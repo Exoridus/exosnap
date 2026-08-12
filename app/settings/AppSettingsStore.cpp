@@ -6,13 +6,16 @@
 #include <QStandardPaths>
 
 #include "settings/ConfigPaths.h"
+#include "ui/theme/ExoSnapThemes.h"
+
+#include <string>
 
 namespace exosnap {
 namespace {
 
-// Bump to 20: CRASH-POLICY-R2 replaces the legacy Boolean with an explicit
-// AskEveryTime / AlwaysSend / NeverSend value.
-constexpr int kSettingsVersionCurrent = 20;
+// Bump to 21: the single `theme_id` is replaced by an independent
+// `appearance_id` + `accent_id` pair, migrated on load.
+constexpr int kSettingsVersionCurrent = 21;
 
 } // namespace
 
@@ -63,6 +66,18 @@ PersistedAppSettings AppSettingsStore::Load() const {
     // NOTIFY-TOASTS-R1: notification toasts toggle (default ON).
     // Pre-1.0: no migration; missing key defaults to true.
     persisted.show_notifications = settings.value(QStringLiteral("show_notifications"), true).toBool();
+    // Overlay content. Read as raw strings: validation belongs to
+    // models/OverlayContentPolicy, which resolves an unknown token to the
+    // shipped default rather than rejecting the file.
+    persisted.recording_overlay_preset =
+        settings.value(QStringLiteral("recording_overlay_preset"), QStringLiteral("minimal")).toString();
+    persisted.recording_overlay_custom_elements =
+        settings.value(QStringLiteral("recording_overlay_custom_elements"), QStringLiteral("elapsed")).toString();
+    persisted.diagnostics_overlay_preset =
+        settings.value(QStringLiteral("diagnostics_overlay_preset"), QStringLiteral("health")).toString();
+    persisted.diagnostics_overlay_custom_elements =
+        settings.value(QStringLiteral("diagnostics_overlay_custom_elements"), QStringLiteral("drop,drift,muted"))
+            .toString();
     settings.endGroup();
 
     settings.beginGroup(QStringLiteral("editor"));
@@ -115,9 +130,28 @@ PersistedAppSettings AppSettingsStore::Load() const {
     settings.endGroup();
 
     settings.beginGroup(QStringLiteral("appearance"));
-    // THEME-SLICE-1: theme_id (replaces accent_id). Default "dark-default".
-    // Pre-1.0: stale accent_id key is ignored; missing key defaults to "dark-default".
-    persisted.theme_id = settings.value(QStringLiteral("theme_id"), QStringLiteral("dark-default")).toString();
+    // `appearance_id` + `accent_id` replace the single `theme_id`. A store
+    // written by an older build carries only `theme_id`, so it is migrated to
+    // the closest pair rather than dropped — otherwise every existing install
+    // would silently snap back to Dark + Aqua on first launch after the update.
+    //
+    // The new keys win when present: once migrated, a later theme_id left in the
+    // file (an older build run against the same store) must not overwrite a
+    // choice the user has since made.
+    const QString stored_appearance = settings.value(QStringLiteral("appearance_id"), QString()).toString();
+    const QString stored_accent = settings.value(QStringLiteral("accent_id"), QString()).toString();
+    if (stored_appearance.isEmpty() || stored_accent.isEmpty()) {
+        const std::string legacy_theme_id =
+            settings.value(QStringLiteral("theme_id"), QString()).toString().toStdString();
+        persisted.appearance_id = stored_appearance.isEmpty()
+                                      ? QString::fromUtf8(ui::theme::MigratedAppearanceId(legacy_theme_id))
+                                      : stored_appearance;
+        persisted.accent_id =
+            stored_accent.isEmpty() ? QString::fromUtf8(ui::theme::MigratedAccentId(legacy_theme_id)) : stored_accent;
+    } else {
+        persisted.appearance_id = stored_appearance;
+        persisted.accent_id = stored_accent;
+    }
     settings.endGroup();
 
     settings.beginGroup(QStringLiteral("settings_tiers"));
@@ -190,6 +224,12 @@ void AppSettingsStore::Save(const PersistedAppSettings& settings_snapshot) const
     settings.setValue(QStringLiteral("show_diagnostics_overlay"), settings_snapshot.show_diagnostics_overlay);
     // NOTIFY-TOASTS-R1: notification toasts toggle.
     settings.setValue(QStringLiteral("show_notifications"), settings_snapshot.show_notifications);
+    settings.setValue(QStringLiteral("recording_overlay_preset"), settings_snapshot.recording_overlay_preset);
+    settings.setValue(QStringLiteral("recording_overlay_custom_elements"),
+                      settings_snapshot.recording_overlay_custom_elements);
+    settings.setValue(QStringLiteral("diagnostics_overlay_preset"), settings_snapshot.diagnostics_overlay_preset);
+    settings.setValue(QStringLiteral("diagnostics_overlay_custom_elements"),
+                      settings_snapshot.diagnostics_overlay_custom_elements);
     settings.endGroup();
 
     settings.beginGroup(QStringLiteral("editor"));
@@ -234,8 +274,12 @@ void AppSettingsStore::Save(const PersistedAppSettings& settings_snapshot) const
     settings.endGroup();
 
     settings.beginGroup(QStringLiteral("appearance"));
-    // THEME-SLICE-1: theme_id (replaces accent_id).
-    settings.setValue(QStringLiteral("theme_id"), settings_snapshot.theme_id);
+    settings.setValue(QStringLiteral("appearance_id"), settings_snapshot.appearance_id);
+    settings.setValue(QStringLiteral("accent_id"), settings_snapshot.accent_id);
+    // Dropped rather than left behind: a stale `theme_id` would be picked up
+    // again by the migration path above if the new keys were ever cleared, and
+    // it would then override a choice made since.
+    settings.remove(QStringLiteral("theme_id"));
     settings.endGroup();
 
     settings.beginGroup(QStringLiteral("settings_tiers"));

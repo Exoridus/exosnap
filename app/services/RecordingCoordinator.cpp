@@ -329,21 +329,90 @@ RecordingCoordinator::RecordingCoordinator()
       mic_meter_service_(std::make_unique<recorder_core::MicMeterService>()),
       sys_meter_service_(std::make_unique<recorder_core::LoopbackMeterService>()),
       app_meter_service_(std::make_unique<recorder_core::LoopbackMeterService>()) {
+    // One screenshot write at a time — see the snapshot_pool_ declaration.
+    snapshot_pool_.setMaxThreadCount(1);
 }
 
 RecordingCoordinator::~RecordingCoordinator() {
     StopMicMeter();
     StopSysMeter();
     StopAppMeter();
-    // Unblock any in-flight prepare/record so the recording_thread_ jthread can join
-    // in its destructor instead of hanging. Requesting the cancel makes a worker still
-    // in its preparation checkpoints unwind before it commits to Record(); pre-arming
-    // the stop (safe before Record() has fully spun up) makes a worker that already
-    // committed return from Record() at once.
+
+    // Every worker is cancelled and JOINED here, in the destructor body, instead
+    // of being left to the jthread members' own destructors.
+    //
+    // Members are destroyed in reverse declaration order, and every std::function
+    // the workers call back through — on_state_changed_, on_result_ready_,
+    // on_frame_captured_, on_split_feedback_, on_remux_progress_ — as well as
+    // every mutex they lock (markers_mutex_, segments_mutex_, output_path_mutex_,
+    // diagnostics_guard_mutex_) is declared AFTER the thread members, so all of it
+    // is already destroyed by the time recording_thread_'s own destructor gets
+    // around to joining. PostResult/PostStateChange then copy a std::function out
+    // of freed storage. The symptom is an access violation during process teardown,
+    // after the last test has reported [ PASSED ].
+    //
+    // Order below is dependency order, not convenience: the recording thread is
+    // what spawns remux_thread_ and the segment remux jobs, so it must be gone
+    // before those are joined or drained — otherwise a job can be appended after
+    // the drain already moved the queue out.
+
+    // Cancel signals first, so the joins below have something to wait for that is
+    // actually ending.
     prepare_cancel_requested_.store(true);
+    // Best-effort: an in-flight remux (single-file or per-segment) gives up at its
+    // next progress callback instead of remuxing the whole file first. That keeps
+    // the transient MKV and discards the partial MP4 — exactly what CancelRemux()
+    // means, and the right trade when the process is going away.
+    remux_cancel_requested_.store(true);
     if (is_recording_.load() || prepare_in_flight_.load()) {
+        // Unblocks both phases: a worker still in its preparation checkpoints
+        // unwinds before it commits to Record(), and one that already committed
+        // returns from Record() at once. StartRecording sets prepare_in_flight_ on
+        // this same (UI) thread before spawning the worker and the worker only
+        // clears it after setting is_recording_, so at least one of the two flags
+        // is observably true for the entire window in which a Stop() is needed.
         session_.Stop();
     }
+
+    // 1) Preparation + recording worker. Terminates because the two blocking steps
+    //    it can sit in are bounded (the capture-lease handshake waits at most
+    //    750 ms on the hub's own worker thread, never on this one, and the webcam
+    //    device open is a bounded Media Foundation call), and because every
+    //    checkpoint after them re-reads prepare_cancel_requested_ while Record()
+    //    returns on the Stop() above. No request_stop() here: the lambda ignores
+    //    its stop_token; session_.Stop() and prepare_cancel_requested_ are the
+    //    real cancel signals.
+    if (recording_thread_.joinable())
+        recording_thread_.join();
+
+    // 2) Single-file MP4 remux, which the recording thread may have started as its
+    //    last act. Joined after (1) so it can no longer be re-assigned under us.
+    //    Re-arm the cancel first: RunRemuxJob clears remux_cancel_requested_ when it
+    //    starts a job, so a job kicked off between the store above and (1) finishing
+    //    would otherwise be waited out in full.
+    remux_cancel_requested_.store(true);
+    if (remux_thread_.joinable())
+        remux_thread_.join();
+
+    // 3) Per-segment remux jobs. The existing drain moves the queue out from under
+    //    segment_remux_mutex_ and only then joins, so this never joins while
+    //    holding the lock the jobs' own bookkeeping would need. Normally a no-op:
+    //    the split path in RecordingThreadProc already drained, and (1) waited for
+    //    it. This catches the jobs left behind when that path returned early.
+    DrainSegmentRemuxJobs(/*cancel=*/true);
+
+    // 4) Low-disk monitor. Here the stop_token IS the cancel signal, and the poll
+    //    sleep is sliced so it is observed within ~100 ms.
+    disk_monitor_thread_.request_stop();
+    if (disk_monitor_thread_.joinable())
+        disk_monitor_thread_.join();
+
+    // 5) Screenshot writer. Deliberately last: (1) is what could still hand the
+    //    pool new work (the engine fires a pending frame-snapshot callback with
+    //    success=false when the session stops), so waiting here — rather than
+    //    relying only on the member's destructor — guarantees the wait happens
+    //    after the last possible enqueue, not before it.
+    snapshot_pool_.waitForDone();
 }
 
 void RecordingCoordinator::SetRecoveryManifestStore(RecoveryManifestStore* store) {
@@ -411,9 +480,18 @@ void RecordingCoordinator::StartDiskMonitor(const std::filesystem::path& output_
         bool reported_unavailable = false;
 
         while (!stop_token.stop_requested()) {
-            // Interruptible sleep.
+            // Sliced sleep. std::this_thread::sleep_for cannot be interrupted, so a
+            // single 5 s sleep would make every stop — including the join in
+            // ~RecordingCoordinator — wait out the rest of the poll interval before
+            // the stop_token is even looked at. Slicing bounds that to one slice
+            // without changing the 5 s polling cadence.
+            constexpr auto kSleepSlice = std::chrono::milliseconds(100);
             {
-                std::this_thread::sleep_for(kPollInterval);
+                for (auto slept = std::chrono::milliseconds(0); slept < kPollInterval; slept += kSleepSlice) {
+                    if (stop_token.stop_requested())
+                        break;
+                    std::this_thread::sleep_for(kSleepSlice);
+                }
                 if (stop_token.stop_requested())
                     break;
             }
@@ -656,6 +734,10 @@ void RecordingCoordinator::SyncWebcamService(bool force_restart) {
 
 void RecordingCoordinator::SetWebcamFrameCallback(WebcamService::FrameCallback cb) {
     webcam_service_.SetFrameCallback(std::move(cb));
+}
+
+void RecordingCoordinator::SetWebcamFrameCallback(QObject* receiver, WebcamService::FrameCallback cb) {
+    webcam_service_.SetFrameCallback(receiver, std::move(cb));
 }
 
 void RecordingCoordinator::SetWebcamStatusCallback(QObject* receiver, WebcamService::StatusCallback cb) {
@@ -1053,6 +1135,15 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
         return;
     }
 
+    // Publish the accepted config before anything starts running on it. Validate()
+    // is the last point at which `config` can still change, so a reader that gets a
+    // value here is holding exactly what the engine will encode with.
+    {
+        std::lock_guard<std::mutex> lock(committed_config_mutex_);
+        last_committed_config_ = config;
+        has_last_committed_config_ = true;
+    }
+
     session_.SetStatsCallback([this](const recorder_core::SessionStats& stats) { PostStats(stats); });
     session_.SetMeterCallback([this](const recorder_core::MeterSnapshot& m) { PostRecordingMeter(m.per_track_rms); });
     session_.SetDiagnosticsCallback(
@@ -1068,6 +1159,7 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
     } else {
         session_.SetPreviewSharedHandleCallback(nullptr);
     }
+    session_.SetPreviewFramePublishedCallback(on_preview_frame_published_);
     // Show an "initializing" diagnostics state until the engine emits live snapshots.
     EmitInitializingDiagnostics();
     {
@@ -2257,6 +2349,28 @@ void RecordingCoordinator::SetStatsUpdatedCallback(StatsUpdatedCallback cb) {
 void RecordingCoordinator::SetDiagnosticsCallback(DiagnosticsUpdatedCallback cb) {
     on_diagnostics_updated_ = std::move(cb);
 }
+bool RecordingCoordinator::LastDiagnosticsSnapshot(recorder_core::RecordingDiagnosticsSnapshot* out) {
+    if (out == nullptr)
+        return false;
+    // Same mutex PostDiagnostics writes under: the snapshot is published from the
+    // stats worker thread, so an unlocked read would be a torn one.
+    std::lock_guard<std::mutex> lock(diagnostics_guard_mutex_);
+    if (!has_last_snapshot_)
+        return false;
+    *out = last_snapshot_;
+    return true;
+}
+
+bool RecordingCoordinator::LastCommittedRecorderConfig(recorder_core::RecorderConfig* out) const {
+    if (out == nullptr)
+        return false;
+    std::lock_guard<std::mutex> lock(committed_config_mutex_);
+    if (!has_last_committed_config_)
+        return false;
+    *out = last_committed_config_;
+    return true;
+}
+
 void RecordingCoordinator::SetResultReadyCallback(ResultReadyCallback cb) {
     on_result_ready_ = std::move(cb);
 }
@@ -2278,6 +2392,10 @@ void RecordingCoordinator::SetFrameCapturedCallback(FrameCapturedCallback cb) {
     on_frame_captured_ = std::move(cb);
 }
 
+void RecordingCoordinator::SetPreviewFramePublishedCallback(PreviewFramePublishedCallback cb) {
+    on_preview_frame_published_ = std::move(cb);
+}
+
 void RecordingCoordinator::SetPreviewSharedHandleReadyCallback(PreviewSharedHandleReadyCallback cb) {
     on_preview_shared_handle_ready_ = std::move(cb);
 }
@@ -2290,8 +2408,9 @@ void RecordingCoordinator::SetReadyFrameRequester(ReadyFrameRequester requester)
     ready_frame_requester_ = std::move(requester);
 }
 
-void RecordingCoordinator::WriteSnapshotAndNotify(FrameCapturedCallback cb, const std::wstring& folder,
-                                                  bool has_target_context, const FilenameTargetContext& target_context,
+void RecordingCoordinator::WriteSnapshotAndNotify(QThreadPool& pool, FrameCapturedCallback cb,
+                                                  const std::wstring& folder, bool has_target_context,
+                                                  const FilenameTargetContext& target_context,
                                                   const QString& log_context_suffix, bool ok, uint32_t width,
                                                   uint32_t height, std::vector<uint8_t> bgra, const QString& error) {
     using diagnostics::AppLog;
@@ -2299,8 +2418,14 @@ void RecordingCoordinator::WriteSnapshotAndNotify(FrameCapturedCallback cb, cons
     if (!ok) {
         AppLog::warning(QStringLiteral("capture_frame"),
                         QStringLiteral("readback failed") + log_context_suffix + QStringLiteral(": ") + error);
+        QCoreApplication* application = QCoreApplication::instance();
+        if (application == nullptr) {
+            if (!QCoreApplication::closingDown() && cb)
+                cb(false, {}, error);
+            return;
+        }
         QMetaObject::invokeMethod(
-            QCoreApplication::instance(),
+            application,
             [cb, error]() mutable {
                 if (cb)
                     cb(false, {}, error);
@@ -2312,8 +2437,14 @@ void RecordingCoordinator::WriteSnapshotAndNotify(FrameCapturedCallback cb, cons
     // Build output path (collision-safe) from folder and context. Runs off the
     // caller's thread (VideoThread for Recording/Paused, the DXGI preview render
     // thread for Ready) — capture everything needed by value, never `this`.
-    std::thread([cb, folder, has_target_context, target_context, log_context_suffix, width, height,
-                 bgra = std::move(bgra)]() mutable {
+    //
+    // The pool, not a detached thread: everything below touches Qt (QDateTime,
+    // QDir, QImage, QFile, a function-static QRegularExpression, and finally
+    // QCoreApplication::instance()), so it must not be running once Qt's statics
+    // are torn down. A detached thread has no owner and nothing to wait on it;
+    // the pool's owner joins it in ~RecordingCoordinator.
+    pool.start([cb, folder, has_target_context, target_context, log_context_suffix, width, height,
+                bgra = std::move(bgra)]() mutable {
         const QString dir_path = QString::fromStdWString(folder);
         const QString datetime = QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd_HH-mm-ss"));
         QString name_base = datetime;
@@ -2358,8 +2489,11 @@ void RecordingCoordinator::WriteSnapshotAndNotify(FrameCapturedCallback cb, cons
         if (!saved)
             QFile::remove(tmp_path);
 
+        QCoreApplication* application = QCoreApplication::instance();
+        if (application == nullptr || QCoreApplication::closingDown())
+            return;
         QMetaObject::invokeMethod(
-            QCoreApplication::instance(),
+            application,
             [cb, saved, out_path, log_context_suffix]() mutable {
                 if (saved) {
                     AppLog::info(QStringLiteral("capture_frame"),
@@ -2375,7 +2509,7 @@ void RecordingCoordinator::WriteSnapshotAndNotify(FrameCapturedCallback cb, cons
                 }
             },
             Qt::QueuedConnection);
-    }).detach();
+    });
 }
 
 void RecordingCoordinator::CaptureFrame() {
@@ -2392,11 +2526,17 @@ void RecordingCoordinator::CaptureFrame() {
         const std::wstring folder = EffectiveOutputFolder().wstring();
         const bool has_ctx = has_output_target_context_;
         const FilenameTargetContext ctx = output_target_context_;
+        // The one thing the callback needs from the coordinator: the pool that owns
+        // the PNG write. Safe on this path because session_ is a member and the
+        // destructor joins the recording thread (which is what makes Record() —
+        // and with it VideoThread, the only firer of this callback) finish before
+        // any member is destroyed.
+        QThreadPool* pool = &snapshot_pool_;
 
-        session_.RequestFrameSnapshot([cb_copy, folder, has_ctx, ctx](bool ok, uint32_t w, uint32_t h,
-                                                                      std::vector<uint8_t> bgra,
-                                                                      const std::string& err) mutable {
-            WriteSnapshotAndNotify(cb_copy, folder, has_ctx, ctx, QString(), ok, w, h, std::move(bgra),
+        session_.RequestFrameSnapshot([cb_copy, folder, has_ctx, ctx, pool](bool ok, uint32_t w, uint32_t h,
+                                                                            std::vector<uint8_t> bgra,
+                                                                            const std::string& err) mutable {
+            WriteSnapshotAndNotify(*pool, cb_copy, folder, has_ctx, ctx, QString(), ok, w, h, std::move(bgra),
                                    QString::fromStdString(err));
         });
         return;
@@ -2416,11 +2556,21 @@ void RecordingCoordinator::CaptureFrame() {
         const std::wstring folder = EffectiveOutputFolder().wstring();
         const bool has_ctx = has_output_target_context_;
         const FilenameTargetContext ctx = output_target_context_;
+        // Unlike the engine path above, the requester's callback fires on the DXGI
+        // preview render thread, which this class does not own and cannot join: the
+        // pool pointer is only sound while the coordinator outlives the pending
+        // request. That is one readback frame (~16 ms) and it is strictly narrower
+        // than what the detached thread exposed before (the whole PNG encode and
+        // write, on Qt statics). Closing it properly means the preview renderer
+        // has to be quiesced before the coordinator is destroyed, which is the
+        // owner's ordering to fix, not this class's.
+        QThreadPool* pool = &snapshot_pool_;
 
-        ready_frame_requester_([cb_copy, folder, has_ctx, ctx](bool ok, uint32_t w, uint32_t h,
-                                                               std::vector<uint8_t> bgra, const QString& err) mutable {
-            WriteSnapshotAndNotify(cb_copy, folder, has_ctx, ctx, QStringLiteral(" (Ready)"), ok, w, h, std::move(bgra),
-                                   err);
+        ready_frame_requester_([cb_copy, folder, has_ctx, ctx, pool](bool ok, uint32_t w, uint32_t h,
+                                                                     std::vector<uint8_t> bgra,
+                                                                     const QString& err) mutable {
+            WriteSnapshotAndNotify(*pool, cb_copy, folder, has_ctx, ctx, QStringLiteral(" (Ready)"), ok, w, h,
+                                   std::move(bgra), err);
         });
         return;
     }
@@ -2579,22 +2729,29 @@ void RecordingCoordinator::PostStats(recorder_core::SessionStats stats) {
 }
 
 void RecordingCoordinator::PostDiagnostics(recorder_core::RecordingDiagnosticsSnapshot snapshot) {
-    if (!on_diagnostics_updated_) {
-        return;
-    }
     // Generation guard: drop snapshots from an older session so a stale recording's
     // late callback can never update a newer recording's view. Applied on the posting
     // side (never capturing `this` into the queued lambda, matching the other Post*).
+    //
+    // The stash runs BEFORE the subscriber check, and must keep doing so. It used to
+    // sit behind an early return for a missing on_diagnostics_updated_, which made
+    // LastDiagnosticsSnapshot() silently depend on somebody else having taken the one
+    // callback slot — the exact coupling that accessor exists to remove. A headless
+    // run (no frontend, hence no subscriber) then reported every engine counter as
+    // "unavailable" and looked like a recording that measured nothing.
     {
         std::lock_guard<std::mutex> lock(diagnostics_guard_mutex_);
         if (!diagnostics_guard_.Accept(snapshot)) {
             return;
         }
-        // Stash the most recent accepted snapshot so PostResult can write the
-        // session report from the end-of-session counters. The stop path emits the
-        // final Completed snapshot before PostResult.
+        // Most recent accepted snapshot, so PostResult can write the session report
+        // from the end-of-session counters. The stop path emits the final Completed
+        // snapshot before PostResult.
         last_snapshot_ = snapshot;
         has_last_snapshot_ = true;
+    }
+    if (!on_diagnostics_updated_) {
+        return;
     }
     auto cb = on_diagnostics_updated_;
     if (QCoreApplication::instance() == nullptr) {

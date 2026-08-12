@@ -1,5 +1,7 @@
 #include "ProgressRing.h"
 
+#include <QAccessible>
+#include <QAccessibleValueChangeEvent>
 #include <QPaintEvent>
 #include <QPainter>
 #include <QRectF>
@@ -11,6 +13,10 @@
 namespace {
 constexpr int kSize = 120;
 constexpr double kArc = 8.0; // arc/track stroke width
+
+int WholePercent(double value01) {
+    return static_cast<int>(std::round(value01 * 100.0));
+}
 } // namespace
 
 ProgressRing::ProgressRing(QWidget* parent) : QWidget(parent) {
@@ -18,13 +24,54 @@ ProgressRing::ProgressRing(QWidget* parent) : QWidget(parent) {
 }
 
 void ProgressRing::setValue(double value01) {
-    value_ = std::clamp(value01, 0.0, 1.0);
+    const double next = std::clamp(value01, 0.0, 1.0);
+    // Announced per whole percent, not per call: a download reports bytes many
+    // times a second and a screen reader that repeats "42 percent" for every
+    // one of them drowns out everything else on the surface.
+    const bool announce = WholePercent(next) != WholePercent(value_);
+    value_ = next;
+    if (announce && QAccessible::isActive()) {
+        QAccessibleValueChangeEvent event(this, WholePercent(value_));
+        QAccessible::updateAccessibility(&event);
+    }
     update();
 }
 
 void ProgressRing::setVariant(TerminalVariant variant) {
     variant_ = variant;
     update();
+}
+
+void ProgressRing::setIndeterminate(bool indeterminate) {
+    if (indeterminate_ == indeterminate)
+        return;
+    indeterminate_ = indeterminate;
+    update();
+}
+
+double ProgressRing::value() const {
+    return value_;
+}
+
+bool ProgressRing::isIndeterminate() const {
+    return indeterminate_;
+}
+
+QString ProgressRing::progressDescription() const {
+    switch (variant_) {
+    case TerminalVariant::Amber:
+        return QStringLiteral("Update didn't complete");
+    case TerminalVariant::Red:
+        return QStringLiteral("Update failed");
+    case TerminalVariant::Green:
+    case TerminalVariant::RebootRequired:
+    case TerminalVariant::Success:
+        return QStringLiteral("Update complete");
+    case TerminalVariant::None:
+        break;
+    }
+    return indeterminate_ ? QStringLiteral("Preparing update, progress not measurable yet")
+                          : QStringLiteral("%1 percent").arg(WholePercent(value_));
 }
 
 QSize ProgressRing::sizeHint() const {
@@ -90,6 +137,12 @@ void ProgressRing::paintEvent(QPaintEvent*) {
             paintCheck(p, g, tone, 2.8);
         return;
     }
+
+    // Pre-flight: the track alone. Nothing has been measured, so a number here
+    // would be invented and an arc would claim a fraction that does not exist.
+    // The status line under the ring says what the updater is doing instead.
+    if (indeterminate_)
+        return;
 
     // In-progress: mint arc from the top (−90°), clockwise, plus percent text.
     if (value_ > 0.0) {

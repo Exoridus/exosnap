@@ -1,12 +1,15 @@
 #pragma once
 
+#include "../benchmark/BenchmarkReport.h"
+
 #include <QString>
 #include <QStringList>
 
-class QApplication;
+#include <functional>
+
+class QCoreApplication;
 
 namespace exosnap {
-class MainWindow;
 class RecordingCoordinator;
 } // namespace exosnap
 
@@ -40,6 +43,46 @@ struct AutoRecordOptions {
     QString screenshot_path; // preview mode only
     int repeat_cycles = 1;   // run N start/stop cycles on the same coordinator
                              // (warm capture-hub state) instead of exiting after one
+
+    // Pause/resume inside the recording. -1 disables. The pause happens
+    // pause_at_seconds into the run and lasts pause_for_seconds, which is added
+    // to the wall-clock budget rather than taken out of duration_seconds: the
+    // recorded MEDIA length stays what was asked for, which is what makes a
+    // paused run comparable with an unpaused one and what lets the exported
+    // duration be checked against an expectation.
+    int pause_at_seconds = -1;
+    int pause_for_seconds = 2;
+
+    // ---- Frontend A/B benchmark mode -------------------------------------
+    // Non-empty benchmark_scenario turns the ordinary drive loop into a measured
+    // run: the recording is extended by benchmark_warmup_seconds, the preview and
+    // process counters are reset when the warm-up ends, and one report per cycle is
+    // written under benchmark_output_dir.
+    //
+    // There is deliberately no --benchmark-frontend flag. The frontend is a property
+    // of the executable being driven, and each entry point states its own; a flag
+    // could disagree with the binary that wrote the file.
+    QString benchmark_scenario;
+    QString benchmark_output_dir;
+    int benchmark_warmup_seconds = 0;
+    // Operator-supplied facts no in-process probe can know: the external source
+    // being captured, its graphics preset, and whether frame generation was on.
+    QString benchmark_source_notes;
+};
+
+// Frontend-specific probes the shared drive loop calls at the two moments that
+// matter. Everything else about a benchmark run — configuration, timing, the
+// engine metrics, the report — is common code, which is what makes the two
+// frontends' numbers comparable at all.
+struct BenchmarkHooks {
+    // Warm-up has ended and the measured window opens. Called on the Qt main
+    // thread while the recording is already active; the frontend resets its
+    // preview counters so no start-up transient lands in the measurement.
+    std::function<void()> onMeasurementStart;
+
+    // The recording result has landed. Called on the Qt main thread; the frontend
+    // reads its own preview instrumentation into the neutral contract.
+    std::function<benchmark::PreviewMetrics()> samplePreviewMetrics;
 };
 
 bool HasAutoRecordRequest(const QStringList& args);
@@ -48,30 +91,36 @@ bool ParseAutoRecordOptions(const QStringList& args, AutoRecordOptions* out, QSt
 // Headless "bare mode" drive loop: builds and drives a standalone
 // exosnap::RecordingCoordinator directly from CLI-configured options, produces a
 // real recording file, and prints one JSON result line to stdout per cycle
-// (options.repeat_cycles, default 1). No MainWindow, no preview window (preview
-// mode is Task 3). Returns the process exit code: 0 when every cycle succeeded,
+// (options.repeat_cycles, default 1). No window of any kind. Returns the process
+// exit code: 0 when every cycle succeeded,
 // non-zero on any failure (target not found, StartRecording refused, capability
 // block, timeout) — cycling stops at the first failed cycle.
-int RunAutoRecord(QApplication& app, const AutoRecordOptions& options);
+int RunAutoRecord(QCoreApplication& app, const AutoRecordOptions& options);
 
 // Shared drive loop: seeds the coordinator's capability gate, commits the CLI output
 // format, selects the capture target, then runs options.repeat_cycles start/stop
 // cycles on it (same coordinator instance across cycles, so a later cycle sees
 // whatever "warm" capture-hub state the previous cycle left behind), printing one
-// JSON result line per cycle. Both the bare-mode entry point (above) and the
-// preview-mode entry point (below) call this on their coordinator —
-// bare mode on a coordinator it constructs itself, preview mode on the one the Record
-// page owns. Returns the process exit code.
-int RunAutoRecordOnCoordinator(QApplication& app, RecordingCoordinator& coordinator, const AutoRecordOptions& options);
-
-// Preview-mode drive loop: shows an OFF-SCREEN MainWindow (never activated, placed on a
-// non-primary screen when one exists), waits for the real async capability probe to
-// bring the Record page's coordinator up through the same idle-preview machinery the
-// live app uses (NOT the frozen --visual-test fixture), records via
-// RunAutoRecordOnCoordinator on that coordinator, and — when options.screenshot_path is
-// set — writes a screenshot of the rendered Record page. Falls back to bare mode when
-// options.enable_preview is false. Defined only in the visual-test-harness-enabled build
-// (debug); declared here so main.cpp can call it.
-int RunAutoRecord(QApplication& app, MainWindow& window, const AutoRecordOptions& options);
+// JSON result line per cycle. Bare mode calls this on a coordinator it constructs
+// itself; the application entry point calls it on the one the shell owns. Returns
+// the process exit code.
+//
+// It was the single orchestration path for the frontend A/B benchmark, which is
+// why configuration, timing and reporting all live here rather than in a caller:
+// both frontends had to commit identical settings, select the target by an
+// identical rule and run an identical warm-up/measure/stop sequence for the
+// numbers to mean anything. Only one frontend is left, and the structure is kept
+// because it is also what makes a run reproducible.
+//
+// `out_last_outcome`, when given, receives the last cycle's result: output path,
+// media duration, dimensions. It exists because this loop takes the
+// coordinator's single SetResultReadyCallback slot for itself, which displaces
+// the frontend's own handler — so after a harness run the application's view
+// model does not know a recording completed, and anything downstream (the
+// Record -> Editor handoff) has nothing to act on. Rather than have the caller
+// reconstruct that from the printed JSON line, hand it back directly.
+int RunAutoRecordOnCoordinator(QCoreApplication& app, RecordingCoordinator& coordinator,
+                               const AutoRecordOptions& options, benchmark::Frontend frontend,
+                               const BenchmarkHooks& hooks = {}, benchmark::RunOutcome* out_last_outcome = nullptr);
 
 } // namespace exosnap::auto_record

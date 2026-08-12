@@ -105,7 +105,12 @@ jobs:
         with:
           version: '6.9.0'
           arch: 'win64_msvc2022_64'
-          archives: 'qtbase qtsvg'
+          # Same module set as ci.yml. qtdeclarative + qtshadertools are not
+          # optional extras here: exosnap IS the Qt Quick application (ADR 0064),
+          # so without them find_package(Qt6) fails, app/CMakeLists.txt falls back
+          # to its "exosnap skipped: Qt6 not found" stub, and this job builds
+          # everything EXCEPT the binary it exists to check.
+          archives: 'qtbase qtsvg qtdeclarative qtshadertools'
           cache: true
 
       - name: Set up sccache
@@ -150,6 +155,16 @@ jobs:
       - name: Verify crashpad_handler.exe is staged
         shell: pwsh
         run: |
+          # The app itself first. `--target exosnap` succeeds even when Qt6 was
+          # not found, because that name then resolves to a stub whose whole
+          # recipe is an echo -- so a missing crashpad_handler.exe used to be
+          # reported as a staging failure when the real cause was that no
+          # application had been built at all.
+          $app = "build/win-on/app/exosnap.exe"
+          if (-not (Test-Path -LiteralPath $app -PathType Leaf)) {
+            Write-Host "::error::exosnap.exe was not built at $app — the 'exosnap' target resolved to the Qt6-not-found stub, so nothing was staged next to it"
+            exit 1
+          }
           $exe = "build/win-on/app/crashpad_handler.exe"
           if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
             Write-Host "::error::crashpad_handler.exe was not staged next to exosnap.exe at $exe"

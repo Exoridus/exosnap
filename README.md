@@ -101,8 +101,9 @@ opt-in network features; see [`PRIVACY.md`](PRIVACY.md)).
 - Global hotkeys, single-frame capture, and an opt-in interactive quick-control pill overlay.
 - **TOML recording presets** with human-readable export/import and a manage dialog (rename,
   duplicate, delete, set default).
-- Four curated themes (two dark, two light) with instant single-click preview and selection; dark
-  mode is the default.
+- Two base appearances (**Dark**, **Light**) with an independently selectable curated accent
+  (Aqua, Sky, Violet, Magenta); Dark + Aqua is the default. The accent never redefines a semantic
+  state — recording, caution and ready keep their own colours.
 - Local-first crash capture (out-of-process Crashpad) with a consent-gated, privacy-scrubbed
   next-launch crash dialog.
 - In-app updates (Stable/Preview channels): a signature- and hash-verified download and in-place
@@ -116,13 +117,13 @@ See [`KNOWN_LIMITATIONS.md`](KNOWN_LIMITATIONS.md) for the precise current suppo
 
 | Setting | Default |
 |---------|---------|
-| Theme | Dark mode |
+| Appearance | Dark + Aqua accent |
 | Container | MKV |
 | Video codec | AV1 (NVENC) |
 | Audio codec | Opus |
 | Frame rate | CFR 60 fps |
 | Audio source order | `APP`, `SYS`, `MIC` — context-aware defaults (`APP` only exists for a captured application window, enabled there; screen capture defaults `SYS` on, `MIC` off), each enabled source its own track |
-| Navigation pages | `Record`, `Device`, `Settings`, `Diagnostics`, `Logs`, `About` |
+| Navigation pages | `Record`, `Settings`, `Diagnostics`, `Logs`, `About` — all five directly in the title band |
 
 ## Install / run
 

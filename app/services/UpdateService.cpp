@@ -27,7 +27,7 @@
 #include <QStandardPaths>
 #include <QString>
 #include <QStringList>
-#include <QThread>
+#include <QThreadPool>
 #include <QWinEventNotifier>
 #include <atomic>
 
@@ -87,6 +87,20 @@ class UpdateService::Impl {
             return exosnap::update::UpdateBlockReason::NotBlocked;
         };
     }
+
+    // Declared as the LAST data member so it is destroyed FIRST: its destructor
+    // waits for the check worker, which writes `state`/`gap_notes` above under
+    // `mutex` once CheckForUpdate returns. The previous worker was a detached
+    // QThread nobody joined, so ~UpdateService's `delete impl_` could free that
+    // mutex and that state while the worker was still about to lock and write
+    // them. Never add a data member below this one.
+    //
+    // The wait has no deadline, because the engine offers none: CheckForUpdate
+    // does a WinHTTP GET that installs no WinHttpSetTimeouts call and exposes
+    // no cancel handle, so it ends only on WinHTTP's own connect/send/receive
+    // defaults. Giving it a deadline is an update-engine policy decision and is
+    // deliberately not invented here.
+    QThreadPool check_pool;
 };
 
 // ---------------------------------------------------------------------------
@@ -106,6 +120,10 @@ UpdateService::~UpdateService() {
     if (impl_->updater_process != nullptr)
         ::CloseHandle(impl_->updater_process);
 #endif
+    // This is also the join: Impl's last member is a QThreadPool whose
+    // destructor waits for the check worker, and it runs before the `mutex` and
+    // `state` that worker writes are destroyed. Nothing the worker can touch
+    // may be torn down above this line.
     delete impl_;
 }
 
@@ -165,7 +183,12 @@ void UpdateService::RequestUpdateCheck() {
     auto* impl = impl_;
     auto* self = this;
 
-    QThread* worker = QThread::create([impl, self]() {
+    {
+        QMutexLocker lk(&impl_->mutex);
+        impl_->state.checking = true;
+    }
+
+    impl_->check_pool.start([impl, self]() {
         namespace upd = exosnap::update;
 
         upd::CheckParams params;
@@ -201,13 +224,6 @@ void UpdateService::RequestUpdateCheck() {
             },
             Qt::QueuedConnection);
     });
-
-    {
-        QMutexLocker lk(&impl_->mutex);
-        impl_->state.checking = true;
-    }
-    worker->start();
-    connect(worker, &QThread::finished, worker, &QObject::deleteLater);
 }
 
 void UpdateService::LaunchUpdater() {

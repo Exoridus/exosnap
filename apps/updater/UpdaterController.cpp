@@ -64,6 +64,10 @@ UpStep FailedStepFor(FailureCase c) {
 UpdaterController::UpdaterController(QString from_version, QString to_version) {
     state_.from_version = std::move(from_version);
     state_.to_version = std::move(to_version);
+    // The pre-flight frame the window opens on, before the worker has reported
+    // anything. It used to be the one state with no status line at all, which
+    // left a bare spinner glyph under the ring with nothing to label it.
+    state_.status_line = QStringLiteral("Preparing update…");
 }
 
 void UpdaterController::setVerificationReinstall(bool on) {
@@ -84,6 +88,7 @@ void UpdaterController::onDownloadProgress(quint64 got, quint64 total) {
     }
     const double fraction = std::clamp(double(got) / double(total), 0.0, 1.0);
     state_.ring = kStepEndWeight[size_t(UpStep::Download)] * fraction;
+    state_.determinate = true;
 }
 
 void UpdaterController::onStepDone(UpStep s) {
@@ -92,6 +97,7 @@ void UpdaterController::onStepDone(UpStep s) {
     }
     state_.steps[size_t(s)] = StepStatus::Done;
     state_.ring = kStepEndWeight[size_t(s)];
+    state_.determinate = true;
 }
 
 void UpdaterController::onAllDone() {
@@ -99,6 +105,7 @@ void UpdaterController::onAllDone() {
         st = StepStatus::Done;
     }
     state_.ring = 1.0;
+    state_.determinate = true;
     state_.variant = TerminalVariant::Success;
     state_.status_line.clear();
 }

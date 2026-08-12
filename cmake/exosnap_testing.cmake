@@ -70,7 +70,18 @@ function(exosnap_add_gtest)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${_asan_dll}" "$<TARGET_FILE_DIR:${ARG_NAME}>")
     endforeach()
-    foreach(_qt_target IN ITEMS Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg)
+    # The Quick modules are staged for the same reason as the Widgets ones, and
+    # they are NOT optional: the Qt Quick frontend's tests link Qt6::Quick but
+    # land in the SAME shared per-directory output as every other app test, and
+    # the Quick runtime deployed for the application sits somewhere else
+    # entirely. Missing here, a test binary does not fail — it fails to START
+    # (0xC0000135), which on an interactive desktop is a modal "Qt6Quickd.dll not
+    # found" dialog and a process that hangs until CTest gives up. Guarded by
+    # if(TARGET) like the rest, so a build without Qt Declarative stages nothing.
+    foreach(_qt_target IN ITEMS Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg Qt6::Qml Qt6::QmlMeta Qt6::QmlModels
+                                Qt6::QmlWorkerScript Qt6::Quick Qt6::QuickControls2 Qt6::QuickControls2Impl
+                                Qt6::QuickLayouts Qt6::QuickTemplates2 Qt6::QuickTest Qt6::Test Qt6::OpenGL
+                                Qt6::Network)
       if(TARGET ${_qt_target})
         list(APPEND _exosnap_stage_commands
           COMMAND ${CMAKE_COMMAND} -E copy_if_different

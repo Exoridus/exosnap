@@ -62,6 +62,18 @@ enum class UiRecordingState {
            state == UiRecordingState::Failed;
 }
 
+// The Edit surface opens *over* Record (ADR 0022), so a live capture that owns
+// the Record surface must keep it: opening the editor over a running recording
+// or a countdown makes no sense, and the automatic "open when finished" open
+// would otherwise fire on a split session's segment boundary while it is still
+// recording. Stopping/Saving are excluded too — the file is not final yet.
+// Stated as a predicate rather than inline at the call sites so both the
+// automatic and the user-triggered entry point are gated identically.
+[[nodiscard]] inline bool AllowsEditorEntry(UiRecordingState state) noexcept {
+    return state == UiRecordingState::Ready || state == UiRecordingState::Completed ||
+           state == UiRecordingState::Failed;
+}
+
 // ---------------------------------------------------------------------------
 // CaptureMode
 // ---------------------------------------------------------------------------

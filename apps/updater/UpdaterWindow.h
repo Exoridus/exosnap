@@ -8,6 +8,19 @@
 // ProgressRing, a status line, the five-step checklist, one fixed-height state
 // panel and one fixed action row. Their geometry does not change between
 // working, warning, error and success states.
+//
+// The title bar's role label is the same word in EVERY state -- including an
+// ADR 0055 verification reinstall and every terminal failure. What the run IS
+// gets said in the content, by the eyebrow above the version pills; a title bar
+// that renames itself under the user is exactly the instability this window was
+// built to avoid.
+//
+// The window is a fixed 520x680 and its content comes from outside the process
+// (version identifiers from the release manifest, msiexec's own failure text),
+// so every text row that can receive an arbitrary-length string is an
+// ElidingLabel: it shortens with an ellipsis and keeps the full value on the
+// tooltip and the accessible name, instead of cutting a glyph in half at a
+// widget edge.
 
 #include <QList>
 #include <QString>
@@ -21,6 +34,7 @@ class QCloseEvent;
 class QLabel;
 class QPushButton;
 class QVBoxLayout;
+class ElidingLabel;
 class ProgressRing;
 class StepListWidget;
 
@@ -69,14 +83,16 @@ class UpdaterWindow : public QWidget {
     QWidget* cancel_overlay_ = nullptr;
 
     // Version transition
-    QLabel* from_pill_ = nullptr;
-    QLabel* to_pill_ = nullptr;
+    QLabel* caption_ = nullptr;
+    ElidingLabel* from_pill_ = nullptr;
+    QWidget* chevron_ = nullptr;
+    ElidingLabel* to_pill_ = nullptr;
 
     // Ring + status
     ProgressRing* ring_ = nullptr;
     QWidget* status_row_ = nullptr;
     QWidget* status_icon_ = nullptr;
-    QLabel* status_text_ = nullptr;
+    ElidingLabel* status_text_ = nullptr;
 
     // Steps + footer
     StepListWidget* steps_ = nullptr;

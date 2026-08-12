@@ -18,6 +18,7 @@
 // marshals to the UI thread itself (the same contract as the engine's
 // PreviewSharedHandleReadyCallback).
 
+#include <atomic>
 #include <condition_variable>
 #include <cstdint>
 #include <functional>
@@ -34,11 +35,23 @@ namespace exosnap {
 
 class DxgiCaptureHubService {
   public:
+    struct PreviewPublishStats {
+        uint64_t attempts = 0;
+        uint64_t published = 0;
+        uint64_t dropped_on_contention = 0;
+    };
     // Fired on the pump thread whenever the shared texture is (re)created: once
     // after the first frame, and again if the desktop changes size or format.
     // Ownership of the NT handle transfers to the sink (open, then CloseHandle).
     using HandleSink =
         std::function<void(void* nt_handle, uint32_t width, uint32_t height, recorder_core::PreviewTapDesc tap)>;
+    // Fired on the pump thread after every frame that actually reached the
+    // shared texture — the "there is something new to take" edge the keyed-mutex
+    // transport itself cannot express. A consumer without it can only poll, and
+    // a poll-driven redraw re-renders on a quiet desktop forever. Carries no
+    // payload: the shared texture always holds the newest frame. Same threading
+    // contract as HandleSink; must return fast and must not touch D3D here.
+    using FramePublishedSink = std::function<void()>;
 
     DxgiCaptureHubService();
     ~DxgiCaptureHubService();
@@ -52,7 +65,7 @@ class DxgiCaptureHubService {
     // second duplication is never opened), or when the monitor has no stable
     // GDI device name. On success the pump thread opens the duplication and
     // starts calling `sink`. Replaces any previous subscription.
-    bool Subscribe(HMONITOR monitor, HandleSink sink);
+    bool Subscribe(HMONITOR monitor, HandleSink sink, FramePublishedSink frame_sink);
 
     // Close the capture (refcount to zero -> the duplication closes). Safe to
     // call when nothing is subscribed. Frames already in flight to the sink may
@@ -74,12 +87,16 @@ class DxgiCaptureHubService {
     // (the producer's device is recreated per open). Asynchronous.
     void ReturnEngineLease();
 
+    [[nodiscard]] PreviewPublishStats GetPreviewPublishStats() const noexcept;
+    void ResetPreviewPublishStats() noexcept;
+
   private:
     struct Command {
         enum class Op { Subscribe, Unsubscribe, LeaseRequest, LeaseReturn };
         Op op = Op::Unsubscribe;
         std::wstring device_name;
         HandleSink sink;
+        FramePublishedSink frame_sink;
         uint64_t serial = 0;
     };
 
@@ -94,6 +111,9 @@ class DxgiCaptureHubService {
     std::condition_variable ack_cv_;
 
     std::jthread worker_;
+    std::atomic<uint64_t> publish_attempts_{0};
+    std::atomic<uint64_t> published_frames_{0};
+    std::atomic<uint64_t> publish_drops_{0};
 };
 
 } // namespace exosnap

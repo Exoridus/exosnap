@@ -1,0 +1,53 @@
+{
+  "id": "superposition-1440p144-headroom",
+  "calibration_status": "frozen 2026-08-10",
+  "description": "Scenario B. Deterministic high-motion GPU workload rendered by Superposition Benchmark 1.1 Pro on the primary 2560x1440@144 display, captured by ExoSnap while the application itself stays visible on the secondary display. Calibrated for headroom, NOT for maximum GPU load: the question is what the frontend costs under a demanding real-time workload, not how fast the RTX 5070 Ti is.",
+  "source_notes": "Superposition Benchmark 1.1 Pro, DirectX, 2560x1440, borderless fullscreen, DoF/motion blur/sound off. No frame generation (Superposition predates it).",
+  "workload": {
+    "kind": "superposition",
+    "warmup_seconds": 45,
+    "calibration_note": "Scene 8 chosen from a measured survey of scenes 0/3/5/8/11/14/17 plus the default sequence, each for one minute at 1440p High (.workspace/benchmark-results/calibration/scene-survey/survey.json). Every candidate sits at the 144 Hz vsync cap; scene 8 is the ONLY one whose mean falls meaningfully below it (138.7 vs 142.8 fps) and it carries by far the highest frame-to-frame variability (4.88 vs 2.7-4.2). The others are indistinguishable precisely because they idle against vsync, where added ExoSnap load could not become visible. GPU utilisation 71.8% mean / 75% p95 and 63 degC peak confirm headroom rather than saturation, which is what this scenario is calibrated for -- Extreme quality would turn it into a GPU-starvation test and belongs in a separately named saturated scenario. Corroborating: loop_scene_8_high_5min.xml is one of Unigine's own documented sample routines. FROZEN: do not change between Widgets and Quick runs.",
+    "cli": {
+      "api": "directx",
+      "resolution": "2560x1440",
+      "fullscreen": 2,
+      "quality": "high",
+      "textures": "high",
+      "dof": 0,
+      "motion_blur": 0,
+      "sound": 0,
+      "mode": "scene",
+      "scene": 8,
+      "mode_duration_minutes": 3
+    }
+  },
+  "exosnap": {
+    "target": "monitor",
+    "duration_seconds": 50,
+    "warmup_seconds": 10,
+    "frame_rate": 60,
+    "container": "mkv",
+    "video_codec": "av1",
+    "audio_codec": "opus",
+    "chroma": 420,
+    "bit_depth": 8,
+    "hdr_mode": "off",
+    "audio_rows": ["sys"]
+  },
+  "settings_rationale": "The shipped default profile for screen capture: MKV + AV1 + Opus, CFR 60 fps, 4:2:0, 8-bit, SDR, SYS on / MIC off. Superposition itself runs with -sound 0, so SYS carries silence — the audio thread, the mux and the A/V clock slaving are still exercised, which is what makes the run production-like. 60 fps from a 144 Hz source deliberately produces CFR coalescing; that is what the shipped default does on this machine, and the pressure is identical on both frontends.",
+  "topology": {
+    "capture_display": {
+      "role": "primary",
+      "width": 2560,
+      "height": 1440,
+      "min_refresh_hz": 140,
+      "model_contains": "27GL850"
+    },
+    "ui_display": {
+      "role": "secondary",
+      "width": 1920,
+      "height": 1080,
+      "model_contains": "27GL650"
+    }
+  }
+}

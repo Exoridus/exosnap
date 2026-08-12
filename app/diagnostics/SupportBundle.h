@@ -1,5 +1,7 @@
 #pragma once
 
+#include "diagnostics/StartupTrace.h"
+
 #include <QByteArray>
 #include <QString>
 #include <QVector>
@@ -62,6 +64,12 @@ struct BundleInputs {
 
     // Human-readable settings summary (ConfigSummary). Scrubbed before inclusion.
     QString settings_summary;
+
+    // Startup milestones for startup-trace.txt (ADR 0044). Passed in rather than
+    // read from StartupTrace::instance() here so the collector stays pure and the
+    // bundle tests can assert an exact table. Empty in a process that recorded no
+    // milestones, in which case the entry is omitted rather than shipped blank.
+    std::vector<StartupTraceEntry> startup_trace;
 
     // Manifest metadata.
     QString app_version;

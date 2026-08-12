@@ -25,4 +25,26 @@ QRect ClampRestoredWindowGeometry(const QRect& saved, const QRect& available, co
 // startup rather than preserving a user-dragged position.
 QRect ClampWindowToWorkArea(const QRect& window, const QRect& available);
 
+struct StartupWindowPlacement {
+    QRect rect;
+    bool maximized = false;
+};
+
+// Where the window opens, given the work area of the screen it will open on.
+//
+// This is the whole screen-independent half of the startup placement decision:
+// choose the rect (the saved one, or `preferred` centred when `saved` is null),
+// then apply the two clamps above in the order that matters. Split out from the
+// caller that has to find the screen first — quick::ResolveWindowGeometry — so
+// the first-launch and restore matrices can be checked against work areas the
+// machine running the tests does not have.
+//
+// `saved_maximized` only counts when there IS a saved rect: a window that has
+// never been placed cannot have been maximized. The containment clamp is skipped
+// for a maximized restore, because the rect being carried is then only the
+// restore rect and the maximized state fills the work area by itself.
+StartupWindowPlacement ResolveStartupWindowPlacement(const QRect& saved, bool saved_maximized, const QRect& available,
+                                                     const QSize& minimum, const QSize& preferred,
+                                                     bool center_on_primary);
+
 } // namespace exosnap::ui

@@ -1,11 +1,11 @@
 #include <gtest/gtest.h>
 
-#include <QApplication>
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QGuiApplication>
 #include <QString>
 #include <QTemporaryDir>
 #include <QVector>
@@ -22,13 +22,13 @@
 namespace exosnap {
 namespace {
 
-QApplication* EnsureApplication() {
-    if (auto* existing = qobject_cast<QApplication*>(QCoreApplication::instance()))
+QGuiApplication* EnsureApplication() {
+    if (auto* existing = qobject_cast<QGuiApplication*>(QCoreApplication::instance()))
         return existing;
     static int argc = 1;
     static char app_name[] = "completed_result_tests";
     static char* argv[] = {app_name, nullptr};
-    static QApplication app(argc, argv);
+    static QGuiApplication app(argc, argv);
     return &app;
 }
 

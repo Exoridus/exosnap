@@ -5,6 +5,15 @@ automated (`scripts/build-release-artifacts.ps1` + `.github/workflows/release-ca
 0037); this document covers the human-gated steps around it and the live checks that CI cannot run on
 a GPU-less runner.
 
+> **Running the live checks.** `scripts/live-verify.ps1` (ADR 0066, usage in `docs/dev/live-verify.md`)
+> executes the automatable part of §5–§7 against a prepared artifact, records evidence per check,
+> binds every PASS to the exact binary and environment it was produced against, and survives an
+> interruption without losing verified progress. It stops only for the bounded human gates that
+> remain. This document stays the authority on *what* must be true; the runner records *whether it
+> was proven and against which bytes*. Start with
+> `pwsh scripts/live-verify.ps1 prepare` → `run` → `report`, and check the generated `report.md`
+> into the RC's evidence rather than ticking boxes here from memory.
+
 ## 1. Pre-cut
 
 - [ ] Bump `project(exosnap VERSION x.y.z)` in the root `CMakeLists.txt` (single source of truth).

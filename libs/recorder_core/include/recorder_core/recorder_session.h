@@ -237,6 +237,22 @@ using SegmentCallback = std::function<void(const CompletedSegment&)>;
 using PreviewSharedHandleCallback =
     std::function<void(uintptr_t nt_handle, uint32_t width, uint32_t height, PreviewTapDesc tap)>;
 
+// Fired from the video thread after every frame that was actually published into
+// the shared preview texture (never for a frame the non-blocking keyed-mutex
+// acquire dropped). It carries no payload: the shared texture always holds the
+// newest published frame, so the edge itself is the whole message.
+//
+// It exists because the transport has no other way to say "there is something
+// new to take". A consumer without this edge can only poll the keyed mutex, and
+// a consumer whose redraw is driven by its own poll re-renders whether or not a
+// frame arrived — measured on the Qt Quick frontend as 10 061 window renders
+// against 3 consumed frames on an idle desktop.
+//
+// Same contract as PreviewSharedHandleCallback: must return quickly, must not
+// make D3D11 calls on the calling (video) thread, and must be set before
+// Record(). Optional; unset costs one null check per published frame.
+using PreviewFramePublishedCallback = std::function<void()>;
+
 // ---------------------------------------------------------------------------
 // OpusFrameDuration — configurable Opus frame size (ADR 0019)
 // ---------------------------------------------------------------------------
@@ -681,6 +697,12 @@ class RecorderSession {
     // running has NO effect until the next Record(). Optional: leaving it unset
     // disables the preview tap at zero cost (the shared texture is never created).
     void SetPreviewSharedHandleCallback(PreviewSharedHandleCallback cb);
+
+    // Register the per-frame publish edge (see PreviewFramePublishedCallback).
+    // Same capture-at-Record() lifetime as SetPreviewSharedHandleCallback, and
+    // only ever fires while that one is set — the tap is not created without a
+    // handle consumer.
+    void SetPreviewFramePublishedCallback(PreviewFramePublishedCallback cb);
 
     // Request a one-shot BGRA frame snapshot from the next composed video frame.
     // The callback fires from VideoThread with (success, width, height, bgra_bytes, error).

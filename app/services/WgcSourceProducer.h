@@ -42,6 +42,13 @@ class WgcSourceProducer final : public HubSourceProducer {
     void Close() override;
     ProducerPoll PollFrame(HubFrame& out) override;
 
+    [[nodiscard]] ID3D11Device* Device() const noexcept {
+        return device_.get();
+    }
+    [[nodiscard]] ID3D11DeviceContext* Context() const noexcept {
+        return context_.get();
+    }
+
   private:
     CaptureSourceKey key_;
     winrt::com_ptr<ID3D11Device> device_;

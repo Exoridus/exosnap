@@ -202,7 +202,8 @@ struct SessionState {
     std::shared_ptr<VideoEncoderFactory> video_encoder_factory = std::make_shared<VideoEncoderFactory>();
 
     // Frame snapshot (CaptureFrame) — VideoThread reads the flag on its next real frame,
-    // performs a one-shot NV12→BGRA readback, fires the callback, then clears the flag.
+    // or from the last completed encode surface while paused, performs a one-shot
+    // NV12→BGRA readback, fires the callback, then clears the flag.
     // At most one pending request is allowed; a second request while one is pending is ignored.
     std::atomic<bool> snapshot_requested{false};
     std::mutex snapshot_callback_mutex;
@@ -337,6 +338,12 @@ struct SessionState {
     // Unset == the tap is disabled at zero cost (the shared texture is never
     // created).
     std::function<void(HANDLE, uint32_t, uint32_t, PreviewTapDesc)> preview_shared_handle_cb;
+
+    // Per-frame publish edge for the same consumer (RecorderSession::
+    // SetPreviewFramePublishedCallback). Fired only after TryPublish actually
+    // wrote a frame, so a consumer can schedule exactly one redraw per new
+    // frame instead of polling the keyed mutex at its own render cadence.
+    std::function<void()> preview_frame_published_cb;
 
     // Record config captured at Record() time
     RecorderConfig config;

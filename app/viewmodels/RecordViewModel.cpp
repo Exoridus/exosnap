@@ -371,18 +371,23 @@ void RecordViewModel::SetState(UiRecordingState new_state) {
     case UiRecordingState::Recording:
         state_text = L"Recording";
         break;
+    case UiRecordingState::Paused:
+        state_text = L"Paused";
+        break;
+    case UiRecordingState::ArmedFromRecovery:
+        state_text = L"Paused — recovery ready";
+        break;
     case UiRecordingState::Stopping:
         state_text = L"Stopping...";
+        break;
+    case UiRecordingState::Saving:
+        state_text = L"Saving...";
         break;
     case UiRecordingState::Completed:
         state_text = L"Completed";
         break;
     case UiRecordingState::Failed:
         state_text = L"Failed";
-        break;
-    default:
-        // Paused/ArmedFromRecovery/Saving keep the text set by their own UI paths;
-        // this defensive default keeps the switch total as the enum grows.
         break;
     }
 }

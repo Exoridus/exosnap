@@ -105,8 +105,8 @@ TEST(AppSettingsStoreTest, AppSettingsStore_Save_WritesSettingsVersion) {
     store.Save(settings);
 
     QSettings raw_settings(settings_path, QSettings::IniFormat);
-    // Version bumped to 20: crash-report policy replaces the legacy Boolean.
-    EXPECT_EQ(raw_settings.value(QStringLiteral("settings_version")).toInt(), 20);
+    // Version bumped to 21: appearance_id + accent_id replace theme_id.
+    EXPECT_EQ(raw_settings.value(QStringLiteral("settings_version")).toInt(), 21);
 }
 
 TEST(AppSettingsStoreTest, CrashReportPolicy_DefaultsToAskEveryTime) {
@@ -672,54 +672,31 @@ TEST(AppSettingsStoreTest, AppSettingsStore_MissingUpdateKeys_DefaultToStableAnd
 }
 
 // ---------------------------------------------------------------------------
-// THEME-SLICE-1: theme_id round-trip + default tests
+// Appearance + accent: round-trip, defaults, and the legacy theme_id migration
 // ---------------------------------------------------------------------------
 
-TEST(AppSettingsStoreTest, AppSettingsStore_DefaultThemeIdIsDarkDefault) {
+TEST(AppSettingsStoreTest, AppSettingsStore_DefaultAppearanceIsDarkAqua) {
     PersistedAppSettings settings;
-    EXPECT_EQ(settings.theme_id, QStringLiteral("dark-default"));
+    EXPECT_EQ(settings.appearance_id, QStringLiteral("dark"));
+    EXPECT_EQ(settings.accent_id, QStringLiteral("aqua"));
 }
 
-TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_ThemeId_DarkIndigo) {
+TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_AppearanceAndAccent) {
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
 
     AppSettingsStore store(TempSettingsPath(temp_dir));
     PersistedAppSettings settings;
-    settings.theme_id = QStringLiteral("dark-indigo");
+    settings.appearance_id = QStringLiteral("light");
+    settings.accent_id = QStringLiteral("violet");
     store.Save(settings);
 
     const PersistedAppSettings loaded = store.Load();
-    EXPECT_EQ(loaded.theme_id, QStringLiteral("dark-indigo"));
+    EXPECT_EQ(loaded.appearance_id, QStringLiteral("light"));
+    EXPECT_EQ(loaded.accent_id, QStringLiteral("violet"));
 }
 
-TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_ThemeId_LightPaper) {
-    QTemporaryDir temp_dir;
-    ASSERT_TRUE(temp_dir.isValid());
-
-    AppSettingsStore store(TempSettingsPath(temp_dir));
-    PersistedAppSettings settings;
-    settings.theme_id = QStringLiteral("light-paper");
-    store.Save(settings);
-
-    const PersistedAppSettings loaded = store.Load();
-    EXPECT_EQ(loaded.theme_id, QStringLiteral("light-paper"));
-}
-
-TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_ThemeId_LightSlate) {
-    QTemporaryDir temp_dir;
-    ASSERT_TRUE(temp_dir.isValid());
-
-    AppSettingsStore store(TempSettingsPath(temp_dir));
-    PersistedAppSettings settings;
-    settings.theme_id = QStringLiteral("light-slate");
-    store.Save(settings);
-
-    const PersistedAppSettings loaded = store.Load();
-    EXPECT_EQ(loaded.theme_id, QStringLiteral("light-slate"));
-}
-
-TEST(AppSettingsStoreTest, AppSettingsStore_MissingThemeId_DefaultsToDarkDefault) {
+TEST(AppSettingsStoreTest, AppSettingsStore_MissingAppearanceGroup_DefaultsToDarkAqua) {
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
     const QString settings_path = TempSettingsPath(temp_dir);
@@ -735,8 +712,105 @@ TEST(AppSettingsStoreTest, AppSettingsStore_MissingThemeId_DefaultsToDarkDefault
 
     AppSettingsStore store(settings_path);
     const PersistedAppSettings loaded = store.Load();
-    // Theme key absent: must default to "dark-default".
-    EXPECT_EQ(loaded.theme_id, QStringLiteral("dark-default"));
+    EXPECT_EQ(loaded.appearance_id, QStringLiteral("dark"));
+    EXPECT_EQ(loaded.accent_id, QStringLiteral("aqua"));
+}
+
+// A store written by a pre-0.9 build carries only `theme_id`. Reading it must
+// produce the closest pair, not the default — otherwise every existing install
+// silently loses its colour on the first launch after the update.
+TEST(AppSettingsStoreTest, AppSettingsStore_LegacyThemeIdMigratesToAppearanceAndAccent) {
+    struct Row {
+        const char* legacy;
+        const char* appearance;
+        const char* accent;
+    };
+    for (const Row& row : {Row{"dark-default", "dark", "aqua"}, Row{"dark-indigo", "dark", "violet"},
+                           Row{"light-paper", "light", "sky"}, Row{"light-slate", "light", "violet"}}) {
+        QTemporaryDir temp_dir;
+        ASSERT_TRUE(temp_dir.isValid());
+        const QString settings_path = TempSettingsPath(temp_dir);
+        {
+            QSettings s(settings_path, QSettings::IniFormat);
+            s.beginGroup(QStringLiteral("appearance"));
+            s.setValue(QStringLiteral("theme_id"), QString::fromUtf8(row.legacy));
+            s.endGroup();
+            s.sync();
+        }
+
+        AppSettingsStore store(settings_path);
+        const PersistedAppSettings loaded = store.Load();
+        EXPECT_EQ(loaded.appearance_id, QString::fromUtf8(row.appearance)) << row.legacy;
+        EXPECT_EQ(loaded.accent_id, QString::fromUtf8(row.accent)) << row.legacy;
+    }
+}
+
+TEST(AppSettingsStoreTest, AppSettingsStore_UnknownLegacyThemeIdMigratesToTheDefault) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+    const QString settings_path = TempSettingsPath(temp_dir);
+    {
+        QSettings s(settings_path, QSettings::IniFormat);
+        s.beginGroup(QStringLiteral("appearance"));
+        s.setValue(QStringLiteral("theme_id"), QStringLiteral("dark-teal-that-never-shipped"));
+        s.endGroup();
+        s.sync();
+    }
+
+    AppSettingsStore store(settings_path);
+    const PersistedAppSettings loaded = store.Load();
+    // Never blank, never unstyled: an unreadable preference resolves to the
+    // shipped default rather than to an empty id.
+    EXPECT_EQ(loaded.appearance_id, QStringLiteral("dark"));
+    EXPECT_EQ(loaded.accent_id, QStringLiteral("aqua"));
+}
+
+// The new keys win once they exist. An older build run against the same store
+// would rewrite `theme_id`; letting that override a choice made since would
+// undo the user's selection every time they switched builds.
+TEST(AppSettingsStoreTest, AppSettingsStore_StoredAppearanceOutranksALingeringThemeId) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+    const QString settings_path = TempSettingsPath(temp_dir);
+    {
+        QSettings s(settings_path, QSettings::IniFormat);
+        s.beginGroup(QStringLiteral("appearance"));
+        s.setValue(QStringLiteral("appearance_id"), QStringLiteral("light"));
+        s.setValue(QStringLiteral("accent_id"), QStringLiteral("magenta"));
+        s.setValue(QStringLiteral("theme_id"), QStringLiteral("dark-indigo"));
+        s.endGroup();
+        s.sync();
+    }
+
+    AppSettingsStore store(settings_path);
+    const PersistedAppSettings loaded = store.Load();
+    EXPECT_EQ(loaded.appearance_id, QStringLiteral("light"));
+    EXPECT_EQ(loaded.accent_id, QStringLiteral("magenta"));
+}
+
+// Saving drops the legacy key, so the migration path above can never fire again
+// against a value the user has since replaced.
+TEST(AppSettingsStoreTest, AppSettingsStore_SaveRemovesTheLegacyThemeIdKey) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+    const QString settings_path = TempSettingsPath(temp_dir);
+    {
+        QSettings s(settings_path, QSettings::IniFormat);
+        s.beginGroup(QStringLiteral("appearance"));
+        s.setValue(QStringLiteral("theme_id"), QStringLiteral("light-slate"));
+        s.endGroup();
+        s.sync();
+    }
+
+    AppSettingsStore store(settings_path);
+    PersistedAppSettings settings = store.Load();
+    ASSERT_EQ(settings.accent_id, QStringLiteral("violet"));
+    store.Save(settings);
+
+    QSettings s(settings_path, QSettings::IniFormat);
+    s.beginGroup(QStringLiteral("appearance"));
+    EXPECT_FALSE(s.contains(QStringLiteral("theme_id")));
+    s.endGroup();
 }
 
 } // namespace exosnap

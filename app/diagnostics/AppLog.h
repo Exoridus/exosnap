@@ -110,6 +110,17 @@ class AppLog final : public QObject {
     void deliverPending();
 };
 
+// SETTINGS-HONESTY-R1: maps the persisted/UI developer log-level string ("Off" |
+// "Error" | "Warning" | "Info" | "Debug") to the setMinSeverity filter above
+// (nullopt = "Off", i.e. record nothing). Unknown/legacy values fall back to
+// Debug (record everything) so a corrupt or stale key can never silently narrow
+// support diagnostics below what the default always recorded.
+//
+// Lives here rather than in a frontend: both entry points have to apply the
+// same persisted string to the same filter, and a second private copy per
+// frontend is exactly how the two would drift.
+[[nodiscard]] std::optional<LogSeverity> DeveloperLogLevelFromString(const QString& level);
+
 } // namespace exosnap::diagnostics
 
 Q_DECLARE_METATYPE(exosnap::diagnostics::LogEntry)

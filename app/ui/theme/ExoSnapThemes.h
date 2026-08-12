@@ -1,82 +1,84 @@
 #pragma once
 
 #include <array>
+#include <string_view>
+
+// The appearance model.
+//
+// Two base appearances and a small curated accent palette, chosen
+// independently. It replaces four complete themes (`dark-default`,
+// `dark-indigo`, `light-paper`, `light-slate`), each of which pinned one hue to
+// one set of neutrals: choosing indigo meant also accepting a different
+// background, and the two light themes existed mainly because neither could
+// carry the other's accent. Splitting the two axes removes that coupling and
+// leaves one Light base to actually get right instead of two to keep in step.
+//
+// The accents are deliberately all cool. Coral, amber and green are the
+// product's semantic colours — recording/error, caution, ready/success — and an
+// accent sharing one of those hues would make ordinary selection look like a
+// state. Semantic meaning wins over palette breadth.
 
 namespace exosnap::ui::theme {
 
-// Identifies the theme kind (dark vs light) for alpha derivation.
+// Identifies the appearance kind for alpha/tint derivation.
 enum class ThemeKind { Dark, Light };
 
-// Log palette per theme.
-struct ExoLogPalette {
-    const char* cat;
-    const char* info;
-    const char* warn;
-    const char* error;
-    const char* debug;
-    const char* time;
-};
-
-// Complete colour token set for one theme.
-// Optional overrides: bg4_override, line3_override, text1_override are used when
-// the derived value would differ from the authoritative palette (dark-default).
-// Set to nullptr to use derived value.
-struct ExoTheme {
+// One base appearance: every neutral and every semantic colour. Accent-free by
+// construction, so an accent can never leak into a surface or a state colour.
+struct ExoAppearance {
     const char* id;
     const char* name;
-    const char* group; // "Dark" or "Light"
     ThemeKind kind;
-    const char* intent; // short description
+    const char* intent; // short description, shown beside the option
 
-    // Surfaces
+    // Surfaces, from the page outwards. Four distinct rungs in both
+    // appearances: an application background, a primary surface, a raised
+    // control surface, and the hover/selected step.
     const char* bg;
     const char* surf;
     const char* surf2;
     const char* raise;
 
-    // Lines (these are raw rgba strings, not derived)
+    // Lines (raw rgba strings so the alpha rides on whatever is behind them).
     const char* line;
     const char* line2;
 
-    // Text
+    // Text, from primary to dimmest. `text1` is the secondary rung; it is
+    // explicit rather than derived because both appearances want it tuned
+    // rather than blended.
     const char* ink;
+    const char* text1;
     const char* mut;
     const char* dim;
 
-    // Primary accent
-    const char* ac;
-    const char* ac_ink;
-
-    // Secondary accent
-    const char* ac2;
-    const char* ac2_ink;
-
-    // Semantic
+    // Semantic. Never derived from the accent — see the note above the
+    // namespace.
     const char* success;
     const char* caution;
     const char* error;
-    const char* error_ink; // text/icon color for content drawn on an `error`-filled
-                           // surface (mirrors ac_ink's contrast role for the accent fill)
-
-    // Log palette
-    ExoLogPalette log;
-
-    // Optional explicit overrides for derived tokens (nullptr = use derived)
-    const char* bg4_override = nullptr;         // dark: Lighten(raise,0.10); light: Darken(raise,0.04)
-    const char* line3_override = nullptr;       // dark: rgba(255,255,255,0.20); light: rgba(ink,0.24)
-    const char* text1_override = nullptr;       // dark-default: #C5C5C3; else: blend(ink,mut,0.42)
-    const char* error_hover_override = nullptr; // dark themes: the historical stop-hover coral;
-                                                // nullptr elsewhere derives Lighten(error, 0.14)
+    const char* error_ink; // ink for content drawn on an `error`-filled surface
 };
 
-// The canonical theme table. dark-default MUST be first (kDefaultThemeId references it).
-inline constexpr std::array<ExoTheme, 4> kExoThemes = {{
+// One curated accent, resolved per appearance. Two entries rather than one
+// colour with a derivation rule: a hue that reads correctly at 60% lightness on
+// a near-black surface is unreadable on a near-white one, and a rule that tried
+// to bridge that produced a different hue in each appearance.
+struct ExoAccent {
+    const char* id;
+    const char* name;
+    const char* intent;
+    const char* dark;     // the accent on the Dark appearance
+    const char* dark_ink; // ink for content on a filled accent surface there
+    const char* light;
+    const char* light_ink;
+};
+
+inline constexpr std::array<ExoAppearance, 2> kExoAppearances = {{
     {
-        "dark-default",
-        "Dark \xC2\xB7 Default",
+        "dark",
         "Dark",
         ThemeKind::Dark,
-        "The frozen Studio-Mint base \xE2\x80\x94 calm graphite, mint primary.",
+        "Calm graphite \xE2\x80\x94 the shipped default.",
         "#0E0E10",
         "#151517",
         "#1C1C1F",
@@ -84,112 +86,144 @@ inline constexpr std::array<ExoTheme, 4> kExoThemes = {{
         "rgba(255, 255, 255, 0.07)",
         "rgba(255, 255, 255, 0.12)",
         "#F1F1EF",
+        "#C5C5C3",
         "#9C9C9A",
-        "#65656A",
-        "#9BD9D2",
-        "#08130F",
-        "#B6A7E6",
-        "#0E0A1E",
+        // Two steps up from the historical #65656A. `dim` is what an unavailable
+        // control draws its icon in, and against the raised control surface
+        // (#1C1C1F) the old value landed at 2.93:1 — just under the 3:1 the
+        // contrast gate holds a non-text UI element to. The nudge clears it on
+        // every surface it lands on without touching the dim/muted separation.
+        "#67676C",
         "#84CBA2",
         "#E6C57C",
         "#E0786C",
-        "#1A0D0B", // error_ink (exact value kept from the historical hardcoded QSS)
-        {"#7FB7D9", "#9C9C9A", "#E6C57C", "#E0786C", "#65656A", "#65656A"},
-        "#2C2C31",                   // bg4_override (exact palette value kBg4)
-        "rgba(255, 255, 255, 0.20)", // line3_override (exact palette value kLine3)
-        "#C5C5C3",                   // text1_override (exact palette value kText1)
-        "#EC8A7E",                   // error_hover_override (exact value kept from the historical hardcoded QSS)
+        "#1A0D0B",
     },
     {
-        "dark-indigo",
-        "Dark \xC2\xB7 Indigo",
-        "Dark",
-        ThemeKind::Dark,
-        "Cooler and more focused \xE2\x80\x94 periwinkle indigo on blue-black.",
-        "#0B0C10",
-        "#14151B",
-        "#1B1D25",
-        "#25272F",
-        "rgba(255, 255, 255, 0.07)",
-        "rgba(255, 255, 255, 0.12)",
-        "#F0F1F4",
-        "#989AA4",
-        "#62646E",
-        "#9DB0F5",
-        "#0A0F22",
-        "#E0B486",
-        "#1E1206",
-        "#84CBA2",
-        "#E6C57C",
-        "#E0786C",
-        "#1A0D0B", // error_ink (same error color as dark-default, same required ink)
-        {"#5FBCA8", "#989AA4", "#E6C57C", "#E0786C", "#62646E", "#62646E"},
-        nullptr,
-        nullptr,
-        nullptr,
-        "#EC8A7E", // error_hover_override (same error color and historical hover as dark-default)
-    },
-    {
-        "light-paper",
-        "Light \xC2\xB7 Paper",
+        // One Light base, rebuilt rather than inherited from either of the two
+        // light themes it replaces. Both of those set `surf2` AND `raise` to
+        // pure white, which collapsed the raised-control and hover rungs into
+        // one and is why the light UI read as flat: a control, the card holding
+        // it and the card's hover state were all the same colour.
+        //
+        // The four rungs below are distinct and none of them is pure white. The
+        // page is a light cool neutral rather than paper, so a near-white
+        // control has something to sit on; hover steps back DOWN towards the
+        // page, which is the light-mode convention (there is no headroom above
+        // white to step up into).
+        "light",
         "Light",
         ThemeKind::Light,
-        "Warm daylight \xE2\x80\x94 ink on paper, petrol-blue primary.",
-        "#EFEDE7",
-        "#F9F8F4",
+        "Cool daylight \xE2\x80\x94 restrained neutrals, near-white surfaces.",
+        "#E7E9ED",
+        "#F2F3F6",
+        "#FDFDFE",
+        "#EAECF1",
+        "rgba(20, 26, 38, 0.12)",
+        "rgba(20, 26, 38, 0.22)",
+        "#171B24",
+        "#3D4351",
+        "#545A68",
+        // Darkened from #868D9C. `dim` is what an unavailable control draws its
+        // icon in, and against the page background it landed at 2.74:1 — under
+        // the 3:1 the contrast gate holds a non-text UI element to.
+        "#798192",
+        // success / caution darkened from #1E9E63 / #B5801C, and error from
+        // #CE4B36. All three are drawn as rings, dots and pill grounds on the
+        // page background, where they sat at 2.82 / 2.85 against the 3:1 bar;
+        // error additionally carries white ink on a filled Stop pill, which was
+        // 4.48 against the 4.5 text bar. Hue and saturation are unchanged — only
+        // lightness moved, and only far enough to clear the bar with a margin.
+        "#1C915B",
+        "#A7761A",
+        "#C94631",
         "#FFFFFF",
-        "#FFFFFF",
-        "rgba(28, 24, 16, 0.10)",
-        "rgba(28, 24, 16, 0.17)",
-        "#20201C",
-        "#5E5C54",
-        "#918E83",
-        "#18708F",
-        "#FFFFFF",
-        "#5A52C7",
-        "#FFFFFF",
-        "#1E9E63",
-        "#B5801C",
-        "#CE4B36",
-        "#FFFFFF", // error_ink (darker saturated red fill needs light ink, like this theme's ac_ink)
-        {"#1F6FB8", "#5E5C54", "#A6731A", "#C0432F", "#918E83", "#918E83"},
-        nullptr,
-        nullptr,
-        nullptr,
-        nullptr, // error_hover_override: derive Lighten(error, 0.14)
-    },
-    {
-        "light-slate",
-        "Light \xC2\xB7 Slate",
-        "Light",
-        ThemeKind::Light,
-        "Cool daylight \xE2\x80\x94 neutral grey-blue with an indigo primary.",
-        "#ECEEF1",
-        "#F7F8FA",
-        "#FFFFFF",
-        "#FFFFFF",
-        "rgba(15, 20, 30, 0.10)",
-        "rgba(15, 20, 30, 0.17)",
-        "#161A22",
-        "#565C68",
-        "#888F9C",
-        "#3B5BD4",
-        "#FFFFFF",
-        "#0E8A7E",
-        "#FFFFFF",
-        "#1E9E63",
-        "#B5801C",
-        "#CE4B36",
-        "#FFFFFF", // error_ink (darker saturated red fill needs light ink, like this theme's ac_ink)
-        {"#0E7C86", "#565C68", "#A6731A", "#C0432F", "#888F9C", "#888F9C"},
-        nullptr,
-        nullptr,
-        nullptr,
-        nullptr, // error_hover_override: derive Lighten(error, 0.14)
     },
 }};
 
-// The default theme id — must match kExoThemes[0].id.
-inline constexpr const char* kDefaultThemeId = "dark-default";
+// Aqua MUST be first (kDefaultAccentId references it).
+inline constexpr std::array<ExoAccent, 4> kExoAccents = {{
+    {
+        "aqua",
+        "Aqua",
+        "Studio mint \xE2\x80\x94 the ExoSnap default.",
+        "#9BD9D2",
+        "#08130F",
+        "#127C74",
+        "#FFFFFF",
+    },
+    {
+        "sky",
+        "Sky",
+        "Petrol blue \xE2\x80\x94 cooler and quieter.",
+        "#7FB7D9",
+        "#06131C",
+        "#18708F",
+        "#FFFFFF",
+    },
+    {
+        "violet",
+        "Violet",
+        "Periwinkle \xE2\x80\x94 more contrast against the neutrals.",
+        "#B6A7E6",
+        "#0E0A1E",
+        "#6A4FC7",
+        "#FFFFFF",
+    },
+    {
+        "magenta",
+        "Magenta",
+        "Warm pink \xE2\x80\x94 the most assertive of the four.",
+        "#E3A0CE",
+        "#1C0A16",
+        "#A63C7E",
+        "#FFFFFF",
+    },
+}};
+
+inline constexpr const char* kDefaultAppearanceId = "dark";
+inline constexpr const char* kDefaultAccentId = "aqua";
+
+// Pre-0.9 complete-theme ids, mapped to the closest (appearance, accent) pair.
+//
+// Mapped by the accent HUE the user actually saw, not by the theme's position
+// in the old list — the two axes are independent now, so preserving the colour
+// someone chose matters more than preserving which row it came from. That is
+// why `light-paper` lands on Sky rather than on the default Aqua: its accent
+// token was #18708F, petrol blue, which is exactly Sky's light value.
+struct ExoThemeMigration {
+    const char* legacy_theme_id;
+    const char* appearance_id;
+    const char* accent_id;
+};
+
+inline constexpr std::array<ExoThemeMigration, 4> kExoThemeMigrations = {{
+    {"dark-default", "dark", "aqua"},
+    {"dark-indigo", "dark", "violet"},
+    {"light-paper", "light", "sky"},
+    {"light-slate", "light", "violet"},
+}};
+
+// Anything unrecognised — an empty string, a hand-edited value, an id from a
+// build that never existed — resolves to the shipped default. A settings store
+// can therefore always be read into a valid pair, which is the property that
+// keeps a damaged preference from producing an unstyled window.
+[[nodiscard]] inline constexpr const char* MigratedAppearanceId(std::string_view legacy_theme_id) noexcept {
+    for (const ExoThemeMigration& migration : kExoThemeMigrations) {
+        if (legacy_theme_id == migration.legacy_theme_id) {
+            return migration.appearance_id;
+        }
+    }
+    return kDefaultAppearanceId;
+}
+
+[[nodiscard]] inline constexpr const char* MigratedAccentId(std::string_view legacy_theme_id) noexcept {
+    for (const ExoThemeMigration& migration : kExoThemeMigrations) {
+        if (legacy_theme_id == migration.legacy_theme_id) {
+            return migration.accent_id;
+        }
+    }
+    return kDefaultAccentId;
+}
 
 } // namespace exosnap::ui::theme

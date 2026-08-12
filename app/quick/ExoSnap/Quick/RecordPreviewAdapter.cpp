@@ -1,0 +1,565 @@
+#include "RecordPreviewAdapter.h"
+
+#include "ExoPreviewItem.h"
+
+#include "services/CaptureSourceKey.h"
+#include "services/DxgiCaptureHubService.h"
+#include "services/RecordingCoordinator.h"
+#include "services/WgcCaptureHubService.h"
+
+#include <QCoreApplication>
+#include <QMetaObject>
+
+#include <recorder_core/recorder_session.h>
+
+#include <windows.h>
+
+#include <algorithm>
+#include <memory>
+#include <utility>
+#include <vector>
+
+namespace exosnap::quick {
+namespace {
+
+struct QueuedSharedHandle {
+    explicit QueuedSharedHandle(void* value) : handle(value) {
+    }
+    ~QueuedSharedHandle() {
+        if (handle != nullptr)
+            CloseHandle(static_cast<HANDLE>(handle));
+    }
+    void* handle = nullptr;
+};
+
+QString targetDescription(const recorder_core::CaptureTarget& target) {
+    const QString description = QString::fromUtf8(target.description);
+    return description.isEmpty() ? QStringLiteral("Primary display") : description;
+}
+
+QString stateTextFor(UiRecordingState state) {
+    switch (state) {
+    case UiRecordingState::LoadingCapabilities:
+        return QStringLiteral("Loading capabilities");
+    case UiRecordingState::Ready:
+        return QStringLiteral("Ready");
+    case UiRecordingState::Blocked:
+        return QStringLiteral("Blocked");
+    case UiRecordingState::Preparing:
+        return QStringLiteral("Preparing");
+    case UiRecordingState::Recording:
+        return QStringLiteral("Recording");
+    case UiRecordingState::Paused:
+        return QStringLiteral("Paused");
+    case UiRecordingState::Stopping:
+        return QStringLiteral("Stopping");
+    case UiRecordingState::Saving:
+        return QStringLiteral("Saving");
+    case UiRecordingState::Completed:
+        return QStringLiteral("Completed");
+    case UiRecordingState::Failed:
+        return QStringLiteral("Failed");
+    case UiRecordingState::Countdown:
+        return QStringLiteral("Countdown");
+    case UiRecordingState::RegionSelecting:
+        return QStringLiteral("Selecting region");
+    case UiRecordingState::ArmedFromRecovery:
+        return QStringLiteral("Recovery paused");
+    }
+    return QStringLiteral("Unknown");
+}
+
+} // namespace
+
+RecordPreviewAdapter::RecordPreviewAdapter(QObject* parent)
+    : QObject(parent), dxgi_source_(std::make_unique<DxgiCaptureHubService>()),
+      wgc_source_(std::make_unique<WgcCaptureHubService>()) {
+    metrics_timer_.setInterval(250);
+    metrics_timer_.setTimerType(Qt::CoarseTimer);
+    connect(&metrics_timer_, &QTimer::timeout, this, &RecordPreviewAdapter::updateMetrics);
+}
+
+RecordPreviewAdapter::~RecordPreviewAdapter() {
+    stopPreview();
+    // Member destruction then joins ready_frame_pool_ (declared last, so
+    // destroyed first). A Ready-frame worker in flight uses its own D3D11
+    // device and touches none of the members torn down above it.
+}
+
+bool RecordPreviewAdapter::active() const noexcept {
+    return active_;
+}
+
+void RecordPreviewAdapter::setActive(bool active) {
+    if (active_ == active)
+        return;
+    active_ = active;
+    emit activeChanged();
+    if (active_)
+        startPreview();
+    else
+        stopPreview();
+}
+
+bool RecordPreviewAdapter::sourceAvailable() const noexcept {
+    return source_available_;
+}
+
+bool RecordPreviewAdapter::frameReady() const noexcept {
+    return frame_ready_;
+}
+
+const QString& RecordPreviewAdapter::sourceName() const noexcept {
+    return source_name_;
+}
+
+const QString& RecordPreviewAdapter::statusText() const noexcept {
+    return status_text_;
+}
+
+const QString& RecordPreviewAdapter::errorText() const noexcept {
+    return error_text_;
+}
+
+QSize RecordPreviewAdapter::sourceSize() const {
+    return source_size_;
+}
+
+double RecordPreviewAdapter::presentationRate() const noexcept {
+    return presentation_rate_;
+}
+
+double RecordPreviewAdapter::sourceDeliveryRate() const noexcept {
+    return source_delivery_rate_;
+}
+
+double RecordPreviewAdapter::frameTimeP95Ms() const noexcept {
+    return frame_time_p95_ms_;
+}
+
+double RecordPreviewAdapter::frameTimeP99Ms() const noexcept {
+    return frame_time_p99_ms_;
+}
+
+double RecordPreviewAdapter::submitP95Us() const noexcept {
+    return submit_p95_us_;
+}
+
+qulonglong RecordPreviewAdapter::consumedFrames() const noexcept {
+    return consumed_frames_;
+}
+
+qulonglong RecordPreviewAdapter::mutexMisses() const noexcept {
+    return mutex_misses_;
+}
+
+bool RecordPreviewAdapter::recordingActive() const noexcept {
+    return recording_active_;
+}
+
+const QString& RecordPreviewAdapter::recordingStateText() const noexcept {
+    return recording_state_text_;
+}
+
+qulonglong RecordPreviewAdapter::recordingDroppedFrames() const noexcept {
+    return recording_dropped_frames_;
+}
+
+QVariantMap RecordPreviewAdapter::benchmarkSnapshot() const {
+    const PreviewMetricsSnapshot metrics = previewMetricsSnapshot();
+    const DxgiCaptureHubService::PreviewPublishStats publisher =
+        dxgi_source_ != nullptr ? dxgi_source_->GetPreviewPublishStats() : DxgiCaptureHubService::PreviewPublishStats{};
+    return {
+        {QStringLiteral("source_name"), source_name_},
+        {QStringLiteral("source_width"), source_size_.width()},
+        {QStringLiteral("source_height"), source_size_.height()},
+        {QStringLiteral("frame_ready"), frame_ready_},
+        {QStringLiteral("render_frames"), QVariant::fromValue<qulonglong>(metrics.render_frames)},
+        {QStringLiteral("consumed_frames"), QVariant::fromValue<qulonglong>(metrics.consumed_frames)},
+        {QStringLiteral("mutex_misses"), QVariant::fromValue<qulonglong>(metrics.mutex_misses)},
+        {QStringLiteral("scene_render_fps"), metrics.scene_fps},
+        {QStringLiteral("scene_frame_ms_p50"), metrics.scene_frame_ms_p50},
+        {QStringLiteral("scene_frame_ms_p95"), metrics.scene_frame_ms_p95},
+        {QStringLiteral("scene_frame_ms_p99"), metrics.scene_frame_ms_p99},
+        {QStringLiteral("scene_frame_ms_max"), metrics.scene_frame_ms_max},
+        {QStringLiteral("source_delivery_fps"), metrics.source_delivery_fps},
+        {QStringLiteral("source_interval_ms_p95"), metrics.source_interval_ms_p95},
+        {QStringLiteral("source_interval_ms_p99"), metrics.source_interval_ms_p99},
+        {QStringLiteral("producer_publish_attempts"), QVariant::fromValue<qulonglong>(publisher.attempts)},
+        {QStringLiteral("producer_published_frames"), QVariant::fromValue<qulonglong>(publisher.published)},
+        {QStringLiteral("producer_contention_drops"), QVariant::fromValue<qulonglong>(publisher.dropped_on_contention)},
+        {QStringLiteral("submit_us_p50"), metrics.submit_us_p50},
+        {QStringLiteral("submit_us_p95"), metrics.submit_us_p95},
+        {QStringLiteral("submit_us_p99"), metrics.submit_us_p99},
+        {QStringLiteral("source_dxgi_format"), metrics.source_dxgi_format},
+        {QStringLiteral("preview_publish_signals"), QVariant::fromValue<qulonglong>(metrics.publish_signals)},
+        {QStringLiteral("preview_coalesced_signals"), QVariant::fromValue<qulonglong>(metrics.coalesced_signals)},
+        {QStringLiteral("preview_scene_update_requests"),
+         QVariant::fromValue<qulonglong>(metrics.scene_update_requests)},
+        {QStringLiteral("transport"), QStringLiteral("NT shared handle + keyed mutex + GPU CopyResource")},
+        {QStringLiteral("cpu_readback"), false},
+        {QStringLiteral("native_child_hwnd"), false},
+        {QStringLiteral("recording_state"), recording_state_text_},
+        {QStringLiteral("recording_capture_frames"), QVariant::fromValue<qulonglong>(recording_captured_frames_)},
+        {QStringLiteral("recording_encoded_packets"), QVariant::fromValue<qulonglong>(recording_encoded_packets_)},
+        {QStringLiteral("recording_dropped_frames"), QVariant::fromValue<qulonglong>(recording_dropped_frames_)},
+        {QStringLiteral("recording_texture_generations"),
+         QVariant::fromValue<qulonglong>(recording_texture_generations_)},
+    };
+}
+
+void RecordPreviewAdapter::waitForPendingReadyFrames() {
+    ready_frame_pool_.waitForDone();
+}
+
+PreviewMetricsSnapshot RecordPreviewAdapter::previewMetricsSnapshot() const {
+    PreviewMetricsSnapshot snapshot = item_ != nullptr ? item_->metricsSnapshot() : PreviewMetricsSnapshot{};
+    // The scheduler lives here, not on the item: the item is only ever told to
+    // redraw, it never learns why.
+    snapshot.publish_signals = update_scheduler_->PublishSignals();
+    snapshot.coalesced_signals = update_scheduler_->CoalescedSignals();
+    snapshot.wakeups = update_scheduler_->Wakeups();
+    snapshot.scene_update_requests = update_scheduler_->SceneUpdateRequests();
+    return snapshot;
+}
+
+void RecordPreviewAdapter::resetMetrics() {
+    if (item_ != nullptr)
+        item_->resetMetrics();
+    if (dxgi_source_ != nullptr)
+        dxgi_source_->ResetPreviewPublishStats();
+    update_scheduler_->ResetCounters();
+    recording_dropped_frames_ = 0;
+    recording_captured_frames_ = 0;
+    recording_encoded_packets_ = 0;
+    recording_texture_generations_ = 0;
+    updateMetrics();
+}
+
+void RecordPreviewAdapter::attachPreviewItem(ExoPreviewItem* item) {
+    if (item_ == item)
+        return;
+    if (item_ != nullptr)
+        item_->clearSharedTexture();
+    item_ = item;
+    if (item_ != nullptr) {
+        connect(item_, &ExoPreviewItem::frameReadyChanged, this, &RecordPreviewAdapter::synchronizeItemState,
+                Qt::UniqueConnection);
+        connect(item_, &ExoPreviewItem::sourceSizeChanged, this, &RecordPreviewAdapter::synchronizeItemState,
+                Qt::UniqueConnection);
+        connect(item_, &ExoPreviewItem::errorTextChanged, this, &RecordPreviewAdapter::synchronizeItemState,
+                Qt::UniqueConnection);
+    }
+    if (active_)
+        startPreview();
+}
+
+void RecordPreviewAdapter::detachPreviewItem(ExoPreviewItem* item) {
+    if (item_ != item)
+        return;
+    stopPreview();
+    item_ = nullptr;
+}
+
+void RecordPreviewAdapter::bindRecordingCoordinator(RecordingCoordinator* coordinator) {
+    if (coordinator == nullptr)
+        return;
+    QPointer<RecordPreviewAdapter> safe_self(this);
+    coordinator->SetPreviewCaptureReleaseHook([safe_self]() {
+        if (safe_self == nullptr)
+            return;
+        safe_self->engine_feed_expected_.store(true, std::memory_order_release);
+        if (safe_self->dxgi_source_ != nullptr)
+            safe_self->dxgi_source_->RequestEngineLease();
+        if (safe_self->wgc_source_ != nullptr)
+            safe_self->wgc_source_->RequestEngineLease();
+    });
+    coordinator->SetPreviewFramePublishedCallback(makeFramePublishedSink());
+    coordinator->SetPreviewSharedHandleReadyCallback(
+        [safe_self](void* handle, uint32_t width, uint32_t height, recorder_core::PreviewTapDesc tap) {
+            auto handle_owner = std::make_shared<QueuedSharedHandle>(handle);
+            QMetaObject::invokeMethod(
+                QCoreApplication::instance(),
+                [safe_self, handle_owner, width, height, tap]() {
+                    if (safe_self == nullptr || !safe_self->engine_feed_expected_.load(std::memory_order_acquire)) {
+                        return;
+                    }
+                    void* raw_handle = std::exchange(handle_owner->handle, nullptr);
+                    safe_self->acceptRecordingTexture(raw_handle, width, height, tap);
+                },
+                Qt::QueuedConnection);
+        });
+}
+
+void RecordPreviewAdapter::setPreviewTarget(const recorder_core::CaptureTarget& target) {
+    const bool changed = !selected_target_.has_value() || selected_target_->kind != target.kind ||
+                         selected_target_->native_id != target.native_id ||
+                         selected_target_->description != target.description;
+    selected_target_ = target;
+    if (changed && active_ && !engine_feed_expected_.load(std::memory_order_acquire))
+        startPreview();
+}
+
+void RecordPreviewAdapter::clearPreviewTarget() {
+    if (!selected_target_.has_value())
+        return;
+    selected_target_.reset();
+    if (active_)
+        startPreview();
+}
+
+void RecordPreviewAdapter::observeRecordingState(UiRecordingState state) {
+    const bool active = state == UiRecordingState::Recording || state == UiRecordingState::Paused;
+    const QString state_text = stateTextFor(state);
+    if (recording_active_ != active || recording_state_text_ != state_text) {
+        recording_active_ = active;
+        recording_state_text_ = state_text;
+        emit recordingStateChanged();
+    }
+    if (ShouldRevertPreviewFromPushedMode(state) && engine_feed_expected_.exchange(false, std::memory_order_acq_rel)) {
+        if (dxgi_source_ != nullptr)
+            dxgi_source_->ReturnEngineLease();
+        if (wgc_source_ != nullptr)
+            wgc_source_->ReturnEngineLease();
+    }
+}
+
+void RecordPreviewAdapter::observeRecordingStats(const recorder_core::SessionStats& stats) {
+    recording_captured_frames_ = stats.video_frames_captured;
+    recording_encoded_packets_ = stats.encoded_video_packets;
+    emit metricsChanged();
+}
+
+void RecordPreviewAdapter::observeRecordingDiagnostics(const recorder_core::RecordingDiagnosticsSnapshot& snapshot) {
+    recording_dropped_frames_ = snapshot.capture.frames_dropped_problem();
+    emit metricsChanged();
+}
+
+void RecordPreviewAdapter::requestReadyFrame(ReadyFrameComposition composition,
+                                             ReadyFrameCaptureService::Callback callback) {
+    HANDLE duplicate = nullptr;
+    if (ready_source_handle_ == nullptr || !frame_ready_ ||
+        DuplicateHandle(GetCurrentProcess(), ready_source_handle_, GetCurrentProcess(), &duplicate, 0, FALSE,
+                        DUPLICATE_SAME_ACCESS) == FALSE) {
+        callback(false, 0, 0, {}, QStringLiteral("No Ready preview frame is available"));
+        return;
+    }
+    ReadyFrameSource source;
+    source.shared_handle = duplicate;
+    source.width = ready_source_width_;
+    source.height = ready_source_height_;
+    source.tap = ready_source_tap_;
+    source.target = ready_source_target_;
+    source.cursor_already_composited = ready_source_cursor_composited_;
+    ReadyFrameCaptureService::Capture(ready_frame_pool_, std::move(source), std::move(composition),
+                                      std::move(callback));
+}
+
+std::function<void()> RecordPreviewAdapter::makeFramePublishedSink() {
+    QPointer<RecordPreviewAdapter> safe_self(this);
+    auto scheduler = update_scheduler_;
+    return [safe_self, scheduler]() {
+        // Producer thread — a capture pump or the engine's video thread. One
+        // atomic exchange in the common case, one posted event when a wake-up
+        // is not already in flight. Touches no QObject: the receiver below is
+        // unconditionally the application object, for the same reason the
+        // handle sink in startPreview() explains.
+        if (!scheduler->ArmWake())
+            return;
+        QMetaObject::invokeMethod(
+            QCoreApplication::instance(),
+            [safe_self, scheduler]() {
+                // Re-arm BEFORE requesting the update, and unconditionally: a
+                // publish landing during the request must produce a fresh
+                // wake-up rather than be swallowed, and a wake-up that finds
+                // nothing alive must still leave the gate open.
+                scheduler->DisarmWake();
+                if (safe_self == nullptr || safe_self->item_ == nullptr)
+                    return;
+                scheduler->RecordSceneUpdateRequested();
+                safe_self->item_->requestSceneUpdate();
+            },
+            Qt::QueuedConnection);
+    };
+}
+
+void RecordPreviewAdapter::acceptRecordingTexture(void* handle, uint32_t width, uint32_t height,
+                                                  recorder_core::PreviewTapDesc tap) {
+    if (handle == nullptr)
+        return;
+    if (!active_ || item_ == nullptr) {
+        CloseHandle(static_cast<HANDLE>(handle));
+        return;
+    }
+    item_->presentSharedTexture(handle, width, height, tap);
+    ++recording_texture_generations_;
+    setStatus(QStringLiteral("Live · recording WYSIWYG texture"));
+}
+
+void RecordPreviewAdapter::startPreview() {
+    stopPreview();
+    if (!active_ || item_ == nullptr)
+        return;
+
+    recorder_core::CaptureTarget target;
+    const bool available = selected_target_.has_value() && selected_target_->native_id != 0;
+    if (available)
+        target = *selected_target_;
+    if (source_available_ != available) {
+        source_available_ = available;
+        emit sourceAvailableChanged();
+    }
+    if (!available) {
+        source_name_.clear();
+        emit sourceNameChanged();
+        setStatus(QStringLiteral("No capture source is selected"));
+        setError(QStringLiteral("Choose a screen, application window, or region to preview."));
+        return;
+    }
+
+    const QString name = targetDescription(target);
+    if (source_name_ != name) {
+        source_name_ = name;
+        emit sourceNameChanged();
+    }
+    setError({});
+    setStatus(QStringLiteral("Opening real DXGI preview source…"));
+    const quint64 epoch = source_epoch_.fetch_add(1, std::memory_order_acq_rel) + 1;
+    QPointer<RecordPreviewAdapter> safe_self(this);
+    QPointer<ExoPreviewItem> safe_item(item_);
+    const auto cursor_composited = std::make_shared<std::atomic_bool>(false);
+    const auto sink = [safe_self, safe_item, epoch, target, cursor_composited](
+                          void* handle, uint32_t width, uint32_t height, recorder_core::PreviewTapDesc tap) {
+        auto handle_owner = std::make_shared<QueuedSharedHandle>(handle);
+        // The receiver is unconditionally the application object, never the item.
+        // This lambda runs on the capture pump thread, and Unsubscribe() is
+        // explicitly NOT a barrier (DxgiCaptureHubService.h) -- frames already in
+        // flight still arrive. Reading `safe_item` here to *pick* the receiver
+        // therefore raced ~ExoPreviewItem: the QPointer could test non-null and
+        // the item be freed before invokeMethod dereferenced it. The in-lambda
+        // null check below still gives the intended "drop it" semantics, and it
+        // runs on the GUI thread where the answer cannot change under it.
+        QMetaObject::invokeMethod(
+            QCoreApplication::instance(),
+            [safe_self, safe_item, handle_owner, width, height, tap, epoch, target, cursor_composited]() {
+                if (safe_self == nullptr || safe_item == nullptr ||
+                    safe_self->source_epoch_.load(std::memory_order_acquire) != epoch || !safe_self->active_ ||
+                    safe_self->engine_feed_expected_.load(std::memory_order_acquire)) {
+                    return;
+                }
+                void* raw_handle = std::exchange(handle_owner->handle, nullptr);
+                HANDLE snapshot_handle = nullptr;
+                if (DuplicateHandle(GetCurrentProcess(), static_cast<HANDLE>(raw_handle), GetCurrentProcess(),
+                                    &snapshot_handle, 0, FALSE, DUPLICATE_SAME_ACCESS) != FALSE) {
+                    if (safe_self->ready_source_handle_ != nullptr)
+                        CloseHandle(safe_self->ready_source_handle_);
+                    safe_self->ready_source_handle_ = snapshot_handle;
+                    safe_self->ready_source_width_ = width;
+                    safe_self->ready_source_height_ = height;
+                    safe_self->ready_source_tap_ = tap;
+                    safe_self->ready_source_target_ = target;
+                    safe_self->ready_source_cursor_composited_ = cursor_composited->load(std::memory_order_acquire);
+                }
+                safe_item->presentSharedTexture(raw_handle, width, height, tap);
+                safe_self->setStatus(QStringLiteral("Waiting for first GPU frame…"));
+            },
+            Qt::QueuedConnection);
+    };
+    bool subscribed = false;
+    if (target.kind == recorder_core::CaptureTarget::Kind::Monitor && dxgi_source_ != nullptr) {
+        subscribed =
+            dxgi_source_->Subscribe(reinterpret_cast<HMONITOR>(target.native_id), sink, makeFramePublishedSink());
+    }
+    if (!subscribed && wgc_source_ != nullptr) {
+        cursor_composited->store(true, std::memory_order_release);
+        CaptureSourceKey key;
+        key.kind = target.kind == recorder_core::CaptureTarget::Kind::Window ? CaptureSourceKey::Kind::Window
+                                                                             : CaptureSourceKey::Kind::Monitor;
+        key.native_id = target.native_id;
+        subscribed = wgc_source_->Subscribe(std::move(key), sink, makeFramePublishedSink());
+    }
+    if (!subscribed) {
+        source_epoch_.fetch_add(1, std::memory_order_acq_rel);
+        setStatus(QStringLiteral("Preview unavailable"));
+        setError(QStringLiteral("The selected capture source could not be opened on Qt Quick's D3D11 adapter."));
+        return;
+    }
+    metrics_timer_.start();
+}
+
+void RecordPreviewAdapter::stopPreview() {
+    source_epoch_.fetch_add(1, std::memory_order_acq_rel);
+    if (dxgi_source_ != nullptr)
+        dxgi_source_->Unsubscribe();
+    if (wgc_source_ != nullptr)
+        wgc_source_->Unsubscribe();
+    if (ready_source_handle_ != nullptr) {
+        CloseHandle(ready_source_handle_);
+        ready_source_handle_ = nullptr;
+    }
+    ready_source_width_ = 0;
+    ready_source_height_ = 0;
+    metrics_timer_.stop();
+    if (item_ != nullptr)
+        item_->clearSharedTexture();
+    if (frame_ready_) {
+        frame_ready_ = false;
+        emit frameReadyChanged();
+    }
+    if (!source_size_.isEmpty()) {
+        source_size_ = {};
+        emit sourceSizeChanged();
+    }
+    if (!active_)
+        setStatus(QStringLiteral("Preview inactive"));
+}
+
+void RecordPreviewAdapter::synchronizeItemState() {
+    if (item_ == nullptr)
+        return;
+    const bool ready = item_->frameReady();
+    if (frame_ready_ != ready) {
+        frame_ready_ = ready;
+        emit frameReadyChanged();
+    }
+    const QSize size = item_->sourceSize();
+    if (source_size_ != size) {
+        source_size_ = size;
+        emit sourceSizeChanged();
+    }
+    setError(item_->errorText());
+    if (!error_text_.isEmpty())
+        setStatus(QStringLiteral("Preview unavailable"));
+    else if (frame_ready_)
+        setStatus(engine_feed_expected_.load(std::memory_order_acquire)
+                      ? QStringLiteral("Live · recording WYSIWYG texture")
+                      : QStringLiteral("Live · D3D11 scene texture"));
+}
+
+void RecordPreviewAdapter::updateMetrics() {
+    const PreviewMetricsSnapshot metrics = item_ != nullptr ? item_->metricsSnapshot() : PreviewMetricsSnapshot{};
+    presentation_rate_ = metrics.scene_fps;
+    source_delivery_rate_ = metrics.source_delivery_fps;
+    frame_time_p95_ms_ = metrics.scene_frame_ms_p95;
+    frame_time_p99_ms_ = metrics.scene_frame_ms_p99;
+    submit_p95_us_ = metrics.submit_us_p95;
+    consumed_frames_ = metrics.consumed_frames;
+    mutex_misses_ = metrics.mutex_misses;
+    emit metricsChanged();
+}
+
+void RecordPreviewAdapter::setStatus(QString status) {
+    if (status_text_ == status)
+        return;
+    status_text_ = std::move(status);
+    emit statusTextChanged();
+}
+
+void RecordPreviewAdapter::setError(QString error) {
+    if (error_text_ == error)
+        return;
+    error_text_ = std::move(error);
+    emit errorTextChanged();
+}
+
+} // namespace exosnap::quick

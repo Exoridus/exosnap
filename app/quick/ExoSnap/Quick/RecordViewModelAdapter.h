@@ -1,0 +1,272 @@
+#pragma once
+
+#include <QObject>
+#include <QRectF>
+#include <QString>
+#include <QVariantList>
+#include <QtQmlIntegration/qqmlintegration.h>
+
+namespace exosnap {
+
+class RecordViewModel;
+
+namespace quick {
+
+// Narrow QObject boundary over the shared, pure-C++ RecordViewModel. It maps
+// presentation-ready state and emits typed command requests; orchestration and
+// service ownership remain in QuickApplication.
+class RecordViewModelAdapter : public QObject {
+    Q_OBJECT
+    QML_ELEMENT
+    QML_UNCREATABLE("RecordViewModelAdapter is provided by the application")
+
+    Q_PROPERTY(bool active READ active WRITE setActive NOTIFY activeChanged FINAL)
+    Q_PROPERTY(int state READ state NOTIFY changed FINAL)
+    Q_PROPERTY(QString stateText READ stateText NOTIFY stateTextChanged FINAL)
+    Q_PROPERTY(QString stateTone READ stateTone NOTIFY changed FINAL)
+    Q_PROPERTY(QString capabilityText READ capabilityText NOTIFY changed FINAL)
+    Q_PROPERTY(QString elapsedText READ elapsedText NOTIFY elapsedTextChanged FINAL)
+    Q_PROPERTY(QString outputSizeText READ outputSizeText NOTIFY outputSizeTextChanged FINAL)
+    Q_PROPERTY(QString bitrateText READ bitrateText NOTIFY changed FINAL)
+    // Measured capture rate, from SessionStats::video_frames_captured over the
+    // elapsed clock. Sampled as a delta between stats callbacks rather than as a
+    // session average, so a dip is visible instead of being smoothed away.
+    Q_PROPERTY(QString capturedFpsText READ capturedFpsText NOTIFY changed FINAL)
+    Q_PROPERTY(QString droppedFramesText READ droppedFramesText NOTIFY changed FINAL)
+    Q_PROPERTY(QString driftText READ driftText NOTIFY changed FINAL)
+    Q_PROPERTY(bool liveStatsAvailable READ liveStatsAvailable NOTIFY liveStatsAvailableChanged FINAL)
+
+    Q_PROPERTY(bool canStart READ canStart NOTIFY changed FINAL)
+    Q_PROPERTY(bool canStop READ canStop NOTIFY changed FINAL)
+    Q_PROPERTY(bool canPause READ canPause NOTIFY changed FINAL)
+    Q_PROPERTY(bool canResume READ canResume NOTIFY changed FINAL)
+    Q_PROPERTY(bool canSelectSource READ canSelectSource NOTIFY changed FINAL)
+    Q_PROPERTY(bool recording READ recording NOTIFY changed FINAL)
+    Q_PROPERTY(bool paused READ paused NOTIFY changed FINAL)
+    Q_PROPERTY(bool countdownActive READ countdownActive NOTIFY changed FINAL)
+    Q_PROPERTY(bool preparing READ preparing NOTIFY changed FINAL)
+    Q_PROPERTY(bool finalizing READ finalizing NOTIFY changed FINAL)
+    Q_PROPERTY(bool blocked READ blocked NOTIFY changed FINAL)
+    Q_PROPERTY(bool failed READ failed NOTIFY changed FINAL)
+
+    Q_PROPERTY(QVariantList targetOptions READ targetOptions NOTIFY targetOptionsChanged FINAL)
+    Q_PROPERTY(QVariantList displayTargetOptions READ displayTargetOptions NOTIFY targetOptionsChanged FINAL)
+    Q_PROPERTY(QVariantList windowTargetOptions READ windowTargetOptions NOTIFY targetOptionsChanged FINAL)
+    Q_PROPERTY(int selectedTargetIndex READ selectedTargetIndex NOTIFY changed FINAL)
+    Q_PROPERTY(int captureMode READ captureMode NOTIFY changed FINAL)
+    Q_PROPERTY(QString sourceName READ sourceName NOTIFY changed FINAL)
+    Q_PROPERTY(QString sourceKindText READ sourceKindText NOTIFY changed FINAL)
+    Q_PROPERTY(QString sourceDetailText READ sourceDetailText NOTIFY changed FINAL)
+    Q_PROPERTY(QString formatText READ formatText NOTIFY changed FINAL)
+    Q_PROPERTY(QRectF normalizedSourceRect READ normalizedSourceRect NOTIFY changed FINAL)
+    Q_PROPERTY(bool regionSelectionNeeded READ regionSelectionNeeded NOTIFY changed FINAL)
+
+    Q_PROPERTY(bool systemAudioEnabled READ systemAudioEnabled NOTIFY changed FINAL)
+    Q_PROPERTY(bool appAudioEnabled READ appAudioEnabled NOTIFY changed FINAL)
+    Q_PROPERTY(bool microphoneEnabled READ microphoneEnabled NOTIFY changed FINAL)
+    Q_PROPERTY(bool webcamEnabled READ webcamEnabled NOTIFY changed FINAL)
+    Q_PROPERTY(bool appAudioVisible READ appAudioVisible NOTIFY changed FINAL)
+    Q_PROPERTY(bool microphoneAvailable READ microphoneAvailable NOTIFY changed FINAL)
+    Q_PROPERTY(bool webcamAvailable READ webcamAvailable NOTIFY changed FINAL)
+    Q_PROPERTY(bool webcamError READ webcamError NOTIFY changed FINAL)
+    Q_PROPERTY(QString webcamErrorText READ webcamErrorText NOTIFY changed FINAL)
+    Q_PROPERTY(QString webcamFrameSource READ webcamFrameSource NOTIFY webcamFrameChanged FINAL)
+    Q_PROPERTY(QRectF webcamOverlayRect READ webcamOverlayRect NOTIFY changed FINAL)
+    Q_PROPERTY(bool webcamOverlayEditable READ webcamOverlayEditable NOTIFY changed FINAL)
+    Q_PROPERTY(bool webcamMirror READ webcamMirror NOTIFY changed FINAL)
+    Q_PROPERTY(double webcamOpacity READ webcamOpacity NOTIFY changed FINAL)
+    Q_PROPERTY(double systemMeter READ systemMeter NOTIFY metersChanged FINAL)
+    Q_PROPERTY(double appMeter READ appMeter NOTIFY metersChanged FINAL)
+    Q_PROPERTY(double microphoneMeter READ microphoneMeter NOTIFY metersChanged FINAL)
+
+    Q_PROPERTY(int countdownSeconds READ countdownSeconds NOTIFY changed FINAL)
+    Q_PROPERTY(int countdownRemaining READ countdownRemaining NOTIFY changed FINAL)
+    Q_PROPERTY(bool captureFrameEnabled READ captureFrameEnabled NOTIFY changed FINAL)
+    Q_PROPERTY(bool splitEnabled READ splitEnabled NOTIFY changed FINAL)
+    Q_PROPERTY(QString noticeText READ noticeText NOTIFY changed FINAL)
+    // What the notice MEANS: "info" | "success" | "warning" | "error", the four
+    // ExoNotice tones. Every notice used to render in the default warning tone,
+    // so a saved recording was announced in caution amber next to a caution
+    // amber "storage running low" — the banner's colour carried no information
+    // at all.
+    Q_PROPERTY(QString noticeTone READ noticeTone NOTIFY changed FINAL)
+    Q_PROPERTY(QString resultText READ resultText NOTIFY changed FINAL)
+    // Whether the finished recording can be opened in the Edit surface. False
+    // for a split recording (no single edit master), a missing file, a failed
+    // run, and while a capture still owns the Record surface. The authoritative
+    // gate is QuickApplication::canOpenEditorForCurrentRecording(); this mirrors
+    // the part of it that depends only on the view model, so the affordance can
+    // be a binding rather than a button that does nothing when pressed.
+    Q_PROPERTY(bool canOpenEditor READ canOpenEditor NOTIFY changed FINAL)
+
+  public:
+    explicit RecordViewModelAdapter(const RecordViewModel* source = nullptr, QObject* parent = nullptr);
+
+    [[nodiscard]] bool active() const noexcept;
+    void setActive(bool active);
+    [[nodiscard]] int state() const noexcept;
+    [[nodiscard]] const QString& stateText() const noexcept;
+    [[nodiscard]] QString stateTone() const;
+    [[nodiscard]] QString capabilityText() const;
+    [[nodiscard]] QString elapsedText() const;
+    [[nodiscard]] const QString& outputSizeText() const noexcept;
+    [[nodiscard]] QString bitrateText() const;
+    [[nodiscard]] const QString& capturedFpsText() const noexcept;
+    [[nodiscard]] QString droppedFramesText() const;
+    [[nodiscard]] QString driftText() const;
+    [[nodiscard]] bool liveStatsAvailable() const noexcept;
+    [[nodiscard]] bool canStart() const noexcept;
+    [[nodiscard]] bool canStop() const noexcept;
+    [[nodiscard]] bool canPause() const noexcept;
+    [[nodiscard]] bool canResume() const noexcept;
+    [[nodiscard]] bool canSelectSource() const noexcept;
+    [[nodiscard]] bool recording() const noexcept;
+    [[nodiscard]] bool paused() const noexcept;
+    [[nodiscard]] bool countdownActive() const noexcept;
+    [[nodiscard]] bool preparing() const noexcept;
+    [[nodiscard]] bool finalizing() const noexcept;
+    [[nodiscard]] bool blocked() const noexcept;
+    [[nodiscard]] bool failed() const noexcept;
+    [[nodiscard]] const QVariantList& targetOptions() const noexcept;
+    [[nodiscard]] const QVariantList& displayTargetOptions() const noexcept;
+    [[nodiscard]] const QVariantList& windowTargetOptions() const noexcept;
+    [[nodiscard]] int selectedTargetIndex() const noexcept;
+    [[nodiscard]] int captureMode() const noexcept;
+    [[nodiscard]] const QString& sourceName() const noexcept;
+    [[nodiscard]] const QString& sourceKindText() const noexcept;
+    [[nodiscard]] const QString& sourceDetailText() const noexcept;
+    [[nodiscard]] const QString& formatText() const noexcept;
+    [[nodiscard]] QRectF normalizedSourceRect() const noexcept;
+    [[nodiscard]] bool regionSelectionNeeded() const noexcept;
+    [[nodiscard]] bool systemAudioEnabled() const noexcept;
+    [[nodiscard]] bool appAudioEnabled() const noexcept;
+    [[nodiscard]] bool microphoneEnabled() const noexcept;
+    [[nodiscard]] bool webcamEnabled() const noexcept;
+    [[nodiscard]] bool appAudioVisible() const noexcept;
+    [[nodiscard]] bool microphoneAvailable() const noexcept;
+    [[nodiscard]] bool webcamAvailable() const noexcept;
+    [[nodiscard]] bool webcamError() const noexcept;
+    [[nodiscard]] const QString& webcamErrorText() const noexcept;
+    [[nodiscard]] const QString& webcamFrameSource() const noexcept;
+    [[nodiscard]] QRectF webcamOverlayRect() const noexcept;
+    [[nodiscard]] bool webcamOverlayEditable() const noexcept;
+    [[nodiscard]] bool webcamMirror() const noexcept;
+    [[nodiscard]] double webcamOpacity() const noexcept;
+    [[nodiscard]] double systemMeter() const noexcept;
+    [[nodiscard]] double appMeter() const noexcept;
+    [[nodiscard]] double microphoneMeter() const noexcept;
+    [[nodiscard]] int countdownSeconds() const noexcept;
+    [[nodiscard]] int countdownRemaining() const noexcept;
+    [[nodiscard]] bool captureFrameEnabled() const noexcept;
+    [[nodiscard]] bool splitEnabled() const noexcept;
+    [[nodiscard]] const QString& noticeText() const noexcept;
+    [[nodiscard]] const QString& noticeTone() const noexcept;
+    [[nodiscard]] QString resultText() const;
+    [[nodiscard]] bool canOpenEditor() const noexcept;
+
+    void setSource(const RecordViewModel* source);
+    void setFormatText(QString text);
+    void setDeviceState(bool microphone_available, bool webcam_available, bool webcam_enabled,
+                        QString webcam_error = {});
+    void setWebcamPresentation(QRectF overlay_rect, bool mirror, double opacity);
+    void setWebcamFrameSource(QString source);
+    void setCountdownState(int configured_seconds, int remaining_seconds);
+    void setRegionState(QRectF normalized_rect, bool selection_needed);
+    void setPreviewFrameReady(bool ready);
+    void setSplitEnabled(bool enabled);
+    void setMeters(double system, double app, double microphone);
+    // `tone` defaults to "warning" so an existing caller that never named one
+    // keeps the banner it already had; the callers that state a tone are the
+    // ones whose message is not a warning.
+    void setNoticeText(QString text, QString tone = QStringLiteral("warning"));
+    void synchronize();
+
+    Q_INVOKABLE void requestStart();
+    Q_INVOKABLE void requestStop();
+    Q_INVOKABLE void requestPause();
+    Q_INVOKABLE void requestResume();
+    Q_INVOKABLE void requestCaptureFrame();
+    Q_INVOKABLE void requestAddMarker();
+    Q_INVOKABLE void requestSplit();
+    Q_INVOKABLE void requestSelectTarget(int target_index, int capture_mode);
+    Q_INVOKABLE void requestSelectRegion(QRectF normalized_rect);
+    Q_INVOKABLE void requestToggleSource(const QString& key);
+    Q_INVOKABLE void requestWebcamOverlayRect(QRectF normalized_rect);
+    Q_INVOKABLE void requestCountdownSeconds(int seconds);
+    Q_INVOKABLE void requestOpenEditor();
+    Q_INVOKABLE void clearNotice();
+
+  signals:
+    void activeChanged();
+    void stateTextChanged();
+    void elapsedTextChanged();
+    void outputSizeTextChanged();
+    void liveStatsAvailableChanged();
+    void webcamFrameChanged();
+    void targetOptionsChanged();
+    void metersChanged();
+    void changed();
+
+    void startRequested();
+    void stopRequested();
+    void pauseRequested();
+    void resumeRequested();
+    void captureFrameRequested();
+    void addMarkerRequested();
+    void splitRequested();
+    void selectTargetRequested(int target_index, int capture_mode);
+    void selectRegionRequested(QRectF normalized_rect);
+    void toggleSourceRequested(QString key);
+    void webcamOverlayRectRequested(QRectF normalized_rect);
+    void countdownSecondsRequested(int seconds);
+    void openEditorRequested();
+
+  private:
+    void rebuildPresentation();
+    // Advances the fps delta window. Called from synchronize(), i.e. on the
+    // engine's stats cadence, so the window is measured against the same clock
+    // the frame counter is.
+    void updateCapturedFps();
+
+    const RecordViewModel* source_ = nullptr;
+    bool active_ = false;
+    QString state_text_;
+    QString elapsed_text_;
+    QString output_size_text_;
+    bool live_stats_available_ = false;
+    // Delta window for capturedFpsText. `sample_seconds_ < 0` means "no sample
+    // taken yet in this session", which is what makes the first reading an em
+    // dash rather than a figure derived from a single point.
+    QString captured_fps_text_;
+    double fps_sample_seconds_ = -1.0;
+    quint64 fps_sample_frames_ = 0;
+    QVariantList target_options_;
+    QVariantList display_target_options_;
+    QVariantList window_target_options_;
+    QString source_name_;
+    QString source_kind_text_;
+    QString source_detail_text_;
+    QString format_text_;
+    QRectF normalized_source_rect_{0.0, 0.0, 1.0, 1.0};
+    bool region_selection_needed_ = false;
+    bool microphone_available_ = true;
+    bool webcam_available_ = true;
+    bool webcam_enabled_ = false;
+    QString webcam_error_text_;
+    QString webcam_frame_source_;
+    QRectF webcam_overlay_rect_{0.0, 0.0, 0.25, 0.25};
+    bool webcam_mirror_ = false;
+    double webcam_opacity_ = 1.0;
+    double system_meter_ = 0.0;
+    double app_meter_ = 0.0;
+    double microphone_meter_ = 0.0;
+    int countdown_seconds_ = 0;
+    int countdown_remaining_ = 0;
+    bool preview_frame_ready_ = false;
+    bool split_enabled_ = false;
+    QString notice_text_;
+    QString notice_tone_ = QStringLiteral("warning");
+};
+
+} // namespace quick
+} // namespace exosnap

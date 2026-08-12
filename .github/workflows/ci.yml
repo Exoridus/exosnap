@@ -279,22 +279,41 @@ jobs:
       - name: Set up MSVC environment
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
 
+      # qtdeclarative + qtshadertools are MANDATORY, not optional extras: the
+      # shipping application (app/quick/ExoSnap/Quick, target `exosnap`) is a Qt
+      # Quick program and links Qt6::Qml/Quick/QuickControls2/QuickDialogs2/
+      # QuickTest, all shipped in the single qtdeclarative archive; qtshadertools
+      # is a separate archive Qt6QuickConfig.cmake hard-requires to be installed
+      # (qmlcachegen/shader compilation) even before this project's own
+      # find_package(... COMPONENTS Quick) runs. Without either archive,
+      # app/CMakeLists.txt's Qt probe fails and the app is silently skipped.
       - name: Install Qt 6
         uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
         with:
           version: '6.9.0'
           arch: 'win64_msvc2022_64'
-          archives: 'qtbase qtsvg'
+          archives: 'qtbase qtsvg qtdeclarative qtshadertools'
           cache: true
 
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
 
+      # No frontend flag: there is one frontend. The Qt Quick application and its
+      # adapter/QML test targets are the default build (ADR 0064).
       - name: Configure (windows-x64-ninja-debug)
         run: cmake --preset windows-x64-ninja-debug -DEXOSNAP_USE_SCCACHE=ON
 
       - name: Build (windows-x64-ninja-debug)
         run: cmake --build --preset windows-x64-ninja-debug
+
+      # qmllint over every QML module in the tree — the shipping one and the QML
+      # test module. Deterministic and fast, and it catches a class of defect no
+      # C++ test can: an Accessible attachment on a non-Item, an unresolvable
+      # import, a property that does not exist on the declared type. `all_qmllint`
+      # rather than the per-module target so a newly added module cannot slip past
+      # the gate by not being named here.
+      - name: qmllint (all QML modules)
+        run: cmake --build build/windows-x64-ninja-debug --target all_qmllint
 
       # Runs through scripts/run-tests.ps1 (the documented, canonical test entry
       # point — see AGENTS.md) rather than a bare `ctest`, so CI shares the same
@@ -379,17 +398,22 @@ jobs:
       - name: Set up MSVC environment
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
 
+      # qtdeclarative + qtshadertools: see build-test-debug's Install Qt 6 step above
+      # for why the Quick frontend needs both archives.
       - name: Install Qt 6
         uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
         with:
           version: '6.9.0'
           arch: 'win64_msvc2022_64'
-          archives: 'qtbase qtsvg'
+          archives: 'qtbase qtsvg qtdeclarative qtshadertools'
           cache: true
 
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
 
+      # A Release build is the only configuration that compiles out the harness
+      # code paths, so the Debug leg alone would miss exactly the guards that
+      # differ between the two.
       - name: Configure (windows-x64-ninja-release)
         run: cmake --preset windows-x64-ninja-release -DEXOSNAP_USE_SCCACHE=ON
 
@@ -477,12 +501,19 @@ jobs:
       - name: Set up MSVC environment
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
 
+      # qtdeclarative + qtshadertools: kept in lockstep with build-test-release's
+      # archives, which this job shares a preset/build-tree lineage with (see the
+      # comment block above). This job is the packaging gate for the Qt Quick
+      # application: install(TARGETS exosnap) plus
+      # qt_generate_deploy_qml_app_script() in app/quick/ExoSnap/Quick/CMakeLists.txt
+      # stage the QML runtime, and scripts/build-release-artifacts.ps1 fails the
+      # run if any of it is missing from the package.
       - name: Install Qt 6
         uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
         with:
           version: '6.9.0'
           arch: 'win64_msvc2022_64'
-          archives: 'qtbase qtsvg'
+          archives: 'qtbase qtsvg qtdeclarative qtshadertools'
           cache: true
 
       - name: Set up sccache
