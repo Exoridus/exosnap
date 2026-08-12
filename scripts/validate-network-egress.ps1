@@ -75,7 +75,15 @@ try {
         'libs/update/include/update/http_download.h',
         'libs/update/include/update/manifest_io.h',
         'apps/updater/UpdaterWorker.cpp',
-        'libs/crash_capture/src/crash_capture.cpp'
+        'libs/crash_capture/src/crash_capture.cpp',
+        # Not an egress point, and listed for the same reason the headers above
+        # are: the token appears only in prose. This header names `Qt6::Network`
+        # in the paragraph explaining why the Live Verify control channel is a
+        # native named pipe INSTEAD of QLocalServer -- so that Qt's networking
+        # module is never linked into the shipping executable. A pipe has no
+        # port and no listening socket. Inventarised under "Local,
+        # never-transmitted stores" in docs/privacy-review.md.
+        'app/live_verify/LiveVerifyControlServer.h'
     ) | ForEach-Object { $_.Replace('/', [System.IO.Path]::DirectorySeparatorChar) }
 
     # -------------------------------------------------------------------------

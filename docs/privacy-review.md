@@ -86,6 +86,13 @@ Confirmed by code search: no `WinHttpOpen`/socket call exists outside `libs/upda
 - Local crash captures — `%LOCALAPPDATA%\ExoSnap\crashes\*.dmp`
 - Recordings — the output folder the user chooses
 - Support bundle `.zip` — written to a location the user picks (E4 above)
+- Live Verify control channel — a **native Windows named pipe**, created only when the executable is
+  launched with the explicit `--live-verify-*` opt-in and never by a normal start. It is listed here
+  rather than in the egress table because a named pipe has no port and no listening socket: the
+  transport was chosen over `QLocalServer` precisely so that `Qt6::Network` is not linked into the
+  shipping executable at all, and the pipe is created with a DACL granting the creating user alone
+  plus `PIPE_REJECT_REMOTE_CLIENTS`. "Not reachable from the network" is therefore answered by the
+  API, not by a bind address. See `app/live_verify/LiveVerifyControlServer.h` and ADR 0066.
 
 ## Window-title logging (capture-target privacy)
 
