@@ -27,12 +27,15 @@
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDesktopServices>
+#include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QMetaObject>
 #include <QPointer>
 #include <QQuickWindow>
 #include <QScreen>
+#include <QStandardPaths>
 #include <QUrl>
 #include <QWindow>
 // The one Qt Widgets type the Quick frontend keeps (cutover plan §35): Qt has no
@@ -409,9 +412,16 @@ void QuickApplication::initializeRecordWorkflow() {
     });
     recording_coordinator_->SetResultReadyCallback([this](const UiRecordingResult& result) {
         record_view_model_.SetResult(result);
+        // The file NAME, not the path. A full path is unbounded, so the banner
+        // it lands in becomes as wide as the deepest directory the user records
+        // into and reads as a broken control rather than as a sentence. The
+        // folder is one click away on the notification the same result raises
+        // ("Show in folder"), and the Edit surface names it in full.
+        const QString saved_name = QFileInfo(QString::fromStdWString(result.output_path)).fileName();
         record_view_model_adapter_.setNoticeText(
-            result.succeeded ? QStringLiteral("Recording saved · %1").arg(QString::fromStdWString(result.output_path))
-                             : QString::fromStdWString(record_view_model_.result_user_message));
+            result.succeeded ? QStringLiteral("Recording saved · %1").arg(saved_name)
+                             : QString::fromStdWString(record_view_model_.result_user_message),
+            result.succeeded ? QStringLiteral("success") : QStringLiteral("error"));
         synchronizeRecordState();
         publishRecordingResultNotification(result);
         // One authoritative failure state: the result itself. The policy decides
@@ -434,9 +444,9 @@ void QuickApplication::initializeRecordWorkflow() {
                                                                            const QString& error) {
         if (safe_record_adapter == nullptr)
             return;
-        safe_record_adapter->setNoticeText(success
-                                               ? QStringLiteral("Frame saved · %1").arg(path)
-                                               : (error.isEmpty() ? QStringLiteral("Frame capture failed") : error));
+        safe_record_adapter->setNoticeText(success ? QStringLiteral("Frame saved · %1").arg(QFileInfo(path).fileName())
+                                                   : (error.isEmpty() ? QStringLiteral("Frame capture failed") : error),
+                                           success ? QStringLiteral("success") : QStringLiteral("error"));
     });
     recording_coordinator_->SetSplitFeedbackCallback([this](bool accepted, const QString& message) {
         if (!accepted)
@@ -1460,7 +1470,8 @@ void QuickApplication::exportSelectedPreset(const QString& path) {
     preset.config = StripEnvironmentFields(live_config_);
     QString error;
     if (!RecordingPresetStore::ExportPresetToFile(preset, path, &error))
-        record_view_model_adapter_.setNoticeText(QStringLiteral("Preset export failed · %1").arg(error));
+        record_view_model_adapter_.setNoticeText(QStringLiteral("Preset export failed · %1").arg(error),
+                                                 QStringLiteral("error"));
 }
 
 void QuickApplication::importPresetsFromFile(const QString& path) {
@@ -1474,7 +1485,8 @@ void QuickApplication::importPresetsFromFile(const QString& path) {
     QString error;
     const QVector<RecordingPreset> imported = RecordingPresetStore::ImportPresetsFromFile(path, existing_ids, &error);
     if (imported.isEmpty()) {
-        record_view_model_adapter_.setNoticeText(QStringLiteral("Preset import failed · %1").arg(error));
+        record_view_model_adapter_.setNoticeText(QStringLiteral("Preset import failed · %1").arg(error),
+                                                 QStringLiteral("error"));
         return;
     }
     for (const RecordingPreset& preset : imported)
@@ -1580,7 +1592,8 @@ void QuickApplication::persistLiveConfig() {
     // A failed write means the change the user just made may be lost on restart.
     // The Record-page notice only reaches whoever is looking at Record, so this
     // also goes to the hub, where it stays until acknowledged.
-    record_view_model_adapter_.setNoticeText(QStringLiteral("Settings could not be saved · %1").arg(error));
+    record_view_model_adapter_.setNoticeText(QStringLiteral("Settings could not be saved · %1").arg(error),
+                                             QStringLiteral("error"));
     notifications::NotificationEvent event;
     event.type = notifications::NotificationType::SettingsSaveFailed;
     event.title = QStringLiteral("Settings could not be saved");
@@ -2239,6 +2252,21 @@ void QuickApplication::initializeCrashReport() {
     if (!pending_crash_)
         return;
 
+    // A visual scenario photographs a named surface. The crash prompt is raised
+    // by whatever the PREVIOUS session did on this machine, so left enabled it
+    // covers every capture taken after an unclean exit — which is exactly what
+    // happens while a developer is killing the application to test something
+    // else. The prompt has its own deterministic scenario
+    // (--overlay-visual-state), which is how it should be photographed.
+    //
+    // Keyed off argv rather than the pending scenario fields: this runs during
+    // load(), and the scenarios are seeded after it.
+    if (QCoreApplication::arguments().contains(QStringLiteral("--visual-test"))) {
+        diagnostics::AppLog::info(QStringLiteral("crash"),
+                                  QStringLiteral("Visual scenario active — crash dialog suppressed"));
+        return;
+    }
+
     // The persisted policy decides whether there is anything to ask at all.
     // Auto-send has already been granted by applyCrashReportPolicy(); never-send
     // has already been revoked there. Prompting in either case would ask a
@@ -2814,6 +2842,9 @@ AboutViewModelAdapter* QuickApplication::aboutViewModel() noexcept {
 RecordPreviewAdapter* QuickApplication::recordPreviewAdapter() noexcept {
     return &record_preview_adapter_;
 }
+const RecordViewModel& QuickApplication::recordViewModel() const noexcept {
+    return record_view_model_;
+}
 RecordViewModelAdapter* QuickApplication::recordViewModelAdapter() noexcept {
     return &record_view_model_adapter_;
 }
@@ -2955,6 +2986,34 @@ bool QuickApplication::applyRecordVisualScenario(const QString& scenario) {
         record_view_model_.elapsed_text = L"12:34";
         record_view_model_.elapsed_seconds = 754.0;
         record_view_model_.output_size_text = L"440.6 MB";
+    } else if (normalized == QStringLiteral("completed") || normalized == QStringLiteral("saved")) {
+        // The post-recording state, which had no deterministic scenario at all —
+        // so the one arrangement in which the transport's recommended action is
+        // Edit rather than Record, and the one in which the page carries a
+        // success banner, could never be photographed. Both are exactly the
+        // things a visual pass has to be able to see.
+        // The Edit affordance is gated on the recording actually existing on
+        // disk, so the scenario writes a placeholder rather than pretending. It
+        // goes to a scratch directory, never to the user's output folder.
+        const QString fixture_directory =
+            QStandardPaths::writableLocation(QStandardPaths::TempLocation) + QStringLiteral("/exosnap-visual-fixtures");
+        QDir().mkpath(fixture_directory);
+        const QString fixture_path = fixture_directory + QStringLiteral("/2026-08-12_06-21-07_Desktop_Display 1.mkv");
+        if (QFile fixture(fixture_path); fixture.open(QIODevice::WriteOnly))
+            fixture.write("visual scenario placeholder");
+
+        record_view_model_.last_succeeded = true;
+        record_view_model_.result_output_path = fixture_path.toStdWString();
+        record_view_model_.result_duration_seconds = 754.0;
+        record_view_model_.result_output_file_bytes = 462'000'000;
+        record_view_model_.current_completed_recording.succeeded = true;
+        record_view_model_.current_completed_recording.file_path = fixture_path;
+        record_view_model_.elapsed_text = L"12:34";
+        record_view_model_.elapsed_seconds = 754.0;
+        record_view_model_.output_size_text = L"440.6 MB";
+        record_view_model_.SetState(UiRecordingState::Completed);
+        record_view_model_adapter_.setNoticeText(
+            QStringLiteral("Recording saved · 2026-08-12_06-21-07_Desktop_Display 1.mkv"), QStringLiteral("success"));
     } else if (normalized == QStringLiteral("warning") || normalized == QStringLiteral("blocked")) {
         record_view_model_.SetState(UiRecordingState::Blocked);
         record_view_model_.capability_status_text =

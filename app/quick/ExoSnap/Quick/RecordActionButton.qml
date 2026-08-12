@@ -51,6 +51,18 @@ FocusScope {
     Accessible.role: Accessible.Button
     Accessible.name: root.accessibleLabel
     Accessible.description: root.available ? "" : root.unavailableReason
+    // Without this the control announces itself as a button, advertises a UIA
+    // Invoke pattern (Qt derives that from the role) and then does nothing when
+    // it is invoked: the inner Button carries the click handler but is
+    // Accessible.ignored, so assistive technology reaches this FocusScope and
+    // finds no press action behind it. A screen-reader user could focus Pause,
+    // Stop, Split, Add marker and Capture frame and never activate any of them.
+    // Guarded on `available` for the same reason the inner Button is disabled:
+    // an unavailable action must not be activatable by any input path.
+    Accessible.onPressAction: {
+        if (root.available)
+            root.clicked();
+    }
 
     HoverHandler {
         id: hover

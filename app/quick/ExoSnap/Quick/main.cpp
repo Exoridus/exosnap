@@ -1,4 +1,5 @@
 #include "QuickApplication.h"
+#include "QuickLiveVerifySource.h"
 #include "QuickWindowGeometry.h"
 #if defined(EXOSNAP_ENABLE_AUTO_RECORD_HARNESS)
 #include "QuickAutoEditHarness.h"
@@ -6,7 +7,10 @@
 #include "auto_record/AutoRecordHarness.h"
 #endif
 #include "bootstrap/ProductionBootstrap.h"
+#include "diagnostics/NativeWindowFacts.h"
 #include "diagnostics/StartupClock.h"
+#include "live_verify/LiveVerifyControlServer.h"
+#include "live_verify/LiveVerifyOptions.h"
 #include "services/ElevatedRelaunch.h"
 #include "services/RecordingCoordinator.h"
 #include "services/VerifyReinstallMode.h"
@@ -127,47 +131,21 @@ QString defaultAdapterName() {
                                                       : QStringLiteral("Unavailable");
 }
 
+// Both facts the audit below reports come from diagnostics/NativeWindowFacts,
+// shared with the Live Verify window/overlay snapshots. Two readers, one
+// implementation: --hwnd-audit is the startup gate and the snapshot is
+// observation during a live run, and the two must never disagree about what
+// "no non-client area" or "no child HWNDs" means.
+using exosnap::diagnostics::CountChildWindows;
+using exosnap::diagnostics::NonClientInset;
+using exosnap::diagnostics::QueryNonClientInset;
+
 int childWindowCount(HWND root) {
-    int count = 0;
-    EnumChildWindows(
-        root,
-        [](HWND, LPARAM value) {
-            ++*reinterpret_cast<int*>(value);
-            return TRUE;
-        },
-        reinterpret_cast<LPARAM>(&count));
-    return count;
+    return CountChildWindows(root);
 }
 
-// How much non-client area Windows still reserves on each edge. A shell whose
-// title band is its own draws NOTHING outside the client rect, so every value
-// here must be 0; a non-zero top is a native caption, i.e. a second title bar
-// above ours. Reported rather than asserted because the caller decides what a
-// failure means.
-struct NonClientInset {
-    int left = 0;
-    int top = 0;
-    int right = 0;
-    int bottom = 0;
-
-    bool isEmpty() const {
-        return left == 0 && top == 0 && right == 0 && bottom == 0;
-    }
-};
-
 NonClientInset nonClientInset(HWND hwnd) {
-    RECT window{};
-    RECT client{};
-    if (GetWindowRect(hwnd, &window) == FALSE || GetClientRect(hwnd, &client) == FALSE)
-        return {};
-    // GetClientRect is client-relative; map its corners into screen space so the
-    // two rectangles are comparable.
-    POINT top_left{client.left, client.top};
-    POINT bottom_right{client.right, client.bottom};
-    if (ClientToScreen(hwnd, &top_left) == FALSE || ClientToScreen(hwnd, &bottom_right) == FALSE)
-        return {};
-    return {static_cast<int>(top_left.x - window.left), static_cast<int>(top_left.y - window.top),
-            static_cast<int>(window.right - bottom_right.x), static_cast<int>(window.bottom - bottom_right.y)};
+    return QueryNonClientInset(hwnd);
 }
 
 LRESULT CALLBACK previewPatternWindowProc(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param) {
@@ -271,6 +249,25 @@ int main(int argc, char* argv[]) {
     exosnap::bootstrap::ApplyApplicationMetadata();
 
     const QStringList arguments = QCoreApplication::arguments();
+
+    // The Live Verify control channel. Explicit argv opt-in and nothing else: no
+    // Debug default, no environment variable, no "looks like a developer
+    // machine" heuristic. A malformed option is fatal rather than ignored — a
+    // runner that believes it armed the channel and silently got a normal
+    // application would report acceptance for a process it never drove.
+    //
+    // Deliberately NOT part of `diagnostic_mode` below: a verification launch
+    // must be the real application, with the real single-instance guard, the
+    // real tray and the real configuration directory. The runner isolates
+    // configuration by setting EXOSNAP_CONFIG_DIR itself when a check calls for
+    // it, so which profile is in force stays the check's decision.
+    const exosnap::live_verify::ControlOptions live_verify_options =
+        exosnap::live_verify::ParseControlOptions(arguments);
+    if (live_verify_options.requested && !live_verify_options.error.isEmpty()) {
+        qCritical().noquote() << live_verify_options.error;
+        return 2;
+    }
+
     const bool preview_mode = arguments.contains(QStringLiteral("--preview-smoke-test")) ||
                               arguments.contains(QStringLiteral("--preview-lifecycle-test")) ||
                               arguments.contains(QStringLiteral("--preview-visual-test")) ||
@@ -396,6 +393,60 @@ int main(int argc, char* argv[]) {
         });
     }
 
+    // ---- Live Verify control channel ----------------------------------------
+    // Declared after `quick_application` so it is destroyed BEFORE it: the pipe
+    // worker hands requests to this thread and the source borrows the
+    // application's adapters, so the endpoint has to be gone before any of that
+    // is torn down. Both stay null on a normal launch — no pipe, no thread, no
+    // log line.
+    std::unique_ptr<exosnap::quick::QuickLiveVerifySource> live_verify_source;
+    std::unique_ptr<exosnap::live_verify::LiveVerifyControlServer> live_verify_server;
+    if (live_verify_options.requested) {
+        live_verify_source = std::make_unique<exosnap::quick::QuickLiveVerifySource>(quick_application, root_window);
+        live_verify_server = std::make_unique<exosnap::live_verify::LiveVerifyControlServer>(
+            live_verify_source.get(), live_verify_options.run_id);
+        QString control_error;
+        if (!live_verify_server->Start(&control_error)) {
+            qCritical().noquote() << QStringLiteral("Live Verify control endpoint unavailable: %1").arg(control_error);
+            return 3;
+        }
+
+        auto* server = live_verify_server.get();
+        auto* source = live_verify_source.get();
+
+        // Events, not polling. Each one reuses an existing signal; none of them
+        // introduces a second idea of the state it reports.
+        if (auto* record = quick_application.recordViewModelAdapter()) {
+            auto last_state = std::make_shared<int>(record->state());
+            QObject::connect(record, &exosnap::quick::RecordViewModelAdapter::changed, server,
+                             [server, source, record, last_state]() {
+                                 if (record->state() == *last_state)
+                                     return;
+                                 *last_state = record->state();
+                                 server->EmitEvent(QStringLiteral("record.stateChanged"), source->RecordSnapshot());
+                                 // Completed/Failed are the two states in which a
+                                 // result exists to read. Emitted from the same
+                                 // transition rather than from a second callback,
+                                 // because the coordinator's result-callback slot
+                                 // is single-occupancy and already owned.
+                                 const bool terminal =
+                                     record->state() == static_cast<int>(exosnap::UiRecordingState::Completed) ||
+                                     record->state() == static_cast<int>(exosnap::UiRecordingState::Failed);
+                                 if (terminal)
+                                     server->EmitEvent(QStringLiteral("record.resultReady"), source->RecordResult());
+                             });
+        }
+        if (root_window != nullptr) {
+            QObject::connect(root_window, &QQuickWindow::screenChanged, server, [server, source](QScreen*) {
+                server->EmitEvent(QStringLiteral("window.screenChanged"), source->WindowSnapshot());
+            });
+        }
+        // Queued so it lands after the event loop starts and the first frame is
+        // on its way; a client connecting later simply reads the snapshots.
+        QTimer::singleShot(
+            0, server, [server, source]() { server->EmitEvent(QStringLiteral("app.ready"), source->AppSnapshot()); });
+    }
+
     const HWND preview_pattern =
         arguments.contains(QStringLiteral("--desktop-pattern")) ? createPreviewPatternWindow() : nullptr;
     if (preview_pattern != nullptr) {
@@ -422,26 +473,31 @@ int main(int argc, char* argv[]) {
     }
 
     // Harness-only: renders a --visual-test capture in the named appearance and
-    // accent. Either may be given alone; the other keeps its current value.
+    // accent.
     //
     // Driven through the settings adapter rather than straight into the token
     // singleton, so the Appearance card's own controls agree with the colours
     // the capture shows — a screenshot in Light whose segmented control reads
-    // "Dark" is worse evidence than no screenshot. Harness runs are isolated
-    // into a scratch config dir (harnessConfigId), so persisting is a no-op
-    // against the developer's real settings.
+    // "Dark" is worse evidence than no screenshot.
+    //
+    // A capture WITHOUT these options is pinned to the product default rather
+    // than left at whatever is in the scratch config dir. The harness config dir
+    // is scratch, but it is not fresh: it survives between runs and the running
+    // application persists its appearance into it, so a capture taken after a
+    // `--visual-appearance light` run silently came out Light while claiming to
+    // be the default. A screenshot whose colours depend on which capture ran
+    // before it is not evidence of anything.
     const QString visual_appearance = optionValue(arguments, QStringLiteral("--visual-appearance"));
     const QString visual_accent = optionValue(arguments, QStringLiteral("--visual-accent"));
-    if (!visual_appearance.isEmpty() || !visual_accent.isEmpty()) {
+    if (!visualOutputPath(arguments).isEmpty()) {
+        const QString appearance = visual_appearance.isEmpty() ? QStringLiteral("dark") : visual_appearance;
+        const QString accent = visual_accent.isEmpty() ? QStringLiteral("aqua") : visual_accent;
         if (auto* settings = quick_application.settingsAdapter()) {
-            if (!visual_appearance.isEmpty())
-                settings->setAppearanceId(visual_appearance);
-            if (!visual_accent.isEmpty())
-                settings->setAccentId(visual_accent);
+            settings->setAppearanceId(appearance);
+            settings->setAccentId(accent);
         } else if (auto* tokens = quick_application.engine().singletonInstance<exosnap::quick::QuickThemeTokens*>(
                        QStringLiteral("ExoSnap.Quick"), QStringLiteral("QuickThemeTokens"))) {
-            tokens->setAppearance(visual_appearance.isEmpty() ? tokens->appearanceId() : visual_appearance,
-                                  visual_accent.isEmpty() ? tokens->accentId() : visual_accent);
+            tokens->setAppearance(appearance, accent);
         }
     }
 

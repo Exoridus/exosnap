@@ -52,6 +52,10 @@ Item {
 
         ExoNotice {
             text: root.recordViewModel.noticeText
+            // The banner used to render every notice in the default warning
+            // tone, so a saved recording arrived in caution amber. The tone now
+            // comes from the same place the sentence does.
+            tone: root.recordViewModel.noticeTone
             dismissible: true
             visible: text.length > 0
             Layout.fillWidth: true
@@ -633,34 +637,12 @@ Item {
             }
         }
 
-        // Production entry into the Edit surface (ADR 0022). Hidden rather than
-        // disabled when the recording cannot be edited at all (split recording,
-        // missing file, failed run) — a permanently dead button next to a
-        // successful result reads as a defect.
-        //
-        // The row's OWN visibility is the Edit button's, so an invisible row
-        // contributes neither height nor column spacing. It used to also carry
-        // `recordViewModel.resultText`, which appeared and disappeared with the
-        // engine state and re-scaled the live preview underneath it every time —
-        // a failed run shrank the preview to make room for a sentence saying it
-        // had failed. What went wrong is stated inside the preview and, when it
-        // is serious, on the recording-error surface; neither needed this line.
-        RowLayout {
-            spacing: ExoTheme.spacingSm
-            visible: root.recordViewModel.canOpenEditor
-            Layout.fillWidth: true
-
-            Item {
-                Layout.fillWidth: true
-            }
-
-            ExoButton {
-                text: qsTr("Edit")
-                tone: "primary"
-                onClicked: root.recordViewModel.requestOpenEditor()
-            }
-        }
-
+        // The entry into the Edit surface (ADR 0022) lives IN the transport dock,
+        // as that state's one recommended action — see RecordTransportDock. It
+        // used to be a detached button in a row of its own between the Preview
+        // Surface and the dock, which broke the page's composition (one Preview
+        // Surface → 16 px → transport dock) and left the primary action of the
+        // Completed state floating in the gap between the two.
         RecordTransportDock {
             recordViewModel: root.recordViewModel
             Layout.fillWidth: true

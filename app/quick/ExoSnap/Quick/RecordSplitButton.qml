@@ -23,6 +23,11 @@ Item {
     // One rung down at the 860 px minimum window, in step with the rest of the
     // transport — see RecordActionButton.
     property bool compact: false
+    // Gives up the accent while another control on the bar is the state's one
+    // recommended action (Completed hands it to Edit). Nothing about the
+    // behaviour changes — the split, the chevron and the countdown menu are
+    // untouched; only the pill stops claiming to be the thing to press.
+    property bool subdued: false
 
     readonly property bool counting: root.recordViewModel.countdownActive
     readonly property bool busy: root.recordViewModel.preparing || root.recordViewModel.finalizing
@@ -31,8 +36,13 @@ Item {
     // "start in 5 seconds" beside it would be two answers to one question.
     readonly property bool chevronEnabled: !root.counting && !root.busy && root.recordViewModel.canStart
 
-    readonly property color fill: root.counting ? ExoTheme.error : ExoTheme.accent
-    readonly property color ink: root.counting ? ExoTheme.errorInk : ExoTheme.accentInk
+    // A countdown outranks `subdued`: cancelling it is unambiguously the action
+    // in flight, whatever else is on the bar.
+    readonly property color fill: root.counting ? ExoTheme.error
+                                : root.subdued ? ExoTheme.surfaceRaised : ExoTheme.accent
+    readonly property color ink: root.counting ? ExoTheme.errorInk
+                               : root.subdued ? ExoTheme.text : ExoTheme.accentInk
+    readonly property bool outlined: root.subdued && !root.counting
 
     readonly property string mainText: root.counting ? qsTr("Cancel")
                                      : root.recordViewModel.preparing ? qsTr("Preparing…")
@@ -51,7 +61,10 @@ Item {
         // round control sits on, so a Record button that cannot start would have
         // read as the most ordinary control on the bar.
         color: root.mainEnabled || root.busy ? root.fill : ExoTheme.surface
-        border.width: root.mainEnabled || root.busy ? 0 : 1
+        // A subdued pill sits on the dock's raised-control fill, which is the
+        // same step the round peers take — without a border it would dissolve
+        // into them instead of reading as a control of its own.
+        border.width: (root.mainEnabled || root.busy) && !root.outlined ? 0 : 1
         border.color: ExoTheme.line
         radius: height / 2
     }

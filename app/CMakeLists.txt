@@ -183,6 +183,22 @@ exosnap_add_app_test_support(exosnap_app_log_test_support
 )
 target_link_libraries(exosnap_app_log_test_support PUBLIC Qt6::Core)
 
+# Live Verify control channel (ADR 0066). Everything except the application
+# binding: the wire format, the command allowlist, the argv gate and the named-
+# pipe transport. Compiled into the SHIPPING executable -- official acceptance
+# has to drive the same bytes users receive, so a test-only build of the server
+# would prove nothing about the artifact. It is inert without the explicit
+# --live-verify-control option; see LiveVerifyOptions.h.
+exosnap_add_app_test_support(exosnap_live_verify
+    live_verify/LiveVerifyControlServer.cpp
+    live_verify/LiveVerifyDispatcher.cpp
+    live_verify/LiveVerifyOptions.cpp
+    live_verify/LiveVerifyProtocol.cpp
+)
+# Advapi32: the endpoint's DACL is built from the process token's own SID
+# (OpenProcessToken/ConvertSidToStringSidW/ConvertStringSecurityDescriptor...).
+target_link_libraries(exosnap_live_verify PUBLIC Qt6::Core Advapi32)
+
 exosnap_add_app_test_support(exosnap_output_model_test_support
     models/FilenameBuilder.cpp
     models/OutputPathPolicy.cpp
@@ -518,6 +534,31 @@ target_include_directories(output_settings_tests PRIVATE ${CMAKE_CURRENT_SOURCE_
 # ADR-0014: mfreadwrite.lib removed (MF/SinkWriter path deleted).
 target_link_libraries(output_settings_tests PRIVATE mfplat.lib mf.lib mfuuid.lib ole32.lib)
 set_target_properties(output_settings_tests PROPERTIES AUTOMOC ON)
+
+# Live Verify: the pure rejection surface -- argv gate, wire format, handshake,
+# allowlist. No pipe, no window, no GPU.
+exosnap_add_gtest(
+    NAME live_verify_protocol_tests
+    TEST_PREFIX live_verify.
+    SOURCES
+        tests/test_live_verify_protocol.cpp
+    LIBRARIES exosnap_live_verify Qt6::Core
+)
+target_include_directories(live_verify_protocol_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+# Live Verify: the transport itself. Drives a real named pipe, because "no TCP
+# listener", "a hostile client cannot take the host down" and "the handshake is
+# per connection" are properties of the transport and a mock would assert them
+# against the mock. RUN_SERIAL is not needed -- each case mints its own endpoint
+# name from the PID plus a counter.
+exosnap_add_gtest(
+    NAME live_verify_server_tests
+    TEST_PREFIX live_verify.
+    SOURCES
+        tests/test_live_verify_server.cpp
+    LIBRARIES exosnap_live_verify Qt6::Core
+)
+target_include_directories(live_verify_server_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 exosnap_add_gtest(
     NAME auto_record_harness_tests
@@ -1048,6 +1089,21 @@ exosnap_add_gtest(
 )
 target_include_directories(recording_error_detail_text_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(recording_error_detail_text_tests PROPERTIES AUTOMOC ON)
+
+# The Live Verify runner's own state machine (ADR 0066). Registered here rather
+# than left as a script somebody remembers to run: "an interruption is never
+# mistaken for success" and "a PASS is bound to the artifact it was produced
+# against" are the runner's whole value, and the only way to test them by hand is
+# to kill a real acceptance run.
+find_program(EXOSNAP_PWSH pwsh)
+if(EXOSNAP_PWSH)
+    add_test(NAME live_verify.runner_state
+        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
+            "${PROJECT_SOURCE_DIR}/scripts/tests/live-verify-state.tests.ps1")
+    set_tests_properties(live_verify.runner_state PROPERTIES TIMEOUT 180 LABELS "live_verify")
+else()
+    message(STATUS "pwsh not found — the Live Verify runner state tests will not be registered.")
+endif()
 
 # ---------------------------------------------------------------------------
 # Install — target-independent payload

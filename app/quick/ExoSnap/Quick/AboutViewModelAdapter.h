@@ -32,6 +32,15 @@ class AboutViewModelAdapter : public QObject {
     explicit AboutViewModelAdapter(models::AboutInfo info, QObject* parent = nullptr);
     ~AboutViewModelAdapter() override;
 
+    // The whole build identity, not just the fields the About page renders.
+    // Exposed for the Live Verify handshake, which has to prove the process it
+    // reached is the exact artifact under acceptance -- that needs the full
+    // commit SHA, the build id and the configuration, none of which the QML
+    // properties above carry.
+    [[nodiscard]] const models::AboutInfo& info() const noexcept {
+        return info_;
+    }
+
     [[nodiscard]] QString version() const;
     [[nodiscard]] QString commitShort() const;
     [[nodiscard]] QString builtDisplay() const;

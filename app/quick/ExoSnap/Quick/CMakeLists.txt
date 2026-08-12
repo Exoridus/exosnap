@@ -250,6 +250,17 @@ target_sources(exosnap
         ${PROJECT_SOURCE_DIR}/app/models/OutputPathValidator.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/AppLog.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/AppLog.h
+        # What Windows itself says about our windows: style/ex-style, non-client
+        # inset, child HWNDs, display affinity. Shared by --hwnd-audit and the
+        # Live Verify window/overlay snapshots so the startup gate and the live
+        # observation can never disagree.
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/NativeWindowFacts.cpp
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/NativeWindowFacts.h
+        # ADR 0066: the application binding for the Live Verify control channel.
+        # The channel itself lives in exosnap_live_verify; this is the only file
+        # that knows what an ExoSnap adapter is.
+        QuickLiveVerifySource.cpp
+        QuickLiveVerifySource.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsController.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsController.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsProbe.cpp
@@ -429,6 +440,7 @@ target_link_libraries(exosnap
         exosnap_output_model_test_support
         exosnap_device_service_test_support
         exosnap_diagnostics_test_support
+        exosnap_live_verify
         exosnap_miniz
         recorder_core
         tomlplusplus::tomlplusplus

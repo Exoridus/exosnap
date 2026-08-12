@@ -84,6 +84,12 @@ class RecordViewModelAdapter : public QObject {
     Q_PROPERTY(bool captureFrameEnabled READ captureFrameEnabled NOTIFY changed FINAL)
     Q_PROPERTY(bool splitEnabled READ splitEnabled NOTIFY changed FINAL)
     Q_PROPERTY(QString noticeText READ noticeText NOTIFY changed FINAL)
+    // What the notice MEANS: "info" | "success" | "warning" | "error", the four
+    // ExoNotice tones. Every notice used to render in the default warning tone,
+    // so a saved recording was announced in caution amber next to a caution
+    // amber "storage running low" — the banner's colour carried no information
+    // at all.
+    Q_PROPERTY(QString noticeTone READ noticeTone NOTIFY changed FINAL)
     Q_PROPERTY(QString resultText READ resultText NOTIFY changed FINAL)
     // Whether the finished recording can be opened in the Edit surface. False
     // for a split recording (no single edit master), a missing file, a failed
@@ -154,6 +160,7 @@ class RecordViewModelAdapter : public QObject {
     [[nodiscard]] bool captureFrameEnabled() const noexcept;
     [[nodiscard]] bool splitEnabled() const noexcept;
     [[nodiscard]] const QString& noticeText() const noexcept;
+    [[nodiscard]] const QString& noticeTone() const noexcept;
     [[nodiscard]] QString resultText() const;
     [[nodiscard]] bool canOpenEditor() const noexcept;
 
@@ -168,7 +175,10 @@ class RecordViewModelAdapter : public QObject {
     void setPreviewFrameReady(bool ready);
     void setSplitEnabled(bool enabled);
     void setMeters(double system, double app, double microphone);
-    void setNoticeText(QString text);
+    // `tone` defaults to "warning" so an existing caller that never named one
+    // keeps the banner it already had; the callers that state a tone are the
+    // ones whose message is not a warning.
+    void setNoticeText(QString text, QString tone = QStringLiteral("warning"));
     void synchronize();
 
     Q_INVOKABLE void requestStart();
@@ -255,6 +265,7 @@ class RecordViewModelAdapter : public QObject {
     bool preview_frame_ready_ = false;
     bool split_enabled_ = false;
     QString notice_text_;
+    QString notice_tone_ = QStringLiteral("warning");
 };
 
 } // namespace quick

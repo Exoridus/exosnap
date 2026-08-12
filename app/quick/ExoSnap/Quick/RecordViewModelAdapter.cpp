@@ -319,6 +319,10 @@ const QString& RecordViewModelAdapter::noticeText() const noexcept {
     return notice_text_;
 }
 
+const QString& RecordViewModelAdapter::noticeTone() const noexcept {
+    return notice_tone_;
+}
+
 QString RecordViewModelAdapter::resultText() const {
     if (source_ == nullptr || !source_->HasResult())
         return {};
@@ -425,10 +429,11 @@ void RecordViewModelAdapter::setMeters(double system, double app, double microph
     emit metersChanged();
 }
 
-void RecordViewModelAdapter::setNoticeText(QString text) {
-    if (notice_text_ == text)
+void RecordViewModelAdapter::setNoticeText(QString text, QString tone) {
+    if (notice_text_ == text && notice_tone_ == tone)
         return;
     notice_text_ = std::move(text);
+    notice_tone_ = std::move(tone);
     emit changed();
 }
 

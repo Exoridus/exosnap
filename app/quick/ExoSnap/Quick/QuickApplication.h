@@ -86,6 +86,11 @@ class QuickApplication {
     [[nodiscard]] CrashReportAdapter* crashReportAdapter() noexcept;
     [[nodiscard]] QQmlApplicationEngine& engine() noexcept;
     [[nodiscard]] RecordingCoordinator* recordingCoordinator() noexcept;
+    // Read-only view of the shared record state. The adapter above exposes what
+    // QML binds to; the Live Verify result snapshot needs the typed result
+    // fields (paths, container/codecs, marker count) that never became QML
+    // properties because no surface renders them individually.
+    [[nodiscard]] const RecordViewModel& recordViewModel() const noexcept;
     [[nodiscard]] bool prepareRecordingBenchmark(uint32_t frame_rate, QString& error);
 
     // Automation only (--auto-record). Picks the first enumerated target of `kind`

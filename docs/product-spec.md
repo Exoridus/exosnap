@@ -838,7 +838,23 @@ thing meant to be pressed the darkest thing on the page.
   while recording and amber while paused, using tabular figures so the digits do not shift.
 - **Right — the actions**, in two tiers: the per-recording secondary actions (capture frame, add
   marker, split, pause) as round icon buttons, then the one recommended action — **Record**,
-  **Resume** or **Stop** — as a wider filled pill. There is never more than one filled pill.
+  **Resume**, **Stop** or, once a recording has finished, **Edit** — as a wider filled pill. There is
+  never more than one filled pill.
+
+  After a successful recording the recommended action is **Edit**, because opening what was just
+  recorded is what the product is for and starting the next one is not. Record is not removed — it
+  keeps its split button and its countdown chevron and steps down to a plain outlined pill beside
+  Edit, so there is always a way on from the completed state. Edit is hidden, not disabled, when the
+  recording cannot be edited at all (a split recording, a missing file, a failed run): a permanently
+  dead button next to a successful result reads as a defect. It is never a separate control floating
+  between the Preview Surface and the dock — the page is one Preview Surface, 16 px, one dock.
+
+**Page notice.** A single inline banner sits above the Preview Surface for conditions the page itself
+cannot fix. Its colour states what the message **means** — a saved recording is a success, a refused
+export is an error, an unavailable display is a caution — and never the same tone for all of them. It
+names a produced file by **file name**, never by full path: a path is unbounded, so a banner carrying
+one grows as wide as the deepest folder the user records into and stops reading as a sentence. The
+folder stays one click away on the notification the same result raises.
 
 **Round-control states.** Every round dock control reads the same way in every state, and the four
 states are told apart by more than one cue:

@@ -216,6 +216,30 @@ mouse moves — is invisible to every other instrument: a screenshot cannot show
 that frames stopped arriving, and the metrics overlay reports rates rather than
 the transition that broke them.
 
+### Live Verify control channel
+
+`exosnap.exe --live-verify-control <run-id>` arms a local named-pipe control
+channel used by the release-acceptance runner (`scripts/live-verify.ps1`, ADR
+0066, usage in `docs/dev/live-verify.md`). It exposes an allowlist of read-only
+snapshots and the same transport intents the QML buttons call — never arbitrary
+object or property access.
+
+Two things worth knowing before touching it:
+
+1. **It is not a harness mode.** Unlike `--visual-test`/`--auto-record`, it does
+   not isolate the config directory, does not suppress the single-instance guard
+   and does not suppress the tray. A verification launch is a *normal* launch,
+   because that is what is being accepted. Close any running ExoSnap first, and
+   set `EXOSNAP_CONFIG_DIR`/`EXOSNAP_OUTPUT_DIR` yourself when a check needs
+   isolation.
+2. **A normal launch has no endpoint at all** — no pipe, no thread, no log line.
+   That is asserted by `live_verify.live_verify_server_tests`, not by inspection;
+   keep it that way.
+
+`preview.snapshot` reports the redraw gate's counters (`publishSignals`,
+`wakeups`, `renderPasses`, `owed`) as structured state — prefer it over parsing
+`preview-trace:` lines, which stay useful as secondary evidence.
+
 ### Final validation
 
 Run once after the integrated branch is complete:

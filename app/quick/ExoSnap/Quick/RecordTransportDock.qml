@@ -283,13 +283,42 @@ Rectangle {
             onClicked: root.recordViewModel.requestStop()
         }
 
+        // The one recommended action of the Completed state (ADR 0022). It takes
+        // the accent pill that Record otherwise holds — after a recording
+        // finishes, editing it is what the product is for, and starting the next
+        // one is not. Record is not removed, only stepped down to a plain pill
+        // beside it: hiding it would leave no way out of Completed except
+        // dismissing the result.
+        //
+        // Hidden rather than disabled when the recording cannot be edited at all
+        // (split recording, missing file, failed run) — a permanently dead button
+        // next to a successful result reads as a defect.
+        RecordActionButton {
+            id: editButton
+
+            compact: root.compactControls
+            accessibleLabel: qsTr("Edit recording")
+            text: qsTr("Edit")
+            round: false
+            emphasised: true
+            emphasisColor: ExoTheme.accent
+            emphasisTextColor: ExoTheme.accentInk
+            visible: root.recordViewModel.canOpenEditor
+            Layout.leftMargin: root.actionGap
+            onClicked: root.recordViewModel.requestOpenEditor()
+        }
+
         RecordSplitButton {
             id: primaryButton
 
             recordViewModel: root.recordViewModel
             compact: root.compactControls
+            // Only one accent pill on the bar at a time. While Edit holds it,
+            // Record keeps its split behaviour and its chevron and gives up the
+            // emphasis.
+            subdued: editButton.visible
             visible: !root.recordViewModel.recording && !root.recordViewModel.paused
-            Layout.leftMargin: root.actionGap
+            Layout.leftMargin: editButton.visible ? root.clusterSpacing : root.actionGap
         }
     }
 
@@ -300,7 +329,9 @@ Rectangle {
             if (!root.recordViewModel.active)
                 return
             Qt.callLater(() => {
-                if (pauseButton.visible && pauseButton.available)
+                if (editButton.visible)
+                    editButton.forceActiveFocus()
+                else if (pauseButton.visible && pauseButton.available)
                     pauseButton.forceActiveFocus()
                 else if (resumeButton.visible && resumeButton.available)
                     resumeButton.forceActiveFocus()
