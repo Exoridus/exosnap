@@ -28,6 +28,9 @@ class RecordingCountdownController {
         return duration_seconds_;
     }
     [[nodiscard]] int remainingSeconds(int64_t now_ms) const noexcept;
+    // 1.0 at the start, 0.0 the moment it expires, unrounded. Feeds the ring;
+    // remainingSeconds() feeds the digit.
+    [[nodiscard]] double remainingFraction(int64_t now_ms) const noexcept;
     [[nodiscard]] bool hasReachedZero(int64_t now_ms) const noexcept;
 
   private:

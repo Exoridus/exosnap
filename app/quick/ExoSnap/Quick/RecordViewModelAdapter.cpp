@@ -318,6 +318,10 @@ int RecordViewModelAdapter::countdownRemaining() const noexcept {
     return countdown_remaining_;
 }
 
+double RecordViewModelAdapter::countdownProgress() const noexcept {
+    return countdown_progress_;
+}
+
 bool RecordViewModelAdapter::captureFrameEnabled() const noexcept {
     return recording() || paused() ||
            (source_ != nullptr && source_->state == UiRecordingState::Ready && preview_frame_ready_);
@@ -393,11 +397,19 @@ void RecordViewModelAdapter::setWebcamFrameSource(QString source) {
     emit webcamFrameChanged();
 }
 
-void RecordViewModelAdapter::setCountdownState(int configured_seconds, int remaining_seconds) {
-    if (countdown_seconds_ == configured_seconds && countdown_remaining_ == remaining_seconds)
+void RecordViewModelAdapter::setCountdownState(int configured_seconds, int remaining_seconds, double progress) {
+    progress = std::clamp(progress, 0.0, 1.0);
+    // The progress comparison is what keeps this signalling at the coordinator's
+    // tick rate rather than once a second. Comparing only the whole-second
+    // fields would swallow nine of every ten updates, which is exactly the
+    // rounding this property exists to avoid.
+    if (countdown_seconds_ == configured_seconds && countdown_remaining_ == remaining_seconds &&
+        qFuzzyCompare(countdown_progress_, progress)) {
         return;
+    }
     countdown_seconds_ = configured_seconds;
     countdown_remaining_ = remaining_seconds;
+    countdown_progress_ = progress;
     emit changed();
 }
 

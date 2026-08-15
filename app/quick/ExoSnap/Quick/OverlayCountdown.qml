@@ -18,34 +18,22 @@ Window {
                                               ? root.monitorGeometry
                                               : Qt.rect(Screen.virtualX, Screen.virtualY, Screen.width, Screen.height)
 
-    // Depleting ring: 1.0 = full, 0.0 = empty.
-    readonly property real progress: root.durationSeconds > 0
-                                     ? Math.max(0.0, Math.min(1.0, root.remainingSeconds / root.durationSeconds))
-                                     : 1.0
+    // Depleting ring: 1.0 = full, 0.0 = empty. Fed by the coordinator's
+    // millisecond clock at its own 100 ms tick, NOT derived from the digit.
+    //
+    // Both earlier versions failed on this. Reading `remainingSeconds`
+    // directly made the ring jump in three whole steps. Interpolating between
+    // those steps then traded that stutter for a lag: an animation shorter than
+    // the tick finished early and parked, one longer than the tick was cut off
+    // when the overlay closed and left a visible arc standing at the moment the
+    // recording started. The unrounded value has none of that -- it is simply
+    // where the countdown actually is -- and needs no animation at all.
+    //
+    // The fallback matters: `durationSeconds` is 0 before the first tick lands.
+    readonly property real progress: root.durationSeconds > 0 ? root.countdownProgress : 1.0
 
-    // What the arc actually draws. The controller counts in whole seconds, so
-    // binding the arc straight to `progress` made the ring jump once a second
-    // in three big steps -- a progress indicator that is only ever right at the
-    // instant it moves. Interpolating across exactly one second turns the same
-    // source into a continuously depleting ring; the digit keeps showing whole
-    // seconds, because that is what it means.
-    property real displayedProgress: root.progress
-
-    Behavior on displayedProgress {
-        NumberAnimation {
-            // Deliberately LONGER than the one-second tick that feeds it. At
-            // exactly 1000 ms the interpolation finishes before the next tick
-            // arrives — the source is a whole-second counter with ordinary timer
-            // jitter, never a metronome — and the ring visibly parks for the
-            // remainder. Overlapping the tick means the next value always
-            // interrupts a still-moving animation, so the ring never stops
-            // before the countdown does. The cost is a few degrees of lag
-            // against the digit, which no one can see; a ring that stutters,
-            // everyone can.
-            duration: 1150
-            easing.type: Easing.Linear
-        }
-    }
+    // 1.0 down to 0.0, from RecordViewModelAdapter.countdownProgress.
+    property real countdownProgress: 1.0
 
     // ── Overlay tokens ────────────────────────────────────────────────────────
     // Verbatim from the Widgets class — the circle sits on captured content, so
@@ -158,7 +146,7 @@ Window {
                     radiusX: root.ringRadius
                     radiusY: root.ringRadius
                     startAngle: -90
-                    sweepAngle: 360 * root.displayedProgress
+                    sweepAngle: 360 * root.progress
                     moveToStart: true
                 }
             }
