@@ -184,8 +184,11 @@ control (two mutually exclusive values do not deserve a list that must be opened
 one), and Accent as a row of round swatches. Each swatch is drawn in the value the accent will
 actually take in the **current** appearance, so a light-mode swatch never shows its dark-mode
 colour. Selection is marked by a ring in the appearance's own text colour rather than in the accent
-— a swatch outlined in its own colour is invisible as a selection. Every swatch is keyboard
-reachable and carries the accent's name as its accessible name.
+— a swatch outlined in its own colour is invisible as a selection — and the ring stands **clear of
+the dot**, so the mark is a shape rather than a slightly heavier outline. Resting swatches carry no
+ring at all: the row has to answer "which one is active" at a glance, without the user clicking one
+to find out. Every swatch is keyboard reachable and carries the accent's name as its accessible
+name.
 
 ---
 
@@ -1030,6 +1033,11 @@ Continued sessions produce independent recording slices (no single-file concat).
 recordings, segments finalized before an interruption remain usable; an interrupted active segment
 may not be recoverable.
 
+Only entries with something to recover are offered. An artefact that is **missing** and one that is
+**empty** are both dropped from the manifest at the next scan — an interruption before the muxer
+wrote its first byte leaves a zero-byte file, and offering it would promise a recovery that cannot
+happen, at every launch, until the user deletes it by hand.
+
 **Edit / Output / Save (post-stop surface).** A single view lets the user trim and export without
 leaving the app: the player and its trim timeline on the left, and a right rail with two cards —
 **Details** (duration / size / resolution / frame rate / video / audio / container as right-aligned
@@ -1202,16 +1210,27 @@ release (0.11 per ADR 0022).
   hub always keeps the full untruncated text); with a single action the card itself is clickable
   (marked `›`); two actions get named buttons. A preset switch raises no toast — only the hub entry
   with **Undo** (the combo box that switched is the way back).
+  - A toast is **operable**: its dismiss ✕ and every action it offers respond to the mouse. Only the
+    transparent gaps between stacked cards fall through to whatever is behind them.
+  - A body that has no place to wrap — a file path is one unbreakable token — breaks mid-token
+    rather than growing past the card. No body may overrun the card at any length.
+  - The "Recording saved" toast names the **file**, not its full path. The path is what the actions
+    act on (**Show in folder** opens it, **Edit** receives it), not what the card spends its width
+    on: the user chose the output folder and already knows it.
 - **On-screen overlays**: a recording-status pill (anchored top-right of the recorded monitor), a
   diagnostics readout pill directly beneath it (**off by default**), a countdown overlay centred on
   the recorded monitor, and an **opt-in** interactive quick-control pill (off by default). All four
-  are capture-excluded. The first three are click-through; the quick-control pill is interactive by
-  design (ADR 0016) and is the sole exception.
+  are capture-excluded, as is the toast window above them — five capture-excluded windows in total.
+  The first three are click-through; the quick-control pill (ADR 0016) and the toast stack are
+  interactive by design and take mouse input.
   - The **recording pill** carries a state glyph plus the configured text. There is no REC or PAUSED
     word — the pill only appears while a capture is live, so the glyph carries the state: a coral dot
     while recording, an amber pause symbol while held, an amber warning symbol once **measured**
     frame drops occur. A failed recording does **not** raise the pill: the in-window error surface
     owns that, and a click-through pill could not be dismissed.
+  - The **countdown overlay** shows whole remaining seconds as a digit, and its ring depletes
+    **continuously**. The ring is a progress indicator, not a second way of printing the digit: a
+    ring that only moves once a second is correct for an instant and stale for the rest of it.
   - **Overlay content is configurable** in Settings → Overlays, by preset with per-element
     overrides. Recording: **Minimal** (elapsed time) or **Custom** (elapsed time · file size ·
     source name). Diagnostics: **Health** (only the tokens that can report a problem — drop, drift,

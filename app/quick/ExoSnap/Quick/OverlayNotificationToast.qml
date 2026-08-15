@@ -46,8 +46,15 @@ Window {
     // most useful exactly when the app is minimised.
     transientParent: null
 
+    // No Qt.WindowTransparentForInput: the mask above is what keeps the gaps
+    // between cards click-through, and the flag would defeat the cards too.
+    // It was set here regardless, which made every toast unoperable on the real
+    // desktop -- dismiss, Edit and Show in folder all dead, and a toast the user
+    // could not get rid of. WindowDoesNotAcceptFocus stays: the toast must not
+    // steal focus from whatever is being recorded, and it does not prevent
+    // clicks (OverlayQuickControlPill ships the same combination).
     flags: Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
-           | Qt.WindowDoesNotAcceptFocus | Qt.WindowTransparentForInput
+           | Qt.WindowDoesNotAcceptFocus
     color: "transparent"
 
     visible: exclusion.granted && repeater.count > 0
@@ -295,7 +302,14 @@ Window {
                         text: card.model.body !== undefined ? card.model.body : ""
                         textFormat: Text.PlainText
                         color: ExoTheme.textMuted
-                        wrapMode: Text.WordWrap
+                        // WrapAnywhere as the fallback, not WordWrap alone: a
+                        // file path is one unbreakable token, and WordWrap has
+                        // no legal break in it -- so the line simply grew past
+                        // the card and out of the window, with elide never
+                        // reached because eliding only applies to the last of
+                        // several lines. Any body that cannot wrap now breaks
+                        // mid-token instead of overrunning.
+                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                         // Grow-to-fit up to six lines; beyond that the last line
                         // elides. The notification hub always keeps the full text.
                         maximumLineCount: 6

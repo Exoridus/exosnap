@@ -415,6 +415,12 @@ function Get-LiveVerifyRunnableChecks {
         rerun -- that is what makes resume worth having. A FAIL bound to the
         current artifact is not rerun either: it is a finding, and `retry` is the
         explicit way to re-attempt it after a change.
+
+        Emitted one entry at a time, NOT as `, [object[]]$runnable`. That comma
+        idiom protects an empty result elsewhere in this module, but here every
+        caller already wraps the call in `@(...)`, and the extra layer survives
+        that wrap: the runner then iterated a single "entry" that was the whole
+        list, and `-Id` got an array instead of a check id.
     #>
     [CmdletBinding()]
     param(
@@ -427,7 +433,7 @@ function Get-LiveVerifyRunnableChecks {
         $state = $Run.State.checks.$($entry.Id).state
         if ($state -in @('PENDING', 'STALE', 'UNVERIFIED', 'RUNNING', 'MANUAL_REQUIRED')) { $runnable += $entry }
     }
-    return , [object[]]$runnable
+    return [object[]]$runnable
 }
 
 function Get-LiveVerifySummary {

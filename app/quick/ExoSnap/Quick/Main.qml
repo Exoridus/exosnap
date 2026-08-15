@@ -149,6 +149,13 @@ ApplicationWindow {
     // useful exactly when ExoSnap is not the window in front — behind a
     // fullscreen game, or with the app hidden in the tray.
     OverlayNotificationToast {
+        // Named like the four below, because it is one of them for every
+        // purpose that matters here: capture-excluded, top-level, invisible to
+        // pixel and adapter tests alike. Without a name it never appeared in the
+        // Live Verify overlay snapshot at all, so the check that asserts native
+        // composition invariants silently covered four windows and reported
+        // success — while this one shipped unoperable.
+        objectName: "quickOverlayNotificationToast"
         toasts: root.notifications.toastModel
         anchorGeometry: root.notifications.toastAnchorGeometry
         onActionTriggered: function (sequence, action) {

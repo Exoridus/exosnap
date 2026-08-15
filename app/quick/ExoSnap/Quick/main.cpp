@@ -78,12 +78,22 @@ QSize visualWindowSize(const QStringList& arguments) {
 // number, not a coincidence, so it is an explicit option.
 int visualCaptureDelayMs(const QStringList& arguments) {
     constexpr int kDefaultCaptureDelayMs = 400;
+    // Scrolling to the end of Settings is not ready at 400 ms: the page is
+    // loader-built, its two breakpoint compositions settle afterwards, and the
+    // pinning timer only then has a content height to scroll to. Measured on
+    // this tree, 400 ms photographs the TOP of the page — which is what the flag
+    // did silently before, so nobody noticed the cards below the fold were never
+    // in the sweep. An explicit --visual-delay-ms still wins over this.
+    constexpr int kSettingsBottomCaptureDelayMs = 2000;
+    const int default_delay_ms = arguments.contains(QStringLiteral("--settings-visual-bottom"))
+                                     ? kSettingsBottomCaptureDelayMs
+                                     : kDefaultCaptureDelayMs;
     const int option_index = arguments.indexOf(QStringLiteral("--visual-delay-ms"));
     if (option_index < 0 || option_index + 1 >= arguments.size())
-        return kDefaultCaptureDelayMs;
+        return default_delay_ms;
     bool delay_ok = false;
     const int delay_ms = arguments.at(option_index + 1).toInt(&delay_ok);
-    return delay_ok && delay_ms >= 0 ? delay_ms : kDefaultCaptureDelayMs;
+    return delay_ok && delay_ms >= 0 ? delay_ms : default_delay_ms;
 }
 
 // Scratch config directory a harness run is isolated into. Distinct per harness
@@ -513,11 +523,22 @@ int main(int argc, char* argv[]) {
     // the cards below the fold. Appearance is the last of them, and no window
     // height on a real display reaches it — the window is clamped to the screen
     // work area long before the content ends.
+    // Queued, not immediate: the Settings page is built by the shell's loader in
+    // response to --visual-page above, so at this point in startup it does not
+    // exist yet. findChild() then returned nullptr and this did nothing at all,
+    // silently -- every capture taken with the flag showed the top of the page
+    // while claiming to show its end, and the cards below the fold (Appearance
+    // among them) had never actually been photographed.
     if (arguments.contains(QStringLiteral("--settings-visual-bottom"))) {
-        if (auto* page = root_window != nullptr ? root_window->findChild<QObject*>(QStringLiteral("quickSettingsPage"))
-                                                : nullptr) {
+        QTimer::singleShot(0, &app, [root_window]() {
+            auto* page = root_window != nullptr ? root_window->findChild<QObject*>(QStringLiteral("quickSettingsPage"))
+                                                : nullptr;
+            if (page == nullptr) {
+                qWarning("--settings-visual-bottom: no quickSettingsPage; is --visual-page set to Settings?");
+                return;
+            }
             QMetaObject::invokeMethod(page, "scrollToBottom");
-        }
+        });
     }
 
     const QString record_visual_state = optionValue(arguments, QStringLiteral("--record-visual-state"));

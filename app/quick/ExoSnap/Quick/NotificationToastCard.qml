@@ -152,7 +152,9 @@ Rectangle {
         Label {
             text: root.body
             textFormat: Text.PlainText
-            wrapMode: Text.WordWrap
+            // See OverlayNotificationToast.qml: WordWrap cannot break a path,
+            // so an unbreakable body overran the card instead of eliding.
+            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
             visible: root.body !== ""
             color: ExoTheme.textSecondary
             maximumLineCount: 6

@@ -145,6 +145,15 @@ Test-Case 'resume reruns what is unresolved and leaves a PASS alone' {
     Assert-True ($ids -notcontains 'T-ART-001') 'a PASS is not rerun'
     Assert-True ($ids -contains 'T-ENV-001') 'an UNVERIFIED check is rerun'
     Assert-True ($ids -contains 'T-FREE-001') 'a PENDING check is run'
+
+    # The shape, not just the contents. A nested result reads correctly through a
+    # pipeline -- member enumeration flattens it -- and still hands the runner one
+    # "entry" that is the entire list. That shipped once and stopped every run
+    # before it started, with the ids intact in this very assertion.
+    Assert-True ($runnable.Count -eq $ids.Count) 'one element per runnable check, not one nested list'
+    foreach ($entry in $runnable) {
+        Assert-True ($entry.Id -is [string]) 'each element is a single check, so its Id is a string'
+    }
 }
 
 Test-Case 'a changed artifact makes an artifact-bound PASS stale' {

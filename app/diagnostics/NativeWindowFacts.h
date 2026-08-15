@@ -42,6 +42,12 @@ struct NativeWindowFacts {
     // per-pixel alpha or as an opaque rectangle -- and the harness cannot see
     // the difference.
     bool layered = false;
+    // WS_EX_TRANSPARENT (0x00000020). Broken out for the same reason as
+    // `layered`: it decides whether an overlay can be operated at all, and no
+    // other instrument here can see it. A window carrying it swallows nothing
+    // and receives nothing -- every control on it is drawn, hit-testable in the
+    // scene graph, and dead to the mouse. That shipped once, on the toast.
+    bool transparent_for_input = false;
     // GetWindowDisplayAffinity result (WDA_NONE 0 / WDA_MONITOR 1 /
     // WDA_EXCLUDEFROMCAPTURE 0x11). `affinity_known` is false when the call
     // failed, which is not the same as WDA_NONE.

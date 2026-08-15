@@ -237,13 +237,40 @@ function Assert-NoForeignInstance {
 
 function Start-LiveVerifySession {
     param([Parameter(Mandatory)] $Run)
-    if ($null -ne $script:Session) { return $script:Session }
+    # A remembered session is only reusable while its process is alive. Handing
+    # back a dead one made the next check talk into a closed pipe ("Pipe is
+    # broken"), which the runner recorded as FAIL -- a product verdict for an
+    # application that had simply been closed, once for a gate the operator had
+    # already judged good. A vanished process is a new session, not a failure.
+    if ($null -ne $script:Session) {
+        $previous = $script:Session
+        $previous.Process.Refresh()
+        if (-not $previous.Process.HasExited) { return $previous }
+        Write-Step 'the previous session exited; starting a new one'
+        $script:Session = $null
+        try { $previous.Connection.Close() } catch { }
+    }
 
     Assert-NoForeignInstance
     $runId = New-LiveVerifyRunId
     $exe = $Run.Artifact.exePath
     Write-Step "launching $([IO.Path]::GetFileName($exe)) with the control channel armed"
-    $process = Start-Process -FilePath $exe -ArgumentList @('--live-verify-control', $runId) -PassThru
+
+    # Acceptance must not write into the operator's own video library. Every
+    # check that records -- LV-REC-001 through the intents, LV-UIA-001 through
+    # the real transport control, and a human gate that starts one by hand --
+    # lands where the run keeps its evidence instead. EXOSNAP_OUTPUT_DIR is a
+    # runtime override on the configured folder (RecordingCoordinator::
+    # EffectiveOutputFolder), not a harness switch, so this stays a normal
+    # launch. Restored immediately: the child copies the environment at start.
+    $recordingsDirectory = Join-Path $Run.Directory 'media/recordings'
+    New-Item -ItemType Directory -Path $recordingsDirectory -Force | Out-Null
+    $previousOutputDirectory = $env:EXOSNAP_OUTPUT_DIR
+    $env:EXOSNAP_OUTPUT_DIR = $recordingsDirectory
+    try {
+        $process = Start-Process -FilePath $exe -ArgumentList @('--live-verify-control', $runId) -PassThru
+    }
+    finally { $env:EXOSNAP_OUTPUT_DIR = $previousOutputDirectory }
 
     $connection = $null
     try {
@@ -297,6 +324,20 @@ function Invoke-ManualGate {
     param([Parameter(Mandatory)] [hashtable] $Gate)
     if ($NonInteractive) { return $false }
 
+    # A redirected stdin cannot answer a gate: Read-Host returns $null there
+    # rather than blocking, and calling .Trim() on it threw inside the check --
+    # which the runner then recorded as FAIL, i.e. as a defect of the product,
+    # for three gates a human never even saw. An unanswerable gate is a deferred
+    # gate. Checked before the instructions are printed, so nobody performs a
+    # ten-second drag that cannot be confirmed afterwards.
+    if ([Console]::IsInputRedirected) {
+        Write-Host ''
+        Write-Host "MANUAL GATE DEFERRED - $($Gate.Title)" -ForegroundColor Yellow
+        Write-Host '  stdin is redirected, so this gate cannot be answered here.'
+        Write-Host '  Run scripts/live-verify.ps1 from a real terminal, or pass -NonInteractive to skip the gates deliberately.'
+        return $false
+    }
+
     Write-Host ''
     Write-Host "MANUAL ACTION REQUIRED - $($Gate.Title)" -ForegroundColor Yellow
     Write-Host ''
@@ -314,6 +355,9 @@ function Invoke-ManualGate {
     Write-Host $Gate.Expected
     Write-Host ''
     $answer = Read-Host "Reply only with 'done' when complete (anything else defers this gate)"
+    # Belt and braces: Read-Host can still hand back $null on a console that
+    # reaches end of input, and a defer must never surface as a thrown check.
+    if ([string]::IsNullOrWhiteSpace($answer)) { return $false }
     return ($answer.Trim().ToLowerInvariant() -eq 'done')
 }
 

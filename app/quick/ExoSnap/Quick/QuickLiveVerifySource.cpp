@@ -51,6 +51,7 @@ QJsonObject NativeFactsJson(const diagnostics::NativeWindowFacts& facts) {
     json.insert(QStringLiteral("style"), QStringLiteral("0x%1").arg(facts.style, 8, 16, QLatin1Char('0')));
     json.insert(QStringLiteral("exStyle"), QStringLiteral("0x%1").arg(facts.ex_style, 8, 16, QLatin1Char('0')));
     json.insert(QStringLiteral("layered"), facts.layered);
+    json.insert(QStringLiteral("transparentForInput"), facts.transparent_for_input);
     json.insert(QStringLiteral("childHwnds"), facts.child_hwnds);
     json.insert(QStringLiteral("nonClientInsetLeft"), facts.inset.left);
     json.insert(QStringLiteral("nonClientInsetTop"), facts.inset.top);
