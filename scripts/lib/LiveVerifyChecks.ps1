@@ -525,28 +525,48 @@ is verified automatically before and after your drag.
             $timedOut = $false
             $noHarness = $false
             try {
+                # The report is the only thing that says WHY the chain failed.
+                # A GUI subsystem binary writes nothing to a redirected stdout on
+                # Windows, so the .log files next to this are always empty --
+                # without the report a non-zero exit is just a number.
+                $reportPath = Join-Path $ctx.RunDirectory 'checks/LV-EDIT-001/auto-edit-report.json'
                 $process = Start-Process -FilePath $ctx.Artifact.exePath -PassThru `
                     -RedirectStandardOutput $log -RedirectStandardError "$log.err" `
                     -ArgumentList @('--auto-record', '--target', 'monitor', '--duration', '6',
-                    '--auto-edit', '--export-container', 'mkv')
-                # Establish first whether the artifact even HAS the harness,
-                # because a Release build without EXOSNAP_BUILD_BENCHMARK_HARNESS
-                # =ON does not know these options: it ignores them and opens a
-                # normal window instead. Bare harness mode never creates a window
-                # (only the preview variant does, and it is not requested here),
-                # so a main window inside the grace period is exactly that case.
-                # Waiting the full timeout for it left a real ExoSnap window --
-                # recovery prompt and all -- sitting on the operator's desktop
-                # for three minutes, looking like a product state under test.
-                $windowDeadline = [DateTime]::UtcNow.AddSeconds(20)
-                while ([DateTime]::UtcNow -lt $windowDeadline) {
+                    # Without --audio-rows the harness records no audio at all,
+                    # and the chain's decode.audioTracks stage then fails on
+                    # every run by construction -- it asserts a track this
+                    # invocation never asked to be captured. SYS is the shipped
+                    # default for screen capture, so it is what acceptance should
+                    # be exercising anyway.
+                    '--audio-rows', 'sys',
+                    '--auto-edit', '--export-container', 'mkv', '--auto-edit-report', $reportPath)
+                # Establish whether the artifact even HAS the harness, because a
+                # Release build without EXOSNAP_BUILD_BENCHMARK_HARNESS=ON does
+                # not know these options: it ignores them and opens a normal
+                # window instead, which never returns. Waiting the full timeout
+                # for that left a real ExoSnap window -- recovery prompt and all
+                # -- on the operator's desktop for three minutes, looking like a
+                # product state under test.
+                #
+                # The signal is PROGRESS, not the presence of a window: --auto-
+                # edit legitimately opens one off-screen to reuse the preview and
+                # editor machinery, so "a window exists" says nothing. It was
+                # tried, and it reported BLOCKED for a harness that was working
+                # and had already written both files. A harness run instead makes
+                # the recording appear in the output directory within a bounded
+                # time; a build without one never writes anything there.
+                $recordingDeadline = [DateTime]::UtcNow.AddSeconds(75)
+                while ([DateTime]::UtcNow -lt $recordingDeadline) {
                     if ($process.HasExited) { break }
-                    $process.Refresh()
-                    if ($process.MainWindowHandle -ne [IntPtr]::Zero) {
-                        $noHarness = $true
+                    if (@(Get-ChildItem -LiteralPath $outputDirectory -File -ErrorAction SilentlyContinue).Count -gt 0) {
                         break
                     }
-                    Start-Sleep -Milliseconds 250
+                    Start-Sleep -Milliseconds 500
+                }
+                if (-not $process.HasExited -and
+                    @(Get-ChildItem -LiteralPath $outputDirectory -File -ErrorAction SilentlyContinue).Count -eq 0) {
+                    $noHarness = $true
                 }
                 if ($noHarness) {
                     $process | Stop-Process -Force -ErrorAction SilentlyContinue
@@ -568,7 +588,7 @@ is verified automatically before and after your drag.
             $produced = @(Get-ChildItem -LiteralPath $outputDirectory -File -ErrorAction SilentlyContinue)
             if ($noHarness) {
                 return @{ Result = 'BLOCKED'
-                    Message = 'The artifact opened a normal window instead of running headless; --auto-record/--auto-edit are not compiled into it (a Release build needs EXOSNAP_BUILD_BENCHMARK_HARNESS=ON)'
+                    Message = 'The artifact wrote no recording within 75 s and kept running; --auto-record/--auto-edit are not compiled into it (a Release build needs EXOSNAP_BUILD_BENCHMARK_HARNESS=ON)'
                     Evidence = @($relative) }
             }
             if ($timedOut) {
@@ -577,8 +597,22 @@ is verified automatically before and after your drag.
                     Evidence = @($relative) }
             }
             if ($process.ExitCode -ne 0) {
-                return @{ Result = 'FAIL'; Message = "--auto-record/--auto-edit exited $($process.ExitCode)"
-                    Evidence = @($relative) }
+                $failedStages = @()
+                if (Test-Path -LiteralPath $reportPath) {
+                    try {
+                        $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
+                        $failedStages = @($report.stages | Where-Object { -not $_.passed } | ForEach-Object {
+                                if ($_.PSObject.Properties.Name -contains 'detail' -and $_.detail) {
+                                    "$($_.stage) ($($_.detail))"
+                                } else { $_.stage }
+                            })
+                    }
+                    catch { $failedStages = @() }
+                }
+                $why = if ($failedStages.Count -gt 0) { ": $($failedStages -join '; ')" } else { '' }
+                return @{ Result = 'FAIL'
+                    Message = "--auto-record/--auto-edit exited $($process.ExitCode)$why"
+                    Evidence = @($relative, 'checks/LV-EDIT-001/auto-edit-report.json') }
             }
             if ($produced.Count -lt 1) {
                 return @{ Result = 'FAIL'; Message = 'The chained harness exited 0 but produced no file'
