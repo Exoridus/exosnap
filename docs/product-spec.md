@@ -90,11 +90,19 @@ setting does not live in Diagnostics.
 **Edit / Output / Save** is a post-stop **overlay over the Record page**, not a nav item. After
 recording stops, the surface opens over Record as **one view**: player, trim timeline, a right
 rail with the details and export cards, and the post-flight report as an icon at the right end of
-its header. The overlay spans the
-client area below the real title bar, so the window can be moved and minimized and the nav tabs
-stay clickable for the whole edit session. Its backdrop is opaque, so the Record page does not
-show through. **Back** (or Escape / backdrop click, except while exporting) closes the overlay and
-returns to Record; when trim points or markers are set it asks before discarding them.
+its header. The overlay spans the client area below the real title bar, so the window keeps its
+title band and can be moved, minimized and closed for the whole edit session. Its backdrop is
+opaque, so the Record page does not show through. **Back** (or Escape / backdrop click, except
+while exporting) closes the overlay and returns to Record; when trim points or markers are set it
+asks before discarding them.
+
+An open edit session owns the content area, so the five top-level navigation tabs are **disabled**
+while it is open — they stay visible in the title band, in their disabled presentation, and Back /
+Escape is the only way out. A live tab would otherwise swap the page *underneath* a workspace that
+still covers it, and routing the click through the unsaved-edits prompt would make navigation
+conditional, which it is nowhere else in the product. This is the same lock the transport's source
+controls take while a recording runs, for the same reason. The window controls are unaffected: the
+band remains draggable and Minimize/Maximize/Close keep working.
 
 ### 2.1 The encode device is not a user choice
 

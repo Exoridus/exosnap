@@ -28,6 +28,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QQuickStyle>
 #include <QQuickWindow>
 #include <QSGRendererInterface>
 #include <QScreen>
@@ -255,6 +256,26 @@ int main(int argc, char* argv[]) {
     // window, which is structurally the same thing the Widgets shell does with
     // event->ignore() + hide(): a refused close never emits lastWindowClosed, so
     // hiding to the tray cannot quit the process out from under a recording.
+
+    // The Qt Quick Controls style, pinned before a single line of QML loads.
+    //
+    // Without this call the style is whatever the platform default resolves to
+    // — on Windows that is the Windows style, which in turn falls back to
+    // Fusion for the controls it does not implement, while the files that
+    // import QtQuick.Controls.Basic explicitly stay Basic. One binary would
+    // then draw its controls from three different styles, and a Qt update
+    // changing the platform default would silently restyle the application.
+    //
+    // Basic is the choice because that is what the ExoSnap design system is
+    // built on: every visual decision lives in the Exo* components and the
+    // theme tokens, so the style underneath must contribute as little of its
+    // own opinion as possible.
+    //
+    // QQuickStyle::setStyle() outranks -style, QT_QUICK_CONTROLS_STYLE and
+    // qtquickcontrols2.conf, so neither the environment nor a command line can
+    // take the application somewhere else.
+    QQuickStyle::setStyle(QStringLiteral("Basic"));
+
     const exosnap::bootstrap::PostAppResult post_app = exosnap::bootstrap::MarkApplicationConstructed();
     exosnap::bootstrap::ApplyApplicationMetadata();
 
