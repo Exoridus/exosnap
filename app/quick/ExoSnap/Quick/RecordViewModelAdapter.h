@@ -81,6 +81,13 @@ class RecordViewModelAdapter : public QObject {
 
     Q_PROPERTY(int countdownSeconds READ countdownSeconds NOTIFY changed FINAL)
     Q_PROPERTY(int countdownRemaining READ countdownRemaining NOTIFY changed FINAL)
+    // Fraction of the countdown still to run, 1.0 down to 0.0, at the resolution
+    // the coordinator actually counts in. `countdownRemaining` is the same value
+    // rounded to whole seconds for the digit; a ring driven from THAT jumps
+    // three times and is right only at the instant it moves. Carried separately
+    // rather than derived in QML, because the millisecond clock exists in C++
+    // and rounding it away first cannot be undone by any amount of animation.
+    Q_PROPERTY(double countdownProgress READ countdownProgress NOTIFY changed FINAL)
     Q_PROPERTY(bool captureFrameEnabled READ captureFrameEnabled NOTIFY changed FINAL)
     Q_PROPERTY(bool splitEnabled READ splitEnabled NOTIFY changed FINAL)
     Q_PROPERTY(QString noticeText READ noticeText NOTIFY changed FINAL)
@@ -157,6 +164,7 @@ class RecordViewModelAdapter : public QObject {
     [[nodiscard]] double microphoneMeter() const noexcept;
     [[nodiscard]] int countdownSeconds() const noexcept;
     [[nodiscard]] int countdownRemaining() const noexcept;
+    [[nodiscard]] double countdownProgress() const noexcept;
     [[nodiscard]] bool captureFrameEnabled() const noexcept;
     [[nodiscard]] bool splitEnabled() const noexcept;
     [[nodiscard]] const QString& noticeText() const noexcept;
@@ -170,7 +178,7 @@ class RecordViewModelAdapter : public QObject {
                         QString webcam_error = {});
     void setWebcamPresentation(QRectF overlay_rect, bool mirror, double opacity);
     void setWebcamFrameSource(QString source);
-    void setCountdownState(int configured_seconds, int remaining_seconds);
+    void setCountdownState(int configured_seconds, int remaining_seconds, double progress);
     void setRegionState(QRectF normalized_rect, bool selection_needed);
     void setPreviewFrameReady(bool ready);
     void setSplitEnabled(bool enabled);
@@ -262,6 +270,7 @@ class RecordViewModelAdapter : public QObject {
     double microphone_meter_ = 0.0;
     int countdown_seconds_ = 0;
     int countdown_remaining_ = 0;
+    double countdown_progress_ = 1.0;
     bool preview_frame_ready_ = false;
     bool split_enabled_ = false;
     QString notice_text_;

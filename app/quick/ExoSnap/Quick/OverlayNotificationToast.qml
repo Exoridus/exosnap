@@ -393,6 +393,19 @@ Window {
                     anchors.bottom: parent.bottom
                     visible: !card.standing
                     color: Qt.alpha(card.tone, 0.6)
+
+                    // The model recomputes this ten times a second, which on a
+                    // 372 px card is a visible step per update rather than a
+                    // moving bar. Interpolating over exactly one tick makes it
+                    // continuous: each new value arrives as the previous
+                    // animation lands, and a late tick is absorbed instead of
+                    // showing up as a jump.
+                    Behavior on width {
+                        NumberAnimation {
+                            duration: 100
+                            easing.type: Easing.Linear
+                        }
+                    }
                 }
             }
         }

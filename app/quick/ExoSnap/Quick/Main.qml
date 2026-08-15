@@ -220,6 +220,7 @@ ApplicationWindow {
         countdownActive: root.overlays.countdownOverlayActive
         remainingSeconds: root.recordViewModel.countdownRemaining
         durationSeconds: root.recordViewModel.countdownSeconds
+        countdownProgress: root.recordViewModel.countdownProgress
     }
 
     // The one capture-excluded overlay that is deliberately NOT click-through:

@@ -17,6 +17,12 @@ constexpr int kCountdownIntervalMs = 100;
 
 NotificationToastModel::NotificationToastModel(QObject* parent) : QAbstractListModel(parent) {
     countdown_.setInterval(kCountdownIntervalMs);
+    // Qt's default timer type allows up to 5 % drift and, on Windows, snaps to
+    // the ~15.6 ms system tick -- at a 100 ms interval that lands the updates
+    // unevenly, and a bar moving in uneven steps reads as stuttering however
+    // small the steps are. The countdown overlay's timer is precise for the
+    // same reason.
+    countdown_.setTimerType(Qt::PreciseTimer);
     QObject::connect(&countdown_, &QTimer::timeout, this, [this]() { updateCountdown(); });
 }
 

@@ -347,6 +347,9 @@ class QuickApplication {
     QTimer webcam_frame_delivery_timer_;
     QTimer webcam_overlay_persist_timer_;
     int countdown_remaining_ = 0;
+    // Unrounded companion to countdown_remaining_, updated on the same 100 ms
+    // tick, so the ring can follow the clock instead of the digit.
+    double countdown_progress_ = 0.0;
     // Post-flight numbers the Edit surface's report badge reads. Latched from
     // the diagnostics stream during the session (the final snapshot arrives
     // before the result callback) and reset on every fresh start.

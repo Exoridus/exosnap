@@ -38,6 +38,35 @@ TEST(RecordingCountdownControllerTest, UsesMonotonicElapsedTimeForDisplay) {
     EXPECT_TRUE(countdown.hasReachedZero(4000));
 }
 
+// The ring reads this instead of the digit. Whole seconds are the wrong source
+// for a progress indicator: three steps for a three second countdown, right
+// only at the instant each one lands.
+TEST(RecordingCountdownControllerTest, RemainingFractionFollowsTheClockNotTheDigit) {
+    RecordingCountdownController countdown;
+    ASSERT_TRUE(countdown.start(3, 1000));
+
+    EXPECT_DOUBLE_EQ(countdown.remainingFraction(1000), 1.0);
+    EXPECT_DOUBLE_EQ(countdown.remainingFraction(2500), 0.5);
+    EXPECT_DOUBLE_EQ(countdown.remainingFraction(4000), 0.0);
+
+    // Moves between two ticks of the digit, which is the entire point.
+    EXPECT_GT(countdown.remainingFraction(1100), countdown.remainingFraction(1200));
+    EXPECT_EQ(countdown.remainingSeconds(1100), countdown.remainingSeconds(1200));
+
+    // Never runs past either end, whatever the clock does.
+    EXPECT_DOUBLE_EQ(countdown.remainingFraction(99999), 0.0);
+    EXPECT_DOUBLE_EQ(countdown.remainingFraction(0), 1.0);
+}
+
+TEST(RecordingCountdownControllerTest, RemainingFractionIsZeroWhenNotRunning) {
+    RecordingCountdownController countdown;
+    EXPECT_DOUBLE_EQ(countdown.remainingFraction(1000), 0.0);
+
+    ASSERT_TRUE(countdown.start(3, 1000));
+    countdown.cancel();
+    EXPECT_DOUBLE_EQ(countdown.remainingFraction(2000), 0.0);
+}
+
 TEST(RecordingCountdownControllerTest, DelayedTicksDoNotDrift) {
     RecordingCountdownController countdown;
     ASSERT_TRUE(countdown.start(5, 0));

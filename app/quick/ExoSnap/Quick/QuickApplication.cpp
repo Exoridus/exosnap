@@ -373,6 +373,7 @@ void QuickApplication::initializeRecordWorkflow() {
             countdown_timer_.stop();
             countdown_.reset();
             countdown_remaining_ = 0;
+            countdown_progress_ = 0.0;
         }
         updateMeterServices();
         synchronizeRecordState();
@@ -766,7 +767,8 @@ void QuickApplication::synchronizeRecordState() {
                                          live_config_.webcam.chroma_key.tolerance,
                                          live_config_.webcam.chroma_key.softness,
                                          live_config_.webcam.chroma_key.spill_reduction);
-    record_view_model_adapter_.setCountdownState(live_config_.countdown_seconds, countdown_remaining_);
+    record_view_model_adapter_.setCountdownState(live_config_.countdown_seconds, countdown_remaining_,
+                                                 countdown_progress_);
     record_view_model_adapter_.setPreviewFrameReady(record_preview_adapter_.frameReady());
     record_view_model_adapter_.setSplitEnabled(mkv && !recording_coordinator_->IsSplitPending());
     // Recording configuration must not be editable while a capture is in flight:
@@ -992,6 +994,7 @@ void QuickApplication::startRequested() {
         if (!countdown_.start(live_config_.countdown_seconds, 0))
             return;
         countdown_remaining_ = live_config_.countdown_seconds;
+        countdown_progress_ = 1.0;
         record_view_model_.SetState(UiRecordingState::Countdown);
         countdown_timer_.start();
         synchronizeRecordState();
@@ -1026,6 +1029,7 @@ void QuickApplication::cancelCountdown() {
     countdown_timer_.stop();
     countdown_.cancel();
     countdown_remaining_ = 0;
+    countdown_progress_ = 0.0;
     record_view_model_.SetState(recording_coordinator_->State());
     synchronizeRecordState();
 }
@@ -1035,10 +1039,12 @@ void QuickApplication::updateCountdown() {
         return;
     const int64_t elapsed = countdown_clock_.isValid() ? countdown_clock_.elapsed() : 0;
     countdown_remaining_ = countdown_.remainingSeconds(elapsed);
+    countdown_progress_ = countdown_.remainingFraction(elapsed);
     if (countdown_.hasReachedZero(elapsed)) {
         countdown_timer_.stop();
         countdown_.complete();
         countdown_remaining_ = 0;
+        countdown_progress_ = 0.0;
         startRecordingNow();
         return;
     }
@@ -3052,6 +3058,7 @@ bool QuickApplication::applyRecordVisualScenario(const QString& scenario) {
         // bare digit rather than a clock), which is exactly the kind of state a
         // visual pass has to be able to see.
         countdown_remaining_ = 3;
+        countdown_progress_ = 1.0;
         live_config_.countdown_seconds = 3;
         record_view_model_.SetState(UiRecordingState::Countdown);
     } else if (normalized == QStringLiteral("paused")) {
