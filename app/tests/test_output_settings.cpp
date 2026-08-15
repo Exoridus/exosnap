@@ -364,6 +364,57 @@ TEST(OutputSettingsTest, EmptyPath) {
     EXPECT_EQ(ValidateOutputFolder(std::filesystem::path{}), FolderValidationResult::InvalidPath);
 }
 
+// QCR-108: the writability probe is only honest if the bytes are flushed and the
+// stream is closed successfully before Ok is returned. A buffered write that the
+// destructor silently drops on a full/quota-bound/offline volume would otherwise
+// report a folder as writable that cannot hold a recording.
+
+// A folder that passes must leave nothing behind: a probe file surviving would
+// mean the probe never completed its own cleanup.
+TEST(OutputSettingsTest, WritableFolderLeavesNoProbeFileBehind) {
+    const std::filesystem::path dir = UniqueTempPath(L"probe_clean");
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    ASSERT_FALSE(ec);
+
+    EXPECT_EQ(ValidateOutputFolder(dir), FolderValidationResult::Ok);
+    EXPECT_FALSE(std::filesystem::exists(dir / L".exosnap_write_test"));
+
+    std::filesystem::remove_all(dir, ec);
+}
+
+// Probe open failure: a DIRECTORY occupying the probe's own path. std::ofstream
+// cannot open it, and the folder must be reported as not writable rather than
+// waved through.
+TEST(OutputSettingsTest, ProbeOpenFailureReportsNotWritable) {
+    const std::filesystem::path dir = UniqueTempPath(L"probe_open_fail");
+    std::error_code ec;
+    std::filesystem::create_directories(dir / L".exosnap_write_test", ec);
+    ASSERT_FALSE(ec);
+
+    EXPECT_EQ(ValidateOutputFolder(dir), FolderValidationResult::NotWritable);
+
+    std::filesystem::remove_all(dir, ec);
+}
+
+// The validator must never mistake a regular file for a folder — the gate the
+// recording start relies on before it generates an output path.
+TEST(OutputSettingsTest, RegularFileAsFolderIsInvalidPath) {
+    const std::filesystem::path dir = UniqueTempPath(L"probe_file");
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    ASSERT_FALSE(ec);
+    const std::filesystem::path file = dir / L"not_a_folder.bin";
+    {
+        std::ofstream out(file);
+        out << "x";
+    }
+
+    EXPECT_EQ(ValidateOutputFolder(file), FolderValidationResult::InvalidPath);
+
+    std::filesystem::remove_all(dir, ec);
+}
+
 TEST(OutputSettingsTest, ResolveAvailableOutputPath_NoCollision_ReturnsBasePath) {
     const std::filesystem::path dir = UniqueTempPath(L"collision_no");
     std::error_code ec;

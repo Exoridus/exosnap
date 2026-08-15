@@ -34,7 +34,17 @@ FolderValidationResult ValidateOutputFolder(const std::filesystem::path& folder)
             return FolderValidationResult::NotWritable;
         }
         probe << "ok";
+        // A stream write only reaches the buffer. Checking good() here says
+        // nothing about whether the bytes ever reached the volume: a full disk, a
+        // quota boundary or an offline network share fails at the flush, and
+        // ~ofstream swallows that failure without a trace. So flush and close
+        // explicitly and judge the stream AFTER the close — an unwritable folder
+        // that accepts open() must still be reported as NotWritable.
+        probe.flush();
+        probe.close();
         if (!probe.good()) {
+            std::error_code cleanup_ec;
+            std::filesystem::remove(write_probe, cleanup_ec);
             return FolderValidationResult::NotWritable;
         }
     }
