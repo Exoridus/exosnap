@@ -2462,7 +2462,13 @@ void QuickApplication::publishRecordingResultNotification(const UiRecordingResul
             return;
         event.type = notifications::NotificationType::Saved;
         event.title = QStringLiteral("Recording saved");
-        event.body = QString::fromStdWString(result.output_path);
+        // The name, not the path. A full path is a single unbreakable token --
+        // no spaces to wrap at -- so it overran the toast instead of eliding,
+        // and it told the user the one thing they already know (where their
+        // recordings go) at the cost of the one thing they want to read. The
+        // path itself is not lost: Show in folder acts on it, and Edit carries
+        // it as its payload.
+        event.body = QFileInfo(QString::fromStdWString(result.output_path)).fileName();
         event.action = notifications::NotificationAction::Edit;
         event.action_payload = QString::fromStdWString(result.output_path);
         event.secondary_action = notifications::NotificationAction::OpenFolder;

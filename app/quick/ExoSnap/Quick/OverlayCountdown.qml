@@ -23,6 +23,30 @@ Window {
                                      ? Math.max(0.0, Math.min(1.0, root.remainingSeconds / root.durationSeconds))
                                      : 1.0
 
+    // What the arc actually draws. The controller counts in whole seconds, so
+    // binding the arc straight to `progress` made the ring jump once a second
+    // in three big steps -- a progress indicator that is only ever right at the
+    // instant it moves. Interpolating across exactly one second turns the same
+    // source into a continuously depleting ring; the digit keeps showing whole
+    // seconds, because that is what it means.
+    property real displayedProgress: root.progress
+
+    Behavior on displayedProgress {
+        NumberAnimation {
+            // Deliberately LONGER than the one-second tick that feeds it. At
+            // exactly 1000 ms the interpolation finishes before the next tick
+            // arrives — the source is a whole-second counter with ordinary timer
+            // jitter, never a metronome — and the ring visibly parks for the
+            // remainder. Overlapping the tick means the next value always
+            // interrupts a still-moving animation, so the ring never stops
+            // before the countdown does. The cost is a few degrees of lag
+            // against the digit, which no one can see; a ring that stutters,
+            // everyone can.
+            duration: 1150
+            easing.type: Easing.Linear
+        }
+    }
+
     // ── Overlay tokens ────────────────────────────────────────────────────────
     // Verbatim from the Widgets class — the circle sits on captured content, so
     // it carries its own darker surface. The digit and ring use the shared
@@ -134,7 +158,7 @@ Window {
                     radiusX: root.ringRadius
                     radiusY: root.ringRadius
                     startAngle: -90
-                    sweepAngle: 360 * root.progress
+                    sweepAngle: 360 * root.displayedProgress
                     moveToStart: true
                 }
             }

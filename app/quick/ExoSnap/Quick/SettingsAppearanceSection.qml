@@ -78,19 +78,29 @@ ExoCard {
                     // outlined in its own colour is invisible as a selection, and
                     // the two light accents that sit closest to the surface need
                     // the strongest ring, not the weakest.
+                    // Selection has to survive being glanced at. It used to differ
+                    // from a resting swatch by one pixel of border width and two
+                    // pixels of dot diameter, in the same colour the focus ring
+                    // uses — so the row read as "nothing is chosen" until a click
+                    // put focus somewhere, which then looked like the click had
+                    // made the selection. The selected swatch now carries a ring
+                    // with a visible gap around its dot; the resting ones carry
+                    // no ring at all, so the difference is a shape, not a weight.
                     background: Rectangle {
                         anchors.fill: parent
                         color: "transparent"
                         border.width: swatch.current ? 2 : 1
                         border.color: swatch.current ? ExoTheme.text
                                       : swatch.visualFocus ? ExoTheme.text
-                                      : swatch.hovered ? ExoTheme.lineStrong : ExoTheme.line
+                                      : swatch.hovered ? ExoTheme.lineStrong : "transparent"
                         radius: height / 2
                     }
 
                     Rectangle {
                         anchors.centerIn: parent
-                        width: swatch.current ? parent.width - 10 : parent.width - 8
+                        // The gap IS the selection mark. Keep it wide enough to
+                        // survive a 100 % scale factor.
+                        width: swatch.current ? parent.width - 14 : parent.width - 4
                         height: width
                         color: swatch.modelData.swatch
                         radius: height / 2
