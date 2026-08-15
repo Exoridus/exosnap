@@ -77,11 +77,25 @@ QVector<RecoveryCandidate> RecoveryService::Scan() {
     surviving.reserve(entries.size());
 
     for (const auto& e : entries) {
-        if (e.artefact_path.isEmpty() || !QFileInfo::exists(e.artefact_path)) {
+        const QFileInfo artefact(e.artefact_path);
+        if (e.artefact_path.isEmpty() || !artefact.exists()) {
             // Orphaned entry — artefact is gone; remove silently.
             diagnostics::AppLog::info(
                 QStringLiteral("recovery"),
                 QStringLiteral("Removing orphaned manifest entry id=%1 path=%2").arg(e.id, e.artefact_path));
+            store_.Remove(e.id);
+            continue;
+        }
+        // An empty artefact is as orphaned as a missing one, and it used to
+        // survive this filter purely because the file existed: a recording
+        // killed before the muxer wrote its first byte then offered itself for
+        // recovery on every single launch, promising to restore nothing. Size
+        // is checked here rather than hidden in the UI, so the manifest stops
+        // carrying the entry instead of the prompt learning to ignore it.
+        if (artefact.size() <= 0) {
+            diagnostics::AppLog::info(
+                QStringLiteral("recovery"),
+                QStringLiteral("Removing empty manifest entry id=%1 path=%2").arg(e.id, e.artefact_path));
             store_.Remove(e.id);
             continue;
         }

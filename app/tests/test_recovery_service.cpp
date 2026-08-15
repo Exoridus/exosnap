@@ -190,6 +190,37 @@ TEST(RecoveryServiceTest, ScanRemovesOrphanedEntries) {
     EXPECT_EQ(store.Entries().size(), 1);
 }
 
+// An artefact that exists but holds nothing is orphaned too. It shipped as a
+// recoverable candidate because the filter only asked whether the file was
+// there: a recording killed before the muxer wrote its first byte then offered
+// itself for recovery on every launch, indefinitely, with nothing to restore.
+TEST(RecoveryServiceTest, ScanRemovesEmptyArtefacts) {
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    const QString store_path = QDir(tmp.path()).filePath(QStringLiteral("manifest.json"));
+    RecoveryManifestStore store(store_path);
+    RecoveryService service(store);
+
+    const QString real_artefact = QDir(tmp.path()).filePath(QStringLiteral("real.mkv"));
+    ASSERT_TRUE(CreateDummyFile(real_artefact));
+    store.Add(MakeEntry(QStringLiteral("id-real"), real_artefact));
+
+    const QString empty_artefact = QDir(tmp.path()).filePath(QStringLiteral("empty.mkv"));
+    ASSERT_TRUE(CreateDummyFile(empty_artefact, QByteArray()));
+    ASSERT_TRUE(QFileInfo::exists(empty_artefact));
+    ASSERT_EQ(QFileInfo(empty_artefact).size(), 0);
+    store.Add(MakeEntry(QStringLiteral("id-empty"), empty_artefact));
+
+    const auto candidates = service.Scan();
+    ASSERT_EQ(candidates.size(), 1);
+    EXPECT_EQ(candidates[0].entry.id, QStringLiteral("id-real"));
+
+    // And it is gone from the manifest, so the prompt does not return next launch.
+    ASSERT_EQ(store.Entries().size(), 1);
+    EXPECT_EQ(store.Entries()[0].id, QStringLiteral("id-real"));
+}
+
 // =============================================================================
 // 2. KeepAsMkv with finalized=true → rename
 // =============================================================================
