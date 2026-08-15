@@ -523,17 +523,36 @@ is verified automatically before and after your drag.
             $previous = $env:EXOSNAP_OUTPUT_DIR
             $env:EXOSNAP_OUTPUT_DIR = $outputDirectory
             $timedOut = $false
+            $noHarness = $false
             try {
                 $process = Start-Process -FilePath $ctx.Artifact.exePath -PassThru `
                     -RedirectStandardOutput $log -RedirectStandardError "$log.err" `
                     -ArgumentList @('--auto-record', '--target', 'monitor', '--duration', '6',
                     '--auto-edit', '--export-container', 'mkv')
-                # Bounded, because a Release build without
-                # EXOSNAP_BUILD_BENCHMARK_HARNESS=ON does not KNOW these options:
-                # it ignores them and opens a normal window, which would never
-                # return. That is a real artifact property worth reporting, not a
-                # reason to hang the runner.
-                if (-not $process.WaitForExit(180000)) {
+                # Establish first whether the artifact even HAS the harness,
+                # because a Release build without EXOSNAP_BUILD_BENCHMARK_HARNESS
+                # =ON does not know these options: it ignores them and opens a
+                # normal window instead. Bare harness mode never creates a window
+                # (only the preview variant does, and it is not requested here),
+                # so a main window inside the grace period is exactly that case.
+                # Waiting the full timeout for it left a real ExoSnap window --
+                # recovery prompt and all -- sitting on the operator's desktop
+                # for three minutes, looking like a product state under test.
+                $windowDeadline = [DateTime]::UtcNow.AddSeconds(20)
+                while ([DateTime]::UtcNow -lt $windowDeadline) {
+                    if ($process.HasExited) { break }
+                    $process.Refresh()
+                    if ($process.MainWindowHandle -ne [IntPtr]::Zero) {
+                        $noHarness = $true
+                        break
+                    }
+                    Start-Sleep -Milliseconds 250
+                }
+                if ($noHarness) {
+                    $process | Stop-Process -Force -ErrorAction SilentlyContinue
+                    [void]$process.WaitForExit(15000)
+                }
+                elseif (-not $process.WaitForExit(180000)) {
                     $timedOut = $true
                     $process | Stop-Process -Force -ErrorAction SilentlyContinue
                     # Wait for it to actually be gone. A process still dying is
@@ -547,9 +566,14 @@ is verified automatically before and after your drag.
 
             $relative = 'checks/LV-EDIT-001/auto-edit.log'
             $produced = @(Get-ChildItem -LiteralPath $outputDirectory -File -ErrorAction SilentlyContinue)
+            if ($noHarness) {
+                return @{ Result = 'BLOCKED'
+                    Message = 'The artifact opened a normal window instead of running headless; --auto-record/--auto-edit are not compiled into it (a Release build needs EXOSNAP_BUILD_BENCHMARK_HARNESS=ON)'
+                    Evidence = @($relative) }
+            }
             if ($timedOut) {
                 return @{ Result = 'BLOCKED'
-                    Message = 'The artifact did not exit; --auto-record/--auto-edit are not compiled into it (a Release build needs EXOSNAP_BUILD_BENCHMARK_HARNESS=ON)'
+                    Message = 'The artifact ran headless but never exited within 180 s'
                     Evidence = @($relative) }
             }
             if ($process.ExitCode -ne 0) {
@@ -600,15 +624,30 @@ is verified automatically before and after your drag.
             $null = Invoke-LiveVerifyCommand -Connection $connection -Command 'record.stop'
             $null = Wait-LiveVerifyEvent -Connection $connection -EventName 'record.resultReady' -TimeoutMs 120000
 
-            $evidence = Save-LiveVerifyEvidence -Context $ctx -CheckId 'LV-OVL-001' -Name 'overlays.json' -Value $snapshot
+            # A second look AFTER the stop, because the toast stack is the one
+            # operable overlay that does not exist during a recording -- it says
+            # the recording was saved. Snapshotting only mid-recording is how a
+            # toast that could not be clicked at all passed this check.
+            Start-Sleep -Seconds 2
+            $afterStop = (Invoke-LiveVerifyCommand -Connection $connection -Command 'overlay.snapshot').result
 
-            $realized = @($snapshot.overlays | Where-Object { $_.visible -and $_.nativeWindowCreated })
+            $evidence = Save-LiveVerifyEvidence -Context $ctx -CheckId 'LV-OVL-001' -Name 'overlays.json' `
+                -Value @{ duringRecording = $snapshot; afterStop = $afterStop }
+
+            $realized = @(@($snapshot.overlays) + @($afterStop.overlays) |
+                    Where-Object { $_.visible -and $_.nativeWindowCreated } |
+                    Group-Object -Property objectName |
+                    ForEach-Object { $_.Group[0] })
             if ($realized.Count -eq 0) {
                 $names = @($snapshot.overlays | ForEach-Object { $_.objectName }) -join ', '
                 return @{ Result = 'UNVERIFIED'
                     Message = "No overlay was on screen during the recording (present but hidden: $names). Enable the recording overlay in Settings, Overlays."
                     Evidence = @($evidence) }
             }
+            # The overlays a user is meant to operate. The other three are
+            # informational and are click-through on purpose.
+            $operableOverlays = @('quickOverlayNotificationToast', 'quickOverlayQuickControls')
+
             $problems = @()
             foreach ($overlay in $realized) {
                 # WS_EX_LAYERED and DirectComposition are mutually exclusive for
@@ -618,13 +657,32 @@ is verified automatically before and after your drag.
                 if (-not $overlay.native.captureExcluded) {
                     $problems += "$($overlay.objectName): display affinity is $($overlay.native.displayAffinity), not WDA_EXCLUDEFROMCAPTURE"
                 }
+                # Two of the five overlays carry controls. WS_EX_TRANSPARENT on
+                # those is invisible everywhere else -- the scene graph renders
+                # them, the harness screenshots them, UI Automation finds them --
+                # and yet nothing on the window can be clicked. The toast shipped
+                # exactly like that: dismiss, Edit and Show in folder all dead,
+                # and a notification the user could not get rid of.
+                if ($operableOverlays -contains $overlay.objectName -and $overlay.native.transparentForInput) {
+                    $problems += "$($overlay.objectName): WS_EX_TRANSPARENT is set, so its controls cannot be clicked"
+                }
             }
             if ($problems.Count -gt 0) {
                 return @{ Result = 'FAIL'; Message = ($problems -join '; '); Evidence = @($evidence) }
             }
+            # Name what was actually covered. An operable overlay only exists
+            # while the condition that raises it holds -- the toast needs a
+            # notification, and "Open editor when finished" suppresses the saved
+            # one entirely -- so a run can legitimately never see it. Saying so
+            # beats a PASS that reads as if every overlay had been inspected.
+            $seen = @($realized | ForEach-Object { $_.objectName })
+            $unseenOperable = @($operableOverlays | Where-Object { $seen -notcontains $_ })
+            $coverage = if ($unseenOperable.Count -gt 0) {
+                "; not raised in this run, so unchecked: $($unseenOperable -join ', ')"
+            } else { '' }
             return @{
                 Result   = 'PASS'
-                Message  = "$($realized.Count) visible overlay window(s): no WS_EX_LAYERED, WDA_EXCLUDEFROMCAPTURE held"
+                Message  = "$($realized.Count) visible overlay window(s): no WS_EX_LAYERED, WDA_EXCLUDEFROMCAPTURE held, operable ones take input$coverage"
                 Evidence = @($evidence)
             }
         }

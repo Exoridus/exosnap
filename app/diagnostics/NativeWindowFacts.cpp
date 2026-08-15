@@ -48,6 +48,7 @@ NativeWindowFacts QueryNativeWindowFacts(void* hwnd) {
     facts.style = static_cast<quint64>(GetWindowLongPtrW(window_handle, GWL_STYLE));
     facts.ex_style = static_cast<quint64>(GetWindowLongPtrW(window_handle, GWL_EXSTYLE));
     facts.layered = (facts.ex_style & WS_EX_LAYERED) != 0;
+    facts.transparent_for_input = (facts.ex_style & WS_EX_TRANSPARENT) != 0;
     facts.inset = QueryNonClientInset(hwnd);
     facts.child_hwnds = CountChildWindows(hwnd);
 
