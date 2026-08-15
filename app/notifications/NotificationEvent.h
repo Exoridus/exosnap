@@ -30,6 +30,9 @@ enum class NotificationType : uint8_t {
     CaptureActionFailed, // a Record-page quick action (frame capture, split request) was rejected
                          // or failed; success is silent (the resulting file/segment is its own
                          // confirmation), only failures surface here.
+    RecoveryProtectionUnavailable, // a recovery-manifest write did not reach disk, so this recording has
+                                   // no crash-recovery entry. The recording itself is unaffected — same
+                                   // class as a failed settings write: reported, never silent.
 };
 
 // ---------------------------------------------------------------------------
@@ -116,6 +119,9 @@ struct NotificationEvent {
     case NotificationType::RecoveryAvailable:
     case NotificationType::HotkeyConflict:   // a bound hotkey is dead
     case NotificationType::SettingsRepaired: // the store needed repairing on load
+    // The recording is fine; only the crash-recovery safety net is missing. Coral
+    // would claim the recording failed, which it did not.
+    case NotificationType::RecoveryProtectionUnavailable:
         return QStringLiteral("caution");
 
     case NotificationType::UpdateAvailable:

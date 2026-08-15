@@ -27,6 +27,7 @@
 #include <recorder_core/recorder_session.h>
 
 #include "../diagnostics/DiskSpaceProvider.h"
+#include "../diagnostics/WindowTargetFacts.h"
 #include "../models/FilenameBuilder.h"
 #include "../models/OutputSettingsModel.h"
 #include "../models/RecordingMarker.h"
@@ -34,6 +35,7 @@
 #include "../models/WebcamSettings.h"
 #include "../settings/RecoveryManifestStore.h"
 #include "../viewmodels/RecordViewModel.h"
+#include "RecordingAdmission.h"
 #include "WebcamService.h"
 
 namespace recorder_core {
@@ -75,6 +77,31 @@ class RecordingCoordinator {
     // is silently disabled (tests that do not care about recovery can omit this).
     void SetRecoveryManifestStore(RecoveryManifestStore* store);
     [[nodiscard]] RecoveryManifestStore* GetRecoveryManifestStore() const noexcept;
+
+    // Fired on the Qt main thread when a recovery-manifest write did not reach
+    // disk. The recording is unaffected — only the crash-recovery safety net is
+    // gone for this session, which the user must be told about (canon: a failed
+    // local write is a reported failure, not a silent one). `detail` names which
+    // step failed. Recording continues; see the manifest-persistence note in
+    // PrepareAndRecordThreadProc for why this never blocks or aborts a start.
+    using RecoveryProtectionLostCallback = std::function<void(const QString& detail)>;
+    void SetRecoveryProtectionLostCallback(RecoveryProtectionLostCallback cb);
+
+    // Supplies the exclusive-fullscreen verdict for a WINDOW capture target — the
+    // SAME verdict the diagnostics card reports, produced by the same resolver
+    // (ClassifyWindowShape + CombineFullscreenEvidence over the window facts and
+    // the measured capture-hub evidence). The coordinator deliberately does not
+    // re-derive it: one problem, one resolution.
+    //
+    // Read on the UI thread inside StartRecording and snapshotted into the prepare
+    // context, because the evidence producer owns a capture hub bound to the
+    // apartment that created it and the worker must never reach for it.
+    //
+    // Unset — the default — yields ExclusiveEvidence::None, and the admission gate
+    // then never blocks on exclusive fullscreen: nothing measured, nothing proven.
+    using WindowExclusiveEvidenceProvider =
+        std::function<diagnostics::ExclusiveEvidence(const recorder_core::CaptureTarget&)>;
+    void SetWindowExclusiveEvidenceProvider(WindowExclusiveEvidenceProvider provider);
 
     // ADR-0015: armed-from-recovery state.
     // Enter the armed-from-recovery (paused) state for the given candidate.
@@ -315,6 +342,20 @@ class RecordingCoordinator {
     // Fires the FrameCapturedCallback on the Qt main thread when complete.
     void CaptureFrame();
 
+    // ── Split-remux lifecycle test seams (MP4-SPLIT-REMUX-R1 / QCR-107) ────────
+    // These drive the exact production scheduling / reaping / drain path with a
+    // stubbed remux body, so the lifecycle can be pinned without a real MKV, a
+    // muxer or a GPU. No production code calls them.
+    //
+    // `work` runs on the job's own thread and returns whether the remux succeeded;
+    // the completion bookkeeping around it is the production one.
+    void ScheduleSegmentRemuxForTest(std::filesystem::path transient_mkv, std::filesystem::path output_mp4,
+                                     QString manifest_id, std::function<bool()> work);
+    [[nodiscard]] size_t SegmentRemuxJobCountForTest() const;
+    [[nodiscard]] uint64_t PendingRemuxReserveBytesForTest() const;
+    void ReapFinishedSegmentRemuxJobsForTest();
+    bool DrainSegmentRemuxJobsForTest(bool cancel);
+
   private:
     // Shared tail of CaptureFrame()'s Recording/Paused and Ready paths: converts
     // a raw BGRA readback (or a failure) into a saved PNG + FrameCapturedCallback
@@ -351,6 +392,10 @@ class RecordingCoordinator {
         FilenameTargetContext output_target_context;
         bool has_output_target_context = false;
         capability::CapabilitySet caps;
+        // Measured exclusive-fullscreen verdict for a window target, resolved on
+        // the UI thread (the evidence producer is not worker-thread-safe) and
+        // carried here for the worker's admission gate. None for monitor targets.
+        diagnostics::ExclusiveEvidence window_exclusive_evidence = diagnostics::ExclusiveEvidence::None;
     };
 
     // Runs the device-setup ("Preparing") phase and, on success, the recording
@@ -401,7 +446,23 @@ class RecordingCoordinator {
     RecoveryManifestStore* recovery_manifest_store_ = nullptr;
     // UUID of the manifest entry for the currently active or most recent recording.
     // Empty when no session is in flight.
+    //
+    // INVARIANT (QCR-103): non-empty ONLY while a manifest entry with that id is
+    // known to have reached disk. A failed Add leaves this empty, because every
+    // later step reads it as "this session is recovery-protected" — cleanup,
+    // finalize and removal all key off it, and a phantom id would make the code
+    // believe it protected a session it never wrote.
     QString current_manifest_id_;
+
+    RecoveryProtectionLostCallback on_recovery_protection_lost_;
+    WindowExclusiveEvidenceProvider window_exclusive_evidence_provider_;
+    // Posts the recovery-protection-lost notice onto the Qt main thread and logs
+    // it. Safe from any thread.
+    void PostRecoveryProtectionLost(QString detail);
+    // Resolves the exclusive-fullscreen verdict for a window target. UI thread
+    // only — it reads the injected evidence provider and Win32 window state.
+    [[nodiscard]] diagnostics::ExclusiveEvidence
+    ResolveWindowExclusiveEvidence(const recorder_core::CaptureTarget& target) const;
 
     // Stable per-recording session id, minted at StartRecording independent of the
     // (nullable) recovery store and NOT cleared before PostResult. This — not
@@ -553,16 +614,32 @@ class RecordingCoordinator {
         // thread is still running joins safely in the destructor instead of
         // calling std::terminate.
         std::jthread thread;
-        // Written by the thread before it exits; read on the recording thread by DrainSegmentRemuxJobs.
+        // The job's explicit lifecycle flag: false = running, true = the thread
+        // body has finished and the job is ready to be joined and dropped.
+        //
+        // thread.joinable() is NOT this flag (QCR-107): a jthread stays joinable
+        // from construction until it is joined, so it reads "running" for the whole
+        // session for a job that finished seconds after it started. The disk
+        // monitor's remux reserve believed exactly that, and a FAILED remux — whose
+        // transient MKV is deliberately kept forever as the only trustworthy
+        // artefact — was reserved against for the rest of the session.
+        std::atomic<bool> completed{false};
+        // Written by the thread before it sets `completed`; read after the join.
         bool succeeded = false;
         int av_error_code = 0;
         std::string error_message;
     };
 
     // Protected by segment_remux_mutex_; appended from OnSegmentCompleted (mux
-    // worker thread) and drained from RecordingThreadProc (recording thread).
+    // worker thread), reaped opportunistically at each split boundary, and drained
+    // from RecordingThreadProc (recording thread) at session end.
     mutable std::mutex segment_remux_mutex_;
     std::vector<std::unique_ptr<SegmentRemuxJob>> segment_remux_jobs_;
+    // Latches when a reaped job had failed. Reaping removes the job before the
+    // end-of-session drain can inspect it, so without this a failed intermediate
+    // segment would be reported as a fully successful split session. Reset at
+    // StartRecording alongside segment_remux_jobs_.
+    std::atomic<bool> reaped_segment_remux_failed_{false};
 
     // Manifest ID for the next segment that has started recording but whose
     // manifest entry was created when the previous segment completed.
@@ -573,15 +650,30 @@ class RecordingCoordinator {
     // Schedule a background remux job for one MKV segment → MP4.
     // Creates a SegmentRemuxJob and starts its thread.  Called on the recording
     // thread (for the final segment) or from OnSegmentCompleted via ScheduleSegmentRemux.
-    void StartSegmentRemuxThread(SegmentRemuxJob& job);
+    // `work` performs the actual remux and returns whether it succeeded; the
+    // completion bookkeeping around it belongs to this function, so a test body
+    // and the real remuxer follow the identical lifecycle.
+    void StartSegmentRemuxThread(SegmentRemuxJob& job, std::function<bool()> work);
+    // The production remux body for one segment (remux → atomic move → transient
+    // cleanup → manifest removal), as handed to StartSegmentRemuxThread.
+    bool RunSegmentRemuxWork(const std::filesystem::path& transient_mkv, const std::filesystem::path& output_mp4,
+                             const QString& manifest_id);
 
-    // Join all segment remux jobs and return false if any failed.
-    // cancel=true requests cancellation of any running remux.
-    // Called on the recording thread after Record() returns.
+    // Join and drop every job whose thread has already finished, latching any
+    // failure into reaped_segment_remux_failed_. Opportunistic: it never waits on
+    // a running job, so it is not a barrier at a split boundary. Called from
+    // OnSegmentCompleted, which is the natural rhythm of a split session.
+    void ReapFinishedSegmentRemuxJobs();
+
+    // Join all segment remux jobs and return false if any failed (including the
+    // ones already reaped). cancel=true requests cancellation of any running remux.
+    // Called on the recording thread after Record() returns — the final safety-net
+    // join that guarantees no remux thread outlives the session.
     bool DrainSegmentRemuxJobs(bool cancel);
 
-    // Total bytes across all transient MKV files that have an outstanding remux
-    // job (not yet completed).  Used by the disk monitor for a conservative reserve.
+    // Total bytes across all transient MKV files whose remux job is still RUNNING.
+    // Used by the disk monitor for a conservative reserve. A finished job — success
+    // or failure — is not transient work and must not inflate the reserve.
     // Thread-safe (acquires segment_remux_mutex_).
     uint64_t PendingRemuxReserveBytes() const;
 

@@ -817,7 +817,10 @@ matrix above reflects the shipped detection + monitor path.)*
 surfaced green/amber/red with fixes. **Recording start is blocked while any diagnostic blocker
 exists** (for example: no supported NVENC encoder detected, hard-stop disk threshold reached, or an
 unresolved HDR10-vs-H.264 conflict). If no supported NVIDIA NVENC encoder is detected, recording is
-blocked with a diagnostic message rather than silently falling back.
+blocked with a diagnostic message rather than silently falling back. Blocking is a property of the
+**start path**, not of the Diagnostics page: every blocker is enforced where the recording is actually
+admitted, so a blocker holds even if the Diagnostics page was never opened. The start is refused with
+the blocker's own reason — never a generic failure.
 
 **Page composition.** The Record page is two things on one rhythm: the **Preview Surface** and the
 **transport dock**, with the shared 24 px page inset around them and 16 px between them.
@@ -1041,6 +1044,13 @@ Continued sessions produce independent recording slices (no single-file concat).
 recordings, segments finalized before an interruption remain usable; an interrupted active segment
 may not be recoverable.
 
+**When the manifest cannot be written.** The manifest is a safety net, not part of the recording, so a
+failed write never blocks a start or aborts a running recording. It is also never hidden: ExoSnap says
+so with a **"Recovery protection unavailable"** notification (amber — the recording is fine, only its
+crash-recovery entry is missing) and treats the session as unprotected from then on, rather than
+carrying on as if an entry existed. A recording made while the manifest is unwritable simply cannot be
+offered for recovery afterwards.
+
 Only entries with something to recover are offered. An artefact that is **missing** and one that is
 **empty** are both dropped from the manifest at the next scan — an interruption before the muxer
 wrote its first byte leaves a zero-byte file, and offering it would promise a recovery that cannot
@@ -1202,14 +1212,16 @@ release (0.11 per ADR 0022).
 - **The bell's unread dot** carries urgency, not a count. It appears whenever anything is unread and
   takes its colour from the **worst** unread entry — **mint** when nothing unread is more than a
   notice, **amber** when at least one is a warning (frames dropped, a source degraded, a dead hotkey,
-  a repaired settings file, an omitted overlay, a recoverable session), **coral** when at least one is
+  a repaired settings file, an omitted overlay, a recoverable session, a recording without crash-recovery
+  protection), **coral** when at least one is
   a failure (unexpected stop, low storage stopping a recording, a failed settings write, a rejected
   capture action). The exact number is deliberately not shown in the title bar: it is never the thing
   you act on, and the hub states it in full one click away.
 - **Toast notifications** — a transient glance at the hub, anchored bottom-right **of the screen
   hosting the ExoSnap window**. A notification is **timed** when it reports something that already
   finished (saved, update available, frames dropped, settings repaired, a hotkey unavailable at
-  startup, a settings save failure) and **standing** when it reports a condition that still holds
+  startup, a settings save failure, a recovery-manifest write that failed) and **standing** when it
+  reports a condition that still holds
   (low storage, unexpected stop, recovery available). At most
   one timed toast is visible — a newer one replaces it; standing toasts stack above it, never
   auto-dismiss, and always carry an explicit action out. A countdown bar appears exactly on the

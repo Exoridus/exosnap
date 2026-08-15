@@ -21,7 +21,14 @@
 #include <QFile>
 #include <QString>
 
+#include <chrono>
+#include <condition_variable>
 #include <filesystem>
+#include <fstream>
+#include <functional>
+#include <mutex>
+#include <string>
+#include <thread>
 
 #include <recorder_core/recorder_session.h>
 
@@ -452,6 +459,212 @@ TEST_F(Mp4SplitRemuxTest, MultiRecovery_SecondArmReplaceFirst) {
 }
 
 // ─── 20. IsArmedFromRecovery is false by default ─────────────────────────────
+
+// ─── Split-remux job lifecycle (QCR-107) ─────────────────────────────────────
+//
+// A jthread reports joinable() from construction until it is joined, so it can
+// never answer "is this job still running". These tests pin the explicit
+// completion flag that replaced it: finished jobs are reaped, running ones are
+// left alone, and the disk reserve counts only genuinely in-flight work.
+
+namespace {
+
+// A job body the test releases on demand, so "still running" is a fact rather
+// than a timing guess.
+class ReleasableWork {
+  public:
+    std::function<bool()> Body(bool succeed) {
+        return [this, succeed] {
+            std::unique_lock<std::mutex> lock(m_);
+            started_ = true;
+            started_cv_.notify_all();
+            release_cv_.wait(lock, [this] { return released_; });
+            return succeed;
+        };
+    }
+    void WaitStarted() {
+        std::unique_lock<std::mutex> lock(m_);
+        started_cv_.wait(lock, [this] { return started_; });
+    }
+    void Release() {
+        {
+            std::lock_guard<std::mutex> lock(m_);
+            released_ = true;
+        }
+        release_cv_.notify_all();
+    }
+
+  private:
+    std::mutex m_;
+    std::condition_variable started_cv_;
+    std::condition_variable release_cv_;
+    bool started_ = false;
+    bool released_ = false;
+};
+
+// Reap until the predicate holds. The job thread has to reach its completion
+// store; this bounds the wait rather than assuming a scheduling order.
+template <typename Pred> bool ReapUntil(RecordingCoordinator& coordinator, Pred predicate) {
+    // Generous bound: this waits on a thread reaching its completion store, and a
+    // loaded CI machine can take a while to schedule it. It is a timeout, not a
+    // timing assumption — the predicate is what is being asserted.
+    for (int i = 0; i < 2500 && !predicate(); ++i) {
+        coordinator.ReapFinishedSegmentRemuxJobsForTest();
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    return predicate();
+}
+
+std::filesystem::path WriteSizedFile(const std::filesystem::path& path, size_t bytes) {
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    const std::string chunk(bytes, 'x');
+    out.write(chunk.data(), static_cast<std::streamsize>(chunk.size()));
+    out.close();
+    return path;
+}
+
+std::filesystem::path SplitTempDir(const wchar_t* tag) {
+    static int counter = 0;
+    const std::filesystem::path p = std::filesystem::temp_directory_path() /
+                                    (std::wstring(L"exosnap_split_reap_") + tag + L"_" + std::to_wstring(++counter));
+    std::error_code ec;
+    std::filesystem::remove_all(p, ec);
+    std::filesystem::create_directories(p, ec);
+    return p;
+}
+
+} // namespace
+
+// A finished job is joined and dropped; a running one is left in place. The
+// reaper must never be a barrier at a split boundary.
+TEST_F(Mp4SplitRemuxTest, ReapDropsFinishedJobsAndLeavesRunningOnesAlone) {
+    RecordingCoordinator coordinator;
+    const auto dir = SplitTempDir(L"mixed");
+
+    coordinator.ScheduleSegmentRemuxForTest(dir / L"a.mkv.tmp", dir / L"a.mp4", QString(), [] { return true; });
+    coordinator.ScheduleSegmentRemuxForTest(dir / L"b.mkv.tmp", dir / L"b.mp4", QString(), [] { return true; });
+
+    ReleasableWork running;
+    coordinator.ScheduleSegmentRemuxForTest(dir / L"c.mkv.tmp", dir / L"c.mp4", QString(), running.Body(true));
+    running.WaitStarted();
+
+    EXPECT_EQ(coordinator.SegmentRemuxJobCountForTest(), 3u);
+    // Exactly the running job survives the reap — if the reaper joined it, this
+    // would deadlock until the release below rather than return.
+    ASSERT_TRUE(ReapUntil(coordinator, [&] { return coordinator.SegmentRemuxJobCountForTest() == 1u; }));
+
+    running.Release();
+    ASSERT_TRUE(ReapUntil(coordinator, [&] { return coordinator.SegmentRemuxJobCountForTest() == 0u; }));
+
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+}
+
+// The job container must not grow with the number of segments. This is the
+// resource leak QCR-107 names: a multi-hour split session accumulated one handle
+// per boundary for its whole life.
+TEST_F(Mp4SplitRemuxTest, ManySegmentsDoNotAccumulateJobHandles) {
+    RecordingCoordinator coordinator;
+    const auto dir = SplitTempDir(L"many");
+
+    // Each segment is scheduled and then reaped back to empty before the next one
+    // starts. Deliberately not "schedule 40, then check a headroom number": how
+    // many threads happen to be in flight at any instant is scheduler-dependent,
+    // and asserting on it makes the test fail under a loaded CI machine rather
+    // than on a real defect. What is timing-free — and what actually regressed —
+    // is that a completed job leaves the container at all.
+    constexpr int kSegments = 40;
+    for (int i = 0; i < kSegments; ++i) {
+        coordinator.ScheduleSegmentRemuxForTest(dir / (L"seg" + std::to_wstring(i) + L".mkv.tmp"),
+                                                dir / (L"seg" + std::to_wstring(i) + L".mp4"), QString(),
+                                                [] { return true; });
+        ASSERT_TRUE(ReapUntil(coordinator, [&] { return coordinator.SegmentRemuxJobCountForTest() == 0u; }))
+            << "segment " << i << " was never reaped — handles accumulate for the whole session";
+    }
+    EXPECT_EQ(coordinator.SegmentRemuxJobCountForTest(), 0u);
+    EXPECT_TRUE(coordinator.DrainSegmentRemuxJobsForTest(false));
+
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+}
+
+// The reserve counts a running job's transient MKV and stops counting it the
+// moment the job completes.
+TEST_F(Mp4SplitRemuxTest, PendingReserveCountsRunningJobsOnly) {
+    RecordingCoordinator coordinator;
+    const auto dir = SplitTempDir(L"reserve");
+    constexpr size_t kBytes = 4096;
+    const auto transient = WriteSizedFile(dir / L"seg.mkv.tmp", kBytes);
+
+    ReleasableWork work;
+    coordinator.ScheduleSegmentRemuxForTest(transient, dir / L"seg.mp4", QString(), work.Body(true));
+    work.WaitStarted();
+    EXPECT_EQ(coordinator.PendingRemuxReserveBytesForTest(), kBytes);
+
+    work.Release();
+    // The file is left in place on purpose: the point is that a COMPLETED job
+    // stops being reserved for, whether or not its artefact is still on disk.
+    ASSERT_TRUE(ReapUntil(coordinator, [&] { return coordinator.PendingRemuxReserveBytesForTest() == 0u; }));
+
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+}
+
+// The specific regression: a FAILED remux deliberately keeps its transient MKV
+// forever, because it is the only trustworthy artefact for that segment. Under
+// joinable()-based accounting that file was reserved against for the rest of the
+// session, pushing the low-disk guard into a permanent false alarm.
+TEST_F(Mp4SplitRemuxTest, FailedRemuxRetainedMkvIsNotReservedForever) {
+    RecordingCoordinator coordinator;
+    const auto dir = SplitTempDir(L"failed");
+    constexpr size_t kBytes = 8192;
+    const auto transient = WriteSizedFile(dir / L"failed.mkv.tmp", kBytes);
+
+    coordinator.ScheduleSegmentRemuxForTest(transient, dir / L"failed.mp4", QString(), [] { return false; });
+
+    ASSERT_TRUE(ReapUntil(coordinator, [&] { return coordinator.SegmentRemuxJobCountForTest() == 0u; }));
+    EXPECT_TRUE(std::filesystem::exists(transient)) << "the retained artefact must survive a failed remux";
+    EXPECT_EQ(coordinator.PendingRemuxReserveBytesForTest(), 0u);
+
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+}
+
+// Reaping removes the job before the end-of-session drain can inspect it, so the
+// failure verdict has to survive the reap. Otherwise a split session with a
+// failed intermediate segment would report as fully saved.
+TEST_F(Mp4SplitRemuxTest, DrainStillReportsAFailureThatWasAlreadyReaped) {
+    RecordingCoordinator coordinator;
+    const auto dir = SplitTempDir(L"drain_fail");
+
+    coordinator.ScheduleSegmentRemuxForTest(dir / L"ok.mkv.tmp", dir / L"ok.mp4", QString(), [] { return true; });
+    coordinator.ScheduleSegmentRemuxForTest(dir / L"bad.mkv.tmp", dir / L"bad.mp4", QString(), [] { return false; });
+
+    ASSERT_TRUE(ReapUntil(coordinator, [&] { return coordinator.SegmentRemuxJobCountForTest() == 0u; }));
+    EXPECT_FALSE(coordinator.DrainSegmentRemuxJobsForTest(false))
+        << "a reaped failure was forgotten and the session reported success";
+
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+}
+
+// All jobs succeeding, none reaped early: the drain still says so.
+TEST_F(Mp4SplitRemuxTest, DrainReportsSuccessWhenEverySegmentSucceeded) {
+    RecordingCoordinator coordinator;
+    const auto dir = SplitTempDir(L"drain_ok");
+
+    for (int i = 0; i < 4; ++i) {
+        coordinator.ScheduleSegmentRemuxForTest(dir / (L"s" + std::to_wstring(i) + L".mkv.tmp"),
+                                                dir / (L"s" + std::to_wstring(i) + L".mp4"), QString(),
+                                                [] { return true; });
+    }
+    EXPECT_TRUE(coordinator.DrainSegmentRemuxJobsForTest(false));
+    EXPECT_EQ(coordinator.SegmentRemuxJobCountForTest(), 0u);
+
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+}
 
 TEST_F(Mp4SplitRemuxTest, IsArmedFromRecovery_FalseByDefault) {
     RecordingCoordinator coordinator;

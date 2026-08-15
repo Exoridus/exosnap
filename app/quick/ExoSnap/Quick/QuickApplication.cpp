@@ -460,6 +460,18 @@ void QuickApplication::initializeRecordWorkflow() {
             record_view_model_adapter_.setNoticeText(message);
         synchronizeRecordState();
     });
+    // A recovery-manifest write that did not reach disk. The recording keeps
+    // running — only the crash-recovery entry is missing — so this is reported
+    // like any other completed local-write failure, never as a recording error.
+    recording_coordinator_->SetRecoveryProtectionLostCallback([this](const QString& detail) {
+        notifications::NotificationEvent event;
+        event.type = notifications::NotificationType::RecoveryProtectionUnavailable;
+        event.title = QStringLiteral("Recovery protection unavailable");
+        event.body = QStringLiteral("This recording has no crash-recovery entry: %1. The recording itself is "
+                                    "unaffected, but it cannot be recovered if ExoSnap is interrupted.")
+                         .arg(detail);
+        notifications_adapter_.manager().Enqueue(std::move(event));
+    });
     recording_coordinator_->SetMicMeterUpdatedCallback([this](float rms) {
         preflight_microphone_rms_ = std::clamp(rms, 0.0f, 1.0f);
         scheduleMeterUpdate();

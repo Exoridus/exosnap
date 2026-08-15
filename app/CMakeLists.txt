@@ -521,6 +521,7 @@ exosnap_add_gtest(
     SOURCES
         tests/test_output_settings.cpp
         services/RecordingCoordinator.cpp
+        services/RecordingAdmission.cpp
         services/AtomicFileOps.cpp
         services/DisplayNumbering.cpp
         settings/RecoveryManifestStore.cpp
@@ -570,6 +571,28 @@ exosnap_add_gtest(
 )
 target_include_directories(auto_record_harness_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
+# QCR-101 / QCR-103: the recording admission gate (diagnostic blockers enforced on
+# the real start path) and recovery-manifest persistence honesty.
+exosnap_add_gtest(
+    NAME recording_admission_tests
+    TEST_PREFIX admission.
+    SOURCES
+        tests/test_recording_admission.cpp
+        services/RecordingCoordinator.cpp
+        services/RecordingAdmission.cpp
+        services/AtomicFileOps.cpp
+        services/DisplayNumbering.cpp
+        settings/RecoveryManifestStore.cpp
+    LIBRARIES
+        exosnap_output_model_test_support
+        exosnap_device_service_test_support
+        exosnap_diagnostics_test_support
+        Qt6::Core Qt6::Gui exosnap_capability recorder_core
+)
+target_include_directories(recording_admission_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(recording_admission_tests PRIVATE mfplat.lib mf.lib mfuuid.lib ole32.lib user32.lib)
+set_target_properties(recording_admission_tests PROPERTIES AUTOMOC ON)
+
 # MP4-SPLIT-REMUX-R1: per-segment manifest lifecycle, disk reserve, split settings.
 exosnap_add_gtest(
     NAME mp4_split_remux_tests
@@ -577,6 +600,7 @@ exosnap_add_gtest(
     SOURCES
         tests/test_mp4_split_remux.cpp
         services/RecordingCoordinator.cpp
+        services/RecordingAdmission.cpp
         services/AtomicFileOps.cpp
         services/DisplayNumbering.cpp
         settings/RecoveryManifestStore.cpp
@@ -1004,6 +1028,7 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
         SOURCES
             tests/test_capture_frame.cpp
             services/RecordingCoordinator.cpp
+            services/RecordingAdmission.cpp
             services/AtomicFileOps.cpp
             services/DisplayNumbering.cpp
             settings/RecoveryManifestStore.cpp
@@ -1044,6 +1069,7 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
         SOURCES
             tests/test_recording_markers.cpp
             services/RecordingCoordinator.cpp
+            services/RecordingAdmission.cpp
             services/AtomicFileOps.cpp
             services/DisplayNumbering.cpp
             settings/RecoveryManifestStore.cpp

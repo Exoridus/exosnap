@@ -290,6 +290,7 @@ target_sources(exosnap
         ${PROJECT_SOURCE_DIR}/app/services/WgcSourceProducer.cpp
         ${PROJECT_SOURCE_DIR}/app/services/WgcSourceProducer.h
         ${PROJECT_SOURCE_DIR}/app/services/RecordingCoordinator.cpp
+        ${PROJECT_SOURCE_DIR}/app/services/RecordingAdmission.cpp
         ${PROJECT_SOURCE_DIR}/app/services/RecordingCoordinator.h
         ${PROJECT_SOURCE_DIR}/app/services/RecordingCountdownController.cpp
         ${PROJECT_SOURCE_DIR}/app/services/RecordingCountdownController.h

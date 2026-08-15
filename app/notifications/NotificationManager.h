@@ -63,6 +63,10 @@ class NotificationManager : public QObject {
     static constexpr int kDismissMs_AudioSourceDegraded = 0; // standing
     // NOLINTNEXTLINE(readability-identifier-naming)
     static constexpr int kDismissMs_CaptureActionFailed = 8000;
+    // Timed, not standing: it reports a write that already failed, matching the
+    // treatment of the other completed-failure reports.
+    // NOLINTNEXTLINE(readability-identifier-naming)
+    static constexpr int kDismissMs_RecoveryProtectionUnavailable = 8000;
 
     explicit NotificationManager(QObject* parent = nullptr);
 

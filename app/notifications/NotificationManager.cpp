@@ -117,6 +117,8 @@ int NotificationManager::DismissIntervalMs(NotificationType type) noexcept {
         return kDismissMs_AudioSourceDegraded;
     case NotificationType::CaptureActionFailed:
         return kDismissMs_CaptureActionFailed;
+    case NotificationType::RecoveryProtectionUnavailable:
+        return kDismissMs_RecoveryProtectionUnavailable;
     }
     return kDismissMs_Saved;
 }
