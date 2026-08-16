@@ -140,6 +140,19 @@ class TimelineThumbnailSource : public QObject {
     // geometry it has already moved past.
     void tileReady(qint64 time_ms, const QImage& image, quint64 run_id);
 
+    // QCR-307. A run has ended, and how. Without this a consumer could only
+    // observe tiles ARRIVING: a clip the engine cannot open, or one that opens
+    // and decodes nothing, produced no tile and no event either, so "still
+    // decoding" and "there is nothing to decode" were the same observation
+    // forever.
+    //
+    // `tiles_emitted` is how many tileReady() emissions this run made.
+    // `cancelled` separates a run that was abandoned — a resize, a clip switch,
+    // a close — from one that ran to the end. Only the second kind can mean the
+    // clip carries nothing; a cancelled run is not a failure and must never be
+    // reported as one.
+    void runFinished(quint64 run_id, int tiles_emitted, bool cancelled);
+
   private:
     struct OpenJob {
         std::filesystem::path path;

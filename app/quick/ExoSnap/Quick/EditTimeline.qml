@@ -442,17 +442,27 @@ Item {
         }
     }
 
-    // ---- Loading hint ----
+    // ---- Strip lifecycle hint ----
     // While the video row has fewer tiles than the current width can hold, say
     // so — a strip that is merely mid-decode otherwise reads as broken. No
     // spinner and no skeleton tiles: a missing tile stays empty, deliberately.
+    //
+    // QCR-307: and when the clip carries nothing decodable, say THAT instead.
+    // "Generating previews…" used to stay up for the rest of the session for a
+    // clip whose first tile was never going to arrive. The wording is the same
+    // "Preview unavailable" the player's own placeholder uses for the same
+    // condition, in the same dim rung — a strip without thumbnails is a missing
+    // convenience, not an error surface, and trim, playback and export are
+    // unaffected.
     Text {
         x: root.trackX
         height: root.labelZoneHeight
         verticalAlignment: Text.AlignVCenter
-        text: qsTr("Generating previews…")
+        text: root.timeline.previewState === "unavailable" ? qsTr("Preview unavailable")
+                                                           : qsTr("Generating previews…")
         textFormat: Text.PlainText
-        visible: root.interactive && root.dragTarget === "" && root.timeline.generatingPreviews
+        visible: root.interactive && root.dragTarget === ""
+                 && (root.timeline.generatingPreviews || root.timeline.previewsUnavailable)
         color: ExoTheme.textDim
         font {
             family: ExoTheme.monoFamily

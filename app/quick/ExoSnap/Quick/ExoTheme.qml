@@ -259,6 +259,26 @@ QtObject {
              : root.accent;
     }
 
+    // QCR-513. The same tone, said without colour: a severity carried only by a
+    // coloured dot is not carried at all for a user who cannot separate those
+    // hues, and is carried by nothing whatsoever for a screen reader.
+    //
+    // Spoken severity. Prefixed to an accessible name, so it reads as
+    // "Warning. Storage running low." — the same shape ExoNotice uses.
+    //
+    // The matching GLYPH is deliberately not here. ExoGlyph is not part of every
+    // QML module that consumes this singleton (the Edit-timeline test module
+    // takes ExoTheme without it), so naming it here is an unqualified access in
+    // those modules — a warning against a file that never changed. The glyph
+    // mapping stays with the surface that draws it, exactly as ExoNotice and
+    // ExoStatusTile already keep theirs.
+    function advisoryToneName(tone: string): string {
+        return tone === "success" ? qsTr("Success")
+             : tone === "caution" ? qsTr("Warning")
+             : tone === "error" ? qsTr("Error")
+             : qsTr("Information");
+    }
+
     // ── Responsive width classes ─────────────────────────────────────────────
     //
     // A desktop recorder, not a web page: three classes are enough, and every one

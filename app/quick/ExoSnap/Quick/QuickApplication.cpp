@@ -2014,8 +2014,13 @@ void QuickApplication::applyEditVisualScenario() {
     const QStringList audio_rows =
         multitrack ? QStringList{QStringLiteral("Game"), QStringLiteral("System"), QStringLiteral("Microphone")}
                    : QStringList{QStringLiteral("System")};
-    const int tile_count = scenario == QStringLiteral("edit-timeline-loading") ? 4 : -1;
+    const bool unavailable_previews = scenario == QStringLiteral("edit-timeline-unavailable");
+    const int tile_count = scenario == QStringLiteral("edit-timeline-loading") ? 4 : unavailable_previews ? 0 : -1;
     edit_timeline_adapter_.setFixture(audio_rows, tile_count);
+    // QCR-307: the terminal state, which no fixture can reach on its own — the
+    // fixture path never touches the decoder whose failure produces it.
+    if (unavailable_previews)
+        edit_timeline_adapter_.applyUnavailablePreviewsForHarness();
 
     if (scenario == QStringLiteral("edit-trimmed"))
         edit_session_adapter_.requestTrim(22000, 118000);

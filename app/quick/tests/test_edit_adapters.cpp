@@ -607,5 +607,210 @@ TEST(EditTimelineAdapterGeneration, ARunIdOfZeroIsNeverAccepted) {
     EXPECT_EQ(timeline.tilesReady(), 0);
 }
 
+// ── The strip has a terminal state (QCR-307) ───────────────────────────────
+//
+// tilesExpected > 0 with tilesReady == 0 described two situations that are not
+// the same thing: a clip that is mid-decode, and a clip that carries nothing
+// decodable and never will. The strip showed "Generating previews…" for both,
+// so the second one showed it for the rest of the session.
+//
+// The two endings are driven through the same signals the worker emits. A real
+// one needs media: a working clip for the first, a deliberately broken one for
+// the second, and neither is something a fixture carries.
+
+// A clip that will never produce a tile is fixture-free by construction — the
+// fixture path bypasses the decoder entirely — so these drive a real (missing)
+// master path and then deliver the worker's verdict.
+EditContext MakeUndecodableContext() {
+    EditContext context = MakeContext();
+    context.mkv_master_path = QStringLiteral("D:/Recordings/not-a-real-clip.mkv");
+    return context;
+}
+
+TEST(EditTimelinePreviewState, AClipWithNothingToShowIsIdleNotGenerating) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    EditTimelineAdapter timeline;
+    timeline.setSession(&session);
+
+    EXPECT_EQ(timeline.previewState(), QStringLiteral("idle"));
+    EXPECT_FALSE(timeline.generatingPreviews());
+    EXPECT_FALSE(timeline.previewsUnavailable());
+}
+
+TEST(EditTimelinePreviewState, APartlyFilledStripKeepsSayingItIsGenerating) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    EditTimelineAdapter timeline;
+    timeline.setSession(&session);
+    session.setEditContext(MakeContext());
+    timeline.setTrackWidth(800);
+    // Fewer tiles than the row holds: exactly the state a slow decode is in.
+    timeline.setFixture({QStringLiteral("System")}, 2);
+
+    ASSERT_GT(timeline.tilesExpected(), timeline.tilesReady());
+    EXPECT_EQ(timeline.previewState(), QStringLiteral("generating"));
+    EXPECT_TRUE(timeline.generatingPreviews());
+    EXPECT_FALSE(timeline.previewsUnavailable());
+}
+
+TEST(EditTimelinePreviewState, AFullStripIsReady) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    EditTimelineAdapter timeline;
+    timeline.setSession(&session);
+    session.setEditContext(MakeContext());
+    timeline.setTrackWidth(800);
+    timeline.setFixture({QStringLiteral("System")}, -1);
+
+    ASSERT_EQ(timeline.tilesReady(), timeline.tilesExpected());
+    ASSERT_GT(timeline.tilesExpected(), 0);
+    EXPECT_EQ(timeline.previewState(), QStringLiteral("ready"));
+    EXPECT_FALSE(timeline.generatingPreviews());
+}
+
+TEST(EditTimelinePreviewState, AClipTheEngineCannotOpenIsUnavailableAtOnce) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    EditTimelineAdapter timeline;
+    timeline.setSession(&session);
+    session.setEditContext(MakeUndecodableContext());
+    timeline.setTrackWidth(800);
+
+    // 0x0 is the worker's answer for "could not open, or carries no video". The
+    // strip does not have to wait for a run to prove what the open already said.
+    timeline.deliverClipOpenedForTest(0, 0, {});
+
+    EXPECT_EQ(timeline.previewState(), QStringLiteral("unavailable"));
+    EXPECT_TRUE(timeline.previewsUnavailable());
+    EXPECT_FALSE(timeline.generatingPreviews()) << "the honest state replaces the optimistic one, it does not join it";
+}
+
+TEST(EditTimelinePreviewState, ARunThatEndsWithNoTileAtAllIsUnavailable) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    EditTimelineAdapter timeline;
+    timeline.setSession(&session);
+    session.setEditContext(MakeContext());
+    timeline.setTrackWidth(800);
+    timeline.setFixture({QStringLiteral("System")}, 0);
+    const quint64 run = timeline.activeRunForTest();
+    ASSERT_NE(run, 0U);
+    ASSERT_EQ(timeline.previewState(), QStringLiteral("generating"));
+
+    // The clip opened, and the decoder still produced nothing for any position.
+    timeline.deliverRunFinishedForTest(run, 0, /*cancelled=*/false);
+
+    EXPECT_EQ(timeline.previewState(), QStringLiteral("unavailable"));
+}
+
+TEST(EditTimelinePreviewState, ACancelledRunIsNotAFailure) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    EditTimelineAdapter timeline;
+    timeline.setSession(&session);
+    session.setEditContext(MakeContext());
+    timeline.setTrackWidth(800);
+    timeline.setFixture({QStringLiteral("System")}, 0);
+    const quint64 run = timeline.activeRunForTest();
+    ASSERT_NE(run, 0U);
+
+    // A resize, a clip switch or a close abandons the run in flight. It says
+    // nothing about the clip, and must not put "Preview unavailable" on a
+    // recording the user merely resized the window for.
+    timeline.deliverRunFinishedForTest(run, 0, /*cancelled=*/true);
+
+    EXPECT_FALSE(timeline.previewsUnavailable());
+    EXPECT_EQ(timeline.previewState(), QStringLiteral("generating"));
+}
+
+TEST(EditTimelinePreviewState, ARunTheStripHasMovedPastCannotFailIt) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    EditTimelineAdapter timeline;
+    timeline.setSession(&session);
+    session.setEditContext(MakeContext());
+    timeline.setTrackWidth(800);
+    timeline.setFixture({QStringLiteral("System")}, 0);
+    const quint64 stale_run = timeline.activeRunForTest() + 99;
+
+    timeline.deliverRunFinishedForTest(stale_run, 0, /*cancelled=*/false);
+    timeline.deliverRunFinishedForTest(0, 0, /*cancelled=*/false);
+
+    EXPECT_FALSE(timeline.previewsUnavailable());
+}
+
+TEST(EditTimelinePreviewState, ARunThatProducedTilesIsNeverUnavailable) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    EditTimelineAdapter timeline;
+    timeline.setSession(&session);
+    session.setEditContext(MakeContext());
+    timeline.setTrackWidth(800);
+    timeline.setFixture({QStringLiteral("System")}, -1);
+    const quint64 run = timeline.activeRunForTest();
+    ASSERT_NE(run, 0U);
+    ASSERT_GT(timeline.tilesReady(), 0);
+
+    timeline.deliverRunFinishedForTest(run, timeline.tilesReady(), /*cancelled=*/false);
+
+    EXPECT_FALSE(timeline.previewsUnavailable());
+    EXPECT_EQ(timeline.previewState(), QStringLiteral("ready"));
+}
+
+TEST(EditTimelinePreviewState, AFailedClipDoesNotFollowTheUserToTheNextOne) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    EditTimelineAdapter timeline;
+    timeline.setSession(&session);
+    session.setEditContext(MakeUndecodableContext());
+    timeline.setTrackWidth(800);
+    timeline.deliverClipOpenedForTest(0, 0, {});
+    ASSERT_TRUE(timeline.previewsUnavailable());
+
+    // Clip B is a different question, and it starts unanswered.
+    EditContext second = MakeContext(50.0);
+    second.mkv_master_path = QStringLiteral("D:/Recordings/second.mkv");
+    session.setEditContext(second);
+
+    EXPECT_FALSE(timeline.previewsUnavailable());
+    EXPECT_NE(timeline.previewState(), QStringLiteral("unavailable"));
+}
+
+TEST(EditTimelinePreviewState, ClosingTheSessionClearsTheVerdictWithTheStrip) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    EditTimelineAdapter timeline;
+    timeline.setSession(&session);
+    session.setEditContext(MakeUndecodableContext());
+    timeline.setTrackWidth(800);
+    timeline.deliverClipOpenedForTest(0, 0, {});
+    ASSERT_TRUE(timeline.previewsUnavailable());
+
+    session.close();
+
+    EXPECT_FALSE(timeline.previewsUnavailable());
+    EXPECT_EQ(timeline.previewState(), QStringLiteral("idle"));
+}
+
+// The rest of the Edit surface does not depend on thumbnails, and an
+// unavailable strip must not take any of it away.
+TEST(EditTimelinePreviewState, AnUnavailableStripLeavesTrimAndMarkersWorking) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    EditTimelineAdapter timeline;
+    timeline.setSession(&session);
+    session.setEditContext(MakeUndecodableContext());
+    timeline.setTrackWidth(800);
+    timeline.deliverClipOpenedForTest(0, 0, {});
+    ASSERT_TRUE(timeline.previewsUnavailable());
+
+    session.requestTrim(10'000, 30'000);
+    EXPECT_EQ(session.trimStartMs(), 10'000);
+    EXPECT_EQ(session.trimEndMs(), 30'000);
+    EXPECT_GT(session.durationMs(), 0);
+    EXPECT_NE(timeline.markerModel(), nullptr);
+}
+
 } // namespace
 } // namespace exosnap::quick

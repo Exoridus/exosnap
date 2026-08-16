@@ -274,14 +274,30 @@ void TimelineThumbnailSource::workerLoop() {
 
         if (!tile_job)
             continue;
-        if (!open)
-            continue; // nothing decodable: the strip stays empty, by design
 
         const quint64 run_id = tile_job->run_id;
+        // QCR-307. Reported for BOTH endings, including the one that decodes
+        // nothing at all. The clip that could not be opened used to leave the
+        // loop here silently, which is precisely why the strip could say
+        // "Generating previews…" for the rest of the session.
+        const auto finish = [this, run_id](int emitted) {
+            const bool cancelled = cancelled_.load(std::memory_order_relaxed);
+            QMetaObject::invokeMethod(
+                this, [this, run_id, emitted, cancelled]() { emit runFinished(run_id, emitted, cancelled); },
+                Qt::QueuedConnection);
+        };
+
+        if (!open) {
+            finish(0);
+            continue;
+        }
+
+        int emitted = 0;
         GenerateTimelineTiles(
             tile_job->times_ms, tile_job->row_height,
             [&engine](int64_t target_us) { return engine->DecodeFrameAt(target_us); },
-            [this, run_id](TimelineThumbnail&& tile) {
+            [this, run_id, &emitted](TimelineThumbnail&& tile) {
+                ++emitted;
                 // One tile at a time onto the owner's thread: the strip fills
                 // in progressively instead of arriving as one late batch.
                 QMetaObject::invokeMethod(
@@ -289,6 +305,7 @@ void TimelineThumbnailSource::workerLoop() {
                     Qt::QueuedConnection);
             },
             cancelled_);
+        finish(emitted);
     }
 
     engine.reset();

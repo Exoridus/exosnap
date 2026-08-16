@@ -254,11 +254,33 @@ Popup {
                 required property bool unread
                 required property var actions
 
-                readonly property color toneColor: ExoTheme.advisoryTone(entryDelegate.tone)
+                // QCR-513. The entry used to carry its severity as an 8 px
+                // coloured dot and nothing else — no shape, no word, so a user
+                // who cannot separate those hues read four different advisories
+                // as one, and a screen reader read the severity as nothing at
+                // all. The glyph and the spoken name come off the same tone
+                // table the rest of the frontend uses; this is the notification
+                // hub joining that vocabulary, not a new one beside it.
+                readonly property color toneColor: ExoTheme.advisoryToneText(entryDelegate.tone)
+                readonly property string toneName: ExoTheme.advisoryToneName(entryDelegate.tone)
+                // Same four meanings, same four glyphs the readiness tiles, the
+                // issue cards and ExoNotice use. Kept beside the surface that
+                // draws it for the reason ExoTheme's own comment gives.
+                readonly property int toneGlyph: entryDelegate.tone === "success" ? ExoGlyph.Check
+                                               : entryDelegate.tone === "caution" ? ExoGlyph.Warning
+                                               : entryDelegate.tone === "error" ? ExoGlyph.Close
+                                               : ExoGlyph.Info
 
                 width: ListView.view.width
                 height: entryColumn.implicitHeight + 2 * ExoTheme.spacingMd
                 color: entryDelegate.unread ? ExoTheme.surfaceHover : "transparent"
+
+                // The whole entry announces itself once, severity first. The
+                // dismiss button and the action buttons inside keep their own
+                // names; this is the row they belong to.
+                Accessible.role: Accessible.ListItem
+                Accessible.name: entryDelegate.toneName + ". " + entryDelegate.title
+                Accessible.description: entryDelegate.body
 
                 Rectangle {
                     anchors {
@@ -271,16 +293,21 @@ Popup {
                     visible: entryDelegate.index > 0
                 }
 
-                Rectangle {
-                    width: 8
-                    height: 8
-                    radius: 4
+                ExoGlyph {
+                    id: toneGlyph
+
+                    kind: entryDelegate.toneGlyph
                     color: entryDelegate.toneColor
+                    width: 14
+                    height: 14
                     anchors {
                         left: parent.left
                         leftMargin: ExoTheme.spacingLg
                         top: parent.top
-                        topMargin: ExoTheme.spacingMd + 3
+                        // Optically centred on the title's cap height: the 14 px
+                        // glyph is shorter than the title's line box, so sharing
+                        // the column's top margin would sit it visibly high.
+                        topMargin: ExoTheme.spacingMd + 2
                     }
                 }
 
@@ -292,7 +319,7 @@ Popup {
                         left: parent.left
                         right: parent.right
                         top: parent.top
-                        leftMargin: ExoTheme.spacingLg + 8 + ExoTheme.spacingSm
+                        leftMargin: ExoTheme.spacingLg + toneGlyph.width + ExoTheme.spacingSm
                         rightMargin: ExoTheme.spacingLg
                         topMargin: ExoTheme.spacingMd
                         // No bottomMargin: without an `anchors.bottom` it would be

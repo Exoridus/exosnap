@@ -74,6 +74,22 @@ class EditTimelineAdapter : public QObject {
     Q_PROPERTY(int tilesExpected READ tilesExpected NOTIFY tileProgressChanged FINAL)
     Q_PROPERTY(int tilesReady READ tilesReady NOTIFY tileProgressChanged FINAL)
     Q_PROPERTY(bool generatingPreviews READ generatingPreviews NOTIFY tileProgressChanged FINAL)
+    // QCR-307. The strip's lifecycle as a state rather than as an inference from
+    // two counters:
+    //
+    //   "idle"        — no clip, or nothing to lay out yet.
+    //   "generating"  — tiles are expected and still arriving.
+    //   "ready"       — every expected tile is on the strip.
+    //   "unavailable" — this clip carries nothing decodable, and no tile will
+    //                   ever arrive. TERMINAL, and reached only from a run that
+    //                   ran to the end, never from a cancel or a clip switch.
+    //
+    // The two counters alone could not express the last one: an undecodable clip
+    // sits at tilesExpected > 0 / tilesReady == 0 exactly like a clip that is
+    // mid-decode, so "Generating previews…" stayed on screen for the rest of the
+    // session for something that was never going to finish.
+    Q_PROPERTY(QString previewState READ previewState NOTIFY tileProgressChanged FINAL)
+    Q_PROPERTY(bool previewsUnavailable READ previewsUnavailable NOTIFY tileProgressChanged FINAL)
 
   public:
     explicit EditTimelineAdapter(QObject* parent = nullptr);
@@ -98,11 +114,18 @@ class EditTimelineAdapter : public QObject {
     [[nodiscard]] int tilesExpected() const noexcept;
     [[nodiscard]] int tilesReady() const noexcept;
     [[nodiscard]] bool generatingPreviews() const noexcept;
+    [[nodiscard]] QString previewState() const;
+    [[nodiscard]] bool previewsUnavailable() const noexcept;
 
     // Harness / test seam: replaces the strip with `tile_count` deterministic
     // placeholder tiles (-1 = as many as the row holds) and the given audio rows.
     // A real decode needs a clip no fixture carries.
     void setFixture(const QStringList& audio_track_labels, int tile_count);
+
+    // Harness seam (--visual-test): puts the strip in its terminal "this clip
+    // carries nothing decodable" state. Not reachable through setFixture, which
+    // bypasses the decoder that produces the verdict.
+    void applyUnavailablePreviewsForHarness();
 
     // Test seam: the same delivery path a decoded tile takes, without a decoder.
     // Exists because the generation check that drops a previous clip's tiles can
@@ -110,6 +133,11 @@ class EditTimelineAdapter : public QObject {
     void deliverTileForTest(qint64 time_ms, const QImage& image, quint64 run_id);
     // Test seam: the run whose tiles the strip currently accepts. 0 means none.
     [[nodiscard]] quint64 activeRunForTest() const noexcept;
+    // Test seams for QCR-307's two terminal endings. Both take the same path the
+    // worker's signals do; a real one needs media a fixture cannot carry, and the
+    // undecodable case needs media that is deliberately broken.
+    void deliverRunFinishedForTest(quint64 run_id, int tiles_emitted, bool cancelled);
+    void deliverClipOpenedForTest(int video_width, int video_height, const QStringList& audio_track_names);
 
   signals:
     void trackWidthChanged();
@@ -121,6 +149,8 @@ class EditTimelineAdapter : public QObject {
     void openClip(const QString& master_path, qint64 duration_ms);
     void closeClip();
     void handleTileReady(qint64 time_ms, const QImage& image, quint64 run_id);
+    void handleClipOpened(int video_width, int video_height, const QStringList& audio_track_names);
+    void handleRunFinished(quint64 run_id, int tiles_emitted, bool cancelled);
     // Drops the run in flight: nothing it still delivers belongs to what the
     // strip shows next.
     void invalidateRun();
@@ -157,6 +187,11 @@ class EditTimelineAdapter : public QObject {
     quint64 active_run_ = 0;
     // Set while placeholder tiles stand in for a decode (-1 = fill the row).
     std::optional<int> fixture_tile_count_;
+    // QCR-307. Latched once this clip has PROVEN it carries nothing decodable:
+    // the engine could not open it (or it has no video stream), or a run reached
+    // its end having produced no tile at all. Cleared by the next clip and by the
+    // start of any new run, so a resize or a reopen gets a fresh verdict.
+    bool previews_unavailable_ = false;
 };
 
 } // namespace exosnap::quick
