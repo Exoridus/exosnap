@@ -72,14 +72,16 @@ Item {
         "developer": developerSection
     })
 
-    // True only when the section actually ended up inside the viewport. The
-    // control channel reports `settled` from this, so a reveal that could not
-    // reach its target is a failure rather than an optimistic success.
-    function revealAutomationTarget(name: string): bool {
+    // -1 = no such target, 0 = a real target that did not end up in the
+    // viewport, 1 = revealed. Three answers rather than two, because "you asked
+    // for something that does not exist" and "what you asked for did not
+    // happen" are different findings and the protocol reports them as different
+    // errors.
+    function revealAutomationTarget(name: string): int {
         const section = root.automationTargets[name];
         if (section === undefined || section === null)
-            return false;
-        return scroll.revealItem(section);
+            return -1;
+        return scroll.revealItem(section) ? 1 : 0;
     }
 
     function scrollAutomationHome(): bool {

@@ -576,6 +576,9 @@ TEST(LiveVerifyDispatcher, EveryListedCommandIsActuallyImplemented) {
         // exist there. Put each command in the page its own policy names.
         if (command.name.startsWith(QStringLiteral("ui.reveal")) ||
             command.name.startsWith(QStringLiteral("ui.scroll"))) {
+            // PlausibleParams picks the first enum value for `surface`, which is
+            // settings -- and a surface is only addressable while it is the
+            // current page.
             source.state.page = QString::fromLatin1(page_name::kSettings);
         }
         const QJsonObject response = dispatcher.Dispatch(RequestV2(command.name, PlausibleParams(command)));
@@ -1063,6 +1066,47 @@ TEST(LiveVerifyReveal, ScrollingIsRefusedOnAPageThatDoesNotScroll) {
         RequestV2(QStringLiteral("ui.scrollEnd"), QJsonObject{{QStringLiteral("surface"), QStringLiteral("logs")}}));
     EXPECT_FALSE(Ok(response));
     EXPECT_EQ(ErrorCode(response), QString::fromLatin1(error_code::kInvalidState));
+}
+
+TEST(LiveVerifyReveal, ASurfaceIsOnlyAddressableWhileItIsTheCurrentPage) {
+    // The four destinations stay resident after their first visit (QCR-602), so
+    // the Settings item is still reachable from Logs -- and scrolling a page
+    // nobody is looking at, then reporting where it landed, is evidence of
+    // nothing. Refused as invalid_state, NOT as an unknown target: the name is
+    // correct, the place is not.
+    FakeSource source;
+    source.state.page = QString::fromLatin1(page_name::kLogs);
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    const QJsonObject reveal = dispatcher.Dispatch(
+        RequestV2(QStringLiteral("ui.reveal"), QJsonObject{{QStringLiteral("surface"), QStringLiteral("settings")},
+                                                           {QStringLiteral("target"), QStringLiteral("appearance")}}));
+    EXPECT_FALSE(Ok(reveal));
+    EXPECT_EQ(ErrorCode(reveal), QString::fromLatin1(error_code::kInvalidState));
+    EXPECT_EQ(ErrorOf(reveal).value(QStringLiteral("requires")).toObject().value(QStringLiteral("page")).toString(),
+              QStringLiteral("settings"));
+    EXPECT_EQ(ErrorOf(reveal).value(QStringLiteral("actual")).toObject().value(QStringLiteral("page")).toString(),
+              QStringLiteral("logs"));
+
+    const QJsonObject scroll = dispatcher.Dispatch(RequestV2(
+        QStringLiteral("ui.scrollEnd"), QJsonObject{{QStringLiteral("surface"), QStringLiteral("settings")}}));
+    EXPECT_EQ(ErrorCode(scroll), QString::fromLatin1(error_code::kInvalidState));
+    EXPECT_TRUE(source.calls.isEmpty());
+}
+
+TEST(LiveVerifyReveal, ARealTargetThatDidNotLandIsNotReportedAsAnUnknownOne) {
+    FakeSource source;
+    source.state.page = QString::fromLatin1(page_name::kSettings);
+    source.reveal_outcome = LiveVerifySource::RevealOutcome::Failed;
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    const QJsonObject response = dispatcher.Dispatch(
+        RequestV2(QStringLiteral("ui.reveal"), QJsonObject{{QStringLiteral("surface"), QStringLiteral("settings")},
+                                                           {QStringLiteral("target"), QStringLiteral("appearance")}}));
+    EXPECT_FALSE(Ok(response));
+    EXPECT_EQ(ErrorCode(response), QString::fromLatin1(error_code::kOperationFailed));
 }
 
 TEST(LiveVerifyReveal, AScrollThatDoesNotLandIsAFailureNotASettledSuccess) {

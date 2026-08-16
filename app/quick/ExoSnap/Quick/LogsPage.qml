@@ -19,8 +19,8 @@ Item {
     // and which one is interesting depends on the run — so ui.reveal has nothing
     // to answer here and says so. Its two ends are what a check actually asks
     // for, and those are ui.scrollHome / ui.scrollEnd.
-    function revealAutomationTarget(name: string): bool {
-        return false;
+    function revealAutomationTarget(name: string): int {
+        return -1;
     }
 
     function scrollAutomationHome(): bool {

@@ -100,13 +100,17 @@ class LiveVerifySource {
 
     enum class RevealOutcome {
         Revealed,
-        // The surface exists and the name is not one of its automation targets.
-        // A silent no-op here is the exact defect --settings-visual-bottom had:
-        // every capture claimed to show the end of the page while showing its
-        // top.
+        // The name is not one of the surface's automation targets. A client
+        // error, and answered as one -- a silent no-op here is the exact defect
+        // --settings-visual-bottom had: every capture claimed to show the end of
+        // the page while showing its top.
         UnknownTarget,
-        // The surface itself is not reachable right now (page not loaded).
-        Unavailable,
+        // The target is a real one and it did not end up in the viewport, or the
+        // surface could not be reached at all. NOT the same statement as
+        // UnknownTarget, and it must not borrow that code: "you asked for
+        // something that does not exist" and "what you asked for did not happen"
+        // send a runner to two different places.
+        Failed,
     };
     [[nodiscard]] virtual RevealOutcome Reveal(const QString& surface, const QString& target, QString* error) = 0;
     virtual bool ScrollHome(const QString& surface, QString* error) = 0;

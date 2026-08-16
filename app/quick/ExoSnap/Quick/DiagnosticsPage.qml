@@ -56,17 +56,19 @@ Item {
         "hardwareCapabilities": hardwareCapabilitiesSection
     })
 
-    function revealAutomationTarget(name: string): bool {
+    // -1 = no such target, 0 = a real target that did not reach the viewport,
+    // 1 = revealed. Same three-way answer as SettingsPage, for the same reason.
+    function revealAutomationTarget(name: string): int {
         const section = root.automationTargets[name];
         if (section === undefined || section === null)
-            return false;
+            return -1;
         // Hardware capabilities is collapsed by default outside Expert, and a
         // scroll that stops at a closed header has not revealed the section any
         // more than not scrolling would have. Assigning `expanded` is exactly
         // what pressing the header does.
         if (section === hardwareCapabilitiesSection)
             hardwareCapabilitiesSection.expanded = true;
-        return scroll.revealItem(section);
+        return scroll.revealItem(section) ? 1 : 0;
     }
 
     function scrollAutomationHome(): bool {

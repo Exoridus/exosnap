@@ -706,17 +706,25 @@ live_verify::LiveVerifySource::RevealOutcome QuickLiveVerifySource::Reveal(const
     QObject* page = pageObjectFor(surface);
     if (page == nullptr) {
         *error = QStringLiteral("The %1 page is not loaded").arg(surface);
-        return RevealOutcome::Unavailable;
+        return RevealOutcome::Failed;
     }
-    bool revealed = false;
-    if (!QMetaObject::invokeMethod(page, "revealAutomationTarget", Q_RETURN_ARG(bool, revealed),
+    // -1 no such target, 0 a real target that did not reach the viewport,
+    // 1 revealed. The middle case is why this is not a bool: it is an
+    // operational failure, and reporting it as "no such target" would send a
+    // runner looking for a typo in a name that is correct.
+    int outcome = -1;
+    if (!QMetaObject::invokeMethod(page, "revealAutomationTarget", Q_RETURN_ARG(int, outcome),
                                    Q_ARG(QString, target))) {
         *error = QStringLiteral("The %1 page exposes no reveal targets").arg(surface);
-        return RevealOutcome::Unavailable;
+        return RevealOutcome::Failed;
     }
-    if (!revealed) {
+    if (outcome < 0) {
         *error = QStringLiteral("The %1 page has no automation target named %2").arg(surface, target);
         return RevealOutcome::UnknownTarget;
+    }
+    if (outcome == 0) {
+        *error = QStringLiteral("%1/%2 did not end up in the viewport").arg(surface, target);
+        return RevealOutcome::Failed;
     }
     return RevealOutcome::Revealed;
 }

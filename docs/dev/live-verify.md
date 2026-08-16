@@ -223,8 +223,16 @@ own control drives; none of them is a second implementation of anything.
 | `ipc.describe` | The static half of capability discovery: every command with its parameters, whether it is idempotent, whether it settles synchronously, and the full error-code list. Not a JSON Schema — the parameter surfaces are zero to three flat fields and a generator would be more code than the validation it describes. |
 | `ui.getState` | The product state, in product vocabulary: named page, recording state, `editSession` vs `editVisible`, `blockingSurface`, source picker, notification hub, edit playback, selected source, and `availableActions`. No QML ids, no object pointers, no pixel coordinates. |
 | `ui.navigate` | Navigation through the one edge QCR-001 established (`ShellAdapter::navigateToPageRequested` → `AppShell.navigateTo`), so the tab, `Ctrl+1..5`, a notification action and a check all answer to the same guard. Synchronous: the answer carries the page it actually reached. Idempotent. |
-| `ui.reveal` | Brings a named product target into view: `settings/appearance`, `diagnostics/hardwareCapabilities`, … The target set is closed and named in code; an unknown name is `invalid_params`, never a quiet no-op. |
+| `ui.reveal` | Brings a named product target into view: `settings/appearance`, `diagnostics/hardwareCapabilities`, … The target set is closed and named in code. Three outcomes, kept apart on purpose: revealed; `invalid_params` for a name that does not exist; `operation_failed` for a real target that did not reach the viewport. |
 | `ui.scrollHome` / `ui.scrollEnd` | The two ends of a scrollable surface (`settings`, `diagnostics`, `logs`). Both report whether the surface really landed there. |
+
+The reveal and scroll surfaces are only addressable **while they are the
+current page** — otherwise `invalid_state`, with `requires.page` and
+`actual.page` naming both sides. The four destinations stay resident after
+their first visit (QCR-602), so a Settings section really is still reachable
+from the Logs page; scrolling a page nobody is looking at and then reporting
+where it landed is evidence of nothing.
+
 | `edit.open` | The only `edit.*` command that may run with no session — the same `openEditorForCurrentRecording()` gate `--auto-edit` uses. |
 | `edit.playPause` / `seek` / `setTrimIn` / `setTrimOut` / `timelineHome` / `timelineEnd` / `close` | The edit surface, through `EditSessionAdapter` / `EditPlayerAdapter`. Clamping, trim ordering and keyframe snapping stay in the adapter. All refuse with `invalid_state` when no session is open; none opens one implicitly. |
 | `sourcePicker.open` / `close` | The real picker surface. `record.selectTarget` bypasses it, which is why the picker had never been live-verified at all. Idempotent. |

@@ -163,6 +163,28 @@ Outcome ExecuteReadOnly(const QString& command, LiveVerifySource& source, int pr
     return Failed(error_code::kUnknownCommand, QStringLiteral("Command %1 is listed but not implemented").arg(command));
 }
 
+// The reveal/scroll surface has to be the page the user is on. The pages stay
+// resident after their first visit (QCR-602), so a Settings section IS still
+// addressable from the Logs page -- and scrolling a page nobody is looking at,
+// then reporting where it landed, is evidence of nothing.
+//
+// Enforced here rather than in the precondition table because it depends on a
+// PARAMETER, and the table's predicates read only the state. It is still
+// `invalid_state` with the same requires/actual shape a precondition produces,
+// so a client sees no seam.
+Outcome RefuseUnlessCurrentPage(const QString& surface, const LiveVerifySource& source) {
+    const AutomationState state = source.State();
+    if (state.page == surface)
+        return Succeeded({});
+    QJsonObject requirements;
+    QJsonObject actual;
+    requirements.insert(QStringLiteral("page"), surface);
+    actual.insert(QStringLiteral("page"), state.page);
+    return Failed(error_code::kInvalidState,
+                  QStringLiteral("The %1 surface can only be addressed while it is the current page").arg(surface),
+                  requirements, actual);
+}
+
 QJsonObject PopupResult(const char* key, bool open) {
     QJsonObject result;
     result.insert(Text(key), open ? QStringLiteral("open") : QStringLiteral("closed"));
@@ -232,10 +254,12 @@ Outcome ExecuteMutating(const CommandDescriptor& command, const ParsedRequest& r
     if (command.name == QLatin1String("ui.reveal")) {
         const QString surface = ParamString(params, "surface");
         const QString target = ParamString(params, "target");
+        if (const Outcome wrong = RefuseUnlessCurrentPage(surface, source); !wrong.ok)
+            return wrong;
         switch (source.Reveal(surface, target, &error)) {
         case LiveVerifySource::RevealOutcome::UnknownTarget:
             return Failed(error_code::kInvalidParams, error);
-        case LiveVerifySource::RevealOutcome::Unavailable:
+        case LiveVerifySource::RevealOutcome::Failed:
             return IntentRefused(command, source, error);
         case LiveVerifySource::RevealOutcome::Revealed:
             break;
@@ -250,6 +274,8 @@ Outcome ExecuteMutating(const CommandDescriptor& command, const ParsedRequest& r
     if (command.name == QLatin1String("ui.scrollHome") || command.name == QLatin1String("ui.scrollEnd")) {
         const bool to_end = command.name.endsWith(QLatin1String("End"));
         const QString surface = ParamString(params, "surface");
+        if (const Outcome wrong = RefuseUnlessCurrentPage(surface, source); !wrong.ok)
+            return wrong;
         const bool moved = to_end ? source.ScrollEnd(surface, &error) : source.ScrollHome(surface, &error);
         if (!moved)
             return IntentRefused(command, source, error);
