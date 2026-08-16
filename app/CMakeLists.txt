@@ -730,6 +730,11 @@ exosnap_add_gtest(
     LIBRARIES Qt6::Core Qt6::Gui recorder_core
 )
 target_include_directories(timeline_thumbnail_source_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+# One case opens a real clip to prove the worker releases the file handle on
+# close; it resolves the (gitignored, .workspace/ is scratch) fixture through the
+# source dir and GTEST_SKIPs where the host has none -- same arrangement
+# test_edit_player_engine already uses.
+target_compile_definitions(timeline_thumbnail_source_tests PRIVATE EXOSNAP_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 set_target_properties(timeline_thumbnail_source_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(

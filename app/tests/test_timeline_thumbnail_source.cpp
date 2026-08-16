@@ -5,9 +5,13 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <optional>
+#include <system_error>
+#include <thread>
 #include <vector>
 
 #include "services/TimelineThumbnailSource.h"
@@ -289,6 +293,51 @@ TEST_F(TimelineThumbnailSourceTest, AnUnusableFrameGeometryStrandsNothing) {
         }
     }
     EXPECT_EQ(live_buffers.load(), 0);
+}
+
+// The clip must be handed back to the user when Edit closes: as long as the
+// worker's engine holds the container open, Windows refuses to delete or rename
+// the recording. Needs real media, so it runs against a fixture in the untracked
+// scratch dir and skips where there is none. Create one with
+// `ffmpeg -f lavfi -i testsrc2=size=1920x1080:rate=60:duration=6 -c:v libx264
+// -g 120 -pix_fmt yuv420p .workspace/test-fixtures/edit_handle_probe.mkv`.
+// Measured while writing this: the copy cannot be deleted while the clip is
+// open, and can be immediately after the close is processed.
+TEST_F(TimelineThumbnailSourceTest, ClosingTheClipReleasesTheFileHandle) {
+    const std::filesystem::path fixture =
+        std::filesystem::path(EXOSNAP_SOURCE_DIR) / ".workspace" / "test-fixtures" / "edit_handle_probe.mkv";
+    if (!std::filesystem::exists(fixture))
+        GTEST_SKIP() << "fixture not present on this host: " << fixture.string();
+
+    // A copy, so a failed run cannot cost the fixture itself.
+    const std::filesystem::path probe = std::filesystem::temp_directory_path() / "exosnap_edit_handle_probe.mkv";
+    std::error_code ec;
+    std::filesystem::remove(probe, ec);
+    ASSERT_TRUE(std::filesystem::copy_file(fixture, probe, std::filesystem::copy_options::overwrite_existing, ec))
+        << ec.message();
+
+    {
+        TimelineThumbnailSource source;
+        source.openClip(QString::fromStdString(probe.string()), {0, 2'000'000});
+        for (int i = 0; i < 400 && source.videoWidth() == 0; ++i) {
+            QCoreApplication::processEvents();
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        ASSERT_GT(source.videoWidth(), 0) << "the fixture did not open";
+
+        source.closeClip();
+        bool released = false;
+        for (int i = 0; i < 400 && !released; ++i) {
+            QCoreApplication::processEvents();
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            std::filesystem::remove(probe, ec);
+            released = !std::filesystem::exists(probe);
+        }
+        // Still inside the source's lifetime: the destructor must not be what
+        // releases the file.
+        EXPECT_TRUE(released);
+    }
+    std::filesystem::remove(probe, ec);
 }
 
 // ---- Worker ----
