@@ -53,6 +53,7 @@ qt_add_qml_module(exosnap
         DeviceCapabilityRow.qml
         DeviceCodecChip.qml
         DiagnosticsPage.qml
+        DiagnosticsRowCard.qml
         DiagnosticsSectionHeader.qml
         DiagnosticsSelfTestRow.qml
         EditDetailsRail.qml
@@ -100,7 +101,6 @@ qt_add_qml_module(exosnap
         Main.qml
         NotificationBell.qml
         NotificationHub.qml
-        NotificationToastCard.qml
         OverlayCountdown.qml
         OverlayDiagnostics.qml
         OverlayNotificationToast.qml
@@ -643,6 +643,10 @@ qt_add_qml_module(record_controls_qml_tests
         CaptureExclusion.cpp
         CaptureExclusion.h
     QML_FILES
+        # QCR-709: the capability row is one line by contract, which is a layout
+        # fact about how its value label behaves once the row runs out of width.
+        DeviceCapabilityRow.qml
+        DeviceCodecChip.qml
         ExoButton.qml
         ExoChevron.qml
         # The 24 px interaction target and the keyboard toggle are geometry and

@@ -221,6 +221,44 @@ QtObject {
         return hovered ? root.text : root.textSecondary;
     }
 
+    // ── Advisory tone ────────────────────────────────────────────────────────
+    //
+    // The vocabulary is notifications::AdvisoryStatusForType()'s:
+    // "success" | "caution" | "error" | "info". It was written out as a compare
+    // chain five times across three files — the desktop toast alone carried three
+    // of them, one per family below — and every copy fell through to the ACCENT,
+    // the selection colour, which the canon says is never a semantic state. A
+    // fifth status string would therefore have shipped as "selected" on every
+    // surface at once.
+    //
+    // Three families because a tone answers three different questions: what it
+    // marks (advisoryTone), what ink reads on a fill of it (advisoryToneInk), and
+    // what colour it is as CONTENT rather than as a mark (advisoryToneText — see
+    // ExoBadge for the rule).
+    //
+    // `info` and any unknown string share one branch on purpose: the fallback is
+    // the neutral informational treatment, not the accent.
+    function advisoryTone(tone: string): color {
+        return tone === "success" ? root.success
+             : tone === "caution" ? root.warning
+             : tone === "error" ? root.error
+             : root.accent;
+    }
+
+    function advisoryToneInk(tone: string): color {
+        return tone === "success" ? root.successInk
+             : tone === "caution" ? root.warningInk
+             : tone === "error" ? root.errorInk
+             : root.accentInk;
+    }
+
+    function advisoryToneText(tone: string): color {
+        return tone === "success" ? root.successText
+             : tone === "caution" ? root.warningText
+             : tone === "error" ? root.errorText
+             : root.accent;
+    }
+
     // ── Responsive width classes ─────────────────────────────────────────────
     //
     // A desktop recorder, not a web page: three classes are enough, and every one

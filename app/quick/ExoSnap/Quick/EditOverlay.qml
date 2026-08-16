@@ -171,8 +171,6 @@ Item {
                     }
 
                     ExoBadge {
-                        id: reportBadge
-
                         text: root.session.reportLabel
                         tone: root.session.reportSeverity === EditSessionAdapter.Critical ? "blocker"
                               : root.session.reportSeverity === EditSessionAdapter.Warning ? "notice" : "neutral"
@@ -237,8 +235,6 @@ Item {
                     // the workspace. Deliberately ONE boundary: the individual
                     // tracks inside it stay unboxed.
                     Rectangle {
-                        id: timelinePanel
-
                         color: ExoTheme.surface
                         border.width: 1
                         border.color: ExoTheme.line

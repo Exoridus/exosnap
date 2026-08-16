@@ -10,6 +10,20 @@ import QtQuick
 // Qt.WindowTransparentForInput — which would also kill the action buttons — the
 // window keeps a mask covering only the card rectangles, rebuilt whenever the
 // stack changes. That is why this overlay is only partially click-through.
+//
+// The card delegate below follows product-spec §9's toast rules exactly. They
+// used to live in a second, never-instantiated reference component
+// (NotificationToastCard.qml, removed in QCR-701); this file is now the only
+// place a toast is described, so the rules belong here:
+//  - a dismiss ✕ is always present (NotificationToastWindow::ToastHit's
+//    is_dismiss target exists independently of action count);
+//  - with exactly one action the whole card is clickable, marked with a
+//    trailing "›";
+//  - with two actions each gets its own named (quiet) button;
+//  - the body wraps up to six lines and ellipsizes beyond that — the hub,
+//    not the toast, is where the untruncated text lives;
+//  - a countdown bar renders only for a TIMED toast (`standing: false`),
+//    matching NotificationManager::IsStanding()/DismissIntervalMs().
 Window {
     id: root
 
@@ -33,26 +47,6 @@ Window {
     // penumbra has room; the cards sit inset by this margin.
     readonly property int shadowMargin: 20
     readonly property int stackGap: 12
-
-    // Text on a tone-filled button. There is no single ink that reads on all
-    // four fills — this was one literal near-black for every tone, which in
-    // Light measured 4.04:1 on the error fill and 3.27:1 on the violet accent —
-    // so each fill takes the ink the theme curates for it.
-    function toneInk(tone) {
-        return tone === "success" ? ExoTheme.successInk
-             : tone === "caution" ? ExoTheme.warningInk
-             : tone === "error" ? ExoTheme.errorInk
-             : ExoTheme.accentInk
-    }
-
-    // The tone as CONTENT (the severity glyph) rather than as a mark (the chip
-    // border, the countdown bar). See ExoBadge for the rule.
-    function toneTextColor(tone) {
-        return tone === "success" ? ExoTheme.successText
-             : tone === "caution" ? ExoTheme.warningText
-             : tone === "error" ? ExoTheme.errorText
-             : ExoTheme.accent
-    }
 
     signal actionTriggered(int sequence, int action)
     signal dismissRequested(int sequence)
@@ -101,13 +95,6 @@ Window {
                                card.height + 48))
         }
         exclusion.setClickThroughRegion(rects)
-    }
-
-    function toneColor(tone) {
-        return tone === "success" ? ExoTheme.success
-             : tone === "caution" ? ExoTheme.warning
-             : tone === "error" ? ExoTheme.error
-             : ExoTheme.accent
     }
 
     onVisibleChanged: if (visible) root.rebuildMask()
@@ -244,7 +231,7 @@ Window {
 
                 required property var model
 
-                readonly property color tone: root.toneColor(card.model.tone)
+                readonly property color tone: ExoTheme.advisoryTone(card.model.tone)
                 readonly property int actionCount: card.model.actionCount !== undefined ? card.model.actionCount : 0
                 // One action means the card itself is the action, marked with a
                 // chevron; two get named buttons in their own row.
@@ -282,7 +269,7 @@ Window {
                     StatusGlyph {
                         anchors.centerIn: parent
                         tone: card.model.tone
-                        stroke: root.toneTextColor(card.model.tone)
+                        stroke: ExoTheme.advisoryToneText(card.model.tone)
                     }
                 }
 
@@ -350,7 +337,7 @@ Window {
                         label: card.model.primaryLabel !== undefined ? card.model.primaryLabel : ""
                         primary: true
                         tone: card.tone
-                        ink: root.toneInk(card.model.tone)
+                        ink: ExoTheme.advisoryToneInk(card.model.tone)
                         onActivated: root.actionTriggered(card.model.sequence, card.model.primaryAction)
                     }
 
@@ -385,9 +372,9 @@ Window {
                 // were all there and correct, and the glyph itself was simply
                 // never drawn — an 18 px hole in the corner of every desktop
                 // toast that only a user who guessed could click. Drawn with the
-                // shared ExoGlyph, the same treatment the in-app
-                // NotificationToastCard and the hub's own dismiss use, so the
-                // two surfaces cannot drift; the 18 px target is unchanged.
+                // shared ExoGlyph, the same treatment the hub's own dismiss
+                // uses, so the two surfaces cannot drift; the 18 px target is
+                // unchanged.
                 Item {
                     id: dismiss
 

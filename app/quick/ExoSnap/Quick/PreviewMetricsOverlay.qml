@@ -55,8 +55,6 @@ Item {
     }
 
     Rectangle {
-        id: metricsPanel
-
         objectName: "previewMetricsOverlay"
         width: Math.min(220, Math.max(0, parent.width))
         height: metricsColumn.implicitHeight + 20

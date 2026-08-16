@@ -15,9 +15,12 @@ Item {
     implicitWidth: ExoTheme.controlHeight
     implicitHeight: ExoTheme.controlHeight
 
-    readonly property color dotColor: root.notifications.worstUnreadTone === "error" ? ExoTheme.error
-                                     : root.notifications.worstUnreadTone === "caution" ? ExoTheme.warning
-                                     : ExoTheme.accent
+    // Three steps, not four: an unread SUCCESS is not urgent, so the bell paints
+    // it the same as info rather than green (product-spec §9 — the dot carries
+    // urgency). Folding it to "info" here keeps the one-step-down decision at the
+    // bell and leaves the colour table itself in ExoTheme, unduplicated.
+    readonly property color dotColor: ExoTheme.advisoryTone(
+        root.notifications.worstUnreadTone === "success" ? "info" : root.notifications.worstUnreadTone)
 
     Accessible.role: Accessible.Button
     Accessible.name: root.notifications.unreadCount > 0

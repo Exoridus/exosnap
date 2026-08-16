@@ -36,8 +36,8 @@ namespace exosnap::quick {
 //     fully unit-testable" — owning it inside the QML boundary layer does
 //     not leak any platform dependency into that layer, it only adds signal
 //     plumbing, which is exactly what an adapter is for.
-//  3. Whatever renders the actual toast WINDOW (explicitly out of scope for
-//     this task — see NotificationToastCard.qml's header comment) needs the
+//  3. Whatever renders the actual toast WINDOW (OverlayNotificationToast.qml,
+//     which carries the spec rules for a card in its header) needs the
 //     SAME manager instance to read VisibleEvents() / ShownAtMs() and call
 //     Dismiss() on a click. manager() below hands out that one instance by
 //     reference so a future toast-window owner and this adapter's hub model

@@ -77,8 +77,6 @@ Popup {
     }
 
     contentItem: ColumnLayout {
-        id: column
-
         // On the contentItem, not on the Popup: Popup derives from QtObject, so
         // an Accessible attachment there is silently inert — the screen reader
         // announced nothing at all. qmllint flags it as Quick.attached-property-type.
@@ -256,10 +254,7 @@ Popup {
                 required property bool unread
                 required property var actions
 
-                readonly property color toneColor: entryDelegate.tone === "success" ? ExoTheme.success
-                                                  : entryDelegate.tone === "caution" ? ExoTheme.warning
-                                                  : entryDelegate.tone === "error" ? ExoTheme.error
-                                                  : ExoTheme.accent
+                readonly property color toneColor: ExoTheme.advisoryTone(entryDelegate.tone)
 
                 width: ListView.view.width
                 height: entryColumn.implicitHeight + 2 * ExoTheme.spacingMd
@@ -300,7 +295,9 @@ Popup {
                         leftMargin: ExoTheme.spacingLg + 8 + ExoTheme.spacingSm
                         rightMargin: ExoTheme.spacingLg
                         topMargin: ExoTheme.spacingMd
-                        bottomMargin: ExoTheme.spacingMd
+                        // No bottomMargin: without an `anchors.bottom` it would be
+                        // inert. The bottom padding is the `2 *` in the delegate's
+                        // own height above, which is the one place that decides it.
                     }
 
                     RowLayout {

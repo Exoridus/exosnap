@@ -113,8 +113,6 @@ Popup {
         }
 
         ListView {
-            id: windowList
-
             model: root.recordViewModel.windowTargetOptions
             spacing: ExoTheme.spacingXs
             boundsBehavior: Flickable.StopAtBounds

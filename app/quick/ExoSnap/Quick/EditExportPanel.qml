@@ -115,8 +115,6 @@ Rectangle {
             // readable at all. The full path is one hover away, and the same
             // string is on the clipboard-free route the reveal action takes.
             Label {
-                id: resultFileName
-
                 text: root.succeeded ? root.exporter.outputFileName : root.exporter.errorText
                 textFormat: Text.PlainText
                 elide: Text.ElideMiddle

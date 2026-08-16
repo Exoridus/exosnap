@@ -56,13 +56,25 @@ Item {
             Layout.fillWidth: true
         }
 
+        // The row is one line by contract, and this is the label that says so.
+        // It used to declare `wrapMode` and no width policy at all: with neither
+        // `Layout.fillWidth` nor a maximum it was never given a width to wrap
+        // inside, so the wrap was inert while the only thing a too-long value
+        // could do was overrun the card. fillWidth + elide is the pairing every
+        // other long-text label in the file set uses, and it makes the overflow
+        // behaviour an ellipsis rather than a silently taller row. It stays
+        // right-aligned because it is the last visible item, so its box ends at
+        // the row's right edge either way.
         Label {
+            objectName: "capabilityRowValue"
+
             text: root.valueText
             textFormat: Text.PlainText
-            wrapMode: Text.WordWrap
+            elide: Text.ElideRight
             horizontalAlignment: Text.AlignRight
             visible: root.valueText !== ""
             color: ExoTheme.text
+            Layout.fillWidth: true
             Layout.alignment: Qt.AlignVCenter
             font {
                 family: ExoTheme.monoFamily

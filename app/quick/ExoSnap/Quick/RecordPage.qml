@@ -59,7 +59,6 @@ Item {
             dismissible: true
             visible: text.length > 0
             Layout.fillWidth: true
-            Layout.preferredHeight: visible ? implicitHeight : 0
             onDismissed: root.recordViewModel.clearNotice()
         }
 
@@ -237,8 +236,6 @@ Item {
                         }
 
                         ExoButton {
-                            id: changeSourceButton
-
                             text: qsTr("Change source")
                             // Compact, but NOT quiet. A quiet button carries no
                             // chrome at rest, and at the end of a row that is
@@ -290,8 +287,6 @@ Item {
                     }
 
                     ExoPreviewItem {
-                        id: previewItem
-
                         objectName: "quickPreviewItem"
                         previewAdapter: root.previewAdapter
                         normalizedSourceRect: root.recordViewModel.normalizedSourceRect
@@ -365,7 +360,10 @@ Item {
                             anchors.fill: parent
                             source: root.active && webcamOverlay.idlePreview
                                     ? root.recordViewModel.webcamFrameSource : ""
-                            sourceSize: Qt.size(320, 180)
+                            // sourceSize is not set here: the Binding below owns it
+                            // and is active from construction, so a literal would be
+                            // overwritten before the first frame and read as a
+                            // decode resolution that nothing honours.
                             cache: false
                             asynchronous: true
                             fillMode: Image.PreserveAspectCrop
@@ -488,8 +486,6 @@ Item {
                     }
 
                     ExoStatusPill {
-                        id: statusChip
-
                         text: root.recordViewModel.stateText
                         tone: root.recordViewModel.stateTone
                         onSurface: true

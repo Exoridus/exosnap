@@ -577,106 +577,70 @@ Item {
                         Layout.fillWidth: true
                     }
 
-                    Rectangle {
-                        implicitHeight: elevationRow.implicitHeight + 2 * ExoTheme.spacingMd
-                        color: ExoTheme.surface
-                        border.width: 1
-                        border.color: ExoTheme.line
-                        radius: ExoTheme.radiusMd
+                    DiagnosticsRowCard {
                         Layout.fillWidth: true
 
-                        RowLayout {
-                            id: elevationRow
-
-                            spacing: ExoTheme.spacingMd
-                            anchors {
-                                fill: parent
-                                topMargin: ExoTheme.spacingMd
-                                bottomMargin: ExoTheme.spacingMd
-                                leftMargin: ExoTheme.spacingLg
-                                rightMargin: ExoTheme.spacingLg
+                        Label {
+                            text: root.diagnostics.elevated
+                                ? qsTr("Running elevated — PresentMon ETW present diagnostics are available.")
+                                : qsTr("Running standard — present-path and DPC/ISR measurements need an elevated relaunch.")
+                            textFormat: Text.PlainText
+                            wrapMode: Text.WordWrap
+                            color: ExoTheme.textMuted
+                            Layout.fillWidth: true
+                            Layout.minimumHeight: 17
+                            font {
+                                family: ExoTheme.sansFamily
+                                pixelSize: ExoTheme.fontSecondary
                             }
+                        }
 
-                            Label {
-                                text: root.diagnostics.elevated
-                                    ? qsTr("Running elevated — PresentMon ETW present diagnostics are available.")
-                                    : qsTr("Running standard — present-path and DPC/ISR measurements need an elevated relaunch.")
-                                textFormat: Text.PlainText
-                                wrapMode: Text.WordWrap
-                                color: ExoTheme.textMuted
-                                Layout.fillWidth: true
-                                Layout.minimumHeight: 17
-                                font {
-                                    family: ExoTheme.sansFamily
-                                    pixelSize: ExoTheme.fontSecondary
-                                }
-                            }
-
-                            ExoBadge {
-                                text: root.diagnostics.elevated ? qsTr("Elevated") : qsTr("Standard")
-                                tone: root.diagnostics.elevated ? "pass" : "neutral"
-                                Layout.alignment: Qt.AlignVCenter
-                            }
+                        ExoBadge {
+                            text: root.diagnostics.elevated ? qsTr("Elevated") : qsTr("Standard")
+                            tone: root.diagnostics.elevated ? "pass" : "neutral"
+                            Layout.alignment: Qt.AlignVCenter
                         }
                     }
 
                     // ── Logs redirect (Expert; the Simple view stays calm) ──────
-                    Rectangle {
-                        implicitHeight: logsRow.implicitHeight + 2 * ExoTheme.spacingMd
-                        color: ExoTheme.surface
-                        border.width: 1
-                        border.color: ExoTheme.line
-                        radius: ExoTheme.radiusMd
+                    DiagnosticsRowCard {
                         Layout.fillWidth: true
 
-                        RowLayout {
-                            id: logsRow
+                        ColumnLayout {
+                            spacing: 2
+                            Layout.fillWidth: true
 
-                            spacing: ExoTheme.spacingMd
-                            anchors {
-                                fill: parent
-                                topMargin: ExoTheme.spacingMd
-                                bottomMargin: ExoTheme.spacingMd
-                                leftMargin: ExoTheme.spacingLg
-                                rightMargin: ExoTheme.spacingLg
-                            }
-
-                            ColumnLayout {
-                                spacing: 2
+                            Label {
+                                text: qsTr("Application Logs")
+                                textFormat: Text.PlainText
+                                color: ExoTheme.text
                                 Layout.fillWidth: true
-
-                                Label {
-                                    text: qsTr("Application Logs")
-                                    textFormat: Text.PlainText
-                                    color: ExoTheme.text
-                                    Layout.fillWidth: true
-                                    font {
-                                        family: ExoTheme.sansFamily
-                                        pixelSize: ExoTheme.fontBody
-                                        weight: Font.DemiBold
-                                    }
-                                }
-
-                                Label {
-                                    text: qsTr("Need the raw event stream behind these checks? Open the Logs page.")
-                                    textFormat: Text.PlainText
-                                    wrapMode: Text.WordWrap
-                                    color: ExoTheme.textMuted
-                                    Layout.fillWidth: true
-                                    Layout.minimumHeight: 16
-                                    font {
-                                        family: ExoTheme.sansFamily
-                                        pixelSize: ExoTheme.fontCaption
-                                    }
+                                font {
+                                    family: ExoTheme.sansFamily
+                                    pixelSize: ExoTheme.fontBody
+                                    weight: Font.DemiBold
                                 }
                             }
 
-                            ExoButton {
-                                text: qsTr("Open Logs Page")
-                                quiet: true
-                                Layout.alignment: Qt.AlignVCenter
-                                onClicked: root.diagnostics.openLogs()
+                            Label {
+                                text: qsTr("Need the raw event stream behind these checks? Open the Logs page.")
+                                textFormat: Text.PlainText
+                                wrapMode: Text.WordWrap
+                                color: ExoTheme.textMuted
+                                Layout.fillWidth: true
+                                Layout.minimumHeight: 16
+                                font {
+                                    family: ExoTheme.sansFamily
+                                    pixelSize: ExoTheme.fontCaption
+                                }
                             }
+                        }
+
+                        ExoButton {
+                            text: qsTr("Open Logs Page")
+                            quiet: true
+                            Layout.alignment: Qt.AlignVCenter
+                            onClicked: root.diagnostics.openLogs()
                         }
                     }
                 }

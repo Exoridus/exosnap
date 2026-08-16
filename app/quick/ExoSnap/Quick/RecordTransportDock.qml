@@ -79,8 +79,6 @@ Rectangle {
 
     // ── Left: the sources ────────────────────────────────────────────────────
     RowLayout {
-        id: sourceCluster
-
         spacing: root.clusterSpacing
         anchors {
             left: parent.left
@@ -195,8 +193,6 @@ Rectangle {
 
     // ── Right: secondary actions, then the one recommended action ────────────
     RowLayout {
-        id: actionCluster
-
         spacing: root.clusterSpacing
         anchors {
             right: parent.right
