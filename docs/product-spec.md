@@ -831,11 +831,16 @@ falls back to its raw number rather than borrowing another display's.
   capture *can* record exclusive fullscreen.
 - **The honest rule:** to record an exclusive-fullscreen game, capture the **monitor**; to capture a
   **window** directly, run the game in borderless / windowed fullscreen. ExoSnap detects an
-  FSE window target pre-flight (`rec.capture.exclusive_window`, §11) and offers a one-confirm "Record
-  the monitor instead" fix; a window that switches to FSE mid-recording is reported (a standing
-  notice) rather than silently frozen. A game that changes the desktop resolution while recording a
-  monitor ends the recording cleanly with an explicit size-change error (the footage up to that point
-  stays valid).
+  FSE window target **pre-flight** (`rec.capture.exclusive_window`, §11): a proven-black window is a
+  Blocker and stops the start, and the check offers a one-confirm "Record the monitor instead" fix.
+  A game that changes the desktop resolution while recording a monitor ends the recording cleanly with
+  an explicit size-change error (the footage up to that point stays valid).
+
+  **Not covered: a window that switches into FSE *during* a recording.** WGC then stops delivering and
+  the CFR encoder duplicates the last frame, so the recording keeps running and the video is frozen —
+  and ExoSnap says nothing. Pre-flight detection does not help, because the window was capturable when
+  the session started. This is a known limitation of v0.9, not a behaviour; it is stated here rather
+  than promised as a mid-session notice ExoSnap does not raise.
 
 *(Cells requiring a real legacy-FSE title are verified live before being promised as behavior; the
 matrix above reflects the shipped detection + monitor path.)*
@@ -1160,6 +1165,12 @@ or duration readout above the strip:
   can hold has landed — no spinner, and no placeholder/skeleton tiles in the meantime. Tiles appear
   as they finish decoding; a position whose frame is
   not (yet) available leaves the row empty there rather than showing a placeholder.
+  When the clip carries **nothing decodable at all** — it cannot be opened, it has no video stream, or
+  a decode pass finished having produced no frame — the hint says **"Preview unavailable"** instead,
+  in the same quiet rung and the same place, and stays there. That is a terminal statement, not a
+  spinner: no tile is coming. The strip is the only thing affected — trim, playback, markers and
+  export all keep working on a clip whose thumbnails cannot be produced. Cancelling a run (resizing
+  the window, switching clips, closing Edit) is never treated as a failure.
 - **Trim handles.** Draggable in/out handles sit at the start and end of the timeline; the
   trimmed-away ranges are dimmed. The handles constrain each other (they can never cross), and on
   release the cut point snaps to the nearest keyframe at or before the requested time and, within
@@ -1243,7 +1254,11 @@ release (0.11 per ADR 0022).
   panel in the app header**. **The hub is the record: every notification lands there**, persists until
   dismissed, and keeps its action (recover, undo, show in folder, …). The **system-tray icon
   additionally shows an unread badge** for the same items. The "Show notifications" setting gates only
-  the toasts — the hub records regardless.
+  the toasts — the hub records regardless. **A hub entry carries its severity as a glyph and a word,
+  not only as a colour**: the same four severity glyphs the readiness tiles, the issue cards and the
+  inline notices use, and an accessible name that starts with the severity ("Warning. Storage running
+  low."). Colour alone would say nothing to a user who cannot separate those hues and nothing at all
+  to a screen reader.
 - **The bell's unread dot** carries urgency, not a count. It appears whenever anything is unread and
   takes its colour from the **worst** unread entry — **mint** when nothing unread is more than a
   notice, **amber** when at least one is a warning (frames dropped, a source degraded, a dead hotkey,

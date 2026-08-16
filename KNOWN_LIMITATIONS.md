@@ -343,11 +343,15 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
   cannot capture an FSE *window* in isolation (that would need hook/injection capture,
   which is deliberately rejected — see the privacy/anti-cheat posture). Record the
   **monitor** instead: monitor capture (DXGI Output Duplication) can capture exclusive
-  fullscreen. ExoSnap now *detects* this pre-flight (the `rec.capture.exclusive_window`
-  check) and offers a one-confirm "Record the monitor instead" fix; a window that goes
-  FSE mid-recording is reported rather than silently frozen. Most modern "fullscreen"
-  settings run as borderless/flip-model (FSO) and record fine on either path; the
-  remaining hardening of this matrix is tracked for `0.10.0`.
+  fullscreen. ExoSnap *detects* this **pre-flight** (the `rec.capture.exclusive_window`
+  check): a proven-black window blocks the start, and the check offers a one-confirm
+  "Record the monitor instead" fix. **A window that switches into FSE *during* a
+  recording is NOT reported** — WGC stops delivering, the CFR encoder duplicates the
+  last frame, and the session keeps running over a frozen picture. Pre-flight detection
+  cannot help there, because the window was capturable when the session started. Most
+  modern "fullscreen" settings run as borderless/flip-model (FSO) and record fine on
+  either path; the mid-session case and the remaining hardening of this matrix are
+  tracked for `0.10.0`.
 - Tray notifications may be suppressed by Windows Focus Assist / Do Not Disturb mode.
 
 ## Capture previews
