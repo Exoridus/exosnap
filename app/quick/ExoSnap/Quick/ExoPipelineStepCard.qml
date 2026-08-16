@@ -27,6 +27,9 @@ Rectangle {
 
     Accessible.role: Accessible.StaticText
     Accessible.name: root.title + ": " + root.value
+    // QCR-509. What the stage measured and why it is coloured the way it is
+    // was hover-only.
+    Accessible.description: root.tip
 
     ToolTip.text: root.tip
     ToolTip.visible: root.tip !== "" && cardHover.hovered

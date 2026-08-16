@@ -74,7 +74,7 @@ Rectangle {
             textFormat: Text.PlainText
             elide: Text.ElideRight
             horizontalAlignment: root.stacked ? Text.AlignLeft : Text.AlignRight
-            color: root.settings.presetDirty ? ExoTheme.warning : ExoTheme.textMuted
+            color: root.settings.presetDirty ? ExoTheme.warningText : ExoTheme.textMuted
             Layout.fillWidth: true
             font {
                 family: ExoTheme.sansFamily
@@ -101,7 +101,7 @@ Rectangle {
         ExoMenuItem {
             text: qsTr("Delete")
             enabled: !root.settings.presetBuiltIn && !root.settings.controlsLocked
-            onTriggered: root.settings.deletePreset()
+            onTriggered: deleteDialog.open()
         }
 
         MenuSeparator {}
@@ -116,6 +116,33 @@ Rectangle {
             enabled: !root.settings.controlsLocked
             onTriggered: presetFileDialog.openFor(false)
         }
+    }
+
+    // QCR-505. "Delete" sat one click away in the overflow menu and destroyed a
+    // custom preset outright — the same distance as "Rename…", which opens a
+    // dialog, and directly under "Reset changes", which is recoverable.
+    //
+    // Confirmation rather than the backlog's preferred Undo, and the reason is
+    // the store rather than a preference: `DeleteSelected()` is a registry
+    // mutation followed by a persist and a re-apply of whatever preset the
+    // selection falls back to. Restoring it would mean a new registry path
+    // (re-insert AT its old index, under its old id, without disturbing the
+    // selection that moved), a persisted undo window, and a notification action
+    // that has to stay valid across a preset switch and an application quit.
+    // That is the "new persistence/history architecture" the brief says not to
+    // build for one menu item — and it would still leave the user's own
+    // recovery window at whatever the toast dwell happens to be.
+    //
+    // The existing shared dialog is keyboard-operable and defaults to Cancel,
+    // so a stray Return cannot delete anything.
+    ExoConfirmDialog {
+        id: deleteDialog
+
+        title: qsTr("Delete preset")
+        bodyText: qsTr("“%1” will be removed. Recording settings switch to the preset that takes its place.")
+                  .arg(root.settings.selectedPresetName)
+        proceedText: qsTr("Delete preset")
+        onAccepted: root.settings.deletePreset()
     }
 
     SettingsPresetNameDialog {

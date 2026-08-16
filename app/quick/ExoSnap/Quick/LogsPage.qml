@@ -104,6 +104,7 @@ Item {
                 ExoSegmentedControl {
                     options: [qsTr("All"), qsTr("Info"), qsTr("Issues")]
                     currentIndex: root.logs.severityFilter
+                    Accessible.name: qsTr("Severity filter")
                     onSelected: function (index) {
                         root.logs.severityFilter = index;
                     }
@@ -188,12 +189,26 @@ Item {
                 implicitHeight: 16
                 implicitWidth: folderLabel.implicitWidth
                 hoverEnabled: true
+                // QCR-503: a bare AbstractButton takes no focus, so this link
+                // was mouse-only. QCR-509: the tooltip is the log FILE path
+                // while the label shows the FOLDER, so it is the only place
+                // that fact appears — it now rides on the accessible
+                // description and appears on keyboard focus as well as hover.
+                focusPolicy: Qt.StrongFocus
                 Accessible.role: Accessible.Link
                 Accessible.name: qsTr("Open the log folder")
+                Accessible.description: root.logs.logFilePath
                 ToolTip.text: root.logs.logFilePath
-                ToolTip.visible: folderLink.hovered && root.logs.logFilePath !== ""
+                ToolTip.visible: (folderLink.hovered || folderLink.visualFocus) && root.logs.logFilePath !== ""
                 ToolTip.delay: 400
                 onClicked: root.logs.openLogFolder()
+
+                background: Rectangle {
+                    color: "transparent"
+                    border.width: folderLink.visualFocus ? ExoTheme.focusRingWidth : 0
+                    border.color: ExoTheme.text
+                    radius: ExoTheme.radiusXs
+                }
 
                 contentItem: Label {
                     id: folderLabel
