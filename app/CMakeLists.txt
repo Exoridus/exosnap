@@ -983,6 +983,20 @@ exosnap_add_gtest(
     LIBRARIES recorder_core)
 target_include_directories(capture_hub_registry_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
+# The layer above the registry: the hub services' command channel and lease
+# gate. Both hub services are thin drivers of these two, so the adversarial
+# LeaseRequest/Subscribe/Unsubscribe interleavings are pinned once for both.
+exosnap_add_gtest(
+    NAME capture_hub_command_tests
+    TEST_PREFIX capture.
+    SOURCES
+        tests/test_capture_hub_commands.cpp
+        services/CaptureHubGate.cpp
+        services/CaptureHubRegistry.cpp
+        services/CaptureSourceHub.cpp
+    LIBRARIES recorder_core)
+target_include_directories(capture_hub_command_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
 # Which mip a tile is read back from. Pure arithmetic; no D3D, no Qt.
 exosnap_add_gtest(
     NAME thumbnail_mip_tests

@@ -276,6 +276,9 @@ target_sources(exosnap
         ${PROJECT_SOURCE_DIR}/app/diagnostics/ZipWriter.cpp
         ${PROJECT_SOURCE_DIR}/app/services/SupportBundleService.cpp
         ${PROJECT_SOURCE_DIR}/app/services/SupportBundleService.h
+        ${PROJECT_SOURCE_DIR}/app/services/CaptureHubCommandQueue.h
+        ${PROJECT_SOURCE_DIR}/app/services/CaptureHubGate.cpp
+        ${PROJECT_SOURCE_DIR}/app/services/CaptureHubGate.h
         ${PROJECT_SOURCE_DIR}/app/services/CaptureHubRegistry.cpp
         ${PROJECT_SOURCE_DIR}/app/services/CaptureHubRegistry.h
         ${PROJECT_SOURCE_DIR}/app/services/CaptureSourceHub.cpp
