@@ -2,6 +2,7 @@
 #include "QuickLiveVerifySource.h"
 #include "QuickWindowGeometry.h"
 #if defined(EXOSNAP_ENABLE_AUTO_RECORD_HARNESS)
+#include "NotificationsAdapter.h"
 #include "PseudoLocalization.h"
 #include "QuickAutoEditHarness.h"
 #include "QuickAutoRecordHarness.h"
@@ -519,6 +520,28 @@ int main(int argc, char* argv[]) {
                 shell->setProperty("currentPage", page_index);
             }
         }
+    }
+
+    // Harness-only: opens one of the popups that is now built on first use
+    // instead of at page load (QCR-601, QCR-610), so a --visual-test capture can
+    // photograph it. Without this the two surfaces would only be reachable by
+    // driving the running application, which is exactly what the harness exists
+    // to avoid. Queued, so the shell has finished its first layout — the picker
+    // measures itself against the overlay it centres in.
+    const QString visual_popup = optionValue(arguments, QStringLiteral("--visual-popup"));
+    if (!visual_popup.isEmpty()) {
+        QTimer::singleShot(0, &app, [root_window, &quick_application, visual_popup]() {
+            if (visual_popup == QLatin1String("source-picker")) {
+                if (auto* page = root_window != nullptr
+                                     ? root_window->findChild<QObject*>(QStringLiteral("quickRecordPage"))
+                                     : nullptr) {
+                    QMetaObject::invokeMethod(page, "openSourcePicker");
+                }
+            } else if (visual_popup == QLatin1String("notification-hub")) {
+                if (auto* notifications = quick_application.notificationsAdapter())
+                    notifications->openHub();
+            }
+        });
     }
 
     // Harness-only: renders a --visual-test capture in the named appearance and

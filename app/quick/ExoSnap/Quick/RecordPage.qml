@@ -253,7 +253,7 @@ Item {
                             compact: true
                             enabled: root.recordViewModel.canSelectSource
                             Layout.alignment: Qt.AlignVCenter
-                            onClicked: sourcePicker.open()
+                            onClicked: root.openSourcePicker()
                         }
                     }
 
@@ -578,31 +578,39 @@ Item {
                         }
                     }
 
-                    PreviewMetricsOverlay {
-                        expanded: root.showMetricsOverlay
-                        frameReady: root.previewAdapter.frameReady
-                        presentationRate: root.previewAdapter.presentationRate
-                        sourceDeliveryRate: root.previewAdapter.sourceDeliveryRate
-                        frameTimeP95Ms: root.previewAdapter.frameTimeP95Ms
-                        frameTimeP99Ms: root.previewAdapter.frameTimeP99Ms
-                        // Fixed-dark surface, fixed-dark ink: `surfaceColor`
-                        // is a literal near-black in both appearances, so the
-                        // three colours over it resolve against the Dark
-                        // appearance rather than the application's.
-                        accentColor: ExoTheme.overlayAccent
-                        surfaceColor: "#E6151517"
-                        textColor: ExoTheme.overlayInk
-                        secondaryTextColor: ExoTheme.overlayInkSecondary
-                        sansFamily: ExoTheme.sansFamily
-                        monoFamily: ExoTheme.monoFamily
-                        visible: root.benchmarkInteractionActive
-                        onToggled: expanded => root.showMetricsOverlay = expanded
+                    // Harness surface, so it is not built in an ordinary run.
+                    // `visible: false` was not enough: an instantiated Item
+                    // evaluates its bindings regardless, so five preview-metrics
+                    // properties stayed bound to an adapter that republishes them
+                    // four times a second — for a panel nobody can see.
+                    Loader {
+                        active: root.benchmarkInteractionActive
                         anchors {
                             fill: parent
                             topMargin: ExoTheme.spacingLg
                             rightMargin: ExoTheme.spacingLg
                             bottomMargin: ExoTheme.spacingLg
                             leftMargin: ExoTheme.spacingLg
+                        }
+
+                        sourceComponent: PreviewMetricsOverlay {
+                            expanded: root.showMetricsOverlay
+                            frameReady: root.previewAdapter.frameReady
+                            presentationRate: root.previewAdapter.presentationRate
+                            sourceDeliveryRate: root.previewAdapter.sourceDeliveryRate
+                            frameTimeP95Ms: root.previewAdapter.frameTimeP95Ms
+                            frameTimeP99Ms: root.previewAdapter.frameTimeP99Ms
+                            // Fixed-dark surface, fixed-dark ink: `surfaceColor`
+                            // is a literal near-black in both appearances, so the
+                            // three colours over it resolve against the Dark
+                            // appearance rather than the application's.
+                            accentColor: ExoTheme.overlayAccent
+                            surfaceColor: "#E6151517"
+                            textColor: ExoTheme.overlayInk
+                            secondaryTextColor: ExoTheme.overlayInkSecondary
+                            sansFamily: ExoTheme.sansFamily
+                            monoFamily: ExoTheme.monoFamily
+                            onToggled: expanded => root.showMetricsOverlay = expanded
                         }
                     }
 
@@ -671,8 +679,36 @@ Item {
         }
     }
 
-    RecordSourcePicker {
-        id: sourcePicker
-        recordViewModel: root.recordViewModel
+    // Built on first open, not at page load. A Popup constructs its contentItem
+    // the moment the Popup itself is constructed — opening it later is only a
+    // visibility change — so the whole picker, including the window list and its
+    // delegates, used to be built while the Record page was being laid out. That
+    // was a measured ~280-293 ms synchronous GUI-thread stall in all three
+    // profiler traces, and in the auto-record trace it landed at t = 20.9 s,
+    // i.e. DURING a running recording, because a targetOptionsChanged re-ran the
+    // binding. The Loader moves the whole cost behind the one gesture that needs
+    // it. Same idiom as AppShell's four overlay Loaders.
+    //
+    // Resident once loaded: the picker's own state is only the selection, which
+    // lives in the view model, but rebuilding it on every open would pay the
+    // construction cost again for no gain.
+    Loader {
+        id: sourcePickerLoader
+
+        active: false
+
+        sourceComponent: RecordSourcePicker {
+            recordViewModel: root.recordViewModel
+        }
+    }
+
+    function openSourcePicker(): void {
+        sourcePickerLoader.active = true;
+        // Loader is synchronous by default, so the item exists on the next line.
+        // Cast because Loader.item is typed QObject — without it qmllint cannot
+        // see Popup::open() and reports missing-property.
+        const picker = sourcePickerLoader.item as RecordSourcePicker;
+        if (picker)
+            picker.open();
     }
 }

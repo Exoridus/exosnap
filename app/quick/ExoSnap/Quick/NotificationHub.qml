@@ -21,12 +21,29 @@ import QtQuick.Layouts
 // whether the hub is open — a click on the bell, an Escape key, or a
 // click-outside must all agree on that one boolean.
 //
-// The entry list is a Repeater over a ColumnLayout, not a ListView: the hub
-// is a handful to a few dozen entries, never the thousands ExoLogView's
-// ListView exists to virtualise, and the same Repeater-over-a-model pattern
-// already covers DiagnosticsPage's issue cards. It also avoids nesting one
-// Flickable (ListView) inside another (ExoScrollView), which has no
-// precedent anywhere else in this frontend.
+// The entry list is a ListView, and the hub scroller IS that ListView.
+//
+// It used to be a Repeater inside an ExoScrollView, on the argument that the hub
+// holds a handful to a few dozen entries. That argument does not survive the
+// model: NotificationEntryModel::recordEvent() collapses only five event types
+// onto a stable key and gives everything else its own permanent `evt-<sequence>`
+// row, with no cap and no eviction — so `Saved`, `FramesDropped`,
+// `CaptureActionFailed` and friends accumulate for the whole process lifetime,
+// and `CaptureActionFailed` is input-driven, so the growth rate is not bounded by
+// how much the user records. A Repeater instantiated every one of those the
+// moment the hub opened: a Rectangle, a ColumnLayout, three wrapping Labels, an
+// ExoGlyph, a HoverHandler, a TapHandler and a nested Repeater, per entry.
+//
+// The original objection — do not nest a Flickable inside another Flickable,
+// which has no precedent in this frontend — is respected rather than overruled:
+// the ExoScrollView is gone, so there is exactly one Flickable here, the same
+// shape ExoLogView uses for its own bounded history.
+//
+// RETENTION IS DELIBERATELY UNCHANGED. `docs/product-spec.md` §9 says the hub is
+// the record and that entries persist until dismissed; capping the model would
+// be a product decision about that sentence, not a performance fix, and it is
+// tracked as one. Virtualisation needs no such decision: the model may hold a
+// thousand rows and only the visible ones cost a delegate.
 Popup {
     id: root
 
@@ -210,179 +227,176 @@ Popup {
             }
         }
 
-        ExoScrollView {
-            id: scroll
+        ListView {
+            id: entryList
+
+            objectName: "hubEntryList"
 
             visible: root.notifications.hasEntries
-            contentWidth: availableWidth
             clip: true
+            model: root.notifications.model
+            reuseItems: true
+            boundsBehavior: Flickable.StopAtBounds
             Layout.fillWidth: true
             Layout.fillHeight: true
 
             Accessible.role: Accessible.List
             Accessible.name: qsTr("Notification history")
 
-            ColumnLayout {
-                width: scroll.availableWidth
-                spacing: 0
+            ScrollBar.vertical: ExoScrollBar {}
 
-                Repeater {
-                    model: root.notifications.model
+            delegate: Rectangle {
+                id: entryDelegate
 
-                    Rectangle {
-                        id: entryDelegate
+                required property int index
+                required property string title
+                required property string body
+                required property string tone
+                required property string timestampText
+                required property bool unread
+                required property var actions
 
-                        required property int index
-                        required property string title
-                        required property string body
-                        required property string tone
-                        required property string timestampText
-                        required property bool unread
-                        required property var actions
+                readonly property color toneColor: entryDelegate.tone === "success" ? ExoTheme.success
+                                                  : entryDelegate.tone === "caution" ? ExoTheme.warning
+                                                  : entryDelegate.tone === "error" ? ExoTheme.error
+                                                  : ExoTheme.accent
 
-                        readonly property color toneColor: entryDelegate.tone === "success" ? ExoTheme.success
-                                                          : entryDelegate.tone === "caution" ? ExoTheme.warning
-                                                          : entryDelegate.tone === "error" ? ExoTheme.error
-                                                          : ExoTheme.accent
+                width: ListView.view.width
+                height: entryColumn.implicitHeight + 2 * ExoTheme.spacingMd
+                color: entryDelegate.unread ? ExoTheme.surfaceHover : "transparent"
 
+                Rectangle {
+                    anchors {
+                        top: parent.top
+                        left: parent.left
+                        right: parent.right
+                    }
+                    height: 1
+                    color: ExoTheme.line
+                    visible: entryDelegate.index > 0
+                }
+
+                Rectangle {
+                    width: 8
+                    height: 8
+                    radius: 4
+                    color: entryDelegate.toneColor
+                    anchors {
+                        left: parent.left
+                        leftMargin: ExoTheme.spacingLg
+                        top: parent.top
+                        topMargin: ExoTheme.spacingMd + 3
+                    }
+                }
+
+                ColumnLayout {
+                    id: entryColumn
+
+                    spacing: ExoTheme.spacingXs
+                    anchors {
+                        left: parent.left
+                        right: parent.right
+                        top: parent.top
+                        leftMargin: ExoTheme.spacingLg + 8 + ExoTheme.spacingSm
+                        rightMargin: ExoTheme.spacingLg
+                        topMargin: ExoTheme.spacingMd
+                        bottomMargin: ExoTheme.spacingMd
+                    }
+
+                    RowLayout {
                         Layout.fillWidth: true
-                        implicitHeight: entryColumn.implicitHeight + 2 * ExoTheme.spacingMd
-                        color: entryDelegate.unread ? ExoTheme.surfaceHover : "transparent"
+                        spacing: ExoTheme.spacingSm
 
-                        Rectangle {
-                            anchors {
-                                top: parent.top
-                                left: parent.left
-                                right: parent.right
-                            }
-                            height: 1
-                            color: ExoTheme.line
-                            visible: entryDelegate.index > 0
-                        }
-
-                        Rectangle {
-                            width: 8
-                            height: 8
-                            radius: 4
-                            color: entryDelegate.toneColor
-                            anchors {
-                                left: parent.left
-                                leftMargin: ExoTheme.spacingLg
-                                top: parent.top
-                                topMargin: ExoTheme.spacingMd + 3
+                        Label {
+                            text: entryDelegate.title
+                            textFormat: Text.PlainText
+                            wrapMode: Text.WordWrap
+                            color: ExoTheme.text
+                            Layout.fillWidth: true
+                            font {
+                                family: ExoTheme.sansFamily
+                                pixelSize: ExoTheme.fontSecondary
+                                weight: entryDelegate.unread ? Font.DemiBold : Font.Medium
                             }
                         }
 
-                        ColumnLayout {
-                            id: entryColumn
+                        Label {
+                            text: entryDelegate.timestampText
+                            textFormat: Text.PlainText
+                            color: ExoTheme.textDim
+                            font {
+                                family: ExoTheme.sansFamily
+                                pixelSize: ExoTheme.fontCaption
+                            }
+                        }
 
-                            spacing: ExoTheme.spacingXs
-                            anchors {
-                                left: parent.left
-                                right: parent.right
-                                top: parent.top
-                                leftMargin: ExoTheme.spacingLg + 8 + ExoTheme.spacingSm
-                                rightMargin: ExoTheme.spacingLg
-                                topMargin: ExoTheme.spacingMd
-                                bottomMargin: ExoTheme.spacingMd
+                        // Same as the two header actions, plus the hit
+                        // target QCR-506 asks of a control this small:
+                        // the glyph stays 12 px, the button around it
+                        // is 24.
+                        AbstractButton {
+                            id: dismissButton
+
+                            hoverEnabled: true
+                            focusPolicy: Qt.StrongFocus
+                            Layout.preferredWidth: 24
+                            Layout.preferredHeight: 24
+                            Accessible.role: Accessible.Button
+                            Accessible.name: qsTr("Dismiss")
+                            onClicked: root.notifications.dismissEntry(entryDelegate.index)
+
+                            background: Rectangle {
+                                color: "transparent"
+                                border.width: dismissButton.visualFocus ? ExoTheme.focusRingWidth : 0
+                                border.color: ExoTheme.text
+                                radius: ExoTheme.radiusXs
                             }
 
-                            RowLayout {
-                                Layout.fillWidth: true
-                                spacing: ExoTheme.spacingSm
-
-                                Label {
-                                    text: entryDelegate.title
-                                    textFormat: Text.PlainText
-                                    wrapMode: Text.WordWrap
-                                    color: ExoTheme.text
-                                    Layout.fillWidth: true
-                                    font {
-                                        family: ExoTheme.sansFamily
-                                        pixelSize: ExoTheme.fontSecondary
-                                        weight: entryDelegate.unread ? Font.DemiBold : Font.Medium
-                                    }
-                                }
-
-                                Label {
-                                    text: entryDelegate.timestampText
-                                    textFormat: Text.PlainText
-                                    color: ExoTheme.textDim
-                                    font {
-                                        family: ExoTheme.sansFamily
-                                        pixelSize: ExoTheme.fontCaption
-                                    }
-                                }
-
-                                // Same as the two header actions, plus the hit
-                                // target QCR-506 asks of a control this small:
-                                // the glyph stays 12 px, the button around it
-                                // is 24.
-                                AbstractButton {
-                                    id: dismissButton
-
-                                    hoverEnabled: true
-                                    focusPolicy: Qt.StrongFocus
-                                    Layout.preferredWidth: 24
-                                    Layout.preferredHeight: 24
-                                    Accessible.role: Accessible.Button
-                                    Accessible.name: qsTr("Dismiss")
-                                    onClicked: root.notifications.dismissEntry(entryDelegate.index)
-
-                                    background: Rectangle {
-                                        color: "transparent"
-                                        border.width: dismissButton.visualFocus ? ExoTheme.focusRingWidth : 0
-                                        border.color: ExoTheme.text
-                                        radius: ExoTheme.radiusXs
-                                    }
-
-                                    ExoGlyph {
-                                        anchors.centerIn: parent
-                                        kind: ExoGlyph.Close
-                                        color: dismissButton.hovered ? ExoTheme.text : ExoTheme.textMuted
-                                        width: 12
-                                        height: 12
-                                    }
-                                }
+                            ExoGlyph {
+                                anchors.centerIn: parent
+                                kind: ExoGlyph.Close
+                                color: dismissButton.hovered ? ExoTheme.text : ExoTheme.textMuted
+                                width: 12
+                                height: 12
                             }
+                        }
+                    }
 
-                            Label {
-                                text: entryDelegate.body
-                                textFormat: Text.PlainText
-                                wrapMode: Text.WordWrap
-                                visible: entryDelegate.body !== ""
-                                color: ExoTheme.textSecondary
-                                Layout.fillWidth: true
-                                font {
-                                    family: ExoTheme.sansFamily
-                                    pixelSize: ExoTheme.fontCaption
-                                }
+                    Label {
+                        text: entryDelegate.body
+                        textFormat: Text.PlainText
+                        wrapMode: Text.WordWrap
+                        visible: entryDelegate.body !== ""
+                        color: ExoTheme.textSecondary
+                        Layout.fillWidth: true
+                        font {
+                            family: ExoTheme.sansFamily
+                            pixelSize: ExoTheme.fontCaption
+                        }
+                    }
+
+                    RowLayout {
+                        visible: entryDelegate.actions.length > 0
+                        Layout.fillWidth: true
+                        Layout.topMargin: ExoTheme.spacingXs
+                        spacing: ExoTheme.spacingSm
+
+                        Repeater {
+                            model: entryDelegate.actions
+
+                            ExoButton {
+                                id: actionButton
+
+                                required property var modelData
+
+                                text: actionButton.modelData.label
+                                quiet: true
+                                onClicked: root.notifications.triggerAction(entryDelegate.index, actionButton.modelData.action)
                             }
+                        }
 
-                            RowLayout {
-                                visible: entryDelegate.actions.length > 0
-                                Layout.fillWidth: true
-                                Layout.topMargin: ExoTheme.spacingXs
-                                spacing: ExoTheme.spacingSm
-
-                                Repeater {
-                                    model: entryDelegate.actions
-
-                                    ExoButton {
-                                        id: actionButton
-
-                                        required property var modelData
-
-                                        text: actionButton.modelData.label
-                                        quiet: true
-                                        onClicked: root.notifications.triggerAction(entryDelegate.index, actionButton.modelData.action)
-                                    }
-                                }
-
-                                Item {
-                                    Layout.fillWidth: true
-                                }
-                            }
+                        Item {
+                            Layout.fillWidth: true
                         }
                     }
                 }

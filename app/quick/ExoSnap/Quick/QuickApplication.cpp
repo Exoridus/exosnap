@@ -322,6 +322,17 @@ void QuickApplication::refreshCrashSessionContext() {
 }
 
 void QuickApplication::initializeRecordWorkflow() {
+    // 150 ms: long enough that a page switch has painted and a Record → Settings
+    // → Record detour coalesces into one start, short enough that a user who
+    // lands on Record and looks straight at the level bars sees them fill within
+    // the same glance. Restarted (not merely armed) on every request, so the
+    // interval measures the time since the LAST decision, not the first.
+    meter_service_start_timer_.setSingleShot(true);
+    meter_service_start_timer_.setInterval(150);
+    meter_service_start_timer_.setTimerType(Qt::CoarseTimer);
+    QObject::connect(&meter_service_start_timer_, &QTimer::timeout, &record_view_model_adapter_,
+                     [this]() { startMeterServices(); });
+
     meter_update_timer_.setSingleShot(true);
     meter_update_timer_.setInterval(33);
     QObject::connect(&meter_update_timer_, &QTimer::timeout, &record_view_model_adapter_, [this]() { updateMeters(); });
@@ -517,6 +528,7 @@ void QuickApplication::initializeRecordWorkflow() {
         [this]() { return CaptureTargetSnapshot{recording_coordinator_->EnumerateTargets()}; });
     capture_target_notifier_.start();
     record_view_model_.targets = capture_target_notifier_.currentSnapshot().targets;
+    ++record_view_model_.targets_revision;
     record_view_model_.target_display_names.reserve(record_view_model_.targets.size());
     for (const auto& target : record_view_model_.targets)
         record_view_model_.target_display_names.push_back(
@@ -884,6 +896,7 @@ void QuickApplication::refreshCaptureTargets(const CaptureTargetSnapshot& snapsh
         previous = record_view_model_.targets[static_cast<size_t>(record_view_model_.selected_target_index)];
     }
     record_view_model_.targets = snapshot.targets;
+    ++record_view_model_.targets_revision;
     record_view_model_.target_display_names.clear();
     record_view_model_.target_display_names.reserve(record_view_model_.targets.size());
     for (const auto& target : record_view_model_.targets) {
@@ -1147,18 +1160,44 @@ void QuickApplication::scheduleMeterUpdate() {
         meter_update_timer_.start();
 }
 
+// Stops happen now, starts happen after a short debounce.
+//
+// The asymmetry is deliberate. A stop is a statement about what must NOT be
+// running — a session is beginning, the page was left — and delaying it would
+// leave a preflight meter holding an endpoint into a state that says it does
+// not. A start is decoration: three level bars a user is not yet looking at.
+//
+// The debounce is what makes a Record → Settings → Record detour cost one start
+// instead of a start, a stop and a start; the profiler measured that round trip
+// at ~43 ms of GUI-thread time per return. Together with
+// MeterStartMode::Deferred (the endpoint open no longer blocks the caller) the
+// page-activation binding does no WASAPI work at all.
 void QuickApplication::updateMeterServices() {
     const bool visible = record_view_model_adapter_.active();
     const bool session = record_view_model_.state == UiRecordingState::Recording ||
                          record_view_model_.state == UiRecordingState::Paused ||
                          record_view_model_.state == UiRecordingState::Stopping;
     if (!visible || session) {
+        meter_service_start_timer_.stop();
         recording_coordinator_->StopSysMeter();
         recording_coordinator_->StopAppMeter();
         recording_coordinator_->StopMicMeter();
         recording_coordinator_->SetWebcamPreviewActive(false);
         return;
     }
+    meter_service_start_timer_.start();
+}
+
+void QuickApplication::startMeterServices() {
+    const bool visible = record_view_model_adapter_.active();
+    const bool session = record_view_model_.state == UiRecordingState::Recording ||
+                         record_view_model_.state == UiRecordingState::Paused ||
+                         record_view_model_.state == UiRecordingState::Stopping;
+    // The state can have moved on inside the debounce window through a path that
+    // does not call updateMeterServices() at all, so the condition is re-read
+    // rather than assumed from whoever scheduled this.
+    if (!visible || session)
+        return;
     recording_coordinator_->StartSysMeter();
     if (microphone_available_)
         recording_coordinator_->StartMicMeter(record_view_model_.audio_ui_state.selected_mic_device_id,

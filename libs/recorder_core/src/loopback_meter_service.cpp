@@ -25,7 +25,8 @@ LoopbackMeterService::~LoopbackMeterService() {
     Stop();
 }
 
-bool LoopbackMeterService::Start(uint32_t target_pid, RmsCallback callback, std::string& out_error) {
+bool LoopbackMeterService::Start(uint32_t target_pid, RmsCallback callback, std::string& out_error,
+                                 MeterStartMode mode) {
     out_error.clear();
 
     if (!callback) {
@@ -59,6 +60,14 @@ bool LoopbackMeterService::Start(uint32_t target_pid, RmsCallback callback, std:
         callback_ = {};
         out_error = "Failed to start loopback meter worker thread.";
         return false;
+    }
+
+    if (mode == MeterStartMode::Deferred) {
+        // The promise is still fulfilled by the worker; nobody waits on the
+        // future, and a promise-backed future's destructor does not block. A
+        // failed open therefore surfaces as IsRunning() going false, which is
+        // what the next start attempt already tests.
+        return true;
     }
 
     StartResult start_result;

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "meter_start_mode.h"
+
 #include <atomic>
 #include <functional>
 #include <future>
@@ -21,7 +23,10 @@ class LoopbackMeterService {
     LoopbackMeterService(const LoopbackMeterService&) = delete;
     LoopbackMeterService& operator=(const LoopbackMeterService&) = delete;
 
-    bool Start(uint32_t target_pid, RmsCallback callback, std::string& out_error);
+    // With MeterStartMode::Deferred the return value only reports that the worker
+    // thread was launched; see MeterStartMode.
+    bool Start(uint32_t target_pid, RmsCallback callback, std::string& out_error,
+               MeterStartMode mode = MeterStartMode::AwaitOpen);
     void Stop();
     [[nodiscard]] bool IsRunning() const;
 

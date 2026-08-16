@@ -1772,8 +1772,13 @@ bool RecordingCoordinator::StartMicMeter(std::optional<std::string> device_id,
     StopMicMeter();
 
     std::string error;
+    // Deferred: every caller of this is the GUI thread reacting to a page
+    // activation or a device change, and none of them consults the endpoint
+    // verdict — the meter is preflight decoration. A failed open clears
+    // IsRunning(), which the guard above already reads, so the next call retries.
     const bool started = mic_meter_service_->Start(
-        device_id, channel_mode, [this](float rms_linear) { PostMicMeter(rms_linear); }, error);
+        device_id, channel_mode, [this](float rms_linear) { PostMicMeter(rms_linear); }, error,
+        recorder_core::MeterStartMode::Deferred);
     if (!started) {
         mic_meter_config_valid_ = false;
         mic_meter_device_id_.reset();
@@ -1809,7 +1814,8 @@ bool RecordingCoordinator::StartSysMeter() {
         return true;
     }
     std::string error;
-    return sys_meter_service_->Start(0u, [this](float rms_linear) { PostSysMeter(rms_linear); }, error);
+    return sys_meter_service_->Start(
+        0u, [this](float rms_linear) { PostSysMeter(rms_linear); }, error, recorder_core::MeterStartMode::Deferred);
 }
 
 void RecordingCoordinator::StopSysMeter() {
@@ -1833,7 +1839,9 @@ bool RecordingCoordinator::StartAppMeter(uint32_t target_pid) {
         return true;
     }
     std::string error;
-    return app_meter_service_->Start(target_pid, [this](float rms_linear) { PostAppMeter(rms_linear); }, error);
+    return app_meter_service_->Start(
+        target_pid, [this](float rms_linear) { PostAppMeter(rms_linear); }, error,
+        recorder_core::MeterStartMode::Deferred);
 }
 
 void RecordingCoordinator::StopAppMeter() {

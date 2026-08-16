@@ -23,7 +23,7 @@ MicMeterService::~MicMeterService() {
 }
 
 bool MicMeterService::Start(std::optional<std::string> device_id, MicChannelMode channel_mode, RmsCallback callback,
-                            std::string& out_error) {
+                            std::string& out_error, MeterStartMode mode) {
     out_error.clear();
 
     if (!callback) {
@@ -58,6 +58,12 @@ bool MicMeterService::Start(std::optional<std::string> device_id, MicChannelMode
         callback_ = {};
         out_error = "Failed to start mic meter worker thread.";
         return false;
+    }
+
+    if (mode == MeterStartMode::Deferred) {
+        // See LoopbackMeterService::Start — the promise is still fulfilled, the
+        // caller simply does not wait for it.
+        return true;
     }
 
     StartResult start_result;

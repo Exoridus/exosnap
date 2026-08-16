@@ -48,6 +48,35 @@ Item {
     // Record 0, Settings 1, Diagnostics 2, Logs 3, About 4.
     readonly property int stackIndex: root.currentPage
 
+    // Activates the Loader behind the destination being navigated to. Written as
+    // a switch over the same index space rather than as a generated list: the
+    // five destinations are a product decision, not a collection.
+    //
+    // Called from onCurrentPageChanged AND from Component.onCompleted, because a
+    // shell constructed with a non-zero currentPage (the --visual-page harness
+    // sets it after load, but nothing guarantees that ordering) would otherwise
+    // show an empty stack page.
+    function loadDestination(page: int): void {
+        switch (page) {
+        case 1:
+            settingsLoader.active = true;
+            break;
+        case 2:
+            diagnosticsLoader.active = true;
+            break;
+        case 3:
+            logsLoader.active = true;
+            break;
+        case 4:
+            aboutLoader.active = true;
+            break;
+        default:
+            break;
+        }
+    }
+
+    onCurrentPageChanged: root.loadDestination(root.currentPage)
+
     // Every destination, directly. Five words fit the band at the 860 px minimum
     // window, so hiding three of them behind a glyph bought nothing and cost a
     // click plus a menu on the way to Diagnostics — the page a user goes to
@@ -341,11 +370,6 @@ Item {
                     Layout.alignment: Qt.AlignVCenter
                     Layout.minimumWidth: implicitWidth
                     onWidthChanged: Qt.callLater(titleBar.refreshChromeGeometry)
-
-                    NotificationHub {
-                        parent: notificationBell
-                        notifications: root.notifications
-                    }
                 }
 
                 // The three window buttons declare a minimum equal to their own
@@ -394,6 +418,27 @@ Item {
             }
         }
 
+        // ── The five destinations ────────────────────────────────────────────
+        //
+        // Record is eager; the other four are built on their first visit and
+        // then stay resident.
+        //
+        // Before this, all five were direct children of the StackLayout, so a
+        // launch that never left Record still compiled and instantiated
+        // Settings, Diagnostics, Logs and About: 8 700 `Creating` events and all
+        // 134 `Compiling` events happened before the first frame, among them 154
+        // ExoSettingRow and the 64 ComboBox popups of a page the user had not
+        // opened. The cost grew with every settings row added.
+        //
+        // Resident after the first visit rather than unloaded on leave: page
+        // state that is not in an adapter (scroll position, an open disclosure,
+        // a Settings draft) is the user's place in the page, and a stack whose
+        // pages forget where you were is worse than a slower first visit. Memory
+        // is not the constraint here — the eager version held all five for the
+        // whole session and nobody measured a problem.
+        //
+        // The five direct tabs are untouched: this changes WHEN a destination's
+        // content is built, never how many destinations there are.
         StackLayout {
             currentIndex: root.stackIndex
             Layout.fillWidth: true
@@ -408,32 +453,86 @@ Item {
                 Layout.fillHeight: true
             }
 
-            SettingsPage {
-                settings: root.settingsAdapter
+            Loader {
+                id: settingsLoader
+
+                active: false
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+
+                sourceComponent: SettingsPage {
+                    settings: root.settingsAdapter
+                }
             }
 
-            DiagnosticsPage {
-                diagnostics: root.diagnosticsAdapter
-                device: root.deviceAdapter
+            Loader {
+                id: diagnosticsLoader
+
+                active: false
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                onNavigateToLogsRequested: root.currentPage = 3
-                onNavigateToSettingsRequested: root.currentPage = 1
+
+                sourceComponent: DiagnosticsPage {
+                    diagnostics: root.diagnosticsAdapter
+                    device: root.deviceAdapter
+                    onNavigateToLogsRequested: root.currentPage = 3
+                    onNavigateToSettingsRequested: root.currentPage = 1
+                }
             }
 
-            LogsPage {
-                logs: root.logsAdapter
+            Loader {
+                id: logsLoader
+
+                active: false
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+
+                sourceComponent: LogsPage {
+                    logs: root.logsAdapter
+                }
             }
 
-            AboutPage {
-                aboutViewModel: root.aboutViewModel
+            Loader {
+                id: aboutLoader
+
+                active: false
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+
+                sourceComponent: AboutPage {
+                    aboutViewModel: root.aboutViewModel
+                }
             }
+        }
+    }
+
+    // Built on the first time the bell is pressed. A Popup constructs its whole
+    // contentItem with itself, so the hub's header, its empty state and — once
+    // the model has rows — a delegate per notification existed from startup for a
+    // surface most sessions never open. It lives out here rather than inside the
+    // bell because a Loader IS an Item and would take part in the title band's
+    // layout, which a Popup does not; the created hub still parents itself to the
+    // bell, so its anchoring is unchanged.
+    Loader {
+        id: notificationHubLoader
+
+        active: false
+
+        sourceComponent: NotificationHub {
+            parent: notificationBell
+            notifications: root.notifications
+        }
+    }
+
+    Connections {
+        target: root.notifications
+
+        function onHubOpenChanged(): void {
+            // One-way: the hub stays resident after the first open, like the four
+            // destinations. Its own `visible` binding takes over from here — it
+            // is already true by the time this loads, so the first press opens it.
+            if (root.notifications.hubOpen)
+                notificationHubLoader.active = true;
         }
     }
 
@@ -443,7 +542,10 @@ Item {
     // A context handed over before the scene existed (the visual harness seeds one
     // during load) has already fired its signal by the time the Connections below
     // is live, so the initial state is read directly.
-    Component.onCompleted: root.editOverlayOpen = root.editSession.durationMs > 0
+    Component.onCompleted: {
+        root.editOverlayOpen = root.editSession.durationMs > 0;
+        root.loadDestination(root.currentPage);
+    }
 
     Connections {
         target: root.editSession

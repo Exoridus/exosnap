@@ -286,6 +286,10 @@ class QuickApplication {
     void updateMeters();
     void scheduleMeterUpdate();
     void updateMeterServices();
+    // The deferred half of updateMeterServices(): opens the endpoints the current
+    // state wants. Re-checks the stop condition, because it runs one debounce
+    // interval after the decision that scheduled it.
+    void startMeterServices();
     void refreshCaptureTargets(const CaptureTargetSnapshot& snapshot, DiscoveryReason reason);
     void updateOutputTargetContext(const recorder_core::CaptureTarget& target);
     void persistLiveConfig();
@@ -356,6 +360,9 @@ class QuickApplication {
     RecordingCountdownController countdown_;
     QElapsedTimer countdown_clock_;
     QTimer countdown_timer_;
+    // Coalesces meter/webcam-preview STARTS only; stops stay synchronous. See
+    // updateMeterServices().
+    QTimer meter_service_start_timer_;
     QTimer meter_update_timer_;
     QTimer webcam_frame_delivery_timer_;
     QTimer webcam_overlay_persist_timer_;
