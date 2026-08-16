@@ -1033,13 +1033,6 @@ exosnap_add_gtest(
     LIBRARIES recorder_core)
 target_include_directories(capture_hub_command_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
-# Which mip a tile is read back from. Pure arithmetic; no D3D, no Qt.
-exosnap_add_gtest(
-    NAME thumbnail_mip_tests
-    TEST_PREFIX capture.
-    SOURCES tests/test_thumbnail_mip.cpp)
-target_include_directories(thumbnail_mip_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-
 # The sequential "Display N" label shared by picker, Record header and output
 # filename. Pure given the sequence map; no Qt.
 exosnap_add_gtest(

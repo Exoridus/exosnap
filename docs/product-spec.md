@@ -639,13 +639,18 @@ Three capture targets:
 Cursor capture is a toggle (on by default). Single-frame capture (a "capture frame" action) is
 available during recording via an on-screen dock control and a hotkey.
 
-**Source-picker tiles hold their last image.** Each tile in the source picker shows a live thumbnail
-of its display or window, refreshed about once a second while the picker is open. When another
-application takes a source over — dragging the Snipping Tool across the desktop is the everyday case
-— Windows stops producing frames for it. The tile then **freezes on the last image it received** and
-resumes when frames come back. It never goes empty and never goes black. A tile that has *never*
-produced a frame still reports "Preview unavailable", because there is nothing to hold. Closing the
-picker releases every capture it opened.
+**The source picker is a named list, not a thumbnail grid.** "Change source" opens a modal picker
+with two sections: **Displays**, where each display is one row carrying its own
+`Region on <display>` action beside it, and **Application windows**, a scrolling list of the currently
+capturable windows. A source is identified by its name — the display's sequential "Display N" label
+(see below) or the window's title — and picking one selects it and closes the picker. The picker
+opens no capture of its own and therefore holds nothing to release.
+
+The **live** picture of the chosen source is the Record page's own preview, which the picker returns
+to. That is deliberate: a grid of live thumbnails means one capture per visible source, all running
+at once, before the user has decided what to record — and every one of them competing with the
+preview for the same sources. One live preview of the one selected source answers the same question
+for the cost of one capture.
 
 **Record preview box (content-fit).** The Record-page preview box follows the **current source's
 aspect ratio** — width-driven and vertically centered in the available space (height-clamped and
