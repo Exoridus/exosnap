@@ -221,9 +221,11 @@ QuickApplication::~QuickApplication() {
     // and the coordinator is destroyed before record_preview_adapter_ -- so the
     // join has to happen here, not in the adapter's own destructor.
     record_preview_adapter_.waitForPendingReadyFrames();
-    // Order matters: stopping the camera joins the capture thread, and that thread
-    // reads frame_callback_ without a lock. Clearing the callback first would
-    // destroy the closure out from under a live reader.
+    // Stop the camera before dropping the callback. This is no longer a safety
+    // requirement -- WebcamService publishes its registration as an immutable
+    // snapshot, so clearing it can no longer destroy a closure a live reader is
+    // holding -- but it stays the right order: a camera nobody listens to has no
+    // reason to keep running for the rest of teardown.
     recording_coordinator_->SetWebcamPreviewActive(false);
     recording_coordinator_->SetWebcamFrameCallback({});
     if (webcam_overlay_persist_timer_.isActive())

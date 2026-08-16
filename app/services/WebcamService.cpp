@@ -625,20 +625,27 @@ std::vector<WebcamFormat> WebcamService::EnumerateFormats(const std::string& dev
 }
 
 void WebcamService::SetFrameCallback(FrameCallback cb) {
-    frame_callback_ = std::move(cb);
-    receiver_ = nullptr;
-    receiver_bound_ = false;
+    auto delivery = std::make_shared<FrameDelivery>();
+    delivery->callback = std::move(cb);
+    std::lock_guard lk(delivery_mutex_);
+    frame_delivery_ = std::move(delivery);
 }
 
 void WebcamService::SetFrameCallback(QObject* receiver, FrameCallback cb) {
-    frame_callback_ = std::move(cb);
-    receiver_ = receiver;
-    receiver_bound_ = true;
+    auto delivery = std::make_shared<FrameDelivery>();
+    delivery->callback = std::move(cb);
+    delivery->receiver = receiver;
+    delivery->receiver_bound = true;
+    std::lock_guard lk(delivery_mutex_);
+    frame_delivery_ = std::move(delivery);
 }
 
 void WebcamService::SetStatusCallback(QObject* receiver, StatusCallback cb) {
-    status_callback_ = std::move(cb);
-    status_receiver_ = receiver;
+    auto delivery = std::make_shared<StatusDelivery>();
+    delivery->callback = std::move(cb);
+    delivery->receiver = receiver;
+    std::lock_guard lk(delivery_mutex_);
+    status_delivery_ = std::move(delivery);
 }
 
 bool WebcamService::Start(const std::string& device_id, int width, int height, int fps) {
@@ -837,34 +844,58 @@ void WebcamService::StoreFrame(int w, int h, std::vector<uint8_t> bgra) {
 }
 
 void WebcamService::PostFrame(QImage img) {
-    if (!frame_callback_)
-        return;
-    // Scope delivery to the bound receiver so Qt drops the queued frame if the
-    // receiver dies before it is delivered. A receiver that is already gone means
-    // there is nothing to deliver to; fall back to the application only for a
-    // legacy (unbound) registration.
-    QObject* target = QCoreApplication::instance();
-    if (receiver_bound_) {
-        target = receiver_.data();
-        if (target == nullptr)
-            return;
+    // Runs on the MF capture thread. Everything it needs is taken as one
+    // immutable snapshot under the lock; the lock is released before anything
+    // is posted, and no user code ever runs under it.
+    std::shared_ptr<const FrameDelivery> delivery;
+    {
+        std::lock_guard lk(delivery_mutex_);
+        delivery = frame_delivery_;
     }
-    auto cb = frame_callback_;
+    if (!delivery || !delivery->callback)
+        return;
+
+    // The receiver is unconditionally the application object -- a QObject that
+    // outlives every registration -- and never the bound receiver: testing a
+    // QPointer here and posting to what it returned raced the receiver's
+    // destructor, which runs on the GUI thread. The QPointer is read below
+    // instead, on the thread that owns the answer, where it cannot change under
+    // the check. (Same shape as RecordPreviewAdapter's handle sink.)
+    QObject* target = QCoreApplication::instance();
+    if (target == nullptr)
+        return;
     QMetaObject::invokeMethod(
-        target, [cb, img = std::move(img)]() mutable { cb(std::move(img)); }, Qt::QueuedConnection);
+        target,
+        [delivery, img = std::move(img)]() mutable {
+            if (delivery->receiver_bound && delivery->receiver.isNull())
+                return;
+            delivery->callback(std::move(img));
+        },
+        Qt::QueuedConnection);
 }
 
 void WebcamService::PostStatus(bool ok, QString reason) {
-    if (!status_callback_)
+    std::shared_ptr<const StatusDelivery> delivery;
+    {
+        std::lock_guard lk(delivery_mutex_);
+        delivery = status_delivery_;
+    }
+    if (!delivery || !delivery->callback)
         return;
-    // Status delivery is always receiver-scoped: a receiver already gone means
-    // there is nothing to deliver to, so drop the transition.
-    QObject* target = status_receiver_.data();
+
+    QObject* target = QCoreApplication::instance();
     if (target == nullptr)
         return;
-    auto cb = status_callback_;
     QMetaObject::invokeMethod(
-        target, [cb, ok, reason = std::move(reason)]() mutable { cb(ok, std::move(reason)); }, Qt::QueuedConnection);
+        target,
+        [delivery, ok, reason = std::move(reason)]() mutable {
+            // Status delivery is always receiver-scoped: a receiver already gone
+            // means there is nothing to deliver to, so drop the transition.
+            if (delivery->receiver.isNull())
+                return;
+            delivery->callback(ok, std::move(reason));
+        },
+        Qt::QueuedConnection);
 }
 
 } // namespace exosnap

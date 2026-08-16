@@ -82,8 +82,6 @@ class ExoPreviewItem : public QQuickItem {
 
     [[nodiscard]] PreviewMetricsSnapshot metricsSnapshot() const;
     void resetMetrics();
-    void publishRenderStateFromRenderThread(quint64 generation, bool ready, QSize size, QString error);
-    [[nodiscard]] bool renderLoopActive() const noexcept;
 
     // Render-thread transport state. Public only so the private scene-graph
     // node implemented in the .cpp can consume it; this is not a QML API.
@@ -112,6 +110,40 @@ class ExoPreviewItem : public QQuickItem {
         std::atomic<uint32_t> source_dxgi_format{0};
     };
 
+    // Everything the scene-graph node's preprocess() needs from this item,
+    // owned by a shared_ptr the node keeps a reference to (QCR-109).
+    //
+    // Why not the item itself: preprocess() runs on the render thread AFTER the
+    // GUI-thread block of the synchronization stage has been released (Qt Quick
+    // Scene Graph, "Threaded Render Loop": step 7 releases the GUI thread, step
+    // 8 invokes preprocess), and the node returned from updatePaintNode() is not
+    // destroyed with its item — its deletion is deferred to a synchronization
+    // stage, which is exactly why Qt tells implementations to schedule cleanup
+    // with QQuickWindow::scheduleRenderJob(BeforeSynchronizingStage /
+    // AfterSynchronizingStage) rather than deleting directly. So a node can be
+    // in preprocess() while the GUI thread runs ~ExoPreviewItem, and a
+    // QPointer is a GUI-thread guard, not a synchronization primitive: even a
+    // non-null read is only true until the next instruction.
+    //
+    // The link removes the question instead of timing it. The render thread
+    // touches only the atomics it owns for the node's lifetime; `item` is read
+    // on the GUI thread alone, inside the queued publication below.
+    struct RenderLink {
+        Metrics metrics;
+        std::atomic<bool> render_loop_active{false};
+
+        // GUI THREAD ONLY. Cleared by ~ExoPreviewItem before the QObject part of
+        // the item goes away.
+        QPointer<ExoPreviewItem> item;
+
+        // Render thread. Posts the state to the application object — never to
+        // the item — and resolves the item on the GUI thread, where the answer
+        // cannot change under the check. `link` is taken by value so the
+        // publication keeps it alive on its own.
+        static void publishRenderState(std::shared_ptr<RenderLink> link, quint64 generation, bool ready, QSize size,
+                                       QString error);
+    };
+
   signals:
     void previewAdapterChanged();
     void cornerRadiusChanged();
@@ -136,6 +168,13 @@ class ExoPreviewItem : public QQuickItem {
     bool queueRetainedSource();
     void applyRenderState(bool ready, const QSize& size, const QString& error);
     void postRenderState(quint64 generation, bool ready, QSize size, QString error);
+    // The render-thread-owned half of this item's state. Never null.
+    [[nodiscard]] Metrics& metrics() const noexcept {
+        return render_link_->metrics;
+    }
+    [[nodiscard]] std::atomic<bool>& renderLoopFlag() const noexcept {
+        return render_link_->render_loop_active;
+    }
     static void closeHandle(void* handle) noexcept;
     static void* duplicateHandle(void* handle) noexcept;
 
@@ -160,8 +199,8 @@ class ExoPreviewItem : public QQuickItem {
     bool frame_ready_ = false;
     QSize source_size_;
     QString error_text_;
-    std::atomic<bool> render_loop_active_{false};
-    Metrics metrics_;
+    // Outlives this item whenever a scene-graph node still holds it.
+    const std::shared_ptr<RenderLink> render_link_ = std::make_shared<RenderLink>();
 };
 
 } // namespace exosnap::quick

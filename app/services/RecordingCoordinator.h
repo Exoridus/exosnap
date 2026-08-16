@@ -452,7 +452,23 @@ class RecordingCoordinator {
     // later step reads it as "this session is recovery-protected" — cleanup,
     // finalize and removal all key off it, and a phantom id would make the code
     // believe it protected a session it never wrote.
+    //
+    // GUARDED BY segment_remux_mutex_ (QCR-106). That mutex owns the whole
+    // manifest-id handoff between the mux worker thread (OnSegmentCompleted mints
+    // the next segment's entry) and the recording thread (which consumes it after
+    // Record() returns) — pending_segment_manifest_id_ was already documented that
+    // way; this field is the other half of the same transaction and was only
+    // partially locked. Access it through CurrentManifestId()/SetCurrentManifestId()
+    // /TakeCurrentManifestId(), or inside an existing segment_remux_mutex_ block.
     QString current_manifest_id_;
+
+    // Locked accessors for current_manifest_id_. None of them calls the recovery
+    // store: an id is taken under the lock, the store call happens without it.
+    [[nodiscard]] QString CurrentManifestId() const;
+    void SetCurrentManifestId(QString id);
+    // Reads and clears in one critical section, so "this session is
+    // recovery-protected" cannot be observed by two threads at once.
+    [[nodiscard]] QString TakeCurrentManifestId();
 
     RecoveryProtectionLostCallback on_recovery_protection_lost_;
     WindowExclusiveEvidenceProvider window_exclusive_evidence_provider_;
@@ -545,9 +561,13 @@ class RecordingCoordinator {
 
     std::atomic<UiRecordingState> state_{UiRecordingState::LoadingCapabilities};
     std::wstring capability_status_text_;
-    // Written by the preparation worker, read by CurrentOutputPath() on the UI
-    // thread; the mutex prevents a torn read of the std::filesystem::path across
-    // the thread boundary.
+    // Written by the preparation worker; read on the UI thread and on the mux
+    // worker thread. The mutex prevents a torn read of the std::filesystem::path
+    // across those boundaries, so EVERY reader goes through CurrentOutputPath()
+    // (QCR-106 — the marker sidecar path and OnSegmentCompleted used to read the
+    // member directly, which is safe only as long as the engine joins its mux
+    // thread inside Record(); the abandoned-worker path it documents means that
+    // is not always true).
     mutable std::mutex output_path_mutex_;
     std::filesystem::path current_output_path_;
 
@@ -633,6 +653,11 @@ class RecordingCoordinator {
     // Protected by segment_remux_mutex_; appended from OnSegmentCompleted (mux
     // worker thread), reaped opportunistically at each split boundary, and drained
     // from RecordingThreadProc (recording thread) at session end.
+    //
+    // The mutex also owns current_manifest_id_ and pending_segment_manifest_id_:
+    // scheduling a job and handing the next segment's recovery id over are one
+    // transaction between the same two threads, and splitting them across two
+    // locks would let a job be queued against an id nobody owns yet.
     mutable std::mutex segment_remux_mutex_;
     std::vector<std::unique_ptr<SegmentRemuxJob>> segment_remux_jobs_;
     // Latches when a reaped job had failed. Reaping removes the job before the

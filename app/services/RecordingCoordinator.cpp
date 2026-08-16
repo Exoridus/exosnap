@@ -865,18 +865,18 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
         if (webcam_started_by_us) {
             webcam_service_.Stop();
         }
-        if (recovery_manifest_store_ != nullptr && !current_manifest_id_.isEmpty()) {
+        const QString cancelled_manifest_id = TakeCurrentManifestId();
+        if (recovery_manifest_store_ != nullptr && !cancelled_manifest_id.isEmpty()) {
             // A failed removal is not a loss of protection — it leaves a stale entry
             // that the next launch offers as recoverable for a recording that never
             // happened. Log it; the recovery overlay's own scan is where the user
             // sees the consequence.
-            if (!recovery_manifest_store_->Remove(current_manifest_id_)) {
+            if (!recovery_manifest_store_->Remove(cancelled_manifest_id)) {
                 diagnostics::AppLog::warning(
                     QStringLiteral("recovery.manifest"),
                     QStringLiteral("could not remove the manifest entry for a cancelled start; it will be offered "
                                    "as recoverable at the next launch"));
             }
-            current_manifest_id_.clear();
         }
         prepare_in_flight_.store(false);
         diagnostics::AppLog::info(QStringLiteral("record"), QStringLiteral("start cancelled during preparation"));
@@ -1302,7 +1302,7 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
     // Recovery manifest entry — written before the engine starts so a hard crash
     // leaves a traceable artefact. The artefact_path is the file the engine will
     // actually write (transient .mkv.tmp for MP4 target, final .mkv for MKV target).
-    current_manifest_id_.clear();
+    SetCurrentManifestId({});
     if (recovery_manifest_store_ != nullptr) {
         const bool is_mp4 = (config.container == recorder_core::Container::Mp4);
         RecoveryManifestEntry entry;
@@ -1327,7 +1327,7 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
         // as a failure-class notification (the same treatment canon gives a failed
         // settings write), not as a refusal to record.
         if (recovery_manifest_store_->Add(entry)) {
-            current_manifest_id_ = entry.id;
+            SetCurrentManifestId(entry.id);
         } else {
             PostRecoveryProtectionLost(
                 QStringLiteral("could not write the recovery manifest entry for this recording"));
@@ -1641,10 +1641,13 @@ void RecordingCoordinator::OnSegmentCompleted(const recorder_core::CompletedSegm
     if (was_split_boundary && segment.succeeded && session_is_mp4_) {
         // Derive the expected MP4 output path for this segment from the transient MKV path.
         // segment.path is a .mkv.tmp (or _part-NNN.mkv.tmp) file; derive the .mp4 side.
-        // The base output path is current_output_path_ (the .mp4 path requested by the user).
-        // Use DeriveSegmentPath on the MP4 base to get the corresponding MP4 segment path.
+        // The base output path is the session's output path (the .mp4 path the user
+        // asked for). Taken through the accessor, not off the member: this runs on
+        // the mux worker thread, which the engine does not always join before
+        // Record() returns (QCR-106).
+        const std::filesystem::path session_output_path = CurrentOutputPath();
         const std::optional<std::filesystem::path> mp4_segment =
-            DeriveSegmentPathLogged(current_output_path_, segment.index, "intermediate segment remux target");
+            DeriveSegmentPathLogged(session_output_path, segment.index, "intermediate segment remux target");
 
         // Capture the manifest ID for this segment before mutating current_manifest_id_.
         QString this_segment_manifest_id;
@@ -1678,7 +1681,7 @@ void RecordingCoordinator::OnSegmentCompleted(const recorder_core::CompletedSegm
                 const std::optional<std::filesystem::path> next_mkv = DeriveSegmentPathLogged(
                     session_transient_mkv_, segment.index + 1, "next segment transient MKV (manifest)");
                 const std::optional<std::filesystem::path> next_final = DeriveSegmentPathLogged(
-                    current_output_path_, segment.index + 1, "next segment final MP4 (manifest)");
+                    session_output_path, segment.index + 1, "next segment final MP4 (manifest)");
                 // Only record a recovery entry when BOTH paths for the next segment were
                 // derived successfully -- a half-populated manifest entry (e.g. a valid
                 // artefact_path but an empty/stale final_output_path) would be worse than
@@ -1973,8 +1976,9 @@ void RecordingCoordinator::RecordingThreadProc(const recorder_core::RecorderConf
             // Mark the manifest entry as finalized before remux. A failed write is
             // conservative — the entry stays finalized=false and recovery repairs an
             // already-clean artefact — but it is still a lost write, so it is logged.
-            if (recovery_manifest_store_ != nullptr && !current_manifest_id_.isEmpty() &&
-                !recovery_manifest_store_->UpdateFinalized(current_manifest_id_, true)) {
+            const QString single_file_manifest_id = CurrentManifestId();
+            if (recovery_manifest_store_ != nullptr && !single_file_manifest_id.isEmpty() &&
+                !recovery_manifest_store_->UpdateFinalized(single_file_manifest_id, true)) {
                 PostRecoveryProtectionLost(
                     QStringLiteral("could not mark this recording as finalized in the recovery manifest"));
             }
@@ -2000,9 +2004,12 @@ void RecordingCoordinator::RecordingThreadProc(const recorder_core::RecorderConf
                 final_seg = segments_.back();
         }
 
-        // Finalize the manifest entry for the final segment.
-        if (recovery_manifest_store_ != nullptr && !current_manifest_id_.isEmpty() &&
-            !recovery_manifest_store_->UpdateFinalized(current_manifest_id_, true)) {
+        // Finalize the manifest entry for the final segment. Read once, outside the
+        // lock: the store call must not run under segment_remux_mutex_, and the id
+        // is handed to the job below in a second, atomic step.
+        const QString final_segment_manifest_id = CurrentManifestId();
+        if (recovery_manifest_store_ != nullptr && !final_segment_manifest_id.isEmpty() &&
+            !recovery_manifest_store_->UpdateFinalized(final_segment_manifest_id, true)) {
             PostRecoveryProtectionLost(
                 QStringLiteral("could not mark the final segment as finalized in the recovery manifest"));
         }
@@ -2013,6 +2020,9 @@ void RecordingCoordinator::RecordingThreadProc(const recorder_core::RecorderConf
                 DeriveSegmentPathLogged(output_path, final_seg.index, "final segment remux target");
             if (mp4_final.has_value()) {
                 {
+                    // Handing the id to the job and giving it up are one
+                    // transaction: a reader must never see an id that is already
+                    // owned by a running remux job.
                     std::lock_guard<std::mutex> lock(segment_remux_mutex_);
                     auto job = std::make_unique<SegmentRemuxJob>();
                     job->transient_mkv = final_seg.path;
@@ -2023,16 +2033,16 @@ void RecordingCoordinator::RecordingThreadProc(const recorder_core::RecorderConf
                             return RunSegmentRemuxWork(transient, out, id);
                         });
                     segment_remux_jobs_.push_back(std::move(job));
+                    current_manifest_id_.clear(); // now owned by the job
                 }
-                current_manifest_id_.clear(); // now owned by the job
             } else {
                 // Could not derive the final segment's MP4 target path — keep the
                 // manifest entry for recovery, same as an engine-side segment failure.
-                current_manifest_id_.clear();
+                SetCurrentManifestId({});
             }
         } else {
             // Final segment failed — keep the manifest entry for recovery.
-            current_manifest_id_.clear();
+            SetCurrentManifestId({});
         }
 
         PostStateChange(UiRecordingState::Saving);
@@ -2084,15 +2094,15 @@ void RecordingCoordinator::RecordingThreadProc(const recorder_core::RecorderConf
 
     // MKV target: engine succeeded → artefact is the final file; remove entry.
     // Engine failed → leave the entry so recovery UI can offer repair.
-    if (recovery_manifest_store_ != nullptr && !current_manifest_id_.isEmpty()) {
-        if (result.succeeded && !recovery_manifest_store_->Remove(current_manifest_id_)) {
+    const QString mkv_manifest_id = TakeCurrentManifestId();
+    if (recovery_manifest_store_ != nullptr && !mkv_manifest_id.isEmpty()) {
+        // On failure the entry stays — recovery UI will surface it.
+        if (result.succeeded && !recovery_manifest_store_->Remove(mkv_manifest_id)) {
             diagnostics::AppLog::warning(
                 QStringLiteral("recovery.manifest"),
                 QStringLiteral("could not remove the manifest entry for a completed MKV recording; it will be "
                                "offered as recoverable at the next launch"));
         }
-        // On failure the entry stays — recovery UI will surface it.
-        current_manifest_id_.clear();
     }
 
     // 0.9.0 S1: for MKV recordings the output file IS the edit master.
@@ -2202,14 +2212,14 @@ void RecordingCoordinator::RunRemuxJob(const std::filesystem::path& transient_mk
                                       QStringLiteral("complete bytes=%1").arg(static_cast<qint64>(mp4_size)));
 
             // Remux complete — remove the manifest entry.
-            if (recovery_manifest_store_ != nullptr && !current_manifest_id_.isEmpty()) {
-                if (!recovery_manifest_store_->Remove(current_manifest_id_)) {
+            const QString remuxed_manifest_id = TakeCurrentManifestId();
+            if (recovery_manifest_store_ != nullptr && !remuxed_manifest_id.isEmpty()) {
+                if (!recovery_manifest_store_->Remove(remuxed_manifest_id)) {
                     diagnostics::AppLog::warning(
                         QStringLiteral("recovery.manifest"),
                         QStringLiteral("could not remove the manifest entry for a completed MP4 remux; it will be "
                                        "offered as recoverable at the next launch"));
                 }
-                current_manifest_id_.clear();
             }
 
             PostResult(std::move(final_result));
@@ -2236,7 +2246,7 @@ void RecordingCoordinator::RunRemuxJob(const std::filesystem::path& transient_mk
 
             // Manifest entry stays (finalized=true was set before the remux started).
             // The recovery UI will offer re-export or keep-as-MKV at next startup.
-            current_manifest_id_.clear();
+            SetCurrentManifestId({});
 
             final_result.succeeded = false;
             final_result.output_path = transient_mkv.wstring();
@@ -2517,6 +2527,23 @@ std::wstring RecordingCoordinator::ResolvedVideoCodecLabel() const {
 std::filesystem::path RecordingCoordinator::CurrentOutputPath() const {
     std::lock_guard<std::mutex> lock(output_path_mutex_);
     return current_output_path_;
+}
+
+QString RecordingCoordinator::CurrentManifestId() const {
+    std::lock_guard<std::mutex> lock(segment_remux_mutex_);
+    return current_manifest_id_;
+}
+
+void RecordingCoordinator::SetCurrentManifestId(QString id) {
+    std::lock_guard<std::mutex> lock(segment_remux_mutex_);
+    current_manifest_id_ = std::move(id);
+}
+
+QString RecordingCoordinator::TakeCurrentManifestId() {
+    std::lock_guard<std::mutex> lock(segment_remux_mutex_);
+    QString id = std::move(current_manifest_id_);
+    current_manifest_id_.clear();
+    return id;
 }
 void RecordingCoordinator::SetOutputSettings(const OutputSettingsModel& settings) {
     output_settings_ = settings;
@@ -3165,11 +3192,14 @@ const std::vector<RecordingMarker>& RecordingCoordinator::Markers() const noexce
 }
 
 std::filesystem::path RecordingCoordinator::MarkerSidecarPath() const {
-    return exosnap::DeriveMarkerSidecarPath(current_output_path_);
+    return exosnap::DeriveMarkerSidecarPath(CurrentOutputPath());
 }
 
 void RecordingCoordinator::WriteMarkerSidecar() {
-    const auto sidecar_path = MarkerSidecarPath();
+    // One snapshot for both the sidecar path and the media name it records, so a
+    // path and a file name from two different sessions can never be paired.
+    const std::filesystem::path output_path = CurrentOutputPath();
+    const auto sidecar_path = exosnap::DeriveMarkerSidecarPath(output_path);
     if (sidecar_path.empty())
         return;
 
@@ -3181,7 +3211,7 @@ void RecordingCoordinator::WriteMarkerSidecar() {
 
     // Delegate to the canonical serializer (models/MarkerSidecar.h) so the edit
     // surface and the coordinator produce one identical format at one path.
-    const QString media = QString::fromStdWString(current_output_path_.filename().wstring());
+    const QString media = QString::fromStdWString(output_path.filename().wstring());
     if (!exosnap::WriteMarkerSidecar(sidecar_path, snapshot, media)) {
         diagnostics::AppLog::warning(
             QStringLiteral("marker"),

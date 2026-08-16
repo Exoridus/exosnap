@@ -947,6 +947,19 @@ target_include_directories(webcam_read_policy_tests PRIVATE ${CMAKE_CURRENT_SOUR
 target_link_libraries(webcam_read_policy_tests PRIVATE ole32.lib mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib)
 set_target_properties(webcam_read_policy_tests PROPERTIES AUTOMOC ON)
 
+# The webcam callback delivery/lifetime contract: registration snapshots,
+# receiver validation on the delivery thread, and replacement under live
+# delivery. Needs a QCoreApplication for the queued posts; needs no camera.
+exosnap_add_gtest(
+    NAME webcam_delivery_tests
+    TEST_PREFIX webcam.
+    SOURCES
+        tests/test_webcam_delivery.cpp
+    LIBRARIES exosnap_device_service_test_support Qt6::Core Qt6::Gui exosnap_capability recorder_core)
+target_include_directories(webcam_delivery_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(webcam_delivery_tests PRIVATE ole32.lib mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib)
+set_target_properties(webcam_delivery_tests PROPERTIES AUTOMOC ON)
+
 # Pure copy mapping for the dock's webcam open-failure tooltip
 # (FriendlyWebcamOpenFailure) — string logic only, no MF calls or live device.
 exosnap_add_gtest(
