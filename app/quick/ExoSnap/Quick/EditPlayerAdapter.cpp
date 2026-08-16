@@ -129,6 +129,27 @@ const QString& EditPlayerAdapter::placeholderText() const noexcept {
     return placeholder_text_;
 }
 
+bool EditPlayerAdapter::surfaceVisible() const noexcept {
+    return surface_visible_;
+}
+
+void EditPlayerAdapter::setSurfaceVisible(bool visible) {
+    if (surface_visible_ == visible)
+        return;
+    surface_visible_ = visible;
+    emit surfaceVisibleChanged();
+    if (!visible)
+        setPlaying(false); // the existing pause intent, not a second one
+}
+
+void EditPlayerAdapter::setClipStateForTest(bool clip_open, qint64 duration_ms) {
+    duration_ms_ = duration_ms;
+    if (clip_open_ == clip_open)
+        return;
+    clip_open_ = clip_open;
+    emit clipOpenChanged();
+}
+
 void EditPlayerAdapter::setPlaceholderText(const QString& text) {
     if (placeholder_text_ == text)
         return;

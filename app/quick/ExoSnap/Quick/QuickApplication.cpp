@@ -3231,6 +3231,14 @@ bool QuickApplication::load(bool no_activate) {
         {QStringLiteral("crashReport"), QVariant::fromValue(&crash_report_adapter_)},
         {QStringLiteral("overlays"), QVariant::fromValue(&overlay_adapter_)},
         {QStringLiteral("noActivate"), no_activate},
+        // ADR 0033, and deliberately an initial property rather than a
+        // navigation emitted once the engine has loaded. By that point a
+        // recovery surface or a crash prompt raised during startup is already
+        // up, and the single navigation edge (QCR-001) refuses a navigation
+        // behind a blocking surface -- which would silently drop a restore that
+        // is not a navigation at all.
+        {QStringLiteral("landingPage"),
+         QVariant::fromValue(static_cast<int>(pending_landing_page_.value_or(ShellAdapter::RecordPage)))},
     });
     applyThemeFromSettings();
     applyDiagnosticsVisualScenarios();
@@ -3240,13 +3248,9 @@ bool QuickApplication::load(bool no_activate) {
         return false;
     }
 
-    // The shell is connected now, so a parked relaunch landing page can be
-    // delivered. Done before the window is shown to the user rather than as a
-    // visible navigation away from Record.
-    if (pending_landing_page_.has_value()) {
-        emit shell_adapter_.navigateToPageRequested(*pending_landing_page_);
-        pending_landing_page_.reset();
-    }
+    // Consumed by the initial property above; cleared so a second load() in the
+    // same process cannot re-apply it.
+    pending_landing_page_.reset();
 
     if (auto* root_window = qobject_cast<QQuickWindow*>(engine_.rootObjects().constFirst())) {
         root_window_ = root_window;

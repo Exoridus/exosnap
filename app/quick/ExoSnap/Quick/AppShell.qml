@@ -44,6 +44,12 @@ Item {
     // nav destination — so its visibility is shell state, not a stack index.
     property bool editOverlayOpen: false
 
+    // QCR-001. An open edit session is STATE OF THE RECORD DESTINATION, not a
+    // modality of the application: it survives a page change untouched and is
+    // simply not on screen while another destination is. Loaded is the session;
+    // visible is where that session is shown.
+    readonly property bool editOverlayVisible: root.editOverlayOpen && root.currentPage === ShellAdapter.RecordPage
+
     // Page index -> stack index. One index space, and it IS ShellAdapter::Page:
     // the StackLayout's child order below is the enum's order, so no separate
     // mapping exists to drift. QCR-716 replaced the bare 0..4 literals that used
@@ -109,6 +115,36 @@ Item {
 
     onCurrentPageChanged: root.loadDestination(root.currentPage)
 
+    // ── The one navigation edge (QCR-001) ────────────────────────────────────
+    //
+    // Every navigation intent in the product writes the destination HERE, and
+    // nowhere else: the five tab delegates, Ctrl+1..5, the Diagnostics page's
+    // two jump signals, and ShellAdapter::navigateToPageRequested — which is
+    // itself emitted from six production paths (the OpenUpdate / ChangeFolder /
+    // OpenHotkeys / OpenDiagnostics notification actions, the Diagnostics
+    // blocker jump, the recovery Continue, the recording-error log jump).
+    //
+    // Before this the policy sat on two AFFORDANCES instead — `enabled` on the
+    // tab delegate and on the shortcuts — while the edge wrote `currentPage`
+    // unconditionally from Main.qml. So a notification toast could already swap
+    // the page underneath an open Edit workspace, which is precisely what those
+    // two disabled affordances claimed to prevent. One policy needs one edge.
+    function navigateTo(page: int): void {
+        if (!root.navigationAllowed)
+            return;
+        root.currentPage = page;
+    }
+
+    // The whole policy, in one expression.
+    //
+    // An open edit session is deliberately NOT in it (QCR-001): navigating away
+    // from Record does not close it, does not ask about unsaved trim points and
+    // does not end the clip — it only stops showing it. The three surfaces that
+    // ARE in it are modal about a question the user has not answered yet, and a
+    // page swapped behind one of them is a page the user never asked for.
+    readonly property bool navigationAllowed: !root.recovery.surfaceOpen && !root.recordingError.active
+                                              && !root.crashReport.active
+
     // Every destination, directly. Five words fit the band at the 860 px minimum
     // window, so hiding three of them behind a glyph bought nothing and cost a
     // click plus a menu on the way to Diagnostics — the page a user goes to
@@ -145,52 +181,52 @@ Item {
     // else — the class of bug this item exists to avoid. A modified digit
     // cannot be typed into any field the product has.
     //
-    // Disabled rather than merely ineffective while a covering surface is up:
-    // the Edit workspace deliberately disables the nav tabs (QCR-001), and a
-    // shortcut that did what the disabled control cannot would be the same
-    // conditional navigation that decision ruled out. The three blocking
-    // surfaces are modal about a session the user has not answered for yet.
-    readonly property bool navigationShortcutsEnabled: !root.editOverlayOpen
-                                                       && !root.recovery.surfaceOpen
-                                                       && !root.recordingError.active
-                                                       && !root.crashReport.active
-
+    // Disabled rather than merely ineffective while a blocking surface is up.
+    // A scrim stops the pointer from reaching the tabs; nothing stops a
+    // keystroke, so the keyboard route needs the guard spelled out. It is the
+    // same guard `navigateTo()` applies — the binding only keeps the key from
+    // being swallowed by a shortcut that would refuse it anyway.
+    //
+    // An open edit session is NOT part of this (QCR-001). Ctrl+1..5 and the tabs
+    // share one contract, and under that contract the edit session is state of
+    // the Record destination rather than a surface the user has to answer.
+    //
     // Written out rather than generated from `navPages`: five destinations is a
     // product decision (CLAUDE.md), not a list length, and a Repeater of
     // Shortcuts would need a delegate item that exists for nothing else.
     Shortcut {
         sequence: "Ctrl+1"
         context: Qt.WindowShortcut
-        enabled: root.navigationShortcutsEnabled
-        onActivated: root.currentPage = ShellAdapter.RecordPage
+        enabled: root.navigationAllowed
+        onActivated: root.navigateTo(ShellAdapter.RecordPage)
     }
 
     Shortcut {
         sequence: "Ctrl+2"
         context: Qt.WindowShortcut
-        enabled: root.navigationShortcutsEnabled
-        onActivated: root.currentPage = ShellAdapter.SettingsPage
+        enabled: root.navigationAllowed
+        onActivated: root.navigateTo(ShellAdapter.SettingsPage)
     }
 
     Shortcut {
         sequence: "Ctrl+3"
         context: Qt.WindowShortcut
-        enabled: root.navigationShortcutsEnabled
-        onActivated: root.currentPage = ShellAdapter.DiagnosticsPage
+        enabled: root.navigationAllowed
+        onActivated: root.navigateTo(ShellAdapter.DiagnosticsPage)
     }
 
     Shortcut {
         sequence: "Ctrl+4"
         context: Qt.WindowShortcut
-        enabled: root.navigationShortcutsEnabled
-        onActivated: root.currentPage = ShellAdapter.LogsPage
+        enabled: root.navigationAllowed
+        onActivated: root.navigateTo(ShellAdapter.LogsPage)
     }
 
     Shortcut {
         sequence: "Ctrl+5"
         context: Qt.WindowShortcut
-        enabled: root.navigationShortcutsEnabled
-        onActivated: root.currentPage = ShellAdapter.AboutPage
+        enabled: root.navigationAllowed
+        onActivated: root.navigateTo(ShellAdapter.AboutPage)
     }
 
     ColumnLayout {
@@ -314,6 +350,15 @@ Item {
                 Repeater {
                     id: navRepeater
 
+                    // Named so the navigation-lifecycle test can reach the five
+                    // delegates through itemAt() and assert the AFFORDANCE, not
+                    // only the edge behind it: QCR-001 was a regression in the
+                    // delegate's `enabled` binding, and an assertion that only
+                    // calls navigateTo() would not have seen it. The delegates
+                    // themselves are not QObject children of the window, so the
+                    // repeater is the way in.
+                    objectName: "quickNavTabs"
+
                     // Nav order is a product decision. Kept as a list rather than
                     // copies of the same button so the hit-test rects can be
                     // collected by index.
@@ -326,16 +371,13 @@ Item {
                         text: modelData
                         selected: root.currentPage === index
                         compact: root.compactNav
-                        // The Edit workspace occupies the content area below
-                        // this band, with Record as its parent context. Leaving
-                        // the tabs live would let a click swap the page UNDER a
-                        // workspace that still covers it — and routing the click
-                        // through the editor's unsaved-edits guard would make
-                        // navigation conditional, which it is not anywhere else
-                        // in the product. The same lock the transport's source
-                        // controls take during a recording, for the same reason:
-                        // Back is the way out.
-                        enabled: !root.editOverlayOpen
+                        // An open Edit workspace is deliberately absent from this
+                        // (QCR-001): it is state of the Record destination, so
+                        // leaving Record hides it and returning shows the same
+                        // session again. It never swaps a page UNDER a covering
+                        // workspace, because the workspace is only ever visible
+                        // on Record — see `editOverlayVisible`.
+                        enabled: root.navigationAllowed
                         Layout.alignment: Qt.AlignVCenter
                         // Shrinkable to nothing on purpose. Everything to the
                         // right of the drag handle is fixed-size, so when the
@@ -359,7 +401,7 @@ Item {
                         Layout.fillWidth: true
                         Layout.maximumWidth: implicitWidth
                         Layout.minimumWidth: 0
-                        onClicked: root.currentPage = index
+                        onClicked: root.navigateTo(index)
                         onWidthChanged: Qt.callLater(titleBar.refreshChromeGeometry)
                     }
                 }
@@ -534,11 +576,11 @@ Item {
         ignoreUnknownSignals: true
 
         function onNavigateToLogsRequested(): void {
-            root.currentPage = ShellAdapter.LogsPage;
+            root.navigateTo(ShellAdapter.LogsPage);
         }
 
         function onNavigateToSettingsRequested(): void {
-            root.currentPage = ShellAdapter.SettingsPage;
+            root.navigateTo(ShellAdapter.SettingsPage);
         }
     }
 
@@ -619,10 +661,33 @@ Item {
             fill: parent
             topMargin: root.titleBarHeight
         }
-        // Unloaded when dismissed: the overlay owns a scene-graph video item and
-        // a decoder session, neither of which should sit behind a hidden page.
+        // Two separate facts, and QCR-001 turns on keeping them apart.
+        //
+        // ACTIVE follows the SESSION: the surface is built when a clip is handed
+        // over and unloaded when the session is closed — never merely because
+        // the user looked at Settings. Unloading on a page change would destroy
+        // the scene-graph video item and every piece of state that is not in an
+        // adapter (the rail's scroll position, the timeline zoom, the focus),
+        // which is the same argument QCR-602 used to keep the four destinations
+        // resident after their first visit.
+        //
+        // VISIBLE follows the DESTINATION: the workspace belongs to Record, so
+        // that is the only page it is on screen for. This is what makes an
+        // unlocked tab safe — the page never changes underneath a covering
+        // surface, because the surface goes with the page. An invisible item
+        // also takes no input and receives no key events, so the editor's
+        // surface-local keys cannot fire while Settings is on screen.
         active: root.editOverlayOpen
+        visible: root.editOverlayVisible
         z: 1
+
+        // Coming back to Record returns the keyboard to the workspace. Without
+        // it the editor is on screen but deaf: Escape, and every surface-local
+        // key below it, would go to whatever held the focus on the page the user
+        // just left. Called on load as well, so the first open is no different
+        // from a return.
+        onVisibleChanged: root.focusEditWorkspace()
+        onLoaded: root.focusEditWorkspace()
 
         sourceComponent: EditOverlay {
             session: root.editSession
@@ -631,6 +696,31 @@ Item {
             exporter: root.editExport
             focus: true
         }
+    }
+
+    function focusEditWorkspace(): void {
+        if (!editOverlayLoader.visible)
+            return;
+        // `Loader.item` is typed QObject, so the cast is what tells qmllint (and
+        // the compiler) that this is the Item whose focus is being taken.
+        const workspace = editOverlayLoader.item as Item;
+        if (workspace !== null)
+            workspace.forceActiveFocus();
+    }
+
+    // Leaving Record pauses the preview; it does not end the session and does
+    // not seek. Playing video and audio out of a surface the user cannot see is
+    // both surprising on Settings and decoder work nobody asked for. Returning
+    // leaves it paused at the same position — starting playback again is the
+    // user's own action.
+    //
+    // Same shape as Main.qml's `previewAdapter.surfaceVisible` binding, and for
+    // the same reason: the decision is C++'s (EditPlayerAdapter), the fact is
+    // the shell's.
+    Binding {
+        target: root.editPlayer
+        property: "surfaceVisible"
+        value: root.editOverlayVisible
     }
 
     // Above the editor: recovery is a startup decision about a PREVIOUS session,

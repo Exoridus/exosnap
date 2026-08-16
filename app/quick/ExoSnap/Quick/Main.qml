@@ -26,6 +26,17 @@ ApplicationWindow {
     property bool closeApproved: false
     property bool benchmarkInteractionActive: false
     property bool noActivate: false
+    // ADR 0033. The destination the pre-elevation instance was showing, handed
+    // back by the relaunch. Applied as the shell's STARTING page, not as a
+    // navigation: the window is still hidden at this point and nothing has
+    // happened yet that a navigation policy could have an opinion about.
+    //
+    // It used to arrive as a navigateToPageRequested() emitted straight after
+    // the engine loaded. That moment is not neutral — a recovery surface or a
+    // crash prompt raised during startup is already up by then, so the one
+    // navigation edge would refuse the restore for a reason that has nothing to
+    // do with it.
+    property int landingPage: ShellAdapter.RecordPage
 
     // Resolved in C++ (QuickWindowGeometry) from the persisted geometry, clamped
     // onto a connected screen's work area. Supplied as an initial property so the
@@ -93,8 +104,14 @@ ApplicationWindow {
             root.close();
         }
 
+        // Routed through the shell's navigateTo() rather than written straight
+        // onto currentPage: this signal is one of five navigation intents, and
+        // after QCR-001 all five answer to the same policy. Writing the index
+        // here is what let a notification action swap the page under an open
+        // Edit workspace while the tabs that claimed to prevent exactly that
+        // sat disabled.
         function onNavigateToPageRequested(page: int): void {
-            appShell.currentPage = page;
+            appShell.navigateTo(page);
         }
 
         // Opened imperatively rather than by binding `visible`: Dialog::accept()
@@ -284,5 +301,13 @@ ApplicationWindow {
         editPlayer: root.editPlayer
         editExport: root.editExport
         benchmarkInteractionActive: root.benchmarkInteractionActive
+    }
+
+    // After AppShell's own completion (children complete first), so the shell
+    // has already loaded Record and this is a normal destination change rather
+    // than an assignment into a half-built stack.
+    Component.onCompleted: {
+        if (root.landingPage !== ShellAdapter.RecordPage)
+            appShell.currentPage = root.landingPage;
     }
 }

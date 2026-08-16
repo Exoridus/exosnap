@@ -394,10 +394,11 @@ class QuickApplication {
     // capture in the earlier baselines silently photographed.
     bool diagnostics_visual_scenario_active_ = false;
     bool reapplying_visual_scenarios_ = false;
-    // The relaunch handoff is applied before load(), when QML is not connected to
-    // navigateToPageRequested yet, so the page is parked here and emitted once the
-    // shell exists. Empty means "no handoff" — it used to be a -1 sentinel in an
-    // int, which is exactly the bare-integer navigation QCR-716 removed.
+    // The relaunch handoff is applied before load(), so the page is parked here
+    // and handed to the shell as its STARTING destination (`landingPage`) when
+    // the engine is loaded. Empty means "no handoff" — it used to be a -1
+    // sentinel in an int, which is exactly the bare-integer navigation QCR-716
+    // removed.
     std::optional<ShellAdapter::Page> pending_landing_page_;
 #if defined(Q_OS_WIN)
     std::unique_ptr<Win32HotkeyRegistrar> hotkey_registrar_;
