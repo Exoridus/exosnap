@@ -362,18 +362,33 @@ Window {
                     onClicked: root.actionTriggered(card.model.sequence, card.model.primaryAction)
                 }
 
-                Text {
+                // The dismiss affordance. It was a bare `Text` with no `text` at
+                // all: the hit target, the hover colour and the accessible name
+                // were all there and correct, and the glyph itself was simply
+                // never drawn — an 18 px hole in the corner of every desktop
+                // toast that only a user who guessed could click. Drawn with the
+                // shared ExoGlyph, the same treatment the in-app
+                // NotificationToastCard and the hub's own dismiss use, so the
+                // two surfaces cannot drift; the 18 px target is unchanged.
+                Item {
                     id: dismiss
 
                     x: root.cardWidth - 15 - 18
                     y: 14
                     width: 18
                     height: 18
-                    color: dismissArea.containsMouse ? ExoTheme.text : ExoTheme.textDim
 
                     Accessible.role: Accessible.Button
                     Accessible.name: qsTr("Dismiss notification")
                     Accessible.onPressAction: root.dismissRequested(card.model.sequence)
+
+                    ExoGlyph {
+                        anchors.centerIn: parent
+                        width: 12
+                        height: 12
+                        kind: ExoGlyph.Close
+                        color: dismissArea.containsMouse ? ExoTheme.text : ExoTheme.textDim
+                    }
 
                     MouseArea {
                         id: dismissArea

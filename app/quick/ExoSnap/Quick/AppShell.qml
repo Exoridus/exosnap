@@ -227,7 +227,14 @@ Item {
                     tone: root.recordViewModel.stateTone
                     Layout.rightMargin: ExoTheme.spacingSm
                     Layout.alignment: Qt.AlignVCenter
-                    Layout.minimumWidth: implicitWidth
+                    // Never wider than its own text, and allowed to be narrower.
+                    // It used to declare its implicit width as a MINIMUM, which
+                    // made a long state string incompressible and left the
+                    // navigation tabs — the only other shrinkable thing in the
+                    // band — to pay for it. A readout may elide; a destination
+                    // may not disappear.
+                    Layout.maximumWidth: implicitWidth
+                    Layout.minimumWidth: 0
                 }
 
                 NotificationBell {

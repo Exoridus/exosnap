@@ -31,8 +31,12 @@ Window {
     // An empty rect falls back to this window's own screen, the way the Widgets
     // overlays fell back to the primary screen before a target was resolved.
     property rect monitorGeometry: Qt.rect(0, 0, 0, 0)
-    // OverlayAdapter.State.
-    property int overlayState: 0
+    // An OverlayAdapter.State value. Compared against that enum by name below
+    // rather than against 1/2/3: the adapter exports the enum to QML precisely
+    // so a value added or reordered in C++ cannot silently re-map what this
+    // window paints, and a local mirror of the numbers is the copy that would
+    // have to be found and updated by hand when it does.
+    property int overlayState: OverlayAdapter.Hidden
     // The gate the recording side controls; capture exclusion gates on top of it.
     property bool overlayActive: false
 
@@ -49,21 +53,15 @@ Window {
                                               ? root.monitorGeometry
                                               : Qt.rect(Screen.virtualX, Screen.virtualY, Screen.width, Screen.height)
 
-    // Mirrors OverlayAdapter.State. Kept as named constants rather than magic
-    // numbers at each comparison; the C++ side static_asserts the same order.
-    readonly property int stateRecording: 1
-    readonly property int statePaused: 2
-    readonly property int stateWarning: 3
-
     // Paused and Warning used to share caution amber, which made a deliberate
     // pause look like a fault to a user glancing at the corner of a full-screen
     // game. Paused now takes the accent — the same colour the Resume action in
     // the transport carries — and amber is left to mean what it says.
     readonly property color stateTone: {
         switch (root.overlayState) {
-        case root.statePaused:
+        case OverlayAdapter.Paused:
             return ExoTheme.accent;
-        case root.stateWarning:
+        case OverlayAdapter.Warning:
             return ExoTheme.warning;
         default:
             return ExoTheme.error;  // recording: the canonical rec tone
@@ -192,9 +190,9 @@ Window {
                 anchors.verticalCenter: parent.verticalCenter
                 kind: {
                     switch (root.overlayState) {
-                    case root.statePaused:
+                    case OverlayAdapter.Paused:
                         return "paused";
-                    case root.stateWarning:
+                    case OverlayAdapter.Warning:
                         return "warning";
                     default:
                         return "recording";
