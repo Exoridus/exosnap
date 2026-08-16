@@ -78,8 +78,16 @@ The one behavior change is the audio path (Option B — "silence and continue"):
 
 Visibility (calm, not alarmist): a live Diagnostics figure
 (`AudioDiagnostics.degraded_sources` / `source_degraded`) while any source is
-degraded, and a post-flight fact (`SessionStats.audio_degraded_occurred`) so the
-"Saved" report can note the recording contains a silence gap.
+degraded, a standing notification for the duration of the outage, and a
+post-flight fact (`SessionStats.audio_degraded_occurred`) so the "Saved" report
+can note the recording contains a silence gap.
+
+The notification is raised from those same figures and from nothing else. There
+is no second detection and no audio-level heuristic: silence can be legitimate
+content, so only the pipeline reporting a source whose *device* is currently lost
+counts as degraded. The latch that decides when to raise, replace and clear is
+`diagnostics::AudioSourceDegradationMonitor` (pure, `app/diagnostics/`); the
+composition root (`QuickApplication::observeAudioSourceDegradation`) acts on it.
 
 ## Alternatives considered
 
@@ -111,7 +119,18 @@ degraded, and a post-flight fact (`SessionStats.audio_degraded_occurred`) so the
 - The standing notification (a calm, informative toast — never alarmist) stays
   visible for as long as any source is degraded, is replaced in place if the
   degraded count changes, and clears the moment every source reactivates or the
-  recording ends; it links to Diagnostics for the full detail.
+  recording ends; it links to Diagnostics for the full detail. It names a count,
+  never a device: the engine reports how many sources are currently lost, so
+  claiming *which* one would be more than was measured. The notification is
+  informational only — the recording keeps running and Stop/Pause/Resume stay
+  available, exactly as the policy above requires.
+- This notification was lost for the length of the Qt Quick cutover. Its producer
+  lived in the Widgets `MainWindow`, which `eba9a28e` removed; the event, the
+  wording resolver, the standing-dwell rule, the hub key and the tests all came
+  across, but nothing called them, so between that commit and the restoration an
+  unplugged microphone was visible only to a user who navigated to Diagnostics.
+  The engine behaviour, the Diagnostics figure and the post-flight fact were
+  correct throughout — only the "tell them while it is happening" half was gone.
 - Follow-up: manual live-hardware verification (real endpoint unplug/replug,
   default-device follow, PID-reuse, audio-service restart) — the automated
   coverage uses fake sources.

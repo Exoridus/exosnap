@@ -23,6 +23,7 @@
 #include "SettingsAdapter.h"
 #include "ShellAdapter.h"
 
+#include "diagnostics/AudioSourceDegradation.h"
 #include "diagnostics/WindowCaptureStall.h"
 #include "models/RecordingPreset.h"
 #include "models/RecordingPresetRegistry.h"
@@ -335,6 +336,18 @@ class QuickApplication {
     // "the recording is still running", which stops being true then.
     void clearWindowCaptureStallWarning();
 
+    // ADR 0046. Feeds one live diagnostics snapshot to the audio-source
+    // degradation latch and acts on what it reports: raise or replace the
+    // standing "audio source went silent" notice, or clear it once every source
+    // is capturing again. Same shape and same driver as the capture-stall path
+    // above — the pipeline's existing AudioDiagnostics health facts, no second
+    // detection.
+    void observeAudioSourceDegradation(const recorder_core::RecordingDiagnosticsSnapshot& snapshot);
+    // Dismisses the standing audio-degradation toast if one is up. Called when
+    // every source recovers and again when the session leaves Recording/Paused —
+    // the toast says the recording continues, which stops being true then.
+    void clearAudioSourceDegradedWarning();
+
     AppSettingsStore settings_store_;
     PersistedAppSettings settings_;
     RecordingPresetStore preset_store_;
@@ -452,6 +465,11 @@ class QuickApplication {
     // Sequence of the standing capture-stall toast while it is up, 0 when none is.
     // The hub keeps its own permanent record either way.
     uint64_t capture_stall_toast_sequence_ = 0;
+    // ADR 0046. Same threading and same driver as capture_stall_monitor_.
+    diagnostics::AudioSourceDegradationMonitor audio_degradation_monitor_;
+    // Sequence of the standing audio-degradation toast while it is up, 0 when
+    // none is. The hub keeps its own permanent record either way.
+    uint64_t audio_degraded_toast_sequence_ = 0;
     // The selection Diagnostics currently holds. Same reason as the two below:
     // pushing it re-runs the recommendation checklist, so only a real change may.
     std::optional<recorder_core::CaptureTarget> pushed_selected_target_;

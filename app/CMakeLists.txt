@@ -235,6 +235,9 @@ exosnap_add_app_test_support(exosnap_diagnostics_test_support
     # frontend drives it from the live diagnostics callback, so it belongs in the
     # library and not only in its own test target.
     diagnostics/WindowCaptureStall.cpp
+    # ADR 0046: the mid-recording audio-degradation latch. Same reason as the two
+    # above — the shipping frontend drives it from the live diagnostics callback.
+    diagnostics/AudioSourceDegradation.cpp
     diagnostics/SelfTestRunner.cpp
     # Session report writer is called by RecordingCoordinator, which is compiled
     # into the coordinator test targets that all link this support lib.
@@ -343,6 +346,18 @@ exosnap_add_gtest(
 )
 target_include_directories(window_capture_stall_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(window_capture_stall_tests PRIVATE dwmapi.lib shell32.lib)
+
+# Mid-recording audio-source degradation: the standing-notification latch over the
+# pipeline's existing AudioDiagnostics health facts (ADR 0046, pure).
+exosnap_add_gtest(
+    NAME audio_source_degradation_tests
+    TEST_PREFIX audio_degraded.
+    SOURCES
+        tests/test_audio_source_degradation.cpp
+        diagnostics/AudioSourceDegradation.cpp
+    LIBRARIES exosnap_capability recorder_core
+)
+target_include_directories(audio_source_degradation_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 # 0.5.0 video rate-control tests (ADR 0009): ComputeNvencRcParams mapping,
 # preset round-trip, dirty-tracking, sanitize, and capability queries.

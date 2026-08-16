@@ -11,7 +11,11 @@ The tone here mirrors the app's: calm, factual, one primary fix per problem.
 
 - **What ExoSnap shows.** The **Audio** diagnostics card flags an audio-format mismatch (for
   example, a 44.1 kHz endpoint against a 48 kHz session) and a source that stopped delivering after
-  an endpoint was unplugged.
+  an endpoint was unplugged. Losing an endpoint *during* a recording also raises a standing caution
+  while it lasts — *"Audio source went silent … Recording continues"* — so you find out while there
+  is still a recording to salvage, rather than in the post-flight report. It names how many sources
+  are affected, not which device, because that is what ExoSnap measured. The recording is never
+  stopped for you, and the notice clears by itself once every source is capturing again.
 - **What to do.** Match the output sample rate to your device (Settings → Audio), or let the
   audio-format fix reconcile it. If a device was unplugged mid-session, reselect it. Confirm the
   source rows (APP / SYS / MIC) you expected are enabled; each enabled source becomes its own track

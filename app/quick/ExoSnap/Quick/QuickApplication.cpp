@@ -403,12 +403,20 @@ void QuickApplication::initializeRecordWorkflow() {
             // neither the latch nor a leftover toast may cross into this one.
             capture_stall_monitor_.Reset();
             clearWindowCaptureStallWarning();
+            // ADR 0046: same reason. A previous recording's audio outage may not
+            // arrive standing over this one.
+            audio_degradation_monitor_.Reset();
+            clearAudioSourceDegradedWarning();
         }
         // The standing stall notice says "the recording is still running". Once
         // the session leaves Recording/Paused that is no longer true, so the toast
-        // goes even though the hub keeps the record.
-        if (state != UiRecordingState::Recording && state != UiRecordingState::Paused)
+        // goes even though the hub keeps the record. The audio-degradation notice
+        // makes the same claim ("Recording continues") and clears on the same
+        // edge — which is also product-spec's "clears ... or the recording ends".
+        if (state != UiRecordingState::Recording && state != UiRecordingState::Paused) {
             clearWindowCaptureStallWarning();
+            clearAudioSourceDegradedWarning();
+        }
         // Keyed off the state the UI is actually showing, not the one just
         // reported. In production the two are the same value — SetState assigned
         // it one line up. Under a latched visual scenario they are not, and
@@ -455,6 +463,7 @@ void QuickApplication::initializeRecordWorkflow() {
         // for the whole session.
         diagnostics_adapter_.applyLiveDiagnostics(snapshot);
         observeWindowCaptureStall(snapshot);
+        observeAudioSourceDegradation(snapshot);
         synchronizeRecordState();
     });
     recording_coordinator_->SetResultReadyCallback([this](const UiRecordingResult& result) {
@@ -1600,6 +1609,64 @@ void QuickApplication::clearWindowCaptureStallWarning() {
         return;
     notifications_adapter_.manager().Dismiss(capture_stall_toast_sequence_);
     capture_stall_toast_sequence_ = 0;
+}
+
+// ADR 0046. The mid-recording audio-degradation notice, driven entirely by the
+// AudioDiagnostics health facts the pipeline already publishes at ~5 Hz.
+//
+// This is a restored producer, not a new feature. The Widgets frontend raised
+// exactly this notification from exactly these facts
+// (MainWindow::updateAudioSourceDegradedNotification, a second tee of
+// RecordPage::diagnosticsUpdated). The Qt Quick cutover carried the event, the
+// resolver, the standing-toast dwell rule, the hub key and the tests across, but
+// not the tee — so from that commit on, an unplugged microphone degraded to
+// honest silence, said so in Diagnostics and in the session report, and told the
+// user nothing while it was happening. Same defect class as the lost
+// exclusive-fullscreen producer.
+//
+// Threading: everything here runs on the Qt main thread. The snapshot arrives
+// through RecordingCoordinator::PostDiagnostics's queued connection (already
+// session-generation filtered), and the latch is a plain main-thread member.
+void QuickApplication::observeAudioSourceDegradation(const recorder_core::RecordingDiagnosticsSnapshot& snapshot) {
+    diagnostics::AudioDegradationSample sample;
+    sample.session_generation = snapshot.session_generation;
+    sample.valid = snapshot.valid;
+    sample.lifecycle = snapshot.lifecycle;
+    sample.source_degraded = snapshot.audio.source_degraded;
+    sample.degraded_sources = snapshot.audio.degraded_sources;
+
+    switch (audio_degradation_monitor_.Observe(sample)) {
+    case diagnostics::AudioDegradationSignal::None:
+        return;
+
+    case diagnostics::AudioDegradationSignal::Clear:
+        clearAudioSourceDegradedWarning();
+        diagnostics::AppLog::info(QStringLiteral("audio"),
+                                  QStringLiteral("every audio source is capturing again after a reported outage"));
+        return;
+
+    case diagnostics::AudioDegradationSignal::Raise:
+        break;
+    }
+
+    const uint32_t degraded = audio_degradation_monitor_.degraded_sources();
+    diagnostics::AppLog::warning(
+        QStringLiteral("audio"),
+        QStringLiteral("%1 audio capture source(s) lost their device and are contributing silence; recording continues")
+            .arg(degraded));
+    // Replaces any earlier notice for this outage rather than stacking a second
+    // one — the manager has no update API, so the standing toast is replaced by
+    // dismissing the tracked sequence and enqueueing the new body.
+    clearAudioSourceDegradedWarning();
+    audio_degraded_toast_sequence_ =
+        notifications_adapter_.manager().Enqueue(notifications::MakeAudioSourceDegradedEvent(degraded));
+}
+
+void QuickApplication::clearAudioSourceDegradedWarning() {
+    if (audio_degraded_toast_sequence_ == 0)
+        return;
+    notifications_adapter_.manager().Dismiss(audio_degraded_toast_sequence_);
+    audio_degraded_toast_sequence_ = 0;
 }
 
 // rec.capture.exclusive_window's "record the monitor instead" fix: resolve the
