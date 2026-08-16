@@ -231,6 +231,10 @@ exosnap_add_app_test_support(exosnap_diagnostics_test_support
     # than only in its own test target, because the shipping frontend now runs
     # the probe and the recommendation engine reads what it accumulates.
     diagnostics/WindowEvidenceAccumulator.cpp
+    # QCR-804: the mid-recording capture-stall monitor. Same reason — the shipping
+    # frontend drives it from the live diagnostics callback, so it belongs in the
+    # library and not only in its own test target.
+    diagnostics/WindowCaptureStall.cpp
     diagnostics/SelfTestRunner.cpp
     # Session report writer is called by RecordingCoordinator, which is compiled
     # into the coordinator test targets that all link this support lib.
@@ -327,10 +331,10 @@ exosnap_add_gtest(
 )
 target_include_directories(window_evidence_accumulator_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
-# Exclusive-fullscreen mid-session stall predicate (S4, pure).
+# Mid-recording window-capture stall: frame-progress monitor + verdict (QCR-804, pure).
 exosnap_add_gtest(
     NAME window_capture_stall_tests
-    TEST_PREFIX exclusive_fs.
+    TEST_PREFIX capture_stall.
     SOURCES
         tests/test_window_capture_stall.cpp
         diagnostics/WindowCaptureStall.cpp
