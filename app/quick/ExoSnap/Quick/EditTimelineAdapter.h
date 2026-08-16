@@ -34,6 +34,17 @@ inline constexpr int kTimelineAudioStackBudget = 3 * kTimelineAudioRowHeight + 2
 // Total height of the audio stack (rows plus the gap above each).
 [[nodiscard]] int TimelineAudioStackHeight(int row_count);
 
+// Whether a tile run may be started right now.
+//
+// The decoder source is reopened asynchronously, one clip behind the adapter:
+// the adapter knows about clip B the moment the session announces it, while the
+// source still has clip A open until the new clip's keyframe scan lands. A run
+// started in that window would decode B's timestamps out of A's file and publish
+// the result as B's strip. So the run waits until the source is provably on the
+// clip the adapter is showing.
+[[nodiscard]] bool TimelineTileRunAllowed(bool has_source, const QString& clip_path, const QString& source_clip_path,
+                                          int tile_count);
+
 // Feeds the timeline: the thumbnail strip, the audio row labels and the marker
 // verticals.
 //
@@ -93,6 +104,13 @@ class EditTimelineAdapter : public QObject {
     // A real decode needs a clip no fixture carries.
     void setFixture(const QStringList& audio_track_labels, int tile_count);
 
+    // Test seam: the same delivery path a decoded tile takes, without a decoder.
+    // Exists because the generation check that drops a previous clip's tiles can
+    // otherwise only be reached through real media.
+    void deliverTileForTest(qint64 time_ms, const QImage& image, quint64 run_id);
+    // Test seam: the run whose tiles the strip currently accepts. 0 means none.
+    [[nodiscard]] quint64 activeRunForTest() const noexcept;
+
   signals:
     void trackWidthChanged();
     void layoutChanged();
@@ -102,6 +120,10 @@ class EditTimelineAdapter : public QObject {
   private:
     void openClip(const QString& master_path, qint64 duration_ms);
     void closeClip();
+    void handleTileReady(qint64 time_ms, const QImage& image, quint64 run_id);
+    // Drops the run in flight: nothing it still delivers belongs to what the
+    // strip shows next.
+    void invalidateRun();
     void refreshMarkers();
     void scheduleTileRun();
     void startTileRun();
@@ -118,6 +140,9 @@ class EditTimelineAdapter : public QObject {
 
     QTimer resize_debounce_;
     QString clip_path_;
+    // The clip the decoder source was last asked to open. Empty means the source
+    // holds nothing this adapter may decode from.
+    QString source_clip_path_;
     QStringList audio_track_labels_;
     qint64 duration_ms_ = 0;
     int track_width_ = 0;
@@ -126,6 +151,9 @@ class EditTimelineAdapter : public QObject {
     int tiles_ready_ = 0;
     int clip_video_width_ = 0;
     int clip_video_height_ = 0;
+    // The only run whose tiles the strip accepts. 0 means none: run ids start at
+    // 1, so a clip switch or a close can silence every run in flight by resetting
+    // this rather than by waiting for the worker.
     quint64 active_run_ = 0;
     // Set while placeholder tiles stand in for a decode (-1 = fill the row).
     std::optional<int> fixture_tile_count_;

@@ -242,6 +242,55 @@ TEST_F(TimelineThumbnailSourceTest, WrappingADecodedFrameDoesNotCopyItsBuffer) {
     EXPECT_EQ(live_buffers.load(), 0);
 }
 
+// A QImage cannot be built on geometry it has no way to describe, and a null
+// QImage never runs its cleanup hook. Allocating the keep-alive first therefore
+// stranded both the wrapper and the decoder's whole frame buffer -- ~33 MB at
+// 4K, once per unusable frame, for the life of the process.
+TEST_F(TimelineThumbnailSourceTest, AnUnusableFrameGeometryStrandsNothing) {
+    std::atomic<int> live_buffers{0};
+
+    const auto expect_released = [&live_buffers](recorder_core::DecodedVideoFrame frame) {
+        {
+            const QImage wrapped = WrapDecodedFrame(frame);
+            EXPECT_TRUE(wrapped.isNull());
+        }
+        // Only the frame itself still holds the buffer; the wrapper kept nothing.
+        EXPECT_EQ(live_buffers.load(), 1);
+    };
+
+    {
+        recorder_core::DecodedVideoFrame zero_width = MakeFrame(0, 0, 36, &live_buffers);
+        zero_width.stride_bytes = 0;
+        expect_released(std::move(zero_width));
+    }
+    EXPECT_EQ(live_buffers.load(), 0);
+
+    {
+        recorder_core::DecodedVideoFrame zero_height = MakeFrame(0, 64, 0, &live_buffers);
+        expect_released(std::move(zero_height));
+    }
+    EXPECT_EQ(live_buffers.load(), 0);
+
+    {
+        // A stride that cannot hold one row: QImage refuses it, and so must the
+        // wrapper -- accepting it would read past the allocation.
+        recorder_core::DecodedVideoFrame short_stride = MakeFrame(0, 64, 36, &live_buffers);
+        short_stride.stride_bytes = 64 * 4 - 4;
+        expect_released(std::move(short_stride));
+    }
+    EXPECT_EQ(live_buffers.load(), 0);
+
+    {
+        recorder_core::DecodedVideoFrame no_buffer = MakeFrame(0, 64, 36, &live_buffers);
+        no_buffer.bgra.reset();
+        {
+            const QImage wrapped = WrapDecodedFrame(no_buffer);
+            EXPECT_TRUE(wrapped.isNull());
+        }
+    }
+    EXPECT_EQ(live_buffers.load(), 0);
+}
+
 // ---- Worker ----
 
 TEST_F(TimelineThumbnailSourceTest, AClipThatCannotBeOpenedYieldsNoTiles) {
@@ -252,6 +301,22 @@ TEST_F(TimelineThumbnailSourceTest, AClipThatCannotBeOpenedYieldsNoTiles) {
 
     // The worker must simply report an unopened clip and stay idle -- no tiles,
     // no crash, and a destructor that joins cleanly.
+    QCoreApplication::processEvents();
+    EXPECT_EQ(source.videoWidth(), 0);
+    EXPECT_EQ(source.videoHeight(), 0);
+}
+
+TEST_F(TimelineThumbnailSourceTest, ClosingTheClipIsIdempotentAndForgetsTheFrameSize) {
+    // Closing the Edit surface has to hand the recording back to the user: as
+    // long as the worker's engine holds the container open, the file cannot be
+    // moved, renamed or deleted.
+    TimelineThumbnailSource source;
+    source.openClip(QStringLiteral("C:\\this\\path\\does\\not\\exist.mkv"), {0, 1'000'000});
+    source.requestTiles({0, 1000}, 40);
+
+    source.closeClip();
+    source.closeClip(); // a second close is a no-op, not a second teardown
+
     QCoreApplication::processEvents();
     EXPECT_EQ(source.videoWidth(), 0);
     EXPECT_EQ(source.videoHeight(), 0);

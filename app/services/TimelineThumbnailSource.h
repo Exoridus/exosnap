@@ -110,6 +110,12 @@ class TimelineThumbnailSource : public QObject {
     // Abandons the run in flight; its remaining tiles are never emitted.
     void cancel();
 
+    // Cancels the run in flight AND closes the clip on the worker, so the file
+    // stops being held open once the Edit surface is done with it. Without this,
+    // the engine keeps the container open until the process exits and the
+    // recording cannot be moved, renamed or deleted. Idempotent.
+    void closeClip();
+
     // The open clip's frame size, or 0x0 when nothing is open. Valid on the
     // owner's thread once clipOpened() has fired.
     [[nodiscard]] int videoWidth() const noexcept {
@@ -138,6 +144,7 @@ class TimelineThumbnailSource : public QObject {
     struct OpenJob {
         std::filesystem::path path;
         std::vector<int64_t> keyframes_us; // kept with the clip: the caller's cue table
+        quint64 generation = 0;            // which openClip() asked for it
     };
     struct TileJob {
         quint64 run_id = 0;
@@ -154,6 +161,9 @@ class TimelineThumbnailSource : public QObject {
     std::mutex mutex_;
     std::condition_variable cv_;
     bool stop_ = false;
+    // Close and open are mutually exclusive requests: each clears the other, so
+    // the worker never has to decide which of the two came last.
+    bool pending_close_ = false;
     // Latest request wins; an unstarted job is simply replaced.
     std::optional<OpenJob> pending_open_;
     std::optional<TileJob> pending_tiles_;
@@ -164,6 +174,11 @@ class TimelineThumbnailSource : public QObject {
     // its tiles without reaching across the thread boundary.
     int video_width_ = 0;
     int video_height_ = 0;
+    // Bumped by every openClip()/closeClip(). A clipOpened() already queued for
+    // an older generation is dropped on arrival: a clip closed while the worker
+    // was still opening it must not report a size (or a track list) afterwards.
+    // Owner thread only -- the worker just carries the value it was given.
+    quint64 open_generation_ = 0;
 };
 
 } // namespace exosnap

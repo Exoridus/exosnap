@@ -6,6 +6,8 @@
 #include "models/EditTimelineModel.h"
 
 #include <QCoreApplication>
+#include <QImage>
+#include <QStringList>
 #include <QVariantMap>
 
 #include <gtest/gtest.h>
@@ -416,6 +418,192 @@ TEST(EditTimelineAdapterSource, WiringTheDecoderSourceSurvivesASecondClip) {
     EXPECT_TRUE(session.trimSnapReady());
     // Nothing decoded — neither file exists — so the strip stays empty rather
     // than reporting phantom progress.
+    EXPECT_EQ(timeline.tilesReady(), 0);
+}
+
+// ── Closing the session closes the clip (QCR-301) ──────────────────────────
+
+// Records the order of the two teardown signals: the resources must be released
+// before the surface is asked to go away, not after it already did.
+struct CloseTrace {
+    int clip_closed = 0;
+    int close_requested = 0;
+    QStringList order;
+};
+
+void TraceClose(EditSessionAdapter& session, CloseTrace& trace) {
+    QObject::connect(&session, &EditSessionAdapter::clipClosed, &session, [&trace]() {
+        ++trace.clip_closed;
+        trace.order.append(QStringLiteral("clipClosed"));
+    });
+    QObject::connect(&session, &EditSessionAdapter::closeRequested, &session, [&trace]() {
+        ++trace.close_requested;
+        trace.order.append(QStringLiteral("closeRequested"));
+    });
+}
+
+TEST(EditSessionAdapterClose, ReleasesTheClipBeforeDismissingTheSurface) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    EditContext context = MakeContext();
+    context.mkv_master_path = QStringLiteral("D:/Recordings/clip.mkv");
+    session.setEditContext(context);
+    session.requestTrim(20'000, 40'000);
+    ASSERT_TRUE(session.open());
+
+    CloseTrace trace;
+    TraceClose(session, trace);
+    session.close();
+
+    EXPECT_EQ(trace.clip_closed, 1);
+    EXPECT_EQ(trace.close_requested, 1);
+    EXPECT_EQ(trace.order, (QStringList{QStringLiteral("clipClosed"), QStringLiteral("closeRequested")}));
+    EXPECT_FALSE(session.open());
+    EXPECT_EQ(session.durationMs(), 0);
+    EXPECT_TRUE(session.clipPath().isEmpty());
+    EXPECT_TRUE(session.markers().empty());
+    EXPECT_TRUE(session.keyframeTimestamps().empty());
+    EXPECT_FALSE(session.trimSnapReady());
+    EXPECT_FALSE(session.hasUnsavedEdits());
+}
+
+TEST(EditSessionAdapterClose, AFixtureClipWithoutAMasterClosesJustAsCompletely) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext()); // duration, no master path
+    ASSERT_FALSE(session.open());
+    ASSERT_GT(session.durationMs(), 0);
+
+    CloseTrace trace;
+    TraceClose(session, trace);
+    session.close();
+
+    EXPECT_EQ(trace.clip_closed, 1);
+    EXPECT_EQ(session.durationMs(), 0);
+}
+
+TEST(EditSessionAdapterClose, IsIdempotentAndKeepsDismissingTheSurface) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext());
+
+    CloseTrace trace;
+    TraceClose(session, trace);
+    session.close();
+    session.close();
+
+    // The second close has nothing left to release, but the request to dismiss
+    // the surface is not swallowed — a stuck overlay is worse than a repeat.
+    EXPECT_EQ(trace.clip_closed, 1);
+    EXPECT_EQ(trace.close_requested, 2);
+}
+
+TEST(EditSessionAdapterClose, ClosingAnEmptySessionOnlyDismissesTheSurface) {
+    EnsureApplication();
+    EditSessionAdapter session;
+
+    CloseTrace trace;
+    TraceClose(session, trace);
+    session.close();
+
+    EXPECT_EQ(trace.clip_closed, 0);
+    EXPECT_EQ(trace.close_requested, 1);
+}
+
+TEST(EditSessionAdapterClose, ANewSessionAfterACloseOpensNormally) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    EditTimelineAdapter timeline;
+    timeline.setSession(&session);
+
+    EditContext first = MakeContext();
+    first.mkv_master_path = QStringLiteral("D:/Recordings/first.mkv");
+    session.setEditContext(first);
+    session.close();
+
+    EditContext second = MakeContext(50.0);
+    second.mkv_master_path = QStringLiteral("D:/Recordings/second.mkv");
+    second.markers = {MakeMarker(1000)};
+    session.setEditContext(second);
+
+    EXPECT_TRUE(session.open());
+    EXPECT_EQ(session.durationMs(), 50'000);
+    EXPECT_EQ(session.markers().size(), 1U);
+    EXPECT_EQ(timeline.tilesReady(), 0);
+}
+
+TEST(EditTimelineAdapterClose, ClosingTheSessionEmptiesTheStripAndTheRun) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    EditTimelineAdapter timeline;
+    timeline.setSession(&session);
+    session.setEditContext(MakeContext());
+    timeline.setTrackWidth(800);
+    timeline.setFixture({QStringLiteral("System")}, 3);
+    ASSERT_EQ(timeline.tilesReady(), 3);
+    ASSERT_NE(timeline.activeRunForTest(), 0U);
+
+    session.close();
+
+    EXPECT_EQ(timeline.tilesReady(), 0);
+    EXPECT_EQ(timeline.tilesExpected(), 0);
+    EXPECT_EQ(timeline.activeRunForTest(), 0U);
+    EXPECT_TRUE(timeline.audioTrackLabels().isEmpty());
+}
+
+// ── A previous clip's tiles never reach the next one (QCR-302) ─────────────
+
+TEST(TimelineTileRunGate, WaitsUntilTheDecoderSourceIsOnTheClipTheStripShows) {
+    const QString clip_a = QStringLiteral("D:/Recordings/a.mkv");
+    const QString clip_b = QStringLiteral("D:/Recordings/b.mkv");
+    // The window between "the session announced clip B" and "the source finished
+    // reopening on B" — a run started here would decode B's timestamps out of A.
+    EXPECT_FALSE(TimelineTileRunAllowed(true, clip_b, clip_a, 12));
+    EXPECT_TRUE(TimelineTileRunAllowed(true, clip_b, clip_b, 12));
+    EXPECT_FALSE(TimelineTileRunAllowed(false, clip_b, clip_b, 12));
+    EXPECT_FALSE(TimelineTileRunAllowed(true, QString(), QString(), 12));
+    EXPECT_FALSE(TimelineTileRunAllowed(true, clip_b, clip_b, 0));
+}
+
+TEST(EditTimelineAdapterGeneration, ATileFromThePreviousClipCannotReachTheNewStrip) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    EditTimelineAdapter timeline;
+    timeline.setSession(&session);
+    session.setEditContext(MakeContext());
+    timeline.setTrackWidth(800);
+    timeline.setFixture({QStringLiteral("System")}, 2);
+
+    const quint64 first_run = timeline.activeRunForTest();
+    ASSERT_NE(first_run, 0U);
+    const int before = timeline.tilesReady();
+    // A tile of the run in flight still counts.
+    timeline.deliverTileForTest(1000, QImage(4, 4, QImage::Format_ARGB32), first_run);
+    ASSERT_EQ(timeline.tilesReady(), before + 1);
+
+    // Second clip. The decode for the first one is still on its way here.
+    EditContext second = MakeContext(50.0);
+    second.mkv_master_path = QStringLiteral("D:/Recordings/second.mkv");
+    session.setEditContext(second);
+    ASSERT_EQ(timeline.activeRunForTest(), 0U);
+    ASSERT_EQ(timeline.tilesReady(), 0);
+
+    timeline.deliverTileForTest(1000, QImage(4, 4, QImage::Format_ARGB32), first_run);
+    timeline.deliverTileForTest(2000, QImage(4, 4, QImage::Format_ARGB32), first_run);
+
+    // Nothing from the previous clip's generation moved the new clip's state.
+    EXPECT_EQ(timeline.tilesReady(), 0);
+    EXPECT_EQ(timeline.activeRunForTest(), 0U);
+}
+
+TEST(EditTimelineAdapterGeneration, ARunIdOfZeroIsNeverAccepted) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    EditTimelineAdapter timeline;
+    timeline.setSession(&session);
+    session.setEditContext(MakeContext());
+
+    timeline.deliverTileForTest(1000, QImage(4, 4, QImage::Format_ARGB32), 0);
     EXPECT_EQ(timeline.tilesReady(), 0);
 }
 
