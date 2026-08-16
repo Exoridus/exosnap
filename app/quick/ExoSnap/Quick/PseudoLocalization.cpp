@@ -13,9 +13,8 @@ namespace {
 // faces actually draw for a translated UI.
 const QStringList& fillerWords() {
     static const QStringList words = {
-        QStringLiteral("lörem"),  QStringLiteral("ïpsüm"), QStringLiteral("dölör"),
-        QStringLiteral("sït"),    QStringLiteral("ämët"),  QStringLiteral("cönsëctëtür"),
-        QStringLiteral("ädïpïsc"),
+        QStringLiteral("lörem"), QStringLiteral("ïpsüm"),       QStringLiteral("dölör"),   QStringLiteral("sït"),
+        QStringLiteral("ämët"),  QStringLiteral("cönsëctëtür"), QStringLiteral("ädïpïsc"),
     };
     return words;
 }

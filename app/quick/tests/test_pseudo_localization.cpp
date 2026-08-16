@@ -42,10 +42,9 @@ TEST(PseudoLocalizationTest, EverySourceGrowsByAtLeastTheStatedFraction) {
     // The short ones matter most: the title band's five destinations and the
     // transport's action labels are all under a dozen characters, and they
     // share the tightest row in the product.
-    for (const QString& source :
-         {QStringLiteral("Logs"), QStringLiteral("Record"), QStringLiteral("Diagnostics"),
-          QStringLiteral("Change source"), QStringLiteral("Merge with above"),
-          QStringLiteral("Recording start is blocked by a diagnostic blocker.")}) {
+    for (const QString& source : {QStringLiteral("Logs"), QStringLiteral("Record"), QStringLiteral("Diagnostics"),
+                                  QStringLiteral("Change source"), QStringLiteral("Merge with above"),
+                                  QStringLiteral("Recording start is blocked by a diagnostic blocker.")}) {
         const QString expanded = ExpandForPseudoLocalization(source);
         EXPECT_GE(expanded.size(), source.size() + static_cast<int>(source.size() * kGrowth))
             << source.toStdString() << " -> " << expanded.toStdString();

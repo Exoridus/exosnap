@@ -19,10 +19,10 @@
 #include <QQuickStyle>
 #include <QtQuickTest>
 
+using exosnap::EditContext;
 using exosnap::quick::EditPlayerAdapter;
 using exosnap::quick::EditSessionAdapter;
 using exosnap::quick::EditTimelineAdapter;
-using exosnap::EditContext;
 
 namespace {
 
