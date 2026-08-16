@@ -9,6 +9,10 @@ Item {
 
     required property AboutViewModelAdapter aboutViewModel
 
+    // Named like the other four destinations, so a harness can find this page the
+    // same way it finds Record, Settings, Diagnostics and Logs.
+    objectName: "quickAboutPage"
+
     ExoScrollView {
         id: scrollView
 

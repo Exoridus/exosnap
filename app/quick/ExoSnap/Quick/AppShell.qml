@@ -48,27 +48,57 @@ Item {
     // Record 0, Settings 1, Diagnostics 2, Logs 3, About 4.
     readonly property int stackIndex: root.currentPage
 
-    // Activates the Loader behind the destination being navigated to. Written as
-    // a switch over the same index space rather than as a generated list: the
-    // five destinations are a product decision, not a collection.
+    // Loads the destination being navigated to. Written as a switch over the same
+    // index space rather than as a generated list: the five destinations are a
+    // product decision, not a collection.
     //
     // Called from onCurrentPageChanged AND from Component.onCompleted, because a
     // shell constructed with a non-zero currentPage (the --visual-page harness
     // sets it after load, but nothing guarantees that ordering) would otherwise
     // show an empty stack page.
+    //
+    // setSource(url, properties) rather than an inline sourceComponent: an inline
+    // component is part of THIS document, so the engine resolves and compiles the
+    // page's type before the first frame even though nothing instantiates it. A
+    // URL is a string until it is loaded, so the four page documents leave the
+    // startup compile entirely — DiagnosticsPage 34,7 ms, LogsPage 17,9 ms,
+    // SettingsPage 8,8 ms, AboutPage 0,5 ms of it (QCR-615). The trade is
+    // deliberate: the first deliberate visit to a page pays that page's compile.
+    //
+    // The properties below are the pages' required adapters. Every one of them is
+    // a required property of this shell, handed in once by Main and never
+    // reassigned, so an initial value is the whole contract — there is no binding
+    // to lose. Signals are the exception: setSource carries values, not handlers,
+    // so DiagnosticsPage's two navigation signals are connected separately below.
+    //
+    // Idempotent by status: a second navigation to the same page finds it loaded
+    // and does nothing, which is the resident-page contract QCR-602 established.
     function loadDestination(page: int): void {
         switch (page) {
         case 1:
-            settingsLoader.active = true;
+            if (settingsLoader.status === Loader.Null)
+                settingsLoader.setSource(Qt.resolvedUrl("SettingsPage.qml"), {
+                    settings: root.settingsAdapter
+                });
             break;
         case 2:
-            diagnosticsLoader.active = true;
+            if (diagnosticsLoader.status === Loader.Null)
+                diagnosticsLoader.setSource(Qt.resolvedUrl("DiagnosticsPage.qml"), {
+                    diagnostics: root.diagnosticsAdapter,
+                    device: root.deviceAdapter
+                });
             break;
         case 3:
-            logsLoader.active = true;
+            if (logsLoader.status === Loader.Null)
+                logsLoader.setSource(Qt.resolvedUrl("LogsPage.qml"), {
+                    logs: root.logsAdapter
+                });
             break;
         case 4:
-            aboutLoader.active = true;
+            if (aboutLoader.status === Loader.Null)
+                aboutLoader.setSource(Qt.resolvedUrl("AboutPage.qml"), {
+                    aboutViewModel: root.aboutViewModel
+                });
             break;
         default:
             break;
@@ -420,8 +450,8 @@ Item {
 
         // ── The five destinations ────────────────────────────────────────────
         //
-        // Record is eager; the other four are built on their first visit and
-        // then stay resident.
+        // Record is eager; the other four are compiled and built on their first
+        // visit and then stay resident.
         //
         // Before this, all five were direct children of the StackLayout, so a
         // launch that never left Record still compiled and instantiated
@@ -453,56 +483,60 @@ Item {
                 Layout.fillHeight: true
             }
 
+            // The four loaders carry no source of their own: loadDestination()
+            // sets it, with the page's required adapters as initial properties.
+            // They stay active so that the assignment loads immediately — an
+            // inactive Loader would defer the load to whenever it is activated,
+            // which is one more state for the same moment to be in.
             Loader {
                 id: settingsLoader
 
-                active: false
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-
-                sourceComponent: SettingsPage {
-                    settings: root.settingsAdapter
-                }
             }
 
             Loader {
                 id: diagnosticsLoader
 
-                active: false
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-
-                sourceComponent: DiagnosticsPage {
-                    diagnostics: root.diagnosticsAdapter
-                    device: root.deviceAdapter
-                    onNavigateToLogsRequested: root.currentPage = 3
-                    onNavigateToSettingsRequested: root.currentPage = 1
-                }
             }
 
             Loader {
                 id: logsLoader
 
-                active: false
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-
-                sourceComponent: LogsPage {
-                    logs: root.logsAdapter
-                }
             }
 
             Loader {
                 id: aboutLoader
 
-                active: false
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-
-                sourceComponent: AboutPage {
-                    aboutViewModel: root.aboutViewModel
-                }
             }
+        }
+    }
+
+    // Diagnostics' two navigation signals. They used to be inline handlers on the
+    // loader's sourceComponent; setSource() carries property values and not signal
+    // handlers, so they are connected here instead. The target is null until the
+    // page is loaded, which is exactly when there is nothing to connect to — the
+    // binding re-targets on load.
+    //
+    // ignoreUnknownSignals because the loaded item's type is deliberately not
+    // known to this document any more: knowing it is what pulled DiagnosticsPage
+    // into the startup compile.
+    Connections {
+        target: diagnosticsLoader.item
+        ignoreUnknownSignals: true
+
+        function onNavigateToLogsRequested(): void {
+            root.currentPage = 3;
+        }
+
+        function onNavigateToSettingsRequested(): void {
+            root.currentPage = 1;
         }
     }
 

@@ -588,6 +588,15 @@ endif()
 add_test(NAME quick.qml.about_smoke COMMAND exosnap --smoke-test)
 set_tests_properties(quick.qml.about_smoke PROPERTIES LABELS "quick")
 
+# The four non-Record destinations are loaded by URL so their documents stay out
+# of the startup compile (QCR-615). That the pages are absent until navigation,
+# that setSource() actually delivered every adapter, and that Diagnostics' two
+# navigation signals still reach the shell are all only observable in the real
+# shell -- AppShell requires fifteen C++ adapters and cannot be built in a QML
+# test. Runs offscreen with the rest of the suite; no window reaches the screen.
+add_test(NAME quick.qml.navigation_lifecycle COMMAND exosnap --navigation-lifecycle-test)
+set_tests_properties(quick.qml.navigation_lifecycle PROPERTIES LABELS "quick")
+
 # An isolated run has to isolate Qt's QML bytecode cache as well — see the
 # script for why EXOSNAP_CONFIG_DIR does not reach it on its own.
 add_test(

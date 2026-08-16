@@ -48,6 +48,8 @@
 #include <wrl/client.h>
 
 #include <algorithm>
+#include <array>
+#include <cstddef>
 #include <memory>
 
 namespace {
@@ -242,6 +244,113 @@ void saveOverlayWindowGrabs(const QString& screenshot_path) {
     }
 }
 
+// ── --navigation-lifecycle-test (QCR-615) ───────────────────────────────────
+//
+// Settings, Diagnostics, Logs and About are loaded by URL rather than from an
+// inline `sourceComponent`, which is the only reason their documents stay out of
+// the startup compile. That mechanism removes two things a component reference
+// used to give for free, and this test is where both are asserted:
+//
+//   * the pages are genuinely absent until they are navigated to. Nothing else
+//     in the product observes it, and the whole point of the change is that they
+//     are not there;
+//   * `setSource()` carries initial property VALUES, not bindings and not signal
+//     handlers. So every adapter a page requires has to have actually arrived,
+//     and Diagnostics' two navigation signals have to still reach the shell even
+//     though the shell no longer knows the page's type.
+//
+// Structural, never timed: no wall-clock assertion belongs in CI. The loaders are
+// synchronous, so a navigation and its result are observable in the same call.
+struct NavigationDestination {
+    int page = 0;
+    const char* object_name = nullptr;
+    const char* adapter_property = nullptr;
+    QObject* adapter = nullptr;
+};
+
+int failNavigationLifecycle(const char* what) {
+    qCritical().noquote() << QStringLiteral("navigation-lifecycle: ") + QString::fromLatin1(what);
+    return 5;
+}
+
+QObject* findShellPage(QQuickWindow* window, const char* object_name) {
+    return window != nullptr ? window->findChild<QObject*>(QString::fromLatin1(object_name)) : nullptr;
+}
+
+int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplication& application) {
+    if (window == nullptr)
+        return failNavigationLifecycle("no root window");
+    QObject* shell = window->findChild<QObject*>(QStringLiteral("quickAppShell"));
+    if (shell == nullptr)
+        return failNavigationLifecycle("no quickAppShell");
+
+    const std::array<NavigationDestination, 4> destinations{{
+        {1, "quickSettingsPage", "settings", application.settingsAdapter()},
+        {2, "quickDiagnosticsPage", "diagnostics", application.diagnosticsAdapter()},
+        {3, "quickLogsPage", "logs", application.logsAdapter()},
+        {4, "quickAboutPage", "aboutViewModel", application.aboutViewModel()},
+    }};
+
+    // Startup built the page the user is looking at, and nothing else.
+    if (findShellPage(window, "quickRecordPage") == nullptr)
+        return failNavigationLifecycle("Record page missing after startup");
+    for (const NavigationDestination& destination : destinations) {
+        if (findShellPage(window, destination.object_name) != nullptr)
+            return failNavigationLifecycle(destination.object_name);
+    }
+
+    // First visit: the page exists and holds the adapter it was handed.
+    std::array<QObject*, 4> first_visit{};
+    for (std::size_t index = 0; index < destinations.size(); ++index) {
+        const NavigationDestination& destination = destinations.at(index);
+        shell->setProperty("currentPage", destination.page);
+        QObject* page = findShellPage(window, destination.object_name);
+        if (page == nullptr)
+            return failNavigationLifecycle(destination.object_name);
+        if (page->property(destination.adapter_property).value<QObject*>() != destination.adapter)
+            return failNavigationLifecycle(destination.adapter_property);
+        first_visit.at(index) = page;
+    }
+
+    // Diagnostics is the one page with a second required property, and the one
+    // whose initial-property list could silently lose a member.
+    QObject* diagnostics = first_visit.at(1);
+    if (diagnostics->property("device").value<QObject*>() != application.deviceAdapter())
+        return failNavigationLifecycle("device");
+
+    // Second visit: the same instance, so a page still remembers where the user
+    // was in it (the resident contract from QCR-602).
+    for (std::size_t index = 0; index < destinations.size(); ++index) {
+        shell->setProperty("currentPage", 0);
+        shell->setProperty("currentPage", destinations.at(index).page);
+        if (findShellPage(window, destinations.at(index).object_name) != first_visit.at(index))
+            return failNavigationLifecycle("page rebuilt on second visit");
+    }
+
+    // The two signals the shell used to handle inline on its sourceComponent.
+    shell->setProperty("currentPage", 2);
+    if (!QMetaObject::invokeMethod(diagnostics, "navigateToLogsRequested"))
+        return failNavigationLifecycle("navigateToLogsRequested not invokable");
+    if (shell->property("currentPage").toInt() != 3)
+        return failNavigationLifecycle("navigateToLogsRequested did not navigate");
+    shell->setProperty("currentPage", 2);
+    if (!QMetaObject::invokeMethod(diagnostics, "navigateToSettingsRequested"))
+        return failNavigationLifecycle("navigateToSettingsRequested not invokable");
+    if (shell->property("currentPage").toInt() != 1)
+        return failNavigationLifecycle("navigateToSettingsRequested did not navigate");
+
+    // The edit lock is a property of the shell, not of the loaders, and must not
+    // have moved with them.
+    shell->setProperty("editOverlayOpen", true);
+    const bool locked = !shell->property("navigationShortcutsEnabled").toBool();
+    shell->setProperty("editOverlayOpen", false);
+    if (!locked)
+        return failNavigationLifecycle("navigation not locked during an edit session");
+
+    shell->setProperty("currentPage", 0);
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char* argv[]) {
@@ -339,8 +448,9 @@ int main(int argc, char* argv[]) {
     constexpr bool auto_record_requested = false;
     constexpr bool auto_edit_requested = false;
 #endif
+    const bool navigation_lifecycle_test = arguments.contains(QStringLiteral("--navigation-lifecycle-test"));
     const bool diagnostic_mode = preview_mode || auto_record_requested || auto_edit_requested ||
-                                 arguments.contains(QStringLiteral("--smoke-test")) ||
+                                 navigation_lifecycle_test || arguments.contains(QStringLiteral("--smoke-test")) ||
                                  arguments.contains(QStringLiteral("--visual-test"));
 
     // A harness runs the *real* application, and the real application persists
@@ -412,6 +522,7 @@ int main(int argc, char* argv[]) {
     // this list: it is what proves the tray still constructs and tears down
     // inside the real application.
     quick_application.applyTraySuppression(preview_mode || auto_record_requested || auto_edit_requested ||
+                                           navigation_lifecycle_test ||
                                            arguments.contains(QStringLiteral("--visual-test")));
 
     if (!quick_application.load(diagnostic_mode))
@@ -618,6 +729,16 @@ int main(int argc, char* argv[]) {
 
     if (arguments.contains(QStringLiteral("--smoke-test")))
         QTimer::singleShot(150, &app, &QCoreApplication::quit);
+
+    // Queued rather than immediate: the shell's own Component.onCompleted is what
+    // loads the landing destination, and the assertions below start from "nothing
+    // but Record exists" — running before that completes would test a half-built
+    // shell and pass for the wrong reason.
+    if (navigation_lifecycle_test) {
+        QTimer::singleShot(0, &app, [&app, root_window, &quick_application]() {
+            app.exit(runNavigationLifecycleTest(root_window, quick_application));
+        });
+    }
 
     if (arguments.contains(QStringLiteral("--preview-smoke-test"))) {
         auto* deadline = new QTimer(&app);
