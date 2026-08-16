@@ -96,13 +96,38 @@ opaque, so the Record page does not show through. **Back** (or Escape / backdrop
 while exporting) closes the overlay and returns to Record; when trim points or markers are set it
 asks before discarding them.
 
-An open edit session owns the content area, so the five top-level navigation tabs are **disabled**
-while it is open — they stay visible in the title band, in their disabled presentation, and Back /
-Escape is the only way out. A live tab would otherwise swap the page *underneath* a workspace that
-still covers it, and routing the click through the unsaved-edits prompt would make navigation
-conditional, which it is nowhere else in the product. This is the same lock the transport's source
-controls take while a recording runs, for the same reason. The window controls are unaffected: the
-band remains draggable and Minimize/Maximize/Close keep working.
+**An open edit session is state of the Record destination, not a modality of the application.**
+
+- The five top-level destinations stay **available** for the whole edit session — the tabs and
+  `Ctrl+1`…`Ctrl+5` alike.
+- Navigating to Settings, Diagnostics, Logs or About **does not close the session** and asks
+  nothing. There is no unsaved-edits prompt on the navigation path; navigation is unconditional
+  everywhere in the product.
+- The workspace is **left, not ended**: it is visible on Record and only on Record. Nothing is
+  unloaded, so no page is ever swapped underneath a surface that still covers it.
+- Returning to Record shows the **same session** — the same clip, trim, markers, playhead,
+  timeline strip and export state, down to where the details rail was scrolled to.
+- Leaving Record **pauses playback** and keeps the position. Video and audio out of a surface the
+  user is not looking at is both surprising on another page and decoder work nobody asked for.
+  Coming back leaves it paused where it was; starting it again is the user's own action.
+- A **running export keeps running** across a page change. It belongs to the session, not to the
+  page, and returning to Record shows its current state. Close / Discard / Exit keep their own
+  protections; navigation is not one of them.
+- The session still ends only through **Back / Escape**, which still asks before discarding trim
+  points or markers that were set.
+- **Blocking surfaces** (recovery, crash report, recording error) do block navigation — they are
+  modal about a question the user has not answered yet. An edit session is not that.
+- The window controls are unaffected: the band remains draggable and Minimize/Maximize/Close keep
+  working.
+
+Every navigation intent answers to this one contract — a tab, a keyboard shortcut, a notification
+action, a jump from the Diagnostics page. There is no second path with different rules.
+
+> **Corrected 2026-08-16.** This paragraph previously stated the opposite — that the five tabs are
+> *disabled* while an edit session is open — on the premise that the shipped code had always
+> disabled them. That premise was false: the Widgets shell that shipped until the Qt Quick cutover
+> let the tabs navigate for the whole edit session, and the lock arrived as an unnoticed porting
+> regression. See the QCR-001 entry in the cutover backlog.
 
 ### 2.1 The encode device is not a user choice
 
@@ -1131,9 +1156,10 @@ application behind a rounded rectangle nearly the size of the window, which read
 the application was waiting on an answer to — and covered the shell's own minimize, maximize and
 close buttons, so a window with the editor open could not be closed or dragged by its own chrome.
 
-While the workspace is open the navigation tabs are **disabled** and Record stays marked as the
-current destination: the workspace owns the content area, and Back is the way out of it. Back is a
-navigation action and is drawn as one, with the shared chevron.
+While the workspace is open Record stays marked as the current destination, because the workspace
+belongs to it. The navigation tabs stay **available**: leaving Record hides the workspace without
+ending the session, and coming back shows the same one (§2). Back is the way out of the session
+itself, and it is a navigation action drawn as one, with the shared chevron.
 
 **Header.** One line: `‹ Back`, the title, the clip's file name, and the post-flight **report
 status** at the right end. The file name is the only element allowed to give up room and elides in
@@ -1377,9 +1403,11 @@ the focused application. The other three are in-window and are **not** rebindabl
 | Text editing | a focused text field | everything else |
 
 Every shortcut ExoSnap adds inside its own window is modifier-qualified, so no shortcut can consume
-a keystroke meant for a text field. The five navigation shortcuts are inactive while an edit session
-or a blocking surface (recovery, crash report, recording error) is open, for the same reason the
-navigation tabs are disabled there: nothing may swap the page under a surface that still covers it.
+a keystroke meant for a text field. The five navigation shortcuts are inactive while a blocking
+surface (recovery, crash report, recording error) is open, for the same reason the navigation tabs
+are: nothing may swap the page under a surface that still covers it. An open **edit session** is
+not one of those — the shortcuts and the tabs share one navigation contract, and under it the
+session is state of the Record destination (§2).
 
 **Every interactive control is reachable and operable with the keyboard alone.** A control that is
 semantically a button, a toggle or a selectable item appears in the tab order, shows a focus ring
