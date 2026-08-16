@@ -1195,6 +1195,10 @@ place for the next one; at the minimum window size they are what scrolls out of 
 interval** selector (Settings →
 Advanced → Video: 2 s default / 1 s / 0.5 s) trades a little file size for finer trim accuracy. The
 original recording is never mutated during export; not-yet-exported edits are discarded on dismiss.
+Dismissing the surface ends the edit session rather than only hiding it: the clip is closed, the
+preview decoder and the thumbnail strip's decoder are released, and the recording can be moved,
+renamed or deleted again without quitting ExoSnap. Opening Edit afterwards starts from a clean
+session.
 
 **Current boundary:** trim, markers, stream-copy export, and real decoded-frame preview (video +
 synchronized audio, FFmpeg-decode + Qt-paint) are implemented and reachable end to end, including
