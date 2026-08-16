@@ -269,7 +269,15 @@ Item {
     Rectangle {
         id: dragPill
 
-        readonly property real labelMs: root.dragTarget === "start" ? root.shownTrimStartMs : root.dragTarget === "end" ? root.shownTrimEndMs : root.session.positionMs
+        // Bound to the playhead only while the playhead is what is being dragged.
+        // The pill is hidden the rest of the time, but a binding on an invisible
+        // item is still a live binding: reading `positionMs` unconditionally made
+        // every decoded frame during playback re-run the C++ timestamp formatter
+        // and re-lay out the label below, for a pill nobody could see. The
+        // fallback is a constant, so no dependency is registered while idle.
+        readonly property real labelMs: root.dragTarget === "start" ? root.shownTrimStartMs
+                                      : root.dragTarget === "end" ? root.shownTrimEndMs
+                                      : root.dragTarget === "playhead" ? root.session.positionMs : 0
 
         x: Math.max(0, Math.min(root.width - width, root.xForMs(dragPill.labelMs) - width / 2))
         y: 2
