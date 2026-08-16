@@ -171,5 +171,104 @@ TEST_F(AppLogRotationTest, HandleStaysOpenAcrossWritesInsteadOfPerLine) {
     EXPECT_EQ(matches, 2) << "both lines from the same session must persist in the live file";
 }
 
+// ---------------------------------------------------------------------------
+// QCR-205: a log file that cannot be (re)opened must not leave the logger
+// claiming a working file sink.
+//
+// The reopen result was dropped on the floor. Rotation closed the live file,
+// shifted the backups, called open() and ignored what it returned, then reset
+// the size counter to zero — so a rotation that could not reopen handed back a
+// closed QFile while writeLineUnlocked reported success to its caller.
+// ---------------------------------------------------------------------------
+
+TEST_F(AppLogRotationTest, FileLoggingIsHealthyBeforeAnythingHasFailed) {
+    EXPECT_TRUE(AppLog::isFileLoggingHealthy()) << "nothing has been attempted yet, so nothing has failed";
+    AppLog::init();
+    AppLog::info(QStringLiteral("test"), QStringLiteral("first"));
+    EXPECT_TRUE(AppLog::isFileLoggingHealthy());
+}
+
+TEST_F(AppLogRotationTest, OrdinaryRotationLeavesTheFileSinkHealthy) {
+    // The checked reopen must not turn a perfectly normal rotation into a
+    // reported failure.
+    AppLog::init();
+    WriteFillerLines(30);
+    EXPECT_TRUE(AppLog::isFileLoggingHealthy());
+    EXPECT_TRUE(QFile::exists(backupPath(1)));
+}
+
+TEST_F(AppLogRotationTest, AFailedReopenIsRecordedInsteadOfIgnored) {
+    AppLog::init();
+    AppLog::info(QStringLiteral("test"), QStringLiteral("before"));
+    ASSERT_TRUE(AppLog::isFileLoggingHealthy());
+
+    // A real open failure against a real filesystem: QFile::open does not create
+    // missing directories, so this is what a log folder that has gone away (a
+    // removed drive, a profile relocation) looks like from inside the logger.
+    const QString unreachable = temp_dir_.path() + QStringLiteral("/no-such-dir/exosnap.log");
+    AppLog::setLogFilePathForTesting(unreachable);
+
+    AppLog::info(QStringLiteral("test"), QStringLiteral("after"));
+
+    EXPECT_FALSE(AppLog::isFileLoggingHealthy()) << "the logger must not claim a file sink it does not have";
+    EXPECT_FALSE(QFile::exists(unreachable));
+}
+
+TEST_F(AppLogRotationTest, WritesAfterAFailedReopenDoNotCrashAndKeepFeedingTheLogsPage) {
+    AppLog::init();
+    AppLog::setLogFilePathForTesting(temp_dir_.path() + QStringLiteral("/no-such-dir/exosnap.log"));
+
+    // Many lines, not one: the failure path is re-entered per line, and the
+    // fallback report is latched precisely so this cannot become a loop.
+    for (int i = 0; i < 50; ++i)
+        AppLog::info(QStringLiteral("test"), QStringLiteral("line %1").arg(i));
+
+    EXPECT_FALSE(AppLog::isFileLoggingHealthy());
+
+    // The in-memory history is a separate sink and is what the Logs page and the
+    // support bundle render from; a dead file must not cost the user those.
+    const QVector<LogEntry> history = AppLog::history();
+    ASSERT_GE(history.size(), 50);
+    EXPECT_TRUE(history.constLast().message.contains(QStringLiteral("line 49")));
+}
+
+TEST_F(AppLogRotationTest, FileLoggingRecoversOnceThePathIsUsableAgain) {
+    AppLog::init();
+    AppLog::setLogFilePathForTesting(temp_dir_.path() + QStringLiteral("/no-such-dir/exosnap.log"));
+    AppLog::info(QStringLiteral("test"), QStringLiteral("lost"));
+    ASSERT_FALSE(AppLog::isFileLoggingHealthy());
+
+    // The failure is a state, not a one-way door: the next successful open
+    // clears it, so a transient lock or a folder that comes back restores file
+    // logging without a restart.
+    const QString recovered = logDir() + QStringLiteral("/recovered.log");
+    ASSERT_TRUE(QDir().mkpath(logDir()));
+    AppLog::setLogFilePathForTesting(recovered);
+    AppLog::info(QStringLiteral("test"), QStringLiteral("MARKER-AFTER-RECOVERY"));
+
+    EXPECT_TRUE(AppLog::isFileLoggingHealthy());
+    const QStringList lines = ReadLines(recovered);
+    bool found = false;
+    for (const QString& line : lines)
+        found = found || line.contains(QStringLiteral("MARKER-AFTER-RECOVERY"));
+    EXPECT_TRUE(found) << "recovery must actually write, not merely clear the flag";
+}
+
+TEST_F(AppLogRotationTest, RotationAfterARecoveredSinkStillWorks) {
+    // The reopen path is shared between a cold open and a rotation, so a sink
+    // that failed and came back must still rotate normally afterwards.
+    AppLog::init();
+    AppLog::setLogFilePathForTesting(temp_dir_.path() + QStringLiteral("/no-such-dir/exosnap.log"));
+    AppLog::info(QStringLiteral("test"), QStringLiteral("lost"));
+    ASSERT_FALSE(AppLog::isFileLoggingHealthy());
+
+    ASSERT_TRUE(QDir().mkpath(logDir()));
+    AppLog::setLogFilePathForTesting(logPath());
+    WriteFillerLines(30);
+
+    EXPECT_TRUE(AppLog::isFileLoggingHealthy());
+    EXPECT_TRUE(QFile::exists(backupPath(1)));
+}
+
 } // namespace
 } // namespace exosnap::diagnostics

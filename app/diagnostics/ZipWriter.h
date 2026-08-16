@@ -32,12 +32,17 @@ class ZipWriter {
         return AddFileFromMemory(name, bytes.data(), bytes.size());
     }
 
-    // Finalize the archive into an in-memory buffer. Empty on failure. After
-    // this the writer must not be reused.
+    // Finalize the archive into an in-memory buffer. Empty on failure, which
+    // includes the library's own finalize/end reporting one — the central
+    // directory is written by that call, so a buffer produced without it is not
+    // a ZIP. After this the writer must not be reused.
     [[nodiscard]] std::vector<char> Finalize();
 
-    // Finalize and write the archive to a file (UTF-16 path). Returns false on
-    // any failure.
+    // Finalize and write the archive to a file (UTF-16 path). True only once the
+    // stream has been flushed and closed successfully: a write() that reached
+    // the buffer proves nothing about the bytes reaching the volume. On failure
+    // the partial file is removed, so a truncated archive is never left behind
+    // under the name a caller was told to expect.
     bool WriteToFile(const std::wstring& path);
 
   private:

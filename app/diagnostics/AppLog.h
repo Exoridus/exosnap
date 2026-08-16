@@ -70,6 +70,15 @@ class AppLog final : public QObject {
     // Returns an empty string if init() has not been called.
     [[nodiscard]] static QString logFilePath();
 
+    // QCR-205. False once opening, writing to or reopening the session log file
+    // has failed and no later attempt has succeeded — including a rotation whose
+    // reopen failed, which used to leave the logger with a closed handle while
+    // every caller carried on as if file logging were live. The in-memory
+    // history (and therefore the Logs page and the support bundle) is unaffected
+    // either way; this only describes the on-disk sink. True before init(),
+    // because nothing has failed yet.
+    [[nodiscard]] static bool isFileLoggingHealthy();
+
     // Process-wide launch session id (a UUID minted once by init()), written to the
     // startup banner and stamped onto every engine JSONL record. This is the *launch*
     // key that correlates the text log, the engine JSONL and a support bundle; it is
@@ -99,6 +108,13 @@ class AppLog final : public QObject {
     // Test support: overrides the rotation threshold so rotation tests don't need
     // to write megabytes of lines. Pass std::nullopt to restore kMaxLogFileBytes.
     static void setMaxLogFileBytesForTesting(std::optional<qint64> max_bytes);
+
+    // Test support: repoint the session log file, closing the current handle.
+    // A path seam rather than an injected failure flag, so a test drives a real
+    // QFile::open against a real filesystem (an absent directory is not created
+    // by open(), so it fails exactly the way a vanished log folder does) instead
+    // of pinning a fake. The next write reopens at the new path.
+    static void setLogFilePathForTesting(const QString& path);
 
   signals:
     void entriesAppended(QVector<exosnap::diagnostics::LogEntry> entries, int evicted_count);

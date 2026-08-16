@@ -16,6 +16,7 @@
 #include "settings/ConfigPaths.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <deque>
 #include <utility>
 
@@ -32,6 +33,13 @@ struct LogState {
     QFile log_file;
     qint64 log_file_size = 0;
     std::optional<qint64> max_log_file_bytes_override;
+    // QCR-205. True once opening the log file has failed and no later attempt
+    // has succeeded. Two jobs: it is what the process can be asked about instead
+    // of assuming file logging works, and it is the latch that keeps the
+    // fallback report to one line per outage — this failure is discovered on the
+    // logging path itself, so reporting it through the ordinary logger on every
+    // line would be a loop with a very short period.
+    bool file_sink_failed = false;
     std::deque<LogEntry> history;
     QVector<LogEntry> pending_entries;
     int pending_evicted_count = 0;
@@ -90,13 +98,60 @@ QString rotationPathUnlocked(int index) {
     return index == 0 ? s.log_path : s.log_path + QStringLiteral(".%1").arg(index);
 }
 
+// Raw stderr, deliberately not qWarning() and not AppLog itself. Both would
+// re-enter AppLog::write() — through the installed Qt message handler in the
+// first case — from a call site that already holds the (non-recursive) state
+// mutex, on the very path that just failed to write. That is a deadlock on the
+// first line and an unbounded loop on every one after. stderr is the same
+// escape hatch Qt's own default handler uses and the only channel guaranteed to
+// work when the file sink is what is broken.
+void writeFallbackLine(const QString& message) {
+    const QByteArray utf8 = message.toUtf8();
+    std::fwrite(utf8.constData(), 1, static_cast<std::size_t>(utf8.size()), stderr);
+    std::fflush(stderr);
+}
+
+// QCR-205. Report a failure *of the logger itself*, once per outage.
+void reportFileSinkFailureUnlocked(const QString& what) {
+    auto& s = state();
+    if (s.file_sink_failed)
+        return; // one report per outage, not one per line
+    s.file_sink_failed = true;
+    writeFallbackLine(QStringLiteral("[exosnap] File logging unavailable: %1 (%2). In-app Logs and the support "
+                                     "bundle keep working from memory.\n")
+                          .arg(what, s.log_file.errorString()));
+}
+
+// One checked open for both the first open and every reopen, so a rotation
+// cannot end up on a different (silent) code path than a cold start.
+bool openLogFileUnlocked() {
+    auto& s = state();
+    s.log_file.setFileName(s.log_path);
+    if (!s.log_file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
+        reportFileSinkFailureUnlocked(QStringLiteral("cannot open ") + s.log_path);
+        return false;
+    }
+    if (s.file_sink_failed) {
+        // Recovery: whatever held the file (a locked handle, a folder that came
+        // back) is gone. Say so on the same channel that reported the outage,
+        // and re-arm the latch for the next one.
+        s.file_sink_failed = false;
+        writeFallbackLine(QStringLiteral("[exosnap] File logging restored: %1\n").arg(s.log_path));
+    }
+    return true;
+}
+
 // Closes the live file, drops the oldest backup, shifts the remaining backups
 // up by one slot, then reopens a fresh, empty exosnap.log. Windows refuses to
 // rename a file that is still open, so the handle must be closed first; nothing
 // else in the process holds the log file open (the Logs page reads the
 // in-memory history, not the file), so this is safe without extra locking
 // beyond the existing state mutex.
-void rotateLogFileUnlocked() {
+//
+// Returns whether the fresh file is open. The reopen result used to be dropped:
+// rotation would leave the logger with a closed handle and a size counter reset
+// to zero, and the caller went on believing file logging was live.
+bool rotateLogFileUnlocked() {
     auto& s = state();
     s.log_file.close();
 
@@ -107,9 +162,8 @@ void rotateLogFileUnlocked() {
             QFile::rename(from, rotationPathUnlocked(index + 1));
     }
 
-    s.log_file.setFileName(s.log_path);
-    s.log_file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text);
     s.log_file_size = 0;
+    return openLogFileUnlocked();
 }
 
 bool ensureLogFileOpenUnlocked() {
@@ -117,8 +171,7 @@ bool ensureLogFileOpenUnlocked() {
     if (s.log_file.isOpen())
         return true;
 
-    s.log_file.setFileName(s.log_path);
-    if (!s.log_file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text))
+    if (!openLogFileUnlocked())
         return false;
 
     // A previous run (or process restart) may have left an oversized file
@@ -127,7 +180,7 @@ bool ensureLogFileOpenUnlocked() {
     // indefinitely to whatever was already there.
     s.log_file_size = s.log_file.size();
     if (s.log_file_size >= maxLogFileBytesUnlocked())
-        rotateLogFileUnlocked();
+        return rotateLogFileUnlocked();
 
     return true;
 }
@@ -142,17 +195,23 @@ bool writeLineUnlocked(const LogEntry& entry) {
 
     const QByteArray line = (AppLog::formatEntry(entry) + QLatin1Char('\n')).toUtf8();
     const qint64 written = s.log_file.write(line);
-    if (written < 0)
+    if (written < 0) {
+        reportFileSinkFailureUnlocked(QStringLiteral("write failed on ") + s.log_path);
         return false;
+    }
 
     // Crash-safety: this is the support-log channel, so every line is flushed
     // individually (a qFatal -> abort() must not lose the lines leading up to
-    // it) even though the handle now stays open across writes.
-    s.log_file.flush();
+    // it) even though the handle now stays open across writes. The flush is also
+    // where a full volume actually shows up, so its result is the line's result.
+    if (!s.log_file.flush()) {
+        reportFileSinkFailureUnlocked(QStringLiteral("flush failed on ") + s.log_path);
+        return false;
+    }
     s.log_file_size += written;
 
     if (s.log_file_size >= maxLogFileBytesUnlocked())
-        rotateLogFileUnlocked();
+        return rotateLogFileUnlocked();
 
     return true;
 }
@@ -213,6 +272,7 @@ void resetUnlocked(int max_entries) {
     s.log_file.close();
     s.log_file.setFileName(QString());
     s.log_file_size = 0;
+    s.file_sink_failed = false;
     s.max_log_file_bytes_override.reset();
     s.initialized = false;
     s.timestamp_provider = nullptr;
@@ -370,6 +430,11 @@ QString AppLog::logFilePath() {
     return state().log_path;
 }
 
+bool AppLog::isFileLoggingHealthy() {
+    QMutexLocker lock(&state().mutex);
+    return !state().file_sink_failed;
+}
+
 QString AppLog::sessionId() {
     QMutexLocker lock(&state().mutex);
     return state().session_id;
@@ -471,6 +536,15 @@ void AppLog::setTimestampProviderForTesting(std::function<QDateTime()> provider)
 void AppLog::setMaxLogFileBytesForTesting(std::optional<qint64> max_bytes) {
     QMutexLocker lock(&state().mutex);
     state().max_log_file_bytes_override = max_bytes;
+}
+
+void AppLog::setLogFilePathForTesting(const QString& path) {
+    QMutexLocker lock(&state().mutex);
+    auto& s = state();
+    s.log_file.close();
+    s.log_path = path;
+    s.log_file.setFileName(path);
+    s.log_file_size = 0;
 }
 
 void AppLog::setMinSeverity(std::optional<LogSeverity> min_severity) {
