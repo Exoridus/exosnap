@@ -20,6 +20,11 @@ ColumnLayout {
 
         implicitHeight: 28
         hoverEnabled: true
+        // QCR-503. A bare AbstractButton does not take focus, so this header —
+        // the only way to open the section — was mouse-only: not in the tab
+        // order, and Enter/Space did nothing. `focusPolicy` covers both, and
+        // AbstractButton's own Space/Enter handling then reaches onClicked.
+        focusPolicy: Qt.StrongFocus
         Layout.fillWidth: true
         Accessible.role: Accessible.Button
         Accessible.name: root.title
@@ -43,6 +48,11 @@ ColumnLayout {
 
         background: Rectangle {
             color: header.hovered ? ExoTheme.surfaceHover : "transparent"
+            // The shared focus treatment: the `text` rung as a hairline, the
+            // control's own radius. Same as ExoButton and ExoNavTab, so a
+            // keyboard user sees one focus language across the frontend.
+            border.width: header.visualFocus ? ExoTheme.focusRingWidth : 0
+            border.color: ExoTheme.text
             radius: ExoTheme.radiusSm
         }
 

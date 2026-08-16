@@ -708,6 +708,90 @@ set_tests_properties(quick.qml.record_controls PROPERTIES
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${_exosnap_quick_qt_prefix}/bin"
 )
 
+# The Edit surface's keyboard contract (QCR-504). A second QML test executable
+# rather than more files in the one above, because EditTimeline.qml takes three
+# REQUIRED C++-typed adapters: they cannot be stubbed from QML, and seeding a
+# session needs a plain C++ call, so the runner builds and seeds them and hands
+# them over as context properties.
+qt_add_executable(edit_timeline_qml_tests
+    ${EXOSNAP_QUICK_TESTS_DIR}/edit_timeline_qml_test_main.cpp
+    ${PROJECT_SOURCE_DIR}/app/assets/fonts/exosnap_fonts.qrc
+)
+
+qt_add_qml_module(edit_timeline_qml_tests
+    URI ExoSnap.Quick.EditTestControls
+    OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/tests/ExoSnap/Quick/EditTestControls"
+    DEPENDENCIES
+        QtQuick
+    # Compiling the adapters into this module registers them under this URI, so
+    # EditTimeline.qml resolves the same types it does in the shipping module.
+    # Same reason QuickThemeTokens is here: every colour in the strip goes
+    # through ExoTheme, which reads that singleton.
+    SOURCES
+        EditPlayerAdapter.cpp
+        EditPlayerAdapter.h
+        EditPlayerWorker.cpp
+        EditPlayerWorker.h
+        EditSessionAdapter.cpp
+        EditSessionAdapter.h
+        EditTimelineAdapter.cpp
+        EditTimelineAdapter.h
+        EditTimelineModels.cpp
+        EditTimelineModels.h
+        # EditPlayerAdapter's frame sink hands decoded frames to the scene-graph
+        # item, so the two link together. The item is never instantiated here —
+        # EditTimeline.qml does not draw the picture — but the symbol has to
+        # resolve.
+        ExoEditPlayerItem.cpp
+        ExoEditPlayerItem.h
+        QuickPreviewRgbaConverter.cpp
+        QuickPreviewRgbaConverter.h
+        QuickThemeTokens.cpp
+        QuickThemeTokens.h
+        ${PROJECT_SOURCE_DIR}/app/services/TimelineThumbnailSource.cpp
+        ${PROJECT_SOURCE_DIR}/app/services/TimelineThumbnailSource.h
+    QML_FILES
+        EditTimeline.qml
+        ExoTheme.qml
+)
+
+# A sibling directory, not a subdirectory of the shared tests/ one: QUICK_TEST_MAIN
+# scans its source dir RECURSIVELY for tst_*.qml, so the two runners would each
+# try to load the other's cases against a module that does not export them.
+target_compile_definitions(edit_timeline_qml_tests
+    PRIVATE
+        NOMINMAX
+        QUICK_TEST_SOURCE_DIR="${PROJECT_SOURCE_DIR}/app/quick/tests_edit"
+)
+
+target_include_directories(edit_timeline_qml_tests
+    PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}"
+        "${PROJECT_SOURCE_DIR}/app"
+)
+
+# Same as record_controls_qml_tests: QUICK_TEST_MAIN_WITH_SETUP pulls in Qt QML
+# headers that trip C4702 under this project's /WX.
+target_compile_options(edit_timeline_qml_tests
+    PRIVATE
+        $<$<CXX_COMPILER_ID:MSVC>:/wd4702>
+)
+
+target_link_libraries(edit_timeline_qml_tests
+    PRIVATE
+        Qt6::Gui
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickTest
+        exosnap_app_log_test_support
+        recorder_core
+        exosnap::warnings
+)
+
+add_test(NAME quick.qml.edit_timeline COMMAND edit_timeline_qml_tests)
+set_tests_properties(quick.qml.edit_timeline PROPERTIES
+    LABELS "quick"
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QML_IMPORT_PATH=${_exosnap_quick_qt_prefix}/qml"
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${_exosnap_quick_qt_prefix}/bin"
 )
 

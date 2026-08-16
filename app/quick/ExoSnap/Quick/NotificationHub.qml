@@ -95,53 +95,70 @@ Popup {
                 }
             }
 
-            Label {
-                id: markAllReadLabel
+            // QCR-503. Both of these were a Label carrying an Accessible.Button
+            // role and a TapHandler: they claimed to be buttons to a screen
+            // reader while being unreachable by Tab and inert to Enter/Space.
+            // An AbstractButton around the same Label keeps the presentation
+            // exactly as it was (a word, no chrome) and makes the claim true.
+            AbstractButton {
+                id: markAllReadButton
 
-                text: qsTr("Mark all read")
-                textFormat: Text.PlainText
+                objectName: "hubMarkAllRead"
+                hoverEnabled: true
+                focusPolicy: Qt.StrongFocus
                 visible: root.notifications.hasEntries
-                color: markAllReadHover.hovered ? ExoTheme.text : ExoTheme.accent
-                font {
-                    family: ExoTheme.sansFamily
-                    pixelSize: ExoTheme.fontSecondary
-                    weight: Font.Medium
-                }
-
+                padding: ExoTheme.spacingXs
                 Accessible.role: Accessible.Button
                 Accessible.name: qsTr("Mark all read")
+                onClicked: root.notifications.markAllRead()
 
-                HoverHandler {
-                    id: markAllReadHover
+                background: Rectangle {
+                    color: "transparent"
+                    border.width: markAllReadButton.visualFocus ? ExoTheme.focusRingWidth : 0
+                    border.color: ExoTheme.text
+                    radius: ExoTheme.radiusXs
                 }
 
-                TapHandler {
-                    onTapped: root.notifications.markAllRead()
+                contentItem: Label {
+                    text: qsTr("Mark all read")
+                    textFormat: Text.PlainText
+                    color: markAllReadButton.hovered ? ExoTheme.text : ExoTheme.accent
+                    font {
+                        family: ExoTheme.sansFamily
+                        pixelSize: ExoTheme.fontSecondary
+                        weight: Font.Medium
+                    }
                 }
             }
 
-            Label {
-                id: clearAllLabel
+            AbstractButton {
+                id: clearAllButton
 
-                text: qsTr("Clear all")
-                textFormat: Text.PlainText
+                objectName: "hubClearAll"
+                hoverEnabled: true
+                focusPolicy: Qt.StrongFocus
                 visible: root.notifications.hasEntries
-                color: clearAllHover.hovered ? ExoTheme.text : ExoTheme.textMuted
-                font {
-                    family: ExoTheme.sansFamily
-                    pixelSize: ExoTheme.fontSecondary
-                    weight: Font.Medium
-                }
-
+                padding: ExoTheme.spacingXs
                 Accessible.role: Accessible.Button
                 Accessible.name: qsTr("Clear all notifications")
+                onClicked: root.notifications.dismissAll()
 
-                HoverHandler {
-                    id: clearAllHover
+                background: Rectangle {
+                    color: "transparent"
+                    border.width: clearAllButton.visualFocus ? ExoTheme.focusRingWidth : 0
+                    border.color: ExoTheme.text
+                    radius: ExoTheme.radiusXs
                 }
 
-                TapHandler {
-                    onTapped: root.notifications.dismissAll()
+                contentItem: Label {
+                    text: qsTr("Clear all")
+                    textFormat: Text.PlainText
+                    color: clearAllButton.hovered ? ExoTheme.text : ExoTheme.textMuted
+                    font {
+                        family: ExoTheme.sansFamily
+                        pixelSize: ExoTheme.fontSecondary
+                        weight: Font.Medium
+                    }
                 }
             }
         }
@@ -297,21 +314,34 @@ Popup {
                                     }
                                 }
 
-                                ExoGlyph {
-                                    kind: ExoGlyph.Close
-                                    color: dismissHover.hovered ? ExoTheme.text : ExoTheme.textMuted
-                                    Layout.preferredWidth: 12
-                                    Layout.preferredHeight: 12
+                                // Same as the two header actions, plus the hit
+                                // target QCR-506 asks of a control this small:
+                                // the glyph stays 12 px, the button around it
+                                // is 24.
+                                AbstractButton {
+                                    id: dismissButton
 
+                                    hoverEnabled: true
+                                    focusPolicy: Qt.StrongFocus
+                                    Layout.preferredWidth: 24
+                                    Layout.preferredHeight: 24
                                     Accessible.role: Accessible.Button
                                     Accessible.name: qsTr("Dismiss")
+                                    onClicked: root.notifications.dismissEntry(entryDelegate.index)
 
-                                    HoverHandler {
-                                        id: dismissHover
+                                    background: Rectangle {
+                                        color: "transparent"
+                                        border.width: dismissButton.visualFocus ? ExoTheme.focusRingWidth : 0
+                                        border.color: ExoTheme.text
+                                        radius: ExoTheme.radiusXs
                                     }
 
-                                    TapHandler {
-                                        onTapped: root.notifications.dismissEntry(entryDelegate.index)
+                                    ExoGlyph {
+                                        anchors.centerIn: parent
+                                        kind: ExoGlyph.Close
+                                        color: dismissButton.hovered ? ExoTheme.text : ExoTheme.textMuted
+                                        width: 12
+                                        height: 12
                                     }
                                 }
                             }

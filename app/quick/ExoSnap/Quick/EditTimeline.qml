@@ -60,6 +60,138 @@ Item {
     onTrackWidthChanged: root.timeline.trackWidth = root.trackWidth
     Component.onCompleted: root.timeline.trackWidth = root.trackWidth
 
+    // ---- Keyboard (QCR-504) ----
+    //
+    // The trim timeline was pointer-only: no focus, no key handling, and the
+    // only way to set a trim point or move the playhead was to drag. This is
+    // the whole editor's central interaction, so "reachable with a mouse only"
+    // made the surface unusable without one.
+    //
+    // ONE tab stop for the whole strip rather than a focusable playhead plus
+    // two focusable handles: the three are positions on one axis, and three tab
+    // stops would make reaching the out-point a matter of counting. Which one
+    // the arrows drive is stated by `keyTarget`, cycled with Tab's neighbour on
+    // this surface — the bracket keys — and shown by the same enlarged handle
+    // the drag already uses.
+    //
+    // The keys themselves are the established ones and nothing more: arrows
+    // step, Shift/Ctrl change the step, Home/End go to the ends, I and O set
+    // the in and out points (the NLE convention, and the same letters the
+    // export panel's own labels use), Space plays. No new vocabulary was
+    // invented for anything that already had one.
+    readonly property int keyStepMs: 1000
+    readonly property int keyStepFineMs: 100
+    readonly property int keyStepCoarseMs: 10000
+
+    // "playhead" | "start" | "end" — what the arrow keys move. Deliberately
+    // separate from `dragTarget`, which means "a pointer is holding this right
+    // now" and drives the drag pill.
+    property string keyTarget: "playhead"
+
+    activeFocusOnTab: root.interactive
+    Accessible.role: Accessible.Slider
+    Accessible.name: qsTr("Trim timeline")
+    Accessible.description: qsTr("Left and right arrows move the %1. Shift for ten seconds, Control for a tenth. Home and End jump to the clip ends. I sets the in point, O the out point. Bracket keys change what the arrows move. Space plays and pauses.")
+                            .arg(root.keyTarget === "start" ? qsTr("trim in point")
+                                 : root.keyTarget === "end" ? qsTr("trim out point") : qsTr("playhead"))
+
+    function keyStepFor(modifiers: int): int {
+        if (Boolean(modifiers & Qt.ShiftModifier))
+            return root.keyStepCoarseMs;
+        if (Boolean(modifiers & Qt.ControlModifier))
+            return root.keyStepFineMs;
+        return root.keyStepMs;
+    }
+
+    // One writer for every keyboard move, so the clamp/snap contract is the
+    // same one the drag release goes through: trim edits land on
+    // requestTrim (which snaps), positions land on requestSeek.
+    function moveTargetBy(deltaMs: real): void {
+        if (!root.interactive)
+            return;
+        if (root.keyTarget === "start") {
+            root.session.requestTrim(root.session.clampTrimStartMs(root.session.trimStartMs + deltaMs,
+                                                                  root.session.trimEndMs),
+                                     root.session.trimEndMs);
+        } else if (root.keyTarget === "end") {
+            root.session.requestTrim(root.session.trimStartMs,
+                                     root.session.clampTrimEndMs(root.session.trimEndMs + deltaMs,
+                                                                 root.session.trimStartMs));
+        } else {
+            root.session.requestSeek(Math.max(0, Math.min(root.session.durationMs,
+                                                          root.session.positionMs + deltaMs)));
+        }
+    }
+
+    function moveTargetTo(ms: real): void {
+        if (!root.interactive)
+            return;
+        if (root.keyTarget === "start") {
+            root.session.requestTrim(root.session.clampTrimStartMs(ms, root.session.trimEndMs),
+                                     root.session.trimEndMs);
+        } else if (root.keyTarget === "end") {
+            root.session.requestTrim(root.session.trimStartMs,
+                                     root.session.clampTrimEndMs(ms, root.session.trimStartMs));
+        } else {
+            root.session.requestSeek(Math.max(0, Math.min(root.session.durationMs, ms)));
+        }
+    }
+
+    // I/O set a trim point AT the playhead, which is what makes the keyboard
+    // workflow the same one the mouse has: park the playhead, mark the point.
+    function markIn(): void {
+        root.session.requestTrim(root.session.clampTrimStartMs(root.session.positionMs, root.session.trimEndMs),
+                                 root.session.trimEndMs);
+    }
+
+    function markOut(): void {
+        root.session.requestTrim(root.session.trimStartMs,
+                                 root.session.clampTrimEndMs(root.session.positionMs, root.session.trimStartMs));
+    }
+
+    function cycleTarget(delta: int): void {
+        const order = ["playhead", "start", "end"];
+        const next = (order.indexOf(root.keyTarget) + delta + order.length) % order.length;
+        root.keyTarget = order[next];
+    }
+
+    Keys.onPressed: event => {
+        if (!root.interactive)
+            return;
+        switch (event.key) {
+        case Qt.Key_Left:
+            root.moveTargetBy(-root.keyStepFor(event.modifiers));
+            break;
+        case Qt.Key_Right:
+            root.moveTargetBy(root.keyStepFor(event.modifiers));
+            break;
+        case Qt.Key_Home:
+            root.moveTargetTo(0);
+            break;
+        case Qt.Key_End:
+            root.moveTargetTo(root.session.durationMs);
+            break;
+        case Qt.Key_I:
+            root.markIn();
+            break;
+        case Qt.Key_O:
+            root.markOut();
+            break;
+        case Qt.Key_BracketLeft:
+            root.cycleTarget(-1);
+            break;
+        case Qt.Key_BracketRight:
+            root.cycleTarget(1);
+            break;
+        case Qt.Key_Space:
+            root.player.togglePlay();
+            break;
+        default:
+            return;
+        }
+        event.accepted = true;
+    }
+
     // ---- Row stack ----
     Rectangle {
         id: track
@@ -73,7 +205,10 @@ Item {
         // The panel around this component now carries the workspace boundary, so
         // the track keeps only the hairline that separates it from the panel's
         // own fill — `lineStrong` here made two competing edges 8 px apart.
-        border.color: ExoTheme.line
+        // While the strip holds the keyboard focus that same hairline becomes
+        // the shared `text` focus ring, so the frontend keeps one focus
+        // language rather than growing a second outline around the track.
+        border.color: root.activeFocus ? ExoTheme.text : ExoTheme.line
         radius: ExoTheme.radiusMd
         // The rows, the dim bands and the markers all have to stop at the
         // rounded shape; the handles and the playhead deliberately do not.
@@ -220,7 +355,10 @@ Item {
 
             required property string modelData
 
+            // Enlarged while a pointer holds it OR while it is what the arrow
+            // keys will move: the same cue, for the two ways of moving it.
             readonly property bool active: root.dragTarget === handle.modelData
+                                           || (root.activeFocus && root.keyTarget === handle.modelData)
             readonly property real handleMs: handle.modelData === "start" ? root.shownTrimStartMs : root.shownTrimEndMs
 
             x: root.xForMs(handle.handleMs) - width / 2
@@ -254,7 +392,8 @@ Item {
         Rectangle {
             id: playheadKnob
 
-            readonly property int knob: root.dragTarget === "playhead" ? 12 : 10
+            readonly property int knob: root.dragTarget === "playhead"
+                                       || (root.activeFocus && root.keyTarget === "playhead") ? 12 : 10
 
             x: -playheadKnob.knob / 2
             y: -playheadKnob.knob / 2

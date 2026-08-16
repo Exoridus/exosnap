@@ -62,6 +62,76 @@ Item {
 
     objectName: "quickAppShell"
 
+    // ── Application shortcuts (QCR-512) ──────────────────────────────────────
+    //
+    // Scope is the point of this block, not coverage. There are four kinds of
+    // key handling in the product and they must not be confused:
+    //
+    //   global OS hotkeys   registered by Win32HotkeyRegistrar (start/stop/
+    //                       pause/marker). They fire while ExoSnap is not even
+    //                       focused, they are user-rebindable, and nothing here
+    //                       touches them.
+    //   window shortcuts    the five below. Ctrl+1..5, the destination order of
+    //                       the band above.
+    //   surface-local keys  Escape on a modal, the Edit timeline's arrows/I/O,
+    //                       the webcam overlay's arrows. They live on the item
+    //                       that owns them and only fire while it has focus.
+    //   text editing        everything a focused TextField consumes.
+    //
+    // Ctrl is what keeps the last two apart. QCR-503/504 made many more items
+    // real focus targets, so an unmodified letter as an application shortcut
+    // would now be a key that types in a hotkey field and navigates everywhere
+    // else — the class of bug this item exists to avoid. A modified digit
+    // cannot be typed into any field the product has.
+    //
+    // Disabled rather than merely ineffective while a covering surface is up:
+    // the Edit workspace deliberately disables the nav tabs (QCR-001), and a
+    // shortcut that did what the disabled control cannot would be the same
+    // conditional navigation that decision ruled out. The three blocking
+    // surfaces are modal about a session the user has not answered for yet.
+    readonly property bool navigationShortcutsEnabled: !root.editOverlayOpen
+                                                       && !root.recovery.surfaceOpen
+                                                       && !root.recordingError.active
+                                                       && !root.crashReport.active
+
+    // Written out rather than generated from `navPages`: five destinations is a
+    // product decision (CLAUDE.md), not a list length, and a Repeater of
+    // Shortcuts would need a delegate item that exists for nothing else.
+    Shortcut {
+        sequence: "Ctrl+1"
+        context: Qt.WindowShortcut
+        enabled: root.navigationShortcutsEnabled
+        onActivated: root.currentPage = 0
+    }
+
+    Shortcut {
+        sequence: "Ctrl+2"
+        context: Qt.WindowShortcut
+        enabled: root.navigationShortcutsEnabled
+        onActivated: root.currentPage = 1
+    }
+
+    Shortcut {
+        sequence: "Ctrl+3"
+        context: Qt.WindowShortcut
+        enabled: root.navigationShortcutsEnabled
+        onActivated: root.currentPage = 2
+    }
+
+    Shortcut {
+        sequence: "Ctrl+4"
+        context: Qt.WindowShortcut
+        enabled: root.navigationShortcutsEnabled
+        onActivated: root.currentPage = 3
+    }
+
+    Shortcut {
+        sequence: "Ctrl+5"
+        context: Qt.WindowShortcut
+        enabled: root.navigationShortcutsEnabled
+        onActivated: root.currentPage = 4
+    }
+
     ColumnLayout {
         anchors.fill: parent
         spacing: 0

@@ -44,10 +44,21 @@ Rectangle {
 
             implicitHeight: 20
             hoverEnabled: true
+            // See ExoDisclosure: a bare AbstractButton is not focusable.
+            focusPolicy: Qt.StrongFocus
             Layout.fillWidth: true
             Accessible.role: Accessible.Button
             Accessible.name: qsTr("Tips")
+            Accessible.checkable: true
+            Accessible.checked: root.expanded
             onClicked: root.expanded = !root.expanded
+
+            background: Rectangle {
+                color: "transparent"
+                border.width: header.visualFocus ? ExoTheme.focusRingWidth : 0
+                border.color: ExoTheme.text
+                radius: ExoTheme.radiusSm
+            }
 
             contentItem: RowLayout {
                 spacing: ExoTheme.spacingSm

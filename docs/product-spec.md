@@ -293,7 +293,12 @@ beside the dropdown and shifts the toolbar. The toolbar carries a single visible
 **Save as new…**, which appears while the preset is `(changed)`. Every other action lives in a `…`
 overflow menu next to the dropdown: **Rename…** (disabled for a built-in), **Reset** (enabled only
 while `(changed)`), **Delete** (enabled whenever a user preset is selected, never for a built-in),
-**Export…**, and **Import…**. The Output page carries the same row. Switching presets applies immediately and
+**Export…**, and **Import…**. **Delete** is the one destructive action in that menu and it asks
+first: a confirmation dialog naming the preset, defaulting to Cancel, so a single click never
+destroys a saved configuration. It is deliberately a confirmation rather than an Undo — a deleted
+preset also moves the selection and re-applies the configuration that takes its place, and restoring
+all of that after the fact would mean a persisted history the product does not otherwise keep.
+The Output page carries the same row. Switching presets applies immediately and
 records a notification-hub entry offering **Undo**, which restores both the previous live
 configuration and the previous selection. No toast appears — the combo box that performed the switch
 already offers the way back.
@@ -1307,6 +1312,40 @@ deliberately set to something else worked when they chose it, so losing it is wo
 about: it raises a notification naming the affected action, with a **Rebind** action that deep-links
 to Settings → Hotkeys, where the user can bind a working shortcut; attempting a combo already held
 elsewhere is reported inline there as a conflict.
+
+### 10.1 In-window keyboard operation
+
+Global hotkeys are one of four kinds of key handling, and only the first works while ExoSnap is not
+the focused application. The other three are in-window and are **not** rebindable:
+
+| Kind | Scope | Examples |
+|---|---|---|
+| Global hotkeys | the whole desktop | start/stop, pause/resume, capture frame, marker |
+| Window shortcuts | the ExoSnap window | `Ctrl+1`…`Ctrl+5` select Record / Settings / Diagnostics / Logs / About |
+| Surface-local keys | one page or overlay while it holds the keyboard focus | the Edit timeline's transport keys, the webcam overlay's arrows, `Escape` on a modal |
+| Text editing | a focused text field | everything else |
+
+Every shortcut ExoSnap adds inside its own window is modifier-qualified, so no shortcut can consume
+a keystroke meant for a text field. The five navigation shortcuts are inactive while an edit session
+or a blocking surface (recovery, crash report, recording error) is open, for the same reason the
+navigation tabs are disabled there: nothing may swap the page under a surface that still covers it.
+
+**Every interactive control is reachable and operable with the keyboard alone.** A control that is
+semantically a button, a toggle or a selectable item appears in the tab order, shows a focus ring
+while the keyboard put it there (never after a click), and is activated by **Space** — the Windows
+convention, and Qt's own; Enter belongs to a dialog's default button and ExoSnap adds no second
+activation key of its own. A group of mutually exclusive choices (a segmented control) is one tab
+stop, with the arrow keys, Home and End moving inside it.
+
+The **Edit surface** is fully operable without a pointer. The trim timeline is a single tab stop:
+
+| Key | Effect |
+|---|---|
+| `←` / `→` | move by one second, `Shift` ten seconds, `Ctrl` a tenth of a second |
+| `Home` / `End` | jump to the clip's start / end |
+| `[` / `]` | choose whether the arrows move the playhead, the in point or the out point |
+| `I` / `O` | set the in / out point at the playhead |
+| `Space` | play / pause |
 
 ---
 
