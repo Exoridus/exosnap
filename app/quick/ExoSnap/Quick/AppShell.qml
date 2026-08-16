@@ -221,8 +221,14 @@ Item {
                     Layout.rightMargin: root.compactNav ? ExoTheme.spacingMd : ExoTheme.spacingXl
                     Layout.alignment: Qt.AlignVCenter
 
+                    // NOT translatable, and now said so. A product name is the
+                    // one string in a UI that must read identically in every
+                    // language, and marking it `qsTr` also made the
+                    // text-expansion harness (QCR-511) grow the wordmark — which
+                    // measured 80 px of pressure on the navigation that no real
+                    // translation will ever apply.
                     Label {
-                        text: qsTr("exo")
+                        text: "exo"
                         textFormat: Text.PlainText
                         color: ExoTheme.text
                         font {
@@ -233,7 +239,7 @@ Item {
                     }
 
                     Label {
-                        text: qsTr("snap")
+                        text: "snap"
                         textFormat: Text.PlainText
                         color: ExoTheme.accent
                         font {
@@ -274,6 +280,23 @@ Item {
                         // right of the drag handle is fixed-size, so when the
                         // band runs out of room the tabs are the only things
                         // that may give — never the close button.
+                        //
+                        // QCR-511. `minimumWidth: 0` alone did NOT achieve that:
+                        // a layout item with `fillWidth` false is FIXED at its
+                        // preferred size (Qt Quick Layouts, Layout attached
+                        // properties), so the minimum was never consulted. Once
+                        // the drag handle — the band's only fillWidth item —
+                        // reached zero, the row simply laid the rest out past
+                        // its own right edge, and what fell off the end was the
+                        // status pill, the bell and all three window buttons.
+                        // Measured at the 860 px minimum window with a +40 %
+                        // text expansion: the window had no visible way to be
+                        // closed, minimised or moved. `fillWidth` with the
+                        // implicit width as a CEILING makes the tab shrinkable
+                        // without letting it grow past its label, so nothing
+                        // changes at any width where the band already fits.
+                        Layout.fillWidth: true
+                        Layout.maximumWidth: implicitWidth
                         Layout.minimumWidth: 0
                         onClicked: root.currentPage = index
                         onWidthChanged: Qt.callLater(titleBar.refreshChromeGeometry)
@@ -303,6 +326,10 @@ Item {
                     // navigation tabs — the only other shrinkable thing in the
                     // band — to pay for it. A readout may elide; a destination
                     // may not disappear.
+                    //
+                    // `fillWidth` for the same reason the tabs now carry it: the
+                    // maximum and minimum above were inert without it.
+                    Layout.fillWidth: true
                     Layout.maximumWidth: implicitWidth
                     Layout.minimumWidth: 0
                 }

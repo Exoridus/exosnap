@@ -75,7 +75,7 @@ Item {
                                 spacing: 0
 
                                 Label {
-                                    text: qsTr("exo")
+                                    text: "exo"  // the wordmark is never translated; see AppShell
                                     textFormat: Text.PlainText
                                     color: ExoTheme.text
                                     font {
@@ -86,7 +86,7 @@ Item {
                                 }
 
                                 Label {
-                                    text: qsTr("snap")
+                                    text: "snap"
                                     textFormat: Text.PlainText
                                     color: ExoTheme.accent
                                     font {

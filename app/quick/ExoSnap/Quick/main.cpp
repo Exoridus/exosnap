@@ -2,6 +2,7 @@
 #include "QuickLiveVerifySource.h"
 #include "QuickWindowGeometry.h"
 #if defined(EXOSNAP_ENABLE_AUTO_RECORD_HARNESS)
+#include "PseudoLocalization.h"
 #include "QuickAutoEditHarness.h"
 #include "QuickAutoRecordHarness.h"
 #include "auto_record/AutoRecordHarness.h"
@@ -385,6 +386,15 @@ int main(int argc, char* argv[]) {
         // sent during creation, so a filter installed afterwards would miss the
         // only part of the sequence worth measuring.
         exosnap::quick::InstallStartupMessageTrace();
+    }
+
+    // Harness-only: controlled text expansion for the 860x700 layout regression
+    // pass (QCR-511). Installed BEFORE the engine loads, so every qsTr() in QML
+    // resolves through it on its first evaluation and no retranslate() call is
+    // needed. argv-only by design — see PseudoLocalization.h.
+    if (arguments.contains(QStringLiteral("--pseudo-localize"))) {
+        auto* pseudo = new exosnap::quick::PseudoLocalizationTranslator(&app);
+        QCoreApplication::installTranslator(pseudo);
     }
 
     exosnap::quick::QuickApplication quick_application;

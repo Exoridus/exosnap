@@ -212,6 +212,10 @@ target_sources(exosnap
     PRIVATE
         QuickApplication.cpp
         QuickApplication.h
+        # Harness-only text expansion (QCR-511). Not a QML type: it is installed
+        # as a QTranslator before the engine loads and nothing in QML names it.
+        PseudoLocalization.cpp
+        PseudoLocalization.h
         # Process-level startup/shutdown contract, shared with the Widgets entry
         # point: DLL-search hardening, interrupted-swap self-heal, startup clock,
         # log sink, crash capture, single-instance guard, elevated relaunch.
@@ -920,6 +924,27 @@ target_include_directories(theme_contrast_tests
 )
 
 target_compile_definitions(theme_contrast_tests PRIVATE NOMINMAX)
+
+# The text-expansion rule the 860x700 layout gate renders with. A pure function
+# plus a QTranslator subclass, so it needs nothing from the application.
+exosnap_add_gtest(
+    NAME pseudo_localization_tests
+    TEST_PREFIX quick_pseudo_localization.
+    SOURCES
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_pseudo_localization.cpp
+        PseudoLocalization.cpp
+        PseudoLocalization.h
+    LIBRARIES
+        Qt6::Core
+)
+
+target_include_directories(pseudo_localization_tests
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${PROJECT_SOURCE_DIR}/app
+)
+
+target_compile_definitions(pseudo_localization_tests PRIVATE NOMINMAX)
 
 exosnap_add_gtest(
     NAME device_qml_adapter_tests
