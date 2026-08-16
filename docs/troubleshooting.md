@@ -21,9 +21,14 @@ The tone here mirrors the app's: calm, factual, one primary fix per problem.
 
 - **What ExoSnap shows.** When a **window** capture target is a legacy exclusive-fullscreen game, the
   `rec.capture.exclusive_window` check fires pre-flight (a **Blocker** once capture has demonstrably
-  produced no frames, otherwise a **Notice**). If a window switches to exclusive fullscreen *during*
-  a recording, a standing notice reports that the video is frozen until frames return — the recording
-  is not silently black.
+  produced no frames, otherwise a **Notice**). If a **fullscreen-shaped** window stops producing frames
+  *during* a recording — what a mid-session switch into exclusive fullscreen looks like — a standing
+  caution appears after 10 seconds without a new capture frame: *"Window capture appears to have
+  stalled… the captured window may be frozen."* The recording keeps running and is never stopped for
+  you; the notice clears by itself when frames return, and the session report records that it happened.
+  ExoSnap names exclusive fullscreen as the cause only when a fullscreen signal corroborates it. An
+  *ordinary* windowed target that goes quiet is **not** reported, because nothing separates it from a
+  window that simply has nothing to redraw.
 - **What to do.** Use the **"Record the monitor instead"** fix (monitor capture can record exclusive
   fullscreen; you confirm a short summary — the whole monitor is recorded and the per-application
   audio row drops to System/Microphone). Or switch the game to **borderless / windowed fullscreen**

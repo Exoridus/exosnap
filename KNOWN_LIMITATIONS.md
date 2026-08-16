@@ -345,13 +345,20 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
   **monitor** instead: monitor capture (DXGI Output Duplication) can capture exclusive
   fullscreen. ExoSnap *detects* this **pre-flight** (the `rec.capture.exclusive_window`
   check): a proven-black window blocks the start, and the check offers a one-confirm
-  "Record the monitor instead" fix. **A window that switches into FSE *during* a
-  recording is NOT reported** — WGC stops delivering, the CFR encoder duplicates the
-  last frame, and the session keeps running over a frozen picture. Pre-flight detection
-  cannot help there, because the window was capturable when the session started. Most
-  modern "fullscreen" settings run as borderless/flip-model (FSO) and record fine on
-  either path; the mid-session case and the remaining hardening of this matrix are
-  tracked for `0.10.0`.
+  "Record the monitor instead" fix. A window that stops producing frames *during* a
+  recording — the shape a mid-session switch into FSE takes — is now reported as a
+  **capture stall**: after 10 seconds without a single new capture frame from a
+  fullscreen-shaped, live, non-minimized window, a standing caution says the capture
+  appears to have stalled and that the recording is still running. The recording is
+  never stopped automatically, the notice is cleared when frames resume, and the
+  session report records it.
+  **What is still not covered:** the stall notice does not fire for an *ordinary*
+  windowed target, because mid-recording nothing separates "stopped producing" from
+  "nothing to redraw", and it never claims exclusive fullscreen as the cause unless a
+  QUNS or PresentMon signal corroborates it. It is also a notice, not a repair — the
+  frames lost to the stall are gone. Most modern "fullscreen" settings run as
+  borderless/flip-model (FSO) and record fine on either path; the remaining hardening
+  of this matrix is tracked for `0.10.0`.
 - Tray notifications may be suppressed by Windows Focus Assist / Do Not Disturb mode.
 
 ## Capture previews

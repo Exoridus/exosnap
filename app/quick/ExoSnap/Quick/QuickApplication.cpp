@@ -399,7 +399,16 @@ void QuickApplication::initializeRecordWorkflow() {
             peak_av_drift_ms_ = 0.0;
             av_drift_ever_available_ = false;
             last_completed_snapshot_ = {};
+            // QCR-804: same reason. A stall belongs to the session that had it —
+            // neither the latch nor a leftover toast may cross into this one.
+            capture_stall_monitor_.Reset();
+            clearWindowCaptureStallWarning();
         }
+        // The standing stall notice says "the recording is still running". Once
+        // the session leaves Recording/Paused that is no longer true, so the toast
+        // goes even though the hub keeps the record.
+        if (state != UiRecordingState::Recording && state != UiRecordingState::Paused)
+            clearWindowCaptureStallWarning();
         // Keyed off the state the UI is actually showing, not the one just
         // reported. In production the two are the same value — SetState assigned
         // it one line up. Under a latched visual scenario they are not, and
@@ -445,6 +454,7 @@ void QuickApplication::initializeRecordWorkflow() {
         // one and left dropped_frames, av_drift and the Edit report badge at zero
         // for the whole session.
         diagnostics_adapter_.applyLiveDiagnostics(snapshot);
+        observeWindowCaptureStall(snapshot);
         synchronizeRecordState();
     });
     recording_coordinator_->SetResultReadyCallback([this](const UiRecordingResult& result) {
@@ -1502,6 +1512,96 @@ QuickApplication::resolveWindowExclusiveEvidence(const recorder_core::CaptureTar
     return diagnostics::ResolveSnapshotEvidence(window_evidence_probe_->CurrentSnapshot(), target.native_id, false);
 }
 
+// QCR-804. The mid-recording capture-stall path, driven entirely by the
+// diagnostics snapshots the pipeline already publishes at ~5 Hz.
+//
+// Before this, a window that stopped producing frames mid-recording was
+// completely silent: WGC delivered nothing, the CFR pacer duplicated the last
+// frame, the transport stayed green, the session finalized successfully and the
+// user found a video frozen from the stall onwards. The pure predicate that was
+// supposed to catch it (WindowCaptureStall) had no consumer at all — and could
+// not have worked anyway, because it gated on capture.actual_fps, which the
+// aggregator derives from EMITTED frames and which therefore sits at the target
+// rate for exactly the whole duration of this failure.
+//
+// Threading: everything here runs on the Qt main thread. The snapshot arrives
+// through RecordingCoordinator::PostDiagnostics's queued connection (already
+// session-generation filtered), the monitor is a plain main-thread member, and
+// the only thing handed back across a thread boundary is an atomic increment on
+// the coordinator. No capture-thread state is dereferenced.
+void QuickApplication::observeWindowCaptureStall(const recorder_core::RecordingDiagnosticsSnapshot& snapshot) {
+    diagnostics::WindowStallSample sample;
+    sample.session_generation = snapshot.session_generation;
+    sample.is_window_target = snapshot.capture.source_type == recorder_core::CaptureSourceType::Window;
+    sample.capture_expected = diagnostics::CaptureProgressExpected(snapshot.lifecycle);
+    sample.frames_captured = snapshot.capture.frames_captured;
+    sample.elapsed_seconds = snapshot.elapsed_seconds;
+
+    switch (capture_stall_monitor_.Observe(sample)) {
+    case diagnostics::WindowStallSignal::None:
+        return;
+
+    case diagnostics::WindowStallSignal::Recovered:
+        clearWindowCaptureStallWarning();
+        diagnostics::AppLog::info(QStringLiteral("capture"),
+                                  QStringLiteral("window capture resumed after a reported stall"));
+        return;
+
+    case diagnostics::WindowStallSignal::Starved:
+        break;
+    }
+
+    // Confirmed starvation. This is the ONLY point at which any Win32 fact is
+    // read — once per episode, never on a healthy recording.
+    const double starved_for = capture_stall_monitor_.seconds_without_progress();
+    const diagnostics::WindowTargetFacts facts =
+        diagnostics::GatherWindowTargetFacts(reinterpret_cast<HWND>(evidence_target_hwnd_));
+    // PresentMon's verdict when it happens to be available (elevation- and
+    // opt-in-gated). It only ever refines the cause; it never decides whether the
+    // stall is reported.
+    const bool present_fse =
+        snapshot.capture.present_mode_availability == recorder_core::MetricAvailability::Available &&
+        snapshot.capture.source_present_mode == recorder_core::PresentMode::ExclusiveFullscreen;
+
+    const diagnostics::WindowStallVerdict verdict = diagnostics::ClassifyConfirmedStall(facts, present_fse);
+    capture_stall_monitor_.ApplyVerdict(verdict);
+    if (verdict != diagnostics::WindowStallVerdict::Stalled) {
+        // Legitimate (minimized/cloaked/gone) or indistinguishable from idle
+        // content. Logged so a support bundle shows the check ran and chose
+        // silence — the user is told nothing.
+        const QString reason = verdict == diagnostics::WindowStallVerdict::Legitimate
+                                   ? QStringLiteral("window is minimized, hidden or gone")
+                                   : QStringLiteral("ordinary window - indistinguishable from static content");
+        diagnostics::AppLog::info(QStringLiteral("capture"),
+                                  QStringLiteral("window capture produced no frame for %1 s; not reported (%2)")
+                                      .arg(starved_for, 0, 'f', 1)
+                                      .arg(reason));
+        return;
+    }
+
+    const bool fullscreen_hint =
+        diagnostics::EvaluateWindowStall(facts, present_fse) == diagnostics::WindowStallCause::ExclusiveFullscreen;
+    if (recording_coordinator_)
+        recording_coordinator_->NoteWindowCaptureStall();
+    diagnostics::AppLog::warning(
+        QStringLiteral("capture"),
+        QStringLiteral("window capture stalled: no frame for %1 s, recording continues%2")
+            .arg(starved_for, 0, 'f', 1)
+            .arg(fullscreen_hint ? QStringLiteral(" (a fullscreen signal corroborates exclusive fullscreen)")
+                                 : QString()));
+    // Replaces any earlier stall toast rather than stacking a second one.
+    clearWindowCaptureStallWarning();
+    capture_stall_toast_sequence_ = notifications_adapter_.manager().Enqueue(
+        notifications::MakeWindowCaptureStalledEvent(starved_for, fullscreen_hint));
+}
+
+void QuickApplication::clearWindowCaptureStallWarning() {
+    if (capture_stall_toast_sequence_ == 0)
+        return;
+    notifications_adapter_.manager().Dismiss(capture_stall_toast_sequence_);
+    capture_stall_toast_sequence_ = 0;
+}
+
 // rec.capture.exclusive_window's "record the monitor instead" fix: resolve the
 // selected window's hosting monitor via MonitorFromWindow and select that monitor
 // target exactly like a manual pick. A user-confirmed retarget drops the APP audio
@@ -2543,6 +2643,11 @@ bool QuickApplication::applyOverlayVisualScenario(const QString& scenario) {
             event.secondary_action = seed.secondary;
             notifications_adapter_.manager().Enqueue(std::move(event));
         }
+        // QCR-804's standing capture-stall caution, built by the very resolver the
+        // live path calls — so what is photographed is the real wording, including
+        // the conditional fullscreen sentence, and not a hand-written stand-in.
+        notifications_adapter_.manager().Enqueue(notifications::MakeWindowCaptureStalledEvent(
+            diagnostics::kStallStarveSeconds, /*exclusive_fullscreen_hint=*/true));
         notifications_adapter_.openHub();
         return true;
     }

@@ -836,11 +836,26 @@ falls back to its raw number rather than borrowing another display's.
   A game that changes the desktop resolution while recording a monitor ends the recording cleanly with
   an explicit size-change error (the footage up to that point stays valid).
 
-  **Not covered: a window that switches into FSE *during* a recording.** WGC then stops delivering and
-  the CFR encoder duplicates the last frame, so the recording keeps running and the video is frozen —
-  and ExoSnap says nothing. Pre-flight detection does not help, because the window was capturable when
-  the session started. This is a known limitation of v0.9, not a behaviour; it is stated here rather
-  than promised as a mid-session notice ExoSnap does not raise.
+  **A window that stops producing frames *during* a recording** — the shape a mid-session switch into
+  FSE takes — is reported as a **capture stall**, not as a diagnosed cause. What ExoSnap measures is the
+  absence of frame progress: while a **window** capture is recording, it watches the count of frames the
+  capture backend actually produced. If that count does not move for **10 seconds** and the window is
+  fullscreen-shaped, alive, visible and not minimized, a standing **caution** notification appears —
+  *"Window capture appears to have stalled. … The recording is still running, but the captured window may
+  be frozen."* The recording is **never** stopped automatically: the rest of it may be worth keeping and
+  the source may recover. The notice is raised **once** per stall, is cleared the moment frames resume
+  (a later independent stall raises a new one), and a session that had one records
+  `window_capture_stall` in its session report.
+
+  Only the stall is claimed. Exclusive fullscreen is named only when a fullscreen signal (the Shell's
+  QUNS state or a PresentMon `ExclusiveFullscreen` observation) actually corroborates it, and even then
+  as a conditional suggestion — never as *"exclusive fullscreen detected"*.
+
+  **What this does not cover:** an *ordinary* (captioned or non-monitor-filling) window that stops
+  producing frames stays silent, because mid-recording nothing distinguishes it from a window that
+  simply has nothing to redraw, and a false alarm on an idle text editor is worse than silence. A
+  minimized, hidden or virtual-desktop-cloaked window is likewise silent — it is supposed to stop.
+  Detection is also a **notice, not a repair**: the frames already lost to the stall are gone.
 
 *(Cells requiring a real legacy-FSE title are verified live before being promised as behavior; the
 matrix above reflects the shipped detection + monitor path.)*
@@ -1274,7 +1289,8 @@ release (0.11 per ADR 0022).
   a hotkey unavailable at
   startup, a settings save failure, a recovery-manifest write that failed) and **standing** when it
   reports a condition that still holds
-  (low storage, unexpected stop, recovery available). At most
+  (low storage, unexpected stop, recovery available, an audio source that lost its device, a window
+  capture that stopped producing frames). At most
   one timed toast is visible — a newer one replaces it; standing toasts stack above it, never
   auto-dismiss, and always carry an explicit action out. A countdown bar appears exactly on the
   toasts that leave on their own. The card grows to fit its content: no reserved space for an absent

@@ -72,6 +72,12 @@ class NotificationManager : public QObject {
     // already provide. The hub keeps the record for the whole session.
     // NOLINTNEXTLINE(readability-identifier-naming)
     static constexpr int kDismissMs_SettingsLoadFailed = 8000;
+    // Standing: it reports a condition that still holds while the recording runs.
+    // The composition root dismisses it the moment capture frames resume, and
+    // again when the session ends — the body says "the recording is still
+    // running", which stops being true then.
+    // NOLINTNEXTLINE(readability-identifier-naming)
+    static constexpr int kDismissMs_WindowCaptureStalled = 0; // standing
 
     explicit NotificationManager(QObject* parent = nullptr);
 

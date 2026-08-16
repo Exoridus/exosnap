@@ -372,6 +372,17 @@ läuft am Registry-Modell vorbei (s. Ist-Zustand). Deshalb:
 
 ### S4 — Mid-Session-Ehrlichkeit: Freeze-Karte + Standing-Notification (gestaffelt, verschlankt)
 
+> **Nachtrag (QCR-804, umgesetzt): der gebaute Vertrag weicht an zwei Stellen ab.**
+> 1. **Stufe 1 misst `capture.frames_captured`, nicht `capture.actual_fps`.** Der Aggregator
+>    leitet `actual_fps` aus den **emittierten** Frames ab — im Stall pacet der CFR-Encoder
+>    weiter mit Duplikaten, `actual_fps` bleibt also bei ~60. Das hier spezifizierte Gate
+>    hätte nie ausgelöst.
+> 2. **Der ausgelieferte Vertrag ist ein Capture-Stall-Vertrag, kein FSE-Vertrag.** Gemeldet
+>    wird jedes fullscreen-shaped Fenster ohne Frame-Fortschritt; Exclusive Fullscreen wird nur
+>    dann *benannt*, wenn QUNS/PresentMon es bestätigen. Ursachenlos gemeldete Stalls heißen
+>    „appears to have stalled", nicht „exclusive fullscreen detected". Maßgeblich ist
+>    `docs/product-spec.md` §7 und `app/diagnostics/WindowCaptureStall.h`.
+
 **Staffelung:** S4 wird erst gebaut, nachdem Live-Verify-Punkt 5a das stumme Einfrieren real
 bestätigt hat — es ist der schwerste Baustein für den seltensten (und OS-seitig schrumpfenden)
 Fall. Ganz streichen wäre aber falsch: der stumme mid-session Freeze ist Schaden Nr. 1 des

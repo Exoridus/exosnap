@@ -103,6 +103,17 @@ class RecordingCoordinator {
         std::function<diagnostics::ExclusiveEvidence(const recorder_core::CaptureTarget&)>;
     void SetWindowExclusiveEvidenceProvider(WindowExclusiveEvidenceProvider provider);
 
+    // QCR-804. Records that the mid-recording window-capture stall monitor
+    // confirmed and reported one stall episode for the session in flight, so the
+    // on-disk session report can still say it happened after the recording ended.
+    //
+    // Called from the Qt main thread (the monitor is driven by the diagnostics
+    // callback); read from the recording thread when the report is written. An
+    // atomic counter is the whole handoff — deliberately no callback, no shared
+    // state, and nothing the coordinator can dereference back into the UI.
+    void NoteWindowCaptureStall() noexcept;
+    [[nodiscard]] uint32_t WindowCaptureStallEpisodes() const noexcept;
+
     // ADR-0015: armed-from-recovery state.
     // Enter the armed-from-recovery (paused) state for the given candidate.
     // The artefact is repaired/remuxed in the background as the first slice;
@@ -472,6 +483,9 @@ class RecordingCoordinator {
 
     RecoveryProtectionLostCallback on_recovery_protection_lost_;
     WindowExclusiveEvidenceProvider window_exclusive_evidence_provider_;
+    // QCR-804: reported window-capture stalls for the session in flight. Written
+    // from the UI thread, read from the recording thread — see NoteWindowCaptureStall.
+    std::atomic<uint32_t> window_capture_stall_episodes_{0};
     // Posts the recovery-protection-lost notice onto the Qt main thread and logs
     // it. Safe from any thread.
     void PostRecoveryProtectionLost(QString detail);

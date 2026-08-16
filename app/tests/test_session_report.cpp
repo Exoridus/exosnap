@@ -128,6 +128,36 @@ TEST(SessionReport, NoSnapshotYieldsUnavailableSections) {
     EXPECT_EQ(o[QStringLiteral("video_pacing")].toString(), QStringLiteral("unavailable"));
 }
 
+TEST(SessionReport, CarriesWindowCaptureStallEpisodes) {
+    // QCR-804: after the recording ended, the file itself cannot tell its owner
+    // that the picture was frozen for part of it. The report can.
+    SessionReportInputs in = MakeInputs();
+    in.window_capture_stall_episodes = 2;
+    const QJsonObject stall = Parse(BuildSessionReportJson(in))[QStringLiteral("window_capture_stall")].toObject();
+    EXPECT_EQ(stall[QStringLiteral("episodes")].toInt(), 2);
+    EXPECT_TRUE(stall[QStringLiteral("detected")].toBool());
+}
+
+TEST(SessionReport, CleanSessionStatesTheAbsenceOfACaptureStall) {
+    // The zero is emitted too: an absent key would read as "this build cannot
+    // check", which is a different (and wrong) answer.
+    const QJsonObject o = Parse(BuildSessionReportJson(MakeInputs()));
+    ASSERT_TRUE(o.contains(QStringLiteral("window_capture_stall")));
+    const QJsonObject stall = o[QStringLiteral("window_capture_stall")].toObject();
+    EXPECT_EQ(stall[QStringLiteral("episodes")].toInt(), 0);
+    EXPECT_FALSE(stall[QStringLiteral("detected")].toBool());
+}
+
+TEST(SessionReport, CaptureStallIsReportedWithoutASnapshot) {
+    // The stall count is independent of the engine snapshot, so a session that
+    // failed before producing one still reports it.
+    SessionReportInputs in = MakeInputs();
+    in.has_snapshot = false;
+    in.window_capture_stall_episodes = 1;
+    const QJsonObject stall = Parse(BuildSessionReportJson(in))[QStringLiteral("window_capture_stall")].toObject();
+    EXPECT_TRUE(stall[QStringLiteral("detected")].toBool());
+}
+
 TEST(SessionReport, CarriesRawDriftAndClockSlaving) {
     // A soak run has to be able to tell "slaving corrected a lot, little residual
     // remained" from "nothing was corrected": raw drift, the ppm the controller

@@ -121,6 +121,8 @@ int NotificationManager::DismissIntervalMs(NotificationType type) noexcept {
         return kDismissMs_RecoveryProtectionUnavailable;
     case NotificationType::SettingsLoadFailed:
         return kDismissMs_SettingsLoadFailed;
+    case NotificationType::WindowCaptureStalled:
+        return kDismissMs_WindowCaptureStalled;
     }
     return kDismissMs_Saved;
 }

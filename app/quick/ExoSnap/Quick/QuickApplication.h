@@ -23,6 +23,7 @@
 #include "SettingsAdapter.h"
 #include "ShellAdapter.h"
 
+#include "diagnostics/WindowCaptureStall.h"
 #include "models/RecordingPreset.h"
 #include "models/RecordingPresetRegistry.h"
 #include "services/AudioDeviceNotifier.h"
@@ -323,6 +324,17 @@ class QuickApplication {
     [[nodiscard]] diagnostics::ExclusiveEvidence
     resolveWindowExclusiveEvidence(const recorder_core::CaptureTarget& target) const;
 
+    // QCR-804. Feeds one live diagnostics snapshot to the mid-recording capture
+    // stall monitor and acts on what it reports: classify a confirmed starvation,
+    // raise the standing warning, or clear it when frames come back. Driven only
+    // by the coordinator's diagnostics callback (~5 Hz, Qt main thread) — no timer
+    // and no probe of its own.
+    void observeWindowCaptureStall(const recorder_core::RecordingDiagnosticsSnapshot& snapshot);
+    // Dismisses the standing capture-stall toast if one is up. Called when frames
+    // resume and again when the session leaves Recording/Paused — the toast says
+    // "the recording is still running", which stops being true then.
+    void clearWindowCaptureStallWarning();
+
     AppSettingsStore settings_store_;
     PersistedAppSettings settings_;
     RecordingPresetStore preset_store_;
@@ -433,6 +445,12 @@ class QuickApplication {
     // unchanged case must not wake the probe's worker.
     uintptr_t evidence_target_hwnd_ = 0;
     bool evidence_paused_ = false;
+    // QCR-804. Lives on the Qt main thread and is driven only from the diagnostics
+    // callback, which the coordinator already marshals here.
+    diagnostics::WindowCaptureStallMonitor capture_stall_monitor_;
+    // Sequence of the standing capture-stall toast while it is up, 0 when none is.
+    // The hub keeps its own permanent record either way.
+    uint64_t capture_stall_toast_sequence_ = 0;
     // The selection Diagnostics currently holds. Same reason as the two below:
     // pushing it re-runs the recommendation checklist, so only a real change may.
     std::optional<recorder_core::CaptureTarget> pushed_selected_target_;

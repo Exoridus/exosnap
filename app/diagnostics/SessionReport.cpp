@@ -102,6 +102,17 @@ QByteArray BuildSessionReportJson(const SessionReportInputs& inputs) {
         root[QStringLiteral("output_format")] = fmt;
     }
 
+    // ---- Capture stall (QCR-804, independent of the snapshot) ----
+    // Always emitted, including the zero: "this session had no capture stall" is
+    // itself the answer a reader of a frozen-looking recording is after, and an
+    // absent key would read as "the check does not exist in this build".
+    {
+        QJsonObject stall;
+        stall[QStringLiteral("episodes")] = static_cast<double>(inputs.window_capture_stall_episodes);
+        stall[QStringLiteral("detected")] = inputs.window_capture_stall_episodes > 0;
+        root[QStringLiteral("window_capture_stall")] = stall;
+    }
+
     // ---- Requested config (independent of the snapshot) ----
     {
         QJsonObject cfg;

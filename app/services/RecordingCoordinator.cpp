@@ -432,6 +432,14 @@ void RecordingCoordinator::SetWindowExclusiveEvidenceProvider(WindowExclusiveEvi
     window_exclusive_evidence_provider_ = std::move(provider);
 }
 
+void RecordingCoordinator::NoteWindowCaptureStall() noexcept {
+    window_capture_stall_episodes_.fetch_add(1, std::memory_order_relaxed);
+}
+
+uint32_t RecordingCoordinator::WindowCaptureStallEpisodes() const noexcept {
+    return window_capture_stall_episodes_.load(std::memory_order_relaxed);
+}
+
 void RecordingCoordinator::PostRecoveryProtectionLost(QString detail) {
     // The recording itself is intact; only the crash-recovery artefact is missing.
     // Log at error level so a support bundle carries it, then tell the user.
@@ -1004,6 +1012,9 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
         has_last_snapshot_ = false;
         last_snapshot_ = recorder_core::RecordingDiagnosticsSnapshot{};
     }
+    // Same reasoning for the capture-stall count (QCR-804): the report for this
+    // recording must not inherit the previous one's episodes.
+    window_capture_stall_episodes_.store(0, std::memory_order_relaxed);
 
     auto config = exosnap::capability::ToRecorderCoreConfig(ctx.resolved_user_config, ctx.caps);
     config.cq = ctx.video_settings.cq;
@@ -2902,6 +2913,8 @@ void RecordingCoordinator::WriteSessionReportForResult(const UiRecordingResult& 
         inputs.has_snapshot = has_last_snapshot_;
         inputs.snapshot = last_snapshot_;
     }
+
+    inputs.window_capture_stall_episodes = WindowCaptureStallEpisodes();
 
     const QDateTime ended = QDateTime::currentDateTime();
     inputs.ended_at = ended.toString(Qt::ISODate);
