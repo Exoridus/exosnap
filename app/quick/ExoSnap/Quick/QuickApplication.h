@@ -215,6 +215,11 @@ class QuickApplication {
     // the scrubbed non-fatal report are SDK concerns, so they live here rather
     // than behind the QML boundary.
     void initializeRecordingError();
+    // QCR-415. Hands the failure to the arbiter instead of raising the surface
+    // straight away, and holds the report until the arbiter says it is this
+    // surface's turn. The report has to live somewhere while it waits, and only
+    // the composition root has it.
+    void presentRecordingFailure(const models::RecordingFailureReport& report, bool can_send_report);
     // Next-launch crash consent (ADR 0017). The crash surface is an in-window
     // overlay of this application, not a separate reporter executable, so it is
     // part of the main-app cutover. Raised only when the persisted policy says
@@ -443,6 +448,11 @@ class QuickApplication {
     // Set when the previous session never marked a clean exit. The next-launch
     // crash overlay is not migrated yet, so today this only reaches the log.
     std::optional<crash_capture::SessionContext> pending_crash_;
+    // QCR-415. The failure report waiting for its turn behind another blocking
+    // surface. Overwritten by a later failure, matching the surface's own rule
+    // that the newest attempt is the one the user just made.
+    std::optional<models::RecordingFailureReport> pending_recording_failure_;
+    bool pending_recording_failure_can_send_ = false;
     // Harness-only Expert override; suppresses the persist of expert_mode_enabled.
     bool visual_expert_override_ = false;
     // Set when the preset store had to repair fields while loading. Raised as a

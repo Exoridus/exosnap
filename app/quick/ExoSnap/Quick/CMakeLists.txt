@@ -1320,18 +1320,26 @@ exosnap_add_gtest(
         CrashReportAdapter.h
         RecoveryAdapter.cpp
         RecoveryAdapter.h
+        # QCR-415: the third arbitrated surface.
+        RecordingErrorAdapter.cpp
+        RecordingErrorAdapter.h
+        ${PROJECT_SOURCE_DIR}/app/models/RecordingFailurePolicy.cpp
+        ${PROJECT_SOURCE_DIR}/app/models/RecordingFailurePolicy.h
         ${PROJECT_SOURCE_DIR}/app/services/RecoveryService.cpp
         ${PROJECT_SOURCE_DIR}/app/services/AtomicFileOps.cpp
         ${PROJECT_SOURCE_DIR}/app/settings/RecoveryManifestStore.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/AppLog.cpp
     LIBRARIES
         Qt6::Core
+        Qt6::Gui
         Qt6::Qml
         Qt6::Test
         exosnap_capability
         recorder_core
         FFmpeg::mux
 )
+
+target_compile_definitions(blocking_surface_arbiter_tests PRIVATE NOMINMAX)
 
 target_include_directories(blocking_surface_arbiter_tests
     PRIVATE

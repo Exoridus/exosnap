@@ -241,6 +241,15 @@ card, chrome, heading and actions are fixed and only the material being read scr
 user is being asked to **decide** (a consent tick, a "remember this choice") stays visible with the
 actions rather than scrolling away with the material.
 
+**At most one of the three is on screen at any moment, and the one that is up keeps precedence.** A
+surface asked for while another is showing is **queued**, not dropped and not allowed to supersede:
+a crash prompt, a recovery offer or a failure report that vanishes mid-read takes its question with
+it, and none of them can be got back without restarting. Queued surfaces come up one at a time, in
+the order they were asked for, and each is shown once. Consequently a **recording cannot be started
+while any of them is up** — a session whose transport is behind a scrim cannot be controlled, and
+starting one would silently invalidate the offer an open recovery surface is still making. Stopping,
+pausing and resuming are never blocked: a running recording the user cannot stop is the worse state.
+
 ---
 
 ## 3. Recording defaults and profiles

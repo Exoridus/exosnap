@@ -473,7 +473,7 @@ void QuickApplication::initializeRecordWorkflow() {
         if (const auto failure = models::BuildRecordingFailureReport(result)) {
             // Only an official build with a compiled-in DSN and active crash
             // capture can send anything, so only there is the action offered.
-            recording_error_adapter_.present(*failure, crash_capture::IsActive());
+            presentRecordingFailure(*failure, crash_capture::IsActive());
         }
         // "Open editor when finished" (PersistedAppSettings): the overlay opening
         // by itself IS the post-recording feedback. The Widgets shell drove this
@@ -1039,6 +1039,18 @@ void QuickApplication::selectRegion(const QRectF& normalized_rect) {
 void QuickApplication::startRequested() {
     if (record_view_model_.state == UiRecordingState::Countdown) {
         cancelCountdown();
+        return;
+    }
+    // QCR-415. The only way to get here while a blocking surface is up is the
+    // global start hotkey — the surfaces cover the transport, and the desktop is
+    // deliberately still reachable. Starting anyway would put the user in a
+    // session whose transport is behind a scrim, and it would silently invalidate
+    // the very offer an open recovery surface is making: ArmFromRecovery is
+    // refused once the coordinator has left Ready. Stop, pause and resume are NOT
+    // gated here; a recording that cannot be stopped is the worse state.
+    if (surface_arbiter_.anySurfaceUp()) {
+        diagnostics::AppLog::info(QStringLiteral("record"),
+                                  QStringLiteral("Start refused: a blocking surface is open — answer it first"));
         return;
     }
     if (!record_view_model_adapter_.canStart())
@@ -2335,11 +2347,36 @@ void QuickApplication::initializeDisplayGeometryWatch() {
 }
 
 void QuickApplication::initializeBlockingSurfaces() {
-    surface_arbiter_.setSurfaces(&recovery_adapter_, &crash_report_adapter_);
-    // The arbiter decides WHEN the crash surface may come up; only this class can
-    // build what it shows.
+    surface_arbiter_.setSurfaces(&recovery_adapter_, &crash_report_adapter_, &recording_error_adapter_);
+    // The arbiter decides WHEN each surface may come up; only this class can
+    // build what they show.
     QObject::connect(&surface_arbiter_, &BlockingSurfaceArbiter::crashSurfaceRequested, &crash_report_adapter_,
                      [this]() { showCrashReportSurface(); });
+    QObject::connect(&surface_arbiter_, &BlockingSurfaceArbiter::recordingErrorSurfaceRequested,
+                     &recording_error_adapter_, [this]() {
+                         if (!pending_recording_failure_)
+                             return;
+                         const models::RecordingFailureReport report = *pending_recording_failure_;
+                         const bool can_send = pending_recording_failure_can_send_;
+                         pending_recording_failure_.reset();
+                         recording_error_adapter_.present(report, can_send);
+                     });
+}
+
+// QCR-415. The recording-error surface used to be raised straight from the
+// result callback with no reference to the other two, so a failure delivered
+// while recovery or the crash prompt was up produced two active modal loaders —
+// the covered one still holding focusable controls, which is exactly what
+// QCR-403 centralized the other two to prevent. The path is reachable because
+// the start hotkey is deliberately desktop-wide and a modal scrim inside the
+// shell does not reach it.
+void QuickApplication::presentRecordingFailure(const models::RecordingFailureReport& report, bool can_send_report) {
+    // A later failure replaces an earlier one that is still waiting: the surface's
+    // own rule is that the newest attempt is the one the user just made, and that
+    // has to hold whether it was raised or queued.
+    pending_recording_failure_ = report;
+    pending_recording_failure_can_send_ = can_send_report;
+    surface_arbiter_.requestRecordingError();
 }
 
 void QuickApplication::initializeRecovery() {
@@ -2457,7 +2494,7 @@ bool QuickApplication::applyOverlayVisualScenario(const QString& scenario) {
         const auto report = models::BuildRecordingFailureReport(result);
         if (!report)
             return false;
-        recording_error_adapter_.present(*report, /*can_send_report=*/true);
+        presentRecordingFailure(*report, /*can_send_report=*/true);
         return true;
     }
 
