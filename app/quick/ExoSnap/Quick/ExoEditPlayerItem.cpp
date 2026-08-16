@@ -212,9 +212,6 @@ class EditPlayerTextureNode final : public QSGNode {
         has_frame_ = false;
     }
 
-    [[nodiscard]] bool hasFrame() const noexcept {
-        return has_frame_;
-    }
     [[nodiscard]] QSize sourceSize() const {
         return QSize(static_cast<int>(width_), static_cast<int>(height_));
     }

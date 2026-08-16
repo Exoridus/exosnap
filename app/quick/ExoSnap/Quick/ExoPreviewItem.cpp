@@ -348,9 +348,6 @@ class PreviewTextureNode final : public QSGNode {
     [[nodiscard]] bool valid() const noexcept {
         return valid_;
     }
-    [[nodiscard]] bool hasFrame() const noexcept {
-        return has_frame_;
-    }
     [[nodiscard]] QSize sourceSize() const {
         return QSize(static_cast<int>(width_), static_cast<int>(height_));
     }
