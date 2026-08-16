@@ -2959,9 +2959,9 @@ bool QuickApplication::load(bool no_activate) {
     // The shell is connected now, so a parked relaunch landing page can be
     // delivered. Done before the window is shown to the user rather than as a
     // visible navigation away from Record.
-    if (pending_landing_page_ >= 0) {
-        emit shell_adapter_.navigateToPageRequested(pending_landing_page_);
-        pending_landing_page_ = -1;
+    if (pending_landing_page_.has_value()) {
+        emit shell_adapter_.navigateToPageRequested(*pending_landing_page_);
+        pending_landing_page_.reset();
     }
 
     if (auto* root_window = qobject_cast<QQuickWindow*>(engine_.rootObjects().constFirst())) {

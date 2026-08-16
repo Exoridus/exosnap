@@ -12,6 +12,10 @@
 
 #include <gtest/gtest.h>
 
+#include <QByteArray>
+#include <QMetaMethod>
+#include <QMetaObject>
+
 using exosnap::CloseGuardKind;
 using exosnap::CloseGuardState;
 using exosnap::EvaluateCloseGuard;
@@ -303,6 +307,29 @@ TEST(ShellNavigation, EveryDestinationIsDirectlyAddressable) {
     // must therefore be a deliberate decision about the band's width budget at
     // the 860 px minimum window, not an accident of appending an enumerator.
     EXPECT_EQ(static_cast<int>(ShellAdapter::AboutPage) + 1, 5);
+}
+
+TEST(ShellNavigation, TheNavigationSignalCarriesThePageEnumRatherThanAnInt) {
+    // QCR-716. The enum's own header comment says it exists "so a navigation
+    // request never has to spell a bare integer", and the one navigation signal
+    // took an int anyway. With the enum in the signature, QML addresses the
+    // destinations as ShellAdapter.SettingsPage instead of a 1 that would keep
+    // compiling — and mean something else — after a reorder.
+    const QMetaObject& meta = ShellAdapter::staticMetaObject;
+    int found = -1;
+    for (int i = meta.methodOffset(); i < meta.methodCount(); ++i) {
+        const QMetaMethod method = meta.method(i);
+        if (method.methodType() == QMetaMethod::Signal &&
+            method.name() == QByteArrayLiteral("navigateToPageRequested")) {
+            found = i;
+            break;
+        }
+    }
+    ASSERT_GE(found, 0) << "the navigation signal must exist";
+
+    const QMetaMethod method = meta.method(found);
+    ASSERT_EQ(method.parameterCount(), 1);
+    EXPECT_EQ(QByteArray(method.parameterTypeName(0)), QByteArrayLiteral("Page"));
 }
 
 } // namespace

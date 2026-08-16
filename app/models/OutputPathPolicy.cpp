@@ -400,6 +400,10 @@ OutputPasteSplitDecision AnalyzeOutputPasteInput(const std::wstring& raw_input) 
     return decision;
 }
 
+// No `default:` in these two: the result enums are ours and closed, so a new
+// outcome must fail the build (C4062 under /W4 /WX) instead of quietly reaching
+// the user as the generic sentence. The trailing return is only what the
+// compiler needs to see a value on every path.
 std::wstring OutputFolderPolicyMessage(OutputFolderPolicyResult result) {
     switch (result) {
     case OutputFolderPolicyResult::Ok:
@@ -414,9 +418,8 @@ std::wstring OutputFolderPolicyMessage(OutputFolderPolicyResult result) {
         return L"Only allowlisted environment variables are supported in output folder.";
     case OutputFolderPolicyResult::UnsupportedExpression:
         return L"Shell expressions are not supported in output folder.";
-    default:
-        return L"Output folder is invalid.";
     }
+    return L"Output folder is invalid.";
 }
 
 std::wstring FilenamePatternPolicyMessage(FilenamePatternPolicyResult result) {
@@ -435,9 +438,8 @@ std::wstring FilenamePatternPolicyMessage(FilenamePatternPolicyResult result) {
         return L"Home alias is not allowed in filename pattern.";
     case FilenamePatternPolicyResult::UnsupportedExpression:
         return L"Shell expressions are not allowed in filename pattern.";
-    default:
-        return L"Filename pattern is invalid.";
     }
+    return L"Filename pattern is invalid.";
 }
 
 } // namespace exosnap

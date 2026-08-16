@@ -93,8 +93,8 @@ ApplicationWindow {
             root.close();
         }
 
-        function onNavigateToPageRequested(pageIndex: int): void {
-            appShell.currentPage = pageIndex;
+        function onNavigateToPageRequested(page: int): void {
+            appShell.currentPage = page;
         }
 
         // Opened imperatively rather than by binding `visible`: Dialog::accept()

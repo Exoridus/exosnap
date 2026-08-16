@@ -107,7 +107,9 @@ std::string RecordingPresetRegistry::AddPreset(RecordingPresetConfig config, con
     preset = SanitizePreset(std::move(preset));
 
     // Keep the deduped name (SanitizePreset may have changed it only if empty).
-    const std::string id = preset.id;
+    // Not const: `id` is returned below and NRVO cannot apply (it is used in
+    // between), so const would turn the return into a copy instead of a move.
+    std::string id = preset.id;
     presets_.push_back(std::move(preset));
     selected_id_ = id;
     return id;
@@ -215,7 +217,7 @@ std::string RecordingPresetRegistry::DeduplicateName(const std::string& base) co
     }
 
     for (int suffix = 2;; ++suffix) {
-        const std::string candidate = base + " (" + std::to_string(suffix) + ")";
+        std::string candidate = base + " (" + std::to_string(suffix) + ")";
         if (!name_exists(FoldPresetName(candidate))) {
             return candidate;
         }

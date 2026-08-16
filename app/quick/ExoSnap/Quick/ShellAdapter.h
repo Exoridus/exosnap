@@ -84,7 +84,11 @@ class ShellAdapter : public QObject {
     // Navigation requested from outside a page — today a notification action
     // ("Open update", "Rebind hotkey", "See the drop breakdown"). The shell owns
     // the nav index, so the request lands here rather than at the source.
-    void navigateToPageRequested(int page_index);
+    //
+    // Carries the `Page` enum above, not a bare int: that is the whole reason the
+    // enum exists, and Q_ENUM means QML writes ShellAdapter.SettingsPage instead
+    // of a 1 that silently means something else after a reorder.
+    void navigateToPageRequested(Page page);
 
     void closeGuardChanged();
     // Every guard has cleared; the frontend may close the window now.

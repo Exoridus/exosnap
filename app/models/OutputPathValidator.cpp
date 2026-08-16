@@ -57,6 +57,9 @@ FolderValidationResult ValidateOutputFolder(const std::filesystem::path& folder)
     return FolderValidationResult::Ok;
 }
 
+// No `default:`: the enum is ours and closed, so a new validation outcome must
+// fail the build (C4062 under /W4 /WX) instead of reaching the user as the
+// generic sentence. The trailing return is only for the compiler's benefit.
 std::wstring FolderValidationMessage(FolderValidationResult result) {
     switch (result) {
     case FolderValidationResult::Ok:
@@ -67,9 +70,8 @@ std::wstring FolderValidationMessage(FolderValidationResult result) {
         return L"Output folder is not writable.";
     case FolderValidationResult::CreationFailed:
         return L"Failed to create output folder.";
-    default:
-        return L"Output folder validation failed.";
     }
+    return L"Output folder validation failed.";
 }
 
 std::optional<std::filesystem::path> ResolveAvailableOutputPath(const std::filesystem::path& base_path) {

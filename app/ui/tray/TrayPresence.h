@@ -129,6 +129,9 @@ class TrayPresence : public QObject {
     TrayIconState state_ = TrayIconState::Idle;
     QString status_label_;
     QString elapsed_text_;
+    // False until the first applyState() call, so the initial state is written
+    // through even when it equals the member defaults.
+    bool state_applied_ = false;
     bool window_visible_ = true;
     bool recording_blocked_ = false;
     int unread_count_ = 0; // NOTIFY-SKIN-R1

@@ -39,13 +39,15 @@ Item {
     // Record is the landing destination, matching the Widgets shell. This was an
     // opt-in during the migration, when About was the only migrated page; leaving
     // it that way shipped an application that opens on its own version numbers.
-    property int currentPage: 0
+    property int currentPage: ShellAdapter.RecordPage
     // Edit/Output/Save is an overlay over the Record page (ADR 0022), never a
     // nav destination — so its visibility is shell state, not a stack index.
     property bool editOverlayOpen: false
 
-    // Page index -> stack index. Single index space, mirroring ShellAdapter::Page:
-    // Record 0, Settings 1, Diagnostics 2, Logs 3, About 4.
+    // Page index -> stack index. One index space, and it IS ShellAdapter::Page:
+    // the StackLayout's child order below is the enum's order, so no separate
+    // mapping exists to drift. QCR-716 replaced the bare 0..4 literals that used
+    // to spell it out here with the enumerators themselves.
     readonly property int stackIndex: root.currentPage
 
     // Loads the destination being navigated to. Written as a switch over the same
@@ -75,26 +77,26 @@ Item {
     // and does nothing, which is the resident-page contract QCR-602 established.
     function loadDestination(page: int): void {
         switch (page) {
-        case 1:
+        case ShellAdapter.SettingsPage:
             if (settingsLoader.status === Loader.Null)
                 settingsLoader.setSource(Qt.resolvedUrl("SettingsPage.qml"), {
                     settings: root.settingsAdapter
                 });
             break;
-        case 2:
+        case ShellAdapter.DiagnosticsPage:
             if (diagnosticsLoader.status === Loader.Null)
                 diagnosticsLoader.setSource(Qt.resolvedUrl("DiagnosticsPage.qml"), {
                     diagnostics: root.diagnosticsAdapter,
                     device: root.deviceAdapter
                 });
             break;
-        case 3:
+        case ShellAdapter.LogsPage:
             if (logsLoader.status === Loader.Null)
                 logsLoader.setSource(Qt.resolvedUrl("LogsPage.qml"), {
                     logs: root.logsAdapter
                 });
             break;
-        case 4:
+        case ShellAdapter.AboutPage:
             if (aboutLoader.status === Loader.Null)
                 aboutLoader.setSource(Qt.resolvedUrl("AboutPage.qml"), {
                     aboutViewModel: root.aboutViewModel
@@ -160,35 +162,35 @@ Item {
         sequence: "Ctrl+1"
         context: Qt.WindowShortcut
         enabled: root.navigationShortcutsEnabled
-        onActivated: root.currentPage = 0
+        onActivated: root.currentPage = ShellAdapter.RecordPage
     }
 
     Shortcut {
         sequence: "Ctrl+2"
         context: Qt.WindowShortcut
         enabled: root.navigationShortcutsEnabled
-        onActivated: root.currentPage = 1
+        onActivated: root.currentPage = ShellAdapter.SettingsPage
     }
 
     Shortcut {
         sequence: "Ctrl+3"
         context: Qt.WindowShortcut
         enabled: root.navigationShortcutsEnabled
-        onActivated: root.currentPage = 2
+        onActivated: root.currentPage = ShellAdapter.DiagnosticsPage
     }
 
     Shortcut {
         sequence: "Ctrl+4"
         context: Qt.WindowShortcut
         enabled: root.navigationShortcutsEnabled
-        onActivated: root.currentPage = 3
+        onActivated: root.currentPage = ShellAdapter.LogsPage
     }
 
     Shortcut {
         sequence: "Ctrl+5"
         context: Qt.WindowShortcut
         enabled: root.navigationShortcutsEnabled
-        onActivated: root.currentPage = 4
+        onActivated: root.currentPage = ShellAdapter.AboutPage
     }
 
     ColumnLayout {
@@ -477,7 +479,7 @@ Item {
             RecordPage {
                 recordViewModel: root.recordViewModel
                 previewAdapter: root.previewAdapter
-                active: root.currentPage === 0
+                active: root.currentPage === ShellAdapter.RecordPage
                 benchmarkInteractionActive: root.benchmarkInteractionActive
                 Layout.fillWidth: true
                 Layout.fillHeight: true
@@ -532,11 +534,11 @@ Item {
         ignoreUnknownSignals: true
 
         function onNavigateToLogsRequested(): void {
-            root.currentPage = 3;
+            root.currentPage = ShellAdapter.LogsPage;
         }
 
         function onNavigateToSettingsRequested(): void {
-            root.currentPage = 1;
+            root.currentPage = ShellAdapter.SettingsPage;
         }
     }
 
@@ -604,6 +606,12 @@ Item {
     // dragged by its own chrome. Anchoring below the title bar puts the brand,
     // the navigation, the status pill, the notification bell and the three
     // window buttons back where they always are.
+    //
+    // This and the three loaders after it keep an id no expression reads (QCR-706
+    // removed eleven such ids elsewhere). They are kept deliberately: the four are
+    // the shell's overlay LAYER STACK, their declaration order IS their z-order,
+    // and the comments above each one argue that order by name. An anonymous
+    // Loader would leave those arguments pointing at nothing.
     Loader {
         id: editOverlayLoader
 

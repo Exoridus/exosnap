@@ -16,21 +16,36 @@
 
 #include <algorithm>
 #include <memory>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
 namespace exosnap::quick {
 namespace {
 
+// The single owner of one queued shared-texture HANDLE; consumers hold it via
+// shared_ptr, so the close happens exactly once, when the last reader is done.
+// Non-copyable and non-movable for the reason the shared-texture path has been
+// hardened for twice already: a copy means two owners and a double CloseHandle,
+// and because Windows recycles handle values the second close can hit an
+// unrelated object instead of failing. Handles travel as `void*` here, which is
+// exactly where an accidental by-value capture hides.
 struct QueuedSharedHandle {
     explicit QueuedSharedHandle(void* value) : handle(value) {
     }
+    QueuedSharedHandle(const QueuedSharedHandle&) = delete;
+    QueuedSharedHandle& operator=(const QueuedSharedHandle&) = delete;
     ~QueuedSharedHandle() {
         if (handle != nullptr)
             CloseHandle(static_cast<HANDLE>(handle));
     }
     void* handle = nullptr;
 };
+
+static_assert(!std::is_copy_constructible_v<QueuedSharedHandle>, "an owned HANDLE must never be copied");
+static_assert(!std::is_copy_assignable_v<QueuedSharedHandle>, "an owned HANDLE must never be copied");
+static_assert(!std::is_move_constructible_v<QueuedSharedHandle>,
+              "no consumer moves one; add a move that clears the source first");
 
 QString targetDescription(const recorder_core::CaptureTarget& target) {
     const QString description = QString::fromUtf8(target.description);
