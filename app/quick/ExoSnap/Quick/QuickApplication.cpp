@@ -5,6 +5,7 @@
 #include "services/DisplayIdentityEnumerator.h"
 #include "services/DisplayIdentityResolver.h"
 #include "services/RecordingCoordinator.h"
+#include "services/TargetDisplayFacts.h"
 #include "services/UpdateService.h"
 
 #include "diagnostics/AppLog.h"
@@ -349,6 +350,18 @@ void QuickApplication::initializeRecordWorkflow() {
     webcam_overlay_persist_timer_.setInterval(250);
     QObject::connect(&webcam_overlay_persist_timer_, &QTimer::timeout, &record_view_model_adapter_,
                      [this]() { persistLiveConfig(); });
+
+    capture_evidence_timer_.setInterval(1000);
+    capture_evidence_timer_.setTimerType(Qt::CoarseTimer);
+    QObject::connect(&capture_evidence_timer_, &QTimer::timeout, &record_view_model_adapter_,
+                     [this]() { refreshCaptureWindowEvidence(); });
+
+    // QCR-110: the admission gate's evidence producer. Read on the UI thread
+    // inside StartRecording; the call takes only the probe's own mutex and copies
+    // a plain struct, so it never blocks on the native probe and never touches
+    // GUI state from the recording worker.
+    recording_coordinator_->SetWindowExclusiveEvidenceProvider(
+        [this](const recorder_core::CaptureTarget& target) { return resolveWindowExclusiveEvidence(target); });
 
     recording_coordinator_->SetRecoveryManifestStore(&recovery_manifest_store_);
     recording_coordinator_->SetOutputSettings(live_config_.output);
@@ -812,6 +825,10 @@ void QuickApplication::synchronizeRecordState() {
     // Sampling this once during initialization left every Settings row unlocked
     // for the whole run, because nothing re-evaluated it on a state change.
     settings_adapter_.setControlsLocked(recording_coordinator_->State() != UiRecordingState::Ready);
+    // The single edge that re-points the exclusive-fullscreen probe: every
+    // selection change and every recording-state change already lands here, and
+    // the unchanged case costs one comparison.
+    updateCaptureEvidenceTarget();
     record_view_model_adapter_.synchronize();
     // Same cadence and the same reason as the tray: the on-screen overlays are
     // presence surfaces and must never lag the state the window is showing.
@@ -1351,6 +1368,126 @@ void QuickApplication::refreshDiagnosticsData() {
     config.hotkeys_summary = "None configured";
     diagnostics_adapter_.setDiagnosticConfig(std::move(config));
     diagnostics_adapter_.setCapabilitySet(capabilities_);
+}
+
+std::optional<recorder_core::CaptureTarget> QuickApplication::selectedCaptureTarget() const {
+    const int selected = record_view_model_.selected_target_index;
+    if (selected < 0 || selected >= static_cast<int>(record_view_model_.targets.size()))
+        return std::nullopt;
+    return record_view_model_.targets[static_cast<std::size_t>(selected)];
+}
+
+// QCR-110. The production producer of exclusive-fullscreen evidence, and the one
+// place the selected target's HDR fact reaches Diagnostics.
+//
+// Before this, WindowEvidenceProbe existed only in the removed Widgets shell:
+// the coordinator's evidence provider was never installed, so
+// ResolveWindowExclusiveEvidence() always returned None and the
+// rec.capture.exclusive_window blocker could not fire in the shipping binary —
+// while the spec promised it would. Nothing called setCaptureWindowEvidence() or
+// setCaptureTargetHdrActive() either, so neither card could ever appear.
+void QuickApplication::updateCaptureEvidenceTarget() {
+    // A --record-visual-state capture photographs a seeded target that has no
+    // live HWND behind it. Subscribing WGC to it would spend a thread and a D3D11
+    // device per harness process and measure nothing.
+    if (visualScenarioLatched())
+        return;
+
+    const std::optional<recorder_core::CaptureTarget> target = selectedCaptureTarget();
+    uintptr_t hwnd = 0;
+    if (target.has_value() && target->kind == recorder_core::CaptureTarget::Kind::Window)
+        hwnd = target->native_id;
+    // The engine owns the capture from the countdown to the last saved byte; the
+    // probe keeps its subscription but stops pumping so the source is not copied
+    // twice. Same predicate the capture-target model uses for the same reason.
+    const bool paused = locksCaptureTargets(record_view_model_.state);
+
+    // Diagnostics reads the target itself for the capture-source readiness tile
+    // and the HDR blocker card. Both are resolved here rather than in the probe:
+    // they are facts about the SELECTION, not measurements of the window.
+    const auto same_target = [](const std::optional<recorder_core::CaptureTarget>& lhs,
+                                const std::optional<recorder_core::CaptureTarget>& rhs) {
+        if (lhs.has_value() != rhs.has_value())
+            return false;
+        if (!lhs.has_value())
+            return true;
+        return lhs->kind == rhs->kind && lhs->native_id == rhs->native_id && lhs->description == rhs->description;
+    };
+    if (!same_target(pushed_selected_target_, target)) {
+        pushed_selected_target_ = target;
+        diagnostics_adapter_.setSelectedCaptureTarget(target);
+    }
+    // Same resolver the coordinator's own native-HDR10 decision uses
+    // (FindTargetDisplayFacts over the probed display facts), so the blocker and
+    // the card that explains it can never disagree about whether HDR is on.
+    bool hdr_active = false;
+    if (target.has_value()) {
+        const capability::DisplayHdrFacts* facts = FindTargetDisplayFacts(*target, capabilities_.runtime.displays);
+        hdr_active = facts != nullptr && facts->hdr_active;
+    }
+    if (pushed_capture_target_hdr_active_ != hdr_active) {
+        pushed_capture_target_hdr_active_ = hdr_active;
+        diagnostics_adapter_.setCaptureTargetHdrActive(hdr_active);
+    }
+
+    if (hwnd == evidence_target_hwnd_ && paused == evidence_paused_)
+        return;
+
+    if (hwnd != 0 && !window_evidence_probe_)
+        window_evidence_probe_ = std::make_unique<WindowEvidenceProbe>();
+
+    evidence_target_hwnd_ = hwnd;
+    evidence_paused_ = paused;
+    if (window_evidence_probe_) {
+        window_evidence_probe_->SetWindowTarget(hwnd);
+        window_evidence_probe_->SetPaused(paused);
+    }
+
+    if (hwnd == 0) {
+        capture_evidence_timer_.stop();
+        // Retargeting away from a window drops the old window's evidence at once
+        // rather than leaving the card up until the next tick.
+        if (pushed_window_evidence_.has_value()) {
+            pushed_window_evidence_.reset();
+            diagnostics_adapter_.setCaptureWindowEvidence(std::nullopt, {});
+        }
+        return;
+    }
+    // A new window starts from nothing measured. Publishing that immediately is
+    // what keeps a card raised for the previous target from describing this one.
+    if (pushed_window_evidence_.has_value()) {
+        pushed_window_evidence_.reset();
+        diagnostics_adapter_.setCaptureWindowEvidence(std::nullopt, {});
+    }
+    capture_evidence_timer_.start();
+}
+
+void QuickApplication::refreshCaptureWindowEvidence() {
+    if (!window_evidence_probe_)
+        return;
+    const WindowEvidenceProbe::Snapshot snapshot = window_evidence_probe_->CurrentSnapshot();
+    if (!snapshot.active || snapshot.hwnd != evidence_target_hwnd_ || snapshot.hwnd == 0)
+        return; // the worker has not caught up with the current target yet
+
+    // Push only on a verdict change. The engine derives nothing else from these
+    // two structs, and every push re-runs the whole recommendation checklist.
+    const diagnostics::ExclusiveEvidence next =
+        diagnostics::ResolveSnapshotEvidence(snapshot, evidence_target_hwnd_, false);
+    if (pushed_window_evidence_.has_value()) {
+        const diagnostics::ExclusiveEvidence current =
+            diagnostics::ResolveSnapshotEvidence(*pushed_window_evidence_, evidence_target_hwnd_, false);
+        if (pushed_window_evidence_->hwnd == snapshot.hwnd && current == next)
+            return;
+    }
+    pushed_window_evidence_ = snapshot;
+    diagnostics_adapter_.setCaptureWindowEvidence(snapshot.facts, snapshot.evidence);
+}
+
+diagnostics::ExclusiveEvidence
+QuickApplication::resolveWindowExclusiveEvidence(const recorder_core::CaptureTarget& target) const {
+    if (!window_evidence_probe_ || target.kind != recorder_core::CaptureTarget::Kind::Window)
+        return diagnostics::ExclusiveEvidence::None;
+    return diagnostics::ResolveSnapshotEvidence(window_evidence_probe_->CurrentSnapshot(), target.native_id, false);
 }
 
 // rec.capture.exclusive_window's "record the monitor instead" fix: resolve the

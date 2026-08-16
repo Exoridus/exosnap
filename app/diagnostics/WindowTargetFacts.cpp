@@ -56,6 +56,12 @@ ExclusiveEvidence CombineFullscreenEvidence(WindowShape shape, const WindowHubEv
     return ExclusiveEvidence::None;
 }
 
+ExclusiveEvidence ResolveExclusiveEvidence(const WindowTargetFacts& facts, const WindowHubEvidence& hub,
+                                           bool present_exclusive_fullscreen) noexcept {
+    const bool signal = facts.quns_d3d_fullscreen || present_exclusive_fullscreen;
+    return CombineFullscreenEvidence(ClassifyWindowShape(facts), hub, signal);
+}
+
 WindowTargetFacts GatherWindowTargetFacts(HWND hwnd) {
     WindowTargetFacts facts;
     if (hwnd == nullptr || IsWindow(hwnd) == FALSE) {

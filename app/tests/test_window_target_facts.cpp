@@ -6,6 +6,7 @@
 // the ladder is pinned so a legitimately static borderless window cannot be
 // misclassified as ProvenBlack.
 
+#include "diagnostics/WindowEvidenceSnapshot.h"
 #include "diagnostics/WindowTargetFacts.h"
 
 #include <gtest/gtest.h>
@@ -143,6 +144,96 @@ TEST(FullscreenEvidence, ProvenBlackWinsOverMissingSignal) {
 TEST(GatherFacts, NullHandleIsInvalid) {
     const WindowTargetFacts f = GatherWindowTargetFacts(nullptr);
     EXPECT_FALSE(f.valid);
+}
+
+// ── QCR-110: the one resolver both consumers go through ─────────────────────────
+//
+// ResolveExclusiveEvidence is what stops the Diagnostics card and the recording
+// admission gate from drifting: neither re-assembles the ladder from its parts.
+
+TEST(ResolveEvidence, MatchesTheHandAssembledLadder) {
+    const WindowTargetFacts f = fullscreenShaped();
+    const WindowHubEvidence hub{HubFrameKind::None, 5.0, 0.0, false};
+    EXPECT_EQ(ResolveExclusiveEvidence(f, hub, false),
+              CombineFullscreenEvidence(ClassifyWindowShape(f), hub, f.quns_d3d_fullscreen));
+}
+
+TEST(ResolveEvidence, QunsSignalAloneIsSuspectedNotProven) {
+    WindowTargetFacts f = fullscreenShaped();
+    f.quns_d3d_fullscreen = true;
+    // Producing frames: shaped like fullscreen and flagged by the shell, but not
+    // black. A Notice, never a start blocker.
+    const WindowHubEvidence hub{HubFrameKind::Live, 5.0, 0.0, true};
+    EXPECT_EQ(ResolveExclusiveEvidence(f, hub, false), ExclusiveEvidence::Suspected);
+}
+
+TEST(ResolveEvidence, PresentSignalIsOredWithQuns) {
+    WindowTargetFacts f = fullscreenShaped();
+    f.quns_d3d_fullscreen = false;
+    const WindowHubEvidence hub{HubFrameKind::Live, 5.0, 0.0, true};
+    EXPECT_EQ(ResolveExclusiveEvidence(f, hub, false), ExclusiveEvidence::None);
+    EXPECT_EQ(ResolveExclusiveEvidence(f, hub, true), ExclusiveEvidence::Suspected);
+}
+
+TEST(ResolveEvidence, NormalWindowIsNeverAVerdict) {
+    WindowTargetFacts f = fullscreenShaped();
+    f.style = WS_OVERLAPPEDWINDOW | WS_VISIBLE;
+    f.quns_d3d_fullscreen = true;
+    const WindowHubEvidence hub{HubFrameKind::None, 30.0, 0.0, false};
+    EXPECT_EQ(ResolveExclusiveEvidence(f, hub, true), ExclusiveEvidence::None);
+}
+
+// ── QCR-110: the probe snapshot contract ────────────────────────────────────────
+//
+// The snapshot names the window it describes, so a consumer that has retargeted
+// cannot judge the new target by the old one's measurements. Everything that
+// cannot speak for the asked-about window resolves to None — never a guess.
+
+WindowEvidenceSnapshot provenBlackSnapshot(uintptr_t hwnd) {
+    WindowEvidenceSnapshot snapshot;
+    snapshot.active = true;
+    snapshot.hwnd = hwnd;
+    snapshot.facts = fullscreenShaped();
+    snapshot.evidence = WindowHubEvidence{HubFrameKind::None, 5.0, 0.0, false};
+    return snapshot;
+}
+
+TEST(SnapshotEvidence, NoProducerIsNoneNotProvenBlack) {
+    // The default-constructed snapshot is what every consumer sees before the
+    // probe exists at all. It must never be mistaken for measured proof.
+    EXPECT_EQ(ResolveSnapshotEvidence(WindowEvidenceSnapshot{}, 0x1234, false), ExclusiveEvidence::None);
+}
+
+TEST(SnapshotEvidence, InactiveSnapshotIsNone) {
+    WindowEvidenceSnapshot snapshot = provenBlackSnapshot(0x1234);
+    snapshot.active = false;
+    EXPECT_EQ(ResolveSnapshotEvidence(snapshot, 0x1234, false), ExclusiveEvidence::None);
+}
+
+TEST(SnapshotEvidence, MatchingTargetResolvesProvenBlack) {
+    EXPECT_EQ(ResolveSnapshotEvidence(provenBlackSnapshot(0x1234), 0x1234, false), ExclusiveEvidence::ProvenBlack);
+}
+
+TEST(SnapshotEvidence, RetargetInvalidatesTheOldWindowsEvidence) {
+    // The proof belongs to 0x1234. Asking about the window the user just picked
+    // must not inherit it, however recent the snapshot is.
+    EXPECT_EQ(ResolveSnapshotEvidence(provenBlackSnapshot(0x1234), 0x5678, false), ExclusiveEvidence::None);
+}
+
+TEST(SnapshotEvidence, ZeroTargetIsNone) {
+    // A monitor target, or no selection at all.
+    EXPECT_EQ(ResolveSnapshotEvidence(provenBlackSnapshot(0x1234), 0, false), ExclusiveEvidence::None);
+}
+
+TEST(SnapshotEvidence, UnknownWindowIsNotBlocked) {
+    // Subscribed, on the right window, but nothing measured yet: an ordinary
+    // window the probe has only just been pointed at must start recording.
+    WindowEvidenceSnapshot snapshot;
+    snapshot.active = true;
+    snapshot.hwnd = 0x1234;
+    snapshot.facts = fullscreenShaped();
+    snapshot.evidence = WindowHubEvidence{HubFrameKind::None, 0.2, 0.0, false};
+    EXPECT_EQ(ResolveSnapshotEvidence(snapshot, 0x1234, false), ExclusiveEvidence::None);
 }
 
 } // namespace

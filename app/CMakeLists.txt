@@ -227,6 +227,10 @@ exosnap_add_app_test_support(exosnap_diagnostics_test_support
     diagnostics/FilesystemProvider.cpp
     diagnostics/RecommendationEngine.cpp
     diagnostics/WindowTargetFacts.cpp
+    # The pure evidence core behind WindowEvidenceProbe. In the library rather
+    # than only in its own test target, because the shipping frontend now runs
+    # the probe and the recommendation engine reads what it accumulates.
+    diagnostics/WindowEvidenceAccumulator.cpp
     diagnostics/SelfTestRunner.cpp
     # Session report writer is called by RecordingCoordinator, which is compiled
     # into the coordinator test targets that all link this support lib.

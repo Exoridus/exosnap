@@ -300,6 +300,11 @@ target_sources(exosnap
         ${PROJECT_SOURCE_DIR}/app/services/WgcCaptureHubService.h
         ${PROJECT_SOURCE_DIR}/app/services/WgcSourceProducer.cpp
         ${PROJECT_SOURCE_DIR}/app/services/WgcSourceProducer.h
+        # QCR-110: the production producer of exclusive-fullscreen evidence. Both
+        # the Diagnostics card and the recording-admission gate read its snapshot;
+        # without it in the shipping target the gate is inert.
+        ${PROJECT_SOURCE_DIR}/app/services/WindowEvidenceProbe.cpp
+        ${PROJECT_SOURCE_DIR}/app/services/WindowEvidenceProbe.h
         ${PROJECT_SOURCE_DIR}/app/services/RecordingCoordinator.cpp
         ${PROJECT_SOURCE_DIR}/app/services/RecordingAdmission.cpp
         ${PROJECT_SOURCE_DIR}/app/services/RecordingCoordinator.h

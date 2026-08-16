@@ -185,7 +185,13 @@ bool RecordViewModelAdapter::canResume() const noexcept {
 bool RecordViewModelAdapter::canSelectSource() const noexcept {
     if (source_ == nullptr)
         return false;
+    // QCR-V03: exhaustive on purpose, with no `default:`. The permissive answer is
+    // the one that lets the user change what is being recorded, so a state added
+    // later and forgotten here would fail OPEN — silently, at runtime. Without the
+    // default label MSVC raises C4062 for the unhandled enumerator, and /W4 /WX
+    // turns that into a build failure at the moment the state is introduced.
     switch (source_->state) {
+    // The capture is committed for the session, or an overlay owns the picking.
     case UiRecordingState::Countdown:
     case UiRecordingState::Preparing:
     case UiRecordingState::RegionSelecting:
@@ -195,9 +201,17 @@ bool RecordViewModelAdapter::canSelectSource() const noexcept {
     case UiRecordingState::Stopping:
     case UiRecordingState::Saving:
         return false;
-    default:
+    // Nothing is in flight: the only question left is whether there is anything
+    // to pick. Blocked and Failed are deliberately here — changing the source is
+    // frequently the fix.
+    case UiRecordingState::LoadingCapabilities:
+    case UiRecordingState::Ready:
+    case UiRecordingState::Blocked:
+    case UiRecordingState::Completed:
+    case UiRecordingState::Failed:
         return !source_->targets.empty();
     }
+    return false;
 }
 
 bool RecordViewModelAdapter::recording() const noexcept {

@@ -33,6 +33,7 @@
 #include "services/UpdateService.h"
 #include "services/WebcamDeviceNotifier.h"
 #include "services/Win32HotkeyRegistrar.h"
+#include "services/WindowEvidenceProbe.h"
 #include "settings/AppSettingsStore.h"
 #include "settings/RecordingPresetStore.h"
 #include "settings/RecoveryManifestStore.h"
@@ -293,6 +294,29 @@ class QuickApplication {
     void refreshCaptureTargets(const CaptureTargetSnapshot& snapshot, DiscoveryReason reason);
     void updateOutputTargetContext(const recorder_core::CaptureTarget& target);
     void persistLiveConfig();
+    [[nodiscard]] std::optional<recorder_core::CaptureTarget> selectedCaptureTarget() const;
+
+    // QCR-110. Points the exclusive-fullscreen probe at whatever is selected now,
+    // pauses it while the recording engine owns the capture, and pushes the
+    // target-derived facts (selection, HDR) into Diagnostics. Called from every
+    // edge that can change the selection or the recording state.
+    //
+    // The probe is created on first use and only for a WINDOW target: a monitor
+    // capture can record exclusive fullscreen, so there is nothing to prove, and
+    // the display-capture user should not pay for a WGC subscription and a D3D11
+    // device that will never be read.
+    void updateCaptureEvidenceTarget();
+    // Pulls the probe's snapshot on a light cadence and pushes it into Diagnostics
+    // only when it differs from what was pushed last — the evidence changes on a
+    // human scale, and each push re-runs the whole recommendation checklist.
+    void refreshCaptureWindowEvidence();
+    // The exclusive-fullscreen verdict for `target`, from the probe's stable
+    // snapshot. Reads no GUI state and takes only the probe's own mutex, so it is
+    // safe as the coordinator's UI-thread-called admission provider. Returns None
+    // for any target the snapshot does not describe, so a retarget can never be
+    // judged by the previous window's evidence.
+    [[nodiscard]] diagnostics::ExclusiveEvidence
+    resolveWindowExclusiveEvidence(const recorder_core::CaptureTarget& target) const;
 
     AppSettingsStore settings_store_;
     PersistedAppSettings settings_;
@@ -326,6 +350,10 @@ class QuickApplication {
     // with that pointer.
     OverlayAdapter overlay_adapter_;
     RecordPreviewAdapter record_preview_adapter_;
+    // Declared BEFORE the coordinator so it is destroyed AFTER it: the coordinator
+    // holds an evidence provider that reads this probe. Null until a window target
+    // is selected for the first time.
+    std::unique_ptr<WindowEvidenceProbe> window_evidence_probe_;
     std::unique_ptr<RecordingCoordinator> recording_coordinator_;
     CaptureTargetNotifier capture_target_notifier_;
     AudioDeviceNotifier audio_notifier_;
@@ -365,6 +393,10 @@ class QuickApplication {
     // updateMeterServices().
     QTimer meter_service_start_timer_;
     QTimer meter_update_timer_;
+    // 1 Hz, and only while the probe has a window target. The probe's own fact
+    // poll runs at the same cadence, so a faster pull would only re-read a value
+    // that cannot have changed.
+    QTimer capture_evidence_timer_;
     QTimer webcam_frame_delivery_timer_;
     QTimer webcam_overlay_persist_timer_;
     int countdown_remaining_ = 0;
@@ -391,6 +423,20 @@ class QuickApplication {
     quint64 webcam_frame_revision_ = 0;
     bool webcam_provider_registered_ = false;
     bool capture_target_refresh_pending_ = false;
+    // What the probe was last told. synchronizeRecordState() is the single edge
+    // that re-evaluates this and runs at stats cadence during a recording, so the
+    // unchanged case must not wake the probe's worker.
+    uintptr_t evidence_target_hwnd_ = 0;
+    bool evidence_paused_ = false;
+    // The selection Diagnostics currently holds. Same reason as the two below:
+    // pushing it re-runs the recommendation checklist, so only a real change may.
+    std::optional<recorder_core::CaptureTarget> pushed_selected_target_;
+    // What refreshCaptureWindowEvidence() last handed to Diagnostics. Kept so an
+    // unchanged snapshot costs one comparison instead of a checklist rebuild.
+    std::optional<WindowEvidenceProbe::Snapshot> pushed_window_evidence_;
+    // The HDR verdict for the selected target that Diagnostics currently holds.
+    // Unset until the first push, so the first SDR target still writes once.
+    std::optional<bool> pushed_capture_target_hdr_active_;
     // Empty when the crash directory could not be resolved, i.e. session
     // tracking is off for this run.
     std::string crash_dir_;

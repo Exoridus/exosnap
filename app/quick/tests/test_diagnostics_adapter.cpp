@@ -7,6 +7,7 @@
 #include "LogsAdapter.h"
 #include "PipelineStageModel.h"
 
+#include "diagnostics/WindowTargetFacts.h"
 #include "services/SupportBundleService.h"
 
 #include <QCoreApplication>
@@ -165,6 +166,106 @@ TEST(DiagnosticsAdapterTest, LastSessionTileAppearsOnlyAfterARecording) {
     // Idempotent: a repeated push must not churn the tiles.
     adapter.setHasLastRecording(true);
     EXPECT_EQ(spy.count(), 1);
+}
+
+// ── QCR-110: the two host-side facts that had no producer at all ────────────────
+//
+// The engine's own coverage proves the cards are correct once the facts arrive.
+// These pin the boundary the shipping frontend now feeds: a fact pushed through
+// the adapter must reach the issue model, or the blocker fires with no card to
+// explain it.
+
+namespace {
+
+// AV1/Opus in MKV — a clean profile, so anything that shows up is the card under
+// test rather than an unrelated blocker.
+diagnostics::DiagnosticsController::Config MakeCaptureConfig() {
+    diagnostics::DiagnosticsController::Config config = MakeConfig();
+    config.caps.video_codecs[capability::VideoCodec::Av1] = {capability::SupportLevel::Available, ""};
+    config.caps.video_codecs[capability::VideoCodec::Hevc] = {capability::SupportLevel::Available, ""};
+    config.caps.audio_codecs[capability::AudioCodec::Opus] = {capability::SupportLevel::Available, ""};
+    config.user_config.container = capability::Container::Matroska;
+    config.user_config.video_codec = capability::VideoCodec::Av1;
+    config.user_config.audio_codec = capability::AudioCodec::Opus;
+    config.user_config.color_range = capability::ColorRange::Limited;
+    return config;
+}
+
+diagnostics::WindowTargetFacts FullscreenShapedFacts() {
+    diagnostics::WindowTargetFacts facts;
+    facts.valid = true;
+    facts.visible = true;
+    facts.window_rect = RECT{0, 0, 1920, 1080};
+    facts.monitor_rect = RECT{0, 0, 1920, 1080};
+    facts.style = WS_POPUP | WS_VISIBLE;
+    return facts;
+}
+
+bool HasIssueTitled(DiagnosticsAdapter& adapter, const QString& needle) {
+    auto* model = qobject_cast<DiagnosticIssueModel*>(adapter.issues());
+    if (model == nullptr)
+        return false;
+    for (int row = 0; row < model->rowCount(); ++row) {
+        if (model->data(model->index(row, 0), DiagnosticIssueModel::TitleRole).toString().contains(needle))
+            return true;
+    }
+    return false;
+}
+
+} // namespace
+
+TEST(DiagnosticsAdapterTest, ProvenBlackWindowEvidenceRaisesTheExclusiveFullscreenCard) {
+    EnsureApplication();
+    DiagnosticsAdapter adapter;
+    adapter.setDiagnosticConfig(MakeCaptureConfig());
+    EXPECT_FALSE(HasIssueTitled(adapter, QStringLiteral("exclusive fullscreen")));
+
+    // FullscreenShaped and the capture API produced nothing for >= 2 s.
+    adapter.setCaptureWindowEvidence(FullscreenShapedFacts(),
+                                     diagnostics::WindowHubEvidence{recorder_core::HubFrameKind::None, 5.0, 0.0,
+                                                                    /*fresh_frame_since_fullscreen_shape=*/false});
+    EXPECT_TRUE(HasIssueTitled(adapter, QStringLiteral("exclusive fullscreen")));
+
+    // Retargeting to a monitor withdraws it — the card describes a selection.
+    adapter.setCaptureWindowEvidence(std::nullopt, {});
+    EXPECT_FALSE(HasIssueTitled(adapter, QStringLiteral("exclusive fullscreen")));
+}
+
+TEST(DiagnosticsAdapterTest, HdrTargetFactRaisesTheHdrBlockerCard) {
+    EnsureApplication();
+    DiagnosticsAdapter adapter;
+    diagnostics::DiagnosticsController::Config config = MakeCaptureConfig();
+    config.caps.video_codecs[capability::VideoCodec::H264] = {capability::SupportLevel::Available, ""};
+    config.user_config.video_codec = capability::VideoCodec::H264;
+    config.user_config.hdr_mode = recorder_core::HdrMode::Hdr10;
+    adapter.setDiagnosticConfig(std::move(config));
+
+    // The recording gate already blocks this pairing. Without the display fact
+    // the card that explains WHY never appeared, which is the whole finding.
+    EXPECT_FALSE(HasIssueTitled(adapter, QStringLiteral("cannot record HDR10")));
+    adapter.setCaptureTargetHdrActive(true);
+    EXPECT_TRUE(HasIssueTitled(adapter, QStringLiteral("cannot record HDR10")));
+
+    // An SDR desktop is not a problem: the HDR10-native path never engages.
+    adapter.setCaptureTargetHdrActive(false);
+    EXPECT_FALSE(HasIssueTitled(adapter, QStringLiteral("cannot record HDR10")));
+}
+
+TEST(DiagnosticsAdapterTest, SelectedCaptureTargetDrivesTheSourceTile) {
+    EnsureApplication();
+    DiagnosticsAdapter adapter;
+    adapter.setDiagnosticConfig(MakeCaptureConfig());
+
+    recorder_core::CaptureTarget window;
+    window.kind = recorder_core::CaptureTarget::Kind::Window;
+    window.native_id = 0x1234;
+    window.description = "Some Game";
+    adapter.setSelectedCaptureTarget(window);
+
+    const QVariantMap tile = TileWithKey(adapter.tiles(), QStringLiteral("target"));
+    ASSERT_FALSE(tile.isEmpty());
+    EXPECT_EQ(tile.value(QStringLiteral("value")).toString(), QStringLiteral("Window"));
+    EXPECT_EQ(tile.value(QStringLiteral("sub")).toString(), QStringLiteral("Some Game"));
 }
 
 TEST(DiagnosticsAdapterTest, InvalidProfileProducesBlockerCards) {

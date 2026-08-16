@@ -186,6 +186,45 @@ TEST(RecordViewModelAdapterTest, DetachingSourceClearsTheBoundarySnapshot) {
     EXPECT_FALSE(adapter.liveStatsAvailable());
 }
 
+// QCR-V03. The switch behind this is exhaustive with no `default:`, so a new
+// state cannot silently inherit the permissive answer — MSVC's C4062 refuses the
+// build first. This pins the full matrix so the exhaustive rewrite kept every
+// existing answer, and so a future enumerator has to be entered here on purpose.
+TEST(RecordViewModelAdapterTest, SourceSelectionIsClosedForEveryInFlightState) {
+    RecordViewModel source;
+    source.targets.push_back({recorder_core::CaptureTarget::Kind::Monitor, 1, "Display 1: 1920x1080 at (0, 0)"});
+    source.selected_target_index = 0;
+    RecordViewModelAdapter adapter(&source);
+
+    // The capture is committed, or an overlay owns the picking.
+    for (UiRecordingState state :
+         {UiRecordingState::Countdown, UiRecordingState::Preparing, UiRecordingState::RegionSelecting,
+          UiRecordingState::Recording, UiRecordingState::Paused, UiRecordingState::ArmedFromRecovery,
+          UiRecordingState::Stopping, UiRecordingState::Saving}) {
+        source.SetState(state);
+        adapter.synchronize();
+        EXPECT_FALSE(adapter.canSelectSource()) << "state index " << static_cast<int>(state);
+    }
+
+    // Nothing in flight: selectable, because a target exists.
+    for (UiRecordingState state : {UiRecordingState::LoadingCapabilities, UiRecordingState::Ready,
+                                   UiRecordingState::Blocked, UiRecordingState::Completed, UiRecordingState::Failed}) {
+        source.SetState(state);
+        adapter.synchronize();
+        EXPECT_TRUE(adapter.canSelectSource()) << "state index " << static_cast<int>(state);
+    }
+
+    // …and with nothing to pick, no state is selectable.
+    source.targets.clear();
+    source.selected_target_index = -1;
+    for (UiRecordingState state : {UiRecordingState::LoadingCapabilities, UiRecordingState::Ready,
+                                   UiRecordingState::Blocked, UiRecordingState::Completed, UiRecordingState::Failed}) {
+        source.SetState(state);
+        adapter.synchronize();
+        EXPECT_FALSE(adapter.canSelectSource()) << "state index " << static_cast<int>(state);
+    }
+}
+
 TEST(RecordViewModelAdapterTest, MapsRecordingStateActionsAndTone) {
     RecordViewModel source;
     source.targets.push_back({recorder_core::CaptureTarget::Kind::Monitor, 1, "Display 1: 1920x1080 at (0, 0)"});
