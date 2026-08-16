@@ -356,7 +356,11 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
   windowed target, because mid-recording nothing separates "stopped producing" from
   "nothing to redraw", and it never claims exclusive fullscreen as the cause unless a
   QUNS or PresentMon signal corroborates it. It is also a notice, not a repair — the
-  frames lost to the stall are gone. Most modern "fullscreen" settings run as
+  frames lost to the stall are gone. In the other direction, a fullscreen-shaped
+  window whose content is genuinely at rest (a borderless video left paused) raises
+  the same caution, which is why the wording says *appears to have stalled* rather
+  than pronouncing a verdict; it clears itself when the content moves again.
+  Most modern "fullscreen" settings run as
   borderless/flip-model (FSO) and record fine on either path; the remaining hardening
   of this matrix is tracked for `0.10.0`.
 - Tray notifications may be suppressed by Windows Focus Assist / Do Not Disturb mode.

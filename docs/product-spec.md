@@ -857,6 +857,12 @@ falls back to its raw number rather than borrowing another display's.
   minimized, hidden or virtual-desktop-cloaked window is likewise silent — it is supposed to stop.
   Detection is also a **notice, not a repair**: the frames already lost to the stall are gone.
 
+  The trade-off runs the other way too, and is deliberate: a **fullscreen-shaped window whose content
+  is genuinely at rest** — a borderless video player left paused for ten seconds — produces no frames
+  either and raises the same caution. That is why the wording is *"appears to have stalled"* and *"may
+  be frozen"* rather than a verdict: for those ten seconds the recording really did hold one frame.
+  The notice clears itself the moment the content moves again.
+
 *(Cells requiring a real legacy-FSE title are verified live before being promised as behavior; the
 matrix above reflects the shipped detection + monitor path.)*
 
