@@ -149,6 +149,8 @@ qt_add_qml_module(exosnap
         DeviceAdapter.h
         DiagnosticIssueModel.cpp
         DiagnosticIssueModel.h
+        PipelineStageModel.cpp
+        PipelineStageModel.h
         DiagnosticsAdapter.cpp
         DiagnosticsAdapter.h
         EditExportAdapter.cpp
@@ -625,6 +627,12 @@ qt_add_qml_module(record_controls_qml_tests
     SOURCES
         QuickThemeTokens.cpp
         QuickThemeTokens.h
+        # OverlayDiagnostics gates its own visibility on CaptureExclusion.granted,
+        # so the type has to exist for the overlay to load at all. Nothing in the
+        # token tests shows the window — `granted` stays false and the delegates
+        # exist regardless, which is the cost QCR-606 is about.
+        CaptureExclusion.cpp
+        CaptureExclusion.h
     QML_FILES
         ExoButton.qml
         ExoChevron.qml
@@ -667,6 +675,14 @@ qt_add_qml_module(record_controls_qml_tests
         # being undone.
         ExoTextField.qml
         ExoTheme.qml
+        # QCR-604: the pipeline cards are delegates over a model with a stable
+        # per-stage identity now, so what has to be asserted is that a value
+        # update reaches the SAME card object.
+        ExoPipelineFlow.qml
+        ExoPipelineStepCard.qml
+        # QCR-606: the HUD's token list is keyed on the content policy, not on
+        # the measured values.
+        OverlayDiagnostics.qml
         PreviewMetricsOverlay.qml
         RecordActionButton.qml
         RecordSourceToggle.qml
@@ -696,6 +712,8 @@ target_link_libraries(record_controls_qml_tests
         Qt6::Quick
         Qt6::QuickControls2
         Qt6::QuickTest
+        # CaptureExclusion logs its verdict through AppLog.
+        exosnap_app_log_test_support
         exosnap::warnings
 )
 
@@ -1043,6 +1061,44 @@ target_include_directories(preview_update_scheduler_tests
 target_compile_definitions(preview_update_scheduler_tests PRIVATE NOMINMAX)
 
 exosnap_add_gtest(
+    NAME preview_percentile_tests
+    TEST_PREFIX quick_preview_percentile.
+    SOURCES
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_preview_percentile.cpp
+    LIBRARIES
+        Qt6::Core
+)
+
+target_include_directories(preview_percentile_tests
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${PROJECT_SOURCE_DIR}/app
+)
+
+target_compile_definitions(preview_percentile_tests PRIVATE NOMINMAX)
+
+exosnap_add_gtest(
+    NAME webcam_chroma_key_tests
+    TEST_PREFIX quick_webcam_chroma_key.
+    SOURCES
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_webcam_chroma_key.cpp
+        RecordWebcamFrameProvider.cpp
+        RecordWebcamFrameProvider.h
+    LIBRARIES
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Quick
+)
+
+target_include_directories(webcam_chroma_key_tests
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${PROJECT_SOURCE_DIR}/app
+)
+
+target_compile_definitions(webcam_chroma_key_tests PRIVATE NOMINMAX)
+
+exosnap_add_gtest(
     NAME log_view_policy_tests
     TEST_PREFIX quick_log_policy.
     SOURCES
@@ -1088,8 +1144,11 @@ exosnap_add_gtest(
     TEST_PREFIX quick_diagnostics_adapter.
     SOURCES
         ${EXOSNAP_QUICK_TESTS_DIR}/test_diagnostics_adapter.cpp
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_pipeline_stage_model.cpp
         DiagnosticIssueModel.cpp
         DiagnosticIssueModel.h
+        PipelineStageModel.cpp
+        PipelineStageModel.h
         DiagnosticsAdapter.cpp
         DiagnosticsAdapter.h
         LogEntryModel.cpp

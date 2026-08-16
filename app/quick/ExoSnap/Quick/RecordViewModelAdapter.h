@@ -6,6 +6,10 @@
 #include <QVariantList>
 #include <QtQmlIntegration/qqmlintegration.h>
 
+#include <cstdint>
+#include <optional>
+#include <vector>
+
 namespace exosnap {
 
 class RecordViewModel;
@@ -230,6 +234,11 @@ class RecordViewModelAdapter : public QObject {
     void openEditorRequested();
 
   private:
+    // Reads every property whose NOTIFY is `changed()`, in declaration order.
+    [[nodiscard]] QVariantList changedPropertySnapshot() const;
+    // Emits `changed()` only when that snapshot actually moved. The single funnel
+    // for the broad signal out of synchronize().
+    void publishChanged();
     void rebuildPresentation();
     // Advances the fps delta window. Called from synchronize(), i.e. on the
     // engine's stats cadence, so the window is measured against the same clock
@@ -237,6 +246,13 @@ class RecordViewModelAdapter : public QObject {
     void updateCapturedFps();
 
     const RecordViewModel* source_ = nullptr;
+    // Property indices carrying NOTIFY changed, resolved once from the static
+    // meta-object, plus the last values published under that signal.
+    std::vector<int> changed_property_indices_;
+    QVariantList changed_property_values_;
+    // The RecordViewModel::targets_revision the three option lists were built
+    // from. Unset means "not built for this source yet".
+    std::optional<std::uint64_t> target_options_revision_;
     bool active_ = false;
     QString state_text_;
     QString elapsed_text_;

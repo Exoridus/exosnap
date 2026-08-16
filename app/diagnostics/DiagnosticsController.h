@@ -227,6 +227,10 @@ struct PipelineStage {
     std::string value; // measured number, or an em dash
     std::string tip;
     StageStatus status = StageStatus::Planned;
+
+    // So the Quick model can tell "same six stages, one value moved" from "a
+    // different pipeline", and skip publishing when nothing moved at all.
+    friend bool operator==(const PipelineStage&, const PipelineStage&) = default;
 };
 
 // Builds the six pipeline health cards and carries the ONLY piece of state on the

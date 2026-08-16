@@ -71,17 +71,6 @@ QVariantMap SelfTestRowToMap(const diagnostics::SelfTestRow& row) {
     return map;
 }
 
-QVariantMap StageToMap(const diagnostics::PipelineStage& stage) {
-    QVariantMap map;
-    map.insert(QStringLiteral("key"), Text(stage.key));
-    map.insert(QStringLiteral("title"), Text(stage.title));
-    map.insert(QStringLiteral("lane"), Text(stage.lane));
-    map.insert(QStringLiteral("value"), Text(stage.value));
-    map.insert(QStringLiteral("tip"), Text(stage.tip));
-    map.insert(QStringLiteral("status"), Key(diagnostics::StageStatusKey(stage.status)));
-    return map;
-}
-
 diagnostics::DiagnosticsController::DisplayFacts PrimaryDisplayFacts() {
     diagnostics::DiagnosticsController::DisplayFacts facts;
     if (QScreen* screen = QGuiApplication::primaryScreen()) {
@@ -221,8 +210,8 @@ const QString& DiagnosticsAdapter::selfTestStatus() const noexcept {
     return self_test_status_;
 }
 
-const QVariantList& DiagnosticsAdapter::pipelineStages() const noexcept {
-    return pipeline_stages_;
+QAbstractListModel* DiagnosticsAdapter::pipelineStages() noexcept {
+    return &pipeline_stage_model_;
 }
 
 bool DiagnosticsAdapter::pipelineLive() const noexcept {
@@ -497,13 +486,14 @@ void DiagnosticsAdapter::refreshSnapshot() {
 }
 
 void DiagnosticsAdapter::refreshPipeline() {
-    const std::vector<diagnostics::PipelineStage> stages = controller_.BuildPipelineStages();
-    pipeline_live_ = controller_.liveRecording();
-    pipeline_stages_.clear();
-    pipeline_stages_.reserve(static_cast<qsizetype>(stages.size()));
-    for (const auto& stage : stages)
-        pipeline_stages_.append(StageToMap(stage));
-    emit pipelineChanged();
+    const bool live = controller_.liveRecording();
+    const bool live_changed = pipeline_live_ != live;
+    pipeline_live_ = live;
+    // The model decides for itself whether anything moved; `pipelineChanged` now
+    // carries only `pipelineLive`, so it is emitted only when that boolean does.
+    pipeline_stage_model_.setStages(controller_.BuildPipelineStages());
+    if (live_changed)
+        emit pipelineChanged();
 }
 
 void DiagnosticsAdapter::refreshSelfTest() {

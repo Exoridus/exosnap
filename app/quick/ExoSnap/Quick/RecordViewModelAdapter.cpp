@@ -2,10 +2,13 @@
 
 #include "viewmodels/RecordViewModel.h"
 
+#include <QMetaObject>
+#include <QMetaProperty>
 #include <QStringList>
 #include <QVariantMap>
 
 #include <algorithm>
+#include <utility>
 
 namespace exosnap::quick {
 namespace {
@@ -38,7 +41,37 @@ bool hasRow(const capability::AudioUiState& state, recorder_core::AudioSourceKin
 
 RecordViewModelAdapter::RecordViewModelAdapter(const RecordViewModel* source, QObject* parent)
     : QObject(parent), source_(source) {
+    // Which properties `changed()` speaks for, asked of moc rather than written
+    // down. There are 49 of them today and the list is exactly the set a
+    // Q_PROPERTY declaration puts in it, so a property added with
+    // `NOTIFY changed` is covered the moment it is declared — a hand-maintained
+    // list would go stale silently, and going stale here means a QML binding that
+    // never updates.
+    const QMetaObject* meta = &RecordViewModelAdapter::staticMetaObject;
+    const int changed_signal = meta->indexOfSignal("changed()");
+    for (int index = meta->propertyOffset(); index < meta->propertyCount(); ++index) {
+        const QMetaProperty property = meta->property(index);
+        if (property.hasNotifySignal() && property.notifySignalIndex() == changed_signal)
+            changed_property_indices_.push_back(index);
+    }
     synchronize();
+}
+
+QVariantList RecordViewModelAdapter::changedPropertySnapshot() const {
+    QVariantList values;
+    values.reserve(static_cast<qsizetype>(changed_property_indices_.size()));
+    const QMetaObject* meta = &RecordViewModelAdapter::staticMetaObject;
+    for (const int index : changed_property_indices_)
+        values.push_back(meta->property(index).read(this));
+    return values;
+}
+
+void RecordViewModelAdapter::publishChanged() {
+    QVariantList snapshot = changedPropertySnapshot();
+    if (snapshot == changed_property_values_)
+        return;
+    changed_property_values_ = std::move(snapshot);
+    emit changed();
 }
 
 bool RecordViewModelAdapter::active() const noexcept {
@@ -356,6 +389,9 @@ bool RecordViewModelAdapter::canOpenEditor() const noexcept {
 
 void RecordViewModelAdapter::setSource(const RecordViewModel* source) {
     source_ = source;
+    // Revisions are per view model, so one source's stamp says nothing about the
+    // next one's — a new source always rebuilds.
+    target_options_revision_.reset();
     synchronize();
 }
 
@@ -486,7 +522,16 @@ void RecordViewModelAdapter::synchronize() {
         emit outputSizeTextChanged();
     if (stats_changed)
         emit liveStatsAvailableChanged();
-    emit changed();
+
+    // `changed()` used to fire here unconditionally, which is the one place in
+    // this class that did not deduplicate — every other setter above compares
+    // first. It reaches 49 bound properties (source name, target options, meter
+    // context, webcam presentation, countdown, split state, notice text, the
+    // whole transport enablement set), and this function runs on the engine's
+    // stats callback at ~8 Hz while recording, at 10 Hz through a countdown, and
+    // again on every preview frameReady. Almost none of those syncs moves
+    // anything a `changed()` property reports.
+    publishChanged();
 }
 
 void RecordViewModelAdapter::updateCapturedFps() {
@@ -533,6 +578,7 @@ void RecordViewModelAdapter::rebuildPresentation() {
     source_kind_text_ = QStringLiteral("SOURCE");
     source_detail_text_ = QStringLiteral("Choose a screen, window, or region.");
     if (source_ == nullptr) {
+        target_options_revision_.reset();
         if (!target_options_.isEmpty()) {
             target_options_.clear();
             display_target_options_.clear();
@@ -542,25 +588,40 @@ void RecordViewModelAdapter::rebuildPresentation() {
         return;
     }
 
-    QVariantList target_options;
-    QVariantList display_target_options;
-    QVariantList window_target_options;
-    for (qsizetype index = 0; index < static_cast<qsizetype>(source_->targets.size()); ++index) {
-        const auto& target = source_->targets[static_cast<std::size_t>(index)];
-        const bool window = target.kind == recorder_core::CaptureTarget::Kind::Window;
-        const QVariantMap option{
-            {QStringLiteral("targetIndex"), index},
-            {QStringLiteral("label"), QString::fromStdString(RecordViewModel::TargetLabelFromCaptureTarget(target))},
-            {QStringLiteral("kind"), window ? QStringLiteral("window") : QStringLiteral("display")},
-        };
-        target_options.push_back(option);
-        (window ? window_target_options : display_target_options).push_back(option);
-    }
-    if (target_options_ != target_options) {
-        target_options_ = std::move(target_options);
-        display_target_options_ = std::move(display_target_options);
-        window_target_options_ = std::move(window_target_options);
-        emit targetOptionsChanged();
+    // The three option lists are rebuilt only when the capture-target vector was
+    // actually replaced. Building them means a QVariantMap of three QStrings per
+    // monitor AND per eligible top-level window, with each label produced by
+    // TargetLabelFromCaptureTarget's string parsing — and it used to run on every
+    // synchronize(), i.e. 8-10 times a second, only for the deep compare below to
+    // throw the result away. The stamp is bumped by whoever assigns
+    // RecordViewModel::targets; `nullopt` means "no list has been built for this
+    // source yet", which is what makes a setSource() rebuild.
+    if (!target_options_revision_.has_value() || *target_options_revision_ != source_->targets_revision) {
+        target_options_revision_ = source_->targets_revision;
+        QVariantList target_options;
+        QVariantList display_target_options;
+        QVariantList window_target_options;
+        for (qsizetype index = 0; index < static_cast<qsizetype>(source_->targets.size()); ++index) {
+            const auto& target = source_->targets[static_cast<std::size_t>(index)];
+            const bool window = target.kind == recorder_core::CaptureTarget::Kind::Window;
+            const QVariantMap option{
+                {QStringLiteral("targetIndex"), index},
+                {QStringLiteral("label"),
+                 QString::fromStdString(RecordViewModel::TargetLabelFromCaptureTarget(target))},
+                {QStringLiteral("kind"), window ? QStringLiteral("window") : QStringLiteral("display")},
+            };
+            target_options.push_back(option);
+            (window ? window_target_options : display_target_options).push_back(option);
+        }
+        // The deep compare stays: a rescan that finds the identical set of
+        // windows must not republish, because targetOptionsChanged is what makes
+        // the source picker rebuild its list.
+        if (target_options_ != target_options) {
+            target_options_ = std::move(target_options);
+            display_target_options_ = std::move(display_target_options);
+            window_target_options_ = std::move(window_target_options);
+            emit targetOptionsChanged();
+        }
     }
 
     if (source_->capture_mode == CaptureMode::Region) {

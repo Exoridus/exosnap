@@ -11,7 +11,10 @@ Rectangle {
     required property string status
     required property string lane
     required property string value
-    property string tip: ""
+    // Required like the four above so a QQmlDelegateModel fills it from the
+    // `tip` role: only REQUIRED delegate properties are initialised from model
+    // roles, and this card is instantiated nowhere except as that delegate.
+    required property string tip
 
     readonly property color statusColor: root.status === "over" ? ExoTheme.error
                                        : root.status === "hotspot" ? ExoTheme.warning

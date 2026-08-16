@@ -149,6 +149,15 @@ class RecordViewModel {
     std::wstring capability_status_text = L"Checking system capabilities...";
 
     std::vector<recorder_core::CaptureTarget> targets;
+    // Bumped by whoever replaces `targets`. The Quick adapter republishes the
+    // three target-option lists only when this moves: building them means one
+    // QVariantMap of three QStrings per monitor AND per eligible top-level
+    // window, each label produced by string-parsing the target, and
+    // RecordViewModelAdapter::synchronize() runs at ~8 Hz while recording and
+    // 10 Hz during the countdown. The lists themselves only change when
+    // CaptureTargetNotifier rescans. A stamp rather than a deep compare of the
+    // vector, which would be the same O(n) string work the rebuild is.
+    std::uint64_t targets_revision = 0;
     std::vector<std::wstring> target_display_names;
     int selected_target_index = -1;
     capability::AudioUiState audio_ui_state;

@@ -5,6 +5,7 @@
 #include "DiagnosticIssueModel.h"
 #include "DiagnosticsAdapter.h"
 #include "LogsAdapter.h"
+#include "PipelineStageModel.h"
 
 #include "services/SupportBundleService.h"
 
@@ -243,9 +244,30 @@ TEST(DiagnosticsAdapterTest, IdlePipelineShowsTheStaticReadinessStages) {
     EnsureApplication();
     DiagnosticsAdapter adapter;
     EXPECT_FALSE(adapter.pipelineLive());
-    ASSERT_EQ(adapter.pipelineStages().size(), 6);
-    EXPECT_EQ(adapter.pipelineStages().at(0).toMap().value(QStringLiteral("status")).toString(),
-              QStringLiteral("planned"));
+    QAbstractListModel* stages = adapter.pipelineStages();
+    ASSERT_NE(stages, nullptr);
+    ASSERT_EQ(stages->rowCount(), 6);
+    EXPECT_EQ(stages->data(stages->index(0), PipelineStageModel::StatusRole).toString(), QStringLiteral("planned"));
+}
+
+// QCR-604. The pipeline used to be a QVariantList, and a Repeater answers a
+// whole-list assignment by destroying every delegate. The idle path republishes
+// the identical six planned stages whenever the configuration is re-applied.
+TEST(DiagnosticsAdapterTest, RepublishingTheSameIdlePipelineSaysNothing) {
+    EnsureApplication();
+    DiagnosticsAdapter adapter;
+    adapter.setDiagnosticConfig(MakeConfig());
+
+    auto* stages = qobject_cast<PipelineStageModel*>(adapter.pipelineStages());
+    ASSERT_NE(stages, nullptr);
+    SignalCounter resets(stages, &QAbstractItemModel::modelReset);
+    SignalCounter changes(stages, &QAbstractItemModel::dataChanged);
+
+    adapter.setDiagnosticConfig(MakeConfig());
+    adapter.setDiagnosticConfig(MakeConfig());
+
+    EXPECT_EQ(resets.count(), 0);
+    EXPECT_EQ(changes.count(), 0);
 }
 
 TEST(DiagnosticsAdapterTest, LiveSnapshotSwitchesThePipelineToMeasuredStages) {
@@ -262,7 +284,9 @@ TEST(DiagnosticsAdapterTest, LiveSnapshotSwitchesThePipelineToMeasuredStages) {
     adapter.applyLiveDiagnostics(snapshot);
 
     EXPECT_TRUE(adapter.pipelineLive());
-    EXPECT_EQ(adapter.pipelineStages().at(0).toMap().value(QStringLiteral("value")).toString(),
+    QAbstractListModel* stages = adapter.pipelineStages();
+    ASSERT_NE(stages, nullptr);
+    EXPECT_EQ(stages->data(stages->index(0), PipelineStageModel::ValueRole).toString(),
               QStringLiteral("59.4 / 60.0 fps"));
 }
 

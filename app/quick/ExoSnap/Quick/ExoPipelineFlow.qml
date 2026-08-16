@@ -20,19 +20,21 @@ Flow {
 
     spacing: ExoTheme.spacingSm
 
+    // A QAbstractListModel with a stable per-stage identity, not a list of maps:
+    // the six stages keep their delegates while a recording updates their values,
+    // where a QVariantList model rebuilt every delegate on every publication.
+    //
+    // The card's five required properties carry the role names, so the delegate
+    // model fills them directly — no modelData indirection and no `?? ""`
+    // fallbacks, which only existed because a QVariantMap has no schema.
     Repeater {
+        // Named so a test can reach the cards by index and assert that a value
+        // update keeps the same card object alive.
+        objectName: "pipelineStageRepeater"
+
         model: root.stages
 
         ExoPipelineStepCard {
-            id: card
-
-            required property var modelData
-
-            title: card.modelData.title ?? ""
-            status: card.modelData.status ?? "planned"
-            lane: card.modelData.lane ?? ""
-            value: card.modelData.value ?? ""
-            tip: card.modelData.tip ?? ""
             width: root.cardWidth
         }
     }

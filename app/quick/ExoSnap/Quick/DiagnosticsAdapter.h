@@ -1,6 +1,7 @@
 #pragma once
 
 #include "DiagnosticIssueModel.h"
+#include "PipelineStageModel.h"
 
 #include "diagnostics/DiagnosticsController.h"
 #include "services/SupportBundleService.h"
@@ -65,7 +66,8 @@ class DiagnosticsAdapter : public QObject {
     Q_PROPERTY(QVariantList configRows READ configRows NOTIFY environmentChanged FINAL)
     Q_PROPERTY(QVariantList selfTestRows READ selfTestRows NOTIFY selfTestChanged FINAL)
     Q_PROPERTY(QString selfTestStatus READ selfTestStatus NOTIFY selfTestChanged FINAL)
-    Q_PROPERTY(QVariantList pipelineStages READ pipelineStages NOTIFY pipelineChanged FINAL)
+    // Same reason as `issues` above for the base-type spelling.
+    Q_PROPERTY(QAbstractListModel* pipelineStages READ pipelineStages CONSTANT FINAL)
     Q_PROPERTY(bool pipelineLive READ pipelineLive NOTIFY pipelineChanged FINAL)
 
     Q_PROPERTY(bool bundleBusy READ bundleBusy NOTIFY bundleBusyChanged FINAL)
@@ -95,7 +97,7 @@ class DiagnosticsAdapter : public QObject {
     [[nodiscard]] const QVariantList& configRows() const noexcept;
     [[nodiscard]] const QVariantList& selfTestRows() const noexcept;
     [[nodiscard]] const QString& selfTestStatus() const noexcept;
-    [[nodiscard]] const QVariantList& pipelineStages() const noexcept;
+    [[nodiscard]] QAbstractListModel* pipelineStages() noexcept;
     [[nodiscard]] bool pipelineLive() const noexcept;
     [[nodiscard]] bool bundleBusy() const noexcept;
     [[nodiscard]] QString defaultBundleFileName() const;
@@ -170,6 +172,7 @@ class DiagnosticsAdapter : public QObject {
     diagnostics::DiagnosticsController controller_;
     capability::CapabilitySet caps_;
     DiagnosticIssueModel issue_model_;
+    PipelineStageModel pipeline_stage_model_;
     std::unique_ptr<SupportBundleService> bundle_service_;
 
     QString last_check_text_;
@@ -179,7 +182,6 @@ class DiagnosticsAdapter : public QObject {
     QVariantList environment_rows_;
     QVariantList config_rows_;
     QVariantList self_test_rows_;
-    QVariantList pipeline_stages_;
 
     diagnostics::VerdictState verdict_state_ = diagnostics::VerdictState::Neutral;
     QString verdict_headline_;

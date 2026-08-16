@@ -52,29 +52,51 @@ Window {
 
     readonly property string unavailable: "—"
 
-    // The configured tokens, in a fixed reading order, each already resolved to
-    // the text it will draw. Built here rather than as four conditional Items so
-    // the separators below can be positioned from the list index — with
-    // per-token `visible` flags, the separator logic is where the bugs live.
+    // The configured tokens, in a fixed reading order. Built here rather than as
+    // four conditional Items so the separators below can be positioned from the
+    // list index — with per-token `visible` flags, the separator logic is where
+    // the bugs live.
+    //
+    // LABELS ONLY, deliberately. This used to carry each token's resolved value
+    // as well, which made the array depend on fpsText/dropText/driftText/sizeText
+    // — four properties that move on the diagnostics cadence, roughly four times
+    // a second while recording. A `var` property compares by identity, so every
+    // one of those was a model ASSIGNMENT: QQmlDelegateModel removed every row
+    // and re-inserted it, tearing down and rebuilding two to four Rows and six to
+    // twelve Texts (each with a fresh font-metric layout) per second, on the same
+    // GUI thread as the DXGI preview and the transport clock.
+    //
+    // Now the array changes only when the CONTENT POLICY changes — a user
+    // toggling a token in Settings — and a value moving is an ordinary property
+    // update inside a delegate that stays alive.
     readonly property var tokens: {
         const list = [];
         if (root.showFps)
-            list.push({ "label": "fps", "value": root.fpsText.length > 0 ? root.fpsText : root.unavailable,
-                        "good": false });
+            list.push("fps");
         if (root.showDrop)
-            // Zero dropped frames is the one measured "all good" state this pill
-            // reports in green. Any other count stays neutral rather than
-            // alarming — the diagnostics tone is calm, never alarmist, and a
-            // dropped frame is reported, not shouted about.
-            list.push({ "label": "drop", "value": root.dropText.length > 0 ? root.dropText : root.unavailable,
-                        "good": root.dropText === "0" });
+            list.push("drop");
         if (root.showDrift)
-            list.push({ "label": "drift", "value": root.driftText.length > 0 ? root.driftText : root.unavailable,
-                        "good": false });
+            list.push("drift");
         if (root.showSize)
-            list.push({ "label": "size", "value": root.sizeText.length > 0 ? root.sizeText : root.unavailable,
-                        "good": false });
+            list.push("size");
         return list;
+    }
+
+    // The value behind a token label, unresolved. Kept as a function on the root
+    // so the delegate binds to the four source properties directly and each
+    // delegate re-evaluates only when its own token's text moves.
+    function tokenValue(label: string): string {
+        switch (label) {
+        case "fps":
+            return root.fpsText;
+        case "drop":
+            return root.dropText;
+        case "drift":
+            return root.driftText;
+        case "size":
+            return root.sizeText;
+        }
+        return "";
     }
 
     readonly property bool anyMutedGlyph: root.showMutedSources && (root.micMuted || root.sysMuted)
@@ -186,17 +208,36 @@ Window {
         Row {
             id: row
 
+            // Named so a test can reach the token delegates and assert that a
+            // value update keeps them alive rather than rebuilding the row.
+            objectName: "overlayTokenRow"
+
             anchors.centerIn: parent
             spacing: 7
 
             Repeater {
+                // Named for the same reason the row is: a test reaches the token
+                // delegates by index to prove they survive a value update.
+                objectName: "overlayTokenRepeater"
+
                 model: root.tokens
 
                 delegate: Row {
                     id: tokenRow
 
-                    required property var modelData
+                    required property string modelData
                     required property int index
+
+                    readonly property string resolvedValue: {
+                        const raw = root.tokenValue(tokenRow.modelData);
+                        return raw.length > 0 ? raw : root.unavailable;
+                    }
+                    // Zero dropped frames is the one measured "all good" state
+                    // this pill reports in green. Any other count stays neutral
+                    // rather than alarming — the diagnostics tone is calm, never
+                    // alarmist, and a dropped frame is reported, not shouted
+                    // about.
+                    readonly property bool good: tokenRow.modelData === "drop" && root.dropText === "0"
 
                     spacing: 7
 
@@ -215,7 +256,7 @@ Window {
                     }
 
                     Text {
-                        text: tokenRow.modelData.label
+                        text: tokenRow.modelData
                         textFormat: Text.PlainText
                         color: ExoTheme.overlayInkMuted
                         font {
@@ -225,9 +266,9 @@ Window {
                     }
 
                     Text {
-                        text: tokenRow.modelData.value
+                        text: tokenRow.resolvedValue
                         textFormat: Text.PlainText
-                        color: tokenRow.modelData.good ? ExoTheme.overlaySuccess : ExoTheme.overlayInk
+                        color: tokenRow.good ? ExoTheme.overlaySuccess : ExoTheme.overlayInk
                         font {
                             family: ExoTheme.monoFamily
                             pixelSize: 13
