@@ -1472,7 +1472,13 @@ unimplemented behavior.
   check at all, via a separate compile-time gate (`IsUpdateCheckEnabled()`), regardless of this
   setting. Both a manual "Check now" and a toggleable automatic update check exist; a manual check
   is itself the user's explicit action and needs no separate consent step.
-- **Stable** and **Preview** channels.
+- **Stable** and **Preview** channels. The selection **takes effect immediately** — the next check
+  queries the channel now shown, not the one that was selected at launch — and it **invalidates the
+  previous channel's answer**: "Update available — <ver>" describes a feed, not the application, so
+  switching returns the card to **Unchecked** rather than carrying the other channel's verdict over.
+  Switching does **not** start a network check on its own; a check remains the user's explicit
+  action. A check already in flight when the channel changes is discarded rather than presented
+  under the new channel.
 - The client verifies the manifest against a **detached ed25519 signature** (Monocypher; shipped as
   a sibling `update-manifest.json.sig` asset, verified over the exact received manifest bytes
   before any field is parsed) plus each package's **SHA-256** hash, and **refuses downgrades**. No
@@ -1487,7 +1493,10 @@ unimplemented behavior.
   support bundles and crash metadata. RC builds are therefore honestly older than the final of the
   same base version, and an older RC naturally discovers a newer RC on the Preview channel.
   Developer builds identify as `<base>-dev` and never impersonate a release.
-- **Update card states** (normative): **Up to date** (`✓ Up to date · <last checked>`, button
+- **Update card states** (normative): **Unchecked** (`No update check has run yet.`, button
+  `Check for updates`; the state at launch and after a channel switch — deliberately distinct from
+  "Up to date", which would be an assertion the app has not earned) · **Up to date**
+  (`✓ Up to date · <last checked>`, button
   `Check for updates`) · **Checking** (`Checking for updates…`, action disabled; the click never
   moves the page's scroll position or steals focus out of the card) · **Available**
   (`Update available — <ver>`, button `Update to <ver>` launches the real external updater for

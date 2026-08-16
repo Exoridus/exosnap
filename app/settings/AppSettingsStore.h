@@ -139,7 +139,10 @@ struct PersistedAppSettings {
     CrashReportPolicy crash_report_policy = CrashReportPolicy::AskEveryTime;
 
     // UPDATE-WIRE-R1 (ADR 0012): the selected update channel — "Stable" | "Preview".
-    // Applied immediately on change (persist + re-check); default Stable.
+    // Applied immediately on change: persisted, pushed into UpdateService, and
+    // the previous channel's answer is dropped from the card. No automatic
+    // re-check — a network check stays the user's explicit action (ADR 0045).
+    // Default Stable.
     QString update_channel = QStringLiteral("Stable");
 
     // UPDATE-WIRE-R1 (ADR 0012): whether to run a guarded update check on startup.

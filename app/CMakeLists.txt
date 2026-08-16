@@ -764,6 +764,20 @@ exosnap_add_gtest(
 )
 target_include_directories(update_launch_plan_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
 
+# QCR-202: the pure completion gate behind UpdateService's async check. The
+# service is a thin driver of this resolver, so the interleavings that used to
+# misattribute a result (a channel change or a second request mid-check) are
+# exercised here rather than against a real network and real thread timing.
+exosnap_add_gtest(
+    NAME update_check_gate_tests
+    TEST_PREFIX update_check.
+    SOURCES
+        tests/test_update_check_gate.cpp
+        services/UpdateCheckGate.cpp
+    LIBRARIES Qt6::Core exosnap::update
+)
+target_include_directories(update_check_gate_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
 exosnap_add_gtest(
     NAME version_tests
     TEST_PREFIX version.

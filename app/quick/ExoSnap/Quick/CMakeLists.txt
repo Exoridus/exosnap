@@ -319,6 +319,9 @@ target_sources(exosnap
         ${PROJECT_SOURCE_DIR}/app/services/WhatsNewPayload.cpp
         ${PROJECT_SOURCE_DIR}/app/services/WhatsNewPayload.h
         ${PROJECT_SOURCE_DIR}/app/services/UpdateLaunchPlan.cpp
+        # QCR-202: the pure completion gate the check worker is a driver of.
+        ${PROJECT_SOURCE_DIR}/app/services/UpdateCheckGate.cpp
+        ${PROJECT_SOURCE_DIR}/app/services/UpdateCheckGate.h
         ${PROJECT_SOURCE_DIR}/app/settings/AppSettingsStore.cpp
         ${PROJECT_SOURCE_DIR}/app/settings/AppSettingsStore.h
         ${PROJECT_SOURCE_DIR}/app/settings/RecordingPresetStore.cpp

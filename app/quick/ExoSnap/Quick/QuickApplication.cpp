@@ -1367,8 +1367,11 @@ void QuickApplication::wireSettingsCommands() {
     QObject::connect(&settings_adapter_, &SettingsAdapter::configEdited, &settings_adapter_,
                      [this]() { applySettingsConfigEdit(); });
     QObject::connect(&settings_adapter_, &SettingsAdapter::appSettingsEdited, &settings_adapter_, [this]() {
+        const QString previous_update_channel = settings_.update_channel;
         settings_ = settings_adapter_.appSettings();
         persistAppSettings(SettingsWriteIntent::UserEdit);
+        if (settings_.update_channel != previous_update_channel)
+            applyUpdateChannel();
         applyThemeFromSettings();
         // Both of these were persisted-and-displayed but never applied: the
         // developer log level left AppLog recording everything regardless of the
@@ -1918,6 +1921,25 @@ void QuickApplication::initializeUpdates() {
     settings_adapter_.setUpdateStatus(QStringLiteral("unchecked"), QString(), QString());
     if (settings_.check_updates_on_start)
         triggerUpdateCheck(/*manual=*/false);
+}
+
+// QCR-202. The selected channel used to reach UpdateService exactly once, in
+// initializeUpdates(): picking Preview persisted the choice and changed the
+// About page, but every check in that session still queried Stable, and only the
+// next launch honoured the selection. Applying it here also invalidates the
+// card, because "Update available — <ver>" was an answer about the feed the user
+// just left. The card returns to the same "unchecked" state a fresh launch
+// shows; no automatic network check is started, since a check is the user's
+// explicit action (ADR 0045) and the card's own button is right there.
+void QuickApplication::applyUpdateChannel() {
+    if (!update_service_)
+        return;
+    update_service_->SetChannel(UpdateChannelFromString(settings_.update_channel));
+    last_available_version_.clear();
+    update_handoff_phase_ = UpdateHandoffPhase::Idle;
+    settings_adapter_.setUpdateStatus(QStringLiteral("unchecked"), QString(), QString());
+    diagnostics::AppLog::info(QStringLiteral("update"),
+                              QStringLiteral("Update channel set to %1").arg(settings_.update_channel));
 }
 
 void QuickApplication::triggerUpdateCheck(bool manual) {

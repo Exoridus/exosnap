@@ -27,6 +27,23 @@ WhatsNewPendingPayload MakePayload(const QString& target) {
 // Round-trip
 // ---------------------------------------------------------------------------
 
+// QCR-203. LaunchUpdater treats this payload as optional — losing it costs the
+// post-update overlay and nothing else, so a failure warns and the update
+// continues. That decision is only defensible if the failure is reported at all,
+// which is what this pins: QSaveFile::commit() is the write's success, not the
+// open.
+TEST(WhatsNewPayload, WriteToAnUnwritablePathReportsFailure) {
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = PayloadPath(dir);
+    // A directory occupying the payload path: the parent exists, the file write
+    // cannot succeed.
+    ASSERT_TRUE(QDir().mkpath(path));
+
+    EXPECT_FALSE(WriteWhatsNewPayload(path, MakePayload(QStringLiteral("1.2.0"))));
+    EXPECT_FALSE(ReadWhatsNewPayload(path).has_value()) << "a failed write must leave nothing readable behind";
+}
+
 TEST(WhatsNewPayload, WriteThenReadRoundTrips) {
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());

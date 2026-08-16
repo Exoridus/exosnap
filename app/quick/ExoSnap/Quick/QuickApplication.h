@@ -223,6 +223,9 @@ class QuickApplication {
     // handoff. Until this existed the card rendered state nobody ever set and its
     // button reached nothing.
     void initializeUpdates();
+    // Push the persisted channel into UpdateService and drop the previous
+    // channel's answer. Called on every change, not only at startup (QCR-202).
+    void applyUpdateChannel();
     void triggerUpdateCheck(bool manual);
     void onUpdateCheckComplete(const exosnap::update::UpdateCheckResult& result);
     void runUpdatePrimaryAction();
