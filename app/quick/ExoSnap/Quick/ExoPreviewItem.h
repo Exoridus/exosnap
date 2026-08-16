@@ -16,6 +16,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 namespace exosnap::quick {
 
@@ -182,6 +183,16 @@ class ExoPreviewItem : public QQuickItem {
     qreal corner_radius_ = 12.0;
     qreal top_corner_radius_ = -1.0;
     QRectF normalized_source_rect_{0.0, 0.0, 1.0, 1.0};
+
+    // Percentile scratch for metricsSnapshot(), which is const but runs on a
+    // 250 ms timer and would otherwise allocate three 1024-double vectors each
+    // time. GUI thread only: metricsSnapshot() is reached from
+    // RecordPreviewAdapter's metrics timer and from benchmarkSnapshot(), never
+    // from preprocess() or any other render-thread entry point, so these are not
+    // part of the RenderLink ownership that QCR-109 established.
+    mutable std::vector<double> interval_scratch_;
+    mutable std::vector<double> scene_interval_scratch_;
+    mutable std::vector<double> submit_scratch_;
 
     mutable QMutex pending_mutex_;
     PendingSource pending_;

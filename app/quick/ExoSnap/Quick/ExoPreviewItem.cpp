@@ -1,5 +1,6 @@
 #include "ExoPreviewItem.h"
 
+#include "PreviewPercentile.h"
 #include "QuickPreviewRgbaConverter.h"
 #include "RecordPreviewAdapter.h"
 #include "RoundedRectClipGeometry.h"
@@ -75,14 +76,6 @@ void tracePresentation(const char* transition, const QQuickWindow* window, const
           scheduler != nullptr ? scheduler->PublishSignals() : 0ULL, scheduler != nullptr ? scheduler->Wakeups() : 0ULL,
           scheduler != nullptr ? scheduler->SceneUpdateRequests() : 0ULL,
           scheduler != nullptr ? scheduler->RenderPasses() : 0ULL);
-}
-
-double percentile(std::vector<double> values, double fraction) {
-    if (values.empty())
-        return 0.0;
-    std::sort(values.begin(), values.end());
-    const size_t index = static_cast<size_t>(std::ceil(fraction * static_cast<double>(values.size()))) - 1;
-    return values[std::min(index, values.size() - 1)];
 }
 
 class PreviewTextureNode final : public QSGNode {
@@ -619,53 +612,68 @@ PreviewMetricsSnapshot ExoPreviewItem::metricsSnapshot() const {
     snapshot.mutex_misses = metrics().mutex_misses.load(std::memory_order_relaxed);
     snapshot.source_dxgi_format = metrics().source_dxgi_format.load(std::memory_order_relaxed);
 
+    // Three member scratch buffers rather than three fresh vectors per call: this
+    // runs on a 250 ms timer for as long as the preview is up, and the buffers
+    // are 1024 doubles each. Only ever touched from the GUI thread — see the
+    // declaration in the header for why that is not a render-thread hazard.
+    std::vector<double>& intervals = interval_scratch_;
+    std::vector<double>& scene_intervals = scene_interval_scratch_;
+    std::vector<double>& submits = submit_scratch_;
+    intervals.clear();
+    scene_intervals.clear();
+    submits.clear();
+
     const quint64 interval_count =
         std::min<quint64>(metrics().interval_write.load(std::memory_order_relaxed), kMetricWindow);
-    std::vector<double> intervals;
     intervals.reserve(static_cast<size_t>(interval_count));
     for (quint64 i = 0; i < interval_count; ++i) {
         const qint64 value = metrics().interval_ns[i].load(std::memory_order_relaxed);
         if (value > 0)
             intervals.push_back(static_cast<double>(value) / 1'000'000.0);
     }
-    snapshot.source_interval_ms_p95 = percentile(intervals, 0.95);
-    snapshot.source_interval_ms_p99 = percentile(intervals, 0.99);
+    // Summed BEFORE the sort. Floating-point addition is not associative, so
+    // accumulating a sorted vector would give a different last bit than the old
+    // code did — a gratuitous change to a published number.
     if (!intervals.empty()) {
         const double total_ms = std::accumulate(intervals.begin(), intervals.end(), 0.0);
         snapshot.source_delivery_fps = total_ms > 0.0 ? 1000.0 * static_cast<double>(intervals.size()) / total_ms : 0.0;
     }
+    std::sort(intervals.begin(), intervals.end());
+    snapshot.source_interval_ms_p95 = PercentileSorted(intervals, 0.95);
+    snapshot.source_interval_ms_p99 = PercentileSorted(intervals, 0.99);
 
     const quint64 scene_interval_count =
         std::min<quint64>(metrics().scene_interval_write.load(std::memory_order_relaxed), kMetricWindow);
-    std::vector<double> scene_intervals;
     scene_intervals.reserve(static_cast<size_t>(scene_interval_count));
     for (quint64 i = 0; i < scene_interval_count; ++i) {
         const qint64 value = metrics().scene_interval_ns[i].load(std::memory_order_relaxed);
         if (value > 0)
             scene_intervals.push_back(static_cast<double>(value) / 1'000'000.0);
     }
-    snapshot.scene_frame_ms_p50 = percentile(scene_intervals, 0.50);
-    snapshot.scene_frame_ms_p95 = percentile(scene_intervals, 0.95);
-    snapshot.scene_frame_ms_p99 = percentile(scene_intervals, 0.99);
-    snapshot.scene_frame_ms_max =
-        scene_intervals.empty() ? 0.0 : *std::max_element(scene_intervals.begin(), scene_intervals.end());
     if (!scene_intervals.empty()) {
         const double total_ms = std::accumulate(scene_intervals.begin(), scene_intervals.end(), 0.0);
         snapshot.scene_fps = total_ms > 0.0 ? 1000.0 * static_cast<double>(scene_intervals.size()) / total_ms : 0.0;
     }
+    std::sort(scene_intervals.begin(), scene_intervals.end());
+    snapshot.scene_frame_ms_p50 = PercentileSorted(scene_intervals, 0.50);
+    snapshot.scene_frame_ms_p95 = PercentileSorted(scene_intervals, 0.95);
+    snapshot.scene_frame_ms_p99 = PercentileSorted(scene_intervals, 0.99);
+    // The sort already put the maximum at the back; std::max_element over the
+    // same values returned exactly this.
+    snapshot.scene_frame_ms_max = scene_intervals.empty() ? 0.0 : scene_intervals.back();
 
     const quint64 submit_count =
         std::min<quint64>(metrics().submit_write.load(std::memory_order_relaxed), kMetricWindow);
-    std::vector<double> submits;
     submits.reserve(static_cast<size_t>(submit_count));
     for (quint64 i = 0; i < submit_count; ++i) {
         const qint64 value = metrics().submit_ns[i].load(std::memory_order_relaxed);
         if (value > 0)
             submits.push_back(static_cast<double>(value) / 1'000.0);
     }
-    snapshot.submit_us_p50 = percentile(submits, 0.50);
-    snapshot.submit_us_p95 = percentile(submits, 0.95);
-    snapshot.submit_us_p99 = percentile(submits, 0.99);
+    std::sort(submits.begin(), submits.end());
+    snapshot.submit_us_p50 = PercentileSorted(submits, 0.50);
+    snapshot.submit_us_p95 = PercentileSorted(submits, 0.95);
+    snapshot.submit_us_p99 = PercentileSorted(submits, 0.99);
     return snapshot;
 }
 

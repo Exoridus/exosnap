@@ -38,6 +38,14 @@ class RecordPreviewAdapter : public QObject {
     QML_ELEMENT
     QML_UNCREATABLE("RecordPreviewAdapter is provided by the application")
     Q_PROPERTY(bool active READ active WRITE setActive NOTIFY activeChanged FINAL)
+    // Whether the surface the preview draws on can be seen at all — the window is
+    // shown and not minimized. Distinct from `active`, which only says the Record
+    // destination is the selected one: a minimized window keeps that true, and
+    // the capture hub then duplicated the desktop at ~66 Hz, published into the
+    // shared texture and armed a scene update per frame for a window that cannot
+    // render. See setSurfaceVisible() for the one case that is deliberately NOT
+    // suspended.
+    Q_PROPERTY(bool surfaceVisible READ surfaceVisible WRITE setSurfaceVisible NOTIFY surfaceVisibleChanged FINAL)
     Q_PROPERTY(bool sourceAvailable READ sourceAvailable NOTIFY sourceAvailableChanged FINAL)
     Q_PROPERTY(bool frameReady READ frameReady NOTIFY frameReadyChanged FINAL)
     Q_PROPERTY(QString sourceName READ sourceName NOTIFY sourceNameChanged FINAL)
@@ -61,6 +69,16 @@ class RecordPreviewAdapter : public QObject {
 
     [[nodiscard]] bool active() const noexcept;
     void setActive(bool active);
+
+    [[nodiscard]] bool surfaceVisible() const noexcept;
+    // Suspends/resumes the preview's own capture subscription. The engine-fed
+    // case is exempt: while a recording owns the capture, the preview draws the
+    // engine's WYSIWYG texture, whose shared handle is published once per capture
+    // start rather than per frame — dropping it on a minimize would leave a black
+    // preview until the recording ended, because nothing re-publishes it on
+    // restore. That case costs no extra duplication anyway: the hub lease is out,
+    // so the pump the suspension exists to stop is not running.
+    void setSurfaceVisible(bool visible);
 
     [[nodiscard]] bool sourceAvailable() const noexcept;
     [[nodiscard]] bool frameReady() const noexcept;
@@ -106,6 +124,7 @@ class RecordPreviewAdapter : public QObject {
 
   signals:
     void activeChanged();
+    void surfaceVisibleChanged();
     void sourceAvailableChanged();
     void frameReadyChanged();
     void sourceNameChanged();
@@ -116,6 +135,11 @@ class RecordPreviewAdapter : public QObject {
     void recordingStateChanged();
 
   private:
+    // The one place `active` and `surfaceVisible` are resolved into "is the
+    // preview subscription running". Both setters go through it, and so does the
+    // end of observeRecordingState(), because losing the engine lease can turn a
+    // hidden-but-exempt preview into one that should now be suspended.
+    void applyPreviewRunState();
     void startPreview();
     void stopPreview();
     void synchronizeItemState();
@@ -140,6 +164,10 @@ class RecordPreviewAdapter : public QObject {
     QTimer metrics_timer_;
     std::atomic<quint64> source_epoch_{0};
     bool active_ = false;
+    // Defaults to true so a host that never sets it (the QML tests, the render
+    // harness) behaves exactly as before this gate existed.
+    bool surface_visible_ = true;
+    bool preview_running_ = false;
     bool source_available_ = false;
     bool frame_ready_ = false;
     QString source_name_;

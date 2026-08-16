@@ -241,6 +241,21 @@ ApplicationWindow {
         onCaptureFrameRequested: root.recordViewModel.requestCaptureFrame()
     }
 
+    // QCR-608. `RecordPreviewAdapter.active` follows the navigation index alone,
+    // which stays true while the window is minimized or sitting in the tray —
+    // and the capture hub then kept duplicating the desktop at ~66 Hz, arming a
+    // scene update per frame for a window that cannot render.
+    //
+    // Window visibility is the fact, so it is read from the window rather than
+    // inferred from an item's `visible`: Qt does not fire
+    // ItemVisibleHasChanged on a minimize, which is why the item-level guard the
+    // preview already has never saw this case.
+    Binding {
+        target: root.previewAdapter
+        property: "surfaceVisible"
+        value: root.visible && root.visibility !== Window.Minimized
+    }
+
     AppShell {
         id: appShell
 
