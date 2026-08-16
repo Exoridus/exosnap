@@ -1,6 +1,7 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import QtQuick.Shapes
 
 // Transient notification toasts, stacked bottom-right of the screen that hosts
 // the ExoSnap window. Ported from app/ui/overlay/NotificationToastWindow.cpp.
@@ -406,13 +407,52 @@ Window {
                 }
 
                 // Countdown hairline along the bottom edge of timed toasts.
-                Rectangle {
+                //
+                // A clipping band with the CARD's own outline drawn inside it,
+                // not a 3 px Rectangle laid over the bottom edge. A Rectangle
+                // clamps its corner radius to half its shortest side, so at 3 px
+                // tall it can round its own corners by 1.5 px against the card's
+                // 14 — while the card's bottom arc cuts about 5 px inwards over
+                // exactly those three rows. The bar's square ends therefore hung
+                // outside the card's rounded corners, which is the broken edge
+                // this replaces.
+                //
+                // The Widgets toast this was ported from clipped the bar to the
+                // card path (setClipPath); the shape is the same one, described
+                // here instead of clipped there. The band's own rectangular clip
+                // is what shortens the bar as the dwell runs out, so the draining
+                // edge stays a straight cut while both bottom corners follow the
+                // card.
+                Item {
+                    id: countdown
+
+                    x: 0
+                    y: card.height - countdown.height
                     height: 3
                     width: card.width * Math.max(0, Math.min(1, card.model.remainingFraction !== undefined
                                                                 ? card.model.remainingFraction : 0))
-                    anchors.bottom: parent.bottom
                     visible: !card.standing
-                    color: Qt.alpha(card.tone, 0.6)
+                    clip: true
+
+                    Shape {
+                        // Offset so the outline lands where the card actually
+                        // is; the band clips everything above it away.
+                        x: 0
+                        y: -(card.height - countdown.height)
+                        width: card.width
+                        height: card.height
+
+                        ShapePath {
+                            fillColor: Qt.alpha(card.tone, 0.6)
+                            strokeWidth: -1
+
+                            PathRectangle {
+                                width: card.width
+                                height: card.height
+                                radius: card.radius
+                            }
+                        }
+                    }
 
                     // The model recomputes this ten times a second, which on a
                     // 372 px card is a visible step per update rather than a
