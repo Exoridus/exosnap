@@ -1,5 +1,6 @@
 #include "EditSessionAdapter.h"
 
+#include "diagnostics/AppLog.h"
 #include "models/EditTimelineModel.h"
 #include "models/MarkerSidecar.h"
 
@@ -354,7 +355,18 @@ void EditSessionAdapter::loadMarkers() {
         const std::filesystem::path sidecar(context_.marker_sidecar_path.toStdWString());
         std::error_code ec;
         if (std::filesystem::exists(sidecar, ec)) {
-            markers_ = ReadMarkerSidecar(sidecar);
+            int skipped = 0;
+            markers_ = ReadMarkerSidecar(sidecar, &skipped);
+            // QCR-207: a dropped marker is a silent difference between the file
+            // and the timeline, so it is stated once here rather than nowhere.
+            // No separate marker-error surface — the sidecar is a companion
+            // file, and losing an entry costs a bookmark, not the recording.
+            if (skipped > 0) {
+                diagnostics::AppLog::warning(QStringLiteral("edit"),
+                                             QStringLiteral("Skipped %1 marker(s) with an unusable time in %2")
+                                                 .arg(skipped)
+                                                 .arg(context_.marker_sidecar_path));
+            }
             return;
         }
     }

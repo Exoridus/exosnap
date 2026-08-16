@@ -1038,11 +1038,15 @@ exosnap_add_gtest(
         EditTimelineModels.h
         ${PROJECT_SOURCE_DIR}/app/services/TimelineThumbnailSource.cpp
         ${PROJECT_SOURCE_DIR}/app/services/TimelineThumbnailSource.h
+    # exosnap_app_log_test_support: loadMarkers() reports markers the sidecar
+    # parser had to skip (QCR-207) through AppLog, same as DeviceAdapter does
+    # for its rescan milestones.
     LIBRARIES
         Qt6::Core
         Qt6::Gui
         Qt6::Qml
         Qt6::Quick
+        exosnap_app_log_test_support
         recorder_core
 )
 

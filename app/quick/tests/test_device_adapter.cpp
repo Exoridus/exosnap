@@ -420,6 +420,131 @@ TEST_F(DeviceAdapterTest, EmptyScanResultShowsTheEmptyStateAndHidesTheMatrix) {
     EXPECT_TRUE(adapter.statusText().contains(QStringLiteral("No encoder-capable adapters")));
 }
 
+// ── QCR-206: the selection-change contract ──────────────────────────────────
+//
+// Ten Q_PROPERTYs carry NOTIFY selectionChanged (selectedIndex, matrixVisible,
+// selectedTitle/KindBadge/Subtitle/StateBadge, selectedIsActive, codecChips,
+// provenanceText, provenanceOk). Their C++ getters were always correct after an
+// empty scan; the branch that cleared the selection returned without emitting,
+// so QML kept the vanished adapter's name, badge and chips on screen.
+
+TEST_F(DeviceAdapterTest, EmptyScanAfterASelectionPublishesTheSelectionChange) {
+    InjectTwoAdapters();
+    ASSERT_EQ(adapter.selectedIndex(), 0);
+
+    int selection_changes = 0;
+    QObject::connect(&adapter, &DeviceAdapter::selectionChanged, [&selection_changes]() { ++selection_changes; });
+
+    adapter.setAdaptersForTest({}, {});
+
+    EXPECT_EQ(selection_changes, 1) << "the effective selection went from an adapter to none — exactly once";
+    EXPECT_EQ(adapter.selectedIndex(), -1);
+    EXPECT_FALSE(adapter.matrixVisible());
+    EXPECT_TRUE(adapter.selectedTitle().isEmpty());
+    EXPECT_TRUE(adapter.selectedKindBadge().isEmpty());
+    EXPECT_TRUE(adapter.provenanceText().isEmpty());
+    EXPECT_FALSE(adapter.provenanceOk());
+    EXPECT_FALSE(adapter.selectedIsActive());
+    EXPECT_TRUE(adapter.codecChips().isEmpty());
+}
+
+TEST_F(DeviceAdapterTest, EmptyScanWithNothingSelectedPublishesNothing) {
+    int selection_changes = 0;
+    QObject::connect(&adapter, &DeviceAdapter::selectionChanged, [&selection_changes]() { ++selection_changes; });
+
+    adapter.setAdaptersForTest({}, {});
+
+    EXPECT_EQ(selection_changes, 0) << "nothing was inspected before and nothing is now: no property can differ";
+    EXPECT_EQ(adapter.selectedIndex(), -1);
+}
+
+TEST_F(DeviceAdapterTest, ARescanThatKeepsTheSameAdapterStillPublishesOnce) {
+    InjectTwoAdapters();
+    ASSERT_EQ(adapter.selectedIndex(), 0);
+
+    int selection_changes = 0;
+    QObject::connect(&adapter, &DeviceAdapter::selectionChanged, [&selection_changes]() { ++selection_changes; });
+
+    // Same LUIDs, same order, but the NVIDIA probe now reports AV1 as well. The
+    // index is unchanged and the selection-derived properties are not, so this
+    // must publish — an index-equality short-circuit here would freeze the
+    // matrix on the previous probe's answer.
+    adapter.setAdaptersForTest(
+        {MakeAdapter("GeForce RTX 4070", capability::AdapterVendor::Nvidia, capability::AdapterKind::Discrete, 1),
+         MakeAdapter("UHD Graphics 770", capability::AdapterVendor::Intel, capability::AdapterKind::Integrated, 2)},
+        {MakeProbedNvencCap(true, true, true), MakeUnwiredCap()});
+
+    EXPECT_EQ(selection_changes, 1);
+    EXPECT_EQ(adapter.selectedIndex(), 0);
+    EXPECT_EQ(ChipStateFor(adapter.codecChips(), QStringLiteral("AV1")), 1);
+}
+
+TEST_F(DeviceAdapterTest, ARescanThatFallsBackToAnotherAdapterPublishesOnce) {
+    InjectTwoAdapters();
+    adapter.selectAdapter(1); // Intel, luid 2
+    ASSERT_EQ(adapter.selectedIndex(), 1);
+
+    int selection_changes = 0;
+    QObject::connect(&adapter, &DeviceAdapter::selectionChanged, [&selection_changes]() { ++selection_changes; });
+
+    // The inspected adapter is gone; the fallback picks the active one.
+    adapter.setAdaptersForTest(
+        {MakeAdapter("GeForce RTX 4070", capability::AdapterVendor::Nvidia, capability::AdapterKind::Discrete, 1)},
+        {MakeProbedNvencCap(true, true, false)});
+
+    EXPECT_EQ(selection_changes, 1);
+    EXPECT_EQ(adapter.selectedIndex(), 0);
+    EXPECT_EQ(adapter.selectedTitle(), QStringLiteral("NVIDIA GeForce RTX 4070"));
+}
+
+TEST_F(DeviceAdapterTest, ReclickingTheInspectedCardPublishesNothing) {
+    InjectTwoAdapters();
+    adapter.selectAdapter(1);
+    ASSERT_EQ(adapter.selectedIndex(), 1);
+
+    int selection_changes = 0;
+    QObject::connect(&adapter, &DeviceAdapter::selectionChanged, [&selection_changes]() { ++selection_changes; });
+
+    adapter.selectAdapter(1);
+    EXPECT_EQ(selection_changes, 0) << "same adapter, same data — re-evaluating ten bindings would be noise";
+
+    adapter.selectAdapter(0);
+    EXPECT_EQ(selection_changes, 1);
+}
+
+TEST_F(DeviceAdapterTest, AnOutOfRangeSelectionNeitherChangesNorPublishes) {
+    InjectTwoAdapters();
+    ASSERT_EQ(adapter.selectedIndex(), 0);
+
+    int selection_changes = 0;
+    QObject::connect(&adapter, &DeviceAdapter::selectionChanged, [&selection_changes]() { ++selection_changes; });
+
+    // A stale delegate index must not clear the inspection — ignoring it is the
+    // established behaviour and stays that way.
+    adapter.selectAdapter(7);
+    adapter.selectAdapter(-1);
+
+    EXPECT_EQ(selection_changes, 0);
+    EXPECT_EQ(adapter.selectedIndex(), 0);
+    EXPECT_TRUE(adapter.matrixVisible());
+}
+
+// The device list and the inspected adapter are separate facts with separate
+// signals, and the fix must not collapse them.
+TEST_F(DeviceAdapterTest, ListAndSelectionChangesStaySeparateSignals) {
+    InjectTwoAdapters();
+
+    int adapters_changes = 0;
+    int selection_changes = 0;
+    QObject::connect(&adapter, &DeviceAdapter::adaptersChanged, [&adapters_changes]() { ++adapters_changes; });
+    QObject::connect(&adapter, &DeviceAdapter::selectionChanged, [&selection_changes]() { ++selection_changes; });
+
+    // Inspecting the other card: selection changed, the list did not.
+    adapter.selectAdapter(1);
+    EXPECT_EQ(selection_changes, 1);
+    EXPECT_EQ(adapters_changes, 0);
+}
+
 TEST_F(DeviceAdapterTest, StatusLineIsHiddenOnceAdaptersAreListed) {
     InjectTwoAdapters();
     EXPECT_FALSE(adapter.statusVisible());
