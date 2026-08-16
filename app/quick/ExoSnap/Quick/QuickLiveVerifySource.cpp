@@ -1,13 +1,19 @@
 #include "QuickLiveVerifySource.h"
 
 #include "AboutViewModelAdapter.h"
+#include "BlockingSurfaceArbiter.h"
+#include "CrashReportAdapter.h"
 #include "DiagnosticsAdapter.h"
 #include "EditPlayerAdapter.h"
 #include "EditSessionAdapter.h"
+#include "NotificationsAdapter.h"
 #include "QuickApplication.h"
 #include "RecordPreviewAdapter.h"
 #include "RecordViewModelAdapter.h"
+#include "RecordingErrorAdapter.h"
+#include "RecoveryAdapter.h"
 #include "SettingsAdapter.h"
+#include "ShellAdapter.h"
 
 #include "diagnostics/NativeWindowFacts.h"
 #include "models/AboutInfo.h"
@@ -17,14 +23,112 @@
 #include <QCoreApplication>
 #include <QGuiApplication>
 #include <QJsonArray>
+#include <QMetaObject>
 #include <QQuickWindow>
 #include <QRect>
 #include <QScreen>
+#include <QVariant>
+
+#include <optional>
+#include <utility>
 
 #include <windows.h>
 
 namespace exosnap::quick {
 namespace {
+
+using live_verify::AutomationState;
+
+// The UiRecordingState enumerator's own name. A switch rather than a table so
+// adding a state without naming it is a compiler warning; the wire has always
+// carried the integer, and an integer whose meaning is an enumerator ORDER is
+// not a protocol.
+QString RecordingStateName(UiRecordingState state) {
+    switch (state) {
+    case UiRecordingState::LoadingCapabilities:
+        return QStringLiteral("LoadingCapabilities");
+    case UiRecordingState::Ready:
+        return QStringLiteral("Ready");
+    case UiRecordingState::Blocked:
+        return QStringLiteral("Blocked");
+    case UiRecordingState::Countdown:
+        return QStringLiteral("Countdown");
+    case UiRecordingState::Preparing:
+        return QStringLiteral("Preparing");
+    case UiRecordingState::RegionSelecting:
+        return QStringLiteral("RegionSelecting");
+    case UiRecordingState::Recording:
+        return QStringLiteral("Recording");
+    case UiRecordingState::Paused:
+        return QStringLiteral("Paused");
+    case UiRecordingState::ArmedFromRecovery:
+        return QStringLiteral("ArmedFromRecovery");
+    case UiRecordingState::Stopping:
+        return QStringLiteral("Stopping");
+    case UiRecordingState::Saving:
+        return QStringLiteral("Saving");
+    case UiRecordingState::Completed:
+        return QStringLiteral("Completed");
+    case UiRecordingState::Failed:
+        return QStringLiteral("Failed");
+    }
+    return QStringLiteral("Unknown");
+}
+
+QString PageName(ShellAdapter::Page page) {
+    switch (page) {
+    case ShellAdapter::RecordPage:
+        return QString::fromLatin1(live_verify::page_name::kRecord);
+    case ShellAdapter::SettingsPage:
+        return QString::fromLatin1(live_verify::page_name::kSettings);
+    case ShellAdapter::DiagnosticsPage:
+        return QString::fromLatin1(live_verify::page_name::kDiagnostics);
+    case ShellAdapter::LogsPage:
+        return QString::fromLatin1(live_verify::page_name::kLogs);
+    case ShellAdapter::AboutPage:
+        return QString::fromLatin1(live_verify::page_name::kAbout);
+    }
+    return QString::fromLatin1(live_verify::page_name::kRecord);
+}
+
+std::optional<ShellAdapter::Page> PageFromName(const QString& name) {
+    if (name == QLatin1String(live_verify::page_name::kRecord))
+        return ShellAdapter::RecordPage;
+    if (name == QLatin1String(live_verify::page_name::kSettings))
+        return ShellAdapter::SettingsPage;
+    if (name == QLatin1String(live_verify::page_name::kDiagnostics))
+        return ShellAdapter::DiagnosticsPage;
+    if (name == QLatin1String(live_verify::page_name::kLogs))
+        return ShellAdapter::LogsPage;
+    if (name == QLatin1String(live_verify::page_name::kAbout))
+        return ShellAdapter::AboutPage;
+    return std::nullopt;
+}
+
+QString BlockingSurfaceName(BlockingSurfaceArbiter::Surface surface) {
+    switch (surface) {
+    case BlockingSurfaceArbiter::Surface::Recovery:
+        return QString::fromLatin1(live_verify::blocking_surface_name::kRecovery);
+    case BlockingSurfaceArbiter::Surface::Crash:
+        return QString::fromLatin1(live_verify::blocking_surface_name::kCrashReport);
+    case BlockingSurfaceArbiter::Surface::RecordingError:
+        return QString::fromLatin1(live_verify::blocking_surface_name::kRecordingError);
+    }
+    return {};
+}
+
+// The page documents' object names. Constant, and the ONLY strings that ever
+// reach findChild(): the wire carries a product surface name, this maps it, and
+// a client-supplied string is never looked up.
+QString PageObjectName(const QString& surface) {
+    if (surface == QLatin1String(live_verify::page_name::kSettings))
+        return QStringLiteral("quickSettingsPage");
+    if (surface == QLatin1String(live_verify::page_name::kDiagnostics))
+        return QStringLiteral("quickDiagnosticsPage");
+    if (surface == QLatin1String(live_verify::page_name::kLogs))
+        return QStringLiteral("quickLogsPage");
+    return {};
+}
 
 QString ToQString(const std::wstring& value) {
     return QString::fromStdWString(value);
@@ -71,8 +175,101 @@ QJsonObject NativeFactsJson(const diagnostics::NativeWindowFacts& facts) {
 
 } // namespace
 
-QuickLiveVerifySource::QuickLiveVerifySource(QuickApplication& application, QQuickWindow* root_window)
-    : application_(application), root_window_(root_window) {
+QuickLiveVerifySource::QuickLiveVerifySource(QuickApplication& application, QQuickWindow* root_window, QObject* parent)
+    : QObject(parent), application_(application), root_window_(root_window) {
+    // Exactly the signals that can move a field of AutomationState. The list is
+    // allowed to be generous -- refreshObservableState() diffs before it
+    // advances anything -- but not short: a field whose signal is missing here
+    // would change without the revision moving, and a runner waiting on the
+    // revision would wait forever.
+    const auto refresh = [this]() { refreshObservableState(); };
+    if (auto* record = application_.recordViewModelAdapter())
+        connect(record, &RecordViewModelAdapter::changed, this, refresh);
+    if (auto* session = application_.editSessionAdapter()) {
+        connect(session, &EditSessionAdapter::openChanged, this, refresh);
+        connect(session, &EditSessionAdapter::clipChanged, this, refresh);
+        connect(session, &EditSessionAdapter::exportRunningChanged, this, refresh);
+    }
+    if (auto* player = application_.editPlayerAdapter()) {
+        connect(player, &EditPlayerAdapter::playingChanged, this, refresh);
+        connect(player, &EditPlayerAdapter::clipOpenChanged, this, refresh);
+    }
+    if (auto* shell = application_.shellAdapter()) {
+        connect(shell, &ShellAdapter::currentPageChanged, this, refresh);
+        connect(shell, &ShellAdapter::editSurfaceVisibleChanged, this, refresh);
+        connect(shell, &ShellAdapter::sourcePickerOpenChanged, this, refresh);
+    }
+    if (auto* notifications = application_.notificationsAdapter())
+        connect(notifications, &NotificationsAdapter::hubOpenChanged, this, refresh);
+    // The three blocking surfaces. Their own signals, not the arbiter's: the
+    // arbiter has no "which one is up" notification, and adding one would be a
+    // second place where that fact is decided.
+    if (auto* recovery = application_.recoveryAdapter())
+        connect(recovery, &RecoveryAdapter::surfaceOpenChanged, this, refresh);
+    if (auto* crash = application_.crashReportAdapter())
+        connect(crash, &CrashReportAdapter::changed, this, refresh);
+    if (auto* recording_error = application_.recordingErrorAdapter())
+        connect(recording_error, &RecordingErrorAdapter::changed, this, refresh);
+
+    // Revision 1 is the state at construction. Starting at 0 with an unread
+    // state would make the first ui.getState look like a change had happened.
+    observed_ = State();
+    revision_ = 1;
+}
+
+void QuickLiveVerifySource::refreshObservableState() {
+    AutomationState current = State();
+    if (current == observed_)
+        return;
+    observed_ = std::move(current);
+    ++revision_;
+    emit observableStateChanged();
+}
+
+std::uint64_t QuickLiveVerifySource::StateRevision() const {
+    return revision_;
+}
+
+live_verify::AutomationState QuickLiveVerifySource::State() const {
+    AutomationState state;
+
+    if (const auto* shell = application_.shellAdapter()) {
+        state.page = PageName(static_cast<ShellAdapter::Page>(shell->currentPage()));
+        state.edit_visible = shell->editSurfaceVisible();
+        state.source_picker_open = shell->sourcePickerOpen();
+    }
+
+    if (const auto surface = application_.blockingSurfaces().activeSurface(); surface.has_value())
+        state.blocking_surface = BlockingSurfaceName(*surface);
+
+    if (const auto* record = application_.recordViewModelAdapter()) {
+        state.recording_state = RecordingStateName(static_cast<UiRecordingState>(record->state()));
+        state.selected_source_name = record->sourceName();
+        state.selected_source_kind = record->sourceKindText();
+        state.can_start = record->canStart();
+        state.can_stop = record->canStop();
+        state.can_pause = record->canPause();
+        state.can_resume = record->canResume();
+        state.can_split = record->splitEnabled();
+        state.can_capture_frame = record->captureFrameEnabled();
+        state.can_select_source = record->canSelectSource();
+    }
+
+    if (const auto* session = application_.editSessionAdapter()) {
+        state.edit_session_open = session->open();
+        state.edit_export_running = session->exportRunning();
+    }
+    if (const auto* player = application_.editPlayerAdapter()) {
+        state.edit_playback = !player->clipOpen() ? QStringLiteral("none")
+                              : player->playing() ? QStringLiteral("playing")
+                                                  : QStringLiteral("paused");
+    }
+    state.can_open_edit = application_.canOpenEditor();
+
+    if (const auto* notifications = application_.notificationsAdapter())
+        state.notification_hub_open = notifications->hubOpen();
+
+    return state;
 }
 
 QJsonObject QuickLiveVerifySource::Identity() const {
@@ -116,14 +313,14 @@ QJsonObject QuickLiveVerifySource::AppSnapshot() const {
         json.insert(QStringLiteral("appearanceId"), settings->appearanceId());
         json.insert(QStringLiteral("accentId"), settings->accentId());
     }
-    // The shell's own navigation index, read from the object the QML declares by
-    // name. Read-only: navigation itself stays a UI action, because a control
-    // channel that could navigate would let a check "prove" a tab works without
-    // ever touching the tab.
-    if (root_window_ != nullptr) {
-        if (QObject* shell = root_window_->findChild<QObject*>(QStringLiteral("quickAppShell")))
-            json.insert(QStringLiteral("currentPage"), shell->property("currentPage").toInt());
-    }
+    // The shell's own navigation index. Still an integer, because that is what
+    // protocol 1 has always answered here and a v1 client must not have its
+    // fields change shape underneath it -- but read from the adapter rather than
+    // from findChild("quickAppShell") plus a property lookup, so the protocol no
+    // longer depends on a QML objectName. Protocol 2 clients read the NAMED page
+    // out of ui.getState instead.
+    if (const auto* shell = application_.shellAdapter())
+        json.insert(QStringLiteral("currentPage"), shell->currentPage());
     if (auto* diagnostics = application_.diagnosticsAdapter())
         json.insert(QStringLiteral("expertMode"), diagnostics->expertMode());
     json.insert(QStringLiteral("windowVisible"), root_window_ != nullptr && root_window_->isVisible());
@@ -375,30 +572,64 @@ bool QuickLiveVerifySource::SelectRecordTarget(const QString& kind, const QStrin
 
 namespace {
 
-// Every intent below is refused when the application itself says the control is
-// unavailable. That is deliberate: the acceptance value of `record.pause` is
-// that it goes through the same gate the button does, so a check that pressed it
-// in a state the UI forbids would be testing a path users cannot reach.
-bool RefuseUnless(bool allowed, const char* what, QString* error) {
-    if (allowed)
+// The transport intents share one shape: press the Q_INVOKABLE the button
+// presses, and report whether the surface was there to press.
+//
+// What they no longer do is check canPause()/canStop()/... for themselves. Those
+// predicates are in State(), LiveVerifyCommandPolicy reads them to decide both
+// "may this run" and "is this in availableActions", and a copy here would be the
+// second table the whole precondition design exists to avoid — the one that
+// drifts silently and tells a client an action is available that dispatch then
+// refuses.
+bool RequireRecordSurface(const RecordViewModelAdapter* record, QString* error) {
+    if (record != nullptr)
         return true;
-    *error = QStringLiteral("%1 is not available in the current state").arg(QString::fromLatin1(what));
+    *error = QStringLiteral("The record surface is not available");
     return false;
 }
 
 } // namespace
 
+// The one intent whose truthfulness this cut is about.
+//
+// It presses exactly what the transport button presses — requestStart() emits
+// RecordViewModelAdapter::startRequested, which QuickApplication::startRequested()
+// answers — and then reads what that call DECIDED. Before this it checked
+// canStart() itself and reported success, while the product path went on to
+// refuse the start under a blocking surface and only wrote a log line: `ok:true`,
+// no state change, no event, and a runner that could discover the lie only as the
+// timeout of a polling loop.
+//
+// The connection is direct (both objects are GUI-thread), so the admission is
+// already latched by the time requestStart() returns.
 bool QuickLiveVerifySource::RecordStart(QString* error) {
     auto* record = application_.recordViewModelAdapter();
-    if (record == nullptr || !RefuseUnless(record->canStart(), "record.start", error))
+    if (!RequireRecordSurface(record, error))
         return false;
     record->requestStart();
-    return true;
+    switch (application_.lastStartAdmission()) {
+    case QuickApplication::StartAdmission::Accepted:
+    case QuickApplication::StartAdmission::CountdownCancelled:
+        return true;
+    case QuickApplication::StartAdmission::RefusedByBlockingSurface:
+        // The dispatcher re-reads the policy on this, which turns it into
+        // `blocked` with the surface named on both sides of requires/actual.
+        *error = QStringLiteral("A blocking surface is open; the start was refused");
+        return false;
+    case QuickApplication::StartAdmission::RefusedByState:
+        *error = QStringLiteral("record.start is not available in the current state");
+        return false;
+    case QuickApplication::StartAdmission::RefusedNoTarget:
+        *error = QStringLiteral("There is no capture target to record");
+        return false;
+    }
+    *error = QStringLiteral("The start request produced no decision");
+    return false;
 }
 
 bool QuickLiveVerifySource::RecordPause(QString* error) {
     auto* record = application_.recordViewModelAdapter();
-    if (record == nullptr || !RefuseUnless(record->canPause(), "record.pause", error))
+    if (!RequireRecordSurface(record, error))
         return false;
     record->requestPause();
     return true;
@@ -406,7 +637,7 @@ bool QuickLiveVerifySource::RecordPause(QString* error) {
 
 bool QuickLiveVerifySource::RecordResume(QString* error) {
     auto* record = application_.recordViewModelAdapter();
-    if (record == nullptr || !RefuseUnless(record->canResume(), "record.resume", error))
+    if (!RequireRecordSurface(record, error))
         return false;
     record->requestResume();
     return true;
@@ -414,7 +645,7 @@ bool QuickLiveVerifySource::RecordResume(QString* error) {
 
 bool QuickLiveVerifySource::RecordStop(QString* error) {
     auto* record = application_.recordViewModelAdapter();
-    if (record == nullptr || !RefuseUnless(record->canStop(), "record.stop", error))
+    if (!RequireRecordSurface(record, error))
         return false;
     record->requestStop();
     return true;
@@ -422,7 +653,7 @@ bool QuickLiveVerifySource::RecordStop(QString* error) {
 
 bool QuickLiveVerifySource::RecordSplit(QString* error) {
     auto* record = application_.recordViewModelAdapter();
-    if (record == nullptr || !RefuseUnless(record->splitEnabled(), "record.split", error))
+    if (!RequireRecordSurface(record, error))
         return false;
     record->requestSplit();
     return true;
@@ -430,9 +661,211 @@ bool QuickLiveVerifySource::RecordSplit(QString* error) {
 
 bool QuickLiveVerifySource::RecordCaptureFrame(QString* error) {
     auto* record = application_.recordViewModelAdapter();
-    if (record == nullptr || !RefuseUnless(record->captureFrameEnabled(), "record.captureFrame", error))
+    if (!RequireRecordSurface(record, error))
         return false;
     record->requestCaptureFrame();
+    return true;
+}
+
+// --- Shell intents -----------------------------------------------------------
+
+bool QuickLiveVerifySource::Navigate(const QString& page, QString* error) {
+    auto* shell = application_.shellAdapter();
+    if (shell == nullptr) {
+        *error = QStringLiteral("The shell is not available");
+        return false;
+    }
+    const std::optional<ShellAdapter::Page> destination = PageFromName(page);
+    if (!destination.has_value()) {
+        *error = QStringLiteral("No page named %1").arg(page);
+        return false;
+    }
+    // The one navigation edge (QCR-001). navigateToPageRequested is what the
+    // notification actions, the recovery Continue and the Diagnostics jumps
+    // already emit; Main routes it into AppShell.navigateTo(), which applies the
+    // single navigation guard. Writing `currentPage` here would be exactly the
+    // bug QCR-001 removed: a page swapped without the policy ever running.
+    //
+    // Synchronous: the QML connection is direct, and the destination loaders use
+    // Loader.setSource(), which loads synchronously. The resulting page is
+    // readable on the next line, which is what lets ui.navigate answer
+    // settled:true with no wait at all.
+    emit shell->navigateToPageRequested(*destination);
+    return true;
+}
+
+QObject* QuickLiveVerifySource::pageObjectFor(const QString& surface) const {
+    const QString object_name = PageObjectName(surface);
+    if (object_name.isEmpty() || root_window_ == nullptr)
+        return nullptr;
+    return root_window_->findChild<QObject*>(object_name);
+}
+
+live_verify::LiveVerifySource::RevealOutcome QuickLiveVerifySource::Reveal(const QString& surface,
+                                                                           const QString& target, QString* error) {
+    QObject* page = pageObjectFor(surface);
+    if (page == nullptr) {
+        *error = QStringLiteral("The %1 page is not loaded").arg(surface);
+        return RevealOutcome::Unavailable;
+    }
+    bool revealed = false;
+    if (!QMetaObject::invokeMethod(page, "revealAutomationTarget", Q_RETURN_ARG(bool, revealed),
+                                   Q_ARG(QString, target))) {
+        *error = QStringLiteral("The %1 page exposes no reveal targets").arg(surface);
+        return RevealOutcome::Unavailable;
+    }
+    if (!revealed) {
+        *error = QStringLiteral("The %1 page has no automation target named %2").arg(surface, target);
+        return RevealOutcome::UnknownTarget;
+    }
+    return RevealOutcome::Revealed;
+}
+
+bool QuickLiveVerifySource::ScrollHome(const QString& surface, QString* error) {
+    QObject* page = pageObjectFor(surface);
+    bool moved = false;
+    if (page == nullptr || !QMetaObject::invokeMethod(page, "scrollAutomationHome", Q_RETURN_ARG(bool, moved))) {
+        *error = QStringLiteral("The %1 page is not loaded").arg(surface);
+        return false;
+    }
+    if (!moved)
+        *error = QStringLiteral("The %1 page did not reach its start").arg(surface);
+    return moved;
+}
+
+bool QuickLiveVerifySource::ScrollEnd(const QString& surface, QString* error) {
+    QObject* page = pageObjectFor(surface);
+    bool moved = false;
+    if (page == nullptr || !QMetaObject::invokeMethod(page, "scrollAutomationEnd", Q_RETURN_ARG(bool, moved))) {
+        *error = QStringLiteral("The %1 page is not loaded").arg(surface);
+        return false;
+    }
+    if (!moved)
+        *error = QStringLiteral("The %1 page did not reach its end").arg(surface);
+    return moved;
+}
+
+bool QuickLiveVerifySource::SetSourcePickerOpen(bool open, QString* error) {
+    auto* shell = application_.shellAdapter();
+    if (shell == nullptr) {
+        *error = QStringLiteral("The shell is not available");
+        return false;
+    }
+    if (shell->sourcePickerOpen() == open)
+        return true; // Idempotent: already in the state that was asked for.
+    // RecordPage owns the picker's Loader, its Popup and the
+    // resident-after-first-open contract; this asks it, exactly as the toolbar
+    // button does. record.selectTarget bypasses the surface entirely, which is
+    // why the picker had never been live-verified at all.
+    emit shell->sourcePickerRequested(open);
+    return true;
+}
+
+bool QuickLiveVerifySource::SetNotificationHubOpen(bool open, QString* error) {
+    auto* notifications = application_.notificationsAdapter();
+    if (notifications == nullptr) {
+        *error = QStringLiteral("The notification hub is not available");
+        return false;
+    }
+    if (open)
+        notifications->openHub();
+    else
+        notifications->closeHub();
+    return true;
+}
+
+bool QuickLiveVerifySource::ClearNotifications(QString* error) {
+    auto* notifications = application_.notificationsAdapter();
+    if (notifications == nullptr) {
+        *error = QStringLiteral("The notification hub is not available");
+        return false;
+    }
+    // Idempotent by construction: dismissing an empty list is a no-op.
+    notifications->dismissAll();
+    return true;
+}
+
+// --- Edit intents ------------------------------------------------------------
+//
+// Every one of these calls the Q_INVOKABLE the Edit surface's own controls and
+// keys call. Clamping, trim ordering and keyframe snapping live in
+// EditSessionAdapter and stay there: a command that clamped for itself would be
+// a second trim model, and the check it powers would prove that model rather
+// than the product's.
+
+bool QuickLiveVerifySource::EditOpen(QString* error) {
+    if (!application_.openEditorForAutomation()) {
+        *error = QStringLiteral("There is no completed recording to open in the editor");
+        return false;
+    }
+    return true;
+}
+
+bool QuickLiveVerifySource::EditPlayPause(QString* error) {
+    auto* player = application_.editPlayerAdapter();
+    if (player == nullptr) {
+        *error = QStringLiteral("The edit player is not available");
+        return false;
+    }
+    player->togglePlay();
+    return true;
+}
+
+bool QuickLiveVerifySource::EditSeek(qint64 position_ms, QString* error) {
+    auto* session = application_.editSessionAdapter();
+    if (session == nullptr) {
+        *error = QStringLiteral("The edit session is not available");
+        return false;
+    }
+    session->requestSeek(position_ms);
+    return true;
+}
+
+bool QuickLiveVerifySource::EditSetTrimIn(qint64 position_ms, QString* error) {
+    auto* session = application_.editSessionAdapter();
+    if (session == nullptr) {
+        *error = QStringLiteral("The edit session is not available");
+        return false;
+    }
+    session->requestTrim(session->clampTrimStartMs(position_ms, session->trimEndMs()), session->trimEndMs());
+    return true;
+}
+
+bool QuickLiveVerifySource::EditSetTrimOut(qint64 position_ms, QString* error) {
+    auto* session = application_.editSessionAdapter();
+    if (session == nullptr) {
+        *error = QStringLiteral("The edit session is not available");
+        return false;
+    }
+    session->requestTrim(session->trimStartMs(), session->clampTrimEndMs(position_ms, session->trimStartMs()));
+    return true;
+}
+
+bool QuickLiveVerifySource::EditTimelineHome(QString* error) {
+    // The timeline's Home key with its default target: move the playhead to 0
+    // and let the adapter clamp. Deliberately not "seek to trimStart" -- that is
+    // a different command than the one the keyboard has.
+    return EditSeek(0, error);
+}
+
+bool QuickLiveVerifySource::EditTimelineEnd(QString* error) {
+    auto* session = application_.editSessionAdapter();
+    if (session == nullptr) {
+        *error = QStringLiteral("The edit session is not available");
+        return false;
+    }
+    return EditSeek(session->durationMs(), error);
+}
+
+bool QuickLiveVerifySource::EditClose(QString* error) {
+    auto* session = application_.editSessionAdapter();
+    if (session == nullptr) {
+        *error = QStringLiteral("The edit session is not available");
+        return false;
+    }
+    // QCR-301: close() performs the whole teardown (context, trim, markers,
+    // keyframes, position, clip generation) before emitting closeRequested().
+    session->close();
     return true;
 }
 

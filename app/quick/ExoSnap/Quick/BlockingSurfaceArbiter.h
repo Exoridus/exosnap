@@ -2,6 +2,7 @@
 
 #include <QObject>
 
+#include <optional>
 #include <vector>
 
 namespace exosnap::quick {
@@ -76,6 +77,13 @@ class BlockingSurfaceArbiter : public QObject {
     // and resuming keep working — those are desktop-wide by contract, and a
     // running recording the user cannot stop is the worse state.
     [[nodiscard]] bool anySurfaceUp() const;
+
+    // Which one is up, for the automation state snapshot. Answered from the same
+    // isUp() the admission edge above reads, so the control channel can never
+    // report a surface the product does not consider raised — reconstructing it
+    // from the three adapters separately is exactly the second source of truth
+    // this class exists to prevent.
+    [[nodiscard]] std::optional<Surface> activeSurface() const;
 
   signals:
     // Raise the crash surface now — build the context and call

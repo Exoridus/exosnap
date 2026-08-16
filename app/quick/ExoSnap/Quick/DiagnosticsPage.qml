@@ -44,6 +44,39 @@ Item {
 
     objectName: "quickDiagnosticsPage"
 
+    // ── Automation targets (protocol 2 ui.reveal) ────────────────────────────
+    //
+    // Two, because two are addressable product landmarks: the verdict band the
+    // page opens on, and the collapsed hardware-capability section that carries
+    // the per-GPU adapter cards and the capability matrix. Everything else on
+    // this page is either always visible or Expert-only taxonomy that the Expert
+    // toggle already governs.
+    readonly property var automationTargets: ({
+        "verdict": verdictBand,
+        "hardwareCapabilities": hardwareCapabilitiesSection
+    })
+
+    function revealAutomationTarget(name: string): bool {
+        const section = root.automationTargets[name];
+        if (section === undefined || section === null)
+            return false;
+        // Hardware capabilities is collapsed by default outside Expert, and a
+        // scroll that stops at a closed header has not revealed the section any
+        // more than not scrolling would have. Assigning `expanded` is exactly
+        // what pressing the header does.
+        if (section === hardwareCapabilitiesSection)
+            hardwareCapabilitiesSection.expanded = true;
+        return scroll.revealItem(section);
+    }
+
+    function scrollAutomationHome(): bool {
+        return scroll.scrollToHome();
+    }
+
+    function scrollAutomationEnd(): bool {
+        return scroll.scrollToEnd();
+    }
+
     onVisibleChanged: {
         if (root.visible) {
             root.diagnostics.ensureChecked();
@@ -399,6 +432,8 @@ Item {
                 // for — expanded straight away in Expert, where the rest of the
                 // technical taxonomy is already open.
                 ExoDisclosure {
+                    id: hardwareCapabilitiesSection
+
                     // No subtitle: the panel opens on DeviceAdapter's own summary
                     // line, which says the same thing with the real adapter name
                     // in it. Two explanatory paragraphs stacked on top of each

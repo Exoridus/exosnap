@@ -112,6 +112,41 @@ class QuickApplication {
     // an automated gate must not silently pass or fail on a persisted user
     // setting. Returns false when there is no completed recording to open.
     [[nodiscard]] bool openEditorForAutomation();
+    // The gate openEditorForAutomation() applies, published so the control
+    // channel's availableActions and its precondition read the same predicate
+    // the intent does instead of a second guess at it.
+    [[nodiscard]] bool canOpenEditor() const;
+    // Which blocking surface is up, straight from the arbiter that decides it.
+    [[nodiscard]] const BlockingSurfaceArbiter& blockingSurfaces() const noexcept {
+        return surface_arbiter_;
+    }
+
+    // What the LAST start request actually did. The recording start policy sits
+    // in startRequested() and nowhere else -- it cancels a countdown, refuses
+    // under a blocking surface (QCR-415), refuses when the transport says it
+    // cannot start, and refuses when there is no selected target. Before this,
+    // that function returned void and merely logged its refusals, so the control
+    // channel checked canStart() on its own and answered `ok:true` for a start
+    // that the product then dropped on the floor: a false success in the
+    // automation contract of a truthfulness release.
+    //
+    // A latch rather than a return value because the caller is a SIGNAL
+    // connection -- the control channel presses the same
+    // RecordViewModelAdapter::requestStart() the button presses, and reads the
+    // outcome here afterwards. The connection is direct (both objects live on
+    // the GUI thread), so this is set by the time requestStart() returns.
+    enum class StartAdmission {
+        Accepted,
+        // A start pressed during the countdown cancels it. Product behaviour,
+        // and not a refusal: the request was honoured.
+        CountdownCancelled,
+        RefusedByBlockingSurface,
+        RefusedByState,
+        RefusedNoTarget,
+    };
+    [[nodiscard]] StartAdmission lastStartAdmission() const noexcept {
+        return last_start_admission_;
+    }
     // Harness-only (--visual-test-size). Resizes the window to the size a
     // capture was asked for and takes the size away from the persistence layer
     // for the rest of the process.
@@ -286,7 +321,10 @@ class QuickApplication {
     void selectTarget(int target_index, CaptureMode mode);
     void selectRegion(const QRectF& normalized_rect);
     void startRequested();
-    void startRecordingNow();
+    // False when there was nothing to record: no selected target, or Region mode
+    // without a valid region. Reported rather than silently returned so the
+    // start latch above can say which refusal it was.
+    [[nodiscard]] bool startRecordingNow();
     void cancelCountdown();
     void updateCountdown();
     void toggleSource(const QString& key);
@@ -470,6 +508,7 @@ class QuickApplication {
     // Sequence of the standing audio-degradation toast while it is up, 0 when
     // none is. The hub keeps its own permanent record either way.
     uint64_t audio_degraded_toast_sequence_ = 0;
+    StartAdmission last_start_admission_ = StartAdmission::RefusedByState;
     // The selection Diagnostics currently holds. Same reason as the two below:
     // pushing it re-runs the recommendation checklist, so only a real change may.
     std::optional<recorder_core::CaptureTarget> pushed_selected_target_;

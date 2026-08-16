@@ -39,6 +39,29 @@ class ShellAdapter : public QObject {
     Q_ENUM(Page)
 
   private:
+    // ── What is on screen, published by the frontend ──────────────────────────
+    //
+    // Written by QML, read by C++. The shell is the only object that knows which
+    // destination is current and whether the Edit workspace and the source
+    // picker are showing, and until now that knowledge existed ONLY inside the
+    // QML document: the control channel read `currentPage` back out through
+    // findChild("quickAppShell") plus a property lookup, which made a QML
+    // objectName part of a public protocol and answered a bare integer whose
+    // meaning is an enumerator order.
+    //
+    // These are facts, not commands. Navigation itself still goes through
+    // navigateToPageRequested() below and through AppShell.navigateTo(), which
+    // is where the one navigation policy lives (QCR-001) — writing `currentPage`
+    // here does not move anything, it records where the shell arrived.
+    Q_PROPERTY(int currentPage READ currentPage WRITE setCurrentPage NOTIFY currentPageChanged FINAL)
+    // QCR-001 again: an open edit session is state of the Record destination, so
+    // "the session is loaded" and "the workspace is on screen" are two different
+    // facts. This is the second one.
+    Q_PROPERTY(bool editSurfaceVisible READ editSurfaceVisible WRITE setEditSurfaceVisible NOTIFY
+                   editSurfaceVisibleChanged FINAL)
+    Q_PROPERTY(
+        bool sourcePickerOpen READ sourcePickerOpen WRITE setSourcePickerOpen NOTIFY sourcePickerOpenChanged FINAL)
+
     Q_PROPERTY(bool closeGuardActive READ closeGuardActive NOTIFY closeGuardChanged FINAL)
     Q_PROPERTY(QString closeGuardTitle READ closeGuardTitle NOTIFY closeGuardChanged FINAL)
     Q_PROPERTY(QString closeGuardBody READ closeGuardBody NOTIFY closeGuardChanged FINAL)
@@ -60,6 +83,13 @@ class ShellAdapter : public QObject {
     // must not interrogate the user about a recording that is deliberately meant
     // to keep running. Absent (or returning false) means the guards decide.
     void setHideToTrayProvider(std::function<bool()> provider);
+
+    [[nodiscard]] int currentPage() const noexcept;
+    void setCurrentPage(int page);
+    [[nodiscard]] bool editSurfaceVisible() const noexcept;
+    void setEditSurfaceVisible(bool visible);
+    [[nodiscard]] bool sourcePickerOpen() const noexcept;
+    void setSourcePickerOpen(bool open);
 
     [[nodiscard]] bool closeGuardActive() const noexcept;
     [[nodiscard]] const QString& closeGuardTitle() const noexcept;
@@ -89,6 +119,17 @@ class ShellAdapter : public QObject {
     // enum exists, and Q_ENUM means QML writes ShellAdapter.SettingsPage instead
     // of a 1 that silently means something else after a reorder.
     void navigateToPageRequested(Page page);
+
+    // The source picker, asked for from outside the Record page — today only the
+    // control channel. Routed as a request rather than by writing
+    // `sourcePickerOpen` for the same reason navigation is: the Loader, the
+    // Popup and the resident-after-first-open contract belong to RecordPage, and
+    // a second opener would be a second policy.
+    void sourcePickerRequested(bool open);
+
+    void currentPageChanged();
+    void editSurfaceVisibleChanged();
+    void sourcePickerOpenChanged();
 
     void closeGuardChanged();
     // Every guard has cleared; the frontend may close the window now.
@@ -122,6 +163,9 @@ class ShellAdapter : public QObject {
     bool waived_export_ = false;
     bool waived_recording_ = false;
     bool active_ = false;
+    int current_page_ = RecordPage;
+    bool edit_surface_visible_ = false;
+    bool source_picker_open_ = false;
 };
 
 } // namespace exosnap::quick

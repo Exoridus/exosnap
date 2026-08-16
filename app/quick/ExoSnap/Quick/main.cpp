@@ -11,6 +11,7 @@
 #include "bootstrap/ProductionBootstrap.h"
 #include "diagnostics/NativeWindowFacts.h"
 #include "diagnostics/StartupClock.h"
+#include "live_verify/LiveVerifyCommandPolicy.h"
 #include "live_verify/LiveVerifyControlServer.h"
 #include "live_verify/LiveVerifyOptions.h"
 #include "services/ElevatedRelaunch.h"
@@ -784,6 +785,17 @@ int main(int argc, char* argv[]) {
                 server->EmitEvent(QStringLiteral("window.screenChanged"), source->WindowSnapshot());
             });
         }
+        // Protocol 2's general settle signal. The source advances its revision
+        // only when the observable state actually differs, so this fires on real
+        // changes and not on every elapsed-time tick — which is what makes it
+        // something a runner can wait on. It also gives the three blocking
+        // surfaces their first observable transition: they had no event at all,
+        // so a check could not even see the state that made record.start refuse.
+        QObject::connect(
+            source, &exosnap::quick::QuickLiveVerifySource::observableStateChanged, server, [server, source]() {
+                server->EmitEvent(QStringLiteral("ui.stateChanged"),
+                                  exosnap::live_verify::StateToJson(source->State(), source->StateRevision()));
+            });
         // Queued so it lands after the event loop starts and the first frame is
         // on its way; a client connecting later simply reads the snapshots.
         QTimer::singleShot(

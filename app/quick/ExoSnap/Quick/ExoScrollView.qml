@@ -30,6 +30,48 @@ ScrollView {
     bottomPadding: control.reserveScrollBarGutters ? control.ScrollBar.horizontal.implicitHeight
                                                    : control.effectiveScrollBarHeight
 
+    // ── Automation-addressable scrolling (protocol 2) ────────────────────────
+    //
+    // ScrollView wraps content that is not itself flickable in a Flickable and
+    // exposes it as `contentItem`; the clamp arithmetic below is that object's,
+    // not an approximation of it.
+    //
+    // All three answer whether the surface REALLY ended up where it was asked
+    // to. The control channel reports `settled` from that, because the defect
+    // this replaces was a scroll request that silently did nothing while every
+    // screenshot taken afterwards claimed to show the end of the page.
+    readonly property Flickable flickable: control.contentItem as Flickable
+
+    function scrollToHome(): bool {
+        const view = control.flickable;
+        if (view === null)
+            return false;
+        view.contentY = 0;
+        return view.contentY === 0;
+    }
+
+    function scrollToEnd(): bool {
+        const view = control.flickable;
+        if (view === null)
+            return false;
+        const maximum = Math.max(0, view.contentHeight - view.height);
+        view.contentY = maximum;
+        return view.contentY === maximum;
+    }
+
+    function revealItem(item: Item): bool {
+        const view = control.flickable;
+        if (view === null || item === null || view.height <= 0)
+            return false;
+        const top = item.mapToItem(view.contentItem, 0, 0).y;
+        view.contentY = Math.min(Math.max(0, top), Math.max(0, view.contentHeight - view.height));
+        // Not "we set contentY, therefore it worked": a target below a content
+        // height that has not been laid out yet lands outside the viewport, and
+        // saying so is the whole reason this returns a value.
+        const relative = top - view.contentY;
+        return relative >= 0 && relative < view.height;
+    }
+
     ScrollBar.vertical: ExoScrollBar {
         parent: control
         x: control.mirrored ? 0 : control.width - width

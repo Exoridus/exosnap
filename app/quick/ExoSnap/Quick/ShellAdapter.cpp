@@ -13,6 +13,39 @@ void ShellAdapter::setHideToTrayProvider(std::function<bool()> provider) {
     hide_to_tray_provider_ = std::move(provider);
 }
 
+int ShellAdapter::currentPage() const noexcept {
+    return current_page_;
+}
+
+void ShellAdapter::setCurrentPage(int page) {
+    if (current_page_ == page)
+        return;
+    current_page_ = page;
+    emit currentPageChanged();
+}
+
+bool ShellAdapter::editSurfaceVisible() const noexcept {
+    return edit_surface_visible_;
+}
+
+void ShellAdapter::setEditSurfaceVisible(bool visible) {
+    if (edit_surface_visible_ == visible)
+        return;
+    edit_surface_visible_ = visible;
+    emit editSurfaceVisibleChanged();
+}
+
+bool ShellAdapter::sourcePickerOpen() const noexcept {
+    return source_picker_open_;
+}
+
+void ShellAdapter::setSourcePickerOpen(bool open) {
+    if (source_picker_open_ == open)
+        return;
+    source_picker_open_ = open;
+    emit sourcePickerOpenChanged();
+}
+
 bool ShellAdapter::closeGuardActive() const noexcept {
     return active_;
 }

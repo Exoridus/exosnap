@@ -68,6 +68,18 @@ bool BlockingSurfaceArbiter::anyUp() const {
     return isUp(Surface::Recovery) || isUp(Surface::Crash) || isUp(Surface::RecordingError);
 }
 
+std::optional<BlockingSurfaceArbiter::Surface> BlockingSurfaceArbiter::activeSurface() const {
+    // Same order as anyUp(), and it does not need a tiebreak: the contract above
+    // is that at most one of the three is up at any time.
+    if (isUp(Surface::Recovery))
+        return Surface::Recovery;
+    if (isUp(Surface::Crash))
+        return Surface::Crash;
+    if (isUp(Surface::RecordingError))
+        return Surface::RecordingError;
+    return std::nullopt;
+}
+
 bool BlockingSurfaceArbiter::queued(Surface surface) const noexcept {
     return std::find(queue_.begin(), queue_.end(), surface) != queue_.end();
 }

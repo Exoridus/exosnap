@@ -11,6 +11,7 @@
 // connection" -- are properties of the transport, and a mocked transport would
 // assert them against the mock.
 
+#include "live_verify/LiveVerifyAutomationState.h"
 #include "live_verify/LiveVerifyControlServer.h"
 #include "live_verify/LiveVerifyOptions.h"
 #include "live_verify/LiveVerifyProtocol.h"
@@ -45,6 +46,26 @@ QCoreApplication& App() {
 class StubSource final : public LiveVerifySource {
   public:
     std::atomic<int> record_starts{0};
+
+    // Ready on the Record page, nothing blocking. The transport tests are about
+    // the pipe, not about the policy, so the state they run against is one every
+    // precondition they exercise accepts.
+    [[nodiscard]] AutomationState State() const override {
+        AutomationState state;
+        state.page = QString::fromLatin1(page_name::kRecord);
+        state.recording_state = QStringLiteral("Ready");
+        state.can_start = true;
+        state.can_stop = true;
+        state.can_pause = true;
+        state.can_resume = true;
+        state.can_split = true;
+        state.can_capture_frame = true;
+        state.can_select_source = true;
+        return state;
+    }
+    [[nodiscard]] std::uint64_t StateRevision() const override {
+        return 1;
+    }
 
     [[nodiscard]] QJsonObject Identity() const override {
         return QJsonObject{{QStringLiteral("productVersion"), QStringLiteral("0.9.0-test")},
@@ -102,6 +123,52 @@ class StubSource final : public LiveVerifySource {
     bool RecordCaptureFrame(QString*) override {
         return true;
     }
+
+    bool Navigate(const QString&, QString*) override {
+        return true;
+    }
+    [[nodiscard]] RevealOutcome Reveal(const QString&, const QString&, QString*) override {
+        return RevealOutcome::Revealed;
+    }
+    bool ScrollHome(const QString&, QString*) override {
+        return true;
+    }
+    bool ScrollEnd(const QString&, QString*) override {
+        return true;
+    }
+    bool SetSourcePickerOpen(bool, QString*) override {
+        return true;
+    }
+    bool SetNotificationHubOpen(bool, QString*) override {
+        return true;
+    }
+    bool ClearNotifications(QString*) override {
+        return true;
+    }
+    bool EditOpen(QString*) override {
+        return true;
+    }
+    bool EditPlayPause(QString*) override {
+        return true;
+    }
+    bool EditSeek(qint64, QString*) override {
+        return true;
+    }
+    bool EditSetTrimIn(qint64, QString*) override {
+        return true;
+    }
+    bool EditSetTrimOut(qint64, QString*) override {
+        return true;
+    }
+    bool EditTimelineHome(QString*) override {
+        return true;
+    }
+    bool EditTimelineEnd(QString*) override {
+        return true;
+    }
+    bool EditClose(QString*) override {
+        return true;
+    }
 };
 
 // Synchronous client with a bounded reader. PeekNamedPipe before every ReadFile
@@ -141,7 +208,7 @@ class PipeClient {
 
     [[nodiscard]] bool WriteRequest(const QString& command, const QJsonObject& params, const QString& id) {
         QJsonObject request;
-        request.insert(QStringLiteral("protocol"), kProtocolVersion);
+        request.insert(QStringLiteral("protocol"), kMinimumProtocolVersion);
         request.insert(QStringLiteral("id"), id);
         request.insert(QStringLiteral("command"), command);
         request.insert(QStringLiteral("params"), params);

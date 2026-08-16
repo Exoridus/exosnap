@@ -9,6 +9,12 @@ Item {
 
     required property RecordViewModelAdapter recordViewModel
     required property RecordPreviewAdapter previewAdapter
+    // The shell adapter, for the two directions the source picker now has to
+    // travel: it publishes whether the picker is on screen (nothing outside this
+    // document could observe that before), and it carries the open/close request
+    // the control channel sends, so automation opens the real picker instead of
+    // bypassing the surface the way record.selectTarget does.
+    required property ShellAdapter shell
     property bool active: false
     property bool benchmarkInteractionActive: false
     property bool showMetricsOverlay: false
@@ -706,5 +712,33 @@ Item {
         const picker = sourcePickerLoader.item as RecordSourcePicker;
         if (picker)
             picker.open();
+    }
+
+    // The counterpart, for a control-channel close. A picker that was never
+    // built is already closed, which is why this is not an error.
+    function closeSourcePicker(): void {
+        const picker = sourcePickerLoader.item as RecordSourcePicker;
+        if (picker)
+            picker.close();
+    }
+
+    // Whether the picker is on screen, published to C++. `opened` rather than
+    // `visible`: it is false for the whole exit transition, and a state the
+    // channel reports must not be true while the surface is on its way out.
+    Binding {
+        target: root.shell
+        property: "sourcePickerOpen"
+        value: sourcePickerLoader.item !== null && (sourcePickerLoader.item as RecordSourcePicker).opened
+    }
+
+    Connections {
+        target: root.shell
+
+        function onSourcePickerRequested(open: bool): void {
+            if (open)
+                root.openSourcePicker();
+            else
+                root.closeSourcePicker();
+        }
     }
 }

@@ -190,6 +190,7 @@ target_link_libraries(exosnap_app_log_test_support PUBLIC Qt6::Core)
 # would prove nothing about the artifact. It is inert without the explicit
 # --live-verify-control option; see LiveVerifyOptions.h.
 exosnap_add_app_test_support(exosnap_live_verify
+    live_verify/LiveVerifyCommandPolicy.cpp
     live_verify/LiveVerifyControlServer.cpp
     live_verify/LiveVerifyDispatcher.cpp
     live_verify/LiveVerifyOptions.cpp
@@ -569,6 +570,18 @@ exosnap_add_gtest(
     LIBRARIES exosnap_live_verify Qt6::Core
 )
 target_include_directories(live_verify_protocol_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+# Live Verify: the precondition/availability policy on its own. Pure -- an
+# AutomationState in, a verdict out -- so every state a command can be refused in
+# is covered by construction instead of by driving the application into it.
+exosnap_add_gtest(
+    NAME live_verify_policy_tests
+    TEST_PREFIX live_verify.
+    SOURCES
+        tests/test_live_verify_policy.cpp
+    LIBRARIES exosnap_live_verify Qt6::Core
+)
+target_include_directories(live_verify_policy_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 # Live Verify: the transport itself. Drives a real named pipe, because "no TCP
 # listener", "a hostile client cannot take the host down" and "the handshake is

@@ -15,6 +15,22 @@ Item {
 
     objectName: "quickLogsPage"
 
+    // The log has no addressable landmarks — every row is the same kind of thing
+    // and which one is interesting depends on the run — so ui.reveal has nothing
+    // to answer here and says so. Its two ends are what a check actually asks
+    // for, and those are ui.scrollHome / ui.scrollEnd.
+    function revealAutomationTarget(name: string): bool {
+        return false;
+    }
+
+    function scrollAutomationHome(): bool {
+        return logView.scrollToHome();
+    }
+
+    function scrollAutomationEnd(): bool {
+        return logView.scrollToEnd();
+    }
+
     onVisibleChanged: {
         if (root.visible) {
             // first-paint / preview-live land after this page is built.
@@ -158,6 +174,8 @@ Item {
         }
 
         ExoLogView {
+            id: logView
+
             model: root.logs.model
             autoScroll: root.logs.autoScroll
             Layout.fillWidth: true

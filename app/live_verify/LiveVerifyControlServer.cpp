@@ -11,7 +11,9 @@
 #include <sddl.h>
 
 #include <chrono>
+#include <cstdint>
 #include <future>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -171,7 +173,13 @@ void LiveVerifyControlServer::Stop() {
 void LiveVerifyControlServer::EmitEvent(const QString& name, QJsonObject data) {
     if (!client_connected_.load(std::memory_order_acquire))
         return;
-    const QByteArray line = SerializeLine(MakeEvent(name, std::move(data)));
+    // GUI thread, like every caller: the dispatcher's negotiated version and the
+    // source's revision counter are both GUI-thread state, and an event written
+    // in a version the connected client did not agree to is worse than no event.
+    const int protocol = dispatcher_.negotiatedProtocol();
+    const std::optional<std::uint64_t> revision =
+        source_ != nullptr ? std::optional<std::uint64_t>(source_->StateRevision()) : std::nullopt;
+    const QByteArray line = SerializeLine(MakeEvent(protocol, name, std::move(data), revision));
     {
         const std::lock_guard<std::mutex> guard(outbound_mutex_);
         outbound_.append(line);
@@ -218,15 +226,16 @@ QByteArray LiveVerifyControlServer::DispatchOnGuiThread(const ParsedRequest& req
         }
         if (WaitForSingleObject(static_cast<HANDLE>(stop_event_), 0) == WAIT_OBJECT_0) {
             *close_connection = true;
-            return SerializeLine(MakeErrorResponse(request.id, QString::fromLatin1(error_code::kUnavailable),
-                                                   QStringLiteral("The application is shutting down")));
+            return SerializeLine(
+                MakeErrorResponse({request.protocol, request.id, QString::fromLatin1(error_code::kUnavailable),
+                                   QStringLiteral("The application is shutting down")}));
         }
     }
 
     *close_connection = false;
     return SerializeLine(
-        MakeErrorResponse(request.id, QString::fromLatin1(error_code::kDispatchTimeout),
-                          QStringLiteral("The application did not answer within %1 ms").arg(kDispatchTimeoutMs)));
+        MakeErrorResponse({request.protocol, request.id, QString::fromLatin1(error_code::kDispatchTimeout),
+                           QStringLiteral("The application did not answer within %1 ms").arg(kDispatchTimeoutMs)}));
 }
 
 void LiveVerifyControlServer::ServeLoop() {
@@ -337,8 +346,10 @@ void LiveVerifyControlServer::ServeLoop() {
             // it once instead of buffering whatever the peer keeps sending.
             if (accumulator.size() > kMaxRequestBytes) {
                 (void)write_all(pipe, SerializeLine(MakeErrorResponse(
-                                          {}, QString::fromLatin1(error_code::kRequestTooLarge),
-                                          QStringLiteral("Request exceeds %1 bytes").arg(kMaxRequestBytes))));
+                                          {kLatestProtocolVersion,
+                                           {},
+                                           QString::fromLatin1(error_code::kRequestTooLarge),
+                                           QStringLiteral("Request exceeds %1 bytes").arg(kMaxRequestBytes)})));
                 break;
             }
 
@@ -356,7 +367,8 @@ void LiveVerifyControlServer::ServeLoop() {
                     if (ParseRequest(line, &request, &failure)) {
                         response = DispatchOnGuiThread(request, &close_connection);
                     } else {
-                        response = SerializeLine(MakeErrorResponse(failure.id, failure.code, failure.message));
+                        response = SerializeLine(
+                            MakeErrorResponse({failure.protocol, failure.id, failure.code, failure.message}));
                         // A protocol-version mismatch is not survivable: the peer
                         // is speaking a language this server does not know.
                         close_connection = failure.code == QString::fromLatin1(error_code::kProtocolVersionMismatch) ||

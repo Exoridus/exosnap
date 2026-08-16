@@ -285,6 +285,7 @@ ApplicationWindow {
         onMinimizeRequested: root.showMinimized()
         onMaximizeRestoreRequested: root.toggleMaximized()
         onCloseRequested: root.close()
+        shell: root.shell
         notifications: root.notifications
         recovery: root.recovery
         recordingError: root.recordingError

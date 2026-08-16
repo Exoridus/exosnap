@@ -45,6 +45,51 @@ Item {
         scrollToBottomTimer.restart();
     }
 
+    // ── Automation targets (protocol 2 ui.reveal) ────────────────────────────
+    //
+    // Stable product names on the left, this document's items on the right. The
+    // QML ids below are document-local and must never appear on the wire: a
+    // client that could name an id would be naming an implementation detail, and
+    // the twelve sections are a product decision (CLAUDE.md) that happens to be
+    // spelled with ids here.
+    //
+    // The set is closed. An unknown name is an error, never a silent no-op —
+    // that is exactly the trap --settings-visual-bottom fell into, where a
+    // findChild() against nullptr did nothing while every capture claimed to
+    // show the end of the page.
+    readonly property var automationTargets: ({
+        "preset": presetSection,
+        "format": formatSection,
+        "quality": qualitySection,
+        "audio": audioSection,
+        "output": outputSection,
+        "webcam": webcamSection,
+        "overlays": overlaysSection,
+        "presence": presenceSection,
+        "hotkeys": hotkeysSection,
+        "updates": updatesSection,
+        "appearance": appearanceSection,
+        "developer": developerSection
+    })
+
+    // True only when the section actually ended up inside the viewport. The
+    // control channel reports `settled` from this, so a reveal that could not
+    // reach its target is a failure rather than an optimistic success.
+    function revealAutomationTarget(name: string): bool {
+        const section = root.automationTargets[name];
+        if (section === undefined || section === null)
+            return false;
+        return scroll.revealItem(section);
+    }
+
+    function scrollAutomationHome(): bool {
+        return scroll.scrollToHome();
+    }
+
+    function scrollAutomationEnd(): bool {
+        return scroll.scrollToEnd();
+    }
+
     // Repeating, not one-shot: the request arrives during startup, when the
     // column layout has not settled and contentHeight is still 0, and anything
     // that rebuilds the content afterwards (the harness applying an appearance,

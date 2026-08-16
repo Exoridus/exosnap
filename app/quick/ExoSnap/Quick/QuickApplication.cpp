@@ -1055,9 +1055,15 @@ void QuickApplication::selectRegion(const QRectF& normalized_rect) {
     synchronizeRecordState();
 }
 
+// The one recording-start policy. Every trigger runs through it -- the transport
+// button, the global start hotkey, the notification actions and the Live Verify
+// control channel -- and the outcome is latched so a caller that needs to know
+// whether the request was honoured can read it instead of re-deriving it. The
+// control channel does exactly that; it does NOT have preconditions of its own.
 void QuickApplication::startRequested() {
     if (record_view_model_.state == UiRecordingState::Countdown) {
         cancelCountdown();
+        last_start_admission_ = StartAdmission::CountdownCancelled;
         return;
     }
     // QCR-415. The only way to get here while a blocking surface is up is the
@@ -1070,33 +1076,39 @@ void QuickApplication::startRequested() {
     if (surface_arbiter_.anySurfaceUp()) {
         diagnostics::AppLog::info(QStringLiteral("record"),
                                   QStringLiteral("Start refused: a blocking surface is open — answer it first"));
+        last_start_admission_ = StartAdmission::RefusedByBlockingSurface;
         return;
     }
-    if (!record_view_model_adapter_.canStart())
+    if (!record_view_model_adapter_.canStart()) {
+        last_start_admission_ = StartAdmission::RefusedByState;
         return;
+    }
     if (live_config_.countdown_seconds > 0) {
         countdown_clock_.restart();
-        if (!countdown_.start(live_config_.countdown_seconds, 0))
+        if (!countdown_.start(live_config_.countdown_seconds, 0)) {
+            last_start_admission_ = StartAdmission::RefusedByState;
             return;
+        }
         countdown_remaining_ = live_config_.countdown_seconds;
         countdown_progress_ = 1.0;
         record_view_model_.SetState(UiRecordingState::Countdown);
         countdown_timer_.start();
         synchronizeRecordState();
+        last_start_admission_ = StartAdmission::Accepted;
         return;
     }
-    startRecordingNow();
+    last_start_admission_ = startRecordingNow() ? StartAdmission::Accepted : StartAdmission::RefusedNoTarget;
 }
 
-void QuickApplication::startRecordingNow() {
+bool QuickApplication::startRecordingNow() {
     if (record_view_model_.selected_target_index < 0 ||
         record_view_model_.selected_target_index >= static_cast<int>(record_view_model_.targets.size()))
-        return;
+        return false;
     const auto& target = record_view_model_.targets[static_cast<std::size_t>(record_view_model_.selected_target_index)];
     std::optional<recorder_core::CaptureRegion> crop;
     if (record_view_model_.capture_mode == CaptureMode::Region) {
         if (!record_view_model_.has_region || !record_view_model_.region.IsValid())
-            return;
+            return false;
         crop = record_view_model_.region;
     }
     FilenameTargetContext context = RecordViewModel::FilenameContextFromCaptureTarget(target);
@@ -1108,6 +1120,7 @@ void QuickApplication::startRecordingNow() {
     recording_coordinator_->SetWebcamSettings(live_config_.webcam);
     record_view_model_.ResetStats();
     recording_coordinator_->StartRecording(target, record_view_model_.audio_ui_state, crop);
+    return true;
 }
 
 void QuickApplication::cancelCountdown() {
@@ -1130,7 +1143,7 @@ void QuickApplication::updateCountdown() {
         countdown_.complete();
         countdown_remaining_ = 0;
         countdown_progress_ = 0.0;
-        startRecordingNow();
+        (void)startRecordingNow();
         return;
     }
     synchronizeRecordState();
@@ -3575,6 +3588,10 @@ bool QuickApplication::openEditorForAutomation() {
         return false;
     openEditorForCurrentRecording();
     return edit_session_adapter_.open();
+}
+
+bool QuickApplication::canOpenEditor() const {
+    return canOpenEditorForCurrentRecording();
 }
 
 // One name per product state, and no aliases at all. There used to be four —

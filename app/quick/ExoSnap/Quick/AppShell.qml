@@ -18,6 +18,7 @@ Item {
     required property EditTimelineAdapter editTimeline
     required property EditPlayerAdapter editPlayer
     required property EditExportAdapter editExport
+    required property ShellAdapter shell
     required property NotificationsAdapter notifications
     required property RecoveryAdapter recovery
     required property RecordingErrorAdapter recordingError
@@ -114,6 +115,27 @@ Item {
     }
 
     onCurrentPageChanged: root.loadDestination(root.currentPage)
+
+    // Where the shell arrived, published back to C++. Two consumers need it and
+    // neither can ask QML: the control channel answers `ui.getState.page` from
+    // here instead of from a findChild() on this document's objectName, and the
+    // navigation intent below reads it back to report the RESULTING page rather
+    // than the requested one.
+    //
+    // A Binding rather than an assignment in the handler above so the initial
+    // value is published too — a shell that starts on a harness-selected page
+    // would otherwise report Record until the first navigation.
+    Binding {
+        target: root.shell
+        property: "currentPage"
+        value: root.currentPage
+    }
+
+    Binding {
+        target: root.shell
+        property: "editSurfaceVisible"
+        value: root.editOverlayVisible
+    }
 
     // ── The one navigation edge (QCR-001) ────────────────────────────────────
     //
@@ -521,6 +543,7 @@ Item {
             RecordPage {
                 recordViewModel: root.recordViewModel
                 previewAdapter: root.previewAdapter
+                shell: root.shell
                 active: root.currentPage === ShellAdapter.RecordPage
                 benchmarkInteractionActive: root.benchmarkInteractionActive
                 Layout.fillWidth: true

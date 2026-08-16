@@ -62,6 +62,20 @@ Rectangle {
         root.selectionIsAll = false;
     }
 
+    // Automation-addressable scrolling (protocol 2). The list is virtualised, so
+    // this positions the view rather than writing a contentY the delegates have
+    // not been created for. An empty log is already at both ends, which is why
+    // that is a success and not a failure.
+    function scrollToEnd(): bool {
+        list.positionViewAtEnd();
+        return list.count === 0 || list.atYEnd;
+    }
+
+    function scrollToHome(): bool {
+        list.positionViewAtBeginning();
+        return list.count === 0 || list.atYBeginning;
+    }
+
     // A reset replaces the history wholesale — Clear, or the harness seeding a
     // synthetic log — and no entry the selection named is in it. Eviction and
     // filtering are deliberately NOT here: those are row removals the
