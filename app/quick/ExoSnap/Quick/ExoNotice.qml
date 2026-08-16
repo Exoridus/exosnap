@@ -29,6 +29,26 @@ Rectangle {
                                  : root.tone === "info" ? ExoTheme.surfaceRaised
                                  : ExoTheme.warningSurface
 
+    // QCR-508. The tone used to reach the user through the border colour and a
+    // ground tint and nothing else. The glyph is the same severity vocabulary
+    // the issue cards, the readiness tiles and the Diagnostics verdict band
+    // use, and it takes the readable rung because it sits inside the tinted
+    // ground (`warning` on `warningSurface` is 2.79:1 in Light).
+    readonly property int _glyph: root.tone === "error" ? ExoGlyph.Close
+                                : root.tone === "success" ? ExoGlyph.Check
+                                : root.tone === "info" ? ExoGlyph.Info
+                                : ExoGlyph.Warning
+    readonly property color _glyphInk: root.tone === "error" ? ExoTheme.errorText
+                                     : root.tone === "success" ? ExoTheme.successText
+                                     : root.tone === "info" ? ExoTheme.textSecondary
+                                     : ExoTheme.warningText
+    // The same fact for a screen reader, which sees neither the glyph nor the
+    // colour.
+    readonly property string _toneText: root.tone === "error" ? qsTr("Error")
+                                      : root.tone === "success" ? qsTr("Success")
+                                      : root.tone === "info" ? qsTr("Information")
+                                      : qsTr("Warning")
+
     implicitHeight: Math.max(noticeLabel.implicitHeight + 2 * ExoTheme.spacingSm,
                              dismissButton.visible ? dismissButton.implicitHeight + ExoTheme.spacingSm : 0)
     color: root._fill
@@ -37,7 +57,22 @@ Rectangle {
     radius: ExoTheme.radiusMd
 
     Accessible.role: Accessible.StaticText
-    Accessible.name: root.text
+    Accessible.name: root._toneText + ". " + root.text
+
+    ExoGlyph {
+        id: toneGlyph
+
+        kind: root._glyph
+        color: root._glyphInk
+        width: 14
+        height: 14
+        anchors {
+            left: parent.left
+            leftMargin: ExoTheme.spacingMd
+            top: parent.top
+            topMargin: ExoTheme.spacingSm + 2
+        }
+    }
 
     Label {
         id: noticeLabel
@@ -49,7 +84,7 @@ Rectangle {
         anchors {
             fill: parent
             margins: ExoTheme.spacingSm
-            leftMargin: ExoTheme.spacingMd
+            leftMargin: ExoTheme.spacingMd + toneGlyph.width + ExoTheme.spacingSm
             rightMargin: dismissButton.visible
                          ? dismissButton.width + 2 * ExoTheme.spacingSm : ExoTheme.spacingMd
         }

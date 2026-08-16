@@ -84,6 +84,8 @@ Window {
     // captured content, so it is not an ExoTheme surface token.
     // Same value as the recording pill: the two sit on the same edge, one under
     // the other, and two different opacities would read as two different things.
+    // Everything drawn on it takes the `overlay*` ink rungs, for the reason
+    // OverlayRecording states: the appearance rungs turn dark in Light.
     readonly property color pillBackground: "#C6161618"
 
     // The recording pill's height plus the gap between the two. This one always
@@ -121,7 +123,7 @@ Window {
         id: glyph
 
         property string kind: "mic"
-        property color tone: ExoTheme.textSecondary
+        property color tone: ExoTheme.overlayInkSecondary
 
         width: 15
         height: 15
@@ -205,7 +207,7 @@ Window {
                         visible: tokenRow.index > 0
                         text: "·"
                         textFormat: Text.PlainText
-                        color: ExoTheme.textDim
+                        color: ExoTheme.overlayInkMuted
                         font {
                             family: ExoTheme.monoFamily
                             pixelSize: 13
@@ -215,7 +217,7 @@ Window {
                     Text {
                         text: tokenRow.modelData.label
                         textFormat: Text.PlainText
-                        color: ExoTheme.textMuted
+                        color: ExoTheme.overlayInkMuted
                         font {
                             family: ExoTheme.monoFamily
                             pixelSize: 13
@@ -225,7 +227,7 @@ Window {
                     Text {
                         text: tokenRow.modelData.value
                         textFormat: Text.PlainText
-                        color: tokenRow.modelData.good ? ExoTheme.success : ExoTheme.text
+                        color: tokenRow.modelData.good ? ExoTheme.overlaySuccess : ExoTheme.overlayInk
                         font {
                             family: ExoTheme.monoFamily
                             pixelSize: 13

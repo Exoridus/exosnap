@@ -54,7 +54,11 @@ Button {
 
     readonly property color _ink: !root.enabled ? ExoTheme.textDim
                                   : root._primary ? ExoTheme.accentInk
-                                  : root._destructive ? ExoTheme.error
+                                  // The label is a word, the border is a mark:
+                                  // `error` as a label measures 4.30:1 on the
+                                  // button fill in Light, and less once hover
+                                  // darkens it.
+                                  : root._destructive ? ExoTheme.errorText
                                   : root.selected ? ExoTheme.text : ExoTheme.textSecondary
 
     contentItem: Item {

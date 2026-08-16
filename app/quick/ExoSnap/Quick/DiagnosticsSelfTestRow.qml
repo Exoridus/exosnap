@@ -14,10 +14,12 @@ Rectangle {
     property string tone: "pass"
     property bool notRun: false
 
+    // Everything the tone touches here is content — the em dash, the severity
+    // glyph and the status word — so all of it takes the readable rung.
     readonly property color toneColor: root.notRun ? ExoTheme.textDim
-                                     : root.tone === "blocker" ? ExoTheme.error
-                                     : root.tone === "notice" ? ExoTheme.warning
-                                     : ExoTheme.success
+                                     : root.tone === "blocker" ? ExoTheme.errorText
+                                     : root.tone === "notice" ? ExoTheme.warningText
+                                     : ExoTheme.successText
 
     implicitHeight: row.implicitHeight + 2 * ExoTheme.spacingSm
     color: ExoTheme.surface

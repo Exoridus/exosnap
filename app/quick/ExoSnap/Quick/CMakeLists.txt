@@ -624,7 +624,14 @@ qt_add_qml_module(record_controls_qml_tests
     QML_FILES
         ExoButton.qml
         ExoChevron.qml
+        # The 24 px interaction target and the keyboard toggle are geometry and
+        # input, so they are asserted rather than judged on a screenshot.
+        ExoCheckBox.qml
         ExoDisclosure.qml
+        # Severity carried by something other than colour (QCR-507/508): which
+        # glyph a tone resolves to, and what the accessible name says.
+        ExoNotice.qml
+        ExoStatusTile.qml
         # The shared overlay card and the two components it draws itself from.
         # Its layout invariants — the card staying out of the shell's title
         # band, and the persistent decision strip surviving a scrolling body —
@@ -698,6 +705,9 @@ get_filename_component(_exosnap_quick_qt_prefix "${Qt6_DIR}/../../.." ABSOLUTE)
 set_tests_properties(quick.qml.record_controls PROPERTIES
     LABELS "quick"
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QML_IMPORT_PATH=${_exosnap_quick_qt_prefix}/qml"
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${_exosnap_quick_qt_prefix}/bin"
+)
+
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${_exosnap_quick_qt_prefix}/bin"
 )
 

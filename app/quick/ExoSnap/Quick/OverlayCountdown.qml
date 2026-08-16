@@ -132,10 +132,12 @@ Window {
             // Accent, not caution amber. A countdown is a normal workflow
             // transition the user asked for — nothing about it needs attention,
             // and amber spent on it is amber a real warning cannot claim back.
-            // Safe on this ground in both appearances: the contrast gate asserts
-            // the accent as an indicator on the overlays' near-black pill.
+            // `overlayAccent`, not `accent`: the circle is near-black in both
+            // appearances, and the LIGHT resolution of an accent measures
+            // 3.2-3.9:1 on it. A fixed-dark surface takes the dark resolution of
+            // whichever accent the user chose.
             ShapePath {
-                strokeColor: ExoTheme.accent
+                strokeColor: ExoTheme.overlayAccent
                 strokeWidth: 3
                 fillColor: "transparent"
                 capStyle: ShapePath.RoundCap
@@ -156,7 +158,7 @@ Window {
             anchors.centerIn: parent
             text: String(Math.max(1, root.remainingSeconds))
             textFormat: Text.PlainText
-            color: ExoTheme.accent
+            color: ExoTheme.overlayAccent
             font {
                 family: ExoTheme.monoFamily
                 pixelSize: 52

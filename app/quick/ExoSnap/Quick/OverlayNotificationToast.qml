@@ -34,9 +34,25 @@ Window {
     readonly property int shadowMargin: 20
     readonly property int stackGap: 12
 
-    // Text on a tone-filled button. Deliberately not a theme token: it has to
-    // stay legible on all four tone fills, which no single ink token does.
-    readonly property color buttonInk: "#0E0E10"
+    // Text on a tone-filled button. There is no single ink that reads on all
+    // four fills — this was one literal near-black for every tone, which in
+    // Light measured 4.04:1 on the error fill and 3.27:1 on the violet accent —
+    // so each fill takes the ink the theme curates for it.
+    function toneInk(tone) {
+        return tone === "success" ? ExoTheme.successInk
+             : tone === "caution" ? ExoTheme.warningInk
+             : tone === "error" ? ExoTheme.errorInk
+             : ExoTheme.accentInk
+    }
+
+    // The tone as CONTENT (the severity glyph) rather than as a mark (the chip
+    // border, the countdown bar). See ExoBadge for the rule.
+    function toneTextColor(tone) {
+        return tone === "success" ? ExoTheme.successText
+             : tone === "caution" ? ExoTheme.warningText
+             : tone === "error" ? ExoTheme.errorText
+             : ExoTheme.accent
+    }
 
     signal actionTriggered(int sequence, int action)
     signal dismissRequested(int sequence)
@@ -170,6 +186,7 @@ Window {
         property string label: ""
         property bool primary: false
         property color tone: ExoTheme.accent
+        property color ink: ExoTheme.accentInk
 
         signal activated()
 
@@ -190,7 +207,7 @@ Window {
             anchors.centerIn: parent
             text: pill.label
             textFormat: Text.PlainText
-            color: pill.primary ? root.buttonInk : ExoTheme.text
+            color: pill.primary ? pill.ink : ExoTheme.text
             font {
                 family: ExoTheme.sansFamily
                 pixelSize: 13
@@ -265,7 +282,7 @@ Window {
                     StatusGlyph {
                         anchors.centerIn: parent
                         tone: card.model.tone
-                        stroke: card.tone
+                        stroke: root.toneTextColor(card.model.tone)
                     }
                 }
 
@@ -333,6 +350,7 @@ Window {
                         label: card.model.primaryLabel !== undefined ? card.model.primaryLabel : ""
                         primary: true
                         tone: card.tone
+                        ink: root.toneInk(card.model.tone)
                         onActivated: root.actionTriggered(card.model.sequence, card.model.primaryAction)
                     }
 

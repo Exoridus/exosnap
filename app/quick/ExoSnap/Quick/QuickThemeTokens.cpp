@@ -51,6 +51,18 @@ QColor blend(const QColor& from, const QColor& to, double t) {
                   qRound(from.blue() * (1.0 - s) + to.blue() * s));
 }
 
+// The Dark appearance, which is what every fixed-dark surface resolves against
+// regardless of the application appearance. Its position in the table is not
+// assumed: it is found by kind.
+const ExoAppearance& darkAppearance() {
+    for (const ExoAppearance& appearance : kExoAppearances) {
+        if (appearance.kind == ThemeKind::Dark) {
+            return appearance;
+        }
+    }
+    return kExoAppearances.front();
+}
+
 const ExoAppearance& resolveAppearance(const QString& appearance_id) {
     for (const ExoAppearance& appearance : kExoAppearances) {
         if (appearance_id == QLatin1StringView(appearance.id)) {
@@ -102,9 +114,23 @@ void QuickThemeTokens::setAppearance(const QString& appearance_id, const QString
     error_ = parseToken(appearance.error);
     error_ink_ = parseToken(appearance.error_ink);
     success_ = parseToken(appearance.success);
+    success_text_ = parseToken(appearance.success_text);
+    warning_text_ = parseToken(appearance.caution_text);
+    error_text_ = parseToken(appearance.error_text);
 
     accent_ = parseToken(dark_ ? accent.dark : accent.light);
     accent_ink_ = parseToken(dark_ ? accent.dark_ink : accent.light_ink);
+    overlay_accent_ = parseToken(accent.dark);
+
+    // Ink for content on a success- or caution-FILLED surface, completing the
+    // set the table already curates for the two fills whose hue moves: the
+    // accent (`accent_ink`, per accent AND per appearance) and error
+    // (`error_ink`, white in Light, a warm near-black in Dark). Success and
+    // caution are light fills in BOTH appearances, so one near-black reads on
+    // either; it is warmed toward its own fill the way the authored
+    // `error_ink` is, rather than being a second literal black.
+    success_ink_ = blend(QColor(0x0B, 0x0B, 0x0C), success_, 0.08);
+    warning_ink_ = blend(QColor(0x0B, 0x0B, 0x0C), warning_, 0.08);
 
     // Tinted notice grounds have no entry in the shared tables (they are a
     // design-system derivation, not a palette value). Derived from this
@@ -229,8 +255,44 @@ QColor QuickThemeTokens::errorSurface() const noexcept {
 QColor QuickThemeTokens::success() const noexcept {
     return success_;
 }
+QColor QuickThemeTokens::successInk() const noexcept {
+    return success_ink_;
+}
+QColor QuickThemeTokens::warningInk() const noexcept {
+    return warning_ink_;
+}
+QColor QuickThemeTokens::successText() const noexcept {
+    return success_text_;
+}
+QColor QuickThemeTokens::warningText() const noexcept {
+    return warning_text_;
+}
+QColor QuickThemeTokens::errorText() const noexcept {
+    return error_text_;
+}
 QColor QuickThemeTokens::overlayScrim() const noexcept {
     return overlay_scrim_;
+}
+QColor QuickThemeTokens::overlayInk() noexcept {
+    return parseToken(darkAppearance().ink);
+}
+QColor QuickThemeTokens::overlayInkSecondary() noexcept {
+    return parseToken(darkAppearance().text1);
+}
+QColor QuickThemeTokens::overlayInkMuted() noexcept {
+    return parseToken(darkAppearance().mut);
+}
+QColor QuickThemeTokens::overlaySuccess() noexcept {
+    return parseToken(darkAppearance().success);
+}
+QColor QuickThemeTokens::overlayWarning() noexcept {
+    return parseToken(darkAppearance().caution);
+}
+QColor QuickThemeTokens::overlayError() noexcept {
+    return parseToken(darkAppearance().error);
+}
+QColor QuickThemeTokens::overlayAccent() const noexcept {
+    return overlay_accent_;
 }
 
 } // namespace exosnap::quick

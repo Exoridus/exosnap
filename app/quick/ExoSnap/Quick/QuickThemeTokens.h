@@ -45,7 +45,40 @@ class QuickThemeTokens : public QObject {
     Q_PROPERTY(QColor errorInk READ errorInk NOTIFY changed FINAL)
     Q_PROPERTY(QColor errorSurface READ errorSurface NOTIFY changed FINAL)
     Q_PROPERTY(QColor success READ success NOTIFY changed FINAL)
+    Q_PROPERTY(QColor successInk READ successInk NOTIFY changed FINAL)
+    Q_PROPERTY(QColor warningInk READ warningInk NOTIFY changed FINAL)
+    Q_PROPERTY(QColor successText READ successText NOTIFY changed FINAL)
+    Q_PROPERTY(QColor warningText READ warningText NOTIFY changed FINAL)
+    Q_PROPERTY(QColor errorText READ errorText NOTIFY changed FINAL)
     Q_PROPERTY(QColor overlayScrim READ overlayScrim NOTIFY changed FINAL)
+
+    // ── Fixed-dark surfaces ─────────────────────────────────────────────────
+    //
+    // A handful of surfaces are near-black in BOTH appearances because they
+    // have to be: the five capture-excluded overlays float over arbitrary
+    // desktop content, and the readouts over the live preview float over
+    // arbitrary captured content. Their ink cannot come from the appearance —
+    // in Light that resolves to dark text on a near-black ground, which is the
+    // 1.1:1 the tokens below exist to prevent.
+    //
+    // The rule is one sentence: a surface whose ground is fixed dark resolves
+    // its colours against the DARK APPEARANCE, whatever the application
+    // appearance is. So these are not new colours. `overlayInk` /
+    // `…Secondary` / `…Muted` are the Dark appearance's own ink rungs,
+    // `overlayAccent` is the selected accent's dark value, and the three
+    // semantic ones are the Dark appearance's success/caution/error. Change
+    // the Dark palette and these follow it, which a set of literals spread
+    // across seven QML files would not.
+    Q_PROPERTY(QColor overlayInk READ overlayInk CONSTANT FINAL)
+    Q_PROPERTY(QColor overlayInkSecondary READ overlayInkSecondary CONSTANT FINAL)
+    Q_PROPERTY(QColor overlayInkMuted READ overlayInkMuted CONSTANT FINAL)
+    Q_PROPERTY(QColor overlaySuccess READ overlaySuccess CONSTANT FINAL)
+    Q_PROPERTY(QColor overlayWarning READ overlayWarning CONSTANT FINAL)
+    Q_PROPERTY(QColor overlayError READ overlayError CONSTANT FINAL)
+    // The one that is NOT constant: the accent is a user choice, so a fixed-dark
+    // surface follows it — it just takes the dark resolution of whichever accent
+    // is selected.
+    Q_PROPERTY(QColor overlayAccent READ overlayAccent NOTIFY changed FINAL)
 
   public:
     explicit QuickThemeTokens(QObject* parent = nullptr);
@@ -90,7 +123,20 @@ class QuickThemeTokens : public QObject {
     [[nodiscard]] QColor errorInk() const noexcept;
     [[nodiscard]] QColor errorSurface() const noexcept;
     [[nodiscard]] QColor success() const noexcept;
+    [[nodiscard]] QColor successInk() const noexcept;
+    [[nodiscard]] QColor warningInk() const noexcept;
+    [[nodiscard]] QColor successText() const noexcept;
+    [[nodiscard]] QColor warningText() const noexcept;
+    [[nodiscard]] QColor errorText() const noexcept;
     [[nodiscard]] QColor overlayScrim() const noexcept;
+
+    [[nodiscard]] static QColor overlayInk() noexcept;
+    [[nodiscard]] static QColor overlayInkSecondary() noexcept;
+    [[nodiscard]] static QColor overlayInkMuted() noexcept;
+    [[nodiscard]] static QColor overlaySuccess() noexcept;
+    [[nodiscard]] static QColor overlayWarning() noexcept;
+    [[nodiscard]] static QColor overlayError() noexcept;
+    [[nodiscard]] QColor overlayAccent() const noexcept;
 
   signals:
     void changed();
@@ -117,7 +163,13 @@ class QuickThemeTokens : public QObject {
     QColor error_ink_;
     QColor error_surface_;
     QColor success_;
+    QColor success_ink_;
+    QColor warning_ink_;
+    QColor success_text_;
+    QColor warning_text_;
+    QColor error_text_;
     QColor overlay_scrim_;
+    QColor overlay_accent_;
 };
 
 } // namespace exosnap::quick

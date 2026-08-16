@@ -22,11 +22,11 @@ Rectangle {
     // its Resume action carries, and a momentary transition takes a quiet
     // neutral. Caution amber stays with `warning`, which is the only tone a real
     // warning uses.
-    readonly property color toneColor: root.tone === "recording" ? ExoTheme.error
-                                     : root.tone === "error" ? ExoTheme.error
-                                     : root.tone === "warning" ? ExoTheme.warning
-                                     : root.tone === "success" ? ExoTheme.success
-                                     : root.tone === "paused" ? ExoTheme.accent
+    readonly property color toneColor: root.tone === "recording" ? root._error
+                                     : root.tone === "error" ? root._error
+                                     : root.tone === "warning" ? root._warning
+                                     : root.tone === "success" ? root._success
+                                     : root.tone === "paused" ? root._accent
                                      // The one tone that has to resolve per
                                      // ground. `busy` is deliberately a quiet
                                      // neutral, and Light has no LIGHT neutral —
@@ -37,17 +37,27 @@ Rectangle {
                                      // semantic tones need no such split because
                                      // they are designed to read on both.
                                      : root.tone === "busy" ? (root.onSurface ? root.onSurfaceInk : ExoTheme.textMuted)
-                                     : ExoTheme.success
+                                     : root._success
+
+    // Over the preview the ground is near-black in BOTH appearances, so every
+    // tone resolves against the Dark appearance there; in the title band the
+    // ground is an appearance surface and the appearance tones are right.
+    readonly property color _error: root.onSurface ? ExoTheme.overlayError : ExoTheme.error
+    readonly property color _warning: root.onSurface ? ExoTheme.overlayWarning : ExoTheme.warning
+    readonly property color _success: root.onSurface ? ExoTheme.overlaySuccess : ExoTheme.success
+    readonly property color _accent: root.onSurface ? ExoTheme.overlayAccent : ExoTheme.accent
 
     // Over the preview the pill has its own near-black ground in BOTH
     // appearances — it has to, because what is behind it is arbitrary captured
     // content — so its label cannot take an appearance colour. Light's
     // `textMuted` on that ground measures 3.06:1 and Light's `error` 4.42:1,
-    // both under the 4.5:1 the contrast gate holds text to; the tone is carried
-    // by the dot and the ring, which are graphical and clear 3:1. A literal
-    // rather than a token for the same reason OverlayRecording uses literals:
-    // there is no appearance in which this ground is light.
-    readonly property color onSurfaceInk: "#F1F1EF"
+    // both under the 4.5:1 the contrast gate holds text to.
+    //
+    // This was the first surface in the product to need that, and it solved it
+    // with a literal. `ExoTheme.overlayInk` is that same value, named: the Dark
+    // appearance's own ink, which is what a fixed-dark ground takes everywhere
+    // now (the desktop overlays, the live-metrics readout, this pill).
+    readonly property color onSurfaceInk: ExoTheme.overlayInk
 
     // Derived from the label's OWN implicit width, not from the Row's — the Row
     // measures its children's actual widths, and the label's actual width is

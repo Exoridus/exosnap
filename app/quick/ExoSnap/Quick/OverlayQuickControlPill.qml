@@ -44,9 +44,11 @@ Window {
     readonly property color buttonBackground: "#0FFFFFFF"  // rgba(255,255,255,0.06)
     readonly property color buttonBorder: "#1AFFFFFF"      // rgba(255,255,255,0.1)
     readonly property color buttonGlyph: "#E6FFFFFF"       // rgba(255,255,255,0.9)
-    // Stop is rec-styled: the coral tone, tinted for fill and border.
-    readonly property color stopBackground: Qt.alpha(ExoTheme.error, 0.18)
-    readonly property color stopBorder: Qt.alpha(ExoTheme.error, 0.5)
+    // Stop is rec-styled: the coral tone, tinted for fill and border. The
+    // `overlayError` rung, because this pill is near-black in both appearances
+    // and Light's `error` lands at 4.15:1 on it against the Dark rung's 6.66:1.
+    readonly property color stopBackground: Qt.alpha(ExoTheme.overlayError, 0.18)
+    readonly property color stopBorder: Qt.alpha(ExoTheme.overlayError, 0.5)
 
     readonly property int pad: 8
     readonly property int gripWidth: 28
@@ -177,7 +179,7 @@ Window {
         PillGlyph {
             anchors.centerIn: parent
             kind: button.glyphKind
-            tone: button.recStyled ? ExoTheme.error : root.buttonGlyph
+            tone: button.recStyled ? ExoTheme.overlayError : root.buttonGlyph
         }
 
         MouseArea {

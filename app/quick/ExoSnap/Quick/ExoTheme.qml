@@ -26,6 +26,36 @@ QtObject {
     readonly property color errorInk: QuickThemeTokens.errorInk
     readonly property color errorSurface: QuickThemeTokens.errorSurface
     readonly property color success: QuickThemeTokens.success
+    readonly property color successInk: QuickThemeTokens.successInk
+    readonly property color warningInk: QuickThemeTokens.warningInk
+
+    // The three states as READABLE TEXT, as opposed to as an indicator.
+    //
+    // `warning`/`success`/`error` are tuned to carry a state as a ring, a dot
+    // or a tinted ground, where WCAG 1.4.11 asks 3:1. The same values as small
+    // text sit at 3.3–3.9:1 in Light, under the 4.5:1 of 1.4.3 — so a badge
+    // label, a severity glyph inside its own tinted card, or any sentence that
+    // states its own severity takes the rung below instead. In Dark the two
+    // rungs are the same colour; the split exists because Light cannot have
+    // one value that does both jobs.
+    readonly property color successText: QuickThemeTokens.successText
+    readonly property color warningText: QuickThemeTokens.warningText
+    readonly property color errorText: QuickThemeTokens.errorText
+
+    // ── Fixed-dark surfaces ──────────────────────────────────────────────────
+    //
+    // For a surface whose ground is near-black in BOTH appearances: the five
+    // capture-excluded overlays over the desktop, and the readouts over the
+    // live preview. See QuickThemeTokens.h — these resolve against the Dark
+    // appearance, so the application appearance never turns their ink dark.
+    readonly property color overlayInk: QuickThemeTokens.overlayInk
+    readonly property color overlayInkSecondary: QuickThemeTokens.overlayInkSecondary
+    readonly property color overlayInkMuted: QuickThemeTokens.overlayInkMuted
+    readonly property color overlayAccent: QuickThemeTokens.overlayAccent
+    readonly property color overlaySuccess: QuickThemeTokens.overlaySuccess
+    readonly property color overlayWarning: QuickThemeTokens.overlayWarning
+    readonly property color overlayError: QuickThemeTokens.overlayError
+
     // The ground a modal/interruption surface lays over the application. Its
     // meaning is "de-emphasise what is behind this", which is why it is a token
     // and not `Qt.alpha(background, x)` at each call site: a translucent copy of

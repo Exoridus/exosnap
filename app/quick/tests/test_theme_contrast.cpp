@@ -362,6 +362,158 @@ TEST(ThemeContrastTest, AnOutlinedDestructiveActionStatesItselfInReadableInk) {
     }
 }
 
+// ── QCR-501: fixed-dark surfaces ────────────────────────────────────────────
+//
+// Six surfaces in the product are near-black in BOTH appearances because what
+// is behind them is not the application: the five capture-excluded overlays
+// (recording pill, diagnostics pill, countdown, quick-control pill, and the
+// desktop toast's tone fills) and the readouts drawn over the live preview.
+// They resolve their colours against the Dark appearance, so `overlayInk` and
+// friends must clear the bars on every one of those grounds in BOTH
+// appearances — which is the same assertion twice by construction, and that is
+// the point: the test fails the moment one of them goes back to an appearance
+// token.
+namespace {
+
+// The grounds, each already composited over the darkest thing behind it. That
+// is the design's own assumption (see OverlayRecording.qml: a near-black pill
+// at ~78 % opacity, in a screen corner) and it is what the pre-existing status
+// pill assertion below already uses. A fully white desktop behind a 78 % pill
+// lifts it to ~#4A4A4C, where `overlayInk` still measures 7.8:1 — the ink
+// survives that; the quieter rungs do not, and no ink can, because the ground
+// is then a mid grey. Changing that would mean changing the overlays' opacity,
+// which is a design decision this gate does not make.
+struct FixedDarkGround {
+    const char* name;
+    QColor color;
+};
+
+std::vector<FixedDarkGround> fixedDarkGrounds() {
+    return {
+        // OverlayRecording / OverlayDiagnostics: "#C6161618" over black.
+        {"overlay pill", composite(QColor(QStringLiteral("#161618")), 198.0 / 255.0, QColor(0, 0, 0))},
+        // RecordPage's liveMetrics: rgba(0,0,0,0.72) over the "#08080A" stage.
+        {"live metrics", composite(QColor(0, 0, 0), 0.72, QColor(QStringLiteral("#08080A")))},
+        // RecordPage's PreviewMetricsOverlay: "#E6151517" over the same stage.
+        {"preview metrics",
+         composite(QColor(QStringLiteral("#151517")), 230.0 / 255.0, QColor(QStringLiteral("#08080A")))},
+        // OverlayCountdown: "#BD0C0C0E" over black.
+        {"countdown circle", composite(QColor(QStringLiteral("#0C0C0E")), 189.0 / 255.0, QColor(0, 0, 0))},
+        // OverlayQuickControlPill: "#CC0C0C0E" over black.
+        {"quick-control pill", composite(QColor(QStringLiteral("#0C0C0E")), 204.0 / 255.0, QColor(0, 0, 0))},
+    };
+}
+
+} // namespace
+
+TEST(ThemeContrastTest, FixedDarkSurfaceInkIsReadableInBothAppearances) {
+    for (const Combination& combination : shippedCombinations()) {
+        QuickThemeTokens tokens;
+        tokens.setAppearance(combination.appearance, combination.accent);
+        SCOPED_TRACE(combination.name());
+
+        for (const FixedDarkGround& ground : fixedDarkGrounds()) {
+            SCOPED_TRACE(ground.name);
+            // The three ink rungs are all TEXT on these surfaces: the elapsed
+            // clock, the output size, a diagnostics token's label and value.
+            EXPECT_TRUE(meets(kText, QuickThemeTokens::overlayInk(), ground.color, "overlayInk"));
+            EXPECT_TRUE(meets(kText, QuickThemeTokens::overlayInkSecondary(), ground.color, "overlayInkSecondary"));
+            EXPECT_TRUE(meets(kText, QuickThemeTokens::overlayInkMuted(), ground.color, "overlayInkMuted"));
+            // `overlaySuccess` is the diagnostics pill's "drop 0" VALUE, so it
+            // is text too. The other two carry the recording pill's state glyph
+            // and the Stop control's fill/ring, which are graphical.
+            EXPECT_TRUE(meets(kText, QuickThemeTokens::overlaySuccess(), ground.color, "overlaySuccess"));
+            EXPECT_TRUE(meets(kGraphical, QuickThemeTokens::overlayWarning(), ground.color, "overlayWarning"));
+            EXPECT_TRUE(meets(kGraphical, QuickThemeTokens::overlayError(), ground.color, "overlayError"));
+            // The countdown digit is 52 px, well past 1.4.3's large-text
+            // threshold, but the ring beside it is a graphical object and the
+            // preview metrics panel's border is another — 3:1 covers both, and
+            // every accent clears it by 3x in its dark resolution.
+            EXPECT_TRUE(meets(kGraphical, tokens.overlayAccent(), ground.color, "overlayAccent"));
+        }
+    }
+}
+
+// The failure this whole item is about, asserted directly rather than only
+// implied by the passing case above: the APPEARANCE ink on a fixed-dark ground
+// is unreadable in Light. If a future palette made Light's ink light enough to
+// survive there, the fixed-dark tokens would be arguing for nothing and this
+// test is what says so.
+TEST(ThemeContrastTest, TheAppearanceInkIsWhyTheFixedDarkRungsExist) {
+    QuickThemeTokens light;
+    light.setAppearance(QStringLiteral("light"), QStringLiteral("aqua"));
+    ASSERT_FALSE(light.dark());
+
+    for (const FixedDarkGround& ground : fixedDarkGrounds()) {
+        SCOPED_TRACE(ground.name);
+        EXPECT_LT(contrastRatio(light.text(), ground.color), kGraphical)
+            << "Light's `text` now measures " << contrastRatio(light.text(), ground.color)
+            << ":1 on a fixed-dark surface. That is the assumption the overlayInk rungs were "
+               "introduced under; revisit them rather than deleting this test.";
+        EXPECT_LT(contrastRatio(light.textSecondary(), ground.color), kText);
+    }
+}
+
+// ── QCR-502: the semantic text rungs ────────────────────────────────────────
+
+TEST(ThemeContrastTest, SemanticTextRungsAreReadableOnEverySurfaceTheyLandOn) {
+    // A state used as a WORD (a badge label, a severity glyph inside its own
+    // tinted card, a log row's severity column, a failed export's verdict) is
+    // text, and the indicator values do not clear 4.5:1 in Light. The tinted
+    // grounds are the binding case: they are the darkest surfaces a dark ink
+    // is drawn on.
+    for (const Combination& combination : shippedCombinations()) {
+        QuickThemeTokens tokens;
+        tokens.setAppearance(combination.appearance, combination.accent);
+        SCOPED_TRACE(combination.name());
+
+        for (const auto& [state, color] :
+             {std::pair{"successText", tokens.successText()}, std::pair{"warningText", tokens.warningText()},
+              std::pair{"errorText", tokens.errorText()}}) {
+            EXPECT_TRUE(meets(kText, color, tokens.background(), state));
+            EXPECT_TRUE(meets(kText, color, tokens.surface(), state));
+            EXPECT_TRUE(meets(kText, color, tokens.surfaceRaised(), state));
+            EXPECT_TRUE(meets(kText, color, tokens.surfaceHover(), state));
+            EXPECT_TRUE(meets(kText, color, tokens.warningSurface(), state));
+            EXPECT_TRUE(meets(kText, color, tokens.errorSurface(), state));
+        }
+    }
+}
+
+// The reason the split exists, pinned the same way the fixed-dark one is: the
+// INDICATOR values are below the text bar in Light. Dark needs no split at all,
+// and the table says so by repeating its three values — this test is what would
+// catch a Light palette drifting far enough to make the second rung redundant.
+TEST(ThemeContrastTest, TheIndicatorRungIsWhyTheSemanticTextRungsExist) {
+    QuickThemeTokens light;
+    light.setAppearance(QStringLiteral("light"), QStringLiteral("aqua"));
+
+    EXPECT_LT(contrastRatio(light.success(), light.surface()), kText);
+    EXPECT_LT(contrastRatio(light.warning(), light.surface()), kText);
+    EXPECT_LT(contrastRatio(light.warning(), light.warningSurface()), kGraphical);
+
+    QuickThemeTokens dark;
+    dark.setAppearance(QStringLiteral("dark"), QStringLiteral("aqua"));
+    EXPECT_EQ(dark.successText(), dark.success());
+    EXPECT_EQ(dark.warningText(), dark.warning());
+    EXPECT_EQ(dark.errorText(), dark.error());
+}
+
+TEST(ThemeContrastTest, EveryToneFilledActionCarriesReadableInk) {
+    // The desktop toast's primary action is filled with the toast's own tone,
+    // and it used to draw one literal near-black label on all four fills. The
+    // theme curates an ink per fill instead; `successInk`/`warningInk` complete
+    // the set `accentInk`/`errorInk` already covered.
+    for (const Combination& combination : shippedCombinations()) {
+        QuickThemeTokens tokens;
+        tokens.setAppearance(combination.appearance, combination.accent);
+        SCOPED_TRACE(combination.name());
+
+        EXPECT_TRUE(meets(kText, tokens.successInk(), tokens.success(), "successInk on success"));
+        EXPECT_TRUE(meets(kText, tokens.warningInk(), tokens.warning(), "warningInk on warning"));
+    }
+}
+
 TEST(ThemeContrastTest, TintedNoticeGroundsCarryReadableText) {
     // warningSurface / errorSurface are derived (blend of the background and the
     // state colour), so unlike every pair above they are not reviewable by

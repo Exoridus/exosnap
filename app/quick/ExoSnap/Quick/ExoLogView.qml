@@ -152,8 +152,8 @@ Rectangle {
                                              || (root.selectionAnchorSequence >= 0
                                                  && row.sequence >= root.selectionLowSequence
                                                  && row.sequence <= root.selectionHighSequence)
-            readonly property color severityColor: row.severityKey === "warning" ? ExoTheme.warning
-                                                 : (row.severityKey === "error" || row.severityKey === "critical") ? ExoTheme.error
+            readonly property color severityColor: row.severityKey === "warning" ? ExoTheme.warningText
+                                                 : (row.severityKey === "error" || row.severityKey === "critical") ? ExoTheme.errorText
                                                  : row.severityKey === "debug" ? ExoTheme.textDim
                                                  : ExoTheme.textSecondary
 

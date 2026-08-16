@@ -389,7 +389,10 @@ Item {
                             wrapMode: Text.WordWrap
                             horizontalAlignment: Text.AlignHCenter
                             verticalAlignment: Text.AlignVCenter
-                            color: ExoTheme.warning
+                            // The theme rung, not the overlay one: this label
+                            // only ever appears in the idle preview, where the
+                            // panel behind it is `ExoTheme.surface`.
+                            color: ExoTheme.warningText
                             visible: webcamImage.status === Image.Error
                             anchors.fill: parent
                             font.family: ExoTheme.sansFamily
@@ -515,6 +518,10 @@ Item {
 
                         width: Math.min(metricsFlow.childrenRect.width + 2 * ExoTheme.spacingMd, liveMetrics.maxWidth)
                         height: metricsFlow.childrenRect.height + 2 * ExoTheme.spacingSm
+                        // Near-black in BOTH appearances, like the status pill
+                        // opposite: what is behind it is the captured frame. So
+                        // the labels below take the `overlay*` ink rungs —
+                        // `ExoTheme.text` measured 1.20:1 here in Light.
                         color: Qt.rgba(0, 0, 0, 0.72)
                         radius: ExoTheme.radiusSm
                         visible: root.recordViewModel.recording || root.recordViewModel.paused
@@ -542,21 +549,21 @@ Item {
                             Label {
                                 text: qsTr("BITRATE %1").arg(root.recordViewModel.bitrateText)
                                 textFormat: Text.PlainText
-                                color: ExoTheme.text
+                                color: ExoTheme.overlayInk
                                 font.family: ExoTheme.monoFamily
                                 font.pixelSize: ExoTheme.fontEyebrow
                             }
                             Label {
                                 text: qsTr("DROP %1").arg(root.recordViewModel.droppedFramesText)
                                 textFormat: Text.PlainText
-                                color: ExoTheme.text
+                                color: ExoTheme.overlayInk
                                 font.family: ExoTheme.monoFamily
                                 font.pixelSize: ExoTheme.fontEyebrow
                             }
                             Label {
                                 text: qsTr("DRIFT %1").arg(root.recordViewModel.driftText)
                                 textFormat: Text.PlainText
-                                color: ExoTheme.text
+                                color: ExoTheme.overlayInk
                                 font.family: ExoTheme.monoFamily
                                 font.pixelSize: ExoTheme.fontEyebrow
                             }
@@ -564,7 +571,7 @@ Item {
                             Label {
                                 text: qsTr("SIZE %1").arg(root.recordViewModel.outputSizeText)
                                 textFormat: Text.PlainText
-                                color: ExoTheme.text
+                                color: ExoTheme.overlayInk
                                 font.family: ExoTheme.monoFamily
                                 font.pixelSize: ExoTheme.fontEyebrow
                             }
@@ -578,10 +585,14 @@ Item {
                         sourceDeliveryRate: root.previewAdapter.sourceDeliveryRate
                         frameTimeP95Ms: root.previewAdapter.frameTimeP95Ms
                         frameTimeP99Ms: root.previewAdapter.frameTimeP99Ms
-                        accentColor: ExoTheme.accent
+                        // Fixed-dark surface, fixed-dark ink: `surfaceColor`
+                        // is a literal near-black in both appearances, so the
+                        // three colours over it resolve against the Dark
+                        // appearance rather than the application's.
+                        accentColor: ExoTheme.overlayAccent
                         surfaceColor: "#E6151517"
-                        textColor: ExoTheme.text
-                        secondaryTextColor: ExoTheme.textSecondary
+                        textColor: ExoTheme.overlayInk
+                        secondaryTextColor: ExoTheme.overlayInkSecondary
                         sansFamily: ExoTheme.sansFamily
                         monoFamily: ExoTheme.monoFamily
                         visible: root.benchmarkInteractionActive
@@ -613,7 +624,8 @@ Item {
                         textFormat: Text.PlainText
                         wrapMode: Text.WordWrap
                         horizontalAlignment: Text.AlignHCenter
-                        color: ExoTheme.warning
+                        // Centred on the black stage, so the fixed-dark rung.
+                        color: ExoTheme.overlayWarning
                         visible: text.length > 0 && !root.recordViewModel.regionSelectionNeeded
                         width: Math.max(0, Math.min(440, parent.width - 48))
                         anchors.centerIn: parent
@@ -626,7 +638,8 @@ Item {
 
                         width: 8
                         height: 8
-                        color: ExoTheme.warning
+                        // Also on the stage.
+                        color: ExoTheme.overlayWarning
                         radius: 4
                         visible: root.benchmarkInteractionActive
                         anchors {

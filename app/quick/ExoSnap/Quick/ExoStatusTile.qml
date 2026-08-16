@@ -20,6 +20,25 @@ Rectangle {
                                      : root.tone === "notice" ? ExoTheme.warning
                                      : ExoTheme.line
 
+    // QCR-507. The tile used to say its severity with colour alone: a blocker
+    // and a notice differed by the hue of a 1 px border and a background tint,
+    // which is nothing to a user with a colour-vision deficiency and very
+    // little on a glanced-at dashboard. The glyph below is the same vocabulary
+    // the issue cards and the Diagnostics verdict band already use — ✕ for a
+    // blocker, ⚠ for a notice, ✓ for a tile that is clear — so this is one
+    // severity language across the product, not a second one.
+    readonly property int toneGlyph: root.tone === "blocker" ? ExoGlyph.Close
+                                   : root.tone === "notice" ? ExoGlyph.Warning
+                                   : root.showOkGlyph ? ExoGlyph.Check
+                                   : ExoGlyph.Invalid
+    readonly property color toneGlyphColor: root.tone === "blocker" ? ExoTheme.errorText
+                                          : root.tone === "notice" ? ExoTheme.warningText
+                                          : ExoTheme.successText
+    // Said in words for a screen reader, which cannot see either cue.
+    readonly property string severityText: root.tone === "blocker" ? qsTr("Blocked")
+                                         : root.tone === "notice" ? qsTr("Caution")
+                                         : root.showOkGlyph ? qsTr("Ready") : ""
+
     implicitHeight: column.implicitHeight + 2 * ExoTheme.spacingLg
     implicitWidth: 210
     color: root.tone === "blocker" ? ExoTheme.errorSurface
@@ -30,7 +49,9 @@ Rectangle {
     radius: ExoTheme.radiusLg
 
     Accessible.role: Accessible.StaticText
-    Accessible.name: root.title + ": " + root.value + " " + root.sub
+    Accessible.name: root.severityText === ""
+                     ? root.title + ": " + root.value + " " + root.sub
+                     : root.severityText + ". " + root.title + ": " + root.value + " " + root.sub
 
     ColumnLayout {
         id: column
@@ -63,9 +84,9 @@ Rectangle {
             }
 
             ExoGlyph {
-                kind: ExoGlyph.Check
-                visible: root.showOkGlyph
-                color: ExoTheme.success
+                kind: root.toneGlyph
+                visible: root.toneGlyph !== ExoGlyph.Invalid
+                color: root.toneGlyphColor
                 Layout.preferredWidth: 14
                 Layout.preferredHeight: 14
             }

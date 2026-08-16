@@ -57,14 +57,17 @@ Window {
     // pause look like a fault to a user glancing at the corner of a full-screen
     // game. Paused now takes the accent — the same colour the Resume action in
     // the transport carries — and amber is left to mean what it says.
+    // The overlay* rungs, not the appearance ones: this pill's ground is
+    // near-black whatever the application appearance is, so it resolves its
+    // colours against the Dark appearance (see ExoTheme).
     readonly property color stateTone: {
         switch (root.overlayState) {
         case OverlayAdapter.Paused:
-            return ExoTheme.accent;
+            return ExoTheme.overlayAccent;
         case OverlayAdapter.Warning:
-            return ExoTheme.warning;
+            return ExoTheme.overlayWarning;
         default:
-            return ExoTheme.error;  // recording: the canonical rec tone
+            return ExoTheme.overlayError;  // recording: the canonical rec tone
         }
     }
 
@@ -73,6 +76,10 @@ Window {
     // and more opaque than any in-app surface token and cannot come from
     // ExoTheme. Deliberately borderless: a hairline reads as a window edge over
     // moving content, which is exactly what this must not look like.
+    //
+    // Because that ground is fixed, everything drawn ON it takes the
+    // `overlay*` rungs. The appearance ones were used here, and in Light they
+    // resolve to dark ink: `ExoTheme.text` measured 1.09:1 against this pill.
     readonly property color pillBackground: "#C6161618"  // ~78% opaque near-black
 
     // No transient parent: a Window declared inside another Window inherits it
@@ -211,7 +218,7 @@ Window {
                 horizontalAlignment: Text.AlignRight
                 text: root.elapsedText
                 textFormat: Text.PlainText
-                color: ExoTheme.text
+                color: ExoTheme.overlayInk
                 font {
                     family: ExoTheme.monoFamily
                     pixelSize: 13
@@ -224,7 +231,7 @@ Window {
                 visible: root.showOutputSize && root.outputSizeText.length > 0
                 text: root.outputSizeText
                 textFormat: Text.PlainText
-                color: ExoTheme.textSecondary
+                color: ExoTheme.overlayInkSecondary
                 font {
                     family: ExoTheme.monoFamily
                     pixelSize: 13
@@ -240,7 +247,7 @@ Window {
                 elide: Text.ElideRight
                 text: root.sourceNameText
                 textFormat: Text.PlainText
-                color: ExoTheme.textSecondary
+                color: ExoTheme.overlayInkSecondary
                 font {
                     family: ExoTheme.sansFamily
                     pixelSize: 13

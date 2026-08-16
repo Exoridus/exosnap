@@ -197,6 +197,12 @@ Item {
                                                         : root.diagnostics.verdictState === "warn" ? ExoTheme.warning
                                                         : root.diagnostics.verdictState === "ready" ? ExoTheme.success
                                                         : ExoTheme.textMuted
+                    // The glyph is what says which verdict this is; the two
+                    // borders around it only mark the band.
+                    readonly property color verdictInk: root.diagnostics.verdictState === "blocked" ? ExoTheme.errorText
+                                                      : root.diagnostics.verdictState === "warn" ? ExoTheme.warningText
+                                                      : root.diagnostics.verdictState === "ready" ? ExoTheme.successText
+                                                      : ExoTheme.textMuted
 
                     implicitHeight: verdictRow.implicitHeight + 2 * ExoTheme.spacingLg
                     color: root.diagnostics.verdictState === "blocked" ? ExoTheme.errorSurface
@@ -231,7 +237,7 @@ Item {
                                       : root.diagnostics.verdictState === "warn" ? ExoGlyph.Warning
                                       : root.diagnostics.verdictState === "ready" ? ExoGlyph.Check
                                                                                   : ExoGlyph.Info
-                                color: verdictBand.verdictColor
+                                color: verdictBand.verdictInk
                                 strokeWidth: 1.8
                                 width: 20
                                 height: 20
