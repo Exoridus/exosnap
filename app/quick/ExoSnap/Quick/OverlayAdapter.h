@@ -1,6 +1,7 @@
 #pragma once
 
 #include "models/OverlayContentPolicy.h"
+#include "services/ScreenPresentation.h"
 #include "settings/AppSettingsStore.h"
 
 #include <QObject>
@@ -8,6 +9,7 @@
 #include <QtQmlIntegration/qqmlintegration.h>
 
 #include <cstdint>
+#include <functional>
 
 namespace exosnap {
 
@@ -71,12 +73,28 @@ class OverlayAdapter : public QObject {
     // never show a state the window has already left.
     void synchronize();
 
+    // The recorded monitor's presentation may have changed WITHOUT the target
+    // changing: a resolution switch, a scale change, or a monitor being moved in
+    // the desktop arrangement all keep the same HMONITOR. The cache below is
+    // keyed on that handle alone, so nothing else would ever re-query it and the
+    // overlays would stay pinned to the display's previous rectangle — off the
+    // edge of a screen that got smaller, or in the middle of one that got
+    // bigger. Called from the display/screen notifications, not from a timer:
+    // the fast path exists because synchronize() runs several times a second.
+    void invalidateMonitorGeometry();
+
     [[nodiscard]] QRect recordedMonitorGeometry() const noexcept;
     [[nodiscard]] int recordingState() const noexcept;
     [[nodiscard]] bool recordingOverlayActive() const noexcept;
     [[nodiscard]] bool countdownOverlayActive() const noexcept;
     [[nodiscard]] bool diagnosticsOverlayActive() const noexcept;
     [[nodiscard]] bool quickControlsActive() const noexcept;
+
+    // Test seam for the one input that only a real desktop can produce. The
+    // monitor rectangle comes from a Win32 query against an HMONITOR, so
+    // "the same monitor now reports a different size" is otherwise only
+    // reachable by physically changing a display.
+    void setPresentationProviderForTesting(std::function<ScreenPresentation(std::uintptr_t)> provider);
 
   signals:
     void changed();
@@ -96,6 +114,10 @@ class OverlayAdapter : public QObject {
     // "no monitor target", which is a distinct state from "not yet resolved" —
     // both produce an empty rect, and neither needs a re-query.
     std::uintptr_t geometry_native_id_ = 0;
+    // Forces the next refresh past the same-monitor fast path. True initially so
+    // the first synchronize() resolves a rectangle at all.
+    bool geometry_dirty_ = true;
+    std::function<ScreenPresentation(std::uintptr_t)> presentation_provider_;
 
     models::RecordingOverlayState state_ = models::RecordingOverlayState::Hidden;
     bool recording_overlay_active_ = false;

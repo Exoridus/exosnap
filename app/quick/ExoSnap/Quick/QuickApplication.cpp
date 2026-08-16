@@ -192,6 +192,9 @@ QuickApplication::QuickApplication()
     // entry, so the manager has to exist first. Before the window loads, so the
     // surface is already up on the first frame rather than appearing over an
     // application the user has started using.
+    // Before recovery: the scan below can raise the recovery surface, and the
+    // arbiter has to own that decision by then.
+    initializeBlockingSurfaces();
     initializeRecovery();
     initializeRecordingError();
     // After recovery: a crash mid-recording produces BOTH a recovery candidate
@@ -2111,6 +2114,58 @@ void QuickApplication::initializeNotifications() {
     }
 }
 
+void QuickApplication::initializeDisplayGeometryWatch() {
+    // Everything that can move the recorded monitor's rectangle without moving
+    // the capture target. The overlays are frameless top-level windows placed
+    // against the desktop in virtual-screen coordinates, and the adapter caches
+    // that rectangle per HMONITOR — a resolution switch, a scale change or a
+    // display being rearranged all keep the handle and change the rectangle, so
+    // each of them has to say so.
+    const auto invalidate = [this]() {
+        overlay_adapter_.invalidateMonitorGeometry();
+        // Applied now rather than at the next tick: with no recording running
+        // nothing else drives synchronize(), and the overlays would carry the
+        // stale rectangle into the recording that starts after the change.
+        overlay_adapter_.synchronize();
+    };
+
+    const auto watch_screen = [this, invalidate](QScreen* screen) {
+        if (screen == nullptr)
+            return;
+        QObject::connect(screen, &QScreen::geometryChanged, &overlay_adapter_,
+                         [invalidate](const QRect&) { invalidate(); });
+        QObject::connect(screen, &QScreen::availableGeometryChanged, &overlay_adapter_,
+                         [invalidate](const QRect&) { invalidate(); });
+        // Both DPI signals: a scale change moves the virtual-screen rectangle of
+        // every display to the right of the one that changed, not only its own.
+        QObject::connect(screen, &QScreen::logicalDotsPerInchChanged, &overlay_adapter_,
+                         [invalidate](qreal) { invalidate(); });
+        QObject::connect(screen, &QScreen::physicalDotsPerInchChanged, &overlay_adapter_,
+                         [invalidate](qreal) { invalidate(); });
+    };
+
+    for (QScreen* screen : QGuiApplication::screens())
+        watch_screen(screen);
+
+    QObject::connect(qGuiApp, &QGuiApplication::screenAdded, &overlay_adapter_,
+                     [watch_screen, invalidate](QScreen* screen) {
+                         watch_screen(screen);
+                         invalidate();
+                     });
+    QObject::connect(qGuiApp, &QGuiApplication::screenRemoved, &overlay_adapter_,
+                     [invalidate](QScreen*) { invalidate(); });
+    QObject::connect(qGuiApp, &QGuiApplication::primaryScreenChanged, &overlay_adapter_,
+                     [invalidate](QScreen*) { invalidate(); });
+}
+
+void QuickApplication::initializeBlockingSurfaces() {
+    surface_arbiter_.setSurfaces(&recovery_adapter_, &crash_report_adapter_);
+    // The arbiter decides WHEN the crash surface may come up; only this class can
+    // build what it shows.
+    QObject::connect(&surface_arbiter_, &BlockingSurfaceArbiter::crashSurfaceRequested, &crash_report_adapter_,
+                     [this]() { showCrashReportSurface(); });
+}
+
 void QuickApplication::initializeRecovery() {
     // The stored destination folder may be gone by the time a recovery runs (an
     // unplugged drive, a folder the user has since moved). The service falls
@@ -2157,7 +2212,7 @@ void QuickApplication::initializeRecovery() {
     event.secondary_action = notifications::NotificationAction::Discard;
     notifications_adapter_.manager().Enqueue(std::move(event));
 
-    recovery_adapter_.openSurface();
+    surface_arbiter_.requestRecovery();
 }
 
 void QuickApplication::initializeRecordingError() {
@@ -2460,20 +2515,13 @@ void QuickApplication::initializeCrashReport() {
         return;
     }
 
-    if (recovery_adapter_.surfaceOpen()) {
-        // Defer behind recovery rather than stacking two modal surfaces. Single
-        // shot: a later "Decide later" must not re-raise a crash prompt the user
-        // has already answered.
-        QObject::connect(
-            &recovery_adapter_, &RecoveryAdapter::surfaceOpenChanged, &crash_report_adapter_,
-            [this]() {
-                if (!recovery_adapter_.surfaceOpen())
-                    showCrashReportSurface();
-            },
-            Qt::SingleShotConnection);
-        return;
-    }
-    showCrashReportSurface();
+    // Raised now, or queued behind an open recovery surface. Both directions of
+    // that arbitration live in BlockingSurfaceArbiter: this one used to be a
+    // single-shot connection here while the reverse — the standing recovery
+    // notification's action, which stays clickable on the desktop toast while
+    // the crash prompt is up — had no check at all and produced two active
+    // modal loaders.
+    surface_arbiter_.requestCrash();
 }
 
 void QuickApplication::showCrashReportSurface() {
@@ -2554,8 +2602,11 @@ void QuickApplication::dispatchNotificationAction(notifications::NotificationAct
     case NotificationAction::OpenRecovery:
         // Raises the surface again after "Decide later". A no-op once every
         // candidate has been resolved — the adapter refuses to open on an empty
-        // set rather than showing an empty card.
-        recovery_adapter_.openSurface();
+        // set rather than showing an empty card. Routed through the arbiter
+        // because this action is reachable while the crash prompt is up: the
+        // desktop toast is its own always-on-top window and takes clicks that
+        // the modal scrim inside the shell never sees.
+        surface_arbiter_.requestRecovery();
         break;
     case NotificationAction::None:
     case NotificationAction::Discard:
@@ -2956,6 +3007,8 @@ bool QuickApplication::load(bool no_activate) {
         QObject::connect(root_window_, &QWindow::screenChanged, &notifications_adapter_,
                          [publish_anchor](QScreen*) { publish_anchor(); });
     }
+
+    initializeDisplayGeometryWatch();
 
     // After the window exists — the tray reports its visibility and acts on it.
     // Suppression is decided by the entry point, not by no_activate: --smoke-test

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AboutViewModelAdapter.h"
+#include "BlockingSurfaceArbiter.h"
 #include "CrashReportAdapter.h"
 #include "DeviceAdapter.h"
 #include "DiagnosticsAdapter.h"
@@ -206,6 +207,8 @@ class QuickApplication {
     // writes, raises the standing notification and puts the surface up. Without
     // this the manifest was written and never read — an interrupted recording
     // stayed on disk with nothing offering to save it.
+    void initializeDisplayGeometryWatch();
+    void initializeBlockingSurfaces();
     void initializeRecovery();
     // Routes the two actions the failure surface offers. The consent grant and
     // the scrubbed non-fatal report are SDK concerns, so they live here rather
@@ -310,6 +313,9 @@ class QuickApplication {
     RecoveryAdapter recovery_adapter_;
     RecordingErrorAdapter recording_error_adapter_;
     CrashReportAdapter crash_report_adapter_;
+    // After both surfaces it arbitrates: it connects to them in setSurfaces()
+    // and must be destroyed before they are.
+    BlockingSurfaceArbiter surface_arbiter_;
     RecordViewModel record_view_model_;
     RecordViewModelAdapter record_view_model_adapter_;
     // After record_view_model_: it holds a pointer into it and is constructed

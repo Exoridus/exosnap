@@ -39,7 +39,15 @@ Popup {
     padding: 0
     modal: false
     focus: true
-    closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+    // OutsideParent, not Outside: the parent IS the bell that toggles this
+    // popup. With CloseOnPressOutside the two fought over one click — the press
+    // landed outside the popup, so the overlay closed it and cleared `hubOpen`,
+    // and then the release reached the bell's TapHandler, whose toggleHub() saw
+    // a closed hub and opened it straight back up. The hub could not be closed
+    // by the control that opened it. Excluding the parent leaves that click to
+    // the bell alone, which is the only thing that ever needed to own it; a
+    // press anywhere else still closes the hub.
+    closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutsideParent
     visible: root.notifications.hubOpen
 
     onClosed: root.notifications.closeHub()

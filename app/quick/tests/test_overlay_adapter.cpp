@@ -264,5 +264,105 @@ TEST_F(OverlayAdapterTest, WindowTargetsYieldNoMonitorGeometry) {
     EXPECT_TRUE(adapter_.recordedMonitorGeometry().isEmpty());
 }
 
+// ---------------------------------------------------------------------------
+// Monitor geometry invalidation (QCR-414)
+// ---------------------------------------------------------------------------
+
+// The rectangle is cached per HMONITOR so a 4 Hz synchronize() does not query
+// Win32 on every tick. A resolution switch, a scale change or a rearranged
+// desktop all keep that handle and change the rectangle — which is why the
+// cache needs someone to tell it, and why these tests drive the query through a
+// seam rather than through a real display.
+class OverlayMonitorGeometryTest : public OverlayAdapterTest {
+  protected:
+    void SetUp() override {
+        OverlayAdapterTest::SetUp();
+
+        recorder_core::CaptureTarget monitor;
+        monitor.kind = recorder_core::CaptureTarget::Kind::Monitor;
+        monitor.native_id = 0xABCD;
+        model_.targets.push_back(monitor);
+        model_.selected_target_index = 0;
+        model_.SetState(UiRecordingState::Recording);
+
+        adapter_.setPresentationProviderForTesting([this](std::uintptr_t) {
+            ++queries_;
+            return presentation_;
+        });
+        presentation_ = MakePresentation(0, 0, 2560, 1440);
+    }
+
+    static ScreenPresentation MakePresentation(int x, int y, int width, int height) {
+        ScreenPresentation meta;
+        meta.available = true;
+        meta.width = width;
+        meta.height = height;
+        meta.origin_x = x;
+        meta.origin_y = y;
+        return meta;
+    }
+
+    ScreenPresentation presentation_;
+    int queries_ = 0;
+};
+
+TEST_F(OverlayMonitorGeometryTest, ResolvesTheRecordedMonitorRectangle) {
+    publish();
+    EXPECT_EQ(adapter_.recordedMonitorGeometry(), QRect(0, 0, 2560, 1440));
+}
+
+TEST_F(OverlayMonitorGeometryTest, RepeatedSynchronizeDoesNotRequery) {
+    publish();
+    const int after_first = queries_;
+
+    publish();
+    publish();
+    publish();
+
+    EXPECT_EQ(queries_, after_first) << "the same-monitor fast path is what keeps a 4 Hz tick cheap";
+}
+
+TEST_F(OverlayMonitorGeometryTest, SameMonitorAtANewResolutionIsStaleUntilInvalidated) {
+    publish();
+    ASSERT_EQ(adapter_.recordedMonitorGeometry(), QRect(0, 0, 2560, 1440));
+
+    // The display switched mode. Same handle, same target, different rectangle.
+    presentation_ = MakePresentation(0, 0, 1920, 1080);
+    publish();
+    EXPECT_EQ(adapter_.recordedMonitorGeometry(), QRect(0, 0, 2560, 1440))
+        << "nothing has reported the change yet, so the cache is entitled to its answer";
+
+    adapter_.invalidateMonitorGeometry();
+    publish();
+    EXPECT_EQ(adapter_.recordedMonitorGeometry(), QRect(0, 0, 1920, 1080));
+}
+
+// A display rearranged to the right of another keeps its size and moves its
+// origin, which is exactly as wrong for a frameless overlay as a size change.
+TEST_F(OverlayMonitorGeometryTest, InvalidationCatchesAMovedOrigin) {
+    publish();
+    ASSERT_EQ(adapter_.recordedMonitorGeometry().topLeft(), QPoint(0, 0));
+
+    presentation_ = MakePresentation(1920, 0, 2560, 1440);
+    adapter_.invalidateMonitorGeometry();
+    publish();
+
+    EXPECT_EQ(adapter_.recordedMonitorGeometry(), QRect(1920, 0, 2560, 1440));
+}
+
+TEST_F(OverlayMonitorGeometryTest, AnInvalidatedMonitorThatVanishedReportsNoRectangle) {
+    publish();
+    ASSERT_FALSE(adapter_.recordedMonitorGeometry().isEmpty());
+
+    // The display was unplugged: the handle is still what the target names, and
+    // the query no longer answers for it.
+    presentation_ = ScreenPresentation{};
+    adapter_.invalidateMonitorGeometry();
+    publish();
+
+    EXPECT_TRUE(adapter_.recordedMonitorGeometry().isEmpty())
+        << "an empty rect is what makes the overlays fall back to their own screen";
+}
+
 } // namespace
 } // namespace exosnap::quick

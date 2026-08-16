@@ -139,6 +139,8 @@ qt_add_qml_module(exosnap
     SOURCES
         AboutViewModelAdapter.cpp
         AboutViewModelAdapter.h
+        BlockingSurfaceArbiter.cpp
+        BlockingSurfaceArbiter.h
         CaptureExclusion.cpp
         CaptureExclusion.h
         CrashReportAdapter.cpp
@@ -635,7 +637,24 @@ qt_add_qml_module(record_controls_qml_tests
         # the test module has to carry it as well — without it qmllint resolves
         # nothing inside either component and reports the whole icon block.
         ExoGlyph.qml
+        # The log viewer, for its selection contract: a selection identifies
+        # entries by sequence, so it has to survive an append, front eviction
+        # and a filter change without ever sliding onto another entry. Driven
+        # here against a plain ListModel — the real one is a C++ proxy the test
+        # module cannot construct, and none of what is asserted is about it.
+        ExoLogView.qml
         ExoSegmentedControl.qml
+        # Elision needs a real constrained width, which is a layout fact and so
+        # is asserted rather than judged on a screenshot.
+        ExoStatusPill.qml
+        # The switch knob is moved by an XAnimator inside a Behavior on a bound
+        # `x`. Whether the binding survives that is exactly the kind of question
+        # a comment cannot answer.
+        ExoSwitch.qml
+        # The shared text input owns its draft while it has the focus. That
+        # contract is the whole fix, and it is one property write away from
+        # being undone.
+        ExoTextField.qml
         ExoTheme.qml
         PreviewMetricsOverlay.qml
         RecordActionButton.qml
@@ -1089,6 +1108,42 @@ target_include_directories(recovery_qml_adapter_tests
 )
 
 target_compile_definitions(recovery_qml_adapter_tests PRIVATE NOMINMAX)
+
+# Which of the two startup modal surfaces may be up. Both real adapters are
+# compiled in rather than doubled: "is recovery still open" and "is the crash
+# prompt still active" are their own state machines, and a double would let the
+# arbitration agree with a model of them instead of with them.
+exosnap_add_gtest(
+    NAME blocking_surface_arbiter_tests
+    TEST_PREFIX quick_blocking_surface.
+    SOURCES
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_blocking_surface_arbiter.cpp
+        BlockingSurfaceArbiter.cpp
+        BlockingSurfaceArbiter.h
+        CrashReportAdapter.cpp
+        CrashReportAdapter.h
+        RecoveryAdapter.cpp
+        RecoveryAdapter.h
+        ${PROJECT_SOURCE_DIR}/app/services/RecoveryService.cpp
+        ${PROJECT_SOURCE_DIR}/app/services/AtomicFileOps.cpp
+        ${PROJECT_SOURCE_DIR}/app/settings/RecoveryManifestStore.cpp
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/AppLog.cpp
+    LIBRARIES
+        Qt6::Core
+        Qt6::Qml
+        Qt6::Test
+        exosnap_capability
+        recorder_core
+        FFmpeg::mux
+)
+
+target_include_directories(blocking_surface_arbiter_tests
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${PROJECT_SOURCE_DIR}/app
+)
+
+target_compile_definitions(blocking_surface_arbiter_tests PRIVATE NOMINMAX)
 
 # The overlay gating and the content policy. RecordViewModel is pulled in whole
 # because the adapter reads the real view model rather than a test double --
