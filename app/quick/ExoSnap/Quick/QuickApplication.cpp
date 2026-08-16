@@ -22,6 +22,7 @@
 #include "models/VideoSettingsModel.h"
 #include "ui/CodecLabels.h"
 #include "ui/theme/ExoSnapMetrics.h"
+#include "visual_tests/RecordVisualStateNames.h"
 
 #include "ExoSnapBuildInfo.h"
 
@@ -3611,10 +3612,12 @@ bool QuickApplication::applyRecordVisualScenario(const QString& scenario) {
     // Re-seeding is idempotent: a scenario that raises no notice must not
     // inherit one from the scenario applied before it.
     record_view_model_adapter_.setNoticeText({});
+    clearAudioSourceDegradedWarning();
 
-    if (normalized == QStringLiteral("ready")) {
+    if (normalized == QLatin1String(visual::record_state::kReady)) {
         record_view_model_.SetState(UiRecordingState::Ready);
-    } else if (normalized == QStringLiteral("recording")) {
+    } else if (normalized == QLatin1String(visual::record_state::kRecording) ||
+               normalized == QLatin1String(visual::record_state::kRecordingAudioDegraded)) {
         record_view_model_.SetState(UiRecordingState::Recording);
         record_view_model_.live_stats_available = true;
         record_view_model_.elapsed_text = L"12:34";
@@ -3625,7 +3628,24 @@ bool QuickApplication::applyRecordVisualScenario(const QString& scenario) {
         record_view_model_.dropped_frames = 0;
         record_view_model_.av_drift_available = true;
         record_view_model_.av_drift_ms = 1.0;
-    } else if (normalized == QStringLiteral("countdown")) {
+        if (normalized == QLatin1String(visual::record_state::kRecordingAudioDegraded)) {
+            // The scenario the visual catalogue has always named
+            // (record-recording-audio-degraded) and that nothing in this
+            // frontend rendered: the Widgets harness read a struct field, the
+            // Quick harness switches on the scenario string, and the field was
+            // left without a consumer when the Widgets shell was removed. A
+            // scenario whose name promises a state it does not produce is worse
+            // than no scenario -- every capture taken under it was evidence of
+            // an ordinary recording.
+            //
+            // Raised through the production Enqueue() with the production
+            // resolver, exactly as observeAudioSourceDegradation() does when a
+            // real source loses its device, so what is photographed is the real
+            // standing notification and not a harness lookalike.
+            audio_degraded_toast_sequence_ =
+                notifications_adapter_.manager().Enqueue(notifications::MakeAudioSourceDegradedEvent(1));
+        }
+    } else if (normalized == QLatin1String(visual::record_state::kCountdown)) {
         // A held countdown: the state and the remaining seconds are set, but the
         // tick timer is not started, so the frame is deterministic. This is the
         // only Record state the deterministic suite could not photograph — the
@@ -3637,13 +3657,13 @@ bool QuickApplication::applyRecordVisualScenario(const QString& scenario) {
         countdown_progress_ = 1.0;
         live_config_.countdown_seconds = 3;
         record_view_model_.SetState(UiRecordingState::Countdown);
-    } else if (normalized == QStringLiteral("paused")) {
+    } else if (normalized == QLatin1String(visual::record_state::kPaused)) {
         record_view_model_.SetState(UiRecordingState::Paused);
         record_view_model_.live_stats_available = true;
         record_view_model_.elapsed_text = L"12:34";
         record_view_model_.elapsed_seconds = 754.0;
         record_view_model_.output_size_text = L"440.6 MB";
-    } else if (normalized == QStringLiteral("completed")) {
+    } else if (normalized == QLatin1String(visual::record_state::kCompleted)) {
         // The post-recording state, which had no deterministic scenario at all —
         // so the one arrangement in which the transport's recommended action is
         // Edit rather than Record, and the one in which the page carries a
@@ -3671,7 +3691,7 @@ bool QuickApplication::applyRecordVisualScenario(const QString& scenario) {
         record_view_model_.SetState(UiRecordingState::Completed);
         // Deliberately no page notice: a successful stop no longer raises one,
         // and the scenario exists to photograph what the product actually does.
-    } else if (normalized == QStringLiteral("blocked")) {
+    } else if (normalized == QLatin1String(visual::record_state::kBlocked)) {
         // A blocker is a condition Diagnostics reports about the machine, not a
         // result of anything the user just did: no page notice, and Record is
         // simply unavailable. That is what makes it visually distinct from
@@ -3679,7 +3699,7 @@ bool QuickApplication::applyRecordVisualScenario(const QString& scenario) {
         record_view_model_.SetState(UiRecordingState::Blocked);
         record_view_model_.capability_status_text =
             L"The selected format is unavailable on this GPU. Choose a supported profile in Settings.";
-    } else if (normalized == QStringLiteral("failed")) {
+    } else if (normalized == QLatin1String(visual::record_state::kFailed)) {
         record_view_model_.SetState(UiRecordingState::Failed);
         record_view_model_.capability_status_text = L"Recording stopped because the capture source became unavailable.";
         record_view_model_.result_user_message = L"The capture source is no longer available.";
@@ -3688,7 +3708,7 @@ bool QuickApplication::applyRecordVisualScenario(const QString& scenario) {
         // is precisely the evidence a failure state needs to be judged on.
         record_view_model_adapter_.setNoticeText(QStringLiteral("The capture source is no longer available."),
                                                  QStringLiteral("error"));
-    } else if (normalized == QStringLiteral("unavailable")) {
+    } else if (normalized == QLatin1String(visual::record_state::kUnavailable)) {
         record_view_model_.SetState(UiRecordingState::Ready);
         record_view_model_.selected_target_index = -1;
         microphone_available_ = false;
