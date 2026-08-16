@@ -27,6 +27,18 @@ enum class LogSeverityFilter {
 
 [[nodiscard]] QString LogEntriesToText(const QVector<LogEntry>& entries);
 
+// The entries of `entries` whose sequence falls inside the inclusive range,
+// order preserved.
+//
+// A log selection is expressed in sequence numbers rather than row indices: the
+// history evicts from the front and the severity/search filter re-maps every
+// visible row, so an index captured when the user clicked names a different
+// entry moments later. Sequences are assigned once and never reused. Entries in
+// the range that have since been evicted or filtered away are simply absent
+// from the result — the selection shrinks, it never slides onto other entries.
+[[nodiscard]] QVector<LogEntry> EntriesInSequenceRange(const QVector<LogEntry>& entries, quint64 first_sequence,
+                                                       quint64 last_sequence);
+
 // "Showing 12 of 480 entries · All · no search[ · feedback]".
 [[nodiscard]] QString LogStatusText(int visible_count, int total_count, LogSeverityFilter filter,
                                     const QString& search_query, const QString& feedback = {});

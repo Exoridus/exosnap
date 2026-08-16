@@ -39,8 +39,16 @@ class LogsAdapter : public QObject {
     Q_PROPERTY(bool canCopy READ canCopy NOTIFY countsChanged FINAL)
     Q_PROPERTY(bool canExport READ canExport NOTIFY countsChanged FINAL)
 
-    Q_PROPERTY(QString logFolderPath READ logFolderPath NOTIFY logFolderChanged FINAL)
-    Q_PROPERTY(QString logFilePath READ logFilePath NOTIFY logFolderChanged FINAL)
+    // CONSTANT, and truthfully so: AppLog::init() resolves the session log file
+    // once per process and every later write reopens the SAME path — rotation
+    // renames the backups (exosnap.log.1/.2) around it and leaves exosnap.log
+    // where it is. Nothing in the product repoints it; the one seam that can
+    // (setLogFilePathForTesting) exists for AppLog's own rotation tests and is
+    // not reachable from the running application. These properties carried a
+    // NOTIFY signal that was never emitted anywhere, which claims a dynamism the
+    // C++ side does not have — a binding on it would look live and never update.
+    Q_PROPERTY(QString logFolderPath READ logFolderPath CONSTANT FINAL)
+    Q_PROPERTY(QString logFilePath READ logFilePath CONSTANT FINAL)
     Q_PROPERTY(QVariantList startupTrace READ startupTrace NOTIFY startupTraceChanged FINAL)
     Q_PROPERTY(QString defaultExportFileName READ defaultExportFileName CONSTANT FINAL)
 
@@ -67,10 +75,15 @@ class LogsAdapter : public QObject {
     [[nodiscard]] QString defaultExportFileName() const;
 
     Q_INVOKABLE void copyVisible();
-    // Copies an inclusive range of VISIBLE rows. Row selection lives in the view,
-    // but the rendered text must not: it comes from the same formatter Copy and
-    // Export use, so a copied selection is byte-identical to an exported line.
-    Q_INVOKABLE void copyRange(int first, int last);
+    // Copies every visible entry whose sequence falls in the inclusive range.
+    // Selection lives in the view, but it is expressed in the entries' own
+    // sequence numbers rather than in row indices — the history evicts from the
+    // front and the filter re-maps every row, so an index captured at click time
+    // names a different entry moments later. Entries in the range that the
+    // filter hides, or that have since been evicted, are simply not there; the
+    // rendered text still comes from the same formatter Copy and Export use, so
+    // a copied selection is byte-identical to an exported line.
+    Q_INVOKABLE void copySequenceRange(qint64 first_sequence, qint64 last_sequence);
     Q_INVOKABLE void exportToUrl(const QUrl& destination);
     Q_INVOKABLE void openLogFolder();
     Q_INVOKABLE void clear();
@@ -89,7 +102,6 @@ class LogsAdapter : public QObject {
     void autoScrollChanged();
     void countsChanged();
     void statusChanged();
-    void logFolderChanged();
     void startupTraceChanged();
     void createSupportBundleRequested(const QUrl& destination);
 

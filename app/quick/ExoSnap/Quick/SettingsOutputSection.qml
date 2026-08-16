@@ -23,7 +23,7 @@ ExoCard {
             Layout.fillWidth: true
 
             ExoTextField {
-                text: root.settings.outputFolder
+                value: root.settings.outputFolder
                 enabled: !root.settings.controlsLocked
                 Layout.fillWidth: true
                 Accessible.name: qsTr("Destination folder")
@@ -52,7 +52,7 @@ ExoCard {
         Layout.fillWidth: true
 
         ExoTextField {
-            text: root.settings.namingPattern
+            value: root.settings.namingPattern
             enabled: !root.settings.controlsLocked
             Layout.fillWidth: true
             Accessible.name: qsTr("Filename pattern")

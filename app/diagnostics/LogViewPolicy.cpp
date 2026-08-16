@@ -4,6 +4,8 @@
 #include <QFileInfo>
 #include <QStringList>
 
+#include <algorithm>
+
 namespace exosnap::diagnostics {
 
 QString LogSeverityFilterName(LogSeverityFilter filter) {
@@ -49,6 +51,19 @@ QString LogEntriesToText(const QVector<LogEntry>& entries) {
     for (const LogEntry& entry : entries)
         lines.push_back(AppLog::formatEntry(entry));
     return lines.join(QStringLiteral("\n"));
+}
+
+QVector<LogEntry> EntriesInSequenceRange(const QVector<LogEntry>& entries, quint64 first_sequence,
+                                         quint64 last_sequence) {
+    const quint64 low = std::min(first_sequence, last_sequence);
+    const quint64 high = std::max(first_sequence, last_sequence);
+
+    QVector<LogEntry> selected;
+    for (const LogEntry& entry : entries) {
+        if (entry.sequence >= low && entry.sequence <= high)
+            selected.push_back(entry);
+    }
+    return selected;
 }
 
 QString LogStatusText(int visible_count, int total_count, LogSeverityFilter filter, const QString& search_query,

@@ -404,3 +404,153 @@ TEST(SupportBundleServiceTest, RejectsAWriteWithNoLogDirectory) {
     ASSERT_EQ(results.size(), 1U);
     EXPECT_FALSE(results[0]);
 }
+
+// ---------------------------------------------------------------------------
+// Issue model update contract (QCR-405)
+// ---------------------------------------------------------------------------
+//
+// While a recording runs, applyLiveDiagnostics() re-runs the recommendation
+// engine at 2 Hz and hands the resulting cards to this model. A reset tells QML
+// "different rows now", so QML destroys every delegate and builds new ones —
+// twice a second, taking the expanded Evidence disclosure with it. The cards
+// are almost always identical, and when they are not they are usually the same
+// issues carrying new measurements. Only a change to the issue SET is
+// structural.
+
+namespace {
+
+diagnostics::IssueCard MakeCard(const char* id, const char* title, const char* measured = "") {
+    diagnostics::IssueCard card;
+    card.id = id;
+    card.tone = diagnostics::IssueTone::Notice;
+    card.title = title;
+    card.summary = "summary";
+    card.measured = measured;
+    return card;
+}
+
+// Counts both halves of a reset plus every dataChanged, so a test can say which
+// of the three paths the model took.
+class ModelChangeCounter {
+  public:
+    explicit ModelChangeCounter(QAbstractItemModel* model) {
+        QObject::connect(model, &QAbstractItemModel::modelAboutToBeReset, model, [this]() { ++resets_; });
+        QObject::connect(model, &QAbstractItemModel::dataChanged, model,
+                         [this](const QModelIndex& first, const QModelIndex&, const QList<int>&) {
+                             ++data_changes_;
+                             changed_rows_.push_back(first.row());
+                         });
+    }
+
+    [[nodiscard]] int resets() const noexcept {
+        return resets_;
+    }
+    [[nodiscard]] int dataChanges() const noexcept {
+        return data_changes_;
+    }
+    [[nodiscard]] const std::vector<int>& changedRows() const noexcept {
+        return changed_rows_;
+    }
+
+  private:
+    int resets_ = 0;
+    int data_changes_ = 0;
+    std::vector<int> changed_rows_;
+};
+
+} // namespace
+
+TEST(DiagnosticIssueModelTest, IdenticalCardsChangeNothingAtAll) {
+    EnsureApplication();
+    DiagnosticIssueModel model;
+    model.setCards({MakeCard("ENC-01", "Encoder falling behind", "62 fps")});
+
+    ModelChangeCounter counter(&model);
+    model.setCards({MakeCard("ENC-01", "Encoder falling behind", "62 fps")});
+    model.setCards({MakeCard("ENC-01", "Encoder falling behind", "62 fps")});
+
+    EXPECT_EQ(counter.resets(), 0) << "the 2 Hz live refresh delivers this same list over and over";
+    EXPECT_EQ(counter.dataChanges(), 0);
+    EXPECT_EQ(model.rowCount(), 1);
+}
+
+TEST(DiagnosticIssueModelTest, SameIssuesWithNewValuesAreARowUpdate) {
+    EnsureApplication();
+    DiagnosticIssueModel model;
+    model.setCards(
+        {MakeCard("ENC-01", "Encoder falling behind", "62 fps"), MakeCard("DSK-02", "Disk is slow", "48 MB/s")});
+
+    ModelChangeCounter counter(&model);
+    model.setCards(
+        {MakeCard("ENC-01", "Encoder falling behind", "62 fps"), MakeCard("DSK-02", "Disk is slow", "31 MB/s")});
+
+    EXPECT_EQ(counter.resets(), 0) << "a delegate's expanded Evidence must survive a measurement update";
+    ASSERT_EQ(counter.dataChanges(), 1);
+    ASSERT_EQ(counter.changedRows().size(), 1U);
+    EXPECT_EQ(counter.changedRows()[0], 1) << "only the row whose value moved";
+    EXPECT_EQ(model.data(model.index(1), DiagnosticIssueModel::MeasuredRole).toString(), QStringLiteral("31 MB/s"));
+}
+
+TEST(DiagnosticIssueModelTest, AnAddedIssueIsStructural) {
+    EnsureApplication();
+    DiagnosticIssueModel model;
+    model.setCards({MakeCard("ENC-01", "Encoder falling behind")});
+
+    ModelChangeCounter counter(&model);
+    model.setCards({MakeCard("ENC-01", "Encoder falling behind"), MakeCard("DSK-02", "Disk is slow")});
+
+    EXPECT_EQ(counter.resets(), 1);
+    EXPECT_EQ(model.rowCount(), 2);
+}
+
+TEST(DiagnosticIssueModelTest, AResolvedIssueIsStructural) {
+    EnsureApplication();
+    DiagnosticIssueModel model;
+    model.setCards({MakeCard("ENC-01", "Encoder falling behind"), MakeCard("DSK-02", "Disk is slow")});
+
+    ModelChangeCounter counter(&model);
+    model.setCards({MakeCard("ENC-01", "Encoder falling behind")});
+
+    EXPECT_EQ(counter.resets(), 1);
+    EXPECT_EQ(model.rowCount(), 1);
+}
+
+// Worst-first ordering can genuinely swap two cards. Row 0 becoming a different
+// issue is not an update of row 0.
+TEST(DiagnosticIssueModelTest, AReorderedIssueSetIsStructural) {
+    EnsureApplication();
+    DiagnosticIssueModel model;
+    model.setCards({MakeCard("ENC-01", "Encoder falling behind"), MakeCard("DSK-02", "Disk is slow")});
+
+    ModelChangeCounter counter(&model);
+    model.setCards({MakeCard("DSK-02", "Disk is slow"), MakeCard("ENC-01", "Encoder falling behind")});
+
+    EXPECT_EQ(counter.resets(), 1);
+    EXPECT_EQ(model.data(model.index(0), DiagnosticIssueModel::IssueIdRole).toString(), QStringLiteral("DSK-02"));
+}
+
+// Synthesised cards (profile invalidity, hotkey conflicts) carry no id, so the
+// title is what tells two of them apart.
+TEST(DiagnosticIssueModelTest, TwoIdlessCardsAreToldApartByTitle) {
+    EnsureApplication();
+    DiagnosticIssueModel model;
+    model.setCards({MakeCard("", "The saved preset is no longer valid")});
+
+    ModelChangeCounter counter(&model);
+    model.setCards({MakeCard("", "Two hotkeys are bound to the same combination")});
+
+    EXPECT_EQ(counter.resets(), 1);
+    EXPECT_EQ(counter.dataChanges(), 0);
+}
+
+TEST(DiagnosticIssueModelTest, ClearingEverySurfacedIssueIsStructural) {
+    EnsureApplication();
+    DiagnosticIssueModel model;
+    model.setCards({MakeCard("ENC-01", "Encoder falling behind")});
+
+    ModelChangeCounter counter(&model);
+    model.setCards({});
+
+    EXPECT_EQ(counter.resets(), 1);
+    EXPECT_EQ(model.rowCount(), 0);
+}

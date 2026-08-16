@@ -151,17 +151,24 @@ void LogsAdapter::copyVisible() {
     updateStatus(QStringLiteral("Copied %1 visible entries.").arg(proxy_model_.rowCount()));
 }
 
-void LogsAdapter::copyRange(int first, int last) {
-    const QVector<LogEntry> visible = proxy_model_.visibleEntries();
-    if (visible.isEmpty())
+void LogsAdapter::copySequenceRange(qint64 first_sequence, qint64 last_sequence) {
+    if (first_sequence < 0 || last_sequence < 0)
         return;
-    const int lo = std::clamp(std::min(first, last), 0, static_cast<int>(visible.size()) - 1);
-    const int hi = std::clamp(std::max(first, last), 0, static_cast<int>(visible.size()) - 1);
-    const QString text = diagnostics::LogEntriesToText(visible.mid(lo, hi - lo + 1));
+    const QVector<LogEntry> selected = diagnostics::EntriesInSequenceRange(
+        proxy_model_.visibleEntries(), static_cast<quint64>(first_sequence), static_cast<quint64>(last_sequence));
+    if (selected.isEmpty()) {
+        // Everything the selection named has been filtered away or evicted.
+        // Reported rather than silently doing nothing, because the user pressed
+        // Ctrl+C and the clipboard still holds whatever it held before.
+        updateStatus(QStringLiteral("The selected entries are no longer in the log."));
+        return;
+    }
+
+    const QString text = diagnostics::LogEntriesToText(selected);
     if (text.isEmpty())
         return;
     QGuiApplication::clipboard()->setText(text);
-    updateStatus(QStringLiteral("Copied %1 selected entries.").arg(hi - lo + 1));
+    updateStatus(QStringLiteral("Copied %1 selected entries.").arg(selected.size()));
 }
 
 void LogsAdapter::exportToUrl(const QUrl& destination) {

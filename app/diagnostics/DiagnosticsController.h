@@ -92,6 +92,12 @@ struct IssueCard {
     FixSafetyKind fix_safety = FixSafetyKind::Auto;
 
     [[nodiscard]] bool has_evidence() const noexcept;
+
+    // Value equality over every field, so a consumer can tell an issue that
+    // genuinely changed from the same issue delivered again. The live path
+    // rebuilds this list twice a second while recording and almost always
+    // rebuilds it identical.
+    friend bool operator==(const IssueCard&, const IssueCard&) = default;
 };
 
 struct TipEntry {

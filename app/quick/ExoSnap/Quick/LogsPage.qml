@@ -162,8 +162,8 @@ Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
             Layout.minimumHeight: 180
-            onCopyRequested: function (first, last) {
-                root.logs.copyRange(first, last);
+            onCopyRequested: function (firstSequence, lastSequence) {
+                root.logs.copySequenceRange(firstSequence, lastSequence);
             }
             onCopyAllRequested: root.logs.copyVisible()
         }
