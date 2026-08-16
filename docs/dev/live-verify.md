@@ -134,7 +134,13 @@ pwsh scripts/live-verify-client.ps1 query record -RunId <run-id>
 pwsh scripts/live-verify-client.ps1 command record.pause -RunId <run-id>
 pwsh scripts/live-verify-client.ps1 command window.moveToScreen -RunId <run-id> -Params '{"screen":"27GL850"}'
 pwsh scripts/live-verify-client.ps1 wait record.stateChanged -Where stateText=Paused -TimeoutSeconds 10 -RunId <run-id>
+pwsh scripts/live-verify-client.ps1 state       -RunId <run-id>
+pwsh scripts/live-verify-client.ps1 describe    -RunId <run-id>
+pwsh scripts/live-verify-client.ps1 query record -RunId <run-id> -Protocol 1
 ```
+
+`state` and `describe` are protocol 2; `-Protocol 1` speaks the older envelope,
+which is how the backward-compatible surface is exercised by hand.
 
 `query <domain>` is sugar for that domain's snapshot command (`system`, `app`,
 `window`, `preview`, `record`, `result`, `overlay`, `editor`, `diagnostics`).
@@ -156,6 +162,40 @@ There are **no hidden retries**. A silent reconnect would turn "the application
 restarted under us" — the single most important thing an updater check has to
 notice — into a green result.
 
+### Protocol versions
+
+The envelope is versioned by a single integer, and this build answers **1 and
+2**. A client picks one at the handshake and keeps it for the whole connection;
+switching mid-connection is fatal, because half a transcript in each dialect is
+worse evidence than either one alone.
+
+**Protocol 1** is the surface described below down to `diagnostics.snapshot` —
+19 commands, four events, `{protocol, id, ok, result}` / `{protocol, id, ok,
+error{code,message}}`. It is answered exactly as it always was. It is kept
+because its contract is written down and exercised, not because compatibility is
+a goal of its own.
+
+**Protocol 2** adds four fields and nothing else to the shape:
+
+| Field | On | Meaning |
+|---|---|---|
+| `stateRevision` | every response and event | Monotonic. Advances when the state `ui.getState` publishes actually differs — not on a timer tick, a meter sample or a preview frame. |
+| `settled` | responses to mutating commands | The command's observable postcondition already holds. Absent on queries: a client must not be able to read "settled" off a snapshot and conclude something completed. |
+| `error.requires` / `error.actual` | refusals | The precondition and what was observed, with the same keys on both sides. A runner answers "why was this refused" without parsing prose. |
+| `state` | responses, when `includeState: true` was sent | The whole `ui.getState` payload in the same round trip. Off by default so an ordinary response stays small. |
+
+Three error codes are protocol 2 only — `invalid_state`, `blocked` and
+`operation_failed`. They split what protocol 1 calls `command_failed`, and a
+protocol-1 client is still told `command_failed`, so its contract is unchanged
+while the refusal itself reaches it.
+
+`invalid_state` vs `blocked` is the distinction a runner needs: `invalid_state`
+means the state is the wrong one (`edit.seek` with no session, `record.pause`
+while Ready) and is usually a test that drove the app somewhere unintended.
+`blocked` means the state would be right and a product rule refuses anyway
+(`record.start` under an open recovery surface, or with a diagnostics blocker) —
+that is a product behaviour to record, not a defect in the check.
+
 ### Commands
 
 | Command | Acceptance purpose |
@@ -175,15 +215,61 @@ notice — into a green result.
 | `editor.snapshot` | Edit-surface state (open, clip, trim, position, export running). Read-only — the Edit → Export path is already covered deterministically by `--auto-edit`. |
 | `diagnostics.snapshot` | Verdict, blocker/notice counts, elevation — recording start is blocked by diagnostic blockers, so a check needs to know. |
 
+Protocol 2 adds the following. Every one of them drives the seam the product's
+own control drives; none of them is a second implementation of anything.
+
+| Command | Acceptance purpose |
+|---|---|
+| `ipc.describe` | The static half of capability discovery: every command with its parameters, whether it is idempotent, whether it settles synchronously, and the full error-code list. Not a JSON Schema — the parameter surfaces are zero to three flat fields and a generator would be more code than the validation it describes. |
+| `ui.getState` | The product state, in product vocabulary: named page, recording state, `editSession` vs `editVisible`, `blockingSurface`, source picker, notification hub, edit playback, selected source, and `availableActions`. No QML ids, no object pointers, no pixel coordinates. |
+| `ui.navigate` | Navigation through the one edge QCR-001 established (`ShellAdapter::navigateToPageRequested` → `AppShell.navigateTo`), so the tab, `Ctrl+1..5`, a notification action and a check all answer to the same guard. Synchronous: the answer carries the page it actually reached. Idempotent. |
+| `ui.reveal` | Brings a named product target into view: `settings/appearance`, `diagnostics/hardwareCapabilities`, … The target set is closed and named in code; an unknown name is `invalid_params`, never a quiet no-op. |
+| `ui.scrollHome` / `ui.scrollEnd` | The two ends of a scrollable surface (`settings`, `diagnostics`, `logs`). Both report whether the surface really landed there. |
+| `edit.open` | The only `edit.*` command that may run with no session — the same `openEditorForCurrentRecording()` gate `--auto-edit` uses. |
+| `edit.playPause` / `seek` / `setTrimIn` / `setTrimOut` / `timelineHome` / `timelineEnd` / `close` | The edit surface, through `EditSessionAdapter` / `EditPlayerAdapter`. Clamping, trim ordering and keyframe snapping stay in the adapter. All refuse with `invalid_state` when no session is open; none opens one implicitly. |
+| `sourcePicker.open` / `close` | The real picker surface. `record.selectTarget` bypasses it, which is why the picker had never been live-verified at all. Idempotent. |
+| `notificationHub.open` / `close`, `notification.clearAll` | The hub, through `NotificationsAdapter`. Idempotent. |
+
+Deliberately **not** exposed: `notification.triggerAction` (it reaches
+navigation, file opening and `QDesktopServices::openUrl` — effects outside the
+application) and every recovery / crash / recording-error action (destructive:
+a discarded recovery offer does not come back without a restart). Those three
+surfaces are **observable** through `ui.getState.blockingSurface` and seeded for
+capture through `--overlay-visual-state`, which keeps the channel and the harness
+separated exactly as ADR 0066 draws the line.
+
 ### Events
 
-`app.ready`, `record.stateChanged`, `record.resultReady`, `window.screenChanged`.
+`app.ready`, `record.stateChanged`, `record.resultReady`, `window.screenChanged`,
+and — protocol 2 only — `ui.stateChanged`.
 
-All four reuse signals the application already emits; none introduces a second
-idea of the state it reports. **There are no synchronization sleeps** anywhere in
-the client or the runner: a command is followed by a wait on an authoritative
-event or state, and a timeout is a failure boundary, not a synchronization
-primitive.
+All of them reuse signals the application already emits; none introduces a second
+idea of the state it reports. `ui.stateChanged` is the general settle signal: it
+fires when the observable product state differs, which is what finally gives the
+three blocking surfaces a transition a check can wait on.
+
+**There are no synchronization sleeps** anywhere in the client or the runner. In
+order of preference:
+
+1. the response itself, when the command declares `settled: true` — navigation,
+   reveal, the edit intents and the popups all do, so there is nothing to wait
+   for;
+2. `Wait-LiveVerifyEvent` / `Wait-LiveVerifyRevision`, which block on a real
+   signal;
+3. `Wait-LiveVerifyState`, the only polling helper, for snapshot fields that are
+   not part of the automation state.
+
+A timeout is a failure boundary, not a synchronization primitive.
+
+The `Start-Sleep` calls that remain in `LiveVerifyChecks.ps1` are **not**
+synchronization and none of them became removable with protocol 2:
+
+| Where | Why it stays |
+|---|---|
+| `LV-PREV-001`, `LV-WIN-002`, `LV-WIN-003` | Measurement windows. The question is how many render passes happen in a fixed interval; the interval IS the measurement. |
+| `LV-REC-001` | Recording duration. A recording needs to last a while to have content; the state transitions around it are waited on, never slept through. |
+| `LV-OVL-001` | The overlay windows and the post-stop toast are realized by the compositor on their own schedule and have no product-state postcondition — protocol 2 did not give them one, and inventing one would be a second idea of when a window is "up". |
+| `LV-APP-001`, `LV-EDIT-001`, `live-verify.ps1` | Bounded polling loops over an external process (a pipe that must never appear, a harness that must write a file). Nothing on the control channel can answer for a process that is not talking to it. |
 
 ---
 

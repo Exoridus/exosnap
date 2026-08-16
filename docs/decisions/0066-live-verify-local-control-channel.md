@@ -91,6 +91,24 @@ evidence a human cannot read is evidence nobody audits.
 {"protocol":1,"event":"record.stateChanged","data":{"stateText":"Paused"}}
 ```
 
+**Protocol 2 (2026-08-17).** The envelope gained four fields —
+`stateRevision`, `settled`, `error.requires`/`error.actual`, and an opt-in
+`state` — and three error codes, `invalid_state`, `blocked` and
+`operation_failed`, split out of the overloaded `command_failed`. Protocol 1 is
+still answered, unchanged, on the same endpoint: a client picks its version at
+the handshake and keeps it, and the three new codes fold back onto
+`command_failed` for a v1 client. JSON-RPC 2.0 was considered and rejected —
+it would rename one field, replace readable string error codes with reserved
+integers (against this ADR's own evidence argument), and solve none of
+preconditions, capability discovery, revisions or postconditions.
+
+The reason for the version bump was a defect, not a feature: `record.start`
+answered `ok:true` while the product path refused the start under a blocking
+surface and only logged it. The channel now presses the same intent the button
+presses and reports what that intent decided, and every stateful command derives
+its precondition from the one table that also fills `availableActions` — so the
+channel cannot advertise an action it would then refuse.
+
 The first command on a connection must be `system.hello`, carrying the run id the
 process was launched with. It answers with the identity the runner needs to
 refuse a process it did not mean to talk to: product version, full commit SHA,
@@ -121,6 +139,27 @@ gate, precisely because programmatic placement is not the same thing.
 
 Unknown commands, malformed JSON, oversized frames and wrong parameters all fail
 closed with a stable error code, and none of them can take the application down.
+
+**Protocol 2 widens the surface, not the reach.** Navigation, scrolling,
+revealing a named section, the edit session's own seek/trim/close, and the two
+popups are view and in-memory session operations: no persistence, no file system,
+no network, and nothing a user cannot already do with a click. They are weaker
+than the `record.*` intents this ADR already accepted, which start and stop real
+recordings that write real files. The three conditions on that:
+
+1. the allowlist stays the boundary — new commands are member functions of
+   `LiveVerifySource`, and `availableActions` introduces no runtime method
+   resolution;
+2. `ui.reveal` targets are a closed set named in code. A client-supplied string
+   never reaches `findChild()`; the surface name is mapped to a constant object
+   name first;
+3. deliberately excluded: `notification.triggerAction` (it reaches navigation,
+   file opening and `QDesktopServices::openUrl` — effects outside the
+   application) and every recovery / crash / recording-error action (destructive:
+   a discarded recovery offer does not come back without a restart). Those
+   surfaces are observable through `ui.getState.blockingSurface` and seeded for
+   capture through `--overlay-visual-state`, which keeps the channel and the
+   harness on the two sides of the line this ADR already draws.
 
 ### The control channel does not replace UI Automation
 
@@ -165,6 +204,12 @@ already emits.
 - Release acceptance becomes resumable and auditable. The list of genuinely human
   gates shrinks to subjective desktop composition, an interactive monitor drag,
   physical device manipulation and Secure Desktop prompts.
+- Protocol 2 makes the central Qt Quick product contracts assertable without a
+  timed wait: navigation, reveal, the edit session and the two popups settle
+  inside their own response, and everything asynchronous is waited on through an
+  event or a revision. The sleeps that remain in the runner are measurement
+  windows, recording duration and polling over external processes — none of them
+  a stand-in for a postcondition.
 - A local Release dry run validates the infrastructure. It does **not** prove
   final release acceptance: after any product code change, official acceptance
   needs a newly published, immutable RC, and a previous RC's PASS does not apply

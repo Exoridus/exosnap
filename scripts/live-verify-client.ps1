@@ -2,7 +2,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory, Position = 0)]
-    [ValidateSet('hello', 'query', 'command', 'wait', 'capabilities')]
+    [ValidateSet('hello', 'query', 'command', 'wait', 'capabilities', 'describe', 'state')]
     [string] $Verb,
 
     [Parameter(Position = 1)]
@@ -17,7 +17,12 @@ param(
     # key=value pairs an awaited event's data must match.
     [string[]] $Where,
 
-    [int] $TimeoutSeconds = 30
+    [int] $TimeoutSeconds = 30,
+
+    # The envelope version to speak. 2 is the default; 1 is selectable so the
+    # backward-compatible surface can be exercised from the command line.
+    [ValidateRange(1, 2)]
+    [int] $Protocol = 2
 )
 
 <#
@@ -60,6 +65,9 @@ $queryCommands = @{
     preview     = 'preview.snapshot'
     record      = 'record.snapshot'
     result      = 'record.result'
+    # Protocol 2. Named here as well so `query ui` reads like the others; the
+    # dedicated `state` verb below is the one a check should use.
+    ui          = 'ui.getState'
     overlay     = 'overlay.snapshot'
     editor      = 'editor.snapshot'
     diagnostics = 'diagnostics.snapshot'
@@ -72,7 +80,8 @@ function Write-Result([object] $value) {
 $connection = $null
 try {
     try {
-        $connection = Connect-LiveVerify -RunId $RunId -ConnectTimeoutMs ($TimeoutSeconds * 1000)
+        $connection = Connect-LiveVerify -RunId $RunId -ConnectTimeoutMs ($TimeoutSeconds * 1000) `
+            -Protocol $Protocol
     }
     catch {
         [Console]::Error.WriteLine($_.Exception.Message)
@@ -86,6 +95,20 @@ try {
         }
         'capabilities' {
             $response = Invoke-LiveVerifyCommand -Connection $connection -Command 'system.capabilities' `
+                -TimeoutMs ($TimeoutSeconds * 1000)
+            if (-not $response.ok) { Write-Result $response.error; exit 4 }
+            Write-Result $response.result
+            exit 0
+        }
+        'describe' {
+            $response = Invoke-LiveVerifyCommand -Connection $connection -Command 'ipc.describe' `
+                -TimeoutMs ($TimeoutSeconds * 1000)
+            if (-not $response.ok) { Write-Result $response.error; exit 4 }
+            Write-Result $response.result
+            exit 0
+        }
+        'state' {
+            $response = Invoke-LiveVerifyCommand -Connection $connection -Command 'ui.getState' `
                 -TimeoutMs ($TimeoutSeconds * 1000)
             if (-not $response.ok) { Write-Result $response.error; exit 4 }
             Write-Result $response.result

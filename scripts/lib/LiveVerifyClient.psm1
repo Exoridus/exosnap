@@ -35,6 +35,15 @@ class LiveVerifyConnection {
     [int] $NextId
     [string] $PipeName
     [object] $Identity
+    # The envelope version every request on this connection carries. Fixed at
+    # the handshake and never changed afterwards: the server refuses a client
+    # that switches mid-connection, because half a transcript in each dialect is
+    # worse evidence than either one alone.
+    [int] $Protocol
+    # The newest stateRevision this connection has seen, from a response or an
+    # event. What replaces "sleep and hope": a command's postcondition is
+    # asserted against a revision that is known to have advanced.
+    [long] $StateRevision
 
     LiveVerifyConnection([string] $pipeName) {
         $this.PipeName = $pipeName
@@ -46,6 +55,8 @@ class LiveVerifyConnection {
         $this.Buffer = [byte[]]::new(8192)
         $this.NextId = 1
         $this.Identity = $null
+        $this.Protocol = 2
+        $this.StateRevision = -1
     }
 
     [void] Connect([int] $timeoutMs) {
@@ -97,6 +108,14 @@ class LiveVerifyConnection {
                         timestamp = [DateTime]::UtcNow.ToString('o')
                         payload   = $parsed
                     })
+                    # Protocol 2 stamps every response and every event. Tracked
+                    # here rather than at each call site so a revision that
+                    # arrived on an EVENT is not missed by a caller that was
+                    # waiting on a response.
+                    if ($parsed.PSObject.Properties.Name -contains 'stateRevision') {
+                        $revision = [long]$parsed.stateRevision
+                        if ($revision -gt $this.StateRevision) { $this.StateRevision = $revision }
+                    }
                     return $parsed
                 }
                 continue
@@ -125,7 +144,7 @@ class LiveVerifyConnection {
         $id = "$($this.NextId)"
         $this.NextId++
         $request = [ordered]@{
-            protocol = 1
+            protocol = $this.Protocol
             id       = $id
             command  = $command
             params   = if ($null -eq $parameters) { @{} } else { $parameters }
@@ -231,10 +250,16 @@ function Connect-LiveVerify {
     param(
         [Parameter(Mandatory)] [string] $RunId,
         [int] $ConnectTimeoutMs = 15000,
-        [int] $RequestTimeoutMs = 20000
+        [int] $RequestTimeoutMs = 20000,
+        # Protocol 2 by default: it is what carries stateRevision, settled and
+        # the structured refusal cause, and those are what let a check assert a
+        # postcondition instead of waiting a fixed time. 1 stays selectable so a
+        # check can prove the v1 contract is still answered.
+        [ValidateRange(1, 2)] [int] $Protocol = 2
     )
 
     $connection = [LiveVerifyConnection]::new((New-LiveVerifyPipeName -RunId $RunId))
+    $connection.Protocol = $Protocol
     try {
         $connection.Connect($ConnectTimeoutMs)
     }
@@ -251,9 +276,9 @@ function Connect-LiveVerify {
         $connection.Close()
         throw "Handshake refused: $($hello.error.code) - $($hello.error.message)"
     }
-    if ($hello.result.protocol -ne 1) {
+    if ($hello.result.protocol -ne $Protocol) {
         $connection.Close()
-        throw "Protocol mismatch: server speaks $($hello.result.protocol), client speaks 1"
+        throw "Protocol mismatch: server answered $($hello.result.protocol), client speaks $Protocol"
     }
     return $connection
 }
@@ -284,15 +309,85 @@ function Wait-LiveVerifyEvent {
     return $Connection.WaitForEvent($EventName, $Where, $TimeoutMs)
 }
 
+function Get-LiveVerifyState {
+    <#
+    .SYNOPSIS
+        The product state the control channel publishes (protocol 2 ui.getState).
+    .DESCRIPTION
+        Named page, recording state, edit session vs edit visibility, blocking
+        surface, the two popups, and the actions that are executable right now.
+        Throws on a refusal, because there is no state in which a query is a
+        legitimate failure -- a caller that got one has a broken connection, not
+        a product finding.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] $Connection,
+        [int] $TimeoutMs = 20000
+    )
+    $response = Invoke-LiveVerifyCommand -Connection $Connection -Command 'ui.getState' -TimeoutMs $TimeoutMs
+    if (-not $response.ok) {
+        throw "ui.getState refused: $($response.error.code) - $($response.error.message)"
+    }
+    return $response.result
+}
+
+function Wait-LiveVerifyRevision {
+    <#
+    .SYNOPSIS
+        Waits until the automation state revision has passed a known value.
+    .DESCRIPTION
+        The protocol-2 answer to "did anything actually happen yet". The server
+        advances stateRevision only when the OBSERVABLE product state differs,
+        so this cannot be satisfied by a clock tick, a meter sample or a preview
+        frame -- which is exactly what made a plain sleep unfalsifiable.
+
+        Event-driven: ui.stateChanged carries the new revision, so the normal
+        case costs one blocking read and no polling at all. Returns the state at
+        that point, or $null on the deadline.
+
+        For a SYNCHRONOUS command this is not needed -- the response already says
+        settled:true -- and calling it there would be a wait for something that
+        has already happened.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] $Connection,
+        [Parameter(Mandatory)] [long] $After,
+        [int] $TimeoutMs = 30000
+    )
+    if ($Connection.StateRevision -gt $After) {
+        return Get-LiveVerifyState -Connection $Connection
+    }
+    $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMs)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        $remaining = [int][Math]::Max(1, ($deadline - [DateTime]::UtcNow).TotalMilliseconds)
+        $observed = $Connection.WaitForEvent('ui.stateChanged', $null, $remaining)
+        if ($null -eq $observed) { break }
+        if ($Connection.StateRevision -gt $After) {
+            return Get-LiveVerifyState -Connection $Connection
+        }
+    }
+    return $null
+}
+
 function Wait-LiveVerifyState {
     <#
     .SYNOPSIS
         Polls a snapshot until a field reaches a value, or the deadline passes.
     .DESCRIPTION
-        The event-driven Wait-LiveVerifyEvent is preferred. This exists for the
-        states that have no event of their own, and for re-establishing ground
-        truth after a reconnect -- never as a substitute for a sleep. There is no
-        "sleep N seconds and assume it worked" anywhere in this client.
+        Third choice, and the only one that polls. Prefer, in order:
+
+          1. the response itself, when the command declares settled:true --
+             navigation, reveal, the edit intents and the popups all do, so
+             there is nothing to wait for at all;
+          2. Wait-LiveVerifyEvent or Wait-LiveVerifyRevision, which block on a
+             real signal;
+          3. this, for a snapshot field that is not part of the automation
+             state (a preview counter, a record.result path).
+
+        Never as a substitute for a sleep. There is no "sleep N seconds and
+        assume it worked" anywhere in this client.
     #>
     [CmdletBinding()]
     param(
@@ -331,4 +426,5 @@ function Get-LiveVerifyTranscript {
 }
 
 Export-ModuleMember -Function New-LiveVerifyPipeName, New-LiveVerifyRunId, Connect-LiveVerify,
-    Invoke-LiveVerifyCommand, Wait-LiveVerifyEvent, Wait-LiveVerifyState, Get-LiveVerifyTranscript
+    Invoke-LiveVerifyCommand, Wait-LiveVerifyEvent, Wait-LiveVerifyState, Wait-LiveVerifyRevision,
+    Get-LiveVerifyState, Get-LiveVerifyTranscript
