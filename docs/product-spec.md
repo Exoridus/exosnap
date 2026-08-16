@@ -308,6 +308,18 @@ silently, and a damaged store is repaired entry by entry — surviving entries a
 being reset wholesale. A repair that actually discards something raises a notification; a mere schema
 upgrade does not.
 
+**An application-settings file that cannot be read is never overwritten by accident.** The
+application settings (appearance, hotkeys, overlays, update channel, window placement, …) live in a
+separate `settings.ini`. Three load outcomes are distinguished: no file yet (a first run — the
+defaults are legitimate and are saved normally), a file read successfully, and **a file that exists
+but could not be read** (corrupt, locked, unreadable). In the third case the session runs on
+built-in defaults and says so once in the notification hub, and ExoSnap refuses every write it
+performs on its own behalf — window placement, startup reconciliation, one-time flags — because none
+of those is the user asking to replace their configuration. The first setting the user *does* change
+supersedes the unreadable file: it is moved aside to `settings.ini.corrupt` and a fresh file is
+written, so the old contents are still recoverable by hand. A settings write that fails is reported
+like any other failed save; it is never silent.
+
 ---
 
 ## 4. Container / codec / audio matrix
@@ -1212,14 +1224,16 @@ release (0.11 per ADR 0022).
 - **The bell's unread dot** carries urgency, not a count. It appears whenever anything is unread and
   takes its colour from the **worst** unread entry — **mint** when nothing unread is more than a
   notice, **amber** when at least one is a warning (frames dropped, a source degraded, a dead hotkey,
-  a repaired settings file, an omitted overlay, a recoverable session, a recording without crash-recovery
+  a repaired settings file, a settings file that could not be read, an omitted overlay, a recoverable
+  session, a recording without crash-recovery
   protection), **coral** when at least one is
   a failure (unexpected stop, low storage stopping a recording, a failed settings write, a rejected
   capture action). The exact number is deliberately not shown in the title bar: it is never the thing
   you act on, and the hub states it in full one click away.
 - **Toast notifications** — a transient glance at the hub, anchored bottom-right **of the screen
   hosting the ExoSnap window**. A notification is **timed** when it reports something that already
-  finished (saved, update available, frames dropped, settings repaired, a hotkey unavailable at
+  finished (saved, update available, frames dropped, settings repaired, an unreadable settings file,
+  a hotkey unavailable at
   startup, a settings save failure, a recovery-manifest write that failed) and **standing** when it
   reports a condition that still holds
   (low storage, unexpected stop, recovery available). At most

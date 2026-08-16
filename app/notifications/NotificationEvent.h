@@ -33,6 +33,11 @@ enum class NotificationType : uint8_t {
     RecoveryProtectionUnavailable, // a recovery-manifest write did not reach disk, so this recording has
                                    // no crash-recovery entry. The recording itself is unaffected — same
                                    // class as a failed settings write: reported, never silent.
+    SettingsLoadFailed,            // settings.ini exists but could not be read, so this session runs on
+                                   // built-in defaults. Distinct from SettingsRepaired (which recovered
+                                   // what it could) and from SettingsSaveFailed (a write that was lost):
+                                   // nothing has been written yet, and nothing will be until the user
+                                   // deliberately changes a setting.
 };
 
 // ---------------------------------------------------------------------------
@@ -122,6 +127,9 @@ struct NotificationEvent {
     // The recording is fine; only the crash-recovery safety net is missing. Coral
     // would claim the recording failed, which it did not.
     case NotificationType::RecoveryProtectionUnavailable:
+    // Nothing was lost: the unreadable file is still on disk and is deliberately
+    // not being written over. Coral would claim a destroyed configuration.
+    case NotificationType::SettingsLoadFailed:
         return QStringLiteral("caution");
 
     case NotificationType::UpdateAvailable:

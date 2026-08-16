@@ -67,6 +67,11 @@ class NotificationManager : public QObject {
     // treatment of the other completed-failure reports.
     // NOLINTNEXTLINE(readability-identifier-naming)
     static constexpr int kDismissMs_RecoveryProtectionUnavailable = 8000;
+    // Timed, like its sibling SettingsRepaired: the load already happened and
+    // there is no action the toast could offer that the Settings page does not
+    // already provide. The hub keeps the record for the whole session.
+    // NOLINTNEXTLINE(readability-identifier-naming)
+    static constexpr int kDismissMs_SettingsLoadFailed = 8000;
 
     explicit NotificationManager(QObject* parent = nullptr);
 

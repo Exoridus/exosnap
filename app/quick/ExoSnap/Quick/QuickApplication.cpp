@@ -157,6 +157,13 @@ QuickApplication::QuickApplication()
       about_view_model_(buildAboutInfo(settings_)), record_view_model_adapter_(&record_view_model_),
       overlay_adapter_(&record_view_model_), recording_coordinator_(std::make_unique<RecordingCoordinator>()),
       webcam_frame_provider_(new RecordWebcamFrameProvider), edit_tile_provider_(new EditTimelineTileProvider) {
+    // QCR-201. Latched here for the same reason preset_store_repaired_ is: the
+    // load runs in the constructor, long before initializeNotifications() exists
+    // to report it. The write block itself needs no latch — it follows from
+    // settings_.load_outcome and takes effect immediately, which matters because
+    // the first incidental write (a startup reconciliation, window geometry) can
+    // happen well before the notification manager is up.
+    settings_load_failed_pending_ = settings_.load_outcome == SettingsLoadOutcome::ReadFailed;
     const PersistedPresetState persisted = preset_store_.Load();
     preset_registry_.LoadState(persisted.user_presets,
                                persisted.selected_id.empty() ? std::string(kDefaultPresetId) : persisted.selected_id);
@@ -1242,7 +1249,7 @@ void QuickApplication::initializeDiagnosticsArea() {
                              return;
                          settings_.expert_mode_enabled = enabled;
                          settings_adapter_.setAppSettings(settings_);
-                         settings_store_.Save(settings_);
+                         persistAppSettings(SettingsWriteIntent::UserEdit);
                      });
 
     QObject::connect(&diagnostics_adapter_, &DiagnosticsAdapter::applyFixAccepted, &diagnostics_adapter_,
@@ -1361,7 +1368,7 @@ void QuickApplication::wireSettingsCommands() {
                      [this]() { applySettingsConfigEdit(); });
     QObject::connect(&settings_adapter_, &SettingsAdapter::appSettingsEdited, &settings_adapter_, [this]() {
         settings_ = settings_adapter_.appSettings();
-        settings_store_.Save(settings_);
+        persistAppSettings(SettingsWriteIntent::UserEdit);
         applyThemeFromSettings();
         // Both of these were persisted-and-displayed but never applied: the
         // developer log level left AppLog recording everything regardless of the
@@ -1422,8 +1429,59 @@ void QuickApplication::syncConfigMirrors() {
     record_view_model_.RebuildAudioPlan();
 }
 
-void QuickApplication::saveAndPublishAppSettings() {
-    settings_store_.Save(settings_);
+bool QuickApplication::persistAppSettings(SettingsWriteIntent intent) {
+    // QCR-201. `settings_` after a failed load is the built-in defaults, not the
+    // user's configuration. Persisting it would turn "we could not read your
+    // settings" into "your settings are gone" — and the write that does it is
+    // almost never one the user asked for: the window-geometry debounce fires on
+    // every move and on close, so simply launching and quitting the app used to
+    // be enough. The decision itself is the pure ResolveSettingsWrite; this
+    // function only carries it out.
+    switch (ResolveSettingsWrite(settings_.load_outcome, settings_load_failure_superseded_, intent)) {
+    case SettingsWriteDecision::Refuse:
+        if (!settings_block_logged_) {
+            settings_block_logged_ = true;
+            diagnostics::AppLog::warning(
+                QStringLiteral("settings"),
+                QStringLiteral("Settings were not written: the existing settings file could not be read, so the "
+                               "built-in defaults are not being saved over it. Change any setting to start a "
+                               "fresh file."));
+        }
+        return false;
+    case SettingsWriteDecision::PreserveThenWrite: {
+        // The user is deliberately authoring settings now, so their intent wins
+        // over an unreadable file — but the file itself is preserved rather than
+        // overwritten, so nothing the user had is destroyed by this decision.
+        QString backup_path;
+        if (settings_store_.BackupUnreadableFile(&backup_path)) {
+            diagnostics::AppLog::info(
+                QStringLiteral("settings"),
+                QStringLiteral("Unreadable settings file kept as %1; writing a fresh one.").arg(backup_path));
+        }
+        settings_load_failure_superseded_ = true;
+        break;
+    }
+    case SettingsWriteDecision::Write:
+        break;
+    }
+
+    if (settings_store_.Save(settings_))
+        return true;
+
+    // Same class as a failed preset write, and the same report: the change the
+    // user just made may be gone on restart, and saying nothing is not an option.
+    diagnostics::AppLog::warning(QStringLiteral("settings"),
+                                 QStringLiteral("Failed to write %1").arg(settings_store_.SettingsFilePath()));
+    notifications::NotificationEvent event;
+    event.type = notifications::NotificationType::SettingsSaveFailed;
+    event.title = QStringLiteral("Settings could not be saved");
+    event.body = QStringLiteral("The change may be lost when ExoSnap restarts.");
+    notifications_adapter_.manager().Enqueue(std::move(event));
+    return false;
+}
+
+void QuickApplication::saveAndPublishAppSettings(SettingsWriteIntent intent) {
+    persistAppSettings(intent);
     settings_adapter_.setAppSettings(settings_);
     // The overlay windows read their enable gates and their content set from the
     // same persisted struct. Published here rather than polled, which is what
@@ -1535,14 +1593,14 @@ void QuickApplication::initializeHotkeys() {
                              return;
                          }
                          hotkey_service_.SaveToStrings(settings_.hotkey_bindings);
-                         saveAndPublishAppSettings();
+                         saveAndPublishAppSettings(SettingsWriteIntent::UserEdit);
                          refreshHotkeyRows();
                      });
     QObject::connect(&settings_adapter_, &SettingsAdapter::hotkeyClearRequested, &settings_adapter_,
                      [this](int action) {
                          hotkey_service_.UnsetBinding(static_cast<HotkeyAction>(action));
                          hotkey_service_.SaveToStrings(settings_.hotkey_bindings);
-                         saveAndPublishAppSettings();
+                         saveAndPublishAppSettings(SettingsWriteIntent::UserEdit);
                          refreshHotkeyRows();
                      });
     QObject::connect(&settings_adapter_, &SettingsAdapter::hotkeyResetRequested, &settings_adapter_,
@@ -1553,7 +1611,7 @@ void QuickApplication::initializeHotkeys() {
                              return;
                          }
                          hotkey_service_.SaveToStrings(settings_.hotkey_bindings);
-                         saveAndPublishAppSettings();
+                         saveAndPublishAppSettings(SettingsWriteIntent::UserEdit);
                          refreshHotkeyRows();
                      });
 }
@@ -1977,7 +2035,7 @@ void QuickApplication::applyStartupRelaunchHandoff(const QString& page_name, boo
     // which is the whole point of deferring the write.
     if (reenable_present_diag && !settings_.present_diagnostics_optin) {
         settings_.present_diagnostics_optin = true;
-        saveAndPublishAppSettings();
+        saveAndPublishAppSettings(SettingsWriteIntent::UserEdit);
         diagnostics::AppLog::info(QStringLiteral("diagnostics"),
                                   QStringLiteral("Present-diagnostics opt-in re-enabled after elevated relaunch."));
     }
@@ -2000,6 +2058,24 @@ void QuickApplication::initializeNotifications() {
                      [this](notifications::NotificationAction action, const QString& payload) {
                          dispatchNotificationAction(action, payload);
                      });
+
+    // QCR-201. Not the same report as SettingsRepaired: nothing was recovered
+    // and nothing was written. The body says both facts the user needs — the
+    // session is running on defaults, and their file is still there.
+    if (settings_load_failed_pending_) {
+        settings_load_failed_pending_ = false;
+        diagnostics::AppLog::warning(
+            QStringLiteral("settings"),
+            QStringLiteral("Settings file could not be read (%1); running on defaults without overwriting it")
+                .arg(settings_store_.SettingsFilePath()));
+        notifications::NotificationEvent event;
+        event.type = notifications::NotificationType::SettingsLoadFailed;
+        event.title = QStringLiteral("Settings could not be read");
+        event.body = QStringLiteral("ExoSnap is running with default settings. Your settings file is left "
+                                    "untouched — changing any setting starts a fresh one and keeps the old "
+                                    "file as settings.ini.corrupt.");
+        notifications_adapter_.manager().Enqueue(std::move(event));
+    }
 
     if (preset_store_repaired_) {
         preset_store_repaired_ = false;
@@ -2308,7 +2384,7 @@ void QuickApplication::initializeCrashReport() {
         [this](const CrashReportDecision& decision, bool send) {
             if (decision.persisted_policy.has_value()) {
                 settings_.crash_report_policy = *decision.persisted_policy;
-                saveAndPublishAppSettings();
+                saveAndPublishAppSettings(SettingsWriteIntent::UserEdit);
             }
             const bool delivered = applyCrashConsentAction(decision.consent_action);
             if (decision.consent_action == CrashConsentAction::None)

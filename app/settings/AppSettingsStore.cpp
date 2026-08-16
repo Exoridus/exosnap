@@ -1,6 +1,7 @@
 #include "AppSettingsStore.h"
 
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QSettings>
 #include <QStandardPaths>
@@ -38,6 +39,11 @@ PersistedAppSettings AppSettingsStore::Load() const {
     if (settings_path_.isEmpty()) {
         return persisted;
     }
+
+    // Captured before the read: QSettings::status() cannot tell "no file" from
+    // "file read cleanly" — both are NoError — and the difference decides
+    // whether writing the defaults back is legitimate or destructive.
+    const bool file_existed = QFileInfo::exists(settings_path_);
 
     QSettings settings(settings_path_, QSettings::IniFormat);
 
@@ -178,15 +184,36 @@ PersistedAppSettings AppSettingsStore::Load() const {
     // silently falls back to defaults for every key above. Surface that via the
     // status check instead of pretending the load was faithful.
     if (settings.status() != QSettings::NoError) {
-        persisted.load_ok = false;
+        persisted.load_outcome = SettingsLoadOutcome::ReadFailed;
+    } else {
+        persisted.load_outcome = file_existed ? SettingsLoadOutcome::Loaded : SettingsLoadOutcome::DefaultsNoFile;
     }
 
     return persisted;
 }
 
-void AppSettingsStore::Save(const PersistedAppSettings& settings_snapshot) const {
+bool AppSettingsStore::BackupUnreadableFile(QString* out_backup_path) const {
+    if (settings_path_.isEmpty() || !QFileInfo::exists(settings_path_)) {
+        return false;
+    }
+    const QString backup_path = settings_path_ + QStringLiteral(".corrupt");
+    // QFile::rename refuses an existing target on Windows, and an older backup
+    // is worth less than the file that just failed to load, so it is replaced.
+    if (QFileInfo::exists(backup_path) && !QFile::remove(backup_path)) {
+        return false;
+    }
+    if (!QFile::rename(settings_path_, backup_path)) {
+        return false;
+    }
+    if (out_backup_path != nullptr) {
+        *out_backup_path = backup_path;
+    }
+    return true;
+}
+
+bool AppSettingsStore::Save(const PersistedAppSettings& settings_snapshot) const {
     if (settings_path_.isEmpty()) {
-        return;
+        return false;
     }
 
     const QFileInfo info(settings_path_);
@@ -300,7 +327,12 @@ void AppSettingsStore::Save(const PersistedAppSettings& settings_snapshot) const
     settings.setValue(QStringLiteral("log_level"), settings_snapshot.developer_log_level);
     settings.endGroup();
 
+    // sync() is where the buffered keys actually reach the file; the status it
+    // leaves behind is the only report of a full disk, a locked file or a
+    // read-only directory. Judging the write before this point (or not at all)
+    // is how a lost change used to look like a successful save.
     settings.sync();
+    return settings.status() == QSettings::NoError;
 }
 
 const QString& AppSettingsStore::SettingsFilePath() const {

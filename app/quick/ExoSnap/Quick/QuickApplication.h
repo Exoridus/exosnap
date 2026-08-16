@@ -254,7 +254,11 @@ class QuickApplication {
     // Same problem one level up: SettingsAdapter mirrors the whole
     // PersistedAppSettings, so a hotkey rebind that only touches settings_ is
     // silently reverted by the next Settings toggle.
-    void saveAndPublishAppSettings();
+    void saveAndPublishAppSettings(SettingsWriteIntent intent = SettingsWriteIntent::Incidental);
+    // The one write edge for settings_. Returns false when the write was
+    // refused (blocked by a failed load) or failed (reported as
+    // SettingsSaveFailed).
+    bool persistAppSettings(SettingsWriteIntent intent);
     void applyPresetConfig(RecordingPresetConfig config);
     void refreshPresetState();
     void applyThemeFromSettings();
@@ -381,6 +385,16 @@ class QuickApplication {
     // Set when the preset store had to repair fields while loading. Raised as a
     // notification once the manager exists, never swallowed.
     bool preset_store_repaired_ = false;
+    // QCR-201. Set once the user has deliberately written over a settings file
+    // that failed to load: from then on the file is theirs again and every
+    // write, incidental ones included, is legitimate. See ResolveSettingsWrite.
+    bool settings_load_failure_superseded_ = false;
+    // Latched like preset_store_repaired_: the load happens in the constructor,
+    // long before the notification manager is wired up in initializeNotifications().
+    bool settings_load_failed_pending_ = false;
+    // One warning per session for refused incidental writes — the geometry
+    // debounce alone would otherwise fill the log.
+    bool settings_block_logged_ = false;
     // Created in load(), once the root window exists. Declared before engine_ so
     // it outlives the window it tracks; it holds a QPointer, so the window dying
     // first is safe.
