@@ -217,6 +217,99 @@ int CommandSnapshot(const Win32EnvironmentProvider& provider, const Options& opt
     return kExitOk;
 }
 
+// ------------------------------------------------------------------ list-modes
+//
+// The vocabulary a refresh-rate transaction may speak on THIS machine.
+//
+// A caller must be able to say "any supported rate other than the current one"
+// without hardcoding a number for one desk, because a number from a datasheet is
+// not necessarily a number Windows will ever report back: ChangeDisplaySettingsEx
+// accepts a nominal 60 for a 59.94 Hz mode, and the read-back then says 59. Every
+// refresh rate below is EnumDisplaySettingsEx's own integer, unrounded -- that is
+// the whole point of the list.
+
+nlohmann::ordered_json ModeJson(const DisplayModeFacts& mode) {
+    nlohmann::ordered_json item;
+    item["width"] = mode.width;
+    item["height"] = mode.height;
+    item["refreshHz"] = mode.refresh_hz;
+    item["bitsPerPixel"] = mode.bits_per_pixel;
+    item["orientation"] = mode.orientation_degrees;
+    item["mode"] = FormatModeFacts(mode);
+    return item;
+}
+
+int CommandListModes(const Win32EnvironmentProvider& provider, const Options& options) {
+    if (!options.kind.empty() && options.kind != device_kind::kDisplay) {
+        return Fail("list-modes", "usage", "list-modes only applies to displays; --kind must be 'display'.",
+                    kExitUsage);
+    }
+
+    std::vector<AliasBinding> selected;
+    for (const auto& binding : provider.Profile().Bindings()) {
+        if (binding.kind != device_kind::kDisplay) {
+            continue;
+        }
+        if (!options.alias.empty() && binding.alias != options.alias) {
+            continue;
+        }
+        selected.push_back(binding);
+    }
+    if (!options.alias.empty() && selected.empty()) {
+        // Either unbound, or bound to something that has no display modes. Both
+        // are the operator's to fix, and the message says which.
+        const auto binding = provider.Profile().Find(options.alias);
+        if (!binding.has_value()) {
+            return Fail("list-modes", std::string(ToKey(AliasErrorCode::UnboundAlias)),
+                        UnboundAliasInstruction(options.alias), kExitFailure);
+        }
+        return Fail("list-modes", "wrong_kind",
+                    "'" + options.alias + "' is bound as kind '" + binding->kind + "', not 'display'.", kExitFailure);
+    }
+
+    nlohmann::ordered_json document;
+    nlohmann::ordered_json displays = nlohmann::ordered_json::array();
+    bool ok = true;
+    for (const auto& binding : selected) {
+        nlohmann::ordered_json entry;
+        entry["alias"] = binding.alias;
+        entry["stableId"] = binding.stable_id;
+
+        const auto* target = provider.FindDisplay(binding.alias);
+        if (target == nullptr) {
+            entry["gdiName"] = "";
+            entry["error"] = "no display matches stable id '" + binding.stable_id + "' (or it matches more than one)";
+            entry["modes"] = nlohmann::ordered_json::array();
+            displays.push_back(entry);
+            ok = false;
+            continue;
+        }
+        entry["gdiName"] = target->gdi_name;
+
+        const auto list = win32::EnumerateModes(*target);
+        if (!list.ok) {
+            entry["error"] = list.error;
+            entry["modes"] = nlohmann::ordered_json::array();
+            displays.push_back(entry);
+            ok = false;
+            continue;
+        }
+        entry["current"] = ModeJson(list.current);
+        nlohmann::ordered_json modes = nlohmann::ordered_json::array();
+        for (const auto& mode : list.candidates) {
+            modes.push_back(ModeJson(mode));
+        }
+        entry["modes"] = modes;
+        displays.push_back(entry);
+    }
+
+    document["ok"] = ok;
+    document["command"] = "list-modes";
+    document["displays"] = displays;
+    Print(document);
+    return ok ? kExitOk : kExitFailure;
+}
+
 // -------------------------------------------------------------- alias binding
 
 int CommandResolveAliases(const Win32EnvironmentProvider& provider, const Options& options) {
@@ -555,6 +648,7 @@ int CommandGuard(Win32EnvironmentProvider& provider, const Options& options) {
 const char* kUsage = "exosnap-envctl (TEST-ONLY; never installed, never a service)\n"
                      "  describe                                       capability classification table\n"
                      "  snapshot [--aliases a,b]                       read every bound property\n"
+                     "  list-modes [--alias X] [--kind display]        display modes a refresh-hz change may target\n"
                      "  resolve-aliases [--aliases a,b]                bindings + candidate stable ids\n"
                      "  bind-alias --alias X --stable-id Y [--kind K]  one-time binding step\n"
                      "  begin --scenario S --run-id R --desired f.json start a transaction (does NOT run a test)\n"
@@ -640,6 +734,9 @@ int main(int argc, char** argv) {
     }
     if (options.command == "snapshot") {
         return CommandSnapshot(provider, options);
+    }
+    if (options.command == "list-modes") {
+        return CommandListModes(provider, options);
     }
     if (options.command == "resolve-aliases") {
         return CommandResolveAliases(provider, options);

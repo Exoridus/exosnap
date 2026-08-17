@@ -17,6 +17,7 @@ add_library(envctl_core STATIC
     core/env_types.cpp
     core/env_alias.cpp
     core/env_catalogue.cpp
+    core/env_display_mode.cpp
     core/env_journal.cpp
     core/env_evidence.cpp
     core/env_transaction.cpp

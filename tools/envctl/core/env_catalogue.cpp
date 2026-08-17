@@ -32,7 +32,12 @@ const std::vector<CatalogueEntry>& Table() {
          "dmDisplayFrequency",
          "ChangeDisplaySettingsExW(CDS_UPDATEREGISTRY) with every coupled mode field held at its original value",
          "Resolution, colour depth and orientation must not move as a side effect: the apply carries the original "
-         "width/height/bpp/orientation and the read-back confirms all of them, not only the frequency."},
+         "width/height/bpp/orientation and the read-back confirms all of them, not only the frequency. "
+         "VALUE SPACE: whatever EnumDisplaySettingsEx REPORTS -- Windows' own truncated integers. "
+         "ChangeDisplaySettingsEx will accept a nominal rate it never reports back (ask a 59.94 Hz mode for "
+         "60 and it succeeds, then reads back as 59; likewise around 24/30/120/240 on many panels), so the "
+         "read-back mismatch is refused and rolled back. There is no tolerance and there will not be one. "
+         "Pick the desired value from `list-modes`, never from a datasheet."},
 
         {device_kind::kDisplay, "mode", CapabilityClass::Read, "mode",
          "EnumDisplaySettingsExW(ENUM_CURRENT_SETTINGS) rendered as <w>x<h>@<hz>x<bpp>/<orientation>",

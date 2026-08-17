@@ -168,6 +168,39 @@ If the original device is gone at restore time the result is
 evidence names the stable id, the friendly name, the original value and the remaining
 restore action, so reconnecting the device and re-running `recover` finishes the job.
 
+### Refresh rates are Windows' integers, not datasheet numbers
+
+`ChangeDisplaySettingsEx` accepts a nominal `dmDisplayFrequency` it will never report
+back. Ask a 59.94 Hz mode for **60** and the setter returns success, and then
+`EnumDisplaySettingsEx(ENUM_CURRENT_SETTINGS)` reports the truncated integer **59** —
+likewise around the 24/30/120/240 families on many panels. The transaction's read-back
+comparison is exact, so it refuses and rolls back. That is the rule working, not a bug,
+and it will **not** be softened with a tolerance: "close enough" on the read-back would
+hollow out the one guarantee everything above rests on.
+
+The desired value therefore has to be expressible in the vocabulary the read-back
+speaks:
+
+```powershell
+exosnap-envctl list-modes --alias display.main-hdr    # or --kind display for all of them
+```
+
+It prints, per bound display, the `current` mode and every mode
+`EnumDisplaySettingsEx` enumerates at that same resolution, colour depth and
+orientation — each `refreshHz` verbatim, unrounded. A scenario picks "any supported
+rate other than the current one" from that list instead of hardcoding a number that
+only exists at one desk. Other resolutions are deliberately not offered: a
+refresh-rate change must not become a resolution change, and the coupled-field guard
+would refuse one anyway.
+
+The list is necessary but not always sufficient, and the desk this was measured on
+shows why: an LG 27GL850 at 2560x1440x32 enumerates **59, 60, 75, 100, 120 and 144**
+— 59 and 60 as two separate entries — yet the transaction that asked for 60 read back
+59. Windows enumerates the nominal and the actual rate separately and then collapses
+them on apply. So prefer a rate with no nominal twin (here 75, 100, 120, 144) and
+treat a `verify_mismatch` on one of a 59/60-style pair as the panel's answer, not as a
+runner defect.
+
 ## Device aliases
 
 Scenarios name **aliases**, never friendly names:

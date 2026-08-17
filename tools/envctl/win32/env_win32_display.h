@@ -17,6 +17,8 @@
 
 #include <windows.h>
 
+#include "env_display_mode.h"
+
 namespace exosnap::envctl::win32 {
 
 struct DisplayTarget {
@@ -64,11 +66,36 @@ DisplayMode ReadCurrentMode(const DisplayTarget& target);
 // "<w>x<h>@<hz>x<bpp>/<orientation>"
 std::string FormatMode(const DEVMODEW& mode);
 
+// A DEVMODE reduced to the five fields the mode fingerprint is made of. Nothing
+// is rounded: dmDisplayFrequency is carried across verbatim.
+DisplayModeFacts ToModeFacts(const DEVMODEW& mode);
+
+struct DisplayModeList {
+    bool ok{false};
+    DisplayModeFacts current{};
+    // Every mode EnumDisplaySettingsExW reports for this display, in enumeration
+    // order and unfiltered. The refresh rates are Windows' own integers.
+    std::vector<DisplayModeFacts> all;
+    // The subset a refresh-rate transaction may target -- see
+    // core/env_display_mode.h for why the geometry is pinned.
+    std::vector<DisplayModeFacts> candidates;
+    std::string error;
+};
+
+// Walks EnumDisplaySettingsExW over increasing iModeNum until it returns 0.
+// READ ONLY.
+DisplayModeList EnumerateModes(const DisplayTarget& target);
+
 // Applies `hz` with width/height/bpp/orientation/position pinned to their current
 // values, then re-reads. If any coupled field moved, the ORIGINAL full mode is
 // put back and this returns false with an error naming what moved -- changing
 // somebody's resolution as a side effect of a refresh-rate test is not an
 // acceptable outcome.
+//
+// `hz` must be a rate this display ENUMERATES (see EnumerateModes). Windows
+// accepts a nominal rate it will never report back -- asking for 60 on a
+// 59.94 Hz mode succeeds here and then reads back as 59 -- and the transaction's
+// read-back comparison then correctly refuses the whole thing.
 bool SetRefreshHz(const DisplayTarget& target, DWORD hz, std::string& error);
 
 // Effective per-monitor DPI as a percentage ("100", "125", "150"). READ ONLY:

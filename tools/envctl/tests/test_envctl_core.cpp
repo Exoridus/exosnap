@@ -4,11 +4,13 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <vector>
 
 #include <gtest/gtest.h>
 
 #include "env_alias.h"
 #include "env_catalogue.h"
+#include "env_display_mode.h"
 #include "env_journal.h"
 #include "env_types.h"
 #include "temp_dir.h"
@@ -142,6 +144,97 @@ TEST(EnvctlCatalogue, DescriptorsForAliasInstantiateTheKind) {
     for (const auto& descriptor : descriptors) {
         EXPECT_EQ(descriptor.id.device_alias, "display.main-hdr");
     }
+}
+
+TEST(EnvctlCatalogue, RefreshRateNoteNamesTheNominalVersusReportedAsymmetry) {
+    const CatalogueEntry* refresh = nullptr;
+    for (const auto& entry : WindowsCapabilityCatalogue()) {
+        if (entry.device_kind == device_kind::kDisplay && entry.property == "refresh-hz") {
+            refresh = &entry;
+        }
+    }
+    ASSERT_NE(refresh, nullptr);
+    // `describe` is where a caller looks before writing a desired-state file, so
+    // the trap has to be stated there: a nominal 60 is accepted and reads back
+    // as 59, and the way out is `list-modes`, not a tolerance.
+    EXPECT_NE(std::string::npos, refresh->note.find("EnumDisplaySettingsEx")) << refresh->note;
+    EXPECT_NE(std::string::npos, refresh->note.find("59")) << refresh->note;
+    EXPECT_NE(std::string::npos, refresh->note.find("list-modes")) << refresh->note;
+    EXPECT_NE(std::string::npos, refresh->note.find("no tolerance")) << refresh->note;
+}
+
+// ---------------------------------------------------------------- display modes
+
+DisplayModeFacts Mode(unsigned long width, unsigned long height, unsigned long hz) {
+    return DisplayModeFacts{width, height, hz, 32, 0};
+}
+
+std::vector<unsigned long> RefreshRatesOf(const std::vector<DisplayModeFacts>& modes) {
+    std::vector<unsigned long> rates;
+    for (const auto& mode : modes) {
+        rates.push_back(mode.refresh_hz);
+    }
+    return rates;
+}
+
+TEST(EnvctlDisplayMode, FingerprintRendersEveryCoupledField) {
+    EXPECT_EQ(FormatModeFacts(DisplayModeFacts{2560, 1440, 144, 32, 0}), "2560x1440@144x32/0");
+    EXPECT_EQ(FormatModeFacts(DisplayModeFacts{1080, 1920, 60, 32, 270}), "1080x1920@60x32/270");
+}
+
+TEST(EnvctlDisplayMode, GeometryComparisonIgnoresOnlyTheRefreshRate) {
+    const DisplayModeFacts current{2560, 1440, 144, 32, 0};
+    EXPECT_TRUE(SameGeometry(current, DisplayModeFacts{2560, 1440, 59, 32, 0}));
+    EXPECT_FALSE(SameGeometry(current, DisplayModeFacts{1920, 1080, 144, 32, 0}));
+    EXPECT_FALSE(SameGeometry(current, DisplayModeFacts{2560, 1440, 144, 16, 0}));
+    EXPECT_FALSE(SameGeometry(current, DisplayModeFacts{2560, 1440, 144, 32, 90}));
+}
+
+TEST(EnvctlDisplayMode, RefreshRatesAreWindowsIntegersAndAreNeverRoundedToNominal) {
+    // The whole point of the list: a panel that enumerates 59 is offered as 59.
+    // Rounding it up to the nominal 60 would hand the caller a value the
+    // read-back can never report, which is exactly the failure this feature
+    // exists to prevent.
+    const DisplayModeFacts current = Mode(2560, 1440, 144);
+    const auto candidates =
+        RefreshRateCandidates(current, {Mode(2560, 1440, 23), Mode(2560, 1440, 29), Mode(2560, 1440, 59),
+                                        Mode(2560, 1440, 119), Mode(2560, 1440, 144)});
+    EXPECT_EQ(RefreshRatesOf(candidates), (std::vector<unsigned long>{23, 29, 59, 119, 144}));
+}
+
+TEST(EnvctlDisplayMode, ARefreshRateChangeIsNeverOfferedAResolutionChange) {
+    const DisplayModeFacts current{2560, 1440, 144, 32, 0};
+    const auto candidates = RefreshRateCandidates(current, {
+                                                               Mode(1920, 1080, 60), // smaller resolution
+                                                               Mode(3840, 2160, 60), // larger resolution
+                                                               DisplayModeFacts{2560, 1440, 60, 16, 0},  // other bpp
+                                                               DisplayModeFacts{2560, 1440, 60, 32, 90}, // rotated
+                                                               Mode(2560, 1440, 60),                     // keep
+                                                               Mode(2560, 1440, 144),                    // keep
+                                                           });
+    ASSERT_EQ(candidates.size(), 2u);
+    for (const auto& mode : candidates) {
+        EXPECT_TRUE(SameGeometry(current, mode)) << FormatModeFacts(mode);
+    }
+}
+
+TEST(EnvctlDisplayMode, RepeatedModesCollapseAndTheListIsSortedByRate) {
+    // EnumDisplaySettingsEx repeats a mode once per dmDisplayFlags variant. The
+    // duplicates carry no information a caller can act on.
+    const DisplayModeFacts current = Mode(2560, 1440, 144);
+    const auto candidates =
+        RefreshRateCandidates(current, {Mode(2560, 1440, 144), Mode(2560, 1440, 60), Mode(2560, 1440, 144),
+                                        Mode(2560, 1440, 60), Mode(2560, 1440, 100)});
+    EXPECT_EQ(RefreshRatesOf(candidates), (std::vector<unsigned long>{60, 100, 144}));
+}
+
+TEST(EnvctlDisplayMode, CurrentIsNotInjectedWhenWindowsDoesNotEnumerateIt) {
+    // An overclocked or custom mode can be current without being enumerated.
+    // Adding it back would make "current is in modes" unfalsifiable and would
+    // claim the display offers something it never offered.
+    const DisplayModeFacts current = Mode(2560, 1440, 165);
+    const auto candidates = RefreshRateCandidates(current, {Mode(2560, 1440, 60), Mode(2560, 1440, 144)});
+    EXPECT_EQ(RefreshRatesOf(candidates), (std::vector<unsigned long>{60, 144}));
 }
 
 // ----------------------------------------------------------------------- alias
