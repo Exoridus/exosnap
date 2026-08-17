@@ -10,6 +10,28 @@ exosnap_add_gtest(
     LIBRARIES exosnap_updater_logic
 )
 
+# The process exit contract. The pure half is a table over every phase; the
+# process half launches the SHIPPED exe for the two codes a real invocation can
+# produce before any window exists, so main()'s early returns are covered too.
+# EXOSNAP_UPDATER_EXE is a build-time generator expression, never a path in the
+# source tree.
+exosnap_add_gtest(
+    NAME    test_updater_exit_codes
+    TEST_PREFIX updater.
+    SOURCES test_updater_exit_codes.cpp
+    LIBRARIES exosnap_updater_logic
+)
+# The path goes through a generated header with a RAW string literal, not
+# through a /D define: a Windows path in a normal string literal turns "\Users"
+# into an invalid escape sequence and fails to compile.
+file(GENERATE
+    OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/$<CONFIG>/UpdaterExePath.h"
+    CONTENT "#pragma once\n#define EXOSNAP_UPDATER_EXE R\"($<TARGET_FILE:exosnap_updater>)\"\n"
+)
+target_include_directories(test_updater_exit_codes
+    PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/$<CONFIG>")
+add_dependencies(test_updater_exit_codes exosnap_updater)
+
 exosnap_add_gtest(
     NAME    test_updater_args
     TEST_PREFIX updater.
@@ -24,6 +46,24 @@ exosnap_add_gtest(
     NAME    test_updater_worker_plan
     TEST_PREFIX updater.
     SOURCES test_updater_worker_plan.cpp
+    LIBRARIES exosnap_updater_logic
+)
+
+# The automation endpoint's precondition table and published state, and the
+# session/settle/revision contract on top of it. Both are pure: no pipe, no
+# window, no worker -- which is what lets the whole refusal surface be covered
+# instead of sampled by driving a real installation into each state.
+exosnap_add_gtest(
+    NAME    test_updater_command_policy
+    TEST_PREFIX updater.
+    SOURCES test_updater_command_policy.cpp
+    LIBRARIES exosnap_updater_logic
+)
+
+exosnap_add_gtest(
+    NAME    test_updater_control_dispatcher
+    TEST_PREFIX updater.
+    SOURCES test_updater_control_dispatcher.cpp
     LIBRARIES exosnap_updater_logic
 )
 

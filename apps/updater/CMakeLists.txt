@@ -36,8 +36,17 @@ set(EXOSNAP_VERSION_FILE_STR
 add_library(exosnap_updater_logic STATIC
     UpdaterArgs.cpp
     UpdaterArgs.h
+    UpdaterAutomation.cpp
+    UpdaterAutomation.h
+    UpdaterCommandPolicy.cpp
+    UpdaterCommandPolicy.h
     UpdaterController.cpp
     UpdaterController.h
+    UpdaterControlDispatcher.cpp
+    UpdaterControlDispatcher.h
+    UpdaterControlSource.h
+    UpdaterExitCode.cpp
+    UpdaterExitCode.h
     UpdaterWorker.cpp
     UpdaterWorker.h
     WindowPlacement.cpp
@@ -47,8 +56,12 @@ add_library(exosnap_updater_logic STATIC
 set_target_properties(exosnap_updater_logic PROPERTIES AUTOMOC ON)
 target_include_directories(exosnap_updater_logic PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(exosnap_updater_logic PUBLIC NOMINMAX)
+# exosnap::control: the shared control-channel layer (protocol, policy
+# mechanics, session, named-pipe transport). The updater's automation endpoint is
+# the same channel the application exposes, from the same code -- see
+# UpdaterControlDispatcher.h. Inert without --automation-control.
 target_link_libraries(exosnap_updater_logic
-    PUBLIC Qt6::Core exosnap::update
+    PUBLIC Qt6::Core exosnap::update exosnap::control
     PRIVATE exosnap::warnings
 )
 

@@ -540,12 +540,17 @@ void UpdaterWindow::render(const UpdaterUiState& state) {
     ring_->setVariant(state.variant);
     ring_->setIndeterminate(state.variant == TerminalVariant::None && !state.determinate);
 
-    // Eyebrow. Three truths, one line, no new geometry.
-    const bool failed_terminal =
-        state.variant == TerminalVariant::Amber || state.variant == TerminalVariant::Red;
+    // Eyebrow. Four truths, one line, no new geometry. A manual window that is
+    // resting says what it IS, not what it is doing: "UPDATING EXOSNAP" over an
+    // idle updater is a claim about something that is not happening.
+    const bool failed_terminal = state.variant == TerminalVariant::Amber || state.variant == TerminalVariant::Red;
+    const bool prompting = state.prompt != PromptKind::None;
     if (failed_terminal) {
         caption_->setText(state.verification_reinstall ? QStringLiteral("EXOSNAP WAS NOT REINSTALLED")
                                                        : QStringLiteral("EXOSNAP WAS NOT UPDATED"));
+    } else if (prompting) {
+        caption_->setText(state.prompt == PromptKind::UpToDate ? QStringLiteral("EXOSNAP IS UP TO DATE")
+                                                               : QStringLiteral("EXOSNAP UPDATER"));
     } else {
         caption_->setText(state.verification_reinstall ? QStringLiteral("REINSTALLING EXOSNAP")
                                                        : QStringLiteral("UPDATING EXOSNAP"));
@@ -575,6 +580,13 @@ void UpdaterWindow::render(const UpdaterUiState& state) {
     // actually be painted with.
     from_pill_->setFullText(state.from_version);
     to_pill_->setFullText(state.to_version);
+    // A transition needs two ends. While no release has been resolved (manual
+    // idle, a check in flight, "up to date") there is no target, and an empty
+    // accent-filled pill with an arrow pointing at it reads as a version whose
+    // name failed to load rather than as one that does not exist.
+    const bool has_target = !state.to_version.isEmpty();
+    chevron_->setVisible(has_target);
+    to_pill_->setVisible(has_target);
 
     // Fail-row tint follows the terminal variant.
     QColor failColor = caution();
@@ -595,7 +607,15 @@ void UpdaterWindow::render(const UpdaterUiState& state) {
 
     // Status line
     auto* icon = static_cast<GlyphWidget*>(status_icon_);
-    if (state.variant == TerminalVariant::None) {
+    if (prompting) {
+        // A resting window has nothing in flight to narrate, and the card below
+        // already carries the headline -- printing it here too is the exact
+        // double-caption the Success state was fixed for. The glyph is cleared
+        // rather than the row hidden so the geometry does not shift the moment
+        // the same window starts working.
+        icon->set(Ico::None, mut());
+        status_text_->setFullText(QString());
+    } else if (state.variant == TerminalVariant::None) {
         icon->set(Ico::Spinner, mint());
         status_text_->setFont(mono(13, QFont::Medium));
         status_text_->setStyleSheet(QStringLiteral("color:%1;").arg(ink().name()));
@@ -650,14 +670,18 @@ void UpdaterWindow::render(const UpdaterUiState& state) {
                        state.steps[size_t(UpStep::Launch)] == StepStatus::Working;
     close_button_->setEnabled(!block);
     const bool terminal = state.variant != TerminalVariant::None;
-    close_button_->setToolTip(block      ? QStringLiteral("Please wait - updating")
-                              : terminal ? QStringLiteral("Close")
-                                         : QStringLiteral("Cancel update and close"));
-    close_button_->setAccessibleName(block      ? QStringLiteral("Close unavailable while updating")
-                                     : terminal ? QStringLiteral("Close updater")
-                                                : QStringLiteral("Cancel update and close"));
+    // A prompt state has nothing in flight to discard, so closing it is just
+    // closing -- asking "cancel this update?" would name a run that never
+    // started.
+    const bool settled = terminal || prompting;
+    close_button_->setToolTip(block     ? QStringLiteral("Please wait - updating")
+                              : settled ? QStringLiteral("Close")
+                                        : QStringLiteral("Cancel update and close"));
+    close_button_->setAccessibleName(block     ? QStringLiteral("Close unavailable while updating")
+                                     : settled ? QStringLiteral("Close updater")
+                                               : QStringLiteral("Cancel update and close"));
     close_blocked_ = block;
-    cancel_confirmation_required_ = !terminal && !block;
+    cancel_confirmation_required_ = !settled && !block;
     if (!cancel_confirmation_required_ && cancel_overlay_ != nullptr)
         cancel_overlay_->hide();
 }
@@ -669,7 +693,13 @@ void UpdaterWindow::buildFooter(const UpdaterUiState& state) {
             w->deleteLater();
         delete item;
     }
-    const bool resultTerminal = state.variant != TerminalVariant::None && state.variant != TerminalVariant::Success;
+    const bool prompting = state.prompt != PromptKind::None;
+    // A prompt renders through the SAME card component as a terminal result --
+    // one geometry, one set of text rows, one action row. The only differences
+    // are the tone and the glyph, which is what keeps the manual flow from
+    // becoming a second window design living inside the first.
+    const bool resultTerminal =
+        prompting || (state.variant != TerminalVariant::None && state.variant != TerminalVariant::Success);
     const bool successDone = state.variant == TerminalVariant::Success;
     const bool critical = state.steps[size_t(UpStep::Install)] == StepStatus::Working ||
                           state.steps[size_t(UpStep::Verify)] == StepStatus::Working ||
@@ -680,7 +710,9 @@ void UpdaterWindow::buildFooter(const UpdaterUiState& state) {
 
     if (resultTerminal) {
         QColor tone = caution();
-        if (state.variant == TerminalVariant::Red)
+        if (prompting)
+            tone = state.prompt == PromptKind::UpToDate ? success() : mint();
+        else if (state.variant == TerminalVariant::Red)
             tone = error();
         else if (state.variant == TerminalVariant::Green || state.variant == TerminalVariant::RebootRequired)
             tone = success();
@@ -698,11 +730,30 @@ void UpdaterWindow::buildFooter(const UpdaterUiState& state) {
         auto* hr = new QHBoxLayout(header);
         hr->setContentsMargins(0, 0, 0, 0);
         hr->setSpacing(9);
+        Ico resultGlyph = Ico::Check;
+        if (prompting) {
+            switch (state.prompt) {
+            case PromptKind::Idle:
+                resultGlyph = Ico::ShieldCheck;
+                break;
+            case PromptKind::UpdateAvailable:
+                resultGlyph = Ico::Download;
+                break;
+            case PromptKind::ReadyToApply:
+                resultGlyph = Ico::Layers;
+                break;
+            case PromptKind::UpToDate:
+            case PromptKind::None:
+                resultGlyph = Ico::Check;
+                break;
+            }
+        } else if (state.variant == TerminalVariant::Amber) {
+            resultGlyph = Ico::Warning;
+        } else if (state.variant == TerminalVariant::Red) {
+            resultGlyph = Ico::Cross;
+        }
         auto* resultIcon = new GlyphWidget(16, header);
-        resultIcon->set(state.variant == TerminalVariant::Amber ? Ico::Warning
-                        : state.variant == TerminalVariant::Red ? Ico::Cross
-                                                                : Ico::Check,
-                        tone);
+        resultIcon->set(resultGlyph, tone);
         resultIcon->setStyleSheet(QStringLiteral("background:transparent;border:none;"));
         hr->addWidget(resultIcon, 0, Qt::AlignVCenter);
         auto* headline = new ElidingLabel(header);
@@ -947,6 +998,12 @@ void UpdaterWindow::emitForAction(const QString& action) {
         emit retryRequested();
     else if (action == QStringLiteral("Open ExoSnap"))
         emit openExoSnapRequested();
+    else if (action == QStringLiteral("Check for updates") || action == QStringLiteral("Check again"))
+        emit checkRequested();
+    else if (action == QStringLiteral("Download update"))
+        emit downloadRequested();
+    else if (action == QStringLiteral("Install now"))
+        emit applyRequested();
     else
         emit closeRequested();
 }
