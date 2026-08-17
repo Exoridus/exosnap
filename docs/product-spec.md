@@ -783,8 +783,12 @@ no memory access, to capture — it uses OS-level capture APIs (DXGI duplication
 Capture) only. Overlays are never auto-disabled; the user gets a global opt-out for on-screen
 overlays plus a one-time, non-blocking banner: "Anti-cheat detected — ExoSnap overlays do not inject;
 disable overlays if required by the game." The optional PresentMon-based present/tearing observation
-is an out-of-process ETW consumer, opt-in and elevation-gated, never a hard dependency; the app
-degrades gracefully when not elevated.
+is an **in-process** ETW consumer (a real-time trace session on a worker thread, ADR 0033), opt-in and
+elevation-gated, never a hard dependency; the app degrades gracefully when not elevated. Three states
+are reported and are distinguishable from each other, because "no measurement" has three different
+causes the user can act on differently: `requiresOptIn`, `requiresElevation`, and available. Turning
+the opt-in on never prompts for elevation — a settings toggle is not consent to restart the
+application.
 
 **Known target-identity boundaries.** A saved Display or Region target is remembered by a
 hardware-stable identity (the monitor's device path plus its EDID vendor/product, and its serial
