@@ -185,6 +185,22 @@ endif()
 # decision rather than a packaging contract.
 set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL ON)
 
+# The local Qt hint belongs HERE, not in app/, for the same reason the paragraph
+# above exists: libs/control is the first directory to call find_package(Qt6), and
+# it runs two add_subdirectory() lines before app/. A hint that arrives later is a
+# hint that arrives after the decision it was meant to inform -- libs/control then
+# takes its "Qt6 not found" branch, exosnap::control is never defined, and the
+# configure dies further down on an alias nobody declared. It stayed invisible for
+# as long as every tree had Qt6_DIR in its cache from an earlier configure, and on
+# CI, where the Qt action exports the path into the environment; the first genuinely
+# clean local configure is what surfaced it.
+#
+# Overridable as before: an explicit Qt6_DIR or CMAKE_PREFIX_PATH wins, because this
+# only fills in when nothing else has.
+if(NOT Qt6_DIR)
+    list(APPEND CMAKE_PREFIX_PATH "C:/Qt/6.11.1/msvc2022_64")
+endif()
+
 add_subdirectory(libs/recorder_core)
 add_subdirectory(libs/capability)
 add_subdirectory(libs/crash_capture)
