@@ -1320,13 +1320,21 @@ release (0.11 per ADR 0022).
   capture action). The exact number is deliberately not shown in the title bar: it is never the thing
   you act on, and the hub states it in full one click away.
 - **Toast notifications** — a transient glance at the hub, anchored bottom-right **of the screen
-  hosting the ExoSnap window**. A notification is **timed** when it reports something that already
-  finished (saved, update available, frames dropped, settings repaired, an unreadable settings file,
-  a hotkey unavailable at
-  startup, a settings save failure, a recovery-manifest write that failed) and **standing** when it
-  reports a condition that still holds
-  (low storage, unexpected stop, recovery available, an audio source that lost its device, a window
-  capture that stopped producing frames). At most
+  hosting the ExoSnap window**. A notification is **timed** when it reports an **event that already
+  happened** and **standing** when it reports a **condition that is true right now and will clear
+  itself** when it stops being true. Only three conditions qualify: low storage, an audio source
+  that lost its device, and a window capture that stopped producing frames — each is dismissed the
+  moment its condition ends. Everything else is an event and leaves on its own, including a
+  recording that stopped unexpectedly and an unfinalized recording offered for recovery: neither
+  will ever be cleared by anything, so standing meant *forever*, and neither loses anything by
+  going — the hub keeps every entry and the recovery surface offers itself again at startup.
+
+  Timed toasts have exactly two dwells, chosen by whether there is anything to do about them.
+  **10 s** when the card offers a way to act or reports a problem worth noticing — long enough to
+  read it, decide and reach the button, including while the user is still coming back from whatever
+  was being recorded. **5 s** when a glance is the whole interaction (a repaired setting, an omitted
+  overlay). Nothing is longer than 10 s: past that a toast reads as standing, and the reflex to
+  dismiss toasts unread is what would cost the three real standing notices their effect. At most
   one timed toast is visible — a newer one replaces it; standing toasts stack above it, never
   auto-dismiss, and always carry an explicit action out. A countdown bar appears exactly on the
   toasts that leave on their own. The card grows to fit its content: no reserved space for an absent

@@ -16,10 +16,12 @@ namespace exosnap::notifications {
 // announced via eventRecorded() so the notification hub can keep the full
 // history. The visible set is only the transient glance:
 //
-//  - A notification is TIMED when it reports something that already finished
-//    (saved, update available, frames dropped, …) and STANDING when it reports
-//    a condition that still holds (low storage, unexpected stop, recovery
-//    available). Standing == DismissIntervalMs(type) == 0.
+//  - A notification is TIMED when it reports an EVENT that already happened
+//    (saved, update available, frames dropped, recording stopped unexpectedly, …)
+//    and STANDING when it reports a CONDITION that is true right now and that
+//    will clear itself when it stops being true (low storage, audio source lost,
+//    capture stalled). Standing == DismissIntervalMs(type) == 0.
+//    Timed comes in two dwells — see the constants below.
 //  - At most one timed toast is visible; a new timed toast replaces the
 //    current one and never displaces a standing one.
 //  - Standing toasts stack without limit and never auto-dismiss.
@@ -33,51 +35,82 @@ class NotificationManager : public QObject {
     Q_OBJECT
 
   public:
-    // Per-type dwell durations in milliseconds. 0 means STANDING: the
-    // notification reports a condition that still holds, never auto-dismisses,
-    // and must carry an explicit way out beyond the ✕.
+    // Per-type dwell durations in milliseconds. There are exactly three values, and
+    // which one a type gets follows one question: WHAT IS THE NOTIFICATION ABOUT?
+    //
+    //   kDwellBrief (5 s)   — an event that already happened and asks nothing of the
+    //                         user. A glance is the whole interaction.
+    //   kDwellAction (10 s) — an event that already happened and offers a way to act
+    //                         on it, or reports a problem worth noticing. Long enough
+    //                         to read the body, decide, and reach the button --
+    //                         including when the user is still alt-tabbing back from
+    //                         whatever was being recorded.
+    //   0 == STANDING       — a CONDITION that is true right now and will CLEAR
+    //                         ITSELF when it stops being true. Never auto-dismisses,
+    //                         and must carry an explicit way out beyond the ✕.
+    //
+    // That last line is the rule the standing set is drawn by, and it is narrower
+    // than it used to be. UnexpectedStop and RecoveryAvailable were standing, but
+    // neither is a condition: they describe an event that is over and that nothing
+    // will ever come along and clear, so they stood forever. Both are now timed --
+    // and neither loses anything by it, because the hub keeps every entry and the
+    // recovery surface offers itself again at startup.
+    //
+    // Nothing here is longer than 10 s on purpose. Past that a toast starts reading
+    // as standing, the user learns that toasts get stuck, and the reflex to dismiss
+    // them unread is exactly what costs the real standing notices their effect.
+
     // NOLINTNEXTLINE(readability-identifier-naming)
-    static constexpr int kDismissMs_Saved = 5000;
+    static constexpr int kDwellBrief = 5000;
     // NOLINTNEXTLINE(readability-identifier-naming)
-    static constexpr int kDismissMs_LowStorage = 0; // standing
+    static constexpr int kDwellAction = 10000;
+
+    // --- Standing: a live condition that clears itself -----------------------
     // NOLINTNEXTLINE(readability-identifier-naming)
-    static constexpr int kDismissMs_UnexpectedStop = 0; // standing
+    static constexpr int kDismissMs_LowStorage = 0; // standing: the drive is still full
     // NOLINTNEXTLINE(readability-identifier-naming)
-    static constexpr int kDismissMs_RecoveryAvailable = 0; // standing
-    // NOLINTNEXTLINE(readability-identifier-naming)
-    static constexpr int kDismissMs_UpdateAvailable = 8000;
-    // NOLINTNEXTLINE(readability-identifier-naming)
-    static constexpr int kDismissMs_FramesDropped = 8000;
-    // NOLINTNEXTLINE(readability-identifier-naming)
-    static constexpr int kDismissMs_SettingsRepaired = 8000;
-    // Recorded in the hub only — never a toast (see class note).
-    // NOLINTNEXTLINE(readability-identifier-naming)
-    static constexpr int kDismissMs_PresetSwitched = 8000;
-    // NOLINTNEXTLINE(readability-identifier-naming)
-    static constexpr int kDismissMs_OverlayOmitted = 8000;
-    // NOLINTNEXTLINE(readability-identifier-naming)
-    static constexpr int kDismissMs_HotkeyConflict = 8000;
-    // NOLINTNEXTLINE(readability-identifier-naming)
-    static constexpr int kDismissMs_SettingsSaveFailed = 8000;
-    // NOLINTNEXTLINE(readability-identifier-naming)
-    static constexpr int kDismissMs_AudioSourceDegraded = 0; // standing
-    // NOLINTNEXTLINE(readability-identifier-naming)
-    static constexpr int kDismissMs_CaptureActionFailed = 8000;
-    // Timed, not standing: it reports a write that already failed, matching the
-    // treatment of the other completed-failure reports.
-    // NOLINTNEXTLINE(readability-identifier-naming)
-    static constexpr int kDismissMs_RecoveryProtectionUnavailable = 8000;
-    // Timed, like its sibling SettingsRepaired: the load already happened and
-    // there is no action the toast could offer that the Settings page does not
-    // already provide. The hub keeps the record for the whole session.
-    // NOLINTNEXTLINE(readability-identifier-naming)
-    static constexpr int kDismissMs_SettingsLoadFailed = 8000;
+    static constexpr int kDismissMs_AudioSourceDegraded = 0; // standing: the source is still gone
     // Standing: it reports a condition that still holds while the recording runs.
     // The composition root dismisses it the moment capture frames resume, and
     // again when the session ends — the body says "the recording is still
     // running", which stops being true then.
     // NOLINTNEXTLINE(readability-identifier-naming)
     static constexpr int kDismissMs_WindowCaptureStalled = 0; // standing
+
+    // --- Actionable / problem ------------------------------------------------
+    // Two actions (Edit, Show in folder) and a filename to read, shown the moment a
+    // recording ends -- when the user is most likely to still be looking elsewhere.
+    // NOLINTNEXTLINE(readability-identifier-naming)
+    static constexpr int kDismissMs_Saved = kDwellAction;
+    // NOLINTNEXTLINE(readability-identifier-naming)
+    static constexpr int kDismissMs_UnexpectedStop = kDwellAction;
+    // NOLINTNEXTLINE(readability-identifier-naming)
+    static constexpr int kDismissMs_RecoveryAvailable = kDwellAction;
+    // NOLINTNEXTLINE(readability-identifier-naming)
+    static constexpr int kDismissMs_UpdateAvailable = kDwellAction;
+    // NOLINTNEXTLINE(readability-identifier-naming)
+    static constexpr int kDismissMs_FramesDropped = kDwellAction;
+    // NOLINTNEXTLINE(readability-identifier-naming)
+    static constexpr int kDismissMs_HotkeyConflict = kDwellAction;
+    // NOLINTNEXTLINE(readability-identifier-naming)
+    static constexpr int kDismissMs_SettingsSaveFailed = kDwellAction;
+    // NOLINTNEXTLINE(readability-identifier-naming)
+    static constexpr int kDismissMs_CaptureActionFailed = kDwellAction;
+    // Timed, not standing: it reports a write that already failed, matching the
+    // treatment of the other completed-failure reports.
+    // NOLINTNEXTLINE(readability-identifier-naming)
+    static constexpr int kDismissMs_RecoveryProtectionUnavailable = kDwellAction;
+    // NOLINTNEXTLINE(readability-identifier-naming)
+    static constexpr int kDismissMs_SettingsLoadFailed = kDwellAction;
+
+    // --- Brief: happened, nothing to do --------------------------------------
+    // NOLINTNEXTLINE(readability-identifier-naming)
+    static constexpr int kDismissMs_SettingsRepaired = kDwellBrief;
+    // NOLINTNEXTLINE(readability-identifier-naming)
+    static constexpr int kDismissMs_OverlayOmitted = kDwellBrief;
+    // Recorded in the hub only — never a toast (see class note).
+    // NOLINTNEXTLINE(readability-identifier-naming)
+    static constexpr int kDismissMs_PresetSwitched = kDwellBrief;
 
     explicit NotificationManager(QObject* parent = nullptr);
 
