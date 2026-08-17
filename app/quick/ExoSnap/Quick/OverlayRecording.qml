@@ -93,6 +93,13 @@ Window {
     // be a defect, not a setting.
     flags: Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
            | Qt.WindowDoesNotAcceptFocus | Qt.WindowTransparentForInput
+
+    // Named, and NOT left to Qt's default. An untitled QWindow falls back to the
+    // application display name, which made every overlay a top-level window
+    // titled "ExoSnap" -- six of them, indistinguishable from the main window to
+    // anything that identifies it by owner pid and title. The staged updater does
+    // exactly that when it asks the app to close for a swap.
+    title: qsTr("ExoSnap Overlay — Recording")
     color: "transparent"
 
     // Fail-closed as a binding: `granted` is false until a platform call proved

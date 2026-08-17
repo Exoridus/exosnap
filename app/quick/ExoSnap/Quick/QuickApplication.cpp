@@ -49,6 +49,10 @@
 #include <QVariantMap>
 
 #include <update/install_mode_detector.h>
+// The private message the staged updater posts to ask this process to close for
+// the swap. One header, both sides -- a second copy of the number would compile
+// and never arrive.
+#include <update/update_handoff.h>
 
 #include <capability/capability_builder.h>
 
@@ -139,6 +143,47 @@ class QuickHotkeyEventFilter : public QAbstractNativeEventFilter {
     HWND hwnd_ = nullptr;
     std::function<void(HotkeyAction)> on_action_;
 };
+
+// The staged updater's marked close request, routed to the composition root.
+//
+// This is the only way the updater can ask the running application to release
+// its own executable, and it is deliberately a PRIVATE message with a magic
+// wParam rather than WM_CLOSE: WM_CLOSE means "the user closed the window",
+// which for ExoSnap means close-to-tray, and a tray-resident process still holds
+// its image locked. The updater targets the top-level window by owner pid AND
+// exact title, so the strict hwnd check here is the same identity from the other
+// side.
+class QuickUpdaterHandoffFilter : public QAbstractNativeEventFilter {
+  public:
+    QuickUpdaterHandoffFilter(HWND hwnd, std::function<void()> on_handoff)
+        : hwnd_(hwnd), on_handoff_(std::move(on_handoff)) {
+    }
+
+    bool nativeEventFilter(const QByteArray& event_type, void* message, qintptr* result) override {
+        if (message == nullptr)
+            return false;
+        if (event_type != QByteArrayLiteral("windows_generic_MSG") &&
+            event_type != QByteArrayLiteral("windows_dispatcher_MSG")) {
+            return false;
+        }
+        auto* msg = static_cast<MSG*>(message);
+        if (msg->hwnd != hwnd_ || msg->message != static_cast<UINT>(exosnap::update::kUpdaterHandoffMessage))
+            return false;
+        // The magic word is what makes this OURS. WM_APP-range values are only
+        // private by convention, so a foreign process posting the same number
+        // must not be able to end this one.
+        if (msg->wParam != static_cast<WPARAM>(exosnap::update::kUpdaterHandoffMagic))
+            return false;
+        on_handoff_();
+        if (result != nullptr)
+            *result = 0;
+        return true;
+    }
+
+  private:
+    HWND hwnd_ = nullptr;
+    std::function<void()> on_handoff_;
+};
 #endif
 
 QString captureSourceUnavailableNotice() {
@@ -223,6 +268,8 @@ QuickApplication::~QuickApplication() {
     // a freed filter. Same shape QuickWindowChrome::detach() already uses.
     if (hotkey_event_filter_)
         QCoreApplication::instance()->removeNativeEventFilter(hotkey_event_filter_.get());
+    if (updater_handoff_filter_)
+        QCoreApplication::instance()->removeNativeEventFilter(updater_handoff_filter_.get());
     // The service keeps a bare pointer to the registrar, which is a member below
     // it; unhook before either can be destroyed.
     (void)hotkey_service_.SetRegistrar(nullptr);
@@ -2319,6 +2366,46 @@ void QuickApplication::applyUpdateChannel() {
                               QStringLiteral("Update channel set to %1").arg(settings_.update_channel));
 }
 
+void QuickApplication::closeForUpdaterHandoff() {
+    // Idempotent: the updater posts once, but a message loop is not a promise of
+    // exactly-once delivery, and quitting twice would race the teardown.
+    if (update_handoff_phase_ == UpdateHandoffPhase::ClosingForHandoff)
+        return;
+
+    // The one refusal. The recording guard that blocked STARTING this update is
+    // not weakened by the handoff: a capture or remux can have begun between the
+    // launch and this request, and ending the process then would lose the
+    // recording. The updater's own answer for a parent that will not close is
+    // appWontClose (B1) with the installation untouched -- which is the truth.
+    const UiRecordingState state = record_view_model_.state;
+    if (state != UiRecordingState::Ready && state != UiRecordingState::Completed && state != UiRecordingState::Failed &&
+        state != UiRecordingState::Blocked) {
+        diagnostics::AppLog::warning(
+            QStringLiteral("update"),
+            QStringLiteral("The updater asked ExoSnap to close for the swap, but a recording is in flight; "
+                           "refusing. The update will report that the app would not close."));
+        return;
+    }
+
+    update_handoff_phase_ = UpdateHandoffPhase::ClosingForHandoff;
+    settings_adapter_.setUpdateStatus(QStringLiteral("pending"), last_available_version_, QString());
+    diagnostics::AppLog::info(
+        QStringLiteral("update"),
+        QStringLiteral("The updater has verified version %1 and asked ExoSnap to close for the swap")
+            .arg(last_available_version_.isEmpty() ? QStringLiteral("the update") : last_available_version_));
+
+    // quit(), NOT the window close the tray's "Quit" drives. Closing the window
+    // runs the close-guard chain and the hide-to-tray decision, and a
+    // tray-resident process still holds exosnap.exe locked -- which is exactly
+    // the file the updater is about to rename. The one guard that must still
+    // apply, a recording in flight, is checked above, explicitly, rather than
+    // inherited from a chain that can also decide to keep the process alive.
+    //
+    // Ending the event loop is enough: QuickApplication's destructor performs
+    // the same geometry/persist flush every other exit relies on.
+    QCoreApplication::quit();
+}
+
 QString QuickApplication::updateBlockerReason() const {
     // App-layer recording guard: never contact the update server while a capture
     // or remux is in flight.
@@ -3483,6 +3570,12 @@ bool QuickApplication::load(bool no_activate) {
         hotkey_event_filter_ = std::make_unique<QuickHotkeyEventFilter>(
             hwnd, [this](HotkeyAction action) { triggerHotkeyAction(action); });
         QCoreApplication::instance()->installNativeEventFilter(hotkey_event_filter_.get());
+        // Same ordering constraint, same window: the updater finds this HWND by
+        // owner pid and title, so the filter has to be armed as soon as the
+        // window exists.
+        updater_handoff_filter_ =
+            std::make_unique<QuickUpdaterHandoffFilter>(hwnd, [this] { closeForUpdaterHandoff(); });
+        QCoreApplication::instance()->installNativeEventFilter(updater_handoff_filter_.get());
         // The return value is the set of bindings Windows refused, usually
         // because another application already owns the combo. Discarding it left
         // the user with a shortcut that silently did nothing and no way to find

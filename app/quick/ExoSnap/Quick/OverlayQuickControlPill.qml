@@ -67,6 +67,11 @@ Window {
     // No Qt.WindowTransparentForInput here: this window takes mouse input.
     flags: Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.WindowDoesNotAcceptFocus
 
+    // Named rather than left to Qt's default: an untitled QWindow inherits the
+    // application display name, and five overlays titled "ExoSnap" made the main
+    // window impossible to identify by owner pid and title. See OverlayRecording.
+    title: qsTr("ExoSnap Overlay — Quick controls")
+
     color: "transparent"
 
     visible: exclusion.granted && root.overlayActive

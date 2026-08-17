@@ -120,6 +120,11 @@ Window {
     // Not conditional: an overlay over someone else's screen never takes input.
     flags: Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
            | Qt.WindowDoesNotAcceptFocus | Qt.WindowTransparentForInput
+
+    // Named rather than left to Qt's default: an untitled QWindow inherits the
+    // application display name, and five overlays titled "ExoSnap" made the main
+    // window impossible to identify by owner pid and title. See OverlayRecording.
+    title: qsTr("ExoSnap Overlay — Diagnostics")
     color: "transparent"
 
     // Fail-closed: `granted` starts false. The empty-content case is already

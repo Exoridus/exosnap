@@ -53,6 +53,11 @@ Window {
 
     flags: Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
            | Qt.WindowDoesNotAcceptFocus | Qt.WindowTransparentForInput
+
+    // Named rather than left to Qt's default: an untitled QWindow inherits the
+    // application display name, and five overlays titled "ExoSnap" made the main
+    // window impossible to identify by owner pid and title. See OverlayRecording.
+    title: qsTr("ExoSnap Overlay — Countdown")
     color: "transparent"
 
     visible: exclusion.granted && root.countdownActive && root.remainingSeconds > 0

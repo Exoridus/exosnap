@@ -255,6 +255,15 @@ There is deliberately no command that arms a handoff; a handoff is a start
 argument, and a channel that could set one afterwards would let a caller decide
 what an elevated `msiexec` installs.
 
+An attached client cannot keep the process alive. The endpoint's teardown used
+to `FlushFileBuffers` the pipe, which on a named-pipe **server** blocks until the
+**client** has read everything still buffered — with no timeout. A runner waiting
+for the application to exit is by definition not reading, so one unread event was
+enough to hold the process open indefinitely; the updater then reported the
+truthful-for-what-it-could-see `appWontClose`. The flush is now skipped on the
+stop path: letting a departing peer drain its buffer is politeness, and it does
+not outrank the product's ability to exit.
+
 Live Verify mode is **not** a harness mode: no config isolation, no
 single-instance suppression, no tray suppression. Set `EXOSNAP_CONFIG_DIR` and
 `EXOSNAP_OUTPUT_DIR` yourself when a check needs an isolated profile, so which

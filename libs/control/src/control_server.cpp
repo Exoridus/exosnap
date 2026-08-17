@@ -397,7 +397,23 @@ void ControlServer::ServeLoop() {
         (void)TakeOutbound();
 
         CancelIoEx(pipe, nullptr);
-        FlushFileBuffers(pipe);
+        // NEVER on the stop path. FlushFileBuffers on a named-pipe SERVER blocks
+        // until the CLIENT has read everything still buffered -- with no timeout
+        // and nothing to cancel it. A client that has stopped reading therefore
+        // holds this thread, and Stop()'s join() with it, for as long as it likes.
+        //
+        // That is not hypothetical: a runner waiting for THIS process to exit is
+        // by definition not reading, so the last event written before shutdown
+        // (the update card moving to "pending" as the app closes for a swap) was
+        // enough to keep the application alive indefinitely -- which the updater
+        // then reported, correctly for what it could observe, as appWontClose.
+        //
+        // Letting a departing peer drain its buffer is politeness; it does not
+        // outrank the product's ability to exit. On a normal client-initiated
+        // disconnect the pipe is already gone and the flush returns at once, so
+        // this costs nothing there.
+        if (WaitForSingleObject(stop, 0) != WAIT_OBJECT_0)
+            FlushFileBuffers(pipe);
         DisconnectNamedPipe(pipe);
         CloseHandle(pipe);
     }

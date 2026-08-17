@@ -307,6 +307,13 @@ class QuickApplication {
     void triggerUpdateCheck(bool manual);
     void onUpdateCheckComplete(const exosnap::update::UpdateCheckResult& result);
     void runUpdatePrimaryAction();
+    // The staged updater has verified the package and is asking this process to
+    // get out of the way so it can replace the installation. Ends the process --
+    // deliberately bypassing close-to-tray, which would leave the executable
+    // locked — unless a recording is in flight, which is the ONE reason to
+    // refuse: the guard that blocked starting the update is not weakened by the
+    // handoff, and the updater reports the honest appWontClose instead.
+    void closeForUpdaterHandoff();
     void dispatchNotificationAction(notifications::NotificationAction action, const QString& payload);
     void publishRecordingResultNotification(const UiRecordingResult& result);
     [[nodiscard]] CloseGuardState sampleCloseGuardState() const;
@@ -486,6 +493,11 @@ class QuickApplication {
 #if defined(Q_OS_WIN)
     std::unique_ptr<Win32HotkeyRegistrar> hotkey_registrar_;
     std::unique_ptr<QAbstractNativeEventFilter> hotkey_event_filter_;
+    // The updater's marked close request. Without it the staged updater has no
+    // way to ask this process to get out of the way, and a portable update stops
+    // at CloseApp with appWontClose -- which is precisely what happened after the
+    // Qt Quick cutover dropped the Widgets shell's nativeEvent handler.
+    std::unique_ptr<QAbstractNativeEventFilter> updater_handoff_filter_;
 #endif
     RecordingCountdownController countdown_;
     QElapsedTimer countdown_clock_;
