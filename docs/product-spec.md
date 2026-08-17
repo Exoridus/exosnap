@@ -611,6 +611,11 @@ all rather than shown-and-inert; it appears the moment an HDR-active display is 
 disappears again if none remains. A stored `hdr_mode` is never rewritten while the row is hidden —
 it takes effect again exactly as before the moment a qualifying display returns.
 
+Detection is not a single reading taken at launch. Windows HDR is a system-wide toggle the user can
+flip at any moment, so the per-display facts are re-read on every display-configuration change, and
+the recording-admission check reads them fresh regardless — a desktop switched to HDR after ExoSnap
+started reaches the HDR handling row and the Diagnostics HDR card rather than waiting for a restart.
+
 Behavior:
 
 - On a non-HDR display the choice has no visible effect either way (the row is hidden there, per

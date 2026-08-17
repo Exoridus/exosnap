@@ -50,6 +50,14 @@ class CaptureTargetNotifier final : public QObject {
 
     [[nodiscard]] const CaptureTargetSnapshot& currentSnapshot() const noexcept;
 
+    // The display-topology notifier this class already owns and already listens to.
+    // Exposed so a second consumer can observe a display-configuration change
+    // without installing a second set of QGuiApplication screen connections — the
+    // target list and the per-display DXGI facts both go stale on the same event.
+    [[nodiscard]] DisplayDeviceNotifier& displayNotifier() noexcept {
+        return display_notifier_;
+    }
+
   signals:
     void snapshotChanged(const exosnap::CaptureTargetSnapshot& snapshot, exosnap::DiscoveryReason reason);
 

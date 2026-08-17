@@ -553,6 +553,9 @@ TEST(EnvironmentSnapshotJson, HdrOffAndHdrUnknownAreDifferentPayloads) {
 
     capability::DisplayHdrFacts facts;
     facts.name = "\\\\.\\DISPLAY1";
+    // The join key: DXGI names the monitor "\\.\DISPLAY1" and Qt names the same
+    // monitor "27GL850", so only the DisplayConfig friendly name connects them.
+    facts.friendly_name = "27GL850";
     facts.hdr_active = false;
     facts.wide_color_enforced = true;
     inputs.capabilities.probed = true;
@@ -569,6 +572,81 @@ TEST(EnvironmentSnapshotJson, HdrOffAndHdrUnknownAreDifferentPayloads) {
     EXPECT_FALSE(measured.value(QStringLiteral("hdrActive")).toBool());
     EXPECT_TRUE(measured.value(QStringLiteral("automaticColorManagement")).toBool());
     EXPECT_EQ(measured.value(QStringLiteral("colorAvailability")).toString(), QStringLiteral("available"));
+}
+
+// The DXGI output walk and Qt's screen list are two independent enumerations of
+// the same monitors. A positional join reads correctly only while the two happen
+// to agree, and reports one monitor's HDR state under the other's name the moment
+// they do not -- silently, because both payloads are well-formed. So the fixture
+// hands the DXGI facts over in the OPPOSITE order and asserts HDR still lands on
+// the panel that has it.
+TEST(EnvironmentSnapshotJson, DisplayFactsJoinByNameNotByEnumerationOrder) {
+    EnvironmentSnapshotInputs inputs;
+    ScreenFacts sdr_screen;
+    sdr_screen.name = QStringLiteral("27GL650F");
+    inputs.screens.push_back(sdr_screen);
+    ScreenFacts hdr_screen;
+    hdr_screen.name = QStringLiteral("27GL850");
+    inputs.screens.push_back(hdr_screen);
+
+    capability::DisplayHdrFacts hdr;
+    hdr.name = "\\\\.\\DISPLAY1";
+    hdr.friendly_name = "27GL850";
+    hdr.hdr_active = true;
+    hdr.max_luminance_nits = 600.0f;
+    capability::DisplayHdrFacts sdr;
+    sdr.name = "\\\\.\\DISPLAY2";
+    sdr.friendly_name = "27GL650F";
+    sdr.hdr_active = false;
+
+    inputs.capabilities.probed = true;
+    // Same length as the screen list -- which is exactly the case the old
+    // index-based join accepted as unambiguous.
+    inputs.capabilities.runtime.displays = {hdr, sdr};
+
+    const QJsonArray screens = EnvironmentSnapshotToJson(inputs)
+                                   .value(QStringLiteral("displays"))
+                                   .toObject()
+                                   .value(QStringLiteral("screens"))
+                                   .toArray();
+    ASSERT_EQ(screens.size(), 2);
+
+    const QJsonObject sdr_entry = screens.at(0).toObject();
+    EXPECT_EQ(sdr_entry.value(QStringLiteral("name")).toString(), QStringLiteral("27GL650F"));
+    EXPECT_FALSE(sdr_entry.value(QStringLiteral("hdrActive")).isNull());
+    EXPECT_FALSE(sdr_entry.value(QStringLiteral("hdrActive")).toBool());
+
+    const QJsonObject hdr_entry = screens.at(1).toObject();
+    EXPECT_EQ(hdr_entry.value(QStringLiteral("name")).toString(), QStringLiteral("27GL850"));
+    EXPECT_TRUE(hdr_entry.value(QStringLiteral("hdrActive")).toBool());
+    EXPECT_EQ(hdr_entry.value(QStringLiteral("maxLuminanceNits")).toDouble(), 600.0);
+}
+
+// No name, no join. The alternative is inheriting whichever DXGI entry sits at the
+// same index, which is how an SDR monitor comes to report a neighbour's HDR state.
+TEST(EnvironmentSnapshotJson, AnUnnamedDxgiDisplayMatchesNothingRatherThanItsNeighbour) {
+    EnvironmentSnapshotInputs inputs;
+    ScreenFacts screen;
+    screen.name = QStringLiteral("27GL850");
+    inputs.screens.push_back(screen);
+
+    capability::DisplayHdrFacts facts;
+    facts.name = "\\\\.\\DISPLAY1";
+    facts.friendly_name = ""; // DisplayConfig answered nothing for this path
+    facts.hdr_active = true;
+    inputs.capabilities.probed = true;
+    inputs.capabilities.runtime.displays.push_back(facts);
+
+    const QJsonObject entry = EnvironmentSnapshotToJson(inputs)
+                                  .value(QStringLiteral("displays"))
+                                  .toObject()
+                                  .value(QStringLiteral("screens"))
+                                  .toArray()
+                                  .at(0)
+                                  .toObject();
+    EXPECT_TRUE(entry.value(QStringLiteral("hdrActive")).isNull());
+    // Probed, and this display was not among what the probe could name.
+    EXPECT_EQ(entry.value(QStringLiteral("colorAvailability")).toString(), QStringLiteral("unsupported"));
 }
 
 TEST(EnvironmentSnapshotJson, PresentUnavailabilityNamesItsCauseInGateOrder) {

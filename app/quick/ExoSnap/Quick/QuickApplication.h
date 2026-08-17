@@ -229,6 +229,19 @@ class QuickApplication {
     [[nodiscard]] const capability::CapabilitySet& capabilities() const noexcept {
         return capabilities_;
     }
+
+    // Re-reads the per-display DXGI facts and re-publishes what the product derives
+    // from them. The capability probe writes `runtime.displays` exactly once at
+    // startup, and HDR is a Windows-global toggle the user can flip at any moment
+    // afterwards -- so without this, the HDR-handling settings row, the Diagnostics
+    // HDR card and environment.snapshot all keep reporting the state the desktop was
+    // in when ExoSnap launched.
+    //
+    // GUI-thread only, and cheap by the same argument that lets the coordinator call
+    // QueryDisplayFacts() inline on the admission path: a DXGI factory, an output
+    // walk and one QueryDisplayConfig, no encoder session and no device creation.
+    void refreshDisplayFacts();
+
     [[nodiscard]] QString settingsFilePath() const {
         return settings_store_.SettingsFilePath();
     }
@@ -280,6 +293,11 @@ class QuickApplication {
     void startCapabilityProbe();
     void onCapabilitiesReady(const capability::CapabilitySet& capabilities);
     void onCapabilityProbeFailed(const QString& reason);
+    // Pushes the two pieces of product state derived from `capabilities_.runtime.displays`
+    // -- the HDR-handling row's gate and the selected target's HDR fact -- and nothing
+    // else. Separate from updateCaptureEvidenceTarget() so a display re-probe can
+    // re-publish them without also re-subscribing the WGC evidence probe.
+    void publishDisplayDerivedState();
     // Re-seeds a --record-visual-state / --overlay-visual-state after the
     // capability probe has pushed the coordinator's own state over it. See the
     // definition for why this cannot be a delay instead.

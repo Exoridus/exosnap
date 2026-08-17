@@ -116,16 +116,33 @@ QJsonObject DisplayJson(const ScreenFacts& screen, const capability::DisplayHdrF
     return json;
 }
 
-// The DXGI display facts are keyed by the Windows device name ("\\.\DISPLAY7").
-// Qt's QScreen::name() is the monitor's FRIENDLY name on Windows, so the two do
-// not join on equality -- and a positional join would be a guess. Match by index
-// only when both lists have the same length, which is the one case where the
-// mapping is not ambiguous; otherwise report the DXGI facts unmatched.
+// The DXGI display facts are keyed by the Windows GDI device name
+// ("\\.\DISPLAY7"). Qt's QScreen::name() is the monitor's FRIENDLY name on
+// Windows ("27GL850"), so the two do not join on equality -- which is why
+// ProbeDisplays carries the DisplayConfig friendly name for the same active path
+// beside the GDI name, exactly the way envctl pairs them. That name IS the join,
+// and it is the only join: matching by list position answered correctly only by
+// coincidence, and silently attributed one monitor's HDR state to another
+// whenever DXGI enumerated the outputs in a different order than Qt did.
+//
+// Nothing here falls back. No index, no geometry, no prefix or case-folded
+// compare: a name that is absent, or shared by two identical panels, matches
+// NOTHING, because "colorAvailability: unsupported" is a true statement about
+// this process's knowledge while a guessed hdrActive is not.
 const capability::DisplayHdrFacts* MatchDisplay(const std::vector<capability::DisplayHdrFacts>& displays,
-                                                std::size_t index, std::size_t screen_count) {
-    if (displays.size() != screen_count || index >= displays.size())
+                                                const QString& screen_name) {
+    if (screen_name.isEmpty())
         return nullptr;
-    return &displays[index];
+    const std::string wanted = screen_name.toStdString();
+    const capability::DisplayHdrFacts* match = nullptr;
+    for (const capability::DisplayHdrFacts& display : displays) {
+        if (display.friendly_name.empty() || display.friendly_name != wanted)
+            continue;
+        if (match != nullptr)
+            return nullptr; // ambiguous twins -- neither, rather than either
+        match = &display;
+    }
+    return match;
 }
 
 QJsonObject PresentJson(const PresentObservation& present) {
@@ -221,7 +238,7 @@ QJsonObject EnvironmentSnapshotToJson(const EnvironmentSnapshotInputs& inputs) {
     QJsonArray displays;
     for (std::size_t i = 0; i < inputs.screens.size(); ++i) {
         displays.append(
-            DisplayJson(inputs.screens[i], MatchDisplay(caps.runtime.displays, i, inputs.screens.size()), caps.probed));
+            DisplayJson(inputs.screens[i], MatchDisplay(caps.runtime.displays, inputs.screens[i].name), caps.probed));
     }
     QJsonObject display_group;
     display_group.insert(QStringLiteral("screens"), displays);

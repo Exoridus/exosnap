@@ -709,6 +709,18 @@ void QuickApplication::initializeRecordWorkflow() {
                          refreshCaptureTargets(snapshot, reason);
                      });
 
+    // A monitor arriving, leaving or being re-arranged also re-orders the DXGI
+    // outputs and can change what each one reports, so the display facts are
+    // re-read on the same event rather than left at what startup measured.
+    //
+    // This is NOT sufficient on its own and is not meant to be: the snapshot is
+    // deduplicated on geometry/DPI/primary, and turning Windows HDR on moves none
+    // of those. The read-time refresh on the observability path covers that case;
+    // this one covers a topology change that no one asks about.
+    QObject::connect(&capture_target_notifier_.displayNotifier(), &DisplayDeviceNotifier::snapshotChanged,
+                     &record_view_model_adapter_,
+                     [this](const DisplaySnapshot&, DiscoveryReason) { refreshDisplayFacts(); });
+
     countdown_timer_.setInterval(100);
     countdown_timer_.setTimerType(Qt::PreciseTimer);
     QObject::connect(&countdown_timer_, &QTimer::timeout, &record_view_model_adapter_, [this]() { updateCountdown(); });
@@ -804,19 +816,68 @@ void QuickApplication::onCapabilitiesReady(const capability::CapabilitySet& capa
     // against the empty set while the probe ran, so they are rebuilt here.
     device_adapter_.setCapabilitySet(capabilities_);
     settings_adapter_.setCapabilities(capabilities_);
-    // Product-spec §6: the HDR-handling row exists only once a display actively
-    // reports an HDR colour space. Nothing set this before, so the row's gate was
-    // stuck at its `false` default and an HDR user could never reach the setting.
-    const auto& displays = capabilities_.runtime.displays;
-    settings_adapter_.setHdrDisplayPresent(
-        std::any_of(displays.begin(), displays.end(),
-                    [](const capability::DisplayHdrFacts& display) { return display.hdr_active; }));
+    publishDisplayDerivedState();
     refreshDiagnosticsData();
     if (!visualScenarioLatched())
         record_view_model_.SetState(recording_coordinator_->State());
     record_view_model_.capability_status_text = recording_coordinator_->CapabilityStatusText();
     synchronizeRecordState();
     reapplyVisualScenarios();
+}
+
+// Product-spec §6: the HDR-handling row exists only once a display actively
+// reports an HDR colour space, and the Diagnostics HDR card describes the SELECTED
+// target's display. Both read the same probed vector, so both are published here --
+// once, from one place, so they can never disagree about whether HDR is on.
+void QuickApplication::publishDisplayDerivedState() {
+    const auto& displays = capabilities_.runtime.displays;
+    settings_adapter_.setHdrDisplayPresent(
+        std::any_of(displays.begin(), displays.end(),
+                    [](const capability::DisplayHdrFacts& display) { return display.hdr_active; }));
+
+    // A seeded --record-visual-state target has no live display behind it; leaving
+    // the pushed value alone is what keeps a re-probe from reverting the scenario.
+    if (visualScenarioLatched())
+        return;
+
+    // Same resolver the coordinator's own native-HDR10 decision uses
+    // (FindTargetDisplayFacts over the probed display facts).
+    bool hdr_active = false;
+    if (const std::optional<recorder_core::CaptureTarget> target = selectedCaptureTarget(); target.has_value()) {
+        const capability::DisplayHdrFacts* facts = FindTargetDisplayFacts(*target, displays);
+        hdr_active = facts != nullptr && facts->hdr_active;
+    }
+    if (pushed_capture_target_hdr_active_ != hdr_active) {
+        pushed_capture_target_hdr_active_ = hdr_active;
+        diagnostics_adapter_.setCaptureTargetHdrActive(hdr_active);
+    }
+}
+
+// Windows HDR is a global toggle with no ExoSnap-side trigger: the user flips it in
+// Settings, or a game flips it, and nothing about this process changes. The startup
+// capability probe is the ONLY writer of `runtime.displays`, so every consumer of it
+// was reporting the desktop's state at launch for the rest of the session — a user
+// who enabled HDR after starting ExoSnap never saw the HDR-handling row appear, and
+// environment.snapshot answered `hdrActive: false` about a live HDR desktop.
+//
+// Re-runs the same IDXGIOutput6::GetDesc1 read the probe used and nothing else: no
+// adapter capability query, no NVENC session, no Media Foundation probe.
+void QuickApplication::refreshDisplayFacts() {
+    // Both callers are GUI-thread edges (a screen-topology signal, and a control
+    // dispatch already marshalled onto the application object). Everything this
+    // touches afterwards — capabilities_, the adapters — is GUI-thread-owned, so a
+    // caller that got here from anywhere else is the defect, not the data.
+    Q_ASSERT(QCoreApplication::instance() == nullptr ||
+             QThread::currentThread() == QCoreApplication::instance()->thread());
+
+    std::vector<capability::DisplayHdrFacts> displays = capability::CapabilityBuilder::QueryDisplayFacts();
+    // An empty result means the query itself failed (no DXGI factory). Keep what we
+    // had rather than announcing that every display just went SDR — same rule the
+    // coordinator's RefreshDisplayFacts() applies for the same reason.
+    if (displays.empty())
+        return;
+    capabilities_.runtime.displays = std::move(displays);
+    publishDisplayDerivedState();
 }
 
 void QuickApplication::onCapabilityProbeFailed(const QString& reason) {
@@ -1560,18 +1621,10 @@ void QuickApplication::updateCaptureEvidenceTarget() {
         // looking at rather than whatever presented last.
         updatePresentAttribution(presentTargetPidForSelection(), /*force=*/false);
     }
-    // Same resolver the coordinator's own native-HDR10 decision uses
-    // (FindTargetDisplayFacts over the probed display facts), so the blocker and
-    // the card that explains it can never disagree about whether HDR is on.
-    bool hdr_active = false;
-    if (target.has_value()) {
-        const capability::DisplayHdrFacts* facts = FindTargetDisplayFacts(*target, capabilities_.runtime.displays);
-        hdr_active = facts != nullptr && facts->hdr_active;
-    }
-    if (pushed_capture_target_hdr_active_ != hdr_active) {
-        pushed_capture_target_hdr_active_ = hdr_active;
-        diagnostics_adapter_.setCaptureTargetHdrActive(hdr_active);
-    }
+    // The selection just moved, so the display-derived facts are republished for
+    // the new target. One shared implementation, so the blocker and the card that
+    // explains it can never disagree about whether HDR is on.
+    publishDisplayDerivedState();
 
     if (hwnd == evidence_target_hwnd_ && paused == evidence_paused_)
         return;

@@ -698,6 +698,18 @@ QJsonObject QuickLiveVerifySource::DiagnosticsResults() const {
 }
 
 QJsonObject QuickLiveVerifySource::EnvironmentSnapshot() const {
+    // The one read on this path that is NOT purely passive, and deliberately so.
+    // `runtime.displays` is written once, by the startup capability probe, while
+    // Windows HDR is a global toggle the user can flip at any moment afterwards --
+    // so a passive read here would report the desktop's state at launch and call it
+    // an observation. Re-reading IDXGIOutput6::GetDesc1 changes nothing about the
+    // machine and starts nothing (contrast the adapter scan below, which would open
+    // an NVENC session and therefore stays untouched).
+    //
+    // Runs on the GUI thread: the control server marshals every dispatch onto the
+    // application object with a queued connection before this method is entered.
+    application_.refreshDisplayFacts();
+
     observability::EnvironmentSnapshotInputs inputs;
     inputs.capabilities = application_.capabilities();
     inputs.elevated = application_.diagnosticsAdapter() != nullptr && application_.diagnosticsAdapter()->elevated();

@@ -325,16 +325,40 @@ void ProbeAdapterName(NvidiaRuntimeFacts& nvidia) {
     }
 }
 
+std::string Utf8From(const wchar_t* text) {
+    if (text == nullptr || *text == L'\0') {
+        return {};
+    }
+    const int len = WideCharToMultiByte(CP_UTF8, 0, text, -1, nullptr, 0, nullptr, nullptr);
+    if (len <= 1) {
+        return {};
+    }
+    std::string out(static_cast<size_t>(len - 1), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, text, -1, out.data(), len, nullptr, nullptr);
+    return out;
+}
+
 // -------------------------------------------------------------------------
 // B2. Per-display HDR facts (IDXGIOutput6::GetDesc1)
 // -------------------------------------------------------------------------
-// Windows "Automatic Color Management" state per display, keyed by GDI device name
+// The DisplayConfig facts DXGI cannot answer, keyed by GDI device name
 // (e.g. "\\.\DISPLAY7", matching DXGI_OUTPUT_DESC1::DeviceName). Mirrors the
 // QueryTargetFactsByGdiName join pattern in DisplayIdentityEnumerator.cpp: walk
 // QueryDisplayConfig's active paths, resolve each path's source GDI name, then
-// read DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO for that path's target.
-std::unordered_map<std::wstring, bool> QueryWideColorEnforcedByGdiName() {
-    std::unordered_map<std::wstring, bool> out;
+// read that path's target for the friendly name and the advanced-colour state.
+//
+// The friendly name is read here rather than derived anywhere else because this is
+// the one place where Windows itself pairs the two names for the SAME path — the
+// join key the Qt-side screen list needs. Both fields are best-effort: a target or
+// ACM read that fails leaves its own field at its default and never borrows the
+// other's value.
+struct DisplayConfigFacts {
+    std::wstring friendly_name;
+    bool wide_color_enforced = false;
+};
+
+std::unordered_map<std::wstring, DisplayConfigFacts> QueryDisplayConfigFactsByGdiName() {
+    std::unordered_map<std::wstring, DisplayConfigFacts> out;
 
     UINT32 path_count = 0;
     UINT32 mode_count = 0;
@@ -359,22 +383,33 @@ std::unordered_map<std::wstring, bool> QueryWideColorEnforcedByGdiName() {
             continue;
         }
 
+        DisplayConfigFacts facts;
+
+        DISPLAYCONFIG_TARGET_DEVICE_NAME target{};
+        target.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME;
+        target.header.size = sizeof(target);
+        target.header.adapterId = path.targetInfo.adapterId;
+        target.header.id = path.targetInfo.id;
+        if (DisplayConfigGetDeviceInfo(&target.header) == ERROR_SUCCESS) {
+            facts.friendly_name = target.monitorFriendlyDeviceName;
+        }
+
         DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO acm{};
         acm.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO;
         acm.header.size = sizeof(acm);
         acm.header.adapterId = path.targetInfo.adapterId;
         acm.header.id = path.targetInfo.id;
-        if (DisplayConfigGetDeviceInfo(&acm.header) != ERROR_SUCCESS) {
-            continue;
+        if (DisplayConfigGetDeviceInfo(&acm.header) == ERROR_SUCCESS) {
+            facts.wide_color_enforced = acm.wideColorEnforced != 0;
         }
 
-        out.emplace(std::wstring(source.viewGdiDeviceName), acm.wideColorEnforced != 0);
+        out.emplace(std::wstring(source.viewGdiDeviceName), std::move(facts));
     }
     return out;
 }
 
 void ProbeDisplays(std::vector<DisplayHdrFacts>& displays) {
-    const std::unordered_map<std::wstring, bool> wide_color_by_gdi_name = QueryWideColorEnforcedByGdiName();
+    const std::unordered_map<std::wstring, DisplayConfigFacts> config_by_gdi_name = QueryDisplayConfigFactsByGdiName();
 
     Microsoft::WRL::ComPtr<IDXGIFactory1> factory;
     if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) {
@@ -407,9 +442,10 @@ void ProbeDisplays(std::vector<DisplayHdrFacts>& displays) {
                     facts.max_luminance_nits = d.MaxLuminance;
                     facts.min_luminance_nits = d.MinLuminance;
                     facts.max_full_frame_nits = d.MaxFullFrameLuminance;
-                    const auto wide_color_it = wide_color_by_gdi_name.find(d.DeviceName);
-                    if (wide_color_it != wide_color_by_gdi_name.end()) {
-                        facts.wide_color_enforced = wide_color_it->second;
+                    const auto config_it = config_by_gdi_name.find(d.DeviceName);
+                    if (config_it != config_by_gdi_name.end()) {
+                        facts.wide_color_enforced = config_it->second.wide_color_enforced;
+                        facts.friendly_name = Utf8From(config_it->second.friendly_name.c_str());
                     }
                     displays.push_back(std::move(facts));
                 }
