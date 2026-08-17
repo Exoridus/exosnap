@@ -3309,6 +3309,20 @@ void QuickApplication::initializeShell() {
     // moment anything can still be written to disk.
     QObject::connect(&shell_adapter_, &ShellAdapter::closeApproved, &shell_adapter_,
                      [this]() { flushPendingPersists(); });
+    // The other half of the tray-Quit story. Together the two lines say what was
+    // asked for and what answered it, which is the difference between "the product
+    // refused, correctly" and "the product hung" — indistinguishable to a user, and
+    // until now indistinguishable in a support bundle too.
+    QObject::connect(&shell_adapter_, &ShellAdapter::closeDecided, &shell_adapter_,
+                     [](const QString& kind, bool recording, bool exporting, bool remuxing) {
+                         diagnostics::AppLog::info(
+                             QStringLiteral("shell"),
+                             QStringLiteral("close requested -> %1 (recording=%2 exporting=%3 remuxing=%4)")
+                                 .arg(kind)
+                                 .arg(recording ? 1 : 0)
+                                 .arg(exporting ? 1 : 0)
+                                 .arg(remuxing ? 1 : 0));
+                     });
     // A guard prompt is modal and lives inside the root window, so raising one
     // while that window is hidden asks a question nobody can see — and the app
     // then sits there waiting for an answer. Reached from the tray "Quit" during

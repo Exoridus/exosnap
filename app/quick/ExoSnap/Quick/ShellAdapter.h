@@ -139,6 +139,14 @@ class ShellAdapter : public QObject {
     // hide itself is the application's to perform — this adapter holds no window
     // reference, the same way it holds no service references.
     void hideToTrayRequested();
+
+    // Every outcome of requestClose(), reported so the decision is recoverable from
+    // a log. Three of the outcomes are indistinguishable from outside the process --
+    // the window simply stays -- so a user reporting "Quit did nothing" otherwise
+    // leaves nothing behind that says whether the product refused, asked something
+    // nobody saw, or failed to tear down. `kind` is one of the CloseGuardKind keys
+    // or "hideToTray".
+    void closeDecided(const QString& kind, bool recording, bool exporting, bool remuxing);
     // Effects the application must apply. Emitted rather than executed here so
     // the adapter keeps no service references.
     void cancelRemuxRequested();
