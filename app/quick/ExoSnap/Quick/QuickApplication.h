@@ -399,8 +399,6 @@ class QuickApplication {
     // Raises the post-update overlay, or holds the notes until the blocking
     // surfaces have cleared. A changelog must never stack on top of a question.
     void presentPostUpdateWhatsNew(const QVector<WhatsNewNote>& notes);
-    // The releases page the last check reported; empty before the first one.
-    [[nodiscard]] QString resolveReleasesUrl() const;
     // The staged updater has verified the package and is asking this process to
     // get out of the way so it can replace the installation. Ends the process --
     // deliberately bypassing close-to-tray, which would leave the executable
@@ -603,6 +601,9 @@ class QuickApplication {
     QString last_available_version_;
     // The releases page URL from the last completed check. Empty until then, and
     // the "All releases" link falls back to the product's own address.
+    // The releases page the last update check reported. Empty until one has
+    // completed, and passed on empty rather than substituted here: WhatsNewAdapter
+    // owns the product's own releases address, so that fallback stays in one place.
     QString last_releases_page_url_;
     // Post-update notes held back because a blocking surface owns the screen.
     // Empty whenever nothing is waiting; the payload behind it is already gone,

@@ -2771,18 +2771,11 @@ void QuickApplication::initializeWhatsNew() {
         // surface it raises will emit changes this same handler listens to.
         const QVector<WhatsNewNote> notes = deferred_whats_new_notes_;
         deferred_whats_new_notes_.clear();
-        whats_new_adapter_.present(notes, /*post_update_mode=*/true, resolveReleasesUrl());
+        whats_new_adapter_.present(notes, /*post_update_mode=*/true, last_releases_page_url_);
     });
 
     // Entry point 2: the payload the previous update left behind.
     consumePendingWhatsNewPayload();
-}
-
-QString QuickApplication::resolveReleasesUrl() const {
-    // Empty is a valid answer and is passed through: no check has completed yet,
-    // so there is no release page to name. WhatsNewAdapter substitutes the
-    // product's own releases address, which keeps that one fallback in one place.
-    return last_releases_page_url_;
 }
 
 void QuickApplication::showWhatsNewForUpdateCard() {
@@ -2800,7 +2793,7 @@ void QuickApplication::showWhatsNewForUpdateCard() {
     }
     // Deliberately not gated by whats_new_suppressed: that setting is about the
     // automatic post-update show, and this is the user asking.
-    whats_new_adapter_.present(notes, /*post_update_mode=*/false, resolveReleasesUrl());
+    whats_new_adapter_.present(notes, /*post_update_mode=*/false, last_releases_page_url_);
 }
 
 void QuickApplication::consumePendingWhatsNewPayload() {
@@ -2823,7 +2816,7 @@ void QuickApplication::presentPostUpdateWhatsNew(const QVector<WhatsNewNote>& no
         deferred_whats_new_notes_ = notes;
         return;
     }
-    whats_new_adapter_.present(notes, /*post_update_mode=*/true, resolveReleasesUrl());
+    whats_new_adapter_.present(notes, /*post_update_mode=*/true, last_releases_page_url_);
 }
 
 void QuickApplication::applyStartupRelaunchHandoff(const QString& page_name, bool reenable_present_diag) {
