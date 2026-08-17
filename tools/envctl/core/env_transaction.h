@@ -79,6 +79,13 @@ struct TransactionResult {
     std::string error_code;
     std::string error;
     std::vector<DevicePendingRestore> pending;
+
+    // Non-fatal, but never silent. The one producer today is a journal file that
+    // could not be DELETED after a verified restore: the machine really is back at
+    // its originals, so `ok` stays true and the state stays Restored, yet a stale
+    // journal left on disk will block the next `begin` with dirty_journal. Swallowing
+    // that turned a one-line "delete this file" into a mystery on the next run.
+    std::string warning;
 };
 
 class EnvironmentTransaction {
@@ -138,6 +145,7 @@ struct RecoveryOutcome {
     TransactionState state{TransactionState::Clean};
     std::string error_code;
     std::string error;
+    std::string warning; // see TransactionResult::warning
     std::vector<DevicePendingRestore> pending;
     TransactionEvidence evidence;
 };

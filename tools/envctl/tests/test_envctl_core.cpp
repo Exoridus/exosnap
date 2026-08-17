@@ -432,6 +432,53 @@ TEST(EnvctlJournal, CorruptJournalIsNeverReportedAsClean) {
     EXPECT_FALSE(error.empty());
 }
 
+TEST(EnvctlJournal, JournalWithAWrongTypedFieldIsReportedNotThrown) {
+    // `value<T>(key, fallback)` throws nlohmann type_error when the key EXISTS with
+    // the wrong type -- "schemaVersion": "1" is a string, not a missing field, so the
+    // fallback never applies. Uncaught, that aborted the one command whose job is to
+    // clean up a mangled journal: recovery died on the file it came to fix.
+    TempDir temp;
+    const auto path = temp.Path() / "journal.json";
+    {
+        std::ofstream stream(path, std::ios::binary);
+        stream << R"({"schemaVersion": "1", "state": "active", "ownerPid": "not-a-number"})";
+    }
+    std::string error;
+    const auto journal = ReadJournal(path, error);
+    EXPECT_FALSE(journal.has_value());
+    EXPECT_FALSE(error.empty()) << "a malformed journal must never read as 'no journal'";
+}
+
+TEST(EnvctlJournal, AJournalPathThatCannotBeOpenedIsAnErrorNotACleanMachine) {
+    // The contract the header states: "I could not read it" must never be answered as
+    // "there is nothing owed", because every caller treats clean as a licence to
+    // mutate. A directory is the portable way to make the open fail.
+    //
+    // The sibling case -- exists() ITSELF failing with an error_code, which used to be
+    // folded into "no journal" by the same `||` -- has no portable way to be provoked
+    // from a test, so it is guarded by the code and by this contract, not by a case.
+    TempDir temp;
+    const auto path = temp.Path() / "journal.json";
+    std::filesystem::create_directories(path);
+    std::string error;
+    const auto journal = ReadJournal(path, error);
+    EXPECT_FALSE(journal.has_value());
+    EXPECT_FALSE(error.empty()) << "an unreadable journal path must not report a clean machine";
+}
+
+TEST(EnvctlJournal, DeleteFailureReturnsFalseWithAReason) {
+    // This primitive always answered correctly; what changed is that a caller now
+    // BRANCHES on it (RestoreInternal reports the failure as a warning instead of
+    // discarding it), so its return value became load-bearing and is pinned here.
+    // A non-empty directory is the portable way to make remove() refuse.
+    TempDir temp;
+    const auto path = temp.Path() / "busy";
+    std::filesystem::create_directories(path / "child");
+    std::string error;
+    EXPECT_FALSE(DeleteJournal(path, error));
+    EXPECT_FALSE(error.empty());
+}
+
 TEST(EnvctlJournal, MachineHashIsStableAndNotTheHostname) {
     const auto first = StableMachineHash();
     EXPECT_EQ(first, StableMachineHash());

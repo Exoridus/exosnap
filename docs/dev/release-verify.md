@@ -164,9 +164,29 @@ disk what was originally there, what has already changed, and what still has to 
 back. The next runner start restores it and refuses to begin a new mutating scenario
 until it has.
 
+**And it is machine-wide, not per campaign** — `.workspace/env-journal.json`, envctl's
+own default, overridable only through `EXOSNAP_ENV_JOURNAL` and then for both the tool
+and the runner at once. One machine has one environment, so it has one journal. A
+journal filed under the campaign that wrote it is invisible to the next campaign,
+because the campaign id is new on every `prepare`: the dirty gate finds nothing, the new
+campaign snapshots the already-mutated value as its "original", and reports `RESTORED`
+for a machine nobody put back.
+
+A failed `begin` is not automatically clean either. It rolls back what it had already
+applied, but that rollback can itself fail — envctl says which in `state`, and anything
+other than `Clean` or `Restored` (including no state at all) leaves the run dirty. While
+a transaction is open the runner also keeps an `exosnap-envctl --guard <pid>` process
+alive, which restores from the journal if the runner dies; it is retired after the
+restore, and it is a shortcut to recovery rather than a replacement for it.
+
 What this cannot promise: instant recovery from a power loss or an OS crash. Nothing
-in user space can. The guarantee is the persistent journal plus a mandatory recovery
-pass, not an unfalsifiable claim about surviving loss of power.
+in user space can. The guarantee is the persistent journal — written durably, so the
+bytes reach the disk before the rename — plus a mandatory recovery pass, not an
+unfalsifiable claim about surviving loss of power.
+
+Once the environment IS dirty, every later mutating scenario reports `UNAVAILABLE` with
+the reason and the way out (`release-verify.ps1 recover`), never `FAIL`. Nothing was
+tested, so nothing failed; a page of red would read like a product collapse.
 
 If the original device is gone at restore time the result is
 `RESTORE_PENDING_DEVICE_UNAVAILABLE`, and **no other device is substituted**. The
@@ -229,6 +249,39 @@ Two failures are reported rather than guessed at:
 
 A test suite that silently picks one of two matching devices is a test suite that lies
 about which hardware it exercised.
+
+## The field contract (`REL-SCHEMA-001`)
+
+The catalog reads the control channel's typed surfaces by name, and a name that no
+emitter emits **throws** under `Set-StrictMode -Version Latest`. Eight scenarios shipped
+doing exactly that — `pipeline.audio.tracks[].degraded` against a snapshot that reports
+`audio.sourceDegraded`, `pipeline.avDriftMs` against one that nests it under `avTiming`,
+`notifications.notifications[].id` against an `entries[]` array keyed by `sequence`, an
+`index` parameter on a `window.moveToScreen` that takes a screen *name*. They survived
+because the opt-in scenarios were never executed, so nothing ever evaluated the paths;
+several of them would have thrown *inside a human gate*, after the operator had already
+unplugged an audio interface or answered a UAC prompt.
+
+`REL-SCHEMA-001` is the early failure mode for that class. It runs first, connects once,
+and walks every path in `Get-ReleaseFieldContract` — idle surfaces, then the pipeline
+groups with a recording running (they are absent by design while `valid` is false), then
+`record.result`. It asserts **existence only**; what a field says is the other scenarios'
+business.
+
+Three outcomes, kept apart on purpose:
+
+| Outcome | Meaning |
+|---|---|
+| present | the path exists |
+| missing | **FAIL**, naming the path and, from `UsedBy`, every scenario about to throw |
+| empty | the collection's name is proven, its element shape is not — reported as unchecked, never as a pass |
+
+A refused command is reported as its own line too, because "the command said no" and
+"the field is gone" call for different work.
+
+Each contract entry names the scenarios that read it, and a unit test enforces that
+those scenarios still exist — a `UsedBy` pointing at a deleted scenario is the contract
+rotting quietly.
 
 ## No synchronisation sleeps
 

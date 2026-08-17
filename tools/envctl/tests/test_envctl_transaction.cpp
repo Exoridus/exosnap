@@ -5,6 +5,11 @@
 // whose read-back disagrees MUST end in RestoreFailed rather than in a cheerful
 // "restored".
 
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h> // one case needs a real deny-delete share mode; see below.
+#endif
+
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -257,6 +262,36 @@ TEST(EnvctlTransaction, RestoreSetterThatSucceedsButReadsBackDifferentlyIsTermin
     const auto evidence = transaction.Evidence();
     EXPECT_FALSE(evidence.Accepted());
 }
+
+#if defined(_WIN32)
+TEST(EnvctlTransaction, AJournalThatCannotBeDeletedIsReportedAlongsideTheRestore) {
+    // The machine really is back at its originals, so `ok` stays true and the state
+    // stays Restored -- but a journal left on disk will refuse the NEXT begin with
+    // dirty_journal, and swallowing the delete failure turned a one-line "remove this
+    // file" into a mystery one run later.
+    //
+    // A desired state already equal to the current one applies nothing, so the restore
+    // path here is exactly one step: delete the journal. Holding the file open without
+    // FILE_SHARE_DELETE is what makes that step fail, and nothing else.
+    TempDir temp;
+    FakeProvider provider = MakeProvider();
+    EnvironmentTransaction transaction(provider, MakeConfig(temp));
+    ASSERT_TRUE(transaction.Begin({{kHdr, "on"}}).ok);
+    ASSERT_TRUE(std::filesystem::exists(temp.File("env-journal.json")));
+
+    const std::wstring path = temp.File("env-journal.json").wstring();
+    HANDLE held = ::CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                                FILE_ATTRIBUTE_NORMAL, nullptr);
+    ASSERT_NE(held, INVALID_HANDLE_VALUE);
+
+    const auto restored = transaction.Restore();
+    ::CloseHandle(held);
+
+    EXPECT_TRUE(restored.ok) << "the machine was never mutated, so nothing failed about the environment";
+    EXPECT_EQ(restored.state, TransactionState::Restored);
+    EXPECT_FALSE(restored.warning.empty()) << "a journal that outlived its transaction must be named out loud";
+}
+#endif
 
 TEST(EnvctlTransaction, RestoreIsIdempotentAndSafeFromAFinally) {
     TempDir temp;

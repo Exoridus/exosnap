@@ -590,6 +590,20 @@ function Invoke-OneScenario {
         return $result
     }
 
+    # A dirty environment is answered HERE rather than by letting
+    # Assert-EnvironmentClean throw into the generic catch below. Both refuse to run
+    # the scenario, but the catch would record every subsequent mutating scenario as
+    # FAIL -- turning one unrestored display into a page of red that reads like a
+    # product collapse. Nothing was tested, so nothing failed: UNAVAILABLE, with the
+    # reason and the way out.
+    if ($desired.Count -gt 0 -and $Orchestrator.Dirty) {
+        $result.Result = 'UNAVAILABLE'
+        $result.Message = "The environment is dirty from an earlier transaction and was not restored: " +
+        "$($Orchestrator.DirtyDetail). Mutating scenarios stay blocked until " +
+        "'release-verify.ps1 recover' reports it clean."
+        return $result
+    }
+
     try {
         $transaction = Invoke-EnvironmentTransaction -Orchestrator $Orchestrator -Scenario $Entry.Id `
             -Desired $desired -Body { param($begun) & $Entry.Run $Context $begun }.GetNewClosure()

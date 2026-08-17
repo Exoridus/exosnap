@@ -206,6 +206,135 @@ function Get-ReleaseScenarioCatalog {
     }
 
     # =======================================================================
+    # The field contract -- run first, because everything after it reads these
+    # =======================================================================
+
+    $catalog += [pscustomobject]@{
+        Id                  = 'REL-SCHEMA-001'
+        Title               = 'Every field path the catalog reads actually exists'
+        Class               = 'schema'
+        Layer               = 'FULL_AUTO'
+        Source              = 'Wave D review: eight scenarios read fields no emitter emits'
+        ArtifactBound       = $true
+        RequiresInstallTree = $false
+        EnvironmentKeys     = @()
+        Requires            = @{}
+        Desired             = @{}
+        Run                 = {
+            param($ctx)
+            # WHY THIS EXISTS. Eight scenarios shipped reading field paths that no
+            # emitter emits -- pipeline.audio.tracks[].degraded, pipeline.avDriftMs,
+            # notifications.notifications[].id, an `index` parameter on
+            # window.moveToScreen. Under StrictMode each of those throws, and several
+            # throw INSIDE a human gate: after the operator has already unplugged an
+            # audio interface or answered a UAC prompt. The errors survived for one
+            # reason only -- the opt-in scenarios were never executed, so nothing ever
+            # evaluated the paths.
+            #
+            # A catalog whose assertions are only checked when a human is standing at
+            # the machine has no early failure mode at all. This scenario is that
+            # failure mode: it connects once, walks the paths every other scenario
+            # depends on, and turns "a gate throws at the worst possible moment" into a
+            # fast, automated, unattended FAIL.
+            #
+            # It asserts EXISTENCE, never values. What a field says is the other
+            # scenarios' business; that it is there at all is a contract between this
+            # catalog and the product's emitters, and contracts are checked cheaply.
+            $session = & $ctx.EnsureSession
+            $conn = $session.Connection
+            $contract = @(Get-ReleaseFieldContract)
+            if ($contract.Count -eq 0) {
+                return @{ Result = 'FAIL'; Message = 'the field contract is empty; nothing was checked' }
+            }
+
+            # The hub keeps a permanent record but starts empty, so an entry has to be
+            # published before the entry-shape paths can be walked at all.
+            [void](Invoke-LiveVerifyCommand -Connection $conn -Command 'diagnostics.run')
+
+            $missing = @()
+            $skipped = @()
+            $checked = 0
+            $snapshots = [ordered]@{}
+
+            $stages = @('idle', 'recording', 'result')
+            foreach ($stage in $stages) {
+                $stageContract = @($contract | Where-Object { $_.Stage -eq $stage })
+                if ($stageContract.Count -eq 0) { continue }
+
+                if ($stage -eq 'recording') {
+                    # The pipeline's measurement groups are absent by design while
+                    # `valid` is false: emitting them idle would hand a reader a
+                    # complete, entirely zero pipeline that reads as a healthy
+                    # recording. So the groups can only be walked with one running.
+                    [void](Invoke-LiveVerifyCommand -Connection $conn -Command 'record.selectTarget' -Parameters @{ kind = 'monitor' })
+                    $audioOn = Enable-ReleaseSystemAudio -Connection $conn
+                    if (-not $audioOn.Ok) {
+                        $skipped += "audio paths: $($audioOn.Detail)"
+                    }
+                    $started = Invoke-LiveVerifyCommand -Connection $conn -Command 'record.start'
+                    if (-not $started.ok) {
+                        return @{ Result = 'FAIL'; Message = "record.start refused: $($started.error.message)" }
+                    }
+                    [void](Wait-ReleaseRecordingState -Connection $conn -States @('Recording') -TimeoutMs 30000)
+                    # Long enough for the audio and A/V groups to have measured
+                    # something. A group that exists but has seen nothing still has its
+                    # keys, which is all this asserts.
+                    Start-Sleep -Seconds 4
+                }
+                if ($stage -eq 'result') {
+                    [void](Invoke-LiveVerifyCommand -Connection $conn -Command 'record.stop')
+                    [void](Wait-ReleaseRecordingState -Connection $conn -States @('Completed', 'Failed') -TimeoutMs 60000)
+                }
+
+                foreach ($command in (@($stageContract | ForEach-Object { $_.Command }) | Sort-Object -Unique)) {
+                    $response = Invoke-LiveVerifyCommand -Connection $conn -Command $command
+                    if (-not $response.ok) {
+                        # A refused command is a different fact from a missing field, and
+                        # it is reported as its own line rather than folded into either
+                        # a pass or a failure.
+                        $skipped += "$command refused: $($response.error.message)"
+                        continue
+                    }
+                    $snapshots["$stage/$command"] = $response.result
+                    foreach ($entry in @($stageContract | Where-Object { $_.Command -eq $command })) {
+                        $checked++
+                        $resolved = Resolve-ReleaseFieldPath -Root $response.result -Path $entry.Path
+                        switch ($resolved.Status) {
+                            'present' { }
+                            'empty' {
+                                # The collection is there and the name is therefore right;
+                                # its element shape simply could not be walked right now.
+                                # Named out loud so an empty check never reads as a pass.
+                                $skipped += "$command $($entry.Path): '$($resolved.At)' is empty, element shape unchecked"
+                            }
+                            default {
+                                $missing += "$command.$($entry.Path) (read by $($entry.UsedBy)) -- '$($resolved.At)' is not emitted"
+                            }
+                        }
+                    }
+                }
+            }
+
+            $evidence = @(
+                Save-LiveVerifyEvidence -Context $ctx -CheckId 'REL-SCHEMA-001' -Name 'snapshots.json' -Value $snapshots
+                Save-LiveVerifyEvidence -Context $ctx -CheckId 'REL-SCHEMA-001' -Name 'contract.json' `
+                    -Value @{ checked = $checked; missing = $missing; skipped = $skipped }
+            )
+            if ($missing.Count -gt 0) {
+                return @{ Result = 'FAIL'
+                    Message      = "$($missing.Count) of $checked field path(s) do not exist: " + ($missing -join ' | ')
+                    Evidence     = $evidence
+                }
+            }
+            $note = if ($skipped.Count -gt 0) { "; $($skipped.Count) unchecked: $($skipped -join ' | ')" } else { '' }
+            return @{ Result = 'PASS'
+                Message      = "$checked field path(s) exist across $($snapshots.Count) snapshot(s)$note"
+                Evidence     = $evidence
+            }
+        }
+    }
+
+    # =======================================================================
     # Present diagnostics (ADR 0033 / Wave D wiring)
     # =======================================================================
 
@@ -477,8 +606,11 @@ function Get-ReleaseScenarioCatalog {
                     $stall = $null
                     while ([DateTime]::UtcNow -lt $deadline) {
                         $notifications = (Invoke-LiveVerifyCommand -Connection $conn2 -Command 'notifications.snapshot').result
-                        $stall = @($notifications.notifications | Where-Object { "$($_.id)$($_.title)" -match 'stall|no frame' }) |
-                        Select-Object -First 1
+                        # `entries`, with sequence/title/body/severity/unread. There is no
+                        # `id` and no `detail` on the hub's entries -- the manager-assigned
+                        # `sequence` is the only stable identity a client may address one by.
+                        $stall = @(Get-ReleaseNotificationEntry -Snapshot $notifications |
+                            Where-Object { "$($_.title) $($_.body)" -match 'stall|no frame' }) | Select-Object -First 1
                         if ($null -ne $stall) { break }
                         Start-Sleep -Milliseconds 1000
                     }
@@ -497,12 +629,18 @@ function Get-ReleaseScenarioCatalog {
                     }
                     # The honesty assertion: an FSE explanation is only permitted when a
                     # present mode was actually measured as exclusive fullscreen.
-                    $claimsFse = "$($stall.body)$($stall.detail)" -match 'exclusive|fullscreen'
-                    $measuredFse = $pipeline.capture.presentMode -eq 'exclusiveFullscreen'
+                    $claimsFse = "$($stall.title) $($stall.body)" -match 'exclusive|fullscreen'
+                    # presentMode lives under `sourcePresentation`, which -- like every other
+                    # measurement group -- is absent entirely while `valid` is false. Reading
+                    # it through a helper keeps "no measurement" from throwing under StrictMode
+                    # on the one path where a human has already done their part.
+                    $measuredMode = Get-ReleaseSnapshotValue -Object $pipeline -Path 'sourcePresentation.presentMode'
+                    $modeAvailability = Get-ReleaseSnapshotValue -Object $pipeline -Path 'sourcePresentation.modeAvailability'
+                    $measuredFse = $measuredMode -eq 'exclusiveFullscreen'
                     if ($claimsFse -and -not $measuredFse) {
                         return @{ Ok = $false
                             Detail   = 'the stall notice blames exclusive fullscreen but presentMode was ' +
-                            "'$($pipeline.capture.presentMode)' (availability $($pipeline.capture.modeAvailability))"
+                            "'$measuredMode' (availability $modeAvailability)"
                             Evidence = $evidence
                         }
                     }
@@ -589,6 +727,11 @@ function Get-ReleaseScenarioCatalog {
             $session = & $ctx.EnsureSession
             $conn = $session.Connection
 
+            # Before the recording, not after: the gate below tells the operator that
+            # system audio IS enabled, and that had better be a fact rather than a hope
+            # about the settings this machine happened to arrive with.
+            $audio = Enable-ReleaseSystemAudio -Connection $conn
+            if (-not $audio.Ok) { return @{ Result = 'FAIL'; Message = $audio.Detail } }
             [void](Invoke-LiveVerifyCommand -Connection $conn -Command 'record.selectTarget' -Parameters @{ kind = 'monitor' })
             $started = Invoke-LiveVerifyCommand -Connection $conn -Command 'record.start'
             if (-not $started.ok) { return @{ Result = 'FAIL'; Message = "record.start refused: $($started.error.message)" } }
@@ -624,10 +767,11 @@ function Get-ReleaseScenarioCatalog {
                         $pipeline = (Invoke-LiveVerifyCommand -Connection $conn2 -Command 'pipeline.snapshot').result
                         $samples += $pipeline
                         if ($pipeline.lifecycle -notin @('recording', 'paused')) { $leftRecording = $true; break }
-                        $degraded = $false
-                        foreach ($track in @($pipeline.audio.tracks)) {
-                            if ($track.PSObject.Properties.Name -contains 'degraded' -and $track.degraded) { $degraded = $true }
-                        }
+                        # Degradation is reported per SNAPSHOT, not per track: `sourceDegraded`
+                        # is the live state and `degradedSources` counts how many sources are
+                        # currently lost. There is no `tracks[]` array under pipeline.audio --
+                        # and the whole group is absent while `valid` is false.
+                        $degraded = [bool](Get-ReleaseSnapshotValue -Object $pipeline -Path 'audio.sourceDegraded')
                         if ($degraded) { $observedDegraded = $true }
                         elseif ($observedDegraded) { $recoveredAgain = $true; break }
                         Start-Sleep -Milliseconds 500
@@ -664,6 +808,11 @@ function Get-ReleaseScenarioCatalog {
             param($ctx)
             $session = & $ctx.EnsureSession
             $conn = $session.Connection
+            # The whole scenario is about a source that is present and quiet. Without
+            # this there is no source at all, and "nothing reported degraded" is true
+            # for the same reason an empty list satisfies any assertion over it.
+            $audio = Enable-ReleaseSystemAudio -Connection $conn
+            if (-not $audio.Ok) { return @{ Result = 'FAIL'; Message = $audio.Detail } }
             [void](Invoke-LiveVerifyCommand -Connection $conn -Command 'record.selectTarget' -Parameters @{ kind = 'monitor' })
             $started = Invoke-LiveVerifyCommand -Connection $conn -Command 'record.start'
             if (-not $started.ok) { return @{ Result = 'FAIL'; Message = "record.start refused: $($started.error.message)" } }
@@ -680,28 +829,39 @@ function Get-ReleaseScenarioCatalog {
                     'Wait about fifteen seconds.'
                 )
                 Expected          = 'No degradation notice appears. Silence is not a fault.'
-                VerifyDescription = 'This runner polls pipeline.snapshot for 15 s and requires that no audio track ' +
-                'ever reports degraded, while the recording keeps running.'
+                VerifyDescription = 'This runner polls pipeline.snapshot for 15 s and requires that audio was ' +
+                'actually being captured throughout AND that pipeline.audio.sourceDegraded never became true, ' +
+                'while the recording keeps running.'
                 Verify            = {
                     param($context, $gate)
                     $conn2 = $script:Session.Connection
                     $samples = @()
                     $degradedSeen = $false
+                    # An assertion about a source that was never active is not evidence
+                    # that quiet is tolerated -- it is evidence that nothing was listened
+                    # to. So the presence of audio is asserted alongside its health.
+                    $audioActiveSeen = $false
                     $deadline = [DateTime]::UtcNow.AddSeconds(15)
                     while ([DateTime]::UtcNow -lt $deadline) {
                         $pipeline = (Invoke-LiveVerifyCommand -Connection $conn2 -Command 'pipeline.snapshot').result
                         $samples += $pipeline
-                        foreach ($track in @($pipeline.audio.tracks)) {
-                            if ($track.PSObject.Properties.Name -contains 'degraded' -and $track.degraded) { $degradedSeen = $true }
-                        }
+                        if (Get-ReleaseSnapshotValue -Object $pipeline -Path 'audio.active') { $audioActiveSeen = $true }
+                        if (Get-ReleaseSnapshotValue -Object $pipeline -Path 'audio.sourceDegraded') { $degradedSeen = $true }
                         Start-Sleep -Milliseconds 500
                     }
                     $evidence = @(Save-LiveVerifyEvidence -Context $context -CheckId 'REL-AUD-SILENCE-001' -Name 'pipeline-samples.json' -Value $samples)
                     try { [void](Invoke-LiveVerifyCommand -Connection $conn2 -Command 'record.stop') } catch { }
+                    if (-not $audioActiveSeen) {
+                        return @{ Ok = $false
+                            Detail   = 'no audio source was active during the 15 s window, so nothing was observed ' +
+                            'about how a silent one is treated'
+                            Evidence = $evidence
+                        }
+                    }
                     if ($degradedSeen) {
                         return @{ Ok = $false; Detail = 'a connected but silent source was reported as degraded'; Evidence = $evidence }
                     }
-                    return @{ Ok = $true; Detail = 'silence over 15 s produced no degradation'; Evidence = $evidence }
+                    return @{ Ok = $true; Detail = 'an active source, silent for 15 s, produced no degradation'; Evidence = $evidence }
                 }
             }
             return & $ctx.HumanGate $gate
@@ -766,6 +926,11 @@ function Get-ReleaseScenarioCatalog {
             if ($null -eq $ffprobe) { return @{ Result = 'UNAVAILABLE'; Message = 'ffprobe is not on PATH' } }
             $session = & $ctx.EnsureSession
             $conn = $session.Connection
+            # The assertion below is about the audio track in the output file, so the
+            # source has to be on. Otherwise a missing track would be reported as a
+            # 44.1 kHz defect when it is a settings state.
+            $audioOn = Enable-ReleaseSystemAudio -Connection $conn
+            if (-not $audioOn.Ok) { return @{ Result = 'FAIL'; Message = $audioOn.Detail } }
             [void](Invoke-LiveVerifyCommand -Connection $conn -Command 'record.selectTarget' -Parameters @{ kind = 'monitor' })
             [void](Invoke-LiveVerifyCommand -Connection $conn -Command 'record.start')
             [void](Wait-ReleaseRecordingState -Connection $conn -States @('Recording') -TimeoutMs 30000)
@@ -821,11 +986,13 @@ function Get-ReleaseScenarioCatalog {
             while ([DateTime]::UtcNow -lt $deadline) {
                 Start-Sleep -Seconds 30
                 $pipeline = (Invoke-LiveVerifyCommand -Connection $conn -Command 'pipeline.snapshot').result
+                # The three A/V facts live under `avTiming`, never at the snapshot root,
+                # and the group is absent entirely while `valid` is false.
                 $samples += [pscustomobject]@{
-                    atUtc     = [DateTime]::UtcNow.ToString('o')
-                    lifecycle = $pipeline.lifecycle
-                    avDriftMs = $pipeline.avDriftMs
-                    driftAvailability = $pipeline.avDriftAvailability
+                    atUtc             = [DateTime]::UtcNow.ToString('o')
+                    lifecycle         = $pipeline.lifecycle
+                    avDriftMs         = Get-ReleaseSnapshotValue -Object $pipeline -Path 'avTiming.avDriftMs'
+                    driftAvailability = Get-ReleaseSnapshotValue -Object $pipeline -Path 'avTiming.avDriftAvailability'
                 }
                 if ($pipeline.lifecycle -notin @('recording', 'paused')) { break }
             }
@@ -985,9 +1152,16 @@ function Get-ReleaseScenarioCatalog {
             if ($displays.Count -lt 2) {
                 return @{ Result = 'UNAVAILABLE'; Message = "this machine has $($displays.Count) display(s); the mixed-monitor scenario needs two" }
             }
-            $moved = Invoke-LiveVerifyCommand -Connection $conn -Command 'window.moveToScreen' -Parameters @{ index = 1 }
+            # The parameter is `screen`, and it is a NAME -- QScreen::name(), which is
+            # what environment.snapshot reports for each display. There is no index
+            # form: an ordinal would silently mean a different monitor after a
+            # topology change, which is the one thing a mixed-monitor gate must not do.
+            $target = @($displays | Where-Object { -not $_.primary }) | Select-Object -First 1
+            if ($null -eq $target) { $target = $displays[1] }
+            $moved = Invoke-LiveVerifyCommand -Connection $conn -Command 'window.moveToScreen' `
+                -Parameters @{ screen = "$($target.name)" }
             if (-not $moved.ok) {
-                return @{ Result = 'FAIL'; Message = "window.moveToScreen refused: $($moved.error.message)" }
+                return @{ Result = 'FAIL'; Message = "window.moveToScreen '$($target.name)' refused: $($moved.error.message)" }
             }
             [void](Wait-LiveVerifyEvent -Connection $conn -EventName 'window.screenChanged' -TimeoutMs 15000)
             $windows = (Invoke-LiveVerifyCommand -Connection $conn -Command 'windows.snapshot').result
@@ -1006,7 +1180,7 @@ function Get-ReleaseScenarioCatalog {
                 }
             }
             return @{ Result = 'PASS'
-                Message      = "moved across $($displays.Count) displays; preview renders=$($preview.renderPasses) owed=$($preview.owed)"
+                Message      = "moved to '$($target.name)' of $($displays.Count) displays; preview renders=$($preview.renderPasses) owed=$($preview.owed)"
                 Evidence     = $evidence
             }
         }
@@ -1155,6 +1329,12 @@ function Get-ReleaseScenarioCatalog {
             $gate = @{
                 Id                = 'REL-VIS-NOTIFY-001'
                 Title             = 'Judge the real desktop notification surface'
+                # Values the Verify block needs travel HERE, not in a closure: a
+                # `.GetNewClosure()` block is bound to a synthetic module that does not
+                # inherit the runner's functions.
+                State             = @{
+                    baselineSequences = @(Get-ReleaseNotificationEntry -Snapshot $before | ForEach-Object { $_.sequence })
+                }
                 Why               = 'What reaches the desktop is composed by the OS notification surface, not by ' +
                 'us. Our own snapshot proves what we asked for; it cannot prove what appeared.'
                 Do                = @(
@@ -1163,20 +1343,26 @@ function Get-ReleaseScenarioCatalog {
                 )
                 Expected          = 'Notifications appear with the correct severity glyph and tint, and the text ' +
                 'is legible and not truncated.'
-                VerifyDescription = 'This runner asserts that the product actually published notifications while ' +
-                'the gate was open, by diffing notifications.snapshot. Whether they LOOKED right is your verdict.'
+                VerifyDescription = 'This runner asserts that the product actually published NEW notifications ' +
+                'while the gate was open, by diffing notifications.snapshot entry sequences against the ones it ' +
+                'recorded beforehand. Whether they LOOKED right is your verdict.'
                 Verify            = {
                     param($context, $gate)
                     $conn2 = $script:Session.Connection
                     $after = (Invoke-LiveVerifyCommand -Connection $conn2 -Command 'notifications.snapshot').result
                     $evidence = @(Save-LiveVerifyEvidence -Context $context -CheckId 'REL-VIS-NOTIFY-001' -Name 'notifications-after.json' -Value $after)
-                    if (@($after.notifications).Count -eq 0) {
+                    # `entries`, not `notifications`. The hub keeps a permanent record, so
+                    # the count BEFORE the gate is the baseline -- an entry that was
+                    # already there is not something the product published just now.
+                    $published = @(Get-ReleaseNotificationEntry -Snapshot $after)
+                    $baseline = @($gate.State.baselineSequences)
+                    $fresh = @($published | Where-Object { $_.sequence -notin $baseline })
+                    if ($fresh.Count -eq 0) {
                         return @{ Ok = $false; Detail = 'the product published no notification while the gate was open'; Evidence = $evidence }
                     }
-                    return @{ Ok = $true; Detail = "$(@($after.notifications).Count) notification(s) were published and judged"; Evidence = $evidence }
+                    return @{ Ok = $true; Detail = "$($fresh.Count) new notification(s) were published and judged"; Evidence = $evidence }
                 }
             }
-            [void]$before
             return & $ctx.HumanGate $gate
         }
     }
@@ -1231,12 +1417,15 @@ function Get-ReleaseScenarioCatalog {
             param($ctx)
             $session = & $ctx.EnsureSession
             $conn = $session.Connection
+            # app.identity answers the same object system.hello carries, and its version
+            # field is `productVersion`. There is no `version`.
             $before = (Invoke-LiveVerifyCommand -Connection $conn -Command 'app.identity').result
+            $beforeVersion = "$($before.productVersion)"
             $checked = Invoke-LiveVerifyCommand -Connection $conn -Command 'update.check'
             if (-not $checked.ok) { return @{ Result = 'FAIL'; Message = "update.check refused: $($checked.error.message)" } }
             $state = (Invoke-LiveVerifyCommand -Connection $conn -Command 'update.getState').result
             if (-not $state.updateAvailable) {
-                return @{ Result = 'UNAVAILABLE'; Message = "no update is offered to $($before.version) on this channel" }
+                return @{ Result = 'UNAVAILABLE'; Message = "no update is offered to $beforeVersion on this channel" }
             }
             $applied = Invoke-LiveVerifyCommand -Connection $conn -Command 'update.apply'
             if (-not $applied.ok) { return @{ Result = 'FAIL'; Message = "update.apply refused: $($applied.error.message)" } }
@@ -1244,7 +1433,7 @@ function Get-ReleaseScenarioCatalog {
             $gate = @{
                 Id                = 'REL-UPD-MSI-001'
                 Title             = 'Accept the elevation prompt for the MSI install'
-                State             = @{ previousVersion = $before.version }
+                State             = @{ previousVersion = $beforeVersion }
                 Why               = 'msiexec needs an elevated token, and the prompt runs on the Secure Desktop. ' +
                 'Windows blocks synthetic input across that boundary by design; there is nothing to automate.'
                 Do                = @(
@@ -1253,7 +1442,7 @@ function Get-ReleaseScenarioCatalog {
                     'Wait for the installer to finish and for ExoSnap to relaunch.'
                 )
                 Expected          = 'The install completes and ExoSnap comes back at the new version.'
-                VerifyDescription = "This runner captured the version before the update ($($before.version)) and " +
+                VerifyDescription = "This runner captured the version before the update ($beforeVersion) and " +
                 'will reconnect afterwards, read app.identity again, and require a DIFFERENT and newer version ' +
                 'plus an installState of intact or restored. It never touches the prompt.'
                 Verify            = {
@@ -1279,10 +1468,11 @@ function Get-ReleaseScenarioCatalog {
                     if ($null -eq $identity) {
                         return @{ Ok = $false; Detail = 'the application could not be reached again after the install'; Evidence = $evidence }
                     }
-                    if ($identity.version -eq $gate.State.previousVersion) {
-                        return @{ Ok = $false; Detail = "the version is unchanged at $($identity.version); nothing was installed"; Evidence = $evidence }
+                    $afterVersion = "$($identity.productVersion)"
+                    if ($afterVersion -eq $gate.State.previousVersion) {
+                        return @{ Ok = $false; Detail = "the version is unchanged at $afterVersion; nothing was installed"; Evidence = $evidence }
                     }
-                    return @{ Ok = $true; Detail = "installed: $($gate.State.previousVersion) -> $($identity.version)"; Evidence = $evidence }
+                    return @{ Ok = $true; Detail = "installed: $($gate.State.previousVersion) -> $afterVersion"; Evidence = $evidence }
                 }
             }
             return & $ctx.HumanGate $gate
@@ -1433,6 +1623,196 @@ function Get-ReleaseScenarioCatalog {
     }
 
     return [object[]]$catalog
+}
+
+function Get-ReleaseFieldContract {
+    <#
+    .SYNOPSIS
+        Every control-channel field path the catalog reads, and who reads it.
+    .DESCRIPTION
+        The contract between this catalog and the product's emitters, written down in
+        one place so REL-SCHEMA-001 can check all of it in one unattended pass.
+
+        A path is listed here BECAUSE a scenario depends on it. `UsedBy` is not
+        decoration: when a path disappears it names, without searching, exactly which
+        gates are about to throw -- including the ones that would otherwise only throw
+        after a human had already unplugged something.
+
+        `Stage` says what the product must be doing for the path to exist at all:
+
+            idle       readable at any time
+            recording  a recording is running. The pipeline's measurement groups are
+                       ABSENT while `valid` is false, by design -- emitting them idle
+                       would hand a reader a complete, entirely zero pipeline that
+                       reads as a healthy recording rather than an idle process.
+            result     after a recording has completed
+
+        `[]` after a segment means "and then its first element". A collection that is
+        legitimately empty at check time is reported as unchecked, never as passing:
+        the name was proven, the element shape was not.
+    #>
+    $groups = @(
+        @{ Command = 'app.identity'; Stage = 'idle'; UsedBy = 'REL-UPD-MSI-001, REL-PRESENT-002'
+            Paths = @('productVersion', 'executableSha256')
+        }
+        @{ Command = 'environment.snapshot'; Stage = 'idle'; UsedBy = 'REL-PRESENT-001, REL-PRESENT-002'
+            Paths = @('present.optIn', 'present.elevated', 'present.available', 'present.availability')
+        }
+        @{ Command = 'environment.snapshot'; Stage = 'idle'
+            UsedBy = 'REL-DISP-HDR-001, REL-DISP-MIXED-001, REL-DISP-DPI-001'
+            Paths  = @('displays.screens[].name', 'displays.screens[].primary',
+                'displays.screens[].hdrActive', 'displays.screens[].devicePixelRatio')
+        }
+        @{ Command = 'windows.snapshot'; Stage = 'idle'; UsedBy = 'REL-DISP-DPI-001'
+            Paths = @('windows[].role', 'windows[].nativeWindowCreated')
+        }
+        @{ Command = 'preview.snapshot'; Stage = 'idle'; UsedBy = 'REL-DISP-MIXED-001'
+            Paths = @('owed', 'renderPasses')
+        }
+        @{ Command = 'record.snapshot'; Stage = 'idle'
+            UsedBy = 'REL-AUD-DEGRADE-001, REL-AUD-SILENCE-001, REL-AUD-FORMAT-001'
+            Paths  = @('systemAudioEnabled')
+        }
+        @{ Command = 'overlay.snapshot'; Stage = 'idle'; UsedBy = 'REL-VIS-OVERLAY-001'
+            Paths = @('overlays[].visible')
+        }
+        @{ Command = 'notifications.snapshot'; Stage = 'idle'; UsedBy = 'REL-CAP-STALL-001, REL-VIS-NOTIFY-001'
+            Paths = @('entries[].sequence', 'entries[].title', 'entries[].body')
+        }
+        @{ Command = 'update.getState'; Stage = 'idle'; UsedBy = 'REL-UPD-MSI-001, REL-UPD-MSI-DECLINE-001'
+            Paths = @('updateAvailable', 'installState', 'phase')
+        }
+        @{ Command = 'pipeline.snapshot'; Stage = 'recording'
+            UsedBy = 'REL-CAP-001, REL-CAP-STALL-001, REL-AUD-DEGRADE-001'
+            Paths  = @('valid', 'lifecycle')
+        }
+        @{ Command = 'pipeline.snapshot'; Stage = 'recording'; UsedBy = 'REL-DISP-REFRESH-001'
+            Paths = @('capture.actualFps')
+        }
+        @{ Command = 'pipeline.snapshot'; Stage = 'recording'; UsedBy = 'REL-CAP-STALL-001'
+            Paths = @('sourcePresentation.presentMode', 'sourcePresentation.modeAvailability')
+        }
+        @{ Command = 'pipeline.snapshot'; Stage = 'recording'; UsedBy = 'REL-AUD-DEGRADE-001, REL-AUD-SILENCE-001'
+            Paths = @('audio.active', 'audio.sourceDegraded', 'audio.degradedSources')
+        }
+        @{ Command = 'pipeline.snapshot'; Stage = 'recording'; UsedBy = 'REL-AUD-CLOCK-001'
+            Paths = @('avTiming.avDriftMs', 'avTiming.avDriftAvailability')
+        }
+        @{ Command = 'record.result'; Stage = 'result'
+            UsedBy = 'REL-CAP-001, REL-AUD-FORMAT-001, REL-AUD-CLOCK-001, REL-DISP-HDR-001'
+            Paths  = @('succeeded', 'outputPath')
+        }
+    )
+
+    $contract = @()
+    foreach ($group in $groups) {
+        foreach ($path in $group.Paths) {
+            $contract += [pscustomobject]@{
+                Command = $group.Command
+                Stage   = $group.Stage
+                Path    = $path
+                UsedBy  = $group.UsedBy
+            }
+        }
+    }
+    return [object[]]$contract
+}
+
+function Resolve-ReleaseFieldPath {
+    <#
+    .SYNOPSIS
+        Walks a dotted field path and says whether it exists.
+    .OUTPUTS
+        @{ Status = 'present' | 'missing' | 'empty'; At = '<segment>'; Value = ... }
+    .DESCRIPTION
+        'empty' is its own answer rather than a failure. A collection that has no
+        elements right now proves its own NAME is right and proves nothing about the
+        shape of its elements, and collapsing that into either verdict would be a
+        false statement in one direction or the other.
+    #>
+    param($Root, [Parameter(Mandatory)] [string] $Path)
+    $current = $Root
+    foreach ($segment in ($Path -split '\.')) {
+        $indexed = $segment.EndsWith('[]')
+        $name = if ($indexed) { $segment.Substring(0, $segment.Length - 2) } else { $segment }
+        if ($null -eq $current) { return @{ Status = 'missing'; At = $name } }
+        $properties = $current.PSObject.Properties.Name
+        if ($null -eq $properties -or $properties -notcontains $name) {
+            return @{ Status = 'missing'; At = $name }
+        }
+        $current = $current.$name
+        if ($indexed) {
+            $items = @($current)
+            if ($items.Count -eq 0) { return @{ Status = 'empty'; At = $name } }
+            $current = $items[0]
+        }
+    }
+    return @{ Status = 'present'; At = $Path; Value = $current }
+}
+
+function Get-ReleaseSnapshotValue {
+    <#
+    .SYNOPSIS
+        Reads a dotted field path out of a control-channel snapshot, or $null.
+    .DESCRIPTION
+        Set-StrictMode -Version Latest makes `$snapshot.audio.sourceDegraded` THROW when
+        `audio` is absent, and whole measurement groups are legitimately absent: a
+        pipeline snapshot with `valid: false` carries only its summary, because emitting
+        the groups would hand a reader a complete, entirely zero pipeline that reads as
+        a healthy recording rather than an idle process.
+
+        So "not measured" has to be answerable without an exception. It returns $null,
+        which a caller compares against -- never a default that could be mistaken for a
+        reading.
+    #>
+    param($Object, [Parameter(Mandatory)] [string] $Path)
+    $current = $Object
+    foreach ($segment in ($Path -split '\.')) {
+        if ($null -eq $current) { return $null }
+        if ($current -isnot [psobject] -or $current.PSObject.Properties.Name -notcontains $segment) { return $null }
+        $current = $current.$segment
+    }
+    return $current
+}
+
+function Get-ReleaseNotificationEntry {
+    <#
+    .SYNOPSIS
+        The hub entries out of a notifications.snapshot, as an array.
+    .DESCRIPTION
+        The array is `entries`, and each entry carries sequence/title/body/severity/
+        unread/actions. There is no `id` and no `detail`: the manager-assigned
+        `sequence` is the hub's own stable identity and the only thing a client may
+        address an entry by.
+    #>
+    param($Snapshot)
+    $entries = Get-ReleaseSnapshotValue -Object $Snapshot -Path 'entries'
+    if ($null -eq $entries) { return @() }
+    return @($entries)
+}
+
+function Enable-ReleaseSystemAudio {
+    <#
+    .SYNOPSIS
+        Turns the system-audio source on through the product's own settings surface.
+    .DESCRIPTION
+        Every audio scenario needs this and none of them may assume it. The shipped
+        default has SYS on, but a campaign runs against whatever settings the machine
+        already had -- and a scenario that asserts over audio it never enabled asserts
+        over nothing. REL-AUD-SILENCE-001 passed that way: its loop looked for a
+        degraded source among sources that did not exist.
+    #>
+    param([Parameter(Mandatory)] $Connection)
+    $set = Invoke-LiveVerifyCommand -Connection $Connection -Command 'settings.set' `
+        -Parameters @{ key = 'audio.systemEnabled'; value = $true }
+    if (-not $set.ok) {
+        return @{ Ok = $false; Detail = "settings.set audio.systemEnabled refused: $($set.error.message)" }
+    }
+    $record = (Invoke-LiveVerifyCommand -Connection $Connection -Command 'record.snapshot').result
+    if (-not (Get-ReleaseSnapshotValue -Object $record -Path 'systemAudioEnabled')) {
+        return @{ Ok = $false; Detail = 'the system-audio source did not become enabled after settings.set' }
+    }
+    return @{ Ok = $true; Detail = 'system audio enabled' }
 }
 
 function Wait-ReleaseRecordingState {

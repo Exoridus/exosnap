@@ -42,6 +42,11 @@ Set-StrictMode -Version Latest
     OS crash. Nothing running in user space can. The guarantee is the persistent
     journal plus a mandatory recovery pass on the next runner start, which refuses to
     begin a new mutating scenario while the environment is dirty.
+
+    That journal is MACHINE-WIDE, not per-campaign. One machine has one environment,
+    so it has one journal; a journal filed under the campaign that wrote it would be
+    invisible to the next campaign, and a crashed run would quietly become the new
+    "original". See Resolve-EnvironmentJournalPath.
 #>
 
 function Write-EnvctlJsonAtomic {
@@ -103,6 +108,37 @@ function Resolve-EnvctlPath {
     return $null
 }
 
+function Resolve-EnvironmentJournalPath {
+    <#
+    .SYNOPSIS
+        The recovery journal path. MACHINE-WIDE, never per-campaign.
+    .DESCRIPTION
+        This is the single most important path in the orchestrator, and it is
+        deliberately not derived from the run directory.
+
+        A journal that lives inside `<runsRoot>/<campaignId>/environment/` is
+        invisible to the next campaign, because `campaignId` is new on every
+        `prepare`. envctl's dirty gate only ever inspects the path it is handed, so
+        the next campaign would find no journal, snapshot the ALREADY-MUTATED value
+        as its "original", and then report RESTORED after putting that value back --
+        a machine left with HDR on would be called clean forever, and the campaign
+        that crashed would have covered its own tracks.
+
+        The whole point of ADR 0069's journal is that it outlives the process that
+        wrote it, and a per-campaign path silently narrows that to "outlives the
+        process, but not the campaign". One machine has one environment, so it has
+        exactly one journal: envctl's own default, `.workspace/env-journal.json`.
+
+        `EXOSNAP_ENV_JOURNAL` is honoured because envctl honours it -- the tool and
+        the runner must never disagree about which file is the journal.
+    #>
+    param([string] $ExplicitPath)
+    if (-not [string]::IsNullOrWhiteSpace($ExplicitPath)) { return $ExplicitPath }
+    if (-not [string]::IsNullOrWhiteSpace($env:EXOSNAP_ENV_JOURNAL)) { return $env:EXOSNAP_ENV_JOURNAL }
+    $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+    return (Join-Path $root '.workspace/env-journal.json')
+}
+
 function Invoke-Envctl {
     <#
     .SYNOPSIS
@@ -155,6 +191,24 @@ function Invoke-EnvctlTolerant {
     catch { throw "envctl $($Arguments -join ' ') produced unparseable output: $text" }
 }
 
+function Get-EnvctlProfileArgument {
+    <#
+    .SYNOPSIS
+        The `--profile` pair for an envctl invocation, or an empty array.
+    .DESCRIPTION
+        A function rather than four copies of the same `if`, because one of those
+        copies was missing. The `restore` call in the transaction's `finally` omitted
+        it, so no aliases loaded, `DevicePresent()` answered false for every device,
+        and the restore bailed with RestorePendingDeviceUnavailable for hardware that
+        was plainly attached -- on the one path where giving up is most expensive.
+
+        Every envctl invocation that resolves an alias goes through here.
+    #>
+    param([string] $AliasProfile)
+    if ([string]::IsNullOrWhiteSpace($AliasProfile)) { return @() }
+    return @('--profile', $AliasProfile)
+}
+
 function New-EnvironmentOrchestrator {
     <#
     .SYNOPSIS
@@ -169,16 +223,21 @@ function New-EnvironmentOrchestrator {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)] [string] $RunId,
+        # Per-campaign SCRATCH: the desired-state handoff documents. Never the journal.
         [Parameter(Mandatory)] [string] $JournalDirectory,
+        # The machine-wide recovery journal. Defaults to envctl's own default; see
+        # Resolve-EnvironmentJournalPath for why this must not follow the campaign.
+        [string] $JournalPath,
         [string] $EnvctlPath,
         [string] $AliasProfile
     )
 
     $resolved = Resolve-EnvctlPath -ExplicitPath $EnvctlPath
-    # One journal FILE per campaign, inside the run directory. envctl takes a file
-    # path, not a directory: a transaction has exactly one journal, and the whole
-    # dirty-startup gate is "does that file exist and is it unfinished".
-    $journalPath = Join-Path $JournalDirectory 'env-journal.json'
+    # One journal FILE per MACHINE. envctl takes a file path, not a directory: a
+    # transaction has exactly one journal, and the whole dirty-startup gate is "does
+    # that file exist and is it unfinished" -- which only answers anything across
+    # campaigns if every campaign asks about the same file.
+    $journalPath = Resolve-EnvironmentJournalPath -ExplicitPath $JournalPath
     $context = [pscustomobject]@{
         RunId            = $RunId
         JournalDirectory = $JournalDirectory
@@ -196,8 +255,7 @@ function New-EnvironmentOrchestrator {
         New-Item -ItemType Directory -Path $JournalDirectory -Force | Out-Null
     }
 
-    $arguments = @('recover', '--journal', $journalPath)
-    if (-not [string]::IsNullOrWhiteSpace($AliasProfile)) { $arguments += @('--profile', $AliasProfile) }
+    $arguments = @('recover', '--journal', $journalPath) + (Get-EnvctlProfileArgument -AliasProfile $AliasProfile)
     try {
         $result = Invoke-Envctl -EnvctlPath $resolved -Arguments $arguments
         if ($null -ne $result) {
@@ -249,10 +307,7 @@ function Get-EnvironmentSnapshot {
     #>
     param([Parameter(Mandatory)] $Orchestrator)
     if (-not $Orchestrator.Available) { return $null }
-    $arguments = @('snapshot')
-    if (-not [string]::IsNullOrWhiteSpace($Orchestrator.AliasProfile)) {
-        $arguments += @('--profile', $Orchestrator.AliasProfile)
-    }
+    $arguments = @('snapshot') + (Get-EnvctlProfileArgument -AliasProfile $Orchestrator.AliasProfile)
     return Invoke-Envctl -EnvctlPath $Orchestrator.EnvctlPath -Arguments $arguments
 }
 
@@ -283,10 +338,7 @@ function Resolve-EnvironmentAliases {
     #>
     param([Parameter(Mandatory)] $Orchestrator)
     if (-not $Orchestrator.Available) { return $null }
-    $arguments = @('resolve-aliases')
-    if (-not [string]::IsNullOrWhiteSpace($Orchestrator.AliasProfile)) {
-        $arguments += @('--profile', $Orchestrator.AliasProfile)
-    }
+    $arguments = @('resolve-aliases') + (Get-EnvctlProfileArgument -AliasProfile $Orchestrator.AliasProfile)
     # resolve-aliases exits 1 when an alias is missing or ambiguous, which is a
     # perfectly ordinary answer for a machine that does not have every device a
     # catalogue mentions. The BODY is what carries the verdict, so the non-zero exit
@@ -304,9 +356,7 @@ function Get-EnvironmentDisplayModes {
     if (-not $Orchestrator.Available) { return $null }
     $arguments = @('list-modes')
     if (-not [string]::IsNullOrWhiteSpace($Alias)) { $arguments += @('--alias', $Alias) }
-    if (-not [string]::IsNullOrWhiteSpace($Orchestrator.AliasProfile)) {
-        $arguments += @('--profile', $Orchestrator.AliasProfile)
-    }
+    $arguments += (Get-EnvctlProfileArgument -AliasProfile $Orchestrator.AliasProfile)
     return Invoke-EnvctlTolerant -EnvctlPath $Orchestrator.EnvctlPath -Arguments $arguments
 }
 
@@ -414,14 +464,91 @@ function ConvertTo-RestoreResult {
         RESTORE_FAILED, never RESTORED, because "I do not know what happened" and
         "everything is fine" must not be the same answer.
     #>
-    param([string] $State)
-    switch ("$State") {
-        'Restored' { return 'RESTORED' }
-        'RestorePending' { return 'RESTORE_PENDING' }
-        'RestorePendingDeviceUnavailable' { return 'RESTORE_PENDING_DEVICE_UNAVAILABLE' }
-        'RestoreFailed' { return 'RESTORE_FAILED' }
-        'Clean' { return 'RESTORED' }   # nothing was ever applied
-        default { return 'RESTORE_FAILED' }
+    param(
+        [string] $State,
+        # envctl's own `ok` flag, when the caller has it. It is not redundant with the
+        # state: a journal that exists but cannot be PARSED never reaches a transaction
+        # at all, so envctl reports the default state `Clean` with ok=false -- and a
+        # state-only mapping would turn "the machine may be mutated and I cannot say
+        # how" into RESTORED. $null means "not supplied"; the state alone then decides.
+        [object] $Ok = $null
+    )
+    $mapped = switch ("$State") {
+        'Restored' { 'RESTORED' }
+        'RestorePending' { 'RESTORE_PENDING' }
+        'RestorePendingDeviceUnavailable' { 'RESTORE_PENDING_DEVICE_UNAVAILABLE' }
+        'RestoreFailed' { 'RESTORE_FAILED' }
+        'Clean' { 'RESTORED' }   # nothing was ever applied
+        default { 'RESTORE_FAILED' }
+    }
+    if ($mapped -eq 'RESTORED' -and $null -ne $Ok -and -not [bool]$Ok) { return 'RESTORE_FAILED' }
+    return $mapped
+}
+
+function Start-EnvironmentGuard {
+    <#
+    .SYNOPSIS
+        Spawns the envctl guardian for the lifetime of one open transaction.
+    .DESCRIPTION
+        `envctl --guard <pid>` waits on the owner process handle and, if the owner
+        dies while a journal is dirty, restores from that journal. It is a
+        CONVENIENCE on top of the real guarantee -- the persistent journal plus the
+        mandatory recovery pass on the next start -- and shortens the window in which
+        a killed runner leaves a machine reconfigured from "until somebody runs the
+        runner again" to "a second".
+
+        It existed unused until now, which made it worth exactly nothing: a safety
+        net nobody hangs up is a comment.
+
+        A guard that cannot be started is logged into the outcome and otherwise
+        ignored. Refusing to run the scenario would trade a real transaction, whose
+        journal is already the guarantee, for a missing optimisation.
+    #>
+    param(
+        [Parameter(Mandatory)] $Orchestrator,
+        [Parameter(Mandatory)] [string] $JournalPath,
+        [string] $LogPath
+    )
+    if (-not $Orchestrator.Available) { return $null }
+    # The guard is a detached subprocess of the real tool. Handing Start-Process
+    # anything that is not an executable image would invoke the shell association for
+    # that extension instead -- a script opened in an editor, or nothing at all -- and
+    # a "guard" that is really a text editor is worse than none. Declined quietly:
+    # the journal, not this, is the guarantee.
+    if ([IO.Path]::GetExtension("$($Orchestrator.EnvctlPath)") -ne '.exe') { return $null }
+    $arguments = @('--guard', "$PID", '--journal', $JournalPath) +
+    (Get-EnvctlProfileArgument -AliasProfile $Orchestrator.AliasProfile)
+    $parameters = @{
+        FilePath     = $Orchestrator.EnvctlPath
+        ArgumentList = $arguments
+        WindowStyle  = 'Hidden'
+        PassThru     = $true
+    }
+    # The guard prints one JSON document when it fires. That document is the only
+    # record that a killed runner was cleaned up by something other than the next
+    # `recover`, so it goes to a file rather than to a console nobody is watching.
+    if (-not [string]::IsNullOrWhiteSpace($LogPath)) { $parameters['RedirectStandardOutput'] = $LogPath }
+    try { return Start-Process @parameters }
+    catch { return $null }
+}
+
+function Stop-EnvironmentGuard {
+    <#
+    .SYNOPSIS
+        Retires the guardian once the transaction has reached a terminal state.
+    .DESCRIPTION
+        Called AFTER the restore, never before: the guard's whole purpose is to cover
+        the window in which the journal is dirty, and the restore is the last part of
+        that window.
+    #>
+    param($Guard)
+    if ($null -eq $Guard) { return }
+    try {
+        if (-not $Guard.HasExited) { $Guard.Kill() }
+    }
+    catch {
+        # Already gone, or never really started. Either way there is nothing owed:
+        # the guard holds no state of its own.
     }
 }
 
@@ -459,6 +586,11 @@ function Invoke-EnvironmentTransaction {
         Product        = $null
         RestoreResult  = 'NOT_APPLICABLE'
         Evidence       = $null
+        # What is STILL OWED when the restore did not complete, each entry naming the
+        # device, the original value and the action that would settle it. Separate
+        # from Evidence because evidence describes what happened and this describes
+        # what has not.
+        Pending        = $null
         TransactionId  = $null
         Error          = $null
         # Set when the environment could not be brought to the desired state at all,
@@ -492,10 +624,8 @@ function Invoke-EnvironmentTransaction {
     Write-EnvctlJsonAtomic -Path $desiredFile -Value @{ desired = $Desired }
 
     $arguments = @('begin', '--scenario', $Scenario, '--run-id', $Orchestrator.RunId,
-        '--journal', $Orchestrator.JournalPath, '--desired', $desiredFile)
-    if (-not [string]::IsNullOrWhiteSpace($Orchestrator.AliasProfile)) {
-        $arguments += @('--profile', $Orchestrator.AliasProfile)
-    }
+        '--journal', $Orchestrator.JournalPath, '--desired', $desiredFile) +
+    (Get-EnvctlProfileArgument -AliasProfile $Orchestrator.AliasProfile)
 
     $begun = Invoke-EnvctlTolerant -EnvctlPath $Orchestrator.EnvctlPath -Arguments $arguments
     Remove-Item -LiteralPath $desiredFile -Force -ErrorAction SilentlyContinue
@@ -508,13 +638,44 @@ function Invoke-EnvironmentTransaction {
             "$($begun.error)"
         }
         else { 'envctl begin produced no usable answer' }
-        # `begin` rolls back whatever it had already applied before it gave up, so
-        # there is nothing to restore here -- and its own journal is gone. Reporting
-        # RESTORED would be a claim about a transaction that never opened.
+
+        # `begin` rolls back whatever it had already applied before it gave up -- and
+        # that rollback CAN ITSELF FAIL, which is exactly when saying nothing is worst.
+        # envctl reports the outcome of its own rollback in `state`, so that is what
+        # decides here rather than the premise that a failed begin always cleans up:
+        #
+        #   Clean / Restored -> nothing is owed; the machine is where it started.
+        #   anything else    -> the rollback did not verify, its journal is still on
+        #                       disk with an outstanding debt, and the environment is
+        #                       dirty. Reporting NOT_APPLICABLE would hand the next
+        #                       scenario a machine nobody put back.
+        #
+        # A begin with no `state` at all is the unknown case, and unknown is dirty:
+        # real envctl always emits it, so its absence means nothing can be concluded.
+        $beginState = if ($null -ne $begun -and $begun.PSObject.Properties.Name -contains 'state') {
+            "$($begun.state)"
+        }
+        else { $null }
+        if ($beginState -in @('Clean', 'Restored')) {
+            return $outcome
+        }
+        $outcome.RestoreResult = ConvertTo-RestoreResult -State $beginState -Ok $false
+        if ($null -ne $begun -and $begun.PSObject.Properties.Name -contains 'evidence') {
+            $outcome.Evidence = $begun.evidence
+        }
+        if ($null -ne $begun -and $begun.PSObject.Properties.Name -contains 'pending') {
+            $outcome.Pending = $begun.pending
+        }
+        $Orchestrator.Dirty = $true
+        $Orchestrator.DirtyDetail = "scenario '$Scenario' failed to begin and its rollback ended in " +
+        "$($outcome.RestoreResult) ($($outcome.SetupErrorCode))"
         return $outcome
     }
     $outcome.TransactionId = $begun.transactionId
     $journalPath = $begun.journalPath
+
+    $guard = Start-EnvironmentGuard -Orchestrator $Orchestrator -JournalPath $journalPath `
+        -LogPath (Join-Path $Orchestrator.JournalDirectory "guard-$Scenario.json")
 
     try {
         $outcome.Product = & $Body $begun
@@ -530,11 +691,24 @@ function Invoke-EnvironmentTransaction {
             # a verdict this function has to REPORT rather than throw on -- the report
             # needs RESTORE_FAILED next to the product result, not a runner stack
             # trace instead of both.
+            #
+            # --profile is not optional here. Without it no aliases load, so
+            # DevicePresent() answers false for every device and the pre-flight refuses
+            # to restore hardware that is plainly attached.
             $restore = Invoke-EnvctlTolerant -EnvctlPath $Orchestrator.EnvctlPath `
-                -Arguments @('restore', '--journal', $journalPath)
-            $outcome.RestoreResult = ConvertTo-RestoreResult -State $(if ($null -ne $restore) { $restore.state } else { $null })
+                -Arguments (@('restore', '--journal', $journalPath) +
+                (Get-EnvctlProfileArgument -AliasProfile $Orchestrator.AliasProfile))
+            $restoreState = if ($null -ne $restore) { $restore.state } else { $null }
+            $restoreOk = if ($null -ne $restore -and $restore.PSObject.Properties.Name -contains 'ok') {
+                $restore.ok
+            }
+            else { $null }
+            $outcome.RestoreResult = ConvertTo-RestoreResult -State $restoreState -Ok $restoreOk
             if ($null -ne $restore -and $restore.PSObject.Properties.Name -contains 'evidence') {
                 $outcome.Evidence = $restore.evidence
+            }
+            if ($null -ne $restore -and $restore.PSObject.Properties.Name -contains 'pending') {
+                $outcome.Pending = $restore.pending
             }
             if ($outcome.RestoreResult -ne 'RESTORED') {
                 $Orchestrator.Dirty = $true
@@ -546,6 +720,9 @@ function Invoke-EnvironmentTransaction {
             $Orchestrator.Dirty = $true
             $Orchestrator.DirtyDetail = $_.Exception.Message
         }
+        # After the restore, never before: the guard covers exactly the window in
+        # which the journal is dirty, and the restore is the end of that window.
+        Stop-EnvironmentGuard -Guard $guard
         Remove-Item -LiteralPath $desiredFile -Force -ErrorAction SilentlyContinue
     }
 
@@ -556,4 +733,6 @@ Export-ModuleMember -Function Write-EnvctlJsonAtomic, Resolve-EnvctlPath, Invoke
 Invoke-EnvctlTolerant, ConvertTo-RestoreResult, New-EnvironmentOrchestrator,
 Assert-EnvironmentClean, Get-EnvironmentSnapshot, Get-EnvironmentCapabilities,
 Resolve-EnvironmentAliases, Get-EnvironmentDisplayModes, Select-UntwinnedRefreshRate,
-Test-EnvironmentRequirement, Invoke-EnvironmentTransaction
+Test-EnvironmentRequirement, Invoke-EnvironmentTransaction,
+Resolve-EnvironmentJournalPath, Get-EnvctlProfileArgument,
+Start-EnvironmentGuard, Stop-EnvironmentGuard

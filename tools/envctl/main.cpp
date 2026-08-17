@@ -485,6 +485,9 @@ int CommandBegin(Win32EnvironmentProvider& provider, const Options& options) {
         document["errorCode"] = result.error_code;
         document["error"] = result.error;
     }
+    if (!result.warning.empty()) {
+        document["warning"] = result.warning;
+    }
     nlohmann::ordered_json applied = nlohmann::ordered_json::array();
     for (const auto& entry : transaction.JournalDocument().applied) {
         nlohmann::ordered_json item;
@@ -531,6 +534,9 @@ int CommandRestore(Win32EnvironmentProvider& provider, const Options& options) {
         document["errorCode"] = outcome.error_code;
         document["error"] = outcome.error;
     }
+    if (!outcome.warning.empty()) {
+        document["warning"] = outcome.warning;
+    }
     Print(document);
     return outcome.recovered ? kExitOk : kExitRestoreOwed;
 }
@@ -551,6 +557,9 @@ int CommandRecover(Win32EnvironmentProvider& provider, const Options& options) {
     if (!outcome.error.empty()) {
         document["errorCode"] = outcome.error_code;
         document["error"] = outcome.error;
+    }
+    if (!outcome.warning.empty()) {
+        document["warning"] = outcome.warning;
     }
     Print(document);
     return outcome.mutation_allowed ? kExitOk : kExitRestoreOwed;
@@ -641,6 +650,13 @@ int CommandGuard(Win32EnvironmentProvider& provider, const Options& options) {
     document["recovered"] = outcome.recovered;
     document["state"] = std::string(ToKey(outcome.state));
     document["pending"] = PendingJson(outcome.pending);
+    if (!outcome.error.empty()) {
+        document["errorCode"] = outcome.error_code;
+        document["error"] = outcome.error;
+    }
+    if (!outcome.warning.empty()) {
+        document["warning"] = outcome.warning;
+    }
     Print(document);
     return outcome.mutation_allowed ? kExitOk : kExitRestoreOwed;
 }

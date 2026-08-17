@@ -332,7 +332,7 @@ std::vector<DevicePendingRestore> EnvironmentTransaction::BuildPending(const std
 TransactionResult EnvironmentTransaction::RestoreInternal() {
     if (journal_.applied.empty()) {
         std::string error;
-        DeleteJournal(config_.journal_path, error);
+        const bool deleted = DeleteJournal(config_.journal_path, error);
         journal_.state = TransactionState::Restored;
         for (auto& [key, evidence] : evidence_) {
             (void)key;
@@ -343,6 +343,9 @@ TransactionResult EnvironmentTransaction::RestoreInternal() {
         TransactionResult result;
         result.ok = true;
         result.state = journal_.state;
+        if (!deleted) {
+            result.warning = error;
+        }
         return result;
     }
 
@@ -448,10 +451,13 @@ TransactionResult EnvironmentTransaction::RestoreInternal() {
 
     journal_.state = TransactionState::Restored;
     std::string error;
-    DeleteJournal(config_.journal_path, error);
+    const bool deleted = DeleteJournal(config_.journal_path, error);
     TransactionResult result;
     result.ok = true;
     result.state = journal_.state;
+    if (!deleted) {
+        result.warning = error;
+    }
     return result;
 }
 
@@ -517,7 +523,12 @@ RecoveryOutcome RecoverIfDirty(IEnvironmentProvider& provider, TransactionConfig
     outcome.journal_present = true;
     if (!IsDirty(journal->state)) {
         std::string error;
-        DeleteJournal(config.journal_path, error);
+        if (!DeleteJournal(config.journal_path, error)) {
+            // Nothing is owed -- the journal was already terminal -- but a file that
+            // cannot be removed will refuse the next `begin` as dirty_journal, so the
+            // reason has to travel with the answer rather than be discovered later.
+            outcome.warning = error;
+        }
         outcome.recovered = true;
         outcome.mutation_allowed = true;
         outcome.state = TransactionState::Restored;
@@ -530,6 +541,7 @@ RecoveryOutcome RecoverIfDirty(IEnvironmentProvider& provider, TransactionConfig
     outcome.state = result.state;
     outcome.error_code = result.error_code;
     outcome.error = result.error;
+    outcome.warning = result.warning;
     outcome.pending = result.pending;
     outcome.evidence = transaction.Evidence();
     outcome.recovered = result.ok && result.state == TransactionState::Restored;

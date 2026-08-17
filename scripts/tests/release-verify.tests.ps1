@@ -235,7 +235,9 @@ Test-Case 'a setter that claims success but reads back differently is a failure'
     # orchestrator surfaces its verdict instead of trusting the exit code of `begin`.
     Set-FakeBehaviour -Directory $directory -Behaviour @{
         recover = @{ exit = 0; output = @{ journalPresent = $false; recovered = $false; mutationAllowed = $true; state = 'Clean' } }
-        begin   = @{ exit = 1; output = @{ ok = $false; errorCode = 'verify_mismatch'; error = 'read-back mismatch: requested 60, actual 144' } }
+        # `state` is what real envctl reports about ITS OWN rollback, and it always
+        # emits it. Restored here means the rollback verified, so nothing is owed.
+        begin   = @{ exit = 1; output = @{ ok = $false; errorCode = 'verify_mismatch'; state = 'Restored'; error = 'read-back mismatch: requested 60, actual 144' } }
     }
     $orchestrator = New-EnvironmentOrchestrator -RunId 'r1' -JournalDirectory $directory -EnvctlPath $fake
     $script:bodyRan = $false
@@ -256,7 +258,7 @@ Test-Case 'a display that does not offer the requested mode is UNAVAILABLE, not 
     $fake = New-FakeEnvctl -Directory $directory
     Set-FakeBehaviour -Directory $directory -Behaviour @{
         recover = @{ exit = 0; output = @{ journalPresent = $false; recovered = $false; mutationAllowed = $true; state = 'Clean' } }
-        begin   = @{ exit = 1; output = @{ ok = $false; errorCode = 'apply_rejected'; error = 'the display does not offer 60 Hz' } }
+        begin   = @{ exit = 1; output = @{ ok = $false; errorCode = 'apply_rejected'; state = 'Restored'; error = 'the display does not offer 60 Hz' } }
     }
     $orchestrator = New-EnvironmentOrchestrator -RunId 'r1' -JournalDirectory $directory -EnvctlPath $fake
     $outcome = Invoke-EnvironmentTransaction -Orchestrator $orchestrator -Scenario 'unsupported-mode' `
@@ -316,6 +318,99 @@ Test-Case 'a device that vanished before restore yields RESTORE_PENDING_DEVICE_U
     Assert-Equal 'RESTORE_PENDING_DEVICE_UNAVAILABLE' $outcome.RestoreResult 'a missing device is its own outcome'
     Assert-True $orchestrator.Dirty 'a pending restore blocks the next mutating scenario'
     Assert-True ($null -ne $outcome.Evidence) 'the evidence naming the unrestored property must survive'
+}
+
+Test-Case 'a begin whose own rollback failed leaves the environment dirty' {
+    $directory = New-TestDirectory
+    $fake = New-FakeEnvctl -Directory $directory
+    # The premise "begin rolls back what it applied, so there is nothing to restore"
+    # is false exactly when that rollback is what failed. envctl says so in `state`,
+    # and the orchestrator has to believe it: a journal is still on disk with an
+    # outstanding debt, and the next mutating scenario must not run.
+    Set-FakeBehaviour -Directory $directory -Behaviour @{
+        recover = @{ exit = 0; output = @{ journalPresent = $false; recovered = $false; mutationAllowed = $true; state = 'Clean' } }
+        begin   = @{ exit = 4; output = @{
+                ok        = $false; errorCode = 'verify_mismatch'; state = 'RestoreFailed'
+                error     = 'read-back mismatch, and the rollback did not verify either'
+                pending   = @(@{ alias = 'display.main-hdr'; property = 'display.main-hdr:hdr'; originalValue = 'on' })
+            }
+        }
+    }
+    $orchestrator = New-EnvironmentOrchestrator -RunId 'r1' -JournalDirectory $directory `
+        -JournalPath (Join-Path $directory 'env-journal.json') -EnvctlPath $fake
+    $outcome = Invoke-EnvironmentTransaction -Orchestrator $orchestrator -Scenario 'rollback-broke' `
+        -Desired @{ 'display.main-hdr:hdr' = 'off' } -Body { param($t) @{ Result = 'PASS' } }
+    Assert-Equal 'RESTORE_FAILED' $outcome.RestoreResult 'a failed rollback is not NOT_APPLICABLE'
+    Assert-True $orchestrator.Dirty 'a failed rollback must block the next mutating scenario'
+    Assert-True ($null -ne $outcome.Pending) 'what is still owed must survive into the report'
+}
+
+Test-Case 'a begin that answers with no state at all is treated as unknown, not as clean' {
+    $directory = New-TestDirectory
+    $fake = New-FakeEnvctl -Directory $directory
+    Set-FakeBehaviour -Directory $directory -Behaviour @{
+        recover = @{ exit = 0; output = @{ journalPresent = $false; recovered = $false; mutationAllowed = $true; state = 'Clean' } }
+        begin   = @{ exit = 1; output = @{ ok = $false; errorCode = 'apply_rejected'; error = 'no state field at all' } }
+    }
+    $orchestrator = New-EnvironmentOrchestrator -RunId 'r1' -JournalDirectory $directory `
+        -JournalPath (Join-Path $directory 'env-journal.json') -EnvctlPath $fake
+    $outcome = Invoke-EnvironmentTransaction -Orchestrator $orchestrator -Scenario 'no-state' `
+        -Desired @{ 'display.main-hdr:hdr' = 'off' } -Body { param($t) @{ Result = 'PASS' } }
+    Assert-Equal 'RESTORE_FAILED' $outcome.RestoreResult 'nothing can be concluded, so nothing may be claimed'
+    Assert-True $orchestrator.Dirty 'an unknown machine state is the strongest reason not to mutate again'
+}
+
+Test-Case 'a restore reporting Clean while ok is false is never RESTORED' {
+    # envctl answers a journal it cannot PARSE with its default state (Clean) and
+    # ok=false, because no transaction was ever constructed to have a state. A
+    # state-only mapping turned "the machine may be mutated and I cannot say how"
+    # into RESTORED.
+    Assert-Equal 'RESTORE_FAILED' (ConvertTo-RestoreResult -State 'Clean' -Ok $false) `
+        'ok=false must beat a benign-looking state'
+    Assert-Equal 'RESTORED' (ConvertTo-RestoreResult -State 'Clean' -Ok $true) `
+        'a genuinely clean transaction is still restored'
+    Assert-Equal 'RESTORED' (ConvertTo-RestoreResult -State 'Restored') `
+        'without an ok flag the state alone still decides'
+}
+
+Test-Case 'the journal is machine-wide, not filed under the campaign' {
+    $directory = New-TestDirectory
+    $fake = New-FakeEnvctl -Directory $directory
+    Set-FakeBehaviour -Directory $directory -Behaviour @{
+        recover = @{ exit = 0; output = @{ journalPresent = $false; recovered = $false; mutationAllowed = $true; state = 'Clean' } }
+    }
+    # No -JournalPath: this is the default every campaign gets.
+    $orchestrator = New-EnvironmentOrchestrator -RunId 'rel-20260817-1' -JournalDirectory $directory -EnvctlPath $fake
+    Assert-True ($orchestrator.JournalPath -notlike "*$directory*") `
+        'a journal inside the campaign directory is invisible to the next campaign'
+    Assert-True ($orchestrator.JournalPath -like '*env-journal.json') 'it is still envctl''s journal file'
+
+    # Two campaigns, one machine, one journal -- otherwise a crashed campaign
+    # snapshots the already-mutated value as its "original" and reports RESTORED.
+    $second = New-EnvironmentOrchestrator -RunId 'rel-20260817-2' -JournalDirectory (New-TestDirectory) -EnvctlPath $fake
+    Assert-Equal $orchestrator.JournalPath $second.JournalPath 'two campaigns must recover from the same journal'
+}
+
+Test-Case 'every envctl call that resolves an alias carries the profile' {
+    $directory = New-TestDirectory
+    $fake = New-FakeEnvctl -Directory $directory
+    Set-FakeBehaviour -Directory $directory -Behaviour @{
+        recover = @{ exit = 0; output = @{ journalPresent = $false; recovered = $false; mutationAllowed = $true; state = 'Clean' } }
+        begin   = @{ exit = 0; output = @{ ok = $true; transactionId = 't1'; journalPath = 'j1'; state = 'Active'; applied = @() } }
+        restore = @{ exit = 0; output = @{ ok = $true; state = 'Restored'; evidence = @{}; pending = @() } }
+    }
+    $orchestrator = New-EnvironmentOrchestrator -RunId 'r1' -JournalDirectory $directory `
+        -JournalPath (Join-Path $directory 'env-journal.json') -EnvctlPath $fake -AliasProfile 'C:\profile.json'
+    [void](Invoke-EnvironmentTransaction -Orchestrator $orchestrator -Scenario 'profile' `
+            -Desired @{ 'display.main-hdr:hdr' = 'off' } -Body { param($t) @{ Result = 'PASS' } })
+    # The restore is the call that lost it. Without --profile no aliases load,
+    # DevicePresent() is false for everything, and the restore refuses to put back a
+    # device that is plainly attached -- on the one path where giving up is worst.
+    foreach ($verb in @('recover', 'begin', 'restore')) {
+        $call = @(Get-FakeCalls -Directory $directory | Where-Object { $_.verb -eq $verb }) | Select-Object -First 1
+        Assert-True ($null -ne $call) "$verb was never called"
+        Assert-True (@($call.args) -contains '--profile') "$verb must carry --profile"
+    }
 }
 
 Test-Case 'a dirty environment blocks the next mutating scenario' {
@@ -471,6 +566,54 @@ Test-Case 'every human gate declares why it is manual and how it will be verifie
     $verifyCount = ([regex]::Matches($source, '(?m)^\s+Verify\s+=')).Count
     Assert-Equal $whyCount $verifyDescriptionCount 'every gate that states Why must state VerifyDescription'
     Assert-Equal $whyCount $verifyCount 'every gate must carry a Verify block'
+}
+
+Test-Case 'the field contract names only scenarios that exist' {
+    # The contract's value is that a vanished field path names, without searching,
+    # exactly which gates are about to throw. A UsedBy pointing at a scenario that no
+    # longer exists is the contract rotting quietly.
+    . (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
+    $contract = @(Get-ReleaseFieldContract)
+    Assert-True ($contract.Count -gt 0) 'the field contract must not be empty'
+    $ids = @((Get-ReleaseScenarioCatalog) | ForEach-Object { $_.Id })
+    foreach ($entry in $contract) {
+        Assert-True ($entry.Stage -in @('idle', 'recording', 'result')) `
+            "$($entry.Command).$($entry.Path) declares an unknown stage '$($entry.Stage)'"
+        foreach ($id in ($entry.UsedBy -split ',\s*')) {
+            Assert-True ($ids -contains $id) "$($entry.Command).$($entry.Path) is used by '$id', which is not a scenario"
+        }
+    }
+}
+
+Test-Case 'the field-path resolver tells missing apart from empty' {
+    . (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
+    $snapshot = '{"audio":{"sourceDegraded":false},"entries":[],"screens":[{"name":"X"}]}' | ConvertFrom-Json
+    Assert-Equal 'present' (Resolve-ReleaseFieldPath -Root $snapshot -Path 'audio.sourceDegraded').Status `
+        'an emitted path is present even when its value is false'
+    Assert-Equal 'present' (Resolve-ReleaseFieldPath -Root $snapshot -Path 'screens[].name').Status `
+        'an element shape is walked through the first element'
+    # The exact defect: pipeline.audio.tracks[].degraded, read by two scenarios,
+    # emitted by nothing. Under StrictMode it threw INSIDE a human gate.
+    Assert-Equal 'missing' (Resolve-ReleaseFieldPath -Root $snapshot -Path 'audio.tracks[].degraded').Status `
+        'a path no emitter emits must be reported missing, not thrown on'
+    # Empty is its own answer: the NAME is proven, the element shape is not, and
+    # calling that a pass would be a false statement about what was checked.
+    Assert-Equal 'empty' (Resolve-ReleaseFieldPath -Root $snapshot -Path 'entries[].sequence').Status `
+        'an empty collection proves its name and nothing about its elements'
+}
+
+Test-Case 'no scenario reads a field the contract does not cover' {
+    # The contract only protects what it lists. This keeps the two in step for the
+    # paths that actually broke, so a rename cannot quietly reintroduce one of them.
+    . (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
+    $code = @(Get-Content -LiteralPath (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1') |
+            Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
+    foreach ($dead in @('\.audio\.tracks', '\$pipeline\.avDriftMs', '\$pipeline\.capture\.presentMode',
+            '\$notifications\.notifications', '\$after\.notifications', '\$identity\.version\b')) {
+        Assert-True ($code -notmatch $dead) "the catalog still reads '$dead', which no emitter emits"
+    }
+    Assert-True ($code -notmatch "moveToScreen'\s+-Parameters\s+@\{\s*index") `
+        'window.moveToScreen takes a screen NAME, never an index'
 }
 
 Write-Host ''

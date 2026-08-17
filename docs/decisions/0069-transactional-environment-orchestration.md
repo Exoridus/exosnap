@@ -115,10 +115,21 @@ the display at its original 144 Hz. A tolerance would have called that a pass.
 **Restore means "put back what this machine actually had"**, never "set the defaults".
 A machine that had HDR on gets HDR on again.
 
-**The journal is written before the first mutation**, atomically, and `applied` is the
-outstanding debt rather than a history log: entries are popped as each is restored *and
-verified*, so a kill at any instant leaves exactly what still has to be undone. It
-carries a stable non-identifying machine hash, never a hostname or user name.
+**The journal is written before the first mutation**, atomically and durably (the bytes
+are committed to the disk before the rename, so a power cut cannot leave a renamed,
+zero-length journal claiming the machine is clean). `applied` is the outstanding debt
+rather than a history log: entries are popped as each is restored *and verified*, so a
+kill at any instant leaves exactly what still has to be undone. It carries a stable
+non-identifying machine hash, never a hostname or user name.
+
+**The journal is machine-wide, not per campaign.** One machine has one environment, so
+it has exactly one journal — `.workspace/env-journal.json`, envctl's own default, which
+the runner must not relocate. Filing it under the campaign that wrote it makes it
+invisible to the next campaign, because the campaign id is new on every `prepare`: the
+dirty gate then finds no journal, snapshots the *already-mutated* value as its
+"original", and reports `RESTORED` for a machine nobody put back. A crashed campaign
+would quietly become the new baseline, which is the precise failure this ADR exists to
+prevent.
 
 Failure states are distinct because they need distinct responses:
 
@@ -157,9 +168,18 @@ What this cannot promise is instant recovery from a power loss or an OS crash. N
 in user space can. The guarantee is the persistent journal plus a mandatory recovery
 pass — stated that way rather than as an unfalsifiable claim.
 
+A failed `begin` is not automatically a clean machine either. `begin` rolls back what it
+had already applied — but that rollback can itself fail, and then its journal is still
+on disk with an outstanding debt. envctl reports the outcome of its own rollback in
+`state`, and the runner believes that rather than the premise: anything other than
+`Clean` or `Restored` — including no state at all, which is the unknown case — marks the
+environment dirty.
+
 An `exosnap-envctl --guard <owner-pid>` mode waits on the owner process and recovers if
 it dies unexpectedly. It is convenience on top of the mandatory guarantee, spawned by
-the runner, never installed.
+the runner for the lifetime of each open transaction and retired after the restore,
+never installed. A safety net nobody hangs up is a comment, so it is wired rather than
+merely available.
 
 ### Two verdicts per scenario
 

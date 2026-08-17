@@ -8,6 +8,10 @@
 #include <sstream>
 #include <system_error>
 
+#if defined(_MSC_VER)
+#include <io.h> // _commit, _fileno -- the journal write is durable, not merely flushed.
+#endif
+
 #include <nlohmann/json.hpp>
 
 namespace exosnap::envctl {
@@ -110,7 +114,7 @@ std::string Journal::ToJsonText() const {
     return document.dump(2) + "\n";
 }
 
-std::optional<Journal> Journal::FromJsonText(std::string_view text, std::string& error) {
+std::optional<Journal> Journal::FromJsonText(std::string_view text, std::string& error) try {
     nlohmann::json document = nlohmann::json::parse(text, nullptr, false);
     if (document.is_discarded() || !document.is_object()) {
         error = "journal_invalid: not a JSON object.";
@@ -168,6 +172,15 @@ std::optional<Journal> Journal::FromJsonText(std::string_view text, std::string&
     journal.created_at = document.value("createdAt", std::string{});
     journal.updated_at = document.value("updatedAt", std::string{});
     return journal;
+} catch (const nlohmann::json::exception& exception) {
+    // `value<T>(key, fallback)` throws type_error when the key EXISTS with the wrong
+    // type -- "schemaVersion": "1" is a string, not a missing field, so the fallback
+    // never applies. Parsing is done on a file that may have been mangled by a crash
+    // or edited by hand, and an escaping exception here would abort the one command
+    // whose job is to clean that up. A malformed journal is a reported error, never
+    // a terminated process and never a silent "no journal".
+    error = std::string("journal_invalid: ") + exception.what();
+    return std::nullopt;
 }
 
 bool WriteJournalAtomic(const std::filesystem::path& path, const Journal& journal, std::string& error) {
@@ -185,17 +198,40 @@ bool WriteJournalAtomic(const std::filesystem::path& path, const Journal& journa
     auto temporary = path;
     temporary += ".tmp";
 
+    // Written through a FILE* rather than an ofstream for one reason: the bytes have
+    // to reach the DISK before the rename, not merely leave this process. A flushed
+    // ofstream has handed the data to the OS cache, and a power cut or a bluescreen
+    // between that flush and the rename can leave a renamed, zero-length journal --
+    // which claims the machine is clean while it is not. That is the exact failure
+    // the atomic rename exists to prevent, so the durability step belongs with it.
     {
-        std::ofstream stream(temporary, std::ios::binary | std::ios::trunc);
-        if (!stream) {
+        const std::string text = journal.ToJsonText();
+        std::FILE* file = nullptr;
+#if defined(_MSC_VER)
+        if (_wfopen_s(&file, temporary.wstring().c_str(), L"wbN") != 0 || file == nullptr) {
             error = "journal_write_failed: could not open '" + temporary.string() + "'.";
             return false;
         }
-        const std::string text = journal.ToJsonText();
-        stream.write(text.data(), static_cast<std::streamsize>(text.size()));
-        stream.flush();
-        if (!stream) {
-            error = "journal_write_failed: could not write '" + temporary.string() + "'.";
+#else
+        file = std::fopen(temporary.string().c_str(), "wb");
+        if (file == nullptr) {
+            error = "journal_write_failed: could not open '" + temporary.string() + "'.";
+            return false;
+        }
+#endif
+        const bool written = std::fwrite(text.data(), 1, text.size(), file) == text.size();
+        const bool flushed = written && std::fflush(file) == 0;
+        bool durable = flushed;
+#if defined(_MSC_VER)
+        // _commit is FlushFileBuffers on the underlying handle. Safe on a regular
+        // file: unlike a pipe it cannot block on a peer that never drains.
+        durable = flushed && _commit(_fileno(file)) == 0;
+#endif
+        std::fclose(file);
+        if (!durable) {
+            std::error_code ignored;
+            std::filesystem::remove(temporary, ignored);
+            error = "journal_write_failed: could not write '" + temporary.string() + "' durably.";
             return false;
         }
     }
@@ -217,7 +253,18 @@ bool WriteJournalAtomic(const std::filesystem::path& path, const Journal& journa
 std::optional<Journal> ReadJournal(const std::filesystem::path& path, std::string& error) {
     error.clear();
     std::error_code code;
-    if (!std::filesystem::exists(path, code) || code) {
+    const bool present = std::filesystem::exists(path, code);
+    if (code) {
+        // "I could not find out whether a journal exists" is not "there is no
+        // journal". Collapsing the two -- which this did -- makes a locked,
+        // permission-denied or unreachable path read as a clean machine, and every
+        // caller here treats clean as a licence to mutate. The header has always
+        // said a non-empty error means NOT clean; this makes the code say it too.
+        error = "journal_read_failed: could not determine whether '" + path.string() +
+                "' exists: " + code.message();
+        return std::nullopt;
+    }
+    if (!present) {
         return std::nullopt;
     }
     std::ifstream stream(path, std::ios::binary);
