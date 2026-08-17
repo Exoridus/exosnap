@@ -1,9 +1,15 @@
+// Not inside the EXOSNAP_ENABLE_AUTO_RECORD_HARNESS block below, and that is
+// the whole contract: --pseudo-localize is armed by argv and by nothing else
+// (see PseudoLocalization.h), so its translator has to exist in every
+// configuration the product ships. Its sources are added to the target
+// unconditionally for the same reason; a harness-gated include here compiled in
+// Debug and broke Release, where the gate is off.
+#include "PseudoLocalization.h"
 #include "QuickApplication.h"
 #include "QuickLiveVerifySource.h"
 #include "QuickWindowGeometry.h"
 #if defined(EXOSNAP_ENABLE_AUTO_RECORD_HARNESS)
 #include "NotificationsAdapter.h"
-#include "PseudoLocalization.h"
 #include "QuickAutoEditHarness.h"
 #include "QuickAutoRecordHarness.h"
 #include "auto_record/AutoRecordHarness.h"
