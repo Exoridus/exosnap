@@ -155,9 +155,13 @@ try {
 
     # An idle process has no live pipeline, and must not answer as if it had one.
     $idlePipeline = Invoke-Query $conn 'pipeline.snapshot'
+    # The measurement groups have to be ABSENT, not present-and-zero. Asked for
+    # by name under StrictMode that is an error rather than a null, so the
+    # assertion is over the property list itself.
+    $idleGroups = $idlePipeline.PSObject.Properties.Name
     Add-Step 'pipeline.snapshot is honest about an idle pipeline' `
-        (-not $idlePipeline.valid -and $null -eq $idlePipeline.capture) `
-        @{ valid = $idlePipeline.valid; lifecycle = $idlePipeline.lifecycle }
+        (-not $idlePipeline.valid -and $idleGroups -notcontains 'capture' -and $idleGroups -notcontains 'encoder') `
+        @{ valid = $idlePipeline.valid; lifecycle = $idlePipeline.lifecycle; groups = $idleGroups }
 
     # -- record -------------------------------------------------------------------
     $selected = Invoke-LiveVerifyCommand -Connection $conn -Command 'record.selectTarget' `
@@ -174,7 +178,18 @@ try {
     $recording = Wait-RecordingState $conn @('Recording') ($TimeoutSeconds * 1000)
     $evidence.recordingState = $recording.recordingState
 
+    # The recording runs for its configured duration BEFORE the pipeline is
+    # queried. That is not a synchronisation sleep standing in for an event: the
+    # transport state is already observed above, and this is how long the check
+    # records for -- a product parameter. Querying immediately would read the
+    # snapshot before the engine's first 5 Hz sample exists, and `valid:false`
+    # would then be the honest answer to a question asked too early.
+    Start-Sleep -Seconds $RecordSeconds
+
     $live = Invoke-Query $conn 'pipeline.snapshot'
+    if ($live.PSObject.Properties.Name -notcontains 'capture') {
+        throw "pipeline.snapshot still reports no measurement after ${RecordSeconds}s of recording: $($live | ConvertTo-Json -Compress -Depth 4)"
+    }
     $evidence.pipelineWhileRecording = $live
     Add-Step 'pipeline.snapshot reports a real, measured pipeline while recording' `
         ($live.valid -and $live.lifecycle -eq 'recording' -and $live.capture.targetFps -gt 0) `
@@ -192,17 +207,26 @@ try {
     $paused = Invoke-LiveVerifyCommand -Connection $conn -Command 'record.pause'
     if (-not $paused.ok) { throw "record.pause refused: $($paused.error.message)" }
     [void](Wait-RecordingState $conn @('Paused') ($TimeoutSeconds * 1000))
-    $pausedPipeline = Invoke-Query $conn 'pipeline.snapshot'
+
+    # The transport state and the pipeline lifecycle are two different clocks:
+    # the transport changes on the request, the pipeline reports what the engine
+    # last PUBLISHED, at ~5 Hz. Reading the snapshot the instant the transport
+    # flips therefore sees the previous sample, and that is honest rather than
+    # wrong. What has to be true is that it CATCHES UP -- so this waits for the
+    # measurement to arrive, bounded, and fails if it never does.
+    $pausedPipeline = $null
+    $deadline = [DateTime]::UtcNow.AddSeconds(10)
+    do {
+        $pausedPipeline = Invoke-Query $conn 'pipeline.snapshot'
+        if ($pausedPipeline.lifecycle -eq 'paused') { break }
+        Start-Sleep -Milliseconds 100
+    } while ([DateTime]::UtcNow -lt $deadline)
     Add-Step 'the pipeline lifecycle follows the transport into paused' `
         ($pausedPipeline.lifecycle -eq 'paused') @{ lifecycle = $pausedPipeline.lifecycle }
 
     $resumed = Invoke-LiveVerifyCommand -Connection $conn -Command 'record.resume'
     if (-not $resumed.ok) { throw "record.resume refused: $($resumed.error.message)" }
     [void](Wait-RecordingState $conn @('Recording') ($TimeoutSeconds * 1000))
-
-    # The one bounded wait in the run, and it is a product parameter: how long to
-    # record. Everything else is an observed transition.
-    Start-Sleep -Seconds $RecordSeconds
 
     $stopped = Invoke-LiveVerifyCommand -Connection $conn -Command 'record.stop'
     if (-not $stopped.ok) { throw "record.stop refused: $($stopped.error.message)" }
@@ -217,12 +241,16 @@ try {
     # -- the session, and the events that belong to it ---------------------------
     $session = Invoke-Query $conn 'session.latest'
     $evidence.session = $session
+    # `report` is absent when no report exists, which is the honest answer and
+    # not an empty object -- so it is looked for rather than read.
+    $recordingId = if ($session.available -and $session.PSObject.Properties.Name -contains 'report') {
+        $session.report.recording_session_id
+    } else { $null }
     Add-Step 'session.latest is the canonical report for the recording that just ran' `
-        ($session.available -and $null -ne $session.report.recording_session_id) `
-        @{ available = $session.available; id = $session.report.recording_session_id }
+        ($session.available -and -not [string]::IsNullOrEmpty($recordingId)) `
+        @{ available = $session.available; id = $recordingId }
 
-    if ($session.available) {
-        $recordingId = $session.report.recording_session_id
+    if (-not [string]::IsNullOrEmpty($recordingId)) {
         $events = Invoke-Query $conn 'events.recent' @{ recordingSessionId = $recordingId; max = 20 }
         $codes = @($events.events | ForEach-Object { $_.eventCode })
         Add-Step 'the recording is addressable in the event stream by its own id' `
@@ -276,7 +304,7 @@ try {
         ($null -eq $final.blockingSurface -and $final.editSession -eq 'closed') `
         @{ page = $final.page; blockingSurface = $final.blockingSurface; editSession = $final.editSession }
 
-    $exitCode = if (($steps | Where-Object { -not $_.pass }).Count -eq 0) { 0 } else { 1 }
+    $exitCode = if (@($steps | Where-Object { -not $_.pass }).Count -eq 0) { 0 } else { 1 }
 }
 finally {
     if ($null -ne $conn) { try { $conn.Close() } catch { } }
@@ -289,7 +317,7 @@ finally {
     Remove-Item -LiteralPath $scratch -Recurse -Force -ErrorAction SilentlyContinue
 
     $evidence.steps = $steps
-    $evidence.pass = ($steps | Where-Object { -not $_.pass }).Count -eq 0
+    $evidence.pass = @($steps | Where-Object { -not $_.pass }).Count -eq 0
     if ($EvidencePath) {
         $evidence | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $EvidencePath -Encoding utf8
         Write-Host "evidence: $EvidencePath"
@@ -297,5 +325,5 @@ finally {
 }
 
 $verdict = if ($exitCode -eq 0) { 'PASS' } else { 'FAIL' }
-Write-Host ("`n{0}: {1}/{2} steps passed" -f $verdict, ($steps | Where-Object { $_.pass }).Count, $steps.Count)
+Write-Host ("`n{0}: {1}/{2} steps passed" -f $verdict, @($steps | Where-Object { $_.pass }).Count, $steps.Count)
 exit $exitCode

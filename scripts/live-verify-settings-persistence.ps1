@@ -201,7 +201,7 @@ try {
     $secondExit = Stop-Application $second ($TimeoutSeconds * 1000)
     Add-Step 'second application exited' ($second.HasExited) @{ how = $secondExit }
 
-    $exitCode = if (($steps | Where-Object { -not $_.pass }).Count -eq 0) { 0 } else { 1 }
+    $exitCode = if (@($steps | Where-Object { -not $_.pass }).Count -eq 0) { 0 } else { 1 }
 }
 finally {
     if ($null -ne $conn) { try { $conn.Close() } catch { } }
@@ -213,7 +213,7 @@ finally {
     Remove-Item -LiteralPath $scratch -Recurse -Force -ErrorAction SilentlyContinue
 
     $evidence.steps = $steps
-    $evidence.pass = ($steps | Where-Object { -not $_.pass }).Count -eq 0
+    $evidence.pass = @($steps | Where-Object { -not $_.pass }).Count -eq 0
     if ($EvidencePath) {
         $evidence | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $EvidencePath -Encoding utf8
         Write-Host "evidence: $EvidencePath"
@@ -221,5 +221,5 @@ finally {
 }
 
 $verdict = if ($exitCode -eq 0) { 'PASS' } else { 'FAIL' }
-Write-Host ("`n{0}: {1}/{2} steps passed" -f $verdict, ($steps | Where-Object { $_.pass }).Count, $steps.Count)
+Write-Host ("`n{0}: {1}/{2} steps passed" -f $verdict, @($steps | Where-Object { $_.pass }).Count, $steps.Count)
 exit $exitCode

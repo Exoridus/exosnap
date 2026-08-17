@@ -3194,30 +3194,48 @@ void RecordingCoordinator::AddMarker(RecordingMarkerType type) {
         return;
     }
 
-    std::lock_guard<std::mutex> lock(markers_mutex_);
+    // The lock is SCOPED, and that is the whole point of this block.
+    //
+    // WriteMarkerSidecar() takes markers_mutex_ itself to snapshot the list, and
+    // markers_mutex_ is a plain std::mutex. Calling it from inside this critical
+    // section is a self-deadlock on the calling thread — which is the GUI thread,
+    // so the application hangs permanently on the FIRST marker of a recording.
+    //
+    // No test reached it: test_recording_markers.cpp says so out loud ("we can't
+    // reach real recording") and exercises the data model instead. The
+    // control-channel product journey is what finally pressed the same button a
+    // user presses, and it timed out here.
+    //
+    // The sidecar write must stay outside for a second reason as well: it is
+    // filesystem I/O, and holding a lock the stats thread also takes across a
+    // disk write puts the recording's own cadence behind it.
+    {
+        std::lock_guard<std::mutex> lock(markers_mutex_);
 
-    if (markers_.size() >= kMaxRecordingMarkers) {
-        if (!markers_limit_reported_) {
-            diagnostics::AppLog::warning(QStringLiteral("marker"),
-                                         QStringLiteral("rejected: marker limit %1 reached").arg(kMaxRecordingMarkers));
-            markers_limit_reported_ = true;
+        if (markers_.size() >= kMaxRecordingMarkers) {
+            if (!markers_limit_reported_) {
+                diagnostics::AppLog::warning(
+                    QStringLiteral("marker"),
+                    QStringLiteral("rejected: marker limit %1 reached").arg(kMaxRecordingMarkers));
+                markers_limit_reported_ = true;
+            }
+            return;
         }
-        return;
+
+        const uint64_t time_ms = last_media_time_ns_ / 1000000ULL;
+
+        RecordingMarker marker;
+        marker.time_ms = time_ms;
+        marker.type = type;
+        marker.label = RecordingMarkerTypeDefaultLabel(type);
+
+        markers_.push_back(marker);
+
+        diagnostics::AppLog::info(QStringLiteral("marker"), QStringLiteral("added id=%1 time_ms=%2 type=%3")
+                                                                .arg(markers_.size())
+                                                                .arg(time_ms)
+                                                                .arg(QLatin1String(RecordingMarkerTypeToString(type))));
     }
-
-    const uint64_t time_ms = last_media_time_ns_ / 1000000ULL;
-
-    RecordingMarker marker;
-    marker.time_ms = time_ms;
-    marker.type = type;
-    marker.label = RecordingMarkerTypeDefaultLabel(type);
-
-    markers_.push_back(marker);
-
-    diagnostics::AppLog::info(QStringLiteral("marker"), QStringLiteral("added id=%1 time_ms=%2 type=%3")
-                                                            .arg(markers_.size())
-                                                            .arg(time_ms)
-                                                            .arg(QLatin1String(RecordingMarkerTypeToString(type))));
 
     WriteMarkerSidecar();
 }
