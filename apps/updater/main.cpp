@@ -2,10 +2,14 @@
 //
 // Two modes, decided by the command line and nothing else:
 //
-//   * LegacyHandoff -- ExoSnap launched this process with the update context
-//     (channel, install mode, install dir, its own pid, the running version and
-//     the exact version it offered the user). The pipeline runs start to finish
-//     without asking: the user already confirmed in the app.
+//   * AppHandoff -- ExoSnap launched this process with `--apply-handoff <path>`,
+//     naming ONE versioned document that carries the whole operation: the pinned
+//     release, the manifest bytes and detached signature that prove it, the
+//     installation it applies to, the parent pid and the transaction id. The
+//     pipeline runs start to finish without asking: the user already confirmed
+//     in the app. The document is untrusted input -- it is re-validated here,
+//     and the manifest signature is verified again in this process, because this
+//     is the process that performs the destructive action.
 //   * Manual -- someone started the executable themselves. It rests at Idle,
 //     works out its own context, and does nothing until asked: check, then
 //     download, then apply, each a separate confirmation. This is also the only
@@ -50,6 +54,7 @@
 #include <update/swap_engine.h>
 #include <update/update_flow_state.h>
 #include <update/update_types.h>
+#include <update_handoff/handoff.h>
 
 #include "UpdaterArgs.h"
 #include "UpdaterAutomation.h"
@@ -196,6 +201,8 @@ QStringList WithoutControlOption(const QStringList& arguments) {
 // What system.hello answers. Enough for a runner to refuse a process it did not
 // mean to talk to.
 QJsonObject BuildIdentity(const UpdaterArgs& args) {
+    const bool handoff = args.mode == exosnap::update::UpdaterMode::AppHandoff;
+
     QJsonObject identity;
     identity.insert(QStringLiteral("product"), QStringLiteral("exosnap-updater"));
     identity.insert(QStringLiteral("executable"), QCoreApplication::applicationFilePath());
@@ -205,13 +212,57 @@ QJsonObject BuildIdentity(const UpdaterArgs& args) {
                                                        ? QStringLiteral("installed")
                                                        : QStringLiteral("portable"));
     identity.insert(QStringLiteral("installDir"), args.install_dir);
-    identity.insert(QStringLiteral("channel"), args.channel == exosnap::update::UpdateChannel::Preview
-                                                   ? QStringLiteral("preview")
-                                                   : QStringLiteral("stable"));
+    // A handoff run resolves no channel: its release is pinned and its manifest
+    // was handed over. Reporting the default "stable" there would name a feed
+    // this process never reads, so the field is null instead.
+    identity.insert(QStringLiteral("channel"), handoff
+                                                   ? QJsonValue(QJsonValue::Null)
+                                                   : QJsonValue(args.channel == exosnap::update::UpdateChannel::Preview
+                                                                    ? QStringLiteral("preview")
+                                                                    : QStringLiteral("stable")));
     identity.insert(QStringLiteral("currentVersion"), args.current_version);
     identity.insert(QStringLiteral("targetVersion"), args.target_version);
     identity.insert(QStringLiteral("verifyReinstall"), args.verify_reinstall);
+    // The correlation identity and the schema this process read it under. A
+    // runner asserts both against what the application reported, which is what
+    // makes the process transition provable rather than assumed.
+    identity.insert(QStringLiteral("updateTransactionId"), args.update_transaction_id.isEmpty()
+                                                               ? QJsonValue(QJsonValue::Null)
+                                                               : QJsonValue(args.update_transaction_id));
+    identity.insert(QStringLiteral("handoffVersion"),
+                    handoff ? QJsonValue(exosnap::update_handoff::kHandoffVersion) : QJsonValue(QJsonValue::Null));
     return identity;
+}
+
+// Load, then validate, the handed-over document. Returns an empty string when
+// the operation may proceed; otherwise the evidence line for the refusal.
+//
+// Three independent things are checked, and NONE of them is a trust decision:
+// the schema (is this a document this build understands), the assets (do the
+// files it points at exist) and the installation context (is the named directory
+// really an ExoSnap installation running the version the document claims). The
+// trust chain itself is re-established later, in the worker, over the manifest
+// bytes.
+QString AcceptHandoff(const QString& path, UpdaterArgs* args, const UpdaterCommandLine& command_line) {
+    namespace handoff_ns = exosnap::update_handoff;
+
+    const handoff_ns::HandoffLoadResult loaded = handoff_ns::LoadUpdateHandoff(path);
+    if (!loaded.ok()) {
+        // The mode is set even on a refusal: this process WAS handed off to, and
+        // reporting it as a manual run would misdescribe why it exists.
+        args->mode = exosnap::update::UpdaterMode::AppHandoff;
+        return QStringLiteral("%1 (%2): %3")
+            .arg(QString::fromLatin1(handoff_ns::HandoffRejectionName(loaded.rejection)), path, loaded.detail);
+    }
+
+    *args = ArgsFromHandoff(*loaded.handoff, command_line);
+
+    QString detail;
+    if (!handoff_ns::HandoffAssetsPresent(*loaded.handoff, &detail))
+        return detail;
+    if (handoff_ns::ValidateInstallContextOnDisk(*loaded.handoff, &detail) != handoff_ns::InstallContextRejection::None)
+        return detail;
+    return {};
 }
 
 // Everything a manual start has to work out for itself, because no launcher told
@@ -286,17 +337,28 @@ int main(int argc, char** argv) {
         return static_cast<int>(UpdaterExit::UsageError);
     }
 
-    std::optional<UpdaterArgs> parsed = ParseUpdaterArgs(WithoutControlOption(arguments));
-    if (!parsed.has_value()) {
-        // ParseUpdaterArgs already wrote a diagnostic line to stderr.
+    const std::optional<UpdaterCommandLine> command_line = ParseUpdaterCommandLine(WithoutControlOption(arguments));
+    if (!command_line.has_value()) {
+        // ParseUpdaterCommandLine already wrote a diagnostic line to stderr.
         return static_cast<int>(UpdaterExit::UsageError);
     }
-    UpdaterArgs args = *parsed;
 
-    const bool manual = args.mode == exosnap::update::UpdaterMode::Manual;
-    if (manual) {
+    // Empty means the handoff was accepted. A refusal is NOT a usage error: the
+    // command line was fine, the document was not -- so it becomes a truthful
+    // terminal failure with an observable state and a non-zero exit code,
+    // reachable over the automation endpoint like any other outcome.
+    UpdaterArgs args;
+    QString handoff_rejection;
+    if (!command_line->handoff_path.isEmpty()) {
+        handoff_rejection = AcceptHandoff(command_line->handoff_path, &args, *command_line);
+        if (!handoff_rejection.isEmpty())
+            std::fprintf(stderr, "exosnap-updater: refusing the update handoff — %s\n", qPrintable(handoff_rejection));
+    } else {
+        args = ArgsForManualStart(*command_line);
         FillManualContext(args);
     }
+
+    const bool manual = args.mode == exosnap::update::UpdaterMode::Manual;
 
     if (args.verify_reinstall) {
         // ADR 0055: a same-version reinstall over the full production path. Log it
@@ -307,6 +369,9 @@ int main(int argc, char** argv) {
     if (!args.target_version.isEmpty()) {
         std::fprintf(stderr, "exosnap-updater: pinned to version \"%s\" — any other release is refused\n",
                      qPrintable(args.target_version));
+    }
+    if (!args.update_transaction_id.isEmpty()) {
+        std::fprintf(stderr, "exosnap-updater: update transaction %s\n", qPrintable(args.update_transaction_id));
     }
 
     // The controller opens on the version the handoff pinned, when there is one:
@@ -320,8 +385,9 @@ int main(int argc, char** argv) {
     const auto MakeController = [&args, manual, checks_enabled](const QString& target) {
         auto c = std::make_unique<UpdaterController>(args.current_version, target);
         c->setVerificationReinstall(args.verify_reinstall);
-        c->setMode(manual ? exosnap::update::UpdaterMode::Manual : exosnap::update::UpdaterMode::LegacyHandoff);
+        c->setMode(manual ? exosnap::update::UpdaterMode::Manual : exosnap::update::UpdaterMode::AppHandoff);
         c->setContext(args.install_mode, checks_enabled);
+        c->setUpdateTransactionId(args.update_transaction_id);
         return c;
     };
     auto controller = MakeController(to_version);
@@ -579,7 +645,17 @@ int main(int argc, char** argv) {
         (void)automation->Publish(controller->flowState());
     }
 
-    if (manual) {
+    if (!handoff_rejection.isEmpty()) {
+        // A0. The pipeline is never entered: this process refused the document
+        // before doing any work, which is exactly why its "nothing was touched"
+        // claim needs no further evidence. The endpoint (armed above) publishes
+        // the same terminal state a runner asserts on.
+        last_failure = FailureCase::HandoffRejected;
+        controller->onFailure(FailureCase::HandoffRejected, handoff_rejection);
+        render();
+        window.show();
+        CenterOnScreen(window);
+    } else if (manual) {
         // The resting entry point. Nothing is fetched, nothing is contacted and
         // nothing is replaced until the primary action is pressed.
         controller->onIdle();

@@ -29,10 +29,19 @@ using exosnap::update::UpStep;
 // case cannot be added without showing up in the totals.
 const std::vector<FailureCase>& AllFailures() {
     static const std::vector<FailureCase> cases = {
-        FailureCase::DownloadFailed,        FailureCase::VerifyDownloadFailed, FailureCase::VerifyReinstallMismatch,
-        FailureCase::TargetVersionMismatch, FailureCase::AppWontClose,         FailureCase::InstallFailed,
-        FailureCase::VerifyInstallFailed,   FailureCase::RestoreFailed,        FailureCase::VerifyInstallFailedMsi,
-        FailureCase::LaunchFailed,          FailureCase::UacDeclined,          FailureCase::MsiFailed,
+        FailureCase::DownloadFailed,
+        FailureCase::VerifyDownloadFailed,
+        FailureCase::VerifyReinstallMismatch,
+        FailureCase::TargetVersionMismatch,
+        FailureCase::HandoffRejected,
+        FailureCase::AppWontClose,
+        FailureCase::InstallFailed,
+        FailureCase::VerifyInstallFailed,
+        FailureCase::RestoreFailed,
+        FailureCase::VerifyInstallFailedMsi,
+        FailureCase::LaunchFailed,
+        FailureCase::UacDeclined,
+        FailureCase::MsiFailed,
         FailureCase::MsiRebootRequired,
     };
     return cases;
@@ -79,8 +88,8 @@ TEST(UpdateFlowState, PhaseNamesAreDistinct) {
 TEST(InstallStateForFailure, NothingWasTouchedBeforeTheSwap) {
     for (const FailureCase failure :
          {FailureCase::DownloadFailed, FailureCase::VerifyDownloadFailed, FailureCase::VerifyReinstallMismatch,
-          FailureCase::TargetVersionMismatch, FailureCase::AppWontClose, FailureCase::InstallFailed,
-          FailureCase::UacDeclined}) {
+          FailureCase::TargetVersionMismatch, FailureCase::HandoffRejected, FailureCase::AppWontClose,
+          FailureCase::InstallFailed, FailureCase::UacDeclined}) {
         EXPECT_EQ(InstallStateForFailure(failure), InstallState::Intact)
             << "case " << exosnap::update::FailureCaseName(failure);
     }
@@ -122,12 +131,29 @@ TEST(RetryEntryStepTable, PinnedTargetMismatchWouldRestartAtDownload) {
     EXPECT_EQ(RetryEntryStep(FailureCase::TargetVersionMismatch), UpStep::Download);
 }
 
+// A0. The handoff document is an INPUT to this process: a refused one is not
+// something the updater can repair by trying again, and the installation claim
+// needs no evidence beyond the ordering -- the pipeline was never entered.
+TEST(HandoffRejectedCase, IsATruthfulTerminalFailureThatTouchedNothing) {
+    EXPECT_EQ(PhaseForFailure(FailureCase::HandoffRejected), UpdatePhase::Failed);
+    EXPECT_EQ(InstallStateForFailure(FailureCase::HandoffRejected), InstallState::Intact);
+    EXPECT_FALSE(RetryOffered(FailureCase::HandoffRejected));
+    EXPECT_EQ(std::string(exosnap::update::FailureCaseName(FailureCase::HandoffRejected)), "handoffRejected");
+}
+
+// The mode is published vocabulary, and it now describes what the run IS rather
+// than what it used to be called.
+TEST(UpdaterModeNames, NameTheTwoProductModes) {
+    EXPECT_EQ(std::string(exosnap::update::UpdaterModeName(exosnap::update::UpdaterMode::Manual)), "manual");
+    EXPECT_EQ(std::string(exosnap::update::UpdaterModeName(exosnap::update::UpdaterMode::AppHandoff)), "appHandoff");
+}
+
 TEST(RetryOfferedTable, VersionGatesAndTerminalSuccessesOfferNoRetry) {
     // A retry would re-fetch the same manifest and be refused again; a terminal
     // success has nothing to repeat.
     for (const FailureCase failure :
-         {FailureCase::VerifyReinstallMismatch, FailureCase::TargetVersionMismatch, FailureCase::LaunchFailed,
-          FailureCase::MsiFailed, FailureCase::MsiRebootRequired}) {
+         {FailureCase::VerifyReinstallMismatch, FailureCase::TargetVersionMismatch, FailureCase::HandoffRejected,
+          FailureCase::LaunchFailed, FailureCase::MsiFailed, FailureCase::MsiRebootRequired}) {
         EXPECT_FALSE(RetryOffered(failure)) << "case " << exosnap::update::FailureCaseName(failure);
     }
 }
@@ -172,6 +198,11 @@ TEST(UpdateFlowStateValue, ComparesFieldByField) {
     EXPECT_NE(a, b);
     b = a;
     b.install_state = InstallState::Restored;
+    EXPECT_NE(a, b);
+    // The correlation identity is part of the observable state, so a state that
+    // belongs to a different operation must not compare equal to this one.
+    b = a;
+    b.update_transaction_id = "u-0123456789abcdef";
     EXPECT_NE(a, b);
 }
 

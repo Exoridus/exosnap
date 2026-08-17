@@ -189,8 +189,10 @@ gated off by `EXOSNAP_OFFICIAL_BUILD`. Three rules matter:
   source can be redirected from a command line is a different product.
 - **https with a host, or the launch is refused.** A test that believes it is
   pointed at a fixture while it talks to GitHub reports the wrong thing.
-- **The same URL is handed to the updater** as `--base-url`. Two feeds behind one
-  offer is exactly the divergence `--target-version` exists to close.
+- **It is application-only.** Since ADR 0068 the updater resolves no feed at all:
+  the release it installs is pinned by the handoff document and proven by the
+  manifest bytes handed over with it, so there is no second resolution left for a
+  second feed to answer differently.
 
 The recording guard still applies; only the official-build gate does not, because
 that gate is a policy about the production feed and this is by construction not
@@ -216,6 +218,22 @@ reachable without a real installable release.
   `unknown`. `unknown` is the truthful answer after the MSI verification failure:
   the updater reads a registry path and a version string and never asks Windows
   Installer for a rollback outcome, so it does not claim one.
+- **`updateTransactionId`** is the application's correlation identity for the
+  operation, carried in through the handoff document (ADR 0068). It is also in
+  the updater's `system.hello` identity and in the application's `updaterLaunch`
+  snapshot, so "the transaction the app started is the transaction this process
+  is running" is an assertion rather than an inference. `null` in manual mode. It
+  is not a credential and does not replace the run id, which is what the pipe
+  name is built from.
+- **`mode`** is `manual` or `appHandoff`. A handoff run reports `channel: null`
+  in its identity, because it resolves no feed at all.
+
+A handoff the updater cannot accept — unknown `handoffVersion`, malformed JSON, a
+missing field, an `installDir` that is not an ExoSnap installation running the
+version the document claims — is `failureCase: handoffRejected`, `installState:
+intact`, no retry, non-zero exit. It is a product outcome on this channel, not a
+usage error, because "the updater refused the handoff" is exactly what an
+acceptance run has to be able to assert.
 
 `updater.cancel` is allowed in exactly one phase: `downloading`. `DownloadToFile`
 is the only operation that checks the flag. `checking` and `waitingForParent`

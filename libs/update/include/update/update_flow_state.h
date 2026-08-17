@@ -39,15 +39,21 @@ enum class FailureCase : std::uint8_t {
     VerifyDownloadFailed,    // A2     -> Red (security stop)
     VerifyReinstallMismatch, // A3     -> Red (verification reinstall gate; nothing installed)
     TargetVersionMismatch,   // A4     -> Red (pinned target gate; nothing installed)
-    AppWontClose,            // B1     -> Amber
-    InstallFailed,           // B2     -> Amber
-    VerifyInstallFailed,     // B3     -> Red (portable: previous version restored)
-    RestoreFailed,           // B3-R   -> Red (backup preserved, restore incomplete)
-    VerifyInstallFailedMsi,  // B3-MSI -> Red (post-install state could not be confirmed)
-    LaunchFailed,            // B4     -> Green (soft success)
-    UacDeclined,             // C1     -> Amber
-    MsiFailed,               // C2     -> Red
-    MsiRebootRequired,       // C3     -> RebootRequired (terminal success; restart pending)
+    // A0 -> Red. The handoff document the application wrote could not be read,
+    // is of an unsupported schema version, is missing a required field, or
+    // describes an installation this process refuses to act on. It happens
+    // BEFORE the pipeline starts, which is why it is the one failure whose
+    // "nothing was touched" claim needs no evidence beyond the ordering.
+    HandoffRejected,
+    AppWontClose,           // B1     -> Amber
+    InstallFailed,          // B2     -> Amber
+    VerifyInstallFailed,    // B3     -> Red (portable: previous version restored)
+    RestoreFailed,          // B3-R   -> Red (backup preserved, restore incomplete)
+    VerifyInstallFailedMsi, // B3-MSI -> Red (post-install state could not be confirmed)
+    LaunchFailed,           // B4     -> Green (soft success)
+    UacDeclined,            // C1     -> Amber
+    MsiFailed,              // C2     -> Red
+    MsiRebootRequired,      // C3     -> RebootRequired (terminal success; restart pending)
 };
 
 // ---------------------------------------------------------------------------
@@ -55,8 +61,8 @@ enum class FailureCase : std::uint8_t {
 // ---------------------------------------------------------------------------
 
 enum class UpdaterMode : std::uint8_t {
-    Manual,       // started by a person; nothing happens without a confirmation
-    LegacyHandoff // started by ExoSnap with context arguments; runs the pipeline
+    Manual,    // started by a person; nothing happens without a confirmation
+    AppHandoff // started by ExoSnap with a validated update handoff; runs the pipeline
 };
 
 enum class UpdatePhase : std::uint8_t {
@@ -122,6 +128,16 @@ struct UpdateFlowState {
     // a release has been resolved or a target was handed over).
     std::string current_version;
     std::string target_version;
+
+    // Correlation identity for one update operation, minted by the application
+    // and carried through the handoff into this process. Opaque, not secret and
+    // NOT a credential: it authorises nothing and replaces neither the
+    // automation run id (which names a control session) nor the named-pipe
+    // security that backs it. Its only job is to let an observer say "the
+    // transaction the app started is the transaction this updater is running"
+    // without inferring it from timing. Empty in manual mode -- a run nobody
+    // handed off is not part of anyone's transaction.
+    std::string update_transaction_id;
 
     std::uint64_t downloaded_bytes = 0;
     std::uint64_t total_bytes = 0;

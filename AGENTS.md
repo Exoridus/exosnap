@@ -284,21 +284,28 @@ carry the child's pid, its staged binary, that binary's SHA-256 and the pinned
 target version.
 
 `scripts/live-verify-update-handoff.ps1 -AppPath <exosnap.exe>` runs the whole
-thing and asserts the one statement the two processes could not previously agree
-on: *the version the app offered is the version the updater is pinned to*. It
-uses no sleeps — every wait is a blocking connect (the child's pipe does not
-exist until its server has started) or a `stateRevision` advance delivered as an
-event.
+thing and asserts what the three processes have to agree on: *the version the app
+offered is the version the handoff pins, the version the updater is running and —
+with `-RequireApply` — the version installed afterwards*, all under one
+`updateTransactionId`. It uses no sleeps — every wait is a blocking connect (the
+child's pipe does not exist until its server has started), a `stateRevision`
+advance delivered as an event, or a real process-handle wait.
+
+`scripts/live-verify-update-handoff-trust.ps1 -AppPath <exosnap.exe>` is the
+negative half: it tampers with the handoff document one field at a time against
+the REAL updater and REAL signed release bytes, and asserts each refusal names
+its case and leaves `installState: intact`. No case in it is a valid handoff, so
+none of them can install anything.
 
 `exosnap.exe --update-base-url <https url>` points the app's check at a
-controlled feed; it is refused in an official build and the same URL is passed
-down to the updater, because two feeds behind one offer is exactly the
-divergence `--target-version` closes. On a development build the pinned update
-public key is all zeros, so the manifest signature check stops the run before a
-package is fetched — which makes a cross-process FAILURE flow
-(`verifyDownloadFailed`, `installState: intact`) reachable without a real
-installable release, and makes the flow above safe to run against the live
-GitHub feed.
+controlled feed; it is refused in an official build. Since ADR 0068 it is
+**application-only**: the updater resolves no feed at all, because the release it
+installs is pinned by the handoff and proven by the manifest handed over with it.
+On a development build the pinned update public key is all zeros, so the manifest
+signature check stops the run before a package is fetched — which makes a
+cross-process FAILURE flow (`verifyDownloadFailed`, `installState: intact`)
+reachable without a real installable release, and makes the flow above safe to
+run against the live GitHub feed.
 
 ### Final validation
 

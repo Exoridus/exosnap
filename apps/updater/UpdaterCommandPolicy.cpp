@@ -248,6 +248,10 @@ QJsonObject StateToJson(const FlowState& state, std::uint64_t state_revision) {
 
     json.insert(QStringLiteral("currentVersion"), OptionalString(state.current_version));
     json.insert(QStringLiteral("targetVersion"), OptionalString(state.target_version));
+    // Machine-readable, not a log line: this is how an observer proves that the
+    // operation the application started is the operation this process is
+    // running. Null in manual mode, where there is no operation to correlate.
+    json.insert(QStringLiteral("updateTransactionId"), OptionalString(state.update_transaction_id));
 
     // High-frequency and deliberately NOT revision-bearing: see
     // UpdaterAutomation.h. A client polls this for a progress bar; it waits on

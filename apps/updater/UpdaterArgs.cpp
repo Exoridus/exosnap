@@ -59,21 +59,16 @@ QString ReadInstalledVersion(const QString& install_dir) {
     return product.has_value() ? QString::fromStdString(*product) : QString();
 }
 
-std::optional<UpdaterArgs> ParseUpdaterArgs(const QStringList& argv) {
-    using exosnap::update::InstallMode;
+std::optional<UpdaterCommandLine> ParseUpdaterCommandLine(const QStringList& argv) {
     using exosnap::update::UpdateChannel;
 
-    UpdaterArgs args;
-    // Handoff mode is not a flag: it is the presence of context only a launcher
-    // can know. Channel, base URL and preview state are configuration a person
-    // may reasonably pass by hand, so they deliberately do NOT arm the pipeline.
-    bool handoff_context = false;
+    UpdaterCommandLine parsed;
 
     // Simple index scan; argv[0] is the executable path.
     for (qsizetype i = 1; i < argv.size(); ++i) {
         const QString& flag = argv[i];
 
-        // Every recognised flag except --verify-reinstall takes exactly one value.
+        // Every recognised flag takes exactly one value.
         auto take_value = [&](QString& out) -> bool {
             if (i + 1 >= argv.size()) {
                 ArgError(QStringLiteral("missing value for %1").arg(flag));
@@ -84,62 +79,24 @@ std::optional<UpdaterArgs> ParseUpdaterArgs(const QStringList& argv) {
         };
 
         QString value;
-        if (flag == QStringLiteral("--verify-reinstall")) {
-            // The only boolean flag: it takes no value.
-            args.verify_reinstall = true;
-            handoff_context = true;
+        if (flag == QLatin1String(exosnap::update_handoff::kApplyHandoffOption)) {
+            if (!take_value(parsed.handoff_path)) {
+                return std::nullopt;
+            }
         } else if (flag == QStringLiteral("--channel")) {
             if (!take_value(value)) {
                 return std::nullopt;
             }
             if (value == QStringLiteral("stable")) {
-                args.channel = UpdateChannel::Stable;
+                parsed.channel = UpdateChannel::Stable;
             } else if (value == QStringLiteral("preview")) {
-                args.channel = UpdateChannel::Preview;
+                parsed.channel = UpdateChannel::Preview;
             } else {
                 ArgError(QStringLiteral("invalid --channel '%1' (expected stable|preview)").arg(value));
                 return std::nullopt;
             }
-        } else if (flag == QStringLiteral("--install-mode")) {
-            if (!take_value(value)) {
-                return std::nullopt;
-            }
-            if (value == QStringLiteral("installed")) {
-                args.install_mode = InstallMode::Installed;
-            } else if (value == QStringLiteral("portable")) {
-                args.install_mode = InstallMode::Portable;
-            } else {
-                ArgError(QStringLiteral("invalid --install-mode '%1' (expected installed|portable)").arg(value));
-                return std::nullopt;
-            }
-        } else if (flag == QStringLiteral("--install-dir")) {
-            if (!take_value(args.install_dir)) {
-                return std::nullopt;
-            }
-            handoff_context = true;
-        } else if (flag == QStringLiteral("--app-pid")) {
-            if (!take_value(value)) {
-                return std::nullopt;
-            }
-            bool ok = false;
-            args.app_pid = value.toUInt(&ok);
-            if (!ok) {
-                ArgError(QStringLiteral("invalid --app-pid '%1' (expected an unsigned integer)").arg(value));
-                return std::nullopt;
-            }
-            handoff_context = true;
-        } else if (flag == QStringLiteral("--current-version")) {
-            if (!take_value(args.current_version)) {
-                return std::nullopt;
-            }
-            handoff_context = true;
-        } else if (flag == QStringLiteral("--target-version")) {
-            if (!take_value(args.target_version)) {
-                return std::nullopt;
-            }
-            handoff_context = true;
         } else if (flag == QStringLiteral("--base-url")) {
-            if (!take_value(args.base_url)) {
+            if (!take_value(parsed.base_url)) {
                 return std::nullopt;
             }
         } else if (flag == QStringLiteral("--preview-state")) {
@@ -151,33 +108,45 @@ std::optional<UpdaterArgs> ParseUpdaterArgs(const QStringList& argv) {
                              .arg(value, PreviewStateNames().join(QLatin1Char('|'))));
                 return std::nullopt;
             }
-            args.preview_state = value;
+            parsed.preview_state = value;
         } else {
             ArgError(QStringLiteral("unknown argument '%1'").arg(flag));
             return std::nullopt;
         }
     }
 
-    args.mode = handoff_context ? exosnap::update::UpdaterMode::LegacyHandoff : exosnap::update::UpdaterMode::Manual;
+    return parsed;
+}
 
-    // Only a handoff has to name the install directory: it launched from a
-    // staged copy that is deliberately NOT the installation. A manual start
-    // derives its own context (ResolveManualContext), which is the whole point
-    // of a double-clickable updater -- refusing there produced a process that
-    // exited 2 with no console and no window, i.e. visibly nothing.
-    if (args.mode == exosnap::update::UpdaterMode::LegacyHandoff &&
-        args.install_mode == exosnap::update::InstallMode::Portable && args.install_dir.isEmpty()) {
-        ArgError(QStringLiteral("--install-dir is required in portable install mode"));
-        return std::nullopt;
-    }
+UpdaterArgs ArgsFromHandoff(const exosnap::update_handoff::UpdateHandoff& handoff,
+                            const UpdaterCommandLine& command_line) {
+    UpdaterArgs args;
+    args.mode = exosnap::update::UpdaterMode::AppHandoff;
+    args.install_mode = handoff.install_mode;
+    args.install_dir = handoff.install_dir;
+    args.app_pid = handoff.app_pid;
+    args.current_version = handoff.current_version;
+    args.target_version = handoff.target_version;
+    args.update_transaction_id = handoff.update_transaction_id;
+    args.manifest_path = handoff.manifest_path;
+    args.manifest_signature_path = handoff.manifest_signature_path;
+    args.verify_reinstall = handoff.verify_reinstall;
+    // Deliberately NOT taken from the handoff. A handoff run resolves no feed:
+    // the release it installs is already pinned by targetVersion and proven by
+    // the handed-over manifest, so a channel and a base URL would be inputs to a
+    // search this mode does not perform. Only the dev preview short-circuit
+    // stays reachable, because it does no engine work at all.
+    args.preview_state = command_line.preview_state;
+    return args;
+}
 
-    // The verification reinstall gate compares the manifest version against
-    // --current-version. Without one there is nothing to compare, and silently
-    // degrading to "install whatever the channel offers" would defeat the gate.
-    if (args.verify_reinstall && args.current_version.isEmpty()) {
-        ArgError(QStringLiteral("--verify-reinstall requires --current-version"));
-        return std::nullopt;
-    }
-
+UpdaterArgs ArgsForManualStart(const UpdaterCommandLine& command_line) {
+    UpdaterArgs args;
+    args.mode = exosnap::update::UpdaterMode::Manual;
+    args.channel = command_line.channel;
+    args.base_url = command_line.base_url;
+    args.preview_state = command_line.preview_state;
+    // No target, no transaction, no handed-over manifest: this run is not part
+    // of anyone's operation and resolves everything itself.
     return args;
 }

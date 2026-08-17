@@ -74,6 +74,42 @@ constexpr std::chrono::milliseconds kMsiPollInterval{200};
 // -- see WaitForProcessOrCancel.
 constexpr std::chrono::minutes kMsiWaitTimeout{15};
 
+// One path component built from an untrusted string. The handoff document is
+// untrusted input and its target version reaches a directory name before
+// anything has verified it, so every character that could leave the intended
+// parent (separators, drive colons, dots) is replaced rather than escaped.
+[[nodiscard]] std::wstring SanitizePathComponent(const QString& value) {
+    std::wstring out;
+    out.reserve(static_cast<size_t>(value.size()));
+    for (const QChar ch : value) {
+        const char16_t code = ch.unicode();
+        const bool safe = (code >= u'0' && code <= u'9') || (code >= u'a' && code <= u'z') ||
+                          (code >= u'A' && code <= u'Z') || code == u'-' || code == u'_';
+        out.push_back(safe ? static_cast<wchar_t>(code) : L'.');
+    }
+    if (out.empty() || out.find_first_not_of(L'.') == std::wstring::npos) {
+        return L"handoff";
+    }
+    return out;
+}
+
+// Read a whole file as bytes. Used for the handed-over manifest and its
+// signature: the SAME bytes that are hashed by the signature check are the ones
+// that get parsed, so there is no second read to disagree with the first.
+[[nodiscard]] bool ReadWholeFile(const QString& path, std::string* out) {
+    std::ifstream in(fs::path(path.toStdWString()), std::ios::binary);
+    if (!in) {
+        return false;
+    }
+    std::ostringstream buf;
+    buf << in.rdbuf();
+    if (!in) {
+        return false;
+    }
+    *out = buf.str();
+    return true;
+}
+
 // Best-effort recursive delete; true when the path is gone afterwards.
 [[nodiscard]] bool RemoveTree(const std::wstring& dir) {
     std::error_code ec;
@@ -390,6 +426,14 @@ bool UpdaterWorker::resolveRelease(bool* no_release) {
 bool UpdaterWorker::runDownload() {
     emit stepStarted(UpStep::Download);
 
+    // A handoff run resolves nothing. The application already picked the release
+    // and handed over the manifest bytes that prove it; re-reading the feed here
+    // is exactly how a release published between the offer and this moment used
+    // to be able to win.
+    if (args_.mode == exosnap::update::UpdaterMode::AppHandoff) {
+        return fetchAndStage();
+    }
+
     bool no_release = false;
     if (!resolveRelease(&no_release)) {
         if (no_release) {
@@ -404,16 +448,21 @@ bool UpdaterWorker::runDownload() {
 
 // ── Manifest, gates, package, staging ────────────────────────────────────────
 bool UpdaterWorker::fetchAndStage() {
-    if (!have_release_) {
+    const bool handoff = args_.mode == exosnap::update::UpdaterMode::AppHandoff;
+    if (!handoff && !have_release_) {
         emit failed(FailureCase::DownloadFailed, QStringLiteral("No release has been resolved yet.")); // A1
         return false;
     }
-    const exosnap::update::ReleaseAssets* release = &release_;
 
-    // %TEMP%\ExoSnapUpdate\<ver>\ -- downloads (manifest + package) live here.
+    // %TEMP%\ExoSnapUpdate\<ver>\ -- the package lives here, and in manual mode
+    // the manifest and signature this run downloads. A handoff run names the
+    // directory after the version it was pinned to, sanitised: that string comes
+    // from an untrusted document and reaches a path before anything has verified
+    // it.
     std::error_code ec;
     const fs::path download_dir =
-        fs::temp_directory_path(ec) / L"ExoSnapUpdate" / fs::path(release->version.ToString());
+        fs::temp_directory_path(ec) / L"ExoSnapUpdate" /
+        (handoff ? SanitizePathComponent(args_.target_version) : fs::path(release_.version.ToString()).wstring());
     if (ec) {
         emit failed(FailureCase::DownloadFailed, QStringLiteral("No usable temp directory.")); // A1
         return false;
@@ -425,49 +474,72 @@ bool UpdaterWorker::fetchAndStage() {
     }
     download_dir_ = download_dir.wstring();
 
-    // Manifest download. The detached signature (.sig sibling) is mandatory --
-    // without it the manifest bytes cannot be verified.
-    if (release->manifest_url.empty() || release->signature_url.empty()) {
-        emit failed(FailureCase::DownloadFailed, QStringLiteral("The release carries no update manifest.")); // A1
-        return false;
-    }
-    const fs::path manifest_path = download_dir / L"update-manifest.json";
-    if (const auto err = DownloadToFile(release->manifest_url, manifest_path.wstring(), {}, cancel_)) {
-        if (abortedByCancel())
-            return false;
-        emit failed(FailureCase::DownloadFailed, QString::fromStdString(*err)); // A1
-        return false;
-    }
     std::string manifest_json;
-    {
-        std::ifstream in(manifest_path, std::ios::binary);
-        std::ostringstream buf;
-        buf << in.rdbuf();
-        manifest_json = buf.str();
-        if (!in) {
-            emit failed(FailureCase::DownloadFailed, QStringLiteral("Can't read the downloaded manifest.")); // A1
+    std::string signature_hex;
+    if (handoff) {
+        // Handed over, not fetched. The bytes are read ONCE into memory and both
+        // the signature check and the parse below run on that one copy -- there
+        // is no second read that could see different bytes, and no re-fetch that
+        // could see a different release.
+        if (!ReadWholeFile(args_.manifest_path, &manifest_json)) {
+            emit failed(
+                FailureCase::HandoffRejected, // A0
+                QStringLiteral("The handoff names a manifest that cannot be read: %1").arg(args_.manifest_path));
             return false;
+        }
+        if (!ReadWholeFile(args_.manifest_signature_path, &signature_hex)) {
+            emit failed(FailureCase::HandoffRejected, // A0
+                        QStringLiteral("The handoff names a manifest signature that cannot be read: %1")
+                            .arg(args_.manifest_signature_path));
+            return false;
+        }
+    } else {
+        // Manifest download. The detached signature (.sig sibling) is mandatory --
+        // without it the manifest bytes cannot be verified.
+        if (release_.manifest_url.empty() || release_.signature_url.empty()) {
+            emit failed(FailureCase::DownloadFailed, QStringLiteral("The release carries no update manifest.")); // A1
+            return false;
+        }
+        const fs::path manifest_path = download_dir / L"update-manifest.json";
+        if (const auto err = DownloadToFile(release_.manifest_url, manifest_path.wstring(), {}, cancel_)) {
+            if (abortedByCancel())
+                return false;
+            emit failed(FailureCase::DownloadFailed, QString::fromStdString(*err)); // A1
+            return false;
+        }
+        {
+            std::ifstream in(manifest_path, std::ios::binary);
+            std::ostringstream buf;
+            buf << in.rdbuf();
+            manifest_json = buf.str();
+            if (!in) {
+                emit failed(FailureCase::DownloadFailed, QStringLiteral("Can't read the downloaded manifest.")); // A1
+                return false;
+            }
+        }
+
+        const fs::path signature_path = download_dir / L"update-manifest.json.sig";
+        if (const auto err = DownloadToFile(release_.signature_url, signature_path.wstring(), {}, cancel_)) {
+            if (abortedByCancel())
+                return false;
+            emit failed(FailureCase::DownloadFailed, QString::fromStdString(*err)); // A1
+            return false;
+        }
+        {
+            std::ifstream in(signature_path, std::ios::binary);
+            std::ostringstream buf;
+            buf << in.rdbuf();
+            signature_hex = buf.str();
+            if (!in) {
+                emit failed(FailureCase::DownloadFailed, QStringLiteral("Can't read the manifest signature.")); // A1
+                return false;
+            }
         }
     }
 
-    const fs::path signature_path = download_dir / L"update-manifest.json.sig";
-    if (const auto err = DownloadToFile(release->signature_url, signature_path.wstring(), {}, cancel_)) {
-        if (abortedByCancel())
-            return false;
-        emit failed(FailureCase::DownloadFailed, QString::fromStdString(*err)); // A1
-        return false;
-    }
-    std::string signature_hex;
+    // Trim surrounding whitespace/newlines so the 128-hex payload parses. The
+    // manifest bytes are NOT touched: they are what the signature covers.
     {
-        std::ifstream in(signature_path, std::ios::binary);
-        std::ostringstream buf;
-        buf << in.rdbuf();
-        signature_hex = buf.str();
-        if (!in) {
-            emit failed(FailureCase::DownloadFailed, QStringLiteral("Can't read the manifest signature.")); // A1
-            return false;
-        }
-        // Trim surrounding whitespace/newlines so the 128-hex payload parses.
         const auto first = signature_hex.find_first_not_of(" \t\r\n");
         const auto last = signature_hex.find_last_not_of(" \t\r\n");
         signature_hex = (first == std::string::npos) ? std::string{} : signature_hex.substr(first, last - first + 1);

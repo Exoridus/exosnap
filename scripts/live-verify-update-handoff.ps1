@@ -6,9 +6,9 @@ param(
     [Parameter(Mandatory)]
     [string] $AppPath,
 
-    # The feed both processes read. The real GitHub releases API by default,
-    # which is a read-only GET -- see the safety note below for why that cannot
-    # install anything from a development build.
+    # The feed the APPLICATION reads. The real GitHub releases API by default,
+    # which is a read-only GET. The updater no longer reads any feed at all --
+    # that is the point of this cut.
     [string] $FeedUrl = 'https://api.github.com/repos/Exoridus/exosnap/releases',
 
     # The update channel the isolated config is seeded with. Preview by default,
@@ -17,45 +17,56 @@ param(
     # releases, and until <base> itself ships there is nothing on Stable that
     # ranks above it. With no offer there is no handoff to follow, so a Stable
     # run would end at "the feed offered nothing to apply" without ever reaching
-    # the assertion this script exists for.
+    # the assertions this script exists for.
     [ValidateSet('Stable', 'Preview')]
     [string] $Channel = 'Preview',
 
+    # Require the operation to reach a COMPLETED apply and a relaunched
+    # application. Only meaningful against a build whose embedded update public
+    # key matches the feed's signing key -- a development build pins an all-zero
+    # key and stops truthfully at the signature gate, which is its own evidence.
+    [switch] $RequireApply,
+
     [string] $EvidencePath,
 
-    [int] $TimeoutSeconds = 120
+    [int] $TimeoutSeconds = 120,
+
+    # The apply downloads and swaps a real release package. Generous, and still
+    # bounded: a timeout is a FAIL, never a silent retry.
+    [int] $ApplyTimeoutSeconds = 900
 )
 
 <#
 .SYNOPSIS
-    Follows the CURRENT app-to-updater handoff end to end over the control
-    channel, and proves the pinned target version across the process boundary.
+    Follows the App -> Updater -> App transition end to end over the control
+    channel, and proves the operation is ONE correlated, version-pinned
+    transaction across all three processes.
 
 .DESCRIPTION
-    This is the measurement point taken BEFORE the handoff is rewritten. It
-    drives the shipping path -- the update card's own check and its own primary
-    action -- and then attaches to the updater process that action started:
-
-        app: update.check   -> updateAvailable X
-        app: update.apply   -> updater process starts
-        event update.updaterLaunched
-        updater endpoint    -> targetVersion X          <-- the cross-process proof
-        updater             -> terminal state + exit code
+        app: update.check    -> updateAvailable X
+        app: update.apply    -> handoff U written, updater process starts
+        the handoff document  -> schema 1, target X, transaction U
+        updater endpoint      -> mode appHandoff, target X, transaction U
+        updater               -> manifest re-verified in the child
+        parent exits          -> observed, not assumed
+        updater               -> terminal state + truthful exit code
+        new ExoSnap           -> identity + version X            (with -RequireApply)
 
     No Start-Sleep anywhere. Every wait is either a blocking connect (the pipe
     does not exist until the child's server has started, so connecting IS the
-    readiness observation) or a stateRevision advance delivered as an event.
+    readiness observation), a stateRevision advance delivered as an event, or a
+    real process handle wait.
 
-    SAFETY. Nothing here can install anything, and that is a property of the
-    build rather than of this script's timing: a development build pins an
-    all-zero update public key, so the manifest signature check fails before a
-    single package byte is fetched. The run therefore ends in a truthful
-    verifyDownloadFailed with the installation untouched -- which is exactly the
-    cross-process failure evidence worth having. Run this against an OFFICIAL
-    build only with a feed you control.
+    SAFETY. Against a DEVELOPMENT build nothing can be installed, and that is a
+    property of the build rather than of this script's timing: it pins an
+    all-zero update public key, so the manifest signature check fails in the
+    updater before a single package byte is fetched. The run then ends in a
+    truthful verifyDownloadFailed with the installation untouched. Against a
+    build whose key matches the feed, this DOES install -- run it only against an
+    isolated scratch install tree.
 
 .EXAMPLE
-    ./live-verify-update-handoff.ps1 -AppPath build/windows-x64-debug/app/quick/ExoSnap/Quick/Debug/exosnap.exe
+    ./live-verify-update-handoff.ps1 -AppPath .workspace/install-scratch/bin/exosnap.exe
 #>
 
 Set-StrictMode -Version Latest
@@ -71,9 +82,28 @@ function Add-Step([string] $Name, [bool] $Pass, [object] $Detail) {
     if (-not $Pass) { Write-Host ("     {0}" -f ($Detail | ConvertTo-Json -Compress -Depth 6)) }
 }
 
+function Get-Sha256([string] $Path) {
+    if ([string]::IsNullOrEmpty($Path) -or -not (Test-Path -LiteralPath $Path)) { return $null }
+    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+
+function Normalize-Path([string] $Path) {
+    if ([string]::IsNullOrEmpty($Path)) { return '' }
+    return $Path.Replace('/', '\').TrimEnd('\').ToLowerInvariant()
+}
+
+# The image path of a running process, straight from the OS. Get-Process reads it
+# via MainModule, which is an open-and-read of the target and comes back null for
+# a child this process is not entitled to inspect that way; the CIM view is a
+# query against the OS and answers for any process on the machine.
+function Get-ProcessImagePath([int] $ProcessId) {
+    return (Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $ProcessId" `
+            -ErrorAction SilentlyContinue).ExecutablePath
+}
+
 if (-not (Test-Path -LiteralPath $AppPath)) { throw "No such application: $AppPath" }
 $appFull = (Resolve-Path -LiteralPath $AppPath).Path
-$appSha = (Get-FileHash -LiteralPath $appFull -Algorithm SHA256).Hash.ToLowerInvariant()
+$appSha = Get-Sha256 $appFull
 $appDir = Split-Path -Parent $appFull
 
 # Artifact-class precondition. LaunchUpdater() stages its runtime from paths
@@ -109,18 +139,32 @@ Set-Content -LiteralPath (Join-Path $env:EXOSNAP_CONFIG_DIR 'settings.ini') -Enc
 $app = $null
 $appConn = $null
 $updaterConn = $null
+$newApp = $null
+$evidence = [ordered]@{
+    runId       = $runId
+    feed        = $FeedUrl
+    channel     = $Channel
+    requireApply = [bool]$RequireApply
+    application = @{ path = $appFull; sha256 = $appSha }
+}
 $exitCode = 1
 try {
-    $app = Start-Process -FilePath $appFull -PassThru -ArgumentList @(
-        '--live-verify-control', $runId,
-        '--update-base-url', $FeedUrl
-    )
+    # The application's own feed override is only accepted by a non-official
+    # build; an official one reads the production feed and refuses the flag. Pass
+    # it only when it differs from the production default, so this script drives
+    # both build kinds without pretending the flag is universal.
+    $appArgs = @('--live-verify-control', $runId)
+    if ($FeedUrl -ne 'https://api.github.com/repos/Exoridus/exosnap/releases') {
+        $appArgs += @('--update-base-url', $FeedUrl)
+    }
+    $app = Start-Process -FilePath $appFull -PassThru -ArgumentList $appArgs
     Add-Step 'application started' $true @{ pid = $app.Id; path = $appFull; sha256 = $appSha }
 
     # Connecting is the readiness wait: the endpoint is created during startup
     # and a normal launch creates none at all.
     $appConn = Connect-LiveVerify -RunId $runId -ConnectTimeoutMs ($TimeoutSeconds * 1000)
     $identity = $appConn.Identity
+    $evidence.parentIdentity = $identity
     Add-Step 'application endpoint attached (artifact bound)' `
         ($identity.executableSha256 -eq $appSha) `
         @{ reported = $identity.executableSha256; measured = $appSha; version = $identity.productVersion }
@@ -151,46 +195,71 @@ try {
     if ($updateState.state -ne 'available') {
         throw "the feed offered nothing to apply (card state '$($updateState.state)')"
     }
+    $evidence.offeredVersion = $offered
 
     # -- apply ---------------------------------------------------------------
     $apply = Invoke-LiveVerifyCommand -Connection $appConn -Command 'update.apply'
     Add-Step 'update.apply accepted, not completed' `
         ($apply.ok -and -not $apply.settled) $apply
-    if (-not $apply.ok) { throw "update.apply refused: $($apply.error.code)" }
+    if (-not $apply.ok) { throw "update.apply refused: $($apply.error.code) - $($apply.error.message)" }
 
     $launch = $apply.result.updaterLaunch
+    $evidence.updaterLaunch = $launch
     Add-Step 'the response names the child it started' `
         ($launch.pid -gt 0 -and -not [string]::IsNullOrEmpty($launch.controlPipe)) $launch
     Add-Step 'the child is pinned to the offered version' `
         ($launch.targetVersion -eq $offered) @{ offered = $offered; pinned = $launch.targetVersion }
+    Add-Step 'the launch names an update transaction' `
+        (-not [string]::IsNullOrEmpty($launch.updateTransactionId)) `
+        @{ updateTransactionId = $launch.updateTransactionId }
+    $transactionId = $launch.updateTransactionId
 
     # The launch snapshot claims a staged executable. Both halves of that claim
     # are checked against the operating system rather than believed: the running
     # child's own image path, and the bytes on disk.
-    # Win32_Process rather than Get-Process: the latter reads the image path via
-    # MainModule, which is an open-and-read of the target process and comes back
-    # null for a child this one is not entitled to inspect that way. The CIM view
-    # is a query against the OS and answers for any process on the machine.
-    $childPath = (Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $($launch.pid)" `
-            -ErrorAction SilentlyContinue).ExecutablePath
-    $normalize = { param($p) if ([string]::IsNullOrEmpty($p)) { '' } else { $p.Replace('/', '\').ToLowerInvariant() } }
+    $childPath = Get-ProcessImagePath $launch.pid
     Add-Step 'the running child is the staged executable the event named' `
-        ((& $normalize $childPath) -eq (& $normalize $launch.stagedExecutable)) `
+        ((Normalize-Path $childPath) -eq (Normalize-Path $launch.stagedExecutable)) `
         @{ reported = $launch.stagedExecutable; running = $childPath }
 
-    $stagedSha = $null
-    if (Test-Path -LiteralPath $launch.stagedExecutable) {
-        $stagedSha = (Get-FileHash -LiteralPath $launch.stagedExecutable -Algorithm SHA256).Hash.ToLowerInvariant()
-    }
+    $stagedSha = Get-Sha256 $launch.stagedExecutable
     Add-Step 'the staged executable hashes to what the event reported' `
         ($null -ne $stagedSha -and $stagedSha -eq $launch.stagedExecutableSha256) `
         @{ reported = $launch.stagedExecutableSha256; measured = $stagedSha }
+
+    # -- the handoff document ------------------------------------------------
+    # Read off disk, not taken from the response: the document IS the contract,
+    # and what the updater will act on is the file, not what the parent said
+    # about it.
+    Add-Step 'the handoff document exists where the launch said' `
+        (-not [string]::IsNullOrEmpty($launch.handoffPath) -and (Test-Path -LiteralPath $launch.handoffPath)) `
+        @{ handoffPath = $launch.handoffPath }
+    $handoff = Get-Content -LiteralPath $launch.handoffPath -Raw | ConvertFrom-Json
+    $evidence.handoff = $handoff
+    Add-Step 'the handoff is the schema version this build writes' `
+        ($handoff.handoffVersion -eq 1 -and $launch.handoffVersion -eq 1) `
+        @{ document = $handoff.handoffVersion; reported = $launch.handoffVersion }
+    Add-Step 'the handoff pins the offered version and the same transaction' `
+        ($handoff.targetVersion -eq $offered -and $handoff.updateTransactionId -eq $transactionId) `
+        @{ target = $handoff.targetVersion; transaction = $handoff.updateTransactionId }
+    Add-Step 'the handoff names the parent process and its installation' `
+        ($handoff.appPid -eq $app.Id -and (Normalize-Path $handoff.installDir) -eq (Normalize-Path $appDir)) `
+        @{ appPid = $handoff.appPid; parent = $app.Id; installDir = $handoff.installDir }
+    Add-Step 'the handoff references the release trust anchor rather than carrying it' `
+        ((Test-Path -LiteralPath $handoff.manifestPath) -and (Test-Path -LiteralPath $handoff.manifestSignaturePath) -and
+         $null -eq ($handoff.PSObject.Properties.Name | Where-Object { $_ -in @('manifest', 'signature', 'packages') })) `
+        @{ manifest = $handoff.manifestPath; signature = $handoff.manifestSignaturePath }
+
+    # The manifest the child will verify is the one the parent downloaded, byte
+    # for byte. Recorded so the evidence can be compared against the release.
+    $evidence.manifestSha256 = Get-Sha256 $handoff.manifestPath
 
     # -- attach to the child -------------------------------------------------
     # Same run id, different role. Connect blocks until the child's endpoint
     # exists, which is the readiness observation -- no polling, no sleep.
     $updaterConn = Connect-LiveVerify -RunId $runId -Role 'Updater' -ConnectTimeoutMs ($TimeoutSeconds * 1000)
     $updaterIdentity = $updaterConn.Identity
+    $evidence.childIdentity = $updaterIdentity
     Add-Step 'updater endpoint attached' `
         ($updaterIdentity.product -eq 'exosnap-updater') $updaterIdentity
     Add-Step 'the attached endpoint is the one the launch advertised' `
@@ -211,20 +280,31 @@ try {
     Add-Step 'a run id the updater was not given reaches no endpoint' $rejected `
         @{ acceptedRunId = $runId; refusedRunId = $foreignId }
 
-    # THE cross-process assertion: what the app offered is what the updater is
-    # allowed to install, observed in two processes rather than inferred.
+    # THE cross-process assertions: what the app offered is what the updater is
+    # allowed to install, and both processes name the same operation. Observed in
+    # two processes rather than inferred from timing.
     Add-Step 'app offeredVersion == updater targetVersion' `
         ($updaterIdentity.targetVersion -eq $offered) `
         @{ appOffered = $offered; updaterTarget = $updaterIdentity.targetVersion }
+    Add-Step 'app transaction == handoff transaction == updater transaction' `
+        ($updaterIdentity.updateTransactionId -eq $transactionId) `
+        @{ parent = $transactionId; handoff = $handoff.updateTransactionId; child = $updaterIdentity.updateTransactionId }
+    Add-Step 'the updater read the handoff under the schema the app wrote' `
+        ($updaterIdentity.handoffVersion -eq 1) @{ childHandoffVersion = $updaterIdentity.handoffVersion }
+    # A handoff run resolves no feed at all -- so it reports no channel, rather
+    # than the default one it would never read.
+    Add-Step 'the handoff run names no channel to resolve' `
+        ($null -eq $updaterIdentity.channel) @{ channel = $updaterIdentity.channel }
 
     $updaterState = (Invoke-LiveVerifyCommand -Connection $updaterConn -Command 'updater.getState').result
-    Add-Step 'updater reports the handoff mode and the same target' `
-        ($updaterState.mode -eq 'legacyHandoff' -and $updaterState.targetVersion -eq $offered) $updaterState
+    Add-Step 'updater reports the app-handoff mode, the same target and the same transaction' `
+        ($updaterState.mode -eq 'appHandoff' -and $updaterState.targetVersion -eq $offered -and
+         $updaterState.updateTransactionId -eq $transactionId) $updaterState
 
     # -- follow the child to a terminal state --------------------------------
     $terminal = @('completed', 'failed', 'cancelled', 'rebootRequired', 'restartPending', 'upToDate')
     $rev = $updaterConn.StateRevision
-    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    $deadline = [DateTime]::UtcNow.AddSeconds($ApplyTimeoutSeconds)
     while ($updaterState.phase -notin $terminal -and [DateTime]::UtcNow -lt $deadline) {
         $remaining = [int]([Math]::Max(1, ($deadline - [DateTime]::UtcNow).TotalMilliseconds))
         $observed = Wait-LiveVerifyRevision -Connection $updaterConn -After $rev -TimeoutMs $remaining `
@@ -233,18 +313,82 @@ try {
         $rev = $updaterConn.StateRevision
         $updaterState = $observed
     }
+    $evidence.updaterTerminalState = $updaterState
     Add-Step 'updater reached a terminal phase' ($updaterState.phase -in $terminal) $updaterState
-    Add-Step 'the existing installation is untouched' `
-        ($updaterState.installState -eq 'intact') @{ installState = $updaterState.installState }
+    Add-Step 'the transaction id survives to the terminal state' `
+        ($updaterState.updateTransactionId -eq $transactionId) `
+        @{ expected = $transactionId; actual = $updaterState.updateTransactionId }
+
+    $applied = $updaterState.phase -eq 'completed'
+    if ($RequireApply -and -not $applied) {
+        Add-Step 'the operation completed the apply' $false $updaterState
+    }
+
+    if (-not $applied) {
+        # Nothing was installed: the state has to say so rather than merely
+        # report a failure. This is the assertion that distinguishes a truthful
+        # refusal from a broken installation.
+        Add-Step 'the existing installation is untouched' `
+            ($updaterState.installState -eq 'intact') @{ installState = $updaterState.installState }
+    }
+
+    # -- the parent transition -----------------------------------------------
+    # Only an apply asks the parent to close. When it does, the exit is OBSERVED
+    # on the process handle -- never assumed from the child's phase.
+    if ($applied) {
+        $parentGone = $app.WaitForExit(60000)
+        Add-Step 'the parent process exited for the handoff' $parentGone `
+            @{ pid = $app.Id; exited = $parentGone }
+        $appConn.Close(); $appConn = $null
+    }
+
+    # -- the relaunched application ------------------------------------------
+    if ($applied) {
+        $installedExe = Join-Path $appDir 'exosnap.exe'
+        $newSha = Get-Sha256 $installedExe
+        $newVersion = (Get-Item -LiteralPath $installedExe).VersionInfo.ProductVersion
+        Add-Step 'the installed executable is a different artifact than the one that started' `
+            ($null -ne $newSha -and $newSha -ne $appSha) `
+            @{ before = $appSha; after = $newSha }
+        Add-Step 'the installed version is the version that was offered' `
+            ($newVersion -eq $offered) @{ offered = $offered; installed = $newVersion }
+
+        # The updater only reports completed after its Launch step observed the
+        # new instance's single-instance mutex, so the process exists by now:
+        # this identifies it, it does not wait for it.
+        $candidates = @(Get-CimInstance -ClassName Win32_Process -Filter "Name = 'exosnap.exe'" `
+                -ErrorAction SilentlyContinue |
+            Where-Object { (Normalize-Path $_.ExecutablePath) -eq (Normalize-Path $installedExe) -and
+                           $_.ProcessId -ne $app.Id })
+        Add-Step 'a new ExoSnap process is running from the installation' `
+            ($candidates.Count -ge 1) `
+            @{ found = $candidates.Count; path = $installedExe }
+        if ($candidates.Count -ge 1) {
+            $newApp = Get-Process -Id $candidates[0].ProcessId -ErrorAction SilentlyContinue
+            $evidence.newApplication = @{
+                pid     = $candidates[0].ProcessId
+                path    = $candidates[0].ExecutablePath
+                sha256  = $newSha
+                version = $newVersion
+            }
+            Add-Step 'the new process is a different process than the one that handed off' `
+                ($candidates[0].ProcessId -ne $app.Id) `
+                @{ old = $app.Id; new = $candidates[0].ProcessId }
+        }
+    }
 
     # -- close the child and read its outcome --------------------------------
-    $close = Invoke-LiveVerifyCommand -Connection $updaterConn -Command 'updater.close'
-    Add-Step 'updater.close accepted' $close.ok $close
     $child = Get-Process -Id $launch.pid -ErrorAction SilentlyContinue
+    if ($null -ne $child -and -not $child.HasExited) {
+        $close = Invoke-LiveVerifyCommand -Connection $updaterConn -Command 'updater.close'
+        Add-Step 'updater.close accepted' $close.ok $close
+    }
     if ($null -ne $child) {
-        $child.WaitForExit(30000) | Out-Null
+        $child.WaitForExit(60000) | Out-Null
+        $expectedSuccess = $updaterState.phase -in @('completed', 'restartPending')
+        $evidence.updaterExitCode = $child.ExitCode
         Add-Step 'the updater exit code matches its reported outcome' `
-            ($child.ExitCode -ne 0 -or $updaterState.phase -eq 'completed') `
+            (($expectedSuccess -and $child.ExitCode -eq 0) -or (-not $expectedSuccess -and $child.ExitCode -ne 0)) `
             @{ exitCode = $child.ExitCode; phase = $updaterState.phase }
     }
 
@@ -257,14 +401,10 @@ finally {
     # test would be inventing product surface. Stopping the harness's own child
     # process is cleanup, not driving.
     if ($null -ne $app -and -not $app.HasExited) { Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue }
+    if ($null -ne $newApp -and -not $newApp.HasExited) { Stop-Process -Id $newApp.Id -Force -ErrorAction SilentlyContinue }
 
     if (-not [string]::IsNullOrWhiteSpace($EvidencePath)) {
-        $evidence = [ordered]@{
-            runId       = $runId
-            feed        = $FeedUrl
-            application = @{ path = $appFull; sha256 = $appSha }
-            steps       = $steps
-        }
+        $evidence.steps = $steps
         $evidence | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $EvidencePath -Encoding utf8
         Write-Host "evidence: $EvidencePath"
     }

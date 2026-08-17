@@ -29,8 +29,8 @@ const char* UpdaterModeName(UpdaterMode mode) noexcept {
     switch (mode) {
     case UpdaterMode::Manual:
         return "manual";
-    case UpdaterMode::LegacyHandoff:
-        return "legacyHandoff";
+    case UpdaterMode::AppHandoff:
+        return "appHandoff";
     }
     return "manual";
 }
@@ -81,6 +81,8 @@ const char* FailureCaseName(FailureCase failure) noexcept {
         return "verifyReinstallMismatch";
     case FailureCase::TargetVersionMismatch:
         return "targetVersionMismatch";
+    case FailureCase::HandoffRejected:
+        return "handoffRejected";
     case FailureCase::AppWontClose:
         return "appWontClose";
     case FailureCase::InstallFailed:
@@ -127,6 +129,10 @@ InstallState InstallStateForFailure(FailureCase failure) noexcept {
     case FailureCase::TargetVersionMismatch:
     case FailureCase::AppWontClose:
         return InstallState::Intact;
+    // A0: the handoff was refused before the pipeline was entered at all, so no
+    // file outside this process's own reasoning was ever opened for writing.
+    case FailureCase::HandoffRejected:
+        return InstallState::Intact;
     // B2: StageRename reports InstallFailed only for its three "nothing touched"
     // errors (staging missing, backup collision, install->backup rename failed).
     case FailureCase::InstallFailed:
@@ -168,6 +174,7 @@ UpStep RetryEntryStep(FailureCase failure) noexcept {
     case FailureCase::VerifyDownloadFailed:    // A2 (file already deleted)
     case FailureCase::VerifyReinstallMismatch: // A3 (nothing downloaded into place)
     case FailureCase::TargetVersionMismatch:   // A4 (nothing downloaded into place)
+    case FailureCase::HandoffRejected:         // A0 (the pipeline never started)
         return UpStep::Download;
     case FailureCase::AppWontClose: // B1 (download kept)
         return UpStep::CloseApp;
@@ -199,6 +206,9 @@ bool RetryOffered(FailureCase failure) noexcept {
     // A3/A4: the same manifest would be fetched and refused again.
     case FailureCase::VerifyReinstallMismatch:
     case FailureCase::TargetVersionMismatch:
+    // A0: the handoff document is an input to this process, not something it can
+    // repair. Re-reading the same file would be refused for the same reason.
+    case FailureCase::HandoffRejected:
     // B4: the update applied; the action is to start the installed version.
     case FailureCase::LaunchFailed:
     // C2/C3: Windows Installer's own outcome; not this process's to repeat.
@@ -219,6 +229,7 @@ UpdatePhase PhaseForFailure(FailureCase failure) noexcept {
     case FailureCase::VerifyDownloadFailed:
     case FailureCase::VerifyReinstallMismatch:
     case FailureCase::TargetVersionMismatch:
+    case FailureCase::HandoffRejected:
     case FailureCase::AppWontClose:
     case FailureCase::InstallFailed:
     case FailureCase::VerifyInstallFailed:

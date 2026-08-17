@@ -66,7 +66,7 @@ TEST(UpdaterCommandPolicy, AvailableActionsAgreesWithEveryVerdict) {
               UpdatePhase::Completed, UpdatePhase::Failed, UpdatePhase::Cancelled}) {
             out.push_back(Manual(phase));
             FlowState handoff = Manual(phase);
-            handoff.mode = UpdaterMode::LegacyHandoff;
+            handoff.mode = UpdaterMode::AppHandoff;
             out.push_back(handoff);
             FlowState no_checks = Manual(phase);
             no_checks.checks_enabled = false;
@@ -129,11 +129,11 @@ TEST(UpdaterCommandPolicy, TheManualCommandsDoNotExistForAHandoffRun) {
     // A handoff was started with a confirmation already given; letting a client
     // re-enter its pipeline half-way is the "arm the handoff from outside" hole.
     FlowState state = Manual(UpdatePhase::Idle);
-    state.mode = UpdaterMode::LegacyHandoff;
+    state.mode = UpdaterMode::AppHandoff;
     for (const char* name : {"updater.check", "updater.download", "updater.apply"}) {
         const PreconditionVerdict verdict = VerdictFor(name, state);
         EXPECT_EQ(verdict.code, QLatin1String(kInvalidState)) << name;
-        EXPECT_EQ(verdict.actual.value(QStringLiteral("mode")).toString(), QStringLiteral("legacyHandoff")) << name;
+        EXPECT_EQ(verdict.actual.value(QStringLiteral("mode")).toString(), QStringLiteral("appHandoff")) << name;
     }
 }
 
@@ -258,6 +258,39 @@ TEST(UpdaterStatePayload, AbsentFailureDetailIsNullNotAnEmptyString) {
     EXPECT_TRUE(json.value(QStringLiteral("retryEntryStep")).isNull());
     EXPECT_TRUE(json.value(QStringLiteral("targetVersion")).isNull());
     EXPECT_EQ(json.value(QStringLiteral("installState")).toString(), QStringLiteral("intact"));
+}
+
+// The correlation identity travels as DATA. It is what lets an observer say "the
+// operation the application started is the operation this process is running"
+// instead of inferring it from what happened when.
+TEST(UpdaterStatePayload, PublishesTheUpdateTransactionId) {
+    FlowState state = Manual(UpdatePhase::Downloading);
+    state.mode = UpdaterMode::AppHandoff;
+    state.update_transaction_id = "u-0123456789abcdef";
+    EXPECT_EQ(StateToJson(state, 1).value(QStringLiteral("updateTransactionId")).toString(),
+              QStringLiteral("u-0123456789abcdef"));
+}
+
+// A manual run is not part of anyone's operation, so it names none -- null, not
+// an empty string a client would have to special-case.
+TEST(UpdaterStatePayload, ManualRunsCarryNoTransaction) {
+    EXPECT_TRUE(StateToJson(Manual(UpdatePhase::Idle), 1).value(QStringLiteral("updateTransactionId")).isNull());
+}
+
+// A0. The refusal of a handoff is a normal terminal outcome on this channel: it
+// names its case, proves the installation is untouched, and offers no retry.
+TEST(UpdaterStatePayload, AHandoffRefusalIsPublishedLikeAnyOtherFailure) {
+    FlowState state = Manual(UpdatePhase::Failed);
+    state.mode = UpdaterMode::AppHandoff;
+    state.failure_case = FailureCase::HandoffRejected;
+    state.install_state = InstallState::Intact;
+
+    const QJsonObject json = StateToJson(state, 7);
+    EXPECT_EQ(json.value(QStringLiteral("mode")).toString(), QStringLiteral("appHandoff"));
+    EXPECT_EQ(json.value(QStringLiteral("failureCase")).toString(), QStringLiteral("handoffRejected"));
+    EXPECT_EQ(json.value(QStringLiteral("installState")).toString(), QStringLiteral("intact"));
+    EXPECT_TRUE(json.value(QStringLiteral("retryEntryStep")).isNull());
+    EXPECT_FALSE(AvailableActions(state).contains(QStringLiteral("updater.retry")));
 }
 
 TEST(UpdaterStatePayload, RebootRequiredIsSeparateFromTheRestartPendingPhase) {

@@ -395,9 +395,45 @@ TEST(UpdaterManualFlow, ABlockedCheckReturnsToIdleWithoutClaimingAFailure) {
 
 TEST(UpdaterManualFlow, HandoffModeIsNotManual) {
     UpdaterController c = MakeController();
-    c.setMode(UpdaterMode::LegacyHandoff);
-    EXPECT_EQ(c.flowState().mode, UpdaterMode::LegacyHandoff);
+    c.setMode(UpdaterMode::AppHandoff);
+    EXPECT_EQ(c.flowState().mode, UpdaterMode::AppHandoff);
     EXPECT_FALSE(c.state().manual);
+}
+
+TEST(UpdaterTransaction, IsCarriedInThePublishedStateAndSurvivesEveryEvent) {
+    UpdaterController c = MakeController();
+    c.setMode(UpdaterMode::AppHandoff);
+    c.setUpdateTransactionId(QStringLiteral("u-0123456789abcdef"));
+    EXPECT_EQ(c.flowState().update_transaction_id, "u-0123456789abcdef");
+
+    // The operation does not change identity because a step did. A runner that
+    // correlated once must still be correlating at the terminal state.
+    c.onStepStarted(UpStep::Download);
+    c.onStepDone(UpStep::Download);
+    c.onFailure(FailureCase::VerifyDownloadFailed, QString());
+    EXPECT_EQ(c.flowState().update_transaction_id, "u-0123456789abcdef");
+}
+
+// A0. The document could not be accepted, so the pipeline was never entered:
+// nothing to retry, nothing touched, and copy that points at the app rather than
+// at a button this window does not have.
+TEST(UpdaterHandoffRejection, IsTerminalOffersNoRetryAndClaimsNothingWasInstalled) {
+    UpdaterController c = MakeController();
+    c.setMode(UpdaterMode::AppHandoff);
+    c.onFailure(FailureCase::HandoffRejected, QStringLiteral("unsupportedVersion (C:/x): handoffVersion 2"));
+
+    EXPECT_EQ(c.flowState().phase, UpdatePhase::Failed);
+    EXPECT_TRUE(c.flowState().terminal());
+    EXPECT_EQ(c.flowState().failure_case, FailureCase::HandoffRejected);
+    EXPECT_FALSE(c.flowState().retry_entry_step.has_value());
+    EXPECT_EQ(c.flowState().install_state, InstallState::Intact);
+
+    EXPECT_EQ(c.state().variant, TerminalVariant::Red);
+    EXPECT_EQ(c.state().primary_action, QStringLiteral("Close"));
+    EXPECT_TRUE(c.state().secondary_action.isEmpty());
+    EXPECT_FALSE(c.state().safety_text.isEmpty()) << "a refusal must still state what happened to the installation";
+    // No step is marked failed before Download: nothing ran.
+    EXPECT_EQ(c.state().steps[size_t(UpStep::CloseApp)], StepStatus::Queued);
 }
 
 TEST(UpdaterCancel, IsTerminalAndCarriesNoFailure) {
@@ -438,7 +474,7 @@ TEST(UpdaterCancel, AManualRunCanStartOverAndAHandoffOnlyCloses) {
     EXPECT_EQ(manual.state().secondary_action, QStringLiteral("Close"));
 
     UpdaterController handoff = MakeController();
-    handoff.setMode(UpdaterMode::LegacyHandoff);
+    handoff.setMode(UpdaterMode::AppHandoff);
     handoff.onStepStarted(UpStep::Download);
     handoff.onCancelled();
     EXPECT_EQ(handoff.state().primary_action, QStringLiteral("Close"))

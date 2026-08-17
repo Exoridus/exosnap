@@ -95,6 +95,12 @@ class UpdaterController {
     // state has to carry: which installation it operates on, and whether this
     // build may contact the feed at all.
     void setContext(exosnap::update::InstallMode install_mode, bool checks_enabled);
+    // The application's correlation identity for this operation, from the
+    // handoff document. Published state, not UI copy: it is what lets an
+    // observer tie the app's transaction, this process's state and the resulting
+    // evidence together without inferring anything from timing. Empty in manual
+    // mode.
+    void setUpdateTransactionId(const QString& id);
 
     // --- Manual-mode events --------------------------------------------------
     void onIdle();                                  // resting entry point

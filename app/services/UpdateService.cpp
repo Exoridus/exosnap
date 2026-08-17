@@ -2,11 +2,13 @@
 
 #include "UpdateService.h"
 
+#include <update/http_download.h>
 #include <update/install_mode_detector.h>
 #include <update/manifest_io.h>
 #include <update/package_verifier.h>
 #include <update/update_checker.h>
 #include <update/update_types.h>
+#include <update_handoff/handoff.h>
 
 #include "ExoSnapBuildInfo.h" // exosnap::build::kVersion (generated from PROJECT_VERSION)
 #include "RecordingCoordinator.h"
@@ -37,6 +39,89 @@
 #endif
 
 namespace exosnap {
+namespace {
+
+// Where prepared update transactions live. Deliberately NOT under the updater
+// staging directory: LaunchUpdater wipes that tree on every launch, and the
+// document plus the manifest bytes it references have to survive exactly that
+// moment.
+[[nodiscard]] QString TransactionsRoot() {
+    const QString local_data = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
+    if (local_data.isEmpty())
+        return {};
+    return QDir(local_data).filePath(QStringLiteral("update-transactions"));
+}
+
+// Bounded lifetime, without a heuristic: preparing a new transaction removes
+// every older one EXCEPT the directory the last launched updater was handed --
+// that child may still be reading it. Nothing else is kept, so an interrupted
+// or failed operation leaves at most one stale directory behind.
+void PruneTransactions(const QString& keep_new, const QString& keep_in_flight) {
+    const QString root = TransactionsRoot();
+    if (root.isEmpty())
+        return;
+    const QDir dir(root);
+    if (!dir.exists())
+        return;
+    for (const QString& name : dir.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+        const QString path = dir.filePath(name);
+        if (path == keep_new || path == keep_in_flight)
+            continue;
+        QDir(path).removeRecursively();
+    }
+}
+
+// Fetch the release trust anchor for an offered version: the exact manifest
+// bytes and their detached signature, into a fresh transaction directory.
+//
+// Nothing here verifies anything. The application is not the trust boundary --
+// it downloads the bytes because it, not the updater, owns release resolution
+// under the handoff contract, and it hands the PATHS over. The updater re-reads
+// those bytes and verifies the signature itself before parsing a single field.
+[[nodiscard]] UpdateService::PreparedUpdate PrepareUpdateTransaction(const exosnap::update::UpdateCheckResult& result) {
+    UpdateService::PreparedUpdate prepared;
+    prepared.target_version = QString::fromStdString(result.available_version_raw);
+
+    const QString root = TransactionsRoot();
+    if (root.isEmpty()) {
+        prepared.error = QStringLiteral("Can't locate a directory to prepare the update in.");
+        return prepared;
+    }
+    if (result.manifest_url.empty() || result.manifest_signature_url.empty()) {
+        prepared.error = QStringLiteral("The offered release carries no signed update manifest.");
+        return prepared;
+    }
+
+    prepared.update_transaction_id = exosnap::update_handoff::MakeUpdateTransactionId();
+    prepared.directory = QDir(root).filePath(prepared.update_transaction_id);
+    if (!QDir().mkpath(prepared.directory)) {
+        prepared.error = QStringLiteral("Can't create the update transaction directory.");
+        return prepared;
+    }
+    prepared.manifest_path =
+        QDir(prepared.directory).filePath(QString::fromLatin1(exosnap::update_handoff::kManifestFileName));
+    prepared.manifest_signature_path =
+        QDir(prepared.directory).filePath(QString::fromLatin1(exosnap::update_handoff::kManifestSignatureFileName));
+
+    // Never cancelled: these are two sub-kilobyte GETs on a worker that already
+    // ran a feed request. There is no user-facing operation to cancel here.
+    const std::atomic<bool> no_cancel{false};
+    const std::pair<std::string, QString> assets[] = {
+        {result.manifest_url, prepared.manifest_path},
+        {result.manifest_signature_url, prepared.manifest_signature_path},
+    };
+    for (const auto& [url, destination] : assets) {
+        if (const auto error = exosnap::update::DownloadToFile(
+                url, QDir::toNativeSeparators(destination).toStdWString(), {}, no_cancel)) {
+            prepared.error =
+                QStringLiteral("Can't fetch the signed update manifest: %1").arg(QString::fromStdString(*error));
+            return prepared;
+        }
+    }
+    return prepared;
+}
+
+} // namespace
 
 // ---------------------------------------------------------------------------
 // Internal implementation
@@ -65,6 +150,10 @@ class UpdateService::Impl {
     QString dev_feed_override;
     QString updater_automation_run_id;
     UpdateService::UpdaterLaunchInfo last_updater_launch;
+    // What the last adopted check prepared for a handoff. Replaced wholesale by
+    // each adopted check, so it can never describe an offer the card has moved
+    // past.
+    UpdateService::PreparedUpdate prepared_update;
     mutable QMutex mutex;
 
     // WHATS-NEW: gap notes from the most recent completed check (mutex-guarded).
@@ -213,6 +302,11 @@ UpdateService::UpdaterLaunchInfo UpdateService::LastUpdaterLaunch() const {
     return impl_->last_updater_launch;
 }
 
+UpdateService::PreparedUpdate UpdateService::LastPreparedUpdate() const {
+    QMutexLocker lk(&impl_->mutex);
+    return impl_->prepared_update;
+}
+
 exosnap::update::UpdateBlockReason UpdateService::CurrentBlockReason() const {
     auto guard = impl_->MakeGuard();
     return guard ? guard() : exosnap::update::UpdateBlockReason::NotBlocked;
@@ -296,8 +390,21 @@ void UpdateService::RequestUpdateCheck() {
             }
         }
 
+        // Prepare the handoff for whatever this check found, BEFORE anything is
+        // published: resolving a release and fetching the bytes that prove it
+        // are one act, and the application owns both under the handoff contract.
+        // A failure here does not hide the update -- a release that exists and
+        // is newer must never be reported as "up to date" -- it is recorded and
+        // refuses the apply with a truthful reason instead.
+        std::optional<UpdateService::PreparedUpdate> prepared;
+        if (result.update_available)
+            prepared = PrepareUpdateTransaction(result);
+
         UpdateCheckCompletion completion;
         upd::UpdateChannel channel_now = operation.channel;
+        QString prune_keep_new;
+        QString prune_keep_in_flight;
+        bool prune = false;
         {
             QMutexLocker lk(&impl->mutex);
             completion =
@@ -306,6 +413,17 @@ void UpdateService::RequestUpdateCheck() {
                 impl->active_operation = 0;
             if (completion.publish)
                 impl->state = completion.state;
+            if (completion.verdict == UpdateCompletionVerdict::Adopt) {
+                // Wholesale replacement, including with an empty one: a
+                // preparation that belonged to a previous offer must not survive
+                // into a check that offers something else (or nothing).
+                impl->prepared_update = prepared.value_or(UpdateService::PreparedUpdate{});
+                prune_keep_new = impl->prepared_update.directory;
+                prune_keep_in_flight = impl->last_updater_launch.handoff_path.isEmpty()
+                                           ? QString()
+                                           : QFileInfo(impl->last_updater_launch.handoff_path).absolutePath();
+                prune = true;
+            }
             if (completion.adopt_notes) {
                 impl->gap_notes = result.gap_notes;
                 impl->all_channel_notes = result.all_channel_notes;
@@ -316,6 +434,22 @@ void UpdateService::RequestUpdateCheck() {
                 impl->all_channel_notes.clear();
             }
             channel_now = impl->channel;
+        }
+
+        // Outside the mutex: filesystem work, and nothing above depends on it.
+        if (prune)
+            PruneTransactions(prune_keep_new, prune_keep_in_flight);
+        // A prepared transaction this check does NOT own (its result was
+        // discarded) is removed here rather than left to accumulate.
+        if (!prune && prepared.has_value() && !prepared->directory.isEmpty())
+            QDir(prepared->directory).removeRecursively();
+        if (prune && prepared.has_value() && !prepared->error.isEmpty()) {
+            // Loud, because the card still offers the update and the apply will
+            // refuse: a support bundle has to show why.
+            diagnostics::AppLog::warning(
+                QStringLiteral("update"),
+                QStringLiteral("Version %1 is on offer, but its update handoff could not be prepared: %2")
+                    .arg(QString::fromStdString(result.available_version_raw), prepared->error));
         }
 
         switch (completion.verdict) {
@@ -369,6 +503,17 @@ void UpdateService::LaunchUpdater() {
     }
 
     const QString app_dir = QCoreApplication::applicationDirPath();
+
+    // The handoff precondition, checked before a single file is staged: this
+    // process only ever hands over the EXACT version the card is offering,
+    // prepared without error. Refusing here is what stops an updater from being
+    // started for a transaction that describes a different release.
+    const upd::UpdateState state_now = CurrentState();
+    const PreparedUpdate prepared = LastPreparedUpdate();
+    if (const QString refusal = HandoffRefusalReason(state_now, prepared); !refusal.isEmpty()) {
+        emit updateError(upd::VerifyResult::PackageNotFound, refusal);
+        return;
+    }
 
     // Stage into %LOCALAPPDATA%\<org>\ExoSnap\updater\ (AppLocalDataLocation +
     // "/updater"). Running the updater from a separate directory lets it replace
@@ -468,17 +613,16 @@ void UpdateService::LaunchUpdater() {
     // version. If there is nothing to show, clear any stale payload instead.
     {
         std::vector<upd::ReleaseNote> notes;
-        std::string target_raw;
+        // The SAME snapshot the handoff document is built from, so the payload
+        // can only ever describe the version the updater is allowed to install.
+        // Re-reading the live state here would open a window in which a check
+        // completing mid-launch made the notes describe one version and the
+        // handoff pin another; reading available_version->ToString() instead
+        // would additionally re-spell a foreign prerelease label.
+        const std::string target_raw = state_now.available_version_raw;
         {
             QMutexLocker lk(&impl_->mutex);
             notes = impl_->gap_notes;
-            // The SAME string that goes out as --target-version, so the payload
-            // can only ever describe the version the updater is allowed to
-            // install. Reading available_version->ToString() here instead let a
-            // foreign prerelease label be re-spelled, and -- before the target
-            // pin existed -- let the payload describe a version the updater
-            // never installed at all.
-            target_raw = impl_->state.available_version_raw;
         }
         const QString payload_path = WhatsNewPayloadPath();
         if (!target_raw.empty() && !notes.empty()) {
@@ -519,11 +663,26 @@ void UpdateService::LaunchUpdater() {
                                   QStringLiteral("Launching the updater in verification reinstall mode — it will "
                                                  "refuse any version but %1")
                                       .arg(QString::fromLatin1(exosnap::build::kVersion)));
-    // Snapshotted, not read in place: BuildUpdaterArgs reads state.channel and
-    // state.install_mode, and a check worker can be writing that same struct.
-    const QStringList flags =
-        BuildUpdaterArgs(CurrentState(), app_dir, pid, QString::fromLatin1(exosnap::build::kVersion), verify_reinstall,
-                         DevFeedOverride(), UpdaterAutomationRunId());
+    // The document, then the command line that points at it. Written atomically
+    // so the child can never observe a partial one: it is created as a temporary
+    // sibling and renamed over the final name.
+    const exosnap::update_handoff::UpdateHandoff handoff = BuildUpdateHandoff(
+        state_now, prepared, app_dir, pid, QString::fromLatin1(exosnap::build::kVersion), verify_reinstall);
+    const QString handoff_path =
+        QDir(prepared.directory).filePath(QString::fromLatin1(exosnap::update_handoff::kHandoffFileName));
+    QString handoff_error;
+    if (!exosnap::update_handoff::WriteUpdateHandoffAtomically(handoff_path, handoff, &handoff_error)) {
+        emit updateError(upd::VerifyResult::PackageNotFound,
+                         QStringLiteral("Can't write the update handoff: %1").arg(handoff_error));
+        return;
+    }
+    diagnostics::AppLog::info(
+        QStringLiteral("update"),
+        QStringLiteral("Update transaction %1 hands version %2 to the updater (handoff schema %3)")
+            .arg(handoff.update_transaction_id, handoff.target_version)
+            .arg(exosnap::update_handoff::kHandoffVersion));
+
+    const QStringList flags = BuildUpdaterArgs(QDir::toNativeSeparators(handoff_path), UpdaterAutomationRunId());
 
     // Launch detached: the app does not wait — the updater sends WM_CLOSE when it is
     // ready to swap. QProcess applies the correct Windows argument-quoting rules so
@@ -549,8 +708,13 @@ void UpdateService::LaunchUpdater() {
         impl_->last_updater_launch.staged_exe = QDir::toNativeSeparators(staged_exe);
         // Read directly, not through CurrentState(): that helper takes the same
         // non-recursive mutex this block already holds.
-        impl_->last_updater_launch.target_version = QString::fromStdString(impl_->state.available_version_raw);
+        impl_->last_updater_launch.target_version = handoff.target_version;
         impl_->last_updater_launch.automation_run_id = impl_->updater_automation_run_id;
+        // The operation and the document it travelled in. Reported rather than
+        // derivable: a check reads the transaction id to correlate the two
+        // processes and the path to see exactly what was handed over.
+        impl_->last_updater_launch.update_transaction_id = handoff.update_transaction_id;
+        impl_->last_updater_launch.handoff_path = QDir::toNativeSeparators(handoff_path);
     }
     impl_->updater_process =
         ::OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, static_cast<DWORD>(updater_pid));

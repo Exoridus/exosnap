@@ -198,6 +198,15 @@ UpdateCheckResult BuildCheckResult(std::string_view releases_json, const std::op
     // on this channel, independent of whether an update is offered.
     r.all_channel_notes = CollectAllReleaseNotesForChannel(releases_json, params.channel);
 
+    // The trust-anchor assets of whichever release qualified, offered or not.
+    // LocateRelease only returns a release that carries BOTH, so a located
+    // release always fills both fields; nothing else in the result depends on
+    // them, which is why they are set before the offer decision.
+    if (release) {
+        r.manifest_url = release->manifest_url;
+        r.manifest_signature_url = release->signature_url;
+    }
+
     const UpdateOffer offer = release ? DecideOffer(release->version, release->version_tag, params) : UpdateOffer::None;
     if (offer != UpdateOffer::None) {
         r.update_available = true;

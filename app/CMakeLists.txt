@@ -803,7 +803,7 @@ exosnap_add_gtest(
         services/VerifyReinstallMode.cpp
         services/UpdateFeedOverride.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/updater/UpdaterArgs.cpp
-    LIBRARIES Qt6::Core exosnap::update exosnap::control
+    LIBRARIES Qt6::Core exosnap::update exosnap::control exosnap::update_handoff
 )
 target_include_directories(update_launch_plan_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
 

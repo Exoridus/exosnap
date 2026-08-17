@@ -1611,10 +1611,17 @@ unimplemented behavior.
   and the hidden legacy `UpdateSettingsPanel`/`AboutOverlay` compatibility shim has been removed —
   the Settings card is the **only** update state model.
 - **Version identity.** The app knows its **full release version** (e.g. `0.9.0-rc4`) everywhere:
-  runtime `kVersion`, updater `--current-version`, manifest `version`, About page, update card,
+  runtime `kVersion`, the handoff document's `currentVersion`, manifest `version`, About page, update card,
   support bundles and crash metadata. RC builds are therefore honestly older than the final of the
   same base version, and an older RC naturally discovers a newer RC on the Preview channel.
   Developer builds identify as `<base>-dev` and never impersonate a release.
+- **The update that was offered is the update that gets installed.** Applying hands the updater a
+  single versioned handoff document naming exactly one release, plus the signed manifest that proves
+  it; the updater verifies that signature itself before reading any manifest field and installs that
+  version or nothing (ADR 0068). It never resolves a release of its own. If the offered release's
+  manifest could not be fetched, the update stays visible — a newer release that exists must not be
+  reported as "up to date" — and applying refuses with that reason instead of starting an updater
+  that cannot work.
 - **Update card states** (normative): **Unchecked** (`No update check has run yet.`, button
   `Check for updates`; the state at launch and after a channel switch — deliberately distinct from
   "Up to date", which would be an assertion the app has not earned) · **Up to date**

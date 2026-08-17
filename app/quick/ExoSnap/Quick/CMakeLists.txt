@@ -461,6 +461,9 @@ target_link_libraries(exosnap
         exosnap::warnings
         exosnap::capability
         exosnap::update
+        # The App -> Updater handoff document. One schema, two processes: this
+        # target writes it, exosnap-updater.exe reads it.
+        exosnap::update_handoff
         exosnap::crash_capture
         exosnap_output_model_test_support
         exosnap_device_service_test_support

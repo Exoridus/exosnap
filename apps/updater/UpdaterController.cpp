@@ -76,6 +76,7 @@ UpStep FailedStepFor(FailureCase c) {
     case FailureCase::VerifyDownloadFailed:
     case FailureCase::VerifyReinstallMismatch:
     case FailureCase::TargetVersionMismatch:
+    case FailureCase::HandoffRejected:
         return UpStep::Download;
     case FailureCase::AppWontClose:
         return UpStep::CloseApp;
@@ -119,6 +120,10 @@ void UpdaterController::setMode(exosnap::update::UpdaterMode mode) {
 void UpdaterController::setContext(exosnap::update::InstallMode install_mode, bool checks_enabled) {
     flow_.install_mode = install_mode;
     flow_.checks_enabled = checks_enabled;
+}
+
+void UpdaterController::setUpdateTransactionId(const QString& id) {
+    flow_.update_transaction_id = id.toStdString();
 }
 
 void UpdaterController::setPhase(UpdatePhase phase) {
@@ -363,6 +368,23 @@ void UpdaterController::onFailure(FailureCase c, const QString& detail) {
                                       detail.isEmpty() ? QStringLiteral("another version") : detail);
         state_.safety_text =
             QStringLiteral("Nothing was installed. Your current version %1 is unchanged.").arg(state_.from_version);
+        state_.primary_action = QStringLiteral("Close");
+        state_.secondary_action.clear();
+        break;
+    case FailureCase::HandoffRejected: // A0 (the pipeline never started)
+        // Nothing was contacted and nothing was touched: the document ExoSnap
+        // wrote could not be accepted, so this process refused before doing any
+        // work. Retry would re-read the same file and refuse again, so only
+        // Close is offered -- the way forward is a fresh update from the app.
+        state_.variant = TerminalVariant::Red;
+        state_.headline = QStringLiteral("This update couldn't be started");
+        state_.detail_text =
+            QStringLiteral("ExoSnap handed over an update this updater can't accept. Start the update again "
+                           "from ExoSnap.");
+        state_.safety_text = state_.from_version.isEmpty()
+                                 ? QStringLiteral("Nothing was downloaded and nothing was changed.")
+                                 : QStringLiteral("Nothing was installed. Your current version %1 is unchanged.")
+                                       .arg(state_.from_version);
         state_.primary_action = QStringLiteral("Close");
         state_.secondary_action.clear();
         break;

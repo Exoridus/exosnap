@@ -24,6 +24,7 @@
 
 #include "ui/CodecLabels.h"
 #include <control/options.h>
+#include <update_handoff/handoff.h>
 
 #include <QCoreApplication>
 #include <QGuiApplication>
@@ -924,11 +925,20 @@ bool QuickLiveVerifySource::UpdateApply(QString* error) {
         *error = QStringLiteral("The update service is not available");
         return false;
     }
-    if (service->LastUpdaterLaunch().pid == 0) {
+    const UpdateService::UpdaterLaunchInfo launch = service->LastUpdaterLaunch();
+    if (launch.pid == 0) {
         // LaunchUpdater stages and spawns synchronously, so by here either a
         // child exists or the launch failed -- and a failed staging is exactly
         // the case that must not answer ok.
         *error = QStringLiteral("The updater was not started");
+        return false;
+    }
+    // The child that exists must be THIS operation's child. A previous launch's
+    // pid is still on record, so "a pid is set" alone would report success for
+    // an apply that was refused (an unprepared or superseded transaction) and
+    // never started anything.
+    if (launch.update_transaction_id != service->LastPreparedUpdate().update_transaction_id) {
+        *error = QStringLiteral("The updater was not started for this update");
         return false;
     }
     return true;
@@ -967,6 +977,19 @@ QJsonObject QuickLiveVerifySource::UpdaterLaunchSnapshot() const {
                     ? QJsonValue(QJsonValue::Null)
                     : QJsonValue(exosnap::control::PipeName(QString::fromLatin1(exosnap::control::role::kUpdater),
                                                             launch.automation_run_id)));
+
+    // The operation and the document that carries it. A check reads the
+    // transaction id to correlate this process's update with the child's
+    // published state, and the path to inspect exactly what was handed over --
+    // neither is derivable from anything else in this payload.
+    json.insert(QStringLiteral("updateTransactionId"), launch.update_transaction_id.isEmpty()
+                                                           ? QJsonValue(QJsonValue::Null)
+                                                           : QJsonValue(launch.update_transaction_id));
+    json.insert(QStringLiteral("handoffPath"),
+                launch.handoff_path.isEmpty() ? QJsonValue(QJsonValue::Null) : QJsonValue(launch.handoff_path));
+    json.insert(QStringLiteral("handoffVersion"), launch.handoff_path.isEmpty()
+                                                      ? QJsonValue(QJsonValue::Null)
+                                                      : QJsonValue(exosnap::update_handoff::kHandoffVersion));
     return json;
 }
 

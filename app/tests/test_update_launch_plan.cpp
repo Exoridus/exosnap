@@ -46,94 +46,91 @@ TEST(UpdaterStagingFileList, IncludesPlatformPlugin) {
     EXPECT_TRUE(has_platform) << "staging list must include plugins/platforms/qwindows.dll";
 }
 
-// -- BuildUpdaterArgs round-trip -------------------------------------------
+// -- BuildUpdaterArgs: two options, not a second contract -------------------
+//
+// The whole operation travels in the handoff document. The argv exists only to
+// name it -- and, when this process is itself under automation, to arm the
+// child's endpoint.
 
-TEST(BuildUpdaterArgs, RoundTripsInstalled) {
-    upd::UpdateState st;
-    st.channel = upd::UpdateChannel::Preview;
-    st.install_mode = upd::InstallMode::Installed;
+TEST(BuildUpdaterArgs, NamesTheHandoffAndNothingElse) {
+    const QStringList flags = exosnap::BuildUpdaterArgs(QStringLiteral("C:/scratch/u-1/update-handoff.json"));
+    ASSERT_EQ(flags.size(), 2);
+    EXPECT_EQ(flags.at(0), QStringLiteral("--apply-handoff"));
+    EXPECT_EQ(flags.at(1), QStringLiteral("C:/scratch/u-1/update-handoff.json"));
+}
 
+// Every removed search argument, named. Their absence is the point of the cut:
+// two production spellings of one operation is what allowed the child to resolve
+// a second release, and --base-url is what armed that resolution.
+TEST(BuildUpdaterArgs, CarriesNoneOfTheFormerSearchArguments) {
+    const QStringList flags = exosnap::BuildUpdaterArgs(QStringLiteral("C:/scratch/u-1/update-handoff.json"),
+                                                        QStringLiteral("run-0123456789ab"));
+    for (const QString& gone :
+         {QStringLiteral("--channel"), QStringLiteral("--install-mode"), QStringLiteral("--install-dir"),
+          QStringLiteral("--app-pid"), QStringLiteral("--current-version"), QStringLiteral("--target-version"),
+          QStringLiteral("--verify-reinstall"), QStringLiteral("--base-url")}) {
+        EXPECT_FALSE(flags.contains(gone)) << qPrintable(gone);
+    }
+}
+
+// The argv the app writes must be an argv the updater accepts. Round-tripped
+// through the updater's own parser, so the two cannot drift.
+TEST(BuildUpdaterArgs, RoundTripsThroughTheUpdatersOwnParser) {
     QStringList argv;
     argv << QStringLiteral("exosnap-updater.exe");
-    argv += exosnap::BuildUpdaterArgs(st, QStringLiteral("C:/Program Files/Codexo/ExoSnap"), 4242u,
-                                      QStringLiteral("0.9.0"));
+    argv += exosnap::BuildUpdaterArgs(QStringLiteral("C:/scratch/u-1/update-handoff.json"));
 
-    const auto parsed = ParseUpdaterArgs(argv);
+    const auto parsed = ParseUpdaterCommandLine(argv);
     ASSERT_TRUE(parsed.has_value());
-    EXPECT_EQ(parsed->channel, upd::UpdateChannel::Preview);
-    EXPECT_EQ(parsed->install_mode, upd::InstallMode::Installed);
-    EXPECT_EQ(parsed->install_dir, QStringLiteral("C:/Program Files/Codexo/ExoSnap"));
-    EXPECT_EQ(parsed->app_pid, 4242u);
-    EXPECT_EQ(parsed->current_version, QStringLiteral("0.9.0"));
+    EXPECT_EQ(parsed->handoff_path, QStringLiteral("C:/scratch/u-1/update-handoff.json"));
+    EXPECT_TRUE(parsed->base_url.isEmpty());
 }
 
-TEST(BuildUpdaterArgs, RoundTripsPortable) {
-    upd::UpdateState st;
-    st.channel = upd::UpdateChannel::Stable;
-    st.install_mode = upd::InstallMode::Portable;
-
-    QStringList argv;
-    argv << QStringLiteral("exosnap-updater.exe");
-    argv += exosnap::BuildUpdaterArgs(st, QStringLiteral("D:/Tools/ExoSnap"), 7u, QStringLiteral("1.2.3"));
-
-    const auto parsed = ParseUpdaterArgs(argv);
-    ASSERT_TRUE(parsed.has_value());
-    EXPECT_EQ(parsed->channel, upd::UpdateChannel::Stable);
-    EXPECT_EQ(parsed->install_mode, upd::InstallMode::Portable);
-    EXPECT_EQ(parsed->install_dir, QStringLiteral("D:/Tools/ExoSnap"));
-    EXPECT_EQ(parsed->app_pid, 7u);
-    EXPECT_EQ(parsed->current_version, QStringLiteral("1.2.3"));
-}
-
-// A normal update run must never hand the updater the verification gate.
-TEST(BuildUpdaterArgs, OmitsVerifyReinstallByDefault) {
-    upd::UpdateState st;
-    st.install_mode = upd::InstallMode::Installed;
-    const QStringList flags = exosnap::BuildUpdaterArgs(st, QStringLiteral("C:/x"), 1u, QStringLiteral("0.9.0"));
-    EXPECT_FALSE(flags.contains(QStringLiteral("--verify-reinstall")));
-}
-
-TEST(BuildUpdaterArgs, VerifyReinstallRoundTripsAsABooleanFlag) {
-    upd::UpdateState st;
-    st.channel = upd::UpdateChannel::Preview;
-    st.install_mode = upd::InstallMode::Portable;
-
-    QStringList argv;
-    argv << QStringLiteral("exosnap-updater.exe");
-    argv += exosnap::BuildUpdaterArgs(st, QStringLiteral("D:/Tools/ExoSnap"), 11u, QStringLiteral("0.9.0-rc4"),
-                                      /*verify_reinstall=*/true);
-
-    const auto parsed = ParseUpdaterArgs(argv);
-    ASSERT_TRUE(parsed.has_value());
-    EXPECT_TRUE(parsed->verify_reinstall);
-    EXPECT_EQ(parsed->current_version, QStringLiteral("0.9.0-rc4"));
-    EXPECT_EQ(parsed->install_dir, QStringLiteral("D:/Tools/ExoSnap")) << "the boolean flag must not eat a value";
-}
-
-// -- the pinned target version ----------------------------------------------
+// -- the handoff document ----------------------------------------------------
 //
 // The truthfulness defect this closes: the app resolved the feed, told the user
 // "version X is available", wrote a What's-new payload for X and stamped X into
 // the applied-version loop guard -- and then the updater resolved the SAME feed
 // again and installed whatever was newest at that second moment.
 
-TEST(BuildUpdaterArgs, PinsTheOfferedVersionAsTheTarget) {
+namespace {
+
+UpdateService::PreparedUpdate PreparedFor(const QString& target) {
+    UpdateService::PreparedUpdate prepared;
+    prepared.update_transaction_id = QStringLiteral("u-0123456789abcdef");
+    prepared.directory = QStringLiteral("C:/scratch/u-0123456789abcdef");
+    prepared.manifest_path = QStringLiteral("C:/scratch/u-0123456789abcdef/update-manifest.json");
+    prepared.manifest_signature_path = QStringLiteral("C:/scratch/u-0123456789abcdef/update-manifest.json.sig");
+    prepared.target_version = target;
+    return prepared;
+}
+
+} // namespace
+
+TEST(BuildUpdateHandoff, PinsTheOfferedVersionAndCarriesTheTrustAnchor) {
     upd::UpdateState st;
     st.install_mode = upd::InstallMode::Installed;
     st.update_available = true;
     st.available_version = upd::SemVer{0, 9, 1};
     st.available_version_raw = "0.9.1";
 
-    QStringList argv;
-    argv << QStringLiteral("exosnap-updater.exe");
-    argv += exosnap::BuildUpdaterArgs(st, QStringLiteral("C:/x"), 1u, QStringLiteral("0.9.0"));
-
-    const auto parsed = ParseUpdaterArgs(argv);
-    ASSERT_TRUE(parsed.has_value());
-    EXPECT_EQ(parsed->target_version, QStringLiteral("0.9.1"));
+    const auto handoff = exosnap::BuildUpdateHandoff(st, PreparedFor(QStringLiteral("0.9.1")),
+                                                     QStringLiteral("C:/Program Files/Codexo/ExoSnap"), 4242u,
+                                                     QStringLiteral("0.9.0"), /*verify_reinstall=*/false);
+    EXPECT_EQ(handoff.handoff_version, exosnap::update_handoff::kHandoffVersion);
+    EXPECT_EQ(handoff.target_version, QStringLiteral("0.9.1"));
+    EXPECT_EQ(handoff.current_version, QStringLiteral("0.9.0"));
+    EXPECT_EQ(handoff.install_mode, upd::InstallMode::Installed);
+    EXPECT_EQ(handoff.install_dir, QStringLiteral("C:/Program Files/Codexo/ExoSnap"));
+    EXPECT_EQ(handoff.app_pid, 4242u);
+    EXPECT_FALSE(handoff.verify_reinstall);
+    EXPECT_EQ(handoff.update_transaction_id, QStringLiteral("u-0123456789abcdef"));
+    EXPECT_EQ(handoff.manifest_path, QStringLiteral("C:/scratch/u-0123456789abcdef/update-manifest.json"));
+    EXPECT_EQ(handoff.manifest_signature_path,
+              QStringLiteral("C:/scratch/u-0123456789abcdef/update-manifest.json.sig"));
 }
 
-TEST(BuildUpdaterArgs, PassesTheReleaseTagVerbatimNotAReSpelling) {
+TEST(BuildUpdateHandoff, PassesTheReleaseTagVerbatimNotAReSpelling) {
     // A foreign prerelease label survives as itself. SemVer::ToString() would
     // have rendered "0.9.0-beta2" as "0.9.0-rc0", and the manifest gate compares
     // strings -- so a re-spelled target would refuse the very release it pinned.
@@ -142,76 +139,89 @@ TEST(BuildUpdaterArgs, PassesTheReleaseTagVerbatimNotAReSpelling) {
     st.available_version = upd::SemVer{0, 9, 0, true, 0};
     st.available_version_raw = "0.9.0-beta2";
 
-    const QStringList flags = exosnap::BuildUpdaterArgs(st, QStringLiteral("D:/x"), 1u, QStringLiteral("0.8.0"));
-    const int index = flags.indexOf(QStringLiteral("--target-version"));
-    ASSERT_GE(index, 0);
-    ASSERT_LT(index + 1, flags.size());
-    EXPECT_EQ(flags.at(index + 1), QStringLiteral("0.9.0-beta2"));
+    const auto handoff =
+        exosnap::BuildUpdateHandoff(st, PreparedFor(QStringLiteral("0.9.0-beta2")), QStringLiteral("D:/x"), 1u,
+                                    QStringLiteral("0.8.0"), /*verify_reinstall=*/false);
+    EXPECT_EQ(handoff.target_version, QStringLiteral("0.9.0-beta2"));
 }
 
-TEST(BuildUpdaterArgs, OmitsTheTargetWhenNothingIsOnOffer) {
-    // Nothing offered means nothing to pin; the updater then resolves the
-    // channel itself, which is the behaviour the manual mode relies on.
-    upd::UpdateState st;
-    st.install_mode = upd::InstallMode::Installed;
-    const QStringList flags = exosnap::BuildUpdaterArgs(st, QStringLiteral("C:/x"), 1u, QStringLiteral("0.9.0"));
-    EXPECT_FALSE(flags.contains(QStringLiteral("--target-version")));
-}
-
-TEST(BuildUpdaterArgs, VerificationReinstallPinsTheIdenticalVersion) {
+TEST(BuildUpdateHandoff, VerificationReinstallPinsTheIdenticalVersion) {
     // Both gates then agree by construction: the target gate and the ADR 0055
     // gate compare the same string against the same manifest field.
     upd::UpdateState st;
     st.install_mode = upd::InstallMode::Portable;
     st.available_version_raw = "0.9.0-rc4";
 
-    QStringList argv;
-    argv << QStringLiteral("exosnap-updater.exe");
-    argv += exosnap::BuildUpdaterArgs(st, QStringLiteral("D:/Tools/ExoSnap"), 11u, QStringLiteral("0.9.0-rc4"),
-                                      /*verify_reinstall=*/true);
-
-    const auto parsed = ParseUpdaterArgs(argv);
-    ASSERT_TRUE(parsed.has_value());
-    EXPECT_TRUE(parsed->verify_reinstall);
-    EXPECT_EQ(parsed->target_version, parsed->current_version);
+    const auto handoff =
+        exosnap::BuildUpdateHandoff(st, PreparedFor(QStringLiteral("0.9.0-rc4")), QStringLiteral("D:/Tools/ExoSnap"),
+                                    11u, QStringLiteral("0.9.0-rc4"), /*verify_reinstall=*/true);
+    EXPECT_TRUE(handoff.verify_reinstall);
+    EXPECT_EQ(handoff.target_version, handoff.current_version);
 }
 
-// -- the dev feed override and the child's automation endpoint ---------------
-
-TEST(BuildUpdaterArgs, PassesTheDevFeedThroughSoBothProcessesReadOneFeed) {
-    // Handing the updater the production URL while the app read a fixture would
-    // be two feeds behind one offer -- exactly the divergence --target-version
-    // exists to close.
+// A normal update run must never hand the updater the verification gate.
+TEST(BuildUpdateHandoff, LeavesVerifyReinstallOffByDefault) {
     upd::UpdateState st;
-    st.install_mode = upd::InstallMode::Portable;
+    st.install_mode = upd::InstallMode::Installed;
+    st.available_version_raw = "0.9.1";
+    EXPECT_FALSE(exosnap::BuildUpdateHandoff(st, PreparedFor(QStringLiteral("0.9.1")), QStringLiteral("C:/x"), 1u,
+                                             QStringLiteral("0.9.0"), /*verify_reinstall=*/false)
+                     .verify_reinstall);
+}
+
+// -- when a handoff may be written at all -----------------------------------
+
+TEST(HandoffRefusal, AcceptsAPreparationForTheOfferedVersion) {
+    upd::UpdateState st;
+    st.available_version_raw = "0.9.1";
+    EXPECT_TRUE(exosnap::HandoffRefusalReason(st, PreparedFor(QStringLiteral("0.9.1"))).isEmpty());
+}
+
+TEST(HandoffRefusal, RefusesWhenNothingIsOnOffer) {
+    upd::UpdateState st;
+    EXPECT_FALSE(exosnap::HandoffRefusalReason(st, PreparedFor(QString())).isEmpty());
+}
+
+// The rule that keeps the offer and the transaction the same release: a
+// preparation left over from a previous offer would hand the updater a
+// transaction for a version the user never accepted.
+TEST(HandoffRefusal, RefusesAPreparationForAnotherVersion) {
+    upd::UpdateState st;
+    st.available_version_raw = "0.9.1";
+    const QString reason = exosnap::HandoffRefusalReason(st, PreparedFor(QStringLiteral("0.9.0")));
+    EXPECT_FALSE(reason.isEmpty());
+    EXPECT_TRUE(reason.contains(QStringLiteral("0.9.0")));
+    EXPECT_TRUE(reason.contains(QStringLiteral("0.9.1")));
+}
+
+TEST(HandoffRefusal, RefusesWhenThePreparationFailedOrNeverRan) {
+    upd::UpdateState st;
     st.available_version_raw = "0.9.1";
 
-    QStringList argv;
-    argv << QStringLiteral("exosnap-updater.exe");
-    argv += exosnap::BuildUpdaterArgs(st, QStringLiteral("D:/x"), 1u, QStringLiteral("0.9.0"),
-                                      /*verify_reinstall=*/false, QStringLiteral("https://localhost:8443/releases"));
+    UpdateService::PreparedUpdate failed = PreparedFor(QStringLiteral("0.9.1"));
+    failed.error = QStringLiteral("Can't fetch the signed update manifest: HTTP 404");
+    EXPECT_EQ(exosnap::HandoffRefusalReason(st, failed), failed.error)
+        << "the apply must refuse with the reason the preparation recorded, not a generic one";
 
-    const auto parsed = ParseUpdaterArgs(argv);
-    ASSERT_TRUE(parsed.has_value());
-    EXPECT_EQ(parsed->base_url, QStringLiteral("https://localhost:8443/releases"));
-    EXPECT_EQ(parsed->target_version, QStringLiteral("0.9.1"));
+    EXPECT_FALSE(exosnap::HandoffRefusalReason(st, UpdateService::PreparedUpdate{}).isEmpty());
+
+    UpdateService::PreparedUpdate without_manifest = PreparedFor(QStringLiteral("0.9.1"));
+    without_manifest.manifest_signature_path.clear();
+    EXPECT_FALSE(exosnap::HandoffRefusalReason(st, without_manifest).isEmpty());
 }
 
-TEST(BuildUpdaterArgs, ArmsTheChildEndpointOnlyWhenTheParentHasOne) {
-    upd::UpdateState st;
-    st.install_mode = upd::InstallMode::Portable;
+// -- the child's automation endpoint ----------------------------------------
 
-    const QStringList without = exosnap::BuildUpdaterArgs(st, QStringLiteral("D:/x"), 1u, QStringLiteral("0.9.0"));
+TEST(BuildUpdaterArgs, ArmsTheChildEndpointOnlyWhenTheParentHasOne) {
+    const QStringList without = exosnap::BuildUpdaterArgs(QStringLiteral("C:/scratch/u-1/update-handoff.json"));
     EXPECT_FALSE(without.contains(QString::fromLatin1(exosnap::control::option::kUpdaterControl)))
         << "a normal launch must give the updater no endpoint at all";
 
-    QStringList argv;
-    argv << QStringLiteral("exosnap-updater.exe");
-    argv += exosnap::BuildUpdaterArgs(st, QStringLiteral("D:/x"), 1u, QStringLiteral("0.9.0"),
-                                      /*verify_reinstall=*/false, QString(), QStringLiteral("run-0123456789ab"));
-    const int index = argv.indexOf(QString::fromLatin1(exosnap::control::option::kUpdaterControl));
+    const QStringList with = exosnap::BuildUpdaterArgs(QStringLiteral("C:/scratch/u-1/update-handoff.json"),
+                                                       QStringLiteral("run-0123456789ab"));
+    const int index = with.indexOf(QString::fromLatin1(exosnap::control::option::kUpdaterControl));
     ASSERT_GE(index, 0);
-    EXPECT_EQ(argv.at(index + 1), QStringLiteral("run-0123456789ab"));
+    EXPECT_EQ(with.at(index + 1), QStringLiteral("run-0123456789ab"));
 }
 
 TEST(BuildUpdaterArgs, TheChildEndpointIsTheSameRunIdInADifferentRole) {
