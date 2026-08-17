@@ -4,6 +4,7 @@
 #include "PipelineStageModel.h"
 
 #include "diagnostics/DiagnosticsController.h"
+#include "diagnostics/DpcLatencyProvider.h"
 #include "services/SupportBundleService.h"
 
 #include <capability/capability_set.h>
@@ -133,7 +134,12 @@ class DiagnosticsAdapter : public QObject {
     void setCaptureTargetHdrActive(bool active);
     void setElevated(bool elevated);
     void setHasLastRecording(bool has_last_recording);
-    void setDpcLatency(diagnostics::DpcLatencyReading reading);
+    // ADR 0033 DPC/ISR latency. Borrowed, never owned, and PULLED on every evaluation
+    // rather than pushed: the reading is only ever as current as the last read, so
+    // sampling where the recommendation engine runs is what keeps a peak that stopped
+    // being measured from standing on the page. nullptr means no producer is installed,
+    // which reports exactly as an unavailable one does -- nothing.
+    void setDpcLatencyProvider(diagnostics::IDpcLatencyProvider* provider);
     void setPresentSample(std::optional<diagnostics::PresentSample> sample);
     void applyLiveDiagnostics(const recorder_core::RecordingDiagnosticsSnapshot& snapshot);
     // Emitted by the composition root once an assisted fix has resolved to a
@@ -192,6 +198,9 @@ class DiagnosticsAdapter : public QObject {
 
     diagnostics::DiagnosticsController controller_;
     capability::CapabilitySet caps_;
+    // Borrowed from the composition root, which must outlive this adapter (see
+    // QuickApplication's member declaration order).
+    diagnostics::IDpcLatencyProvider* dpc_provider_ = nullptr;
     DiagnosticIssueModel issue_model_;
     PipelineStageModel pipeline_stage_model_;
     std::unique_ptr<SupportBundleService> bundle_service_;

@@ -389,8 +389,9 @@ void DiagnosticsAdapter::setHasLastRecording(bool has_last_recording) {
     refreshSnapshot();
 }
 
-void DiagnosticsAdapter::setDpcLatency(diagnostics::DpcLatencyReading reading) {
-    controller_.SetDpcLatency(std::move(reading));
+void DiagnosticsAdapter::setDpcLatencyProvider(diagnostics::IDpcLatencyProvider* provider) {
+    dpc_provider_ = provider;
+    refreshSnapshot();
 }
 
 void DiagnosticsAdapter::setPresentSample(std::optional<diagnostics::PresentSample> sample) {
@@ -495,6 +496,20 @@ void DiagnosticsAdapter::applyProbe(diagnostics::DiagnosticsController::ProbeRes
 }
 
 void DiagnosticsAdapter::refreshSnapshot() {
+    // ADR 0033. Read the DPC/ISR producer HERE, where the recommendation engine is about
+    // to run, and hand the controller nothing at all unless the kernel trace is actually
+    // measuring. An unavailable reading is not a zero one: with no measurement there is
+    // no recommendation to make, and the Diagnostics page says nothing about DPC rather
+    // than reporting a peak nobody is updating any more. Read() takes a short lock and
+    // never blocks on the kernel, so this stays a GUI-thread call.
+    if (dpc_provider_ != nullptr) {
+        const diagnostics::DpcLatencyReading reading = dpc_provider_->Read();
+        controller_.SetDpcLatency(reading.available ? std::optional<diagnostics::DpcLatencyReading>(reading)
+                                                    : std::nullopt);
+    } else {
+        controller_.SetDpcLatency(std::nullopt);
+    }
+
     const diagnostics::DiagnosticsSnapshot snapshot = controller_.Evaluate();
 
     verdict_state_ = snapshot.verdict.state;

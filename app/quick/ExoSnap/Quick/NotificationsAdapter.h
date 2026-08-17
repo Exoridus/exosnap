@@ -131,6 +131,17 @@ class NotificationsAdapter : public QObject {
     // comment for why this adapter owns it and hands it out by reference.
     [[nodiscard]] notifications::NotificationManager& manager() noexcept;
 
+    // The "Show notifications" setting (product-spec §9: "The 'Show notifications'
+    // setting gates only the toasts — the hub records regardless"). Applied by the
+    // composition root from the persisted value at startup and again on every change.
+    //
+    // It lives here, with the manager this adapter owns, because the rule is one
+    // sentence about notifications and not a line of composition: `false` suppresses
+    // AND clears the visible set — standing cards included, since the setting is about
+    // whether anything appears on screen at all — while every event still reaches the
+    // hub. Nothing about the dwell contract changes; a suppressed toast has no dwell.
+    void applyShowNotifications(bool show);
+
     // UpdateAvailable's hub entry cannot clear itself on a later "up to date"
     // result — no NotificationEvent is raised for that outcome, only for
     // finding an update. The composition root calls this directly from that

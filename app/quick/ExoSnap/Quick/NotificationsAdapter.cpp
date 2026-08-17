@@ -128,6 +128,10 @@ notifications::NotificationManager& NotificationsAdapter::manager() noexcept {
     return *manager_;
 }
 
+void NotificationsAdapter::applyShowNotifications(bool show) {
+    manager_->SetToastsEnabled(show);
+}
+
 bool NotificationsAdapter::removeEntryByKey(const QString& key) {
     const bool removed = model_.removeByKey(key);
     if (removed)

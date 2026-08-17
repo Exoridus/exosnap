@@ -227,6 +227,13 @@ QuickApplication::QuickApplication()
     // so early-startup entries are unaffected; this narrows the filter now that
     // the persisted level is known.
     applyDeveloperLogLevel();
+    // Before every initializer that can raise one: a hotkey conflict, a repaired
+    // preset store or an unreadable settings file all enqueue during construction, and
+    // "Show notifications: off" has to be true for the FIRST toast of the session, not
+    // from the second one on. The manager exists from NotificationsAdapter's
+    // construction, so this is applicable as soon as the persisted value is known --
+    // the same reason applyDeveloperLogLevel() runs here.
+    applyShowNotifications();
     initializeCrashSession();
     initializeRecordWorkflow();
     initializeSettingsArea();
@@ -305,6 +312,34 @@ QuickApplication::~QuickApplication() {
 
 void QuickApplication::applyDeveloperLogLevel() {
     diagnostics::AppLog::setMinSeverity(diagnostics::DeveloperLogLevelFromString(settings_.developer_log_level));
+}
+
+void QuickApplication::applyShowNotifications() {
+    notifications_adapter_.applyShowNotifications(settings_.show_notifications);
+}
+
+void QuickApplication::applyDpcLatencyGate() {
+    // The kernel DPC/ISR session shares the present opt-in but has no internal
+    // elevation check, so the gate (opt-in AND elevation) is applied here -- mirroring
+    // PresentMonProvider::GateOpen().
+    const bool elevated = elevation_provider_.IsElevated();
+    const bool gate_open = settings_.present_diagnostics_optin && elevated;
+    // Start() is itself idempotent (it returns true for an already-open session), and
+    // this runs on the startup path plus on an actual opt-in change, never per refresh.
+    // Stop() likewise releases the session and, with it, the reading.
+    bool started = false;
+    if (gate_open) {
+        started = dpc_provider_.Start();
+    } else {
+        dpc_provider_.Stop();
+    }
+    // Logged in both directions, and it is the only way to tell the three states apart
+    // from the outside: gate closed (nothing opened), gate open but the session refused
+    // (ETW said no), gate open and measuring.
+    diagnostics::AppLog::info(QStringLiteral("dpc"), QStringLiteral("kernel trace optIn=%1 elevated=%2 started=%3")
+                                                         .arg(settings_.present_diagnostics_optin ? 1 : 0)
+                                                         .arg(elevated ? 1 : 0)
+                                                         .arg(started ? 1 : 0));
 }
 
 void QuickApplication::applyCrashReportPolicy() {
@@ -1498,6 +1533,14 @@ void QuickApplication::initializeDiagnosticsArea() {
                                   .arg(elevated ? 1 : 0)
                                   .arg(present_provider_->IsAvailable() ? 1 : 0));
 
+    // ADR 0033 DPC/ISR latency. The producer existed in this tree since the ETW slice
+    // landed but was compiled by no target at all and driven by nobody, so
+    // RecommendationEngine::checkDpcLatency evaluated an absent reading forever while
+    // the spec promised the check. The adapter samples this on every evaluation; the
+    // gate below decides whether there is anything to sample.
+    diagnostics_adapter_.setDpcLatencyProvider(&dpc_provider_);
+    applyDpcLatencyGate();
+
     // Single global Expert state, shared with Settings (AppSettingsStore).
     QObject::connect(&diagnostics_adapter_, &DiagnosticsAdapter::expertModeChanged, &diagnostics_adapter_,
                      [this](bool enabled) {
@@ -1902,12 +1945,19 @@ void QuickApplication::wireSettingsCommands() {
         // choice, and the crash-report policy never reached the SDK consent gate.
         applyDeveloperLogLevel();
         applyCrashReportPolicy();
+        applyShowNotifications();
         // ADR 0033. Turning the opt-in on opens the ETW session immediately when the
         // process is already elevated, and does nothing at all when it is not --
         // there is no relaunch prompt here, because a settings toggle is not consent
         // to restart the application.
-        if (present_provider_ && settings_.present_diagnostics_optin != previous_present_optin)
-            present_provider_->SetOptIn(settings_.present_diagnostics_optin);
+        if (settings_.present_diagnostics_optin != previous_present_optin) {
+            if (present_provider_)
+                present_provider_->SetOptIn(settings_.present_diagnostics_optin);
+            // The kernel DPC/ISR session follows the same opt-in. Turning it off stops
+            // the trace, and the reading goes back to unavailable in the same step --
+            // a peak measured a moment ago is not a measurement of this machine now.
+            applyDpcLatencyGate();
+        }
     });
 
     QObject::connect(&settings_adapter_, &SettingsAdapter::presetSelected, &settings_adapter_,

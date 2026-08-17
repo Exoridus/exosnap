@@ -10,6 +10,11 @@
 #include <evntcons.h>
 // clang-format on
 
+#include <QtCore/QtGlobal> // qWarning -> the installed Qt handler -> exosnap.log
+
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -62,6 +67,24 @@ struct SessionImpl {
     int64_t qpc_freq = 0;
     uint32_t pointer_size = sizeof(void*);
     std::vector<uint8_t> props_storage; // EVENT_TRACE_PROPERTIES + name; reused by ControlTrace(STOP)
+    // Set by the worker when it enters ProcessTrace and cleared when ProcessTrace
+    // returns, for whatever reason it returned. Starts false on purpose: an open trace
+    // nobody is consuming yet has measured nothing, and has nothing to report.
+    // Lives in SessionImpl rather than in the provider because the worker holds the
+    // shared_ptr for the whole call, so writing it after ProcessTrace can never touch
+    // a destroyed object.
+    std::atomic<bool> consuming{false};
+    // Set by Stop() before CloseTrace, so the worker can tell "I was asked to end"
+    // from "the trace ended under me" -- the same ProcessTrace return, two very
+    // different facts about the machine.
+    std::atomic<bool> stop_requested{false};
+    // The worker's "I have left ProcessTrace" handshake, so Stop() can wait with a
+    // deadline instead of joining forever. It lives in SessionImpl, which the worker
+    // itself holds a shared_ptr to, precisely so that a thread abandoned after the
+    // deadline still owns everything it may touch.
+    std::mutex finish_mutex;
+    std::condition_variable finish_cv;
+    bool finished = false; // guarded by finish_mutex
 
     std::mutex acc_mutex; // guards everything below
     double max_us = 0.0;
@@ -254,7 +277,33 @@ void DpcLatencyProvider::ConsumeLoop() {
         return;
     // ProcessTrace blocks, routing events into DpcEventRecordCallback, until Stop() calls
     // CloseTrace. The snapshot sp keeps SessionImpl alive for the lifetime of this call.
+    s->consuming.store(true, std::memory_order_release);
     ::ProcessTrace(&s->trace_handle, 1, nullptr, nullptr);
+    s->consuming.store(false, std::memory_order_release);
+    if (!s->stop_requested.load(std::memory_order_acquire)) {
+        // Nobody asked for this. The session is gone (stopped by another process, a
+        // driver reset, an ETW buffer error) and the peak it measured stops being
+        // reported as of now -- see Read().
+        qWarning("[dpc] kernel trace ended without being asked; DPC/ISR latency is no longer measured");
+    }
+    {
+        std::lock_guard<std::mutex> lk(s->finish_mutex);
+        s->finished = true;
+    }
+    s->finish_cv.notify_all();
+}
+
+bool DpcLatencyProvider::IsOpen() const {
+    if (!open_.load(std::memory_order_acquire))
+        return false;
+    std::shared_ptr<void> sp;
+    {
+        std::lock_guard<std::mutex> lk(impl_mutex_);
+        sp = impl_;
+    }
+    if (!sp)
+        return false;
+    return static_cast<SessionImpl*>(sp.get())->consuming.load(std::memory_order_acquire);
 }
 
 DpcLatencyReading DpcLatencyProvider::Read() const {
@@ -266,6 +315,11 @@ DpcLatencyReading DpcLatencyProvider::Read() const {
     if (!sp)
         return DpcLatencyReading{};
     auto* s = static_cast<SessionImpl*>(sp.get());
+    // A peak nothing is updating any more is not a measurement of this machine now, and
+    // the numbers do not leave this function with it: an unavailable reading carries no
+    // figure a caller could mistake for one.
+    if (!s->consuming.load(std::memory_order_acquire))
+        return DpcLatencyReading{};
     std::lock_guard<std::mutex> lk(s->acc_mutex);
     DpcLatencyReading r;
     r.available = s->count > 0;
@@ -292,6 +346,7 @@ void DpcLatencyProvider::Stop() {
     }
     if (sp) {
         auto* s = static_cast<SessionImpl*>(sp.get());
+        s->stop_requested.store(true, std::memory_order_release);
         if (s->control_handle != 0) {
             auto* props = reinterpret_cast<EVENT_TRACE_PROPERTIES*>(s->props_storage.data());
             ::ControlTraceW(s->control_handle, nullptr, props, EVENT_TRACE_CONTROL_STOP);
@@ -300,8 +355,28 @@ void DpcLatencyProvider::Stop() {
             ::CloseTrace(s->trace_handle); // unblocks ProcessTrace
         }
     }
-    if (worker_.joinable())
-        worker_.join();
+    // A deadline rather than an unconditional join, and the reason is the process exit
+    // path: ~DpcLatencyProvider() runs on the GUI thread, and CloseTrace only *asks*
+    // ProcessTrace to return (ERROR_CTX_CLOSE_PENDING is a documented answer). Joining
+    // forever would trade a hung shutdown for a guarantee nobody can see. Past the
+    // ceiling the worker is abandoned instead: it holds its own shared_ptr to
+    // SessionImpl, so it still owns everything it can touch. Same trade, same reason as
+    // PresentMonEtwSession::Stop().
+    constexpr auto kShutdownCeiling = std::chrono::seconds(2);
+    bool finished = true;
+    if (sp && worker_.joinable()) {
+        auto* s = static_cast<SessionImpl*>(sp.get());
+        std::unique_lock<std::mutex> lk(s->finish_mutex);
+        finished = s->finish_cv.wait_for(lk, kShutdownCeiling, [s]() { return s->finished; });
+    }
+    if (worker_.joinable()) {
+        if (finished) {
+            worker_.join();
+        } else {
+            qWarning("[dpc] kernel trace consumer did not return within the shutdown ceiling; abandoning it");
+            worker_.detach();
+        }
+    }
     {
         std::lock_guard<std::mutex> lk(impl_mutex_);
         impl_.reset();
@@ -323,6 +398,9 @@ bool DpcLatencyProvider::Start() {
     return false;
 }
 void DpcLatencyProvider::Stop() {
+}
+bool DpcLatencyProvider::IsOpen() const {
+    return false;
 }
 DpcLatencyReading DpcLatencyProvider::Read() const {
     return DpcLatencyReading{};

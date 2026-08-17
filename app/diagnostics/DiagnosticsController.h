@@ -398,7 +398,10 @@ class DiagnosticsController {
     void SetElevated(bool elevated) noexcept;
     void SetHasLastRecording(bool has_last_recording) noexcept;
     void SetCaptureTargetHdrActive(bool active) noexcept;
-    void SetDpcLatency(DpcLatencyReading reading);
+    // nullopt == "not being measured", and it is the value the host pushes whenever the
+    // kernel trace is not consuming: the recommendation must then come from no reading
+    // at all rather than from a default-zero one. Same shape as SetPresentSample.
+    void SetDpcLatency(std::optional<DpcLatencyReading> reading);
     void SetPresentSample(std::optional<PresentSample> sample);
     void SetLiveSnapshot(const recorder_core::RecordingDiagnosticsSnapshot& snapshot);
 

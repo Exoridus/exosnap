@@ -251,6 +251,82 @@ TEST(DiagnosticsAdapterTest, HdrTargetFactRaisesTheHdrBlockerCard) {
     EXPECT_FALSE(HasIssueTitled(adapter, QStringLiteral("cannot record HDR10")));
 }
 
+// ── ADR 0033: the DPC/ISR producer that reached nothing ─────────────────────────
+//
+// RecommendationEngine::checkDpcLatency has been correct and covered from the day it
+// landed, and it still never fired in a shipping build: DpcLatencyProvider.cpp was
+// compiled by no target, and nothing called the setter. These cases pin the two halves
+// the frontend now owns — a producer IS sampled where the engine runs, and a producer
+// that is not measuring reports nothing rather than a peak nobody is updating.
+
+namespace {
+
+// The reading a caller would get from the real kernel trace, without one. The interface
+// exists exactly so this is possible: opening a machine-wide named ETW session needs
+// elevation, and a unit test may not tear one out from under a running ExoSnap.
+class FakeDpcProvider final : public diagnostics::IDpcLatencyProvider {
+  public:
+    [[nodiscard]] diagnostics::DpcLatencyReading Read() const override {
+        ++reads_;
+        return reading_;
+    }
+
+    void setReading(diagnostics::DpcLatencyReading reading) {
+        reading_ = std::move(reading);
+    }
+    [[nodiscard]] int reads() const noexcept {
+        return reads_;
+    }
+
+  private:
+    diagnostics::DpcLatencyReading reading_;
+    mutable int reads_ = 0;
+};
+
+diagnostics::DpcLatencyReading MeasuredSpike() {
+    // 2.5 ms peak, well past the 1 ms threshold, attributed to a named driver.
+    return diagnostics::DpcLatencyReading{2500.0, 180.0, "nvlddmkm.sys", /*available=*/true};
+}
+
+} // namespace
+
+TEST(DiagnosticsAdapterTest, MeasuredDpcLatencyRaisesTheDriverCard) {
+    EnsureApplication();
+    DiagnosticsAdapter adapter;
+    adapter.setDiagnosticConfig(MakeCaptureConfig());
+    EXPECT_FALSE(HasIssueTitled(adapter, QStringLiteral("DPC/ISR latency")));
+
+    FakeDpcProvider provider;
+    provider.setReading(MeasuredSpike());
+    adapter.setDpcLatencyProvider(&provider);
+
+    EXPECT_TRUE(HasIssueTitled(adapter, QStringLiteral("DPC/ISR latency")))
+        << "a measured kernel-latency spike has to reach the Diagnostics surface";
+    EXPECT_GE(provider.reads(), 1) << "the provider is sampled where the engine runs";
+}
+
+TEST(DiagnosticsAdapterTest, DpcLatencyThatStoppedBeingMeasuredStopsBeingReported) {
+    EnsureApplication();
+    DiagnosticsAdapter adapter;
+    adapter.setDiagnosticConfig(MakeCaptureConfig());
+
+    FakeDpcProvider provider;
+    provider.setReading(MeasuredSpike());
+    adapter.setDpcLatencyProvider(&provider);
+    ASSERT_TRUE(HasIssueTitled(adapter, QStringLiteral("DPC/ISR latency")));
+
+    // The trace stops (opt-in withdrawn, session torn down by another process, ETW
+    // buffer error). What the provider then returns is the default reading: available
+    // false and 0 us — a figure a threshold check would read as "no problem" and a value
+    // row would read as "measured 0 us". Neither is true, so the engine is handed no
+    // reading at all, and the peak measured a moment ago leaves the page with it.
+    provider.setReading({});
+    adapter.setSelectedCaptureTarget(std::nullopt); // any refresh of the surface
+
+    EXPECT_FALSE(HasIssueTitled(adapter, QStringLiteral("DPC/ISR latency")))
+        << "an unavailable reading must not leave the last measured peak on the page";
+}
+
 TEST(DiagnosticsAdapterTest, SelectedCaptureTargetDrivesTheSourceTile) {
     EnsureApplication();
     DiagnosticsAdapter adapter;

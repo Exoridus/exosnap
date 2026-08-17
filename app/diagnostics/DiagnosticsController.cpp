@@ -1103,7 +1103,7 @@ void DiagnosticsController::SetCaptureTargetHdrActive(bool active) noexcept {
     capture_target_hdr_active_ = active;
 }
 
-void DiagnosticsController::SetDpcLatency(DpcLatencyReading reading) {
+void DiagnosticsController::SetDpcLatency(std::optional<DpcLatencyReading> reading) {
     dpc_ = std::move(reading);
 }
 

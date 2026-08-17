@@ -9,6 +9,19 @@
 
 namespace exosnap::diagnostics {
 
+// What a consumer of DPC/ISR latency is allowed to know: one reading, and nothing
+// about how it was obtained. The Diagnostics host layer holds this rather than the
+// concrete class so the wiring stays assertable without a real kernel trace --
+// opening one needs elevation, and a unit test may not tear a machine-wide named
+// ETW session out from under a running ExoSnap.
+class IDpcLatencyProvider {
+  public:
+    virtual ~IDpcLatencyProvider() = default;
+    // `available == false` means "not being measured right now" -- never a zero
+    // reading to be reported as if it had been measured.
+    [[nodiscard]] virtual DpcLatencyReading Read() const = 0;
+};
+
 // Owns a real-time kernel system-trace ETW session (DPC + ISR + image-load) and a
 // consumer worker. Read() returns the accumulated max/avg DPC+ISR latency plus a
 // best-effort attribution of the worst-offending kernel driver. Requires elevation;
@@ -19,23 +32,31 @@ namespace exosnap::diagnostics {
 //   * the worker thread runs the blocking ProcessTrace;
 //   * Read()/Stop() snapshot impl_ under impl_mutex_ before deref so a concurrent
 //     Stop() cannot free the SessionImpl mid-read;
-//   * Stop() snapshots, stops the session + CloseTrace (to unblock ProcessTrace),
-//     joins the worker, then resets impl_; the destructor calls Stop().
-class DpcLatencyProvider {
+//   * Stop() snapshots, stops the session + CloseTrace (to unblock ProcessTrace), waits
+//     for the worker with a ceiling and abandons it past that, then resets impl_; the
+//     destructor calls Stop().
+//
+// Threading: Start()/Stop()/Read() are called from the GUI thread. The only blocking
+// call in the class -- ProcessTrace -- runs on worker_, and Read() takes a short
+// accumulator lock, so the Diagnostics refresh never waits on the kernel.
+class DpcLatencyProvider final : public IDpcLatencyProvider {
   public:
     DpcLatencyProvider();
-    ~DpcLatencyProvider();
+    ~DpcLatencyProvider() override;
     DpcLatencyProvider(const DpcLatencyProvider&) = delete;
     DpcLatencyProvider& operator=(const DpcLatencyProvider&) = delete;
 
     [[nodiscard]] bool Start();
     void Stop();
-    [[nodiscard]] bool IsOpen() const {
-        return open_.load(std::memory_order_acquire);
-    }
+    // True while a consumer is actually consuming, not merely "Start() succeeded".
+    // Same reasoning as PresentMonEtwSession::IsOpen(): a ProcessTrace that returned
+    // for any other reason -- the named session stopped by another process, a driver
+    // reset, an ETW buffer error -- must not leave the provider claiming to measure.
+    [[nodiscard]] bool IsOpen() const;
     // Snapshot of the accumulated reading. available == false until at least one
-    // DPC/ISR event has been measured (or when the session is not open).
-    [[nodiscard]] DpcLatencyReading Read() const;
+    // DPC/ISR event has been measured, and again as soon as the trace stops being
+    // consumed: a peak that is no longer being updated is not a measurement.
+    [[nodiscard]] DpcLatencyReading Read() const override;
 
   private:
     void ConsumeLoop(); // runs ProcessTrace (blocking) on worker_

@@ -91,6 +91,53 @@ TEST_F(ToastStackTest, ToastsDisabledLeavesTheStackEmptyButStillRecordsTheHub) {
     EXPECT_TRUE(adapter_.hasEntries()) << "the hub is the record and is fed unconditionally";
 }
 
+// ── "Show notifications": the setting that used to suppress nothing ──────────────
+//
+// The switch was surfaced, persisted and exported to automation, and
+// NotificationManager::SetToastsEnabled had no non-test caller at all, so turning it
+// off changed nothing whatsoever. The manager's own suppression rules were never the
+// gap; the path from the setting to the manager was. These cases pin that path at the
+// object the composition root applies the persisted value to.
+
+TEST_F(ToastStackTest, TheShowNotificationsSettingSuppressesTheGlanceAndKeepsTheRecord) {
+    adapter_.applyShowNotifications(false);
+
+    adapter_.manager().Enqueue(
+        MakeEvent(NotificationType::Saved, QStringLiteral("Recording saved"), NotificationAction::Edit));
+    // A standing card too: the setting is about whether anything appears on screen,
+    // so it is not a timed-only gate.
+    adapter_.manager().Enqueue(MakeEvent(NotificationType::LowStorage, QStringLiteral("Storage running low"),
+                                         NotificationAction::ChangeFolder));
+
+    EXPECT_EQ(adapter_.toastModel()->rowCount(), 0) << "the setting gates the toast glance";
+    EXPECT_EQ(adapter_.model()->rowCount(), 2) << "the hub is the record and keeps every event";
+}
+
+TEST_F(ToastStackTest, ApplyingShowNotificationsOffClearsWhatIsAlreadyOnScreen) {
+    adapter_.manager().Enqueue(MakeEvent(NotificationType::LowStorage, QStringLiteral("Storage running low"),
+                                         NotificationAction::ChangeFolder));
+    ASSERT_EQ(adapter_.toastModel()->rowCount(), 1);
+
+    // Turning the setting off mid-session has to take effect now, not from the next
+    // event on — a standing card would otherwise sit there forever.
+    adapter_.applyShowNotifications(false);
+
+    EXPECT_EQ(adapter_.toastModel()->rowCount(), 0);
+    EXPECT_EQ(adapter_.model()->rowCount(), 1) << "clearing the glance never unrecords it";
+}
+
+TEST_F(ToastStackTest, TurningShowNotificationsBackOnLetsTheNextToastThrough) {
+    adapter_.applyShowNotifications(false);
+    adapter_.manager().Enqueue(MakeEvent(NotificationType::Saved, QStringLiteral("Suppressed")));
+    ASSERT_EQ(adapter_.toastModel()->rowCount(), 0);
+
+    adapter_.applyShowNotifications(true);
+    adapter_.manager().Enqueue(MakeEvent(NotificationType::Saved, QStringLiteral("Recording saved")));
+
+    ASSERT_EQ(adapter_.toastModel()->rowCount(), 1);
+    EXPECT_EQ(RoleAt(adapter_.toastModel(), 0, "title").toString(), QStringLiteral("Recording saved"));
+}
+
 TEST_F(ToastStackTest, ActionIsAddressedBySequenceAndRetiresTheToast) {
     const quint64 sequence = adapter_.manager().Enqueue(MakeEvent(
         NotificationType::LowStorage, QStringLiteral("Storage running low"), NotificationAction::ChangeFolder));

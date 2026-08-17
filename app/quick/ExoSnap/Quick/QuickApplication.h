@@ -25,6 +25,7 @@
 #include "ShellAdapter.h"
 
 #include "diagnostics/AudioSourceDegradation.h"
+#include "diagnostics/DpcLatencyProvider.h"
 #include "diagnostics/ElevationProvider.h"
 #include "diagnostics/PresentMonProvider.h"
 #include "diagnostics/WindowCaptureStall.h"
@@ -286,6 +287,15 @@ class QuickApplication {
     // Same category of gap as the consent above: the setting was persisted and
     // displayed, but nothing ever applied it in this frontend.
     void applyDeveloperLogLevel();
+    // Applies the "Show notifications" setting to the notification manager. Same
+    // category of gap again: the switch was surfaced, persisted and exported to
+    // automation, and turning it off suppressed nothing at all. Per product-spec §9 it
+    // gates only the toast glance -- the hub records every event regardless.
+    void applyShowNotifications();
+    // Opens or closes the kernel DPC/ISR trace against the same gate the present
+    // provider evaluates (opt-in AND elevation). Graceful: an unelevated process or a
+    // refused session simply keeps measuring nothing, and nothing is then reported.
+    void applyDpcLatencyGate();
     void initializeRecordWorkflow();
     // Hardware capability query, off the GUI thread. Until it lands the
     // coordinator stays in LoadingCapabilities and the surfaces render against
@@ -521,6 +531,12 @@ class QuickApplication {
     AboutViewModelAdapter about_view_model_;
     SettingsAdapter settings_adapter_;
     DeviceAdapter device_adapter_;
+    // ADR 0033 DPC/ISR latency. Declared BEFORE the adapter that borrows it: the
+    // adapter samples it on every evaluation, so this member has to outlive it —
+    // members are destroyed in reverse declaration order. Owns a real kernel trace
+    // only while the same gate the present provider uses (opt-in AND elevation) is
+    // open, and nothing at all otherwise.
+    diagnostics::DpcLatencyProvider dpc_provider_;
     DiagnosticsAdapter diagnostics_adapter_;
     // ADR 0033 present diagnostics. Declared BEFORE the provider that borrows it:
     // PresentMonProvider holds a reference to the elevation provider for its whole

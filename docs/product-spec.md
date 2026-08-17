@@ -1567,9 +1567,12 @@ the toolbar and the list. The log list itself is deliberately full-width — a l
 truncating it to protect a reading measure would be the wrong trade on a tool surface.
 
 **Present / tearing / latency diagnostics.** An opt-in, elevation-gated provider (PresentMon, the
-engine behind FrameView) enriches window/game-capture diagnosis and feeds judder correlation. The
-same in-process ETW session powers a DPC/ISR-latency check that names the offending kernel driver
-behind "smooth game, stuttery/crackling recording". The app does not run elevated by default; when
+engine behind FrameView) enriches window/game-capture diagnosis and feeds judder correlation. A
+second in-process kernel trace on the same opt-in and the same elevation gate powers a
+DPC/ISR-latency check that names the offending kernel driver behind "smooth game, stuttery/crackling
+recording". It reports a peak only while it is measuring one: a trace that is stopped, refused or
+that ended by itself withdraws the reading and with it the recommendation, for the same reason the
+present figures do below. The app does not run elevated by default; when
 not elevated the toggle ("Present, tearing & latency diagnostics") is disabled with the hint "Restart
 as Administrator to enable present/tearing diagnostics", and enabling it triggers a self-relaunch
 offer (never during an active recording). The provider is never required, and the portable build

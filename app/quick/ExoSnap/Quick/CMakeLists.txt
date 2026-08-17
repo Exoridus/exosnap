@@ -308,6 +308,12 @@ target_sources(exosnap
         ${PROJECT_SOURCE_DIR}/app/diagnostics/PresentTraceBackend.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/PresentModeMapping.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/PresentModeMapping.h
+        # The DPC/ISR half of the same ADR 0033 opt-in, and the worse case of the same
+        # defect: this file was compiled by NO target at all, so the check that names
+        # the kernel driver behind "smooth game, stuttery recording" evaluated an
+        # absent reading in every build there has ever been.
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/DpcLatencyProvider.cpp
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/DpcLatencyProvider.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/PresentSnapshotOverlay.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/PresentSnapshotOverlay.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/SupportBundle.cpp
@@ -557,6 +563,55 @@ if(MSVC)
 endif()
 
 add_dependencies(exosnap exosnap_build_info)
+
+# ---- Structural guard: a diagnostics producer must be in a shipping target -------
+# Wave D found the same defect four times, and this is the cheapest half of it: a
+# producer source file that no shipping target compiles. PresentMon* was compiled only
+# by present_provider_tests, WindowEvidenceProbe only by the deleted Widgets shell, and
+# DpcLatencyProvider by NOTHING -- while Diagnostics recommended as though all three
+# were measuring. Nothing in C++ can see a missing caller, but "is this file in the
+# binary at all" is a build fact, so it is asserted at configure time rather than left
+# to review.
+#
+# The two targets that may own such a file are the application itself and the
+# diagnostics support library it links. A producer that belongs in neither has to say so
+# in EXOSNAP_UNSHIPPED_DIAGNOSTICS_PRODUCERS below, with a reason -- the point is that
+# the decision is explicit and visible, never silent.
+set(EXOSNAP_UNSHIPPED_DIAGNOSTICS_PRODUCERS
+    # (empty: every diagnostics producer currently ships)
+)
+file(GLOB _exosnap_diag_producers CONFIGURE_DEPENDS
+    "${PROJECT_SOURCE_DIR}/app/diagnostics/*Provider.cpp"
+    "${PROJECT_SOURCE_DIR}/app/services/*Probe.cpp"
+)
+set(_exosnap_shipped_sources "")
+foreach(_shipping_target IN ITEMS exosnap exosnap_diagnostics_test_support)
+    get_target_property(_target_sources ${_shipping_target} SOURCES)
+    get_target_property(_target_dir ${_shipping_target} SOURCE_DIR)
+    foreach(_source IN LISTS _target_sources)
+        # Generator expressions cannot be resolved here; none of them names a producer.
+        if(_source MATCHES "\\$<")
+            continue()
+        endif()
+        get_filename_component(_absolute "${_source}" ABSOLUTE BASE_DIR "${_target_dir}")
+        list(APPEND _exosnap_shipped_sources "${_absolute}")
+    endforeach()
+endforeach()
+foreach(_producer IN LISTS _exosnap_diag_producers)
+    get_filename_component(_producer_name "${_producer}" NAME)
+    if(_producer_name IN_LIST EXOSNAP_UNSHIPPED_DIAGNOSTICS_PRODUCERS)
+        continue()
+    endif()
+    if(NOT "${_producer}" IN_LIST _exosnap_shipped_sources)
+        message(FATAL_ERROR
+            "${_producer_name} produces diagnostics data but is compiled by no shipping target. "
+            "Whatever reads it can only ever see the absent/no-op answer. Add it to the exosnap "
+            "target (app/quick/ExoSnap/Quick/CMakeLists.txt) or to exosnap_diagnostics_test_support "
+            "(app/CMakeLists.txt) -- or, if it deliberately does not ship, to "
+            "EXOSNAP_UNSHIPPED_DIAGNOSTICS_PRODUCERS with the reason."
+        )
+    endif()
+endforeach()
 
 # recorder_core links the FFmpeg-backed recording path even though this slice
 # only consumes its preview transport. Keep the development executable
