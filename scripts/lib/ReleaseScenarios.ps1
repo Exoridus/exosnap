@@ -61,21 +61,44 @@ function Get-ReleaseScenarioCatalog {
             $evidence = Save-LiveVerifyEvidence -Context $ctx -CheckId 'REL-ENV-001' `
                 -Name 'capabilities.json' -Value $describe
 
-            # The classification itself is the deliverable. What is asserted is that
-            # every property carries one -- an unclassified property is one somebody
-            # might mutate without having decided whether Windows supports doing so.
-            $unclassified = @($describe.properties | Where-Object {
-                    [string]::IsNullOrWhiteSpace($_.capability) -or $_.capability -eq 'unknown'
-                })
-            if ($unclassified.Count -gt 0) {
+            # Asserted over the CATALOGUE, not over `properties`. `properties` is the
+            # catalogue projected onto the aliases this machine happens to have bound,
+            # so on a machine with no alias profile it is empty -- and an empty list
+            # satisfies "every entry is classified" vacuously. That reported PASS for a
+            # classification nobody had made.
+            $catalogue = @($describe.catalogue)
+            if ($catalogue.Count -eq 0) {
                 return @{ Result = 'FAIL'
-                    Message      = "$($unclassified.Count) environment properties carry no capability class"
+                    Message      = 'the capability catalogue is empty; no environment property is classified at all'
                     Evidence     = @($evidence)
                 }
             }
-            $mutable = @($describe.properties | Where-Object { $_.capability -eq 'ENV_MUTATE_SAFE' })
+            $known = @('ENV_READ', 'ENV_MUTATE_SAFE', 'ENV_MUTATE_TESTONLY', 'ENV_HUMAN', 'PHYSICAL',
+                'SECURE', 'UNAVAILABLE')
+            $unclassified = @($catalogue | Where-Object { $_.capability -notin $known })
+            if ($unclassified.Count -gt 0) {
+                return @{ Result = 'FAIL'
+                    Message      = "$($unclassified.Count) catalogue entries carry no recognised capability class"
+                    Evidence     = @($evidence)
+                }
+            }
+            # Every entry must also name HOW it is read, and a mutable one how it is
+            # mutated. ENV_MUTATE_SAFE with no named mechanism is a claim with nothing
+            # behind it, which is precisely what the class is supposed to rule out.
+            $mechanismless = @($catalogue | Where-Object {
+                    [string]::IsNullOrWhiteSpace($_.readMechanism) -or
+                    ($_.capability -in @('ENV_MUTATE_SAFE', 'ENV_MUTATE_TESTONLY') -and
+                    [string]::IsNullOrWhiteSpace($_.mutateMechanism))
+                })
+            if ($mechanismless.Count -gt 0) {
+                return @{ Result = 'FAIL'
+                    Message      = "$($mechanismless.Count) catalogue entries name no mechanism for what they claim"
+                    Evidence     = @($evidence)
+                }
+            }
+            $mutable = @($catalogue | Where-Object { $_.capability -eq 'ENV_MUTATE_SAFE' })
             return @{ Result = 'PASS'
-                Message      = "$($describe.properties.Count) properties classified, $($mutable.Count) safely mutable"
+                Message      = "$($catalogue.Count) properties classified, $($mutable.Count) safely mutable"
                 Evidence     = @($evidence)
             }
         }
@@ -89,7 +112,7 @@ function Get-ReleaseScenarioCatalog {
         Source              = 'ADR 0069'
         ArtifactBound       = $false
         RequiresInstallTree = $false
-        EnvironmentKeys     = @('monitorTopology')
+        EnvironmentKeys     = @('monitorTopology', 'aliasProfile')
         Requires            = @{}
         Desired             = @{}
         Run                 = {
@@ -104,15 +127,27 @@ function Get-ReleaseScenarioCatalog {
             # An ambiguous alias is a hard failure of the profile, not a warning:
             # picking one of two matching devices silently is exactly the behaviour
             # that makes a test suite lie about which hardware it exercised.
-            $ambiguous = @($aliases.aliases | Where-Object { $_.error -eq 'ambiguous_device' })
+            $ambiguous = @($aliases.errors | Where-Object { $_.code -eq 'ambiguous_device' })
+            $ambiguous += @($aliases.bindings | Where-Object { $_.status -eq 'ambiguous_device' })
             if ($ambiguous.Count -gt 0) {
                 return @{ Result = 'FAIL'
                     Message      = "ambiguous_device for: $(($ambiguous | ForEach-Object { $_.alias }) -join ', ')"
                     Evidence     = @($evidence)
                 }
             }
-            $bound = @($aliases.aliases | Where-Object { $_.present })
-            $unbound = @($aliases.aliases | Where-Object { -not $_.present })
+            $bound = @($aliases.bindings | Where-Object { $_.status -in @('ok', 'friendly_name_changed') })
+            $unbound = @($aliases.bindings | Where-Object { $_.status -eq 'device_not_present' }) + @($aliases.errors)
+            # No bindings AND no errors means there is no alias profile on this machine
+            # yet: nothing was resolved, so nothing was proven. Reporting PASS over an
+            # empty list would claim the alias model works on a machine that has never
+            # used it -- an assertion that is true because it is vacuous.
+            if ($bound.Count -eq 0 -and $unbound.Count -eq 0) {
+                return @{ Result = 'UNAVAILABLE'
+                    Message      = 'no alias profile on this machine; bind one with exosnap-envctl bind-alias ' +
+                    "($(@($aliases.candidates).Count) device(s) enumerated as candidates)"
+                    Evidence     = @($evidence)
+                }
+            }
             return @{ Result = 'PASS'
                 Message      = "$($bound.Count) alias(es) bound and present; $($unbound.Count) not on this machine"
                 Evidence     = @($evidence)
@@ -128,13 +163,14 @@ function Get-ReleaseScenarioCatalog {
         Source              = 'ADR 0069 (write -> read-back -> compare; exact restore)'
         ArtifactBound       = $false
         RequiresInstallTree = $false
-        EnvironmentKeys     = @('env.display.main-hdr:refreshHz')
+        EnvironmentKeys     = @('env.display.main-hdr:refresh-hz', 'env.display.main-hdr:mode')
         Requires            = @{ display = 'display.main-hdr' }
         # The refresh rate is the cheapest ENV_MUTATE_SAFE property to prove the whole
-        # transaction on: documented setter, documented read-back, and a change nobody
-        # has to look at. `alternate` asks envctl for any supported mode OTHER than the
-        # current one, so the scenario does not hardcode a rate this display may not have.
-        Desired             = @{ 'display.main-hdr:refreshHz' = 'alternate' }
+        # transaction on: documented setter, documented read-back, and a change that
+        # restores itself. 60 Hz rather than a machine-specific rate -- and a display
+        # that does not offer it answers `apply_rejected`, which the runner records as
+        # UNAVAILABLE rather than as a product failure.
+        Desired             = @{ 'display.main-hdr:refresh-hz' = '60' }
         Run                 = {
             param($ctx, $transaction)
             # The applied state was already read back and compared by envctl before this
@@ -230,6 +266,11 @@ function Get-ReleaseScenarioCatalog {
             $gate = @{
                 Id                = 'REL-PRESENT-002'
                 Title             = 'Elevated relaunch for present diagnostics'
+                # Values the Verify block needs travel HERE, not in a closure. A
+                # `.GetNewClosure()` block is bound to a synthetic module that does not
+                # inherit the runner's functions, so it cannot call Connect-LiveVerify
+                # at all -- the capture would work and the call would not.
+                State             = @{ runId = $runId; exePath = $exe }
                 Why               = 'PresentMon needs a real-time ETW session, which Windows grants only to an ' +
                 'elevated process. The elevation prompt runs on the Secure Desktop, where synthetic input is ' +
                 'blocked by design -- not merely discouraged.'
@@ -246,9 +287,9 @@ function Get-ReleaseScenarioCatalog {
                 'the opt-in on through settings.set, and then requires present.available == true with a ' +
                 'presentCount greater than zero. Tearing false and discarded zero are accepted results.'
                 Verify            = {
-                    param($context)
-                    try { $conn = Connect-LiveVerify -RunId $runId -ConnectTimeoutMs 20000 }
-                    catch { return @{ Ok = $false; Detail = "no control channel at run id $runId : $($_.Exception.Message)" } }
+                    param($context, $gate)
+                    try { $conn = Connect-LiveVerify -RunId $gate.State.runId -ConnectTimeoutMs 20000 }
+                    catch { return @{ Ok = $false; Detail = "no control channel at run id $($gate.State.runId): $($_.Exception.Message)" } }
                     try {
                         $identity = $conn.Identity
                         if ($identity.executableSha256 -ne $context.Artifact.exeSha256) {
@@ -298,7 +339,7 @@ function Get-ReleaseScenarioCatalog {
                         }
                     }
                     finally { try { $conn.Close() } catch { } }
-                }.GetNewClosure()
+                }
             }
             return & $ctx.HumanGate $gate
         }
@@ -354,7 +395,7 @@ function Get-ReleaseScenarioCatalog {
             if (-not $result.succeeded) {
                 return @{ Result = 'FAIL'; Message = 'the product reports the recording did not succeed'; Evidence = $evidence }
             }
-            $file = $result.outputFilePath
+            $file = $result.outputPath
             if ([string]::IsNullOrWhiteSpace($file) -or -not (Test-Path -LiteralPath $file)) {
                 return @{ Result = 'FAIL'; Message = "the product named an output file that does not exist: $file"; Evidence = $evidence }
             }
@@ -416,7 +457,7 @@ function Get-ReleaseScenarioCatalog {
                 'that the stall is NOT explained as exclusive fullscreen unless pipeline.snapshot actually ' +
                 'reports presentMode exclusiveFullscreen. It then stops the recording through the product.'
                 Verify            = {
-                    param($context)
+                    param($context, $gate)
                     $conn2 = $script:Session.Connection
                     $deadline = [DateTime]::UtcNow.AddSeconds(30)
                     $notifications = $null
@@ -456,7 +497,7 @@ function Get-ReleaseScenarioCatalog {
                         Detail   = "standing stall notice present, lifecycle $($pipeline.lifecycle), fseClaim=$claimsFse fseMeasured=$measuredFse"
                         Evidence = $evidence
                     }
-                }.GetNewClosure()
+                }
             }
             [void]$windows
             return & $ctx.HumanGate $gate
@@ -493,7 +534,7 @@ function Get-ReleaseScenarioCatalog {
                 'and then asserts that environment.snapshot reports present mode exclusiveFullscreen. Without a ' +
                 'real present measurement this scenario reports UNAVAILABLE rather than guessing from window shape.'
                 Verify            = {
-                    param($context)
+                    param($context, $gate)
                     $conn = $script:Session.Connection
                     $present = (Invoke-LiveVerifyCommand -Connection $conn -Command 'environment.snapshot').result.present
                     $evidence = @(Save-LiveVerifyEvidence -Context $context -CheckId 'REL-CAP-FSE-001' -Name 'present.json' -Value $present)
@@ -507,7 +548,7 @@ function Get-ReleaseScenarioCatalog {
                         return @{ Ok = $false; Detail = "present mode is '$($present.mode)', not exclusiveFullscreen"; Evidence = $evidence }
                     }
                     return @{ Ok = $true; Detail = "present mode exclusiveFullscreen over $($present.presentCount) presents"; Evidence = $evidence }
-                }.GetNewClosure()
+                }
             }
             [void]$session
             return & $ctx.HumanGate $gate
@@ -526,7 +567,7 @@ function Get-ReleaseScenarioCatalog {
         Source              = 'ADR 0046; docs/release-checklist.md §7'
         ArtifactBound       = $true
         RequiresInstallTree = $false
-        EnvironmentKeys     = @('env.audio.render.normal:state')
+        EnvironmentKeys     = @('env.audio.render.normal:endpoint-state')
         Requires            = @{ audioRender = 'audio.render.normal' }
         Desired             = @{}
         OptIn               = $true
@@ -559,7 +600,7 @@ function Get-ReleaseScenarioCatalog {
                 'cleared again after the device returned. It then stops the recording and validates the output ' +
                 'file with ffprobe -- the file must still contain its audio track.'
                 Verify            = {
-                    param($context)
+                    param($context, $gate)
                     $conn2 = $script:Session.Connection
                     $observedDegraded = $false
                     $recoveredAgain = $false
@@ -588,7 +629,7 @@ function Get-ReleaseScenarioCatalog {
                     if (-not $observedDegraded) { return @{ Ok = $false; Detail = 'no audio-source degradation was observed within 60 s'; Evidence = $evidence } }
                     if (-not $recoveredAgain) { return @{ Ok = $false; Detail = 'degradation was observed but never cleared after the device returned'; Evidence = $evidence } }
                     return @{ Ok = $true; Detail = 'degraded during the outage, recovered afterwards, recording never stopped'; Evidence = $evidence }
-                }.GetNewClosure()
+                }
             }
             return & $ctx.HumanGate $gate
         }
@@ -629,7 +670,7 @@ function Get-ReleaseScenarioCatalog {
                 VerifyDescription = 'This runner polls pipeline.snapshot for 15 s and requires that no audio track ' +
                 'ever reports degraded, while the recording keeps running.'
                 Verify            = {
-                    param($context)
+                    param($context, $gate)
                     $conn2 = $script:Session.Connection
                     $samples = @()
                     $degradedSeen = $false
@@ -648,7 +689,7 @@ function Get-ReleaseScenarioCatalog {
                         return @{ Ok = $false; Detail = 'a connected but silent source was reported as degraded'; Evidence = $evidence }
                     }
                     return @{ Ok = $true; Detail = 'silence over 15 s produced no degradation'; Evidence = $evidence }
-                }.GetNewClosure()
+                }
             }
             return & $ctx.HumanGate $gate
         }
@@ -662,7 +703,7 @@ function Get-ReleaseScenarioCatalog {
         Source              = 'docs/release-checklist.md §7 (44.1 kHz output device)'
         ArtifactBound       = $true
         RequiresInstallTree = $false
-        EnvironmentKeys     = @('env.audio.render.44100-test:format')
+        EnvironmentKeys     = @('env.audio.render.44100-test:device-format')
         Requires            = @{ audioRender = 'audio.render.44100-test' }
         # No Desired: Windows exposes no documented, supported API for setting an
         # endpoint's shared-mode format. The only mechanism is an undocumented
@@ -689,12 +730,12 @@ function Get-ReleaseScenarioCatalog {
                 'actually reads 44100. It then records with system audio and validates the sample rate of the ' +
                 'audio track in the output file with ffprobe.'
                 Verify            = {
-                    param($context)
+                    param($context, $gate)
                     if (-not $context.Orchestrator.Available) {
                         return @{ Ok = $false; Detail = 'exosnap-envctl is not built; the endpoint format cannot be re-read' }
                     }
                     $snapshot = Get-EnvironmentSnapshot -Orchestrator $context.Orchestrator
-                    $property = @($snapshot.properties | Where-Object { $_.id -eq 'audio.render.44100-test:format' }) | Select-Object -First 1
+                    $property = @($snapshot.properties | Where-Object { $_.key -eq 'audio.render.44100-test:device-format' }) | Select-Object -First 1
                     $evidence = @(Save-LiveVerifyEvidence -Context $context -CheckId 'REL-AUD-FORMAT-001' -Name 'endpoint-format.json' -Value $property)
                     if ($null -eq $property) {
                         return @{ Ok = $false; Detail = 'the endpoint format could not be read'; Evidence = $evidence }
@@ -703,7 +744,7 @@ function Get-ReleaseScenarioCatalog {
                         return @{ Ok = $false; Detail = "the endpoint still reports '$($property.value)', not 44100"; Evidence = $evidence }
                     }
                     return @{ Ok = $true; Detail = "endpoint shared-mode format is $($property.value)"; Evidence = $evidence }
-                }.GetNewClosure()
+                }
             }
             $gateResult = & $ctx.HumanGate $gate
             if ($gateResult.Result -ne 'PASS') { return $gateResult }
@@ -721,7 +762,7 @@ function Get-ReleaseScenarioCatalog {
             $result = (Invoke-LiveVerifyCommand -Connection $conn -Command 'record.result').result
             if (-not $result.succeeded) { return @{ Result = 'FAIL'; Message = 'the recording did not succeed' } }
 
-            $probeRaw = & $ffprobe -v error -print_format json -show_streams -- "$($result.outputFilePath)" 2>&1 | Out-String
+            $probeRaw = & $ffprobe -v error -print_format json -show_streams -- "$($result.outputPath)" 2>&1 | Out-String
             $evidence = @(Save-LiveVerifyEvidence -Context $ctx -CheckId 'REL-AUD-FORMAT-001' -Name 'ffprobe.json' -Raw $probeRaw)
             $probe = $probeRaw | ConvertFrom-Json
             $audio = @($probe.streams | Where-Object { $_.codec_type -eq 'audio' })
@@ -743,7 +784,7 @@ function Get-ReleaseScenarioCatalog {
         Source              = 'docs/release-checklist.md §7 (long-duration soak, clock slaving)'
         ArtifactBound       = $true
         RequiresInstallTree = $false
-        EnvironmentKeys     = @('env.audio.render.normal:format', 'env.audio.capture.main-mic:format')
+        EnvironmentKeys     = @('env.audio.render.normal:device-format', 'env.audio.capture.main-mic:device-format')
         Requires            = @{}
         Desired             = @{}
         OptIn               = $true
@@ -785,7 +826,7 @@ function Get-ReleaseScenarioCatalog {
             )
             if (-not $result.succeeded) { return @{ Result = 'FAIL'; Message = 'the long recording did not succeed'; Evidence = $evidence } }
 
-            $probeRaw = & $ffprobe -v error -print_format json -show_format -show_streams -- "$($result.outputFilePath)" 2>&1 | Out-String
+            $probeRaw = & $ffprobe -v error -print_format json -show_format -show_streams -- "$($result.outputPath)" 2>&1 | Out-String
             $evidence += Save-LiveVerifyEvidence -Context $ctx -CheckId 'REL-AUD-CLOCK-001' -Name 'ffprobe.json' -Raw $probeRaw
             $probe = $probeRaw | ConvertFrom-Json
             $duration = [double]$probe.format.duration
@@ -820,9 +861,9 @@ function Get-ReleaseScenarioCatalog {
         Source              = 'docs/release-checklist.md §7'
         ArtifactBound       = $true
         RequiresInstallTree = $false
-        EnvironmentKeys     = @('env.display.main-hdr:refreshHz')
+        EnvironmentKeys     = @('env.display.main-hdr:refresh-hz', 'env.display.main-hdr:mode')
         Requires            = @{ display = 'display.main-hdr' }
-        Desired             = @{ 'display.main-hdr:refreshHz' = '60' }
+        Desired             = @{ 'display.main-hdr:refresh-hz' = '60' }
         OptIn               = $true
         Run                 = {
             param($ctx, $transaction)
@@ -867,7 +908,7 @@ function Get-ReleaseScenarioCatalog {
             $session = & $ctx.EnsureSession
             $conn = $session.Connection
             $environment = (Invoke-LiveVerifyCommand -Connection $conn -Command 'environment.snapshot').result
-            $hdrDisplays = @($environment.displays | Where-Object { $_.hdrActive })
+            $hdrDisplays = @($environment.displays.screens | Where-Object { $_.hdrActive })
             $evidence = @(
                 Save-LiveVerifyEvidence -Context $ctx -CheckId 'REL-DISP-HDR-001' -Name 'environment.json' -Value $environment
                 Save-LiveVerifyEvidence -Context $ctx -CheckId 'REL-DISP-HDR-001' -Name 'transaction.json' -Value $transaction
@@ -916,7 +957,7 @@ function Get-ReleaseScenarioCatalog {
             $session = & $ctx.EnsureSession
             $conn = $session.Connection
             $environment = (Invoke-LiveVerifyCommand -Connection $conn -Command 'environment.snapshot').result
-            $displays = @($environment.displays)
+            $displays = @($environment.displays.screens)
             if ($displays.Count -lt 2) {
                 return @{ Result = 'UNAVAILABLE'; Message = "this machine has $($displays.Count) display(s); the mixed-monitor scenario needs two" }
             }
@@ -965,20 +1006,39 @@ function Get-ReleaseScenarioCatalog {
             $environment = (Invoke-LiveVerifyCommand -Connection $conn -Command 'environment.snapshot').result
             $windows = (Invoke-LiveVerifyCommand -Connection $conn -Command 'windows.snapshot').result
             $evidence = @(
-                Save-LiveVerifyEvidence -Context $ctx -CheckId 'REL-DISP-DPI-001' -Name 'displays.json' -Value $environment.displays
+                Save-LiveVerifyEvidence -Context $ctx -CheckId 'REL-DISP-DPI-001' -Name 'displays.json' -Value $environment.displays.screens
                 Save-LiveVerifyEvidence -Context $ctx -CheckId 'REL-DISP-DPI-001' -Name 'windows.json' -Value $windows
             )
             $root = @($windows.windows | Where-Object { $_.role -eq 'main' }) | Select-Object -First 1
             if ($null -eq $root) {
                 return @{ Result = 'FAIL'; Message = 'no main window was reported'; Evidence = $evidence }
             }
+            # Geometry lives under `native`, and only when a native window exists --
+            # the snapshot deliberately never calls winId(), because that would CREATE
+            # one and the snapshot would have changed what it was observing.
+            if (-not $root.nativeWindowCreated) {
+                return @{ Result = 'UNVERIFIED'
+                    Message      = 'the main window has no native window yet, so its size cannot be read'
+                    Evidence     = $evidence
+                }
+            }
+            $width = [int]$root.native.width
+            $height = [int]$root.native.height
+            # The product minimum. A window smaller than this is not a scaling
+            # observation, it is a broken minimum-size constraint.
+            if ($width -lt 860 -or $height -lt 700) {
+                return @{ Result = 'FAIL'
+                    Message      = "the main window is ${width}x${height}, below the 860x700 product minimum"
+                    Evidence     = $evidence
+                }
+            }
             # Per-monitor DPI SETTING has no documented API, so scaling is read-only
             # here and the actual 125/150/175/200 % sweep stays a human gate. What is
             # automatable is that the scale factors were read at all and that the shell
             # honours its declared minimum at the CURRENT scale.
-            $scales = @($environment.displays | ForEach-Object { $_.devicePixelRatio })
+            $scales = @($environment.displays.screens | ForEach-Object { $_.devicePixelRatio })
             return @{ Result = 'PASS'
-                Message      = "device pixel ratios: $($scales -join ', '); main window $($root.width)x$($root.height)"
+                Message      = "device pixel ratios: $($scales -join ', '); main window ${width}x${height}"
                 Evidence     = $evidence
             }
         }
@@ -996,7 +1056,7 @@ function Get-ReleaseScenarioCatalog {
         Source              = 'docs/product-spec.md (fixed-dark capture overlays)'
         ArtifactBound       = $true
         RequiresInstallTree = $false
-        EnvironmentKeys     = @('env.appearance:mode')
+        EnvironmentKeys     = @('env.system:apps-theme')
         Requires            = @{}
         Desired             = @{}
         OptIn               = $true
@@ -1031,7 +1091,7 @@ function Get-ReleaseScenarioCatalog {
                 'the overlay state it prepared, and your judgement is the verdict. It verifies only that the ' +
                 'overlays were actually on screen while you looked, via overlay.snapshot.'
                 Verify            = {
-                    param($context)
+                    param($context, $gate)
                     $conn2 = $script:Session.Connection
                     $after = (Invoke-LiveVerifyCommand -Connection $conn2 -Command 'overlay.snapshot').result
                     $evidence = @(Save-LiveVerifyEvidence -Context $context -CheckId 'REL-VIS-OVERLAY-001' -Name 'overlays-after.json' -Value $after)
@@ -1041,7 +1101,7 @@ function Get-ReleaseScenarioCatalog {
                         return @{ Ok = $false; Detail = 'no overlay was visible while the gate was open; nothing was judged'; Evidence = $evidence }
                     }
                     return @{ Ok = $true; Detail = "$($visible.Count) overlay(s) were on screen and judged by the operator"; Evidence = $evidence }
-                }.GetNewClosure()
+                }
             }
             [void]$overlays
             return & $ctx.HumanGate $gate
@@ -1082,7 +1142,7 @@ function Get-ReleaseScenarioCatalog {
                 VerifyDescription = 'This runner asserts that the product actually published notifications while ' +
                 'the gate was open, by diffing notifications.snapshot. Whether they LOOKED right is your verdict.'
                 Verify            = {
-                    param($context)
+                    param($context, $gate)
                     $conn2 = $script:Session.Connection
                     $after = (Invoke-LiveVerifyCommand -Connection $conn2 -Command 'notifications.snapshot').result
                     $evidence = @(Save-LiveVerifyEvidence -Context $context -CheckId 'REL-VIS-NOTIFY-001' -Name 'notifications-after.json' -Value $after)
@@ -1090,7 +1150,7 @@ function Get-ReleaseScenarioCatalog {
                         return @{ Ok = $false; Detail = 'the product published no notification while the gate was open'; Evidence = $evidence }
                     }
                     return @{ Ok = $true; Detail = "$(@($after.notifications).Count) notification(s) were published and judged"; Evidence = $evidence }
-                }.GetNewClosure()
+                }
             }
             [void]$before
             return & $ctx.HumanGate $gate
@@ -1160,6 +1220,7 @@ function Get-ReleaseScenarioCatalog {
             $gate = @{
                 Id                = 'REL-UPD-MSI-001'
                 Title             = 'Accept the elevation prompt for the MSI install'
+                State             = @{ previousVersion = $before.version }
                 Why               = 'msiexec needs an elevated token, and the prompt runs on the Secure Desktop. ' +
                 'Windows blocks synthetic input across that boundary by design; there is nothing to automate.'
                 Do                = @(
@@ -1172,7 +1233,7 @@ function Get-ReleaseScenarioCatalog {
                 'will reconnect afterwards, read app.identity again, and require a DIFFERENT and newer version ' +
                 'plus an installState of intact or restored. It never touches the prompt.'
                 Verify            = {
-                    param($context)
+                    param($context, $gate)
                     $deadline = [DateTime]::UtcNow.AddMinutes(5)
                     $identity = $null
                     while ([DateTime]::UtcNow -lt $deadline) {
@@ -1194,11 +1255,11 @@ function Get-ReleaseScenarioCatalog {
                     if ($null -eq $identity) {
                         return @{ Ok = $false; Detail = 'the application could not be reached again after the install'; Evidence = $evidence }
                     }
-                    if ($identity.version -eq $before.version) {
+                    if ($identity.version -eq $gate.State.previousVersion) {
                         return @{ Ok = $false; Detail = "the version is unchanged at $($identity.version); nothing was installed"; Evidence = $evidence }
                     }
-                    return @{ Ok = $true; Detail = "installed: $($before.version) -> $($identity.version)"; Evidence = $evidence }
-                }.GetNewClosure()
+                    return @{ Ok = $true; Detail = "installed: $($gate.State.previousVersion) -> $($identity.version)"; Evidence = $evidence }
+                }
             }
             return & $ctx.HumanGate $gate
         }
@@ -1237,7 +1298,7 @@ function Get-ReleaseScenarioCatalog {
                 VerifyDescription = 'This runner reads update.getState and requires a cancelled-or-idle state with ' +
                 'installState intact -- never a failure state, and never strandedInBackup.'
                 Verify            = {
-                    param($context)
+                    param($context, $gate)
                     $conn2 = $script:Session.Connection
                     $after = (Invoke-LiveVerifyCommand -Connection $conn2 -Command 'update.getState').result
                     $evidence = @(Save-LiveVerifyEvidence -Context $context -CheckId 'REL-UPD-MSI-DECLINE-001' -Name 'update-state.json' -Value $after)
@@ -1248,7 +1309,7 @@ function Get-ReleaseScenarioCatalog {
                         return @{ Ok = $false; Detail = "a declined prompt was reported as a failure: $($after.phase)"; Evidence = $evidence }
                     }
                     return @{ Ok = $true; Detail = "phase=$($after.phase) installState=$($after.installState)"; Evidence = $evidence }
-                }.GetNewClosure()
+                }
             }
             return & $ctx.HumanGate $gate
         }

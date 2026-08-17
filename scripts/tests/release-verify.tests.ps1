@@ -215,7 +215,7 @@ Test-Case 'an interrupted scenario resumes as UNVERIFIED, never as PASS' {
 Test-Case 'a no-op desired state mutates nothing and needs no restore' {
     $directory = New-TestDirectory
     $fake = New-FakeEnvctl -Directory $directory
-    Set-FakeBehaviour -Directory $directory -Behaviour @{ recover = @{ exit = 0; output = @{ dirty = $false; recovered = @() } } }
+    Set-FakeBehaviour -Directory $directory -Behaviour @{ recover = @{ exit = 0; output = @{ journalPresent = $false; recovered = $false; mutationAllowed = $true; state = 'Clean' } } }
     $orchestrator = New-EnvironmentOrchestrator -RunId 'r1' -JournalDirectory $directory -EnvctlPath $fake
 
     $ran = $false
@@ -234,23 +234,44 @@ Test-Case 'a setter that claims success but reads back differently is a failure'
     # envctl is the component that compares; the contract asserted here is that the
     # orchestrator surfaces its verdict instead of trusting the exit code of `begin`.
     Set-FakeBehaviour -Directory $directory -Behaviour @{
-        recover = @{ exit = 0; output = @{ dirty = $false; recovered = @() } }
-        begin   = @{ exit = 4; output = @{ error = 'read-back mismatch: requested 60, actual 144' } }
+        recover = @{ exit = 0; output = @{ journalPresent = $false; recovered = $false; mutationAllowed = $true; state = 'Clean' } }
+        begin   = @{ exit = 1; output = @{ ok = $false; errorCode = 'verify_mismatch'; error = 'read-back mismatch: requested 60, actual 144' } }
     }
     $orchestrator = New-EnvironmentOrchestrator -RunId 'r1' -JournalDirectory $directory -EnvctlPath $fake
-    Assert-Throws {
-        Invoke-EnvironmentTransaction -Orchestrator $orchestrator -Scenario 'mismatch' `
-            -Desired @{ 'display.main-hdr:refreshHz' = '60' } -Body { param($t) @{ Result = 'PASS' } }
-    } 'an apply whose read-back disagreed must not reach the scenario body'
+    $script:bodyRan = $false
+    $outcome = Invoke-EnvironmentTransaction -Orchestrator $orchestrator -Scenario 'mismatch' `
+        -Desired @{ 'display.main-hdr:refresh-hz' = '60' } `
+        -Body { param($t) $script:bodyRan = $true; @{ Result = 'PASS' } }
+    Assert-True (-not $script:bodyRan) 'an apply whose read-back disagreed must not reach the scenario body'
+    Assert-Equal 'verify_mismatch' $outcome.SetupErrorCode 'the failure must be reported with its typed code'
+    Assert-True ($null -eq $outcome.Product) 'there is no product verdict when the product was never exercised'
+    # Typed rather than thrown, because the caller has to tell "this display does not
+    # offer 60 Hz" (UNAVAILABLE) from "the setter lied" (FAIL), and a thrown string
+    # collapses both into a scenario crash.
+    Assert-Equal 'NOT_APPLICABLE' $outcome.RestoreResult 'a transaction that never opened has no restore verdict'
+}
+
+Test-Case 'a display that does not offer the requested mode is UNAVAILABLE, not FAIL' {
+    $directory = New-TestDirectory
+    $fake = New-FakeEnvctl -Directory $directory
+    Set-FakeBehaviour -Directory $directory -Behaviour @{
+        recover = @{ exit = 0; output = @{ journalPresent = $false; recovered = $false; mutationAllowed = $true; state = 'Clean' } }
+        begin   = @{ exit = 1; output = @{ ok = $false; errorCode = 'apply_rejected'; error = 'the display does not offer 60 Hz' } }
+    }
+    $orchestrator = New-EnvironmentOrchestrator -RunId 'r1' -JournalDirectory $directory -EnvctlPath $fake
+    $outcome = Invoke-EnvironmentTransaction -Orchestrator $orchestrator -Scenario 'unsupported-mode' `
+        -Desired @{ 'display.main-hdr:refresh-hz' = '60' } -Body { param($t) @{ Result = 'PASS' } }
+    Assert-Equal 'apply_rejected' $outcome.SetupErrorCode 'the refusal must keep its code so the runner can classify it'
+    Assert-True (-not $orchestrator.Dirty) 'a refused apply leaves nothing to restore and nothing dirty'
 }
 
 Test-Case 'the restore runs even when the scenario body throws' {
     $directory = New-TestDirectory
     $fake = New-FakeEnvctl -Directory $directory
     Set-FakeBehaviour -Directory $directory -Behaviour @{
-        recover = @{ exit = 0; output = @{ dirty = $false; recovered = @() } }
-        begin   = @{ exit = 0; output = @{ transactionId = 't1'; journalPath = 'j1'; applied = @() } }
-        restore = @{ exit = 0; output = @{ restoreResult = 'RESTORED'; evidence = @{} } }
+        recover = @{ exit = 0; output = @{ journalPresent = $false; recovered = $false; mutationAllowed = $true; state = 'Clean' } }
+        begin   = @{ exit = 0; output = @{ ok = $true; transactionId = 't1'; journalPath = 'j1'; state = 'Active'; applied = @() } }
+        restore = @{ exit = 0; output = @{ ok = $true; state = 'Restored'; evidence = @{}; pending = @() } }
     }
     $orchestrator = New-EnvironmentOrchestrator -RunId 'r1' -JournalDirectory $directory -EnvctlPath $fake
     $outcome = Invoke-EnvironmentTransaction -Orchestrator $orchestrator -Scenario 'boom' `
@@ -265,9 +286,9 @@ Test-Case 'a restore whose read-back disagrees is RESTORE_FAILED and marks the r
     $directory = New-TestDirectory
     $fake = New-FakeEnvctl -Directory $directory
     Set-FakeBehaviour -Directory $directory -Behaviour @{
-        recover = @{ exit = 0; output = @{ dirty = $false; recovered = @() } }
-        begin   = @{ exit = 0; output = @{ transactionId = 't1'; journalPath = 'j1'; applied = @() } }
-        restore = @{ exit = 0; output = @{ restoreResult = 'RESTORE_FAILED'; evidence = @{} } }
+        recover = @{ exit = 0; output = @{ journalPresent = $false; recovered = $false; mutationAllowed = $true; state = 'Clean' } }
+        begin   = @{ exit = 0; output = @{ ok = $true; transactionId = 't1'; journalPath = 'j1'; state = 'Active'; applied = @() } }
+        restore = @{ exit = 4; output = @{ ok = $false; state = 'RestoreFailed'; evidence = @{}; pending = @() } }
     }
     $orchestrator = New-EnvironmentOrchestrator -RunId 'r1' -JournalDirectory $directory -EnvctlPath $fake
     $outcome = Invoke-EnvironmentTransaction -Orchestrator $orchestrator -Scenario 'restore-broken' `
@@ -281,10 +302,10 @@ Test-Case 'a device that vanished before restore yields RESTORE_PENDING_DEVICE_U
     $directory = New-TestDirectory
     $fake = New-FakeEnvctl -Directory $directory
     Set-FakeBehaviour -Directory $directory -Behaviour @{
-        recover = @{ exit = 0; output = @{ dirty = $false; recovered = @() } }
-        begin   = @{ exit = 0; output = @{ transactionId = 't1'; journalPath = 'j1'; applied = @() } }
-        restore = @{ exit = 0; output = @{
-                restoreResult = 'RESTORE_PENDING_DEVICE_UNAVAILABLE'
+        recover = @{ exit = 0; output = @{ journalPresent = $false; recovered = $false; mutationAllowed = $true; state = 'Clean' } }
+        begin   = @{ exit = 0; output = @{ ok = $true; transactionId = 't1'; journalPath = 'j1'; state = 'Active'; applied = @() } }
+        restore = @{ exit = 4; output = @{
+                state = 'RestorePendingDeviceUnavailable'
                 evidence      = @{ 'audio.render.normal:default' = @{ before = 'on'; requested = 'off'; applied = 'off'; afterRestore = '<device absent>' } }
             }
         }
@@ -301,7 +322,7 @@ Test-Case 'a dirty environment blocks the next mutating scenario' {
     $directory = New-TestDirectory
     $fake = New-FakeEnvctl -Directory $directory
     Set-FakeBehaviour -Directory $directory -Behaviour @{
-        recover = @{ exit = 0; output = @{ dirty = $true; detail = 'HDR left off on display.main-hdr'; recovered = @() } }
+        recover = @{ exit = 0; output = @{ journalPresent = $true; recovered = $false; mutationAllowed = $false; state = 'RestoreFailed'; error = 'HDR left off on display.main-hdr' } }
     }
     $orchestrator = New-EnvironmentOrchestrator -RunId 'r1' -JournalDirectory $directory -EnvctlPath $fake
     Assert-True $orchestrator.Dirty 'startup recovery reported the environment as dirty'
@@ -317,7 +338,7 @@ Test-Case 'startup recovery restores before anything else runs' {
     $directory = New-TestDirectory
     $fake = New-FakeEnvctl -Directory $directory
     Set-FakeBehaviour -Directory $directory -Behaviour @{
-        recover = @{ exit = 0; output = @{ dirty = $false; recovered = @('display.main-hdr:hdr') } }
+        recover = @{ exit = 0; output = @{ journalPresent = $true; recovered = $true; mutationAllowed = $true; state = 'Restored'; evidence = @{ properties = @(@{ property = 'display.main-hdr:hdr'; before = 'on'; afterRestore = 'on' }) } } }
     }
     $orchestrator = New-EnvironmentOrchestrator -RunId 'r1' -JournalDirectory $directory -EnvctlPath $fake
     Assert-True (-not $orchestrator.Dirty) 'a completed recovery leaves a clean environment'
@@ -329,7 +350,7 @@ Test-Case 'startup recovery restores before anything else runs' {
 Test-Case 'a recovery pass that itself fails leaves the run dirty rather than throwing' {
     $directory = New-TestDirectory
     $fake = New-FakeEnvctl -Directory $directory
-    Set-FakeBehaviour -Directory $directory -Behaviour @{ recover = @{ exit = 5; output = @{ error = 'journal unreadable' } } }
+    Set-FakeBehaviour -Directory $directory -Behaviour @{ recover = @{ exit = 1; output = @{ ok = $false; errorCode = 'journal_read_failed'; error = 'journal unreadable' } } }
     $orchestrator = New-EnvironmentOrchestrator -RunId 'r1' -JournalDirectory $directory -EnvctlPath $fake
     Assert-True $orchestrator.Dirty 'a failed recovery is the strongest reason not to mutate anything'
     Assert-True ($orchestrator.DirtyDetail -match 'journal unreadable') 'the reason must be carried, not lost'
@@ -339,8 +360,8 @@ Test-Case 'an unbound alias is UNAVAILABLE, not a product failure' {
     $directory = New-TestDirectory
     $fake = New-FakeEnvctl -Directory $directory
     Set-FakeBehaviour -Directory $directory -Behaviour @{
-        recover           = @{ exit = 0; output = @{ dirty = $false; recovered = @() } }
-        'resolve-aliases' = @{ exit = 0; output = @{ aliases = @() } }
+        recover           = @{ exit = 0; output = @{ journalPresent = $false; recovered = $false; mutationAllowed = $true; state = 'Clean' } }
+        'resolve-aliases' = @{ exit = 1; output = @{ ok = $false; bindings = @(); candidates = @(); errors = @(@{ code = 'unbound_alias'; alias = 'display.main-hdr'; message = 'bind it with exosnap-envctl bind-alias' }) } }
     }
     $orchestrator = New-EnvironmentOrchestrator -RunId 'r1' -JournalDirectory $directory -EnvctlPath $fake
     $verdict = Test-EnvironmentRequirement -Orchestrator $orchestrator -Requirement @{ display = 'display.main-hdr' }
@@ -352,9 +373,9 @@ Test-Case 'an ambiguous alias is refused rather than resolved' {
     $directory = New-TestDirectory
     $fake = New-FakeEnvctl -Directory $directory
     Set-FakeBehaviour -Directory $directory -Behaviour @{
-        recover           = @{ exit = 0; output = @{ dirty = $false; recovered = @() } }
-        'resolve-aliases' = @{ exit = 0; output = @{ aliases = @(
-                    @{ alias = 'display.main-hdr'; error = 'ambiguous_device'; present = $false }
+        recover           = @{ exit = 0; output = @{ journalPresent = $false; recovered = $false; mutationAllowed = $true; state = 'Clean' } }
+        'resolve-aliases' = @{ exit = 1; output = @{ ok = $false; errors = @(); candidates = @(); bindings = @(
+                    @{ alias = 'display.main-hdr'; kind = 'display'; stableId = 'x'; status = 'ambiguous_device' }
                 )
             }
         }
@@ -412,6 +433,29 @@ Test-Case 'no scenario hardcodes a device friendly name' {
             Assert-True ($alias -match '^(display|audio)\.[a-z0-9.-]+$') `
                 "$($entry.Id) requires '$alias', which is not an alias of the documented shape"
         }
+    }
+}
+
+Test-Case 'no Verify block relies on a closure the runner cannot resolve' {
+    # A `.GetNewClosure()` script block is bound to a synthetic module that does NOT
+    # inherit this script's functions, so such a block can capture a variable and then
+    # fail to call Connect-LiveVerify or Save-LiveVerifyEvidence at all -- and only at
+    # the moment a human is standing there waiting for the gate to be verified.
+    # Comment lines are stripped first: the file EXPLAINS this trap in prose, and a
+    # naive match would fail on the explanation rather than on a real call.
+    $code = @(Get-Content -LiteralPath (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1') |
+            Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
+    Assert-True ($code -notmatch '\.GetNewClosure\(\)') `
+        'a gate must hand values forward in $Gate.State, never in a closure'
+    # `\s*` before the newline would swallow it, so the line break is matched by
+    # excluding it first: [^\n]* to the end of the opening line, then one newline.
+    $pattern = 'Verify\s+=\s+\{[^' + "`n" + ']*' + "`n" + '\s*param\(([^)]*)\)'
+    $verifyBlocks = [regex]::Matches($code, $pattern)
+    Assert-True ($verifyBlocks.Count -gt 0) 'the catalog is expected to contain Verify blocks'
+    foreach ($match in $verifyBlocks) {
+        $parameters = $match.Groups[1].Value
+        Assert-True ($parameters -match '\$context\s*,\s*\$gate') `
+            "a Verify block takes ($parameters); it must take (`$context, `$gate) to read `$gate.State"
     }
 }
 

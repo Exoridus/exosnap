@@ -132,6 +132,29 @@ function Invoke-Envctl {
     return $parsed
 }
 
+function Invoke-EnvctlTolerant {
+    <#
+    .SYNOPSIS
+        Like Invoke-Envctl, but returns the parsed body on a non-zero exit instead of
+        throwing.
+    .DESCRIPTION
+        For the subcommands whose non-zero exit is a VERDICT rather than a fault --
+        `resolve-aliases` exits 1 when an alias is unbound, which is the ordinary
+        answer on a machine that does not own every device the catalogue can name.
+        Throwing there would turn "this desk has no second monitor" into a runner
+        crash. Unparseable output is still an error: that is a fault.
+    #>
+    param(
+        [Parameter(Mandatory)] [string] $EnvctlPath,
+        [Parameter(Mandatory)] [string[]] $Arguments
+    )
+    $stdout = & $EnvctlPath @Arguments 2>$null
+    $text = ($stdout | Out-String).Trim()
+    if ([string]::IsNullOrWhiteSpace($text)) { return $null }
+    try { return $text | ConvertFrom-Json }
+    catch { throw "envctl $($Arguments -join ' ') produced unparseable output: $text" }
+}
+
 function New-EnvironmentOrchestrator {
     <#
     .SYNOPSIS
@@ -152,9 +175,14 @@ function New-EnvironmentOrchestrator {
     )
 
     $resolved = Resolve-EnvctlPath -ExplicitPath $EnvctlPath
+    # One journal FILE per campaign, inside the run directory. envctl takes a file
+    # path, not a directory: a transaction has exactly one journal, and the whole
+    # dirty-startup gate is "does that file exist and is it unfinished".
+    $journalPath = Join-Path $JournalDirectory 'env-journal.json'
     $context = [pscustomobject]@{
         RunId            = $RunId
         JournalDirectory = $JournalDirectory
+        JournalPath      = $journalPath
         EnvctlPath       = $resolved
         AliasProfile     = $AliasProfile
         Available        = ($null -ne $resolved)
@@ -168,15 +196,26 @@ function New-EnvironmentOrchestrator {
         New-Item -ItemType Directory -Path $JournalDirectory -Force | Out-Null
     }
 
-    $arguments = @('recover', '--journal-dir', $JournalDirectory)
-    if (-not [string]::IsNullOrWhiteSpace($AliasProfile)) { $arguments += @('--aliases', $AliasProfile) }
+    $arguments = @('recover', '--journal', $journalPath)
+    if (-not [string]::IsNullOrWhiteSpace($AliasProfile)) { $arguments += @('--profile', $AliasProfile) }
     try {
         $result = Invoke-Envctl -EnvctlPath $resolved -Arguments $arguments
         if ($null -ne $result) {
-            if ($result.PSObject.Properties.Name -contains 'recovered') { $context.Recovered = @($result.recovered) }
-            if ($result.PSObject.Properties.Name -contains 'dirty' -and $result.dirty) {
+            # `mutationAllowed` is the gate envctl computes, and it is the only field
+            # worth trusting here: a journal that was present and restored leaves it
+            # true, and anything else -- unreadable journal, a restore that could not
+            # verify, a device still missing -- leaves it false. Deriving "dirty" from
+            # `journalPresent` instead would call a successfully recovered run dirty.
+            if ($result.PSObject.Properties.Name -contains 'evidence' -and $null -ne $result.evidence -and
+                $result.evidence.PSObject.Properties.Name -contains 'properties') {
+                $context.Recovered = @($result.evidence.properties | ForEach-Object { $_.property })
+            }
+            if ($result.PSObject.Properties.Name -contains 'mutationAllowed' -and -not $result.mutationAllowed) {
                 $context.Dirty = $true
-                $context.DirtyDetail = if ($result.PSObject.Properties.Name -contains 'detail') { $result.detail } else { 'recovery incomplete' }
+                $context.DirtyDetail = "recovery left the environment in state '$($result.state)'"
+                if ($result.PSObject.Properties.Name -contains 'error' -and $result.error) {
+                    $context.DirtyDetail += ": $($result.error)"
+                }
             }
         }
     }
@@ -212,7 +251,7 @@ function Get-EnvironmentSnapshot {
     if (-not $Orchestrator.Available) { return $null }
     $arguments = @('snapshot')
     if (-not [string]::IsNullOrWhiteSpace($Orchestrator.AliasProfile)) {
-        $arguments += @('--aliases', $Orchestrator.AliasProfile)
+        $arguments += @('--profile', $Orchestrator.AliasProfile)
     }
     return Invoke-Envctl -EnvctlPath $Orchestrator.EnvctlPath -Arguments $arguments
 }
@@ -246,9 +285,14 @@ function Resolve-EnvironmentAliases {
     if (-not $Orchestrator.Available) { return $null }
     $arguments = @('resolve-aliases')
     if (-not [string]::IsNullOrWhiteSpace($Orchestrator.AliasProfile)) {
-        $arguments += @('--aliases', $Orchestrator.AliasProfile)
+        $arguments += @('--profile', $Orchestrator.AliasProfile)
     }
-    return Invoke-Envctl -EnvctlPath $Orchestrator.EnvctlPath -Arguments $arguments
+    # resolve-aliases exits 1 when an alias is missing or ambiguous, which is a
+    # perfectly ordinary answer for a machine that does not have every device a
+    # catalogue mentions. The BODY is what carries the verdict, so the non-zero exit
+    # is read rather than thrown on.
+    try { return Invoke-Envctl -EnvctlPath $Orchestrator.EnvctlPath -Arguments $arguments }
+    catch { return Invoke-EnvctlTolerant -EnvctlPath $Orchestrator.EnvctlPath -Arguments $arguments }
 }
 
 function Test-EnvironmentRequirement {
@@ -274,21 +318,66 @@ function Test-EnvironmentRequirement {
 
     foreach ($key in $Requirement.Keys) {
         $alias = $Requirement[$key]
+
+        # An error carrying this alias wins over a binding row, because that is where
+        # `unbound_alias` lands: an alias the profile never bound has no row at all.
+        if ($null -ne $Aliases -and $Aliases.PSObject.Properties.Name -contains 'errors') {
+            $failure = @($Aliases.errors) | Where-Object { $_.alias -eq $alias } | Select-Object -First 1
+            if ($null -ne $failure) {
+                return @{ Satisfied = $false; Reason = "$($failure.code): $($failure.message)" }
+            }
+        }
+
         $binding = $null
-        if ($null -ne $Aliases -and $Aliases.PSObject.Properties.Name -contains 'aliases') {
-            $binding = @($Aliases.aliases) | Where-Object { $_.alias -eq $alias } | Select-Object -First 1
+        if ($null -ne $Aliases -and $Aliases.PSObject.Properties.Name -contains 'bindings') {
+            $binding = @($Aliases.bindings) | Where-Object { $_.alias -eq $alias } | Select-Object -First 1
         }
         if ($null -eq $binding) {
-            return @{ Satisfied = $false; Reason = "unbound_alias: '$alias' is not bound on this machine" }
+            return @{ Satisfied = $false
+                Reason           = "unbound_alias: '$alias' is not bound on this machine. Bind it once with: " +
+                "exosnap-envctl bind-alias --alias $alias --stable-id <id from resolve-aliases>"
+            }
         }
-        if ($binding.PSObject.Properties.Name -contains 'error' -and $binding.error) {
-            return @{ Satisfied = $false; Reason = "$($binding.error): '$alias'" }
-        }
-        if ($binding.PSObject.Properties.Name -contains 'present' -and -not $binding.present) {
-            return @{ Satisfied = $false; Reason = "'$alias' is bound but the device is not present" }
+        switch ("$($binding.status)") {
+            'ok' { }
+            # A friendly name that drifted is not a failure: the binding is by stable
+            # id, and the name is a label. Reporting it as unmet would make a monitor
+            # firmware update look like missing hardware.
+            'friendly_name_changed' { }
+            'ambiguous_device' {
+                return @{ Satisfied = $false; Reason = "ambiguous_device: '$alias' matches more than one device; nothing was chosen" }
+            }
+            'device_not_present' {
+                return @{ Satisfied = $false; Reason = "'$alias' is bound to $($binding.stableId) but that device is not present" }
+            }
+            default {
+                return @{ Satisfied = $false; Reason = "'$alias' reports status '$($binding.status)'" }
+            }
         }
     }
     return @{ Satisfied = $true; Reason = $null }
+}
+
+function ConvertTo-RestoreResult {
+    <#
+    .SYNOPSIS
+        Maps envctl's terminal transaction state onto the report's restore taxonomy.
+    .DESCRIPTION
+        Two vocabularies for one fact, deliberately kept apart: envctl speaks about a
+        transaction's state machine, the release report speaks about whether the
+        machine was put back. The mapping is total -- an unrecognised state becomes
+        RESTORE_FAILED, never RESTORED, because "I do not know what happened" and
+        "everything is fine" must not be the same answer.
+    #>
+    param([string] $State)
+    switch ("$State") {
+        'Restored' { return 'RESTORED' }
+        'RestorePending' { return 'RESTORE_PENDING' }
+        'RestorePendingDeviceUnavailable' { return 'RESTORE_PENDING_DEVICE_UNAVAILABLE' }
+        'RestoreFailed' { return 'RESTORE_FAILED' }
+        'Clean' { return 'RESTORED' }   # nothing was ever applied
+        default { return 'RESTORE_FAILED' }
+    }
 }
 
 function Invoke-EnvironmentTransaction {
@@ -322,11 +411,19 @@ function Invoke-EnvironmentTransaction {
     )
 
     $outcome = @{
-        Product       = $null
-        RestoreResult = 'NOT_APPLICABLE'
-        Evidence      = $null
-        TransactionId = $null
-        Error         = $null
+        Product        = $null
+        RestoreResult  = 'NOT_APPLICABLE'
+        Evidence       = $null
+        TransactionId  = $null
+        Error          = $null
+        # Set when the environment could not be brought to the desired state at all,
+        # so the scenario body never ran. Carried as a TYPED code rather than a thrown
+        # message because the caller has to tell two very different things apart: a
+        # display that does not offer the requested mode (UNAVAILABLE -- a fact about
+        # this desk) from a setter that claimed success and read back wrong (FAIL -- a
+        # fact about the mechanism).
+        SetupError     = $null
+        SetupErrorCode = $null
     }
 
     # A desired state with nothing in it mutates nothing, journals nothing and needs
@@ -344,15 +441,33 @@ function Invoke-EnvironmentTransaction {
     }
 
     $desiredFile = Join-Path $Orchestrator.JournalDirectory "desired-$([guid]::NewGuid().ToString('n')).json"
-    Write-EnvctlJsonAtomic -Path $desiredFile -Value $Desired
+    # The document envctl reads is { "desired": { "<alias>:<property>": "<value>" } }
+    # and every value must be a string -- a JSON number here would be a type error at
+    # the boundary rather than a refresh rate.
+    Write-EnvctlJsonAtomic -Path $desiredFile -Value @{ desired = $Desired }
 
     $arguments = @('begin', '--scenario', $Scenario, '--run-id', $Orchestrator.RunId,
-        '--journal-dir', $Orchestrator.JournalDirectory, '--desired', $desiredFile)
+        '--journal', $Orchestrator.JournalPath, '--desired', $desiredFile)
     if (-not [string]::IsNullOrWhiteSpace($Orchestrator.AliasProfile)) {
-        $arguments += @('--aliases', $Orchestrator.AliasProfile)
+        $arguments += @('--profile', $Orchestrator.AliasProfile)
     }
 
-    $begun = Invoke-Envctl -EnvctlPath $Orchestrator.EnvctlPath -Arguments $arguments
+    $begun = Invoke-EnvctlTolerant -EnvctlPath $Orchestrator.EnvctlPath -Arguments $arguments
+    Remove-Item -LiteralPath $desiredFile -Force -ErrorAction SilentlyContinue
+    if ($null -eq $begun -or -not $begun.ok) {
+        $outcome.SetupErrorCode = if ($null -ne $begun -and $begun.PSObject.Properties.Name -contains 'errorCode') {
+            "$($begun.errorCode)"
+        }
+        else { 'begin_failed' }
+        $outcome.SetupError = if ($null -ne $begun -and $begun.PSObject.Properties.Name -contains 'error') {
+            "$($begun.error)"
+        }
+        else { 'envctl begin produced no usable answer' }
+        # `begin` rolls back whatever it had already applied before it gave up, so
+        # there is nothing to restore here -- and its own journal is gone. Reporting
+        # RESTORED would be a claim about a transaction that never opened.
+        return $outcome
+    }
     $outcome.TransactionId = $begun.transactionId
     $journalPath = $begun.journalPath
 
@@ -366,10 +481,16 @@ function Invoke-EnvironmentTransaction {
     }
     finally {
         try {
-            $restore = Invoke-Envctl -EnvctlPath $Orchestrator.EnvctlPath `
+            # `restore` exits 4 when the environment is still owed something, which is
+            # a verdict this function has to REPORT rather than throw on -- the report
+            # needs RESTORE_FAILED next to the product result, not a runner stack
+            # trace instead of both.
+            $restore = Invoke-EnvctlTolerant -EnvctlPath $Orchestrator.EnvctlPath `
                 -Arguments @('restore', '--journal', $journalPath)
-            $outcome.RestoreResult = $restore.restoreResult
-            if ($restore.PSObject.Properties.Name -contains 'evidence') { $outcome.Evidence = $restore.evidence }
+            $outcome.RestoreResult = ConvertTo-RestoreResult -State $(if ($null -ne $restore) { $restore.state } else { $null })
+            if ($null -ne $restore -and $restore.PSObject.Properties.Name -contains 'evidence') {
+                $outcome.Evidence = $restore.evidence
+            }
             if ($outcome.RestoreResult -ne 'RESTORED') {
                 $Orchestrator.Dirty = $true
                 $Orchestrator.DirtyDetail = "scenario '$Scenario' ended in $($outcome.RestoreResult)"
@@ -386,6 +507,7 @@ function Invoke-EnvironmentTransaction {
     return $outcome
 }
 
-Export-ModuleMember -Function Write-EnvctlJsonAtomic, Resolve-EnvctlPath, Invoke-Envctl, New-EnvironmentOrchestrator,
+Export-ModuleMember -Function Write-EnvctlJsonAtomic, Resolve-EnvctlPath, Invoke-Envctl,
+Invoke-EnvctlTolerant, ConvertTo-RestoreResult, New-EnvironmentOrchestrator,
 Assert-EnvironmentClean, Get-EnvironmentSnapshot, Get-EnvironmentCapabilities,
 Resolve-EnvironmentAliases, Test-EnvironmentRequirement, Invoke-EnvironmentTransaction

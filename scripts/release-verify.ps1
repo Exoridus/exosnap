@@ -193,11 +193,29 @@ function Get-ReleaseEnvironmentFacts {
             $snapshot = Get-EnvironmentSnapshot -Orchestrator $Orchestrator
             if ($null -ne $snapshot -and $snapshot.PSObject.Properties.Name -contains 'properties') {
                 foreach ($property in $snapshot.properties) {
-                    $facts["env.$($property.id)"] = "$($property.value)"
+                    # `key` is "<alias>:<property>" -- the stable-id-backed identity a
+                    # scenario declares. The friendly name is deliberately not part of
+                    # the fingerprint: a monitor firmware update that renames the panel
+                    # must not invalidate every display verdict.
+                    $facts["env.$($property.key)"] = "$($property.value)"
                 }
             }
         }
         catch { $facts['envctlError'] = $_.Exception.Message }
+
+        # Which aliases are bound is itself an environment fact. Without it, binding a
+        # display for the first time would leave every alias-dependent scenario stuck
+        # at the UNAVAILABLE it earned while nothing was bound -- the staleness pass
+        # would see an unchanged fingerprint and never offer them again.
+        try {
+            $aliases = Resolve-EnvironmentAliases -Orchestrator $Orchestrator
+            if ($null -ne $aliases -and $aliases.PSObject.Properties.Name -contains 'bindings') {
+                $bound = @($aliases.bindings | ForEach-Object { "$($_.alias)=$($_.status)" } | Sort-Object)
+                $facts['aliasProfile'] = ($bound -join '|')
+            }
+            else { $facts['aliasProfile'] = 'none' }
+        }
+        catch { $facts['aliasProfile'] = 'unresolved' }
     }
 
     $stringified = @{}
@@ -281,7 +299,10 @@ function Invoke-ReleaseHumanGate {
     }
 
     Write-Step 'verifying the consequence independently...'
-    $verdict = & $Gate.Verify $Context
+    # The gate is passed back to its own Verify block so a scenario can hand values
+    # forward in $Gate.State instead of capturing them in a closure -- see
+    # New-ReleaseContext for why closures cannot resolve this script's functions.
+    $verdict = & $Gate.Verify $Context $Gate
     if ($null -eq $verdict) {
         return @{ Result = 'UNVERIFIED'; Message = 'The gate verification returned nothing' }
     }
@@ -299,6 +320,10 @@ function Invoke-ReleaseHumanGate {
 # ---------------------------------------------------------------------------
 
 $script:Session = $null
+# Script-scoped so the plain (non-closure) blocks in New-ReleaseContext can reach
+# them. See the note there for why closures are not usable here.
+$script:CurrentRun = $null
+$script:CurrentContext = $null
 
 function Start-ReleaseSession {
     param([Parameter(Mandatory)] $Run)
@@ -353,8 +378,13 @@ function Stop-ReleaseSession {
         # CloseMainWindow rather than a kill: the close-to-tray refusal and the close
         # guards are product behaviour, and killing would step straight over them.
         [void]$session.Process.CloseMainWindow()
-        if (-not $session.Process.WaitForExit(15000)) {
-            Write-Host '   WARNING: the application did not exit within 15 s of being asked to close.' -ForegroundColor Red
+        # A close that does not exit is not a defect here: closing to the tray is
+        # product behaviour and the setting that governs it is a user choice. The
+        # process is ended after the grace period so the next scenario starts from a
+        # known state, and REL-SHUTDOWN-001 is where the exit invariant is actually
+        # asserted -- not in a teardown that cannot tell the two apart.
+        if (-not $session.Process.WaitForExit(10000)) {
+            Write-Step 'the window closed to the tray; ending the process for the next scenario'
             $session.Process | Stop-Process -Force -ErrorAction SilentlyContinue
         }
     }
@@ -398,17 +428,30 @@ function ConvertTo-Hashtable {
 # ---------------------------------------------------------------------------
 
 function New-ReleaseContext {
+    <#
+    .SYNOPSIS
+        The object every scenario body receives.
+    .DESCRIPTION
+        EnsureSession and HumanGate are PLAIN script blocks over script-scoped state,
+        deliberately not `.GetNewClosure()` ones. GetNewClosure binds the captured
+        VARIABLES into a fresh synthetic module, and that module does not inherit this
+        script's functions -- so a closure invoked from inside EnvironmentOrchestrator
+        (a real module) failed with "Start-ReleaseSession is not recognized" while the
+        function was plainly defined a few lines above. A plain block keeps the
+        script's session state and resolves both.
+    #>
     param([Parameter(Mandatory)] $Run, [Parameter(Mandatory)] $Orchestrator)
+    $script:CurrentRun = $Run
     return [pscustomobject]@{
-        RunDirectory  = $Run.Directory
-        Artifact      = $Run.Artifact
-        Environment   = $Run.Environment
-        Orchestrator  = $Orchestrator
+        RunDirectory   = $Run.Directory
+        Artifact       = $Run.Artifact
+        Environment    = $Run.Environment
+        Orchestrator   = $Orchestrator
         RepositoryRoot = $repositoryRoot
-        State         = @{}
-        EnsureSession = { Start-ReleaseSession -Run $Run }.GetNewClosure()
-        EndSession    = { Stop-ReleaseSession }
-        HumanGate     = $null   # assigned below; needs the context itself
+        State          = @{}
+        EnsureSession  = { Start-ReleaseSession -Run $script:CurrentRun }
+        EndSession     = { Stop-ReleaseSession }
+        HumanGate      = { param($gate) Invoke-ReleaseHumanGate -Gate $gate -Context $script:CurrentContext }
     }
 }
 
@@ -421,7 +464,7 @@ function Invoke-Scenarios {
     )
 
     $context = New-ReleaseContext -Run $Run -Orchestrator $Orchestrator
-    $context.HumanGate = { param($gate) Invoke-ReleaseHumanGate -Gate $gate -Context $context }.GetNewClosure()
+    $script:CurrentContext = $context
 
     $environmentTable = ConvertTo-Hashtable $Run.Environment
     $artifactFingerprint = $Run.Artifact.fingerprint
@@ -539,6 +582,20 @@ function Invoke-OneScenario {
     $result.RestoreResult = $transaction.RestoreResult
     $result.EnvironmentEvidence = $transaction.Evidence
 
+    if ($null -ne $transaction.SetupErrorCode) {
+        # The environment could not be brought to the state the scenario needs, so the
+        # product was never exercised. Which of the two answers that is depends
+        # entirely on WHY, and the codes say so:
+        #   apply_rejected / device_not_present -- this machine does not offer it.
+        #     UNAVAILABLE: a fact about the desk, not about ExoSnap.
+        #   verify_mismatch and everything else -- the mechanism misbehaved.
+        #     FAIL: something claimed success and was not telling the truth.
+        $benign = @('apply_rejected', 'device_not_present', 'unknown_property', 'not_mutable')
+        $result.Result = if ($transaction.SetupErrorCode -in $benign) { 'UNAVAILABLE' } else { 'FAIL' }
+        $result.Message = "$($transaction.SetupErrorCode): $($transaction.SetupError)"
+        return $result
+    }
+
     if ($null -ne $transaction.Error) {
         $result.Result = 'FAIL'
         $result.Message = "Scenario threw: $($transaction.Error)"
@@ -560,19 +617,41 @@ function Invoke-OneScenario {
 # Commands
 # ---------------------------------------------------------------------------
 
+function Expand-ListArgument {
+    <#
+    .SYNOPSIS
+        Normalises a list parameter that may have arrived as one comma-joined string.
+    .DESCRIPTION
+        `pwsh -File script.ps1 -Only A,B` does NOT parse PowerShell array syntax: the
+        whole thing arrives as the single string "A,B". Without this, such a call
+        matched no scenario and the runner printed "Nothing runnable" -- a silently
+        empty selection that reads exactly like "everything is already done".
+    #>
+    param([string[]] $Values)
+    if ($null -eq $Values) { return @() }
+    return @($Values | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+}
+
 function Select-Entries {
     param([Parameter(Mandatory)] [object[]] $Catalog, [object[]] $Runnable)
     $entries = if ($null -eq $Runnable) { $Catalog } else { $Runnable }
-    if ($null -ne $Only -and $Only.Count -gt 0) {
-        $entries = @($entries | Where-Object { $Only -contains $_.Id })
+    $selected = @(Expand-ListArgument -Values $Only)
+    if ($selected.Count -gt 0) {
+        $unknown = @($selected | Where-Object { $_ -notin @($Catalog | ForEach-Object { $_.Id }) })
+        if ($unknown.Count -gt 0) {
+            $names = $unknown -join ', '
+            throw "No such scenario: $names. Run 'release-verify.ps1 list' for the catalog."
+        }
+        $entries = @($entries | Where-Object { $selected -contains $_.Id })
     }
     # Opt-in classes stay out of a default sweep. A 45-minute mixed-clock recording
     # and a scenario that asks the operator to unplug an audio interface are not
     # things a runner should start because somebody typed `run`.
-    $included = @($IncludeClass)
+    $included = @(Expand-ListArgument -Values $IncludeClass)
     $entries = @($entries | Where-Object {
             $optIn = $_.PSObject.Properties.Name -contains 'OptIn' -and $_.OptIn
-            (-not $optIn) -or ($included -contains $_.Class) -or ($null -ne $Only -and $Only -contains $_.Id)
+            (-not $optIn) -or ($included -contains $_.Class) -or ($selected -contains $_.Id)
         })
     return [object[]]$entries
 }
@@ -651,10 +730,13 @@ switch ($Command) {
             -JournalDirectory (Join-Path $directory 'environment') -EnvctlPath $EnvctlPath -AliasProfile $AliasProfile
         Resolve-LiveVerifyInterrupted -Run $run | Out-Null
         $runnable = @(Get-LiveVerifyRunnableChecks -Run $run -Catalog $catalog)
-        $entries = Select-Entries -Catalog $catalog -Runnable $runnable
+        # @(...) around the call, not only inside it: a function that returns an
+        # EMPTY [object[]] hands back $null, and $null.Count throws under
+        # StrictMode -- which is what "nothing left to run" looked like.
+        $entries = @(Select-Entries -Catalog $catalog -Runnable $runnable)
         if ($entries.Count -eq 0) { Write-Host 'Nothing runnable.'; return }
         Invoke-Scenarios -Run $run -Orchestrator $orchestrator -Catalog $catalog -Entries $entries
-        Write-LiveVerifyReport -Run $run
+        Write-LiveVerifyReport -Run $run | Out-Null
         return
     }
 
@@ -674,10 +756,13 @@ switch ($Command) {
         Write-Heading "Resumed $($run.Run.runId)"
         if ($stale.Count -gt 0) { Write-Host "  $($stale.Count) result(s) became STALE: $($stale -join ', ')" }
         $runnable = @(Get-LiveVerifyRunnableChecks -Run $run -Catalog $catalog)
-        $entries = Select-Entries -Catalog $catalog -Runnable $runnable
+        # @(...) around the call, not only inside it: a function that returns an
+        # EMPTY [object[]] hands back $null, and $null.Count throws under
+        # StrictMode -- which is what "nothing left to run" looked like.
+        $entries = @(Select-Entries -Catalog $catalog -Runnable $runnable)
         if ($entries.Count -eq 0) { Write-Host 'Nothing runnable.'; return }
         Invoke-Scenarios -Run $run -Orchestrator $orchestrator -Catalog $catalog -Entries $entries
-        Write-LiveVerifyReport -Run $run
+        Write-LiveVerifyReport -Run $run | Out-Null
         return
     }
 
@@ -712,7 +797,7 @@ switch ($Command) {
     'report' {
         $directory = Resolve-RunDirectory
         $run = Get-LiveVerifyRun -RunDirectory $directory
-        Write-LiveVerifyReport -Run $run
+        Write-LiveVerifyReport -Run $run | Out-Null
         # The release-facing name. Same content as report.json -- one writer, so the
         # machine-readable release verdict and the Live Verify report cannot disagree.
         Copy-Item -LiteralPath (Join-Path $directory 'report.json') `
