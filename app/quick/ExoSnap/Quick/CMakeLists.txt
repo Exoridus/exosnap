@@ -291,6 +291,19 @@ target_sources(exosnap
         ${PROJECT_SOURCE_DIR}/app/diagnostics/CrashSessionContext.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/CrashSessionContext.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/ElevationProvider.cpp
+        # ADR 0033 present diagnostics. These sources existed since the ETW slice
+        # landed but were compiled ONLY by present_provider_tests, so the shipping
+        # binary contained the no-op session and could never report a present mode.
+        # Wave D compiles them here and defines EXOSNAP_HAS_PRESENTMON below, which
+        # is what makes the real ETW consumer reachable at all.
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/PresentMonProvider.cpp
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/PresentMonProvider.h
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/PresentMonEtwSession.cpp
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/PresentMonEtwSession.h
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/PresentModeMapping.cpp
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/PresentModeMapping.h
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/PresentSnapshotOverlay.cpp
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/PresentSnapshotOverlay.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/SupportBundle.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/ZipWriter.cpp
         ${PROJECT_SOURCE_DIR}/app/services/SupportBundleService.cpp
@@ -463,6 +476,16 @@ target_compile_options(exosnap
     PRIVATE
         $<$<CXX_COMPILER_ID:MSVC>:/wd4702>
 )
+
+# ADR 0033 / Wave D: the real in-process PresentMon ETW consumer. Without the
+# define, PresentMonEtwSession compiles to the graceful no-op branch and
+# IsAvailable() is false forever -- which is exactly the state the shipping
+# binary was in, and why present mode, tearing, discarded count and mode flips
+# were structurally unreachable rather than merely unavailable.
+if(EXOSNAP_WITH_PRESENTMON)
+    target_compile_definitions(exosnap PRIVATE EXOSNAP_HAS_PRESENTMON)
+    target_link_libraries(exosnap PRIVATE PresentMon::consumer)
+endif()
 
 target_link_libraries(exosnap
     PRIVATE

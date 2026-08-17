@@ -24,6 +24,8 @@
 #include "ShellAdapter.h"
 
 #include "diagnostics/AudioSourceDegradation.h"
+#include "diagnostics/ElevationProvider.h"
+#include "diagnostics/PresentMonProvider.h"
 #include "diagnostics/WindowCaptureStall.h"
 #include "models/RecordingPreset.h"
 #include "models/RecordingPresetRegistry.h"
@@ -91,6 +93,11 @@ class QuickApplication {
     [[nodiscard]] CrashReportAdapter* crashReportAdapter() noexcept;
     [[nodiscard]] QQmlApplicationEngine& engine() noexcept;
     [[nodiscard]] RecordingCoordinator* recordingCoordinator() noexcept;
+    // The present-diagnostics provider, or null when this build/launch has none.
+    // Sampling DRAINS the ETW queue and advances reader-side accumulators, so it is
+    // GUI-thread-only -- which every caller is, because the control channel
+    // marshals its dispatch onto the GUI thread before touching this.
+    [[nodiscard]] diagnostics::PresentMonProvider* presentProvider() noexcept;
     // Read-only view of the shared record state. The adapter above exposes what
     // QML binds to; the Live Verify result snapshot needs the typed result
     // fields (paths, container/codecs, marker count) that never became QML
@@ -445,6 +452,22 @@ class QuickApplication {
     // by the coordinator's diagnostics callback (~5 Hz, Qt main thread) — no timer
     // and no probe of its own.
     void observeWindowCaptureStall(const recorder_core::RecordingDiagnosticsSnapshot& snapshot);
+    // Announces the present-attribution boundary. `pid` is the captured window's
+    // process for Window targets and 0 for Display/Region (whose presenter is the
+    // dominant one, exactly like the idle desktop).
+    //
+    // Every forward resets the per-recording present / discard / mode-flip
+    // accumulators, so the two callers want different things and say so:
+    //
+    //   force == false (idle selection change) -- skip when the pid did not move, so
+    //     re-selecting the same target does not churn.
+    //   force == true (recording start) -- reset UNCONDITIONALLY. A Display or Region
+    //     recording targets pid 0 exactly like the idle desktop did a moment earlier,
+    //     so a pid-equality guard would carry every present counted while the user was
+    //     still choosing a target into the recording's statistics.
+    void updatePresentAttribution(unsigned long pid, bool force);
+    // The captured window's process id for the current selection, or 0.
+    [[nodiscard]] unsigned long presentTargetPidForSelection() const;
     // Dismisses the standing capture-stall toast if one is up. Called when frames
     // resume and again when the session leaves Recording/Paused — the toast says
     // "the recording is still running", which stops being true then.
@@ -475,6 +498,19 @@ class QuickApplication {
     SettingsAdapter settings_adapter_;
     DeviceAdapter device_adapter_;
     DiagnosticsAdapter diagnostics_adapter_;
+    // ADR 0033 present diagnostics. Declared BEFORE the provider that borrows it:
+    // PresentMonProvider holds a reference to the elevation provider for its whole
+    // lifetime, so this member must outlive it.
+    diagnostics::Win32ElevationProvider elevation_provider_;
+    // Null until initializeDiagnosticsArea() runs. Owns a real ETW session while the
+    // gate (opt-in AND elevation) is open and nothing at all otherwise -- an
+    // unelevated launch never opens a session and never prompts for one.
+    std::unique_ptr<diagnostics::PresentMonProvider> present_provider_;
+    // The process id present statistics are currently attributed to (0 == dominant
+    // presenter / no window target). Kept so the attribution boundary is only
+    // announced to the session when it actually moves; every announcement resets the
+    // per-recording accumulators.
+    unsigned long present_target_pid_ = 0;
     LogsAdapter logs_adapter_;
     EditSessionAdapter edit_session_adapter_;
     EditTimelineAdapter edit_timeline_adapter_;

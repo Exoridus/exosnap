@@ -777,6 +777,18 @@ exosnap_add_gtest(
 )
 target_include_directories(present_provider_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
+# Wave D: the app -> engine present overlay. Pure mapping; needs recorder_core for
+# the snapshot type but no ETW, no elevation and no recording.
+exosnap_add_gtest(
+    NAME present_overlay_tests
+    TEST_PREFIX present_overlay.
+    SOURCES
+        tests/test_present_snapshot_overlay.cpp
+        diagnostics/PresentSnapshotOverlay.cpp
+    LIBRARIES Qt6::Core recorder_core
+)
+target_include_directories(present_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
 # Pure PresentMon present-mode mapping. Maps raw present events (POD) to our
 # diagnostics::PresentSample. No Win32/ETW headers; unit-testable in isolation.
 exosnap_add_gtest(

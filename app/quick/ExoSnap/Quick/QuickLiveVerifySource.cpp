@@ -22,6 +22,7 @@
 #include "ExoSnapBuildInfo.h"
 
 #include "diagnostics/NativeWindowFacts.h"
+#include "diagnostics/PresentMonProvider.h"
 #include "models/AboutInfo.h"
 #include "observability/DiagnosticsResultsJson.h"
 #include "observability/EnvironmentSnapshot.h"
@@ -739,13 +740,22 @@ QJsonObject QuickLiveVerifySource::EnvironmentSnapshot() const {
     inputs.audio_outputs = map_endpoints(audio.outputs);
     inputs.audio_observed = !audio.inputs.isEmpty() || !audio.outputs.isEmpty();
 
-    // PresentMon: this frontend instantiates no provider, so there is nothing to
-    // sample. The opt-in and the elevation state are still real and are reported,
-    // because they are what a client needs in order to know WHY there is no
-    // present measurement rather than merely that there is none.
+    // PresentMon (ADR 0033). The opt-in and the elevation state are reported
+    // unconditionally, because they are what a client needs in order to know WHY
+    // there is no present measurement rather than merely that there is none.
+    //
+    // Sampling drains the ETW queue and advances the reader-side accumulators, so it
+    // is GUI-thread-only. That holds here: the control server marshals every dispatch
+    // onto the application object with a queued connection before this runs.
     inputs.present.opt_in = application_.appSettings().present_diagnostics_optin;
     inputs.present.elevated = inputs.elevated;
-    inputs.present.available = false;
+    if (diagnostics::PresentMonProvider* provider = application_.presentProvider(); provider != nullptr) {
+        inputs.present.available = provider->IsAvailable();
+        if (inputs.present.available)
+            inputs.present.sample = provider->Sample();
+    } else {
+        inputs.present.available = false;
+    }
 
     return observability::EnvironmentSnapshotToJson(inputs);
 }

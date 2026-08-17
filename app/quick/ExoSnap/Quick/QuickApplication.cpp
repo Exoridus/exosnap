@@ -13,6 +13,7 @@
 #include "diagnostics/CrashSessionContext.h"
 #include "diagnostics/ElevationProvider.h"
 #include "diagnostics/FixActionDispatcher.h"
+#include "diagnostics/PresentSnapshotOverlay.h"
 #include "diagnostics/StartupClock.h"
 #include "models/CompletedRecording.h"
 #include "models/EditContextFactory.h"
@@ -456,6 +457,12 @@ void QuickApplication::initializeRecordWorkflow() {
             // arrive standing over this one.
             audio_degradation_monitor_.Reset();
             clearAudioSourceDegradedWarning();
+            // ADR 0033: same reason, one class further. Present / discarded / mode-flip
+            // totals are per-recording, and a Display or Region recording shares pid 0
+            // with the idle desktop -- so this boundary is announced unconditionally,
+            // or every present counted while the user was still picking a target would
+            // be reported as part of the recording.
+            updatePresentAttribution(presentTargetPidForSelection(), /*force=*/true);
         }
         // The standing stall notice says "the recording is still running". Once
         // the session leaves Recording/Paused that is no longer true, so the toast
@@ -490,7 +497,23 @@ void QuickApplication::initializeRecordWorkflow() {
         updateMeters();
         synchronizeRecordState();
     });
-    recording_coordinator_->SetDiagnosticsCallback([this](const recorder_core::RecordingDiagnosticsSnapshot& snapshot) {
+    recording_coordinator_->SetDiagnosticsCallback([this](const recorder_core::RecordingDiagnosticsSnapshot& measured) {
+        // ADR 0033 / Wave D. The engine measures no presentation, so the present
+        // fields arrive Unavailable on every snapshot; the elevation- and opt-in-gated
+        // ETW consumer is the only producer and it lives here. Overlaying ONCE at the
+        // single fan-out point is what makes the Diagnostics surface, the
+        // capture-stall classifier's exclusive-fullscreen refinement and
+        // `pipeline.snapshot` answer from the same measurement instead of three.
+        //
+        // This runs on the GUI thread (PostDiagnostics queues it onto the application
+        // object), which is the thread PresentMonEtwSession::Latest() requires.
+        recorder_core::RecordingDiagnosticsSnapshot snapshot = measured;
+        if (present_provider_ != nullptr) {
+            const diagnostics::PresentSample sample = present_provider_->Sample();
+            diagnostics::ApplyPresentSample(snapshot.capture, sample);
+            diagnostics_adapter_.setPresentSample(sample.available ? std::optional<diagnostics::PresentSample>(sample)
+                                                                   : std::nullopt);
+        }
         record_view_model_.av_drift_available =
             snapshot.av_drift_availability == recorder_core::MetricAvailability::Available;
         record_view_model_.av_drift_ms = record_view_model_.av_drift_available ? snapshot.av_drift_ms : 0.0;
@@ -1385,11 +1408,24 @@ void QuickApplication::initializeSettingsArea() {
 void QuickApplication::initializeDiagnosticsArea() {
     diagnostics_adapter_.setCapabilitySet(capabilities_);
     diagnostics_adapter_.setExpertMode(settings_.expert_mode_enabled);
-    {
-        // The elevation fact is a one-shot process property, not a per-refresh probe.
-        diagnostics::Win32ElevationProvider elevation;
-        diagnostics_adapter_.setElevated(elevation.IsElevated());
-    }
+    // The elevation fact is a one-shot process property, not a per-refresh probe.
+    const bool elevated = elevation_provider_.IsElevated();
+    diagnostics_adapter_.setElevated(elevated);
+
+    // ADR 0033 / Wave D: the present-diagnostics provider. Constructing it is free --
+    // the constructor opens nothing. SetOptIn() is what evaluates the gate
+    // (opt-in AND elevation) and starts the ETW session, so an unelevated process or
+    // one with the opt-in off holds a provider that reports `available: false` and
+    // owns no session, which is exactly what `environment.snapshot` must be able to
+    // explain the difference between.
+    present_provider_ =
+        std::make_unique<diagnostics::PresentMonProvider>(elevation_provider_, settings_.present_diagnostics_optin);
+    present_provider_->SetOptIn(settings_.present_diagnostics_optin);
+    diagnostics::AppLog::info(QStringLiteral("present"),
+                              QStringLiteral("provider constructed optIn=%1 elevated=%2 available=%3")
+                                  .arg(settings_.present_diagnostics_optin ? 1 : 0)
+                                  .arg(elevated ? 1 : 0)
+                                  .arg(present_provider_->IsAvailable() ? 1 : 0));
 
     // Single global Expert state, shared with Settings (AppSettingsStore).
     QObject::connect(&diagnostics_adapter_, &DiagnosticsAdapter::expertModeChanged, &diagnostics_adapter_,
@@ -1509,6 +1545,10 @@ void QuickApplication::updateCaptureEvidenceTarget() {
     if (!same_target(pushed_selected_target_, target)) {
         pushed_selected_target_ = target;
         diagnostics_adapter_.setSelectedCaptureTarget(target);
+        // Idle attribution boundary (ADR 0033): present statistics follow the
+        // selection, so the Diagnostics page describes the source the user is
+        // looking at rather than whatever presented last.
+        updatePresentAttribution(presentTargetPidForSelection(), /*force=*/false);
     }
     // Same resolver the coordinator's own native-HDR10 decision uses
     // (FindTargetDisplayFacts over the probed display facts), so the blocker and
@@ -1788,6 +1828,7 @@ void QuickApplication::wireSettingsCommands() {
                      [this]() { applySettingsConfigEdit(); });
     QObject::connect(&settings_adapter_, &SettingsAdapter::appSettingsEdited, &settings_adapter_, [this]() {
         const QString previous_update_channel = settings_.update_channel;
+        const bool previous_present_optin = settings_.present_diagnostics_optin;
         settings_ = settings_adapter_.appSettings();
         persistAppSettings(SettingsWriteIntent::UserEdit);
         if (settings_.update_channel != previous_update_channel)
@@ -1798,6 +1839,12 @@ void QuickApplication::wireSettingsCommands() {
         // choice, and the crash-report policy never reached the SDK consent gate.
         applyDeveloperLogLevel();
         applyCrashReportPolicy();
+        // ADR 0033. Turning the opt-in on opens the ETW session immediately when the
+        // process is already elevated, and does nothing at all when it is not --
+        // there is no relaunch prompt here, because a settings toggle is not consent
+        // to restart the application.
+        if (present_provider_ && settings_.present_diagnostics_optin != previous_present_optin)
+            present_provider_->SetOptIn(settings_.present_diagnostics_optin);
     });
 
     QObject::connect(&settings_adapter_, &SettingsAdapter::presetSelected, &settings_adapter_,
@@ -3724,6 +3771,40 @@ QQmlApplicationEngine& QuickApplication::engine() noexcept {
 }
 RecordingCoordinator* QuickApplication::recordingCoordinator() noexcept {
     return recording_coordinator_.get();
+}
+
+diagnostics::PresentMonProvider* QuickApplication::presentProvider() noexcept {
+    return present_provider_.get();
+}
+
+unsigned long QuickApplication::presentTargetPidForSelection() const {
+    // Window capture attributes presents to the captured window's process. Display
+    // and Region capture have no owning process -- their presenter is whichever
+    // process dominates the screen -- so they stay on pid 0, which is the same
+    // filter the idle desktop uses.
+    if (!pushed_selected_target_.has_value())
+        return 0;
+    if (pushed_selected_target_->kind != recorder_core::CaptureTarget::Kind::Window)
+        return 0;
+    const auto hwnd = reinterpret_cast<HWND>(static_cast<uintptr_t>(pushed_selected_target_->native_id));
+    if (hwnd == nullptr || ::IsWindow(hwnd) == FALSE)
+        return 0;
+    DWORD pid = 0;
+    ::GetWindowThreadProcessId(hwnd, &pid);
+    return pid;
+}
+
+void QuickApplication::updatePresentAttribution(unsigned long pid, bool force) {
+    if (present_provider_ == nullptr)
+        return;
+    if (!force && present_target_pid_ == pid)
+        return;
+    present_target_pid_ = pid;
+    present_provider_->SetTargetProcessId(pid);
+    diagnostics::AppLog::info(QStringLiteral("present"),
+                              QStringLiteral("attribution boundary: target pid=%1 force=%2 (accumulators reset)")
+                                  .arg(pid)
+                                  .arg(force ? 1 : 0));
 }
 
 bool QuickApplication::prepareRecordingBenchmark(uint32_t frame_rate, QString& error) {
