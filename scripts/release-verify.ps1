@@ -385,7 +385,11 @@ function Stop-ReleaseSession {
         # known state, and REL-SHUTDOWN-001 is where the exit invariant is actually
         # asserted -- not in a teardown that cannot tell the two apart.
         if (-not $session.Process.WaitForExit(10000)) {
-            Write-Step 'the window closed to the tray; ending the process for the next scenario'
+            # Says what was observed, not why. A close that has not finished in ten
+            # seconds may be hiding to the tray, finalizing a recording, or stuck --
+            # and a teardown that names one of those is guessing. The app's own
+            # `close requested -> ...` log line is what distinguishes them.
+            Write-Step 'the process had not exited 10 s after the close; ending it for the next scenario'
             $session.Process | Stop-Process -Force -ErrorAction SilentlyContinue
         }
     }
