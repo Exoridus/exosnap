@@ -11,6 +11,16 @@ param(
     # install anything from a development build.
     [string] $FeedUrl = 'https://api.github.com/repos/Exoridus/exosnap/releases',
 
+    # The update channel the isolated config is seeded with. Preview by default,
+    # and that is a property of the feed rather than a preference: a development
+    # build carries <base>-dev, the Stable channel only ever names non-prerelease
+    # releases, and until <base> itself ships there is nothing on Stable that
+    # ranks above it. With no offer there is no handoff to follow, so a Stable
+    # run would end at "the feed offered nothing to apply" without ever reaching
+    # the assertion this script exists for.
+    [ValidateSet('Stable', 'Preview')]
+    [string] $Channel = 'Preview',
+
     [string] $EvidencePath,
 
     [int] $TimeoutSeconds = 120
@@ -64,6 +74,19 @@ function Add-Step([string] $Name, [bool] $Pass, [object] $Detail) {
 if (-not (Test-Path -LiteralPath $AppPath)) { throw "No such application: $AppPath" }
 $appFull = (Resolve-Path -LiteralPath $AppPath).Path
 $appSha = (Get-FileHash -LiteralPath $appFull -Algorithm SHA256).Hash.ToLowerInvariant()
+$appDir = Split-Path -Parent $appFull
+
+# Artifact-class precondition. LaunchUpdater() stages its runtime from paths
+# relative to applicationDirPath(), and only an installed tree is flat that way
+# -- in a build tree the updater lives one directory over, so update.apply
+# settles as operation_failed and the run proves nothing about the handoff. One
+# marker file, deliberately not a second copy of UpdaterStagingFileList(): that
+# list stays the product's own source of truth.
+$updaterBeside = Join-Path $appDir 'exosnap-updater.exe'
+if (-not (Test-Path -LiteralPath $updaterBeside)) {
+    throw ("$appDir is not an install-equivalent tree: exosnap-updater.exe is not beside exosnap.exe. " +
+        'Run cmake --install into a scratch prefix and point -AppPath at that tree.')
+}
 
 $runId = New-LiveVerifyRunId
 $scratch = Join-Path ([System.IO.Path]::GetTempPath()) "exosnap-handoff-$runId"
@@ -71,6 +94,17 @@ New-Item -ItemType Directory -Path $scratch -Force | Out-Null
 
 $env:EXOSNAP_CONFIG_DIR = Join-Path $scratch 'config'
 $env:EXOSNAP_OUTPUT_DIR = Join-Path $scratch 'output'
+
+# Seed the isolated config with the channel to check. This is the settings key
+# the Updates section writes, read back by AppSettingsStore on startup -- so the
+# run still takes the product's own path; only the starting preference is given
+# rather than clicked. Nothing else is seeded: every other setting stays at its
+# first-launch default.
+New-Item -ItemType Directory -Path $env:EXOSNAP_CONFIG_DIR -Force | Out-Null
+Set-Content -LiteralPath (Join-Path $env:EXOSNAP_CONFIG_DIR 'settings.ini') -Encoding utf8 -Value @(
+    '[update]'
+    "channel=$Channel"
+)
 
 $app = $null
 $appConn = $null
@@ -130,6 +164,28 @@ try {
     Add-Step 'the child is pinned to the offered version' `
         ($launch.targetVersion -eq $offered) @{ offered = $offered; pinned = $launch.targetVersion }
 
+    # The launch snapshot claims a staged executable. Both halves of that claim
+    # are checked against the operating system rather than believed: the running
+    # child's own image path, and the bytes on disk.
+    # Win32_Process rather than Get-Process: the latter reads the image path via
+    # MainModule, which is an open-and-read of the target process and comes back
+    # null for a child this one is not entitled to inspect that way. The CIM view
+    # is a query against the OS and answers for any process on the machine.
+    $childPath = (Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $($launch.pid)" `
+            -ErrorAction SilentlyContinue).ExecutablePath
+    $normalize = { param($p) if ([string]::IsNullOrEmpty($p)) { '' } else { $p.Replace('/', '\').ToLowerInvariant() } }
+    Add-Step 'the running child is the staged executable the event named' `
+        ((& $normalize $childPath) -eq (& $normalize $launch.stagedExecutable)) `
+        @{ reported = $launch.stagedExecutable; running = $childPath }
+
+    $stagedSha = $null
+    if (Test-Path -LiteralPath $launch.stagedExecutable) {
+        $stagedSha = (Get-FileHash -LiteralPath $launch.stagedExecutable -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
+    Add-Step 'the staged executable hashes to what the event reported' `
+        ($null -ne $stagedSha -and $stagedSha -eq $launch.stagedExecutableSha256) `
+        @{ reported = $launch.stagedExecutableSha256; measured = $stagedSha }
+
     # -- attach to the child -------------------------------------------------
     # Same run id, different role. Connect blocks until the child's endpoint
     # exists, which is the readiness observation -- no polling, no sleep.
@@ -137,6 +193,23 @@ try {
     $updaterIdentity = $updaterConn.Identity
     Add-Step 'updater endpoint attached' `
         ($updaterIdentity.product -eq 'exosnap-updater') $updaterIdentity
+    Add-Step 'the attached endpoint is the one the launch advertised' `
+        ($updaterConn.PipeName -eq $launch.controlPipe) `
+        @{ advertised = $launch.controlPipe; attached = $updaterConn.PipeName }
+
+    # The run id IS the credential: it is part of the endpoint name, so an id the
+    # runner did not mint reaches no endpoint at all. A blocking connect against a
+    # name that does not exist is the observation -- not a wait for anything.
+    $foreignId = New-LiveVerifyRunId
+    $rejected = $false
+    try {
+        $foreign = Connect-LiveVerify -RunId $foreignId -Role 'Updater' -ConnectTimeoutMs 2000
+        $foreign.Close()
+    } catch {
+        $rejected = $true
+    }
+    Add-Step 'a run id the updater was not given reaches no endpoint' $rejected `
+        @{ acceptedRunId = $runId; refusedRunId = $foreignId }
 
     # THE cross-process assertion: what the app offered is what the updater is
     # allowed to install, observed in two processes rather than inferred.

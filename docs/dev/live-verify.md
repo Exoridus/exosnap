@@ -101,6 +101,30 @@ invalidates becomes `STALE` and is rerun. Environment dependencies are declared
 per check (`EnvironmentKeys`), so rearranging monitors invalidates the
 cross-monitor Preview check and leaves updater identity alone.
 
+### Artifact class
+
+Artifact binding says *which bytes*. Artifact class says which kind of tree those
+bytes have to sit in, and the two checks answer to different classes:
+
+- **Ordinary application checks** may run against a build-tree `exosnap.exe`
+  wherever the individual check supports it. Nothing they exercise is resolved
+  relative to the executable's neighbours.
+- **Cross-process updater checks require an installed tree** (or something laid
+  out like one). `UpdaterStagingFileList()` names its entries **relative to
+  `applicationDirPath()`**, and only the installed layout is flat that way: a
+  Debug tree has `Qt6Cored.dll` rather than `Qt6Core.dll`, no
+  `plugins/platforms/` beside the executable, and `exosnap-updater.exe` one
+  directory over.
+
+Run from a build tree, `LaunchUpdater()` fails with `Updater runtime file
+missing: …`, the launch snapshot reports `pid: 0`, and `update.apply` settles as
+`operation_failed`. That is the false-success guard working, not a runner defect
+— it is covered by `live_verify_protocol_tests`. The fix is always to point the
+runner at a `cmake --install` tree, never to teach the product a build-tree
+layout. `scripts/live-verify-update-handoff.ps1` refuses up front when
+`exosnap-updater.exe` is not beside the `-AppPath` executable, so the class
+mismatch is named instead of surfacing as a failed handoff.
+
 ---
 
 ## The control channel

@@ -1284,6 +1284,26 @@ TEST(LiveVerifyDispatcher, UpdateApplyRoutesToTheCardsPrimaryActionAndReportsThe
     EXPECT_EQ(launch.value(QStringLiteral("targetVersion")).toString(), QStringLiteral("0.9.1"));
 }
 
+// The build-tree case, pinned. LaunchUpdater() stages its runtime from paths
+// relative to applicationDirPath(), which only an installed tree satisfies, so a
+// run from a build tree reaches the card's primary action and the LAUNCH is what
+// fails. The card is genuinely offering an update, so no precondition catches
+// it: the honest answer is operation_failed, never a settled success and never
+// the invalid_state that "nothing to apply" earns.
+TEST(LiveVerifyDispatcher, UpdateApplyThatCannotLaunchTheUpdaterIsAFailureNotASettledSuccess) {
+    FakeSource source;
+    source.allow_intents = false;
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    const QJsonObject response = dispatcher.Dispatch(RequestV2(QStringLiteral("update.apply")));
+    EXPECT_FALSE(Ok(response));
+    EXPECT_EQ(ErrorCode(response), QString::fromLatin1(error_code::kOperationFailed));
+    EXPECT_TRUE(source.calls.contains(QStringLiteral("update.apply")))
+        << "the offer was real; the action must have been attempted before it failed";
+    EXPECT_FALSE(response.contains(QStringLiteral("settled"))) << "a failure must not also claim an outcome";
+}
+
 TEST(LiveVerifyDispatcher, UpdateApplyWithNothingOfferedNeverReachesTheSource) {
     FakeSource source;
     source.state.update_state = QStringLiteral("uptodate");
