@@ -272,6 +272,34 @@ The updater without arguments is a normal manual updater, not a harness mode: it
 rests at Idle and does nothing until asked. `--automation-control` does not
 change that — it observes and drives the same actions the buttons do.
 
+### Following the update handoff across processes
+
+The application's channel answers `update.getState`, `update.check` and
+`update.apply`, all bound to the Settings update card's own entry points. When
+the application is itself under a control channel it hands the SAME run id to
+the updater it launches, so the child answers at
+`\\.\pipe\ExoSnap.Updater.<run-id>` — one credential, two roles, nothing to
+discover. `update.apply`'s response and the `update.updaterLaunched` event both
+carry the child's pid, its staged binary, that binary's SHA-256 and the pinned
+target version.
+
+`scripts/live-verify-update-handoff.ps1 -AppPath <exosnap.exe>` runs the whole
+thing and asserts the one statement the two processes could not previously agree
+on: *the version the app offered is the version the updater is pinned to*. It
+uses no sleeps — every wait is a blocking connect (the child's pipe does not
+exist until its server has started) or a `stateRevision` advance delivered as an
+event.
+
+`exosnap.exe --update-base-url <https url>` points the app's check at a
+controlled feed; it is refused in an official build and the same URL is passed
+down to the updater, because two feeds behind one offer is exactly the
+divergence `--target-version` closes. On a development build the pinned update
+public key is all zeros, so the manifest signature check stops the run before a
+package is fetched — which makes a cross-process FAILURE flow
+(`verifyDownloadFailed`, `installState: intact`) reachable without a real
+installable release, and makes the flow above safe to run against the live
+GitHub feed.
+
 ### Final validation
 
 Run once after the integrated branch is complete:

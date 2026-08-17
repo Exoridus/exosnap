@@ -2488,6 +2488,10 @@ const UpdateService* QuickApplication::updateService() const noexcept {
     return update_service_.get();
 }
 
+UpdateService* QuickApplication::updateService() noexcept {
+    return update_service_.get();
+}
+
 void QuickApplication::applyVerifyUpdateReinstallMode(bool enabled) {
     verify_update_reinstall_ = enabled;
     if (!enabled)

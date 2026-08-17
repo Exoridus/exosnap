@@ -1681,6 +1681,13 @@ unimplemented behavior.
   reached the event loop, including a visibly failed one, so nothing that launched the updater could
   tell the two apart — and a cancellation must not report `1`, which would send a release script
   looking for a fault that never happened.
+- **Development feed override.** `exosnap.exe --update-base-url <https url>` points the update
+  check at a named feed instead of the production one, so a development build can exercise its own
+  check and the full app→updater handoff. It is **refused in an official build**, refused on
+  anything that is not an https URL with a host, never persisted, and the same URL is handed to the
+  updater — app and updater must resolve one feed, not two. It relaxes nothing else: the recording
+  guard, the signature verification and the package hash are unchanged, and a development build's
+  pinned key is all zeros, so no manifest from any feed can pass verification there.
 - **Shipped flow:** the update check (automatic or manual) finds a new version → an "update
   available" notification deep-links to the Settings update card → clicking **Update** opens the
   dedicated updater, a separate process that performs every step itself. Its step list (as

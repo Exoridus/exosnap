@@ -200,6 +200,10 @@ class QuickApplication {
     void requestUpdateCheck();
     void requestUpdatePrimaryAction();
     [[nodiscard]] const UpdateService* updateService() const noexcept;
+    // Non-const overload for the one caller that needs to CONNECT to the
+    // service's signals -- main.cpp turning updaterLaunched into a control
+    // event. Everything else reads.
+    [[nodiscard]] UpdateService* updateService() noexcept;
 
     // Why the update area refuses to act right now, in product vocabulary:
     // "" (nothing in the way) | "recording" | "finalizing" | "updaterRunning".

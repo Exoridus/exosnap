@@ -329,8 +329,14 @@ QStringList LiveVerifyDispatcher::EventNames(int protocol) {
     // asynchronous command without knowing which domain-specific event covers
     // it -- or poll for one that does not exist, as the blocking surfaces had no
     // event at all.
-    if (protocol >= 2)
+    if (protocol >= 2) {
         names.append(QStringLiteral("ui.stateChanged"));
+        // The one update event that is not a state change: it carries the CHILD
+        // process's identity and endpoint, which no snapshot of this process's
+        // state could report. A runner waits on it instead of watching for a
+        // pipe to appear.
+        names.append(QStringLiteral("update.updaterLaunched"));
+    }
     names.sort();
     return names;
 }

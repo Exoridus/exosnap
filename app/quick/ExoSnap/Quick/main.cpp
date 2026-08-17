@@ -779,6 +779,16 @@ int main(int argc, char* argv[]) {
 
         // Events, not polling. Each one reuses an existing signal; none of them
         // introduces a second idea of the state it reports.
+        //
+        // The update child is the one event that is not a state change of THIS
+        // process: it carries the pid, the staged binary and the endpoint of the
+        // updater that was just started, so a runner attaches to a process it
+        // caused instead of watching for a pipe to appear.
+        if (auto* updates = quick_application.updateService()) {
+            QObject::connect(updates, &exosnap::UpdateService::updaterLaunched, server, [server, source]() {
+                server->EmitEvent(QStringLiteral("update.updaterLaunched"), source->UpdaterLaunchSnapshot());
+            });
+        }
         if (auto* record = quick_application.recordViewModelAdapter()) {
             auto last_state = std::make_shared<int>(record->state());
             QObject::connect(record, &exosnap::quick::RecordViewModelAdapter::changed, server,

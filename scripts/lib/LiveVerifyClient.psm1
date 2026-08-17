@@ -223,10 +223,18 @@ class LiveVerifyConnection {
 function New-LiveVerifyPipeName {
     <#
     .SYNOPSIS
-        The endpoint name for a run id. Mirrors LiveVerifyOptions::PipeNameForRunId.
+        The endpoint name for a run id and a role. Mirrors control::PipeName.
+    .DESCRIPTION
+        The role is why one run id reaches two processes: the application answers
+        at "LiveVerify" and the updater it launches answers at "Updater". A
+        runner therefore never mints a second credential and never discovers a
+        pipe -- it derives the child's name from the id it already holds.
     #>
-    param([Parameter(Mandatory)] [string] $RunId)
-    return "\\.\pipe\ExoSnap.LiveVerify.$RunId"
+    param(
+        [Parameter(Mandatory)] [string] $RunId,
+        [ValidateSet('LiveVerify', 'Updater')] [string] $Role = 'LiveVerify'
+    )
+    return "\\.\pipe\ExoSnap.$Role.$RunId"
 }
 
 function New-LiveVerifyRunId {
@@ -255,10 +263,15 @@ function Connect-LiveVerify {
         # the structured refusal cause, and those are what let a check assert a
         # postcondition instead of waiting a fixed time. 1 stays selectable so a
         # check can prove the v1 contract is still answered.
-        [ValidateRange(1, 2)] [int] $Protocol = 2
+        [ValidateRange(1, 2)] [int] $Protocol = 2,
+        # Which endpoint of this run to attach to. The updater's exists only when
+        # the application that launched it was itself under a control channel;
+        # connecting IS the readiness observation, because the pipe does not
+        # exist until the child's server has started.
+        [ValidateSet('LiveVerify', 'Updater')] [string] $Role = 'LiveVerify'
     )
 
-    $connection = [LiveVerifyConnection]::new((New-LiveVerifyPipeName -RunId $RunId))
+    $connection = [LiveVerifyConnection]::new((New-LiveVerifyPipeName -RunId $RunId -Role $Role))
     $connection.Protocol = $Protocol
     try {
         $connection.Connect($ConnectTimeoutMs)
@@ -323,11 +336,15 @@ function Get-LiveVerifyState {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)] $Connection,
-        [int] $TimeoutMs = 20000
+        [int] $TimeoutMs = 20000,
+        # The state query for this endpoint: ui.getState on the application,
+        # updater.getState on the updater. Same shape of answer, different
+        # vocabulary, because they describe different products.
+        [string] $Command = 'ui.getState'
     )
-    $response = Invoke-LiveVerifyCommand -Connection $Connection -Command 'ui.getState' -TimeoutMs $TimeoutMs
+    $response = Invoke-LiveVerifyCommand -Connection $Connection -Command $Command -TimeoutMs $TimeoutMs
     if (-not $response.ok) {
-        throw "ui.getState refused: $($response.error.code) - $($response.error.message)"
+        throw "$Command refused: $($response.error.code) - $($response.error.message)"
     }
     return $response.result
 }
@@ -354,18 +371,24 @@ function Wait-LiveVerifyRevision {
     param(
         [Parameter(Mandatory)] $Connection,
         [Parameter(Mandatory)] [long] $After,
-        [int] $TimeoutMs = 30000
+        [int] $TimeoutMs = 30000,
+        # The event that carries a new revision on this endpoint. The application
+        # publishes ui.stateChanged; the updater publishes updater.stateChanged.
+        # Same contract, different name -- and a runner that waited for the wrong
+        # one would wait forever.
+        [string] $EventName = 'ui.stateChanged',
+        [string] $StateCommand = 'ui.getState'
     )
     if ($Connection.StateRevision -gt $After) {
-        return Get-LiveVerifyState -Connection $Connection
+        return Get-LiveVerifyState -Connection $Connection -Command $StateCommand
     }
     $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMs)
     while ([DateTime]::UtcNow -lt $deadline) {
         $remaining = [int][Math]::Max(1, ($deadline - [DateTime]::UtcNow).TotalMilliseconds)
-        $observed = $Connection.WaitForEvent('ui.stateChanged', $null, $remaining)
+        $observed = $Connection.WaitForEvent($EventName, $null, $remaining)
         if ($null -eq $observed) { break }
         if ($Connection.StateRevision -gt $After) {
-            return Get-LiveVerifyState -Connection $Connection
+            return Get-LiveVerifyState -Connection $Connection -Command $StateCommand
         }
     }
     return $null

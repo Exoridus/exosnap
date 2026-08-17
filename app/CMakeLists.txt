@@ -1204,6 +1204,15 @@ if(EXOSNAP_PWSH)
         COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
             "${PROJECT_SOURCE_DIR}/scripts/tests/live-verify-state.tests.ps1")
     set_tests_properties(live_verify.runner_state PROPERTIES TIMEOUT 180 LABELS "live_verify")
+
+    # The client's endpoint naming. Registered for the same reason: deriving the
+    # updater child's pipe name wrongly fails as a connect timeout, which is
+    # indistinguishable from "the child never started" -- the most expensive way
+    # to learn about a typo.
+    add_test(NAME live_verify.endpoint_names
+        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
+            "${PROJECT_SOURCE_DIR}/scripts/tests/live-verify-endpoints.tests.ps1")
+    set_tests_properties(live_verify.endpoint_names PROPERTIES TIMEOUT 120 LABELS "live_verify")
 else()
     message(STATUS "pwsh not found — the Live Verify runner state tests will not be registered.")
 endif()
