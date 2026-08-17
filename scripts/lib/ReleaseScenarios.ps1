@@ -165,12 +165,25 @@ function Get-ReleaseScenarioCatalog {
         RequiresInstallTree = $false
         EnvironmentKeys     = @('env.display.main-hdr:refresh-hz', 'env.display.main-hdr:mode')
         Requires            = @{ display = 'display.main-hdr' }
-        # The refresh rate is the cheapest ENV_MUTATE_SAFE property to prove the whole
-        # transaction on: documented setter, documented read-back, and a change that
-        # restores itself. 60 Hz rather than a machine-specific rate -- and a display
-        # that does not offer it answers `apply_rejected`, which the runner records as
-        # UNAVAILABLE rather than as a product failure.
-        Desired             = @{ 'display.main-hdr:refresh-hz' = '60' }
+        # Chosen against the machine, not hardcoded. Windows enumerates the NOMINAL and
+        # the ACTUAL rate of one physical mode separately (59 and 60, 119 and 120) and
+        # collapses them on apply -- so asking for 60 on this panel is answered by a
+        # read-back of 59, and the transaction correctly refuses. That is the mechanism
+        # working, not failing, so the scenario picks a rate with no neighbour within
+        # 1 Hz instead of weakening the verify rule to accommodate one.
+        Desired             = {
+            param($ctx)
+            if (-not $ctx.Orchestrator.Available) { return 'exosnap-envctl is not built' }
+            $listed = Get-EnvironmentDisplayModes -Orchestrator $ctx.Orchestrator -Alias 'display.main-hdr'
+            if ($null -eq $listed -or -not $listed.ok) { return 'the display modes could not be enumerated' }
+            $display = @($listed.displays) | Select-Object -First 1
+            if ($null -eq $display) { return 'no display resolved for display.main-hdr' }
+            $rate = Select-UntwinnedRefreshRate -Display $display
+            if ($null -eq $rate) {
+                return 'this display enumerates no alternative refresh rate a read-back could confirm'
+            }
+            return @{ 'display.main-hdr:refresh-hz' = "$rate" }
+        }
         Run                 = {
             param($ctx, $transaction)
             # The applied state was already read back and compared by envctl before this
@@ -863,7 +876,18 @@ function Get-ReleaseScenarioCatalog {
         RequiresInstallTree = $false
         EnvironmentKeys     = @('env.display.main-hdr:refresh-hz', 'env.display.main-hdr:mode')
         Requires            = @{ display = 'display.main-hdr' }
-        Desired             = @{ 'display.main-hdr:refresh-hz' = '60' }
+        # Same rule as REL-ENV-003: pick a rate the read-back can confirm.
+        Desired             = {
+            param($ctx)
+            if (-not $ctx.Orchestrator.Available) { return 'exosnap-envctl is not built' }
+            $listed = Get-EnvironmentDisplayModes -Orchestrator $ctx.Orchestrator -Alias 'display.main-hdr'
+            if ($null -eq $listed -or -not $listed.ok) { return 'the display modes could not be enumerated' }
+            $display = @($listed.displays) | Select-Object -First 1
+            if ($null -eq $display) { return 'no display resolved for display.main-hdr' }
+            $rate = Select-UntwinnedRefreshRate -Display $display
+            if ($null -eq $rate) { return 'this display enumerates no alternative refresh rate a read-back could confirm' }
+            return @{ 'display.main-hdr:refresh-hz' = "$rate" }
+        }
         OptIn               = $true
         Run                 = {
             param($ctx, $transaction)
@@ -885,7 +909,7 @@ function Get-ReleaseScenarioCatalog {
                 return @{ Result = 'FAIL'; Message = 'the recording failed at 60 Hz'; Evidence = $evidence }
             }
             return @{ Result = 'PASS'
-                Message      = "recorded at a display refresh of 60 Hz; capture fps $($pipeline.capture.actualFps)"
+                Message      = "recorded at the applied display refresh; capture fps $($pipeline.capture.actualFps)"
                 Evidence     = $evidence
             }
         }

@@ -616,11 +616,26 @@ function Write-LiveVerifyReport {
             if ($check.message) { $lines.Add("- Result: $($check.message)") }
             $restore = if ($check.PSObject.Properties.Name -contains 'restoreResult') { $check.restoreResult } else { $null }
             if ($restore -and $restore -ne 'NOT_APPLICABLE') { $lines.Add("- Environment restore: $restore") }
-            if ($check.PSObject.Properties.Name -contains 'environmentEvidence' -and $null -ne $check.environmentEvidence) {
-                $lines.Add('- Environment evidence (before / requested / applied / afterRestore):')
-                foreach ($property in $check.environmentEvidence.PSObject.Properties) {
-                    $e = $property.Value
-                    $lines.Add("  - ``$($property.Name)``: $($e.before) / $($e.requested) / $($e.applied) / $($e.afterRestore)")
+            # The per-property rows live under `properties`; the object around them
+            # carries the transaction's own identity. Iterating the outer object
+            # yielded transactionId and runId and then asked them for a `before`.
+            if ($check.PSObject.Properties.Name -contains 'environmentEvidence' -and
+                $null -ne $check.environmentEvidence -and
+                $check.environmentEvidence.PSObject.Properties.Name -contains 'properties') {
+                $rows = @($check.environmentEvidence.properties)
+                if ($rows.Count -gt 0) {
+                    $lines.Add('- Environment evidence (before / requested / applied / afterRestore):')
+                    foreach ($row in $rows) {
+                        $restored = if ($row.PSObject.Properties.Name -contains 'restored' -and $row.restored) { 'restored' }
+                        else { '**NOT RESTORED**' }
+                        $lines.Add("  - ``$($row.property)``: $($row.before) / $($row.requested) / $($row.applied) / " +
+                            "$($row.afterRestore) — $restored")
+                    }
+                }
+                foreach ($pending in @($check.environmentEvidence.pending)) {
+                    $lines.Add("- **Restore still owed**: ``$($pending.property)`` on $($pending.alias) " +
+                        "($($pending.friendlyName), $($pending.stableId)) — original ``$($pending.originalValue)``, " +
+                        "action: $($pending.remainingAction)")
                 }
             }
             if ($check.skipReason) { $lines.Add("- Skip reason: $($check.skipReason)") }

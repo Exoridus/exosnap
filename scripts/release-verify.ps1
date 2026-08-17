@@ -41,6 +41,7 @@
     prepare   start a campaign against an explicitly named artifact
     run       run every runnable scenario
     resume    re-fingerprint, mark stale, and continue
+    retry     re-attempt named scenarios (a FAIL is otherwise left alone as a finding)
     status    print the current state
     report    write release-verification.json + .md + junit.xml
     recover   restore a dirty environment left by a killed runner, and nothing else
@@ -59,7 +60,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('prepare', 'run', 'resume', 'status', 'report', 'recover', 'list')]
+    [ValidateSet('prepare', 'run', 'resume', 'retry', 'status', 'report', 'recover', 'list')]
     [string] $Command = 'status',
 
     [string] $ExePath,
@@ -557,10 +558,26 @@ function Invoke-OneScenario {
         }
     }
 
-    $desired = if ($Entry.PSObject.Properties.Name -contains 'Desired' -and $null -ne $Entry.Desired) {
-        $Entry.Desired
+    # `Desired` may be a hashtable or a script block. The block form exists because
+    # some desired values can only be chosen against the machine in front of you --
+    # a refresh rate has to come from what the display actually enumerates, and a
+    # catalogue that hardcoded one would only ever be correct at one desk. A block
+    # that returns nothing is saying "this machine offers no usable value", which is
+    # UNAVAILABLE rather than a failure.
+    $desired = @{}
+    if ($Entry.PSObject.Properties.Name -contains 'Desired' -and $null -ne $Entry.Desired) {
+        if ($Entry.Desired -is [scriptblock]) {
+            $resolved = & $Entry.Desired $Context
+            if ($null -eq $resolved -or $resolved -isnot [hashtable]) {
+                $result.Result = 'UNAVAILABLE'
+                $result.Message = if ($resolved -is [string]) { $resolved }
+                else { 'this machine offers no value the scenario can target' }
+                return $result
+            }
+            $desired = $resolved
+        }
+        else { $desired = $Entry.Desired }
     }
-    else { @{} }
 
     if ($desired.Count -gt 0 -and -not $Orchestrator.Available) {
         $result.Result = 'UNAVAILABLE'
@@ -704,6 +721,26 @@ switch ($Command) {
         }
         Write-Host ''
         Write-Host "  $($catalog.Count) scenarios pending. Run them with: release-verify.ps1 run"
+        return
+    }
+
+    'retry' {
+        # A FAIL is a finding, not a to-do: `run` deliberately leaves it alone so a
+        # rerun cannot quietly erase it. Re-attempting one is therefore an explicit
+        # act, and it drops the old evidence link so the report never pairs a new
+        # verdict with an old artefact.
+        $directory = Resolve-RunDirectory
+        $run = Get-LiveVerifyRun -RunDirectory $directory
+        $selected = @(Expand-ListArgument -Values $Only)
+        if ($selected.Count -eq 0) { throw 'retry needs -Only <scenario id>' }
+        foreach ($id in $selected) { Reset-LiveVerifyCheck -Run $run -Id $id | Out-Null }
+        Write-Heading "Reset for retry: $($selected -join ', ')"
+        $orchestrator = New-EnvironmentOrchestrator -RunId $run.Run.runId `
+            -JournalDirectory (Join-Path $directory 'environment') -EnvctlPath $EnvctlPath -AliasProfile $AliasProfile
+        $entries = @(Select-Entries -Catalog $catalog -Runnable $null)
+        if ($entries.Count -eq 0) { Write-Host 'Nothing runnable.'; return }
+        Invoke-Scenarios -Run $run -Orchestrator $orchestrator -Catalog $catalog -Entries $entries
+        Write-LiveVerifyReport -Run $run | Out-Null
         return
     }
 

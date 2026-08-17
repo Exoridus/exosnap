@@ -295,6 +295,51 @@ function Resolve-EnvironmentAliases {
     catch { return Invoke-EnvctlTolerant -EnvctlPath $Orchestrator.EnvctlPath -Arguments $arguments }
 }
 
+function Get-EnvironmentDisplayModes {
+    <#
+    .SYNOPSIS
+        The display modes a refresh-rate transaction may target.
+    #>
+    param([Parameter(Mandatory)] $Orchestrator, [string] $Alias)
+    if (-not $Orchestrator.Available) { return $null }
+    $arguments = @('list-modes')
+    if (-not [string]::IsNullOrWhiteSpace($Alias)) { $arguments += @('--alias', $Alias) }
+    if (-not [string]::IsNullOrWhiteSpace($Orchestrator.AliasProfile)) {
+        $arguments += @('--profile', $Orchestrator.AliasProfile)
+    }
+    return Invoke-EnvctlTolerant -EnvctlPath $Orchestrator.EnvctlPath -Arguments $arguments
+}
+
+function Select-UntwinnedRefreshRate {
+    <#
+    .SYNOPSIS
+        Picks a refresh rate that a read-back can actually confirm.
+    .DESCRIPTION
+        Windows enumerates the NOMINAL and the ACTUAL rate of the same physical mode as
+        two separate entries -- 59 and 60, 119 and 120 -- and then collapses them on
+        apply: `ChangeDisplaySettingsExW` accepts 60 and `EnumDisplaySettingsExW`
+        afterwards reports 59. Asking for one half of such a pair therefore produces a
+        verify_mismatch no matter how correct the mechanism is.
+
+        So a rate is only usable when no neighbour within 1 Hz is also enumerated. That
+        is a rule about Windows, not about one panel: it holds wherever the pair
+        appears and costs nothing where it does not.
+
+        Returns $null when the display offers no usable alternative -- which the caller
+        must report as UNAVAILABLE, because it is a fact about the display.
+    #>
+    param([Parameter(Mandatory)] $Display)
+    $rates = @($Display.modes | ForEach-Object { [int]$_.refreshHz } | Sort-Object -Unique)
+    $current = [int]$Display.current.refreshHz
+    foreach ($rate in ($rates | Sort-Object -Descending)) {
+        if ($rate -eq $current) { continue }
+        if ($rates -contains ($rate - 1)) { continue }
+        if ($rates -contains ($rate + 1)) { continue }
+        return $rate
+    }
+    return $null
+}
+
 function Test-EnvironmentRequirement {
     <#
     .SYNOPSIS
@@ -510,4 +555,5 @@ function Invoke-EnvironmentTransaction {
 Export-ModuleMember -Function Write-EnvctlJsonAtomic, Resolve-EnvctlPath, Invoke-Envctl,
 Invoke-EnvctlTolerant, ConvertTo-RestoreResult, New-EnvironmentOrchestrator,
 Assert-EnvironmentClean, Get-EnvironmentSnapshot, Get-EnvironmentCapabilities,
-Resolve-EnvironmentAliases, Test-EnvironmentRequirement, Invoke-EnvironmentTransaction
+Resolve-EnvironmentAliases, Get-EnvironmentDisplayModes, Select-UntwinnedRefreshRate,
+Test-EnvironmentRequirement, Invoke-EnvironmentTransaction
