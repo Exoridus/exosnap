@@ -592,6 +592,28 @@ if(WIN32)
     # it, so the deployed application resolves its QML imports relative to its own
     # directory and never from the build tree or a developer Qt installation.
     install(CODE "set(QT_DEPLOY_BIN_DIR \".\")")
+
+    # Contract guard for the generated script installed below. Qt writes that
+    # script to call qt6_deploy_qml_imports(), which only exists if
+    # Qt6QmlDeploySupport.cmake made it into the generated
+    # QtDeploySupport-<CONFIG>.cmake. Qt collects that list off the Qt6::Core
+    # target, so it depends on every find_package(Qt6) in the tree sharing ONE
+    # Qt6::Core — see CMAKE_FIND_PACKAGE_TARGETS_GLOBAL in the top-level
+    # CMakeLists.txt. Without this check the regression surfaces inside Qt's own
+    # generated script as "Unknown CMake command", which names neither the cause
+    # nor the fix, and the shipped tree would silently be missing the entire QML
+    # runtime. Re-including the deploy support is free: it only defines
+    # functions.
+    install(CODE "
+include(\"${QT_DEPLOY_SUPPORT}\")
+if(NOT COMMAND qt6_deploy_qml_imports)
+    message(FATAL_ERROR
+        \"Qt QML deployment support is missing from the generated deploy script, so the \"
+        \"installed tree would not contain the Qt Quick runtime. Check that the top-level \"
+        \"CMakeLists.txt still sets CMAKE_FIND_PACKAGE_TARGETS_GLOBAL before any \"
+        \"find_package(Qt6).\")
+endif()")
+
     install(SCRIPT ${_exosnap_deploy_script})
 endif()
 

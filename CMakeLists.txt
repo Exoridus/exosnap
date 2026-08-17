@@ -171,6 +171,20 @@ if(Git_FOUND AND EXISTS "${PROJECT_SOURCE_DIR}/.git")
     endif()
 endif()
 
+# Qt's deployment API is set up ONCE, by whichever directory first calls
+# find_package(Qt6), and the set of deploy helpers it makes available is read
+# off the Qt6::Core target in that directory's scope. Imported targets are
+# directory-scoped by default, so a sibling directory that later asks for the
+# Qml component registers Qt6QmlDeploySupport.cmake on a DIFFERENT Qt6::Core and
+# the generated QtDeploySupport-<CONFIG>.cmake never learns about it — the
+# install step then dies on "qt6_deploy_qml_imports: Unknown CMake command".
+# That is exactly what libs/control (the first find_package(Qt6) in the tree,
+# Core-only) did to app/'s Qt Quick deployment. Promoting imported targets to
+# global scope makes all of them the same Qt6::Core regardless of which
+# subdirectory finds Qt first, so the ordering below stays a readability
+# decision rather than a packaging contract.
+set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL ON)
+
 add_subdirectory(libs/recorder_core)
 add_subdirectory(libs/capability)
 add_subdirectory(libs/crash_capture)
