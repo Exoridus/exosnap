@@ -291,7 +291,7 @@ if ($StaticOnly) {
 # launch test executables that link Qt (0xc0000135 otherwise in worktrees).
 # ---------------------------------------------------------------------------
 
-$qtBin = 'C:\Qt\6.9.0\msvc2022_64\bin'
+$qtBin = 'C:\Qt\6.11.1\msvc2022_64\bin'
 if (Test-Path $qtBin -PathType Container) {
     $env:PATH = "$qtBin;$env:PATH"
 }

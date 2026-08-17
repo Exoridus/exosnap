@@ -1,9 +1,8 @@
 ﻿cmake_minimum_required(VERSION 3.27)
 
-#Local Qt install hint — override via Qt6_DIR or CMAKE_PREFIX_PATH.
-if(NOT Qt6_DIR)
-    list(APPEND CMAKE_PREFIX_PATH "C:/Qt/6.9.0/msvc2022_64")
-endif()
+# The local Qt install hint lives in the ROOT CMakeLists.txt, because libs/control
+# calls find_package(Qt6) before this directory is even added. Repeating it here
+# would be a second authority for one path, and the one that loses.
 
 # Whether to build the ExoSnap Qt application at all. Defaulted ON; flip OFF for
 # configurations that only need the core engine libraries and tests (headless
@@ -53,7 +52,7 @@ endif()
 # PLUGIN, which needs Qt6Svg.dll at runtime without the executable importing a
 # single symbol from it. Dropping the component would still build and still run
 # here, and would ship a package whose logo silently fails to load.
-find_package(Qt6 6.9 QUIET COMPONENTS
+find_package(Qt6 6.11 QUIET COMPONENTS
     Core Gui Widgets Svg Qml Quick QuickControls2 QuickDialogs2 QuickTest Test)
 
 # A stand-in `exosnap` custom target is created in every branch below other than
@@ -75,7 +74,7 @@ if(NOT EXOSNAP_BUILD_APP OR NOT Qt6_FOUND)
     return()
 endif()
 
-qt_standard_project_setup(REQUIRES 6.9)
+qt_standard_project_setup(REQUIRES 6.11)
 
 # Re-stated as REQUIRED so a partially-satisfied probe above turns into a hard
 # configure error here rather than a link failure later. Test is not used
@@ -83,7 +82,7 @@ qt_standard_project_setup(REQUIRES 6.9)
 # cmake/exosnap_testing.cmake can only copy a module whose imported target
 # actually exists. Without it a QuickTest binary builds and then fails to START
 # with 0xC0000135.
-find_package(Qt6 6.9 REQUIRED COMPONENTS Qml Quick QuickControls2 QuickDialogs2 QuickTest Test)
+find_package(Qt6 6.11 REQUIRED COMPONENTS Qml Quick QuickControls2 QuickDialogs2 QuickTest Test)
 
 # Qt test executables need Qt DLLs on PATH during gtest_discover_tests (POST_BUILD)
 # and during CTest execution. Add Qt's bin directory to the environment so both work.

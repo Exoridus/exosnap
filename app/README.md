@@ -1,10 +1,10 @@
-# exosnap (Qt 6 + Qt Widgets)
+# exosnap (Qt 6 + Qt Quick)
 
 ## Building
 
 ### Prerequisites
 
-- Qt 6.9+ at `C:\Qt\6.9.0\msvc2022_64` (via `aqtinstall` or the Qt Online Installer)
+- Qt 6.11+ at `C:\Qt\6.11.1\msvc2022_64` (via `aqtinstall` or the Qt Online Installer)
 - Visual Studio 2022 with C++ workload
 - CMake 3.27+
 
@@ -20,7 +20,7 @@ cmake --build --preset windows-x64-debug --target exosnap
 ### Deploy Qt DLLs (first run)
 
 ```pwsh
-C:\Qt\6.9.0\msvc2022_64\bin\windeployqt6.exe `
+C:\Qt\6.11.1\msvc2022_64\bin\windeployqt6.exe `
     build\windows-x64-debug\app\Debug\exosnap.exe
 ```
 

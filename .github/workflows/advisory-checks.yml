@@ -87,9 +87,15 @@ jobs:
       - name: Install Qt 6
         uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
         with:
-          version: '6.9.0'
+          version: '6.11.1'
           arch: 'win64_msvc2022_64'
           archives: 'qtbase qtsvg'
+          # aqtinstall 3.3.0, the newest release on PyPI, cannot install Qt 6.11 at all:
+          # the Qt repository moved to per-architecture folders (.../qt6_6111/
+          # qt6_6111_msvc2022_64/) and 3.3.0 still builds the pre-6.11 path, so it fails
+          # looking for XML data that is not there. Pinned to the upstream commit that
+          # handles the new layout; drop this line once an aqtinstall release includes it.
+          aqtsource: 'git+https://github.com/miurahr/aqtinstall.git@16db45a70b5905ad596941b223469bc86a56901e'
           cache: true
 
       - name: Set up sccache
