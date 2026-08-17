@@ -34,9 +34,10 @@ enum class UpdaterExit : int {
     // terminal SUCCESS with an outstanding machine action, which is exactly why
     // it is not folded into 0.
     RebootRequired = 4,
-    // The process ended before reaching any terminal outcome -- the window was
-    // closed while resting or mid-run. Nothing is claimed about the update
-    // because nothing concluded.
+    // The run stopped because it was asked to, or the window was closed before
+    // any outcome. Neither a success nor a failure: nothing was installed and
+    // nothing broke. A user cancellation that reported 1 would send a release
+    // script looking for a fault that does not exist.
     Cancelled = 5,
 };
 

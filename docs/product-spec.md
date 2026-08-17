@@ -1665,12 +1665,22 @@ unimplemented behavior.
   says so plainly and contacts nothing. The handoff started by the app is unchanged: it enters
   through its arguments and still runs start-to-finish without asking, because the user already
   confirmed in the app.
+- **A cancellation is not a failure.** Stopping a download on purpose leaves the updater in a
+  **Canceled** state — neutral card, no error tone, the stopped step back to *queued* rather than
+  marked failed, and the truth that matters spelled out: *nothing was installed and nothing was
+  changed*. It carries no failure case and offers no retry, because there is no fault to re-enter;
+  a manual run offers a fresh **Check for updates**, a handoff run offers only **Close** (its
+  confirmation was given in the app). Cancellation is only honoured where the engine actually
+  observes it — while a package is downloading. The feed check and the wait for ExoSnap to close
+  take no cancellation at all, and the install/verify/relaunch steps must not be interrupted; in
+  all of those the request is refused rather than accepted and ignored.
 - **The updater's exit code is its outcome.** `0` update applied and verified (including the case
   where only the automatic relaunch did not open), `1` the update failed, `2` the command line could
   not be understood, `3` a manual check found nothing newer, `4` installed and Windows must restart
-  to finish, `5` closed before any outcome. It used to be `0` for every run that reached the event
-  loop, including a visibly failed one, so nothing that launched the updater could tell the two
-  apart.
+  to finish, `5` canceled, or closed before any outcome. It used to be `0` for every run that
+  reached the event loop, including a visibly failed one, so nothing that launched the updater could
+  tell the two apart — and a cancellation must not report `1`, which would send a release script
+  looking for a fault that never happened.
 - **Shipped flow:** the update check (automatic or manual) finds a new version → an "update
   available" notification deep-links to the Settings update card → clicking **Update** opens the
   dedicated updater, a separate process that performs every step itself. Its step list (as

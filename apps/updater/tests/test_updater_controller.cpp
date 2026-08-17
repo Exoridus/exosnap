@@ -400,6 +400,62 @@ TEST(UpdaterManualFlow, HandoffModeIsNotManual) {
     EXPECT_FALSE(c.state().manual);
 }
 
+TEST(UpdaterCancel, IsTerminalAndCarriesNoFailure) {
+    // The whole point: a cancellation is neither a success nor a failure. A
+    // download cancelled by the user used to surface as FailureCase::
+    // DownloadFailed, which describes a network fault that did not happen.
+    UpdaterController c = MakeManualController();
+    c.onIdle();
+    c.onUpdateAvailable(QStringLiteral("0.9.1"));
+    c.onStepStarted(UpStep::Download);
+    ASSERT_EQ(c.flowState().phase, UpdatePhase::Downloading);
+
+    c.onCancelled();
+
+    EXPECT_EQ(c.flowState().phase, UpdatePhase::Cancelled);
+    EXPECT_TRUE(c.flowState().terminal());
+    EXPECT_FALSE(c.flowState().failure_case.has_value());
+    EXPECT_FALSE(c.flowState().retry_entry_step.has_value());
+    EXPECT_EQ(c.flowState().install_state, InstallState::Intact);
+    EXPECT_FALSE(c.flowState().reboot_required);
+}
+
+TEST(UpdaterCancel, TheStoppedStepIsNotMarkedFailed) {
+    // A red cross in the checklist would say the step broke. It was stopped.
+    UpdaterController c = MakeManualController();
+    c.onStepStarted(UpStep::Download);
+    c.onCancelled();
+    EXPECT_EQ(c.state().steps[size_t(UpStep::Download)], StepStatus::Queued);
+    EXPECT_EQ(c.state().variant, TerminalVariant::None) << "no amber/red terminal card for a cancellation";
+    EXPECT_EQ(c.state().prompt, PromptKind::Cancelled);
+}
+
+TEST(UpdaterCancel, AManualRunCanStartOverAndAHandoffOnlyCloses) {
+    UpdaterController manual = MakeManualController();
+    manual.onStepStarted(UpStep::Download);
+    manual.onCancelled();
+    EXPECT_EQ(manual.state().primary_action, QStringLiteral("Check for updates"));
+    EXPECT_EQ(manual.state().secondary_action, QStringLiteral("Close"));
+
+    UpdaterController handoff = MakeController();
+    handoff.setMode(UpdaterMode::LegacyHandoff);
+    handoff.onStepStarted(UpStep::Download);
+    handoff.onCancelled();
+    EXPECT_EQ(handoff.state().primary_action, QStringLiteral("Close"))
+        << "the confirmation that started a handoff was given in the app; there is nothing to restart here";
+    EXPECT_TRUE(handoff.state().secondary_action.isEmpty());
+}
+
+TEST(UpdaterCancel, AFreshCheckLeavesTheCancelledStateBehind) {
+    UpdaterController c = MakeManualController();
+    c.onStepStarted(UpStep::Download);
+    c.onCancelled();
+    ASSERT_EQ(c.flowState().phase, UpdatePhase::Cancelled);
+    c.onCheckStarted();
+    EXPECT_EQ(c.flowState().phase, UpdatePhase::Checking);
+    EXPECT_EQ(c.state().prompt, PromptKind::None);
+}
+
 // ---------------------------------------------------------------------------
 // The pinned-target failure
 // ---------------------------------------------------------------------------

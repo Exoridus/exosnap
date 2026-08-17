@@ -65,6 +65,8 @@ const char* UpdatePhaseName(UpdatePhase phase) noexcept {
         return "completed";
     case UpdatePhase::Failed:
         return "failed";
+    case UpdatePhase::Cancelled:
+        return "cancelled";
     }
     return "idle";
 }

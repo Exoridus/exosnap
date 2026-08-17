@@ -63,7 +63,7 @@ TEST(UpdaterCommandPolicy, AvailableActionsAgreesWithEveryVerdict) {
              {UpdatePhase::Idle, UpdatePhase::Checking, UpdatePhase::UpToDate, UpdatePhase::UpdateAvailable,
               UpdatePhase::Downloading, UpdatePhase::ReadyToApply, UpdatePhase::WaitingForParent, UpdatePhase::Applying,
               UpdatePhase::Verifying, UpdatePhase::Launching, UpdatePhase::RestartPending, UpdatePhase::RebootRequired,
-              UpdatePhase::Completed, UpdatePhase::Failed}) {
+              UpdatePhase::Completed, UpdatePhase::Failed, UpdatePhase::Cancelled}) {
             out.push_back(Manual(phase));
             FlowState handoff = Manual(phase);
             handoff.mode = UpdaterMode::LegacyHandoff;
@@ -177,10 +177,25 @@ TEST(UpdaterCommandPolicy, RetryFollowsThePublishedRetryEntryStep) {
 
 // -- cancel -------------------------------------------------------------------
 
-TEST(UpdaterCommandPolicy, CancelIsBlockedWhereNothingObservesIt) {
-    // requestCancel only reaches the download loop and the bounded msiexec wait.
-    // Accepting it during the staged rename, the verification or the relaunch
-    // health check would be a command that reports success and does nothing.
+TEST(UpdaterCommandPolicy, CancelIsAllowedOnlyWhereTheEngineHonoursIt) {
+    // DownloadToFile is the only operation that checks the flag between chunks.
+    EXPECT_TRUE(VerdictFor("updater.cancel", Manual(UpdatePhase::Downloading)).allowed());
+    EXPECT_TRUE(Available("updater.cancel", Manual(UpdatePhase::Downloading)));
+}
+
+TEST(UpdaterCommandPolicy, CancelIsBlockedWhereItWouldBeAcceptedAndDoNothing) {
+    // The correction that matters: FetchReleasesJson and WaitForProcessExit take
+    // no cancel parameter at all, so a cancel accepted in those phases would
+    // report success for something that never happens -- and a client could not
+    // tell the difference.
+    for (const UpdatePhase phase : {UpdatePhase::Checking, UpdatePhase::WaitingForParent}) {
+        const PreconditionVerdict verdict = VerdictFor("updater.cancel", Manual(phase));
+        EXPECT_EQ(verdict.code, QLatin1String(kBlocked)) << exosnap::update::UpdatePhaseName(phase);
+        EXPECT_FALSE(Available("updater.cancel", Manual(phase)));
+    }
+}
+
+TEST(UpdaterCommandPolicy, CancelIsBlockedWhereItWouldRiskTheInstallation) {
     for (const UpdatePhase phase : {UpdatePhase::Applying, UpdatePhase::Verifying, UpdatePhase::Launching}) {
         const PreconditionVerdict verdict = VerdictFor("updater.cancel", Manual(phase));
         EXPECT_EQ(verdict.code, QLatin1String(kBlocked)) << exosnap::update::UpdatePhaseName(phase);
@@ -188,15 +203,19 @@ TEST(UpdaterCommandPolicy, CancelIsBlockedWhereNothingObservesIt) {
     }
 }
 
-TEST(UpdaterCommandPolicy, CancelIsAllowedWhileSomethingIsActuallyInFlight) {
-    for (const UpdatePhase phase : {UpdatePhase::Checking, UpdatePhase::Downloading, UpdatePhase::WaitingForParent}) {
-        EXPECT_TRUE(VerdictFor("updater.cancel", Manual(phase)).allowed()) << exosnap::update::UpdatePhaseName(phase);
-    }
-}
-
 TEST(UpdaterCommandPolicy, CancelWithNothingRunningIsInvalidNotBlocked) {
     const PreconditionVerdict verdict = VerdictFor("updater.cancel", Manual(UpdatePhase::Idle));
     EXPECT_EQ(verdict.code, QLatin1String(kInvalidState));
+}
+
+TEST(UpdaterCommandPolicy, ACancelledRunCanStartOverButHasNothingToRetry) {
+    // Cancelled is terminal without being a dead end: a manual run offers a new
+    // check. It offers no retry, because there is no failure to re-enter.
+    const FlowState state = Manual(UpdatePhase::Cancelled);
+    EXPECT_TRUE(VerdictFor("updater.check", state).allowed());
+    EXPECT_TRUE(VerdictFor("updater.close", state).allowed());
+    EXPECT_FALSE(VerdictFor("updater.retry", state).allowed());
+    EXPECT_FALSE(VerdictFor("updater.cancel", state).allowed());
 }
 
 // -- close --------------------------------------------------------------------

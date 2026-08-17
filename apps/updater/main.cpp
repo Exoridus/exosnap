@@ -408,6 +408,12 @@ int main(int argc, char** argv) {
         render();
     });
 
+    QObject::connect(&worker, &UpdaterWorker::cancelled, &window, [&] {
+        in_flight = false;
+        controller->onCancelled();
+        render();
+    });
+
     // ── Manual-mode results ──────────────────────────────────────────────────
     QObject::connect(&worker, &UpdaterWorker::checkStarted, &window, [&] {
         controller->onCheckStarted();

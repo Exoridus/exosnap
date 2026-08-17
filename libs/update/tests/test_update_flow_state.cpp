@@ -62,6 +62,7 @@ TEST(UpdateFlowState, PhaseNamesAreDistinct) {
         UpdatePhase::RebootRequired,
         UpdatePhase::Completed,
         UpdatePhase::Failed,
+        UpdatePhase::Cancelled,
     };
     std::vector<std::string> names;
     for (const UpdatePhase phase : phases)
@@ -177,7 +178,7 @@ TEST(UpdateFlowStateValue, ComparesFieldByField) {
 TEST(UpdateFlowStateValue, TerminalCoversEveryEndState) {
     UpdateFlowState state;
     for (const UpdatePhase phase : {UpdatePhase::Completed, UpdatePhase::Failed, UpdatePhase::RebootRequired,
-                                    UpdatePhase::RestartPending, UpdatePhase::UpToDate}) {
+                                    UpdatePhase::RestartPending, UpdatePhase::UpToDate, UpdatePhase::Cancelled}) {
         state.phase = phase;
         EXPECT_TRUE(state.terminal()) << exosnap::update::UpdatePhaseName(phase);
     }

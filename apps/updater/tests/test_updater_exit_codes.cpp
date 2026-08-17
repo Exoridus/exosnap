@@ -88,6 +88,16 @@ TEST(UpdaterExitCode, UpToDateIsNeitherSuccessNorFailure) {
     EXPECT_NE(code, static_cast<int>(UpdaterExit::UpdateFailed));
 }
 
+TEST(UpdaterExitCode, AnIntentionalCancellationIsNotAFailure) {
+    // A user who stops a download must not make a release script report a failed
+    // update. It shares the code with "closed without an outcome", because that
+    // is the same statement: nothing installed, nothing broken.
+    const int code = ExitFor(UpdatePhase::Cancelled);
+    EXPECT_EQ(code, static_cast<int>(UpdaterExit::Cancelled));
+    EXPECT_NE(code, static_cast<int>(UpdaterExit::UpdateFailed));
+    EXPECT_NE(code, static_cast<int>(UpdaterExit::Success));
+}
+
 TEST(UpdaterExitCode, EveryNonTerminalPhaseIsCancelled) {
     for (const UpdatePhase phase : {UpdatePhase::Idle, UpdatePhase::Checking, UpdatePhase::UpdateAvailable,
                                     UpdatePhase::Downloading, UpdatePhase::ReadyToApply, UpdatePhase::WaitingForParent,

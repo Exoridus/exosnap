@@ -74,6 +74,11 @@ enum class UpdatePhase : std::uint8_t {
     RebootRequired,   // terminal success; Windows must restart to finish (C3)
     Completed,        // terminal success; the new version is up
     Failed,           // terminal failure; failure_case says which one
+    // Terminal, and deliberately NEITHER of the two above: the operation stopped
+    // because it was asked to. Nothing was installed and nothing broke, so
+    // reporting it as a failure would send a runner (and a user) looking for a
+    // fault that does not exist. It carries no failureCase for the same reason.
+    Cancelled,
 };
 
 // Which installation is live right now. The single most valuable assertion an
@@ -128,7 +133,7 @@ struct UpdateFlowState {
     [[nodiscard]] bool terminal() const noexcept {
         return phase == UpdatePhase::Completed || phase == UpdatePhase::Failed ||
                phase == UpdatePhase::RebootRequired || phase == UpdatePhase::RestartPending ||
-               phase == UpdatePhase::UpToDate;
+               phase == UpdatePhase::UpToDate || phase == UpdatePhase::Cancelled;
     }
 
     [[nodiscard]] bool operator==(const UpdateFlowState&) const = default;

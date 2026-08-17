@@ -16,6 +16,10 @@ int UpdaterExitCodeFor(const exosnap::update::UpdateFlowState& state) {
         return static_cast<int>(UpdaterExit::UpToDate);
     case UpdatePhase::Failed:
         return static_cast<int>(UpdaterExit::UpdateFailed);
+    // An intentional cancellation is terminal and shares the code with "closed
+    // without an outcome", because it is the same statement: nothing was
+    // installed, nothing failed.
+    case UpdatePhase::Cancelled:
     // Every non-terminal phase means the process is ending without an outcome:
     // the window was closed while resting, while a check ran, or mid-pipeline.
     case UpdatePhase::Idle:

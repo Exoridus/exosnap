@@ -63,12 +63,13 @@ PreconditionVerdict CanCheck(const FlowState& state) {
     case UpdatePhase::UpToDate:
     case UpdatePhase::UpdateAvailable:
     case UpdatePhase::Failed:
+    case UpdatePhase::Cancelled:
         return Allowed();
     default:
         break;
     }
     return Refuse(ec::kInvalidState, QStringLiteral("updater.check cannot start while %1").arg(PhaseName(state.phase)),
-                  QStringLiteral("phase"), QStringLiteral("idle|upToDate|updateAvailable|failed"),
+                  QStringLiteral("phase"), QStringLiteral("idle|upToDate|updateAvailable|failed|cancelled"),
                   PhaseName(state.phase));
 }
 
@@ -98,30 +99,51 @@ PreconditionVerdict CanRetry(const FlowState& state) {
                   QStringLiteral("retryEntryStep"), QJsonValue(QJsonValue::Null), QJsonValue(QJsonValue::Null));
 }
 
-// The honest cancel. UpdaterWorker::requestCancel only reaches the download loop
-// and the bounded msiexec wait; during the staged rename, the post-install
-// verification and the relaunch health check there is nothing that observes it,
-// and the window disables its own close X in exactly those phases for the same
-// reason. Accepting it there would be a command that reports success and does
-// nothing.
+// The honest cancel, and it is narrower than it first looks. Exactly ONE phase
+// honours cancellation in a way a client can rely on:
+//
+//   * downloading      -- DownloadToFile checks the flag between chunks, deletes
+//                         its partial file and returns. Genuinely cancellable.
+//   * checking         -- FetchReleasesJson takes no cancel flag at all. The
+//                         request runs to completion (or to its own timeout)
+//                         regardless, so accepting a cancel here would report
+//                         success for something that does not happen.
+//   * waitingForParent -- WaitForProcessExit takes no cancel flag either.
+//   * applying         -- portable: the staged rename must not be torn apart.
+//                         MSI: the wait IS cancellable, but cancelling it only
+//                         stops this process from WATCHING an elevated msiexec
+//                         that keeps installing. Reporting "cancelled,
+//                         installation intact" there would be a guess about
+//                         another process's transaction.
+//   * verifying,
+//     launching        -- nothing observes the flag, and interrupting the
+//                         relaunch health check risks the restore it guards.
+//
+// The window disables its own close X during applying/verifying/launching for
+// the same reason, so a client and a user are told the same thing.
 PreconditionVerdict CanCancel(const FlowState& state) {
     switch (state.phase) {
+    case UpdatePhase::Downloading:
+        return Allowed();
     case UpdatePhase::Applying:
     case UpdatePhase::Verifying:
     case UpdatePhase::Launching:
         return Refuse(ec::kBlocked,
                       QStringLiteral("The %1 phase cannot be interrupted without risking the installation")
                           .arg(PhaseName(state.phase)),
-                      QStringLiteral("phase"), QStringLiteral("!applying|verifying|launching"), PhaseName(state.phase));
+                      QStringLiteral("phase"), QStringLiteral("downloading"), PhaseName(state.phase));
     case UpdatePhase::Checking:
-    case UpdatePhase::Downloading:
     case UpdatePhase::WaitingForParent:
-        return Allowed();
+        return Refuse(ec::kBlocked,
+                      QStringLiteral("The %1 phase does not observe cancellation; the request would be accepted "
+                                     "and have no effect")
+                          .arg(PhaseName(state.phase)),
+                      QStringLiteral("phase"), QStringLiteral("downloading"), PhaseName(state.phase));
     default:
         break;
     }
     return Refuse(ec::kInvalidState, QStringLiteral("Nothing is in flight to cancel"), QStringLiteral("phase"),
-                  QStringLiteral("checking|downloading|waitingForParent"), PhaseName(state.phase));
+                  QStringLiteral("downloading"), PhaseName(state.phase));
 }
 
 // Same rule as the window's close X, from the same three phases -- so a client

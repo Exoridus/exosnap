@@ -549,8 +549,9 @@ void UpdaterWindow::render(const UpdaterUiState& state) {
         caption_->setText(state.verification_reinstall ? QStringLiteral("EXOSNAP WAS NOT REINSTALLED")
                                                        : QStringLiteral("EXOSNAP WAS NOT UPDATED"));
     } else if (prompting) {
-        caption_->setText(state.prompt == PromptKind::UpToDate ? QStringLiteral("EXOSNAP IS UP TO DATE")
-                                                               : QStringLiteral("EXOSNAP UPDATER"));
+        caption_->setText(state.prompt == PromptKind::UpToDate    ? QStringLiteral("EXOSNAP IS UP TO DATE")
+                          : state.prompt == PromptKind::Cancelled ? QStringLiteral("EXOSNAP WAS NOT UPDATED")
+                                                                  : QStringLiteral("EXOSNAP UPDATER"));
     } else {
         caption_->setText(state.verification_reinstall ? QStringLiteral("REINSTALLING EXOSNAP")
                                                        : QStringLiteral("UPDATING EXOSNAP"));
@@ -710,9 +711,13 @@ void UpdaterWindow::buildFooter(const UpdaterUiState& state) {
 
     if (resultTerminal) {
         QColor tone = caution();
-        if (prompting)
-            tone = state.prompt == PromptKind::UpToDate ? success() : mint();
-        else if (state.variant == TerminalVariant::Red)
+        if (prompting) {
+            // Cancelled is neutral on purpose: nothing succeeded and nothing
+            // broke, so neither the success nor the warning tone is honest.
+            tone = state.prompt == PromptKind::UpToDate    ? success()
+                   : state.prompt == PromptKind::Cancelled ? mut()
+                                                           : mint();
+        } else if (state.variant == TerminalVariant::Red)
             tone = error();
         else if (state.variant == TerminalVariant::Green || state.variant == TerminalVariant::RebootRequired)
             tone = success();
@@ -741,6 +746,9 @@ void UpdaterWindow::buildFooter(const UpdaterUiState& state) {
                 break;
             case PromptKind::ReadyToApply:
                 resultGlyph = Ico::Layers;
+                break;
+            case PromptKind::Cancelled:
+                resultGlyph = Ico::Dot;
                 break;
             case PromptKind::UpToDate:
             case PromptKind::None:

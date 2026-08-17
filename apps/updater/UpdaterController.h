@@ -47,6 +47,7 @@ enum class PromptKind : std::uint8_t {
     UpToDate,        // a check finished and found nothing newer
     UpdateAvailable, // a release was found; the user decides whether to fetch it
     ReadyToApply,    // downloaded and verified; the user decides whether to apply
+    Cancelled,       // the run stopped because it was asked to; nothing happened
 };
 
 struct UpdaterUiState {
@@ -105,6 +106,11 @@ class UpdaterController {
     // override). Not a failure of an update -- nothing was attempted -- so it
     // returns to Idle with the reason on the card rather than to Failed.
     void onCheckBlocked(const QString& reason);
+    // The run stopped because cancellation was requested and observed. Terminal,
+    // and neither a success nor a failure: no failureCase, no retry entry, and
+    // the installation is provably untouched (cancellation is only honoured
+    // before anything is put in place).
+    void onCancelled();
 
     // --- Pipeline events -----------------------------------------------------
     void onStepStarted(UpStep s);                         // marks Working + status line

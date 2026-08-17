@@ -135,8 +135,18 @@ class UpdaterWorker : public QObject {
   public:
     explicit UpdaterWorker(UpdaterArgs args, QObject* parent = nullptr);
 
-    // Cooperative cancel for in-flight downloads (process shutdown). Safe from
-    // any thread.
+    // Cooperative cancel for the operations that observe it (the download loop
+    // and the bounded msiexec wait). Safe from any thread.
+    //
+    // This is also the ATTRIBUTION: when a step aborts while this flag is set,
+    // the abort was caused by the request rather than by the network or the
+    // installer, and the worker emits cancelled() instead of failed(). Without
+    // it, cancelling a download surfaced as FailureCase::DownloadFailed and
+    // cancelling the msiexec wait as "The installer did not finish in time" --
+    // both of which describe a fault that did not happen.
+    //
+    // Cleared by every run()/check() entry, so a cancellation cannot leak into
+    // the next attempt.
     void requestCancel() {
         cancel_.store(true);
     }
@@ -171,6 +181,10 @@ class UpdaterWorker : public QObject {
     void releaseResolved(QString to_version);
     void allDone();
     void failed(FailureCase c, QString detail);
+    // The run stopped because requestCancel() was observed. Terminal, and NOT a
+    // failure: nothing was installed and nothing broke. Emitted instead of
+    // failed(...) at the points where the engine actually honours cancellation.
+    void cancelled();
 
     // Manual-mode results.
     void checkStarted();
@@ -189,6 +203,12 @@ class UpdaterWorker : public QObject {
     // `no_release` (without emitting) when the feed is fine and simply carries
     // nothing for this channel, which is a result the manual check reports as
     // upToDate and the handoff path reports as A1.
+    // True when a step just aborted because cancellation was requested, and the
+    // cancelled() signal has been emitted in place of failed(...). Used only at
+    // the four sites where the engine honours the flag; everywhere else a
+    // failure is a failure even if a cancel happens to be pending.
+    [[nodiscard]] bool abortedByCancel();
+
     [[nodiscard]] bool resolveRelease(bool* no_release);
     // Manifest + signature + gates + package + hash + portable staging.
     [[nodiscard]] bool fetchAndStage();

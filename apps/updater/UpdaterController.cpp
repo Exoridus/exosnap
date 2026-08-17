@@ -210,6 +210,35 @@ void UpdaterController::onCheckBlocked(const QString& reason) {
     setPhase(UpdatePhase::Idle);
 }
 
+void UpdaterController::onCancelled() {
+    // The step that was running goes back to Queued rather than to Failed: it
+    // did not fail, it was stopped, and a red cross in the checklist would say
+    // the opposite of what happened.
+    for (StepStatus& st : state_.steps) {
+        if (st == StepStatus::Working)
+            st = StepStatus::Queued;
+    }
+    state_.prompt = PromptKind::Cancelled;
+    state_.variant = TerminalVariant::None;
+    state_.status_line.clear();
+    state_.determinate = false;
+    state_.ring = 0.0;
+    state_.headline = QStringLiteral("Update canceled");
+    state_.detail_text = QStringLiteral("The download was stopped and its partial files were discarded.");
+    state_.safety_text = state_.from_version.isEmpty()
+                             ? QStringLiteral("Nothing was installed and nothing was changed.")
+                             : QStringLiteral("Your current version %1 is unchanged.").arg(state_.from_version);
+    // Manual runs can start over from here; a handoff run has nothing left to
+    // offer, because the confirmation that started it was given in the app.
+    const bool manual = flow_.mode == exosnap::update::UpdaterMode::Manual;
+    state_.primary_action = manual ? QStringLiteral("Check for updates") : QStringLiteral("Close");
+    state_.secondary_action = manual ? QStringLiteral("Close") : QString();
+
+    // setPhase clears the failure detail, which is the point: a cancellation
+    // carries no failureCase, no retry entry, and installState intact.
+    setPhase(UpdatePhase::Cancelled);
+}
+
 void UpdaterController::onReadyToApply() {
     state_.prompt = PromptKind::ReadyToApply;
     state_.variant = TerminalVariant::None;

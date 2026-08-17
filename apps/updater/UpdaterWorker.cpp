@@ -278,6 +278,14 @@ void UpdaterWorker::run(UpStep entry) {
     (void)runLaunch();
 }
 
+bool UpdaterWorker::abortedByCancel() {
+    if (!cancel_.load()) {
+        return false;
+    }
+    emit cancelled();
+    return true;
+}
+
 // ── Manual mode ──────────────────────────────────────────────────────────────
 // The pipeline, split at the two points a person has to be asked. Every step
 // below reuses the same functions the handoff path runs -- there is no second
@@ -425,6 +433,8 @@ bool UpdaterWorker::fetchAndStage() {
     }
     const fs::path manifest_path = download_dir / L"update-manifest.json";
     if (const auto err = DownloadToFile(release->manifest_url, manifest_path.wstring(), {}, cancel_)) {
+        if (abortedByCancel())
+            return false;
         emit failed(FailureCase::DownloadFailed, QString::fromStdString(*err)); // A1
         return false;
     }
@@ -442,6 +452,8 @@ bool UpdaterWorker::fetchAndStage() {
 
     const fs::path signature_path = download_dir / L"update-manifest.json.sig";
     if (const auto err = DownloadToFile(release->signature_url, signature_path.wstring(), {}, cancel_)) {
+        if (abortedByCancel())
+            return false;
         emit failed(FailureCase::DownloadFailed, QString::fromStdString(*err)); // A1
         return false;
     }
@@ -541,6 +553,11 @@ bool UpdaterWorker::fetchAndStage() {
     // overwrite the file (a held deny-write/deny-delete handle would block it).
     locked_package_.reset();
     if (const auto err = DownloadToFile(package->url, package_path.wstring(), on_progress, cancel_)) {
+        // The one abort a person can cause on purpose. DownloadToFile deletes
+        // its partial file either way, so the installation is untouched and
+        // there is nothing to report as broken.
+        if (abortedByCancel())
+            return false;
         emit failed(FailureCase::DownloadFailed, QString::fromStdString(*err)); // A1
         return false;
     }
@@ -778,6 +795,12 @@ bool UpdaterWorker::runInstallMsi() {
     // uncooperative INFINITE wait guarantees that fallback fires.
     if (!WaitForProcessOrCancel(sei.hProcess, kMsiWaitTimeout, cancel_)) {
         ::CloseHandle(sei.hProcess);
+        // Cancelled and timed out are the same return value and two different
+        // truths. msiexec keeps running in either case -- this process only
+        // stops WATCHING it -- so the honest report for a requested stop is a
+        // cancellation, not "the installer did not finish in time".
+        if (abortedByCancel())
+            return false;
         emit failed(FailureCase::MsiFailed, QStringLiteral("The installer did not finish in time.")); // C2
         return false;
     }
