@@ -2,35 +2,52 @@
 
 #include "PresentAccumulator.h"
 #include "PresentProvider.h"
+#include "PresentTraceBackend.h"
 
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <thread>
 
 namespace exosnap::diagnostics {
 
-// Owns a real-time ETW present-trace session and a consumer worker that feeds the
-// vendored PresentMon PresentData decoder. Latest() returns the most recent mapped
-// present (Unavailable until one is seen). Requires elevation; Start() returns false
-// (graceful) when the session cannot be opened.
+// Owns a real-time present trace and a consumer worker that feeds the classification.
+// Latest() returns the most recent mapped present (Unavailable until one is seen).
+// The real trace requires elevation; Start() returns false (graceful) when the session
+// cannot be opened, and when this build carries no trace backend at all.
+//
+// This class contains NO conditional compilation. Everything Windows-specific about the
+// trace itself lives behind IPresentTraceBackend, so the product and the tests compile
+// exactly these lines -- which was not true before: the tests used to compile a no-op
+// twin, leaving every contract below verified against an implementation that did
+// nothing while the shipping one was verified by nobody.
 class PresentMonEtwSession {
   public:
     PresentMonEtwSession();
+    // Test seam. The factory is called once per Start(), so each session generation
+    // gets its own backend and a detached consumer from a previous generation can
+    // never be reached by the next one.
+    explicit PresentMonEtwSession(std::function<std::shared_ptr<IPresentTraceBackend>()> backend_factory);
     ~PresentMonEtwSession();
     PresentMonEtwSession(const PresentMonEtwSession&) = delete;
     PresentMonEtwSession& operator=(const PresentMonEtwSession&) = delete;
 
     [[nodiscard]] bool Start();
     void Stop();
-    // True only while a consumer is actually consuming. `open_` alone is NOT that
-    // answer: it is written by Start() and Stop() and by nobody else, so a
-    // ProcessTrace that returned for any other reason -- the session torn down by
-    // another process, a driver reset, an ETW buffer error -- left this true forever
-    // while Latest() went on serving the last sample it ever saw AS THE CURRENT ONE.
-    // A dead trace reporting a live present mode is worse than reporting none.
+    // True only while a consumer is actually consuming. Not "Start() succeeded":
+    // `open_` is written by Start() and Stop() and by nobody else, so a Consume() that
+    // returned for any other reason -- the session torn down by another process, a
+    // driver reset, an ETW buffer error -- would leave it true forever while Latest()
+    // went on serving the last sample it ever saw AS THE CURRENT ONE. A dead trace
+    // reporting a live present mode is worse than reporting none.
+    //
+    // It is therefore also false for a moment AFTER Start() returns true, until the
+    // consumer thread has actually entered Consume(). That gap is truthful: an open
+    // trace nobody is reading yet has nothing to report, and Latest() has no sample to
+    // return in it either.
     [[nodiscard]] bool IsOpen() const;
     [[nodiscard]] PresentSample Latest() const;
     // Scope reporting to a capture target's process (0 = dominant non-composed presenter).
@@ -50,6 +67,16 @@ class PresentMonEtwSession {
     // closed keeps describing the machine's current present mode.
     void SetTargetProcessId(unsigned long pid);
 
+    // Test-only observers. They report the two facts a caller cannot otherwise see
+    // without a real trace, and they exist so the contracts stay checkable rather than
+    // to give production code a second way to ask.
+    [[nodiscard]] unsigned long TargetProcessIdForTest() const {
+        return target_pid_.load(std::memory_order_relaxed);
+    }
+    [[nodiscard]] PresentAccumulator AccumulatorForTest() const {
+        return accumulator_;
+    }
+
   private:
     // Handshake between the consumer thread and Stop(), owned by a shared_ptr that
     // BOTH hold. It cannot live in this object: when the bounded wait below times
@@ -60,15 +87,14 @@ class PresentMonEtwSession {
         std::mutex mutex;
         std::condition_variable cv;
         bool finished = false;
-        // Cleared by the consumer thread the instant ProcessTrace returns, whichever
-        // reason it returned for. Lives here rather than in the session for the same
-        // reason `finished` does: after a detach the thread may outlive the session,
-        // and it still has to be able to say it stopped. Atomic because IsOpen() reads
-        // it without taking `mutex`.
-        std::atomic<bool> consuming{true};
-        // Set by Stop() immediately before CloseTrace. Lets the consumer thread tell
+        // Set by the consumer thread when it enters Consume() and cleared when Consume()
+        // returns, whichever reason it returned for. Starts FALSE on purpose: claiming a
+        // consumer before one is running would make IsOpen() a statement about Start()'s
+        // return value rather than about the trace.
+        std::atomic<bool> consuming{false};
+        // Set by Stop() immediately before Close(). Lets the consumer thread tell
         // "I was asked to end" from "the trace ended under me", which are the same
-        // ProcessTrace return and very different facts about the machine.
+        // Consume() return and very different facts about the machine.
         std::atomic<bool> stop_requested{false};
     };
 
@@ -76,13 +102,14 @@ class PresentMonEtwSession {
     // "whatever dominates the screen" -- has nothing to outlive and is always alive.
     [[nodiscard]] bool TargetAlive() const;
 
+    std::function<std::shared_ptr<IPresentTraceBackend>()> backend_factory_;
     std::atomic<bool> open_{false};
     std::atomic<unsigned long> target_pid_{0};
     // A SYNCHRONIZE handle on the attributed process, nullptr for pid 0 or for a
     // process this one may not open. HELD rather than re-opened per sample, because
     // Windows recycles process ids: a pid re-checked after the target exited can name
     // a different program, and the attribution would silently follow it. Guarded by
-    // sample_mutex_; typed void* to keep the header free of windows.h, like impl_.
+    // sample_mutex_; typed void* to keep the header free of windows.h.
     void* target_handle_ = nullptr;
     // One log line per dead target, not one per sample.
     mutable bool target_death_logged_ = false;
@@ -97,10 +124,10 @@ class PresentMonEtwSession {
     // Reset() at every attribution boundary via SetTargetProcessId so the statistics measure
     // only the current recording, never the whole session.
     mutable PresentAccumulator accumulator_;
-    // Opaque SessionImpl (PMTraceConsumer + TraceSession). shared_ptr<void> keeps the
-    // header PresentMon-free; all access is guarded by sample_mutex_. Snapshotting the
-    // pointer under the lock keeps SessionImpl alive across a concurrent Stop().
-    std::shared_ptr<void> impl_;
+    // The trace for THIS session generation. Re-created by every Start() and released by
+    // Stop(), so a consumer detached after the shutdown ceiling still owns everything it
+    // touches and cannot collide with the next generation. Guarded by sample_mutex_.
+    std::shared_ptr<IPresentTraceBackend> backend_;
 };
 
 } // namespace exosnap::diagnostics

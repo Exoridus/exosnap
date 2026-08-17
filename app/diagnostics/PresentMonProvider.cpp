@@ -1,11 +1,21 @@
 #include "diagnostics/PresentMonProvider.h"
 
+#include <utility>
+
 namespace exosnap::diagnostics {
 
 PresentMonProvider::PresentMonProvider(const IElevationProvider& elevation, bool opt_in)
     : elevation_(elevation), opt_in_(opt_in) {
     if (GateOpen()) {
-        [[maybe_unused]] bool started = session_.Start(); // graceful: false when ETW can't open
+        [[maybe_unused]] bool started = session_.Start(); // graceful: false when the trace can't open
+    }
+}
+
+PresentMonProvider::PresentMonProvider(const IElevationProvider& elevation, bool opt_in,
+                                       std::function<std::shared_ptr<IPresentTraceBackend>()> backend_factory)
+    : elevation_(elevation), opt_in_(opt_in), session_(std::move(backend_factory)) {
+    if (GateOpen()) {
+        [[maybe_unused]] bool started = session_.Start();
     }
 }
 

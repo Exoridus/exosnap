@@ -300,6 +300,12 @@ target_sources(exosnap
         ${PROJECT_SOURCE_DIR}/app/diagnostics/PresentMonProvider.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/PresentMonEtwSession.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/PresentMonEtwSession.h
+        # The ETW boundary, and the only file that names PresentMon. The session above
+        # is free of conditional compilation precisely so the product and the tests
+        # compile the same lines of it; EXOSNAP_HAS_PRESENTMON now only selects which
+        # backend this file provides.
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/PresentMonTraceBackend.cpp
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/PresentTraceBackend.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/PresentModeMapping.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/PresentModeMapping.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/PresentSnapshotOverlay.cpp

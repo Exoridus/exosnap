@@ -762,20 +762,35 @@ target_compile_definitions(elevation_tests PRIVATE NOMINMAX)
 
 # ADR 0033: present-diagnostics provider. PresentMonProvider owns a
 # PresentMonEtwSession and gates on elevation && opt-in before starting it.
-# EXOSNAP_HAS_PRESENTMON is intentionally NOT defined here so the no-op session
-# is used, keeping this target Qt-only (no ETW dep) while the gate logic is
-# fully covered.
+#
+# This target used to leave EXOSNAP_HAS_PRESENTMON undefined so that
+# PresentMonEtwSession.cpp compiled to a no-op twin -- which meant every contract the
+# session owns (attribution boundaries, accumulator resets, the held process handle,
+# what `available` means) was verified against an implementation that did nothing,
+# while the shipping one was verified by nobody. That is the same shape as the original
+# defect this ADR's Wave D slice fixed, so the session no longer has an ifdef at all:
+# the trace itself lives behind IPresentTraceBackend, and these tests inject a fake one.
+#
+# The define and the vendored consumer are carried anyway, so the REAL backend compiles
+# and links here too. A production translation unit that only ever built inside
+# app/quick is exactly what went unnoticed the first time.
 exosnap_add_gtest(
     NAME present_provider_tests
     TEST_PREFIX present.
     SOURCES
         tests/test_present_provider.cpp
+        tests/test_present_session.cpp
         diagnostics/PresentMonProvider.cpp
         diagnostics/PresentMonEtwSession.cpp
+        diagnostics/PresentMonTraceBackend.cpp
         diagnostics/PresentModeMapping.cpp
     LIBRARIES Qt6::Core
 )
 target_include_directories(present_provider_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+if(EXOSNAP_WITH_PRESENTMON)
+    target_compile_definitions(present_provider_tests PRIVATE EXOSNAP_HAS_PRESENTMON)
+    target_link_libraries(present_provider_tests PRIVATE PresentMon::consumer)
+endif()
 
 # Wave D: the app -> engine present overlay. Pure mapping; needs recorder_core for
 # the snapshot type but no ETW, no elevation and no recording.
