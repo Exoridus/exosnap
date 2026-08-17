@@ -3313,16 +3313,35 @@ void QuickApplication::initializeShell() {
     // asked for and what answered it, which is the difference between "the product
     // refused, correctly" and "the product hung" — indistinguishable to a user, and
     // until now indistinguishable in a support bundle too.
-    QObject::connect(&shell_adapter_, &ShellAdapter::closeDecided, &shell_adapter_,
-                     [](const QString& kind, bool recording, bool exporting, bool remuxing) {
-                         diagnostics::AppLog::info(
-                             QStringLiteral("shell"),
-                             QStringLiteral("close requested -> %1 (recording=%2 exporting=%3 remuxing=%4)")
-                                 .arg(kind)
-                                 .arg(recording ? 1 : 0)
-                                 .arg(exporting ? 1 : 0)
-                                 .arg(remuxing ? 1 : 0));
-                     });
+    QObject::connect(
+        &shell_adapter_, &ShellAdapter::closeDecided, &shell_adapter_,
+        [this](const QString& kind, bool recording, bool exporting, bool remuxing) {
+            diagnostics::AppLog::info(QStringLiteral("shell"),
+                                      QStringLiteral("close requested -> %1 (recording=%2 exporting=%3 remuxing=%4)")
+                                          .arg(kind)
+                                          .arg(recording ? 1 : 0)
+                                          .arg(exporting ? 1 : 0)
+                                          .arg(remuxing ? 1 : 0));
+            // One close attempt, one decision, one place the latch is cleared. A
+            // tray "Quit" that ends at a prompt the user then cancels must not leave
+            // the next ordinary close behaving like a hard quit.
+            force_quit_ = false;
+
+            // An APPROVED close ends the process, and does so explicitly rather than
+            // leaving it to quitOnLastWindowClosed. Qt quits when the last visible
+            // "primary window (i.e. top level window with no transient parent)"
+            // closes -- and all five capture overlays are exactly that: top level,
+            // `transientParent: null`. So a standing notification toast kept the
+            // application alive after its only window was gone, with the tray icon
+            // still showing and its Quit routing through a window that no longer
+            // existed. Task Manager was the only way out.
+            //
+            // Queued, so the close this decision belongs to finishes first.
+            if (kind == QLatin1String("allow")) {
+                QMetaObject::invokeMethod(
+                    QCoreApplication::instance(), []() { QCoreApplication::quit(); }, Qt::QueuedConnection);
+            }
+        });
     // A guard prompt is modal and lives inside the root window, so raising one
     // while that window is hidden asks a question nobody can see — and the app
     // then sits there waiting for an answer. Reached from the tray "Quit" during
@@ -3332,7 +3351,11 @@ void QuickApplication::initializeShell() {
     // requestClose() will prompt or close outright — restoring there would flash
     // the window on screen for the ordinary idle quit.
     QObject::connect(&shell_adapter_, &ShellAdapter::closeGuardChanged, &shell_adapter_, [this]() {
-        if (shell_adapter_.closeGuardActive() && root_window_ != nullptr && !root_window_->isVisible())
+        // Unconditional raise, not only when hidden. A prompt behind another
+        // application is the same failure as a prompt behind the tray: the user
+        // asked to close, nothing visibly happened, and the question waiting for
+        // them is somewhere they are not looking.
+        if (shell_adapter_.closeGuardActive() && root_window_ != nullptr)
             restoreWindowFromTray();
     });
 }
@@ -3365,18 +3388,29 @@ void QuickApplication::initializeTray() {
             QStringLiteral("tray Quit requested (window=%1)")
                 .arg(root_window_ != nullptr ? QStringLiteral("present") : QStringLiteral("absent")));
         force_quit_ = true;
-        if (root_window_)
+        // A visible window is asked to close, so the request travels the same path
+        // an ordinary close does and inherits the guards for free.
+        if (root_window_ != nullptr && root_window_->isVisible()) {
             root_window_->close();
+            return;
+        }
+        // No window to deliver a close event to -- it is hidden in the tray, or it
+        // was closed while an overlay kept the process alive. Routing the request
+        // through a window in that state is how a tray Quit came to do nothing at
+        // all, so ask the shell directly: same guard chain, same decision, and the
+        // approved case quits through closeDecided like every other close.
+        if (shell_adapter_.requestClose())
+            flushPendingPersists();
     });
 
     shell_adapter_.setHideToTrayProvider([this]() {
-        const bool hide =
-            ui::tray::ShouldHideToTray(settings_.keep_running_in_tray, force_quit_, tray_presence_ != nullptr);
-        // Consumed on the first close attempt after the tray "Quit", matching the
-        // Widgets shell: leaving it latched would turn every later close into a
-        // hard quit even after the user had cancelled at a guard.
-        force_quit_ = false;
-        return hide;
+        // Reads the latch; does NOT consume it. Since the tear-down guards moved
+        // ahead of this branch, a tray "Quit" during a recording never reaches the
+        // provider at all -- it raises a prompt first -- so consuming the latch here
+        // would leave it set whenever the user was asked something. It is cleared
+        // instead on closeDecided, which fires exactly once per close attempt for
+        // every outcome, including the ones that never get this far.
+        return ui::tray::ShouldHideToTray(settings_.keep_running_in_tray, force_quit_, tray_presence_ != nullptr);
     });
 
     QObject::connect(&shell_adapter_, &ShellAdapter::hideToTrayRequested, &shell_adapter_, [this]() {

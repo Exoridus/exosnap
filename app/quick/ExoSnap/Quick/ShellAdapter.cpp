@@ -108,20 +108,9 @@ CloseGuardState ShellAdapter::currentState() const {
 }
 
 bool ShellAdapter::requestClose() {
-    // Ahead of the guards, and deliberately so. Close-to-tray is not a weaker
-    // form of closing: nothing is torn down, so there is nothing to warn about.
-    // Asking "you are still recording, really close?" before a hide would
-    // contradict the whole reason the preference exists. The provider owns the
-    // force-quit latch, so a tray "Quit" falls through to the guards below.
-    if (hide_to_tray_provider_ && hide_to_tray_provider_()) {
-        // Any prompt still standing belongs to a previous, abandoned attempt.
-        cancelCloseGuard();
-        emit closeDecided(QStringLiteral("hideToTray"), false, false, false);
-        emit hideToTrayRequested();
-        return false;
-    }
+    const CloseGuardState state = currentState();
+    const CloseGuardPrompt prompt = EvaluateCloseGuard(state);
 
-    const CloseGuardPrompt prompt = EvaluateCloseGuard(currentState());
     // Reported for every outcome, because three of them look identical from the
     // outside: the window simply stays. A user saying "Quit did nothing" has no way
     // to tell a silent block from an unseen prompt from a teardown that hung, and
@@ -130,23 +119,55 @@ bool ShellAdapter::requestClose() {
     // A SIGNAL rather than a log call, so this adapter keeps its two-library
     // dependency surface. The application logs it, which is also where the other
     // half of the story lives -- the tray Quit that asked for the close.
-    const CloseGuardState state = currentState();
-    emit closeDecided(QString::fromLatin1(CloseGuardKindKey(prompt.kind)), state.recording, state.exporting,
-                      state.remuxing);
+    const auto report = [this, &state](const char* kind) {
+        emit closeDecided(QString::fromLatin1(kind), state.recording, state.exporting, state.remuxing);
+    };
+
+    // The tear-down guards run AHEAD of close-to-tray, and that ordering is the
+    // product rule: a running recording, export or remux is asked about whichever
+    // way the preference is set, because what the user is answering is "close for
+    // real", not "hide". Confirming therefore always ends in a full close --
+    // confirmCloseGuard() emits closeApproved, which the window honours without
+    // consulting this function again, so the tray branch below is never reached.
+    //
+    // This deliberately reverses the earlier order, where a hide short-circuited
+    // everything on the argument that hiding tears nothing down. That argument is
+    // sound for the hide itself and wrong about the question: with close-to-tray on,
+    // "close" during a recording used to silently mean "hide", and the user never
+    // found out that the thing they asked to close was still running.
     switch (prompt.kind) {
-    case CloseGuardKind::Allow:
-        clearPrompt();
-        return true;
-    case CloseGuardKind::BlockSilently:
-        // The finalizing overlay is already on screen; no prompt, no close.
-        clearPrompt();
-        return false;
     case CloseGuardKind::ConfirmRemux:
     case CloseGuardKind::ConfirmExport:
     case CloseGuardKind::ConfirmRecording:
+        report(CloseGuardKindKey(prompt.kind));
         publish(prompt);
         return false;
+    case CloseGuardKind::BlockSilently:
+    case CloseGuardKind::Allow:
+        break;
     }
+
+    // Close-to-tray sits below the tear-down guards and ABOVE the finalize block,
+    // because a finalize in flight is precisely the case where not ending the
+    // process is the safe answer -- and hiding is not ending it. Nothing is torn
+    // down here, so the half-written container the finalize guard exists to prevent
+    // cannot arise.
+    if (hide_to_tray_provider_ && hide_to_tray_provider_()) {
+        // Any prompt still standing belongs to a previous, abandoned attempt.
+        cancelCloseGuard();
+        report("hideToTray");
+        emit hideToTrayRequested();
+        return false;
+    }
+
+    if (prompt.kind == CloseGuardKind::BlockSilently) {
+        // The finalizing overlay is already on screen; no prompt, no close.
+        report(CloseGuardKindKey(prompt.kind));
+        clearPrompt();
+        return false;
+    }
+
+    report(CloseGuardKindKey(CloseGuardKind::Allow));
     clearPrompt();
     return true;
 }

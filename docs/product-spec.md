@@ -1367,7 +1367,33 @@ release (0.11 per ADR 0022).
     design-system values, not preferences; the Settings section configures behaviour and content
     only. Click-through is likewise not a setting — it is a correctness property of a window that
     sits over whatever the user is recording.
-- **Close-to-tray** is opt-in.
+- **Close-to-tray** is opt-in and **off by default**.
+
+**Closing the window.** Two inputs decide the outcome, and work in flight outranks the preference:
+
+| Close-to-tray | Recording, export or remux in flight | Outcome |
+|---|---|---|
+| off | no | the application closes completely |
+| off | yes | the window comes to the front and asks; confirming closes completely |
+| **on** | **yes** | **the same** — the window comes to the front and asks; confirming closes completely |
+| on | no | the window hides to the tray |
+
+The third row is the rule worth stating: a running recording is asked about **whichever way the
+preference is set**. Hiding tears nothing down, which is why it needs no warning of its own — but
+what the user asked for was to *close*, and silently turning that into "hide" left them believing a
+recording had ended when it had not. What they are answering is therefore always "close for real",
+and confirming never resolves to a hide.
+
+A finalize still in flight is the one case that blocks a full close without asking (the container is
+being written), yet still permits a hide — hiding does not end the process, so the half-written file
+the block exists to prevent cannot arise.
+
+**An approved close ends the process.** It does so explicitly rather than relying on the toolkit's
+"quit when the last window closes" behaviour, because the five capture-excluded overlays are
+top-level windows in their own right: a standing notification kept the application alive after its
+only window was gone, with the tray icon still showing and its Quit routing through a window that no
+longer existed. **Quit** in the tray menu works whether the window is visible, hidden, or already
+gone.
 
 ---
 
