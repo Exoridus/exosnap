@@ -396,6 +396,18 @@ target_sources(exosnap
         "$<${EXOSNAP_HARNESS_GATE}:${PROJECT_SOURCE_DIR}/app/benchmark/BenchmarkEffectiveConfig.h>"
 )
 
+# Deterministic live-pipeline snapshots for the Diagnostics visual states.
+# UNGATED, unlike the benchmark harness above, because the function that seeds
+# them -- QuickApplication::applyDiagnosticsVisualScenarios -- is itself ungated:
+# the Diagnostics and Logs visual scenarios have always been env-configured in
+# every configuration. Gating only the snapshots would break the Release link
+# rather than remove anything.
+target_sources(exosnap
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}/app/visual_tests/DiagnosticsLiveScenario.cpp
+        ${PROJECT_SOURCE_DIR}/app/visual_tests/DiagnosticsLiveScenario.h
+)
+
 if(WIN32)
     # The two Windows resource scripts that make this a shippable executable:
     # exosnap.rc carries the three application icons (bootstrap's WM_SETICON path
@@ -1074,6 +1086,10 @@ exosnap_add_gtest(
     TEST_PREFIX quick_diagnostics_policy.
     SOURCES
         ${EXOSNAP_QUICK_TESTS_DIR}/test_diagnostics_policy.cpp
+        # The live summary tiles, driven by the SAME fixtures the visual harness
+        # seeds, so a capture and these assertions describe one thing.
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_diagnostics_live_tiles.cpp
+        ${PROJECT_SOURCE_DIR}/app/visual_tests/DiagnosticsLiveScenario.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsController.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsProbe.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/FixActionDispatcher.cpp
@@ -1081,6 +1097,10 @@ exosnap_add_gtest(
         Qt6::Core
         Qt6::Gui
         exosnap_diagnostics_test_support
+        # So the live tiles and pipeline.snapshot can be asserted against each
+        # other in one place: they read the same snapshot, and the test is what
+        # keeps that from quietly becoming two readings of it.
+        exosnap_observability
         exosnap::capability
         recorder_core
 )

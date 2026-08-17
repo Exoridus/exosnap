@@ -188,6 +188,276 @@ std::string HumanBytes(uint64_t bytes) {
     return Number(gb, 1) + " GB";
 }
 
+namespace {
+
+// The engine's health verdict, rendered. Not a re-classification: this maps one
+// enumerator onto one tone and nothing else decides a colour anywhere below.
+TileTone ToneOfHealth(recorder_core::PipelineHealth health) noexcept {
+    switch (health) {
+    case recorder_core::PipelineHealth::Critical:
+        return TileTone::Blocker;
+    case recorder_core::PipelineHealth::Warning:
+        return TileTone::Notice;
+    case recorder_core::PipelineHealth::Good:
+    case recorder_core::PipelineHealth::Idle:
+    case recorder_core::PipelineHealth::Unavailable:
+        return TileTone::Neutral;
+    }
+    return TileTone::Neutral;
+}
+
+// A per-tile tone follows the engine's ATTRIBUTION: a tile turns amber only when
+// the engine named its stage as the bottleneck AND said the pipeline is unwell.
+// Without the second half every tile would light up the moment a bottleneck was
+// merely identified in a healthy pipeline.
+TileTone ToneOfStage(const recorder_core::RecordingDiagnosticsSnapshot& s,
+                     std::initializer_list<recorder_core::PipelineBottleneck> stages) noexcept {
+    if (s.health != recorder_core::PipelineHealth::Warning && s.health != recorder_core::PipelineHealth::Critical)
+        return TileTone::Neutral;
+    for (const recorder_core::PipelineBottleneck stage : stages) {
+        if (s.bottleneck == stage)
+            return ToneOfHealth(s.health);
+    }
+    return TileTone::Neutral;
+}
+
+std::string BottleneckLabel(recorder_core::PipelineBottleneck bottleneck) {
+    switch (bottleneck) {
+    case recorder_core::PipelineBottleneck::None:
+        return "No sustained bottleneck";
+    case recorder_core::PipelineBottleneck::Capture:
+        return "Capture";
+    case recorder_core::PipelineBottleneck::Compositor:
+        return "Compositor";
+    case recorder_core::PipelineBottleneck::VideoEncoder:
+        return "Video encoder";
+    case recorder_core::PipelineBottleneck::Audio:
+        return "Audio";
+    case recorder_core::PipelineBottleneck::Muxer:
+        return "Muxer";
+    case recorder_core::PipelineBottleneck::Disk:
+        return "Disk";
+    case recorder_core::PipelineBottleneck::Unknown:
+        return "Not enough evidence yet";
+    }
+    return "Not enough evidence yet";
+}
+
+std::string HealthLabel(recorder_core::PipelineHealth health) {
+    switch (health) {
+    case recorder_core::PipelineHealth::Good:
+        return "Good";
+    case recorder_core::PipelineHealth::Warning:
+        return "Warning";
+    case recorder_core::PipelineHealth::Critical:
+        return "Critical";
+    case recorder_core::PipelineHealth::Idle:
+        return "Idle";
+    case recorder_core::PipelineHealth::Unavailable:
+        return "Unavailable";
+    }
+    return "Unavailable";
+}
+
+std::string CodecName(recorder_core::VideoCodec codec) {
+    switch (codec) {
+    case recorder_core::VideoCodec::Av1:
+        return "AV1";
+    case recorder_core::VideoCodec::Hevc:
+        return "HEVC";
+    case recorder_core::VideoCodec::H264:
+        return "H.264";
+    }
+    return "AV1";
+}
+
+std::string PresetName(recorder_core::NvencPreset preset) {
+    switch (preset) {
+    case recorder_core::NvencPreset::P1:
+        return "P1";
+    case recorder_core::NvencPreset::P2:
+        return "P2";
+    case recorder_core::NvencPreset::P3:
+        return "P3";
+    case recorder_core::NvencPreset::P4:
+        return "P4";
+    case recorder_core::NvencPreset::P5:
+        return "P5";
+    case recorder_core::NvencPreset::P6:
+        return "P6";
+    case recorder_core::NvencPreset::P7:
+        return "P7";
+    }
+    return "P4";
+}
+
+std::string PresentModeLabel(recorder_core::PresentMode mode) {
+    switch (mode) {
+    case recorder_core::PresentMode::Composed:
+        return "Composed";
+    case recorder_core::PresentMode::IndependentFlip:
+        return "Independent flip";
+    case recorder_core::PresentMode::ExclusiveFullscreen:
+        return "Exclusive fullscreen";
+    case recorder_core::PresentMode::Unknown:
+        return "Unknown";
+    }
+    return "Unknown";
+}
+
+// Coarse on purpose. A disk-fill estimate is a projection from the current
+// sustained throughput, and quoting it to the minute would claim a precision the
+// measurement does not have.
+std::string CoarseDuration(double seconds) {
+    if (seconds >= 6.0 * 3600.0)
+        return std::string("> 6") + kNarrowNbsp + "h";
+    if (seconds >= 3600.0)
+        return Number(seconds / 3600.0, 1) + kNarrowNbsp + "h";
+    if (seconds >= 60.0)
+        return Number(seconds / 60.0, 0) + kNarrowNbsp + "min";
+    return Number(seconds, 0) + kNarrowNbsp + "s";
+}
+
+std::string Join(const std::string& left, const std::string& right) {
+    if (left.empty())
+        return right;
+    if (right.empty())
+        return left;
+    return left + " " + kMiddot + " " + right;
+}
+
+LiveTile PipelineHealthTile(const recorder_core::RecordingDiagnosticsSnapshot& s) {
+    LiveTile tile;
+    tile.key = "pipelineHealth";
+    tile.title = "Pipeline health";
+    tile.value = HealthLabel(s.health);
+    tile.sub = BottleneckLabel(s.bottleneck);
+    // The engine's own sentence when it has one; the drop count otherwise. Never
+    // a sentence written here about a problem the engine did not report.
+    tile.detail = s.bottleneck_reason.empty() ? "Problem drops " + Number(s.capture.frames_dropped_problem())
+                                              : s.bottleneck_reason;
+    tile.tone = ToneOfHealth(s.health);
+    return tile;
+}
+
+LiveTile FramePacingTile(const recorder_core::RecordingDiagnosticsSnapshot& s) {
+    LiveTile tile;
+    tile.key = "framePacing";
+    tile.title = "Frame pacing";
+    tile.value = Number(s.capture.actual_fps, 2) + " fps";
+    tile.sub = "Target " + Number(s.capture.target_fps, 0) + " fps";
+    if (s.capture.present_cadence_availability == recorder_core::MetricAvailability::Available)
+        tile.sub = Join(tile.sub, "jitter " + Number(s.capture.source_present_jitter_ms, 1) + " ms");
+
+    if (s.capture.present_mode_availability == recorder_core::MetricAvailability::Available) {
+        tile.detail = Join(PresentModeLabel(s.capture.source_present_mode),
+                           s.capture.source_tearing ? std::string("tearing active") : std::string("no tearing"));
+    } else {
+        // Named, not blank: "unavailable" without a cause reads as a defect, and
+        // the cause is an opt-in the user controls.
+        tile.detail = "Present diagnostics unavailable (elevation + opt-in)";
+    }
+    tile.tone =
+        ToneOfStage(s, {recorder_core::PipelineBottleneck::Capture, recorder_core::PipelineBottleneck::Compositor});
+    return tile;
+}
+
+LiveTile EncoderTile(const recorder_core::RecordingDiagnosticsSnapshot& s) {
+    LiveTile tile;
+    tile.key = "encoder";
+    tile.title = "Encoder";
+    // What is ACTUALLY running, from the encoder's initialization record. Falls
+    // back to the codec the diagnostics stream reports when no encoder has been
+    // configured -- never to the configured preset, which is a request.
+    if (s.encoder_init.valid) {
+        tile.value = CodecName(s.encoder_init.codec) + " " + kMiddot + " " + PresetName(s.encoder_init.preset);
+        if (s.encoder_init.rc_mode == recorder_core::RateControlMode::ConstantQuality)
+            tile.value += std::string(" ") + kMiddot + " CQ " + Number(static_cast<uint64_t>(s.encoder_init.cq));
+    } else {
+        tile.value = CodecName(s.video_encoder.codec);
+    }
+
+    if (s.video_encoder.frames_encoded > 0) {
+        tile.sub = "p99 " + Number(s.video_encoder.p99_ms, 1) + " ms";
+        if (s.video_timing.budget_ms > 0.0)
+            tile.sub = Join(tile.sub, "budget " + Number(s.video_timing.budget_ms, 2) + " ms");
+    } else {
+        tile.sub = "No frame encoded yet";
+    }
+    tile.detail = "Backlog " + Number(s.video_encoder.backlog);
+    tile.tone = ToneOfStage(s, {recorder_core::PipelineBottleneck::VideoEncoder});
+    return tile;
+}
+
+LiveTile AudioSyncTile(const recorder_core::RecordingDiagnosticsSnapshot& s) {
+    LiveTile tile;
+    tile.key = "audioSync";
+    tile.title = "Audio sync";
+    if (!s.audio.active) {
+        tile.value = "No audio";
+        tile.sub = "This recording has no audio track";
+        tile.detail.clear();
+        return tile;
+    }
+
+    if (s.av_drift_availability == recorder_core::MetricAvailability::Available) {
+        const std::string sign = s.av_drift_ms >= 0.0 ? "+" : "";
+        tile.value = sign + Number(s.av_drift_ms, 1) + " ms";
+    } else {
+        // A multi-source merge mixes several device clocks and does not report.
+        // Zero here would claim perfect sync on a recording nobody measured.
+        tile.value = "Unavailable";
+    }
+
+    tile.sub = Number(static_cast<uint64_t>(s.audio.sample_rate / 1000)) + " kHz";
+    tile.sub = Join(tile.sub, s.audio.channels == 1 ? std::string("Mono") : std::string("Stereo"));
+
+    std::string detail;
+    if (s.peak_av_drift_availability == recorder_core::MetricAvailability::Available)
+        detail = "peak " + Number(s.peak_av_drift_ms, 1) + " ms";
+    if (s.clock_slaving_active)
+        detail = Join(detail, "correcting " + Number(s.clock_slaving_ppm, 0) + " ppm");
+    if (s.audio.source_degraded) {
+        detail = Join(detail, Number(static_cast<uint64_t>(s.audio.degraded_sources)) + " source(s) silent");
+    }
+    tile.detail = detail;
+
+    tile.tone = ToneOfStage(s, {recorder_core::PipelineBottleneck::Audio});
+    // A degraded source is a MEASURED problem in its own right (ADR 0046) and is
+    // reported as one even while the engine still calls the pipeline healthy --
+    // the recording keeps running, which is why it never escalates past Notice.
+    if (s.audio.source_degraded && tile.tone == TileTone::Neutral)
+        tile.tone = TileTone::Notice;
+    return tile;
+}
+
+LiveTile StorageTile(const recorder_core::RecordingDiagnosticsSnapshot& s) {
+    LiveTile tile;
+    tile.key = "storage";
+    tile.title = "Storage";
+    tile.value = Number(s.disk.throughput_mib_s, 0) + " MiB/s";
+    tile.sub = "Write failures " + Number(s.disk.write_failures);
+    // Negative means the estimate could not be made (unknown throughput or no
+    // free-space reading), which is a different answer from "no time left".
+    tile.detail = s.disk_fill_eta_seconds >= 0.0 ? "Est. remaining " + CoarseDuration(s.disk_fill_eta_seconds)
+                                                 : "Remaining time unavailable";
+    tile.tone = ToneOfStage(s, {recorder_core::PipelineBottleneck::Disk, recorder_core::PipelineBottleneck::Muxer});
+    if (s.disk.write_failures > 0 && tile.tone == TileTone::Neutral)
+        tile.tone = TileTone::Notice;
+    return tile;
+}
+
+} // namespace
+
+std::vector<LiveTile> BuildLiveTiles(const recorder_core::RecordingDiagnosticsSnapshot& snapshot) {
+    const bool live = snapshot.lifecycle == recorder_core::DiagnosticsLifecycle::Recording ||
+                      snapshot.lifecycle == recorder_core::DiagnosticsLifecycle::Paused;
+    if (!snapshot.valid || !live)
+        return {};
+    return {PipelineHealthTile(snapshot), FramePacingTile(snapshot), EncoderTile(snapshot), AudioSyncTile(snapshot),
+            StorageTile(snapshot)};
+}
+
 bool NeedsElevation(std::string_view id) noexcept {
     return id.rfind("rec.present.", 0) == 0 || id.rfind("rec.dpc.", 0) == 0;
 }

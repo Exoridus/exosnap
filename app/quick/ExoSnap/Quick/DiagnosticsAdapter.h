@@ -18,6 +18,7 @@
 #include <QtQmlIntegration/qqmlintegration.h>
 
 #include <memory>
+#include <vector>
 
 namespace exosnap::quick {
 
@@ -60,6 +61,11 @@ class DiagnosticsAdapter : public QObject {
     Q_PROPERTY(QAbstractListModel* issues READ issues CONSTANT FINAL)
 
     Q_PROPERTY(QVariantList tiles READ tiles NOTIFY tilesChanged FINAL)
+    // The five live tiles, and whether there is a live pipeline to show them
+    // for. Separate from `tiles`: those are pre-flight readiness facts and stay
+    // meaningful while idle, these exist only while something is recording.
+    Q_PROPERTY(QVariantList liveTiles READ liveTiles NOTIFY liveTilesChanged FINAL)
+    Q_PROPERTY(bool liveTilesVisible READ liveTilesVisible NOTIFY liveTilesChanged FINAL)
     Q_PROPERTY(QVariantList tips READ tips NOTIFY issuesChanged FINAL)
     Q_PROPERTY(bool hasIssues READ hasIssues NOTIFY issuesChanged FINAL)
     Q_PROPERTY(QVariantList environmentRows READ environmentRows NOTIFY environmentChanged FINAL)
@@ -91,6 +97,8 @@ class DiagnosticsAdapter : public QObject {
     [[nodiscard]] bool elevated() const noexcept;
     [[nodiscard]] QAbstractListModel* issues() noexcept;
     [[nodiscard]] const QVariantList& tiles() const noexcept;
+    [[nodiscard]] const QVariantList& liveTiles() const noexcept;
+    [[nodiscard]] bool liveTilesVisible() const noexcept;
     [[nodiscard]] const QVariantList& tips() const noexcept;
     [[nodiscard]] bool hasIssues() const noexcept;
     [[nodiscard]] const QVariantList& environmentRows() const noexcept;
@@ -151,6 +159,7 @@ class DiagnosticsAdapter : public QObject {
     void expertModeChanged(bool enabled);
     void hasLastRecordingChanged();
     void tilesChanged();
+    void liveTilesChanged();
     void issuesChanged();
     void environmentChanged();
     void selfTestChanged();
@@ -172,6 +181,11 @@ class DiagnosticsAdapter : public QObject {
     void applyProbe(diagnostics::DiagnosticsController::ProbeResult probe, bool from_manual_check);
     void refreshSnapshot();
     void refreshPipeline();
+    // Rebuilds the five live tiles from the last snapshot and publishes only when
+    // they actually differ. The stream arrives at ~5 Hz and almost always
+    // rebuilds identical -- a notify per sample would repaint five tiles twice a
+    // second for nothing.
+    void refreshLiveTiles();
     void refreshSelfTest();
     void setChecking(bool checking);
     void updateLiveProbeTimer();
@@ -185,6 +199,11 @@ class DiagnosticsAdapter : public QObject {
     QString last_check_text_;
     QString self_test_status_;
     QVariantList tiles_;
+    QVariantList live_tiles_;
+    // The plain structs the QVariantList above was built from, kept so the
+    // "did anything change" comparison is over typed values rather than over
+    // QVariantMaps.
+    std::vector<diagnostics::LiveTile> live_tile_values_;
     QVariantList tips_;
     QVariantList environment_rows_;
     QVariantList config_rows_;

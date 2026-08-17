@@ -22,6 +22,7 @@
 #include "models/VideoSettingsModel.h"
 #include "ui/CodecLabels.h"
 #include "ui/theme/ExoSnapMetrics.h"
+#include "visual_tests/DiagnosticsLiveScenario.h"
 #include "visual_tests/RecordVisualStateNames.h"
 
 #include "ExoSnapBuildInfo.h"
@@ -2171,6 +2172,17 @@ void QuickApplication::applyDiagnosticsVisualScenarios() {
         config.hotkeys_ok = false;
         config.hotkeys_summary = "Ctrl+Shift+R";
         diagnostics_adapter_.setDiagnosticConfig(std::move(config));
+        diagnostics_visual_scenario_active_ = true;
+    }
+
+    // The live pipeline summary. Seeded through applyLiveDiagnostics(), which is
+    // the same entry point the recording engine's ~5 Hz callback uses, so the
+    // real BuildLiveTiles() policy decides what the capture shows. A scenario
+    // that placed tiles directly would photograph the fixture rather than the
+    // product's own classification of it.
+    const QByteArray diag_live = qgetenv("EXOSNAP_VISUAL_DIAG_LIVE");
+    if (!diag_live.isEmpty()) {
+        diagnostics_adapter_.applyLiveDiagnostics(visual::MakeDiagnosticsLiveSnapshot(QString::fromUtf8(diag_live)));
         diagnostics_visual_scenario_active_ = true;
     }
 }

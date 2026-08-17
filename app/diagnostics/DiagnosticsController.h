@@ -175,6 +175,40 @@ struct ReadinessTileInputs {
 
 [[nodiscard]] std::vector<ReadinessTile> BuildReadinessTiles(const ReadinessTileInputs& inputs);
 
+// ── Live tiles ──────────────────────────────────────────────────────────────────
+//
+// The five questions the Diagnostics page has to answer while a recording is
+// running, and could not: is the pipeline healthy, where is the bottleneck, is
+// frame pacing healthy, is the encoder healthy, is audio synchronous, is storage
+// healthy. Everything below is a RENDERING of the engine's own verdict --
+// PipelineHealth, PipelineBottleneck and the measurements behind them. There is
+// no second classification here: a tile never decides that something is wrong,
+// it only says which of the engine's findings it is showing.
+//
+// The live pipeline stage cards (PipelineCardBuilder) stay where they are and
+// keep their Expert home. These tiles are the calm summary above them.
+struct LiveTile {
+    std::string key; // "pipelineHealth" | "framePacing" | "encoder" | "audioSync" | "storage"
+    std::string title;
+    std::string value;  // the one measurement that answers the tile's question
+    std::string sub;    // its context (target, format, budget)
+    std::string detail; // a second fact, or why the first one is unavailable
+    TileTone tone = TileTone::Neutral;
+
+    friend bool operator==(const LiveTile&, const LiveTile&) = default;
+};
+
+// Pure. Returns an empty list unless the snapshot describes a pipeline that is
+// actually running (Recording or Paused).
+//
+// Two exclusions, for two different reasons. An invalid snapshot has nothing
+// measured at all, and five tiles of em dashes are worse than no tiles. A
+// COMPLETED or FAILED session has real numbers but they answer a different
+// question -- "how did it go", which the Edit review step owns -- and leaving
+// them on a page headed "live" would report a recording that has stopped as one
+// that is still running.
+[[nodiscard]] std::vector<LiveTile> BuildLiveTiles(const recorder_core::RecordingDiagnosticsSnapshot& snapshot);
+
 // ── Fact / configuration tables ─────────────────────────────────────────────────
 
 struct KeyValueRow {

@@ -343,6 +343,57 @@ Item {
                     }
                 }
 
+                // ── Live pipeline summary ───────────────────────────────────────
+                //
+                // Present only while something is recording, and ABOVE the
+                // readiness tiles while it is: readiness answers "may I start",
+                // which stops being the question the moment a recording is
+                // running. Five tiles, one per question the page could not
+                // answer in Simple mode — is the pipeline healthy, where is the
+                // bottleneck, is frame pacing healthy, is the encoder healthy,
+                // is audio synchronous, is storage healthy.
+                //
+                // Every value comes from diagnostics::BuildLiveTiles over the
+                // engine's own snapshot. The page classifies nothing: a tile's
+                // tone IS PipelineHealth plus the engine's bottleneck
+                // attribution, so this surface can never call a pipeline the
+                // engine reported as Good a warning.
+                ColumnLayout {
+                    spacing: ExoTheme.spacingSm
+                    visible: root.diagnostics.liveTilesVisible
+                    Layout.fillWidth: true
+
+                    DiagnosticsSectionHeader {
+                        title: qsTr("LIVE RECORDING")
+                        Layout.fillWidth: true
+                    }
+
+                    GridLayout {
+                        columns: root.tileColumns
+                        columnSpacing: ExoTheme.spacingMd
+                        rowSpacing: ExoTheme.spacingMd
+                        Layout.fillWidth: true
+
+                        Repeater {
+                            model: root.diagnostics.liveTiles
+
+                            ExoStatusTile {
+                                id: liveTile
+
+                                required property var modelData
+
+                                title: liveTile.modelData.title
+                                value: liveTile.modelData.value
+                                sub: liveTile.modelData.sub
+                                detail: liveTile.modelData.detail
+                                tone: liveTile.modelData.tone
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                            }
+                        }
+                    }
+                }
+
                 // ── Readiness tiles ─────────────────────────────────────────────
                 GridLayout {
                     columns: root.tileColumns

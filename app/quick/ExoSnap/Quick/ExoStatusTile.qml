@@ -11,6 +11,11 @@ Rectangle {
     required property string title
     required property string value
     property string sub: ""
+    // A second qualifier line, below `sub`. Empty for the readiness tiles, which
+    // have one fact to add; the live tiles use it for the thing that is missing
+    // when the measurement above it is unavailable (why present diagnostics are
+    // off, why a remaining time cannot be estimated).
+    property string detail: ""
     property string tone: "neutral"
     property bool showOkGlyph: false
     property bool hasUsageBar: false
@@ -49,9 +54,10 @@ Rectangle {
     radius: ExoTheme.radiusLg
 
     Accessible.role: Accessible.StaticText
-    Accessible.name: root.severityText === ""
-                     ? root.title + ": " + root.value + " " + root.sub
-                     : root.severityText + ". " + root.title + ": " + root.value + " " + root.sub
+    readonly property string spokenBody: root.detail === ""
+                                       ? root.title + ": " + root.value + " " + root.sub
+                                       : root.title + ": " + root.value + " " + root.sub + ". " + root.detail
+    Accessible.name: root.severityText === "" ? root.spokenBody : root.severityText + ". " + root.spokenBody
 
     ColumnLayout {
         id: column
@@ -126,6 +132,22 @@ Rectangle {
             Layout.fillWidth: true
             // A one-line floor: a wrapping sub-line must never clip the tile's own
             // height the way an unconstrained wordWrap label does.
+            Layout.minimumHeight: 16
+            font {
+                family: ExoTheme.sansFamily
+                pixelSize: ExoTheme.fontCaption
+            }
+        }
+
+        Label {
+            text: root.detail
+            textFormat: Text.PlainText
+            wrapMode: Text.WordWrap
+            visible: root.detail !== ""
+            color: ExoTheme.textDim
+            Layout.fillWidth: true
+            // Same one-line floor as `sub`: an unconstrained wrapping label
+            // clips its own tile at the 860 px width class.
             Layout.minimumHeight: 16
             font {
                 family: ExoTheme.sansFamily

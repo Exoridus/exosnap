@@ -186,6 +186,37 @@ const QVariantList& DiagnosticsAdapter::tiles() const noexcept {
     return tiles_;
 }
 
+const QVariantList& DiagnosticsAdapter::liveTiles() const noexcept {
+    return live_tiles_;
+}
+
+bool DiagnosticsAdapter::liveTilesVisible() const noexcept {
+    return !live_tiles_.isEmpty();
+}
+
+void DiagnosticsAdapter::refreshLiveTiles() {
+    std::vector<diagnostics::LiveTile> next = diagnostics::BuildLiveTiles(controller_.liveSnapshot());
+    if (next == live_tile_values_)
+        return;
+
+    live_tile_values_ = std::move(next);
+    live_tiles_.clear();
+    live_tiles_.reserve(static_cast<qsizetype>(live_tile_values_.size()));
+    for (const diagnostics::LiveTile& tile : live_tile_values_) {
+        QVariantMap entry;
+        entry.insert(QStringLiteral("key"), QString::fromStdString(tile.key));
+        entry.insert(QStringLiteral("title"), QString::fromStdString(tile.title));
+        entry.insert(QStringLiteral("value"), QString::fromStdString(tile.value));
+        entry.insert(QStringLiteral("sub"), QString::fromStdString(tile.sub));
+        entry.insert(QStringLiteral("detail"), QString::fromStdString(tile.detail));
+        entry.insert(QStringLiteral("tone"),
+                     QString::fromUtf8(diagnostics::TileToneKey(tile.tone).data(),
+                                       static_cast<qsizetype>(diagnostics::TileToneKey(tile.tone).size())));
+        live_tiles_.append(entry);
+    }
+    emit liveTilesChanged();
+}
+
 const QVariantList& DiagnosticsAdapter::tips() const noexcept {
     return tips_;
 }
@@ -372,6 +403,11 @@ void DiagnosticsAdapter::applyLiveDiagnostics(const recorder_core::RecordingDiag
     if (!controller_.liveRecording()) {
         live_throttle_.Reset();
         refreshPipeline();
+        // Not throttled on this edge: leaving the recording lifecycle is the one
+        // transition where the tiles must go away immediately rather than at the
+        // next allowed tick, or the page keeps showing a live summary of a
+        // recording that has stopped.
+        refreshLiveTiles();
         updateLiveProbeTimer();
         return;
     }
@@ -383,6 +419,7 @@ void DiagnosticsAdapter::applyLiveDiagnostics(const recorder_core::RecordingDiag
         return;
 
     refreshPipeline();
+    refreshLiveTiles();
     if (controller_.dataReady())
         refreshSnapshot();
     updateLiveProbeTimer();

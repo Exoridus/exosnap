@@ -391,6 +391,39 @@ TEST(DiagnosticsAdapterTest, LiveSnapshotSwitchesThePipelineToMeasuredStages) {
               QStringLiteral("59.4 / 60.0 fps"));
 }
 
+TEST(DiagnosticsAdapterTest, LiveTilesAppearWithARecordingAndVanishWhenItEnds) {
+    EnsureApplication();
+    DiagnosticsAdapter adapter;
+    adapter.setDiagnosticConfig(MakeConfig());
+
+    // Idle: the readiness tiles are still meaningful, the live summary is not.
+    EXPECT_FALSE(adapter.liveTilesVisible());
+    EXPECT_TRUE(adapter.liveTiles().isEmpty());
+
+    recorder_core::RecordingDiagnosticsSnapshot snapshot;
+    snapshot.valid = true;
+    snapshot.lifecycle = recorder_core::DiagnosticsLifecycle::Recording;
+    snapshot.session_generation = 1;
+    snapshot.health = recorder_core::PipelineHealth::Good;
+    snapshot.capture.target_fps = 60.0;
+    snapshot.capture.actual_fps = 59.98;
+    adapter.applyLiveDiagnostics(snapshot);
+
+    ASSERT_TRUE(adapter.liveTilesVisible());
+    ASSERT_EQ(adapter.liveTiles().size(), 5);
+    EXPECT_EQ(adapter.liveTiles().at(0).toMap().value(QStringLiteral("key")).toString(),
+              QStringLiteral("pipelineHealth"));
+    EXPECT_EQ(adapter.liveTiles().at(0).toMap().value(QStringLiteral("value")).toString(), QStringLiteral("Good"));
+
+    // Leaving the recording lifecycle clears them on that very edge, not at the
+    // next throttled tick: a live summary of a recording that has stopped is a
+    // stale claim about something that is no longer happening.
+    snapshot.lifecycle = recorder_core::DiagnosticsLifecycle::Completed;
+    adapter.applyLiveDiagnostics(snapshot);
+    EXPECT_FALSE(adapter.liveTilesVisible());
+    EXPECT_TRUE(adapter.liveTiles().isEmpty());
+}
+
 TEST(DiagnosticsAdapterTest, SelfTestRowsOnlyAppearOnceAChecklistArrives) {
     EnsureApplication();
     DiagnosticsAdapter adapter;
