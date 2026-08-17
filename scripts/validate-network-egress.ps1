@@ -165,6 +165,12 @@ try {
 
             foreach ($urlMatch in $urlRegex.Matches($line)) {
                 $hostName = $urlMatch.Groups[1].Value
+                # A placeholder in prose is not an egress point. "https://<host>/<path>"
+                # in a doc comment describes the SHAPE of a flag's argument; there is
+                # no host to reach and nothing to inventorize. Deliberately narrow: a
+                # name containing an angle bracket cannot be a real hostname, so this
+                # skips exactly the placeholders and widens the allowlist by nothing.
+                if ($hostName -match '[<>]') { continue }
                 if (-not (Test-HostAllowed -HostName $hostName) -and -not $isAllowlistedFile) {
                     Add-Violation (
                         "new egress point: $relPath`:$($i + 1) references disallowed host '$hostName' " +

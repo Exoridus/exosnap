@@ -209,7 +209,11 @@ KeyDescriptor EnumKey(const char* key, const char* description, const std::array
 using TextGetter = QString (SettingsAdapter::*)() const;
 using TextSetter = void (SettingsAdapter::*)(const QString&);
 
-KeyDescriptor TextKey(const char* key, const char* description, TextGetter get, TextSetter set,
+// `get` and `set` by const reference rather than by value: a pointer to member
+// function is not necessarily pointer-sized on MSVC (an inheritance thunk makes
+// it wider), and this signature is the one cppcheck measures as large enough to
+// matter. The lambdas below copy it once, which is what they need anyway.
+KeyDescriptor TextKey(const char* key, const char* description, const TextGetter& get, const TextSetter& set,
                       QStringList allowed = {}) {
     KeyDescriptor descriptor;
     descriptor.key = QString::fromLatin1(key);
