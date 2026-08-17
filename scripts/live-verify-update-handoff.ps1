@@ -87,7 +87,7 @@ function Get-Sha256([string] $Path) {
     return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 
-function Normalize-Path([string] $Path) {
+function ConvertTo-ComparablePath([string] $Path) {
     if ([string]::IsNullOrEmpty($Path)) { return '' }
     return $Path.Replace('/', '\').TrimEnd('\').ToLowerInvariant()
 }
@@ -105,6 +105,7 @@ if (-not (Test-Path -LiteralPath $AppPath)) { throw "No such application: $AppPa
 $appFull = (Resolve-Path -LiteralPath $AppPath).Path
 $appSha = Get-Sha256 $appFull
 $appDir = Split-Path -Parent $appFull
+$appVersion = (Get-Item -LiteralPath $appFull).VersionInfo.ProductVersion
 
 # Artifact-class precondition. LaunchUpdater() stages its runtime from paths
 # relative to applicationDirPath(), and only an installed tree is flat that way
@@ -145,16 +146,19 @@ $evidence = [ordered]@{
     feed        = $FeedUrl
     channel     = $Channel
     requireApply = [bool]$RequireApply
-    application = @{ path = $appFull; sha256 = $appSha }
+    application = @{ path = $appFull; sha256 = $appSha; productVersion = $appVersion }
 }
 $exitCode = 1
 try {
-    # The application's own feed override is only accepted by a non-official
-    # build; an official one reads the production feed and refuses the flag. Pass
-    # it only when it differs from the production default, so this script drives
-    # both build kinds without pretending the flag is universal.
+    # Which build this is decides how it is allowed to reach a feed at all, and
+    # the artifact says so itself: a `-dev` ProductVersion is the marker for an
+    # UNOFFICIAL build (root CMakeLists.txt), whose update check is gated off
+    # entirely. For it, `--update-base-url` is the documented — and only — way to
+    # look at any feed, production one included. An official build refuses the
+    # flag outright and reads the production feed on its own, so passing it there
+    # would turn a valid run into a refused launch.
     $appArgs = @('--live-verify-control', $runId)
-    if ($FeedUrl -ne 'https://api.github.com/repos/Exoridus/exosnap/releases') {
+    if ($appVersion -like '*-dev') {
         $appArgs += @('--update-base-url', $FeedUrl)
     }
     $app = Start-Process -FilePath $appFull -PassThru -ArgumentList $appArgs
@@ -217,9 +221,17 @@ try {
     # The launch snapshot claims a staged executable. Both halves of that claim
     # are checked against the operating system rather than believed: the running
     # child's own image path, and the bytes on disk.
+    # Opened WHILE the child is alive, and its native handle materialised right
+    # away. Get-Process hands back a Process object that opens its handle lazily;
+    # without this touch the object has none by the time the process is gone, and
+    # ExitCode then reads as $null -- which passes every "-ne 0" test while
+    # measuring nothing. Touching .Handle makes .NET cache it, so the exit code
+    # is still readable afterwards.
+    $child = Get-Process -Id $launch.pid -ErrorAction SilentlyContinue
+    if ($null -ne $child) { $null = $child.Handle }
     $childPath = Get-ProcessImagePath $launch.pid
     Add-Step 'the running child is the staged executable the event named' `
-        ((Normalize-Path $childPath) -eq (Normalize-Path $launch.stagedExecutable)) `
+        ((ConvertTo-ComparablePath $childPath) -eq (ConvertTo-ComparablePath $launch.stagedExecutable)) `
         @{ reported = $launch.stagedExecutable; running = $childPath }
 
     $stagedSha = Get-Sha256 $launch.stagedExecutable
@@ -243,7 +255,7 @@ try {
         ($handoff.targetVersion -eq $offered -and $handoff.updateTransactionId -eq $transactionId) `
         @{ target = $handoff.targetVersion; transaction = $handoff.updateTransactionId }
     Add-Step 'the handoff names the parent process and its installation' `
-        ($handoff.appPid -eq $app.Id -and (Normalize-Path $handoff.installDir) -eq (Normalize-Path $appDir)) `
+        ($handoff.appPid -eq $app.Id -and (ConvertTo-ComparablePath $handoff.installDir) -eq (ConvertTo-ComparablePath $appDir)) `
         @{ appPid = $handoff.appPid; parent = $app.Id; installDir = $handoff.installDir }
     Add-Step 'the handoff references the release trust anchor rather than carrying it' `
         ((Test-Path -LiteralPath $handoff.manifestPath) -and (Test-Path -LiteralPath $handoff.manifestSignaturePath) -and
@@ -358,7 +370,7 @@ try {
         # this identifies it, it does not wait for it.
         $candidates = @(Get-CimInstance -ClassName Win32_Process -Filter "Name = 'exosnap.exe'" `
                 -ErrorAction SilentlyContinue |
-            Where-Object { (Normalize-Path $_.ExecutablePath) -eq (Normalize-Path $installedExe) -and
+            Where-Object { (ConvertTo-ComparablePath $_.ExecutablePath) -eq (ConvertTo-ComparablePath $installedExe) -and
                            $_.ProcessId -ne $app.Id })
         Add-Step 'a new ExoSnap process is running from the installation' `
             ($candidates.Count -ge 1) `
@@ -378,18 +390,24 @@ try {
     }
 
     # -- close the child and read its outcome --------------------------------
-    $child = Get-Process -Id $launch.pid -ErrorAction SilentlyContinue
     if ($null -ne $child -and -not $child.HasExited) {
         $close = Invoke-LiveVerifyCommand -Connection $updaterConn -Command 'updater.close'
         Add-Step 'updater.close accepted' $close.ok $close
     }
     if ($null -ne $child) {
-        $child.WaitForExit(60000) | Out-Null
+        $exited = $child.WaitForExit(60000)
+        $observedExit = $null
+        if ($exited) { $observedExit = $child.ExitCode }
+        $evidence.updaterExitCode = $observedExit
         $expectedSuccess = $updaterState.phase -in @('completed', 'restartPending')
-        $evidence.updaterExitCode = $child.ExitCode
+        # A measured code, not merely "not zero": an unreadable exit code is null,
+        # and null passes every -ne 0 test while proving nothing.
         Add-Step 'the updater exit code matches its reported outcome' `
-            (($expectedSuccess -and $child.ExitCode -eq 0) -or (-not $expectedSuccess -and $child.ExitCode -ne 0)) `
-            @{ exitCode = $child.ExitCode; phase = $updaterState.phase }
+            ($null -ne $observedExit -and
+             (($expectedSuccess -and $observedExit -eq 0) -or (-not $expectedSuccess -and $observedExit -ne 0))) `
+            @{ exitCode = $observedExit; exited = $exited; phase = $updaterState.phase }
+    } else {
+        Add-Step 'the updater process could be observed to its exit' $false @{ pid = $launch.pid }
     }
 
     $exitCode = if ($steps.Where({ -not $_.pass }).Count -eq 0) { 0 } else { 1 }

@@ -400,6 +400,31 @@ TEST(UpdaterManualFlow, HandoffModeIsNotManual) {
     EXPECT_FALSE(c.state().manual);
 }
 
+// The footer and the published state offer the SAME thing. A2 is the one case
+// whose answer depends on the mode: a manual run downloaded the manifest itself
+// and can fetch it again; a handoff run would re-read the file ExoSnap handed
+// over and be refused identically, so it offers Close instead of a button that
+// provably cannot work.
+TEST(UpdaterDownloadVerification, TheFooterOffersExactlyWhatTheStateOffers) {
+    UpdaterController manual = MakeManualController();
+    manual.onFailure(FailureCase::VerifyDownloadFailed, QString());
+    EXPECT_TRUE(manual.flowState().retry_entry_step.has_value());
+    EXPECT_EQ(manual.state().primary_action, QStringLiteral("Re-download"));
+    EXPECT_EQ(manual.state().secondary_action, QStringLiteral("Close"));
+
+    UpdaterController handoff = MakeController();
+    handoff.setMode(UpdaterMode::AppHandoff);
+    handoff.onFailure(FailureCase::VerifyDownloadFailed, QString());
+    EXPECT_FALSE(handoff.flowState().retry_entry_step.has_value());
+    EXPECT_EQ(handoff.state().primary_action, QStringLiteral("Close"));
+    EXPECT_TRUE(handoff.state().secondary_action.isEmpty());
+    // The security stop keeps its name and its tone either way -- only the
+    // affordance changes.
+    EXPECT_EQ(handoff.flowState().failure_case, FailureCase::VerifyDownloadFailed);
+    EXPECT_EQ(handoff.state().variant, TerminalVariant::Red);
+    EXPECT_EQ(handoff.flowState().install_state, InstallState::Intact);
+}
+
 TEST(UpdaterTransaction, IsCarriedInThePublishedStateAndSurvivesEveryEvent) {
     UpdaterController c = MakeController();
     c.setMode(UpdaterMode::AppHandoff);

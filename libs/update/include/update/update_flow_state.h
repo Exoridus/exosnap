@@ -181,7 +181,17 @@ struct UpdateFlowState {
 // after B4 the product's action is "open the installed version", not "retry".
 // The updater window's footer and the automation channel's availableActions read
 // this one rule.
-[[nodiscard]] bool RetryOffered(FailureCase failure) noexcept;
+//
+// The MODE is part of the rule, because since ADR 0068 it changes what a retry
+// would actually do. A retry re-enters at Download, and in AppHandoff mode the
+// manifest and its signature are files that were handed over: re-reading them
+// cannot produce a different answer, so A2 is refused identically every time.
+// The rule is deliberately drawn at the whole case rather than at the sub-case
+// (a corrupt PACKAGE could in principle be re-fetched): offering nothing is
+// never a false promise, and offering a button that provably cannot work is.
+// A fresh attempt in that state starts in ExoSnap, which is still running --
+// A2 aborts before the parent is asked to close.
+[[nodiscard]] bool RetryOffered(FailureCase failure, UpdaterMode mode) noexcept;
 
 // The terminal phase a failure case ends in. Only three of the twelve are not
 // UpdatePhase::Failed, and each for a reason the product already states: C3 is a

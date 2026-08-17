@@ -192,7 +192,14 @@ UpStep RetryEntryStep(FailureCase failure) noexcept {
     return UpStep::Download;
 }
 
-bool RetryOffered(FailureCase failure) noexcept {
+bool RetryOffered(FailureCase failure, UpdaterMode mode) noexcept {
+    // A2 in a handoff run: a retry re-enters at Download, and the manifest and
+    // signature it would re-read are the exact files the application handed over.
+    // They cannot change, so the run would be refused identically -- see the
+    // header for why the whole case is drawn in rather than the sub-case.
+    if (mode == UpdaterMode::AppHandoff && failure == FailureCase::VerifyDownloadFailed) {
+        return false;
+    }
     switch (failure) {
     case FailureCase::DownloadFailed:
     case FailureCase::VerifyDownloadFailed:

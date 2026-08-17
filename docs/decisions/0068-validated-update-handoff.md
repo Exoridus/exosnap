@@ -128,6 +128,19 @@ usage error. It is observable on the automation endpoint like every other
 terminal state, because "the updater refused the handoff" is exactly the thing an
 acceptance run has to be able to assert.
 
+### The retry offer becomes mode-aware
+
+A retry re-enters at Download. In a **manual** run that step fetches the manifest,
+so re-running it can genuinely produce a different answer. In an **app-handoff**
+run it re-reads the exact file the application handed over, which cannot change —
+so `VerifyDownloadFailed` (A2) would be refused identically every time.
+`RetryOffered()` therefore takes the mode, and the updater's footer reads the
+same answer the automation channel publishes: `Close`, not a `Re-download` button
+that provably cannot work. The rule is drawn at the whole case rather than at the
+sub-case (a corrupt *package* could in principle be re-fetched) because offering
+nothing is never a false promise; the next attempt starts in ExoSnap, which is
+still running — A2 aborts before the parent is asked to close.
+
 ### What was removed
 
 The seven search arguments are **gone**, not deprecated — ExoSnap is pre-1.0 and

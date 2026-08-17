@@ -315,7 +315,8 @@ void UpdaterController::onFailure(FailureCase c, const QString& detail) {
     // outcomes.
     flow_.phase = exosnap::update::PhaseForFailure(c);
     flow_.failure_case = c;
-    flow_.retry_entry_step = exosnap::update::RetryOffered(c) ? std::optional<UpStep>(RetryEntryStep(c)) : std::nullopt;
+    flow_.retry_entry_step =
+        exosnap::update::RetryOffered(c, flow_.mode) ? std::optional<UpStep>(RetryEntryStep(c)) : std::nullopt;
     flow_.install_state = exosnap::update::InstallStateForFailure(c);
     flow_.reboot_required = c == FailureCase::MsiRebootRequired;
 
@@ -338,8 +339,18 @@ void UpdaterController::onFailure(FailureCase c, const QString& detail) {
             QStringLiteral("The downloaded files didn't match the signed release, so they were discarded.");
         state_.safety_text =
             QStringLiteral("Nothing was installed. Your current version %1 is unchanged.").arg(state_.from_version);
-        state_.primary_action = QStringLiteral("Re-download");
-        state_.secondary_action = QStringLiteral("Close");
+        // The footer offers exactly what the published state offers. In a handoff
+        // run a retry would re-read the manifest ExoSnap handed over and be
+        // refused identically, so the card says Close and the next attempt starts
+        // in ExoSnap -- which is still running, because A2 aborts before the
+        // parent is asked to close.
+        if (flow_.retry_entry_step.has_value()) {
+            state_.primary_action = QStringLiteral("Re-download");
+            state_.secondary_action = QStringLiteral("Close");
+        } else {
+            state_.primary_action = QStringLiteral("Close");
+            state_.secondary_action.clear();
+        }
         break;
     case FailureCase::VerifyReinstallMismatch: // A3 (verification reinstall gate)
         // Nothing was downloaded into place and nothing was installed: the

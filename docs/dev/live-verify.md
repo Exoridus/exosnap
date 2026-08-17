@@ -235,6 +235,12 @@ intact`, no retry, non-zero exit. It is a product outcome on this channel, not a
 usage error, because "the updater refused the handoff" is exactly what an
 acceptance run has to be able to assert.
 
+`retryEntryStep` is mode-aware for one case. A retry re-enters at Download, and
+in `appHandoff` mode that step re-reads the manifest the application handed over
+— it cannot change, so `verifyDownloadFailed` offers no retry there and the
+window's footer says `Close`. In `manual` mode the updater fetched the manifest
+itself, so the retry is real. `availableActions` and the footer always agree.
+
 `updater.cancel` is allowed in exactly one phase: `downloading`. `DownloadToFile`
 is the only operation that checks the flag. `checking` and `waitingForParent`
 answer `blocked` because `FetchReleasesJson` and `WaitForProcessExit` take no

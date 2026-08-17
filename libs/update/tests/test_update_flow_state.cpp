@@ -23,6 +23,7 @@ using exosnap::update::RetryEntryStep;
 using exosnap::update::RetryOffered;
 using exosnap::update::UpdateFlowState;
 using exosnap::update::UpdatePhase;
+using exosnap::update::UpdaterMode;
 using exosnap::update::UpStep;
 
 // Every failure case, in matrix order. The tests below iterate this so a new
@@ -137,7 +138,7 @@ TEST(RetryEntryStepTable, PinnedTargetMismatchWouldRestartAtDownload) {
 TEST(HandoffRejectedCase, IsATruthfulTerminalFailureThatTouchedNothing) {
     EXPECT_EQ(PhaseForFailure(FailureCase::HandoffRejected), UpdatePhase::Failed);
     EXPECT_EQ(InstallStateForFailure(FailureCase::HandoffRejected), InstallState::Intact);
-    EXPECT_FALSE(RetryOffered(FailureCase::HandoffRejected));
+    EXPECT_FALSE(RetryOffered(FailureCase::HandoffRejected, UpdaterMode::AppHandoff));
     EXPECT_EQ(std::string(exosnap::update::FailureCaseName(FailureCase::HandoffRejected)), "handoffRejected");
 }
 
@@ -150,21 +151,35 @@ TEST(UpdaterModeNames, NameTheTwoProductModes) {
 
 TEST(RetryOfferedTable, VersionGatesAndTerminalSuccessesOfferNoRetry) {
     // A retry would re-fetch the same manifest and be refused again; a terminal
-    // success has nothing to repeat.
-    for (const FailureCase failure :
-         {FailureCase::VerifyReinstallMismatch, FailureCase::TargetVersionMismatch, FailureCase::HandoffRejected,
-          FailureCase::LaunchFailed, FailureCase::MsiFailed, FailureCase::MsiRebootRequired}) {
-        EXPECT_FALSE(RetryOffered(failure)) << "case " << exosnap::update::FailureCaseName(failure);
+    // success has nothing to repeat. True in both modes.
+    for (const UpdaterMode mode : {UpdaterMode::Manual, UpdaterMode::AppHandoff}) {
+        for (const FailureCase failure :
+             {FailureCase::VerifyReinstallMismatch, FailureCase::TargetVersionMismatch, FailureCase::HandoffRejected,
+              FailureCase::LaunchFailed, FailureCase::MsiFailed, FailureCase::MsiRebootRequired}) {
+            EXPECT_FALSE(RetryOffered(failure, mode)) << "case " << exosnap::update::FailureCaseName(failure);
+        }
     }
 }
 
 TEST(RetryOfferedTable, RecoverableFailuresOfferOne) {
-    for (const FailureCase failure :
-         {FailureCase::DownloadFailed, FailureCase::VerifyDownloadFailed, FailureCase::AppWontClose,
-          FailureCase::InstallFailed, FailureCase::VerifyInstallFailed, FailureCase::RestoreFailed,
-          FailureCase::VerifyInstallFailedMsi, FailureCase::UacDeclined}) {
-        EXPECT_TRUE(RetryOffered(failure)) << "case " << exosnap::update::FailureCaseName(failure);
+    for (const UpdaterMode mode : {UpdaterMode::Manual, UpdaterMode::AppHandoff}) {
+        for (const FailureCase failure :
+             {FailureCase::DownloadFailed, FailureCase::AppWontClose, FailureCase::InstallFailed,
+              FailureCase::VerifyInstallFailed, FailureCase::RestoreFailed, FailureCase::VerifyInstallFailedMsi,
+              FailureCase::UacDeclined}) {
+            EXPECT_TRUE(RetryOffered(failure, mode)) << "case " << exosnap::update::FailureCaseName(failure);
+        }
     }
+}
+
+// A2 is the one case whose answer depends on the mode, and ADR 0068 is why: a
+// manual run downloads the manifest itself, so a retry can genuinely fetch it
+// again; a handoff run re-reads the exact file the application handed over, so
+// the same refusal is guaranteed. Offering nothing is never a false promise --
+// offering a button that provably cannot work is.
+TEST(RetryOfferedTable, DownloadVerificationRetryDependsOnWhoFetchedTheManifest) {
+    EXPECT_TRUE(RetryOffered(FailureCase::VerifyDownloadFailed, UpdaterMode::Manual));
+    EXPECT_FALSE(RetryOffered(FailureCase::VerifyDownloadFailed, UpdaterMode::AppHandoff));
 }
 
 // -- terminal phase ---------------------------------------------------------
