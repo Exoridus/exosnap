@@ -3489,6 +3489,30 @@ void QuickApplication::refreshTrayState() {
                                record_view_model_adapter_.elapsedText());
     tray_presence_->setRecordingBlocked(record_view_model_adapter_.blocked() &&
                                         tray_state == ui::tray::TrayIconState::Idle);
+
+    // The WINDOW icon, which is what the taskbar button shows -- a different surface
+    // from the tray icon above, and the one the Widgets frontend used to swap. The
+    // cutover carried the mechanism over (QuickWindowChrome::applyWindowIcon, the
+    // three .ico variants, their resource ids) and left the call behind, so the
+    // taskbar button has shown the idle logo through every recording since. Driven
+    // from the same state as the tray so the two surfaces cannot disagree.
+    QuickWindowChrome::IconState icon_state = QuickWindowChrome::Idle;
+    if (tray_state == ui::tray::TrayIconState::Paused) {
+        icon_state = QuickWindowChrome::Paused;
+    } else if (tray_state == ui::tray::TrayIconState::Recording) {
+        icon_state = QuickWindowChrome::Recording;
+    }
+    // Only on a real change. This function runs from synchronizeRecordState(), which
+    // the diagnostics tick also reaches while recording -- and applyWindowIcon loads
+    // an icon and sends two WM_SETICONs, which is a taskbar redraw each time. The tray
+    // above is idempotent internally; this is not.
+    if (icon_state != window_icon_state_) {
+        window_icon_state_ = icon_state;
+        if (root_window_) {
+            if (auto* chrome = root_window_->findChild<QuickWindowChrome*>())
+                chrome->applyWindowIcon(icon_state);
+        }
+    }
 }
 
 void QuickApplication::restoreWindowFromTray() {

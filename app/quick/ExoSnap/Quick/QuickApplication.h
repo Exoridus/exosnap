@@ -14,6 +14,7 @@
 #include "NotificationsAdapter.h"
 #include "OverlayAdapter.h"
 #include "QuickThemeTokens.h"
+#include "QuickWindowChrome.h" // IconState -- the window/taskbar icon variant held below
 #include "QuickWindowGeometry.h"
 #include "RecordPreviewAdapter.h"
 #include "RecordViewModelAdapter.h"
@@ -307,10 +308,15 @@ class QuickApplication {
     // the platform reports no system tray, which is also what makes
     // ShouldHideToTray refuse to hide — there would be no way back to the window.
     void initializeTray();
-    // Pushes the current recording state onto the tray icon/tooltip. Called from
-    // the same place the Record surface is synchronized, so the tray can never
-    // disagree with the window about whether a recording is running.
+    // Pushes the current recording state onto the tray icon/tooltip AND onto the
+    // window icon, which is what the taskbar button shows. Called from the same
+    // place the Record surface is synchronized, so neither surface can disagree
+    // with the window about whether a recording is running.
     void refreshTrayState();
+    // The window-icon variant currently applied. Held because refreshTrayState()
+    // also runs on the diagnostics tick, and re-applying the icon there would be a
+    // taskbar redraw per tick for no change.
+    QuickWindowChrome::IconState window_icon_state_ = QuickWindowChrome::Idle;
     // Brings the window back from the tray (tray icon click, "Show window", or
     // the unread-notifications mirror).
     void restoreWindowFromTray();
