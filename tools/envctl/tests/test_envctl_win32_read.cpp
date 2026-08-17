@@ -8,12 +8,16 @@
 // passed to Apply() here -- their write path is exercised by the runner, under a
 // journal, on purpose.
 
+#include <algorithm>
+#include <set>
 #include <string>
+#include <vector>
 
 #include <gtest/gtest.h>
 
 #include "env_alias.h"
 #include "env_catalogue.h"
+#include "env_display_mode.h"
 #include "env_win32_audio.h"
 #include "env_win32_display.h"
 #include "env_win32_provider.h"
@@ -80,6 +84,102 @@ TEST(EnvctlWin32Read, CurrentModeIsAWholeDevmode) {
     const auto formatted = win32::FormatMode(mode.devmode);
     EXPECT_NE(std::string::npos, formatted.find('x'));
     EXPECT_NE(std::string::npos, formatted.find('@'));
+}
+
+// The list `list-modes` prints is the VOCABULARY the read-back speaks, so the
+// only thing worth asserting about it is that nothing between
+// EnumDisplaySettingsExW and the caller touches a value. These tests therefore
+// re-walk the raw API themselves and compare against it.
+//
+// Membership alone is NOT enough, and finding that out cost a falsification
+// round: this desk's panel enumerates BOTH 59 and 60, so a production path that
+// rewrote 59 to a nominal 60 would still land on a mode that exists and would
+// pass a "is this one of them?" check. The assertion is therefore SET EQUALITY
+// -- every rate Windows enumerates at the current geometry is offered, exactly
+// once, unchanged.
+TEST(EnvctlWin32Read, EnumeratedRefreshRatesAreExactlyWhatWindowsReports) {
+    std::string error;
+    const auto displays = EnumerateDisplays(error);
+    if (displays.empty()) {
+        GTEST_SKIP() << "no active display paths (" << error << ")";
+    }
+    for (const auto& display : displays) {
+        const auto list = win32::EnumerateModes(display);
+        ASSERT_TRUE(list.ok) << display.gdi_name << ": " << list.error;
+
+        const std::wstring gdi_name(display.gdi_name.begin(), display.gdi_name.end());
+        DEVMODEW current{};
+        current.dmSize = sizeof(DEVMODEW);
+        ASSERT_NE(0, EnumDisplaySettingsExW(gdi_name.c_str(), ENUM_CURRENT_SETTINGS, &current, 0)) << display.gdi_name;
+
+        // Independently walk EnumDisplaySettingsExW, keeping every DEVMODE field
+        // untouched, and collect the rates at the geometry the display is in.
+        std::set<unsigned long> raw_rates;
+        for (DWORD index = 0;; ++index) {
+            DEVMODEW mode{};
+            mode.dmSize = sizeof(DEVMODEW);
+            if (EnumDisplaySettingsExW(gdi_name.c_str(), index, &mode, 0) == 0) {
+                break;
+            }
+            if (mode.dmPelsWidth != current.dmPelsWidth || mode.dmPelsHeight != current.dmPelsHeight ||
+                mode.dmBitsPerPel != current.dmBitsPerPel ||
+                mode.dmDisplayOrientation != current.dmDisplayOrientation) {
+                continue;
+            }
+            raw_rates.insert(static_cast<unsigned long>(mode.dmDisplayFrequency));
+        }
+        ASSERT_FALSE(raw_rates.empty()) << display.gdi_name;
+
+        std::vector<unsigned long> offered;
+        for (const auto& mode : list.candidates) {
+            offered.push_back(mode.refresh_hz);
+        }
+        EXPECT_EQ(offered, std::vector<unsigned long>(raw_rates.begin(), raw_rates.end()))
+            << display.gdi_name << " offers refresh rates EnumDisplaySettingsExW did not report at "
+            << FormatModeFacts(list.current);
+    }
+}
+
+TEST(EnvctlWin32Read, EnumeratedModesNeverOfferAResolutionChange) {
+    std::string error;
+    const auto displays = EnumerateDisplays(error);
+    if (displays.empty()) {
+        GTEST_SKIP() << "no active display paths (" << error << ")";
+    }
+    for (const auto& display : displays) {
+        const auto list = win32::EnumerateModes(display);
+        ASSERT_TRUE(list.ok) << display.gdi_name << ": " << list.error;
+        // SetRefreshHz refuses a coupled-field move, so offering one here would
+        // only produce a confusing apply_rejected later.
+        for (const auto& mode : list.candidates) {
+            EXPECT_TRUE(SameGeometry(list.current, mode))
+                << FormatModeFacts(mode) << " differs in geometry from " << FormatModeFacts(list.current);
+        }
+        // The unfiltered enumeration is what makes that filter meaningful: if a
+        // panel only ever enumerated one geometry there would be nothing to
+        // filter, and this assertion would be vacuous.
+        EXPECT_GE(list.all.size(), list.candidates.size());
+    }
+}
+
+TEST(EnvctlWin32Read, TheCurrentModeIsOneOfTheModesTheDisplayEnumerates) {
+    std::string error;
+    const auto displays = EnumerateDisplays(error);
+    if (displays.empty()) {
+        GTEST_SKIP() << "no active display paths (" << error << ")";
+    }
+    for (const auto& display : displays) {
+        const auto list = win32::EnumerateModes(display);
+        ASSERT_TRUE(list.ok) << display.gdi_name << ": " << list.error;
+        // Nothing injects it -- so this is a real claim about the machine: the
+        // mode the display is IN is expressible in the vocabulary a desired
+        // value has to be written in. If it were not, a scenario could never ask
+        // to be put back into it via `refresh-hz`.
+        const bool present =
+            std::find(list.candidates.begin(), list.candidates.end(), list.current) != list.candidates.end();
+        EXPECT_TRUE(present) << display.gdi_name << " is in " << FormatModeFacts(list.current)
+                             << ", which EnumDisplaySettingsExW does not enumerate";
+    }
 }
 
 TEST(EnvctlWin32Read, AudioEndpointFormatsAreTwoDistinctFields) {

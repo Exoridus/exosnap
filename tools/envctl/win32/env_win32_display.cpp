@@ -39,18 +39,22 @@ BOOL CALLBACK MatchMonitor(HMONITOR monitor, HDC, LPRECT, LPARAM parameter) {
     return TRUE;
 }
 
-std::string OrientationName(DWORD orientation) {
+// DMDO_* is an index (0..3), not an angle. The mode fingerprint has always been
+// written in degrees, so the mapping lives in exactly one place. An undocumented
+// value is carried through unmapped rather than replaced by a placeholder: a
+// number Windows really returned is more useful than "?".
+unsigned long OrientationDegrees(DWORD orientation) {
     switch (orientation) {
     case DMDO_DEFAULT:
-        return "0";
+        return 0;
     case DMDO_90:
-        return "90";
+        return 90;
     case DMDO_180:
-        return "180";
+        return 180;
     case DMDO_270:
-        return "270";
+        return 270;
     default:
-        return "?";
+        return static_cast<unsigned long>(orientation);
     }
 }
 
@@ -242,12 +246,49 @@ DisplayMode ReadCurrentMode(const DisplayTarget& target) {
     return mode;
 }
 
+DisplayModeFacts ToModeFacts(const DEVMODEW& mode) {
+    DisplayModeFacts facts;
+    facts.width = static_cast<unsigned long>(mode.dmPelsWidth);
+    facts.height = static_cast<unsigned long>(mode.dmPelsHeight);
+    // Verbatim. Windows has already truncated 59.94 to 59 by the time it lands
+    // here, and correcting it back to a nominal 60 would invent a value the
+    // read-back can never produce.
+    facts.refresh_hz = static_cast<unsigned long>(mode.dmDisplayFrequency);
+    facts.bits_per_pixel = static_cast<unsigned long>(mode.dmBitsPerPel);
+    facts.orientation_degrees = OrientationDegrees(mode.dmDisplayOrientation);
+    return facts;
+}
+
 std::string FormatMode(const DEVMODEW& mode) {
-    char buffer[96] = {};
-    std::snprintf(buffer, sizeof(buffer), "%lux%lu@%lux%lu/%s", static_cast<unsigned long>(mode.dmPelsWidth),
-                  static_cast<unsigned long>(mode.dmPelsHeight), static_cast<unsigned long>(mode.dmDisplayFrequency),
-                  static_cast<unsigned long>(mode.dmBitsPerPel), OrientationName(mode.dmDisplayOrientation).c_str());
-    return std::string(buffer);
+    return FormatModeFacts(ToModeFacts(mode));
+}
+
+DisplayModeList EnumerateModes(const DisplayTarget& target) {
+    DisplayModeList list;
+    const DisplayMode current = ReadCurrentMode(target);
+    if (!current.ok) {
+        list.error = current.error;
+        return list;
+    }
+    list.current = ToModeFacts(current.devmode);
+
+    const std::wstring gdi_name(target.gdi_name.begin(), target.gdi_name.end());
+    for (DWORD index = 0;; ++index) {
+        DEVMODEW mode{};
+        mode.dmSize = sizeof(DEVMODEW);
+        if (EnumDisplaySettingsExW(gdi_name.c_str(), index, &mode, 0) == 0) {
+            break;
+        }
+        list.all.push_back(ToModeFacts(mode));
+    }
+    if (list.all.empty()) {
+        list.error = "EnumDisplaySettingsExW enumerated no modes for " + target.gdi_name;
+        return list;
+    }
+
+    list.candidates = RefreshRateCandidates(list.current, list.all);
+    list.ok = true;
+    return list;
 }
 
 bool SetRefreshHz(const DisplayTarget& target, DWORD hz, std::string& error) {
@@ -279,6 +320,21 @@ bool SetRefreshHz(const DisplayTarget& target, DWORD hz, std::string& error) {
 
     // The coupling check. DISP_CHANGE_SUCCESSFUL does not promise that only the
     // frequency moved.
+    //
+    // It does not promise the frequency reached `hz` either, and that asymmetry
+    // is worth stating plainly because it looks like a bug when it is met:
+    // ChangeDisplaySettingsExW happily ACCEPTS a nominal dmDisplayFrequency the
+    // panel never reports back. Ask a 59.94 Hz mode for 60 and this call returns
+    // DISP_CHANGE_SUCCESSFUL, while EnumDisplaySettingsExW(ENUM_CURRENT_SETTINGS)
+    // then reports 59 -- likewise around 24/30/120/240 on many panels. The value
+    // space is therefore whatever EnumDisplaySettingsEx REPORTS, never what a
+    // datasheet or a marketing number says, and a caller picks a rate from
+    // `EnumerateModes` (CLI: `exosnap-envctl list-modes`).
+    //
+    // Deliberately NOT reconciled here with a tolerance. The transaction's
+    // read-back comparison is exact, and it stays exact: "close enough" on the
+    // read-back would hollow out the one guarantee the whole model rests on. A
+    // mismatch is reported as a mismatch and rolled back.
     const DisplayMode after = ReadCurrentMode(target);
     if (!after.ok) {
         error = after.error;

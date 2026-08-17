@@ -40,6 +40,12 @@ class Win32EnvironmentProvider : public IEnvironmentProvider {
         return profile_;
     }
 
+    // The display an alias is bound to, or nullptr when nothing (or more than
+    // one thing) matches its stable id. Public so a READ-ONLY caller -- the
+    // CLI's `list-modes` -- can reach the display's own mode enumeration without
+    // going through a property read, which would flatten it to one string.
+    const DisplayTarget* FindDisplay(const std::string& alias) const;
+
     // Re-enumerate displays and audio endpoints. Called once per CLI invocation
     // and again after any mutation, because a display change re-enumerates the
     // adapter and invalidates the session-scoped LUID/target pair.
@@ -50,7 +56,6 @@ class Win32EnvironmentProvider : public IEnvironmentProvider {
     }
 
   private:
-    const DisplayTarget* FindDisplay(const std::string& alias) const;
     const AudioEndpoint* FindAudioEndpoint(const std::string& alias) const;
 
     AliasProfile profile_;
