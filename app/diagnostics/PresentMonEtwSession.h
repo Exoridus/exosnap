@@ -4,6 +4,8 @@
 #include "PresentProvider.h"
 
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -46,10 +48,20 @@ class PresentMonEtwSession {
     }
 
   private:
-    void ConsumeLoop(); // runs ProcessTrace (blocking) on worker_
+    // Handshake between the consumer thread and Stop(), owned by a shared_ptr that
+    // BOTH hold. It cannot live in this object: when the bounded wait below times
+    // out the thread is detached, and a detached thread that then signalled a member
+    // of a destroyed session would be a use-after-free -- the exact trade a timeout
+    // is supposed to avoid.
+    struct FinishSignal {
+        std::mutex mutex;
+        std::condition_variable cv;
+        bool finished = false;
+    };
 
     std::atomic<bool> open_{false};
     std::atomic<unsigned long> target_pid_{0};
+    std::shared_ptr<FinishSignal> finish_; // guarded by sample_mutex_ for publication
     std::thread worker_;
     mutable std::mutex sample_mutex_;
     mutable PresentSample latest_;          // guarded by sample_mutex_

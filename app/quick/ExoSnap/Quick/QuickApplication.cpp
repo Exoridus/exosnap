@@ -3342,6 +3342,14 @@ void QuickApplication::initializeTray() {
     // attempt still passes onClosing -> requestClose() and therefore the guards:
     // "Quit" from the tray must still ask about a running recording.
     QObject::connect(tray_presence_.get(), &ui::tray::TrayPresence::quitRequested, &shell_adapter_, [this]() {
+        // Logged because a tray Quit that is then refused by a close guard is
+        // completely silent to the user: no prompt, no toast, the window simply
+        // stays. Paired with the shell's own close-decision line, the log then says
+        // both that Quit was asked for and what answered it.
+        diagnostics::AppLog::info(
+            QStringLiteral("shell"),
+            QStringLiteral("tray Quit requested (window=%1)")
+                .arg(root_window_ != nullptr ? QStringLiteral("present") : QStringLiteral("absent")));
         force_quit_ = true;
         if (root_window_)
             root_window_->close();

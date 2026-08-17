@@ -1,6 +1,31 @@
 #include "ShellAdapter.h"
 
+#include "diagnostics/AppLog.h"
+
 namespace exosnap::quick {
+
+namespace {
+
+// Stable keys for the close-decision log line. The whole point of logging this
+// path is that its three "nothing happened" outcomes are indistinguishable to the
+// user -- and, until now, to a support bundle as well.
+[[nodiscard]] const char* CloseGuardKindKey(CloseGuardKind kind) noexcept {
+    switch (kind) {
+    case CloseGuardKind::Allow:
+        return "allow";
+    case CloseGuardKind::BlockSilently:
+        return "blockSilently";
+    case CloseGuardKind::ConfirmRemux:
+        return "confirmRemux";
+    case CloseGuardKind::ConfirmExport:
+        return "confirmExport";
+    case CloseGuardKind::ConfirmRecording:
+        return "confirmRecording";
+    }
+    return "unknown";
+}
+
+} // namespace
 
 ShellAdapter::ShellAdapter(QObject* parent) : QObject(parent) {
 }
@@ -93,11 +118,23 @@ bool ShellAdapter::requestClose() {
     if (hide_to_tray_provider_ && hide_to_tray_provider_()) {
         // Any prompt still standing belongs to a previous, abandoned attempt.
         cancelCloseGuard();
+        diagnostics::AppLog::info(QStringLiteral("shell"), QStringLiteral("close requested -> hide to tray"));
         emit hideToTrayRequested();
         return false;
     }
 
     const CloseGuardPrompt prompt = EvaluateCloseGuard(currentState());
+    // Logged for every outcome, because three of them look identical from the
+    // outside: the window simply stays. A user reporting "Quit did nothing" has no
+    // way to tell a silent block from an unseen prompt from a teardown that hung,
+    // and until this line existed neither did a support bundle.
+    const CloseGuardState state = currentState();
+    diagnostics::AppLog::info(QStringLiteral("shell"),
+                              QStringLiteral("close requested -> %1 (recording=%2 exporting=%3 remuxing=%4)")
+                                  .arg(QLatin1String(CloseGuardKindKey(prompt.kind)))
+                                  .arg(state.recording ? 1 : 0)
+                                  .arg(state.exporting ? 1 : 0)
+                                  .arg(state.remuxing ? 1 : 0));
     switch (prompt.kind) {
     case CloseGuardKind::Allow:
         clearPrompt();

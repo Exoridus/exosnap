@@ -59,28 +59,31 @@ bool PresentMonEtwSession::Start() {
     // Fresh accounting per session so a Stop()->Start() cycle does not carry over a prior
     // session's discarded/flip totals. SetTargetProcessId resets it again per recording.
     accumulator_.Reset();
+    auto signal = std::make_shared<FinishSignal>();
     {
         std::lock_guard lk(sample_mutex_);
         impl_ = s; // shared_ptr<SessionImpl> -> shared_ptr<void>
+        finish_ = signal;
     }
     open_.store(true, std::memory_order_release);
-    worker_ = std::thread(&PresentMonEtwSession::ConsumeLoop, this);
+    // The thread body captures ONLY shared owners -- never `this`. That is what makes
+    // the detach path in Stop() safe: a consumer that outlives this object still has
+    // everything it touches alive in its own hands.
+    worker_ = std::thread([sp = std::static_pointer_cast<void>(s), signal]() {
+        auto* impl = static_cast<SessionImpl*>(sp.get());
+        if (impl != nullptr) {
+            // ProcessTrace blocks, routing events into impl->pm (TraceSession set up
+            // the callback), until TraceSession::Stop() -> CloseTrace unblocks it.
+            // The captured sp keeps SessionImpl alive for the whole call.
+            ::ProcessTrace(&impl->session.mTraceHandle, 1, nullptr, nullptr);
+        }
+        {
+            std::lock_guard lk(signal->mutex);
+            signal->finished = true;
+        }
+        signal->cv.notify_all();
+    });
     return true;
-}
-
-void PresentMonEtwSession::ConsumeLoop() {
-    std::shared_ptr<void> sp;
-    {
-        std::lock_guard lk(sample_mutex_);
-        sp = impl_;
-    }
-    auto* s = static_cast<SessionImpl*>(sp.get());
-    if (s == nullptr)
-        return;
-    // ProcessTrace blocks, routing events into s->pm (TraceSession set up the callback),
-    // until Stop() calls TraceSession::Stop() -> CloseTrace. The snapshot sp keeps
-    // SessionImpl alive for the lifetime of this call.
-    ::ProcessTrace(&s->session.mTraceHandle, 1, nullptr, nullptr);
 }
 
 PresentSample PresentMonEtwSession::Latest() const {
@@ -135,11 +138,36 @@ void PresentMonEtwSession::Stop() {
         auto* s = static_cast<SessionImpl*>(sp.get());
         s->session.Stop(); // CloseTrace -> unblocks ProcessTrace
     }
-    if (worker_.joinable())
-        worker_.join();
+    std::shared_ptr<FinishSignal> signal;
+    {
+        std::lock_guard lk(sample_mutex_);
+        signal = finish_;
+    }
+    if (worker_.joinable()) {
+        // BOUNDED. CloseTrace is documented to make ProcessTrace return once it has
+        // drained its buffers, and in practice that takes well under a second. But
+        // this wait runs while the application is shutting down, and an unbounded
+        // join on an OS call means one misbehaving trace session leaves a process
+        // the user asked to quit alive, with its window gone and only Task Manager
+        // left to end it. A quit that does not quit is a worse failure than a thread
+        // that outlives its owner, so the wait has a ceiling.
+        bool finished = false;
+        if (signal) {
+            std::unique_lock lk(signal->mutex);
+            finished = signal->cv.wait_for(lk, std::chrono::seconds(5), [&signal] { return signal->finished; });
+        }
+        if (finished) {
+            worker_.join();
+        } else {
+            // Detached only after the ceiling was hit. The thread captured its own
+            // owners for everything it touches, so it cannot reach this object.
+            worker_.detach();
+        }
+    }
     {
         std::lock_guard lk(sample_mutex_);
         impl_.reset();
+        finish_.reset();
     }
 }
 
