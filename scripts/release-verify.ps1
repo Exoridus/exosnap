@@ -88,6 +88,7 @@ Import-Module (Join-Path $PSScriptRoot 'lib/LiveVerifyState.psm1') -Force -Disab
 Import-Module (Join-Path $PSScriptRoot 'lib/LiveVerifyClient.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $PSScriptRoot 'lib/EnvironmentOrchestrator.psm1') -Force -DisableNameChecking
 . (Join-Path $PSScriptRoot 'lib/LiveVerifyChecks.ps1')
+. (Join-Path $PSScriptRoot 'lib/ReleaseArtifactIdentity.ps1')
 . (Join-Path $PSScriptRoot 'lib/ReleaseScenarios.ps1')
 
 # ---------------------------------------------------------------------------
@@ -100,39 +101,6 @@ function Write-Step { param([string] $Text) Write-Host "   $Text" -ForegroundCol
 # ---------------------------------------------------------------------------
 # Artifact + environment identity
 # ---------------------------------------------------------------------------
-
-function Get-ReleaseArtifactFingerprint {
-    <#
-    .SYNOPSIS
-        Binds the campaign to one set of bytes.
-    .DESCRIPTION
-        No fallback resolution on purpose. A release PASS says "these bytes behaved
-        correctly"; a runner that helpfully found some other exosnap.exe would make
-        that sentence false without saying so.
-    #>
-    param([Parameter(Mandatory)] [string] $Path, [string] $ReleaseTag)
-
-    if (-not (Test-Path -LiteralPath $Path)) {
-        throw "No artifact at '$Path'. Release gates bind to an explicit binary; there is no default."
-    }
-    $item = Get-Item -LiteralPath $Path
-    $facts = @{
-        kind           = 'release'
-        tag            = $ReleaseTag
-        exePath        = $item.FullName
-        exeSha256      = (Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-        exeBytes       = $item.Length
-        productVersion = $item.VersionInfo.ProductVersion
-        fileVersion    = $item.VersionInfo.FileVersion
-        builtUtc       = $item.LastWriteTimeUtc.ToString('o')
-        # Whether this artifact sits in an installed tree decides which scenarios can
-        # run at all: the updater and handoff paths resolve applicationDirPath()-
-        # relative files that only exist after `cmake --install`.
-        installTree    = (Test-Path -LiteralPath (Join-Path $item.DirectoryName 'exosnap-updater.exe'))
-    }
-    $facts['fingerprint'] = Get-LiveVerifyFingerprint -Properties $facts
-    return $facts
-}
 
 function Get-ReleaseEnvironmentFacts {
     <#

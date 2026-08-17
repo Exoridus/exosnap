@@ -568,6 +568,69 @@ Test-Case 'every human gate declares why it is manual and how it will be verifie
     Assert-Equal $whyCount $verifyCount 'every gate must carry a Verify block'
 }
 
+. (Join-Path $scriptRoot 'lib/ReleaseArtifactIdentity.ps1')
+
+function New-FakeExeItem {
+    # Only the three members the identity helpers read. A real Get-Item would need a
+    # real signed, versioned binary; what is under test is the reasoning, not Win32.
+    param([Parameter(Mandatory)] [string] $Directory, [string] $ProductVersion = '0.9.0-dev')
+    return [pscustomobject]@{
+        Directory     = (Get-Item -LiteralPath $Directory)
+        DirectoryName = $Directory
+        VersionInfo   = [pscustomobject]@{ ProductVersion = $ProductVersion }
+    }
+}
+
+Test-Case 'the artifact commit comes from the build manifest, and only when it describes these bytes' {
+    $root = Join-Path ([System.IO.Path]::GetTempPath()) ([System.IO.Path]::GetRandomFileName())
+    $staging = Join-Path $root 'staging/ExoSnap-0.9.0-dev-windows-x64-portable'
+    New-Item -ItemType Directory -Path $staging -Force | Out-Null
+    try {
+        $manifest = Join-Path $root 'artifact-manifest.json'
+        # No manifest anywhere: unknown provenance, and it says so.
+        Assert-True ($null -eq (Get-ReleaseArtifactSourceCommit -ExeItem (New-FakeExeItem -Directory $staging))) `
+            'without a manifest the source commit must be unknown, not guessed'
+
+        # Found two levels up, as the release build actually lays it out.
+        @{ version = '0.9.0-dev'; sourceCommit = 'c9384511' } | ConvertTo-Json |
+            Set-Content -LiteralPath $manifest -Encoding utf8
+        Assert-Equal 'c9384511' (Get-ReleaseArtifactSourceCommit -ExeItem (New-FakeExeItem -Directory $staging)) `
+            'the commit must be read from the manifest beside the staging tree'
+
+        # A manifest describing a DIFFERENT build is not evidence about these bytes.
+        @{ version = '0.8.1'; sourceCommit = 'deadbeef' } | ConvertTo-Json |
+            Set-Content -LiteralPath $manifest -Encoding utf8
+        Assert-True ($null -eq (Get-ReleaseArtifactSourceCommit -ExeItem (New-FakeExeItem -Directory $staging))) `
+            "a manifest for another version must not lend its commit to this artifact"
+
+        # Unparseable paperwork is unknown provenance, never a runner failure.
+        Set-Content -LiteralPath $manifest -Value '{ this is not json' -Encoding utf8
+        Assert-True ($null -eq (Get-ReleaseArtifactSourceCommit -ExeItem (New-FakeExeItem -Directory $staging))) `
+            'a corrupt manifest must read as unknown, not throw'
+    }
+    finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-Case 'the shipped Qt runtime is read from the package, not from the machine' {
+    $root = Join-Path ([System.IO.Path]::GetTempPath()) ([System.IO.Path]::GetRandomFileName())
+    New-Item -ItemType Directory -Path $root -Force | Out-Null
+    try {
+        $item = New-FakeExeItem -Directory $root
+        Assert-True ($null -eq (Get-ReleaseArtifactQtRuntimeVersion -ExeItem $item)) `
+            'a package with no Qt6Core.dll must report no Qt runtime, not the developer machine''s'
+
+        # Any versioned binary proves the reading; a real Qt DLL would only add a
+        # dependency on which Qt this machine has installed -- the opposite of the
+        # point. Taken from the environment, never a hardcoded system path.
+        $donor = Join-Path $env:SystemRoot 'System32/kernel32.dll'
+        Copy-Item -LiteralPath $donor -Destination (Join-Path $root 'Qt6Core.dll')
+        Assert-Equal (Get-Item -LiteralPath $donor).VersionInfo.FileVersion `
+            (Get-ReleaseArtifactQtRuntimeVersion -ExeItem $item) `
+            'the Qt runtime version must come from the DLL beside the executable'
+    }
+    finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
 Test-Case 'a scenario that launches its own instance ends the shared session first' {
     # The single-instance guard is a machine-wide mutex, so a second exosnap.exe hands
     # focus to the running one and exits 0 without ever opening its Live Verify server.
