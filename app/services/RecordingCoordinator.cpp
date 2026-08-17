@@ -3240,7 +3240,7 @@ void RecordingCoordinator::AddMarker(RecordingMarkerType type) {
     WriteMarkerSidecar();
 }
 
-const std::vector<RecordingMarker>& RecordingCoordinator::Markers() const noexcept {
+std::vector<RecordingMarker> RecordingCoordinator::Markers() const {
     std::lock_guard<std::mutex> lock(markers_mutex_);
     return markers_;
 }

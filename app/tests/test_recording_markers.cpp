@@ -20,6 +20,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include "models/OutputSettingsModel.h"
@@ -327,6 +328,35 @@ TEST(SegmentMarkerPartitionTest, ZeroMarkerSegmentYieldsEmpty) {
     // Segment window with no markers in it.
     const auto seg = PartitionSegmentMarkers(session, 30000, 30000);
     EXPECT_TRUE(seg.empty());
+}
+
+// ── Marker accessor concurrency contract (Wave D) ───────────────────────────
+//
+// Markers() used to be `const std::vector<RecordingMarker>&` guarded by a
+// lock_guard scoped to the return statement. That releases markers_mutex_ before
+// the caller reads anything, and hands back a reference into the very vector
+// AddMarker() push_back()s into -- one reallocation from another thread while a
+// caller iterates and the reference is dangling. The lock made the signature LOOK
+// synchronised while synchronising nothing the caller does.
+//
+// This is a compile-time assertion on purpose: no runtime test can reliably
+// reproduce a use-after-free, but the API shape that permits one is decidable, and
+// reverting the signature to a reference stops this file compiling.
+TEST_F(RecordingMarkerTest, MarkersAccessorHandsBackASnapshotNotAReference) {
+    RecordingCoordinator coordinator;
+    static_assert(!std::is_reference_v<decltype(coordinator.Markers())>,
+                  "RecordingCoordinator::Markers() must return a snapshot by value. A reference escapes the "
+                  "markers_mutex_ scope and aliases a vector AddMarker() can reallocate.");
+    static_assert(std::is_same_v<decltype(coordinator.Markers()), std::vector<RecordingMarker>>,
+                  "Markers() must return an owning vector, not a view or a span into the guarded storage.");
+
+    // And the snapshot is genuinely independent: mutating it cannot reach back
+    // into the coordinator.
+    std::vector<RecordingMarker> snapshot = coordinator.Markers();
+    RecordingMarker extra;
+    extra.time_ms = 999;
+    snapshot.push_back(extra);
+    EXPECT_TRUE(coordinator.Markers().empty());
 }
 
 TEST(SegmentMarkerPartitionTest, TypeAndLabelPreserved) {

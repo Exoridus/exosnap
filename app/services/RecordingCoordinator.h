@@ -235,7 +235,16 @@ class RecordingCoordinator {
     [[nodiscard]] recorder_core::RecordingSplitSettings SplitSettings() const noexcept;
 
     void AddMarker(RecordingMarkerType type = RecordingMarkerType::General);
-    [[nodiscard]] const std::vector<RecordingMarker>& Markers() const noexcept;
+    // A SNAPSHOT, deliberately by value. This used to return `const&` while taking
+    // markers_mutex_ for the duration of the return statement -- so the lock was
+    // released before the caller had read a single element, and the reference it was
+    // handed aliased a vector that AddMarker() can push_back into. One reallocation
+    // from the control channel or a hotkey while the caller iterates and the
+    // reference dangles; the lock made the signature look synchronised without
+    // synchronising anything a caller does. Every other reader in this class already
+    // copies under the lock (WriteMarkerSidecar, the result path); this one now does
+    // too. Not noexcept: the copy allocates.
+    [[nodiscard]] std::vector<RecordingMarker> Markers() const;
     [[nodiscard]] std::filesystem::path MarkerSidecarPath() const;
     bool StartMicMeter(std::optional<std::string> device_id, recorder_core::MicChannelMode channel_mode);
     void StopMicMeter();
