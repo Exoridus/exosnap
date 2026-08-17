@@ -92,6 +92,18 @@ class BlockingSurfaceArbiter : public QObject {
     // Raise the recording-error surface now — call
     // RecordingErrorAdapter::present() with the report that was held back.
     void recordingErrorSurfaceRequested();
+    // The last of the three came down and nothing is queued behind it.
+    //
+    // For a surface that must merely WAIT for the screen rather than compete for
+    // it: the post-update "What's new" overlay is informational, blocks no
+    // recording and answers no question, so it is deliberately NOT a fourth
+    // Surface — joining the queue would put a changelog into the precedence rules
+    // and into anySurfaceUp(), which is the recording-admission edge.
+    //
+    // Latched on a transition, not on state: it fires when something WAS up and
+    // now nothing is, so a listener cannot mistake an ordinary adapter
+    // notification on a quiet screen for a surface coming down.
+    void surfacesCleared();
 
   private:
     void request(Surface surface);
@@ -108,6 +120,10 @@ class BlockingSurfaceArbiter : public QObject {
     // FIFO, deduplicated. Small and fixed by construction — there are three
     // surfaces — so a vector is the whole data structure.
     std::vector<Surface> queue_;
+    // What anyUp() said the last time a surface state change was observed, so
+    // surfacesCleared() reports a TRANSITION rather than a state. Starts false:
+    // nothing is up before the first request.
+    bool any_up_ = false;
     // Guards the re-entry a raise causes: raising one surface emits the very
     // signal this class listens to.
     bool dispatching_ = false;

@@ -77,6 +77,17 @@ bool ShouldShowWhatsNew(const std::optional<WhatsNewPendingPayload>& payload, co
     return payload->target_version == running_version;
 }
 
+WhatsNewConsumption ConsumeWhatsNewPayload(const QString& path, const QString& running_version, bool suppressed) {
+    const std::optional<WhatsNewPendingPayload> payload = ReadWhatsNewPayload(path);
+    // Unconditional, and before the decision is even read: every outcome ends with
+    // the file gone. See the header for why each one does.
+    DeleteWhatsNewPayload(path);
+
+    if (!ShouldShowWhatsNew(payload, running_version, suppressed))
+        return {};
+    return {/*show=*/true, payload->notes};
+}
+
 QString WhatsNewPayloadPath() {
     const QString config_dir = settings::ResolveAppConfigDir();
     if (config_dir.isEmpty())

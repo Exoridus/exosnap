@@ -135,6 +135,7 @@ qt_add_qml_module(exosnap
         SettingsQualitySection.qml
         SettingsUpdatesSection.qml
         SettingsWebcamSection.qml
+        WhatsNewOverlay.qml
         WindowChromeButton.qml
     SOURCES
         AboutViewModelAdapter.cpp
@@ -204,6 +205,8 @@ qt_add_qml_module(exosnap
         SettingsAdapter.h
         ShellAdapter.cpp
         ShellAdapter.h
+        WhatsNewAdapter.cpp
+        WhatsNewAdapter.h
         QuickWindowChrome.cpp
         QuickWindowChrome.h
         QuickWindowGeometry.cpp
@@ -783,6 +786,13 @@ qt_add_qml_module(record_controls_qml_tests
         # exist regardless, which is the cost QCR-606 is about.
         CaptureExclusion.cpp
         CaptureExclusion.h
+        # WhatsNewOverlay.qml takes the adapter as a REQUIRED typed property, so
+        # the type has to be registered under this URI for the document to load
+        # at all. It carries no policy — the notes, the mode and the two user
+        # inputs — which is what makes the surface testable from QML: the test
+        # calls present() and asserts what the card does with it.
+        WhatsNewAdapter.cpp
+        WhatsNewAdapter.h
     QML_FILES
         # QCR-709: the capability row is one line by contract, which is a layout
         # fact about how its value label behaves once the row runs out of width.
@@ -840,6 +850,10 @@ qt_add_qml_module(record_controls_qml_tests
         PreviewMetricsOverlay.qml
         RecordActionButton.qml
         RecordSourceToggle.qml
+        # The release-notes surface. Both entry points, the one-time consumption
+        # rules and the focus hand-back are behaviour rather than pixels, so they
+        # are asserted here; --overlay-visual-state photographs the document.
+        WhatsNewOverlay.qml
 )
 
 target_compile_definitions(record_controls_qml_tests

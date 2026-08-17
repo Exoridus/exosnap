@@ -23,6 +23,7 @@ Item {
     required property RecoveryAdapter recovery
     required property RecordingErrorAdapter recordingError
     required property CrashReportAdapter crashReport
+    required property WhatsNewAdapter whatsNew
     property bool benchmarkInteractionActive: false
 
     // Supplied by Main. Optional so the shell still loads in a QML test or a
@@ -161,11 +162,17 @@ Item {
     //
     // An open edit session is deliberately NOT in it (QCR-001): navigating away
     // from Record does not close it, does not ask about unsaved trim points and
-    // does not end the clip — it only stops showing it. The three surfaces that
-    // ARE in it are modal about a question the user has not answered yet, and a
-    // page swapped behind one of them is a page the user never asked for.
+    // does not end the clip — it only stops showing it. Three of the four
+    // surfaces that ARE in it are modal about a question the user has not
+    // answered yet, and a page swapped behind one of them is a page the user
+    // never asked for.
+    //
+    // "What's new" is the fourth for a different reason: it asks nothing, but its
+    // scrim covers the title band, so the POINTER route to the tabs is already
+    // refused. Leaving Ctrl+1..5 live would make the keyboard disagree with the
+    // affordance — exactly the split QCR-001 was about, in the other direction.
     readonly property bool navigationAllowed: !root.recovery.surfaceOpen && !root.recordingError.active
-                                              && !root.crashReport.active
+                                              && !root.crashReport.active && !root.whatsNew.active
 
     // Every destination, directly. Five words fit the band at the 860 px minimum
     // window, so hiding three of them behind a glyph bought nothing and cost a
@@ -744,6 +751,51 @@ Item {
         target: root.editPlayer
         property: "surfaceVisible"
         value: root.editOverlayVisible
+    }
+
+    // Release notes (product-spec, "What's new (shipped)"). Above the editor for
+    // the same reason recovery is, and FIRST among the equal-z surfaces below, so
+    // that if one of them were ever raised while this is up it draws over the
+    // changelog rather than under it. The composition root already keeps that
+    // from happening — the post-update auto-show waits for the blocking surfaces
+    // to clear — so this is the ordering as a fallback, not as the policy.
+    Loader {
+        id: whatsNewLoader
+
+        // Where the keyboard was before the card took it, read off the card while
+        // it still exists. The Loader outlives it, which is why the restore
+        // happens here: a focus assignment made from the dying item's own
+        // destruction handler is undone by this focus scope coming down with it.
+        property Item focusReturn: null
+
+        anchors.fill: parent
+        active: root.whatsNew.active
+        z: 2
+
+        onLoaded: {
+            const card = whatsNewLoader.item as WhatsNewOverlay;
+            whatsNewLoader.focusReturn = card !== null ? card.focusReturnItem : null;
+        }
+
+        onActiveChanged: {
+            if (whatsNewLoader.active)
+                return;
+            const target = whatsNewLoader.focusReturn;
+            whatsNewLoader.focusReturn = null;
+            // A closed overlay must not leave the window without a focus owner:
+            // Tab from nowhere goes nowhere, and where the user was is the control
+            // they opened this from.
+            if (target !== null && target.enabled && target.visible)
+                target.forceActiveFocus(Qt.OtherFocusReason);
+        }
+
+        sourceComponent: WhatsNewOverlay {
+            whatsNew: root.whatsNew
+            // The scrim covers the band; the card stays below it, like every
+            // other in-window surface.
+            contentTopInset: root.titleBarHeight
+            focus: true
+        }
     }
 
     // Above the editor: recovery is a startup decision about a PREVIOUS session,

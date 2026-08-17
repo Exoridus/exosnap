@@ -23,6 +23,7 @@
 #include "RecoveryAdapter.h"
 #include "SettingsAdapter.h"
 #include "ShellAdapter.h"
+#include "WhatsNewAdapter.h"
 
 #include "diagnostics/AudioSourceDegradation.h"
 #include "diagnostics/DpcLatencyProvider.h"
@@ -385,6 +386,21 @@ class QuickApplication {
     void triggerUpdateCheck(bool manual);
     void onUpdateCheckComplete(const exosnap::update::UpdateCheckResult& result);
     void runUpdatePrimaryAction();
+    // "What's new" (product-spec). Both entry points, and nothing else, reach the
+    // one overlay:
+    //   - the Settings card link, with the full channel reference list;
+    //   - the pending payload the previous update wrote, consumed once at startup.
+    void initializeWhatsNew();
+    void showWhatsNewForUpdateCard();
+    // Consumes the pending payload: reads it, decides with ShouldShowWhatsNew(),
+    // and clears it either way — a payload for another version, or one the
+    // suppress setting hides, is not kept to be re-decided on every later launch.
+    void consumePendingWhatsNewPayload();
+    // Raises the post-update overlay, or holds the notes until the blocking
+    // surfaces have cleared. A changelog must never stack on top of a question.
+    void presentPostUpdateWhatsNew(const QVector<WhatsNewNote>& notes);
+    // The releases page the last check reported; empty before the first one.
+    [[nodiscard]] QString resolveReleasesUrl() const;
     // The staged updater has verified the package and is asking this process to
     // get out of the way so it can replace the installation. Ends the process --
     // deliberately bypassing close-to-tray, which would leave the executable
@@ -561,6 +577,7 @@ class QuickApplication {
     RecoveryAdapter recovery_adapter_;
     RecordingErrorAdapter recording_error_adapter_;
     CrashReportAdapter crash_report_adapter_;
+    WhatsNewAdapter whats_new_adapter_;
     // After both surfaces it arbitrates: it connects to them in setSurfaces()
     // and must be destroyed before they are.
     BlockingSurfaceArbiter surface_arbiter_;
@@ -584,6 +601,13 @@ class QuickApplication {
     std::unique_ptr<UpdateService> update_service_;
     UpdateHandoffPhase update_handoff_phase_ = UpdateHandoffPhase::Idle;
     QString last_available_version_;
+    // The releases page URL from the last completed check. Empty until then, and
+    // the "All releases" link falls back to the product's own address.
+    QString last_releases_page_url_;
+    // Post-update notes held back because a blocking surface owns the screen.
+    // Empty whenever nothing is waiting; the payload behind it is already gone,
+    // because the decision to show was made when it was read.
+    QVector<WhatsNewNote> deferred_whats_new_notes_;
     // ADR 0055, argv-armed for this run only; never persisted.
     bool verify_update_reinstall_ = false;
     bool tray_suppressed_ = false;

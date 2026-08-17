@@ -381,5 +381,63 @@ TEST_F(BlockingSurfaceArbiterTest, AQueuedRecordingErrorIsRaisedOnlyOnce) {
     EXPECT_FALSE(recording_error_.active());
 }
 
+// ─── surfacesCleared: for a surface that waits rather than competes ───────────
+//
+// The post-update "What's new" overlay asks nothing and blocks no recording, so
+// it is deliberately not a fourth arbitrated Surface — joining the queue would
+// put a changelog into the precedence rules and into anySurfaceUp(), which is the
+// recording-admission edge. It only has to wait for the screen, which is what
+// this signal reports.
+
+TEST_F(BlockingSurfaceArbiterTest, SurfacesClearedFiresWhenTheLastSurfaceComesDown) {
+    QSignalSpy cleared(&arbiter_, &BlockingSurfaceArbiter::surfacesCleared);
+    arbiter_.requestRecovery();
+    ASSERT_TRUE(recovery_.surfaceOpen());
+    EXPECT_EQ(cleared.count(), 0) << "nothing has come down yet";
+
+    recovery_.dismiss();
+
+    EXPECT_EQ(cleared.count(), 1);
+}
+
+TEST_F(BlockingSurfaceArbiterTest, SurfacesClearedIsATransitionAndNotAState) {
+    QSignalSpy cleared(&arbiter_, &BlockingSurfaceArbiter::surfacesCleared);
+    // The exact input this class observes, on a screen where nothing is up:
+    // `changed()` is an aggregate notification and fires for reasons that have
+    // nothing to do with a surface coming down. A listener that treated every one
+    // of them as "the screen is free now" would raise its own surface at an
+    // arbitrary moment during startup.
+    emit crash_.changed();
+    emit recording_error_.changed();
+
+    EXPECT_EQ(cleared.count(), 0);
+
+    arbiter_.requestRecovery();
+    recovery_.dismiss();
+    ASSERT_EQ(cleared.count(), 1);
+
+    // And it does not repeat: still nothing up, still nothing coming down.
+    emit crash_.changed();
+
+    EXPECT_EQ(cleared.count(), 1);
+}
+
+TEST_F(BlockingSurfaceArbiterTest, SurfacesClearedWaitsForTheQueueBehindTheSurface) {
+    QSignalSpy cleared(&arbiter_, &BlockingSurfaceArbiter::surfacesCleared);
+    arbiter_.requestRecovery();
+    requestFailure(QStringLiteral("queued behind recovery"));
+    ASSERT_TRUE(arbiter_.recordingErrorQueued());
+
+    recovery_.dismiss();
+    // The failure report took the screen the moment recovery left it, so the
+    // screen was never free.
+    ASSERT_TRUE(recording_error_.active());
+    EXPECT_EQ(cleared.count(), 0);
+
+    recording_error_.dismiss();
+
+    EXPECT_EQ(cleared.count(), 1);
+}
+
 } // namespace
 } // namespace exosnap::quick

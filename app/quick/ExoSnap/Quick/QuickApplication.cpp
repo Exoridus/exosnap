@@ -260,6 +260,11 @@ QuickApplication::QuickApplication()
     // After notifications: an available update publishes a hub entry, so the
     // manager has to be wired before the first check can complete.
     initializeUpdates();
+    // LAST of the startup surfaces, and after updates: it consumes the payload the
+    // previous update left behind, and the two blocking startup surfaces above
+    // have already made their own decision by now — so it can see whether one of
+    // them owns the screen instead of stacking a changelog on top of a question.
+    initializeWhatsNew();
 }
 
 QuickApplication::~QuickApplication() {
@@ -2683,6 +2688,9 @@ void QuickApplication::onUpdateCheckComplete(const exosnap::update::UpdateCheckR
     // have to be the same bytes the signed manifest carries.
     last_available_version_ =
         result.verification_reinstall ? current_version : QString::fromStdString(result.available_version_raw);
+    // The feed's own release page, for the "What's new" footer link. Kept from the
+    // last successful check rather than resolved a second time.
+    last_releases_page_url_ = result.releases_page_url ? QString::fromStdString(*result.releases_page_url) : QString();
 
     const bool is_scoop = UpdateService::IsScoopManagedInstall(QCoreApplication::applicationDirPath());
     const QString card_state = exosnap::ResolveUpdateCardState(
@@ -2726,6 +2734,96 @@ void QuickApplication::runUpdatePrimaryAction() {
     }
     // Every other state's action is "check again".
     triggerUpdateCheck(/*manual=*/true);
+}
+
+// ── "What's new" ─────────────────────────────────────────────────────────────
+//
+// The whole backend for this surface survived the Qt Quick cutover — the payload
+// is still written by every update, `whats_new_suppressed` is still persisted,
+// and the Settings card still shows the link — but the QML surface and both
+// connections did not, so the link reached nothing and the post-update overlay
+// never appeared on any machine. This is the missing half.
+
+void QuickApplication::initializeWhatsNew() {
+    whats_new_adapter_.setSuppressed(settings_.whats_new_suppressed);
+
+    // Entry point 1: the Settings update card's link.
+    QObject::connect(&settings_adapter_, &SettingsAdapter::whatsNewRequested, &whats_new_adapter_,
+                     [this]() { showWhatsNewForUpdateCard(); });
+
+    // The suppress tick, persisted the moment it moves. It gates the post-update
+    // auto-show only; the card link is never hidden by it.
+    QObject::connect(&whats_new_adapter_, &WhatsNewAdapter::suppressedEdited, &whats_new_adapter_,
+                     [this](bool suppressed) {
+                         if (settings_.whats_new_suppressed == suppressed)
+                             return;
+                         settings_.whats_new_suppressed = suppressed;
+                         saveAndPublishAppSettings();
+                     });
+
+    // A changelog waits for the screen; it never competes for it. See
+    // BlockingSurfaceArbiter::surfacesCleared() for why this is not a fourth
+    // arbitrated surface.
+    QObject::connect(&surface_arbiter_, &BlockingSurfaceArbiter::surfacesCleared, &whats_new_adapter_, [this]() {
+        if (deferred_whats_new_notes_.isEmpty())
+            return;
+        // Taken before presenting, not after: present() is synchronous and the
+        // surface it raises will emit changes this same handler listens to.
+        const QVector<WhatsNewNote> notes = deferred_whats_new_notes_;
+        deferred_whats_new_notes_.clear();
+        whats_new_adapter_.present(notes, /*post_update_mode=*/true, resolveReleasesUrl());
+    });
+
+    // Entry point 2: the payload the previous update left behind.
+    consumePendingWhatsNewPayload();
+}
+
+QString QuickApplication::resolveReleasesUrl() const {
+    // Empty is a valid answer and is passed through: no check has completed yet,
+    // so there is no release page to name. WhatsNewAdapter substitutes the
+    // product's own releases address, which keeps that one fallback in one place.
+    return last_releases_page_url_;
+}
+
+void QuickApplication::showWhatsNewForUpdateCard() {
+    if (!update_service_)
+        return;
+    // The FULL reference list for the active channel, not the pending gap: the
+    // link has to lead somewhere even when there is nothing left to update to.
+    QVector<WhatsNewNote> notes;
+    for (const auto& source : update_service_->LastAllChannelNotes()) {
+        WhatsNewNote note;
+        note.version = QString::fromStdString(source.version.ToString());
+        note.body = QString::fromStdString(source.body_markdown);
+        note.html_url = QString::fromStdString(source.html_url);
+        notes.push_back(note);
+    }
+    // Deliberately not gated by whats_new_suppressed: that setting is about the
+    // automatic post-update show, and this is the user asking.
+    whats_new_adapter_.present(notes, /*post_update_mode=*/false, resolveReleasesUrl());
+}
+
+void QuickApplication::consumePendingWhatsNewPayload() {
+    // Read, decided and cleared in one call: the one-time rules — including that
+    // the file goes whether or not it is shown, and that a corrupt one goes
+    // silently — live with the payload, so there is no half of them to get wrong
+    // here. Silent on purpose either way: the user did not ask for anything.
+    const WhatsNewConsumption consumed = ConsumeWhatsNewPayload(
+        WhatsNewPayloadPath(), QString::fromLatin1(exosnap::build::kVersion), settings_.whats_new_suppressed);
+    if (!consumed.show)
+        return;
+    presentPostUpdateWhatsNew(consumed.notes);
+}
+
+void QuickApplication::presentPostUpdateWhatsNew(const QVector<WhatsNewNote>& notes) {
+    if (surface_arbiter_.anySurfaceUp() || surface_arbiter_.recoveryQueued() || surface_arbiter_.crashQueued() ||
+        surface_arbiter_.recordingErrorQueued()) {
+        // Held, not dropped: the payload behind these notes is already gone, so
+        // losing them here would lose the one showing the user was owed.
+        deferred_whats_new_notes_ = notes;
+        return;
+    }
+    whats_new_adapter_.present(notes, /*post_update_mode=*/true, resolveReleasesUrl());
 }
 
 void QuickApplication::applyStartupRelaunchHandoff(const QString& page_name, bool reenable_present_diag) {
@@ -3167,6 +3265,44 @@ bool QuickApplication::applyOverlayVisualScenario(const QString& scenario) {
             if (QObject* disclosure = root_window_->findChild<QObject*>(QStringLiteral("crashIncludedDisclosure")))
                 disclosure->setProperty("expanded", true);
         }
+        return true;
+    }
+
+    // The release-notes overlay, in both of the modes the product has. Real
+    // Markdown bodies of the shape GitHub release bodies actually take (a heading,
+    // a list, an inline link, a long line that has to wrap), because the whole
+    // point of photographing this surface is the rendered document — a hand-built
+    // one-liner would show a card with a sentence in it.
+    if (scenario == QLatin1String("whats-new") || scenario == QLatin1String("whats-new-post-update")) {
+        const bool post_update = scenario == QLatin1String("whats-new-post-update");
+
+        QVector<WhatsNewNote> notes;
+        WhatsNewNote newest;
+        newest.version = QStringLiteral("0.9.1");
+        newest.html_url = QStringLiteral("https://github.com/Exoridus/exosnap/releases/tag/v0.9.1");
+        newest.body =
+            QStringLiteral("### Fixed\n\n"
+                           "- The preview no longer freezes when the window crosses a monitor boundary.\n"
+                           "- Recording start is blocked while a diagnostic blocker is standing, instead of "
+                           "failing a few seconds later in the encoder with an HRESULT nobody can act on.\n"
+                           "- `Merge with above` now survives a container change.\n\n"
+                           "See the [capture notes](https://github.com/Exoridus/exosnap) for the measurements.\n");
+        notes.append(newest);
+
+        WhatsNewNote older;
+        older.version = QStringLiteral("0.9.0");
+        older.html_url = QStringLiteral("https://github.com/Exoridus/exosnap/releases/tag/v0.9.0");
+        older.body = QStringLiteral("### Added\n\n"
+                                    "- One visual language across all five destinations.\n"
+                                    "- Modals that keep the keyboard.\n\n"
+                                    "### Changed\n\n"
+                                    "- The Device tab is gone; the adapter cards moved to Diagnostics.\n");
+        notes.append(older);
+
+        // The real entry point in both cases, so what is photographed is what the
+        // adapter produces — including the mode-dependent hint, the suppress strip
+        // and the primary action's label.
+        whats_new_adapter_.present(notes, post_update, QStringLiteral("https://github.com/Exoridus/exosnap/releases"));
         return true;
     }
 
@@ -3733,6 +3869,7 @@ bool QuickApplication::load(bool no_activate) {
         {QStringLiteral("recovery"), QVariant::fromValue(&recovery_adapter_)},
         {QStringLiteral("recordingError"), QVariant::fromValue(&recording_error_adapter_)},
         {QStringLiteral("crashReport"), QVariant::fromValue(&crash_report_adapter_)},
+        {QStringLiteral("whatsNew"), QVariant::fromValue(&whats_new_adapter_)},
         {QStringLiteral("overlays"), QVariant::fromValue(&overlay_adapter_)},
         {QStringLiteral("noActivate"), no_activate},
         // ADR 0033, and deliberately an initial property rather than a

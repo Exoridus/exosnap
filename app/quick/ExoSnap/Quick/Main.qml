@@ -20,6 +20,7 @@ ApplicationWindow {
     required property RecoveryAdapter recovery
     required property RecordingErrorAdapter recordingError
     required property CrashReportAdapter crashReport
+    required property WhatsNewAdapter whatsNew
     required property OverlayAdapter overlays
     // Set once every close guard has cleared, so the re-issued close() is not
     // caught by the same guards again.
@@ -290,6 +291,7 @@ ApplicationWindow {
         recovery: root.recovery
         recordingError: root.recordingError
         crashReport: root.crashReport
+        whatsNew: root.whatsNew
         aboutViewModel: root.aboutViewModel
         recordViewModel: root.recordViewModel
         previewAdapter: root.previewAdapter

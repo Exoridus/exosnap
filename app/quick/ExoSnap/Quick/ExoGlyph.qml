@@ -58,7 +58,8 @@ Item {
         Warning,
         Info,
         Display,
-        Region
+        Region,
+        ExternalLink
     }
 
     // An ExoGlyph.Kind value. Declared `int` because a QML-declared enum is not
@@ -137,7 +138,11 @@ Item {
         "M1.8 3.5H16.2V12H1.8Z M6.2 15.5H11.8 M9 12V15.5",
         // Region — four marquee corners: a rectangle the user drew, so it is
         // deliberately not a closed shape.
-        "M2.5 6.2V2.5H6.2 M11.8 2.5H15.5V6.2 M15.5 11.8V15.5H11.8 M6.2 15.5H2.5V11.8"
+        "M2.5 6.2V2.5H6.2 M11.8 2.5H15.5V6.2 M15.5 11.8V15.5H11.8 M6.2 15.5H2.5V11.8",
+        // ExternalLink — an open frame with an arrow leaving through its corner:
+        // this action leaves ExoSnap for the browser. Deliberately not the same
+        // shape as AppWindow, which is a capture TARGET inside the product.
+        "M10.5 3.5H15.5V8.5 M15.5 3.5L9 10 M13 10.5V14.5H3.5V5H7.5"
     ]
 
     // Kinds drawn as a filled silhouette instead of a stroked outline.

@@ -51,8 +51,12 @@ ExoCard {
                        : root.settings.checkForUpdates()
         }
 
+        // Names the version, as the spec requires: "What's new" alone says nothing
+        // about which release it is about, and the card right above it is already
+        // showing one.
         ExoButton {
-            text: qsTr("What's new")
+            objectName: "settingsWhatsNewLink"
+            text: qsTr("See what's new in v%1").arg(root.settings.updateAvailableVersion)
             quiet: true
             visible: root.settings.whatsNewAvailable
             onClicked: root.settings.showWhatsNew()

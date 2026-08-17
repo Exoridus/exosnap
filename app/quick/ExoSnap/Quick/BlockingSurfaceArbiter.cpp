@@ -156,14 +156,32 @@ void BlockingSurfaceArbiter::onSurfaceStateChanged() {
     // against a state that is only half written.
     if (dispatching_)
         return;
-    if (queue_.empty() || anyUp())
+
+    // The latch is read and rewritten before anything else can early-return, so
+    // "was something up" survives every path through this function.
+    const bool up_now = anyUp();
+    const bool came_down = any_up_ && !up_now;
+    any_up_ = up_now;
+
+    if (up_now)
         return;
+
+    if (queue_.empty()) {
+        // Nothing waiting to take the screen, and something just left it.
+        if (came_down)
+            emit surfacesCleared();
+        return;
+    }
 
     dispatching_ = true;
     const Surface next = queue_.front();
     queue_.erase(queue_.begin());
     raise(next);
     dispatching_ = false;
+    // That raise re-entered this function under the guard above, so the latch did
+    // not see the surface come up. Bring it up to date here instead — otherwise
+    // the surface now on screen would come down without a transition to report.
+    any_up_ = anyUp();
 }
 
 } // namespace exosnap::quick
