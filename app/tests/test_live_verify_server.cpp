@@ -169,6 +169,15 @@ class StubSource final : public LiveVerifySource {
     bool EditClose(QString*) override {
         return true;
     }
+    bool UpdateCheck(QString*) override {
+        return true;
+    }
+    bool UpdateApply(QString*) override {
+        return true;
+    }
+    [[nodiscard]] QJsonObject UpdaterLaunchSnapshot() const override {
+        return {};
+    }
 };
 
 // Synchronous client with a bounded reader. PeekNamedPipe before every ReadFile

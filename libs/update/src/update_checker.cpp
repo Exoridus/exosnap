@@ -218,7 +218,36 @@ UpdateCheckResult BuildCheckResult(std::string_view releases_json, const std::op
 }
 
 // ---------------------------------------------------------------------------
-// CheckForUpdate
+// CheckAgainstFeed -- the mechanics, without any policy
+// ---------------------------------------------------------------------------
+UpdateCheckResult CheckAgainstFeed(const CheckParams& params) noexcept {
+    // Fetch the first releases page (30 items) and pick the right channel.
+    // Honours params.api_base_url so tests / dev servers can redirect the call.
+    std::string http_error;
+    auto body = FetchReleasesJson(params.api_base_url, http_error);
+    if (!body) {
+        UpdateCheckResult r{};
+        r.check_failed = true;
+        r.error_message = "Network error: " + http_error;
+        return r;
+    }
+
+    // Select the newest qualifying release for the channel. The channel/draft
+    // filtering and asset extraction live once in LocateRelease (DRY).
+    std::string parse_error;
+    auto release = LocateRelease(*body, params.channel, &parse_error);
+    if (!release && !parse_error.empty()) {
+        UpdateCheckResult r{};
+        r.check_failed = true;
+        r.error_message = "JSON parse error from GitHub releases API";
+        return r;
+    }
+
+    return BuildCheckResult(*body, release, params);
+}
+
+// ---------------------------------------------------------------------------
+// CheckForUpdate -- the product policy, then the mechanics
 // ---------------------------------------------------------------------------
 UpdateCheckResult CheckForUpdate(const CheckParams& params) noexcept {
     // Recording guard runs first — must block regardless of build gate,
@@ -243,29 +272,7 @@ UpdateCheckResult CheckForUpdate(const CheckParams& params) noexcept {
         return r;
     }
 
-    // Fetch the first releases page (30 items) and pick the right channel.
-    // Honours params.api_base_url so tests / dev servers can redirect the call.
-    std::string http_error;
-    auto body = FetchReleasesJson(params.api_base_url, http_error);
-    if (!body) {
-        UpdateCheckResult r{};
-        r.check_failed = true;
-        r.error_message = "Network error: " + http_error;
-        return r;
-    }
-
-    // Select the newest qualifying release for the channel. The channel/draft
-    // filtering and asset extraction live once in LocateRelease (DRY).
-    std::string parse_error;
-    auto release = LocateRelease(*body, params.channel, &parse_error);
-    if (!release && !parse_error.empty()) {
-        UpdateCheckResult r{};
-        r.check_failed = true;
-        r.error_message = "JSON parse error from GitHub releases API";
-        return r;
-    }
-
-    return BuildCheckResult(*body, release, params);
+    return CheckAgainstFeed(params);
 }
 
 } // namespace exosnap::update

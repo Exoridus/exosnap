@@ -77,6 +77,31 @@ struct AutomationState {
     // --- Shell surfaces ------------------------------------------------------
     bool notification_hub_open = false;
 
+    // --- Update --------------------------------------------------------------
+    // The update card's own state string, verbatim: "unchecked" | "checking" |
+    // "uptodate" | "available" | "scoop" | "updater-running" | "pending" |
+    // "verify-reinstall" | "error". Deliberately the SAME vocabulary the product
+    // uses rather than a parallel enum -- a second spelling of the same fact is
+    // a second thing that can be wrong, and this one is what the user sees.
+    QString update_state;
+    QString update_channel;
+    // The running build's full version, and the offered release tag verbatim
+    // (empty when nothing is offered). The second is the string that becomes the
+    // updater's pinned --target-version, which is what makes "installed what was
+    // offered" assertable across the process boundary.
+    QString update_current_version;
+    QString update_available_version;
+    bool update_checking = false;
+    bool update_available = false;
+    // Whether the card's primary action is live right now. The precondition for
+    // update.apply reads THIS rather than re-deriving it, so the button and the
+    // command cannot disagree.
+    bool update_action_enabled = false;
+    // Why an update action is refused, in product vocabulary: "" (nothing in the
+    // way) | "recording" | "finalizing" | "scoop" | "updaterRunning" |
+    // "restartPending". Not a message -- a runner branches on this.
+    QString update_blocker;
+
     [[nodiscard]] bool blocked() const noexcept {
         return !blocking_surface.isEmpty();
     }

@@ -12,8 +12,12 @@
 #include <QStringList>
 
 #include "../apps/updater/UpdaterArgs.h"
+#include "services/UpdateFeedOverride.h"
 #include "services/UpdateService.h"
 #include "services/VerifyReinstallMode.h"
+
+#include <control/options.h>
+#include <update/update_checker.h>
 
 namespace {
 
@@ -170,6 +174,114 @@ TEST(BuildUpdaterArgs, VerificationReinstallPinsTheIdenticalVersion) {
     ASSERT_TRUE(parsed.has_value());
     EXPECT_TRUE(parsed->verify_reinstall);
     EXPECT_EQ(parsed->target_version, parsed->current_version);
+}
+
+// -- the dev feed override and the child's automation endpoint ---------------
+
+TEST(BuildUpdaterArgs, PassesTheDevFeedThroughSoBothProcessesReadOneFeed) {
+    // Handing the updater the production URL while the app read a fixture would
+    // be two feeds behind one offer -- exactly the divergence --target-version
+    // exists to close.
+    upd::UpdateState st;
+    st.install_mode = upd::InstallMode::Portable;
+    st.available_version_raw = "0.9.1";
+
+    QStringList argv;
+    argv << QStringLiteral("exosnap-updater.exe");
+    argv += exosnap::BuildUpdaterArgs(st, QStringLiteral("D:/x"), 1u, QStringLiteral("0.9.0"),
+                                      /*verify_reinstall=*/false, QStringLiteral("https://localhost:8443/releases"));
+
+    const auto parsed = ParseUpdaterArgs(argv);
+    ASSERT_TRUE(parsed.has_value());
+    EXPECT_EQ(parsed->base_url, QStringLiteral("https://localhost:8443/releases"));
+    EXPECT_EQ(parsed->target_version, QStringLiteral("0.9.1"));
+}
+
+TEST(BuildUpdaterArgs, ArmsTheChildEndpointOnlyWhenTheParentHasOne) {
+    upd::UpdateState st;
+    st.install_mode = upd::InstallMode::Portable;
+
+    const QStringList without = exosnap::BuildUpdaterArgs(st, QStringLiteral("D:/x"), 1u, QStringLiteral("0.9.0"));
+    EXPECT_FALSE(without.contains(QString::fromLatin1(exosnap::control::option::kUpdaterControl)))
+        << "a normal launch must give the updater no endpoint at all";
+
+    QStringList argv;
+    argv << QStringLiteral("exosnap-updater.exe");
+    argv += exosnap::BuildUpdaterArgs(st, QStringLiteral("D:/x"), 1u, QStringLiteral("0.9.0"),
+                                      /*verify_reinstall=*/false, QString(), QStringLiteral("run-0123456789ab"));
+    const int index = argv.indexOf(QString::fromLatin1(exosnap::control::option::kUpdaterControl));
+    ASSERT_GE(index, 0);
+    EXPECT_EQ(argv.at(index + 1), QStringLiteral("run-0123456789ab"));
+}
+
+TEST(BuildUpdaterArgs, TheChildEndpointIsTheSameRunIdInADifferentRole) {
+    // One run id, two roles: that is what lets a runner already driving the app
+    // reach the updater it starts without minting or discovering anything.
+    const QString run_id = QStringLiteral("run-0123456789ab");
+    const QString app_pipe =
+        exosnap::control::PipeName(QString::fromLatin1(exosnap::control::role::kApplication), run_id);
+    const QString updater_pipe =
+        exosnap::control::PipeName(QString::fromLatin1(exosnap::control::role::kUpdater), run_id);
+    EXPECT_NE(app_pipe, updater_pipe);
+    EXPECT_TRUE(updater_pipe.endsWith(run_id));
+}
+
+// -- --update-base-url --------------------------------------------------------
+
+TEST(UpdateFeedOverride, IsAbsentUnlessPassed) {
+    const auto override_ = exosnap::services::ParseUpdateFeedOverride({QStringLiteral("exosnap.exe")});
+    EXPECT_FALSE(override_.requested);
+    EXPECT_TRUE(override_.base_url.isEmpty());
+    EXPECT_TRUE(override_.error.isEmpty());
+}
+
+TEST(UpdateFeedOverride, AcceptsAnHttpsUrlWithAHost) {
+    EXPECT_TRUE(exosnap::services::IsAcceptableFeedUrl(QStringLiteral("https://localhost:8443/releases")));
+    EXPECT_TRUE(exosnap::services::IsAcceptableFeedUrl(QStringLiteral("https://api.github.com/repos/x/y/releases")));
+}
+
+TEST(UpdateFeedOverride, RefusesAnythingThatIsNotHttpsWithAHost) {
+    // FetchReleasesJson refuses these anyway; refusing here turns a typo into a
+    // refused launch instead of a check that fails later with a network error
+    // nobody connects to the command line.
+    for (const QString& bad : {QStringLiteral("http://localhost/releases"), QStringLiteral("https://"),
+                               QStringLiteral("localhost:8443"), QString()}) {
+        EXPECT_FALSE(exosnap::services::IsAcceptableFeedUrl(bad)) << qPrintable(bad);
+    }
+}
+
+TEST(UpdateFeedOverride, AMissingOrMalformedValueIsAnErrorNotAFallback) {
+    // Falling back to the production feed would let a test believe it is pointed
+    // at a fixture while it talks to GitHub -- and act on a real release.
+    const auto missing = exosnap::services::ParseUpdateFeedOverride(
+        {QStringLiteral("exosnap.exe"), QString::fromLatin1(exosnap::services::kUpdateFeedOverrideFlag)});
+    EXPECT_TRUE(missing.requested);
+    EXPECT_FALSE(missing.error.isEmpty());
+    EXPECT_TRUE(missing.base_url.isEmpty());
+
+    const auto malformed = exosnap::services::ParseUpdateFeedOverride(
+        {QStringLiteral("exosnap.exe"), QString::fromLatin1(exosnap::services::kUpdateFeedOverrideFlag),
+         QStringLiteral("http://localhost/releases")});
+    EXPECT_TRUE(malformed.requested);
+    EXPECT_FALSE(malformed.error.isEmpty());
+    EXPECT_TRUE(malformed.base_url.isEmpty());
+}
+
+TEST(UpdateFeedOverride, IsAcceptedInThisBuildOnlyBecauseItIsNotOfficial) {
+    // The rule, stated as a test rather than as a comment: an official build
+    // refuses the flag outright, because a shipped artifact whose update source
+    // can be redirected from a command line is a different product.
+    const auto parsed = exosnap::services::ParseUpdateFeedOverride(
+        {QStringLiteral("exosnap.exe"), QString::fromLatin1(exosnap::services::kUpdateFeedOverrideFlag),
+         QStringLiteral("https://localhost:8443/releases")});
+    ASSERT_TRUE(parsed.requested);
+    if (exosnap::update::IsUpdateCheckEnabled()) {
+        EXPECT_FALSE(parsed.error.isEmpty()) << "an official build must refuse the override";
+        EXPECT_TRUE(parsed.base_url.isEmpty());
+    } else {
+        EXPECT_TRUE(parsed.error.isEmpty());
+        EXPECT_EQ(parsed.base_url, QStringLiteral("https://localhost:8443/releases"));
+    }
 }
 
 // -- HasVerifyUpdateReinstallRequest ----------------------------------------

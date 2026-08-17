@@ -77,6 +77,24 @@ class UpdateService final : public QObject {
     void SetVerifyReinstallMode(bool on);
     [[nodiscard]] bool IsVerifyReinstallMode() const;
 
+    // Dev feed override (--update-base-url, non-official builds only; see
+    // services/UpdateFeedOverride.h). While armed, the check runs the same
+    // mechanics against the named feed instead of consulting the production one,
+    // and the SAME url is handed to the updater as --base-url -- otherwise the
+    // app and the updater would resolve two different feeds, which is precisely
+    // the divergence the pinned target version exists to prevent. Empty is the
+    // shipping default and means "the production feed, with its policy gate".
+    void SetDevFeedOverride(const QString& base_url);
+    [[nodiscard]] QString DevFeedOverride() const;
+
+    // The automation run id to hand the updater (--automation-control). Set only
+    // when this process itself was launched with a control channel; empty
+    // otherwise, and then the updater gets no endpoint at all. See ADR 0067 --
+    // the endpoint name carries a role, so parent and child share one run id
+    // without sharing a pipe.
+    void SetUpdaterAutomationRunId(const QString& run_id);
+    [[nodiscard]] QString UpdaterAutomationRunId() const;
+
     // Current block reason (re-queried each time a check is requested).
     exosnap::update::UpdateBlockReason CurrentBlockReason() const;
 
@@ -88,6 +106,24 @@ class UpdateService final : public QObject {
     //   * Emits updaterLaunched() on success, or updateError() on any staging /
     //     launch failure (missing runtime file, spawn failure).
     void LaunchUpdater();
+
+    // What the last LaunchUpdater() actually started. Read right after
+    // updaterLaunched(): the point is that a test does not have to DISCOVER the
+    // child -- which staged copy ran, with which pid, pinned to which version
+    // and reachable at which endpoint are all decided here, so they are all
+    // reported from here. Empty/zero before the first launch.
+    struct UpdaterLaunchInfo {
+        qint64 pid = 0;
+        // The staged copy under %LOCALAPPDATA%\...\updater\, not the one in the
+        // install tree. Binding evidence to THIS path is what stops an older
+        // build sitting elsewhere from being silently credited with the run.
+        QString staged_exe;
+        QString target_version;
+        // Empty unless this process is itself under automation; then it is the
+        // run id the child was given, and the endpoint follows from it.
+        QString automation_run_id;
+    };
+    [[nodiscard]] UpdaterLaunchInfo LastUpdaterLaunch() const;
 
     // Notify-only Scoop detection (case-insensitive, both path separators): true
     // when app_dir_path sits under a Scoop tree — either the default
@@ -155,8 +191,16 @@ class UpdateService final : public QObject {
 // payload describes and the version actually installed from diverging: without
 // it the app and the updater resolve the same feed twice, and a release
 // published between the two resolutions silently wins.
+// `feed_override` and `automation_run_id` are both empty in a normal launch and
+// then contribute nothing to the argv. When set they are passed through as
+// --base-url and --automation-control: the first so the app and the updater
+// resolve the SAME feed (two feeds is the divergence the pinned target version
+// exists to prevent), the second so a runner that is already driving this
+// process can reach the child it just started without discovering anything.
 [[nodiscard]] QStringList BuildUpdaterArgs(const exosnap::update::UpdateState& st, const QString& install_dir,
-                                           quint32 pid, const QString& current_version, bool verify_reinstall = false);
+                                           quint32 pid, const QString& current_version, bool verify_reinstall = false,
+                                           const QString& feed_override = QString(),
+                                           const QString& automation_run_id = QString());
 
 // Resolve the Settings updates-card state string from a completed check. Pure so
 // the loop-guard / recovery semantics can be unit-tested headless:

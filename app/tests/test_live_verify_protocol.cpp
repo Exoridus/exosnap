@@ -58,6 +58,14 @@ AutomationState PermissiveState() {
     state.can_open_edit = true;
     state.edit_session_open = true;
     state.edit_visible = true;
+    // An offered update with nothing in the way, so the update commands are
+    // reachable by default and a test that wants them refused says so.
+    state.update_state = QStringLiteral("available");
+    state.update_channel = QStringLiteral("stable");
+    state.update_current_version = QStringLiteral("0.9.0-test");
+    state.update_available_version = QStringLiteral("0.9.1");
+    state.update_available = true;
+    state.update_action_enabled = true;
     return state;
 }
 
@@ -230,6 +238,31 @@ class FakeSource final : public LiveVerifySource {
         state.edit_session_open = false;
         return true;
     }
+
+    bool UpdateCheck(QString* error) override {
+        calls.append(QStringLiteral("update.check"));
+        if (!Outcome(error))
+            return false;
+        state.update_state = QStringLiteral("checking");
+        state.update_checking = true;
+        return true;
+    }
+    bool UpdateApply(QString* error) override {
+        calls.append(QStringLiteral("update.apply"));
+        if (!Outcome(error))
+            return false;
+        updater_launched = true;
+        return true;
+    }
+    [[nodiscard]] QJsonObject UpdaterLaunchSnapshot() const override {
+        QJsonObject json;
+        json.insert(QStringLiteral("pid"), updater_launched ? 4242 : 0);
+        json.insert(QStringLiteral("targetVersion"),
+                    updater_launched ? QJsonValue(state.update_available_version) : QJsonValue(QJsonValue::Null));
+        return json;
+    }
+
+    bool updater_launched = false;
 
   private:
     [[nodiscard]] static QJsonObject Marker(const QString& name) {
@@ -1214,4 +1247,79 @@ TEST(LiveVerifyDescribe, IdempotencyIsDeclaredAndPlayPauseIsTheExceptionThatIsNo
     EXPECT_TRUE(saw_play_pause);
     // The six transport intents plus edit.playPause.
     EXPECT_EQ(non_idempotent, 7);
+}
+
+// ---------------------------------------------------------------------------
+// Update
+// ---------------------------------------------------------------------------
+
+TEST(LiveVerifyDispatcher, UpdateCheckIsAcceptedWithoutClaimingAnAnswer) {
+    FakeSource source;
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    const QJsonObject response = dispatcher.Dispatch(RequestV2(QStringLiteral("update.check")));
+    ASSERT_TRUE(Ok(response));
+    ASSERT_TRUE(response.contains(QStringLiteral("settled")));
+    EXPECT_FALSE(response.value(QStringLiteral("settled")).toBool())
+        << "the check runs on a pool thread; its answer is the card's next state";
+    EXPECT_TRUE(source.calls.contains(QStringLiteral("update.check")));
+}
+
+TEST(LiveVerifyDispatcher, UpdateApplyRoutesToTheCardsPrimaryActionAndReportsTheChild) {
+    FakeSource source;
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    const QJsonObject response = dispatcher.Dispatch(RequestV2(QStringLiteral("update.apply")));
+    ASSERT_TRUE(Ok(response));
+    EXPECT_FALSE(response.value(QStringLiteral("settled")).toBool())
+        << "the updater was started; the UPDATE has not happened";
+    EXPECT_TRUE(source.calls.contains(QStringLiteral("update.apply")));
+
+    // The response already names the child, so a client never has to discover it.
+    const QJsonObject launch =
+        response.value(QStringLiteral("result")).toObject().value(QStringLiteral("updaterLaunch")).toObject();
+    EXPECT_EQ(launch.value(QStringLiteral("pid")).toInt(), 4242);
+    EXPECT_EQ(launch.value(QStringLiteral("targetVersion")).toString(), QStringLiteral("0.9.1"));
+}
+
+TEST(LiveVerifyDispatcher, UpdateApplyWithNothingOfferedNeverReachesTheSource) {
+    FakeSource source;
+    source.state.update_state = QStringLiteral("uptodate");
+    source.state.update_available = false;
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    const QJsonObject response = dispatcher.Dispatch(RequestV2(QStringLiteral("update.apply")));
+    EXPECT_FALSE(Ok(response));
+    EXPECT_EQ(ErrorCode(response), QString::fromLatin1(error_code::kInvalidState));
+    EXPECT_FALSE(source.calls.contains(QStringLiteral("update.apply")))
+        << "the card's button would have re-checked here; an apply must not silently mean check";
+}
+
+TEST(LiveVerifyDispatcher, UpdateGetStateIsReadOnlyAndCarriesTheLaunchSnapshot) {
+    FakeSource source;
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    const QJsonObject before = dispatcher.Dispatch(RequestV2(QStringLiteral("update.getState")));
+    ASSERT_TRUE(Ok(before));
+    EXPECT_FALSE(before.contains(QStringLiteral("settled"))) << "a query must not look like a completed action";
+    const QJsonObject result = before.value(QStringLiteral("result")).toObject();
+    EXPECT_EQ(result.value(QStringLiteral("state")).toString(), QStringLiteral("available"));
+    EXPECT_EQ(result.value(QStringLiteral("availableVersion")).toString(), QStringLiteral("0.9.1"));
+    EXPECT_EQ(result.value(QStringLiteral("updaterLaunch")).toObject().value(QStringLiteral("pid")).toInt(), 0);
+}
+
+TEST(LiveVerifyDispatcher, UpdateCommandsAreProtocolTwoOnly) {
+    FakeSource source;
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 1)));
+    for (const QString& name :
+         {QStringLiteral("update.getState"), QStringLiteral("update.check"), QStringLiteral("update.apply")}) {
+        const QJsonObject response = dispatcher.Dispatch(Request(name, {}, 1));
+        EXPECT_FALSE(Ok(response)) << name.toStdString();
+        EXPECT_EQ(ErrorCode(response), QString::fromLatin1(error_code::kUnknownCommand)) << name.toStdString();
+    }
 }

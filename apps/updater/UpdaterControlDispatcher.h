@@ -17,6 +17,7 @@
 #include "UpdaterCommandPolicy.h"
 #include "UpdaterControlSource.h"
 
+#include <control/options.h>
 #include <control/session.h>
 
 #include <QJsonObject>
@@ -29,8 +30,8 @@ namespace exosnap::updater_control {
 // the option there is no pipe, no thread and no log line -- the same rule the
 // application's channel follows, and for the same reason: an endpoint nobody
 // asked for is attack surface nobody accounted for.
-inline constexpr const char* kControlOption = "--automation-control";
-inline constexpr const char* kControlRole = "Updater";
+inline constexpr const char* kControlOption = exosnap::control::option::kUpdaterControl;
+inline constexpr const char* kControlRole = exosnap::control::role::kUpdater;
 
 // The one event this endpoint emits. It fires when the revision advances, which
 // is what lets a client wait on "something observable changed" rather than on a

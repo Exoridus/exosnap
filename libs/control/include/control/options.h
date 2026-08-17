@@ -23,6 +23,22 @@
 
 namespace exosnap::control {
 
+// The endpoint registry. Both halves of a name live here rather than next to the
+// process that answers to them, because the OTHER process has to spell them: the
+// application passes the updater's option and run id on the command line, and a
+// client derives the updater's pipe name from the application's response. Two
+// private copies of these strings would be a handoff that compiles and does not
+// connect.
+namespace option {
+inline constexpr const char* kApplicationControl = "--live-verify-control";
+inline constexpr const char* kUpdaterControl = "--automation-control";
+} // namespace option
+
+namespace role {
+inline constexpr const char* kApplication = "LiveVerify";
+inline constexpr const char* kUpdater = "Updater";
+} // namespace role
+
 struct ControlOptions {
     bool requested = false;
     QString run_id;

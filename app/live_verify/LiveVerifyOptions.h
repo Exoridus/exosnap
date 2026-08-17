@@ -23,11 +23,12 @@
 
 namespace exosnap::live_verify {
 
-inline constexpr const char* kControlOption = "--live-verify-control";
-// The endpoint's role, and therefore part of its name. Unchanged from before
-// the lift: the endpoint is still "\\\\.\\pipe\\ExoSnap.LiveVerify.<run-id>",
-// so every runner and every script that already knows the name keeps working.
-inline constexpr const char* kControlRole = "LiveVerify";
+// Both come from the shared endpoint registry (control/options.h): the updater's
+// launcher and a client deriving the child's pipe name need the same strings,
+// and a private copy here would be a second spelling of a cross-process
+// contract. The endpoint name itself is unchanged.
+inline constexpr const char* kControlOption = exosnap::control::option::kApplicationControl;
+inline constexpr const char* kControlRole = exosnap::control::role::kApplication;
 
 using exosnap::control::ControlOptions;
 using exosnap::control::IsValidRunId;

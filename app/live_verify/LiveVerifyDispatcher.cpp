@@ -46,6 +46,19 @@ qint64 ParamInt(const QJsonObject& params, const char* name) {
 
 // --- Command execution ------------------------------------------------------
 
+// The update area's own snapshot, plus what the last apply actually launched.
+// The update fields are lifted out of the SAME StateToJson the shell snapshot
+// publishes rather than assembled a second time, so update.getState and
+// ui.getState can never describe different updates.
+QJsonObject UpdatePayload(const LiveVerifySource& source) {
+    QJsonObject result = StateToJson(source.State(), source.StateRevision()).value(QStringLiteral("update")).toObject();
+    // Empty before the first apply. Carrying it here is what removes discovery
+    // from the client: which child, at which endpoint, pinned to which version
+    // is decided by the launch and reported by the launch.
+    result.insert(QStringLiteral("updaterLaunch"), source.UpdaterLaunchSnapshot());
+    return result;
+}
+
 Outcome ExecuteReadOnly(const QString& command, LiveVerifySource& source, const QJsonObject& capabilities,
                         const QJsonObject& described) {
     // system.capabilities and ipc.describe are assembled by the shared session
@@ -57,6 +70,8 @@ Outcome ExecuteReadOnly(const QString& command, LiveVerifySource& source, const 
         return Succeeded(described);
     if (command == QLatin1String("ui.getState"))
         return Succeeded(StateToJson(source.State(), source.StateRevision()));
+    if (command == QLatin1String("update.getState"))
+        return Succeeded(UpdatePayload(source));
     if (command == QLatin1String("system.snapshot"))
         return Succeeded(source.SystemSnapshot());
     if (command == QLatin1String("app.snapshot"))
@@ -263,6 +278,25 @@ Outcome ExecuteMutating(const CommandDescriptor& command, const ParsedRequest& r
         if (source.State().notification_hub_open != open)
             return PostconditionMissed(command.name, QStringLiteral("the hub changing state"));
         return Succeeded(PopupResult("notificationHub", open));
+    }
+
+    if (command.name == QLatin1String("update.check")) {
+        if (!source.UpdateCheck(&error))
+            return IntentRefused(command, source, error);
+        // Accepted, not answered. The check runs on a pool thread and reports
+        // through the card's next state, which is a stateRevision advance.
+        return Succeeded(UpdatePayload(source), /*settled=*/false);
+    }
+
+    if (command.name == QLatin1String("update.apply")) {
+        if (!source.UpdateApply(&error))
+            return IntentRefused(command, source, error);
+        // The updater process has been started by the time this returns
+        // (LaunchUpdater stages and spawns synchronously), so the response
+        // already carries the child's pid, its staged binary and the endpoint it
+        // was given. The UPDATE, of course, has not happened -- hence
+        // settled:false and a completion that lives in another process.
+        return Succeeded(UpdatePayload(source), /*settled=*/false);
     }
 
     if (command.name == QLatin1String("notification.clearAll")) {

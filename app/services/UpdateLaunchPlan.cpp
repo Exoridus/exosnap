@@ -5,6 +5,8 @@
 
 #include "UpdateService.h"
 
+#include <control/options.h>
+
 #include <QString>
 #include <QStringList>
 
@@ -25,7 +27,8 @@ QStringList UpdaterStagingFileList() {
 }
 
 QStringList BuildUpdaterArgs(const exosnap::update::UpdateState& st, const QString& install_dir, quint32 pid,
-                             const QString& current_version, bool verify_reinstall) {
+                             const QString& current_version, bool verify_reinstall, const QString& feed_override,
+                             const QString& automation_run_id) {
     using exosnap::update::InstallMode;
     using exosnap::update::UpdateChannel;
 
@@ -48,6 +51,16 @@ QStringList BuildUpdaterArgs(const exosnap::update::UpdateState& st, const QStri
     // the user explicitly started with --verify-update-reinstall.
     if (verify_reinstall)
         args << QStringLiteral("--verify-reinstall");
+    // The app resolved its offer against this feed; the updater must resolve the
+    // target against the same one. Handing it the production URL while the app
+    // read a fixture would be two feeds behind one offer -- exactly the
+    // divergence --target-version exists to close.
+    if (!feed_override.isEmpty())
+        args << QStringLiteral("--base-url") << feed_override;
+    // Only when this process is itself being driven. A normal launch passes
+    // nothing, and the updater then creates no endpoint at all.
+    if (!automation_run_id.isEmpty())
+        args << QString::fromLatin1(exosnap::control::option::kUpdaterControl) << automation_run_id;
     return args;
 }
 

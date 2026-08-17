@@ -1411,6 +1411,10 @@ bool SettingsAdapter::updateActionEnabled() const noexcept {
 bool SettingsAdapter::updateAvailable() const noexcept {
     return update_state_ == QLatin1String("available");
 }
+
+const QString& SettingsAdapter::updateAvailableVersion() const noexcept {
+    return update_available_version_;
+}
 bool SettingsAdapter::whatsNewAvailable() const noexcept {
     return whats_new_available_;
 }

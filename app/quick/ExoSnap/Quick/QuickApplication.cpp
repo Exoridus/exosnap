@@ -2319,16 +2319,34 @@ void QuickApplication::applyUpdateChannel() {
                               QStringLiteral("Update channel set to %1").arg(settings_.update_channel));
 }
 
-void QuickApplication::triggerUpdateCheck(bool manual) {
-    if (!update_service_)
-        return;
+QString QuickApplication::updateBlockerReason() const {
     // App-layer recording guard: never contact the update server while a capture
     // or remux is in flight.
     const UiRecordingState state = record_view_model_.state;
+    if (state == UiRecordingState::Saving || state == UiRecordingState::Stopping)
+        return QStringLiteral("finalizing");
     if (state != UiRecordingState::Ready && state != UiRecordingState::Completed && state != UiRecordingState::Failed &&
-        state != UiRecordingState::Blocked) {
-        settings_adapter_.setUpdateStatus(QStringLiteral("error"), QString(), QString(),
-                                          QStringLiteral("Update checks are paused while a recording is in progress."));
+        state != UiRecordingState::Blocked)
+        return QStringLiteral("recording");
+    // A handoff in flight owns the update area: the card's action is disabled
+    // while the updater runs, and starting a second one would be a second swap.
+    if (update_handoff_phase_ != UpdateHandoffPhase::Idle)
+        return QStringLiteral("updaterRunning");
+    return {};
+}
+
+void QuickApplication::triggerUpdateCheck(bool manual) {
+    if (!update_service_)
+        return;
+    if (const QString blocker = updateBlockerReason(); !blocker.isEmpty()) {
+        // "updaterRunning" deliberately writes nothing: the card is already
+        // showing "Updater running…" / "Restart pending", and replacing that
+        // with an error would describe the handoff as a fault.
+        if (blocker != QLatin1String("updaterRunning")) {
+            settings_adapter_.setUpdateStatus(
+                QStringLiteral("error"), QString(), QString(),
+                QStringLiteral("Update checks are paused while a recording is in progress."));
+        }
         return;
     }
     if (manual) {
@@ -2444,6 +2462,30 @@ void QuickApplication::applyStartupRelaunchHandoff(const QString& page_name, boo
 
 void QuickApplication::applyTraySuppression(bool suppressed) {
     tray_suppressed_ = suppressed;
+}
+
+void QuickApplication::applyUpdateFeedOverride(const QString& base_url) {
+    if (update_service_)
+        update_service_->SetDevFeedOverride(base_url);
+}
+
+void QuickApplication::applyUpdaterAutomationRunId(const QString& run_id) {
+    if (update_service_)
+        update_service_->SetUpdaterAutomationRunId(run_id);
+}
+
+void QuickApplication::requestUpdateCheck() {
+    // Manual: the same call the card's button makes, so the loop-guard reset and
+    // the app-layer recording guard both apply.
+    triggerUpdateCheck(/*manual=*/true);
+}
+
+void QuickApplication::requestUpdatePrimaryAction() {
+    runUpdatePrimaryAction();
+}
+
+const UpdateService* QuickApplication::updateService() const noexcept {
+    return update_service_.get();
 }
 
 void QuickApplication::applyVerifyUpdateReinstallMode(bool enabled) {

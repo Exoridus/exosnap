@@ -184,6 +184,57 @@ PreconditionVerdict CanCloseEdit(const AutomationState& state) {
                   QStringLiteral("exportRunning"), false, true);
 }
 
+// --- Update ------------------------------------------------------------------
+//
+// Both commands read the state the update CARD publishes, not a second derived
+// view of the update engine. The card already resolves every rule that decides
+// whether its button does anything -- the recording guard, the Scoop opt-out,
+// the loop guard, an updater already running -- and re-deriving those here would
+// be the drift this file exists to prevent.
+
+PreconditionVerdict RefuseWithUpdateBlocker(const AutomationState& state, const char* command) {
+    // `blocked` rather than `invalid_state`: the update area is in a perfectly
+    // ordinary state and a product rule refuses anyway. A runner reads this as
+    // "the product said no", which is a result to record.
+    return Refuse(error_code::kBlocked,
+                  QStringLiteral("%1 is refused while %2").arg(Text(command), state.update_blocker),
+                  QStringLiteral("updateBlocker"), QJsonValue(QJsonValue::Null), QJsonValue(state.update_blocker));
+}
+
+PreconditionVerdict CanUpdateCheck(const AutomationState& state) {
+    if (!state.update_blocker.isEmpty())
+        return RefuseWithUpdateBlocker(state, "update.check");
+    if (state.update_checking) {
+        // Single-flight is the engine's own rule (QCR-202); asking again while a
+        // check owns the state would be accepted and then discarded.
+        return Refuse(error_code::kInvalidState, QStringLiteral("An update check is already running"),
+                      QStringLiteral("updateChecking"), false, true);
+    }
+    return Allowed();
+}
+
+PreconditionVerdict CanUpdateApply(const AutomationState& state) {
+    if (!state.update_blocker.isEmpty())
+        return RefuseWithUpdateBlocker(state, "update.apply");
+    // The two card states whose primary action launches the updater. Every other
+    // state's action is "check again", and accepting update.apply there would
+    // report an update starting when a check started -- the false success this
+    // whole protocol version exists to remove.
+    const bool offerable =
+        state.update_state == QLatin1String("available") || state.update_state == QLatin1String("verify-reinstall");
+    if (!offerable) {
+        return Refuse(
+            error_code::kInvalidState,
+            QStringLiteral("update.apply needs an offered update; the card is \"%1\"").arg(state.update_state),
+            QStringLiteral("updateState"), QStringLiteral("available|verify-reinstall"), state.update_state);
+    }
+    if (!state.update_action_enabled) {
+        return Refuse(error_code::kBlocked, QStringLiteral("The update action is not currently enabled"),
+                      QStringLiteral("updateActionEnabled"), true, false);
+    }
+    return Allowed();
+}
+
 const QStringList& PageValues() {
     static const QStringList values = {Text(page_name::kRecord), Text(page_name::kSettings),
                                        Text(page_name::kDiagnostics), Text(page_name::kLogs), Text(page_name::kAbout)};
@@ -316,6 +367,15 @@ const QVector<CommandDescriptor>& AllCommands() {
         {QStringLiteral("notificationHub.open"), 2, true, true, Settle::Synchronous, {}, &NoPrecondition},
         {QStringLiteral("notificationHub.close"), 2, true, true, Settle::Synchronous, {}, &NoPrecondition},
         {QStringLiteral("notification.clearAll"), 2, true, true, Settle::Synchronous, {}, &NoPrecondition},
+
+        // --- Update ------------------------------------------------------------
+        // The only product area with its own state machine that the channel did
+        // not reach. Both actions are ASYNCHRONOUS: a check answers through the
+        // card's next state, and an apply's real completion is a different
+        // process entirely.
+        {QStringLiteral("update.getState"), 2, false, true, Settle::NotApplicable, {}, &NoPrecondition},
+        {QStringLiteral("update.check"), 2, true, true, Settle::Asynchronous, {}, &CanUpdateCheck},
+        {QStringLiteral("update.apply"), 2, true, true, Settle::Asynchronous, {}, &CanUpdateApply},
     };
     return commands;
 }
@@ -364,6 +424,20 @@ QJsonObject StateToJson(const AutomationState& state, std::uint64_t state_revisi
     source.insert(QStringLiteral("name"), state.selected_source_name);
     source.insert(QStringLiteral("kind"), state.selected_source_kind);
     json.insert(QStringLiteral("selectedSource"), source);
+
+    QJsonObject update;
+    update.insert(QStringLiteral("state"), state.update_state);
+    update.insert(QStringLiteral("channel"), state.update_channel);
+    update.insert(QStringLiteral("currentVersion"), state.update_current_version);
+    update.insert(QStringLiteral("availableVersion"), state.update_available_version.isEmpty()
+                                                          ? QJsonValue(QJsonValue::Null)
+                                                          : QJsonValue(state.update_available_version));
+    update.insert(QStringLiteral("checking"), state.update_checking);
+    update.insert(QStringLiteral("updateAvailable"), state.update_available);
+    update.insert(QStringLiteral("actionEnabled"), state.update_action_enabled);
+    update.insert(QStringLiteral("blocker"),
+                  state.update_blocker.isEmpty() ? QJsonValue(QJsonValue::Null) : QJsonValue(state.update_blocker));
+    json.insert(QStringLiteral("update"), update);
 
     QJsonArray actions;
     for (const QString& action : AvailableActions(state))

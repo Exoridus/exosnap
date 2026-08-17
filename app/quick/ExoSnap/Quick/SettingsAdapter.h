@@ -429,6 +429,10 @@ class SettingsAdapter : public QObject {
     [[nodiscard]] const QString& updateActionText() const noexcept;
     [[nodiscard]] bool updateActionEnabled() const noexcept;
     [[nodiscard]] bool updateAvailable() const noexcept;
+    // The offered release tag verbatim, empty when nothing is offered. Already
+    // held for the card's copy; exposed because it is the string that becomes
+    // the updater's pinned target version.
+    [[nodiscard]] const QString& updateAvailableVersion() const noexcept;
     [[nodiscard]] bool whatsNewAvailable() const noexcept;
 
     [[nodiscard]] bool webcamEnabled() const noexcept;

@@ -129,8 +129,57 @@ without a second credential. The protocol, the policy mechanics, the session
 rules and the transport are the same code (`libs/control`); only the command
 table and the state differ.
 
-The updater's commands are `updater.getState`, `.check`, `.download`, `.apply`,
-`.retry`, `.cancel`, `.close`. Three properties are worth stating up front:
+### Update commands (application side)
+
+`update.getState`, `update.check`, `update.apply`. Both actions bind to the
+*same* entry points the Settings update card drives — the manual check with its
+recording guard and loop-guard reset, and the card's primary button — so an
+acceptance run exercises the path a user takes rather than a shortcut into the
+update engine.
+
+- Both are **asynchronous**. `update.check` answers through the card's next
+  state; `update.apply` starts a different process, and that process is the
+  completion.
+- `update.apply` is refused unless the card is actually offering an update
+  (`available` or `verify-reinstall`). In every other state the same button
+  re-checks, and accepting an "apply" that means "check" is precisely the false
+  success this protocol version exists to remove.
+- `update.getState` carries an `updaterLaunch` object: the child's pid, the
+  staged executable and its SHA-256, the pinned target version, and the endpoint
+  the child was given. **Nothing has to be discovered** — which child, where, and
+  pinned to what are decided by the launch and reported by it. The same object
+  rides on the `update.apply` response, so one round trip hands over the attach
+  handle.
+- `update.getState` also carries a `blocker` (`recording` | `finalizing` |
+  `updaterRunning` | null). One rule, shared with the card's own guard.
+
+### Driving a check against a controlled feed
+
+`exosnap.exe --update-base-url https://<host>/<path>` points the application's
+update check at a named feed instead of the production one. It exists because
+nothing could otherwise exercise the app's own check — and therefore the whole
+app-to-updater handoff — in a development build, where `CheckForUpdate` is
+gated off by `EXOSNAP_OFFICIAL_BUILD`. Three rules matter:
+
+- **Refused outright in an official build.** A shipped artifact whose update
+  source can be redirected from a command line is a different product.
+- **https with a host, or the launch is refused.** A test that believes it is
+  pointed at a fixture while it talks to GitHub reports the wrong thing.
+- **The same URL is handed to the updater** as `--base-url`. Two feeds behind one
+  offer is exactly the divergence `--target-version` exists to close.
+
+The recording guard still applies; only the official-build gate does not, because
+that gate is a policy about the production feed and this is by construction not
+it. Signature and hash verification are untouched — and in a development build
+the pinned public key is all zeros, so a manifest from any feed fails
+verification. That is a useful property rather than a limitation: it makes a
+cross-process failure flow (`verifyDownloadFailed`, `installState: intact`)
+reachable without a real installable release.
+
+### Updater commands
+
+`updater.getState`, `.check`, `.download`, `.apply`, `.retry`, `.cancel`,
+`.close`. Three properties are worth stating up front:
 
 - **Every product action is asynchronous.** `ok` means accepted; the response
   carries `settled: false`, and the completion is a `stateRevision` advance
@@ -144,13 +193,19 @@ The updater's commands are `updater.getState`, `.check`, `.download`, `.apply`,
   the updater reads a registry path and a version string and never asks Windows
   Installer for a rollback outcome, so it does not claim one.
 
-`updater.cancel` answers `blocked` during `applying`, `verifying` and
-`launching` — the engine observes cancellation in the download loop and in the
-bounded `msiexec` wait and nowhere else, and those are the same three phases in
-which the window disables its own close control. There is deliberately no
-command that arms a handoff; a handoff is a start argument, and a channel that
-could set one afterwards would let a caller decide what an elevated `msiexec`
-installs.
+`updater.cancel` is allowed in exactly one phase: `downloading`. `DownloadToFile`
+is the only operation that checks the flag. `checking` and `waitingForParent`
+answer `blocked` because `FetchReleasesJson` and `WaitForProcessExit` take no
+cancellation at all — accepting there would report success for something that
+never happens. `applying`, `verifying` and `launching` answer `blocked` because
+interrupting them risks the installation, and those are the same three phases in
+which the window disables its own close control. A cancellation that IS honoured
+ends in `phase: cancelled` with no `failureCase` and `installState: intact`, and
+the process exits `5` — never `1`.
+
+There is deliberately no command that arms a handoff; a handoff is a start
+argument, and a channel that could set one afterwards would let a caller decide
+what an elevated `msiexec` installs.
 
 Live Verify mode is **not** a harness mode: no config isolation, no
 single-instance suppression, no tray suppression. Set `EXOSNAP_CONFIG_DIR` and

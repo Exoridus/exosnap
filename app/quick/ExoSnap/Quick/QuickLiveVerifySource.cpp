@@ -15,10 +15,15 @@
 #include "SettingsAdapter.h"
 #include "ShellAdapter.h"
 
+#include "ExoSnapBuildInfo.h"
+
 #include "diagnostics/NativeWindowFacts.h"
 #include "models/AboutInfo.h"
 #include "services/RecordingCoordinator.h"
+#include "services/UpdateService.h"
+
 #include "ui/CodecLabels.h"
+#include <control/options.h>
 
 #include <QCoreApplication>
 #include <QGuiApplication>
@@ -201,6 +206,11 @@ QuickLiveVerifySource::QuickLiveVerifySource(QuickApplication& application, QQui
     }
     if (auto* notifications = application_.notificationsAdapter())
         connect(notifications, &NotificationsAdapter::hubOpenChanged, this, refresh);
+    // The update card's only change notification, and therefore the settle
+    // signal for update.check: the card moves to "checking" and then to its
+    // answer, and each is a revision the client can wait on instead of sleeping.
+    if (auto* settings = application_.settingsAdapter())
+        connect(settings, &SettingsAdapter::updateStatusChanged, this, refresh);
     // The three blocking surfaces. Their own signals, not the arbiter's: the
     // arbiter has no "which one is up" notification, and adding one would be a
     // second place where that fact is decided.
@@ -268,6 +278,20 @@ live_verify::AutomationState QuickLiveVerifySource::State() const {
 
     if (const auto* notifications = application_.notificationsAdapter())
         state.notification_hub_open = notifications->hubOpen();
+
+    // Update. Read from the CARD, not from a second view of the update engine:
+    // the card is what the user acts on, and what the precondition for
+    // update.apply has to agree with.
+    if (auto* settings = application_.settingsAdapter()) {
+        state.update_state = settings->updateState();
+        state.update_channel = settings->updateChannel();
+        state.update_available_version = settings->updateAvailableVersion();
+        state.update_available = settings->updateAvailable();
+        state.update_action_enabled = settings->updateActionEnabled();
+        state.update_checking = settings->updateState() == QLatin1String("checking");
+    }
+    state.update_current_version = QString::fromLatin1(exosnap::build::kVersion);
+    state.update_blocker = application_.updateBlockerReason();
 
     return state;
 }
@@ -875,6 +899,75 @@ bool QuickLiveVerifySource::EditClose(QString* error) {
     // keyframes, position, clip generation) before emitting closeRequested().
     session->close();
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// Update
+// ---------------------------------------------------------------------------
+
+bool QuickLiveVerifySource::UpdateCheck(QString* error) {
+    // The card's own manual check. Nothing here reaches past it into
+    // UpdateService: a check that skipped the app-layer guard and the loop-guard
+    // reset would exercise a path no user has.
+    application_.requestUpdateCheck();
+    (void)error;
+    return true;
+}
+
+bool QuickLiveVerifySource::UpdateApply(QString* error) {
+    // The card's primary action. Its precondition has already established that
+    // the card is offering an update, which is what makes this an APPLY rather
+    // than the re-check the same button performs in every other state.
+    application_.requestUpdatePrimaryAction();
+    const UpdateService* service = application_.updateService();
+    if (service == nullptr) {
+        *error = QStringLiteral("The update service is not available");
+        return false;
+    }
+    if (service->LastUpdaterLaunch().pid == 0) {
+        // LaunchUpdater stages and spawns synchronously, so by here either a
+        // child exists or the launch failed -- and a failed staging is exactly
+        // the case that must not answer ok.
+        *error = QStringLiteral("The updater was not started");
+        return false;
+    }
+    return true;
+}
+
+QJsonObject QuickLiveVerifySource::UpdaterLaunchSnapshot() const {
+    QJsonObject json;
+    const UpdateService* service = application_.updateService();
+    if (service == nullptr)
+        return json;
+
+    const UpdateService::UpdaterLaunchInfo launch = service->LastUpdaterLaunch();
+    json.insert(QStringLiteral("pid"), static_cast<double>(launch.pid));
+    json.insert(QStringLiteral("stagedExecutable"), launch.staged_exe);
+    json.insert(QStringLiteral("targetVersion"),
+                launch.target_version.isEmpty() ? QJsonValue(QJsonValue::Null) : QJsonValue(launch.target_version));
+
+    // Artifact binding: the hash of the exact staged copy that ran, so a stale
+    // build sitting somewhere else cannot be credited with the run. Hashed once
+    // per path -- the staging tree is rebuilt per apply, but its bytes do not
+    // change while that child lives.
+    if (!launch.staged_exe.isEmpty() && launch.staged_exe != staged_updater_path_) {
+        staged_updater_path_ = launch.staged_exe;
+        staged_updater_sha256_ = models::ComputeFileSha256(launch.staged_exe);
+    }
+    json.insert(QStringLiteral("stagedExecutableSha256"), staged_updater_sha256_);
+
+    // The endpoint, spelled out rather than left to be derived. Empty unless
+    // this process is itself under a control channel, in which case the child
+    // got none either -- and a client must be able to see that difference.
+    json.insert(QStringLiteral("controlRunId"), launch.automation_run_id.isEmpty()
+                                                    ? QJsonValue(QJsonValue::Null)
+                                                    : QJsonValue(launch.automation_run_id));
+    json.insert(QStringLiteral("controlPipe"),
+                launch.automation_run_id.isEmpty()
+                    ? QJsonValue(QJsonValue::Null)
+                    : QJsonValue(exosnap::control::PipeName(QString::fromLatin1(exosnap::control::role::kUpdater),
+                                                            launch.automation_run_id)));
+    return json;
 }
 
 } // namespace exosnap::quick

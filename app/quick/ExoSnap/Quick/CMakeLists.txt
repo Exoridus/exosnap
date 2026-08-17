@@ -233,6 +233,11 @@ target_sources(exosnap
         # entry point.
         ${PROJECT_SOURCE_DIR}/app/services/VerifyReinstallMode.cpp
         ${PROJECT_SOURCE_DIR}/app/services/VerifyReinstallMode.h
+        # The dev feed override (--update-base-url): the seam that lets a
+        # non-official build exercise its own update check, and therefore the
+        # whole app-to-updater handoff, against a controlled feed.
+        ${PROJECT_SOURCE_DIR}/app/services/UpdateFeedOverride.cpp
+        ${PROJECT_SOURCE_DIR}/app/services/UpdateFeedOverride.h
         ${PROJECT_SOURCE_DIR}/app/models/AboutInfo.cpp
         ${PROJECT_SOURCE_DIR}/app/models/AboutInfo.h
         ${PROJECT_SOURCE_DIR}/app/models/RecordingPresetRegistry.cpp

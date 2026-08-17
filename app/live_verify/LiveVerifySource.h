@@ -116,6 +116,26 @@ class LiveVerifySource {
     virtual bool ScrollHome(const QString& surface, QString* error) = 0;
     virtual bool ScrollEnd(const QString& surface, QString* error) = 0;
 
+    // --- Update intents -----------------------------------------------------
+    // Both bind to the SAME product paths the Settings update card drives. An
+    // automation-only shortcut into the update engine would prove something no
+    // user executes -- and for the update path that is the whole point, since
+    // what is being accepted is the real handoff, not a test harness's.
+
+    // The card's "Check for updates": the manual check, with its recording
+    // guard and its loop-guard reset. Asynchronous -- the result arrives as an
+    // update state change.
+    virtual bool UpdateCheck(QString* error) = 0;
+    // The card's primary action when an update is offered: stage the updater and
+    // launch it. Asynchronous, and the meaningful completion is the CHILD
+    // process, not this call.
+    virtual bool UpdateApply(QString* error) = 0;
+    // What the last apply actually started, for a client that has to reach the
+    // child: pid, the staged executable and its SHA-256, the pinned target
+    // version, and the endpoint the child was given. Empty before the first
+    // launch. Read-only.
+    [[nodiscard]] virtual QJsonObject UpdaterLaunchSnapshot() const = 0;
+
     virtual bool SetSourcePickerOpen(bool open, QString* error) = 0;
     virtual bool SetNotificationHubOpen(bool open, QString* error) = 0;
     virtual bool ClearNotifications(QString* error) = 0;

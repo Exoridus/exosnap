@@ -16,6 +16,7 @@
 #include "live_verify/LiveVerifyOptions.h"
 #include "services/ElevatedRelaunch.h"
 #include "services/RecordingCoordinator.h"
+#include "services/UpdateFeedOverride.h"
 #include "services/VerifyReinstallMode.h"
 
 // QApplication, not QGuiApplication: QSystemTrayIcon is a Qt Widgets type and
@@ -593,6 +594,17 @@ int main(int argc, char* argv[]) {
         return 2;
     }
 
+    // The dev feed override. Refused outright in an official build and refused
+    // on a malformed value, because a test that believes it is pointed at a
+    // fixture and is actually talking to the production feed reports the wrong
+    // thing -- and could act on a real release.
+    const exosnap::services::UpdateFeedOverride update_feed_override =
+        exosnap::services::ParseUpdateFeedOverride(arguments);
+    if (update_feed_override.requested && !update_feed_override.error.isEmpty()) {
+        qCritical().noquote() << update_feed_override.error;
+        return 2;
+    }
+
     const bool preview_mode = arguments.contains(QStringLiteral("--preview-smoke-test")) ||
                               arguments.contains(QStringLiteral("--preview-lifecycle-test")) ||
                               arguments.contains(QStringLiteral("--preview-visual-test")) ||
@@ -699,6 +711,13 @@ int main(int argc, char* argv[]) {
     const exosnap::services::RelaunchHandoff startup_handoff = exosnap::services::ParseRelaunchArgs(arguments);
     quick_application.applyStartupRelaunchHandoff(startup_handoff.page_name, startup_handoff.reenable_present_diag);
     quick_application.applyVerifyUpdateReinstallMode(exosnap::services::HasVerifyUpdateReinstallRequest(arguments));
+    quick_application.applyUpdateFeedOverride(update_feed_override.base_url);
+    // The child updater gets an automation endpoint ONLY when this process has
+    // one. Same run id, different role in the pipe name (ADR 0067), so a runner
+    // that is already driving this process can reach the updater it starts
+    // without discovering anything.
+    quick_application.applyUpdaterAutomationRunId(live_verify_options.requested ? live_verify_options.run_id
+                                                                                : QString());
     // A --visual-test sweep is one process per scenario and a benchmark run
     // measures the frontend, not the notification area; neither should drop an
     // ExoSnap icon into the developer's tray. --smoke-test is deliberately NOT in

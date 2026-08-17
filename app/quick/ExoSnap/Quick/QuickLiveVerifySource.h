@@ -91,6 +91,10 @@ class QuickLiveVerifySource final : public QObject, public live_verify::LiveVeri
     bool EditTimelineEnd(QString* error) override;
     bool EditClose(QString* error) override;
 
+    bool UpdateCheck(QString* error) override;
+    bool UpdateApply(QString* error) override;
+    [[nodiscard]] QJsonObject UpdaterLaunchSnapshot() const override;
+
   signals:
     // The observable state changed, and the revision has already been advanced.
     // main.cpp turns this into the ui.stateChanged event -- the protocol-2
@@ -112,6 +116,11 @@ class QuickLiveVerifySource final : public QObject, public live_verify::LiveVeri
     QPointer<QQuickWindow> root_window_;
     live_verify::AutomationState observed_;
     std::uint64_t revision_ = 0;
+    // Hashed once per staged path: the staged updater is rebuilt on every apply,
+    // but within one launch the bytes do not change, and re-hashing a ~2 MB image
+    // on every getState would make a poll expensive for no new information.
+    mutable QString staged_updater_path_;
+    mutable QString staged_updater_sha256_;
     // The executable hash is the artifact binding, and hashing a ~40 MB image on
     // every hello would put a visible cost into a channel that must not perturb
     // what it measures. Computed once, on first use.

@@ -60,6 +60,11 @@ class UpdateService::Impl {
     // outside the mutex; its value is snapshotted into the operation context at
     // check start so a toggle cannot change what a running check means.
     std::atomic<bool> verify_reinstall{false};
+    // Both mutex-guarded: they are read by the check worker on a pool thread and
+    // written from the GUI thread at startup.
+    QString dev_feed_override;
+    QString updater_automation_run_id;
+    UpdateService::UpdaterLaunchInfo last_updater_launch;
     mutable QMutex mutex;
 
     // WHATS-NEW: gap notes from the most recent completed check (mutex-guarded).
@@ -173,6 +178,41 @@ bool UpdateService::IsVerifyReinstallMode() const {
     return impl_->verify_reinstall.load();
 }
 
+void UpdateService::SetDevFeedOverride(const QString& base_url) {
+    {
+        QMutexLocker lk(&impl_->mutex);
+        impl_->dev_feed_override = base_url;
+    }
+    if (!base_url.isEmpty()) {
+        // Loud on purpose: every check and every updater launch in this run
+        // talks to a feed that is not the product's. A support bundle from such
+        // a run must say so.
+        diagnostics::AppLog::warning(
+            QStringLiteral("update"),
+            QStringLiteral("Update feed overridden for this run — checks and the updater both use %1").arg(base_url));
+    }
+}
+
+QString UpdateService::DevFeedOverride() const {
+    QMutexLocker lk(&impl_->mutex);
+    return impl_->dev_feed_override;
+}
+
+void UpdateService::SetUpdaterAutomationRunId(const QString& run_id) {
+    QMutexLocker lk(&impl_->mutex);
+    impl_->updater_automation_run_id = run_id;
+}
+
+QString UpdateService::UpdaterAutomationRunId() const {
+    QMutexLocker lk(&impl_->mutex);
+    return impl_->updater_automation_run_id;
+}
+
+UpdateService::UpdaterLaunchInfo UpdateService::LastUpdaterLaunch() const {
+    QMutexLocker lk(&impl_->mutex);
+    return impl_->last_updater_launch;
+}
+
 exosnap::update::UpdateBlockReason UpdateService::CurrentBlockReason() const {
     auto guard = impl_->MakeGuard();
     return guard ? guard() : exosnap::update::UpdateBlockReason::NotBlocked;
@@ -202,6 +242,7 @@ void UpdateService::RequestUpdateCheck() {
     // and travel with the operation. Reading them inside the worker meant the
     // check could query one feed and be interpreted as another.
     UpdateCheckOperation operation;
+    QString feed_override;
     {
         QMutexLocker lk(&impl_->mutex);
         if (impl_->active_operation != 0)
@@ -209,12 +250,16 @@ void UpdateService::RequestUpdateCheck() {
         operation.id = impl_->next_operation_id++;
         operation.channel = impl_->channel;
         operation.verify_reinstall = impl_->verify_reinstall.load();
+        // Snapshotted with the rest of the operation context, for the same
+        // reason: which feed a check ran against must not be able to change
+        // while it runs.
+        feed_override = impl_->dev_feed_override;
         impl_->active_operation = operation.id;
         impl_->state.checking = true;
         impl_->state.channel = operation.channel;
     }
 
-    impl_->check_pool.start([impl, self, operation]() {
+    impl_->check_pool.start([impl, self, operation, feed_override]() {
         namespace upd = exosnap::update;
 
         upd::CheckParams params;
@@ -228,7 +273,28 @@ void UpdateService::RequestUpdateCheck() {
         params.channel = operation.channel;
         params.recording_guard = impl->MakeGuard();
 
-        const auto result = upd::CheckForUpdate(params);
+        // With a dev feed override the recording guard still applies -- it is a
+        // product rule about what the machine is doing, not about which feed is
+        // being read -- but the official-build gate does not: that gate is a
+        // policy about the PRODUCTION feed, and this is by construction not it.
+        // Without this branch a dev build could never exercise its own check,
+        // and therefore never the app-to-updater handoff either.
+        upd::UpdateCheckResult result;
+        if (feed_override.isEmpty()) {
+            result = upd::CheckForUpdate(params);
+        } else {
+            params.api_base_url = feed_override.toStdString();
+            const upd::UpdateBlockReason blocked =
+                params.recording_guard ? params.recording_guard() : upd::UpdateBlockReason::NotBlocked;
+            if (blocked != upd::UpdateBlockReason::NotBlocked) {
+                result.check_failed = true;
+                result.error_message = blocked == upd::UpdateBlockReason::ActiveRecording
+                                           ? "Update check blocked: recording in progress"
+                                           : "Update check blocked: recording finalizing";
+            } else {
+                result = upd::CheckAgainstFeed(params);
+            }
+        }
 
         UpdateCheckCompletion completion;
         upd::UpdateChannel channel_now = operation.channel;
@@ -456,7 +522,8 @@ void UpdateService::LaunchUpdater() {
     // Snapshotted, not read in place: BuildUpdaterArgs reads state.channel and
     // state.install_mode, and a check worker can be writing that same struct.
     const QStringList flags =
-        BuildUpdaterArgs(CurrentState(), app_dir, pid, QString::fromLatin1(exosnap::build::kVersion), verify_reinstall);
+        BuildUpdaterArgs(CurrentState(), app_dir, pid, QString::fromLatin1(exosnap::build::kVersion), verify_reinstall,
+                         DevFeedOverride(), UpdaterAutomationRunId());
 
     // Launch detached: the app does not wait — the updater sends WM_CLOSE when it is
     // ready to swap. QProcess applies the correct Windows argument-quoting rules so
@@ -474,6 +541,17 @@ void UpdateService::LaunchUpdater() {
     // close handoff, MainWindow can immediately re-arm the card. This is process
     // lifecycle ownership, not UI polling.
     impl_->updater_pid = updater_pid;
+    {
+        // Recorded BEFORE the exit watcher is wired, so a child that dies
+        // immediately still leaves behind what it was.
+        QMutexLocker lk(&impl_->mutex);
+        impl_->last_updater_launch.pid = updater_pid;
+        impl_->last_updater_launch.staged_exe = QDir::toNativeSeparators(staged_exe);
+        // Read directly, not through CurrentState(): that helper takes the same
+        // non-recursive mutex this block already holds.
+        impl_->last_updater_launch.target_version = QString::fromStdString(impl_->state.available_version_raw);
+        impl_->last_updater_launch.automation_run_id = impl_->updater_automation_run_id;
+    }
     impl_->updater_process =
         ::OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, static_cast<DWORD>(updater_pid));
     if (impl_->updater_process != nullptr) {

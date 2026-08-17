@@ -182,6 +182,34 @@ class QuickApplication {
     // automatically covered instead of only provable by hand.
     void applyTraySuppression(bool suppressed);
 
+    // The dev feed override (--update-base-url) and, when this process is itself
+    // under a control channel, the run id the updater child is to be given.
+    // Both are plumbed into UpdateService rather than kept here, because that is
+    // where the check and the launch read them.
+    void applyUpdateFeedOverride(const QString& base_url);
+    void applyUpdaterAutomationRunId(const QString& run_id);
+
+    // --- Update intents reachable by the control channel ---------------------
+    // The SAME entry points the Settings update card drives -- deliberately not
+    // a shortcut into UpdateService, because what an acceptance run has to prove
+    // is the path a user takes. requestUpdateCheck() is the card's manual check
+    // (recording guard, loop-guard reset); requestUpdatePrimaryAction() is its
+    // primary button, which launches the updater exactly when the card offers an
+    // update and otherwise re-checks -- the caller's precondition is what keeps
+    // "apply" from silently meaning "check".
+    void requestUpdateCheck();
+    void requestUpdatePrimaryAction();
+    [[nodiscard]] const UpdateService* updateService() const noexcept;
+
+    // Why the update area refuses to act right now, in product vocabulary:
+    // "" (nothing in the way) | "recording" | "finalizing" | "updaterRunning".
+    // ONE rule, read by the card's own guard and by the control channel's
+    // preconditions -- so a client is never told an action is available and then
+    // refused by the intent behind it. Scoop and "restart pending" are card
+    // STATES rather than blockers: a check is still meaningful in both, and it
+    // is the apply that has no offer to act on.
+    [[nodiscard]] QString updateBlockerReason() const;
+
   private:
     // Crash session sidecar (ADR 0017). Reads the previous session's context
     // before overwriting it, so a crash in the last run stays detectable.

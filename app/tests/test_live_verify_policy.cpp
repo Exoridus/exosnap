@@ -56,8 +56,22 @@ AutomationState EditOpenOnRecord() {
 // awkward combinations -- a blocking surface over an open edit session, a
 // running export, a blocked transport -- because those are where two tables
 // would disagree first.
+AutomationState UpdateOffered();
+
 QVector<AutomationState> InterestingStates() {
-    QVector<AutomationState> states = {Ready(), Recording(), EditOpenOnRecord()};
+    QVector<AutomationState> states = {Ready(), Recording(), EditOpenOnRecord(), UpdateOffered()};
+
+    // The update area, in the three shapes that decide whether its commands are
+    // reachable: an offer, an offer the product currently refuses to act on, and
+    // a card with nothing to apply.
+    AutomationState update_blocked = UpdateOffered();
+    update_blocked.update_blocker = QStringLiteral("recording");
+    states.append(update_blocked);
+    AutomationState update_none = UpdateOffered();
+    update_none.update_state = QStringLiteral("uptodate");
+    update_none.update_available = false;
+    update_none.update_available_version.clear();
+    states.append(update_none);
 
     AutomationState blocked_transport = Ready();
     blocked_transport.recording_state = QStringLiteral("Blocked");
@@ -95,6 +109,17 @@ QStringList ActionsIn(const QJsonObject& state) {
     for (const QJsonValue& value : state.value(QStringLiteral("availableActions")).toArray())
         actions.append(value.toString());
     return actions;
+}
+
+AutomationState UpdateOffered() {
+    AutomationState state = Ready();
+    state.update_state = QStringLiteral("available");
+    state.update_channel = QStringLiteral("stable");
+    state.update_current_version = QStringLiteral("0.9.0");
+    state.update_available_version = QStringLiteral("0.9.1");
+    state.update_available = true;
+    state.update_action_enabled = true;
+    return state;
 }
 
 } // namespace
@@ -259,4 +284,102 @@ TEST(LiveVerifyPolicy, DescribeIsFilteredByProtocol) {
     EXPECT_EQ(v1.size(), CommandNamesForProtocol(1).size());
     EXPECT_EQ(v2.size(), CommandNamesForProtocol(2).size());
     EXPECT_GT(v2.size(), v1.size());
+}
+
+// ---------------------------------------------------------------------------
+// Update
+// ---------------------------------------------------------------------------
+
+TEST(LiveVerifyUpdatePolicy, ApplyNeedsAnOfferedUpdate) {
+    // The card's primary button re-checks in every state that is not an offer.
+    // Accepting update.apply there would report an update starting when a check
+    // started -- the false success this protocol version exists to remove.
+    EXPECT_TRUE(Evaluate(*FindCommand(QStringLiteral("update.apply")), UpdateOffered()).allowed());
+
+    for (const QString& card : {QStringLiteral("unchecked"), QStringLiteral("uptodate"), QStringLiteral("checking"),
+                                QStringLiteral("scoop"), QStringLiteral("pending"), QStringLiteral("error")}) {
+        AutomationState state = UpdateOffered();
+        state.update_state = card;
+        const PreconditionVerdict verdict = Evaluate(*FindCommand(QStringLiteral("update.apply")), state);
+        EXPECT_EQ(verdict.code, QString::fromLatin1(error_code::kInvalidState)) << card.toStdString();
+        EXPECT_EQ(verdict.actual.value(QStringLiteral("updateState")).toString(), card);
+        EXPECT_FALSE(AvailableActions(state).contains(QStringLiteral("update.apply"))) << card.toStdString();
+    }
+}
+
+TEST(LiveVerifyUpdatePolicy, AVerificationReinstallIsAlsoAnOffer) {
+    // ADR 0055: the offered version IS the running one, on purpose, and its
+    // button launches the updater exactly like a normal update's.
+    AutomationState state = UpdateOffered();
+    state.update_state = QStringLiteral("verify-reinstall");
+    state.update_available_version = state.update_current_version;
+    EXPECT_TRUE(Evaluate(*FindCommand(QStringLiteral("update.apply")), state).allowed());
+}
+
+TEST(LiveVerifyUpdatePolicy, ADisabledCardActionBlocksApply) {
+    // `blocked`, not `invalid_state`: the card is offering an update and the
+    // product still refuses to act on it right now.
+    AutomationState state = UpdateOffered();
+    state.update_action_enabled = false;
+    const PreconditionVerdict verdict = Evaluate(*FindCommand(QStringLiteral("update.apply")), state);
+    EXPECT_EQ(verdict.code, QString::fromLatin1(error_code::kBlocked));
+    EXPECT_EQ(verdict.requirements.value(QStringLiteral("updateActionEnabled")).toBool(), true);
+    EXPECT_EQ(verdict.actual.value(QStringLiteral("updateActionEnabled")).toBool(), false);
+}
+
+TEST(LiveVerifyUpdatePolicy, EveryBlockerRefusesBothCommandsWithItsReason) {
+    // One rule, read by the card's own guard and by these preconditions: a
+    // client cannot be told an action is available and then refused by the
+    // intent behind it.
+    for (const QString& blocker :
+         {QStringLiteral("recording"), QStringLiteral("finalizing"), QStringLiteral("updaterRunning")}) {
+        AutomationState state = UpdateOffered();
+        state.update_blocker = blocker;
+        for (const QString& name : {QStringLiteral("update.check"), QStringLiteral("update.apply")}) {
+            const PreconditionVerdict verdict = Evaluate(*FindCommand(name), state);
+            EXPECT_EQ(verdict.code, QString::fromLatin1(error_code::kBlocked))
+                << name.toStdString() << " under " << blocker.toStdString();
+            EXPECT_EQ(verdict.actual.value(QStringLiteral("updateBlocker")).toString(), blocker);
+            EXPECT_FALSE(AvailableActions(state).contains(name));
+        }
+    }
+}
+
+TEST(LiveVerifyUpdatePolicy, ASecondCheckWhileOneRunsIsInvalidState) {
+    // Single-flight is the engine's own rule; a second request would be admitted
+    // and then discarded, which is not something to report as accepted.
+    AutomationState state = UpdateOffered();
+    state.update_state = QStringLiteral("checking");
+    state.update_checking = true;
+    const PreconditionVerdict verdict = Evaluate(*FindCommand(QStringLiteral("update.check")), state);
+    EXPECT_EQ(verdict.code, QString::fromLatin1(error_code::kInvalidState));
+}
+
+TEST(LiveVerifyUpdatePolicy, BothActionsAreAsynchronous) {
+    // A check answers through the card's next state; an apply's real completion
+    // is a different process entirely. Neither may claim `settled`.
+    for (const QString& name : {QStringLiteral("update.check"), QStringLiteral("update.apply")}) {
+        const CommandDescriptor* command = FindCommand(name);
+        ASSERT_NE(command, nullptr) << name.toStdString();
+        EXPECT_TRUE(command->mutating) << name.toStdString();
+        EXPECT_EQ(command->settle, Settle::Asynchronous) << name.toStdString();
+    }
+    const CommandDescriptor* query = FindCommand(QStringLiteral("update.getState"));
+    ASSERT_NE(query, nullptr);
+    EXPECT_FALSE(query->mutating);
+    EXPECT_EQ(query->settle, Settle::NotApplicable);
+}
+
+TEST(LiveVerifyUpdatePolicy, TheStateSnapshotCarriesTheUpdateFacts) {
+    const QJsonObject update = StateToJson(UpdateOffered(), 7).value(QStringLiteral("update")).toObject();
+    EXPECT_EQ(update.value(QStringLiteral("state")).toString(), QStringLiteral("available"));
+    EXPECT_EQ(update.value(QStringLiteral("availableVersion")).toString(), QStringLiteral("0.9.1"));
+    EXPECT_EQ(update.value(QStringLiteral("currentVersion")).toString(), QStringLiteral("0.9.0"));
+    EXPECT_TRUE(update.value(QStringLiteral("updateAvailable")).toBool());
+    EXPECT_TRUE(update.value(QStringLiteral("blocker")).isNull());
+
+    AutomationState none = Ready();
+    const QJsonObject empty = StateToJson(none, 1).value(QStringLiteral("update")).toObject();
+    EXPECT_TRUE(empty.value(QStringLiteral("availableVersion")).isNull())
+        << "an empty string is a value; null is \"there is none\"";
 }

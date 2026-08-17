@@ -72,6 +72,21 @@ enum class UpdateOffer : uint8_t {
                                                  const std::optional<ReleaseAssets>& release,
                                                  const CheckParams& params) noexcept;
 
+// Fetch `params.api_base_url`, locate the newest qualifying release for the
+// channel and assemble the result -- the whole check MINUS the two policies
+// CheckForUpdate applies around it (the recording guard and the
+// EXOSNAP_OFFICIAL_BUILD gate).
+//
+// Exposed because more than one caller needs the mechanics without the app's
+// policy: the standalone updater does its own gating (it only exists once a
+// handoff has happened, or once a person started it by hand), and an explicitly
+// named dev feed is by definition not the production feed the official-build
+// gate is about. Deliberately NOT a way around that gate for the production
+// URL -- callers decide their own policy and are responsible for it.
+//
+// Synchronous blocking call; intended to be run on a background thread.
+[[nodiscard]] UpdateCheckResult CheckAgainstFeed(const CheckParams& params) noexcept;
+
 // Synchronous blocking call; intended to be run on a background thread.
 // Never throws; always returns a populated UpdateCheckResult.
 [[nodiscard]] UpdateCheckResult CheckForUpdate(const CheckParams& params) noexcept;
