@@ -78,12 +78,13 @@ try {
         'libs/crash_capture/src/crash_capture.cpp',
         # Not an egress point, and listed for the same reason the headers above
         # are: the token appears only in prose. This header names `Qt6::Network`
-        # in the paragraph explaining why the Live Verify control channel is a
-        # native named pipe INSTEAD of QLocalServer -- so that Qt's networking
-        # module is never linked into the shipping executable. A pipe has no
-        # port and no listening socket. Inventarised under "Local,
-        # never-transmitted stores" in docs/privacy-review.md.
-        'app/live_verify/LiveVerifyControlServer.h'
+        # in the paragraph explaining why the shared control channel is a native
+        # named pipe INSTEAD of QLocalServer -- so that Qt's networking module is
+        # never linked into either shipping executable. A pipe has no port and no
+        # listening socket. Inventarised under "Local, never-transmitted stores"
+        # in docs/privacy-review.md.
+        'libs/control/include/control/control_server.h',
+        'libs/control/CMakeLists.txt'
     ) | ForEach-Object { $_.Replace('/', [System.IO.Path]::DirectorySeparatorChar) }
 
     # -------------------------------------------------------------------------

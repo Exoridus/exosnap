@@ -240,6 +240,38 @@ Two things worth knowing before touching it:
 `wakeups`, `renderPasses`, `owed`) as structured state — prefer it over parsing
 `preview-trace:` lines, which stay useful as secondary evidence.
 
+The protocol, the policy mechanics, the session state machine and the named-pipe
+transport live in `libs/control`; `app/live_verify/` keeps only what is
+application-specific (the state, the command table, the intents, the argv
+option). Adding a command means adding a row to that table — never a second
+dispatch path, because the same table answers `availableActions`.
+
+### Updater automation channel
+
+`exosnap-updater.exe --automation-control <run-id>` arms the same channel in the
+updater process (ADR 0067). Its endpoint is
+`\\.\pipe\ExoSnap.Updater.<run-id>` — the role in the name is what lets one
+runner hold the application's endpoint and the updater's endpoint of the same
+run id at once.
+
+Commands: `updater.getState`, `.check`, `.download`, `.apply`, `.retry`,
+`.cancel`, `.close`. Three things about it are worth knowing before using it:
+
+1. **Every product action is asynchronous.** `ok` means accepted, not completed;
+   the response carries `settled: false` and the client waits for
+   `stateRevision` to advance, with its own timeout.
+2. **`stateRevision` deliberately ignores download progress.** Progress is
+   published in `download.receivedBytes`/`totalBytes` at full rate; the counter
+   moves only when the state a runner can act on changed.
+3. **`installState` is the assertion that matters** — `intact` / `restored` /
+   `strandedInBackup` / `unknown`. `unknown` is a real answer after the MSI
+   verify failure (B3-MSI): this process never asks Windows Installer for a
+   rollback outcome, so it does not claim one.
+
+The updater without arguments is a normal manual updater, not a harness mode: it
+rests at Idle and does nothing until asked. `--automation-control` does not
+change that — it observes and drives the same actions the buttons do.
+
 ### Final validation
 
 Run once after the integrated branch is complete:

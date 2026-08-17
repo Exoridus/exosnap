@@ -7,26 +7,14 @@
 namespace exosnap::live_verify {
 namespace {
 
+// Allowed() and Refuse() are the shared refusal shape (control/command_policy.h):
+// `requires` and `actual` always carry the SAME key, so a runner diffs them
+// instead of reading prose.
+using exosnap::control::Allowed;
+using exosnap::control::Refuse;
+
 QString Text(const char* literal) {
     return QString::fromLatin1(literal);
-}
-
-PreconditionVerdict Allowed() {
-    return {};
-}
-
-// A refusal whose cause is stated as a key that exists on both sides. The two
-// objects always carry the SAME key: `requires` is what the command needs,
-// `actual` is what was observed, and a client compares them without reading a
-// word of English.
-PreconditionVerdict Refuse(const char* code, QString message, const QString& key, QJsonValue required,
-                           QJsonValue observed) {
-    PreconditionVerdict verdict;
-    verdict.code = Text(code);
-    verdict.message = std::move(message);
-    verdict.requirements.insert(key, std::move(required));
-    verdict.actual.insert(key, std::move(observed));
-    return verdict;
 }
 
 QJsonValue BlockingSurfaceValue(const QString& surface) {
@@ -212,18 +200,6 @@ CommandParameter Param(const char* name, const char* type, bool required, QStrin
     return CommandParameter{Text(name), Text(type), required, std::move(values)};
 }
 
-QString SettleName(Settle settle) {
-    switch (settle) {
-    case Settle::Synchronous:
-        return QStringLiteral("synchronous");
-    case Settle::Asynchronous:
-        return QStringLiteral("asynchronous");
-    case Settle::NotApplicable:
-        break;
-    }
-    return QStringLiteral("none");
-}
-
 } // namespace
 
 bool IsScrollableSurface(const QString& page) {
@@ -344,85 +320,28 @@ const QVector<CommandDescriptor>& AllCommands() {
     return commands;
 }
 
+// The four functions below are the shared mechanics applied to THIS table. They
+// are one-liners on purpose: the moment one of them grows a rule of its own,
+// this channel and the updater's stop agreeing about what a command table means.
+
 const CommandDescriptor* FindCommand(const QString& name) {
-    const QVector<CommandDescriptor>& commands = AllCommands();
-    const auto match = std::find_if(commands.begin(), commands.end(),
-                                    [&name](const CommandDescriptor& command) { return command.name == name; });
-    return match == commands.end() ? nullptr : &*match;
+    return exosnap::control::FindCommandIn(AllCommands(), name);
 }
 
 QStringList CommandNamesForProtocol(int protocol) {
-    QStringList names;
-    for (const CommandDescriptor& command : AllCommands()) {
-        if (command.minimum_protocol <= protocol)
-            names.append(command.name);
-    }
-    names.sort();
-    return names;
+    return exosnap::control::CommandNamesForProtocolIn(AllCommands(), protocol);
 }
 
 PreconditionVerdict Evaluate(const CommandDescriptor& command, const AutomationState& state) {
-    if (command.precondition == nullptr)
-        return Allowed();
-    return command.precondition(state);
+    return exosnap::control::EvaluateIn(command, state);
 }
 
 QStringList AvailableActions(const AutomationState& state) {
-    QStringList actions;
-    for (const CommandDescriptor& command : AllCommands()) {
-        if (!command.mutating)
-            continue;
-        if (Evaluate(command, state).allowed())
-            actions.append(command.name);
-    }
-    actions.sort();
-    return actions;
+    return exosnap::control::AvailableActionsIn(AllCommands(), state);
 }
 
 QJsonObject DescribeCommands(int protocol) {
-    QJsonArray described;
-    for (const CommandDescriptor& command : AllCommands()) {
-        if (command.minimum_protocol > protocol)
-            continue;
-        QJsonArray parameters;
-        for (const CommandParameter& parameter : command.parameters) {
-            QJsonObject json;
-            json.insert(QStringLiteral("name"), parameter.name);
-            json.insert(QStringLiteral("type"), parameter.type);
-            json.insert(QStringLiteral("required"), parameter.required);
-            if (!parameter.values.isEmpty()) {
-                QJsonArray values;
-                for (const QString& value : parameter.values)
-                    values.append(value);
-                json.insert(QStringLiteral("values"), values);
-            }
-            parameters.append(json);
-        }
-
-        QJsonObject json;
-        json.insert(QStringLiteral("name"), command.name);
-        json.insert(QStringLiteral("minimumProtocol"), command.minimum_protocol);
-        json.insert(QStringLiteral("mutating"), command.mutating);
-        json.insert(QStringLiteral("idempotent"), command.idempotent);
-        json.insert(QStringLiteral("settle"), SettleName(command.settle));
-        json.insert(QStringLiteral("parameters"), parameters);
-        described.append(json);
-    }
-
-    QJsonArray error_codes;
-    for (const QString& code : AllErrorCodes())
-        error_codes.append(code);
-
-    QJsonArray supported;
-    for (int version = kMinimumProtocolVersion; version <= kLatestProtocolVersion; ++version)
-        supported.append(version);
-
-    QJsonObject json;
-    json.insert(QStringLiteral("protocol"), protocol);
-    json.insert(QStringLiteral("supportedProtocols"), supported);
-    json.insert(QStringLiteral("commands"), described);
-    json.insert(QStringLiteral("errorCodes"), error_codes);
-    return json;
+    return exosnap::control::DescribeCommandsIn(AllCommands(), protocol);
 }
 
 QJsonObject StateToJson(const AutomationState& state, std::uint64_t state_revision) {

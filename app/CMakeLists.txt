@@ -183,22 +183,23 @@ exosnap_add_app_test_support(exosnap_app_log_test_support
 )
 target_link_libraries(exosnap_app_log_test_support PUBLIC Qt6::Core)
 
-# Live Verify control channel (ADR 0066). Everything except the application
-# binding: the wire format, the command allowlist, the argv gate and the named-
-# pipe transport. Compiled into the SHIPPING executable -- official acceptance
-# has to drive the same bytes users receive, so a test-only build of the server
-# would prove nothing about the artifact. It is inert without the explicit
+# Live Verify control channel (ADR 0066) -- the APPLICATION's half of it: the
+# command table, its preconditions, the state it publishes, the intents it
+# executes, and the argv option this executable answers to. The wire format, the
+# policy mechanics, the session state machine and the named-pipe transport are
+# shared with the updater's endpoint and live in libs/control.
+#
+# Compiled into the SHIPPING executable -- official acceptance has to drive the
+# same bytes users receive, so a test-only build of the server would prove
+# nothing about the artifact. It is inert without the explicit
 # --live-verify-control option; see LiveVerifyOptions.h.
 exosnap_add_app_test_support(exosnap_live_verify
     live_verify/LiveVerifyCommandPolicy.cpp
     live_verify/LiveVerifyControlServer.cpp
     live_verify/LiveVerifyDispatcher.cpp
     live_verify/LiveVerifyOptions.cpp
-    live_verify/LiveVerifyProtocol.cpp
 )
-# Advapi32: the endpoint's DACL is built from the process token's own SID
-# (OpenProcessToken/ConvertSidToStringSidW/ConvertStringSecurityDescriptor...).
-target_link_libraries(exosnap_live_verify PUBLIC Qt6::Core Advapi32)
+target_link_libraries(exosnap_live_verify PUBLIC Qt6::Core exosnap::control)
 
 exosnap_add_app_test_support(exosnap_output_model_test_support
     models/FilenameBuilder.cpp

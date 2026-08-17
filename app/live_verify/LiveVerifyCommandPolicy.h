@@ -1,7 +1,7 @@
 #pragma once
 
-// LiveVerifyCommandPolicy.h -- one table that says what every command is, and
-// one predicate per command that says whether it may run right now.
+// LiveVerifyCommandPolicy.h -- one table that says what every application
+// command is, and one predicate per command that says whether it may run now.
 //
 // The reason this is a single table and not two is the whole point of it.
 // `Dispatch()` needs to know whether a command may run; `ui.getState` needs to
@@ -11,6 +11,10 @@
 // transcript contradicts. Here `Evaluate()` and `AvailableActions()` read the
 // same predicates, so divergence is not a bug that can be introduced.
 //
+// The MECHANICS of that arrangement are shared with the updater's endpoint
+// (control/command_policy.h); the TABLE below is not, because "may record.start
+// run" is a question about this product and nothing else.
+//
 // Everything here is pure. Given an AutomationState it decides, with no Qt
 // objects, no window and no application -- which is what lets the whole
 // precondition surface be tested exhaustively instead of by driving the app into
@@ -19,6 +23,8 @@
 #include "LiveVerifyAutomationState.h"
 #include "LiveVerifyProtocol.h"
 
+#include <control/command_policy.h>
+
 #include <QJsonObject>
 #include <QString>
 #include <QStringList>
@@ -26,61 +32,11 @@
 
 namespace exosnap::live_verify {
 
-// Why a command was refused, in the shape the response carries. An empty `code`
-// means it may run.
-struct PreconditionVerdict {
-    QString code;
-    QString message;
-    // The precondition, and what was actually observed, as parallel objects.
-    // Same keys on both sides: a runner diffs them instead of reading prose.
-    QJsonObject requirements;
-    QJsonObject actual;
+using exosnap::control::CommandParameter;
+using exosnap::control::PreconditionVerdict;
+using exosnap::control::Settle;
 
-    [[nodiscard]] bool allowed() const noexcept {
-        return code.isEmpty();
-    }
-};
-
-struct CommandParameter {
-    QString name;
-    // "string" | "int" | "bool" | "enum"
-    QString type;
-    bool required = false;
-    // Populated for "enum" only, and it is the exact accepted set -- the
-    // validator and this description read the same list.
-    QStringList values;
-};
-
-// Whether the command's observable postcondition holds by the time the response
-// is written.
-enum class Settle {
-    // Read-only. There is no postcondition, so `settled` is absent rather than
-    // trivially true -- a client must not be able to read "settled" off a query
-    // and conclude an action completed.
-    NotApplicable,
-    // The effect is observable in ui.getState before the response leaves. These
-    // are the commands that let a runner drop its sleep entirely.
-    Synchronous,
-    // Accepted, effect still outstanding. The client waits for the named event
-    // or for stateRevision to advance -- with ITS own timeout, not a fixed wait.
-    Asynchronous,
-};
-
-struct CommandDescriptor {
-    QString name;
-    // Lowest envelope version that answers this command. A protocol-1 client
-    // asking for a version-2 command gets `unknown_command`, which is exactly
-    // what it would get from the build that predates the command.
-    int minimum_protocol = kMinimumProtocolVersion;
-    // Read-only queries are false. Only mutating commands appear in
-    // availableActions: a list that included every snapshot would be a list of
-    // things that are always true.
-    bool mutating = false;
-    bool idempotent = true;
-    Settle settle = Settle::NotApplicable;
-    QVector<CommandParameter> parameters;
-    PreconditionVerdict (*precondition)(const AutomationState&) = nullptr;
-};
+using CommandDescriptor = exosnap::control::CommandDescriptor<AutomationState>;
 
 // Whether a page has scrollable content the reveal/scroll commands can address.
 // Record is deliberately absent: its composition is a fixed preview surface plus

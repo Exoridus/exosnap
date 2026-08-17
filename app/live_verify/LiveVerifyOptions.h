@@ -1,21 +1,22 @@
 #pragma once
 
-// LiveVerifyOptions.h -- the one gate that turns the control channel on.
-//
-// A normal launch has no endpoint. Not "an endpoint nobody connects to" -- no
-// pipe is created, no thread is started, nothing is logged. The only way in is
-// an explicit argv option carrying a run id:
+// LiveVerifyOptions.h -- the one gate that turns the application's control
+// channel on.
 //
 //     exosnap.exe --live-verify-control <run-id>
+//
+// The gate mechanics (run-id validation, the endpoint name) are shared with the
+// updater's automation endpoint and live in libs/control (control/options.h);
+// what belongs here is the option this executable answers to and the ROLE its
+// endpoint carries in the pipe name. The role is what lets one runner hold the
+// application's endpoint and the updater's endpoint of the same run at once.
 //
 // Deliberately NOT triggered by: a Debug configuration, an environment
 // variable, the presence of a developer tool, or a settings key. Every one of
 // those can be true on a user's machine without the user asking for it, and the
 // control channel drives real recordings.
-//
-// The run id doubles as the connection credential and as the pipe-name suffix,
-// so it must be unguessable (the runner mints a GUID) and must survive being
-// pasted into a pipe path -- hence the character allowlist below.
+
+#include <control/options.h>
 
 #include <QString>
 #include <QStringList>
@@ -23,19 +24,13 @@
 namespace exosnap::live_verify {
 
 inline constexpr const char* kControlOption = "--live-verify-control";
+// The endpoint's role, and therefore part of its name. Unchanged from before
+// the lift: the endpoint is still "\\\\.\\pipe\\ExoSnap.LiveVerify.<run-id>",
+// so every runner and every script that already knows the name keeps working.
+inline constexpr const char* kControlRole = "LiveVerify";
 
-struct ControlOptions {
-    bool requested = false;
-    QString run_id;
-    // Set when --live-verify-control was present but its value was missing or
-    // malformed. The entry point must refuse to start rather than silently fall
-    // back to a normal launch: a runner that believes it armed the channel and
-    // got a normal application instead would report the wrong thing.
-    QString error;
-};
-
-// True for a run id of 8..64 characters drawn from [A-Za-z0-9._-].
-[[nodiscard]] bool IsValidRunId(const QString& run_id);
+using exosnap::control::ControlOptions;
+using exosnap::control::IsValidRunId;
 
 [[nodiscard]] ControlOptions ParseControlOptions(const QStringList& arguments);
 

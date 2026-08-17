@@ -175,6 +175,8 @@ add_subdirectory(libs/recorder_core)
 add_subdirectory(libs/capability)
 add_subdirectory(libs/crash_capture)
 add_subdirectory(libs/update)
+# Before app/ and apps/updater/: both link the shared control-channel layer.
+add_subdirectory(libs/control)
 add_subdirectory(app)
 add_subdirectory(apps/updater)
 add_subdirectory(tests)

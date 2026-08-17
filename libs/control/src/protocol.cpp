@@ -1,10 +1,10 @@
-#include "LiveVerifyProtocol.h"
+#include <control/protocol.h>
 
 #include <QJsonDocument>
 #include <QJsonParseError>
 #include <QJsonValue>
 
-namespace exosnap::live_verify {
+namespace exosnap::control {
 namespace {
 
 QString RecoverId(const QJsonObject& object) {
@@ -180,4 +180,4 @@ QByteArray SerializeLine(const QJsonObject& object) {
     return line;
 }
 
-} // namespace exosnap::live_verify
+} // namespace exosnap::control

@@ -7,59 +7,21 @@
 #include <QJsonValue>
 
 #include <optional>
+#include <utility>
 
 namespace exosnap::live_verify {
 namespace {
-
-const QString kHello = QStringLiteral("system.hello");
-
-QJsonArray ToArray(const QStringList& values) {
-    QJsonArray array;
-    for (const QString& value : values)
-        array.append(value);
-    return array;
-}
 
 QString Text(const char* literal) {
     return QString::fromLatin1(literal);
 }
 
-// What executing a command produced. Kept separate from the wire envelope so
-// the execution below never has to think about protocol versions or about which
-// fields a v1 response is allowed to carry.
-struct Outcome {
-    bool ok = true;
-    QJsonObject result;
-    // Meaningful only for mutating commands; read-only ones leave `settled`
-    // absent from the response entirely.
-    bool settled = true;
-    QString code;
-    QString message;
-    QJsonObject requirements;
-    QJsonObject actual;
-};
-
-Outcome Succeeded(QJsonObject result, bool settled = true) {
-    Outcome outcome;
-    outcome.result = std::move(result);
-    outcome.settled = settled;
-    return outcome;
-}
-
-Outcome Failed(QString code, QString message, QJsonObject requirements = {}, QJsonObject actual = {}) {
-    Outcome outcome;
-    outcome.ok = false;
-    outcome.settled = false;
-    outcome.code = std::move(code);
-    outcome.message = std::move(message);
-    outcome.requirements = std::move(requirements);
-    outcome.actual = std::move(actual);
-    return outcome;
-}
-
-Outcome Failed(const char* code, QString message, QJsonObject requirements = {}, QJsonObject actual = {}) {
-    return Failed(Text(code), std::move(message), std::move(requirements), std::move(actual));
-}
+// Outcome / Succeeded / Failed are the shared execution result
+// (control/session.h): what a command produced, before anything decides which
+// fields this protocol version is allowed to carry.
+using exosnap::control::Failed;
+using exosnap::control::Outcome;
+using exosnap::control::Succeeded;
 
 // An intent that passed its precondition and still came back false. Rather than
 // invent a second explanation, the policy is asked again against the state as it
@@ -74,37 +36,6 @@ Outcome IntentRefused(const CommandDescriptor& command, const LiveVerifySource& 
     return Failed(error_code::kOperationFailed, error);
 }
 
-// One validator for every command, driven by the same parameter descriptions
-// ipc.describe publishes. A hand-written check per command is how a documented
-// parameter set and an enforced one come apart.
-std::optional<QString> ValidateParams(const CommandDescriptor& command, const QJsonObject& params) {
-    for (const CommandParameter& parameter : command.parameters) {
-        const QJsonValue value = params.value(parameter.name);
-        const bool absent = value.isUndefined() || value.isNull();
-        if (absent) {
-            if (!parameter.required)
-                continue;
-            return QStringLiteral("%1 requires a \"%2\" parameter").arg(command.name, parameter.name);
-        }
-        if (parameter.type == QLatin1String("string")) {
-            if (!value.isString() || value.toString().isEmpty())
-                return QStringLiteral("\"%1\" must be a non-empty string").arg(parameter.name);
-        } else if (parameter.type == QLatin1String("int")) {
-            if (!value.isDouble())
-                return QStringLiteral("\"%1\" must be a number").arg(parameter.name);
-        } else if (parameter.type == QLatin1String("bool")) {
-            if (!value.isBool())
-                return QStringLiteral("\"%1\" must be a boolean").arg(parameter.name);
-        } else if (parameter.type == QLatin1String("enum")) {
-            if (!value.isString() || !parameter.values.contains(value.toString())) {
-                return QStringLiteral("\"%1\" must be one of: %2")
-                    .arg(parameter.name, parameter.values.join(QStringLiteral(", ")));
-            }
-        }
-    }
-    return std::nullopt;
-}
-
 QString ParamString(const QJsonObject& params, const char* name) {
     return params.value(Text(name)).toString();
 }
@@ -115,28 +46,15 @@ qint64 ParamInt(const QJsonObject& params, const char* name) {
 
 // --- Command execution ------------------------------------------------------
 
-Outcome ExecuteReadOnly(const QString& command, LiveVerifySource& source, int protocol) {
-    if (command == QLatin1String("system.capabilities")) {
-        QJsonObject result;
-        result.insert(QStringLiteral("protocol"), protocol);
-        result.insert(QStringLiteral("commands"), ToArray(LiveVerifyDispatcher::CommandNames(protocol)));
-        result.insert(QStringLiteral("events"), ToArray(LiveVerifyDispatcher::EventNames(protocol)));
-        // Additive, and protocol 2 only: a v1 client's capabilities payload is
-        // byte-identical to the one it has always received.
-        if (protocol >= 2) {
-            result.insert(QStringLiteral("errorCodes"), ToArray(AllErrorCodes()));
-            QJsonArray supported;
-            for (int version = kMinimumProtocolVersion; version <= kLatestProtocolVersion; ++version)
-                supported.append(version);
-            result.insert(QStringLiteral("supportedProtocols"), supported);
-        }
-        return Succeeded(result);
-    }
-    if (command == QLatin1String("ipc.describe")) {
-        QJsonObject result = DescribeCommands(protocol);
-        result.insert(QStringLiteral("events"), ToArray(LiveVerifyDispatcher::EventNames(protocol)));
-        return Succeeded(result);
-    }
+Outcome ExecuteReadOnly(const QString& command, LiveVerifySource& source, const QJsonObject& capabilities,
+                        const QJsonObject& described) {
+    // system.capabilities and ipc.describe are assembled by the shared session
+    // from this process's own command table and event list -- one payload
+    // builder, so the two endpoints cannot describe themselves differently.
+    if (command == QLatin1String("system.capabilities"))
+        return Succeeded(capabilities);
+    if (command == QLatin1String("ipc.describe"))
+        return Succeeded(described);
     if (command == QLatin1String("ui.getState"))
         return Succeeded(StateToJson(source.State(), source.StateRevision()));
     if (command == QLatin1String("system.snapshot"))
@@ -362,7 +280,7 @@ Outcome ExecuteMutating(const CommandDescriptor& command, const ParsedRequest& r
 } // namespace
 
 LiveVerifyDispatcher::LiveVerifyDispatcher(LiveVerifySource* source, QString run_id)
-    : source_(source), run_id_(std::move(run_id)) {
+    : exosnap::control::ControlSession<AutomationState>(std::move(run_id)), source_(source) {
 }
 
 QStringList LiveVerifyDispatcher::CommandNames(int protocol) {
@@ -383,136 +301,40 @@ QStringList LiveVerifyDispatcher::EventNames(int protocol) {
     return names;
 }
 
-void LiveVerifyDispatcher::ResetSession() {
-    handshake_complete_ = false;
-    poisoned_ = false;
-    negotiated_protocol_ = kMinimumProtocolVersion;
+QJsonObject LiveVerifyDispatcher::Identity() const {
+    return source_ != nullptr ? source_->Identity() : QJsonObject{};
 }
 
-QJsonObject LiveVerifyDispatcher::HandleHello(const ParsedRequest& request) {
-    if (handshake_complete_) {
-        return MakeErrorResponse({request.protocol, request.id, Text(error_code::kAlreadyHandshaken),
-                                  QStringLiteral("This connection has already completed its handshake")});
-    }
-
-    const QJsonValue run_id = request.params.value(QStringLiteral("runId"));
-    if (!run_id.isString()) {
-        return MakeErrorResponse({request.protocol, request.id, Text(error_code::kInvalidParams),
-                                  QStringLiteral("system.hello requires a string \"runId\" parameter")});
-    }
-    if (run_id.toString() != run_id_) {
-        // Fatal on purpose. The run id is the connection credential; a client
-        // that guessed wrong is not given a second guess on a live application.
-        poisoned_ = true;
-        return MakeErrorResponse({request.protocol, request.id, Text(error_code::kRunIdMismatch),
-                                  QStringLiteral("Run id does not match this process")});
-    }
-
-    handshake_complete_ = true;
-    negotiated_protocol_ = request.protocol;
-
-    QJsonObject result = source_ != nullptr ? source_->Identity() : QJsonObject{};
-    result.insert(QStringLiteral("protocol"), request.protocol);
-    result.insert(QStringLiteral("runId"), run_id_);
-    result.insert(QStringLiteral("commands"), ToArray(CommandNames(request.protocol)));
-    result.insert(QStringLiteral("events"), ToArray(EventNames(request.protocol)));
-    if (request.protocol >= 2) {
-        result.insert(QStringLiteral("errorCodes"), ToArray(AllErrorCodes()));
-        QJsonArray supported;
-        for (int version = kMinimumProtocolVersion; version <= kLatestProtocolVersion; ++version)
-            supported.append(version);
-        result.insert(QStringLiteral("supportedProtocols"), supported);
-    }
-
-    SuccessEnvelope envelope;
-    envelope.protocol = request.protocol;
-    envelope.id = request.id;
-    envelope.result = result;
-    if (request.protocol >= 2 && source_ != nullptr)
-        envelope.state_revision = source_->StateRevision();
-    return MakeSuccessResponse(envelope);
+const exosnap::control::CommandTable<AutomationState>& LiveVerifyDispatcher::Commands() const {
+    return AllCommands();
 }
 
-QJsonObject LiveVerifyDispatcher::Dispatch(const ParsedRequest& request) {
-    if (request.command == kHello)
-        return HandleHello(request);
+QStringList LiveVerifyDispatcher::EventNamesFor(int protocol) const {
+    return EventNames(protocol);
+}
 
-    if (!handshake_complete_) {
-        return MakeErrorResponse({request.protocol, request.id, Text(error_code::kHandshakeRequired),
-                                  QStringLiteral("system.hello must be the first command on a connection")});
-    }
+bool LiveVerifyDispatcher::HasState() const {
+    return source_ != nullptr;
+}
 
-    if (request.protocol != negotiated_protocol_) {
-        // The handshake fixed the dialect. A client that switches mid-connection
-        // is either two clients on one credential or a bug that would otherwise
-        // surface as a field quietly missing from half the transcript.
-        poisoned_ = true;
-        return MakeErrorResponse(
-            {negotiated_protocol_, request.id, Text(error_code::kProtocolVersionMismatch),
-             QStringLiteral("This connection negotiated protocol %1 at its handshake").arg(negotiated_protocol_)});
-    }
+AutomationState LiveVerifyDispatcher::StateValue() const {
+    return source_ != nullptr ? source_->State() : AutomationState{};
+}
 
-    const CommandDescriptor* command = FindCommand(request.command);
-    if (command == nullptr || command->minimum_protocol > request.protocol) {
-        // Fail closed. No prefix matching, no "did you mean", no reflection --
-        // and a protocol-2 command asked for over protocol 1 is answered exactly
-        // as the build that predates it would have answered.
-        return MakeErrorResponse({request.protocol, request.id, Text(error_code::kUnknownCommand),
-                                  QStringLiteral("Unknown command: %1").arg(request.command)});
-    }
+std::uint64_t LiveVerifyDispatcher::Revision() const {
+    return source_ != nullptr ? source_->StateRevision() : 0;
+}
 
-    if (source_ == nullptr) {
-        return MakeErrorResponse({request.protocol, request.id, Text(error_code::kUnavailable),
-                                  QStringLiteral("No application state is bound to this server")});
-    }
+QJsonObject LiveVerifyDispatcher::StateJson(const AutomationState& state, std::uint64_t revision) const {
+    return StateToJson(state, revision);
+}
 
-    if (const std::optional<QString> invalid = ValidateParams(*command, request.params); invalid.has_value()) {
-        return MakeErrorResponse(
-            {request.protocol, request.id, Text(error_code::kInvalidParams), *invalid, {}, {}, std::nullopt});
-    }
-
-    const AutomationState before = source_->State();
-    if (const PreconditionVerdict verdict = Evaluate(*command, before); !verdict.allowed()) {
-        ErrorEnvelope envelope;
-        envelope.protocol = request.protocol;
-        envelope.id = request.id;
-        envelope.code = verdict.code;
-        envelope.message = verdict.message;
-        envelope.requirements = verdict.requirements;
-        envelope.actual = verdict.actual;
-        if (request.protocol >= 2)
-            envelope.state_revision = source_->StateRevision();
-        return MakeErrorResponse(envelope);
-    }
-
-    const Outcome outcome = command->mutating ? ExecuteMutating(*command, request, *source_)
-                                              : ExecuteReadOnly(command->name, *source_, request.protocol);
-
-    const std::optional<std::uint64_t> revision =
-        request.protocol >= 2 ? std::optional<std::uint64_t>(source_->StateRevision()) : std::nullopt;
-
-    if (!outcome.ok) {
-        ErrorEnvelope envelope;
-        envelope.protocol = request.protocol;
-        envelope.id = request.id;
-        envelope.code = outcome.code;
-        envelope.message = outcome.message;
-        envelope.requirements = outcome.requirements;
-        envelope.actual = outcome.actual;
-        envelope.state_revision = revision;
-        return MakeErrorResponse(envelope);
-    }
-
-    SuccessEnvelope envelope;
-    envelope.protocol = request.protocol;
-    envelope.id = request.id;
-    envelope.result = outcome.result;
-    envelope.state_revision = revision;
-    if (request.protocol >= 2 && command->settle != Settle::NotApplicable)
-        envelope.settled = outcome.settled;
-    if (request.include_state)
-        envelope.state = StateToJson(source_->State(), source_->StateRevision());
-    return MakeSuccessResponse(envelope);
+exosnap::control::Outcome LiveVerifyDispatcher::Execute(const CommandDescriptor& command,
+                                                        const ParsedRequest& request) {
+    if (command.mutating)
+        return ExecuteMutating(command, request, *source_);
+    return ExecuteReadOnly(command.name, *source_, CapabilitiesPayload(request.protocol),
+                           DescribePayload(request.protocol));
 }
 
 } // namespace exosnap::live_verify

@@ -120,6 +120,38 @@ doubles as the connection credential. The endpoint is
 `\\.\pipe\ExoSnap.LiveVerify.<run-id>`, ACL'd to the creating user, with
 `PIPE_REJECT_REMOTE_CLIENTS`.
 
+The name carries a **role** (`LiveVerify`) because the application is not the
+only process with an endpoint: `exosnap-updater.exe --automation-control <run-id>`
+arms the same channel at `\\.\pipe\ExoSnap.Updater.<run-id>` (ADR 0067). Both can
+therefore use one run id, which is what an end-to-end update flow needs — the
+runner mints the id, hands it to the application, and attaches to the updater
+without a second credential. The protocol, the policy mechanics, the session
+rules and the transport are the same code (`libs/control`); only the command
+table and the state differ.
+
+The updater's commands are `updater.getState`, `.check`, `.download`, `.apply`,
+`.retry`, `.cancel`, `.close`. Three properties are worth stating up front:
+
+- **Every product action is asynchronous.** `ok` means accepted; the response
+  carries `settled: false`, and the completion is a `stateRevision` advance
+  (`updater.stateChanged`), never the response itself.
+- **`stateRevision` ignores download progress on purpose.** Bytes are published
+  in `download.receivedBytes` / `download.totalBytes` at full rate; the counter
+  moves only when the state a runner can act on changed, so waiting on it is not
+  a disguised 80 ms sleep.
+- **`installState`** answers `intact` / `restored` / `strandedInBackup` /
+  `unknown`. `unknown` is the truthful answer after the MSI verification failure:
+  the updater reads a registry path and a version string and never asks Windows
+  Installer for a rollback outcome, so it does not claim one.
+
+`updater.cancel` answers `blocked` during `applying`, `verifying` and
+`launching` — the engine observes cancellation in the download loop and in the
+bounded `msiexec` wait and nowhere else, and those are the same three phases in
+which the window disables its own close control. There is deliberately no
+command that arms a handoff; a handoff is a start argument, and a channel that
+could set one afterwards would let a caller decide what an elevated `msiexec`
+installs.
+
 Live Verify mode is **not** a harness mode: no config isolation, no
 single-instance suppression, no tray suppression. Set `EXOSNAP_CONFIG_DIR` and
 `EXOSNAP_OUTPUT_DIR` yourself when a check needs an isolated profile, so which
