@@ -507,19 +507,53 @@ is verified automatically before and after your drag.
         Layer           = 'CONTROL_CHANNEL'
         Source          = 'QCR-001; docs/product-spec.md (Edit/Output/Save is an overlay over Record, ADR 0022)'
         ArtifactBound   = $true
-        EnvironmentKeys = @()
-        # Needs the completed recording LV-REC-001 leaves behind in THIS process:
-        # the editor opens on the recording this session produced, and a fresh
-        # process has none. Ordered before LV-EDIT-001, which ends the session.
-        DependsOn       = 'LV-REC-001'
+        EnvironmentKeys = @('primaryScreen')
+        # No DependsOn, and deliberately so. The editor opens on a recording THIS
+        # process finished, so an earlier check having made one is a precondition
+        # -- and expressing it as "LV-REC-001 ran, and LV-EDIT-001 has not ended
+        # the session yet" would be a dependency on catalog ORDER. A reordering
+        # would then turn this into UNVERIFIED for a reason that has nothing to
+        # do with the product. It makes its own clip instead.
         Run             = {
             param($ctx)
             $connection = (& $ctx.EnsureSession).Connection
 
+            # Reuse a completed recording if this session already has one (the
+            # usual case when LV-REC-001 ran first) and record one otherwise, so
+            # the check is the same either way and costs a clip only when it has
+            # to.
             $opened = Invoke-LiveVerifyCommand -Connection $connection -Command 'edit.open'
+            if (-not $opened.ok) {
+                $null = Invoke-LiveVerifyCommand -Connection $connection -Command 'record.selectTarget' `
+                    -Parameters @{ kind = 'monitor' }
+                $null = Wait-LiveVerifyState -Connection $connection -Command 'preview.snapshot' `
+                    -Field 'frameReady' -Value 'True' -TimeoutMs 30000
+                $started = Invoke-LiveVerifyCommand -Connection $connection -Command 'record.start'
+                if (-not $started.ok) {
+                    return @{ Result = 'UNVERIFIED'
+                        Message = "Could not record a clip to edit: $($started.error.code) - $($started.error.message)" }
+                }
+                if ($null -eq (Wait-LiveVerifyState -Connection $connection -Command 'record.snapshot' `
+                            -Field 'recording' -Value 'True' -TimeoutMs 45000)) {
+                    return @{ Result = 'UNVERIFIED'; Message = 'The recording never reported itself as running' }
+                }
+                # Recording DURATION, not synchronisation: a clip with no content
+                # has no timeline to trim. Every transition around it is waited
+                # on, never slept through.
+                Start-Sleep -Seconds 3
+                $null = Invoke-LiveVerifyCommand -Connection $connection -Command 'record.stop'
+                if ($null -eq (Wait-LiveVerifyEvent -Connection $connection -EventName 'record.resultReady' `
+                            -TimeoutMs 120000)) {
+                    return @{ Result = 'UNVERIFIED'; Message = 'No record.resultReady within 120 s' }
+                }
+                $opened = Invoke-LiveVerifyCommand -Connection $connection -Command 'edit.open'
+            }
             if (-not $opened.ok) {
                 return @{ Result = 'UNVERIFIED'
                     Message = "No editable recording in this session: $($opened.error.code) - $($opened.error.message)" }
+            }
+            if (-not $opened.settled) {
+                return @{ Result = 'FAIL'; Message = 'edit.open did not settle in its own response' }
             }
 
             # Park the playhead and set a trim range, so what survives the round
