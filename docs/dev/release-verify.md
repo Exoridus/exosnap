@@ -48,6 +48,7 @@ pwsh scripts/release-verify.ps1 run            # everything runnable that is not
 pwsh scripts/release-verify.ps1 run -IncludeClass display,audio-physical
 pwsh scripts/release-verify.ps1 run -Only REL-CAP-001
 pwsh scripts/release-verify.ps1 resume         # re-fingerprint, mark stale, continue
+pwsh scripts/release-verify.ps1 retry -Only REL-ENV-003   # re-attempt a FAIL, explicitly
 pwsh scripts/release-verify.ps1 status
 pwsh scripts/release-verify.ps1 report         # release-verification.json + report.md + junit.xml
 pwsh scripts/release-verify.ps1 recover        # restore a dirty environment, and nothing else
@@ -96,6 +97,10 @@ anything that no longer matches to `STALE`.
 `UNAVAILABLE` is invalidated by an environment change too, from the other side:
 plugging the HDR display in makes the HDR scenario runnable again rather than leaving
 it permanently written off.
+
+A `FAIL` is a finding, so `run` and `resume` leave it alone — re-running the sweep can
+never quietly erase one. `retry` is the explicit way back, and it drops the old
+evidence link so the report never pairs a new verdict with an old artefact.
 
 ## Human gates
 
