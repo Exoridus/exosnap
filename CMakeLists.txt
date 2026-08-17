@@ -210,3 +210,10 @@ endif()
 # library + its CI test; the GPU-driving `exosnap-soak` executable is gated
 # inside on EXOSNAP_BUILD_SOAK (developer machine only).
 add_subdirectory(tools/soak)
+
+# TEST-ONLY Windows environment orchestrator (display/audio state for release
+# verification). Unconditional like tools/soak so the PURE transaction library
+# and its tests build on the headless CI runner; the WinAPI provider and the
+# `exosnap-envctl` host are guarded by if(WIN32) inside. Nothing here is linked
+# into exosnap.exe or exosnap-updater.exe, and nothing here is installed.
+add_subdirectory(tools/envctl)
