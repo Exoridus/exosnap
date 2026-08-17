@@ -68,6 +68,7 @@ target_compile_options(exosnap_miniz PRIVATE
 # ---------------------------------------------------------------------------
 add_library(exosnap_update STATIC
     src/semver.cpp
+    src/update_flow_state.cpp
     src/ed25519_verify.cpp
     src/manifest_io.cpp
     src/update_checker.cpp

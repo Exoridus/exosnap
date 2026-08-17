@@ -21,6 +21,7 @@
 #include <optional>
 #include <string>
 
+#include <update/release_locator.h>
 #include <update/swap_engine.h>
 #include <update/update_types.h>
 
@@ -40,19 +41,33 @@
 //   - anything else (missing, empty, several entries, no exe) -> nullopt
 [[nodiscard]] std::optional<std::wstring> ResolveStagedRoot(const std::wstring& extract_dir);
 
-// Which pipeline step a Retry / Re-download press re-enters for a failure:
-// A1/A2/A3 -> Download, B1 -> CloseApp, B2/B3/C1/C2 -> Install, B4 -> Launch.
-[[nodiscard]] UpStep RetryEntryStep(FailureCase c);
+// RetryEntryStep now lives with the failure matrix it belongs to
+// (update/update_flow_state.h) and is visible here through UpdaterController.h,
+// because "which step would a retry re-enter" is published state, not a private
+// routing detail of this file.
+
+// Exact version equality, and never against an empty string on either side --
+// an unknown version must fail closed, not match everything. Both version gates
+// below are this one rule; SemVer equality is deliberately NOT used, because it
+// collapses every foreign prerelease label onto ordinal 0 and would let
+// "0.9.0-beta1" pass for "0.9.0-alpha7".
+[[nodiscard]] bool VersionsMatchExactly(const QString& a, const QString& b);
 
 // ADR 0055 verification reinstall gate. With --verify-reinstall the run may only
 // proceed when the signed manifest names EXACTLY the version the app handed over
-// in --current-version -- byte-for-byte, because SemVer equality collapses every
-// foreign prerelease label onto ordinal 0 and would let "0.9.0-beta1" pass for
-// "0.9.0-alpha7". Returns true when the pipeline may continue. Without the flag
-// it is always true (this gate is additive; the downgrade guard and every
+// in --current-version. Returns true when the pipeline may continue. Without the
+// flag it is always true (this gate is additive; the downgrade guard and every
 // signature/hash check stay exactly as they are).
 [[nodiscard]] bool VerificationReinstallAccepts(bool verify_reinstall, const QString& manifest_version,
                                                 const QString& current_version);
+
+// Pinned-target gate. When the app handed over --target-version, the signed
+// manifest must name exactly that version; a newer release that appeared between
+// the app's check and this run is refused rather than silently installed. Same
+// equality as the verification reinstall gate, on purpose -- there is one rule
+// for "is this the version I was promised", not two. Always true when no target
+// was pinned (a manual run resolves the channel itself).
+[[nodiscard]] bool TargetVersionAccepts(const QString& target_version, const QString& manifest_version);
 
 // msiexec parameter string for a silent install. Normal upgrades use
 // /i "<msi>" /qn /norestart. Verification reinstall mode additionally sets
@@ -122,13 +137,30 @@ class UpdaterWorker : public QObject {
 
     // Cooperative cancel for in-flight downloads (process shutdown). Safe from
     // any thread.
-    void requestCancel() { cancel_.store(true); }
+    void requestCancel() {
+        cancel_.store(true);
+    }
 
   public slots:
     // Run the pipeline from `entry` to the end (initial run: Download; retries
     // re-enter per RetryEntryStep). Invoked queued from the GUI thread; emits
     // either allDone() or exactly one failed(...) before returning.
     void run(UpStep entry);
+
+    // --- Manual mode: the same pipeline, split at the two points a person has
+    //     to be asked. Each is queued from the GUI thread exactly like run().
+    //
+    // Resolve the channel and report whether anything is on offer. "Nothing
+    // newer" is a RESULT here (upToDate), not the DownloadFailed it used to be
+    // folded into -- the pipeline entry treated a missing release as an error
+    // because a handoff only ever starts when the app already found one.
+    void check();
+    // Fetch, verify and stage the release `check()` resolved. Ends in
+    // readyToApply(); nothing on disk outside the download/staging directories
+    // has been touched at that point.
+    void download();
+    // Close the parent (if any), install, verify and relaunch.
+    void apply();
 
   signals:
     void stepStarted(UpStep step);
@@ -140,7 +172,26 @@ class UpdaterWorker : public QObject {
     void allDone();
     void failed(FailureCase c, QString detail);
 
+    // Manual-mode results.
+    void checkStarted();
+    void upToDate();
+    void updateAvailable(QString version);
+    void readyToApply();
+    // A check that the product refuses to run at all: an unofficial build has no
+    // update-check policy and must not query the real feed (--base-url is the
+    // documented dev override). Reported separately from failed() because it is
+    // not a failure of an update, it is the absence of permission to look.
+    void checkBlocked(QString reason);
+
   private:
+    // Resolve the newest qualifying release for the channel into release_.
+    // Emits failed(A1) and returns false when the feed cannot be read; sets
+    // `no_release` (without emitting) when the feed is fine and simply carries
+    // nothing for this channel, which is a result the manual check reports as
+    // upToDate and the handoff path reports as A1.
+    [[nodiscard]] bool resolveRelease(bool* no_release);
+    // Manifest + signature + gates + package + hash + portable staging.
+    [[nodiscard]] bool fetchAndStage();
     [[nodiscard]] bool runDownload();
     [[nodiscard]] bool runCloseApp();
     [[nodiscard]] bool runInstallPortable();
@@ -167,6 +218,14 @@ class UpdaterWorker : public QObject {
     std::atomic<bool> cancel_{false};
 
     // Pipeline state kept across retries (B1/B2/B3/C1 re-enter mid-pipeline).
+    // The release resolved for this run; the manual flow resolves it in check()
+    // and consumes it in download(), so the two are provably about the same one.
+    exosnap::update::ReleaseAssets release_{};
+    bool have_release_ = false;
+    // The releases feed body the resolution read. Kept so the manual check can
+    // hand the SAME bytes to BuildCheckResult that LocateRelease saw, rather
+    // than fetching twice and deciding on two different answers.
+    std::string releases_json_;
     exosnap::update::UpdateManifest manifest_{};
     exosnap::update::SwapPlan plan_{}; // portable swap plan
     std::wstring package_path_;        // downloaded .zip / .msi

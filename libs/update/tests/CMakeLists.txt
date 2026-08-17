@@ -7,6 +7,12 @@ exosnap_add_gtest(
 )
 
 exosnap_add_gtest(
+    NAME    update_flow_state_tests
+    SOURCES test_update_flow_state.cpp
+    LIBRARIES exosnap::update
+)
+
+exosnap_add_gtest(
     NAME    update_signature_tests
     SOURCES test_update_signature.cpp
     LIBRARIES exosnap::update
