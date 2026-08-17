@@ -472,6 +472,16 @@ void QuickApplication::initializeRecordWorkflow() {
         if (state != UiRecordingState::Recording && state != UiRecordingState::Paused) {
             clearWindowCaptureStallWarning();
             clearAudioSourceDegradedWarning();
+            // ADR 0033: the OTHER half of the attribution boundary, on the edge OUT of
+            // a session. Both PresentMonEtwSession and PresentAccumulator document the
+            // reset as happening at "recording start/stop"; only start was ever wired,
+            // so a finished recording's present, discard and mode-flip totals stayed on
+            // the idle Diagnostics page describing a session that had ended. Keyed on
+            // the transition rather than the state, because every non-recording state
+            // would otherwise re-announce a boundary that did not happen.
+            if (previous == UiRecordingState::Recording || previous == UiRecordingState::Paused) {
+                updatePresentAttribution(presentTargetPidForSelection(), /*force=*/true);
+            }
         }
         // Keyed off the state the UI is actually showing, not the one just
         // reported. In production the two are the same value — SetState assigned

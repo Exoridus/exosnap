@@ -396,10 +396,20 @@ What Wave D changed — wiring only, no redesign of the provider, the session or
   AND classified: an open session that has not yet decoded a present stays Unavailable,
   because "Unknown" is the absence of a verdict, not a verdict.
 - **Attribution.** The boundary is announced on capture-target selection (skipped when the
-  pid did not move) and unconditionally on recording start. Unconditional is the point: a
-  Display or Region recording targets pid 0 exactly like the idle desktop, so a
+  pid did not move) and unconditionally on recording **start and stop**. Unconditional is
+  the point: a Display or Region recording targets pid 0 exactly like the idle desktop, so a
   pid-equality guard would carry every present counted while the user was still choosing a
-  target into the recording's statistics.
+  target into the recording's statistics. Stop is the same argument pointed the other way,
+  and it was the half that Wave D shipped without: a finished recording's totals stayed on
+  the idle Diagnostics page as if they were current.
+- **A window can also close without anyone asking**, and both ways are now noticed rather
+  than frozen. The attributed process gets a `SYNCHRONIZE` handle — held, not re-opened per
+  sample, because Windows recycles process ids and a re-checked pid can name a different
+  program — so a captured game that exits mid-recording stops reporting instead of
+  repeating its last frame's mode forever. And `ProcessTrace` returning is published by the
+  consumer thread itself, so a trace another process tore down makes present diagnostics
+  unavailable instead of leaving the session marked open with a permanently stale sample.
+  Both transitions are logged; the trade in every case is a missing number over a wrong one.
 - **`environment.snapshot`.** `present.available` and the sample now come from the real
   provider. `optIn` and `elevated` were already truthful and stay so — they are what lets a
   client distinguish *not measured because opt-in is off* from *not measured because the

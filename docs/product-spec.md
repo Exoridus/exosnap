@@ -1562,6 +1562,14 @@ as Administrator to enable present/tearing diagnostics", and enabling it trigger
 offer (never during an active recording). The provider is never required, and the portable build
 degrades gracefully.
 
+The reported present figures always describe the **current** attribution window and nothing else.
+Starting a recording opens a window; ending it closes one, and the per-recording present, discarded
+and mode-flip totals reset rather than standing on the idle Diagnostics page describing a session
+that is over. The same rule covers the two ways a window can end without anyone asking: if the
+attributed process exits mid-recording, or the trace session itself dies, the reading goes back to
+unavailable. A stale number presented as a live one is worse than no number, because it is the only
+one a reader cannot tell apart from a measurement.
+
 ---
 
 ## 12. Settings model (Default / Expert)

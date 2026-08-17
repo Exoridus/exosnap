@@ -10,6 +10,9 @@
 #include <evntrace.h>
 // clang-format on
 #include <vector>
+
+#include <QtCore/QtGlobal> // qWarning -> the installed Qt handler -> exosnap.log
+
 // Vendored PresentMon PresentData (pinned v1.10.0):
 #include "PresentMonTraceConsumer.hpp"
 #include "TraceSession.hpp"
@@ -77,6 +80,18 @@ bool PresentMonEtwSession::Start() {
             // The captured sp keeps SessionImpl alive for the whole call.
             ::ProcessTrace(&impl->session.mTraceHandle, 1, nullptr, nullptr);
         }
+        // Published BEFORE `finished`, and unconditionally: ProcessTrace returning is
+        // the end of consumption regardless of whether Stop() asked for it. This is
+        // the only writer that can tell the session a trace died on its own.
+        signal->consuming.store(false, std::memory_order_release);
+        if (!signal->stop_requested.load(std::memory_order_acquire)) {
+            // Nobody asked. Another process stopped the named session, a driver reset
+            // tore it down, or ETW hit a buffer error -- and present diagnostics are
+            // now unavailable for the rest of this run. Until IsOpen() consulted this
+            // flag, the same event silently froze the last sample as "current".
+            qWarning("[presentmon] the ETW trace ended without a stop request; "
+                     "present diagnostics are unavailable until the session is restarted");
+        }
         {
             std::lock_guard lk(signal->mutex);
             signal->finished = true;
@@ -86,7 +101,77 @@ bool PresentMonEtwSession::Start() {
     return true;
 }
 
+void PresentMonEtwSession::SetTargetProcessId(unsigned long pid) {
+    target_pid_.store(pid, std::memory_order_relaxed);
+    accumulator_.Reset();
+    last_present_qpc_ = 0;
+    std::lock_guard lk(sample_mutex_);
+    latest_ = PresentSample{};
+    target_death_logged_ = false;
+    if (target_handle_ != nullptr) {
+        ::CloseHandle(static_cast<HANDLE>(target_handle_));
+        target_handle_ = nullptr;
+    }
+    if (pid != 0) {
+        // SYNCHRONIZE only: this is a liveness question, never an inspection.
+        target_handle_ = ::OpenProcess(SYNCHRONIZE, FALSE, static_cast<DWORD>(pid));
+    }
+}
+
+bool PresentMonEtwSession::TargetAlive() const {
+    std::lock_guard lk(sample_mutex_);
+    if (target_pid_.load(std::memory_order_relaxed) == 0) {
+        return true;
+    }
+    if (target_handle_ == nullptr) {
+        // The process could not be opened at all -- most often because it is more
+        // privileged than this one. That is UNKNOWN, and unknown must not read as
+        // dead: blanking present diagnostics for a program that is plainly running
+        // would be the same lie, pointed the other way.
+        return true;
+    }
+    if (::WaitForSingleObject(static_cast<HANDLE>(target_handle_), 0) == WAIT_TIMEOUT) {
+        return true;
+    }
+    if (!target_death_logged_) {
+        target_death_logged_ = true;
+        qWarning("[presentmon] the attributed process (pid %lu) exited; present diagnostics stop here "
+                 "rather than keep reporting its last totals",
+                 target_pid_.load(std::memory_order_relaxed));
+    }
+    return false;
+}
+
+bool PresentMonEtwSession::IsOpen() const {
+    if (!open_.load(std::memory_order_acquire)) {
+        return false;
+    }
+    std::shared_ptr<FinishSignal> signal;
+    {
+        std::lock_guard lk(sample_mutex_);
+        signal = finish_;
+    }
+    return signal && signal->consuming.load(std::memory_order_acquire);
+}
+
 PresentSample PresentMonEtwSession::Latest() const {
+    // A consumer that has stopped has no CURRENT present to report, and the last one
+    // it saw is not a substitute -- that is precisely the sample that would sit on the
+    // Diagnostics page describing a trace that ended minutes ago.
+    if (!IsOpen()) {
+        return PresentSample{};
+    }
+    // The presenter this session is attributed to has exited. Its totals describe a
+    // source that no longer exists, and the filter guarantees no further present will
+    // ever replace them -- so without this the last frame a closed game rendered would
+    // sit on the Diagnostics page as the current present mode for the rest of the run.
+    // Both checks run BEFORE sample_mutex_ is taken: each acquires it itself, and the
+    // mutex is not recursive.
+    if (!TargetAlive()) {
+        std::lock_guard lk(sample_mutex_);
+        latest_ = PresentSample{};
+        return latest_;
+    }
     // Snapshot impl_ under the lock, then drain on the snapshot. The held snapshot keeps
     // SessionImpl alive even if Stop() resets impl_ mid-drain (a DequeuePresentEvents
     // after session.Stop() is safe and just returns empty).
@@ -130,18 +215,20 @@ void PresentMonEtwSession::Stop() {
     if (!open_.exchange(false))
         return;
     std::shared_ptr<void> sp;
+    std::shared_ptr<FinishSignal> signal;
     {
         std::lock_guard lk(sample_mutex_);
         sp = impl_;
+        signal = finish_;
+    }
+    // Before CloseTrace, so the consumer cannot observe its own return without also
+    // observing that it was asked for.
+    if (signal) {
+        signal->stop_requested.store(true, std::memory_order_release);
     }
     if (sp) {
         auto* s = static_cast<SessionImpl*>(sp.get());
         s->session.Stop(); // CloseTrace -> unblocks ProcessTrace
-    }
-    std::shared_ptr<FinishSignal> signal;
-    {
-        std::lock_guard lk(sample_mutex_);
-        signal = finish_;
     }
     if (worker_.joinable()) {
         // BOUNDED. CloseTrace is documented to make ProcessTrace return once it has
@@ -161,6 +248,14 @@ void PresentMonEtwSession::Stop() {
         } else {
             // Detached only after the ceiling was hit. The thread captured its own
             // owners for everything it touches, so it cannot reach this object.
+            //
+            // Logged because this is the one branch that trades a guarantee for a
+            // deadline: from here on a thread is running that nothing will ever join,
+            // and the process is a little less tidy at exit than the code claims.
+            // Silent, it looks exactly like the clean path -- and the only evidence
+            // that the ceiling was ever reached would be a shutdown that felt slow.
+            qWarning("[presentmon] ProcessTrace did not return within 5s of CloseTrace; "
+                     "detaching the consumer thread so shutdown can finish");
             worker_.detach();
         }
     }
@@ -173,6 +268,14 @@ void PresentMonEtwSession::Stop() {
 
 PresentMonEtwSession::~PresentMonEtwSession() {
     Stop();
+    // Not released in Stop(): the attribution outlives a Stop()/Start() cycle, so the
+    // handle has to as well. The object's end is the only point at which it is
+    // certainly no longer wanted.
+    std::lock_guard lk(sample_mutex_);
+    if (target_handle_ != nullptr) {
+        ::CloseHandle(static_cast<HANDLE>(target_handle_));
+        target_handle_ = nullptr;
+    }
 }
 
 } // namespace exosnap::diagnostics
@@ -186,6 +289,21 @@ bool PresentMonEtwSession::Start() {
     return false;
 }
 void PresentMonEtwSession::Stop() {
+}
+bool PresentMonEtwSession::IsOpen() const {
+    return false;
+}
+bool PresentMonEtwSession::TargetAlive() const {
+    return true;
+}
+void PresentMonEtwSession::SetTargetProcessId(unsigned long pid) {
+    // No session, so nothing to attribute -- but the field is still the record of what
+    // was asked for, and the tests read it.
+    target_pid_.store(pid, std::memory_order_relaxed);
+    accumulator_.Reset();
+    last_present_qpc_ = 0;
+    std::lock_guard lk(sample_mutex_);
+    latest_ = PresentSample{};
 }
 PresentSample PresentMonEtwSession::Latest() const {
     return PresentSample{};
