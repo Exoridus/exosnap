@@ -1643,6 +1643,34 @@ unimplemented behavior.
   `Downloading version <ver> again…` and `Reinstalling version <ver>…`) — rather than through a
   title-bar badge. It is gone after the next restart. Without the flag, the same version is never
   offered.
+- **The offered version is the installed version.** The version the card offers is handed to the
+  updater as its **pinned target**, and the updater installs **that** version or nothing at all: the
+  signed manifest must name it byte-for-byte (the same exact-string equality the verification
+  reinstall gate uses, because SemVer equality collapses foreign prerelease labels). If a newer
+  release appears in the feed between the app's check and the updater's own resolution, the run
+  stops before a single package byte is fetched, with `The offered version is no longer what the
+  channel serves` and the installation untouched; a fresh check is the way forward. Without this,
+  the offer, the "What's new" notes written for the next launch, the applied-version loop guard and
+  the build actually installed could each name a different version. The **What's new** payload is
+  bound to the same pinned target for the same reason.
+- **Manual updater start.** `exosnap-updater.exe` ships next to `exosnap.exe` and is
+  double-clickable, so starting it by hand is a real entry point — and the only way back when a
+  failed update has left the app unable to start. Started **without arguments** it opens its normal
+  window at rest and works out its own context (installed vs. portable, the install directory, and
+  the version actually on disk); it never checks, downloads or installs anything on its own. The
+  flow is *Idle → Checking → **Up to date** | **Update available** → Downloading → **Ready to
+  install** → Installing → Verifying → Launching*, with a confirmation at each bold step:
+  **Check for updates**, then **Download update**, then **Install now**. "Nothing newer" is a
+  **result** (`ExoSnap is up to date`), not a download error. A build that may not contact the feed
+  says so plainly and contacts nothing. The handoff started by the app is unchanged: it enters
+  through its arguments and still runs start-to-finish without asking, because the user already
+  confirmed in the app.
+- **The updater's exit code is its outcome.** `0` update applied and verified (including the case
+  where only the automatic relaunch did not open), `1` the update failed, `2` the command line could
+  not be understood, `3` a manual check found nothing newer, `4` installed and Windows must restart
+  to finish, `5` closed before any outcome. It used to be `0` for every run that reached the event
+  loop, including a visibly failed one, so nothing that launched the updater could tell the two
+  apart.
 - **Shipped flow:** the update check (automatic or manual) finds a new version → an "update
   available" notification deep-links to the Settings update card → clicking **Update** opens the
   dedicated updater, a separate process that performs every step itself. Its step list (as

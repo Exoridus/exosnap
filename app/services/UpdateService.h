@@ -148,6 +148,13 @@ class UpdateService final : public QObject {
 // updater. Round-trips through ParseUpdaterArgs. `verify_reinstall` adds
 // --verify-reinstall (ADR 0055), which makes the updater refuse every version
 // but the one named by `current_version`.
+//
+// When the state carries an offered release tag it is passed as
+// --target-version, and the updater then installs THAT version or nothing. This
+// is what keeps the version the user was offered, the version the What's-new
+// payload describes and the version actually installed from diverging: without
+// it the app and the updater resolve the same feed twice, and a release
+// published between the two resolutions silently wins.
 [[nodiscard]] QStringList BuildUpdaterArgs(const exosnap::update::UpdateState& st, const QString& install_dir,
                                            quint32 pid, const QString& current_version, bool verify_reinstall = false);
 

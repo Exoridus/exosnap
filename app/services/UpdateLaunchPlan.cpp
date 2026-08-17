@@ -37,6 +37,13 @@ QStringList BuildUpdaterArgs(const exosnap::update::UpdateState& st, const QStri
     args << QStringLiteral("--install-dir") << install_dir;
     args << QStringLiteral("--app-pid") << QString::number(pid);
     args << QStringLiteral("--current-version") << current_version;
+    // The exact release tag the check offered. Omitted only when nothing is on
+    // offer (a launch that could not have been triggered from the card anyway);
+    // the updater then falls back to resolving the channel itself, which is the
+    // pre-pin behaviour and stays reachable for the verification-reinstall run,
+    // whose own gate already pins the version.
+    if (!st.available_version_raw.empty())
+        args << QStringLiteral("--target-version") << QString::fromStdString(st.available_version_raw);
     // ADR 0055: the updater's own same-version gate. Only ever added for a run
     // the user explicitly started with --verify-update-reinstall.
     if (verify_reinstall)

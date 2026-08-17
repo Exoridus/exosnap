@@ -402,16 +402,22 @@ void UpdateService::LaunchUpdater() {
     // version. If there is nothing to show, clear any stale payload instead.
     {
         std::vector<upd::ReleaseNote> notes;
-        std::optional<upd::SemVer> target;
+        std::string target_raw;
         {
             QMutexLocker lk(&impl_->mutex);
             notes = impl_->gap_notes;
-            target = impl_->state.available_version;
+            // The SAME string that goes out as --target-version, so the payload
+            // can only ever describe the version the updater is allowed to
+            // install. Reading available_version->ToString() here instead let a
+            // foreign prerelease label be re-spelled, and -- before the target
+            // pin existed -- let the payload describe a version the updater
+            // never installed at all.
+            target_raw = impl_->state.available_version_raw;
         }
         const QString payload_path = WhatsNewPayloadPath();
-        if (target && !notes.empty()) {
+        if (!target_raw.empty() && !notes.empty()) {
             WhatsNewPendingPayload payload;
-            payload.target_version = QString::fromStdString(target->ToString());
+            payload.target_version = QString::fromStdString(target_raw);
             for (const auto& n : notes) {
                 WhatsNewNote note;
                 note.version = QString::fromStdString(n.version.ToString());

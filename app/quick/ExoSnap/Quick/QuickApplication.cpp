@@ -2364,10 +2364,12 @@ void QuickApplication::onUpdateCheckComplete(const exosnap::update::UpdateCheckR
 
     // A verification reinstall was granted on byte-identical version STRINGS, so
     // the running version string is the truthful label for it.
+    // The release tag verbatim, not SemVer::ToString(): this string is what the
+    // card offers, what the loop guard remembers and -- through
+    // --target-version -- what the updater is pinned to install, so all three
+    // have to be the same bytes the signed manifest carries.
     last_available_version_ =
-        result.verification_reinstall
-            ? current_version
-            : (result.available_version ? QString::fromStdString(result.available_version->ToString()) : QString());
+        result.verification_reinstall ? current_version : QString::fromStdString(result.available_version_raw);
 
     const bool is_scoop = UpdateService::IsScoopManagedInstall(QCoreApplication::applicationDirPath());
     const QString card_state = exosnap::ResolveUpdateCardState(

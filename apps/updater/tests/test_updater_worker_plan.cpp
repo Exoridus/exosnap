@@ -155,6 +155,52 @@ TEST(VerificationReinstallAccepts, AnEmptyVersionFailsClosed) {
     EXPECT_FALSE(VerificationReinstallAccepts(true, QString(), QString()));
 }
 
+// ---------------------------------------------------------------------------
+// TargetVersionAccepts -- the pinned-target gate
+//
+// Same equality as the verification reinstall gate above, deliberately: there is
+// ONE rule for "is this the version I was promised". Without this gate the app
+// and the updater resolved the same feed twice, and a release published between
+// the two resolutions was installed while the UI, the What's-new payload and the
+// loop guard all still described the version the user had actually been offered.
+// ---------------------------------------------------------------------------
+
+TEST(TargetVersionAccepts, WithoutAPinAnyVersionPasses) {
+    EXPECT_TRUE(TargetVersionAccepts(QString(), QStringLiteral("0.9.1")));
+    EXPECT_TRUE(TargetVersionAccepts(QString(), QString()));
+}
+
+TEST(TargetVersionAccepts, TheExactPinnedVersionPasses) {
+    EXPECT_TRUE(TargetVersionAccepts(QStringLiteral("0.9.0-rc5"), QStringLiteral("0.9.0-rc5")));
+}
+
+TEST(TargetVersionAccepts, ANewerReleaseIsRefused) {
+    // The window this closes: the app offered rc5, rc6 appeared before the
+    // updater resolved the feed, and rc6 was installed silently.
+    EXPECT_FALSE(TargetVersionAccepts(QStringLiteral("0.9.0-rc5"), QStringLiteral("0.9.0-rc6")));
+    EXPECT_FALSE(TargetVersionAccepts(QStringLiteral("0.9.0-rc5"), QStringLiteral("0.9.0")));
+}
+
+TEST(TargetVersionAccepts, ADifferentPrereleaseLabelIsRefused) {
+    // SemVer equality collapses foreign prerelease labels onto ordinal 0, which
+    // is exactly why this compares strings.
+    EXPECT_FALSE(TargetVersionAccepts(QStringLiteral("0.9.0-beta1"), QStringLiteral("0.9.0-alpha7")));
+}
+
+TEST(TargetVersionAccepts, AnEmptyManifestVersionFailsClosed) {
+    EXPECT_FALSE(TargetVersionAccepts(QStringLiteral("0.9.0-rc5"), QString()));
+}
+
+TEST(VersionsMatchExactly, NeverMatchesOnAnEmptyString) {
+    EXPECT_TRUE(VersionsMatchExactly(QStringLiteral("1.0.0"), QStringLiteral("1.0.0")));
+    EXPECT_FALSE(VersionsMatchExactly(QString(), QString()));
+    EXPECT_FALSE(VersionsMatchExactly(QStringLiteral("1.0.0"), QString()));
+}
+
+TEST(RetryEntryStep, PinnedTargetMismatchReentersDownload) {
+    EXPECT_EQ(RetryEntryStep(FailureCase::TargetVersionMismatch), UpStep::Download); // A4
+}
+
 TEST(RetryEntryStep, AppWontCloseReentersCloseApp) {
     EXPECT_EQ(RetryEntryStep(FailureCase::AppWontClose), UpStep::CloseApp); // B1
 }

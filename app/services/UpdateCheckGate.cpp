@@ -33,6 +33,7 @@ UpdateCheckCompletion ResolveUpdateCheckCompletion(exosnap::update::UpdateState 
         out.state.channel = current_channel;
         out.state.update_available = false;
         out.state.available_version.reset();
+        out.state.available_version_raw.clear();
         out.state.last_error.clear();
         out.verdict = UpdateCompletionVerdict::ChannelChanged;
         return out;
@@ -41,6 +42,7 @@ UpdateCheckCompletion ResolveUpdateCheckCompletion(exosnap::update::UpdateState 
     out.state.channel = completed.channel;
     out.state.update_available = result.update_available;
     out.state.available_version = result.available_version;
+    out.state.available_version_raw = result.available_version_raw;
     // Cleared on success rather than left standing: last_error describes the
     // most recent check, and a check that succeeded had no error. Keeping the
     // previous one made a recovered feed keep reporting the outage.
@@ -58,6 +60,7 @@ exosnap::update::UpdateState ApplyUpdateChannelSelection(exosnap::update::Update
     next.channel = channel;
     next.update_available = false;
     next.available_version.reset();
+    next.available_version_raw.clear();
     next.last_error.clear();
     return next;
 }

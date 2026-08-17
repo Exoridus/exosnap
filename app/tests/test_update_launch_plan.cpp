@@ -106,6 +106,72 @@ TEST(BuildUpdaterArgs, VerifyReinstallRoundTripsAsABooleanFlag) {
     EXPECT_EQ(parsed->install_dir, QStringLiteral("D:/Tools/ExoSnap")) << "the boolean flag must not eat a value";
 }
 
+// -- the pinned target version ----------------------------------------------
+//
+// The truthfulness defect this closes: the app resolved the feed, told the user
+// "version X is available", wrote a What's-new payload for X and stamped X into
+// the applied-version loop guard -- and then the updater resolved the SAME feed
+// again and installed whatever was newest at that second moment.
+
+TEST(BuildUpdaterArgs, PinsTheOfferedVersionAsTheTarget) {
+    upd::UpdateState st;
+    st.install_mode = upd::InstallMode::Installed;
+    st.update_available = true;
+    st.available_version = upd::SemVer{0, 9, 1};
+    st.available_version_raw = "0.9.1";
+
+    QStringList argv;
+    argv << QStringLiteral("exosnap-updater.exe");
+    argv += exosnap::BuildUpdaterArgs(st, QStringLiteral("C:/x"), 1u, QStringLiteral("0.9.0"));
+
+    const auto parsed = ParseUpdaterArgs(argv);
+    ASSERT_TRUE(parsed.has_value());
+    EXPECT_EQ(parsed->target_version, QStringLiteral("0.9.1"));
+}
+
+TEST(BuildUpdaterArgs, PassesTheReleaseTagVerbatimNotAReSpelling) {
+    // A foreign prerelease label survives as itself. SemVer::ToString() would
+    // have rendered "0.9.0-beta2" as "0.9.0-rc0", and the manifest gate compares
+    // strings -- so a re-spelled target would refuse the very release it pinned.
+    upd::UpdateState st;
+    st.install_mode = upd::InstallMode::Portable;
+    st.available_version = upd::SemVer{0, 9, 0, true, 0};
+    st.available_version_raw = "0.9.0-beta2";
+
+    const QStringList flags = exosnap::BuildUpdaterArgs(st, QStringLiteral("D:/x"), 1u, QStringLiteral("0.8.0"));
+    const int index = flags.indexOf(QStringLiteral("--target-version"));
+    ASSERT_GE(index, 0);
+    ASSERT_LT(index + 1, flags.size());
+    EXPECT_EQ(flags.at(index + 1), QStringLiteral("0.9.0-beta2"));
+}
+
+TEST(BuildUpdaterArgs, OmitsTheTargetWhenNothingIsOnOffer) {
+    // Nothing offered means nothing to pin; the updater then resolves the
+    // channel itself, which is the behaviour the manual mode relies on.
+    upd::UpdateState st;
+    st.install_mode = upd::InstallMode::Installed;
+    const QStringList flags = exosnap::BuildUpdaterArgs(st, QStringLiteral("C:/x"), 1u, QStringLiteral("0.9.0"));
+    EXPECT_FALSE(flags.contains(QStringLiteral("--target-version")));
+}
+
+TEST(BuildUpdaterArgs, VerificationReinstallPinsTheIdenticalVersion) {
+    // Both gates then agree by construction: the target gate and the ADR 0055
+    // gate compare the same string against the same manifest field.
+    upd::UpdateState st;
+    st.install_mode = upd::InstallMode::Portable;
+    st.available_version_raw = "0.9.0-rc4";
+
+    QStringList argv;
+    argv << QStringLiteral("exosnap-updater.exe");
+    argv += exosnap::BuildUpdaterArgs(st, QStringLiteral("D:/Tools/ExoSnap"), 11u, QStringLiteral("0.9.0-rc4"),
+                                      /*verify_reinstall=*/true);
+
+    const auto parsed = ParseUpdaterArgs(argv);
+    ASSERT_TRUE(parsed.has_value());
+    EXPECT_TRUE(parsed->verify_reinstall);
+    EXPECT_EQ(parsed->target_version, parsed->current_version);
+}
+
 // -- HasVerifyUpdateReinstallRequest ----------------------------------------
 
 TEST(VerifyUpdateReinstallFlag, AbsentByDefault) {

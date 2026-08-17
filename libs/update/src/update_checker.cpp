@@ -203,6 +203,9 @@ UpdateCheckResult BuildCheckResult(std::string_view releases_json, const std::op
         r.update_available = true;
         r.verification_reinstall = (offer == UpdateOffer::VerificationReinstall);
         r.available_version = release->version;
+        // The tag verbatim, not SemVer::ToString(): the target-version pin the
+        // app hands the updater has to be the string the signed manifest carries.
+        r.available_version_raw = release->version_tag;
         r.releases_page_url = release->releases_page_url;
         // Gap-aware What's-new notes: every release in (current, best] for this
         // channel, newest first -- read from the SAME fetched JSON (no extra call).
