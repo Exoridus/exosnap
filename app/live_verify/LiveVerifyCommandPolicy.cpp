@@ -241,6 +241,14 @@ const QStringList& PageValues() {
     return values;
 }
 
+// The severity ladder events.recent filters on, published so ipc.describe names
+// the accepted values instead of leaving a client to discover them by rejection.
+const QStringList& SeverityValues() {
+    static const QStringList values = {QStringLiteral("trace"),   QStringLiteral("debug"), QStringLiteral("info"),
+                                       QStringLiteral("warning"), QStringLiteral("error"), QStringLiteral("critical")};
+    return values;
+}
+
 const QStringList& ScrollSurfaceValues() {
     static const QStringList values = {Text(page_name::kSettings), Text(page_name::kDiagnostics),
                                        Text(page_name::kLogs)};
@@ -281,6 +289,35 @@ const QVector<CommandDescriptor>& AllCommands() {
         {QStringLiteral("overlay.snapshot"), 1, false, true, Settle::NotApplicable, {}, &NoPrecondition},
         {QStringLiteral("editor.snapshot"), 1, false, true, Settle::NotApplicable, {}, &NoPrecondition},
         {QStringLiteral("diagnostics.snapshot"), 1, false, true, Settle::NotApplicable, {}, &NoPrecondition},
+
+        // --- Observability (protocol 2) ---------------------------------------
+        // All read-only, all unconditional. A precondition on an observation
+        // would be a state in which the product refuses to say what it is doing,
+        // and the whole point of these is that they answer in every state --
+        // including the ones a check is trying to explain.
+        {QStringLiteral("app.identity"), 2, false, true, Settle::NotApplicable, {}, &NoPrecondition},
+        {QStringLiteral("pipeline.snapshot"), 2, false, true, Settle::NotApplicable, {}, &NoPrecondition},
+        {QStringLiteral("settings.snapshot"), 2, false, true, Settle::NotApplicable, {}, &NoPrecondition},
+        {QStringLiteral("diagnostics.results"), 2, false, true, Settle::NotApplicable, {}, &NoPrecondition},
+        {QStringLiteral("environment.snapshot"), 2, false, true, Settle::NotApplicable, {}, &NoPrecondition},
+        {QStringLiteral("windows.snapshot"), 2, false, true, Settle::NotApplicable, {}, &NoPrecondition},
+        {QStringLiteral("events.recent"),
+         2,
+         false,
+         true,
+         Settle::NotApplicable,
+         {Param("max", "int", false), Param("subsystem", "string", false), Param("eventCode", "string", false),
+          Param("severity", "enum", false, SeverityValues()), Param("launchSessionId", "string", false),
+          Param("recordingSessionId", "string", false), Param("updateTransactionId", "string", false)},
+         &NoPrecondition},
+        {QStringLiteral("session.latest"), 2, false, true, Settle::NotApplicable, {}, &NoPrecondition},
+        {QStringLiteral("session.get"),
+         2,
+         false,
+         true,
+         Settle::NotApplicable,
+         {Param("recordingSessionId", "string", true)},
+         &NoPrecondition},
 
         // --- Window ----------------------------------------------------------
         {QStringLiteral("window.moveToScreen"),

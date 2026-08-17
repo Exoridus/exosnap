@@ -396,6 +396,10 @@ void DiagnosticsAdapter::applyProbeResultForTest(diagnostics::DiagnosticsControl
     applyProbe(std::move(probe), true);
 }
 
+const diagnostics::DiagnosticsController& DiagnosticsAdapter::controller() const noexcept {
+    return controller_;
+}
+
 diagnostics::DiagnosticsController& DiagnosticsAdapter::controllerForTest() noexcept {
     return controller_;
 }

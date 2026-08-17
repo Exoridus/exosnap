@@ -42,6 +42,7 @@
 #include "ui/tray/TrayPresence.h"
 #include "viewmodels/RecordViewModel.h"
 
+#include <capability/resolver.h>
 #include <crash_capture/crash_capture.h>
 
 #include <QAbstractNativeEventFilter>
@@ -204,6 +205,42 @@ class QuickApplication {
     // service's signals -- main.cpp turning updaterLaunched into a control
     // event. Everything else reads.
     [[nodiscard]] UpdateService* updateService() noexcept;
+
+    // --- Observability inputs (Wave C) ---------------------------------------
+    // Narrow const reads for the control channel's observability surfaces. Each
+    // one hands back a model this class already owns; none of them computes a
+    // second version of anything the product decides elsewhere.
+
+    // What the user has configured, as stored. This is the REQUESTED level.
+    [[nodiscard]] const RecordingPresetConfig& liveConfig() const noexcept {
+        return live_config_;
+    }
+    [[nodiscard]] const PersistedAppSettings& appSettings() const noexcept {
+        return settings_;
+    }
+    [[nodiscard]] const capability::CapabilitySet& capabilities() const noexcept {
+        return capabilities_;
+    }
+    [[nodiscard]] QString settingsFilePath() const {
+        return settings_store_.SettingsFilePath();
+    }
+    [[nodiscard]] const AudioDeviceNotifier& audioDeviceNotifier() const noexcept {
+        return audio_notifier_;
+    }
+
+    // The configuration the NEXT recording would actually use, and the resolver's
+    // account of how it got there. Produced by running the product's own
+    // reconciliation -- SanitizePresetConfig followed by
+    // capability::SettingsResolver -- rather than by a second set of rules.
+    // `evaluated` is false until the capability probe has landed; before that
+    // there is no hardware verdict to report and the resolver's empty adjustment
+    // list must not be read as "nothing needed changing".
+    struct EffectiveRecordingConfig {
+        RecordingPresetConfig config;
+        capability::ResolveResult resolution;
+        bool evaluated = false;
+    };
+    [[nodiscard]] EffectiveRecordingConfig resolveEffectiveConfig() const;
 
     // Why the update area refuses to act right now, in product vocabulary:
     // "" (nothing in the way) | "recording" | "finalizing" | "updaterRunning".

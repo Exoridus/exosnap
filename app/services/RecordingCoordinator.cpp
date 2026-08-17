@@ -16,6 +16,7 @@
 #include <windows.h>
 
 #include "../diagnostics/DiskSpaceThresholds.h"
+#include "../diagnostics/StructuredLog.h"
 
 #include <QCoreApplication>
 #include <QDateTime>
@@ -1007,6 +1008,13 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
     // the snapshot stash so the report for this recording cannot inherit the last
     // one's counters.
     recording_session_id_ = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    // Publish the id as a structured event so the recording is addressable in the
+    // event stream, not only in the session report written at the end. Without
+    // this, `events.recent?recordingSessionId=...` could never match anything and
+    // a failed recording -- the case where the report may never be written --
+    // would leave nothing to correlate its events by.
+    diagnostics::logEvent(diagnostics::LogSeverity::Info, "record", "record.sessionStarted",
+                          {{"recordingSessionId", recording_session_id_.toStdString()}});
     {
         std::lock_guard<std::mutex> lock(diagnostics_guard_mutex_);
         has_last_snapshot_ = false;
@@ -2980,6 +2988,13 @@ void RecordingCoordinator::WriteSessionReportForResult(const UiRecordingResult& 
         diagnostics::AppLog::warning(QStringLiteral("record.report"),
                                      QStringLiteral("session report not written: %1").arg(error));
     }
+    // Closes the correlated span opened at record.sessionStarted, and says
+    // whether the report exists -- a client that cannot find one then knows
+    // whether it was never written or simply has not been looked for yet.
+    diagnostics::logEvent(diagnostics::LogSeverity::Info, "record", "record.sessionEnded",
+                          {{"recordingSessionId", recording_session_id_.toStdString()},
+                           {"succeeded", result.succeeded ? "true" : "false"},
+                           {"reportWritten", error.isEmpty() ? "true" : "false"}});
 }
 
 void RecordingCoordinator::PostResult(UiRecordingResult result) {

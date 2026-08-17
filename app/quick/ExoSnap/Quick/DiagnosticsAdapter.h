@@ -132,6 +132,13 @@ class DiagnosticsAdapter : public QObject {
     // Settings section, so the page can route the navigation.
     void requestSettingsNavigation();
 
+    // Read-only view of the policy owner, for the observability surface. The
+    // adapter converts the controller's structs into QML-shaped values; the
+    // structured control-channel payload reads the SAME controller instead of a
+    // re-conversion of the QML shapes, so a tier or a fix action cannot be lost
+    // in translation on the way out.
+    [[nodiscard]] const diagnostics::DiagnosticsController& controller() const noexcept;
+
     // Test seam: applies a probe result without touching the filesystem.
     void applyProbeResultForTest(diagnostics::DiagnosticsController::ProbeResult probe);
     [[nodiscard]] diagnostics::DiagnosticsController& controllerForTest() noexcept;

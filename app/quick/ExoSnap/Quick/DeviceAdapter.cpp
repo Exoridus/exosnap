@@ -236,6 +236,14 @@ int DeviceAdapter::adapterCount() const noexcept {
     return static_cast<int>(adapters_.size());
 }
 
+const std::vector<capability::AdapterInfo>& DeviceAdapter::adapterInfos() const noexcept {
+    return adapters_;
+}
+
+const std::vector<capability::AdapterEncoderCapability>& DeviceAdapter::adapterCapabilities() const noexcept {
+    return capabilities_;
+}
+
 int DeviceAdapter::activeIndex() const noexcept {
     return active_index_;
 }

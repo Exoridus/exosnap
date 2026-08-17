@@ -368,6 +368,22 @@ class DiagnosticsController {
     void SetPresentSample(std::optional<PresentSample> sample);
     void SetLiveSnapshot(const recorder_core::RecordingDiagnosticsSnapshot& snapshot);
 
+    // The structured checklist the last Evaluate() produced, and the environment
+    // facts alongside it. Retained rather than rebuilt on demand: running the
+    // recommendation engine a second time to answer a query would re-read the
+    // live snapshot at a different instant, so a consumer could see a verdict the
+    // surface never showed. Empty before the first Evaluate().
+    [[nodiscard]] const DiagnosticChecklist& lastChecklist() const noexcept;
+    [[nodiscard]] const std::vector<DiagnosticResult>& lastEnvironmentFacts() const noexcept;
+    // The self-test checklist as the probe produced it, and whether it ran at all
+    // ("not executed in this build" is a real answer, not an empty list).
+    [[nodiscard]] const DiagnosticChecklist& selfTestChecklist() const noexcept;
+    [[nodiscard]] bool selfTestValid() const noexcept;
+    // The last live pipeline snapshot fed in by the recording path. This is a
+    // pass-through of the engine's own value -- the controller neither smooths
+    // nor re-derives it.
+    [[nodiscard]] const recorder_core::RecordingDiagnosticsSnapshot& liveSnapshot() const noexcept;
+
     [[nodiscard]] bool dataReady() const noexcept;
     [[nodiscard]] bool hasLastRecording() const noexcept;
     [[nodiscard]] bool elevated() const noexcept;
@@ -404,6 +420,10 @@ class DiagnosticsController {
     recorder_core::RecordingDiagnosticsSnapshot live_{};
     SelfTestReport self_test_;
     std::vector<KeyValueRow> config_rows_;
+    // What the last Evaluate() computed, kept so the structured surface and the
+    // rendered surface answer from one pass.
+    DiagnosticChecklist last_checklist_;
+    std::vector<DiagnosticResult> last_facts_;
     PipelineCardBuilder pipeline_;
 };
 

@@ -67,6 +67,38 @@ class LiveVerifySource {
     [[nodiscard]] virtual QJsonObject EditorSnapshot() const = 0;
     [[nodiscard]] virtual QJsonObject DiagnosticsSnapshot() const = 0;
 
+    // --- Observability surfaces (Wave C) -------------------------------------
+    // Each of these answers from the ONE owner of the fact it reports -- the
+    // engine's diagnostics snapshot, the recommendation engine's checklist, the
+    // settings models plus the capability resolver, the logging ring, the session
+    // reports on disk. None of them measures anything: a surface that took its
+    // own measurement would be a second truth about a machine that already has
+    // one, and the two would disagree the first time either changed.
+    //
+    // Separate queries rather than one everything.snapshot. They have different
+    // costs, different availability stories and different consumers; a client
+    // that wants the pipeline should not be made to pay for a display probe.
+
+    // The live recording pipeline, from recorder_core::RecordingDiagnosticsSnapshot.
+    [[nodiscard]] virtual QJsonObject PipelineSnapshot() const = 0;
+    // requested / effective / running recording configuration, plus app settings.
+    [[nodiscard]] virtual QJsonObject SettingsSnapshot() const = 0;
+    // The structured diagnostics checklist, tiers and fix actions preserved.
+    [[nodiscard]] virtual QJsonObject DiagnosticsResults() const = 0;
+    // What ExoSnap OBSERVES about the machine. Read-only in every sense: nothing
+    // reachable from here can change a Windows-global state.
+    [[nodiscard]] virtual QJsonObject EnvironmentSnapshot() const = 0;
+    // Every native top-level window with its semantic ROLE. The role plus this
+    // process's identity is the automation identity; the title is reported for
+    // humans and must never be matched on.
+    [[nodiscard]] virtual QJsonObject WindowsSnapshot() const = 0;
+    // A bounded, filtered read of the structured event ring. Never a log-file
+    // API: no path, no offset, no follow. `error` is set for a malformed filter.
+    [[nodiscard]] virtual QJsonObject RecentEvents(const QJsonObject& params, QString* error) const = 0;
+    // The canonical on-disk session report -- the latest one when the id is
+    // empty. The same document the support bundle ships, not a second report.
+    [[nodiscard]] virtual QJsonObject SessionReport(const QString& recording_session_id) const = 0;
+
     // --- Intents ------------------------------------------------------------
     // All return false with a filled `error` rather than throwing; a refused
     // intent is a normal, reportable acceptance outcome.

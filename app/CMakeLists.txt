@@ -201,6 +201,25 @@ exosnap_add_app_test_support(exosnap_live_verify
 )
 target_link_libraries(exosnap_live_verify PUBLIC Qt6::Core exosnap::control)
 
+# Observability serialization boundary (Wave C). Pure translation from the typed
+# owners -- RecordingDiagnosticsSnapshot, DiagnosticChecklist, RecordingPresetConfig,
+# CapabilitySet, the logging ring, the session reports -- into transport-neutral
+# JSON. It measures nothing, classifies nothing, and owns no state: everything here
+# already exists somewhere else in the tree and was simply unreachable from outside
+# the process.
+#
+# Declared BEFORE the model support library it links so the reader meets it in
+# dependency order; CMake itself does not care.
+exosnap_add_app_test_support(exosnap_observability
+    observability/DiagnosticsResultsJson.cpp
+    observability/EnvironmentSnapshot.cpp
+    observability/EventQuery.cpp
+    observability/PipelineSnapshotJson.cpp
+    observability/SessionQuery.cpp
+    observability/SettingsSnapshot.cpp
+    observability/WindowIdentity.cpp
+)
+
 exosnap_add_app_test_support(exosnap_output_model_test_support
     models/FilenameBuilder.cpp
     models/OutputPathPolicy.cpp
@@ -210,6 +229,13 @@ exosnap_add_app_test_support(exosnap_output_model_test_support
 )
 target_link_libraries(exosnap_output_model_test_support PUBLIC
     Qt6::Core Qt6::Gui exosnap_capability recorder_core ole32.lib shell32.lib
+)
+
+# Linked after both, because the serializers read the models (SplitDurationMs,
+# SanitizePresetConfig's structs) and resolve the reports directory from AppLog.
+target_link_libraries(exosnap_observability PUBLIC
+    exosnap_app_log_test_support exosnap_output_model_test_support
+    Qt6::Core exosnap_capability recorder_core
 )
 
 exosnap_add_app_test_support(exosnap_record_viewmodel_test_support
@@ -560,6 +586,25 @@ target_include_directories(output_settings_tests PRIVATE ${CMAKE_CURRENT_SOURCE_
 # ADR-0014: mfreadwrite.lib removed (MF/SinkWriter path deleted).
 target_link_libraries(output_settings_tests PRIVATE mfplat.lib mf.lib mfuuid.lib ole32.lib)
 set_target_properties(output_settings_tests PROPERTIES AUTOMOC ON)
+
+# Observability: the serialization boundary's honesty contract. Fixture-driven,
+# because the states most likely to produce a lying payload (nothing measured
+# yet, a metric that cannot exist on this backend, an unprobed adapter) are the
+# ones a live run barely visits. The event cases drive the REAL logging ring
+# through the real logEvent, so a green result means the query reads what the
+# product actually writes.
+exosnap_add_gtest(
+    NAME observability_tests
+    TEST_PREFIX observability.
+    SOURCES
+        tests/test_observability_snapshots.cpp
+        diagnostics/EngineLogBridge.cpp
+        diagnostics/StructuredLog.cpp
+    LIBRARIES exosnap_observability exosnap_capability recorder_core Qt6::Core Qt6::Gui
+)
+target_include_directories(observability_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(observability_tests PRIVATE ole32.lib shell32.lib)
+set_target_properties(observability_tests PROPERTIES AUTOMOC ON)
 
 # Live Verify: the pure rejection surface -- argv gate, wire format, handshake,
 # allowlist. No pipe, no window, no GPU.

@@ -65,6 +65,14 @@ class QuickLiveVerifySource final : public QObject, public live_verify::LiveVeri
     [[nodiscard]] QJsonObject EditorSnapshot() const override;
     [[nodiscard]] QJsonObject DiagnosticsSnapshot() const override;
 
+    [[nodiscard]] QJsonObject PipelineSnapshot() const override;
+    [[nodiscard]] QJsonObject SettingsSnapshot() const override;
+    [[nodiscard]] QJsonObject DiagnosticsResults() const override;
+    [[nodiscard]] QJsonObject EnvironmentSnapshot() const override;
+    [[nodiscard]] QJsonObject WindowsSnapshot() const override;
+    [[nodiscard]] QJsonObject RecentEvents(const QJsonObject& params, QString* error) const override;
+    [[nodiscard]] QJsonObject SessionReport(const QString& recording_session_id) const override;
+
     bool MoveWindowToScreen(const QString& screen_name, QString* error) override;
     bool SelectRecordTarget(const QString& kind, const QString& title_filter, QString* error) override;
     bool RecordStart(QString* error) override;

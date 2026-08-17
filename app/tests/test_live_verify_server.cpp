@@ -98,6 +98,30 @@ class StubSource final : public LiveVerifySource {
     [[nodiscard]] QJsonObject DiagnosticsSnapshot() const override {
         return {};
     }
+    // Observability surfaces: empty here on purpose. These transport cases are
+    // about the pipe -- handshake, framing, hostile clients, shutdown -- and a
+    // payload would only make the assertions about bytes harder to read.
+    [[nodiscard]] QJsonObject PipelineSnapshot() const override {
+        return {};
+    }
+    [[nodiscard]] QJsonObject SettingsSnapshot() const override {
+        return {};
+    }
+    [[nodiscard]] QJsonObject DiagnosticsResults() const override {
+        return {};
+    }
+    [[nodiscard]] QJsonObject EnvironmentSnapshot() const override {
+        return {};
+    }
+    [[nodiscard]] QJsonObject WindowsSnapshot() const override {
+        return {};
+    }
+    [[nodiscard]] QJsonObject RecentEvents(const QJsonObject&, QString*) const override {
+        return {};
+    }
+    [[nodiscard]] QJsonObject SessionReport(const QString&) const override {
+        return {};
+    }
     bool MoveWindowToScreen(const QString&, QString*) override {
         return true;
     }

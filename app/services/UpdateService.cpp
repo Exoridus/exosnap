@@ -16,6 +16,7 @@
 #include "WhatsNewPayload.h"
 
 #include "../diagnostics/AppLog.h"
+#include "../diagnostics/StructuredLog.h"
 
 #include "../viewmodels/RecordViewModel.h" // for UiRecordingState
 
@@ -716,6 +717,16 @@ void UpdateService::LaunchUpdater() {
         impl_->last_updater_launch.update_transaction_id = handoff.update_transaction_id;
         impl_->last_updater_launch.handoff_path = QDir::toNativeSeparators(handoff_path);
     }
+    // The same fact as the AppLog line above, but structured and keyed by the
+    // transaction id, so `events.recent?updateTransactionId=...` returns this
+    // process's half of the update without anyone parsing prose. No path is
+    // carried: the handoff document's location is an implementation detail of
+    // this launch, and the launch snapshot already reports it to the one client
+    // that has a reason to look at it.
+    diagnostics::logEvent(diagnostics::LogSeverity::Info, "update", "update.updaterLaunched",
+                          {{"updateTransactionId", handoff.update_transaction_id.toStdString()},
+                           {"targetVersion", handoff.target_version.toStdString()},
+                           {"updaterPid", std::to_string(updater_pid)}});
     impl_->updater_process =
         ::OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, static_cast<DWORD>(updater_pid));
     if (impl_->updater_process != nullptr) {

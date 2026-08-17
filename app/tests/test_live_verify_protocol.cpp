@@ -118,6 +118,40 @@ class FakeSource final : public LiveVerifySource {
         return Marker(QStringLiteral("diagnostics"));
     }
 
+    // Observability surfaces. Markers for the same reason as the snapshots above:
+    // what is under test here is the ROUTING -- that pipeline.snapshot reaches
+    // PipelineSnapshot() and nothing else -- not the payloads, which have their
+    // own fixture-driven tests.
+    [[nodiscard]] QJsonObject PipelineSnapshot() const override {
+        return Marker(QStringLiteral("pipeline"));
+    }
+    [[nodiscard]] QJsonObject SettingsSnapshot() const override {
+        return Marker(QStringLiteral("settings"));
+    }
+    [[nodiscard]] QJsonObject DiagnosticsResults() const override {
+        return Marker(QStringLiteral("diagnostics.results"));
+    }
+    [[nodiscard]] QJsonObject EnvironmentSnapshot() const override {
+        return Marker(QStringLiteral("environment"));
+    }
+    [[nodiscard]] QJsonObject WindowsSnapshot() const override {
+        return Marker(QStringLiteral("windows"));
+    }
+    [[nodiscard]] QJsonObject RecentEvents(const QJsonObject& params, QString* error) const override {
+        if (params.value(QStringLiteral("severity")).toString() == QLatin1String("nonsense")) {
+            *error = QStringLiteral("Unknown severity \"nonsense\"");
+            return {};
+        }
+        QJsonObject json = Marker(QStringLiteral("events"));
+        json.insert(QStringLiteral("max"), params.value(QStringLiteral("max")).toDouble());
+        return json;
+    }
+    [[nodiscard]] QJsonObject SessionReport(const QString& recording_session_id) const override {
+        QJsonObject json = Marker(QStringLiteral("session"));
+        json.insert(QStringLiteral("requestedId"), recording_session_id);
+        return json;
+    }
+
     bool MoveWindowToScreen(const QString& screen_name, QString* error) override {
         calls.append(QStringLiteral("moveToScreen:%1").arg(screen_name));
         return Outcome(error);
@@ -693,6 +727,106 @@ TEST(LiveVerifyDispatcher, SnapshotCommandsRouteToTheMatchingSource) {
         ASSERT_TRUE(Ok(response)) << command.toStdString();
         EXPECT_EQ(response.value(QStringLiteral("result")).toObject().value(QStringLiteral("marker")).toString(),
                   marker);
+    }
+}
+
+TEST(LiveVerifyDispatcher, ObservabilityQueriesRouteToTheMatchingSurface) {
+    FakeSource source;
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    const std::pair<QString, QString> expectations[] = {
+        {QStringLiteral("pipeline.snapshot"), QStringLiteral("pipeline")},
+        {QStringLiteral("settings.snapshot"), QStringLiteral("settings")},
+        {QStringLiteral("diagnostics.results"), QStringLiteral("diagnostics.results")},
+        {QStringLiteral("environment.snapshot"), QStringLiteral("environment")},
+        {QStringLiteral("windows.snapshot"), QStringLiteral("windows")},
+        {QStringLiteral("events.recent"), QStringLiteral("events")},
+        {QStringLiteral("session.latest"), QStringLiteral("session")},
+    };
+    for (const auto& [command, marker] : expectations) {
+        const QJsonObject response = dispatcher.Dispatch(RequestV2(command));
+        ASSERT_TRUE(Ok(response)) << command.toStdString();
+        EXPECT_EQ(response.value(QStringLiteral("result")).toObject().value(QStringLiteral("marker")).toString(),
+                  marker);
+        // Every one of them is an observation, so none may carry the flag that
+        // says an action's postcondition holds.
+        EXPECT_FALSE(response.contains(QStringLiteral("settled"))) << command.toStdString();
+    }
+}
+
+TEST(LiveVerifyDispatcher, AppIdentityAnswersTheSameIdentityTheHandshakeCarries) {
+    FakeSource source;
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    const QJsonObject hello = Hello(dispatcher, QString::fromLatin1(kRunId), 2);
+    ASSERT_TRUE(Ok(hello));
+
+    const QJsonObject response = dispatcher.Dispatch(RequestV2(QStringLiteral("app.identity")));
+    ASSERT_TRUE(Ok(response));
+
+    // One identity, two ways to read it. The handshake merges it into its result
+    // alongside the negotiated protocol and the command surface, so the assertion
+    // is field-wise rather than object equality -- but every field has to agree,
+    // because a second identity would be a second thing to keep in step with the
+    // build.
+    const QJsonObject identity = response.value(QStringLiteral("result")).toObject();
+    const QJsonObject hello_result = hello.value(QStringLiteral("result")).toObject();
+    ASSERT_FALSE(identity.isEmpty());
+    for (auto it = identity.begin(); it != identity.end(); ++it)
+        EXPECT_EQ(hello_result.value(it.key()), it.value()) << it.key().toStdString();
+}
+
+TEST(LiveVerifyDispatcher, SessionGetPassesTheIdThroughAndRefusesAnEmptyOne) {
+    FakeSource source;
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    QJsonObject params;
+    params.insert(QStringLiteral("recordingSessionId"), QStringLiteral("rec-42"));
+    const QJsonObject response = dispatcher.Dispatch(RequestV2(QStringLiteral("session.get"), params));
+    ASSERT_TRUE(Ok(response));
+    EXPECT_EQ(response.value(QStringLiteral("result")).toObject().value(QStringLiteral("requestedId")).toString(),
+              QStringLiteral("rec-42"));
+
+    // session.latest is the SAME surface with no id, not a second command with
+    // its own report.
+    const QJsonObject latest = dispatcher.Dispatch(RequestV2(QStringLiteral("session.latest")));
+    ASSERT_TRUE(Ok(latest));
+    EXPECT_TRUE(
+        latest.value(QStringLiteral("result")).toObject().value(QStringLiteral("requestedId")).toString().isEmpty());
+
+    QJsonObject empty;
+    empty.insert(QStringLiteral("recordingSessionId"), QString());
+    EXPECT_EQ(ErrorCode(dispatcher.Dispatch(RequestV2(QStringLiteral("session.get"), empty))),
+              QString::fromLatin1(error_code::kInvalidParams));
+}
+
+TEST(LiveVerifyDispatcher, AMalformedEventFilterIsAClientErrorAndNotAnEmptyResult) {
+    FakeSource source;
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    QJsonObject params;
+    params.insert(QStringLiteral("severity"), QStringLiteral("nonsense"));
+    const QJsonObject response = dispatcher.Dispatch(RequestV2(QStringLiteral("events.recent"), params));
+    // Answering `ok` with an empty list would let a check that filters for
+    // errors pass because its filter never matched anything.
+    EXPECT_FALSE(Ok(response));
+    EXPECT_EQ(ErrorCode(response), QString::fromLatin1(error_code::kInvalidParams));
+}
+
+TEST(LiveVerifyDispatcher, ObservabilityQueriesAreProtocolTwoOnly) {
+    FakeSource source;
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 1)));
+
+    for (const QString& command :
+         {QStringLiteral("app.identity"), QStringLiteral("pipeline.snapshot"), QStringLiteral("settings.snapshot"),
+          QStringLiteral("diagnostics.results"), QStringLiteral("environment.snapshot"),
+          QStringLiteral("windows.snapshot"), QStringLiteral("events.recent"), QStringLiteral("session.latest"),
+          QStringLiteral("session.get")}) {
+        EXPECT_EQ(ErrorCode(dispatcher.Dispatch(Request(command))), QString::fromLatin1(error_code::kUnknownCommand))
+            << command.toStdString();
     }
 }
 

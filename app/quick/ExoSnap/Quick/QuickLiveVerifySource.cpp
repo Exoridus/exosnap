@@ -3,6 +3,7 @@
 #include "AboutViewModelAdapter.h"
 #include "BlockingSurfaceArbiter.h"
 #include "CrashReportAdapter.h"
+#include "DeviceAdapter.h"
 #include "DiagnosticsAdapter.h"
 #include "EditPlayerAdapter.h"
 #include "EditSessionAdapter.h"
@@ -19,6 +20,13 @@
 
 #include "diagnostics/NativeWindowFacts.h"
 #include "models/AboutInfo.h"
+#include "observability/DiagnosticsResultsJson.h"
+#include "observability/EnvironmentSnapshot.h"
+#include "observability/EventQuery.h"
+#include "observability/PipelineSnapshotJson.h"
+#include "observability/SessionQuery.h"
+#include "observability/SettingsSnapshot.h"
+#include "observability/WindowIdentity.h"
 #include "services/RecordingCoordinator.h"
 #include "services/UpdateService.h"
 
@@ -550,6 +558,172 @@ QJsonObject QuickLiveVerifySource::DiagnosticsSnapshot() const {
     json.insert(QStringLiteral("noticeCount"), diagnostics->noticeCount());
     json.insert(QStringLiteral("elevated"), diagnostics->elevated());
     return json;
+}
+
+// ---------------------------------------------------------------------------
+// Observability surfaces
+//
+// Each of these is an assembly, never a computation: it collects the models the
+// application already owns and hands them to the pure serializer in
+// app/observability. Nothing below measures, classifies or reconciles anything.
+// ---------------------------------------------------------------------------
+
+QJsonObject QuickLiveVerifySource::PipelineSnapshot() const {
+    const auto* adapter = application_.diagnosticsAdapter();
+    if (adapter == nullptr) {
+        // No diagnostics area at all. Not "an idle pipeline" -- an idle pipeline
+        // has a valid:false snapshot, and this does not even have that.
+        QJsonObject json;
+        json.insert(QStringLiteral("valid"), false);
+        json.insert(QStringLiteral("lifecycle"), QStringLiteral("idle"));
+        json.insert(QStringLiteral("health"), QStringLiteral("Unavailable"));
+        return json;
+    }
+    // The last snapshot the engine published, verbatim. The controller is a
+    // pass-through for it; the 5 Hz delivery already happened and this only reads
+    // the latest immutable value, so a poll costs one serialization and never
+    // perturbs the recording.
+    return observability::PipelineSnapshotToJson(adapter->controller().liveSnapshot());
+}
+
+QJsonObject QuickLiveVerifySource::SettingsSnapshot() const {
+    const QuickApplication::EffectiveRecordingConfig effective = application_.resolveEffectiveConfig();
+
+    observability::SettingsSnapshotInputs inputs;
+    inputs.requested = application_.liveConfig();
+    inputs.effective = effective.config;
+    inputs.resolution = effective.resolution;
+    inputs.capabilities_probed = effective.evaluated;
+    inputs.app = application_.appSettings();
+    inputs.settingsFilePath = application_.settingsFilePath();
+
+    // The RUNNING level is the encoder's own initialization record, not a third
+    // copy of the configuration. It stays valid after a recording ends, which is
+    // what makes "what did the last session actually run with" answerable.
+    if (const auto* adapter = application_.diagnosticsAdapter()) {
+        inputs.running = adapter->controller().liveSnapshot().encoder_init;
+        inputs.running_live = adapter->controller().liveRecording();
+    }
+    return observability::SettingsSnapshotToJson(inputs);
+}
+
+QJsonObject QuickLiveVerifySource::DiagnosticsResults() const {
+    auto* adapter = application_.diagnosticsAdapter();
+    if (adapter == nullptr) {
+        QJsonObject json;
+        json.insert(QStringLiteral("checked"), false);
+        json.insert(QStringLiteral("checking"), false);
+        return json;
+    }
+    const diagnostics::DiagnosticsController& controller = adapter->controller();
+    // A self-test that never ran contributes an empty checklist rather than the
+    // probe's default-constructed one -- "not executed in this build" must not
+    // arrive as a list of zero passing checks.
+    const diagnostics::DiagnosticChecklist empty_self_test;
+    // `checked` is dataReady(), not "the list is non-empty": a machine with
+    // nothing wrong produces an empty checklist, and so does a process that has
+    // not probed yet. Those are different answers.
+    return observability::DiagnosticsResultsToJson(
+        controller.lastChecklist(), controller.selfTestValid() ? controller.selfTestChecklist() : empty_self_test,
+        controller.dataReady(), adapter->checking(), controller.elevated());
+}
+
+QJsonObject QuickLiveVerifySource::EnvironmentSnapshot() const {
+    observability::EnvironmentSnapshotInputs inputs;
+    inputs.capabilities = application_.capabilities();
+    inputs.elevated = application_.diagnosticsAdapter() != nullptr && application_.diagnosticsAdapter()->elevated();
+
+    if (const auto* devices = application_.deviceAdapter()) {
+        // Read only. ensureScanned() is NOT called: an observation that starts a
+        // DXGI enumeration and an NVENC session would change what it measures,
+        // and `scanned:false` is a perfectly good answer.
+        inputs.adapters_scanned = devices->hasScanned();
+        inputs.adapters = devices->adapterInfos();
+        inputs.adapter_capabilities = devices->adapterCapabilities();
+        inputs.active_adapter_index = devices->activeIndex();
+    }
+
+    for (const QScreen* screen : QGuiApplication::screens()) {
+        if (screen == nullptr)
+            continue;
+        observability::ScreenFacts facts;
+        const QRect geometry = screen->geometry();
+        facts.name = screen->name();
+        facts.x = geometry.x();
+        facts.y = geometry.y();
+        facts.width = geometry.width();
+        facts.height = geometry.height();
+        facts.device_pixel_ratio = screen->devicePixelRatio();
+        facts.refresh_hz = screen->refreshRate();
+        facts.primary = screen == QGuiApplication::primaryScreen();
+        inputs.screens.push_back(std::move(facts));
+    }
+
+    const AudioDeviceSnapshot audio = application_.audioDeviceNotifier().currentSnapshot();
+    const auto map_endpoints = [](const QVector<recorder_core::AudioInputDeviceInfo>& source) {
+        std::vector<observability::AudioEndpointFacts> endpoints;
+        endpoints.reserve(static_cast<std::size_t>(source.size()));
+        for (const recorder_core::AudioInputDeviceInfo& device : source)
+            endpoints.push_back({QString::fromStdString(device.display_name), device.is_default});
+        return endpoints;
+    };
+    inputs.audio_inputs = map_endpoints(audio.inputs);
+    inputs.audio_outputs = map_endpoints(audio.outputs);
+    inputs.audio_observed = !audio.inputs.isEmpty() || !audio.outputs.isEmpty();
+
+    // PresentMon: this frontend instantiates no provider, so there is nothing to
+    // sample. The opt-in and the elevation state are still real and are reported,
+    // because they are what a client needs in order to know WHY there is no
+    // present measurement rather than merely that there is none.
+    inputs.present.opt_in = application_.appSettings().present_diagnostics_optin;
+    inputs.present.elevated = inputs.elevated;
+    inputs.present.available = false;
+
+    return observability::EnvironmentSnapshotToJson(inputs);
+}
+
+QJsonObject QuickLiveVerifySource::WindowsSnapshot() const {
+    std::vector<observability::WindowFacts> windows;
+    for (QWindow* window : QGuiApplication::topLevelWindows()) {
+        if (window == nullptr)
+            continue;
+        const bool is_root = root_window_ != nullptr && window == static_cast<QWindow*>(root_window_.data());
+        const QString object_name = window->objectName();
+        // Every top-level window this process owns is reported, including one
+        // that matches no known role. A snapshot that filtered by objectName
+        // prefix -- which overlay.snapshot does -- cannot show the defect Wave B
+        // found, because the window that shared the main window's title was the
+        // one the filter dropped.
+        observability::WindowFacts facts;
+        facts.role = observability::WindowRoleForObjectName(object_name, is_root);
+        facts.object_name = object_name;
+        facts.title = window->title();
+        facts.visible = window->isVisible();
+        facts.exposed = window->isExposed();
+        // winId() on a window with no platform window would CREATE one. A
+        // snapshot observes; it never brings a window into existence.
+        facts.native_window_created = window->handle() != nullptr;
+        if (window->screen() != nullptr)
+            facts.screen = window->screen()->name();
+        if (facts.native_window_created) {
+            facts.native =
+                NativeFactsJson(diagnostics::QueryNativeWindowFacts(reinterpret_cast<void*>(window->winId())));
+        }
+        windows.push_back(std::move(facts));
+    }
+    return observability::WindowSnapshotToJson(windows, QCoreApplication::applicationPid());
+}
+
+QJsonObject QuickLiveVerifySource::RecentEvents(const QJsonObject& params, QString* error) const {
+    const observability::EventQueryFilter filter = observability::ParseEventQueryFilter(params, error);
+    if (error != nullptr && !error->isEmpty())
+        return {};
+    return observability::QueryEvents(filter);
+}
+
+QJsonObject QuickLiveVerifySource::SessionReport(const QString& recording_session_id) const {
+    return recording_session_id.isEmpty() ? observability::LatestSessionReport()
+                                          : observability::SessionReportById(recording_session_id);
 }
 
 bool QuickLiveVerifySource::MoveWindowToScreen(const QString& screen_name, QString* error) {

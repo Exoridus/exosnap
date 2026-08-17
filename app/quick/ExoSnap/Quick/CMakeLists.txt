@@ -469,6 +469,10 @@ target_link_libraries(exosnap
         exosnap_device_service_test_support
         exosnap_diagnostics_test_support
         exosnap_live_verify
+        # The observability serialization boundary (Wave C). The control channel
+        # is one consumer of it; the Diagnostics surface reads the same typed
+        # owners directly, so neither is downstream of the other.
+        exosnap_observability
         exosnap_miniz
         recorder_core
         tomlplusplus::tomlplusplus

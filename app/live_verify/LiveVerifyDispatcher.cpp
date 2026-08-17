@@ -59,8 +59,8 @@ QJsonObject UpdatePayload(const LiveVerifySource& source) {
     return result;
 }
 
-Outcome ExecuteReadOnly(const QString& command, LiveVerifySource& source, const QJsonObject& capabilities,
-                        const QJsonObject& described) {
+Outcome ExecuteReadOnly(const QString& command, const QJsonObject& params, LiveVerifySource& source,
+                        const QJsonObject& capabilities, const QJsonObject& described) {
     // system.capabilities and ipc.describe are assembled by the shared session
     // from this process's own command table and event list -- one payload
     // builder, so the two endpoints cannot describe themselves differently.
@@ -90,6 +90,41 @@ Outcome ExecuteReadOnly(const QString& command, LiveVerifySource& source, const 
         return Succeeded(source.EditorSnapshot());
     if (command == QLatin1String("diagnostics.snapshot"))
         return Succeeded(source.DiagnosticsSnapshot());
+
+    // --- Observability ------------------------------------------------------
+    // app.identity answers the SAME object system.hello carries. Deliberately
+    // not a second identity: a handshake is a one-shot, and a client that wants
+    // to re-read the build it is talking to mid-run had no way to.
+    if (command == QLatin1String("app.identity"))
+        return Succeeded(source.Identity());
+    if (command == QLatin1String("pipeline.snapshot"))
+        return Succeeded(source.PipelineSnapshot());
+    if (command == QLatin1String("settings.snapshot"))
+        return Succeeded(source.SettingsSnapshot());
+    if (command == QLatin1String("diagnostics.results"))
+        return Succeeded(source.DiagnosticsResults());
+    if (command == QLatin1String("environment.snapshot"))
+        return Succeeded(source.EnvironmentSnapshot());
+    if (command == QLatin1String("windows.snapshot"))
+        return Succeeded(source.WindowsSnapshot());
+    if (command == QLatin1String("events.recent")) {
+        QString error;
+        const QJsonObject events = source.RecentEvents(params, &error);
+        // A malformed filter is a client error, not an empty result: silently
+        // widening a mistyped severity to "everything" is how a check that
+        // filters for errors passes on a stream of Info records.
+        if (!error.isEmpty())
+            return Failed(error_code::kInvalidParams, error);
+        return Succeeded(events);
+    }
+    if (command == QLatin1String("session.latest"))
+        return Succeeded(source.SessionReport(QString()));
+    if (command == QLatin1String("session.get")) {
+        const QString id = ParamString(params, "recordingSessionId");
+        if (id.isEmpty())
+            return Failed(error_code::kInvalidParams, QStringLiteral("recordingSessionId must not be empty"));
+        return Succeeded(source.SessionReport(id));
+    }
 
     // Reachable only if a read-only command is added to the policy table without
     // a branch here; loud rather than silently answering nothing.
@@ -373,7 +408,7 @@ exosnap::control::Outcome LiveVerifyDispatcher::Execute(const CommandDescriptor&
                                                         const ParsedRequest& request) {
     if (command.mutating)
         return ExecuteMutating(command, request, *source_);
-    return ExecuteReadOnly(command.name, *source_, CapabilitiesPayload(request.protocol),
+    return ExecuteReadOnly(command.name, request.params, *source_, CapabilitiesPayload(request.protocol),
                            DescribePayload(request.protocol));
 }
 

@@ -876,10 +876,32 @@ bool DiagnosticsController::liveRecording() const noexcept {
                            live_.lifecycle == recorder_core::DiagnosticsLifecycle::Paused);
 }
 
+const DiagnosticChecklist& DiagnosticsController::lastChecklist() const noexcept {
+    return last_checklist_;
+}
+
+const std::vector<DiagnosticResult>& DiagnosticsController::lastEnvironmentFacts() const noexcept {
+    return last_facts_;
+}
+
+const DiagnosticChecklist& DiagnosticsController::selfTestChecklist() const noexcept {
+    return probe_.self_test;
+}
+
+bool DiagnosticsController::selfTestValid() const noexcept {
+    return probe_.self_test_valid;
+}
+
+const recorder_core::RecordingDiagnosticsSnapshot& DiagnosticsController::liveSnapshot() const noexcept {
+    return live_;
+}
+
 DiagnosticsSnapshot DiagnosticsController::Evaluate() {
     DiagnosticsSnapshot out;
 
     if (!data_ready_) {
+        last_checklist_ = {};
+        last_facts_.clear();
         out.verdict = ComputeVerdict({}, 0, false);
         ReadinessTileInputs tile_inputs;
         tile_inputs.display_width = display_.width;
@@ -906,6 +928,11 @@ DiagnosticsSnapshot DiagnosticsController::Evaluate() {
 
     const DiagnosticChecklist recommendations = engine.Generate();
     const std::vector<DiagnosticResult> facts = engine.GenerateEnvironmentFacts();
+    // Retained for the structured surface, so `diagnostics.results` and the
+    // Diagnostics page are two renderings of ONE evaluation rather than two
+    // evaluations that happen to usually agree.
+    last_checklist_ = recommendations;
+    last_facts_ = facts;
     const int cap_passes = CountAvailableCapabilities(config_.cap_summary);
 
     out.verdict = ComputeVerdict(recommendations, cap_passes, true);

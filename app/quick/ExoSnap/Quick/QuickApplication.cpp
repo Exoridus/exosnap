@@ -2406,6 +2406,42 @@ void QuickApplication::closeForUpdaterHandoff() {
     QCoreApplication::quit();
 }
 
+QuickApplication::EffectiveRecordingConfig QuickApplication::resolveEffectiveConfig() const {
+    EffectiveRecordingConfig effective;
+    // Step one is the product's own sanitizer: container x codec reconciliation
+    // (ADR 0010), the 10-bit demotion (ADR 0032), the 4:4:4 snap, the MP4 CFR
+    // constraint, and the split clamps. It is the same call persistLiveConfig()
+    // makes on the way to disk.
+    effective.config = SanitizePresetConfig(live_config_);
+    if (!capabilities_.probed) {
+        // No hardware verdict yet. The static rules above have run and are
+        // reported; the capability-gated fallbacks have not, and saying they
+        // found nothing would be a claim about hardware nobody has looked at.
+        return effective;
+    }
+
+    const capability::SettingsResolver resolver(capabilities_);
+    effective.resolution =
+        resolver.ValidateConfig(diagnostics::UserConfigFromSettings(effective.config.output, effective.config.video));
+    effective.evaluated = true;
+
+    // Copy the resolver's answer back onto the model so `effective` really is one
+    // configuration rather than a sanitized config with a verdict stapled to it.
+    // Only the fields the resolver owns -- everything else it never looked at.
+    const capability::UserRecorderConfig& resolved = effective.resolution.resolved_config;
+    effective.config.output.container = resolved.container;
+    effective.config.output.video_codec = resolved.video_codec;
+    effective.config.output.audio_codec = resolved.audio_codec;
+    effective.config.output.chroma_subsampling = resolved.chroma;
+    effective.config.output.bit_depth = resolved.bit_depth;
+    effective.config.output.color_range = resolved.color_range;
+    effective.config.output.hdr_mode = resolved.hdr_mode;
+    effective.config.video.frame_rate_num = resolved.frame_rate_num;
+    effective.config.video.frame_rate_den = resolved.frame_rate_den;
+    effective.config.video.frame_pacing = resolved.frame_pacing;
+    return effective;
+}
+
 QString QuickApplication::updateBlockerReason() const {
     // App-layer recording guard: never contact the update server while a capture
     // or remux is in flight.
