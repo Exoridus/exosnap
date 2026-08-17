@@ -107,11 +107,23 @@ target_link_libraries(exosnap_updater PRIVATE
 )
 
 if(WIN32)
+    # The application's own brand icon, compiled into the updater as its first
+    # icon resource. Windows picks the LOWEST-numbered icon resource for the
+    # taskbar, Explorer and the window, so without this the updater shows the
+    # generic executable icon in the taskbar while the user is watching it
+    # replace ExoSnap. Forward slashes on purpose: the resource compiler accepts
+    # them and a configured Windows path would otherwise embed escape sequences.
+    set(EXOSNAP_UPDATER_ICON "${PROJECT_SOURCE_DIR}/app/assets/brand/exosnap-logo-idle.ico")
+    if(NOT EXISTS "${EXOSNAP_UPDATER_ICON}")
+        message(FATAL_ERROR "Updater icon not found: ${EXOSNAP_UPDATER_ICON}")
+    endif()
     configure_file(
         "${CMAKE_CURRENT_SOURCE_DIR}/updater.rc.in"
         "${CMAKE_CURRENT_BINARY_DIR}/updater.rc"
         @ONLY
     )
+    set_property(SOURCE "${CMAKE_CURRENT_BINARY_DIR}/updater.rc"
+        APPEND PROPERTY OBJECT_DEPENDS "${EXOSNAP_UPDATER_ICON}")
     target_sources(exosnap_updater PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/updater.rc")
 endif()
 
