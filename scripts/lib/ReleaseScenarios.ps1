@@ -248,8 +248,19 @@ function Get-ReleaseScenarioCatalog {
             }
 
             # The hub keeps a permanent record but starts empty, so an entry has to be
-            # published before the entry-shape paths can be walked at all.
+            # published before the entry-shape paths can be walked at all. Waited for as
+            # a state, not slept over: whether a diagnostics run publishes anything on
+            # this machine depends on what it finds, and an empty hub is reported as
+            # unchecked rather than passed.
             [void](Invoke-LiveVerifyCommand -Connection $conn -Command 'diagnostics.run')
+            $notificationDeadline = [DateTime]::UtcNow.AddSeconds(10)
+            while ([DateTime]::UtcNow -lt $notificationDeadline) {
+                $hub = (Invoke-LiveVerifyCommand -Connection $conn -Command 'notifications.snapshot').result
+                # @(...) around the CALL, not only inside it: a function returning an
+                # empty array hands back $null, and $null.Count throws under StrictMode.
+                if (@(Get-ReleaseNotificationEntry -Snapshot $hub).Count -gt 0) { break }
+                Start-Sleep -Milliseconds 250
+            }
 
             $missing = @()
             $skipped = @()
@@ -1173,14 +1184,19 @@ function Get-ReleaseScenarioCatalog {
             # The defect this catches is the preview freezing after a monitor crossing:
             # a frame published with no render pass following it. `owed` is that
             # condition as structured state, so it is asserted rather than eyeballed.
-            if ($preview.owed) {
+            # It lives under `updateGate`, which is the bookkeeping that decides whether
+            # a published frame still owes a render pass -- not a top-level property of
+            # the preview.
+            $owed = Get-ReleaseSnapshotValue -Object $preview -Path 'updateGate.owed'
+            $renderPasses = Get-ReleaseSnapshotValue -Object $preview -Path 'updateGate.renderPasses'
+            if ($owed) {
                 return @{ Result = 'FAIL'
                     Message      = 'after the screen change a published preview frame is still owed a render pass (frozen preview)'
                     Evidence     = $evidence
                 }
             }
             return @{ Result = 'PASS'
-                Message      = "moved to '$($target.name)' of $($displays.Count) displays; preview renders=$($preview.renderPasses) owed=$($preview.owed)"
+                Message      = "moved to '$($target.name)' of $($displays.Count) displays; preview renders=$renderPasses owed=$owed"
                 Evidence     = $evidence
             }
         }
@@ -1323,18 +1339,44 @@ function Get-ReleaseScenarioCatalog {
             $session = & $ctx.EnsureSession
             $conn = $session.Connection
             $before = (Invoke-LiveVerifyCommand -Connection $conn -Command 'notifications.snapshot').result
+            $baseline = @(Get-ReleaseNotificationEntry -Snapshot $before | ForEach-Object { $_.sequence })
             # Raise a deterministic product state rather than a synthetic toast: a
             # notification the product decided to show is the thing under test.
             [void](Invoke-LiveVerifyCommand -Connection $conn -Command 'diagnostics.run')
+
+            # ... but ExoSnap notifies about PROBLEMS, and a healthy machine has none.
+            # Every publisher in the product is a real fault -- a settings write that
+            # failed, an unfinalized recording from a crash, an update that is ready, a
+            # capture that stalled. So on a clean desk a diagnostics run legitimately
+            # publishes nothing, and there is no product state this runner may fabricate
+            # to change that: a synthetic toast would test the injection.
+            #
+            # The operator is therefore not asked to judge an empty surface. That is
+            # UNAVAILABLE -- a fact about this machine having nothing to report -- and
+            # not a failure of the notification surface, which was never exercised.
+            $fresh = @()
+            $deadline = [DateTime]::UtcNow.AddSeconds(10)
+            while ([DateTime]::UtcNow -lt $deadline) {
+                $now = (Invoke-LiveVerifyCommand -Connection $conn -Command 'notifications.snapshot').result
+                $fresh = @(Get-ReleaseNotificationEntry -Snapshot $now | Where-Object { $_.sequence -notin $baseline })
+                if ($fresh.Count -gt 0) { break }
+                Start-Sleep -Milliseconds 250
+            }
+            if ($fresh.Count -eq 0) {
+                return @{ Result = 'UNAVAILABLE'
+                    Message      = 'the product published no notification: it notifies about problems, and this ' +
+                    'machine currently has none. Re-run this gate on a machine with a real condition to report ' +
+                    '(a pending update, an unfinalized recording, a failing settings write).'
+                }
+            }
+
             $gate = @{
                 Id                = 'REL-VIS-NOTIFY-001'
                 Title             = 'Judge the real desktop notification surface'
                 # Values the Verify block needs travel HERE, not in a closure: a
                 # `.GetNewClosure()` block is bound to a synthetic module that does not
                 # inherit the runner's functions.
-                State             = @{
-                    baselineSequences = @(Get-ReleaseNotificationEntry -Snapshot $before | ForEach-Object { $_.sequence })
-                }
+                State             = @{ baselineSequences = $baseline }
                 Why               = 'What reaches the desktop is composed by the OS notification surface, not by ' +
                 'us. Our own snapshot proves what we asked for; it cannot prove what appeared.'
                 Do                = @(
@@ -1391,6 +1433,13 @@ function Get-ReleaseScenarioCatalog {
             if (-not (Test-Path -LiteralPath $script)) {
                 return @{ Result = 'UNAVAILABLE'; Message = 'scripts/live-verify-update-handoff.ps1 is missing' }
             }
+            # The handoff launches its own isolated instance, so this campaign's shared
+            # session has to be out of the way first: the single-instance guard is a
+            # machine-wide mutex, and `EXOSNAP_CONFIG_DIR` isolation does not change
+            # that. A second launch hands focus to the running instance and exits 0
+            # WITHOUT ever constructing the Live Verify server, so the handoff then
+            # waits for a pipe nobody opened and fails on a connect timeout.
+            & $ctx.EndSession
             $output = & pwsh -NoProfile -File $script -AppPath $ctx.Artifact.exePath 2>&1 | Out-String
             $exit = $LASTEXITCODE
             $evidence = @(Save-LiveVerifyEvidence -Context $ctx -CheckId 'REL-UPD-PORTABLE-001' -Name 'handoff.log' -Raw $output)
@@ -1443,8 +1492,10 @@ function Get-ReleaseScenarioCatalog {
                 )
                 Expected          = 'The install completes and ExoSnap comes back at the new version.'
                 VerifyDescription = "This runner captured the version before the update ($beforeVersion) and " +
-                'will reconnect afterwards, read app.identity again, and require a DIFFERENT and newer version ' +
-                'plus an installState of intact or restored. It never touches the prompt.'
+                'will reconnect afterwards, read app.identity again, and require a DIFFERENT version. Install ' +
+                'integrity is not asked of the application here: after an accepted install the updater has ' +
+                'already exited, so the only honest evidence available is that the new version came back and ' +
+                'runs. It never touches the prompt.'
                 Verify            = {
                     param($context, $gate)
                     $deadline = [DateTime]::UtcNow.AddMinutes(5)
@@ -1499,30 +1550,49 @@ function Get-ReleaseScenarioCatalog {
             if (-not $checked.ok) { return @{ Result = 'FAIL'; Message = "update.check refused: $($checked.error.message)" } }
             $state = (Invoke-LiveVerifyCommand -Connection $conn -Command 'update.getState').result
             if (-not $state.updateAvailable) { return @{ Result = 'UNAVAILABLE'; Message = 'no update is offered on this channel' } }
-            [void](Invoke-LiveVerifyCommand -Connection $conn -Command 'update.apply')
+            $applied = Invoke-LiveVerifyCommand -Connection $conn -Command 'update.apply'
+            if (-not $applied.ok) { return @{ Result = 'FAIL'; Message = "update.apply refused: $($applied.error.message)" } }
+            # The child the apply launched, named by the launch itself. `installState` and
+            # `phase` are the UPDATER's vocabulary -- asking the application for them was
+            # asking the wrong process, which is why the two fields never existed.
+            $launch = (Invoke-LiveVerifyCommand -Connection $conn -Command 'update.getState').result.updaterLaunch
 
             $gate = @{
                 Id                = 'REL-UPD-MSI-DECLINE-001'
                 Title             = 'DECLINE the elevation prompt'
+                State             = @{ updaterRunId = "$($launch.controlRunId)"; updaterPipe = "$($launch.controlPipe)" }
                 Why               = 'Same Secure Desktop boundary as accepting it. What is under test is what the ' +
                 'product says afterwards.'
                 Do                = @('A UAC prompt is appearing now.', 'DECLINE it.')
                 Expected          = 'The updater reports a cancelled update, not a failed one, and nothing is ' +
                 'left half-installed.'
-                VerifyDescription = 'This runner reads update.getState and requires a cancelled-or-idle state with ' +
-                'installState intact -- never a failure state, and never strandedInBackup.'
+                VerifyDescription = "This runner attaches to the updater's own control endpoint (run id " +
+                "$($launch.controlRunId)) and requires a cancelled-or-idle phase with installState intact -- never " +
+                'a failure state, and never strandedInBackup. Those fields belong to the updater; the application ' +
+                'only reports which child it launched.'
                 Verify            = {
                     param($context, $gate)
-                    $conn2 = $script:Session.Connection
-                    $after = (Invoke-LiveVerifyCommand -Connection $conn2 -Command 'update.getState').result
-                    $evidence = @(Save-LiveVerifyEvidence -Context $context -CheckId 'REL-UPD-MSI-DECLINE-001' -Name 'update-state.json' -Value $after)
-                    if ("$($after.installState)" -eq 'strandedInBackup') {
-                        return @{ Ok = $false; Detail = 'the install is stranded in backup after a declined prompt'; Evidence = $evidence }
+                    if ([string]::IsNullOrWhiteSpace($gate.State.updaterRunId)) {
+                        return @{ Ok = $false; Detail = 'update.apply reported no updater launch, so there is no child to ask' }
                     }
-                    if ("$($after.phase)" -match 'fail|error') {
-                        return @{ Ok = $false; Detail = "a declined prompt was reported as a failure: $($after.phase)"; Evidence = $evidence }
+                    try { $updater = Connect-LiveVerify -RunId $gate.State.updaterRunId -Role 'Updater' -ConnectTimeoutMs 30000 }
+                    catch {
+                        return @{ Ok = $false; Detail = "the updater endpoint could not be reached: $($_.Exception.Message)" }
                     }
-                    return @{ Ok = $true; Detail = "phase=$($after.phase) installState=$($after.installState)"; Evidence = $evidence }
+                    try {
+                        $after = (Invoke-LiveVerifyCommand -Connection $updater -Command 'update.getState').result
+                        $evidence = @(Save-LiveVerifyEvidence -Context $context -CheckId 'REL-UPD-MSI-DECLINE-001' -Name 'updater-state.json' -Value $after)
+                        $installState = "$(Get-ReleaseSnapshotValue -Object $after -Path 'installState')"
+                        $phase = "$(Get-ReleaseSnapshotValue -Object $after -Path 'phase')"
+                        if ($installState -eq 'strandedInBackup') {
+                            return @{ Ok = $false; Detail = 'the install is stranded in backup after a declined prompt'; Evidence = $evidence }
+                        }
+                        if ($phase -match 'fail|error') {
+                            return @{ Ok = $false; Detail = "a declined prompt was reported as a failure: $phase"; Evidence = $evidence }
+                        }
+                        return @{ Ok = $true; Detail = "phase=$phase installState=$installState"; Evidence = $evidence }
+                    }
+                    finally { try { $updater.Close() } catch { } }
                 }
             }
             return & $ctx.HumanGate $gate
@@ -1592,6 +1662,10 @@ function Get-ReleaseScenarioCatalog {
             # The defect this pins let one unread event block the process forever,
             # because the server flushed the pipe on the stop path and the flush waits
             # for a client that is by definition not reading.
+            # Own instance, own run id — so the shared session must go first, for the
+            # single-instance reason spelled out in REL-UPD-PORTABLE-001. Passing today
+            # only because the scenario before this one happens to end the session.
+            & $ctx.EndSession
             $runId = New-LiveVerifyRunId
             $process = Start-Process -FilePath $ctx.Artifact.exePath `
                 -ArgumentList @('--live-verify-control', $runId) -PassThru
@@ -1667,7 +1741,10 @@ function Get-ReleaseFieldContract {
             Paths = @('windows[].role', 'windows[].nativeWindowCreated')
         }
         @{ Command = 'preview.snapshot'; Stage = 'idle'; UsedBy = 'REL-DISP-MIXED-001'
-            Paths = @('owed', 'renderPasses')
+            # The repaint bookkeeping is a group of its own: `owed` at the top level
+            # would be a claim about the preview, and it is a claim about the update
+            # gate that drives it.
+            Paths = @('active', 'frameReady', 'updateGate.owed', 'updateGate.renderPasses')
         }
         @{ Command = 'record.snapshot'; Stage = 'idle'
             UsedBy = 'REL-AUD-DEGRADE-001, REL-AUD-SILENCE-001, REL-AUD-FORMAT-001'
@@ -1680,7 +1757,12 @@ function Get-ReleaseFieldContract {
             Paths = @('entries[].sequence', 'entries[].title', 'entries[].body')
         }
         @{ Command = 'update.getState'; Stage = 'idle'; UsedBy = 'REL-UPD-MSI-001, REL-UPD-MSI-DECLINE-001'
-            Paths = @('updateAvailable', 'installState', 'phase')
+            # `installState` and `phase` are the UPDATER's vocabulary, not the app's.
+            # The app reports its own update state machine plus the endpoint of the
+            # child it launched; whoever wants the updater's answer connects to that
+            # child, which is what `updaterLaunch` exists for.
+            Paths = @('updateAvailable', 'state', 'blocker', 'currentVersion',
+                'updaterLaunch.controlRunId', 'updaterLaunch.controlPipe')
         }
         @{ Command = 'pipeline.snapshot'; Stage = 'recording'
             UsedBy = 'REL-CAP-001, REL-CAP-STALL-001, REL-AUD-DEGRADE-001'
@@ -1784,6 +1866,11 @@ function Get-ReleaseNotificationEntry {
         unread/actions. There is no `id` and no `detail`: the manager-assigned
         `sequence` is the hub's own stable identity and the only thing a client may
         address an entry by.
+
+        Wrap the CALL in @(...) before reading .Count. PowerShell unrolls an empty
+        array on return, so the caller receives $null and $null.Count throws under
+        StrictMode -- which looks exactly like "the hub is broken" rather than "the hub
+        is empty".
     #>
     param($Snapshot)
     $entries = Get-ReleaseSnapshotValue -Object $Snapshot -Path 'entries'

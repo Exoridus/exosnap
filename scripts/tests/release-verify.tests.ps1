@@ -568,6 +568,40 @@ Test-Case 'every human gate declares why it is manual and how it will be verifie
     Assert-Equal $whyCount $verifyCount 'every gate must carry a Verify block'
 }
 
+Test-Case 'a scenario that launches its own instance ends the shared session first' {
+    # The single-instance guard is a machine-wide mutex, so a second exosnap.exe hands
+    # focus to the running one and exits 0 without ever opening its Live Verify server.
+    # The scenario that launched it then waits for a pipe nobody created and fails on a
+    # connect timeout -- a verdict about the runner, not about the product. This is the
+    # defect REL-UPD-PORTABLE-001 reported as "the update handoff script exited 1".
+    #
+    # Checked as source text, per scenario block, with comment lines stripped: the file
+    # EXPLAINS the hazard in prose, and a naive match would read the explanation as the
+    # call it demands.
+    $lines = @(Get-Content -LiteralPath (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1') |
+            Where-Object { $_ -notmatch '^\s*#' })
+    $currentId = '<before the first scenario>'
+    $endedSession = $false
+    $launches = 0
+    foreach ($line in $lines) {
+        if ($line -match "^\s+Id\s+=\s+'([^']+)'") {
+            $currentId = $Matches[1]
+            $endedSession = $false
+            continue
+        }
+        if ($line -match '\$ctx\.EndSession') { $endedSession = $true; continue }
+        # Both launch shapes: the scenario starting the binary itself, and the one
+        # delegating to a helper script that starts it.
+        if ($line -match '\$ctx\.Artifact\.exePath' -and
+            ($line -match 'Start-Process' -or $line -match '-AppPath')) {
+            $launches++
+            Assert-True $endedSession `
+                "$currentId launches its own instance without calling & `$ctx.EndSession first"
+        }
+    }
+    Assert-True ($launches -gt 0) 'the catalog is expected to contain scenarios that launch their own instance'
+}
+
 Test-Case 'the field contract names only scenarios that exist' {
     # The contract's value is that a vanished field path names, without searching,
     # exactly which gates are about to throw. A UsedBy pointing at a scenario that no

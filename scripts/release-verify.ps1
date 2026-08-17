@@ -460,6 +460,41 @@ function New-ReleaseContext {
     }
 }
 
+function Stop-ReleaseLeakedRecording {
+    <#
+    .SYNOPSIS
+        Ends a recording a scenario left running, and says that it did.
+    .DESCRIPTION
+        The product analogue of the environment restore, and it exists for the same
+        reason: a scenario must not be able to hand the next one a machine it did not
+        expect.
+
+        Several human-gated scenarios start a recording in their body and stop it in
+        their Verify block, which is correct while a human answers -- but a DEFERRED
+        gate never runs Verify, so the recording simply kept going. The next scenario
+        then met `update.check is refused while recording` and reported a FAIL that
+        described the runner, not the product. Cleaning up inside every one of those
+        five bodies would have been five chances to forget; this is one.
+
+        Reported rather than silent: a scenario that leaks a recording is a fact about
+        the catalog worth seeing, even though it is repaired here.
+    #>
+    param($Session)
+    if ($null -eq $Session) { return }
+    try {
+        $state = Get-LiveVerifyState -Connection $Session.Connection
+        if ($state.recordingState -notin @('Recording', 'Paused', 'Countdown')) { return }
+        Write-Step "a recording was still $($state.recordingState) after the scenario; stopping it"
+        [void](Invoke-LiveVerifyCommand -Connection $Session.Connection -Command 'record.stop')
+        [void](Wait-ReleaseRecordingState -Connection $Session.Connection -States @('Completed', 'Failed', 'Ready') -TimeoutMs 60000)
+    }
+    catch {
+        # The session may already be gone -- a scenario is allowed to end it. Nothing
+        # is owed then, and turning that into an error would report a teardown as a
+        # product failure.
+    }
+}
+
 function Invoke-Scenarios {
     param(
         [Parameter(Mandatory)] $Run,
@@ -489,6 +524,9 @@ function Invoke-Scenarios {
                 -EnvironmentFingerprint $environmentFingerprint | Out-Null
 
             $outcome = Invoke-OneScenario -Entry $entry -Context $context -Orchestrator $Orchestrator -Aliases $aliases
+            # Before the verdict is written, so the next scenario cannot inherit a
+            # recording this one started. See Stop-ReleaseLeakedRecording.
+            Stop-ReleaseLeakedRecording -Session $script:Session
 
             $evidence = @()
             if ($outcome.ContainsKey('Evidence') -and $null -ne $outcome.Evidence) { $evidence = @($outcome.Evidence) }
