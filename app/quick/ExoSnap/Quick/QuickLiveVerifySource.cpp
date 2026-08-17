@@ -5,8 +5,10 @@
 #include "CrashReportAdapter.h"
 #include "DeviceAdapter.h"
 #include "DiagnosticsAdapter.h"
+#include "EditExportAdapter.h"
 #include "EditPlayerAdapter.h"
 #include "EditSessionAdapter.h"
+#include "NotificationEntryModel.h"
 #include "NotificationsAdapter.h"
 #include "QuickApplication.h"
 #include "RecordPreviewAdapter.h"
@@ -14,6 +16,7 @@
 #include "RecordingErrorAdapter.h"
 #include "RecoveryAdapter.h"
 #include "SettingsAdapter.h"
+#include "SettingsAutomationKeys.h"
 #include "ShellAdapter.h"
 
 #include "ExoSnapBuildInfo.h"
@@ -119,6 +122,26 @@ std::optional<ShellAdapter::Page> PageFromName(const QString& name) {
     return std::nullopt;
 }
 
+// The export panel's own lifecycle, by name. A switch rather than a table so
+// adding a state without naming it is a compiler warning, and named rather than
+// the integer for the same reason the recording state is: an enumerator's ORDER
+// is not a protocol.
+QString ExportStateName(EditExportAdapter::State state) {
+    switch (state) {
+    case EditExportAdapter::Options:
+        return QStringLiteral("idle");
+    case EditExportAdapter::Running:
+        return QStringLiteral("exporting");
+    case EditExportAdapter::Cancelling:
+        return QStringLiteral("cancelling");
+    case EditExportAdapter::Done:
+        return QStringLiteral("completed");
+    case EditExportAdapter::Failed:
+        return QStringLiteral("failed");
+    }
+    return QStringLiteral("idle");
+}
+
 QString BlockingSurfaceName(BlockingSurfaceArbiter::Surface surface) {
     switch (surface) {
     case BlockingSurfaceArbiter::Surface::Recovery:
@@ -213,13 +236,28 @@ QuickLiveVerifySource::QuickLiveVerifySource(QuickApplication& application, QQui
         connect(shell, &ShellAdapter::editSurfaceVisibleChanged, this, refresh);
         connect(shell, &ShellAdapter::sourcePickerOpenChanged, this, refresh);
     }
-    if (auto* notifications = application_.notificationsAdapter())
+    if (auto* notifications = application_.notificationsAdapter()) {
         connect(notifications, &NotificationsAdapter::hubOpenChanged, this, refresh);
+        // The entry count and the unread count are product state now, so their
+        // signals have to move the revision too -- a client waiting for a
+        // notification to arrive would otherwise wait on a clock.
+        connect(notifications, &NotificationsAdapter::entriesChanged, this, refresh);
+        connect(notifications, &NotificationsAdapter::unreadChanged, this, refresh);
+    }
+    if (auto* exporter = application_.editExportAdapter())
+        connect(exporter, &EditExportAdapter::stateChanged, this, refresh);
+    if (auto* diagnostics = application_.diagnosticsAdapter())
+        connect(diagnostics, &DiagnosticsAdapter::checkingChanged, this, refresh);
     // The update card's only change notification, and therefore the settle
     // signal for update.check: the card moves to "checking" and then to its
     // answer, and each is a revision the client can wait on instead of sleeping.
-    if (auto* settings = application_.settingsAdapter())
+    if (auto* settings = application_.settingsAdapter()) {
         connect(settings, &SettingsAdapter::updateStatusChanged, this, refresh);
+        // The selected profile and its dirty flag are product state: a
+        // settings.set that made the live config drift from its profile is
+        // something a client waits on.
+        connect(settings, &SettingsAdapter::presetsChanged, this, refresh);
+    }
     // The three blocking surfaces. Their own signals, not the arbiter's: the
     // arbiter has no "which one is up" notification, and adding one would be a
     // second place where that fact is decided.
@@ -272,6 +310,10 @@ live_verify::AutomationState QuickLiveVerifySource::State() const {
         state.can_split = record->splitEnabled();
         state.can_capture_frame = record->captureFrameEnabled();
         state.can_select_source = record->canSelectSource();
+        state.countdown_active = record->countdownActive();
+        // A marker belongs to a running recording. Paused counts: the file is
+        // still open and the marker lands at the paused media time.
+        state.can_add_marker = record->recording() || record->paused();
     }
 
     if (const auto* session = application_.editSessionAdapter()) {
@@ -285,8 +327,34 @@ live_verify::AutomationState QuickLiveVerifySource::State() const {
     }
     state.can_open_edit = application_.canOpenEditor();
 
-    if (const auto* notifications = application_.notificationsAdapter())
+    if (const auto* exporter = application_.editExportAdapter()) {
+        state.edit_export_state = ExportStateName(static_cast<EditExportAdapter::State>(exporter->stateValue()));
+        state.can_export = exporter->canExport();
+    }
+
+    if (auto* notifications = application_.notificationsAdapter()) {
         state.notification_hub_open = notifications->hubOpen();
+        state.notification_unread = notifications->unreadCount();
+        if (const QAbstractItemModel* model = notifications->model())
+            state.notification_count = model->rowCount();
+    }
+
+    if (const auto* settings = application_.settingsAdapter()) {
+        state.profile_id = settings->selectedPresetId();
+        state.profile_name = settings->selectedPresetName();
+        state.profile_built_in = settings->presetBuiltIn();
+        state.profile_dirty = settings->presetDirty();
+    }
+
+    if (const auto* diagnostics = application_.diagnosticsAdapter())
+        state.diagnostics_checking = diagnostics->checking();
+
+    if (const auto* recovery = application_.recoveryAdapter())
+        state.recovery_candidate_count = recovery->candidateCount();
+    if (const auto* failure = application_.recordingErrorAdapter())
+        state.recording_error_can_send_report = failure->canSendReport();
+    if (const auto* crash = application_.crashReportAdapter())
+        state.crash_report_folder_available = crash->crashFolderAvailable();
 
     // Update. Read from the CARD, not from a second view of the update engine:
     // the card is what the user acts on, and what the precondition for
@@ -866,6 +934,364 @@ bool QuickLiveVerifySource::RecordCaptureFrame(QString* error) {
     return true;
 }
 
+bool QuickLiveVerifySource::RecordAddMarker(QString* error) {
+    auto* record = application_.recordViewModelAdapter();
+    if (!RequireRecordSurface(record, error))
+        return false;
+    // The same Q_INVOKABLE the marker hotkey and the transport dock's marker
+    // button press. The coordinator's AddMarker() is behind it, and stays there.
+    record->requestAddMarker();
+    return true;
+}
+
+bool QuickLiveVerifySource::RecordCancelCountdown(QString* error) {
+    auto* record = application_.recordViewModelAdapter();
+    if (!RequireRecordSurface(record, error))
+        return false;
+    // Pressing the transport during a countdown IS the product's cancel -- there
+    // is no separate control, and startRequested() answers it with
+    // StartAdmission::CountdownCancelled. Reaching for a private cancel path
+    // here would prove something no user executes.
+    record->requestStart();
+    if (application_.lastStartAdmission() == QuickApplication::StartAdmission::CountdownCancelled)
+        return true;
+    *error = QStringLiteral("The transport did not treat the request as a countdown cancel");
+    return false;
+}
+
+// ---------------------------------------------------------------------------
+// Settings and profiles
+//
+// Every write below goes through a SettingsAdapter setter -- the same one the
+// QML control is bound to -- so validation, container/codec reconciliation,
+// persistence and the propagation into the recording side happen exactly as for
+// a user edit. The key table (SettingsAutomationKeys) is what turns that into a
+// stable contract instead of a property-name dependency.
+// ---------------------------------------------------------------------------
+
+QJsonObject QuickLiveVerifySource::SettingsDescribe() const {
+    return settings_automation::DescribeKeys();
+}
+
+QJsonObject QuickLiveVerifySource::SettingsGet(const QString& key, QString* error) const {
+    const auto* settings = application_.settingsAdapter();
+    if (settings == nullptr) {
+        if (error != nullptr)
+            *error = QStringLiteral("The settings surface is not available");
+        return {};
+    }
+    return settings_automation::ReadKeys(*settings, key, error);
+}
+
+bool QuickLiveVerifySource::SettingsSet(const QString& key, const QJsonValue& value, QString* error) {
+    auto* settings = application_.settingsAdapter();
+    if (settings == nullptr) {
+        *error = QStringLiteral("The settings surface is not available");
+        return false;
+    }
+    return settings_automation::WriteKey(*settings, key, value, error);
+}
+
+bool QuickLiveVerifySource::SettingsReset(QString* error) {
+    auto* settings = application_.settingsAdapter();
+    if (settings == nullptr) {
+        *error = QStringLiteral("The settings surface is not available");
+        return false;
+    }
+    // The card's own "Reset changes": back to the selected profile, through the
+    // same path the button takes.
+    settings->resetChanges();
+    return true;
+}
+
+QJsonObject QuickLiveVerifySource::ProfilesSnapshot() const {
+    QJsonObject json;
+    const auto* settings = application_.settingsAdapter();
+    if (settings == nullptr) {
+        json.insert(QStringLiteral("available"), false);
+        return json;
+    }
+    json.insert(QStringLiteral("available"), true);
+
+    QJsonArray profiles;
+    for (const QVariant& entry : settings->presetOptions()) {
+        const QVariantMap map = entry.toMap();
+        const QString id = map.value(QStringLiteral("value")).toString();
+        QJsonObject profile;
+        profile.insert(QStringLiteral("id"), id);
+        profile.insert(QStringLiteral("name"), map.value(QStringLiteral("label")).toString());
+        // The shipped profiles are read-only by product rule. Published so a
+        // client does not have to learn which ids those are by being refused.
+        profile.insert(QStringLiteral("builtIn"), IsBuiltInPresetId(id.toStdString()));
+        profile.insert(QStringLiteral("selected"), id == settings->selectedPresetId());
+        profiles.append(profile);
+    }
+    json.insert(QStringLiteral("profiles"), profiles);
+    json.insert(QStringLiteral("selectedId"), settings->selectedPresetId());
+    json.insert(QStringLiteral("selectedName"), settings->selectedPresetName());
+    // Whether the live configuration has drifted from the profile it came from.
+    json.insert(QStringLiteral("dirty"), settings->presetDirty());
+    return json;
+}
+
+bool QuickLiveVerifySource::ProfileSelect(const QString& id, QString* error) {
+    auto* settings = application_.settingsAdapter();
+    if (settings == nullptr) {
+        *error = QStringLiteral("The settings surface is not available");
+        return false;
+    }
+    bool known = false;
+    for (const QVariant& entry : settings->presetOptions())
+        known = known || entry.toMap().value(QStringLiteral("value")).toString() == id;
+    if (!known) {
+        *error = QStringLiteral("No profile with id %1").arg(id);
+        return false;
+    }
+    settings->selectPreset(id);
+    return true;
+}
+
+bool QuickLiveVerifySource::ProfileCreate(const QString& name, QString* error) {
+    auto* settings = application_.settingsAdapter();
+    if (settings == nullptr) {
+        *error = QStringLiteral("The settings surface is not available");
+        return false;
+    }
+    // The adapter owns the name rules (empty, whitespace-only, colliding with an
+    // existing profile). Asking it first turns a refusal into an explanation
+    // instead of a silently ignored click.
+    if (settings->presetNameRejected(name, QString())) {
+        *error = QStringLiteral("\"%1\" is not a usable profile name").arg(name);
+        return false;
+    }
+    settings->savePresetAs(name);
+    return true;
+}
+
+bool QuickLiveVerifySource::ProfileRename(const QString& name, QString* error) {
+    auto* settings = application_.settingsAdapter();
+    if (settings == nullptr) {
+        *error = QStringLiteral("The settings surface is not available");
+        return false;
+    }
+    if (settings->presetNameRejected(name, settings->selectedPresetId())) {
+        *error = QStringLiteral("\"%1\" is not a usable profile name").arg(name);
+        return false;
+    }
+    settings->renamePreset(name);
+    return true;
+}
+
+bool QuickLiveVerifySource::ProfileDelete(QString* error) {
+    auto* settings = application_.settingsAdapter();
+    if (settings == nullptr) {
+        *error = QStringLiteral("The settings surface is not available");
+        return false;
+    }
+    settings->deletePreset();
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Notifications
+// ---------------------------------------------------------------------------
+
+int QuickLiveVerifySource::notificationRowForSequence(qint64 sequence) const {
+    auto* notifications = application_.notificationsAdapter();
+    if (notifications == nullptr)
+        return -1;
+    const QAbstractItemModel* model = notifications->model();
+    if (model == nullptr)
+        return -1;
+    for (int row = 0; row < model->rowCount(); ++row) {
+        if (model->data(model->index(row, 0), NotificationEntryModel::SequenceRole).toLongLong() == sequence)
+            return row;
+    }
+    return -1;
+}
+
+QJsonObject QuickLiveVerifySource::NotificationsSnapshot() const {
+    QJsonObject json;
+    auto* notifications = application_.notificationsAdapter();
+    if (notifications == nullptr) {
+        json.insert(QStringLiteral("available"), false);
+        return json;
+    }
+    json.insert(QStringLiteral("available"), true);
+    json.insert(QStringLiteral("hubOpen"), notifications->hubOpen());
+    json.insert(QStringLiteral("unreadCount"), notifications->unreadCount());
+
+    QJsonArray entries;
+    if (const QAbstractItemModel* model = notifications->model()) {
+        for (int row = 0; row < model->rowCount(); ++row) {
+            const QModelIndex index = model->index(row, 0);
+            QJsonObject entry;
+            // The manager-assigned sequence, which is the hub's own stable
+            // identity and the only thing a client should address an entry by.
+            entry.insert(QStringLiteral("sequence"),
+                         static_cast<double>(model->data(index, NotificationEntryModel::SequenceRole).toLongLong()));
+            entry.insert(QStringLiteral("title"), model->data(index, NotificationEntryModel::TitleRole).toString());
+            entry.insert(QStringLiteral("body"), model->data(index, NotificationEntryModel::BodyRole).toString());
+            entry.insert(QStringLiteral("severity"), model->data(index, NotificationEntryModel::ToneRole).toString());
+            entry.insert(QStringLiteral("unread"), model->data(index, NotificationEntryModel::UnreadRole).toBool());
+            // Standing entries are the ones whose condition still holds; the hub
+            // keeps a permanent record of both kinds, so this is what tells them
+            // apart without reading the toast surface.
+            const QVariantList actions = model->data(index, NotificationEntryModel::ActionsRole).toList();
+            QJsonArray action_names;
+            for (const QVariant& action : actions)
+                action_names.append(action.toMap().value(QStringLiteral("label")).toString());
+            entry.insert(QStringLiteral("actions"), action_names);
+            entries.append(entry);
+        }
+    }
+    json.insert(QStringLiteral("entries"), entries);
+    json.insert(QStringLiteral("count"), entries.size());
+    return json;
+}
+
+bool QuickLiveVerifySource::NotificationDismiss(qint64 sequence, QString* error) {
+    auto* notifications = application_.notificationsAdapter();
+    if (notifications == nullptr) {
+        *error = QStringLiteral("The notification hub is not available");
+        return false;
+    }
+    const int row = notificationRowForSequence(sequence);
+    if (row < 0) {
+        *error = QStringLiteral("No notification with sequence %1").arg(sequence);
+        return false;
+    }
+    notifications->dismissEntry(row);
+    return true;
+}
+
+bool QuickLiveVerifySource::NotificationInvokeAction(qint64 sequence, const QString& which, QString* error) {
+    auto* notifications = application_.notificationsAdapter();
+    if (notifications == nullptr) {
+        *error = QStringLiteral("The notification hub is not available");
+        return false;
+    }
+    const int row = notificationRowForSequence(sequence);
+    if (row < 0) {
+        *error = QStringLiteral("No notification with sequence %1").arg(sequence);
+        return false;
+    }
+    const QAbstractItemModel* model = notifications->model();
+    const QVariantList actions = model->data(model->index(row, 0), NotificationEntryModel::ActionsRole).toList();
+    const int slot = which == QLatin1String("secondary") ? 1 : 0;
+    if (slot >= actions.size()) {
+        // Named rather than silently no-op: a client that asked for a button the
+        // entry does not have has a bug, and a success would hide it.
+        *error = QStringLiteral("That notification has no %1 action").arg(which);
+        return false;
+    }
+    notifications->triggerAction(row, actions.at(slot).toMap().value(QStringLiteral("action")).toInt());
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Diagnostics, logs and the blocking surfaces
+// ---------------------------------------------------------------------------
+
+bool QuickLiveVerifySource::DiagnosticsRun(QString* error) {
+    auto* diagnostics = application_.diagnosticsAdapter();
+    if (diagnostics == nullptr) {
+        *error = QStringLiteral("The diagnostics surface is not available");
+        return false;
+    }
+    // The page's own "Run Check" button. Its worker-thread probe and its
+    // `checking` flag are what a client waits on.
+    diagnostics->runCheck();
+    return true;
+}
+
+bool QuickLiveVerifySource::LogsOpen(QString* error) {
+    // The Diagnostics "open logs" affordance, which routes through the shell's
+    // one navigation edge rather than writing a page index. Deliberately not a
+    // file-open: nothing here reveals or reads a log PATH.
+    auto* diagnostics = application_.diagnosticsAdapter();
+    if (diagnostics == nullptr) {
+        *error = QStringLiteral("The diagnostics surface is not available");
+        return false;
+    }
+    diagnostics->openLogs();
+    return true;
+}
+
+bool QuickLiveVerifySource::RecoveryContinue(int index, QString* error) {
+    auto* recovery = application_.recoveryAdapter();
+    if (recovery == nullptr) {
+        *error = QStringLiteral("The recovery surface is not available");
+        return false;
+    }
+    recovery->continueSession(index);
+    return true;
+}
+
+bool QuickLiveVerifySource::RecoveryDiscard(int index, QString* error) {
+    auto* recovery = application_.recoveryAdapter();
+    if (recovery == nullptr) {
+        *error = QStringLiteral("The recovery surface is not available");
+        return false;
+    }
+    // The surface's own two-step: arm, then discard. Skipping the arm would
+    // exercise a path the user cannot take -- the confirmation IS the product's
+    // guard against discarding an interrupted recording by accident.
+    recovery->armDiscard(index);
+    recovery->discard(index);
+    return true;
+}
+
+bool QuickLiveVerifySource::RecoveryDismiss(QString* error) {
+    auto* recovery = application_.recoveryAdapter();
+    if (recovery == nullptr) {
+        *error = QStringLiteral("The recovery surface is not available");
+        return false;
+    }
+    recovery->dismiss();
+    return true;
+}
+
+bool QuickLiveVerifySource::CrashReportSend(QString* error) {
+    auto* crash = application_.crashReportAdapter();
+    if (crash == nullptr) {
+        *error = QStringLiteral("The crash-report surface is not available");
+        return false;
+    }
+    crash->sendReport();
+    return true;
+}
+
+bool QuickLiveVerifySource::CrashReportDecline(QString* error) {
+    auto* crash = application_.crashReportAdapter();
+    if (crash == nullptr) {
+        *error = QStringLiteral("The crash-report surface is not available");
+        return false;
+    }
+    crash->dontSend();
+    return true;
+}
+
+bool QuickLiveVerifySource::RecordingErrorDismiss(QString* error) {
+    auto* failure = application_.recordingErrorAdapter();
+    if (failure == nullptr) {
+        *error = QStringLiteral("The failure surface is not available");
+        return false;
+    }
+    failure->dismiss();
+    return true;
+}
+
+bool QuickLiveVerifySource::RecordingErrorSendReport(QString* error) {
+    auto* failure = application_.recordingErrorAdapter();
+    if (failure == nullptr) {
+        *error = QStringLiteral("The failure surface is not available");
+        return false;
+    }
+    failure->sendReport();
+    return true;
+}
+
 // --- Shell intents -----------------------------------------------------------
 
 bool QuickLiveVerifySource::Navigate(const QString& page, QString* error) {
@@ -1073,6 +1499,29 @@ bool QuickLiveVerifySource::EditClose(QString* error) {
     // QCR-301: close() performs the whole teardown (context, trim, markers,
     // keyframes, position, clip generation) before emitting closeRequested().
     session->close();
+    return true;
+}
+
+bool QuickLiveVerifySource::ExportStart(QString* error) {
+    auto* exporter = application_.editExportAdapter();
+    if (exporter == nullptr) {
+        *error = QStringLiteral("The export panel is not available");
+        return false;
+    }
+    // The panel's own Export button. Container, destination and overwrite are
+    // whatever the panel resolved from the settings and the clip -- this is a
+    // product action, not a "write this file here" API.
+    exporter->startExport();
+    return true;
+}
+
+bool QuickLiveVerifySource::ExportCancel(QString* error) {
+    auto* exporter = application_.editExportAdapter();
+    if (exporter == nullptr) {
+        *error = QStringLiteral("The export panel is not available");
+        return false;
+    }
+    exporter->cancel();
     return true;
 }
 

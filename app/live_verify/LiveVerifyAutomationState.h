@@ -63,6 +63,13 @@ struct AutomationState {
     bool can_capture_frame = false;
     bool can_select_source = false;
 
+    bool can_add_marker = false;
+    // Whether a countdown is running. Derived from recording_state, but carried
+    // as its own predicate because that is what record.cancelCountdown's
+    // precondition reads -- and a precondition that string-compared a state name
+    // would be a second spelling of the state machine.
+    bool countdown_active = false;
+
     // --- Edit ----------------------------------------------------------------
     // QCR-001: an open session is state of the Record destination, so "open" and
     // "on screen" are two facts and both are reported. `edit_visible` is false
@@ -74,8 +81,39 @@ struct AutomationState {
     QString edit_playback = QStringLiteral("none");
     bool can_open_edit = false;
 
+    // The export's own lifecycle, in product vocabulary: "idle" | "options" |
+    // "exporting" | "completed" | "cancelled" | "failed". `edit_export_running`
+    // above stays what it was -- the predicate the close guard reads -- and this
+    // is the state a client waits on.
+    QString edit_export_state = QStringLiteral("idle");
+    bool can_export = false;
+
     // --- Shell surfaces ------------------------------------------------------
     bool notification_hub_open = false;
+    // How many entries the hub holds and how many are unread. Product state, not
+    // telemetry: an entry appearing IS something the user can act on.
+    int notification_count = 0;
+    int notification_unread = 0;
+
+    // --- Settings and profiles -----------------------------------------------
+    // The selected profile and whether the live configuration has drifted from
+    // it. Both are what the Settings preset row shows.
+    QString profile_id;
+    QString profile_name;
+    bool profile_built_in = false;
+    bool profile_dirty = false;
+
+    // --- Diagnostics ----------------------------------------------------------
+    // A check is in flight. Carried so diagnostics.run's precondition and the
+    // page's own disabled button read one predicate.
+    bool diagnostics_checking = false;
+
+    // --- Blocking surfaces, in detail -----------------------------------------
+    // Enough to know which actions the surface that is up actually offers.
+    // `blocking_surface` above says WHICH one; these say what it can do.
+    int recovery_candidate_count = 0;
+    bool recording_error_can_send_report = false;
+    bool crash_report_folder_available = false;
 
     // --- Update --------------------------------------------------------------
     // The update card's own state string, verbatim: "unchecked" | "checking" |

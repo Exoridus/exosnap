@@ -117,6 +117,19 @@ Outcome ExecuteReadOnly(const QString& command, const QJsonObject& params, LiveV
             return Failed(error_code::kInvalidParams, error);
         return Succeeded(events);
     }
+    if (command == QLatin1String("settings.describe"))
+        return Succeeded(source.SettingsDescribe());
+    if (command == QLatin1String("settings.get")) {
+        QString error;
+        const QJsonObject values = source.SettingsGet(ParamString(params, "key"), &error);
+        if (!error.isEmpty())
+            return Failed(error_code::kInvalidParams, error);
+        return Succeeded(values);
+    }
+    if (command == QLatin1String("profiles.list"))
+        return Succeeded(source.ProfilesSnapshot());
+    if (command == QLatin1String("notifications.snapshot"))
+        return Succeeded(source.NotificationsSnapshot());
     if (command == QLatin1String("session.latest"))
         return Succeeded(source.SessionReport(QString()));
     if (command == QLatin1String("session.get")) {
@@ -204,6 +217,19 @@ Outcome ExecuteMutating(const CommandDescriptor& command, const ParsedRequest& r
         return transport(&LiveVerifySource::RecordSplit);
     if (command.name == QLatin1String("record.captureFrame"))
         return transport(&LiveVerifySource::RecordCaptureFrame);
+    if (command.name == QLatin1String("record.addMarker"))
+        return transport(&LiveVerifySource::RecordAddMarker);
+
+    if (command.name == QLatin1String("record.cancelCountdown")) {
+        if (!source.RecordCancelCountdown(&error))
+            return IntentRefused(command, source, error);
+        // Declared synchronous, so the countdown really has to be gone by the
+        // time this answers -- the transport press that cancels it is a direct
+        // connection, and anything else would be `settled:false`.
+        if (source.State().countdown_active)
+            return PostconditionMissed(command.name, QStringLiteral("the countdown ending"));
+        return Succeeded(source.RecordSnapshot());
+    }
 
     if (command.name == QLatin1String("ui.navigate")) {
         const QString page = ParamString(params, "page");
@@ -332,6 +358,138 @@ Outcome ExecuteMutating(const CommandDescriptor& command, const ParsedRequest& r
         // was given. The UPDATE, of course, has not happened -- hence
         // settled:false and a completion that lives in another process.
         return Succeeded(UpdatePayload(source), /*settled=*/false);
+    }
+
+    // --- Settings and profiles ----------------------------------------------
+
+    if (command.name == QLatin1String("settings.set")) {
+        const QString key = ParamString(params, "key");
+        if (!source.SettingsSet(key, params.value(QStringLiteral("value")), &error))
+            return IntentRefused(command, source, error);
+        // The RECONCILED value, read back through the same key. A response that
+        // echoed the request would hide the whole point of writing through the
+        // product edge: MP4 turns an AV1 request into H.264, and the caller has
+        // to be able to see that without a second round trip.
+        QString read_error;
+        QJsonObject result = source.SettingsGet(key, &read_error);
+        result.insert(QStringLiteral("requested"), params.value(QStringLiteral("value")));
+        return Succeeded(result);
+    }
+
+    if (command.name == QLatin1String("settings.reset")) {
+        if (!source.SettingsReset(&error))
+            return IntentRefused(command, source, error);
+        QString read_error;
+        return Succeeded(source.SettingsGet(QString(), &read_error));
+    }
+
+    if (command.name == QLatin1String("profiles.select")) {
+        const QString id = ParamString(params, "id");
+        if (!source.ProfileSelect(id, &error))
+            return IntentRefused(command, source, error);
+        if (source.State().profile_id != id)
+            return PostconditionMissed(command.name, QStringLiteral("the profile becoming \"%1\"").arg(id));
+        return Succeeded(source.ProfilesSnapshot());
+    }
+
+    if (command.name == QLatin1String("profiles.create")) {
+        if (!source.ProfileCreate(ParamString(params, "name"), &error))
+            return IntentRefused(command, source, error);
+        return Succeeded(source.ProfilesSnapshot());
+    }
+
+    if (command.name == QLatin1String("profiles.rename")) {
+        if (!source.ProfileRename(ParamString(params, "name"), &error))
+            return IntentRefused(command, source, error);
+        return Succeeded(source.ProfilesSnapshot());
+    }
+
+    if (command.name == QLatin1String("profiles.delete")) {
+        if (!source.ProfileDelete(&error))
+            return IntentRefused(command, source, error);
+        return Succeeded(source.ProfilesSnapshot());
+    }
+
+    // --- Export ---------------------------------------------------------------
+    // Both asynchronous: a remux runs on its own thread and finishes into the
+    // export state, which is what a client waits on.
+
+    if (command.name == QLatin1String("export.start")) {
+        if (!source.ExportStart(&error))
+            return IntentRefused(command, source, error);
+        return Succeeded(source.EditorSnapshot(), /*settled=*/false);
+    }
+    if (command.name == QLatin1String("export.cancel")) {
+        if (!source.ExportCancel(&error))
+            return IntentRefused(command, source, error);
+        return Succeeded(source.EditorSnapshot(), /*settled=*/false);
+    }
+
+    // --- Diagnostics and logs --------------------------------------------------
+
+    if (command.name == QLatin1String("diagnostics.run")) {
+        if (!source.DiagnosticsRun(&error))
+            return IntentRefused(command, source, error);
+        // The probe runs on a worker thread; `checking` going false again is the
+        // completion, and that is a stateRevision advance.
+        return Succeeded(source.DiagnosticsSnapshot(), /*settled=*/false);
+    }
+    if (command.name == QLatin1String("logs.open")) {
+        if (!source.LogsOpen(&error))
+            return IntentRefused(command, source, error);
+        QJsonObject result;
+        result.insert(QStringLiteral("page"), source.State().page);
+        return Succeeded(result);
+    }
+
+    // --- Blocking surfaces ------------------------------------------------------
+
+    if (command.name == QLatin1String("recovery.continue") || command.name == QLatin1String("recovery.discard")) {
+        const int index = static_cast<int>(ParamInt(params, "index"));
+        const bool discard = command.name.endsWith(QLatin1String("discard"));
+        if (!(discard ? source.RecoveryDiscard(index, &error) : source.RecoveryContinue(index, &error)))
+            return IntentRefused(command, source, error);
+        // Both do real work on real files, off this thread. What is settled is
+        // that the request was accepted.
+        return Succeeded(StateToJson(source.State(), source.StateRevision()), /*settled=*/false);
+    }
+
+    const auto surface_action = [&](bool (LiveVerifySource::*intent)(QString*), const char* expectation) {
+        if (!(source.*intent)(&error))
+            return IntentRefused(command, source, error);
+        if (!source.State().blocking_surface.isEmpty())
+            return PostconditionMissed(command.name, Text(expectation));
+        return Succeeded(StateToJson(source.State(), source.StateRevision()));
+    };
+    if (command.name == QLatin1String("recovery.dismiss"))
+        return surface_action(&LiveVerifySource::RecoveryDismiss, "the recovery surface closing");
+    if (command.name == QLatin1String("crashReport.send"))
+        return surface_action(&LiveVerifySource::CrashReportSend, "the crash surface closing");
+    if (command.name == QLatin1String("crashReport.decline"))
+        return surface_action(&LiveVerifySource::CrashReportDecline, "the crash surface closing");
+    if (command.name == QLatin1String("recordingError.dismiss"))
+        return surface_action(&LiveVerifySource::RecordingErrorDismiss, "the failure surface closing");
+    if (command.name == QLatin1String("recordingError.sendReport"))
+        return surface_action(&LiveVerifySource::RecordingErrorSendReport, "the failure surface closing");
+
+    // --- Notifications ----------------------------------------------------------
+
+    if (command.name == QLatin1String("notification.dismiss")) {
+        const qint64 sequence = ParamInt(params, "sequence");
+        if (!source.NotificationDismiss(sequence, &error))
+            return IntentRefused(command, source, error);
+        return Succeeded(source.NotificationsSnapshot());
+    }
+
+    if (command.name == QLatin1String("notification.invokeAction")) {
+        const QString which = ParamString(params, "action");
+        if (!source.NotificationInvokeAction(ParamInt(params, "sequence"),
+                                             which.isEmpty() ? QStringLiteral("primary") : which, &error)) {
+            return IntentRefused(command, source, error);
+        }
+        // An action navigates, opens Explorer or relaunches elevated. None of
+        // those is observable in this response.
+        return Succeeded(source.NotificationsSnapshot(), /*settled=*/false);
     }
 
     if (command.name == QLatin1String("notification.clearAll")) {

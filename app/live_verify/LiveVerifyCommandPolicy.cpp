@@ -235,6 +235,138 @@ PreconditionVerdict CanUpdateApply(const AutomationState& state) {
     return Allowed();
 }
 
+// --- Settings, profiles, notifications, diagnostics -------------------------
+
+// A settings write during a recording would change the configuration the
+// session is running under, which the product does not do either: the Settings
+// controls are locked while the transport is live. `blocked` rather than
+// `invalid_state` -- the state is a perfectly ordinary one and a product rule
+// refuses anyway.
+PreconditionVerdict CanWriteSettings(const AutomationState& state) {
+    if (const PreconditionVerdict blocked = RefuseUnderBlockingSurface(state); !blocked.allowed())
+        return blocked;
+    const bool live =
+        state.recording_state == QLatin1String("Recording") || state.recording_state == QLatin1String("Paused") ||
+        state.recording_state == QLatin1String("Preparing") || state.recording_state == QLatin1String("Countdown") ||
+        state.recording_state == QLatin1String("Stopping") || state.recording_state == QLatin1String("Saving");
+    if (!live)
+        return Allowed();
+    return Refuse(error_code::kBlocked, QStringLiteral("Settings cannot be changed while a recording is in flight"),
+                  QStringLiteral("recordingState"), QStringLiteral("Ready|Blocked|Completed|Failed"),
+                  state.recording_state);
+}
+
+PreconditionVerdict CanDeleteProfile(const AutomationState& state) {
+    if (const PreconditionVerdict writable = CanWriteSettings(state); !writable.allowed())
+        return writable;
+    if (!state.profile_built_in)
+        return Allowed();
+    // The shipped profiles are read-only by product rule, not by accident.
+    return Refuse(error_code::kBlocked, QStringLiteral("A built-in profile cannot be deleted or renamed"),
+                  QStringLiteral("profileBuiltIn"), false, true);
+}
+
+PreconditionVerdict CanRunDiagnostics(const AutomationState& state) {
+    if (!state.diagnostics_checking)
+        return Allowed();
+    return Refuse(error_code::kInvalidState, QStringLiteral("A diagnostics check is already running"),
+                  QStringLiteral("diagnosticsChecking"), false, true);
+}
+
+PreconditionVerdict CanActOnNotification(const AutomationState& state) {
+    if (state.notification_count > 0)
+        return Allowed();
+    return Refuse(error_code::kInvalidState, QStringLiteral("The notification hub is empty"),
+                  QStringLiteral("notificationCount"), QStringLiteral(">0"), state.notification_count);
+}
+
+PreconditionVerdict CanAddMarker(const AutomationState& state) {
+    if (state.can_add_marker)
+        return Allowed();
+    return Refuse(error_code::kInvalidState,
+                  QStringLiteral("record.addMarker is not available in the %1 state").arg(state.recording_state),
+                  QStringLiteral("canAddMarker"), true, false);
+}
+
+PreconditionVerdict CanCancelCountdown(const AutomationState& state) {
+    if (state.countdown_active)
+        return Allowed();
+    return Refuse(error_code::kInvalidState, QStringLiteral("No countdown is running"),
+                  QStringLiteral("countdownActive"), true, false);
+}
+
+// --- Export ------------------------------------------------------------------
+
+PreconditionVerdict CanStartExport(const AutomationState& state) {
+    if (const PreconditionVerdict open = RequireEditSession(state, "export.start"); !open.allowed())
+        return open;
+    if (state.can_export)
+        return Allowed();
+    // The panel's own gate, read rather than re-derived: it already knows about
+    // a running export, a missing clip and an unresolvable destination.
+    return Refuse(error_code::kInvalidState, QStringLiteral("The export panel cannot start an export right now"),
+                  QStringLiteral("canExport"), true, false);
+}
+
+PreconditionVerdict CanCancelExport(const AutomationState& state) {
+    if (state.edit_export_running)
+        return Allowed();
+    return Refuse(error_code::kInvalidState, QStringLiteral("No export is running"), QStringLiteral("exportRunning"),
+                  true, false);
+}
+
+// --- Blocking surfaces --------------------------------------------------------
+//
+// The inverse of every other precondition in this file: these commands are the
+// ONLY ones that require a blocking surface, because they are that surface's own
+// buttons. Answering the question in front of the user is never "driving the
+// shell behind it".
+
+PreconditionVerdict RequireSurface(const AutomationState& state, const char* surface, const char* command) {
+    if (state.blocking_surface == QLatin1String(surface))
+        return Allowed();
+    return Refuse(error_code::kInvalidState,
+                  QStringLiteral("%1 belongs to the %2 surface, which is not open").arg(Text(command), Text(surface)),
+                  QStringLiteral("blockingSurface"), Text(surface), BlockingSurfaceValue(state.blocking_surface));
+}
+
+PreconditionVerdict CanActOnRecovery(const AutomationState& state) {
+    if (const PreconditionVerdict up = RequireSurface(state, blocking_surface_name::kRecovery, "recovery action");
+        !up.allowed()) {
+        return up;
+    }
+    if (state.recovery_candidate_count > 0)
+        return Allowed();
+    return Refuse(error_code::kInvalidState, QStringLiteral("There is no recoverable session to act on"),
+                  QStringLiteral("recoveryCandidates"), QStringLiteral(">0"), state.recovery_candidate_count);
+}
+
+PreconditionVerdict CanDismissRecovery(const AutomationState& state) {
+    return RequireSurface(state, blocking_surface_name::kRecovery, "recovery.dismiss");
+}
+
+PreconditionVerdict CanActOnCrashReport(const AutomationState& state) {
+    return RequireSurface(state, blocking_surface_name::kCrashReport, "crashReport action");
+}
+
+PreconditionVerdict CanDismissRecordingError(const AutomationState& state) {
+    return RequireSurface(state, blocking_surface_name::kRecordingError, "recordingError.dismiss");
+}
+
+PreconditionVerdict CanSendRecordingErrorReport(const AutomationState& state) {
+    if (const PreconditionVerdict up =
+            RequireSurface(state, blocking_surface_name::kRecordingError, "recordingError.sendReport");
+        !up.allowed()) {
+        return up;
+    }
+    if (state.recording_error_can_send_report)
+        return Allowed();
+    // Consent, or the absence of a report to send. Either way the button is not
+    // there, and the command must not be either.
+    return Refuse(error_code::kBlocked, QStringLiteral("This failure has no report that may be sent"),
+                  QStringLiteral("canSendReport"), true, false);
+}
+
 const QStringList& PageValues() {
     static const QStringList values = {Text(page_name::kRecord), Text(page_name::kSettings),
                                        Text(page_name::kDiagnostics), Text(page_name::kLogs), Text(page_name::kAbout)};
@@ -343,6 +475,8 @@ const QVector<CommandDescriptor>& AllCommands() {
         {QStringLiteral("record.stop"), 1, true, false, Settle::Asynchronous, {}, &CanStop},
         {QStringLiteral("record.split"), 1, true, false, Settle::Asynchronous, {}, &CanSplit},
         {QStringLiteral("record.captureFrame"), 1, true, false, Settle::Asynchronous, {}, &CanCaptureFrame},
+        {QStringLiteral("record.addMarker"), 2, true, false, Settle::Asynchronous, {}, &CanAddMarker},
+        {QStringLiteral("record.cancelCountdown"), 2, true, true, Settle::Synchronous, {}, &CanCancelCountdown},
 
         // --- Navigation and scrolling ----------------------------------------
         {QStringLiteral("ui.navigate"),
@@ -404,6 +538,107 @@ const QVector<CommandDescriptor>& AllCommands() {
         {QStringLiteral("notificationHub.open"), 2, true, true, Settle::Synchronous, {}, &NoPrecondition},
         {QStringLiteral("notificationHub.close"), 2, true, true, Settle::Synchronous, {}, &NoPrecondition},
         {QStringLiteral("notification.clearAll"), 2, true, true, Settle::Synchronous, {}, &NoPrecondition},
+        {QStringLiteral("notifications.snapshot"), 2, false, true, Settle::NotApplicable, {}, &NoPrecondition},
+        {QStringLiteral("notification.dismiss"),
+         2,
+         true,
+         true,
+         Settle::Synchronous,
+         {Param("sequence", "int", true)},
+         &CanActOnNotification},
+        {QStringLiteral("notification.invokeAction"),
+         2,
+         true,
+         // Not idempotent: an action navigates, opens a folder or relaunches.
+         // Sending it twice is two requests, and ipc.describe says so.
+         false,
+         Settle::Asynchronous,
+         {Param("sequence", "int", true),
+          Param("action", "enum", false, {QStringLiteral("primary"), QStringLiteral("secondary")})},
+         &CanActOnNotification},
+
+        // --- Settings and profiles ---------------------------------------------
+        // describe/get are unconditional observations; every write is refused
+        // while a recording is in flight, exactly as the Settings controls are.
+        {QStringLiteral("settings.describe"), 2, false, true, Settle::NotApplicable, {}, &NoPrecondition},
+        {QStringLiteral("settings.get"),
+         2,
+         false,
+         true,
+         Settle::NotApplicable,
+         {Param("key", "string", false)},
+         &NoPrecondition},
+        {QStringLiteral("settings.set"),
+         2,
+         true,
+         true,
+         Settle::Synchronous,
+         {Param("key", "string", true), Param("value", "any", true)},
+         &CanWriteSettings},
+        {QStringLiteral("settings.reset"), 2, true, true, Settle::Synchronous, {}, &CanWriteSettings},
+
+        {QStringLiteral("profiles.list"), 2, false, true, Settle::NotApplicable, {}, &NoPrecondition},
+        {QStringLiteral("profiles.select"),
+         2,
+         true,
+         true,
+         Settle::Synchronous,
+         {Param("id", "string", true)},
+         &CanWriteSettings},
+        {QStringLiteral("profiles.create"),
+         2,
+         true,
+         // Two creates with the same name are two profiles, not one.
+         false,
+         Settle::Synchronous,
+         {Param("name", "string", true)},
+         &CanWriteSettings},
+        {QStringLiteral("profiles.rename"),
+         2,
+         true,
+         true,
+         Settle::Synchronous,
+         {Param("name", "string", true)},
+         &CanDeleteProfile},
+        {QStringLiteral("profiles.delete"), 2, true, true, Settle::Synchronous, {}, &CanDeleteProfile},
+
+        // --- Export --------------------------------------------------------------
+        {QStringLiteral("export.start"), 2, true, true, Settle::Asynchronous, {}, &CanStartExport},
+        {QStringLiteral("export.cancel"), 2, true, true, Settle::Asynchronous, {}, &CanCancelExport},
+
+        // --- Diagnostics and logs ------------------------------------------------
+        {QStringLiteral("diagnostics.run"), 2, true, true, Settle::Asynchronous, {}, &CanRunDiagnostics},
+        {QStringLiteral("logs.open"), 2, true, true, Settle::Synchronous, {}, &NoPrecondition},
+
+        // --- Blocking surfaces ---------------------------------------------------
+        // The one group whose precondition REQUIRES a blocking surface: these are
+        // that surface's own buttons, and answering the question in front of the
+        // user is not the same thing as driving the shell behind it.
+        {QStringLiteral("recovery.continue"),
+         2,
+         true,
+         true,
+         Settle::Asynchronous,
+         {Param("index", "int", false)},
+         &CanActOnRecovery},
+        {QStringLiteral("recovery.discard"),
+         2,
+         true,
+         true,
+         Settle::Asynchronous,
+         {Param("index", "int", false)},
+         &CanActOnRecovery},
+        {QStringLiteral("recovery.dismiss"), 2, true, true, Settle::Synchronous, {}, &CanDismissRecovery},
+        {QStringLiteral("crashReport.send"), 2, true, true, Settle::Synchronous, {}, &CanActOnCrashReport},
+        {QStringLiteral("crashReport.decline"), 2, true, true, Settle::Synchronous, {}, &CanActOnCrashReport},
+        {QStringLiteral("recordingError.dismiss"), 2, true, true, Settle::Synchronous, {}, &CanDismissRecordingError},
+        {QStringLiteral("recordingError.sendReport"),
+         2,
+         true,
+         true,
+         Settle::Synchronous,
+         {},
+         &CanSendRecordingErrorReport},
 
         // --- Update ------------------------------------------------------------
         // The only product area with its own state machine that the channel did
@@ -451,6 +686,11 @@ QJsonObject StateToJson(const AutomationState& state, std::uint64_t state_revisi
     json.insert(QStringLiteral("editVisible"), state.edit_visible);
     json.insert(QStringLiteral("editPlayback"), state.edit_playback);
     json.insert(QStringLiteral("exportRunning"), state.edit_export_running);
+    json.insert(QStringLiteral("exportState"), state.edit_export_state);
+    json.insert(QStringLiteral("canExport"), state.can_export);
+    json.insert(QStringLiteral("countdownActive"), state.countdown_active);
+    json.insert(QStringLiteral("canAddMarker"), state.can_add_marker);
+    json.insert(QStringLiteral("diagnosticsChecking"), state.diagnostics_checking);
     json.insert(QStringLiteral("blockingSurface"), BlockingSurfaceValue(state.blocking_surface));
     json.insert(QStringLiteral("sourcePicker"),
                 state.source_picker_open ? QStringLiteral("open") : QStringLiteral("closed"));
@@ -461,6 +701,27 @@ QJsonObject StateToJson(const AutomationState& state, std::uint64_t state_revisi
     source.insert(QStringLiteral("name"), state.selected_source_name);
     source.insert(QStringLiteral("kind"), state.selected_source_kind);
     json.insert(QStringLiteral("selectedSource"), source);
+
+    QJsonObject notifications;
+    notifications.insert(QStringLiteral("count"), state.notification_count);
+    notifications.insert(QStringLiteral("unread"), state.notification_unread);
+    json.insert(QStringLiteral("notifications"), notifications);
+
+    QJsonObject profile;
+    profile.insert(QStringLiteral("id"), state.profile_id);
+    profile.insert(QStringLiteral("name"), state.profile_name);
+    profile.insert(QStringLiteral("builtIn"), state.profile_built_in);
+    profile.insert(QStringLiteral("dirty"), state.profile_dirty);
+    json.insert(QStringLiteral("profile"), profile);
+
+    // What the surface that is up can actually do. Reported unconditionally --
+    // zeroes when no surface is open are the honest answer, and a client that
+    // branches on `blockingSurface` never reads them then.
+    QJsonObject surfaces;
+    surfaces.insert(QStringLiteral("recoveryCandidates"), state.recovery_candidate_count);
+    surfaces.insert(QStringLiteral("recordingErrorCanSendReport"), state.recording_error_can_send_report);
+    surfaces.insert(QStringLiteral("crashFolderAvailable"), state.crash_report_folder_available);
+    json.insert(QStringLiteral("blockingSurfaceDetail"), surfaces);
 
     QJsonObject update;
     update.insert(QStringLiteral("state"), state.update_state);

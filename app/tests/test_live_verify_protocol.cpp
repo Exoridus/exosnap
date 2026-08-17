@@ -56,8 +56,16 @@ AutomationState PermissiveState() {
     state.can_capture_frame = true;
     state.can_select_source = true;
     state.can_open_edit = true;
+    state.can_add_marker = true;
+    state.countdown_active = true;
     state.edit_session_open = true;
     state.edit_visible = true;
+    state.can_export = true;
+    // One entry in the hub, so the notification commands have something to act
+    // on. Deliberately NOT an export in flight: export.cancel needs one and
+    // edit.close refuses under one, so that flag is set per command below.
+    state.notification_count = 1;
+    state.profile_id = QStringLiteral("preset.default");
     // An offered update with nothing in the way, so the update commands are
     // reachable by default and a test that wants them refused says so.
     state.update_state = QStringLiteral("available");
@@ -152,6 +160,124 @@ class FakeSource final : public LiveVerifySource {
         return json;
     }
 
+    // --- Settings, profiles, notifications ----------------------------------
+    QString last_settings_key;
+    QJsonValue last_settings_value;
+
+    [[nodiscard]] QJsonObject SettingsDescribe() const override {
+        return Marker(QStringLiteral("settings.describe"));
+    }
+    [[nodiscard]] QJsonObject SettingsGet(const QString& key, QString* error) const override {
+        if (key == QLatin1String("nope")) {
+            *error = QStringLiteral("No settings key named \"nope\"");
+            return {};
+        }
+        QJsonObject json = Marker(QStringLiteral("settings.get"));
+        json.insert(QStringLiteral("requestedKey"), key);
+        return json;
+    }
+    bool SettingsSet(const QString& key, const QJsonValue& value, QString* error) override {
+        calls.append(QStringLiteral("settings.set:%1").arg(key));
+        last_settings_key = key;
+        last_settings_value = value;
+        return Outcome(error);
+    }
+    bool SettingsReset(QString* error) override {
+        calls.append(QStringLiteral("settings.reset"));
+        return Outcome(error);
+    }
+
+    [[nodiscard]] QJsonObject ProfilesSnapshot() const override {
+        return Marker(QStringLiteral("profiles"));
+    }
+    bool ProfileSelect(const QString& id, QString* error) override {
+        calls.append(QStringLiteral("profiles.select:%1").arg(id));
+        if (allow_intents)
+            state.profile_id = id;
+        return Outcome(error);
+    }
+    bool ProfileCreate(const QString& name, QString* error) override {
+        calls.append(QStringLiteral("profiles.create:%1").arg(name));
+        return Outcome(error);
+    }
+    bool ProfileRename(const QString& name, QString* error) override {
+        calls.append(QStringLiteral("profiles.rename:%1").arg(name));
+        return Outcome(error);
+    }
+    bool ProfileDelete(QString* error) override {
+        calls.append(QStringLiteral("profiles.delete"));
+        return Outcome(error);
+    }
+
+    [[nodiscard]] QJsonObject NotificationsSnapshot() const override {
+        return Marker(QStringLiteral("notifications"));
+    }
+    bool NotificationDismiss(qint64 sequence, QString* error) override {
+        calls.append(QStringLiteral("notification.dismiss:%1").arg(sequence));
+        return Outcome(error);
+    }
+    bool NotificationInvokeAction(qint64 sequence, const QString& which, QString* error) override {
+        calls.append(QStringLiteral("notification.invokeAction:%1/%2").arg(sequence).arg(which));
+        return Outcome(error);
+    }
+
+    bool DiagnosticsRun(QString* error) override {
+        calls.append(QStringLiteral("diagnostics.run"));
+        return Outcome(error);
+    }
+    bool LogsOpen(QString* error) override {
+        calls.append(QStringLiteral("logs.open"));
+        return Outcome(error);
+    }
+
+    bool RecoveryContinue(int index, QString* error) override {
+        calls.append(QStringLiteral("recovery.continue:%1").arg(index));
+        return Outcome(error);
+    }
+    bool RecoveryDiscard(int index, QString* error) override {
+        calls.append(QStringLiteral("recovery.discard:%1").arg(index));
+        return Outcome(error);
+    }
+    bool RecoveryDismiss(QString* error) override {
+        calls.append(QStringLiteral("recovery.dismiss"));
+        if (allow_intents)
+            state.blocking_surface.clear();
+        return Outcome(error);
+    }
+    bool CrashReportSend(QString* error) override {
+        calls.append(QStringLiteral("crashReport.send"));
+        if (allow_intents)
+            state.blocking_surface.clear();
+        return Outcome(error);
+    }
+    bool CrashReportDecline(QString* error) override {
+        calls.append(QStringLiteral("crashReport.decline"));
+        if (allow_intents)
+            state.blocking_surface.clear();
+        return Outcome(error);
+    }
+    bool RecordingErrorDismiss(QString* error) override {
+        calls.append(QStringLiteral("recordingError.dismiss"));
+        if (allow_intents)
+            state.blocking_surface.clear();
+        return Outcome(error);
+    }
+    bool RecordingErrorSendReport(QString* error) override {
+        calls.append(QStringLiteral("recordingError.sendReport"));
+        if (allow_intents)
+            state.blocking_surface.clear();
+        return Outcome(error);
+    }
+
+    bool ExportStart(QString* error) override {
+        calls.append(QStringLiteral("export.start"));
+        return Outcome(error);
+    }
+    bool ExportCancel(QString* error) override {
+        calls.append(QStringLiteral("export.cancel"));
+        return Outcome(error);
+    }
+
     bool MoveWindowToScreen(const QString& screen_name, QString* error) override {
         calls.append(QStringLiteral("moveToScreen:%1").arg(screen_name));
         return Outcome(error);
@@ -182,6 +308,16 @@ class FakeSource final : public LiveVerifySource {
     }
     bool RecordCaptureFrame(QString* error) override {
         calls.append(QStringLiteral("captureFrame"));
+        return Outcome(error);
+    }
+    bool RecordAddMarker(QString* error) override {
+        calls.append(QStringLiteral("addMarker"));
+        return Outcome(error);
+    }
+    bool RecordCancelCountdown(QString* error) override {
+        calls.append(QStringLiteral("cancelCountdown"));
+        if (allow_intents)
+            state.countdown_active = false;
         return Outcome(error);
     }
 
@@ -648,6 +784,26 @@ TEST(LiveVerifyDispatcher, EveryListedCommandIsActuallyImplemented) {
             // current page.
             source.state.page = QString::fromLatin1(page_name::kSettings);
         }
+        // Settings and profiles are locked while a recording is in flight, the
+        // way the Settings controls are.
+        if (command.name.startsWith(QStringLiteral("settings.")) ||
+            command.name.startsWith(QStringLiteral("profiles."))) {
+            source.state.recording_state = QStringLiteral("Ready");
+            source.state.profile_built_in = false;
+        }
+        // The blocking-surface commands are the inverse of every other one here:
+        // they REQUIRE their surface, because they are its own buttons.
+        if (command.name.startsWith(QStringLiteral("recovery."))) {
+            source.state.blocking_surface = QString::fromLatin1(blocking_surface_name::kRecovery);
+            source.state.recovery_candidate_count = 1;
+        } else if (command.name.startsWith(QStringLiteral("crashReport."))) {
+            source.state.blocking_surface = QString::fromLatin1(blocking_surface_name::kCrashReport);
+        } else if (command.name.startsWith(QStringLiteral("recordingError."))) {
+            source.state.blocking_surface = QString::fromLatin1(blocking_surface_name::kRecordingError);
+            source.state.recording_error_can_send_report = true;
+        }
+        if (command.name == QStringLiteral("export.cancel"))
+            source.state.edit_export_running = true;
         const QJsonObject response = dispatcher.Dispatch(RequestV2(command.name, PlausibleParams(command)));
         EXPECT_TRUE(Ok(response)) << command.name.toStdString() << ": " << ErrorCode(response).toStdString();
     }
@@ -828,6 +984,203 @@ TEST(LiveVerifyDispatcher, ObservabilityQueriesAreProtocolTwoOnly) {
         EXPECT_EQ(ErrorCode(dispatcher.Dispatch(Request(command))), QString::fromLatin1(error_code::kUnknownCommand))
             << command.toStdString();
     }
+}
+
+TEST(LiveVerifyDispatcher, SettingsSetAnswersWithTheReconciledValueAndNotTheRequestedOne) {
+    FakeSource source;
+    source.state.recording_state = QStringLiteral("Ready");
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    QJsonObject params;
+    params.insert(QStringLiteral("key"), QStringLiteral("video.container"));
+    params.insert(QStringLiteral("value"), QStringLiteral("MP4"));
+    const QJsonObject response = dispatcher.Dispatch(RequestV2(QStringLiteral("settings.set"), params));
+    ASSERT_TRUE(Ok(response));
+
+    EXPECT_EQ(source.last_settings_key, QStringLiteral("video.container"));
+    EXPECT_EQ(source.last_settings_value.toString(), QStringLiteral("MP4"));
+    const QJsonObject result = response.value(QStringLiteral("result")).toObject();
+    // The response is a READ BACK, not an echo. MP4 turns an AV1 request into
+    // H.264, and a caller has to be able to see that without a second round trip
+    // -- so both the read-back and what was asked for are present.
+    EXPECT_EQ(result.value(QStringLiteral("marker")).toString(), QStringLiteral("settings.get"));
+    EXPECT_EQ(result.value(QStringLiteral("requestedKey")).toString(), QStringLiteral("video.container"));
+    EXPECT_EQ(result.value(QStringLiteral("requested")).toString(), QStringLiteral("MP4"));
+}
+
+TEST(LiveVerifyDispatcher, SettingsSetIsRefusedWhileARecordingIsInFlight) {
+    FakeSource source;
+    source.state.recording_state = QStringLiteral("Recording");
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    QJsonObject params;
+    params.insert(QStringLiteral("key"), QStringLiteral("video.container"));
+    params.insert(QStringLiteral("value"), QStringLiteral("MP4"));
+    const QJsonObject response = dispatcher.Dispatch(RequestV2(QStringLiteral("settings.set"), params));
+    EXPECT_FALSE(Ok(response));
+    EXPECT_EQ(ErrorCode(response), QString::fromLatin1(error_code::kBlocked));
+    // Refused BEFORE the intent ran: an accepted-then-ignored write is the false
+    // success this whole precondition design exists to remove.
+    EXPECT_FALSE(source.calls.contains(QStringLiteral("settings.set:video.container")));
+}
+
+TEST(LiveVerifyDispatcher, AnUnknownSettingsKeyIsAClientErrorOnBothRead) {
+    FakeSource source;
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    QJsonObject params;
+    params.insert(QStringLiteral("key"), QStringLiteral("nope"));
+    const QJsonObject response = dispatcher.Dispatch(RequestV2(QStringLiteral("settings.get"), params));
+    EXPECT_FALSE(Ok(response));
+    EXPECT_EQ(ErrorCode(response), QString::fromLatin1(error_code::kInvalidParams));
+}
+
+TEST(LiveVerifyDispatcher, SettingsSetRequiresBothAKeyAndAValue) {
+    FakeSource source;
+    source.state.recording_state = QStringLiteral("Ready");
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    QJsonObject no_value;
+    no_value.insert(QStringLiteral("key"), QStringLiteral("video.container"));
+    EXPECT_EQ(ErrorCode(dispatcher.Dispatch(RequestV2(QStringLiteral("settings.set"), no_value))),
+              QString::fromLatin1(error_code::kInvalidParams));
+
+    // `value` is declared "any" because its type depends on the key -- but "any"
+    // still has to be PRESENT, or a write with no value would read as a write of
+    // whatever the key already holds.
+    QJsonObject no_key;
+    no_key.insert(QStringLiteral("value"), true);
+    EXPECT_EQ(ErrorCode(dispatcher.Dispatch(RequestV2(QStringLiteral("settings.set"), no_key))),
+              QString::fromLatin1(error_code::kInvalidParams));
+}
+
+TEST(LiveVerifyDispatcher, ProfileSelectionAssertsItsOwnPostcondition) {
+    FakeSource source;
+    source.state.recording_state = QStringLiteral("Ready");
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    QJsonObject params;
+    params.insert(QStringLiteral("id"), QStringLiteral("preset.mine"));
+    const QJsonObject response = dispatcher.Dispatch(RequestV2(QStringLiteral("profiles.select"), params));
+    ASSERT_TRUE(Ok(response));
+    EXPECT_TRUE(source.calls.contains(QStringLiteral("profiles.select:preset.mine")));
+    EXPECT_EQ(response.value(QStringLiteral("result")).toObject().value(QStringLiteral("marker")).toString(),
+              QStringLiteral("profiles"));
+
+    // A source that accepts the selection without making it is an operational
+    // failure, not a success -- the command is declared synchronous.
+    FakeSource silent;
+    silent.state.recording_state = QStringLiteral("Ready");
+    silent.allow_intents = true;
+    LiveVerifyDispatcher second(&silent, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(second, QString::fromLatin1(kRunId), 2)));
+    silent.state.profile_id = QStringLiteral("preset.other");
+    // Pin the id so the fake's own assignment cannot satisfy the postcondition.
+    silent.allow_intents = false;
+    EXPECT_FALSE(Ok(second.Dispatch(RequestV2(QStringLiteral("profiles.select"), params))));
+}
+
+TEST(LiveVerifyDispatcher, CountdownCancelIsSynchronousAndProvesTheCountdownEnded) {
+    FakeSource source;
+    source.state.recording_state = QStringLiteral("Countdown");
+    source.state.countdown_active = true;
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    const QJsonObject response = dispatcher.Dispatch(RequestV2(QStringLiteral("record.cancelCountdown")));
+    ASSERT_TRUE(Ok(response));
+    EXPECT_TRUE(source.calls.contains(QStringLiteral("cancelCountdown")));
+    // Declared synchronous, so it settles in this very response -- and it only
+    // gets to say so because the dispatcher re-read the state and found the
+    // countdown gone.
+    EXPECT_TRUE(response.value(QStringLiteral("settled")).toBool());
+
+    // With no countdown there is nothing to cancel, and the refusal is about the
+    // state rather than about a product rule.
+    FakeSource ready;
+    ready.state.countdown_active = false;
+    LiveVerifyDispatcher second(&ready, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(second, QString::fromLatin1(kRunId), 2)));
+    const QJsonObject refused = second.Dispatch(RequestV2(QStringLiteral("record.cancelCountdown")));
+    EXPECT_EQ(ErrorCode(refused), QString::fromLatin1(error_code::kInvalidState));
+}
+
+TEST(LiveVerifyDispatcher, ABlockingSurfaceActionMustLeaveTheSurfaceClosed) {
+    FakeSource source;
+    source.state.blocking_surface = QString::fromLatin1(blocking_surface_name::kRecordingError);
+    source.state.recording_error_can_send_report = true;
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    const QJsonObject response = dispatcher.Dispatch(RequestV2(QStringLiteral("recordingError.dismiss")));
+    ASSERT_TRUE(Ok(response));
+    EXPECT_TRUE(source.calls.contains(QStringLiteral("recordingError.dismiss")));
+    EXPECT_TRUE(response.value(QStringLiteral("result")).toObject().value(QStringLiteral("blockingSurface")).isNull());
+
+    // A surface that stays up after its own button was pressed is an operational
+    // failure. Nothing else in the protocol would notice it.
+    FakeSource stuck;
+    stuck.allow_intents = false;
+    stuck.state.blocking_surface = QString::fromLatin1(blocking_surface_name::kRecordingError);
+    LiveVerifyDispatcher second(&stuck, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(second, QString::fromLatin1(kRunId), 2)));
+    EXPECT_FALSE(Ok(second.Dispatch(RequestV2(QStringLiteral("recordingError.dismiss")))));
+}
+
+TEST(LiveVerifyDispatcher, NotificationActionsAddressAnEntryBySequenceAndNotByRow) {
+    FakeSource source;
+    source.state.notification_count = 3;
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    QJsonObject params;
+    params.insert(QStringLiteral("sequence"), 42);
+    ASSERT_TRUE(Ok(dispatcher.Dispatch(RequestV2(QStringLiteral("notification.dismiss"), params))));
+    EXPECT_TRUE(source.calls.contains(QStringLiteral("notification.dismiss:42")));
+
+    params.insert(QStringLiteral("action"), QStringLiteral("secondary"));
+    const QJsonObject invoked = dispatcher.Dispatch(RequestV2(QStringLiteral("notification.invokeAction"), params));
+    ASSERT_TRUE(Ok(invoked));
+    EXPECT_TRUE(source.calls.contains(QStringLiteral("notification.invokeAction:42/secondary")));
+    // An action navigates, opens Explorer or relaunches elevated. None of that
+    // is observable in the response, so it must not claim to be settled.
+    EXPECT_FALSE(invoked.value(QStringLiteral("settled")).toBool());
+
+    // The default slot is the primary button, so a client that only has one
+    // action does not have to name it.
+    QJsonObject bare;
+    bare.insert(QStringLiteral("sequence"), 7);
+    ASSERT_TRUE(Ok(dispatcher.Dispatch(RequestV2(QStringLiteral("notification.invokeAction"), bare))));
+    EXPECT_TRUE(source.calls.contains(QStringLiteral("notification.invokeAction:7/primary")));
+}
+
+TEST(LiveVerifyDispatcher, ExportAndDiagnosticsRunAreAcceptedWithoutClaimingCompletion) {
+    FakeSource source;
+    source.state.edit_session_open = true;
+    source.state.can_export = true;
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    const QJsonObject started = dispatcher.Dispatch(RequestV2(QStringLiteral("export.start")));
+    ASSERT_TRUE(Ok(started));
+    // A remux runs on its own thread. `ok` means accepted; the export state is
+    // what a client waits on.
+    EXPECT_FALSE(started.value(QStringLiteral("settled")).toBool());
+
+    const QJsonObject checked = dispatcher.Dispatch(RequestV2(QStringLiteral("diagnostics.run")));
+    ASSERT_TRUE(Ok(checked));
+    EXPECT_FALSE(checked.value(QStringLiteral("settled")).toBool());
+    EXPECT_TRUE(source.calls.contains(QStringLiteral("diagnostics.run")));
+
+    // A second check while one is running is refused rather than queued.
+    source.state.diagnostics_checking = true;
+    EXPECT_EQ(ErrorCode(dispatcher.Dispatch(RequestV2(QStringLiteral("diagnostics.run")))),
+              QString::fromLatin1(error_code::kInvalidState));
 }
 
 TEST(LiveVerifyDispatcher, ReadOnlyCommandsCarryNoSettledFlag) {
@@ -1379,8 +1732,11 @@ TEST(LiveVerifyDescribe, IdempotencyIsDeclaredAndPlayPauseIsTheExceptionThatIsNo
             EXPECT_EQ(command.value(QStringLiteral("settle")).toString(), QStringLiteral("asynchronous"));
     }
     EXPECT_TRUE(saw_play_pause);
-    // The six transport intents plus edit.playPause.
-    EXPECT_EQ(non_idempotent, 7);
+    // The seven transport intents (six plus record.addMarker -- a second marker
+    // is a second marker), edit.playPause, profiles.create (two creates with the
+    // same name are two profiles), and notification.invokeAction (an action
+    // navigates, opens a folder or relaunches).
+    EXPECT_EQ(non_idempotent, 10);
 }
 
 // ---------------------------------------------------------------------------

@@ -28,6 +28,7 @@
 #include "LiveVerifyAutomationState.h"
 
 #include <QJsonObject>
+#include <QJsonValue>
 #include <QString>
 
 #include <cstdint>
@@ -99,6 +100,52 @@ class LiveVerifySource {
     // empty. The same document the support bundle ships, not a second report.
     [[nodiscard]] virtual QJsonObject SessionReport(const QString& recording_session_id) const = 0;
 
+    // --- Settings and profiles (protocol 2) ---------------------------------
+    // Stable PRODUCT keys, never QML property names, and every write goes
+    // through the SettingsAdapter setter the QML control writes to -- so
+    // validation, container/codec reconciliation, persistence and the
+    // propagation into the recording side all happen exactly as for a user edit.
+    [[nodiscard]] virtual QJsonObject SettingsDescribe() const = 0;
+    // One key, or all of them when `key` is empty.
+    [[nodiscard]] virtual QJsonObject SettingsGet(const QString& key, QString* error) const = 0;
+    // Reconciliation is the product's answer, not a rejection: a write that the
+    // product changes its mind about is still a success, and the caller reads
+    // the result back to see what it became.
+    virtual bool SettingsSet(const QString& key, const QJsonValue& value, QString* error) = 0;
+    // The Settings card's own "Reset changes": back to the selected profile.
+    virtual bool SettingsReset(QString* error) = 0;
+
+    [[nodiscard]] virtual QJsonObject ProfilesSnapshot() const = 0;
+    virtual bool ProfileSelect(const QString& id, QString* error) = 0;
+    virtual bool ProfileCreate(const QString& name, QString* error) = 0;
+    virtual bool ProfileRename(const QString& name, QString* error) = 0;
+    virtual bool ProfileDelete(QString* error) = 0;
+
+    // --- Notifications (protocol 2) ------------------------------------------
+    // Entries by their manager-assigned SEQUENCE, which is the hub's own stable
+    // identity. Never by row index: the list is reordered by dismissal, and an
+    // index would address a different entry between reading and acting.
+    [[nodiscard]] virtual QJsonObject NotificationsSnapshot() const = 0;
+    virtual bool NotificationDismiss(qint64 sequence, QString* error) = 0;
+    // `which` is "primary" | "secondary" -- the two buttons the entry offers.
+    virtual bool NotificationInvokeAction(qint64 sequence, const QString& which, QString* error) = 0;
+
+    // --- Diagnostics and logs (protocol 2) -----------------------------------
+    virtual bool DiagnosticsRun(QString* error) = 0;
+    virtual bool LogsOpen(QString* error) = 0;
+
+    // --- Blocking surfaces (protocol 2) --------------------------------------
+    // Only the actions the surface really offers. There is no failure injection
+    // here and never will be: raising a recovery or crash surface is something
+    // the product does in response to a real event, not a command.
+    virtual bool RecoveryContinue(int index, QString* error) = 0;
+    virtual bool RecoveryDiscard(int index, QString* error) = 0;
+    virtual bool RecoveryDismiss(QString* error) = 0;
+    virtual bool CrashReportSend(QString* error) = 0;
+    virtual bool CrashReportDecline(QString* error) = 0;
+    virtual bool RecordingErrorDismiss(QString* error) = 0;
+    virtual bool RecordingErrorSendReport(QString* error) = 0;
+
     // --- Intents ------------------------------------------------------------
     // All return false with a filled `error` rather than throwing; a refused
     // intent is a normal, reportable acceptance outcome.
@@ -122,6 +169,12 @@ class LiveVerifySource {
     virtual bool RecordStop(QString* error) = 0;
     virtual bool RecordSplit(QString* error) = 0;
     virtual bool RecordCaptureFrame(QString* error) = 0;
+    // The marker hotkey's own action, and the transport press that cancels a
+    // running countdown -- both product behaviours, neither of them reachable
+    // before. cancelCountdown presses the same transport a user presses; the
+    // command exists so the INTENT is expressible and can carry a precondition.
+    virtual bool RecordAddMarker(QString* error) = 0;
+    virtual bool RecordCancelCountdown(QString* error) = 0;
 
     // --- Shell intents (protocol 2) -----------------------------------------
 
@@ -184,6 +237,11 @@ class LiveVerifySource {
     virtual bool EditTimelineHome(QString* error) = 0;
     virtual bool EditTimelineEnd(QString* error) = 0;
     virtual bool EditClose(QString* error) = 0;
+    // The export panel's own start and cancel. Product semantics only: there is
+    // no "write this file" here, and the destination stays whatever the panel
+    // resolved from the settings and the clip.
+    virtual bool ExportStart(QString* error) = 0;
+    virtual bool ExportCancel(QString* error) = 0;
 };
 
 } // namespace exosnap::live_verify

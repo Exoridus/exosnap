@@ -122,6 +122,83 @@ class StubSource final : public LiveVerifySource {
     [[nodiscard]] QJsonObject SessionReport(const QString&) const override {
         return {};
     }
+    // The C4 product surface, stubbed for the same reason as the snapshots
+    // above: these cases are about the pipe, not about what travels through it.
+    [[nodiscard]] QJsonObject SettingsDescribe() const override {
+        return {};
+    }
+    [[nodiscard]] QJsonObject SettingsGet(const QString&, QString*) const override {
+        return {};
+    }
+    bool SettingsSet(const QString&, const QJsonValue&, QString*) override {
+        return true;
+    }
+    bool SettingsReset(QString*) override {
+        return true;
+    }
+    [[nodiscard]] QJsonObject ProfilesSnapshot() const override {
+        return {};
+    }
+    bool ProfileSelect(const QString&, QString*) override {
+        return true;
+    }
+    bool ProfileCreate(const QString&, QString*) override {
+        return true;
+    }
+    bool ProfileRename(const QString&, QString*) override {
+        return true;
+    }
+    bool ProfileDelete(QString*) override {
+        return true;
+    }
+    [[nodiscard]] QJsonObject NotificationsSnapshot() const override {
+        return {};
+    }
+    bool NotificationDismiss(qint64, QString*) override {
+        return true;
+    }
+    bool NotificationInvokeAction(qint64, const QString&, QString*) override {
+        return true;
+    }
+    bool DiagnosticsRun(QString*) override {
+        return true;
+    }
+    bool LogsOpen(QString*) override {
+        return true;
+    }
+    bool RecoveryContinue(int, QString*) override {
+        return true;
+    }
+    bool RecoveryDiscard(int, QString*) override {
+        return true;
+    }
+    bool RecoveryDismiss(QString*) override {
+        return true;
+    }
+    bool CrashReportSend(QString*) override {
+        return true;
+    }
+    bool CrashReportDecline(QString*) override {
+        return true;
+    }
+    bool RecordingErrorDismiss(QString*) override {
+        return true;
+    }
+    bool RecordingErrorSendReport(QString*) override {
+        return true;
+    }
+    bool ExportStart(QString*) override {
+        return true;
+    }
+    bool ExportCancel(QString*) override {
+        return true;
+    }
+    bool RecordAddMarker(QString*) override {
+        return true;
+    }
+    bool RecordCancelCountdown(QString*) override {
+        return true;
+    }
     bool MoveWindowToScreen(const QString&, QString*) override {
         return true;
     }

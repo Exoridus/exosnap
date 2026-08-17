@@ -50,7 +50,12 @@ struct PreconditionVerdict {
 
 struct CommandParameter {
     QString name;
-    // "string" | "int" | "bool" | "enum"
+    // "string" | "int" | "bool" | "enum" | "any"
+    //
+    // "any" is for a parameter whose type depends on another parameter and can
+    // therefore only be checked by the command itself (settings.set's `value`,
+    // which is a bool, a number or a string according to the key). It still has
+    // to be PRESENT when required.
     QString type;
     bool required = false;
     // Populated for "enum" only, and it is the exact accepted set -- the

@@ -81,6 +81,37 @@ class QuickLiveVerifySource final : public QObject, public live_verify::LiveVeri
     bool RecordStop(QString* error) override;
     bool RecordSplit(QString* error) override;
     bool RecordCaptureFrame(QString* error) override;
+    bool RecordAddMarker(QString* error) override;
+    bool RecordCancelCountdown(QString* error) override;
+
+    [[nodiscard]] QJsonObject SettingsDescribe() const override;
+    [[nodiscard]] QJsonObject SettingsGet(const QString& key, QString* error) const override;
+    bool SettingsSet(const QString& key, const QJsonValue& value, QString* error) override;
+    bool SettingsReset(QString* error) override;
+
+    [[nodiscard]] QJsonObject ProfilesSnapshot() const override;
+    bool ProfileSelect(const QString& id, QString* error) override;
+    bool ProfileCreate(const QString& name, QString* error) override;
+    bool ProfileRename(const QString& name, QString* error) override;
+    bool ProfileDelete(QString* error) override;
+
+    [[nodiscard]] QJsonObject NotificationsSnapshot() const override;
+    bool NotificationDismiss(qint64 sequence, QString* error) override;
+    bool NotificationInvokeAction(qint64 sequence, const QString& which, QString* error) override;
+
+    bool DiagnosticsRun(QString* error) override;
+    bool LogsOpen(QString* error) override;
+
+    bool RecoveryContinue(int index, QString* error) override;
+    bool RecoveryDiscard(int index, QString* error) override;
+    bool RecoveryDismiss(QString* error) override;
+    bool CrashReportSend(QString* error) override;
+    bool CrashReportDecline(QString* error) override;
+    bool RecordingErrorDismiss(QString* error) override;
+    bool RecordingErrorSendReport(QString* error) override;
+
+    bool ExportStart(QString* error) override;
+    bool ExportCancel(QString* error) override;
 
     bool Navigate(const QString& page, QString* error) override;
     [[nodiscard]] RevealOutcome Reveal(const QString& surface, const QString& target, QString* error) override;
@@ -119,6 +150,11 @@ class QuickLiveVerifySource final : public QObject, public live_verify::LiveVeri
     // that page is not loaded. Constant object names only -- a client-supplied
     // string never reaches findChild().
     [[nodiscard]] QObject* pageObjectFor(const QString& surface) const;
+    // The hub row holding `sequence`, or -1. The hub's model is index-addressed
+    // and the wire is sequence-addressed on purpose: the list reorders on
+    // dismissal, so an index a client read a moment ago can name a different
+    // entry by the time it acts on it.
+    [[nodiscard]] int notificationRowForSequence(qint64 sequence) const;
 
     QuickApplication& application_;
     QPointer<QQuickWindow> root_window_;

@@ -40,6 +40,15 @@ std::optional<QString> ValidateParams(const QString& command_name, const QVector
                 return QStringLiteral("\"%1\" must be one of: %2")
                     .arg(parameter.name, parameter.values.join(QStringLiteral(", ")));
             }
+        } else if (parameter.type == QLatin1String("any")) {
+            // A parameter whose type genuinely depends on another parameter --
+            // settings.set's `value` is a bool, a number or a string according
+            // to the key. Presence is all this layer can check; the receiving
+            // command owns the type, because only it knows the key.
+            //
+            // Deliberately spelled out rather than left to the fall-through: an
+            // unlisted type would ALSO be accepted here, and "any" has to be a
+            // declared decision rather than a typo that happens to work.
         }
     }
     return std::nullopt;

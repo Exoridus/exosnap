@@ -274,6 +274,12 @@ target_sources(exosnap
         # that knows what an ExoSnap adapter is.
         QuickLiveVerifySource.cpp
         QuickLiveVerifySource.h
+        # The stable product keys settings.get/settings.set speak, and the table
+        # that binds each of them to the SettingsAdapter setter the QML control
+        # writes to. Not reflection: a key that is not in the table cannot be
+        # read or written.
+        SettingsAutomationKeys.cpp
+        SettingsAutomationKeys.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsController.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsController.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsProbe.cpp
@@ -960,6 +966,11 @@ exosnap_add_gtest(
     TEST_PREFIX quick_settings_adapter.
     SOURCES
         ${EXOSNAP_QUICK_TESTS_DIR}/test_settings_adapter.cpp
+        # The automation key table lives with the adapter it binds to, so a
+        # renamed setter is a compile error in both at once.
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_settings_automation_keys.cpp
+        SettingsAutomationKeys.cpp
+        SettingsAutomationKeys.h
         SettingsAdapter.cpp
         SettingsAdapter.h
         QuickThemeTokens.cpp

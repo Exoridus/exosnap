@@ -252,6 +252,145 @@ TEST(LiveVerifyPolicy, TheStateSnapshotCarriesTheSameActionsTheTableDoes) {
     }
 }
 
+TEST(LiveVerifyPolicy, SettingsAndProfilesAreLockedWhileARecordingIsInFlight) {
+    AutomationState ready = Ready();
+    ready.profile_id = QStringLiteral("preset.mine");
+    EXPECT_TRUE(Evaluate(*FindCommand(QStringLiteral("settings.set")), ready).allowed());
+    EXPECT_TRUE(Evaluate(*FindCommand(QStringLiteral("profiles.select")), ready).allowed());
+
+    for (const char* live : {"Countdown", "Preparing", "Recording", "Paused", "Stopping", "Saving"}) {
+        AutomationState state = ready;
+        state.recording_state = QString::fromLatin1(live);
+        const PreconditionVerdict verdict = Evaluate(*FindCommand(QStringLiteral("settings.set")), state);
+        EXPECT_FALSE(verdict.allowed()) << live;
+        // `blocked`, not `invalid_state`: the state is a perfectly ordinary one
+        // and a product rule refuses anyway -- which is what the Settings
+        // controls do while the transport is live.
+        EXPECT_EQ(verdict.code, QString::fromLatin1(error_code::kBlocked)) << live;
+        EXPECT_FALSE(AvailableActions(state).contains(QStringLiteral("settings.set"))) << live;
+    }
+
+    // Reading is never refused. An observation a product state can turn off is
+    // useless in exactly the state a check is trying to explain.
+    AutomationState recording = ready;
+    recording.recording_state = QStringLiteral("Recording");
+    EXPECT_TRUE(Evaluate(*FindCommand(QStringLiteral("settings.get")), recording).allowed());
+    EXPECT_TRUE(Evaluate(*FindCommand(QStringLiteral("settings.describe")), recording).allowed());
+    EXPECT_TRUE(Evaluate(*FindCommand(QStringLiteral("profiles.list")), recording).allowed());
+}
+
+TEST(LiveVerifyPolicy, ABuiltInProfileCannotBeRenamedOrDeleted) {
+    AutomationState state = Ready();
+    state.profile_id = QStringLiteral("preset.default");
+    state.profile_built_in = true;
+
+    for (const char* command : {"profiles.rename", "profiles.delete"}) {
+        const PreconditionVerdict verdict = Evaluate(*FindCommand(QString::fromLatin1(command)), state);
+        EXPECT_FALSE(verdict.allowed()) << command;
+        EXPECT_EQ(verdict.code, QString::fromLatin1(error_code::kBlocked)) << command;
+        EXPECT_FALSE(AvailableActions(state).contains(QString::fromLatin1(command))) << command;
+    }
+    // Selecting one is fine -- read-only is about editing it, not using it.
+    EXPECT_TRUE(Evaluate(*FindCommand(QStringLiteral("profiles.select")), state).allowed());
+
+    state.profile_built_in = false;
+    EXPECT_TRUE(Evaluate(*FindCommand(QStringLiteral("profiles.delete")), state).allowed());
+}
+
+TEST(LiveVerifyPolicy, BlockingSurfaceActionsAreOfferedOnlyByTheirOwnSurface) {
+    // The inverse of every other precondition in the table: these commands
+    // REQUIRE a blocking surface, because they are that surface's own buttons.
+    const std::pair<const char*, const char*> owned[] = {
+        {"recovery.dismiss", blocking_surface_name::kRecovery},
+        {"crashReport.send", blocking_surface_name::kCrashReport},
+        {"crashReport.decline", blocking_surface_name::kCrashReport},
+        {"recordingError.dismiss", blocking_surface_name::kRecordingError},
+    };
+
+    for (const auto& [command, surface] : owned) {
+        AutomationState absent = Ready();
+        EXPECT_FALSE(Evaluate(*FindCommand(QString::fromLatin1(command)), absent).allowed()) << command;
+        EXPECT_FALSE(AvailableActions(absent).contains(QString::fromLatin1(command))) << command;
+
+        AutomationState present = Ready();
+        present.blocking_surface = QString::fromLatin1(surface);
+        EXPECT_TRUE(Evaluate(*FindCommand(QString::fromLatin1(command)), present).allowed()) << command;
+        EXPECT_TRUE(AvailableActions(present).contains(QString::fromLatin1(command))) << command;
+
+        // And never by a DIFFERENT surface: answering the crash question is not
+        // the same as answering the recovery one.
+        AutomationState other = Ready();
+        other.blocking_surface = QString::fromLatin1(surface == QLatin1String(blocking_surface_name::kRecovery)
+                                                         ? blocking_surface_name::kCrashReport
+                                                         : blocking_surface_name::kRecovery);
+        EXPECT_FALSE(Evaluate(*FindCommand(QString::fromLatin1(command)), other).allowed()) << command;
+    }
+}
+
+TEST(LiveVerifyPolicy, RecoveryActionsNeedACandidateAndAFailureReportNeedsConsent) {
+    AutomationState empty = Ready();
+    empty.blocking_surface = QString::fromLatin1(blocking_surface_name::kRecovery);
+    empty.recovery_candidate_count = 0;
+    EXPECT_FALSE(Evaluate(*FindCommand(QStringLiteral("recovery.continue")), empty).allowed());
+    // Dismissing an empty surface is still a real thing to do.
+    EXPECT_TRUE(Evaluate(*FindCommand(QStringLiteral("recovery.dismiss")), empty).allowed());
+
+    empty.recovery_candidate_count = 2;
+    EXPECT_TRUE(Evaluate(*FindCommand(QStringLiteral("recovery.continue")), empty).allowed());
+
+    AutomationState failure = Ready();
+    failure.blocking_surface = QString::fromLatin1(blocking_surface_name::kRecordingError);
+    failure.recording_error_can_send_report = false;
+    const PreconditionVerdict refused = Evaluate(*FindCommand(QStringLiteral("recordingError.sendReport")), failure);
+    EXPECT_FALSE(refused.allowed());
+    // Consent, or no report to send. Either way the button is not there, and
+    // the command must not be either.
+    EXPECT_EQ(refused.code, QString::fromLatin1(error_code::kBlocked));
+    failure.recording_error_can_send_report = true;
+    EXPECT_TRUE(Evaluate(*FindCommand(QStringLiteral("recordingError.sendReport")), failure).allowed());
+}
+
+TEST(LiveVerifyPolicy, ExportStartAndCancelAnswerToOppositeStates) {
+    AutomationState open = Ready();
+    open.edit_session_open = true;
+    open.can_export = true;
+    EXPECT_TRUE(Evaluate(*FindCommand(QStringLiteral("export.start")), open).allowed());
+    // Nothing to cancel yet.
+    EXPECT_FALSE(Evaluate(*FindCommand(QStringLiteral("export.cancel")), open).allowed());
+
+    AutomationState running = open;
+    running.edit_export_running = true;
+    running.can_export = false;
+    EXPECT_FALSE(Evaluate(*FindCommand(QStringLiteral("export.start")), running).allowed());
+    EXPECT_TRUE(Evaluate(*FindCommand(QStringLiteral("export.cancel")), running).allowed());
+    // The same running export is what stops the session being closed under it.
+    EXPECT_FALSE(Evaluate(*FindCommand(QStringLiteral("edit.close")), running).allowed());
+
+    // Without an edit session there is nothing to export at all.
+    AutomationState closed = Ready();
+    closed.can_export = true;
+    EXPECT_FALSE(Evaluate(*FindCommand(QStringLiteral("export.start")), closed).allowed());
+}
+
+TEST(LiveVerifyPolicy, MarkerAndCountdownCancelFollowTheTransportsOwnPredicates) {
+    AutomationState ready = Ready();
+    EXPECT_FALSE(Evaluate(*FindCommand(QStringLiteral("record.addMarker")), ready).allowed());
+    EXPECT_FALSE(Evaluate(*FindCommand(QStringLiteral("record.cancelCountdown")), ready).allowed());
+
+    AutomationState counting = ready;
+    counting.recording_state = QStringLiteral("Countdown");
+    counting.countdown_active = true;
+    EXPECT_TRUE(Evaluate(*FindCommand(QStringLiteral("record.cancelCountdown")), counting).allowed());
+    // A marker belongs to a running recording, and a countdown is not one yet.
+    EXPECT_FALSE(Evaluate(*FindCommand(QStringLiteral("record.addMarker")), counting).allowed());
+
+    AutomationState recording = ready;
+    recording.recording_state = QStringLiteral("Recording");
+    recording.can_add_marker = true;
+    EXPECT_TRUE(Evaluate(*FindCommand(QStringLiteral("record.addMarker")), recording).allowed());
+    EXPECT_FALSE(Evaluate(*FindCommand(QStringLiteral("record.cancelCountdown")), recording).allowed());
+}
+
 TEST(LiveVerifyPolicy, NoCommandIsListedTwiceAndEveryOneIsFindable) {
     QStringList names;
     for (const CommandDescriptor& command : AllCommands()) {
@@ -269,8 +408,12 @@ TEST(LiveVerifyPolicy, EveryDescribedParameterIsOneTheValidatorUnderstands) {
     for (const CommandDescriptor& command : AllCommands()) {
         for (const CommandParameter& parameter : command.parameters) {
             EXPECT_FALSE(parameter.name.isEmpty()) << command.name.toStdString();
+            // "any" is a declared decision, not a hole: an unlisted type is
+            // silently accepted by the shared validator, so this list is what
+            // turns a typo into a failure.
             EXPECT_TRUE(parameter.type == QLatin1String("string") || parameter.type == QLatin1String("int") ||
-                        parameter.type == QLatin1String("bool") || parameter.type == QLatin1String("enum"))
+                        parameter.type == QLatin1String("bool") || parameter.type == QLatin1String("enum") ||
+                        parameter.type == QLatin1String("any"))
                 << command.name.toStdString() << "/" << parameter.type.toStdString();
             EXPECT_EQ(parameter.type == QLatin1String("enum"), !parameter.values.isEmpty())
                 << command.name.toStdString() << "/" << parameter.name.toStdString();
