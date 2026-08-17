@@ -41,6 +41,13 @@ param(
     No case in this suite is a VALID handoff, so no case can install anything.
     That is a property of the inputs, not of timing.
 
+    NOT COVERED HERE, and why: a wrong package hash and a missing package would
+    need a manifest that names them AND carries a valid signature, which requires
+    the release signing key. Those two gates are covered where they can be
+    covered honestly -- package_verifier's hash comparison and the updater's
+    lock-and-verify path in the unit suites -- rather than by weakening the
+    signature check to make a live case reachable.
+
 .EXAMPLE
     ./live-verify-update-handoff-trust.ps1 -AppPath .workspace/install-scratch/bin/exosnap.exe
 #>

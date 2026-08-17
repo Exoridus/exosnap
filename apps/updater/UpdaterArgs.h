@@ -65,6 +65,11 @@ struct UpdaterArgs {
     // mode, which downloads its own.
     QString manifest_path;
     QString manifest_signature_path;
+    // The document itself. Kept so this process can dispose of the transaction it
+    // consumed once the update has actually succeeded -- created by the
+    // application, consumed and cleaned up here. On any other outcome it is left
+    // exactly where it is: it is the evidence for what was handed over.
+    QString handoff_path;
     QString base_url;      // manual-mode dev feed override
     QString preview_state; // dev-only render short-circuit
     // ADR 0055 -- verification reinstall: the app asked for the IDENTICAL

@@ -27,6 +27,12 @@ param(
     # key and stops truthfully at the signature gate, which is its own evidence.
     [switch] $RequireApply,
 
+    # Stop the run on purpose once the download is in flight. Asserts the
+    # cancellation contract: a terminal `cancelled` with NO failure case, an
+    # installation that is provably untouched, and the dedicated neutral exit
+    # code -- never the DownloadFailed a network fault would produce.
+    [switch] $CancelDuringDownload,
+
     [string] $EvidencePath,
 
     [int] $TimeoutSeconds = 120,
@@ -91,6 +97,38 @@ function ConvertTo-ComparablePath([string] $Path) {
     if ([string]::IsNullOrEmpty($Path)) { return '' }
     return $Path.Replace('/', '\').TrimEnd('\').ToLowerInvariant()
 }
+
+# The exact enumeration the updater performs when it asks the application to
+# close for the swap: every top-level window owned by a pid, with its title.
+# Reimplemented here rather than inferred, because the ambiguity this guards
+# against is invisible from any higher-level API -- Get-Process reports ONE main
+# window and would have shown nothing wrong.
+Add-Type -TypeDefinition @'
+using System;
+using System.Text;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+public static class ExoSnapWindows {
+  private delegate bool EnumProc(IntPtr h, IntPtr l);
+  [DllImport("user32.dll")] private static extern bool EnumWindows(EnumProc cb, IntPtr l);
+  [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowTextW(IntPtr h, StringBuilder s, int n);
+  public static List<string> TitlesFor(uint targetPid) {
+    var titles = new List<string>();
+    EnumWindows((h, l) => {
+      uint owner;
+      GetWindowThreadProcessId(h, out owner);
+      if (owner == targetPid) {
+        var sb = new StringBuilder(256);
+        GetWindowTextW(h, sb, 256);
+        titles.Add(sb.ToString());
+      }
+      return true;
+    }, IntPtr.Zero);
+    return titles;
+  }
+}
+'@
 
 # The image path of a running process, straight from the OS. Get-Process reads it
 # via MainModule, which is an open-and-read of the target and comes back null for
@@ -172,6 +210,16 @@ try {
     Add-Step 'application endpoint attached (artifact bound)' `
         ($identity.executableSha256 -eq $appSha) `
         @{ reported = $identity.executableSha256; measured = $appSha; version = $identity.productVersion }
+
+    # The updater identifies the window to ask by owner pid AND exact title, so
+    # that pair has to name exactly ONE window. It did not: five capture-excluded
+    # overlays inherited the application display name, the close request reached
+    # a topmost overlay, and the swap stopped at appWontClose with no symptom
+    # anywhere. Asserted here because no higher-level API shows the ambiguity.
+    $titled = @([ExoSnapWindows]::TitlesFor([uint32]$app.Id) | Where-Object { $_ -eq 'ExoSnap' })
+    Add-Step 'exactly one top-level window carries the identity the updater matches on' `
+        ($titled.Count -eq 1) `
+        @{ matching = $titled.Count; allTitles = [ExoSnapWindows]::TitlesFor([uint32]$app.Id) }
 
     # -- check ---------------------------------------------------------------
     $before = $appConn.StateRevision
@@ -313,8 +361,30 @@ try {
         ($updaterState.mode -eq 'appHandoff' -and $updaterState.targetVersion -eq $offered -and
          $updaterState.updateTransactionId -eq $transactionId) $updaterState
 
-    # -- follow the child to a terminal state --------------------------------
+    # -- optionally stop the run on purpose ----------------------------------
+    # Downloading is the ONE phase the engine honours cancellation in, and the
+    # command policy refuses it everywhere else rather than accepting it and
+    # doing nothing. Waiting for that phase is a revision advance, not a sleep.
     $terminal = @('completed', 'failed', 'cancelled', 'rebootRequired', 'restartPending', 'upToDate')
+    if ($CancelDuringDownload) {
+        $rev = $updaterConn.StateRevision
+        $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+        while ($updaterState.phase -notin $terminal -and $updaterState.phase -ne 'downloading' -and
+               [DateTime]::UtcNow -lt $deadline) {
+            $remaining = [int]([Math]::Max(1, ($deadline - [DateTime]::UtcNow).TotalMilliseconds))
+            $observed = Wait-LiveVerifyRevision -Connection $updaterConn -After $rev -TimeoutMs $remaining `
+                -EventName 'updater.stateChanged' -StateCommand 'updater.getState'
+            if ($null -eq $observed) { break }
+            $rev = $updaterConn.StateRevision
+            $updaterState = $observed
+        }
+        Add-Step 'the updater reached the one cancellable phase' `
+            ($updaterState.phase -eq 'downloading') $updaterState
+        $cancel = Invoke-LiveVerifyCommand -Connection $updaterConn -Command 'updater.cancel'
+        Add-Step 'updater.cancel accepted while downloading' ($cancel.ok -and -not $cancel.settled) $cancel
+    }
+
+    # -- follow the child to a terminal state --------------------------------
     $rev = $updaterConn.StateRevision
     $deadline = [DateTime]::UtcNow.AddSeconds($ApplyTimeoutSeconds)
     while ($updaterState.phase -notin $terminal -and [DateTime]::UtcNow -lt $deadline) {
@@ -336,12 +406,37 @@ try {
         Add-Step 'the operation completed the apply' $false $updaterState
     }
 
+    if ($CancelDuringDownload) {
+        # A cancellation is neither a success nor a failure. Reporting it as
+        # DownloadFailed would send a runner -- and a user -- looking for a
+        # network fault that did not happen, which is exactly the defect this
+        # contract exists to prevent.
+        Add-Step 'a cancelled run is cancelled, not failed' `
+            ($updaterState.phase -eq 'cancelled') $updaterState
+        Add-Step 'a cancelled run carries no failure case and no retry entry' `
+            ($null -eq $updaterState.failureCase -and $null -eq $updaterState.retryEntryStep) `
+            @{ failureCase = $updaterState.failureCase; retryEntryStep = $updaterState.retryEntryStep }
+    }
+
     if (-not $applied) {
         # Nothing was installed: the state has to say so rather than merely
         # report a failure. This is the assertion that distinguishes a truthful
         # refusal from a broken installation.
         Add-Step 'the existing installation is untouched' `
             ($updaterState.installState -eq 'intact') @{ installState = $updaterState.installState }
+    }
+
+    # Ownership, closed. The application creates the transaction directory; the
+    # updater consumes it and, on success and only on success, removes it. On any
+    # other outcome it stays exactly where it is, because it IS the evidence for
+    # what was handed over.
+    $transactionDir = Split-Path -Parent $launch.handoffPath
+    if ($applied) {
+        Add-Step 'the consumed transaction was cleaned up by the process that consumed it' `
+            (-not (Test-Path -LiteralPath $transactionDir)) @{ directory = $transactionDir }
+    } else {
+        Add-Step 'an operation that did not apply keeps its transaction as evidence' `
+            (Test-Path -LiteralPath $transactionDir) @{ directory = $transactionDir }
     }
 
     # -- the parent transition -----------------------------------------------
@@ -399,13 +494,23 @@ try {
         $observedExit = $null
         if ($exited) { $observedExit = $child.ExitCode }
         $evidence.updaterExitCode = $observedExit
-        $expectedSuccess = $updaterState.phase -in @('completed', 'restartPending')
-        # A measured code, not merely "not zero": an unreadable exit code is null,
-        # and null passes every -ne 0 test while proving nothing.
-        Add-Step 'the updater exit code matches its reported outcome' `
-            ($null -ne $observedExit -and
-             (($expectedSuccess -and $observedExit -eq 0) -or (-not $expectedSuccess -and $observedExit -ne 0))) `
-            @{ exitCode = $observedExit; exited = $exited; phase = $updaterState.phase }
+        # The exact code the phase calls for, not merely "zero or not".
+        # UpdaterExitCode.h gives each outcome its own number precisely so they
+        # cannot be conflated -- a cancellation reported as 1 would send a
+        # release script looking for a fault that did not happen. A MEASURED
+        # code, too: an unreadable exit code is null, and null passes every
+        # "-ne 0" test while proving nothing.
+        $expectedExit = switch ($updaterState.phase) {
+            'completed' { 0 }
+            'restartPending' { 0 }
+            'upToDate' { 3 }
+            'rebootRequired' { 4 }
+            'cancelled' { 5 }
+            default { 1 }
+        }
+        Add-Step 'the updater exit code is the one its reported outcome calls for' `
+            ($null -ne $observedExit -and $observedExit -eq $expectedExit) `
+            @{ exitCode = $observedExit; expected = $expectedExit; exited = $exited; phase = $updaterState.phase }
     } else {
         Add-Step 'the updater process could be observed to its exit' $false @{ pid = $launch.pid }
     }

@@ -34,6 +34,8 @@
 // clang-format on
 
 #include <QApplication>
+#include <QDir>
+#include <QFileInfo>
 #include <QGuiApplication>
 #include <QScreen>
 #include <QString>
@@ -457,6 +459,17 @@ int main(int argc, char** argv) {
     });
     QObject::connect(&worker, &UpdaterWorker::allDone, &window, [&] {
         in_flight = false;
+        // The transaction is over and it succeeded: this process consumed the
+        // document, so this process disposes of it. On every other outcome the
+        // directory is left exactly where it is -- it IS the evidence for what
+        // was handed over, and the application prunes it when it prepares the
+        // next one.
+        if (!args.handoff_path.isEmpty()) {
+            const QString transaction_dir = QFileInfo(args.handoff_path).absolutePath();
+            if (!QDir(transaction_dir).removeRecursively())
+                std::fprintf(stderr, "exosnap-updater: could not remove the consumed update transaction at %s\n",
+                             qPrintable(transaction_dir));
+        }
         controller->onAllDone();
         render();
         // Success footer: "this window closes automatically".

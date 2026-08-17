@@ -130,6 +130,7 @@ UpdaterArgs ArgsFromHandoff(const exosnap::update_handoff::UpdateHandoff& handof
     args.update_transaction_id = handoff.update_transaction_id;
     args.manifest_path = handoff.manifest_path;
     args.manifest_signature_path = handoff.manifest_signature_path;
+    args.handoff_path = command_line.handoff_path;
     args.verify_reinstall = handoff.verify_reinstall;
     // Deliberately NOT taken from the handoff. A handoff run resolves no feed:
     // the release it installs is already pinned by targetVersion and proven by

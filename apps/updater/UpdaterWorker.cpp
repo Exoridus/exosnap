@@ -740,10 +740,21 @@ bool UpdaterWorker::runCloseApp() {
         // tray callback window), which silently swallows the message since
         // only the real main window's nativeEvent reacts to it; title alone
         // can hit a second already-running instance that shares the title.
-        if (const auto app_window =
-                reinterpret_cast<HWND>(FindTopLevelWindowForProcess(args_.app_pid, kAppWindowTitle))) {
-            ::PostMessageW(app_window, static_cast<UINT>(exosnap::update::kUpdaterHandoffMessage),
-                           static_cast<WPARAM>(exosnap::update::kUpdaterHandoffMagic), 0);
+        const auto app_window = reinterpret_cast<HWND>(FindTopLevelWindowForProcess(args_.app_pid, kAppWindowTitle));
+        if (app_window != nullptr) {
+            const BOOL posted = ::PostMessageW(app_window, static_cast<UINT>(exosnap::update::kUpdaterHandoffMessage),
+                                               static_cast<WPARAM>(exosnap::update::kUpdaterHandoffMagic), 0);
+            // Evidence, because the failure it guards against is silent: a
+            // request that reaches the wrong window -- or no window -- looks
+            // exactly like an application that chose not to close, and the only
+            // symptom is a 60 s wait ending in appWontClose.
+            std::fprintf(stderr, "exosnap-updater: close handoff posted to window %p of pid %u (result %d)\n",
+                         static_cast<void*>(app_window), args_.app_pid, static_cast<int>(posted));
+        } else {
+            std::fprintf(stderr,
+                         "exosnap-updater: no top-level window titled \"ExoSnap\" is owned by pid %u; the close "
+                         "handoff cannot be delivered\n",
+                         args_.app_pid);
         }
         if (!WaitForProcessExit(args_.app_pid, kCloseAppTimeout)) {
             emit failed(FailureCase::AppWontClose, QString()); // B1 -- download kept, Retry re-enters here

@@ -353,6 +353,26 @@ TEST_F(PackageLockTest, LockOpensExistingFileAndVerifiesThroughHandle) {
     ClosePackageLock(lock);
 }
 
+// The package gate itself, on the path the updater actually uses. A live
+// cross-process case for this cannot exist without the release signing key --
+// a wrong hash has to travel in a manifest whose signature verifies -- so it is
+// asserted here rather than by weakening the signature check to make one
+// reachable.
+TEST_F(PackageLockTest, AWrongHashIsRefusedThroughTheSameHandle) {
+    Write("abd"); // one byte off the canonical vector
+    void* lock = OpenPackageWriteLock(path_.wstring());
+    ASSERT_NE(lock, INVALID_HANDLE_VALUE);
+    EXPECT_EQ(exosnap::update::VerifyPackageHandle(lock, kAbcSha256),
+              exosnap::update::VerifyResult::PackageHashMismatch);
+    ClosePackageLock(lock);
+}
+
+// A package that is not there at all is a refusal, not an exception: the lock
+// cannot be taken, so nothing is hashed and nothing is consumed.
+TEST_F(PackageLockTest, AMissingPackageCannotBeLockedAtAll) {
+    EXPECT_EQ(OpenPackageWriteLock(path_.wstring()), INVALID_HANDLE_VALUE);
+}
+
 TEST_F(PackageLockTest, HeldLockDeniesConcurrentWriteOpen) {
     // The core of the fix: while the deny-write lock is held, no same-user
     // process can open the verified file for writing to swap its contents.
