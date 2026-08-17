@@ -1,0 +1,435 @@
+#Requires -Version 7.0
+<#
+.SYNOPSIS
+    Tests for the release verification runner and the environment orchestrator.
+
+.DESCRIPTION
+    Not Pester: the same homegrown harness the other script tests use, so CTest runs
+    all of them the same way and a contributor reads one style.
+
+    Everything here runs against a FAKE envctl -- a script that reports whatever the
+    test needs it to report, including lying about success. That is the point. The
+    failures worth pinning are the ones where a setter claims it worked and the
+    read-back disagrees, and no real display can be talked into that on demand.
+
+    Nothing in this file mutates the machine.
+#>
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
+$scriptRoot = Split-Path -Parent $PSScriptRoot
+Import-Module (Join-Path $scriptRoot 'lib/LiveVerifyState.psm1') -Force -DisableNameChecking
+Import-Module (Join-Path $scriptRoot 'lib/EnvironmentOrchestrator.psm1') -Force -DisableNameChecking
+
+$script:Passed = 0
+$script:Failed = 0
+
+function Test-Case {
+    param([Parameter(Mandatory)] [string] $Name, [Parameter(Mandatory)] [scriptblock] $Body)
+    try {
+        & $Body
+        Write-Host "  PASS  $Name" -ForegroundColor Green
+        $script:Passed++
+    }
+    catch {
+        Write-Host "  FAIL  $Name" -ForegroundColor Red
+        Write-Host "        $($_.Exception.Message)" -ForegroundColor Red
+        $script:Failed++
+    }
+}
+
+function Assert-True { param($Condition, [string] $Message) if (-not $Condition) { throw $Message } }
+function Assert-Equal {
+    param($Expected, $Actual, [string] $Message)
+    if ("$Expected" -ne "$Actual") { throw "$Message (expected '$Expected', got '$Actual')" }
+}
+function Assert-Throws {
+    param([scriptblock] $Body, [string] $Message)
+    try { & $Body } catch { return }
+    throw $Message
+}
+
+function New-TestDirectory {
+    $path = Join-Path ([IO.Path]::GetTempPath()) "release-verify-tests/$([guid]::NewGuid().ToString('n'))"
+    New-Item -ItemType Directory -Path $path -Force | Out-Null
+    return $path
+}
+
+function New-FakeEnvctl {
+    <#
+    .SYNOPSIS
+        Writes a fake exosnap-envctl whose every answer comes from a JSON script file.
+    .DESCRIPTION
+        The fake reads `behaviour.json` from its own directory on every invocation, so
+        a test can change what the next call returns -- which is how "the setter said
+        yes and the read-back said no" is reproduced without a real device.
+    #>
+    param([Parameter(Mandatory)] [string] $Directory)
+
+    $path = Join-Path $Directory 'fake-envctl.ps1'
+    $body = @'
+param([Parameter(ValueFromRemainingArguments = $true)] [string[]] $Arguments)
+$behaviourPath = Join-Path $PSScriptRoot 'behaviour.json'
+$behaviour = Get-Content -LiteralPath $behaviourPath -Raw | ConvertFrom-Json
+$verb = $Arguments[0]
+# Every invocation is appended to a call log so a test can assert what was NOT done --
+# "no other device was touched" is only checkable against a record of the calls.
+$logPath = Join-Path $PSScriptRoot 'calls.jsonl'
+Add-Content -LiteralPath $logPath -Value (@{ verb = $verb; args = $Arguments } | ConvertTo-Json -Compress)
+$node = $behaviour.$verb
+if ($null -eq $node) { Write-Output (@{ error = "no behaviour for '$verb'" } | ConvertTo-Json -Compress); exit 3 }
+Write-Output ($node.output | ConvertTo-Json -Depth 20 -Compress)
+exit ([int]$node.exit)
+'@
+    Set-Content -LiteralPath $path -Value $body -Encoding utf8NoBOM
+    return $path
+}
+
+function Set-FakeBehaviour {
+    param([Parameter(Mandatory)] [string] $Directory, [Parameter(Mandatory)] [hashtable] $Behaviour)
+    Set-Content -LiteralPath (Join-Path $Directory 'behaviour.json') `
+        -Value ($Behaviour | ConvertTo-Json -Depth 20) -Encoding utf8NoBOM
+}
+
+function Get-FakeCalls {
+    param([Parameter(Mandatory)] [string] $Directory)
+    $path = Join-Path $Directory 'calls.jsonl'
+    if (-not (Test-Path -LiteralPath $path)) { return @() }
+    return @(Get-Content -LiteralPath $path | ForEach-Object { $_ | ConvertFrom-Json })
+}
+
+function New-TestCatalogEntry {
+    param([string] $Id = 'T-001', [hashtable] $Desired = @{}, [scriptblock] $Run, [hashtable] $Requires = @{})
+    return [pscustomobject]@{
+        Id                  = $Id
+        Title               = "test scenario $Id"
+        Class               = 'test'
+        Layer               = 'FULL_AUTO'
+        Source              = 'tests'
+        ArtifactBound       = $true
+        RequiresInstallTree = $false
+        EnvironmentKeys     = @('probe')
+        Requires            = $Requires
+        Desired             = $Desired
+        Run                 = $Run
+    }
+}
+
+Write-Host ''
+Write-Host 'Release verification runner tests' -ForegroundColor Cyan
+Write-Host ''
+
+# ---------------------------------------------------------------------------
+# Result taxonomy
+# ---------------------------------------------------------------------------
+
+Test-Case 'DEFERRED and UNAVAILABLE are first-class terminal states' {
+    $states = Get-LiveVerifyCheckStates
+    Assert-True ($states -contains 'DEFERRED') 'DEFERRED must be a check state'
+    Assert-True ($states -contains 'UNAVAILABLE') 'UNAVAILABLE must be a check state'
+}
+
+Test-Case 'a restore verdict is recorded separately from the product verdict' {
+    $directory = New-TestDirectory
+    $catalog = @(New-TestCatalogEntry)
+    $run = New-LiveVerifyRun -RunDirectory $directory -RunId 'r1' -Catalog $catalog `
+        -Artifact @{ fingerprint = 'a' } -Environment @{ probe = '1' }
+    Complete-LiveVerifyCheck -Run $run -Id 'T-001' -Result 'PASS' -Message 'product fine' `
+        -RestoreResult 'RESTORE_FAILED' | Out-Null
+    $reloaded = Get-LiveVerifyRun -RunDirectory $directory
+    Assert-Equal 'PASS' $reloaded.State.checks.'T-001'.state 'the product verdict must survive'
+    Assert-Equal 'RESTORE_FAILED' $reloaded.State.checks.'T-001'.restoreResult 'the restore verdict must survive'
+}
+
+Test-Case 'a PASS with a broken restore is a failure in the machine-readable report' {
+    $directory = New-TestDirectory
+    $catalog = @(New-TestCatalogEntry)
+    $run = New-LiveVerifyRun -RunDirectory $directory -RunId 'r1' -Catalog $catalog `
+        -Artifact @{ fingerprint = 'a' } -Environment @{ probe = '1' }
+    Complete-LiveVerifyCheck -Run $run -Id 'T-001' -Result 'PASS' -RestoreResult 'RESTORE_FAILED' | Out-Null
+    Write-LiveVerifyReport -Run (Get-LiveVerifyRun -RunDirectory $directory) | Out-Null
+    $junit = Get-Content -LiteralPath (Join-Path $directory 'junit.xml') -Raw
+    Assert-True ($junit -match '<failure') 'a product PASS with a failed restore must not report as green'
+    $report = Get-Content -LiteralPath (Join-Path $directory 'report.json') -Raw | ConvertFrom-Json
+    Assert-Equal 1 $report.restoreSummary.RESTORE_FAILED 'the restore summary must count it'
+}
+
+Test-Case 'a deferred gate is rerunnable and an unavailable one is not' {
+    $directory = New-TestDirectory
+    $catalog = @(New-TestCatalogEntry -Id 'T-DEF'), (New-TestCatalogEntry -Id 'T-UNAVAIL')
+    $run = New-LiveVerifyRun -RunDirectory $directory -RunId 'r1' -Catalog $catalog `
+        -Artifact @{ fingerprint = 'a' } -Environment @{ probe = '1' }
+    Complete-LiveVerifyCheck -Run $run -Id 'T-DEF' -Result 'DEFERRED' | Out-Null
+    Complete-LiveVerifyCheck -Run $run -Id 'T-UNAVAIL' -Result 'UNAVAILABLE' | Out-Null
+    $runnable = @(Get-LiveVerifyRunnableChecks -Run (Get-LiveVerifyRun -RunDirectory $directory) -Catalog $catalog)
+    $ids = @($runnable | ForEach-Object { $_.Id })
+    Assert-True ($ids -contains 'T-DEF') 'a gate nobody answered is an open question'
+    Assert-True (-not ($ids -contains 'T-UNAVAIL')) 'absent hardware is still absent; do not retry it every run'
+}
+
+Test-Case 'UNAVAILABLE goes stale when the environment changes' {
+    $directory = New-TestDirectory
+    $catalog = @(New-TestCatalogEntry -Id 'T-HW')
+    $run = New-LiveVerifyRun -RunDirectory $directory -RunId 'r1' -Catalog $catalog `
+        -Artifact @{ fingerprint = 'a' } -Environment @{ probe = 'no-hdr' }
+    Set-LiveVerifyCheckRunning -Run $run -Id 'T-HW' -ArtifactFingerprint 'a' `
+        -EnvironmentFingerprint (Get-LiveVerifyEnvironmentFingerprint -Entry $catalog[0] -Environment @{ probe = 'no-hdr' }) | Out-Null
+    Complete-LiveVerifyCheck -Run $run -Id 'T-HW' -Result 'UNAVAILABLE' -Message 'no HDR display' | Out-Null
+
+    $stale = Update-LiveVerifyStaleness -Run $run -Catalog $catalog -ArtifactFingerprint 'a' `
+        -Environment @{ probe = 'hdr-attached' }
+    Assert-True ($stale -contains 'T-HW') 'plugging the display in must make the scenario runnable again'
+}
+
+Test-Case 'an artifact change invalidates a release PASS' {
+    $directory = New-TestDirectory
+    $catalog = @(New-TestCatalogEntry)
+    $run = New-LiveVerifyRun -RunDirectory $directory -RunId 'r1' -Catalog $catalog `
+        -Artifact @{ fingerprint = 'sha-old' } -Environment @{ probe = '1' }
+    Set-LiveVerifyCheckRunning -Run $run -Id 'T-001' -ArtifactFingerprint 'sha-old' `
+        -EnvironmentFingerprint (Get-LiveVerifyEnvironmentFingerprint -Entry $catalog[0] -Environment @{ probe = '1' }) | Out-Null
+    Complete-LiveVerifyCheck -Run $run -Id 'T-001' -Result 'PASS' | Out-Null
+    $stale = Update-LiveVerifyStaleness -Run $run -Catalog $catalog -ArtifactFingerprint 'sha-new' `
+        -Environment @{ probe = '1' }
+    Assert-True ($stale -contains 'T-001') 'a PASS must not be inherited by a binary nobody tested'
+}
+
+Test-Case 'an interrupted scenario resumes as UNVERIFIED, never as PASS' {
+    $directory = New-TestDirectory
+    $catalog = @(New-TestCatalogEntry)
+    $run = New-LiveVerifyRun -RunDirectory $directory -RunId 'r1' -Catalog $catalog `
+        -Artifact @{ fingerprint = 'a' } -Environment @{ probe = '1' }
+    Set-LiveVerifyCheckRunning -Run $run -Id 'T-001' -ArtifactFingerprint 'a' -EnvironmentFingerprint 'e' | Out-Null
+    $reloaded = Get-LiveVerifyRun -RunDirectory $directory
+    Assert-Equal 'RUNNING' $reloaded.State.checks.'T-001'.state 'RUNNING is persisted before execution'
+    Resolve-LiveVerifyInterrupted -Run $reloaded | Out-Null
+    Assert-Equal 'UNVERIFIED' (Get-LiveVerifyRun -RunDirectory $directory).State.checks.'T-001'.state `
+        'a killed runner leaves an unknown outcome, not a good one'
+}
+
+# ---------------------------------------------------------------------------
+# Environment orchestration
+# ---------------------------------------------------------------------------
+
+Test-Case 'a no-op desired state mutates nothing and needs no restore' {
+    $directory = New-TestDirectory
+    $fake = New-FakeEnvctl -Directory $directory
+    Set-FakeBehaviour -Directory $directory -Behaviour @{ recover = @{ exit = 0; output = @{ dirty = $false; recovered = @() } } }
+    $orchestrator = New-EnvironmentOrchestrator -RunId 'r1' -JournalDirectory $directory -EnvctlPath $fake
+
+    $ran = $false
+    $outcome = Invoke-EnvironmentTransaction -Orchestrator $orchestrator -Scenario 'noop' -Desired @{} `
+        -Body { param($t) $script:noopRan = $true; return @{ Result = 'PASS' } }
+    Assert-Equal 'NOT_APPLICABLE' $outcome.RestoreResult 'a scenario that mutated nothing has no restore verdict'
+    Assert-Equal 'PASS' $outcome.Product.Result 'the body still runs'
+    $calls = @(Get-FakeCalls -Directory $directory | Where-Object { $_.verb -eq 'begin' })
+    Assert-Equal 0 $calls.Count 'no transaction may be opened for an empty desired state'
+    [void]$ran
+}
+
+Test-Case 'a setter that claims success but reads back differently is a failure' {
+    $directory = New-TestDirectory
+    $fake = New-FakeEnvctl -Directory $directory
+    # envctl is the component that compares; the contract asserted here is that the
+    # orchestrator surfaces its verdict instead of trusting the exit code of `begin`.
+    Set-FakeBehaviour -Directory $directory -Behaviour @{
+        recover = @{ exit = 0; output = @{ dirty = $false; recovered = @() } }
+        begin   = @{ exit = 4; output = @{ error = 'read-back mismatch: requested 60, actual 144' } }
+    }
+    $orchestrator = New-EnvironmentOrchestrator -RunId 'r1' -JournalDirectory $directory -EnvctlPath $fake
+    Assert-Throws {
+        Invoke-EnvironmentTransaction -Orchestrator $orchestrator -Scenario 'mismatch' `
+            -Desired @{ 'display.main-hdr:refreshHz' = '60' } -Body { param($t) @{ Result = 'PASS' } }
+    } 'an apply whose read-back disagreed must not reach the scenario body'
+}
+
+Test-Case 'the restore runs even when the scenario body throws' {
+    $directory = New-TestDirectory
+    $fake = New-FakeEnvctl -Directory $directory
+    Set-FakeBehaviour -Directory $directory -Behaviour @{
+        recover = @{ exit = 0; output = @{ dirty = $false; recovered = @() } }
+        begin   = @{ exit = 0; output = @{ transactionId = 't1'; journalPath = 'j1'; applied = @() } }
+        restore = @{ exit = 0; output = @{ restoreResult = 'RESTORED'; evidence = @{} } }
+    }
+    $orchestrator = New-EnvironmentOrchestrator -RunId 'r1' -JournalDirectory $directory -EnvctlPath $fake
+    $outcome = Invoke-EnvironmentTransaction -Orchestrator $orchestrator -Scenario 'boom' `
+        -Desired @{ 'display.main-hdr:hdr' = 'off' } -Body { param($t) throw 'the product blew up' }
+    Assert-Equal 'RESTORED' $outcome.RestoreResult 'a body that threw must still leave the machine restored'
+    Assert-True ($outcome.Error -match 'blew up') 'the body failure must be reported, not swallowed'
+    $calls = @(Get-FakeCalls -Directory $directory | Where-Object { $_.verb -eq 'restore' })
+    Assert-Equal 1 $calls.Count 'restore must have been called exactly once'
+}
+
+Test-Case 'a restore whose read-back disagrees is RESTORE_FAILED and marks the run dirty' {
+    $directory = New-TestDirectory
+    $fake = New-FakeEnvctl -Directory $directory
+    Set-FakeBehaviour -Directory $directory -Behaviour @{
+        recover = @{ exit = 0; output = @{ dirty = $false; recovered = @() } }
+        begin   = @{ exit = 0; output = @{ transactionId = 't1'; journalPath = 'j1'; applied = @() } }
+        restore = @{ exit = 0; output = @{ restoreResult = 'RESTORE_FAILED'; evidence = @{} } }
+    }
+    $orchestrator = New-EnvironmentOrchestrator -RunId 'r1' -JournalDirectory $directory -EnvctlPath $fake
+    $outcome = Invoke-EnvironmentTransaction -Orchestrator $orchestrator -Scenario 'restore-broken' `
+        -Desired @{ 'display.main-hdr:hdr' = 'off' } -Body { param($t) @{ Result = 'PASS' } }
+    Assert-Equal 'PASS' $outcome.Product.Result 'the product verdict is independent'
+    Assert-Equal 'RESTORE_FAILED' $outcome.RestoreResult 'the restore verdict is its own answer'
+    Assert-True $orchestrator.Dirty 'a failed restore must leave the orchestrator dirty'
+}
+
+Test-Case 'a device that vanished before restore yields RESTORE_PENDING_DEVICE_UNAVAILABLE' {
+    $directory = New-TestDirectory
+    $fake = New-FakeEnvctl -Directory $directory
+    Set-FakeBehaviour -Directory $directory -Behaviour @{
+        recover = @{ exit = 0; output = @{ dirty = $false; recovered = @() } }
+        begin   = @{ exit = 0; output = @{ transactionId = 't1'; journalPath = 'j1'; applied = @() } }
+        restore = @{ exit = 0; output = @{
+                restoreResult = 'RESTORE_PENDING_DEVICE_UNAVAILABLE'
+                evidence      = @{ 'audio.render.normal:default' = @{ before = 'on'; requested = 'off'; applied = 'off'; afterRestore = '<device absent>' } }
+            }
+        }
+    }
+    $orchestrator = New-EnvironmentOrchestrator -RunId 'r1' -JournalDirectory $directory -EnvctlPath $fake
+    $outcome = Invoke-EnvironmentTransaction -Orchestrator $orchestrator -Scenario 'device-gone' `
+        -Desired @{ 'audio.render.normal:default' = 'off' } -Body { param($t) @{ Result = 'PASS' } }
+    Assert-Equal 'RESTORE_PENDING_DEVICE_UNAVAILABLE' $outcome.RestoreResult 'a missing device is its own outcome'
+    Assert-True $orchestrator.Dirty 'a pending restore blocks the next mutating scenario'
+    Assert-True ($null -ne $outcome.Evidence) 'the evidence naming the unrestored property must survive'
+}
+
+Test-Case 'a dirty environment blocks the next mutating scenario' {
+    $directory = New-TestDirectory
+    $fake = New-FakeEnvctl -Directory $directory
+    Set-FakeBehaviour -Directory $directory -Behaviour @{
+        recover = @{ exit = 0; output = @{ dirty = $true; detail = 'HDR left off on display.main-hdr'; recovered = @() } }
+    }
+    $orchestrator = New-EnvironmentOrchestrator -RunId 'r1' -JournalDirectory $directory -EnvctlPath $fake
+    Assert-True $orchestrator.Dirty 'startup recovery reported the environment as dirty'
+    Assert-Throws { Assert-EnvironmentClean -Orchestrator $orchestrator } `
+        'a dirty environment must refuse a new mutation, not warn about one'
+    Assert-Throws {
+        Invoke-EnvironmentTransaction -Orchestrator $orchestrator -Scenario 'x' `
+            -Desired @{ 'display.main-hdr:hdr' = 'off' } -Body { param($t) @{ Result = 'PASS' } }
+    } 'the transaction itself must enforce the same gate'
+}
+
+Test-Case 'startup recovery restores before anything else runs' {
+    $directory = New-TestDirectory
+    $fake = New-FakeEnvctl -Directory $directory
+    Set-FakeBehaviour -Directory $directory -Behaviour @{
+        recover = @{ exit = 0; output = @{ dirty = $false; recovered = @('display.main-hdr:hdr') } }
+    }
+    $orchestrator = New-EnvironmentOrchestrator -RunId 'r1' -JournalDirectory $directory -EnvctlPath $fake
+    Assert-True (-not $orchestrator.Dirty) 'a completed recovery leaves a clean environment'
+    Assert-True (@($orchestrator.Recovered) -contains 'display.main-hdr:hdr') 'what was restored must be reported'
+    $calls = @(Get-FakeCalls -Directory $directory)
+    Assert-Equal 'recover' $calls[0].verb 'recovery must be the FIRST thing the orchestrator does'
+}
+
+Test-Case 'a recovery pass that itself fails leaves the run dirty rather than throwing' {
+    $directory = New-TestDirectory
+    $fake = New-FakeEnvctl -Directory $directory
+    Set-FakeBehaviour -Directory $directory -Behaviour @{ recover = @{ exit = 5; output = @{ error = 'journal unreadable' } } }
+    $orchestrator = New-EnvironmentOrchestrator -RunId 'r1' -JournalDirectory $directory -EnvctlPath $fake
+    Assert-True $orchestrator.Dirty 'a failed recovery is the strongest reason not to mutate anything'
+    Assert-True ($orchestrator.DirtyDetail -match 'journal unreadable') 'the reason must be carried, not lost'
+}
+
+Test-Case 'an unbound alias is UNAVAILABLE, not a product failure' {
+    $directory = New-TestDirectory
+    $fake = New-FakeEnvctl -Directory $directory
+    Set-FakeBehaviour -Directory $directory -Behaviour @{
+        recover           = @{ exit = 0; output = @{ dirty = $false; recovered = @() } }
+        'resolve-aliases' = @{ exit = 0; output = @{ aliases = @() } }
+    }
+    $orchestrator = New-EnvironmentOrchestrator -RunId 'r1' -JournalDirectory $directory -EnvctlPath $fake
+    $verdict = Test-EnvironmentRequirement -Orchestrator $orchestrator -Requirement @{ display = 'display.main-hdr' }
+    Assert-True (-not $verdict.Satisfied) 'an unbound alias cannot satisfy a requirement'
+    Assert-True ($verdict.Reason -match 'unbound_alias') 'the reason must name the failure class'
+}
+
+Test-Case 'an ambiguous alias is refused rather than resolved' {
+    $directory = New-TestDirectory
+    $fake = New-FakeEnvctl -Directory $directory
+    Set-FakeBehaviour -Directory $directory -Behaviour @{
+        recover           = @{ exit = 0; output = @{ dirty = $false; recovered = @() } }
+        'resolve-aliases' = @{ exit = 0; output = @{ aliases = @(
+                    @{ alias = 'display.main-hdr'; error = 'ambiguous_device'; present = $false }
+                )
+            }
+        }
+    }
+    $orchestrator = New-EnvironmentOrchestrator -RunId 'r1' -JournalDirectory $directory -EnvctlPath $fake
+    $verdict = Test-EnvironmentRequirement -Orchestrator $orchestrator -Requirement @{ display = 'display.main-hdr' }
+    Assert-True (-not $verdict.Satisfied) 'ambiguity must never be resolved by picking one'
+    Assert-True ($verdict.Reason -match 'ambiguous_device') 'the reason must name the failure class'
+}
+
+Test-Case 'without envctl a mutating scenario is UNAVAILABLE, not silently skipped' {
+    $orchestrator = [pscustomobject]@{
+        RunId = 'r1'; JournalDirectory = 'x'; EnvctlPath = $null; AliasProfile = $null
+        Available = $false; Dirty = $false; DirtyDetail = $null; Recovered = @()
+    }
+    $verdict = Test-EnvironmentRequirement -Orchestrator $orchestrator -Requirement @{ display = 'display.main-hdr' }
+    Assert-True (-not $verdict.Satisfied) 'no tool means no resolvable requirement'
+    Assert-True ($verdict.Reason -match 'envctl') 'the reason must say the tool is missing'
+}
+
+# ---------------------------------------------------------------------------
+# Runner surface
+# ---------------------------------------------------------------------------
+
+Test-Case 'prepare refuses to run without an explicit artifact' {
+    $runner = Join-Path $scriptRoot 'release-verify.ps1'
+    $output = & pwsh -NoProfile -File $runner prepare 2>&1 | Out-String
+    Assert-True ($output -match 'ExePath') 'a release campaign must not resolve a default binary'
+}
+
+Test-Case 'the catalog loads and every scenario declares what it needs' {
+    . (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
+    $catalog = Get-ReleaseScenarioCatalog
+    Assert-True ($catalog.Count -gt 0) 'the catalog must not be empty'
+    $ids = @($catalog | ForEach-Object { $_.Id })
+    Assert-Equal $ids.Count (@($ids | Select-Object -Unique).Count) 'scenario ids must be unique'
+    foreach ($entry in $catalog) {
+        foreach ($field in @('Id', 'Title', 'Class', 'Layer', 'Source', 'Run')) {
+            Assert-True ($entry.PSObject.Properties.Name -contains $field) "$($entry.Id) is missing $field"
+        }
+        Assert-True ($entry.Layer -in @('FULL_AUTO', 'EXTERNAL_TOOL', 'CONTROL_CHANNEL', 'UI_AUTOMATION',
+                'SEMI_AUTO', 'MANUAL_VISUAL', 'MANUAL_PHYSICAL', 'SECURE')) "$($entry.Id) has an unknown layer '$($entry.Layer)'"
+    }
+}
+
+Test-Case 'no scenario hardcodes a device friendly name' {
+    # The rule the whole catalog rests on: a scenario names an ALIAS, and the alias
+    # profile is the only machine-specific file. A model number in a Requires block
+    # is a scenario that can only run at one desk.
+    . (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
+    $catalog = Get-ReleaseScenarioCatalog
+    foreach ($entry in $catalog) {
+        if ($entry.PSObject.Properties.Name -notcontains 'Requires') { continue }
+        foreach ($alias in $entry.Requires.Values) {
+            Assert-True ($alias -match '^(display|audio)\.[a-z0-9.-]+$') `
+                "$($entry.Id) requires '$alias', which is not an alias of the documented shape"
+        }
+    }
+}
+
+Test-Case 'every human gate declares why it is manual and how it will be verified' {
+    # A gate without a Verify block cannot tell "done" from "typed done", and a gate
+    # without a VerifyDescription asks the operator to act on faith.
+    . (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
+    $source = Get-Content -LiteralPath (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1') -Raw
+    $gateCount = ([regex]::Matches($source, '\$ctx\.HumanGate')).Count
+    Assert-True ($gateCount -gt 0) 'the catalog is expected to contain human gates'
+    $whyCount = ([regex]::Matches($source, '(?m)^\s+Why\s+=')).Count
+    $verifyDescriptionCount = ([regex]::Matches($source, '(?m)^\s+VerifyDescription\s+=')).Count
+    $verifyCount = ([regex]::Matches($source, '(?m)^\s+Verify\s+=')).Count
+    Assert-Equal $whyCount $verifyDescriptionCount 'every gate that states Why must state VerifyDescription'
+    Assert-Equal $whyCount $verifyCount 'every gate must carry a Verify block'
+}
+
+Write-Host ''
+Write-Host "$script:Passed/$($script:Passed + $script:Failed) passed"
+if ($script:Failed -gt 0) { exit 1 }
+exit 0

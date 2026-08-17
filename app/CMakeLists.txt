@@ -1270,6 +1270,17 @@ if(EXOSNAP_PWSH)
         COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
             "${PROJECT_SOURCE_DIR}/scripts/tests/live-verify-endpoints.tests.ps1")
     set_tests_properties(live_verify.endpoint_names PROPERTIES TIMEOUT 120 LABELS "live_verify")
+
+    # Wave D: the release campaign runner and the environment orchestrator. Every
+    # case here runs against a FAKE envctl, which is what makes the interesting
+    # failures reachable at all -- "the setter returned success and the read-back
+    # disagreed" and "the original device vanished before the restore" cannot be
+    # produced on demand by a real display or a real audio endpoint. Nothing in this
+    # suite touches the machine's actual configuration.
+    add_test(NAME live_verify.release_runner
+        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
+            "${PROJECT_SOURCE_DIR}/scripts/tests/release-verify.tests.ps1")
+    set_tests_properties(live_verify.release_runner PROPERTIES TIMEOUT 300 LABELS "live_verify")
 else()
     message(STATUS "pwsh not found — the Live Verify runner state tests will not be registered.")
 endif()

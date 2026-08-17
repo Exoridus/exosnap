@@ -203,14 +203,28 @@ walked by hand.
 ## 7. 0.9 release gate — manual live verifications
 
 0.9 is **not** tagged or released until these manual checks pass, on real hardware, against the RC
-prerelease from §3, in addition to the automated gates and the updater RC live-check above:
+prerelease from §3, in addition to the automated gates and the updater RC live-check above.
+
+> **Since Wave D most of this section is driven by a runner rather than performed by hand.**
+> `pwsh scripts/release-verify.ps1` (see `docs/dev/release-verify.md`) prepares the environment,
+> drives ExoSnap through its own semantic automation, validates the output with ffprobe, and asks
+> for a person only at a real physical, secure or visual boundary. Items below carry a
+> `→ REL-…` reference to the scenario that covers them; run the scenario rather than repeating the
+> steps by hand. Where the runner still needs a human it says so, prints exactly what to do, and
+> then verifies the consequence itself — an operator answering "done" is never recorded as a pass.
+>
+> The long-term intent for this section is that only genuinely irreducible gates remain: UAC,
+> physical unplug/replug, desktop composition a person has to look at, and hardware this machine
+> does not have.
 
 - [ ] **Window-capture recording with the `APP` audio row.** Record a specific application window
       with the `APP` row enabled; play the result back and confirm per-app audio is present and
       audibly correct.
-- [ ] **System-audio recording on a real 44.1 kHz output device.** Set a physical playback device to
+- [ ] **System-audio recording on a real 44.1 kHz output device.** — `→ REL-AUD-FORMAT-001`
+      (the runner verifies the endpoint really reads 44100 before it records, and ffprobes the result) Set a physical playback device to
       44.1 kHz, record with `SYS` enabled, and confirm audio is present in the output file.
-- [ ] **Updater round-trip on the RC build.** With the signed manifest and its detached `.sig`
+- [ ] **Updater round-trip on the RC build.** — `→ REL-UPD-PORTABLE-001` (portable) and
+      `→ REL-UPD-MSI-001` / `REL-UPD-MSI-DECLINE-001` (MSI; UAC stays yours) With the signed manifest and its detached `.sig`
       published alongside the RC release, confirm the in-app update check finds the release,
       verifies it, and installs it end to end.
 - [ ] **Edit overlay walkthrough.** Open a completed recording in the Edit overlay and click through
@@ -226,7 +240,9 @@ prerelease from §3, in addition to the automated gates and the updater RC live-
       vendor, so this clip is the software path's worst case — watch specifically for audio holes
       or stutter, not just for a picture appearing.
       Not automatable (real audio-clock pacing and a real decoder, no mock seam).
-- [ ] **Audio-endpoint loss mid-recording degrades to silence and keeps recording (ADR 0046).**
+- [ ] **Audio-endpoint loss mid-recording degrades to silence and keeps recording (ADR 0046).** —
+      `→ REL-AUD-DEGRADE-001` (you unplug; the runner asserts the degradation, the continued
+      recording and the recovery) and `→ REL-AUD-SILENCE-001` (silence is not degradation)
       During a `SYS`-row recording, remove or switch the playback endpoint device: the recording
       does **not** stop. The affected source falls to honest silence, the engine reactivates the
       same source identity every 500 ms, and a standing notification plus Diagnostics/post-flight
@@ -234,7 +250,8 @@ prerelease from §3, in addition to the automated gates and the updater RC live-
       sources keep recording normally; in a merged track only the dead source's contribution goes
       silent. Confirm this end-to-end on real hardware — unit/integration tests already cover the
       logic with fake sources, but the real endpoint-unplug path has no test-harness device seam.
-- [ ] **Present-mode diagnostics are per-recording, not per-session.** After some normal desktop use
+- [ ] **Present-mode diagnostics are per-recording, not per-session.** — `→ REL-PRESENT-001`
+      (unelevated posture) and `→ REL-PRESENT-002` (elevated, real presents; needs your UAC) After some normal desktop use
       (window switches, notifications), record one demonstrably stable window, stop, then record a
       second stable window. Neither recording may surface a false "captured source keeps changing
       present mode" notice — the warning must reflect only the current recording, not accumulated
