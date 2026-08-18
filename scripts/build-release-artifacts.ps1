@@ -227,6 +227,11 @@ $WindowsSystemDllAllowlist = @(
     # is the Event Trace Decode Helper (TdhGetEventInformation / TdhFormatProperty),
     # a Windows system DLL present on every Win10/11 install — not bundled.
     'tdh.dll',
+    # Text / internationalization. Qt 6.11's Qt6Core.dll imports icuuc.dll, which
+    # Qt 6.9 did not — the Qt build now uses the ICU that Windows itself ships in
+    # System32 rather than bundling its own, so there is nothing for the deploy to
+    # stage and nothing to add to the package.
+    'icuuc.dll',
     # Misc
     'winmm.dll', 'version.dll'
 )
@@ -1127,6 +1132,13 @@ else {
 # 7. Manifest + report
 # ---------------------------------------------------------------------------
 $sourceCommit = (& git -C $RepoRoot rev-parse HEAD).Trim()
+# A package built from a modified working tree is not the commit it names, and the
+# manifest is the only place that claim is ever checked. Release CI builds from a
+# clean checkout and never sees the suffix; a local gate run does, which is exactly
+# when the difference matters.
+if (@(& git -C $RepoRoot status --porcelain).Count -gt 0) {
+    $sourceCommit += '-dirty'
+}
 $fileEntries = foreach ($file in ($allFiles | Sort-Object FullName)) {
     [ordered]@{
         path   = "$PortablePackageName/" + $file.FullName.Substring($PackageRoot.Length + 1).Replace('\', '/')
