@@ -857,9 +857,9 @@ exosnap_add_gtest(
 )
 target_include_directories(timeline_thumbnail_source_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 # One case opens a real clip to prove the worker releases the file handle on
-# close; it resolves the (gitignored, .workspace/ is scratch) fixture through the
-# source dir and GTEST_SKIPs where the host has none -- same arrangement
-# test_edit_player_engine already uses.
+# close; it resolves its untracked fixture through the source dir and GTEST_SKIPs
+# where the host has none -- same arrangement test_edit_player_engine already
+# uses.
 target_compile_definitions(timeline_thumbnail_source_tests PRIVATE EXOSNAP_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 set_target_properties(timeline_thumbnail_source_tests PROPERTIES AUTOMOC ON)
 
@@ -1313,8 +1313,33 @@ if(EXOSNAP_PWSH)
         COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
             "${PROJECT_SOURCE_DIR}/scripts/tests/release-verify.tests.ps1")
     set_tests_properties(live_verify.release_runner PROPERTIES TIMEOUT 300 LABELS "live_verify")
+
+    # The local verification pipeline's own contracts. These belong in CTest and
+    # not only in verify.ps1, because verify.ps1 is the thing under test: a
+    # pipeline that reports PASS is worth nothing until it has been shown to
+    # report FAIL when a step fails, and to refuse PASS for a step whose
+    # prerequisite never ran. Running them from inside the pipeline they guard
+    # would let a broken orchestrator pass itself.
+    #
+    # Label "pipeline", deliberately not "live_verify": ctest -LE takes a regex,
+    # so the documented "-ExcludeLabel live" shortcut also drops live_verify.
+    # These cases query no hardware and must survive that exclusion.
+    add_test(NAME pipeline.drift_guards
+        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
+            "${PROJECT_SOURCE_DIR}/scripts/tests/check-drift.tests.ps1")
+    set_tests_properties(pipeline.drift_guards PROPERTIES TIMEOUT 180 LABELS "pipeline")
+
+    add_test(NAME pipeline.verify_orchestrator
+        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
+            "${PROJECT_SOURCE_DIR}/scripts/tests/verify-pipeline.tests.ps1")
+    set_tests_properties(pipeline.verify_orchestrator PROPERTIES TIMEOUT 180 LABELS "pipeline")
+
+    add_test(NAME pipeline.source_hygiene
+        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
+            "${PROJECT_SOURCE_DIR}/scripts/tests/check-source-hygiene.tests.ps1")
+    set_tests_properties(pipeline.source_hygiene PROPERTIES TIMEOUT 180 LABELS "pipeline")
 else()
-    message(STATUS "pwsh not found — the Live Verify runner state tests will not be registered.")
+    message(STATUS "pwsh not found: the Live Verify and pipeline script tests will not be registered.")
 endif()
 
 # ---------------------------------------------------------------------------
