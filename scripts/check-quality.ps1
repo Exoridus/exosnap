@@ -1,8 +1,17 @@
 param(
     [int]$FailureTailLines = 160,
     [switch]$VerboseOutput,
-    [switch]$StaticOnly
+    [switch]$StaticOnly,
+    # Which static pass to run. 'all' is the historical behaviour and stays the
+    # default. The single-tool values exist so scripts/verify.ps1 can report
+    # cppcheck and clang-tidy as separate checks -- one line per tool, so a
+    # failure names the tool that failed -- without a second copy of the
+    # invocation living over there. Implies -StaticOnly.
+    [ValidateSet('all', 'cppcheck', 'clang-tidy')]
+    [string]$Only = 'all'
 )
+
+if ($Only -ne 'all') { $StaticOnly = $true }
 
 $ErrorActionPreference = 'Stop'
 
@@ -169,7 +178,10 @@ $srcFiles = @(git -C $repoRoot ls-files -- 'libs/' 'app/' 'tests/' |
 # ---------------------------------------------------------------------------
 
 $compDb = Join-Path $repoRoot 'build/windows-x64-debug/compile_commands.json'
-if (Test-Path -Path $compDb -PathType Leaf) {
+if ($Only -eq 'cppcheck') {
+    if ($VerboseOutput) { Write-Host "clang-tidy: SKIP (-Only cppcheck)" }
+}
+elseif (Test-Path -Path $compDb -PathType Leaf) {
     if (-not $clangTidy) {
         throw "clang-tidy.exe not found on PATH, VS LLVM, or LLVM install."
     }
@@ -196,7 +208,10 @@ else {
 # cppcheck
 # ---------------------------------------------------------------------------
 
-if ($cppcheck) {
+if ($Only -eq 'clang-tidy') {
+    if ($VerboseOutput) { Write-Host "cppcheck: SKIP (-Only clang-tidy)" }
+}
+elseif ($cppcheck) {
     Invoke-QuietNative -Name 'cppcheck' -FilePath $cppcheck -Arguments @(
         '--enable=warning,performance,portability',
         '--std=c++20',
