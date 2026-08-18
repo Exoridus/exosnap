@@ -69,7 +69,7 @@ param(
     [Parameter(ParameterSetName = 'Full')] [switch] $Full,
     [switch] $Staged,
     [string] $Base,
-    [string] $Preset = 'windows-x64-debug',
+    [string] $Preset = 'windows-x64-ninja-debug',
     [string] $Config = 'Debug',
     [switch] $DryRun,
     [string[]] $SimulateFail = @(),
@@ -207,16 +207,6 @@ function Invoke-Step {
     return @{ Status = $status.Fail; Detail = "exit $code"; Evidence = @{ log = $logPath } }
 }
 
-function Get-FailedCTestName {
-    param([string] $LogPath)
-    if (-not (Test-Path -LiteralPath $LogPath -PathType Leaf)) { return @() }
-    # ctest's failure summary lines look like:  "  12 - quick.qml.record_controls (Failed)"
-    return @(Get-Content -LiteralPath $LogPath |
-            ForEach-Object {
-                if ($_ -match '^\s*\d+\s+-\s+(\S+)\s+\((Failed|Timeout|Subprocess aborted)') { $Matches[1] }
-            } | Sort-Object -Unique)
-}
-
 $realExecutor = {
     param($check, $context)
 
@@ -326,9 +316,15 @@ $realExecutor = {
         }
 
         'clang-tidy' {
+            # The BLOCKING check set, scoped to the change. Not check-quality.ps1's
+            # broad pass: that one is advisory by design (advisory-checks.yml owns
+            # it in CI), it reports hundreds of findings on this tree today, and
+            # the MSVC STL shipped with the current toolchain refuses to compile
+            # against an older clang, so it cannot be a local gate at all. -Full
+            # replaces this step with the whole-tree form of the same check set.
             return Invoke-Step -Name 'clang-tidy' -FilePath 'pwsh' -Arguments @(
-                '-NoProfile', '-NonInteractive', '-File', (Join-Path $PSScriptRoot 'check-quality.ps1'),
-                '-Only', 'clang-tidy')
+                '-NoProfile', '-NonInteractive', '-File', (Join-Path $PSScriptRoot 'run-clang-tidy-blocking.ps1'),
+                '-BuildDir', $buildDir, '-Base', $Base)
         }
 
         'clang-tidy-blocking' {

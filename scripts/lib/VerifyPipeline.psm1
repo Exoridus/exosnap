@@ -217,16 +217,15 @@ function Get-VerifyScope {
                 $scope.RequiresBuild          = $true
                 $scope.RequiresTests          = $true
                 $scope.RequiresStaticAnalysis = $true
-                if ($path -match '(?i)^app/') {
-                    [void]$testFilters.Add('^quick\.')
-                }
-                elseif ($path -match '(?i)^(libs|recorder_core|apps|tools)/') {
-                    [void]$testFilters.Add('^(?!quick\.)')
-                }
-                else {
-                    $scope.RequiresFullTests = $true
-                    & $addReason 'C++ outside the known source roots; running the full suite' $path
-                }
+                # No narrowing by source root. It was tried as app/ -> "^quick\." and
+                # libs/ -> "^(?!quick\.)", and the first half is false safety: app/
+                # holds dozens of gtest binaries registered under their own prefixes
+                # (whats_new_payload., record.error.detail., ...), so a change to one
+                # of them ran the Quick UI tests and skipped its own. The suite costs
+                # well under a minute; the narrowing saved a fraction of that and
+                # could report PASS without having run the tests for the file that
+                # changed.
+                $scope.RequiresFullTests = $true
                 continue
             }
             '(?i)\.(qml|mjs)$' {
@@ -338,8 +337,8 @@ function New-VerifyPlan {
     param(
         [Parameter(Mandatory)] [ValidateSet('Fast', 'Full')] [string] $Mode,
         [Parameter(Mandatory)] [hashtable] $Scope,
-        [string] $BuildDir = 'build/windows-x64-debug',
-        [string] $Preset = 'windows-x64-debug',
+        [string] $BuildDir = 'build/windows-x64-ninja-debug',
+        [string] $Preset = 'windows-x64-ninja-debug',
         [string] $Config = 'Debug'
     )
 
@@ -386,7 +385,11 @@ function New-VerifyPlan {
                 -Applicable:$wantStatic -SkipReason 'no C++ changed'))
 
     # clang-tidy reads compile_commands.json, which the configure produces and the
-    # build keeps in step with the source it describes.
+    # build keeps in step with the source it describes. This is the change-scoped
+    # form of the blocking check set; -Full adds the whole-tree form below. The
+    # overlap is deliberate: -Full is defined as a superset of -Fast, and the
+    # curated set is cheap enough that dropping a step to save the overlap would
+    # cost more in explanation than it saves in time.
     $checks.Add((New-VerifyCheck -Name 'clang-tidy' -Kind 'clang-tidy' -DependsOn @('build') `
                 -Applicable:$wantStatic -SkipReason 'no C++ changed' `
                 -Evidence @{ buildDir = $BuildDir }))
@@ -493,6 +496,73 @@ function Invoke-VerifyPlan {
     }
 }
 
+function Get-FailedCTestName {
+    <#
+    .SYNOPSIS
+        The ctest names that failed, from a run-tests.ps1 or a raw ctest log.
+    .DESCRIPTION
+        run-tests.ps1 writes a compact summary and keeps the full ctest output in
+        a separate file it names on a "Full log:" line. Only the full output
+        carries the "The following tests FAILED:" block, so a parser pointed at
+        the summary finds no names and the caller silently loses every diagnosis
+        that depends on knowing which test failed. The pointer is followed when it
+        is there; a raw ctest log parses directly.
+    #>
+    [OutputType([string[]])]
+    param([string] $LogPath)
+
+    if (-not $LogPath -or -not (Test-Path -LiteralPath $LogPath -PathType Leaf)) { return , @() }
+
+    $lines = @(Get-Content -LiteralPath $LogPath)
+    foreach ($line in $lines) {
+        if ($line -match '^\s*Full log:\s*(.+?)\s*$') {
+            $full = $Matches[1]
+            if ((Test-Path -LiteralPath $full -PathType Leaf) -and $full -ne $LogPath) {
+                $lines += @(Get-Content -LiteralPath $full)
+            }
+            break
+        }
+    }
+
+    # ctest's failure summary lines look like:  "  12 - quick.qml.record_controls (Failed)"
+    # Comma operator: a single name would otherwise be unrolled to a bare string,
+    # and the caller's .Count fails under Set-StrictMode.
+    return , @($lines | ForEach-Object {
+            if ($_ -match '^\s*\d+\s+-\s+(\S+)\s+\((Failed|Timeout|Subprocess aborted)') { $Matches[1] }
+        } | Sort-Object -Unique)
+}
+
+function Get-CTestCommandPath {
+    <#
+    .SYNOPSIS
+        Test name to the executable CTest runs for it, from a configured tree.
+    .DESCRIPTION
+        Empty when the tree is not configured or CTest is unavailable: the caller
+        falls back to a composed path, and the worst case stays "no diagnosis",
+        never "ran the wrong binary".
+    #>
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)] [string] $BuildDir,
+        [string] $Config = 'Debug'
+    )
+
+    $paths = @{}
+    if (-not (Test-Path -LiteralPath (Join-Path $BuildDir 'CTestTestfile.cmake') -PathType Leaf)) {
+        return $paths
+    }
+
+    try {
+        $raw = & ctest --test-dir $BuildDir -C $Config --show-only=json-v1 2>$null | Out-String
+        if (-not $raw.Trim()) { return $paths }
+        foreach ($test in (ConvertFrom-Json $raw).tests) {
+            if ($test.command -and $test.command.Count -gt 0) { $paths[$test.name] = $test.command[0] }
+        }
+    }
+    catch { return @{} }
+    return $paths
+}
+
 function Resolve-QmlDiagnosticCommand {
     <#
     .SYNOPSIS
@@ -506,6 +576,12 @@ function Resolve-QmlDiagnosticCommand {
 
         Only real QuickTest runners take -o. The `exosnap --*-test` entry points
         registered alongside them are ordinary executables and are left alone.
+
+        The binary is located by asking CTest where it registered the test, not by
+        composing a path. Where the runners land differs by generator -- the Visual
+        Studio generator writes a per-configuration subdirectory, Ninja does not --
+        and a composed path that misses only makes the diagnosis quietly absent,
+        which is the one outcome this function exists to prevent.
     #>
     [OutputType([object[]])]
     param(
@@ -523,18 +599,26 @@ function Resolve-QmlDiagnosticCommand {
         }
     }
 
+    $registered = Get-CTestCommandPath -BuildDir $BuildDir -Config $Config
+
     $commands = [System.Collections.Generic.List[object]]::new()
     foreach ($name in @($FailedTestNames | Sort-Object -Unique)) {
         if (-not $TestExecutables.ContainsKey($name)) { continue }
         $exe = $TestExecutables[$name]
         $output = Join-Path $LogDirectory "$exe.txt"
+        $filePath = if ($registered.ContainsKey($name)) {
+            $registered[$name]
+        }
+        else {
+            Join-Path (Join-Path $BuildDir $Config) "$exe.exe"
+        }
         # A [pscustomobject], not a hashtable: @(...) around a single dictionary
         # enumerates its ENTRIES, so a one-command result would arrive at the
         # caller as five DictionaryEntry objects instead of one command.
         $commands.Add([pscustomobject]@{
                 TestName   = $name
                 Executable = $exe
-                FilePath   = (Join-Path (Join-Path $BuildDir $Config) "$exe.exe")
+                FilePath   = $filePath
                 Arguments  = @('-o', "$output,txt")
                 OutputPath = $output
             })
@@ -627,6 +711,8 @@ Export-ModuleMember -Function @(
     'New-VerifyPlan',
     'Invoke-VerifyPlan',
     'Resolve-QmlDiagnosticCommand',
+    'Get-CTestCommandPath',
+    'Get-FailedCTestName',
     'New-VerifySummary',
     'Save-VerifyResult'
 )

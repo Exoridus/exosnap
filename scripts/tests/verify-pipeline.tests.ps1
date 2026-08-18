@@ -82,12 +82,22 @@ function New-FakeExecutor {
 Write-Host ''
 Write-Host 'Scope'
 
-Test-Case 'a .cpp change requires a build and its tests' {
+Test-Case 'a .cpp change requires a build and the whole suite' {
     $scope = Get-VerifyScope -ChangedFiles @('libs/recorder_core/src/muxer.cpp')
     Assert-True $scope.RequiresBuild 'a compiled source change must require a build'
     Assert-True $scope.RequiresTests 'a compiled source change must require tests'
-    Assert-True (-not $scope.RequiresFullTests) 'a single engine .cpp does not need the whole suite'
-    Assert-Equal '^(?!quick\.)' $scope.TestFilter 'engine sources map to the non-Quick tests'
+    Assert-True $scope.RequiresFullTests 'a compiled source change may not narrow the suite'
+    Assert-Equal '' $scope.TestFilter 'a full-suite run carries no filter'
+}
+
+Test-Case 'a C++ test under app/ runs its own tests, not only the Quick ones' {
+    # The narrowing this replaces mapped every app/ source to "^quick\.". app/
+    # holds dozens of gtest binaries under their own prefixes, so a change to one
+    # of them ran the Quick UI suite and skipped the tests belonging to the file
+    # that had changed -- a PASS that had never executed the relevant test.
+    $scope = Get-VerifyScope -ChangedFiles @('app/tests/test_whats_new_payload.cpp')
+    Assert-True $scope.RequiresFullTests 'an app/ source may not be narrowed to the Quick tests'
+    Assert-True ($scope.TestFilter -notmatch 'quick') 'the Quick-only filter must be gone'
 }
 
 Test-Case 'a header change escalates to the full test suite' {
@@ -361,6 +371,53 @@ Test-Case 'the QuickTest re-run asks for a text report' {
         'the re-run must request a txt report; without it a QuickTest failure is only an exit code'
 }
 
+Test-Case 'the failing test names are read through the summary log pointer' {
+    # run-tests.ps1 prints a compact summary and keeps the ctest output that
+    # names the failures in a separate file. Parsing only the summary found
+    # nothing, so a failing QML test produced no diagnosis at all while the
+    # pipeline still reported the failure -- honest, and useless.
+    $dir = Join-Path ([IO.Path]::GetTempPath()) "verify-tests/$([guid]::NewGuid().ToString('n'))"
+    New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    $full = Join-Path $dir 'last-run.log'
+    $summary = Join-Path $dir 'tests.log'
+    Set-Content -LiteralPath $full -Encoding utf8 -Value @(
+        'The following tests FAILED:',
+        "`t219 - quick.qml.record_controls (Failed)                quick")
+    Set-Content -LiteralPath $summary -Encoding utf8 -Value @(
+        'ctest --test-dir x -C Debug',
+        "Full log: $full",
+        '88% tests passed, 1 tests failed out of 8')
+
+    $names = Get-FailedCTestName -LogPath $summary
+    Assert-Equal 1 $names.Count 'the failure named in the full log must be found through the summary'
+    Assert-Equal 'quick.qml.record_controls' $names[0] 'the ctest name must survive the tab and trailing label'
+}
+
+Test-Case 'a raw ctest log still parses without a pointer' {
+    $path = Join-Path ([IO.Path]::GetTempPath()) "verify-tests/$([guid]::NewGuid().ToString('n')).log"
+    New-Item -ItemType Directory -Path (Split-Path -Parent $path) -Force | Out-Null
+    Set-Content -LiteralPath $path -Encoding utf8 -Value @(
+        'The following tests FAILED:',
+        '  12 - engine.muxer (Timeout)')
+    Assert-Equal 'engine.muxer' (Get-FailedCTestName -LogPath $path)[0] 'a direct ctest log must still parse'
+}
+
+Test-Case 'an unconfigured build directory yields no registered commands' {
+    # The fallback path matters more than the lookup: a tree that was never
+    # configured must not make the resolver throw on the way to reporting a
+    # failure.
+    $paths = Get-CTestCommandPath -BuildDir (Join-Path ([IO.Path]::GetTempPath()) "verify-tests/$([guid]::NewGuid().ToString('n'))")
+    Assert-Equal 0 $paths.Count 'an unconfigured directory registers nothing'
+}
+
+Test-Case 'the re-run targets an executable, however the generator laid it out' {
+    $commands = Resolve-QmlDiagnosticCommand -BuildDir 'build/windows-x64-ninja-debug' -LogDirectory 'C:/logs' `
+        -FailedTestNames @('quick.qml.record_controls')
+    Assert-Equal 1 $commands.Count 'the known QuickTest runner must be re-run'
+    Assert-True ($commands[0].FilePath -match '(?i)record_controls_qml_tests\.exe$') `
+        "the command must point at the runner binary, not at a directory (got '$($commands[0].FilePath)')"
+}
+
 Test-Case 'a non-QuickTest failure is not re-run with QuickTest flags' {
     # exosnap --smoke-test is registered as a ctest test but is not a QuickTest
     # binary, and does not understand -o.
@@ -401,7 +458,7 @@ Test-Case 'the JSON summary records the run truthfully' {
         Assert-True ($tests.dependsOn -contains 'build') 'the JSON has to say what the test result stood on'
 
         $build = @($document.checks | Where-Object { $_.name -eq 'build' })[0]
-        Assert-Equal 'build/windows-x64-debug' $build.evidence.buildDir 'the build target has to be identifiable'
+        Assert-Equal 'build/windows-x64-ninja-debug' $build.evidence.buildDir 'the build target has to be identifiable'
     }
     finally {
         Remove-Item -LiteralPath (Split-Path -Parent $path) -Recurse -Force -ErrorAction SilentlyContinue

@@ -8,7 +8,19 @@ param(
     # failure names the tool that failed -- without a second copy of the
     # invocation living over there. Implies -StaticOnly.
     [ValidateSet('all', 'cppcheck', 'clang-tidy')]
-    [string]$Only = 'all'
+    [string]$Only = 'all',
+    # The configured tree clang-tidy reads compile_commands.json from. Passing it
+    # makes a missing database an error instead of a silent skip: a caller that
+    # names a tree has already built it, and "clang-tidy passed" must not be the
+    # report for a run that never started. Left empty, the first tree that has a
+    # database is used and the skip is stated out loud.
+    [string]$BuildDir = '',
+    # Restrict clang-tidy to the C++ touched since this revision. The broad check
+    # set this pass runs is advisory (advisory-checks.yml owns the full-tree form
+    # in CI), and a whole-tree run measured over ten minutes here even at one job
+    # per core, which is not a price a pre-commit or pre-push hook can pay. The
+    # BLOCKING check set is a different script and stays whole-tree.
+    [string]$Base = ''
 )
 
 if ($Only -ne 'all') { $StaticOnly = $true }
@@ -172,36 +184,108 @@ $cppcheck  = Find-Tool 'cppcheck' -Optional
 $srcFiles = @(git -C $repoRoot ls-files -- 'libs/' 'app/' 'tests/' |
     Where-Object { $_ -match '\.(cpp|h)$' }
 )
+$srcScope = 'every tracked source'
+
+if ($Base) {
+    $touched = @(
+        @(git -C $repoRoot diff --name-only "$Base...HEAD") +
+        @(git -C $repoRoot diff --name-only) +
+        @(git -C $repoRoot diff --cached --name-only)
+    ) | Where-Object { $_ } | Sort-Object -Unique
+    # Intersect rather than filter the diff directly: a deleted file is in the
+    # diff and cannot be analysed, and a path outside the scanned roots is not
+    # this pass's business.
+    $srcFiles = @($srcFiles | Where-Object { $touched -contains $_ })
+    $srcScope = "changed since $Base"
+}
 
 # ---------------------------------------------------------------------------
 # clang-tidy
 # ---------------------------------------------------------------------------
 
-$compDb = Join-Path $repoRoot 'build/windows-x64-debug/compile_commands.json'
+# Only the Ninja presets export a compile database; the Visual Studio generator
+# does not, which is why the hardcoded path this replaces never resolved and the
+# clang-tidy step reported success without running for as long as it existed.
+$compDbTree = $BuildDir
+if (-not $compDbTree) {
+    foreach ($candidate in @('build/windows-x64-ninja-debug', 'build/windows-x64-ninja-release', 'build/windows-x64-debug')) {
+        if (Test-Path -Path (Join-Path $repoRoot "$candidate/compile_commands.json") -PathType Leaf) {
+            $compDbTree = $candidate
+            break
+        }
+    }
+}
+$compDb = if ($compDbTree) { Join-Path $repoRoot "$compDbTree/compile_commands.json" } else { '' }
+
 if ($Only -eq 'cppcheck') {
     if ($VerboseOutput) { Write-Host "clang-tidy: SKIP (-Only cppcheck)" }
 }
-elseif (Test-Path -Path $compDb -PathType Leaf) {
+elseif ($BuildDir -and -not (Test-Path -Path $compDb -PathType Leaf)) {
+    throw "clang-tidy: '$BuildDir' has no compile_commands.json. Configure it with a Ninja preset before asking for this check."
+}
+elseif ($compDb -and (Test-Path -Path $compDb -PathType Leaf)) {
     if (-not $clangTidy) {
         throw "clang-tidy.exe not found on PATH, VS LLVM, or LLVM install."
     }
 
     if ($srcFiles) {
         # -clang-analyzer-*: .clang-tidy enables a few path-sensitive analyser
-        # checks for the blocking CI gate, and the analyser turns this serial
-        # whole-tree pass from a ~45 s pre-push check into a multi-hour one.
-        # scripts/run-clang-tidy-blocking.ps1 is what runs those checks.
-        Invoke-QuietNative -Name 'clang-tidy' -FilePath $clangTidy -Arguments (
-            @('-p', 'build/windows-x64-debug', '--checks=-clang-analyzer-*') + $srcFiles)
+        # checks for the blocking gate, and the analyser turns this pass into a
+        # multi-hour one. scripts/run-clang-tidy-blocking.ps1 runs those checks.
+        #
+        # Two reasons this is not one invocation. A single command line carrying
+        # every tracked source exceeds the length limit ("Der Dateiname oder die
+        # Erweiterung ist zu lang"), which check-format.ps1 already batches
+        # around; and clang-tidy is single-threaded, so a serial whole-tree pass
+        # over this repository runs for the better part of an hour, nearly all of
+        # it re-parsing Qt headers. Batches are independent, so they run
+        # concurrently the way run-clang-tidy-blocking.ps1 runs its units.
+        $batchSize = 25
+        $batches = [System.Collections.Generic.List[object]]::new()
+        for ($i = 0; $i -lt $srcFiles.Count; $i += $batchSize) {
+            $batches.Add(@($srcFiles[$i..([Math]::Min($i + $batchSize - 1, $srcFiles.Count - 1))]))
+        }
+
+        $jobs = [Math]::Max(1, [Environment]::ProcessorCount)
+        Write-Host ("clang-tidy... {0} file(s) ({1}) in {2} batch(es), {3} parallel job(s)" -f `
+                $srcFiles.Count, $srcScope, $batches.Count, $jobs) -NoNewline
+        $started = Get-Date
+
+        # An absolute -p and an absolute working directory: the parallel runspaces
+        # do not inherit this script's location, and a relative build directory
+        # resolves against whatever the caller's happened to be.
+        $compDbAbsolute = (Resolve-Path -LiteralPath (Join-Path $repoRoot $compDbTree)).Path
+        $failures = $batches | ForEach-Object -ThrottleLimit $jobs -Parallel {
+            $arguments = @('-p', $using:compDbAbsolute, '--checks=-clang-analyzer-*') + $_
+            Set-Location $using:repoRoot
+            $output = & $using:clangTidy @arguments 2>&1
+            if ($LASTEXITCODE -ne 0) { ($output | Out-String) }
+        }
+
+        Write-Host (" [{0}s]" -f [int]((Get-Date) - $started).TotalSeconds)
+        if ($failures) {
+            # Reported, never thrown. The broad set in .clang-tidy is advisory by
+            # design -- advisory-checks.yml owns its CI form -- and it currently
+            # reports findings across this tree. The set that blocks is the
+            # curated one in scripts/run-clang-tidy-blocking.ps1, which
+            # scripts/verify.ps1 runs as its own step.
+            $text = ($failures -join "`n")
+            $lines = @($text -split "`r?`n" | Where-Object { $_ -match ': (warning|error): ' })
+            Write-Host ("clang-tidy ADVISORY: {0} finding(s), last {1} shown" -f $lines.Count, $FailureTailLines)
+            Write-Host ((@($text -split "`r?`n") | Select-Object -Last $FailureTailLines) -join "`n")
+        }
+        else {
+            Write-Host "clang-tidy: OK"
+        }
     }
     else {
-        Write-Host "clang-tidy: SKIP (no tracked C++ source files)"
+        Write-Host "clang-tidy: SKIP (no C++ in scope: $srcScope)"
     }
 }
 else {
-    if ($VerboseOutput) {
-        Write-Host "clang-tidy: SKIP (no compile_commands.json; run: cmake --preset windows-x64-debug)"
-    }
+    # Not gated on -VerboseOutput. A skipped gate that says nothing is how this
+    # one went unnoticed.
+    Write-Host "clang-tidy: SKIP (no compile_commands.json; run: cmake --preset windows-x64-ninja-debug)"
 }
 
 # ---------------------------------------------------------------------------
