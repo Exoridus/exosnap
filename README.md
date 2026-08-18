@@ -166,7 +166,9 @@ failing gtest cases; each CTest entry is one test **binary**, and `-Filter`/`-R`
 names (e.g. `recorder_core.`), not individual gtest cases. Optional faster/cached builds are
 available via Ninja and sccache (`winget install Ninja-build.Ninja` / `Mozilla.sccache`). C++ code
 is formatted with `clang-format` and checked with `clang-tidy`; run `scripts\pre-commit.ps1` before
-committing. See [`AGENTS.md`](AGENTS.md) for the full build-tooling reference.
+committing. [`AGENTS.md`](AGENTS.md) carries the working rules;
+[`docs/dev/harness-and-tracing.md`](docs/dev/harness-and-tracing.md) documents the diagnostic
+harness modes and the AddressSanitizer build.
 
 ## Repo layout
 

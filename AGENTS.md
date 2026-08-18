@@ -92,8 +92,12 @@ edge cases. Do not restate names, types or signatures.
 Never put development provenance in source or API documentation: task IDs,
 commits, issues, pull requests, branches or worktrees, conversation or agent
 history, private workspace references, or machine-specific paths. Keep the
-durable technical rationale, drop how it was discovered. Developer-facing source
-documentation is English and uses plain ASCII punctuation.
+durable technical rationale, drop how it was discovered.
+
+Developer-facing source documentation is English and uses plain ASCII
+punctuation: no em dash, en dash, curly quotes or ellipsis character. That is a
+rule about punctuation marks, not about letters — accented characters are
+unaffected, and localized user-facing strings are exempt entirely.
 
 ## Iteration
 

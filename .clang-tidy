@@ -43,9 +43,10 @@
 #   clang-analyzer-core.CallAndMessage
 #   clang-analyzer-core.uninitialized.*
 #   clang-analyzer-cplusplus.NewDelete*
-# These five were measured at zero findings in repository-owned files across all
-# 509 project translation units, which is the only reason they may fail a build.
-# Two consequences worth knowing:
+# A check may fail a build only after a full pass reports zero findings in
+# repository-owned files. That measurement, and the candidates it disqualified,
+# are recorded in docs/dev/static-analysis.md -- repeat it before extending this
+# list. Two consequences worth knowing:
 #   * Requesting any clang-analyzer-* check makes clang-tidy register the entire
 #     clang-analyzer core package — -clang-analyzer-core.X cannot switch the
 #     extras back off — so the path-sensitive analyser now runs under this
@@ -54,20 +55,6 @@
 #     (cppwinrt's Windows.Graphics.Capture.h, QtCore's qsharedpointer_impl.h and
 #     qobjectdefs.h). Those are not ours to fix, so the CI gate only counts
 #     diagnostics located in files this repository owns.
-#
-# Candidates that did NOT qualify, with their finding counts from that same pass:
-#   bugprone-narrowing-conversions / cppcoreguidelines-narrowing-conversions  156
-#                                 qsizetype -> int at Qt call sites, tree-wide
-#   bugprone-integer-division                                                   5
-#                                 deliberate integer pixel math (4:2:0 chroma
-#                                 viewport, Matroska timescale)
-#   clang-diagnostic-switch (enum-exhaustiveness)                               2
-#                                 see the note under HeaderFilterRegex below
-# bugprone-use-after-move had three findings on the same pass and is now blocking:
-# all three were false positives on winrt::com_ptr and a deliberate moved-from
-# assertion in a test, and were resolved at the source rather than suppressed
-# wholesale - the two loop-carried handles in VideoThread::Run are cleared
-# explicitly after the move, the test carries a NOLINT that names its reason.
 Checks: >
   bugprone-*,
   cppcoreguidelines-*,
@@ -138,14 +125,9 @@ WarningsAsErrors: >
   clang-analyzer-core.uninitialized.*,
   clang-analyzer-cplusplus.NewDelete*
 
-# Enum-switch exhaustiveness is NOT covered by the compiler here. The build uses
-# /W4 /WX, but MSVC keeps C4062 (unhandled enumerator, no default label) and
-# C4061 (unhandled enumerator, default label present) off by default at every
-# warning level; they need an explicit /w44062 / /w44061. Verified by compiling a
-# probe with the project's exact flags: silent at /W4 /WX, diagnosed once the
-# warnings are switched on. clang's own -Wswitch does run here as
-# clang-diagnostic-switch and currently reports two unhandled enumerators
-# (RecordPage::canApplyPresetNow, VisualTestHarness), so it is not eligible for
-# the blocking set until those are resolved.
+# Enum-switch exhaustiveness is NOT covered by the compiler here: MSVC keeps
+# C4062 and C4061 off at every warning level, so /W4 /WX does not diagnose an
+# unhandled enumerator. clang's own -Wswitch does run, as clang-diagnostic-switch
+# -- see docs/dev/static-analysis.md for why it is not blocking yet.
 HeaderFilterRegex: '^(?!.*third_party/).*'
 FormatStyle: file
