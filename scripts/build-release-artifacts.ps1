@@ -604,7 +604,7 @@ $requiredFiles = @(
     'Qt6Core.dll', 'Qt6Gui.dll', 'Qt6Widgets.dll', 'Qt6Svg.dll',
     'Qt6Qml.dll', 'Qt6QmlModels.dll', 'Qt6Network.dll',
     'Qt6Quick.dll', 'Qt6QuickControls2.dll', 'Qt6QuickTemplates2.dll',
-    'Qt6QuickLayouts.dll', 'Qt6QuickShapes.dll', 'Qt6QuickDialogs2.dll',
+    'Qt6QuickLayouts.dll', 'Qt6QuickShapes.dll', 'Qt6QuickDialogs2.dll', 'Qt6QuickEffects.dll',
     'LICENSE', 'THIRD_PARTY_NOTICES.md', 'KNOWN_LIMITATIONS.md', 'README-PORTABLE.md'
 )
 foreach ($f in $requiredFiles) {
@@ -612,7 +612,11 @@ foreach ($f in $requiredFiles) {
 }
 foreach ($d in @('plugins/platforms', 'licenses',
                  'qml/QtQuick', 'qml/QtQuick/Controls', 'qml/QtQuick/Dialogs',
-                 'qml/QtQuick/Shapes', 'qml/QtQml')) {
+                 'qml/QtQuick/Shapes', 'qml/QtQml',
+                 # OverlayCountdown.qml imports QtQuick.Effects for its MultiEffect.
+                 # Unasserted, a deploy regression passes packaging and fails at runtime
+                 # inside a capture-excluded overlay -- the one place nobody can observe.
+                 'qml/QtQuick/Effects')) {
     if (-not (Test-Path -LiteralPath (Join-Path $PackageRoot $d) -PathType Container)) { Add-Error "Missing required directory: $d" }
 }
 # A QML module directory without its qmldir is a directory the engine cannot

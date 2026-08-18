@@ -261,6 +261,19 @@ void ControlServer::ServeLoop() {
         const DWORD outcome = WaitForMultipleObjects(2, waits, FALSE, INFINITE);
         if (outcome != WAIT_OBJECT_0) {
             CancelIoEx(pipe, &write_ov.overlapped);
+            // CancelIoEx REQUESTS the cancellation; it does not wait for it. `write_ov`
+            // is a stack object whose destructor closes the event, and the frame it
+            // lives in is reused immediately -- so returning here hands the kernel an
+            // address it may still write the 16-byte status block into. The pipe stays
+            // open on this path (nothing closes it), so nothing else forces the IRP to
+            // finish either. Wait it out; it comes back at once, with
+            // ERROR_OPERATION_ABORTED.
+            //
+            // Reachable exactly where this file's own note at the bottom points: a peer
+            // that has stopped reading fills the outbound buffer, this write goes
+            // pending, and Stop() then signals during shutdown.
+            DWORD cancelled = 0;
+            (void)GetOverlappedResult(pipe, &write_ov.overlapped, &cancelled, TRUE);
             return false;
         }
         return GetOverlappedResult(pipe, &write_ov.overlapped, &written, FALSE) != FALSE;
@@ -289,6 +302,10 @@ void ControlServer::ServeLoop() {
 
         OverlappedEvent connect_ov;
         bool connected = false;
+        // Whether an IRP is actually outstanding against `connect_ov`. Only the
+        // ERROR_IO_PENDING branch arms one, and a bWait=TRUE wait on an unarmed
+        // OVERLAPPED would block on an event nothing will ever signal.
+        bool connect_pending = false;
         if (ConnectNamedPipe(pipe, &connect_ov.overlapped) != FALSE) {
             connected = true;
         } else {
@@ -296,12 +313,19 @@ void ControlServer::ServeLoop() {
             if (status == ERROR_PIPE_CONNECTED) {
                 connected = true;
             } else if (status == ERROR_IO_PENDING) {
+                connect_pending = true;
                 HANDLE waits[] = {connect_ov.event, stop};
                 connected = WaitForMultipleObjects(2, waits, FALSE, INFINITE) == WAIT_OBJECT_0;
+                if (connected)
+                    connect_pending = false;
             }
         }
         if (!connected) {
             CancelIoEx(pipe, nullptr);
+            if (connect_pending) {
+                DWORD cancelled = 0;
+                (void)GetOverlappedResult(pipe, &connect_ov.overlapped, &cancelled, TRUE);
+            }
             CloseHandle(pipe);
             break;
         }
@@ -397,6 +421,13 @@ void ControlServer::ServeLoop() {
         (void)TakeOutbound();
 
         CancelIoEx(pipe, nullptr);
+        // Same rule as the two above: the read IRP has to be finished with before
+        // `read_ov` leaves scope at the end of this iteration.
+        if (read_pending) {
+            DWORD cancelled = 0;
+            (void)GetOverlappedResult(pipe, &read_ov.overlapped, &cancelled, TRUE);
+            read_pending = false;
+        }
         // NEVER on the stop path. FlushFileBuffers on a named-pipe SERVER blocks
         // until the CLIENT has read everything still buffered -- with no timeout
         // and nothing to cancel it. A client that has stopped reading therefore

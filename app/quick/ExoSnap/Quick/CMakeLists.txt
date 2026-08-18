@@ -757,6 +757,14 @@ qt_add_executable(record_controls_qml_tests
     ${PROJECT_SOURCE_DIR}/app/assets/fonts/exosnap_fonts.qrc
 )
 
+# AUTORCC, because the .qrc above is only a list of files until something compiles
+# it. `exosnap` gets it from a set_target_properties() call of its own;
+# qt_standard_project_setup() does NOT set CMAKE_AUTORCC, so without this line the
+# resource is silently dropped, qrc:/fonts/* does not exist, and ExoTheme falls back
+# to Segoe UI -- leaving the elision and single-line assertions in these suites
+# measuring a font the product never ships.
+set_target_properties(record_controls_qml_tests PROPERTIES AUTORCC ON)
+
 qt_add_qml_module(record_controls_qml_tests
     URI ExoSnap.Quick.TestControls
     OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/tests/ExoSnap/Quick/TestControls"
@@ -907,6 +915,14 @@ qt_add_executable(edit_timeline_qml_tests
     ${EXOSNAP_QUICK_TESTS_DIR}/edit_timeline_qml_test_main.cpp
     ${PROJECT_SOURCE_DIR}/app/assets/fonts/exosnap_fonts.qrc
 )
+
+# AUTORCC, because the .qrc above is only a list of files until something compiles
+# it. `exosnap` gets it from a set_target_properties() call of its own;
+# qt_standard_project_setup() does NOT set CMAKE_AUTORCC, so without this line the
+# resource is silently dropped, qrc:/fonts/* does not exist, and ExoTheme falls back
+# to Segoe UI -- leaving the elision and single-line assertions in these suites
+# measuring a font the product never ships.
+set_target_properties(edit_timeline_qml_tests PROPERTIES AUTORCC ON)
 
 qt_add_qml_module(edit_timeline_qml_tests
     URI ExoSnap.Quick.EditTestControls

@@ -7,7 +7,11 @@
 # Reuse the Qt discovered by app/CMakeLists.txt when it ran; find it here too so
 # this subdirectory is order-independent.
 if(NOT Qt6_FOUND)
-    find_package(Qt6 QUIET COMPONENTS Core Gui Widgets)
+    # The SAME floor app/ requires. Without it this probe accepts any Qt6 it finds
+    # -- including one a stale cache still points at -- caches that decision, and
+    # then app/'s 6.11 probe fails against it. One version statement per tree, or
+    # the first directory to ask silently decides for the last one.
+    find_package(Qt6 6.11 QUIET COMPONENTS Core Gui Widgets)
 endif()
 
 if(NOT Qt6_FOUND)
