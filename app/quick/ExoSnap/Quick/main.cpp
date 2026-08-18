@@ -548,6 +548,17 @@ int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplic
     return 0;
 }
 
+// installTranslator does not take ownership, and the translator has to outlive
+// every qsTr() that resolves through it -- so it is parented to the application
+// and destroyed with it. The static analyser does not model Qt's parent
+// ownership and reads the allocation as unowned; the suppression is scoped to
+// this function so it can never cover an unrelated allocation.
+// NOLINTBEGIN(clang-analyzer-cplusplus.NewDeleteLeaks)
+void installPseudoLocalization(QApplication& app) {
+    QCoreApplication::installTranslator(new exosnap::quick::PseudoLocalizationTranslator(&app));
+}
+// NOLINTEND(clang-analyzer-cplusplus.NewDeleteLeaks)
+
 } // namespace
 
 int main(int argc, char* argv[]) {
@@ -711,10 +722,8 @@ int main(int argc, char* argv[]) {
     // pass (QCR-511). Installed BEFORE the engine loads, so every qsTr() in QML
     // resolves through it on its first evaluation and no retranslate() call is
     // needed. argv-only by design — see PseudoLocalization.h.
-    if (arguments.contains(QStringLiteral("--pseudo-localize"))) {
-        auto* pseudo = new exosnap::quick::PseudoLocalizationTranslator(&app);
-        QCoreApplication::installTranslator(pseudo);
-    }
+    if (arguments.contains(QStringLiteral("--pseudo-localize")))
+        installPseudoLocalization(app);
 
     exosnap::quick::QuickApplication quick_application;
     // ADR 0033: the handoff a prior elevated self-relaunch put in our own argv.
