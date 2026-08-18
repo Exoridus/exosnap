@@ -128,10 +128,15 @@ try {
     $urlRegex = [regex]::new('https?://([^/\s"''>)]+)', [System.Text.RegularExpressions.RegexOptions]::None)
 
     # -------------------------------------------------------------------------
-    # Enumerate tracked source files (git ls-files -- never touches build/,
-    # and naturally skips anything gitignored).
+    # Enumerate tracked source files. git ls-files, not a recursive directory
+    # walk: it never touches build/, and it naturally skips everything
+    # gitignored -- which now includes .claude/worktrees/, where a parallel agent
+    # session keeps a full second checkout of this repository. A Get-ChildItem
+    # -Recurse from the repo root would scan those copies as if they were source.
+    # -C pins it to the repository this script belongs to rather than to whatever
+    # the caller's working directory happens to be.
     # -------------------------------------------------------------------------
-    $trackedFiles = git ls-files -- 'app' 'libs' 'apps' 2>$null
+    $trackedFiles = git -C $repoRoot ls-files -- 'app' 'libs' 'apps' 2>$null
     $sourceFiles = $trackedFiles | Where-Object {
         ($_ -match '\.(cpp|h|cc|hpp)$') -and
         ($_ -notmatch '(^|[/\\])third_party([/\\]|$)') -and
