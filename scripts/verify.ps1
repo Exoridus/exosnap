@@ -82,6 +82,7 @@ $ErrorActionPreference = 'Stop'
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 Import-Module (Join-Path $PSScriptRoot 'lib/VerifyPipeline.psm1') -Force -DisableNameChecking
+Import-Module (Join-Path $PSScriptRoot 'lib/MsvcEnvironment.psm1') -Force -DisableNameChecking
 
 # Before anything else, and before any child process is started: see the function
 # for what a leaked hook git environment does to a repository.
@@ -123,6 +124,46 @@ $plan = New-VerifyPlan -Mode $mode -Scope $scope -BuildDir $buildDir -Preset $Pr
 # ---------------------------------------------------------------------------
 
 $script:LastFailedTests = @()
+$script:MsvcEnvironmentReady = $false
+
+function Test-PresetUsesNinja {
+    <#
+    .SYNOPSIS
+        Whether a configure preset builds with Ninja, following inherits.
+    #>
+    param([Parameter(Mandatory)] [string] $Name)
+
+    $presets = (Get-Content -LiteralPath (Join-Path $repoRoot 'CMakePresets.json') -Raw |
+        ConvertFrom-Json).configurePresets
+    # Bounded rather than while($true): a cycle in inherits is a broken presets
+    # file, and hanging the whole pipeline is a worse way to report it.
+    for ($hop = 0; $hop -lt 16 -and $Name; $hop++) {
+        $preset = $presets | Where-Object { $_.name -eq $Name } | Select-Object -First 1
+        if (-not $preset) { return $false }
+        if ($preset.PSObject.Properties.Name -contains 'generator' -and $preset.generator) {
+            return $preset.generator -eq 'Ninja'
+        }
+        $Name = if ($preset.PSObject.Properties.Name -contains 'inherits') { @($preset.inherits)[0] } else { $null }
+    }
+    return $false
+}
+
+function Initialize-CompilerEnvironment {
+    <#
+    .SYNOPSIS
+        Makes cl.exe reachable before the first step that needs a compiler.
+    .DESCRIPTION
+        The Visual Studio generator locates its own toolchain; Ninja does not, and
+        a plain PowerShell has no cl.exe on PATH. Doing this here rather than
+        asking the developer for a Developer PowerShell is what makes the fast
+        preset usable from the shell they already have open. The import applies to
+        this process only and is a no-op inside a Developer PowerShell.
+    #>
+    if ($script:MsvcEnvironmentReady) { return }
+    $script:MsvcEnvironmentReady = $true
+    if (-not (Test-PresetUsesNinja -Name $Preset)) { return }
+    Enter-MsvcEnvironment | Out-Null
+}
 
 function Invoke-Step {
     <#
@@ -246,17 +287,23 @@ $realExecutor = {
         }
 
         'configure' {
+            Initialize-CompilerEnvironment
             return Invoke-Step -Name 'configure' -FilePath 'cmake' -Arguments @('--preset', $Preset)
         }
 
         'qmllint' {
             # The CMake target, never a bare qmllint call: a hand-rolled invocation
             # on this repository reports resolution failures the target does not.
+            Initialize-CompilerEnvironment
             return Invoke-Step -Name 'qmllint' -FilePath 'cmake' `
                 -Arguments @('--build', $buildDir, '--target', 'all_qmllint')
         }
 
         'build' {
+            # Also here, not only in 'configure': a plan that reuses an existing
+            # build directory does not reconfigure, and the compiler is needed
+            # either way.
+            Initialize-CompilerEnvironment
             return Invoke-Step -Name 'build' -FilePath 'cmake' -Arguments @('--build', '--preset', $Preset)
         }
 

@@ -42,10 +42,11 @@
     {
       "name": "windows-x64-ninja-debug",
       "displayName": "Windows x64 Ninja Debug",
-      "description": "Ninja + MSVC Debug. Run from a VS Developer PowerShell/Command Prompt.",
+      "description": "Ninja + MSVC Debug, sccache on. scripts/verify.ps1 imports the MSVC environment itself; a bare cmake --preset needs a Developer PowerShell.",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/${presetName}",
       "cacheVariables": {
+        "EXOSNAP_USE_SCCACHE": "ON",
         "CMAKE_BUILD_TYPE": "Debug",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
       }
@@ -53,17 +54,18 @@
     {
       "name": "windows-x64-ninja-release",
       "displayName": "Windows x64 Ninja Release",
-      "description": "Ninja + MSVC Release. Run from a VS Developer PowerShell/Command Prompt. Optionally enable sccache: -DEXOSNAP_USE_SCCACHE=ON",
+      "description": "Ninja + MSVC Release, sccache on. scripts/verify.ps1 imports the MSVC environment itself; a bare cmake --preset needs a Developer PowerShell.",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/${presetName}",
       "cacheVariables": {
+        "EXOSNAP_USE_SCCACHE": "ON",
         "CMAKE_BUILD_TYPE": "Release"
       }
     },
     {
       "name": "windows-x64-ninja-lint",
       "displayName": "Windows x64 Ninja Lint",
-      "description": "Ninja + MSVC Debug with clang-tidy + cppcheck. Run from a VS Developer PowerShell/Command Prompt.",
+      "description": "Ninja + MSVC Debug with clang-tidy + cppcheck. scripts/verify.ps1 imports the MSVC environment itself; a bare cmake --preset needs a Developer PowerShell.",
       "inherits": "windows-x64-ninja-debug",
       "cacheVariables": {
         "EXOSNAP_CLANG_TIDY": "ON",
@@ -73,7 +75,7 @@
     {
       "name": "windows-x64-ninja-asan",
       "displayName": "Windows x64 Ninja ASan",
-      "description": "Ninja + MSVC Debug with AddressSanitizer. Run from a VS Developer PowerShell/Command Prompt. Needs the 'C++ AddressSanitizer' VS component.",
+      "description": "Ninja + MSVC Debug with AddressSanitizer. Needs the 'C++ AddressSanitizer' VS component. scripts/verify.ps1 imports the MSVC environment itself; a bare cmake --preset needs a Developer PowerShell.",
       "inherits": "windows-x64-ninja-debug",
       "cacheVariables": {
         "EXOSNAP_ASAN": "ON"
