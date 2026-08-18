@@ -60,6 +60,8 @@ jobs:
   advisory-unused-checks:
     name: advisory-unused-checks
     runs-on: windows-2022
+    # ~2x the observed worst case (45 min: full-tree clang-tidy + cppcheck).
+    timeout-minutes: 90
     # NO job-level continue-on-error: only the FINDINGS must never block (their
     # steps carry their own continue-on-error below). If the toolchain setup,
     # configure, or build breaks, this nightly must go visibly red — a job-level
