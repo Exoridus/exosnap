@@ -358,6 +358,7 @@ function New-VerifyPlan {
     $checks.Add((New-VerifyCheck -Name 'sanity' -Kind 'sanity' -Applicable))
     $checks.Add((New-VerifyCheck -Name 'diff' -Kind 'diff' -DependsOn @('sanity') -Applicable))
     $checks.Add((New-VerifyCheck -Name 'drift' -Kind 'drift' -DependsOn @('sanity') -Applicable))
+    $checks.Add((New-VerifyCheck -Name 'source-hygiene' -Kind 'source-hygiene' -DependsOn @('sanity') -Applicable))
     $checks.Add((New-VerifyCheck -Name 'format' -Kind 'format' -DependsOn @('sanity') -Applicable))
 
     $checks.Add((New-VerifyCheck -Name 'script-tests' -Kind 'script-tests' -DependsOn @('sanity') `

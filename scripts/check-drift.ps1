@@ -179,8 +179,8 @@ function Test-DriftRule {
 
             # -- qt-version-consistency ---------------------------------------
             # Two load-bearing shapes only:
-            #   an absolute Qt SDK path   C:/Qt/6.11.1/msvc2022_64
-            #   a workflow version input  version: '6.11.1'
+            #   an absolute Qt SDK path, drive letter through three-part version
+            #   a workflow version input, `version:` followed by a three-part version
             # A two-part find_package(Qt6 6.11 REQUIRED ...) is a MINIMUM, not the
             # installed SDK, and is deliberately not matched.
             $found = @()

@@ -228,6 +228,22 @@ Test-Case 'a format failure stops the compile and everything past it' {
     Assert-True ((Get-CheckStatus $run 'tests').status -ne $S.Pass) 'no test may read as passed'
 }
 
+Test-Case 'a source-hygiene failure fails the run' {
+    $plan = New-VerifyPlan -Mode 'Fast' -Scope (Get-VerifyScope -ChangedFiles @('app/quick/ExoSnap/Quick/x.cpp'))
+    $run = Invoke-VerifyPlan -Plan $plan -Executor (New-FakeExecutor -FailingChecks @('source-hygiene'))
+    Assert-Equal 'failed' $run.result 'provenance in a source comment is a blocking gate'
+}
+
+Test-Case 'source-hygiene runs in both modes and before the compile' {
+    foreach ($mode in @('Fast', 'Full')) {
+        $plan = New-VerifyPlan -Mode $mode -Scope (Get-VerifyScope -ChangedFiles @())
+        $names = @($plan.Checks.Name)
+        Assert-True ($names -contains 'source-hygiene') "$mode must run source-hygiene"
+        Assert-True ([array]::IndexOf($names, 'source-hygiene') -lt [array]::IndexOf($names, 'build')) `
+            "$mode must run the cheap text check before the compile"
+    }
+}
+
 Test-Case 'a drift failure fails the run' {
     $plan = New-VerifyPlan -Mode 'Fast' -Scope (Get-VerifyScope -ChangedFiles @('.github/workflows/ci.yml'))
     $run = Invoke-VerifyPlan -Plan $plan -Executor (New-FakeExecutor -FailingChecks @('drift'))

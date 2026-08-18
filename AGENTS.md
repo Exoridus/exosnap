@@ -99,6 +99,18 @@ non-ASCII characters are allowed only when technically meaningful. The rule bans
 typographic variants (em dash, en dash, curly quotes, ellipsis), not characters
 as such: a unit, a symbol or an arrow that is the correct notation stays.
 
+Repository specifics:
+
+- `.workspace/` is private planning context. Agents may read it; committed source
+  and public documentation must never point at it.
+- Review findings are tracked as `QCR-###`. They belong in `.workspace/`, not in a
+  source comment - keep the constraint the finding produced, drop the number.
+- Diagnostic identifiers shipped as product data (`ART-001`, `ENV-001`, ...) are
+  code, not tracker references, and are left alone.
+- `scripts/check-source-hygiene.ps1` enforces the mechanical half; `scripts/verify.ps1`
+  runs it. Its default scope is the work in front of you. The branch-wide sweep
+  (`check-source-hygiene.ps1 -All`) currently reports a backlog in older comments.
+
 ## Iteration
 
 - A normal slice targets one subsystem and 30-60 minutes. Do not broaden scope

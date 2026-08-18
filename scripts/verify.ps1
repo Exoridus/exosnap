@@ -214,6 +214,18 @@ $realExecutor = {
                 '-NoProfile', '-NonInteractive', '-File', (Join-Path $PSScriptRoot 'check-drift.ps1'))
         }
 
+        'source-hygiene' {
+            # -Base HEAD scopes this to the work in front of the developer: the
+            # staged and working-tree changes, not the whole branch. That is what
+            # makes the rules adoptable at all. The branch-wide sweep
+            # (check-source-hygiene.ps1, or -All for every tracked file) is a
+            # known backlog on this tree; widening the scope here is a one-word
+            # change once it is cleared.
+            return Invoke-Step -Name 'source-hygiene' -FilePath 'pwsh' -Arguments @(
+                '-NoProfile', '-NonInteractive', '-File', (Join-Path $PSScriptRoot 'check-source-hygiene.ps1'),
+                '-Base', 'HEAD')
+        }
+
         'format' {
             $formatArgs = @('-NoProfile', '-NonInteractive', '-File', (Join-Path $PSScriptRoot 'check-format.ps1'))
             if ($Staged) { $formatArgs += @('-Staged', '-Fix') }
