@@ -29,13 +29,14 @@ TrayIconState TrayIconStateFromStatusLabel(const QString& status_label) {
 
 TrayPresence::TrayPresence(QObject* parent) : QObject(parent) {
     // tray_icon_ is parented to this (QObject), so it will be destroyed
-    // automatically.  tray_menu_ is parented to tray_icon_ so it is in the
-    // QObject tree and findChild<QMenu*>() works from TrayPresence in tests.
+    // automatically.
     tray_icon_ = new QSystemTrayIcon(this);
 
-    // Parent the menu to tray_icon_ so the QObject tree owns it.
+    // The menu stays parentless and is deleted by hand in the destructor.
+    // setContextMenu() does NOT take ownership -- QSystemTrayIcon holds it as a
+    // QPointer -- so giving it a parent here would be the fiction, not the plain
+    // delete below.
     tray_menu_ = new QMenu();
-    tray_menu_->setParent(nullptr); // unparented widget; owned by tray_icon_ via setContextMenu below
 
     show_hide_action_ = tray_menu_->addAction(QStringLiteral("Show window"));
     record_toggle_action_ = tray_menu_->addAction(QStringLiteral("Start recording"));
@@ -50,8 +51,7 @@ TrayPresence::TrayPresence(QObject* parent) : QObject(parent) {
 
     connect(show_hide_action_, &QAction::triggered, this, &TrayPresence::onShowHideTriggered);
     connect(record_toggle_action_, &QAction::triggered, this, &TrayPresence::recordToggleRequested);
-    // Notifications action: clicking focuses the window and clears the badge
-    // (MainWindow wires clearUnreadCount via activateWindowRequested).
+    // Notifications action: clicking focuses the window and clears the badge.
     connect(notifications_action_, &QAction::triggered, this, [this]() {
         clearUnreadCount();
         emit activateWindowRequested();

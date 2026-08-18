@@ -171,8 +171,15 @@ Item {
     // scrim covers the title band, so the POINTER route to the tabs is already
     // refused. Leaving Ctrl+1..5 live would make the keyboard disagree with the
     // affordance — exactly the split QCR-001 was about, in the other direction.
+    //
+    // The close guard is the fifth, and the only one whose surface is a Dialog
+    // rather than an in-shell overlay: its scrim does not cover the desktop
+    // toast, which is its own always-on-top window and reaches navigateTo()
+    // directly. Without this term a toast action swaps the page underneath an
+    // unanswered close prompt.
     readonly property bool navigationAllowed: !root.recovery.surfaceOpen && !root.recordingError.active
                                               && !root.crashReport.active && !root.whatsNew.active
+                                              && !root.shell.closeGuardActive
 
     // Every destination, directly. Five words fit the band at the 860 px minimum
     // window, so hiding three of them behind a glyph bought nothing and cost a
@@ -784,7 +791,10 @@ Item {
             whatsNewLoader.focusReturn = null;
             // A closed overlay must not leave the window without a focus owner:
             // Tab from nowhere goes nowhere, and where the user was is the control
-            // they opened this from.
+            // they opened this from. A null target is the post-update auto-show,
+            // raised before anything could be focused; the window's root item owns
+            // the chain in that case and Tab still walks the page, so there is
+            // nothing to restore and nothing to invent.
             if (target !== null && target.enabled && target.visible)
                 target.forceActiveFocus(Qt.OtherFocusReason);
         }

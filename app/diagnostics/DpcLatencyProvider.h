@@ -59,7 +59,11 @@ class DpcLatencyProvider final : public IDpcLatencyProvider {
     [[nodiscard]] DpcLatencyReading Read() const override;
 
   private:
-    void ConsumeLoop(); // runs ProcessTrace (blocking) on worker_
+    // Runs ProcessTrace (blocking) on worker_. Static, and handed the session as a
+    // shared owner rather than reaching it through the provider: Stop() may abandon
+    // this thread, and a member function would still be dereferencing a destroyed
+    // provider on its way to the very pointer that keeps the session alive.
+    static void ConsumeLoop(std::shared_ptr<void> session);
 
     std::atomic<bool> open_{false};
     std::thread worker_;

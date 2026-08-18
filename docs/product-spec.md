@@ -1447,8 +1447,11 @@ the focused application. The other three are in-window and are **not** rebindabl
 
 Every shortcut ExoSnap adds inside its own window is modifier-qualified, so no shortcut can consume
 a keystroke meant for a text field. The five navigation shortcuts are inactive while a blocking
-surface (recovery, crash report, recording error) is open, for the same reason the navigation tabs
-are: nothing may swap the page under a surface that still covers it. An open **edit session** is
+surface (recovery, crash report, recording error, release notes) or an unanswered close prompt is
+open, for the same reason the navigation tabs are: nothing may swap the page under a surface that
+still covers it. The close prompt is named separately because it is the one case a scrim cannot
+cover on its own — the desktop notification toast is its own always-on-top window and reaches the
+same navigation intents from outside the shell. An open **edit session** is
 not one of those — the shortcuts and the tabs share one navigation contract, and under it the
 session is state of the Record destination (§2).
 
@@ -1827,7 +1830,8 @@ unimplemented behavior.
 - **What's new (shipped).** Release notes are surfaced from the GitHub release bodies already present
   in the `/releases` payload the update check fetches — no extra network call. One in-window overlay
   shows the notes as a single, always-expanded scrolling document (no collapse/expand), newest first;
-  bodies are Markdown, and a footer **"All releases"** link (bottom-left, with an external-link icon)
+  bodies are Markdown with their links in the accent colour, and a footer **"All releases"** link
+  (bottom-left, with an external-link icon)
   opens the releases page; a primary **Close**/**Got it** button sits bottom-right. It has two entry
   points, which differ in *which* notes they show:
   - **Pre-update:** while the Settings update card shows "Update available — vX.Y", a **"See what's

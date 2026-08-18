@@ -236,6 +236,36 @@ TestCase {
         compare(whatsNewDriver.lastSuppressed(), false, "re-ticking must un-suppress future auto-shows");
     }
 
+    // The post-update overlay raises ITSELF: no control was clicked to open it, so
+    // the hand-back has no origin to restore. Every other focus test here arrives
+    // through the Settings card link and therefore always has one. What must hold
+    // on this path is weaker but not nothing — the window keeps a focus owner and
+    // the page answers Tab again, rather than the keyboard dying with the surface
+    // that let itself in.
+    function test_the_auto_shown_overlay_hands_the_keyboard_to_the_page() {
+        let shell = makeShell();
+        let other = find(shell, "pageOther");
+        verify(other);
+
+        whatsNewDriver.presentPostUpdate();
+        waitForRendering(shell);
+        verify(overlay(shell), "the post-update entry point raised no overlay");
+
+        keyClick(Qt.Key_Escape);
+        waitForRendering(shell);
+        compare(overlay(shell), null, "Escape did not close the overlay");
+
+        verify(shell.Window.activeFocusItem !== null,
+               "closing the auto-shown overlay left the window without a focus owner");
+
+        let reached = false;
+        for (let i = 0; i < 6 && !reached; ++i) {
+            keyClick(Qt.Key_Tab);
+            reached = shell.Window.activeFocusItem === other;
+        }
+        verify(reached, "Tab never reached a page control after the auto-shown overlay closed");
+    }
+
     // Both entry points can legitimately have nothing: a channel with no releases
     // yet, a payload that carried no notes. An overlay whose entire content is
     // missing is worse than none.

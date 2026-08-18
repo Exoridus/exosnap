@@ -288,6 +288,10 @@ QuickApplication::~QuickApplication() {
     // it; unhook before either can be destroyed.
     (void)hotkey_service_.SetRegistrar(nullptr);
 #endif
+    // The tile provider is owned by the QML engine, which is declared after the
+    // timeline adapter and therefore destroyed before it. Dropping the borrow here
+    // keeps the inverted order from mattering.
+    edit_timeline_adapter_.setTileProvider(nullptr);
     recording_coordinator_->SetReadyFrameRequester({});
     // Clearing the requester only refuses NEW requests. A Ready-frame worker that
     // is already running holds a pointer into RecordingCoordinator::snapshot_pool_,
@@ -758,8 +762,10 @@ void QuickApplication::initializeRecordWorkflow() {
     // of those. The read-time refresh on the observability path covers that case;
     // this one covers a topology change that no one asks about.
     QObject::connect(&capture_target_notifier_.displayNotifier(), &DisplayDeviceNotifier::snapshotChanged,
-                     &record_view_model_adapter_,
-                     [this](const DisplaySnapshot&, DiscoveryReason) { refreshDisplayFacts(); });
+                     &record_view_model_adapter_, [this](const DisplaySnapshot&, DiscoveryReason) {
+                         refreshDisplayFacts();
+                         publishRefreshRateDerivedState();
+                     });
 
     countdown_timer_.setInterval(100);
     countdown_timer_.setTimerType(Qt::PreciseTimer);
@@ -863,6 +869,16 @@ void QuickApplication::onCapabilitiesReady(const capability::CapabilitySet& capa
     record_view_model_.capability_status_text = recording_coordinator_->CapabilityStatusText();
     synchronizeRecordState();
     reapplyVisualScenarios();
+}
+
+void QuickApplication::publishRefreshRateDerivedState() {
+    const QList<QScreen*> screens = QGuiApplication::screens();
+    QList<qreal> rates;
+    rates.reserve(screens.size());
+    for (const QScreen* screen : screens)
+        rates.append(screen->refreshRate());
+    settings_adapter_.setMaxFrameRate(MaxFrameRateForRefreshRates(rates));
+    diagnostics_adapter_.refreshDisplayFacts();
 }
 
 // Product-spec §6: the HDR-handling row exists only once a display actively
@@ -1473,11 +1489,7 @@ void QuickApplication::initializeSettingsArea() {
     settings_adapter_.setConfig(live_config_);
     settings_adapter_.setControlsLocked(recording_coordinator_->State() != UiRecordingState::Ready);
 
-    int max_fps = 0;
-    for (const QScreen* screen : QGuiApplication::screens()) {
-        max_fps = std::max(max_fps, static_cast<int>(std::lround(screen->refreshRate())));
-    }
-    settings_adapter_.setMaxFrameRate(max_fps > 0 ? max_fps : kFallbackMaxFrameRate);
+    publishRefreshRateDerivedState();
 
     QObject::connect(&audio_notifier_, &AudioDeviceNotifier::snapshotChanged, &settings_adapter_,
                      [this](const AudioDeviceSnapshot& snapshot, DiscoveryReason) {
@@ -3640,8 +3652,8 @@ void QuickApplication::initializeTray() {
             root_window_->close();
             return;
         }
-        // No window to deliver a close event to -- it is hidden in the tray, or it
-        // was closed while an overlay kept the process alive. Routing the request
+        // No window to deliver a close event to -- it is hidden in the tray.
+        // Routing the request
         // through a window in that state is how a tray Quit came to do nothing at
         // all, so ask the shell directly: same guard chain, same decision, and the
         // approved case quits through closeDecided like every other close.

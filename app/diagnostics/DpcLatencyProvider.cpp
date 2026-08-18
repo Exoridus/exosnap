@@ -262,16 +262,11 @@ bool DpcLatencyProvider::Start() {
         impl_ = s; // shared_ptr<SessionImpl> -> shared_ptr<void>
     }
     open_.store(true, std::memory_order_release);
-    worker_ = std::thread(&DpcLatencyProvider::ConsumeLoop, this);
+    worker_ = std::thread(&DpcLatencyProvider::ConsumeLoop, std::static_pointer_cast<void>(s));
     return true;
 }
 
-void DpcLatencyProvider::ConsumeLoop() {
-    std::shared_ptr<void> sp;
-    {
-        std::lock_guard<std::mutex> lk(impl_mutex_);
-        sp = impl_;
-    }
+void DpcLatencyProvider::ConsumeLoop(std::shared_ptr<void> sp) {
     auto* s = static_cast<SessionImpl*>(sp.get());
     if (s == nullptr)
         return;
@@ -359,8 +354,9 @@ void DpcLatencyProvider::Stop() {
     // path: ~DpcLatencyProvider() runs on the GUI thread, and CloseTrace only *asks*
     // ProcessTrace to return (ERROR_CTX_CLOSE_PENDING is a documented answer). Joining
     // forever would trade a hung shutdown for a guarantee nobody can see. Past the
-    // ceiling the worker is abandoned instead: it holds its own shared_ptr to
-    // SessionImpl, so it still owns everything it can touch. Same trade, same reason as
+    // ceiling the worker is abandoned instead: the thread body took its own shared_ptr
+    // to SessionImpl as an argument and touches nothing else, so an abandoned worker
+    // owns everything it can reach. Same trade, same reason as
     // PresentMonEtwSession::Stop().
     constexpr auto kShutdownCeiling = std::chrono::seconds(2);
     bool finished = true;

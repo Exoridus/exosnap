@@ -61,6 +61,7 @@ static DisplayInfo MakeDisplay(QString id, bool primary = false, QRect geometry 
     d.available_geometry = geometry;
     d.device_pixel_ratio = 1.0;
     d.logical_dpi = 96.0;
+    d.refresh_hz = 60.0;
     d.rotation_degrees = 0;
     d.primary = primary;
     return d;
@@ -176,6 +177,40 @@ TEST_F(DisplayDeviceNotifierTest, GeometryChange_EmitsWithGeometryChangedReason)
 
     EXPECT_EQ(sink.last().reason, DiscoveryReason::GeometryChanged);
     EXPECT_EQ(sink.last().snapshot.displays[0].geometry, QRect(0, 0, 2560, 1440));
+}
+
+// ---------------------------------------------------------------------------
+// Test 3b: A mode-set that changes only the compositor rate still reaches the
+//          consumers. The snapshot is compared field by field, so a rate that is
+//          not part of the value is a change no one can observe — and the two
+//          things derived from it (the frame-rate ceiling, the diagnostics
+//          refresh-rate check) would go on describing the display that was.
+// ---------------------------------------------------------------------------
+
+TEST_F(DisplayDeviceNotifierTest, RefreshRateChange_Emits) {
+    const DisplaySnapshot v1 = MakeSnapshot({MakeDisplay("\\\\.\\DISPLAY1", true)});
+    DisplayInfo faster = MakeDisplay("\\\\.\\DISPLAY1", true);
+    faster.refresh_hz = 144.0;
+    const DisplaySnapshot v2 = MakeSnapshot({faster});
+
+    int call_count = 0;
+    auto notifier =
+        MakeTestNotifier([&call_count, v1, v2]() -> DisplaySnapshot { return (call_count++ == 0) ? v1 : v2; });
+
+    SignalSink sink;
+    sink.connect(notifier.get());
+
+    notifier->simulateNativeEvent(DiscoveryReason::Startup);
+    notifier->flushPendingForTest();
+    ASSERT_EQ(sink.count(), 1);
+    EXPECT_DOUBLE_EQ(sink.last().snapshot.displays[0].refresh_hz, 60.0);
+
+    notifier->simulateNativeEvent(DiscoveryReason::PropertyChanged);
+    notifier->flushPendingForTest();
+    ASSERT_EQ(sink.count(), 2);
+
+    EXPECT_EQ(sink.last().reason, DiscoveryReason::PropertyChanged);
+    EXPECT_DOUBLE_EQ(sink.last().snapshot.displays[0].refresh_hz, 144.0);
 }
 
 // ---------------------------------------------------------------------------

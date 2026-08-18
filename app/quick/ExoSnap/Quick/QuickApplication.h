@@ -244,6 +244,12 @@ class QuickApplication {
     // walk and one QueryDisplayConfig, no encoder session and no device creation.
     void refreshDisplayFacts();
 
+    // The two consumers of the compositor rate that are pushed rather than pulled:
+    // the Expert frame-rate ceiling and the Diagnostics display facts. Both used to
+    // be read once at startup, which survived only as long as the rate did -- Qt
+    // 6.11 tracks a mid-session mode-set that earlier versions missed.
+    void publishRefreshRateDerivedState();
+
     [[nodiscard]] QString settingsFilePath() const {
         return settings_store_.SettingsFilePath();
     }

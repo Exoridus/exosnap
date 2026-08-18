@@ -374,6 +374,11 @@ void DiagnosticsAdapter::setCaptureTargetHdrActive(bool active) {
     refreshSnapshot();
 }
 
+void DiagnosticsAdapter::refreshDisplayFacts() {
+    controller_.SetDisplayFacts(PrimaryDisplayFacts());
+    refreshSnapshot();
+}
+
 void DiagnosticsAdapter::setElevated(bool elevated) {
     controller_.SetElevated(elevated);
     emit environmentChanged();

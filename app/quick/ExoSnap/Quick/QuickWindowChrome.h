@@ -93,8 +93,8 @@ class QuickWindowChrome : public QObject, public QAbstractNativeEventFilter {
     Q_INVOKABLE void attach(QQuickWindow* window);
     Q_INVOKABLE void detach();
     // Qt can recreate the platform window (flag changes, some DPI transitions),
-    // which invalidates the cached HWND. QML calls this when it changes anything
-    // that could have caused a recreate.
+    // which invalidates the cached HWND. Re-reads it. Exposed to QML for a caller
+    // that changes such a property; today the only callers are C++.
     Q_INVOKABLE void refreshHandle();
 
     // Re-asserts WS_THICKFRAME once Qt has written the window style for the last

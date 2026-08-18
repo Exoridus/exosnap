@@ -132,6 +132,11 @@ class DiagnosticsAdapter : public QObject {
     void setCaptureWindowEvidence(std::optional<diagnostics::WindowTargetFacts> facts,
                                   const diagnostics::WindowHubEvidence& hub);
     void setCaptureTargetHdrActive(bool active);
+    // Re-reads the primary screen's size and compositor rate. The refresh-rate
+    // mismatch check compares the configured fps against this number, so a
+    // mode-set that is never picked up leaves the page recommending against a
+    // rate the display now supports.
+    void refreshDisplayFacts();
     void setElevated(bool elevated);
     void setHasLastRecording(bool has_last_recording);
     // ADR 0033 DPC/ISR latency. Borrowed, never owned, and PULLED on every evaluation

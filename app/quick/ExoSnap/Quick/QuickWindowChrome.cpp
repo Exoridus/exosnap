@@ -96,9 +96,12 @@ void QuickWindowChrome::setTarget(QQuickWindow* window) {
     hwnd_ = reinterpret_cast<void*>(window->winId());
     TraceWindowGeometry("chrome-hwnd-created", window);
 
-    // Qt recreates the platform window for some flag and DPI transitions, which
-    // invalidates the cached HWND; a screen change is the cheapest observable
-    // proxy for that and also the moment the DWM border wants re-applying.
+    // A screen change is the moment the DWM border wants re-applying, and the
+    // handle is re-read on the way. It is NOT a recreate notification: the Windows
+    // QPA plugin handles screen and DPI transitions on the existing HWND. What
+    // keeps the cached handle valid is that nothing destroys the root window while
+    // the process lives -- an accepted close posts a quit, and no top-level window
+    // refuses one. Break that and this connection will not catch it.
     QObject::connect(window, &QWindow::screenChanged, this, [this]() { refreshHandle(); });
     QObject::connect(window, &QObject::destroyed, this, [this]() { detach(); });
 

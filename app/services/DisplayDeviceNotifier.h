@@ -37,6 +37,11 @@ struct DisplayInfo {
     QRect available_geometry; // geometry minus taskbar / docks
     qreal device_pixel_ratio = 1.0;
     qreal logical_dpi = 96.0;
+    // Compositor rate in Hz, 0 when the driver reports none. Part of the value
+    // because the snapshot is deduplicated field by field: a mode-set that
+    // changes only the rate moves nothing else here, so without it the change
+    // is indistinguishable from no change and never reaches a consumer.
+    qreal refresh_hz = 0.0;
     int rotation_degrees = 0; // derived from QScreen::orientation(), or 0
     bool primary = false;
 

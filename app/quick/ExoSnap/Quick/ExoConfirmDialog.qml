@@ -19,6 +19,12 @@ Dialog {
     property bool defaultIsCancel: true
 
     modal: true
+    // Without this the popup never takes active focus, and everything the dialog
+    // claims about the keyboard stops being true: CloseOnEscape is documented to
+    // need activeFocus, so Escape reaches the window instead of the guard, and
+    // neither button below can hold the focus `defaultIsCancel` assigns. The
+    // shell behind the modal keeps answering Tab and Return.
+    focus: true
     anchors.centerIn: Overlay.overlay
     width: Math.min(420, (parent?.width ?? 420) - 2 * ExoTheme.spacingXl)
     padding: ExoTheme.spacingLg

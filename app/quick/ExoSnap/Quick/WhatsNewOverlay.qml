@@ -86,7 +86,10 @@ ExoOverlayCard {
                 textFormat: Text.MarkdownText
                 wrapMode: Text.WordWrap
                 color: ExoTheme.textSecondary
-                linkColor: ExoTheme.accent
+                // No linkColor here: it only reaches Text's StyledText parser, and
+                // this document is Markdown. QuickThemeTokens puts the accent in the
+                // application palette's Link role, which is what the QTextDocument
+                // path reads.
                 Layout.fillWidth: true
                 font {
                     family: ExoTheme.sansFamily

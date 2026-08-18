@@ -822,6 +822,10 @@ qt_add_qml_module(record_controls_qml_tests
         # The 24 px interaction target and the keyboard toggle are geometry and
         # input, so they are asserted rather than judged on a screenshot.
         ExoCheckBox.qml
+        # The shared confirm. Whether it holds the keyboard is the whole contract:
+        # a modal that never takes focus leaves Escape and Return answering the
+        # page behind it, and nothing about that is visible in a screenshot.
+        ExoConfirmDialog.qml
         ExoDisclosure.qml
         # Severity carried by something other than colour (QCR-507/508): which
         # glyph a tone resolves to, and what the accessible name says.

@@ -18,8 +18,8 @@ bool DisplayInfo::operator==(const DisplayInfo& other) const noexcept {
     return id == other.id && name == other.name && geometry == other.geometry &&
            available_geometry == other.available_geometry &&
            qFuzzyCompare(device_pixel_ratio, other.device_pixel_ratio) &&
-           qFuzzyCompare(logical_dpi, other.logical_dpi) && rotation_degrees == other.rotation_degrees &&
-           primary == other.primary;
+           qFuzzyCompare(logical_dpi, other.logical_dpi) && qFuzzyCompare(refresh_hz, other.refresh_hz) &&
+           rotation_degrees == other.rotation_degrees && primary == other.primary;
 }
 
 bool DisplayInfo::operator!=(const DisplayInfo& other) const noexcept {
@@ -70,6 +70,7 @@ static DisplaySnapshot DefaultEnumerator() {
         info.available_geometry = screen->availableGeometry();
         info.device_pixel_ratio = screen->devicePixelRatio();
         info.logical_dpi = screen->logicalDotsPerInch();
+        info.refresh_hz = screen->refreshRate();
         // Derive rotation from screen orientation vs. native orientation.
         const Qt::ScreenOrientation orient = screen->orientation();
         const Qt::ScreenOrientation native = screen->nativeOrientation();
@@ -251,6 +252,9 @@ void DisplayDeviceNotifier::connectScreenSignals(QScreen* screen) {
                                           [this](qreal) { scheduleRefresh(DiscoveryReason::PropertyChanged); }));
 
     screen_connections_.push_back(connect(screen, &QScreen::physicalDotsPerInchChanged, this,
+                                          [this](qreal) { scheduleRefresh(DiscoveryReason::PropertyChanged); }));
+
+    screen_connections_.push_back(connect(screen, &QScreen::refreshRateChanged, this,
                                           [this](qreal) { scheduleRefresh(DiscoveryReason::PropertyChanged); }));
 
     screen_connections_.push_back(connect(screen, &QScreen::orientationChanged, this, [this](Qt::ScreenOrientation) {

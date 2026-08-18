@@ -2,6 +2,8 @@
 
 #include "ui/theme/ExoSnapThemes.h"
 
+#include <QGuiApplication>
+#include <QPalette>
 #include <QRegularExpression>
 #include <QVariantMap>
 
@@ -121,6 +123,20 @@ void QuickThemeTokens::setAppearance(const QString& appearance_id, const QString
     accent_ = parseToken(dark_ ? accent.dark : accent.light);
     accent_ink_ = parseToken(dark_ ? accent.dark_ink : accent.light_ink);
     overlay_accent_ = parseToken(accent.dark);
+
+    // The one token this product cannot deliver through a QML property. Text's
+    // linkColor reaches only the StyledText parser; MarkdownText and RichText go
+    // through QTextDocument, which colours anchors from the application palette's
+    // Link role. Left alone it is whatever the platform theme supplies -- on a
+    // machine whose Windows accent is green, the release notes draw their links
+    // in the colour this product reserves for "ready".
+    if (QGuiApplication::instance() != nullptr) {
+        QPalette palette = QGuiApplication::palette();
+        if (palette.color(QPalette::Link) != accent_) {
+            palette.setColor(QPalette::Link, accent_);
+            QGuiApplication::setPalette(palette);
+        }
+    }
 
     // Ink for content on a success- or caution-FILLED surface, completing the
     // set the table already curates for the two fills whose hue moves: the
