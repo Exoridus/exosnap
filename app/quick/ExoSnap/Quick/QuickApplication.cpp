@@ -3685,8 +3685,15 @@ void QuickApplication::initializeTray() {
 }
 
 void QuickApplication::refreshTrayState() {
-    if (!tray_presence_)
-        return;
+    // NO early return on a missing tray. This function drives TWO surfaces, and
+    // only one of them is the tray: the window icon below is what the TASKBAR
+    // button shows, and it exists whether or not a tray does. Returning here left
+    // the taskbar on the idle logo through a whole recording for every session
+    // without one -- a machine with the notification area disabled, and every
+    // --auto-record / --auto-edit / --visual-test run, which suppress the tray on
+    // purpose. That is the regression b42c7d2e fixed, still open for exactly the
+    // sessions least likely to be watched.
+    //
     // Derived from the view model's own booleans rather than by re-parsing the
     // status string: the label is presentation and may be localized, the state is
     // not. Countdown and Preparing read as Recording, matching the Widgets
@@ -3699,10 +3706,12 @@ void QuickApplication::refreshTrayState() {
                state == UiRecordingState::Preparing) {
         tray_state = ui::tray::TrayIconState::Recording;
     }
-    tray_presence_->applyState(tray_state, record_view_model_adapter_.stateText().toUpper(),
-                               record_view_model_adapter_.elapsedText());
-    tray_presence_->setRecordingBlocked(record_view_model_adapter_.blocked() &&
-                                        tray_state == ui::tray::TrayIconState::Idle);
+    if (tray_presence_) {
+        tray_presence_->applyState(tray_state, record_view_model_adapter_.stateText().toUpper(),
+                                   record_view_model_adapter_.elapsedText());
+        tray_presence_->setRecordingBlocked(record_view_model_adapter_.blocked() &&
+                                            tray_state == ui::tray::TrayIconState::Idle);
+    }
 
     // The WINDOW icon, which is what the taskbar button shows -- a different surface
     // from the tray icon above, and the one the Widgets frontend used to swap. The
