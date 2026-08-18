@@ -60,6 +60,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdio>
 #include <memory>
 
 namespace {
@@ -280,6 +281,12 @@ struct NavigationDestination {
 
 int failNavigationLifecycle(const char* what) {
     qCritical().noquote() << QStringLiteral("navigation-lifecycle: ") + QString::fromLatin1(what);
+    // AppLog's message handler replaces Qt's default one, and Qt hands a first
+    // installer no previous handler to chain to -- so nothing reaches stderr and
+    // the whole diagnosis lives in a log file inside a throwaway config dir. A
+    // CTest failure has to state its reason where CTest captures it, or the gate
+    // reports red without saying why.
+    std::fprintf(stderr, "navigation-lifecycle: %s\n", what);
     return 5;
 }
 

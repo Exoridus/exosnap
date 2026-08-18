@@ -729,8 +729,18 @@ endif()")
     install(SCRIPT ${_exosnap_deploy_script})
 endif()
 
+# EXOSNAP_CONFIG_DIR is where the QML bytecode cache ends up (see
+# AlignQmlDiskCacheWithConfigDir), and the suite runs with one config dir for the
+# whole run. Two application processes sharing it race on the same .qmlc files,
+# and a document read while another process is still writing it loads without its
+# signal connections -- which surfaces as an unrelated navigation assertion
+# rather than as a cache error. Every test that launches the application
+# concurrently therefore needs a config dir of its own.
 add_test(NAME quick.qml.about_smoke COMMAND exosnap --smoke-test)
-set_tests_properties(quick.qml.about_smoke PROPERTIES LABELS "quick")
+set_tests_properties(quick.qml.about_smoke PROPERTIES
+    LABELS "quick"
+    ENVIRONMENT "EXOSNAP_CONFIG_DIR=${CMAKE_CURRENT_BINARY_DIR}/test-config/about_smoke"
+)
 
 # The four non-Record destinations are loaded by URL so their documents stay out
 # of the startup compile (QCR-615). That the pages are absent until navigation,
@@ -739,7 +749,10 @@ set_tests_properties(quick.qml.about_smoke PROPERTIES LABELS "quick")
 # shell -- AppShell requires fifteen C++ adapters and cannot be built in a QML
 # test. Runs offscreen with the rest of the suite; no window reaches the screen.
 add_test(NAME quick.qml.navigation_lifecycle COMMAND exosnap --navigation-lifecycle-test)
-set_tests_properties(quick.qml.navigation_lifecycle PROPERTIES LABELS "quick")
+set_tests_properties(quick.qml.navigation_lifecycle PROPERTIES
+    LABELS "quick"
+    ENVIRONMENT "EXOSNAP_CONFIG_DIR=${CMAKE_CURRENT_BINARY_DIR}/test-config/navigation_lifecycle"
+)
 
 # An isolated run has to isolate Qt's QML bytecode cache as well — see the
 # script for why EXOSNAP_CONFIG_DIR does not reach it on its own.
