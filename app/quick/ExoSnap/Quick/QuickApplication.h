@@ -348,6 +348,10 @@ class QuickApplication {
     QuickWindowChrome::IconState window_icon_state_ = QuickWindowChrome::Idle;
     // Brings the window back from the tray (tray icon click, "Show window", or
     // the unread-notifications mirror).
+    // Banks the geometry, hides the window and raises the one-time notice.
+    // Reached from the close-to-tray preference and from the tray menu's own
+    // "Hide window" entry, which must not grow a second copy of it.
+    void hideWindowToTray();
     void restoreWindowFromTray();
     // Notification event sources and the action router. Dispatch lives here
     // rather than in the adapter: navigating, opening Explorer and relaunching

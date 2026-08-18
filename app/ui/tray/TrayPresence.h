@@ -98,9 +98,15 @@ class TrayPresence : public QObject {
     }
 
   signals:
-    // Emitted when the user clicks "Show/Hide window" in the context menu or
-    // double-clicks the tray icon.
+    // Emitted when the user asks for the window while it is NOT on screen --
+    // "Show window" in the context menu, or a double-click on the tray icon.
     void activateWindowRequested();
+
+    // Emitted when the user clicks the same context-menu entry while the window
+    // IS on screen, where it reads "Hide window". Its own signal rather than a
+    // second meaning for the one above: that entry used to raise the window under
+    // both labels, so the menu offered to hide a window and then showed it.
+    void hideWindowRequested();
 
     // Emitted when the user clicks "Start/Stop recording" — route via
     // MainWindow::recordToggleRequested to RecordPage (same path as hotkey).

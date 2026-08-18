@@ -244,6 +244,11 @@ void TrayPresence::onTrayActivated(QSystemTrayIcon::ActivationReason reason) {
 }
 
 void TrayPresence::onShowHideTriggered() {
+    // The label decides, from the same flag that wrote it in setWindowVisible().
+    if (window_visible_) {
+        emit hideWindowRequested();
+        return;
+    }
     emit activateWindowRequested();
 }
 

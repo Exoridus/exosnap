@@ -3613,6 +3613,10 @@ void QuickApplication::initializeTray() {
 
     QObject::connect(tray_presence_.get(), &ui::tray::TrayPresence::activateWindowRequested, &shell_adapter_,
                      [this]() { restoreWindowFromTray(); });
+    // The same menu entry under its other label. It reported "Hide window" and
+    // then raised the window, because both labels emitted the one signal.
+    QObject::connect(tray_presence_.get(), &ui::tray::TrayPresence::hideWindowRequested, &shell_adapter_,
+                     [this]() { hideWindowToTray(); });
     // Same entry point the global hotkey uses, so the tray cannot develop its own
     // idea of what "toggle recording" means.
     QObject::connect(tray_presence_.get(), &ui::tray::TrayPresence::recordToggleRequested, &shell_adapter_,
@@ -3655,33 +3659,11 @@ void QuickApplication::initializeTray() {
         return ui::tray::ShouldHideToTray(settings_.keep_running_in_tray, force_quit_, tray_presence_ != nullptr);
     });
 
-    QObject::connect(&shell_adapter_, &ShellAdapter::hideToTrayRequested, &shell_adapter_, [this]() {
-        if (!root_window_)
-            return;
-        // Geometry is read from a visible window only, so it has to be banked
-        // before the hide — otherwise a session that ends from the tray persists
-        // whatever the last debounced sample happened to be.
-        if (window_geometry_)
-            window_geometry_->flush();
-        root_window_->hide();
-        if (tray_presence_)
-            tray_presence_->setWindowVisible(false);
-
-        // One-time notice, so the first hide can never look like a crash. The
-        // flag is persisted immediately: a user who then kills the process must
-        // not be told again on the next run.
-        if (!settings_.tray_close_notice_shown) {
-            settings_.tray_close_notice_shown = true;
-            saveAndPublishAppSettings();
-            if (tray_presence_) {
-                tray_presence_->showMessage(
-                    QStringLiteral("ExoSnap is still running"),
-                    QStringLiteral("ExoSnap is running in the tray. Right-click the tray icon to quit."),
-                    QSystemTrayIcon::Information, 4000);
-            }
-        }
-        diagnostics::AppLog::info(QStringLiteral("tray"), QStringLiteral("Window hidden to tray"));
-    });
+    // Two callers, one hide: the close-to-tray preference, and the tray menu's
+    // own "Hide window" entry. A second copy of this body is how the two would
+    // drift apart on the geometry flush or on the one-time notice.
+    QObject::connect(&shell_adapter_, &ShellAdapter::hideToTrayRequested, &shell_adapter_,
+                     [this]() { hideWindowToTray(); });
 
     // The unread badge mirrors the in-window bell: a toast raised while the
     // window is hidden is otherwise invisible.
@@ -3745,6 +3727,34 @@ void QuickApplication::refreshTrayState() {
                 chrome->applyWindowIcon(icon_state);
         }
     }
+}
+
+void QuickApplication::hideWindowToTray() {
+    if (!root_window_)
+        return;
+    // Geometry is read from a visible window only, so it has to be banked
+    // before the hide — otherwise a session that ends from the tray persists
+    // whatever the last debounced sample happened to be.
+    if (window_geometry_)
+        window_geometry_->flush();
+    root_window_->hide();
+    if (tray_presence_)
+        tray_presence_->setWindowVisible(false);
+
+    // One-time notice, so the first hide can never look like a crash. The
+    // flag is persisted immediately: a user who then kills the process must
+    // not be told again on the next run.
+    if (!settings_.tray_close_notice_shown) {
+        settings_.tray_close_notice_shown = true;
+        saveAndPublishAppSettings();
+        if (tray_presence_) {
+            tray_presence_->showMessage(
+                QStringLiteral("ExoSnap is still running"),
+                QStringLiteral("ExoSnap is running in the tray. Right-click the tray icon to quit."),
+                QSystemTrayIcon::Information, 4000);
+        }
+    }
+    diagnostics::AppLog::info(QStringLiteral("tray"), QStringLiteral("Window hidden to tray"));
 }
 
 void QuickApplication::restoreWindowFromTray() {

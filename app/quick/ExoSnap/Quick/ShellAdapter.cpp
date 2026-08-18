@@ -203,8 +203,26 @@ void ShellAdapter::confirmCloseGuard() {
         return;
     }
     clearPrompt();
-    if (next.kind == CloseGuardKind::Allow)
+    if (next.kind == CloseGuardKind::Allow) {
+        // BOTH signals, and closeDecided FIRST. They answer different questions, and
+        // only one of them ends the process: `closeApproved` tells the window it may
+        // go and flushes pending persists, while `closeDecided("allow")` is what the
+        // application hangs the explicit QCoreApplication::quit() off.
+        //
+        // Emitting only the former is how a confirmed close came to destroy the
+        // window without ending the process. Qt's own quit does not step in there:
+        // it fires on the last visible PRIMARY window, and all five capture overlays
+        // are exactly that -- top level, `transientParent: null` -- and they are
+        // hidden rather than closed, so the signal gets no later chance either. What
+        // is left is no window, a live tray icon, and Task Manager. That is the
+        // failure 25f0ed32 removed from the tray-Quit path; the guarded path kept it
+        // because it approves the close HERE and never returns through
+        // requestClose(), which is where every other outcome is reported.
+        const CloseGuardState allowed = currentState();
+        emit closeDecided(QString::fromLatin1(CloseGuardKindKey(CloseGuardKind::Allow)), allowed.recording,
+                          allowed.exporting, allowed.remuxing);
         emit closeApproved();
+    }
     // BlockSilently: a finalize started while the dialog was up. Keeping the
     // window open is the only safe answer, and the overlay explains it.
 }

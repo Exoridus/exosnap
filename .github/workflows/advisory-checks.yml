@@ -89,7 +89,12 @@ jobs:
         with:
           version: '6.11.1'
           arch: 'win64_msvc2022_64'
-          archives: 'qtbase qtsvg'
+          # qtdeclarative + the shadertools module, because this job's clang-tidy pass
+          # lists app/ sources: without them the Qt Quick application is not in the
+          # compile database at all, and every app/quick file is skipped for lack of a
+          # compile command -- an advisory pass that quietly covers less than it claims.
+          archives: 'qtbase qtsvg qtdeclarative'
+          modules: 'qtshadertools'
           # aqtinstall 3.3.0, the newest release on PyPI, cannot install Qt 6.11 at all:
           # the Qt repository moved to per-architecture folders (.../qt6_6111/
           # qt6_6111_msvc2022_64/) and 3.3.0 still builds the pre-6.11 path, so it fails

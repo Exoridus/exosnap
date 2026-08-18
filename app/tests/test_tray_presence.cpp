@@ -247,6 +247,41 @@ TEST_F(TrayPresenceTest, ShowHideAction_WindowHidden_ShowsShow) {
     EXPECT_EQ(action->text(), QStringLiteral("Show window"));
 }
 
+// The label is only half the contract. Triggering the entry while the window is
+// visible used to emit activateWindowRequested, so the menu offered to hide the
+// window and then raised it -- there was no hide path at all.
+TEST_F(TrayPresenceTest, ShowHideAction_WindowVisible_AsksToHideNotToShow) {
+    TrayPresence tp;
+    tp.setWindowVisible(true);
+    int hides = 0;
+    int activates = 0;
+    QObject::connect(&tp, &TrayPresence::hideWindowRequested, &tp, [&hides]() { ++hides; });
+    QObject::connect(&tp, &TrayPresence::activateWindowRequested, &tp, [&activates]() { ++activates; });
+
+    auto* action = findShowHideAction(tp);
+    ASSERT_NE(action, nullptr);
+    action->trigger();
+
+    EXPECT_EQ(hides, 1);
+    EXPECT_EQ(activates, 0);
+}
+
+TEST_F(TrayPresenceTest, ShowHideAction_WindowHidden_AsksToShow) {
+    TrayPresence tp;
+    tp.setWindowVisible(false);
+    int hides = 0;
+    int activates = 0;
+    QObject::connect(&tp, &TrayPresence::hideWindowRequested, &tp, [&hides]() { ++hides; });
+    QObject::connect(&tp, &TrayPresence::activateWindowRequested, &tp, [&activates]() { ++activates; });
+
+    auto* action = findShowHideAction(tp);
+    ASSERT_NE(action, nullptr);
+    action->trigger();
+
+    EXPECT_EQ(activates, 1);
+    EXPECT_EQ(hides, 0);
+}
+
 // ---- State round-trip: Idle → Recording → Paused → Idle ----
 
 TEST_F(TrayPresenceTest, StateRoundTrip) {

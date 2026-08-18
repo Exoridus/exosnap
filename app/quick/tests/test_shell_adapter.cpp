@@ -142,6 +142,50 @@ TEST_F(ShellAdapterTest, ConfirmingRecordingStopsItAndApprovesTheClose) {
     EXPECT_FALSE(adapter_.closeGuardActive());
 }
 
+// A confirmed guard has to produce BOTH signals. `closeApproved` lets the window
+// go; `closeDecided("allow")` is the one the application hangs the explicit quit
+// off. With only the first, a confirmed close destroyed the window and left the
+// process running behind a live tray icon, because Qt's quit-on-last-window
+// counts the five capture overlays as primary windows and they are hidden, never
+// closed. Asserted for every guard kind, since each one approves from the same
+// place and any of them could have been the one that forgot.
+TEST(ShellAdapterCloseDecisionTest, ConfirmingAnyGuardReportsTheAllowDecisionThatEndsTheProcess) {
+    struct Case {
+        const char* name;
+        bool recording;
+        bool exporting;
+        bool remuxing;
+    };
+    // A FRESH adapter per case, not the fixture's: confirming a guard latches a
+    // waiver, and a reused adapter would answer the next case with the previous
+    // one's waiver instead of raising its prompt.
+    for (const Case& c : {Case{"recording", true, false, false}, Case{"exporting", false, true, false},
+                          Case{"remuxing", false, false, true}}) {
+        SCOPED_TRACE(c.name);
+        CloseGuardState state;
+        state.recording = c.recording;
+        state.exporting = c.exporting;
+        state.remuxing = c.remuxing;
+        ShellAdapter adapter;
+        adapter.setStateProvider([&state]() { return state; });
+
+        QStringList decisions;
+        QObject::connect(&adapter, &ShellAdapter::closeDecided, &adapter,
+                         [&decisions](const QString& kind, bool, bool, bool) { decisions << kind; });
+        int approved = 0;
+        QObject::connect(&adapter, &ShellAdapter::closeApproved, &adapter, [&approved]() { ++approved; });
+
+        EXPECT_FALSE(adapter.requestClose());
+        adapter.confirmCloseGuard();
+
+        EXPECT_EQ(approved, 1);
+        // The prompt was reported first, the approval second: one close attempt,
+        // two decisions, and the last one is what ends the process.
+        ASSERT_EQ(decisions.size(), 2);
+        EXPECT_EQ(decisions.back(), QStringLiteral("allow"));
+    }
+}
+
 TEST_F(ShellAdapterTest, ExportConfirmFallsThroughToTheRecordingGuard) {
     state_.exporting = true;
     state_.recording = true;

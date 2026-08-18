@@ -55,22 +55,40 @@ endif()
 find_package(Qt6 6.11 QUIET COMPONENTS
     Core Gui Widgets Svg Qml Quick QuickControls2 QuickDialogs2 QuickTest Test)
 
-# A stand-in `exosnap` custom target is created in every branch below other than
-# the real build, so add_subdirectory(app) always leaves a target named `exosnap`
+# A stand-in `exosnap` custom target is created on the deliberate opt-out path
+# below, so add_subdirectory(app) always leaves a target named `exosnap`
 # behind for anything downstream that references it defensively (see
 # apps/updater/CMakeLists.txt and tests/CMakeLists.txt). Nothing must call
 # target_link_libraries()/target_compile_definitions() on this stand-in — the
 # real `exosnap` executable is the Qt Quick application defined in the
 # quick/ExoSnap/Quick subdirectory added at the bottom of this file, and only
 # exists on the path that does not return early here.
-if(NOT EXOSNAP_BUILD_APP OR NOT Qt6_FOUND)
-    if(EXOSNAP_BUILD_APP)
-        add_custom_target(exosnap COMMAND ${CMAKE_COMMAND} -E echo "exosnap skipped: Qt6 not found")
-        message(WARNING "Qt6 not found — exosnap app will not be built. Install Qt 6 and set Qt6_DIR or CMAKE_PREFIX_PATH.")
-    else()
-        add_custom_target(exosnap COMMAND ${CMAKE_COMMAND} -E echo "exosnap skipped: EXOSNAP_BUILD_APP is OFF")
-        message(STATUS "EXOSNAP_BUILD_APP is OFF — exosnap app will not be built.")
-    endif()
+# A missing Qt is a HARD error while the app is requested, and a warning would be
+# the worse choice for a reason this repository has now met twice. A build that
+# quietly omits the shipping binary still turns green: every library, every test
+# and even the updater compile, ctest passes, and the compile database contains no
+# app translation unit at all — so a clang-tidy pass over "the changes" analyses
+# nothing and reports clean. That is exactly how this branch's own gate lied once,
+# against a stale cache pinning Qt 6.9 that the new 6.11 minimum then rejected.
+#
+# Not building the app is a legitimate configuration (headless CI, a contributor
+# without Qt), so it stays available -- it just has to be ASKED for, with
+# -DEXOSNAP_BUILD_APP=OFF, instead of being inferred from a failed probe.
+if(EXOSNAP_BUILD_APP AND NOT Qt6_FOUND)
+    message(FATAL_ERROR
+        "Qt 6.11 or newer with the Qml/Quick/QuickControls2/QuickDialogs2/QuickTest/Svg "
+        "components was not found, and EXOSNAP_BUILD_APP is ON.\n"
+        "  Install Qt 6.11+ and point CMAKE_PREFIX_PATH or Qt6_DIR at it, or configure "
+        "with -DEXOSNAP_BUILD_APP=OFF to build the engine, tools and tests without the "
+        "application. Silently skipping it is not an option: the build would go green "
+        "without the binary this project exists to ship.")
+endif()
+
+# A stand-in target for the deliberate opt-out, so add_subdirectory(app) still
+# leaves a target named `exosnap` behind (see the note above).
+if(NOT EXOSNAP_BUILD_APP)
+    add_custom_target(exosnap COMMAND ${CMAKE_COMMAND} -E echo "exosnap skipped: EXOSNAP_BUILD_APP is OFF")
+    message(STATUS "EXOSNAP_BUILD_APP is OFF — exosnap app will not be built.")
     return()
 endif()
 
