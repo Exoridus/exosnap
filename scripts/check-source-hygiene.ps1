@@ -67,13 +67,14 @@ $RepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
 
 $script:TrackerPrefixes = @('QCR', 'BUG', 'TC', 'VR', 'TASK', 'TICKET', 'ISSUE', 'JIRA')
 
-# Staged adoption. Every rule reports; these two do not yet fail the run, because
-# the tree they were written for already contains 222 tracker references and 512
-# non-ASCII dashes. A gate that is red on arrival gets switched off rather than
-# obeyed, so they stay advisory until the backlog is cleared, and then this list
-# becomes empty. The precise rules -- the ones measured at a handful of hits --
-# block from the start.
-$script:AdvisoryRules = @('task-id', 'non-ascii-punctuation')
+# Staged adoption. Every rule reports; these do not yet fail the run. task-id and
+# non-ascii-punctuation are here because the tree they were written for already
+# contains 222 tracker references and 512 non-ASCII dashes: a gate that is red on
+# arrival gets switched off rather than obeyed, so they stay advisory until the
+# backlog is cleared. user-request-phrasing is here for the opposite reason, given
+# with the rule itself: it is imprecise by nature, not by backlog. The precise
+# rules -- the ones measured at a handful of hits -- block from the start.
+$script:AdvisoryRules = @('task-id', 'non-ascii-punctuation', 'user-request-phrasing')
 
 # Test fixtures are excluded for the same reason check-drift.ps1 excludes them: a
 # rule with no rejected fixture has never been shown to reject anything, so the
@@ -246,7 +247,7 @@ function Get-HygieneRule {
     # GetNewClosure: the confirmation runs later, outside this function's scope,
     # so $Root has to travel with the scriptblock.
     $confirmHash = { param($value) Test-CommitHash -Root $Root -Candidate $value }.GetNewClosure()
-    $rules.Add((New-HygieneRule 'commit-hash' '[0-9a-fA-F]{7,40}' `
+    $rules.Add((New-HygieneRule 'commit-hash' '\b[0-9a-fA-F]{7,40}\b' `
                 'Remove the commit reference; a comment outlives the history it points at.' `
                 $confirmHash))
 
@@ -264,9 +265,24 @@ function Get-HygieneRule {
     $rules.Add((New-HygieneRule 'unc-path' '\\{2,4}(?!(?:[.?]|pipe)\\+)[^\\\s]+\\' `
                 'Remove the network path; it is meaningless outside one network.'))
 
+    # Split in two on purpose. The phrasings below name the exchange itself and
+    # cannot describe anything the running product does, so they block.
+    # "previous attempt" is first-person only: "the previous attempt's failure" is
+    # retry state, not provenance.
     $rules.Add((New-HygieneRule 'conversation-provenance' `
-                '\b(?:user (?:said|asked|decided|mentioned|requested|wanted)|as (?:discussed|requested)|per (?:our|the) (?:discussion|conversation)|previous attempt|earlier session)\b' `
+                '\b(?:user (?:said|decided|mentioned)|as (?:discussed|requested)|per (?:our|the) (?:discussion|conversation)|(?:[Mm]y|[Oo]ur) previous attempt|earlier session)\b' `
                 'Drop how the decision was reached; keep what the decision is.'))
+
+    # "the user asked for X" is the plainest way to write provenance AND the
+    # plainest way to describe what an end user of a recording application did.
+    # Comments are matched a line at a time, so sentence position cannot separate
+    # the two -- wrapping puts either one at the start of a line. Every hit on the
+    # tree this rule was written against was product behaviour, so blocking on it
+    # would spend the gate's credibility on nothing. It reports for a human to
+    # read and never fails the run.
+    $rules.Add((New-HygieneRule 'user-request-phrasing' `
+                '\buser (?:asked|requested|wanted)\b' `
+                'If this records who asked for the change, drop it; if it describes what an end user did, keep it.'))
 
     $rules.Add((New-HygieneRule 'agent-provenance' `
                 '\b(?:Claude|Codex|ChatGPT|Copilot|Gemini)\b\s*(?:Code\s*)?(?:said|suggested|decided|added|implemented|changed|wrote|generated)\b' `

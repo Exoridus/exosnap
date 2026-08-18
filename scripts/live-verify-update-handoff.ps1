@@ -72,7 +72,7 @@ param(
     isolated scratch install tree.
 
 .EXAMPLE
-    ./live-verify-update-handoff.ps1 -AppPath .workspace/install-scratch/bin/exosnap.exe
+    ./live-verify-update-handoff.ps1 -AppPath ./scratch-install/bin/exosnap.exe
 #>
 
 Set-StrictMode -Version Latest

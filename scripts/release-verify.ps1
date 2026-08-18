@@ -53,7 +53,7 @@
     resolution here. `live-verify.ps1` may guess at a local build; this may not.
 
 .EXAMPLE
-    pwsh scripts/release-verify.ps1 prepare -ExePath C:\rc\exosnap.exe -Tag v0.9.0-rc10
+    pwsh scripts/release-verify.ps1 prepare -ExePath ./rc/exosnap.exe -Tag v0.9.0-rc10
     pwsh scripts/release-verify.ps1 run
     pwsh scripts/release-verify.ps1 report
 #>

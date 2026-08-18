@@ -49,7 +49,7 @@ param(
     signature check to make a live case reachable.
 
 .EXAMPLE
-    ./live-verify-update-handoff-trust.ps1 -AppPath .workspace/install-scratch/bin/exosnap.exe
+    ./live-verify-update-handoff-trust.ps1 -AppPath ./scratch-install/bin/exosnap.exe
 #>
 
 Set-StrictMode -Version Latest

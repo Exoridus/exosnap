@@ -48,6 +48,21 @@ function Invoke-IsolatedGit {
     }
 }
 
+function Invoke-IsolatedGitOutput {
+    param([Parameter(ValueFromRemainingArguments = $true)] [string[]] $GitArgs)
+    $saved = @{}
+    foreach ($name in $script:LeakedGitVariables) {
+        $saved[$name] = [Environment]::GetEnvironmentVariable($name)
+        if ($null -ne $saved[$name]) { Remove-Item "Env:$name" -ErrorAction SilentlyContinue }
+    }
+    try { return (& git @GitArgs 2>&1 | Out-String).Trim() }
+    finally {
+        foreach ($name in $script:LeakedGitVariables) {
+            if ($null -ne $saved[$name]) { Set-Item "Env:$name" -Value $saved[$name] }
+        }
+    }
+}
+
 $script:Passed = 0
 $script:Failed = 0
 
@@ -101,6 +116,14 @@ function Assert-Reported {
         "'$Rule' was not reported. Scanner said:`n$($result.Output)"
 }
 
+function Assert-Advisory {
+    param([string] $RelativePath, [string] $Content, [string] $Rule)
+    $result = Invoke-Scanner -RelativePath $RelativePath -Content $Content
+    Assert-True ($result.Output -match "ADVISORY: \d+ x $([regex]::Escape($Rule))") `
+        "'$Rule' was not reported as an advisory. Scanner said:`n$($result.Output)"
+    Assert-True ($result.ExitCode -eq 0) "an advisory-only run must not fail (exit $($result.ExitCode))"
+}
+
 function Assert-Silent {
     param([string] $RelativePath, [string] $Content)
     $result = Invoke-Scanner -RelativePath $RelativePath -Content $Content
@@ -136,7 +159,23 @@ Test-Case 'a network path' {
 }
 
 Test-Case 'conversation provenance' {
-    Assert-Reported 'app/x.cpp' "// The user asked for the tray icon to stay put.`nint x = 1;`n" 'conversation-provenance'
+    Assert-Reported 'app/x.cpp' "// Kept as discussed, because the encoder reuses the device.`nint x = 1;`n" 'conversation-provenance'
+}
+
+Test-Case 'a first-person previous attempt is provenance' {
+    Assert-Reported 'app/x.cpp' "// My previous attempt cleared this at every call site.`nint x = 1;`n" 'conversation-provenance'
+}
+
+Test-Case 'a retry describing the previous attempt is not provenance' {
+    Assert-Silent 'app/x.cpp' "// Keeps a retry from publishing the previous attempt's failure.`nint x = 1;`n"
+}
+
+Test-Case 'user-request phrasing is advisory, never blocking' {
+    Assert-Advisory 'app/x.cpp' "// The user asked for the tray icon to stay put.`nint x = 1;`n" 'user-request-phrasing'
+}
+
+Test-Case 'an end user request at runtime does not fail the run' {
+    Assert-Advisory 'app/x.cpp' "// One misbehaving session leaves a process the user asked to quit alive.`nint x = 1;`n" 'user-request-phrasing'
 }
 
 Test-Case 'agent provenance' {
@@ -178,6 +217,30 @@ Test-Case 'a product diagnostic identifier in a comment' {
 
 Test-Case 'the Win32 device namespace is not a network path' {
     Assert-Silent 'app/x.cpp' "// The endpoint is \\.\pipe\exosnap and \\?\ removes the MAX_PATH limit.`nint x = 1;`n"
+}
+
+Test-Case 'a real commit hash is reported' {
+    # The only case in this file that needs a fixture repository with history:
+    # the rule confirms every candidate against `git cat-file`, so a hash that
+    # resolves nowhere proves nothing. Without this, the rule passed its negative
+    # case while its pattern was incapable of matching anything at all.
+    $root = Join-Path ([IO.Path]::GetTempPath()) "source-hygiene-tests/$([guid]::NewGuid().ToString('n'))"
+    New-Item -ItemType Directory -Path (Join-Path $root 'app') -Force | Out-Null
+    try {
+        Set-Content -LiteralPath (Join-Path $root 'seed.txt') -Value 'seed' -Encoding utf8
+        Invoke-IsolatedGit -C $root init --quiet
+        Invoke-IsolatedGit -C $root add -A
+        Invoke-IsolatedGit -C $root -c user.name=t -c user.email=t@t commit -q -m seed
+        $hash = Invoke-IsolatedGitOutput -C $root rev-parse --short=8 HEAD
+
+        Set-Content -LiteralPath (Join-Path $root 'app/x.cpp') `
+            -Value "// The clamp $hash added is still required.`nint x = 1;`n" -Encoding utf8
+        Invoke-IsolatedGit -C $root add -A
+
+        $output = & pwsh -NoProfile -NonInteractive -File $scanner -RepoRoot $root -All 2>&1 | Out-String
+        Assert-True ($output -match 'commit-hash') "the commit hash '$hash' was not reported. Scanner said:`n$output"
+    }
+    finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
 Test-Case 'a hex-looking word that is not a commit' {

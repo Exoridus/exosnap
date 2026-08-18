@@ -215,7 +215,7 @@ void ShellAdapter::confirmCloseGuard() {
         // are exactly that -- top level, `transientParent: null` -- and they are
         // hidden rather than closed, so the signal gets no later chance either. What
         // is left is no window, a live tray icon, and Task Manager. That is the
-        // failure 25f0ed32 removed from the tray-Quit path; the guarded path kept it
+        // failure the tray-Quit path used to have; the guarded path kept it longer
         // because it approves the close HERE and never returns through
         // requestClose(), which is where every other outcome is reported.
         const CloseGuardState allowed = currentState();

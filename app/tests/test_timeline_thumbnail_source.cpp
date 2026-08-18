@@ -297,10 +297,10 @@ TEST_F(TimelineThumbnailSourceTest, AnUnusableFrameGeometryStrandsNothing) {
 
 // The clip must be handed back to the user when Edit closes: as long as the
 // worker's engine holds the container open, Windows refuses to delete or rename
-// the recording. Needs real media, so it runs against a fixture in the untracked
-// scratch dir and skips where there is none. Create one with
+// the recording. Needs real media, so it runs against an untracked fixture at the
+// path below and skips where there is none. Create one with
 // `ffmpeg -f lavfi -i testsrc2=size=1920x1080:rate=60:duration=6 -c:v libx264
-// -g 120 -pix_fmt yuv420p .workspace/test-fixtures/edit_handle_probe.mkv`.
+// -g 120 -pix_fmt yuv420p <that path>`.
 // Measured while writing this: the copy cannot be deleted while the clip is
 // open, and can be immediately after the close is processed.
 TEST_F(TimelineThumbnailSourceTest, ClosingTheClipReleasesTheFileHandle) {

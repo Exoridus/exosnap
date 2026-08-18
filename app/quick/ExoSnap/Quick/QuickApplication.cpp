@@ -3703,8 +3703,8 @@ void QuickApplication::refreshTrayState() {
     // the taskbar on the idle logo through a whole recording for every session
     // without one -- a machine with the notification area disabled, and every
     // --auto-record / --auto-edit / --visual-test run, which suppress the tray on
-    // purpose. That is the regression b42c7d2e fixed, still open for exactly the
-    // sessions least likely to be watched.
+    // purpose. The regression stayed open for exactly the sessions least likely
+    // to be watched.
     //
     // Derived from the view model's own booleans rather than by re-parsing the
     // status string: the label is presentation and may be localized, the state is

@@ -214,8 +214,8 @@ TEST(WhatsNewPayload, ConsumeClearsASuppressedPayloadWithoutShowing) {
     ASSERT_TRUE(WriteWhatsNewPayload(path, MakePayload(QStringLiteral("1.2.0"))));
 
     EXPECT_FALSE(ConsumeWhatsNewPayload(path, QStringLiteral("1.2.0"), /*suppressed=*/true).show);
-    // The user asked not to be shown notes after updates -- not to be asked again
-    // on the launch after that.
+    // Suppression means "do not show notes after an update", not "stop asking on
+    // the launch after that": the payload still goes.
     EXPECT_FALSE(QFile::exists(path));
 }
 
