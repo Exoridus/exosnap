@@ -59,6 +59,36 @@ ScrollView {
         return view.contentY === maximum;
     }
 
+    // Keyboard scrolling, reported the same way the other helpers report: whether
+    // the view actually moved. A key that changes nothing must not be swallowed --
+    // Escape has to keep reaching the surface above, and Tab has to keep walking.
+    function scrollByKey(key: int): bool {
+        const view = control.flickable;
+        if (view === null || view.height <= 0)
+            return false;
+        const page = view.height * 0.9;
+        const line = view.height * 0.1;
+        let delta = 0;
+        if (key === Qt.Key_Down)
+            delta = line;
+        else if (key === Qt.Key_Up)
+            delta = -line;
+        else if (key === Qt.Key_PageDown)
+            delta = page;
+        else if (key === Qt.Key_PageUp)
+            delta = -page;
+        else if (key === Qt.Key_Home)
+            return control.scrollToHome();
+        else if (key === Qt.Key_End)
+            return control.scrollToEnd();
+        if (delta === 0)
+            return false;
+        const maximum = Math.max(0, view.contentHeight - view.height);
+        const before = view.contentY;
+        view.contentY = Math.max(0, Math.min(maximum, before + delta));
+        return view.contentY !== before;
+    }
+
     function revealItem(item: Item): bool {
         const view = control.flickable;
         if (view === null || item === null || view.height <= 0)

@@ -282,6 +282,21 @@ QColor QuickThemeTokens::overlayInkSecondary() noexcept {
 QColor QuickThemeTokens::overlayInkMuted() noexcept {
     return parseToken(darkAppearance().mut);
 }
+QColor QuickThemeTokens::overlaySurface() noexcept {
+    return parseToken(darkAppearance().surf);
+}
+QColor QuickThemeTokens::overlaySurfaceRaised() noexcept {
+    return parseToken(darkAppearance().surf2);
+}
+QColor QuickThemeTokens::overlayLine() noexcept {
+    return parseToken(darkAppearance().line);
+}
+QColor QuickThemeTokens::overlayLineStrong() noexcept {
+    return parseToken(darkAppearance().line2);
+}
+QColor QuickThemeTokens::overlayInkDim() noexcept {
+    return parseToken(darkAppearance().dim);
+}
 QColor QuickThemeTokens::overlaySuccess() noexcept {
     return parseToken(darkAppearance().success);
 }

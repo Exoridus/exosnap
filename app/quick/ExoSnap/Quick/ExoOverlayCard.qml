@@ -318,6 +318,20 @@ Item {
             ExoScrollView {
                 id: bodyScroll
 
+                // The body was reachable by wheel only. A card whose content does not
+                // fit -- a multi-release changelog, a long recovery list -- was then
+                // unreadable past the fold for anyone not using a mouse, and at the
+                // 860x700 minimum window that is most of them. Focusable and driven by
+                // the usual keys; the card's own Escape handling is untouched because
+                // these are all accepted only when they actually scroll something.
+                activeFocusOnTab: flickable !== null && flickable.contentHeight > flickable.height
+
+                Keys.onPressed: function (event) {
+                    // Accepted only when it actually scrolled: an unscrollable body
+                    // must not eat Escape or the arrow keys the card above wants.
+                    event.accepted = bodyScroll.scrollByKey(event.key);
+                }
+
                 // Word-wrapped content inside a width-capped card: the content
                 // width feeds its own height, so the gutters are reserved
                 // unconditionally to cut that cycle (see ExoScrollView's note).

@@ -111,7 +111,7 @@ Window {
         id: statusGlyph
 
         property string tone: "info"
-        property color stroke: ExoTheme.accent
+        property color stroke: ExoTheme.overlayAccent
 
         width: 16
         height: 16
@@ -178,7 +178,7 @@ Window {
 
         property string label: ""
         property bool primary: false
-        property color tone: ExoTheme.accent
+        property color tone: ExoTheme.overlayAccent
         property color ink: ExoTheme.accentInk
 
         signal activated()
@@ -200,7 +200,7 @@ Window {
             anchors.centerIn: parent
             text: pill.label
             textFormat: Text.PlainText
-            color: pill.primary ? pill.ink : ExoTheme.text
+            color: pill.primary ? pill.ink : ExoTheme.overlayInk
             font {
                 family: ExoTheme.sansFamily
                 pixelSize: 13
@@ -237,7 +237,7 @@ Window {
 
                 required property var model
 
-                readonly property color tone: ExoTheme.advisoryTone(card.model.tone)
+                readonly property color tone: ExoTheme.overlayAdvisoryTone(card.model.tone)
                 readonly property int actionCount: card.model.actionCount !== undefined ? card.model.actionCount : 0
                 // One action means the card itself is the action, marked with a
                 // chevron; two get named buttons in their own row.
@@ -250,9 +250,9 @@ Window {
                 height: 14 + Math.max(30, textBlock.height + (actionRow.visible ? 11 + actionRow.height : 0))
                         + 14 + (card.standing ? 0 : 3)
                 radius: 14
-                color: ExoTheme.surfaceHover
+                color: ExoTheme.overlaySurfaceRaised
                 border.width: 1
-                border.color: ExoTheme.lineStrong
+                border.color: ExoTheme.overlayLineStrong
 
                 Accessible.role: Accessible.AlertMessage
                 Accessible.name: card.model.title
@@ -275,7 +275,7 @@ Window {
                     StatusGlyph {
                         anchors.centerIn: parent
                         tone: card.model.tone
-                        stroke: ExoTheme.advisoryToneText(card.model.tone)
+                        stroke: ExoTheme.overlayAdvisoryToneText(card.model.tone)
                     }
                 }
 
@@ -297,7 +297,7 @@ Window {
                         width: parent.width
                         text: card.model.title
                         textFormat: Text.PlainText
-                        color: ExoTheme.text
+                        color: ExoTheme.overlayInk
                         elide: Text.ElideRight
                         font {
                             family: ExoTheme.sansFamily
@@ -311,7 +311,7 @@ Window {
                         visible: text.length > 0
                         text: card.model.body !== undefined ? card.model.body : ""
                         textFormat: Text.PlainText
-                        color: ExoTheme.textMuted
+                        color: ExoTheme.overlayInkSecondary
                         // WrapAnywhere as the fallback, not WordWrap alone: a
                         // file path is one unbreakable token, and WordWrap has
                         // no legal break in it -- so the line simply grew past
@@ -343,7 +343,7 @@ Window {
                         label: card.model.primaryLabel !== undefined ? card.model.primaryLabel : ""
                         primary: true
                         tone: card.tone
-                        ink: ExoTheme.advisoryToneInk(card.model.tone)
+                        ink: ExoTheme.overlayAdvisoryToneInk(card.model.tone)
                         onActivated: root.actionTriggered(card.model.sequence, card.model.primaryAction)
                     }
 
@@ -363,7 +363,7 @@ Window {
                     height: 14
                     visible: card.cardIsAction
                     direction: 270
-                    tone: ExoTheme.textMuted
+                    tone: ExoTheme.overlayInkSecondary
                 }
 
                 MouseArea {
@@ -398,7 +398,7 @@ Window {
                         width: 12
                         height: 12
                         kind: ExoGlyph.Close
-                        color: dismissArea.containsMouse ? ExoTheme.text : ExoTheme.textDim
+                        color: dismissArea.containsMouse ? ExoTheme.overlayInk : ExoTheme.overlayInkDim
                     }
 
                     MouseArea {

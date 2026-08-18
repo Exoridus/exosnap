@@ -72,6 +72,18 @@ class QuickThemeTokens : public QObject {
     Q_PROPERTY(QColor overlayInk READ overlayInk CONSTANT FINAL)
     Q_PROPERTY(QColor overlayInkSecondary READ overlayInkSecondary CONSTANT FINAL)
     Q_PROPERTY(QColor overlayInkMuted READ overlayInkMuted CONSTANT FINAL)
+    // The GROUND and its divider, added when the notification toast turned out to
+    // be the one capture-excluded surface still painting itself from the
+    // appearance -- so in Light it rendered light, on a stack whose whole rule is
+    // that it does not. Same derivation as the ink rungs: the Dark appearance's
+    // own surface/raised/line, so the Dark palette stays the single place these
+    // move. `overlayInkOnAccent` is the ink that sits ON overlayAccent, which is
+    // the Dark appearance's own on-accent ink rather than the page's.
+    Q_PROPERTY(QColor overlaySurface READ overlaySurface CONSTANT FINAL)
+    Q_PROPERTY(QColor overlaySurfaceRaised READ overlaySurfaceRaised CONSTANT FINAL)
+    Q_PROPERTY(QColor overlayLine READ overlayLine CONSTANT FINAL)
+    Q_PROPERTY(QColor overlayLineStrong READ overlayLineStrong CONSTANT FINAL)
+    Q_PROPERTY(QColor overlayInkDim READ overlayInkDim CONSTANT FINAL)
     Q_PROPERTY(QColor overlaySuccess READ overlaySuccess CONSTANT FINAL)
     Q_PROPERTY(QColor overlayWarning READ overlayWarning CONSTANT FINAL)
     Q_PROPERTY(QColor overlayError READ overlayError CONSTANT FINAL)
@@ -133,6 +145,11 @@ class QuickThemeTokens : public QObject {
     [[nodiscard]] static QColor overlayInk() noexcept;
     [[nodiscard]] static QColor overlayInkSecondary() noexcept;
     [[nodiscard]] static QColor overlayInkMuted() noexcept;
+    [[nodiscard]] static QColor overlaySurface() noexcept;
+    [[nodiscard]] static QColor overlaySurfaceRaised() noexcept;
+    [[nodiscard]] static QColor overlayLine() noexcept;
+    [[nodiscard]] static QColor overlayLineStrong() noexcept;
+    [[nodiscard]] static QColor overlayInkDim() noexcept;
     [[nodiscard]] static QColor overlaySuccess() noexcept;
     [[nodiscard]] static QColor overlayWarning() noexcept;
     [[nodiscard]] static QColor overlayError() noexcept;

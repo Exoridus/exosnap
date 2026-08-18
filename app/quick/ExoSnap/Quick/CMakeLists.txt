@@ -752,6 +752,17 @@ add_test(
 )
 set_tests_properties(quick.qml.disk_cache_isolation PROPERTIES LABELS "quick")
 
+# The fixed-dark canon for the five capture-excluded overlays, checked at the
+# source because nothing downstream can observe it: those windows defeat every
+# form of capture, and the harness only sees their scene graph.
+add_test(
+    NAME quick.qml.overlays_are_fixed_dark
+    COMMAND ${CMAKE_COMMAND}
+        -DQML_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+        -P ${PROJECT_SOURCE_DIR}/cmake/tests/assert_overlays_are_fixed_dark.cmake
+)
+set_tests_properties(quick.qml.overlays_are_fixed_dark PROPERTIES LABELS "quick")
+
 qt_add_executable(record_controls_qml_tests
     ${EXOSNAP_QUICK_TESTS_DIR}/qml_test_main.cpp
     ${PROJECT_SOURCE_DIR}/app/assets/fonts/exosnap_fonts.qrc

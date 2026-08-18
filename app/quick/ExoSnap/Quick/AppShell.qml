@@ -803,9 +803,30 @@ Item {
     Loader {
         id: recoveryOverlayLoader
 
+        // Where the keyboard was before this surface took it. The card publishes
+        // it; restoring it is this loader's job, because the card is gone by the
+        // time there is anything to restore. Added late: the contract landed with
+        // the What's-new overlay, after these three were already written, so they
+        // closed and left the window with no focus owner at all.
+        property Item focusReturn: null
+
         anchors.fill: parent
         active: root.recovery.surfaceOpen
         z: 2
+
+        onLoaded: {
+            const card = recoveryOverlayLoader.item as ExoOverlayCard;
+            recoveryOverlayLoader.focusReturn = card !== null ? card.focusReturnItem : null;
+        }
+
+        onActiveChanged: {
+            if (recoveryOverlayLoader.active)
+                return;
+            const target = recoveryOverlayLoader.focusReturn;
+            recoveryOverlayLoader.focusReturn = null;
+            if (target !== null && target.enabled && target.visible)
+                target.forceActiveFocus(Qt.OtherFocusReason);
+        }
 
         sourceComponent: RecoveryOverlay {
             recovery: root.recovery
@@ -823,9 +844,30 @@ Item {
     Loader {
         id: recordingErrorLoader
 
+        // Where the keyboard was before this surface took it. The card publishes
+        // it; restoring it is this loader's job, because the card is gone by the
+        // time there is anything to restore. Added late: the contract landed with
+        // the What's-new overlay, after these three were already written, so they
+        // closed and left the window with no focus owner at all.
+        property Item focusReturn: null
+
         anchors.fill: parent
         active: root.recordingError.active
         z: 3
+
+        onLoaded: {
+            const card = recordingErrorLoader.item as ExoOverlayCard;
+            recordingErrorLoader.focusReturn = card !== null ? card.focusReturnItem : null;
+        }
+
+        onActiveChanged: {
+            if (recordingErrorLoader.active)
+                return;
+            const target = recordingErrorLoader.focusReturn;
+            recordingErrorLoader.focusReturn = null;
+            if (target !== null && target.enabled && target.visible)
+                target.forceActiveFocus(Qt.OtherFocusReason);
+        }
 
         sourceComponent: RecordingErrorOverlay {
             error: root.recordingError
@@ -840,9 +882,30 @@ Item {
     Loader {
         id: crashReportLoader
 
+        // Where the keyboard was before this surface took it. The card publishes
+        // it; restoring it is this loader's job, because the card is gone by the
+        // time there is anything to restore. Added late: the contract landed with
+        // the What's-new overlay, after these three were already written, so they
+        // closed and left the window with no focus owner at all.
+        property Item focusReturn: null
+
         anchors.fill: parent
         active: root.crashReport.active
         z: 2
+
+        onLoaded: {
+            const card = crashReportLoader.item as ExoOverlayCard;
+            crashReportLoader.focusReturn = card !== null ? card.focusReturnItem : null;
+        }
+
+        onActiveChanged: {
+            if (crashReportLoader.active)
+                return;
+            const target = crashReportLoader.focusReturn;
+            crashReportLoader.focusReturn = null;
+            if (target !== null && target.enabled && target.visible)
+                target.forceActiveFocus(Qt.OtherFocusReason);
+        }
 
         sourceComponent: CrashReportOverlay {
             crash: root.crashReport

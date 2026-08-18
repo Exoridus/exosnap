@@ -52,6 +52,11 @@ QtObject {
     readonly property color overlayInkSecondary: QuickThemeTokens.overlayInkSecondary
     readonly property color overlayInkMuted: QuickThemeTokens.overlayInkMuted
     readonly property color overlayAccent: QuickThemeTokens.overlayAccent
+    readonly property color overlaySurface: QuickThemeTokens.overlaySurface
+    readonly property color overlaySurfaceRaised: QuickThemeTokens.overlaySurfaceRaised
+    readonly property color overlayLine: QuickThemeTokens.overlayLine
+    readonly property color overlayLineStrong: QuickThemeTokens.overlayLineStrong
+    readonly property color overlayInkDim: QuickThemeTokens.overlayInkDim
     readonly property color overlaySuccess: QuickThemeTokens.overlaySuccess
     readonly property color overlayWarning: QuickThemeTokens.overlayWarning
     readonly property color overlayError: QuickThemeTokens.overlayError
@@ -257,6 +262,34 @@ QtObject {
              : tone === "caution" ? root.warningText
              : tone === "error" ? root.errorText
              : root.accent;
+    }
+
+    // The same three helpers for a FIXED-DARK ground. A capture-excluded surface
+    // may not resolve a tone against the application appearance -- in Light that
+    // puts a light advisory ground and dark ink on a near-black card. These pick
+    // the Dark appearance's semantics instead, which is the same rule the
+    // overlay* colour tokens follow, and the ink deliberately stays the shared
+    // on-semantic ink: it is chosen for contrast against the semantic colour, not
+    // against the page behind it.
+    function overlayAdvisoryTone(tone: string): color {
+        return tone === "success" ? root.overlaySuccess
+             : tone === "caution" ? root.overlayWarning
+             : tone === "error" ? root.overlayError
+             : root.overlayAccent;
+    }
+
+    function overlayAdvisoryToneInk(tone: string): color {
+        return tone === "success" ? root.successInk
+             : tone === "caution" ? root.warningInk
+             : tone === "error" ? root.errorInk
+             : root.accentInk;
+    }
+
+    function overlayAdvisoryToneText(tone: string): color {
+        return tone === "success" ? root.overlaySuccess
+             : tone === "caution" ? root.overlayWarning
+             : tone === "error" ? root.overlayError
+             : root.overlayAccent;
     }
 
     // QCR-513. The same tone, said without colour: a severity carried only by a
