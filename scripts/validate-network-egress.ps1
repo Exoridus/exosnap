@@ -78,12 +78,13 @@ try {
         'libs/crash_capture/src/crash_capture.cpp',
         # Not an egress point, and listed for the same reason the headers above
         # are: the token appears only in prose. This header names `Qt6::Network`
-        # in the paragraph explaining why the Live Verify control channel is a
-        # native named pipe INSTEAD of QLocalServer -- so that Qt's networking
-        # module is never linked into the shipping executable. A pipe has no
-        # port and no listening socket. Inventarised under "Local,
-        # never-transmitted stores" in docs/privacy-review.md.
-        'app/live_verify/LiveVerifyControlServer.h'
+        # in the paragraph explaining why the shared control channel is a native
+        # named pipe INSTEAD of QLocalServer -- so that Qt's networking module is
+        # never linked into either shipping executable. A pipe has no port and no
+        # listening socket. Inventarised under "Local, never-transmitted stores"
+        # in docs/privacy-review.md.
+        'libs/control/include/control/control_server.h',
+        'libs/control/CMakeLists.txt'
     ) | ForEach-Object { $_.Replace('/', [System.IO.Path]::DirectorySeparatorChar) }
 
     # -------------------------------------------------------------------------
@@ -127,10 +128,15 @@ try {
     $urlRegex = [regex]::new('https?://([^/\s"''>)]+)', [System.Text.RegularExpressions.RegexOptions]::None)
 
     # -------------------------------------------------------------------------
-    # Enumerate tracked source files (git ls-files -- never touches build/,
-    # and naturally skips anything gitignored).
+    # Enumerate tracked source files. git ls-files, not a recursive directory
+    # walk: it never touches build/, and it naturally skips everything
+    # gitignored -- which now includes .claude/worktrees/, where a parallel agent
+    # session keeps a full second checkout of this repository. A Get-ChildItem
+    # -Recurse from the repo root would scan those copies as if they were source.
+    # -C pins it to the repository this script belongs to rather than to whatever
+    # the caller's working directory happens to be.
     # -------------------------------------------------------------------------
-    $trackedFiles = git ls-files -- 'app' 'libs' 'apps' 2>$null
+    $trackedFiles = git -C $repoRoot ls-files -- 'app' 'libs' 'apps' 2>$null
     $sourceFiles = $trackedFiles | Where-Object {
         ($_ -match '\.(cpp|h|cc|hpp)$') -and
         ($_ -notmatch '(^|[/\\])third_party([/\\]|$)') -and
@@ -164,6 +170,12 @@ try {
 
             foreach ($urlMatch in $urlRegex.Matches($line)) {
                 $hostName = $urlMatch.Groups[1].Value
+                # A placeholder in prose is not an egress point. "https://<host>/<path>"
+                # in a doc comment describes the SHAPE of a flag's argument; there is
+                # no host to reach and nothing to inventorize. Deliberately narrow: a
+                # name containing an angle bracket cannot be a real hostname, so this
+                # skips exactly the placeholders and widens the allowlist by nothing.
+                if ($hostName -match '[<>]') { continue }
                 if (-not (Test-HostAllowed -HostName $hostName) -and -not $isAllowlistedFile) {
                     Add-Violation (
                         "new egress point: $relPath`:$($i + 1) references disallowed host '$hostName' " +

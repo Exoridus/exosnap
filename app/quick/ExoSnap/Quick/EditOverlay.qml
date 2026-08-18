@@ -128,6 +128,13 @@ Item {
                         textFormat: Text.PlainText
                         elide: Text.ElideMiddle
                         color: ExoTheme.accent
+                        // QCR-509. Middle-elided by design, so the untruncated
+                        // name existed only under the pointer. The accessible
+                        // name carries it whether or not it is truncated —
+                        // which is also the case where a screen reader would
+                        // otherwise read the ellipsis.
+                        Accessible.role: Accessible.StaticText
+                        Accessible.name: qsTr("Editing %1").arg(root.session.clipTitle)
                         Layout.fillWidth: true
                         Layout.minimumWidth: 0
                         Layout.alignment: Qt.AlignVCenter
@@ -164,8 +171,6 @@ Item {
                     }
 
                     ExoBadge {
-                        id: reportBadge
-
                         text: root.session.reportLabel
                         tone: root.session.reportSeverity === EditSessionAdapter.Critical ? "blocker"
                               : root.session.reportSeverity === EditSessionAdapter.Warning ? "notice" : "neutral"
@@ -230,8 +235,6 @@ Item {
                     // the workspace. Deliberately ONE boundary: the individual
                     // tracks inside it stay unboxed.
                     Rectangle {
-                        id: timelinePanel
-
                         color: ExoTheme.surface
                         border.width: 1
                         border.color: ExoTheme.line

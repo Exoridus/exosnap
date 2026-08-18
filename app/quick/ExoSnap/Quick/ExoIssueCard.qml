@@ -34,6 +34,13 @@ Rectangle {
     readonly property color toneColor: root.tone === "blocker" ? ExoTheme.error
                                      : root.tone === "notice" ? ExoTheme.warning
                                      : ExoTheme.success
+    // The glyph carries the severity and sits INSIDE the tinted ground, which
+    // is the darkest surface the tone is drawn on: `warning` on
+    // `warningSurface` measures 2.79:1 in Light, under even the graphical bar.
+    // The border keeps the indicator rung — it is drawn against the page.
+    readonly property color toneTextColor: root.tone === "blocker" ? ExoTheme.errorText
+                                         : root.tone === "notice" ? ExoTheme.warningText
+                                         : ExoTheme.successText
 
     implicitHeight: column.implicitHeight + 2 * ExoTheme.spacingMd
     color: root.tone === "blocker" ? ExoTheme.errorSurface
@@ -65,7 +72,7 @@ Rectangle {
             ExoGlyph {
                 kind: root.tone === "blocker" ? ExoGlyph.Close
                       : root.tone === "notice" ? ExoGlyph.Warning : ExoGlyph.Check
-                color: root.toneColor
+                color: root.toneTextColor
                 Layout.alignment: Qt.AlignTop
                 Layout.preferredWidth: 14
                 Layout.preferredHeight: 14
@@ -97,6 +104,9 @@ Rectangle {
                 tone: "notice"
                 visible: root.needsElevation
                 Layout.alignment: Qt.AlignTop
+                // QCR-509. A four-letter badge whose whole meaning was in a
+                // tooltip.
+                Accessible.description: qsTr("Measured from the elevated present-path baseline (PresentMon / DPC-ISR).")
                 ToolTip.text: qsTr("Measured from the elevated present-path baseline (PresentMon / DPC-ISR).")
                 ToolTip.visible: elevHover.hovered
                 ToolTip.delay: 400

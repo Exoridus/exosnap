@@ -36,8 +36,8 @@ namespace exosnap::quick {
 //     fully unit-testable" — owning it inside the QML boundary layer does
 //     not leak any platform dependency into that layer, it only adds signal
 //     plumbing, which is exactly what an adapter is for.
-//  3. Whatever renders the actual toast WINDOW (explicitly out of scope for
-//     this task — see NotificationToastCard.qml's header comment) needs the
+//  3. Whatever renders the actual toast WINDOW (OverlayNotificationToast.qml,
+//     which carries the spec rules for a card in its header) needs the
 //     SAME manager instance to read VisibleEvents() / ShownAtMs() and call
 //     Dismiss() on a click. manager() below hands out that one instance by
 //     reference so a future toast-window owner and this adapter's hub model
@@ -130,6 +130,17 @@ class NotificationsAdapter : public QObject {
     // The manager every event source enqueues into. See the class doc
     // comment for why this adapter owns it and hands it out by reference.
     [[nodiscard]] notifications::NotificationManager& manager() noexcept;
+
+    // The "Show notifications" setting (product-spec §9: "The 'Show notifications'
+    // setting gates only the toasts — the hub records regardless"). Applied by the
+    // composition root from the persisted value at startup and again on every change.
+    //
+    // It lives here, with the manager this adapter owns, because the rule is one
+    // sentence about notifications and not a line of composition: `false` suppresses
+    // AND clears the visible set — standing cards included, since the setting is about
+    // whether anything appears on screen at all — while every event still reaches the
+    // hub. Nothing about the dwell contract changes; a suppressed toast has no dwell.
+    void applyShowNotifications(bool show);
 
     // UpdateAvailable's hub entry cannot clear itself on a later "up to date"
     // result — no NotificationEvent is raised for that outcome, only for

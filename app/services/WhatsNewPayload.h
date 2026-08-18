@@ -49,4 +49,21 @@ void DeleteWhatsNewPayload(const QString& path);
 // Default payload location: <config-dir>/whats-new-pending.json.
 [[nodiscard]] QString WhatsNewPayloadPath();
 
+struct WhatsNewConsumption {
+    bool show = false;
+    QVector<WhatsNewNote> notes; // empty unless show
+};
+
+// Read the payload, decide with ShouldShowWhatsNew(), and CLEAR the file — the
+// whole one-time contract in one call, so no caller can implement half of it.
+//
+// The file goes in every case:
+//   - shown: it has been shown, and once is what "one-time" means;
+//   - target mismatch (first install, downgrade, manual-ZIP update): it does not
+//     describe this build and never will;
+//   - suppressed: the user asked not to see it, not to be asked again later;
+//   - unparseable: keeping it means failing to parse it again on every launch.
+[[nodiscard]] WhatsNewConsumption ConsumeWhatsNewPayload(const QString& path, const QString& running_version,
+                                                         bool suppressed);
+
 } // namespace exosnap

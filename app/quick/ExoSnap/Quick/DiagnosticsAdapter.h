@@ -1,8 +1,10 @@
 #pragma once
 
 #include "DiagnosticIssueModel.h"
+#include "PipelineStageModel.h"
 
 #include "diagnostics/DiagnosticsController.h"
+#include "diagnostics/DpcLatencyProvider.h"
 #include "services/SupportBundleService.h"
 
 #include <capability/capability_set.h>
@@ -17,6 +19,7 @@
 #include <QtQmlIntegration/qqmlintegration.h>
 
 #include <memory>
+#include <vector>
 
 namespace exosnap::quick {
 
@@ -59,13 +62,19 @@ class DiagnosticsAdapter : public QObject {
     Q_PROPERTY(QAbstractListModel* issues READ issues CONSTANT FINAL)
 
     Q_PROPERTY(QVariantList tiles READ tiles NOTIFY tilesChanged FINAL)
+    // The five live tiles, and whether there is a live pipeline to show them
+    // for. Separate from `tiles`: those are pre-flight readiness facts and stay
+    // meaningful while idle, these exist only while something is recording.
+    Q_PROPERTY(QVariantList liveTiles READ liveTiles NOTIFY liveTilesChanged FINAL)
+    Q_PROPERTY(bool liveTilesVisible READ liveTilesVisible NOTIFY liveTilesChanged FINAL)
     Q_PROPERTY(QVariantList tips READ tips NOTIFY issuesChanged FINAL)
     Q_PROPERTY(bool hasIssues READ hasIssues NOTIFY issuesChanged FINAL)
     Q_PROPERTY(QVariantList environmentRows READ environmentRows NOTIFY environmentChanged FINAL)
     Q_PROPERTY(QVariantList configRows READ configRows NOTIFY environmentChanged FINAL)
     Q_PROPERTY(QVariantList selfTestRows READ selfTestRows NOTIFY selfTestChanged FINAL)
     Q_PROPERTY(QString selfTestStatus READ selfTestStatus NOTIFY selfTestChanged FINAL)
-    Q_PROPERTY(QVariantList pipelineStages READ pipelineStages NOTIFY pipelineChanged FINAL)
+    // Same reason as `issues` above for the base-type spelling.
+    Q_PROPERTY(QAbstractListModel* pipelineStages READ pipelineStages CONSTANT FINAL)
     Q_PROPERTY(bool pipelineLive READ pipelineLive NOTIFY pipelineChanged FINAL)
 
     Q_PROPERTY(bool bundleBusy READ bundleBusy NOTIFY bundleBusyChanged FINAL)
@@ -89,13 +98,15 @@ class DiagnosticsAdapter : public QObject {
     [[nodiscard]] bool elevated() const noexcept;
     [[nodiscard]] QAbstractListModel* issues() noexcept;
     [[nodiscard]] const QVariantList& tiles() const noexcept;
+    [[nodiscard]] const QVariantList& liveTiles() const noexcept;
+    [[nodiscard]] bool liveTilesVisible() const noexcept;
     [[nodiscard]] const QVariantList& tips() const noexcept;
     [[nodiscard]] bool hasIssues() const noexcept;
     [[nodiscard]] const QVariantList& environmentRows() const noexcept;
     [[nodiscard]] const QVariantList& configRows() const noexcept;
     [[nodiscard]] const QVariantList& selfTestRows() const noexcept;
     [[nodiscard]] const QString& selfTestStatus() const noexcept;
-    [[nodiscard]] const QVariantList& pipelineStages() const noexcept;
+    [[nodiscard]] QAbstractListModel* pipelineStages() noexcept;
     [[nodiscard]] bool pipelineLive() const noexcept;
     [[nodiscard]] bool bundleBusy() const noexcept;
     [[nodiscard]] QString defaultBundleFileName() const;
@@ -121,14 +132,31 @@ class DiagnosticsAdapter : public QObject {
     void setCaptureWindowEvidence(std::optional<diagnostics::WindowTargetFacts> facts,
                                   const diagnostics::WindowHubEvidence& hub);
     void setCaptureTargetHdrActive(bool active);
+    // Re-reads the primary screen's size and compositor rate. The refresh-rate
+    // mismatch check compares the configured fps against this number, so a
+    // mode-set that is never picked up leaves the page recommending against a
+    // rate the display now supports.
+    void refreshDisplayFacts();
     void setElevated(bool elevated);
     void setHasLastRecording(bool has_last_recording);
-    void setDpcLatency(diagnostics::DpcLatencyReading reading);
+    // ADR 0033 DPC/ISR latency. Borrowed, never owned, and PULLED on every evaluation
+    // rather than pushed: the reading is only ever as current as the last read, so
+    // sampling where the recommendation engine runs is what keeps a peak that stopped
+    // being measured from standing on the page. nullptr means no producer is installed,
+    // which reports exactly as an unavailable one does -- nothing.
+    void setDpcLatencyProvider(diagnostics::IDpcLatencyProvider* provider);
     void setPresentSample(std::optional<diagnostics::PresentSample> sample);
     void applyLiveDiagnostics(const recorder_core::RecordingDiagnosticsSnapshot& snapshot);
     // Emitted by the composition root once an assisted fix has resolved to a
     // Settings section, so the page can route the navigation.
     void requestSettingsNavigation();
+
+    // Read-only view of the policy owner, for the observability surface. The
+    // adapter converts the controller's structs into QML-shaped values; the
+    // structured control-channel payload reads the SAME controller instead of a
+    // re-conversion of the QML shapes, so a tier or a fix action cannot be lost
+    // in translation on the way out.
+    [[nodiscard]] const diagnostics::DiagnosticsController& controller() const noexcept;
 
     // Test seam: applies a probe result without touching the filesystem.
     void applyProbeResultForTest(diagnostics::DiagnosticsController::ProbeResult probe);
@@ -142,6 +170,7 @@ class DiagnosticsAdapter : public QObject {
     void expertModeChanged(bool enabled);
     void hasLastRecordingChanged();
     void tilesChanged();
+    void liveTilesChanged();
     void issuesChanged();
     void environmentChanged();
     void selfTestChanged();
@@ -163,23 +192,36 @@ class DiagnosticsAdapter : public QObject {
     void applyProbe(diagnostics::DiagnosticsController::ProbeResult probe, bool from_manual_check);
     void refreshSnapshot();
     void refreshPipeline();
+    // Rebuilds the five live tiles from the last snapshot and publishes only when
+    // they actually differ. The stream arrives at ~5 Hz and almost always
+    // rebuilds identical -- a notify per sample would repaint five tiles twice a
+    // second for nothing.
+    void refreshLiveTiles();
     void refreshSelfTest();
     void setChecking(bool checking);
     void updateLiveProbeTimer();
 
     diagnostics::DiagnosticsController controller_;
     capability::CapabilitySet caps_;
+    // Borrowed from the composition root, which must outlive this adapter (see
+    // QuickApplication's member declaration order).
+    diagnostics::IDpcLatencyProvider* dpc_provider_ = nullptr;
     DiagnosticIssueModel issue_model_;
+    PipelineStageModel pipeline_stage_model_;
     std::unique_ptr<SupportBundleService> bundle_service_;
 
     QString last_check_text_;
     QString self_test_status_;
     QVariantList tiles_;
+    QVariantList live_tiles_;
+    // The plain structs the QVariantList above was built from, kept so the
+    // "did anything change" comparison is over typed values rather than over
+    // QVariantMaps.
+    std::vector<diagnostics::LiveTile> live_tile_values_;
     QVariantList tips_;
     QVariantList environment_rows_;
     QVariantList config_rows_;
     QVariantList self_test_rows_;
-    QVariantList pipeline_stages_;
 
     diagnostics::VerdictState verdict_state_ = diagnostics::VerdictState::Neutral;
     QString verdict_headline_;

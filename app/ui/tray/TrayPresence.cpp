@@ -29,13 +29,14 @@ TrayIconState TrayIconStateFromStatusLabel(const QString& status_label) {
 
 TrayPresence::TrayPresence(QObject* parent) : QObject(parent) {
     // tray_icon_ is parented to this (QObject), so it will be destroyed
-    // automatically.  tray_menu_ is parented to tray_icon_ so it is in the
-    // QObject tree and findChild<QMenu*>() works from TrayPresence in tests.
+    // automatically.
     tray_icon_ = new QSystemTrayIcon(this);
 
-    // Parent the menu to tray_icon_ so the QObject tree owns it.
+    // The menu stays parentless and is deleted by hand in the destructor.
+    // setContextMenu() does NOT take ownership -- QSystemTrayIcon holds it as a
+    // QPointer -- so giving it a parent here would be the fiction, not the plain
+    // delete below.
     tray_menu_ = new QMenu();
-    tray_menu_->setParent(nullptr); // unparented widget; owned by tray_icon_ via setContextMenu below
 
     show_hide_action_ = tray_menu_->addAction(QStringLiteral("Show window"));
     record_toggle_action_ = tray_menu_->addAction(QStringLiteral("Start recording"));
@@ -50,8 +51,7 @@ TrayPresence::TrayPresence(QObject* parent) : QObject(parent) {
 
     connect(show_hide_action_, &QAction::triggered, this, &TrayPresence::onShowHideTriggered);
     connect(record_toggle_action_, &QAction::triggered, this, &TrayPresence::recordToggleRequested);
-    // Notifications action: clicking focuses the window and clears the badge
-    // (MainWindow wires clearUnreadCount via activateWindowRequested).
+    // Notifications action: clicking focuses the window and clears the badge.
     connect(notifications_action_, &QAction::triggered, this, [this]() {
         clearUnreadCount();
         emit activateWindowRequested();
@@ -74,6 +74,17 @@ TrayPresence::~TrayPresence() {
 }
 
 void TrayPresence::applyState(TrayIconState state, const QString& status_label, const QString& elapsed_text) {
+    // QCR-714. Every QuickApplication::synchronizeRecordState() ends here, and
+    // that runs on the diagnostics and metrics cadences as well as on real state
+    // changes — so this was constructing a QIcon from a resource, re-setting the
+    // tray icon, rebuilding the tooltip string and rewriting two menu-item
+    // properties several times a second to arrive at exactly what was already
+    // there. The adapters upstream are all change-guarded; this leaf was not.
+    if (state_applied_ && state_ == state && status_label_ == status_label && elapsed_text_ == elapsed_text) {
+        return;
+    }
+
+    state_applied_ = true;
     state_ = state;
     status_label_ = status_label;
     elapsed_text_ = elapsed_text;
@@ -81,7 +92,9 @@ void TrayPresence::applyState(TrayIconState state, const QString& status_label, 
     applyIcon();
     rebuildTooltip();
 
-    // Update the "Start/Stop recording" menu item label.
+    // Update the "Start/Stop recording" menu item label. No `default:` — a
+    // fourth tray state must fail the build rather than silently present itself
+    // to the user as "Idle".
     if (record_toggle_action_) {
         switch (state_) {
         case TrayIconState::Recording:
@@ -91,7 +104,6 @@ void TrayPresence::applyState(TrayIconState state, const QString& status_label, 
             record_toggle_action_->setText(QStringLiteral("Stop recording"));
             break;
         case TrayIconState::Idle:
-        default:
             record_toggle_action_->setText(QStringLiteral("Start recording"));
             break;
         }
@@ -151,7 +163,6 @@ QString TrayPresence::currentTooltip() const {
         tip += QStringLiteral("Paused");
         break;
     case TrayIconState::Idle:
-    default:
         tip += QStringLiteral("Ready");
         break;
     }
@@ -179,9 +190,9 @@ void TrayPresence::applyIcon() {
         case TrayIconState::Paused:
             return kPausedPath;
         case TrayIconState::Idle:
-        default:
             return kIdlePath;
         }
+        return kIdlePath;
     }();
 
     QIcon icon(icon_path);
@@ -233,6 +244,11 @@ void TrayPresence::onTrayActivated(QSystemTrayIcon::ActivationReason reason) {
 }
 
 void TrayPresence::onShowHideTriggered() {
+    // The label decides, from the same flag that wrote it in setWindowVisible().
+    if (window_visible_) {
+        emit hideWindowRequested();
+        return;
+    }
     emit activateWindowRequested();
 }
 

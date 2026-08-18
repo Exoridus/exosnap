@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 
 #include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QSettings>
 #include <QTemporaryDir>
 
@@ -50,7 +52,7 @@ TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_HotkeyBindings) {
     settings.hotkey_bindings[2] = QStringLiteral("Alt+F8");
     settings.hotkey_bindings[3] = QStringLiteral("Ctrl+Alt+M");
 
-    store.Save(settings);
+    ASSERT_TRUE(store.Save(settings));
     const PersistedAppSettings loaded = store.Load();
     EXPECT_EQ(loaded.hotkey_bindings[0], QStringLiteral("Ctrl+Alt+F10"));
     EXPECT_EQ(loaded.hotkey_bindings[1], QStringLiteral("Ctrl+Shift+F11"));
@@ -70,7 +72,7 @@ TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_WindowGeometry) {
     settings.window_geometry.height = 800;
     settings.window_geometry.maximized = true;
 
-    store.Save(settings);
+    ASSERT_TRUE(store.Save(settings));
     const PersistedAppSettings loaded = store.Load();
     EXPECT_EQ(loaded.window_geometry.x, 100);
     EXPECT_EQ(loaded.window_geometry.y, 200);
@@ -90,7 +92,7 @@ TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_PresentDiagnosticsOptIn)
 
     PersistedAppSettings settings;
     settings.present_diagnostics_optin = true;
-    store.Save(settings);
+    ASSERT_TRUE(store.Save(settings));
 
     EXPECT_TRUE(store.Load().present_diagnostics_optin);
 }
@@ -102,7 +104,7 @@ TEST(AppSettingsStoreTest, AppSettingsStore_Save_WritesSettingsVersion) {
 
     AppSettingsStore store(settings_path);
     PersistedAppSettings settings;
-    store.Save(settings);
+    ASSERT_TRUE(store.Save(settings));
 
     QSettings raw_settings(settings_path, QSettings::IniFormat);
     // Version bumped to 21: appearance_id + accent_id replace theme_id.
@@ -123,7 +125,7 @@ TEST(AppSettingsStoreTest, CrashReportPolicy_RoundTripsAllThreeStates) {
     for (const CrashReportPolicy policy :
          {CrashReportPolicy::AskEveryTime, CrashReportPolicy::AlwaysSend, CrashReportPolicy::NeverSend}) {
         settings.crash_report_policy = policy;
-        store.Save(settings);
+        ASSERT_TRUE(store.Save(settings));
         EXPECT_EQ(store.Load().crash_report_policy, policy);
     }
 }
@@ -184,7 +186,7 @@ TEST(AppSettingsStoreTest, CrashReportPolicy_SaveRemovesLegacyBoolean) {
     AppSettingsStore store(settings_path);
     PersistedAppSettings settings;
     settings.crash_report_policy = CrashReportPolicy::NeverSend;
-    store.Save(settings);
+    ASSERT_TRUE(store.Save(settings));
 
     QSettings raw_settings(settings_path, QSettings::IniFormat);
     EXPECT_FALSE(raw_settings.contains(QStringLiteral("crash/auto_send_crash_reports")));
@@ -240,7 +242,7 @@ TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_DiagnosticsOverlay_False
     AppSettingsStore store(TempSettingsPath(temp_dir));
     PersistedAppSettings settings;
     settings.show_diagnostics_overlay = false;
-    store.Save(settings);
+    ASSERT_TRUE(store.Save(settings));
 
     const PersistedAppSettings loaded = store.Load();
     EXPECT_FALSE(loaded.show_diagnostics_overlay);
@@ -253,7 +255,7 @@ TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_DiagnosticsOverlay_True)
     AppSettingsStore store(TempSettingsPath(temp_dir));
     PersistedAppSettings settings;
     settings.show_diagnostics_overlay = true;
-    store.Save(settings);
+    ASSERT_TRUE(store.Save(settings));
 
     const PersistedAppSettings loaded = store.Load();
     EXPECT_TRUE(loaded.show_diagnostics_overlay);
@@ -294,7 +296,7 @@ TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_ShowNotifications_True) 
     AppSettingsStore store(TempSettingsPath(temp_dir));
     PersistedAppSettings settings;
     settings.show_notifications = true;
-    store.Save(settings);
+    ASSERT_TRUE(store.Save(settings));
 
     const PersistedAppSettings loaded = store.Load();
     EXPECT_TRUE(loaded.show_notifications);
@@ -307,7 +309,7 @@ TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_ShowNotifications_False)
     AppSettingsStore store(TempSettingsPath(temp_dir));
     PersistedAppSettings settings;
     settings.show_notifications = false;
-    store.Save(settings);
+    ASSERT_TRUE(store.Save(settings));
 
     const PersistedAppSettings loaded = store.Load();
     EXPECT_FALSE(loaded.show_notifications);
@@ -349,7 +351,7 @@ TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_OpenEditorWhenFinished_T
     AppSettingsStore store(TempSettingsPath(temp_dir));
     PersistedAppSettings settings;
     settings.open_editor_when_finished = true;
-    store.Save(settings);
+    ASSERT_TRUE(store.Save(settings));
 
     const PersistedAppSettings loaded = store.Load();
     EXPECT_TRUE(loaded.open_editor_when_finished);
@@ -362,7 +364,7 @@ TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_OpenEditorWhenFinished_F
     AppSettingsStore store(TempSettingsPath(temp_dir));
     PersistedAppSettings settings;
     settings.open_editor_when_finished = false;
-    store.Save(settings);
+    ASSERT_TRUE(store.Save(settings));
 
     const PersistedAppSettings loaded = store.Load();
     EXPECT_FALSE(loaded.open_editor_when_finished);
@@ -412,7 +414,7 @@ TEST(AppSettingsStoreTest, AppSettingsStore_Save_RemovesLegacyGroups) {
 
     AppSettingsStore store(settings_path);
     PersistedAppSettings settings;
-    store.Save(settings); // triggers legacy removal
+    ASSERT_TRUE(store.Save(settings)); // triggers legacy removal
 
     QSettings raw(settings_path, QSettings::IniFormat);
     // Legacy groups must be absent after Save().
@@ -423,36 +425,189 @@ TEST(AppSettingsStoreTest, AppSettingsStore_Save_RemovesLegacyGroups) {
 }
 
 // ---------------------------------------------------------------------------
-// load_ok surfaces a corrupt/unreadable settings.ini instead of silently
-// returning built-in defaults with no way for the caller to notice.
+// QCR-201: load_outcome distinguishes the three load cases, because only one of
+// them ("a settings file exists that we could not read") makes writing the
+// built-in defaults back a destructive act.
 // ---------------------------------------------------------------------------
 
-TEST(AppSettingsStoreTest, AppSettingsStore_NormalLoad_LoadOkIsTrue) {
+TEST(AppSettingsStoreTest, AppSettingsStore_MissingFile_IsDefaultsNoFileNotAFailure) {
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
 
     AppSettingsStore store(TempSettingsPath(temp_dir));
-    // Missing file (first run) is not a corruption — still load_ok.
-    EXPECT_TRUE(store.Load().load_ok);
-
-    PersistedAppSettings settings;
-    store.Save(settings);
-    EXPECT_TRUE(store.Load().load_ok);
+    // First run: no file. Defaults are legitimate and persisting them is correct.
+    EXPECT_EQ(store.Load().load_outcome, SettingsLoadOutcome::DefaultsNoFile);
 }
 
-TEST(AppSettingsStoreTest, AppSettingsStore_UnreadableFile_SetsLoadOkFalse) {
+TEST(AppSettingsStoreTest, AppSettingsStore_NormalLoad_IsLoaded) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+
+    AppSettingsStore store(TempSettingsPath(temp_dir));
+    PersistedAppSettings settings;
+    ASSERT_TRUE(store.Save(settings));
+    EXPECT_EQ(store.Load().load_outcome, SettingsLoadOutcome::Loaded);
+}
+
+TEST(AppSettingsStoreTest, AppSettingsStore_UnreadableFile_IsReadFailed) {
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
     const QString settings_path = TempSettingsPath(temp_dir);
 
     // A directory sitting at the settings path can never be parsed as an INI
     // file — QSettings reports this via status(), which is exactly the
-    // corrupt/locked-file scenario load_ok exists to surface.
+    // corrupt/locked-file scenario load_outcome exists to surface.
     ASSERT_TRUE(QDir().mkpath(settings_path));
 
     AppSettingsStore store(settings_path);
-    const PersistedAppSettings loaded = store.Load();
-    EXPECT_FALSE(loaded.load_ok);
+    EXPECT_EQ(store.Load().load_outcome, SettingsLoadOutcome::ReadFailed);
+}
+
+TEST(AppSettingsStoreTest, AppSettingsStore_CorruptFileContent_IsReadFailed) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+    const QString settings_path = TempSettingsPath(temp_dir);
+
+    {
+        QFile file(settings_path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        // Binary garbage with an unterminated group header: QSettings' INI
+        // parser reports FormatError rather than silently yielding no keys.
+        file.write(QByteArray("[hotkeys\n\x01\x02\x00\x03 = = =\n", 26));
+    }
+
+    AppSettingsStore store(settings_path);
+    EXPECT_EQ(store.Load().load_outcome, SettingsLoadOutcome::ReadFailed);
+}
+
+// The QCR-201 invariant itself, checked against the bytes on disk: a store that
+// failed to load must still be the store's own file after the caller decides not
+// to write. The store cannot enforce that on its own (it does not know the
+// caller's intent) — what it must provide is the fact the caller needs, plus a
+// way to preserve the file when the caller does eventually write.
+TEST(AppSettingsStoreTest, AppSettingsStore_BackupUnreadableFile_PreservesTheOriginalBytes) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+    const QString settings_path = TempSettingsPath(temp_dir);
+
+    const QByteArray original("[hotkeys\nnot-parseable", 22);
+    {
+        QFile file(settings_path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write(original);
+    }
+
+    AppSettingsStore store(settings_path);
+    ASSERT_EQ(store.Load().load_outcome, SettingsLoadOutcome::ReadFailed);
+
+    QString backup_path;
+    ASSERT_TRUE(store.BackupUnreadableFile(&backup_path));
+    EXPECT_EQ(backup_path, settings_path + QStringLiteral(".corrupt"));
+    EXPECT_FALSE(QFileInfo::exists(settings_path)) << "the unreadable file is moved aside, not copied";
+
+    QFile backup(backup_path);
+    ASSERT_TRUE(backup.open(QIODevice::ReadOnly));
+    EXPECT_EQ(backup.readAll(), original);
+
+    // The write that follows now lands on a clean path and cannot destroy anything.
+    PersistedAppSettings settings;
+    settings.appearance_id = QStringLiteral("light");
+    ASSERT_TRUE(store.Save(settings));
+    EXPECT_EQ(store.Load().appearance_id, QStringLiteral("light"));
+}
+
+TEST(AppSettingsStoreTest, AppSettingsStore_BackupUnreadableFile_ReplacesAnEarlierBackup) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+    const QString settings_path = TempSettingsPath(temp_dir);
+    const QString backup_path = settings_path + QStringLiteral(".corrupt");
+
+    {
+        QFile stale(backup_path);
+        ASSERT_TRUE(stale.open(QIODevice::WriteOnly));
+        stale.write("stale");
+    }
+    {
+        QFile file(settings_path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("fresh");
+    }
+
+    AppSettingsStore store(settings_path);
+    ASSERT_TRUE(store.BackupUnreadableFile());
+
+    QFile backup(backup_path);
+    ASSERT_TRUE(backup.open(QIODevice::ReadOnly));
+    EXPECT_EQ(backup.readAll(), QByteArray("fresh")) << "one unreadable file is kept, not a growing pile";
+}
+
+TEST(AppSettingsStoreTest, AppSettingsStore_BackupUnreadableFile_NoFileIsNotABackup) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+
+    AppSettingsStore store(TempSettingsPath(temp_dir));
+    EXPECT_FALSE(store.BackupUnreadableFile());
+}
+
+// ---------------------------------------------------------------------------
+// ResolveSettingsWrite: the QCR-201 decision itself. Exhaustive over the three
+// load outcomes x two intents x superseded/not, because the whole point of the
+// item is that one of those twelve cells used to be a silent data loss.
+// ---------------------------------------------------------------------------
+
+TEST(SettingsWritePolicyTest, MissingFileAllowsEveryWrite) {
+    for (const SettingsWriteIntent intent : {SettingsWriteIntent::Incidental, SettingsWriteIntent::UserEdit}) {
+        EXPECT_EQ(ResolveSettingsWrite(SettingsLoadOutcome::DefaultsNoFile, /*superseded=*/false, intent),
+                  SettingsWriteDecision::Write);
+    }
+}
+
+TEST(SettingsWritePolicyTest, SuccessfulLoadAllowsEveryWrite) {
+    for (const SettingsWriteIntent intent : {SettingsWriteIntent::Incidental, SettingsWriteIntent::UserEdit}) {
+        EXPECT_EQ(ResolveSettingsWrite(SettingsLoadOutcome::Loaded, /*superseded=*/false, intent),
+                  SettingsWriteDecision::Write);
+    }
+}
+
+// The regression this item exists for: window geometry on move/close, a startup
+// reconciliation, a one-time tray flag — none of them may replace a settings
+// file the app could not read.
+TEST(SettingsWritePolicyTest, ReadFailureRefusesIncidentalWrites) {
+    EXPECT_EQ(
+        ResolveSettingsWrite(SettingsLoadOutcome::ReadFailed, /*superseded=*/false, SettingsWriteIntent::Incidental),
+        SettingsWriteDecision::Refuse);
+}
+
+TEST(SettingsWritePolicyTest, ReadFailureLetsAUserEditThroughButPreservesTheFileFirst) {
+    EXPECT_EQ(
+        ResolveSettingsWrite(SettingsLoadOutcome::ReadFailed, /*superseded=*/false, SettingsWriteIntent::UserEdit),
+        SettingsWriteDecision::PreserveThenWrite);
+}
+
+TEST(SettingsWritePolicyTest, OnceSupersededTheFileIsOrdinaryAgain) {
+    // The unreadable file has already been moved aside and rewritten, so there
+    // is nothing left to protect — including for the incidental writes that
+    // were refused a moment earlier.
+    for (const SettingsWriteIntent intent : {SettingsWriteIntent::Incidental, SettingsWriteIntent::UserEdit}) {
+        EXPECT_EQ(ResolveSettingsWrite(SettingsLoadOutcome::ReadFailed, /*superseded=*/true, intent),
+                  SettingsWriteDecision::Write);
+    }
+}
+
+// QCR-201, second half: Save() reports its own failure instead of returning void
+// and letting a lost change look like a successful write.
+TEST(AppSettingsStoreTest, AppSettingsStore_SaveToAnUnwritablePath_ReportsFailure) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+
+    // A directory occupying the settings path: mkpath of the parent succeeds,
+    // the INI write cannot.
+    const QString settings_path = TempSettingsPath(temp_dir);
+    ASSERT_TRUE(QDir().mkpath(settings_path));
+
+    AppSettingsStore store(settings_path);
+    const PersistedAppSettings settings;
+    EXPECT_FALSE(store.Save(settings));
 }
 
 TEST(AppSettingsStoreTest, AppSettingsStore_EmptyPath_LoadReturnsDefaults) {
@@ -468,8 +623,9 @@ TEST(AppSettingsStoreTest, AppSettingsStore_EmptyPath_SaveIsNoOp) {
     AppSettingsStore store{empty_path};
     PersistedAppSettings settings;
     settings.hotkey_bindings[0] = QStringLiteral("Alt+F9");
-    // Should not throw or crash.
-    EXPECT_NO_THROW(store.Save(settings));
+    // Nothing to write to, and the caller is told so rather than left believing
+    // the settings were persisted.
+    EXPECT_FALSE(store.Save(settings));
 }
 
 // TRAY-CLOSE-TO-TRAY-R1: keep_running_in_tray + tray_close_notice_shown round-trip tests
@@ -491,7 +647,7 @@ TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_KeepRunningInTray_True) 
     AppSettingsStore store(TempSettingsPath(temp_dir));
     PersistedAppSettings settings;
     settings.keep_running_in_tray = true;
-    store.Save(settings);
+    ASSERT_TRUE(store.Save(settings));
 
     const PersistedAppSettings loaded = store.Load();
     EXPECT_TRUE(loaded.keep_running_in_tray);
@@ -504,7 +660,7 @@ TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_KeepRunningInTray_False)
     AppSettingsStore store(TempSettingsPath(temp_dir));
     PersistedAppSettings settings;
     settings.keep_running_in_tray = false;
-    store.Save(settings);
+    ASSERT_TRUE(store.Save(settings));
 
     const PersistedAppSettings loaded = store.Load();
     EXPECT_FALSE(loaded.keep_running_in_tray);
@@ -517,7 +673,7 @@ TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_TrayCloseNoticeShown_Tru
     AppSettingsStore store(TempSettingsPath(temp_dir));
     PersistedAppSettings settings;
     settings.tray_close_notice_shown = true;
-    store.Save(settings);
+    ASSERT_TRUE(store.Save(settings));
 
     const PersistedAppSettings loaded = store.Load();
     EXPECT_TRUE(loaded.tray_close_notice_shown);
@@ -530,7 +686,7 @@ TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_TrayCloseNoticeShown_Fal
     AppSettingsStore store(TempSettingsPath(temp_dir));
     PersistedAppSettings settings;
     settings.tray_close_notice_shown = false;
-    store.Save(settings);
+    ASSERT_TRUE(store.Save(settings));
 
     const PersistedAppSettings loaded = store.Load();
     EXPECT_FALSE(loaded.tray_close_notice_shown);
@@ -571,7 +727,7 @@ TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_ShowQuickControls_False)
     AppSettingsStore store(TempSettingsPath(temp_dir));
     PersistedAppSettings settings;
     settings.show_quick_controls = false;
-    store.Save(settings);
+    ASSERT_TRUE(store.Save(settings));
 
     const PersistedAppSettings loaded = store.Load();
     EXPECT_FALSE(loaded.show_quick_controls);
@@ -584,7 +740,7 @@ TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_ShowQuickControls_True) 
     AppSettingsStore store(TempSettingsPath(temp_dir));
     PersistedAppSettings settings;
     settings.show_quick_controls = true;
-    store.Save(settings);
+    ASSERT_TRUE(store.Save(settings));
 
     const PersistedAppSettings loaded = store.Load();
     EXPECT_TRUE(loaded.show_quick_controls);
@@ -631,7 +787,7 @@ TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_UpdateChannel_Preview) {
     AppSettingsStore store(TempSettingsPath(temp_dir));
     PersistedAppSettings settings;
     settings.update_channel = QStringLiteral("Preview");
-    store.Save(settings);
+    ASSERT_TRUE(store.Save(settings));
 
     const PersistedAppSettings loaded = store.Load();
     EXPECT_EQ(loaded.update_channel, QStringLiteral("Preview"));
@@ -644,7 +800,7 @@ TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_CheckUpdatesOnStart_Fals
     AppSettingsStore store(TempSettingsPath(temp_dir));
     PersistedAppSettings settings;
     settings.check_updates_on_start = false;
-    store.Save(settings);
+    ASSERT_TRUE(store.Save(settings));
 
     const PersistedAppSettings loaded = store.Load();
     EXPECT_FALSE(loaded.check_updates_on_start);
@@ -689,7 +845,7 @@ TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_AppearanceAndAccent) {
     PersistedAppSettings settings;
     settings.appearance_id = QStringLiteral("light");
     settings.accent_id = QStringLiteral("violet");
-    store.Save(settings);
+    ASSERT_TRUE(store.Save(settings));
 
     const PersistedAppSettings loaded = store.Load();
     EXPECT_EQ(loaded.appearance_id, QStringLiteral("light"));
@@ -805,7 +961,7 @@ TEST(AppSettingsStoreTest, AppSettingsStore_SaveRemovesTheLegacyThemeIdKey) {
     AppSettingsStore store(settings_path);
     PersistedAppSettings settings = store.Load();
     ASSERT_EQ(settings.accent_id, QStringLiteral("violet"));
-    store.Save(settings);
+    ASSERT_TRUE(store.Save(settings));
 
     QSettings s(settings_path, QSettings::IniFormat);
     s.beginGroup(QStringLiteral("appearance"));

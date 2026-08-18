@@ -2,6 +2,29 @@
 
 namespace exosnap::quick {
 
+namespace {
+
+// Stable keys for the close-decision signal. The whole point of reporting this
+// path is that its three "nothing happened" outcomes are indistinguishable to the
+// user -- and, until now, to a support bundle as well.
+[[nodiscard]] const char* CloseGuardKindKey(CloseGuardKind kind) noexcept {
+    switch (kind) {
+    case CloseGuardKind::Allow:
+        return "allow";
+    case CloseGuardKind::BlockSilently:
+        return "blockSilently";
+    case CloseGuardKind::ConfirmRemux:
+        return "confirmRemux";
+    case CloseGuardKind::ConfirmExport:
+        return "confirmExport";
+    case CloseGuardKind::ConfirmRecording:
+        return "confirmRecording";
+    }
+    return "unknown";
+}
+
+} // namespace
+
 ShellAdapter::ShellAdapter(QObject* parent) : QObject(parent) {
 }
 
@@ -11,6 +34,39 @@ void ShellAdapter::setStateProvider(std::function<CloseGuardState()> provider) {
 
 void ShellAdapter::setHideToTrayProvider(std::function<bool()> provider) {
     hide_to_tray_provider_ = std::move(provider);
+}
+
+int ShellAdapter::currentPage() const noexcept {
+    return current_page_;
+}
+
+void ShellAdapter::setCurrentPage(int page) {
+    if (current_page_ == page)
+        return;
+    current_page_ = page;
+    emit currentPageChanged();
+}
+
+bool ShellAdapter::editSurfaceVisible() const noexcept {
+    return edit_surface_visible_;
+}
+
+void ShellAdapter::setEditSurfaceVisible(bool visible) {
+    if (edit_surface_visible_ == visible)
+        return;
+    edit_surface_visible_ = visible;
+    emit editSurfaceVisibleChanged();
+}
+
+bool ShellAdapter::sourcePickerOpen() const noexcept {
+    return source_picker_open_;
+}
+
+void ShellAdapter::setSourcePickerOpen(bool open) {
+    if (source_picker_open_ == open)
+        return;
+    source_picker_open_ = open;
+    emit sourcePickerOpenChanged();
 }
 
 bool ShellAdapter::closeGuardActive() const noexcept {
@@ -52,33 +108,66 @@ CloseGuardState ShellAdapter::currentState() const {
 }
 
 bool ShellAdapter::requestClose() {
-    // Ahead of the guards, and deliberately so. Close-to-tray is not a weaker
-    // form of closing: nothing is torn down, so there is nothing to warn about.
-    // Asking "you are still recording, really close?" before a hide would
-    // contradict the whole reason the preference exists. The provider owns the
-    // force-quit latch, so a tray "Quit" falls through to the guards below.
+    const CloseGuardState state = currentState();
+    const CloseGuardPrompt prompt = EvaluateCloseGuard(state);
+
+    // Reported for every outcome, because three of them look identical from the
+    // outside: the window simply stays. A user saying "Quit did nothing" has no way
+    // to tell a silent block from an unseen prompt from a teardown that hung, and
+    // until this signal existed neither did a support bundle.
+    //
+    // A SIGNAL rather than a log call, so this adapter keeps its two-library
+    // dependency surface. The application logs it, which is also where the other
+    // half of the story lives -- the tray Quit that asked for the close.
+    const auto report = [this, &state](const char* kind) {
+        emit closeDecided(QString::fromLatin1(kind), state.recording, state.exporting, state.remuxing);
+    };
+
+    // The tear-down guards run AHEAD of close-to-tray, and that ordering is the
+    // product rule: a running recording, export or remux is asked about whichever
+    // way the preference is set, because what the user is answering is "close for
+    // real", not "hide". Confirming therefore always ends in a full close --
+    // confirmCloseGuard() emits closeApproved, which the window honours without
+    // consulting this function again, so the tray branch below is never reached.
+    //
+    // This deliberately reverses the earlier order, where a hide short-circuited
+    // everything on the argument that hiding tears nothing down. That argument is
+    // sound for the hide itself and wrong about the question: with close-to-tray on,
+    // "close" during a recording used to silently mean "hide", and the user never
+    // found out that the thing they asked to close was still running.
+    switch (prompt.kind) {
+    case CloseGuardKind::ConfirmRemux:
+    case CloseGuardKind::ConfirmExport:
+    case CloseGuardKind::ConfirmRecording:
+        report(CloseGuardKindKey(prompt.kind));
+        publish(prompt);
+        return false;
+    case CloseGuardKind::BlockSilently:
+    case CloseGuardKind::Allow:
+        break;
+    }
+
+    // Close-to-tray sits below the tear-down guards and ABOVE the finalize block,
+    // because a finalize in flight is precisely the case where not ending the
+    // process is the safe answer -- and hiding is not ending it. Nothing is torn
+    // down here, so the half-written container the finalize guard exists to prevent
+    // cannot arise.
     if (hide_to_tray_provider_ && hide_to_tray_provider_()) {
         // Any prompt still standing belongs to a previous, abandoned attempt.
         cancelCloseGuard();
+        report("hideToTray");
         emit hideToTrayRequested();
         return false;
     }
 
-    const CloseGuardPrompt prompt = EvaluateCloseGuard(currentState());
-    switch (prompt.kind) {
-    case CloseGuardKind::Allow:
-        clearPrompt();
-        return true;
-    case CloseGuardKind::BlockSilently:
+    if (prompt.kind == CloseGuardKind::BlockSilently) {
         // The finalizing overlay is already on screen; no prompt, no close.
+        report(CloseGuardKindKey(prompt.kind));
         clearPrompt();
-        return false;
-    case CloseGuardKind::ConfirmRemux:
-    case CloseGuardKind::ConfirmExport:
-    case CloseGuardKind::ConfirmRecording:
-        publish(prompt);
         return false;
     }
+
+    report(CloseGuardKindKey(CloseGuardKind::Allow));
     clearPrompt();
     return true;
 }
@@ -114,8 +203,26 @@ void ShellAdapter::confirmCloseGuard() {
         return;
     }
     clearPrompt();
-    if (next.kind == CloseGuardKind::Allow)
+    if (next.kind == CloseGuardKind::Allow) {
+        // BOTH signals, and closeDecided FIRST. They answer different questions, and
+        // only one of them ends the process: `closeApproved` tells the window it may
+        // go and flushes pending persists, while `closeDecided("allow")` is what the
+        // application hangs the explicit QCoreApplication::quit() off.
+        //
+        // Emitting only the former is how a confirmed close came to destroy the
+        // window without ending the process. Qt's own quit does not step in there:
+        // it fires on the last visible PRIMARY window, and all five capture overlays
+        // are exactly that -- top level, `transientParent: null` -- and they are
+        // hidden rather than closed, so the signal gets no later chance either. What
+        // is left is no window, a live tray icon, and Task Manager. That is the
+        // failure the tray-Quit path used to have; the guarded path kept it longer
+        // because it approves the close HERE and never returns through
+        // requestClose(), which is where every other outcome is reported.
+        const CloseGuardState allowed = currentState();
+        emit closeDecided(QString::fromLatin1(CloseGuardKindKey(CloseGuardKind::Allow)), allowed.recording,
+                          allowed.exporting, allowed.remuxing);
         emit closeApproved();
+    }
     // BlockSilently: a finalize started while the dialog was up. Keeping the
     // window open is the only safe answer, and the overlay explains it.
 }

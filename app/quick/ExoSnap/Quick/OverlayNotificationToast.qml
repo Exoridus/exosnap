@@ -1,6 +1,7 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import QtQuick.Shapes
 
 // Transient notification toasts, stacked bottom-right of the screen that hosts
 // the ExoSnap window. Ported from app/ui/overlay/NotificationToastWindow.cpp.
@@ -10,6 +11,20 @@ import QtQuick
 // Qt.WindowTransparentForInput — which would also kill the action buttons — the
 // window keeps a mask covering only the card rectangles, rebuilt whenever the
 // stack changes. That is why this overlay is only partially click-through.
+//
+// The card delegate below follows product-spec §9's toast rules exactly. They
+// used to live in a second, never-instantiated reference component
+// (NotificationToastCard.qml, removed in QCR-701); this file is now the only
+// place a toast is described, so the rules belong here:
+//  - a dismiss ✕ is always present (NotificationToastWindow::ToastHit's
+//    is_dismiss target exists independently of action count);
+//  - with exactly one action the whole card is clickable, marked with a
+//    trailing "›";
+//  - with two actions each gets its own named (quiet) button;
+//  - the body wraps up to six lines and ellipsizes beyond that — the hub,
+//    not the toast, is where the untruncated text lives;
+//  - a countdown bar renders only for a TIMED toast (`standing: false`),
+//    matching NotificationManager::IsStanding()/DismissIntervalMs().
 Window {
     id: root
 
@@ -34,10 +49,6 @@ Window {
     readonly property int shadowMargin: 20
     readonly property int stackGap: 12
 
-    // Text on a tone-filled button. Deliberately not a theme token: it has to
-    // stay legible on all four tone fills, which no single ink token does.
-    readonly property color buttonInk: "#0E0E10"
-
     signal actionTriggered(int sequence, int action)
     signal dismissRequested(int sequence)
 
@@ -55,6 +66,11 @@ Window {
     // clicks (OverlayQuickControlPill ships the same combination).
     flags: Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
            | Qt.WindowDoesNotAcceptFocus
+
+    // Named rather than left to Qt's default: an untitled QWindow inherits the
+    // application display name, and five overlays titled "ExoSnap" made the main
+    // window impossible to identify by owner pid and title. See OverlayRecording.
+    title: qsTr("ExoSnap Overlay — Notification")
     color: "transparent"
 
     visible: exclusion.granted && repeater.count > 0
@@ -87,13 +103,6 @@ Window {
         exclusion.setClickThroughRegion(rects)
     }
 
-    function toneColor(tone) {
-        return tone === "success" ? ExoTheme.success
-             : tone === "caution" ? ExoTheme.warning
-             : tone === "error" ? ExoTheme.error
-             : ExoTheme.accent
-    }
-
     onVisibleChanged: if (visible) root.rebuildMask()
 
     // Status glyph inside the 30 px chip. Vector-drawn so it stays identical
@@ -102,7 +111,7 @@ Window {
         id: statusGlyph
 
         property string tone: "info"
-        property color stroke: ExoTheme.accent
+        property color stroke: ExoTheme.overlayAccent
 
         width: 16
         height: 16
@@ -169,7 +178,8 @@ Window {
 
         property string label: ""
         property bool primary: false
-        property color tone: ExoTheme.accent
+        property color tone: ExoTheme.overlayAccent
+        property color ink: ExoTheme.accentInk
 
         signal activated()
 
@@ -190,7 +200,7 @@ Window {
             anchors.centerIn: parent
             text: pill.label
             textFormat: Text.PlainText
-            color: pill.primary ? root.buttonInk : ExoTheme.text
+            color: pill.primary ? pill.ink : ExoTheme.overlayInk
             font {
                 family: ExoTheme.sansFamily
                 pixelSize: 13
@@ -227,7 +237,7 @@ Window {
 
                 required property var model
 
-                readonly property color tone: root.toneColor(card.model.tone)
+                readonly property color tone: ExoTheme.overlayAdvisoryTone(card.model.tone)
                 readonly property int actionCount: card.model.actionCount !== undefined ? card.model.actionCount : 0
                 // One action means the card itself is the action, marked with a
                 // chevron; two get named buttons in their own row.
@@ -240,9 +250,9 @@ Window {
                 height: 14 + Math.max(30, textBlock.height + (actionRow.visible ? 11 + actionRow.height : 0))
                         + 14 + (card.standing ? 0 : 3)
                 radius: 14
-                color: ExoTheme.surfaceHover
+                color: ExoTheme.overlaySurfaceRaised
                 border.width: 1
-                border.color: ExoTheme.lineStrong
+                border.color: ExoTheme.overlayLineStrong
 
                 Accessible.role: Accessible.AlertMessage
                 Accessible.name: card.model.title
@@ -265,7 +275,7 @@ Window {
                     StatusGlyph {
                         anchors.centerIn: parent
                         tone: card.model.tone
-                        stroke: card.tone
+                        stroke: ExoTheme.overlayAdvisoryToneText(card.model.tone)
                     }
                 }
 
@@ -287,7 +297,7 @@ Window {
                         width: parent.width
                         text: card.model.title
                         textFormat: Text.PlainText
-                        color: ExoTheme.text
+                        color: ExoTheme.overlayInk
                         elide: Text.ElideRight
                         font {
                             family: ExoTheme.sansFamily
@@ -301,7 +311,7 @@ Window {
                         visible: text.length > 0
                         text: card.model.body !== undefined ? card.model.body : ""
                         textFormat: Text.PlainText
-                        color: ExoTheme.textMuted
+                        color: ExoTheme.overlayInkSecondary
                         // WrapAnywhere as the fallback, not WordWrap alone: a
                         // file path is one unbreakable token, and WordWrap has
                         // no legal break in it -- so the line simply grew past
@@ -333,6 +343,7 @@ Window {
                         label: card.model.primaryLabel !== undefined ? card.model.primaryLabel : ""
                         primary: true
                         tone: card.tone
+                        ink: ExoTheme.overlayAdvisoryToneInk(card.model.tone)
                         onActivated: root.actionTriggered(card.model.sequence, card.model.primaryAction)
                     }
 
@@ -352,7 +363,7 @@ Window {
                     height: 14
                     visible: card.cardIsAction
                     direction: 270
-                    tone: ExoTheme.textMuted
+                    tone: ExoTheme.overlayInkSecondary
                 }
 
                 MouseArea {
@@ -362,18 +373,33 @@ Window {
                     onClicked: root.actionTriggered(card.model.sequence, card.model.primaryAction)
                 }
 
-                Text {
+                // The dismiss affordance. It was a bare `Text` with no `text` at
+                // all: the hit target, the hover colour and the accessible name
+                // were all there and correct, and the glyph itself was simply
+                // never drawn — an 18 px hole in the corner of every desktop
+                // toast that only a user who guessed could click. Drawn with the
+                // shared ExoGlyph, the same treatment the hub's own dismiss
+                // uses, so the two surfaces cannot drift; the 18 px target is
+                // unchanged.
+                Item {
                     id: dismiss
 
                     x: root.cardWidth - 15 - 18
                     y: 14
                     width: 18
                     height: 18
-                    color: dismissArea.containsMouse ? ExoTheme.text : ExoTheme.textDim
 
                     Accessible.role: Accessible.Button
                     Accessible.name: qsTr("Dismiss notification")
                     Accessible.onPressAction: root.dismissRequested(card.model.sequence)
+
+                    ExoGlyph {
+                        anchors.centerIn: parent
+                        width: 12
+                        height: 12
+                        kind: ExoGlyph.Close
+                        color: dismissArea.containsMouse ? ExoTheme.overlayInk : ExoTheme.overlayInkDim
+                    }
 
                     MouseArea {
                         id: dismissArea
@@ -386,13 +412,52 @@ Window {
                 }
 
                 // Countdown hairline along the bottom edge of timed toasts.
-                Rectangle {
+                //
+                // A clipping band with the CARD's own outline drawn inside it,
+                // not a 3 px Rectangle laid over the bottom edge. A Rectangle
+                // clamps its corner radius to half its shortest side, so at 3 px
+                // tall it can round its own corners by 1.5 px against the card's
+                // 14 — while the card's bottom arc cuts about 5 px inwards over
+                // exactly those three rows. The bar's square ends therefore hung
+                // outside the card's rounded corners, which is the broken edge
+                // this replaces.
+                //
+                // The Widgets toast this was ported from clipped the bar to the
+                // card path (setClipPath); the shape is the same one, described
+                // here instead of clipped there. The band's own rectangular clip
+                // is what shortens the bar as the dwell runs out, so the draining
+                // edge stays a straight cut while both bottom corners follow the
+                // card.
+                Item {
+                    id: countdown
+
+                    x: 0
+                    y: card.height - countdown.height
                     height: 3
                     width: card.width * Math.max(0, Math.min(1, card.model.remainingFraction !== undefined
                                                                 ? card.model.remainingFraction : 0))
-                    anchors.bottom: parent.bottom
                     visible: !card.standing
-                    color: Qt.alpha(card.tone, 0.6)
+                    clip: true
+
+                    Shape {
+                        // Offset so the outline lands where the card actually
+                        // is; the band clips everything above it away.
+                        x: 0
+                        y: -(card.height - countdown.height)
+                        width: card.width
+                        height: card.height
+
+                        ShapePath {
+                            fillColor: Qt.alpha(card.tone, 0.6)
+                            strokeWidth: -1
+
+                            PathRectangle {
+                                width: card.width
+                                height: card.height
+                                radius: card.radius
+                            }
+                        }
+                    }
 
                     // The model recomputes this ten times a second, which on a
                     // 372 px card is a visible step per update rather than a

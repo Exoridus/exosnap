@@ -87,3 +87,92 @@ TEST(LogViewPolicy, FolderDisplayPathKeepsOnlyParentAndFileName) {
               QStringLiteral("logs/exosnap.log"));
     EXPECT_TRUE(LogFolderDisplayPath({}).isEmpty());
 }
+
+// ── Sequence-range selection (QCR-404) ──────────────────────────────────────
+//
+// The Logs view selects entries, not row positions. Everything below is the
+// same selection surviving — or correctly shrinking under — the model changes a
+// running session produces: appends, front eviction, and a filter that re-maps
+// every visible row.
+
+namespace {
+
+LogEntry MakeSequenced(quint64 sequence, const char* message) {
+    LogEntry entry = MakeEntry(LogSeverity::Info, "engine", message);
+    entry.sequence = sequence;
+    return entry;
+}
+
+QVector<LogEntry> Sequences(std::initializer_list<quint64> sequences) {
+    QVector<LogEntry> entries;
+    for (const quint64 sequence : sequences)
+        entries.push_back(MakeSequenced(sequence, "entry"));
+    return entries;
+}
+
+QVector<quint64> SequencesOf(const QVector<LogEntry>& entries) {
+    QVector<quint64> result;
+    for (const LogEntry& entry : entries)
+        result.push_back(entry.sequence);
+    return result;
+}
+
+} // namespace
+
+TEST(LogViewPolicy, SequenceRangeSelectsTheInclusiveSpan) {
+    const QVector<LogEntry> visible = Sequences({10, 11, 12, 13, 14});
+
+    EXPECT_EQ(SequencesOf(EntriesInSequenceRange(visible, 11, 13)), QVector<quint64>({11, 12, 13}));
+}
+
+TEST(LogViewPolicy, SequenceRangeAcceptsItsBoundsInEitherOrder) {
+    const QVector<LogEntry> visible = Sequences({10, 11, 12});
+
+    EXPECT_EQ(SequencesOf(EntriesInSequenceRange(visible, 12, 10)), QVector<quint64>({10, 11, 12}));
+}
+
+TEST(LogViewPolicy, SequenceRangeIsUnmovedByAnAppend) {
+    const QVector<LogEntry> before = Sequences({10, 11, 12});
+    const QVector<LogEntry> after = Sequences({10, 11, 12, 13, 14});
+
+    // The same two entries, whatever arrived after them. An index-based
+    // selection is unmoved here too — this is the case that never broke.
+    EXPECT_EQ(SequencesOf(EntriesInSequenceRange(before, 11, 12)), SequencesOf(EntriesInSequenceRange(after, 11, 12)));
+}
+
+// The case an index-based selection got wrong: the history evicts from the
+// front, so every surviving row moves up and index 1 becomes a different entry.
+TEST(LogViewPolicy, SequenceRangeFollowsItsEntriesThroughFrontEviction) {
+    const QVector<LogEntry> after_eviction = Sequences({12, 13, 14, 15});
+
+    EXPECT_EQ(SequencesOf(EntriesInSequenceRange(after_eviction, 13, 14)), QVector<quint64>({13, 14}));
+}
+
+TEST(LogViewPolicy, SequenceRangeShrinksToWhatSurvivedEviction) {
+    // 10 and 11 were selected; 10 has since been evicted.
+    const QVector<LogEntry> after_eviction = Sequences({11, 12, 13});
+
+    EXPECT_EQ(SequencesOf(EntriesInSequenceRange(after_eviction, 10, 11)), QVector<quint64>({11}));
+}
+
+// A filter change re-maps every visible row. The selection keeps exactly the
+// entries that are still shown, and picks up nothing that merely moved into the
+// rows it used to occupy.
+TEST(LogViewPolicy, SequenceRangeKeepsOnlyWhatTheFilterStillShows) {
+    const QVector<LogEntry> filtered = Sequences({11, 14});
+
+    EXPECT_EQ(SequencesOf(EntriesInSequenceRange(filtered, 11, 13)), QVector<quint64>({11}));
+}
+
+TEST(LogViewPolicy, SequenceRangeWhoseEntriesAreAllGoneSelectsNothing) {
+    const QVector<LogEntry> visible = Sequences({20, 21, 22});
+
+    EXPECT_TRUE(EntriesInSequenceRange(visible, 10, 12).isEmpty());
+    EXPECT_TRUE(EntriesInSequenceRange({}, 10, 12).isEmpty());
+}
+
+TEST(LogViewPolicy, SingleEntrySelectionIsARangeOfOne) {
+    const QVector<LogEntry> visible = Sequences({10, 11, 12});
+
+    EXPECT_EQ(SequencesOf(EntriesInSequenceRange(visible, 11, 11)), QVector<quint64>({11}));
+}

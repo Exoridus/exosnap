@@ -15,6 +15,10 @@ namespace {
 constexpr wchar_t kMissingTokenSentinel = 0xE000;
 
 std::wstring ContainerExtension(capability::Container container) {
+    // No `default:` — the enum is ours and closed, so a new container must break
+    // the build here (/W4 /WX turns C4062 into an error) rather than ship a file
+    // silently named .mkv. The trailing return exists only because the compiler
+    // cannot prove the switch exhaustive; it is not a fallback the product uses.
     switch (container) {
     case capability::Container::Matroska:
         return L".mkv";
@@ -22,9 +26,8 @@ std::wstring ContainerExtension(capability::Container container) {
         return L".mp4";
     case capability::Container::WebM:
         return L".webm";
-    default:
-        return L".mkv";
     }
+    return L".mkv";
 }
 
 bool IsInvalidWindowsFilenameChar(wchar_t c) {

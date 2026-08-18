@@ -132,14 +132,20 @@ bool OverlayAdapter::refreshMonitorGeometry() {
         }
     }
 
-    if (native_id == geometry_native_id_)
+    // The fast path: the same monitor, and nothing has told us its presentation
+    // moved. synchronize() runs several times a second, and this is a Win32
+    // query — but it is only ever skipped when a notification would have marked
+    // it dirty.
+    if (!geometry_dirty_ && native_id == geometry_native_id_)
         return false;
 
     geometry_native_id_ = native_id;
+    geometry_dirty_ = false;
 
     QRect resolved;
     if (native_id != 0) {
-        const ScreenPresentation meta = QueryScreenPresentation(native_id);
+        const ScreenPresentation meta =
+            presentation_provider_ ? presentation_provider_(native_id) : QueryScreenPresentation(native_id);
         if (meta.available && meta.width > 0 && meta.height > 0)
             resolved = QRect(meta.origin_x, meta.origin_y, meta.width, meta.height);
     }
@@ -149,6 +155,15 @@ bool OverlayAdapter::refreshMonitorGeometry() {
 
     recorded_monitor_geometry_ = resolved;
     return true;
+}
+
+void OverlayAdapter::invalidateMonitorGeometry() {
+    geometry_dirty_ = true;
+}
+
+void OverlayAdapter::setPresentationProviderForTesting(std::function<ScreenPresentation(std::uintptr_t)> provider) {
+    presentation_provider_ = std::move(provider);
+    geometry_dirty_ = true;
 }
 
 QRect OverlayAdapter::recordedMonitorGeometry() const noexcept {

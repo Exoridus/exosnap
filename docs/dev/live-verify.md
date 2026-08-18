@@ -101,6 +101,30 @@ invalidates becomes `STALE` and is rerun. Environment dependencies are declared
 per check (`EnvironmentKeys`), so rearranging monitors invalidates the
 cross-monitor Preview check and leaves updater identity alone.
 
+### Artifact class
+
+Artifact binding says *which bytes*. Artifact class says which kind of tree those
+bytes have to sit in, and the two checks answer to different classes:
+
+- **Ordinary application checks** may run against a build-tree `exosnap.exe`
+  wherever the individual check supports it. Nothing they exercise is resolved
+  relative to the executable's neighbours.
+- **Cross-process updater checks require an installed tree** (or something laid
+  out like one). `UpdaterStagingFileList()` names its entries **relative to
+  `applicationDirPath()`**, and only the installed layout is flat that way: a
+  Debug tree has `Qt6Cored.dll` rather than `Qt6Core.dll`, no
+  `plugins/platforms/` beside the executable, and `exosnap-updater.exe` one
+  directory over.
+
+Run from a build tree, `LaunchUpdater()` fails with `Updater runtime file
+missing: …`, the launch snapshot reports `pid: 0`, and `update.apply` settles as
+`operation_failed`. That is the false-success guard working, not a runner defect
+— it is covered by `live_verify_protocol_tests`. The fix is always to point the
+runner at a `cmake --install` tree, never to teach the product a build-tree
+layout. `scripts/live-verify-update-handoff.ps1` refuses up front when
+`exosnap-updater.exe` is not beside the `-AppPath` executable, so the class
+mismatch is named instead of surfacing as a failed handoff.
+
 ---
 
 ## The control channel
@@ -120,6 +144,126 @@ doubles as the connection credential. The endpoint is
 `\\.\pipe\ExoSnap.LiveVerify.<run-id>`, ACL'd to the creating user, with
 `PIPE_REJECT_REMOTE_CLIENTS`.
 
+The name carries a **role** (`LiveVerify`) because the application is not the
+only process with an endpoint: `exosnap-updater.exe --automation-control <run-id>`
+arms the same channel at `\\.\pipe\ExoSnap.Updater.<run-id>` (ADR 0067). Both can
+therefore use one run id, which is what an end-to-end update flow needs — the
+runner mints the id, hands it to the application, and attaches to the updater
+without a second credential. The protocol, the policy mechanics, the session
+rules and the transport are the same code (`libs/control`); only the command
+table and the state differ.
+
+### Update commands (application side)
+
+`update.getState`, `update.check`, `update.apply`. Both actions bind to the
+*same* entry points the Settings update card drives — the manual check with its
+recording guard and loop-guard reset, and the card's primary button — so an
+acceptance run exercises the path a user takes rather than a shortcut into the
+update engine.
+
+- Both are **asynchronous**. `update.check` answers through the card's next
+  state; `update.apply` starts a different process, and that process is the
+  completion.
+- `update.apply` is refused unless the card is actually offering an update
+  (`available` or `verify-reinstall`). In every other state the same button
+  re-checks, and accepting an "apply" that means "check" is precisely the false
+  success this protocol version exists to remove.
+- `update.getState` carries an `updaterLaunch` object: the child's pid, the
+  staged executable and its SHA-256, the pinned target version, and the endpoint
+  the child was given. **Nothing has to be discovered** — which child, where, and
+  pinned to what are decided by the launch and reported by it. The same object
+  rides on the `update.apply` response, so one round trip hands over the attach
+  handle.
+- `update.getState` also carries a `blocker` (`recording` | `finalizing` |
+  `updaterRunning` | null). One rule, shared with the card's own guard.
+
+### Driving a check against a controlled feed
+
+`exosnap.exe --update-base-url https://<host>/<path>` points the application's
+update check at a named feed instead of the production one. It exists because
+nothing could otherwise exercise the app's own check — and therefore the whole
+app-to-updater handoff — in a development build, where `CheckForUpdate` is
+gated off by `EXOSNAP_OFFICIAL_BUILD`. Three rules matter:
+
+- **Refused outright in an official build.** A shipped artifact whose update
+  source can be redirected from a command line is a different product.
+- **https with a host, or the launch is refused.** A test that believes it is
+  pointed at a fixture while it talks to GitHub reports the wrong thing.
+- **It is application-only.** Since ADR 0068 the updater resolves no feed at all:
+  the release it installs is pinned by the handoff document and proven by the
+  manifest bytes handed over with it, so there is no second resolution left for a
+  second feed to answer differently.
+
+The recording guard still applies; only the official-build gate does not, because
+that gate is a policy about the production feed and this is by construction not
+it. Signature and hash verification are untouched — and in a development build
+the pinned public key is all zeros, so a manifest from any feed fails
+verification. That is a useful property rather than a limitation: it makes a
+cross-process failure flow (`verifyDownloadFailed`, `installState: intact`)
+reachable without a real installable release.
+
+### Updater commands
+
+`updater.getState`, `.check`, `.download`, `.apply`, `.retry`, `.cancel`,
+`.close`. Three properties are worth stating up front:
+
+- **Every product action is asynchronous.** `ok` means accepted; the response
+  carries `settled: false`, and the completion is a `stateRevision` advance
+  (`updater.stateChanged`), never the response itself.
+- **`stateRevision` ignores download progress on purpose.** Bytes are published
+  in `download.receivedBytes` / `download.totalBytes` at full rate; the counter
+  moves only when the state a runner can act on changed, so waiting on it is not
+  a disguised 80 ms sleep.
+- **`installState`** answers `intact` / `restored` / `strandedInBackup` /
+  `unknown`. `unknown` is the truthful answer after the MSI verification failure:
+  the updater reads a registry path and a version string and never asks Windows
+  Installer for a rollback outcome, so it does not claim one.
+- **`updateTransactionId`** is the application's correlation identity for the
+  operation, carried in through the handoff document (ADR 0068). It is also in
+  the updater's `system.hello` identity and in the application's `updaterLaunch`
+  snapshot, so "the transaction the app started is the transaction this process
+  is running" is an assertion rather than an inference. `null` in manual mode. It
+  is not a credential and does not replace the run id, which is what the pipe
+  name is built from.
+- **`mode`** is `manual` or `appHandoff`. A handoff run reports `channel: null`
+  in its identity, because it resolves no feed at all.
+
+A handoff the updater cannot accept — unknown `handoffVersion`, malformed JSON, a
+missing field, an `installDir` that is not an ExoSnap installation running the
+version the document claims — is `failureCase: handoffRejected`, `installState:
+intact`, no retry, non-zero exit. It is a product outcome on this channel, not a
+usage error, because "the updater refused the handoff" is exactly what an
+acceptance run has to be able to assert.
+
+`retryEntryStep` is mode-aware for one case. A retry re-enters at Download, and
+in `appHandoff` mode that step re-reads the manifest the application handed over
+— it cannot change, so `verifyDownloadFailed` offers no retry there and the
+window's footer says `Close`. In `manual` mode the updater fetched the manifest
+itself, so the retry is real. `availableActions` and the footer always agree.
+
+`updater.cancel` is allowed in exactly one phase: `downloading`. `DownloadToFile`
+is the only operation that checks the flag. `checking` and `waitingForParent`
+answer `blocked` because `FetchReleasesJson` and `WaitForProcessExit` take no
+cancellation at all — accepting there would report success for something that
+never happens. `applying`, `verifying` and `launching` answer `blocked` because
+interrupting them risks the installation, and those are the same three phases in
+which the window disables its own close control. A cancellation that IS honoured
+ends in `phase: cancelled` with no `failureCase` and `installState: intact`, and
+the process exits `5` — never `1`.
+
+There is deliberately no command that arms a handoff; a handoff is a start
+argument, and a channel that could set one afterwards would let a caller decide
+what an elevated `msiexec` installs.
+
+An attached client cannot keep the process alive. The endpoint's teardown used
+to `FlushFileBuffers` the pipe, which on a named-pipe **server** blocks until the
+**client** has read everything still buffered — with no timeout. A runner waiting
+for the application to exit is by definition not reading, so one unread event was
+enough to hold the process open indefinitely; the updater then reported the
+truthful-for-what-it-could-see `appWontClose`. The flush is now skipped on the
+stop path: letting a departing peer drain its buffer is politeness, and it does
+not outrank the product's ability to exit.
+
 Live Verify mode is **not** a harness mode: no config isolation, no
 single-instance suppression, no tray suppression. Set `EXOSNAP_CONFIG_DIR` and
 `EXOSNAP_OUTPUT_DIR` yourself when a check needs an isolated profile, so which
@@ -134,7 +278,13 @@ pwsh scripts/live-verify-client.ps1 query record -RunId <run-id>
 pwsh scripts/live-verify-client.ps1 command record.pause -RunId <run-id>
 pwsh scripts/live-verify-client.ps1 command window.moveToScreen -RunId <run-id> -Params '{"screen":"27GL850"}'
 pwsh scripts/live-verify-client.ps1 wait record.stateChanged -Where stateText=Paused -TimeoutSeconds 10 -RunId <run-id>
+pwsh scripts/live-verify-client.ps1 state       -RunId <run-id>
+pwsh scripts/live-verify-client.ps1 describe    -RunId <run-id>
+pwsh scripts/live-verify-client.ps1 query record -RunId <run-id> -Protocol 1
 ```
+
+`state` and `describe` are protocol 2; `-Protocol 1` speaks the older envelope,
+which is how the backward-compatible surface is exercised by hand.
 
 `query <domain>` is sugar for that domain's snapshot command (`system`, `app`,
 `window`, `preview`, `record`, `result`, `overlay`, `editor`, `diagnostics`).
@@ -156,6 +306,40 @@ There are **no hidden retries**. A silent reconnect would turn "the application
 restarted under us" — the single most important thing an updater check has to
 notice — into a green result.
 
+### Protocol versions
+
+The envelope is versioned by a single integer, and this build answers **1 and
+2**. A client picks one at the handshake and keeps it for the whole connection;
+switching mid-connection is fatal, because half a transcript in each dialect is
+worse evidence than either one alone.
+
+**Protocol 1** is the surface described below down to `diagnostics.snapshot` —
+19 commands, four events, `{protocol, id, ok, result}` / `{protocol, id, ok,
+error{code,message}}`. It is answered exactly as it always was. It is kept
+because its contract is written down and exercised, not because compatibility is
+a goal of its own.
+
+**Protocol 2** adds four fields and nothing else to the shape:
+
+| Field | On | Meaning |
+|---|---|---|
+| `stateRevision` | every response and event | Monotonic. Advances when the state `ui.getState` publishes actually differs — not on a timer tick, a meter sample or a preview frame. |
+| `settled` | responses to mutating commands | The command's observable postcondition already holds. Absent on queries: a client must not be able to read "settled" off a snapshot and conclude something completed. |
+| `error.requires` / `error.actual` | refusals | The precondition and what was observed, with the same keys on both sides. A runner answers "why was this refused" without parsing prose. |
+| `state` | responses, when `includeState: true` was sent | The whole `ui.getState` payload in the same round trip. Off by default so an ordinary response stays small. |
+
+Three error codes are protocol 2 only — `invalid_state`, `blocked` and
+`operation_failed`. They split what protocol 1 calls `command_failed`, and a
+protocol-1 client is still told `command_failed`, so its contract is unchanged
+while the refusal itself reaches it.
+
+`invalid_state` vs `blocked` is the distinction a runner needs: `invalid_state`
+means the state is the wrong one (`edit.seek` with no session, `record.pause`
+while Ready) and is usually a test that drove the app somewhere unintended.
+`blocked` means the state would be right and a product rule refuses anyway
+(`record.start` under an open recovery surface, or with a diagnostics blocker) —
+that is a product behaviour to record, not a defect in the check.
+
 ### Commands
 
 | Command | Acceptance purpose |
@@ -175,15 +359,69 @@ notice — into a green result.
 | `editor.snapshot` | Edit-surface state (open, clip, trim, position, export running). Read-only — the Edit → Export path is already covered deterministically by `--auto-edit`. |
 | `diagnostics.snapshot` | Verdict, blocker/notice counts, elevation — recording start is blocked by diagnostic blockers, so a check needs to know. |
 
+Protocol 2 adds the following. Every one of them drives the seam the product's
+own control drives; none of them is a second implementation of anything.
+
+| Command | Acceptance purpose |
+|---|---|
+| `ipc.describe` | The static half of capability discovery: every command with its parameters, whether it is idempotent, whether it settles synchronously, and the full error-code list. Not a JSON Schema — the parameter surfaces are zero to three flat fields and a generator would be more code than the validation it describes. |
+| `ui.getState` | The product state, in product vocabulary: named page, recording state, `editSession` vs `editVisible`, `blockingSurface`, source picker, notification hub, edit playback, selected source, and `availableActions`. No QML ids, no object pointers, no pixel coordinates. |
+| `ui.navigate` | Navigation through the one edge QCR-001 established (`ShellAdapter::navigateToPageRequested` → `AppShell.navigateTo`), so the tab, `Ctrl+1..5`, a notification action and a check all answer to the same guard. Synchronous: the answer carries the page it actually reached. Idempotent. |
+| `ui.reveal` | Brings a named product target into view: `settings/appearance`, `diagnostics/hardwareCapabilities`, … The target set is closed and named in code. Three outcomes, kept apart on purpose: revealed; `invalid_params` for a name that does not exist; `operation_failed` for a real target that did not reach the viewport. |
+| `ui.scrollHome` / `ui.scrollEnd` | The two ends of a scrollable surface (`settings`, `diagnostics`, `logs`). Both report whether the surface really landed there. |
+
+The reveal and scroll surfaces are only addressable **while they are the
+current page** — otherwise `invalid_state`, with `requires.page` and
+`actual.page` naming both sides. The four destinations stay resident after
+their first visit (QCR-602), so a Settings section really is still reachable
+from the Logs page; scrolling a page nobody is looking at and then reporting
+where it landed is evidence of nothing.
+
+| `edit.open` | The only `edit.*` command that may run with no session — the same `openEditorForCurrentRecording()` gate `--auto-edit` uses. |
+| `edit.playPause` / `seek` / `setTrimIn` / `setTrimOut` / `timelineHome` / `timelineEnd` / `close` | The edit surface, through `EditSessionAdapter` / `EditPlayerAdapter`. Clamping, trim ordering and keyframe snapping stay in the adapter. All refuse with `invalid_state` when no session is open; none opens one implicitly. |
+| `sourcePicker.open` / `close` | The real picker surface. `record.selectTarget` bypasses it, which is why the picker had never been live-verified at all. Idempotent. |
+| `notificationHub.open` / `close`, `notification.clearAll` | The hub, through `NotificationsAdapter`. Idempotent. |
+
+Deliberately **not** exposed: `notification.triggerAction` (it reaches
+navigation, file opening and `QDesktopServices::openUrl` — effects outside the
+application) and every recovery / crash / recording-error action (destructive:
+a discarded recovery offer does not come back without a restart). Those three
+surfaces are **observable** through `ui.getState.blockingSurface` and seeded for
+capture through `--overlay-visual-state`, which keeps the channel and the harness
+separated exactly as ADR 0066 draws the line.
+
 ### Events
 
-`app.ready`, `record.stateChanged`, `record.resultReady`, `window.screenChanged`.
+`app.ready`, `record.stateChanged`, `record.resultReady`, `window.screenChanged`,
+and — protocol 2 only — `ui.stateChanged`.
 
-All four reuse signals the application already emits; none introduces a second
-idea of the state it reports. **There are no synchronization sleeps** anywhere in
-the client or the runner: a command is followed by a wait on an authoritative
-event or state, and a timeout is a failure boundary, not a synchronization
-primitive.
+All of them reuse signals the application already emits; none introduces a second
+idea of the state it reports. `ui.stateChanged` is the general settle signal: it
+fires when the observable product state differs, which is what finally gives the
+three blocking surfaces a transition a check can wait on.
+
+**There are no synchronization sleeps** anywhere in the client or the runner. In
+order of preference:
+
+1. the response itself, when the command declares `settled: true` — navigation,
+   reveal, the edit intents and the popups all do, so there is nothing to wait
+   for;
+2. `Wait-LiveVerifyEvent` / `Wait-LiveVerifyRevision`, which block on a real
+   signal;
+3. `Wait-LiveVerifyState`, the only polling helper, for snapshot fields that are
+   not part of the automation state.
+
+A timeout is a failure boundary, not a synchronization primitive.
+
+The `Start-Sleep` calls that remain in `LiveVerifyChecks.ps1` are **not**
+synchronization and none of them became removable with protocol 2:
+
+| Where | Why it stays |
+|---|---|
+| `LV-PREV-001`, `LV-WIN-002`, `LV-WIN-003` | Measurement windows. The question is how many render passes happen in a fixed interval; the interval IS the measurement. |
+| `LV-REC-001` | Recording duration. A recording needs to last a while to have content; the state transitions around it are waited on, never slept through. |
+| `LV-OVL-001` | The overlay windows and the post-stop toast are realized by the compositor on their own schedule and have no product-state postcondition — protocol 2 did not give them one, and inventing one would be a second idea of when a window is "up". |
+| `LV-APP-001`, `LV-EDIT-001`, `live-verify.ps1` | Bounded polling loops over an external process (a pipe that must never appear, a harness that must write a file). Nothing on the control channel can answer for a process that is not talking to it. |
 
 ---
 

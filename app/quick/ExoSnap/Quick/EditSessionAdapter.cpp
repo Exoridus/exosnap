@@ -1,5 +1,6 @@
 #include "EditSessionAdapter.h"
 
+#include "diagnostics/AppLog.h"
 #include "models/EditTimelineModel.h"
 #include "models/MarkerSidecar.h"
 
@@ -234,7 +235,57 @@ void EditSessionAdapter::setPositionMs(qint64 position_ms) {
     emit positionChanged();
 }
 
+// Closing the Edit surface is a session close, not a view change.
+//
+// The surface is a QML Loader over adapters that live for the life of the
+// process, so unloading it destroys items and nothing else: before this, close()
+// emitted closeRequested() alone, the overlay disappeared, and the clip stayed
+// open behind it -- the player kept its decoder session (and its WASAPI
+// renderer), the timeline's thumbnail worker kept the container open, and the
+// recording could not be moved or deleted until ExoSnap exited. A second Edit
+// session then started on top of the first one's leftovers.
+//
+// clipClosed() is what the player and the timeline hang their teardown off, so
+// it is emitted here as well as from setEditContext(), and always before
+// closeRequested(): the resources are released first, the surface goes second.
+// Idempotent -- a second close on an already-empty session only repeats the
+// request to dismiss the surface.
 void EditSessionAdapter::close() {
+    // A fixture context carries a duration but no master path, and must close
+    // just as completely as a real clip -- hence not `open_` alone.
+    const bool had_clip = open_ || duration_ms_ > 0 || !context_.output_path.isEmpty();
+    if (!had_clip) {
+        emit closeRequested();
+        return;
+    }
+
+    const bool was_open = open_;
+    // A keyframe scan still running for this clip belongs to a generation nobody
+    // is showing any more; advancing the counter drops its result on arrival.
+    ++clip_generation_;
+    context_ = EditContext{};
+    keyframe_timestamps_.clear();
+    trim_snap_ready_ = false;
+    trim_start_us_ = recorder_core::TrimRange::kNoTimestamp;
+    trim_end_us_ = recorder_core::TrimRange::kNoTimestamp;
+    duration_ms_ = 0;
+    position_ms_ = 0;
+    open_ = false;
+
+    applyReport(context_);
+    rebuildFacts();
+    loadMarkers();
+
+    emit clipChanged();
+    emit durationChanged();
+    emit trimChanged();
+    emit trimSnapReadyChanged();
+    emit positionChanged();
+    emit unsavedEditsChanged();
+    if (was_open)
+        emit openChanged();
+
+    emit clipClosed();
     emit closeRequested();
 }
 
@@ -354,7 +405,18 @@ void EditSessionAdapter::loadMarkers() {
         const std::filesystem::path sidecar(context_.marker_sidecar_path.toStdWString());
         std::error_code ec;
         if (std::filesystem::exists(sidecar, ec)) {
-            markers_ = ReadMarkerSidecar(sidecar);
+            int skipped = 0;
+            markers_ = ReadMarkerSidecar(sidecar, &skipped);
+            // QCR-207: a dropped marker is a silent difference between the file
+            // and the timeline, so it is stated once here rather than nowhere.
+            // No separate marker-error surface — the sidecar is a companion
+            // file, and losing an entry costs a bookmark, not the recording.
+            if (skipped > 0) {
+                diagnostics::AppLog::warning(QStringLiteral("edit"),
+                                             QStringLiteral("Skipped %1 marker(s) with an unusable time in %2")
+                                                 .arg(skipped)
+                                                 .arg(context_.marker_sidecar_path));
+            }
             return;
         }
     }

@@ -42,6 +42,13 @@ struct SessionReportInputs {
 
     // Scrubbed output file *name* only (never a path). Empty to omit entirely.
     QString output_filename;
+
+    // QCR-804: how many times an active WINDOW capture was confirmed to have
+    // stopped producing frames during this recording and the user was warned.
+    // Non-zero means the picture was frozen for at least one stretch of the
+    // session even though the recording ran to completion — the one fact a
+    // finished file cannot tell its owner by itself.
+    uint32_t window_capture_stall_episodes = 0;
 };
 
 // Pure: serialize the inputs to the canonical session-report JSON (Qt JSON, not

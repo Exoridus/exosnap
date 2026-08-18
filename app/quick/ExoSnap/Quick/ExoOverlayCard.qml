@@ -73,8 +73,27 @@ Item {
     property alias persistent: persistentColumn.data
     // The action row. Fill it with ExoButtons; the card supplies alignment.
     property alias actions: actionRow.data
+    // For a surface whose standing decision exists in only SOME of its modes —
+    // the "What's new" suppress tick is post-update only. Set false and the strip
+    // and its divider go with it, rather than reserving an empty band and a rule
+    // for a control that is not there. Said explicitly instead of derived from
+    // child visibility: a Layout that is itself invisible stops being laid out,
+    // so its implicit height is not a reliable answer to "is anything in here".
+    property bool persistentVisible: true
 
     signal dismissed()
+
+    // Where the keyboard was before this surface took it. Published rather than
+    // private because restoring it is the SHELL's job: the loader that unloads
+    // this card outlives it, and a focus assignment made from a dying item's own
+    // destruction handler is immediately undone by the focus scope coming down
+    // around it.
+    //
+    // Null when there was no focus to take (a surface raised during startup, like
+    // the post-update "What's new" auto-show) or when the outgoing item is already
+    // inside this card — neither is something to return to.
+    readonly property Item focusReturnItem: root._focusReturn
+    property Item _focusReturn: null
 
     // Blocking the pointer is only half of modality, and it was the only half
     // this card had. Qt Quick's focus chain walks the whole scene graph and
@@ -91,11 +110,25 @@ Item {
     // on the shell either — that would paint the whole application behind the
     // scrim in its disabled rung.
     Component.onCompleted: {
+        // Read FIRST, before this card parks focus on its own head — one line
+        // later the answer is `focusHead`.
+        const outgoing = root.Window.activeFocusItem;
+        root._focusReturn = outgoing !== null && !root._contains(outgoing) ? outgoing : null;
         // Parked on the head rather than on an action: pre-focusing either half
         // of a consent question answers it on the user's behalf at the first
         // stray Return.
         focusHead.forceActiveFocus(Qt.OtherFocusReason);
         focusHead.armed = true;
+    }
+
+    function _contains(item: Item): bool {
+        let current = item;
+        while (current !== null) {
+            if (current === root)
+                return true;
+            current = current.parent;
+        }
+        return false;
     }
 
     // Blocks every click that would otherwise reach the page underneath: the
@@ -285,6 +318,20 @@ Item {
             ExoScrollView {
                 id: bodyScroll
 
+                // The body was reachable by wheel only. A card whose content does not
+                // fit -- a multi-release changelog, a long recovery list -- was then
+                // unreadable past the fold for anyone not using a mouse, and at the
+                // 860x700 minimum window that is most of them. Focusable and driven by
+                // the usual keys; the card's own Escape handling is untouched because
+                // these are all accepted only when they actually scroll something.
+                activeFocusOnTab: flickable !== null && flickable.contentHeight > flickable.height
+
+                Keys.onPressed: function (event) {
+                    // Accepted only when it actually scrolled: an unscrollable body
+                    // must not eat Escape or the arrow keys the card above wants.
+                    event.accepted = bodyScroll.scrollByKey(event.key);
+                }
+
                 // Word-wrapped content inside a width-capped card: the content
                 // width feeds its own height, so the gutters are reserved
                 // unconditionally to cut that cycle (see ExoScrollView's note).
@@ -317,7 +364,7 @@ Item {
                 id: persistentColumn
 
                 spacing: ExoTheme.spacingXs
-                visible: persistentColumn.children.length > 0
+                visible: root.persistentVisible && persistentColumn.children.length > 0
                 Layout.fillWidth: true
                 Layout.leftMargin: ExoTheme.spacingXl
                 Layout.rightMargin: ExoTheme.spacingXl

@@ -46,7 +46,8 @@ Item {
         "Region": ExoGlyph.Region,
         "Dot": ExoGlyph.Dot,
         "Warning": ExoGlyph.Warning,
-        "Info": ExoGlyph.Info
+        "Info": ExoGlyph.Info,
+        "ExternalLink": ExoGlyph.ExternalLink
     })
 
     Component {

@@ -5,9 +5,13 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <optional>
+#include <system_error>
+#include <thread>
 #include <vector>
 
 #include "services/TimelineThumbnailSource.h"
@@ -242,6 +246,100 @@ TEST_F(TimelineThumbnailSourceTest, WrappingADecodedFrameDoesNotCopyItsBuffer) {
     EXPECT_EQ(live_buffers.load(), 0);
 }
 
+// A QImage cannot be built on geometry it has no way to describe, and a null
+// QImage never runs its cleanup hook. Allocating the keep-alive first therefore
+// stranded both the wrapper and the decoder's whole frame buffer -- ~33 MB at
+// 4K, once per unusable frame, for the life of the process.
+TEST_F(TimelineThumbnailSourceTest, AnUnusableFrameGeometryStrandsNothing) {
+    std::atomic<int> live_buffers{0};
+
+    const auto expect_released = [&live_buffers](recorder_core::DecodedVideoFrame frame) {
+        {
+            const QImage wrapped = WrapDecodedFrame(frame);
+            EXPECT_TRUE(wrapped.isNull());
+        }
+        // Only the frame itself still holds the buffer; the wrapper kept nothing.
+        EXPECT_EQ(live_buffers.load(), 1);
+    };
+
+    {
+        recorder_core::DecodedVideoFrame zero_width = MakeFrame(0, 0, 36, &live_buffers);
+        zero_width.stride_bytes = 0;
+        expect_released(std::move(zero_width));
+    }
+    EXPECT_EQ(live_buffers.load(), 0);
+
+    {
+        recorder_core::DecodedVideoFrame zero_height = MakeFrame(0, 64, 0, &live_buffers);
+        expect_released(std::move(zero_height));
+    }
+    EXPECT_EQ(live_buffers.load(), 0);
+
+    {
+        // A stride that cannot hold one row: QImage refuses it, and so must the
+        // wrapper -- accepting it would read past the allocation.
+        recorder_core::DecodedVideoFrame short_stride = MakeFrame(0, 64, 36, &live_buffers);
+        short_stride.stride_bytes = 64 * 4 - 4;
+        expect_released(std::move(short_stride));
+    }
+    EXPECT_EQ(live_buffers.load(), 0);
+
+    {
+        recorder_core::DecodedVideoFrame no_buffer = MakeFrame(0, 64, 36, &live_buffers);
+        no_buffer.bgra.reset();
+        {
+            const QImage wrapped = WrapDecodedFrame(no_buffer);
+            EXPECT_TRUE(wrapped.isNull());
+        }
+    }
+    EXPECT_EQ(live_buffers.load(), 0);
+}
+
+// The clip must be handed back to the user when Edit closes: as long as the
+// worker's engine holds the container open, Windows refuses to delete or rename
+// the recording. Needs real media, so it runs against an untracked fixture at the
+// path below and skips where there is none. Create one with
+// `ffmpeg -f lavfi -i testsrc2=size=1920x1080:rate=60:duration=6 -c:v libx264
+// -g 120 -pix_fmt yuv420p <that path>`.
+// Measured while writing this: the copy cannot be deleted while the clip is
+// open, and can be immediately after the close is processed.
+TEST_F(TimelineThumbnailSourceTest, ClosingTheClipReleasesTheFileHandle) {
+    const std::filesystem::path fixture =
+        std::filesystem::path(EXOSNAP_SOURCE_DIR) / ".workspace" / "test-fixtures" / "edit_handle_probe.mkv";
+    if (!std::filesystem::exists(fixture))
+        GTEST_SKIP() << "fixture not present on this host: " << fixture.string();
+
+    // A copy, so a failed run cannot cost the fixture itself.
+    const std::filesystem::path probe = std::filesystem::temp_directory_path() / "exosnap_edit_handle_probe.mkv";
+    std::error_code ec;
+    std::filesystem::remove(probe, ec);
+    ASSERT_TRUE(std::filesystem::copy_file(fixture, probe, std::filesystem::copy_options::overwrite_existing, ec))
+        << ec.message();
+
+    {
+        TimelineThumbnailSource source;
+        source.openClip(QString::fromStdString(probe.string()), {0, 2'000'000});
+        for (int i = 0; i < 400 && source.videoWidth() == 0; ++i) {
+            QCoreApplication::processEvents();
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        ASSERT_GT(source.videoWidth(), 0) << "the fixture did not open";
+
+        source.closeClip();
+        bool released = false;
+        for (int i = 0; i < 400 && !released; ++i) {
+            QCoreApplication::processEvents();
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            std::filesystem::remove(probe, ec);
+            released = !std::filesystem::exists(probe);
+        }
+        // Still inside the source's lifetime: the destructor must not be what
+        // releases the file.
+        EXPECT_TRUE(released);
+    }
+    std::filesystem::remove(probe, ec);
+}
+
 // ---- Worker ----
 
 TEST_F(TimelineThumbnailSourceTest, AClipThatCannotBeOpenedYieldsNoTiles) {
@@ -252,6 +350,22 @@ TEST_F(TimelineThumbnailSourceTest, AClipThatCannotBeOpenedYieldsNoTiles) {
 
     // The worker must simply report an unopened clip and stay idle -- no tiles,
     // no crash, and a destructor that joins cleanly.
+    QCoreApplication::processEvents();
+    EXPECT_EQ(source.videoWidth(), 0);
+    EXPECT_EQ(source.videoHeight(), 0);
+}
+
+TEST_F(TimelineThumbnailSourceTest, ClosingTheClipIsIdempotentAndForgetsTheFrameSize) {
+    // Closing the Edit surface has to hand the recording back to the user: as
+    // long as the worker's engine holds the container open, the file cannot be
+    // moved, renamed or deleted.
+    TimelineThumbnailSource source;
+    source.openClip(QStringLiteral("C:\\this\\path\\does\\not\\exist.mkv"), {0, 1'000'000});
+    source.requestTiles({0, 1000}, 40);
+
+    source.closeClip();
+    source.closeClip(); // a second close is a no-op, not a second teardown
+
     QCoreApplication::processEvents();
     EXPECT_EQ(source.videoWidth(), 0);
     EXPECT_EQ(source.videoHeight(), 0);

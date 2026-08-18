@@ -38,6 +38,13 @@ int TimelineAudioStackHeight(int row_count) {
     return row_count * (kTimelineRowGap + TimelineAudioRowHeight(row_count));
 }
 
+bool TimelineTileRunAllowed(bool has_source, const QString& clip_path, const QString& source_clip_path,
+                            int tile_count) {
+    if (!has_source || tile_count <= 0 || clip_path.isEmpty())
+        return false;
+    return source_clip_path == clip_path;
+}
+
 EditTimelineAdapter::EditTimelineAdapter(QObject* parent) : QObject(parent) {
     resize_debounce_.setSingleShot(true);
     resize_debounce_.setInterval(kResizeDebounceMs);
@@ -72,6 +79,10 @@ void EditTimelineAdapter::setSession(EditSessionAdapter* session) {
         if (session_ == nullptr || !session_->trimSnapReady() || clip_path_.isEmpty())
             return;
         ensureThumbnailSource();
+        // Recorded before the request, not after it: the worker handles the open
+        // before any tile job queued behind it, so every run started from here on
+        // decodes out of this clip.
+        source_clip_path_ = clip_path_;
         source_->openClip(clip_path_, session_->keyframeTimestamps());
     });
 }
@@ -90,23 +101,82 @@ void EditTimelineAdapter::ensureThumbnailSource() {
     if (source_.has_value())
         return;
     source_.emplace();
-    connect(&source_.value(), &TimelineThumbnailSource::clipOpened, this,
-            [this](int width, int height, const QStringList& audio_track_names) {
-                clip_video_width_ = width;
-                clip_video_height_ = height;
-                setAudioTrackLabels(audio_track_names);
-                scheduleTileRun();
-            });
-    connect(&source_.value(), &TimelineThumbnailSource::tileReady, this,
-            [this](qint64 time_ms, const QImage& image, quint64 run_id) {
-                if (run_id != active_run_)
-                    return;
-                if (provider_ != nullptr)
-                    provider_->submitTile(run_id, tiles_ready_, image);
-                ++tiles_ready_;
-                tile_model_.appendTile(time_ms);
-                emit tileProgressChanged();
-            });
+    connect(&source_.value(), &TimelineThumbnailSource::clipOpened, this, &EditTimelineAdapter::handleClipOpened);
+    connect(&source_.value(), &TimelineThumbnailSource::tileReady, this, &EditTimelineAdapter::handleTileReady);
+    connect(&source_.value(), &TimelineThumbnailSource::runFinished, this, &EditTimelineAdapter::handleRunFinished);
+}
+
+void EditTimelineAdapter::handleClipOpened(int width, int height, const QStringList& audio_track_names) {
+    clip_video_width_ = width;
+    clip_video_height_ = height;
+    setAudioTrackLabels(audio_track_names);
+    // QCR-307. 0x0 is the worker's answer for "could not open, or carries no
+    // video". Either way no tile can ever arrive for this clip, and saying so
+    // here means the strip does not have to wait for a run that will decode
+    // nothing to prove it. Everything else about the Edit surface — trim,
+    // playback, markers, export — is unaffected and stays usable.
+    if (width <= 0 || height <= 0) {
+        if (!previews_unavailable_) {
+            previews_unavailable_ = true;
+            emit tileProgressChanged();
+        }
+    }
+    scheduleTileRun();
+}
+
+// QCR-307. The end of a run, and the only place "this clip carries nothing
+// decodable" may be concluded from a run rather than from the open.
+void EditTimelineAdapter::handleRunFinished(quint64 run_id, int tiles_emitted, bool cancelled) {
+    if (run_id == 0 || run_id != active_run_)
+        return; // a run the strip has already moved past
+    // A cancelled run is a resize, a clip switch or a close. It says nothing at
+    // all about the clip, and reporting it as a failure would put "Preview
+    // unavailable" on a perfectly good recording the user merely resized.
+    if (cancelled)
+        return;
+    if (tiles_emitted > 0 || tiles_ready_ > 0)
+        return; // it produced something; the strip is ready, not unavailable
+    if (previews_unavailable_)
+        return;
+    previews_unavailable_ = true;
+    emit tileProgressChanged();
+}
+
+void EditTimelineAdapter::handleTileReady(qint64 time_ms, const QImage& image, quint64 run_id) {
+    // A tile carries the run it was decoded for. Cancelling a run cannot stop the
+    // tile already on its way to this thread, so the identity is checked here as
+    // well: after a clip switch or a close, active_run_ is 0 and nothing in
+    // flight can reach the strip.
+    if (run_id == 0 || run_id != active_run_)
+        return;
+    if (provider_ != nullptr)
+        provider_->submitTile(run_id, tiles_ready_, image);
+    ++tiles_ready_;
+    tile_model_.appendTile(time_ms);
+    emit tileProgressChanged();
+}
+
+void EditTimelineAdapter::invalidateRun() {
+    active_run_ = 0;
+    if (source_.has_value())
+        source_->cancel();
+}
+
+void EditTimelineAdapter::deliverTileForTest(qint64 time_ms, const QImage& image, quint64 run_id) {
+    handleTileReady(time_ms, image, run_id);
+}
+
+quint64 EditTimelineAdapter::activeRunForTest() const noexcept {
+    return active_run_;
+}
+
+void EditTimelineAdapter::deliverRunFinishedForTest(quint64 run_id, int tiles_emitted, bool cancelled) {
+    handleRunFinished(run_id, tiles_emitted, cancelled);
+}
+
+void EditTimelineAdapter::deliverClipOpenedForTest(int video_width, int video_height,
+                                                   const QStringList& audio_track_names) {
+    handleClipOpened(video_width, video_height, audio_track_names);
 }
 
 QAbstractItemModel* EditTimelineAdapter::tileModel() noexcept {
@@ -160,7 +230,19 @@ int EditTimelineAdapter::tilesReady() const noexcept {
 }
 
 bool EditTimelineAdapter::generatingPreviews() const noexcept {
-    return tiles_expected_ > 0 && tiles_ready_ < tiles_expected_;
+    return !previews_unavailable_ && tiles_expected_ > 0 && tiles_ready_ < tiles_expected_;
+}
+
+bool EditTimelineAdapter::previewsUnavailable() const noexcept {
+    return previews_unavailable_;
+}
+
+QString EditTimelineAdapter::previewState() const {
+    if (previews_unavailable_)
+        return QStringLiteral("unavailable");
+    if (tiles_expected_ <= 0)
+        return QStringLiteral("idle");
+    return tiles_ready_ < tiles_expected_ ? QStringLiteral("generating") : QStringLiteral("ready");
 }
 
 void EditTimelineAdapter::setAudioTrackLabels(const QStringList& labels) {
@@ -178,11 +260,22 @@ void EditTimelineAdapter::setAudioTrackLabels(const QStringList& labels) {
 }
 
 void EditTimelineAdapter::openClip(const QString& master_path, qint64 duration_ms) {
+    // Before anything is published for the new clip: the previous run is dropped
+    // here, not when the new one starts. Between the two lies the debounce and
+    // the source's own reopen, and a tile decoded from the previous clip that
+    // arrived in that window used to be counted as this clip's.
+    invalidateRun();
+    source_clip_path_.clear();
     clip_path_ = master_path;
     duration_ms_ = duration_ms;
+    clip_video_width_ = 0;
+    clip_video_height_ = 0;
     fixture_tile_count_.reset();
     tiles_ready_ = 0;
     tiles_expected_ = 0;
+    // A verdict belongs to the clip it was reached for. Clip A being
+    // undecodable must not greet clip B.
+    previews_unavailable_ = false;
     tile_model_.clear();
     if (provider_ != nullptr)
         provider_->clear();
@@ -193,16 +286,26 @@ void EditTimelineAdapter::openClip(const QString& master_path, qint64 duration_m
 }
 
 void EditTimelineAdapter::closeClip() {
+    invalidateRun();
+    source_clip_path_.clear();
     clip_path_.clear();
+    resize_debounce_.stop();
+    fixture_tile_count_.reset();
+    clip_video_width_ = 0;
+    clip_video_height_ = 0;
     // The strip is gone, but the clip's length is not: a context without a
     // decodable master (the visual fixture) still has a duration and markers to
     // lay out against.
     duration_ms_ = session_ != nullptr ? session_->durationMs() : 0;
     tiles_ready_ = 0;
     tiles_expected_ = 0;
+    previews_unavailable_ = false;
     tile_model_.clear();
+    // Not just cancelled: the worker's engine keeps the container open until it
+    // is told to close it, and a recording the Edit surface is done with must be
+    // movable and deletable again.
     if (source_.has_value())
-        source_->cancel();
+        source_->closeClip();
     if (provider_ != nullptr)
         provider_->clear();
     setAudioTrackLabels({});
@@ -251,11 +354,26 @@ void EditTimelineAdapter::startTileRun() {
         return;
     }
 
-    if (!source_.has_value() || times.empty() || clip_path_.isEmpty()) {
+    if (!TimelineTileRunAllowed(source_.has_value(), clip_path_, source_clip_path_, static_cast<int>(times.size()))) {
+        active_run_ = 0;
+        // A clip whose source is still being reopened keeps its expected count:
+        // the strip is genuinely mid-decode and says so. Without a clip at all
+        // there is nothing to wait for.
+        if (clip_path_.isEmpty() || times.empty())
+            tiles_expected_ = 0;
         tile_model_.clear();
         emit tileProgressChanged();
         return;
     }
+
+    // QCR-307. A fresh run over a clip the engine DID open gets a fresh verdict:
+    // a resize is a new decode and may well succeed where the last one did not.
+    // A clip that failed to open keeps its verdict, because re-running it would
+    // only replace "Preview unavailable" with "Generating previews…" for the
+    // length of a run that is guaranteed to decode nothing — which is the exact
+    // lie this item exists to remove, once per resize.
+    if (previews_unavailable_ && clip_video_width_ > 0 && clip_video_height_ > 0)
+        previews_unavailable_ = false;
 
     active_run_ = source_->requestTiles(times, kTimelineVideoRowHeight);
     tile_model_.beginRun(active_run_);
@@ -270,6 +388,17 @@ void EditTimelineAdapter::setFixture(const QStringList& audio_track_labels, int 
     if (tile_width_ <= 0)
         tile_width_ = TimelineTileWidth(kTimelineVideoRowHeight, clip_video_width_, clip_video_height_);
     startTileRun();
+}
+
+// QCR-307. Puts the strip in its terminal state for a --visual-test capture.
+// The state is otherwise unreachable from a fixture by construction: the
+// fixture path never touches the decoder, and the only clip that can produce
+// this verdict is one the decoder actually failed on.
+void EditTimelineAdapter::applyUnavailablePreviewsForHarness() {
+    if (previews_unavailable_)
+        return;
+    previews_unavailable_ = true;
+    emit tileProgressChanged();
 }
 
 } // namespace exosnap::quick

@@ -7,7 +7,11 @@
 # Reuse the Qt discovered by app/CMakeLists.txt when it ran; find it here too so
 # this subdirectory is order-independent.
 if(NOT Qt6_FOUND)
-    find_package(Qt6 QUIET COMPONENTS Core Gui Widgets)
+    # The SAME floor app/ requires. Without it this probe accepts any Qt6 it finds
+    # -- including one a stale cache still points at -- caches that decision, and
+    # then app/'s 6.11 probe fails against it. One version statement per tree, or
+    # the first directory to ask silently decides for the last one.
+    find_package(Qt6 6.11 QUIET COMPONENTS Core Gui Widgets)
 endif()
 
 if(NOT Qt6_FOUND)
@@ -36,8 +40,17 @@ set(EXOSNAP_VERSION_FILE_STR
 add_library(exosnap_updater_logic STATIC
     UpdaterArgs.cpp
     UpdaterArgs.h
+    UpdaterAutomation.cpp
+    UpdaterAutomation.h
+    UpdaterCommandPolicy.cpp
+    UpdaterCommandPolicy.h
     UpdaterController.cpp
     UpdaterController.h
+    UpdaterControlDispatcher.cpp
+    UpdaterControlDispatcher.h
+    UpdaterControlSource.h
+    UpdaterExitCode.cpp
+    UpdaterExitCode.h
     UpdaterWorker.cpp
     UpdaterWorker.h
     WindowPlacement.cpp
@@ -47,8 +60,12 @@ add_library(exosnap_updater_logic STATIC
 set_target_properties(exosnap_updater_logic PROPERTIES AUTOMOC ON)
 target_include_directories(exosnap_updater_logic PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(exosnap_updater_logic PUBLIC NOMINMAX)
+# exosnap::control: the shared control-channel layer (protocol, policy
+# mechanics, session, named-pipe transport). The updater's automation endpoint is
+# the same channel the application exposes, from the same code -- see
+# UpdaterControlDispatcher.h. Inert without --automation-control.
 target_link_libraries(exosnap_updater_logic
-    PUBLIC Qt6::Core exosnap::update
+    PUBLIC Qt6::Core exosnap::update exosnap::control exosnap::update_handoff
     PRIVATE exosnap::warnings
 )
 
@@ -94,11 +111,23 @@ target_link_libraries(exosnap_updater PRIVATE
 )
 
 if(WIN32)
+    # The application's own brand icon, compiled into the updater as its first
+    # icon resource. Windows picks the LOWEST-numbered icon resource for the
+    # taskbar, Explorer and the window, so without this the updater shows the
+    # generic executable icon in the taskbar while the user is watching it
+    # replace ExoSnap. Forward slashes on purpose: the resource compiler accepts
+    # them and a configured Windows path would otherwise embed escape sequences.
+    set(EXOSNAP_UPDATER_ICON "${PROJECT_SOURCE_DIR}/app/assets/brand/exosnap-logo-idle.ico")
+    if(NOT EXISTS "${EXOSNAP_UPDATER_ICON}")
+        message(FATAL_ERROR "Updater icon not found: ${EXOSNAP_UPDATER_ICON}")
+    endif()
     configure_file(
         "${CMAKE_CURRENT_SOURCE_DIR}/updater.rc.in"
         "${CMAKE_CURRENT_BINARY_DIR}/updater.rc"
         @ONLY
     )
+    set_property(SOURCE "${CMAKE_CURRENT_BINARY_DIR}/updater.rc"
+        APPEND PROPERTY OBJECT_DEPENDS "${EXOSNAP_UPDATER_ICON}")
     target_sources(exosnap_updater PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/updater.rc")
 endif()
 

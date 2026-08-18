@@ -15,11 +15,30 @@ Rectangle {
     required property var model
     property bool autoScroll: true
 
-    // Inclusive selection range over VISIBLE rows; -1 when nothing is selected.
-    property int selectionAnchor: -1
-    property int selectionEnd: -1
+    // Inclusive selection range over the entries' own SEQUENCE numbers, not
+    // over row indices. A row index means nothing across a model change: the
+    // history evicts from the front, the filter re-maps every visible row, and
+    // a Clear empties the model — after any of those, index 4 is a different
+    // entry than the one the user clicked, or no entry at all, and an
+    // index-based selection silently follows along to whatever moved into that
+    // slot. Sequences are assigned once per entry and never reused, and the
+    // view is never sorted, so "between these two sequences" is the same set of
+    // rows as "between these two indices" for as long as both still exist and
+    // degrades correctly when they do not.
+    //
+    // -1 when nothing is selected.
+    property real selectionAnchorSequence: -1
+    property real selectionEndSequence: -1
+    // Ctrl+A is "everything visible", which is not a range: it has to keep
+    // meaning everything after a filter change or an append, and a range
+    // captured from the rows that happened to be visible then would not.
+    property bool selectionIsAll: false
 
-    signal copyRequested(int first, int last)
+    readonly property real selectionLowSequence: Math.min(root.selectionAnchorSequence, root.selectionEndSequence)
+    readonly property real selectionHighSequence: Math.max(root.selectionAnchorSequence, root.selectionEndSequence)
+    readonly property bool hasSelection: root.selectionIsAll || root.selectionAnchorSequence >= 0
+
+    signal copyRequested(real firstSequence, real lastSequence)
     signal copyAllRequested()
 
     color: ExoTheme.background
@@ -27,17 +46,61 @@ Rectangle {
     border.color: ExoTheme.line
     radius: ExoTheme.radiusMd
 
-    function selectRow(index: int, extend: bool): void {
-        if (extend && root.selectionAnchor >= 0) {
-            root.selectionEnd = index;
+    function selectRow(sequence: real, extend: bool): void {
+        if (extend && root.selectionAnchorSequence >= 0) {
+            root.selectionEndSequence = sequence;
         } else {
-            root.selectionAnchor = index;
-            root.selectionEnd = index;
+            root.selectionAnchorSequence = sequence;
+            root.selectionEndSequence = sequence;
+        }
+        root.selectionIsAll = false;
+    }
+
+    function clearSelection(): void {
+        root.selectionAnchorSequence = -1;
+        root.selectionEndSequence = -1;
+        root.selectionIsAll = false;
+    }
+
+    // Automation-addressable scrolling (protocol 2). The list is virtualised, so
+    // this positions the view rather than writing a contentY the delegates have
+    // not been created for. An empty log is already at both ends, which is why
+    // that is a success and not a failure.
+    function scrollToEnd(): bool {
+        list.positionViewAtEnd();
+        return list.count === 0 || list.atYEnd;
+    }
+
+    function scrollToHome(): bool {
+        list.positionViewAtBeginning();
+        return list.count === 0 || list.atYBeginning;
+    }
+
+    // A reset replaces the history wholesale — Clear, or the harness seeding a
+    // synthetic log — and no entry the selection named is in it. Eviction and
+    // filtering are deliberately NOT here: those are row removals the
+    // sequence-based selection already survives correctly, keeping whatever is
+    // still shown.
+    //
+    // Bound to the model's own signal rather than to the view's row count: a
+    // ListView recomputes `count` when it next lays out, so a model that fills
+    // and empties again between two frames never reports the rows it briefly
+    // had — and the emptied view would keep a selection nothing in it matches.
+    Connections {
+        target: root.model
+
+        function onModelReset(): void {
+            root.clearSelection();
         }
     }
 
     ListView {
         id: list
+
+        // The item that actually holds the keyboard focus: Ctrl+A and Ctrl+C are
+        // handled here, not on the frame around it. Named so a test can put the
+        // focus where a click would.
+        objectName: "logList"
 
         anchors {
             fill: parent
@@ -58,6 +121,13 @@ Rectangle {
         // Sticky tail: a new entry only pulls the view down while the user has
         // auto-scroll on, so reading history is never yanked away mid-line.
         onCountChanged: {
+            // The other way a view can end up empty: every row removed one at a
+            // time, or filtered away. A range selection over sequences is
+            // harmless there — it simply matches nothing — but "select all"
+            // would go on meaning "all", and would take in whatever the session
+            // logs next.
+            if (list.count === 0)
+                root.selectionIsAll = false;
             if (root.autoScroll) {
                 list.positionViewAtEnd();
             }
@@ -66,14 +136,15 @@ Rectangle {
         Keys.onPressed: function (event) {
             if (event.modifiers & Qt.ControlModifier) {
                 if (event.key === Qt.Key_A) {
-                    root.selectionAnchor = 0;
-                    root.selectionEnd = list.count - 1;
+                    root.selectionAnchorSequence = -1;
+                    root.selectionEndSequence = -1;
+                    root.selectionIsAll = true;
                     event.accepted = true;
                 } else if (event.key === Qt.Key_C) {
-                    if (root.selectionAnchor >= 0) {
-                        root.copyRequested(root.selectionAnchor, root.selectionEnd);
-                    } else {
+                    if (root.selectionIsAll || root.selectionAnchorSequence < 0) {
                         root.copyAllRequested();
+                    } else {
+                        root.copyRequested(root.selectionLowSequence, root.selectionHighSequence);
                     }
                     event.accepted = true;
                 }
@@ -84,17 +155,19 @@ Rectangle {
             id: row
 
             required property int index
+            required property var sequence
             required property string timestampText
             required property string severityKey
             required property string severityLabel
             required property string category
             required property string message
 
-            readonly property bool selected: root.selectionAnchor >= 0
-                                             && row.index >= Math.min(root.selectionAnchor, root.selectionEnd)
-                                             && row.index <= Math.max(root.selectionAnchor, root.selectionEnd)
-            readonly property color severityColor: row.severityKey === "warning" ? ExoTheme.warning
-                                                 : (row.severityKey === "error" || row.severityKey === "critical") ? ExoTheme.error
+            readonly property bool selected: root.selectionIsAll
+                                             || (root.selectionAnchorSequence >= 0
+                                                 && row.sequence >= root.selectionLowSequence
+                                                 && row.sequence <= root.selectionHighSequence)
+            readonly property color severityColor: row.severityKey === "warning" ? ExoTheme.warningText
+                                                 : (row.severityKey === "error" || row.severityKey === "critical") ? ExoTheme.errorText
                                                  : row.severityKey === "debug" ? ExoTheme.textDim
                                                  : ExoTheme.textSecondary
 
@@ -123,7 +196,7 @@ Rectangle {
                 acceptedButtons: Qt.LeftButton
                 onClicked: function (mouse) {
                     list.forceActiveFocus();
-                    root.selectRow(row.index, (mouse.modifiers & Qt.ShiftModifier) !== 0);
+                    root.selectRow(row.sequence, (mouse.modifiers & Qt.ShiftModifier) !== 0);
                 }
             }
 

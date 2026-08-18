@@ -97,7 +97,7 @@ Rectangle {
                 Label {
                     text: root.succeeded ? qsTr("Export complete") : qsTr("Export failed")
                     textFormat: Text.PlainText
-                    color: root.succeeded ? ExoTheme.success : ExoTheme.error
+                    color: root.succeeded ? ExoTheme.successText : ExoTheme.errorText
                     Layout.fillWidth: true
                     font {
                         family: ExoTheme.sansFamily
@@ -115,8 +115,6 @@ Rectangle {
             // readable at all. The full path is one hover away, and the same
             // string is on the clipboard-free route the reveal action takes.
             Label {
-                id: resultFileName
-
                 text: root.succeeded ? root.exporter.outputFileName : root.exporter.errorText
                 textFormat: Text.PlainText
                 elide: Text.ElideMiddle
@@ -128,6 +126,12 @@ Rectangle {
                     family: ExoTheme.monoFamily
                     pixelSize: ExoTheme.fontCaption
                 }
+
+                // QCR-509. The full output path was hover-only; the visible
+                // run is a middle-elided file name.
+                Accessible.role: Accessible.StaticText
+                Accessible.name: root.succeeded ? root.exporter.outputFileName : root.exporter.errorText
+                Accessible.description: root.succeeded ? root.exporter.outputPath : ""
 
                 HoverHandler {
                     id: resultHover

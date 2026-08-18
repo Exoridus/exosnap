@@ -49,7 +49,9 @@ WgcCaptureHubService::WgcCaptureHubService() {
 
 WgcCaptureHubService::~WgcCaptureHubService() {
     worker_.request_stop();
-    cv_.notify_all();
+    // Wakes the pump thread and releases any lease waiter with a failure rather
+    // than leaving it to its full timeout against a thread that is exiting.
+    commands_.Shutdown();
     if (worker_.joinable())
         worker_.join();
 }
@@ -59,47 +61,28 @@ bool WgcCaptureHubService::Subscribe(CaptureSourceKey key, HandleSink sink, Fram
         (key.kind != CaptureSourceKey::Kind::Monitor && key.kind != CaptureSourceKey::Kind::Window)) {
         return false;
     }
-    Command command;
-    command.op = Command::Op::Subscribe;
-    command.key = std::move(key);
-    command.sink = std::move(sink);
-    command.frame_sink = std::move(frame_sink);
-    PostCommand(std::move(command));
+    SubscribePayload payload;
+    payload.key = std::move(key);
+    payload.sink = std::move(sink);
+    payload.frame_sink = std::move(frame_sink);
+    commands_.Post(CaptureHubOp::Subscribe, std::move(payload));
     return true;
 }
 
 void WgcCaptureHubService::Unsubscribe() {
-    Command command;
-    command.op = Command::Op::Unsubscribe;
-    PostCommand(std::move(command));
+    commands_.Post(CaptureHubOp::Unsubscribe);
 }
 
 void WgcCaptureHubService::RequestEngineLease() {
-    Command command;
-    command.op = Command::Op::LeaseRequest;
-    const uint64_t serial = PostCommand(std::move(command));
-    std::unique_lock lock(mutex_);
-    if (!ack_cv_.wait_for(lock, std::chrono::milliseconds(750), [&] { return processed_serial_ >= serial; })) {
+    const uint64_t serial = commands_.Post(CaptureHubOp::LeaseRequest);
+    // Only this command's own release publishes an acknowledgement for this
+    // serial, and the service opens nothing further until the lease returns.
+    if (!commands_.WaitForLeaseRelease(serial, std::chrono::milliseconds(750)))
         diagnostics::AppLog::warning(QStringLiteral("wgc-hub"), QStringLiteral("lease request timed out"));
-    }
 }
 
 void WgcCaptureHubService::ReturnEngineLease() {
-    Command command;
-    command.op = Command::Op::LeaseReturn;
-    PostCommand(std::move(command));
-}
-
-uint64_t WgcCaptureHubService::PostCommand(Command command) {
-    uint64_t serial = 0;
-    {
-        std::lock_guard lock(mutex_);
-        serial = next_serial_++;
-        command.serial = serial;
-        pending_ = std::move(command);
-    }
-    cv_.notify_all();
-    return serial;
+    commands_.Post(CaptureHubOp::LeaseReturn);
 }
 
 void WgcCaptureHubService::WorkerProc(std::stop_token stop_token) {
@@ -123,6 +106,12 @@ void WgcCaptureHubService::WorkerProc(std::stop_token stop_token) {
     CaptureSourceKey current_key;
     HandleSink sink;
     FramePublishedSink frame_sink;
+
+    // The service-level lease/subscription arbitration (CaptureHubGate.h) and
+    // the payload a deferred Subscribe is waiting to be applied with.
+    CaptureHubGateState gate;
+    SubscribePayload desired;
+
     recorder_core::PreviewSharedTexture shared;
     uint32_t shared_width = 0;
     uint32_t shared_height = 0;
@@ -162,6 +151,8 @@ void WgcCaptureHubService::WorkerProc(std::stop_token stop_token) {
             frame_sink();
     };
 
+    std::vector<CaptureHubCommandQueue<SubscribePayload>::Entry> batch;
+
     while (!stop_token.stop_requested()) {
         // WgcSourceProducer's contract (see its header) is that the owning thread
         // is an STA *that pumps messages*: Windows.Graphics.Capture delivers both
@@ -176,50 +167,45 @@ void WgcCaptureHubService::WorkerProc(std::stop_token stop_token) {
             DispatchMessageW(&message);
         }
 
-        std::optional<Command> command;
-        {
-            std::unique_lock lock(mutex_);
-            cv_.wait_for(lock, kPumpTick, [&] { return pending_.has_value() || stop_token.stop_requested(); });
-            command = std::exchange(pending_, std::nullopt);
-        }
+        commands_.WaitAndDrain(kPumpTick, batch);
         if (stop_token.stop_requested())
             break;
 
-        if (command) {
-            switch (command->op) {
-            case Command::Op::Subscribe:
-                subscription.Reset();
-                producer = nullptr;
-                resetPublisher();
-                current_key = std::move(command->key);
-                sink = std::move(command->sink);
-                frame_sink = std::move(command->frame_sink);
-                subscription = registry.Subscribe(
-                    current_key, [&publish](const HubFrame& frame, recorder_core::HubFrameKind) { publish(frame); });
-                break;
-            case Command::Op::Unsubscribe:
+        // Every drained command is applied, in post order: nothing is dropped
+        // because something newer arrived while the pump was busy.
+        for (auto& command : batch) {
+            const CaptureHubGateAction action = StepCaptureHubGate(gate, command.op);
+            gate = action.next;
+
+            if (command.op == CaptureHubOp::Subscribe)
+                desired = std::move(command.payload);
+
+            if (action.drop_subscription) {
                 subscription.Reset();
                 producer = nullptr;
                 current_key = {};
                 sink = nullptr;
                 frame_sink = nullptr;
-                resetPublisher();
-                break;
-            case Command::Op::LeaseRequest:
-                if (subscription)
-                    registry.RequestLease(current_key);
-                resetPublisher();
-                break;
-            case Command::Op::LeaseReturn:
-                if (subscription)
-                    registry.ReturnLease(current_key);
-                break;
             }
-            {
-                std::lock_guard lock(mutex_);
-                processed_serial_ = command->serial;
+            if (action.release_lease)
+                registry.RequestLease(current_key);
+            if (action.reset_publisher)
+                resetPublisher();
+            if (action.return_lease)
+                registry.ReturnLease(current_key);
+            if (action.apply_subscription) {
+                current_key = desired.key;
+                sink = std::move(desired.sink);
+                frame_sink = std::move(desired.frame_sink);
+                subscription = registry.Subscribe(
+                    current_key, [&publish](const HubFrame& frame, recorder_core::HubFrameKind) { publish(frame); });
             }
-            ack_cv_.notify_all();
+            if (action.acknowledge_release) {
+                // Published only now: after this point the gate refuses to open
+                // anything until the lease is returned, so the engine's wait
+                // ends on a capture that is gone and stays gone.
+                commands_.PublishLeaseRelease(command.serial);
+            }
         }
         registry.PumpAll();
     }

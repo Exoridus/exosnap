@@ -11,6 +11,7 @@
 // connection" -- are properties of the transport, and a mocked transport would
 // assert them against the mock.
 
+#include "live_verify/LiveVerifyAutomationState.h"
 #include "live_verify/LiveVerifyControlServer.h"
 #include "live_verify/LiveVerifyOptions.h"
 #include "live_verify/LiveVerifyProtocol.h"
@@ -46,6 +47,26 @@ class StubSource final : public LiveVerifySource {
   public:
     std::atomic<int> record_starts{0};
 
+    // Ready on the Record page, nothing blocking. The transport tests are about
+    // the pipe, not about the policy, so the state they run against is one every
+    // precondition they exercise accepts.
+    [[nodiscard]] AutomationState State() const override {
+        AutomationState state;
+        state.page = QString::fromLatin1(page_name::kRecord);
+        state.recording_state = QStringLiteral("Ready");
+        state.can_start = true;
+        state.can_stop = true;
+        state.can_pause = true;
+        state.can_resume = true;
+        state.can_split = true;
+        state.can_capture_frame = true;
+        state.can_select_source = true;
+        return state;
+    }
+    [[nodiscard]] std::uint64_t StateRevision() const override {
+        return 1;
+    }
+
     [[nodiscard]] QJsonObject Identity() const override {
         return QJsonObject{{QStringLiteral("productVersion"), QStringLiteral("0.9.0-test")},
                            {QStringLiteral("commit"), QStringLiteral("deadbeef")}};
@@ -77,6 +98,107 @@ class StubSource final : public LiveVerifySource {
     [[nodiscard]] QJsonObject DiagnosticsSnapshot() const override {
         return {};
     }
+    // Observability surfaces: empty here on purpose. These transport cases are
+    // about the pipe -- handshake, framing, hostile clients, shutdown -- and a
+    // payload would only make the assertions about bytes harder to read.
+    [[nodiscard]] QJsonObject PipelineSnapshot() const override {
+        return {};
+    }
+    [[nodiscard]] QJsonObject SettingsSnapshot() const override {
+        return {};
+    }
+    [[nodiscard]] QJsonObject DiagnosticsResults() const override {
+        return {};
+    }
+    [[nodiscard]] QJsonObject EnvironmentSnapshot() const override {
+        return {};
+    }
+    [[nodiscard]] QJsonObject WindowsSnapshot() const override {
+        return {};
+    }
+    [[nodiscard]] QJsonObject RecentEvents(const QJsonObject&, QString*) const override {
+        return {};
+    }
+    [[nodiscard]] QJsonObject SessionReport(const QString&) const override {
+        return {};
+    }
+    // The C4 product surface, stubbed for the same reason as the snapshots
+    // above: these cases are about the pipe, not about what travels through it.
+    [[nodiscard]] QJsonObject SettingsDescribe() const override {
+        return {};
+    }
+    [[nodiscard]] QJsonObject SettingsGet(const QString&, QString*) const override {
+        return {};
+    }
+    bool SettingsSet(const QString&, const QJsonValue&, QString*) override {
+        return true;
+    }
+    bool SettingsReset(QString*) override {
+        return true;
+    }
+    [[nodiscard]] QJsonObject ProfilesSnapshot() const override {
+        return {};
+    }
+    bool ProfileSelect(const QString&, QString*) override {
+        return true;
+    }
+    bool ProfileCreate(const QString&, QString*) override {
+        return true;
+    }
+    bool ProfileRename(const QString&, QString*) override {
+        return true;
+    }
+    bool ProfileDelete(QString*) override {
+        return true;
+    }
+    [[nodiscard]] QJsonObject NotificationsSnapshot() const override {
+        return {};
+    }
+    bool NotificationDismiss(qint64, QString*) override {
+        return true;
+    }
+    bool NotificationInvokeAction(qint64, const QString&, QString*) override {
+        return true;
+    }
+    bool DiagnosticsRun(QString*) override {
+        return true;
+    }
+    bool LogsOpen(QString*) override {
+        return true;
+    }
+    bool RecoveryContinue(int, QString*) override {
+        return true;
+    }
+    bool RecoveryDiscard(int, QString*) override {
+        return true;
+    }
+    bool RecoveryDismiss(QString*) override {
+        return true;
+    }
+    bool CrashReportSend(QString*) override {
+        return true;
+    }
+    bool CrashReportDecline(QString*) override {
+        return true;
+    }
+    bool RecordingErrorDismiss(QString*) override {
+        return true;
+    }
+    bool RecordingErrorSendReport(QString*) override {
+        return true;
+    }
+    bool ExportStart(QString*) override {
+        return true;
+    }
+    bool ExportCancel(QString*) override {
+        return true;
+    }
+    bool RecordAddMarker(QString*) override {
+        return true;
+    }
+    bool RecordCancelCountdown(QString*) override {
+        return true;
+    }
     bool MoveWindowToScreen(const QString&, QString*) override {
         return true;
     }
@@ -101,6 +223,61 @@ class StubSource final : public LiveVerifySource {
     }
     bool RecordCaptureFrame(QString*) override {
         return true;
+    }
+
+    bool Navigate(const QString&, QString*) override {
+        return true;
+    }
+    [[nodiscard]] RevealOutcome Reveal(const QString&, const QString&, QString*) override {
+        return RevealOutcome::Revealed;
+    }
+    bool ScrollHome(const QString&, QString*) override {
+        return true;
+    }
+    bool ScrollEnd(const QString&, QString*) override {
+        return true;
+    }
+    bool SetSourcePickerOpen(bool, QString*) override {
+        return true;
+    }
+    bool SetNotificationHubOpen(bool, QString*) override {
+        return true;
+    }
+    bool ClearNotifications(QString*) override {
+        return true;
+    }
+    bool EditOpen(QString*) override {
+        return true;
+    }
+    bool EditPlayPause(QString*) override {
+        return true;
+    }
+    bool EditSeek(qint64, QString*) override {
+        return true;
+    }
+    bool EditSetTrimIn(qint64, QString*) override {
+        return true;
+    }
+    bool EditSetTrimOut(qint64, QString*) override {
+        return true;
+    }
+    bool EditTimelineHome(QString*) override {
+        return true;
+    }
+    bool EditTimelineEnd(QString*) override {
+        return true;
+    }
+    bool EditClose(QString*) override {
+        return true;
+    }
+    bool UpdateCheck(QString*) override {
+        return true;
+    }
+    bool UpdateApply(QString*) override {
+        return true;
+    }
+    [[nodiscard]] QJsonObject UpdaterLaunchSnapshot() const override {
+        return {};
     }
 };
 
@@ -141,7 +318,7 @@ class PipeClient {
 
     [[nodiscard]] bool WriteRequest(const QString& command, const QJsonObject& params, const QString& id) {
         QJsonObject request;
-        request.insert(QStringLiteral("protocol"), kProtocolVersion);
+        request.insert(QStringLiteral("protocol"), kMinimumProtocolVersion);
         request.insert(QStringLiteral("id"), id);
         request.insert(QStringLiteral("command"), command);
         request.insert(QStringLiteral("params"), params);

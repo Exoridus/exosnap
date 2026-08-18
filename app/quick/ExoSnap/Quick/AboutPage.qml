@@ -9,6 +9,10 @@ Item {
 
     required property AboutViewModelAdapter aboutViewModel
 
+    // Named like the other four destinations, so a harness can find this page the
+    // same way it finds Record, Settings, Diagnostics and Logs.
+    objectName: "quickAboutPage"
+
     ExoScrollView {
         id: scrollView
 
@@ -75,7 +79,7 @@ Item {
                                 spacing: 0
 
                                 Label {
-                                    text: qsTr("exo")
+                                    text: "exo"  // the wordmark is never translated; see AppShell
                                     textFormat: Text.PlainText
                                     color: ExoTheme.text
                                     font {
@@ -86,7 +90,7 @@ Item {
                                 }
 
                                 Label {
-                                    text: qsTr("snap")
+                                    text: "snap"
                                     textFormat: Text.PlainText
                                     color: ExoTheme.accent
                                     font {

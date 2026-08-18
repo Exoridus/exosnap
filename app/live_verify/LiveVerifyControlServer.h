@@ -1,45 +1,28 @@
 #pragma once
 
-// LiveVerifyControlServer.h -- the local-only transport for the Live Verify
-// control channel.
+// LiveVerifyControlServer.h -- the application's Live Verify endpoint.
 //
-// Transport choice: a native Windows named pipe, not QLocalServer and not a
-// socket. Three reasons, in order of weight:
+// The transport itself (named pipe, DACL on the creating user,
+// PIPE_REJECT_REMOTE_CLIENTS, FILE_FLAG_FIRST_PIPE_INSTANCE, run id in the name,
+// dispatch with a timeout instead of a hang) lives in libs/control
+// (control/control_server.h) because the updater's automation endpoint needs
+// exactly the same properties, and a second implementation of them is a second
+// place for the DACL to be forgotten.
 //
-//   1. No TCP, ever. A named pipe has no port and no listening socket, so
-//      "is the control channel reachable from the network" is answered by the
-//      API rather than by a bind address that could be mistyped. `netstat`
-//      showing nothing is then a real proof, not a coincidence.
-//   2. QLocalServer would pull Qt6::Network into the SHIPPING executable for one
-//      release-verification seam -- a new DLL in every package, for a feature
-//      that is dormant in every user launch. (Qt's Windows QLocalServer is a
-//      named pipe underneath anyway.)
-//   3. A pipe can be created with an explicit DACL. This one grants the creating
-//      user alone, and sets PIPE_REJECT_REMOTE_CLIENTS.
+// This class is the application's binding of it: its dispatcher, its role in the
+// endpoint name ("LiveVerify", so the name is unchanged), and its log tag.
 //
-// The endpoint name embeds the run id (LiveVerifyOptions::PipeNameForRunId), so
-// two verification runs cannot collide and a normal second ExoSnap instance --
-// which creates no pipe at all -- cannot be mistaken for one.
-//
-// Threading: one owned worker thread does all pipe I/O. Requests are handed to
-// the Qt GUI thread with a queued call plus a future, never a blocking queued
-// connection: the destructor runs ON the GUI thread, and a blocking connection
-// would deadlock against its own join. A dispatch that does not come back within
-// kDispatchTimeoutMs is answered with `dispatch_timeout` rather than hanging the
-// connection, because a wedged GUI thread is itself an acceptance finding.
+// A normal launch still has NO endpoint at all -- no pipe, no thread, no log
+// line. That is asserted by live_verify.live_verify_server_tests, not by
+// inspection; keep it that way.
 
 #include "LiveVerifyDispatcher.h"
 
-#include <QByteArray>
+#include <control/control_server.h>
+
 #include <QJsonObject>
-#include <QList>
 #include <QObject>
 #include <QString>
-
-#include <atomic>
-#include <memory>
-#include <mutex>
-#include <thread>
 
 namespace exosnap::live_verify {
 
@@ -50,7 +33,7 @@ class LiveVerifyControlServer : public QObject {
 
   public:
     // How long the pipe thread waits for the GUI thread to answer one request.
-    static constexpr int kDispatchTimeoutMs = 15000;
+    static constexpr int kDispatchTimeoutMs = exosnap::control::ControlServer::kDispatchTimeoutMs;
 
     LiveVerifyControlServer(LiveVerifySource* source, QString run_id, QObject* parent = nullptr);
     ~LiveVerifyControlServer() override;
@@ -65,10 +48,10 @@ class LiveVerifyControlServer : public QObject {
     void Stop();
 
     [[nodiscard]] const QString& pipeName() const noexcept {
-        return pipe_name_;
+        return server_.pipeName();
     }
     [[nodiscard]] bool running() const noexcept {
-        return running_.load(std::memory_order_acquire);
+        return server_.running();
     }
 
     // GUI thread. Queues one event line. Dropped when no client is connected:
@@ -77,32 +60,8 @@ class LiveVerifyControlServer : public QObject {
     void EmitEvent(const QString& name, QJsonObject data);
 
   private:
-    void ServeLoop();
-    // Runs on the pipe thread. Returns the response bytes to write, and sets
-    // `close_connection` when the handshake failed fatally.
-    [[nodiscard]] QByteArray DispatchOnGuiThread(const ParsedRequest& request, bool* close_connection);
-    void RequestSessionReset();
-    [[nodiscard]] QList<QByteArray> TakeOutbound();
-
-    LiveVerifySource* source_ = nullptr;
-    QString run_id_;
-    QString pipe_name_;
     LiveVerifyDispatcher dispatcher_;
-
-    // Win32 HANDLEs kept as void* so windows.h stays out of this header.
-    void* stop_event_ = nullptr;
-    void* outbound_event_ = nullptr;
-    // The FILE_FLAG_FIRST_PIPE_INSTANCE handle, created in Start() and consumed
-    // by the worker's first iteration. Created up front so a launch that cannot
-    // own the endpoint fails at startup rather than at first connect, and held
-    // rather than reopened so nothing can claim the name in between.
-    void* first_pipe_ = nullptr;
-
-    std::mutex outbound_mutex_;
-    QList<QByteArray> outbound_;
-    std::atomic<bool> client_connected_{false};
-    std::atomic<bool> running_{false};
-    std::thread worker_;
+    exosnap::control::ControlServer server_;
 };
 
 } // namespace exosnap::live_verify

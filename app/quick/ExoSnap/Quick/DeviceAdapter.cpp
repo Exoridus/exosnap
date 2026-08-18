@@ -236,6 +236,14 @@ int DeviceAdapter::adapterCount() const noexcept {
     return static_cast<int>(adapters_.size());
 }
 
+const std::vector<capability::AdapterInfo>& DeviceAdapter::adapterInfos() const noexcept {
+    return adapters_;
+}
+
+const std::vector<capability::AdapterEncoderCapability>& DeviceAdapter::adapterCapabilities() const noexcept {
+    return capabilities_;
+}
+
 int DeviceAdapter::activeIndex() const noexcept {
     return active_index_;
 }
@@ -383,9 +391,10 @@ void DeviceAdapter::applyScanResults(std::vector<capability::AdapterInfo> adapte
     emit adaptersChanged();
 
     if (adapters_.empty()) {
-        selected_index_ = -1;
-        selected_luid_ = 0;
-        renderCapabilityMatrix();
+        // Through applySelection, not inline: an empty scan is just the selection
+        // becoming "nothing", and it owes QML the same notification every other
+        // selection change does.
+        applySelection(-1);
         setStatus(QStringLiteral("No encoder-capable adapters were found on this system."), true);
         updateSummaryText();
         emit scanCompleted();
@@ -406,7 +415,10 @@ void DeviceAdapter::applyScanResults(std::vector<capability::AdapterInfo> adapte
     }
     if (next_selection < 0)
         next_selection = active_index_ >= 0 ? active_index_ : 0;
-    selectAdapter(next_selection);
+    // Deliberately not routed through the public selectAdapter(): landing on the
+    // same index after a rescan is still a change, because capabilities_ was just
+    // replaced and every derived property reads from it.
+    applySelection(next_selection);
     updateSummaryText();
     emit scanCompleted();
 }
@@ -429,11 +441,32 @@ void DeviceAdapter::rebuildSelectorRows() {
 }
 
 void DeviceAdapter::selectAdapter(int index) {
+    // The QML entry point. Out of range is a no-op, unchanged — clearing the
+    // inspection because a delegate handed over a stale index would be worse
+    // than ignoring it. `-1` is reachable only from applyScanResults, which owns
+    // the fact that there is nothing left to inspect.
     if (index < 0 || index >= static_cast<int>(adapters_.size()))
         return;
-    selected_index_ = index;
-    selected_luid_ = adapters_[static_cast<size_t>(index)].luid;
-    adapter_model_.setSelectedRow(index);
+    // Re-clicking the already-inspected card changes nothing: same adapter, same
+    // capability data, so re-evaluating ten property bindings would be noise.
+    if (index == selected_index_)
+        return;
+    applySelection(index);
+}
+
+void DeviceAdapter::applySelection(int index) {
+    const bool valid = index >= 0 && index < static_cast<int>(adapters_.size());
+    // Nothing was being inspected and nothing is now: every property bound to
+    // selectionChanged derives from the selected adapter, so none of them can
+    // read differently. A valid index always publishes, because even the same
+    // index means new capability data after a rescan.
+    if (!valid && selected_index_ < 0)
+        return;
+    selected_index_ = valid ? index : -1;
+    selected_luid_ = valid ? adapters_[static_cast<size_t>(index)].luid : 0;
+    // Also correct for -1 and for the empty model: it only clears whichever row
+    // still carries the flag, and an empty rows_ has none.
+    adapter_model_.setSelectedRow(selected_index_);
     renderCapabilityMatrix();
     emit selectionChanged();
 }

@@ -1,13 +1,10 @@
 #pragma once
 
+#include "services/CaptureHubCommandQueue.h"
 #include "services/CaptureSourceKey.h"
 
-#include <atomic>
-#include <condition_variable>
 #include <cstdint>
 #include <functional>
-#include <mutex>
-#include <optional>
 #include <thread>
 
 #include <recorder_core/preview_tap.h>
@@ -37,24 +34,20 @@ class WgcCaptureHubService {
     void ReturnEngineLease();
 
   private:
-    struct Command {
-        enum class Op { Subscribe, Unsubscribe, LeaseRequest, LeaseReturn };
-        Op op = Op::Unsubscribe;
+    // Only a Subscribe carries one; the other three commands are their own
+    // instruction.
+    struct SubscribePayload {
         CaptureSourceKey key;
         HandleSink sink;
         FramePublishedSink frame_sink;
-        uint64_t serial = 0;
     };
 
     void WorkerProc(std::stop_token stop_token);
-    uint64_t PostCommand(Command command);
 
-    std::mutex mutex_;
-    std::condition_variable cv_;
-    std::condition_variable ack_cv_;
-    std::optional<Command> pending_;
-    uint64_t next_serial_ = 1;
-    uint64_t processed_serial_ = 0;
+    // Same ordered channel and same service-level lease gate as the DXGI hub:
+    // the two services share one semantic contract by construction. See
+    // CaptureHubCommandQueue.h and CaptureHubGate.h.
+    CaptureHubCommandQueue<SubscribePayload> commands_;
     std::jthread worker_;
 };
 

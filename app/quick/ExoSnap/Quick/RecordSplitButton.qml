@@ -56,7 +56,10 @@ Item {
 
     objectName: "quickRecordSplitButton"
     implicitHeight: root.compact ? ExoTheme.controlHeight : ExoTheme.controlHeightLarge
-    implicitWidth: mainFace.implicitWidth + divider.width + chevronFace.width
+    // The divider is a child of the Row below, and a positioner skips invisible
+    // children — so counting it unconditionally declared the pill 1 px wider
+    // than it composes in exactly the states where the divider is hidden.
+    implicitWidth: mainFace.implicitWidth + (divider.visible ? divider.width : 0) + chevronFace.width
 
     Rectangle {
         id: pill

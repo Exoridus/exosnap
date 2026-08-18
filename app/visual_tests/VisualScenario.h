@@ -317,13 +317,25 @@ struct VisualScenario {
 
     // --- Standing audio-degraded notification (AUDIO-DEGRADED-NOTIFY-R1) ---
     // 0 = scenario does not drive the notification; >=1 = the degraded-source
-    // count to raise it with, via the SAME production path a live recording
-    // uses (MainWindow::applyVisualScenario enqueues MakeAudioSourceDegradedEvent).
-    // The toast is a separate top-level window outside the pixel-screenshot
-    // harness (like the countdown/recording overlays); its resulting state is
-    // reported in the JSON manifest and its rendering is covered by
-    // NotificationToastWindow's own widget tests.
+    // count it is raised with, through the SAME production Enqueue() a live
+    // recording uses. The toast is a separate top-level window outside the
+    // pixel-screenshot harness (like the countdown/recording overlays); its
+    // resulting state is reported in the JSON manifest and its rendering is
+    // covered by the notification toast tests.
+    //
+    // The Quick harness reaches it through `record_visual_state` below, not
+    // through this number: the Widgets harness read the struct, the Quick one
+    // switches on the --record-visual-state string, and for one release this
+    // field was the scenario's ONLY expression of its own name -- so the
+    // scenario rendered a plain recording while claiming otherwise.
     int audio_degraded_notification_count = 0;
+
+    // --- Quick harness argument ---
+    // The --record-visual-state value that reproduces this scenario in the
+    // shipping frontend, when it is not simply ToString(record_state). Spelled
+    // with the shared constants in RecordVisualStateNames.h so the catalogue and
+    // the frontend's branch cannot drift apart.
+    QString record_visual_state;
 
     // --- FinalizingOverlay (MainWindow-owned, drives it directly) ---
     // The overlay listens to record_status_label_/chromeStateChanged, a signal

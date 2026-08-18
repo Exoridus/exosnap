@@ -92,6 +92,12 @@ struct IssueCard {
     FixSafetyKind fix_safety = FixSafetyKind::Auto;
 
     [[nodiscard]] bool has_evidence() const noexcept;
+
+    // Value equality over every field, so a consumer can tell an issue that
+    // genuinely changed from the same issue delivered again. The live path
+    // rebuilds this list twice a second while recording and almost always
+    // rebuilds it identical.
+    friend bool operator==(const IssueCard&, const IssueCard&) = default;
 };
 
 struct TipEntry {
@@ -169,6 +175,40 @@ struct ReadinessTileInputs {
 
 [[nodiscard]] std::vector<ReadinessTile> BuildReadinessTiles(const ReadinessTileInputs& inputs);
 
+// ── Live tiles ──────────────────────────────────────────────────────────────────
+//
+// The five questions the Diagnostics page has to answer while a recording is
+// running, and could not: is the pipeline healthy, where is the bottleneck, is
+// frame pacing healthy, is the encoder healthy, is audio synchronous, is storage
+// healthy. Everything below is a RENDERING of the engine's own verdict --
+// PipelineHealth, PipelineBottleneck and the measurements behind them. There is
+// no second classification here: a tile never decides that something is wrong,
+// it only says which of the engine's findings it is showing.
+//
+// The live pipeline stage cards (PipelineCardBuilder) stay where they are and
+// keep their Expert home. These tiles are the calm summary above them.
+struct LiveTile {
+    std::string key; // "pipelineHealth" | "framePacing" | "encoder" | "audioSync" | "storage"
+    std::string title;
+    std::string value;  // the one measurement that answers the tile's question
+    std::string sub;    // its context (target, format, budget)
+    std::string detail; // a second fact, or why the first one is unavailable
+    TileTone tone = TileTone::Neutral;
+
+    friend bool operator==(const LiveTile&, const LiveTile&) = default;
+};
+
+// Pure. Returns an empty list unless the snapshot describes a pipeline that is
+// actually running (Recording or Paused).
+//
+// Two exclusions, for two different reasons. An invalid snapshot has nothing
+// measured at all, and five tiles of em dashes are worse than no tiles. A
+// COMPLETED or FAILED session has real numbers but they answer a different
+// question -- "how did it go", which the Edit review step owns -- and leaving
+// them on a page headed "live" would report a recording that has stopped as one
+// that is still running.
+[[nodiscard]] std::vector<LiveTile> BuildLiveTiles(const recorder_core::RecordingDiagnosticsSnapshot& snapshot);
+
 // ── Fact / configuration tables ─────────────────────────────────────────────────
 
 struct KeyValueRow {
@@ -221,6 +261,10 @@ struct PipelineStage {
     std::string value; // measured number, or an em dash
     std::string tip;
     StageStatus status = StageStatus::Planned;
+
+    // So the Quick model can tell "same six stages, one value moved" from "a
+    // different pipeline", and skip publishing when nothing moved at all.
+    friend bool operator==(const PipelineStage&, const PipelineStage&) = default;
 };
 
 // Builds the six pipeline health cards and carries the ONLY piece of state on the
@@ -354,9 +398,28 @@ class DiagnosticsController {
     void SetElevated(bool elevated) noexcept;
     void SetHasLastRecording(bool has_last_recording) noexcept;
     void SetCaptureTargetHdrActive(bool active) noexcept;
-    void SetDpcLatency(DpcLatencyReading reading);
+    // nullopt == "not being measured", and it is the value the host pushes whenever the
+    // kernel trace is not consuming: the recommendation must then come from no reading
+    // at all rather than from a default-zero one. Same shape as SetPresentSample.
+    void SetDpcLatency(std::optional<DpcLatencyReading> reading);
     void SetPresentSample(std::optional<PresentSample> sample);
     void SetLiveSnapshot(const recorder_core::RecordingDiagnosticsSnapshot& snapshot);
+
+    // The structured checklist the last Evaluate() produced, and the environment
+    // facts alongside it. Retained rather than rebuilt on demand: running the
+    // recommendation engine a second time to answer a query would re-read the
+    // live snapshot at a different instant, so a consumer could see a verdict the
+    // surface never showed. Empty before the first Evaluate().
+    [[nodiscard]] const DiagnosticChecklist& lastChecklist() const noexcept;
+    [[nodiscard]] const std::vector<DiagnosticResult>& lastEnvironmentFacts() const noexcept;
+    // The self-test checklist as the probe produced it, and whether it ran at all
+    // ("not executed in this build" is a real answer, not an empty list).
+    [[nodiscard]] const DiagnosticChecklist& selfTestChecklist() const noexcept;
+    [[nodiscard]] bool selfTestValid() const noexcept;
+    // The last live pipeline snapshot fed in by the recording path. This is a
+    // pass-through of the engine's own value -- the controller neither smooths
+    // nor re-derives it.
+    [[nodiscard]] const recorder_core::RecordingDiagnosticsSnapshot& liveSnapshot() const noexcept;
 
     [[nodiscard]] bool dataReady() const noexcept;
     [[nodiscard]] bool hasLastRecording() const noexcept;
@@ -394,6 +457,10 @@ class DiagnosticsController {
     recorder_core::RecordingDiagnosticsSnapshot live_{};
     SelfTestReport self_test_;
     std::vector<KeyValueRow> config_rows_;
+    // What the last Evaluate() computed, kept so the structured surface and the
+    // rendered surface answer from one pass.
+    DiagnosticChecklist last_checklist_;
+    std::vector<DiagnosticResult> last_facts_;
     PipelineCardBuilder pipeline_;
 };
 

@@ -1,7 +1,15 @@
+// Not inside the EXOSNAP_ENABLE_AUTO_RECORD_HARNESS block below, and that is
+// the whole contract: --pseudo-localize is armed by argv and by nothing else
+// (see PseudoLocalization.h), so its translator has to exist in every
+// configuration the product ships. Its sources are added to the target
+// unconditionally for the same reason; a harness-gated include here compiled in
+// Debug and broke Release, where the gate is off.
+#include "PseudoLocalization.h"
 #include "QuickApplication.h"
 #include "QuickLiveVerifySource.h"
 #include "QuickWindowGeometry.h"
 #if defined(EXOSNAP_ENABLE_AUTO_RECORD_HARNESS)
+#include "NotificationsAdapter.h"
 #include "QuickAutoEditHarness.h"
 #include "QuickAutoRecordHarness.h"
 #include "auto_record/AutoRecordHarness.h"
@@ -9,10 +17,12 @@
 #include "bootstrap/ProductionBootstrap.h"
 #include "diagnostics/NativeWindowFacts.h"
 #include "diagnostics/StartupClock.h"
+#include "live_verify/LiveVerifyCommandPolicy.h"
 #include "live_verify/LiveVerifyControlServer.h"
 #include "live_verify/LiveVerifyOptions.h"
 #include "services/ElevatedRelaunch.h"
 #include "services/RecordingCoordinator.h"
+#include "services/UpdateFeedOverride.h"
 #include "services/VerifyReinstallMode.h"
 
 // QApplication, not QGuiApplication: QSystemTrayIcon is a Qt Widgets type and
@@ -28,6 +38,9 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QMetaMethod>
+#include <QQuickItem>
+#include <QQuickStyle>
 #include <QQuickWindow>
 #include <QSGRendererInterface>
 #include <QScreen>
@@ -45,6 +58,9 @@
 #include <wrl/client.h>
 
 #include <algorithm>
+#include <array>
+#include <cstddef>
+#include <cstdio>
 #include <memory>
 
 namespace {
@@ -239,6 +255,310 @@ void saveOverlayWindowGrabs(const QString& screenshot_path) {
     }
 }
 
+// ── --navigation-lifecycle-test (QCR-615) ───────────────────────────────────
+//
+// Settings, Diagnostics, Logs and About are loaded by URL rather than from an
+// inline `sourceComponent`, which is the only reason their documents stay out of
+// the startup compile. That mechanism removes two things a component reference
+// used to give for free, and this test is where both are asserted:
+//
+//   * the pages are genuinely absent until they are navigated to. Nothing else
+//     in the product observes it, and the whole point of the change is that they
+//     are not there;
+//   * `setSource()` carries initial property VALUES, not bindings and not signal
+//     handlers. So every adapter a page requires has to have actually arrived,
+//     and Diagnostics' two navigation signals have to still reach the shell even
+//     though the shell no longer knows the page's type.
+//
+// Structural, never timed: no wall-clock assertion belongs in CI. The loaders are
+// synchronous, so a navigation and its result are observable in the same call.
+struct NavigationDestination {
+    int page = 0;
+    const char* object_name = nullptr;
+    const char* adapter_property = nullptr;
+    QObject* adapter = nullptr;
+};
+
+int failNavigationLifecycle(const char* what) {
+    qCritical().noquote() << QStringLiteral("navigation-lifecycle: ") + QString::fromLatin1(what);
+    // AppLog's message handler replaces Qt's default one, and Qt hands a first
+    // installer no previous handler to chain to -- so nothing reaches stderr and
+    // the whole diagnosis lives in a log file inside a throwaway config dir. A
+    // CTest failure has to state its reason where CTest captures it, or the gate
+    // reports red without saying why.
+    std::fprintf(stderr, "navigation-lifecycle: %s\n", what);
+    return 5;
+}
+
+QObject* findShellPage(QQuickWindow* window, const char* object_name) {
+    return window != nullptr ? window->findChild<QObject*>(QString::fromLatin1(object_name)) : nullptr;
+}
+
+// Calls the shell's one navigation edge the way a tab, a shortcut or a
+// notification action does. Resolved through the metaobject rather than by name
+// alone, because a typed QML function (`navigateTo(page: int)`) publishes an
+// int parameter and an untyped one publishes a QVariant -- and invoking with the
+// wrong one fails with a warning instead of an error.
+bool invokeNavigateTo(QObject* shell, int page) {
+    const QMetaObject* meta = shell->metaObject();
+    for (int index = 0; index < meta->methodCount(); ++index) {
+        const QMetaMethod method = meta->method(index);
+        if (method.name() != QByteArrayLiteral("navigateTo") || method.parameterCount() != 1)
+            continue;
+        if (method.parameterMetaType(0) == QMetaType::fromType<int>())
+            return method.invoke(shell, Q_ARG(int, page));
+        return method.invoke(shell, Q_ARG(QVariant, QVariant(page)));
+    }
+    return false;
+}
+
+// One nav-tab delegate. A Repeater's delegates are not QObject children of the
+// window -- only the Repeater itself is -- so they are reached through itemAt().
+QObject* navTabAt(QObject* repeater, int index) {
+    QQuickItem* item = nullptr;
+    if (!QMetaObject::invokeMethod(repeater, "itemAt", Q_RETURN_ARG(QQuickItem*, item), Q_ARG(int, index)))
+        return nullptr;
+    return item;
+}
+
+// The clip the QCR-001 assertions below run against. No master path, so nothing
+// is decoded, no keyframe scan starts and no export can run -- exactly the
+// fixture shape the visual harness uses. A duration is all `editOverlayOpen`
+// needs.
+exosnap::EditContext navigationTestEditContext() {
+    exosnap::EditContext context;
+    context.output_path = QStringLiteral("qcr001-navigation-lifecycle.mkv");
+    context.duration = QStringLiteral("2:34");
+    context.duration_seconds = 154.0;
+    return context;
+}
+
+int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplication& application) {
+    if (window == nullptr)
+        return failNavigationLifecycle("no root window");
+    QObject* shell = window->findChild<QObject*>(QStringLiteral("quickAppShell"));
+    if (shell == nullptr)
+        return failNavigationLifecycle("no quickAppShell");
+
+    const std::array<NavigationDestination, 4> destinations{{
+        {1, "quickSettingsPage", "settings", application.settingsAdapter()},
+        {2, "quickDiagnosticsPage", "diagnostics", application.diagnosticsAdapter()},
+        {3, "quickLogsPage", "logs", application.logsAdapter()},
+        {4, "quickAboutPage", "aboutViewModel", application.aboutViewModel()},
+    }};
+
+    // Startup built the page the user is looking at, and nothing else.
+    if (findShellPage(window, "quickRecordPage") == nullptr)
+        return failNavigationLifecycle("Record page missing after startup");
+    for (const NavigationDestination& destination : destinations) {
+        if (findShellPage(window, destination.object_name) != nullptr)
+            return failNavigationLifecycle(destination.object_name);
+    }
+
+    // First visit: the page exists and holds the adapter it was handed.
+    std::array<QObject*, 4> first_visit{};
+    for (std::size_t index = 0; index < destinations.size(); ++index) {
+        const NavigationDestination& destination = destinations.at(index);
+        shell->setProperty("currentPage", destination.page);
+        QObject* page = findShellPage(window, destination.object_name);
+        if (page == nullptr)
+            return failNavigationLifecycle(destination.object_name);
+        if (page->property(destination.adapter_property).value<QObject*>() != destination.adapter)
+            return failNavigationLifecycle(destination.adapter_property);
+        first_visit.at(index) = page;
+    }
+
+    // Diagnostics is the one page with a second required property, and the one
+    // whose initial-property list could silently lose a member.
+    QObject* diagnostics = first_visit.at(1);
+    if (diagnostics->property("device").value<QObject*>() != application.deviceAdapter())
+        return failNavigationLifecycle("device");
+
+    // Second visit: the same instance, so a page still remembers where the user
+    // was in it (the resident contract from QCR-602).
+    for (std::size_t index = 0; index < destinations.size(); ++index) {
+        shell->setProperty("currentPage", 0);
+        shell->setProperty("currentPage", destinations.at(index).page);
+        if (findShellPage(window, destinations.at(index).object_name) != first_visit.at(index))
+            return failNavigationLifecycle("page rebuilt on second visit");
+    }
+
+    // The two signals the shell used to handle inline on its sourceComponent.
+    shell->setProperty("currentPage", 2);
+    if (!QMetaObject::invokeMethod(diagnostics, "navigateToLogsRequested"))
+        return failNavigationLifecycle("navigateToLogsRequested not invokable");
+    if (shell->property("currentPage").toInt() != 3)
+        return failNavigationLifecycle("navigateToLogsRequested did not navigate");
+    shell->setProperty("currentPage", 2);
+    if (!QMetaObject::invokeMethod(diagnostics, "navigateToSettingsRequested"))
+        return failNavigationLifecycle("navigateToSettingsRequested not invokable");
+    if (shell->property("currentPage").toInt() != 1)
+        return failNavigationLifecycle("navigateToSettingsRequested did not navigate");
+
+    // ── QCR-001: an open edit session is state of Record, not a modality ────
+    //
+    // This block used to assert the opposite ("navigation not locked during an
+    // edit session"). That contract was never a product decision: the Widgets
+    // shell that shipped until the cutover let the nav tabs navigate for the
+    // whole edit session, the Quick port lost it in `enabled: !editOverlayOpen`,
+    // and Wave 0 canonised the regression on the false premise that the code had
+    // always disabled them. What follows is the intended contract instead.
+    shell->setProperty("currentPage", 0);
+    exosnap::quick::EditSessionAdapter* session = application.editSessionAdapter();
+    exosnap::quick::EditPlayerAdapter* player = application.editPlayerAdapter();
+    exosnap::quick::EditExportAdapter* exporter = application.editExportAdapter();
+    if (session == nullptr || player == nullptr || exporter == nullptr)
+        return failNavigationLifecycle("no edit adapters");
+
+    session->setEditContext(navigationTestEditContext());
+    if (!shell->property("editOverlayOpen").toBool())
+        return failNavigationLifecycle("a clip did not open the edit workspace");
+    QObject* workspace = findShellPage(window, "quickEditOverlay");
+    if (workspace == nullptr)
+        return failNavigationLifecycle("no quickEditOverlay after a clip opened");
+    // `visible` on a QQuickItem is EFFECTIVE visibility, so this is read off the
+    // workspace itself rather than off the shell's derived property: the point of
+    // the contract is what reaches the screen, not what the shell believes.
+    if (!shell->property("editOverlayVisible").toBool() || !workspace->property("visible").toBool())
+        return failNavigationLifecycle("the edit workspace is not visible on Record");
+
+    // The affordance itself, not only the edge behind it: this exact `enabled`
+    // binding is where the Quick port lost the Widgets shell's contract.
+    QObject* nav_tabs = findShellPage(window, "quickNavTabs");
+    if (nav_tabs == nullptr)
+        return failNavigationLifecycle("no quickNavTabs repeater");
+    for (int tab = 0; tab <= 4; ++tab) {
+        QObject* delegate = navTabAt(nav_tabs, tab);
+        if (delegate == nullptr)
+            return failNavigationLifecycle("a navigation tab is missing");
+        if (!delegate->property("enabled").toBool())
+            return failNavigationLifecycle("a navigation tab is disabled during an edit session");
+    }
+
+    // State the user would notice losing, set before leaving and compared after
+    // returning. Product state, not QML internals.
+    session->requestTrim(22000, 118000);
+    session->requestSeek(41000);
+    const QString clip_path = session->clipPath();
+    const qint64 trim_start = session->trimStartMs();
+    const qint64 trim_end = session->trimEndMs();
+    const qint64 position = session->positionMs();
+    if (trim_start != 22000 || trim_end != 118000 || position != 41000)
+        return failNavigationLifecycle("the fixture clip did not take the trim and the position");
+
+    // Every destination stays reachable, and reaching it neither closes the
+    // session nor leaves the workspace lying over the page that replaced it.
+    for (int page = 1; page <= 4; ++page) {
+        if (!invokeNavigateTo(shell, page))
+            return failNavigationLifecycle("navigateTo is not invokable");
+        if (shell->property("currentPage").toInt() != page)
+            return failNavigationLifecycle("a destination was refused during an edit session");
+        if (!shell->property("editOverlayOpen").toBool())
+            return failNavigationLifecycle("navigation closed the edit session");
+        if (shell->property("editOverlayVisible").toBool() || workspace->property("visible").toBool())
+            return failNavigationLifecycle("the edit workspace stayed visible off Record");
+        if (findShellPage(window, "quickEditOverlay") != workspace)
+            return failNavigationLifecycle("the edit workspace was rebuilt by a page change");
+    }
+
+    // Back on Record: the same workspace, the same session, the same numbers.
+    if (!invokeNavigateTo(shell, 0))
+        return failNavigationLifecycle("navigateTo is not invokable");
+    if (!shell->property("editOverlayVisible").toBool() || !workspace->property("visible").toBool())
+        return failNavigationLifecycle("returning to Record did not show the edit workspace");
+    if (findShellPage(window, "quickEditOverlay") != workspace)
+        return failNavigationLifecycle("returning to Record built a second edit workspace");
+    if (session->clipPath() != clip_path || session->trimStartMs() != trim_start || session->trimEndMs() != trim_end ||
+        session->positionMs() != position)
+        return failNavigationLifecycle("the edit session lost state across a page change");
+
+    // Playback: leaving Record pauses, keeps the position, and does not resume
+    // on the way back.
+    player->setClipStateForTest(/*clip_open=*/true, session->durationMs());
+    player->setPlaying(true);
+    if (!player->playing())
+        return failNavigationLifecycle("the fixture player refused to play");
+    if (!invokeNavigateTo(shell, 1))
+        return failNavigationLifecycle("navigateTo is not invokable");
+    if (player->playing())
+        return failNavigationLifecycle("playback kept running off Record");
+    if (session->positionMs() != position)
+        return failNavigationLifecycle("pausing on a page change moved the playhead");
+    if (!invokeNavigateTo(shell, 0))
+        return failNavigationLifecycle("navigateTo is not invokable");
+    if (player->playing())
+        return failNavigationLifecycle("returning to Record resumed playback on its own");
+    if (session->positionMs() != position)
+        return failNavigationLifecycle("returning to Record moved the playhead");
+    player->setClipStateForTest(/*clip_open=*/false, 0);
+
+    // Export: a page change is not a cancel. The run lives on a thread the
+    // adapter owns, so it is unaffected by which QML item is on screen -- this
+    // pins that, using the harness state seam rather than a fake export.
+    exporter->applyVisualState(exosnap::quick::EditExportAdapter::Running, 42, QString(), QString());
+    if (!invokeNavigateTo(shell, 2))
+        return failNavigationLifecycle("navigateTo is not invokable");
+    if (!exporter->running() || exporter->progressPercent() != 42)
+        return failNavigationLifecycle("navigating away disturbed a running export");
+    if (!invokeNavigateTo(shell, 0))
+        return failNavigationLifecycle("navigateTo is not invokable");
+    if (!exporter->running() || exporter->progressPercent() != 42)
+        return failNavigationLifecycle("returning to Record disturbed a running export");
+    exporter->applyVisualState(exosnap::quick::EditExportAdapter::Options, 0, QString(), QString());
+
+    // The alternative navigation path. ShellAdapter::navigateToPageRequested is
+    // what a notification action, the Diagnostics blocker jump and the recording
+    // error's log jump all emit; it used to write `currentPage` directly and so
+    // obeyed a different contract than the tabs did.
+    exosnap::quick::ShellAdapter* shell_adapter = application.shellAdapter();
+    if (shell_adapter == nullptr)
+        return failNavigationLifecycle("no shell adapter");
+    emit shell_adapter->navigateToPageRequested(exosnap::quick::ShellAdapter::LogsPage);
+    if (shell->property("currentPage").toInt() != 3)
+        return failNavigationLifecycle("the adapter navigation path did not reach the shell");
+    if (!shell->property("editOverlayOpen").toBool() || shell->property("editOverlayVisible").toBool() ||
+        workspace->property("visible").toBool())
+        return failNavigationLifecycle("the adapter navigation path used a different edit contract");
+
+    // A blocking surface still blocks — QCR-415 must not regress. Edit is not
+    // one of them, which is the whole point of the block above.
+    exosnap::quick::RecordingErrorAdapter* recording_error = application.recordingErrorAdapter();
+    if (recording_error == nullptr)
+        return failNavigationLifecycle("no recording error adapter");
+    exosnap::models::RecordingFailureReport report;
+    report.title = QStringLiteral("Recording stopped unexpectedly");
+    report.summary = QStringLiteral("navigation-lifecycle fixture");
+    recording_error->present(report, /*can_send_report=*/false);
+    if (shell->property("navigationAllowed").toBool())
+        return failNavigationLifecycle("a blocking surface left navigation allowed");
+    if (QObject* delegate = navTabAt(nav_tabs, 1); delegate == nullptr || delegate->property("enabled").toBool())
+        return failNavigationLifecycle("a blocking surface left the navigation tabs enabled");
+    (void)invokeNavigateTo(shell, 4);
+    if (shell->property("currentPage").toInt() != 3)
+        return failNavigationLifecycle("navigation went through behind a blocking surface");
+    recording_error->dismiss();
+    if (!shell->property("navigationAllowed").toBool())
+        return failNavigationLifecycle("dismissing the blocking surface did not restore navigation");
+
+    session->close();
+    if (shell->property("editOverlayOpen").toBool())
+        return failNavigationLifecycle("closing the session left the edit workspace open");
+
+    shell->setProperty("currentPage", 0);
+    return 0;
+}
+
+// installTranslator does not take ownership, and the translator has to outlive
+// every qsTr() that resolves through it -- so it is parented to the application
+// and destroyed with it. The static analyser does not model Qt's parent
+// ownership and reads the allocation as unowned; the suppression is scoped to
+// this function so it can never cover an unrelated allocation.
+// NOLINTBEGIN(clang-analyzer-cplusplus.NewDeleteLeaks)
+void installPseudoLocalization(QApplication& app) {
+    QCoreApplication::installTranslator(new exosnap::quick::PseudoLocalizationTranslator(&app));
+}
+// NOLINTEND(clang-analyzer-cplusplus.NewDeleteLeaks)
+
 } // namespace
 
 int main(int argc, char* argv[]) {
@@ -255,6 +575,26 @@ int main(int argc, char* argv[]) {
     // window, which is structurally the same thing the Widgets shell does with
     // event->ignore() + hide(): a refused close never emits lastWindowClosed, so
     // hiding to the tray cannot quit the process out from under a recording.
+
+    // The Qt Quick Controls style, pinned before a single line of QML loads.
+    //
+    // Without this call the style is whatever the platform default resolves to
+    // — on Windows that is the Windows style, which in turn falls back to
+    // Fusion for the controls it does not implement, while the files that
+    // import QtQuick.Controls.Basic explicitly stay Basic. One binary would
+    // then draw its controls from three different styles, and a Qt update
+    // changing the platform default would silently restyle the application.
+    //
+    // Basic is the choice because that is what the ExoSnap design system is
+    // built on: every visual decision lives in the Exo* components and the
+    // theme tokens, so the style underneath must contribute as little of its
+    // own opinion as possible.
+    //
+    // QQuickStyle::setStyle() outranks -style, QT_QUICK_CONTROLS_STYLE and
+    // qtquickcontrols2.conf, so neither the environment nor a command line can
+    // take the application somewhere else.
+    QQuickStyle::setStyle(QStringLiteral("Basic"));
+
     const exosnap::bootstrap::PostAppResult post_app = exosnap::bootstrap::MarkApplicationConstructed();
     exosnap::bootstrap::ApplyApplicationMetadata();
 
@@ -275,6 +615,17 @@ int main(int argc, char* argv[]) {
         exosnap::live_verify::ParseControlOptions(arguments);
     if (live_verify_options.requested && !live_verify_options.error.isEmpty()) {
         qCritical().noquote() << live_verify_options.error;
+        return 2;
+    }
+
+    // The dev feed override. Refused outright in an official build and refused
+    // on a malformed value, because a test that believes it is pointed at a
+    // fixture and is actually talking to the production feed reports the wrong
+    // thing -- and could act on a real release.
+    const exosnap::services::UpdateFeedOverride update_feed_override =
+        exosnap::services::ParseUpdateFeedOverride(arguments);
+    if (update_feed_override.requested && !update_feed_override.error.isEmpty()) {
+        qCritical().noquote() << update_feed_override.error;
         return 2;
     }
 
@@ -316,8 +667,9 @@ int main(int argc, char* argv[]) {
     constexpr bool auto_record_requested = false;
     constexpr bool auto_edit_requested = false;
 #endif
+    const bool navigation_lifecycle_test = arguments.contains(QStringLiteral("--navigation-lifecycle-test"));
     const bool diagnostic_mode = preview_mode || auto_record_requested || auto_edit_requested ||
-                                 arguments.contains(QStringLiteral("--smoke-test")) ||
+                                 navigation_lifecycle_test || arguments.contains(QStringLiteral("--smoke-test")) ||
                                  arguments.contains(QStringLiteral("--visual-test"));
 
     // A harness runs the *real* application, and the real application persists
@@ -366,6 +718,13 @@ int main(int argc, char* argv[]) {
         exosnap::quick::InstallStartupMessageTrace();
     }
 
+    // Harness-only: controlled text expansion for the 860x700 layout regression
+    // pass (QCR-511). Installed BEFORE the engine loads, so every qsTr() in QML
+    // resolves through it on its first evaluation and no retranslate() call is
+    // needed. argv-only by design — see PseudoLocalization.h.
+    if (arguments.contains(QStringLiteral("--pseudo-localize")))
+        installPseudoLocalization(app);
+
     exosnap::quick::QuickApplication quick_application;
     // ADR 0033: the handoff a prior elevated self-relaunch put in our own argv.
     // Applied before load() so the shell's landing page is decided once, rather
@@ -374,12 +733,20 @@ int main(int argc, char* argv[]) {
     const exosnap::services::RelaunchHandoff startup_handoff = exosnap::services::ParseRelaunchArgs(arguments);
     quick_application.applyStartupRelaunchHandoff(startup_handoff.page_name, startup_handoff.reenable_present_diag);
     quick_application.applyVerifyUpdateReinstallMode(exosnap::services::HasVerifyUpdateReinstallRequest(arguments));
+    quick_application.applyUpdateFeedOverride(update_feed_override.base_url);
+    // The child updater gets an automation endpoint ONLY when this process has
+    // one. Same run id, different role in the pipe name (ADR 0067), so a runner
+    // that is already driving this process can reach the updater it starts
+    // without discovering anything.
+    quick_application.applyUpdaterAutomationRunId(live_verify_options.requested ? live_verify_options.run_id
+                                                                                : QString());
     // A --visual-test sweep is one process per scenario and a benchmark run
     // measures the frontend, not the notification area; neither should drop an
     // ExoSnap icon into the developer's tray. --smoke-test is deliberately NOT in
     // this list: it is what proves the tray still constructs and tears down
     // inside the real application.
     quick_application.applyTraySuppression(preview_mode || auto_record_requested || auto_edit_requested ||
+                                           navigation_lifecycle_test ||
                                            arguments.contains(QStringLiteral("--visual-test")));
 
     if (!quick_application.load(diagnostic_mode))
@@ -434,6 +801,16 @@ int main(int argc, char* argv[]) {
 
         // Events, not polling. Each one reuses an existing signal; none of them
         // introduces a second idea of the state it reports.
+        //
+        // The update child is the one event that is not a state change of THIS
+        // process: it carries the pid, the staged binary and the endpoint of the
+        // updater that was just started, so a runner attaches to a process it
+        // caused instead of watching for a pipe to appear.
+        if (auto* updates = quick_application.updateService()) {
+            QObject::connect(updates, &exosnap::UpdateService::updaterLaunched, server, [server, source]() {
+                server->EmitEvent(QStringLiteral("update.updaterLaunched"), source->UpdaterLaunchSnapshot());
+            });
+        }
         if (auto* record = quick_application.recordViewModelAdapter()) {
             auto last_state = std::make_shared<int>(record->state());
             QObject::connect(record, &exosnap::quick::RecordViewModelAdapter::changed, server,
@@ -459,6 +836,17 @@ int main(int argc, char* argv[]) {
                 server->EmitEvent(QStringLiteral("window.screenChanged"), source->WindowSnapshot());
             });
         }
+        // Protocol 2's general settle signal. The source advances its revision
+        // only when the observable state actually differs, so this fires on real
+        // changes and not on every elapsed-time tick — which is what makes it
+        // something a runner can wait on. It also gives the three blocking
+        // surfaces their first observable transition: they had no event at all,
+        // so a check could not even see the state that made record.start refuse.
+        QObject::connect(
+            source, &exosnap::quick::QuickLiveVerifySource::observableStateChanged, server, [server, source]() {
+                server->EmitEvent(QStringLiteral("ui.stateChanged"),
+                                  exosnap::live_verify::StateToJson(source->State(), source->StateRevision()));
+            });
         // Queued so it lands after the event loop starts and the first frame is
         // on its way; a client connecting later simply reads the snapshots.
         QTimer::singleShot(
@@ -488,6 +876,28 @@ int main(int argc, char* argv[]) {
                 shell->setProperty("currentPage", page_index);
             }
         }
+    }
+
+    // Harness-only: opens one of the popups that is now built on first use
+    // instead of at page load (QCR-601, QCR-610), so a --visual-test capture can
+    // photograph it. Without this the two surfaces would only be reachable by
+    // driving the running application, which is exactly what the harness exists
+    // to avoid. Queued, so the shell has finished its first layout — the picker
+    // measures itself against the overlay it centres in.
+    const QString visual_popup = optionValue(arguments, QStringLiteral("--visual-popup"));
+    if (!visual_popup.isEmpty()) {
+        QTimer::singleShot(0, &app, [root_window, &quick_application, visual_popup]() {
+            if (visual_popup == QLatin1String("source-picker")) {
+                if (auto* page = root_window != nullptr
+                                     ? root_window->findChild<QObject*>(QStringLiteral("quickRecordPage"))
+                                     : nullptr) {
+                    QMetaObject::invokeMethod(page, "openSourcePicker");
+                }
+            } else if (visual_popup == QLatin1String("notification-hub")) {
+                if (auto* notifications = quick_application.notificationsAdapter())
+                    notifications->openHub();
+            }
+        });
     }
 
     // Harness-only: renders a --visual-test capture in the named appearance and
@@ -564,6 +974,16 @@ int main(int argc, char* argv[]) {
 
     if (arguments.contains(QStringLiteral("--smoke-test")))
         QTimer::singleShot(150, &app, &QCoreApplication::quit);
+
+    // Queued rather than immediate: the shell's own Component.onCompleted is what
+    // loads the landing destination, and the assertions below start from "nothing
+    // but Record exists" — running before that completes would test a half-built
+    // shell and pass for the wrong reason.
+    if (navigation_lifecycle_test) {
+        QTimer::singleShot(0, &app, [&app, root_window, &quick_application]() {
+            app.exit(runNavigationLifecycleTest(root_window, quick_application));
+        });
+    }
 
     if (arguments.contains(QStringLiteral("--preview-smoke-test"))) {
         auto* deadline = new QTimer(&app);

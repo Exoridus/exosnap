@@ -16,7 +16,20 @@ namespace exosnap::capability {
 // display's capabilities are the usual approximation for the content's
 // mastering values). This only captures them for now.
 struct DisplayHdrFacts {
-    std::string name;            // device name, e.g. "\\.\DISPLAY7"
+    std::string name; // GDI device name, e.g. "\\.\DISPLAY7" (DXGI_OUTPUT_DESC1::DeviceName)
+
+    // The same display's DisplayConfig monitorFriendlyDeviceName, e.g. "27GL850",
+    // paired with `name` over one QueryDisplayConfig active path — the pairing
+    // envctl already uses (tools/envctl/win32/env_win32_display.cpp).
+    //
+    // It exists because the two APIs that describe a monitor key it differently:
+    // DXGI answers in GDI device names, and Qt's QScreen::name() answers in
+    // friendly names on Windows. Carrying both is what lets a Qt-side screen be
+    // joined to its DXGI facts by NAME rather than by list position. Empty when
+    // DisplayConfig did not answer for this path, and an empty name matches
+    // nothing — an unmatched display is a better answer than a guessed one.
+    std::string friendly_name;
+
     bool hdr_active = false;     // Windows HDR currently ON (PQ/BT.2020 colour space)
     uint32_t bits_per_color = 0; // panel link bit depth
 

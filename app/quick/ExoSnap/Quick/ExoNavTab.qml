@@ -46,6 +46,15 @@ Button {
         verticalAlignment: Text.AlignVCenter
         text: root.text
         textFormat: Text.PlainText
+        // The LAST resort, and only that. The band gives up its drag handle
+        // first, then the tabs' own padding at the compact rung, and only a
+        // label that still does not fit after both elides — which happens with
+        // a translation long enough that five destinations plus the window
+        // buttons no longer share 860 px. The alternative measured worse: the
+        // row laid itself out past the window's right edge and took the close
+        // button with it. A destination the user can still recognise beats a
+        // window they cannot close.
+        elide: Text.ElideRight
         color: !root.enabled ? ExoTheme.textDim
                : root.selected || root.hovered ? ExoTheme.text : ExoTheme.textSecondary
         font {

@@ -3,6 +3,10 @@
 #include "ElevationProvider.h"
 #include "PresentMonEtwSession.h"
 #include "PresentProvider.h"
+#include "PresentTraceBackend.h"
+
+#include <functional>
+#include <memory>
 
 namespace exosnap::diagnostics {
 
@@ -16,6 +20,16 @@ class PresentMonProvider final : public IPresentProvider {
     // The elevation provider is borrowed (must outlive this object). `opt_in`
     // reflects PersistedAppSettings::present_diagnostics_optin.
     PresentMonProvider(const IElevationProvider& elevation, bool opt_in);
+
+    // Test seam. Passed straight to the session, so a test can drive the whole
+    // availability truth table without a real trace.
+    //
+    // Tests MUST use this. An elevated+opt-in provider built with the default factory
+    // opens a real system-wide ETW session named ExoSnapPresentMon and first calls
+    // StopNamedSession on it -- which would tear the session out from under a running
+    // ExoSnap on the same machine. A unit test may not do that to a developer's desktop.
+    PresentMonProvider(const IElevationProvider& elevation, bool opt_in,
+                       std::function<std::shared_ptr<IPresentTraceBackend>()> backend_factory);
 
     [[nodiscard]] PresentSample Sample() const override;
 

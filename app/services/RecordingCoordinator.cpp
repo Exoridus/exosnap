@@ -16,6 +16,7 @@
 #include <windows.h>
 
 #include "../diagnostics/DiskSpaceThresholds.h"
+#include "../diagnostics/StructuredLog.h"
 
 #include <QCoreApplication>
 #include <QDateTime>
@@ -36,6 +37,7 @@
 #include <chrono>
 #include <cstdio>
 #include <ctime>
+#include <iterator>
 #include <sstream>
 #include <string_view>
 #include <thread>
@@ -423,6 +425,49 @@ RecoveryManifestStore* RecordingCoordinator::GetRecoveryManifestStore() const no
     return recovery_manifest_store_;
 }
 
+void RecordingCoordinator::SetRecoveryProtectionLostCallback(RecoveryProtectionLostCallback cb) {
+    on_recovery_protection_lost_ = std::move(cb);
+}
+
+void RecordingCoordinator::SetWindowExclusiveEvidenceProvider(WindowExclusiveEvidenceProvider provider) {
+    window_exclusive_evidence_provider_ = std::move(provider);
+}
+
+void RecordingCoordinator::NoteWindowCaptureStall() noexcept {
+    window_capture_stall_episodes_.fetch_add(1, std::memory_order_relaxed);
+}
+
+uint32_t RecordingCoordinator::WindowCaptureStallEpisodes() const noexcept {
+    return window_capture_stall_episodes_.load(std::memory_order_relaxed);
+}
+
+void RecordingCoordinator::PostRecoveryProtectionLost(QString detail) {
+    // The recording itself is intact; only the crash-recovery artefact is missing.
+    // Log at error level so a support bundle carries it, then tell the user.
+    diagnostics::AppLog::error(QStringLiteral("recovery.manifest"),
+                               QStringLiteral("recovery protection unavailable: %1").arg(detail));
+    if (!on_recovery_protection_lost_)
+        return;
+    auto cb = on_recovery_protection_lost_;
+    if (QCoreApplication::instance() == nullptr) {
+        cb(detail);
+        return;
+    }
+    QMetaObject::invokeMethod(
+        QCoreApplication::instance(), [cb, detail = std::move(detail)]() { cb(detail); }, Qt::QueuedConnection);
+}
+
+diagnostics::ExclusiveEvidence
+RecordingCoordinator::ResolveWindowExclusiveEvidence(const recorder_core::CaptureTarget& target) const {
+    // Monitor capture can record exclusive fullscreen; only a window target can be
+    // rendered black by it.
+    if (target.kind != recorder_core::CaptureTarget::Kind::Window || target.native_id == 0)
+        return diagnostics::ExclusiveEvidence::None;
+    if (!window_exclusive_evidence_provider_)
+        return diagnostics::ExclusiveEvidence::None;
+    return window_exclusive_evidence_provider_(target);
+}
+
 void RecordingCoordinator::SetDiskSpaceProvider(diagnostics::IDiskSpaceProvider* provider) {
     disk_space_provider_ = provider;
 }
@@ -792,6 +837,10 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     ctx.output_target_context =
         has_output_target_context_ ? output_target_context_ : BuildFilenameContextFromTarget(target);
     ctx.has_output_target_context = true;
+    // Resolved here, on the UI thread, and carried into the snapshot: the evidence
+    // producer is UI-thread-owned (its capture hub belongs to the COM apartment
+    // that created it), so the worker must never reach for it.
+    ctx.window_exclusive_evidence = ResolveWindowExclusiveEvidence(target);
 
     // Preparing is now a real, drawn state: the UI thread posts it and returns to
     // the event loop immediately (repaint shows "Preparing…"), then the worker does
@@ -825,9 +874,18 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
         if (webcam_started_by_us) {
             webcam_service_.Stop();
         }
-        if (recovery_manifest_store_ != nullptr && !current_manifest_id_.isEmpty()) {
-            recovery_manifest_store_->Remove(current_manifest_id_);
-            current_manifest_id_.clear();
+        const QString cancelled_manifest_id = TakeCurrentManifestId();
+        if (recovery_manifest_store_ != nullptr && !cancelled_manifest_id.isEmpty()) {
+            // A failed removal is not a loss of protection — it leaves a stale entry
+            // that the next launch offers as recoverable for a recording that never
+            // happened. Log it; the recovery overlay's own scan is where the user
+            // sees the consequence.
+            if (!recovery_manifest_store_->Remove(cancelled_manifest_id)) {
+                diagnostics::AppLog::warning(
+                    QStringLiteral("recovery.manifest"),
+                    QStringLiteral("could not remove the manifest entry for a cancelled start; it will be offered "
+                                   "as recoverable at the next launch"));
+            }
         }
         prepare_in_flight_.store(false);
         diagnostics::AppLog::info(QStringLiteral("record"), QStringLiteral("start cancelled during preparation"));
@@ -950,11 +1008,21 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
     // the snapshot stash so the report for this recording cannot inherit the last
     // one's counters.
     recording_session_id_ = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    // Publish the id as a structured event so the recording is addressable in the
+    // event stream, not only in the session report written at the end. Without
+    // this, `events.recent?recordingSessionId=...` could never match anything and
+    // a failed recording -- the case where the report may never be written --
+    // would leave nothing to correlate its events by.
+    diagnostics::logEvent(diagnostics::LogSeverity::Info, "record", "record.sessionStarted",
+                          {{"recordingSessionId", recording_session_id_.toStdString()}});
     {
         std::lock_guard<std::mutex> lock(diagnostics_guard_mutex_);
         has_last_snapshot_ = false;
         last_snapshot_ = recorder_core::RecordingDiagnosticsSnapshot{};
     }
+    // Same reasoning for the capture-stall count (QCR-804): the report for this
+    // recording must not inherit the previous one's episodes.
+    window_capture_stall_episodes_.store(0, std::memory_order_relaxed);
 
     auto config = exosnap::capability::ToRecorderCoreConfig(ctx.resolved_user_config, ctx.caps);
     config.cq = ctx.video_settings.cq;
@@ -1004,7 +1072,8 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
     // display as it is now — the user may have toggled HDR since launch. The refresh
     // mutates the member caps_.runtime.displays; during Preparing RevalidateCapabilities
     // early-returns, so no UI-thread reader competes for it.
-    if (const capability::DisplayHdrFacts* facts = FindTargetDisplayFacts(target, RefreshedDisplayFacts())) {
+    const capability::DisplayHdrFacts* target_display_facts = FindTargetDisplayFacts(target, RefreshedDisplayFacts());
+    if (const capability::DisplayHdrFacts* facts = target_display_facts) {
         if (recorder_core::IsHdr10NativeEffective(config.hdr_mode, facts->hdr_active, config.video_codec)) {
             // Derive BT.2020/PQ colour metadata, pin 10-bit, and snap chroma back to
             // 4:2:0 — 4:4:4 (AYUV) is 8-bit only, so a leftover Cs444 selection would
@@ -1024,6 +1093,44 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
             }
         }
     }
+    // ── Recording admission gate (QCR-101) ────────────────────────────────────
+    // Spec: "Recording start is blocked while any diagnostic blocker exists."
+    // Most Tier-1 blockers are already enforced independently on the way here —
+    // the disk hard stop and the output-folder probe above, and codec/container
+    // availability inside capability::Resolve(). The two that had no such path get
+    // it here, from the coordinator's own refreshed facts and resolved config, so
+    // a blocker is never mere UI decoration. See RecordingAdmission.h.
+    {
+        AdmissionFacts admission;
+        admission.hdr_mode = config.hdr_mode;
+        // Same capability annotation the diagnostics card reads, so the gate and
+        // the card can never disagree about which codec carries HDR10.
+        admission.codec_can_carry_hdr10 =
+            capability::IsSelectable(ctx.caps.QueryHdr10Native(ctx.resolved_user_config.video_codec).level);
+        admission.target_display_hdr_active = target_display_facts != nullptr && target_display_facts->hdr_active;
+        admission.window_exclusive_evidence = ctx.window_exclusive_evidence;
+
+        if (const AdmissionBlocker blocker = EvaluateRecordingAdmission(admission); blocker != AdmissionBlocker::None) {
+            const std::wstring detail = AdmissionBlockerDetail(blocker);
+            diagnostics::AppLog::error(
+                QStringLiteral("record.failure"),
+                QStringLiteral("phase=Prepare category=DiagnosticBlocker check=%1 output_path=\"%2\" detail=\"%3\"")
+                    .arg(QString::fromLatin1(AdmissionBlockerDiagnosticId(blocker)),
+                         QString::fromStdWString(output_path.wstring()), QString::fromStdWString(detail)));
+
+            PostStateChange(UiRecordingState::Failed);
+            UiRecordingResult result;
+            result.succeeded = false;
+            result.output_path = output_path.wstring();
+            result.error_phase = FormatErrorPhase(recorder_core::ErrorPhase::Prepare);
+            result.error_detail = detail;
+            FillResultFormat(result, ctx);
+            PostResult(std::move(result));
+            prepare_in_flight_.store(false);
+            return;
+        }
+    }
+
     config.output_path = output_path;
     config.split = ctx.split_settings;
 
@@ -1209,11 +1316,12 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
         segment_remux_jobs_.clear();
         pending_segment_manifest_id_.clear();
     }
+    reaped_segment_remux_failed_.store(false);
 
     // Recovery manifest entry — written before the engine starts so a hard crash
     // leaves a traceable artefact. The artefact_path is the file the engine will
     // actually write (transient .mkv.tmp for MP4 target, final .mkv for MKV target).
-    current_manifest_id_.clear();
+    SetCurrentManifestId({});
     if (recovery_manifest_store_ != nullptr) {
         const bool is_mp4 = (config.container == recorder_core::Container::Mp4);
         RecoveryManifestEntry entry;
@@ -1225,8 +1333,24 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
         entry.final_output_path = QString::fromStdWString(output_path.wstring());
         entry.started_at = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
         entry.finalized = false;
-        recovery_manifest_store_->Add(entry);
-        current_manifest_id_ = entry.id;
+        // QCR-103: adopt the id ONLY when the entry actually reached disk.
+        // current_manifest_id_ is read everywhere downstream as "this session is
+        // recovery-protected" — the cancel unwind removes it, the finalize path
+        // marks it, the stop path deletes it. Setting it after a failed write made
+        // every one of those steps operate on an entry that does not exist, and the
+        // user was told nothing.
+        //
+        // A failed write does NOT block or abort the start: the canon's blocker
+        // list is explicit and does not include it, and the recording itself is
+        // unaffected — only the crash-recovery safety net is gone. That is reported
+        // as a failure-class notification (the same treatment canon gives a failed
+        // settings write), not as a refusal to record.
+        if (recovery_manifest_store_->Add(entry)) {
+            SetCurrentManifestId(entry.id);
+        } else {
+            PostRecoveryProtectionLost(
+                QStringLiteral("could not write the recovery manifest entry for this recording"));
+        }
     }
 
     // Cancellation checkpoint 4 — immediately before the recording commits.
@@ -1536,10 +1660,13 @@ void RecordingCoordinator::OnSegmentCompleted(const recorder_core::CompletedSegm
     if (was_split_boundary && segment.succeeded && session_is_mp4_) {
         // Derive the expected MP4 output path for this segment from the transient MKV path.
         // segment.path is a .mkv.tmp (or _part-NNN.mkv.tmp) file; derive the .mp4 side.
-        // The base output path is current_output_path_ (the .mp4 path requested by the user).
-        // Use DeriveSegmentPath on the MP4 base to get the corresponding MP4 segment path.
+        // The base output path is the session's output path (the .mp4 path the user
+        // asked for). Taken through the accessor, not off the member: this runs on
+        // the mux worker thread, which the engine does not always join before
+        // Record() returns (QCR-106).
+        const std::filesystem::path session_output_path = CurrentOutputPath();
         const std::optional<std::filesystem::path> mp4_segment =
-            DeriveSegmentPathLogged(current_output_path_, segment.index, "intermediate segment remux target");
+            DeriveSegmentPathLogged(session_output_path, segment.index, "intermediate segment remux target");
 
         // Capture the manifest ID for this segment before mutating current_manifest_id_.
         QString this_segment_manifest_id;
@@ -1557,8 +1684,15 @@ void RecordingCoordinator::OnSegmentCompleted(const recorder_core::CompletedSegm
             this_segment_manifest_id = current_manifest_id_;
 
             // Finalize the manifest entry: the MKV is clean (engine closed it).
+            // A failed update leaves the entry at finalized=false, which recovery
+            // reads as "needs repair" — conservative, never a false success — but
+            // it is still a write that did not happen, so it is reported.
             if (recovery_manifest_store_ != nullptr && !this_segment_manifest_id.isEmpty()) {
-                recovery_manifest_store_->UpdateFinalized(this_segment_manifest_id, true);
+                if (!recovery_manifest_store_->UpdateFinalized(this_segment_manifest_id, true)) {
+                    PostRecoveryProtectionLost(
+                        QStringLiteral("could not mark segment %1 as finalized in the recovery manifest")
+                            .arg(segment.index));
+                }
             }
 
             // Create a recovery manifest entry for the NEXT segment (now recording).
@@ -1566,7 +1700,7 @@ void RecordingCoordinator::OnSegmentCompleted(const recorder_core::CompletedSegm
                 const std::optional<std::filesystem::path> next_mkv = DeriveSegmentPathLogged(
                     session_transient_mkv_, segment.index + 1, "next segment transient MKV (manifest)");
                 const std::optional<std::filesystem::path> next_final = DeriveSegmentPathLogged(
-                    current_output_path_, segment.index + 1, "next segment final MP4 (manifest)");
+                    session_output_path, segment.index + 1, "next segment final MP4 (manifest)");
                 // Only record a recovery entry when BOTH paths for the next segment were
                 // derived successfully -- a half-populated manifest entry (e.g. a valid
                 // artefact_path but an empty/stale final_output_path) would be worse than
@@ -1579,8 +1713,17 @@ void RecordingCoordinator::OnSegmentCompleted(const recorder_core::CompletedSegm
                     next_entry.final_output_path = QString::fromStdWString(next_final->wstring());
                     next_entry.started_at = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
                     next_entry.finalized = false;
-                    recovery_manifest_store_->Add(next_entry);
-                    next_segment_manifest_id = next_entry.id;
+                    // QCR-103: same invariant as at StartRecording — the next
+                    // segment's id is adopted only if its entry reached disk.
+                    // Otherwise current_manifest_id_ stays empty and the segment
+                    // simply records without a recovery entry, honestly.
+                    if (recovery_manifest_store_->Add(next_entry)) {
+                        next_segment_manifest_id = next_entry.id;
+                    } else {
+                        PostRecoveryProtectionLost(
+                            QStringLiteral("could not write the recovery manifest entry for segment %1")
+                                .arg(segment.index + 1));
+                    }
                 }
             }
 
@@ -1596,10 +1739,18 @@ void RecordingCoordinator::OnSegmentCompleted(const recorder_core::CompletedSegm
                 job->transient_mkv = segment.path;
                 job->output_mp4 = *mp4_segment;
                 job->manifest_id = this_segment_manifest_id;
-                StartSegmentRemuxThread(*job);
+                StartSegmentRemuxThread(*job,
+                                        [this, transient = job->transient_mkv, out = job->output_mp4,
+                                         id = job->manifest_id] { return RunSegmentRemuxWork(transient, out, id); });
                 segment_remux_jobs_.push_back(std::move(job));
             }
         }
+
+        // Collect the handles of segments whose remux already finished. Done after
+        // the scheduling block so the lock is not held across the joins, and here
+        // rather than at session end so a long split recording does not carry every
+        // job handle it ever created (QCR-107).
+        ReapFinishedSegmentRemuxJobs();
 
         if (mp4_segment.has_value()) {
             diagnostics::AppLog::info(
@@ -1640,8 +1791,13 @@ bool RecordingCoordinator::StartMicMeter(std::optional<std::string> device_id,
     StopMicMeter();
 
     std::string error;
+    // Deferred: every caller of this is the GUI thread reacting to a page
+    // activation or a device change, and none of them consults the endpoint
+    // verdict — the meter is preflight decoration. A failed open clears
+    // IsRunning(), which the guard above already reads, so the next call retries.
     const bool started = mic_meter_service_->Start(
-        device_id, channel_mode, [this](float rms_linear) { PostMicMeter(rms_linear); }, error);
+        device_id, channel_mode, [this](float rms_linear) { PostMicMeter(rms_linear); }, error,
+        recorder_core::MeterStartMode::Deferred);
     if (!started) {
         mic_meter_config_valid_ = false;
         mic_meter_device_id_.reset();
@@ -1677,7 +1833,8 @@ bool RecordingCoordinator::StartSysMeter() {
         return true;
     }
     std::string error;
-    return sys_meter_service_->Start(0u, [this](float rms_linear) { PostSysMeter(rms_linear); }, error);
+    return sys_meter_service_->Start(
+        0u, [this](float rms_linear) { PostSysMeter(rms_linear); }, error, recorder_core::MeterStartMode::Deferred);
 }
 
 void RecordingCoordinator::StopSysMeter() {
@@ -1701,7 +1858,9 @@ bool RecordingCoordinator::StartAppMeter(uint32_t target_pid) {
         return true;
     }
     std::string error;
-    return app_meter_service_->Start(target_pid, [this](float rms_linear) { PostAppMeter(rms_linear); }, error);
+    return app_meter_service_->Start(
+        target_pid, [this](float rms_linear) { PostAppMeter(rms_linear); }, error,
+        recorder_core::MeterStartMode::Deferred);
 }
 
 void RecordingCoordinator::StopAppMeter() {
@@ -1841,9 +2000,15 @@ void RecordingCoordinator::RecordingThreadProc(const recorder_core::RecorderConf
         if (!has_split_segments) {
             // ── Single-file MP4 path (no splits) — unchanged from the original flow ──
             const std::filesystem::path transient_mkv = recorder_core::DeriveTransientMkvPath(output_path);
-            // Mark the manifest entry as finalized before remux.
-            if (recovery_manifest_store_ != nullptr && !current_manifest_id_.isEmpty())
-                recovery_manifest_store_->UpdateFinalized(current_manifest_id_, true);
+            // Mark the manifest entry as finalized before remux. A failed write is
+            // conservative — the entry stays finalized=false and recovery repairs an
+            // already-clean artefact — but it is still a lost write, so it is logged.
+            const QString single_file_manifest_id = CurrentManifestId();
+            if (recovery_manifest_store_ != nullptr && !single_file_manifest_id.isEmpty() &&
+                !recovery_manifest_store_->UpdateFinalized(single_file_manifest_id, true)) {
+                PostRecoveryProtectionLost(
+                    QStringLiteral("could not mark this recording as finalized in the recovery manifest"));
+            }
             PostStateChange(UiRecordingState::Saving);
             SyncWebcamService(false);
             RunRemuxJob(transient_mkv, output_path, std::move(ui_result));
@@ -1866,9 +2031,15 @@ void RecordingCoordinator::RecordingThreadProc(const recorder_core::RecorderConf
                 final_seg = segments_.back();
         }
 
-        // Finalize the manifest entry for the final segment.
-        if (recovery_manifest_store_ != nullptr && !current_manifest_id_.isEmpty())
-            recovery_manifest_store_->UpdateFinalized(current_manifest_id_, true);
+        // Finalize the manifest entry for the final segment. Read once, outside the
+        // lock: the store call must not run under segment_remux_mutex_, and the id
+        // is handed to the job below in a second, atomic step.
+        const QString final_segment_manifest_id = CurrentManifestId();
+        if (recovery_manifest_store_ != nullptr && !final_segment_manifest_id.isEmpty() &&
+            !recovery_manifest_store_->UpdateFinalized(final_segment_manifest_id, true)) {
+            PostRecoveryProtectionLost(
+                QStringLiteral("could not mark the final segment as finalized in the recovery manifest"));
+        }
 
         // Schedule the final segment remux (same as intermediate segments).
         if (final_seg.succeeded && !final_seg.path.empty()) {
@@ -1876,23 +2047,29 @@ void RecordingCoordinator::RecordingThreadProc(const recorder_core::RecorderConf
                 DeriveSegmentPathLogged(output_path, final_seg.index, "final segment remux target");
             if (mp4_final.has_value()) {
                 {
+                    // Handing the id to the job and giving it up are one
+                    // transaction: a reader must never see an id that is already
+                    // owned by a running remux job.
                     std::lock_guard<std::mutex> lock(segment_remux_mutex_);
                     auto job = std::make_unique<SegmentRemuxJob>();
                     job->transient_mkv = final_seg.path;
                     job->output_mp4 = *mp4_final;
                     job->manifest_id = current_manifest_id_;
-                    StartSegmentRemuxThread(*job);
+                    StartSegmentRemuxThread(
+                        *job, [this, transient = job->transient_mkv, out = job->output_mp4, id = job->manifest_id] {
+                            return RunSegmentRemuxWork(transient, out, id);
+                        });
                     segment_remux_jobs_.push_back(std::move(job));
+                    current_manifest_id_.clear(); // now owned by the job
                 }
-                current_manifest_id_.clear(); // now owned by the job
             } else {
                 // Could not derive the final segment's MP4 target path — keep the
                 // manifest entry for recovery, same as an engine-side segment failure.
-                current_manifest_id_.clear();
+                SetCurrentManifestId({});
             }
         } else {
             // Final segment failed — keep the manifest entry for recovery.
-            current_manifest_id_.clear();
+            SetCurrentManifestId({});
         }
 
         PostStateChange(UiRecordingState::Saving);
@@ -1944,11 +2121,15 @@ void RecordingCoordinator::RecordingThreadProc(const recorder_core::RecorderConf
 
     // MKV target: engine succeeded → artefact is the final file; remove entry.
     // Engine failed → leave the entry so recovery UI can offer repair.
-    if (recovery_manifest_store_ != nullptr && !current_manifest_id_.isEmpty()) {
-        if (result.succeeded)
-            recovery_manifest_store_->Remove(current_manifest_id_);
+    const QString mkv_manifest_id = TakeCurrentManifestId();
+    if (recovery_manifest_store_ != nullptr && !mkv_manifest_id.isEmpty()) {
         // On failure the entry stays — recovery UI will surface it.
-        current_manifest_id_.clear();
+        if (result.succeeded && !recovery_manifest_store_->Remove(mkv_manifest_id)) {
+            diagnostics::AppLog::warning(
+                QStringLiteral("recovery.manifest"),
+                QStringLiteral("could not remove the manifest entry for a completed MKV recording; it will be "
+                               "offered as recoverable at the next launch"));
+        }
     }
 
     // 0.9.0 S1: for MKV recordings the output file IS the edit master.
@@ -2058,9 +2239,14 @@ void RecordingCoordinator::RunRemuxJob(const std::filesystem::path& transient_mk
                                       QStringLiteral("complete bytes=%1").arg(static_cast<qint64>(mp4_size)));
 
             // Remux complete — remove the manifest entry.
-            if (recovery_manifest_store_ != nullptr && !current_manifest_id_.isEmpty()) {
-                recovery_manifest_store_->Remove(current_manifest_id_);
-                current_manifest_id_.clear();
+            const QString remuxed_manifest_id = TakeCurrentManifestId();
+            if (recovery_manifest_store_ != nullptr && !remuxed_manifest_id.isEmpty()) {
+                if (!recovery_manifest_store_->Remove(remuxed_manifest_id)) {
+                    diagnostics::AppLog::warning(
+                        QStringLiteral("recovery.manifest"),
+                        QStringLiteral("could not remove the manifest entry for a completed MP4 remux; it will be "
+                                       "offered as recoverable at the next launch"));
+                }
             }
 
             PostResult(std::move(final_result));
@@ -2087,7 +2273,7 @@ void RecordingCoordinator::RunRemuxJob(const std::filesystem::path& transient_mk
 
             // Manifest entry stays (finalized=true was set before the remux started).
             // The recovery UI will offer re-export or keep-as-MKV at next startup.
-            current_manifest_id_.clear();
+            SetCurrentManifestId({});
 
             final_result.succeeded = false;
             final_result.output_path = transient_mkv.wstring();
@@ -2108,91 +2294,143 @@ void RecordingCoordinator::RunRemuxJob(const std::filesystem::path& transient_mk
 // MP4-SPLIT-REMUX-R1: per-segment background remux helpers
 // ---------------------------------------------------------------------------
 
-void RecordingCoordinator::StartSegmentRemuxThread(SegmentRemuxJob& job) {
-    // job must be fully initialised before this call.
-    // The thread writes job.succeeded / job.av_error_code / job.error_message
-    // and then exits; DrainSegmentRemuxJobs joins it. job.thread is a jthread
-    // (RAII joiner): if a future code path destroys the job before the drain
-    // gets to it, the destructor joins instead of terminating the process.
-    job.thread = std::jthread([this, &job](std::stop_token) {
-        const std::filesystem::path transient_mkv = job.transient_mkv;
-        const std::filesystem::path output_mp4 = job.output_mp4;
-        const QString manifest_id = job.manifest_id;
+void RecordingCoordinator::StartSegmentRemuxThread(SegmentRemuxJob& job, std::function<bool()> work) {
+    // job must be fully initialised before this call, and its address must be
+    // stable (it lives in a unique_ptr) — the thread holds a reference to it.
+    //
+    // The thread runs `work`, records the outcome and then, as its LAST action,
+    // publishes job.completed. That ordering is the whole contract: `completed`
+    // is what the reaper and the disk reserve read, and it must never be visible
+    // before job.succeeded is. job.thread is a jthread (RAII joiner) so a future
+    // code path destroying the job before the drain gets to it joins in the
+    // destructor instead of calling std::terminate.
+    job.thread = std::jthread([&job, work = std::move(work)](std::stop_token) {
+        job.succeeded = work();
+        job.completed.store(true, std::memory_order_release);
+    });
+}
 
-        diagnostics::AppLog::info(QStringLiteral("remux"),
-                                  QStringLiteral("segment start transient=\"%1\" output=\"%2\"")
-                                      .arg(QString::fromStdWString(transient_mkv.filename().wstring()),
-                                           QString::fromStdWString(output_mp4.filename().wstring())));
+bool RecordingCoordinator::RunSegmentRemuxWork(const std::filesystem::path& transient_mkv,
+                                               const std::filesystem::path& output_mp4, const QString& manifest_id) {
+    diagnostics::AppLog::info(QStringLiteral("remux"),
+                              QStringLiteral("segment start transient=\"%1\" output=\"%2\"")
+                                  .arg(QString::fromStdWString(transient_mkv.filename().wstring()),
+                                       QString::fromStdWString(output_mp4.filename().wstring())));
 
-        auto progress_cb = [this](float /*fraction*/) -> bool { return !remux_cancel_requested_.load(); };
+    auto progress_cb = [this](float /*fraction*/) -> bool { return !remux_cancel_requested_.load(); };
 
-        // Remux to a sibling ".part" temp on the segment output's own volume, then
-        // atomically rename it onto the segment path. A kill mid-remux leaves only the
-        // temp — the segment output path never holds a half-written MP4 (ADR-0014).
-        const std::filesystem::path segment_temp = MakeSiblingTempPath(output_mp4);
-        auto result = recorder_core::RemuxToProgressiveMp4(transient_mkv, segment_temp, progress_cb);
+    // Remux to a sibling ".part" temp on the segment output's own volume, then
+    // atomically rename it onto the segment path. A kill mid-remux leaves only the
+    // temp — the segment output path never holds a half-written MP4 (ADR-0014).
+    const std::filesystem::path segment_temp = MakeSiblingTempPath(output_mp4);
+    auto result = recorder_core::RemuxToProgressiveMp4(transient_mkv, segment_temp, progress_cb);
 
-        if (result.success) {
-            if (const unsigned long move_err = AtomicReplaceInPlace(segment_temp, output_mp4); move_err != 0) {
-                std::error_code cleanup_ec;
-                std::filesystem::remove(segment_temp, cleanup_ec);
-                result = recorder_core::RemuxResult::Fail(0, "Atomic move to segment output failed (Win32 error " +
-                                                                 std::to_string(move_err) + ")");
-            }
-        } else {
-            // Failed or cancelled: the segment path was never written. Drop the temp.
+    if (result.success) {
+        if (const unsigned long move_err = AtomicReplaceInPlace(segment_temp, output_mp4); move_err != 0) {
             std::error_code cleanup_ec;
             std::filesystem::remove(segment_temp, cleanup_ec);
+            result = recorder_core::RemuxResult::Fail(0, "Atomic move to segment output failed (Win32 error " +
+                                                             std::to_string(move_err) + ")");
+        }
+    } else {
+        // Failed or cancelled: the segment path was never written. Drop the temp.
+        std::error_code cleanup_ec;
+        std::filesystem::remove(segment_temp, cleanup_ec);
+    }
+
+    if (result.success) {
+        // Delete the transient MKV for this segment.
+        std::error_code ec;
+        std::filesystem::remove(transient_mkv, ec);
+        if (ec) {
+            diagnostics::AppLog::warning(QStringLiteral("remux"),
+                                         QStringLiteral("segment transient MKV removal failed: %1 path=\"%2\"")
+                                             .arg(QString::fromStdWString(ToWide(ec.message())),
+                                                  QString::fromStdWString(transient_mkv.filename().wstring())));
         }
 
-        job.succeeded = result.success;
-        job.av_error_code = result.av_error_code;
-        job.error_message = result.message;
+        std::error_code size_ec;
+        const auto mp4_size = std::filesystem::file_size(output_mp4, size_ec);
+        diagnostics::AppLog::info(QStringLiteral("remux"),
+                                  QStringLiteral("segment complete bytes=%1 output=\"%2\"")
+                                      .arg(static_cast<qint64>(size_ec ? 0 : mp4_size))
+                                      .arg(QString::fromStdWString(output_mp4.filename().wstring())));
 
-        if (result.success) {
-            // Delete the transient MKV for this segment.
-            std::error_code ec;
-            std::filesystem::remove(transient_mkv, ec);
-            if (ec) {
-                diagnostics::AppLog::warning(QStringLiteral("remux"),
-                                             QStringLiteral("segment transient MKV removal failed: %1 path=\"%2\"")
-                                                 .arg(QString::fromStdWString(ToWide(ec.message())),
-                                                      QString::fromStdWString(transient_mkv.filename().wstring())));
-            }
-
-            std::error_code size_ec;
-            const auto mp4_size = std::filesystem::file_size(output_mp4, size_ec);
+        // Remove the manifest entry on success. A failed removal leaves a stale
+        // entry that the next launch offers as recoverable for a segment that is
+        // already exported — noise, not data loss.
+        if (recovery_manifest_store_ != nullptr && !manifest_id.isEmpty() &&
+            !recovery_manifest_store_->Remove(manifest_id)) {
+            diagnostics::AppLog::warning(
+                QStringLiteral("recovery.manifest"),
+                QStringLiteral("could not remove the manifest entry for a remuxed segment; it will be offered as "
+                               "recoverable at the next launch"));
+        }
+    } else {
+        const bool cancelled = remux_cancel_requested_.load();
+        if (cancelled) {
             diagnostics::AppLog::info(QStringLiteral("remux"),
-                                      QStringLiteral("segment complete bytes=%1 output=\"%2\"")
-                                          .arg(static_cast<qint64>(size_ec ? 0 : mp4_size))
-                                          .arg(QString::fromStdWString(output_mp4.filename().wstring())));
-
-            // Remove the manifest entry on success.
-            if (recovery_manifest_store_ != nullptr && !manifest_id.isEmpty()) {
-                recovery_manifest_store_->Remove(manifest_id);
-            }
+                                      QStringLiteral("segment cancelled — transient MKV retained: \"%1\"")
+                                          .arg(QString::fromStdWString(transient_mkv.filename().wstring())));
         } else {
-            const bool cancelled = remux_cancel_requested_.load();
-            if (cancelled) {
-                diagnostics::AppLog::info(QStringLiteral("remux"),
-                                          QStringLiteral("segment cancelled — transient MKV retained: \"%1\"")
-                                              .arg(QString::fromStdWString(transient_mkv.filename().wstring())));
-            } else {
-                diagnostics::AppLog::error(
-                    QStringLiteral("remux"),
-                    QStringLiteral("segment failed av_err=%1 detail=\"%2\" — transient MKV retained: \"%3\"")
-                        .arg(result.av_error_code)
-                        .arg(QString::fromStdString(result.message),
-                             QString::fromStdWString(transient_mkv.filename().wstring())));
-            }
-            // The segment's transient MKV is retained above (it is never deleted on
-            // this path) — it is the only trustworthy artefact for this segment. The
-            // failed/cancelled remux only ever wrote to the ".part" temp (already
-            // removed above), so the segment output path was never touched: any file
-            // sitting there is left exactly as it was.
-            // Manifest entry stays; recovery UI will offer re-export.
+            diagnostics::AppLog::error(
+                QStringLiteral("remux"),
+                QStringLiteral("segment failed av_err=%1 detail=\"%2\" — transient MKV retained: \"%3\"")
+                    .arg(result.av_error_code)
+                    .arg(QString::fromStdString(result.message),
+                         QString::fromStdWString(transient_mkv.filename().wstring())));
         }
-    });
+        // The segment's transient MKV is retained above (it is never deleted on
+        // this path) — it is the only trustworthy artefact for this segment. The
+        // failed/cancelled remux only ever wrote to the ".part" temp (already
+        // removed above), so the segment output path was never touched: any file
+        // sitting there is left exactly as it was.
+        // Manifest entry stays; recovery UI will offer re-export.
+        //
+        // That retained MKV is precisely why the disk reserve must key off the
+        // completion flag and not off joinable(): it stays on disk for the whole
+        // session, and reserving against it forever would push the low-disk guard
+        // into a permanent false alarm.
+    }
+
+    return result.success;
+}
+
+void RecordingCoordinator::ReapFinishedSegmentRemuxJobs() {
+    // Opportunistic, never a barrier: only jobs that have already published
+    // `completed` are taken, so the join below returns immediately and a running
+    // remux is left alone. Called at each split boundary, which is the natural
+    // rhythm of a split session — without it, every job handle of a multi-hour
+    // recording lives until the session ends.
+    std::vector<std::unique_ptr<SegmentRemuxJob>> finished;
+    {
+        std::lock_guard<std::mutex> lock(segment_remux_mutex_);
+        auto it = std::stable_partition(segment_remux_jobs_.begin(), segment_remux_jobs_.end(),
+                                        [](const std::unique_ptr<SegmentRemuxJob>& job) {
+                                            return !job->completed.load(std::memory_order_acquire);
+                                        });
+        finished.insert(finished.end(), std::make_move_iterator(it),
+                        std::make_move_iterator(segment_remux_jobs_.end()));
+        segment_remux_jobs_.erase(it, segment_remux_jobs_.end());
+    }
+
+    // Joined outside the lock: nothing else needs to wait on segment_remux_mutex_
+    // while these already-finished threads are collected.
+    for (auto& job : finished) {
+        if (job->thread.joinable())
+            job->thread.join();
+        if (!job->succeeded) {
+            // Latch it — the end-of-session drain can no longer see this job, and a
+            // failed intermediate segment must not be reported as a clean split.
+            reaped_segment_remux_failed_.store(true);
+        }
+    }
+
+    if (!finished.empty()) {
+        diagnostics::AppLog::info(
+            QStringLiteral("remux"),
+            QStringLiteral("reaped %1 finished segment remux job(s)").arg(static_cast<qulonglong>(finished.size())));
+    }
 }
 
 bool RecordingCoordinator::DrainSegmentRemuxJobs(bool cancel) {
@@ -2206,7 +2444,9 @@ bool RecordingCoordinator::DrainSegmentRemuxJobs(bool cancel) {
         jobs = std::move(segment_remux_jobs_);
     }
 
-    bool all_succeeded = true;
+    // Jobs reaped earlier are gone from the vector but their verdict is not: a
+    // failure latched into reaped_segment_remux_failed_ still fails the session.
+    bool all_succeeded = !reaped_segment_remux_failed_.load();
     for (auto& job : jobs) {
         if (job->thread.joinable()) {
             job->thread.join();
@@ -2219,20 +2459,56 @@ bool RecordingCoordinator::DrainSegmentRemuxJobs(bool cancel) {
 }
 
 uint64_t RecordingCoordinator::PendingRemuxReserveBytes() const {
-    // Sum the on-disk sizes of all transient MKV files for jobs that are still
-    // in flight (the thread has not yet exited or cleaned up the file).
+    // Sum the on-disk sizes of the transient MKV files of jobs that are still
+    // RUNNING. joinable() is not that question — a jthread reports joinable from
+    // construction until it is joined, so a job that finished in the first minute
+    // of a two-hour session would keep its bytes in the reserve for the rest of
+    // it, and a FAILED job (whose transient MKV is deliberately retained) would do
+    // so permanently. The explicit completion flag is the only honest signal.
     std::lock_guard<std::mutex> lock(segment_remux_mutex_);
     uint64_t total = 0;
     for (const auto& job : segment_remux_jobs_) {
-        if (job->thread.joinable()) {
-            // Thread still running — include the transient MKV in the reserve.
-            std::error_code ec;
-            const auto sz = std::filesystem::file_size(job->transient_mkv, ec);
-            if (!ec)
-                total += static_cast<uint64_t>(sz);
-        }
+        if (job->completed.load(std::memory_order_acquire))
+            continue; // finished — its transient MKV is either gone or permanent
+        std::error_code ec;
+        const auto sz = std::filesystem::file_size(job->transient_mkv, ec);
+        if (!ec)
+            total += static_cast<uint64_t>(sz);
     }
     return total;
+}
+
+// ── Split-remux lifecycle test seams (QCR-107) ──────────────────────────────
+// Deliberately thin: each forwards to the production path so a test pins the
+// real lifecycle, not a parallel one.
+
+void RecordingCoordinator::ScheduleSegmentRemuxForTest(std::filesystem::path transient_mkv,
+                                                       std::filesystem::path output_mp4, QString manifest_id,
+                                                       std::function<bool()> work) {
+    std::lock_guard<std::mutex> lock(segment_remux_mutex_);
+    auto job = std::make_unique<SegmentRemuxJob>();
+    job->transient_mkv = std::move(transient_mkv);
+    job->output_mp4 = std::move(output_mp4);
+    job->manifest_id = std::move(manifest_id);
+    StartSegmentRemuxThread(*job, std::move(work));
+    segment_remux_jobs_.push_back(std::move(job));
+}
+
+size_t RecordingCoordinator::SegmentRemuxJobCountForTest() const {
+    std::lock_guard<std::mutex> lock(segment_remux_mutex_);
+    return segment_remux_jobs_.size();
+}
+
+uint64_t RecordingCoordinator::PendingRemuxReserveBytesForTest() const {
+    return PendingRemuxReserveBytes();
+}
+
+void RecordingCoordinator::ReapFinishedSegmentRemuxJobsForTest() {
+    ReapFinishedSegmentRemuxJobs();
+}
+
+bool RecordingCoordinator::DrainSegmentRemuxJobsForTest(bool cancel) {
+    return DrainSegmentRemuxJobs(cancel);
 }
 
 void RecordingCoordinator::CancelRemux() {
@@ -2278,6 +2554,23 @@ std::wstring RecordingCoordinator::ResolvedVideoCodecLabel() const {
 std::filesystem::path RecordingCoordinator::CurrentOutputPath() const {
     std::lock_guard<std::mutex> lock(output_path_mutex_);
     return current_output_path_;
+}
+
+QString RecordingCoordinator::CurrentManifestId() const {
+    std::lock_guard<std::mutex> lock(segment_remux_mutex_);
+    return current_manifest_id_;
+}
+
+void RecordingCoordinator::SetCurrentManifestId(QString id) {
+    std::lock_guard<std::mutex> lock(segment_remux_mutex_);
+    current_manifest_id_ = std::move(id);
+}
+
+QString RecordingCoordinator::TakeCurrentManifestId() {
+    std::lock_guard<std::mutex> lock(segment_remux_mutex_);
+    QString id = std::move(current_manifest_id_);
+    current_manifest_id_.clear();
+    return id;
 }
 void RecordingCoordinator::SetOutputSettings(const OutputSettingsModel& settings) {
     output_settings_ = settings;
@@ -2629,6 +2922,8 @@ void RecordingCoordinator::WriteSessionReportForResult(const UiRecordingResult& 
         inputs.snapshot = last_snapshot_;
     }
 
+    inputs.window_capture_stall_episodes = WindowCaptureStallEpisodes();
+
     const QDateTime ended = QDateTime::currentDateTime();
     inputs.ended_at = ended.toString(Qt::ISODate);
     inputs.started_at = ended.addMSecs(-static_cast<qint64>(result.elapsed_seconds * 1000.0)).toString(Qt::ISODate);
@@ -2693,6 +2988,13 @@ void RecordingCoordinator::WriteSessionReportForResult(const UiRecordingResult& 
         diagnostics::AppLog::warning(QStringLiteral("record.report"),
                                      QStringLiteral("session report not written: %1").arg(error));
     }
+    // Closes the correlated span opened at record.sessionStarted, and says
+    // whether the report exists -- a client that cannot find one then knows
+    // whether it was never written or simply has not been looked for yet.
+    diagnostics::logEvent(diagnostics::LogSeverity::Info, "record", "record.sessionEnded",
+                          {{"recordingSessionId", recording_session_id_.toStdString()},
+                           {"succeeded", result.succeeded ? "true" : "false"},
+                           {"reportWritten", error.isEmpty() ? "true" : "false"}});
 }
 
 void RecordingCoordinator::PostResult(UiRecordingResult result) {
@@ -2892,45 +3194,66 @@ void RecordingCoordinator::AddMarker(RecordingMarkerType type) {
         return;
     }
 
-    std::lock_guard<std::mutex> lock(markers_mutex_);
+    // The lock is SCOPED, and that is the whole point of this block.
+    //
+    // WriteMarkerSidecar() takes markers_mutex_ itself to snapshot the list, and
+    // markers_mutex_ is a plain std::mutex. Calling it from inside this critical
+    // section is a self-deadlock on the calling thread — which is the GUI thread,
+    // so the application hangs permanently on the FIRST marker of a recording.
+    //
+    // No test reached it: test_recording_markers.cpp says so out loud ("we can't
+    // reach real recording") and exercises the data model instead. The
+    // control-channel product journey is what finally pressed the same button a
+    // user presses, and it timed out here.
+    //
+    // The sidecar write must stay outside for a second reason as well: it is
+    // filesystem I/O, and holding a lock the stats thread also takes across a
+    // disk write puts the recording's own cadence behind it.
+    {
+        std::lock_guard<std::mutex> lock(markers_mutex_);
 
-    if (markers_.size() >= kMaxRecordingMarkers) {
-        if (!markers_limit_reported_) {
-            diagnostics::AppLog::warning(QStringLiteral("marker"),
-                                         QStringLiteral("rejected: marker limit %1 reached").arg(kMaxRecordingMarkers));
-            markers_limit_reported_ = true;
+        if (markers_.size() >= kMaxRecordingMarkers) {
+            if (!markers_limit_reported_) {
+                diagnostics::AppLog::warning(
+                    QStringLiteral("marker"),
+                    QStringLiteral("rejected: marker limit %1 reached").arg(kMaxRecordingMarkers));
+                markers_limit_reported_ = true;
+            }
+            return;
         }
-        return;
+
+        const uint64_t time_ms = last_media_time_ns_ / 1000000ULL;
+
+        RecordingMarker marker;
+        marker.time_ms = time_ms;
+        marker.type = type;
+        marker.label = RecordingMarkerTypeDefaultLabel(type);
+
+        markers_.push_back(marker);
+
+        diagnostics::AppLog::info(QStringLiteral("marker"), QStringLiteral("added id=%1 time_ms=%2 type=%3")
+                                                                .arg(markers_.size())
+                                                                .arg(time_ms)
+                                                                .arg(QLatin1String(RecordingMarkerTypeToString(type))));
     }
-
-    const uint64_t time_ms = last_media_time_ns_ / 1000000ULL;
-
-    RecordingMarker marker;
-    marker.time_ms = time_ms;
-    marker.type = type;
-    marker.label = RecordingMarkerTypeDefaultLabel(type);
-
-    markers_.push_back(marker);
-
-    diagnostics::AppLog::info(QStringLiteral("marker"), QStringLiteral("added id=%1 time_ms=%2 type=%3")
-                                                            .arg(markers_.size())
-                                                            .arg(time_ms)
-                                                            .arg(QLatin1String(RecordingMarkerTypeToString(type))));
 
     WriteMarkerSidecar();
 }
 
-const std::vector<RecordingMarker>& RecordingCoordinator::Markers() const noexcept {
+std::vector<RecordingMarker> RecordingCoordinator::Markers() const {
     std::lock_guard<std::mutex> lock(markers_mutex_);
     return markers_;
 }
 
 std::filesystem::path RecordingCoordinator::MarkerSidecarPath() const {
-    return exosnap::DeriveMarkerSidecarPath(current_output_path_);
+    return exosnap::DeriveMarkerSidecarPath(CurrentOutputPath());
 }
 
 void RecordingCoordinator::WriteMarkerSidecar() {
-    const auto sidecar_path = MarkerSidecarPath();
+    // One snapshot for both the sidecar path and the media name it records, so a
+    // path and a file name from two different sessions can never be paired.
+    const std::filesystem::path output_path = CurrentOutputPath();
+    const auto sidecar_path = exosnap::DeriveMarkerSidecarPath(output_path);
     if (sidecar_path.empty())
         return;
 
@@ -2942,7 +3265,7 @@ void RecordingCoordinator::WriteMarkerSidecar() {
 
     // Delegate to the canonical serializer (models/MarkerSidecar.h) so the edit
     // surface and the coordinator produce one identical format at one path.
-    const QString media = QString::fromStdWString(current_output_path_.filename().wstring());
+    const QString media = QString::fromStdWString(output_path.filename().wstring());
     if (!exosnap::WriteMarkerSidecar(sidecar_path, snapshot, media)) {
         diagnostics::AppLog::warning(
             QStringLiteral("marker"),

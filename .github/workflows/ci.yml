@@ -279,21 +279,15 @@ jobs:
       - name: Set up MSVC environment
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
 
-      # qtdeclarative + qtshadertools are MANDATORY, not optional extras: the
-      # shipping application (app/quick/ExoSnap/Quick, target `exosnap`) is a Qt
-      # Quick program and links Qt6::Qml/Quick/QuickControls2/QuickDialogs2/
-      # QuickTest, all shipped in the single qtdeclarative archive; qtshadertools
-      # is a separate archive Qt6QuickConfig.cmake hard-requires to be installed
-      # (qmlcachegen/shader compilation) even before this project's own
-      # find_package(... COMPONENTS Quick) runs. Without either archive,
-      # app/CMakeLists.txt's Qt probe fails and the app is silently skipped.
+      # 'quick', because the shipping application (app/quick/ExoSnap/Quick, target
+      # `exosnap`) is a Qt Quick program (ADR 0064). Under the 'base' profile
+      # app/CMakeLists.txt's Qt probe fails and the app is silently SKIPPED rather
+      # than failing the job -- see .github/actions/setup-qt for what each profile
+      # installs and why the two Quick pieces arrive by different routes.
       - name: Install Qt 6
-        uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
+        uses: ./.github/actions/setup-qt
         with:
-          version: '6.9.0'
-          arch: 'win64_msvc2022_64'
-          archives: 'qtbase qtsvg qtdeclarative qtshadertools'
-          cache: true
+          profile: quick
 
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
@@ -398,15 +392,11 @@ jobs:
       - name: Set up MSVC environment
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
 
-      # qtdeclarative + qtshadertools: see build-test-debug's Install Qt 6 step above
-      # for why the Quick frontend needs both archives.
+      # 'quick': same reason as build-test-debug's Install Qt 6 step above.
       - name: Install Qt 6
-        uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
+        uses: ./.github/actions/setup-qt
         with:
-          version: '6.9.0'
-          arch: 'win64_msvc2022_64'
-          archives: 'qtbase qtsvg qtdeclarative qtshadertools'
-          cache: true
+          profile: quick
 
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
@@ -501,20 +491,15 @@ jobs:
       - name: Set up MSVC environment
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
 
-      # qtdeclarative + qtshadertools: kept in lockstep with build-test-release's
-      # archives, which this job shares a preset/build-tree lineage with (see the
-      # comment block above). This job is the packaging gate for the Qt Quick
-      # application: install(TARGETS exosnap) plus
-      # qt_generate_deploy_qml_app_script() in app/quick/ExoSnap/Quick/CMakeLists.txt
-      # stage the QML runtime, and scripts/build-release-artifacts.ps1 fails the
-      # run if any of it is missing from the package.
+      # 'quick': this job is the packaging gate for the Qt Quick application.
+      # install(TARGETS exosnap) plus qt_generate_deploy_qml_app_script() in
+      # app/quick/ExoSnap/Quick/CMakeLists.txt stage the QML runtime, and
+      # scripts/build-release-artifacts.ps1 fails the run if any of it is missing
+      # from the package.
       - name: Install Qt 6
-        uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
+        uses: ./.github/actions/setup-qt
         with:
-          version: '6.9.0'
-          arch: 'win64_msvc2022_64'
-          archives: 'qtbase qtsvg qtdeclarative qtshadertools'
-          cache: true
+          profile: quick
 
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10

@@ -11,7 +11,10 @@ namespace {
 QImage applyChromaKey(QImage image, const auto& key) {
     if (!key.enabled || image.isNull())
         return image;
-    image = image.convertToFormat(QImage::Format_RGBA8888);
+    // convertToFormat() on a matching format still costs a full copy plus its
+    // allocation; the webcam delivery timer runs this at 30 Hz.
+    if (image.format() != QImage::Format_RGBA8888)
+        image = image.convertToFormat(QImage::Format_RGBA8888);
     const float key_red = static_cast<float>(key.red) / 255.0f;
     const float key_green = static_cast<float>(key.green) / 255.0f;
     const float key_blue = static_cast<float>(key.blue) / 255.0f;
@@ -22,6 +25,19 @@ QImage applyChromaKey(QImage image, const auto& key) {
     const float key_length_squared =
         key_chroma[0] * key_chroma[0] + key_chroma[1] * key_chroma[1] + key_chroma[2] * key_chroma[2];
     const float softness = std::max(key.softness, 0.001f);
+    // The alpha ramp is a function of the chroma distance, so the square root
+    // cannot simply be dropped — but it is only NEEDED between the two clamps.
+    // Below `tolerance` the pixel is fully keyed, at or above `tolerance +
+    // softness` it is fully opaque, and on a real key almost every pixel is in
+    // one of those two bands. Both are decided on the squared distance against
+    // the squared bounds; only the ramp itself still calls std::hypot, so the
+    // values inside it stay bit-identical to the previous implementation rather
+    // than merely close. Both bounds are non-negative (tolerance is clamped to
+    // [0,1] and softness to at least 0.001), so squaring preserves the ordering.
+    const float keyed_bound = key.tolerance;
+    const float opaque_bound = key.tolerance + softness;
+    const float keyed_bound_squared = keyed_bound * keyed_bound;
+    const float opaque_bound_squared = opaque_bound * opaque_bound;
 
     for (int y = 0; y < image.height(); ++y) {
         uchar* pixels = image.scanLine(y);
@@ -31,8 +47,17 @@ QImage applyChromaKey(QImage image, const auto& key) {
             float blue = static_cast<float>(pixels[2]) / 255.0f;
             const float cb = -0.169f * red - 0.331f * green + 0.5f * blue + 0.5f;
             const float cr = 0.5f * red - 0.419f * green - 0.081f * blue + 0.5f;
-            const float distance = std::hypot(cb - key_cb, cr - key_cr);
-            const float keyed_alpha = std::clamp((distance - key.tolerance) / softness, 0.0f, 1.0f);
+            const float delta_cb = cb - key_cb;
+            const float delta_cr = cr - key_cr;
+            const float distance_squared = delta_cb * delta_cb + delta_cr * delta_cr;
+            // The clamp is kept on the ramp branch: the squared comparison and
+            // std::hypot can disagree by an ulp exactly on a bound, and the old
+            // code guaranteed [0, 1] unconditionally.
+            const float keyed_alpha =
+                distance_squared <= keyed_bound_squared ? 0.0f
+                : distance_squared >= opaque_bound_squared
+                    ? 1.0f
+                    : std::clamp((std::hypot(delta_cb, delta_cr) - key.tolerance) / softness, 0.0f, 1.0f);
 
             if (key.spill_reduction > 0.001f && keyed_alpha > 0.001f && key_length_squared > 0.001f) {
                 const float luminance = 0.2126f * red + 0.7152f * green + 0.0722f * blue;

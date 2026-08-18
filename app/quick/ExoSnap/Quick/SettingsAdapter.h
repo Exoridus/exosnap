@@ -215,6 +215,10 @@ class SettingsAdapter : public QObject {
     Q_PROPERTY(bool updateActionEnabled READ updateActionEnabled NOTIFY updateStatusChanged FINAL)
     Q_PROPERTY(bool updateAvailable READ updateAvailable NOTIFY updateStatusChanged FINAL)
     Q_PROPERTY(bool whatsNewAvailable READ whatsNewAvailable NOTIFY updateStatusChanged FINAL)
+    // The offered release tag verbatim. Read by the card's "See what's new in
+    // vX.Y" link, which the spec requires to name the version rather than to say
+    // "What's new" about an unnamed one.
+    Q_PROPERTY(QString updateAvailableVersion READ updateAvailableVersion NOTIFY updateStatusChanged FINAL)
 
     // ---- Webcam -------------------------------------------------------------
     Q_PROPERTY(bool webcamEnabled READ webcamEnabled WRITE setWebcamEnabled NOTIFY configChanged FINAL)
@@ -429,6 +433,10 @@ class SettingsAdapter : public QObject {
     [[nodiscard]] const QString& updateActionText() const noexcept;
     [[nodiscard]] bool updateActionEnabled() const noexcept;
     [[nodiscard]] bool updateAvailable() const noexcept;
+    // The offered release tag verbatim, empty when nothing is offered. Already
+    // held for the card's copy; exposed because it is the string that becomes
+    // the updater's pinned target version.
+    [[nodiscard]] const QString& updateAvailableVersion() const noexcept;
     [[nodiscard]] bool whatsNewAvailable() const noexcept;
 
     [[nodiscard]] bool webcamEnabled() const noexcept;

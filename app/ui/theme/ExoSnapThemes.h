@@ -57,6 +57,21 @@ struct ExoAppearance {
     const char* caution;
     const char* error;
     const char* error_ink; // ink for content drawn on an `error`-filled surface
+
+    // The same three states, as READABLE TEXT.
+    //
+    // A semantic colour has two jobs that do not share a contrast bar. As a
+    // ring, a dot or a tinted ground it is a graphical object and WCAG 1.4.11
+    // asks 3:1 of it; as a word — a badge label, a severity glyph inside its
+    // own tinted card — it is text and 1.4.3 asks 4.5:1. In Dark the three
+    // values above clear both, so these repeat them. In Light they clear 3:1
+    // and land at 3.3–3.9:1 as text, which is why a separate rung exists at
+    // all: only the lightness moved, far enough to clear 4.5:1 on every
+    // surface the product draws them on — including the tinted warning/error
+    // grounds, which are the darkest of them and therefore the binding case.
+    const char* success_text;
+    const char* caution_text;
+    const char* error_text;
 };
 
 // One curated accent, resolved per appearance. Two entries rather than one
@@ -98,6 +113,11 @@ inline constexpr std::array<ExoAppearance, 2> kExoAppearances = {{
         "#E6C57C",
         "#E0786C",
         "#1A0D0B",
+        // Dark needs no separate text rung: the three above measure 5.2:1 to
+        // 11.6:1 as text on every surface, tinted grounds included.
+        "#84CBA2",
+        "#E6C57C",
+        "#E0786C",
     },
     {
         // One Light base, rebuilt rather than inherited from either of the two
@@ -138,6 +158,13 @@ inline constexpr std::array<ExoAppearance, 2> kExoAppearances = {{
         "#A7761A",
         "#C94631",
         "#FFFFFF",
+        // The text rung. Same hue and saturation as the three above; only the
+        // lightness moved, and only as far as the binding case needs — the
+        // tinted error ground (#E2CFCF), where each of these lands at 4.5:1
+        // to 4.55:1. On the ordinary surfaces they sit at 5.5:1 to 6.7:1.
+        "#146842",
+        "#795513",
+        "#A13827",
     },
 }};
 

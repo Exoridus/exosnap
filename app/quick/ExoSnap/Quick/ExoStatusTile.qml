@@ -11,6 +11,11 @@ Rectangle {
     required property string title
     required property string value
     property string sub: ""
+    // A second qualifier line, below `sub`. Empty for the readiness tiles, which
+    // have one fact to add; the live tiles use it for the thing that is missing
+    // when the measurement above it is unavailable (why present diagnostics are
+    // off, why a remaining time cannot be estimated).
+    property string detail: ""
     property string tone: "neutral"
     property bool showOkGlyph: false
     property bool hasUsageBar: false
@@ -19,6 +24,25 @@ Rectangle {
     readonly property color toneColor: root.tone === "blocker" ? ExoTheme.error
                                      : root.tone === "notice" ? ExoTheme.warning
                                      : ExoTheme.line
+
+    // QCR-507. The tile used to say its severity with colour alone: a blocker
+    // and a notice differed by the hue of a 1 px border and a background tint,
+    // which is nothing to a user with a colour-vision deficiency and very
+    // little on a glanced-at dashboard. The glyph below is the same vocabulary
+    // the issue cards and the Diagnostics verdict band already use — ✕ for a
+    // blocker, ⚠ for a notice, ✓ for a tile that is clear — so this is one
+    // severity language across the product, not a second one.
+    readonly property int toneGlyph: root.tone === "blocker" ? ExoGlyph.Close
+                                   : root.tone === "notice" ? ExoGlyph.Warning
+                                   : root.showOkGlyph ? ExoGlyph.Check
+                                   : ExoGlyph.Invalid
+    readonly property color toneGlyphColor: root.tone === "blocker" ? ExoTheme.errorText
+                                          : root.tone === "notice" ? ExoTheme.warningText
+                                          : ExoTheme.successText
+    // Said in words for a screen reader, which cannot see either cue.
+    readonly property string severityText: root.tone === "blocker" ? qsTr("Blocked")
+                                         : root.tone === "notice" ? qsTr("Caution")
+                                         : root.showOkGlyph ? qsTr("Ready") : ""
 
     implicitHeight: column.implicitHeight + 2 * ExoTheme.spacingLg
     implicitWidth: 210
@@ -30,7 +54,10 @@ Rectangle {
     radius: ExoTheme.radiusLg
 
     Accessible.role: Accessible.StaticText
-    Accessible.name: root.title + ": " + root.value + " " + root.sub
+    readonly property string spokenBody: root.detail === ""
+                                       ? root.title + ": " + root.value + " " + root.sub
+                                       : root.title + ": " + root.value + " " + root.sub + ". " + root.detail
+    Accessible.name: root.severityText === "" ? root.spokenBody : root.severityText + ". " + root.spokenBody
 
     ColumnLayout {
         id: column
@@ -63,9 +90,9 @@ Rectangle {
             }
 
             ExoGlyph {
-                kind: ExoGlyph.Check
-                visible: root.showOkGlyph
-                color: ExoTheme.success
+                kind: root.toneGlyph
+                visible: root.toneGlyph !== ExoGlyph.Invalid
+                color: root.toneGlyphColor
                 Layout.preferredWidth: 14
                 Layout.preferredHeight: 14
             }
@@ -105,6 +132,22 @@ Rectangle {
             Layout.fillWidth: true
             // A one-line floor: a wrapping sub-line must never clip the tile's own
             // height the way an unconstrained wordWrap label does.
+            Layout.minimumHeight: 16
+            font {
+                family: ExoTheme.sansFamily
+                pixelSize: ExoTheme.fontCaption
+            }
+        }
+
+        Label {
+            text: root.detail
+            textFormat: Text.PlainText
+            wrapMode: Text.WordWrap
+            visible: root.detail !== ""
+            color: ExoTheme.textDim
+            Layout.fillWidth: true
+            // Same one-line floor as `sub`: an unconstrained wrapping label
+            // clips its own tile at the 860 px width class.
             Layout.minimumHeight: 16
             font {
                 family: ExoTheme.sansFamily

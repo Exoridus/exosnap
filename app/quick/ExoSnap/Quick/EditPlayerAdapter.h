@@ -56,6 +56,11 @@ class EditPlayerAdapter : public QObject {
     Q_PROPERTY(bool playing READ playing NOTIFY playingChanged FINAL)
     Q_PROPERTY(bool clipOpen READ clipOpen NOTIFY clipOpenChanged FINAL)
     Q_PROPERTY(QString placeholderText READ placeholderText NOTIFY placeholderTextChanged FINAL)
+    // Is the Edit workspace the surface the user is looking at? Bound by the
+    // shell from the navigation state (QCR-001) -- the same shape
+    // RecordPreviewAdapter::surfaceVisible has, and for the same reason: the
+    // FACT is the shell's, the POLICY is here.
+    Q_PROPERTY(bool surfaceVisible READ surfaceVisible WRITE setSurfaceVisible NOTIFY surfaceVisibleChanged FINAL)
 
   public:
     explicit EditPlayerAdapter(QObject* parent = nullptr);
@@ -69,6 +74,15 @@ class EditPlayerAdapter : public QObject {
     [[nodiscard]] bool playing() const noexcept;
     [[nodiscard]] bool clipOpen() const noexcept;
     [[nodiscard]] const QString& placeholderText() const noexcept;
+    [[nodiscard]] bool surfaceVisible() const noexcept;
+
+    // The workspace left the screen, or came back. Leaving PAUSES: video and
+    // audio out of a surface the user is not looking at is both surprising on
+    // another page and decoder work nobody asked for. It does NOT seek, does not
+    // close the clip and does not end the session -- the position stands, and
+    // coming back leaves the preview paused where it was. Resuming is the user's
+    // own action, so there is deliberately nothing to do when this turns true.
+    void setSurfaceVisible(bool visible);
 
     Q_INVOKABLE void togglePlay();
     Q_INVOKABLE void setPlaying(bool playing);
@@ -77,10 +91,17 @@ class EditPlayerAdapter : public QObject {
     Q_INVOKABLE void beginScrub();
     Q_INVOKABLE void endScrub();
 
+    // Test seam. Puts the adapter in the state a successfully opened clip leaves
+    // it in, without a file, a decoder or a worker round trip -- the worker
+    // refuses every call while it holds no session, so nothing downstream runs.
+    // Named like EditSessionAdapter::setKeyframeTimestampsForTest.
+    void setClipStateForTest(bool clip_open, qint64 duration_ms);
+
   signals:
     void playingChanged();
     void clipOpenChanged();
     void placeholderTextChanged();
+    void surfaceVisibleChanged();
 
   private:
     void openClip(const QString& master_path, qint64 duration_ms);
@@ -99,6 +120,9 @@ class EditPlayerAdapter : public QObject {
     bool playing_ = false;
     bool clip_open_ = false;
     bool resume_after_scrub_ = false;
+    // True until the shell says otherwise: a session that is handed a clip is
+    // handed it on Record, which is the page the workspace is visible on.
+    bool surface_visible_ = true;
 };
 
 } // namespace exosnap::quick

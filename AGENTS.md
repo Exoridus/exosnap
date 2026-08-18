@@ -1,271 +1,164 @@
-# AGENTS.md
+# ExoSnap agent instructions
 
-## Project intent
+## Project
 
-Build a Windows-native, diagnostics-first recording application MVP with a high-performance C++ engine and a Qt 6 + Qt Quick/QML user interface.
+ExoSnap is a Windows-native recording application: a high-performance C++ engine
+with a Qt 6 / Qt Quick user interface (ADR 0064). `Qt6::Widgets` remains linked
+for `QSystemTrayIcon` alone, and the separate updater executable keeps its own
+Widgets UI; neither is a second frontend.
 
-The main frontend is Qt Quick (ADR 0064). `Qt6::Widgets` remains linked for
-`QSystemTrayIcon` alone, and the separate updater executable keeps its own
-Widgets UI; neither is a second frontend. Business and product policy stays in
-C++ — QML owns presentation, layout and interaction only.
+Business and product policy stays in C++. QML owns presentation, layout and
+interaction only.
 
-## Canonical product decisions
+## Product behavior
 
-Product decisions (defaults, navigation, audio/video model, container/codec rules) are **not
-duplicated here** to avoid the two drifting apart. `CLAUDE.md` and `docs/product-spec.md` are the
-single authoritative source for user-visible product behavior — read them before any change that
-could be visible to a user. This file only adds constraints on *how* agents implement that
-behavior, not *what* the behavior is:
+`docs/product-spec.md` is authoritative for user-visible product behavior. Read
+it before changing behavior, defaults, navigation, terminology, UX, or product
+policy, and update it in the same change when that behavior moves. Do not
+duplicate product decisions into this file.
 
-- UI must not duplicate track resolution logic. It submits editable source rows; the engine
-  returns resolved tracks.
-- When switching containers, the selected audio codec must be reconciled to a valid codec for the
-  new container; reconciliation is engine logic, never duplicated in the UI.
-- If a hotkey starts recording while the app window is visible, activate the Record view. If
-  minimized, do not restore the window.
+## Working context
 
-## Architectural rules
+Inspect the code and tests relevant to the task first. Do not read large
+repository documents by default.
 
-- Keep the recording engine independent from UI concerns.
-- Keep capture, encode, mux, diagnostics, telemetry, and UI responsibilities separate.
-- Use structured data models rather than ad hoc UI-bound state.
-- Prefer explicit state machines for recording session lifecycle.
-- Every live metric must have:
-  - source
-  - meaning
-  - update cadence
-  - UI consumer
-  - log consumer
-- Prefer isolated capability probes before production integration.
-- Do not optimize speculatively; add profiling hooks and measure.
+`.workspace/` is private working context, not repository authority. Plans,
+research, reviews, live-verify evidence and release artifacts belong there.
+Agents may consult it when relevant, but it is never a source of truth and must
+never be referenced from committed source or public documentation. If a decision
+becomes a durable contract, promote the conclusion into `docs/` instead.
 
-## Documentation rules
+## Architecture
 
-- Update specs when product behavior changes.
-- Add an ADR for any cross-cutting architectural decision.
-- Each milestone must end with:
-  - implementation notes
-  - tests
-  - doc updates
-  - explicit unresolved issues, if any
+- Keep the recording engine independent from UI concerns, and capture, encode,
+  mux, diagnostics, telemetry and UI separate from each other.
+- The UI submits editable source rows; the engine returns resolved tracks. Track
+  resolution is never duplicated in the UI.
+- Switching containers reconciles the selected audio codec to one the new
+  container allows. That reconciliation is engine logic.
+- A hotkey that starts recording while the window is visible activates the Record
+  view; while minimized it does not restore the window.
+- Prefer explicit state machines for the recording session lifecycle, and
+  structured models over ad hoc UI-bound state.
+- Every live metric has a source, a meaning, an update cadence, a UI consumer and
+  a log consumer.
+- Probe a capability in isolation before integrating it. Do not optimize
+  speculatively; add profiling hooks and measure.
 
-## Agent workflow
+## Driving the running application
 
-- Opus owns architecture, product decisions, cross-cutting reviews, and final approval.
-- Sonnet implements substantial bounded features from approved specs.
-- Codex handles repo bootstrap, mechanical work, tests, refactors, build fixes, and explicit task lists.
-- No agent should silently expand MVP scope.
+The developer works on the same machine and may be doing anything else on it at
+the same moment. The failure mode this guards against is *uncoordinated* input:
+taking focus while a controller is in use breaks controller-input recognition,
+and moving the OS cursor while the developer is moving it causes mis-clicks.
 
-## Fast Iteration Policy
+- Never synthesize mouse or keyboard input, and never take window focus, without
+  asking in the same turn and being told the developer is not using the machine
+  right now. An earlier "go ahead" does not carry forward.
+- UAC and Secure Desktop prompts cannot be scripted at all. Describe what the
+  prompt will ask and what each answer does, then wait — the developer cannot
+  have another window open while answering one.
+- Physical and system-level changes (HDR, refresh rate, unplugging an endpoint)
+  stay the developer's own action, even inside an otherwise automated flow.
+- Prefer structural automation (UI Automation invoke patterns, accessible names)
+  over coordinate-based synthesis: it does not move the real cursor.
+- Starting the app once to confirm it does not crash is always allowed;
+  `--smoke-test` is the cheaper form of the same check.
+- Judge pixels with `--visual-test` and behavior with the adapter and QML tests
+  before reaching for a live run, and say so when nothing else can verify a
+  change. Know what a fixture cannot reach: the Edit surface's decode path needs
+  real media (`--auto-edit`).
+- The five capture-excluded overlays are structurally unobservable —
+  `WDA_EXCLUDEFROMCAPTURE` defeats screenshots, screen recording and
+  `PrintWindow`, and the harness only grabs their scene graph. How they reach the
+  desktop can only be confirmed by the developer looking at the screen. Their
+  `[overlay]` log lines exist for that reason.
+- `--auto-record` is the same class of exception as `--visual-test`: argv- or
+  environment-configured, never input synthesis. Its output goes to a scratch
+  directory (`EXOSNAP_OUTPUT_DIR`, else the system temp directory) and is never
+  committed.
 
-This policy applies to all future ExoSnap agent sessions.
+## Source hygiene
 
-### Scope
+Prefer self-explanatory code. Add comments only for non-obvious correctness,
+safety, invariants, lifecycle or ordering constraints, compatibility workarounds,
+or intentional deviations from normal practice. Explain why the obvious
+implementation would be wrong, not what the code visibly does.
 
-- Normal feature slices target 30-60 minutes.
-- Keep each slice to one subsystem.
-- Do not broaden scope without a blocking technical need.
-- Record minor P2/polish findings for consolidated review instead of fixing everything immediately.
+API documentation (Doxygen, QDoc, JSDoc) is concise and caller-facing. Document
+only behavior, contracts, constraints, important side effects, and non-obvious
+edge cases. Do not restate names, types or signatures.
 
-### Agent use
+Never put development provenance in source or API documentation: task IDs,
+commits, issues, pull requests, branches or worktrees, conversation or agent
+history, private workspace references, or machine-specific paths. Keep the
+durable technical rationale, drop how it was discovered.
 
-- Do not launch multiple Explore agents when direct repository inspection is sufficient.
-- Use at most one architecture/exploration pass for normal slices.
-- Use workers only for meaningful, clearly separated packages.
-- Run independent workers in parallel worktrees only when their file ownership is disjoint.
-- Never let workers concurrently edit high-churn files such as:
-  - `MainWindow.cpp`
-  - `RecordPage.cpp`
-  - `ConfigPage.cpp`
-  - shared stores/view models
-  - shared CMake files
+Developer-facing source documentation is English and uses ASCII punctuation;
+non-ASCII characters are allowed only when technically meaningful. The rule bans
+typographic variants (em dash, en dash, curly quotes, ellipsis), not characters
+as such: a unit, a symbol or an arrow that is the correct notation stays.
 
-### Development validation
+Repository specifics:
 
-During implementation, workers should use the smallest sufficient validation:
+- `.workspace/` is private planning context. Agents may read it; committed source
+  and public documentation must never point at it.
+- Review findings are tracked as `QCR-###`. They belong in `.workspace/`, not in a
+  source comment - keep the constraint the finding produced, drop the number.
+- Diagnostic identifiers shipped as product data (`ART-001`, `ENV-001`, ...) are
+  code, not tracker references, and are left alone.
+- `scripts/check-source-hygiene.ps1` enforces the mechanical half; `scripts/verify.ps1`
+  runs it. Its default scope is the work in front of you. The branch-wide sweep
+  (`check-source-hygiene.ps1 -All`) currently reports a backlog in older comments.
 
-1. Build only the affected target.
-2. Run focused tests for the changed subsystem.
-3. Do not run full Debug builds, full CTest, quality suite, and Release build after every worker or edit cycle.
+## Iteration
 
-Canonical principle: `Minimal validation during development; complete validation once at the final gate.`
+- A normal slice targets one subsystem and 30-60 minutes. Do not broaden scope
+  without a blocking technical need, and do not silently expand the MVP.
+- Record minor polish findings for consolidated review instead of fixing
+  everything on the way past.
+- Run parallel workers only when their file ownership is disjoint. Never let two
+  workers modify the same shared integration file.
+- While implementing, validate with the smallest sufficient check: build the
+  affected target, run the focused tests for that subsystem. Complete validation
+  happens once, at the final gate.
+- Budget roughly 5-15 targeted tests and 2-4 visual scenarios per slice. No
+  exhaustive matrix unless the feature is inherently high-risk.
 
-### Running tests
+## Running tests
 
-`scripts/run-tests.ps1` is the standard entry point for running the suite — use
-it instead of invoking `ctest` directly. It sets the required environment (a
-throwaway `EXOSNAP_CONFIG_DIR`, `QT_QPA_PLATFORM=offscreen`, `QT_PLUGIN_PATH`, Qt
-on `PATH`), writes the full log to `<BuildDir>/Testing/last-run.log`, and prints
-only a compact summary plus the exact failing gtest cases.
-
-- Whole suite: `pwsh scripts/run-tests.ps1`
-- Focused: `pwsh scripts/run-tests.ps1 -Filter <regex>` (matches test **binary**
-  names, e.g. `recorder_core.` — each CTest entry is one binary, not one gtest
-  case; gtest_main runs all cases in-process and still prints the exact failing
-  `Suite.Case`).
-- No-GPU host: `pwsh scripts/run-tests.ps1 -ExcludeLabel live` skips binaries
-  that issue real hardware queries (DXGI adapter enumeration, GPU capability
-  probes).
-- Build first: add `-Build` to do a full build before testing.
-
-### AddressSanitizer
-
-`windows-x64-asan` (MSBuild) and `windows-x64-ninja-asan` (Ninja, needs a VS
-Developer shell) build the whole tree with `/fsanitize=address`. Use them when
-chasing a crash whose stack makes no sense — a use-after-free surfaces as an
-unrelated crash somewhere else entirely, and ASan turns that into a report at
-the first invalid access with the allocation and free stacks attached.
-
-- Build + test: `cmake --preset windows-x64-asan && cmake --build --preset windows-x64-asan`,
-  then `pwsh scripts/run-tests.ps1 -BuildDir build/windows-x64-asan -Config Debug`.
-- The sanitizer runtime (`clang_rt.asan*dynamic-*.dll`) ships next to `cl.exe`
-  and is never on PATH; the build stages it beside every binary. A missing
-  'C++ AddressSanitizer' VS component fails configure with an explicit message
-  rather than at first launch with 0xC0000135.
-- `/RTC1` is stripped from the Debug flags — MSVC rejects it alongside
-  `/fsanitize=address`. ASan subsumes what it checked.
-- Expect the suite to run noticeably slower than a plain Debug run. This is a
-  diagnostic preset, not a replacement for the normal test gate.
-
-### Window-ownership and chrome auditing
-
-`exosnap.exe --hwnd-audit` reports three things about the real top-level window
-and exits 0 only when all three hold:
-
-```
-quick-hwnd-audit: child_hwnds=0
-quick-hwnd-audit: style=0x96040000 exstyle=0x00000100 caption=0 thickframe=1 border=0
-quick-hwnd-audit: nonclient_inset=0,0,0,0 native_titlebar=0
-```
-
-1. **`child_hwnds=0`** — no native child windows. Tests and `--visual-test` are
-   both blind to this: they see objects and pixels, never which WINDOW owns a
-   pixel — and a native child never lets the top-level window see a
-   `WM_NCHITTEST`, so it silently breaks drag, resize and Snap over whatever it
-   covers.
-2. **No non-client area** — the 40 px title band is the product's own, so Windows
-   must reserve nothing outside the client rect. A non-zero top inset is a native
-   caption drawn ABOVE ours, i.e. two title bars.
-3. **`WS_THICKFRAME` present** — a frameless window has no caption to offer the
-   system, so this bit is the only thing keeping the native resize drag, Aero
-   Snap and Win+Arrow alive. Qt drops it when it makes the window visible unless
-   `QuickWindowChrome` re-asserts it; nothing about the window LOOKS wrong when
-   it is missing.
-
-Run it after any work on window chrome, hit-testing or overlays. The window is
-never activated.
-
-Zero is the expected result and is the point of the Qt Quick migration: the
-preview and the editor player are scene-graph items, not child windows. The
-richer "does a child cover a region the top-level must hit-test" report belonged
-to the Widgets shell and went with it; a non-zero count is now the whole signal,
-because in a Quick build any native child at all is the regression.
-
-### Startup window geometry
-
-`exosnap.exe --window-trace` (or `EXOSNAP_WINDOW_TRACE=1`, for a launch that
-cannot take extra argv) writes one line per startup geometry milestone to the
-application log:
+`scripts/run-tests.ps1` is the entry point — it sets the throwaway
+`EXOSNAP_CONFIG_DIR`, `QT_QPA_PLATFORM=offscreen`, `QT_PLUGIN_PATH` and Qt on
+PATH, and prints a compact summary plus the exact failing gtest cases.
 
 ```
-window-trace: persisted 400,120 1280x820 maximized=0
-window-trace: resolved  400,120 1280x820 maximized=0
-window-trace: pre-show  qt=400,120 1280x820 ... native_window=400,120 1280x820 native_visible=0 ...
-window-trace: post-show qt=400,120 1280x820 ... native_window=400,120 1280x820 native_visible=1 ...
-window-trace: first-frame ...
+pwsh scripts/run-tests.ps1                        # whole suite
+pwsh scripts/run-tests.ps1 -Filter recorder_core. # one binary (not one case)
+pwsh scripts/run-tests.ps1 -ExcludeLabel live     # skip real hardware queries
 ```
 
-Each line carries both spaces at once — Qt's logical geometry and believed frame
-margins next to the native window and client rects — because the whole class of
-defect here is the two disagreeing about what a rect means.
+## Diagnostics and verification tooling
 
-The property to check is **not** "it ends up in the right place". It is that
-`pre-show` already holds the final rect while `native_visible=0`, and that
-`post-show`, `first-expose` and `first-frame` never change it. A window that
-reaches the right rect a frame late reached it visibly.
+- Harness modes and tracing (`--hwnd-audit`, `--window-trace`,
+  `EXOSNAP_PREVIEW_TRACE`, AddressSanitizer): `docs/dev/harness-and-tracing.md`.
+- The Live Verify control channel, the updater automation channel and the
+  cross-process update handoff: `docs/dev/live-verify.md` (ADR 0066, ADR 0067,
+  ADR 0068).
+- The release acceptance campaign: `docs/dev/release-verify.md`.
 
-`--window-trace` also logs the Win32 messages that decide the rect
-(`window-msg: WINDOWPOSCHANGING/NCCALCSIZE/GETMINMAXINFO/STYLECHANGED`) until the
-first frame. Those are *sent*, not posted, so they are invisible to any log
-written from Qt signals: by the time `xChanged` arrives the decision is made and
-its cause is gone.
+## Final validation
 
-Combine with `--hwnd-audit` for a run that measures all of this and exits without
-ever activating the window.
+Once, after the branch is complete: format check, `git diff --check`, full Debug
+build, full CTest, the static quality checks, and a Release build. Do not re-run
+`check-quality.ps1` after an identical configure/build/test sequence unless it
+contributes a check that cannot be invoked separately.
 
-### Preview presentation tracing
+Green automated tests and clean deterministic visual scenarios are sufficient for
+an implementation wave. Physical hardware checks and broad visual review are
+deferred to consolidated review rounds. One or two documented minor limitations
+do not block merge when the core behavior is correct.
 
-`EXOSNAP_PREVIEW_TRACE=1` writes one `preview-trace:` line per Record-preview
-presentation lifecycle transition (window expose, screen change, scene-graph
-re-initialisation):
+## Reporting
 
-```
-preview-trace: screen-changed screen=\\.\DISPLAY2 dpr=1.00 exposed=1 visible=1 loop=1 owed=1 reissued=1 publishes=412 wakeups=409 updates=410 renders=409
-```
-
-`owed=1` means a producer published a frame that no render pass has followed —
-i.e. the newest frame is sitting in the transport and the screen has not shown
-it. `reissued=1` is this transition asking for the render that frame is owed.
-The pair is the whole contract: a transition that finds `owed=0` does nothing,
-and a frame that is owed one is never left waiting for an unrelated redraw.
-
-Off by default and read once, because the point of the preview's redraw gate is
-that a quiet desktop costs nothing. It exists because the defect it was written
-for — the preview freezing when the window crosses a monitor boundary, until the
-mouse moves — is invisible to every other instrument: a screenshot cannot show
-that frames stopped arriving, and the metrics overlay reports rates rather than
-the transition that broke them.
-
-### Live Verify control channel
-
-`exosnap.exe --live-verify-control <run-id>` arms a local named-pipe control
-channel used by the release-acceptance runner (`scripts/live-verify.ps1`, ADR
-0066, usage in `docs/dev/live-verify.md`). It exposes an allowlist of read-only
-snapshots and the same transport intents the QML buttons call — never arbitrary
-object or property access.
-
-Two things worth knowing before touching it:
-
-1. **It is not a harness mode.** Unlike `--visual-test`/`--auto-record`, it does
-   not isolate the config directory, does not suppress the single-instance guard
-   and does not suppress the tray. A verification launch is a *normal* launch,
-   because that is what is being accepted. Close any running ExoSnap first, and
-   set `EXOSNAP_CONFIG_DIR`/`EXOSNAP_OUTPUT_DIR` yourself when a check needs
-   isolation.
-2. **A normal launch has no endpoint at all** — no pipe, no thread, no log line.
-   That is asserted by `live_verify.live_verify_server_tests`, not by inspection;
-   keep it that way.
-
-`preview.snapshot` reports the redraw gate's counters (`publishSignals`,
-`wakeups`, `renderPasses`, `owed`) as structured state — prefer it over parsing
-`preview-trace:` lines, which stay useful as secondary evidence.
-
-### Final validation
-
-Run once after the integrated branch is complete:
-
-- format check
-- `git diff --check`
-- full Debug build
-- focused tests if still useful
-- full CTest
-- quality/static checks once
-- Release build only at the final gate or when Release-specific behavior is in scope
-
-Do not invoke `check-quality.ps1` after already running the same complete configure/build/test sequence unless the script provides additional required checks that cannot be invoked separately. Prefer invoking only the missing static-analysis step when possible.
-
-### Test and visual budgets
-
-For a normal feature slice:
-
-- approximately 5-15 targeted new tests
-- approximately 2-4 Visual Harness scenarios
-- no exhaustive matrix unless the feature is inherently high-risk
-- no fragile physical-device or multi-step external automation
-
-### Acceptance
-
-- Green automated tests and clean deterministic visual scenarios are sufficient for implementation waves.
-- Physical hardware checks and broad visual/product review are deferred to consolidated final review rounds.
-- One or two documented minor limitations do not block merge when core behavior is correct.
-
+Keep final reports concise: what changed, what validated it, and what remains
+limited. Mention specification or ADR updates when the change required them.

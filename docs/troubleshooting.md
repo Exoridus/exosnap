@@ -11,7 +11,11 @@ The tone here mirrors the app's: calm, factual, one primary fix per problem.
 
 - **What ExoSnap shows.** The **Audio** diagnostics card flags an audio-format mismatch (for
   example, a 44.1 kHz endpoint against a 48 kHz session) and a source that stopped delivering after
-  an endpoint was unplugged.
+  an endpoint was unplugged. Losing an endpoint *during* a recording also raises a standing caution
+  while it lasts — *"Audio source went silent … Recording continues"* — so you find out while there
+  is still a recording to salvage, rather than in the post-flight report. It names how many sources
+  are affected, not which device, because that is what ExoSnap measured. The recording is never
+  stopped for you, and the notice clears by itself once every source is capturing again.
 - **What to do.** Match the output sample rate to your device (Settings → Audio), or let the
   audio-format fix reconcile it. If a device was unplugged mid-session, reselect it. Confirm the
   source rows (APP / SYS / MIC) you expected are enabled; each enabled source becomes its own track
@@ -21,9 +25,14 @@ The tone here mirrors the app's: calm, factual, one primary fix per problem.
 
 - **What ExoSnap shows.** When a **window** capture target is a legacy exclusive-fullscreen game, the
   `rec.capture.exclusive_window` check fires pre-flight (a **Blocker** once capture has demonstrably
-  produced no frames, otherwise a **Notice**). If a window switches to exclusive fullscreen *during*
-  a recording, a standing notice reports that the video is frozen until frames return — the recording
-  is not silently black.
+  produced no frames, otherwise a **Notice**). If a **fullscreen-shaped** window stops producing frames
+  *during* a recording — what a mid-session switch into exclusive fullscreen looks like — a standing
+  caution appears after 10 seconds without a new capture frame: *"Window capture appears to have
+  stalled… the captured window may be frozen."* The recording keeps running and is never stopped for
+  you; the notice clears by itself when frames return, and the session report records that it happened.
+  ExoSnap names exclusive fullscreen as the cause only when a fullscreen signal corroborates it. An
+  *ordinary* windowed target that goes quiet is **not** reported, because nothing separates it from a
+  window that simply has nothing to redraw.
 - **What to do.** Use the **"Record the monitor instead"** fix (monitor capture can record exclusive
   fullscreen; you confirm a short summary — the whole monitor is recorded and the per-application
   audio row drops to System/Microphone). Or switch the game to **borderless / windowed fullscreen**

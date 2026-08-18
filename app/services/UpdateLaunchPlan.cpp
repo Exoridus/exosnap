@@ -5,6 +5,8 @@
 
 #include "UpdateService.h"
 
+#include <control/options.h>
+
 #include <QString>
 #include <QStringList>
 
@@ -24,24 +26,58 @@ QStringList UpdaterStagingFileList() {
     };
 }
 
-QStringList BuildUpdaterArgs(const exosnap::update::UpdateState& st, const QString& install_dir, quint32 pid,
-                             const QString& current_version, bool verify_reinstall) {
-    using exosnap::update::InstallMode;
-    using exosnap::update::UpdateChannel;
-
+QStringList BuildUpdaterArgs(const QString& handoff_path, const QString& automation_run_id) {
     QStringList args;
-    args << QStringLiteral("--channel")
-         << (st.channel == UpdateChannel::Preview ? QStringLiteral("preview") : QStringLiteral("stable"));
-    args << QStringLiteral("--install-mode")
-         << (st.install_mode == InstallMode::Installed ? QStringLiteral("installed") : QStringLiteral("portable"));
-    args << QStringLiteral("--install-dir") << install_dir;
-    args << QStringLiteral("--app-pid") << QString::number(pid);
-    args << QStringLiteral("--current-version") << current_version;
-    // ADR 0055: the updater's own same-version gate. Only ever added for a run
-    // the user explicitly started with --verify-update-reinstall.
-    if (verify_reinstall)
-        args << QStringLiteral("--verify-reinstall");
+    // The whole operation, by reference. One option, one document, one version
+    // gate -- instead of seven search arguments the child had to re-resolve a
+    // release from.
+    args << QString::fromLatin1(exosnap::update_handoff::kApplyHandoffOption) << handoff_path;
+    // Only when this process is itself being driven. A normal launch passes
+    // nothing, and the updater then creates no endpoint at all. Deliberately not
+    // a handoff field: this names a control session, not a product operation.
+    if (!automation_run_id.isEmpty())
+        args << QString::fromLatin1(exosnap::control::option::kUpdaterControl) << automation_run_id;
     return args;
+}
+
+exosnap::update_handoff::UpdateHandoff BuildUpdateHandoff(const exosnap::update::UpdateState& st,
+                                                          const UpdateService::PreparedUpdate& prepared,
+                                                          const QString& install_dir, quint32 pid,
+                                                          const QString& current_version, bool verify_reinstall) {
+    exosnap::update_handoff::UpdateHandoff handoff;
+    handoff.update_transaction_id = prepared.update_transaction_id;
+    // The exact release tag the check offered, verbatim. The updater compares
+    // the signed manifest against THIS string, which is what keeps the version
+    // the user was offered, the version the What's-new payload describes and the
+    // version actually installed from ever being three different answers.
+    handoff.target_version = QString::fromStdString(st.available_version_raw);
+    handoff.current_version = current_version;
+    handoff.manifest_path = prepared.manifest_path;
+    handoff.manifest_signature_path = prepared.manifest_signature_path;
+    handoff.install_mode = st.install_mode;
+    handoff.install_dir = install_dir;
+    handoff.app_pid = pid;
+    // ADR 0055: the updater's own same-version gate. Only ever set for a run the
+    // user explicitly started with --verify-update-reinstall.
+    handoff.verify_reinstall = verify_reinstall;
+    return handoff;
+}
+
+QString HandoffRefusalReason(const exosnap::update::UpdateState& st, const UpdateService::PreparedUpdate& prepared) {
+    if (st.available_version_raw.empty())
+        return QStringLiteral("There is no offered version to hand over.");
+    if (!prepared.error.isEmpty())
+        return prepared.error;
+    if (prepared.update_transaction_id.isEmpty() || prepared.manifest_path.isEmpty() ||
+        prepared.manifest_signature_path.isEmpty())
+        return QStringLiteral("This update has not been prepared yet. Check for updates again.");
+    // Exact string equality, the same rule the updater's target gate uses. A
+    // preparation left over from a previous offer would hand the updater a
+    // transaction for a release the user did not accept.
+    if (prepared.target_version != QString::fromStdString(st.available_version_raw))
+        return QStringLiteral("The prepared update is for version %1, but %2 is on offer. Check for updates again.")
+            .arg(prepared.target_version, QString::fromStdString(st.available_version_raw));
+    return {};
 }
 
 QString ResolveUpdateCardState(bool update_available, bool is_scoop, const QString& applied_version,

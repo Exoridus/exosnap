@@ -70,6 +70,11 @@ namespace exosnap::notifications {
         return QStringLiteral("audio-source-degraded");
     case NotificationType::UpdateAvailable:
         return QStringLiteral("update-available");
+    // A standing condition like the four above: one entry per recording session,
+    // replaced in place when the same capture stalls again rather than stacking a
+    // second identical row.
+    case NotificationType::WindowCaptureStalled:
+        return QStringLiteral("window-capture-stalled");
     default:
         return QStringLiteral("evt-%1").arg(event.sequence);
     }

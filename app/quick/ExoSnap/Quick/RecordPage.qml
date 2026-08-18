@@ -9,6 +9,12 @@ Item {
 
     required property RecordViewModelAdapter recordViewModel
     required property RecordPreviewAdapter previewAdapter
+    // The shell adapter, for the two directions the source picker now has to
+    // travel: it publishes whether the picker is on screen (nothing outside this
+    // document could observe that before), and it carries the open/close request
+    // the control channel sends, so automation opens the real picker instead of
+    // bypassing the surface the way record.selectTarget does.
+    required property ShellAdapter shell
     property bool active: false
     property bool benchmarkInteractionActive: false
     property bool showMetricsOverlay: false
@@ -59,7 +65,6 @@ Item {
             dismissible: true
             visible: text.length > 0
             Layout.fillWidth: true
-            Layout.preferredHeight: visible ? implicitHeight : 0
             onDismissed: root.recordViewModel.clearNotice()
         }
 
@@ -237,8 +242,6 @@ Item {
                         }
 
                         ExoButton {
-                            id: changeSourceButton
-
                             text: qsTr("Change source")
                             // Compact, but NOT quiet. A quiet button carries no
                             // chrome at rest, and at the end of a row that is
@@ -253,7 +256,7 @@ Item {
                             compact: true
                             enabled: root.recordViewModel.canSelectSource
                             Layout.alignment: Qt.AlignVCenter
-                            onClicked: sourcePicker.open()
+                            onClicked: root.openSourcePicker()
                         }
                     }
 
@@ -290,8 +293,6 @@ Item {
                     }
 
                     ExoPreviewItem {
-                        id: previewItem
-
                         objectName: "quickPreviewItem"
                         previewAdapter: root.previewAdapter
                         normalizedSourceRect: root.recordViewModel.normalizedSourceRect
@@ -365,7 +366,10 @@ Item {
                             anchors.fill: parent
                             source: root.active && webcamOverlay.idlePreview
                                     ? root.recordViewModel.webcamFrameSource : ""
-                            sourceSize: Qt.size(320, 180)
+                            // sourceSize is not set here: the Binding below owns it
+                            // and is active from construction, so a literal would be
+                            // overwritten before the first frame and read as a
+                            // decode resolution that nothing honours.
                             cache: false
                             asynchronous: true
                             fillMode: Image.PreserveAspectCrop
@@ -389,7 +393,10 @@ Item {
                             wrapMode: Text.WordWrap
                             horizontalAlignment: Text.AlignHCenter
                             verticalAlignment: Text.AlignVCenter
-                            color: ExoTheme.warning
+                            // The theme rung, not the overlay one: this label
+                            // only ever appears in the idle preview, where the
+                            // panel behind it is `ExoTheme.surface`.
+                            color: ExoTheme.warningText
                             visible: webcamImage.status === Image.Error
                             anchors.fill: parent
                             font.family: ExoTheme.sansFamily
@@ -485,8 +492,6 @@ Item {
                     }
 
                     ExoStatusPill {
-                        id: statusChip
-
                         text: root.recordViewModel.stateText
                         tone: root.recordViewModel.stateTone
                         onSurface: true
@@ -515,6 +520,10 @@ Item {
 
                         width: Math.min(metricsFlow.childrenRect.width + 2 * ExoTheme.spacingMd, liveMetrics.maxWidth)
                         height: metricsFlow.childrenRect.height + 2 * ExoTheme.spacingSm
+                        // Near-black in BOTH appearances, like the status pill
+                        // opposite: what is behind it is the captured frame. So
+                        // the labels below take the `overlay*` ink rungs —
+                        // `ExoTheme.text` measured 1.20:1 here in Light.
                         color: Qt.rgba(0, 0, 0, 0.72)
                         radius: ExoTheme.radiusSm
                         visible: root.recordViewModel.recording || root.recordViewModel.paused
@@ -542,21 +551,21 @@ Item {
                             Label {
                                 text: qsTr("BITRATE %1").arg(root.recordViewModel.bitrateText)
                                 textFormat: Text.PlainText
-                                color: ExoTheme.text
+                                color: ExoTheme.overlayInk
                                 font.family: ExoTheme.monoFamily
                                 font.pixelSize: ExoTheme.fontEyebrow
                             }
                             Label {
                                 text: qsTr("DROP %1").arg(root.recordViewModel.droppedFramesText)
                                 textFormat: Text.PlainText
-                                color: ExoTheme.text
+                                color: ExoTheme.overlayInk
                                 font.family: ExoTheme.monoFamily
                                 font.pixelSize: ExoTheme.fontEyebrow
                             }
                             Label {
                                 text: qsTr("DRIFT %1").arg(root.recordViewModel.driftText)
                                 textFormat: Text.PlainText
-                                color: ExoTheme.text
+                                color: ExoTheme.overlayInk
                                 font.family: ExoTheme.monoFamily
                                 font.pixelSize: ExoTheme.fontEyebrow
                             }
@@ -564,34 +573,46 @@ Item {
                             Label {
                                 text: qsTr("SIZE %1").arg(root.recordViewModel.outputSizeText)
                                 textFormat: Text.PlainText
-                                color: ExoTheme.text
+                                color: ExoTheme.overlayInk
                                 font.family: ExoTheme.monoFamily
                                 font.pixelSize: ExoTheme.fontEyebrow
                             }
                         }
                     }
 
-                    PreviewMetricsOverlay {
-                        expanded: root.showMetricsOverlay
-                        frameReady: root.previewAdapter.frameReady
-                        presentationRate: root.previewAdapter.presentationRate
-                        sourceDeliveryRate: root.previewAdapter.sourceDeliveryRate
-                        frameTimeP95Ms: root.previewAdapter.frameTimeP95Ms
-                        frameTimeP99Ms: root.previewAdapter.frameTimeP99Ms
-                        accentColor: ExoTheme.accent
-                        surfaceColor: "#E6151517"
-                        textColor: ExoTheme.text
-                        secondaryTextColor: ExoTheme.textSecondary
-                        sansFamily: ExoTheme.sansFamily
-                        monoFamily: ExoTheme.monoFamily
-                        visible: root.benchmarkInteractionActive
-                        onToggled: expanded => root.showMetricsOverlay = expanded
+                    // Harness surface, so it is not built in an ordinary run.
+                    // `visible: false` was not enough: an instantiated Item
+                    // evaluates its bindings regardless, so five preview-metrics
+                    // properties stayed bound to an adapter that republishes them
+                    // four times a second — for a panel nobody can see.
+                    Loader {
+                        active: root.benchmarkInteractionActive
                         anchors {
                             fill: parent
                             topMargin: ExoTheme.spacingLg
                             rightMargin: ExoTheme.spacingLg
                             bottomMargin: ExoTheme.spacingLg
                             leftMargin: ExoTheme.spacingLg
+                        }
+
+                        sourceComponent: PreviewMetricsOverlay {
+                            expanded: root.showMetricsOverlay
+                            frameReady: root.previewAdapter.frameReady
+                            presentationRate: root.previewAdapter.presentationRate
+                            sourceDeliveryRate: root.previewAdapter.sourceDeliveryRate
+                            frameTimeP95Ms: root.previewAdapter.frameTimeP95Ms
+                            frameTimeP99Ms: root.previewAdapter.frameTimeP99Ms
+                            // Fixed-dark surface, fixed-dark ink: `surfaceColor`
+                            // is a literal near-black in both appearances, so the
+                            // three colours over it resolve against the Dark
+                            // appearance rather than the application's.
+                            accentColor: ExoTheme.overlayAccent
+                            surfaceColor: "#E6151517"
+                            textColor: ExoTheme.overlayInk
+                            secondaryTextColor: ExoTheme.overlayInkSecondary
+                            sansFamily: ExoTheme.sansFamily
+                            monoFamily: ExoTheme.monoFamily
+                            onToggled: expanded => root.showMetricsOverlay = expanded
                         }
                     }
 
@@ -613,7 +634,8 @@ Item {
                         textFormat: Text.PlainText
                         wrapMode: Text.WordWrap
                         horizontalAlignment: Text.AlignHCenter
-                        color: ExoTheme.warning
+                        // Centred on the black stage, so the fixed-dark rung.
+                        color: ExoTheme.overlayWarning
                         visible: text.length > 0 && !root.recordViewModel.regionSelectionNeeded
                         width: Math.max(0, Math.min(440, parent.width - 48))
                         anchors.centerIn: parent
@@ -626,7 +648,8 @@ Item {
 
                         width: 8
                         height: 8
-                        color: ExoTheme.warning
+                        // Also on the stage.
+                        color: ExoTheme.overlayWarning
                         radius: 4
                         visible: root.benchmarkInteractionActive
                         anchors {
@@ -658,8 +681,64 @@ Item {
         }
     }
 
-    RecordSourcePicker {
-        id: sourcePicker
-        recordViewModel: root.recordViewModel
+    // Built on first open, not at page load. A Popup constructs its contentItem
+    // the moment the Popup itself is constructed — opening it later is only a
+    // visibility change — so the whole picker, including the window list and its
+    // delegates, used to be built while the Record page was being laid out. That
+    // was a measured ~280-293 ms synchronous GUI-thread stall in all three
+    // profiler traces, and in the auto-record trace it landed at t = 20.9 s,
+    // i.e. DURING a running recording, because a targetOptionsChanged re-ran the
+    // binding. The Loader moves the whole cost behind the one gesture that needs
+    // it. Same idiom as AppShell's four overlay Loaders.
+    //
+    // Resident once loaded: the picker's own state is only the selection, which
+    // lives in the view model, but rebuilding it on every open would pay the
+    // construction cost again for no gain.
+    Loader {
+        id: sourcePickerLoader
+
+        active: false
+
+        sourceComponent: RecordSourcePicker {
+            recordViewModel: root.recordViewModel
+        }
+    }
+
+    function openSourcePicker(): void {
+        sourcePickerLoader.active = true;
+        // Loader is synchronous by default, so the item exists on the next line.
+        // Cast because Loader.item is typed QObject — without it qmllint cannot
+        // see Popup::open() and reports missing-property.
+        const picker = sourcePickerLoader.item as RecordSourcePicker;
+        if (picker)
+            picker.open();
+    }
+
+    // The counterpart, for a control-channel close. A picker that was never
+    // built is already closed, which is why this is not an error.
+    function closeSourcePicker(): void {
+        const picker = sourcePickerLoader.item as RecordSourcePicker;
+        if (picker)
+            picker.close();
+    }
+
+    // Whether the picker is on screen, published to C++. `opened` rather than
+    // `visible`: it is false for the whole exit transition, and a state the
+    // channel reports must not be true while the surface is on its way out.
+    Binding {
+        target: root.shell
+        property: "sourcePickerOpen"
+        value: sourcePickerLoader.item !== null && (sourcePickerLoader.item as RecordSourcePicker).opened
+    }
+
+    Connections {
+        target: root.shell
+
+        function onSourcePickerRequested(open: bool): void {
+            if (open)
+                root.openSourcePicker();
+            else
+                root.closeSourcePicker();
+        }
     }
 }

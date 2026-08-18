@@ -90,11 +90,44 @@ setting does not live in Diagnostics.
 **Edit / Output / Save** is a post-stop **overlay over the Record page**, not a nav item. After
 recording stops, the surface opens over Record as **one view**: player, trim timeline, a right
 rail with the details and export cards, and the post-flight report as an icon at the right end of
-its header. The overlay spans the
-client area below the real title bar, so the window can be moved and minimized and the nav tabs
-stay clickable for the whole edit session. Its backdrop is opaque, so the Record page does not
-show through. **Back** (or Escape / backdrop click, except while exporting) closes the overlay and
-returns to Record; when trim points or markers are set it asks before discarding them.
+its header. The overlay spans the client area below the real title bar, so the window keeps its
+title band and can be moved, minimized and closed for the whole edit session. Its backdrop is
+opaque, so the Record page does not show through. **Back** (or Escape / backdrop click, except
+while exporting) closes the overlay and returns to Record; when trim points or markers are set it
+asks before discarding them.
+
+**An open edit session is state of the Record destination, not a modality of the application.**
+
+- The five top-level destinations stay **available** for the whole edit session — the tabs and
+  `Ctrl+1`…`Ctrl+5` alike.
+- Navigating to Settings, Diagnostics, Logs or About **does not close the session** and asks
+  nothing. There is no unsaved-edits prompt on the navigation path; navigation is unconditional
+  everywhere in the product.
+- The workspace is **left, not ended**: it is visible on Record and only on Record. Nothing is
+  unloaded, so no page is ever swapped underneath a surface that still covers it.
+- Returning to Record shows the **same session** — the same clip, trim, markers, playhead,
+  timeline strip and export state, down to where the details rail was scrolled to.
+- Leaving Record **pauses playback** and keeps the position. Video and audio out of a surface the
+  user is not looking at is both surprising on another page and decoder work nobody asked for.
+  Coming back leaves it paused where it was; starting it again is the user's own action.
+- A **running export keeps running** across a page change. It belongs to the session, not to the
+  page, and returning to Record shows its current state. Close / Discard / Exit keep their own
+  protections; navigation is not one of them.
+- The session still ends only through **Back / Escape**, which still asks before discarding trim
+  points or markers that were set.
+- **Blocking surfaces** (recovery, crash report, recording error) do block navigation — they are
+  modal about a question the user has not answered yet. An edit session is not that.
+- The window controls are unaffected: the band remains draggable and Minimize/Maximize/Close keep
+  working.
+
+Every navigation intent answers to this one contract — a tab, a keyboard shortcut, a notification
+action, a jump from the Diagnostics page. There is no second path with different rules.
+
+> **Corrected 2026-08-16.** This paragraph previously stated the opposite — that the five tabs are
+> *disabled* while an edit session is open — on the premise that the shipped code had always
+> disabled them. That premise was false: the Widgets shell that shipped until the Qt Quick cutover
+> let the tabs navigate for the whole edit session, and the lock arrived as an unnoticed porting
+> regression. See the QCR-001 entry in the cutover backlog.
 
 ### 2.1 The encode device is not a user choice
 
@@ -233,6 +266,15 @@ card, chrome, heading and actions are fixed and only the material being read scr
 user is being asked to **decide** (a consent tick, a "remember this choice") stays visible with the
 actions rather than scrolling away with the material.
 
+**At most one of the three is on screen at any moment, and the one that is up keeps precedence.** A
+surface asked for while another is showing is **queued**, not dropped and not allowed to supersede:
+a crash prompt, a recovery offer or a failure report that vanishes mid-read takes its question with
+it, and none of them can be got back without restarting. Queued surfaces come up one at a time, in
+the order they were asked for, and each is shown once. Consequently a **recording cannot be started
+while any of them is up** — a session whose transport is behind a scrim cannot be controlled, and
+starting one would silently invalidate the offer an open recovery surface is still making. Stopping,
+pausing and resuming are never blocked: a running recording the user cannot stop is the worse state.
+
 ---
 
 ## 3. Recording defaults and profiles
@@ -285,7 +327,12 @@ beside the dropdown and shifts the toolbar. The toolbar carries a single visible
 **Save as new…**, which appears while the preset is `(changed)`. Every other action lives in a `…`
 overflow menu next to the dropdown: **Rename…** (disabled for a built-in), **Reset** (enabled only
 while `(changed)`), **Delete** (enabled whenever a user preset is selected, never for a built-in),
-**Export…**, and **Import…**. The Output page carries the same row. Switching presets applies immediately and
+**Export…**, and **Import…**. **Delete** is the one destructive action in that menu and it asks
+first: a confirmation dialog naming the preset, defaulting to Cancel, so a single click never
+destroys a saved configuration. It is deliberately a confirmation rather than an Undo — a deleted
+preset also moves the selection and re-applies the configuration that takes its place, and restoring
+all of that after the fact would mean a persisted history the product does not otherwise keep.
+The Output page carries the same row. Switching presets applies immediately and
 records a notification-hub entry offering **Undo**, which restores both the previous live
 configuration and the previous selection. No toast appears — the combo box that performed the switch
 already offers the way back.
@@ -299,6 +346,18 @@ Values are validated and sanitized before storage; invalid values are clamped ra
 silently, and a damaged store is repaired entry by entry — surviving entries are kept — instead of
 being reset wholesale. A repair that actually discards something raises a notification; a mere schema
 upgrade does not.
+
+**An application-settings file that cannot be read is never overwritten by accident.** The
+application settings (appearance, hotkeys, overlays, update channel, window placement, …) live in a
+separate `settings.ini`. Three load outcomes are distinguished: no file yet (a first run — the
+defaults are legitimate and are saved normally), a file read successfully, and **a file that exists
+but could not be read** (corrupt, locked, unreadable). In the third case the session runs on
+built-in defaults and says so once in the notification hub, and ExoSnap refuses every write it
+performs on its own behalf — window placement, startup reconciliation, one-time flags — because none
+of those is the user asking to replace their configuration. The first setting the user *does* change
+supersedes the unreadable file: it is moved aside to `settings.ini.corrupt` and a fresh file is
+written, so the old contents are still recoverable by hand. A settings write that fails is reported
+like any other failed save; it is never silent.
 
 ---
 
@@ -552,6 +611,11 @@ all rather than shown-and-inert; it appears the moment an HDR-active display is 
 disappears again if none remains. A stored `hdr_mode` is never rewritten while the row is hidden —
 it takes effect again exactly as before the moment a qualifying display returns.
 
+Detection is not a single reading taken at launch. Windows HDR is a system-wide toggle the user can
+flip at any moment, so the per-display facts are re-read on every display-configuration change, and
+the recording-admission check reads them fresh regardless — a desktop switched to HDR after ExoSnap
+started reaches the HDR handling row and the Diagnostics HDR card rather than waiting for a restart.
+
 Behavior:
 
 - On a non-HDR display the choice has no visible effect either way (the row is hidden there, per
@@ -605,13 +669,18 @@ Three capture targets:
 Cursor capture is a toggle (on by default). Single-frame capture (a "capture frame" action) is
 available during recording via an on-screen dock control and a hotkey.
 
-**Source-picker tiles hold their last image.** Each tile in the source picker shows a live thumbnail
-of its display or window, refreshed about once a second while the picker is open. When another
-application takes a source over — dragging the Snipping Tool across the desktop is the everyday case
-— Windows stops producing frames for it. The tile then **freezes on the last image it received** and
-resumes when frames come back. It never goes empty and never goes black. A tile that has *never*
-produced a frame still reports "Preview unavailable", because there is nothing to hold. Closing the
-picker releases every capture it opened.
+**The source picker is a named list, not a thumbnail grid.** "Change source" opens a modal picker
+with two sections: **Displays**, where each display is one row carrying its own
+`Region on <display>` action beside it, and **Application windows**, a scrolling list of the currently
+capturable windows. A source is identified by its name — the display's sequential "Display N" label
+(see below) or the window's title — and picking one selects it and closes the picker. The picker
+opens no capture of its own and therefore holds nothing to release.
+
+The **live** picture of the chosen source is the Record page's own preview, which the picker returns
+to. That is deliberate: a grid of live thumbnails means one capture per visible source, all running
+at once, before the user has decided what to record — and every one of them competing with the
+preview for the same sources. One live preview of the one selected source answers the same question
+for the cost of one capture.
 
 **Record preview box (content-fit).** The Record-page preview box follows the **current source's
 aspect ratio** — width-driven and vertically centered in the available space (height-clamped and
@@ -719,8 +788,12 @@ no memory access, to capture — it uses OS-level capture APIs (DXGI duplication
 Capture) only. Overlays are never auto-disabled; the user gets a global opt-out for on-screen
 overlays plus a one-time, non-blocking banner: "Anti-cheat detected — ExoSnap overlays do not inject;
 disable overlays if required by the game." The optional PresentMon-based present/tearing observation
-is an out-of-process ETW consumer, opt-in and elevation-gated, never a hard dependency; the app
-degrades gracefully when not elevated.
+is an **in-process** ETW consumer (a real-time trace session on a worker thread, ADR 0033), opt-in and
+elevation-gated, never a hard dependency; the app degrades gracefully when not elevated. Three states
+are reported and are distinguishable from each other, because "no measurement" has three different
+causes the user can act on differently: `requiresOptIn`, `requiresElevation`, and available. Turning
+the opt-in on never prompts for elevation — a settings toggle is not consent to restart the
+application.
 
 **Known target-identity boundaries.** A saved Display or Region target is remembered by a
 hardware-stable identity (the monitor's device path plus its EDID vendor/product, and its serial
@@ -792,11 +865,37 @@ falls back to its raw number rather than borrowing another display's.
   capture *can* record exclusive fullscreen.
 - **The honest rule:** to record an exclusive-fullscreen game, capture the **monitor**; to capture a
   **window** directly, run the game in borderless / windowed fullscreen. ExoSnap detects an
-  FSE window target pre-flight (`rec.capture.exclusive_window`, §11) and offers a one-confirm "Record
-  the monitor instead" fix; a window that switches to FSE mid-recording is reported (a standing
-  notice) rather than silently frozen. A game that changes the desktop resolution while recording a
-  monitor ends the recording cleanly with an explicit size-change error (the footage up to that point
-  stays valid).
+  FSE window target **pre-flight** (`rec.capture.exclusive_window`, §11): a proven-black window is a
+  Blocker and stops the start, and the check offers a one-confirm "Record the monitor instead" fix.
+  A game that changes the desktop resolution while recording a monitor ends the recording cleanly with
+  an explicit size-change error (the footage up to that point stays valid).
+
+  **A window that stops producing frames *during* a recording** — the shape a mid-session switch into
+  FSE takes — is reported as a **capture stall**, not as a diagnosed cause. What ExoSnap measures is the
+  absence of frame progress: while a **window** capture is recording, it watches the count of frames the
+  capture backend actually produced. If that count does not move for **10 seconds** and the window is
+  fullscreen-shaped, alive, visible and not minimized, a standing **caution** notification appears —
+  *"Window capture appears to have stalled. … The recording is still running, but the captured window may
+  be frozen."* The recording is **never** stopped automatically: the rest of it may be worth keeping and
+  the source may recover. The notice is raised **once** per stall, is cleared the moment frames resume
+  (a later independent stall raises a new one), and a session that had one records
+  `window_capture_stall` in its session report.
+
+  Only the stall is claimed. Exclusive fullscreen is named only when a fullscreen signal (the Shell's
+  QUNS state or a PresentMon `ExclusiveFullscreen` observation) actually corroborates it, and even then
+  as a conditional suggestion — never as *"exclusive fullscreen detected"*.
+
+  **What this does not cover:** an *ordinary* (captioned or non-monitor-filling) window that stops
+  producing frames stays silent, because mid-recording nothing distinguishes it from a window that
+  simply has nothing to redraw, and a false alarm on an idle text editor is worse than silence. A
+  minimized, hidden or virtual-desktop-cloaked window is likewise silent — it is supposed to stop.
+  Detection is also a **notice, not a repair**: the frames already lost to the stall are gone.
+
+  The trade-off runs the other way too, and is deliberate: a **fullscreen-shaped window whose content
+  is genuinely at rest** — a borderless video player left paused for ten seconds — produces no frames
+  either and raises the same caution. That is why the wording is *"appears to have stalled"* and *"may
+  be frozen"* rather than a verdict: for those ten seconds the recording really did hold one frame.
+  The notice clears itself the moment the content moves again.
 
 *(Cells requiring a real legacy-FSE title are verified live before being promised as behavior; the
 matrix above reflects the shipped detection + monitor path.)*
@@ -809,7 +908,10 @@ matrix above reflects the shipped detection + monitor path.)*
 surfaced green/amber/red with fixes. **Recording start is blocked while any diagnostic blocker
 exists** (for example: no supported NVENC encoder detected, hard-stop disk threshold reached, or an
 unresolved HDR10-vs-H.264 conflict). If no supported NVIDIA NVENC encoder is detected, recording is
-blocked with a diagnostic message rather than silently falling back.
+blocked with a diagnostic message rather than silently falling back. Blocking is a property of the
+**start path**, not of the Diagnostics page: every blocker is enforced where the recording is actually
+admitted, so a blocker holds even if the Diagnostics page was never opened. The start is refused with
+the blocker's own reason — never a generic failure.
 
 **Page composition.** The Record page is two things on one rhythm: the **Preview Surface** and the
 **transport dock**, with the shared 24 px page inset around them and 16 px between them.
@@ -1033,6 +1135,13 @@ Continued sessions produce independent recording slices (no single-file concat).
 recordings, segments finalized before an interruption remain usable; an interrupted active segment
 may not be recoverable.
 
+**When the manifest cannot be written.** The manifest is a safety net, not part of the recording, so a
+failed write never blocks a start or aborts a running recording. It is also never hidden: ExoSnap says
+so with a **"Recovery protection unavailable"** notification (amber — the recording is fine, only its
+crash-recovery entry is missing) and treats the session as unprotected from then on, rather than
+carrying on as if an entry existed. A recording made while the manifest is unwritable simply cannot be
+offered for recovery afterwards.
+
 Only entries with something to recover are offered. An artefact that is **missing** and one that is
 **empty** are both dropped from the manifest at the next scan — an interruption before the muxer
 wrote its first byte leaves a zero-byte file, and offering it would promise a recovery that cannot
@@ -1056,9 +1165,10 @@ application behind a rounded rectangle nearly the size of the window, which read
 the application was waiting on an answer to — and covered the shell's own minimize, maximize and
 close buttons, so a window with the editor open could not be closed or dragged by its own chrome.
 
-While the workspace is open the navigation tabs are **disabled** and Record stays marked as the
-current destination: the workspace owns the content area, and Back is the way out of it. Back is a
-navigation action and is drawn as one, with the shared chevron.
+While the workspace is open Record stays marked as the current destination, because the workspace
+belongs to it. The navigation tabs stay **available**: leaving Record hides the workspace without
+ending the session, and coming back shows the same one (§2). Back is the way out of the session
+itself, and it is a navigation action drawn as one, with the shared chevron.
 
 **Header.** One line: `‹ Back`, the title, the clip's file name, and the post-flight **report
 status** at the right end. The file name is the only element allowed to give up room and elides in
@@ -1111,6 +1221,12 @@ or duration readout above the strip:
   can hold has landed — no spinner, and no placeholder/skeleton tiles in the meantime. Tiles appear
   as they finish decoding; a position whose frame is
   not (yet) available leaves the row empty there rather than showing a placeholder.
+  When the clip carries **nothing decodable at all** — it cannot be opened, it has no video stream, or
+  a decode pass finished having produced no frame — the hint says **"Preview unavailable"** instead,
+  in the same quiet rung and the same place, and stays there. That is a terminal statement, not a
+  spinner: no tile is coming. The strip is the only thing affected — trim, playback, markers and
+  export all keep working on a clip whose thumbnails cannot be produced. Cancelling a run (resizing
+  the window, switching clips, closing Edit) is never treated as a failure.
 - **Trim handles.** Draggable in/out handles sit at the start and end of the timeline; the
   trimmed-away ranges are dimmed. The handles constrain each other (they can never cross), and on
   release the cut point snaps to the nearest keyframe at or before the requested time and, within
@@ -1165,6 +1281,10 @@ place for the next one; at the minimum window size they are what scrolls out of 
 interval** selector (Settings →
 Advanced → Video: 2 s default / 1 s / 0.5 s) trades a little file size for finer trim accuracy. The
 original recording is never mutated during export; not-yet-exported edits are discarded on dismiss.
+Dismissing the surface ends the edit session rather than only hiding it: the clip is closed, the
+preview decoder and the thumbnail strip's decoder are released, and the recording can be moved,
+renamed or deleted again without quitting ExoSnap. Opening Edit afterwards starts from a clean
+session.
 
 **Current boundary:** trim, markers, stream-copy export, and real decoded-frame preview (video +
 synchronized audio, FFmpeg-decode + Qt-paint) are implemented and reachable end to end, including
@@ -1190,19 +1310,36 @@ release (0.11 per ADR 0022).
   panel in the app header**. **The hub is the record: every notification lands there**, persists until
   dismissed, and keeps its action (recover, undo, show in folder, …). The **system-tray icon
   additionally shows an unread badge** for the same items. The "Show notifications" setting gates only
-  the toasts — the hub records regardless.
+  the toasts — the hub records regardless. **A hub entry carries its severity as a glyph and a word,
+  not only as a colour**: the same four severity glyphs the readiness tiles, the issue cards and the
+  inline notices use, and an accessible name that starts with the severity ("Warning. Storage running
+  low."). Colour alone would say nothing to a user who cannot separate those hues and nothing at all
+  to a screen reader.
 - **The bell's unread dot** carries urgency, not a count. It appears whenever anything is unread and
   takes its colour from the **worst** unread entry — **mint** when nothing unread is more than a
   notice, **amber** when at least one is a warning (frames dropped, a source degraded, a dead hotkey,
-  a repaired settings file, an omitted overlay, a recoverable session), **coral** when at least one is
+  a repaired settings file, a settings file that could not be read, an omitted overlay, a recoverable
+  session, a recording without crash-recovery
+  protection), **coral** when at least one is
   a failure (unexpected stop, low storage stopping a recording, a failed settings write, a rejected
   capture action). The exact number is deliberately not shown in the title bar: it is never the thing
   you act on, and the hub states it in full one click away.
 - **Toast notifications** — a transient glance at the hub, anchored bottom-right **of the screen
-  hosting the ExoSnap window**. A notification is **timed** when it reports something that already
-  finished (saved, update available, frames dropped, settings repaired, a hotkey unavailable at
-  startup, a settings save failure) and **standing** when it reports a condition that still holds
-  (low storage, unexpected stop, recovery available). At most
+  hosting the ExoSnap window**. A notification is **timed** when it reports an **event that already
+  happened** and **standing** when it reports a **condition that is true right now and will clear
+  itself** when it stops being true. Only three conditions qualify: low storage, an audio source
+  that lost its device, and a window capture that stopped producing frames — each is dismissed the
+  moment its condition ends. Everything else is an event and leaves on its own, including a
+  recording that stopped unexpectedly and an unfinalized recording offered for recovery: neither
+  will ever be cleared by anything, so standing meant *forever*, and neither loses anything by
+  going — the hub keeps every entry and the recovery surface offers itself again at startup.
+
+  Timed toasts have exactly two dwells, chosen by whether there is anything to do about them.
+  **10 s** when the card offers a way to act or reports a problem worth noticing — long enough to
+  read it, decide and reach the button, including while the user is still coming back from whatever
+  was being recorded. **5 s** when a glance is the whole interaction (a repaired setting, an omitted
+  overlay). Nothing is longer than 10 s: past that a toast reads as standing, and the reflex to
+  dismiss toasts unread is what would cost the three real standing notices their effect. At most
   one timed toast is visible — a newer one replaces it; standing toasts stack above it, never
   auto-dismiss, and always carry an explicit action out. A countdown bar appears exactly on the
   toasts that leave on their own. The card grows to fit its content: no reserved space for an absent
@@ -1243,7 +1380,33 @@ release (0.11 per ADR 0022).
     design-system values, not preferences; the Settings section configures behaviour and content
     only. Click-through is likewise not a setting — it is a correctness property of a window that
     sits over whatever the user is recording.
-- **Close-to-tray** is opt-in.
+- **Close-to-tray** is opt-in and **off by default**.
+
+**Closing the window.** Two inputs decide the outcome, and work in flight outranks the preference:
+
+| Close-to-tray | Recording, export or remux in flight | Outcome |
+|---|---|---|
+| off | no | the application closes completely |
+| off | yes | the window comes to the front and asks; confirming closes completely |
+| **on** | **yes** | **the same** — the window comes to the front and asks; confirming closes completely |
+| on | no | the window hides to the tray |
+
+The third row is the rule worth stating: a running recording is asked about **whichever way the
+preference is set**. Hiding tears nothing down, which is why it needs no warning of its own — but
+what the user asked for was to *close*, and silently turning that into "hide" left them believing a
+recording had ended when it had not. What they are answering is therefore always "close for real",
+and confirming never resolves to a hide.
+
+A finalize still in flight is the one case that blocks a full close without asking (the container is
+being written), yet still permits a hide — hiding does not end the process, so the half-written file
+the block exists to prevent cannot arise.
+
+**An approved close ends the process.** It does so explicitly rather than relying on the toolkit's
+"quit when the last window closes" behaviour, because the five capture-excluded overlays are
+top-level windows in their own right: a standing notification kept the application alive after its
+only window was gone, with the tray icon still showing and its Quit routing through a window that no
+longer existed. **Quit** in the tray menu works whether the window is visible, hidden, or already
+gone.
 
 ---
 
@@ -1269,6 +1432,45 @@ deliberately set to something else worked when they chose it, so losing it is wo
 about: it raises a notification naming the affected action, with a **Rebind** action that deep-links
 to Settings → Hotkeys, where the user can bind a working shortcut; attempting a combo already held
 elsewhere is reported inline there as a conflict.
+
+### 10.1 In-window keyboard operation
+
+Global hotkeys are one of four kinds of key handling, and only the first works while ExoSnap is not
+the focused application. The other three are in-window and are **not** rebindable:
+
+| Kind | Scope | Examples |
+|---|---|---|
+| Global hotkeys | the whole desktop | start/stop, pause/resume, capture frame, marker |
+| Window shortcuts | the ExoSnap window | `Ctrl+1`…`Ctrl+5` select Record / Settings / Diagnostics / Logs / About |
+| Surface-local keys | one page or overlay while it holds the keyboard focus | the Edit timeline's transport keys, the webcam overlay's arrows, `Escape` on a modal |
+| Text editing | a focused text field | everything else |
+
+Every shortcut ExoSnap adds inside its own window is modifier-qualified, so no shortcut can consume
+a keystroke meant for a text field. The five navigation shortcuts are inactive while a blocking
+surface (recovery, crash report, recording error, release notes) or an unanswered close prompt is
+open, for the same reason the navigation tabs are: nothing may swap the page under a surface that
+still covers it. The close prompt is named separately because it is the one case a scrim cannot
+cover on its own — the desktop notification toast is its own always-on-top window and reaches the
+same navigation intents from outside the shell. An open **edit session** is
+not one of those — the shortcuts and the tabs share one navigation contract, and under it the
+session is state of the Record destination (§2).
+
+**Every interactive control is reachable and operable with the keyboard alone.** A control that is
+semantically a button, a toggle or a selectable item appears in the tab order, shows a focus ring
+while the keyboard put it there (never after a click), and is activated by **Space** — the Windows
+convention, and Qt's own; Enter belongs to a dialog's default button and ExoSnap adds no second
+activation key of its own. A group of mutually exclusive choices (a segmented control) is one tab
+stop, with the arrow keys, Home and End moving inside it.
+
+The **Edit surface** is fully operable without a pointer. The trim timeline is a single tab stop:
+
+| Key | Effect |
+|---|---|
+| `←` / `→` | move by one second, `Shift` ten seconds, `Ctrl` a tenth of a second |
+| `Home` / `End` | jump to the clip's start / end |
+| `[` / `]` | choose whether the arrows move the playhead, the in point or the out point |
+| `I` / `O` | set the in / out point at the playhead |
+| `Space` | play / pause |
 
 ---
 
@@ -1368,13 +1570,24 @@ the toolbar and the list. The log list itself is deliberately full-width — a l
 truncating it to protect a reading measure would be the wrong trade on a tool surface.
 
 **Present / tearing / latency diagnostics.** An opt-in, elevation-gated provider (PresentMon, the
-engine behind FrameView) enriches window/game-capture diagnosis and feeds judder correlation. The
-same in-process ETW session powers a DPC/ISR-latency check that names the offending kernel driver
-behind "smooth game, stuttery/crackling recording". The app does not run elevated by default; when
+engine behind FrameView) enriches window/game-capture diagnosis and feeds judder correlation. A
+second in-process kernel trace on the same opt-in and the same elevation gate powers a
+DPC/ISR-latency check that names the offending kernel driver behind "smooth game, stuttery/crackling
+recording". It reports a peak only while it is measuring one: a trace that is stopped, refused or
+that ended by itself withdraws the reading and with it the recommendation, for the same reason the
+present figures do below. The app does not run elevated by default; when
 not elevated the toggle ("Present, tearing & latency diagnostics") is disabled with the hint "Restart
 as Administrator to enable present/tearing diagnostics", and enabling it triggers a self-relaunch
 offer (never during an active recording). The provider is never required, and the portable build
 degrades gracefully.
+
+The reported present figures always describe the **current** attribution window and nothing else.
+Starting a recording opens a window; ending it closes one, and the per-recording present, discarded
+and mode-flip totals reset rather than standing on the idle Diagnostics page describing a session
+that is over. The same rule covers the two ways a window can end without anyone asking: if the
+attributed process exits mid-recording, or the trace session itself dies, the reading goes back to
+unavailable. A stale number presented as a live one is worse than no number, because it is the only
+one a reader cannot tell apart from a measurement.
 
 ---
 
@@ -1438,7 +1651,13 @@ unimplemented behavior.
   check at all, via a separate compile-time gate (`IsUpdateCheckEnabled()`), regardless of this
   setting. Both a manual "Check now" and a toggleable automatic update check exist; a manual check
   is itself the user's explicit action and needs no separate consent step.
-- **Stable** and **Preview** channels.
+- **Stable** and **Preview** channels. The selection **takes effect immediately** — the next check
+  queries the channel now shown, not the one that was selected at launch — and it **invalidates the
+  previous channel's answer**: "Update available — <ver>" describes a feed, not the application, so
+  switching returns the card to **Unchecked** rather than carrying the other channel's verdict over.
+  Switching does **not** start a network check on its own; a check remains the user's explicit
+  action. A check already in flight when the channel changes is discarded rather than presented
+  under the new channel.
 - The client verifies the manifest against a **detached ed25519 signature** (Monocypher; shipped as
   a sibling `update-manifest.json.sig` asset, verified over the exact received manifest bytes
   before any field is parsed) plus each package's **SHA-256** hash, and **refuses downgrades**. No
@@ -1449,11 +1668,21 @@ unimplemented behavior.
   and the hidden legacy `UpdateSettingsPanel`/`AboutOverlay` compatibility shim has been removed —
   the Settings card is the **only** update state model.
 - **Version identity.** The app knows its **full release version** (e.g. `0.9.0-rc4`) everywhere:
-  runtime `kVersion`, updater `--current-version`, manifest `version`, About page, update card,
+  runtime `kVersion`, the handoff document's `currentVersion`, manifest `version`, About page, update card,
   support bundles and crash metadata. RC builds are therefore honestly older than the final of the
   same base version, and an older RC naturally discovers a newer RC on the Preview channel.
   Developer builds identify as `<base>-dev` and never impersonate a release.
-- **Update card states** (normative): **Up to date** (`✓ Up to date · <last checked>`, button
+- **The update that was offered is the update that gets installed.** Applying hands the updater a
+  single versioned handoff document naming exactly one release, plus the signed manifest that proves
+  it; the updater verifies that signature itself before reading any manifest field and installs that
+  version or nothing (ADR 0068). It never resolves a release of its own. If the offered release's
+  manifest could not be fetched, the update stays visible — a newer release that exists must not be
+  reported as "up to date" — and applying refuses with that reason instead of starting an updater
+  that cannot work.
+- **Update card states** (normative): **Unchecked** (`No update check has run yet.`, button
+  `Check for updates`; the state at launch and after a channel switch — deliberately distinct from
+  "Up to date", which would be an assertion the app has not earned) · **Up to date**
+  (`✓ Up to date · <last checked>`, button
   `Check for updates`) · **Checking** (`Checking for updates…`, action disabled; the click never
   moves the page's scroll position or steals focus out of the card) · **Available**
   (`Update available — <ver>`, button `Update to <ver>` launches the real external updater for
@@ -1478,6 +1707,51 @@ unimplemented behavior.
   `Downloading version <ver> again…` and `Reinstalling version <ver>…`) — rather than through a
   title-bar badge. It is gone after the next restart. Without the flag, the same version is never
   offered.
+- **The offered version is the installed version.** The version the card offers is handed to the
+  updater as its **pinned target**, and the updater installs **that** version or nothing at all: the
+  signed manifest must name it byte-for-byte (the same exact-string equality the verification
+  reinstall gate uses, because SemVer equality collapses foreign prerelease labels). If a newer
+  release appears in the feed between the app's check and the updater's own resolution, the run
+  stops before a single package byte is fetched, with `The offered version is no longer what the
+  channel serves` and the installation untouched; a fresh check is the way forward. Without this,
+  the offer, the "What's new" notes written for the next launch, the applied-version loop guard and
+  the build actually installed could each name a different version. The **What's new** payload is
+  bound to the same pinned target for the same reason.
+- **Manual updater start.** `exosnap-updater.exe` ships next to `exosnap.exe` and is
+  double-clickable, so starting it by hand is a real entry point — and the only way back when a
+  failed update has left the app unable to start. Started **without arguments** it opens its normal
+  window at rest and works out its own context (installed vs. portable, the install directory, and
+  the version actually on disk); it never checks, downloads or installs anything on its own. The
+  flow is *Idle → Checking → **Up to date** | **Update available** → Downloading → **Ready to
+  install** → Installing → Verifying → Launching*, with a confirmation at each bold step:
+  **Check for updates**, then **Download update**, then **Install now**. "Nothing newer" is a
+  **result** (`ExoSnap is up to date`), not a download error. A build that may not contact the feed
+  says so plainly and contacts nothing. The handoff started by the app is unchanged: it enters
+  through its arguments and still runs start-to-finish without asking, because the user already
+  confirmed in the app.
+- **A cancellation is not a failure.** Stopping a download on purpose leaves the updater in a
+  **Canceled** state — neutral card, no error tone, the stopped step back to *queued* rather than
+  marked failed, and the truth that matters spelled out: *nothing was installed and nothing was
+  changed*. It carries no failure case and offers no retry, because there is no fault to re-enter;
+  a manual run offers a fresh **Check for updates**, a handoff run offers only **Close** (its
+  confirmation was given in the app). Cancellation is only honoured where the engine actually
+  observes it — while a package is downloading. The feed check and the wait for ExoSnap to close
+  take no cancellation at all, and the install/verify/relaunch steps must not be interrupted; in
+  all of those the request is refused rather than accepted and ignored.
+- **The updater's exit code is its outcome.** `0` update applied and verified (including the case
+  where only the automatic relaunch did not open), `1` the update failed, `2` the command line could
+  not be understood, `3` a manual check found nothing newer, `4` installed and Windows must restart
+  to finish, `5` canceled, or closed before any outcome. It used to be `0` for every run that
+  reached the event loop, including a visibly failed one, so nothing that launched the updater could
+  tell the two apart — and a cancellation must not report `1`, which would send a release script
+  looking for a fault that never happened.
+- **Development feed override.** `exosnap.exe --update-base-url <https url>` points the update
+  check at a named feed instead of the production one, so a development build can exercise its own
+  check and the full app→updater handoff. It is **refused in an official build**, refused on
+  anything that is not an https URL with a host, never persisted, and the same URL is handed to the
+  updater — app and updater must resolve one feed, not two. It relaxes nothing else: the recording
+  guard, the signature verification and the package hash are unchanged, and a development build's
+  pinned key is all zeros, so no manifest from any feed can pass verification there.
 - **Shipped flow:** the update check (automatic or manual) finds a new version → an "update
   available" notification deep-links to the Settings update card → clicking **Update** opens the
   dedicated updater, a separate process that performs every step itself. Its step list (as
@@ -1556,7 +1830,8 @@ unimplemented behavior.
 - **What's new (shipped).** Release notes are surfaced from the GitHub release bodies already present
   in the `/releases` payload the update check fetches — no extra network call. One in-window overlay
   shows the notes as a single, always-expanded scrolling document (no collapse/expand), newest first;
-  bodies are Markdown, and a footer **"All releases"** link (bottom-left, with an external-link icon)
+  bodies are Markdown with their links in the accent colour, and a footer **"All releases"** link
+  (bottom-left, with an external-link icon)
   opens the releases page; a primary **Close**/**Got it** button sits bottom-right. It has two entry
   points, which differ in *which* notes they show:
   - **Pre-update:** while the Settings update card shows "Update available — vX.Y", a **"See what's

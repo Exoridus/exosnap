@@ -16,21 +16,36 @@
 
 #include <algorithm>
 #include <memory>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
 namespace exosnap::quick {
 namespace {
 
+// The single owner of one queued shared-texture HANDLE; consumers hold it via
+// shared_ptr, so the close happens exactly once, when the last reader is done.
+// Non-copyable and non-movable for the reason the shared-texture path has been
+// hardened for twice already: a copy means two owners and a double CloseHandle,
+// and because Windows recycles handle values the second close can hit an
+// unrelated object instead of failing. Handles travel as `void*` here, which is
+// exactly where an accidental by-value capture hides.
 struct QueuedSharedHandle {
     explicit QueuedSharedHandle(void* value) : handle(value) {
     }
+    QueuedSharedHandle(const QueuedSharedHandle&) = delete;
+    QueuedSharedHandle& operator=(const QueuedSharedHandle&) = delete;
     ~QueuedSharedHandle() {
         if (handle != nullptr)
             CloseHandle(static_cast<HANDLE>(handle));
     }
     void* handle = nullptr;
 };
+
+static_assert(!std::is_copy_constructible_v<QueuedSharedHandle>, "an owned HANDLE must never be copied");
+static_assert(!std::is_copy_assignable_v<QueuedSharedHandle>, "an owned HANDLE must never be copied");
+static_assert(!std::is_move_constructible_v<QueuedSharedHandle>,
+              "no consumer moves one; add a move that clears the source first");
 
 QString targetDescription(const recorder_core::CaptureTarget& target) {
     const QString description = QString::fromUtf8(target.description);
@@ -95,7 +110,38 @@ void RecordPreviewAdapter::setActive(bool active) {
         return;
     active_ = active;
     emit activeChanged();
-    if (active_)
+    applyPreviewRunState();
+}
+
+bool RecordPreviewAdapter::surfaceVisible() const noexcept {
+    return surface_visible_;
+}
+
+void RecordPreviewAdapter::setSurfaceVisible(bool visible) {
+    if (surface_visible_ == visible)
+        return;
+    surface_visible_ = visible;
+    emit surfaceVisibleChanged();
+    applyPreviewRunState();
+}
+
+void RecordPreviewAdapter::applyPreviewRunState() {
+    // While the engine owns the capture, the preview draws the recording's own
+    // WYSIWYG texture, which arrives through acceptRecordingTexture() and needs
+    // no hub subscription at all — so there is no duplication to suspend, and
+    // dropping and retaking the subscription under an outstanding lease is
+    // exactly the traffic QCR-104's gate has to defer. The gate stands still for
+    // the whole engine-fed window and is re-evaluated when the lease comes back
+    // (observeRecordingState). Read here rather than in QML because
+    // `engine_feed_expected_` is not a property and must not become one: it is
+    // written from the coordinator's release hook, on whichever thread that runs.
+    if (engine_feed_expected_.load(std::memory_order_acquire))
+        return;
+    const bool want_running = active_ && surface_visible_;
+    if (want_running == preview_running_)
+        return;
+    preview_running_ = want_running;
+    if (want_running)
         startPreview();
     else
         stopPreview();
@@ -234,6 +280,11 @@ void RecordPreviewAdapter::resetMetrics() {
     recording_encoded_packets_ = 0;
     recording_texture_generations_ = 0;
     updateMetrics();
+    // updateMetrics() only signals a real change, and a reset can leave every
+    // value where it already was while `recording_dropped_frames_` above went
+    // back to zero. The harness reads these right after resetting them, so the
+    // one place that must announce unconditionally says so here.
+    emit metricsChanged();
 }
 
 void RecordPreviewAdapter::attachPreviewItem(ExoPreviewItem* item) {
@@ -250,14 +301,19 @@ void RecordPreviewAdapter::attachPreviewItem(ExoPreviewItem* item) {
         connect(item_, &ExoPreviewItem::errorTextChanged, this, &RecordPreviewAdapter::synchronizeItemState,
                 Qt::UniqueConnection);
     }
-    if (active_)
-        startPreview();
+    // A newly attached item has no texture, so the subscription is restarted even
+    // when it was already running — hence the reset before the gate is asked.
+    preview_running_ = false;
+    applyPreviewRunState();
 }
 
 void RecordPreviewAdapter::detachPreviewItem(ExoPreviewItem* item) {
     if (item_ != item)
         return;
     stopPreview();
+    // The subscription is gone with the item, so the gate must agree — otherwise
+    // a re-attach would find `preview_running_` still true and never resubscribe.
+    preview_running_ = false;
     item_ = nullptr;
 }
 
@@ -296,7 +352,7 @@ void RecordPreviewAdapter::setPreviewTarget(const recorder_core::CaptureTarget& 
                          selected_target_->native_id != target.native_id ||
                          selected_target_->description != target.description;
     selected_target_ = target;
-    if (changed && active_ && !engine_feed_expected_.load(std::memory_order_acquire))
+    if (changed && preview_running_ && !engine_feed_expected_.load(std::memory_order_acquire))
         startPreview();
 }
 
@@ -304,7 +360,7 @@ void RecordPreviewAdapter::clearPreviewTarget() {
     if (!selected_target_.has_value())
         return;
     selected_target_.reset();
-    if (active_)
+    if (preview_running_)
         startPreview();
 }
 
@@ -321,17 +377,29 @@ void RecordPreviewAdapter::observeRecordingState(UiRecordingState state) {
             dxgi_source_->ReturnEngineLease();
         if (wgc_source_ != nullptr)
             wgc_source_->ReturnEngineLease();
+        // Losing the engine feed removes the exemption in applyPreviewRunState():
+        // a preview that was kept alive only because the recording owned the
+        // capture must now suspend if its surface is still not visible.
+        applyPreviewRunState();
     }
 }
 
 void RecordPreviewAdapter::observeRecordingStats(const recorder_core::SessionStats& stats) {
     recording_captured_frames_ = stats.video_frames_captured;
     recording_encoded_packets_ = stats.encoded_video_packets;
-    emit metricsChanged();
+    // No signal. Neither of these two counters backs a Q_PROPERTY: they are read
+    // only by benchmarkSnapshot(), which the A/B harness pulls on demand. This
+    // ran on the stats callback at ~8 Hz and invalidated every binding on
+    // presentationRate, sourceDeliveryRate, frameTimeP95Ms, frameTimeP99Ms,
+    // submitP95Us, consumedFrames, mutexMisses and recordingDroppedFrames —
+    // eight properties, none of which this function touches.
 }
 
 void RecordPreviewAdapter::observeRecordingDiagnostics(const recorder_core::RecordingDiagnosticsSnapshot& snapshot) {
-    recording_dropped_frames_ = snapshot.capture.frames_dropped_problem();
+    const qulonglong dropped = snapshot.capture.frames_dropped_problem();
+    if (recording_dropped_frames_ == dropped)
+        return;
+    recording_dropped_frames_ = dropped;
     emit metricsChanged();
 }
 
@@ -510,7 +578,7 @@ void RecordPreviewAdapter::stopPreview() {
         source_size_ = {};
         emit sourceSizeChanged();
     }
-    if (!active_)
+    if (!preview_running_)
         setStatus(QStringLiteral("Preview inactive"));
 }
 
@@ -538,6 +606,17 @@ void RecordPreviewAdapter::synchronizeItemState() {
 
 void RecordPreviewAdapter::updateMetrics() {
     const PreviewMetricsSnapshot metrics = item_ != nullptr ? item_->metricsSnapshot() : PreviewMetricsSnapshot{};
+    // Bit-equality, not an epsilon. These are percentile READINGS, not measured
+    // quantities being compared for closeness: a percentile over a sample window
+    // is either the same sample as last time or a different one, and inventing a
+    // tolerance here would silently stop reporting a real drift. `==` on doubles
+    // is exactly the right question, and the same one every other setter in this
+    // class asks of its own value.
+    const bool changed = presentation_rate_ != metrics.scene_fps ||
+                         source_delivery_rate_ != metrics.source_delivery_fps ||
+                         frame_time_p95_ms_ != metrics.scene_frame_ms_p95 ||
+                         frame_time_p99_ms_ != metrics.scene_frame_ms_p99 || submit_p95_us_ != metrics.submit_us_p95 ||
+                         consumed_frames_ != metrics.consumed_frames || mutex_misses_ != metrics.mutex_misses;
     presentation_rate_ = metrics.scene_fps;
     source_delivery_rate_ = metrics.source_delivery_fps;
     frame_time_p95_ms_ = metrics.scene_frame_ms_p95;
@@ -545,7 +624,8 @@ void RecordPreviewAdapter::updateMetrics() {
     submit_p95_us_ = metrics.submit_us_p95;
     consumed_frames_ = metrics.consumed_frames;
     mutex_misses_ = metrics.mutex_misses;
-    emit metricsChanged();
+    if (changed)
+        emit metricsChanged();
 }
 
 void RecordPreviewAdapter::setStatus(QString status) {

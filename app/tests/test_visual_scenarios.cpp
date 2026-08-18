@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include "visual_tests/RecordVisualStateNames.h"
 #include "visual_tests/VisualScenario.h"
 
 #include <QSet>
@@ -626,11 +627,26 @@ TEST(VisualScenarioTest, AudioDegradedNotificationScenarioCarriesDeterministicSt
     EXPECT_EQ(s->audio_degraded_notification_count, 1);
 }
 
+// The scenario has to name a harness state the shipping frontend actually
+// branches on. It spent a release without one: the Widgets harness read
+// `audio_degraded_notification_count` out of the struct, the Quick harness
+// switches on --record-visual-state, and when the Widgets shell was removed the
+// field lost its only consumer -- so the scenario kept its name and rendered a
+// plain recording. The constant below is the same one QuickApplication's branch
+// compares against, which is what makes the two impossible to drift apart.
+TEST(VisualScenarioTest, AudioDegradedScenarioNamesTheHarnessStateThatRendersIt) {
+    const VisualScenario* s = FindVisualScenario(QStringLiteral("record-recording-audio-degraded"));
+    ASSERT_NE(s, nullptr);
+    EXPECT_EQ(s->record_visual_state, QString::fromLatin1(record_state::kRecordingAudioDegraded));
+    EXPECT_EQ(s->record_visual_state, QStringLiteral("recording-audio-degraded"));
+}
+
 TEST(VisualScenarioTest, OtherScenarios_DoNotDriveAudioDegradedNotification) {
     for (const VisualScenario& s : VisualScenarioRegistry()) {
         if (s.id == QStringLiteral("record-recording-audio-degraded"))
             continue;
         EXPECT_EQ(s.audio_degraded_notification_count, 0) << s.id.toStdString();
+        EXPECT_TRUE(s.record_visual_state.isEmpty()) << s.id.toStdString();
     }
 }
 

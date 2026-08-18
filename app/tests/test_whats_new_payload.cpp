@@ -27,6 +27,23 @@ WhatsNewPendingPayload MakePayload(const QString& target) {
 // Round-trip
 // ---------------------------------------------------------------------------
 
+// QCR-203. LaunchUpdater treats this payload as optional — losing it costs the
+// post-update overlay and nothing else, so a failure warns and the update
+// continues. That decision is only defensible if the failure is reported at all,
+// which is what this pins: QSaveFile::commit() is the write's success, not the
+// open.
+TEST(WhatsNewPayload, WriteToAnUnwritablePathReportsFailure) {
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = PayloadPath(dir);
+    // A directory occupying the payload path: the parent exists, the file write
+    // cannot succeed.
+    ASSERT_TRUE(QDir().mkpath(path));
+
+    EXPECT_FALSE(WriteWhatsNewPayload(path, MakePayload(QStringLiteral("1.2.0"))));
+    EXPECT_FALSE(ReadWhatsNewPayload(path).has_value()) << "a failed write must leave nothing readable behind";
+}
+
 TEST(WhatsNewPayload, WriteThenReadRoundTrips) {
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
@@ -82,12 +99,13 @@ TEST(WhatsNewPayload, DeleteOnMissingFileIsNoop) {
 }
 
 // ---------------------------------------------------------------------------
-// Corrupt-payload lifecycle: MainWindow::checkAndShowWhatsNewOverlay() deletes
-// the payload file whenever ReadWhatsNewPayload() returns nullopt (corrupt JSON
-// or absent file) rather than leaving a corrupt file to be re-read (and re-fail
-// to parse) on every subsequent launch. The MainWindow startup path itself isn't
-// unit-testable headless, so this exercises the same read-then-delete sequence
-// the caller runs, directly against the pure helpers.
+// Corrupt-payload lifecycle at the level of the two primitives: a corrupt file
+// parses to nullopt and is then removed, rather than being left to be re-read
+// (and re-fail to parse) on every subsequent launch.
+//
+// The named caller this used to describe — MainWindow::checkAndShowWhatsNewOverlay()
+// — went with the Qt Widgets shell. The rule did not: it now lives in
+// ConsumeWhatsNewPayload(), covered end to end at the bottom of this file.
 // ---------------------------------------------------------------------------
 
 TEST(WhatsNewPayload, CorruptFileParsesToNulloptAndCallerDeletesIt) {
@@ -137,6 +155,88 @@ TEST(WhatsNewPayload, EmptyNotesDoesNotShow) {
     WhatsNewPendingPayload payload;
     payload.target_version = QStringLiteral("1.2.0");
     EXPECT_FALSE(ShouldShowWhatsNew(payload, QStringLiteral("1.2.0"), /*suppressed=*/false));
+}
+
+// ---------------------------------------------------------------------------
+// ConsumeWhatsNewPayload (read + decide + clear, once)
+// ---------------------------------------------------------------------------
+//
+// The Qt Quick cutover dropped the surface these rules feed, and with it the only
+// caller that applied them. They are here rather than in the composition root so
+// that "shown once" and "cleared either way" are one function nobody can
+// implement half of.
+
+TEST(WhatsNewPayload, ConsumeShowsTheNotesAndClearsThePayload) {
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = PayloadPath(dir);
+    ASSERT_TRUE(WriteWhatsNewPayload(path, MakePayload(QStringLiteral("1.2.0"))));
+
+    const WhatsNewConsumption consumed = ConsumeWhatsNewPayload(path, QStringLiteral("1.2.0"), /*suppressed=*/false);
+    EXPECT_TRUE(consumed.show);
+    ASSERT_EQ(consumed.notes.size(), 2);
+    // Newest first, as written.
+    EXPECT_EQ(consumed.notes.at(0).version, QStringLiteral("1.2.0"));
+    EXPECT_FALSE(QFile::exists(path)) << "a shown payload must not survive to be shown again";
+}
+
+TEST(WhatsNewPayload, ConsumeIsOneTimeAcrossLaunches) {
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = PayloadPath(dir);
+    ASSERT_TRUE(WriteWhatsNewPayload(path, MakePayload(QStringLiteral("1.2.0"))));
+
+    ASSERT_TRUE(ConsumeWhatsNewPayload(path, QStringLiteral("1.2.0"), /*suppressed=*/false).show);
+    // The next launch of the same build finds nothing.
+    const WhatsNewConsumption second = ConsumeWhatsNewPayload(path, QStringLiteral("1.2.0"), /*suppressed=*/false);
+    EXPECT_FALSE(second.show) << "the post-update overlay showed a second time";
+    EXPECT_TRUE(second.notes.isEmpty());
+}
+
+TEST(WhatsNewPayload, ConsumeClearsAPayloadForAnotherVersionWithoutShowing) {
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = PayloadPath(dir);
+    // First install / downgrade / manual-ZIP update: the payload names a version
+    // this build is not.
+    ASSERT_TRUE(WriteWhatsNewPayload(path, MakePayload(QStringLiteral("9.9.9"))));
+
+    const WhatsNewConsumption consumed = ConsumeWhatsNewPayload(path, QStringLiteral("1.2.0"), /*suppressed=*/false);
+    EXPECT_FALSE(consumed.show);
+    EXPECT_TRUE(consumed.notes.isEmpty());
+    EXPECT_FALSE(QFile::exists(path)) << "a payload for another version must not be left to be reconsidered";
+}
+
+TEST(WhatsNewPayload, ConsumeClearsASuppressedPayloadWithoutShowing) {
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = PayloadPath(dir);
+    ASSERT_TRUE(WriteWhatsNewPayload(path, MakePayload(QStringLiteral("1.2.0"))));
+
+    EXPECT_FALSE(ConsumeWhatsNewPayload(path, QStringLiteral("1.2.0"), /*suppressed=*/true).show);
+    // Suppression means "do not show notes after an update", not "stop asking on
+    // the launch after that": the payload still goes.
+    EXPECT_FALSE(QFile::exists(path));
+}
+
+TEST(WhatsNewPayload, ConsumeClearsACorruptPayloadSilently) {
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = PayloadPath(dir);
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    file.write("{ this is not json");
+    file.close();
+
+    EXPECT_FALSE(ConsumeWhatsNewPayload(path, QStringLiteral("1.2.0"), /*suppressed=*/false).show);
+    EXPECT_FALSE(QFile::exists(path)) << "a corrupt payload would be re-read and re-rejected on every launch";
+}
+
+TEST(WhatsNewPayload, ConsumeOnAnAbsentPayloadIsANoop) {
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    // The ordinary case: no update has run.
+    EXPECT_FALSE(ConsumeWhatsNewPayload(PayloadPath(dir), QStringLiteral("1.2.0"), /*suppressed=*/false).show);
 }
 
 } // namespace

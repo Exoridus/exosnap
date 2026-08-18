@@ -85,8 +85,8 @@ if (-not (Test-Path $BuildDir -PathType Container)) {
 }
 
 # --- Qt / DLL resolution -----------------------------------------------------
-$qtBin = 'C:\Qt\6.9.0\msvc2022_64\bin'
-$qtPlugins = 'C:\Qt\6.9.0\msvc2022_64\plugins'
+$qtBin = 'C:\Qt\6.11.1\msvc2022_64\bin'
+$qtPlugins = 'C:\Qt\6.11.1\msvc2022_64\plugins'
 if (Test-Path $qtBin -PathType Container) {
     $env:PATH = "$qtBin;$env:PATH"
 }

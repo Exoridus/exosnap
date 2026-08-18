@@ -53,6 +53,7 @@ qt_add_qml_module(exosnap
         DeviceCapabilityRow.qml
         DeviceCodecChip.qml
         DiagnosticsPage.qml
+        DiagnosticsRowCard.qml
         DiagnosticsSectionHeader.qml
         DiagnosticsSelfTestRow.qml
         EditDetailsRail.qml
@@ -100,7 +101,6 @@ qt_add_qml_module(exosnap
         Main.qml
         NotificationBell.qml
         NotificationHub.qml
-        NotificationToastCard.qml
         OverlayCountdown.qml
         OverlayDiagnostics.qml
         OverlayNotificationToast.qml
@@ -135,10 +135,13 @@ qt_add_qml_module(exosnap
         SettingsQualitySection.qml
         SettingsUpdatesSection.qml
         SettingsWebcamSection.qml
+        WhatsNewOverlay.qml
         WindowChromeButton.qml
     SOURCES
         AboutViewModelAdapter.cpp
         AboutViewModelAdapter.h
+        BlockingSurfaceArbiter.cpp
+        BlockingSurfaceArbiter.h
         CaptureExclusion.cpp
         CaptureExclusion.h
         CrashReportAdapter.cpp
@@ -147,6 +150,8 @@ qt_add_qml_module(exosnap
         DeviceAdapter.h
         DiagnosticIssueModel.cpp
         DiagnosticIssueModel.h
+        PipelineStageModel.cpp
+        PipelineStageModel.h
         DiagnosticsAdapter.cpp
         DiagnosticsAdapter.h
         EditExportAdapter.cpp
@@ -200,6 +205,8 @@ qt_add_qml_module(exosnap
         SettingsAdapter.h
         ShellAdapter.cpp
         ShellAdapter.h
+        WhatsNewAdapter.cpp
+        WhatsNewAdapter.h
         QuickWindowChrome.cpp
         QuickWindowChrome.h
         QuickWindowGeometry.cpp
@@ -210,6 +217,10 @@ target_sources(exosnap
     PRIVATE
         QuickApplication.cpp
         QuickApplication.h
+        # Harness-only text expansion (QCR-511). Not a QML type: it is installed
+        # as a QTranslator before the engine loads and nothing in QML names it.
+        PseudoLocalization.cpp
+        PseudoLocalization.h
         # Process-level startup/shutdown contract, shared with the Widgets entry
         # point: DLL-search hardening, interrupted-swap self-heal, startup clock,
         # log sink, crash capture, single-instance guard, elevated relaunch.
@@ -225,6 +236,11 @@ target_sources(exosnap
         # entry point.
         ${PROJECT_SOURCE_DIR}/app/services/VerifyReinstallMode.cpp
         ${PROJECT_SOURCE_DIR}/app/services/VerifyReinstallMode.h
+        # The dev feed override (--update-base-url): the seam that lets a
+        # non-official build exercise its own update check, and therefore the
+        # whole app-to-updater handoff, against a controlled feed.
+        ${PROJECT_SOURCE_DIR}/app/services/UpdateFeedOverride.cpp
+        ${PROJECT_SOURCE_DIR}/app/services/UpdateFeedOverride.h
         ${PROJECT_SOURCE_DIR}/app/models/AboutInfo.cpp
         ${PROJECT_SOURCE_DIR}/app/models/AboutInfo.h
         ${PROJECT_SOURCE_DIR}/app/models/RecordingPresetRegistry.cpp
@@ -261,6 +277,12 @@ target_sources(exosnap
         # that knows what an ExoSnap adapter is.
         QuickLiveVerifySource.cpp
         QuickLiveVerifySource.h
+        # The stable product keys settings.get/settings.set speak, and the table
+        # that binds each of them to the SettingsAdapter setter the QML control
+        # writes to. Not reflection: a key that is not in the table cannot be
+        # read or written.
+        SettingsAutomationKeys.cpp
+        SettingsAutomationKeys.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsController.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsController.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsProbe.cpp
@@ -272,10 +294,38 @@ target_sources(exosnap
         ${PROJECT_SOURCE_DIR}/app/diagnostics/CrashSessionContext.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/CrashSessionContext.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/ElevationProvider.cpp
+        # ADR 0033 present diagnostics. These sources existed since the ETW slice
+        # landed but were compiled ONLY by present_provider_tests, so the shipping
+        # binary contained the no-op session and could never report a present mode.
+        # Wave D compiles them here and defines EXOSNAP_HAS_PRESENTMON below, which
+        # is what makes the real ETW consumer reachable at all.
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/PresentMonProvider.cpp
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/PresentMonProvider.h
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/PresentMonEtwSession.cpp
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/PresentMonEtwSession.h
+        # The ETW boundary, and the only file that names PresentMon. The session above
+        # is free of conditional compilation precisely so the product and the tests
+        # compile the same lines of it; EXOSNAP_HAS_PRESENTMON now only selects which
+        # backend this file provides.
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/PresentMonTraceBackend.cpp
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/PresentTraceBackend.h
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/PresentModeMapping.cpp
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/PresentModeMapping.h
+        # The DPC/ISR half of the same ADR 0033 opt-in, and the worse case of the same
+        # defect: this file was compiled by NO target at all, so the check that names
+        # the kernel driver behind "smooth game, stuttery recording" evaluated an
+        # absent reading in every build there has ever been.
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/DpcLatencyProvider.cpp
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/DpcLatencyProvider.h
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/PresentSnapshotOverlay.cpp
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/PresentSnapshotOverlay.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/SupportBundle.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/ZipWriter.cpp
         ${PROJECT_SOURCE_DIR}/app/services/SupportBundleService.cpp
         ${PROJECT_SOURCE_DIR}/app/services/SupportBundleService.h
+        ${PROJECT_SOURCE_DIR}/app/services/CaptureHubCommandQueue.h
+        ${PROJECT_SOURCE_DIR}/app/services/CaptureHubGate.cpp
+        ${PROJECT_SOURCE_DIR}/app/services/CaptureHubGate.h
         ${PROJECT_SOURCE_DIR}/app/services/CaptureHubRegistry.cpp
         ${PROJECT_SOURCE_DIR}/app/services/CaptureHubRegistry.h
         ${PROJECT_SOURCE_DIR}/app/services/CaptureSourceHub.cpp
@@ -289,7 +339,13 @@ target_sources(exosnap
         ${PROJECT_SOURCE_DIR}/app/services/WgcCaptureHubService.h
         ${PROJECT_SOURCE_DIR}/app/services/WgcSourceProducer.cpp
         ${PROJECT_SOURCE_DIR}/app/services/WgcSourceProducer.h
+        # QCR-110: the production producer of exclusive-fullscreen evidence. Both
+        # the Diagnostics card and the recording-admission gate read its snapshot;
+        # without it in the shipping target the gate is inert.
+        ${PROJECT_SOURCE_DIR}/app/services/WindowEvidenceProbe.cpp
+        ${PROJECT_SOURCE_DIR}/app/services/WindowEvidenceProbe.h
         ${PROJECT_SOURCE_DIR}/app/services/RecordingCoordinator.cpp
+        ${PROJECT_SOURCE_DIR}/app/services/RecordingAdmission.cpp
         ${PROJECT_SOURCE_DIR}/app/services/RecordingCoordinator.h
         ${PROJECT_SOURCE_DIR}/app/services/RecordingCountdownController.cpp
         ${PROJECT_SOURCE_DIR}/app/services/RecordingCountdownController.h
@@ -315,6 +371,9 @@ target_sources(exosnap
         ${PROJECT_SOURCE_DIR}/app/services/WhatsNewPayload.cpp
         ${PROJECT_SOURCE_DIR}/app/services/WhatsNewPayload.h
         ${PROJECT_SOURCE_DIR}/app/services/UpdateLaunchPlan.cpp
+        # QCR-202: the pure completion gate the check worker is a driver of.
+        ${PROJECT_SOURCE_DIR}/app/services/UpdateCheckGate.cpp
+        ${PROJECT_SOURCE_DIR}/app/services/UpdateCheckGate.h
         ${PROJECT_SOURCE_DIR}/app/settings/AppSettingsStore.cpp
         ${PROJECT_SOURCE_DIR}/app/settings/AppSettingsStore.h
         ${PROJECT_SOURCE_DIR}/app/settings/RecordingPresetStore.cpp
@@ -371,6 +430,18 @@ target_sources(exosnap
         "$<${EXOSNAP_HARNESS_GATE}:${PROJECT_SOURCE_DIR}/app/benchmark/BenchmarkEffectiveConfig.h>"
 )
 
+# Deterministic live-pipeline snapshots for the Diagnostics visual states.
+# UNGATED, unlike the benchmark harness above, because the function that seeds
+# them -- QuickApplication::applyDiagnosticsVisualScenarios -- is itself ungated:
+# the Diagnostics and Logs visual scenarios have always been env-configured in
+# every configuration. Gating only the snapshots would break the Release link
+# rather than remove anything.
+target_sources(exosnap
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}/app/visual_tests/DiagnosticsLiveScenario.cpp
+        ${PROJECT_SOURCE_DIR}/app/visual_tests/DiagnosticsLiveScenario.h
+)
+
 if(WIN32)
     # The two Windows resource scripts that make this a shippable executable:
     # exosnap.rc carries the three application icons (bootstrap's WM_SETICON path
@@ -421,6 +492,16 @@ target_compile_options(exosnap
         $<$<CXX_COMPILER_ID:MSVC>:/wd4702>
 )
 
+# ADR 0033 / Wave D: the real in-process PresentMon ETW consumer. Without the
+# define, PresentMonEtwSession compiles to the graceful no-op branch and
+# IsAvailable() is false forever -- which is exactly the state the shipping
+# binary was in, and why present mode, tearing, discarded count and mode flips
+# were structurally unreachable rather than merely unavailable.
+if(EXOSNAP_WITH_PRESENTMON)
+    target_compile_definitions(exosnap PRIVATE EXOSNAP_HAS_PRESENTMON)
+    target_link_libraries(exosnap PRIVATE PresentMon::consumer)
+endif()
+
 target_link_libraries(exosnap
     PRIVATE
         Qt6::Core
@@ -436,11 +517,18 @@ target_link_libraries(exosnap
         exosnap::warnings
         exosnap::capability
         exosnap::update
+        # The App -> Updater handoff document. One schema, two processes: this
+        # target writes it, exosnap-updater.exe reads it.
+        exosnap::update_handoff
         exosnap::crash_capture
         exosnap_output_model_test_support
         exosnap_device_service_test_support
         exosnap_diagnostics_test_support
         exosnap_live_verify
+        # The observability serialization boundary (Wave C). The control channel
+        # is one consumer of it; the Diagnostics surface reads the same typed
+        # owners directly, so neither is downstream of the other.
+        exosnap_observability
         exosnap_miniz
         recorder_core
         tomlplusplus::tomlplusplus
@@ -478,6 +566,55 @@ if(MSVC)
 endif()
 
 add_dependencies(exosnap exosnap_build_info)
+
+# ---- Structural guard: a diagnostics producer must be in a shipping target -------
+# Wave D found the same defect four times, and this is the cheapest half of it: a
+# producer source file that no shipping target compiles. PresentMon* was compiled only
+# by present_provider_tests, WindowEvidenceProbe only by the deleted Widgets shell, and
+# DpcLatencyProvider by NOTHING -- while Diagnostics recommended as though all three
+# were measuring. Nothing in C++ can see a missing caller, but "is this file in the
+# binary at all" is a build fact, so it is asserted at configure time rather than left
+# to review.
+#
+# The two targets that may own such a file are the application itself and the
+# diagnostics support library it links. A producer that belongs in neither has to say so
+# in EXOSNAP_UNSHIPPED_DIAGNOSTICS_PRODUCERS below, with a reason -- the point is that
+# the decision is explicit and visible, never silent.
+set(EXOSNAP_UNSHIPPED_DIAGNOSTICS_PRODUCERS
+    # (empty: every diagnostics producer currently ships)
+)
+file(GLOB _exosnap_diag_producers CONFIGURE_DEPENDS
+    "${PROJECT_SOURCE_DIR}/app/diagnostics/*Provider.cpp"
+    "${PROJECT_SOURCE_DIR}/app/services/*Probe.cpp"
+)
+set(_exosnap_shipped_sources "")
+foreach(_shipping_target IN ITEMS exosnap exosnap_diagnostics_test_support)
+    get_target_property(_target_sources ${_shipping_target} SOURCES)
+    get_target_property(_target_dir ${_shipping_target} SOURCE_DIR)
+    foreach(_source IN LISTS _target_sources)
+        # Generator expressions cannot be resolved here; none of them names a producer.
+        if(_source MATCHES "\\$<")
+            continue()
+        endif()
+        get_filename_component(_absolute "${_source}" ABSOLUTE BASE_DIR "${_target_dir}")
+        list(APPEND _exosnap_shipped_sources "${_absolute}")
+    endforeach()
+endforeach()
+foreach(_producer IN LISTS _exosnap_diag_producers)
+    get_filename_component(_producer_name "${_producer}" NAME)
+    if(_producer_name IN_LIST EXOSNAP_UNSHIPPED_DIAGNOSTICS_PRODUCERS)
+        continue()
+    endif()
+    if(NOT "${_producer}" IN_LIST _exosnap_shipped_sources)
+        message(FATAL_ERROR
+            "${_producer_name} produces diagnostics data but is compiled by no shipping target. "
+            "Whatever reads it can only ever see the absent/no-op answer. Add it to the exosnap "
+            "target (app/quick/ExoSnap/Quick/CMakeLists.txt) or to exosnap_diagnostics_test_support "
+            "(app/CMakeLists.txt) -- or, if it deliberately does not ship, to "
+            "EXOSNAP_UNSHIPPED_DIAGNOSTICS_PRODUCERS with the reason."
+        )
+    endif()
+endforeach()
 
 # recorder_core links the FFmpeg-backed recording path even though this slice
 # only consumes its preview transport. Keep the development executable
@@ -567,11 +704,55 @@ if(WIN32)
     # it, so the deployed application resolves its QML imports relative to its own
     # directory and never from the build tree or a developer Qt installation.
     install(CODE "set(QT_DEPLOY_BIN_DIR \".\")")
+
+    # Contract guard for the generated script installed below. Qt writes that
+    # script to call qt6_deploy_qml_imports(), which only exists if
+    # Qt6QmlDeploySupport.cmake made it into the generated
+    # QtDeploySupport-<CONFIG>.cmake. Qt collects that list off the Qt6::Core
+    # target, so it depends on every find_package(Qt6) in the tree sharing ONE
+    # Qt6::Core — see CMAKE_FIND_PACKAGE_TARGETS_GLOBAL in the top-level
+    # CMakeLists.txt. Without this check the regression surfaces inside Qt's own
+    # generated script as "Unknown CMake command", which names neither the cause
+    # nor the fix, and the shipped tree would silently be missing the entire QML
+    # runtime. Re-including the deploy support is free: it only defines
+    # functions.
+    install(CODE "
+include(\"${QT_DEPLOY_SUPPORT}\")
+if(NOT COMMAND qt6_deploy_qml_imports)
+    message(FATAL_ERROR
+        \"Qt QML deployment support is missing from the generated deploy script, so the \"
+        \"installed tree would not contain the Qt Quick runtime. Check that the top-level \"
+        \"CMakeLists.txt still sets CMAKE_FIND_PACKAGE_TARGETS_GLOBAL before any \"
+        \"find_package(Qt6).\")
+endif()")
+
     install(SCRIPT ${_exosnap_deploy_script})
 endif()
 
+# EXOSNAP_CONFIG_DIR is where the QML bytecode cache ends up (see
+# AlignQmlDiskCacheWithConfigDir), and the suite runs with one config dir for the
+# whole run. Two application processes sharing it race on the same .qmlc files,
+# and a document read while another process is still writing it loads without its
+# signal connections -- which surfaces as an unrelated navigation assertion
+# rather than as a cache error. Every test that launches the application
+# concurrently therefore needs a config dir of its own.
 add_test(NAME quick.qml.about_smoke COMMAND exosnap --smoke-test)
-set_tests_properties(quick.qml.about_smoke PROPERTIES LABELS "quick")
+set_tests_properties(quick.qml.about_smoke PROPERTIES
+    LABELS "quick"
+    ENVIRONMENT "EXOSNAP_CONFIG_DIR=${CMAKE_CURRENT_BINARY_DIR}/test-config/about_smoke"
+)
+
+# The four non-Record destinations are loaded by URL so their documents stay out
+# of the startup compile (QCR-615). That the pages are absent until navigation,
+# that setSource() actually delivered every adapter, and that Diagnostics' two
+# navigation signals still reach the shell are all only observable in the real
+# shell -- AppShell requires fifteen C++ adapters and cannot be built in a QML
+# test. Runs offscreen with the rest of the suite; no window reaches the screen.
+add_test(NAME quick.qml.navigation_lifecycle COMMAND exosnap --navigation-lifecycle-test)
+set_tests_properties(quick.qml.navigation_lifecycle PROPERTIES
+    LABELS "quick"
+    ENVIRONMENT "EXOSNAP_CONFIG_DIR=${CMAKE_CURRENT_BINARY_DIR}/test-config/navigation_lifecycle"
+)
 
 # An isolated run has to isolate Qt's QML bytecode cache as well — see the
 # script for why EXOSNAP_CONFIG_DIR does not reach it on its own.
@@ -584,10 +765,29 @@ add_test(
 )
 set_tests_properties(quick.qml.disk_cache_isolation PROPERTIES LABELS "quick")
 
+# The fixed-dark canon for the five capture-excluded overlays, checked at the
+# source because nothing downstream can observe it: those windows defeat every
+# form of capture, and the harness only sees their scene graph.
+add_test(
+    NAME quick.qml.overlays_are_fixed_dark
+    COMMAND ${CMAKE_COMMAND}
+        -DQML_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+        -P ${PROJECT_SOURCE_DIR}/cmake/tests/assert_overlays_are_fixed_dark.cmake
+)
+set_tests_properties(quick.qml.overlays_are_fixed_dark PROPERTIES LABELS "quick")
+
 qt_add_executable(record_controls_qml_tests
     ${EXOSNAP_QUICK_TESTS_DIR}/qml_test_main.cpp
     ${PROJECT_SOURCE_DIR}/app/assets/fonts/exosnap_fonts.qrc
 )
+
+# AUTORCC, because the .qrc above is only a list of files until something compiles
+# it. `exosnap` gets it from a set_target_properties() call of its own;
+# qt_standard_project_setup() does NOT set CMAKE_AUTORCC, so without this line the
+# resource is silently dropped, qrc:/fonts/* does not exist, and ExoTheme falls back
+# to Segoe UI -- leaving the elision and single-line assertions in these suites
+# measuring a font the product never ships.
+set_target_properties(record_controls_qml_tests PROPERTIES AUTORCC ON)
 
 qt_add_qml_module(record_controls_qml_tests
     URI ExoSnap.Quick.TestControls
@@ -612,10 +812,38 @@ qt_add_qml_module(record_controls_qml_tests
     SOURCES
         QuickThemeTokens.cpp
         QuickThemeTokens.h
+        # OverlayDiagnostics gates its own visibility on CaptureExclusion.granted,
+        # so the type has to exist for the overlay to load at all. Nothing in the
+        # token tests shows the window — `granted` stays false and the delegates
+        # exist regardless, which is the cost QCR-606 is about.
+        CaptureExclusion.cpp
+        CaptureExclusion.h
+        # WhatsNewOverlay.qml takes the adapter as a REQUIRED typed property, so
+        # the type has to be registered under this URI for the document to load
+        # at all. It carries no policy — the notes, the mode and the two user
+        # inputs — which is what makes the surface testable from QML: the test
+        # calls present() and asserts what the card does with it.
+        WhatsNewAdapter.cpp
+        WhatsNewAdapter.h
     QML_FILES
+        # QCR-709: the capability row is one line by contract, which is a layout
+        # fact about how its value label behaves once the row runs out of width.
+        DeviceCapabilityRow.qml
+        DeviceCodecChip.qml
         ExoButton.qml
         ExoChevron.qml
+        # The 24 px interaction target and the keyboard toggle are geometry and
+        # input, so they are asserted rather than judged on a screenshot.
+        ExoCheckBox.qml
+        # The shared confirm. Whether it holds the keyboard is the whole contract:
+        # a modal that never takes focus leaves Escape and Return answering the
+        # page behind it, and nothing about that is visible in a screenshot.
+        ExoConfirmDialog.qml
         ExoDisclosure.qml
+        # Severity carried by something other than colour (QCR-507/508): which
+        # glyph a tone resolves to, and what the accessible name says.
+        ExoNotice.qml
+        ExoStatusTile.qml
         # The shared overlay card and the two components it draws itself from.
         # Its layout invariants — the card staying out of the shell's title
         # band, and the persistent decision strip surviving a scrolling body —
@@ -628,11 +856,40 @@ qt_add_qml_module(record_controls_qml_tests
         # the test module has to carry it as well — without it qmllint resolves
         # nothing inside either component and reports the whole icon block.
         ExoGlyph.qml
+        # The log viewer, for its selection contract: a selection identifies
+        # entries by sequence, so it has to survive an append, front eviction
+        # and a filter change without ever sliding onto another entry. Driven
+        # here against a plain ListModel — the real one is a C++ proxy the test
+        # module cannot construct, and none of what is asserted is about it.
+        ExoLogView.qml
         ExoSegmentedControl.qml
+        # Elision needs a real constrained width, which is a layout fact and so
+        # is asserted rather than judged on a screenshot.
+        ExoStatusPill.qml
+        # The switch knob is moved by an XAnimator inside a Behavior on a bound
+        # `x`. Whether the binding survives that is exactly the kind of question
+        # a comment cannot answer.
+        ExoSwitch.qml
+        # The shared text input owns its draft while it has the focus. That
+        # contract is the whole fix, and it is one property write away from
+        # being undone.
+        ExoTextField.qml
         ExoTheme.qml
+        # QCR-604: the pipeline cards are delegates over a model with a stable
+        # per-stage identity now, so what has to be asserted is that a value
+        # update reaches the SAME card object.
+        ExoPipelineFlow.qml
+        ExoPipelineStepCard.qml
+        # QCR-606: the HUD's token list is keyed on the content policy, not on
+        # the measured values.
+        OverlayDiagnostics.qml
         PreviewMetricsOverlay.qml
         RecordActionButton.qml
         RecordSourceToggle.qml
+        # The release-notes surface. Both entry points, the one-time consumption
+        # rules and the focus hand-back are behaviour rather than pixels, so they
+        # are asserted here; --overlay-visual-state photographs the document.
+        WhatsNewOverlay.qml
 )
 
 target_compile_definitions(record_controls_qml_tests
@@ -659,6 +916,8 @@ target_link_libraries(record_controls_qml_tests
         Qt6::Quick
         Qt6::QuickControls2
         Qt6::QuickTest
+        # CaptureExclusion logs its verdict through AppLog.
+        exosnap_app_log_test_support
         exosnap::warnings
 )
 
@@ -670,6 +929,101 @@ get_filename_component(_exosnap_quick_qt_prefix "${Qt6_DIR}/../../.." ABSOLUTE)
 # staged copies next to the test binary do not include them — so the plugin
 # resolves and then fails to load. Qt's bin/ on PATH covers that.
 set_tests_properties(quick.qml.record_controls PROPERTIES
+    LABELS "quick"
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QML_IMPORT_PATH=${_exosnap_quick_qt_prefix}/qml"
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${_exosnap_quick_qt_prefix}/bin"
+)
+
+# The Edit surface's keyboard contract (QCR-504). A second QML test executable
+# rather than more files in the one above, because EditTimeline.qml takes three
+# REQUIRED C++-typed adapters: they cannot be stubbed from QML, and seeding a
+# session needs a plain C++ call, so the runner builds and seeds them and hands
+# them over as context properties.
+qt_add_executable(edit_timeline_qml_tests
+    ${EXOSNAP_QUICK_TESTS_DIR}/edit_timeline_qml_test_main.cpp
+    ${PROJECT_SOURCE_DIR}/app/assets/fonts/exosnap_fonts.qrc
+)
+
+# AUTORCC, because the .qrc above is only a list of files until something compiles
+# it. `exosnap` gets it from a set_target_properties() call of its own;
+# qt_standard_project_setup() does NOT set CMAKE_AUTORCC, so without this line the
+# resource is silently dropped, qrc:/fonts/* does not exist, and ExoTheme falls back
+# to Segoe UI -- leaving the elision and single-line assertions in these suites
+# measuring a font the product never ships.
+set_target_properties(edit_timeline_qml_tests PROPERTIES AUTORCC ON)
+
+qt_add_qml_module(edit_timeline_qml_tests
+    URI ExoSnap.Quick.EditTestControls
+    OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/tests/ExoSnap/Quick/EditTestControls"
+    DEPENDENCIES
+        QtQuick
+    # Compiling the adapters into this module registers them under this URI, so
+    # EditTimeline.qml resolves the same types it does in the shipping module.
+    # Same reason QuickThemeTokens is here: every colour in the strip goes
+    # through ExoTheme, which reads that singleton.
+    SOURCES
+        EditPlayerAdapter.cpp
+        EditPlayerAdapter.h
+        EditPlayerWorker.cpp
+        EditPlayerWorker.h
+        EditSessionAdapter.cpp
+        EditSessionAdapter.h
+        EditTimelineAdapter.cpp
+        EditTimelineAdapter.h
+        EditTimelineModels.cpp
+        EditTimelineModels.h
+        # EditPlayerAdapter's frame sink hands decoded frames to the scene-graph
+        # item, so the two link together. The item is never instantiated here —
+        # EditTimeline.qml does not draw the picture — but the symbol has to
+        # resolve.
+        ExoEditPlayerItem.cpp
+        ExoEditPlayerItem.h
+        QuickPreviewRgbaConverter.cpp
+        QuickPreviewRgbaConverter.h
+        QuickThemeTokens.cpp
+        QuickThemeTokens.h
+        ${PROJECT_SOURCE_DIR}/app/services/TimelineThumbnailSource.cpp
+        ${PROJECT_SOURCE_DIR}/app/services/TimelineThumbnailSource.h
+    QML_FILES
+        EditTimeline.qml
+        ExoTheme.qml
+)
+
+# A sibling directory, not a subdirectory of the shared tests/ one: QUICK_TEST_MAIN
+# scans its source dir RECURSIVELY for tst_*.qml, so the two runners would each
+# try to load the other's cases against a module that does not export them.
+target_compile_definitions(edit_timeline_qml_tests
+    PRIVATE
+        NOMINMAX
+        QUICK_TEST_SOURCE_DIR="${PROJECT_SOURCE_DIR}/app/quick/tests_edit"
+)
+
+target_include_directories(edit_timeline_qml_tests
+    PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}"
+        "${PROJECT_SOURCE_DIR}/app"
+)
+
+# Same as record_controls_qml_tests: QUICK_TEST_MAIN_WITH_SETUP pulls in Qt QML
+# headers that trip C4702 under this project's /WX.
+target_compile_options(edit_timeline_qml_tests
+    PRIVATE
+        $<$<CXX_COMPILER_ID:MSVC>:/wd4702>
+)
+
+target_link_libraries(edit_timeline_qml_tests
+    PRIVATE
+        Qt6::Gui
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickTest
+        exosnap_app_log_test_support
+        recorder_core
+        exosnap::warnings
+)
+
+add_test(NAME quick.qml.edit_timeline COMMAND edit_timeline_qml_tests)
+set_tests_properties(quick.qml.edit_timeline PROPERTIES
     LABELS "quick"
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QML_IMPORT_PATH=${_exosnap_quick_qt_prefix}/qml"
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${_exosnap_quick_qt_prefix}/bin"
@@ -754,6 +1108,11 @@ exosnap_add_gtest(
     TEST_PREFIX quick_settings_adapter.
     SOURCES
         ${EXOSNAP_QUICK_TESTS_DIR}/test_settings_adapter.cpp
+        # The automation key table lives with the adapter it binds to, so a
+        # renamed setter is a compile error in both at once.
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_settings_automation_keys.cpp
+        SettingsAutomationKeys.cpp
+        SettingsAutomationKeys.h
         SettingsAdapter.cpp
         SettingsAdapter.h
         QuickThemeTokens.cpp
@@ -800,6 +1159,27 @@ target_include_directories(theme_contrast_tests
 )
 
 target_compile_definitions(theme_contrast_tests PRIVATE NOMINMAX)
+
+# The text-expansion rule the 860x700 layout gate renders with. A pure function
+# plus a QTranslator subclass, so it needs nothing from the application.
+exosnap_add_gtest(
+    NAME pseudo_localization_tests
+    TEST_PREFIX quick_pseudo_localization.
+    SOURCES
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_pseudo_localization.cpp
+        PseudoLocalization.cpp
+        PseudoLocalization.h
+    LIBRARIES
+        Qt6::Core
+)
+
+target_include_directories(pseudo_localization_tests
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${PROJECT_SOURCE_DIR}/app
+)
+
+target_compile_definitions(pseudo_localization_tests PRIVATE NOMINMAX)
 
 exosnap_add_gtest(
     NAME device_qml_adapter_tests
@@ -859,6 +1239,10 @@ exosnap_add_gtest(
     TEST_PREFIX quick_diagnostics_policy.
     SOURCES
         ${EXOSNAP_QUICK_TESTS_DIR}/test_diagnostics_policy.cpp
+        # The live summary tiles, driven by the SAME fixtures the visual harness
+        # seeds, so a capture and these assertions describe one thing.
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_diagnostics_live_tiles.cpp
+        ${PROJECT_SOURCE_DIR}/app/visual_tests/DiagnosticsLiveScenario.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsController.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsProbe.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/FixActionDispatcher.cpp
@@ -866,6 +1250,10 @@ exosnap_add_gtest(
         Qt6::Core
         Qt6::Gui
         exosnap_diagnostics_test_support
+        # So the live tiles and pipeline.snapshot can be asserted against each
+        # other in one place: they read the same snapshot, and the test is what
+        # keeps that from quietly becoming two readings of it.
+        exosnap_observability
         exosnap::capability
         recorder_core
 )
@@ -896,6 +1284,44 @@ target_include_directories(preview_update_scheduler_tests
 )
 
 target_compile_definitions(preview_update_scheduler_tests PRIVATE NOMINMAX)
+
+exosnap_add_gtest(
+    NAME preview_percentile_tests
+    TEST_PREFIX quick_preview_percentile.
+    SOURCES
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_preview_percentile.cpp
+    LIBRARIES
+        Qt6::Core
+)
+
+target_include_directories(preview_percentile_tests
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${PROJECT_SOURCE_DIR}/app
+)
+
+target_compile_definitions(preview_percentile_tests PRIVATE NOMINMAX)
+
+exosnap_add_gtest(
+    NAME webcam_chroma_key_tests
+    TEST_PREFIX quick_webcam_chroma_key.
+    SOURCES
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_webcam_chroma_key.cpp
+        RecordWebcamFrameProvider.cpp
+        RecordWebcamFrameProvider.h
+    LIBRARIES
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Quick
+)
+
+target_include_directories(webcam_chroma_key_tests
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${PROJECT_SOURCE_DIR}/app
+)
+
+target_compile_definitions(webcam_chroma_key_tests PRIVATE NOMINMAX)
 
 exosnap_add_gtest(
     NAME log_view_policy_tests
@@ -943,8 +1369,11 @@ exosnap_add_gtest(
     TEST_PREFIX quick_diagnostics_adapter.
     SOURCES
         ${EXOSNAP_QUICK_TESTS_DIR}/test_diagnostics_adapter.cpp
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_pipeline_stage_model.cpp
         DiagnosticIssueModel.cpp
         DiagnosticIssueModel.h
+        PipelineStageModel.cpp
+        PipelineStageModel.h
         DiagnosticsAdapter.cpp
         DiagnosticsAdapter.h
         LogEntryModel.cpp
@@ -1031,11 +1460,15 @@ exosnap_add_gtest(
         EditTimelineModels.h
         ${PROJECT_SOURCE_DIR}/app/services/TimelineThumbnailSource.cpp
         ${PROJECT_SOURCE_DIR}/app/services/TimelineThumbnailSource.h
+    # exosnap_app_log_test_support: loadMarkers() reports markers the sidecar
+    # parser had to skip (QCR-207) through AppLog, same as DeviceAdapter does
+    # for its rescan milestones.
     LIBRARIES
         Qt6::Core
         Qt6::Gui
         Qt6::Qml
         Qt6::Quick
+        exosnap_app_log_test_support
         recorder_core
 )
 
@@ -1078,6 +1511,50 @@ target_include_directories(recovery_qml_adapter_tests
 )
 
 target_compile_definitions(recovery_qml_adapter_tests PRIVATE NOMINMAX)
+
+# Which of the two startup modal surfaces may be up. Both real adapters are
+# compiled in rather than doubled: "is recovery still open" and "is the crash
+# prompt still active" are their own state machines, and a double would let the
+# arbitration agree with a model of them instead of with them.
+exosnap_add_gtest(
+    NAME blocking_surface_arbiter_tests
+    TEST_PREFIX quick_blocking_surface.
+    SOURCES
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_blocking_surface_arbiter.cpp
+        BlockingSurfaceArbiter.cpp
+        BlockingSurfaceArbiter.h
+        CrashReportAdapter.cpp
+        CrashReportAdapter.h
+        RecoveryAdapter.cpp
+        RecoveryAdapter.h
+        # QCR-415: the third arbitrated surface.
+        RecordingErrorAdapter.cpp
+        RecordingErrorAdapter.h
+        ${PROJECT_SOURCE_DIR}/app/models/RecordingFailurePolicy.cpp
+        ${PROJECT_SOURCE_DIR}/app/models/RecordingFailurePolicy.h
+        ${PROJECT_SOURCE_DIR}/app/services/RecoveryService.cpp
+        ${PROJECT_SOURCE_DIR}/app/services/AtomicFileOps.cpp
+        ${PROJECT_SOURCE_DIR}/app/settings/RecoveryManifestStore.cpp
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/AppLog.cpp
+    LIBRARIES
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Qml
+        Qt6::Test
+        exosnap_capability
+        recorder_core
+        FFmpeg::mux
+)
+
+target_compile_definitions(blocking_surface_arbiter_tests PRIVATE NOMINMAX)
+
+target_include_directories(blocking_surface_arbiter_tests
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${PROJECT_SOURCE_DIR}/app
+)
+
+target_compile_definitions(blocking_surface_arbiter_tests PRIVATE NOMINMAX)
 
 # The overlay gating and the content policy. RecordViewModel is pulled in whole
 # because the adapter reads the real view model rather than a test double --

@@ -1,9 +1,8 @@
 ﻿cmake_minimum_required(VERSION 3.27)
 
-#Local Qt install hint — override via Qt6_DIR or CMAKE_PREFIX_PATH.
-if(NOT Qt6_DIR)
-    list(APPEND CMAKE_PREFIX_PATH "C:/Qt/6.9.0/msvc2022_64")
-endif()
+# The local Qt install hint lives in the ROOT CMakeLists.txt, because libs/control
+# calls find_package(Qt6) before this directory is even added. Repeating it here
+# would be a second authority for one path, and the one that loses.
 
 # Whether to build the ExoSnap Qt application at all. Defaulted ON; flip OFF for
 # configurations that only need the core engine libraries and tests (headless
@@ -53,29 +52,47 @@ endif()
 # PLUGIN, which needs Qt6Svg.dll at runtime without the executable importing a
 # single symbol from it. Dropping the component would still build and still run
 # here, and would ship a package whose logo silently fails to load.
-find_package(Qt6 6.9 QUIET COMPONENTS
+find_package(Qt6 6.11 QUIET COMPONENTS
     Core Gui Widgets Svg Qml Quick QuickControls2 QuickDialogs2 QuickTest Test)
 
-# A stand-in `exosnap` custom target is created in every branch below other than
-# the real build, so add_subdirectory(app) always leaves a target named `exosnap`
+# A stand-in `exosnap` custom target is created on the deliberate opt-out path
+# below, so add_subdirectory(app) always leaves a target named `exosnap`
 # behind for anything downstream that references it defensively (see
 # apps/updater/CMakeLists.txt and tests/CMakeLists.txt). Nothing must call
 # target_link_libraries()/target_compile_definitions() on this stand-in — the
 # real `exosnap` executable is the Qt Quick application defined in the
 # quick/ExoSnap/Quick subdirectory added at the bottom of this file, and only
 # exists on the path that does not return early here.
-if(NOT EXOSNAP_BUILD_APP OR NOT Qt6_FOUND)
-    if(EXOSNAP_BUILD_APP)
-        add_custom_target(exosnap COMMAND ${CMAKE_COMMAND} -E echo "exosnap skipped: Qt6 not found")
-        message(WARNING "Qt6 not found — exosnap app will not be built. Install Qt 6 and set Qt6_DIR or CMAKE_PREFIX_PATH.")
-    else()
-        add_custom_target(exosnap COMMAND ${CMAKE_COMMAND} -E echo "exosnap skipped: EXOSNAP_BUILD_APP is OFF")
-        message(STATUS "EXOSNAP_BUILD_APP is OFF — exosnap app will not be built.")
-    endif()
+# A missing Qt is a HARD error while the app is requested, and a warning would be
+# the worse choice for a reason this repository has now met twice. A build that
+# quietly omits the shipping binary still turns green: every library, every test
+# and even the updater compile, ctest passes, and the compile database contains no
+# app translation unit at all — so a clang-tidy pass over "the changes" analyses
+# nothing and reports clean. That is exactly how this branch's own gate lied once,
+# against a stale cache pinning Qt 6.9 that the new 6.11 minimum then rejected.
+#
+# Not building the app is a legitimate configuration (headless CI, a contributor
+# without Qt), so it stays available -- it just has to be ASKED for, with
+# -DEXOSNAP_BUILD_APP=OFF, instead of being inferred from a failed probe.
+if(EXOSNAP_BUILD_APP AND NOT Qt6_FOUND)
+    message(FATAL_ERROR
+        "Qt 6.11 or newer with the Qml/Quick/QuickControls2/QuickDialogs2/QuickTest/Svg "
+        "components was not found, and EXOSNAP_BUILD_APP is ON.\n"
+        "  Install Qt 6.11+ and point CMAKE_PREFIX_PATH or Qt6_DIR at it, or configure "
+        "with -DEXOSNAP_BUILD_APP=OFF to build the engine, tools and tests without the "
+        "application. Silently skipping it is not an option: the build would go green "
+        "without the binary this project exists to ship.")
+endif()
+
+# A stand-in target for the deliberate opt-out, so add_subdirectory(app) still
+# leaves a target named `exosnap` behind (see the note above).
+if(NOT EXOSNAP_BUILD_APP)
+    add_custom_target(exosnap COMMAND ${CMAKE_COMMAND} -E echo "exosnap skipped: EXOSNAP_BUILD_APP is OFF")
+    message(STATUS "EXOSNAP_BUILD_APP is OFF — exosnap app will not be built.")
     return()
 endif()
 
-qt_standard_project_setup(REQUIRES 6.9)
+qt_standard_project_setup(REQUIRES 6.11)
 
 # Re-stated as REQUIRED so a partially-satisfied probe above turns into a hard
 # configure error here rather than a link failure later. Test is not used
@@ -83,7 +100,7 @@ qt_standard_project_setup(REQUIRES 6.9)
 # cmake/exosnap_testing.cmake can only copy a module whose imported target
 # actually exists. Without it a QuickTest binary builds and then fails to START
 # with 0xC0000135.
-find_package(Qt6 6.9 REQUIRED COMPONENTS Qml Quick QuickControls2 QuickDialogs2 QuickTest Test)
+find_package(Qt6 6.11 REQUIRED COMPONENTS Qml Quick QuickControls2 QuickDialogs2 QuickTest Test)
 
 # Qt test executables need Qt DLLs on PATH during gtest_discover_tests (POST_BUILD)
 # and during CTest execution. Add Qt's bin directory to the environment so both work.
@@ -183,21 +200,42 @@ exosnap_add_app_test_support(exosnap_app_log_test_support
 )
 target_link_libraries(exosnap_app_log_test_support PUBLIC Qt6::Core)
 
-# Live Verify control channel (ADR 0066). Everything except the application
-# binding: the wire format, the command allowlist, the argv gate and the named-
-# pipe transport. Compiled into the SHIPPING executable -- official acceptance
-# has to drive the same bytes users receive, so a test-only build of the server
-# would prove nothing about the artifact. It is inert without the explicit
+# Live Verify control channel (ADR 0066) -- the APPLICATION's half of it: the
+# command table, its preconditions, the state it publishes, the intents it
+# executes, and the argv option this executable answers to. The wire format, the
+# policy mechanics, the session state machine and the named-pipe transport are
+# shared with the updater's endpoint and live in libs/control.
+#
+# Compiled into the SHIPPING executable -- official acceptance has to drive the
+# same bytes users receive, so a test-only build of the server would prove
+# nothing about the artifact. It is inert without the explicit
 # --live-verify-control option; see LiveVerifyOptions.h.
 exosnap_add_app_test_support(exosnap_live_verify
+    live_verify/LiveVerifyCommandPolicy.cpp
     live_verify/LiveVerifyControlServer.cpp
     live_verify/LiveVerifyDispatcher.cpp
     live_verify/LiveVerifyOptions.cpp
-    live_verify/LiveVerifyProtocol.cpp
 )
-# Advapi32: the endpoint's DACL is built from the process token's own SID
-# (OpenProcessToken/ConvertSidToStringSidW/ConvertStringSecurityDescriptor...).
-target_link_libraries(exosnap_live_verify PUBLIC Qt6::Core Advapi32)
+target_link_libraries(exosnap_live_verify PUBLIC Qt6::Core exosnap::control)
+
+# Observability serialization boundary (Wave C). Pure translation from the typed
+# owners -- RecordingDiagnosticsSnapshot, DiagnosticChecklist, RecordingPresetConfig,
+# CapabilitySet, the logging ring, the session reports -- into transport-neutral
+# JSON. It measures nothing, classifies nothing, and owns no state: everything here
+# already exists somewhere else in the tree and was simply unreachable from outside
+# the process.
+#
+# Declared BEFORE the model support library it links so the reader meets it in
+# dependency order; CMake itself does not care.
+exosnap_add_app_test_support(exosnap_observability
+    observability/DiagnosticsResultsJson.cpp
+    observability/EnvironmentSnapshot.cpp
+    observability/EventQuery.cpp
+    observability/PipelineSnapshotJson.cpp
+    observability/SessionQuery.cpp
+    observability/SettingsSnapshot.cpp
+    observability/WindowIdentity.cpp
+)
 
 exosnap_add_app_test_support(exosnap_output_model_test_support
     models/FilenameBuilder.cpp
@@ -208,6 +246,13 @@ exosnap_add_app_test_support(exosnap_output_model_test_support
 )
 target_link_libraries(exosnap_output_model_test_support PUBLIC
     Qt6::Core Qt6::Gui exosnap_capability recorder_core ole32.lib shell32.lib
+)
+
+# Linked after both, because the serializers read the models (SplitDurationMs,
+# SanitizePresetConfig's structs) and resolve the reports directory from AppLog.
+target_link_libraries(exosnap_observability PUBLIC
+    exosnap_app_log_test_support exosnap_output_model_test_support
+    Qt6::Core exosnap_capability recorder_core
 )
 
 exosnap_add_app_test_support(exosnap_record_viewmodel_test_support
@@ -227,6 +272,17 @@ exosnap_add_app_test_support(exosnap_diagnostics_test_support
     diagnostics/FilesystemProvider.cpp
     diagnostics/RecommendationEngine.cpp
     diagnostics/WindowTargetFacts.cpp
+    # The pure evidence core behind WindowEvidenceProbe. In the library rather
+    # than only in its own test target, because the shipping frontend now runs
+    # the probe and the recommendation engine reads what it accumulates.
+    diagnostics/WindowEvidenceAccumulator.cpp
+    # QCR-804: the mid-recording capture-stall monitor. Same reason — the shipping
+    # frontend drives it from the live diagnostics callback, so it belongs in the
+    # library and not only in its own test target.
+    diagnostics/WindowCaptureStall.cpp
+    # ADR 0046: the mid-recording audio-degradation latch. Same reason as the two
+    # above — the shipping frontend drives it from the live diagnostics callback.
+    diagnostics/AudioSourceDegradation.cpp
     diagnostics/SelfTestRunner.cpp
     # Session report writer is called by RecordingCoordinator, which is compiled
     # into the coordinator test targets that all link this support lib.
@@ -323,10 +379,10 @@ exosnap_add_gtest(
 )
 target_include_directories(window_evidence_accumulator_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
-# Exclusive-fullscreen mid-session stall predicate (S4, pure).
+# Mid-recording window-capture stall: frame-progress monitor + verdict (QCR-804, pure).
 exosnap_add_gtest(
     NAME window_capture_stall_tests
-    TEST_PREFIX exclusive_fs.
+    TEST_PREFIX capture_stall.
     SOURCES
         tests/test_window_capture_stall.cpp
         diagnostics/WindowCaptureStall.cpp
@@ -335,6 +391,18 @@ exosnap_add_gtest(
 )
 target_include_directories(window_capture_stall_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(window_capture_stall_tests PRIVATE dwmapi.lib shell32.lib)
+
+# Mid-recording audio-source degradation: the standing-notification latch over the
+# pipeline's existing AudioDiagnostics health facts (ADR 0046, pure).
+exosnap_add_gtest(
+    NAME audio_source_degradation_tests
+    TEST_PREFIX audio_degraded.
+    SOURCES
+        tests/test_audio_source_degradation.cpp
+        diagnostics/AudioSourceDegradation.cpp
+    LIBRARIES exosnap_capability recorder_core
+)
+target_include_directories(audio_source_degradation_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 # 0.5.0 video rate-control tests (ADR 0009): ComputeNvencRcParams mapping,
 # preset round-trip, dirty-tracking, sanitize, and capability queries.
@@ -521,6 +589,7 @@ exosnap_add_gtest(
     SOURCES
         tests/test_output_settings.cpp
         services/RecordingCoordinator.cpp
+        services/RecordingAdmission.cpp
         services/AtomicFileOps.cpp
         services/DisplayNumbering.cpp
         settings/RecoveryManifestStore.cpp
@@ -535,6 +604,25 @@ target_include_directories(output_settings_tests PRIVATE ${CMAKE_CURRENT_SOURCE_
 target_link_libraries(output_settings_tests PRIVATE mfplat.lib mf.lib mfuuid.lib ole32.lib)
 set_target_properties(output_settings_tests PROPERTIES AUTOMOC ON)
 
+# Observability: the serialization boundary's honesty contract. Fixture-driven,
+# because the states most likely to produce a lying payload (nothing measured
+# yet, a metric that cannot exist on this backend, an unprobed adapter) are the
+# ones a live run barely visits. The event cases drive the REAL logging ring
+# through the real logEvent, so a green result means the query reads what the
+# product actually writes.
+exosnap_add_gtest(
+    NAME observability_tests
+    TEST_PREFIX observability.
+    SOURCES
+        tests/test_observability_snapshots.cpp
+        diagnostics/EngineLogBridge.cpp
+        diagnostics/StructuredLog.cpp
+    LIBRARIES exosnap_observability exosnap_capability recorder_core Qt6::Core Qt6::Gui
+)
+target_include_directories(observability_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(observability_tests PRIVATE ole32.lib shell32.lib)
+set_target_properties(observability_tests PROPERTIES AUTOMOC ON)
+
 # Live Verify: the pure rejection surface -- argv gate, wire format, handshake,
 # allowlist. No pipe, no window, no GPU.
 exosnap_add_gtest(
@@ -545,6 +633,18 @@ exosnap_add_gtest(
     LIBRARIES exosnap_live_verify Qt6::Core
 )
 target_include_directories(live_verify_protocol_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+# Live Verify: the precondition/availability policy on its own. Pure -- an
+# AutomationState in, a verdict out -- so every state a command can be refused in
+# is covered by construction instead of by driving the application into it.
+exosnap_add_gtest(
+    NAME live_verify_policy_tests
+    TEST_PREFIX live_verify.
+    SOURCES
+        tests/test_live_verify_policy.cpp
+    LIBRARIES exosnap_live_verify Qt6::Core
+)
+target_include_directories(live_verify_policy_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 # Live Verify: the transport itself. Drives a real named pipe, because "no TCP
 # listener", "a hostile client cannot take the host down" and "the handshake is
@@ -570,6 +670,28 @@ exosnap_add_gtest(
 )
 target_include_directories(auto_record_harness_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
+# QCR-101 / QCR-103: the recording admission gate (diagnostic blockers enforced on
+# the real start path) and recovery-manifest persistence honesty.
+exosnap_add_gtest(
+    NAME recording_admission_tests
+    TEST_PREFIX admission.
+    SOURCES
+        tests/test_recording_admission.cpp
+        services/RecordingCoordinator.cpp
+        services/RecordingAdmission.cpp
+        services/AtomicFileOps.cpp
+        services/DisplayNumbering.cpp
+        settings/RecoveryManifestStore.cpp
+    LIBRARIES
+        exosnap_output_model_test_support
+        exosnap_device_service_test_support
+        exosnap_diagnostics_test_support
+        Qt6::Core Qt6::Gui exosnap_capability recorder_core
+)
+target_include_directories(recording_admission_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(recording_admission_tests PRIVATE mfplat.lib mf.lib mfuuid.lib ole32.lib user32.lib)
+set_target_properties(recording_admission_tests PROPERTIES AUTOMOC ON)
+
 # MP4-SPLIT-REMUX-R1: per-segment manifest lifecycle, disk reserve, split settings.
 exosnap_add_gtest(
     NAME mp4_split_remux_tests
@@ -577,6 +699,7 @@ exosnap_add_gtest(
     SOURCES
         tests/test_mp4_split_remux.cpp
         services/RecordingCoordinator.cpp
+        services/RecordingAdmission.cpp
         services/AtomicFileOps.cpp
         services/DisplayNumbering.cpp
         settings/RecoveryManifestStore.cpp
@@ -656,20 +779,47 @@ target_compile_definitions(elevation_tests PRIVATE NOMINMAX)
 
 # ADR 0033: present-diagnostics provider. PresentMonProvider owns a
 # PresentMonEtwSession and gates on elevation && opt-in before starting it.
-# EXOSNAP_HAS_PRESENTMON is intentionally NOT defined here so the no-op session
-# is used, keeping this target Qt-only (no ETW dep) while the gate logic is
-# fully covered.
+#
+# This target used to leave EXOSNAP_HAS_PRESENTMON undefined so that
+# PresentMonEtwSession.cpp compiled to a no-op twin -- which meant every contract the
+# session owns (attribution boundaries, accumulator resets, the held process handle,
+# what `available` means) was verified against an implementation that did nothing,
+# while the shipping one was verified by nobody. That is the same shape as the original
+# defect this ADR's Wave D slice fixed, so the session no longer has an ifdef at all:
+# the trace itself lives behind IPresentTraceBackend, and these tests inject a fake one.
+#
+# The define and the vendored consumer are carried anyway, so the REAL backend compiles
+# and links here too. A production translation unit that only ever built inside
+# app/quick is exactly what went unnoticed the first time.
 exosnap_add_gtest(
     NAME present_provider_tests
     TEST_PREFIX present.
     SOURCES
         tests/test_present_provider.cpp
+        tests/test_present_session.cpp
         diagnostics/PresentMonProvider.cpp
         diagnostics/PresentMonEtwSession.cpp
+        diagnostics/PresentMonTraceBackend.cpp
         diagnostics/PresentModeMapping.cpp
     LIBRARIES Qt6::Core
 )
 target_include_directories(present_provider_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+if(EXOSNAP_WITH_PRESENTMON)
+    target_compile_definitions(present_provider_tests PRIVATE EXOSNAP_HAS_PRESENTMON)
+    target_link_libraries(present_provider_tests PRIVATE PresentMon::consumer)
+endif()
+
+# Wave D: the app -> engine present overlay. Pure mapping; needs recorder_core for
+# the snapshot type but no ETW, no elevation and no recording.
+exosnap_add_gtest(
+    NAME present_overlay_tests
+    TEST_PREFIX present_overlay.
+    SOURCES
+        tests/test_present_snapshot_overlay.cpp
+        diagnostics/PresentSnapshotOverlay.cpp
+    LIBRARIES Qt6::Core recorder_core
+)
+target_include_directories(present_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 # Pure PresentMon present-mode mapping. Maps raw present events (POD) to our
 # diagnostics::PresentSample. No Win32/ETW headers; unit-testable in isolation.
@@ -706,6 +856,11 @@ exosnap_add_gtest(
     LIBRARIES Qt6::Core Qt6::Gui recorder_core
 )
 target_include_directories(timeline_thumbnail_source_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+# One case opens a real clip to prove the worker releases the file handle on
+# close; it resolves its untracked fixture through the source dir and GTEST_SKIPs
+# where the host has none -- same arrangement test_edit_player_engine already
+# uses.
+target_compile_definitions(timeline_thumbnail_source_tests PRIVATE EXOSNAP_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 set_target_properties(timeline_thumbnail_source_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
@@ -735,10 +890,25 @@ exosnap_add_gtest(
         tests/test_update_launch_plan.cpp
         services/UpdateLaunchPlan.cpp
         services/VerifyReinstallMode.cpp
+        services/UpdateFeedOverride.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/updater/UpdaterArgs.cpp
-    LIBRARIES Qt6::Core exosnap::update
+    LIBRARIES Qt6::Core exosnap::update exosnap::control exosnap::update_handoff
 )
 target_include_directories(update_launch_plan_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+
+# QCR-202: the pure completion gate behind UpdateService's async check. The
+# service is a thin driver of this resolver, so the interleavings that used to
+# misattribute a result (a channel change or a second request mid-check) are
+# exercised here rather than against a real network and real thread timing.
+exosnap_add_gtest(
+    NAME update_check_gate_tests
+    TEST_PREFIX update_check.
+    SOURCES
+        tests/test_update_check_gate.cpp
+        services/UpdateCheckGate.cpp
+    LIBRARIES Qt6::Core exosnap::update
+)
+target_include_directories(update_check_gate_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 exosnap_add_gtest(
     NAME version_tests
@@ -923,6 +1093,19 @@ target_include_directories(webcam_read_policy_tests PRIVATE ${CMAKE_CURRENT_SOUR
 target_link_libraries(webcam_read_policy_tests PRIVATE ole32.lib mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib)
 set_target_properties(webcam_read_policy_tests PROPERTIES AUTOMOC ON)
 
+# The webcam callback delivery/lifetime contract: registration snapshots,
+# receiver validation on the delivery thread, and replacement under live
+# delivery. Needs a QCoreApplication for the queued posts; needs no camera.
+exosnap_add_gtest(
+    NAME webcam_delivery_tests
+    TEST_PREFIX webcam.
+    SOURCES
+        tests/test_webcam_delivery.cpp
+    LIBRARIES exosnap_device_service_test_support Qt6::Core Qt6::Gui exosnap_capability recorder_core)
+target_include_directories(webcam_delivery_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(webcam_delivery_tests PRIVATE ole32.lib mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib)
+set_target_properties(webcam_delivery_tests PROPERTIES AUTOMOC ON)
+
 # Pure copy mapping for the dock's webcam open-failure tooltip
 # (FriendlyWebcamOpenFailure) — string logic only, no MF calls or live device.
 exosnap_add_gtest(
@@ -959,12 +1142,19 @@ exosnap_add_gtest(
     LIBRARIES recorder_core)
 target_include_directories(capture_hub_registry_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
-# Which mip a tile is read back from. Pure arithmetic; no D3D, no Qt.
+# The layer above the registry: the hub services' command channel and lease
+# gate. Both hub services are thin drivers of these two, so the adversarial
+# LeaseRequest/Subscribe/Unsubscribe interleavings are pinned once for both.
 exosnap_add_gtest(
-    NAME thumbnail_mip_tests
+    NAME capture_hub_command_tests
     TEST_PREFIX capture.
-    SOURCES tests/test_thumbnail_mip.cpp)
-target_include_directories(thumbnail_mip_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    SOURCES
+        tests/test_capture_hub_commands.cpp
+        services/CaptureHubGate.cpp
+        services/CaptureHubRegistry.cpp
+        services/CaptureSourceHub.cpp
+    LIBRARIES recorder_core)
+target_include_directories(capture_hub_command_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 # The sequential "Display N" label shared by picker, Record header and output
 # filename. Pure given the sequence map; no Qt.
@@ -1004,6 +1194,7 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
         SOURCES
             tests/test_capture_frame.cpp
             services/RecordingCoordinator.cpp
+            services/RecordingAdmission.cpp
             services/AtomicFileOps.cpp
             services/DisplayNumbering.cpp
             settings/RecoveryManifestStore.cpp
@@ -1044,6 +1235,7 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
         SOURCES
             tests/test_recording_markers.cpp
             services/RecordingCoordinator.cpp
+            services/RecordingAdmission.cpp
             services/AtomicFileOps.cpp
             services/DisplayNumbering.cpp
             settings/RecoveryManifestStore.cpp
@@ -1101,8 +1293,53 @@ if(EXOSNAP_PWSH)
         COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
             "${PROJECT_SOURCE_DIR}/scripts/tests/live-verify-state.tests.ps1")
     set_tests_properties(live_verify.runner_state PROPERTIES TIMEOUT 180 LABELS "live_verify")
+
+    # The client's endpoint naming. Registered for the same reason: deriving the
+    # updater child's pipe name wrongly fails as a connect timeout, which is
+    # indistinguishable from "the child never started" -- the most expensive way
+    # to learn about a typo.
+    add_test(NAME live_verify.endpoint_names
+        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
+            "${PROJECT_SOURCE_DIR}/scripts/tests/live-verify-endpoints.tests.ps1")
+    set_tests_properties(live_verify.endpoint_names PROPERTIES TIMEOUT 120 LABELS "live_verify")
+
+    # Wave D: the release campaign runner and the environment orchestrator. Every
+    # case here runs against a FAKE envctl, which is what makes the interesting
+    # failures reachable at all -- "the setter returned success and the read-back
+    # disagreed" and "the original device vanished before the restore" cannot be
+    # produced on demand by a real display or a real audio endpoint. Nothing in this
+    # suite touches the machine's actual configuration.
+    add_test(NAME live_verify.release_runner
+        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
+            "${PROJECT_SOURCE_DIR}/scripts/tests/release-verify.tests.ps1")
+    set_tests_properties(live_verify.release_runner PROPERTIES TIMEOUT 300 LABELS "live_verify")
+
+    # The local verification pipeline's own contracts. These belong in CTest and
+    # not only in verify.ps1, because verify.ps1 is the thing under test: a
+    # pipeline that reports PASS is worth nothing until it has been shown to
+    # report FAIL when a step fails, and to refuse PASS for a step whose
+    # prerequisite never ran. Running them from inside the pipeline they guard
+    # would let a broken orchestrator pass itself.
+    #
+    # Label "pipeline", deliberately not "live_verify": ctest -LE takes a regex,
+    # so the documented "-ExcludeLabel live" shortcut also drops live_verify.
+    # These cases query no hardware and must survive that exclusion.
+    add_test(NAME pipeline.drift_guards
+        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
+            "${PROJECT_SOURCE_DIR}/scripts/tests/check-drift.tests.ps1")
+    set_tests_properties(pipeline.drift_guards PROPERTIES TIMEOUT 180 LABELS "pipeline")
+
+    add_test(NAME pipeline.verify_orchestrator
+        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
+            "${PROJECT_SOURCE_DIR}/scripts/tests/verify-pipeline.tests.ps1")
+    set_tests_properties(pipeline.verify_orchestrator PROPERTIES TIMEOUT 180 LABELS "pipeline")
+
+    add_test(NAME pipeline.source_hygiene
+        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
+            "${PROJECT_SOURCE_DIR}/scripts/tests/check-source-hygiene.tests.ps1")
+    set_tests_properties(pipeline.source_hygiene PROPERTIES TIMEOUT 180 LABELS "pipeline")
 else()
-    message(STATUS "pwsh not found — the Live Verify runner state tests will not be registered.")
+    message(STATUS "pwsh not found: the Live Verify and pipeline script tests will not be registered.")
 endif()
 
 # ---------------------------------------------------------------------------

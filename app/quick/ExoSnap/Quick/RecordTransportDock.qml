@@ -79,8 +79,6 @@ Rectangle {
 
     // ── Left: the sources ────────────────────────────────────────────────────
     RowLayout {
-        id: sourceCluster
-
         spacing: root.clusterSpacing
         anchors {
             left: parent.left
@@ -195,8 +193,6 @@ Rectangle {
 
     // ── Right: secondary actions, then the one recommended action ────────────
     RowLayout {
-        id: actionCluster
-
         spacing: root.clusterSpacing
         anchors {
             right: parent.right
@@ -244,8 +240,6 @@ Rectangle {
         // Pause is a secondary action DURING a recording — Stop is the one that
         // ends it — so it stays a round peer of the three above.
         RecordActionButton {
-            id: pauseButton
-
             compact: root.compactControls
 
             accessibleLabel: qsTr("Pause recording")
@@ -256,8 +250,6 @@ Rectangle {
         }
 
         RecordActionButton {
-            id: resumeButton
-
             compact: root.compactControls
 
             accessibleLabel: qsTr("Resume recording")
@@ -272,8 +264,6 @@ Rectangle {
         }
 
         RecordActionButton {
-            id: stopButton
-
             compact: root.compactControls
 
             accessibleLabel: qsTr("Stop recording")
@@ -331,24 +321,16 @@ Rectangle {
         }
     }
 
-    Connections {
-        target: root.recordViewModel
-
-        function onStateTextChanged() {
-            if (!root.recordViewModel.active)
-                return
-            Qt.callLater(() => {
-                if (editButton.visible)
-                    editButton.forceActiveFocus()
-                else if (pauseButton.visible && pauseButton.available)
-                    pauseButton.forceActiveFocus()
-                else if (resumeButton.visible && resumeButton.available)
-                    resumeButton.forceActiveFocus()
-                else if (stopButton.visible && stopButton.available)
-                    stopButton.forceActiveFocus()
-                else if (primaryButton.visible)
-                    primaryButton.forceActiveFocus()
-            })
-        }
-    }
+    // No focus is claimed here on a state change. Every recording state change
+    // used to pull the active focus into whichever transport button the new
+    // state recommends, which is wrong twice over: it took the keyboard away
+    // from a user who was working somewhere else on the page, and — because a
+    // recording can start, fail or finish while a modal surface is up — it took
+    // it out of an open modal, whose whole contract is that it keeps the
+    // keyboard until it is answered.
+    //
+    // Nothing depended on that focus. The transport's keyboard shortcuts are
+    // process-wide hotkeys registered by Win32HotkeyRegistrar, not QML `Shortcut`
+    // items scoped to a focused control, so they keep working with the focus
+    // anywhere. Tab order into the dock is unchanged.
 }

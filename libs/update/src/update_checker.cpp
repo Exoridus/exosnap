@@ -198,11 +198,23 @@ UpdateCheckResult BuildCheckResult(std::string_view releases_json, const std::op
     // on this channel, independent of whether an update is offered.
     r.all_channel_notes = CollectAllReleaseNotesForChannel(releases_json, params.channel);
 
+    // The trust-anchor assets of whichever release qualified, offered or not.
+    // LocateRelease only returns a release that carries BOTH, so a located
+    // release always fills both fields; nothing else in the result depends on
+    // them, which is why they are set before the offer decision.
+    if (release) {
+        r.manifest_url = release->manifest_url;
+        r.manifest_signature_url = release->signature_url;
+    }
+
     const UpdateOffer offer = release ? DecideOffer(release->version, release->version_tag, params) : UpdateOffer::None;
     if (offer != UpdateOffer::None) {
         r.update_available = true;
         r.verification_reinstall = (offer == UpdateOffer::VerificationReinstall);
         r.available_version = release->version;
+        // The tag verbatim, not SemVer::ToString(): the target-version pin the
+        // app hands the updater has to be the string the signed manifest carries.
+        r.available_version_raw = release->version_tag;
         r.releases_page_url = release->releases_page_url;
         // Gap-aware What's-new notes: every release in (current, best] for this
         // channel, newest first -- read from the SAME fetched JSON (no extra call).
@@ -215,7 +227,36 @@ UpdateCheckResult BuildCheckResult(std::string_view releases_json, const std::op
 }
 
 // ---------------------------------------------------------------------------
-// CheckForUpdate
+// CheckAgainstFeed -- the mechanics, without any policy
+// ---------------------------------------------------------------------------
+UpdateCheckResult CheckAgainstFeed(const CheckParams& params) noexcept {
+    // Fetch the first releases page (30 items) and pick the right channel.
+    // Honours params.api_base_url so tests / dev servers can redirect the call.
+    std::string http_error;
+    auto body = FetchReleasesJson(params.api_base_url, http_error);
+    if (!body) {
+        UpdateCheckResult r{};
+        r.check_failed = true;
+        r.error_message = "Network error: " + http_error;
+        return r;
+    }
+
+    // Select the newest qualifying release for the channel. The channel/draft
+    // filtering and asset extraction live once in LocateRelease (DRY).
+    std::string parse_error;
+    auto release = LocateRelease(*body, params.channel, &parse_error);
+    if (!release && !parse_error.empty()) {
+        UpdateCheckResult r{};
+        r.check_failed = true;
+        r.error_message = "JSON parse error from GitHub releases API";
+        return r;
+    }
+
+    return BuildCheckResult(*body, release, params);
+}
+
+// ---------------------------------------------------------------------------
+// CheckForUpdate -- the product policy, then the mechanics
 // ---------------------------------------------------------------------------
 UpdateCheckResult CheckForUpdate(const CheckParams& params) noexcept {
     // Recording guard runs first — must block regardless of build gate,
@@ -240,29 +281,7 @@ UpdateCheckResult CheckForUpdate(const CheckParams& params) noexcept {
         return r;
     }
 
-    // Fetch the first releases page (30 items) and pick the right channel.
-    // Honours params.api_base_url so tests / dev servers can redirect the call.
-    std::string http_error;
-    auto body = FetchReleasesJson(params.api_base_url, http_error);
-    if (!body) {
-        UpdateCheckResult r{};
-        r.check_failed = true;
-        r.error_message = "Network error: " + http_error;
-        return r;
-    }
-
-    // Select the newest qualifying release for the channel. The channel/draft
-    // filtering and asset extraction live once in LocateRelease (DRY).
-    std::string parse_error;
-    auto release = LocateRelease(*body, params.channel, &parse_error);
-    if (!release && !parse_error.empty()) {
-        UpdateCheckResult r{};
-        r.check_failed = true;
-        r.error_message = "JSON parse error from GitHub releases API";
-        return r;
-    }
-
-    return BuildCheckResult(*body, release, params);
+    return CheckAgainstFeed(params);
 }
 
 } // namespace exosnap::update

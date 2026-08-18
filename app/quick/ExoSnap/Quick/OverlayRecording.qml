@@ -31,8 +31,12 @@ Window {
     // An empty rect falls back to this window's own screen, the way the Widgets
     // overlays fell back to the primary screen before a target was resolved.
     property rect monitorGeometry: Qt.rect(0, 0, 0, 0)
-    // OverlayAdapter.State.
-    property int overlayState: 0
+    // An OverlayAdapter.State value. Compared against that enum by name below
+    // rather than against 1/2/3: the adapter exports the enum to QML precisely
+    // so a value added or reordered in C++ cannot silently re-map what this
+    // window paints, and a local mirror of the numbers is the copy that would
+    // have to be found and updated by hand when it does.
+    property int overlayState: OverlayAdapter.Hidden
     // The gate the recording side controls; capture exclusion gates on top of it.
     property bool overlayActive: false
 
@@ -49,24 +53,21 @@ Window {
                                               ? root.monitorGeometry
                                               : Qt.rect(Screen.virtualX, Screen.virtualY, Screen.width, Screen.height)
 
-    // Mirrors OverlayAdapter.State. Kept as named constants rather than magic
-    // numbers at each comparison; the C++ side static_asserts the same order.
-    readonly property int stateRecording: 1
-    readonly property int statePaused: 2
-    readonly property int stateWarning: 3
-
     // Paused and Warning used to share caution amber, which made a deliberate
     // pause look like a fault to a user glancing at the corner of a full-screen
     // game. Paused now takes the accent — the same colour the Resume action in
     // the transport carries — and amber is left to mean what it says.
+    // The overlay* rungs, not the appearance ones: this pill's ground is
+    // near-black whatever the application appearance is, so it resolves its
+    // colours against the Dark appearance (see ExoTheme).
     readonly property color stateTone: {
         switch (root.overlayState) {
-        case root.statePaused:
-            return ExoTheme.accent;
-        case root.stateWarning:
-            return ExoTheme.warning;
+        case OverlayAdapter.Paused:
+            return ExoTheme.overlayAccent;
+        case OverlayAdapter.Warning:
+            return ExoTheme.overlayWarning;
         default:
-            return ExoTheme.error;  // recording: the canonical rec tone
+            return ExoTheme.overlayError;  // recording: the canonical rec tone
         }
     }
 
@@ -75,6 +76,10 @@ Window {
     // and more opaque than any in-app surface token and cannot come from
     // ExoTheme. Deliberately borderless: a hairline reads as a window edge over
     // moving content, which is exactly what this must not look like.
+    //
+    // Because that ground is fixed, everything drawn ON it takes the
+    // `overlay*` rungs. The appearance ones were used here, and in Light they
+    // resolve to dark ink: `ExoTheme.text` measured 1.09:1 against this pill.
     readonly property color pillBackground: "#C6161618"  // ~78% opaque near-black
 
     // No transient parent: a Window declared inside another Window inherits it
@@ -88,6 +93,13 @@ Window {
     // be a defect, not a setting.
     flags: Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
            | Qt.WindowDoesNotAcceptFocus | Qt.WindowTransparentForInput
+
+    // Named, and NOT left to Qt's default. An untitled QWindow falls back to the
+    // application display name, which made every overlay a top-level window
+    // titled "ExoSnap" -- six of them, indistinguishable from the main window to
+    // anything that identifies it by owner pid and title. The staged updater does
+    // exactly that when it asks the app to close for a swap.
+    title: qsTr("ExoSnap Overlay — Recording")
     color: "transparent"
 
     // Fail-closed as a binding: `granted` is false until a platform call proved
@@ -192,9 +204,9 @@ Window {
                 anchors.verticalCenter: parent.verticalCenter
                 kind: {
                     switch (root.overlayState) {
-                    case root.statePaused:
+                    case OverlayAdapter.Paused:
                         return "paused";
-                    case root.stateWarning:
+                    case OverlayAdapter.Warning:
                         return "warning";
                     default:
                         return "recording";
@@ -213,7 +225,7 @@ Window {
                 horizontalAlignment: Text.AlignRight
                 text: root.elapsedText
                 textFormat: Text.PlainText
-                color: ExoTheme.text
+                color: ExoTheme.overlayInk
                 font {
                     family: ExoTheme.monoFamily
                     pixelSize: 13
@@ -226,7 +238,7 @@ Window {
                 visible: root.showOutputSize && root.outputSizeText.length > 0
                 text: root.outputSizeText
                 textFormat: Text.PlainText
-                color: ExoTheme.textSecondary
+                color: ExoTheme.overlayInkSecondary
                 font {
                     family: ExoTheme.monoFamily
                     pixelSize: 13
@@ -242,7 +254,7 @@ Window {
                 elide: Text.ElideRight
                 text: root.sourceNameText
                 textFormat: Text.PlainText
-                color: ExoTheme.textSecondary
+                color: ExoTheme.overlayInkSecondary
                 font {
                     family: ExoTheme.sansFamily
                     pixelSize: 13

@@ -63,6 +63,16 @@ RecoveryManifestStore::RecoveryManifestStore(QString file_path) : file_path_(std
 }
 
 QVector<RecoveryManifestEntry> RecoveryManifestStore::Load() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return LoadLocked();
+}
+
+bool RecoveryManifestStore::Save(const QVector<RecoveryManifestEntry>& entries) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return SaveLocked(entries);
+}
+
+QVector<RecoveryManifestEntry> RecoveryManifestStore::LoadLocked() const {
     QVector<RecoveryManifestEntry> result;
 
     if (file_path_.isEmpty())
@@ -113,7 +123,7 @@ QVector<RecoveryManifestEntry> RecoveryManifestStore::Load() const {
     return result;
 }
 
-bool RecoveryManifestStore::Save(const QVector<RecoveryManifestEntry>& entries) const {
+bool RecoveryManifestStore::SaveLocked(const QVector<RecoveryManifestEntry>& entries) const {
     if (file_path_.isEmpty())
         return false;
 
@@ -145,30 +155,38 @@ bool RecoveryManifestStore::Save(const QVector<RecoveryManifestEntry>& entries) 
     return true;
 }
 
+// The three mutations below each hold mutex_ for the WHOLE load → mutate → save
+// sequence. Splitting the lock per step would still lose updates: two threads
+// would load the same snapshot and the later save would drop the earlier one's
+// change, no matter how atomic each individual file replacement is.
+
 bool RecoveryManifestStore::Add(const RecoveryManifestEntry& entry) {
-    auto entries = Load();
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto entries = LoadLocked();
     entries.append(entry);
-    return Save(entries);
+    return SaveLocked(entries);
 }
 
 bool RecoveryManifestStore::UpdateFinalized(const QString& id, bool finalized) {
-    auto entries = Load();
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto entries = LoadLocked();
     for (auto& e : entries) {
         if (e.id == id) {
             e.finalized = finalized;
-            return Save(entries);
+            return SaveLocked(entries);
         }
     }
     return true; // not found — benign
 }
 
 bool RecoveryManifestStore::Remove(const QString& id) {
-    auto entries = Load();
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto entries = LoadLocked();
     const int before = entries.size();
     entries.removeIf([&id](const RecoveryManifestEntry& e) { return e.id == id; });
     if (entries.size() == before)
         return true; // not found — benign
-    return Save(entries);
+    return SaveLocked(entries);
 }
 
 QVector<RecoveryManifestEntry> RecoveryManifestStore::Entries() const {
@@ -176,6 +194,8 @@ QVector<RecoveryManifestEntry> RecoveryManifestStore::Entries() const {
 }
 
 const QString& RecoveryManifestStore::StorePath() const {
+    // Immutable after construction; no lock needed, and returning a reference
+    // under one would be a lie anyway.
     return file_path_;
 }
 

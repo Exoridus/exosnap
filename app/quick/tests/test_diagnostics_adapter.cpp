@@ -5,7 +5,9 @@
 #include "DiagnosticIssueModel.h"
 #include "DiagnosticsAdapter.h"
 #include "LogsAdapter.h"
+#include "PipelineStageModel.h"
 
+#include "diagnostics/WindowTargetFacts.h"
 #include "services/SupportBundleService.h"
 
 #include <QCoreApplication>
@@ -166,6 +168,182 @@ TEST(DiagnosticsAdapterTest, LastSessionTileAppearsOnlyAfterARecording) {
     EXPECT_EQ(spy.count(), 1);
 }
 
+// ── QCR-110: the two host-side facts that had no producer at all ────────────────
+//
+// The engine's own coverage proves the cards are correct once the facts arrive.
+// These pin the boundary the shipping frontend now feeds: a fact pushed through
+// the adapter must reach the issue model, or the blocker fires with no card to
+// explain it.
+
+namespace {
+
+// AV1/Opus in MKV — a clean profile, so anything that shows up is the card under
+// test rather than an unrelated blocker.
+diagnostics::DiagnosticsController::Config MakeCaptureConfig() {
+    diagnostics::DiagnosticsController::Config config = MakeConfig();
+    config.caps.video_codecs[capability::VideoCodec::Av1] = {capability::SupportLevel::Available, ""};
+    config.caps.video_codecs[capability::VideoCodec::Hevc] = {capability::SupportLevel::Available, ""};
+    config.caps.audio_codecs[capability::AudioCodec::Opus] = {capability::SupportLevel::Available, ""};
+    config.user_config.container = capability::Container::Matroska;
+    config.user_config.video_codec = capability::VideoCodec::Av1;
+    config.user_config.audio_codec = capability::AudioCodec::Opus;
+    config.user_config.color_range = capability::ColorRange::Limited;
+    return config;
+}
+
+diagnostics::WindowTargetFacts FullscreenShapedFacts() {
+    diagnostics::WindowTargetFacts facts;
+    facts.valid = true;
+    facts.visible = true;
+    facts.window_rect = RECT{0, 0, 1920, 1080};
+    facts.monitor_rect = RECT{0, 0, 1920, 1080};
+    facts.style = WS_POPUP | WS_VISIBLE;
+    return facts;
+}
+
+bool HasIssueTitled(DiagnosticsAdapter& adapter, const QString& needle) {
+    auto* model = qobject_cast<DiagnosticIssueModel*>(adapter.issues());
+    if (model == nullptr)
+        return false;
+    for (int row = 0; row < model->rowCount(); ++row) {
+        if (model->data(model->index(row, 0), DiagnosticIssueModel::TitleRole).toString().contains(needle))
+            return true;
+    }
+    return false;
+}
+
+} // namespace
+
+TEST(DiagnosticsAdapterTest, ProvenBlackWindowEvidenceRaisesTheExclusiveFullscreenCard) {
+    EnsureApplication();
+    DiagnosticsAdapter adapter;
+    adapter.setDiagnosticConfig(MakeCaptureConfig());
+    EXPECT_FALSE(HasIssueTitled(adapter, QStringLiteral("exclusive fullscreen")));
+
+    // FullscreenShaped and the capture API produced nothing for >= 2 s.
+    adapter.setCaptureWindowEvidence(FullscreenShapedFacts(),
+                                     diagnostics::WindowHubEvidence{recorder_core::HubFrameKind::None, 5.0, 0.0,
+                                                                    /*fresh_frame_since_fullscreen_shape=*/false});
+    EXPECT_TRUE(HasIssueTitled(adapter, QStringLiteral("exclusive fullscreen")));
+
+    // Retargeting to a monitor withdraws it — the card describes a selection.
+    adapter.setCaptureWindowEvidence(std::nullopt, {});
+    EXPECT_FALSE(HasIssueTitled(adapter, QStringLiteral("exclusive fullscreen")));
+}
+
+TEST(DiagnosticsAdapterTest, HdrTargetFactRaisesTheHdrBlockerCard) {
+    EnsureApplication();
+    DiagnosticsAdapter adapter;
+    diagnostics::DiagnosticsController::Config config = MakeCaptureConfig();
+    config.caps.video_codecs[capability::VideoCodec::H264] = {capability::SupportLevel::Available, ""};
+    config.user_config.video_codec = capability::VideoCodec::H264;
+    config.user_config.hdr_mode = recorder_core::HdrMode::Hdr10;
+    adapter.setDiagnosticConfig(std::move(config));
+
+    // The recording gate already blocks this pairing. Without the display fact
+    // the card that explains WHY never appeared, which is the whole finding.
+    EXPECT_FALSE(HasIssueTitled(adapter, QStringLiteral("cannot record HDR10")));
+    adapter.setCaptureTargetHdrActive(true);
+    EXPECT_TRUE(HasIssueTitled(adapter, QStringLiteral("cannot record HDR10")));
+
+    // An SDR desktop is not a problem: the HDR10-native path never engages.
+    adapter.setCaptureTargetHdrActive(false);
+    EXPECT_FALSE(HasIssueTitled(adapter, QStringLiteral("cannot record HDR10")));
+}
+
+// ── ADR 0033: the DPC/ISR producer that reached nothing ─────────────────────────
+//
+// RecommendationEngine::checkDpcLatency has been correct and covered from the day it
+// landed, and it still never fired in a shipping build: DpcLatencyProvider.cpp was
+// compiled by no target, and nothing called the setter. These cases pin the two halves
+// the frontend now owns — a producer IS sampled where the engine runs, and a producer
+// that is not measuring reports nothing rather than a peak nobody is updating.
+
+namespace {
+
+// The reading a caller would get from the real kernel trace, without one. The interface
+// exists exactly so this is possible: opening a machine-wide named ETW session needs
+// elevation, and a unit test may not tear one out from under a running ExoSnap.
+class FakeDpcProvider final : public diagnostics::IDpcLatencyProvider {
+  public:
+    [[nodiscard]] diagnostics::DpcLatencyReading Read() const override {
+        ++reads_;
+        return reading_;
+    }
+
+    void setReading(diagnostics::DpcLatencyReading reading) {
+        reading_ = std::move(reading);
+    }
+    [[nodiscard]] int reads() const noexcept {
+        return reads_;
+    }
+
+  private:
+    diagnostics::DpcLatencyReading reading_;
+    mutable int reads_ = 0;
+};
+
+diagnostics::DpcLatencyReading MeasuredSpike() {
+    // 2.5 ms peak, well past the 1 ms threshold, attributed to a named driver.
+    return diagnostics::DpcLatencyReading{2500.0, 180.0, "nvlddmkm.sys", /*available=*/true};
+}
+
+} // namespace
+
+TEST(DiagnosticsAdapterTest, MeasuredDpcLatencyRaisesTheDriverCard) {
+    EnsureApplication();
+    DiagnosticsAdapter adapter;
+    adapter.setDiagnosticConfig(MakeCaptureConfig());
+    EXPECT_FALSE(HasIssueTitled(adapter, QStringLiteral("DPC/ISR latency")));
+
+    FakeDpcProvider provider;
+    provider.setReading(MeasuredSpike());
+    adapter.setDpcLatencyProvider(&provider);
+
+    EXPECT_TRUE(HasIssueTitled(adapter, QStringLiteral("DPC/ISR latency")))
+        << "a measured kernel-latency spike has to reach the Diagnostics surface";
+    EXPECT_GE(provider.reads(), 1) << "the provider is sampled where the engine runs";
+}
+
+TEST(DiagnosticsAdapterTest, DpcLatencyThatStoppedBeingMeasuredStopsBeingReported) {
+    EnsureApplication();
+    DiagnosticsAdapter adapter;
+    adapter.setDiagnosticConfig(MakeCaptureConfig());
+
+    FakeDpcProvider provider;
+    provider.setReading(MeasuredSpike());
+    adapter.setDpcLatencyProvider(&provider);
+    ASSERT_TRUE(HasIssueTitled(adapter, QStringLiteral("DPC/ISR latency")));
+
+    // The trace stops (opt-in withdrawn, session torn down by another process, ETW
+    // buffer error). What the provider then returns is the default reading: available
+    // false and 0 us — a figure a threshold check would read as "no problem" and a value
+    // row would read as "measured 0 us". Neither is true, so the engine is handed no
+    // reading at all, and the peak measured a moment ago leaves the page with it.
+    provider.setReading({});
+    adapter.setSelectedCaptureTarget(std::nullopt); // any refresh of the surface
+
+    EXPECT_FALSE(HasIssueTitled(adapter, QStringLiteral("DPC/ISR latency")))
+        << "an unavailable reading must not leave the last measured peak on the page";
+}
+
+TEST(DiagnosticsAdapterTest, SelectedCaptureTargetDrivesTheSourceTile) {
+    EnsureApplication();
+    DiagnosticsAdapter adapter;
+    adapter.setDiagnosticConfig(MakeCaptureConfig());
+
+    recorder_core::CaptureTarget window;
+    window.kind = recorder_core::CaptureTarget::Kind::Window;
+    window.native_id = 0x1234;
+    window.description = "Some Game";
+    adapter.setSelectedCaptureTarget(window);
+
+    const QVariantMap tile = TileWithKey(adapter.tiles(), QStringLiteral("target"));
+    ASSERT_FALSE(tile.isEmpty());
+    EXPECT_EQ(tile.value(QStringLiteral("value")).toString(), QStringLiteral("Window"));
+    EXPECT_EQ(tile.value(QStringLiteral("sub")).toString(), QStringLiteral("Some Game"));
+}
+
 TEST(DiagnosticsAdapterTest, InvalidProfileProducesBlockerCards) {
     EnsureApplication();
     DiagnosticsAdapter adapter;
@@ -243,9 +421,30 @@ TEST(DiagnosticsAdapterTest, IdlePipelineShowsTheStaticReadinessStages) {
     EnsureApplication();
     DiagnosticsAdapter adapter;
     EXPECT_FALSE(adapter.pipelineLive());
-    ASSERT_EQ(adapter.pipelineStages().size(), 6);
-    EXPECT_EQ(adapter.pipelineStages().at(0).toMap().value(QStringLiteral("status")).toString(),
-              QStringLiteral("planned"));
+    QAbstractListModel* stages = adapter.pipelineStages();
+    ASSERT_NE(stages, nullptr);
+    ASSERT_EQ(stages->rowCount(), 6);
+    EXPECT_EQ(stages->data(stages->index(0), PipelineStageModel::StatusRole).toString(), QStringLiteral("planned"));
+}
+
+// QCR-604. The pipeline used to be a QVariantList, and a Repeater answers a
+// whole-list assignment by destroying every delegate. The idle path republishes
+// the identical six planned stages whenever the configuration is re-applied.
+TEST(DiagnosticsAdapterTest, RepublishingTheSameIdlePipelineSaysNothing) {
+    EnsureApplication();
+    DiagnosticsAdapter adapter;
+    adapter.setDiagnosticConfig(MakeConfig());
+
+    auto* stages = qobject_cast<PipelineStageModel*>(adapter.pipelineStages());
+    ASSERT_NE(stages, nullptr);
+    SignalCounter resets(stages, &QAbstractItemModel::modelReset);
+    SignalCounter changes(stages, &QAbstractItemModel::dataChanged);
+
+    adapter.setDiagnosticConfig(MakeConfig());
+    adapter.setDiagnosticConfig(MakeConfig());
+
+    EXPECT_EQ(resets.count(), 0);
+    EXPECT_EQ(changes.count(), 0);
 }
 
 TEST(DiagnosticsAdapterTest, LiveSnapshotSwitchesThePipelineToMeasuredStages) {
@@ -262,8 +461,43 @@ TEST(DiagnosticsAdapterTest, LiveSnapshotSwitchesThePipelineToMeasuredStages) {
     adapter.applyLiveDiagnostics(snapshot);
 
     EXPECT_TRUE(adapter.pipelineLive());
-    EXPECT_EQ(adapter.pipelineStages().at(0).toMap().value(QStringLiteral("value")).toString(),
+    QAbstractListModel* stages = adapter.pipelineStages();
+    ASSERT_NE(stages, nullptr);
+    EXPECT_EQ(stages->data(stages->index(0), PipelineStageModel::ValueRole).toString(),
               QStringLiteral("59.4 / 60.0 fps"));
+}
+
+TEST(DiagnosticsAdapterTest, LiveTilesAppearWithARecordingAndVanishWhenItEnds) {
+    EnsureApplication();
+    DiagnosticsAdapter adapter;
+    adapter.setDiagnosticConfig(MakeConfig());
+
+    // Idle: the readiness tiles are still meaningful, the live summary is not.
+    EXPECT_FALSE(adapter.liveTilesVisible());
+    EXPECT_TRUE(adapter.liveTiles().isEmpty());
+
+    recorder_core::RecordingDiagnosticsSnapshot snapshot;
+    snapshot.valid = true;
+    snapshot.lifecycle = recorder_core::DiagnosticsLifecycle::Recording;
+    snapshot.session_generation = 1;
+    snapshot.health = recorder_core::PipelineHealth::Good;
+    snapshot.capture.target_fps = 60.0;
+    snapshot.capture.actual_fps = 59.98;
+    adapter.applyLiveDiagnostics(snapshot);
+
+    ASSERT_TRUE(adapter.liveTilesVisible());
+    ASSERT_EQ(adapter.liveTiles().size(), 5);
+    EXPECT_EQ(adapter.liveTiles().at(0).toMap().value(QStringLiteral("key")).toString(),
+              QStringLiteral("pipelineHealth"));
+    EXPECT_EQ(adapter.liveTiles().at(0).toMap().value(QStringLiteral("value")).toString(), QStringLiteral("Good"));
+
+    // Leaving the recording lifecycle clears them on that very edge, not at the
+    // next throttled tick: a live summary of a recording that has stopped is a
+    // stale claim about something that is no longer happening.
+    snapshot.lifecycle = recorder_core::DiagnosticsLifecycle::Completed;
+    adapter.applyLiveDiagnostics(snapshot);
+    EXPECT_FALSE(adapter.liveTilesVisible());
+    EXPECT_TRUE(adapter.liveTiles().isEmpty());
 }
 
 TEST(DiagnosticsAdapterTest, SelfTestRowsOnlyAppearOnceAChecklistArrives) {
@@ -403,4 +637,154 @@ TEST(SupportBundleServiceTest, RejectsAWriteWithNoLogDirectory) {
     service.createAsync(QStringLiteral("C:/does-not-exist/bundle.zip"), {}, {});
     ASSERT_EQ(results.size(), 1U);
     EXPECT_FALSE(results[0]);
+}
+
+// ---------------------------------------------------------------------------
+// Issue model update contract (QCR-405)
+// ---------------------------------------------------------------------------
+//
+// While a recording runs, applyLiveDiagnostics() re-runs the recommendation
+// engine at 2 Hz and hands the resulting cards to this model. A reset tells QML
+// "different rows now", so QML destroys every delegate and builds new ones —
+// twice a second, taking the expanded Evidence disclosure with it. The cards
+// are almost always identical, and when they are not they are usually the same
+// issues carrying new measurements. Only a change to the issue SET is
+// structural.
+
+namespace {
+
+diagnostics::IssueCard MakeCard(const char* id, const char* title, const char* measured = "") {
+    diagnostics::IssueCard card;
+    card.id = id;
+    card.tone = diagnostics::IssueTone::Notice;
+    card.title = title;
+    card.summary = "summary";
+    card.measured = measured;
+    return card;
+}
+
+// Counts both halves of a reset plus every dataChanged, so a test can say which
+// of the three paths the model took.
+class ModelChangeCounter {
+  public:
+    explicit ModelChangeCounter(QAbstractItemModel* model) {
+        QObject::connect(model, &QAbstractItemModel::modelAboutToBeReset, model, [this]() { ++resets_; });
+        QObject::connect(model, &QAbstractItemModel::dataChanged, model,
+                         [this](const QModelIndex& first, const QModelIndex&, const QList<int>&) {
+                             ++data_changes_;
+                             changed_rows_.push_back(first.row());
+                         });
+    }
+
+    [[nodiscard]] int resets() const noexcept {
+        return resets_;
+    }
+    [[nodiscard]] int dataChanges() const noexcept {
+        return data_changes_;
+    }
+    [[nodiscard]] const std::vector<int>& changedRows() const noexcept {
+        return changed_rows_;
+    }
+
+  private:
+    int resets_ = 0;
+    int data_changes_ = 0;
+    std::vector<int> changed_rows_;
+};
+
+} // namespace
+
+TEST(DiagnosticIssueModelTest, IdenticalCardsChangeNothingAtAll) {
+    EnsureApplication();
+    DiagnosticIssueModel model;
+    model.setCards({MakeCard("ENC-01", "Encoder falling behind", "62 fps")});
+
+    ModelChangeCounter counter(&model);
+    model.setCards({MakeCard("ENC-01", "Encoder falling behind", "62 fps")});
+    model.setCards({MakeCard("ENC-01", "Encoder falling behind", "62 fps")});
+
+    EXPECT_EQ(counter.resets(), 0) << "the 2 Hz live refresh delivers this same list over and over";
+    EXPECT_EQ(counter.dataChanges(), 0);
+    EXPECT_EQ(model.rowCount(), 1);
+}
+
+TEST(DiagnosticIssueModelTest, SameIssuesWithNewValuesAreARowUpdate) {
+    EnsureApplication();
+    DiagnosticIssueModel model;
+    model.setCards(
+        {MakeCard("ENC-01", "Encoder falling behind", "62 fps"), MakeCard("DSK-02", "Disk is slow", "48 MB/s")});
+
+    ModelChangeCounter counter(&model);
+    model.setCards(
+        {MakeCard("ENC-01", "Encoder falling behind", "62 fps"), MakeCard("DSK-02", "Disk is slow", "31 MB/s")});
+
+    EXPECT_EQ(counter.resets(), 0) << "a delegate's expanded Evidence must survive a measurement update";
+    ASSERT_EQ(counter.dataChanges(), 1);
+    ASSERT_EQ(counter.changedRows().size(), 1U);
+    EXPECT_EQ(counter.changedRows()[0], 1) << "only the row whose value moved";
+    EXPECT_EQ(model.data(model.index(1), DiagnosticIssueModel::MeasuredRole).toString(), QStringLiteral("31 MB/s"));
+}
+
+TEST(DiagnosticIssueModelTest, AnAddedIssueIsStructural) {
+    EnsureApplication();
+    DiagnosticIssueModel model;
+    model.setCards({MakeCard("ENC-01", "Encoder falling behind")});
+
+    ModelChangeCounter counter(&model);
+    model.setCards({MakeCard("ENC-01", "Encoder falling behind"), MakeCard("DSK-02", "Disk is slow")});
+
+    EXPECT_EQ(counter.resets(), 1);
+    EXPECT_EQ(model.rowCount(), 2);
+}
+
+TEST(DiagnosticIssueModelTest, AResolvedIssueIsStructural) {
+    EnsureApplication();
+    DiagnosticIssueModel model;
+    model.setCards({MakeCard("ENC-01", "Encoder falling behind"), MakeCard("DSK-02", "Disk is slow")});
+
+    ModelChangeCounter counter(&model);
+    model.setCards({MakeCard("ENC-01", "Encoder falling behind")});
+
+    EXPECT_EQ(counter.resets(), 1);
+    EXPECT_EQ(model.rowCount(), 1);
+}
+
+// Worst-first ordering can genuinely swap two cards. Row 0 becoming a different
+// issue is not an update of row 0.
+TEST(DiagnosticIssueModelTest, AReorderedIssueSetIsStructural) {
+    EnsureApplication();
+    DiagnosticIssueModel model;
+    model.setCards({MakeCard("ENC-01", "Encoder falling behind"), MakeCard("DSK-02", "Disk is slow")});
+
+    ModelChangeCounter counter(&model);
+    model.setCards({MakeCard("DSK-02", "Disk is slow"), MakeCard("ENC-01", "Encoder falling behind")});
+
+    EXPECT_EQ(counter.resets(), 1);
+    EXPECT_EQ(model.data(model.index(0), DiagnosticIssueModel::IssueIdRole).toString(), QStringLiteral("DSK-02"));
+}
+
+// Synthesised cards (profile invalidity, hotkey conflicts) carry no id, so the
+// title is what tells two of them apart.
+TEST(DiagnosticIssueModelTest, TwoIdlessCardsAreToldApartByTitle) {
+    EnsureApplication();
+    DiagnosticIssueModel model;
+    model.setCards({MakeCard("", "The saved preset is no longer valid")});
+
+    ModelChangeCounter counter(&model);
+    model.setCards({MakeCard("", "Two hotkeys are bound to the same combination")});
+
+    EXPECT_EQ(counter.resets(), 1);
+    EXPECT_EQ(counter.dataChanges(), 0);
+}
+
+TEST(DiagnosticIssueModelTest, ClearingEverySurfacedIssueIsStructural) {
+    EnsureApplication();
+    DiagnosticIssueModel model;
+    model.setCards({MakeCard("ENC-01", "Encoder falling behind")});
+
+    ModelChangeCounter counter(&model);
+    model.setCards({});
+
+    EXPECT_EQ(counter.resets(), 1);
+    EXPECT_EQ(model.rowCount(), 0);
 }

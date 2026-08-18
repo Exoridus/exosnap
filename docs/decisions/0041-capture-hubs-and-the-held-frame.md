@@ -9,6 +9,14 @@ idle-duplication hardware probe (MPO / fullscreen behaviour beside a running
 game) is still outstanding and remains the off-ramp for the DXGI hub's idle
 duplication specifically — the rest does not depend on it.
 
+**Amended for v0.9.** The first consumer named above is gone. The shipping source
+picker is a named list of displays and windows with no image path at all (see
+`docs/product-spec.md` §7), so `ThumbnailCapture` and the `ThumbnailMip` helper it
+read back through were removed as unreferenced code. The hub architecture this ADR
+decided is unaffected and still carries the preview: what changed is which
+consumers exist, not how a hub arbitrates or what a held frame means. The
+`ThumbnailCapture` bullet below is kept as the record of what was built.
+
 Design source: `docs/superpowers/specs/2026-07-10-capture-hubs-design.md`.
 Related: ADR 0013 (OD for monitor capture, format policy), ADR 0040 (WYSIWYG
 preview via engine source-tap).

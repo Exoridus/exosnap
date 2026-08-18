@@ -3,6 +3,13 @@
 // All version fields derive from the canonical root project(... VERSION ...).
 #include <winver.h>
 
+// The application's brand icon. Windows uses the lowest-numbered icon resource
+// as the executable's icon, which is what the taskbar and Explorer show -- and
+// Qt takes it as the default window icon. Without it the updater ran under the
+// generic executable icon while replacing ExoSnap, which is the one moment a
+// user has to be sure of what they are looking at.
+1 ICON "@EXOSNAP_UPDATER_ICON@"
+
 VS_VERSION_INFO VERSIONINFO
  FILEVERSION    @EXOSNAP_VERSION_COMMA@
  PRODUCTVERSION @EXOSNAP_VERSION_COMMA@

@@ -55,7 +55,7 @@ GridLayout {
             textFormat: Text.PlainText
             wrapMode: Text.WordWrap
             visible: root.warning !== ""
-            color: ExoTheme.warning
+            color: ExoTheme.warningText
             Layout.fillWidth: true
             font {
                 family: ExoTheme.sansFamily

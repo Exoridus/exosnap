@@ -22,6 +22,7 @@
 #include <iterator>
 #include <memory>
 #include <string>
+#include <type_traits>
 
 namespace exosnap::quick {
 namespace {
@@ -53,15 +54,30 @@ float4 main(float4 position : SV_POSITION) : SV_TARGET {
 }
 )";
 
+// Scoped owner of one shared-texture HANDLE. Non-copyable and non-movable: a
+// copy would leave two owners closing the same handle, and Windows recycles
+// handle values, so the second CloseHandle can close an UNRELATED object rather
+// than merely failing. The surrounding code passes handles around as `void*`,
+// where an accidental by-value capture is one keystroke away — the same reason
+// CaptureSourceHub, AudioDeviceNotifier and LiveVerifyControlServer delete
+// theirs. Nothing here needs to move one, so no move operations are defined
+// (the destructor already suppresses the implicit ones).
 struct OwnedHandle {
     explicit OwnedHandle(void* value) : value(static_cast<HANDLE>(value)) {
     }
+    OwnedHandle(const OwnedHandle&) = delete;
+    OwnedHandle& operator=(const OwnedHandle&) = delete;
     ~OwnedHandle() {
         if (value != nullptr)
             CloseHandle(value);
     }
     HANDLE value = nullptr;
 };
+
+static_assert(!std::is_copy_constructible_v<OwnedHandle>, "an owned HANDLE must never be copied");
+static_assert(!std::is_copy_assignable_v<OwnedHandle>, "an owned HANDLE must never be copied");
+static_assert(!std::is_move_constructible_v<OwnedHandle>,
+              "no consumer moves one; add a move that clears the source first");
 
 struct CropConstants {
     uint32_t x = 0;

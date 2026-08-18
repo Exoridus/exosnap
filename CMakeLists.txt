@@ -171,10 +171,44 @@ if(Git_FOUND AND EXISTS "${PROJECT_SOURCE_DIR}/.git")
     endif()
 endif()
 
+# Qt's deployment API is set up ONCE, by whichever directory first calls
+# find_package(Qt6), and the set of deploy helpers it makes available is read
+# off the Qt6::Core target in that directory's scope. Imported targets are
+# directory-scoped by default, so a sibling directory that later asks for the
+# Qml component registers Qt6QmlDeploySupport.cmake on a DIFFERENT Qt6::Core and
+# the generated QtDeploySupport-<CONFIG>.cmake never learns about it — the
+# install step then dies on "qt6_deploy_qml_imports: Unknown CMake command".
+# That is exactly what libs/control (the first find_package(Qt6) in the tree,
+# Core-only) did to app/'s Qt Quick deployment. Promoting imported targets to
+# global scope makes all of them the same Qt6::Core regardless of which
+# subdirectory finds Qt first, so the ordering below stays a readability
+# decision rather than a packaging contract.
+set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL ON)
+
+# The local Qt hint belongs HERE, not in app/, for the same reason the paragraph
+# above exists: libs/control is the first directory to call find_package(Qt6), and
+# it runs two add_subdirectory() lines before app/. A hint that arrives later is a
+# hint that arrives after the decision it was meant to inform -- libs/control then
+# takes its "Qt6 not found" branch, exosnap::control is never defined, and the
+# configure dies further down on an alias nobody declared. It stayed invisible for
+# as long as every tree had Qt6_DIR in its cache from an earlier configure, and on
+# CI, where the Qt action exports the path into the environment; the first genuinely
+# clean local configure is what surfaced it.
+#
+# Overridable as before: an explicit Qt6_DIR or CMAKE_PREFIX_PATH wins, because this
+# only fills in when nothing else has.
+if(NOT Qt6_DIR)
+    list(APPEND CMAKE_PREFIX_PATH "C:/Qt/6.11.1/msvc2022_64")
+endif()
+
 add_subdirectory(libs/recorder_core)
 add_subdirectory(libs/capability)
 add_subdirectory(libs/crash_capture)
 add_subdirectory(libs/update)
+# Before app/ and apps/updater/: both link the shared control-channel layer and
+# the shared update-handoff document (one schema, two processes).
+add_subdirectory(libs/control)
+add_subdirectory(libs/update_handoff)
 add_subdirectory(app)
 add_subdirectory(apps/updater)
 add_subdirectory(tests)
@@ -192,3 +226,10 @@ endif()
 # library + its CI test; the GPU-driving `exosnap-soak` executable is gated
 # inside on EXOSNAP_BUILD_SOAK (developer machine only).
 add_subdirectory(tools/soak)
+
+# TEST-ONLY Windows environment orchestrator (display/audio state for release
+# verification). Unconditional like tools/soak so the PURE transaction library
+# and its tests build on the headless CI runner; the WinAPI provider and the
+# `exosnap-envctl` host are guarded by if(WIN32) inside. Nothing here is linked
+# into exosnap.exe or exosnap-updater.exe, and nothing here is installed.
+add_subdirectory(tools/envctl)

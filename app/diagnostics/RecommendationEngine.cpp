@@ -626,10 +626,8 @@ ExclusiveEvidence RecommendationEngine::exclusiveWindowEvidence() const {
     if (!capture_window_facts_.has_value()) {
         return ExclusiveEvidence::None;
     }
-    const WindowShape shape = ClassifyWindowShape(*capture_window_facts_);
     const bool present_fse = present_.has_value() && present_->mode == PresentMode::ExclusiveFullscreen;
-    const bool signal = capture_window_facts_->quns_d3d_fullscreen || present_fse;
-    return CombineFullscreenEvidence(shape, capture_window_hub_, signal);
+    return ResolveExclusiveEvidence(*capture_window_facts_, capture_window_hub_, present_fse);
 }
 
 void RecommendationEngine::checkExclusiveWindowTarget(DiagnosticChecklist& checklist) const {

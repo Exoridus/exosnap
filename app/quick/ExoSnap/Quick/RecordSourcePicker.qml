@@ -113,11 +113,18 @@ Popup {
         }
 
         ListView {
-            id: windowList
-
             model: root.recordViewModel.windowTargetOptions
             spacing: ExoTheme.spacingXs
             boundsBehavior: Flickable.StopAtBounds
+            // The window list is the one scrolling region in this dialog, so it
+            // is the one item whose contents can leave their own bounds: with a
+            // list longer than the popup, the rows above and below the viewport
+            // were drawn straight over the dialog's padding and past its rounded
+            // edge. Clipped here, at the viewport itself, rather than higher up
+            // the tree — the Flow above scrolls nothing, and a clip on the
+            // content column or the popup would cut the delegates' own hover and
+            // focus decorations at the padding line.
+            clip: true
             Layout.fillWidth: true
             Layout.fillHeight: true
 

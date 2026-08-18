@@ -44,6 +44,41 @@ Item {
 
     objectName: "quickDiagnosticsPage"
 
+    // ── Automation targets (protocol 2 ui.reveal) ────────────────────────────
+    //
+    // Two, because two are addressable product landmarks: the verdict band the
+    // page opens on, and the collapsed hardware-capability section that carries
+    // the per-GPU adapter cards and the capability matrix. Everything else on
+    // this page is either always visible or Expert-only taxonomy that the Expert
+    // toggle already governs.
+    readonly property var automationTargets: ({
+        "verdict": verdictBand,
+        "hardwareCapabilities": hardwareCapabilitiesSection
+    })
+
+    // -1 = no such target, 0 = a real target that did not reach the viewport,
+    // 1 = revealed. Same three-way answer as SettingsPage, for the same reason.
+    function revealAutomationTarget(name: string): int {
+        const section = root.automationTargets[name];
+        if (section === undefined || section === null)
+            return -1;
+        // Hardware capabilities is collapsed by default outside Expert, and a
+        // scroll that stops at a closed header has not revealed the section any
+        // more than not scrolling would have. Assigning `expanded` is exactly
+        // what pressing the header does.
+        if (section === hardwareCapabilitiesSection)
+            hardwareCapabilitiesSection.expanded = true;
+        return scroll.revealItem(section) ? 1 : 0;
+    }
+
+    function scrollAutomationHome(): bool {
+        return scroll.scrollToHome();
+    }
+
+    function scrollAutomationEnd(): bool {
+        return scroll.scrollToEnd();
+    }
+
     onVisibleChanged: {
         if (root.visible) {
             root.diagnostics.ensureChecked();
@@ -197,6 +232,12 @@ Item {
                                                         : root.diagnostics.verdictState === "warn" ? ExoTheme.warning
                                                         : root.diagnostics.verdictState === "ready" ? ExoTheme.success
                                                         : ExoTheme.textMuted
+                    // The glyph is what says which verdict this is; the two
+                    // borders around it only mark the band.
+                    readonly property color verdictInk: root.diagnostics.verdictState === "blocked" ? ExoTheme.errorText
+                                                      : root.diagnostics.verdictState === "warn" ? ExoTheme.warningText
+                                                      : root.diagnostics.verdictState === "ready" ? ExoTheme.successText
+                                                      : ExoTheme.textMuted
 
                     implicitHeight: verdictRow.implicitHeight + 2 * ExoTheme.spacingLg
                     color: root.diagnostics.verdictState === "blocked" ? ExoTheme.errorSurface
@@ -231,7 +272,7 @@ Item {
                                       : root.diagnostics.verdictState === "warn" ? ExoGlyph.Warning
                                       : root.diagnostics.verdictState === "ready" ? ExoGlyph.Check
                                                                                   : ExoGlyph.Info
-                                color: verdictBand.verdictColor
+                                color: verdictBand.verdictInk
                                 strokeWidth: 1.8
                                 width: 20
                                 height: 20
@@ -297,6 +338,57 @@ Item {
                                 enabled: !root.diagnostics.checking
                                 Layout.alignment: Qt.AlignRight
                                 onClicked: root.diagnostics.runCheck()
+                            }
+                        }
+                    }
+                }
+
+                // ── Live pipeline summary ───────────────────────────────────────
+                //
+                // Present only while something is recording, and ABOVE the
+                // readiness tiles while it is: readiness answers "may I start",
+                // which stops being the question the moment a recording is
+                // running. Five tiles, one per question the page could not
+                // answer in Simple mode — is the pipeline healthy, where is the
+                // bottleneck, is frame pacing healthy, is the encoder healthy,
+                // is audio synchronous, is storage healthy.
+                //
+                // Every value comes from diagnostics::BuildLiveTiles over the
+                // engine's own snapshot. The page classifies nothing: a tile's
+                // tone IS PipelineHealth plus the engine's bottleneck
+                // attribution, so this surface can never call a pipeline the
+                // engine reported as Good a warning.
+                ColumnLayout {
+                    spacing: ExoTheme.spacingSm
+                    visible: root.diagnostics.liveTilesVisible
+                    Layout.fillWidth: true
+
+                    DiagnosticsSectionHeader {
+                        title: qsTr("LIVE RECORDING")
+                        Layout.fillWidth: true
+                    }
+
+                    GridLayout {
+                        columns: root.tileColumns
+                        columnSpacing: ExoTheme.spacingMd
+                        rowSpacing: ExoTheme.spacingMd
+                        Layout.fillWidth: true
+
+                        Repeater {
+                            model: root.diagnostics.liveTiles
+
+                            ExoStatusTile {
+                                id: liveTile
+
+                                required property var modelData
+
+                                title: liveTile.modelData.title
+                                value: liveTile.modelData.value
+                                sub: liveTile.modelData.sub
+                                detail: liveTile.modelData.detail
+                                tone: liveTile.modelData.tone
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
                             }
                         }
                     }
@@ -393,6 +485,8 @@ Item {
                 // for — expanded straight away in Expert, where the rest of the
                 // technical taxonomy is already open.
                 ExoDisclosure {
+                    id: hardwareCapabilitiesSection
+
                     // No subtitle: the panel opens on DeviceAdapter's own summary
                     // line, which says the same thing with the real adapter name
                     // in it. Two explanatory paragraphs stacked on top of each
@@ -571,106 +665,70 @@ Item {
                         Layout.fillWidth: true
                     }
 
-                    Rectangle {
-                        implicitHeight: elevationRow.implicitHeight + 2 * ExoTheme.spacingMd
-                        color: ExoTheme.surface
-                        border.width: 1
-                        border.color: ExoTheme.line
-                        radius: ExoTheme.radiusMd
+                    DiagnosticsRowCard {
                         Layout.fillWidth: true
 
-                        RowLayout {
-                            id: elevationRow
-
-                            spacing: ExoTheme.spacingMd
-                            anchors {
-                                fill: parent
-                                topMargin: ExoTheme.spacingMd
-                                bottomMargin: ExoTheme.spacingMd
-                                leftMargin: ExoTheme.spacingLg
-                                rightMargin: ExoTheme.spacingLg
+                        Label {
+                            text: root.diagnostics.elevated
+                                ? qsTr("Running elevated — PresentMon ETW present diagnostics are available.")
+                                : qsTr("Running standard — present-path and DPC/ISR measurements need an elevated relaunch.")
+                            textFormat: Text.PlainText
+                            wrapMode: Text.WordWrap
+                            color: ExoTheme.textMuted
+                            Layout.fillWidth: true
+                            Layout.minimumHeight: 17
+                            font {
+                                family: ExoTheme.sansFamily
+                                pixelSize: ExoTheme.fontSecondary
                             }
+                        }
 
-                            Label {
-                                text: root.diagnostics.elevated
-                                    ? qsTr("Running elevated — PresentMon ETW present diagnostics are available.")
-                                    : qsTr("Running standard — present-path and DPC/ISR measurements need an elevated relaunch.")
-                                textFormat: Text.PlainText
-                                wrapMode: Text.WordWrap
-                                color: ExoTheme.textMuted
-                                Layout.fillWidth: true
-                                Layout.minimumHeight: 17
-                                font {
-                                    family: ExoTheme.sansFamily
-                                    pixelSize: ExoTheme.fontSecondary
-                                }
-                            }
-
-                            ExoBadge {
-                                text: root.diagnostics.elevated ? qsTr("Elevated") : qsTr("Standard")
-                                tone: root.diagnostics.elevated ? "pass" : "neutral"
-                                Layout.alignment: Qt.AlignVCenter
-                            }
+                        ExoBadge {
+                            text: root.diagnostics.elevated ? qsTr("Elevated") : qsTr("Standard")
+                            tone: root.diagnostics.elevated ? "pass" : "neutral"
+                            Layout.alignment: Qt.AlignVCenter
                         }
                     }
 
                     // ── Logs redirect (Expert; the Simple view stays calm) ──────
-                    Rectangle {
-                        implicitHeight: logsRow.implicitHeight + 2 * ExoTheme.spacingMd
-                        color: ExoTheme.surface
-                        border.width: 1
-                        border.color: ExoTheme.line
-                        radius: ExoTheme.radiusMd
+                    DiagnosticsRowCard {
                         Layout.fillWidth: true
 
-                        RowLayout {
-                            id: logsRow
+                        ColumnLayout {
+                            spacing: 2
+                            Layout.fillWidth: true
 
-                            spacing: ExoTheme.spacingMd
-                            anchors {
-                                fill: parent
-                                topMargin: ExoTheme.spacingMd
-                                bottomMargin: ExoTheme.spacingMd
-                                leftMargin: ExoTheme.spacingLg
-                                rightMargin: ExoTheme.spacingLg
-                            }
-
-                            ColumnLayout {
-                                spacing: 2
+                            Label {
+                                text: qsTr("Application Logs")
+                                textFormat: Text.PlainText
+                                color: ExoTheme.text
                                 Layout.fillWidth: true
-
-                                Label {
-                                    text: qsTr("Application Logs")
-                                    textFormat: Text.PlainText
-                                    color: ExoTheme.text
-                                    Layout.fillWidth: true
-                                    font {
-                                        family: ExoTheme.sansFamily
-                                        pixelSize: ExoTheme.fontBody
-                                        weight: Font.DemiBold
-                                    }
-                                }
-
-                                Label {
-                                    text: qsTr("Need the raw event stream behind these checks? Open the Logs page.")
-                                    textFormat: Text.PlainText
-                                    wrapMode: Text.WordWrap
-                                    color: ExoTheme.textMuted
-                                    Layout.fillWidth: true
-                                    Layout.minimumHeight: 16
-                                    font {
-                                        family: ExoTheme.sansFamily
-                                        pixelSize: ExoTheme.fontCaption
-                                    }
+                                font {
+                                    family: ExoTheme.sansFamily
+                                    pixelSize: ExoTheme.fontBody
+                                    weight: Font.DemiBold
                                 }
                             }
 
-                            ExoButton {
-                                text: qsTr("Open Logs Page")
-                                quiet: true
-                                Layout.alignment: Qt.AlignVCenter
-                                onClicked: root.diagnostics.openLogs()
+                            Label {
+                                text: qsTr("Need the raw event stream behind these checks? Open the Logs page.")
+                                textFormat: Text.PlainText
+                                wrapMode: Text.WordWrap
+                                color: ExoTheme.textMuted
+                                Layout.fillWidth: true
+                                Layout.minimumHeight: 16
+                                font {
+                                    family: ExoTheme.sansFamily
+                                    pixelSize: ExoTheme.fontCaption
+                                }
                             }
+                        }
+
+                        ExoButton {
+                            text: qsTr("Open Logs Page")
+                            quiet: true
+                            Layout.alignment: Qt.AlignVCenter
+                            onClicked: root.diagnostics.openLogs()
                         }
                     }
                 }

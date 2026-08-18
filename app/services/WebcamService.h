@@ -163,25 +163,29 @@ class WebcamService : public recorder_core::WebcamFrameProvider {
     // Returns empty when IsMfPresent() is false.
     static std::vector<WebcamFormat> EnumerateFormats(const std::string& device_id);
 
-    // Set callback invoked on main thread with each new QImage frame.
+    // Set callback invoked on the main thread with each new QImage frame.
     // Legacy registration: delivery is bound to the application's lifetime, so the
     // callback must own no receiver it cannot outlive (a consumer should capture a
     // QPointer guard only).
+    //
+    // Callable from any thread, at any time, including while the capture thread is
+    // delivering: the registration is an immutable snapshot published under
+    // delivery_mutex_, so replacing or clearing it never destroys a closure a
+    // worker is holding (see PostFrame).
     void SetFrameCallback(FrameCallback cb);
 
     // Preferred registration: binds queued frame delivery to `receiver`'s
-    // lifetime. PostFrame enqueues onto `receiver`, so Qt drops any in-flight
-    // frame the moment the receiver is destroyed and the callback is never invoked
-    // against a freed receiver. Fixes the latent use-after-free where a frame
-    // posted just before the receiving page died was still delivered.
+    // lifetime. The receiver is validated on the delivery thread, so the callback
+    // is never invoked against a destroyed receiver. Same any-thread contract as
+    // the overload above.
     void SetFrameCallback(QObject* receiver, FrameCallback cb);
 
     using StatusCallback = std::function<void(bool ok, QString reason)>;
     // Fires on open-reader transitions only (a failure streak begins → ok=false
     // with the reason; recovery to a successful open → ok=true, reason empty). The
-    // first successful open of a run also fires ok=true. It is marshaled to
-    // `receiver`'s thread and dropped if the receiver died — same delivery contract
-    // as SetFrameCallback(receiver, cb). Stop() resets the streak state without
+    // first successful open of a run also fires ok=true. It is delivered on the
+    // main thread and dropped if the receiver died — same delivery contract as
+    // SetFrameCallback(receiver, cb). Stop() resets the streak state without
     // firing.
     void SetStatusCallback(QObject* receiver, StatusCallback cb);
 
@@ -204,8 +208,8 @@ class WebcamService : public recorder_core::WebcamFrameProvider {
     // without a live capture device.
     void PostFrame(QImage img);
 
-    // Marshals an open-reader status transition to the status callback's receiver
-    // thread. Same receiver-scoped, queued delivery as PostFrame.
+    // Marshals an open-reader status transition to the status callback. Same
+    // snapshot-and-post delivery as PostFrame.
     void PostStatus(bool ok, QString reason);
 
   private:
@@ -214,16 +218,30 @@ class WebcamService : public recorder_core::WebcamFrameProvider {
     // Body of Stop(); caller must hold control_mutex_.
     void StopLocked();
 
-    FrameCallback frame_callback_;
-    // When receiver_bound_ is true, delivery is scoped to receiver_: a null
-    // receiver_ means the receiver has been destroyed and the frame is dropped.
-    QPointer<QObject> receiver_;
-    bool receiver_bound_ = false;
+    // One registration, immutable once published. The capture thread copies the
+    // shared_ptr under delivery_mutex_ and touches nothing else: it never reads
+    // the QPointer (QPointer is a GUI-thread guard, not a synchronization
+    // primitive) and it cannot have a closure destroyed underneath it, because a
+    // replacement installs a *new* snapshot rather than mutating this one. The
+    // in-flight post keeps its own snapshot alive until it has run.
+    //
+    // `receiver` is read only on the delivery thread, inside the posted lambda.
+    // When receiver_bound is true a null receiver means the receiver has been
+    // destroyed and the event is dropped.
+    struct FrameDelivery {
+        FrameCallback callback;
+        QPointer<QObject> receiver;
+        bool receiver_bound = false;
+    };
+    // Status delivery is always receiver-scoped (no legacy unbound path).
+    struct StatusDelivery {
+        StatusCallback callback;
+        QPointer<QObject> receiver;
+    };
 
-    // Status delivery is always receiver-scoped (no legacy unbound path): a null
-    // status_receiver_ drops the event, mirroring the frame receiver contract.
-    StatusCallback status_callback_;
-    QPointer<QObject> status_receiver_;
+    mutable std::mutex delivery_mutex_;
+    std::shared_ptr<const FrameDelivery> frame_delivery_;   // guarded by delivery_mutex_
+    std::shared_ptr<const StatusDelivery> status_delivery_; // guarded by delivery_mutex_
 
     // Start()/Stop() are called from more than one thread (RecordingCoordinator's
     // UI-thread SyncWebcamService() and its background recording_thread_ both call

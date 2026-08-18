@@ -1,5 +1,6 @@
 #include "ExoPreviewItem.h"
 
+#include "PreviewPercentile.h"
 #include "QuickPreviewRgbaConverter.h"
 #include "RecordPreviewAdapter.h"
 #include "RoundedRectClipGeometry.h"
@@ -77,14 +78,6 @@ void tracePresentation(const char* transition, const QQuickWindow* window, const
           scheduler != nullptr ? scheduler->RenderPasses() : 0ULL);
 }
 
-double percentile(std::vector<double> values, double fraction) {
-    if (values.empty())
-        return 0.0;
-    std::sort(values.begin(), values.end());
-    const size_t index = static_cast<size_t>(std::ceil(fraction * static_cast<double>(values.size()))) - 1;
-    return values[std::min(index, values.size() - 1)];
-}
-
 class PreviewTextureNode final : public QSGNode {
   public:
     PreviewTextureNode() {
@@ -101,16 +94,15 @@ class PreviewTextureNode final : public QSGNode {
         delete texture_wrapper_;
     }
 
+    // `owner` is read here and NOT stored: adopt() runs at the sync point with
+    // the GUI thread blocked, so this is the one moment the render thread may
+    // touch the item at all. Everything preprocess() needs afterwards comes out
+    // of the two shared_ptrs taken here, which outlive the item (QCR-109).
     void adopt(ExoPreviewItem::PendingSource source, QQuickWindow* window, ExoPreviewItem* owner,
-               ExoPreviewItem::Metrics& metrics, QString& error) {
+               std::shared_ptr<ExoPreviewItem::RenderLink> link, QString& error) {
         releaseGpuResources();
         window_ = window;
-        owner_ = owner;
-        metrics_ = &metrics;
-        // Copied here rather than reached for in preprocess(). adopt() runs at
-        // the sync point with the GUI thread blocked, so this is the one moment
-        // the render thread may read the item's members; afterwards the node
-        // owns a shared_ptr that outlives any adapter swap.
+        link_ = std::move(link);
         scheduler_ = owner != nullptr ? owner->updateScheduler() : nullptr;
         generation_ = source.generation;
         if (source.clear || source.handle == nullptr)
@@ -161,7 +153,7 @@ class PreviewTextureNode final : public QSGNode {
 
         D3D11_TEXTURE2D_DESC desc{};
         shared_texture_->GetDesc(&desc);
-        metrics.source_dxgi_format.store(static_cast<uint32_t>(desc.Format), std::memory_order_relaxed);
+        link_->metrics.source_dxgi_format.store(static_cast<uint32_t>(desc.Format), std::memory_order_relaxed);
         width_ = desc.Width;
         height_ = desc.Height;
         tap_ = source.tap;
@@ -300,7 +292,11 @@ class PreviewTextureNode final : public QSGNode {
     }
 
     void preprocess() override {
-        if (!valid_ || window_ == nullptr || owner_ == nullptr || metrics_ == nullptr || !owner_->renderLoopActive()) {
+        // Render thread, after the sync stage released the GUI thread. Nothing
+        // below dereferences the item: the link is render-owned and its atomics
+        // stay valid even while ~ExoPreviewItem runs on the other thread.
+        if (!valid_ || window_ == nullptr || link_ == nullptr ||
+            !link_->render_loop_active.load(std::memory_order_acquire)) {
             return;
         }
         // Before the acquire below, so a publish that races this pass stays
@@ -309,19 +305,19 @@ class PreviewTextureNode final : public QSGNode {
             scheduler_->NoteRenderPass();
         QString error;
         const bool first_frame = !has_frame_;
-        const bool consumed = consume(window_, *metrics_, error);
+        const bool consumed = consume(window_, link_->metrics, error);
         if (!error.isEmpty()) {
             conversion_error_active_ = true;
-            owner_->publishRenderStateFromRenderThread(generation_, has_frame_, sourceSize(), error);
+            ExoPreviewItem::RenderLink::publishRenderState(link_, generation_, has_frame_, sourceSize(), error);
         }
         if (consumed && (first_frame || conversion_error_active_)) {
             if (image_node_ != nullptr)
                 image_node_->setRect(target_rect_);
             conversion_error_active_ = false;
-            owner_->publishRenderStateFromRenderThread(generation_, true, sourceSize(), {});
+            ExoPreviewItem::RenderLink::publishRenderState(link_, generation_, true, sourceSize(), {});
         }
         if (has_frame_)
-            recordSceneFrame(*metrics_);
+            recordSceneFrame(link_->metrics);
         // Deliberately no window_->update() here. Asking for the next render at
         // the end of this one is what made the scene graph redraw the whole
         // window at display refresh on a quiet desktop. Renders are requested by
@@ -351,9 +347,6 @@ class PreviewTextureNode final : public QSGNode {
 
     [[nodiscard]] bool valid() const noexcept {
         return valid_;
-    }
-    [[nodiscard]] bool hasFrame() const noexcept {
-        return has_frame_;
     }
     [[nodiscard]] QSize sourceSize() const {
         return QSize(static_cast<int>(width_), static_cast<int>(height_));
@@ -415,8 +408,8 @@ class PreviewTextureNode final : public QSGNode {
     QSGImageNode* image_node_ = nullptr;
     QSGClipNode* clip_node_ = nullptr;
     QQuickWindow* window_ = nullptr;
-    QPointer<ExoPreviewItem> owner_;
-    ExoPreviewItem::Metrics* metrics_ = nullptr;
+    // Render-owned for the node's whole lifetime; see ExoPreviewItem::RenderLink.
+    std::shared_ptr<ExoPreviewItem::RenderLink> link_;
     std::shared_ptr<PreviewUpdateScheduler> scheduler_;
     QRectF target_rect_;
     QRectF geometry_rect_;
@@ -446,9 +439,15 @@ class PreviewTextureNode final : public QSGNode {
 ExoPreviewItem::ExoPreviewItem(QQuickItem* parent) : QQuickItem(parent) {
     setFlag(ItemHasContents, true);
     setAcceptedMouseButtons(Qt::NoButton);
+    render_link_->item = this;
 }
 
 ExoPreviewItem::~ExoPreviewItem() {
+    // A scene-graph node may still be holding the link (its deletion is deferred
+    // to a synchronization stage). Cutting the item out of it here is what makes
+    // a publication that lands after this point a no-op rather than a
+    // use-after-free; the render thread's half of the link stays valid.
+    render_link_->item = nullptr;
     setPreviewAdapter(nullptr);
     QMutexLocker lock(&pending_mutex_);
     closeHandle(pending_.handle);
@@ -543,11 +542,11 @@ void ExoPreviewItem::presentSharedTexture(void* nt_handle, uint32_t width, uint3
     }
     active_generation_.store(generation, std::memory_order_release);
     if (pending_handle == nullptr) {
-        render_loop_active_.store(false, std::memory_order_release);
+        renderLoopFlag().store(false, std::memory_order_release);
         applyRenderState(false, {}, QStringLiteral("Duplicating the D3D11 preview shared handle failed."));
         return;
     }
-    render_loop_active_.store(true, std::memory_order_release);
+    renderLoopFlag().store(true, std::memory_order_release);
     update();
 }
 
@@ -561,7 +560,7 @@ void ExoPreviewItem::clearSharedTexture() {
         pending_ = {nullptr, 0, 0, {}, generation, true};
     }
     active_generation_.store(generation, std::memory_order_release);
-    render_loop_active_.store(false, std::memory_order_release);
+    renderLoopFlag().store(false, std::memory_order_release);
     applyRenderState(false, {}, {});
     update();
 }
@@ -584,7 +583,7 @@ void ExoPreviewItem::requestSceneUpdate() {
 
 void ExoPreviewItem::reissuePendingPresentation(const char* transition) {
     Q_ASSERT(QThread::currentThread() == thread());
-    const bool loop_active = render_loop_active_.load(std::memory_order_acquire);
+    const bool loop_active = renderLoopFlag().load(std::memory_order_acquire);
     const bool reissue = loop_active && update_scheduler_ != nullptr && update_scheduler_->HasUnrenderedPublish();
     tracePresentation(transition, window(), update_scheduler_.get(), loop_active, reissue);
     if (!reissue)
@@ -605,75 +604,90 @@ bool ExoPreviewItem::eventFilter(QObject* watched, QEvent* event) {
 
 PreviewMetricsSnapshot ExoPreviewItem::metricsSnapshot() const {
     PreviewMetricsSnapshot snapshot;
-    snapshot.render_frames = metrics_.render_frames.load(std::memory_order_relaxed);
-    snapshot.consumed_frames = metrics_.consumed_frames.load(std::memory_order_relaxed);
-    snapshot.mutex_misses = metrics_.mutex_misses.load(std::memory_order_relaxed);
-    snapshot.source_dxgi_format = metrics_.source_dxgi_format.load(std::memory_order_relaxed);
+    snapshot.render_frames = metrics().render_frames.load(std::memory_order_relaxed);
+    snapshot.consumed_frames = metrics().consumed_frames.load(std::memory_order_relaxed);
+    snapshot.mutex_misses = metrics().mutex_misses.load(std::memory_order_relaxed);
+    snapshot.source_dxgi_format = metrics().source_dxgi_format.load(std::memory_order_relaxed);
+
+    // Three member scratch buffers rather than three fresh vectors per call: this
+    // runs on a 250 ms timer for as long as the preview is up, and the buffers
+    // are 1024 doubles each. Only ever touched from the GUI thread — see the
+    // declaration in the header for why that is not a render-thread hazard.
+    std::vector<double>& intervals = interval_scratch_;
+    std::vector<double>& scene_intervals = scene_interval_scratch_;
+    std::vector<double>& submits = submit_scratch_;
+    intervals.clear();
+    scene_intervals.clear();
+    submits.clear();
 
     const quint64 interval_count =
-        std::min<quint64>(metrics_.interval_write.load(std::memory_order_relaxed), kMetricWindow);
-    std::vector<double> intervals;
+        std::min<quint64>(metrics().interval_write.load(std::memory_order_relaxed), kMetricWindow);
     intervals.reserve(static_cast<size_t>(interval_count));
     for (quint64 i = 0; i < interval_count; ++i) {
-        const qint64 value = metrics_.interval_ns[i].load(std::memory_order_relaxed);
+        const qint64 value = metrics().interval_ns[i].load(std::memory_order_relaxed);
         if (value > 0)
             intervals.push_back(static_cast<double>(value) / 1'000'000.0);
     }
-    snapshot.source_interval_ms_p95 = percentile(intervals, 0.95);
-    snapshot.source_interval_ms_p99 = percentile(intervals, 0.99);
+    // Summed BEFORE the sort. Floating-point addition is not associative, so
+    // accumulating a sorted vector would give a different last bit than the old
+    // code did — a gratuitous change to a published number.
     if (!intervals.empty()) {
         const double total_ms = std::accumulate(intervals.begin(), intervals.end(), 0.0);
         snapshot.source_delivery_fps = total_ms > 0.0 ? 1000.0 * static_cast<double>(intervals.size()) / total_ms : 0.0;
     }
+    std::sort(intervals.begin(), intervals.end());
+    snapshot.source_interval_ms_p95 = PercentileSorted(intervals, 0.95);
+    snapshot.source_interval_ms_p99 = PercentileSorted(intervals, 0.99);
 
     const quint64 scene_interval_count =
-        std::min<quint64>(metrics_.scene_interval_write.load(std::memory_order_relaxed), kMetricWindow);
-    std::vector<double> scene_intervals;
+        std::min<quint64>(metrics().scene_interval_write.load(std::memory_order_relaxed), kMetricWindow);
     scene_intervals.reserve(static_cast<size_t>(scene_interval_count));
     for (quint64 i = 0; i < scene_interval_count; ++i) {
-        const qint64 value = metrics_.scene_interval_ns[i].load(std::memory_order_relaxed);
+        const qint64 value = metrics().scene_interval_ns[i].load(std::memory_order_relaxed);
         if (value > 0)
             scene_intervals.push_back(static_cast<double>(value) / 1'000'000.0);
     }
-    snapshot.scene_frame_ms_p50 = percentile(scene_intervals, 0.50);
-    snapshot.scene_frame_ms_p95 = percentile(scene_intervals, 0.95);
-    snapshot.scene_frame_ms_p99 = percentile(scene_intervals, 0.99);
-    snapshot.scene_frame_ms_max =
-        scene_intervals.empty() ? 0.0 : *std::max_element(scene_intervals.begin(), scene_intervals.end());
     if (!scene_intervals.empty()) {
         const double total_ms = std::accumulate(scene_intervals.begin(), scene_intervals.end(), 0.0);
         snapshot.scene_fps = total_ms > 0.0 ? 1000.0 * static_cast<double>(scene_intervals.size()) / total_ms : 0.0;
     }
+    std::sort(scene_intervals.begin(), scene_intervals.end());
+    snapshot.scene_frame_ms_p50 = PercentileSorted(scene_intervals, 0.50);
+    snapshot.scene_frame_ms_p95 = PercentileSorted(scene_intervals, 0.95);
+    snapshot.scene_frame_ms_p99 = PercentileSorted(scene_intervals, 0.99);
+    // The sort already put the maximum at the back; std::max_element over the
+    // same values returned exactly this.
+    snapshot.scene_frame_ms_max = scene_intervals.empty() ? 0.0 : scene_intervals.back();
 
     const quint64 submit_count =
-        std::min<quint64>(metrics_.submit_write.load(std::memory_order_relaxed), kMetricWindow);
-    std::vector<double> submits;
+        std::min<quint64>(metrics().submit_write.load(std::memory_order_relaxed), kMetricWindow);
     submits.reserve(static_cast<size_t>(submit_count));
     for (quint64 i = 0; i < submit_count; ++i) {
-        const qint64 value = metrics_.submit_ns[i].load(std::memory_order_relaxed);
+        const qint64 value = metrics().submit_ns[i].load(std::memory_order_relaxed);
         if (value > 0)
             submits.push_back(static_cast<double>(value) / 1'000.0);
     }
-    snapshot.submit_us_p50 = percentile(submits, 0.50);
-    snapshot.submit_us_p95 = percentile(submits, 0.95);
-    snapshot.submit_us_p99 = percentile(submits, 0.99);
+    std::sort(submits.begin(), submits.end());
+    snapshot.submit_us_p50 = PercentileSorted(submits, 0.50);
+    snapshot.submit_us_p95 = PercentileSorted(submits, 0.95);
+    snapshot.submit_us_p99 = PercentileSorted(submits, 0.99);
     return snapshot;
 }
 
 void ExoPreviewItem::resetMetrics() {
-    metrics_.render_frames.store(0, std::memory_order_relaxed);
-    metrics_.consumed_frames.store(0, std::memory_order_relaxed);
-    metrics_.mutex_misses.store(0, std::memory_order_relaxed);
-    metrics_.interval_write.store(0, std::memory_order_relaxed);
-    metrics_.scene_interval_write.store(0, std::memory_order_relaxed);
-    metrics_.submit_write.store(0, std::memory_order_relaxed);
-    metrics_.last_consumed_ns.store(0, std::memory_order_relaxed);
-    metrics_.last_scene_frame_ns.store(0, std::memory_order_relaxed);
-    for (auto& sample : metrics_.interval_ns)
+    metrics().render_frames.store(0, std::memory_order_relaxed);
+    metrics().consumed_frames.store(0, std::memory_order_relaxed);
+    metrics().mutex_misses.store(0, std::memory_order_relaxed);
+    metrics().interval_write.store(0, std::memory_order_relaxed);
+    metrics().scene_interval_write.store(0, std::memory_order_relaxed);
+    metrics().submit_write.store(0, std::memory_order_relaxed);
+    metrics().last_consumed_ns.store(0, std::memory_order_relaxed);
+    metrics().last_scene_frame_ns.store(0, std::memory_order_relaxed);
+    for (auto& sample : metrics().interval_ns)
         sample.store(0, std::memory_order_relaxed);
-    for (auto& sample : metrics_.scene_interval_ns)
+    for (auto& sample : metrics().scene_interval_ns)
         sample.store(0, std::memory_order_relaxed);
-    for (auto& sample : metrics_.submit_ns)
+    for (auto& sample : metrics().submit_ns)
         sample.store(0, std::memory_order_relaxed);
 }
 
@@ -689,9 +703,9 @@ QSGNode* ExoPreviewItem::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData*
         }
         node = new PreviewTextureNode;
         QString error;
-        node->adopt(pending, window(), this, metrics_, error);
+        node->adopt(pending, window(), this, render_link_, error);
         if (!error.isEmpty()) {
-            render_loop_active_.store(false, std::memory_order_release);
+            renderLoopFlag().store(false, std::memory_order_release);
             postRenderState(pending.generation, false, {}, error);
         } else {
             postRenderState(pending.generation, false, node->sourceSize(), {});
@@ -714,7 +728,7 @@ QSGNode* ExoPreviewItem::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData*
 void ExoPreviewItem::itemChange(ItemChange change, const ItemChangeData& value) {
     QQuickItem::itemChange(change, value);
     if (change == ItemVisibleHasChanged) {
-        render_loop_active_.store(value.boolValue, std::memory_order_release);
+        renderLoopFlag().store(value.boolValue, std::memory_order_release);
         if (value.boolValue)
             update();
     } else if (change == ItemSceneChange) {
@@ -740,14 +754,14 @@ void ExoPreviewItem::itemChange(ItemChange change, const ItemChangeData& value) 
                                                  [this](QScreen*) { reissuePendingPresentation("screen-changed"); });
             scene_graph_invalidated_connection_ =
                 connect(value.window, &QQuickWindow::sceneGraphInvalidated, this, [this]() {
-                    render_loop_active_.store(false, std::memory_order_release);
+                    renderLoopFlag().store(false, std::memory_order_release);
                     const quint64 generation = active_generation_.load(std::memory_order_acquire);
                     postRenderState(generation, false, source_size_, {});
                 });
             scene_graph_initialized_connection_ =
                 connect(value.window, &QQuickWindow::sceneGraphInitialized, this, [this]() {
                     if (queueRetainedSource()) {
-                        render_loop_active_.store(isVisible(), std::memory_order_release);
+                        renderLoopFlag().store(isVisible(), std::memory_order_release);
                         update();
                         return;
                     }
@@ -810,12 +824,27 @@ void ExoPreviewItem::postRenderState(quint64 generation, bool ready, QSize size,
         Qt::QueuedConnection);
 }
 
-void ExoPreviewItem::publishRenderStateFromRenderThread(quint64 generation, bool ready, QSize size, QString error) {
-    postRenderState(generation, ready, size, std::move(error));
-}
-
-bool ExoPreviewItem::renderLoopActive() const noexcept {
-    return render_loop_active_.load(std::memory_order_acquire);
+void ExoPreviewItem::RenderLink::publishRenderState(std::shared_ptr<RenderLink> link, quint64 generation, bool ready,
+                                                    QSize size, QString error) {
+    QCoreApplication* app = QCoreApplication::instance();
+    if (link == nullptr || app == nullptr)
+        return;
+    // The receiver is the application object, never the item: this runs on the
+    // render thread, where the item may be halfway through its destructor. The
+    // item is resolved in the lambda below, on the GUI thread, which is also the
+    // only thread that writes `item` — so the check and the use cannot be
+    // separated by a destruction.
+    QMetaObject::invokeMethod(
+        app,
+        [link = std::move(link), generation, ready, size, error = std::move(error)]() {
+            ExoPreviewItem* target = link->item.data();
+            if (target == nullptr)
+                return;
+            if (generation != target->active_generation_.load(std::memory_order_acquire))
+                return;
+            target->applyRenderState(ready, size, error);
+        },
+        Qt::QueuedConnection);
 }
 
 void ExoPreviewItem::closeHandle(void* handle) noexcept {

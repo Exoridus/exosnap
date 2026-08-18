@@ -103,13 +103,13 @@ TEST(RecordingHistoryStoreTest, ValidEntriesRoundTrip) {
 
     {
         QFile f(file1);
-        f.open(QIODevice::WriteOnly);
+        ASSERT_TRUE(f.open(QIODevice::WriteOnly));
         f.write("test");
         f.close();
     }
     {
         QFile f(file2);
-        f.open(QIODevice::WriteOnly);
+        ASSERT_TRUE(f.open(QIODevice::WriteOnly));
         f.write("test");
         f.close();
     }
@@ -148,7 +148,7 @@ TEST(RecordingHistoryStoreTest, OrderingDeterministic) {
     for (int i = 0; i < 5; ++i) {
         const QString file_path = dir.filePath(QStringLiteral("rec%1.mkv").arg(i));
         QFile f(file_path);
-        f.open(QIODevice::WriteOnly);
+        ASSERT_TRUE(f.open(QIODevice::WriteOnly));
         f.close();
         originals.append(MakeTestRecording(file_path, i));
     }
@@ -180,7 +180,7 @@ TEST(RecordingHistoryStoreTest, MaxHistoryLengthEnforced) {
     for (int i = 0; i < 15; ++i) {
         const QString file_path = dir.filePath(QStringLiteral("rec%1.mkv").arg(i));
         QFile f(file_path);
-        f.open(QIODevice::WriteOnly);
+        ASSERT_TRUE(f.open(QIODevice::WriteOnly));
         f.close();
 
         CompletedRecording rec = MakeTestRecording(file_path, i);
@@ -207,7 +207,7 @@ TEST(RecordingHistoryStoreTest, DuplicatePathsDeduplicated) {
     const QString file_path = dir.filePath(QStringLiteral("dup.mkv"));
     {
         QFile f(file_path);
-        f.open(QIODevice::WriteOnly);
+        ASSERT_TRUE(f.open(QIODevice::WriteOnly));
         f.close();
     }
 
@@ -246,7 +246,7 @@ TEST(RecordingHistoryStoreTest, RenameUpdatesStoredPath) {
     const QString file_path = dir.filePath(QStringLiteral("original.mkv"));
     {
         QFile f(file_path);
-        f.open(QIODevice::WriteOnly);
+        ASSERT_TRUE(f.open(QIODevice::WriteOnly));
         f.close();
     }
 
@@ -288,12 +288,12 @@ TEST(RecordingHistoryStoreTest, DeleteRemovesStoredEntry) {
     const QString file2 = dir.filePath(QStringLiteral("delete.mkv"));
     {
         QFile f(file1);
-        f.open(QIODevice::WriteOnly);
+        ASSERT_TRUE(f.open(QIODevice::WriteOnly));
         f.close();
     }
     {
         QFile f(file2);
-        f.open(QIODevice::WriteOnly);
+        ASSERT_TRUE(f.open(QIODevice::WriteOnly));
         f.close();
     }
 
@@ -371,7 +371,7 @@ TEST(RecordingHistoryStoreTest, InvalidEntrySkippedValidEntriesSurvive) {
     const QString valid_path = dir.filePath(QStringLiteral("valid.mkv"));
     {
         QFile f(valid_path);
-        f.open(QIODevice::WriteOnly);
+        ASSERT_TRUE(f.open(QIODevice::WriteOnly));
         f.close();
     }
 
@@ -639,7 +639,7 @@ TEST(RecordingHistoryStoreTest, FailedAtomicSaveDoesNotCorruptPriorValidFile) {
     const QString file_path = dir.filePath(QStringLiteral("original.mkv"));
     {
         QFile f(file_path);
-        f.open(QIODevice::WriteOnly);
+        ASSERT_TRUE(f.open(QIODevice::WriteOnly));
         f.close();
     }
 
@@ -682,7 +682,7 @@ TEST(RecordingHistoryStoreTest, ViewModelPersistIntegration) {
     for (int i = 0; i < 3; ++i) {
         const QString file_path = dir.filePath(QStringLiteral("rec%1.mkv").arg(i));
         QFile f(file_path);
-        f.open(QIODevice::WriteOnly);
+        ASSERT_TRUE(f.open(QIODevice::WriteOnly));
         f.close();
 
         CompletedRecording rec = MakeTestRecording(file_path, i);
@@ -723,7 +723,7 @@ TEST(RecordingHistoryStoreTest, TimestampParsing) {
     const QString file_path = dir.filePath(QStringLiteral("ts.mkv"));
     {
         QFile f(file_path);
-        f.open(QIODevice::WriteOnly);
+        ASSERT_TRUE(f.open(QIODevice::WriteOnly));
         f.close();
     }
 
@@ -764,7 +764,7 @@ TEST(RecordingHistoryStoreTest, MarkersRoundTrip) {
     const QString file_path = dir.filePath(QStringLiteral("marked.mkv"));
     {
         QFile f(file_path);
-        f.open(QIODevice::WriteOnly);
+        ASSERT_TRUE(f.open(QIODevice::WriteOnly));
         f.close();
     }
 
@@ -801,7 +801,7 @@ TEST(RecordingHistoryStoreTest, InvalidMarkerIsSkippedNotFatal) {
     const QString file_path = dir.filePath(QStringLiteral("salvage.mkv"));
     {
         QFile f(file_path);
-        f.open(QIODevice::WriteOnly);
+        ASSERT_TRUE(f.open(QIODevice::WriteOnly));
         f.close();
     }
 

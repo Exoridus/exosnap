@@ -5,6 +5,7 @@
 #include "services/DisplayIdentityEnumerator.h"
 #include "services/DisplayIdentityResolver.h"
 #include "services/RecordingCoordinator.h"
+#include "services/TargetDisplayFacts.h"
 #include "services/UpdateService.h"
 
 #include "diagnostics/AppLog.h"
@@ -12,6 +13,7 @@
 #include "diagnostics/CrashSessionContext.h"
 #include "diagnostics/ElevationProvider.h"
 #include "diagnostics/FixActionDispatcher.h"
+#include "diagnostics/PresentSnapshotOverlay.h"
 #include "diagnostics/StartupClock.h"
 #include "models/CompletedRecording.h"
 #include "models/EditContextFactory.h"
@@ -21,6 +23,8 @@
 #include "models/VideoSettingsModel.h"
 #include "ui/CodecLabels.h"
 #include "ui/theme/ExoSnapMetrics.h"
+#include "visual_tests/DiagnosticsLiveScenario.h"
+#include "visual_tests/RecordVisualStateNames.h"
 
 #include "ExoSnapBuildInfo.h"
 
@@ -47,6 +51,10 @@
 #include <QVariantMap>
 
 #include <update/install_mode_detector.h>
+// The private message the staged updater posts to ask this process to close for
+// the swap. One header, both sides -- a second copy of the number would compile
+// and never arrive.
+#include <update/update_handoff.h>
 
 #include <capability/capability_builder.h>
 
@@ -137,6 +145,47 @@ class QuickHotkeyEventFilter : public QAbstractNativeEventFilter {
     HWND hwnd_ = nullptr;
     std::function<void(HotkeyAction)> on_action_;
 };
+
+// The staged updater's marked close request, routed to the composition root.
+//
+// This is the only way the updater can ask the running application to release
+// its own executable, and it is deliberately a PRIVATE message with a magic
+// wParam rather than WM_CLOSE: WM_CLOSE means "the user closed the window",
+// which for ExoSnap means close-to-tray, and a tray-resident process still holds
+// its image locked. The updater targets the top-level window by owner pid AND
+// exact title, so the strict hwnd check here is the same identity from the other
+// side.
+class QuickUpdaterHandoffFilter : public QAbstractNativeEventFilter {
+  public:
+    QuickUpdaterHandoffFilter(HWND hwnd, std::function<void()> on_handoff)
+        : hwnd_(hwnd), on_handoff_(std::move(on_handoff)) {
+    }
+
+    bool nativeEventFilter(const QByteArray& event_type, void* message, qintptr* result) override {
+        if (message == nullptr)
+            return false;
+        if (event_type != QByteArrayLiteral("windows_generic_MSG") &&
+            event_type != QByteArrayLiteral("windows_dispatcher_MSG")) {
+            return false;
+        }
+        auto* msg = static_cast<MSG*>(message);
+        if (msg->hwnd != hwnd_ || msg->message != static_cast<UINT>(exosnap::update::kUpdaterHandoffMessage))
+            return false;
+        // The magic word is what makes this OURS. WM_APP-range values are only
+        // private by convention, so a foreign process posting the same number
+        // must not be able to end this one.
+        if (msg->wParam != static_cast<WPARAM>(exosnap::update::kUpdaterHandoffMagic))
+            return false;
+        on_handoff_();
+        if (result != nullptr)
+            *result = 0;
+        return true;
+    }
+
+  private:
+    HWND hwnd_ = nullptr;
+    std::function<void()> on_handoff_;
+};
 #endif
 
 QString captureSourceUnavailableNotice() {
@@ -157,6 +206,13 @@ QuickApplication::QuickApplication()
       about_view_model_(buildAboutInfo(settings_)), record_view_model_adapter_(&record_view_model_),
       overlay_adapter_(&record_view_model_), recording_coordinator_(std::make_unique<RecordingCoordinator>()),
       webcam_frame_provider_(new RecordWebcamFrameProvider), edit_tile_provider_(new EditTimelineTileProvider) {
+    // QCR-201. Latched here for the same reason preset_store_repaired_ is: the
+    // load runs in the constructor, long before initializeNotifications() exists
+    // to report it. The write block itself needs no latch — it follows from
+    // settings_.load_outcome and takes effect immediately, which matters because
+    // the first incidental write (a startup reconciliation, window geometry) can
+    // happen well before the notification manager is up.
+    settings_load_failed_pending_ = settings_.load_outcome == SettingsLoadOutcome::ReadFailed;
     const PersistedPresetState persisted = preset_store_.Load();
     preset_registry_.LoadState(persisted.user_presets,
                                persisted.selected_id.empty() ? std::string(kDefaultPresetId) : persisted.selected_id);
@@ -171,6 +227,13 @@ QuickApplication::QuickApplication()
     // so early-startup entries are unaffected; this narrows the filter now that
     // the persisted level is known.
     applyDeveloperLogLevel();
+    // Before every initializer that can raise one: a hotkey conflict, a repaired
+    // preset store or an unreadable settings file all enqueue during construction, and
+    // "Show notifications: off" has to be true for the FIRST toast of the session, not
+    // from the second one on. The manager exists from NotificationsAdapter's
+    // construction, so this is applicable as soon as the persisted value is known --
+    // the same reason applyDeveloperLogLevel() runs here.
+    applyShowNotifications();
     initializeCrashSession();
     initializeRecordWorkflow();
     initializeSettingsArea();
@@ -185,6 +248,9 @@ QuickApplication::QuickApplication()
     // entry, so the manager has to exist first. Before the window loads, so the
     // surface is already up on the first frame rather than appearing over an
     // application the user has started using.
+    // Before recovery: the scan below can raise the recovery surface, and the
+    // arbiter has to own that decision by then.
+    initializeBlockingSurfaces();
     initializeRecovery();
     initializeRecordingError();
     // After recovery: a crash mid-recording produces BOTH a recovery candidate
@@ -194,6 +260,11 @@ QuickApplication::QuickApplication()
     // After notifications: an available update publishes a hub entry, so the
     // manager has to be wired before the first check can complete.
     initializeUpdates();
+    // LAST of the startup surfaces, and after updates: it consumes the payload the
+    // previous update left behind, and the two blocking startup surfaces above
+    // have already made their own decision by now — so it can see whether one of
+    // them owns the screen instead of stacking a changelog on top of a question.
+    initializeWhatsNew();
 }
 
 QuickApplication::~QuickApplication() {
@@ -211,19 +282,27 @@ QuickApplication::~QuickApplication() {
     // a freed filter. Same shape QuickWindowChrome::detach() already uses.
     if (hotkey_event_filter_)
         QCoreApplication::instance()->removeNativeEventFilter(hotkey_event_filter_.get());
+    if (updater_handoff_filter_)
+        QCoreApplication::instance()->removeNativeEventFilter(updater_handoff_filter_.get());
     // The service keeps a bare pointer to the registrar, which is a member below
     // it; unhook before either can be destroyed.
     (void)hotkey_service_.SetRegistrar(nullptr);
 #endif
+    // The tile provider is owned by the QML engine, which is declared after the
+    // timeline adapter and therefore destroyed before it. Dropping the borrow here
+    // keeps the inverted order from mattering.
+    edit_timeline_adapter_.setTileProvider(nullptr);
     recording_coordinator_->SetReadyFrameRequester({});
     // Clearing the requester only refuses NEW requests. A Ready-frame worker that
     // is already running holds a pointer into RecordingCoordinator::snapshot_pool_,
     // and the coordinator is destroyed before record_preview_adapter_ -- so the
     // join has to happen here, not in the adapter's own destructor.
     record_preview_adapter_.waitForPendingReadyFrames();
-    // Order matters: stopping the camera joins the capture thread, and that thread
-    // reads frame_callback_ without a lock. Clearing the callback first would
-    // destroy the closure out from under a live reader.
+    // Stop the camera before dropping the callback. This is no longer a safety
+    // requirement -- WebcamService publishes its registration as an immutable
+    // snapshot, so clearing it can no longer destroy a closure a live reader is
+    // holding -- but it stays the right order: a camera nobody listens to has no
+    // reason to keep running for the rest of teardown.
     recording_coordinator_->SetWebcamPreviewActive(false);
     recording_coordinator_->SetWebcamFrameCallback({});
     if (webcam_overlay_persist_timer_.isActive())
@@ -242,6 +321,34 @@ QuickApplication::~QuickApplication() {
 
 void QuickApplication::applyDeveloperLogLevel() {
     diagnostics::AppLog::setMinSeverity(diagnostics::DeveloperLogLevelFromString(settings_.developer_log_level));
+}
+
+void QuickApplication::applyShowNotifications() {
+    notifications_adapter_.applyShowNotifications(settings_.show_notifications);
+}
+
+void QuickApplication::applyDpcLatencyGate() {
+    // The kernel DPC/ISR session shares the present opt-in but has no internal
+    // elevation check, so the gate (opt-in AND elevation) is applied here -- mirroring
+    // PresentMonProvider::GateOpen().
+    const bool elevated = elevation_provider_.IsElevated();
+    const bool gate_open = settings_.present_diagnostics_optin && elevated;
+    // Start() is itself idempotent (it returns true for an already-open session), and
+    // this runs on the startup path plus on an actual opt-in change, never per refresh.
+    // Stop() likewise releases the session and, with it, the reading.
+    bool started = false;
+    if (gate_open) {
+        started = dpc_provider_.Start();
+    } else {
+        dpc_provider_.Stop();
+    }
+    // Logged in both directions, and it is the only way to tell the three states apart
+    // from the outside: gate closed (nothing opened), gate open but the session refused
+    // (ETW said no), gate open and measuring.
+    diagnostics::AppLog::info(QStringLiteral("dpc"), QStringLiteral("kernel trace optIn=%1 elevated=%2 started=%3")
+                                                         .arg(settings_.present_diagnostics_optin ? 1 : 0)
+                                                         .arg(elevated ? 1 : 0)
+                                                         .arg(started ? 1 : 0));
 }
 
 void QuickApplication::applyCrashReportPolicy() {
@@ -310,6 +417,17 @@ void QuickApplication::refreshCrashSessionContext() {
 }
 
 void QuickApplication::initializeRecordWorkflow() {
+    // 150 ms: long enough that a page switch has painted and a Record → Settings
+    // → Record detour coalesces into one start, short enough that a user who
+    // lands on Record and looks straight at the level bars sees them fill within
+    // the same glance. Restarted (not merely armed) on every request, so the
+    // interval measures the time since the LAST decision, not the first.
+    meter_service_start_timer_.setSingleShot(true);
+    meter_service_start_timer_.setInterval(150);
+    meter_service_start_timer_.setTimerType(Qt::CoarseTimer);
+    QObject::connect(&meter_service_start_timer_, &QTimer::timeout, &record_view_model_adapter_,
+                     [this]() { startMeterServices(); });
+
     meter_update_timer_.setSingleShot(true);
     meter_update_timer_.setInterval(33);
     QObject::connect(&meter_update_timer_, &QTimer::timeout, &record_view_model_adapter_, [this]() { updateMeters(); });
@@ -326,6 +444,18 @@ void QuickApplication::initializeRecordWorkflow() {
     webcam_overlay_persist_timer_.setInterval(250);
     QObject::connect(&webcam_overlay_persist_timer_, &QTimer::timeout, &record_view_model_adapter_,
                      [this]() { persistLiveConfig(); });
+
+    capture_evidence_timer_.setInterval(1000);
+    capture_evidence_timer_.setTimerType(Qt::CoarseTimer);
+    QObject::connect(&capture_evidence_timer_, &QTimer::timeout, &record_view_model_adapter_,
+                     [this]() { refreshCaptureWindowEvidence(); });
+
+    // QCR-110: the admission gate's evidence producer. Read on the UI thread
+    // inside StartRecording; the call takes only the probe's own mutex and copies
+    // a plain struct, so it never blocks on the native probe and never touches
+    // GUI state from the recording worker.
+    recording_coordinator_->SetWindowExclusiveEvidenceProvider(
+        [this](const recorder_core::CaptureTarget& target) { return resolveWindowExclusiveEvidence(target); });
 
     recording_coordinator_->SetRecoveryManifestStore(&recovery_manifest_store_);
     recording_coordinator_->SetOutputSettings(live_config_.output);
@@ -363,6 +493,39 @@ void QuickApplication::initializeRecordWorkflow() {
             peak_av_drift_ms_ = 0.0;
             av_drift_ever_available_ = false;
             last_completed_snapshot_ = {};
+            // QCR-804: same reason. A stall belongs to the session that had it —
+            // neither the latch nor a leftover toast may cross into this one.
+            capture_stall_monitor_.Reset();
+            clearWindowCaptureStallWarning();
+            // ADR 0046: same reason. A previous recording's audio outage may not
+            // arrive standing over this one.
+            audio_degradation_monitor_.Reset();
+            clearAudioSourceDegradedWarning();
+            // ADR 0033: same reason, one class further. Present / discarded / mode-flip
+            // totals are per-recording, and a Display or Region recording shares pid 0
+            // with the idle desktop -- so this boundary is announced unconditionally,
+            // or every present counted while the user was still picking a target would
+            // be reported as part of the recording.
+            updatePresentAttribution(presentTargetPidForSelection(), /*force=*/true);
+        }
+        // The standing stall notice says "the recording is still running". Once
+        // the session leaves Recording/Paused that is no longer true, so the toast
+        // goes even though the hub keeps the record. The audio-degradation notice
+        // makes the same claim ("Recording continues") and clears on the same
+        // edge — which is also product-spec's "clears ... or the recording ends".
+        if (state != UiRecordingState::Recording && state != UiRecordingState::Paused) {
+            clearWindowCaptureStallWarning();
+            clearAudioSourceDegradedWarning();
+            // ADR 0033: the OTHER half of the attribution boundary, on the edge OUT of
+            // a session. Both PresentMonEtwSession and PresentAccumulator document the
+            // reset as happening at "recording start/stop"; only start was ever wired,
+            // so a finished recording's present, discard and mode-flip totals stayed on
+            // the idle Diagnostics page describing a session that had ended. Keyed on
+            // the transition rather than the state, because every non-recording state
+            // would otherwise re-announce a boundary that did not happen.
+            if (previous == UiRecordingState::Recording || previous == UiRecordingState::Paused) {
+                updatePresentAttribution(presentTargetPidForSelection(), /*force=*/true);
+            }
         }
         // Keyed off the state the UI is actually showing, not the one just
         // reported. In production the two are the same value — SetState assigned
@@ -388,7 +551,23 @@ void QuickApplication::initializeRecordWorkflow() {
         updateMeters();
         synchronizeRecordState();
     });
-    recording_coordinator_->SetDiagnosticsCallback([this](const recorder_core::RecordingDiagnosticsSnapshot& snapshot) {
+    recording_coordinator_->SetDiagnosticsCallback([this](const recorder_core::RecordingDiagnosticsSnapshot& measured) {
+        // ADR 0033 / Wave D. The engine measures no presentation, so the present
+        // fields arrive Unavailable on every snapshot; the elevation- and opt-in-gated
+        // ETW consumer is the only producer and it lives here. Overlaying ONCE at the
+        // single fan-out point is what makes the Diagnostics surface, the
+        // capture-stall classifier's exclusive-fullscreen refinement and
+        // `pipeline.snapshot` answer from the same measurement instead of three.
+        //
+        // This runs on the GUI thread (PostDiagnostics queues it onto the application
+        // object), which is the thread PresentMonEtwSession::Latest() requires.
+        recorder_core::RecordingDiagnosticsSnapshot snapshot = measured;
+        if (present_provider_ != nullptr) {
+            const diagnostics::PresentSample sample = present_provider_->Sample();
+            diagnostics::ApplyPresentSample(snapshot.capture, sample);
+            diagnostics_adapter_.setPresentSample(sample.available ? std::optional<diagnostics::PresentSample>(sample)
+                                                                   : std::nullopt);
+        }
         record_view_model_.av_drift_available =
             snapshot.av_drift_availability == recorder_core::MetricAvailability::Available;
         record_view_model_.av_drift_ms = record_view_model_.av_drift_available ? snapshot.av_drift_ms : 0.0;
@@ -409,6 +588,8 @@ void QuickApplication::initializeRecordWorkflow() {
         // one and left dropped_frames, av_drift and the Edit report badge at zero
         // for the whole session.
         diagnostics_adapter_.applyLiveDiagnostics(snapshot);
+        observeWindowCaptureStall(snapshot);
+        observeAudioSourceDegradation(snapshot);
         synchronizeRecordState();
     });
     recording_coordinator_->SetResultReadyCallback([this](const UiRecordingResult& result) {
@@ -437,7 +618,7 @@ void QuickApplication::initializeRecordWorkflow() {
         if (const auto failure = models::BuildRecordingFailureReport(result)) {
             // Only an official build with a compiled-in DSN and active crash
             // capture can send anything, so only there is the action offered.
-            recording_error_adapter_.present(*failure, crash_capture::IsActive());
+            presentRecordingFailure(*failure, crash_capture::IsActive());
         }
         // "Open editor when finished" (PersistedAppSettings): the overlay opening
         // by itself IS the post-recording feedback. The Widgets shell drove this
@@ -459,6 +640,18 @@ void QuickApplication::initializeRecordWorkflow() {
         if (!accepted)
             record_view_model_adapter_.setNoticeText(message);
         synchronizeRecordState();
+    });
+    // A recovery-manifest write that did not reach disk. The recording keeps
+    // running — only the crash-recovery entry is missing — so this is reported
+    // like any other completed local-write failure, never as a recording error.
+    recording_coordinator_->SetRecoveryProtectionLostCallback([this](const QString& detail) {
+        notifications::NotificationEvent event;
+        event.type = notifications::NotificationType::RecoveryProtectionUnavailable;
+        event.title = QStringLiteral("Recovery protection unavailable");
+        event.body = QStringLiteral("This recording has no crash-recovery entry: %1. The recording itself is "
+                                    "unaffected, but it cannot be recovered if ExoSnap is interrupted.")
+                         .arg(detail);
+        notifications_adapter_.manager().Enqueue(std::move(event));
     });
     recording_coordinator_->SetMicMeterUpdatedCallback([this](float rms) {
         preflight_microphone_rms_ = std::clamp(rms, 0.0f, 1.0f);
@@ -493,6 +686,7 @@ void QuickApplication::initializeRecordWorkflow() {
         [this]() { return CaptureTargetSnapshot{recording_coordinator_->EnumerateTargets()}; });
     capture_target_notifier_.start();
     record_view_model_.targets = capture_target_notifier_.currentSnapshot().targets;
+    ++record_view_model_.targets_revision;
     record_view_model_.target_display_names.reserve(record_view_model_.targets.size());
     for (const auto& target : record_view_model_.targets)
         record_view_model_.target_display_names.push_back(
@@ -557,6 +751,20 @@ void QuickApplication::initializeRecordWorkflow() {
     QObject::connect(&capture_target_notifier_, &CaptureTargetNotifier::snapshotChanged, &record_view_model_adapter_,
                      [this](const CaptureTargetSnapshot& snapshot, DiscoveryReason reason) {
                          refreshCaptureTargets(snapshot, reason);
+                     });
+
+    // A monitor arriving, leaving or being re-arranged also re-orders the DXGI
+    // outputs and can change what each one reports, so the display facts are
+    // re-read on the same event rather than left at what startup measured.
+    //
+    // This is NOT sufficient on its own and is not meant to be: the snapshot is
+    // deduplicated on geometry/DPI/primary, and turning Windows HDR on moves none
+    // of those. The read-time refresh on the observability path covers that case;
+    // this one covers a topology change that no one asks about.
+    QObject::connect(&capture_target_notifier_.displayNotifier(), &DisplayDeviceNotifier::snapshotChanged,
+                     &record_view_model_adapter_, [this](const DisplaySnapshot&, DiscoveryReason) {
+                         refreshDisplayFacts();
+                         publishRefreshRateDerivedState();
                      });
 
     countdown_timer_.setInterval(100);
@@ -654,19 +862,78 @@ void QuickApplication::onCapabilitiesReady(const capability::CapabilitySet& capa
     // against the empty set while the probe ran, so they are rebuilt here.
     device_adapter_.setCapabilitySet(capabilities_);
     settings_adapter_.setCapabilities(capabilities_);
-    // Product-spec §6: the HDR-handling row exists only once a display actively
-    // reports an HDR colour space. Nothing set this before, so the row's gate was
-    // stuck at its `false` default and an HDR user could never reach the setting.
-    const auto& displays = capabilities_.runtime.displays;
-    settings_adapter_.setHdrDisplayPresent(
-        std::any_of(displays.begin(), displays.end(),
-                    [](const capability::DisplayHdrFacts& display) { return display.hdr_active; }));
+    publishDisplayDerivedState();
     refreshDiagnosticsData();
     if (!visualScenarioLatched())
         record_view_model_.SetState(recording_coordinator_->State());
     record_view_model_.capability_status_text = recording_coordinator_->CapabilityStatusText();
     synchronizeRecordState();
     reapplyVisualScenarios();
+}
+
+void QuickApplication::publishRefreshRateDerivedState() {
+    const QList<QScreen*> screens = QGuiApplication::screens();
+    QList<qreal> rates;
+    rates.reserve(screens.size());
+    for (const QScreen* screen : screens)
+        rates.append(screen->refreshRate());
+    settings_adapter_.setMaxFrameRate(MaxFrameRateForRefreshRates(rates));
+    diagnostics_adapter_.refreshDisplayFacts();
+}
+
+// Product-spec §6: the HDR-handling row exists only once a display actively
+// reports an HDR colour space, and the Diagnostics HDR card describes the SELECTED
+// target's display. Both read the same probed vector, so both are published here --
+// once, from one place, so they can never disagree about whether HDR is on.
+void QuickApplication::publishDisplayDerivedState() {
+    const auto& displays = capabilities_.runtime.displays;
+    settings_adapter_.setHdrDisplayPresent(
+        std::any_of(displays.begin(), displays.end(),
+                    [](const capability::DisplayHdrFacts& display) { return display.hdr_active; }));
+
+    // A seeded --record-visual-state target has no live display behind it; leaving
+    // the pushed value alone is what keeps a re-probe from reverting the scenario.
+    if (visualScenarioLatched())
+        return;
+
+    // Same resolver the coordinator's own native-HDR10 decision uses
+    // (FindTargetDisplayFacts over the probed display facts).
+    bool hdr_active = false;
+    if (const std::optional<recorder_core::CaptureTarget> target = selectedCaptureTarget(); target.has_value()) {
+        const capability::DisplayHdrFacts* facts = FindTargetDisplayFacts(*target, displays);
+        hdr_active = facts != nullptr && facts->hdr_active;
+    }
+    if (pushed_capture_target_hdr_active_ != hdr_active) {
+        pushed_capture_target_hdr_active_ = hdr_active;
+        diagnostics_adapter_.setCaptureTargetHdrActive(hdr_active);
+    }
+}
+
+// Windows HDR is a global toggle with no ExoSnap-side trigger: the user flips it in
+// Settings, or a game flips it, and nothing about this process changes. The startup
+// capability probe is the ONLY writer of `runtime.displays`, so every consumer of it
+// was reporting the desktop's state at launch for the rest of the session — a user
+// who enabled HDR after starting ExoSnap never saw the HDR-handling row appear, and
+// environment.snapshot answered `hdrActive: false` about a live HDR desktop.
+//
+// Re-runs the same IDXGIOutput6::GetDesc1 read the probe used and nothing else: no
+// adapter capability query, no NVENC session, no Media Foundation probe.
+void QuickApplication::refreshDisplayFacts() {
+    // Both callers are GUI-thread edges (a screen-topology signal, and a control
+    // dispatch already marshalled onto the application object). Everything this
+    // touches afterwards — capabilities_, the adapters — is GUI-thread-owned, so a
+    // caller that got here from anywhere else is the defect, not the data.
+    Q_ASSERT(QCoreApplication::instance() == nullptr ||
+             QThread::currentThread() == QCoreApplication::instance()->thread());
+
+    std::vector<capability::DisplayHdrFacts> displays = capability::CapabilityBuilder::QueryDisplayFacts();
+    // An empty result means the query itself failed (no DXGI factory). Keep what we
+    // had rather than announcing that every display just went SDR — same rule the
+    // coordinator's RefreshDisplayFacts() applies for the same reason.
+    if (displays.empty())
+        return;
+    capabilities_.runtime.displays = std::move(displays);
+    publishDisplayDerivedState();
 }
 
 void QuickApplication::onCapabilityProbeFailed(const QString& reason) {
@@ -776,6 +1043,10 @@ void QuickApplication::synchronizeRecordState() {
     // Sampling this once during initialization left every Settings row unlocked
     // for the whole run, because nothing re-evaluated it on a state change.
     settings_adapter_.setControlsLocked(recording_coordinator_->State() != UiRecordingState::Ready);
+    // The single edge that re-points the exclusive-fullscreen probe: every
+    // selection change and every recording-state change already lands here, and
+    // the unchanged case costs one comparison.
+    updateCaptureEvidenceTarget();
     record_view_model_adapter_.synchronize();
     // Same cadence and the same reason as the tray: the on-screen overlays are
     // presence surfaces and must never lag the state the window is showing.
@@ -860,6 +1131,7 @@ void QuickApplication::refreshCaptureTargets(const CaptureTargetSnapshot& snapsh
         previous = record_view_model_.targets[static_cast<size_t>(record_view_model_.selected_target_index)];
     }
     record_view_model_.targets = snapshot.targets;
+    ++record_view_model_.targets_revision;
     record_view_model_.target_display_names.clear();
     record_view_model_.target_display_names.reserve(record_view_model_.targets.size());
     for (const auto& target : record_view_model_.targets) {
@@ -982,36 +1254,60 @@ void QuickApplication::selectRegion(const QRectF& normalized_rect) {
     synchronizeRecordState();
 }
 
+// The one recording-start policy. Every trigger runs through it -- the transport
+// button, the global start hotkey, the notification actions and the Live Verify
+// control channel -- and the outcome is latched so a caller that needs to know
+// whether the request was honoured can read it instead of re-deriving it. The
+// control channel does exactly that; it does NOT have preconditions of its own.
 void QuickApplication::startRequested() {
     if (record_view_model_.state == UiRecordingState::Countdown) {
         cancelCountdown();
+        last_start_admission_ = StartAdmission::CountdownCancelled;
         return;
     }
-    if (!record_view_model_adapter_.canStart())
+    // QCR-415. The only way to get here while a blocking surface is up is the
+    // global start hotkey — the surfaces cover the transport, and the desktop is
+    // deliberately still reachable. Starting anyway would put the user in a
+    // session whose transport is behind a scrim, and it would silently invalidate
+    // the very offer an open recovery surface is making: ArmFromRecovery is
+    // refused once the coordinator has left Ready. Stop, pause and resume are NOT
+    // gated here; a recording that cannot be stopped is the worse state.
+    if (surface_arbiter_.anySurfaceUp()) {
+        diagnostics::AppLog::info(QStringLiteral("record"),
+                                  QStringLiteral("Start refused: a blocking surface is open — answer it first"));
+        last_start_admission_ = StartAdmission::RefusedByBlockingSurface;
         return;
+    }
+    if (!record_view_model_adapter_.canStart()) {
+        last_start_admission_ = StartAdmission::RefusedByState;
+        return;
+    }
     if (live_config_.countdown_seconds > 0) {
         countdown_clock_.restart();
-        if (!countdown_.start(live_config_.countdown_seconds, 0))
+        if (!countdown_.start(live_config_.countdown_seconds, 0)) {
+            last_start_admission_ = StartAdmission::RefusedByState;
             return;
+        }
         countdown_remaining_ = live_config_.countdown_seconds;
         countdown_progress_ = 1.0;
         record_view_model_.SetState(UiRecordingState::Countdown);
         countdown_timer_.start();
         synchronizeRecordState();
+        last_start_admission_ = StartAdmission::Accepted;
         return;
     }
-    startRecordingNow();
+    last_start_admission_ = startRecordingNow() ? StartAdmission::Accepted : StartAdmission::RefusedNoTarget;
 }
 
-void QuickApplication::startRecordingNow() {
+bool QuickApplication::startRecordingNow() {
     if (record_view_model_.selected_target_index < 0 ||
         record_view_model_.selected_target_index >= static_cast<int>(record_view_model_.targets.size()))
-        return;
+        return false;
     const auto& target = record_view_model_.targets[static_cast<std::size_t>(record_view_model_.selected_target_index)];
     std::optional<recorder_core::CaptureRegion> crop;
     if (record_view_model_.capture_mode == CaptureMode::Region) {
         if (!record_view_model_.has_region || !record_view_model_.region.IsValid())
-            return;
+            return false;
         crop = record_view_model_.region;
     }
     FilenameTargetContext context = RecordViewModel::FilenameContextFromCaptureTarget(target);
@@ -1023,6 +1319,7 @@ void QuickApplication::startRecordingNow() {
     recording_coordinator_->SetWebcamSettings(live_config_.webcam);
     record_view_model_.ResetStats();
     recording_coordinator_->StartRecording(target, record_view_model_.audio_ui_state, crop);
+    return true;
 }
 
 void QuickApplication::cancelCountdown() {
@@ -1045,7 +1342,7 @@ void QuickApplication::updateCountdown() {
         countdown_.complete();
         countdown_remaining_ = 0;
         countdown_progress_ = 0.0;
-        startRecordingNow();
+        (void)startRecordingNow();
         return;
     }
     synchronizeRecordState();
@@ -1123,18 +1420,44 @@ void QuickApplication::scheduleMeterUpdate() {
         meter_update_timer_.start();
 }
 
+// Stops happen now, starts happen after a short debounce.
+//
+// The asymmetry is deliberate. A stop is a statement about what must NOT be
+// running — a session is beginning, the page was left — and delaying it would
+// leave a preflight meter holding an endpoint into a state that says it does
+// not. A start is decoration: three level bars a user is not yet looking at.
+//
+// The debounce is what makes a Record → Settings → Record detour cost one start
+// instead of a start, a stop and a start; the profiler measured that round trip
+// at ~43 ms of GUI-thread time per return. Together with
+// MeterStartMode::Deferred (the endpoint open no longer blocks the caller) the
+// page-activation binding does no WASAPI work at all.
 void QuickApplication::updateMeterServices() {
     const bool visible = record_view_model_adapter_.active();
     const bool session = record_view_model_.state == UiRecordingState::Recording ||
                          record_view_model_.state == UiRecordingState::Paused ||
                          record_view_model_.state == UiRecordingState::Stopping;
     if (!visible || session) {
+        meter_service_start_timer_.stop();
         recording_coordinator_->StopSysMeter();
         recording_coordinator_->StopAppMeter();
         recording_coordinator_->StopMicMeter();
         recording_coordinator_->SetWebcamPreviewActive(false);
         return;
     }
+    meter_service_start_timer_.start();
+}
+
+void QuickApplication::startMeterServices() {
+    const bool visible = record_view_model_adapter_.active();
+    const bool session = record_view_model_.state == UiRecordingState::Recording ||
+                         record_view_model_.state == UiRecordingState::Paused ||
+                         record_view_model_.state == UiRecordingState::Stopping;
+    // The state can have moved on inside the debounce window through a path that
+    // does not call updateMeterServices() at all, so the condition is re-read
+    // rather than assumed from whoever scheduled this.
+    if (!visible || session)
+        return;
     recording_coordinator_->StartSysMeter();
     if (microphone_available_)
         recording_coordinator_->StartMicMeter(record_view_model_.audio_ui_state.selected_mic_device_id,
@@ -1166,11 +1489,7 @@ void QuickApplication::initializeSettingsArea() {
     settings_adapter_.setConfig(live_config_);
     settings_adapter_.setControlsLocked(recording_coordinator_->State() != UiRecordingState::Ready);
 
-    int max_fps = 0;
-    for (const QScreen* screen : QGuiApplication::screens()) {
-        max_fps = std::max(max_fps, static_cast<int>(std::lround(screen->refreshRate())));
-    }
-    settings_adapter_.setMaxFrameRate(max_fps > 0 ? max_fps : kFallbackMaxFrameRate);
+    publishRefreshRateDerivedState();
 
     QObject::connect(&audio_notifier_, &AudioDeviceNotifier::snapshotChanged, &settings_adapter_,
                      [this](const AudioDeviceSnapshot& snapshot, DiscoveryReason) {
@@ -1212,11 +1531,32 @@ void QuickApplication::initializeSettingsArea() {
 void QuickApplication::initializeDiagnosticsArea() {
     diagnostics_adapter_.setCapabilitySet(capabilities_);
     diagnostics_adapter_.setExpertMode(settings_.expert_mode_enabled);
-    {
-        // The elevation fact is a one-shot process property, not a per-refresh probe.
-        diagnostics::Win32ElevationProvider elevation;
-        diagnostics_adapter_.setElevated(elevation.IsElevated());
-    }
+    // The elevation fact is a one-shot process property, not a per-refresh probe.
+    const bool elevated = elevation_provider_.IsElevated();
+    diagnostics_adapter_.setElevated(elevated);
+
+    // ADR 0033 / Wave D: the present-diagnostics provider. Constructing it is free --
+    // the constructor opens nothing. SetOptIn() is what evaluates the gate
+    // (opt-in AND elevation) and starts the ETW session, so an unelevated process or
+    // one with the opt-in off holds a provider that reports `available: false` and
+    // owns no session, which is exactly what `environment.snapshot` must be able to
+    // explain the difference between.
+    present_provider_ =
+        std::make_unique<diagnostics::PresentMonProvider>(elevation_provider_, settings_.present_diagnostics_optin);
+    present_provider_->SetOptIn(settings_.present_diagnostics_optin);
+    diagnostics::AppLog::info(QStringLiteral("present"),
+                              QStringLiteral("provider constructed optIn=%1 elevated=%2 available=%3")
+                                  .arg(settings_.present_diagnostics_optin ? 1 : 0)
+                                  .arg(elevated ? 1 : 0)
+                                  .arg(present_provider_->IsAvailable() ? 1 : 0));
+
+    // ADR 0033 DPC/ISR latency. The producer existed in this tree since the ETW slice
+    // landed but was compiled by no target at all and driven by nobody, so
+    // RecommendationEngine::checkDpcLatency evaluated an absent reading forever while
+    // the spec promised the check. The adapter samples this on every evaluation; the
+    // gate below decides whether there is anything to sample.
+    diagnostics_adapter_.setDpcLatencyProvider(&dpc_provider_);
+    applyDpcLatencyGate();
 
     // Single global Expert state, shared with Settings (AppSettingsStore).
     QObject::connect(&diagnostics_adapter_, &DiagnosticsAdapter::expertModeChanged, &diagnostics_adapter_,
@@ -1228,7 +1568,7 @@ void QuickApplication::initializeDiagnosticsArea() {
                              return;
                          settings_.expert_mode_enabled = enabled;
                          settings_adapter_.setAppSettings(settings_);
-                         settings_store_.Save(settings_);
+                         persistAppSettings(SettingsWriteIntent::UserEdit);
                      });
 
     QObject::connect(&diagnostics_adapter_, &DiagnosticsAdapter::applyFixAccepted, &diagnostics_adapter_,
@@ -1290,6 +1630,270 @@ void QuickApplication::refreshDiagnosticsData() {
     diagnostics_adapter_.setCapabilitySet(capabilities_);
 }
 
+std::optional<recorder_core::CaptureTarget> QuickApplication::selectedCaptureTarget() const {
+    const int selected = record_view_model_.selected_target_index;
+    if (selected < 0 || selected >= static_cast<int>(record_view_model_.targets.size()))
+        return std::nullopt;
+    return record_view_model_.targets[static_cast<std::size_t>(selected)];
+}
+
+// QCR-110. The production producer of exclusive-fullscreen evidence, and the one
+// place the selected target's HDR fact reaches Diagnostics.
+//
+// Before this, WindowEvidenceProbe existed only in the removed Widgets shell:
+// the coordinator's evidence provider was never installed, so
+// ResolveWindowExclusiveEvidence() always returned None and the
+// rec.capture.exclusive_window blocker could not fire in the shipping binary —
+// while the spec promised it would. Nothing called setCaptureWindowEvidence() or
+// setCaptureTargetHdrActive() either, so neither card could ever appear.
+void QuickApplication::updateCaptureEvidenceTarget() {
+    // A --record-visual-state capture photographs a seeded target that has no
+    // live HWND behind it. Subscribing WGC to it would spend a thread and a D3D11
+    // device per harness process and measure nothing.
+    if (visualScenarioLatched())
+        return;
+
+    const std::optional<recorder_core::CaptureTarget> target = selectedCaptureTarget();
+    uintptr_t hwnd = 0;
+    if (target.has_value() && target->kind == recorder_core::CaptureTarget::Kind::Window)
+        hwnd = target->native_id;
+    // The engine owns the capture from the countdown to the last saved byte; the
+    // probe keeps its subscription but stops pumping so the source is not copied
+    // twice. Same predicate the capture-target model uses for the same reason.
+    const bool paused = locksCaptureTargets(record_view_model_.state);
+
+    // Diagnostics reads the target itself for the capture-source readiness tile
+    // and the HDR blocker card. Both are resolved here rather than in the probe:
+    // they are facts about the SELECTION, not measurements of the window.
+    const auto same_target = [](const std::optional<recorder_core::CaptureTarget>& lhs,
+                                const std::optional<recorder_core::CaptureTarget>& rhs) {
+        if (lhs.has_value() != rhs.has_value())
+            return false;
+        if (!lhs.has_value())
+            return true;
+        return lhs->kind == rhs->kind && lhs->native_id == rhs->native_id && lhs->description == rhs->description;
+    };
+    if (!same_target(pushed_selected_target_, target)) {
+        pushed_selected_target_ = target;
+        diagnostics_adapter_.setSelectedCaptureTarget(target);
+        // Idle attribution boundary (ADR 0033): present statistics follow the
+        // selection, so the Diagnostics page describes the source the user is
+        // looking at rather than whatever presented last.
+        updatePresentAttribution(presentTargetPidForSelection(), /*force=*/false);
+    }
+    // The selection just moved, so the display-derived facts are republished for
+    // the new target. One shared implementation, so the blocker and the card that
+    // explains it can never disagree about whether HDR is on.
+    publishDisplayDerivedState();
+
+    if (hwnd == evidence_target_hwnd_ && paused == evidence_paused_)
+        return;
+
+    if (hwnd != 0 && !window_evidence_probe_)
+        window_evidence_probe_ = std::make_unique<WindowEvidenceProbe>();
+
+    evidence_target_hwnd_ = hwnd;
+    evidence_paused_ = paused;
+    if (window_evidence_probe_) {
+        window_evidence_probe_->SetWindowTarget(hwnd);
+        window_evidence_probe_->SetPaused(paused);
+    }
+
+    if (hwnd == 0) {
+        capture_evidence_timer_.stop();
+        // Retargeting away from a window drops the old window's evidence at once
+        // rather than leaving the card up until the next tick.
+        if (pushed_window_evidence_.has_value()) {
+            pushed_window_evidence_.reset();
+            diagnostics_adapter_.setCaptureWindowEvidence(std::nullopt, {});
+        }
+        return;
+    }
+    // A new window starts from nothing measured. Publishing that immediately is
+    // what keeps a card raised for the previous target from describing this one.
+    if (pushed_window_evidence_.has_value()) {
+        pushed_window_evidence_.reset();
+        diagnostics_adapter_.setCaptureWindowEvidence(std::nullopt, {});
+    }
+    capture_evidence_timer_.start();
+}
+
+void QuickApplication::refreshCaptureWindowEvidence() {
+    if (!window_evidence_probe_)
+        return;
+    const WindowEvidenceProbe::Snapshot snapshot = window_evidence_probe_->CurrentSnapshot();
+    if (!snapshot.active || snapshot.hwnd != evidence_target_hwnd_ || snapshot.hwnd == 0)
+        return; // the worker has not caught up with the current target yet
+
+    // Push only on a verdict change. The engine derives nothing else from these
+    // two structs, and every push re-runs the whole recommendation checklist.
+    const diagnostics::ExclusiveEvidence next =
+        diagnostics::ResolveSnapshotEvidence(snapshot, evidence_target_hwnd_, false);
+    if (pushed_window_evidence_.has_value()) {
+        const diagnostics::ExclusiveEvidence current =
+            diagnostics::ResolveSnapshotEvidence(*pushed_window_evidence_, evidence_target_hwnd_, false);
+        if (pushed_window_evidence_->hwnd == snapshot.hwnd && current == next)
+            return;
+    }
+    pushed_window_evidence_ = snapshot;
+    diagnostics_adapter_.setCaptureWindowEvidence(snapshot.facts, snapshot.evidence);
+}
+
+diagnostics::ExclusiveEvidence
+QuickApplication::resolveWindowExclusiveEvidence(const recorder_core::CaptureTarget& target) const {
+    if (!window_evidence_probe_ || target.kind != recorder_core::CaptureTarget::Kind::Window)
+        return diagnostics::ExclusiveEvidence::None;
+    return diagnostics::ResolveSnapshotEvidence(window_evidence_probe_->CurrentSnapshot(), target.native_id, false);
+}
+
+// QCR-804. The mid-recording capture-stall path, driven entirely by the
+// diagnostics snapshots the pipeline already publishes at ~5 Hz.
+//
+// Before this, a window that stopped producing frames mid-recording was
+// completely silent: WGC delivered nothing, the CFR pacer duplicated the last
+// frame, the transport stayed green, the session finalized successfully and the
+// user found a video frozen from the stall onwards. The pure predicate that was
+// supposed to catch it (WindowCaptureStall) had no consumer at all — and could
+// not have worked anyway, because it gated on capture.actual_fps, which the
+// aggregator derives from EMITTED frames and which therefore sits at the target
+// rate for exactly the whole duration of this failure.
+//
+// Threading: everything here runs on the Qt main thread. The snapshot arrives
+// through RecordingCoordinator::PostDiagnostics's queued connection (already
+// session-generation filtered), the monitor is a plain main-thread member, and
+// the only thing handed back across a thread boundary is an atomic increment on
+// the coordinator. No capture-thread state is dereferenced.
+void QuickApplication::observeWindowCaptureStall(const recorder_core::RecordingDiagnosticsSnapshot& snapshot) {
+    diagnostics::WindowStallSample sample;
+    sample.session_generation = snapshot.session_generation;
+    sample.is_window_target = snapshot.capture.source_type == recorder_core::CaptureSourceType::Window;
+    sample.capture_expected = diagnostics::CaptureProgressExpected(snapshot.lifecycle);
+    sample.frames_captured = snapshot.capture.frames_captured;
+    sample.elapsed_seconds = snapshot.elapsed_seconds;
+
+    switch (capture_stall_monitor_.Observe(sample)) {
+    case diagnostics::WindowStallSignal::None:
+        return;
+
+    case diagnostics::WindowStallSignal::Recovered:
+        clearWindowCaptureStallWarning();
+        diagnostics::AppLog::info(QStringLiteral("capture"),
+                                  QStringLiteral("window capture resumed after a reported stall"));
+        return;
+
+    case diagnostics::WindowStallSignal::Starved:
+        break;
+    }
+
+    // Confirmed starvation. This is the ONLY point at which any Win32 fact is
+    // read — once per episode, never on a healthy recording.
+    const double starved_for = capture_stall_monitor_.seconds_without_progress();
+    const diagnostics::WindowTargetFacts facts =
+        diagnostics::GatherWindowTargetFacts(reinterpret_cast<HWND>(evidence_target_hwnd_));
+    // PresentMon's verdict when it happens to be available (elevation- and
+    // opt-in-gated). It only ever refines the cause; it never decides whether the
+    // stall is reported.
+    const bool present_fse =
+        snapshot.capture.present_mode_availability == recorder_core::MetricAvailability::Available &&
+        snapshot.capture.source_present_mode == recorder_core::PresentMode::ExclusiveFullscreen;
+
+    const diagnostics::WindowStallVerdict verdict = diagnostics::ClassifyConfirmedStall(facts, present_fse);
+    capture_stall_monitor_.ApplyVerdict(verdict);
+    if (verdict != diagnostics::WindowStallVerdict::Stalled) {
+        // Legitimate (minimized/cloaked/gone) or indistinguishable from idle
+        // content. Logged so a support bundle shows the check ran and chose
+        // silence — the user is told nothing.
+        const QString reason = verdict == diagnostics::WindowStallVerdict::Legitimate
+                                   ? QStringLiteral("window is minimized, hidden or gone")
+                                   : QStringLiteral("ordinary window - indistinguishable from static content");
+        diagnostics::AppLog::info(QStringLiteral("capture"),
+                                  QStringLiteral("window capture produced no frame for %1 s; not reported (%2)")
+                                      .arg(starved_for, 0, 'f', 1)
+                                      .arg(reason));
+        return;
+    }
+
+    const bool fullscreen_hint =
+        diagnostics::EvaluateWindowStall(facts, present_fse) == diagnostics::WindowStallCause::ExclusiveFullscreen;
+    if (recording_coordinator_)
+        recording_coordinator_->NoteWindowCaptureStall();
+    diagnostics::AppLog::warning(
+        QStringLiteral("capture"),
+        QStringLiteral("window capture stalled: no frame for %1 s, recording continues%2")
+            .arg(starved_for, 0, 'f', 1)
+            .arg(fullscreen_hint ? QStringLiteral(" (a fullscreen signal corroborates exclusive fullscreen)")
+                                 : QString()));
+    // Replaces any earlier stall toast rather than stacking a second one.
+    clearWindowCaptureStallWarning();
+    capture_stall_toast_sequence_ = notifications_adapter_.manager().Enqueue(
+        notifications::MakeWindowCaptureStalledEvent(starved_for, fullscreen_hint));
+}
+
+void QuickApplication::clearWindowCaptureStallWarning() {
+    if (capture_stall_toast_sequence_ == 0)
+        return;
+    notifications_adapter_.manager().Dismiss(capture_stall_toast_sequence_);
+    capture_stall_toast_sequence_ = 0;
+}
+
+// ADR 0046. The mid-recording audio-degradation notice, driven entirely by the
+// AudioDiagnostics health facts the pipeline already publishes at ~5 Hz.
+//
+// This is a restored producer, not a new feature. The Widgets frontend raised
+// exactly this notification from exactly these facts
+// (MainWindow::updateAudioSourceDegradedNotification, a second tee of
+// RecordPage::diagnosticsUpdated). The Qt Quick cutover carried the event, the
+// resolver, the standing-toast dwell rule, the hub key and the tests across, but
+// not the tee — so from that commit on, an unplugged microphone degraded to
+// honest silence, said so in Diagnostics and in the session report, and told the
+// user nothing while it was happening. Same defect class as the lost
+// exclusive-fullscreen producer.
+//
+// Threading: everything here runs on the Qt main thread. The snapshot arrives
+// through RecordingCoordinator::PostDiagnostics's queued connection (already
+// session-generation filtered), and the latch is a plain main-thread member.
+void QuickApplication::observeAudioSourceDegradation(const recorder_core::RecordingDiagnosticsSnapshot& snapshot) {
+    diagnostics::AudioDegradationSample sample;
+    sample.session_generation = snapshot.session_generation;
+    sample.valid = snapshot.valid;
+    sample.lifecycle = snapshot.lifecycle;
+    sample.source_degraded = snapshot.audio.source_degraded;
+    sample.degraded_sources = snapshot.audio.degraded_sources;
+
+    switch (audio_degradation_monitor_.Observe(sample)) {
+    case diagnostics::AudioDegradationSignal::None:
+        return;
+
+    case diagnostics::AudioDegradationSignal::Clear:
+        clearAudioSourceDegradedWarning();
+        diagnostics::AppLog::info(QStringLiteral("audio"),
+                                  QStringLiteral("every audio source is capturing again after a reported outage"));
+        return;
+
+    case diagnostics::AudioDegradationSignal::Raise:
+        break;
+    }
+
+    const uint32_t degraded = audio_degradation_monitor_.degraded_sources();
+    diagnostics::AppLog::warning(
+        QStringLiteral("audio"),
+        QStringLiteral("%1 audio capture source(s) lost their device and are contributing silence; recording continues")
+            .arg(degraded));
+    // Replaces any earlier notice for this outage rather than stacking a second
+    // one — the manager has no update API, so the standing toast is replaced by
+    // dismissing the tracked sequence and enqueueing the new body.
+    clearAudioSourceDegradedWarning();
+    audio_degraded_toast_sequence_ =
+        notifications_adapter_.manager().Enqueue(notifications::MakeAudioSourceDegradedEvent(degraded));
+}
+
+void QuickApplication::clearAudioSourceDegradedWarning() {
+    if (audio_degraded_toast_sequence_ == 0)
+        return;
+    notifications_adapter_.manager().Dismiss(audio_degraded_toast_sequence_);
+    audio_degraded_toast_sequence_ = 0;
+}
+
 // rec.capture.exclusive_window's "record the monitor instead" fix: resolve the
 // selected window's hosting monitor via MonitorFromWindow and select that monitor
 // target exactly like a manual pick. A user-confirmed retarget drops the APP audio
@@ -1346,14 +1950,31 @@ void QuickApplication::wireSettingsCommands() {
     QObject::connect(&settings_adapter_, &SettingsAdapter::configEdited, &settings_adapter_,
                      [this]() { applySettingsConfigEdit(); });
     QObject::connect(&settings_adapter_, &SettingsAdapter::appSettingsEdited, &settings_adapter_, [this]() {
+        const QString previous_update_channel = settings_.update_channel;
+        const bool previous_present_optin = settings_.present_diagnostics_optin;
         settings_ = settings_adapter_.appSettings();
-        settings_store_.Save(settings_);
+        persistAppSettings(SettingsWriteIntent::UserEdit);
+        if (settings_.update_channel != previous_update_channel)
+            applyUpdateChannel();
         applyThemeFromSettings();
         // Both of these were persisted-and-displayed but never applied: the
         // developer log level left AppLog recording everything regardless of the
         // choice, and the crash-report policy never reached the SDK consent gate.
         applyDeveloperLogLevel();
         applyCrashReportPolicy();
+        applyShowNotifications();
+        // ADR 0033. Turning the opt-in on opens the ETW session immediately when the
+        // process is already elevated, and does nothing at all when it is not --
+        // there is no relaunch prompt here, because a settings toggle is not consent
+        // to restart the application.
+        if (settings_.present_diagnostics_optin != previous_present_optin) {
+            if (present_provider_)
+                present_provider_->SetOptIn(settings_.present_diagnostics_optin);
+            // The kernel DPC/ISR session follows the same opt-in. Turning it off stops
+            // the trace, and the reading goes back to unavailable in the same step --
+            // a peak measured a moment ago is not a measurement of this machine now.
+            applyDpcLatencyGate();
+        }
     });
 
     QObject::connect(&settings_adapter_, &SettingsAdapter::presetSelected, &settings_adapter_,
@@ -1408,8 +2029,59 @@ void QuickApplication::syncConfigMirrors() {
     record_view_model_.RebuildAudioPlan();
 }
 
-void QuickApplication::saveAndPublishAppSettings() {
-    settings_store_.Save(settings_);
+bool QuickApplication::persistAppSettings(SettingsWriteIntent intent) {
+    // QCR-201. `settings_` after a failed load is the built-in defaults, not the
+    // user's configuration. Persisting it would turn "we could not read your
+    // settings" into "your settings are gone" — and the write that does it is
+    // almost never one the user asked for: the window-geometry debounce fires on
+    // every move and on close, so simply launching and quitting the app used to
+    // be enough. The decision itself is the pure ResolveSettingsWrite; this
+    // function only carries it out.
+    switch (ResolveSettingsWrite(settings_.load_outcome, settings_load_failure_superseded_, intent)) {
+    case SettingsWriteDecision::Refuse:
+        if (!settings_block_logged_) {
+            settings_block_logged_ = true;
+            diagnostics::AppLog::warning(
+                QStringLiteral("settings"),
+                QStringLiteral("Settings were not written: the existing settings file could not be read, so the "
+                               "built-in defaults are not being saved over it. Change any setting to start a "
+                               "fresh file."));
+        }
+        return false;
+    case SettingsWriteDecision::PreserveThenWrite: {
+        // The user is deliberately authoring settings now, so their intent wins
+        // over an unreadable file — but the file itself is preserved rather than
+        // overwritten, so nothing the user had is destroyed by this decision.
+        QString backup_path;
+        if (settings_store_.BackupUnreadableFile(&backup_path)) {
+            diagnostics::AppLog::info(
+                QStringLiteral("settings"),
+                QStringLiteral("Unreadable settings file kept as %1; writing a fresh one.").arg(backup_path));
+        }
+        settings_load_failure_superseded_ = true;
+        break;
+    }
+    case SettingsWriteDecision::Write:
+        break;
+    }
+
+    if (settings_store_.Save(settings_))
+        return true;
+
+    // Same class as a failed preset write, and the same report: the change the
+    // user just made may be gone on restart, and saying nothing is not an option.
+    diagnostics::AppLog::warning(QStringLiteral("settings"),
+                                 QStringLiteral("Failed to write %1").arg(settings_store_.SettingsFilePath()));
+    notifications::NotificationEvent event;
+    event.type = notifications::NotificationType::SettingsSaveFailed;
+    event.title = QStringLiteral("Settings could not be saved");
+    event.body = QStringLiteral("The change may be lost when ExoSnap restarts.");
+    notifications_adapter_.manager().Enqueue(std::move(event));
+    return false;
+}
+
+void QuickApplication::saveAndPublishAppSettings(SettingsWriteIntent intent) {
+    persistAppSettings(intent);
     settings_adapter_.setAppSettings(settings_);
     // The overlay windows read their enable gates and their content set from the
     // same persisted struct. Published here rather than polled, which is what
@@ -1521,14 +2193,14 @@ void QuickApplication::initializeHotkeys() {
                              return;
                          }
                          hotkey_service_.SaveToStrings(settings_.hotkey_bindings);
-                         saveAndPublishAppSettings();
+                         saveAndPublishAppSettings(SettingsWriteIntent::UserEdit);
                          refreshHotkeyRows();
                      });
     QObject::connect(&settings_adapter_, &SettingsAdapter::hotkeyClearRequested, &settings_adapter_,
                      [this](int action) {
                          hotkey_service_.UnsetBinding(static_cast<HotkeyAction>(action));
                          hotkey_service_.SaveToStrings(settings_.hotkey_bindings);
-                         saveAndPublishAppSettings();
+                         saveAndPublishAppSettings(SettingsWriteIntent::UserEdit);
                          refreshHotkeyRows();
                      });
     QObject::connect(&settings_adapter_, &SettingsAdapter::hotkeyResetRequested, &settings_adapter_,
@@ -1539,7 +2211,7 @@ void QuickApplication::initializeHotkeys() {
                              return;
                          }
                          hotkey_service_.SaveToStrings(settings_.hotkey_bindings);
-                         saveAndPublishAppSettings();
+                         saveAndPublishAppSettings(SettingsWriteIntent::UserEdit);
                          refreshHotkeyRows();
                      });
 }
@@ -1679,6 +2351,17 @@ void QuickApplication::applyDiagnosticsVisualScenarios() {
         diagnostics_adapter_.setDiagnosticConfig(std::move(config));
         diagnostics_visual_scenario_active_ = true;
     }
+
+    // The live pipeline summary. Seeded through applyLiveDiagnostics(), which is
+    // the same entry point the recording engine's ~5 Hz callback uses, so the
+    // real BuildLiveTiles() policy decides what the capture shows. A scenario
+    // that placed tiles directly would photograph the fixture rather than the
+    // product's own classification of it.
+    const QByteArray diag_live = qgetenv("EXOSNAP_VISUAL_DIAG_LIVE");
+    if (!diag_live.isEmpty()) {
+        diagnostics_adapter_.applyLiveDiagnostics(visual::MakeDiagnosticsLiveSnapshot(QString::fromUtf8(diag_live)));
+        diagnostics_visual_scenario_active_ = true;
+    }
 }
 
 // Harness-only, env-configured. A real Edit surface needs a finished recording
@@ -1748,8 +2431,13 @@ void QuickApplication::applyEditVisualScenario() {
     const QStringList audio_rows =
         multitrack ? QStringList{QStringLiteral("Game"), QStringLiteral("System"), QStringLiteral("Microphone")}
                    : QStringList{QStringLiteral("System")};
-    const int tile_count = scenario == QStringLiteral("edit-timeline-loading") ? 4 : -1;
+    const bool unavailable_previews = scenario == QStringLiteral("edit-timeline-unavailable");
+    const int tile_count = scenario == QStringLiteral("edit-timeline-loading") ? 4 : unavailable_previews ? 0 : -1;
     edit_timeline_adapter_.setFixture(audio_rows, tile_count);
+    // QCR-307: the terminal state, which no fixture can reach on its own — the
+    // fixture path never touches the decoder whose failure produces it.
+    if (unavailable_previews)
+        edit_timeline_adapter_.applyUnavailablePreviewsForHarness();
 
     if (scenario == QStringLiteral("edit-trimmed"))
         edit_session_adapter_.requestTrim(22000, 118000);
@@ -1848,16 +2536,129 @@ void QuickApplication::initializeUpdates() {
         triggerUpdateCheck(/*manual=*/false);
 }
 
-void QuickApplication::triggerUpdateCheck(bool manual) {
+// QCR-202. The selected channel used to reach UpdateService exactly once, in
+// initializeUpdates(): picking Preview persisted the choice and changed the
+// About page, but every check in that session still queried Stable, and only the
+// next launch honoured the selection. Applying it here also invalidates the
+// card, because "Update available — <ver>" was an answer about the feed the user
+// just left. The card returns to the same "unchecked" state a fresh launch
+// shows; no automatic network check is started, since a check is the user's
+// explicit action (ADR 0045) and the card's own button is right there.
+void QuickApplication::applyUpdateChannel() {
     if (!update_service_)
         return;
-    // App-layer recording guard: never contact the update server while a capture
-    // or remux is in flight.
+    update_service_->SetChannel(UpdateChannelFromString(settings_.update_channel));
+    last_available_version_.clear();
+    update_handoff_phase_ = UpdateHandoffPhase::Idle;
+    settings_adapter_.setUpdateStatus(QStringLiteral("unchecked"), QString(), QString());
+    diagnostics::AppLog::info(QStringLiteral("update"),
+                              QStringLiteral("Update channel set to %1").arg(settings_.update_channel));
+}
+
+void QuickApplication::closeForUpdaterHandoff() {
+    // Idempotent: the updater posts once, but a message loop is not a promise of
+    // exactly-once delivery, and quitting twice would race the teardown.
+    if (update_handoff_phase_ == UpdateHandoffPhase::ClosingForHandoff)
+        return;
+
+    // The one refusal. The recording guard that blocked STARTING this update is
+    // not weakened by the handoff: a capture or remux can have begun between the
+    // launch and this request, and ending the process then would lose the
+    // recording. The updater's own answer for a parent that will not close is
+    // appWontClose (B1) with the installation untouched -- which is the truth.
     const UiRecordingState state = record_view_model_.state;
     if (state != UiRecordingState::Ready && state != UiRecordingState::Completed && state != UiRecordingState::Failed &&
         state != UiRecordingState::Blocked) {
-        settings_adapter_.setUpdateStatus(QStringLiteral("error"), QString(), QString(),
-                                          QStringLiteral("Update checks are paused while a recording is in progress."));
+        diagnostics::AppLog::warning(
+            QStringLiteral("update"),
+            QStringLiteral("The updater asked ExoSnap to close for the swap, but a recording is in flight; "
+                           "refusing. The update will report that the app would not close."));
+        return;
+    }
+
+    update_handoff_phase_ = UpdateHandoffPhase::ClosingForHandoff;
+    settings_adapter_.setUpdateStatus(QStringLiteral("pending"), last_available_version_, QString());
+    diagnostics::AppLog::info(
+        QStringLiteral("update"),
+        QStringLiteral("The updater has verified version %1 and asked ExoSnap to close for the swap")
+            .arg(last_available_version_.isEmpty() ? QStringLiteral("the update") : last_available_version_));
+
+    // quit(), NOT the window close the tray's "Quit" drives. Closing the window
+    // runs the close-guard chain and the hide-to-tray decision, and a
+    // tray-resident process still holds exosnap.exe locked -- which is exactly
+    // the file the updater is about to rename. The one guard that must still
+    // apply, a recording in flight, is checked above, explicitly, rather than
+    // inherited from a chain that can also decide to keep the process alive.
+    //
+    // Ending the event loop is enough: QuickApplication's destructor performs
+    // the same geometry/persist flush every other exit relies on.
+    QCoreApplication::quit();
+}
+
+QuickApplication::EffectiveRecordingConfig QuickApplication::resolveEffectiveConfig() const {
+    EffectiveRecordingConfig effective;
+    // Step one is the product's own sanitizer: container x codec reconciliation
+    // (ADR 0010), the 10-bit demotion (ADR 0032), the 4:4:4 snap, the MP4 CFR
+    // constraint, and the split clamps. It is the same call persistLiveConfig()
+    // makes on the way to disk.
+    effective.config = SanitizePresetConfig(live_config_);
+    if (!capabilities_.probed) {
+        // No hardware verdict yet. The static rules above have run and are
+        // reported; the capability-gated fallbacks have not, and saying they
+        // found nothing would be a claim about hardware nobody has looked at.
+        return effective;
+    }
+
+    const capability::SettingsResolver resolver(capabilities_);
+    effective.resolution =
+        resolver.ValidateConfig(diagnostics::UserConfigFromSettings(effective.config.output, effective.config.video));
+    effective.evaluated = true;
+
+    // Copy the resolver's answer back onto the model so `effective` really is one
+    // configuration rather than a sanitized config with a verdict stapled to it.
+    // Only the fields the resolver owns -- everything else it never looked at.
+    const capability::UserRecorderConfig& resolved = effective.resolution.resolved_config;
+    effective.config.output.container = resolved.container;
+    effective.config.output.video_codec = resolved.video_codec;
+    effective.config.output.audio_codec = resolved.audio_codec;
+    effective.config.output.chroma_subsampling = resolved.chroma;
+    effective.config.output.bit_depth = resolved.bit_depth;
+    effective.config.output.color_range = resolved.color_range;
+    effective.config.output.hdr_mode = resolved.hdr_mode;
+    effective.config.video.frame_rate_num = resolved.frame_rate_num;
+    effective.config.video.frame_rate_den = resolved.frame_rate_den;
+    effective.config.video.frame_pacing = resolved.frame_pacing;
+    return effective;
+}
+
+QString QuickApplication::updateBlockerReason() const {
+    // App-layer recording guard: never contact the update server while a capture
+    // or remux is in flight.
+    const UiRecordingState state = record_view_model_.state;
+    if (state == UiRecordingState::Saving || state == UiRecordingState::Stopping)
+        return QStringLiteral("finalizing");
+    if (state != UiRecordingState::Ready && state != UiRecordingState::Completed && state != UiRecordingState::Failed &&
+        state != UiRecordingState::Blocked)
+        return QStringLiteral("recording");
+    // A handoff in flight owns the update area: the card's action is disabled
+    // while the updater runs, and starting a second one would be a second swap.
+    if (update_handoff_phase_ != UpdateHandoffPhase::Idle)
+        return QStringLiteral("updaterRunning");
+    return {};
+}
+
+void QuickApplication::triggerUpdateCheck(bool manual) {
+    if (!update_service_)
+        return;
+    if (const QString blocker = updateBlockerReason(); !blocker.isEmpty()) {
+        // "updaterRunning" deliberately writes nothing: the card is already
+        // showing "Updater running…" / "Restart pending", and replacing that
+        // with an error would describe the handoff as a fault.
+        if (blocker != QLatin1String("updaterRunning")) {
+            settings_adapter_.setUpdateStatus(
+                QStringLiteral("error"), QString(), QString(),
+                QStringLiteral("Update checks are paused while a recording is in progress."));
+        }
         return;
     }
     if (manual) {
@@ -1893,10 +2694,15 @@ void QuickApplication::onUpdateCheckComplete(const exosnap::update::UpdateCheckR
 
     // A verification reinstall was granted on byte-identical version STRINGS, so
     // the running version string is the truthful label for it.
+    // The release tag verbatim, not SemVer::ToString(): this string is what the
+    // card offers, what the loop guard remembers and -- through
+    // --target-version -- what the updater is pinned to install, so all three
+    // have to be the same bytes the signed manifest carries.
     last_available_version_ =
-        result.verification_reinstall
-            ? current_version
-            : (result.available_version ? QString::fromStdString(result.available_version->ToString()) : QString());
+        result.verification_reinstall ? current_version : QString::fromStdString(result.available_version_raw);
+    // The feed's own release page, for the "What's new" footer link. Kept from the
+    // last successful check rather than resolved a second time.
+    last_releases_page_url_ = result.releases_page_url ? QString::fromStdString(*result.releases_page_url) : QString();
 
     const bool is_scoop = UpdateService::IsScoopManagedInstall(QCoreApplication::applicationDirPath());
     const QString card_state = exosnap::ResolveUpdateCardState(
@@ -1942,6 +2748,89 @@ void QuickApplication::runUpdatePrimaryAction() {
     triggerUpdateCheck(/*manual=*/true);
 }
 
+// ── "What's new" ─────────────────────────────────────────────────────────────
+//
+// The whole backend for this surface survived the Qt Quick cutover — the payload
+// is still written by every update, `whats_new_suppressed` is still persisted,
+// and the Settings card still shows the link — but the QML surface and both
+// connections did not, so the link reached nothing and the post-update overlay
+// never appeared on any machine. This is the missing half.
+
+void QuickApplication::initializeWhatsNew() {
+    whats_new_adapter_.setSuppressed(settings_.whats_new_suppressed);
+
+    // Entry point 1: the Settings update card's link.
+    QObject::connect(&settings_adapter_, &SettingsAdapter::whatsNewRequested, &whats_new_adapter_,
+                     [this]() { showWhatsNewForUpdateCard(); });
+
+    // The suppress tick, persisted the moment it moves. It gates the post-update
+    // auto-show only; the card link is never hidden by it.
+    QObject::connect(&whats_new_adapter_, &WhatsNewAdapter::suppressedEdited, &whats_new_adapter_,
+                     [this](bool suppressed) {
+                         if (settings_.whats_new_suppressed == suppressed)
+                             return;
+                         settings_.whats_new_suppressed = suppressed;
+                         saveAndPublishAppSettings();
+                     });
+
+    // A changelog waits for the screen; it never competes for it. See
+    // BlockingSurfaceArbiter::surfacesCleared() for why this is not a fourth
+    // arbitrated surface.
+    QObject::connect(&surface_arbiter_, &BlockingSurfaceArbiter::surfacesCleared, &whats_new_adapter_, [this]() {
+        if (deferred_whats_new_notes_.isEmpty())
+            return;
+        // Taken before presenting, not after: present() is synchronous and the
+        // surface it raises will emit changes this same handler listens to.
+        const QVector<WhatsNewNote> notes = deferred_whats_new_notes_;
+        deferred_whats_new_notes_.clear();
+        whats_new_adapter_.present(notes, /*post_update_mode=*/true, last_releases_page_url_);
+    });
+
+    // Entry point 2: the payload the previous update left behind.
+    consumePendingWhatsNewPayload();
+}
+
+void QuickApplication::showWhatsNewForUpdateCard() {
+    if (!update_service_)
+        return;
+    // The FULL reference list for the active channel, not the pending gap: the
+    // link has to lead somewhere even when there is nothing left to update to.
+    QVector<WhatsNewNote> notes;
+    for (const auto& source : update_service_->LastAllChannelNotes()) {
+        WhatsNewNote note;
+        note.version = QString::fromStdString(source.version.ToString());
+        note.body = QString::fromStdString(source.body_markdown);
+        note.html_url = QString::fromStdString(source.html_url);
+        notes.push_back(note);
+    }
+    // Deliberately not gated by whats_new_suppressed: that setting is about the
+    // automatic post-update show, and this is the user asking.
+    whats_new_adapter_.present(notes, /*post_update_mode=*/false, last_releases_page_url_);
+}
+
+void QuickApplication::consumePendingWhatsNewPayload() {
+    // Read, decided and cleared in one call: the one-time rules — including that
+    // the file goes whether or not it is shown, and that a corrupt one goes
+    // silently — live with the payload, so there is no half of them to get wrong
+    // here. Silent on purpose either way: the user did not ask for anything.
+    const WhatsNewConsumption consumed = ConsumeWhatsNewPayload(
+        WhatsNewPayloadPath(), QString::fromLatin1(exosnap::build::kVersion), settings_.whats_new_suppressed);
+    if (!consumed.show)
+        return;
+    presentPostUpdateWhatsNew(consumed.notes);
+}
+
+void QuickApplication::presentPostUpdateWhatsNew(const QVector<WhatsNewNote>& notes) {
+    if (surface_arbiter_.anySurfaceUp() || surface_arbiter_.recoveryQueued() || surface_arbiter_.crashQueued() ||
+        surface_arbiter_.recordingErrorQueued()) {
+        // Held, not dropped: the payload behind these notes is already gone, so
+        // losing them here would lose the one showing the user was owed.
+        deferred_whats_new_notes_ = notes;
+        return;
+    }
+    whats_new_adapter_.present(notes, /*post_update_mode=*/true, last_releases_page_url_);
+}
+
 void QuickApplication::applyStartupRelaunchHandoff(const QString& page_name, bool reenable_present_diag) {
     // ADR 0033. Land on the page the pre-elevation instance was showing.
     static const std::array<std::pair<const char*, ShellAdapter::Page>, 5> kNavLabels{{
@@ -1963,7 +2852,7 @@ void QuickApplication::applyStartupRelaunchHandoff(const QString& page_name, boo
     // which is the whole point of deferring the write.
     if (reenable_present_diag && !settings_.present_diagnostics_optin) {
         settings_.present_diagnostics_optin = true;
-        saveAndPublishAppSettings();
+        saveAndPublishAppSettings(SettingsWriteIntent::UserEdit);
         diagnostics::AppLog::info(QStringLiteral("diagnostics"),
                                   QStringLiteral("Present-diagnostics opt-in re-enabled after elevated relaunch."));
     }
@@ -1971,6 +2860,34 @@ void QuickApplication::applyStartupRelaunchHandoff(const QString& page_name, boo
 
 void QuickApplication::applyTraySuppression(bool suppressed) {
     tray_suppressed_ = suppressed;
+}
+
+void QuickApplication::applyUpdateFeedOverride(const QString& base_url) {
+    if (update_service_)
+        update_service_->SetDevFeedOverride(base_url);
+}
+
+void QuickApplication::applyUpdaterAutomationRunId(const QString& run_id) {
+    if (update_service_)
+        update_service_->SetUpdaterAutomationRunId(run_id);
+}
+
+void QuickApplication::requestUpdateCheck() {
+    // Manual: the same call the card's button makes, so the loop-guard reset and
+    // the app-layer recording guard both apply.
+    triggerUpdateCheck(/*manual=*/true);
+}
+
+void QuickApplication::requestUpdatePrimaryAction() {
+    runUpdatePrimaryAction();
+}
+
+const UpdateService* QuickApplication::updateService() const noexcept {
+    return update_service_.get();
+}
+
+UpdateService* QuickApplication::updateService() noexcept {
+    return update_service_.get();
 }
 
 void QuickApplication::applyVerifyUpdateReinstallMode(bool enabled) {
@@ -1987,6 +2904,24 @@ void QuickApplication::initializeNotifications() {
                          dispatchNotificationAction(action, payload);
                      });
 
+    // QCR-201. Not the same report as SettingsRepaired: nothing was recovered
+    // and nothing was written. The body says both facts the user needs — the
+    // session is running on defaults, and their file is still there.
+    if (settings_load_failed_pending_) {
+        settings_load_failed_pending_ = false;
+        diagnostics::AppLog::warning(
+            QStringLiteral("settings"),
+            QStringLiteral("Settings file could not be read (%1); running on defaults without overwriting it")
+                .arg(settings_store_.SettingsFilePath()));
+        notifications::NotificationEvent event;
+        event.type = notifications::NotificationType::SettingsLoadFailed;
+        event.title = QStringLiteral("Settings could not be read");
+        event.body = QStringLiteral("ExoSnap is running with default settings. Your settings file is left "
+                                    "untouched — changing any setting starts a fresh one and keeps the old "
+                                    "file as settings.ini.corrupt.");
+        notifications_adapter_.manager().Enqueue(std::move(event));
+    }
+
     if (preset_store_repaired_) {
         preset_store_repaired_ = false;
         diagnostics::AppLog::warning(QStringLiteral("preset"),
@@ -1997,6 +2932,83 @@ void QuickApplication::initializeNotifications() {
         event.body = QStringLiteral("Some saved settings were invalid and have been repaired.");
         notifications_adapter_.manager().Enqueue(std::move(event));
     }
+}
+
+void QuickApplication::initializeDisplayGeometryWatch() {
+    // Everything that can move the recorded monitor's rectangle without moving
+    // the capture target. The overlays are frameless top-level windows placed
+    // against the desktop in virtual-screen coordinates, and the adapter caches
+    // that rectangle per HMONITOR — a resolution switch, a scale change or a
+    // display being rearranged all keep the handle and change the rectangle, so
+    // each of them has to say so.
+    const auto invalidate = [this]() {
+        overlay_adapter_.invalidateMonitorGeometry();
+        // Applied now rather than at the next tick: with no recording running
+        // nothing else drives synchronize(), and the overlays would carry the
+        // stale rectangle into the recording that starts after the change.
+        overlay_adapter_.synchronize();
+    };
+
+    const auto watch_screen = [this, invalidate](QScreen* screen) {
+        if (screen == nullptr)
+            return;
+        QObject::connect(screen, &QScreen::geometryChanged, &overlay_adapter_,
+                         [invalidate](const QRect&) { invalidate(); });
+        QObject::connect(screen, &QScreen::availableGeometryChanged, &overlay_adapter_,
+                         [invalidate](const QRect&) { invalidate(); });
+        // Both DPI signals: a scale change moves the virtual-screen rectangle of
+        // every display to the right of the one that changed, not only its own.
+        QObject::connect(screen, &QScreen::logicalDotsPerInchChanged, &overlay_adapter_,
+                         [invalidate](qreal) { invalidate(); });
+        QObject::connect(screen, &QScreen::physicalDotsPerInchChanged, &overlay_adapter_,
+                         [invalidate](qreal) { invalidate(); });
+    };
+
+    for (QScreen* screen : QGuiApplication::screens())
+        watch_screen(screen);
+
+    QObject::connect(qGuiApp, &QGuiApplication::screenAdded, &overlay_adapter_,
+                     [watch_screen, invalidate](QScreen* screen) {
+                         watch_screen(screen);
+                         invalidate();
+                     });
+    QObject::connect(qGuiApp, &QGuiApplication::screenRemoved, &overlay_adapter_,
+                     [invalidate](QScreen*) { invalidate(); });
+    QObject::connect(qGuiApp, &QGuiApplication::primaryScreenChanged, &overlay_adapter_,
+                     [invalidate](QScreen*) { invalidate(); });
+}
+
+void QuickApplication::initializeBlockingSurfaces() {
+    surface_arbiter_.setSurfaces(&recovery_adapter_, &crash_report_adapter_, &recording_error_adapter_);
+    // The arbiter decides WHEN each surface may come up; only this class can
+    // build what they show.
+    QObject::connect(&surface_arbiter_, &BlockingSurfaceArbiter::crashSurfaceRequested, &crash_report_adapter_,
+                     [this]() { showCrashReportSurface(); });
+    QObject::connect(&surface_arbiter_, &BlockingSurfaceArbiter::recordingErrorSurfaceRequested,
+                     &recording_error_adapter_, [this]() {
+                         if (!pending_recording_failure_)
+                             return;
+                         const models::RecordingFailureReport report = *pending_recording_failure_;
+                         const bool can_send = pending_recording_failure_can_send_;
+                         pending_recording_failure_.reset();
+                         recording_error_adapter_.present(report, can_send);
+                     });
+}
+
+// QCR-415. The recording-error surface used to be raised straight from the
+// result callback with no reference to the other two, so a failure delivered
+// while recovery or the crash prompt was up produced two active modal loaders —
+// the covered one still holding focusable controls, which is exactly what
+// QCR-403 centralized the other two to prevent. The path is reachable because
+// the start hotkey is deliberately desktop-wide and a modal scrim inside the
+// shell does not reach it.
+void QuickApplication::presentRecordingFailure(const models::RecordingFailureReport& report, bool can_send_report) {
+    // A later failure replaces an earlier one that is still waiting: the surface's
+    // own rule is that the newest attempt is the one the user just made, and that
+    // has to hold whether it was raised or queued.
+    pending_recording_failure_ = report;
+    pending_recording_failure_can_send_ = can_send_report;
+    surface_arbiter_.requestRecordingError();
 }
 
 void QuickApplication::initializeRecovery() {
@@ -2045,7 +3057,7 @@ void QuickApplication::initializeRecovery() {
     event.secondary_action = notifications::NotificationAction::Discard;
     notifications_adapter_.manager().Enqueue(std::move(event));
 
-    recovery_adapter_.openSurface();
+    surface_arbiter_.requestRecovery();
 }
 
 void QuickApplication::initializeRecordingError() {
@@ -2114,7 +3126,7 @@ bool QuickApplication::applyOverlayVisualScenario(const QString& scenario) {
         const auto report = models::BuildRecordingFailureReport(result);
         if (!report)
             return false;
-        recording_error_adapter_.present(*report, /*can_send_report=*/true);
+        presentRecordingFailure(*report, /*can_send_report=*/true);
         return true;
     }
 
@@ -2158,6 +3170,11 @@ bool QuickApplication::applyOverlayVisualScenario(const QString& scenario) {
             event.secondary_action = seed.secondary;
             notifications_adapter_.manager().Enqueue(std::move(event));
         }
+        // QCR-804's standing capture-stall caution, built by the very resolver the
+        // live path calls — so what is photographed is the real wording, including
+        // the conditional fullscreen sentence, and not a hand-written stand-in.
+        notifications_adapter_.manager().Enqueue(notifications::MakeWindowCaptureStalledEvent(
+            diagnostics::kStallStarveSeconds, /*exclusive_fullscreen_hint=*/true));
         notifications_adapter_.openHub();
         return true;
     }
@@ -2256,6 +3273,44 @@ bool QuickApplication::applyOverlayVisualScenario(const QString& scenario) {
         return true;
     }
 
+    // The release-notes overlay, in both of the modes the product has. Real
+    // Markdown bodies of the shape GitHub release bodies actually take (a heading,
+    // a list, an inline link, a long line that has to wrap), because the whole
+    // point of photographing this surface is the rendered document — a hand-built
+    // one-liner would show a card with a sentence in it.
+    if (scenario == QLatin1String("whats-new") || scenario == QLatin1String("whats-new-post-update")) {
+        const bool post_update = scenario == QLatin1String("whats-new-post-update");
+
+        QVector<WhatsNewNote> notes;
+        WhatsNewNote newest;
+        newest.version = QStringLiteral("0.9.1");
+        newest.html_url = QStringLiteral("https://github.com/Exoridus/exosnap/releases/tag/v0.9.1");
+        newest.body =
+            QStringLiteral("### Fixed\n\n"
+                           "- The preview no longer freezes when the window crosses a monitor boundary.\n"
+                           "- Recording start is blocked while a diagnostic blocker is standing, instead of "
+                           "failing a few seconds later in the encoder with an HRESULT nobody can act on.\n"
+                           "- `Merge with above` now survives a container change.\n\n"
+                           "See the [capture notes](https://github.com/Exoridus/exosnap) for the measurements.\n");
+        notes.append(newest);
+
+        WhatsNewNote older;
+        older.version = QStringLiteral("0.9.0");
+        older.html_url = QStringLiteral("https://github.com/Exoridus/exosnap/releases/tag/v0.9.0");
+        older.body = QStringLiteral("### Added\n\n"
+                                    "- One visual language across all five destinations.\n"
+                                    "- Modals that keep the keyboard.\n\n"
+                                    "### Changed\n\n"
+                                    "- The Device tab is gone; the adapter cards moved to Diagnostics.\n");
+        notes.append(older);
+
+        // The real entry point in both cases, so what is photographed is what the
+        // adapter produces — including the mode-dependent hint, the suppress strip
+        // and the primary action's label.
+        whats_new_adapter_.present(notes, post_update, QStringLiteral("https://github.com/Exoridus/exosnap/releases"));
+        return true;
+    }
+
     return false;
 }
 
@@ -2294,7 +3349,7 @@ void QuickApplication::initializeCrashReport() {
         [this](const CrashReportDecision& decision, bool send) {
             if (decision.persisted_policy.has_value()) {
                 settings_.crash_report_policy = *decision.persisted_policy;
-                saveAndPublishAppSettings();
+                saveAndPublishAppSettings(SettingsWriteIntent::UserEdit);
             }
             const bool delivered = applyCrashConsentAction(decision.consent_action);
             if (decision.consent_action == CrashConsentAction::None)
@@ -2348,20 +3403,13 @@ void QuickApplication::initializeCrashReport() {
         return;
     }
 
-    if (recovery_adapter_.surfaceOpen()) {
-        // Defer behind recovery rather than stacking two modal surfaces. Single
-        // shot: a later "Decide later" must not re-raise a crash prompt the user
-        // has already answered.
-        QObject::connect(
-            &recovery_adapter_, &RecoveryAdapter::surfaceOpenChanged, &crash_report_adapter_,
-            [this]() {
-                if (!recovery_adapter_.surfaceOpen())
-                    showCrashReportSurface();
-            },
-            Qt::SingleShotConnection);
-        return;
-    }
-    showCrashReportSurface();
+    // Raised now, or queued behind an open recovery surface. Both directions of
+    // that arbitration live in BlockingSurfaceArbiter: this one used to be a
+    // single-shot connection here while the reverse — the standing recovery
+    // notification's action, which stays clickable on the desktop toast while
+    // the crash prompt is up — had no check at all and produced two active
+    // modal loaders.
+    surface_arbiter_.requestCrash();
 }
 
 void QuickApplication::showCrashReportSurface() {
@@ -2442,8 +3490,11 @@ void QuickApplication::dispatchNotificationAction(notifications::NotificationAct
     case NotificationAction::OpenRecovery:
         // Raises the surface again after "Decide later". A no-op once every
         // candidate has been resolved — the adapter refuses to open on an empty
-        // set rather than showing an empty card.
-        recovery_adapter_.openSurface();
+        // set rather than showing an empty card. Routed through the arbiter
+        // because this action is reachable while the crash prompt is up: the
+        // desktop toast is its own always-on-top window and takes clicks that
+        // the modal scrim inside the shell never sees.
+        surface_arbiter_.requestRecovery();
         break;
     case NotificationAction::None:
     case NotificationAction::Discard:
@@ -2512,6 +3563,39 @@ void QuickApplication::initializeShell() {
     // moment anything can still be written to disk.
     QObject::connect(&shell_adapter_, &ShellAdapter::closeApproved, &shell_adapter_,
                      [this]() { flushPendingPersists(); });
+    // The other half of the tray-Quit story. Together the two lines say what was
+    // asked for and what answered it, which is the difference between "the product
+    // refused, correctly" and "the product hung" — indistinguishable to a user, and
+    // until now indistinguishable in a support bundle too.
+    QObject::connect(
+        &shell_adapter_, &ShellAdapter::closeDecided, &shell_adapter_,
+        [this](const QString& kind, bool recording, bool exporting, bool remuxing) {
+            diagnostics::AppLog::info(QStringLiteral("shell"),
+                                      QStringLiteral("close requested -> %1 (recording=%2 exporting=%3 remuxing=%4)")
+                                          .arg(kind)
+                                          .arg(recording ? 1 : 0)
+                                          .arg(exporting ? 1 : 0)
+                                          .arg(remuxing ? 1 : 0));
+            // One close attempt, one decision, one place the latch is cleared. A
+            // tray "Quit" that ends at a prompt the user then cancels must not leave
+            // the next ordinary close behaving like a hard quit.
+            force_quit_ = false;
+
+            // An APPROVED close ends the process, and does so explicitly rather than
+            // leaving it to quitOnLastWindowClosed. Qt quits when the last visible
+            // "primary window (i.e. top level window with no transient parent)"
+            // closes -- and all five capture overlays are exactly that: top level,
+            // `transientParent: null`. So a standing notification toast kept the
+            // application alive after its only window was gone, with the tray icon
+            // still showing and its Quit routing through a window that no longer
+            // existed. Task Manager was the only way out.
+            //
+            // Queued, so the close this decision belongs to finishes first.
+            if (kind == QLatin1String("allow")) {
+                QMetaObject::invokeMethod(
+                    QCoreApplication::instance(), []() { QCoreApplication::quit(); }, Qt::QueuedConnection);
+            }
+        });
     // A guard prompt is modal and lives inside the root window, so raising one
     // while that window is hidden asks a question nobody can see — and the app
     // then sits there waiting for an answer. Reached from the tray "Quit" during
@@ -2521,7 +3605,11 @@ void QuickApplication::initializeShell() {
     // requestClose() will prompt or close outright — restoring there would flash
     // the window on screen for the ordinary idle quit.
     QObject::connect(&shell_adapter_, &ShellAdapter::closeGuardChanged, &shell_adapter_, [this]() {
-        if (shell_adapter_.closeGuardActive() && root_window_ != nullptr && !root_window_->isVisible())
+        // Unconditional raise, not only when hidden. A prompt behind another
+        // application is the same failure as a prompt behind the tray: the user
+        // asked to close, nothing visibly happened, and the question waiting for
+        // them is somewhere they are not looking.
+        if (shell_adapter_.closeGuardActive() && root_window_ != nullptr)
             restoreWindowFromTray();
     });
 }
@@ -2537,6 +3625,10 @@ void QuickApplication::initializeTray() {
 
     QObject::connect(tray_presence_.get(), &ui::tray::TrayPresence::activateWindowRequested, &shell_adapter_,
                      [this]() { restoreWindowFromTray(); });
+    // The same menu entry under its other label. It reported "Hide window" and
+    // then raised the window, because both labels emitted the one signal.
+    QObject::connect(tray_presence_.get(), &ui::tray::TrayPresence::hideWindowRequested, &shell_adapter_,
+                     [this]() { hideWindowToTray(); });
     // Same entry point the global hotkey uses, so the tray cannot develop its own
     // idea of what "toggle recording" means.
     QObject::connect(tray_presence_.get(), &ui::tray::TrayPresence::recordToggleRequested, &shell_adapter_,
@@ -2545,48 +3637,45 @@ void QuickApplication::initializeTray() {
     // attempt still passes onClosing -> requestClose() and therefore the guards:
     // "Quit" from the tray must still ask about a running recording.
     QObject::connect(tray_presence_.get(), &ui::tray::TrayPresence::quitRequested, &shell_adapter_, [this]() {
+        // Logged because a tray Quit that is then refused by a close guard is
+        // completely silent to the user: no prompt, no toast, the window simply
+        // stays. Paired with the shell's own close-decision line, the log then says
+        // both that Quit was asked for and what answered it.
+        diagnostics::AppLog::info(
+            QStringLiteral("shell"),
+            QStringLiteral("tray Quit requested (window=%1)")
+                .arg(root_window_ != nullptr ? QStringLiteral("present") : QStringLiteral("absent")));
         force_quit_ = true;
-        if (root_window_)
+        // A visible window is asked to close, so the request travels the same path
+        // an ordinary close does and inherits the guards for free.
+        if (root_window_ != nullptr && root_window_->isVisible()) {
             root_window_->close();
+            return;
+        }
+        // No window to deliver a close event to -- it is hidden in the tray.
+        // Routing the request
+        // through a window in that state is how a tray Quit came to do nothing at
+        // all, so ask the shell directly: same guard chain, same decision, and the
+        // approved case quits through closeDecided like every other close.
+        if (shell_adapter_.requestClose())
+            flushPendingPersists();
     });
 
     shell_adapter_.setHideToTrayProvider([this]() {
-        const bool hide =
-            ui::tray::ShouldHideToTray(settings_.keep_running_in_tray, force_quit_, tray_presence_ != nullptr);
-        // Consumed on the first close attempt after the tray "Quit", matching the
-        // Widgets shell: leaving it latched would turn every later close into a
-        // hard quit even after the user had cancelled at a guard.
-        force_quit_ = false;
-        return hide;
+        // Reads the latch; does NOT consume it. Since the tear-down guards moved
+        // ahead of this branch, a tray "Quit" during a recording never reaches the
+        // provider at all -- it raises a prompt first -- so consuming the latch here
+        // would leave it set whenever the user was asked something. It is cleared
+        // instead on closeDecided, which fires exactly once per close attempt for
+        // every outcome, including the ones that never get this far.
+        return ui::tray::ShouldHideToTray(settings_.keep_running_in_tray, force_quit_, tray_presence_ != nullptr);
     });
 
-    QObject::connect(&shell_adapter_, &ShellAdapter::hideToTrayRequested, &shell_adapter_, [this]() {
-        if (!root_window_)
-            return;
-        // Geometry is read from a visible window only, so it has to be banked
-        // before the hide — otherwise a session that ends from the tray persists
-        // whatever the last debounced sample happened to be.
-        if (window_geometry_)
-            window_geometry_->flush();
-        root_window_->hide();
-        if (tray_presence_)
-            tray_presence_->setWindowVisible(false);
-
-        // One-time notice, so the first hide can never look like a crash. The
-        // flag is persisted immediately: a user who then kills the process must
-        // not be told again on the next run.
-        if (!settings_.tray_close_notice_shown) {
-            settings_.tray_close_notice_shown = true;
-            saveAndPublishAppSettings();
-            if (tray_presence_) {
-                tray_presence_->showMessage(
-                    QStringLiteral("ExoSnap is still running"),
-                    QStringLiteral("ExoSnap is running in the tray. Right-click the tray icon to quit."),
-                    QSystemTrayIcon::Information, 4000);
-            }
-        }
-        diagnostics::AppLog::info(QStringLiteral("tray"), QStringLiteral("Window hidden to tray"));
-    });
+    // Two callers, one hide: the close-to-tray preference, and the tray menu's
+    // own "Hide window" entry. A second copy of this body is how the two would
+    // drift apart on the geometry flush or on the one-time notice.
+    QObject::connect(&shell_adapter_, &ShellAdapter::hideToTrayRequested, &shell_adapter_,
+                     [this]() { hideWindowToTray(); });
 
     // The unread badge mirrors the in-window bell: a toast raised while the
     // window is hidden is otherwise invisible.
@@ -2608,8 +3697,15 @@ void QuickApplication::initializeTray() {
 }
 
 void QuickApplication::refreshTrayState() {
-    if (!tray_presence_)
-        return;
+    // NO early return on a missing tray. This function drives TWO surfaces, and
+    // only one of them is the tray: the window icon below is what the TASKBAR
+    // button shows, and it exists whether or not a tray does. Returning here left
+    // the taskbar on the idle logo through a whole recording for every session
+    // without one -- a machine with the notification area disabled, and every
+    // --auto-record / --auto-edit / --visual-test run, which suppress the tray on
+    // purpose. The regression stayed open for exactly the sessions least likely
+    // to be watched.
+    //
     // Derived from the view model's own booleans rather than by re-parsing the
     // status string: the label is presentation and may be localized, the state is
     // not. Countdown and Preparing read as Recording, matching the Widgets
@@ -2622,10 +3718,64 @@ void QuickApplication::refreshTrayState() {
                state == UiRecordingState::Preparing) {
         tray_state = ui::tray::TrayIconState::Recording;
     }
-    tray_presence_->applyState(tray_state, record_view_model_adapter_.stateText().toUpper(),
-                               record_view_model_adapter_.elapsedText());
-    tray_presence_->setRecordingBlocked(record_view_model_adapter_.blocked() &&
-                                        tray_state == ui::tray::TrayIconState::Idle);
+    if (tray_presence_) {
+        tray_presence_->applyState(tray_state, record_view_model_adapter_.stateText().toUpper(),
+                                   record_view_model_adapter_.elapsedText());
+        tray_presence_->setRecordingBlocked(record_view_model_adapter_.blocked() &&
+                                            tray_state == ui::tray::TrayIconState::Idle);
+    }
+
+    // The WINDOW icon, which is what the taskbar button shows -- a different surface
+    // from the tray icon above, and the one the Widgets frontend used to swap. The
+    // cutover carried the mechanism over (QuickWindowChrome::applyWindowIcon, the
+    // three .ico variants, their resource ids) and left the call behind, so the
+    // taskbar button has shown the idle logo through every recording since. Driven
+    // from the same state as the tray so the two surfaces cannot disagree.
+    QuickWindowChrome::IconState icon_state = QuickWindowChrome::Idle;
+    if (tray_state == ui::tray::TrayIconState::Paused) {
+        icon_state = QuickWindowChrome::Paused;
+    } else if (tray_state == ui::tray::TrayIconState::Recording) {
+        icon_state = QuickWindowChrome::Recording;
+    }
+    // Only on a real change. This function runs from synchronizeRecordState(), which
+    // the diagnostics tick also reaches while recording -- and applyWindowIcon loads
+    // an icon and sends two WM_SETICONs, which is a taskbar redraw each time. The tray
+    // above is idempotent internally; this is not.
+    if (icon_state != window_icon_state_) {
+        window_icon_state_ = icon_state;
+        if (root_window_) {
+            if (auto* chrome = root_window_->findChild<QuickWindowChrome*>())
+                chrome->applyWindowIcon(icon_state);
+        }
+    }
+}
+
+void QuickApplication::hideWindowToTray() {
+    if (!root_window_)
+        return;
+    // Geometry is read from a visible window only, so it has to be banked
+    // before the hide — otherwise a session that ends from the tray persists
+    // whatever the last debounced sample happened to be.
+    if (window_geometry_)
+        window_geometry_->flush();
+    root_window_->hide();
+    if (tray_presence_)
+        tray_presence_->setWindowVisible(false);
+
+    // One-time notice, so the first hide can never look like a crash. The
+    // flag is persisted immediately: a user who then kills the process must
+    // not be told again on the next run.
+    if (!settings_.tray_close_notice_shown) {
+        settings_.tray_close_notice_shown = true;
+        saveAndPublishAppSettings();
+        if (tray_presence_) {
+            tray_presence_->showMessage(
+                QStringLiteral("ExoSnap is still running"),
+                QStringLiteral("ExoSnap is running in the tray. Right-click the tray icon to quit."),
+                QSystemTrayIcon::Information, 4000);
+        }
+    }
+    diagnostics::AppLog::info(QStringLiteral("tray"), QStringLiteral("Window hidden to tray"));
 }
 
 void QuickApplication::restoreWindowFromTray() {
@@ -2743,8 +3893,17 @@ bool QuickApplication::load(bool no_activate) {
         {QStringLiteral("recovery"), QVariant::fromValue(&recovery_adapter_)},
         {QStringLiteral("recordingError"), QVariant::fromValue(&recording_error_adapter_)},
         {QStringLiteral("crashReport"), QVariant::fromValue(&crash_report_adapter_)},
+        {QStringLiteral("whatsNew"), QVariant::fromValue(&whats_new_adapter_)},
         {QStringLiteral("overlays"), QVariant::fromValue(&overlay_adapter_)},
         {QStringLiteral("noActivate"), no_activate},
+        // ADR 0033, and deliberately an initial property rather than a
+        // navigation emitted once the engine has loaded. By that point a
+        // recovery surface or a crash prompt raised during startup is already
+        // up, and the single navigation edge (QCR-001) refuses a navigation
+        // behind a blocking surface -- which would silently drop a restore that
+        // is not a navigation at all.
+        {QStringLiteral("landingPage"),
+         QVariant::fromValue(static_cast<int>(pending_landing_page_.value_or(ShellAdapter::RecordPage)))},
     });
     applyThemeFromSettings();
     applyDiagnosticsVisualScenarios();
@@ -2754,13 +3913,9 @@ bool QuickApplication::load(bool no_activate) {
         return false;
     }
 
-    // The shell is connected now, so a parked relaunch landing page can be
-    // delivered. Done before the window is shown to the user rather than as a
-    // visible navigation away from Record.
-    if (pending_landing_page_ >= 0) {
-        emit shell_adapter_.navigateToPageRequested(pending_landing_page_);
-        pending_landing_page_ = -1;
-    }
+    // Consumed by the initial property above; cleared so a second load() in the
+    // same process cannot re-apply it.
+    pending_landing_page_.reset();
 
     if (auto* root_window = qobject_cast<QQuickWindow*>(engine_.rootObjects().constFirst())) {
         root_window_ = root_window;
@@ -2845,6 +4000,8 @@ bool QuickApplication::load(bool no_activate) {
                          [publish_anchor](QScreen*) { publish_anchor(); });
     }
 
+    initializeDisplayGeometryWatch();
+
     // After the window exists — the tray reports its visibility and acts on it.
     // Suppression is decided by the entry point, not by no_activate: --smoke-test
     // deliberately keeps the tray so the QApplication + QSystemTrayIcon startup
@@ -2862,6 +4019,12 @@ bool QuickApplication::load(bool no_activate) {
         hotkey_event_filter_ = std::make_unique<QuickHotkeyEventFilter>(
             hwnd, [this](HotkeyAction action) { triggerHotkeyAction(action); });
         QCoreApplication::instance()->installNativeEventFilter(hotkey_event_filter_.get());
+        // Same ordering constraint, same window: the updater finds this HWND by
+        // owner pid and title, so the filter has to be armed as soon as the
+        // window exists.
+        updater_handoff_filter_ =
+            std::make_unique<QuickUpdaterHandoffFilter>(hwnd, [this] { closeForUpdaterHandoff(); });
+        QCoreApplication::instance()->installNativeEventFilter(updater_handoff_filter_.get());
         // The return value is the set of bindings Windows refused, usually
         // because another application already owns the combo. Discarding it left
         // the user with a shortcut that silently did nothing and no way to find
@@ -2964,6 +4127,40 @@ RecordingCoordinator* QuickApplication::recordingCoordinator() noexcept {
     return recording_coordinator_.get();
 }
 
+diagnostics::PresentMonProvider* QuickApplication::presentProvider() noexcept {
+    return present_provider_.get();
+}
+
+unsigned long QuickApplication::presentTargetPidForSelection() const {
+    // Window capture attributes presents to the captured window's process. Display
+    // and Region capture have no owning process -- their presenter is whichever
+    // process dominates the screen -- so they stay on pid 0, which is the same
+    // filter the idle desktop uses.
+    if (!pushed_selected_target_.has_value())
+        return 0;
+    if (pushed_selected_target_->kind != recorder_core::CaptureTarget::Kind::Window)
+        return 0;
+    const auto hwnd = reinterpret_cast<HWND>(static_cast<uintptr_t>(pushed_selected_target_->native_id));
+    if (hwnd == nullptr || ::IsWindow(hwnd) == FALSE)
+        return 0;
+    DWORD pid = 0;
+    ::GetWindowThreadProcessId(hwnd, &pid);
+    return pid;
+}
+
+void QuickApplication::updatePresentAttribution(unsigned long pid, bool force) {
+    if (present_provider_ == nullptr)
+        return;
+    if (!force && present_target_pid_ == pid)
+        return;
+    present_target_pid_ = pid;
+    present_provider_->SetTargetProcessId(pid);
+    diagnostics::AppLog::info(QStringLiteral("present"),
+                              QStringLiteral("attribution boundary: target pid=%1 force=%2 (accumulators reset)")
+                                  .arg(pid)
+                                  .arg(force ? 1 : 0));
+}
+
 bool QuickApplication::prepareRecordingBenchmark(uint32_t frame_rate, QString& error) {
     if (recording_coordinator_ == nullptr) {
         error = QStringLiteral("The Quick composition owner has no recording coordinator.");
@@ -3018,6 +4215,10 @@ bool QuickApplication::openEditorForAutomation() {
     return edit_session_adapter_.open();
 }
 
+bool QuickApplication::canOpenEditor() const {
+    return canOpenEditorForCurrentRecording();
+}
+
 // One name per product state, and no aliases at all. There used to be four —
 // `warning` for Blocked, `error` for Failed, `idle` for Ready, `saved` for
 // Completed — and the visual sweep captured every one of them, so the evidence
@@ -3035,10 +4236,12 @@ bool QuickApplication::applyRecordVisualScenario(const QString& scenario) {
     // Re-seeding is idempotent: a scenario that raises no notice must not
     // inherit one from the scenario applied before it.
     record_view_model_adapter_.setNoticeText({});
+    clearAudioSourceDegradedWarning();
 
-    if (normalized == QStringLiteral("ready")) {
+    if (normalized == QLatin1String(visual::record_state::kReady)) {
         record_view_model_.SetState(UiRecordingState::Ready);
-    } else if (normalized == QStringLiteral("recording")) {
+    } else if (normalized == QLatin1String(visual::record_state::kRecording) ||
+               normalized == QLatin1String(visual::record_state::kRecordingAudioDegraded)) {
         record_view_model_.SetState(UiRecordingState::Recording);
         record_view_model_.live_stats_available = true;
         record_view_model_.elapsed_text = L"12:34";
@@ -3049,7 +4252,24 @@ bool QuickApplication::applyRecordVisualScenario(const QString& scenario) {
         record_view_model_.dropped_frames = 0;
         record_view_model_.av_drift_available = true;
         record_view_model_.av_drift_ms = 1.0;
-    } else if (normalized == QStringLiteral("countdown")) {
+        if (normalized == QLatin1String(visual::record_state::kRecordingAudioDegraded)) {
+            // The scenario the visual catalogue has always named
+            // (record-recording-audio-degraded) and that nothing in this
+            // frontend rendered: the Widgets harness read a struct field, the
+            // Quick harness switches on the scenario string, and the field was
+            // left without a consumer when the Widgets shell was removed. A
+            // scenario whose name promises a state it does not produce is worse
+            // than no scenario -- every capture taken under it was evidence of
+            // an ordinary recording.
+            //
+            // Raised through the production Enqueue() with the production
+            // resolver, exactly as observeAudioSourceDegradation() does when a
+            // real source loses its device, so what is photographed is the real
+            // standing notification and not a harness lookalike.
+            audio_degraded_toast_sequence_ =
+                notifications_adapter_.manager().Enqueue(notifications::MakeAudioSourceDegradedEvent(1));
+        }
+    } else if (normalized == QLatin1String(visual::record_state::kCountdown)) {
         // A held countdown: the state and the remaining seconds are set, but the
         // tick timer is not started, so the frame is deterministic. This is the
         // only Record state the deterministic suite could not photograph — the
@@ -3061,13 +4281,13 @@ bool QuickApplication::applyRecordVisualScenario(const QString& scenario) {
         countdown_progress_ = 1.0;
         live_config_.countdown_seconds = 3;
         record_view_model_.SetState(UiRecordingState::Countdown);
-    } else if (normalized == QStringLiteral("paused")) {
+    } else if (normalized == QLatin1String(visual::record_state::kPaused)) {
         record_view_model_.SetState(UiRecordingState::Paused);
         record_view_model_.live_stats_available = true;
         record_view_model_.elapsed_text = L"12:34";
         record_view_model_.elapsed_seconds = 754.0;
         record_view_model_.output_size_text = L"440.6 MB";
-    } else if (normalized == QStringLiteral("completed")) {
+    } else if (normalized == QLatin1String(visual::record_state::kCompleted)) {
         // The post-recording state, which had no deterministic scenario at all —
         // so the one arrangement in which the transport's recommended action is
         // Edit rather than Record, and the one in which the page carries a
@@ -3095,7 +4315,7 @@ bool QuickApplication::applyRecordVisualScenario(const QString& scenario) {
         record_view_model_.SetState(UiRecordingState::Completed);
         // Deliberately no page notice: a successful stop no longer raises one,
         // and the scenario exists to photograph what the product actually does.
-    } else if (normalized == QStringLiteral("blocked")) {
+    } else if (normalized == QLatin1String(visual::record_state::kBlocked)) {
         // A blocker is a condition Diagnostics reports about the machine, not a
         // result of anything the user just did: no page notice, and Record is
         // simply unavailable. That is what makes it visually distinct from
@@ -3103,7 +4323,7 @@ bool QuickApplication::applyRecordVisualScenario(const QString& scenario) {
         record_view_model_.SetState(UiRecordingState::Blocked);
         record_view_model_.capability_status_text =
             L"The selected format is unavailable on this GPU. Choose a supported profile in Settings.";
-    } else if (normalized == QStringLiteral("failed")) {
+    } else if (normalized == QLatin1String(visual::record_state::kFailed)) {
         record_view_model_.SetState(UiRecordingState::Failed);
         record_view_model_.capability_status_text = L"Recording stopped because the capture source became unavailable.";
         record_view_model_.result_user_message = L"The capture source is no longer available.";
@@ -3112,7 +4332,7 @@ bool QuickApplication::applyRecordVisualScenario(const QString& scenario) {
         // is precisely the evidence a failure state needs to be judged on.
         record_view_model_adapter_.setNoticeText(QStringLiteral("The capture source is no longer available."),
                                                  QStringLiteral("error"));
-    } else if (normalized == QStringLiteral("unavailable")) {
+    } else if (normalized == QLatin1String(visual::record_state::kUnavailable)) {
         record_view_model_.SetState(UiRecordingState::Ready);
         record_view_model_.selected_target_index = -1;
         microphone_available_ = false;

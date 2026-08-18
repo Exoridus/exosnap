@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <memory>
 #include <string>
 #include <utility>
@@ -79,11 +80,30 @@ std::vector<qint64> TimelineTileTimesMs(int tile_count, qint64 duration_ms, cons
 }
 
 QImage WrapDecodedFrame(const recorder_core::DecodedVideoFrame& frame) {
+    // Geometry first, keep-alive second. QImage refuses a frame it cannot
+    // describe (no buffer, a zero side, a stride shorter than one row, a
+    // dimension past what its int-based geometry can hold) by returning a null
+    // image -- and a null image never runs the cleanup hook, so a keep-alive
+    // allocated before the constructor would strand both itself and the
+    // decoder's ~15-33 MB frame buffer for the life of the process.
+    constexpr auto kMaxSide = static_cast<uint32_t>(std::numeric_limits<int>::max());
+    if (frame.bgra == nullptr || frame.width == 0 || frame.height == 0 || frame.width > kMaxSide ||
+        frame.height > kMaxSide || frame.stride_bytes / 4u < frame.width || frame.stride_bytes > kMaxSide)
+        return {};
+
     auto* keep_alive = new std::shared_ptr<const uint8_t[]>(frame.bgra);
-    return QImage(
+    QImage image(
         frame.bgra.get(), static_cast<int>(frame.width), static_cast<int>(frame.height),
         static_cast<int>(frame.stride_bytes), QImage::Format_ARGB32,
         [](void* owner) { delete static_cast<std::shared_ptr<const uint8_t[]>*>(owner); }, keep_alive);
+    if (image.isNull()) {
+        // Rejected for a reason the checks above do not name (an allocation
+        // failure inside QImage, say): the hook was never registered, so the
+        // reference is released here instead of leaking.
+        delete keep_alive;
+        return {};
+    }
+    return image;
 }
 
 void GenerateTimelineTiles(const std::vector<qint64>& times_ms, int row_height, const TimelineFrameDecoder& decode,
@@ -142,10 +162,25 @@ void TimelineThumbnailSource::cancelLocked() {
 void TimelineThumbnailSource::openClip(const QString& path, std::vector<int64_t> keyframes_us) {
     video_width_ = 0;
     video_height_ = 0;
+    ++open_generation_;
     {
         const std::lock_guard<std::mutex> lock(mutex_);
         cancelLocked();
-        pending_open_ = OpenJob{std::filesystem::path(path.toStdWString()), std::move(keyframes_us)};
+        pending_close_ = false;
+        pending_open_ = OpenJob{std::filesystem::path(path.toStdWString()), std::move(keyframes_us), open_generation_};
+    }
+    cv_.notify_all();
+}
+
+void TimelineThumbnailSource::closeClip() {
+    video_width_ = 0;
+    video_height_ = 0;
+    ++open_generation_;
+    {
+        const std::lock_guard<std::mutex> lock(mutex_);
+        cancelLocked();
+        pending_open_.reset();
+        pending_close_ = true;
     }
     cv_.notify_all();
 }
@@ -179,14 +214,20 @@ void TimelineThumbnailSource::workerLoop() {
     for (;;) {
         std::optional<OpenJob> open_job;
         std::optional<TileJob> tile_job;
+        bool close_job = false;
         {
             std::unique_lock<std::mutex> lock(mutex_);
-            cv_.wait(lock, [this]() { return stop_ || pending_open_.has_value() || pending_tiles_.has_value(); });
+            cv_.wait(lock, [this]() {
+                return stop_ || pending_close_ || pending_open_.has_value() || pending_tiles_.has_value();
+            });
             if (stop_)
                 break;
-            // Opening first: a tile job queued alongside it belongs to the new
-            // clip, never to the one still open.
-            if (pending_open_) {
+            // Closing first, then opening: a tile job queued alongside either
+            // belongs to what the clip becomes, never to the one still open.
+            if (pending_close_) {
+                close_job = true;
+                pending_close_ = false;
+            } else if (pending_open_) {
                 open_job = std::move(pending_open_);
                 pending_open_.reset();
             } else {
@@ -195,6 +236,12 @@ void TimelineThumbnailSource::workerLoop() {
                 // The run that starts here is the one the flag now applies to.
                 cancelled_.store(false, std::memory_order_relaxed);
             }
+        }
+
+        if (close_job) {
+            engine->Close();
+            open = false;
+            continue;
         }
 
         if (open_job) {
@@ -208,9 +255,15 @@ void TimelineThumbnailSource::workerLoop() {
                 for (const auto& track : engine->AudioTracks())
                     audio_names.append(QString::fromStdString(track.name));
             }
+            const quint64 generation = open_job->generation;
             QMetaObject::invokeMethod(
                 this,
-                [this, w, h, audio_names]() {
+                [this, w, h, audio_names, generation]() {
+                    // The clip may have been closed (or replaced) while this open
+                    // was still running -- its size and track list then belong to
+                    // nothing the owner is showing.
+                    if (generation != open_generation_)
+                        return;
                     video_width_ = w;
                     video_height_ = h;
                     emit clipOpened(w, h, audio_names);
@@ -221,14 +274,30 @@ void TimelineThumbnailSource::workerLoop() {
 
         if (!tile_job)
             continue;
-        if (!open)
-            continue; // nothing decodable: the strip stays empty, by design
 
         const quint64 run_id = tile_job->run_id;
+        // QCR-307. Reported for BOTH endings, including the one that decodes
+        // nothing at all. The clip that could not be opened used to leave the
+        // loop here silently, which is precisely why the strip could say
+        // "Generating previews…" for the rest of the session.
+        const auto finish = [this, run_id](int emitted) {
+            const bool cancelled = cancelled_.load(std::memory_order_relaxed);
+            QMetaObject::invokeMethod(
+                this, [this, run_id, emitted, cancelled]() { emit runFinished(run_id, emitted, cancelled); },
+                Qt::QueuedConnection);
+        };
+
+        if (!open) {
+            finish(0);
+            continue;
+        }
+
+        int emitted = 0;
         GenerateTimelineTiles(
             tile_job->times_ms, tile_job->row_height,
             [&engine](int64_t target_us) { return engine->DecodeFrameAt(target_us); },
-            [this, run_id](TimelineThumbnail&& tile) {
+            [this, run_id, &emitted](TimelineThumbnail&& tile) {
+                ++emitted;
                 // One tile at a time onto the owner's thread: the strip fills
                 // in progressively instead of arriving as one late batch.
                 QMetaObject::invokeMethod(
@@ -236,6 +305,7 @@ void TimelineThumbnailSource::workerLoop() {
                     Qt::QueuedConnection);
             },
             cancelled_);
+        finish(emitted);
     }
 
     engine.reset();

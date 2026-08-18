@@ -13,4 +13,7 @@ if [ "$branch" = "main" ] && [ "$ALLOW_MAIN_COMMIT" != "1" ]; then
     exit 1
 fi
 
-pwsh -NonInteractive -File "$(git rev-parse --show-toplevel)/scripts/check-format.ps1" -Staged -Fix
+# One entry point, no verification logic of its own. What -Fast means, in what
+# order, and which steps a failure has to stop is scripts/verify.ps1's business;
+# this file only says when it runs. CI remains the authority either way.
+pwsh -NonInteractive -File "$(git rev-parse --show-toplevel)/scripts/verify.ps1" -Fast -Staged

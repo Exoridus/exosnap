@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls.Basic
+import QtQuick.Layouts
 
 // Dropdown over an adapter-built option list. Each entry carries the
 // capability owner's own `selectable` verdict and `reason`, so an unavailable
@@ -88,16 +89,43 @@ ComboBox {
         enabled: optionDelegate.model.selectable
         highlighted: optionDelegate.ListView.isCurrentItem
 
-        contentItem: Label {
-            text: optionDelegate.model.label
-            textFormat: Text.PlainText
-            elide: Text.ElideRight
-            verticalAlignment: Text.AlignVCenter
-            color: optionDelegate.enabled ? ExoTheme.text : ExoTheme.textDim
-            leftPadding: ExoTheme.spacingSm
-            font {
-                family: ExoTheme.sansFamily
-                pixelSize: ExoTheme.fontBody
+        contentItem: RowLayout {
+            spacing: ExoTheme.spacingSm
+
+            Label {
+                text: optionDelegate.model.label
+                textFormat: Text.PlainText
+                elide: Text.ElideRight
+                verticalAlignment: Text.AlignVCenter
+                color: optionDelegate.enabled ? ExoTheme.text : ExoTheme.textDim
+                leftPadding: ExoTheme.spacingSm
+                Layout.fillWidth: true
+                Layout.minimumWidth: 0
+                font {
+                    family: ExoTheme.sansFamily
+                    pixelSize: ExoTheme.fontBody
+                }
+            }
+
+            // Why this one cannot be chosen, stated in the row. It was a
+            // ToolTip on a DISABLED delegate — and Qt delivers no hover events
+            // to a disabled item, so it never appeared for any input at all.
+            // The row it explains is the only place with the room for it.
+            Label {
+                text: optionDelegate.model.reason ?? ""
+                textFormat: Text.PlainText
+                elide: Text.ElideRight
+                horizontalAlignment: Text.AlignRight
+                verticalAlignment: Text.AlignVCenter
+                visible: !optionDelegate.enabled && text !== ""
+                color: ExoTheme.textDim
+                rightPadding: ExoTheme.spacingSm
+                Layout.maximumWidth: optionDelegate.width / 2
+                Layout.minimumWidth: 0
+                font {
+                    family: ExoTheme.sansFamily
+                    pixelSize: ExoTheme.fontCaption
+                }
             }
         }
 
@@ -107,8 +135,15 @@ ComboBox {
             opacity: optionDelegate.highlighted ? 1.0 : 0.55
         }
 
-        ToolTip.visible: optionDelegate.hovered && optionDelegate.model.reason !== ""
-        ToolTip.text: optionDelegate.model.reason
+        // QCR-509. The reason also rides on the accessible description, for the
+        // enabled and the disabled case alike.
+        Accessible.description: optionDelegate.model.reason ?? ""
+        // The tooltip stays for an ENABLED option — an option can carry a
+        // reason without being unavailable, and hover works there. It is the
+        // DISABLED case the row above had to take over, because Qt delivers no
+        // hover events to a disabled item at all.
+        ToolTip.visible: optionDelegate.hovered && (optionDelegate.model.reason ?? "") !== ""
+        ToolTip.text: optionDelegate.model.reason ?? ""
     }
 
     popup: Popup {

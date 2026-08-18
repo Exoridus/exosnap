@@ -12,24 +12,27 @@
 // duplication ever (the subscribed monitor), none while nothing is subscribed.
 //
 // Threading: Subscribe/Unsubscribe are called on the UI thread and only post a
-// command. The registry, the hub, the producer and the publisher all live on
-// this service's own pump thread (~60 Hz — a live preview, not a thumbnail
+// command; RequestEngineLease/ReturnEngineLease are posted from the recording
+// coordinator's prepare/record worker thread. Those two producers race, which
+// is why the channel is an ordered queue and not a slot (CaptureHubCommandQueue.h)
+// and why the lease lives in a service-level state machine (CaptureHubGate.h).
+// The registry, the hub, the producer and the publisher all live on this
+// service's own pump thread (~60 Hz — a live preview, not a thumbnail
 // cadence). The handle sink is invoked ON THE PUMP THREAD; the subscriber
 // marshals to the UI thread itself (the same contract as the engine's
 // PreviewSharedHandleReadyCallback).
 
 #include <atomic>
-#include <condition_variable>
 #include <cstdint>
 #include <functional>
-#include <mutex>
-#include <optional>
 #include <string>
 #include <thread>
 
 #include <windows.h>
 
 #include <recorder_core/preview_tap.h>
+
+#include "services/CaptureHubCommandQueue.h"
 
 namespace exosnap {
 
@@ -77,9 +80,11 @@ class DxgiCaptureHubService {
     // duplication is closed — and BLOCKS until the pump thread has actually
     // closed it: an output can only be duplicated once per process, so the
     // close must have happened before StartRecording proceeds, not merely be
-    // queued. Bounded wait; logs and returns anyway if the pump thread is
-    // wedged (the recording then fails to open its capture rather than the UI
-    // hanging).
+    // queued. The acknowledgement carries this request's own serial, so no
+    // later command can stand in for it, and the service opens nothing at all
+    // until ReturnEngineLease(). Bounded wait; logs and returns anyway if the
+    // pump thread is wedged (the recording then fails to open its capture
+    // rather than the UI hanging).
     void RequestEngineLease();
 
     // The recording ended: return the lease. The hub reopens its duplication
@@ -91,24 +96,17 @@ class DxgiCaptureHubService {
     void ResetPreviewPublishStats() noexcept;
 
   private:
-    struct Command {
-        enum class Op { Subscribe, Unsubscribe, LeaseRequest, LeaseReturn };
-        Op op = Op::Unsubscribe;
+    // Only a Subscribe carries one; the other three commands are their own
+    // instruction.
+    struct SubscribePayload {
         std::wstring device_name;
         HandleSink sink;
         FramePublishedSink frame_sink;
-        uint64_t serial = 0;
     };
 
     void WorkerProc(std::stop_token stop_token);
-    uint64_t PostCommand(Command cmd);
 
-    std::mutex mutex_;
-    std::condition_variable cv_;
-    std::optional<Command> pending_;
-    uint64_t next_serial_ = 1;      // guarded by mutex_
-    uint64_t processed_serial_ = 0; // guarded by mutex_
-    std::condition_variable ack_cv_;
+    CaptureHubCommandQueue<SubscribePayload> commands_;
 
     std::jthread worker_;
     std::atomic<uint64_t> publish_attempts_{0};

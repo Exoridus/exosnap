@@ -58,82 +58,87 @@ Rectangle {
         }
     }
 
-    Rectangle {
+    // QCR-504. This was a Rectangle with a MouseArea that CLAIMED
+    // Accessible.Button: the editor's central transport control was mouse-only,
+    // not in the tab order, and inert to Enter/Space. An AbstractButton keeps
+    // the drawing exactly as it was and makes the claim true; the timeline
+    // below adds the rest of the keyboard contract.
+    AbstractButton {
         id: playToggle
 
+        objectName: "editPlayerToggle"
         anchors.centerIn: parent
-        width: 60
-        height: 60
-        radius: 30
+        implicitWidth: 60
+        implicitHeight: 60
         // Nothing to transport without a decodable clip — and the toggle would
         // otherwise sit on top of the placeholder that says so.
         visible: root.player.clipOpen
-        color: playPointer.containsMouse ? ExoTheme.surfaceHover : ExoTheme.surface
-        opacity: 0.85
-        border.width: 1
-        border.color: ExoTheme.lineStrong
-
+        hoverEnabled: true
+        focusPolicy: Qt.StrongFocus
         Accessible.role: Accessible.Button
         Accessible.name: root.player.playing ? qsTr("Pause preview") : qsTr("Play preview")
-        Accessible.onPressAction: root.player.togglePlay()
+        onClicked: root.player.togglePlay()
 
-        Shape {
-            anchors.centerIn: parent
-            width: 20
-            height: 22
-            visible: !root.player.playing
-            preferredRendererType: Shape.CurveRenderer
-
-            ShapePath {
-                fillColor: ExoTheme.text
-                strokeWidth: -1
-                startX: 3
-                startY: 0
-
-                PathLine {
-                    x: 20
-                    y: 11
-                }
-
-                PathLine {
-                    x: 3
-                    y: 22
-                }
-
-                PathLine {
-                    x: 3
-                    y: 0
-                }
-            }
+        background: Rectangle {
+            radius: 30
+            color: playToggle.hovered ? ExoTheme.surfaceHover : ExoTheme.surface
+            opacity: 0.85
+            // The focus ring is the same `text` hairline every other control
+            // uses; at rest the toggle keeps its own quiet boundary.
+            border.width: playToggle.visualFocus ? 2 : 1
+            border.color: playToggle.visualFocus ? ExoTheme.text : ExoTheme.lineStrong
         }
 
-        Row {
-            anchors.centerIn: parent
-            spacing: 6
-            visible: root.player.playing
-
-            Rectangle {
-                width: 5
+        contentItem: Item {
+            Shape {
+                anchors.centerIn: parent
+                width: 20
                 height: 22
-                radius: 1
-                color: ExoTheme.text
+                visible: !root.player.playing
+                preferredRendererType: Shape.CurveRenderer
+
+                ShapePath {
+                    fillColor: ExoTheme.text
+                    strokeWidth: -1
+                    startX: 3
+                    startY: 0
+
+                    PathLine {
+                        x: 20
+                        y: 11
+                    }
+
+                    PathLine {
+                        x: 3
+                        y: 22
+                    }
+
+                    PathLine {
+                        x: 3
+                        y: 0
+                    }
+                }
             }
 
-            Rectangle {
-                width: 5
-                height: 22
-                radius: 1
-                color: ExoTheme.text
+            Row {
+                anchors.centerIn: parent
+                spacing: 6
+                visible: root.player.playing
+
+                Rectangle {
+                    width: 5
+                    height: 22
+                    radius: 1
+                    color: ExoTheme.text
+                }
+
+                Rectangle {
+                    width: 5
+                    height: 22
+                    radius: 1
+                    color: ExoTheme.text
+                }
             }
-        }
-
-        MouseArea {
-            id: playPointer
-
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: root.player.togglePlay()
         }
     }
 

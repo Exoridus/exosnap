@@ -54,7 +54,9 @@ DxgiCaptureHubService::DxgiCaptureHubService() {
 
 DxgiCaptureHubService::~DxgiCaptureHubService() {
     worker_.request_stop();
-    cv_.notify_all();
+    // Wakes the pump thread and releases any lease waiter with a failure rather
+    // than leaving it to its full timeout against a thread that is exiting.
+    commands_.Shutdown();
     if (worker_.joinable())
         worker_.join();
 }
@@ -80,44 +82,32 @@ bool DxgiCaptureHubService::Subscribe(HMONITOR monitor, HandleSink sink, FramePu
         return false;
     }
 
-    Command cmd;
-    cmd.op = Command::Op::Subscribe;
-    cmd.device_name = info.szDevice;
-    cmd.sink = std::move(sink);
-    cmd.frame_sink = std::move(frame_sink);
-    PostCommand(std::move(cmd));
+    SubscribePayload payload;
+    payload.device_name = info.szDevice;
+    payload.sink = std::move(sink);
+    payload.frame_sink = std::move(frame_sink);
+    commands_.Post(CaptureHubOp::Subscribe, std::move(payload));
     return true;
 }
 
 void DxgiCaptureHubService::Unsubscribe() {
-    Command cmd;
-    cmd.op = Command::Op::Unsubscribe;
-    PostCommand(std::move(cmd));
+    commands_.Post(CaptureHubOp::Unsubscribe);
 }
 
 void DxgiCaptureHubService::RequestEngineLease() {
-    Command cmd;
-    cmd.op = Command::Op::LeaseRequest;
-    const uint64_t serial = PostCommand(std::move(cmd));
-
-    std::unique_lock lock(mutex_);
-    // A later command's serial also satisfies the wait: the pump processes the
-    // newest pending command, and every command handler leaves no duplication
-    // open unless it (re)subscribed — which only this thread could have asked
-    // for after the lease request. "Processed >= our serial" therefore implies
-    // the duplication is closed.
-    const bool released =
-        ack_cv_.wait_for(lock, std::chrono::milliseconds(750), [&] { return processed_serial_ >= serial; });
-    if (!released) {
+    const uint64_t serial = commands_.Post(CaptureHubOp::LeaseRequest);
+    // Only this command's own release publishes an acknowledgement for this
+    // serial, and the service opens nothing further until the lease returns —
+    // so the wait ends on "the duplication is gone", never on "something else
+    // happened afterwards".
+    if (!commands_.WaitForLeaseRelease(serial, std::chrono::milliseconds(750))) {
         diagnostics::AppLog::warning(QStringLiteral("dxgi-hub"),
                                      QStringLiteral("lease request timed out; the engine's capture open may fail"));
     }
 }
 
 void DxgiCaptureHubService::ReturnEngineLease() {
-    Command cmd;
-    cmd.op = Command::Op::LeaseReturn;
-    PostCommand(std::move(cmd));
+    commands_.Post(CaptureHubOp::LeaseReturn);
 }
 
 DxgiCaptureHubService::PreviewPublishStats DxgiCaptureHubService::GetPreviewPublishStats() const noexcept {
@@ -132,18 +122,6 @@ void DxgiCaptureHubService::ResetPreviewPublishStats() noexcept {
     publish_attempts_.store(0, std::memory_order_relaxed);
     published_frames_.store(0, std::memory_order_relaxed);
     publish_drops_.store(0, std::memory_order_relaxed);
-}
-
-uint64_t DxgiCaptureHubService::PostCommand(Command cmd) {
-    uint64_t serial = 0;
-    {
-        std::lock_guard lock(mutex_);
-        serial = next_serial_++;
-        cmd.serial = serial;
-        pending_ = std::move(cmd);
-    }
-    cv_.notify_all();
-    return serial;
 }
 
 void DxgiCaptureHubService::WorkerProc(std::stop_token stop_token) {
@@ -161,6 +139,11 @@ void DxgiCaptureHubService::WorkerProc(std::stop_token stop_token) {
     HandleSink sink;
     FramePublishedSink frameSink;
     CaptureSourceKey currentKey;
+
+    // The service-level lease/subscription arbitration (CaptureHubGate.h) and
+    // the payload a deferred Subscribe is waiting to be applied with.
+    CaptureHubGateState gate;
+    SubscribePayload desired;
 
     // Publisher state: the shared texture lives on the producer's device and is
     // recreated whenever the desktop's size or format changes.
@@ -230,68 +213,56 @@ void DxgiCaptureHubService::WorkerProc(std::stop_token stop_token) {
         }
     };
 
+    std::vector<CaptureHubCommandQueue<SubscribePayload>::Entry> batch;
+
     while (!stop_token.stop_requested()) {
-        std::optional<Command> command;
-        {
-            std::unique_lock lock(mutex_);
-            cv_.wait_for(lock, kPumpTick, [&] { return pending_.has_value() || stop_token.stop_requested(); });
-            command = std::exchange(pending_, std::nullopt);
-        }
+        commands_.WaitAndDrain(kPumpTick, batch);
         if (stop_token.stop_requested())
             break;
 
-        if (command) {
-            switch (command->op) {
-            case Command::Op::Subscribe:
-                // Old subscription first: refcount to zero closes the duplication
-                // BEFORE any new one opens (one duplication per output, ever).
+        // Every drained command is applied, in post order: nothing is dropped
+        // because something newer arrived while the pump was busy.
+        for (auto& command : batch) {
+            const CaptureHubGateAction action = StepCaptureHubGate(gate, command.op);
+            gate = action.next;
+
+            if (command.op == CaptureHubOp::Subscribe)
+                desired = std::move(command.payload);
+
+            // Drop before open, always: refcount to zero closes the duplication
+            // BEFORE any new one opens (one duplication per output, ever).
+            if (action.drop_subscription) {
                 subscription.Reset();
                 producer = nullptr;
                 sink = nullptr;
                 frameSink = nullptr;
+                currentKey = {};
+            }
+            if (action.release_lease)
+                registry.RequestLease(currentKey);
+            if (action.reset_publisher)
                 resetPublisher();
-
-                sink = std::move(command->sink);
-                frameSink = std::move(command->frame_sink);
+            if (action.return_lease)
+                registry.ReturnLease(currentKey);
+            if (action.apply_subscription) {
+                sink = std::move(desired.sink);
+                frameSink = std::move(desired.frame_sink);
                 currentKey = {};
                 currentKey.kind = CaptureSourceKey::Kind::DxgiMonitor;
-                currentKey.device_name = std::move(command->device_name);
+                currentKey.device_name = desired.device_name;
                 subscription = registry.Subscribe(
                     currentKey, [&publish](const HubFrame& frame, recorder_core::HubFrameKind) { publish(frame); });
                 diagnostics::AppLog::debug(QStringLiteral("dxgi-hub"), QStringLiteral("subscribed to display feed"));
-                break;
-
-            case Command::Op::Unsubscribe:
-                subscription.Reset();
-                producer = nullptr;
-                sink = nullptr;
-                frameSink = nullptr;
-                currentKey = {};
-                resetPublisher();
-                break;
-
-            case Command::Op::LeaseRequest:
-                // The engine takes the capture; the subscription and the hub's
-                // held frame stay. The producer's device dies with its close,
-                // so the publisher must rebuild on the next frame after return.
-                if (subscription)
-                    registry.RequestLease(currentKey);
-                resetPublisher();
+            }
+            if (action.acknowledge_release) {
+                // Published only now: after this point the gate refuses to open
+                // anything until the lease is returned, so the engine's wait
+                // ends on a duplication that is gone and stays gone.
+                commands_.PublishLeaseRelease(command.serial);
                 diagnostics::AppLog::debug(QStringLiteral("dxgi-hub"), QStringLiteral("lease granted to the engine"));
-                break;
-
-            case Command::Op::LeaseReturn:
-                if (subscription)
-                    registry.ReturnLease(currentKey);
+            }
+            if (command.op == CaptureHubOp::LeaseReturn)
                 diagnostics::AppLog::debug(QStringLiteral("dxgi-hub"), QStringLiteral("lease returned; reopening"));
-                break;
-            }
-
-            {
-                std::lock_guard lock(mutex_);
-                processed_serial_ = command->serial;
-            }
-            ack_cv_.notify_all();
         }
 
         registry.PumpAll();

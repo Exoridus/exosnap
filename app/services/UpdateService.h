@@ -18,6 +18,7 @@
 #include <optional>
 #include <update/update_service_interface.h>
 #include <update/update_types.h>
+#include <update_handoff/handoff.h>
 #include <vector>
 
 namespace exosnap {
@@ -77,8 +78,51 @@ class UpdateService final : public QObject {
     void SetVerifyReinstallMode(bool on);
     [[nodiscard]] bool IsVerifyReinstallMode() const;
 
+    // Dev feed override (--update-base-url, non-official builds only; see
+    // services/UpdateFeedOverride.h). While armed, the check runs the same
+    // mechanics against the named feed instead of consulting the production one,
+    // and the SAME url is handed to the updater as --base-url -- otherwise the
+    // app and the updater would resolve two different feeds, which is precisely
+    // the divergence the pinned target version exists to prevent. Empty is the
+    // shipping default and means "the production feed, with its policy gate".
+    void SetDevFeedOverride(const QString& base_url);
+    [[nodiscard]] QString DevFeedOverride() const;
+
+    // The automation run id to hand the updater (--automation-control). Set only
+    // when this process itself was launched with a control channel; empty
+    // otherwise, and then the updater gets no endpoint at all. See ADR 0067 --
+    // the endpoint name carries a role, so parent and child share one run id
+    // without sharing a pipe.
+    void SetUpdaterAutomationRunId(const QString& run_id);
+    [[nodiscard]] QString UpdaterAutomationRunId() const;
+
     // Current block reason (re-queried each time a check is requested).
     exosnap::update::UpdateBlockReason CurrentBlockReason() const;
+
+    // What the last completed check prepared for a handoff: the transaction it
+    // minted and the release trust anchor it downloaded for it. Empty before the
+    // first check that found an update.
+    //
+    // Preparation happens on the CHECK worker, not here and not at apply time:
+    // resolving a release and fetching the bytes that prove it is the same act,
+    // it is the application's job under the new handoff contract (the updater
+    // must never resolve a second time), and doing it at apply time would put a
+    // network round trip on the GUI thread.
+    struct PreparedUpdate {
+        QString update_transaction_id;
+        QString directory;
+        QString manifest_path;
+        QString manifest_signature_path;
+        // The offer this preparation belongs to. A handoff is only written when
+        // this still equals the version the card is offering.
+        QString target_version;
+        // Non-empty when the preparation failed. The update is still OFFERED --
+        // a release that exists and is newer must not be reported as "up to
+        // date" because a fetch failed -- and the apply then refuses with this
+        // reason instead of launching an updater that cannot work.
+        QString error;
+    };
+    [[nodiscard]] PreparedUpdate LastPreparedUpdate() const;
 
     // Stage the updater (executable + Qt runtime subset) into
     // %LOCALAPPDATA%\ExoSnap\updater\ and launch it. The app keeps running and
@@ -88,6 +132,31 @@ class UpdateService final : public QObject {
     //   * Emits updaterLaunched() on success, or updateError() on any staging /
     //     launch failure (missing runtime file, spawn failure).
     void LaunchUpdater();
+
+    // What the last LaunchUpdater() actually started. Read right after
+    // updaterLaunched(): the point is that a test does not have to DISCOVER the
+    // child -- which staged copy ran, with which pid, pinned to which version
+    // and reachable at which endpoint are all decided here, so they are all
+    // reported from here. Empty/zero before the first launch.
+    struct UpdaterLaunchInfo {
+        qint64 pid = 0;
+        // The staged copy under %LOCALAPPDATA%\...\updater\, not the one in the
+        // install tree. Binding evidence to THIS path is what stops an older
+        // build sitting elsewhere from being silently credited with the run.
+        QString staged_exe;
+        QString target_version;
+        // Empty unless this process is itself under automation; then it is the
+        // run id the child was given, and the endpoint follows from it.
+        QString automation_run_id;
+        // The operation this launch belongs to, and the document that carries
+        // it. Both are reported rather than derivable: the transaction id is
+        // what correlates the app's state, the child's state and the evidence,
+        // and the path is what a check can read to see exactly what was handed
+        // over.
+        QString update_transaction_id;
+        QString handoff_path;
+    };
+    [[nodiscard]] UpdaterLaunchInfo LastUpdaterLaunch() const;
 
     // Notify-only Scoop detection (case-insensitive, both path separators): true
     // when app_dir_path sits under a Scoop tree — either the default
@@ -144,12 +213,40 @@ class UpdateService final : public QObject {
 // on top of this list.
 [[nodiscard]] QStringList UpdaterStagingFileList();
 
-// The argv (flags only, excluding argv[0]) the app passes to the staged
-// updater. Round-trips through ParseUpdaterArgs. `verify_reinstall` adds
-// --verify-reinstall (ADR 0055), which makes the updater refuse every version
-// but the one named by `current_version`.
-[[nodiscard]] QStringList BuildUpdaterArgs(const exosnap::update::UpdateState& st, const QString& install_dir,
-                                           quint32 pid, const QString& current_version, bool verify_reinstall = false);
+// The argv (flags only, excluding argv[0]) the app passes to the staged updater.
+//
+// It is two options at most, and that is the point. Everything about the
+// operation -- the pinned release, the manifest bytes and signature that prove
+// it, the installation, this process's pid, the running version, the
+// verification-reinstall gate and the transaction id -- travels in the ONE
+// versioned document at `handoff_path`. The search arguments that used to be
+// spelled out here (--channel, --install-dir, --app-pid, --current-version,
+// --target-version, --base-url, --verify-reinstall) are gone: they were an
+// unversioned second contract for the same operation, and --base-url in
+// particular armed a second release resolution in the child, which is precisely
+// what the pinned target existed to compensate for.
+//
+// `automation_run_id` is empty in a normal launch and then contributes nothing;
+// when set it is passed as --automation-control so a runner that is already
+// driving this process can reach the child it just started without discovering
+// anything. It is a control-session identity and deliberately NOT part of the
+// handoff document: one names a pipe, the other names a product operation.
+[[nodiscard]] QStringList BuildUpdaterArgs(const QString& handoff_path, const QString& automation_run_id = QString());
+
+// The document itself, assembled from what this process knows. Pure so the
+// contract can be asserted without a filesystem, a feed or a child process.
+// `prepared` is what the last completed check downloaded for this offer.
+[[nodiscard]] exosnap::update_handoff::UpdateHandoff
+BuildUpdateHandoff(const exosnap::update::UpdateState& st, const UpdateService::PreparedUpdate& prepared,
+                   const QString& install_dir, quint32 pid, const QString& current_version, bool verify_reinstall);
+
+// Whether `prepared` may be handed over for the offer in `st`, and why not.
+// Returns an empty string when the handoff may be written. The rule is one
+// sentence: a handoff is only ever written for the EXACT version the card is
+// offering, prepared without error. Anything else would hand the updater a
+// transaction that describes a different release than the user accepted.
+[[nodiscard]] QString HandoffRefusalReason(const exosnap::update::UpdateState& st,
+                                           const UpdateService::PreparedUpdate& prepared);
 
 // Resolve the Settings updates-card state string from a completed check. Pure so
 // the loop-guard / recovery semantics can be unit-tested headless:

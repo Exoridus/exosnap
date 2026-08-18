@@ -58,6 +58,12 @@ class UpdaterWindow : public QWidget {
     void retryRequested();
     void closeRequested();
     void openExoSnapRequested();
+    // Manual mode. Each is a deliberate confirmation, which is the whole
+    // difference between this window and the handoff run: nothing is fetched or
+    // replaced until the person in front of it says so.
+    void checkRequested();
+    void downloadRequested();
+    void applyRequested();
 
   protected:
     void paintEvent(QPaintEvent* event) override;

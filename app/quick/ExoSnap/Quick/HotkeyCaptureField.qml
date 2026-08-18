@@ -27,6 +27,16 @@ Control {
 
     Keys.onPressed: event => {
         if (!root.capturing) {
+            // Not capturing yet, so this is the keyboard asking to START. Without
+            // it the field was reachable by Tab and did nothing there: a bare
+            // Control has none of AbstractButton's Enter/Space activation, and the
+            // only path to captureRequested() was the TapHandler. No hotkey could
+            // be rebound without a mouse.
+            if (root.enabled && (event.key === Qt.Key_Return || event.key === Qt.Key_Enter
+                                 || event.key === Qt.Key_Space)) {
+                event.accepted = true;
+                root.captureRequested();
+            }
             return;
         }
         event.accepted = true;

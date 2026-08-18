@@ -183,6 +183,14 @@ class DeviceAdapter : public QObject {
     Q_INVOKABLE void rescan();
     Q_INVOKABLE void selectAdapter(int index);
 
+    // The raw per-adapter facts, for the environment observability surface. The
+    // two list models above are presentation strings; a structured consumer must
+    // read the facts they were built from, not parse them back out of a label.
+    // Empty until ensureScanned() has completed -- `hasScanned()` is what tells
+    // "not scanned yet" apart from "no adapter present".
+    [[nodiscard]] const std::vector<capability::AdapterInfo>& adapterInfos() const noexcept;
+    [[nodiscard]] const std::vector<capability::AdapterEncoderCapability>& adapterCapabilities() const noexcept;
+
     // Supplies the static, system-wide capability declarations (bit depth /
     // rate control) used for the "system-wide" feature rows. Safe before or
     // after any scan.
@@ -208,6 +216,13 @@ class DeviceAdapter : public QObject {
     void startScan();
     void applyScanResults(std::vector<capability::AdapterInfo> adapters,
                           std::vector<capability::AdapterEncoderCapability> capabilities);
+    // QCR-206. The single place the effective selection changes, `-1` (nothing to
+    // inspect) included. That value used to be reached by a branch in
+    // applyScanResults that cleared the fields inline and returned, so the ten
+    // Q_PROPERTYs bound to selectionChanged kept the vanished adapter's values.
+    // Always publishes: every caller either changes the index or has just
+    // replaced the capability data the derived properties read from.
+    void applySelection(int index);
     void rebuildSelectorRows();
     void renderCapabilityMatrix();
     void updateSummaryText();

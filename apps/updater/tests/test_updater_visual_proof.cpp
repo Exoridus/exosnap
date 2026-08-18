@@ -75,6 +75,8 @@ UpdaterUiState FailureState(FailureCase failure, bool verify = false) {
     case FailureCase::DownloadFailed:
     case FailureCase::VerifyDownloadFailed:
     case FailureCase::VerifyReinstallMismatch:
+    // A0 -- refused before the pipeline was entered, so no step is marked done.
+    case FailureCase::HandoffRejected:
         break;
     case FailureCase::AppWontClose:
         controller.onStepDone(UpStep::Download);
@@ -171,8 +173,8 @@ void ExpectNoClippedCopy(const UpdaterWindow& window) {
     for (const auto* label : window.findChildren<QLabel*>()) {
         if (!label->isVisible() || label->text().isEmpty())
             continue;
-        const std::string what = label->objectName().isEmpty() ? label->text().toStdString()
-                                                               : label->objectName().toStdString();
+        const std::string what =
+            label->objectName().isEmpty() ? label->text().toStdString() : label->objectName().toStdString();
 
         const QRect placed(label->mapTo(&window, QPoint(0, 0)), label->size());
         EXPECT_TRUE(frame.contains(placed)) << "leaves the 520x680 window: " << what;

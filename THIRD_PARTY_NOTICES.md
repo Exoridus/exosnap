@@ -98,11 +98,12 @@ directory alongside the ExoSnap binary.
 
 ### Qt
 
-- **Version:** 6.9.0 (open source edition)
+- **Version:** 6.11.1 (open source edition)
 - **Project:** https://www.qt.io
 - **License:** Available under LGPLv3, GPLv2, GPLv3, or Qt Commercial License.
   This distribution uses the open source edition.
-- **Linkage:** dynamic (Core, Gui, Widgets, Svg modules)
+- **Linkage:** dynamic (Core, Gui, Widgets, Svg, Qml, Quick, QuickControls2,
+  QuickDialogs2 modules)
 - **Bundled license:** `licenses/qt.txt` (canonical LGPLv3 text from the Free
   Software Foundation)
 - **Note:** Qt DLLs are deployed alongside the ExoSnap binary by `windeployqt`.

@@ -2,6 +2,7 @@
 
 #include <QString>
 #include <array>
+#include <cstdint>
 #include <string>
 
 #include "../models/CrashReportPolicy.h"
@@ -15,6 +16,62 @@ struct PersistedWindowGeometry {
     int height = -1;
     bool maximized = false;
 };
+
+// What Load() actually found. The three states are not interchangeable: only
+// `ReadFailed` means "there is a settings file we could not read", and only that
+// state must inhibit an unattended overwrite. A missing file is a legitimate
+// first run whose defaults may be written back freely.
+enum class SettingsLoadOutcome : uint8_t {
+    // The settings file was read without error.
+    Loaded,
+    // No settings file exists yet (first run, or a wiped config dir). Every
+    // field is the built-in default and persisting them is correct.
+    DefaultsNoFile,
+    // A settings file exists but QSettings reported an error while reading it
+    // (corrupt, locked, unreadable). Every field is the built-in default rather
+    // than a faithful read of whatever is on disk, so writing them back would
+    // replace the user's configuration with defaults.
+    ReadFailed,
+};
+
+// Why a write has to declare its intent (QCR-201): after a load that failed,
+// the in-memory settings are the built-in defaults, and almost every write the
+// app performs is one the user never asked for — the window-geometry debounce
+// fires on every move and on close, a one-time tray flag persists itself, a
+// hotkey that could not be registered is dropped and saved. Launching and
+// quitting the app was therefore enough to replace an unreadable settings file
+// with defaults.
+enum class SettingsWriteIntent : uint8_t {
+    // Housekeeping the app does for itself.
+    Incidental,
+    // The user edited a setting and expects it to stick.
+    UserEdit,
+};
+
+enum class SettingsWriteDecision : uint8_t {
+    // Persist normally.
+    Write,
+    // Persist, but move the unreadable file aside first so the user's own
+    // configuration survives the decision to start a fresh one.
+    PreserveThenWrite,
+    // Do not touch the file.
+    Refuse,
+};
+
+// The QCR-201 decision, as a pure function of what the load found, whether a
+// deliberate edit has already superseded a failed load in this session, and
+// what kind of write is being attempted.
+[[nodiscard]] constexpr SettingsWriteDecision ResolveSettingsWrite(SettingsLoadOutcome outcome, bool superseded,
+                                                                   SettingsWriteIntent intent) {
+    // A missing file and a clean read are both faithful pictures of the store;
+    // so is a failed load the user has already deliberately written over.
+    if (outcome != SettingsLoadOutcome::ReadFailed || superseded)
+        return SettingsWriteDecision::Write;
+    // The user's own edit outranks a file nobody can read — but not silently.
+    if (intent == SettingsWriteIntent::UserEdit)
+        return SettingsWriteDecision::PreserveThenWrite;
+    return SettingsWriteDecision::Refuse;
+}
 
 struct PersistedAppSettings {
     // Indexed by HotkeyAction: ToggleRecording, TogglePause, CaptureFrame,
@@ -82,7 +139,10 @@ struct PersistedAppSettings {
     CrashReportPolicy crash_report_policy = CrashReportPolicy::AskEveryTime;
 
     // UPDATE-WIRE-R1 (ADR 0012): the selected update channel — "Stable" | "Preview".
-    // Applied immediately on change (persist + re-check); default Stable.
+    // Applied immediately on change: persisted, pushed into UpdateService, and
+    // the previous channel's answer is dropped from the card. No automatic
+    // re-check — a network check stays the user's explicit action (ADR 0045).
+    // Default Stable.
     QString update_channel = QStringLiteral("Stable");
 
     // UPDATE-WIRE-R1 (ADR 0012): whether to run a guarded update check on startup.
@@ -132,12 +192,11 @@ struct PersistedAppSettings {
     // exactly what support cases need. The filter only narrows on explicit user choice.
     QString developer_log_level = QStringLiteral("Debug");
 
-    // Transient — not written by Save(). False when settings.ini existed but
-    // QSettings::status() reported an error while reading it (corrupt/locked
-    // file); every field above is then the built-in default rather than a
-    // faithful read of whatever was on disk. True on a normal load, including
-    // a missing file (first run).
-    bool load_ok = true;
+    // Transient — not written by Save(). Says which of the three load cases
+    // produced the fields above; see SettingsLoadOutcome. Defaults to
+    // DefaultsNoFile so a default-constructed struct (tests, harness scenarios)
+    // never claims to be a faithful read of a file.
+    SettingsLoadOutcome load_outcome = SettingsLoadOutcome::DefaultsNoFile;
 };
 
 class AppSettingsStore {
@@ -146,7 +205,20 @@ class AppSettingsStore {
     explicit AppSettingsStore(QString settings_file_path);
 
     [[nodiscard]] PersistedAppSettings Load() const;
-    void Save(const PersistedAppSettings& settings) const;
+
+    // Returns false when the settings could not be persisted: no path is
+    // configured, or QSettings reported an error after sync(). The result is
+    // [[nodiscard]] on purpose — ignoring it is how a failed write used to
+    // become an invisible loss of the user's change.
+    [[nodiscard]] bool Save(const PersistedAppSettings& settings) const;
+
+    // Move an existing settings file aside to "<settings.ini>.corrupt" so that
+    // an unreadable file is preserved rather than overwritten. Called exactly
+    // once, immediately before the first write that follows a
+    // SettingsLoadOutcome::ReadFailed load. Any earlier backup is replaced —
+    // one unreadable file is kept, not a growing pile. Returns true when a
+    // backup was made and writes its path to `out_backup_path` if given.
+    bool BackupUnreadableFile(QString* out_backup_path = nullptr) const;
 
     [[nodiscard]] const QString& SettingsFilePath() const;
 

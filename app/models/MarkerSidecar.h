@@ -34,6 +34,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonValue>
 #include <QSaveFile>
 #include <QString>
 
@@ -63,15 +64,68 @@ inline QJsonDocument SerializeMarkerSidecar(const std::vector<RecordingMarker>& 
     return QJsonDocument(root);
 }
 
-// Parse a marker set from canonical JSON bytes (lenient on missing keys).
-inline std::vector<RecordingMarker> ParseMarkerSidecar(const QByteArray& json) {
+// QCR-207. The largest marker time the format can carry, derived from the code
+// on both sides rather than picked as a plausible-looking recording length.
+//
+// Two constraints meet here and 2^53 satisfies both exactly:
+//   * Qt stores every JSON number as a double. Above 2^53 consecutive integers
+//     are no longer representable, so a larger "timeMs" is not an exact
+//     millisecond count in the first place — the file cannot mean what it says.
+//   * The one consumer converts to microseconds (`time_ms * 1000` into an
+//     int64_t, EditSessionAdapter::SnapTrimBoundaryUs). 2^53 ms is 9.007e18 µs,
+//     which still fits int64_t's 9.223e18, so that multiplication cannot
+//     overflow for any value this parser admits.
+inline constexpr double kMaxMarkerTimeMs = 9007199254740992.0; // 2^53
+
+// The typed boundary for one marker's time. Anything that is not a JSON number
+// in [0, kMaxMarkerTimeMs] is rejected rather than coerced.
+//
+// It used to be `static_cast<uint64_t>(value.toDouble())`, which is where the
+// damage came from. `toDouble()` yields 0.0 for a missing key, a string, a bool
+// and null, so a marker with no usable time silently became a marker at 00:00 —
+// close enough to a trim boundary to snap it to the clip start. Worse, casting a
+// negative or out-of-range double to uint64_t is undefined behaviour: on MSVC
+// `-1` came out as 2^64-1, which then read back as -1 in the int64_t conversion
+// downstream and could snap a trim boundary to a *negative* timestamp.
+[[nodiscard]] inline std::optional<uint64_t> ParseMarkerTimeMs(const QJsonValue& value) {
+    // isDouble() is true for every JSON number, integral ones included, and
+    // false for absent/string/bool/null/object/array.
+    if (!value.isDouble())
+        return std::nullopt;
+    const double ms = value.toDouble();
+    // Written as !(ms >= 0.0) so NaN is rejected by the same comparison. Qt's
+    // JSON parser cannot produce NaN or infinity — they have no JSON syntax —
+    // but this function is also the boundary for values built in memory.
+    if (!(ms >= 0.0) || ms > kMaxMarkerTimeMs)
+        return std::nullopt;
+    return static_cast<uint64_t>(ms);
+}
+
+// Parse a marker set from canonical JSON bytes.
+//
+// Lenient per entry, never per file: `type` and `label` still fall back to their
+// defaults, and a marker whose `timeMs` is unusable is skipped while the valid
+// ones around it are kept. This is the same contract ReadMarkerSidecar already
+// had for an unparseable file (return what could be read, never fail the open),
+// applied one level down. `out_skipped`, when given, receives the number of
+// dropped markers so a caller with a logger can say so.
+inline std::vector<RecordingMarker> ParseMarkerSidecar(const QByteArray& json, int* out_skipped = nullptr) {
     std::vector<RecordingMarker> out;
+    int skipped = 0;
     const QJsonDocument doc = QJsonDocument::fromJson(json);
     const QJsonArray arr = doc.object().value(QStringLiteral("markers")).toArray();
     for (const auto& v : arr) {
         const QJsonObject obj = v.toObject();
+        const std::optional<uint64_t> time_ms = ParseMarkerTimeMs(obj.value(QStringLiteral("timeMs")));
+        if (!time_ms.has_value()) {
+            // A marker without a usable time is not a marker at a wrong place —
+            // it is not a marker at all, and defaulting it to 0 put it on the
+            // timeline anyway.
+            ++skipped;
+            continue;
+        }
         RecordingMarker m;
-        m.time_ms = static_cast<uint64_t>(obj.value(QStringLiteral("timeMs")).toDouble());
+        m.time_ms = *time_ms;
         const QString t = obj.value(QStringLiteral("type")).toString();
         if (t == QStringLiteral("cut"))
             m.type = RecordingMarkerType::Cut;
@@ -82,6 +136,8 @@ inline std::vector<RecordingMarker> ParseMarkerSidecar(const QByteArray& json) {
         m.label = obj.value(QStringLiteral("label")).toString().toStdString();
         out.push_back(m);
     }
+    if (out_skipped != nullptr)
+        *out_skipped = skipped;
     return out;
 }
 
@@ -100,14 +156,18 @@ inline bool WriteMarkerSidecar(const std::filesystem::path& sidecar_path, const 
 }
 
 // Read markers from `sidecar_path`. Returns an empty vector when the file is
-// missing or unparseable.
-inline std::vector<RecordingMarker> ReadMarkerSidecar(const std::filesystem::path& sidecar_path) {
+// missing or unparseable. `out_skipped`, when given, receives the number of
+// markers dropped for an unusable `timeMs` — see ParseMarkerSidecar.
+inline std::vector<RecordingMarker> ReadMarkerSidecar(const std::filesystem::path& sidecar_path,
+                                                      int* out_skipped = nullptr) {
+    if (out_skipped != nullptr)
+        *out_skipped = 0;
     if (sidecar_path.empty())
         return {};
     QFile f(QString::fromStdWString(sidecar_path.wstring()));
     if (!f.open(QIODevice::ReadOnly))
         return {};
-    return ParseMarkerSidecar(f.readAll());
+    return ParseMarkerSidecar(f.readAll(), out_skipped);
 }
 
 // The ONE path convention: "<media>.markers.json" = the media path with its

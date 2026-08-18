@@ -17,9 +17,14 @@ if [ "$has_branch_update" -eq 0 ]; then
     exit 0
 fi
 
-# Static checks only (cppcheck + clang-tidy, ~45 s). The full build + test for both the
-# Debug and Release presets is already run by GitHub CI on every push and pull_request
-# (.github/workflows/ci.yml), so duplicating a cold Visual-Studio build+test here only
-# made every push take minutes. Run scripts/check-quality.ps1 (no -StaticOnly) manually
-# when you want the full local gate.
-pwsh -NonInteractive -File "$(git rev-parse --show-toplevel)/scripts/check-quality.ps1" -StaticOnly
+# The full local blocking contract. This is deliberately wider than what this
+# hook used to run (check-quality.ps1 -StaticOnly, i.e. cppcheck plus a
+# conditional broad clang-tidy): build and test were left to CI, so a push could
+# be made from a tree that had never compiled. verify.ps1 -Full restores them and
+# ties them together -- tests only run behind a build that succeeded in the same
+# invocation.
+#
+# No speed claim is made here yet. Making -Full quick is the compiler-side work
+# (sccache, a working Ninja developer preset) that is deliberately not part of
+# this change.
+pwsh -NonInteractive -File "$(git rev-parse --show-toplevel)/scripts/verify.ps1" -Full

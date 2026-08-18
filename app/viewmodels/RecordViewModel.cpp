@@ -731,7 +731,7 @@ std::string RecordViewModel::WindowLabelFromTarget(const std::string& raw_descri
 
 std::string RecordViewModel::TargetLabelFromCaptureTarget(const recorder_core::CaptureTarget& target) {
     const FilenameTargetContext context = FilenameContextFromCaptureTarget(target);
-    const std::string label = ToUtf8(context.target_name);
+    std::string label = ToUtf8(context.target_name);
 
     if (!label.empty()) {
         return label;

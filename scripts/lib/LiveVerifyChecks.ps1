@@ -497,6 +497,128 @@ is verified automatically before and after your drag.
         }
     }
 
+
+    # -----------------------------------------------------------------------
+    # QCR-001: an open edit session is state of the Record page
+    # -----------------------------------------------------------------------
+    $catalog += [pscustomobject]@{
+        Id              = 'LV-NAV-002'
+        Title           = 'An open edit session survives a navigation round trip'
+        Layer           = 'CONTROL_CHANNEL'
+        Source          = 'QCR-001; docs/product-spec.md (Edit/Output/Save is an overlay over Record, ADR 0022)'
+        ArtifactBound   = $true
+        EnvironmentKeys = @('primaryScreen')
+        # No DependsOn, and deliberately so. The editor opens on a recording THIS
+        # process finished, so an earlier check having made one is a precondition
+        # -- and expressing it as "LV-REC-001 ran, and LV-EDIT-001 has not ended
+        # the session yet" would be a dependency on catalog ORDER. A reordering
+        # would then turn this into UNVERIFIED for a reason that has nothing to
+        # do with the product. It makes its own clip instead.
+        Run             = {
+            param($ctx)
+            $connection = (& $ctx.EnsureSession).Connection
+
+            # Reuse a completed recording if this session already has one (the
+            # usual case when LV-REC-001 ran first) and record one otherwise, so
+            # the check is the same either way and costs a clip only when it has
+            # to.
+            $opened = Invoke-LiveVerifyCommand -Connection $connection -Command 'edit.open'
+            if (-not $opened.ok) {
+                $null = Invoke-LiveVerifyCommand -Connection $connection -Command 'record.selectTarget' `
+                    -Parameters @{ kind = 'monitor' }
+                $null = Wait-LiveVerifyState -Connection $connection -Command 'preview.snapshot' `
+                    -Field 'frameReady' -Value 'True' -TimeoutMs 30000
+                $started = Invoke-LiveVerifyCommand -Connection $connection -Command 'record.start'
+                if (-not $started.ok) {
+                    return @{ Result = 'UNVERIFIED'
+                        Message = "Could not record a clip to edit: $($started.error.code) - $($started.error.message)" }
+                }
+                if ($null -eq (Wait-LiveVerifyState -Connection $connection -Command 'record.snapshot' `
+                            -Field 'recording' -Value 'True' -TimeoutMs 45000)) {
+                    return @{ Result = 'UNVERIFIED'; Message = 'The recording never reported itself as running' }
+                }
+                # Recording DURATION, not synchronisation: a clip with no content
+                # has no timeline to trim. Every transition around it is waited
+                # on, never slept through.
+                Start-Sleep -Seconds 3
+                $null = Invoke-LiveVerifyCommand -Connection $connection -Command 'record.stop'
+                if ($null -eq (Wait-LiveVerifyEvent -Connection $connection -EventName 'record.resultReady' `
+                            -TimeoutMs 120000)) {
+                    return @{ Result = 'UNVERIFIED'; Message = 'No record.resultReady within 120 s' }
+                }
+                $opened = Invoke-LiveVerifyCommand -Connection $connection -Command 'edit.open'
+            }
+            if (-not $opened.ok) {
+                return @{ Result = 'UNVERIFIED'
+                    Message = "No editable recording in this session: $($opened.error.code) - $($opened.error.message)" }
+            }
+            if (-not $opened.settled) {
+                return @{ Result = 'FAIL'; Message = 'edit.open did not settle in its own response' }
+            }
+
+            # Park the playhead and set a trim range, so what survives the round
+            # trip is real session state and not merely a boolean.
+            $null = Invoke-LiveVerifyCommand -Connection $connection -Command 'edit.seek' `
+                -Parameters @{ positionMs = 1200 }
+            $null = Invoke-LiveVerifyCommand -Connection $connection -Command 'edit.setTrimIn' `
+                -Parameters @{ positionMs = 800 }
+            $trimmed = Invoke-LiveVerifyCommand -Connection $connection -Command 'edit.setTrimOut' `
+                -Parameters @{ positionMs = 2400 }
+            $before = $trimmed.result
+
+            $steps = @()
+            $problems = @()
+            # No sleep and no poll anywhere below: ui.navigate declares itself
+            # synchronous and the response carries settled:true plus the page it
+            # actually reached.
+            foreach ($page in @('settings', 'diagnostics', 'logs', 'about', 'record')) {
+                $response = Invoke-LiveVerifyCommand -Connection $connection -Command 'ui.navigate' `
+                    -Parameters @{ page = $page }
+                if (-not $response.ok) {
+                    $problems += "ui.navigate($page) refused: $($response.error.code)"
+                    continue
+                }
+                if (-not $response.settled) { $problems += "ui.navigate($page) did not settle in its own response" }
+                if ($response.result.page -ne $page) {
+                    $problems += "ui.navigate($page) reported page=$($response.result.page)"
+                }
+                $state = Get-LiveVerifyState -Connection $connection
+                if ($state.editSession -ne 'open') {
+                    $problems += "the edit session was $($state.editSession) on $page"
+                }
+                # The QCR-001 contract in one line: loaded is the session,
+                # visible is where it is shown.
+                $expectedVisible = ($page -eq 'record')
+                if ($state.editVisible -ne $expectedVisible) {
+                    $problems += "editVisible was $($state.editVisible) on $page"
+                }
+                $steps += @{ page = $page; settled = $response.settled; editSession = $state.editSession
+                    editVisible = $state.editVisible }
+            }
+
+            $after = (Invoke-LiveVerifyCommand -Connection $connection -Command 'editor.snapshot').result
+            foreach ($field in @('clipPath', 'positionMs', 'trimStartMs', 'trimEndMs', 'trimmed')) {
+                if ($before.$field -ne $after.$field) {
+                    $problems += "$field changed across the round trip: $($before.$field) -> $($after.$field)"
+                }
+            }
+
+            $closed = Invoke-LiveVerifyCommand -Connection $connection -Command 'edit.close'
+            if (-not $closed.ok) { $problems += "edit.close refused: $($closed.error.code)" }
+            elseif (-not $closed.settled) { $problems += 'edit.close did not settle in its own response' }
+
+            $evidence = Save-LiveVerifyEvidence -Context $ctx -CheckId 'LV-NAV-002' -Name 'round-trip.json' `
+                -Value @{ before = $before; after = $after; steps = $steps
+                    finalState = (Get-LiveVerifyState -Connection $connection) }
+            if ($problems.Count -gt 0) {
+                return @{ Result = 'FAIL'; Message = ($problems -join '; '); Evidence = @($evidence) }
+            }
+            return @{ Result = 'PASS'
+                Message = 'Session and trim survived all five destinations; no wait anywhere'
+                Evidence = @($evidence) }
+        }
+    }
+
     $catalog += [pscustomobject]@{
         Id              = 'LV-EDIT-001'
         Title           = 'Chained Record -> Edit -> Export harness'
@@ -871,6 +993,361 @@ judge what you see, not an older Light screenshot.
             $evidence = Save-LiveVerifyEvidence -Context $ctx -CheckId 'LV-THEME-001' -Name 'appearance.json' `
                 -Value @{ before = $app; after = $after }
             return @{ Result = 'PASS'; Message = "Confirmed by the operator (appearance $($after.appearanceId)/$($after.accentId))"
+                Evidence = @($evidence) }
+        }
+    }
+
+
+    # -----------------------------------------------------------------------
+    # Protocol 2
+    # -----------------------------------------------------------------------
+    $catalog += [pscustomobject]@{
+        Id              = 'LV-IPC-001'
+        Title           = 'Protocol 1 is still answered unchanged beside protocol 2'
+        Layer           = 'CONTROL_CHANNEL'
+        Source          = 'ADR 0066 (versioned envelope)'
+        ArtifactBound   = $true
+        EnvironmentKeys = @()
+        Run             = {
+            param($ctx)
+            $connection = (& $ctx.EnsureSession).Connection
+            $problems = @()
+
+            $described = Invoke-LiveVerifyCommand -Connection $connection -Command 'ipc.describe'
+            if (-not $described.ok) {
+                return @{ Result = 'FAIL'; Message = "ipc.describe refused: $($described.error.code)" }
+            }
+            foreach ($version in @(1, 2)) {
+                if (@($described.result.supportedProtocols) -notcontains $version) {
+                    $problems += "protocol $version is not advertised"
+                }
+            }
+            foreach ($code in @('invalid_state', 'blocked', 'operation_failed')) {
+                if (@($described.result.errorCodes) -notcontains $code) {
+                    $problems += "error code $code is not advertised"
+                }
+            }
+
+            # A genuinely v1 connection, on its own process: the endpoint accepts
+            # one client at a time, and the point is not "v1 parses" but "this
+            # build answers the exact surface the previous runner was written
+            # against, and refuses a v2 command there instead of half-answering".
+            & $ctx.EndSession
+            $runId = New-LiveVerifyRunId
+            $process = Start-Process -FilePath $ctx.Artifact.exePath -PassThru `
+                -ArgumentList @('--live-verify-control', $runId)
+            $legacy = $null
+            $legacyCommands = @()
+            try {
+                $legacy = Connect-LiveVerify -RunId $runId -ConnectTimeoutMs 30000 -Protocol 1
+                $legacyCommands = @($legacy.Identity.commands)
+                if ($legacyCommands.Count -ne 19) {
+                    $problems += "the protocol-1 command surface is $($legacyCommands.Count) commands, not 19"
+                }
+                foreach ($expected in @('record.start', 'record.stop', 'record.selectTarget', 'app.snapshot',
+                        'window.moveToScreen', 'editor.snapshot', 'system.capabilities')) {
+                    if ($legacyCommands -notcontains $expected) { $problems += "$expected left the protocol-1 surface" }
+                }
+
+                # v1 answers carry none of protocol 2's fields.
+                $snapshot = Invoke-LiveVerifyCommand -Connection $legacy -Command 'record.snapshot'
+                if (-not $snapshot.ok) { $problems += 'record.snapshot was refused over protocol 1' }
+                foreach ($field in @('stateRevision', 'settled', 'state')) {
+                    if ($snapshot.PSObject.Properties.Name -contains $field) {
+                        $problems += "a protocol-1 response carried $field"
+                    }
+                }
+                if ($snapshot.protocol -ne 1) { $problems += "a protocol-1 response was stamped $($snapshot.protocol)" }
+
+                # And a v2-only command is unknown rather than partly understood.
+                $v2Only = Invoke-LiveVerifyCommand -Connection $legacy -Command 'ui.getState'
+                if ($v2Only.ok -or $v2Only.error.code -ne 'unknown_command') {
+                    $problems += 'ui.getState was not unknown_command over protocol 1'
+                }
+            }
+            catch {
+                $problems += "could not drive a protocol-1 session: $($_.Exception.Message)"
+            }
+            finally {
+                if ($null -ne $legacy) { try { $legacy.Close() } catch { } }
+                if (-not $process.HasExited) { $process | Stop-Process -Force -ErrorAction SilentlyContinue }
+            }
+
+            $evidence = Save-LiveVerifyEvidence -Context $ctx -CheckId 'LV-IPC-001' -Name 'describe.json' `
+                -Value @{ describe = $described.result; protocolOneCommands = $legacyCommands }
+            if ($problems.Count -gt 0) {
+                return @{ Result = 'FAIL'; Message = ($problems -join '; '); Evidence = @($evidence) }
+            }
+            return @{ Result = 'PASS'
+                Message = "protocol 1 unchanged at 19 commands, $(@($described.result.commands).Count) described for protocol 2"
+                Evidence = @($evidence) }
+        }
+    }
+
+    $catalog += [pscustomobject]@{
+        Id              = 'LV-NAV-001'
+        Title           = 'Every destination is reachable and settles in its own response'
+        Layer           = 'CONTROL_CHANNEL'
+        Source          = 'CLAUDE.md (five direct destinations); QCR-001 (one navigation edge)'
+        ArtifactBound   = $true
+        EnvironmentKeys = @()
+        Run             = {
+            param($ctx)
+            $connection = (& $ctx.EnsureSession).Connection
+            $problems = @()
+            $visited = @()
+            foreach ($page in @('record', 'settings', 'diagnostics', 'logs', 'about')) {
+                $response = Invoke-LiveVerifyCommand -Connection $connection -Command 'ui.navigate' `
+                    -Parameters @{ page = $page }
+                if (-not $response.ok) {
+                    $problems += "ui.navigate($page) refused: $($response.error.code)"
+                    continue
+                }
+                if (-not $response.settled) { $problems += "ui.navigate($page) did not settle" }
+                if ($response.result.page -ne $page) { $problems += "ui.navigate($page) landed on $($response.result.page)" }
+
+                # Idempotent: the same destination again is a successful no-op,
+                # settled, and leaves the revision where it was.
+                $revision = $response.stateRevision
+                $again = Invoke-LiveVerifyCommand -Connection $connection -Command 'ui.navigate' `
+                    -Parameters @{ page = $page }
+                if (-not $again.ok) { $problems += "a repeated ui.navigate($page) was refused" }
+                elseif ($again.stateRevision -ne $revision) {
+                    $problems += "a repeated ui.navigate($page) moved the revision $revision -> $($again.stateRevision)"
+                }
+                $visited += @{ page = $page; settled = $response.settled; stateRevision = $revision }
+            }
+
+            $unknown = Invoke-LiveVerifyCommand -Connection $connection -Command 'ui.navigate' `
+                -Parameters @{ page = 'edit' }
+            if ($unknown.ok -or $unknown.error.code -ne 'invalid_params') {
+                # Edit is an overlay over Record, never a destination (ADR 0022).
+                $problems += 'ui.navigate accepted "edit" as a destination'
+            }
+
+            $null = Invoke-LiveVerifyCommand -Connection $connection -Command 'ui.navigate' `
+                -Parameters @{ page = 'record' }
+            $evidence = Save-LiveVerifyEvidence -Context $ctx -CheckId 'LV-NAV-001' -Name 'navigation.json' `
+                -Value @{ visited = $visited; rejectedEdit = $unknown.error }
+            if ($problems.Count -gt 0) {
+                return @{ Result = 'FAIL'; Message = ($problems -join '; '); Evidence = @($evidence) }
+            }
+            return @{ Result = 'PASS'; Message = 'All five destinations, no wait, idempotent'
+                Evidence = @($evidence) }
+        }
+    }
+
+    $catalog += [pscustomobject]@{
+        Id              = 'LV-REC-002'
+        Title           = 'A start under a blocking surface is refused, and says so'
+        Layer           = 'CONTROL_CHANNEL'
+        Source          = 'QCR-415; the record.start truthfulness contract'
+        ArtifactBound   = $true
+        EnvironmentKeys = @()
+        Run             = {
+            param($ctx)
+            # Its own process: the surface has to be genuinely up, and the
+            # runner's session must not own the single-instance guard while a
+            # second ExoSnap starts.
+            & $ctx.EndSession
+            $runId = New-LiveVerifyRunId
+            $process = Start-Process -FilePath $ctx.Artifact.exePath -PassThru -ArgumentList @(
+                '--live-verify-control', $runId, '--overlay-visual-state', 'recovery')
+            $connection = $null
+            try {
+                $connection = Connect-LiveVerify -RunId $runId -ConnectTimeoutMs 30000
+                $problems = @()
+
+                $state = Get-LiveVerifyState -Connection $connection
+                if ($state.blockingSurface -ne 'recovery') {
+                    $problems += "blockingSurface was '$($state.blockingSurface)', not 'recovery'"
+                }
+                if (@($state.availableActions) -contains 'record.start') {
+                    $problems += 'record.start was offered while a blocking surface was up'
+                }
+
+                $started = Invoke-LiveVerifyCommand -Connection $connection -Command 'record.start'
+                if ($started.ok) {
+                    # The exact false success this contract exists to remove.
+                    $problems += 'record.start reported success under an open recovery surface'
+                }
+                else {
+                    if ($started.error.code -ne 'blocked') {
+                        $problems += "record.start was refused as '$($started.error.code)', not 'blocked'"
+                    }
+                    if ($null -ne $started.error.requires.blockingSurface) {
+                        $problems += 'error.requires.blockingSurface was not null'
+                    }
+                    if ($started.error.actual.blockingSurface -ne 'recovery') {
+                        $problems += "error.actual.blockingSurface was '$($started.error.actual.blockingSurface)'"
+                    }
+                }
+
+                $after = Get-LiveVerifyState -Connection $connection
+                if ($after.recordingState -notin @('Ready', 'Blocked', 'LoadingCapabilities')) {
+                    $problems += "the transport moved to $($after.recordingState) after a refused start"
+                }
+
+                $evidence = Save-LiveVerifyEvidence -Context $ctx -CheckId 'LV-REC-002' -Name 'blocked-start.json' `
+                    -Value @{ state = $state; response = $started; after = $after }
+                if ($problems.Count -gt 0) {
+                    return @{ Result = 'FAIL'; Message = ($problems -join '; '); Evidence = @($evidence) }
+                }
+                return @{ Result = 'PASS'; Message = 'Refused as blocked, with the surface named on both sides'
+                    Evidence = @($evidence) }
+            }
+            catch {
+                return @{ Result = 'UNVERIFIED'
+                    Message = "Could not drive the blocking-surface instance: $($_.Exception.Message)" }
+            }
+            finally {
+                if ($null -ne $connection) { try { $connection.Close() } catch { } }
+                if (-not $process.HasExited) { $process | Stop-Process -Force -ErrorAction SilentlyContinue }
+            }
+        }
+    }
+
+    $catalog += [pscustomobject]@{
+        Id              = 'LV-SET-001'
+        Title           = 'Settings sections are reachable by name, and say whether they arrived'
+        Layer           = 'CONTROL_CHANNEL'
+        Source          = 'CLAUDE.md (the twelve Settings sections)'
+        ArtifactBound   = $true
+        EnvironmentKeys = @()
+        Run             = {
+            param($ctx)
+            $connection = (& $ctx.EnsureSession).Connection
+            $problems = @()
+
+            $navigated = Invoke-LiveVerifyCommand -Connection $connection -Command 'ui.navigate' `
+                -Parameters @{ page = 'settings' }
+            if (-not $navigated.ok) {
+                return @{ Result = 'FAIL'; Message = "ui.navigate(settings) refused: $($navigated.error.code)" }
+            }
+
+            $revealed = @()
+            # Appearance is the last card on the page and no window height on a
+            # real display reaches it -- the window is clamped to the work area
+            # long before the content ends. That is what --settings-visual-bottom
+            # existed for, and what it silently failed to do for a while.
+            foreach ($target in @('appearance', 'audio', 'developer', 'preset')) {
+                $response = Invoke-LiveVerifyCommand -Connection $connection -Command 'ui.reveal' `
+                    -Parameters @{ surface = 'settings'; target = $target }
+                if (-not $response.ok) { $problems += "ui.reveal(settings/$target) refused: $($response.error.code)" }
+                elseif (-not $response.settled -or -not $response.result.revealed) {
+                    $problems += "ui.reveal(settings/$target) did not report the section in view"
+                }
+                $revealed += @{ target = $target; ok = $response.ok; settled = $response.settled }
+            }
+
+            # An unknown target must be an error, never a quiet no-op: a reveal
+            # that does nothing while a capture claims to show the section is the
+            # exact defect this replaces.
+            $bogus = Invoke-LiveVerifyCommand -Connection $connection -Command 'ui.reveal' `
+                -Parameters @{ surface = 'settings'; target = 'no-such-section' }
+            if ($bogus.ok -or $bogus.error.code -ne 'invalid_params') {
+                $problems += 'an unknown reveal target did not fail'
+            }
+
+            foreach ($command in @('ui.scrollEnd', 'ui.scrollHome')) {
+                $response = Invoke-LiveVerifyCommand -Connection $connection -Command $command `
+                    -Parameters @{ surface = 'settings' }
+                if (-not $response.ok -or -not $response.settled) {
+                    $problems += "$command(settings) did not settle"
+                }
+            }
+
+            $null = Invoke-LiveVerifyCommand -Connection $connection -Command 'ui.navigate' `
+                -Parameters @{ page = 'record' }
+            $evidence = Save-LiveVerifyEvidence -Context $ctx -CheckId 'LV-SET-001' -Name 'reveal.json' `
+                -Value @{ revealed = $revealed; unknownTarget = $bogus.error }
+            if ($problems.Count -gt 0) {
+                return @{ Result = 'FAIL'; Message = ($problems -join '; '); Evidence = @($evidence) }
+            }
+            return @{ Result = 'PASS'; Message = 'Four sections revealed, unknown target rejected, no wait'
+                Evidence = @($evidence) }
+        }
+    }
+
+    $catalog += [pscustomobject]@{
+        Id              = 'LV-SRC-001'
+        Title           = 'The source picker surface opens, is observable, and closes'
+        Layer           = 'CONTROL_CHANNEL'
+        Source          = 'docs/product-spec.md (Record source selection)'
+        ArtifactBound   = $true
+        EnvironmentKeys = @()
+        Run             = {
+            param($ctx)
+            $connection = (& $ctx.EnsureSession).Connection
+            $problems = @()
+            $null = Invoke-LiveVerifyCommand -Connection $connection -Command 'ui.navigate' `
+                -Parameters @{ page = 'record' }
+
+            # record.selectTarget bypasses this surface entirely, which is why
+            # the picker itself had never been live verified at all.
+            $opened = Invoke-LiveVerifyCommand -Connection $connection -Command 'sourcePicker.open'
+            if (-not $opened.ok) { $problems += "sourcePicker.open refused: $($opened.error.code)" }
+            elseif (-not $opened.settled) { $problems += 'sourcePicker.open did not settle' }
+
+            $whileOpen = Get-LiveVerifyState -Connection $connection
+            if ($whileOpen.sourcePicker -ne 'open') { $problems += "sourcePicker was $($whileOpen.sourcePicker)" }
+
+            $closed = Invoke-LiveVerifyCommand -Connection $connection -Command 'sourcePicker.close'
+            if (-not $closed.ok) { $problems += "sourcePicker.close refused: $($closed.error.code)" }
+            # Idempotent: closing an already closed picker is a success.
+            $again = Invoke-LiveVerifyCommand -Connection $connection -Command 'sourcePicker.close'
+            if (-not $again.ok) { $problems += 'a repeated sourcePicker.close was refused' }
+
+            $afterClose = Get-LiveVerifyState -Connection $connection
+            if ($afterClose.sourcePicker -ne 'closed') { $problems += "sourcePicker stayed $($afterClose.sourcePicker)" }
+
+            $evidence = Save-LiveVerifyEvidence -Context $ctx -CheckId 'LV-SRC-001' -Name 'source-picker.json' `
+                -Value @{ whileOpen = $whileOpen; afterClose = $afterClose }
+            if ($problems.Count -gt 0) {
+                return @{ Result = 'FAIL'; Message = ($problems -join '; '); Evidence = @($evidence) }
+            }
+            return @{ Result = 'PASS'; Message = 'Picker opened, observed and closed idempotently'
+                Evidence = @($evidence) }
+        }
+    }
+
+    $catalog += [pscustomobject]@{
+        Id              = 'LV-HUB-001'
+        Title           = 'The notification hub opens, clears and closes'
+        Layer           = 'CONTROL_CHANNEL'
+        Source          = 'docs/product-spec.md (Notifications & presence)'
+        ArtifactBound   = $true
+        EnvironmentKeys = @()
+        Run             = {
+            param($ctx)
+            $connection = (& $ctx.EnsureSession).Connection
+            $problems = @()
+
+            $opened = Invoke-LiveVerifyCommand -Connection $connection -Command 'notificationHub.open'
+            if (-not $opened.ok -or -not $opened.settled) { $problems += 'notificationHub.open did not settle' }
+            $whileOpen = Get-LiveVerifyState -Connection $connection
+            if ($whileOpen.notificationHub -ne 'open') { $problems += "the hub was $($whileOpen.notificationHub)" }
+
+            # Idempotent on an empty list, which is the state most runs are in.
+            foreach ($attempt in 1..2) {
+                $cleared = Invoke-LiveVerifyCommand -Connection $connection -Command 'notification.clearAll'
+                if (-not $cleared.ok) { $problems += "notification.clearAll refused on attempt $attempt" }
+            }
+
+            $closed = Invoke-LiveVerifyCommand -Connection $connection -Command 'notificationHub.close'
+            if (-not $closed.ok) { $problems += "notificationHub.close refused: $($closed.error.code)" }
+            $again = Invoke-LiveVerifyCommand -Connection $connection -Command 'notificationHub.close'
+            if (-not $again.ok) { $problems += 'a repeated notificationHub.close was refused' }
+
+            $afterClose = Get-LiveVerifyState -Connection $connection
+            if ($afterClose.notificationHub -ne 'closed') { $problems += "the hub stayed $($afterClose.notificationHub)" }
+
+            $evidence = Save-LiveVerifyEvidence -Context $ctx -CheckId 'LV-HUB-001' -Name 'hub.json' `
+                -Value @{ whileOpen = $whileOpen; afterClose = $afterClose }
+            if ($problems.Count -gt 0) {
+                return @{ Result = 'FAIL'; Message = ($problems -join '; '); Evidence = @($evidence) }
+            }
+            return @{ Result = 'PASS'; Message = 'Hub opened, cleared twice and closed idempotently'
                 Evidence = @($evidence) }
         }
     }

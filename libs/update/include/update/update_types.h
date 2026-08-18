@@ -166,7 +166,26 @@ struct UpdateCheckResult {
     // rather than by a genuinely newer release.
     bool verification_reinstall = false;
     std::optional<SemVer> available_version;
+    // The offered release tag verbatim, leading "v" stripped ("0.9.0-rc4").
+    // Empty when nothing is offered. SemVer collapses every foreign prerelease
+    // label onto ordinal 0, so this exact string -- not SemVer::ToString() -- is
+    // what the handoff pins as the target version and what the updater's target
+    // gate compares byte-for-byte, the same equality the ADR 0055 verification
+    // reinstall gate already uses.
+    std::string available_version_raw;
     std::optional<std::string> releases_page_url;
+    // The two release assets that carry the trust anchor for the offered
+    // version: the manifest and its detached ed25519 signature. Populated
+    // whenever a release qualified for the channel (LocateRelease demands both),
+    // independent of whether it is being OFFERED -- an up-to-date answer names
+    // no update but still located a release.
+    //
+    // They are here because the application, not the updater, owns release
+    // resolution: it fetches these exact bytes once and hands their paths over,
+    // so the updater installs the release the user was offered rather than
+    // resolving the feed a second time and finding a different one.
+    std::string manifest_url;
+    std::string manifest_signature_url;
     std::optional<std::string> error_message;
     bool check_failed = false;
 
@@ -204,6 +223,10 @@ struct UpdateState {
     UpdateBlockReason block_reason = UpdateBlockReason::NotBlocked;
 
     std::optional<SemVer> available_version;
+    // The offered release tag verbatim -- see UpdateCheckResult. This is the
+    // value handed to the updater as its pinned target version, so what the user
+    // was offered and what gets installed cannot diverge.
+    std::string available_version_raw;
     bool update_available = false;
     bool checking = false;
     std::string last_error;

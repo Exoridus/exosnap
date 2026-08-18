@@ -99,6 +99,40 @@ TestCase {
         compare(disclosure.expanded, false);
     }
 
+    // QCR-503. The header was a bare AbstractButton: it carried the Button role
+    // asserted above while being unreachable by Tab and inert to Enter and
+    // Space, so the section could only be opened with a pointer.
+    function test_the_header_is_a_keyboard_target() {
+        let disclosure = createTemporaryObject(disclosureComponent, testCase);
+        verify(disclosure);
+        let header = findHeader(disclosure);
+        verify(header);
+
+        compare(header.focusPolicy, Qt.StrongFocus);
+        // Tab reason, not the default OtherFocusReason: `visualFocus` is Qt's
+        // own "this focus came from the keyboard" flag, and it is what the ring
+        // binds to — a header focused by a click must not sprout one.
+        header.forceActiveFocus(Qt.TabFocusReason);
+        verify(header.activeFocus);
+        verify(header.visualFocus, "the focus ring binds to visualFocus");
+    }
+
+    // Space, which is Qt's own activation key for a focused button and the
+    // Windows convention (Enter belongs to a dialog's default button, which a
+    // section header is not). The frontend deliberately adds no second key.
+    function test_space_toggles_the_focused_header() {
+        let disclosure = createTemporaryObject(disclosureComponent, testCase);
+        verify(disclosure);
+        let header = findHeader(disclosure);
+        verify(header);
+        header.forceActiveFocus(Qt.TabFocusReason);
+
+        keyClick(Qt.Key_Space);
+        compare(disclosure.expanded, true);
+        keyClick(Qt.Key_Space);
+        compare(disclosure.expanded, false);
+    }
+
     function findHeader(disclosure) {
         for (let i = 0; i < disclosure.children.length; ++i) {
             let child = disclosure.children[i];

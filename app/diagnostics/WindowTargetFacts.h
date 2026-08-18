@@ -92,6 +92,15 @@ inline constexpr double kEvidenceMinSeconds = 2.0;
 [[nodiscard]] ExclusiveEvidence CombineFullscreenEvidence(WindowShape shape, const WindowHubEvidence& hub,
                                                           bool fullscreen_signal) noexcept;
 
+// PURE. The whole verdict for one selected window target, from the raw probe
+// snapshot: classify the shape, OR the two fullscreen signals (the window's own
+// QUNS state and an optional PresentMon ExclusiveFullscreen observation), then
+// combine. This exists so the Diagnostics card and the recording-admission gate
+// cannot drift: both consume the same probe snapshot through this one function
+// rather than each re-assembling the ladder from its parts.
+[[nodiscard]] ExclusiveEvidence ResolveExclusiveEvidence(const WindowTargetFacts& facts, const WindowHubEvidence& hub,
+                                                         bool present_exclusive_fullscreen) noexcept;
+
 // Thin Win32 gatherer. Reads geometry/style/state + SHQueryUserNotificationState.
 // Facts only, no judgement. A null / dead HWND yields valid == false.
 [[nodiscard]] WindowTargetFacts GatherWindowTargetFacts(HWND hwnd);

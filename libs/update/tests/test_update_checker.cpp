@@ -64,6 +64,52 @@ TEST(BuildCheckResult, AllChannelNotesPopulatedWhenUpdateAvailable) {
     EXPECT_EQ(result.all_channel_notes[1].version, (SemVer{0, 8, 0}));
 }
 
+TEST(BuildCheckResult, OfferCarriesTheReleaseTagVerbatim) {
+    // The raw tag, not SemVer::ToString(): it is what gets pinned as the
+    // updater's --target-version, and the manifest gate compares strings. A
+    // re-spelled tag would refuse the very release that was offered.
+    auto params = StableParamsAt("0.8.0");
+    auto release = LocateRelease(kReleases, UpdateChannel::Stable);
+    ASSERT_TRUE(release.has_value());
+
+    auto result = BuildCheckResult(kReleases, release, params);
+
+    EXPECT_TRUE(result.update_available);
+    EXPECT_EQ(result.available_version_raw, std::string("0.9.0"));
+    EXPECT_EQ(result.available_version_raw, release->version_tag);
+}
+
+TEST(BuildCheckResult, NoOfferCarriesNoTargetTag) {
+    auto params = StableParamsAt("0.9.0");
+    auto release = LocateRelease(kReleases, UpdateChannel::Stable);
+    ASSERT_TRUE(release.has_value());
+
+    auto result = BuildCheckResult(kReleases, release, params);
+
+    EXPECT_FALSE(result.update_available);
+    EXPECT_TRUE(result.available_version_raw.empty())
+        << "an empty target is what tells the launcher there is nothing to pin";
+}
+
+TEST(BuildCheckResult, AForeignPrereleaseLabelSurvivesAsItself) {
+    // "-rc.1" is not this project's own "-rcN" shape, so SemVer parses it as
+    // prerelease ordinal 0 and ToString() would render it "0.10.0-rc0".
+    CheckParams params;
+    params.current_version = *ParseSemVer("0.9.0");
+    params.current_version_raw = "0.9.0";
+    params.channel = UpdateChannel::Preview;
+    auto release = LocateRelease(kReleases, UpdateChannel::Preview);
+    ASSERT_TRUE(release.has_value());
+
+    auto result = BuildCheckResult(kReleases, release, params);
+
+    ASSERT_TRUE(result.update_available);
+    EXPECT_EQ(result.available_version_raw, std::string("0.10.0-rc.1"));
+    ASSERT_TRUE(result.available_version.has_value());
+    EXPECT_NE(result.available_version->ToString(), result.available_version_raw)
+        << "this is exactly the case where the parsed form is not the tag";
+}
+
 TEST(BuildCheckResult, AllChannelNotesRespectsChannelWhenNoReleaseLocates) {
     // Preview: newest qualifying release is the rc. current_version already equals it,
     // so no update is offered, but all_channel_notes must still include the rc.

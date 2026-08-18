@@ -352,3 +352,72 @@ default view and an **Expert** toggle that reveals depth rather than a second mo
 - **Dormancy resolved.** With the `hdr_mode` plumbing, the fix path, and the capture-target →
   display HDR-active wiring (above) all in place, `rec.hdr.h264` is live end-to-end: it fires in the
   running app when HDR10 handling is selected on an HDR-active desktop with a non-HDR10 codec.
+
+## Delivered — Wave D: the provider reaches the shipping frontend (2026-08-17)
+
+The 2026-06-27 slice above is accurate about what was *built*. It is not accurate about
+what shipped. The Qt Quick cutover (ADR 0064) carried `DiagnosticsController`,
+`ElevationProvider` and the whole diagnostics surface into the Quick module, and left the
+present sources behind: `PresentMonProvider.cpp`, `PresentMonEtwSession.cpp` and
+`PresentModeMapping.cpp` were listed only in the SOURCES of `present_provider_tests`, and
+`EXOSNAP_HAS_PRESENTMON` was defined by no target at all. Three consequences, all
+structural rather than situational:
+
+1. The shipping binary compiled the `#else` no-op session, so `PresentMonEtwSession::Start()`
+   returned false unconditionally and `IsAvailable()` could never be true on any machine, at
+   any elevation, with any setting.
+2. No frontend instantiated a `PresentMonProvider`. `DiagnosticsAdapter::setPresentSample()`
+   existed and had zero callers, so `DiagnosticsController::SetPresentSample()` was never
+   reached and the `RecommendationEngine` never saw a present sample.
+3. Nothing ever wrote `CaptureDiagnostics::source_present_mode` /
+   `present_mode_availability`. `pipeline.snapshot` therefore reported `presentMode: null`
+   on every machine, and the capture-stall classifier's exclusive-fullscreen refinement
+   (`present_fse`) was unreachable code rather than a check that happened not to fire.
+
+`present_diagnostics_optin` was, as the Quick migration audit put it, "a persisted toggle
+with no implementation".
+
+What Wave D changed — wiring only, no redesign of the provider, the session or the mapping:
+
+- **Build.** The three present sources plus the new `PresentSnapshotOverlay` are compiled
+  into the `exosnap` target, and `EXOSNAP_WITH_PRESENTMON` now also defines
+  `EXOSNAP_HAS_PRESENTMON` on it and links `PresentMon::consumer`. The OFF build and the
+  Qt-only test targets are unaffected: they keep the no-op branch.
+- **Ownership.** `QuickApplication` owns a `Win32ElevationProvider` and a
+  `PresentMonProvider` built on it. Construction opens nothing; `SetOptIn()` evaluates the
+  gate. The Settings toggle is wired to `SetOptIn()`, so turning it on opens the session
+  immediately when the process is already elevated and does nothing when it is not — a
+  settings toggle is not consent to restart the application, so there is no relaunch prompt
+  and no repeated UAC.
+- **One overlay point.** `ApplyPresentSample()` (pure, `PresentSnapshotOverlay.h`) puts the
+  sample onto the snapshot inside the coordinator's single diagnostics fan-out, before the
+  Diagnostics surface, the stall classifier and `pipeline.snapshot` read it, so all three
+  answer from one measurement. Availability is granted only for a sample that is available
+  AND classified: an open session that has not yet decoded a present stays Unavailable,
+  because "Unknown" is the absence of a verdict, not a verdict.
+- **Attribution.** The boundary is announced on capture-target selection (skipped when the
+  pid did not move) and unconditionally on recording **start and stop**. Unconditional is
+  the point: a Display or Region recording targets pid 0 exactly like the idle desktop, so a
+  pid-equality guard would carry every present counted while the user was still choosing a
+  target into the recording's statistics. Stop is the same argument pointed the other way,
+  and it was the half that Wave D shipped without: a finished recording's totals stayed on
+  the idle Diagnostics page as if they were current.
+- **A window can also close without anyone asking**, and both ways are now noticed rather
+  than frozen. The attributed process gets a `SYNCHRONIZE` handle — held, not re-opened per
+  sample, because Windows recycles process ids and a re-checked pid can name a different
+  program — so a captured game that exits mid-recording stops reporting instead of
+  repeating its last frame's mode forever. And `ProcessTrace` returning is published by the
+  consumer thread itself, so a trace another process tore down makes present diagnostics
+  unavailable instead of leaving the session marked open with a permanently stale sample.
+  Both transitions are logged; the trade in every case is a missing number over a wrong one.
+- **`environment.snapshot`.** `present.available` and the sample now come from the real
+  provider. `optIn` and `elevated` were already truthful and stay so — they are what lets a
+  client distinguish *not measured because opt-in is off* from *not measured because the
+  process is not elevated* from *measured*.
+
+**Verification boundary (honest, unchanged in kind).** The gate logic, the mapping and the
+overlay are headless-verified. `present.available == true` with a real present count still
+requires an elevated process and a presenting workload, and is a human-gated step of the
+release campaign (UAC cannot be scripted). What Wave D can and does prove headlessly is
+that the define, the link and the provider construction are present in the shipping binary —
+the three things whose absence made the feature unreachable rather than merely unavailable.

@@ -20,6 +20,12 @@ Button {
     // for the handful of actions whose whole name is a symbol (the preset
     // overflow). `text` stays as the accessible name's fallback.
     property int glyph: ExoGlyph.Invalid
+    // An ExoGlyph.Kind drawn BEFORE the label rather than instead of it, for an
+    // action whose name needs a mark to say where it goes — the "All releases"
+    // link leaves the application for the browser, and the label alone reads as
+    // one more in-app destination. Ignored while `glyph` makes the button
+    // icon-only: a button cannot be both its icon and a labelled one.
+    property int leadingGlyph: ExoGlyph.Invalid
     // One control rung down, for a button that lives inside chrome rather than
     // on a page: the Record page's preview toolbar is 38 px tall, and a
     // full-height button there leaves a 1 px margin and reads as the toolbar's
@@ -27,6 +33,10 @@ Button {
     property bool compact: false
 
     readonly property bool _iconOnly: root.glyph !== ExoGlyph.Invalid
+    readonly property bool _hasLeadingGlyph: !root._iconOnly && root.leadingGlyph !== ExoGlyph.Invalid
+    // Reserved on the label's left. One rung below the icon-only glyph's 18 px:
+    // it sits beside a body-sized label rather than standing in for one.
+    readonly property real _leadingGlyphSpace: root._hasLeadingGlyph ? 14 + ExoTheme.spacingXs : 0
 
     readonly property bool _primary: root.tone === "primary" && root.enabled
     readonly property bool _destructive: root.tone === "destructive" && root.enabled
@@ -54,17 +64,36 @@ Button {
 
     readonly property color _ink: !root.enabled ? ExoTheme.textDim
                                   : root._primary ? ExoTheme.accentInk
-                                  : root._destructive ? ExoTheme.error
+                                  // The label is a word, the border is a mark:
+                                  // `error` as a label measures 4.30:1 on the
+                                  // button fill in Light, and less once hover
+                                  // darkens it.
+                                  : root._destructive ? ExoTheme.errorText
                                   : root.selected ? ExoTheme.text : ExoTheme.textSecondary
 
     contentItem: Item {
-        implicitWidth: root._iconOnly ? icon.width : buttonLabel.implicitWidth
+        implicitWidth: root._iconOnly ? icon.width : buttonLabel.implicitWidth + root._leadingGlyphSpace
         implicitHeight: root._iconOnly ? icon.height : buttonLabel.implicitHeight
+
+        ExoGlyph {
+            id: leadingIcon
+
+            kind: root.leadingGlyph
+            color: root._ink
+            visible: root._hasLeadingGlyph
+            width: 14
+            height: 14
+            anchors {
+                left: parent.left
+                verticalCenter: parent.verticalCenter
+            }
+        }
 
         Label {
             id: buttonLabel
 
             anchors.fill: parent
+            anchors.leftMargin: root._leadingGlyphSpace
             horizontalAlignment: root.quiet && root.width > root.implicitWidth ? Text.AlignLeft : Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
             text: root.text

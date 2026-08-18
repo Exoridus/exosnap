@@ -74,6 +74,42 @@ constexpr std::chrono::milliseconds kMsiPollInterval{200};
 // -- see WaitForProcessOrCancel.
 constexpr std::chrono::minutes kMsiWaitTimeout{15};
 
+// One path component built from an untrusted string. The handoff document is
+// untrusted input and its target version reaches a directory name before
+// anything has verified it, so every character that could leave the intended
+// parent (separators, drive colons, dots) is replaced rather than escaped.
+[[nodiscard]] std::wstring SanitizePathComponent(const QString& value) {
+    std::wstring out;
+    out.reserve(static_cast<size_t>(value.size()));
+    for (const QChar ch : value) {
+        const char16_t code = ch.unicode();
+        const bool safe = (code >= u'0' && code <= u'9') || (code >= u'a' && code <= u'z') ||
+                          (code >= u'A' && code <= u'Z') || code == u'-' || code == u'_';
+        out.push_back(safe ? static_cast<wchar_t>(code) : L'.');
+    }
+    if (out.empty() || out.find_first_not_of(L'.') == std::wstring::npos) {
+        return L"handoff";
+    }
+    return out;
+}
+
+// Read a whole file as bytes. Used for the handed-over manifest and its
+// signature: the SAME bytes that are hashed by the signature check are the ones
+// that get parsed, so there is no second read to disagree with the first.
+[[nodiscard]] bool ReadWholeFile(const QString& path, std::string* out) {
+    std::ifstream in(fs::path(path.toStdWString()), std::ios::binary);
+    if (!in) {
+        return false;
+    }
+    std::ostringstream buf;
+    buf << in.rdbuf();
+    if (!in) {
+        return false;
+    }
+    *out = buf.str();
+    return true;
+}
+
 // Best-effort recursive delete; true when the path is gone afterwards.
 [[nodiscard]] bool RemoveTree(const std::wstring& dir) {
     std::error_code ec;
@@ -135,26 +171,8 @@ std::optional<std::wstring> ResolveStagedRoot(const std::wstring& extract_dir) {
     return only_entry->wstring();
 }
 
-UpStep RetryEntryStep(FailureCase c) {
-    switch (c) {
-    case FailureCase::DownloadFailed:          // A1
-    case FailureCase::VerifyDownloadFailed:    // A2 (file already deleted)
-    case FailureCase::VerifyReinstallMismatch: // A3 (nothing downloaded into place)
-        return UpStep::Download;
-    case FailureCase::AppWontClose: // B1 (download kept)
-        return UpStep::CloseApp;
-    case FailureCase::InstallFailed:          // B2 (staging kept)
-    case FailureCase::VerifyInstallFailed:    // B3 (portable: previous version restored)
-    case FailureCase::RestoreFailed:          // B3-R (backup preserved; retry heals it)
-    case FailureCase::VerifyInstallFailedMsi: // B3-MSI (msiexec rolled back)
-    case FailureCase::UacDeclined:            // C1 (re-handoff)
-    case FailureCase::MsiFailed:              // C2
-    case FailureCase::MsiRebootRequired:      // C3 (terminal success; no Retry offered)
-        return UpStep::Install;
-    case FailureCase::LaunchFailed: // B4 (soft success; manual start)
-        return UpStep::Launch;
-    }
-    return UpStep::Download;
+bool VersionsMatchExactly(const QString& a, const QString& b) {
+    return !a.isEmpty() && !b.isEmpty() && a == b;
 }
 
 bool VerificationReinstallAccepts(bool verify_reinstall, const QString& manifest_version,
@@ -162,9 +180,14 @@ bool VerificationReinstallAccepts(bool verify_reinstall, const QString& manifest
     if (!verify_reinstall) {
         return true;
     }
-    // Exact string equality, and never against an empty string on either side --
-    // an unknown version must fail closed, not match everything.
-    return !manifest_version.isEmpty() && !current_version.isEmpty() && manifest_version == current_version;
+    return VersionsMatchExactly(manifest_version, current_version);
+}
+
+bool TargetVersionAccepts(const QString& target_version, const QString& manifest_version) {
+    if (target_version.isEmpty()) {
+        return true; // nothing pinned -- this run resolves the channel itself
+    }
+    return VersionsMatchExactly(manifest_version, target_version);
 }
 
 std::wstring BuildMsiexecParams(const std::wstring& msi_path, bool verification_reinstall) {
@@ -254,11 +277,27 @@ void UpdaterWorker::run(UpStep entry) {
     // only re-enters steps that failed after Download populated it) falls back
     // to a clean full run.
     if (entry != UpStep::Download && !have_package_) {
+        if (args_.mode == exosnap::update::UpdaterMode::Manual) {
+            // A manual run must never turn a retry into an unattended
+            // download-and-install: the confirmation the user gave was for
+            // applying a package that no longer exists.
+            emit failed(FailureCase::DownloadFailed, // A1
+                        QStringLiteral("The verified update is no longer available."));
+            return;
+        }
         entry = UpStep::Download;
     }
 
-    if (int(entry) <= int(UpStep::Download) && !runDownload()) {
-        return;
+    if (int(entry) <= int(UpStep::Download)) {
+        if (!runDownload()) {
+            return;
+        }
+        if (args_.mode == exosnap::update::UpdaterMode::Manual) {
+            // Manual mode halts here by construction. Only the handoff runs
+            // Download straight into CloseApp/Install without asking.
+            emit readyToApply();
+            return;
+        }
     }
     if (int(entry) <= int(UpStep::CloseApp) && !runCloseApp()) {
         return;
@@ -275,9 +314,87 @@ void UpdaterWorker::run(UpStep entry) {
     (void)runLaunch();
 }
 
-// ── Step 1: Download ─────────────────────────────────────────────────────────
-bool UpdaterWorker::runDownload() {
+bool UpdaterWorker::abortedByCancel() {
+    if (!cancel_.load()) {
+        return false;
+    }
+    emit cancelled();
+    return true;
+}
+
+// ── Manual mode ──────────────────────────────────────────────────────────────
+// The pipeline, split at the two points a person has to be asked. Every step
+// below reuses the same functions the handoff path runs -- there is no second
+// download, no second verification and no second swap.
+
+void UpdaterWorker::check() {
+    cancel_.store(false);
+    emit checkStarted();
+
+    // The official-build gate is an update-check POLICY (update_checker.h), and
+    // it applies to whoever is doing the checking. A dev build must not poll the
+    // real feed; --base-url is the documented way to point a dev run at a test
+    // feed, and it is what makes this path testable at all.
+    if (!UpdateChecksEnabled(args_)) {
+        emit checkBlocked(QStringLiteral("This build does not check for updates. Pass --base-url to check "
+                                         "against a specific feed."));
+        return;
+    }
+
+    bool no_release = false;
+    if (!resolveRelease(&no_release) && !no_release) {
+        return; // resolveRelease already reported the feed error as A1
+    }
+
+    // BuildCheckResult, not a bare "did LocateRelease find something": it is the
+    // one place that decides whether a located release is an OFFER, and reusing
+    // it is what makes "nothing newer" a result instead of a download error.
+    exosnap::update::CheckParams params;
+    params.current_version = ParseSemVer(args_.current_version.toStdString()).value_or(SemVer{});
+    params.current_version_raw = args_.current_version.toStdString();
+    params.channel = args_.channel;
+    params.allow_same_version_reinstall = args_.verify_reinstall;
+    const std::optional<exosnap::update::ReleaseAssets> located =
+        no_release ? std::nullopt : std::optional<exosnap::update::ReleaseAssets>(release_);
+    const exosnap::update::UpdateCheckResult result =
+        exosnap::update::BuildCheckResult(releases_json_, located, params);
+
+    if (!result.update_available) {
+        have_release_ = false;
+        emit upToDate();
+        return;
+    }
+    emit updateAvailable(QString::fromStdString(result.available_version_raw));
+}
+
+void UpdaterWorker::download() {
+    cancel_.store(false);
     emit stepStarted(UpStep::Download);
+    if (!fetchAndStage()) {
+        return;
+    }
+    // fetchAndStage already emitted stepDone(Download). The halt is the whole
+    // point of the manual flow: verified bytes are on disk and NOTHING outside
+    // the download/staging directories has been touched yet.
+    emit readyToApply();
+}
+
+void UpdaterWorker::apply() {
+    // CloseApp onwards. In manual mode there is no --app-pid, so CloseApp is a
+    // no-op and a still-running ExoSnap surfaces as the honest B2 ("the current
+    // installation is in use and could not be moved") rather than as a swap
+    // performed under a live process.
+    run(UpStep::CloseApp);
+}
+
+// ── Release resolution ───────────────────────────────────────────────────────
+// Shared by the handoff pipeline's Download step and the manual check. Emits its
+// own A1 on a feed error; a well-formed feed with nothing for this channel is
+// reported through `no_release` instead, because the two callers answer that
+// case differently ("up to date" vs. "the app promised a release and it is
+// gone").
+bool UpdaterWorker::resolveRelease(bool* no_release) {
+    *no_release = false;
 
     const std::string base_url =
         args_.base_url.isEmpty() ? std::string(kDefaultReleasesUrl) : args_.base_url.toStdString();
@@ -287,21 +404,65 @@ bool UpdaterWorker::runDownload() {
         emit failed(FailureCase::DownloadFailed, QString::fromStdString(fetch_error)); // A1
         return false;
     }
+    releases_json_ = *releases_json;
 
     std::string parse_error;
     const auto release = LocateRelease(*releases_json, args_.channel, &parse_error);
     if (!release.has_value()) {
-        emit failed(FailureCase::DownloadFailed, // A1
-                    parse_error.empty() ? QStringLiteral("No release with an update manifest found for this channel.")
-                                        : QString::fromStdString(parse_error));
+        if (!parse_error.empty()) {
+            emit failed(FailureCase::DownloadFailed, QString::fromStdString(parse_error)); // A1
+            return false;
+        }
+        *no_release = true;
         return false;
     }
-    emit releaseResolved(QString::fromStdString(release->version.ToString()));
 
-    // %TEMP%\ExoSnapUpdate\<ver>\ -- downloads (manifest + package) live here.
+    release_ = *release;
+    have_release_ = true;
+    return true;
+}
+
+// ── Step 1: Download ─────────────────────────────────────────────────────────
+bool UpdaterWorker::runDownload() {
+    emit stepStarted(UpStep::Download);
+
+    // A handoff run resolves nothing. The application already picked the release
+    // and handed over the manifest bytes that prove it; re-reading the feed here
+    // is exactly how a release published between the offer and this moment used
+    // to be able to win.
+    if (args_.mode == exosnap::update::UpdaterMode::AppHandoff) {
+        return fetchAndStage();
+    }
+
+    bool no_release = false;
+    if (!resolveRelease(&no_release)) {
+        if (no_release) {
+            emit failed(FailureCase::DownloadFailed, // A1
+                        QStringLiteral("No release with an update manifest found for this channel."));
+        }
+        return false;
+    }
+    emit releaseResolved(QString::fromStdString(release_.version.ToString()));
+    return fetchAndStage();
+}
+
+// ── Manifest, gates, package, staging ────────────────────────────────────────
+bool UpdaterWorker::fetchAndStage() {
+    const bool handoff = args_.mode == exosnap::update::UpdaterMode::AppHandoff;
+    if (!handoff && !have_release_) {
+        emit failed(FailureCase::DownloadFailed, QStringLiteral("No release has been resolved yet.")); // A1
+        return false;
+    }
+
+    // %TEMP%\ExoSnapUpdate\<ver>\ -- the package lives here, and in manual mode
+    // the manifest and signature this run downloads. A handoff run names the
+    // directory after the version it was pinned to, sanitised: that string comes
+    // from an untrusted document and reaches a path before anything has verified
+    // it.
     std::error_code ec;
     const fs::path download_dir =
-        fs::temp_directory_path(ec) / L"ExoSnapUpdate" / fs::path(release->version.ToString());
+        fs::temp_directory_path(ec) / L"ExoSnapUpdate" /
+        (handoff ? SanitizePathComponent(args_.target_version) : fs::path(release_.version.ToString()).wstring());
     if (ec) {
         emit failed(FailureCase::DownloadFailed, QStringLiteral("No usable temp directory.")); // A1
         return false;
@@ -313,45 +474,72 @@ bool UpdaterWorker::runDownload() {
     }
     download_dir_ = download_dir.wstring();
 
-    // Manifest download. The detached signature (.sig sibling) is mandatory --
-    // without it the manifest bytes cannot be verified.
-    if (release->manifest_url.empty() || release->signature_url.empty()) {
-        emit failed(FailureCase::DownloadFailed, QStringLiteral("The release carries no update manifest.")); // A1
-        return false;
-    }
-    const fs::path manifest_path = download_dir / L"update-manifest.json";
-    if (const auto err = DownloadToFile(release->manifest_url, manifest_path.wstring(), {}, cancel_)) {
-        emit failed(FailureCase::DownloadFailed, QString::fromStdString(*err)); // A1
-        return false;
-    }
     std::string manifest_json;
-    {
-        std::ifstream in(manifest_path, std::ios::binary);
-        std::ostringstream buf;
-        buf << in.rdbuf();
-        manifest_json = buf.str();
-        if (!in) {
-            emit failed(FailureCase::DownloadFailed, QStringLiteral("Can't read the downloaded manifest.")); // A1
+    std::string signature_hex;
+    if (handoff) {
+        // Handed over, not fetched. The bytes are read ONCE into memory and both
+        // the signature check and the parse below run on that one copy -- there
+        // is no second read that could see different bytes, and no re-fetch that
+        // could see a different release.
+        if (!ReadWholeFile(args_.manifest_path, &manifest_json)) {
+            emit failed(
+                FailureCase::HandoffRejected, // A0
+                QStringLiteral("The handoff names a manifest that cannot be read: %1").arg(args_.manifest_path));
             return false;
+        }
+        if (!ReadWholeFile(args_.manifest_signature_path, &signature_hex)) {
+            emit failed(FailureCase::HandoffRejected, // A0
+                        QStringLiteral("The handoff names a manifest signature that cannot be read: %1")
+                            .arg(args_.manifest_signature_path));
+            return false;
+        }
+    } else {
+        // Manifest download. The detached signature (.sig sibling) is mandatory --
+        // without it the manifest bytes cannot be verified.
+        if (release_.manifest_url.empty() || release_.signature_url.empty()) {
+            emit failed(FailureCase::DownloadFailed, QStringLiteral("The release carries no update manifest.")); // A1
+            return false;
+        }
+        const fs::path manifest_path = download_dir / L"update-manifest.json";
+        if (const auto err = DownloadToFile(release_.manifest_url, manifest_path.wstring(), {}, cancel_)) {
+            if (abortedByCancel())
+                return false;
+            emit failed(FailureCase::DownloadFailed, QString::fromStdString(*err)); // A1
+            return false;
+        }
+        {
+            std::ifstream in(manifest_path, std::ios::binary);
+            std::ostringstream buf;
+            buf << in.rdbuf();
+            manifest_json = buf.str();
+            if (!in) {
+                emit failed(FailureCase::DownloadFailed, QStringLiteral("Can't read the downloaded manifest.")); // A1
+                return false;
+            }
+        }
+
+        const fs::path signature_path = download_dir / L"update-manifest.json.sig";
+        if (const auto err = DownloadToFile(release_.signature_url, signature_path.wstring(), {}, cancel_)) {
+            if (abortedByCancel())
+                return false;
+            emit failed(FailureCase::DownloadFailed, QString::fromStdString(*err)); // A1
+            return false;
+        }
+        {
+            std::ifstream in(signature_path, std::ios::binary);
+            std::ostringstream buf;
+            buf << in.rdbuf();
+            signature_hex = buf.str();
+            if (!in) {
+                emit failed(FailureCase::DownloadFailed, QStringLiteral("Can't read the manifest signature.")); // A1
+                return false;
+            }
         }
     }
 
-    const fs::path signature_path = download_dir / L"update-manifest.json.sig";
-    if (const auto err = DownloadToFile(release->signature_url, signature_path.wstring(), {}, cancel_)) {
-        emit failed(FailureCase::DownloadFailed, QString::fromStdString(*err)); // A1
-        return false;
-    }
-    std::string signature_hex;
+    // Trim surrounding whitespace/newlines so the 128-hex payload parses. The
+    // manifest bytes are NOT touched: they are what the signature covers.
     {
-        std::ifstream in(signature_path, std::ios::binary);
-        std::ostringstream buf;
-        buf << in.rdbuf();
-        signature_hex = buf.str();
-        if (!in) {
-            emit failed(FailureCase::DownloadFailed, QStringLiteral("Can't read the manifest signature.")); // A1
-            return false;
-        }
-        // Trim surrounding whitespace/newlines so the 128-hex payload parses.
         const auto first = signature_hex.find_first_not_of(" \t\r\n");
         const auto last = signature_hex.find_last_not_of(" \t\r\n");
         signature_hex = (first == std::string::npos) ? std::string{} : signature_hex.substr(first, last - first + 1);
@@ -372,6 +560,23 @@ bool UpdaterWorker::runDownload() {
         return false;
     }
     UpdateManifest manifest = std::get<UpdateManifest>(parsed);
+    const QString manifest_version = QString::fromStdString(manifest.version_raw);
+
+    // Pinned-target gate, immediately after the signature proved the manifest is
+    // authentic and before anything is fetched or touched. The app resolved the
+    // feed once and told the user "version X is available"; between then and now
+    // a newer release can have appeared, and installing THAT would leave the
+    // offer, the What's-new payload, the applied-version loop guard and the
+    // installed build describing three different versions. Same exact-string
+    // equality as the verification reinstall gate below -- one rule, not two.
+    if (!TargetVersionAccepts(args_.target_version, manifest_version)) {
+        std::fprintf(stderr,
+                     "exosnap-updater: the handoff pinned version \"%s\" but the signed manifest offers "
+                     "\"%s\" -- nothing installed\n",
+                     qPrintable(args_.target_version), qPrintable(manifest_version));
+        emit failed(FailureCase::TargetVersionMismatch, manifest_version); // A4
+        return false;
+    }
 
     // Downgrade guard (unparseable current version defends as 0.0.0 -- never
     // blocks, the manifest minimum_accepted_version still applies).
@@ -387,7 +592,6 @@ bool UpdaterWorker::runDownload() {
     // of the downgrade guard: this run was started to reinstall one exact version,
     // so anything else -- including a legitimately newer release -- is refused
     // before a single package byte is fetched. Nothing is installed here.
-    const QString manifest_version = QString::fromStdString(manifest.version_raw);
     if (!VerificationReinstallAccepts(args_.verify_reinstall, manifest_version, args_.current_version)) {
         std::fprintf(stderr,
                      "exosnap-updater: verification reinstall requires the identical version "
@@ -421,6 +625,11 @@ bool UpdaterWorker::runDownload() {
     // overwrite the file (a held deny-write/deny-delete handle would block it).
     locked_package_.reset();
     if (const auto err = DownloadToFile(package->url, package_path.wstring(), on_progress, cancel_)) {
+        // The one abort a person can cause on purpose. DownloadToFile deletes
+        // its partial file either way, so the installation is untouched and
+        // there is nothing to report as broken.
+        if (abortedByCancel())
+            return false;
         emit failed(FailureCase::DownloadFailed, QString::fromStdString(*err)); // A1
         return false;
     }
@@ -531,10 +740,21 @@ bool UpdaterWorker::runCloseApp() {
         // tray callback window), which silently swallows the message since
         // only the real main window's nativeEvent reacts to it; title alone
         // can hit a second already-running instance that shares the title.
-        if (const auto app_window =
-                reinterpret_cast<HWND>(FindTopLevelWindowForProcess(args_.app_pid, kAppWindowTitle))) {
-            ::PostMessageW(app_window, static_cast<UINT>(exosnap::update::kUpdaterHandoffMessage),
-                           static_cast<WPARAM>(exosnap::update::kUpdaterHandoffMagic), 0);
+        const auto app_window = reinterpret_cast<HWND>(FindTopLevelWindowForProcess(args_.app_pid, kAppWindowTitle));
+        if (app_window != nullptr) {
+            const BOOL posted = ::PostMessageW(app_window, static_cast<UINT>(exosnap::update::kUpdaterHandoffMessage),
+                                               static_cast<WPARAM>(exosnap::update::kUpdaterHandoffMagic), 0);
+            // Evidence, because the failure it guards against is silent: a
+            // request that reaches the wrong window -- or no window -- looks
+            // exactly like an application that chose not to close, and the only
+            // symptom is a 60 s wait ending in appWontClose.
+            std::fprintf(stderr, "exosnap-updater: close handoff posted to window %p of pid %u (result %d)\n",
+                         static_cast<void*>(app_window), args_.app_pid, static_cast<int>(posted));
+        } else {
+            std::fprintf(stderr,
+                         "exosnap-updater: no top-level window titled \"ExoSnap\" is owned by pid %u; the close "
+                         "handoff cannot be delivered\n",
+                         args_.app_pid);
         }
         if (!WaitForProcessExit(args_.app_pid, kCloseAppTimeout)) {
             emit failed(FailureCase::AppWontClose, QString()); // B1 -- download kept, Retry re-enters here
@@ -658,6 +878,12 @@ bool UpdaterWorker::runInstallMsi() {
     // uncooperative INFINITE wait guarantees that fallback fires.
     if (!WaitForProcessOrCancel(sei.hProcess, kMsiWaitTimeout, cancel_)) {
         ::CloseHandle(sei.hProcess);
+        // Cancelled and timed out are the same return value and two different
+        // truths. msiexec keeps running in either case -- this process only
+        // stops WATCHING it -- so the honest report for a requested stop is a
+        // cancellation, not "the installer did not finish in time".
+        if (abortedByCancel())
+            return false;
         emit failed(FailureCase::MsiFailed, QStringLiteral("The installer did not finish in time.")); // C2
         return false;
     }

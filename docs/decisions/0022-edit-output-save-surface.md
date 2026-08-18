@@ -63,12 +63,15 @@ with no scrim, no gap, no outer frame and no outer border.
 
 Two behavioural notes, so this file does not stay wrong about the shipped build:
 
-- **Nav tabs are disabled while the workspace is open**, with Record still marked as the current
-  destination. The Widgets shape closed the overlay through the discard guard when the user
-  navigated away; the Quick shape locks the tabs instead — the same lock the transport's source
-  controls take during a recording — because routing a navigation click through a guard that may
-  raise a dialog makes navigation conditional, which it is nowhere else in the product. Back is the
-  way out.
+- **Nav tabs stay available while the workspace is open** (corrected 2026-08-16, QCR-001), with
+  Record still marked as the current destination. Three shapes have existed and only the third is
+  shipped: the Widgets shape closed the overlay through the discard guard on nav-away; the Quick
+  port locked the tabs instead; the shipped shape does neither. An open edit session is state of
+  the Record destination — leaving Record hides the workspace without ending the session, and
+  returning shows the same one. Navigation is unconditional and asks nothing; Back is still the
+  only way out of the session, and it still guards unsaved trim points and markers. The nav-away
+  paragraphs under "Decision" below describe the Widgets shape and are kept for history.
+  Normative behaviour: `docs/product-spec.md` §2.
 - **The Done state offers one folder action.** `Open folder` and `Show in Explorer` were two labels
   for one user task (the second opens the same folder *and* selects the file); the panel now offers
   `Show in folder` alone. The "Export panel" section below still describes the pair and is kept for

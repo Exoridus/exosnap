@@ -79,14 +79,25 @@ TEST_F(NotificationManagerTest, Enqueue_SequenceIsMonotonicallyIncreasing) {
 }
 
 // ── Timed vs. standing classification ────────────────────────────────────────
-// Timed = reports something that already finished. Standing = a condition that
-// still holds. Standing is exactly DismissIntervalMs == 0.
+// Standing is exactly DismissIntervalMs == 0, and it means one specific thing: a
+// CONDITION that is true right now and that will CLEAR ITSELF when it stops being
+// true. Everything else is an event that already happened, and events are timed.
 
-TEST_F(NotificationManagerTest, Standing_Types_AreExactlyTheConditionReports) {
+TEST_F(NotificationManagerTest, Standing_Types_AreExactlyTheSelfClearingConditions) {
+    // The drive is still full; the audio source is still gone; the capture is still
+    // producing no frames. Each of the three is dismissed by the composition root
+    // the moment its condition ends.
     EXPECT_TRUE(NotificationManager::IsStanding(NotificationType::LowStorage));
-    EXPECT_TRUE(NotificationManager::IsStanding(NotificationType::UnexpectedStop));
-    EXPECT_TRUE(NotificationManager::IsStanding(NotificationType::RecoveryAvailable));
     EXPECT_TRUE(NotificationManager::IsStanding(NotificationType::AudioSourceDegraded));
+    EXPECT_TRUE(NotificationManager::IsStanding(NotificationType::WindowCaptureStalled));
+
+    // These two used to be standing and were the reason the rule needed stating.
+    // Neither is a condition: a recording that stopped unexpectedly stays stopped,
+    // and an unfinalized recording stays unfinalized, so nothing was ever going to
+    // come along and clear them and they stood for the rest of the session. The hub
+    // keeps both, and the recovery surface offers itself again at startup.
+    EXPECT_FALSE(NotificationManager::IsStanding(NotificationType::UnexpectedStop));
+    EXPECT_FALSE(NotificationManager::IsStanding(NotificationType::RecoveryAvailable));
 
     EXPECT_FALSE(NotificationManager::IsStanding(NotificationType::Saved));
     EXPECT_FALSE(NotificationManager::IsStanding(NotificationType::UpdateAvailable));
@@ -98,8 +109,38 @@ TEST_F(NotificationManagerTest, Standing_Types_AreExactlyTheConditionReports) {
     EXPECT_FALSE(NotificationManager::IsStanding(NotificationType::SettingsSaveFailed));
 }
 
-TEST_F(NotificationManagerTest, DismissInterval_Saved_IsExactly5000ms) {
-    EXPECT_EQ(NotificationManager::kDismissMs_Saved, 5000);
+TEST_F(NotificationManagerTest, TimedDwellsAreExactlyTwoValues) {
+    // Asserted as a SET rather than per type: the point of the classification is
+    // that there are two answers and a type picks one, so a bespoke third value is
+    // the thing worth failing on -- not a particular type moving between them.
+    for (const NotificationType type :
+         {NotificationType::Saved, NotificationType::UnexpectedStop, NotificationType::RecoveryAvailable,
+          NotificationType::UpdateAvailable, NotificationType::FramesDropped, NotificationType::SettingsRepaired,
+          NotificationType::PresetSwitched, NotificationType::OverlayOmitted, NotificationType::HotkeyConflict,
+          NotificationType::SettingsSaveFailed, NotificationType::CaptureActionFailed,
+          NotificationType::RecoveryProtectionUnavailable, NotificationType::SettingsLoadFailed,
+          NotificationType::LowStorage, NotificationType::AudioSourceDegraded,
+          NotificationType::WindowCaptureStalled}) {
+        const int dwell = NotificationManager::DismissIntervalMs(type);
+        EXPECT_TRUE(dwell == 0 || dwell == NotificationManager::kDwellBrief ||
+                    dwell == NotificationManager::kDwellAction)
+            << "type " << static_cast<int>(type) << " carries a bespoke dwell of " << dwell;
+    }
+}
+
+TEST_F(NotificationManagerTest, ADwellIsChosenByWhetherThereIsAnythingToDo) {
+    // Saved is the case that drove the split: it is the only toast carrying two
+    // actions and a filename, it appears the instant a recording ends, and it used
+    // to have the SHORTEST dwell in the system.
+    EXPECT_EQ(NotificationManager::kDismissMs_Saved, NotificationManager::kDwellAction);
+    EXPECT_EQ(NotificationManager::kDismissMs_SettingsSaveFailed, NotificationManager::kDwellAction);
+    // Nothing to do about either: the repair already happened, the overlay was
+    // already omitted. A glance is the whole interaction.
+    EXPECT_EQ(NotificationManager::kDismissMs_SettingsRepaired, NotificationManager::kDwellBrief);
+    EXPECT_EQ(NotificationManager::kDismissMs_OverlayOmitted, NotificationManager::kDwellBrief);
+    // Past 10 s a toast reads as standing and teaches the reflex to dismiss unread.
+    EXPECT_LE(NotificationManager::kDwellAction, 10000);
+    EXPECT_LT(NotificationManager::kDwellBrief, NotificationManager::kDwellAction);
 }
 
 // ── One timed slot ───────────────────────────────────────────────────────────
@@ -122,7 +163,7 @@ TEST_F(NotificationManagerTest, TimedToast_NeverReplacesAStandingToast) {
 TEST_F(NotificationManagerTest, TimedToast_IsAlwaysTheLastVisibleElement) {
     mgr.Enqueue(MakeEvent(NotificationType::Saved, QStringLiteral("timed")));
     mgr.Enqueue(MakeEvent(NotificationType::LowStorage, QStringLiteral("standing-1")));
-    mgr.Enqueue(MakeEvent(NotificationType::RecoveryAvailable, QStringLiteral("standing-2")));
+    mgr.Enqueue(MakeEvent(NotificationType::AudioSourceDegraded, QStringLiteral("standing-2")));
     ASSERT_EQ(mgr.VisibleEvents().size(), 3);
     EXPECT_EQ(mgr.VisibleEvents()[0].title, QStringLiteral("standing-1"));
     EXPECT_EQ(mgr.VisibleEvents()[1].title, QStringLiteral("standing-2"));
@@ -409,6 +450,46 @@ TEST(MakeAudioSourceDegradedEventTest, NeverAlarmist_NoExclamationOrErrorWording
     }
 }
 
+// ── MakeWindowCaptureStalledEvent (pure resolver, QCR-804) ───────────────────
+// The wording carries the whole truthfulness contract of the feature, so it is
+// pinned here rather than left to the composition root.
+
+TEST(MakeWindowCaptureStalledEventTest, StatesTheMeasurementAndNotACause) {
+    const NotificationEvent e = MakeWindowCaptureStalledEvent(10.4, /*exclusive_fullscreen_hint=*/false);
+    EXPECT_EQ(e.type, NotificationType::WindowCaptureStalled);
+    EXPECT_TRUE(e.title.contains(QStringLiteral("appears to have stalled")));
+    EXPECT_TRUE(e.body.contains(QStringLiteral("10 seconds")));
+    EXPECT_TRUE(e.body.contains(QStringLiteral("may be frozen")));
+    EXPECT_EQ(e.action, NotificationAction::OpenDiagnostics);
+    // Without corroboration, exclusive fullscreen must not be named at all.
+    EXPECT_FALSE(e.body.contains(QStringLiteral("fullscreen"), Qt::CaseInsensitive));
+}
+
+TEST(MakeWindowCaptureStalledEventTest, SaysTheRecordingIsStillRunning) {
+    // Not a failure report: the file keeps growing and Stop/Pause still work.
+    for (const bool hint : {false, true}) {
+        const NotificationEvent e = MakeWindowCaptureStalledEvent(12.0, hint);
+        EXPECT_TRUE(e.body.contains(QStringLiteral("recording is still running")));
+        EXPECT_FALSE(e.body.contains(QStringLiteral("fail"), Qt::CaseInsensitive));
+        EXPECT_FALSE(e.title.contains(QLatin1Char('!')));
+        EXPECT_FALSE(e.body.contains(QLatin1Char('!')));
+    }
+}
+
+TEST(MakeWindowCaptureStalledEventTest, FullscreenHintIsConditionalNeverAClaim) {
+    const NotificationEvent e = MakeWindowCaptureStalledEvent(10.0, /*exclusive_fullscreen_hint=*/true);
+    EXPECT_TRUE(e.body.contains(QStringLiteral("If the application switched to exclusive fullscreen")));
+    // "detected" would assert a cause the pre-flight ladder alone cannot prove.
+    EXPECT_FALSE(e.body.contains(QStringLiteral("detected"), Qt::CaseInsensitive));
+}
+
+TEST(NotificationTypeDwellTest, WindowCaptureStalled_IsStanding) {
+    // It reports a condition that still holds; the composition root clears it on
+    // recovery and at session end.
+    EXPECT_EQ(NotificationManager::DismissIntervalMs(NotificationType::WindowCaptureStalled), 0);
+    EXPECT_TRUE(NotificationManager::IsStanding(NotificationType::WindowCaptureStalled));
+}
+
 // ── Replace-in-place lifecycle (MainWindow's Dismiss-then-Enqueue pattern) ────
 // MainWindow does not call a manager "update" API — it owns the tracked sequence
 // and replaces the standing toast by dismissing the old one and enqueueing the
@@ -469,6 +550,12 @@ TEST(AdvisoryStatusForTypeTest, DegradedButWorkingIsCaution) {
     EXPECT_EQ(AdvisoryStatusForType(NotificationType::SettingsRepaired), QStringLiteral("caution"));
 }
 
+TEST(AdvisoryStatusForTypeTest, WindowCaptureStalled_IsCautionNotError) {
+    // QCR-804: the recording is still running and still being written. Coral
+    // would claim it failed, which it did not.
+    EXPECT_EQ(AdvisoryStatusForType(NotificationType::WindowCaptureStalled), QStringLiteral("caution"));
+}
+
 TEST(AdvisoryStatusForTypeTest, RecoveryAvailable_IsCautionNotError) {
     // As "error" the bell would go coral within seconds of every launch that
     // finds a recoverable session. Recovery offers to rescue work; it does not
@@ -492,9 +579,10 @@ TEST(AdvisoryStatusForTypeTest, EveryTypeResolvesToAKnownStatus) {
         NotificationType::SettingsRepaired,    NotificationType::PresetSwitched,
         NotificationType::OverlayOmitted,      NotificationType::HotkeyConflict,
         NotificationType::SettingsSaveFailed,  NotificationType::AudioSourceDegraded,
-        NotificationType::CaptureActionFailed,
+        NotificationType::CaptureActionFailed, NotificationType::RecoveryProtectionUnavailable,
+        NotificationType::SettingsLoadFailed,  NotificationType::WindowCaptureStalled,
     };
-    ASSERT_EQ(std::size(kAll), 13u) << "a NotificationType was added without a severity decision";
+    ASSERT_EQ(std::size(kAll), 16u) << "a NotificationType was added without a severity decision";
 
     for (const NotificationType type : kAll) {
         const QString status = AdvisoryStatusForType(type);

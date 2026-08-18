@@ -33,8 +33,32 @@ $script:CheckStates = @(
     'MANUAL_REQUIRED',  # waiting for a human gate
     'SKIPPED',          # deliberately not run, with a recorded reason
     'UNVERIFIED',       # attempted, outcome unknown (interrupted, or evidence unusable)
-    'STALE'             # passed once, against an artifact/environment that has since changed
+    'STALE',            # passed once, against an artifact/environment that has since changed
+    # --- Wave D additions -----------------------------------------------------
+    # Kept as distinct states rather than folded into BLOCKED/MANUAL_REQUIRED,
+    # because a release report has to be able to answer three different questions
+    # with three different answers, and two of them are not failures:
+    'DEFERRED',         # a human gate that could not be answered (no interactive stdin,
+                        #   or the operator postponed it). NEVER a FAIL: nobody was asked.
+    'UNAVAILABLE'       # the scenario's declared requirement does not exist on this
+                        #   machine (no HDR display, no 240 Hz mode, no second monitor).
+                        #   The product was not tested and did not fail.
 )
+
+# Terminal states a scenario's PRODUCT verdict may take. Kept separate from the
+# environment-restore verdict below: a scenario can prove the product correct and
+# still leave the machine in the wrong state, and one result field cannot say both.
+$script:RestoreStates = @(
+    'NOT_APPLICABLE',                        # the scenario mutated nothing
+    'RESTORED',                              # restored and verified equal to the original
+    'RESTORE_PENDING',                       # restore not completed; retry required
+    'RESTORE_PENDING_DEVICE_UNAVAILABLE',    # the original device is gone; nothing else was touched
+    'RESTORE_FAILED'                         # the setter succeeded and the read-back disagreed
+)
+
+function Get-LiveVerifyRestoreStates {
+    return $script:RestoreStates
+}
 
 function Get-LiveVerifyCheckStates {
     return $script:CheckStates
@@ -128,6 +152,10 @@ function New-LiveVerifyRun {
             evidence               = @()
             artifactFingerprint    = $null
             environmentFingerprint = $null
+            # Wave D. Present from creation so a resumed run written by an older
+            # schema is still readable and a report never has to guess.
+            restoreResult          = 'NOT_APPLICABLE'
+            environmentEvidence    = $null
         }
     }
 
@@ -226,10 +254,21 @@ function Complete-LiveVerifyCheck {
     param(
         [Parameter(Mandatory)] $Run,
         [Parameter(Mandatory)] [string] $Id,
-        [Parameter(Mandatory)] [ValidateSet('PASS', 'FAIL', 'BLOCKED', 'MANUAL_REQUIRED', 'UNVERIFIED')]
+        [Parameter(Mandatory)]
+        [ValidateSet('PASS', 'FAIL', 'BLOCKED', 'MANUAL_REQUIRED', 'UNVERIFIED', 'DEFERRED', 'UNAVAILABLE')]
         [string] $Result,
         [string] $Message,
-        [string[]] $Evidence = @()
+        [string[]] $Evidence = @(),
+        # The environment-restore verdict, recorded ALONGSIDE the product verdict and
+        # never merged into it. A scenario that proved the product correct and then
+        # failed to put the machine back is not a passing release check, and the
+        # report has to be able to say which of the two went wrong.
+        [ValidateSet('NOT_APPLICABLE', 'RESTORED', 'RESTORE_PENDING',
+            'RESTORE_PENDING_DEVICE_UNAVAILABLE', 'RESTORE_FAILED')]
+        [string] $RestoreResult = 'NOT_APPLICABLE',
+        # Per-property { before, requested, applied, afterRestore } for everything the
+        # scenario controlled. Acceptance is before == afterRestore.
+        $EnvironmentEvidence = $null
     )
     $check = Get-LiveVerifyCheck -Run $Run -Id $Id
     $check.state = $Result
@@ -238,8 +277,35 @@ function Complete-LiveVerifyCheck {
     if ($Evidence.Count -gt 0) {
         $check.evidence = @($check.evidence) + $Evidence | Select-Object -Unique
     }
+    Set-JsonProperty -Object $check -Name 'restoreResult' -Value $RestoreResult
+    if ($null -ne $EnvironmentEvidence) {
+        Set-JsonProperty -Object $check -Name 'environmentEvidence' -Value $EnvironmentEvidence
+    }
     Save-LiveVerifyRun -Run $Run
     return $check
+}
+
+function Set-JsonProperty {
+    <#
+    .SYNOPSIS
+        Assigns a property on an object that came back from ConvertFrom-Json.
+    .DESCRIPTION
+        A PSCustomObject rehydrated from JSON has exactly the properties the JSON
+        had. Assigning to one that was not in the file throws under StrictMode and
+        silently does nothing otherwise -- which is how a field added to the schema
+        after a run started would vanish from that run's report without an error.
+    #>
+    param(
+        [Parameter(Mandatory)] $Object,
+        [Parameter(Mandatory)] [string] $Name,
+        $Value
+    )
+    if ($Object.PSObject.Properties.Name -contains $Name) {
+        $Object.$Name = $Value
+    }
+    else {
+        $Object | Add-Member -NotePropertyName $Name -NotePropertyValue $Value -Force
+    }
 }
 
 function Set-LiveVerifyCheckSkipped {
@@ -360,7 +426,12 @@ function Update-LiveVerifyStaleness {
     # place means the fix that turned it green is never observed. SKIPPED and
     # MANUAL_REQUIRED are human decisions and are left alone -- a skip carries a
     # reason, and an unperformed gate is re-offered by the runnable set instead.
-    $invalidatable = @('PASS', 'FAIL', 'BLOCKED', 'UNVERIFIED')
+    # UNAVAILABLE joins them (Wave D) for the same reason from the other side: it
+    # records that this machine could not offer what the scenario declared it needs,
+    # which is a statement about the environment. Once the environment moves, that
+    # statement stops being current -- plugging in the HDR display must make the HDR
+    # scenario runnable again, not leave it permanently written off.
+    $invalidatable = @('PASS', 'FAIL', 'BLOCKED', 'UNVERIFIED', 'UNAVAILABLE')
     $stale = @()
     foreach ($entry in $Catalog) {
         if ($Run.State.checks.PSObject.Properties.Name -notcontains $entry.Id) { continue }
@@ -431,7 +502,13 @@ function Get-LiveVerifyRunnableChecks {
     foreach ($entry in $Catalog) {
         if ($Run.State.checks.PSObject.Properties.Name -notcontains $entry.Id) { continue }
         $state = $Run.State.checks.$($entry.Id).state
-        if ($state -in @('PENDING', 'STALE', 'UNVERIFIED', 'RUNNING', 'MANUAL_REQUIRED')) { $runnable += $entry }
+        # DEFERRED joins the rerunnable set (Wave D): a gate nobody could answer is
+        # an open question, not an answer. UNAVAILABLE does NOT -- the hardware it
+        # asked for is still absent, and Update-LiveVerifyStaleness is what brings
+        # it back the moment the environment changes.
+        if ($state -in @('PENDING', 'STALE', 'UNVERIFIED', 'RUNNING', 'MANUAL_REQUIRED', 'DEFERRED')) {
+            $runnable += $entry
+        }
     }
     return [object[]]$runnable
 }
@@ -461,15 +538,32 @@ function Write-LiveVerifyReport {
     $summary = Get-LiveVerifySummary -Run $Run
     $checks = @($Run.State.checks.PSObject.Properties | ForEach-Object { $_.Value })
 
+    # Environment-restore verdicts, counted separately from the product verdicts.
+    # A run whose product checks all passed but which left a display in the wrong
+    # mode is not a clean run, and the number that says so must be visible without
+    # reading every check.
+    $restoreSummary = [ordered]@{}
+    foreach ($state in $script:RestoreStates) { $restoreSummary[$state] = 0 }
+    foreach ($check in $checks) {
+        $value = if ($check.PSObject.Properties.Name -contains 'restoreResult' -and $check.restoreResult) {
+            $check.restoreResult
+        }
+        else { 'NOT_APPLICABLE' }
+        if ($restoreSummary.Contains($value)) { $restoreSummary[$value] = [int]$restoreSummary[$value] + 1 }
+    }
+    $restoreProblems = [int]$restoreSummary['RESTORE_FAILED'] + [int]$restoreSummary['RESTORE_PENDING'] +
+        [int]$restoreSummary['RESTORE_PENDING_DEVICE_UNAVAILABLE']
+
     # --- JSON -------------------------------------------------------------
     $json = [ordered]@{
-        runId       = $Run.Run.runId
-        createdUtc  = $Run.Run.createdUtc
-        reportedUtc = [DateTime]::UtcNow.ToString('o')
-        artifact    = $Run.Artifact
-        environment = $Run.Environment
-        summary     = $summary
-        checks      = $checks
+        runId          = $Run.Run.runId
+        createdUtc     = $Run.Run.createdUtc
+        reportedUtc    = [DateTime]::UtcNow.ToString('o')
+        artifact       = $Run.Artifact
+        environment    = $Run.Environment
+        summary        = $summary
+        restoreSummary = $restoreSummary
+        checks         = $checks
     }
     Write-JsonAtomic -Path (Join-Path $Run.Directory 'report.json') -Value $json
 
@@ -488,6 +582,19 @@ function Write-LiveVerifyReport {
         if ($summary[$state] -gt 0) { $lines.Add("| $state | $($summary[$state]) |") }
     }
     $lines.Add('')
+    if ($restoreProblems -gt 0) {
+        $lines.Add('## Environment restore')
+        $lines.Add('')
+        $lines.Add('The machine was NOT put back the way it was found. This is release-relevant on')
+        $lines.Add('its own, independently of every product verdict above.')
+        $lines.Add('')
+        $lines.Add('| Restore result | Count |')
+        $lines.Add('|---|---:|')
+        foreach ($state in $script:RestoreStates) {
+            if ($restoreSummary[$state] -gt 0) { $lines.Add("| $state | $($restoreSummary[$state]) |") }
+        }
+        $lines.Add('')
+    }
     $lines.Add('## Artifact under test')
     $lines.Add('')
     if ($null -ne $Run.Artifact) {
@@ -507,6 +614,30 @@ function Write-LiveVerifyReport {
             $lines.Add("- Layer: $($check.layer)")
             $lines.Add("- Attempts: $($check.attempts)")
             if ($check.message) { $lines.Add("- Result: $($check.message)") }
+            $restore = if ($check.PSObject.Properties.Name -contains 'restoreResult') { $check.restoreResult } else { $null }
+            if ($restore -and $restore -ne 'NOT_APPLICABLE') { $lines.Add("- Environment restore: $restore") }
+            # The per-property rows live under `properties`; the object around them
+            # carries the transaction's own identity. Iterating the outer object
+            # yielded transactionId and runId and then asked them for a `before`.
+            if ($check.PSObject.Properties.Name -contains 'environmentEvidence' -and
+                $null -ne $check.environmentEvidence -and
+                $check.environmentEvidence.PSObject.Properties.Name -contains 'properties') {
+                $rows = @($check.environmentEvidence.properties)
+                if ($rows.Count -gt 0) {
+                    $lines.Add('- Environment evidence (before / requested / applied / afterRestore):')
+                    foreach ($row in $rows) {
+                        $restored = if ($row.PSObject.Properties.Name -contains 'restored' -and $row.restored) { 'restored' }
+                        else { '**NOT RESTORED**' }
+                        $lines.Add("  - ``$($row.property)``: $($row.before) / $($row.requested) / $($row.applied) / " +
+                            "$($row.afterRestore) — $restored")
+                    }
+                }
+                foreach ($pending in @($check.environmentEvidence.pending)) {
+                    $lines.Add("- **Restore still owed**: ``$($pending.property)`` on $($pending.alias) " +
+                        "($($pending.friendlyName), $($pending.stableId)) — original ``$($pending.originalValue)``, " +
+                        "action: $($pending.remainingAction)")
+                }
+            }
             if ($check.skipReason) { $lines.Add("- Skip reason: $($check.skipReason)") }
             if ($check.interrupted) { $lines.Add('- Interrupted: yes') }
             if ($check.note) { $lines.Add("- Note: $($check.note)") }
@@ -524,9 +655,13 @@ function Write-LiveVerifyReport {
     Set-Content -LiteralPath (Join-Path $Run.Directory 'report.md') -Value ($lines -join "`n") -Encoding utf8NoBOM
 
     # --- JUnit ------------------------------------------------------------
-    $failures = [int]$summary['FAIL']
+    # A restore problem counts as a failure here even when the product verdict was
+    # PASS: CI gating on this file must not report a green run that left the machine
+    # in a state the next run would silently inherit.
+    $failures = [int]$summary['FAIL'] + $restoreProblems
     $skipped = [int]$summary['SKIPPED'] + [int]$summary['BLOCKED'] + [int]$summary['MANUAL_REQUIRED'] +
-        [int]$summary['UNVERIFIED'] + [int]$summary['STALE'] + [int]$summary['PENDING']
+        [int]$summary['UNVERIFIED'] + [int]$summary['STALE'] + [int]$summary['PENDING'] +
+        [int]$summary['DEFERRED'] + [int]$summary['UNAVAILABLE']
     $xml = [System.Collections.Generic.List[string]]::new()
     $xml.Add('<?xml version="1.0" encoding="UTF-8"?>')
     $xml.Add("<testsuites name=`"live-verify`" tests=`"$($checks.Count)`" failures=`"$failures`" skipped=`"$skipped`">")
@@ -535,10 +670,23 @@ function Write-LiveVerifyReport {
         $name = [System.Security.SecurityElement]::Escape("$($check.id) $($check.title)")
         $message = [System.Security.SecurityElement]::Escape("$($check.message)$($check.skipReason)")
         $xml.Add("    <testcase classname=`"live-verify`" name=`"$name`">")
+        $restore = if ($check.PSObject.Properties.Name -contains 'restoreResult') { $check.restoreResult } else { 'NOT_APPLICABLE' }
+        $restoreBroken = $restore -in @('RESTORE_FAILED', 'RESTORE_PENDING', 'RESTORE_PENDING_DEVICE_UNAVAILABLE')
         switch ($check.state) {
-            'PASS' { }
+            'PASS' {
+                if ($restoreBroken) {
+                    $xml.Add("      <failure message=`"product PASS but environment restore $restore`" />")
+                }
+            }
             'FAIL' { $xml.Add("      <failure message=`"$message`" />") }
-            default { $xml.Add("      <skipped message=`"$($check.state): $message`" />") }
+            default {
+                if ($restoreBroken) {
+                    $xml.Add("      <failure message=`"$($check.state) and environment restore $restore`" />")
+                }
+                else {
+                    $xml.Add("      <skipped message=`"$($check.state): $message`" />")
+                }
+            }
         }
         $xml.Add('    </testcase>')
     }
@@ -549,7 +697,8 @@ function Write-LiveVerifyReport {
     return $summary
 }
 
-Export-ModuleMember -Function Get-LiveVerifyCheckStates, Write-JsonAtomic, Read-JsonFile,
+Export-ModuleMember -Function Get-LiveVerifyCheckStates, Get-LiveVerifyRestoreStates, Set-JsonProperty,
+    Write-JsonAtomic, Read-JsonFile,
     Get-LiveVerifyFingerprint, New-LiveVerifyRun, Get-LiveVerifyRun, Save-LiveVerifyRun,
     Get-LiveVerifyCheck, Set-LiveVerifyCheckRunning, Complete-LiveVerifyCheck,
     Set-LiveVerifyCheckSkipped, Add-LiveVerifyNote, Reset-LiveVerifyCheck,

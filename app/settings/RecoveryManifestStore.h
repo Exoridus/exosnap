@@ -3,6 +3,8 @@
 #include <QString>
 #include <QVector>
 
+#include <mutex>
+
 namespace exosnap {
 
 // A single recovery manifest entry. Written before session start and removed
@@ -21,21 +23,36 @@ struct RecoveryManifestEntry {
 // Crash-manifest store — recovery-manifest.json in the app config dir.
 // Analogous to RecordingHistoryStore in structure; minimal in scope.
 //
-// Thread-safety: all methods must be called from the same thread (Qt main
-// thread). Writes flush immediately so a crash between Add and the matching
-// Remove still leaves a recoverable entry.
+// Thread-safety: every public method is safe to call from any thread. The store
+// owns a mutex that covers each mutation as one transaction, because every
+// mutation is a load → mutate → save sequence and QSaveFile only makes the
+// single file replacement atomic, not the read-modify-write around it. Two
+// unsynchronized mutations from different threads would each load the same
+// snapshot and the second save would silently discard the first one's entry.
+//
+// This is not theoretical: Add/UpdateFinalized/Remove are called from the Qt main
+// thread (start, cancel unwind), the recording thread (finalize, stop) and the mux
+// worker + segment-remux threads (split boundaries, per-segment remux completion).
+//
+// The mutex is in-process only — it does not coordinate with a second ExoSnap
+// process. Writes still flush immediately so a crash between Add and the matching
+// Remove leaves a recoverable entry.
 class RecoveryManifestStore {
   public:
     RecoveryManifestStore();
     explicit RecoveryManifestStore(QString file_path);
 
     // Load entries from disk. Returns empty on missing or corrupt file.
+    // Never observes a partially-applied mutation.
     [[nodiscard]] QVector<RecoveryManifestEntry> Load() const;
 
-    // Persist the current in-memory list. Called internally after mutations.
+    // Persist the given list, replacing everything on disk. Exposed for the
+    // recovery scan, which rewrites the manifest wholesale.
     bool Save(const QVector<RecoveryManifestEntry>& entries) const;
 
-    // Add a new entry and immediately flush to disk.
+    // Add a new entry and immediately flush to disk. Returns false when the
+    // entry did NOT reach disk — the caller must not treat the recording as
+    // recovery-protected in that case.
     bool Add(const RecoveryManifestEntry& entry);
 
     // Mark an existing entry as finalized=true and flush.
@@ -52,6 +69,16 @@ class RecoveryManifestStore {
     [[nodiscard]] const QString& StorePath() const;
 
   private:
+    // Unlocked cores. Callers must already hold mutex_ — this is what lets a
+    // mutation hold the lock across its whole load → mutate → save sequence
+    // instead of taking it three separate times.
+    [[nodiscard]] QVector<RecoveryManifestEntry> LoadLocked() const;
+    bool SaveLocked(const QVector<RecoveryManifestEntry>& entries) const;
+
+    // Guards every read and every load → mutate → save transaction. Public methods
+    // take it exactly once and then work through the *Locked cores, so no path can
+    // re-enter it. Contention is a handful of writes per recording.
+    mutable std::mutex mutex_;
     QString file_path_;
     static constexpr int kSchemaVersion = 1;
 };

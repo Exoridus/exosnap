@@ -96,8 +96,13 @@ void RecordingErrorAdapter::sendReport() {
 void RecordingErrorAdapter::openLogs() {
     if (!active_)
         return;
-    emit openLogsRequested();
+    // Dismissed BEFORE the request, the same order RecoveryAdapter::
+    // continueSession() uses. The request navigates to Logs, and navigation is
+    // refused while a blocking surface is up (QCR-001) — this surface being the
+    // one in the way. Emitting first meant asking to leave a room whose door was
+    // still locked, and the answer would have been silence.
     dismiss();
+    emit openLogsRequested();
 }
 
 } // namespace exosnap::quick

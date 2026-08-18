@@ -26,6 +26,41 @@ QtObject {
     readonly property color errorInk: QuickThemeTokens.errorInk
     readonly property color errorSurface: QuickThemeTokens.errorSurface
     readonly property color success: QuickThemeTokens.success
+    readonly property color successInk: QuickThemeTokens.successInk
+    readonly property color warningInk: QuickThemeTokens.warningInk
+
+    // The three states as READABLE TEXT, as opposed to as an indicator.
+    //
+    // `warning`/`success`/`error` are tuned to carry a state as a ring, a dot
+    // or a tinted ground, where WCAG 1.4.11 asks 3:1. The same values as small
+    // text sit at 3.3–3.9:1 in Light, under the 4.5:1 of 1.4.3 — so a badge
+    // label, a severity glyph inside its own tinted card, or any sentence that
+    // states its own severity takes the rung below instead. In Dark the two
+    // rungs are the same colour; the split exists because Light cannot have
+    // one value that does both jobs.
+    readonly property color successText: QuickThemeTokens.successText
+    readonly property color warningText: QuickThemeTokens.warningText
+    readonly property color errorText: QuickThemeTokens.errorText
+
+    // ── Fixed-dark surfaces ──────────────────────────────────────────────────
+    //
+    // For a surface whose ground is near-black in BOTH appearances: the five
+    // capture-excluded overlays over the desktop, and the readouts over the
+    // live preview. See QuickThemeTokens.h — these resolve against the Dark
+    // appearance, so the application appearance never turns their ink dark.
+    readonly property color overlayInk: QuickThemeTokens.overlayInk
+    readonly property color overlayInkSecondary: QuickThemeTokens.overlayInkSecondary
+    readonly property color overlayInkMuted: QuickThemeTokens.overlayInkMuted
+    readonly property color overlayAccent: QuickThemeTokens.overlayAccent
+    readonly property color overlaySurface: QuickThemeTokens.overlaySurface
+    readonly property color overlaySurfaceRaised: QuickThemeTokens.overlaySurfaceRaised
+    readonly property color overlayLine: QuickThemeTokens.overlayLine
+    readonly property color overlayLineStrong: QuickThemeTokens.overlayLineStrong
+    readonly property color overlayInkDim: QuickThemeTokens.overlayInkDim
+    readonly property color overlaySuccess: QuickThemeTokens.overlaySuccess
+    readonly property color overlayWarning: QuickThemeTokens.overlayWarning
+    readonly property color overlayError: QuickThemeTokens.overlayError
+
     // The ground a modal/interruption surface lays over the application. Its
     // meaning is "de-emphasise what is behind this", which is why it is a token
     // and not `Qt.alpha(background, x)` at each call site: a translucent copy of
@@ -189,6 +224,92 @@ QtObject {
         if (active)
             return root.accent;
         return hovered ? root.text : root.textSecondary;
+    }
+
+    // ── Advisory tone ────────────────────────────────────────────────────────
+    //
+    // The vocabulary is notifications::AdvisoryStatusForType()'s:
+    // "success" | "caution" | "error" | "info". It was written out as a compare
+    // chain five times across three files — the desktop toast alone carried three
+    // of them, one per family below — and every copy fell through to the ACCENT,
+    // the selection colour, which the canon says is never a semantic state. A
+    // fifth status string would therefore have shipped as "selected" on every
+    // surface at once.
+    //
+    // Three families because a tone answers three different questions: what it
+    // marks (advisoryTone), what ink reads on a fill of it (advisoryToneInk), and
+    // what colour it is as CONTENT rather than as a mark (advisoryToneText — see
+    // ExoBadge for the rule).
+    //
+    // `info` and any unknown string share one branch on purpose: the fallback is
+    // the neutral informational treatment, not the accent.
+    function advisoryTone(tone: string): color {
+        return tone === "success" ? root.success
+             : tone === "caution" ? root.warning
+             : tone === "error" ? root.error
+             : root.accent;
+    }
+
+    function advisoryToneInk(tone: string): color {
+        return tone === "success" ? root.successInk
+             : tone === "caution" ? root.warningInk
+             : tone === "error" ? root.errorInk
+             : root.accentInk;
+    }
+
+    function advisoryToneText(tone: string): color {
+        return tone === "success" ? root.successText
+             : tone === "caution" ? root.warningText
+             : tone === "error" ? root.errorText
+             : root.accent;
+    }
+
+    // The same three helpers for a FIXED-DARK ground. A capture-excluded surface
+    // may not resolve a tone against the application appearance -- in Light that
+    // puts a light advisory ground and dark ink on a near-black card. These pick
+    // the Dark appearance's semantics instead, which is the same rule the
+    // overlay* colour tokens follow, and the ink deliberately stays the shared
+    // on-semantic ink: it is chosen for contrast against the semantic colour, not
+    // against the page behind it.
+    function overlayAdvisoryTone(tone: string): color {
+        return tone === "success" ? root.overlaySuccess
+             : tone === "caution" ? root.overlayWarning
+             : tone === "error" ? root.overlayError
+             : root.overlayAccent;
+    }
+
+    function overlayAdvisoryToneInk(tone: string): color {
+        return tone === "success" ? root.successInk
+             : tone === "caution" ? root.warningInk
+             : tone === "error" ? root.errorInk
+             : root.accentInk;
+    }
+
+    function overlayAdvisoryToneText(tone: string): color {
+        return tone === "success" ? root.overlaySuccess
+             : tone === "caution" ? root.overlayWarning
+             : tone === "error" ? root.overlayError
+             : root.overlayAccent;
+    }
+
+    // QCR-513. The same tone, said without colour: a severity carried only by a
+    // coloured dot is not carried at all for a user who cannot separate those
+    // hues, and is carried by nothing whatsoever for a screen reader.
+    //
+    // Spoken severity. Prefixed to an accessible name, so it reads as
+    // "Warning. Storage running low." — the same shape ExoNotice uses.
+    //
+    // The matching GLYPH is deliberately not here. ExoGlyph is not part of every
+    // QML module that consumes this singleton (the Edit-timeline test module
+    // takes ExoTheme without it), so naming it here is an unqualified access in
+    // those modules — a warning against a file that never changed. The glyph
+    // mapping stays with the surface that draws it, exactly as ExoNotice and
+    // ExoStatusTile already keep theirs.
+    function advisoryToneName(tone: string): string {
+        return tone === "success" ? qsTr("Success")
+             : tone === "caution" ? qsTr("Warning")
+             : tone === "error" ? qsTr("Error")
+             : qsTr("Information");
     }
 
     // ── Responsive width classes ─────────────────────────────────────────────

@@ -30,6 +30,19 @@ enum class NotificationType : uint8_t {
     CaptureActionFailed, // a Record-page quick action (frame capture, split request) was rejected
                          // or failed; success is silent (the resulting file/segment is its own
                          // confirmation), only failures surface here.
+    RecoveryProtectionUnavailable, // a recovery-manifest write did not reach disk, so this recording has
+                                   // no crash-recovery entry. The recording itself is unaffected — same
+                                   // class as a failed settings write: reported, never silent.
+    SettingsLoadFailed,            // settings.ini exists but could not be read, so this session runs on
+                                   // built-in defaults. Distinct from SettingsRepaired (which recovered
+                                   // what it could) and from SettingsSaveFailed (a write that was lost):
+                                   // nothing has been written yet, and nothing will be until the user
+                                   // deliberately changes a setting.
+    WindowCaptureStalled,          // an active WINDOW capture stopped producing frames mid-recording
+                                   // (QCR-804). The recording keeps running and the file keeps growing —
+                                   // the CFR pacer holds the last frame — so this is a standing caution,
+                                   // never a failure. Cleared the moment frames resume, and when the
+                                   // recording ends.
 };
 
 // ---------------------------------------------------------------------------
@@ -116,6 +129,15 @@ struct NotificationEvent {
     case NotificationType::RecoveryAvailable:
     case NotificationType::HotkeyConflict:   // a bound hotkey is dead
     case NotificationType::SettingsRepaired: // the store needed repairing on load
+    // The recording is fine; only the crash-recovery safety net is missing. Coral
+    // would claim the recording failed, which it did not.
+    case NotificationType::RecoveryProtectionUnavailable:
+    // Nothing was lost: the unreadable file is still on disk and is deliberately
+    // not being written over. Coral would claim a destroyed configuration.
+    case NotificationType::SettingsLoadFailed:
+    // The recording is still running and still being written. Coral would claim
+    // it failed, which it did not — and the stall may resolve by itself.
+    case NotificationType::WindowCaptureStalled:
         return QStringLiteral("caution");
 
     case NotificationType::UpdateAvailable:
@@ -145,6 +167,42 @@ struct NotificationEvent {
                                      : QStringLiteral("%1 audio sources lost their device. Recording continues — "
                                                       "ExoSnap keeps retrying the connections.")
                                            .arg(degraded_count);
+    event.action = NotificationAction::OpenDiagnostics;
+    return event;
+}
+
+// ---------------------------------------------------------------------------
+// MakeWindowCaptureStalledEvent
+// ---------------------------------------------------------------------------
+// Pure resolver: the standing mid-recording capture-stall notice (QCR-804).
+// Same division of labour as MakeAudioSourceDegradedEvent — the composition root
+// decides WHEN, this decides WHAT IS SAID — so the wording is unit-testable
+// without a recording.
+//
+// Truthfulness rules baked into the text, in order of importance:
+//   * "appears to have stalled" / "may be frozen": what ExoSnap measured is the
+//     absence of frame progress. It has NOT proven the picture is frozen, and it
+//     has NOT proven a cause.
+//   * The recording is explicitly stated to be still running. This is not a
+//     failure report; the file keeps growing and Stop/Pause still work.
+//   * The exclusive-fullscreen sentence appears ONLY when a fullscreen signal
+//     (QUNS or PresentMon) actually corroborated it, and even then it is phrased
+//     as a conditional the user can check — never "exclusive fullscreen detected".
+//
+// seconds_without_frames is the measured starve duration, rounded for display.
+[[nodiscard]] inline NotificationEvent MakeWindowCaptureStalledEvent(double seconds_without_frames,
+                                                                     bool exclusive_fullscreen_hint) {
+    NotificationEvent event;
+    event.type = NotificationType::WindowCaptureStalled;
+    event.title = QStringLiteral("Window capture appears to have stalled");
+    const int seconds = static_cast<int>(seconds_without_frames + 0.5);
+    event.body = QStringLiteral("No new frame has arrived from the captured window for %1 seconds. The recording is "
+                                "still running, but the captured window may be frozen.")
+                     .arg(seconds);
+    if (exclusive_fullscreen_hint) {
+        event.body += QStringLiteral(" If the application switched to exclusive fullscreen, set it back to windowed "
+                                     "or borderless mode — or stop the recording.");
+    }
     event.action = NotificationAction::OpenDiagnostics;
     return event;
 }

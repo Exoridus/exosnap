@@ -152,11 +152,17 @@ void LogEntryModel::onLogCleared() {
 LogFilterProxyModel::LogFilterProxyModel(QObject* parent) : QSortFilterProxyModel(parent) {
 }
 
+// Qt 6.11 deprecates invalidateRowsFilter() in favour of a begin/end pair, and the
+// pair is not a rename: beginFilterChange() has to bracket the mutation, because it
+// is what lets the proxy keep the persistent indexes across the re-filter. Only the
+// rows direction is announced -- neither filter here touches columns, and claiming
+// Both would invalidate a column mapping that never changed.
 void LogFilterProxyModel::setSeverityFilter(diagnostics::LogSeverityFilter filter) {
     if (filter_ == filter)
         return;
+    beginFilterChange();
     filter_ = filter;
-    invalidateRowsFilter();
+    endFilterChange(QSortFilterProxyModel::Direction::Rows);
 }
 
 diagnostics::LogSeverityFilter LogFilterProxyModel::severityFilter() const noexcept {
@@ -166,8 +172,9 @@ diagnostics::LogSeverityFilter LogFilterProxyModel::severityFilter() const noexc
 void LogFilterProxyModel::setSearchQuery(const QString& query) {
     if (search_query_ == query)
         return;
+    beginFilterChange();
     search_query_ = query;
-    invalidateRowsFilter();
+    endFilterChange(QSortFilterProxyModel::Direction::Rows);
 }
 
 const QString& LogFilterProxyModel::searchQuery() const noexcept {

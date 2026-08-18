@@ -5,6 +5,8 @@
 
 #include <gtest/gtest.h>
 
+#include <string>
+
 namespace exosnap::quick {
 namespace {
 
@@ -56,6 +58,118 @@ TEST(RecordViewModelAdapterTest, SynchronizeEmitsOnlyForChangedProperties) {
     EXPECT_EQ(availability_changes, 1);
 }
 
+// QCR-605. `changed()` is the NOTIFY of 49 bound properties and synchronize()
+// used to fire it unconditionally — at ~8 Hz through a recording, 10 Hz through a
+// countdown, and again on every preview frameReady.
+TEST(RecordViewModelAdapterTest, ASyncThatMovesNothingDoesNotInvalidateTheBroadSignal) {
+    RecordViewModel source;
+    source.state_text = L"Ready";
+    RecordViewModelAdapter adapter(&source);
+
+    int broad_changes = 0;
+    QObject::connect(&adapter, &RecordViewModelAdapter::changed, [&broad_changes]() { ++broad_changes; });
+
+    for (int i = 0; i < 20; ++i)
+        adapter.synchronize();
+
+    EXPECT_EQ(broad_changes, 0);
+}
+
+// The counters the stats callback moves — frames, bytes, packets — reach the UI
+// through their own narrow signals. They must not drag the broad one with them.
+TEST(RecordViewModelAdapterTest, LiveStatsAloneDoNotInvalidateTheBroadSignal) {
+    RecordViewModel source;
+    source.SetState(UiRecordingState::Recording);
+    source.live_stats_available = true;
+    source.elapsed_text = L"0:01";
+    RecordViewModelAdapter adapter(&source);
+
+    int broad_changes = 0;
+    QObject::connect(&adapter, &RecordViewModelAdapter::changed, [&broad_changes]() { ++broad_changes; });
+
+    for (int tick = 2; tick < 12; ++tick) {
+        source.elapsed_text = std::wstring(L"0:0") + static_cast<wchar_t>(L'0' + (tick % 10));
+        source.frames_captured += 60;
+        source.video_bytes += 1'000'000;
+        source.output_file_bytes += 1'000'000;
+        adapter.synchronize();
+    }
+
+    EXPECT_EQ(broad_changes, 0);
+}
+
+TEST(RecordViewModelAdapterTest, AStateChangeStillInvalidatesTheBroadSignalExactlyOnce) {
+    RecordViewModel source;
+    source.SetState(UiRecordingState::Ready);
+    RecordViewModelAdapter adapter(&source);
+
+    int broad_changes = 0;
+    QObject::connect(&adapter, &RecordViewModelAdapter::changed, [&broad_changes]() { ++broad_changes; });
+
+    source.SetState(UiRecordingState::Recording);
+    adapter.synchronize();
+    EXPECT_EQ(broad_changes, 1);
+    EXPECT_TRUE(adapter.recording());
+
+    // A second sync with the same state says nothing new.
+    adapter.synchronize();
+    EXPECT_EQ(broad_changes, 1);
+}
+
+// The three option lists are the expensive half: a QVariantMap of three QStrings
+// per monitor and per eligible window, each label parsed out of the target.
+TEST(RecordViewModelAdapterTest, TargetOptionsAreRebuiltOnlyWhenTheTargetVectorIsReplaced) {
+    RecordViewModel source;
+    source.targets = {
+        {recorder_core::CaptureTarget::Kind::Monitor, 1, "Display 1: 2560x1440 at (0, 0)"},
+    };
+    source.selected_target_index = 0;
+    RecordViewModelAdapter adapter(&source);
+    ASSERT_EQ(adapter.targetOptions().size(), 1);
+
+    int option_changes = 0;
+    QObject::connect(&adapter, &RecordViewModelAdapter::targetOptionsChanged,
+                     [&option_changes]() { ++option_changes; });
+
+    for (int i = 0; i < 20; ++i)
+        adapter.synchronize();
+    EXPECT_EQ(option_changes, 0);
+
+    // A rescan that replaces the vector bumps the stamp; the lists are rebuilt
+    // and, because they differ, republished.
+    source.targets.push_back({recorder_core::CaptureTarget::Kind::Window, 2, "Editor — project.qml"});
+    ++source.targets_revision;
+    adapter.synchronize();
+    EXPECT_EQ(option_changes, 1);
+    EXPECT_EQ(adapter.targetOptions().size(), 2);
+    EXPECT_EQ(adapter.windowTargetOptions().size(), 1);
+
+    // A rescan that finds the identical set still must not republish: that signal
+    // is what makes the source picker rebuild its list.
+    ++source.targets_revision;
+    adapter.synchronize();
+    EXPECT_EQ(option_changes, 1);
+}
+
+TEST(RecordViewModelAdapterTest, ANewSourceRebuildsTheTargetOptionsRegardlessOfItsStamp) {
+    RecordViewModel first;
+    first.targets = {{recorder_core::CaptureTarget::Kind::Monitor, 1, "Display 1: 2560x1440 at (0, 0)"}};
+    RecordViewModelAdapter adapter(&first);
+    ASSERT_EQ(adapter.targetOptions().size(), 1);
+
+    // Same revision number (both start at 0), different view model.
+    RecordViewModel second;
+    second.targets = {
+        {recorder_core::CaptureTarget::Kind::Monitor, 7, "Display 2: 1920x1080 at (2560, 0)"},
+        {recorder_core::CaptureTarget::Kind::Window, 9, "Terminal"},
+    };
+    adapter.setSource(&second);
+
+    EXPECT_EQ(adapter.targetOptions().size(), 2);
+    EXPECT_EQ(adapter.displayTargetOptions().size(), 1);
+    EXPECT_EQ(adapter.windowTargetOptions().size(), 1);
+}
+
 TEST(RecordViewModelAdapterTest, DetachingSourceClearsTheBoundarySnapshot) {
     RecordViewModel source;
     source.state_text = L"Recording";
@@ -70,6 +184,45 @@ TEST(RecordViewModelAdapterTest, DetachingSourceClearsTheBoundarySnapshot) {
     EXPECT_EQ(adapter.elapsedText(), QStringLiteral("00:00:00"));
     EXPECT_TRUE(adapter.outputSizeText().isEmpty());
     EXPECT_FALSE(adapter.liveStatsAvailable());
+}
+
+// QCR-V03. The switch behind this is exhaustive with no `default:`, so a new
+// state cannot silently inherit the permissive answer — MSVC's C4062 refuses the
+// build first. This pins the full matrix so the exhaustive rewrite kept every
+// existing answer, and so a future enumerator has to be entered here on purpose.
+TEST(RecordViewModelAdapterTest, SourceSelectionIsClosedForEveryInFlightState) {
+    RecordViewModel source;
+    source.targets.push_back({recorder_core::CaptureTarget::Kind::Monitor, 1, "Display 1: 1920x1080 at (0, 0)"});
+    source.selected_target_index = 0;
+    RecordViewModelAdapter adapter(&source);
+
+    // The capture is committed, or an overlay owns the picking.
+    for (UiRecordingState state :
+         {UiRecordingState::Countdown, UiRecordingState::Preparing, UiRecordingState::RegionSelecting,
+          UiRecordingState::Recording, UiRecordingState::Paused, UiRecordingState::ArmedFromRecovery,
+          UiRecordingState::Stopping, UiRecordingState::Saving}) {
+        source.SetState(state);
+        adapter.synchronize();
+        EXPECT_FALSE(adapter.canSelectSource()) << "state index " << static_cast<int>(state);
+    }
+
+    // Nothing in flight: selectable, because a target exists.
+    for (UiRecordingState state : {UiRecordingState::LoadingCapabilities, UiRecordingState::Ready,
+                                   UiRecordingState::Blocked, UiRecordingState::Completed, UiRecordingState::Failed}) {
+        source.SetState(state);
+        adapter.synchronize();
+        EXPECT_TRUE(adapter.canSelectSource()) << "state index " << static_cast<int>(state);
+    }
+
+    // …and with nothing to pick, no state is selectable.
+    source.targets.clear();
+    source.selected_target_index = -1;
+    for (UiRecordingState state : {UiRecordingState::LoadingCapabilities, UiRecordingState::Ready,
+                                   UiRecordingState::Blocked, UiRecordingState::Completed, UiRecordingState::Failed}) {
+        source.SetState(state);
+        adapter.synchronize();
+        EXPECT_FALSE(adapter.canSelectSource()) << "state index " << static_cast<int>(state);
+    }
 }
 
 TEST(RecordViewModelAdapterTest, MapsRecordingStateActionsAndTone) {

@@ -62,6 +62,7 @@ ExoCard {
 
         ExoSegmentedControl {
             options: root.settings.recordingOverlayPresetOptions.map(option => option.label)
+            Accessible.name: qsTr("Recording overlay content")
             currentIndex: root.settings.recordingOverlayPresetOptions
                               .findIndex(option => option.value === root.settings.recordingOverlayPreset)
             onSelected: index => root.settings.recordingOverlayPreset =
@@ -118,6 +119,7 @@ ExoCard {
 
         ExoSegmentedControl {
             options: root.settings.diagnosticsOverlayPresetOptions.map(option => option.label)
+            Accessible.name: qsTr("Diagnostics overlay content")
             currentIndex: root.settings.diagnosticsOverlayPresetOptions
                               .findIndex(option => option.value === root.settings.diagnosticsOverlayPreset)
             onSelected: index => root.settings.diagnosticsOverlayPreset =

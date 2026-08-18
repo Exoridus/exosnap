@@ -71,17 +71,6 @@ QVariantMap SelfTestRowToMap(const diagnostics::SelfTestRow& row) {
     return map;
 }
 
-QVariantMap StageToMap(const diagnostics::PipelineStage& stage) {
-    QVariantMap map;
-    map.insert(QStringLiteral("key"), Text(stage.key));
-    map.insert(QStringLiteral("title"), Text(stage.title));
-    map.insert(QStringLiteral("lane"), Text(stage.lane));
-    map.insert(QStringLiteral("value"), Text(stage.value));
-    map.insert(QStringLiteral("tip"), Text(stage.tip));
-    map.insert(QStringLiteral("status"), Key(diagnostics::StageStatusKey(stage.status)));
-    return map;
-}
-
 diagnostics::DiagnosticsController::DisplayFacts PrimaryDisplayFacts() {
     diagnostics::DiagnosticsController::DisplayFacts facts;
     if (QScreen* screen = QGuiApplication::primaryScreen()) {
@@ -197,6 +186,37 @@ const QVariantList& DiagnosticsAdapter::tiles() const noexcept {
     return tiles_;
 }
 
+const QVariantList& DiagnosticsAdapter::liveTiles() const noexcept {
+    return live_tiles_;
+}
+
+bool DiagnosticsAdapter::liveTilesVisible() const noexcept {
+    return !live_tiles_.isEmpty();
+}
+
+void DiagnosticsAdapter::refreshLiveTiles() {
+    std::vector<diagnostics::LiveTile> next = diagnostics::BuildLiveTiles(controller_.liveSnapshot());
+    if (next == live_tile_values_)
+        return;
+
+    live_tile_values_ = std::move(next);
+    live_tiles_.clear();
+    live_tiles_.reserve(static_cast<qsizetype>(live_tile_values_.size()));
+    for (const diagnostics::LiveTile& tile : live_tile_values_) {
+        QVariantMap entry;
+        entry.insert(QStringLiteral("key"), QString::fromStdString(tile.key));
+        entry.insert(QStringLiteral("title"), QString::fromStdString(tile.title));
+        entry.insert(QStringLiteral("value"), QString::fromStdString(tile.value));
+        entry.insert(QStringLiteral("sub"), QString::fromStdString(tile.sub));
+        entry.insert(QStringLiteral("detail"), QString::fromStdString(tile.detail));
+        entry.insert(QStringLiteral("tone"),
+                     QString::fromUtf8(diagnostics::TileToneKey(tile.tone).data(),
+                                       static_cast<qsizetype>(diagnostics::TileToneKey(tile.tone).size())));
+        live_tiles_.append(entry);
+    }
+    emit liveTilesChanged();
+}
+
 const QVariantList& DiagnosticsAdapter::tips() const noexcept {
     return tips_;
 }
@@ -221,8 +241,8 @@ const QString& DiagnosticsAdapter::selfTestStatus() const noexcept {
     return self_test_status_;
 }
 
-const QVariantList& DiagnosticsAdapter::pipelineStages() const noexcept {
-    return pipeline_stages_;
+QAbstractListModel* DiagnosticsAdapter::pipelineStages() noexcept {
+    return &pipeline_stage_model_;
 }
 
 bool DiagnosticsAdapter::pipelineLive() const noexcept {
@@ -354,6 +374,11 @@ void DiagnosticsAdapter::setCaptureTargetHdrActive(bool active) {
     refreshSnapshot();
 }
 
+void DiagnosticsAdapter::refreshDisplayFacts() {
+    controller_.SetDisplayFacts(PrimaryDisplayFacts());
+    refreshSnapshot();
+}
+
 void DiagnosticsAdapter::setElevated(bool elevated) {
     controller_.SetElevated(elevated);
     emit environmentChanged();
@@ -369,8 +394,9 @@ void DiagnosticsAdapter::setHasLastRecording(bool has_last_recording) {
     refreshSnapshot();
 }
 
-void DiagnosticsAdapter::setDpcLatency(diagnostics::DpcLatencyReading reading) {
-    controller_.SetDpcLatency(std::move(reading));
+void DiagnosticsAdapter::setDpcLatencyProvider(diagnostics::IDpcLatencyProvider* provider) {
+    dpc_provider_ = provider;
+    refreshSnapshot();
 }
 
 void DiagnosticsAdapter::setPresentSample(std::optional<diagnostics::PresentSample> sample) {
@@ -383,6 +409,11 @@ void DiagnosticsAdapter::applyLiveDiagnostics(const recorder_core::RecordingDiag
     if (!controller_.liveRecording()) {
         live_throttle_.Reset();
         refreshPipeline();
+        // Not throttled on this edge: leaving the recording lifecycle is the one
+        // transition where the tiles must go away immediately rather than at the
+        // next allowed tick, or the page keeps showing a live summary of a
+        // recording that has stopped.
+        refreshLiveTiles();
         updateLiveProbeTimer();
         return;
     }
@@ -394,6 +425,7 @@ void DiagnosticsAdapter::applyLiveDiagnostics(const recorder_core::RecordingDiag
         return;
 
     refreshPipeline();
+    refreshLiveTiles();
     if (controller_.dataReady())
         refreshSnapshot();
     updateLiveProbeTimer();
@@ -405,6 +437,10 @@ void DiagnosticsAdapter::requestSettingsNavigation() {
 
 void DiagnosticsAdapter::applyProbeResultForTest(diagnostics::DiagnosticsController::ProbeResult probe) {
     applyProbe(std::move(probe), true);
+}
+
+const diagnostics::DiagnosticsController& DiagnosticsAdapter::controller() const noexcept {
+    return controller_;
 }
 
 diagnostics::DiagnosticsController& DiagnosticsAdapter::controllerForTest() noexcept {
@@ -465,6 +501,20 @@ void DiagnosticsAdapter::applyProbe(diagnostics::DiagnosticsController::ProbeRes
 }
 
 void DiagnosticsAdapter::refreshSnapshot() {
+    // ADR 0033. Read the DPC/ISR producer HERE, where the recommendation engine is about
+    // to run, and hand the controller nothing at all unless the kernel trace is actually
+    // measuring. An unavailable reading is not a zero one: with no measurement there is
+    // no recommendation to make, and the Diagnostics page says nothing about DPC rather
+    // than reporting a peak nobody is updating any more. Read() takes a short lock and
+    // never blocks on the kernel, so this stays a GUI-thread call.
+    if (dpc_provider_ != nullptr) {
+        const diagnostics::DpcLatencyReading reading = dpc_provider_->Read();
+        controller_.SetDpcLatency(reading.available ? std::optional<diagnostics::DpcLatencyReading>(reading)
+                                                    : std::nullopt);
+    } else {
+        controller_.SetDpcLatency(std::nullopt);
+    }
+
     const diagnostics::DiagnosticsSnapshot snapshot = controller_.Evaluate();
 
     verdict_state_ = snapshot.verdict.state;
@@ -497,13 +547,14 @@ void DiagnosticsAdapter::refreshSnapshot() {
 }
 
 void DiagnosticsAdapter::refreshPipeline() {
-    const std::vector<diagnostics::PipelineStage> stages = controller_.BuildPipelineStages();
-    pipeline_live_ = controller_.liveRecording();
-    pipeline_stages_.clear();
-    pipeline_stages_.reserve(static_cast<qsizetype>(stages.size()));
-    for (const auto& stage : stages)
-        pipeline_stages_.append(StageToMap(stage));
-    emit pipelineChanged();
+    const bool live = controller_.liveRecording();
+    const bool live_changed = pipeline_live_ != live;
+    pipeline_live_ = live;
+    // The model decides for itself whether anything moved; `pipelineChanged` now
+    // carries only `pipelineLive`, so it is emitted only when that boolean does.
+    pipeline_stage_model_.setStages(controller_.BuildPipelineStages());
+    if (live_changed)
+        emit pipelineChanged();
 }
 
 void DiagnosticsAdapter::refreshSelfTest() {

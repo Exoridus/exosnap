@@ -15,9 +15,12 @@ Item {
     implicitWidth: ExoTheme.controlHeight
     implicitHeight: ExoTheme.controlHeight
 
-    readonly property color dotColor: root.notifications.worstUnreadTone === "error" ? ExoTheme.error
-                                     : root.notifications.worstUnreadTone === "caution" ? ExoTheme.warning
-                                     : ExoTheme.accent
+    // Three steps, not four: an unread SUCCESS is not urgent, so the bell paints
+    // it the same as info rather than green (product-spec §9 — the dot carries
+    // urgency). Folding it to "info" here keeps the one-step-down decision at the
+    // bell and leaves the colour table itself in ExoTheme, unduplicated.
+    readonly property color dotColor: ExoTheme.advisoryTone(
+        root.notifications.worstUnreadTone === "success" ? "info" : root.notifications.worstUnreadTone)
 
     Accessible.role: Accessible.Button
     Accessible.name: root.notifications.unreadCount > 0
@@ -25,6 +28,17 @@ Item {
                      : qsTr("Notifications")
     Accessible.onPressAction: root.notifications.toggleHub()
     activeFocusOnTab: true
+    // QCR-503. `activeFocusOnTab` put the bell in the tab order; nothing acted
+    // on a key once it was there, so a keyboard user could reach the hub's
+    // opener and not open it. Space, and only Space: this is a plain Item with
+    // a hand-written handler rather than an AbstractButton, so it is the one
+    // place in the frontend that could quietly grow a second activation key —
+    // and the product's contract is that a focused control answers to Space
+    // (product-spec §10.1).
+    Keys.onSpacePressed: event => {
+        root.notifications.toggleHub();
+        event.accepted = true;
+    }
 
     ToolTip.text: qsTr("Notifications")
     ToolTip.visible: hoverHandler.hovered
@@ -34,6 +48,8 @@ Item {
         anchors.fill: parent
         radius: ExoTheme.radiusSm
         color: hoverHandler.hovered || root.notifications.hubOpen ? ExoTheme.surfaceHover : "transparent"
+        border.width: root.activeFocus ? ExoTheme.focusRingWidth : 0
+        border.color: ExoTheme.text
     }
 
     // The bell, drawn as one continuous outline.

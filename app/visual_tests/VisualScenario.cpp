@@ -1,5 +1,7 @@
 #include "VisualScenario.h"
 
+#include "RecordVisualStateNames.h"
+
 #include <recorder_core/webcam_placement.h>
 
 #include <algorithm>
@@ -2032,18 +2034,23 @@ const QVector<VisualScenario> kDevicePageScenarios = {
 };
 
 // Standing audio-degraded notification (AUDIO-DEGRADED-NOTIFY-R1 / ADR 0046
-// follow-up). Drives the SAME production Enqueue() path a live recording uses
-// (MainWindow::applyVisualScenario), so the visual-test JSON manifest reports the
-// real toast state. The toast itself is a separate top-level window outside the
-// pixel-screenshot harness — like the countdown/recording overlays, it is not
-// composited into MainWindow::grab(); its rendering is covered by
-// NotificationToastWindow's own widget tests (test_notification_toast.cpp).
+// follow-up). Drives the SAME production Enqueue() path a live recording uses,
+// so the visual-test JSON manifest reports the real notification state. The
+// toast itself is a separate top-level window outside the pixel-screenshot
+// harness — like the countdown/recording overlays, it is not composited into
+// the window grab; what a capture CAN show is the bell's unread state in the
+// title band.
+//
+// `record_visual_state` is what actually reproduces it: the Quick frontend
+// switches on the harness string, and this scenario spent a release with no
+// branch to switch to.
 const QVector<VisualScenario> kAudioDegradedNotificationScenarios = {
     {.id = QStringLiteral("record-recording-audio-degraded"),
      .title = QStringLiteral("Record / Recording / Audio source degraded"),
      .page = VisualPage::Record,
      .record_state = VisualRecordState::Recording,
-     .audio_degraded_notification_count = 1},
+     .audio_degraded_notification_count = 1,
+     .record_visual_state = QString::fromLatin1(visual::record_state::kRecordingAudioDegraded)},
 };
 
 // Notification hub open (PS-PHASE-B follow-up). The live hub is a top-level
