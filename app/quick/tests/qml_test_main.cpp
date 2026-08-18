@@ -6,6 +6,7 @@
 #include <QQmlEngine>
 #include <QQuickStyle>
 #include <QString>
+#include <QStringList>
 #include <QVector>
 #include <QtQuickTest>
 
@@ -56,6 +57,38 @@ class WhatsNewTestDriver final : public QObject {
     // A channel with nothing to report, or a payload that carried no notes.
     Q_INVOKABLE void presentNothing() {
         adapter_.present({}, /*post_update_mode=*/true, QString());
+    }
+
+    // A release body as an author actually writes one: a screenshot, a reference
+    // image, an inline <img>, and a plain link that must survive all three.
+    Q_INVOKABLE void presentWithImages() {
+        // Line by line rather than one raw literal: moc stops parsing this file on
+        // an R"..." here and then never sees WhatsNewTestDriver at all, which shows
+        // up as three unresolved metaObject symbols and says nothing about why.
+        const QString body =
+            QStringList{QStringLiteral("### Fixed"),
+                        QString(),
+                        QStringLiteral("![the new toast](https://example.invalid/toast.png)"),
+                        QString(),
+                        QStringLiteral("![reference shot][shot]"),
+                        QString(),
+                        QStringLiteral("<img src=\"https://example.invalid/inline.png\" alt=\"inline\">"),
+                        QString(),
+                        QStringLiteral("See [the notes](https://example.invalid/notes).")}
+                .join(QLatin1Char('\n'));
+
+        QVector<exosnap::WhatsNewNote> out;
+        out.push_back({QStringLiteral("0.9.1"), body, QStringLiteral("https://example.invalid/releases/tag/v0.9.1")});
+        adapter_.present(out, /*post_update_mode=*/false, QString());
+    }
+
+    // What the overlay is actually handed, so the assertion is about the string
+    // the Text item receives rather than about pixels.
+    Q_INVOKABLE QString firstNoteBody() const {
+        const QVariantList notes = adapter_.notes();
+        if (notes.isEmpty())
+            return {};
+        return notes.first().toMap().value(QStringLiteral("body")).toString();
     }
 
     // Back to the state a fresh launch is in: closed, notes shown after updates.

@@ -3,6 +3,8 @@
 #include "diagnostics/AppLog.h"
 
 #include <QDesktopServices>
+#include <QRegularExpression>
+#include <QStringView>
 #include <QUrl>
 #include <QVariantMap>
 
@@ -13,6 +15,52 @@ namespace {
 // address models::AboutInfo carries; duplicated rather than reached for because
 // nothing else in this class knows about About.
 constexpr const char* kReleasesUrlFallback = "https://github.com/Exoridus/exosnap/releases";
+
+// Release bodies are third-party text: GitHub renders whatever the author wrote,
+// and authors put screenshots in release notes. Qt's Text loads the images a
+// MarkdownText or RichText document references, over the network, the moment the
+// document is set -- so simply showing the body would make opening this overlay
+// fetch remote URLs, from a product whose stated rule is that every URL it opens
+// goes through one place. It would also be the only network request in the app
+// that no setting governs.
+//
+// The alt text is kept rather than the whole reference dropped: a note that reads
+// "see below" above a removed screenshot is worse than one that says what the
+// screenshot was. Links are untouched -- they are inert until clicked, and the
+// click already goes through openUrl().
+QString WithoutRemoteImages(const QString& markdown) {
+    // Raw string literals, so the patterns read as the regexes they are. Written
+    // with C escapes they need a doubled backslash for every bracket, and `\b`
+    // then compiles cleanly as a BACKSPACE rather than as a word boundary --
+    // silently matching nothing.
+    //
+    // `![alt](url)` and `![alt][ref]`, alt captured.
+    static const QRegularExpression kImage(QStringLiteral(R"(!\[([^\]]*)\](?:\([^)]*\)|\[[^\]]*\]))"));
+    // Markdown permits inline HTML, and <img> is the same request by another name.
+    static const QRegularExpression kHtmlImage(QStringLiteral(R"(<img\b[^>]*>)"),
+                                               QRegularExpression::CaseInsensitiveOption);
+
+    // Rebuilt from the matches rather than replaced with a `\1` backreference: the
+    // backreference form produced an EMPTY alt text, which is precisely the result
+    // this function exists to avoid -- a note reading "see below" above a
+    // screenshot that is no longer there.
+    QString out;
+    out.reserve(markdown.size());
+    qsizetype cursor = 0;
+    QRegularExpressionMatchIterator it = kImage.globalMatch(markdown);
+    while (it.hasNext()) {
+        const QRegularExpressionMatch match = it.next();
+        out.append(QStringView{markdown}.sliced(cursor, match.capturedStart() - cursor));
+        out.append(match.captured(1));
+        cursor = match.capturedEnd();
+    }
+    out.append(QStringView{markdown}.sliced(cursor));
+
+    // No alt text to keep for the HTML form: there it is an attribute, not the
+    // element's content.
+    out.remove(kHtmlImage);
+    return out;
+}
 
 } // namespace
 
@@ -65,7 +113,7 @@ void WhatsNewAdapter::present(const QVector<WhatsNewNote>& notes, bool post_upda
     for (const WhatsNewNote& note : notes) {
         QVariantMap row;
         row[QStringLiteral("version")] = note.version;
-        row[QStringLiteral("body")] = note.body;
+        row[QStringLiteral("body")] = WithoutRemoteImages(note.body);
         row[QStringLiteral("url")] = note.html_url;
         notes_.append(row);
     }

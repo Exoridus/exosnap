@@ -305,4 +305,27 @@ TestCase {
         compare(shell.Window.activeFocusItem, other,
                 "Tab did not reach the next page control after the overlay closed");
     }
+
+    // A release body is third-party text, and Qt's Text fetches the images a
+    // Markdown document references as soon as the document is set. Without this,
+    // opening the overlay makes network requests for whatever a release author put
+    // in their notes -- past the openUrl() chokepoint every other URL in this
+    // product goes through, and governed by no setting.
+    function test_remote_images_never_reach_the_document() {
+        whatsNewDriver.reset();
+        whatsNewDriver.presentWithImages();
+        const body = whatsNewDriver.firstNoteBody();
+
+        verify(body.indexOf("toast.png") === -1, "an inline image URL reached the document");
+        verify(body.indexOf("inline.png") === -1, "an HTML <img> reached the document");
+        verify(body.indexOf("![") === -1, "an image reference survived");
+        // The alt text stays. A note reading "see below" above a screenshot that is
+        // no longer there is worse than one that says what the screenshot showed.
+        verify(body.indexOf("the new toast") !== -1, "the alt text was dropped with the image");
+        verify(body.indexOf("reference shot") !== -1, "the reference alt text was dropped");
+        // Links are inert until clicked, and the click already goes through openUrl().
+        verify(body.indexOf("https://example.invalid/notes") !== -1, "a plain link was stripped");
+
+        whatsNewDriver.reset();
+    }
 }
