@@ -216,32 +216,13 @@ jobs:
           echo "SOURCE_DATE_EPOCH=$epoch" >> "$GITHUB_ENV"
           echo "SOURCE_DATE_EPOCH=$epoch (commit $GITHUB_SHA)"
 
-      # qtdeclarative + qtshadertools are MANDATORY for the shipped artifact: the
-      # ExoSnap application (app/quick/ExoSnap/Quick, target `exosnap`) is a Qt
-      # Quick program and links Qt6::Qml/Quick/QuickControls2/QuickDialogs2/
-      # QuickTest, all shipped in the single qtdeclarative archive; qtshadertools
-      # is a separate archive Qt6QuickConfig.cmake hard-requires to be installed
-      # (qmlcachegen/shader compilation) even before this project's own
-      # find_package(... COMPONENTS Quick) runs. Dropping either archive does not
-      # produce a Widgets fallback — it produces no application at all.
+      # 'quick' is MANDATORY for the shipped artifact: the ExoSnap application is a
+      # Qt Quick program (ADR 0064), and the 'base' profile does not produce a
+      # Widgets fallback -- it produces no application at all.
       - name: Install Qt 6
-        uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
+        uses: ./.github/actions/setup-qt
         with:
-          version: '6.11.1'
-          arch: 'win64_msvc2022_64'
-          archives: 'qtbase qtsvg qtdeclarative'
-          # qtshadertools stopped being an archive of the base package in Qt 6.11 and is
-          # a MODULE now. Left under `archives:` it installs nothing and says nothing,
-          # and Qt6QuickConfig.cmake then fails the configure -- the same silent-skip
-          # shape the archive comment above warns about.
-          modules: 'qtshadertools'
-          # aqtinstall 3.3.0, the newest release on PyPI, cannot install Qt 6.11 at all:
-          # the Qt repository moved to per-architecture folders (.../qt6_6111/
-          # qt6_6111_msvc2022_64/) and 3.3.0 still builds the pre-6.11 path, so it fails
-          # looking for XML data that is not there. Pinned to the upstream commit that
-          # handles the new layout; drop this line once an aqtinstall release includes it.
-          aqtsource: 'git+https://github.com/miurahr/aqtinstall.git@16db45a70b5905ad596941b223469bc86a56901e'
-          cache: true
+          profile: quick
 
       # Pinned so the release pipeline can't silently pick up a new WiX major/minor
       # mid-cycle; verified working (4.0.5) as of this pin. Bump deliberately.
@@ -660,11 +641,85 @@ jobs:
       release_tag: ${{ needs.resolve-identity.outputs.release_tag }}
     secrets: inherit
 
+  # THE release gate that was missing.
+  #
+  # This workflow builds, smoke-tests and packages, and it proves the artifact
+  # matches the tag. What it never ran is the quality gate set: CTest, qmllint,
+  # clang-format, the blocking clang-tidy check set, cppcheck. Those live in
+  # ci.yml, and a `v*` tag push starts ci.yml as a SEPARATE workflow run. GitHub
+  # does not order two workflows triggered by one event, and nothing here used to
+  # reference that run -- so publish-release could hand a Release to the public
+  # while ci.yml for the identical commit was still running, or already red.
+  # Branch protection does not cover this: it applies to pull requests into main,
+  # and a tag can be cut from any commit, including one that never saw a PR.
+  #
+  # So: wait for the ci.yml run of THIS commit AND this tag, and require success.
+  # Matching on head_sha alone would be too weak -- the same commit may also have
+  # a pull_request run, and that run deliberately executes a smaller matrix (no
+  # Release test suite). The run that is the release gate is the push run on the
+  # tag ref, and that is the only one accepted here.
+  require-ci:
+    name: Require CI release gate for this commit
+    needs: resolve-identity
+    if: ${{ needs.resolve-identity.outputs.is_official == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CI_WORKFLOW: ci.yml
+      REF_NAME: ${{ github.ref_name }}
+      COMMIT_SHA: ${{ github.sha }}
+    steps:
+      - name: Wait for the CI release gate of this exact commit and tag
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Poll rather than fail fast: both workflows are started by the same tag
+          # push, so on the normal path ci.yml has not finished (and may not even
+          # have registered) when this job starts.
+          poll_seconds=30
+          deadline=$(( SECONDS + 105 * 60 ))
+
+          while :; do
+            run=$(gh api               "repos/$GITHUB_REPOSITORY/actions/workflows/$CI_WORKFLOW/runs?head_sha=$COMMIT_SHA&per_page=100"               --jq '[.workflow_runs[] | select(.head_branch == env.REF_NAME and .event == "push")]
+                    | sort_by(.run_started_at) | last // empty')
+
+            if [ -n "$run" ]; then
+              status=$(printf '%s' "$run" | jq -r '.status')
+              conclusion=$(printf '%s' "$run" | jq -r '.conclusion // ""')
+              url=$(printf '%s' "$run" | jq -r '.html_url')
+
+              if [ "$status" = "completed" ]; then
+                if [ "$conclusion" = "success" ]; then
+                  echo "CI release gate green for $COMMIT_SHA on $REF_NAME: $url"
+                  exit 0
+                fi
+                echo "::error::The CI release gate for $COMMIT_SHA on $REF_NAME concluded '$conclusion', not 'success'. $url"
+                exit 1
+              fi
+
+              echo "CI release gate is '$status' ($url); waiting ${poll_seconds}s."
+            else
+              echo "No ci.yml push run for $COMMIT_SHA on $REF_NAME yet; waiting ${poll_seconds}s."
+            fi
+
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::Timed out waiting for the ci.yml push run of $COMMIT_SHA on $REF_NAME. Nothing is published without it."
+              exit 1
+            fi
+            sleep "$poll_seconds"
+          done
+
   # Deterministic release publication (official release builds only — a final or RC
   # version-tag push; identical steps for both, the RC just lands on its own tag and
   # is marked as a GitHub prerelease). Fixes the
   # release/signing race: nothing used to create the GitHub Release, yet sign-manifest
   # assumed it existed and tried to `gh release upload` into it. Order here is:
+  #   0. (done by `require-ci`) the ci.yml release gate for this exact commit
+  #      and tag concluded successfully
   #   1. (done by `build`) build + validate artifacts
   #   2. create a DRAFT Release for this exact tag (idempotent; reuses one if present)
   #   3. (done by `sign-manifest`) generate manifest from the artifact SHA-256s, sign,
@@ -678,7 +733,7 @@ jobs:
   # assets were never re-verified would make the live updater test prove nothing.
   publish-release:
     name: Publish GitHub Release
-    needs: [resolve-identity, build, sign-manifest]
+    needs: [resolve-identity, require-ci, build, sign-manifest]
     if: ${{ needs.resolve-identity.outputs.is_official == 'true' && vars.EXOSNAP_UPDATE_PUBLIC_KEY_HEX != '' }}
     runs-on: ubuntu-latest
     permissions:

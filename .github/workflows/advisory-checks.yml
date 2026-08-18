@@ -84,24 +84,14 @@ jobs:
       - name: Set up MSVC environment
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
 
+      # 'quick', because this job's clang-tidy pass lists app/ sources: with the
+      # 'base' profile the Qt Quick application is not in the compile database at
+      # all, and every app/quick file is skipped for lack of a compile command --
+      # an advisory pass that quietly covers less than it claims.
       - name: Install Qt 6
-        uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
+        uses: ./.github/actions/setup-qt
         with:
-          version: '6.11.1'
-          arch: 'win64_msvc2022_64'
-          # qtdeclarative + the shadertools module, because this job's clang-tidy pass
-          # lists app/ sources: without them the Qt Quick application is not in the
-          # compile database at all, and every app/quick file is skipped for lack of a
-          # compile command -- an advisory pass that quietly covers less than it claims.
-          archives: 'qtbase qtsvg qtdeclarative'
-          modules: 'qtshadertools'
-          # aqtinstall 3.3.0, the newest release on PyPI, cannot install Qt 6.11 at all:
-          # the Qt repository moved to per-architecture folders (.../qt6_6111/
-          # qt6_6111_msvc2022_64/) and 3.3.0 still builds the pre-6.11 path, so it fails
-          # looking for XML data that is not there. Pinned to the upstream commit that
-          # handles the new layout; drop this line once an aqtinstall release includes it.
-          aqtsource: 'git+https://github.com/miurahr/aqtinstall.git@16db45a70b5905ad596941b223469bc86a56901e'
-          cache: true
+          profile: quick
 
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
