@@ -31,6 +31,7 @@ ExoCard {
         locked: root.settings.controlsLocked
         meterLevel: root.settings.systemMeter
         stacked: root.stacked
+        showMergeOption: root.settings.appAudioVisible
         Layout.fillWidth: true
         onSourceToggled: value => root.settings.systemAudioEnabled = value
         onSeparateToggled: value => root.settings.systemAudioSeparate = value
