@@ -328,8 +328,11 @@ Item {
                 //
                 // The split follows the canonical order rather than balancing
                 // heights — left is the recording chain (format → quality → audio
-                // → output), right is everything around it — so reading order stays
-                // top-to-bottom within a column.
+                // → output) plus notifications & presence, right is everything
+                // else around it — so reading order stays top-to-bottom within a
+                // column. Presence sits in the left column purely to keep the two
+                // columns' endpoints reasonably close; it is not part of the
+                // recording chain itself.
                 ColumnLayout {
                     id: twoColumn
 
@@ -353,6 +356,7 @@ Item {
                             LayoutItemProxy { target: qualitySection }
                             LayoutItemProxy { target: audioSection }
                             LayoutItemProxy { target: outputSection }
+                            LayoutItemProxy { target: presenceSection }
 
                             Item {
                                 Layout.fillHeight: true
@@ -367,7 +371,6 @@ Item {
 
                             LayoutItemProxy { target: webcamSection }
                             LayoutItemProxy { target: overlaysSection }
-                            LayoutItemProxy { target: presenceSection }
                             LayoutItemProxy { target: hotkeysSection }
                             LayoutItemProxy { target: updatesSection }
                             LayoutItemProxy { target: appearanceSection }
