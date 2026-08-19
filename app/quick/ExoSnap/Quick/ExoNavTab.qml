@@ -27,8 +27,8 @@ Button {
     // wider than it is tall, and it is the only lever that costs nothing:
     // shrinking the type or eliding the words would both make a destination
     // harder to read to buy the same pixels.
-    leftPadding: root.compact ? ExoTheme.spacingSm : ExoTheme.spacingMd
-    rightPadding: root.compact ? ExoTheme.spacingSm : ExoTheme.spacingMd
+    leftPadding: root.compact ? ExoTheme.spacingSm : ExoTheme.spacingLg
+    rightPadding: root.compact ? ExoTheme.spacingSm : ExoTheme.spacingLg
     topPadding: 0
     bottomPadding: 0
     hoverEnabled: true
