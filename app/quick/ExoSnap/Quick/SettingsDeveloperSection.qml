@@ -26,7 +26,7 @@ ExoCard {
 
     ExoSettingRow {
         label: qsTr("Crash reports")
-        hint: qsTr("Reports are privacy-scrubbed and never sent without consent")
+        hint: qsTr("Privacy-scrubbed, never sent without consent")
         stacked: root.stacked
         Layout.fillWidth: true
 
