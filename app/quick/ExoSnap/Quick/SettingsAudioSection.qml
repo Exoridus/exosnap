@@ -19,6 +19,7 @@ ExoCard {
         meterLevel: root.settings.appMeter
         stacked: root.stacked
         visible: root.settings.appAudioVisible
+        showMergeOption: false
         Layout.fillWidth: true
         onSourceToggled: value => root.settings.appAudioEnabled = value
         onSeparateToggled: value => root.settings.appAudioSeparate = value

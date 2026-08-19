@@ -30,6 +30,20 @@ TestCase {
         }
     }
 
+    // A negative-range field (mirroring the mic gain/threshold fields), since
+    // the throwing case needs a lone "-" to be a value the validator accepts
+    // as an intermediate state at all.
+    Component {
+        id: negativeFieldComponent
+
+        ExoNumberField {
+            from: -12
+            to: 12
+            suffix: "dB"
+            value: 3
+        }
+    }
+
     function test_blur_after_a_stepper_click_keeps_the_stepped_value() {
         let field = createTemporaryObject(fieldComponent, testCase);
         verify(field);
@@ -47,5 +61,44 @@ TestCase {
 
         tryCompare(field, "activeFocus", false);
         compare(field.value, 168);
+    }
+
+    function test_blur_after_select_all_delete_keeps_the_value() {
+        let field = createTemporaryObject(fieldComponent, testCase);
+        verify(field);
+
+        // Mirrors selecting the whole displayed text (suffix included) and
+        // deleting it -- valueFromText then sees an empty string.
+        field.forceActiveFocus();
+        tryCompare(field, "activeFocus", true);
+        field.contentItem.selectAll();
+        field.contentItem.remove(field.contentItem.selectionStart, field.contentItem.selectionEnd);
+        field.focus = false;
+        testCase.forceActiveFocus();
+
+        tryCompare(field, "activeFocus", false);
+        compare(field.value, 160);
+    }
+
+    function test_blur_with_a_lone_minus_sign_keeps_the_value() {
+        let field = createTemporaryObject(negativeFieldComponent, testCase);
+        verify(field);
+
+        // Mirrors selecting the whole displayed text and typing a lone "-",
+        // a valid intermediate state for a field whose range goes negative.
+        // Number.fromLocaleString throws on a lone "-" instead of returning
+        // NaN, so without the guard this escaped the isFinite fallback and
+        // the field snapped to `from` (the exact bug this component exists
+        // to fix) with a JS error logged besides.
+        field.forceActiveFocus();
+        tryCompare(field, "activeFocus", true);
+        field.contentItem.selectAll();
+        field.contentItem.remove(field.contentItem.selectionStart, field.contentItem.selectionEnd);
+        field.contentItem.insert(0, "-");
+        field.focus = false;
+        testCase.forceActiveFocus();
+
+        tryCompare(field, "activeFocus", false);
+        compare(field.value, 3);
     }
 }

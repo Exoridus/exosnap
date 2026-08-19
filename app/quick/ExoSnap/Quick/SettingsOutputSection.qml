@@ -16,7 +16,7 @@ ExoCard {
         hint: qsTr("Where recordings are saved")
         warning: root.settings.folderValidation
         stacked: root.stacked
-        controlWidth: 420
+        controlWidth: 320
         Layout.fillWidth: true
 
         RowLayout {

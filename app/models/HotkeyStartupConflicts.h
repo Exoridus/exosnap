@@ -11,15 +11,15 @@
 //    take it. A binding that failed to register is dead weight -- it would
 //    swallow nothing, do nothing, and re-warn on every launch -- so it is
 //    dropped rather than kept.
-//  - A DEFAULT binding colliding is ordinary environmental noise (another app's
-//    own default claimed the combo first; NVIDIA's Alt+F9 is the usual one). It
-//    is worth a log line and nothing more.
-//  - A CUSTOM binding is different: the user chose it and it worked when they
-//    did, so losing it is worth telling them about.
+//  - No action ships with a non-empty default binding, so a binding that failed
+//    to register can only be one the user chose themselves. It worked when they
+//    set it, so losing it is always worth telling them about, with a Rebind
+//    notification that deep-links to Settings -> Hotkeys.
 //
-// The split has to be computed BEFORE anything is unset -- unsetting clears the
-// binding, after which every action reads as "at default" and the distinction is
-// gone.
+// The default/custom split below has to be computed BEFORE anything is unset --
+// unsetting clears the binding, after which every action reads as "at default"
+// and the distinction is gone -- even though, with no shipped default to collide
+// with, the default branch has no case left where it applies.
 
 #include "services/GlobalHotkeyService.h"
 

@@ -23,6 +23,7 @@ ColumnLayout {
             checked: root.settings.micHpfEnabled
             enabled: !root.settings.controlsLocked
             Accessible.name: qsTr("Microphone high-pass filter")
+            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
             onToggledByUser: value => root.settings.micHpfEnabled = value
         }
     }
@@ -57,6 +58,7 @@ ColumnLayout {
             checked: root.settings.micGateEnabled
             enabled: !root.settings.controlsLocked
             Accessible.name: qsTr("Microphone noise gate")
+            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
             onToggledByUser: value => root.settings.micGateEnabled = value
         }
     }
@@ -90,6 +92,7 @@ ColumnLayout {
             checked: root.settings.micAgcEnabled
             enabled: !root.settings.controlsLocked
             Accessible.name: qsTr("Microphone automatic gain control")
+            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
             onToggledByUser: value => root.settings.micAgcEnabled = value
         }
     }
@@ -124,6 +127,7 @@ ColumnLayout {
             checked: root.settings.micRnnoiseEnabled
             enabled: !root.settings.controlsLocked
             Accessible.name: qsTr("RNNoise suppression")
+            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
             onToggledByUser: value => root.settings.micRnnoiseEnabled = value
         }
     }

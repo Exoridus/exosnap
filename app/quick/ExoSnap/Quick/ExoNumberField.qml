@@ -24,7 +24,9 @@ SpinBox {
     // genuinely unparseable string, since a value field should never jump to
     // its floor because of a formatting artifact it introduced itself.
     valueFromText: (text, locale) => {
-        const digitsOnly = text.replace(/[^0-9-]/g, '');
+        const digitsOnly = text.replace(/[^0-9\u2212-]/g, '').replace(/\u2212/g, '-');
+        if (digitsOnly === '' || digitsOnly === '-')
+            return root.value;
         const parsed = Number.fromLocaleString(locale, digitsOnly);
         return Number.isFinite(parsed) ? parsed : root.value;
     }
