@@ -62,6 +62,7 @@ ExoCard {
                 options: root.settings.microphoneDeviceOptions
                 value: root.settings.microphoneDeviceId
                 enabled: !root.settings.controlsLocked
+                placeholderText: qsTr("(no microphone)")
                 Layout.fillWidth: true
                 Accessible.name: qsTr("Microphone device")
                 onValueActivated: value => root.settings.microphoneDeviceId = value

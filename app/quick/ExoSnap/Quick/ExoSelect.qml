@@ -11,6 +11,12 @@ ComboBox {
     required property var options
     required property var value
 
+    // Shown instead of blank text when nothing in `options` matches `value` --
+    // an empty list (nothing detected) and a value with no matching entry
+    // (nothing pinned yet) both land on resolvedIndex === -1, and the control
+    // must always display something rather than going empty.
+    property string placeholderText: qsTr("(none selected)")
+
     // ComboBox.indexOfValue() is a plain call, so a binding on it never
     // re-evaluates when `options` is replaced -- the adapter rebuilds its option
     // lists on every edit, which would leave the control permanently blank.
@@ -39,16 +45,17 @@ ComboBox {
     hoverEnabled: true
 
     contentItem: Label {
-        text: root.displayText
+        text: root.currentIndex === -1 ? root.placeholderText : root.displayText
         textFormat: Text.PlainText
         elide: Text.ElideRight
         verticalAlignment: Text.AlignVCenter
-        color: root.enabled ? ExoTheme.text : ExoTheme.textDim
+        color: root.currentIndex === -1 ? ExoTheme.textDim : root.enabled ? ExoTheme.text : ExoTheme.textDim
         leftPadding: ExoTheme.spacingMd
         rightPadding: root.indicator.width + ExoTheme.spacingMd
         font {
             family: ExoTheme.sansFamily
             pixelSize: ExoTheme.fontBody
+            italic: root.currentIndex === -1
         }
     }
 
