@@ -283,37 +283,80 @@ ExoCard {
         controlWidth: 100
         Layout.fillWidth: true
 
-        RowLayout {
-            spacing: ExoTheme.spacingSm
+        Item {
+            id: micPostProcessingToggle
+
+            implicitWidth: toggleRow.implicitWidth
+            implicitHeight: toggleRow.implicitHeight
             Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
 
-            Label {
-                text: micPostProcessing.visible ? qsTr("Hide") : qsTr("Configure")
-                textFormat: Text.PlainText
-                color: ExoTheme.textSecondary
-                font {
-                    family: ExoTheme.sansFamily
-                    pixelSize: ExoTheme.fontSecondary
-                }
+            // Same pattern as ExoDisclosure's header: a plain Item stands in for
+            // a button, so Tab order, Space activation and the Accessible role
+            // that a real Control gets for free all need to be spelled out here.
+            // Space only, not Enter - product-spec 10.1 reserves Enter for a
+            // dialog's default button and gives every other control exactly one
+            // activation key.
+            activeFocusOnTab: true
+            Accessible.role: Accessible.Button
+            Accessible.name: qsTr("Microphone post-processing")
+            Accessible.checkable: true
+            Accessible.checked: micPostProcessing.visible
+            Accessible.focusable: true
+            Accessible.focused: micPostProcessingToggle.activeFocus
+            Accessible.onPressAction: micPostProcessingToggle.toggle()
+            Accessible.onToggleAction: micPostProcessingToggle.toggle()
+
+            function toggle(): void {
+                micPostProcessing.visible = !micPostProcessing.visible;
             }
 
-            ExoChevron {
-                // 0 = down (expanded), -90 = right (collapsed) - same convention
-                // as ExoDisclosure's header chevron.
-                direction: micPostProcessing.visible ? 0 : -90
-                tone: ExoTheme.textMuted
-                Layout.preferredWidth: 12
+            Keys.onSpacePressed: event => {
+                micPostProcessingToggle.toggle();
+                event.accepted = true;
+            }
 
-                Behavior on rotation {
-                    NumberAnimation {
-                        duration: ExoTheme.animMedium
-                        easing.type: Easing.OutCubic
+            Rectangle {
+                anchors.fill: parent
+                radius: ExoTheme.radiusSm
+                color: "transparent"
+                border.width: micPostProcessingToggle.activeFocus ? ExoTheme.focusRingWidth : 0
+                border.color: ExoTheme.text
+            }
+
+            RowLayout {
+                id: toggleRow
+
+                anchors.fill: parent
+                spacing: ExoTheme.spacingSm
+
+                Label {
+                    text: micPostProcessing.visible ? qsTr("Hide") : qsTr("Configure")
+                    textFormat: Text.PlainText
+                    color: ExoTheme.textSecondary
+                    font {
+                        family: ExoTheme.sansFamily
+                        pixelSize: ExoTheme.fontSecondary
+                    }
+                }
+
+                ExoChevron {
+                    // 0 = down (expanded), -90 = right (collapsed) - same convention
+                    // as ExoDisclosure's header chevron.
+                    direction: micPostProcessing.visible ? 0 : -90
+                    tone: ExoTheme.textMuted
+                    Layout.preferredWidth: 12
+
+                    Behavior on rotation {
+                        NumberAnimation {
+                            duration: ExoTheme.animMedium
+                            easing.type: Easing.OutCubic
+                        }
                     }
                 }
             }
 
             TapHandler {
-                onTapped: micPostProcessing.visible = !micPostProcessing.visible
+                onTapped: micPostProcessingToggle.toggle()
             }
         }
     }
