@@ -220,6 +220,7 @@ ExoCard {
             checked: root.settings.limiterEnabled
             enabled: !root.settings.controlsLocked
             Accessible.name: qsTr("Brickwall limiter")
+            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
             onToggledByUser: value => root.settings.limiterEnabled = value
         }
     }
@@ -268,6 +269,7 @@ ExoCard {
             checked: root.settings.clockSlavingEnabled
             enabled: !root.settings.controlsLocked
             Accessible.name: qsTr("Audio/video clock slaving")
+            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
             onToggledByUser: value => root.settings.clockSlavingEnabled = value
         }
     }

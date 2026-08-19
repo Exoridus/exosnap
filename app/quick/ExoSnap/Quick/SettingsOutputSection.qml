@@ -151,6 +151,7 @@ ExoCard {
             checked: root.settings.splitByTimeEnabled
             enabled: !root.settings.controlsLocked
             Accessible.name: qsTr("Split recording by time")
+            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
             onToggledByUser: value => root.settings.splitByTimeEnabled = value
         }
     }
@@ -193,6 +194,7 @@ ExoCard {
             checked: root.settings.splitBySizeEnabled
             enabled: !root.settings.controlsLocked
             Accessible.name: qsTr("Split recording by size")
+            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
             onToggledByUser: value => root.settings.splitBySizeEnabled = value
         }
     }

@@ -35,6 +35,7 @@ ExoCard {
         ExoSwitch {
             checked: root.settings.autoUpdateCheck
             Accessible.name: qsTr("Check for updates automatically")
+            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
             onToggledByUser: value => root.settings.autoUpdateCheck = value
         }
     }

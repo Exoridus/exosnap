@@ -166,6 +166,7 @@ ExoCard {
             checked: root.settings.captureCursor
             enabled: !root.settings.controlsLocked
             Accessible.name: qsTr("Capture cursor")
+            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
             onToggledByUser: value => root.settings.captureCursor = value
         }
     }

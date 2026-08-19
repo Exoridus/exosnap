@@ -28,6 +28,7 @@ ExoCard {
             checked: root.settings.webcamEnabled
             enabled: !root.settings.controlsLocked && root.settings.webcamAvailable
             Accessible.name: qsTr("Include webcam")
+            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
             onToggledByUser: value => root.settings.webcamEnabled = value
         }
     }
@@ -89,6 +90,7 @@ ExoCard {
             checked: root.settings.webcamMirror
             enabled: !root.settings.controlsLocked && root.settings.webcamAvailable
             Accessible.name: qsTr("Mirror webcam image")
+            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
             onToggledByUser: value => root.settings.webcamMirror = value
         }
     }
@@ -138,6 +140,7 @@ ExoCard {
             checked: root.settings.chromaKeyEnabled
             enabled: !root.settings.controlsLocked && root.settings.webcamAvailable
             Accessible.name: qsTr("Chroma key")
+            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
             onToggledByUser: value => root.settings.chromaKeyEnabled = value
         }
     }

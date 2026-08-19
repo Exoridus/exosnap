@@ -23,6 +23,7 @@ ExoCard {
         ExoSwitch {
             checked: root.settings.showNotifications
             Accessible.name: qsTr("Notifications")
+            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
             onToggledByUser: value => root.settings.showNotifications = value
         }
     }
@@ -37,6 +38,7 @@ ExoCard {
         ExoSwitch {
             checked: root.settings.keepRunningInTray
             Accessible.name: qsTr("Keep running in tray")
+            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
             onToggledByUser: value => root.settings.keepRunningInTray = value
         }
     }
@@ -50,6 +52,7 @@ ExoCard {
         ExoSwitch {
             checked: root.settings.openEditorWhenFinished
             Accessible.name: qsTr("Open editor when finished")
+            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
             onToggledByUser: value => root.settings.openEditorWhenFinished = value
         }
     }
@@ -65,6 +68,7 @@ ExoCard {
         ExoSwitch {
             checked: root.settings.presentDiagnosticsOptIn
             Accessible.name: qsTr("Present and tearing diagnostics")
+            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
             onToggledByUser: value => root.settings.presentDiagnosticsOptIn = value
         }
     }

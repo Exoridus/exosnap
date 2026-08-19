@@ -49,6 +49,7 @@ ExoCard {
         ExoSwitch {
             checked: root.settings.showRecordingOverlay
             Accessible.name: qsTr("Recording overlay")
+            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
             onToggledByUser: value => root.settings.showRecordingOverlay = value
         }
     }
@@ -63,6 +64,7 @@ ExoCard {
         ExoSegmentedControl {
             options: root.settings.recordingOverlayPresetOptions.map(option => option.label)
             Accessible.name: qsTr("Recording overlay content")
+            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
             currentIndex: root.settings.recordingOverlayPresetOptions
                               .findIndex(option => option.value === root.settings.recordingOverlayPreset)
             onSelected: index => root.settings.recordingOverlayPreset =
@@ -106,6 +108,7 @@ ExoCard {
         ExoSwitch {
             checked: root.settings.showDiagnosticsOverlay
             Accessible.name: qsTr("Diagnostics overlay")
+            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
             onToggledByUser: value => root.settings.showDiagnosticsOverlay = value
         }
     }
@@ -120,6 +123,7 @@ ExoCard {
         ExoSegmentedControl {
             options: root.settings.diagnosticsOverlayPresetOptions.map(option => option.label)
             Accessible.name: qsTr("Diagnostics overlay content")
+            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
             currentIndex: root.settings.diagnosticsOverlayPresetOptions
                               .findIndex(option => option.value === root.settings.diagnosticsOverlayPreset)
             onSelected: index => root.settings.diagnosticsOverlayPreset =
@@ -178,6 +182,7 @@ ExoCard {
         ExoSwitch {
             checked: root.settings.showQuickControls
             Accessible.name: qsTr("Quick control pill")
+            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
             onToggledByUser: value => root.settings.showQuickControls = value
         }
     }

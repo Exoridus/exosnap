@@ -32,6 +32,7 @@ ExoCard {
             currentIndex: Math.max(0, root.settings.appearanceOptions
                                         .findIndex(option => option.value === root.settings.appearanceId))
             Accessible.name: qsTr("Appearance")
+            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
             onSelected: index => root.settings.appearanceId = root.settings.appearanceOptions[index].value
         }
     }
@@ -44,6 +45,7 @@ ExoCard {
 
         Row {
             spacing: ExoTheme.spacingSm
+            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
 
             Repeater {
                 model: root.settings.accentOptions
