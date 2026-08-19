@@ -27,7 +27,11 @@ ExoCard {
             label: hotkeyRow.modelData.label
             warning: root.settings.hotkeyErrorAction === hotkeyRow.modelData.action ? root.settings.hotkeyErrorText : ""
             stacked: root.stacked
-            controlWidth: 280
+            // 300 = the capture badge's "Press a key combination..." prompt (150px at
+            // 13px Hanken Grotesk, measured) plus the widest button pair sharing this
+            // row -- Change (81px) + the close glyph (36px) + two 8px gaps (133px) --
+            // with a small margin for font-hinting variance between platforms.
+            controlWidth: 300
             Layout.fillWidth: true
 
             RowLayout {
