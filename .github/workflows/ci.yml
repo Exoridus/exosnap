@@ -93,6 +93,7 @@ jobs:
   lint:
     name: lint
     runs-on: windows-2022
+    timeout-minutes: 10
     concurrency:
       group: ci-${{ github.workflow }}-lint-${{ github.event.pull_request.number || github.run_id }}
       cancel-in-progress: true
@@ -133,6 +134,7 @@ jobs:
   dev-scripts:
     name: dev-scripts
     runs-on: windows-2022
+    timeout-minutes: 15
     concurrency:
       group: ci-${{ github.workflow }}-dev-scripts-${{ github.event.pull_request.number || github.run_id }}
       cancel-in-progress: true
@@ -198,6 +200,7 @@ jobs:
   changes:
     name: detect packaging changes
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     concurrency:
       group: ci-${{ github.workflow }}-changes-${{ github.event.pull_request.number || github.run_id }}
       cancel-in-progress: true
@@ -249,6 +252,9 @@ jobs:
   build-test-debug:
     name: build-test (windows-x64-debug)
     runs-on: windows-2022
+    # ~2x the observed worst case (46 min, cold sccache): build + qmllint +
+    # full suite + scoped clang-tidy blocking set, all in one job.
+    timeout-minutes: 90
     # Not on a push to main: that commit is the squash of a PR whose own run of
     # this exact job just went green (see "WHAT RUNS WHERE" at the top of this
     # file). Written as a positive list over the events this workflow can see
@@ -357,6 +363,8 @@ jobs:
   build-test-release:
     name: build-test (windows-x64-release)
     runs-on: windows-2022
+    # ~2x the observed worst case (27 min, cold sccache).
+    timeout-minutes: 60
     needs: changes
     # PR-CI tiering: this leg proves the Release configure/build/link still
     # works, so on a PR it runs when the `changes` job flags a C++/build/
@@ -471,6 +479,8 @@ jobs:
   # ---------------------------------------------------------------------------
   packaging-smoke:
     name: packaging-smoke
+    # ~2x the observed worst case (14 min, cold sccache).
+    timeout-minutes: 30
     needs: changes
     # PR-CI only (see the comment above). Now that `changes` runs on every
     # trigger (not just pull_request — see its own comment above), its
