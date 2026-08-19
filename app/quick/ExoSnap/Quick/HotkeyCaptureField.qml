@@ -46,7 +46,9 @@ Control {
         elide: Text.ElideRight
         verticalAlignment: Text.AlignVCenter
         horizontalAlignment: Text.AlignHCenter
-        color: root.capturing ? ExoTheme.accent : root.binding === "" ? ExoTheme.textMuted : ExoTheme.text
+        color: !root.enabled ? ExoTheme.textDim
+                             : root.capturing ? ExoTheme.accent
+                                              : root.binding === "" ? ExoTheme.textMuted : ExoTheme.text
         font {
             family: root.binding === "" || root.capturing ? ExoTheme.sansFamily : ExoTheme.monoFamily
             pixelSize: ExoTheme.fontSecondary
@@ -54,8 +56,8 @@ Control {
     }
 
     background: Rectangle {
-        color: root.capturing ? ExoTheme.surfaceRaised : "transparent"
-        border.width: root.capturing ? 1 : 0
+        color: root.capturing && root.enabled ? ExoTheme.surfaceRaised : "transparent"
+        border.width: root.capturing && root.enabled ? 1 : 0
         border.color: ExoTheme.accent
         radius: ExoTheme.radiusSm
     }
