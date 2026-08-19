@@ -283,11 +283,38 @@ ExoCard {
         controlWidth: 100
         Layout.fillWidth: true
 
-        ExoButton {
-            text: micPostProcessing.visible ? qsTr("Hide") : qsTr("Configure")
-            quiet: true
-            Layout.fillWidth: true
-            onClicked: micPostProcessing.visible = !micPostProcessing.visible
+        RowLayout {
+            spacing: ExoTheme.spacingSm
+            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
+
+            Label {
+                text: micPostProcessing.visible ? qsTr("Hide") : qsTr("Configure")
+                textFormat: Text.PlainText
+                color: ExoTheme.textSecondary
+                font {
+                    family: ExoTheme.sansFamily
+                    pixelSize: ExoTheme.fontSecondary
+                }
+            }
+
+            ExoChevron {
+                // 0 = down (expanded), -90 = right (collapsed) - same convention
+                // as ExoDisclosure's header chevron.
+                direction: micPostProcessing.visible ? 0 : -90
+                tone: ExoTheme.textMuted
+                Layout.preferredWidth: 12
+
+                Behavior on rotation {
+                    NumberAnimation {
+                        duration: ExoTheme.animMedium
+                        easing.type: Easing.OutCubic
+                    }
+                }
+            }
+
+            TapHandler {
+                onTapped: micPostProcessing.visible = !micPostProcessing.visible
+            }
         }
     }
 
