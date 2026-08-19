@@ -32,6 +32,7 @@ ColumnLayout {
         stacked: root.stacked
         visible: root.settings.micHpfEnabled
         Layout.fillWidth: true
+        Layout.leftMargin: ExoTheme.spacingLg
 
         ExoNumberField {
             from: 20
@@ -65,6 +66,7 @@ ColumnLayout {
         stacked: root.stacked
         visible: root.settings.micGateEnabled
         Layout.fillWidth: true
+        Layout.leftMargin: ExoTheme.spacingLg
 
         ExoNumberField {
             from: -90
@@ -97,6 +99,7 @@ ColumnLayout {
         stacked: root.stacked
         visible: root.settings.micAgcEnabled
         Layout.fillWidth: true
+        Layout.leftMargin: ExoTheme.spacingLg
 
         ExoNumberField {
             from: -40
