@@ -843,6 +843,10 @@ qt_add_qml_module(record_controls_qml_tests
         # Severity carried by something other than colour (QCR-507/508): which
         # glyph a tone resolves to, and what the accessible name says.
         ExoNotice.qml
+        # The suffix formatting (textFromValue) and its inverse (valueFromText)
+        # only matter together -- a test module built without the paired parser
+        # would exercise a SpinBox that never showed the bug.
+        ExoNumberField.qml
         ExoStatusTile.qml
         # The shared overlay card and the two components it draws itself from.
         # Its layout invariants — the card staying out of the shell's title

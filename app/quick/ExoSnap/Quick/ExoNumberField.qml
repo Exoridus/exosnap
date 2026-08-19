@@ -16,6 +16,19 @@ SpinBox {
                                       ? Number(value).toLocaleString(locale, 'f', 0)
                                       : qsTr("%1 %2").arg(Number(value).toLocaleString(locale, 'f', 0)).arg(root.suffix)
 
+    // The default valueFromText expects a plain number and fails on the
+    // suffix textFromValue appended above. SpinBox re-parses the displayed
+    // text through this on every revalidation point, including focus loss,
+    // so without a matching override a suffixed field snaps to `from` the
+    // moment it is left. Falling back to the current value (not `from`) on a
+    // genuinely unparseable string, since a value field should never jump to
+    // its floor because of a formatting artifact it introduced itself.
+    valueFromText: (text, locale) => {
+        const digitsOnly = text.replace(/[^0-9-]/g, '');
+        const parsed = Number.fromLocaleString(locale, digitsOnly);
+        return Number.isFinite(parsed) ? parsed : root.value;
+    }
+
     contentItem: TextInput {
         text: root.displayText
         verticalAlignment: Text.AlignVCenter
