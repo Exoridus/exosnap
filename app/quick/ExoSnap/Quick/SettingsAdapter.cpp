@@ -261,6 +261,14 @@ void SettingsAdapter::commitHotkeyCapture(int key, int modifiers) {
 }
 
 void SettingsAdapter::clearHotkey(int action) {
+    // A conflict warning from a prior capture attempt is scoped to this action;
+    // clearing the binding must drop it too, or an unset row keeps reporting a
+    // conflict it no longer has.
+    if (hotkey_error_action_ == action) {
+        hotkey_error_action_ = -1;
+        hotkey_error_text_.clear();
+        emit hotkeysChanged();
+    }
     emit hotkeyClearRequested(action);
 }
 

@@ -489,6 +489,21 @@ TEST_F(SettingsAdapterTest, HotkeyErrorEndsCaptureAndIsAttributedToTheAction) {
     EXPECT_FALSE(adapter.hotkeyErrorText().isEmpty());
 }
 
+// A capture attempt that hit a conflict leaves the row's error visible; clearing
+// that row's binding afterward must drop the warning along with it, or the row
+// reads as unset-but-still-conflicting.
+TEST_F(SettingsAdapterTest, ClearingAHotkeyDropsItsStaleConflictWarning) {
+    adapter.beginHotkeyCapture(1);
+    adapter.setHotkeyError(1, QStringLiteral("Alt+F4 is reserved by Windows."));
+    ASSERT_EQ(adapter.hotkeyErrorAction(), 1);
+    ASSERT_FALSE(adapter.hotkeyErrorText().isEmpty());
+
+    adapter.clearHotkey(1);
+
+    EXPECT_NE(adapter.hotkeyErrorAction(), 1);
+    EXPECT_TRUE(adapter.hotkeyErrorText().isEmpty());
+}
+
 TEST_F(SettingsAdapterTest, HotkeyCaptureIsRefusedWhileRecordingLocksControls) {
     adapter.setControlsLocked(true);
     adapter.beginHotkeyCapture(0);
