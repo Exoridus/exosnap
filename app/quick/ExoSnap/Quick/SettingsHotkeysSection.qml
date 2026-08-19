@@ -35,27 +35,33 @@ ExoCard {
                 Layout.fillWidth: true
 
                 HotkeyCaptureField {
+                    id: captureField
+
                     capturing: hotkeyRow.capturing
                     binding: hotkeyRow.modelData.binding
                     enabled: !root.settings.controlsLocked
                     Layout.fillWidth: true
                     Accessible.name: qsTr("Shortcut for %1").arg(hotkeyRow.modelData.label)
-                    onCaptureRequested: root.settings.beginHotkeyCapture(hotkeyRow.modelData.action)
                     onCaptureCancelled: root.settings.cancelHotkeyCapture()
                     onCaptured: (key, modifiers) => root.settings.commitHotkeyCapture(key, modifiers)
                 }
 
                 ExoButton {
-                    text: qsTr("Reset")
+                    text: hotkeyRow.modelData.binding === "" ? qsTr("Set") : qsTr("Change")
                     quiet: true
-                    enabled: !root.settings.controlsLocked && !hotkeyRow.modelData.isDefault
-                    onClicked: root.settings.resetHotkey(hotkeyRow.modelData.action)
+                    enabled: !root.settings.controlsLocked
+                    onClicked: {
+                        captureField.forceActiveFocus();
+                        root.settings.beginHotkeyCapture(hotkeyRow.modelData.action);
+                    }
                 }
 
                 ExoButton {
-                    text: qsTr("Clear")
+                    glyph: ExoGlyph.Close
                     quiet: true
-                    enabled: !root.settings.controlsLocked && hotkeyRow.modelData.binding !== ""
+                    visible: hotkeyRow.modelData.binding !== ""
+                    enabled: !root.settings.controlsLocked
+                    Accessible.name: qsTr("Clear shortcut for %1").arg(hotkeyRow.modelData.label)
                     onClicked: root.settings.clearHotkey(hotkeyRow.modelData.action)
                 }
             }
