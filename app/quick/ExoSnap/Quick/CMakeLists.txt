@@ -76,6 +76,7 @@ qt_add_qml_module(exosnap
         ExoMenu.qml
         ExoMenuItem.qml
         ExoNavTab.qml
+        ExoInfoButton.qml
         ExoNotice.qml
         ExoNumberField.qml
         ExoOverlayCard.qml
@@ -117,7 +118,8 @@ qt_add_qml_module(exosnap
         RecoveryOverlay.qml
         RegionSelectionOverlay.qml
         SettingsAppearanceSection.qml
-        SettingsAudioSection.qml
+        SettingsAudioEncodingSection.qml
+        SettingsAudioSourcesSection.qml
         SettingsAudioSourceRow.qml
         SettingsChromaSlider.qml
         SettingsDeveloperSection.qml
@@ -842,6 +844,7 @@ qt_add_qml_module(record_controls_qml_tests
         ExoDisclosure.qml
         # Severity carried by something other than colour (QCR-507/508): which
         # glyph a tone resolves to, and what the accessible name says.
+        ExoInfoButton.qml
         ExoNotice.qml
         # The suffix formatting (textFromValue) and its inverse (valueFromText)
         # only matter together -- a test module built without the paired parser
@@ -866,6 +869,10 @@ qt_add_qml_module(record_controls_qml_tests
         # here against a plain ListModel — the real one is a C++ proxy the test
         # module cannot construct, and none of what is asserted is about it.
         ExoLogView.qml
+        # The title band's destination. Its width has to stay put while the
+        # selection moves across the row, which is geometry rather than
+        # something a screenshot of one selected state can show.
+        ExoNavTab.qml
         ExoSegmentedControl.qml
         # Elision needs a real constrained width, which is a layout fact and so
         # is asserted rather than judged on a screenshot.

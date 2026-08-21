@@ -17,6 +17,8 @@ ExoSettingRow {
         Layout.fillWidth: true
 
         ExoSlider {
+            id: chromaSlider
+
             from: 0
             to: 100
             stepSize: 1
@@ -31,7 +33,7 @@ ExoSettingRow {
             text: qsTr("%1 %").arg(root.value)
             textFormat: Text.PlainText
             horizontalAlignment: Text.AlignRight
-            color: ExoTheme.textSecondary
+            color: chromaSlider.enabled ? ExoTheme.textSecondary : ExoTheme.textDim
             Layout.preferredWidth: 48
             font {
                 family: ExoTheme.monoFamily

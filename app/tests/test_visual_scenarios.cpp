@@ -109,7 +109,7 @@ TEST(VisualScenarioTest, RequiredScenariosAreRegistered) {
         QStringLiteral("settings-format-container-mp4"),
         QStringLiteral("settings-format-incompatible"),
         QStringLiteral("settings-format-recording-locked"),
-        QStringLiteral("settings-quality-efficient"),
+        QStringLiteral("settings-quality-low"),
         QStringLiteral("settings-quality-ultra"),
         QStringLiteral("record-output-native"),
         QStringLiteral("record-output-1080p"),
@@ -344,7 +344,7 @@ TEST(VisualScenarioTest, ScenarioParserAcceptsOptionalQualityCq) {
     // Unset (0) is the default and must stay valid — most scenarios never set it.
     EXPECT_TRUE(ValidateVisualScenario(scenario, &error));
 
-    // The two tiers the fix-round scenarios seed (Efficient=30, Ultra=16).
+    // The two tiers the fix-round scenarios seed (Low=30, Ultra=16).
     scenario.quality_cq = 30;
     EXPECT_TRUE(ValidateVisualScenario(scenario, &error));
     scenario.quality_cq = 16;

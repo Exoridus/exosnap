@@ -691,8 +691,21 @@ Item {
     // the shell's overlay LAYER STACK, their declaration order IS their z-order,
     // and the comments above each one argue that order by name. An anonymous
     // Loader would leave those arguments pointing at nothing.
+    //
+    // setSource(url, properties) rather than an inline sourceComponent, for the
+    // same reason loadDestination() above uses it for the four nav pages
+    // (QCR-615): an inline Component is part of THIS document, so the engine
+    // compiles EditOverlay's whole type -- and everything it pulls in -- before
+    // the first frame, even though the Loader stays inactive until a clip
+    // exists. Measured on this tree: EditOverlay.qml + EditExportPanel.qml alone
+    // cost ~385 ms of compile time on a launch that never opens the editor.
+    // sourceLoaded guards the one-time setSource call; `source` itself is
+    // sticky across active going false then true again, so a later reopen does
+    // not recompile or re-snapshot the initial properties.
     Loader {
         id: editOverlayLoader
+
+        property bool sourceLoaded: false
 
         anchors {
             fill: parent
@@ -725,13 +738,17 @@ Item {
         // from a return.
         onVisibleChanged: root.focusEditWorkspace()
         onLoaded: root.focusEditWorkspace()
-
-        sourceComponent: EditOverlay {
-            session: root.editSession
-            timeline: root.editTimeline
-            player: root.editPlayer
-            exporter: root.editExport
-            focus: true
+        onActiveChanged: {
+            if (!editOverlayLoader.active || editOverlayLoader.sourceLoaded)
+                return;
+            editOverlayLoader.sourceLoaded = true;
+            editOverlayLoader.setSource(Qt.resolvedUrl("EditOverlay.qml"), {
+                session: root.editSession,
+                timeline: root.editTimeline,
+                player: root.editPlayer,
+                exporter: root.editExport,
+                focus: true
+            });
         }
     }
 
@@ -766,6 +783,8 @@ Item {
     // changelog rather than under it. The composition root already keeps that
     // from happening — the post-update auto-show waits for the blocking surfaces
     // to clear — so this is the ordering as a fallback, not as the policy.
+    // setSource(url, properties) rather than an inline sourceComponent -- see
+    // editOverlayLoader above. Same trade for the other three overlays below.
     Loader {
         id: whatsNewLoader
 
@@ -774,6 +793,7 @@ Item {
         // happens here: a focus assignment made from the dying item's own
         // destruction handler is undone by this focus scope coming down with it.
         property Item focusReturn: null
+        property bool sourceLoaded: false
 
         anchors.fill: parent
         active: root.whatsNew.active
@@ -785,8 +805,19 @@ Item {
         }
 
         onActiveChanged: {
-            if (whatsNewLoader.active)
+            if (whatsNewLoader.active) {
+                if (!whatsNewLoader.sourceLoaded) {
+                    whatsNewLoader.sourceLoaded = true;
+                    whatsNewLoader.setSource(Qt.resolvedUrl("WhatsNewOverlay.qml"), {
+                        whatsNew: root.whatsNew,
+                        // The scrim covers the band; the card stays below it, like
+                        // every other in-window surface.
+                        contentTopInset: root.titleBarHeight,
+                        focus: true
+                    });
+                }
                 return;
+            }
             const target = whatsNewLoader.focusReturn;
             whatsNewLoader.focusReturn = null;
             // A closed overlay must not leave the window without a focus owner:
@@ -797,14 +828,6 @@ Item {
             // nothing to restore and nothing to invent.
             if (target !== null && target.enabled && target.visible)
                 target.forceActiveFocus(Qt.OtherFocusReason);
-        }
-
-        sourceComponent: WhatsNewOverlay {
-            whatsNew: root.whatsNew
-            // The scrim covers the band; the card stays below it, like every
-            // other in-window surface.
-            contentTopInset: root.titleBarHeight
-            focus: true
         }
     }
 
@@ -819,6 +842,7 @@ Item {
         // the What's-new overlay, after these three were already written, so they
         // closed and left the window with no focus owner at all.
         property Item focusReturn: null
+        property bool sourceLoaded: false
 
         anchors.fill: parent
         active: root.recovery.surfaceOpen
@@ -830,22 +854,26 @@ Item {
         }
 
         onActiveChanged: {
-            if (recoveryOverlayLoader.active)
+            if (recoveryOverlayLoader.active) {
+                if (!recoveryOverlayLoader.sourceLoaded) {
+                    recoveryOverlayLoader.sourceLoaded = true;
+                    recoveryOverlayLoader.setSource(Qt.resolvedUrl("RecoveryOverlay.qml"), {
+                        recovery: root.recovery,
+                        // The scrim covers the shell including its title band --
+                        // the window behind a modal must not read as still usable
+                        // -- but the card stays below it, or at the 860x700
+                        // minimum window its top edge lands on the brand, the
+                        // navigation and the window buttons.
+                        contentTopInset: root.titleBarHeight,
+                        focus: true
+                    });
+                }
                 return;
+            }
             const target = recoveryOverlayLoader.focusReturn;
             recoveryOverlayLoader.focusReturn = null;
             if (target !== null && target.enabled && target.visible)
                 target.forceActiveFocus(Qt.OtherFocusReason);
-        }
-
-        sourceComponent: RecoveryOverlay {
-            recovery: root.recovery
-            // The scrim covers the shell including its title band — the window
-            // behind a modal must not read as still usable — but the card stays
-            // below it, or at the 860x700 minimum window its top edge lands on
-            // the brand, the navigation and the window buttons.
-            contentTopInset: root.titleBarHeight
-            focus: true
         }
     }
 
@@ -860,6 +888,7 @@ Item {
         // the What's-new overlay, after these three were already written, so they
         // closed and left the window with no focus owner at all.
         property Item focusReturn: null
+        property bool sourceLoaded: false
 
         anchors.fill: parent
         active: root.recordingError.active
@@ -871,18 +900,21 @@ Item {
         }
 
         onActiveChanged: {
-            if (recordingErrorLoader.active)
+            if (recordingErrorLoader.active) {
+                if (!recordingErrorLoader.sourceLoaded) {
+                    recordingErrorLoader.sourceLoaded = true;
+                    recordingErrorLoader.setSource(Qt.resolvedUrl("RecordingErrorOverlay.qml"), {
+                        error: root.recordingError,
+                        contentTopInset: root.titleBarHeight,
+                        focus: true
+                    });
+                }
                 return;
+            }
             const target = recordingErrorLoader.focusReturn;
             recordingErrorLoader.focusReturn = null;
             if (target !== null && target.enabled && target.visible)
                 target.forceActiveFocus(Qt.OtherFocusReason);
-        }
-
-        sourceComponent: RecordingErrorOverlay {
-            error: root.recordingError
-            contentTopInset: root.titleBarHeight
-            focus: true
         }
     }
 
@@ -898,6 +930,7 @@ Item {
         // the What's-new overlay, after these three were already written, so they
         // closed and left the window with no focus owner at all.
         property Item focusReturn: null
+        property bool sourceLoaded: false
 
         anchors.fill: parent
         active: root.crashReport.active
@@ -909,18 +942,21 @@ Item {
         }
 
         onActiveChanged: {
-            if (crashReportLoader.active)
+            if (crashReportLoader.active) {
+                if (!crashReportLoader.sourceLoaded) {
+                    crashReportLoader.sourceLoaded = true;
+                    crashReportLoader.setSource(Qt.resolvedUrl("CrashReportOverlay.qml"), {
+                        crash: root.crashReport,
+                        contentTopInset: root.titleBarHeight,
+                        focus: true
+                    });
+                }
                 return;
+            }
             const target = crashReportLoader.focusReturn;
             crashReportLoader.focusReturn = null;
             if (target !== null && target.enabled && target.visible)
                 target.forceActiveFocus(Qt.OtherFocusReason);
-        }
-
-        sourceComponent: CrashReportOverlay {
-            crash: root.crashReport
-            contentTopInset: root.titleBarHeight
-            focus: true
         }
     }
 }

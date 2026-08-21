@@ -100,6 +100,16 @@ class ExoPreviewItem : public QQuickItem {
         std::atomic<quint64> render_frames{0};
         std::atomic<quint64> consumed_frames{0};
         std::atomic<quint64> mutex_misses{0};
+        // The funnel between mutex_misses and consumed_frames, so no branch of a
+        // render pass is invisible. Within one measurement window:
+        //   render_frames = mutex_misses + acquire_abandoned + acquires
+        //   acquires      = consumed_frames + conversion_failures
+        // A pass that acquired but failed to convert has still TAKEN the frame off
+        // the last-value slot and handed the key back, so it can never be consumed
+        // again — which is why it is counted apart from a miss rather than with it.
+        std::atomic<quint64> acquires{0};
+        std::atomic<quint64> acquire_abandoned{0};
+        std::atomic<quint64> conversion_failures{0};
         std::atomic<quint64> interval_write{0};
         std::atomic<quint64> scene_interval_write{0};
         std::atomic<quint64> submit_write{0};
@@ -143,6 +153,14 @@ class ExoPreviewItem : public QQuickItem {
         // publication keeps it alive on its own.
         static void publishRenderState(std::shared_ptr<RenderLink> link, quint64 generation, bool ready, QSize size,
                                        QString error);
+
+        // Render thread, after a pass that could not take the frame it was owed.
+        // Routed through the GUI thread by the same queued hand-back as above,
+        // NOT by touching the window from the render thread: a scene update
+        // requested from inside a render pass reorders against the pass it is
+        // issued from, and measured live it collapsed the render rate rather
+        // than restoring it.
+        static void requestRetry(std::shared_ptr<RenderLink> link, quint64 generation);
     };
 
   signals:
@@ -206,6 +224,7 @@ class ExoPreviewItem : public QQuickItem {
     QMetaObject::Connection scene_graph_invalidated_connection_;
     QMetaObject::Connection scene_graph_initialized_connection_;
     QMetaObject::Connection screen_changed_connection_;
+    QMetaObject::Connection frame_swapped_connection_;
 
     bool frame_ready_ = false;
     QSize source_size_;

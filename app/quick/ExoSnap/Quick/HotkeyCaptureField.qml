@@ -55,10 +55,13 @@ Control {
         }
     }
 
+    // Chromed at rest, not only while capturing: the binding is a value the eye
+    // has to find on a row that also carries two buttons, and as bare text it
+    // reads as prose rather than as the shortcut this row is about.
     background: Rectangle {
-        color: root.capturing && root.enabled ? ExoTheme.surfaceRaised : "transparent"
-        border.width: root.capturing && root.enabled ? 1 : 0
-        border.color: ExoTheme.accent
+        color: root.enabled ? ExoTheme.surfaceRaised : "transparent"
+        border.width: 1
+        border.color: root.capturing && root.enabled ? ExoTheme.accent : ExoTheme.line
         radius: ExoTheme.radiusSm
     }
 }

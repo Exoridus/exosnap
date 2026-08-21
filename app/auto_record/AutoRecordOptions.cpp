@@ -156,6 +156,33 @@ bool ParseAutoRecordOptions(const QStringList& args, AutoRecordOptions* out, QSt
                     *error = QStringLiteral("--frame-rate requires an integer between 1 and 240");
                 return false;
             }
+        } else if (arg == QStringLiteral("--cq")) {
+            QString value;
+            if (!require_value(&value))
+                return false;
+            bool ok = false;
+            parsed.cq = value.toInt(&ok);
+            if (!ok || parsed.cq < AutoRecordOptions::kCqMin || parsed.cq > AutoRecordOptions::kCqMax) {
+                if (error)
+                    *error = QStringLiteral("--cq requires an integer between %1 and %2")
+                                 .arg(AutoRecordOptions::kCqMin)
+                                 .arg(AutoRecordOptions::kCqMax);
+                return false;
+            }
+        } else if (arg == QStringLiteral("--nvenc-preset")) {
+            QString value;
+            if (!require_value(&value))
+                return false;
+            bool ok = false;
+            parsed.nvenc_preset = value.toInt(&ok);
+            if (!ok || parsed.nvenc_preset < AutoRecordOptions::kNvencPresetMin ||
+                parsed.nvenc_preset > AutoRecordOptions::kNvencPresetMax) {
+                if (error)
+                    *error = QStringLiteral("--nvenc-preset requires an integer between %1 and %2")
+                                 .arg(AutoRecordOptions::kNvencPresetMin)
+                                 .arg(AutoRecordOptions::kNvencPresetMax);
+                return false;
+            }
         } else if (arg == QStringLiteral("--repeat-cycles")) {
             QString value;
             if (!require_value(&value))

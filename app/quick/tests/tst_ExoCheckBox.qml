@@ -18,7 +18,7 @@ TestCase {
         id: labelledComponent
 
         ExoCheckBox {
-            text: "Merge with above"
+            text: "Mix into previous track"
         }
     }
 

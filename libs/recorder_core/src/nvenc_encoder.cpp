@@ -646,20 +646,25 @@ bool NvencEncoder::QueryYuv444Support(std::string& out_error) {
 //   rcParams.averageBitRate    — target average bitrate in bps (VBR/CBR)
 //   rcParams.maxBitRate        — peak bitrate in bps (VBR: 1.5× avg; CBR: = avg)
 
-RcParams ComputeNvencRcParams(RateControlMode mode, uint32_t cq, uint32_t bitrate_kbps) {
+ConstQp NvencConstQpForCodec(VideoCodec codec, uint32_t cq) noexcept {
+    const uint32_t canonical = cq < kCqMin ? kCqMin : (cq > kCqMax ? kCqMax : cq);
+    // Inter frames carry +2 canonical CQ relative to intra — the ratio the three
+    // named presets always used (19/21, 24/26, 30/32). Converting both ends
+    // through the same curve keeps that offset meaningful in every codec's own
+    // domain instead of scaling a difference that was never measured there.
+    const uint32_t canonical_inter = (canonical + 2u > kCqMax) ? kCqMax : canonical + 2u;
+    return ConstQp{NvencNativeQuantizer(codec, canonical), NvencNativeQuantizer(codec, canonical_inter)};
+}
+
+RcParams ComputeNvencRcParams(VideoCodec codec, RateControlMode mode, uint32_t cq, uint32_t bitrate_kbps) {
     RcParams p{};
     switch (mode) {
     case RateControlMode::ConstantQuality: {
         p.rateControlMode = static_cast<uint32_t>(NV_ENC_PARAMS_RC_CONSTQP);
-        // Out-of-range values are clamped rather than rejected: the encoder must
-        // never be handed a QP outside [1, 51], whatever the caller passed.
-        const uint32_t qp = cq < kCqMin ? kCqMin : (cq > kCqMax ? kCqMax : cq);
-        // Inter frames carry +2 QP relative to intra — the ratio the three named
-        // presets always used (19/21, 24/26, 30/32), now applied to every CQ.
-        const uint32_t qp_inter = (qp + 2u) > kCqMax ? kCqMax : qp + 2u;
-        p.qpIntra = qp;
-        p.qpInterP = qp_inter;
-        p.qpInterB = qp_inter;
+        const ConstQp qp = NvencConstQpForCodec(codec, cq);
+        p.qpIntra = qp.intra;
+        p.qpInterP = qp.inter;
+        p.qpInterB = qp.inter;
         p.averageBitRate = 0;
         p.maxBitRate = 0;
         break;
@@ -688,14 +693,15 @@ RcParams ComputeNvencRcParams(RateControlMode mode, uint32_t cq, uint32_t bitrat
     case RateControlMode::Lossless:
         // Lossless is not yet implemented. Capability marks it NotImplemented so
         // the UI hides it. Defensively fall back to ConstantQuality/Balanced.
-        p = ComputeNvencRcParams(RateControlMode::ConstantQuality, CanonicalCq(QualityPreset::Balanced), bitrate_kbps);
+        p = ComputeNvencRcParams(codec, RateControlMode::ConstantQuality, CanonicalCq(QualityPreset::Balanced),
+                                 bitrate_kbps);
         break;
     }
     return p;
 }
 
 // ---------------------------------------------------------------------------
-// ComputeGopLength / ApplyGopToNvenc / ApplySpatialAqToNvenc / NextGopKeyframePhase
+// ComputeGopLength / ApplyGopToNvenc / ApplyAdaptiveQuantizationToNvenc / NextGopKeyframePhase
 // Pure GOP + AQ helpers (see nvenc_encoder.h). No GPU/NVENC session required.
 // ---------------------------------------------------------------------------
 uint32_t ComputeGopLength(float keyframe_interval_secs, uint32_t frame_rate_num, uint32_t frame_rate_den) noexcept {
@@ -732,10 +738,10 @@ uint32_t ComputeNvencGopBackstop(uint32_t gop_length, bool constant_frame_rate) 
     return constant_frame_rate ? gop_length : NVENC_INFINITE_GOPLENGTH;
 }
 
-void ApplySpatialAqToNvenc(NV_ENC_CONFIG& cfg) noexcept {
-    cfg.rcParams.enableAQ = 1;         // spatial AQ — no capability gate; safe without lookahead
-    cfg.rcParams.enableTemporalAQ = 0; // deliberately off (undocumented without lookahead)
-    cfg.rcParams.aqStrength = 0;       // 0 = driver auto-selects AQ strength
+void ApplyAdaptiveQuantizationToNvenc(NV_ENC_CONFIG& cfg) noexcept {
+    cfg.rcParams.enableAQ = 0;         // spatial AQ — measured net-negative under CONSTQP
+    cfg.rcParams.enableTemporalAQ = 0; // capability-gated and undocumented without lookahead
+    cfg.rcParams.aqStrength = 0;       // 0 = driver auto-selection; irrelevant while AQ is off
 }
 
 uint64_t ComputeFrameIntervalNs(uint32_t frame_rate_num, uint32_t frame_rate_den) noexcept {
@@ -864,7 +870,7 @@ bool NvencEncoder::FetchPresetConfig(std::string& out_error) {
 
     // Apply canonical rate-control via the pure, testable ComputeNvencRcParams helper.
     // NVENC SDK field names: rcParams.rateControlMode / constQP / averageBitRate / maxBitRate.
-    const RcParams rc = ComputeNvencRcParams(m_rateControlMode, m_cq, m_bitrate_kbps);
+    const RcParams rc = ComputeNvencRcParams(m_codec, m_rateControlMode, m_cq, m_bitrate_kbps);
     m_encodeConfig.rcParams.rateControlMode = static_cast<NV_ENC_PARAMS_RC_MODE>(rc.rateControlMode);
     m_encodeConfig.rcParams.constQP.qpIntra = rc.qpIntra;
     m_encodeConfig.rcParams.constQP.qpInterP = rc.qpInterP;
@@ -878,10 +884,9 @@ bool NvencEncoder::FetchPresetConfig(std::string& out_error) {
     m_encodeConfig.rcParams.lookaheadDepth = 0;
     m_encodeConfig.frameIntervalP = 1;
 
-    // Explicitly pin spatial adaptive quantization on, so the AQ state no longer
-    // depends on the driver's per-preset default. Temporal AQ stays off (no
-    // lookahead) — see ApplySpatialAqToNvenc.
-    ApplySpatialAqToNvenc(m_encodeConfig);
+    // Pin the adaptive-quantization state explicitly, so it no longer depends on
+    // the driver's per-preset default — see ApplyAdaptiveQuantizationToNvenc.
+    ApplyAdaptiveQuantizationToNvenc(m_encodeConfig);
 
     return true;
 }

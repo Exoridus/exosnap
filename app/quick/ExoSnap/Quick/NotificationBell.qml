@@ -12,8 +12,12 @@ Item {
 
     required property NotificationsAdapter notifications
 
-    implicitWidth: ExoTheme.controlHeight
-    implicitHeight: ExoTheme.controlHeight
+    // 40 x 40, filling the whole 40 px band top to bottom like the three window
+    // buttons at the other end of it, rather than a controlHeight chip centred
+    // with a gap above and below. Square, not the chip's radiusSm, for the same
+    // reason: it is part of the band, not a floating control sitting in it.
+    implicitWidth: 40
+    implicitHeight: 40
 
     // Three steps, not four: an unread SUCCESS is not urgent, so the bell paints
     // it the same as info rather than green (product-spec §9 — the dot carries
@@ -46,7 +50,6 @@ Item {
 
     Rectangle {
         anchors.fill: parent
-        radius: ExoTheme.radiusSm
         color: hoverHandler.hovered || root.notifications.hubOpen ? ExoTheme.surfaceHover : "transparent"
         border.width: root.activeFocus ? ExoTheme.focusRingWidth : 0
         border.color: ExoTheme.text
@@ -145,8 +148,12 @@ Item {
         anchors {
             top: parent.top
             right: parent.right
-            topMargin: 7
-            rightMargin: 7
+            // +2 over the glyph's own crown/shoulder offset, matching the 2 px
+            // the box grew on each side when it went from the 36 px chip to the
+            // full 40 px band cell — keeps the dot sitting on the same point of
+            // the glyph rather than drifting with the container.
+            topMargin: 9
+            rightMargin: 9
         }
     }
 

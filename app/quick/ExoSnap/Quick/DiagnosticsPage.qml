@@ -186,22 +186,35 @@ Item {
                 onClicked: bundleDialog.open()
             }
 
-            Label {
-                text: qsTr("Expert mode")
-                textFormat: Text.PlainText
-                color: root.diagnostics.expertMode ? ExoTheme.accent : ExoTheme.textSecondary
+            // Its own fixed gap rather than the header row's general item
+            // spacing: a label and the one switch it names read as a single
+            // control, and that pairing must not drift with how many other
+            // things happen to share the row on a given page (this header
+            // also carries the status label and the bundle button). Same
+            // value in SettingsPresetBar.qml, which carries the twin of this
+            // switch.
+            Row {
+                spacing: ExoTheme.spacingSm
                 Layout.alignment: Qt.AlignVCenter
-                font {
-                    family: ExoTheme.sansFamily
-                    pixelSize: ExoTheme.fontBody
-                }
-            }
 
-            ExoSwitch {
-                checked: root.diagnostics.expertMode
-                Accessible.name: qsTr("Expert mode")
-                onToggledByUser: function (value) {
-                    root.diagnostics.expertMode = value;
+                Label {
+                    text: qsTr("Expert mode")
+                    textFormat: Text.PlainText
+                    color: root.diagnostics.expertMode ? ExoTheme.accent : ExoTheme.textSecondary
+                    anchors.verticalCenter: parent.verticalCenter
+                    font {
+                        family: ExoTheme.sansFamily
+                        pixelSize: ExoTheme.fontBody
+                    }
+                }
+
+                ExoSwitch {
+                    checked: root.diagnostics.expertMode
+                    Accessible.name: qsTr("Expert mode")
+                    anchors.verticalCenter: parent.verticalCenter
+                    onToggledByUser: function (value) {
+                        root.diagnostics.expertMode = value;
+                    }
                 }
             }
         }
@@ -546,7 +559,6 @@ Item {
                                     ExoButton {
                                         text: qsTr("Run Self-Test")
                                         enabled: !root.diagnostics.checking
-                                        quiet: true
                                         onClicked: root.diagnostics.runCheck()
                                     }
                                 }
@@ -639,7 +651,6 @@ Item {
                                 ExoButton {
                                     text: qsTr("Open last report")
                                     enabled: root.diagnostics.hasLastRecording
-                                    quiet: true
                                     Layout.alignment: Qt.AlignLeft
                                     onClicked: root.diagnostics.openLastReport()
                                 }
@@ -726,7 +737,6 @@ Item {
 
                         ExoButton {
                             text: qsTr("Open Logs Page")
-                            quiet: true
                             Layout.alignment: Qt.AlignVCenter
                             onClicked: root.diagnostics.openLogs()
                         }

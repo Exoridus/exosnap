@@ -20,6 +20,7 @@ import json
 import math
 import os
 import re
+import statistics
 import subprocess
 import sys
 import tempfile
@@ -425,6 +426,41 @@ def default_matrix():
     return cells
 
 
+def explicit_matrix(presets, cq_values, vbr_values):
+    """A caller-chosen sweep, for calibrating a product decision rather than
+    re-running the baseline.
+
+    Deliberately separate from default_matrix(): the baseline exists so two
+    runs months apart are comparable, and a product sweep that widened it in
+    place would silently redefine what "the matrix" means. A sweep built here
+    is also free to carry more than four points per curve -- BD-rate still
+    needs exactly four (see bd_rate), so an exploration sweep and a BD-rate
+    comparison are two different reads of the same CSV, not one command.
+    """
+    cells = []
+    for preset in presets:
+        for cq in cq_values:
+            cells.append(MatrixCell(preset, "cq", cq))
+        for kbps in vbr_values:
+            cells.append(MatrixCell(preset, "vbr", kbps))
+    return cells
+
+
+def _parse_int_list(text, what):
+    if not text:
+        return []
+    values = []
+    for part in text.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            values.append(int(part))
+        except ValueError:
+            raise SystemExit(f"{what}: '{part}' is not an integer")
+    return values
+
+
 def check_ffmpeg_has_libvmaf(ffmpeg_path):
     result = subprocess.run([ffmpeg_path, "-filters"], capture_output=True, text=True, check=False)
     if "libvmaf" not in result.stdout:
@@ -459,10 +495,37 @@ def probe_encode(probe_path, y4m_path, out_path, vcodec, cell):
     return out_path
 
 
+# Both inputs are forced to the same colour description before scoring. The
+# encodes carry a real colour description (the encoder writes BT.709 into the
+# bitstream) while a Y4M reference carries none, and ffmpeg then auto-inserts a
+# colour conversion on one input only. Scoring that conversion cost 14 dB of
+# PSNR-Y and 4.3 VMAF on a 1440p60 AV1 encode whose pixels were in fact
+# untouched, which is large enough to invert a comparison. VMAF, SSIM and PSNR
+# are all defined on raw sample values, so declaring both sides unspecified
+# limited-range is the correct normalisation, not a workaround.
+# Both inputs are also re-stamped by frame index, which is what "compare frame i
+# against frame i" actually means. The metric filters pair frames by presentation
+# time, and a muxed candidate carries container timestamps a raw Y4M reference
+# does not -- Matroska quantises to its 1 ms timecode scale, so 60 fps lands on
+# 0/16/33/50 ms while the Y4M sits on exact 1/60 s. The two sets never coincide,
+# framesync then duplicates and mispairs, and a bit-exact lossless copy scores
+# PSNR-Y 21 dB with a third of its frames at VMAF 0. Rebasing to PTS-STARTPTS on
+# a shared timebase is not enough, because the quantisation is inside the
+# sequence, not at its start. Elementary streams happen not to need any of this,
+# which is exactly why it has to be unconditional.
+_METRIC_INPUT_NORMALISATION = (
+    "settb=1/1,setpts=N,setparams=range=1:color_primaries=2:color_trc=2:colorspace=2"
+)
+
+
 def measure_quality(ffmpeg_path, distorted_path, reference_path, log_dir, label):
     """Runs ffmpeg's libvmaf filter (which also reports SSIM/PSNR when asked)
     comparing `distorted_path` (the probe's encode, decoded) against the
-    original `reference_path` Y4M. Returns a dict with vmaf/ssim/psnr floats.
+    original `reference_path` Y4M.
+
+    Returns pooled vmaf/ssim/psnr plus the VMAF distribution (median, p10, p5,
+    minimum) and the libvmaf version. A high mean VMAF can hide a handful of bad
+    scroll or scene-change frames, so the tail is reported alongside it.
 
     Input order matters: libvmaf's `main`/`main2` streams follow the
     -lavfi/-filter_complex convention of [0:v] as the distorted signal and
@@ -479,7 +542,11 @@ def measure_quality(ffmpeg_path, distorted_path, reference_path, log_dir, label)
     """
     vmaf_log_name = f"{label}.vmaf.json"
     vmaf_log_path = os.path.join(log_dir, vmaf_log_name)
-    filter_arg = f"libvmaf=log_path={vmaf_log_name}:log_fmt=json:feature=name=psnr|name=float_ssim"
+    norm = _METRIC_INPUT_NORMALISATION
+    filter_arg = (
+        f"[0:v]{norm}[dist];[1:v]{norm}[ref];[dist][ref]"
+        f"libvmaf=log_path={vmaf_log_name}:log_fmt=json:feature=name=psnr|name=float_ssim"
+    )
     args = [
         ffmpeg_path,
         "-hide_banner",
@@ -487,7 +554,7 @@ def measure_quality(ffmpeg_path, distorted_path, reference_path, log_dir, label)
         distorted_path,
         "-i",
         reference_path,
-        "-lavfi",
+        "-filter_complex",
         filter_arg,
         "-f",
         "null",
@@ -500,12 +567,34 @@ def measure_quality(ffmpeg_path, distorted_path, reference_path, log_dir, label)
     with open(vmaf_log_path, "r", encoding="utf-8") as f:
         report = json.load(f)
     pooled = report["pooled_metrics"]
+    per_frame = sorted(frame["metrics"]["vmaf"] for frame in report["frames"])
+
+    def percentile(pct):
+        idx = int(round(pct / 100.0 * (len(per_frame) - 1)))
+        return per_frame[min(max(idx, 0), len(per_frame) - 1)]
+
+    # Mean of the worst 1% of frames, at least one frame wide. On screen content
+    # the upper percentiles saturate at exactly 100 and only the extreme tail
+    # moves, but a single frame's minimum is easy to move by one outlier;
+    # averaging the worst percentile keeps that tail readable without resting a
+    # verdict on one frame.
+    worst_n = max(1, len(per_frame) // 100)
+    vmaf_worst1_mean = sum(per_frame[:worst_n]) / worst_n
+
     # libvmaf's `feature=name=psnr` reports per-plane psnr_y/psnr_cb/psnr_cr
     # in pooled_metrics -- there is no combined "psnr" key (verified against
     # real ffmpeg 7.1.1's libvmaf JSON output). psnr_y (luma PSNR) is the
     # conventional scalar for encoder quality reporting.
     return {
         "vmaf": pooled["vmaf"]["mean"],
+        "vmaf_median": statistics.median(per_frame),
+        "vmaf_p10": percentile(10),
+        "vmaf_p5": percentile(5),
+        "vmaf_p1": percentile(1),
+        "vmaf_worst1_mean": vmaf_worst1_mean,
+        "vmaf_min": per_frame[0],
+        "frames": len(per_frame),
+        "libvmaf_version": report.get("version"),
         "ssim": pooled.get("float_ssim", {}).get("mean"),
         "psnr": pooled.get("psnr_y", {}).get("mean"),
     }
@@ -532,7 +621,7 @@ def run_matrix(args):
     ext = "ivf" if args.vcodec == "av1" else ("h265" if args.vcodec == "hevc" else "h264")
 
     rows = []
-    for cell in default_matrix():
+    for cell in args.matrix:
         out_path = os.path.join(work_dir, f"{clip_name}-{cell.label()}.{ext}")
         print(f"encoding {cell.label()} ...")
         probe_encode(args.probe, args.clip, out_path, args.vcodec, cell)
@@ -574,7 +663,25 @@ def _clip_duration_seconds(y4m_path):
 def write_report(output_base, vcodec, clip_path, rows, ffmpeg_path):
     csv_path = f"{output_base}.csv"
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=["preset", "rc", "value", "bitrate_kbps", "vmaf", "ssim", "psnr"])
+        writer = csv.DictWriter(
+            f,
+            fieldnames=[
+                "preset",
+                "rc",
+                "value",
+                "bitrate_kbps",
+                "vmaf",
+                "vmaf_median",
+                "vmaf_p10",
+                "vmaf_p5",
+                "vmaf_p1",
+                "vmaf_worst1_mean",
+                "vmaf_min",
+                "ssim",
+                "psnr",
+            ],
+            extrasaction="ignore",
+        )
         writer.writeheader()
         writer.writerows(rows)
 
@@ -588,28 +695,149 @@ def write_report(output_base, vcodec, clip_path, rows, ffmpeg_path):
         f.write(f"Clip: `{clip_path}`\n\n")
         f.write(f"Date: {datetime.date.today().isoformat()}\n\n")
         f.write(f"ffmpeg: `{ffmpeg_version}`\n\n")
-        f.write("| Preset | RC | Value | Bitrate (kbps) | VMAF | SSIM | PSNR |\n")
-        f.write("|---|---|---|---|---|---|---|\n")
+        if rows:
+            first = rows[0]
+            f.write(f"libvmaf: `{first.get('libvmaf_version', 'unknown')}`, model `vmaf_v0.6.1` (libvmaf default)\n\n")
+            f.write(f"Scored frames per encode: {first.get('frames', 'unknown')}\n\n")
+        f.write(
+            "Both inputs are normalised to an unspecified limited-range colour description before "
+            "scoring, so a colour description present on only one side cannot be scored as distortion.\n\n"
+        )
+        f.write(
+            "| Preset | RC | Value | Bitrate (kbps) | VMAF | VMAF p10 | VMAF p5 | VMAF p1 | "
+            "VMAF worst-1% | VMAF min | SSIM | PSNR |\n"
+        )
+        f.write("|---|---|---|---|---|---|---|---|---|---|---|---|\n")
         for r in rows:
             f.write(
                 f"| {r['preset']} | {r['rc']} | {r['value']} | {r['bitrate_kbps']:.0f} | "
-                f"{r['vmaf']:.2f} | {r['ssim']:.4f} | {r['psnr']:.2f} |\n"
+                f"{r['vmaf']:.2f} | {r['vmaf_p10']:.2f} | {r['vmaf_p5']:.2f} | {r['vmaf_p1']:.2f} | "
+                f"{r['vmaf_worst1_mean']:.2f} | {r['vmaf_min']:.2f} | "
+                f"{r['ssim']:.4f} | {r['psnr']:.2f} |\n"
             )
+
+
+# ---------------------------------------------------------------------------
+# Metric sanity suite
+# ---------------------------------------------------------------------------
+#
+# Establishes that the scoring path can tell good from bad before any encoder
+# conclusion is drawn from it. Four candidates are built from the reference
+# itself with an external encoder, so their true ordering is known in advance:
+# a lossless copy, a mildly and a severely degraded encode, and the reference
+# shifted by one frame. VMAF, SSIM and PSNR must all rank them
+# identity > mild > severe, and the one-frame shift must score far below
+# identity -- a scoring path that compares the wrong frames, or that scores a
+# colour description instead of pixels, fails at least one of those.
+#
+# No absolute thresholds beyond "clearly separated": the numbers depend on the
+# clip, and a suite that pins them turns a content change into a false failure.
+
+
+def _build_sanity_candidates(ffmpeg_path, clip_path, work_dir):
+    """Returns [(label, path)] for the four sanity candidates."""
+    out = []
+
+    lossless = os.path.join(work_dir, "sanity-identity.mkv")
+    subprocess.run(
+        [ffmpeg_path, "-hide_banner", "-loglevel", "error", "-i", clip_path,
+         "-c:v", "ffv1", "-y", lossless],
+        check=True,
+    )
+    out.append(("identity", lossless))
+
+    for label, crf in (("mild", "20"), ("severe", "42")):
+        path = os.path.join(work_dir, f"sanity-{label}.mkv")
+        subprocess.run(
+            [ffmpeg_path, "-hide_banner", "-loglevel", "error", "-i", clip_path,
+             "-c:v", "libx264", "-preset", "veryfast", "-crf", crf, "-y", path],
+            check=True,
+        )
+        out.append((label, path))
+
+    # One-frame temporal offset: drop the first frame, so every compared pair is
+    # off by one. Lossless again, to keep the offset the only difference.
+    offset = os.path.join(work_dir, "sanity-offset.mkv")
+    subprocess.run(
+        [ffmpeg_path, "-hide_banner", "-loglevel", "error", "-i", clip_path,
+         "-vf", "trim=start_frame=1,setpts=PTS-STARTPTS", "-c:v", "ffv1", "-y", offset],
+        check=True,
+    )
+    out.append(("offset-1-frame", offset))
+    return out
+
+
+def run_metric_sanity(args):
+    check_ffmpeg_has_libvmaf(args.ffmpeg)
+    work_dir = args.out_dir or tempfile.mkdtemp(prefix="exosnap-metric-sanity-")
+    os.makedirs(work_dir, exist_ok=True)
+
+    scores = {}
+    for label, path in _build_sanity_candidates(args.ffmpeg, args.clip, work_dir):
+        scores[label] = measure_quality(args.ffmpeg, path, args.clip, work_dir, f"sanity-{label}")
+        m = scores[label]
+        print(
+            f"{label:16s} vmaf={m['vmaf']:8.4f}  p10={m['vmaf_p10']:8.4f}  "
+            f"worst1%={m['vmaf_worst1_mean']:8.4f}  min={m['vmaf_min']:8.4f}  "
+            f"ssim={m['ssim']:.6f}  psnr_y={m['psnr']:.3f}  frames={m['frames']}"
+        )
+
+    failures = []
+    for metric in ("vmaf", "ssim", "psnr"):
+        ordered = [scores["identity"][metric], scores["mild"][metric], scores["severe"][metric]]
+        if not (ordered[0] > ordered[1] > ordered[2]):
+            failures.append(f"{metric}: identity/mild/severe not strictly ordered: {ordered}")
+
+    for metric in ("vmaf", "ssim", "psnr"):
+        if scores["offset-1-frame"][metric] >= scores["identity"][metric]:
+            failures.append(f"{metric}: a one-frame offset did not score below identity")
+    if scores["offset-1-frame"]["vmaf"] >= scores["mild"]["vmaf"]:
+        failures.append("vmaf: a one-frame offset scored no worse than a mild encode")
+
+    print()
+    print(f"libvmaf: {scores['identity'].get('libvmaf_version')}, model vmaf_v0.6.1 (libvmaf default)")
+    print(f"artifacts: {work_dir}")
+    if failures:
+        for line in failures:
+            print(f"FAIL: {line}")
+        return 1
+    print("METRIC SANITY PASSED")
+    return 0
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--self-test", action="store_true", help="run built-in self-tests and exit")
+    parser.add_argument(
+        "--metric-sanity",
+        action="store_true",
+        help="score four candidates of known ordering against --clip and verify the metrics rank them correctly",
+    )
+    parser.add_argument("--out-dir", help="directory for --metric-sanity artifacts (default: a temp directory)")
     parser.add_argument("--clip", help="reference Y4M clip")
     parser.add_argument("--vcodec", choices=["av1", "h264", "hevc"], help="codec to sweep")
     parser.add_argument("--probe", default="build/windows-x64-debug/tools/probes/probe_encode_file/Debug/probe_encode_file.exe",
                         help="path to the probe_encode_file executable")
     parser.add_argument("--ffmpeg", default="ffmpeg", help="ffmpeg executable with libvmaf support")
     parser.add_argument("--output", default="quality-matrix-result", help="output basename (writes .csv and .md)")
+    # Sweep selection. Omitted entirely, the baseline matrix runs unchanged, so
+    # an existing invocation from the workflow doc keeps producing the same
+    # cells.
+    parser.add_argument("--presets", help="comma-separated NVENC presets to sweep, e.g. p4,p6,p7 (default: the baseline p4,p7)")
+    parser.add_argument("--cq-values", help="comma-separated CQ points, e.g. 16,19,22,24 (default: the baseline 19,24,30,36)")
+    parser.add_argument("--vbr-values", help="comma-separated VBR kbps points (default: the baseline; pass an empty value to skip VBR)")
     args = parser.parse_args(argv)
 
     if args.self_test:
         return 0 if _self_test() else 1
+
+    if args.metric_sanity:
+        if not args.clip:
+            parser.error("--metric-sanity requires --clip")
+        args.clip = os.path.abspath(args.clip)
+        if args.out_dir:
+            args.out_dir = os.path.abspath(args.out_dir)
+        return run_metric_sanity(args)
 
     if not args.clip or not args.vcodec:
         parser.error("--clip and --vcodec are required unless --self-test is given")
@@ -619,6 +847,22 @@ def main(argv=None):
     # against the caller's cwd by the time ffmpeg sees it. Resolve once, here,
     # rather than at every args.clip use site in run_matrix()/measure_quality().
     args.clip = os.path.abspath(args.clip)
+    # Same reason as the clip above, and the same failure: measure_quality()
+    # and probe_encode() both run from a scratch cwd, so a relative --probe
+    # resolves against the wrong directory and CreateProcess reports a bare
+    # "file not found" that names neither the path nor the reason.
+    args.probe = os.path.abspath(args.probe)
+
+    if args.presets is None and args.cq_values is None and args.vbr_values is None:
+        args.matrix = default_matrix()
+    else:
+        presets = [p.strip() for p in args.presets.split(",") if p.strip()] if args.presets else ["p4", "p7"]
+        cq_values = _parse_int_list(args.cq_values, "--cq-values") if args.cq_values is not None else [19, 24, 30, 36]
+        vbr_values = (_parse_int_list(args.vbr_values, "--vbr-values") if args.vbr_values is not None
+                      else [3000, 6000, 12000, 24000])
+        if not cq_values and not vbr_values:
+            parser.error("nothing to sweep: --cq-values and --vbr-values are both empty")
+        args.matrix = explicit_matrix(presets, cq_values, vbr_values)
 
     run_matrix(args)
     return 0

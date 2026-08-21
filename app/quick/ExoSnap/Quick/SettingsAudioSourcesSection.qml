@@ -2,24 +2,34 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
+// What goes into the recording, and where it comes from. Split from Audio
+// encoding because the two answer different questions: this card is about which
+// sources are captured and how the microphone is picked up, that one is about
+// the shape of the resulting audio stream. Both are visible in Default; Expert
+// only adds rows inside them.
 ExoCard {
     id: root
 
     required property SettingsAdapter settings
     required property bool stacked
 
-    title: qsTr("Audio")
+    title: qsTr("Audio sources")
     subtitle: root.settings.audioSummary
 
+    // Always listed, receding rather than disappearing while a window is not the
+    // capture target: it is a persisted setting, and a row that vanishes teaches
+    // the user that the application-audio option does not exist.
     SettingsAudioSourceRow {
         label: qsTr("Application audio")
+        hint: root.settings.appAudioVisible
+              ? ""
+              : qsTr("Only while capturing a window")
         sourceEnabled: root.settings.appAudioEnabled
         separateTrack: root.settings.appAudioSeparate
-        locked: root.settings.controlsLocked
+        locked: root.settings.controlsLocked || !root.settings.appAudioVisible
         meterLevel: root.settings.appMeter
         stacked: root.stacked
-        visible: root.settings.appAudioVisible
-        showMergeOption: false
+        showMixOption: false
         Layout.fillWidth: true
         onSourceToggled: value => root.settings.appAudioEnabled = value
         onSeparateToggled: value => root.settings.appAudioSeparate = value
@@ -32,7 +42,7 @@ ExoCard {
         locked: root.settings.controlsLocked
         meterLevel: root.settings.systemMeter
         stacked: root.stacked
-        showMergeOption: root.settings.appAudioVisible
+        showMixOption: root.settings.appAudioVisible
         Layout.fillWidth: true
         onSourceToggled: value => root.settings.systemAudioEnabled = value
         onSeparateToggled: value => root.settings.systemAudioSeparate = value
@@ -53,6 +63,10 @@ ExoCard {
     ExoSettingRow {
         label: qsTr("Microphone device")
         stacked: root.stacked
+        // Wider than the default slot because a device name and Rescan share it:
+        // at 220 the select keeps ~125 px and elides every real device name away.
+        // Matches the Destination folder row, which pairs a field with Browse.
+        controlWidth: 320
         Layout.fillWidth: true
 
         RowLayout {
@@ -79,7 +93,7 @@ ExoCard {
 
     ExoSettingRow {
         label: qsTr("Microphone channels")
-        hint: qsTr("How stereo mic inputs are mapped to the recorded channel")
+        info: qsTr("A stereo microphone can be recorded as it arrives, folded down to mono, or taken from one side only. Auto follows the device: a mono microphone stays mono and a stereo one stays stereo.")
         stacked: root.stacked
         Layout.fillWidth: true
 
@@ -104,6 +118,8 @@ ExoCard {
             Layout.fillWidth: true
 
             ExoSlider {
+                id: micGainSlider
+
                 from: -12
                 to: 12
                 stepSize: 1
@@ -118,162 +134,15 @@ ExoCard {
                 text: qsTr("%1 dB").arg(Math.round(root.settings.micGainDb))
                 textFormat: Text.PlainText
                 horizontalAlignment: Text.AlignRight
-                color: ExoTheme.textSecondary
+                // Follows the slider: a readout at full strength beside a receded
+                // track claims the value is still editable.
+                color: micGainSlider.enabled ? ExoTheme.textSecondary : ExoTheme.textDim
                 Layout.preferredWidth: 52
                 font {
                     family: ExoTheme.monoFamily
                     pixelSize: ExoTheme.fontSecondary
                 }
             }
-        }
-    }
-
-    ExoSettingRow {
-        label: qsTr("Audio bitrate")
-        stacked: root.stacked
-        visible: root.settings.audioBitrateRelevant
-        Layout.fillWidth: true
-
-        ExoNumberField {
-            from: 32
-            to: 510
-            stepSize: 8
-            suffix: qsTr("kbps")
-            value: root.settings.audioBitrateKbps
-            enabled: !root.settings.controlsLocked
-            Layout.fillWidth: true
-            Accessible.name: qsTr("Audio bitrate")
-            onValueCommitted: value => root.settings.audioBitrateKbps = value
-        }
-    }
-
-    ExoSettingRow {
-        label: qsTr("Channels")
-        hint: qsTr("Stereo preserves L/R · Mono mixes both channels")
-        stacked: root.stacked
-        Layout.fillWidth: true
-
-        ExoSelect {
-            options: root.settings.audioChannelsOptions
-            value: root.settings.audioChannels
-            enabled: !root.settings.controlsLocked
-            Layout.fillWidth: true
-            Accessible.name: qsTr("Audio channels")
-            onValueActivated: value => root.settings.audioChannels = value
-        }
-    }
-
-    ExoSettingRow {
-        label: qsTr("Sample rate")
-        stacked: root.stacked
-        visible: root.settings.audioSampleRateRelevant
-        Layout.fillWidth: true
-
-        ExoSelect {
-            options: root.settings.audioSampleRateOptions
-            value: root.settings.audioSampleRate
-            enabled: !root.settings.controlsLocked
-            Layout.fillWidth: true
-            Accessible.name: qsTr("Audio sample rate")
-            onValueActivated: value => root.settings.audioSampleRate = value
-        }
-    }
-
-    ExoSettingRow {
-        label: qsTr("Audio bit depth")
-        stacked: root.stacked
-        visible: root.settings.audioBitDepthRelevant
-        Layout.fillWidth: true
-
-        ExoSelect {
-            options: root.settings.audioBitDepthOptions
-            value: root.settings.audioBitDepth
-            enabled: !root.settings.controlsLocked
-            Layout.fillWidth: true
-            Accessible.name: qsTr("Audio bit depth")
-            onValueActivated: value => root.settings.audioBitDepth = value
-        }
-    }
-
-    ExoSettingRow {
-        label: qsTr("FLAC compression")
-        hint: qsTr("FLAC compression level (0 = fastest, 8 = smallest file)")
-        stacked: root.stacked
-        visible: root.settings.flacCompressionRelevant
-        Layout.fillWidth: true
-
-        ExoNumberField {
-            from: 0
-            to: 8
-            value: root.settings.flacCompressionLevel
-            enabled: !root.settings.controlsLocked
-            Layout.fillWidth: true
-            Accessible.name: qsTr("FLAC compression level")
-            onValueCommitted: value => root.settings.flacCompressionLevel = value
-        }
-    }
-
-    ExoSettingRow {
-        label: qsTr("Brickwall limiter")
-        stacked: root.stacked
-        controlWidth: 60
-        Layout.fillWidth: true
-
-        ExoSwitch {
-            checked: root.settings.limiterEnabled
-            enabled: !root.settings.controlsLocked
-            Accessible.name: qsTr("Brickwall limiter")
-            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
-            onToggledByUser: value => root.settings.limiterEnabled = value
-        }
-    }
-
-    ExoSettingRow {
-        label: qsTr("Opus frame duration")
-        stacked: root.stacked
-        visible: root.settings.expertMode && root.settings.opusControlsRelevant
-        Layout.fillWidth: true
-
-        ExoSelect {
-            options: root.settings.opusFrameDurationOptions
-            value: root.settings.opusFrameDuration
-            enabled: !root.settings.controlsLocked
-            Layout.fillWidth: true
-            Accessible.name: qsTr("Opus frame duration")
-            onValueActivated: value => root.settings.opusFrameDuration = value
-        }
-    }
-
-    ExoSettingRow {
-        label: qsTr("Opus complexity")
-        stacked: root.stacked
-        visible: root.settings.expertMode && root.settings.opusControlsRelevant
-        Layout.fillWidth: true
-
-        ExoNumberField {
-            from: 0
-            to: 10
-            value: root.settings.opusComplexity
-            enabled: !root.settings.controlsLocked
-            Layout.fillWidth: true
-            Accessible.name: qsTr("Opus complexity")
-            onValueCommitted: value => root.settings.opusComplexity = value
-        }
-    }
-
-    ExoSettingRow {
-        label: qsTr("A/V clock slaving")
-        stacked: root.stacked
-        controlWidth: 60
-        visible: root.settings.expertMode
-        Layout.fillWidth: true
-
-        ExoSwitch {
-            checked: root.settings.clockSlavingEnabled
-            enabled: !root.settings.controlsLocked
-            Accessible.name: qsTr("Audio/video clock slaving")
-            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
-            onToggledByUser: value => root.settings.clockSlavingEnabled = value
         }
     }
 

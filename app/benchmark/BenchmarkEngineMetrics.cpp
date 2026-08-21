@@ -116,6 +116,37 @@ RecordingMetrics RecordingMetricsFromSnapshot(const recorder_core::RecordingDiag
 
     metrics.av_drift_ms = Gated(valid, terminal.av_drift_availability, terminal.av_drift_ms,
                                 "recorder_core: residual A/V drift as it lands in the file");
+
+    // Session totals, NOT differenced against the warm-up baseline. The funnel is
+    // only readable as a whole, and the one-shot shared-texture creation happens
+    // during the warm-up: subtracting it would report a session that never
+    // created a texture and still published through it.
+    const recorder_core::PreviewTapDiagnostics& tap = terminal.preview_tap;
+    metrics.preview_tap_frames_seen =
+        Counter(valid, tap.frames_seen, "recorder_core: ticks that reached the preview tap with a frame (session)");
+    metrics.preview_tap_gate_passes =
+        Counter(valid, tap.gate_passes, "recorder_core: tap ticks the ~30 Hz publish gate let through (session)");
+    metrics.preview_tap_shared_texture_ready =
+        Counter(valid, tap.shared_texture_ready ? 1 : 0,
+                "recorder_core: 1 once the shared texture exists and its handle reached the consumer");
+    metrics.preview_tap_publish_attempts =
+        Counter(valid, tap.publish_attempts, "recorder_core: PreviewSharedTexture::TryPublish calls (session)");
+    metrics.preview_tap_publish_successes =
+        Counter(valid, tap.publish_successes, "recorder_core: TryPublish calls that took the keyed mutex (session)");
+    metrics.preview_tap_publish_mutex_misses =
+        Counter(valid, tap.publish_mutex_misses,
+                "recorder_core: TryPublish calls that lost the 0 ms keyed-mutex acquire, WAIT_TIMEOUT (session)");
+    metrics.preview_tap_publish_abandoned =
+        Counter(valid, tap.publish_abandoned,
+                "recorder_core: TryPublish calls that found the keyed mutex abandoned — the shared surface is "
+                "inconsistent and this transport generation cannot recover (session)");
+    metrics.preview_tap_publish_failures =
+        Counter(valid, tap.publish_failures, "recorder_core: TryPublish acquires that failed outright (session)");
+    metrics.preview_tap_publish_release_failures =
+        Counter(valid, tap.publish_release_failures,
+                "recorder_core: copies made and then failed to release the key to the consumer (session)");
+    metrics.preview_tap_published_edges =
+        Counter(valid, tap.published_edges, "recorder_core: publish edges delivered to the consumer (session)");
     return metrics;
 }
 

@@ -53,16 +53,22 @@ const CompareData kAudioCodec{
 // ---------------------------------------------------------------------------
 // quality
 // ---------------------------------------------------------------------------
+// The CQ numbers are deliberately absent. They are an ExoSnap scale that each
+// codec maps onto its own quantizer, so a number here would read as the value
+// the encoder receives. Expert mode owns the number and names what it resolves
+// to; this table compares what the tiers are FOR.
 const CompareData kQuality{
     QStringLiteral("Quality"),
-    QStringLiteral("Constant-quality preset \xC2\xB7 lower CQ number is sharper."),
+    QStringLiteral("How much the encoder may soften the picture to save space."),
     {
-        {QStringLiteral("Draft"), QStringLiteral("CQ 35 \xC2\xB7 smallest files \xC2\xB7 visibly soft"), false,
+        {QStringLiteral("Draft"), QStringLiteral("Smallest files \xC2\xB7 visibly soft \xC2\xB7 review copies"), false,
          QString()},
-        {QStringLiteral("Efficient"), QStringLiteral("CQ 30 \xC2\xB7 small files \xC2\xB7 softer"), false, QString()},
-        {QStringLiteral("Balanced"), QStringLiteral("CQ 24 \xC2\xB7 best size-to-quality"), true, QString()},
-        {QStringLiteral("High"), QStringLiteral("CQ 19 \xC2\xB7 sharp \xC2\xB7 larger files"), false, QString()},
-        {QStringLiteral("Ultra"), QStringLiteral("CQ 16 \xC2\xB7 sharpest \xC2\xB7 largest files"), false, QString()},
+        {QStringLiteral("Low"), QStringLiteral("Small files \xC2\xB7 softer \xC2\xB7 long sessions"), false, QString()},
+        {QStringLiteral("Balanced"), QStringLiteral("Best size-to-quality \xC2\xB7 clean at normal viewing"), true,
+         QString()},
+        {QStringLiteral("High"), QStringLiteral("Sharp \xC2\xB7 larger files \xC2\xB7 the default"), false, QString()},
+        {QStringLiteral("Ultra"), QStringLiteral("Sharpest \xC2\xB7 largest files \xC2\xB7 archival"), false,
+         QString()},
     },
 };
 

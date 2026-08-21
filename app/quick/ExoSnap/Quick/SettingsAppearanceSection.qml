@@ -19,8 +19,8 @@ ExoCard {
     title: qsTr("Appearance")
 
     ExoSettingRow {
-        label: qsTr("Appearance")
-        hint: qsTr("Surface palette. Dark is the shipped default.")
+        label: qsTr("Mode")
+        hint: qsTr("Surface palette · Dark is the shipped default")
         stacked: root.stacked
         Layout.fillWidth: true
 
@@ -39,7 +39,9 @@ ExoCard {
 
     ExoSettingRow {
         label: qsTr("Accent")
-        hint: qsTr("Highlight colour for selection, active controls and the primary action. It never changes what recording, caution or ready look like.")
+        info: qsTr("The highlight colour for selections, active controls and the primary action.
+
+It never changes what recording, caution or ready look like -- those stay fixed so a status never depends on a personal preference.")
         stacked: root.stacked
         Layout.fillWidth: true
 

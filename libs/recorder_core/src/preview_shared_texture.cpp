@@ -71,19 +71,36 @@ bool PreviewSharedTexture::Create(ID3D11Device* device, uint32_t width, uint32_t
     return true;
 }
 
-bool PreviewSharedTexture::TryPublish(ID3D11DeviceContext* context, ID3D11Texture2D* src) {
+PreviewAcquireOutcome ClassifyPreviewAcquire(HRESULT hr) noexcept {
+    if (hr == S_OK)
+        return PreviewAcquireOutcome::Acquired;
+    if (hr == static_cast<HRESULT>(WAIT_TIMEOUT))
+        return PreviewAcquireOutcome::Contended;
+    if (hr == static_cast<HRESULT>(WAIT_ABANDONED))
+        return PreviewAcquireOutcome::Abandoned;
+    return PreviewAcquireOutcome::Failed;
+}
+
+PreviewSharedTexture::PublishResult PreviewSharedTexture::TryPublish(ID3D11DeviceContext* context,
+                                                                     ID3D11Texture2D* src) {
+    PublishResult result;
     if (context == nullptr || src == nullptr || !Valid())
-        return false;
+        return result;
 
     // 0 ms acquire: if the consumer currently holds the mutex we drop this frame
-    // rather than stall the encode thread. WAIT_TIMEOUT / WAIT_ABANDONED land here.
-    HRESULT hr = mutex_->AcquireSync(kPreviewSharedProducerKey, 0);
-    if (hr != S_OK)
-        return false;
+    // rather than stall the encode thread.
+    result.acquire = ClassifyPreviewAcquire(mutex_->AcquireSync(kPreviewSharedProducerKey, 0));
+    if (result.acquire != PreviewAcquireOutcome::Acquired) {
+        // Deliberately no ReleaseSync on Abandoned. A keyed mutex does not hand
+        // the caller ownership there the way a Win32 mutex does; the surface and
+        // the mutex are documented as inconsistent, and releasing a mutex this
+        // thread does not own would corrupt the key state on top of that.
+        return result;
+    }
 
     context->CopyResource(tex_.get(), src);
-    mutex_->ReleaseSync(kPreviewSharedConsumerKey);
-    return true;
+    result.released_ok = SUCCEEDED(mutex_->ReleaseSync(kPreviewSharedConsumerKey));
+    return result;
 }
 
 void PreviewSharedTexture::Reset() noexcept {

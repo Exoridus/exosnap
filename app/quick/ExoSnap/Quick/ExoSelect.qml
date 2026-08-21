@@ -44,6 +44,10 @@ ComboBox {
     focusPolicy: Qt.StrongFocus
     hoverEnabled: true
 
+    HoverHandler {
+        cursorShape: Qt.PointingHandCursor
+    }
+
     contentItem: Label {
         text: root.currentIndex === -1 ? root.placeholderText : root.displayText
         textFormat: Text.PlainText
@@ -95,6 +99,10 @@ ComboBox {
         height: ExoTheme.controlHeight
         enabled: optionDelegate.model.selectable
         highlighted: optionDelegate.ListView.isCurrentItem
+
+        HoverHandler {
+            cursorShape: Qt.PointingHandCursor
+        }
 
         contentItem: RowLayout {
             spacing: ExoTheme.spacingSm

@@ -15,6 +15,11 @@
 namespace exosnap {
 namespace {
 
+// Derived, not spelled out: the registry seeds whatever MakeBuiltInPresets()
+// returns, and a case that hardcodes the count fails for the wrong reason every
+// time the shipped set changes.
+const std::size_t kBuiltIns = MakeBuiltInPresets().size();
+
 // ===========================================================================
 // Helpers
 // ===========================================================================
@@ -23,7 +28,7 @@ namespace {
 RecordingPresetConfig MakeDistinctConfig() {
     RecordingPresetConfig cfg = MakeDefaultPreset().config;
     cfg.countdown_seconds = 3;
-    cfg.video.cq = recorder_core::CanonicalCq(recorder_core::QualityPreset::Efficient);
+    cfg.video.cq = recorder_core::CanonicalCq(recorder_core::QualityPreset::Low);
     return cfg;
 }
 
@@ -33,7 +38,7 @@ RecordingPresetConfig MakeDistinctConfig() {
 
 TEST(RecordingPresetRegistry, Constructor_SeedsDefault) {
     RecordingPresetRegistry reg;
-    EXPECT_EQ(reg.Count(), 4u);
+    EXPECT_EQ(reg.Count(), kBuiltIns);
     EXPECT_EQ(reg.SelectedId(), std::string(kDefaultPresetId));
     EXPECT_EQ(reg.SelectedPreset().id, std::string(kDefaultPresetId));
 }
@@ -45,7 +50,7 @@ TEST(RecordingPresetRegistry, Constructor_SeedsDefault) {
 TEST(RecordingPresetRegistry, AddPreset_CreatesNewId_SelectsIt_CountGrows) {
     RecordingPresetRegistry reg;
     const std::string id = reg.AddPreset(MakeDistinctConfig(), "Custom Preset");
-    EXPECT_EQ(reg.Count(), 5u);
+    EXPECT_EQ(reg.Count(), kBuiltIns + 1);
     EXPECT_EQ(reg.SelectedId(), id);
     EXPECT_NE(id, std::string(kDefaultPresetId));
     // id starts with "preset."
@@ -125,19 +130,19 @@ TEST(RecordingPresetRegistry, RenameSelected_SameNameAsSelected_ReturnsTrue) {
 
 TEST(RecordingPresetRegistry, DeleteSelected_DefaultBuiltInSelected_ReturnsFalse) {
     RecordingPresetRegistry reg;
-    EXPECT_EQ(reg.Count(), 4u);
+    EXPECT_EQ(reg.Count(), kBuiltIns);
     EXPECT_FALSE(reg.DeleteSelected());
-    EXPECT_EQ(reg.Count(), 4u);
+    EXPECT_EQ(reg.Count(), kBuiltIns);
 }
 
 TEST(RecordingPresetRegistry, DeleteSelected_UserPreset_RemovesIt_FallsBackToDefault) {
     RecordingPresetRegistry reg;
     const std::string id2 = reg.AddPreset(MakeDefaultPreset().config, "Mine");
-    EXPECT_EQ(reg.Count(), 5u);
+    EXPECT_EQ(reg.Count(), kBuiltIns + 1);
     EXPECT_EQ(reg.SelectedId(), id2); // AddPreset selects the new one.
 
     EXPECT_TRUE(reg.DeleteSelected());
-    EXPECT_EQ(reg.Count(), 4u);
+    EXPECT_EQ(reg.Count(), kBuiltIns);
     EXPECT_EQ(reg.SelectedId(), std::string(kDefaultPresetId));
     EXPECT_EQ(reg.FindById(id2), nullptr);
 }
@@ -232,7 +237,7 @@ TEST(RecordingPresetRegistry, IsSelectedDirty_MutatingAudio_IsDirty) {
 TEST(RecordingPresetRegistry, IsSelectedDirty_MutatingVideo_IsDirty) {
     RecordingPresetRegistry reg;
     RecordingPresetConfig live = reg.SelectedSavedConfig();
-    live.video.cq = recorder_core::CanonicalCq(recorder_core::QualityPreset::Efficient);
+    live.video.cq = recorder_core::CanonicalCq(recorder_core::QualityPreset::Low);
     EXPECT_TRUE(reg.IsSelectedDirty(live));
 }
 
@@ -279,7 +284,7 @@ TEST(RecordingPresetRegistry, IsSelectedDirty_RevertingCaptureMutation_StillClea
 TEST(RecordingPresetRegistry, LoadState_EmptyList_SeedsDefault) {
     RecordingPresetRegistry reg;
     reg.LoadState({}, "");
-    EXPECT_EQ(reg.Count(), 4u);
+    EXPECT_EQ(reg.Count(), kBuiltIns);
     EXPECT_EQ(reg.SelectedId(), std::string(kDefaultPresetId));
 }
 
@@ -315,7 +320,7 @@ TEST(RecordingPresetRegistry, LoadState_DuplicateIds_Deduped) {
 
     RecordingPresetRegistry reg;
     reg.LoadState(presets, "preset.aabbccddeeff0011");
-    EXPECT_EQ(reg.Count(), 5u);                    // 4 built-ins + the kept user preset
+    EXPECT_EQ(reg.Count(), kBuiltIns + 1);         // built-ins + the kept user preset
     EXPECT_EQ(reg.SelectedPreset().name, "First"); // First kept.
 }
 
@@ -329,7 +334,7 @@ TEST(RecordingPresetRegistry, LoadState_EachPresetSanitized) {
 
     RecordingPresetRegistry reg;
     reg.LoadState(presets, "preset.aabbccddeeff0011");
-    ASSERT_EQ(reg.Count(), 5u); // 4 built-ins + the user preset
+    ASSERT_EQ(reg.Count(), kBuiltIns + 1); // built-ins + the user preset
     EXPECT_EQ(reg.SelectedPreset().name, "Trimmed");
     EXPECT_EQ(reg.SelectedPreset().config.countdown_seconds, 0);
 }
@@ -340,12 +345,13 @@ TEST(RecordingPresetRegistry, LoadState_EachPresetSanitized) {
 
 // Production call site: MainWindow ctor -> RecordingPresetRegistry() and
 // LoadState() after RecordingPresetStore::Load().
-TEST(RecordingPresetRegistry, Constructor_SeedsFourBuiltIns_DefaultSelected) {
+TEST(RecordingPresetRegistry, Constructor_SeedsEveryBuiltIn_DefaultSelected) {
     RecordingPresetRegistry reg;
-    EXPECT_EQ(reg.Count(), 4u);
+    EXPECT_EQ(reg.Count(), kBuiltIns);
     EXPECT_EQ(reg.SelectedId(), kDefaultPresetId);
     EXPECT_NE(reg.FindById(kQualityPresetId), nullptr);
-    EXPECT_NE(reg.FindById(kEfficiencyPresetId), nullptr);
+    EXPECT_NE(reg.FindById(kCompactPresetId), nullptr);
+    EXPECT_NE(reg.FindById(kPerformancePresetId), nullptr);
     EXPECT_NE(reg.FindById(kCompatibilityPresetId), nullptr);
 }
 
@@ -359,7 +365,7 @@ TEST(RecordingPresetRegistry, BuiltIn_RenameDelete_Refused) {
     EXPECT_EQ(reg.SelectedPreset().name, "Quality");
 
     EXPECT_FALSE(reg.DeleteSelected());
-    EXPECT_EQ(reg.Count(), 4u);
+    EXPECT_EQ(reg.Count(), kBuiltIns);
 }
 
 TEST(RecordingPresetRegistry, RenameSelected_CaseInsensitiveCollision_Refused) {
@@ -390,7 +396,7 @@ TEST(RecordingPresetRegistry, DeleteUserPreset_SelectionFallsToDefault) {
     reg.AddPreset(MakeDefaultPreset().config, "Mine");
     ASSERT_TRUE(reg.DeleteSelected());
     EXPECT_EQ(reg.SelectedId(), kDefaultPresetId);
-    EXPECT_EQ(reg.Count(), 4u);
+    EXPECT_EQ(reg.Count(), kBuiltIns);
 }
 
 // Production call site: MainWindow ctor LoadState — a stale persisted copy of
@@ -406,7 +412,7 @@ TEST(RecordingPresetRegistry, LoadState_DropsPersistedBuiltInIds_DedupesReserved
 
     RecordingPresetRegistry reg;
     reg.LoadState({stale_default, user}, user.id);
-    EXPECT_EQ(reg.Count(), 5u);
+    EXPECT_EQ(reg.Count(), kBuiltIns + 1);
     EXPECT_EQ(reg.FindById(kDefaultPresetId)->config.video.cq, 19u);
     EXPECT_EQ(reg.FindById(user.id)->name, "quality (2)");
     EXPECT_EQ(reg.SelectedId(), user.id);
@@ -439,12 +445,11 @@ TEST(RecordingPresetRegistry, AddPreset_StripsEnvironmentFields) {
 // environment) and SanitizePresetConfig, and the dirty check compares that
 // against the newly-selected preset via IsSelectedDirty. It runs the full
 // from→to matrix so every built-in is verified both as the switch source and
-// the switch target (Efficiency's cq 30 = CanonicalCq(Efficient) is the case
-// that historically snapped to a canonical value and produced a spurious
-// dirty).
+// the switch target (Compact's cq 30 = CanonicalCq(Low) is the case that
+// historically snapped to a canonical value and produced a spurious dirty).
 TEST(RecordingPresetRegistry, SelectingBuiltIn_NeverReportsDirty_AllTransitions) {
-    const std::array<std::string_view, 4> ids = {kDefaultPresetId, kQualityPresetId, kEfficiencyPresetId,
-                                                 kCompatibilityPresetId};
+    const std::array<std::string_view, 5> ids = {kDefaultPresetId, kQualityPresetId, kCompactPresetId,
+                                                 kPerformancePresetId, kCompatibilityPresetId};
     for (const auto from_id : ids) {
         for (const auto to_id : ids) {
             RecordingPresetRegistry reg;

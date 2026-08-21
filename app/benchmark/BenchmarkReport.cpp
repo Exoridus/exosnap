@@ -445,6 +445,19 @@ bool WriteReport(const QString& path, const Environment& environment, const RunC
     preview_json.insert(QStringLiteral("preview_publish_signals"), MetricToJson(preview.preview_publish_signals));
     preview_json.insert(QStringLiteral("preview_scene_update_requests"),
                         MetricToJson(preview.preview_scene_update_requests));
+    preview_json.insert(QStringLiteral("consumer_acquires"), MetricToJson(preview.consumer_acquires));
+    preview_json.insert(QStringLiteral("consumer_acquire_abandoned"), MetricToJson(preview.consumer_acquire_abandoned));
+    preview_json.insert(QStringLiteral("consumer_conversion_failures"),
+                        MetricToJson(preview.consumer_conversion_failures));
+    preview_json.insert(QStringLiteral("publish_interval_ms_p50"), MetricToJson(preview.publish_interval_ms_p50));
+    preview_json.insert(QStringLiteral("publish_interval_ms_p95"), MetricToJson(preview.publish_interval_ms_p95));
+    preview_json.insert(QStringLiteral("publish_interval_ms_p99"), MetricToJson(preview.publish_interval_ms_p99));
+    preview_json.insert(QStringLiteral("publish_interval_ms_max"), MetricToJson(preview.publish_interval_ms_max));
+    preview_json.insert(QStringLiteral("presentation_debt_ms_p50"), MetricToJson(preview.presentation_debt_ms_p50));
+    preview_json.insert(QStringLiteral("presentation_debt_ms_p95"), MetricToJson(preview.presentation_debt_ms_p95));
+    preview_json.insert(QStringLiteral("presentation_debt_ms_p99"), MetricToJson(preview.presentation_debt_ms_p99));
+    preview_json.insert(QStringLiteral("presentation_debt_ms_max"), MetricToJson(preview.presentation_debt_ms_max));
+    preview_json.insert(QStringLiteral("source_interval_ms_max"), MetricToJson(preview.source_interval_ms_max));
     root.insert(QStringLiteral("preview"), preview_json);
 
     QJsonObject recording_json;
@@ -470,6 +483,24 @@ bool WriteReport(const QString& path, const Environment& environment, const RunC
     recording_json.insert(QStringLiteral("mux_queue_depth"), MetricToJson(recording.mux_queue_depth));
     recording_json.insert(QStringLiteral("audio_frames_dropped"), MetricToJson(recording.audio_frames_dropped));
     recording_json.insert(QStringLiteral("av_drift_ms"), MetricToJson(recording.av_drift_ms));
+    recording_json.insert(QStringLiteral("preview_tap_frames_seen"), MetricToJson(recording.preview_tap_frames_seen));
+    recording_json.insert(QStringLiteral("preview_tap_gate_passes"), MetricToJson(recording.preview_tap_gate_passes));
+    recording_json.insert(QStringLiteral("preview_tap_shared_texture_ready"),
+                          MetricToJson(recording.preview_tap_shared_texture_ready));
+    recording_json.insert(QStringLiteral("preview_tap_publish_attempts"),
+                          MetricToJson(recording.preview_tap_publish_attempts));
+    recording_json.insert(QStringLiteral("preview_tap_publish_successes"),
+                          MetricToJson(recording.preview_tap_publish_successes));
+    recording_json.insert(QStringLiteral("preview_tap_publish_mutex_misses"),
+                          MetricToJson(recording.preview_tap_publish_mutex_misses));
+    recording_json.insert(QStringLiteral("preview_tap_publish_abandoned"),
+                          MetricToJson(recording.preview_tap_publish_abandoned));
+    recording_json.insert(QStringLiteral("preview_tap_publish_failures"),
+                          MetricToJson(recording.preview_tap_publish_failures));
+    recording_json.insert(QStringLiteral("preview_tap_publish_release_failures"),
+                          MetricToJson(recording.preview_tap_publish_release_failures));
+    recording_json.insert(QStringLiteral("preview_tap_published_edges"),
+                          MetricToJson(recording.preview_tap_published_edges));
     root.insert(QStringLiteral("recording"), recording_json);
 
     QJsonObject process_json;

@@ -1,6 +1,7 @@
 #include "RecordPreviewAdapter.h"
 
 #include "ExoPreviewItem.h"
+#include "PreviewPercentile.h"
 
 #include "services/CaptureSourceKey.h"
 #include "services/DxgiCaptureHubService.h"
@@ -46,6 +47,15 @@ static_assert(!std::is_copy_constructible_v<QueuedSharedHandle>, "an owned HANDL
 static_assert(!std::is_copy_assignable_v<QueuedSharedHandle>, "an owned HANDLE must never be copied");
 static_assert(!std::is_move_constructible_v<QueuedSharedHandle>,
               "no consumer moves one; add a move that clears the source first");
+
+// The engine-source and feed-lifecycle lines share the switch the item's own
+// presentation trace uses, so one variable turns the whole chain on. Read once:
+// these sit on paths that run per recording, not per frame, but the trace is a
+// diagnostic and must cost nothing when nobody asked for it.
+bool previewTraceEnabled() {
+    static const bool enabled = qEnvironmentVariableIntValue("EXOSNAP_PREVIEW_TRACE") != 0;
+    return enabled;
+}
 
 QString targetDescription(const recorder_core::CaptureTarget& target) {
     const QString description = QString::fromUtf8(target.description);
@@ -96,6 +106,7 @@ RecordPreviewAdapter::RecordPreviewAdapter(QObject* parent)
 
 RecordPreviewAdapter::~RecordPreviewAdapter() {
     stopPreview();
+    releaseEngineSource();
     // Member destruction then joins ready_frame_pool_ (declared last, so
     // destroyed first). A Ready-frame worker in flight uses its own D3D11
     // device and touches none of the members torn down above it.
@@ -110,6 +121,8 @@ void RecordPreviewAdapter::setActive(bool active) {
         return;
     active_ = active;
     emit activeChanged();
+    // A held engine source is presented as soon as there is somewhere to put it.
+    presentEngineSourceIfPossible();
     applyPreviewRunState();
 }
 
@@ -251,6 +264,13 @@ QVariantMap RecordPreviewAdapter::benchmarkSnapshot() const {
         {QStringLiteral("recording_dropped_frames"), QVariant::fromValue<qulonglong>(recording_dropped_frames_)},
         {QStringLiteral("recording_texture_generations"),
          QVariant::fromValue<qulonglong>(recording_texture_generations_)},
+        // The engine source's own funnel. `announcements > presentations` with
+        // deferrals standing means the handle arrived and is being held for a
+        // consumer; `announcements == 0` means it never arrived at all.
+        {QStringLiteral("engine_source_announcements"), QVariant::fromValue<qulonglong>(engine_source_announcements_)},
+        {QStringLiteral("engine_source_deferrals"), QVariant::fromValue<qulonglong>(engine_source_deferrals_)},
+        {QStringLiteral("engine_source_presentations"), QVariant::fromValue<qulonglong>(engine_source_presentations_)},
+        {QStringLiteral("engine_source_epoch"), QVariant::fromValue<qulonglong>(engine_source_epoch_)},
     };
 }
 
@@ -266,6 +286,20 @@ PreviewMetricsSnapshot RecordPreviewAdapter::previewMetricsSnapshot() const {
     snapshot.coalesced_signals = update_scheduler_->CoalescedSignals();
     snapshot.wakeups = update_scheduler_->Wakeups();
     snapshot.scene_update_requests = update_scheduler_->SceneUpdateRequests();
+
+    const auto fill = [](std::vector<double> samples, double* p50, double* p95, double* p99, double* max) {
+        if (samples.empty())
+            return;
+        std::sort(samples.begin(), samples.end());
+        *p50 = PercentileSorted(samples, 0.50);
+        *p95 = PercentileSorted(samples, 0.95);
+        *p99 = PercentileSorted(samples, 0.99);
+        *max = samples.back();
+    };
+    fill(update_scheduler_->PublishIntervalsMs(), &snapshot.publish_interval_ms_p50, &snapshot.publish_interval_ms_p95,
+         &snapshot.publish_interval_ms_p99, &snapshot.publish_interval_ms_max);
+    fill(update_scheduler_->PresentationDebtAgesMs(), &snapshot.debt_age_ms_p50, &snapshot.debt_age_ms_p95,
+         &snapshot.debt_age_ms_p99, &snapshot.debt_age_ms_max);
     return snapshot;
 }
 
@@ -304,6 +338,9 @@ void RecordPreviewAdapter::attachPreviewItem(ExoPreviewItem* item) {
     // A newly attached item has no texture, so the subscription is restarted even
     // when it was already running — hence the reset before the gate is asked.
     preview_running_ = false;
+    // An item created after the engine announced its texture must still get it;
+    // the announcement is never repeated.
+    presentEngineSourceIfPossible();
     applyPreviewRunState();
 }
 
@@ -337,9 +374,23 @@ void RecordPreviewAdapter::bindRecordingCoordinator(RecordingCoordinator* coordi
             QMetaObject::invokeMethod(
                 QCoreApplication::instance(),
                 [safe_self, handle_owner, width, height, tap]() {
-                    if (safe_self == nullptr || !safe_self->engine_feed_expected_.load(std::memory_order_acquire)) {
+                    if (safe_self == nullptr)
                         return;
-                    }
+                    // Deliberately NOT gated on engine_feed_expected_. The engine
+                    // announces its shared texture exactly once per session, from
+                    // the video thread as the first tapped frame goes through,
+                    // while that flag is set by the coordinator's capture-release
+                    // hook on another path entirely. When the announcement won the
+                    // race it was dropped here — and nothing ever announced again,
+                    // so the engine published into a texture with no consumer for
+                    // the rest of the recording while the item kept polling the
+                    // hub's abandoned one. Measured: 535 publish attempts, one
+                    // success, 534 timeouts, against a consumer that never once
+                    // acquired.
+                    //
+                    // The adapter owns the source and releases it when the feed
+                    // ends, so accepting it early costs nothing and removes the
+                    // race instead of narrowing it.
                     void* raw_handle = std::exchange(handle_owner->handle, nullptr);
                     safe_self->acceptRecordingTexture(raw_handle, width, height, tap);
                 },
@@ -373,6 +424,20 @@ void RecordPreviewAdapter::observeRecordingState(UiRecordingState state) {
         emit recordingStateChanged();
     }
     if (ShouldRevertPreviewFromPushedMode(state) && engine_feed_expected_.exchange(false, std::memory_order_acq_rel)) {
+        // The consumer half of the funnel, once, at the moment the engine feed
+        // ends. The per-transition trace in ExoPreviewItem only fires on expose,
+        // screen and scene-graph events, so a recording during which nothing
+        // moved left no record of how the preview did at all.
+        if (previewTraceEnabled()) {
+            const PreviewMetricsSnapshot metrics = previewMetricsSnapshot();
+            qInfo("preview-trace: engine-feed-ended publishes=%llu updates=%llu renders=%llu consumed=%llu "
+                  "mutex_misses=%llu source_fps=%.2f",
+                  metrics.publish_signals, metrics.scene_update_requests, metrics.render_frames,
+                  metrics.consumed_frames, metrics.mutex_misses, metrics.source_delivery_fps);
+        }
+        // The engine's texture belongs to the feed that just ended. Holding it
+        // past that would hand a dead surface to the next item that attaches.
+        releaseEngineSource();
         if (dxgi_source_ != nullptr)
             dxgi_source_->ReturnEngineLease();
         if (wgc_source_ != nullptr)
@@ -455,13 +520,70 @@ void RecordPreviewAdapter::acceptRecordingTexture(void* handle, uint32_t width, 
                                                   recorder_core::PreviewTapDesc tap) {
     if (handle == nullptr)
         return;
+    ++engine_source_announcements_;
+
+    // The adapter, not the item, owns the engine's source for the whole feed.
+    //
+    // The engine announces its shared texture EXACTLY ONCE per session: the
+    // handle callback fires inside the "texture does not exist yet" branch, and
+    // nothing re-announces. Handing that one handle straight to whatever item
+    // happened to exist at that instant made the preview's whole session depend
+    // on a race — the announcement arrives on the GUI thread, and if the Record
+    // page was not current right then, the handle was closed and silently
+    // dropped. The engine kept publishing into a texture with no consumer, the
+    // node kept polling the hub texture nobody publishes into any more, and both
+    // sides then missed their complementary keys for the rest of the run.
+    //
+    // Keeping the canonical handle here also survives what a one-shot handover
+    // cannot: an item destroyed and rebuilt, a page left and returned to, a
+    // scene-graph rebuild, or a late queued delivery.
+    releaseEngineSource();
+    engine_source_.handle = handle;
+    engine_source_.width = width;
+    engine_source_.height = height;
+    engine_source_.tap = tap;
+    ++engine_source_epoch_;
+    if (previewTraceEnabled()) {
+        qInfo("preview-trace: engine-source-announced epoch=%llu size=%ux%u active=%d item=%d", engine_source_epoch_,
+              width, height, active_ ? 1 : 0, item_ != nullptr ? 1 : 0);
+    }
+    presentEngineSourceIfPossible();
+}
+
+void RecordPreviewAdapter::presentEngineSourceIfPossible() {
+    if (engine_source_.handle == nullptr)
+        return;
     if (!active_ || item_ == nullptr) {
-        CloseHandle(static_cast<HANDLE>(handle));
+        // Held, not dropped. Counted apart from an announcement that never
+        // arrived, because the two need completely different investigations.
+        ++engine_source_deferrals_;
         return;
     }
-    item_->presentSharedTexture(handle, width, height, tap);
+
+    // The item takes ownership of what it is given and closes it once opened, so
+    // it gets a duplicate and the canonical handle stays here for the next item.
+    HANDLE duplicate = nullptr;
+    if (DuplicateHandle(GetCurrentProcess(), static_cast<HANDLE>(engine_source_.handle), GetCurrentProcess(),
+                        &duplicate, 0, FALSE, DUPLICATE_SAME_ACCESS) == FALSE) {
+        setStatus(QStringLiteral("Preview unavailable · could not duplicate the recording texture"));
+        return;
+    }
+
+    item_->presentSharedTexture(duplicate, engine_source_.width, engine_source_.height, engine_source_.tap);
     ++recording_texture_generations_;
+    ++engine_source_presentations_;
+    if (previewTraceEnabled()) {
+        qInfo("preview-trace: engine-source-presented epoch=%llu presentations=%llu deferrals=%llu",
+              engine_source_epoch_, engine_source_presentations_, engine_source_deferrals_);
+    }
     setStatus(QStringLiteral("Live · recording WYSIWYG texture"));
+}
+
+void RecordPreviewAdapter::releaseEngineSource() {
+    if (engine_source_.handle == nullptr)
+        return;
+    CloseHandle(static_cast<HANDLE>(engine_source_.handle));
+    engine_source_ = EngineSource{};
 }
 
 void RecordPreviewAdapter::startPreview() {

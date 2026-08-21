@@ -147,6 +147,11 @@ class RecordPreviewAdapter : public QObject {
     void setStatus(QString status);
     void setError(QString error);
     void acceptRecordingTexture(void* handle, uint32_t width, uint32_t height, recorder_core::PreviewTapDesc tap);
+    // Hands the current engine source to the item as a duplicate handle, or
+    // records that it is being held until one is available. Idempotent, so every
+    // event that can make a consumer appear may simply call it.
+    void presentEngineSourceIfPossible();
+    void releaseEngineSource();
     // Builds the per-frame publish edge every producer gets handed. Captures
     // nothing but shared_ptr/QPointer copies, so it is safe to call from a
     // capture pump thread or the engine's video thread.
@@ -188,6 +193,23 @@ class RecordPreviewAdapter : public QObject {
     qulonglong recording_captured_frames_ = 0;
     qulonglong recording_encoded_packets_ = 0;
     qulonglong recording_texture_generations_ = 0;
+
+    // The engine's shared texture for the current feed, owned here rather than
+    // by whichever item existed when it was announced. See acceptRecordingTexture
+    // for why the one-shot handover could not be kept.
+    struct EngineSource {
+        void* handle = nullptr;
+        uint32_t width = 0;
+        uint32_t height = 0;
+        recorder_core::PreviewTapDesc tap{};
+    };
+    EngineSource engine_source_;
+    // Bumped per announcement, so a queued presentation from a previous feed can
+    // be told apart from the current one.
+    qulonglong engine_source_epoch_ = 0;
+    qulonglong engine_source_announcements_ = 0;
+    qulonglong engine_source_deferrals_ = 0;
+    qulonglong engine_source_presentations_ = 0;
     HANDLE ready_source_handle_ = nullptr;
     uint32_t ready_source_width_ = 0;
     uint32_t ready_source_height_ = 0;

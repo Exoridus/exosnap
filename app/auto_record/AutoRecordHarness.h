@@ -31,6 +31,23 @@ struct AutoRecordOptions {
     int bit_depth = 8;                            // 8 | 10
     HdrMode hdr_mode = HdrMode::Off;
     int frame_rate = 60; // 1-240; the product's own Expert range
+    // Canonical CQ for the run, 1-51, defaulting to the Balanced tier. Spelled as
+    // plain integers because this struct is parsed before anything else exists
+    // and its test target links Qt only; AutoRecordHarness.cpp static_asserts
+    // them against recorder_core's canonical values, so the duplication cannot
+    // drift silently.
+    static constexpr int kCqMin = 1;
+    static constexpr int kCqMax = 51;
+    static constexpr int kCqDefault = 24;
+    int cq = kCqDefault;
+    // NVENC speed/quality preset, 1-7 (P1..P7), defaulting to the shipped P4.
+    // Same plain-integer treatment and the same static_assert pairing as the CQ
+    // range above. Under constant QP this is an encode-time control, which is
+    // exactly why a headroom run needs to vary it.
+    static constexpr int kNvencPresetMin = 1;
+    static constexpr int kNvencPresetMax = 7;
+    static constexpr int kNvencPresetDefault = 4;
+    int nvenc_preset = kNvencPresetDefault;
     int duration_seconds = 10;
     int capture_frame_at_seconds = -1; // -1 = disabled
     // Preview mode only: capture a frame while the coordinator is still Ready

@@ -341,6 +341,13 @@ class PipelineDiagnosticsAggregator {
     // ---- Additional CPU-timed stages ---------------------------------------
     void OnWebcamConvert(time_point now, double ms) noexcept; // source -> BGRA conversion
     void OnPreviewCopy(time_point now, double ms) noexcept;   // WYSIWYG preview tap copy
+    // The preview tap's own branch counters. Separate from OnPreviewCopy, which
+    // times the copy and therefore only ever sees the successful path.
+    void OnPreviewTapFrameSeen() noexcept;
+    void OnPreviewTapGatePass() noexcept;
+    void OnPreviewTapSharedTextureReady() noexcept;
+    void OnPreviewTapPublish(PreviewAcquireOutcome outcome, bool released_ok) noexcept;
+    void OnPreviewTapPublishedEdge() noexcept;
     // Time a packet actually waited in the post-encode mux queue between being
     // enqueued and being dequeued by the drain loop (distinct from OnMuxLatency,
     // which times the drain loop's own work once it holds the packet).
@@ -483,6 +490,7 @@ class PipelineDiagnosticsAggregator {
     LatencyHistogram webcam_convert_hist_;
     RollingTimeWindow preview_copy_window_{256, std::chrono::milliseconds(2000)};
     LatencyHistogram preview_copy_hist_;
+    PreviewTapDiagnostics preview_tap_;
 
     // Encoder
     uint64_t frames_submitted_ = 0;

@@ -29,6 +29,20 @@ void handleWake(PreviewUpdateScheduler& scheduler, bool item_alive = true) {
         scheduler.RecordSceneUpdateRequested();
 }
 
+// The two ways a render pass can end, as ExoPreviewItem::preprocess() runs them:
+// it takes the generation it is about to try for, then either consumes a frame
+// or loses the non-blocking acquire.
+void renderPassConsuming(PreviewUpdateScheduler& scheduler) {
+    scheduler.NotePresented(scheduler.BeginRenderPass());
+}
+
+// Returns whether the pass asked for one more render, which is what the retry
+// budget tests below measure.
+bool renderPassMissing(PreviewUpdateScheduler& scheduler) {
+    (void)scheduler.BeginRenderPass();
+    return scheduler.ShouldRetryAfterMiss();
+}
+
 // Stands in for ExoPreviewItem::reissuePendingPresentation(): the GUI thread
 // reacting to a lifecycle transition that made the window renderable again.
 // Returns whether it asked for anything, which is what the amplification tests
@@ -154,13 +168,98 @@ TEST(PreviewUpdateSchedulerTest, QuietSchedulerOwesNothing) {
     EXPECT_EQ(scheduler.SceneUpdateRequests(), 0u);
 }
 
-TEST(PreviewUpdateSchedulerTest, ARenderPassClearsTheDebt) {
+TEST(PreviewUpdateSchedulerTest, AConsumingRenderPassClearsTheDebt) {
     PreviewUpdateScheduler scheduler;
     ASSERT_TRUE(scheduler.ArmWake());
     handleWake(scheduler);
     EXPECT_TRUE(scheduler.HasUnrenderedPublish()) << "requesting the update is not the same as having rendered";
 
-    scheduler.NoteRenderPass();
+    renderPassConsuming(scheduler);
+    EXPECT_FALSE(scheduler.HasUnrenderedPublish());
+    EXPECT_EQ(scheduler.RenderPasses(), 1u);
+}
+
+// The stall this contract was rewritten for. A pass that runs but loses the
+// non-blocking acquire has shown nothing, so it must not be able to settle the
+// debt -- otherwise the lifecycle reissue finds nothing owed and the picture
+// waits for an unrelated redraw.
+TEST(PreviewUpdateSchedulerTest, ARenderPassThatConsumedNothingKeepsTheDebt) {
+    PreviewUpdateScheduler scheduler;
+    ASSERT_TRUE(scheduler.ArmWake());
+    handleWake(scheduler);
+
+    EXPECT_TRUE(renderPassMissing(scheduler)) << "a miss with a frame owed must ask for one more render";
+    EXPECT_TRUE(scheduler.HasUnrenderedPublish());
+    EXPECT_EQ(scheduler.RenderPasses(), 1u);
+
+    renderPassConsuming(scheduler);
+    EXPECT_FALSE(scheduler.HasUnrenderedPublish());
+}
+
+// The retry is what makes a dropped request self-healing, and the budget is what
+// keeps it from becoming the display-refresh redraw loop this class removed.
+TEST(PreviewUpdateSchedulerTest, MissRetriesAreBoundedPerPublish) {
+    PreviewUpdateScheduler scheduler;
+    ASSERT_TRUE(scheduler.ArmWake());
+    handleWake(scheduler);
+
+    for (quint64 i = 0; i < PreviewUpdateScheduler::kRetriesPerMiss; ++i)
+        EXPECT_TRUE(renderPassMissing(scheduler)) << "retry " << i;
+    for (int i = 0; i < 20; ++i)
+        EXPECT_FALSE(renderPassMissing(scheduler)) << "the budget must not refill on misses alone";
+
+    EXPECT_EQ(scheduler.MissRetries(), PreviewUpdateScheduler::kRetriesPerMiss);
+    EXPECT_TRUE(scheduler.HasUnrenderedPublish()) << "an exhausted budget still owes the frame";
+
+    // A new publish is a new obligation, so it refills the budget.
+    ASSERT_TRUE(scheduler.ArmWake());
+    EXPECT_TRUE(renderPassMissing(scheduler));
+}
+
+// A pass that took the frame off the slot and then failed to convert it has
+// still consumed that generation: the key went back to the producer and the
+// transport is a last-value slot, so no later render can find it. Leaving the
+// debt open would spend the retry budget on something that no longer exists.
+// The mapping the consumer applies. Only a pass that never got the frame may
+// leave the debt standing; both outcomes that took it off the slot settle it.
+TEST(PreviewUpdateSchedulerTest, OnlyAMissLeavesTheDebtStanding) {
+    EXPECT_FALSE(exosnap::quick::SettlesPresentationDebt(exosnap::quick::PreviewConsumeOutcome::Missed));
+    EXPECT_TRUE(exosnap::quick::SettlesPresentationDebt(exosnap::quick::PreviewConsumeOutcome::TakenButFailed));
+    EXPECT_TRUE(exosnap::quick::SettlesPresentationDebt(exosnap::quick::PreviewConsumeOutcome::Presented));
+}
+
+TEST(PreviewUpdateSchedulerTest, AFrameTakenButNotConvertedSettlesItsGeneration) {
+    PreviewUpdateScheduler scheduler;
+    ASSERT_TRUE(scheduler.ArmWake());
+    handleWake(scheduler);
+
+    const quint64 attempted = scheduler.BeginRenderPass();
+    // ... acquire succeeded, conversion failed ...
+    scheduler.NotePresented(attempted);
+
+    EXPECT_FALSE(scheduler.HasUnrenderedPublish());
+    EXPECT_FALSE(renderPassMissing(scheduler)) << "a settled generation must not keep asking for renders";
+    EXPECT_EQ(scheduler.MissRetries(), 0u);
+}
+
+// A quiet transport must stay quiet: with nothing owed, a pass that consumes
+// nothing is the normal idle case and may not ask for anything.
+TEST(PreviewUpdateSchedulerTest, MissWithNothingOwedRequestsNoRedraw) {
+    PreviewUpdateScheduler scheduler;
+    for (int i = 0; i < 50; ++i)
+        EXPECT_FALSE(renderPassMissing(scheduler)) << "idle pass " << i;
+    EXPECT_EQ(scheduler.MissRetries(), 0u);
+}
+
+// Ten publishes before any render must cost one presentation, not ten: the
+// transport is a last-value slot and carries no queue.
+TEST(PreviewUpdateSchedulerTest, ABurstOfPublishesIsSettledByOnePresentation) {
+    PreviewUpdateScheduler scheduler;
+    ASSERT_TRUE(scheduler.ArmWake());
+    for (int i = 0; i < 9; ++i)
+        ASSERT_FALSE(scheduler.ArmWake()) << "publish " << i << " coalesces into the wake already in flight";
+
+    renderPassConsuming(scheduler);
     EXPECT_FALSE(scheduler.HasUnrenderedPublish());
     EXPECT_EQ(scheduler.RenderPasses(), 1u);
 }
@@ -179,7 +278,7 @@ TEST(PreviewUpdateSchedulerTest, FrameOwedWhileUnrenderableIsPresentedWhenRender
 
     // Renderability returns — a screen change, an expose, a rebuilt scene graph.
     EXPECT_TRUE(reissuePendingPresentation(scheduler)) << "the frame published while unrenderable must be re-asked for";
-    scheduler.NoteRenderPass();
+    renderPassConsuming(scheduler);
 
     EXPECT_FALSE(scheduler.HasUnrenderedPublish());
     EXPECT_EQ(scheduler.PublishSignals(), 1u) << "no second frame may be required to unstick the preview";
@@ -194,9 +293,10 @@ TEST(PreviewUpdateSchedulerTest, PublishRacingARenderPassStaysOwed) {
     ASSERT_TRUE(scheduler.ArmWake());
     handleWake(scheduler);
 
-    scheduler.NoteRenderPass(); // pass begins ...
+    const quint64 attempted = scheduler.BeginRenderPass(); // pass begins ...
     ASSERT_TRUE(scheduler.ArmWake());
     // ... and only now acquires the transport, having missed the publish above.
+    scheduler.NotePresented(attempted);
 
     EXPECT_TRUE(scheduler.HasUnrenderedPublish());
 }
@@ -209,7 +309,7 @@ TEST(PreviewUpdateSchedulerTest, RepeatedRenderabilityTransitionsDoNotAmplify) {
     handleWake(scheduler);
 
     EXPECT_TRUE(reissuePendingPresentation(scheduler));
-    scheduler.NoteRenderPass();
+    renderPassConsuming(scheduler);
     for (int i = 0; i < 20; ++i)
         EXPECT_FALSE(reissuePendingPresentation(scheduler)) << "transition " << i << " had nothing to ask for";
 
@@ -226,7 +326,7 @@ TEST(PreviewUpdateSchedulerTest, ReissuingLeavesTheGateOpen) {
     ASSERT_FALSE(scheduler.WakeInFlightForTest());
 
     reissuePendingPresentation(scheduler);
-    scheduler.NoteRenderPass();
+    renderPassConsuming(scheduler);
 
     EXPECT_FALSE(scheduler.WakeInFlightForTest());
     EXPECT_TRUE(scheduler.ArmWake()) << "the next real publish must still deliver its own wake-up";
@@ -294,7 +394,7 @@ LifecycleOutcome runLifecycleInterleaving(const std::vector<LifecycleStep>& step
         case LifecycleStep::Render:
             if (!render_requested || !renderable)
                 break;
-            scheduler.NoteRenderPass();
+            renderPassConsuming(scheduler);
             seen = version;
             render_requested = false;
             break;

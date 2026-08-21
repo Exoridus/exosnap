@@ -147,7 +147,7 @@ void WgcCaptureHubService::WorkerProc(std::stop_token stop_token) {
         }
         // A contention drop deliberately does NOT signal: it means the consumer
         // has not taken the previous frame yet, so its redraw is already pending.
-        if (shared.TryPublish(producer->Context(), frame.texture.get()) && frame_sink)
+        if (shared.TryPublish(producer->Context(), frame.texture.get()).published() && frame_sink)
             frame_sink();
     };
 

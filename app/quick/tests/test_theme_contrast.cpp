@@ -384,7 +384,7 @@ namespace {
 // is then a mid grey. Changing that would mean changing the overlays' opacity,
 // which is a design decision this gate does not make.
 struct FixedDarkGround {
-    const char* name;
+    const char* name = nullptr;
     QColor color;
 };
 

@@ -335,6 +335,61 @@ struct SplitDiagnostics {
 };
 
 // Canonical immutable diagnostics snapshot.
+// How one acquire ended. The distinction matters because only ONE of these is a
+// dropped frame.
+//
+// A keyed mutex does not follow the Win32 mutex rule that WAIT_ABANDONED hands
+// the caller ownership to release: for IDXGIKeyedMutex::AcquireSync it means the
+// shared surface and the mutex are no longer in a consistent state, and both are
+// to be released and recreated. Treating it as another contention drop leaves a
+// transport that can never recover, and releasing on it would be worse still.
+enum class PreviewAcquireOutcome {
+    Acquired,  // S_OK
+    Contended, // WAIT_TIMEOUT: the other side holds it, drop this frame
+    Abandoned, // WAIT_ABANDONED: this transport generation is poisoned
+    Failed,    // any other HRESULT
+};
+
+// The WYSIWYG preview tap, counted at every branch it can leave through.
+//
+// The tap is observation-only and non-blocking by contract: a preview frame is
+// dropped rather than allowed to stall the encode. That makes a permanently
+// dead preview indistinguishable from a healthy one from the encoder's side —
+// capture, composition, encode and mux stay perfect either way. These counters
+// exist so "the preview showed nothing" resolves to ONE branch instead of five
+// equally consistent stories.
+//
+// Read them as a funnel: each number is a subset of the one above it.
+struct PreviewTapDiagnostics {
+    // Ticks that reached the tap with a composited frame to offer. Zero means the
+    // tap never ran at all — no consumer registered, the tap disabled for this
+    // session, or the session never produced a frame the tap could see.
+    uint64_t frames_seen = 0;
+    // Ticks the publish gate let through (the tap throttles to ~30 Hz, so this is
+    // legitimately far below frames_seen).
+    uint64_t gate_passes = 0;
+    // True once the shared texture exists and its handle has been handed to the
+    // consumer. A permanent false with frames_seen > 0 is a creation failure.
+    bool shared_texture_ready = false;
+    // Publish attempts, and how they ended.
+    // attempts == successes + contended + abandoned + failed.
+    //
+    // `contended` is the expected, harmless outcome of a 0 ms acquire and costs
+    // one frame. `abandoned` is not: the keyed mutex reports the shared surface
+    // as inconsistent, and this transport generation cannot recover on its own.
+    // `release_failures` counts copies that were made and then failed to hand the
+    // key over, which strands the mutex on the producer key.
+    uint64_t publish_attempts = 0;
+    uint64_t publish_successes = 0;
+    uint64_t publish_mutex_misses = 0; // WAIT_TIMEOUT
+    uint64_t publish_abandoned = 0;
+    uint64_t publish_failures = 0;
+    uint64_t publish_release_failures = 0;
+    // Publish edges actually emitted to the consumer. Below publish_successes
+    // means the notification path, not the GPU transport, is what broke.
+    uint64_t published_edges = 0;
+};
+
 struct RecordingDiagnosticsSnapshot {
     uint64_t session_generation = 0;
     DiagnosticsLifecycle lifecycle = DiagnosticsLifecycle::Idle;
@@ -351,6 +406,7 @@ struct RecordingDiagnosticsSnapshot {
     MuxDiagnostics mux;
     DiskDiagnostics disk;
     SplitDiagnostics split;
+    PreviewTapDiagnostics preview_tap;
 
     // Retained-frame reuse counters (spec section 13)
     uint64_t screen_generation_changes = 0;

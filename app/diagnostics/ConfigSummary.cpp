@@ -1,5 +1,6 @@
 #include "ConfigSummary.h"
 
+#include <capability/codec_selection.h>
 #include <capability/config_types.h>
 
 #include <sstream>
@@ -84,19 +85,29 @@ std::string QualityPresetName(recorder_core::QualityPreset q) {
         return "High";
     case recorder_core::QualityPreset::Balanced:
         return "Balanced";
-    case recorder_core::QualityPreset::Efficient:
-        return "Efficient";
+    case recorder_core::QualityPreset::Low:
+        return "Low";
     case recorder_core::QualityPreset::Draft:
         return "Draft";
     }
     return "Balanced";
 }
 
-// "CQ 24 (Balanced)" for a canonical value, "CQ 22 (~High)" for anything between.
-std::string QualityName(uint32_t cq) {
+// "CQ 24 (Balanced), AV1 qindex 94" for a canonical value, "CQ 22 (~High), ..."
+// for anything between. The quantizer is spelled out because the CQ number is a
+// product scale: a support log that only carried it would not say what the
+// encoder was actually configured with.
+std::string QualityName(uint32_t cq, capability::VideoCodec codec) {
     const std::string tier = QualityPresetName(recorder_core::NearestQualityPreset(cq));
     const std::string approx = recorder_core::IsCanonicalCq(cq) ? "" : "~";
-    return "CQ " + std::to_string(cq) + " (" + approx + tier + ")";
+    const recorder_core::VideoCodec engine_codec =
+        codec == capability::VideoCodec::H264   ? recorder_core::VideoCodec::H264
+        : codec == capability::VideoCodec::Hevc ? recorder_core::VideoCodec::Hevc
+                                                : recorder_core::VideoCodec::Av1;
+    const std::string parameter = engine_codec == recorder_core::VideoCodec::Av1 ? " qindex " : " QP ";
+    return "CQ " + std::to_string(cq) + " (" + approx + tier + "), " +
+           std::string(capability::VisibleVideoCodecLabel(codec)) + parameter +
+           std::to_string(recorder_core::NvencNativeQuantizer(engine_codec, cq));
 }
 
 std::string ResolutionName(const OutputResolutionSettings& resolution) {
@@ -178,7 +189,7 @@ ConfigSummary ConfigSummary::FromCurrentSettings(const OutputSettingsModel& outp
     summary.entries.push_back({"Fit Mode", "Fit"});
     summary.entries.push_back({"FPS", FrameRateName(video.frame_rate_num, video.frame_rate_den)});
     summary.entries.push_back({"CFR/VFR", video.cfr ? "CFR" : "VFR"});
-    summary.entries.push_back({"Quality", QualityName(video.cq)});
+    summary.entries.push_back({"Quality", QualityName(video.cq, output.video_codec)});
     summary.entries.push_back({"Capture Cursor", video.capture_cursor ? "Yes" : "No"});
 
     // Audio routing

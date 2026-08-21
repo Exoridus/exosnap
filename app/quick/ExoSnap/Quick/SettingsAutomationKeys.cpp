@@ -266,8 +266,8 @@ QVector<KeyDescriptor> BuildKeys() {
                         &SettingsAdapter::encoderPreset, &SettingsAdapter::setEncoderPreset));
     keys.append(EnumKey("video.rateControl", "Rate-control mode", kRateControls, &SettingsAdapter::rateControl,
                         &SettingsAdapter::setRateControl));
-    keys.append(IntKey("video.cq", "Constant-quality target (1 best .. 51 worst)", &SettingsAdapter::cq,
-                       &SettingsAdapter::setCq));
+    keys.append(IntKey("video.cq", "ExoSnap quality scale (1 best .. 51 worst); the codec's own quantizer is derived",
+                       &SettingsAdapter::cq, &SettingsAdapter::setCq));
     keys.append(IntKey("video.bitrateKbps", "Target bitrate for VBR/CBR", &SettingsAdapter::bitrateKbps,
                        &SettingsAdapter::setBitrateKbps));
     keys.append(EnumKey("video.keyframeInterval", "Keyframe interval", kKeyframeIntervals,

@@ -81,6 +81,10 @@ Rectangle {
                 Accessible.checked: root.currentIndex === segment.index
                 onClicked: root.selected(segment.index)
 
+                HoverHandler {
+                    cursorShape: Qt.PointingHandCursor
+                }
+
                 background: Rectangle {
                     color: root.currentIndex === segment.index ? ExoTheme.surfaceHover
                          : segment.hovered ? ExoTheme.surfaceRaised

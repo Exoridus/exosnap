@@ -25,7 +25,7 @@ TestCase {
         id: switchComponent
 
         ExoSwitch {
-            text: "Merge with above"
+            text: "Mix into previous track"
         }
     }
 

@@ -211,6 +211,31 @@ TEST(ConfigSummaryTest, FromCurrentSettings_HasExpectedFields) {
     EXPECT_TRUE(has_profile);
 }
 
+TEST(ConfigSummaryTest, QualityNamesTheQuantizerTheSelectedCodecActuallyGets) {
+    // The CQ number alone is an ExoSnap scale. A support log that only carried
+    // it would not say what the encoder was configured with, and the answer is
+    // different for every codec at the same CQ.
+    const auto quality_entry = [](capability::VideoCodec codec, uint32_t cq) {
+        OutputSettingsModel output;
+        output.video_codec = codec;
+        VideoSettingsModel video;
+        video.cq = cq;
+        const auto summary = ConfigSummary::FromCurrentSettings(output, video, capability::AudioUiState{},
+                                                                std::filesystem::path(L"C:/settings.ini"), "", "");
+        for (const auto& entry : summary.entries) {
+            if (entry.label == "Quality") {
+                return entry.value;
+            }
+        }
+        return std::string{};
+    };
+
+    EXPECT_EQ(quality_entry(capability::VideoCodec::H264, 19), "CQ 19 (High), H.264 QP 19");
+    EXPECT_EQ(quality_entry(capability::VideoCodec::Av1, 19), "CQ 19 (High), AV1 qindex 65");
+    EXPECT_EQ(quality_entry(capability::VideoCodec::Hevc, 19), "CQ 19 (High), HEVC QP 19");
+    EXPECT_EQ(quality_entry(capability::VideoCodec::Av1, 22), "CQ 22 (~Balanced), AV1 qindex 82");
+}
+
 TEST(ConfigSummaryTest, FromCurrentSettings_VfrReportsCorrectly) {
     OutputSettingsModel output;
     VideoSettingsModel video;

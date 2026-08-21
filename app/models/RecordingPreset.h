@@ -66,10 +66,11 @@ inline constexpr int kPresetSchemaColorRangeMigratedThrough = 19;
 // Default PiP inset (bottom-right corner), as a fraction of the frame edge.
 inline constexpr float kDefaultPipInsetNorm = 0.03f;
 
-// Stable ids for the four shipped read-only built-in presets.
+// Stable ids for the five shipped read-only built-in presets.
 inline constexpr std::string_view kDefaultPresetId = "preset.default";
 inline constexpr std::string_view kQualityPresetId = "preset.quality";
-inline constexpr std::string_view kEfficiencyPresetId = "preset.efficiency";
+inline constexpr std::string_view kCompactPresetId = "preset.compact";
+inline constexpr std::string_view kPerformancePresetId = "preset.performance";
 inline constexpr std::string_view kCompatibilityPresetId = "preset.compatibility";
 
 // ---------------------------------------------------------------------------
@@ -210,6 +211,13 @@ void ReconcileContainerCodecs(OutputSettingsModel& output);
 // NOTE: NormalizedConfigEquals is kept for persistence round-trip verification
 // and must NOT be changed.
 [[nodiscard]] bool ConfigDirtyEquivalent(const RecordingPresetConfig& a, const RecordingPresetConfig& b);
+
+// The name of the first field on which ConfigDirtyEquivalent separates the two
+// configurations, or an empty view when they are dirty-equivalent. The returned
+// view points at a string literal and outlives any caller. Field order is the
+// comparison order, so the name identifies which comparison fired, not the only
+// difference that exists.
+[[nodiscard]] std::string_view ConfigDirtyDifference(const RecordingPresetConfig& a, const RecordingPresetConfig& b);
 
 // ---------------------------------------------------------------------------
 // Environment fields

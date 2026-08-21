@@ -8,6 +8,7 @@
 
 #include <capability/container_compat_registry.h>
 
+#include <QDir>
 #include <QStringList>
 #include <QVariantMap>
 
@@ -55,22 +56,36 @@ QString fromWide(const std::wstring& value) {
     return QString::fromWCharArray(value.c_str(), static_cast<int>(value.size()));
 }
 
+// The two enumerations carry the same three codecs in a different order, so a
+// cast between them is silently wrong.
+recorder_core::VideoCodec toRecorderCodec(VideoCodec codec) noexcept {
+    switch (codec) {
+    case VideoCodec::H264:
+        return recorder_core::VideoCodec::H264;
+    case VideoCodec::Hevc:
+        return recorder_core::VideoCodec::Hevc;
+    case VideoCodec::Av1:
+        break;
+    }
+    return recorder_core::VideoCodec::Av1;
+}
+
 QString nvencPresetLabel(recorder_core::NvencPreset preset) {
     switch (preset) {
     case recorder_core::NvencPreset::P1:
-        return QObject::tr("P1 — fastest");
+        return QObject::tr("P1 · Fastest");
     case recorder_core::NvencPreset::P2:
         return QStringLiteral("P2");
     case recorder_core::NvencPreset::P3:
         return QStringLiteral("P3");
     case recorder_core::NvencPreset::P4:
-        return QObject::tr("P4 — balanced");
+        return QObject::tr("P4 · Balanced");
     case recorder_core::NvencPreset::P5:
         return QStringLiteral("P5");
     case recorder_core::NvencPreset::P6:
         return QStringLiteral("P6");
     case recorder_core::NvencPreset::P7:
-        return QObject::tr("P7 — best quality");
+        return QObject::tr("P7 · Best quality");
     }
     return QStringLiteral("P4");
 }
@@ -83,8 +98,8 @@ QString qualityPresetLabel(recorder_core::QualityPreset preset) {
         return QObject::tr("High");
     case recorder_core::QualityPreset::Balanced:
         return QObject::tr("Balanced");
-    case recorder_core::QualityPreset::Efficient:
-        return QObject::tr("Efficient");
+    case recorder_core::QualityPreset::Low:
+        return QObject::tr("Low");
     case recorder_core::QualityPreset::Draft:
         return QObject::tr("Draft");
     }
@@ -152,6 +167,12 @@ void SettingsAdapter::setControlsLocked(bool locked) {
     }
     controls_locked_ = locked;
     emit controlsLockedChanged();
+    // updateActionEnabled reads this flag but is notified by updateStatusChanged,
+    // so without this the Updates card's button keeps whatever value it had when
+    // the last status arrived. Startup locks the controls before the first
+    // "unchecked" status and unlocks after it, which left the button permanently
+    // disabled for the whole session.
+    emit updateStatusChanged();
 }
 
 void SettingsAdapter::setMaxFrameRate(int max_fps) {
@@ -178,6 +199,10 @@ void SettingsAdapter::setMicrophoneDevices(QVariantList devices) {
 void SettingsAdapter::setWebcamDevices(QVariantList devices) {
     webcam_devices_ = std::move(devices);
     emit webcamDevicesChanged();
+    // webcamDeviceId resolves an unpinned configuration against this list, so
+    // the displayed device changes with the list even though the configuration
+    // did not.
+    emit configChanged();
 }
 
 void SettingsAdapter::setMeters(double system, double app, double microphone) {
@@ -215,7 +240,11 @@ void SettingsAdapter::setPresetState(QVariantList options, QString selected_id, 
         }
     }
     selected_preset_name_ = label;
-    preset_status_text_ = dirty ? tr("%1 · unsaved changes").arg(label) : label;
+    // The name alone, not "<name> · unsaved changes": the selector next to this
+    // badge already shows the name, and a status that repeats it reads as a
+    // second, contradicting preset field. Empty while clean, so nothing occupies
+    // the bar when there is nothing to say.
+    preset_status_text_ = dirty ? tr("Unsaved changes") : QString();
     emit presetsChanged();
 }
 
@@ -287,7 +316,18 @@ const QVariantList& SettingsAdapter::webcamDeviceOptions() const noexcept {
     return webcam_devices_;
 }
 QString SettingsAdapter::webcamDeviceId() const {
-    return QString::fromStdString(config_.webcam.device_id);
+    if (!config_.webcam.device_id.empty()) {
+        return QString::fromStdString(config_.webcam.device_id);
+    }
+    // An empty device_id means "not pinned to a camera", which the capture path
+    // resolves to the first enumerated device. The selector shows that resolved
+    // device rather than an empty row, but the configuration stays unpinned --
+    // writing the resolution back would make a freshly seeded profile differ
+    // from the built-in Default it was seeded from.
+    if (webcam_devices_.isEmpty()) {
+        return {};
+    }
+    return webcam_devices_.first().toMap().value(QStringLiteral("value")).toString();
 }
 const QVariantList& SettingsAdapter::webcamResolutionOptions() const noexcept {
     return webcam_resolution_options_;
@@ -616,11 +656,14 @@ void SettingsAdapter::rebuildOptions() {
     quality_preset_options_.clear();
     for (const recorder_core::QualityPreset preset :
          {recorder_core::QualityPreset::Ultra, recorder_core::QualityPreset::High,
-          recorder_core::QualityPreset::Balanced, recorder_core::QualityPreset::Efficient,
+          recorder_core::QualityPreset::Balanced, recorder_core::QualityPreset::Low,
           recorder_core::QualityPreset::Draft}) {
-        quality_preset_options_.append(
-            makeOption(static_cast<int>(preset),
-                       tr("%1 · CQ %2").arg(qualityPresetLabel(preset)).arg(recorder_core::CanonicalCq(preset))));
+        // The tier name alone. The CQ number used to lead this label, from when
+        // it was the value the encoder was handed; it is now a product scale
+        // that each codec maps onto its own quantizer, so printing it here would
+        // present an ExoSnap abstraction as encoder mechanics. Expert mode owns
+        // the number, and names the resolved quantizer next to it.
+        quality_preset_options_.append(makeOption(static_cast<int>(preset), qualityPresetLabel(preset)));
     }
 
     rate_control_options_.clear();
@@ -745,7 +788,7 @@ void SettingsAdapter::rebuildDerivedText() {
     const auto& video = config_.video;
 
     format_summary_ =
-        tr("%1 · %2 · %3 · %4 %5")
+        tr("%1 · %2 · %3 · %4 · %5")
             .arg(ui::containerLabel(out.container), ui::videoCodecLabel(out.video_codec),
                  ui::audioCodecLabel(out.audio_codec), ui::frameRateLabel(video.frame_rate_num, video.frame_rate_den),
                  video.cfr ? tr("CFR") : tr("VFR"));
@@ -756,7 +799,14 @@ void SettingsAdapter::rebuildDerivedText() {
                          : QString::fromUtf8(compat.reason.data(), static_cast<int>(compat.reason.size()));
 
     example_filename_ = fromWide(BuildFilename(out.naming_pattern, out.container, std::time(nullptr)));
-    saves_to_text_ = out.output_folder.empty() ? QString() : QString::fromStdWString(out.output_folder.wstring());
+    // The whole path a recording would land on, not the folder alone: the folder
+    // is already the value of the row right below this, and the question the
+    // pattern editor leaves open is what the finished file is actually called
+    // where it is actually written.
+    saves_to_text_ = out.output_folder.empty()
+                         ? example_filename_
+                         : QDir::toNativeSeparators(
+                               QDir(QString::fromStdWString(out.output_folder.wstring())).filePath(example_filename_));
 
     const FolderValidationResult folder_result = ValidateOutputFolder(out.output_folder);
     folder_validation_ =
@@ -790,6 +840,8 @@ void SettingsAdapter::rebuildDerivedText() {
     }
     split_summary_ = split_parts.isEmpty() ? tr("Single file") : tr("New file %1").arg(split_parts.join(tr(" or ")));
 
+    output_summary_ = tr("%1 · %2").arg(fromWide(OutputResolutionModeName(out.resolution.mode)), split_summary_);
+
     const auto& audio = config_.audio;
     QStringList stages;
     if (audio.mic_hpf_enabled) {
@@ -806,17 +858,30 @@ void SettingsAdapter::rebuildDerivedText() {
     }
     mic_post_processing_summary_ = stages.isEmpty() ? tr("Off") : stages.join(QStringLiteral(" · "));
 
+    // The card's own row labels, not the APP/SYS/MIC codes the engine and the
+    // diagnostics summary use: this string is read by a user under a card title,
+    // where an untranslated three-letter code says nothing about sound (the same
+    // reason the record transport stopped spelling them out).
     QStringList sources;
     if (audio.IsAppEnabled()) {
-        sources.append(QStringLiteral("APP"));
+        sources.append(tr("Application audio"));
     }
     if (audio.IsSysEnabled()) {
-        sources.append(QStringLiteral("SYS"));
+        sources.append(tr("System audio"));
     }
     if (audio.IsMicEnabled()) {
-        sources.append(QStringLiteral("MIC"));
+        sources.append(tr("Microphone"));
     }
     audio_summary_ = sources.isEmpty() ? tr("No audio") : sources.join(QStringLiteral(" · "));
+
+    // The encoding card's own at-a-glance line. Codec first because it decides
+    // which of the rows under it even apply.
+    QStringList encoding_parts{ui::audioCodecLabel(out.audio_codec)};
+    if (audioBitrateRelevant()) {
+        encoding_parts.append(tr("%1 kbps").arg(audioBitrateKbps()));
+    }
+    encoding_parts.append(config_.audio.audio_channels == 1 ? tr("Mono") : tr("Stereo"));
+    audio_encoding_summary_ = encoding_parts.join(QStringLiteral(" · "));
 }
 
 // ---------------------------------------------------------------------------
@@ -948,6 +1013,17 @@ int SettingsAdapter::qualityPreset() const noexcept {
 int SettingsAdapter::cq() const noexcept {
     return static_cast<int>(config_.video.cq);
 }
+QString SettingsAdapter::nativeQuantizerHint() const {
+    const recorder_core::VideoCodec codec = toRecorderCodec(config_.output.video_codec);
+    const uint32_t native = recorder_core::NvencNativeQuantizer(codec, config_.video.cq);
+    const uint32_t ceiling = recorder_core::NvencNativeQuantizerCeiling(codec);
+    // "qindex" for AV1, "QP" for the other two: the codec's own name for the
+    // parameter, so the number can be matched against the codec's documentation
+    // rather than read as a second ExoSnap scale.
+    const QString parameter = codec == recorder_core::VideoCodec::Av1 ? tr("qindex") : tr("QP");
+    return tr("%1 %2 %3 of %4")
+        .arg(ui::videoCodecLabel(codec), parameter, QString::number(native), QString::number(ceiling));
+}
 const QVariantList& SettingsAdapter::rateControlOptions() const noexcept {
     return rate_control_options_;
 }
@@ -999,6 +1075,9 @@ QString SettingsAdapter::namingPattern() const {
 }
 const QString& SettingsAdapter::exampleFilename() const noexcept {
     return example_filename_;
+}
+const QString& SettingsAdapter::outputSummary() const noexcept {
+    return output_summary_;
 }
 const QString& SettingsAdapter::savesToText() const noexcept {
     return saves_to_text_;
@@ -1199,6 +1278,9 @@ double SettingsAdapter::microphoneMeter() const noexcept {
 }
 const QString& SettingsAdapter::micPostProcessingSummary() const noexcept {
     return mic_post_processing_summary_;
+}
+const QString& SettingsAdapter::audioEncodingSummary() const noexcept {
+    return audio_encoding_summary_;
 }
 const QString& SettingsAdapter::audioSummary() const noexcept {
     return audio_summary_;

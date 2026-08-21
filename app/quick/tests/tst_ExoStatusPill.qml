@@ -84,6 +84,32 @@ TestCase {
         compare(label.truncated, false);
     }
 
+    // A layout that grants exactly what the pill asked for must fit the text.
+    // In the shipping title band it did not: "Ready" read "Rea..." at every
+    // window width, narrow or not, and only stopped when the pill began sizing
+    // itself from the string's own metrics instead of reading the width back
+    // off its Label.
+    //
+    // This case does NOT reproduce that: the component elides here neither
+    // before nor after that change, at either device pixel ratio tried. What
+    // the shipping band does differently is unexplained, so the fix is held by
+    // the rendered evidence and this only pins the contract.
+    function test_being_given_exactly_the_requested_width_does_not_elide() {
+        let pill = createTemporaryObject(pillComponent, testCase);
+        verify(pill);
+        let label = findLabel(pill);
+        verify(label);
+
+        for (const state of ["Ready", "Recording", "Paused", "Saving"]) {
+            pill.text = state;
+            // Floor, because that is what a layout does: item widths land on
+            // whole pixels, so an implicit width carrying a fraction is granted
+            // one pixel LESS than it asked for.
+            pill.width = Math.floor(pill.implicitWidth);
+            compare(label.truncated, false, state + " was elided at its own implicit width");
+        }
+    }
+
     // Nothing is lost to a screen reader: the pill's accessible name is the
     // whole string whatever the label is showing.
     function test_the_accessible_name_keeps_the_full_text() {

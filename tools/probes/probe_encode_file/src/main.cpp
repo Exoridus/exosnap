@@ -40,6 +40,8 @@
 #include <recorder_core/codec_types.h>
 #include <recorder_core/color_metadata.h>
 
+#include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -237,13 +239,13 @@ int main(int argc, char** argv) {
     printf("[probe] %ux%u @ %u/%u fps\n", header->width, header->height, header->fps_num, header->fps_den);
 
     printf("[probe] applied encoder fields: vcodec=%d preset=%d rc=%d cq=%u bitrate_kbps=%u keyint_secs=%.2f\n",
-          static_cast<int>(opt.vcodec), static_cast<int>(opt.preset), static_cast<int>(opt.rc), opt.cq,
-          opt.bitrate_kbps, opt.keyint_secs);
+           static_cast<int>(opt.vcodec), static_cast<int>(opt.preset), static_cast<int>(opt.rc), opt.cq,
+           opt.bitrate_kbps, opt.keyint_secs);
     if (opt.bframes != 0 || opt.lookahead || opt.temporal_aq) {
         printf("[probe] NOTE: --bframes/--lookahead/--temporal-aq were requested (bframes=%d lookahead=%d "
-              "temporal_aq=%d) but NvencVideoEncoder has no setter for them yet — NOT applied. This run measures "
-              "the baseline encoder only.\n",
-              opt.bframes, opt.lookahead ? 1 : 0, opt.temporal_aq ? 1 : 0);
+               "temporal_aq=%d) but NvencVideoEncoder has no setter for them yet — NOT applied. This run measures "
+               "the baseline encoder only.\n",
+               opt.bframes, opt.lookahead ? 1 : 0, opt.temporal_aq ? 1 : 0);
     }
 
     ComPtr<ID3D11Device> device;
@@ -297,6 +299,13 @@ int main(int argc, char** argv) {
     uint64_t frameIdx = 0;
     bool encodeError = false;
 
+    // Per-frame encoder cost: the wait for a free input slot (the encoder's own
+    // backpressure) plus submit and reap. Reading the Y4M, the I420->NV12
+    // conversion and the CPU-side texture upload are this probe's work and have
+    // no counterpart in the capture pipeline, so they sit between the two spans
+    // and are excluded.
+    std::vector<double> frameMs;
+
     for (;;) {
         const auto frame = ReadY4mFrame(fileData, offset, header->width, header->height, err);
         if (!frame.has_value()) {
@@ -308,6 +317,7 @@ int main(int argc, char** argv) {
         }
         offset = frame->next_offset;
 
+        const auto slotWaitStart = std::chrono::steady_clock::now();
         int32_t slot = enc.AcquireFreeSlot();
         if (slot < 0) {
             std::vector<EncodedVideoPacket> reaped;
@@ -318,11 +328,14 @@ int main(int argc, char** argv) {
             slot = enc.AcquireFreeSlot();
             if (slot < 0) {
                 printf("[probe] frame %llu: no free input slot even after ReapCompleted\n",
-                      static_cast<unsigned long long>(frameIdx));
+                       static_cast<unsigned long long>(frameIdx));
                 encodeError = true;
                 break;
             }
         }
+
+        const double slotWaitMs =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - slotWaitStart).count();
 
         ConvertI420ToNv12(reinterpret_cast<const uint8_t*>(fileData.data()) + frame->data_offset, header->width,
                           header->height, nv12);
@@ -333,9 +346,10 @@ int main(int argc, char** argv) {
             frameIdx * 1'000'000'000ull * header->fps_den / (header->fps_num == 0 ? 1 : header->fps_num);
         std::vector<EncodedVideoPacket> pkts;
         std::string encErr;
+        const auto submitStart = std::chrono::steady_clock::now();
         if (!enc.EncodeFrame(slot, ptsNs, header->width, header->height, pkts, encErr)) {
             printf("[probe] frame %llu: EncodeFrame failed: %s\n", static_cast<unsigned long long>(frameIdx),
-                  encErr.c_str());
+                   encErr.c_str());
             encodeError = true;
             break;
         }
@@ -346,13 +360,16 @@ int main(int argc, char** argv) {
         std::string rerr;
         if (!enc.ReapCompleted(reaped, rerr, 0)) {
             printf("[probe] frame %llu: ReapCompleted failed: %s\n", static_cast<unsigned long long>(frameIdx),
-                  rerr.c_str());
+                   rerr.c_str());
             encodeError = true;
             break;
         }
         for (auto& p : reaped)
             allPackets.push_back(std::move(p));
 
+        frameMs.push_back(
+            slotWaitMs +
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - submitStart).count());
         ++frameIdx;
     }
 
@@ -382,23 +399,21 @@ int main(int argc, char** argv) {
 
     if (opt.vcodec == VideoCodec::Av1) {
         const auto fileHeader = BuildIvfFileHeader(header->width, header->height, header->fps_num, header->fps_den,
-                                                    static_cast<uint32_t>(allPackets.size()));
+                                                   static_cast<uint32_t>(allPackets.size()));
         out.write(reinterpret_cast<const char*>(fileHeader.data()), static_cast<std::streamsize>(fileHeader.size()));
         for (size_t i = 0; i < allPackets.size(); ++i) {
             const auto& pkt = allPackets[i];
             const auto frameHeader = BuildIvfFrameHeader(static_cast<uint32_t>(pkt.bytes.size()), i);
             out.write(reinterpret_cast<const char*>(frameHeader.data()),
                       static_cast<std::streamsize>(frameHeader.size()));
-            out.write(reinterpret_cast<const char*>(pkt.bytes.data()),
-                      static_cast<std::streamsize>(pkt.bytes.size()));
+            out.write(reinterpret_cast<const char*>(pkt.bytes.data()), static_cast<std::streamsize>(pkt.bytes.size()));
         }
     } else {
         // H.264/HEVC: NVENC already emits Annex-B start-coded NAL units —
         // straight concatenation is a valid, directly ffprobe-decodable
         // elementary stream.
         for (const auto& pkt : allPackets)
-            out.write(reinterpret_cast<const char*>(pkt.bytes.data()),
-                      static_cast<std::streamsize>(pkt.bytes.size()));
+            out.write(reinterpret_cast<const char*>(pkt.bytes.data()), static_cast<std::streamsize>(pkt.bytes.size()));
     }
     out.close();
 
@@ -407,7 +422,21 @@ int main(int argc, char** argv) {
         totalBytes += pkt.bytes.size();
 
     printf("[probe] frames encoded: %zu, total bytes: %zu, wrote %s\n", allPackets.size(), totalBytes,
-          opt.out_path.c_str());
+           opt.out_path.c_str());
+    if (!frameMs.empty()) {
+        std::vector<double> sorted = frameMs;
+        std::sort(sorted.begin(), sorted.end());
+        const auto at = [&sorted](double pct) {
+            const size_t idx = static_cast<size_t>(pct / 100.0 * static_cast<double>(sorted.size() - 1) + 0.5);
+            return sorted[idx < sorted.size() ? idx : sorted.size() - 1];
+        };
+        double total = 0.0;
+        for (double v : frameMs)
+            total += v;
+        const double mean = total / static_cast<double>(frameMs.size());
+        printf("[probe] TIMING frames=%zu mean=%.3fms p50=%.3fms p99=%.3fms max=%.3fms sustained=%.1ffps\n",
+               frameMs.size(), mean, at(50.0), at(99.0), sorted.back(), mean > 0.0 ? 1000.0 / mean : 0.0);
+    }
     printf("[probe] RESULT: PASS\n");
     return 0;
 }

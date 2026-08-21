@@ -52,7 +52,6 @@ ExoCard {
 
                 ExoButton {
                     text: hotkeyRow.modelData.binding === "" ? qsTr("Set") : qsTr("Change")
-                    quiet: true
                     enabled: !root.settings.controlsLocked
                     onClicked: {
                         captureField.forceActiveFocus();
@@ -62,7 +61,6 @@ ExoCard {
 
                 ExoButton {
                     glyph: ExoGlyph.Close
-                    quiet: true
                     visible: hotkeyRow.modelData.binding !== ""
                     enabled: !root.settings.controlsLocked
                     Accessible.name: qsTr("Clear shortcut for %1").arg(hotkeyRow.modelData.label)

@@ -375,11 +375,37 @@ QtObject {
     readonly property string sansFamily: sansFont.status === FontLoader.Ready ? sansFont.name : "Segoe UI"
     readonly property string monoFamily: monoFont.status === FontLoader.Ready ? monoFont.name : "Consolas"
 
+    // Every face the family ships, not only the one the family is named after.
+    // A FontLoader registers ONE file; a weight with no registered face is
+    // resolved from whatever is registered, which leaves `Font.DemiBold` drawing
+    // the Regular outline at Regular metrics. The product asks for Medium,
+    // DemiBold and Bold in more than fifty places, so all four are loaded and
+    // `sansFamily` still comes from the Regular loader — they register into one
+    // family, and the family name is what the weight then selects within.
     readonly property FontLoader sansFont: FontLoader {
         source: "qrc:/fonts/HankenGrotesk-Regular.ttf"
     }
 
+    readonly property FontLoader sansMediumFont: FontLoader {
+        source: "qrc:/fonts/HankenGrotesk-Medium.ttf"
+    }
+
+    readonly property FontLoader sansSemiBoldFont: FontLoader {
+        source: "qrc:/fonts/HankenGrotesk-SemiBold.ttf"
+    }
+
+    readonly property FontLoader sansBoldFont: FontLoader {
+        source: "qrc:/fonts/HankenGrotesk-Bold.ttf"
+    }
+
     readonly property FontLoader monoFont: FontLoader {
         source: "qrc:/fonts/IBMPlexMono-Regular.ttf"
+    }
+
+    // The mono family ships two faces and the product asks for a heavier one in
+    // the log viewer and the diagnostics tables. It has no face above Medium, so
+    // a DemiBold request there resolves to this one rather than to Regular.
+    readonly property FontLoader monoMediumFont: FontLoader {
+        source: "qrc:/fonts/IBMPlexMono-Medium.ttf"
     }
 }

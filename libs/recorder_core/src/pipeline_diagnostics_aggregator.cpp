@@ -102,6 +102,7 @@ void PipelineDiagnosticsAggregator::Reset(uint64_t generation, const Diagnostics
     webcam_convert_hist_.Clear();
     preview_copy_window_.Clear();
     preview_copy_hist_.Clear();
+    preview_tap_ = PreviewTapDiagnostics{};
 
     frames_submitted_ = 0;
     forced_keyframes_ = 0;
@@ -313,6 +314,48 @@ void PipelineDiagnosticsAggregator::OnPreviewCopy(time_point now, double ms) noe
     std::lock_guard lk(mutex_);
     preview_copy_window_.Add(now, ms);
     preview_copy_hist_.Add(ms);
+}
+
+void PipelineDiagnosticsAggregator::OnPreviewTapFrameSeen() noexcept {
+    std::lock_guard lk(mutex_);
+    ++preview_tap_.frames_seen;
+}
+
+void PipelineDiagnosticsAggregator::OnPreviewTapGatePass() noexcept {
+    std::lock_guard lk(mutex_);
+    ++preview_tap_.gate_passes;
+}
+
+void PipelineDiagnosticsAggregator::OnPreviewTapSharedTextureReady() noexcept {
+    std::lock_guard lk(mutex_);
+    preview_tap_.shared_texture_ready = true;
+}
+
+void PipelineDiagnosticsAggregator::OnPreviewTapPublish(PreviewAcquireOutcome outcome, bool released_ok) noexcept {
+    std::lock_guard lk(mutex_);
+    ++preview_tap_.publish_attempts;
+    switch (outcome) {
+    case PreviewAcquireOutcome::Acquired:
+        if (released_ok)
+            ++preview_tap_.publish_successes;
+        else
+            ++preview_tap_.publish_release_failures;
+        break;
+    case PreviewAcquireOutcome::Contended:
+        ++preview_tap_.publish_mutex_misses;
+        break;
+    case PreviewAcquireOutcome::Abandoned:
+        ++preview_tap_.publish_abandoned;
+        break;
+    case PreviewAcquireOutcome::Failed:
+        ++preview_tap_.publish_failures;
+        break;
+    }
+}
+
+void PipelineDiagnosticsAggregator::OnPreviewTapPublishedEdge() noexcept {
+    std::lock_guard lk(mutex_);
+    ++preview_tap_.published_edges;
 }
 
 void PipelineDiagnosticsAggregator::OnMuxQueueDelay(time_point now, double ms) noexcept {
@@ -763,6 +806,8 @@ RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_p
     // Only the streaming Matroska writer exposes a measurable filesystem write boundary;
     // the MP4 path (IMFSinkWriter) buffers internally with no measurable write call.
     disk.latency_availability = cfg_.split_supported ? MetricAvailability::Available : MetricAvailability::Unavailable;
+
+    s.preview_tap = preview_tap_;
 
     // ---- Split ----
     SplitDiagnostics& sp = s.split;

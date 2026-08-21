@@ -71,6 +71,7 @@ class SettingsAdapter : public QObject {
     Q_PROPERTY(QVariantList rateControlOptions READ rateControlOptions NOTIFY optionsChanged FINAL)
     Q_PROPERTY(int rateControl READ rateControl WRITE setRateControl NOTIFY configChanged FINAL)
     Q_PROPERTY(bool bitrateRelevant READ bitrateRelevant NOTIFY configChanged FINAL)
+    Q_PROPERTY(QString nativeQuantizerHint READ nativeQuantizerHint NOTIFY configChanged FINAL)
     Q_PROPERTY(int bitrateKbps READ bitrateKbps WRITE setBitrateKbps NOTIFY configChanged FINAL)
     Q_PROPERTY(QVariantList frameRateOptions READ frameRateOptions NOTIFY optionsChanged FINAL)
     Q_PROPERTY(int frameRate READ frameRate WRITE setFrameRate NOTIFY configChanged FINAL)
@@ -87,6 +88,7 @@ class SettingsAdapter : public QObject {
     Q_PROPERTY(QString outputFolder READ outputFolder WRITE setOutputFolder NOTIFY configChanged FINAL)
     Q_PROPERTY(QString namingPattern READ namingPattern WRITE setNamingPattern NOTIFY configChanged FINAL)
     Q_PROPERTY(QString exampleFilename READ exampleFilename NOTIFY configChanged FINAL)
+    Q_PROPERTY(QString outputSummary READ outputSummary NOTIFY configChanged FINAL)
     Q_PROPERTY(QString savesToText READ savesToText NOTIFY configChanged FINAL)
     Q_PROPERTY(QString folderValidation READ folderValidation NOTIFY configChanged FINAL)
     Q_PROPERTY(QString patternValidation READ patternValidation NOTIFY configChanged FINAL)
@@ -153,6 +155,7 @@ class SettingsAdapter : public QObject {
     Q_PROPERTY(double appMeter READ appMeter NOTIFY metersChanged FINAL)
     Q_PROPERTY(double microphoneMeter READ microphoneMeter NOTIFY metersChanged FINAL)
     Q_PROPERTY(QString micPostProcessingSummary READ micPostProcessingSummary NOTIFY configChanged FINAL)
+    Q_PROPERTY(QString audioEncodingSummary READ audioEncodingSummary NOTIFY configChanged FINAL)
     Q_PROPERTY(QString audioSummary READ audioSummary NOTIFY configChanged FINAL)
 
     // ---- Notifications & overlays ------------------------------------------
@@ -309,6 +312,10 @@ class SettingsAdapter : public QObject {
     [[nodiscard]] const QVariantList& rateControlOptions() const noexcept;
     [[nodiscard]] int rateControl() const noexcept;
     [[nodiscard]] bool bitrateRelevant() const noexcept;
+    // The quantizer the selected codec is actually configured with for the
+    // current CQ, named in that codec's own domain. The Expert CQ field shows
+    // it because the CQ number itself is a product scale, not the encoder's.
+    [[nodiscard]] QString nativeQuantizerHint() const;
     [[nodiscard]] int bitrateKbps() const noexcept;
     [[nodiscard]] const QVariantList& frameRateOptions() const noexcept;
     [[nodiscard]] int frameRate() const noexcept;
@@ -324,6 +331,7 @@ class SettingsAdapter : public QObject {
     [[nodiscard]] QString outputFolder() const;
     [[nodiscard]] QString namingPattern() const;
     [[nodiscard]] const QString& exampleFilename() const noexcept;
+    [[nodiscard]] const QString& outputSummary() const noexcept;
     [[nodiscard]] const QString& savesToText() const noexcept;
     [[nodiscard]] const QString& folderValidation() const noexcept;
     [[nodiscard]] const QString& patternValidation() const noexcept;
@@ -385,6 +393,7 @@ class SettingsAdapter : public QObject {
     [[nodiscard]] double appMeter() const noexcept;
     [[nodiscard]] double microphoneMeter() const noexcept;
     [[nodiscard]] const QString& micPostProcessingSummary() const noexcept;
+    [[nodiscard]] const QString& audioEncodingSummary() const noexcept;
     [[nodiscard]] const QString& audioSummary() const noexcept;
 
     [[nodiscard]] bool showRecordingOverlay() const noexcept;
@@ -675,12 +684,14 @@ class SettingsAdapter : public QObject {
     QString format_summary_;
     QString compat_notice_;
     QString example_filename_;
+    QString output_summary_;
     QString saves_to_text_;
     QString folder_validation_;
     QString pattern_validation_;
     QString custom_resolution_validation_;
     QString split_summary_;
     QString mic_post_processing_summary_;
+    QString audio_encoding_summary_;
     QString audio_summary_;
 
     QVariantList hotkey_rows_;

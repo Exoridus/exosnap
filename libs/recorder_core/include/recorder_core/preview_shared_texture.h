@@ -3,6 +3,8 @@
 #include <d3d11.h>
 #include <dxgi1_2.h>
 
+#include <recorder_core/pipeline_diagnostics.h>
+
 #include <winrt/base.h>
 
 #include <cstdint>
@@ -18,6 +20,11 @@ namespace recorder_core {
 // AcquireSync returns WAIT_TIMEOUT and the caller simply drops that frame.
 inline constexpr UINT64 kPreviewSharedProducerKey = 0;
 inline constexpr UINT64 kPreviewSharedConsumerKey = 1;
+
+// Classifies an AcquireSync HRESULT. The outcome type itself lives in
+// pipeline_diagnostics.h, which by design pulls in no Windows headers; the
+// mapping needs HRESULT and therefore lives here.
+[[nodiscard]] PreviewAcquireOutcome ClassifyPreviewAcquire(HRESULT hr) noexcept;
 
 // Producer-side shared GPU texture for the live preview: the engine's WYSIWYG
 // tap during recording, and the DXGI capture hub's idle feed.
@@ -58,12 +65,27 @@ class PreviewSharedTexture {
         return format_;
     }
 
+    // How one publish ended. `released_ok` is false when the release after a
+    // successful copy failed, which strands the mutex on the producer key and is
+    // therefore a transport-level failure rather than a dropped frame.
+    struct PublishResult {
+        PreviewAcquireOutcome acquire = PreviewAcquireOutcome::Failed;
+        bool released_ok = true;
+
+        [[nodiscard]] bool published() const noexcept {
+            return acquire == PreviewAcquireOutcome::Acquired && released_ok;
+        }
+    };
+
     // Non-blocking publish. 0 ms AcquireSync(kProducerKey); on success copies `src`
-    // into the shared texture and releases with kConsumerKey. Returns true when the
-    // frame was published, false when the consumer holds the mutex (frame dropped —
-    // the encode path is never stalled) or the object is invalid. `src` must match
-    // the shared texture's format and dimensions exactly (CopyResource requirement).
-    bool TryPublish(ID3D11DeviceContext* context, ID3D11Texture2D* src);
+    // into the shared texture and releases with kConsumerKey. `src` must match the
+    // shared texture's format and dimensions exactly (CopyResource requirement).
+    //
+    // The outcome is reported rather than collapsed into a bool because a dropped
+    // frame and a poisoned transport look identical from a caller that only asks
+    // "did it publish": the first is expected at any time and costs one frame, the
+    // second means no frame will ever be published into this texture again.
+    PublishResult TryPublish(ID3D11DeviceContext* context, ID3D11Texture2D* src);
 
     void Reset() noexcept;
 

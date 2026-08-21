@@ -28,7 +28,7 @@ Item {
         "Speaker": ExoGlyph.Speaker,
         "AppWindow": ExoGlyph.AppWindow,
         "Mic": ExoGlyph.Mic,
-        "Camera": ExoGlyph.Camera,
+        "Webcam": ExoGlyph.Webcam,
         "Shutter": ExoGlyph.Shutter,
         "Flag": ExoGlyph.Flag,
         "Scissors": ExoGlyph.Scissors,

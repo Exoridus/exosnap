@@ -19,8 +19,15 @@ Button {
     // bell and three window buttons all share one 40 px band at the 860 px
     // minimum window, and a per-tab minimum width is what pushed the close
     // button off the right edge there.
-    implicitWidth: contentItem.implicitWidth + leftPadding + rightPadding
-    implicitHeight: 40 - 2 * ExoTheme.spacingXs
+    // Measured at the SELECTED weight in every state. The label goes DemiBold on
+    // selection, and sizing the tab from the live label made every tab in the row
+    // shift by the few pixels that weight costs each time the selection moved.
+    implicitWidth: Math.ceil(selectedMetrics.advanceWidth) + leftPadding + rightPadding
+    // The full 40 px band, not a shorter centred cell: the previous height left
+    // a spacingXs sliver above and below the tab where the hover/press block and
+    // the focus ring stopped short of the band's own top and bottom edges, while
+    // the window buttons at the other end of the same band went edge to edge.
+    implicitHeight: 40
     // All five destinations are direct tabs, so the band's width budget is the
     // one thing deciding this padding. Below the regular width class it drops a
     // rung — 8 px a side still leaves the shortest label ("Logs") a hit target
@@ -66,12 +73,35 @@ Button {
         }
     }
 
+    TextMetrics {
+        id: selectedMetrics
+
+        text: root.text
+        font {
+            family: ExoTheme.sansFamily
+            pixelSize: ExoTheme.fontBody
+            weight: Font.DemiBold
+        }
+    }
+
+    HoverHandler {
+        cursorShape: Qt.PointingHandCursor
+    }
+
     background: Item {
+        // No corner radius: the tab fills its whole cell in the title band, the
+        // same full-block treatment as the window buttons at the other end of
+        // it. A rounded highlight here read as a floating chip rather than as
+        // part of the same band.
+        //
+        // The already-selected tab is excluded from BOTH states, not just
+        // hover: it already carries its own selection cues (the underline, the
+        // bold label), so pressing it must not flash the hover/press block on
+        // top of them.
         Rectangle {
             anchors.fill: parent
             color: root.down ? ExoTheme.surfaceHover : ExoTheme.surfaceRaised
-            radius: ExoTheme.radiusSm
-            visible: root.hovered && !root.selected || root.down
+            visible: (root.hovered || root.down) && !root.selected
         }
 
         Rectangle {
@@ -79,7 +109,6 @@ Button {
             color: "transparent"
             border.width: ExoTheme.focusRingWidth
             border.color: ExoTheme.text
-            radius: ExoTheme.radiusSm
             visible: root.visualFocus
         }
 
@@ -94,7 +123,6 @@ Button {
                 bottom: parent.bottom
                 leftMargin: ExoTheme.spacingXs
                 rightMargin: ExoTheme.spacingXs
-                bottomMargin: -ExoTheme.spacingXs
             }
         }
     }

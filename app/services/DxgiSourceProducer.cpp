@@ -17,8 +17,8 @@ constexpr std::chrono::milliseconds kOpenThrottle{250};
 // changes across a hot-plug; the name does not.
 HMONITOR FindMonitorByDeviceName(const std::wstring& device_name) {
     struct Ctx {
-        const std::wstring* name;
-        HMONITOR found;
+        const std::wstring* name = nullptr;
+        HMONITOR found = nullptr;
     } ctx{&device_name, nullptr};
 
     EnumDisplayMonitors(

@@ -451,6 +451,10 @@ class QuickApplication {
     bool persistAppSettings(SettingsWriteIntent intent);
     void applyPresetConfig(RecordingPresetConfig config);
     void refreshPresetState();
+    // live_config_.webcam with an unpinned device_id resolved to the first
+    // enumerated camera. Everything that opens a camera goes through this;
+    // live_config_ itself keeps the unpinned value.
+    [[nodiscard]] WebcamSettings webcamSettingsForCapture() const;
     void applyThemeFromSettings();
     void initializeHotkeys();
     void refreshHotkeyRows();
@@ -726,6 +730,13 @@ class QuickApplication {
     // Set when the preset store had to repair fields while loading. Raised as a
     // notification once the manager exists, never swallowed.
     bool preset_store_repaired_ = false;
+    // First camera reported by the last webcam enumeration, used to resolve an
+    // unpinned webcam device. Empty when no camera is attached.
+    std::string default_webcam_device_id_;
+    // The dirty field named in the last [preset] log line. refreshPresetState()
+    // runs on every config mirror sync, so without this the same line would be
+    // written dozens of times per edit.
+    std::string last_logged_dirty_field_;
     // QCR-201. Set once the user has deliberately written over a settings file
     // that failed to load: from then on the file is theirs again and every
     // write, incidental ones included, is legitimate. See ResolveSettingsWrite.

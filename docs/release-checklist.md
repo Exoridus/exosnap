@@ -263,7 +263,11 @@ prerelease from §3, in addition to the automated gates and the updater RC live-
       receded `APP` row in Settings; switch the capture target to a specific window and record —
       per-app audio is present in the file. Switch back to a display target: the row stays
       configured (rendered receded), and a new recording carries no app track.
-- [ ] **Five-tier quality + free frame rate record/playback.** Record one clip at `CQ 16 · Ultra`
+- [ ] **Quality scale reads truthfully.** The Default ladder shows tier names only, with no CQ
+      number. In Expert, the CQ field's line underneath names the quantizer the selected codec is
+      actually given, and it changes with the codec: `AV1 qindex 65 of 255`, `H.264 QP 19 of 51`,
+      `HEVC QP 19 of 51` at CQ 19.
+- [ ] **Five-tier quality + free frame rate record/playback.** Record one clip at the `Ultra` tier
       and one with an Expert free frame rate (e.g. 73 fps): both play back correctly and the
       container reports the chosen rate. Leaving Expert keeps the truth visible: the frame-rate
       combo grows a dynamic `73 fps (Custom)` entry showing the actually configured value — it never

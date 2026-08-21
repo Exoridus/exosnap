@@ -141,7 +141,7 @@ void RunRoundTrip(DXGI_FORMAT format) {
     EXPECT_EQ(shared.Height(), kH);
 
     auto src = CreatePatternTexture(producer.device.get(), kW, kH, format, 0xA5A5u);
-    ASSERT_TRUE(shared.TryPublish(producer.context.get(), src.get()));
+    ASSERT_TRUE(shared.TryPublish(producer.context.get(), src.get()).published());
     producer.context->Flush();
 
     std::vector<uint32_t> pixels;
@@ -181,7 +181,7 @@ TEST(PreviewSharedTexture, PublishDropsWhileConsumerHoldsMutex) {
     auto src = CreatePatternTexture(producer.device.get(), kW, kH, DXGI_FORMAT_B8G8R8A8_UNORM, 1u);
 
     // First publish succeeds and hands the mutex to the consumer key.
-    ASSERT_TRUE(shared.TryPublish(producer.context.get(), src.get()));
+    ASSERT_TRUE(shared.TryPublish(producer.context.get(), src.get()).published());
 
     // Consumer opens and acquires the mutex, then holds it.
     winrt::com_ptr<ID3D11Device1> dev1;
@@ -192,13 +192,23 @@ TEST(PreviewSharedTexture, PublishDropsWhileConsumerHoldsMutex) {
     ASSERT_TRUE(SUCCEEDED(openedTex->QueryInterface(IID_PPV_ARGS(consumerMutex.put()))));
     ASSERT_EQ(consumerMutex->AcquireSync(kPreviewSharedConsumerKey, 1000), S_OK);
 
-    // While the consumer holds the mutex, a producer publish must DROP (return
-    // false) rather than block — the encode path is never stalled.
-    EXPECT_FALSE(shared.TryPublish(producer.context.get(), src.get()));
+    // While the consumer holds the mutex, a producer publish must DROP rather
+    // than block — the encode path is never stalled. It must report CONTENDED
+    // specifically: an abandoned or failed acquire is not a dropped frame but a
+    // transport that cannot recover, and collapsing the two is what hid a
+    // permanently dead preview behind a healthy-looking recording.
+    const recorder_core::PreviewSharedTexture::PublishResult contended =
+        shared.TryPublish(producer.context.get(), src.get());
+    EXPECT_FALSE(contended.published());
+    EXPECT_EQ(contended.acquire, recorder_core::PreviewAcquireOutcome::Contended);
 
     // Once the consumer releases, publishing succeeds again.
     consumerMutex->ReleaseSync(kPreviewSharedProducerKey);
-    EXPECT_TRUE(shared.TryPublish(producer.context.get(), src.get()));
+    const recorder_core::PreviewSharedTexture::PublishResult resumed =
+        shared.TryPublish(producer.context.get(), src.get());
+    EXPECT_TRUE(resumed.published());
+    EXPECT_EQ(resumed.acquire, recorder_core::PreviewAcquireOutcome::Acquired);
+    EXPECT_TRUE(resumed.released_ok);
 
     CloseHandle(handle);
 }

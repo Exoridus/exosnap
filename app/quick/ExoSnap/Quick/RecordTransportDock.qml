@@ -133,7 +133,7 @@ Rectangle {
         RecordSourceToggle {
             compact: root.compactControls
             shortLabel: qsTr("CAM")
-            glyph: ExoGlyph.Camera
+            glyph: ExoGlyph.Webcam
             accessibleLabel: qsTr("Webcam")
             checkedState: root.recordViewModel.webcamEnabled
             errorState: root.recordViewModel.webcamError
