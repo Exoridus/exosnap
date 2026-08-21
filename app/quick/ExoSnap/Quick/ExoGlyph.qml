@@ -40,7 +40,7 @@ Item {
         Speaker,
         AppWindow,
         Mic,
-        Camera,
+        Webcam,
         Shutter,
         Flag,
         Scissors,
@@ -84,13 +84,19 @@ Item {
         "",
         // Speaker — cone plus two waves: system audio.
         "M2 7H5L8.5 3.5V14.5L5 11H2Z M10.99 6.49A3.2 3.2 0 0 1 10.99 11.51 M12.48 4.61A5.6 5.6 0 0 1 12.48 13.39",
-        // AppWindow — a titled window: application audio follows one window.
-        "M2.5 3.5H15.5V14.5H2.5Z M2.5 7H15.5",
+        // AppWindow — a titled window: application audio follows one window. The
+        // two marks in the title bar are what separates it from a plain framed
+        // box at 18 px; without them it reads as a generic rectangle.
+        "M2.5 3.5H15.5V14.5H2.5Z M2.5 7H15.5 M4.65 5.25H5.15 M7.25 5.25H7.75",
         // Mic — capsule, cradle, stem.
         "M6.5 5A2.5 2.5 0 0 1 11.5 5V8.5A2.5 2.5 0 0 1 6.5 8.5Z M14 9A5 5 0 0 1 4 9 M9 14V16",
-        // Camera — body plus lens barrel: a video camera, so it cannot be
-        // confused with the capture-frame shutter below.
-        "M2.5 5.5H10.5V12.5H2.5Z M10.5 9.5L15.5 6.5V11.5Z",
+        // Webcam — round body on a stand, with the lens drawn as a concentric
+        // ring. A camcorder body reads as "recording" in general, which is the
+        // one thing this toggle must not claim: it names the camera source
+        // beside three audio sources, and it is off far more often than on.
+        "M3.8 8.2A5.2 5.2 0 1 0 14.2 8.2A5.2 5.2 0 1 0 3.8 8.2"
+            + " M6.8 8.2A2.2 2.2 0 1 0 11.2 8.2A2.2 2.2 0 1 0 6.8 8.2"
+            + " M9 13.4V15.3 M5.8 15.3H12.2",
         // Shutter — still camera: capture one frame out of the recording.
         "M2.5 6H6L7 4H11L12 6H15.5V14H2.5Z M6.2 10A2.8 2.8 0 1 0 11.8 10A2.8 2.8 0 1 0 6.2 10",
         // Flag — marker.

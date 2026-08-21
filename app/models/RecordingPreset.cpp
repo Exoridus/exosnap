@@ -172,26 +172,44 @@ std::vector<RecordingPreset> MakeBuiltInPresets() {
     std::vector<RecordingPreset> result;
     result.push_back(MakeDefaultPreset());
 
-    // Quality: maximum sharpness; costs disk and GPU. Default already sits at
-    // the canonical High tier (cq 19), so Quality deliberately goes below the
-    // canonical ladder to cq 16 (the segment UI renders it as "~High").
+    // Quality: the top of the ladder. Deliberately still P4 — measured on real
+    // 1440p60 gameplay and a real browser scroll, P6 and P7 move VMAF by 0.01 at
+    // the Ultra tier while spending 2-3% more bitrate and 1.7-2.3x the encode
+    // time. Under constant QP the NVENC preset is an encode-time control, not a
+    // quality one; the quantizer is what makes this preset better.
     RecordingPreset quality = MakeDefaultPreset();
     quality.id = std::string(kQualityPresetId);
     quality.name = "Quality";
-    quality.config.video.cq = 16;
-    quality.config.output.nvenc_preset = recorder_core::NvencPreset::P6;
+    quality.config.video.cq = recorder_core::CanonicalCq(recorder_core::QualityPreset::Ultra);
     result.push_back(std::move(quality));
 
-    // Efficiency: small files at usable quality. P6 buys compression with GPU
-    // time instead of quality loss.
-    RecordingPreset efficiency = MakeDefaultPreset();
-    efficiency.id = std::string(kEfficiencyPresetId);
-    efficiency.name = "Efficiency";
-    efficiency.config.video.cq = recorder_core::CanonicalCq(recorder_core::QualityPreset::Efficient);
-    efficiency.config.output.nvenc_preset = recorder_core::NvencPreset::P6;
-    result.push_back(std::move(efficiency));
+    // Compact: the smallest files that still read, for long screen recordings.
+    // P6 is the one place a high NVENC preset earns its GPU time: on dense small
+    // text it cuts 19% of the bitrate at slightly better quality, because the
+    // sub-pixel motion search is what that content needs. On gameplay it costs
+    // about 4% instead, which is the trade this preset exists to make. P7 adds a
+    // further 3% at 38% more encode time and is not worth it.
+    RecordingPreset compact = MakeDefaultPreset();
+    compact.id = std::string(kCompactPresetId);
+    compact.name = "Compact";
+    compact.config.video.cq = recorder_core::CanonicalCq(recorder_core::QualityPreset::Low);
+    compact.config.output.nvenc_preset = recorder_core::NvencPreset::P6;
+    result.push_back(std::move(compact));
 
-    // Compatibility: editing, upload, GPUs without AV1 encode (pre-RTX-40).
+    // Performance: maximum encoder headroom at the default quality tier. P2
+    // encodes a 1440p frame in under 0.6 ms against P4's 1.45 ms, for 0.24 VMAF
+    // on gameplay and 0.10 on screen content, and produces a marginally SMALLER
+    // file. For 1440p120 or a busy GPU that is the right end of the curve.
+    RecordingPreset performance = MakeDefaultPreset();
+    performance.id = std::string(kPerformancePresetId);
+    performance.name = "Performance";
+    performance.config.output.nvenc_preset = recorder_core::NvencPreset::P2;
+    result.push_back(std::move(performance));
+
+    // Compatibility: editing, upload, GPUs without AV1 encode (pre-RTX-40). It
+    // keeps the same canonical CQ as Default, which is now a calibrated
+    // statement rather than a coincidence: the canonical scale IS H.264's
+    // quantizer scale, so CQ 19 here is the High tier for H.264 by definition.
     RecordingPreset compatibility = MakeDefaultPreset();
     compatibility.id = std::string(kCompatibilityPresetId);
     compatibility.name = "Compatibility";
@@ -204,7 +222,7 @@ std::vector<RecordingPreset> MakeBuiltInPresets() {
 }
 
 bool IsBuiltInPresetId(std::string_view id) {
-    return id == kDefaultPresetId || id == kQualityPresetId || id == kEfficiencyPresetId ||
+    return id == kDefaultPresetId || id == kQualityPresetId || id == kCompactPresetId || id == kPerformancePresetId ||
            id == kCompatibilityPresetId;
 }
 
@@ -793,10 +811,14 @@ bool NormalizedConfigEquals(const RecordingPresetConfig& a, const RecordingPrese
 }
 
 // ---------------------------------------------------------------------------
-// ConfigDirtyEquivalent
+// ConfigDirtyDifference / ConfigDirtyEquivalent
 // ---------------------------------------------------------------------------
 
 bool ConfigDirtyEquivalent(const RecordingPresetConfig& a, const RecordingPresetConfig& b) {
+    return ConfigDirtyDifference(a, b).empty();
+}
+
+std::string_view ConfigDirtyDifference(const RecordingPresetConfig& a, const RecordingPresetConfig& b) {
     // Capture identity (kind, display_id, window_key, has_region, region norms,
     // region_display_id), output.bit_depth, and output.hdr_mode are
     // intentionally NOT compared here: all three are environment fields
@@ -814,154 +836,154 @@ bool ConfigDirtyEquivalent(const RecordingPresetConfig& a, const RecordingPreset
 
     // Countdown
     if (a.countdown_seconds != b.countdown_seconds) {
-        return false;
+        return "countdown_seconds";
     }
 
     // --- Output ---
     if (a.output.container != b.output.container) {
-        return false;
+        return "output.container";
     }
     if (a.output.video_codec != b.output.video_codec) {
-        return false;
+        return "output.video_codec";
     }
     if (a.output.chroma_subsampling != b.output.chroma_subsampling) {
-        return false;
+        return "output.chroma_subsampling";
     }
     if (a.output.color_range != b.output.color_range) {
-        return false;
+        return "output.color_range";
     }
     if (a.output.nvenc_preset != b.output.nvenc_preset) {
-        return false;
+        return "output.nvenc_preset";
     }
     if (a.output.audio_codec != b.output.audio_codec) {
-        return false;
+        return "output.audio_codec";
     }
     if (a.output.resolution.mode != b.output.resolution.mode) {
-        return false;
+        return "output.resolution.mode";
     }
     if (a.output.resolution.custom_width != b.output.resolution.custom_width) {
-        return false;
+        return "output.resolution.custom_width";
     }
     if (a.output.resolution.custom_height != b.output.resolution.custom_height) {
-        return false;
+        return "output.resolution.custom_height";
     }
     if (a.output.resolution.fit != b.output.resolution.fit) {
-        return false;
+        return "output.resolution.fit";
     }
     if (a.output.output_folder != b.output.output_folder) {
-        return false;
+        return "output.output_folder";
     }
     if (a.output.naming_pattern != b.output.naming_pattern) {
-        return false;
+        return "output.naming_pattern";
     }
     if (a.output.split != b.output.split) {
-        return false;
+        return "output.split";
     }
 
     // --- Video ---
     if (a.video.cq != b.video.cq) {
-        return false;
+        return "video.cq";
     }
     if (a.video.rate_control != b.video.rate_control) {
-        return false;
+        return "video.rate_control";
     }
     if (a.video.bitrate_kbps != b.video.bitrate_kbps) {
-        return false;
+        return "video.bitrate_kbps";
     }
     if (a.video.cfr != b.video.cfr) {
-        return false;
+        return "video.cfr";
     }
     if (a.video.frame_pacing != b.video.frame_pacing) {
-        return false;
+        return "video.frame_pacing";
     }
     if (a.video.capture_cursor != b.video.capture_cursor) {
-        return false;
+        return "video.capture_cursor";
     }
     if (a.video.frame_rate_num != b.video.frame_rate_num) {
-        return false;
+        return "video.frame_rate_num";
     }
     if (a.video.frame_rate_den != b.video.frame_rate_den) {
-        return false;
+        return "video.frame_rate_den";
     }
 
     // --- Audio ---
     if (a.audio.target_kind != b.audio.target_kind) {
-        return false;
+        return "audio.target_kind";
     }
     if (a.audio.mic_channel_mode != b.audio.mic_channel_mode) {
-        return false;
+        return "audio.mic_channel_mode";
     }
     if (a.audio.selected_mic_device_id != b.audio.selected_mic_device_id) {
-        return false;
+        return "audio.selected_mic_device_id";
     }
     if (a.audio.selected_window_pid != b.audio.selected_window_pid) {
-        return false;
+        return "audio.selected_window_pid";
     }
     if (std::abs(a.audio.mic_gain_linear - b.audio.mic_gain_linear) > 1e-3f) {
-        return false;
+        return "audio.mic_gain_linear";
     }
 
     // Audio encoding params (ADR 0019).
     if (a.audio.audio_bitrate_kbps != b.audio.audio_bitrate_kbps) {
-        return false;
+        return "audio.audio_bitrate_kbps";
     }
     if (a.audio.opus_frame_duration != b.audio.opus_frame_duration) {
-        return false;
+        return "audio.opus_frame_duration";
     }
     if (a.audio.opus_complexity != b.audio.opus_complexity) {
-        return false;
+        return "audio.opus_complexity";
     }
     // Brickwall limiter (Audio v2): enabled (exact) + ceiling (1e-2 dB tolerance).
     if (a.audio.limiter_enabled != b.audio.limiter_enabled) {
-        return false;
+        return "audio.limiter_enabled";
     }
     if (std::abs(a.audio.limiter_ceiling_db - b.audio.limiter_ceiling_db) > 1e-2f) {
-        return false;
+        return "audio.limiter_ceiling_db";
     }
     // A/V clock slaving (H-3): enabled (exact).
     if (a.audio.clock_slaving_enabled != b.audio.clock_slaving_enabled) {
-        return false;
+        return "audio.clock_slaving_enabled";
     }
     // Mic high-pass filter (Audio v2): enabled (exact) + cutoff (1e-2 Hz tolerance).
     if (a.audio.mic_hpf_enabled != b.audio.mic_hpf_enabled) {
-        return false;
+        return "audio.mic_hpf_enabled";
     }
     if (std::abs(a.audio.mic_hpf_cutoff_hz - b.audio.mic_hpf_cutoff_hz) > 1e-2f) {
-        return false;
+        return "audio.mic_hpf_cutoff_hz";
     }
     // Mic noise gate (Audio v2): enabled (exact) + threshold (1e-2 dB tolerance).
     if (a.audio.mic_gate_enabled != b.audio.mic_gate_enabled) {
-        return false;
+        return "audio.mic_gate_enabled";
     }
     if (std::abs(a.audio.mic_gate_threshold_db - b.audio.mic_gate_threshold_db) > 1e-2f) {
-        return false;
+        return "audio.mic_gate_threshold_db";
     }
     // Mic AGC (Audio v2): enabled (exact) + target (1e-2 dB tolerance).
     if (a.audio.mic_agc_enabled != b.audio.mic_agc_enabled) {
-        return false;
+        return "audio.mic_agc_enabled";
     }
     if (std::abs(a.audio.mic_agc_target_db - b.audio.mic_agc_target_db) > 1e-2f) {
-        return false;
+        return "audio.mic_agc_target_db";
     }
     // Mic RNNoise (Audio v2): enabled (exact); no numeric parameter.
     if (a.audio.mic_rnnoise_enabled != b.audio.mic_rnnoise_enabled) {
-        return false;
+        return "audio.mic_rnnoise_enabled";
     }
     // Channel / sample-format model (ADR 0030 — 0.6.0): exact integer comparisons.
     if (a.audio.audio_sample_rate != b.audio.audio_sample_rate) {
-        return false;
+        return "audio.audio_sample_rate";
     }
     if (a.audio.audio_channels != b.audio.audio_channels) {
-        return false;
+        return "audio.audio_channels";
     }
     if (a.audio.audio_bit_depth != b.audio.audio_bit_depth) {
-        return false;
+        return "audio.audio_bit_depth";
     }
     if (a.audio.audio_pcm_float != b.audio.audio_pcm_float) {
-        return false;
+        return "audio.audio_pcm_float";
     }
     if (a.audio.flac_compression_level != b.audio.flac_compression_level) {
-        return false;
+        return "audio.flac_compression_level";
     }
 
     // Semantic audio-row equality: same resolved plan AND same enabled-source set.
@@ -969,25 +991,25 @@ bool ConfigDirtyEquivalent(const RecordingPresetConfig& a, const RecordingPreset
         const recorder_core::AudioTrackPlan plan_a = recorder_core::ResolveAudioTracks(a.audio.source_rows);
         const recorder_core::AudioTrackPlan plan_b = recorder_core::ResolveAudioTracks(b.audio.source_rows);
         if (!AudioTrackPlansEqual(plan_a, plan_b)) {
-            return false;
+            return "audio.source_rows (resolved track plan)";
         }
         if (EnabledSourceKinds(a.audio.source_rows) != EnabledSourceKinds(b.audio.source_rows)) {
-            return false;
+            return "audio.source_rows (enabled kinds)";
         }
     }
     // Audio v2 (0.6.0): compare per-row gain_db and muted.
     {
         if (a.audio.source_rows.size() != b.audio.source_rows.size()) {
-            return false;
+            return "audio.source_rows (row count)";
         }
         for (std::size_t i = 0; i < a.audio.source_rows.size(); ++i) {
             const auto& ra = a.audio.source_rows[i];
             const auto& rb = b.audio.source_rows[i];
             if (ra.muted != rb.muted) {
-                return false;
+                return "audio.source_rows[].muted";
             }
             if (std::abs(ra.gain_db - rb.gain_db) > 1e-2f) {
-                return false;
+                return "audio.source_rows[].gain_db";
             }
         }
     }
@@ -997,74 +1019,74 @@ bool ConfigDirtyEquivalent(const RecordingPresetConfig& a, const RecordingPreset
     constexpr float kChromaTol = 1e-3f;
 
     if (a.webcam.enabled != b.webcam.enabled) {
-        return false;
+        return "webcam.enabled";
     }
     if (a.webcam.device_id != b.webcam.device_id) {
-        return false;
+        return "webcam.device_id";
     }
     if (a.webcam.width != b.webcam.width) {
-        return false;
+        return "webcam.width";
     }
     if (a.webcam.height != b.webcam.height) {
-        return false;
+        return "webcam.height";
     }
     if (a.webcam.fps != b.webcam.fps) {
-        return false;
+        return "webcam.fps";
     }
     if (a.webcam.mirror != b.webcam.mirror) {
-        return false;
+        return "webcam.mirror";
     }
     if (a.webcam.aspect_ratio_locked != b.webcam.aspect_ratio_locked) {
-        return false;
+        return "webcam.aspect_ratio_locked";
     }
     if (a.webcam.overlay_user_placed != b.webcam.overlay_user_placed) {
-        return false;
+        return "webcam.overlay_user_placed";
     }
 
     // PiP overlay — float tolerance
     if (std::abs(a.webcam.overlay.x_norm - b.webcam.overlay.x_norm) > kPipTol) {
-        return false;
+        return "webcam.overlay.x_norm";
     }
     if (std::abs(a.webcam.overlay.y_norm - b.webcam.overlay.y_norm) > kPipTol) {
-        return false;
+        return "webcam.overlay.y_norm";
     }
     if (std::abs(a.webcam.overlay.w_norm - b.webcam.overlay.w_norm) > kPipTol) {
-        return false;
+        return "webcam.overlay.w_norm";
     }
     if (std::abs(a.webcam.overlay.h_norm - b.webcam.overlay.h_norm) > kPipTol) {
-        return false;
+        return "webcam.overlay.h_norm";
     }
     if (std::abs(a.webcam.opacity - b.webcam.opacity) > kPipTol) {
-        return false;
+        return "webcam.opacity";
     }
 
     // Chroma key
     if (a.webcam.chroma_key.enabled != b.webcam.chroma_key.enabled) {
-        return false;
+        return "webcam.chroma_key.enabled";
     }
     if (a.webcam.chroma_key.color_mode != b.webcam.chroma_key.color_mode) {
-        return false;
+        return "webcam.chroma_key.color_mode";
     }
     if (a.webcam.chroma_key.custom_r != b.webcam.chroma_key.custom_r) {
-        return false;
+        return "webcam.chroma_key.custom_r";
     }
     if (a.webcam.chroma_key.custom_g != b.webcam.chroma_key.custom_g) {
-        return false;
+        return "webcam.chroma_key.custom_g";
     }
     if (a.webcam.chroma_key.custom_b != b.webcam.chroma_key.custom_b) {
-        return false;
+        return "webcam.chroma_key.custom_b";
     }
     if (std::abs(a.webcam.chroma_key.tolerance - b.webcam.chroma_key.tolerance) > kChromaTol) {
-        return false;
+        return "webcam.chroma_key.tolerance";
     }
     if (std::abs(a.webcam.chroma_key.softness - b.webcam.chroma_key.softness) > kChromaTol) {
-        return false;
+        return "webcam.chroma_key.softness";
     }
     if (std::abs(a.webcam.chroma_key.spill_reduction - b.webcam.chroma_key.spill_reduction) > kChromaTol) {
-        return false;
+        return "webcam.chroma_key.spill_reduction";
     }
 
-    return true;
+    return {};
 }
 
 // ---------------------------------------------------------------------------

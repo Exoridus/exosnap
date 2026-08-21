@@ -921,10 +921,10 @@ const QVector<VisualScenario> kScenarios = {
 
     // Quality combo width probe (fix round 1 on Task 12): seeds a non-default CQ so the
     // Default-tier "qualityPresetCombo" (ConfigPage.cpp:1071-1084, fixedWidth 160) renders
-    // its Efficient/Ultra labels closed, for a direct pixel check of clipping/ellipsis
+    // its Low/Ultra labels closed, for a direct pixel check of clipping/ellipsis
     // rather than reasoning from the Balanced label alone.
-    {.id = QStringLiteral("settings-quality-efficient"),
-     .title = QStringLiteral("Settings / Quality / Efficient (combo width)"),
+    {.id = QStringLiteral("settings-quality-low"),
+     .title = QStringLiteral("Settings / Quality / Low (combo width)"),
      .page = VisualPage::Settings,
      .quality_cq = 30},
     {.id = QStringLiteral("settings-quality-ultra"),

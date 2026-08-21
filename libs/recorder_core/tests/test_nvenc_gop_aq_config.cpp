@@ -9,7 +9,7 @@
 //   ComputeGopLength        — round(interval_secs * fps) with a degenerate-fps fallback
 //   ApplyGopToNvenc         — gopLength + codec-specific idrPeriod, kept consistent
 //   ComputeNvencGopBackstop — the frame-count backstop actually programmed into NVENC
-//   ApplySpatialAqToNvenc   — enableAQ=1, enableTemporalAQ=0, aqStrength=0
+//   ApplyAdaptiveQuantizationToNvenc — enableAQ=0, enableTemporalAQ=0, aqStrength=0
 //   ComputeFrameIntervalNs  — nominal frame duration feeding the media-time cadence
 //   NextGopKeyframePhase    — media-time IDR cadence, robust against CFR timeline
 //                             gaps that never reach the encoder
@@ -140,26 +140,27 @@ TEST(ApplyGopToNvenc, VfrBackstopReachesEveryCodecsIdrPeriod) {
 }
 
 // ---------------------------------------------------------------------------
-// ApplySpatialAqToNvenc — spatial AQ on, temporal off, auto strength
+// ApplyAdaptiveQuantizationToNvenc — both AQ flavours pinned off
 // ---------------------------------------------------------------------------
 
-TEST(ApplySpatialAqToNvenc, EnablesSpatialAqOnly) {
+TEST(ApplyAdaptiveQuantizationToNvenc, DisablesBothAqFlavours) {
     NV_ENC_CONFIG cfg{};
-    ApplySpatialAqToNvenc(cfg);
-    EXPECT_EQ(cfg.rcParams.enableAQ, 1u) << "spatial AQ must be explicitly enabled";
-    EXPECT_EQ(cfg.rcParams.enableTemporalAQ, 0u) << "temporal AQ must stay off (no lookahead)";
-    EXPECT_EQ(cfg.rcParams.aqStrength, 0u) << "aqStrength 0 keeps driver auto-selection";
+    ApplyAdaptiveQuantizationToNvenc(cfg);
+    EXPECT_EQ(cfg.rcParams.enableAQ, 0u) << "spatial AQ is net-negative under CONSTQP";
+    EXPECT_EQ(cfg.rcParams.enableTemporalAQ, 0u) << "temporal AQ is capability-gated and needs lookahead";
+    EXPECT_EQ(cfg.rcParams.aqStrength, 0u) << "no strength is implied while AQ is off";
 }
 
-TEST(ApplySpatialAqToNvenc, OverridesInheritedTemporalAqAndStrength) {
-    // Simulate a preset config that arrived with temporal AQ / a strength set;
-    // the explicit apply must pin it back to the deterministic spatial-only state.
+TEST(ApplyAdaptiveQuantizationToNvenc, OverridesInheritedAqState) {
+    // Simulate a preset config that arrived with AQ / temporal AQ / a strength
+    // set; the explicit apply must pin it back to the deterministic off state
+    // rather than letting a driver default decide.
     NV_ENC_CONFIG cfg{};
-    cfg.rcParams.enableAQ = 0;
+    cfg.rcParams.enableAQ = 1;
     cfg.rcParams.enableTemporalAQ = 1;
     cfg.rcParams.aqStrength = 8;
-    ApplySpatialAqToNvenc(cfg);
-    EXPECT_EQ(cfg.rcParams.enableAQ, 1u);
+    ApplyAdaptiveQuantizationToNvenc(cfg);
+    EXPECT_EQ(cfg.rcParams.enableAQ, 0u);
     EXPECT_EQ(cfg.rcParams.enableTemporalAQ, 0u);
     EXPECT_EQ(cfg.rcParams.aqStrength, 0u);
 }

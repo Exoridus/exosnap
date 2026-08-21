@@ -8,10 +8,11 @@ ExoCard {
     required property bool stacked
 
     // The three capture-excluded overlays moved to SettingsOverlaysSection when
-    // they gained content configuration. What stays here is presence in the
-    // Windows shell and in the app window itself — a toast, the tray, and where
-    // a finished recording lands.
-    title: qsTr("Notifications & presence")
+    // they gained content configuration, and the PresentMon opt-in to Developer:
+    // an elevation-gated measurement probe is not presence. What stays is how the
+    // app announces itself while it runs -- a toast, the tray, and what happens
+    // when a recording finishes.
+    title: qsTr("App behaviour")
 
     ExoSettingRow {
         label: qsTr("Notifications")
@@ -23,13 +24,13 @@ ExoCard {
         ExoSwitch {
             checked: root.settings.showNotifications
             Accessible.name: qsTr("Notifications")
+            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
             onToggledByUser: value => root.settings.showNotifications = value
         }
     }
 
     ExoSettingRow {
         label: qsTr("Keep running in tray")
-        hint: qsTr("Keep running when window closed")
         stacked: root.stacked
         controlWidth: 60
         Layout.fillWidth: true
@@ -37,6 +38,7 @@ ExoCard {
         ExoSwitch {
             checked: root.settings.keepRunningInTray
             Accessible.name: qsTr("Keep running in tray")
+            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
             onToggledByUser: value => root.settings.keepRunningInTray = value
         }
     }
@@ -50,22 +52,8 @@ ExoCard {
         ExoSwitch {
             checked: root.settings.openEditorWhenFinished
             Accessible.name: qsTr("Open editor when finished")
+            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
             onToggledByUser: value => root.settings.openEditorWhenFinished = value
-        }
-    }
-
-    ExoSettingRow {
-        label: qsTr("Present & tearing diagnostics")
-        hint: qsTr("Elevation-gated PresentMon observation · opt-in")
-        stacked: root.stacked
-        controlWidth: 60
-        visible: root.settings.expertMode
-        Layout.fillWidth: true
-
-        ExoSwitch {
-            checked: root.settings.presentDiagnosticsOptIn
-            Accessible.name: qsTr("Present and tearing diagnostics")
-            onToggledByUser: value => root.settings.presentDiagnosticsOptIn = value
         }
     }
 }

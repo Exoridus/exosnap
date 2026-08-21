@@ -213,3 +213,43 @@ TEST(CfrTickDrop, PacingIsTheSoleBenignCombination) {
         }
     }
 }
+
+// --- Held-screen ownership rotation --------------------------------------
+// Modelled over identity handles: the production ring holds com_ptrs, and what a
+// future rework can break is the rotation's direction and the no-aliasing rule,
+// not the swap itself.
+namespace {
+struct RingSlot {
+    int tex = 0;
+    uint64_t present_qpc = 0;
+};
+} // namespace
+
+TEST(HeldScreen, EmittedBecomesHeldAndPreviousHeldReturnsToRing) {
+    RingSlot ring[]{{1, 100}, {2, 200}, {3, 300}};
+    int held = 0; // the session's first frame
+
+    // Slot 1 is emitted: consumed first, then rotated in.
+    ring[1].present_qpc = 0;
+    AdoptEmittedAsHeldScreen(ring[1].tex, held);
+
+    EXPECT_EQ(held, 2);        // held screen is the emitted capture
+    EXPECT_EQ(ring[1].tex, 0); // the previously held texture is the free slot
+    EXPECT_EQ(ring[1].present_qpc, 0u);
+}
+
+TEST(HeldScreen, ConsecutiveEmitsRotateWithoutAliasingTheHeldTexture) {
+    RingSlot ring[]{{1, 100}, {2, 200}, {3, 300}};
+    int held = 0;
+
+    for (std::size_t emitted : {std::size_t{0}, std::size_t{2}, std::size_t{1}}) {
+        ring[emitted].present_qpc = 0;
+        AdoptEmittedAsHeldScreen(ring[emitted].tex, held);
+        // The drain may overwrite any free slot at any time, so the held screen
+        // must not be one of them.
+        for (const RingSlot& slot : ring)
+            EXPECT_NE(slot.tex, held);
+    }
+
+    EXPECT_EQ(held, 2); // the capture emitted last, not the session's first frame
+}

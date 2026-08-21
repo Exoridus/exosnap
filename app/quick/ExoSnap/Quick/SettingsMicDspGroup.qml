@@ -23,6 +23,7 @@ ColumnLayout {
             checked: root.settings.micHpfEnabled
             enabled: !root.settings.controlsLocked
             Accessible.name: qsTr("Microphone high-pass filter")
+            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
             onToggledByUser: value => root.settings.micHpfEnabled = value
         }
     }
@@ -32,6 +33,7 @@ ColumnLayout {
         stacked: root.stacked
         visible: root.settings.micHpfEnabled
         Layout.fillWidth: true
+        Layout.leftMargin: ExoTheme.spacingLg
 
         ExoNumberField {
             from: 20
@@ -56,6 +58,7 @@ ColumnLayout {
             checked: root.settings.micGateEnabled
             enabled: !root.settings.controlsLocked
             Accessible.name: qsTr("Microphone noise gate")
+            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
             onToggledByUser: value => root.settings.micGateEnabled = value
         }
     }
@@ -65,6 +68,7 @@ ColumnLayout {
         stacked: root.stacked
         visible: root.settings.micGateEnabled
         Layout.fillWidth: true
+        Layout.leftMargin: ExoTheme.spacingLg
 
         ExoNumberField {
             from: -90
@@ -88,6 +92,7 @@ ColumnLayout {
             checked: root.settings.micAgcEnabled
             enabled: !root.settings.controlsLocked
             Accessible.name: qsTr("Microphone automatic gain control")
+            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
             onToggledByUser: value => root.settings.micAgcEnabled = value
         }
     }
@@ -97,6 +102,7 @@ ColumnLayout {
         stacked: root.stacked
         visible: root.settings.micAgcEnabled
         Layout.fillWidth: true
+        Layout.leftMargin: ExoTheme.spacingLg
 
         ExoNumberField {
             from: -40
@@ -121,6 +127,7 @@ ColumnLayout {
             checked: root.settings.micRnnoiseEnabled
             enabled: !root.settings.controlsLocked
             Accessible.name: qsTr("RNNoise suppression")
+            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
             onToggledByUser: value => root.settings.micRnnoiseEnabled = value
         }
     }

@@ -622,10 +622,21 @@ Test-Case 'the shipped Qt runtime is read from the package, not from the machine
         # Any versioned binary proves the reading; a real Qt DLL would only add a
         # dependency on which Qt this machine has installed -- the opposite of the
         # point. Taken from the environment, never a hardcoded system path.
+        #
+        # The expectation is read from the COPY, not from the donor. Windows
+        # redirects version-resource queries for paths under System32 to the
+        # servicing state, so a byte-identical copy outside System32 reports the
+        # version that is actually in its resource while the original reports the
+        # serviced one -- verified as a hash-identical pair whose FileVersion
+        # strings differ. Comparing against the donor asserts a Windows quirk, not
+        # this function's behaviour.
         $donor = Join-Path $env:SystemRoot 'System32/kernel32.dll'
-        Copy-Item -LiteralPath $donor -Destination (Join-Path $root 'Qt6Core.dll')
-        Assert-Equal (Get-Item -LiteralPath $donor).VersionInfo.FileVersion `
-            (Get-ReleaseArtifactQtRuntimeVersion -ExeItem $item) `
+        $packaged = Join-Path $root 'Qt6Core.dll'
+        Copy-Item -LiteralPath $donor -Destination $packaged
+        $expected = (Get-Item -LiteralPath $packaged).VersionInfo.FileVersion
+        Assert-True (-not [string]::IsNullOrWhiteSpace($expected)) `
+            'the donor binary must carry a version resource for this case to prove anything'
+        Assert-Equal $expected (Get-ReleaseArtifactQtRuntimeVersion -ExeItem $item) `
             'the Qt runtime version must come from the DLL beside the executable'
     }
     finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }

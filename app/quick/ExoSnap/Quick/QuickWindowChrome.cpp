@@ -39,8 +39,8 @@ constexpr DWORD kDwmwaBorderColor = 34;
 // Resource ids and .ico paths for the three window-icon variants, kept in the same
 // order as QuickWindowChrome::IconState.
 struct IconVariant {
-    const char* qrc_path;
-    WORD resource_id;
+    const char* qrc_path = nullptr;
+    WORD resource_id = 0;
 };
 
 IconVariant iconVariantFor(QuickWindowChrome::IconState state) {

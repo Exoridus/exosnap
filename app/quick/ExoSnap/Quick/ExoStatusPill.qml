@@ -76,7 +76,20 @@ Rectangle {
     // navigation tabs it was pushing aside.
     readonly property int availableTextWidth: Math.max(0, root.width - root.chromeWidth)
 
-    implicitWidth: label.implicitWidth + root.chromeWidth
+    // Measured off the string rather than read back from the Label. The Label's
+    // own implicit width is a live, rounded-down quantity that the layout then
+    // feeds back in as this item's width — one pixel short of the text is enough
+    // for ElideRight to drop three characters, and "Ready" became "Rea..." at
+    // every window width, not only narrow ones. TextMetrics answers the same
+    // question about the full string without participating in the layout.
+    TextMetrics {
+        id: labelMetrics
+
+        text: label.text
+        font: label.font
+    }
+
+    implicitWidth: Math.ceil(labelMetrics.advanceWidth) + root.chromeWidth
     implicitHeight: root.onSurface ? 26 : 20
     color: root.onSurface ? Qt.rgba(0, 0, 0, 0.72) : "transparent"
     border.width: root.onSurface ? 1 : 0
@@ -109,7 +122,7 @@ Rectangle {
             // The whole point: a real, finite width. Capped at what the pill was
             // given, never wider than the text needs. The full string stays in
             // the pill's accessible name, so nothing is lost to a screen reader.
-            width: Math.min(label.implicitWidth, root.availableTextWidth)
+            width: Math.min(Math.ceil(labelMetrics.advanceWidth), root.availableTextWidth)
             anchors.verticalCenter: parent.verticalCenter
             color: root.onSurface ? root.onSurfaceInk : ExoTheme.textSecondary
             font {

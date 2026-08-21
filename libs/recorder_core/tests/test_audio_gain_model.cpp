@@ -181,4 +181,74 @@ TEST(AudioGainModel, Constants_Valid) {
     EXPECT_LT(kMinGainDb, kMaxGainDb);
 }
 
+// ---------------------------------------------------------------------------
+// What the row's control is allowed to be called
+// ---------------------------------------------------------------------------
+//
+// The Settings control reads "Merge into previous track". Most row arrangements
+// cannot tell that wording apart from "merge with the previous source" -- both
+// readings predict the same plan. The one case that separates them is a
+// predecessor that contributes nothing: the flag still merges, into the track an
+// EARLIER row opened, so a label naming the previous source would point at a row
+// the user can see is not participating. That case is pinned below; the rest pin
+// the surrounding behaviour the label depends on.
+
+TEST(ResolveAudioTracks, ConsecutiveMergesLandInOneTrack) {
+    std::vector<AudioSourceRow> rows{
+        {AudioSourceKind::App, true, false, 0.0f, false},
+        {AudioSourceKind::Sys, true, true, 0.0f, false},
+        {AudioSourceKind::Mic, true, true, 0.0f, false},
+    };
+
+    const AudioTrackPlan plan = ResolveAudioTracks(rows);
+
+    ASSERT_EQ(plan.tracks.size(), 1u);
+    EXPECT_EQ(plan.tracks[0].sources.size(), 3u);
+}
+
+TEST(ResolveAudioTracks, MergeSkipsADisabledPredecessor) {
+    // App is off, so System starts track 0 despite carrying no merge flag, and
+    // Mic merges into THAT track. "Previous" is the previous contributing
+    // track, which is why the label does not name a source row.
+    std::vector<AudioSourceRow> rows{
+        {AudioSourceKind::App, false, false, 0.0f, false},
+        {AudioSourceKind::Sys, true, true, 0.0f, false},
+        {AudioSourceKind::Mic, true, true, 0.0f, false},
+    };
+
+    const AudioTrackPlan plan = ResolveAudioTracks(rows);
+
+    ASSERT_EQ(plan.tracks.size(), 1u);
+    ASSERT_EQ(plan.tracks[0].sources.size(), 2u);
+    EXPECT_EQ(plan.tracks[0].sources[0], AudioSourceKind::Sys);
+    EXPECT_EQ(plan.tracks[0].sources[1], AudioSourceKind::Mic);
+}
+
+TEST(ResolveAudioTracks, AMergeFlagOnTheFirstContributingRowStartsATrack) {
+    std::vector<AudioSourceRow> rows{
+        {AudioSourceKind::App, false, false, 0.0f, false},
+        {AudioSourceKind::Sys, true, true, 0.0f, false},
+    };
+
+    const AudioTrackPlan plan = ResolveAudioTracks(rows);
+
+    ASSERT_EQ(plan.tracks.size(), 1u);
+    EXPECT_EQ(plan.tracks[0].sources.size(), 1u);
+}
+
+TEST(ResolveAudioTracks, AClearedMergeFlagOpensASecondTrack) {
+    std::vector<AudioSourceRow> rows{
+        {AudioSourceKind::App, true, false, 0.0f, false},
+        {AudioSourceKind::Sys, true, true, 0.0f, false},
+        {AudioSourceKind::Mic, true, false, 0.0f, false},
+    };
+
+    const AudioTrackPlan plan = ResolveAudioTracks(rows);
+
+    ASSERT_EQ(plan.tracks.size(), 2u);
+    EXPECT_EQ(plan.tracks[0].sources.size(), 2u);
+    ASSERT_EQ(plan.tracks[1].sources.size(), 1u);
+    EXPECT_EQ(plan.tracks[1].sources[0], AudioSourceKind::Mic);
+}
+
 } // namespace

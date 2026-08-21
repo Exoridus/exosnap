@@ -97,7 +97,34 @@ durable technical rationale, drop how it was discovered.
 Developer-facing source documentation is English and uses ASCII punctuation;
 non-ASCII characters are allowed only when technically meaningful. The rule bans
 typographic variants (em dash, en dash, curly quotes, ellipsis), not characters
-as such: a unit, a symbol or an arrow that is the correct notation stays.
+as such. Three kinds stay:
+
+- **Notation that is the correct notation**: units and quantities (`µs`, `ms`,
+  `m/s²`, `°`), mathematical and physical symbols (`Δ`, `σ`, `ω`, `≤`, `≈`,
+  `×`, `·`, `∑`), and arrows in a diagram or a data-flow comment.
+- **Letters carrying diacritics, in any language.** A letter is not punctuation
+  and is never transliterated: a codec author's name, a cited title, a path a
+  user actually has on disk. Never `ae`/`oe`/`ue` for `ä`/`ö`/`ü`.
+- **Localized user-facing strings**, which this rule does not reach at all (see
+  below).
+
+Identifiers stay ASCII in the other direction - file names, C++ symbols, CMake
+targets, QML ids, CLI flags - because the toolchain and the build depend on it.
+
+### Language of user-facing content
+
+The shipped UI is English today. A German localization is planned, through Qt's
+normal path: strings wrapped for translation, per-locale `.ts` sources compiled
+to `.qm`, English as the fallback locale.
+
+Wrap user-visible strings for translation as they are written, rather than
+retrofitting later. German translations use natural orthography with ä, ö, ü and
+ß; an `ae`/`oe`/`ue` spelling in a shipped string is a defect, not a
+compatibility measure. If a surface cannot render the text, fix the font or the
+encoding - do not degrade the words.
+
+Developer documentation, code comments, commit messages and `docs/` stay English
+regardless of which locales ship.
 
 Repository specifics:
 

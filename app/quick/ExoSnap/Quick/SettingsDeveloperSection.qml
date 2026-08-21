@@ -26,7 +26,7 @@ ExoCard {
 
     ExoSettingRow {
         label: qsTr("Crash reports")
-        hint: qsTr("Reports are privacy-scrubbed and never sent without consent")
+        hint: qsTr("Privacy-scrubbed, never sent without consent")
         stacked: root.stacked
         Layout.fillWidth: true
 
@@ -39,10 +39,35 @@ ExoCard {
         }
     }
 
-    ExoButton {
-        text: qsTr("Open Diagnostics")
-        quiet: true
-        Layout.alignment: Qt.AlignLeft
-        onClicked: root.settings.openDiagnostics()
+    ExoSettingRow {
+        label: qsTr("Present, tearing & latency diagnostics")
+        hint: qsTr("Elevation-gated PresentMon observation · opt-in")
+        stacked: root.stacked
+        controlWidth: 60
+        visible: root.settings.expertMode
+        Layout.fillWidth: true
+
+        ExoSwitch {
+            checked: root.settings.presentDiagnosticsOptIn
+            Accessible.name: qsTr("Present and tearing diagnostics")
+            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
+            onToggledByUser: value => root.settings.presentDiagnosticsOptIn = value
+        }
+    }
+
+    // A row, not a loose button: every other control in this card sits on the
+    // right-hand control axis, and an action parked at the left margin reads as
+    // a stray link under the form rather than as part of it.
+    ExoSettingRow {
+        label: qsTr("Diagnostics")
+        hint: qsTr("Inspect capture and system health")
+        stacked: root.stacked
+        Layout.fillWidth: true
+
+        ExoButton {
+            text: qsTr("Open Diagnostics")
+            Layout.alignment: Qt.AlignRight
+            onClicked: root.settings.openDiagnostics()
+        }
     }
 }

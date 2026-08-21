@@ -139,11 +139,26 @@ struct RcParams {
     uint32_t maxBitRate = 0;
 };
 
+// ---------------------------------------------------------------------------
+// NvencConstQpForCodec — the intra/inter constQP pair for a canonical CQ.
+//
+// The canonical-to-native conversion itself is product policy and lives with
+// CanonicalCq in recorder_core/codec_types.h (NvencNativeQuantizer). This adds
+// only the inter-frame offset: +2 in the CANONICAL domain, converted through
+// the same curve, so it lands wherever +2 canonical actually lands in that
+// codec rather than being scaled by a ratio nothing measured.
+// ---------------------------------------------------------------------------
+struct ConstQp {
+    uint32_t intra = 0;
+    uint32_t inter = 0;
+};
+ConstQp NvencConstQpForCodec(VideoCodec codec, uint32_t cq) noexcept;
+
 // Pure, testable mapping from canonical rate-control mode to NVENC parameters.
 // No GPU or NVENC session required. Used by FetchPresetConfig().
 // NVENC SDK field names: rcParams.rateControlMode, rcParams.averageBitRate,
 //   rcParams.maxBitRate, rcParams.constQP.{qpIntra, qpInterP, qpInterB}.
-RcParams ComputeNvencRcParams(RateControlMode mode, uint32_t cq, uint32_t bitrate_kbps);
+RcParams ComputeNvencRcParams(VideoCodec codec, RateControlMode mode, uint32_t cq, uint32_t bitrate_kbps);
 
 // ---------------------------------------------------------------------------
 // GOP / keyframe helpers — pure, testable, no GPU/NVENC session.
@@ -186,17 +201,26 @@ void ApplyGopToNvenc(NV_ENC_CONFIG& cfg, VideoCodec codec, uint32_t gop_length) 
 uint32_t ComputeNvencGopBackstop(uint32_t gop_length, bool constant_frame_rate) noexcept;
 
 // ---------------------------------------------------------------------------
-// ApplySpatialAqToNvenc — pure, testable. Explicitly pins spatial adaptive
-// quantization on so the AQ state is set by us, not inherited from the driver's
-// per-preset default. Spatial AQ (rcParams.enableAQ) has no capability gate in
-// the NVENC API, unlike temporal AQ (NV_ENC_CAPS_SUPPORT_TEMPORAL_AQ), and is
-// valid with the P-only / no-lookahead pipeline used here. Temporal AQ is left
-// off deliberately: nvEncodeAPI.h does not document it as valid without
-// lookahead, so enabling it would be speculative. aqStrength stays 0 to keep the
-// driver's automatic strength selection (header: "If not set, strength is auto
-// selected by driver."). No GPU/NVENC session required.
+// ApplyAdaptiveQuantizationToNvenc — pure, testable. Pins the whole AQ state
+// explicitly, so it is ours rather than whatever the driver's per-preset default
+// happens to be. Both flavours are off.
+//
+// Spatial AQ redistributes bits from detailed regions to flat ones. That is a
+// trade against a bit budget, and CONSTQP has no budget to trade against.
+// Measured over two 1440p60 clips (high-entropy motion, and scrolling small
+// text): at the same QP it costs up to 45% more bitrate and still scores lower
+// on VMAF as well as PSNR, and at matched bitrate it is neutral at the top of
+// the ladder and negative below it. NVIDIA's own preset configuration returns
+// enableAQ = 0 for all three codecs, and the guide recommends AQ in use-case
+// rows whose rate control is VBR or CBR. Revisit if the product ever moves to
+// VBR + targetQuality — that is the configuration the recommendation belongs to.
+//
+// Temporal AQ additionally has a capability gate (NV_ENC_CAPS_SUPPORT_TEMPORAL_AQ)
+// and is not documented as valid without lookahead, which this pipeline does not
+// use. aqStrength stays 0 (driver auto-selection) so nothing is implied about a
+// strength while AQ is off. No GPU/NVENC session required.
 // ---------------------------------------------------------------------------
-void ApplySpatialAqToNvenc(NV_ENC_CONFIG& cfg) noexcept;
+void ApplyAdaptiveQuantizationToNvenc(NV_ENC_CONFIG& cfg) noexcept;
 
 // ---------------------------------------------------------------------------
 // ComputeFrameIntervalNs — pure. Nominal frame duration in nanoseconds for the
@@ -473,13 +497,16 @@ class NvencEncoder {
     // (covers the observed P6/P7 pipeline depth, plus headroom for a future
     // higher-depth pipeline once lookahead/B-frames need one);
     // m_activeDepth (1..kMaxOutputResources) is how many of them are
-    // actually used by Submit/Reap this session. Ship default is 1: a pure
-    // correctness fix with no extra VRAM use vs. sync mode — raising it is a
-    // deliberately deferred follow-up (would need an expert setting + a VRAM
-    // clamp, not part of this step). Events are registered for all
-    // kMaxOutputResources slots regardless of m_activeDepth (cheap; avoids
-    // re-registration if the depth ever becomes configurable at Configure()
-    // time).
+    // actually used by Submit/Reap this session. All kMaxOutputResources
+    // bitstream buffers and events are created unconditionally, so any depth up
+    // to the ceiling costs no additional video memory over depth 1.
+    //
+    // Depth 2 is the measured optimum: at depth 1 every submission first waits
+    // for the previous frame's completion event, which costs ~0.64 ms per frame
+    // (360 frames, AV1 P4, 1440p60); depth 2 removes that and depth 4 adds
+    // nothing further. Output is byte-identical at depths 1, 2 and 4 — the depth
+    // only pipelines submission against completion, it never changes an encode
+    // decision.
     static constexpr int32_t kMaxOutputResources = 4;
     struct OutputResource {
         NV_ENC_OUTPUT_PTR bitstream = nullptr;
@@ -487,7 +514,7 @@ class NvencEncoder {
         bool in_flight = false;
     };
     std::array<OutputResource, kMaxOutputResources> m_outputResources{};
-    int32_t m_activeDepth = 1;
+    int32_t m_activeDepth = 2;
     int32_t m_outputCursor = 0;
     bool m_asyncMode = false;
     // Async mode only: EOS submissions carry no output buffer, but the SDK's

@@ -30,7 +30,8 @@ TEST(AppSettingsStoreTest, AppSettingsStore_LoadMissingFile_ReturnsDefaults) {
     AppSettingsStore store(TempSettingsPath(temp_dir));
     const PersistedAppSettings loaded = store.Load();
 
-    // Default hotkey[0] = "Alt+F9" (stored as empty string until first Save).
+    // Every hotkey ships unset; no action has a non-empty factory default.
+    EXPECT_TRUE(loaded.hotkey_bindings[0].isEmpty());
     EXPECT_TRUE(loaded.hotkey_bindings[1].isEmpty());
     EXPECT_TRUE(loaded.hotkey_bindings[2].isEmpty());
     EXPECT_TRUE(loaded.hotkey_bindings[3].isEmpty());

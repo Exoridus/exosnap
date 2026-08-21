@@ -2,128 +2,18 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
+// The shape of the recorded audio stream: how many channels, at what rate, and
+// under which codec-specific controls. Separate from Audio sources because none
+// of this changes what is captured -- it changes what the captured audio is
+// turned into.
 ExoCard {
     id: root
 
     required property SettingsAdapter settings
     required property bool stacked
 
-    title: qsTr("Audio")
-    subtitle: root.settings.audioSummary
-
-    SettingsAudioSourceRow {
-        label: qsTr("Application audio")
-        sourceEnabled: root.settings.appAudioEnabled
-        separateTrack: root.settings.appAudioSeparate
-        locked: root.settings.controlsLocked
-        meterLevel: root.settings.appMeter
-        stacked: root.stacked
-        visible: root.settings.appAudioVisible
-        Layout.fillWidth: true
-        onSourceToggled: value => root.settings.appAudioEnabled = value
-        onSeparateToggled: value => root.settings.appAudioSeparate = value
-    }
-
-    SettingsAudioSourceRow {
-        label: qsTr("System audio")
-        sourceEnabled: root.settings.systemAudioEnabled
-        separateTrack: root.settings.systemAudioSeparate
-        locked: root.settings.controlsLocked
-        meterLevel: root.settings.systemMeter
-        stacked: root.stacked
-        Layout.fillWidth: true
-        onSourceToggled: value => root.settings.systemAudioEnabled = value
-        onSeparateToggled: value => root.settings.systemAudioSeparate = value
-    }
-
-    SettingsAudioSourceRow {
-        label: qsTr("Microphone")
-        sourceEnabled: root.settings.microphoneEnabled
-        separateTrack: root.settings.microphoneSeparate
-        locked: root.settings.controlsLocked
-        meterLevel: root.settings.microphoneMeter
-        stacked: root.stacked
-        Layout.fillWidth: true
-        onSourceToggled: value => root.settings.microphoneEnabled = value
-        onSeparateToggled: value => root.settings.microphoneSeparate = value
-    }
-
-    ExoSettingRow {
-        label: qsTr("Microphone device")
-        stacked: root.stacked
-        Layout.fillWidth: true
-
-        RowLayout {
-            spacing: ExoTheme.spacingSm
-            Layout.fillWidth: true
-
-            ExoSelect {
-                options: root.settings.microphoneDeviceOptions
-                value: root.settings.microphoneDeviceId
-                enabled: !root.settings.controlsLocked
-                Layout.fillWidth: true
-                Accessible.name: qsTr("Microphone device")
-                onValueActivated: value => root.settings.microphoneDeviceId = value
-            }
-
-            ExoButton {
-                text: qsTr("Rescan")
-                enabled: !root.settings.controlsLocked
-                onClicked: root.settings.rescanAudioDevices()
-            }
-        }
-    }
-
-    ExoSettingRow {
-        label: qsTr("Microphone channels")
-        hint: qsTr("How stereo mic inputs are mapped to the recorded channel")
-        stacked: root.stacked
-        Layout.fillWidth: true
-
-        ExoSelect {
-            options: root.settings.micChannelModeOptions
-            value: root.settings.micChannelMode
-            enabled: !root.settings.controlsLocked
-            Layout.fillWidth: true
-            Accessible.name: qsTr("Microphone channel mode")
-            onValueActivated: value => root.settings.micChannelMode = value
-        }
-    }
-
-    ExoSettingRow {
-        label: qsTr("Microphone gain")
-        hint: qsTr("Boost or cut the microphone level before encoding")
-        stacked: root.stacked
-        Layout.fillWidth: true
-
-        RowLayout {
-            spacing: ExoTheme.spacingSm
-            Layout.fillWidth: true
-
-            ExoSlider {
-                from: -12
-                to: 12
-                stepSize: 1
-                value: root.settings.micGainDb
-                enabled: !root.settings.controlsLocked
-                Layout.fillWidth: true
-                Accessible.name: qsTr("Microphone gain")
-                onMovedByUser: value => root.settings.micGainDb = value
-            }
-
-            Label {
-                text: qsTr("%1 dB").arg(Math.round(root.settings.micGainDb))
-                textFormat: Text.PlainText
-                horizontalAlignment: Text.AlignRight
-                color: ExoTheme.textSecondary
-                Layout.preferredWidth: 52
-                font {
-                    family: ExoTheme.monoFamily
-                    pixelSize: ExoTheme.fontSecondary
-                }
-            }
-        }
-    }
+    title: qsTr("Audio encoding")
+    subtitle: root.settings.audioEncodingSummary
 
     ExoSettingRow {
         label: qsTr("Audio bitrate")
@@ -163,7 +53,7 @@ ExoCard {
     ExoSettingRow {
         label: qsTr("Sample rate")
         stacked: root.stacked
-        visible: root.settings.audioSampleRateRelevant
+        visible: root.settings.expertMode && root.settings.audioSampleRateRelevant
         Layout.fillWidth: true
 
         ExoSelect {
@@ -220,6 +110,7 @@ ExoCard {
             checked: root.settings.limiterEnabled
             enabled: !root.settings.controlsLocked
             Accessible.name: qsTr("Brickwall limiter")
+            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
             onToggledByUser: value => root.settings.limiterEnabled = value
         }
     }
@@ -259,6 +150,7 @@ ExoCard {
 
     ExoSettingRow {
         label: qsTr("A/V clock slaving")
+        info: qsTr("The audio device and the video capture run off different clocks and drift apart by a few parts per million. Slaving resamples audio onto the video clock so a multi-hour recording stays in sync. Turn it off only when you need bit-exact audio samples.")
         stacked: root.stacked
         controlWidth: 60
         visible: root.settings.expertMode
@@ -268,31 +160,8 @@ ExoCard {
             checked: root.settings.clockSlavingEnabled
             enabled: !root.settings.controlsLocked
             Accessible.name: qsTr("Audio/video clock slaving")
+            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
             onToggledByUser: value => root.settings.clockSlavingEnabled = value
         }
-    }
-
-    ExoSettingRow {
-        label: qsTr("Microphone post-processing")
-        hint: root.settings.micPostProcessingSummary
-        stacked: root.stacked
-        controlWidth: 100
-        Layout.fillWidth: true
-
-        ExoButton {
-            text: micPostProcessing.visible ? qsTr("Hide") : qsTr("Configure")
-            quiet: true
-            Layout.fillWidth: true
-            onClicked: micPostProcessing.visible = !micPostProcessing.visible
-        }
-    }
-
-    SettingsMicDspGroup {
-        id: micPostProcessing
-
-        settings: root.settings
-        stacked: root.stacked
-        visible: false
-        Layout.fillWidth: true
     }
 }

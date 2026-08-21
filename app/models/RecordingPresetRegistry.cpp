@@ -174,10 +174,15 @@ RecordingPresetConfig RecordingPresetRegistry::SelectedSavedConfig() const {
 }
 
 bool RecordingPresetRegistry::IsSelectedDirty(const RecordingPresetConfig& live_config) const {
-    // Use ConfigDirtyEquivalent (not NormalizedConfigEquals) so that capture
-    // identity (display_key, window_key, region) does not contribute to dirty
-    // state.  Capture is transient/auto-resolved and excluded from dirty per spec.
-    return !ConfigDirtyEquivalent(live_config, SelectedPreset().config);
+    return !SelectedDirtyField(live_config).empty();
+}
+
+std::string_view RecordingPresetRegistry::SelectedDirtyField(const RecordingPresetConfig& live_config) const {
+    // Use the ConfigDirty* comparison (not NormalizedConfigEquals) so that
+    // capture identity (display_key, window_key, region) does not contribute to
+    // dirty state. Capture is transient/auto-resolved and excluded from dirty
+    // per spec.
+    return ConfigDirtyDifference(live_config, SelectedPreset().config);
 }
 
 bool RecordingPresetRegistry::IsBuiltIn(std::string_view id) {

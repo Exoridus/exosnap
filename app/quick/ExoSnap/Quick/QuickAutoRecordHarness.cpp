@@ -114,6 +114,38 @@ benchmark::PreviewMetrics SampleQuickPreviewMetrics(const RecordPreviewAdapter& 
     preview.preview_scene_update_requests = benchmark::MakeMetric(
         static_cast<double>(metrics.scene_update_requests), benchmark::Comparability::FrontendOnly,
         "PreviewUpdateScheduler: wake-ups that reached the live item as one QQuickItem::update()");
+    preview.consumer_acquires = benchmark::MakeMetric(
+        static_cast<double>(metrics.acquires), kSame,
+        "ExoPreviewItem: keyed-mutex acquires that succeeded — the frame left the slot, whether or not it "
+        "then converted");
+    preview.consumer_acquire_abandoned = benchmark::MakeMetric(
+        static_cast<double>(metrics.acquire_abandoned), kSame,
+        "ExoPreviewItem: acquires that found the keyed mutex abandoned — the shared surface is inconsistent");
+    preview.publish_interval_ms_p50 = benchmark::MakeMetric(metrics.publish_interval_ms_p50, kSame,
+                                                            "PreviewUpdateScheduler: interval between successful "
+                                                            "publishes, measured at the publish edge");
+    preview.publish_interval_ms_p95 =
+        benchmark::MakeMetric(metrics.publish_interval_ms_p95, kSame, "PreviewUpdateScheduler: publish interval");
+    preview.publish_interval_ms_p99 =
+        benchmark::MakeMetric(metrics.publish_interval_ms_p99, kSame, "PreviewUpdateScheduler: publish interval");
+    preview.publish_interval_ms_max =
+        benchmark::MakeMetric(metrics.publish_interval_ms_max, kSame, "PreviewUpdateScheduler: publish interval");
+    preview.presentation_debt_ms_p50 =
+        benchmark::MakeMetric(metrics.debt_age_ms_p50, kApprox,
+                              "PreviewUpdateScheduler: how long the preview owed a frame, from the first publish "
+                              "after the last successful consume to that consume");
+    preview.presentation_debt_ms_p95 =
+        benchmark::MakeMetric(metrics.debt_age_ms_p95, kApprox, "PreviewUpdateScheduler: presentation debt age");
+    preview.presentation_debt_ms_p99 =
+        benchmark::MakeMetric(metrics.debt_age_ms_p99, kApprox, "PreviewUpdateScheduler: presentation debt age");
+    preview.presentation_debt_ms_max =
+        benchmark::MakeMetric(metrics.debt_age_ms_max, kApprox, "PreviewUpdateScheduler: presentation debt age");
+    preview.source_interval_ms_max = benchmark::MakeMetric(
+        metrics.source_interval_ms_max, kApprox, "ExoPreviewItem: worst consumer-observed arrival gap in the window");
+    preview.consumer_conversion_failures = benchmark::MakeMetric(
+        static_cast<double>(metrics.conversion_failures), kSame,
+        "ExoPreviewItem: frames taken off the slot that then failed tone-map/RGBA conversion and can never be "
+        "taken again");
     return preview;
 }
 

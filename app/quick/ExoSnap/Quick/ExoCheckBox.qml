@@ -25,6 +25,10 @@ CheckBox {
     bottomPadding: 3
     implicitWidth: Math.max(24, contentItem.implicitWidth + root.leftPadding + root.rightPadding)
 
+    HoverHandler {
+        cursorShape: Qt.PointingHandCursor
+    }
+
     indicator: Rectangle {
         x: root.leftPadding
         y: root.topPadding + (root.availableHeight - height) / 2

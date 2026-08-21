@@ -41,7 +41,7 @@ RecordingPresetConfig WithMicGainDelta(RecordingPresetConfig cfg, float delta) {
 // RecordingPresetRegistry::IsBuiltIn into ConfigPage/OutputPage ProfileOption.
 TEST(RecordingPreset, MakeBuiltInPresets_FourPresets_ExpectedValues) {
     const std::vector<RecordingPreset> b = MakeBuiltInPresets();
-    ASSERT_EQ(b.size(), 4u);
+    ASSERT_EQ(b.size(), 5u);
 
     EXPECT_EQ(b[0].id, kDefaultPresetId);
     EXPECT_EQ(b[0].name, "Default");
@@ -51,21 +51,27 @@ TEST(RecordingPreset, MakeBuiltInPresets_FourPresets_ExpectedValues) {
     EXPECT_EQ(b[1].id, kQualityPresetId);
     EXPECT_EQ(b[1].name, "Quality");
     EXPECT_EQ(b[1].config.video.cq, 16u);
-    EXPECT_EQ(b[1].config.output.nvenc_preset, recorder_core::NvencPreset::P6);
+    EXPECT_EQ(b[1].config.output.nvenc_preset, recorder_core::NvencPreset::P4);
     EXPECT_EQ(b[1].config.output.container, capability::Container::Matroska);
 
-    EXPECT_EQ(b[2].id, kEfficiencyPresetId);
-    EXPECT_EQ(b[2].name, "Efficiency");
+    EXPECT_EQ(b[2].id, kCompactPresetId);
+    EXPECT_EQ(b[2].name, "Compact");
     EXPECT_EQ(b[2].config.video.cq, 30u);
     EXPECT_EQ(b[2].config.output.nvenc_preset, recorder_core::NvencPreset::P6);
 
-    EXPECT_EQ(b[3].id, kCompatibilityPresetId);
-    EXPECT_EQ(b[3].name, "Compatibility");
-    EXPECT_EQ(b[3].config.output.container, capability::Container::Mp4);
-    EXPECT_EQ(b[3].config.output.video_codec, capability::VideoCodec::H264);
-    EXPECT_EQ(b[3].config.output.audio_codec, capability::AudioCodec::Aac);
+    EXPECT_EQ(b[3].id, kPerformancePresetId);
+    EXPECT_EQ(b[3].name, "Performance");
     EXPECT_EQ(b[3].config.video.cq, 19u);
-    EXPECT_EQ(b[3].config.output.nvenc_preset, recorder_core::NvencPreset::P4);
+    EXPECT_EQ(b[3].config.output.nvenc_preset, recorder_core::NvencPreset::P2);
+    EXPECT_EQ(b[3].config.output.container, capability::Container::Matroska);
+
+    EXPECT_EQ(b[4].id, kCompatibilityPresetId);
+    EXPECT_EQ(b[4].name, "Compatibility");
+    EXPECT_EQ(b[4].config.output.container, capability::Container::Mp4);
+    EXPECT_EQ(b[4].config.output.video_codec, capability::VideoCodec::H264);
+    EXPECT_EQ(b[4].config.output.audio_codec, capability::AudioCodec::Aac);
+    EXPECT_EQ(b[4].config.video.cq, 19u);
+    EXPECT_EQ(b[4].config.output.nvenc_preset, recorder_core::NvencPreset::P4);
 
     // No built-in claims an environment field.
     const OutputSettingsModel defaults = OutputSettingsModel::Defaults();
@@ -78,10 +84,11 @@ TEST(RecordingPreset, MakeBuiltInPresets_FourPresets_ExpectedValues) {
     }
 }
 
-TEST(RecordingPreset, IsBuiltInPresetId_MatchesExactlyTheFour) {
+TEST(RecordingPreset, IsBuiltInPresetId_MatchesExactlyTheFive) {
     EXPECT_TRUE(IsBuiltInPresetId(kDefaultPresetId));
     EXPECT_TRUE(IsBuiltInPresetId(kQualityPresetId));
-    EXPECT_TRUE(IsBuiltInPresetId(kEfficiencyPresetId));
+    EXPECT_TRUE(IsBuiltInPresetId(kCompactPresetId));
+    EXPECT_TRUE(IsBuiltInPresetId(kPerformancePresetId));
     EXPECT_TRUE(IsBuiltInPresetId(kCompatibilityPresetId));
     EXPECT_FALSE(IsBuiltInPresetId("preset.0123456789abcdef"));
     EXPECT_FALSE(IsBuiltInPresetId(""));
@@ -955,7 +962,7 @@ TEST(RecordingPreset, NormalizedEquals_OutputContainerChange_NotEqual) {
 TEST(RecordingPreset, NormalizedEquals_VideoQualityChange_NotEqual) {
     RecordingPresetConfig a = MakeDefaultPreset().config;
     RecordingPresetConfig b = a;
-    b.video.cq = recorder_core::CanonicalCq(recorder_core::QualityPreset::Efficient);
+    b.video.cq = recorder_core::CanonicalCq(recorder_core::QualityPreset::Low);
     EXPECT_FALSE(NormalizedConfigEquals(a, b));
 }
 
@@ -1074,7 +1081,7 @@ TEST(RecordingPreset, DirtyEquivalent_CaptureRegionChange_StillEquivalent) {
 TEST(RecordingPreset, DirtyEquivalent_VideoQualityChange_NotEquivalent) {
     RecordingPresetConfig a = MakeDefaultPreset().config;
     RecordingPresetConfig b = a;
-    b.video.cq = recorder_core::CanonicalCq(recorder_core::QualityPreset::Efficient);
+    b.video.cq = recorder_core::CanonicalCq(recorder_core::QualityPreset::Low);
     EXPECT_FALSE(ConfigDirtyEquivalent(a, b));
 }
 

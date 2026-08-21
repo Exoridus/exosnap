@@ -61,7 +61,8 @@ Item {
         "preset": presetSection,
         "format": formatSection,
         "quality": qualitySection,
-        "audio": audioSection,
+        "audio": audioSourcesSection,
+        "audio-encoding": audioEncodingSection,
         "output": outputSection,
         "webcam": webcamSection,
         "overlays": overlaysSection,
@@ -141,8 +142,17 @@ Item {
         Layout.fillWidth: true
     }
 
-    SettingsAudioSection {
-        id: audioSection
+    SettingsAudioSourcesSection {
+        id: audioSourcesSection
+
+        settings: root.settings
+        stacked: root.stackedRows
+        visible: false
+        Layout.fillWidth: true
+    }
+
+    SettingsAudioEncodingSection {
+        id: audioEncodingSection
 
         settings: root.settings
         stacked: root.stackedRows
@@ -229,42 +239,6 @@ Item {
             margins: ExoTheme.pagePadding
         }
 
-        RowLayout {
-            spacing: ExoTheme.spacingSm
-            Layout.fillWidth: true
-            Layout.bottomMargin: ExoTheme.spacingXs
-            Layout.leftMargin: root.sideInset
-            Layout.rightMargin: root.sideInset + ExoTheme.spacingLg
-
-            Label {
-                text: qsTr("Settings")
-                textFormat: Text.PlainText
-                color: ExoTheme.text
-                Layout.fillWidth: true
-                font {
-                    family: ExoTheme.sansFamily
-                    pixelSize: ExoTheme.fontPageTitle
-                    weight: Font.DemiBold
-                }
-            }
-
-            Label {
-                text: qsTr("Expert mode")
-                textFormat: Text.PlainText
-                color: root.settings.expertMode ? ExoTheme.accent : ExoTheme.textSecondary
-                font {
-                    family: ExoTheme.sansFamily
-                    pixelSize: ExoTheme.fontBody
-                }
-            }
-
-            ExoSwitch {
-                checked: root.settings.expertMode
-                Accessible.name: qsTr("Expert mode")
-                onToggledByUser: value => root.settings.expertMode = value
-            }
-        }
-
         ExoNotice {
             text: qsTr("Recording is in progress — settings that change the output format are locked until it stops.")
             tone: "info"
@@ -310,7 +284,8 @@ Item {
                     LayoutItemProxy { target: presetSection }
                     LayoutItemProxy { target: formatSection }
                     LayoutItemProxy { target: qualitySection }
-                    LayoutItemProxy { target: audioSection }
+                    LayoutItemProxy { target: audioSourcesSection }
+                    LayoutItemProxy { target: audioEncodingSection }
                     LayoutItemProxy { target: outputSection }
                     LayoutItemProxy { target: webcamSection }
                     LayoutItemProxy { target: overlaysSection }
@@ -328,8 +303,11 @@ Item {
                 //
                 // The split follows the canonical order rather than balancing
                 // heights — left is the recording chain (format → quality → audio
-                // → output), right is everything around it — so reading order stays
-                // top-to-bottom within a column.
+                // → output) plus notifications & presence, right is everything
+                // else around it — so reading order stays top-to-bottom within a
+                // column. Presence sits in the left column purely to keep the two
+                // columns' endpoints reasonably close; it is not part of the
+                // recording chain itself.
                 ColumnLayout {
                     id: twoColumn
 
@@ -351,8 +329,9 @@ Item {
 
                             LayoutItemProxy { target: formatSection }
                             LayoutItemProxy { target: qualitySection }
-                            LayoutItemProxy { target: audioSection }
+                            LayoutItemProxy { target: audioSourcesSection }
                             LayoutItemProxy { target: outputSection }
+                            LayoutItemProxy { target: presenceSection }
 
                             Item {
                                 Layout.fillHeight: true
@@ -366,8 +345,8 @@ Item {
                             Layout.alignment: Qt.AlignTop
 
                             LayoutItemProxy { target: webcamSection }
+                            LayoutItemProxy { target: audioEncodingSection }
                             LayoutItemProxy { target: overlaysSection }
-                            LayoutItemProxy { target: presenceSection }
                             LayoutItemProxy { target: hotkeysSection }
                             LayoutItemProxy { target: updatesSection }
                             LayoutItemProxy { target: appearanceSection }

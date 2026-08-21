@@ -41,6 +41,22 @@ ffmpeg -i <recording>.mkv -ss <start> -t <duration> -pix_fmt yuv420p -vf scale=1
 This command is the whole clip-set-generation "tool" — repeatable any time a new or better
 reference clip is needed; there is no separate script.
 
+## Recording a reference clip with the product itself
+
+`--auto-record --cq <n>` takes a recording at a canonical CQ the shipped ladder
+does not offer, which is what a reference clip needs: at CQ 1 the encode is close
+enough to lossless that the measurement is about the candidate rather than about
+the reference. Everything else about the run is the normal harness path.
+
+```
+exosnap.exe --auto-record --enable-preview --target monitor --duration 30             --frame-rate 60 --cq 1 --container mkv --video-codec av1             --audio-codec opus --chroma 420 --bit-depth 8 --hdr off --audio-rows sys
+```
+
+`--auto-record` is only compiled into a Release build configured with
+`EXOSNAP_BUILD_BENCHMARK_HARNESS=ON`; a Debug build always has it. Point
+`EXOSNAP_OUTPUT_DIR` at a scratch directory — a reference clip is a large file
+and never belongs in the user's output folder.
+
 ## Running the matrix
 
 Per codec, per clip:
@@ -55,6 +71,50 @@ python scripts/dev/encoder_quality_matrix.py \
 Repeat for `--vcodec h264`/`hevc` and for each clip. Each run sweeps P4 and P7, each under CQ
 (the product default) and VBR, at 4 rate-control points — enough for a BD-rate curve fit.
 Writes `<output>.csv` (raw data) and `<output>.md` (human-readable table).
+
+Sweep selection is optional: `--presets`, `--cq-values` and `--vbr-values` replace the baseline
+sweep when an exploration needs different points. Omit all three and the baseline matrix runs
+unchanged, so the invocation above keeps producing the same cells and the 4-point BD-rate contract
+below still holds.
+
+## Trusting the numbers before trusting the encoder
+
+```bash
+python scripts/dev/encoder_quality_matrix.py --metric-sanity --clip desktop-scroll.y4m
+```
+
+Builds four candidates from the clip whose ordering is known in advance — a lossless copy, a mildly
+and a severely degraded encode, and the clip shifted by one frame — and verifies that VMAF, SSIM and
+PSNR all rank them `identity > mild > severe` with the shifted copy far below identity. Run it after
+any change to the scoring path, and on a new clip before a sweep it will be used for. It carries no
+absolute thresholds: those depend on the clip, and pinning them turns a content change into a false
+failure.
+
+Two things the scoring path does unconditionally, both of which this suite exists to keep honest:
+
+- **Frames are paired by index**, by re-stamping both inputs. Metric filters pair by presentation
+  time, and a muxed candidate carries container timestamps a raw Y4M reference does not — Matroska
+  quantises to its 1 ms timecode scale, so 60 fps lands on 0/16/33/50 ms while the Y4M sits on exact
+  1/60 s. Left alone, a bit-exact lossless copy scores PSNR-Y 21 dB with a third of its frames at
+  VMAF 0.
+- **Colour descriptions are normalised on both inputs.** The encodes carry one (the encoder writes
+  BT.709 into the bitstream); a Y4M reference does not. ffmpeg then auto-inserts a colour conversion
+  on one input only and the metric scores that conversion — measured at 14 dB of PSNR-Y and 4.3 VMAF
+  on a 1440p60 AV1 encode whose pixels were untouched, which is more than enough to invert a
+  comparison between two encoders.
+
+Reports name the ffmpeg version, the libvmaf version, the VMAF model and the scored frame count, and
+list VMAF **median, p10, p5, p1, worst-1%-mean and minimum** next to the mean. On screen content the
+mean hides the answer: over a scrolling small-text clip the median stays at exactly 100.0000 across
+an entire CQ sweep while p10 travels 8 points, and over a *real* browser scroll even p10 pegs at
+100.0000 and only the extreme tail moves. Absolute VMAF is not a screen-quality grade — only the
+ordering within one clip and one harness is.
+
+**Which tail statistic to read.** `min` finds the single worst frame and is the most sensitive, but a
+single frame is also the easiest thing to move by an outlier. `worst-1%-mean` averages the worst
+percentile instead, which keeps a short visible scroll or rasterizer failure legible without resting
+a verdict on one frame. The two coincide on windows shorter than 200 frames, where one per cent is
+one frame — sweep at least 200 frames when the tail is what decides.
 
 ## Result storage
 

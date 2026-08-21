@@ -881,6 +881,15 @@ void VideoThread::Run() {
     // nothing on format mismatch, which previously starved the encoder and
     // surfaced minutes later as an opaque mux timeout — an unsupported format
     // is now an explicit ErrorPhase::VideoCapture failure instead.
+    //
+    // Two roles, and they differ by pacing path. Without phase-correct pacing this is
+    // the current captured desktop, rewritten by every acquire. With it, the ring
+    // takes over the drain and this becomes the HELD SCREEN: the last emitted
+    // desktop, rotated in by AdoptEmittedAsHeldScreen, which is what
+    // ShouldRecompositeHeldScreen re-composites on a tick with no fresh capture but a
+    // moved cursor or webcam. Either way it must track the newest screen the encode
+    // has seen — a write that happens only once leaves the recording reverting to
+    // that one frame for the rest of the session.
     winrt::com_ptr<ID3D11Texture2D> odCapturedTex;
     DXGI_FORMAT odFrameFormat = DXGI_FORMAT_UNKNOWN; // set when odCapturedTex is created
     bool odCapturedTexValid = false;
@@ -2400,6 +2409,7 @@ void VideoThread::Run() {
     const PreviewTapPlan previewTapPlan = ResolvePreviewTapPlan(hdrNativeActive, hdrPqInputIsPq, hdrPeakScale);
     PreviewSharedTexture previewSharedTex;
     bool previewSharedInitFailed = false;
+    bool previewTransportPoisoned = false;
     PreviewPublishGate previewGate(kPreviewMinIntervalNs);
 
     auto tapPreviewSource = [&](ID3D11Texture2D* vpInput, uint64_t pts_ns) {
@@ -2407,8 +2417,13 @@ void VideoThread::Run() {
             return; // no consumer registered -- zero cost beyond this check
         if (previewSharedInitFailed || vpInput == nullptr || !previewTapPlan.tap_enabled)
             return;
+        // Counted AFTER the cheap disqualifiers and BEFORE the gate: a zero here
+        // says the tap never had a frame to offer, which is a different defect
+        // from a tap that offered frames the transport then refused.
+        m_state.diagnostics.OnPreviewTapFrameSeen();
         if (!previewGate.ShouldPublish(pts_ns))
             return; // throttle to ~30 Hz
+        m_state.diagnostics.OnPreviewTapGatePass();
 
         if (!previewSharedTex.Valid()) {
             D3D11_TEXTURE2D_DESC srcDesc{};
@@ -2426,6 +2441,7 @@ void VideoThread::Run() {
             // opens it on its render device and CloseHandle's it. Must return fast
             // and must not touch D3D on this (video) thread.
             m_state.preview_shared_handle_cb(ntHandle, srcDesc.Width, srcDesc.Height, previewTapPlan.desc);
+            m_state.diagnostics.OnPreviewTapSharedTextureReady();
         }
 
         // Non-blocking publish of the composited frame (observation-only; the encode
@@ -2433,16 +2449,32 @@ void VideoThread::Run() {
         // Time the CPU submission cost of the copy; the display present itself runs
         // on the consumer's (UI) render thread, outside this engine path.
         const auto prev_t0 = std::chrono::steady_clock::now();
-        const bool published = previewSharedTex.TryPublish(d3dContext.get(), vpInput);
+        const PreviewSharedTexture::PublishResult publish = previewSharedTex.TryPublish(d3dContext.get(), vpInput);
+        const bool published = publish.published();
         const auto prev_t1 = std::chrono::steady_clock::now();
         m_state.diagnostics.OnPreviewCopy(prev_t1,
                                           std::chrono::duration<double, std::milli>(prev_t1 - prev_t0).count());
+        m_state.diagnostics.OnPreviewTapPublish(publish.acquire, publish.released_ok);
+        // Logged once per session, not per frame: an abandoned keyed mutex or a
+        // failed release does not recover, so every later tick would repeat it.
+        if (!previewTransportPoisoned && (publish.acquire == PreviewAcquireOutcome::Abandoned ||
+                                          publish.acquire == PreviewAcquireOutcome::Failed || !publish.released_ok)) {
+            previewTransportPoisoned = true;
+            logging::log(logging::LogLevel::Warn, "video_thread",
+                         std::string("preview transport failed and will not recover this session: ") +
+                             (publish.acquire == PreviewAcquireOutcome::Abandoned ? "keyed mutex abandoned"
+                              : publish.acquire == PreviewAcquireOutcome::Failed  ? "acquire failed"
+                                                                                  : "release failed"),
+                         {});
+        }
         // Only a frame that reached the shared texture is worth waking the
         // consumer for. A contention drop means the consumer has not taken the
         // PREVIOUS frame yet, so its redraw is already pending — signalling it
         // again would add a render without adding a picture.
-        if (published && m_state.preview_frame_published_cb)
+        if (published && m_state.preview_frame_published_cb) {
             m_state.preview_frame_published_cb();
+            m_state.diagnostics.OnPreviewTapPublishedEdge();
+        }
     };
 
     // Cache the VideoProcessor input view across ticks. The encode input handed to
@@ -2972,7 +3004,6 @@ void VideoThread::Run() {
                     for (uint32_t d = 0; d < dec.newly_dropped; ++d)
                         m_state.diagnostics.OnFrameDroppedCoalesced();
                     if (dec.emit) {
-                        rawSourceTex = captureRing[liveIndexToRingSlot[dec.index]].tex.get();
                         lastEmittedPresentQpc = presentQpcsAscending[dec.index];
                         // Consume the emitted entry and every skipped/older one so they
                         // are not re-selected or counted again as eviction drops.
@@ -2980,6 +3011,11 @@ void VideoThread::Run() {
                             if (entry.presentQpc != 0 && entry.presentQpc <= lastEmittedPresentQpc)
                                 entry.presentQpc = 0;
                         }
+                        // odCapturedTex doubles as the held screen (see its declaration).
+                        // The entry was consumed by the loop above, so rotating it in here
+                        // hands the drain back a free slot of identical description.
+                        AdoptEmittedAsHeldScreen(captureRing[liveIndexToRingSlot[dec.index]].tex, odCapturedTex);
+                        rawSourceTex = odCapturedTex.get();
                     } else {
                         // No fresh frame near this slot -> existing duplicate / CFR-skip path.
                         rawSourceTex = nullptr;

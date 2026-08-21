@@ -85,9 +85,16 @@ class RecordingPresetRegistry {
     // The newly imported preset is NOT auto-selected (unlike AddPreset).
     void ImportPreset(RecordingPreset preset);
 
-    // Returns true when live_config differs from the selected preset's saved config
-    // (!NormalizedConfigEquals).
+    // Returns true when live_config differs from the selected preset's saved
+    // config in a way the user is meant to see (ConfigDirtyEquivalent, which
+    // excludes the environment fields).
     [[nodiscard]] bool IsSelectedDirty(const RecordingPresetConfig& live_config) const;
+
+    // The field that makes the selected preset dirty, or an empty view when it
+    // is not. Same comparison and same order as IsSelectedDirty; a caller that
+    // needs to explain the (changed) badge uses this instead of recomputing the
+    // rule.
+    [[nodiscard]] std::string_view SelectedDirtyField(const RecordingPresetConfig& live_config) const;
 
     // True when `id` names one of the shipped read-only presets.
     [[nodiscard]] static bool IsBuiltIn(std::string_view id);

@@ -59,8 +59,8 @@ setting does not live in Diagnostics.
 
 - **Record** — the operational view: capture target, readiness, live preview before recording, and
   the live runtime (technical) view while recording.
-- **Settings** — unified recording configuration, hosting embedded sections: **Container & codecs ·
-  Quality & timing · Audio · Output · Webcam · Overlays · Notifications & presence · Hotkeys · Updates ·
+- **Settings** — unified recording configuration, hosting embedded sections: **Recording format ·
+  Video quality & timing · Audio sources · Audio encoding · Output · Webcam · Overlays · App behaviour · Hotkeys · Updates ·
   Appearance · Developer**. There is no separate Advanced section — a global **Expert** toggle
   (shared with Diagnostics) reveals additional rows in place within a section rather than hiding or
   revealing a whole card; every section, including Developer, is visible in both modes (§12).
@@ -251,9 +251,13 @@ was last closed comes back maximized without showing its normal size first.
 
 Every nav destination that has a page title states it the same way: the destination's name on the
 page-title rung, on the same axis as its own content, with that page's controls (Expert toggle,
-Rescan, filters) on the right of the same row. **Record** is the one destination with no page title
-— its Preview Toolbar names the capture target instead, because the preview is that page's subject —
-and **About** is the one with no header at all, being a single centred identity card.
+Rescan, filters) on the right of the same row. Three destinations opt out. **Record** has no page
+title — its Preview Toolbar names the capture target instead, because the preview is that page's
+subject. **About** has no header at all, being a single centred identity card. **Settings** has no
+page title either: its first band is already a toolbar (the preset selector, its dirty badge and the
+preset actions), so a heading above it repeated the selected navigation tab word for word and pushed
+the page's real controls a rung further down. The Expert toggle Settings would have carried in that
+heading rides the right end of the preset toolbar instead.
 
 **In-window modal surfaces** — the crash-report consent surface, the recovery prompt and the
 recording-error surface — share one shape. Their **scrim covers the whole shell including the title
@@ -295,20 +299,30 @@ The built-in default profile is **MKV + AV1 + Opus + CFR 60 fps**.
 | Color range | Limited |
 | Cursor capture | On |
 | Countdown | 0 seconds (selectable 0/3/5/10) |
-| Audio source rows | Order is `APP`, `SYS`, `MIC`. The Settings **Audio** card always lists all three rows: the `APP` row is a persisted setting that recedes (inactive meter, explanatory line "Takes effect while a specific application window is the capture target.") whenever a window is not the capture target, and it carries no **Merge with above** control because it is the first row. Which sources enter the recording plan still depends on the capture target — an `APP` source exists only while a specific application window is being captured. For screen capture the shipped default is `SYS` enabled and `MIC` present but off. |
+| Audio source rows | Order is `APP`, `SYS`, `MIC`. The Settings **Audio sources** card always lists all three rows: the `APP` row is a persisted setting that recedes (inactive meter, explanatory line "Takes effect while a specific application window is the capture target.") whenever a window is not the capture target, and it carries no **Mix into previous track** control because it is the first row. Which sources enter the recording plan still depends on the capture target — an `APP` source exists only while a specific application window is being captured. For screen capture the shipped default is `SYS` enabled and `MIC` present but off. |
 | Resulting tracks | Each enabled source is a separate resulting track unless merged with the row above |
 | Webcam | Off |
 
-Four read-only built-in presets ship with the app and always appear first in the preset list. They
+Five read-only built-in presets ship with the app and always appear first in the preset list. They
 cannot be renamed, overwritten, or deleted; **Save as new…** derives an editable user preset from any
 of them.
 
-| Preset | Container | Codecs | CQ | NVENC preset | Intent |
-|--------|-----------|--------|----|--------------|--------|
-| Default | MKV | AV1 + Opus | 19 | P4 | balanced |
-| Quality | MKV | AV1 + Opus | 16 | P6 | maximum sharpness; costs disk and GPU |
-| Efficiency | MKV | AV1 + Opus | 30 | P6 | small files at usable quality |
-| Compatibility | MP4 | H.264 + AAC | 19 | P4 | editing, upload, GPUs without AV1 encode |
+| Preset | Container | Codecs | CQ (tier) | NVENC preset | Intent |
+|--------|-----------|--------|-----------|--------------|--------|
+| Default | MKV | AV1 + Opus | 19 (High) | P4 | balanced |
+| Quality | MKV | AV1 + Opus | 16 (Ultra) | P4 | the top of the quality ladder |
+| Compact | MKV | AV1 + Opus | 30 (Low) | P6 | smallest files, for long screen recordings |
+| Performance | MKV | AV1 + Opus | 19 (High) | P2 | maximum encoder headroom |
+| Compatibility | MP4 | H.264 + AAC | 19 (High) | P4 | editing, upload, GPUs without AV1 encode |
+
+Each differs from **Default** on exactly one axis. Under constant quality the NVENC preset is an
+encode-time control rather than a quality one — measured on real gameplay and a real browser scroll,
+P2 through P7 move VMAF by at most 0.24 points and bitrate by at most 4% — so the quality tier is
+what separates **Quality** and **Compact**, and the NVENC preset is what separates **Performance**.
+**Compact** is the one case where a high NVENC preset pays: on dense small text P6 cuts roughly a
+fifth of the bitrate, because sub-pixel motion search is what that content needs. **Compatibility**
+keeps CQ 19 because the canonical scale *is* H.264's quantizer scale, so that is the High tier for
+H.264 by definition rather than by coincidence.
 
 The **live configuration is the source of truth**. It is persisted silently and continuously, so the
 app restarts into exactly the state it was closed in. A preset is a named snapshot the live
@@ -413,7 +427,7 @@ back to H.264 or AV1 if issues appear.
 configurable, not conditional on the capture target. While no specific application window is the
 capture target it recedes (inactive meter, explanatory line "Takes effect while a specific
 application window is the capture target.") instead of disappearing, and — being the first listed
-row — it carries no **Merge with above** control, since there is no row above it to fold into.
+row — it carries no **Mix into previous track** control, since there is nothing before it to fold into.
 Whether an `APP` source actually contributes audio to the recording still depends on the capture
 target: it contributes only while a specific application window is being captured. Defaults are
 **context-aware** (see §3 and "Resolved-decision notes" below): the `APP` row defaults enabled; for
@@ -431,10 +445,23 @@ the rows as locked previews.
 - The **Mic row hides its gain slider** (mic level lives on the dedicated mic gain control); its mute
   button is always shown.
 
-**`Merge with above`.** The exact per-row control label is **`Merge with above`** (do not rename).
+**`Mix into previous track`.** The per-row control names the track the source joins, not the row's
+position on screen. `Merge with above` was the first wording; it described where the control sat
+rather than what it did, and stopped being true the moment the rows were laid out differently
+(narrow single column, a receding `APP` row, a future reordering). "Previous" refers to the product
+order `APP`, `SYS`, `MIC` fixed above, which is the model the engine resolves tracks from, so the
+label stays true regardless of how the rows are drawn. Naming the concrete target instead ("Mix into
+the system-audio track") was considered and rejected: the target changes with which rows are enabled,
+so the row's own label would move under the user.
+
+The verb is `Mix`, not `Merge`, because that is what the resolver does: the checked source is
+appended to the track currently being built and its samples are summed into it at that row's own
+gain, producing one track whose name is its sources joined with " + ". Nothing merges two existing
+tracks. Three sources chained this way all land in the same track, which is why the target stays
+"previous track" and does not become "previous source".
 Checking it folds a source into the track above it instead of producing a separate track, so users
-can combine sources (for example, merging system and app audio into one track) without engine-side
-UI logic. The set of relevant sources is context-aware — it adapts to the capture target.
+can combine sources (for example, system and app audio in one track) without engine-side UI logic.
+The set of relevant sources is context-aware — it adapts to the capture target.
 
 **Mix bus and limiter.** Per-source gain and mute are applied in the mixer. A **brickwall limiter**
 sits on the mixed bus and is **on by default** at a 0 dBFS ceiling, so summed sources can exceed full
@@ -486,23 +513,60 @@ A bitrate control accompanies the bitrate-based modes. Switching encoders preser
 canonical mode; only the internal mapping changes. Expert rate-control, bitrate, and frame-timing
 controls sit behind the Expert toggle.
 
-**Quality ladder.** In Default mode, quality is chosen from a five-tier, CQ-first-labelled ladder:
+**Quality ladder.** In Default mode, quality is chosen from a five-tier ladder, **labelled by tier
+name alone**:
 
 | Tier | Label | CQ |
 |------|-------|----|
 | 1 | Draft | 35 |
-| 2 | Efficient | 30 |
+| 2 | Low | 30 |
 | 3 | Balanced | 24 |
 | 4 | High (default) | 19 |
 | 5 | Ultra | 16 |
 
 The top tier deliberately avoids "Best" (vague) and "Quality" (collides with the built-in Quality
-preset's name). The built-in **Quality** preset's CQ 16 now lands exactly on the Ultra tier instead
-of only approximating it. Expert mode replaces the ladder with the explicit **Rate control**
-selector (CQ/VBR/CBR) plus a **CQ** spinbox (1–51, no suffix) or a **bitrate** spinbox, depending on
-the selected mode.
+preset's name); the second tier is "Low" rather than "Efficient", so the ladder names quality levels
+throughout and pairs with "High". The built-in **Quality** preset's CQ 16 lands exactly on the Ultra
+tier. Expert mode replaces the ladder with the explicit **Rate control** selector (CQ/VBR/CBR) plus a
+**CQ** spinbox (1–51, no suffix) or a **bitrate** spinbox, depending on the selected mode.
 
-**Encoder preset.** An expert **NVENC encoder preset** control (in the Container & codecs expert
+The CQ number no longer appears in the Default ladder's labels. It is an ExoSnap scale rather than
+the value the encoder receives, so printing it beside the tier name presented a product abstraction
+as encoder mechanics. Expert mode owns the number, and names the quantizer it resolves to underneath
+the field (for example `AV1 qindex 65 of 255`).
+
+**The CQ number is a product scale, not an encoder quantizer.** 1–51 is what the product means by
+constant quality, and the scale is *defined* to be H.264's quantizer scale, so a CQ a user saved
+keeps meaning what it always meant. Each codec is then given the quantizer calibrated to that point:
+
+| Tier | CQ | H.264 QP | HEVC QP | AV1 qindex |
+|---|---|---|---|---|
+| Ultra | 16 | 16 | 16 | 42 |
+| High | 19 | 19 | 19 | 65 |
+| Balanced | 24 | 24 | 24 | 94 |
+| Low | 30 | 30 | 30 | 135 |
+| Draft | 35 | 35 | 35 | 167 |
+
+Values between tiers are interpolated; the ends of the scale are pinned at CQ 1 (AV1 qindex 5) and
+CQ 51 (AV1 qindex 255). H.264 and HEVC are the identity — measured at the same QP, NVENC's HEVC is
+within 0.35 VMAF of H.264 at the top of the ladder, better below it, and 22–51% cheaper throughout,
+which is already what a shared tier name promises. AV1 needs a table rather than a factor: the ratio
+it needs to match H.264 runs from under 2× at the top of the ladder to nearly 5× at the bottom.
+
+A tier therefore aims at the same look on every codec, and AV1 reaches it with a much smaller file:
+measured on real 1440p60 gameplay, AV1 is never more than 0.9 VMAF behind H.264 at any tier — and 3.3
+points ahead at Draft — while using 56–69% less bitrate, and on a real browser scroll the two are
+within 0.5 points of each other at 6–12% less. The residual is content-dependent and does not vanish:
+no single quantizer makes two codecs agree on every content class at once.
+
+**Adaptive quantization is off.** NVENC's spatial AQ trades bits from detailed regions to flat ones,
+which is a trade against a bit budget, and constant quality has no budget to trade against. Measured
+across high-entropy motion and scrolling small text it cost up to 45% more bitrate while scoring
+lower on both a perceptual metric and a pixel metric. NVIDIA's own preset configuration leaves it
+off, and recommends it for bitrate-targeted modes. If ExoSnap ever adopts a bitrate-targeted quality
+mode, AQ is re-evaluated there.
+
+**Encoder preset.** An expert **NVENC encoder preset** control (in the Recording format expert
 section) exposes presets **P1–P7** (P1 fastest, P7 best) uniformly for all codecs; it is never
 capability-gated (only the recording lock disables it). The **default is P4 for all codecs**. It
 takes effect from the next recording.
@@ -600,7 +664,7 @@ explicit Full is respected as a deliberate opt-in.
 
 **HDR handling.** HDR-capable displays are **detected automatically**; detection is not a setting and
 cannot be turned off. Once an HDR-active display is detected, an **expert-only HDR handling control**
-(Settings → Video, Container & codecs section) chooses the outcome:
+(Settings → Recording format section) chooses the outcome:
 
 - **Tone-map to SDR** (default) — the safe, universally compatible choice.
 - **Record native HDR10** — keeps the original PQ / BT.2020 HDR10 signal.
@@ -1413,8 +1477,9 @@ gone.
 ## 10. Hotkeys
 
 Global hotkeys are rebindable, with conflict detection and rollback on an invalid bind. They cover
-recording start/stop, pause/resume, single-frame capture, and related actions. Pause/Resume default
-to Unset. Hotkeys live as an embedded card inside Settings.
+recording start/stop, pause/resume, single-frame capture, and related actions. Every action ships
+unset; the user picks a combo that does not collide on their own machine. Hotkeys live as an
+embedded card inside Settings.
 
 If a hotkey starts recording while the app window is visible, the Record view is activated; if the
 window is minimized, it is not restored.
@@ -1424,14 +1489,11 @@ it), ExoSnap **drops the unregisterable binding** (it stays cleared across launc
 silently swallowing the key or re-warning every start). Windows exposes no way to name the holding
 process or to reclaim the combo.
 
-Whether this also raises a notification depends on the binding's provenance. A binding still equal
-to its shipped default (never customized) is common environmental noise — another app's own default
-hotkey (e.g. NVIDIA's Alt+F9 Instant Replay) claims the same combo first, which happens on every
-launch that app is running — and is dropped silently, logged but not surfaced. A binding the user
-deliberately set to something else worked when they chose it, so losing it is worth telling them
-about: it raises a notification naming the affected action, with a **Rebind** action that deep-links
-to Settings → Hotkeys, where the user can bind a working shortcut; attempting a combo already held
-elsewhere is reported inline there as a conflict.
+Because no action ships with a default binding, a non-empty binding can only exist because the user
+set it themselves — it worked when they chose it, so losing it is always worth telling them about.
+Losing any registered binding at startup raises a notification naming the affected action, with a
+**Rebind** action that deep-links to Settings → Hotkeys, where the user can bind a working shortcut;
+attempting a combo already held elsewhere is reported inline there as a conflict.
 
 ### 10.1 In-window keyboard operation
 
@@ -1604,11 +1666,11 @@ brickwall limiter, microphone post-processing, and automatic split all live in D
 toggle is a single global state shared with the Diagnostics page.
 
 Expert mode adds, in place within their existing section: **Bit depth**, **Color range**, **NVENC
-encoder preset**, **Keyframe interval**, and **Chroma subsampling** (Container & codecs); the
+encoder preset**, **Keyframe interval**, and **Chroma subsampling** (Recording format); the
 **Rate control** selector (CQ/VBR/CBR) with its **CQ** or **bitrate** spinbox, the free-entry **frame
-rate** field (1 fps up to the fastest monitor's refresh rate), and **Frame pacing** (Quality &
+rate** field (1 fps up to the fastest monitor's refresh rate), and **Frame pacing** (Video quality &
 timing); **Opus frame duration**, **Opus
-complexity**, **Sample rate**, and **Audio clock slaving** (Audio).
+complexity**, **Sample rate**, and **Audio clock slaving** (Audio encoding).
 
 **HDR handling** is Default, not Expert: HDR-capable displays are mainstream, the row is already
 display-conditional (Section 6), and its default (Tone-map to SDR) is the safe, universally
@@ -1621,6 +1683,15 @@ active GPU can carry 4:4:4 at all). A row that fails its relevance gate is not s
 shown-and-disabled, so the expert view lists only what currently applies; the Chroma row is the one
 exception that stays visible-but-disabled for a 10-bit conflict specifically, because that conflict
 is fixable in place (switch Bit depth back to 8-bit).
+
+**Audio is two sections, both Default-visible.** **Audio sources** carries which sources are
+captured and how the microphone is picked up (the three source rows, device, channel mapping, gain,
+post-processing); **Audio encoding** carries the shape of the resulting stream (bitrate, channels,
+sample rate, bit depth, FLAC compression, the brickwall limiter, and the Opus/clock expert rows). One
+card mixed capture routing with encoder tuning and grew past every other card in the page; splitting
+it also lets the two halves sit in different columns, which is what evens the page out once Expert
+adds its rows. The split is a section boundary, not an Expert gate: both cards are present in
+Default, and Expert still only reveals rows inside them.
 
 **No section is Expert-gated.** Every embedded Settings section, including **Developer** (a logging
 level, an honest disabled "planned" NVTX/profiling-markers row, and crash-report consent), is visible

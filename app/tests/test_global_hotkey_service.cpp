@@ -60,10 +60,13 @@ class HotkeyServiceTest : public ::testing::Test {
 
 // ── Tests ───────────────────────────────────────────────────────────────────
 
-// 1. Default binding for ToggleRecording is Alt+F9; TogglePause is empty.
+// 1. Every action ships with no default binding.
 TEST_F(HotkeyServiceTest, DefaultBindingsAreCorrect) {
-    EXPECT_EQ(GlobalHotkeyService::DefaultBinding(HotkeyAction::ToggleRecording), QKeySequence(Qt::ALT | Qt::Key_F9));
+    EXPECT_TRUE(GlobalHotkeyService::DefaultBinding(HotkeyAction::ToggleRecording).isEmpty());
     EXPECT_TRUE(GlobalHotkeyService::DefaultBinding(HotkeyAction::TogglePause).isEmpty());
+    EXPECT_TRUE(GlobalHotkeyService::DefaultBinding(HotkeyAction::CaptureFrame).isEmpty());
+    EXPECT_TRUE(GlobalHotkeyService::DefaultBinding(HotkeyAction::AddMarker).isEmpty());
+    EXPECT_TRUE(GlobalHotkeyService::DefaultBinding(HotkeyAction::SplitRecording).isEmpty());
 }
 
 // 2. Modifier-only sequence (Ctrl alone) is rejected.
@@ -96,7 +99,9 @@ TEST_F(HotkeyServiceTest, InternalConflictDetected) {
     (void)svc.SetRegistrar(&reg);
 
     const QKeySequence seq(Qt::ALT | Qt::Key_F9);
-    // ToggleRecording already has Alt+F9 by default.
+    [[maybe_unused]] auto setup = svc.TrySetBinding(HotkeyAction::ToggleRecording, seq);
+    ASSERT_TRUE(setup.success);
+
     RebindResult result = svc.TrySetBinding(HotkeyAction::TogglePause, seq);
     EXPECT_FALSE(result.success);
     EXPECT_EQ(result.error, RebindError::InternalConflict);
@@ -109,10 +114,14 @@ TEST_F(HotkeyServiceTest, IdempotentRebindSucceedsWithoutReregistration) {
     FakeRegistrar reg;
     (void)svc.SetRegistrar(&reg);
 
+    const QKeySequence seq(Qt::ALT | Qt::Key_F9);
+    [[maybe_unused]] auto setup = svc.TrySetBinding(HotkeyAction::ToggleRecording, seq);
+    ASSERT_TRUE(setup.success);
+
     const int calls_before = reg.register_calls;
-    RebindResult result = svc.TrySetBinding(HotkeyAction::ToggleRecording, QKeySequence(Qt::ALT | Qt::Key_F9));
+    RebindResult result = svc.TrySetBinding(HotkeyAction::ToggleRecording, seq);
     EXPECT_TRUE(result.success);
-    // No new registration — it was already registered via SetRegistrar.
+    // No new registration — it was already registered by the setup call above.
     EXPECT_EQ(reg.register_calls, calls_before);
 }
 
@@ -123,7 +132,9 @@ TEST_F(HotkeyServiceTest, SuccessfulRebindUnregistersOldAndRegistersNew) {
     (void)svc.SetRegistrar(&reg);
 
     const int id = GlobalHotkeyService::Win32IdForAction(HotkeyAction::ToggleRecording);
-    EXPECT_TRUE(reg.IsRegistered(id)); // default Alt+F9 was registered by SetRegistrar
+    [[maybe_unused]] auto setup = svc.TrySetBinding(HotkeyAction::ToggleRecording, QKeySequence(Qt::ALT | Qt::Key_F9));
+    ASSERT_TRUE(setup.success);
+    EXPECT_TRUE(reg.IsRegistered(id)); // initial binding is registered
 
     const QKeySequence new_seq(Qt::ALT | Qt::Key_F8);
     RebindResult result = svc.TrySetBinding(HotkeyAction::ToggleRecording, new_seq);
@@ -138,7 +149,10 @@ TEST_F(HotkeyServiceTest, FailedRebindRestoresOldBinding) {
     FakeRegistrar reg;
     (void)svc.SetRegistrar(&reg);
 
-    const QKeySequence original = svc.GetBinding(HotkeyAction::ToggleRecording);
+    const QKeySequence original(Qt::ALT | Qt::Key_F9);
+    [[maybe_unused]] auto setup = svc.TrySetBinding(HotkeyAction::ToggleRecording, original);
+    ASSERT_TRUE(setup.success);
+
     reg.fail_next_n = 1; // make the next Register call fail
 
     RebindResult result = svc.TrySetBinding(HotkeyAction::ToggleRecording, QKeySequence(Qt::ALT | Qt::Key_F8));
@@ -158,10 +172,16 @@ TEST_F(HotkeyServiceTest, FailedRebindRestoresOldBinding) {
 // silently swallowing the failure.
 TEST_F(HotkeyServiceTest, SetRegistrarReportsFailedBindings) {
     GlobalHotkeyService svc;
+    // No action ships with a default binding, so give one an explicit binding
+    // before the registrar is attached — this is the pre-registrar path a
+    // persisted custom binding takes at real startup, and it gives
+    // SetRegistrar something non-empty to attempt registering below.
+    const QKeySequence custom(Qt::ALT | Qt::Key_F9);
+    [[maybe_unused]] auto setup = svc.TrySetBinding(HotkeyAction::ToggleRecording, custom);
+    ASSERT_TRUE(setup.success);
+
     FakeRegistrar reg;
-    // Only one non-empty binding exists by default (ToggleRecording = Alt+F9);
-    // make its Register() call fail to simulate an external conflict at startup.
-    reg.fail_next_n = 1;
+    reg.fail_next_n = 1; // make its Register() call fail to simulate an external conflict at startup
 
     const std::vector<HotkeyAction> failed = svc.SetRegistrar(&reg);
     ASSERT_EQ(failed.size(), 1u);
@@ -169,32 +189,34 @@ TEST_F(HotkeyServiceTest, SetRegistrarReportsFailedBindings) {
 
     // The binding model itself is untouched — SetRegistrar only reports, it
     // never mutates state on failure.
-    EXPECT_EQ(svc.GetBinding(HotkeyAction::ToggleRecording),
-              GlobalHotkeyService::DefaultBinding(HotkeyAction::ToggleRecording));
+    EXPECT_EQ(svc.GetBinding(HotkeyAction::ToggleRecording), custom);
 }
 
 // IsAtDefault distinguishes a still-default binding from one the user
-// explicitly customized -- this is what lets a startup registration failure
-// be treated as quiet environmental noise (default vs. default collision, no
-// notification) versus a deliberate choice worth telling the user about.
+// explicitly customized -- the settings UI uses this to decide whether an
+// action's control should offer Reset (back to default) as distinct from
+// Clear.
 TEST_F(HotkeyServiceTest, IsAtDefaultReflectsCustomizationState) {
     GlobalHotkeyService svc;
-    EXPECT_TRUE(svc.IsAtDefault(HotkeyAction::ToggleRecording)); // untouched: Alt+F9 default
+    EXPECT_TRUE(svc.IsAtDefault(HotkeyAction::ToggleRecording)); // untouched: empty default
     EXPECT_TRUE(svc.IsAtDefault(HotkeyAction::TogglePause));     // untouched: empty default
 
     FakeRegistrar reg;
     (void)svc.SetRegistrar(&reg);
     [[maybe_unused]] auto r = svc.TrySetBinding(HotkeyAction::ToggleRecording, QKeySequence(Qt::ALT | Qt::Key_F8));
     ASSERT_TRUE(r.success);
-    EXPECT_FALSE(svc.IsAtDefault(HotkeyAction::ToggleRecording)); // now customized away from Alt+F9
+    EXPECT_FALSE(svc.IsAtDefault(HotkeyAction::ToggleRecording)); // now customized away from empty
 
     [[maybe_unused]] auto reset = svc.ResetToDefault(HotkeyAction::ToggleRecording);
-    EXPECT_TRUE(svc.IsAtDefault(HotkeyAction::ToggleRecording)); // back to default
+    EXPECT_TRUE(svc.IsAtDefault(HotkeyAction::ToggleRecording)); // back to default (empty)
 }
 
 // 9c. SetRegistrar reports nothing when every registration succeeds.
 TEST_F(HotkeyServiceTest, SetRegistrarReportsNoFailuresOnSuccess) {
     GlobalHotkeyService svc;
+    [[maybe_unused]] auto setup = svc.TrySetBinding(HotkeyAction::ToggleRecording, QKeySequence(Qt::ALT | Qt::Key_F9));
+    ASSERT_TRUE(setup.success);
+
     FakeRegistrar reg;
     const std::vector<HotkeyAction> failed = svc.SetRegistrar(&reg);
     EXPECT_TRUE(failed.empty());
@@ -225,7 +247,9 @@ TEST_F(HotkeyServiceTest, UnsetBindingRemovesRegistration) {
     (void)svc.SetRegistrar(&reg);
 
     const int id = GlobalHotkeyService::Win32IdForAction(HotkeyAction::ToggleRecording);
-    EXPECT_TRUE(reg.IsRegistered(id));
+    [[maybe_unused]] auto setup = svc.TrySetBinding(HotkeyAction::ToggleRecording, QKeySequence(Qt::ALT | Qt::Key_F9));
+    ASSERT_TRUE(setup.success);
+    ASSERT_TRUE(reg.IsRegistered(id));
 
     svc.UnsetBinding(HotkeyAction::ToggleRecording);
     EXPECT_TRUE(svc.GetBinding(HotkeyAction::ToggleRecording).isEmpty());
@@ -354,13 +378,16 @@ TEST_F(HotkeyServiceTest, InvalidPersistedPauseStringFallsToEmpty) {
 }
 
 // 20b. An explicitly unset binding round-trips as unset — it must NOT fall back to
-//      the action default on reload. This is what makes the startup conflict cleanup
-//      stick: a shortcut ExoSnap had to drop (because another app held it) stays
-//      dropped across launches instead of silently returning as Alt+F9 and re-warning.
+//      the action default on reload. The sentinel is what lets a shortcut the user
+//      cleared (or that startup had to drop because another app already held it)
+//      stay cleared across launches instead of silently reappearing.
 TEST_F(HotkeyServiceTest, UnsetBindingRoundTripsAsUnsetNotDefault) {
     GlobalHotkeyService svc;
     FakeRegistrar reg;
     (void)svc.SetRegistrar(&reg);
+
+    [[maybe_unused]] auto setup = svc.TrySetBinding(HotkeyAction::ToggleRecording, QKeySequence(Qt::ALT | Qt::Key_F9));
+    ASSERT_TRUE(setup.success);
 
     svc.UnsetBinding(HotkeyAction::ToggleRecording);
     ASSERT_TRUE(svc.GetBinding(HotkeyAction::ToggleRecording).isEmpty());
@@ -368,7 +395,8 @@ TEST_F(HotkeyServiceTest, UnsetBindingRoundTripsAsUnsetNotDefault) {
     HotkeyBindings saved{};
     svc.SaveToStrings(saved);
     // An explicitly-unset binding must persist as a non-empty sentinel, otherwise an
-    // empty string would reload as the Alt+F9 default.
+    // empty string would reload as the action's (now also empty) default and lose
+    // the distinction between "never customized" and "customized, then cleared".
     EXPECT_FALSE(saved[0].trimmed().isEmpty());
 
     GlobalHotkeyService reloaded;

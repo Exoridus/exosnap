@@ -110,10 +110,9 @@ QString BuildConflictMessage(HotkeyAction conflicting, QKeySequence seq) {
 // Persisted marker for a binding that was explicitly cleared — by the user, or by
 // startup cleanup when the shortcut was already held elsewhere and could not be
 // registered. It round-trips as "unset" instead of falling back to the action's
-// default, so a shortcut we had to drop stays dropped across launches (otherwise a
-// non-empty default like ToggleRecording's Alt+F9 would silently return and re-warn
-// every launch). A genuinely empty string still means "never configured → use
-// default" (fresh settings on first run).
+// default, so a customized shortcut we had to drop stays dropped across launches
+// instead of silently reappearing. A genuinely empty string still means "never
+// configured → use default" (fresh settings on first run).
 QString UnsetSentinel() {
     return QStringLiteral("<unset>");
 }
@@ -292,7 +291,7 @@ void GlobalHotkeyService::SaveToStrings(HotkeyBindings& out) const {
 QKeySequence GlobalHotkeyService::DefaultBinding(HotkeyAction action) {
     switch (action) {
     case HotkeyAction::ToggleRecording:
-        return QKeySequence(Qt::ALT | Qt::Key_F9);
+        return QKeySequence(); // no default binding, per product decision
     case HotkeyAction::TogglePause:
         return QKeySequence();
     case HotkeyAction::CaptureFrame:

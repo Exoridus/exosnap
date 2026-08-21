@@ -201,7 +201,7 @@ void DxgiCaptureHubService::WorkerProc(std::stop_token stop_token) {
             sink(handle, sharedW, sharedH, tap);
         }
         publish_attempts_.fetch_add(1, std::memory_order_relaxed);
-        if (shared.TryPublish(producer->Context(), frame.texture.get())) {
+        if (shared.TryPublish(producer->Context(), frame.texture.get()).published()) {
             published_frames_.fetch_add(1, std::memory_order_relaxed);
             // A contention drop deliberately does NOT signal: it means the
             // consumer still has the previous frame to take, so a redraw is

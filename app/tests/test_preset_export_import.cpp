@@ -30,6 +30,10 @@
 namespace exosnap {
 namespace {
 
+// Derived, not spelled out: a case that hardcodes the built-in count fails for
+// the wrong reason every time the shipped preset set changes.
+const std::size_t kBuiltIns = MakeBuiltInPresets().size();
+
 // ===========================================================================
 // Helpers
 // ===========================================================================
@@ -302,7 +306,7 @@ TEST(PresetExportImport, Registry_ImportPreset_InsertsWithoutSelectingIt) {
 
     reg.ImportPreset(imported_preset);
 
-    EXPECT_EQ(reg.Count(), 5u); // 4 built-ins + the imported preset
+    EXPECT_EQ(reg.Count(), kBuiltIns + 1); // built-ins + the imported preset
     // Selection must not change.
     EXPECT_EQ(reg.SelectedId(), original_selected);
     // The imported preset must be findable by id.
@@ -328,7 +332,7 @@ TEST(PresetExportImport, Registry_ImportPreset_DeduplicatesName) {
 
     reg.ImportPreset(dup);
 
-    EXPECT_EQ(reg.Count(), 5u); // 4 built-ins + the imported preset
+    EXPECT_EQ(reg.Count(), kBuiltIns + 1); // built-ins + the imported preset
     const RecordingPreset* found = reg.FindById(dup.id);
     ASSERT_NE(found, nullptr);
     // Name must have been changed to avoid collision.
@@ -357,7 +361,7 @@ TEST(PresetExportImport, FullPipeline_ExportImportRegistry_ConfigEqual) {
     ASSERT_EQ(imported.size(), 1) << err.toStdString();
 
     reg.ImportPreset(imported[0]);
-    EXPECT_EQ(reg.Count(), 5u); // 4 built-ins + the imported preset
+    EXPECT_EQ(reg.Count(), kBuiltIns + 1); // built-ins + the imported preset
 
     const RecordingPreset* found = reg.FindById(imported[0].id);
     ASSERT_NE(found, nullptr);

@@ -17,6 +17,10 @@ Switch {
 
     onClicked: root.toggledByUser(root.checked)
 
+    HoverHandler {
+        cursorShape: Qt.PointingHandCursor
+    }
+
     indicator: Rectangle {
         implicitWidth: 44
         implicitHeight: 24

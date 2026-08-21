@@ -2,6 +2,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <utility>
 
 namespace recorder_core {
 
@@ -117,6 +118,34 @@ enum class CfrTickDropCause : uint8_t {
     if (had_source_frame)
         return CfrTickDropCause::ProcessingFailure;
     return reference_storage_available ? CfrTickDropCause::Pacing : CfrTickDropCause::ProcessingFailure;
+}
+
+// ---------------------------------------------------------------------------
+// Held-screen ownership rotation for the phase-correct capture ring
+//
+// The held screen is the desktop texture a CFR tick re-composites when it has no
+// fresh capture but the cursor or webcam moved (see ShouldRecompositeHeldScreen).
+// It must be the LAST EMITTED capture. While phase-correct pacing is on, the ring
+// owns the drain and nothing else writes the held slot, so a held texture that is
+// merely "whatever was written once" stays the session's first frame and every
+// such tick encodes that frame instead of the current screen.
+//
+// The exchange is an ownership rotation, not a copy: the emitted entry has
+// already been consumed (its present timestamp cleared) before this is called, so
+// handing the previous held texture back in its place gives the drain a free slot
+// of identical description, while the encode keeps reading the very texture it
+// was handed.
+//
+// Two invariants a future ring rework must preserve, and that the tests pin:
+//   - after the rotation the held texture is the emitted one, and the ring entry
+//     is the previously held one;
+//   - the held texture is never aliased by a live ring entry, or the drain would
+//     overwrite the screen a later tick still intends to re-composite.
+// ---------------------------------------------------------------------------
+template <typename TexturePtr>
+void AdoptEmittedAsHeldScreen(TexturePtr& emitted_ring_entry, TexturePtr& held_screen) noexcept {
+    using std::swap;
+    swap(emitted_ring_entry, held_screen);
 }
 
 } // namespace recorder_core

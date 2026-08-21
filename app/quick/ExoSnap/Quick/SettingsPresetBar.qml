@@ -55,6 +55,33 @@ Rectangle {
                 onValueActivated: value => root.settings.selectPreset(value)
             }
 
+            // Beside the selector it qualifies, not at the far end of the bar:
+            // "unsaved changes" 900 px away from the preset it is about is a
+            // statement the eye has to go looking for.
+            Rectangle {
+                visible: root.settings.presetDirty
+                implicitWidth: dirtyLabel.implicitWidth + 2 * ExoTheme.spacingSm
+                implicitHeight: 22
+                color: "transparent"
+                border.width: 1
+                border.color: ExoTheme.warningText
+                radius: ExoTheme.radiusSm
+                Layout.alignment: Qt.AlignVCenter
+
+                Label {
+                    id: dirtyLabel
+
+                    text: root.settings.presetStatusText
+                    textFormat: Text.PlainText
+                    anchors.centerIn: parent
+                    color: ExoTheme.warningText
+                    font {
+                        family: ExoTheme.sansFamily
+                        pixelSize: ExoTheme.fontCaption
+                    }
+                }
+            }
+
             ExoButton {
                 text: qsTr("Save as new…")
                 enabled: !root.settings.controlsLocked
@@ -63,22 +90,46 @@ Rectangle {
 
             ExoButton {
                 glyph: ExoGlyph.Overflow
-                quiet: true
                 Accessible.name: qsTr("More preset actions")
                 onClicked: overflowMenu.popup()
             }
         }
 
-        Label {
-            text: root.settings.presetStatusText
-            textFormat: Text.PlainText
-            elide: Text.ElideRight
-            horizontalAlignment: root.stacked ? Text.AlignLeft : Text.AlignRight
-            color: root.settings.presetDirty ? ExoTheme.warningText : ExoTheme.textMuted
+        RowLayout {
+            spacing: ExoTheme.spacingSm
             Layout.fillWidth: true
-            font {
-                family: ExoTheme.sansFamily
-                pixelSize: ExoTheme.fontSecondary
+
+            Item {
+                Layout.fillWidth: true
+            }
+
+            // Its own fixed gap rather than the bar's item spacing: a label and
+            // the one switch it names read as a single control. It rides the
+            // preset toolbar rather than a page heading because the page has no
+            // heading -- the selected navigation tab already names it, and a
+            // 22 px "Settings" under a tab reading "Settings" is the same word
+            // twice. Diagnostics states the same pairing in its own header.
+            Row {
+                spacing: ExoTheme.spacingSm
+                Layout.alignment: Qt.AlignVCenter
+
+                Label {
+                    text: qsTr("Expert mode")
+                    textFormat: Text.PlainText
+                    color: root.settings.expertMode ? ExoTheme.accent : ExoTheme.textSecondary
+                    anchors.verticalCenter: parent.verticalCenter
+                    font {
+                        family: ExoTheme.sansFamily
+                        pixelSize: ExoTheme.fontBody
+                    }
+                }
+
+                ExoSwitch {
+                    checked: root.settings.expertMode
+                    Accessible.name: qsTr("Expert mode")
+                    anchors.verticalCenter: parent.verticalCenter
+                    onToggledByUser: value => root.settings.expertMode = value
+                }
             }
         }
     }

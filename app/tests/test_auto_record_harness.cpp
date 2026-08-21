@@ -119,6 +119,66 @@ TEST(AutoRecordHarness, RejectsFrameRateOutsideWhatTheProductOffers) {
     }
 }
 
+TEST(AutoRecordHarness, ParsesCq) {
+    AutoRecordOptions opts;
+    QString error;
+    const QStringList args = {QStringLiteral("exosnap.exe"), QStringLiteral("--auto-record"), QStringLiteral("--cq"),
+                              QStringLiteral("1")};
+    ASSERT_TRUE(ParseAutoRecordOptions(args, &opts, &error)) << error.toStdString();
+    EXPECT_EQ(opts.cq, 1);
+}
+
+TEST(AutoRecordHarness, CqDefaultsToTheBalancedTier) {
+    AutoRecordOptions opts;
+    QString error;
+    const QStringList args = {QStringLiteral("exosnap.exe"), QStringLiteral("--auto-record")};
+    ASSERT_TRUE(ParseAutoRecordOptions(args, &opts, &error)) << error.toStdString();
+    // AutoRecordHarness.cpp static_asserts this 24 against CanonicalCq(Balanced).
+    EXPECT_EQ(opts.cq, 24);
+}
+
+TEST(AutoRecordHarness, RejectsCqOutsideTheCanonicalRange) {
+    // The canonical CQ range is 1-51 for every codec; the per-codec quantizer
+    // conversion happens below this, so a value outside it is a typo rather than
+    // an exotic request.
+    AutoRecordOptions opts;
+    QString error;
+    for (const auto& bad : {QStringLiteral("0"), QStringLiteral("-1"), QStringLiteral("52"), QStringLiteral("abc")}) {
+        const QStringList args = {QStringLiteral("exosnap.exe"), QStringLiteral("--auto-record"),
+                                  QStringLiteral("--cq"), bad};
+        EXPECT_FALSE(ParseAutoRecordOptions(args, &opts, &error)) << "accepted " << bad.toStdString();
+        EXPECT_FALSE(error.isEmpty());
+    }
+}
+
+TEST(AutoRecordHarness, ParsesNvencPreset) {
+    AutoRecordOptions opts;
+    QString error;
+    const QStringList args = {QStringLiteral("exosnap.exe"), QStringLiteral("--auto-record"),
+                              QStringLiteral("--nvenc-preset"), QStringLiteral("7")};
+    ASSERT_TRUE(ParseAutoRecordOptions(args, &opts, &error)) << error.toStdString();
+    EXPECT_EQ(opts.nvenc_preset, 7);
+}
+
+TEST(AutoRecordHarness, NvencPresetDefaultsToTheShippedP4) {
+    AutoRecordOptions opts;
+    QString error;
+    const QStringList args = {QStringLiteral("exosnap.exe"), QStringLiteral("--auto-record")};
+    ASSERT_TRUE(ParseAutoRecordOptions(args, &opts, &error)) << error.toStdString();
+    EXPECT_EQ(opts.nvenc_preset, 4);
+}
+
+TEST(AutoRecordHarness, RejectsNvencPresetOutsideTheRange) {
+    AutoRecordOptions opts;
+    QString error;
+    for (const auto& bad : {QStringLiteral("0"), QStringLiteral("-1"), QStringLiteral("8"), QStringLiteral("p4")}) {
+        const QStringList args = {QStringLiteral("exosnap.exe"), QStringLiteral("--auto-record"),
+                                  QStringLiteral("--nvenc-preset"), bad};
+        EXPECT_FALSE(ParseAutoRecordOptions(args, &opts, &error)) << "accepted " << bad.toStdString();
+        EXPECT_FALSE(error.isEmpty());
+    }
+}
+
 TEST(AutoRecordHarness, ParsesCaptureFrameInReadyFlag) {
     AutoRecordOptions opts;
     QString error;

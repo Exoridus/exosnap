@@ -106,6 +106,16 @@ recorder_core::AudioSourceKind RowKindFromName(const QString& name) {
     return recorder_core::AudioSourceKind::Sys;
 }
 
+// The option struct spells the canonical CQ range as plain integers so its
+// parser can be tested without linking recorder_core. This is where the two
+// definitions meet, so this is where they are held together.
+static_assert(AutoRecordOptions::kCqMin == static_cast<int>(recorder_core::kCqMin));
+static_assert(AutoRecordOptions::kCqMax == static_cast<int>(recorder_core::kCqMax));
+static_assert(AutoRecordOptions::kCqDefault ==
+              static_cast<int>(recorder_core::CanonicalCq(recorder_core::QualityPreset::Balanced)));
+static_assert(AutoRecordOptions::kNvencPresetMin == static_cast<int>(recorder_core::NvencPreset::P1) + 1);
+static_assert(AutoRecordOptions::kNvencPresetMax == static_cast<int>(recorder_core::NvencPreset::P7) + 1);
+
 OutputSettingsModel BuildOutputSettings(const AutoRecordOptions& options) {
     OutputSettingsModel settings = OutputSettingsModel::Defaults();
     // Fallback output folder; the harness normally sets EXOSNAP_OUTPUT_DIR, which
@@ -117,6 +127,7 @@ OutputSettingsModel BuildOutputSettings(const AutoRecordOptions& options) {
     settings.bit_depth = MapBitDepth(options.bit_depth);
     settings.chroma_subsampling = MapChroma(options.chroma);
     settings.hdr_mode = MapHdrMode(options.hdr_mode);
+    settings.nvenc_preset = static_cast<recorder_core::NvencPreset>(options.nvenc_preset - 1);
     return settings;
 }
 
@@ -227,6 +238,7 @@ int RunAutoRecordOnCoordinator(QCoreApplication& app, exosnap::RecordingCoordina
     VideoSettingsModel video_settings = VideoSettingsModel::Defaults();
     video_settings.frame_rate_num = static_cast<uint32_t>(options.frame_rate);
     video_settings.frame_rate_den = 1;
+    video_settings.cq = static_cast<uint32_t>(options.cq);
     coordinator.SetVideoSettings(video_settings);
 
     coordinator.OnCapabilitiesReady(caps);

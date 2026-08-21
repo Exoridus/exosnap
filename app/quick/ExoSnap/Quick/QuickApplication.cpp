@@ -460,7 +460,7 @@ void QuickApplication::initializeRecordWorkflow() {
     recording_coordinator_->SetRecoveryManifestStore(&recovery_manifest_store_);
     recording_coordinator_->SetOutputSettings(live_config_.output);
     recording_coordinator_->SetVideoSettings(live_config_.video);
-    recording_coordinator_->SetWebcamSettings(live_config_.webcam);
+    recording_coordinator_->SetWebcamSettings(webcamSettingsForCapture());
     recording_coordinator_->SetSplitSettings(
         {SplitDurationMs(live_config_.output.split), SplitSizeBytes(live_config_.output.split)});
 
@@ -469,7 +469,7 @@ void QuickApplication::initializeRecordWorkflow() {
         ReadyFrameComposition composition;
         composition.normalized_source_rect = record_view_model_adapter_.normalizedSourceRect();
         composition.video = live_config_.video;
-        composition.webcam = live_config_.webcam;
+        composition.webcam = webcamSettingsForCapture();
         if (webcam_frame_provider_ != nullptr)
             composition.webcam_frame = webcam_frame_provider_->latestFrame();
         record_preview_adapter_.requestReadyFrame(std::move(composition), std::move(callback));
@@ -782,9 +782,14 @@ void QuickApplication::initializeRecordWorkflow() {
     QObject::connect(&webcam_notifier_, &WebcamDeviceNotifier::snapshotChanged, &record_view_model_adapter_,
                      [this](const WebcamDeviceSnapshot& snapshot, DiscoveryReason) {
                          webcam_available_ = !snapshot.devices.isEmpty();
-                         if (webcam_available_ && live_config_.webcam.device_id.empty()) {
-                             live_config_.webcam.device_id = snapshot.devices.front().id;
-                             recording_coordinator_->SetWebcamSettings(live_config_.webcam);
+                         // The discovered device is never written into the
+                         // configuration: an empty device_id means "not pinned to
+                         // a camera", and resolving it in place made a freshly
+                         // seeded profile differ from the built-in Default it was
+                         // seeded from, so the preset bar opened on (changed).
+                         default_webcam_device_id_ = webcam_available_ ? snapshot.devices.front().id : std::string{};
+                         if (webcam_available_) {
+                             recording_coordinator_->SetWebcamSettings(webcamSettingsForCapture());
                          }
                          synchronizeRecordState();
                      });
@@ -1316,7 +1321,7 @@ bool QuickApplication::startRecordingNow() {
     recording_coordinator_->SetOutputTargetContext(context);
     recording_coordinator_->SetOutputSettings(live_config_.output);
     recording_coordinator_->SetVideoSettings(live_config_.video);
-    recording_coordinator_->SetWebcamSettings(live_config_.webcam);
+    recording_coordinator_->SetWebcamSettings(webcamSettingsForCapture());
     record_view_model_.ResetStats();
     recording_coordinator_->StartRecording(target, record_view_model_.audio_ui_state, crop);
     return true;
@@ -1354,7 +1359,7 @@ void QuickApplication::toggleSource(const QString& key) {
             return;
         live_config_.webcam.enabled = !live_config_.webcam.enabled;
         webcam_error_.clear();
-        recording_coordinator_->SetWebcamSettings(live_config_.webcam);
+        recording_coordinator_->SetWebcamSettings(webcamSettingsForCapture());
         persistLiveConfig();
         // Webcam enable is also a Settings row; both surfaces write the same flag.
         syncConfigMirrors();
@@ -1410,7 +1415,7 @@ void QuickApplication::updateWebcamOverlay(const QRectF& normalized_rect) {
     overlay.w_norm = static_cast<float>(normalized_rect.width());
     overlay.h_norm = static_cast<float>(normalized_rect.height());
     live_config_.webcam.overlay = SanitizeWebcamOverlayRect(overlay);
-    recording_coordinator_->SetWebcamSettings(live_config_.webcam);
+    recording_coordinator_->SetWebcamSettings(webcamSettingsForCapture());
     webcam_overlay_persist_timer_.start();
     synchronizeRecordState();
 }
@@ -2108,7 +2113,7 @@ void QuickApplication::applySettingsConfigEdit() {
     refreshDiagnosticsData();
     recording_coordinator_->SetOutputSettings(live_config_.output);
     recording_coordinator_->SetVideoSettings(live_config_.video);
-    recording_coordinator_->SetWebcamSettings(live_config_.webcam);
+    recording_coordinator_->SetWebcamSettings(webcamSettingsForCapture());
     recording_coordinator_->SetSplitSettings(
         {SplitDurationMs(live_config_.output.split), SplitSizeBytes(live_config_.output.split)});
     persistLiveConfig();
@@ -2122,13 +2127,21 @@ void QuickApplication::applyPresetConfig(RecordingPresetConfig config) {
     settings_adapter_.setConfig(live_config_);
     recording_coordinator_->SetOutputSettings(live_config_.output);
     recording_coordinator_->SetVideoSettings(live_config_.video);
-    recording_coordinator_->SetWebcamSettings(live_config_.webcam);
+    recording_coordinator_->SetWebcamSettings(webcamSettingsForCapture());
     recording_coordinator_->SetSplitSettings(
         {SplitDurationMs(live_config_.output.split), SplitSizeBytes(live_config_.output.split)});
     persistLiveConfig();
     refreshPresetState();
     refreshCrashSessionContext();
     synchronizeRecordState();
+}
+
+WebcamSettings QuickApplication::webcamSettingsForCapture() const {
+    WebcamSettings resolved = live_config_.webcam;
+    if (resolved.device_id.empty()) {
+        resolved.device_id = default_webcam_device_id_;
+    }
+    return resolved;
 }
 
 void QuickApplication::refreshPresetState() {
@@ -2141,8 +2154,22 @@ void QuickApplication::refreshPresetState() {
         entry.insert(QStringLiteral("reason"), QString());
         options.append(entry);
     }
+    const std::string_view dirty_field = preset_registry_.SelectedDirtyField(live_config_);
+    if (dirty_field != last_logged_dirty_field_) {
+        last_logged_dirty_field_ = std::string(dirty_field);
+        if (!dirty_field.empty()) {
+            // The field that made the preset dirty, not just that it is. A
+            // (changed) badge the user cannot explain is a truthfulness defect,
+            // and without the field name it can only be diagnosed by eye.
+            diagnostics::AppLog::debug(
+                QStringLiteral("preset"),
+                QStringLiteral("'%1' differs from live config at %2")
+                    .arg(QString::fromStdString(preset_registry_.SelectedPreset().name),
+                         QString::fromUtf8(dirty_field.data(), static_cast<int>(dirty_field.size()))));
+        }
+    }
     settings_adapter_.setPresetState(std::move(options), QString::fromStdString(preset_registry_.SelectedId()),
-                                     preset_registry_.IsSelectedDirty(live_config_));
+                                     !dirty_field.empty());
 }
 
 void QuickApplication::exportSelectedPreset(const QString& path) {

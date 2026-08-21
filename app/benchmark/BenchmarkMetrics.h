@@ -139,6 +139,26 @@ struct PreviewMetrics {
     // correctly added no second render.
     Metric preview_publish_signals;
     Metric preview_scene_update_requests;
+
+    // The rest of the consume funnel. IDENTICAL: these count the shared
+    // transport, not the frontend's own presentation work.
+    Metric consumer_acquires;
+    Metric consumer_acquire_abandoned;
+    Metric consumer_conversion_failures;
+
+    // The producer's own cadence and the age of the debt it created, on the same
+    // clock and the same window as everything above. Without the first, a long
+    // arrival interval cannot be told from a quiet source; without the second, a
+    // last-value slot hides a stall behind a young newest frame.
+    Metric publish_interval_ms_p50;
+    Metric publish_interval_ms_p95;
+    Metric publish_interval_ms_p99;
+    Metric publish_interval_ms_max;
+    Metric presentation_debt_ms_p50;
+    Metric presentation_debt_ms_p95;
+    Metric presentation_debt_ms_p99;
+    Metric presentation_debt_ms_max;
+    Metric source_interval_ms_max;
 };
 
 // ---------------------------------------------------------------------------
@@ -186,6 +206,20 @@ struct RecordingMetrics {
 
     // A/V alignment at the end of the run.
     Metric av_drift_ms;
+
+    // The producer half of the preview path, as a funnel. The consumer half is
+    // in PreviewMetrics; the two only answer the question together, because a
+    // preview that shows nothing looks identical from either end alone.
+    Metric preview_tap_frames_seen;
+    Metric preview_tap_gate_passes;
+    Metric preview_tap_shared_texture_ready;
+    Metric preview_tap_publish_attempts;
+    Metric preview_tap_publish_successes;
+    Metric preview_tap_publish_mutex_misses;
+    Metric preview_tap_publish_abandoned;
+    Metric preview_tap_publish_failures;
+    Metric preview_tap_publish_release_failures;
+    Metric preview_tap_published_edges;
 };
 
 // Process-level cost, measured identically on both sides (Win32 GetProcessTimes /

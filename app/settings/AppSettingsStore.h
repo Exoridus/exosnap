@@ -77,7 +77,7 @@ struct PersistedAppSettings {
     // Indexed by HotkeyAction: ToggleRecording, TogglePause, CaptureFrame,
     // AddMarker, SplitRecording. Size must match kHotkeyActionCount.
     std::array<QString, 5> hotkey_bindings = {
-        QStringLiteral("Alt+F9"), QString(), QString(), QString(), QString(),
+        QString(), QString(), QString(), QString(), QString(),
     };
     PersistedWindowGeometry window_geometry;
 

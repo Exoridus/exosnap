@@ -68,14 +68,15 @@ void tracePresentation(const char* transition, const QQuickWindow* window, const
         return;
     const QScreen* screen = window != nullptr ? window->screen() : nullptr;
     qInfo("preview-trace: %s screen=%s dpr=%.2f exposed=%d visible=%d loop=%d owed=%d reissued=%d publishes=%llu "
-          "wakeups=%llu updates=%llu renders=%llu",
+          "wakeups=%llu updates=%llu renders=%llu swaps=%llu",
           transition, screen != nullptr ? qPrintable(screen->name()) : "<none>",
           window != nullptr ? window->devicePixelRatio() : 0.0, window != nullptr && window->isExposed() ? 1 : 0,
           window != nullptr && window->isVisible() ? 1 : 0, render_loop_active ? 1 : 0,
           scheduler != nullptr && scheduler->HasUnrenderedPublish() ? 1 : 0, reissued ? 1 : 0,
           scheduler != nullptr ? scheduler->PublishSignals() : 0ULL, scheduler != nullptr ? scheduler->Wakeups() : 0ULL,
           scheduler != nullptr ? scheduler->SceneUpdateRequests() : 0ULL,
-          scheduler != nullptr ? scheduler->RenderPasses() : 0ULL);
+          scheduler != nullptr ? scheduler->RenderPasses() : 0ULL,
+          scheduler != nullptr ? scheduler->FrameSwaps() : 0ULL);
 }
 
 class PreviewTextureNode final : public QSGNode {
@@ -242,13 +243,24 @@ class PreviewTextureNode final : public QSGNode {
         valid_ = true;
     }
 
-    bool consume(QQuickWindow* window, ExoPreviewItem::Metrics& metrics, QString& error) {
+    using ConsumeOutcome = PreviewConsumeOutcome;
+
+    ConsumeOutcome consume(QQuickWindow* window, ExoPreviewItem::Metrics& metrics, QString& error) {
         if (!valid_ || keyed_mutex_ == nullptr || context_ == nullptr)
-            return false;
-        if (keyed_mutex_->AcquireSync(recorder_core::kPreviewSharedConsumerKey, 0) != S_OK) {
-            metrics.mutex_misses.fetch_add(1, std::memory_order_relaxed);
-            return false;
+            return ConsumeOutcome::Missed;
+        const recorder_core::PreviewAcquireOutcome acquired = recorder_core::ClassifyPreviewAcquire(
+            keyed_mutex_->AcquireSync(recorder_core::kPreviewSharedConsumerKey, 0));
+        if (acquired != recorder_core::PreviewAcquireOutcome::Acquired) {
+            // Counted apart because they are not the same event: contention is one
+            // dropped look at a slot that will fill again, while an abandoned mutex
+            // means this transport generation is finished.
+            if (acquired == recorder_core::PreviewAcquireOutcome::Abandoned)
+                metrics.acquire_abandoned.fetch_add(1, std::memory_order_relaxed);
+            else
+                metrics.mutex_misses.fetch_add(1, std::memory_order_relaxed);
+            return ConsumeOutcome::Missed;
         }
+        metrics.acquires.fetch_add(1, std::memory_order_relaxed);
 
         const qint64 submit_start = nowNs();
         window->beginExternalCommands();
@@ -273,8 +285,10 @@ class PreviewTextureNode final : public QSGNode {
             }
         }
         window->endExternalCommands();
-        if (!converted)
-            return false;
+        if (!converted) {
+            metrics.conversion_failures.fetch_add(1, std::memory_order_relaxed);
+            return ConsumeOutcome::TakenButFailed;
+        }
         const qint64 consumed_at = nowNs();
 
         const quint64 submit_index = metrics.submit_write.fetch_add(1, std::memory_order_relaxed);
@@ -288,7 +302,7 @@ class PreviewTextureNode final : public QSGNode {
         }
         metrics.consumed_frames.fetch_add(1, std::memory_order_relaxed);
         has_frame_ = true;
-        return true;
+        return ConsumeOutcome::Presented;
     }
 
     void preprocess() override {
@@ -301,11 +315,29 @@ class PreviewTextureNode final : public QSGNode {
         }
         // Before the acquire below, so a publish that races this pass stays
         // outstanding rather than being written off as presented.
-        if (scheduler_ != nullptr)
-            scheduler_->NoteRenderPass();
+        const quint64 attempted_generation = scheduler_ != nullptr ? scheduler_->BeginRenderPass() : 0;
         QString error;
         const bool first_frame = !has_frame_;
-        const bool consumed = consume(window_, link_->metrics, error);
+        const ConsumeOutcome outcome = consume(window_, link_->metrics, error);
+        const bool consumed = outcome == ConsumeOutcome::Presented;
+        if (scheduler_ != nullptr) {
+            // Both taken cases settle the generation. A frame that was taken and
+            // then failed to convert is gone from the last-value slot for good, so
+            // leaving its debt open would spend the retry budget chasing something
+            // no render can ever find — the conversion error is reported through
+            // the render state instead.
+            if (SettlesPresentationDebt(outcome)) {
+                scheduler_->NotePresented(attempted_generation);
+            } else if (scheduler_->ShouldRetryAfterMiss()) {
+                // The pass ran but took nothing while a publish is still owed a
+                // presentation — the update request that would have carried it
+                // was dropped, or the acquire lost a race with the producer.
+                // Asking again is what makes the stall self-healing; the
+                // scheduler's budget is what keeps it from becoming the
+                // display-refresh redraw loop this class exists to prevent.
+                ExoPreviewItem::RenderLink::requestRetry(link_, generation_);
+            }
+        }
         if (!error.isEmpty()) {
             conversion_error_active_ = true;
             ExoPreviewItem::RenderLink::publishRenderState(link_, generation_, has_frame_, sourceSize(), error);
@@ -607,6 +639,9 @@ PreviewMetricsSnapshot ExoPreviewItem::metricsSnapshot() const {
     snapshot.render_frames = metrics().render_frames.load(std::memory_order_relaxed);
     snapshot.consumed_frames = metrics().consumed_frames.load(std::memory_order_relaxed);
     snapshot.mutex_misses = metrics().mutex_misses.load(std::memory_order_relaxed);
+    snapshot.acquires = metrics().acquires.load(std::memory_order_relaxed);
+    snapshot.acquire_abandoned = metrics().acquire_abandoned.load(std::memory_order_relaxed);
+    snapshot.conversion_failures = metrics().conversion_failures.load(std::memory_order_relaxed);
     snapshot.source_dxgi_format = metrics().source_dxgi_format.load(std::memory_order_relaxed);
 
     // Three member scratch buffers rather than three fresh vectors per call: this
@@ -638,6 +673,10 @@ PreviewMetricsSnapshot ExoPreviewItem::metricsSnapshot() const {
     std::sort(intervals.begin(), intervals.end());
     snapshot.source_interval_ms_p95 = PercentileSorted(intervals, 0.95);
     snapshot.source_interval_ms_p99 = PercentileSorted(intervals, 0.99);
+    // The single worst gap. A preview that froze once for most of a second is
+    // exactly what a reader is looking for here, and one sample in a thousand
+    // does not move p99.
+    snapshot.source_interval_ms_max = intervals.empty() ? 0.0 : intervals.back();
 
     const quint64 scene_interval_count =
         std::min<quint64>(metrics().scene_interval_write.load(std::memory_order_relaxed), kMetricWindow);
@@ -678,6 +717,9 @@ void ExoPreviewItem::resetMetrics() {
     metrics().render_frames.store(0, std::memory_order_relaxed);
     metrics().consumed_frames.store(0, std::memory_order_relaxed);
     metrics().mutex_misses.store(0, std::memory_order_relaxed);
+    metrics().acquires.store(0, std::memory_order_relaxed);
+    metrics().acquire_abandoned.store(0, std::memory_order_relaxed);
+    metrics().conversion_failures.store(0, std::memory_order_relaxed);
     metrics().interval_write.store(0, std::memory_order_relaxed);
     metrics().scene_interval_write.store(0, std::memory_order_relaxed);
     metrics().submit_write.store(0, std::memory_order_relaxed);
@@ -738,6 +780,8 @@ void ExoPreviewItem::itemChange(ItemChange change, const ItemChangeData& value) 
             disconnect(scene_graph_initialized_connection_);
         if (screen_changed_connection_)
             disconnect(screen_changed_connection_);
+        if (frame_swapped_connection_)
+            disconnect(frame_swapped_connection_);
         if (connected_window_ != nullptr)
             connected_window_->removeEventFilter(this);
         connected_window_ = value.window;
@@ -752,6 +796,20 @@ void ExoPreviewItem::itemChange(ItemChange change, const ItemChangeData& value) 
             value.window->installEventFilter(this);
             screen_changed_connection_ = connect(value.window, &QWindow::screenChanged, this,
                                                  [this](QScreen*) { reissuePendingPresentation("screen-changed"); });
+            // Direct, and deliberately not bound to `this`: frameSwapped is
+            // emitted on the render thread, and a queued hop would count the
+            // swap whenever the GUI thread next ran rather than when it
+            // happened — which is exactly the interval under suspicion when a
+            // render pass no longer reaches the screen. The lambda touches one
+            // atomic through a shared_ptr copy, so it stays valid even if the
+            // item is torn down between swaps.
+            frame_swapped_connection_ = connect(
+                value.window, &QQuickWindow::frameSwapped, this,
+                [scheduler = update_scheduler_]() {
+                    if (scheduler)
+                        scheduler->NoteFrameSwapped();
+                },
+                Qt::DirectConnection);
             scene_graph_invalidated_connection_ =
                 connect(value.window, &QQuickWindow::sceneGraphInvalidated, this, [this]() {
                     renderLoopFlag().store(false, std::memory_order_release);
@@ -767,6 +825,12 @@ void ExoPreviewItem::itemChange(ItemChange change, const ItemChangeData& value) 
                     }
                     // No source to re-adopt, but a rebuilt scene graph is still
                     // a stretch in which requests were dropped.
+                    //
+                    // The flag has to be restored first. sceneGraphInvalidated
+                    // cleared it, nothing else sets it on this path, and
+                    // reissuePendingPresentation() gates on it — so without this
+                    // line the re-issue below was unreachable.
+                    renderLoopFlag().store(isVisible(), std::memory_order_release);
                     reissuePendingPresentation("scenegraph-initialized");
                 });
             if (queueRetainedSource())
@@ -843,6 +907,26 @@ void ExoPreviewItem::RenderLink::publishRenderState(std::shared_ptr<RenderLink> 
             if (generation != target->active_generation_.load(std::memory_order_acquire))
                 return;
             target->applyRenderState(ready, size, error);
+        },
+        Qt::QueuedConnection);
+}
+
+void ExoPreviewItem::RenderLink::requestRetry(std::shared_ptr<RenderLink> link, quint64 generation) {
+    QCoreApplication* app = QCoreApplication::instance();
+    if (link == nullptr || app == nullptr)
+        return;
+    QMetaObject::invokeMethod(
+        app,
+        [link = std::move(link), generation]() {
+            ExoPreviewItem* target = link->item.data();
+            if (target == nullptr)
+                return;
+            if (generation != target->active_generation_.load(std::memory_order_acquire))
+                return;
+            // Same path a lifecycle transition takes, and inert for the same
+            // reason: it re-checks the debt on the GUI thread, so a frame that
+            // arrived in the meantime costs nothing.
+            target->reissuePendingPresentation("consume-miss");
         },
         Qt::QueuedConnection);
 }

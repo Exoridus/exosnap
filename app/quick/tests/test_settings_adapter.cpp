@@ -116,10 +116,33 @@ TEST_F(SettingsAdapterTest, AppSettingsEditIsSeparateFromConfigEdit) {
 
 TEST_F(SettingsAdapterTest, QualityPresetMapsToCanonicalCq) {
 
-    adapter.setQualityPreset(static_cast<int>(recorder_core::QualityPreset::Efficient));
+    adapter.setQualityPreset(static_cast<int>(recorder_core::QualityPreset::Low));
 
-    EXPECT_EQ(adapter.cq(), static_cast<int>(recorder_core::CanonicalCq(recorder_core::QualityPreset::Efficient)));
-    EXPECT_EQ(adapter.qualityPreset(), static_cast<int>(recorder_core::QualityPreset::Efficient));
+    EXPECT_EQ(adapter.cq(), static_cast<int>(recorder_core::CanonicalCq(recorder_core::QualityPreset::Low)));
+    EXPECT_EQ(adapter.qualityPreset(), static_cast<int>(recorder_core::QualityPreset::Low));
+}
+
+TEST_F(SettingsAdapterTest, QualityTierLabelsCarryNoCqNumber) {
+    // The CQ number is an ExoSnap scale that each codec maps onto its own
+    // quantizer. Printing it in the Default ladder presented that abstraction as
+    // the value the encoder receives.
+    for (const QVariant& entry : adapter.qualityPresetOptions()) {
+        const QString label = entry.toMap().value(QStringLiteral("label")).toString();
+        EXPECT_FALSE(label.contains(QStringLiteral("CQ"))) << label.toStdString();
+    }
+}
+
+TEST_F(SettingsAdapterTest, NativeQuantizerHintNamesTheSelectedCodecsOwnParameter) {
+    adapter.setCq(19);
+
+    adapter.setVideoCodec(static_cast<int>(VideoCodec::Av1));
+    EXPECT_EQ(adapter.nativeQuantizerHint(), QStringLiteral("AV1 qindex 65 of 255"));
+
+    adapter.setVideoCodec(static_cast<int>(VideoCodec::H264));
+    EXPECT_EQ(adapter.nativeQuantizerHint(), QStringLiteral("H.264 QP 19 of 51"));
+
+    adapter.setVideoCodec(static_cast<int>(VideoCodec::Hevc));
+    EXPECT_EQ(adapter.nativeQuantizerHint(), QStringLiteral("HEVC QP 19 of 51"));
 }
 
 TEST_F(SettingsAdapterTest, MaxFrameRateClampsConfiguredRateAndOptions) {
@@ -162,7 +185,7 @@ TEST_F(SettingsAdapterTest, AudioSummaryListsEnabledSourcesInProductOrder) {
     adapter.setSystemAudioEnabled(true);
     adapter.setMicrophoneEnabled(true);
 
-    EXPECT_EQ(adapter.audioSummary(), QStringLiteral("SYS · MIC"));
+    EXPECT_EQ(adapter.audioSummary(), QStringLiteral("System audio · Microphone"));
 }
 
 // ---------------------------------------------------------------------------
@@ -215,7 +238,14 @@ TEST_F(SettingsAdapterTest, PresetStateExposesNameAndDirtyStatusSeparately) {
 
     EXPECT_EQ(adapter.selectedPresetName(), QStringLiteral("Streaming"));
     EXPECT_TRUE(adapter.presetDirty());
-    EXPECT_NE(adapter.presetStatusText(), adapter.selectedPresetName());
+    // The badge states the condition only. Repeating the name next to the
+    // selector that already shows it reads as a second preset field.
+    EXPECT_FALSE(adapter.presetStatusText().contains(adapter.selectedPresetName()));
+    EXPECT_FALSE(adapter.presetStatusText().isEmpty());
+
+    adapter.setPresetState(options, QStringLiteral("preset.abc"), false);
+    EXPECT_FALSE(adapter.presetDirty());
+    EXPECT_TRUE(adapter.presetStatusText().isEmpty());
 }
 
 // ---------------------------------------------------------------------------
@@ -487,6 +517,21 @@ TEST_F(SettingsAdapterTest, HotkeyErrorEndsCaptureAndIsAttributedToTheAction) {
     EXPECT_EQ(adapter.capturingHotkeyAction(), -1);
     EXPECT_EQ(adapter.hotkeyErrorAction(), 1);
     EXPECT_FALSE(adapter.hotkeyErrorText().isEmpty());
+}
+
+// A capture attempt that hit a conflict leaves the row's error visible; clearing
+// that row's binding afterward must drop the warning along with it, or the row
+// reads as unset-but-still-conflicting.
+TEST_F(SettingsAdapterTest, ClearingAHotkeyDropsItsStaleConflictWarning) {
+    adapter.beginHotkeyCapture(1);
+    adapter.setHotkeyError(1, QStringLiteral("Alt+F4 is reserved by Windows."));
+    ASSERT_EQ(adapter.hotkeyErrorAction(), 1);
+    ASSERT_FALSE(adapter.hotkeyErrorText().isEmpty());
+
+    adapter.clearHotkey(1);
+
+    EXPECT_NE(adapter.hotkeyErrorAction(), 1);
+    EXPECT_TRUE(adapter.hotkeyErrorText().isEmpty());
 }
 
 TEST_F(SettingsAdapterTest, HotkeyCaptureIsRefusedWhileRecordingLocksControls) {

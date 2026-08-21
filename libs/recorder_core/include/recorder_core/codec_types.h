@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 namespace recorder_core {
@@ -39,11 +40,12 @@ enum class BitDepth {
 };
 
 // Constant-quality targets. Named shorthands for five canonical CQ values;
-// the CQ value itself is what the encoder consumes (RecorderConfig::cq).
+// the CQ value itself is what a preset persists (RecorderConfig::cq), and the
+// encoder consumes the codec's own quantizer for it (NvencNativeQuantizer).
 // New members are appended after the original three so existing
 // static_cast<int> item data (persisted presets, combo-box userData) stays
-// stable across the rename (Small -> Efficient).
-enum class QualityPreset { High, Balanced, Efficient, Draft, Ultra };
+// stable across the renames (Small -> Efficient -> Low).
+enum class QualityPreset { High, Balanced, Low, Draft, Ultra };
 
 // Valid CQ (constant-quality) range. 1 = best, 51 = worst. NVENC maps it onto
 // CQP; another backend maps it onto its own quality parameter.
@@ -72,7 +74,7 @@ inline constexpr uint32_t CanonicalCq(QualityPreset preset) noexcept {
         return 16;
     case QualityPreset::High:
         return 19;
-    case QualityPreset::Efficient:
+    case QualityPreset::Low:
         return 30;
     case QualityPreset::Draft:
         return 35;
@@ -86,7 +88,7 @@ inline constexpr uint32_t CanonicalCq(QualityPreset preset) noexcept {
 // resolve toward the lower CQ (higher quality), matching the ladder order.
 inline constexpr QualityPreset NearestQualityPreset(uint32_t cq) noexcept {
     constexpr QualityPreset kByQuality[] = {QualityPreset::Ultra, QualityPreset::High, QualityPreset::Balanced,
-                                            QualityPreset::Efficient, QualityPreset::Draft};
+                                            QualityPreset::Low, QualityPreset::Draft};
     QualityPreset best = QualityPreset::Ultra;
     uint32_t best_d = ~0u;
     for (QualityPreset p : kByQuality) {
@@ -104,6 +106,73 @@ inline constexpr QualityPreset NearestQualityPreset(uint32_t cq) noexcept {
 // in front of the tier name otherwise).
 inline constexpr bool IsCanonicalCq(uint32_t cq) noexcept {
     return cq == 16u || cq == 19u || cq == 24u || cq == 30u || cq == 35u;
+}
+
+// ---------------------------------------------------------------------------
+// NvencNativeQuantizer — the canonical CQ is a product scale; NVENC's constQP
+// is a codec one, and the two are neither the same size nor related by a
+// constant.
+//
+// The canonical scale is DEFINED to be H.264's quantizer scale. H.264 is
+// therefore the identity and a CQ a user saved keeps meaning what it meant.
+//
+// HEVC is the identity too, on measurement rather than by definition. At the
+// same QP as H.264, NVENC's HEVC lands within 0.35 VMAF at the top of the
+// ladder, scores better below it, and costs 22-51% less bitrate throughout --
+// which is already the tier contract. A finer HEVC curve was fitted the same way
+// AV1's was and rejected: at the Ultra tier it spent MORE bitrate than H.264 for
+// slightly less quality, inverting the efficiency ordering the shared tier name
+// exists to preserve.
+//
+// AV1 needs a table, because the ratio it needs to match H.264 runs from under
+// 2x at the top of the ladder to nearly 5x at the bottom: a single factor is
+// right at one point on the curve and progressively wrong everywhere else. At a
+// flat 5x, AV1's best tier scored below H.264's default tier on real gameplay.
+// The anchors are interpolated piecewise-linearly and were measured at equal
+// perceived quality over two 1440p60 clips with near-lossless references -- real
+// gameplay and a real browser scroll -- using pooled VMAF on the motion clip and
+// the per-frame tail on the screen-content clip, where the upper percentiles
+// saturate at 100 and only the worst frames separate the ladder.
+//
+// This is product policy, not encoder plumbing, which is why it sits beside
+// CanonicalCq. The anchor values are NVENC-specific; a second backend needs its
+// own.
+//
+// Callers that need the value the encoder is actually configured with -- the
+// Expert UI, diagnostics -- use this rather than showing the canonical CQ as if
+// it were the quantizer.
+// ---------------------------------------------------------------------------
+inline constexpr uint32_t NvencNativeQuantizerCeiling(VideoCodec codec) noexcept {
+    return codec == VideoCodec::Av1 ? 255u : 51u;
+}
+
+inline constexpr uint32_t NvencNativeQuantizer(VideoCodec codec, uint32_t cq) noexcept {
+    struct Anchor {
+        uint32_t canonical;
+        uint32_t native;
+    };
+    // Anchors at CQ 1 and 51 pin the ends of the scale; the five in between are
+    // the shipped quality tiers, which is where the calibration was measured.
+    constexpr Anchor kAv1[] = {{1, 5}, {16, 42}, {19, 65}, {24, 94}, {30, 135}, {35, 167}, {51, 255}};
+
+    // Clamped in the canonical domain, before conversion, so no codec ceiling
+    // can be exceeded whatever the caller passed.
+    const uint32_t canonical = cq < kCqMin ? kCqMin : (cq > kCqMax ? kCqMax : cq);
+    if (codec != VideoCodec::Av1) {
+        return canonical;
+    }
+    constexpr std::size_t kCount = sizeof(kAv1) / sizeof(kAv1[0]);
+    for (std::size_t i = 1; i < kCount; ++i) {
+        if (canonical > kAv1[i].canonical) {
+            continue;
+        }
+        const uint32_t span = kAv1[i].canonical - kAv1[i - 1].canonical;
+        const uint32_t rise = kAv1[i].native - kAv1[i - 1].native;
+        // Rounded integer interpolation: a truncating divide would bias every
+        // segment toward its better-quality end.
+        return kAv1[i - 1].native + ((canonical - kAv1[i - 1].canonical) * rise + span / 2) / span;
+    }
+    return kAv1[kCount - 1].native;
 }
 
 // NVENC encoder speed/quality preset (SDK presets P1-P7). P1 is fastest with the

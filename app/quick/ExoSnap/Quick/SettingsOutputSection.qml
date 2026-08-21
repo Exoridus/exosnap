@@ -9,13 +9,13 @@ ExoCard {
     required property bool stacked
 
     title: qsTr("Output")
-    subtitle: root.settings.savesToText
+    subtitle: root.settings.outputSummary
 
     ExoSettingRow {
         label: qsTr("Destination folder")
-        hint: qsTr("Where recordings are saved")
         warning: root.settings.folderValidation
         stacked: root.stacked
+        controlWidth: 320
         Layout.fillWidth: true
 
         RowLayout {
@@ -95,6 +95,42 @@ ExoCard {
         }
     }
 
+    // What the pattern above actually produces, folder included. The Widgets
+    // settings page answered this and the first Quick version did not: an example
+    // file name alone never says where the file lands.
+    ExoSettingRow {
+        label: qsTr("Saves as")
+        stacked: root.stacked
+        controlWidth: 320
+        Layout.fillWidth: true
+
+        Label {
+            id: savesToLabel
+
+            text: root.settings.savesToText
+            textFormat: Text.PlainText
+            elide: Text.ElideMiddle
+            horizontalAlignment: root.stacked ? Text.AlignLeft : Text.AlignRight
+            color: ExoTheme.textSecondary
+            Layout.fillWidth: true
+            font {
+                family: ExoTheme.monoFamily
+                pixelSize: ExoTheme.fontCaption
+            }
+
+            // The label's own `truncated`, not `parent`'s: the parent is the
+            // setting row, which has no such property, so the tooltip never
+            // opened.
+            ToolTip.visible: pathHover.hovered && savesToLabel.truncated
+            ToolTip.delay: 400
+            ToolTip.text: root.settings.savesToText
+
+            HoverHandler {
+                id: pathHover
+            }
+        }
+    }
+
     ExoSettingRow {
         label: qsTr("Output resolution")
         hint: qsTr("Downscale to save size · re-encodes")
@@ -151,6 +187,7 @@ ExoCard {
             checked: root.settings.splitByTimeEnabled
             enabled: !root.settings.controlsLocked
             Accessible.name: qsTr("Split recording by time")
+            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
             onToggledByUser: value => root.settings.splitByTimeEnabled = value
         }
     }
@@ -193,6 +230,7 @@ ExoCard {
             checked: root.settings.splitBySizeEnabled
             enabled: !root.settings.controlsLocked
             Accessible.name: qsTr("Split recording by size")
+            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
             onToggledByUser: value => root.settings.splitBySizeEnabled = value
         }
     }

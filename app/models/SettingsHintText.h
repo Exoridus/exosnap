@@ -38,10 +38,10 @@ inline const QString kQualityPreset =
                                 "Ultra \xe2\x89\x88 CQ 16 (sharpest, largest files).<br>"
                                 "Lower CQ = higher quality."));
 inline const QString kConstantQuality =
-    detail::card(QStringLiteral("<b>Quantizer target (1\xe2\x80\x93"
+    detail::card(QStringLiteral("<b>Quality scale (1\xe2\x80\x93"
                                 "51).</b><br>"
                                 "Lower = better quality, larger files.<br>"
-                                "16 = Ultra \xC2\xB7 19 = High \xC2\xB7 24 = Balanced \xC2\xB7 30 = Efficient \xC2\xB7 "
+                                "16 = Ultra \xC2\xB7 19 = High \xC2\xB7 24 = Balanced \xC2\xB7 30 = Low \xC2\xB7 "
                                 "35 = Draft."));
 inline const QString kFrameRate = QStringLiteral("Constant rate \xC2\xB7 editor-friendly");
 inline const QString kCaptureCursor = QStringLiteral("Show the mouse pointer");

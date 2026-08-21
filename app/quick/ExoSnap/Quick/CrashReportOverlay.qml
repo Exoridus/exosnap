@@ -169,7 +169,6 @@ ExoOverlayCard {
         ExoButton {
             objectName: "crashOpenFolderButton"
             text: qsTr("Open crash folder")
-            quiet: true
             enabled: root.crash.crashFolderAvailable
             onClicked: root.crash.openCrashFolder()
         },

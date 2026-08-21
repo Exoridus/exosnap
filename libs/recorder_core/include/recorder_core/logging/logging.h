@@ -19,7 +19,7 @@ struct LogField {
 
 struct LogRecord {
     std::chrono::system_clock::time_point timestamp;
-    LogLevel level;
+    LogLevel level = LogLevel::Info;
     std::string component;
     std::string message;
     std::vector<LogField> fields;
