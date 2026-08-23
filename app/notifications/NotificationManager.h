@@ -82,6 +82,12 @@ class NotificationManager : public QObject {
     // recording ends -- when the user is most likely to still be looking elsewhere.
     // NOLINTNEXTLINE(readability-identifier-naming)
     static constexpr int kDismissMs_Saved = kDwellAction;
+    // Brief despite carrying an action, unlike Saved above. A frame capture is
+    // something the user pressed a moment ago and is still looking at the app
+    // for; Saved arrives when a recording ends, which is exactly when attention
+    // has already moved elsewhere.
+    // NOLINTNEXTLINE(readability-identifier-naming)
+    static constexpr int kDismissMs_FrameCaptured = kDwellBrief;
     // NOLINTNEXTLINE(readability-identifier-naming)
     static constexpr int kDismissMs_UnexpectedStop = kDwellAction;
     // NOLINTNEXTLINE(readability-identifier-naming)

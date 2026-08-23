@@ -640,14 +640,31 @@ void QuickApplication::initializeRecordWorkflow() {
         if (result.succeeded && settings_.open_editor_when_finished)
             openEditorForCurrentRecording();
     });
-    QPointer<RecordViewModelAdapter> safe_record_adapter(&record_view_model_adapter_);
-    recording_coordinator_->SetFrameCapturedCallback([safe_record_adapter](bool success, const QString& path,
-                                                                           const QString& error) {
-        if (safe_record_adapter == nullptr)
-            return;
-        safe_record_adapter->setNoticeText(success ? QStringLiteral("Frame saved · %1").arg(QFileInfo(path).fileName())
-                                                   : (error.isEmpty() ? QStringLiteral("Frame capture failed") : error),
-                                           success ? QStringLiteral("success") : QStringLiteral("error"));
+    // A toast, not the page notice. The banner above the Preview Surface is for
+    // UNRESOLVED conditions; a frame that has been written is a confirmation, and
+    // a confirmation there pushes the preview down the moment the user is looking
+    // at it. The recording-saved banner was removed for exactly that reason and
+    // this one was left behind.
+    //
+    // The failure is a toast for the same reason the recovery-manifest failure
+    // below is: it is a completed local-write failure, not a state the page can
+    // offer to resolve.
+    recording_coordinator_->SetFrameCapturedCallback([this](bool success, const QString& path, const QString& error) {
+        notifications::NotificationEvent event;
+        if (success) {
+            event.type = notifications::NotificationType::FrameCaptured;
+            event.title = QStringLiteral("Frame saved");
+            // The file name, never the path: a toast carrying a full path grows
+            // as wide as the deepest folder the user happens to record into.
+            event.body = QFileInfo(path).fileName();
+            event.action = notifications::NotificationAction::OpenFolder;
+            event.action_payload = path;
+        } else {
+            event.type = notifications::NotificationType::CaptureActionFailed;
+            event.title = QStringLiteral("Frame capture failed");
+            event.body = error.isEmpty() ? QStringLiteral("The frame could not be written.") : error;
+        }
+        notifications_adapter_.manager().Enqueue(std::move(event));
     });
     recording_coordinator_->SetSplitFeedbackCallback([this](bool accepted, const QString& message) {
         if (!accepted)
@@ -3241,13 +3258,22 @@ bool QuickApplication::applyOverlayVisualScenario(const QString& scenario) {
         } else if (variant == QLatin1String("warning")) {
             record_view_model_.dropped_frames = 3;
             record_view_model_.SetState(UiRecordingState::Recording);
+        } else if (variant == QLatin1String("countdown")) {
+            // The countdown owns the screen BEFORE the capture is live, which is
+            // why it is its own variant rather than a flag on the recording one.
+            record_view_model_.SetState(UiRecordingState::Countdown);
         } else if (variant == QLatin1String("recording") || variant == QLatin1String("diagnostics") ||
-                   variant == QLatin1String("diagnostics-technical")) {
+                   variant == QLatin1String("diagnostics-technical") || variant == QLatin1String("controls")) {
             record_view_model_.SetState(UiRecordingState::Recording);
         } else {
             return false;
         }
 
+        // The quick-control pill is opt-in and off by default, so the variant
+        // that photographs it has to turn it on. It is the one capture-excluded
+        // overlay that takes mouse input (ADR 0016), which is exactly why its
+        // appearance has to be checkable like the others'.
+        settings_.show_quick_controls = variant == QLatin1String("controls");
         settings_.show_recording_overlay = true;
         settings_.show_diagnostics_overlay =
             variant == QLatin1String("diagnostics") || variant == QLatin1String("diagnostics-technical");
@@ -3265,6 +3291,22 @@ bool QuickApplication::applyOverlayVisualScenario(const QString& scenario) {
         // force the window on by hand -- photographing a state the product
         // cannot reach and presenting it as evidence.
         record_view_model_adapter_.synchronize();
+        if (variant == QLatin1String("countdown")) {
+            // Seeded on the members the live refresh reads, not on the adapter:
+            // refreshCountdownState() re-pushes these on its own schedule, so a
+            // value written straight into the adapter is overwritten with the
+            // real (zero) one before the grab, and the overlay stays invisible
+            // on `remainingSeconds > 0`.
+            //
+            // Mid-count, not at a boundary: a ring photographed at 3/3 or 0/3 is
+            // a full or an empty circle, and either hides an arc drawn from the
+            // wrong end.
+            live_config_.countdown_seconds = 3;
+            countdown_remaining_ = 2;
+            countdown_progress_ = 0.35;
+            record_view_model_adapter_.setCountdownState(live_config_.countdown_seconds, countdown_remaining_,
+                                                         countdown_progress_);
+        }
         overlay_adapter_.synchronize();
         return true;
     }

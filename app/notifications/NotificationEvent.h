@@ -28,6 +28,7 @@ enum class NotificationType : uint8_t {
                          // source stays degraded, replaced in place if the degraded set changes,
                          // cleared the moment every source reactivates (or the recording ends).
     CaptureActionFailed, // a Record-page quick action (frame capture, split request) was rejected
+    FrameCaptured,       // a single frame was written to disk from the Record page
                          // or failed; success is silent (the resulting file/segment is its own
                          // confirmation), only failures surface here.
     RecoveryProtectionUnavailable, // a recovery-manifest write did not reach disk, so this recording has
@@ -110,6 +111,7 @@ struct NotificationEvent {
 [[nodiscard]] inline QString AdvisoryStatusForType(NotificationType type) {
     switch (type) {
     case NotificationType::Saved:
+    case NotificationType::FrameCaptured:
         return QStringLiteral("success");
 
     // Something failed, was lost, or ended the recording.

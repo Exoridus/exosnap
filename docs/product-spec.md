@@ -1074,8 +1074,13 @@ unavailable display is a caution — and never the same tone for all of them. It
 by **file name**, never by full path: a path is unbounded, so a banner carrying one grows as wide as
 the deepest folder the user records into and stops reading as a sentence.
 
-The banner is for **unresolved conditions**, not for confirmations. **A successful recording raises
-no page notice.** It used to: a full-width "Recording saved · name.mkv" banner appeared above the
+The banner is for **unresolved conditions**, not for confirmations. **Neither a successful recording
+nor a saved frame raises a page notice.** A captured frame reports itself as a brief toast carrying
+the file name and an **Open folder** action; a capture that failed reports itself the same way,
+because a write that did not happen is a finished event and not a state the page can offer to
+resolve.
+
+It used to: a full-width "Recording saved · name.mkv" banner appeared above the
 Preview Surface, and because the preview is the page's fill-height element that banner came straight
 out of its height — and, through the aspect-ratio fit, out of its width as well. Measured at
 1 600 × 1 000, stopping a recording moved the Preview Surface down 60 px and narrowed it by 106 px:
