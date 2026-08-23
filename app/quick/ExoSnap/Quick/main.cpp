@@ -256,15 +256,28 @@ void saveOverlayWindowGrabs(const QString& screenshot_path) {
     const QString stem = dot > 0 ? screenshot_path.left(dot) : screenshot_path;
     const QString suffix = dot > 0 ? screenshot_path.mid(dot) : QStringLiteral(".png");
 
+    // Every candidate is REPORTED, grabbed or not. A capture-excluded overlay
+    // that is simply not visible produces no file, and a silent short write is
+    // how a scenario comes to cover four windows while its caller believes it
+    // covered five -- the same failure the notification toast already caused
+    // once by having no objectName at all.
     for (QWindow* window : QGuiApplication::topLevelWindows()) {
-        if (window == nullptr || !window->isVisible())
-            continue;
-        if (!window->objectName().startsWith(QLatin1String("quickOverlay")))
+        if (window == nullptr || !window->objectName().startsWith(QLatin1String("quickOverlay")))
             continue;
         auto* quick_window = qobject_cast<QQuickWindow*>(window);
-        if (quick_window == nullptr)
+        if (quick_window == nullptr) {
+            qInfo("overlay-grab: %s skipped (not a QQuickWindow)", qPrintable(window->objectName()));
             continue;
-        (void)quick_window->grabWindow().save(stem + QLatin1Char('.') + window->objectName() + suffix);
+        }
+        if (!window->isVisible()) {
+            qInfo("overlay-grab: %s skipped (not visible) geometry=%dx%d", qPrintable(window->objectName()),
+                  window->width(), window->height());
+            continue;
+        }
+        const QString path = stem + QLatin1Char('.') + window->objectName() + suffix;
+        const bool saved = quick_window->grabWindow().save(path);
+        qInfo("overlay-grab: %s %s %dx%d", qPrintable(window->objectName()), saved ? "saved" : "SAVE FAILED",
+              window->width(), window->height());
     }
 }
 
