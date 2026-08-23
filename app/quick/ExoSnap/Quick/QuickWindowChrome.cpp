@@ -419,6 +419,23 @@ void QuickWindowChrome::restoreWindow() {
 #endif
 }
 
+bool QuickWindowChrome::willOccupyScreenMaximized() const {
+#if defined(Q_OS_WIN)
+    HWND hwnd = static_cast<HWND>(hwnd_);
+    if (hwnd == nullptr)
+        return false;
+    if (IsIconic(hwnd) == FALSE)
+        return IsZoomed(hwnd) != FALSE;
+    WINDOWPLACEMENT placement{};
+    placement.length = sizeof(placement);
+    if (GetWindowPlacement(hwnd, &placement) == FALSE || placement.showCmd != SW_SHOWMINIMIZED)
+        return false;
+    return (placement.flags & WPF_RESTORETOMAXIMIZED) != 0;
+#else
+    return false;
+#endif
+}
+
 void QuickWindowChrome::toggleMaximized() {
     setWindowMaximized(!windowMaximized());
 }

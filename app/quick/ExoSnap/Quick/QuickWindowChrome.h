@@ -143,6 +143,17 @@ class QuickWindowChrome : public QObject, public QAbstractNativeEventFilter {
     // A window that is not iconic is left alone.
     Q_INVOKABLE void restoreWindow();
 
+    // What this window will occupy the screen with once it is shown again --
+    // the value to bank before hiding it to the tray.
+    //
+    // Two sources, and which one applies is documented, not guessed:
+    // IsZoomed answers for a window that is not minimized. For one that IS,
+    // WPF_RESTORETOMAXIMIZED is the authority ("the restored window will be
+    // maximized, regardless of whether it was maximized before it was
+    // minimized"), and it is valid ONLY while showCmd is SW_SHOWMINIMIZED --
+    // which is exactly the case being asked about here.
+    [[nodiscard]] Q_INVOKABLE bool willOccupyScreenMaximized() const;
+
     // Sets QWindow::icon and posts WM_SETICON for ICON_SMALL/ICON_BIG. Qt's own
     // icon path updates the frame; the taskbar BUTTON only follows WM_SETICON.
     Q_INVOKABLE void applyWindowIcon(IconState state);

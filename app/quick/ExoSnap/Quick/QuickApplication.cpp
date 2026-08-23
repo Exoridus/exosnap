@@ -3798,6 +3798,15 @@ void QuickApplication::hideWindowToTray() {
     // whatever the last debounced sample happened to be.
     if (window_geometry_)
         window_geometry_->flush();
+    // Banked for the same reason as the geometry, and BEFORE the hide: a hidden
+    // window keeps its show state, but nothing readable after the restore still
+    // distinguishes "was maximized" from "was windowed" once Qt's show has run.
+    // The window may already be minimized here (the user minimized it and then
+    // chose Hide), which is why this asks the chrome rather than reading
+    // IsZoomed: a minimized window is never zoomed, and the answer for it lives
+    // in WPF_RESTORETOMAXIMIZED instead.
+    if (auto* chrome = root_window_->findChild<QuickWindowChrome*>())
+        hidden_while_maximized_ = chrome->willOccupyScreenMaximized();
     root_window_->hide();
     if (tray_presence_)
         tray_presence_->setWindowVisible(false);
@@ -3821,20 +3830,29 @@ void QuickApplication::hideWindowToTray() {
 void QuickApplication::restoreWindowFromTray() {
     if (!root_window_)
         return;
-    // Two steps, and never showNormal(): that forces Qt::WindowNoState, so a
-    // window that was MAXIMIZED when it went to the tray came back windowed.
+    // Two steps, and Qt decides neither of them.
     //
-    //  - show() makes a hidden window visible again and restarts rendering,
-    //    which no native call does. Qt applies its own window state here, and
-    //    that state follows Windows now.
-    //  - the native SW_RESTORE then un-minimizes, and it is the only one of the
-    //    two that honours WPF_RESTORETOMAXIMIZED -- the flag that decides
-    //    whether a minimized window comes back maximized. It is a no-op unless
-    //    the window is actually iconic.
+    // show() is unavoidable: a hidden window has to become visible to Qt again
+    // or the scene graph never resumes. What it must NOT be trusted with is the
+    // window STATE. This used to be showNormal(), which Qt documents as
+    // "setWindowStates(Qt::WindowNoState) and then setVisible(true)" -- it does
+    // not lose the maximized state, it deletes it on purpose. MEASURED: a window
+    // that went to the tray maximized came back windowed.
+    //
+    // So the state is re-applied natively afterwards, from the value banked
+    // before the hide rather than from anything read now: by this point Qt's own
+    // show has already picked a show command, and neither IsZoomed nor
+    // WPF_RESTORETOMAXIMIZED still describes what the user put away.
+    const bool restore_maximized = hidden_while_maximized_;
+    hidden_while_maximized_ = false;
     if (!root_window_->isVisible())
         root_window_->show();
-    if (auto* chrome = root_window_->findChild<QuickWindowChrome*>())
-        chrome->restoreWindow();
+    if (auto* chrome = root_window_->findChild<QuickWindowChrome*>()) {
+        if (restore_maximized)
+            chrome->setWindowMaximized(true);
+        else
+            chrome->restoreWindow();
+    }
     root_window_->raise();
     root_window_->requestActivate();
     if (tray_presence_) {

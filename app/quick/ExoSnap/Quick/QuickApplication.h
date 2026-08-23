@@ -358,6 +358,10 @@ class QuickApplication {
     // Reached from the close-to-tray preference and from the tray menu's own
     // "Hide window" entry, which must not grow a second copy of it.
     void hideWindowToTray();
+    // Whether the window was maximized when it went to the tray. Banked at hide
+    // time because nothing readable at restore time still says so: the hide
+    // minimizes first, and the restore un-minimizes before this is consulted.
+    bool hidden_while_maximized_ = false;
     void restoreWindowFromTray();
     // Notification event sources and the action router. Dispatch lives here
     // rather than in the adapter: navigating, opening Explorer and relaunching

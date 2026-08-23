@@ -1261,13 +1261,20 @@ int main(int argc, char* argv[]) {
                 placement.length = sizeof(placement);
                 const bool have_placement = GetWindowPlacement(hwnd, &placement) != FALSE;
                 const RECT& normal = placement.rcNormalPosition;
-                qInfo("window-cycle: %s zoomed=%d iconic=%d show_cmd=%u ws_maximize=%d restore_to_max=%d "
+                // restore_to_max is printed as "-" unless showCmd is
+                // SW_SHOWMINIMIZED. WPF_RESTORETOMAXIMIZED is documented as
+                // valid ONLY then, so reporting the raw bit in any other state
+                // publishes a number that carries no meaning -- and a reader
+                // (this one included) will reason from it anyway.
+                const bool restore_flag_valid = have_placement && placement.showCmd == SW_SHOWMINIMIZED;
+                const char* restore_to_max =
+                    !restore_flag_valid ? "-" : ((placement.flags & WPF_RESTORETOMAXIMIZED) != 0 ? "1" : "0");
+                qInfo("window-cycle: %s zoomed=%d iconic=%d show_cmd=%u ws_maximize=%d restore_to_max=%s "
                       "window=%ld,%ld %ldx%ld restore=%ld,%ld %ldx%ld",
                       stage, IsZoomed(hwnd) != FALSE ? 1 : 0, IsIconic(hwnd) != FALSE ? 1 : 0,
                       have_placement ? placement.showCmd : 0u,
-                      (GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_MAXIMIZE) != 0 ? 1 : 0,
-                      have_placement && (placement.flags & WPF_RESTORETOMAXIMIZED) != 0 ? 1 : 0, rect.left, rect.top,
-                      rect.right - rect.left, rect.bottom - rect.top, normal.left, normal.top,
+                      (GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_MAXIMIZE) != 0 ? 1 : 0, restore_to_max, rect.left,
+                      rect.top, rect.right - rect.left, rect.bottom - rect.top, normal.left, normal.top,
                       normal.right - normal.left, normal.bottom - normal.top);
                 if (normal_out != nullptr)
                     *normal_out = normal;
