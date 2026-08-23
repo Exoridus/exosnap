@@ -2,6 +2,8 @@
 
 #include "hdr_reference_white.h"
 
+#include <recorder_core/sdr_white_level.h>
+
 #include <dxgiformat.h>
 
 #include <algorithm>
@@ -16,7 +18,20 @@
 // mode is delivered as scRGB FP16 — linear light, BT.709 primaries, where a
 // channel value of 1.0 equals SDR reference white (80 cd/m^2). Because the
 // primaries already match BT.709, no gamut matrix is needed: mapping to an SDR
-// BT.709 signal is a luminance roll-off followed by the BT.709 OETF.
+// signal is a luminance roll-off followed by the sRGB OETF.
+//
+// Why sRGB and not the BT.709 OETF, when the result is tagged BT.709: the two
+// are different curves (mid-grey differs by 13/255) because BT.709's OETF is a
+// camera curve whose paired display transfer is BT.1886's pure 2.4 gamma, giving
+// a deliberate end-to-end system gamma of ~1.2 for a dim viewing environment.
+// Neither end of this product's chain is that: the preview is composited by Qt
+// as sRGB, the frame snapshot is written as an sRGB PNG, and desktop players
+// decode BT.709-tagged SDR with an ~sRGB display transfer. Decisively, the plain
+// SDR capture path applies no OETF at all -- the duplicated desktop is already
+// sRGB-encoded and is passed through -- so encoding the HDR path with a camera
+// curve would make one recording darker than the other under the same BT.709
+// tag. The tag stays BT.709 (CICP 1, universally understood, and the primaries
+// really are BT.709); only the transfer is sRGB throughout.
 
 namespace recorder_core {
 
@@ -66,12 +81,10 @@ inline float HdrToneMapChannel(float scrgb_linear, float peak_scale) {
 }
 
 // sRGB opto-electronic transfer function: SDR linear [0, 1] -> non-linear signal
-// [0, 1]. Used for a desktop that is already SDR but delivered as linear scRGB
-// (Advanced Color Management, see OdCaptureMode::SdrScrgb): no roll-off is
-// wanted there, only the transfer the desktop compositor would have applied
-// itself. Encoding such a desktop with the BT.709 OETF instead darkens the whole
-// image (mid-grey 128 -> 115) because BT.709 is a camera OETF paired with a ~2.4
-// EOTF display, not the inverse of the sRGB EOTF the preview/player assumes.
+// [0, 1]. The single encode transfer for every SDR output this engine produces
+// (see the transfer rationale at the top of this header). It is the exact
+// inverse of the sRGB EOTF, so a desktop level that was never tone-mapped
+// round-trips to its original code.
 inline float SrgbOetf(float linear) {
     float l = linear;
     if (l < 0.0f) {
@@ -83,27 +96,42 @@ inline float SrgbOetf(float linear) {
     return l <= 0.0031308f ? 12.92f * l : 1.055f * std::pow(l, 1.0f / 2.4f) - 0.055f;
 }
 
-// BT.709 opto-electronic transfer function (Rec.709 s.1.2): SDR linear [0, 1] ->
-// non-linear signal [0, 1].
-inline float Bt709Oetf(float linear) {
-    float l = linear;
-    if (l < 0.0f) {
-        l = 0.0f;
-    }
-    if (l > 1.0f) {
-        l = 1.0f;
-    }
-    return l < 0.018f ? 4.5f * l : 1.099f * std::pow(l, 0.45f) - 0.099f;
+// The OS SDR reference white, expressed in scRGB reference-white multiples.
+//
+// DOCUMENTED, and the reason the roll-off cannot work in raw scRGB units: on an
+// HDR desktop Windows composes scene-referred, where scRGB 1.0 is 80 nits, and
+// it renders SDR content at the user's SDR reference white level instead --
+// "you can simply multiply the SDR color value by SdrWhiteLevelInNits / 80".
+// So an sRGB mid-grey of 128 does NOT arrive as its own linear 0.2158; on a
+// display set to 280 nits it arrives at 0.2158 * 3.5. Tone-mapping that without
+// undoing the boost leaves it far above the knee's identity range and writes it
+// out at 222 instead of 128 -- measured, and equally in the recording and the
+// preview, because both apply this same transform.
+//
+// Returns >= 1.0. An unknown or implausible level resolves to the OS default
+// through EffectiveOverlayReferenceWhiteNits, which is where those bounds live.
+inline float SdrPaperWhiteScale(float sdr_white_level_nits) {
+    const float nits = EffectiveOverlayReferenceWhiteNits(sdr_white_level_nits);
+    const float scale = nits / kHdrReferenceWhiteNits;
+    return scale > 1.0f ? scale : 1.0f;
 }
 
-// Full per-channel scRGB (HDR, linear) -> BT.709 SDR non-linear signal.
-inline float ScrgbToSdr709Channel(float scrgb_linear, float peak_scale) {
-    return Bt709Oetf(HdrToneMapChannel(scrgb_linear, peak_scale));
+// Full per-channel scRGB (HDR, linear) -> SDR non-linear signal, BT.709
+// primaries with the sRGB transfer.
+//
+// `paper_white_scale` normalises the input so that SDR reference white lands on
+// 1.0 before the roll-off; `peak_scale` is divided by the same factor so the
+// knee keeps describing the same physical luminance. A scale of 1.0 is the
+// scene-referred identity and reproduces the pre-normalisation behaviour.
+inline float ScrgbToSdr709Channel(float scrgb_linear, float peak_scale, float paper_white_scale = 1.0f) {
+    const float scale = paper_white_scale > 0.0f ? paper_white_scale : 1.0f;
+    return SrgbOetf(HdrToneMapChannel(scrgb_linear / scale, peak_scale / scale));
 }
 
 // Full per-channel scRGB (SDR, linear) -> sRGB non-linear signal, for an
-// Advanced-Color desktop that is still SDR (see OdCaptureMode::SdrScrgb). There
-// is no headroom to roll off: reference white (1.0) must stay white.
+// Advanced-Color desktop that is still SDR (see OdCaptureMode::SdrScrgb). Same
+// transfer as the HDR path; what differs is that there is no headroom to roll
+// off, so reference white (1.0) must stay white and the roll-off is skipped.
 inline float ScrgbSdrToSrgbChannel(float scrgb_linear) {
     return SrgbOetf(scrgb_linear);
 }

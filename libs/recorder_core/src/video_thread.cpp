@@ -386,6 +386,11 @@ void VideoThread::Run() {
     // HDR display's reported peak is trusted; otherwise the documented fallback
     // is used (an SDR-mode display still reports inflated EDID luminance caps).
     float hdrPeakScale = HdrPeakScale(false, 0.0f);
+    // The OS SDR reference white, in the same reference-white multiples. An HDR
+    // desktop composes SDR content at that level rather than at scRGB's nominal
+    // 80 nits, so the tone-map has to divide it back out; 1.0 is the
+    // scene-referred identity used until the capture source is known.
+    float hdrPaperWhiteScale = 1.0f;
     // Native HDR10 output is expected when HDR10 handling is selected, the
     // captured display is HDR-active, and the codec can encode HDR10. The
     // session colour metadata (BT.2020/PQ + mastering) and 10-bit pinning are
@@ -399,6 +404,7 @@ void VideoThread::Run() {
             return;
         }
         hdrPeakScale = HdrPeakScale(odSrc.HdrActive(), odSrc.MaxLuminanceNits());
+        hdrPaperWhiteScale = SdrPaperWhiteScale(odSrc.DisplayFacts().sdr_white_level_nits);
         expectNativeHdr =
             IsHdr10NativeEffective(m_state.config.hdr_mode, odSrc.HdrActive(), m_state.config.video_codec);
     } else {
@@ -426,6 +432,7 @@ void VideoThread::Run() {
         wgcPlan = ResolveWgcCapturePlan(wgcHdrFacts.hdr_active, m_state.config.hdr_mode,
                                         CodecSupportsHdr10Native(m_state.config.video_codec));
         hdrPeakScale = HdrPeakScale(wgcHdrFacts.hdr_active, wgcHdrFacts.max_luminance_nits);
+        hdrPaperWhiteScale = SdrPaperWhiteScale(wgcHdrFacts.sdr_white_level_nits);
         expectNativeHdr =
             IsHdr10NativeEffective(m_state.config.hdr_mode, wgcHdrFacts.hdr_active, m_state.config.video_codec);
 
@@ -1908,7 +1915,7 @@ void VideoThread::Run() {
             return;
         }
         if (!hdrToneMapper.Init(d3dDevice.get(), d3dContext.get(), sourceWidth, sourceHeight, hdrPeakScale,
-                                hdrToneMapSdrSource, tmErr)) {
+                                hdrToneMapSdrSource, tmErr, hdrPaperWhiteScale)) {
             m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, "HDR tone-map init: " + tmErr);
             if (!useOdCapture) {
                 if (captureSession != nullptr)

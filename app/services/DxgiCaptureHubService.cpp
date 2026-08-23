@@ -195,8 +195,8 @@ void DxgiCaptureHubService::WorkerProc(std::stop_token stop_token) {
             sharedFmt = desc.Format;
             lastHdrActive = facts.hdr_active;
             lastMaxLuminanceNits = facts.max_luminance_nits;
-            const recorder_core::PreviewTapDesc tap =
-                recorder_core::ResolveRawCaptureTapDesc(desc.Format, facts.hdr_active, facts.max_luminance_nits);
+            const recorder_core::PreviewTapDesc tap = recorder_core::ResolveRawCaptureTapDesc(
+                desc.Format, facts.hdr_active, facts.sdr_white_level_nits, facts.max_luminance_nits);
             // Ownership of the NT handle transfers to the sink.
             sink(handle, sharedW, sharedH, tap);
         }

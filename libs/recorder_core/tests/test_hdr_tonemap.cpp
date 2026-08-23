@@ -1,6 +1,6 @@
 // Pure-math tests for the scRGB(HDR) -> SDR BT.709 tone-map and for the OD
 // capture-format x HDR-mode negotiation decision. No GPU: the shader replicates
-// HdrToneMapChannel/Bt709Oetf verbatim, so pinning the CPU reference here pins
+// HdrToneMapChannel/SrgbOetf verbatim, so pinning the CPU reference here pins
 // the on-screen result too.
 
 #include "hdr_tonemap.h"
@@ -37,7 +37,7 @@ TEST(HdrToneMap, ShadowsAndMidtonesPreservedBelowKnee) {
 }
 
 TEST(HdrToneMap, ReferenceWhiteStaysBright) {
-    // scRGB 1.0 == 80 cd/m^2 reference white. After the roll-off + BT.709 OETF
+    // scRGB 1.0 == 80 cd/m^2 reference white. After the roll-off + sRGB OETF
     // it must land near full white, not a dim grey (the "washed out" failure).
     const float linear = HdrToneMapChannel(1.0f, kPeak400);
     EXPECT_GT(linear, kHdrToneMapKnee); // above the knee, still climbing
@@ -76,13 +76,6 @@ TEST(HdrToneMap, MonotonicNonDecreasing) {
     }
 }
 
-TEST(Bt709Oetf, Endpoints) {
-    EXPECT_FLOAT_EQ(Bt709Oetf(0.0f), 0.0f);
-    EXPECT_NEAR(Bt709Oetf(1.0f), 1.0f, 1e-4f);
-    EXPECT_FLOAT_EQ(Bt709Oetf(-1.0f), 0.0f); // clamps
-    EXPECT_NEAR(Bt709Oetf(2.0f), 1.0f, 1e-4f);
-}
-
 TEST(SrgbOetf, MatchesTheDesktopTransfer) {
     EXPECT_FLOAT_EQ(SrgbOetf(0.0f), 0.0f);
     EXPECT_NEAR(SrgbOetf(1.0f), 1.0f, 1e-5f);
@@ -92,15 +85,33 @@ TEST(SrgbOetf, MatchesTheDesktopTransfer) {
     EXPECT_NEAR(SrgbOetf(0.2159f), 0.5019f, 1e-3f);
 }
 
-TEST(SrgbOetf, PreservesSdrScrgbLevelsUnlikeTheHdrCurve) {
-    // An ACM (Advanced Color) desktop with HDR off delivers scRGB FP16 whose
-    // reference white is exactly 1.0 (measured). Encoding it for an sRGB target
-    // must round-trip; the HDR tone-map curve instead crushes white and shadows.
-    EXPECT_NEAR(SrgbOetf(1.0f), 1.0f, 1e-5f);
+TEST(SrgbOetf, IsTheExactInverseOfTheDesktopEotf) {
+    // Every SDR level that the tone-map leaves alone must come out as the code it
+    // went in as. This is the property that makes an HDR-desktop recording match
+    // an SDR-desktop recording of the same content: the plain SDR capture path
+    // applies no transfer at all, so anything but the exact sRGB inverse here
+    // would put two different pictures under the same BT.709 tag.
+    auto srgb_eotf = [](float signal) {
+        return signal <= 0.04045f ? signal / 12.92f : std::pow((signal + 0.055f) / 1.055f, 2.4f);
+    };
+    for (int code : {0, 16, 32, 64, 128, 192, 235, 255}) {
+        const float signal = static_cast<float>(code) / 255.0f;
+        EXPECT_NEAR(SrgbOetf(srgb_eotf(signal)) * 255.0f, static_cast<float>(code), 0.51f) << "code=" << code;
+    }
+}
 
-    const float hdr_peak = HdrPeakScale(/*display_hdr_active=*/false, 0.0f);      // 1000/80 fallback
-    EXPECT_NEAR(Bt709Oetf(HdrToneMapChannel(1.0f, hdr_peak)), 0.9135f, 1e-3f);    // white -> ~233/255
-    EXPECT_NEAR(Bt709Oetf(HdrToneMapChannel(0.0144f, hdr_peak)), 0.0653f, 1e-3f); // code 32 -> ~17/255
+TEST(SrgbOetf, OnlyTheRollOffSeparatesTheSdrScrgbPathFromTheHdrPath) {
+    // An ACM (Advanced Color) desktop with HDR off delivers scRGB FP16 whose
+    // reference white is exactly 1.0 (measured), so no roll-off may be applied:
+    // reference white must stay white. The HDR path's roll-off, applied to the
+    // same input, crushes white and lifts the deep shadows toward the knee.
+    EXPECT_NEAR(ScrgbSdrToSrgbChannel(1.0f), 1.0f, 1e-5f);
+
+    const float hdr_peak = HdrPeakScale(/*display_hdr_active=*/false, 0.0f); // 1000/80 fallback
+    EXPECT_NEAR(ScrgbToSdr709Channel(1.0f, hdr_peak), 0.9228f, 1e-3f);       // white -> ~235/255
+    // Below the knee the roll-off is identity, so shadows are untouched by it
+    // and the transfer round-trips them exactly: linear 0.0144 is sRGB code 32.
+    EXPECT_NEAR(ScrgbToSdr709Channel(0.0144f, hdr_peak) * 255.0f, 32.0f, 0.6f);
 }
 
 TEST(HdrPeakScale, UsesActiveDisplayLuminance) {
@@ -275,6 +286,42 @@ TEST(HdrColorSpace, NonPqColorSpacesAreNotHdr) {
     EXPECT_FALSE(recorder_core::IsHdrColorSpace(DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709));
     // scRGB FP16 — an Advanced-Color SDR desktop, not HDR (see OdCaptureMode::SdrScrgb).
     EXPECT_FALSE(recorder_core::IsHdrColorSpace(DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709));
+}
+
+// The SDR-paper-white normalisation. On an HDR desktop Windows renders SDR
+// content at the user's reference white level, not at scRGB's nominal 80 nits,
+// so the roll-off has to divide that back out. Without it an sRGB mid-grey came
+// out at 222 instead of 128 -- in the recording and in the preview alike.
+TEST(HdrToneMapTest, SdrPaperWhiteNormalisationRestoresSdrMidGrey) {
+    // sRGB 128/255 in linear light, and the scRGB value Windows composes it to
+    // on a display whose SDR white level is 280 nits.
+    constexpr float kSrgbMidGreyLinear = 0.2158605f;
+    constexpr float kWhiteNits = 280.0f;
+    const float paper_white = SdrPaperWhiteScale(kWhiteNits);
+    EXPECT_NEAR(paper_white, kWhiteNits / 80.0f, 1e-5f);
+
+    const float composed = kSrgbMidGreyLinear * paper_white;
+
+    // Uncorrected: the value sits far above the knee's identity range and is
+    // written out much too bright. This is the defect, pinned.
+    const float uncorrected = ScrgbToSdr709Channel(composed, kPeak400);
+    EXPECT_GT(uncorrected, 0.80f);
+
+    // Corrected: back to the exact code the same grey has on an SDR desktop. The
+    // grey is below the knee, so the roll-off is identity and the sRGB transfer
+    // inverts the desktop's own encoding -- 128/255 to the byte, not merely close.
+    const float corrected = ScrgbToSdr709Channel(composed, kPeak400, paper_white);
+    EXPECT_NEAR(corrected, SrgbOetf(kSrgbMidGreyLinear), 1e-4f);
+    EXPECT_NEAR(corrected * 255.0f, 128.0f, 0.51f);
+}
+
+// An unknown or implausible level must not scale anything: it resolves to the
+// OS default, and a scale below 1.0 would darken a correct picture.
+TEST(HdrToneMapTest, SdrPaperWhiteScaleClampsToTheDefaultAndNeverBelowUnity) {
+    EXPECT_NEAR(SdrPaperWhiteScale(0.0f), kDefaultSdrWhiteLevelNits / 80.0f, 1e-5f);
+    EXPECT_NEAR(SdrPaperWhiteScale(-5.0f), kDefaultSdrWhiteLevelNits / 80.0f, 1e-5f);
+    EXPECT_NEAR(SdrPaperWhiteScale(100000.0f), kDefaultSdrWhiteLevelNits / 80.0f, 1e-5f);
+    EXPECT_GE(SdrPaperWhiteScale(80.0f), 1.0f);
 }
 
 } // namespace

@@ -24,8 +24,9 @@ VS_OUTPUT main(uint id : SV_VertexID) {
 }
 )";
 
-// Per-channel scRGB(HDR) -> SDR BT.709. This HLSL is a verbatim copy of the CPU
-// reference in hdr_tonemap.h (HdrToneMapChannel + Bt709Oetf); the kKnee constant
+// Per-channel scRGB(HDR) -> SDR BT.709 primaries with the sRGB transfer. This
+// HLSL is a verbatim copy of the CPU reference in hdr_tonemap.h
+// (HdrToneMapChannel + SrgbOetf); the kKnee constant
 // mirrors kHdrToneMapKnee there. Keep the two in sync — the CPU version is the
 // unit-tested source of truth. Uses only portable ALU (no driver intrinsics) so
 // the result is identical on every GPU.
@@ -53,11 +54,6 @@ float ToneMapChannel(float x, float peak) {
     return min(kKnee + head * s, 1.0f);
 }
 
-float Bt709Oetf(float l) {
-    l = saturate(l);
-    return l < 0.018f ? 4.5f * l : 1.099f * pow(l, 0.45f) - 0.099f;
-}
-
 float SrgbOetf(float l) {
     l = saturate(l);
     return l <= 0.0031308f ? 12.92f * l : 1.055f * pow(l, 1.0f / 2.4f) - 0.055f;
@@ -66,19 +62,27 @@ float SrgbOetf(float l) {
 float4 main(float4 position : SV_POSITION, float2 texcoord : TEXCOORD0) : SV_TARGET {
     float4 c = srcTex.Sample(srcSamp, texcoord);
     if (params.y > 0.5f) {
-        // SDR scRGB desktop: content already ends at reference white (1.0).
+        // SDR scRGB desktop: content already ends at reference white (1.0), so
+        // only the transfer is applied and the roll-off is skipped.
         float3 s = float3(SrgbOetf(c.r), SrgbOetf(c.g), SrgbOetf(c.b));
         return float4(s, 1.0f);
     }
-    const float peak = params.x;
-    float3 lin = float3(ToneMapChannel(c.r, peak), ToneMapChannel(c.g, peak), ToneMapChannel(c.b, peak));
-    float3 sig = float3(Bt709Oetf(lin.r), Bt709Oetf(lin.g), Bt709Oetf(lin.b));
+    // params.z normalises the OS SDR reference white onto 1.0 before the
+    // roll-off. On an HDR desktop Windows renders SDR content at that level, not
+    // at scRGB's nominal 80 nits, so rolling off the raw value writes mid-greys
+    // out far too bright. The peak is divided by the same factor to keep the
+    // knee describing the same physical luminance.
+    const float paperWhite = max(params.z, 1.0f);
+    const float peak = params.x / paperWhite;
+    const float3 n = c.rgb / paperWhite;
+    float3 lin = float3(ToneMapChannel(n.r, peak), ToneMapChannel(n.g, peak), ToneMapChannel(n.b, peak));
+    float3 sig = float3(SrgbOetf(lin.r), SrgbOetf(lin.g), SrgbOetf(lin.b));
     return float4(sig, 1.0f);
 }
 )";
 
 struct ToneMapConstants {
-    float params[4]; // x = peak scale, y = sdr scRGB source flag, z/w reserved
+    float params[4]; // x = peak scale, y = sdr scRGB source flag, z = SDR paper-white scale, w reserved
 };
 
 void SetHResultError(std::string& err, const char* what, HRESULT hr) {
@@ -90,7 +94,7 @@ void SetHResultError(std::string& err, const char* what, HRESULT hr) {
 } // namespace
 
 bool HdrToneMapper::Init(ID3D11Device* device, ID3D11DeviceContext* context, UINT width, UINT height, float peak_scale,
-                         bool sdr_scrgb_source, std::string& err) {
+                         bool sdr_scrgb_source, std::string& err, float paper_white_scale) {
     if (device == nullptr || context == nullptr || width == 0 || height == 0) {
         err = "HdrToneMapper::Init invalid arguments";
         return false;
@@ -150,6 +154,12 @@ bool HdrToneMapper::Init(ID3D11Device* device, ID3D11DeviceContext* context, UIN
     ToneMapConstants pc{};
     pc.params[0] = peak_scale;
     pc.params[1] = sdr_scrgb_source ? 1.0f : 0.0f;
+    // Only the scene-referred (HDR desktop) path normalises. An SDR
+    // Advanced-Color desktop is display-referred -- documented as "(1.0, 1.0,
+    // 1.0) always means the maximum white luminance that the display can
+    // reproduce" -- so there is nothing to undo there, and dividing would darken
+    // a picture that measures correct today.
+    pc.params[2] = sdr_scrgb_source ? 1.0f : (paper_white_scale > 1.0f ? paper_white_scale : 1.0f);
 
     D3D11_BUFFER_DESC const_desc{};
     const_desc.ByteWidth = sizeof(ToneMapConstants);

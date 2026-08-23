@@ -16,7 +16,7 @@
 //     -> BT.2020 -> BT.709 gamut (linear light)
 //     -> scale to scRGB reference-white multiples (1.0 = 80 nits)
 //     -> the shared HDR->SDR tone-map operator (hdr_tonemap.h) at the session's
-//        display peak, then the BT.709 OETF                 -> SDR BGRA8.
+//        display peak, then the sRGB OETF                   -> SDR BGRA8.
 //
 // This is a monitoring approximation (product decision): the tone-map curve and
 // the PQ / gamut math are the same reference helpers the capture paths use, not a

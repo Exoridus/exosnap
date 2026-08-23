@@ -361,7 +361,7 @@ void captureOnWorker(ReadyFrameSource source, ReadyFrameComposition composition,
         const bool sdr_scrgb = source.tap.transform == recorder_core::PreviewTapTransform::ScrgbSdr;
         if (FAILED(result) ||
             !mapper.Init(device.Get(), context.Get(), source.width, source.height, source.tap.peak_scale, sdr_scrgb,
-                         error) ||
+                         error, source.tap.paper_white_scale) ||
             !mapper.Convert(local.Get(), tone_mapped.Get(), error)) {
             if (error.empty())
                 setError(error, "CreateTexture2D(Ready frame tone map)", result);

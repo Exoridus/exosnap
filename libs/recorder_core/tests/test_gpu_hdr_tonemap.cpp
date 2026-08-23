@@ -219,7 +219,7 @@ TEST(GpuHdrToneMapR10, SdrScrgbSourceEncodesWithSrgbAndKeepsWhite) {
     // The regression this guards: white must reach 255, not the 233 the HDR
     // roll-off would produce, and the peak_scale passed above must be ignored.
     EXPECT_EQ(R8(texels.back()), 255u);
-    // Mid-grey (sRGB code 128) round-trips instead of sinking to 115.
+    // Mid-grey (sRGB code 128) round-trips exactly, as it must on every path.
     EXPECT_NEAR(static_cast<int>(R8(texels[2])), 128, 1);
 }
 
@@ -246,10 +246,10 @@ TEST(GpuHdrToneMapR10, TenBitPreservesPrecisionEightBitDestroys) {
     ASSERT_TRUE(d3d.device);
 
     // Two scRGB inputs whose tone-mapped SDR signals sit in the same 8-bit code
-    // but are more than one 10-bit code apart. Both are below the tone-map knee
-    // (identity), so the signal is Bt709Oetf of the input.
-    const float x1 = RoundTrip(0.36486f);
-    const float x2 = RoundTrip(0.36672f);
+    // but are several 10-bit codes apart. Both are below the tone-map knee
+    // (identity), so the signal is SrgbOetf of the input.
+    const float x1 = RoundTrip(0.3642f);
+    const float x2 = RoundTrip(0.3682f);
 
     const float sig1 = recorder_core::ScrgbToSdr709Channel(x1, kPeak400);
     const float sig2 = recorder_core::ScrgbToSdr709Channel(x2, kPeak400);

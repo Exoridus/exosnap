@@ -11,7 +11,7 @@ namespace recorder_core {
 // scRGB FP16 -> SDR BT.709 tone-map render pass. Reads an FP16 shader-resource
 // texture (scRGB: linear, BT.709 primaries, 1.0 = 80 cd/m^2 reference white) and
 // writes a BGRA8 render target of identical dimensions, applying the documented
-// per-channel highlight roll-off + BT.709 OETF from hdr_tonemap.h. The result is
+// per-channel highlight roll-off + sRGB OETF from hdr_tonemap.h. The result is
 // an ordinary SDR desktop surface that the existing VideoProcessor path converts
 // to NV12/P010 unchanged.
 //
@@ -27,10 +27,18 @@ class HdrToneMapper {
     // sdr_scrgb_source is true.
     // sdr_scrgb_source: the source is an SDR desktop that merely happens to be
     // delivered as linear scRGB (Advanced Color Management). It carries no HDR
-    // headroom, so the pass clamps and applies the sRGB OETF instead of the
-    // highlight roll-off + BT.709 OETF (see OdCaptureMode::SdrScrgb).
+    // headroom, so the pass skips the highlight roll-off and applies the sRGB
+    // OETF alone (see OdCaptureMode::SdrScrgb). The transfer is the same on both
+    // paths; only the roll-off differs.
+    // paper_white_scale: the OS SDR reference white in reference-white multiples
+    // (SdrPaperWhiteScale in hdr_tonemap.h). On an HDR desktop Windows renders
+    // SDR content at that level rather than at scRGB's nominal 80 nits, so the
+    // pass divides by it before rolling off; without that an sRGB mid-grey comes
+    // out far too bright. Ignored when sdr_scrgb_source is true, where 1.0
+    // already means the display's own reference white. Defaults to the
+    // scene-referred identity.
     bool Init(ID3D11Device* device, ID3D11DeviceContext* context, UINT width, UINT height, float peak_scale,
-              bool sdr_scrgb_source, std::string& err);
+              bool sdr_scrgb_source, std::string& err, float paper_white_scale = 1.0f);
 
     // Tone-map src (FP16, must have D3D11_BIND_SHADER_RESOURCE) into dst (BGRA8,
     // must have D3D11_BIND_RENDER_TARGET). Both must be width x height. SRVs and

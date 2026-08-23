@@ -73,7 +73,7 @@ float4 main(float4 position : SV_POSITION, float2 texcoord : TEXCOORD0) : SV_TAR
 // HDR10 (PQ / BT.2020, 10-bit limited range) -> tone-mapped SDR BT.709. A
 // verbatim port of the CPU monitoring chain in hdr_preview.h /
 // P010PqPixelToMonitorBgr (DequantY10Limited/DequantC10Limited -> YcbcrToPqRgb
-// -> PqEotf -> Bt2020ToBt709 -> HdrToneMapChannel -> Bt709Oetf). The CPU
+// -> PqEotf -> Bt2020ToBt709 -> HdrToneMapChannel -> SrgbOetf). The CPU
 // version is the unit-tested source of truth; keep the two in sync.
 const char* kPqPixelShaderSrc = R"(
 Texture2D<uint> YPlane : register(t0);
@@ -122,9 +122,9 @@ float HdrToneMapChannel(float x, float peak) {
     return min(knee + head * s, 1.0f);
 }
 
-float Bt709Oetf(float l) {
+float SrgbOetf(float l) {
     l = saturate(l);
-    return l < 0.018f ? 4.5f * l : 1.099f * pow(l, 0.45f) - 0.099f;
+    return l <= 0.0031308f ? 12.92f * l : 1.055f * pow(l, 1.0f / 2.4f) - 0.055f;
 }
 
 float4 main(float4 position : SV_POSITION, float2 texcoord : TEXCOORD0) : SV_TARGET {
@@ -146,7 +146,7 @@ float4 main(float4 position : SV_POSITION, float2 texcoord : TEXCOORD0) : SV_TAR
         HdrToneMapChannel(lin709.g * kPqLinearToScrgb, peak_scale),
         HdrToneMapChannel(lin709.b * kPqLinearToScrgb, peak_scale));
 
-    float3 outRgb = float3(Bt709Oetf(sdrLinear.r), Bt709Oetf(sdrLinear.g), Bt709Oetf(sdrLinear.b));
+    float3 outRgb = float3(SrgbOetf(sdrLinear.r), SrgbOetf(sdrLinear.g), SrgbOetf(sdrLinear.b));
     return float4(outRgb, 1.0f);
 }
 )";

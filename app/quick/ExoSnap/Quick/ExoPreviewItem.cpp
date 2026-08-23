@@ -193,7 +193,7 @@ class PreviewTextureNode final : public QSGNode {
             std::string tone_map_error;
             const bool sdr_scrgb = tap_.transform == recorder_core::PreviewTapTransform::ScrgbSdr;
             if (!tone_mapper_->Init(device_.Get(), context_.Get(), width_, height_, tap_.peak_scale, sdr_scrgb,
-                                    tone_map_error)) {
+                                    tone_map_error, tap_.paper_white_scale)) {
                 error = QStringLiteral("Initializing the Quick HDR tone-map pass failed: %1")
                             .arg(QString::fromStdString(tone_map_error));
                 return;

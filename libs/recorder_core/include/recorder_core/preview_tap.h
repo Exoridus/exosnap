@@ -24,7 +24,7 @@ namespace recorder_core {
 enum class PreviewTapTransform : uint8_t {
     None,     // SDR surface (BGRA8 / R10G10B10A2): draw as-is
     ScrgbHdr, // linear scRGB FP16 from an HDR desktop: highlight roll-off +
-              // BT.709 OETF (HdrToneMapper with sdr_scrgb_source = false)
+              // sRGB OETF (HdrToneMapper with sdr_scrgb_source = false)
     ScrgbSdr, // linear scRGB FP16 from an SDR Advanced-Color desktop: sRGB OETF
               // only, no roll-off (HdrToneMapper with sdr_scrgb_source = true)
 };
@@ -35,6 +35,12 @@ struct PreviewTapDesc {
     // Display peak in reference-white multiples (HdrPeakScale in hdr_tonemap.h).
     // Meaningful for ScrgbHdr only; 1.0 otherwise.
     float peak_scale = 1.0f;
+    // The OS SDR reference white in the same units (SdrPaperWhiteScale). An HDR
+    // desktop renders SDR content at that level rather than at scRGB's nominal
+    // 80 nits, so the consumer must divide by it before rolling off. Meaningful
+    // for ScrgbHdr only -- an SDR Advanced-Color desktop is display-referred and
+    // needs no correction -- and 1.0 everywhere else.
+    float paper_white_scale = 1.0f;
 };
 
 struct PreviewTapPlan {
@@ -47,12 +53,13 @@ struct PreviewTapPlan {
 
 // Pure: the display transform for a RAW captured desktop frame (an idle
 // DXGI-hub source, no session policy applied). An FP16 desktop is linear scRGB:
-// tone-mapped when the display is actively HDR, sRGB-encoded when it is an SDR
-// Advanced-Color desktop (no headroom to roll off — encoding it with the HDR
-// roll-off + BT.709 OETF darkens the whole image; see OdCaptureMode::SdrScrgb).
+// tone-mapped when the display is actively HDR, encoded without the roll-off
+// when it is an SDR Advanced-Color desktop (no headroom to roll off -- the
+// roll-off would crush its reference white; see OdCaptureMode::SdrScrgb).
 // BGRA8 and the 10 bpc SDR desktop draw as-is. display_max_luminance_nits feeds
 // HdrPeakScale and is only trusted while the display is HDR-active.
 [[nodiscard]] PreviewTapDesc ResolveRawCaptureTapDesc(DXGI_FORMAT format, bool display_hdr_active,
+                                                      float sdr_white_level_nits,
                                                       float display_max_luminance_nits) noexcept;
 
 // Pure: decide whether a session's pre-encode surface can be tapped and which

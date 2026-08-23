@@ -55,12 +55,12 @@ TEST(HdrPreview, GamutRoundTripsToIdentity) {
 TEST(HdrPreview, ReferenceWhiteDecodesBrightNotFlat) {
     const P010Codes rw = EncodeScrgbNeutral(1.0f); // 80 nits, PQ-encoded
     const MonitorBgr px = P010PqPixelToMonitorBgr(rw.y, rw.cb, rw.cr, kPeak1000);
-    // Golden (CPU reference): 80-nit neutral tone-maps to ~233/255 on a 1000-nit
+    // Golden (CPU reference): 80-nit neutral tone-maps to ~235/255 on a 1000-nit
     // display, near-white and clearly above the ~124 mid-grey the raw-SDR
     // misinterpretation produced (the "washed out / flat" bug).
-    EXPECT_NEAR(px.r, 233, 1);
-    EXPECT_NEAR(px.g, 233, 1);
-    EXPECT_NEAR(px.b, 233, 1);
+    EXPECT_NEAR(px.r, 235, 1);
+    EXPECT_NEAR(px.g, 235, 1);
+    EXPECT_NEAR(px.b, 235, 1);
     // Neutral input stays neutral.
     EXPECT_EQ(px.r, px.g);
     EXPECT_EQ(px.g, px.b);
@@ -87,7 +87,7 @@ TEST(HdrPreview, BrighterInputsAreMonotonicUpToWhite) {
     EXPECT_LT(a.r, b.r);
     EXPECT_LT(b.r, c.r);
     EXPECT_EQ(c.r, 255); // content at the display peak clamps to white
-    EXPECT_NEAR(b.r, 249, 1);
+    EXPECT_NEAR(b.r, 250, 1);
 }
 
 // ---- Frame converter (P010 planar -> BGRA) tracks the reference -------------
