@@ -245,6 +245,19 @@ small or heavily scaled display never opens the window under the taskbar or off-
 preferred size, not a forced one: any valid persisted rect wins over it outright, and the window is
 freely resizable, maximizable and snappable afterwards.
 
+Owning the title bar never costs the window a native gesture. Every gesture Windows offers a normal
+window works here too: **double-clicking the band maximizes and restores**, dragging the band to the
+top edge maximizes it and to a side edge snaps it to that half, `Win`+arrow moves and snaps it,
+right-clicking the band or pressing `Alt`+`Space` opens the **system window menu**, and hovering the
+Maximize button offers the **Snap Layouts** flyout on Windows 11. Aero Shake and the native resize
+drag on all four edges and corners behave as they do anywhere else.
+
+A maximized window behaves like any other maximized window: it **cannot be resized**, the resize
+edges answer only in the windowed state, and both the Restore button and dragging the title bar
+downward return it to **exactly** the size and position it had before it was maximized — including
+after Windows itself maximized it through Snap, a double-click or `Win`+`Up`. Minimizing a maximized
+window and bringing it back from the taskbar returns it **maximized**, not windowed.
+
 The window is **already at its final position, size and maximized state on the first frame it
 shows**. It does not appear at one rect and move to another, and a window that was maximized when it
 was last closed comes back maximized without showing its normal size first.
@@ -403,8 +416,10 @@ Rules and notes:
     default) and **WebM**. Switching an AV1 selection to MP4 reconciles it to **H.264 + AAC**.
   - MP4 is delivered by **remuxing the transient MKV to a progressive, faststart MP4** via
     stream-copy on stop — no re-encode. During the remux the UI distinguishes **"Saving…"** (remux in
-    progress) from **"Saved"** (complete); the remux is cancellable and cancelling keeps the valid
-    MKV. If the remux fails, the playable MKV is retained and the error surfaced. The MP4 carries
+    progress) from **"Saved"** (complete), and the record control reports the remux's **progress as a
+    percentage** once the remuxer has measured one — before that it reads **"Finalizing…"** with no
+    number rather than a zero, because nothing has been observed yet. The remux is cancellable and
+    cancelling keeps the valid MKV. If the remux fails, the playable MKV is retained and the error surfaced. The MP4 carries
     **BT.709 color metadata**, and HEVC in MP4 uses the **`hvc1`** sample entry (parameter sets in
     `hvcC`) for Apple/QuickTime compatibility.
   - MP4 shows a calm informational note that it has lower crash resilience than MKV (the file is only
