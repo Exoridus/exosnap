@@ -3808,11 +3808,20 @@ void QuickApplication::hideWindowToTray() {
 void QuickApplication::restoreWindowFromTray() {
     if (!root_window_)
         return;
-    // showNormal() rather than show(): a window hidden while minimized comes back
-    // minimized otherwise, which reads to the user as the tray click doing
-    // nothing at all.
-    if (root_window_->visibility() == QWindow::Minimized || !root_window_->isVisible())
-        root_window_->showNormal();
+    // Two steps, and never showNormal(): that forces Qt::WindowNoState, so a
+    // window that was MAXIMIZED when it went to the tray came back windowed.
+    //
+    //  - show() makes a hidden window visible again and restarts rendering,
+    //    which no native call does. Qt applies its own window state here, and
+    //    that state follows Windows now.
+    //  - the native SW_RESTORE then un-minimizes, and it is the only one of the
+    //    two that honours WPF_RESTORETOMAXIMIZED -- the flag that decides
+    //    whether a minimized window comes back maximized. It is a no-op unless
+    //    the window is actually iconic.
+    if (!root_window_->isVisible())
+        root_window_->show();
+    if (auto* chrome = root_window_->findChild<QuickWindowChrome*>())
+        chrome->restoreWindow();
     root_window_->raise();
     root_window_->requestActivate();
     if (tray_presence_) {
@@ -3970,17 +3979,21 @@ bool QuickApplication::load(bool no_activate) {
         // is shown takes focus because Windows gives it focus, and a --no-activate
         // start withholds it through Qt::WindowDoesNotAcceptFocus in the flags,
         // which is already set by the time we get here.
-        if (auto* chrome = root_window->findChild<QuickWindowChrome*>())
+        auto* chrome = root_window->findChild<QuickWindowChrome*>();
+        if (chrome != nullptr)
             chrome->applyNativeWindowStyle();
         ApplyStartupWindowGeometry(root_window, restored.rect);
         TraceWindowGeometry("pre-show", root_window);
-        // showMaximized() rather than an initial `visibility`, and after the rect
-        // above: a maximized window still needs a restore rect, and the rect it
-        // un-maximizes to is whatever it stood on when it was maximized.
-        if (restored.maximized)
-            root_window->showMaximized();
-        else
-            root_window->show();
+        // Shown windowed first and maximized afterwards, never QWindow::
+        // showMaximized(): on this frameless window Qt answers that with a plain
+        // SetWindowPos onto the work area, which leaves Windows in SW_SHOWNORMAL
+        // and makes the work-area rect the rect the window un-maximizes to. The
+        // ordering matters for the same reason it did before -- a maximized window
+        // still needs the restore rect underneath it, and that is the rect placed
+        // above.
+        root_window->show();
+        if (restored.maximized && chrome != nullptr)
+            chrome->setWindowMaximized(true);
         TraceWindowGeometry("post-show", root_window);
 
         // Seeded with the rect the window is ACTUALLY on -- the resolved one --

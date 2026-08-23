@@ -899,6 +899,11 @@ qt_add_qml_module(record_controls_qml_tests
         PreviewMetricsOverlay.qml
         RecordActionButton.qml
         RecordSourceToggle.qml
+        # The Maximize button reconstructs hover, press and click from the
+        # non-client message stream, because returning HTMAXBUTTON hands its
+        # rectangle to Windows and Qt stops delivering mouse events there. That
+        # substitution is state, not pixels, so it is asserted here.
+        WindowChromeButton.qml
         # The release-notes surface. Both entry points, the one-time consumption
         # rules and the focus hand-back are behaviour rather than pixels, so they
         # are asserted here; --overlay-visual-state photographs the document.
