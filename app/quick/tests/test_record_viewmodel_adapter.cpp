@@ -466,5 +466,41 @@ TEST(RecordViewModelAdapterTest, RoutesNarrowCommandsWithoutServiceExposure) {
     EXPECT_EQ(webcam_overlay, QRectF(0.2, 0.3, 0.25, 0.25));
 }
 
+// The remux progress the Widgets shell used to show and the cutover dropped.
+// Its whole contract is the distinction between "no fraction measured" and
+// "0 %": a bar sitting at zero for the length of the first packet claims
+// progress that was never observed.
+TEST(RecordViewModelAdapterTest, SavingProgressStartsUnknownAndClampsToUnit) {
+    RecordViewModelAdapter adapter;
+    EXPECT_DOUBLE_EQ(adapter.savingProgress(), -1.0);
+
+    int notifications = 0;
+    QObject::connect(&adapter, &RecordViewModelAdapter::savingProgressChanged, [&notifications]() { ++notifications; });
+
+    // The coordinator's own start marker. It must not read as 0 %.
+    adapter.setSavingProgress(-1.0f);
+    EXPECT_DOUBLE_EQ(adapter.savingProgress(), -1.0);
+    EXPECT_EQ(notifications, 0);
+
+    adapter.setSavingProgress(0.42f);
+    // Against the WIDENED float, not the double literal: the coordinator reports
+    // a float and 0.42f widens to 0.41999998688697815.
+    EXPECT_DOUBLE_EQ(adapter.savingProgress(), static_cast<qreal>(0.42f));
+    EXPECT_EQ(notifications, 1);
+
+    // Idempotent: the remuxer reports once per video packet, thousands of times
+    // for a short clip, and an unchanged value must not wake the binding.
+    adapter.setSavingProgress(0.42f);
+    EXPECT_EQ(notifications, 1);
+
+    adapter.setSavingProgress(1.7f);
+    EXPECT_DOUBLE_EQ(adapter.savingProgress(), 1.0);
+
+    // Leaving Saving clears it, so the next recording cannot inherit this one's
+    // last fraction while its own remux is still silent.
+    adapter.setSavingProgress(-1.0f);
+    EXPECT_DOUBLE_EQ(adapter.savingProgress(), -1.0);
+}
+
 } // namespace
 } // namespace exosnap::quick

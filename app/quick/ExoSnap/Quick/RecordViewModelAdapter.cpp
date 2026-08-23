@@ -236,6 +236,22 @@ bool RecordViewModelAdapter::finalizing() const noexcept {
            (source_->state == UiRecordingState::Stopping || source_->state == UiRecordingState::Saving);
 }
 
+qreal RecordViewModelAdapter::savingProgress() const noexcept {
+    return saving_progress_;
+}
+
+void RecordViewModelAdapter::setSavingProgress(float fraction) {
+    // The coordinator posts -1 to mark the remux STARTING, before any packet has
+    // been counted. Treating that as 0 % would put a bar at zero and leave it
+    // there for however long the first packet takes; treating it as "unknown"
+    // keeps the label honest until there is something to report.
+    const qreal next = fraction < 0.0f ? -1.0 : static_cast<qreal>(std::clamp(fraction, 0.0f, 1.0f));
+    if (qFuzzyCompare(next, saving_progress_))
+        return;
+    saving_progress_ = next;
+    emit savingProgressChanged();
+}
+
 bool RecordViewModelAdapter::blocked() const noexcept {
     return source_ != nullptr && source_->state == UiRecordingState::Blocked;
 }

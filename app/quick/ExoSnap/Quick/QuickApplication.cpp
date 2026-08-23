@@ -457,6 +457,14 @@ void QuickApplication::initializeRecordWorkflow() {
     recording_coordinator_->SetWindowExclusiveEvidenceProvider(
         [this](const recorder_core::CaptureTarget& target) { return resolveWindowExclusiveEvidence(target); });
 
+    // QCR: the Widgets Record page consumed this and turned "Saving…" into
+    // "Saving… N%". It went out with that shell in the cutover, and
+    // PostRemuxProgress has been firing into an unset callback ever since --
+    // producer kept, consumer deleted. The Saving state is the one part of a
+    // recording the user cannot see the end of, so the number is the whole point.
+    recording_coordinator_->SetRemuxProgressCallback(
+        [this](float fraction) { record_view_model_adapter_.setSavingProgress(fraction); });
+
     recording_coordinator_->SetRecoveryManifestStore(&recovery_manifest_store_);
     recording_coordinator_->SetOutputSettings(live_config_.output);
     recording_coordinator_->SetVideoSettings(live_config_.video);
@@ -477,6 +485,11 @@ void QuickApplication::initializeRecordWorkflow() {
     wireRecordCommands();
 
     recording_coordinator_->SetStateChangedCallback([this](UiRecordingState state) {
+        // Cleared on the way out of Saving, and on the way in: a fraction left
+        // over from the previous recording would show as that recording's
+        // progress for as long as the next remux takes to report.
+        if (state != UiRecordingState::Saving)
+            record_view_model_adapter_.setSavingProgress(-1.0f);
         record_preview_adapter_.observeRecordingState(state);
         const UiRecordingState previous = record_view_model_.state;
         // A seeded visual scenario owns the state for the rest of the process.
