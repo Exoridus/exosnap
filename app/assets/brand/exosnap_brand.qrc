@@ -4,7 +4,10 @@
         <file>exosnap-logo-wordmark.svg</file>
         <file>exosnap-logo-idle.ico</file>
         <file>exosnap-logo-recording.ico</file>
+        <file>exosnap-logo-recording-p0.ico</file>
+        <file>exosnap-logo-recording-p1.ico</file>
         <file>exosnap-logo-paused.ico</file>
+        <file>exosnap-logo-saved.ico</file>
         <file>exosnap_wordmark-light-transparent.svg</file>
     </qresource>
 </RCC>

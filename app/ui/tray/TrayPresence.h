@@ -3,58 +3,52 @@
 #include <QString>
 #include <QSystemTrayIcon>
 
+#include "models/ShellPresence.h"
+
 class QAction;
 class QMenu;
 
 namespace exosnap::ui::tray {
 
 // ---------------------------------------------------------------------------
-// TrayIconState
-// ---------------------------------------------------------------------------
-// Canonical tray icon state — drives icon, tooltip, and menu item enable state.
-// Idle is the default; Recording/Paused are mutually exclusive live states.
-
-enum class TrayIconState {
-    Idle,      // Not recording — ready or blocked
-    Recording, // Active recording in progress (REC)
-    Paused,    // Recording paused (PAUSED)
-};
-
-// ---------------------------------------------------------------------------
 // TrayPresence
 // ---------------------------------------------------------------------------
 // Owns the QSystemTrayIcon and its context menu for the lifetime of the
-// application.  Fed by the existing chromeStateChanged signal path in
-// MainWindow: the owner calls applyState() on each state change.
+// application.
+//
+// It decides nothing. What the menu offers and which icon is shown come from the
+// shell projection (models/ShellPresence.h), which the taskbar's thumbnail
+// buttons read as well -- one table, two renderings. The tray used to re-derive
+// its state by parsing the status label, which is presentation and may be
+// localized.
 //
 // Design constraints (TRAY-PRESENCE-R1):
 //  - Does NOT change window lifecycle (no minimize-to-tray / hide-on-close).
-//  - Does NOT own timers; elapsed text, if shown, comes from the chromeRuntime-
-//    MetricsChanged signal and is passed in as an optional string.
-//  - Context-menu actions are wired to signals so the owner (MainWindow) can
-//    route them through its existing action handlers — no duplicated logic.
+//  - Does NOT own timers. Both the elapsed text and the recording heartbeat's
+//    frame are pushed in, so the tray cannot drift from the taskbar badge.
+//  - Menu actions are wired to signals so the owner routes them through its
+//    existing handlers -- no duplicated logic.
 
 class TrayPresence : public QObject {
     Q_OBJECT
   public:
-    // parent must be the MainWindow (QWidget) so that activate/raise works.
     explicit TrayPresence(QObject* parent = nullptr);
     ~TrayPresence() override;
 
-    // Apply the new tray state derived from the chrome state change.
-    // status_label: uppercase trimmed label ("REC", "PAUSED", "READY", …).
-    // elapsed_text: optional formatted elapsed string while recording; empty → omit.
-    void applyState(TrayIconState state, const QString& status_label, const QString& elapsed_text = {});
+    // Apply the shell projection.
+    //
+    // `elapsed_text` is the formatted elapsed string while recording; empty
+    // omits it. `pulse_frame` indexes the recording heartbeat and is ignored in
+    // every state but Recording.
+    void applyState(const ShellPresenceState& state, const QString& elapsed_text = {}, int pulse_frame = 0);
 
-    // Update only the elapsed text portion of the tooltip without changing the icon.
-    // Call from chromeRuntimeMetricsChanged while state is Recording or Paused.
+    // Update only the elapsed text portion of the tooltip without touching the
+    // icon. Called on the runtime-metrics cadence, which is far denser than the
+    // state changes.
     void updateElapsedText(const QString& elapsed_text);
 
     // Reflect whether the main window is currently visible (for "Show/Hide" action label).
     void setWindowVisible(bool visible);
-
-    // Reflect whether recording is blocked so the "Start recording" action is greyed out.
-    void setRecordingBlocked(bool blocked);
 
     // Show/hide the icon.  The tray icon is always present while the app runs,
     // so this is called once during app startup (show) and once at quit (hide).
@@ -63,7 +57,7 @@ class TrayPresence : public QObject {
 
     // ---- Unread notification badge (NOTIFY-SKIN-R1) ----------------------
     // Increment the unread count; updates the Notifications menu item label.
-    // Call from MainWindow when an actionable toast becomes visible.
+    // Call from the shell when an actionable toast becomes visible.
     void incrementUnreadCount();
 
     // Reset the unread count to zero; updates the menu item.
@@ -76,17 +70,27 @@ class TrayPresence : public QObject {
     }
 
     // Read-only introspection for tests.
-    [[nodiscard]] TrayIconState currentState() const {
-        return state_;
+    [[nodiscard]] ShellIconState currentIconState() const noexcept {
+        return state_.icon_state;
     }
     [[nodiscard]] QString currentTooltip() const;
+    // Which pre-rendered heartbeat frame the icon is currently showing.
+    [[nodiscard]] int currentPulseFrame() const noexcept {
+        return pulse_frame_;
+    }
 
     // Direct action accessors for unit testing.
     [[nodiscard]] QAction* showHideAction() const {
         return show_hide_action_;
     }
-    [[nodiscard]] QAction* recordToggleAction() const {
-        return record_toggle_action_;
+    [[nodiscard]] QAction* recordAction() const {
+        return record_action_;
+    }
+    [[nodiscard]] QAction* pauseResumeAction() const {
+        return pause_resume_action_;
+    }
+    [[nodiscard]] QAction* stopAction() const {
+        return stop_action_;
     }
     [[nodiscard]] QAction* notificationsAction() const {
         return notifications_action_;
@@ -103,8 +107,12 @@ class TrayPresence : public QObject {
     // both labels, so the menu offered to hide a window and then showed it.
     void hideWindowRequested();
 
-    // Emitted when the user clicks "Start/Stop recording" — route via
-    // MainWindow::recordToggleRequested to RecordPage (same path as hotkey).
+    // A transport entry was chosen. The same signal the taskbar's thumbnail
+    // buttons raise, carrying the same projection-resolved intent.
+    void shellActionRequested(ShellAction action);
+
+    // A double-click on the icon, which is "toggle recording" rather than a
+    // specific transport action -- the gesture has no state to read.
     void recordToggleRequested();
 
     // Emitted when the user clicks "Quit" in the context menu.
@@ -117,33 +125,31 @@ class TrayPresence : public QObject {
   private:
     void rebuildTooltip();
     void applyIcon();
-
+    void applyMenuState();
     void rebuildNotificationsLabel();
+    // Raises `action` only when the projection allows it. A menu item can be
+    // triggered by an accelerator between the state change and the repaint.
+    void requestAction(ShellButton button);
 
     QSystemTrayIcon* tray_icon_ = nullptr;
     QMenu* tray_menu_ = nullptr;
     QAction* show_hide_action_ = nullptr;
-    QAction* record_toggle_action_ = nullptr;
+    QAction* record_action_ = nullptr;
+    // One entry, two labels -- the same reason the taskbar spends one thumbnail
+    // slot on it: the two are mutually exclusive.
+    QAction* pause_resume_action_ = nullptr;
+    QAction* stop_action_ = nullptr;
     QAction* notifications_action_ = nullptr; // NOTIFY-SKIN-R1: unread badge mirror
     QAction* quit_action_ = nullptr;
 
-    TrayIconState state_ = TrayIconState::Idle;
-    QString status_label_;
+    ShellPresenceState state_;
     QString elapsed_text_;
+    int pulse_frame_ = 0;
     // False until the first applyState() call, so the initial state is written
     // through even when it equals the member defaults.
     bool state_applied_ = false;
     bool window_visible_ = true;
-    bool recording_blocked_ = false;
     int unread_count_ = 0; // NOTIFY-SKIN-R1
 };
-
-// ---------------------------------------------------------------------------
-// TrayPresenceStateMapper
-// ---------------------------------------------------------------------------
-// Pure function: map the chrome status label to a TrayIconState.
-// Testable without a QApplication.
-
-[[nodiscard]] TrayIconState TrayIconStateFromStatusLabel(const QString& status_label);
 
 } // namespace exosnap::ui::tray

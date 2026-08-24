@@ -44,6 +44,14 @@ Window {
     property string outputSizeText: ""
     property string sourceNameText: ""
 
+    // The recording heartbeat's phase, 0.0 at the trough and 1.0 at the peak.
+    // Pushed in from the ONE source every shell surface reads
+    // (ShellPresenceAdapter): the tray icon, the taskbar badge and this dot beat
+    // together because none of them owns a timer. It arrives quantized -- the
+    // icon surfaces can only swap between pre-rendered frames -- and is smoothed
+    // back out below, which is a rendering difference, not a second phase.
+    property real recordingPulse: 0
+
     // Resolved content flags (SettingsAdapter -> models::OverlayContentPolicy).
     property bool showElapsed: true
     property bool showOutputSize: false
@@ -139,6 +147,20 @@ Window {
 
         width: 10
         height: 10
+        // Only the recording dot breathes. Paused is held on purpose and a
+        // warning must not look like it is about to go away.
+        opacity: glyph.kind === "recording" ? 0.55 + 0.45 * root.recordingPulse : 1.0
+
+        // The phase arrives in steps, because the tray and the taskbar can only
+        // swap whole icons at that rate. Interpolating between them here costs
+        // nothing on a surface that is already a scene graph and turns the same
+        // beat into a breath rather than a blink.
+        Behavior on opacity {
+            NumberAnimation {
+                duration: 220
+                easing.type: Easing.InOutSine
+            }
+        }
         onKindChanged: requestPaint()
         onToneChanged: requestPaint()
         onPaint: {

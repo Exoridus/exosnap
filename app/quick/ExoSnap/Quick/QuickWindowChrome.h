@@ -87,7 +87,7 @@ class QuickWindowChrome : public QObject, public QAbstractNativeEventFilter {
     // resource ids are the same assets the Widgets shell switched between in
     // MainWindow::switchRecordingIcon; Paused takes precedence over Recording
     // there and the caller is expected to keep that precedence.
-    enum IconState { Idle, Recording, Paused };
+    enum IconState { Idle, Recording, Paused, Saved };
     Q_ENUM(IconState)
 
     // The default title band height matches ui::theme::ExoSnapMetrics::kTitlebarHeight (40).
@@ -155,6 +155,21 @@ class QuickWindowChrome : public QObject, public QAbstractNativeEventFilter {
     // button of the active window, none of which QML ever sees. One provider, one
     // outcome, whatever asked.
     void setMinimizeToTrayProvider(std::function<bool()> provider);
+
+    // Answers a WM_COMMAND. Returns true when the command was one of ours and
+    // Windows must not perform it. The handler is what the taskbar's thumbnail
+    // buttons arrive through: THBN_CLICKED is delivered as a WM_COMMAND, and this
+    // window has no menus and no accelerators of its own, so everything else in
+    // that message is somebody else's.
+    //
+    // A provider rather than a signal for the same reason as the minimize one
+    // below: the filter needs an ANSWER, and a signal has none.
+    void setNativeCommandHandler(std::function<bool(quint64)> handler);
+    [[nodiscard]] bool handleNativeCommand(quint64 wparam);
+
+    // The shell HWND as an opaque handle, for the per-HWND shell integrations
+    // that live outside this class. Null before attach and after detach.
+    [[nodiscard]] void* nativeHandle() const noexcept;
 
     // Answers a WM_SYSCOMMAND. Returns true when the command was taken over and
     // Windows must not perform it -- today only SC_MINIMIZE, and only while the
@@ -256,6 +271,18 @@ class QuickWindowChrome : public QObject, public QAbstractNativeEventFilter {
     // back.
     void minimizeToTrayRequested();
 
+    // Explorer created (or re-created, after its own restart) the taskbar button
+    // for this window. ITaskbarList3 is not usable before this: calls made
+    // earlier are accepted by COM and dropped, which looks exactly like a silent
+    // bug. Carried as a signal rather than acted on here -- what the taskbar
+    // button shows is product state, and this class owns none.
+    void taskbarButtonCreated();
+
+    // The native handle changed identity. Everything applied per-HWND -- display
+    // affinity, the taskbar button's registrations -- has to be re-asserted, and
+    // this is the one place a real recreation is observed.
+    void nativeHandleChanged();
+
   private:
     // `hwnd_` is the raw HWND but is typed as void* so this header stays free of
     // <windows.h> — it is included by moc-generated TUs and by any QML consumer.
@@ -277,6 +304,7 @@ class QuickWindowChrome : public QObject, public QAbstractNativeEventFilter {
     bool non_client_leave_tracked_ = false;
 
     std::function<bool()> minimize_to_tray_provider_;
+    std::function<bool(quint64)> native_command_handler_;
     MainWindowAffinity affinity_;
 
     // What the DWM border attribute was last set to, and on which handle. Mutable

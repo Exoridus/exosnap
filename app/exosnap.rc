@@ -3,3 +3,14 @@
 IDI_EXOSNAP_APP_ICON          ICON "assets/brand/exosnap-logo-idle.ico"
 IDI_EXOSNAP_APP_ICON_RECORDING ICON "assets/brand/exosnap-logo-recording.ico"
 IDI_EXOSNAP_APP_ICON_PAUSED   ICON "assets/brand/exosnap-logo-paused.ico"
+IDI_EXOSNAP_APP_ICON_SAVED    ICON "assets/brand/exosnap-logo-saved.ico"
+
+IDI_EXOSNAP_BADGE_RECORDING     ICON "assets/brand/exosnap-badge-recording.ico"
+IDI_EXOSNAP_BADGE_RECORDING_DIM ICON "assets/brand/exosnap-badge-recording-dim.ico"
+IDI_EXOSNAP_BADGE_PAUSED        ICON "assets/brand/exosnap-badge-paused.ico"
+IDI_EXOSNAP_BADGE_SAVED         ICON "assets/brand/exosnap-badge-saved.ico"
+
+IDI_EXOSNAP_THUMB_RECORD      ICON "assets/brand/exosnap-thumb-record.ico"
+IDI_EXOSNAP_THUMB_PAUSE       ICON "assets/brand/exosnap-thumb-pause.ico"
+IDI_EXOSNAP_THUMB_RESUME      ICON "assets/brand/exosnap-thumb-resume.ico"
+IDI_EXOSNAP_THUMB_STOP        ICON "assets/brand/exosnap-thumb-stop.ico"
