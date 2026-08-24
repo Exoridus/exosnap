@@ -3,6 +3,8 @@
 #include <capability/capability_builder.h>
 #include <capability/capability_set.h>
 #include <capability/config_types.h>
+#include <capability/container_compat_registry.h>
+#include <capability/support_level.h>
 
 #include <cstddef>
 
@@ -179,6 +181,56 @@ TEST(CapabilityMatrixTest, TenBitHevcAndAv1AreValidUnvalidated) {
         caps.QueryCombo(Container::WebM, VideoCodec::Av1, AudioCodec::Opus, ChromaSubsampling::Cs420, BitDepth::Bit10)
             .level,
         SupportLevel::ValidUnvalidated);
+}
+
+// ---------------------------------------------------------------------------
+// Registry level <-> user-selectability
+//
+// One gate, one answer. Documentation, the container matrix in the product spec
+// and the UI all describe what a user can actually pick, and this is the only
+// place that decides it: a combination is offered exactly when its registry
+// level is Recommended or Allowed. Experimental means technically muxable and
+// deliberately NOT offered -- the distinction that a support table has to keep.
+// ---------------------------------------------------------------------------
+
+TEST(CapabilityMatrixTest, OnlyRecommendedAndAllowedAreSelectable) {
+    const CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
+
+    for (const Container c : AllContainers()) {
+        for (const VideoCodec v : AllVideoCodecs()) {
+            for (const AudioCodec a : AllAudioCodecs()) {
+                const ContainerCompatLevel level = ContainerCompatRegistry::Query(c, v, a).level;
+                const bool registry_offers =
+                    level == ContainerCompatLevel::Recommended || level == ContainerCompatLevel::Allowed;
+                const SupportAnnotation annotation = caps.QueryCombo(c, v, a, ChromaSubsampling::Cs420, BitDepth::Bit8);
+
+                EXPECT_EQ(IsSelectable(annotation.level), registry_offers)
+                    << "container=" << static_cast<int>(c) << " video=" << static_cast<int>(v)
+                    << " audio=" << static_cast<int>(a) << " level=" << ToString(level);
+            }
+        }
+    }
+}
+
+TEST(CapabilityMatrixTest, Mp4Av1IsNotUserSelectable) {
+    // The claim the product spec's container matrix has to match: AV1-in-MP4 is
+    // Experimental in the registry and therefore never offered in 0.9.
+    const CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
+
+    for (const AudioCodec a : AllAudioCodecs()) {
+        EXPECT_FALSE(IsSelectable(
+            caps.QueryCombo(Container::Mp4, VideoCodec::Av1, a, ChromaSubsampling::Cs420, BitDepth::Bit8).level))
+            << "audio=" << static_cast<int>(a);
+    }
+
+    // The two MP4 video codecs that ARE offered, so the test above cannot pass by
+    // rejecting all of MP4.
+    EXPECT_TRUE(
+        caps.QueryCombo(Container::Mp4, VideoCodec::H264, AudioCodec::Aac, ChromaSubsampling::Cs420, BitDepth::Bit8)
+            .level == SupportLevel::Available);
+    EXPECT_TRUE(IsSelectable(
+        caps.QueryCombo(Container::Mp4, VideoCodec::Hevc, AudioCodec::Aac, ChromaSubsampling::Cs420, BitDepth::Bit8)
+            .level));
 }
 
 } // namespace

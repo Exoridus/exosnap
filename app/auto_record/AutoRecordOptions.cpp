@@ -67,7 +67,15 @@ bool ParseAutoRecordOptions(const QStringList& args, AutoRecordOptions* out, QSt
         if (arg == QStringLiteral("--auto-record")) {
             continue;
         } else if (arg == QStringLiteral("--enable-preview")) {
-            parsed.enable_preview = true;
+            // Was the switch into the Widgets-era off-screen preview mode, which
+            // no longer exists: the Quick frontend's Record preview is live for
+            // every --auto-record run, and bare mode has no preview at all.
+            // Accepting it silently would let a caller believe it selected
+            // something.
+            if (error)
+                *error = QStringLiteral("--enable-preview is no longer a mode: the Record preview is always live "
+                                        "under --auto-record on the application frontend, and bare mode has none");
+            return false;
         } else if (arg == QStringLiteral("--target")) {
             QString value;
             if (!require_value(&value) || !ParseTargetKind(value, &parsed.target)) {
@@ -222,16 +230,26 @@ bool ParseAutoRecordOptions(const QStringList& args, AutoRecordOptions* out, QSt
                 return false;
             bool ok = false;
             parsed.capture_frame_at_seconds = value.toInt(&ok);
-            if (!ok) {
+            if (!ok || parsed.capture_frame_at_seconds <= 0) {
                 if (error)
-                    *error = QStringLiteral("--capture-frame-at requires an integer");
+                    *error = QStringLiteral("--capture-frame-at requires a positive integer");
                 return false;
             }
         } else if (arg == QStringLiteral("--screenshot-path")) {
-            if (!require_value(&parsed.screenshot_path))
-                return false;
+            // Belonged to the same removed preview mode. Nothing wrote the path,
+            // so a run that asked for it succeeded with no artefact. The
+            // mid-recording still is reported as `snapshot_path` on the result
+            // line instead; a picture of the UI is --visual-test's job.
+            if (error)
+                *error = QStringLiteral("--screenshot-path is not supported by --auto-record; use --capture-frame-at "
+                                        "for a mid-recording still (its path is reported as snapshot_path), or "
+                                        "--visual-test to photograph the window");
+            return false;
         } else if (arg == QStringLiteral("--capture-frame-in-ready")) {
-            parsed.capture_frame_in_ready = true;
+            if (error)
+                *error = QStringLiteral("--capture-frame-in-ready is not supported by --auto-record; "
+                                        "--still-frame-validation covers the Ready/Recording/Paused capture path");
+            return false;
         } else if (arg == QStringLiteral("--benchmark-scenario")) {
             if (!require_value(&parsed.benchmark_scenario))
                 return false;
@@ -272,6 +290,17 @@ bool ParseAutoRecordOptions(const QStringList& args, AutoRecordOptions* out, QSt
     if (parsed.benchmark_scenario.trimmed().isEmpty() && parsed.benchmark_warmup_seconds > 0) {
         if (error)
             *error = QStringLiteral("--benchmark-warmup requires --benchmark-scenario");
+        return false;
+    }
+
+    // A capture scheduled at or past the stop deadline never fires, and the run
+    // would then report a missing artefact it was never given the chance to
+    // produce. Refuse it here instead.
+    if (parsed.capture_frame_at_seconds > 0 && parsed.capture_frame_at_seconds >= parsed.duration_seconds) {
+        if (error)
+            *error = QStringLiteral("--capture-frame-at %1 is not inside the %2 s recording")
+                         .arg(parsed.capture_frame_at_seconds)
+                         .arg(parsed.duration_seconds);
         return false;
     }
 

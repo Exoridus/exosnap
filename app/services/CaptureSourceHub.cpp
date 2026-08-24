@@ -2,6 +2,8 @@
 
 #include <utility>
 
+#include <recorder_core/logging/logging.h>
+
 namespace exosnap {
 
 using recorder_core::CaptureHubDecision;
@@ -43,11 +45,24 @@ void CaptureSourceHub::OpenProducer() {
     std::string err;
     if (producer_->Open(err)) {
         producer_open_ = true;
+        last_open_error_.clear();
         return;
     }
     // A source that will not open leaves the hub owning a capture with no live
-    // producer -- the holding state. Pump() retries it, without a deadline.
+    // producer -- the holding state. Pump() retries it, without a deadline, so
+    // without this line the reason is nowhere: consumers just keep seeing the
+    // held frame and the log stays silent for as long as the retry runs.
+    LogOpenFailure(err);
     Apply(CaptureHubEvent::SourceLost);
+}
+
+void CaptureSourceHub::LogOpenFailure(const std::string& err) {
+    if (err == last_open_error_)
+        return;
+    last_open_error_ = err;
+    recorder_core::logging::log(
+        recorder_core::logging::LogLevel::Warn, "capture_hub",
+        "capture source failed to open: " + (err.empty() ? std::string("no reason given") : err), {});
 }
 
 void CaptureSourceHub::CloseProducer() {
@@ -104,10 +119,12 @@ void CaptureSourceHub::Pump() {
         std::string err;
         if (producer_->Open(err)) {
             producer_open_ = true;
+            last_open_error_.clear();
             // Reopened, but not producing yet: consumers keep the held frame
             // until a frame actually arrives.
             Apply(CaptureHubEvent::ReopenSucceeded);
         } else {
+            LogOpenFailure(err);
             Apply(CaptureHubEvent::ReopenFailed);
         }
         return;

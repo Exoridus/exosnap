@@ -203,8 +203,12 @@ TEST(ContainerCompatRegistry, Selectable_Allowed_IsTrue) {
     EXPECT_TRUE(IsContainerCompatSelectable(ContainerCompatLevel::Allowed));
 }
 
-TEST(ContainerCompatRegistry, Selectable_Experimental_IsTrue) {
-    EXPECT_TRUE(IsContainerCompatSelectable(ContainerCompatLevel::Experimental));
+// Not "technically muxable is good enough": an Experimental combination stays out
+// of the UI until it is validated, which is also what CapabilitySet concludes by
+// mapping it to NotImplemented. While these two disagreed, the Settings dropdowns
+// offered combinations the engine then reconciled away.
+TEST(ContainerCompatRegistry, Selectable_Experimental_IsFalse) {
+    EXPECT_FALSE(IsContainerCompatSelectable(ContainerCompatLevel::Experimental));
 }
 
 TEST(ContainerCompatRegistry, Selectable_Fallback_IsFalse) {

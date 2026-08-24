@@ -11,6 +11,10 @@
 
 #include <winrt/Windows.Foundation.h>
 
+#include <recorder_core/wgc_acquire_classify.h>
+
+#include "../diagnostics/AppLog.h"
+
 namespace exosnap {
 
 namespace {
@@ -172,14 +176,24 @@ ProducerPoll WgcSourceProducer::PollFrame(HubFrame& out) {
         out.generation = ++generation_;
         return ProducerPoll::Frame;
     } catch (const winrt::hresult_error& e) {
-        switch (e.code()) {
-        case DXGI_ERROR_DEVICE_REMOVED:
-        case DXGI_ERROR_DEVICE_RESET:
-        case DXGI_ERROR_DEVICE_HUNG:
+        // Same classification the recording worker applies, so one HRESULT never
+        // means two different things in one product. The ACTION differs by design:
+        // a preview holds its last frame where a recording ends the session.
+        switch (recorder_core::ClassifyWgcAcquireFailure(e.code().value)) {
+        case recorder_core::WgcAcquireFailure::DeviceLost:
             return ProducerPoll::Fatal;
-        default:
+        case recorder_core::WgcAcquireFailure::SourceLost:
+            return ProducerPoll::Lost;
+        case recorder_core::WgcAcquireFailure::Unexpected:
+            // Held like a source loss -- a preview must not take the app down --
+            // but never silently: an unclassified code here is the one thing that
+            // would otherwise look identical to an ordinary blank.
+            diagnostics::AppLog::warning(QStringLiteral("wgc-producer"),
+                                         QStringLiteral("unexpected acquire failure 0x%1")
+                                             .arg(static_cast<uint32_t>(e.code().value), 8, 16, QLatin1Char('0')));
             return ProducerPoll::Lost;
         }
+        return ProducerPoll::Lost;
     }
 }
 

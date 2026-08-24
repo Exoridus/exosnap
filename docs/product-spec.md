@@ -384,7 +384,7 @@ registry that answers: allowed? recommended? experimental? fallback? warning?
 | Container | Video | Audio (offered) |
 |-----------|-------|-----------------|
 | MKV | AV1, HEVC, H.264 | Opus, AAC, PCM, FLAC |
-| MP4 | AV1, HEVC (`hvc1`), H.264 | AAC |
+| MP4 | HEVC (`hvc1`), H.264 | AAC |
 | WebM | AV1 | Opus |
 
 Rules and notes:
@@ -397,6 +397,10 @@ Rules and notes:
     `ipcm` (ISO/IEC 23003-5) sample entry, which many players and editors (Windows "Films & TV",
     QuickTime, several NLEs) do not play. MKV is PCM's home.
   - **FLAC in MP4** is not a 1.0 target.
+  - **AV1 in MP4 is deferred (experimental, not user-selectable):** the muxer can write it, but the
+    container pairing is not validated against the player/editor matrix, so the compatibility
+    registry classifies it as experimental and the UI never offers it. AV1 ships in **MKV** (the
+    default) and **WebM**. Switching an AV1 selection to MP4 reconciles it to **H.264 + AAC**.
   - MP4 is delivered by **remuxing the transient MKV to a progressive, faststart MP4** via
     stream-copy on stop — no re-encode. During the remux the UI distinguishes **"Saving…"** (remux in
     progress) from **"Saved"** (complete); the remux is cancellable and cancelling keeps the valid

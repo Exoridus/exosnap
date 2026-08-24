@@ -46,6 +46,7 @@
 #include <QScreen>
 #include <QSize>
 #include <QStringList>
+#include <QTextStream>
 #include <QTimer>
 #include <QVariantMap>
 
@@ -64,6 +65,15 @@
 #include <memory>
 
 namespace {
+
+// A rejected command line has to reach the person or script that typed it. This
+// is a GUI-subsystem binary, so qCritical alone lands in the log and nowhere the
+// caller can see -- an explicit rejection the caller cannot read is barely better
+// than a silent one. stdout is where the harness already prints its result line.
+void reportStartupError(const QString& message) {
+    QTextStream(stdout) << message << Qt::endl;
+    qCritical().noquote() << message;
+}
 
 QString visualOutputPath(const QStringList& arguments) {
     const int option_index = arguments.indexOf(QStringLiteral("--visual-test"));
@@ -614,7 +624,7 @@ int main(int argc, char* argv[]) {
     const exosnap::live_verify::ControlOptions live_verify_options =
         exosnap::live_verify::ParseControlOptions(arguments);
     if (live_verify_options.requested && !live_verify_options.error.isEmpty()) {
-        qCritical().noquote() << live_verify_options.error;
+        reportStartupError(live_verify_options.error);
         return 2;
     }
 
@@ -625,7 +635,7 @@ int main(int argc, char* argv[]) {
     const exosnap::services::UpdateFeedOverride update_feed_override =
         exosnap::services::ParseUpdateFeedOverride(arguments);
     if (update_feed_override.requested && !update_feed_override.error.isEmpty()) {
-        qCritical().noquote() << update_feed_override.error;
+        reportStartupError(update_feed_override.error);
         return 2;
     }
 
@@ -647,7 +657,7 @@ int main(int argc, char* argv[]) {
     if (auto_record_requested) {
         QString parse_error;
         if (!exosnap::auto_record::ParseAutoRecordOptions(arguments, &auto_record_options, &parse_error)) {
-            qCritical().noquote() << parse_error;
+            reportStartupError(parse_error);
             return 2;
         }
     }
@@ -659,7 +669,7 @@ int main(int argc, char* argv[]) {
     if (auto_edit_requested) {
         QString parse_error;
         if (!exosnap::quick::ParseAutoEditOptions(arguments, &auto_edit_options, &parse_error)) {
-            qCritical().noquote() << parse_error;
+            reportStartupError(parse_error);
             return 2;
         }
     }

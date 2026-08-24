@@ -114,9 +114,14 @@ class CaptureSourceHub {
     void OpenProducer();
     void CloseProducer();
     void Deliver(const HubFrame& frame);
+    void LogOpenFailure(const std::string& err);
 
     std::unique_ptr<HubSourceProducer> producer_;
     bool producer_open_ = false;
+    // Last open failure already logged. Pump() retries an unopenable source
+    // without a deadline, so the message is logged on change rather than on
+    // every attempt: once per distinct cause, not once per tick.
+    std::string last_open_error_;
 
     recorder_core::CaptureHubState state_{};
     HubFrame held_{};

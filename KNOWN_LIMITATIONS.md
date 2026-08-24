@@ -64,6 +64,10 @@ Supported encoders actually selectable in this build:
 Container/codec rules:
 
 - MP4 uses H.264 or HEVC (`hvc1`) + AAC. Opus, PCM, and FLAC are not offered for MP4.
+  - **AV1 in MP4 is deferred**: the pairing is muxable but not validated against the
+    player/editor matrix, so it is classified experimental and never offered. Record
+    AV1 to MKV (the default) or WebM. Switching an AV1 selection to MP4 reconciles it
+    to H.264 + AAC.
   - **PCM in MP4 is deferred**: the project's libavformat (avformat-62) emits the
     `ipcm` (ISO/IEC 23003-5) sample entry instead of the broadly-compatible QuickTime
     entries (`sowt`/`in24`/`lpcm`); confirmed via `ffprobe codec_tag_string=ipcm`.
@@ -367,11 +371,12 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
 
 ## Capture previews
 
-- **Source-picker tiles hold their last image** when a source stops producing
-  frames (another app takes the surface — dragging the Snipping Tool across the
-  desktop is the common case). The tile freezes rather than going empty or black,
-  and resumes when frames return. A source that has **never** produced a frame
-  shows "Preview unavailable" instead, because there is nothing to hold.
+- **The source picker shows no thumbnails.** "Change source" opens a named list —
+  displays, a "Region on <display>" entry per display, and application windows by
+  title — not a grid of live tiles. Picking an entry selects it and closes the
+  picker; the live picture of the chosen source is the Record page's own preview,
+  described below. Frame-accurate identification from the picker alone is
+  therefore not possible for two windows with the same title.
 - **A plain display preview shares the recording's capture backend.** The idle
   Record-page preview of a display is fed by a DXGI Output Duplication capture
   hub — the same backend the recording uses — so it is VRR- and HDR-true, shows

@@ -21,7 +21,7 @@ TEST(AutoRecordHarness, ParsesDefaults) {
     EXPECT_EQ(opts.target, TargetKind::Monitor);
     EXPECT_EQ(opts.duration_seconds, 10);
     EXPECT_EQ(opts.container, QStringLiteral("mkv"));
-    EXPECT_FALSE(opts.enable_preview);
+    EXPECT_EQ(opts.capture_frame_at_seconds, -1);
     EXPECT_EQ(opts.repeat_cycles, 1);
 }
 
@@ -179,21 +179,51 @@ TEST(AutoRecordHarness, RejectsNvencPresetOutsideTheRange) {
     }
 }
 
-TEST(AutoRecordHarness, ParsesCaptureFrameInReadyFlag) {
+// The three flags of the removed off-screen preview mode. They parsed cleanly and
+// then did nothing, so a run could ask for an artefact, be told it succeeded, and
+// produce none. An accepted no-op is the defect; an explicit rejection is not.
+TEST(AutoRecordHarness, RejectsRemovedPreviewModeFlags) {
+    for (const QString& flag : {QStringLiteral("--enable-preview"), QStringLiteral("--capture-frame-in-ready")}) {
+        AutoRecordOptions opts;
+        QString error;
+        const QStringList args = {QStringLiteral("exosnap.exe"), QStringLiteral("--auto-record"), flag};
+        EXPECT_FALSE(ParseAutoRecordOptions(args, &opts, &error)) << flag.toStdString();
+        EXPECT_FALSE(error.isEmpty()) << flag.toStdString();
+    }
+}
+
+TEST(AutoRecordHarness, RejectsScreenshotPath) {
     AutoRecordOptions opts;
     QString error;
     const QStringList args = {QStringLiteral("exosnap.exe"), QStringLiteral("--auto-record"),
-                              QStringLiteral("--enable-preview"), QStringLiteral("--capture-frame-in-ready")};
-    ASSERT_TRUE(ParseAutoRecordOptions(args, &opts, &error)) << error.toStdString();
-    EXPECT_TRUE(opts.capture_frame_in_ready);
+                              QStringLiteral("--screenshot-path"), QStringLiteral("shot.png")};
+    EXPECT_FALSE(ParseAutoRecordOptions(args, &opts, &error));
+    EXPECT_TRUE(error.contains(QStringLiteral("--capture-frame-at"))) << error.toStdString();
 }
 
-TEST(AutoRecordHarness, CaptureFrameInReadyDefaultsFalse) {
-    AutoRecordOptions opts;
-    QString error;
-    const QStringList args = {QStringLiteral("exosnap.exe"), QStringLiteral("--auto-record")};
-    ASSERT_TRUE(ParseAutoRecordOptions(args, &opts, &error)) << error.toStdString();
-    EXPECT_FALSE(opts.capture_frame_in_ready);
+// A capture at or past the stop deadline never fires. Accepting it would make the
+// run report a missing artefact it was never given the chance to produce.
+TEST(AutoRecordHarness, RejectsCaptureFrameAtOutsideTheRecording) {
+    for (const QString& at : {QStringLiteral("6"), QStringLiteral("9")}) {
+        AutoRecordOptions opts;
+        QString error;
+        const QStringList args = {QStringLiteral("exosnap.exe"),        QStringLiteral("--auto-record"),
+                                  QStringLiteral("--duration"),         QStringLiteral("6"),
+                                  QStringLiteral("--capture-frame-at"), at};
+        EXPECT_FALSE(ParseAutoRecordOptions(args, &opts, &error)) << at.toStdString();
+        EXPECT_FALSE(error.isEmpty()) << at.toStdString();
+    }
+}
+
+TEST(AutoRecordHarness, RejectsNonPositiveCaptureFrameAt) {
+    for (const QString& at : {QStringLiteral("0"), QStringLiteral("-1"), QStringLiteral("later")}) {
+        AutoRecordOptions opts;
+        QString error;
+        const QStringList args = {QStringLiteral("exosnap.exe"), QStringLiteral("--auto-record"),
+                                  QStringLiteral("--capture-frame-at"), at};
+        EXPECT_FALSE(ParseAutoRecordOptions(args, &opts, &error)) << at.toStdString();
+        EXPECT_FALSE(error.isEmpty()) << at.toStdString();
+    }
 }
 
 TEST(AutoRecordHarness, RejectsWindowTargetWithoutTitle) {

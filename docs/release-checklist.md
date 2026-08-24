@@ -62,10 +62,11 @@ a binary whose `ProductVersion` does not match the tag).
 - [ ] **In-app RC→RC update offer.** Natural RC → RC discovery requires the **running** build to
       embed its full RC version — that is true from `v0.9.0-rc4` on (see the RC2/RC3 defect note
       below; rc2/rc3 misidentify as `0.9.0` and can never be offered a later `0.9.0`-family tag).
-      The first natural pair that can prove this live is therefore **rc4 → rc5** (if one is cut) or
-      **rc4 → the final `v0.9.0`** right after the final publishes. Until then, prove the full
-      app→updater→install→relaunch path against the published rc4 artifacts with the
-      **verification reinstall mode** (`--verify-update-reinstall`, §7a).
+      Use the **newest already-published RC** (rc4 or later) as the baseline; today that is
+      `v0.9.0-rc10`. Where no newer build exists yet to be offered, prove the full
+      app→updater→install→relaunch path against the published artifacts of the RC under test with
+      the **verification reinstall mode** (`--verify-update-reinstall`, §7a) instead, and leave the
+      natural-discovery line open until the next candidate or the final tag publishes.
 - [ ] **If anything fails:** fix it, and cut the next candidate (`rc_N+1`) from the new commit.
       A published RC is never re-used or overwritten; the pipeline refuses to re-upload into an
       already-published Release.
@@ -143,20 +144,31 @@ this deterministically — there is no manual asset upload and no `sign-manifest
 ## 5. Updater RC live-check (manual, on real hardware)
 
 CI runs on GPU-less runners and cannot exercise a real swap. Run these against the RC prerelease from
-§3, by hand, from the previous shipped version to the RC build — but while the last shipped version
-(0.8.1) predates the swap updater (see the §3 note), use the newest swap-capable RC as the baseline
-instead: currently that means `v0.9.0-rc2` → `v0.9.0-rc3`. The test install must be on the
-**Preview** update channel to see the RC at all:
+§3, by hand, from the previous shipped version to the RC build — but the last shipped version (0.8.1)
+predates the swap updater (see the §3 note), so the baseline is the **newest already-published RC**
+instead.
 
-- [ ] **Portable happy-path swap (rc2 → rc3).** From a user-writable portable `v0.9.0-rc2` install
-      on the Preview channel, confirm `rc3` is offered, then click Update; the dedicated updater
-      downloads, verifies signature + hash, closes the app, does the staged-rename swap, verifies,
-      and relaunches on the RC. No UAC. Backup is discarded on the healthy start. (`v0.8.1` does not
-      ship the swap updater, so an 0.8.1 → RC run proves nothing about the swap path — a manual
-      install-over comparison from 0.8.1 may still be done separately, but it is not this check.)
-- [ ] **MSI happy-path via UAC (rc2 → rc3).** From the rc2 MSI-installed build on Preview, click
-      Update; accept the **single** UAC prompt; `msiexec /qn` applies the upgrade and the app
-      relaunches on rc3.
+**Which baseline is valid.** The baseline must embed its own full RC version, which is true from
+`v0.9.0-rc4` on (ADR 0054). rc1–rc3 embed the bare `0.9.0` and can never be offered a later
+`0.9.0`-family build, so they cannot serve as the baseline for any check below that begins with an
+update offer — the offer never appears. At the time of writing the newest published RC is
+`v0.9.0-rc10`; substitute whatever the newest published RC actually is when running this. The test
+install must be on the **Preview** update channel to see the RC at all:
+
+- [ ] **Portable happy-path swap (newest published RC → the RC under test).** From a user-writable
+      portable install of the baseline RC on the Preview channel, confirm the new RC is offered, then
+      click Update; the dedicated updater downloads, verifies signature + hash, closes the app, does
+      the staged-rename swap, verifies, and relaunches on the RC. No UAC. Backup is discarded on the
+      healthy start. (`v0.8.1` does not ship the swap updater, so an 0.8.1 → RC run proves nothing
+      about the swap path — a manual install-over comparison from 0.8.1 may still be done separately,
+      but it is not this check.)
+      - If this RC is the first candidate of the cycle and no newer build exists to be offered, the
+        mechanics — download, signature, hash, staged swap, relaunch, cleanup — are proven with the
+        **verification reinstall mode** (`--verify-update-reinstall`, §7a) instead, and this line
+        stays open until a second RC or the final tag makes a natural offer possible.
+- [ ] **MSI happy-path via UAC (newest published RC → the RC under test).** From the baseline RC's
+      MSI-installed build on Preview, click Update; accept the **single** UAC prompt; `msiexec /qn`
+      applies the upgrade and the app relaunches on the new RC.
 - [ ] **UAC-decline (case C1).** MSI path, decline the UAC prompt: the current version stays intact
       and the failure card is amber/retryable, naming the current version as safe to run.
 - [ ] **Unplugged-network download failure (case A1).** Disconnect the network mid-download: the
@@ -280,7 +292,8 @@ prerelease from §3, in addition to the automated gates and the updater RC live-
 
 ### RC3 regression live checks
 
-Targeted regressions for defects fixed in the rc3 cycle (drop truthfulness, WGC frame copies,
+Named after the cycle the defects were **fixed** in, not the build under test: these run against
+every subsequent candidate. Targeted regressions for defects fixed in the rc3 cycle (drop truthfulness, WGC frame copies,
 webcam fps negotiation, audio-timing, VFR epoch clamping). Run against the RC build on real
 hardware:
 
@@ -329,42 +342,45 @@ hardware:
       cleanup). That proves the mechanics only; it does **not** count as natural discovery. RC4's
       current acceptance gate is §7a below.
 
-### §7a — RC4 acceptance live checks (version identity + verification reinstall)
+### §7a — RC acceptance live checks (version identity + verification reinstall)
 
-RC4 introduces the full embedded release version and the verification-reinstall mode
-(ADR 0054/0055). Run these against the **published** rc4 artifacts:
+The full embedded release version and the verification-reinstall mode landed in rc4
+(ADR 0054/0055); every candidate from rc4 on is checked this way. `<rc>` below is the RC under test
+(`0.9.0-rc10` at the time of writing). Run these against the **published** artifacts of that RC, not
+against a local build:
 
 **Identity**
 
-- [ ] The published portable ZIP's `exosnap.exe` reports `ProductVersion == 0.9.0-rc4`
+- [ ] The published portable ZIP's `exosnap.exe` reports `ProductVersion == <rc>`
       (`(Get-Item exosnap.exe).VersionInfo.ProductVersion`), and the About page shows
-      **Version 0.9.0-rc4** with no *Unofficial build* / *Dirty source tree* notice.
-- [ ] `update-manifest.json` on the release carries `"version": "0.9.0-rc4"`, and **Copy details**
+      **Version `<rc>`** with no *Unofficial build* / *Dirty source tree* notice.
+- [ ] `update-manifest.json` on the release carries `"version": "<rc>"`, and **Copy details**
       pastes the full commit SHA, build ID, install mode, channel and the executable SHA-256
       matching the published artifact hash.
 
-**Natural discovery** (rc2/rc3 installs cannot prove this — they misidentify as `0.9.0`, see §3)
+**Natural discovery** (rc1–rc3 installs cannot prove this — they misidentify as `0.9.0`, see §3)
 
-- [ ] A Preview-channel rc4 install is **not** offered rc4 again in normal mode (`✓ Up to date`).
-- [ ] After the final `v0.9.0` publishes (or an rc5 is cut): the rc4 install **naturally** shows
-      `Update available — <ver>` and `Update to <ver>` launches the updater; complete it end to end
-      once for portable and once for MSI. A Stable-channel install never sees an rc.
+- [ ] A Preview-channel `<rc>` install is **not** offered `<rc>` again in normal mode
+      (`✓ Up to date`).
+- [ ] After the next candidate or the final `v0.9.0` publishes: the `<rc>` install **naturally**
+      shows `Update available — <ver>` and `Update to <ver>` launches the updater; complete it end
+      to end once for portable and once for MSI. A Stable-channel install never sees an rc.
 
 **Portable (verification reinstall, `--verify-update-reinstall`)**
 
-- [ ] Start rc4 portable with the flag: card shows `Verification reinstall available — 0.9.0-rc4` +
-      `Reinstall 0.9.0-rc4`; app log and support bundle record the active mode.
+- [ ] Start `<rc>` portable with the flag: card shows `Verification reinstall available — <rc>` +
+      `Reinstall <rc>`; app log and support bundle record the active mode.
 - [ ] Full path runs: close → swap → verify → relaunch → cleanup; installed EXE hash equals the
-      published rc4 hash; backup and temp directory removed afterwards.
+      published `<rc>` hash; backup and temp directory removed afterwards.
 - [ ] Interrupt the download once (kill network): old install intact, Retry works.
 - [ ] Updater refuses to close during the swap-critical steps.
-- [ ] Without the flag, the same rc4 is **not** offered (up to date); the flag does not survive a
+- [ ] Without the flag, the same `<rc>` is **not** offered (up to date); the flag does not survive a
       restart.
 
 **MSI (verification reinstall)**
 
 - [ ] Same-version reinstall over MSI: UAC decline leaves a retryable amber state; retry installs;
-      rc4 relaunches; installed EXE matches the published hash.
+      `<rc>` relaunches; installed EXE matches the published hash.
 
 **Guards**
 

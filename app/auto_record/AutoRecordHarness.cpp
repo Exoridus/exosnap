@@ -1,10 +1,12 @@
 #include "AutoRecordHarness.h"
 
 #include <filesystem>
+#include <memory>
 
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QTextStream>
@@ -146,14 +148,29 @@ capability::AudioUiState BuildAudioUiState(const AutoRecordOptions& options) {
 }
 
 QJsonObject ResultToJson(bool ok, const QString& output_path, const QString& session_report_path,
-                         const QString& error_detail) {
+                         const QString& error_detail, const QString& snapshot_path = QString()) {
     QJsonObject obj;
     obj.insert(QStringLiteral("status"), ok ? QStringLiteral("ok") : QStringLiteral("error"));
     obj.insert(QStringLiteral("output_path"), output_path);
     obj.insert(QStringLiteral("session_report_path"), session_report_path);
     obj.insert(QStringLiteral("error_detail"), error_detail);
+    // Present only when --capture-frame-at asked for one, so a reader can tell
+    // "not requested" from "requested and produced".
+    if (!snapshot_path.isEmpty())
+        obj.insert(QStringLiteral("snapshot_path"), snapshot_path);
     return obj;
 }
+
+// What became of the still --capture-frame-at asked for. The PNG is written on a
+// pool thread, so every field is only ever touched on the Qt main thread through
+// a queued call, and the struct outlives the cycle scope the callback was
+// installed from.
+struct SnapshotOutcome {
+    bool arrived = false;
+    bool ok = false;
+    QString path;
+    QString error;
+};
 
 void PrintResultLine(const QJsonObject& obj) {
     QTextStream(stdout) << QJsonDocument(obj).toJson(QJsonDocument::Compact) << Qt::endl;
@@ -290,6 +307,26 @@ int RunAutoRecordOnCoordinator(QCoreApplication& app, exosnap::RecordingCoordina
     const benchmark::Environment environment =
         benchmark_mode ? benchmark::CollectEnvironment() : benchmark::Environment{};
 
+    // Installed once, outside the cycle loop, and held by shared_ptr: the PNG is
+    // written on a coordinator-owned pool thread, so the callback must not point
+    // at anything whose lifetime ends with a cycle. Taking this slot displaces the
+    // frontend's own "frame captured" toast for the duration of the harness run,
+    // the same trade SetResultReadyCallback below already makes.
+    const auto still = std::make_shared<SnapshotOutcome>();
+    if (options.capture_frame_at_seconds > 0) {
+        coordinator.SetFrameCapturedCallback([&app, still](bool success, const QString& path, const QString& error) {
+            QMetaObject::invokeMethod(
+                &app,
+                [still, success, path, error]() {
+                    still->arrived = true;
+                    still->ok = success;
+                    still->path = path;
+                    still->error = error;
+                },
+                Qt::QueuedConnection);
+        });
+    }
+
     bool all_ok = true;
     for (int cycle = 0; cycle < options.repeat_cycles; ++cycle) {
         // Result is delivered via callback, posted to this (Qt main) thread by the
@@ -339,6 +376,7 @@ int RunAutoRecordOnCoordinator(QCoreApplication& app, exosnap::RecordingCoordina
         // cycle starts.
         QTimer captureFrameTimer;
         captureFrameTimer.setSingleShot(true);
+        *still = SnapshotOutcome{};
         if (options.capture_frame_at_seconds > 0) {
             // Optional mid-recording frame capture (PNG to the output folder).
             QObject::connect(&captureFrameTimer, &QTimer::timeout, &app,
@@ -432,6 +470,36 @@ int RunAutoRecordOnCoordinator(QCoreApplication& app, exosnap::RecordingCoordina
                                       : QStringLiteral("timed out waiting for the recording result");
         }
 
+        // A requested still that never reached disk is a failed run, not a
+        // successful recording with a missing side effect, the same rule the
+        // benchmark report below follows. Without it a caller can ask for a frame,
+        // be told the run succeeded, and find no artefact anywhere.
+        QString snapshot_path;
+        if (options.capture_frame_at_seconds > 0) {
+            if (!still->arrived) {
+                ok = false;
+                if (final_error.isEmpty())
+                    final_error = QStringLiteral("--capture-frame-at %1: no snapshot result arrived")
+                                      .arg(options.capture_frame_at_seconds);
+            } else if (!still->ok || still->path.isEmpty()) {
+                ok = false;
+                if (final_error.isEmpty()) {
+                    final_error =
+                        QStringLiteral("--capture-frame-at %1 failed: %2")
+                            .arg(options.capture_frame_at_seconds)
+                            .arg(still->error.isEmpty() ? QStringLiteral("no path was written") : still->error);
+                }
+            } else if (!QFileInfo::exists(still->path)) {
+                ok = false;
+                if (final_error.isEmpty())
+                    final_error = QStringLiteral("--capture-frame-at %1 reported %2, which does not exist")
+                                      .arg(options.capture_frame_at_seconds)
+                                      .arg(still->path);
+            } else {
+                snapshot_path = still->path;
+            }
+        }
+
         QString report_path;
         if (benchmark_mode) {
             const benchmark::RunConfig config = BuildBenchmarkRunConfig(options, frontend, cycle + 1, selected_target);
@@ -478,7 +546,7 @@ int RunAutoRecordOnCoordinator(QCoreApplication& app, exosnap::RecordingCoordina
             }
         }
 
-        PrintResultLine(ResultToJson(ok, final_output_path, report_path, final_error));
+        PrintResultLine(ResultToJson(ok, final_output_path, report_path, final_error, snapshot_path));
         if (out_last_outcome != nullptr)
             *out_last_outcome = outcome;
         all_ok = all_ok && ok;
