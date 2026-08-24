@@ -23,7 +23,6 @@ IVideoEncoder
 ├── NvencVideoEncoder      (current baseline)
 ├── AmfVideoEncoder        (later)
 ├── QsvVideoEncoder        (later)
-├── X264VideoEncoder       (software fallback)
 └── SvtAv1VideoEncoder     (optional software fallback)
 
 VideoEncoderFactory · CapabilityProbe · EncoderSelectionPolicy · EncoderDiagnosticsAdapter
@@ -32,9 +31,14 @@ VideoEncoderFactory · CapabilityProbe · EncoderSelectionPolicy · EncoderDiagn
 - **Hardware encoders use native SDKs** (NVENC, AMF, QSV/oneVPL) — not a single "everything through
   FFmpeg" path. This enables direct D3D11-surface use, no needless copies, precise capability
   detection, native forced-keyframe / rate-control / HDR features, and clearer vendor-specific errors.
-- **Software H.264 is x264** (`GPL-2.0-or-later`, compatible with the project's GPL model). x264 sits
-  behind the encoder factory with its own distribution/license gate — never wired directly into the
-  video thread. A license + patent-distribution audit must precede the first release that ships x264.
+- **ExoSnap bundles no software H.264/HEVC encoder.** x264 and x265 are license-compatible with this
+  project (both `GPL-2.0-or-later`, and ExoSnap is `GPL-3.0-or-later`) — what stopped them is
+  **patents**, not licensing: distributing an AVC/HEVC encoder invites royalty claims that this
+  project has no legal budget to clear (ADR 0007, revised 2026-07-23). The bundled FFmpeg build is
+  deliberately LGPL-only for the same reason, and `THIRD_PARTY_NOTICES.md` states that no
+  `libx264`/`libx265` is compiled in. Software AVC/HEVC, if it is ever offered, is opt-in detection
+  of an FFmpeg the **user** installed, invoked across a process boundary — never linked into
+  `exosnap.exe`, never built or hosted by this project.
 - **Media Foundation is transitional only.** It is not used for new preferred encoder paths; it may
   remain as a narrowly-scoped Windows fallback or legacy MP4 path until replaced.
 
@@ -80,9 +84,9 @@ Encoders must never be forced to present as "CRF" when they don't use it.
 | `0.6.0`  | Audio v2                           | Per-track gain, mute, brickwall limiter, mic AGC, optional noise gate / high-pass / RNNoise, PCM, FLAC, channel/sample-format model. |
 | `0.7.0`  | HDR and final codec matrix         | Finalize HEVC/AVC/AV1, 8-/10-bit, HDR10, color metadata, P010 compositor path, `hvc1`, MKV/MP4/WebM final matrix, Apple + NLE tests. |
 | `0.8.0`  | Diagnostics as a feature           | First-class diagnostics engine (ADR 0033): `FixAction` model, pre-flight readiness gate, low-cost live monitoring (drops/drift/disk-ETA, encoder-vs-capture-vs-disk-bound classification), root-cause correlation (e.g. VRR-vs-CFR judder), incident→check catalog. Post-flight kept minimal (report card; full integrity review handed to 0.9.0). `PresentProvider` interface with PresentMon (tearing/game-present) as an opt-in, elevation-gated provider. The same in-process ETW consumer also powers a **DPC/ISR-latency check** (LatencyMon-style: names the offending kernel driver behind "smooth game, stuttery/crackling recording") — high-value, near-free once the ETW session exists. **Phase-correct CFR frame pacing** (ADR 0035): GPU-only, present-time-aware frame *selection* (not blending) so uncapped VRR / high-refresh sources record to smooth, judder-free 60 fps — pulled forward from 0.10.0; the engine-side fix for the judder that 0.8.0 *diagnoses* (a select control + a `FixAction`; default Smooth; no elevation). |
-| `0.9.0`  | Edit / Output / Save               | Quick Trim (stream copy, keyframe-exact), marker display, marker JSON sidecar export (ADR 0042 — container chapters deliberately not written, not merely deferred); Edit/Output/Save surface (ADR 0022) as interactive shell; the "Review" step consumes the post-flight diagnostic report from 0.8.0. |
-| `0.10.0` | Reliability hardening (vendor-independent) | Long-recording soak, A/V-sync drift validation, recovery drills, updater/installer/signing/SmartScreen reputation, privacy review, fullscreen/borderless/exclusive capture matrix (deferred from 0.3.0). The vendor-independent half of the former `0.12.x`. The developer harness for the first three (headless `exosnap-soak` tool, the `av-sync-check.py` drift analyzer, and the recovery drill matrix) landed early and is documented in [`docs/dev/soak-and-recovery-drills.md`](dev/soak-and-recovery-drills.md); its thresholds are advisory, not a release gate. |
-| `0.11.0` | Software encoding (SVT-AV1 only)   | Optional SVT-AV1, GPU→CPU readback, performance warnings, fallback policy, software capability matrix. x264/HEVC software encoding is **not** bundled by ExoSnap (see ADR 0007, revised 2026-07-23: patent-licensing risk without legal budget to clear it) — if offered at all, it is a post-`1.0`, opt-in detection of a user-supplied FFmpeg install, never built/hosted by ExoSnap. |
+| `0.9.0`  | Edit / Output / Save               | Quick Trim (stream copy, keyframe-exact), marker display, marker JSON sidecar export (ADR 0042 — container chapters deliberately not written, not merely deferred); Edit/Output/Save surface (ADR 0022) as interactive shell; the "Review" step consumes the post-flight diagnostic report from 0.8.0. Also carries two verification additions that need no product surface: a **synthetic `IAudioCaptureSource`** so sample rates, bit depths, discontinuities, gap-fill and clock drift are covered deterministically without an audio device (Windows offers no user-mode virtual audio device — that is a kernel driver, see below), and the module-boundary work that makes "the engine knows no UI" a build-enforced rule rather than a written one. |
+| `0.10.0` | Reliability hardening + automation surface | Long-recording soak, A/V-sync drift validation, recovery drills, updater/installer/signing/SmartScreen reputation, privacy review, fullscreen/borderless/exclusive capture matrix (deferred from 0.3.0). The vendor-independent half of the former `0.12.x`. Carries the **automation surface** the software-encoder theme vacated (see `0.11.0`): a headless CLI over the engine, and an **MCP server on top of that CLI** — never on the engine directly, so validation and authorization stay in one place. Both depend on the coordinator moving out of the GUI target, which is the first slice of this wave. The developer harness for the first three (headless `exosnap-soak` tool, the `av-sync-check.py` drift analyzer, and the recovery drill matrix) landed early and is documented in [`docs/dev/soak-and-recovery-drills.md`](dev/soak-and-recovery-drills.md); its thresholds are advisory, not a release gate. |
+| `0.11.0` | Software encoding (SVT-AV1 only)   | Optional SVT-AV1, GPU→CPU readback, performance warnings, fallback policy, software capability matrix. x264/HEVC software encoding is **not** bundled by ExoSnap (see ADR 0007, revised 2026-07-23: patent risk without a legal budget to clear it) — if offered at all, it is opt-in detection of an FFmpeg the **user** installed, invoked as a separate process and never linked, with the install instructions kept in this repository's wiki. That decision is what freed this wave's original weight for the `0.10.0` automation surface. |
 | `0.12.0` | AMD hardware                       | Native AMF, hardware test matrix, diagnostics provider, fallback behavior. |
 | `0.13.0` | Intel hardware                     | Native oneVPL/QSV, allocator/surface integration, hardware test matrix, diagnostics provider, fallback behavior. |
 | `1.0.0`  | First stable release (cross-vendor RC gate) | Cross-vendor matrix + quality-validation matrix (SSIM/VMAF, A/V-sync, long recordings across all vendors) — the vendor-dependent half of RC stabilization. Ships only once these promises are genuinely validated. |
