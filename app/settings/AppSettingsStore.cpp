@@ -62,6 +62,12 @@ PersistedAppSettings AppSettingsStore::Load() const {
     persisted.window_geometry.width = settings.value(QStringLiteral("width"), -1).toInt();
     persisted.window_geometry.height = settings.value(QStringLiteral("height"), -1).toInt();
     persisted.window_geometry.maximized = settings.value(QStringLiteral("maximized"), false).toBool();
+    // Minimize-to-tray opt-in (default OFF). Closing is not a preference at all:
+    // the close button always closes.
+    persisted.minimize_to_tray = settings.value(QStringLiteral("minimize_to_tray"), false).toBool();
+    // Capture-exclusion opt-in (default OFF). Both keys must read as OFF when
+    // absent -- each of them hides the window in its own way.
+    persisted.hide_window_from_capture = settings.value(QStringLiteral("hide_window_from_capture"), false).toBool();
     settings.endGroup();
 
     settings.beginGroup(QStringLiteral("overlay"));
@@ -90,13 +96,6 @@ PersistedAppSettings AppSettingsStore::Load() const {
     // "Open editor when finished" toggle (default ON).
     // Pre-1.0: no migration; missing key defaults to true.
     persisted.open_editor_when_finished = settings.value(QStringLiteral("open_editor_when_finished"), true).toBool();
-    settings.endGroup();
-
-    settings.beginGroup(QStringLiteral("tray"));
-    // TRAY-CLOSE-TO-TRAY-R1: close-to-tray opt-in (default OFF).
-    persisted.keep_running_in_tray = settings.value(QStringLiteral("keep_running_in_tray"), false).toBool();
-    // TRAY-CLOSE-TO-TRAY-R1: one-time close notice shown flag (default false).
-    persisted.tray_close_notice_shown = settings.value(QStringLiteral("tray_close_notice_shown"), false).toBool();
     settings.endGroup();
 
     settings.beginGroup(QStringLiteral("presence"));
@@ -243,6 +242,8 @@ bool AppSettingsStore::Save(const PersistedAppSettings& settings_snapshot) const
     settings.setValue(QStringLiteral("width"), settings_snapshot.window_geometry.width);
     settings.setValue(QStringLiteral("height"), settings_snapshot.window_geometry.height);
     settings.setValue(QStringLiteral("maximized"), settings_snapshot.window_geometry.maximized);
+    settings.setValue(QStringLiteral("minimize_to_tray"), settings_snapshot.minimize_to_tray);
+    settings.setValue(QStringLiteral("hide_window_from_capture"), settings_snapshot.hide_window_from_capture);
     settings.endGroup();
 
     settings.beginGroup(QStringLiteral("overlay"));
@@ -261,13 +262,6 @@ bool AppSettingsStore::Save(const PersistedAppSettings& settings_snapshot) const
 
     settings.beginGroup(QStringLiteral("editor"));
     settings.setValue(QStringLiteral("open_editor_when_finished"), settings_snapshot.open_editor_when_finished);
-    settings.endGroup();
-
-    settings.beginGroup(QStringLiteral("tray"));
-    // TRAY-CLOSE-TO-TRAY-R1: close-to-tray opt-in.
-    settings.setValue(QStringLiteral("keep_running_in_tray"), settings_snapshot.keep_running_in_tray);
-    // TRAY-CLOSE-TO-TRAY-R1: one-time close notice shown flag.
-    settings.setValue(QStringLiteral("tray_close_notice_shown"), settings_snapshot.tray_close_notice_shown);
     settings.endGroup();
 
     settings.beginGroup(QStringLiteral("presence"));

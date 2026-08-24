@@ -20,30 +20,6 @@ namespace exosnap::ui::tray {
 namespace {
 
 // ---------------------------------------------------------------------------
-// Pure-logic tests: ShouldHideToTray (TRAY-CLOSE-TO-TRAY-R1)
-// ---------------------------------------------------------------------------
-
-TEST(ShouldHideToTrayTest, AllConditionsMet_ReturnsTrue) {
-    EXPECT_TRUE(ShouldHideToTray(/*keep=*/true, /*force=*/false, /*tray_available=*/true));
-}
-
-TEST(ShouldHideToTrayTest, SettingOff_ReturnsFalse) {
-    EXPECT_FALSE(ShouldHideToTray(/*keep=*/false, /*force=*/false, /*tray_available=*/true));
-}
-
-TEST(ShouldHideToTrayTest, ForceQuit_ReturnsFalse) {
-    EXPECT_FALSE(ShouldHideToTray(/*keep=*/true, /*force=*/true, /*tray_available=*/true));
-}
-
-TEST(ShouldHideToTrayTest, TrayUnavailable_ReturnsFalse) {
-    EXPECT_FALSE(ShouldHideToTray(/*keep=*/true, /*force=*/false, /*tray_available=*/false));
-}
-
-TEST(ShouldHideToTrayTest, AllFalse_ReturnsFalse) {
-    EXPECT_FALSE(ShouldHideToTray(/*keep=*/false, /*force=*/true, /*tray_available=*/false));
-}
-
-// ---------------------------------------------------------------------------
 // Pure-logic tests: TrayIconStateFromStatusLabel
 // ---------------------------------------------------------------------------
 

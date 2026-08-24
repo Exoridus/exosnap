@@ -209,6 +209,8 @@ qt_add_qml_module(exosnap
         ShellAdapter.h
         WhatsNewAdapter.cpp
         WhatsNewAdapter.h
+        MainWindowAffinity.cpp
+        MainWindowAffinity.h
         QuickWindowChrome.cpp
         QuickWindowChrome.h
         QuickWindowGeometry.cpp
@@ -254,6 +256,8 @@ target_sources(exosnap
         ${PROJECT_SOURCE_DIR}/app/models/EditContextFactory.h
         ${PROJECT_SOURCE_DIR}/app/models/CloseGuardPolicy.cpp
         ${PROJECT_SOURCE_DIR}/app/models/CloseGuardPolicy.h
+        ${PROJECT_SOURCE_DIR}/app/models/WindowPresencePolicy.cpp
+        ${PROJECT_SOURCE_DIR}/app/models/WindowPresencePolicy.h
         ${PROJECT_SOURCE_DIR}/app/models/RecordingFailurePolicy.cpp
         ${PROJECT_SOURCE_DIR}/app/models/RecordingFailurePolicy.h
         ${PROJECT_SOURCE_DIR}/app/models/OverlayContentPolicy.cpp
@@ -1462,6 +1466,44 @@ target_include_directories(shell_adapter_tests
 )
 
 target_compile_definitions(shell_adapter_tests PRIVATE NOMINMAX)
+
+# What the shell window does when it is not wanted on screen: where a minimize
+# goes, and whether the window is in a capture. Both decisions are read on paths
+# that own an HWND and a message pump, which is where they stop being testable --
+# so the policy is pure and the affinity seam takes its platform call through a
+# function it can be handed a stub for.
+exosnap_add_gtest(
+    NAME window_presence_tests
+    TEST_PREFIX quick_window_presence.
+    SOURCES
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_window_presence.cpp
+        MainWindowAffinity.cpp
+        MainWindowAffinity.h
+        # The chrome is here for one reason: both minimize routes -- the title
+        # bar's button and the SC_MINIMIZE Windows sends -- have to be shown
+        # consulting the SAME provider, and neither needs a window to reach that
+        # decision.
+        QuickWindowChrome.cpp
+        QuickWindowChrome.h
+        QuickWindowGeometry.cpp
+        QuickWindowGeometry.h
+        ${PROJECT_SOURCE_DIR}/app/ui/WindowGeometryPolicy.cpp
+        ${PROJECT_SOURCE_DIR}/app/models/WindowPresencePolicy.cpp
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/AppLog.cpp
+    LIBRARIES
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Quick
+)
+
+target_include_directories(window_presence_tests
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${PROJECT_SOURCE_DIR}/app
+)
+
+target_compile_definitions(window_presence_tests PRIVATE NOMINMAX)
+set_target_properties(window_presence_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
     NAME edit_qml_adapter_tests

@@ -14,6 +14,10 @@ namespace exosnap::quick {
 // page: today the close guards, which decide whether the window may close at
 // all.
 //
+// A close is decided HERE and by nothing else. There is no preference that turns
+// it into a hide -- putting the window away is the minimize gesture's job
+// (models/WindowPresencePolicy), which never travels this path.
+//
 // The asymmetry with the Widgets shell is deliberate. There, `closeEvent` ran
 // `QMessageBox::exec()` and read the answer on the next line. A QML dialog has
 // no `exec()`, so the sequence has to be split: `requestClose()` samples the
@@ -76,14 +80,6 @@ class ShellAdapter : public QObject {
     // invoked on every close attempt so the answer is never stale.
     void setStateProvider(std::function<CloseGuardState()> provider);
 
-    // Answers "should this close attempt hide to the tray instead of closing?".
-    // Set once by QuickApplication, which owns the persisted `keep running in
-    // tray` preference, the force-quit latch and the tray icon itself. Consulted
-    // BEFORE the close guards, mirroring the Widgets shell: hiding to the tray
-    // must not interrogate the user about a recording that is deliberately meant
-    // to keep running. Absent (or returning false) means the guards decide.
-    void setHideToTrayProvider(std::function<bool()> provider);
-
     [[nodiscard]] int currentPage() const noexcept;
     void setCurrentPage(int page);
     [[nodiscard]] bool editSurfaceVisible() const noexcept;
@@ -134,18 +130,12 @@ class ShellAdapter : public QObject {
     void closeGuardChanged();
     // Every guard has cleared; the frontend may close the window now.
     void closeApproved();
-    // This close attempt resolved to "hide to the tray". The window must stay
-    // alive: recording, hotkeys and every service keep running behind it. The
-    // hide itself is the application's to perform — this adapter holds no window
-    // reference, the same way it holds no service references.
-    void hideToTrayRequested();
-
     // Every outcome of requestClose(), reported so the decision is recoverable from
-    // a log. Three of the outcomes are indistinguishable from outside the process --
-    // the window simply stays -- so a user reporting "Quit did nothing" otherwise
-    // leaves nothing behind that says whether the product refused, asked something
-    // nobody saw, or failed to tear down. `kind` is one of the CloseGuardKind keys
-    // or "hideToTray".
+    // a log. Every outcome except "allow" is indistinguishable from outside the
+    // process -- the window simply stays -- so a user reporting "Quit did nothing"
+    // otherwise leaves nothing behind that says whether the product refused, asked
+    // something nobody saw, or failed to tear down. `kind` is one of the
+    // CloseGuardKind keys.
     void closeDecided(const QString& kind, bool recording, bool exporting, bool remuxing);
     // Effects the application must apply. Emitted rather than executed here so
     // the adapter keeps no service references.
@@ -160,7 +150,6 @@ class ShellAdapter : public QObject {
     void clearPrompt();
 
     std::function<CloseGuardState()> state_provider_;
-    std::function<bool()> hide_to_tray_provider_;
     CloseGuardPrompt prompt_;
     // Conditions the user has already answered "proceed" for during this close
     // attempt. Without them the re-evaluation after a confirm would show the

@@ -629,76 +629,76 @@ TEST(AppSettingsStoreTest, AppSettingsStore_EmptyPath_SaveIsNoOp) {
     EXPECT_FALSE(store.Save(settings));
 }
 
-// TRAY-CLOSE-TO-TRAY-R1: keep_running_in_tray + tray_close_notice_shown round-trip tests
+// Window presence: minimize_to_tray + hide_window_from_capture round-trip tests
 
-TEST(AppSettingsStoreTest, AppSettingsStore_DefaultKeepRunningInTrayIsFalse) {
+TEST(AppSettingsStoreTest, AppSettingsStore_DefaultMinimizeToTrayIsFalse) {
     PersistedAppSettings settings;
-    EXPECT_FALSE(settings.keep_running_in_tray);
+    EXPECT_FALSE(settings.minimize_to_tray);
 }
 
-TEST(AppSettingsStoreTest, AppSettingsStore_DefaultTrayCloseNoticeShownIsFalse) {
+TEST(AppSettingsStoreTest, AppSettingsStore_DefaultHideWindowFromCaptureIsFalse) {
     PersistedAppSettings settings;
-    EXPECT_FALSE(settings.tray_close_notice_shown);
+    EXPECT_FALSE(settings.hide_window_from_capture);
 }
 
-TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_KeepRunningInTray_True) {
+TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_MinimizeToTray_True) {
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
 
     AppSettingsStore store(TempSettingsPath(temp_dir));
     PersistedAppSettings settings;
-    settings.keep_running_in_tray = true;
+    settings.minimize_to_tray = true;
     ASSERT_TRUE(store.Save(settings));
 
     const PersistedAppSettings loaded = store.Load();
-    EXPECT_TRUE(loaded.keep_running_in_tray);
+    EXPECT_TRUE(loaded.minimize_to_tray);
 }
 
-TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_KeepRunningInTray_False) {
+TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_MinimizeToTray_False) {
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
 
     AppSettingsStore store(TempSettingsPath(temp_dir));
     PersistedAppSettings settings;
-    settings.keep_running_in_tray = false;
+    settings.minimize_to_tray = false;
     ASSERT_TRUE(store.Save(settings));
 
     const PersistedAppSettings loaded = store.Load();
-    EXPECT_FALSE(loaded.keep_running_in_tray);
+    EXPECT_FALSE(loaded.minimize_to_tray);
 }
 
-TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_TrayCloseNoticeShown_True) {
+TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_HideWindowFromCapture_True) {
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
 
     AppSettingsStore store(TempSettingsPath(temp_dir));
     PersistedAppSettings settings;
-    settings.tray_close_notice_shown = true;
+    settings.hide_window_from_capture = true;
     ASSERT_TRUE(store.Save(settings));
 
     const PersistedAppSettings loaded = store.Load();
-    EXPECT_TRUE(loaded.tray_close_notice_shown);
+    EXPECT_TRUE(loaded.hide_window_from_capture);
 }
 
-TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_TrayCloseNoticeShown_False) {
+TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_HideWindowFromCapture_False) {
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
 
     AppSettingsStore store(TempSettingsPath(temp_dir));
     PersistedAppSettings settings;
-    settings.tray_close_notice_shown = false;
+    settings.hide_window_from_capture = false;
     ASSERT_TRUE(store.Save(settings));
 
     const PersistedAppSettings loaded = store.Load();
-    EXPECT_FALSE(loaded.tray_close_notice_shown);
+    EXPECT_FALSE(loaded.hide_window_from_capture);
 }
 
-TEST(AppSettingsStoreTest, AppSettingsStore_MissingTrayKeys_DefaultToFalse) {
+TEST(AppSettingsStoreTest, AppSettingsStore_MissingWindowKeys_DefaultToFalse) {
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
     const QString settings_path = TempSettingsPath(temp_dir);
 
-    // Write a file without the [tray] group at all.
+    // Write a file without the [window] group at all.
     {
         QSettings s(settings_path, QSettings::IniFormat);
         s.beginGroup(QStringLiteral("overlay"));
@@ -709,9 +709,10 @@ TEST(AppSettingsStoreTest, AppSettingsStore_MissingTrayKeys_DefaultToFalse) {
 
     AppSettingsStore store(settings_path);
     const PersistedAppSettings loaded = store.Load();
-    // Tray keys absent: must default to false.
-    EXPECT_FALSE(loaded.keep_running_in_tray);
-    EXPECT_FALSE(loaded.tray_close_notice_shown);
+    // Both settings hide the window in their own way, so an absent key must
+    // never read as ON.
+    EXPECT_FALSE(loaded.minimize_to_tray);
+    EXPECT_FALSE(loaded.hide_window_from_capture);
 }
 
 // QUICK-PILL-R1: show_quick_controls round-trip tests
