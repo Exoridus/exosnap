@@ -21,7 +21,7 @@ duplication.
 ### Model
 
 Add `gain_db` (`float`, default `0.0`) and `muted` (`bool`, default `false`) to
-`recorder_core::AudioSourceRow`. These are the primary user-visible controls.
+`exosnap::engine::AudioSourceRow`. These are the primary user-visible controls.
 
 The domain for `gain_db` is `[-60.0, +24.0]` dB (enforced by
 `SanitizePresetConfig`). At 0 dB the behavior is byte-identical to the previous

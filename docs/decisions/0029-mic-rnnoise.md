@@ -86,9 +86,9 @@ the third-party CMake and called out here:
 - **License.** `COPYING` is staged to `licenses/rnnoise.txt` via
   `_exosnap_install_license` and listed in `THIRD_PARTY_NOTICES.md`.
 
-`rnnoise` (alias `RNNoise::rnnoise`) is linked into `recorder_core`.
+`rnnoise` (alias `RNNoise::rnnoise`) is linked into `engine`.
 
-### DSP model (`libs/recorder_core/src/rnnoise_denoiser.{h,cpp}`)
+### DSP model (`libs/engine/src/rnnoise_denoiser.{h,cpp}`)
 
 RNNoise is strictly **mono**, runs on **exactly 480-sample (10 ms) blocks of
 48 kHz** audio, and expects samples in the **int16 range** (normalized `[-1, 1]`

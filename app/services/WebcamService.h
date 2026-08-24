@@ -4,7 +4,7 @@
 #include <QObject>
 #include <QPointer>
 #include <QString>
-#include <recorder_core/recorder_session.h>
+#include <exosnap/engine/recorder_session.h>
 
 #include <windows.h> // HRESULT / DWORD for ClassifyWebcamReadResult
 
@@ -23,7 +23,7 @@ namespace exosnap {
 // ---------------------------------------------------------------------------
 // How the capture loop must react to one IMFSourceReader::ReadSample() result.
 // Pure and MF-call-free (only inspects the returned HRESULT + reader flags) so the
-// loss-recovery policy is unit-pinned, mirroring recorder_core's
+// loss-recovery policy is unit-pinned, mirroring the engine's
 // ClassifyOdAcquireFailure. Any result that means the reader is dead maps to
 // Reconnect: the capture thread tears the reader down and polls to reopen the
 // device, while TryGetFrame keeps serving the last captured frame (frozen).
@@ -139,7 +139,7 @@ struct WebcamNativeFormat {
 
 // Captures from a webcam via Media Foundation IMFSourceReader.
 // Also implements WebcamFrameProvider so VideoThread can composite frames.
-class WebcamService : public recorder_core::WebcamFrameProvider {
+class WebcamService : public exosnap::engine::WebcamFrameProvider {
   public:
     using FrameCallback = std::function<void(QImage)>;
 

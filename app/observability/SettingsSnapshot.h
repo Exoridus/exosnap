@@ -29,7 +29,7 @@
 #include "settings/AppSettingsStore.h"
 
 #include <capability/resolver.h>
-#include <recorder_core/pipeline_diagnostics.h>
+#include <exosnap/engine/pipeline_diagnostics.h>
 
 #include <QJsonObject>
 #include <QString>
@@ -52,7 +52,7 @@ struct SettingsSnapshotInputs {
     // The encoder that is actually running (or that ran last). `valid == false`
     // means no encoder has been configured in this process, which is the honest
     // answer before the first recording -- never a fabricated copy of `effective`.
-    recorder_core::EncoderInitInfo running;
+    exosnap::engine::EncoderInitInfo running;
     // True while the pipeline is in the recording/paused lifecycle. False with a
     // valid `running` means "the last session ran with this", which is a
     // different statement and is reported as one.

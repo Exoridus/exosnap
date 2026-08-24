@@ -97,15 +97,20 @@ TEST(CommandLineFlags, DoubleDashEndsOptionParsing) {
         << error.toStdString();
 }
 
-// The three withdrawn preview-mode options stay registered on purpose: the
-// auto-record parser owns their message, which names the replacement. If the
-// generic validator claimed them first, that guidance would be lost.
-TEST(CommandLineFlags, WithdrawnPreviewFlagsPassTheRegistryAndAreRefusedByTheirOwnParser) {
+// The Ready-frame capture options are ordinary registered options.
+TEST(CommandLineFlags, ReadyFrameCaptureOptionsAreAccepted) {
+    QString error;
+    EXPECT_TRUE(ValidateCommandLine(
+        Cmd({"--auto-record", "--capture-frame-in-ready", "--screenshot-path", "ready.png"}), &error))
+        << error.toStdString();
+}
+
+// --enable-preview stays registered on purpose although nothing implements it:
+// the auto-record parser owns the message that explains why, and claiming it here
+// first would replace that guidance with a bare "unknown option".
+TEST(CommandLineFlags, WithdrawnPreviewFlagPassesTheRegistryAndIsRefusedByItsOwnParser) {
     QString error;
     EXPECT_TRUE(ValidateCommandLine(Cmd({"--auto-record", "--enable-preview"}), &error)) << error.toStdString();
-    EXPECT_TRUE(ValidateCommandLine(Cmd({"--auto-record", "--screenshot-path", "shot.png"}), &error))
-        << error.toStdString();
-    EXPECT_TRUE(ValidateCommandLine(Cmd({"--auto-record", "--capture-frame-in-ready"}), &error)) << error.toStdString();
 }
 
 // ---------------------------------------------------------------------------

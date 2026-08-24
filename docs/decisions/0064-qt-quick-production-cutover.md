@@ -37,7 +37,7 @@ exosnap.exe
     → Qt Quick / QML frontend
     → narrow QObject adapters and models
     → shared application services
-    → recorder_core
+    → engine
 ```
 
 `exosnap` is the CMake target defined in `app/quick/ExoSnap/Quick/CMakeLists.txt`.

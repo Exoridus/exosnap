@@ -5,7 +5,7 @@
 Proposed. The engine-side counterpart to the 0.8.0 VRR/CFR judder *diagnosis* (ADR 0033): the
 diagnosis tells the user *why* a recording judders; this fixes it. Builds directly on the
 present-cadence instrumentation already landed in 0.8.0 (`DXGI_OUTDUPL_FRAME_INFO.LastPresentTime`
-tapped per frame in `libs/recorder_core/src/video_thread.cpp`). Candidate placement: a `0.8.x`
+tapped per frame in `libs/engine/src/video_thread.cpp`). Candidate placement: a `0.8.x`
 follow or `0.10.0` (reliability hardening) — it is a capture-engine reliability feature, not a
 vendor feature. Relates to [[0033-diagnostics-engine-and-fixaction.md]].
 

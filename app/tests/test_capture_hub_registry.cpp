@@ -18,7 +18,7 @@
 namespace {
 
 using namespace exosnap;
-using recorder_core::HubFrameKind;
+using exosnap::engine::HubFrameKind;
 
 // Not constexpr: the key carries the DXGI hub's device-name string now.
 const CaptureSourceKey kWindowA{CaptureSourceKey::Kind::Window, 0x1000};

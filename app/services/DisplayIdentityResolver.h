@@ -13,7 +13,7 @@ namespace exosnap {
 // PhysicalRect
 //
 // A monitor rectangle in PHYSICAL virtual-screen pixels — the coordinate space
-// of MONITORINFOEXW.rcMonitor and recorder_core::CaptureRegion. Kept as plain
+// of MONITORINFOEXW.rcMonitor and exosnap::engine::CaptureRegion. Kept as plain
 // ints so the pure matcher and region math carry no <windows.h> dependency and
 // stay fully unit-testable without real hardware.
 //

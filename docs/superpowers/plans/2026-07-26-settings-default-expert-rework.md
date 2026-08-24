@@ -4,7 +4,7 @@
 
 **Goal:** Re-gate the Settings page around the "Expert = incompatibility risk / format expertise" criterion, grow the quality ladder to five tiers, add free frame-rate entry, and apply the approved layout/label polish — per `docs/superpowers/specs/2026-07-26-settings-default-expert-rework-design.md` (the spec; read it first, it is the authority for every label and gate).
 
-**Architecture:** `ConfigPage.cpp` keeps its one-applier gating model (`updateExpertModeVisibility()`); rows move between the lazily-built expert subtrees and eagerly-built default sections. The quality ladder grows in `recorder_core` (`codec_types.h`) and every label surface follows. Frame rate stays a rational `num/den` in `VideoSettingsModel`; only its validation and UI change.
+**Architecture:** `ConfigPage.cpp` keeps its one-applier gating model (`updateExpertModeVisibility()`); rows move between the lazily-built expert subtrees and eagerly-built default sections. The quality ladder grows in `engine` (`codec_types.h`) and every label surface follows. Frame rate stays a rational `num/den` in `VideoSettingsModel`; only its validation and UI change.
 
 **Tech Stack:** C++20, Qt 6.9 Widgets, GoogleTest via `exosnap_add_gtest`, QSS theme tokens.
 
@@ -27,13 +27,13 @@
 
 ---
 
-### Task 1: Five-tier quality ladder in recorder_core
+### Task 1: Five-tier quality ladder in engine
 
 **Files:**
-- Modify: `libs/recorder_core/include/recorder_core/codec_types.h:40-90`
+- Modify: `libs/engine/include/exosnap/engine/codec_types.h:40-90`
 - Modify: `app/models/RecordingPreset.cpp:170-203` (built-ins comment/usages)
 - Modify: `app/diagnostics/ConfigSummary.cpp:79-96`
-- Test: `libs/recorder_core/tests/test_nvenc_rc_params.cpp:143-170`
+- Test: `libs/engine/tests/test_nvenc_rc_params.cpp:143-170`
 
 **Interfaces:**
 - Produces: `enum class NvencQualityPreset { High, Balanced, Efficient, Draft, Ultra }` (old `Small` renamed to `Efficient`; new members appended so existing underlying values 0/1/2 are unchanged), `CanonicalCq()` returning 19/24/30/35/16 respectively, `NearestQualityPreset(uint32_t)` snapping to the five anchors {16,19,24,30,35} with ties toward the LOWER CQ (higher quality), `IsCanonicalCq()` true for exactly those five.
@@ -44,19 +44,19 @@ In `test_nvenc_rc_params.cpp` replace the three `QualityPresetMapping` tests:
 
 ```cpp
 TEST(QualityPresetMapping, CanonicalCqMatchesTheFiveTierLadder) {
-    EXPECT_EQ(recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Ultra), 16u);
-    EXPECT_EQ(recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::High), 19u);
-    EXPECT_EQ(recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Balanced), 24u);
-    EXPECT_EQ(recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Efficient), 30u);
-    EXPECT_EQ(recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Draft), 35u);
+    EXPECT_EQ(exosnap::engine::CanonicalCq(exosnap::engine::NvencQualityPreset::Ultra), 16u);
+    EXPECT_EQ(exosnap::engine::CanonicalCq(exosnap::engine::NvencQualityPreset::High), 19u);
+    EXPECT_EQ(exosnap::engine::CanonicalCq(exosnap::engine::NvencQualityPreset::Balanced), 24u);
+    EXPECT_EQ(exosnap::engine::CanonicalCq(exosnap::engine::NvencQualityPreset::Efficient), 30u);
+    EXPECT_EQ(exosnap::engine::CanonicalCq(exosnap::engine::NvencQualityPreset::Draft), 35u);
 }
 
 TEST(QualityPresetMapping, NearestPresetRoundTripsAndSnapsBetweenValues) {
-    using recorder_core::NvencQualityPreset;
-    using recorder_core::NearestQualityPreset;
+    using exosnap::engine::NvencQualityPreset;
+    using exosnap::engine::NearestQualityPreset;
     for (auto p : {NvencQualityPreset::Ultra, NvencQualityPreset::High, NvencQualityPreset::Balanced,
                    NvencQualityPreset::Efficient, NvencQualityPreset::Draft}) {
-        EXPECT_EQ(NearestQualityPreset(recorder_core::CanonicalCq(p)), p);
+        EXPECT_EQ(NearestQualityPreset(exosnap::engine::CanonicalCq(p)), p);
     }
     EXPECT_EQ(NearestQualityPreset(1u), NvencQualityPreset::Ultra);
     EXPECT_EQ(NearestQualityPreset(17u), NvencQualityPreset::Ultra);
@@ -71,9 +71,9 @@ TEST(QualityPresetMapping, NearestPresetRoundTripsAndSnapsBetweenValues) {
 }
 
 TEST(QualityPresetMapping, IsCanonicalCqOnlyForTheFiveNamedValues) {
-    for (uint32_t cq = recorder_core::kNvencCqMin; cq <= recorder_core::kNvencCqMax; ++cq) {
+    for (uint32_t cq = exosnap::engine::kNvencCqMin; cq <= exosnap::engine::kNvencCqMax; ++cq) {
         const bool expected = (cq == 16u || cq == 19u || cq == 24u || cq == 30u || cq == 35u);
-        EXPECT_EQ(recorder_core::IsCanonicalCq(cq), expected) << "cq=" << cq;
+        EXPECT_EQ(exosnap::engine::IsCanonicalCq(cq), expected) << "cq=" << cq;
     }
 }
 ```

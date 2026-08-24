@@ -4,7 +4,7 @@
 #include "runtime_snapshot.h"
 #include "support_level.h"
 
-#include <recorder_core/codec_types.h>
+#include <exosnap/engine/codec_types.h>
 
 #include <cstddef>
 #include <string>
@@ -117,7 +117,7 @@ struct CapabilitySet {
     // Query support for a canonical rate-control mode (ADR 0009).
     // Returns Available for CQ/VBR/CBR; NotImplemented for Lossless.
     // This is a static capability declaration (not runtime-probed per-session).
-    SupportAnnotation QueryRateControlMode(recorder_core::RateControlMode mode) const;
+    SupportAnnotation QueryRateControlMode(exosnap::engine::RateControlMode mode) const;
 };
 
 } // namespace exosnap::capability

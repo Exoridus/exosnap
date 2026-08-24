@@ -189,18 +189,18 @@ SupportAnnotation CapabilitySet::QueryTemporalAq(VideoCodec v) const {
     return LookupAnnotation(temporal_aq, v, "temporal AQ");
 }
 
-SupportAnnotation CapabilitySet::QueryRateControlMode(recorder_core::RateControlMode mode) const {
+SupportAnnotation CapabilitySet::QueryRateControlMode(exosnap::engine::RateControlMode mode) const {
     // Static capability declaration for NVENC (ADR 0009).
     // CQ / VBR / CBR are implemented and available.
     // Lossless is not yet implemented for any encoder — hidden in UI per ADR 0009.
     switch (mode) {
-    case recorder_core::RateControlMode::ConstantQuality:
+    case exosnap::engine::RateControlMode::ConstantQuality:
         return {SupportLevel::Available, "NVENC CQP — quality-target, encoder chooses bitrate."};
-    case recorder_core::RateControlMode::VariableBitrate:
+    case exosnap::engine::RateControlMode::VariableBitrate:
         return {SupportLevel::Available, "NVENC VBR — encoder targets a bitrate, quality varies."};
-    case recorder_core::RateControlMode::ConstantBitrate:
+    case exosnap::engine::RateControlMode::ConstantBitrate:
         return {SupportLevel::Available, "NVENC CBR — strict bitrate, quality managed by encoder."};
-    case recorder_core::RateControlMode::Lossless:
+    case exosnap::engine::RateControlMode::Lossless:
         return {SupportLevel::NotImplemented, "Lossless encoding is not yet implemented. Hidden in UI."};
     }
     return {SupportLevel::Invalid, "Unknown rate-control mode."};

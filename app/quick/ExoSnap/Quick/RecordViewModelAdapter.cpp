@@ -30,10 +30,10 @@ QString clockText(const QString& value) {
     return QStringLiteral("00:00:00");
 }
 
-bool hasRow(const capability::AudioUiState& state, recorder_core::AudioSourceKind kind) {
+bool hasRow(const capability::AudioUiState& state, exosnap::engine::AudioSourceKind kind) {
     return std::any_of(state.source_rows.begin(), state.source_rows.end(), [kind](const auto& row) {
-        return row.kind == kind || (kind == recorder_core::AudioSourceKind::Sys &&
-                                    row.kind == recorder_core::AudioSourceKind::SystemOutput);
+        return row.kind == kind || (kind == exosnap::engine::AudioSourceKind::Sys &&
+                                    row.kind == exosnap::engine::AudioSourceKind::SystemOutput);
     });
 }
 
@@ -236,6 +236,22 @@ bool RecordViewModelAdapter::finalizing() const noexcept {
            (source_->state == UiRecordingState::Stopping || source_->state == UiRecordingState::Saving);
 }
 
+qreal RecordViewModelAdapter::savingProgress() const noexcept {
+    return saving_progress_;
+}
+
+void RecordViewModelAdapter::setSavingProgress(float fraction) {
+    // The coordinator posts -1 to mark the remux STARTING, before any packet has
+    // been counted. Treating that as 0 % would put a bar at zero and leave it
+    // there for however long the first packet takes; treating it as "unknown"
+    // keeps the label honest until there is something to report.
+    const qreal next = fraction < 0.0f ? -1.0 : static_cast<qreal>(std::clamp(fraction, 0.0f, 1.0f));
+    if (qFuzzyCompare(next, saving_progress_))
+        return;
+    saving_progress_ = next;
+    emit savingProgressChanged();
+}
+
 bool RecordViewModelAdapter::blocked() const noexcept {
     return source_ != nullptr && source_->state == UiRecordingState::Blocked;
 }
@@ -306,7 +322,7 @@ bool RecordViewModelAdapter::webcamEnabled() const noexcept {
 
 bool RecordViewModelAdapter::appAudioVisible() const noexcept {
     return source_ != nullptr && source_->audio_ui_state.target_kind == capability::CaptureTargetKind::Window &&
-           hasRow(source_->audio_ui_state, recorder_core::AudioSourceKind::App);
+           hasRow(source_->audio_ui_state, exosnap::engine::AudioSourceKind::App);
 }
 
 bool RecordViewModelAdapter::microphoneAvailable() const noexcept {
@@ -617,7 +633,7 @@ void RecordViewModelAdapter::rebuildPresentation() {
         QVariantList window_target_options;
         for (qsizetype index = 0; index < static_cast<qsizetype>(source_->targets.size()); ++index) {
             const auto& target = source_->targets[static_cast<std::size_t>(index)];
-            const bool window = target.kind == recorder_core::CaptureTarget::Kind::Window;
+            const bool window = target.kind == exosnap::engine::CaptureTarget::Kind::Window;
             const QVariantMap option{
                 {QStringLiteral("targetIndex"), index},
                 {QStringLiteral("label"),
@@ -658,8 +674,8 @@ void RecordViewModelAdapter::rebuildPresentation() {
         return;
     const auto& target = source_->targets[static_cast<std::size_t>(index)];
     source_name_ = QString::fromStdString(RecordViewModel::TargetLabelFromCaptureTarget(target));
-    source_kind_text_ =
-        target.kind == recorder_core::CaptureTarget::Kind::Window ? QStringLiteral("WINDOW") : QStringLiteral("SCREEN");
+    source_kind_text_ = target.kind == exosnap::engine::CaptureTarget::Kind::Window ? QStringLiteral("WINDOW")
+                                                                                    : QStringLiteral("SCREEN");
     source_detail_text_ = QString::fromUtf8(target.description);
 }
 

@@ -2,8 +2,8 @@
 
 namespace exosnap::diagnostics {
 
-bool CaptureProgressExpected(recorder_core::DiagnosticsLifecycle lifecycle) noexcept {
-    return lifecycle == recorder_core::DiagnosticsLifecycle::Recording;
+bool CaptureProgressExpected(exosnap::engine::DiagnosticsLifecycle lifecycle) noexcept {
+    return lifecycle == exosnap::engine::DiagnosticsLifecycle::Recording;
 }
 
 WindowStallCause EvaluateWindowStall(const WindowTargetFacts& facts, bool present_fse) noexcept {

@@ -10,6 +10,8 @@
 
 #include "UpdaterTheme.h"
 
+namespace exosnap::updater {
+
 namespace {
 constexpr int kSize = 120;
 constexpr double kArc = 8.0; // arc/track stroke width
@@ -79,7 +81,7 @@ QSize ProgressRing::sizeHint() const {
 }
 
 void ProgressRing::paintEvent(QPaintEvent*) {
-    using namespace updater_theme;
+    using namespace theme;
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing, true);
 
@@ -164,3 +166,5 @@ void ProgressRing::paintEvent(QPaintEvent*) {
     QRectF capArea = numRect.adjusted(0, height() * 0.58, 0, -height() * 0.16);
     p.drawText(capArea, Qt::AlignHCenter | Qt::AlignVCenter, QStringLiteral("percent"));
 }
+
+} // namespace exosnap::updater

@@ -8,8 +8,8 @@
 namespace exosnap::observability {
 namespace {
 
-using recorder_core::MetricAvailability;
-using recorder_core::RecordingDiagnosticsSnapshot;
+using exosnap::engine::MetricAvailability;
+using exosnap::engine::RecordingDiagnosticsSnapshot;
 
 QJsonObject SummaryJson(const RecordingDiagnosticsSnapshot& s) {
     QJsonObject json;
@@ -17,13 +17,13 @@ QJsonObject SummaryJson(const RecordingDiagnosticsSnapshot& s) {
     json.insert(QStringLiteral("sessionGeneration"), Count(s.session_generation));
     json.insert(QStringLiteral("lifecycle"), LifecycleName(s.lifecycle));
     json.insert(QStringLiteral("elapsedSeconds"), Metric(s.elapsed_seconds, s.valid));
-    json.insert(QStringLiteral("health"), QString::fromLatin1(recorder_core::ToString(s.health)));
-    json.insert(QStringLiteral("bottleneck"), QString::fromLatin1(recorder_core::ToString(s.bottleneck)));
+    json.insert(QStringLiteral("health"), QString::fromLatin1(exosnap::engine::ToString(s.health)));
+    json.insert(QStringLiteral("bottleneck"), QString::fromLatin1(exosnap::engine::ToString(s.bottleneck)));
     json.insert(QStringLiteral("bottleneckReason"), TextOrNull(s.bottleneck_reason));
     return json;
 }
 
-QJsonObject CaptureJson(const recorder_core::CaptureDiagnostics& c) {
+QJsonObject CaptureJson(const exosnap::engine::CaptureDiagnostics& c) {
     QJsonObject json;
     json.insert(QStringLiteral("targetFps"), c.target_fps);
     json.insert(QStringLiteral("actualFps"), c.actual_fps);
@@ -62,10 +62,10 @@ QJsonObject CaptureJson(const recorder_core::CaptureDiagnostics& c) {
 //   mode       -- PresentMon ETW, elevation- and opt-in-gated. The pipeline
 //                 snapshot cannot tell WHY it is off; environment.snapshot can,
 //                 and says so there.
-QJsonObject SourcePresentationJson(const recorder_core::CaptureDiagnostics& c) {
+QJsonObject SourcePresentationJson(const exosnap::engine::CaptureDiagnostics& c) {
     const bool cadence_available = IsAvailable(c.present_cadence_availability);
-    const bool wgc_source = c.source_type == recorder_core::CaptureSourceType::Window ||
-                            c.source_type == recorder_core::CaptureSourceType::Region;
+    const bool wgc_source = c.source_type == exosnap::engine::CaptureSourceType::Window ||
+                            c.source_type == exosnap::engine::CaptureSourceType::Region;
 
     QJsonObject json;
     json.insert(QStringLiteral("presentIntervalMs"), Metric(c.source_present_interval_ms, cadence_available));
@@ -84,7 +84,7 @@ QJsonObject SourcePresentationJson(const recorder_core::CaptureDiagnostics& c) {
     return json;
 }
 
-QJsonObject CaptureTimingJson(const recorder_core::CaptureDiagnostics& c) {
+QJsonObject CaptureTimingJson(const exosnap::engine::CaptureDiagnostics& c) {
     QJsonObject json;
     json.insert(QStringLiteral("acquireLatestMs"), Metric(c.acquire_latest_ms, c.acquire_availability));
     json.insert(QStringLiteral("acquireAverageMs"), Metric(c.acquire_average_ms, c.acquire_availability));
@@ -95,7 +95,7 @@ QJsonObject CaptureTimingJson(const recorder_core::CaptureDiagnostics& c) {
     return json;
 }
 
-QJsonObject CompositorJson(const recorder_core::CompositorDiagnostics& c) {
+QJsonObject CompositorJson(const exosnap::engine::CompositorDiagnostics& c) {
     QJsonObject json;
     json.insert(QStringLiteral("active"), c.active);
     json.insert(QStringLiteral("latestMs"), Metric(c.latest_ms, c.active));
@@ -116,7 +116,7 @@ QJsonObject CompositorJson(const recorder_core::CompositorDiagnostics& c) {
     return json;
 }
 
-QJsonObject EncoderJson(const recorder_core::EncoderDiagnostics& e) {
+QJsonObject EncoderJson(const exosnap::engine::EncoderDiagnostics& e) {
     QJsonObject json;
     const bool sampled = e.frames_encoded > 0;
     json.insert(QStringLiteral("latestMs"), Metric(e.latest_ms, sampled));
@@ -146,7 +146,7 @@ QJsonObject EncoderJson(const recorder_core::EncoderDiagnostics& e) {
 // The authoritative answer to "what is actually running in the encoder". Emitted
 // only when the encoder was configured: an EncoderInitInfo with valid == false is
 // a session that failed before configure, and its defaults are not a measurement.
-QJsonObject EncoderInitJson(const recorder_core::EncoderInitInfo& init) {
+QJsonObject EncoderInitJson(const exosnap::engine::EncoderInitInfo& init) {
     QJsonObject json;
     json.insert(QStringLiteral("valid"), init.valid);
     if (!init.valid)
@@ -169,7 +169,7 @@ QJsonObject EncoderInitJson(const recorder_core::EncoderInitInfo& init) {
     return json;
 }
 
-QJsonObject VideoTimingJson(const recorder_core::VideoTimingDiagnostics& t) {
+QJsonObject VideoTimingJson(const exosnap::engine::VideoTimingDiagnostics& t) {
     QJsonObject json;
     json.insert(QStringLiteral("tickP50Ms"), Metric(t.tick_p50_ms, t.availability));
     json.insert(QStringLiteral("tickP99Ms"), Metric(t.tick_p99_ms, t.availability));
@@ -183,7 +183,7 @@ QJsonObject VideoTimingJson(const recorder_core::VideoTimingDiagnostics& t) {
     return json;
 }
 
-QJsonArray ResamplerDrainJson(const recorder_core::AudioDiagnostics& a) {
+QJsonArray ResamplerDrainJson(const exosnap::engine::AudioDiagnostics& a) {
     QJsonArray tracks;
     for (std::size_t i = 0; i < a.resampler_drain_recorded.size(); ++i) {
         // A track that never reached its drain leaves the counters at 0, and 0
@@ -199,7 +199,7 @@ QJsonArray ResamplerDrainJson(const recorder_core::AudioDiagnostics& a) {
     return tracks;
 }
 
-QJsonObject AudioJson(const recorder_core::AudioDiagnostics& a) {
+QJsonObject AudioJson(const exosnap::engine::AudioDiagnostics& a) {
     QJsonObject json;
     json.insert(QStringLiteral("active"), a.active);
     json.insert(QStringLiteral("packetsEncoded"), Count(a.packets_encoded));
@@ -229,7 +229,7 @@ QJsonObject AudioJson(const recorder_core::AudioDiagnostics& a) {
 //   raw       -- measured device-clock vs QPC drift, BEFORE compensation
 //   residual  -- what is left after clock slaving, i.e. what lands in the file
 //   skew      -- accumulated |video duration - audio duration|, a starving encoder
-QJsonObject AvTimingJson(const recorder_core::RecordingDiagnosticsSnapshot& s) {
+QJsonObject AvTimingJson(const exosnap::engine::RecordingDiagnosticsSnapshot& s) {
     const bool drift_available = IsAvailable(s.av_drift_availability);
     QJsonObject json;
     json.insert(QStringLiteral("avDriftMs"), Metric(s.av_drift_ms, drift_available));
@@ -244,7 +244,7 @@ QJsonObject AvTimingJson(const recorder_core::RecordingDiagnosticsSnapshot& s) {
     return json;
 }
 
-QJsonObject QueueJson(const recorder_core::QueueDiagnostics& q) {
+QJsonObject QueueJson(const exosnap::engine::QueueDiagnostics& q) {
     const bool available = IsAvailable(q.availability);
     QJsonObject json;
     json.insert(QStringLiteral("currentDepth"), Metric(static_cast<double>(q.current_depth), available));
@@ -256,7 +256,7 @@ QJsonObject QueueJson(const recorder_core::QueueDiagnostics& q) {
     return json;
 }
 
-QJsonObject MuxJson(const recorder_core::MuxDiagnostics& m) {
+QJsonObject MuxJson(const exosnap::engine::MuxDiagnostics& m) {
     const bool available = IsAvailable(m.availability);
     QJsonObject json;
     json.insert(QStringLiteral("packetsProcessed"), Count(m.packets_processed));
@@ -290,8 +290,8 @@ QJsonObject MuxJson(const recorder_core::MuxDiagnostics& m) {
     return json;
 }
 
-QJsonObject DiskJson(const recorder_core::RecordingDiagnosticsSnapshot& s) {
-    const recorder_core::DiskDiagnostics& d = s.disk;
+QJsonObject DiskJson(const exosnap::engine::RecordingDiagnosticsSnapshot& s) {
+    const exosnap::engine::DiskDiagnostics& d = s.disk;
     const bool latency_available = IsAvailable(d.latency_availability);
     QJsonObject json;
     json.insert(QStringLiteral("bytesWritten"), Count(d.bytes_written));
@@ -311,7 +311,7 @@ QJsonObject DiskJson(const recorder_core::RecordingDiagnosticsSnapshot& s) {
     return json;
 }
 
-QJsonObject SplitJson(const recorder_core::SplitDiagnostics& sp) {
+QJsonObject SplitJson(const exosnap::engine::SplitDiagnostics& sp) {
     QJsonObject json;
     json.insert(QStringLiteral("supported"), sp.split_supported);
     json.insert(QStringLiteral("currentSegment"), static_cast<double>(sp.current_segment));
@@ -326,7 +326,7 @@ QJsonObject SplitJson(const recorder_core::SplitDiagnostics& sp) {
     return json;
 }
 
-QJsonObject RetainedFramesJson(const recorder_core::RecordingDiagnosticsSnapshot& s) {
+QJsonObject RetainedFramesJson(const exosnap::engine::RecordingDiagnosticsSnapshot& s) {
     QJsonObject json;
     json.insert(QStringLiteral("screenGenerationChanges"), Count(s.screen_generation_changes));
     json.insert(QStringLiteral("webcamGenerationChanges"), Count(s.webcam_generation_changes));

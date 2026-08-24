@@ -26,8 +26,8 @@
 #include <windows.h>
 #include <wrl/client.h>
 
-#include <recorder_core/gpu_hdr_tonemap.h>
-#include <recorder_core/preview_shared_texture.h>
+#include <exosnap/engine/gpu_hdr_tonemap.h>
+#include <exosnap/engine/preview_shared_texture.h>
 
 #include <algorithm>
 #include <chrono>
@@ -172,7 +172,7 @@ class PreviewTextureNode final : public QSGNode {
         }
 
         ID3D11Texture2D* display_texture = local_texture_.Get();
-        if (tap_.transform != recorder_core::PreviewTapTransform::None) {
+        if (tap_.transform != exosnap::engine::PreviewTapTransform::None) {
             if (desc.Format != DXGI_FORMAT_R16G16B16A16_FLOAT) {
                 error = QStringLiteral("The preview transform requires an FP16 scRGB source.");
                 return;
@@ -189,11 +189,11 @@ class PreviewTextureNode final : public QSGNode {
                             .arg(static_cast<unsigned long>(hr), 8, 16, QLatin1Char('0'));
                 return;
             }
-            tone_mapper_ = std::make_unique<recorder_core::HdrToneMapper>();
+            tone_mapper_ = std::make_unique<exosnap::engine::HdrToneMapper>();
             std::string tone_map_error;
-            const bool sdr_scrgb = tap_.transform == recorder_core::PreviewTapTransform::ScrgbSdr;
+            const bool sdr_scrgb = tap_.transform == exosnap::engine::PreviewTapTransform::ScrgbSdr;
             if (!tone_mapper_->Init(device_.Get(), context_.Get(), width_, height_, tap_.peak_scale, sdr_scrgb,
-                                    tone_map_error)) {
+                                    tone_map_error, tap_.paper_white_scale)) {
                 error = QStringLiteral("Initializing the Quick HDR tone-map pass failed: %1")
                             .arg(QString::fromStdString(tone_map_error));
                 return;
@@ -248,13 +248,13 @@ class PreviewTextureNode final : public QSGNode {
     ConsumeOutcome consume(QQuickWindow* window, ExoPreviewItem::Metrics& metrics, QString& error) {
         if (!valid_ || keyed_mutex_ == nullptr || context_ == nullptr)
             return ConsumeOutcome::Missed;
-        const recorder_core::PreviewAcquireOutcome acquired = recorder_core::ClassifyPreviewAcquire(
-            keyed_mutex_->AcquireSync(recorder_core::kPreviewSharedConsumerKey, 0));
-        if (acquired != recorder_core::PreviewAcquireOutcome::Acquired) {
+        const exosnap::engine::PreviewAcquireOutcome acquired = exosnap::engine::ClassifyPreviewAcquire(
+            keyed_mutex_->AcquireSync(exosnap::engine::kPreviewSharedConsumerKey, 0));
+        if (acquired != exosnap::engine::PreviewAcquireOutcome::Acquired) {
             // Counted apart because they are not the same event: contention is one
             // dropped look at a slot that will fill again, while an abandoned mutex
             // means this transport generation is finished.
-            if (acquired == recorder_core::PreviewAcquireOutcome::Abandoned)
+            if (acquired == exosnap::engine::PreviewAcquireOutcome::Abandoned)
                 metrics.acquire_abandoned.fetch_add(1, std::memory_order_relaxed);
             else
                 metrics.mutex_misses.fetch_add(1, std::memory_order_relaxed);
@@ -269,7 +269,7 @@ class PreviewTextureNode final : public QSGNode {
         // state is otherwise inherited by the offscreen conversion pass.
         context_->ClearState();
         context_->CopyResource(local_texture_.Get(), shared_texture_.Get());
-        keyed_mutex_->ReleaseSync(recorder_core::kPreviewSharedProducerKey);
+        keyed_mutex_->ReleaseSync(exosnap::engine::kPreviewSharedProducerKey);
         bool converted = true;
         if (tone_mapper_ != nullptr) {
             std::string tone_map_error;
@@ -455,9 +455,9 @@ class PreviewTextureNode final : public QSGNode {
     ComPtr<IDXGIKeyedMutex> keyed_mutex_;
     ComPtr<ID3D11Texture2D> local_texture_;
     ComPtr<ID3D11Texture2D> sdr_texture_;
-    std::unique_ptr<recorder_core::HdrToneMapper> tone_mapper_;
+    std::unique_ptr<exosnap::engine::HdrToneMapper> tone_mapper_;
     std::unique_ptr<QuickPreviewRgbaConverter> rgba_converter_;
-    recorder_core::PreviewTapDesc tap_{};
+    exosnap::engine::PreviewTapDesc tap_{};
     uint32_t width_ = 0;
     uint32_t height_ = 0;
     quint64 generation_ = 0;
@@ -561,7 +561,7 @@ const QString& ExoPreviewItem::errorText() const noexcept {
 }
 
 void ExoPreviewItem::presentSharedTexture(void* nt_handle, uint32_t width, uint32_t height,
-                                          recorder_core::PreviewTapDesc tap) {
+                                          exosnap::engine::PreviewTapDesc tap) {
     Q_ASSERT(QThread::currentThread() == thread());
     const quint64 generation = next_generation_++;
     void* pending_handle = duplicateHandle(nt_handle);

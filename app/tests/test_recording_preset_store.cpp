@@ -14,8 +14,8 @@
 #include <QTextStream>
 
 #include <capability/audio_ui_state.h>
-#include <recorder_core/audio_track_model.h>
-#include <recorder_core/recorder_session.h>
+#include <exosnap/engine/audio_track_model.h>
+#include <exosnap/engine/recorder_session.h>
 
 #include "models/RecordingPreset.h"
 #include "settings/RecordingPresetStore.h"
@@ -352,7 +352,7 @@ TEST(RecordingPresetStore, NvencPresetPersists_DefaultP4) {
         const PersistedPresetState state = store.Load();
         EXPECT_FALSE(state.repaired);
         ASSERT_EQ(state.user_presets.size(), 1u);
-        EXPECT_EQ(state.user_presets[0].config.output.nvenc_preset, recorder_core::NvencPreset::P4);
+        EXPECT_EQ(state.user_presets[0].config.output.nvenc_preset, exosnap::engine::NvencPreset::P4);
     }
 
     CleanupFile(path);
@@ -365,7 +365,7 @@ TEST(RecordingPresetStore, NvencPresetPersists_P7) {
     p.id = GeneratePresetId();
     p.name = "P7 preset";
     p.config = MakeDefaultPreset().config;
-    p.config.output.nvenc_preset = recorder_core::NvencPreset::P7;
+    p.config.output.nvenc_preset = exosnap::engine::NvencPreset::P7;
 
     {
         RecordingPresetStore store(path);
@@ -377,7 +377,7 @@ TEST(RecordingPresetStore, NvencPresetPersists_P7) {
         const PersistedPresetState state = store.Load();
         EXPECT_FALSE(state.repaired);
         ASSERT_EQ(state.user_presets.size(), 1u);
-        EXPECT_EQ(state.user_presets[0].config.output.nvenc_preset, recorder_core::NvencPreset::P7);
+        EXPECT_EQ(state.user_presets[0].config.output.nvenc_preset, exosnap::engine::NvencPreset::P7);
     }
 
     CleanupFile(path);
@@ -405,7 +405,7 @@ TEST(RecordingPresetStore, HdrModePersists_DefaultTonemapSdr) {
         const PersistedPresetState state = store.Load();
         EXPECT_FALSE(state.repaired);
         ASSERT_EQ(state.user_presets.size(), 1u);
-        EXPECT_EQ(state.user_presets[0].config.output.hdr_mode, recorder_core::HdrMode::TonemapSdr);
+        EXPECT_EQ(state.user_presets[0].config.output.hdr_mode, exosnap::engine::HdrMode::TonemapSdr);
     }
 
     CleanupFile(path);
@@ -418,7 +418,7 @@ TEST(RecordingPresetStore, HdrModePersists_Hdr10) {
     p.id = GeneratePresetId();
     p.name = "HDR10 preset";
     p.config = MakeDefaultPreset().config;
-    p.config.output.hdr_mode = recorder_core::HdrMode::Hdr10;
+    p.config.output.hdr_mode = exosnap::engine::HdrMode::Hdr10;
 
     {
         RecordingPresetStore store(path);
@@ -430,7 +430,7 @@ TEST(RecordingPresetStore, HdrModePersists_Hdr10) {
         const PersistedPresetState state = store.Load();
         EXPECT_FALSE(state.repaired);
         ASSERT_EQ(state.user_presets.size(), 1u);
-        EXPECT_EQ(state.user_presets[0].config.output.hdr_mode, recorder_core::HdrMode::Hdr10);
+        EXPECT_EQ(state.user_presets[0].config.output.hdr_mode, exosnap::engine::HdrMode::Hdr10);
     }
 
     CleanupFile(path);
@@ -541,7 +541,7 @@ TEST(RecordingPresetStore, NvencPresetMissingKey_DefaultsToP4) {
     const PersistedPresetState state = store.Load();
     EXPECT_FALSE(state.repaired);
     ASSERT_EQ(state.user_presets.size(), 1u);
-    EXPECT_EQ(state.user_presets[0].config.output.nvenc_preset, recorder_core::NvencPreset::P4);
+    EXPECT_EQ(state.user_presets[0].config.output.nvenc_preset, exosnap::engine::NvencPreset::P4);
 
     CleanupFile(path);
 }
@@ -561,7 +561,7 @@ TEST(RecordingPresetStore, NvencPresetInvalidValue_DefaultsToP4_NoReset) {
     const PersistedPresetState state = store.Load();
     EXPECT_FALSE(state.repaired);
     ASSERT_EQ(state.user_presets.size(), 1u);
-    EXPECT_EQ(state.user_presets[0].config.output.nvenc_preset, recorder_core::NvencPreset::P4);
+    EXPECT_EQ(state.user_presets[0].config.output.nvenc_preset, exosnap::engine::NvencPreset::P4);
 
     CleanupFile(path);
 }
@@ -577,7 +577,7 @@ TEST(RecordingPresetStore, HdrModeMissingKey_DefaultsToTonemapSdr) {
     const PersistedPresetState state = store.Load();
     EXPECT_FALSE(state.repaired);
     ASSERT_EQ(state.user_presets.size(), 1u);
-    EXPECT_EQ(state.user_presets[0].config.output.hdr_mode, recorder_core::HdrMode::TonemapSdr);
+    EXPECT_EQ(state.user_presets[0].config.output.hdr_mode, exosnap::engine::HdrMode::TonemapSdr);
 
     CleanupFile(path);
 }
@@ -596,7 +596,7 @@ TEST(RecordingPresetStore, HdrModeInvalidValue_DefaultsToTonemapSdr_NoReset) {
     const PersistedPresetState state = store.Load();
     EXPECT_FALSE(state.repaired);
     ASSERT_EQ(state.user_presets.size(), 1u);
-    EXPECT_EQ(state.user_presets[0].config.output.hdr_mode, recorder_core::HdrMode::TonemapSdr);
+    EXPECT_EQ(state.user_presets[0].config.output.hdr_mode, exosnap::engine::HdrMode::TonemapSdr);
 
     CleanupFile(path);
 }
@@ -1524,7 +1524,7 @@ TEST(RecordingPresetStore, OldSchemaVersion_Load_KeepsData_NotRepaired) {
 // ===========================================================================
 
 TEST(RecordingPresetStore, FramePacingRoundtrips) {
-    using recorder_core::FramePacingMode;
+    using exosnap::engine::FramePacingMode;
     const QString path = UniqueTempPath();
 
     RecordingPreset p;
@@ -1798,7 +1798,7 @@ TEST(RecordingPresetStore, LiveTable_CorruptField_ClampedNotReset) {
     // Out-of-range cq is dropped by the field parser, leaving the struct
     // default (VideoSettingsModel's Balanced CQ), not the built-in Default
     // preset's High CQ — SanitizePresetConfig does not range-clamp cq itself.
-    EXPECT_EQ(state.live->video.cq, recorder_core::CanonicalCq(recorder_core::QualityPreset::Balanced));
+    EXPECT_EQ(state.live->video.cq, exosnap::engine::CanonicalCq(exosnap::engine::QualityPreset::Balanced));
     CleanupFile(path);
 }
 

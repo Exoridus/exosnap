@@ -44,16 +44,16 @@ OutputSettingsModel OutputSettingsModel::Defaults() {
     return defaults;
 }
 
-std::optional<recorder_core::FrameSize> PresetOutputSize(OutputResolutionMode mode) noexcept {
+std::optional<exosnap::engine::FrameSize> PresetOutputSize(OutputResolutionMode mode) noexcept {
     switch (mode) {
     case OutputResolutionMode::UHD2160:
-        return recorder_core::FrameSize{3840, 2160};
+        return exosnap::engine::FrameSize{3840, 2160};
     case OutputResolutionMode::QHD1440:
-        return recorder_core::FrameSize{2560, 1440};
+        return exosnap::engine::FrameSize{2560, 1440};
     case OutputResolutionMode::FHD1080:
-        return recorder_core::FrameSize{1920, 1080};
+        return exosnap::engine::FrameSize{1920, 1080};
     case OutputResolutionMode::HD720:
-        return recorder_core::FrameSize{1280, 720};
+        return exosnap::engine::FrameSize{1280, 720};
     case OutputResolutionMode::Native:
     case OutputResolutionMode::Custom:
         return std::nullopt;
@@ -79,25 +79,25 @@ const wchar_t* OutputResolutionModeName(OutputResolutionMode mode) noexcept {
     return L"Native";
 }
 
-const wchar_t* OutputFitModeName(recorder_core::OutputFitMode mode) noexcept {
+const wchar_t* OutputFitModeName(exosnap::engine::OutputFitMode mode) noexcept {
     switch (mode) {
-    case recorder_core::OutputFitMode::Contain:
+    case exosnap::engine::OutputFitMode::Contain:
         return L"Fit";
     }
     return L"Fit";
 }
 
-std::optional<recorder_core::FrameSize> ResolveRequestedOutputSize(const OutputResolutionSettings& settings,
-                                                                   recorder_core::FrameSize source) noexcept {
+std::optional<exosnap::engine::FrameSize> ResolveRequestedOutputSize(const OutputResolutionSettings& settings,
+                                                                     exosnap::engine::FrameSize source) noexcept {
     if (settings.mode == OutputResolutionMode::Native) {
-        const recorder_core::FrameSize aligned = recorder_core::AlignOutputSizeEven(source);
-        if (!recorder_core::IsEncoderAlignedSize(aligned)) {
+        const exosnap::engine::FrameSize aligned = exosnap::engine::AlignOutputSizeEven(source);
+        if (!exosnap::engine::IsEncoderAlignedSize(aligned)) {
             return std::nullopt;
         }
         return aligned;
     }
 
-    if (const std::optional<recorder_core::FrameSize> preset = PresetOutputSize(settings.mode)) {
+    if (const std::optional<exosnap::engine::FrameSize> preset = PresetOutputSize(settings.mode)) {
         return *preset;
     }
 
@@ -105,9 +105,9 @@ std::optional<recorder_core::FrameSize> ResolveRequestedOutputSize(const OutputR
         if (!IsCustomSizeUsable(settings.custom_width, settings.custom_height)) {
             return std::nullopt;
         }
-        const recorder_core::FrameSize aligned =
-            recorder_core::AlignOutputSizeEven({settings.custom_width, settings.custom_height});
-        if (!recorder_core::IsEncoderAlignedSize(aligned)) {
+        const exosnap::engine::FrameSize aligned =
+            exosnap::engine::AlignOutputSizeEven({settings.custom_width, settings.custom_height});
+        if (!exosnap::engine::IsEncoderAlignedSize(aligned)) {
             return std::nullopt;
         }
         return aligned;
@@ -117,8 +117,8 @@ std::optional<recorder_core::FrameSize> ResolveRequestedOutputSize(const OutputR
 }
 
 void SanitizeOutputResolution(OutputResolutionSettings& settings) noexcept {
-    if (settings.fit != recorder_core::OutputFitMode::Contain) {
-        settings.fit = recorder_core::OutputFitMode::Contain;
+    if (settings.fit != exosnap::engine::OutputFitMode::Contain) {
+        settings.fit = exosnap::engine::OutputFitMode::Contain;
     }
 
     if (settings.mode != OutputResolutionMode::Custom) {
@@ -134,8 +134,8 @@ void SanitizeOutputResolution(OutputResolutionSettings& settings) noexcept {
         return;
     }
 
-    settings.custom_width = recorder_core::AlignOutputDimensionEven(settings.custom_width);
-    settings.custom_height = recorder_core::AlignOutputDimensionEven(settings.custom_height);
+    settings.custom_width = exosnap::engine::AlignOutputDimensionEven(settings.custom_width);
+    settings.custom_height = exosnap::engine::AlignOutputDimensionEven(settings.custom_height);
 }
 
 uint64_t SplitDurationMs(const SplitRecordingSettings& s) noexcept {

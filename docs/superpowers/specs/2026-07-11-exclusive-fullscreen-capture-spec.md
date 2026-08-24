@@ -44,12 +44,12 @@ Abschnitt „Design" wägt es ab und lehnt es für pre-1.0 begründet ab.
 
 ### Backend-Wahl und Matrix-Mechanik
 
-- **Backend-Split ist rein zielbasiert:** `libs/recorder_core/src/video_thread.cpp:198`
+- **Backend-Split ist rein zielbasiert:** `libs/engine/src/video_thread.cpp:198`
   (`useOdCapture = (target.kind == Kind::Monitor)`); Kommentar `:316-318`: Monitor → DXGI OD,
   Window → WGC („only option for window/app capture").
 - **Region = Monitor-OD + Crop:** `crop_region` wird nur für Monitor-Ziele angewendet
   (`video_thread.cpp:453`); `CaptureRegion` verlangt explizit `Kind::Monitor`
-  (`libs/recorder_core/include/recorder_core/recorder_session.h:126-128`). Die Region-Spalte der
+  (`libs/engine/include/exosnap/engine/recorder_session.h:126-128`). Die Region-Spalte der
   Matrix erbt damit vollständig das Monitor-Verhalten.
 - **Es gibt nur zwei Target-Kinds:** `recorder_session.h:112-120` (`Monitor`, `Window`).
 
@@ -67,7 +67,7 @@ Abschnitt „Design" wägt es ab und lehnt es für pre-1.0 begründet ab.
   `++duplicatedFrames`). Größenwechsel des Fensters beendet die Session ehrlich
   (`:2403-2411`). Ein mid-session FSE-Wechsel ist also ein **stummer Freeze**.
 - Die Bottleneck-Klassifikation schlägt bei 0 fps bewusst NICHT an (`cap_cond` verlangt
-  `actual_fps > 0.0`, `libs/recorder_core/src/pipeline_diagnostics_aggregator.cpp:635-637` —
+  `actual_fps > 0.0`, `libs/engine/src/pipeline_diagnostics_aggregator.cpp:635-637` —
   richtig so, ein statischer Desktop ist legitim). Sichtbar ist der Freeze nur als wachsendes
   `frames_duplicated` im LivePipelinePanel (`pipeline_diagnostics.h:96`,
   `app/ui/widgets/LivePipelinePanel.cpp:337`). Keine Karte, keine Notification.
@@ -130,7 +130,7 @@ Abschnitt „Design" wägt es ab und lehnt es für pre-1.0 begründet ab.
   eine pre-flight nutzbare Hub-Evidenz für das *ausgewählte* Fenster existiert noch nicht und
   muss als eigener Baustein gebaut werden (→ S2a).
 - **Fensterenumeration filtert** unsichtbare/child/owned/iconic/cloaked Fenster
-  (`libs/recorder_core/src/wgc_capture.cpp:34-57`) — FSE-Fenster sind sichtbar und landen in der
+  (`libs/engine/src/wgc_capture.cpp:34-57`) — FSE-Fenster sind sichtbar und landen in der
   Liste.
 
 ### Produkt-/Doku-Stand

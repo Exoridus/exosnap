@@ -10,7 +10,7 @@ AdmissionBlocker EvaluateRecordingAdmission(const AdmissionFacts& facts) noexcep
     //   2. The codec cannot carry HDR10.
     //   3. The target display is HDR-active. On an SDR desktop the native HDR10
     //      path never engages, so there is nothing to break.
-    if (facts.hdr_mode == recorder_core::HdrMode::Hdr10 && !facts.codec_can_carry_hdr10 &&
+    if (facts.hdr_mode == exosnap::engine::HdrMode::Hdr10 && !facts.codec_can_carry_hdr10 &&
         facts.target_display_hdr_active) {
         return AdmissionBlocker::Hdr10CodecConflict;
     }

@@ -15,6 +15,8 @@
 
 #include <update/update_flow_state.h>
 
+namespace exosnap::updater {
+
 enum class UpdaterExit : int {
     // The update applied and was verified. Includes the soft success where the
     // automatic relaunch did not open (B4): the new version IS installed, and a
@@ -45,3 +47,5 @@ enum class UpdaterExit : int {
 // is pinned by a table test rather than by launching the executable in every
 // phase.
 [[nodiscard]] int UpdaterExitCodeFor(const exosnap::update::UpdateFlowState& state);
+
+} // namespace exosnap::updater

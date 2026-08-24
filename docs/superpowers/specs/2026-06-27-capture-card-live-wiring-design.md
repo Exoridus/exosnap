@@ -21,9 +21,9 @@ The Diagnostics page has two pipeline surfaces today:
 Engine-side, `PipelineDiagnosticsAggregator` already measures **compositor submit**, **encode
 latency**, **disk write** (each a `RollingTimeWindow`), plus the full `CaptureDiagnostics`
 counters/rates (actual/target fps, frame interval, captured/emitted/dropped/duplicated). The
-`RecordingDiagnosticsSnapshot` (`libs/recorder_core/include/recorder_core/pipeline_diagnostics.h:216`)
+`RecordingDiagnosticsSnapshot` (`libs/engine/include/exosnap/engine/pipeline_diagnostics.h:216`)
 is published via `DiagnosticsCallback` (`:248`) by `SessionStatsCollector::Run()`
-(`libs/recorder_core/src/session_stats_collector.cpp:25-27`, ~5 Hz / 198 ms).
+(`libs/engine/src/session_stats_collector.cpp:25-27`, ~5 Hz / 198 ms).
 
 ## Goal
 
@@ -131,11 +131,11 @@ state, not an alarm.
 
 | File | Change |
 |------|--------|
-| `libs/recorder_core/include/recorder_core/pipeline_health.h` + `src/pipeline_health.cpp` | NEW — pure `StageHealth`/`StageSignals`/`PipelineHealthVerdict` + `ResolvePipelineHealth` |
-| `libs/recorder_core/include/recorder_core/pipeline_diagnostics.h` | New fields: acquire/vpblt/mux avg+peak+latest, queue depth+peak, per-stage availability; (no GPU-timing fields) |
-| `libs/recorder_core/src/pipeline_diagnostics_aggregator.{h,cpp}` | New `acquire_window_`, `vpblt_window_`, `mux_window_`; `OnAcquireLatency`/`OnVpbltSubmit`/`OnMuxLatency`; queue-depth gauge |
-| `libs/recorder_core/src/video_thread.cpp` | Cheap QPC around Acquire and around `VideoProcessorBlt` submit (no GPU queries) |
-| `libs/recorder_core/src/mux_thread.cpp` | Cheap QPC around mux processing; expose `mux_queue` depth |
+| `libs/engine/include/exosnap/engine/pipeline_health.h` + `src/pipeline_health.cpp` | NEW — pure `StageHealth`/`StageSignals`/`PipelineHealthVerdict` + `ResolvePipelineHealth` |
+| `libs/engine/include/exosnap/engine/pipeline_diagnostics.h` | New fields: acquire/vpblt/mux avg+peak+latest, queue depth+peak, per-stage availability; (no GPU-timing fields) |
+| `libs/engine/src/pipeline_diagnostics_aggregator.{h,cpp}` | New `acquire_window_`, `vpblt_window_`, `mux_window_`; `OnAcquireLatency`/`OnVpbltSubmit`/`OnMuxLatency`; queue-depth gauge |
+| `libs/engine/src/video_thread.cpp` | Cheap QPC around Acquire and around `VideoProcessorBlt` submit (no GPU queries) |
+| `libs/engine/src/mux_thread.cpp` | Cheap QPC around mux processing; expose `mux_queue` depth |
 | `app/pages/DiagnosticsPage.cpp` | Light up PipelineFlow cards 0–5 from the live snapshot via `ResolvePipelineHealth`; 2 Hz throttle; idle↔live |
 | `app/ui/widgets/PipelineFlow.{h,cpp}` | Card face: status chip + CPU/GPU tag + secondary number + tooltip (peak / CPU-submit note) |
 | tests | `ResolvePipelineHealth`, aggregator windows, PipelineFlow card |

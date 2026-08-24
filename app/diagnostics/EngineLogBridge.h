@@ -2,7 +2,7 @@
 
 namespace exosnap {
 
-// Brings up recorder_core's logger and mirrors its records into AppLog.
+// Brings up the engine's logger and mirrors its records into AppLog.
 //
 // Without this the engine's logger stays uninitialised and every log() call returns
 // early, so the capture path's decisions — tone-map vs native HDR, scRGB detection,

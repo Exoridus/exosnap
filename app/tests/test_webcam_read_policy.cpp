@@ -1,7 +1,7 @@
 // Pure policy for the webcam capture loop's reaction to one ReadSample() result.
 // ClassifyWebcamReadResult inspects only the returned HRESULT and reader flags, so
 // the loss-detection / reconnect policy is unit-pinned (no live device needed),
-// mirroring recorder_core's ClassifyOdAcquireFailure. A dead reader (failed HRESULT,
+// mirroring the engine's ClassifyOdAcquireFailure. A dead reader (failed HRESULT,
 // MF_SOURCE_READERF_ERROR, or MF_SOURCE_READERF_ENDOFSTREAM) maps to Reconnect so the
 // capture thread reopens the device while TryGetFrame keeps serving the last frame.
 

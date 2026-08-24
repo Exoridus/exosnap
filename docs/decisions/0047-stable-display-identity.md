@@ -63,7 +63,7 @@ stage is worth it.
 
 The region is persisted as normalized [0,1] fractions of its **anchor display's physical
 `MONITORINFOEXW.rcMonitor`** (not `QScreen::geometry()`, which is DPI-scaled/logical), plus the
-anchor's `StableDisplayId`. A capture region (`recorder_core::CaptureRegion`) is in physical
+anchor's `StableDisplayId`. A capture region (`exosnap::engine::CaptureRegion`) is in physical
 virtual-screen pixels, so normalizing against the logical geometry would break the round-trip on any
 scaled display. On restore the rectangle is recomputed from the current anchor geometry and clamped;
 a missing anchor skips the region rather than dropping a stale rectangle onto the wrong pixels. This

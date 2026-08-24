@@ -34,9 +34,9 @@ SessionReportInputs MakeInputs() {
     in.result.frame_rate_num = 60;
     in.result.frame_rate_den = 1;
     in.result.cfr = true;
-    in.result.container = recorder_core::Container::Matroska;
-    in.result.video_codec = recorder_core::VideoCodec::Av1;
-    in.result.audio_codec = recorder_core::AudioCodec::Opus;
+    in.result.container = exosnap::engine::Container::Matroska;
+    in.result.video_codec = exosnap::engine::VideoCodec::Av1;
+    in.result.audio_codec = exosnap::engine::AudioCodec::Opus;
     in.output_filename = QStringLiteral("ExoSnap_2026.mkv");
 
     in.has_snapshot = true;
@@ -47,11 +47,11 @@ SessionReportInputs MakeInputs() {
     s.video_encoder.frames_submitted = 2540;
     s.video_encoder.frames_encoded = 2540;
     s.duration_skew_ms = 12.0;
-    s.duration_skew_availability = recorder_core::MetricAvailability::Available;
+    s.duration_skew_availability = exosnap::engine::MetricAvailability::Available;
     s.av_drift_ms = -4.0;
-    s.av_drift_availability = recorder_core::MetricAvailability::Available;
+    s.av_drift_availability = exosnap::engine::MetricAvailability::Available;
     s.peak_av_drift_ms = 9.0;
-    s.peak_av_drift_availability = recorder_core::MetricAvailability::Available;
+    s.peak_av_drift_availability = exosnap::engine::MetricAvailability::Available;
     s.av_drift_raw_ms = -14.0;
     s.clock_slaving_ppm = 120.0;
     s.clock_slaving_active = true;
@@ -59,7 +59,7 @@ SessionReportInputs MakeInputs() {
     s.capture.target_fps = 60.0;
     s.capture.frames_emitted = 2540;
     s.capture.frame_interval_ms = 16.7;
-    s.capture.interval_observed = recorder_core::MetricAvailability::Unavailable;
+    s.capture.interval_observed = exosnap::engine::MetricAvailability::Unavailable;
     s.audio.track_count = 2;
     s.audio.degraded_sources = 1;
     s.audio.source_degraded = true;
@@ -68,9 +68,9 @@ SessionReportInputs MakeInputs() {
     s.audio.resampler_drained_frames = {441, 0, 0};
     s.audio.resampler_undrained_frames = {0, 0, 0};
     s.encoder_init.valid = true;
-    s.encoder_init.codec = recorder_core::VideoCodec::Av1;
-    s.encoder_init.preset = recorder_core::NvencPreset::P5;
-    s.encoder_init.rc_mode = recorder_core::RateControlMode::VariableBitrate;
+    s.encoder_init.codec = exosnap::engine::VideoCodec::Av1;
+    s.encoder_init.preset = exosnap::engine::NvencPreset::P5;
+    s.encoder_init.rc_mode = exosnap::engine::RateControlMode::VariableBitrate;
     s.encoder_init.target_bitrate_kbps = 20000;
     s.encoder_init.gop_length = 120;
     return in;
@@ -111,8 +111,8 @@ TEST(SessionReport, CarriesEncoderInitAndPeakDrift) {
 
 TEST(SessionReport, UnavailableInsteadOfFakeZero) {
     SessionReportInputs in = MakeInputs();
-    in.snapshot.duration_skew_availability = recorder_core::MetricAvailability::Unavailable;
-    in.snapshot.peak_av_drift_availability = recorder_core::MetricAvailability::Unavailable;
+    in.snapshot.duration_skew_availability = exosnap::engine::MetricAvailability::Unavailable;
+    in.snapshot.peak_av_drift_availability = exosnap::engine::MetricAvailability::Unavailable;
     const QJsonObject counters = Parse(BuildSessionReportJson(in))[QStringLiteral("counters")].toObject();
     EXPECT_EQ(counters[QStringLiteral("duration_skew_ms")].toString(), QStringLiteral("unavailable"));
     EXPECT_EQ(counters[QStringLiteral("peak_av_drift_ms")].toString(), QStringLiteral("unavailable"));
@@ -173,7 +173,7 @@ TEST(SessionReport, ClockSlavingFollowsDriftAvailability) {
     // Raw drift and ppm come from the same track av_drift_ms is taken from, so an
     // unmeasured drift must not be published as a fabricated 0 ppm.
     SessionReportInputs in = MakeInputs();
-    in.snapshot.av_drift_availability = recorder_core::MetricAvailability::Unavailable;
+    in.snapshot.av_drift_availability = exosnap::engine::MetricAvailability::Unavailable;
     const QJsonObject counters = Parse(BuildSessionReportJson(in))[QStringLiteral("counters")].toObject();
     EXPECT_EQ(counters[QStringLiteral("av_drift_ms")].toString(), QStringLiteral("unavailable"));
     EXPECT_EQ(counters[QStringLiteral("av_drift_raw_ms")].toString(), QStringLiteral("unavailable"));
@@ -306,7 +306,7 @@ TEST(SessionReport, PacingAverageIsUnavailableWithoutElapsedTime) {
 
 TEST(SessionReport, ObservedFrameIntervalIsReportedOnVfr) {
     SessionReportInputs in = MakeInputs();
-    in.snapshot.capture.interval_observed = recorder_core::MetricAvailability::Available;
+    in.snapshot.capture.interval_observed = exosnap::engine::MetricAvailability::Available;
     const QJsonObject pacing = Parse(BuildSessionReportJson(in))[QStringLiteral("video_pacing")].toObject();
     EXPECT_DOUBLE_EQ(pacing[QStringLiteral("frame_interval_ms")].toDouble(), 16.7);
 }

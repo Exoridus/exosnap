@@ -1,5 +1,7 @@
 #include "UpdaterExitCode.h"
 
+namespace exosnap::updater {
+
 int UpdaterExitCodeFor(const exosnap::update::UpdateFlowState& state) {
     using exosnap::update::UpdatePhase;
 
@@ -35,3 +37,5 @@ int UpdaterExitCodeFor(const exosnap::update::UpdateFlowState& state) {
     }
     return static_cast<int>(UpdaterExit::Cancelled);
 }
+
+} // namespace exosnap::updater

@@ -43,7 +43,7 @@ competing readers (#147). This applies that pattern to the rest.
 capture per key, counts its consumers, retains the last frame, classifies loss,
 and reconnects without a deadline.
 
-- The **arbitration is pure** (`recorder_core::StepCaptureHub` +
+- The **arbitration is pure** (`exosnap::engine::StepCaptureHub` +
   `ResolveHubFrame`): no D3D, no WGC, no threads, no Qt. The hub classes are thin
   drivers that apply the decision and perform the flagged actions. This is what
   makes the reconnect and hold behaviour unit-pinnable at all — the webcam's
@@ -102,7 +102,7 @@ exactly as today.
 
 ## What shipped
 
-- `recorder_core::StepCaptureHub` / `ResolveHubFrame` — pure arbitration.
+- `exosnap::engine::StepCaptureHub` / `ResolveHubFrame` — pure arbitration.
 - `CaptureSourceHub` — drives the policy; injectable `HubSourceProducer`.
 - `CaptureHubRegistry` + `CaptureSubscription` — one hub per `CaptureSourceKey`,
   refcounted.

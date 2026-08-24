@@ -23,9 +23,9 @@ UiRecordingResult FailedResult(const wchar_t* phase, uint64_t bytes = 0) {
     result.hresult_text = L"0x80004005";
     result.error_detail = L"Container::Matroska requires VideoCodec::Av1";
     result.output_file_bytes = bytes;
-    result.container = recorder_core::Container::Matroska;
-    result.video_codec = recorder_core::VideoCodec::Av1;
-    result.audio_codec = recorder_core::AudioCodec::Opus;
+    result.container = exosnap::engine::Container::Matroska;
+    result.video_codec = exosnap::engine::VideoCodec::Av1;
+    result.audio_codec = exosnap::engine::AudioCodec::Opus;
     return result;
 }
 

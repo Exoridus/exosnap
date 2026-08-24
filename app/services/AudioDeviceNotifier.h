@@ -8,7 +8,7 @@
 #include <functional>
 #include <string>
 
-#include <recorder_core/audio_input_device.h>
+#include <exosnap/engine/audio_input_device.h>
 
 #include "services/DeviceDiscoveryCommon.h"
 
@@ -19,8 +19,8 @@ namespace exosnap {
 // No COM/native handles. Deterministic ordering (sorted by device_id).
 // ---------------------------------------------------------------------------
 struct AudioDeviceSnapshot {
-    QVector<recorder_core::AudioInputDeviceInfo> inputs;  // eCapture, sorted by device_id
-    QVector<recorder_core::AudioInputDeviceInfo> outputs; // eRender,  sorted by device_id
+    QVector<exosnap::engine::AudioInputDeviceInfo> inputs;  // eCapture, sorted by device_id
+    QVector<exosnap::engine::AudioInputDeviceInfo> outputs; // eRender,  sorted by device_id
     std::string default_input_id;
     std::string default_output_id;
 

@@ -17,7 +17,7 @@
 #include "CompletedRecording.h"
 #include "EditContext.h"
 
-#include <recorder_core/pipeline_diagnostics.h>
+#include <exosnap/engine/pipeline_diagnostics.h>
 
 namespace exosnap {
 
@@ -32,7 +32,7 @@ namespace exosnap {
 [[nodiscard]] EditContext
 MakeEditContextForCurrentSession(const CompletedRecording& recording, const QString& mkv_master_path,
                                  double peak_av_drift_ms, bool av_drift_available,
-                                 const recorder_core::RecordingDiagnosticsSnapshot& completed_snapshot);
+                                 const exosnap::engine::RecordingDiagnosticsSnapshot& completed_snapshot);
 
 // Minimal context for an output path that no longer resolves to a known
 // recording (e.g. trimmed out of the bounded history). Every detail row renders

@@ -6,8 +6,8 @@
 #include <vector>
 
 #include <capability/audio_ui_state.h>
-#include <recorder_core/audio_track_model.h>
-#include <recorder_core/recorder_session.h>
+#include <exosnap/engine/audio_track_model.h>
+#include <exosnap/engine/recorder_session.h>
 
 #include "models/RecordingPreset.h"
 #include "models/RecordingPresetRegistry.h"
@@ -28,7 +28,7 @@ const std::size_t kBuiltIns = MakeBuiltInPresets().size();
 RecordingPresetConfig MakeDistinctConfig() {
     RecordingPresetConfig cfg = MakeDefaultPreset().config;
     cfg.countdown_seconds = 3;
-    cfg.video.cq = recorder_core::CanonicalCq(recorder_core::QualityPreset::Low);
+    cfg.video.cq = exosnap::engine::CanonicalCq(exosnap::engine::QualityPreset::Low);
     return cfg;
 }
 
@@ -237,7 +237,7 @@ TEST(RecordingPresetRegistry, IsSelectedDirty_MutatingAudio_IsDirty) {
 TEST(RecordingPresetRegistry, IsSelectedDirty_MutatingVideo_IsDirty) {
     RecordingPresetRegistry reg;
     RecordingPresetConfig live = reg.SelectedSavedConfig();
-    live.video.cq = recorder_core::CanonicalCq(recorder_core::QualityPreset::Low);
+    live.video.cq = exosnap::engine::CanonicalCq(exosnap::engine::QualityPreset::Low);
     EXPECT_TRUE(reg.IsSelectedDirty(live));
 }
 

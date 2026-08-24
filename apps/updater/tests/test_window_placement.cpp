@@ -8,6 +8,8 @@
 
 #include "WindowPlacement.h"
 
+using namespace exosnap::updater;
+
 namespace {
 
 // A generous single-monitor work area, no taskbar overlap to worry about.

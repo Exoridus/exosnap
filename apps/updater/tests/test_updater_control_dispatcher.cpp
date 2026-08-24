@@ -22,6 +22,8 @@
 #include "UpdaterAutomation.h"
 #include "UpdaterControlDispatcher.h"
 
+using namespace exosnap::updater;
+
 namespace {
 
 using exosnap::control::ParsedRequest;

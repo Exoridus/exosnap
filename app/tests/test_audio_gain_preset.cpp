@@ -12,7 +12,7 @@
 #include <QTemporaryDir>
 
 #include <capability/audio_ui_state.h>
-#include <recorder_core/audio_track_model.h>
+#include <exosnap/engine/audio_track_model.h>
 
 #include "models/RecordingPreset.h"
 #include "settings/RecordingPresetStore.h"
@@ -48,9 +48,9 @@ RecordingPreset MakeGainPreset(float app_gain, bool app_muted, float mic_gain, b
     // sanitizing drops it otherwise. This fixture wants the row, so it wants a window.
     p.config.audio.target_kind = capability::CaptureTargetKind::Window;
     p.config.audio.source_rows = {
-        {recorder_core::AudioSourceKind::App, true, false, app_gain, app_muted},
-        {recorder_core::AudioSourceKind::Mic, true, false, mic_gain, mic_muted},
-        {recorder_core::AudioSourceKind::Sys, true, false, 0.0f, false},
+        {exosnap::engine::AudioSourceKind::App, true, false, app_gain, app_muted},
+        {exosnap::engine::AudioSourceKind::Mic, true, false, mic_gain, mic_muted},
+        {exosnap::engine::AudioSourceKind::Sys, true, false, 0.0f, false},
     };
     return p;
 }
@@ -163,14 +163,14 @@ TEST(AudioGainPreset, Sanitize_ClampsGainAboveMax) {
     RecordingPresetConfig cfg = MakeDefaultPreset().config;
     cfg.audio.source_rows[0].gain_db = 100.0f; // above kMaxGainDb = +24
     const auto sanitized = SanitizePresetConfig(cfg);
-    EXPECT_NEAR(sanitized.audio.source_rows[0].gain_db, recorder_core::kMaxGainDb, 0.01f);
+    EXPECT_NEAR(sanitized.audio.source_rows[0].gain_db, exosnap::engine::kMaxGainDb, 0.01f);
 }
 
 TEST(AudioGainPreset, Sanitize_ClampsGainBelowMin) {
     RecordingPresetConfig cfg = MakeDefaultPreset().config;
     cfg.audio.source_rows[0].gain_db = -200.0f; // below kMinGainDb = -60
     const auto sanitized = SanitizePresetConfig(cfg);
-    EXPECT_NEAR(sanitized.audio.source_rows[0].gain_db, recorder_core::kMinGainDb, 0.01f);
+    EXPECT_NEAR(sanitized.audio.source_rows[0].gain_db, exosnap::engine::kMinGainDb, 0.01f);
 }
 
 TEST(AudioGainPreset, Sanitize_ResetsNaN) {
@@ -200,7 +200,7 @@ TEST(AudioGainPreset, MicGainComposition_UnityRowGain_PreservesMicGainLinear) {
     capability::AudioUiState state;
     state.mic_gain_linear = 1.5f;
     state.source_rows = {
-        {recorder_core::AudioSourceKind::Mic, true, false, 0.0f, false},
+        {exosnap::engine::AudioSourceKind::Mic, true, false, 0.0f, false},
     };
 
     const auto plan = capability::BuildAudioPlan(state);
@@ -218,7 +218,7 @@ TEST(AudioGainPreset, MicGainComposition_MutedRow_EffectiveIsZero) {
     capability::AudioUiState state;
     state.mic_gain_linear = 2.0f;
     state.source_rows = {
-        {recorder_core::AudioSourceKind::Mic, true, false, 0.0f, true}, // muted
+        {exosnap::engine::AudioSourceKind::Mic, true, false, 0.0f, true}, // muted
     };
 
     const auto plan = capability::BuildAudioPlan(state);

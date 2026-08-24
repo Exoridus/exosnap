@@ -6,6 +6,8 @@
 
 #include "UpdaterController.h"
 
+using namespace exosnap::updater;
+
 namespace {
 
 UpdaterController MakeController() {

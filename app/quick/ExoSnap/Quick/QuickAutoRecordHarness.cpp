@@ -8,8 +8,10 @@
 #include "services/RecordingCoordinator.h"
 
 #include <QCoreApplication>
+#include <QDir>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QFile>
 #include <QQuickWindow>
 #include <QTimer>
 
@@ -149,6 +151,103 @@ benchmark::PreviewMetrics SampleQuickPreviewMetrics(const RecordPreviewAdapter& 
     return preview;
 }
 
+// The idle-preview snapshot. Deliberately routed through
+// RecordingCoordinator::CaptureFrame() rather than assembling a
+// ReadyFrameComposition here: the composition carries the crop, the video
+// settings and the webcam overlay, and a harness that built its own would be
+// measuring a picture the product never produces.
+//
+// What this exercises that `capture_frame_at_seconds` cannot: the Ready branch
+// goes through ReadyFrameCaptureService, which applies the SAME PreviewTapDesc
+// transform ExoPreviewItem applies. Its output is therefore the preview's own
+// colour pipeline, readable as a file and comparable against a frame decoded
+// from a recording of the same desktop -- which is the only automated way to
+// tell a preview-side HDR/SDR mistake from an engine-side one.
+int CaptureReadyFrame(QCoreApplication& app, RecordingCoordinator& coordinator, RecordPreviewAdapter* adapter,
+                      const auto_record::AutoRecordOptions& options) {
+    constexpr int kFrameReadyTimeoutMs = 15000;
+    constexpr int kCaptureTimeoutMs = 15000;
+
+    if (adapter == nullptr) {
+        qCritical().noquote() << QStringLiteral("auto-record: no preview adapter for --capture-frame-in-ready");
+        return 1;
+    }
+
+    QElapsedTimer clock;
+    clock.start();
+    {
+        QEventLoop wait_ready;
+        QTimer poll;
+        poll.setInterval(25);
+        QObject::connect(&poll, &QTimer::timeout, &wait_ready, [&]() {
+            if (adapter->frameReady() || clock.elapsed() >= kFrameReadyTimeoutMs)
+                wait_ready.quit();
+        });
+        poll.start();
+        wait_ready.exec();
+    }
+    if (!adapter->frameReady()) {
+        qCritical().noquote() << QStringLiteral("auto-record: the idle preview never produced a frame in %1 ms")
+                                     .arg(kFrameReadyTimeoutMs);
+        return 3;
+    }
+
+    // Clobbers the application's own frame-captured handler (a toast). That is
+    // sound only because this mode reports one line and exits without ever
+    // starting a recording; it must not be copied into a mode that keeps running.
+    bool done = false;
+    bool ok = false;
+    QString written_path;
+    QString capture_error;
+    QEventLoop wait_capture;
+    coordinator.SetFrameCapturedCallback([&](bool success, const QString& path, const QString& error) {
+        done = true;
+        ok = success;
+        written_path = path;
+        capture_error = error;
+        wait_capture.quit();
+    });
+
+    QTimer deadline;
+    deadline.setSingleShot(true);
+    QObject::connect(&deadline, &QTimer::timeout, &wait_capture, [&]() { wait_capture.quit(); });
+    deadline.start(kCaptureTimeoutMs);
+
+    coordinator.CaptureFrame();
+    wait_capture.exec();
+    deadline.stop();
+
+    if (!done) {
+        qCritical().noquote()
+            << QStringLiteral("auto-record: the Ready snapshot did not complete in %1 ms").arg(kCaptureTimeoutMs);
+        return 3;
+    }
+    if (!ok) {
+        qCritical().noquote() << QStringLiteral("auto-record: the Ready snapshot failed: %1").arg(capture_error);
+        return 1;
+    }
+
+    // The engine names and places the file. An explicit --screenshot-path is
+    // honoured by MOVING it afterwards rather than by teaching the engine a
+    // second naming rule: the path the product would have produced stays the one
+    // that was produced.
+    if (!options.screenshot_path.isEmpty() && !written_path.isEmpty()) {
+        const QString destination = QDir::toNativeSeparators(options.screenshot_path);
+        QFile::remove(destination);
+        if (!QFile::rename(written_path, destination)) {
+            qCritical().noquote() << QStringLiteral(
+                                         "auto-record: could not move the Ready snapshot to %1 (it is at %2)")
+                                         .arg(destination, written_path);
+            return 2;
+        }
+        written_path = destination;
+    }
+
+    qInfo().noquote() << QStringLiteral("auto-record-ready-frame: ok=1 path=%1").arg(written_path);
+    Q_UNUSED(app);
+    return 0;
+}
+
 } // namespace
 
 int RunQuickAutoRecord(QCoreApplication& app, QuickApplication& application, QQuickWindow* window,
@@ -182,8 +281,8 @@ int RunQuickAutoRecord(QCoreApplication& app, QuickApplication& application, QQu
     coordinator->SetVideoSettings(preview_video_settings);
 
     const auto want_kind = options.target == auto_record::TargetKind::Window
-                               ? recorder_core::CaptureTarget::Kind::Window
-                               : recorder_core::CaptureTarget::Kind::Monitor;
+                               ? exosnap::engine::CaptureTarget::Kind::Window
+                               : exosnap::engine::CaptureTarget::Kind::Monitor;
     if (!application.selectCaptureTargetForAutomation(want_kind, options.target_window_title)) {
         const QString what = options.target == auto_record::TargetKind::Monitor
                                  ? QStringLiteral("monitor")
@@ -193,6 +292,11 @@ int RunQuickAutoRecord(QCoreApplication& app, QuickApplication& application, QQu
     }
 
     RecordPreviewAdapter* adapter = application.recordPreviewAdapter();
+
+    // Before any recording is started, and it never starts one: this mode exists
+    // to photograph the IDLE preview's own transform.
+    if (options.capture_frame_in_ready)
+        return CaptureReadyFrame(app, *coordinator, adapter, options);
 
     auto_record::BenchmarkHooks hooks;
     hooks.onMeasurementStart = [adapter]() {

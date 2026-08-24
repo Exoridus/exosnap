@@ -88,31 +88,31 @@ const std::array<EnumEntry, 2> kColorRanges{{
 }};
 
 const std::array<EnumEntry, 3> kHdrModes{{
-    {"off", static_cast<int>(recorder_core::HdrMode::Off)},
-    {"tonemapSdr", static_cast<int>(recorder_core::HdrMode::TonemapSdr)},
-    {"hdr10", static_cast<int>(recorder_core::HdrMode::Hdr10)},
+    {"off", static_cast<int>(exosnap::engine::HdrMode::Off)},
+    {"tonemapSdr", static_cast<int>(exosnap::engine::HdrMode::TonemapSdr)},
+    {"hdr10", static_cast<int>(exosnap::engine::HdrMode::Hdr10)},
 }};
 
 const std::array<EnumEntry, 7> kEncoderPresets{{
-    {"P1", static_cast<int>(recorder_core::NvencPreset::P1)},
-    {"P2", static_cast<int>(recorder_core::NvencPreset::P2)},
-    {"P3", static_cast<int>(recorder_core::NvencPreset::P3)},
-    {"P4", static_cast<int>(recorder_core::NvencPreset::P4)},
-    {"P5", static_cast<int>(recorder_core::NvencPreset::P5)},
-    {"P6", static_cast<int>(recorder_core::NvencPreset::P6)},
-    {"P7", static_cast<int>(recorder_core::NvencPreset::P7)},
+    {"P1", static_cast<int>(exosnap::engine::NvencPreset::P1)},
+    {"P2", static_cast<int>(exosnap::engine::NvencPreset::P2)},
+    {"P3", static_cast<int>(exosnap::engine::NvencPreset::P3)},
+    {"P4", static_cast<int>(exosnap::engine::NvencPreset::P4)},
+    {"P5", static_cast<int>(exosnap::engine::NvencPreset::P5)},
+    {"P6", static_cast<int>(exosnap::engine::NvencPreset::P6)},
+    {"P7", static_cast<int>(exosnap::engine::NvencPreset::P7)},
 }};
 
 const std::array<EnumEntry, 4> kRateControls{{
-    {"constantQuality", static_cast<int>(recorder_core::RateControlMode::ConstantQuality)},
-    {"variableBitrate", static_cast<int>(recorder_core::RateControlMode::VariableBitrate)},
-    {"constantBitrate", static_cast<int>(recorder_core::RateControlMode::ConstantBitrate)},
-    {"lossless", static_cast<int>(recorder_core::RateControlMode::Lossless)},
+    {"constantQuality", static_cast<int>(exosnap::engine::RateControlMode::ConstantQuality)},
+    {"variableBitrate", static_cast<int>(exosnap::engine::RateControlMode::VariableBitrate)},
+    {"constantBitrate", static_cast<int>(exosnap::engine::RateControlMode::ConstantBitrate)},
+    {"lossless", static_cast<int>(exosnap::engine::RateControlMode::Lossless)},
 }};
 
 const std::array<EnumEntry, 2> kFramePacing{{
-    {"smooth", static_cast<int>(recorder_core::FramePacingMode::Smooth)},
-    {"newest", static_cast<int>(recorder_core::FramePacingMode::Newest)},
+    {"smooth", static_cast<int>(exosnap::engine::FramePacingMode::Smooth)},
+    {"newest", static_cast<int>(exosnap::engine::FramePacingMode::Newest)},
 }};
 
 const std::array<EnumEntry, 3> kKeyframeIntervals{{

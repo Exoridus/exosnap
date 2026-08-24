@@ -27,7 +27,7 @@ timeline, applies the advisory abort budgets live, and writes a report.
 ### Build
 
 `exosnap-soak` builds with the normal Debug/Release configure (it links
-`recorder_core`, whose NVENC headers are vendored, so it builds even on the
+`engine`, whose NVENC headers are vendored, so it builds even on the
 GPU-less CI runner). Only the **real recording path** needs a GPU at runtime.
 
 ```

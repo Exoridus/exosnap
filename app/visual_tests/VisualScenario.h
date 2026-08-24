@@ -147,7 +147,7 @@ struct VisualScenario {
     uint32_t frame_rate_num = 60;
     uint32_t frame_rate_den = 1;
     bool cfr = true;
-    // NVENC CQ value to seed into VideoSettingsModel::cq (recorder_core::kCqMin..Max,
+    // NVENC CQ value to seed into VideoSettingsModel::cq (exosnap::engine::kCqMin..Max,
     // 1-51). 0 (the sentinel) means "leave the model's own default" (Balanced/CQ 24) —
     // the field is optional; most scenarios never set it. Non-zero values let a
     // scenario render the Quality combo/segments at a specific tier (e.g. 30 = Low,
@@ -299,7 +299,7 @@ struct VisualScenario {
     // Trailing field so existing positional initializers stay valid. Tone-map to
     // SDR (default) / Record native HDR10, capability-gated on video_codec above
     // (HEVC/AV1 only).
-    recorder_core::HdrMode hdr_mode = recorder_core::HdrMode::TonemapSdr;
+    exosnap::engine::HdrMode hdr_mode = exosnap::engine::HdrMode::TonemapSdr;
 
     // --- EditExport Edit-phase marker pins ---
     // Trailing fields so existing positional initializers stay valid.

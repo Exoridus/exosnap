@@ -50,9 +50,16 @@ Item {
     readonly property color ink: root.subdued && !root.counting ? ExoTheme.text : ExoTheme.accentInk
     readonly property bool outlined: root.subdued && !root.counting
 
+    // -1 is "no fraction measured yet", which covers all of Stopping and the
+    // first instant of Saving. The bare "Finalizing…" is what that must read as;
+    // a percentage only appears once the remuxer has actually counted something.
+    readonly property string finalizingText: root.recordViewModel.savingProgress >= 0
+                                             ? qsTr("Finalizing… %1%").arg(Math.round(root.recordViewModel.savingProgress * 100))
+                                             : qsTr("Finalizing…")
+
     readonly property string mainText: root.counting ? qsTr("Cancel")
                                      : root.recordViewModel.preparing ? qsTr("Preparing…")
-                                     : root.recordViewModel.finalizing ? qsTr("Finalizing…") : qsTr("Record")
+                                     : root.recordViewModel.finalizing ? root.finalizingText : qsTr("Record")
 
     objectName: "quickRecordSplitButton"
     implicitHeight: root.compact ? ExoTheme.controlHeight : ExoTheme.controlHeightLarge

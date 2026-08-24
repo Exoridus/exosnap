@@ -6,7 +6,7 @@
 #include <capability/codec_selection.h>
 #include <capability/config_types.h>
 #include <capability/support_level.h>
-#include <recorder_core/codec_types.h>
+#include <exosnap/engine/codec_types.h>
 
 #include <QCoreApplication>
 #include <QMetaObject>
@@ -517,11 +517,11 @@ void DeviceAdapter::renderCapabilityMatrix() {
         // Static declaration from the global CapabilitySet (ADR 0009), not a
         // per-adapter probe result.
         QStringList modes;
-        if (capability::IsSelectable(caps_.QueryRateControlMode(recorder_core::RateControlMode::ConstantQuality)))
+        if (capability::IsSelectable(caps_.QueryRateControlMode(exosnap::engine::RateControlMode::ConstantQuality)))
             modes << QStringLiteral("CQ");
-        if (capability::IsSelectable(caps_.QueryRateControlMode(recorder_core::RateControlMode::VariableBitrate)))
+        if (capability::IsSelectable(caps_.QueryRateControlMode(exosnap::engine::RateControlMode::VariableBitrate)))
             modes << QStringLiteral("VBR");
-        if (capability::IsSelectable(caps_.QueryRateControlMode(recorder_core::RateControlMode::ConstantBitrate)))
+        if (capability::IsSelectable(caps_.QueryRateControlMode(exosnap::engine::RateControlMode::ConstantBitrate)))
             modes << QStringLiteral("CBR");
         if (!modes.isEmpty()) {
             rows.push_back({QStringLiteral("Rate control"),

@@ -11,7 +11,7 @@
 #include <dxgi1_6.h>
 #include <wrl/client.h>
 
-#include <recorder_core/hdr_color_space.h>
+#include <exosnap/engine/hdr_color_space.h>
 
 #include <cstdio>
 
@@ -64,7 +64,7 @@ void DumpDisplays() {
                 printf("  display \"%ls\":\n", d.DeviceName);
                 printf("    colorSpace      = %d  %s\n", static_cast<int>(d.ColorSpace), ColorSpaceName(d.ColorSpace));
                 printf("    HDR mode        = %s\n",
-                       recorder_core::IsHdrColorSpace(d.ColorSpace) ? "ON" : "off (SDR)");
+                       exosnap::engine::IsHdrColorSpace(d.ColorSpace) ? "ON" : "off (SDR)");
                 printf("    bitsPerColor    = %u\n", d.BitsPerColor);
                 printf("    luminance       = min %.4f / max %.1f / maxFullFrame %.1f nits\n",
                        static_cast<double>(d.MinLuminance), static_cast<double>(d.MaxLuminance),

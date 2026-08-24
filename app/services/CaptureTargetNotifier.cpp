@@ -16,7 +16,7 @@ namespace {
 std::mutex g_hook_mutex;
 std::unordered_map<HWINEVENTHOOK, QPointer<CaptureTargetNotifier>> g_hook_owners;
 
-bool targetEqual(const recorder_core::CaptureTarget& left, const recorder_core::CaptureTarget& right) noexcept {
+bool targetEqual(const exosnap::engine::CaptureTarget& left, const exosnap::engine::CaptureTarget& right) noexcept {
     return left.kind == right.kind && left.native_id == right.native_id && left.description == right.description;
 }
 

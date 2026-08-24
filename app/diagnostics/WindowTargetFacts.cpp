@@ -42,8 +42,8 @@ ExclusiveEvidence CombineFullscreenEvidence(WindowShape shape, const WindowHubEv
     // Proven black: the same WGC API the recording would use has demonstrably
     // produced nothing usable for the selected window.
     const bool never_produced =
-        hub.kind == recorder_core::HubFrameKind::None && hub.seconds_subscribed >= kEvidenceMinSeconds;
-    const bool froze_at_transition = hub.kind == recorder_core::HubFrameKind::Held &&
+        hub.kind == exosnap::engine::HubFrameKind::None && hub.seconds_subscribed >= kEvidenceMinSeconds;
+    const bool froze_at_transition = hub.kind == exosnap::engine::HubFrameKind::Held &&
                                      !hub.fresh_frame_since_fullscreen_shape &&
                                      hub.seconds_since_fresh_frame >= kEvidenceMinSeconds;
     if (never_produced || froze_at_transition) {

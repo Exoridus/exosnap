@@ -58,8 +58,22 @@ and moving the OS cursor while the developer is moving it causes mis-clicks.
 - UAC and Secure Desktop prompts cannot be scripted at all. Describe what the
   prompt will ask and what each answer does, then wait — the developer cannot
   have another window open while answering one.
-- Physical and system-level changes (HDR, refresh rate, unplugging an endpoint)
-  stay the developer's own action, even inside an otherwise automated flow.
+- Display and audio state that Windows exposes a documented, restorable setter
+  for -- HDR, refresh rate, the default endpoint -- is automated by
+  `tools/envctl`, not asked of the developer. Check `exosnap-envctl snapshot`
+  before concluding a property is out of reach; anything it reports as
+  `ENV_MUTATE_SAFE` is yours to change inside a transaction. Always pair `begin`
+  with `restore`, and leave the journal `Clean`.
+- The alias profile is machine-local and deliberately untracked, so a fresh
+  clone binds nothing and `snapshot` reports `unbound_alias` rather than a
+  device. That is the tool working, not the property being unreachable: follow
+  the instruction in the error (`resolve-aliases`, then `bind-alias`) once per
+  machine. No device is ever selected automatically.
+- What genuinely stays the developer's own action is what no documented API can
+  reach: unplugging or repowering hardware, and anything behind a UAC or Secure
+  Desktop prompt. `ENV_HUMAN` properties are in this class too, whatever they
+  look like -- envctl reads them so a gate can state its precondition, and
+  refuses to write them on purpose.
 - Prefer structural automation (UI Automation invoke patterns, accessible names)
   over coordinate-based synthesis: it does not move the real cursor.
 - Starting the app once to confirm it does not crash is always allowed;
@@ -172,6 +186,16 @@ pwsh scripts/run-tests.ps1 -ExcludeLabel live     # skip real hardware queries
   cross-process update handoff: `docs/dev/live-verify.md` (ADR 0066, ADR 0067,
   ADR 0068).
 - The release acceptance campaign: `docs/dev/release-verify.md`.
+- Machine state for a live check -- display HDR, refresh rate, audio endpoints --
+  through the `exosnap-envctl` transaction model (build with
+  `-DEXOSNAP_BUILD_PROBES=ON` is NOT needed; the tool is its own target). The
+  boundary between what it mutates, what it only reads and what a person must do
+  is the capability column of `snapshot`, and the mechanics are in
+  `docs/dev/release-verify.md`.
+- One-off hardware questions ("is this display actually in HDR right now",
+  "does the VideoProcessor support this conversion") have standing answers in
+  `tools/probes` (`-DEXOSNAP_BUILD_PROBES=ON`); look there before writing a new
+  probe.
 
 ## Final validation
 

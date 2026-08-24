@@ -20,6 +20,8 @@
 // string literal, so the build-tree path never appears in the source tree.
 #include "UpdaterExePath.h"
 
+using namespace exosnap::updater;
+
 namespace {
 
 using exosnap::update::FailureCase;

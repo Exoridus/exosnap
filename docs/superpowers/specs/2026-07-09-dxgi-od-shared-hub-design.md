@@ -31,7 +31,7 @@ via engine source-tap), `OdCaptureMode::SdrScrgb` (SDR Advanced-Color desktops).
 Monitor pixels are captured through two unrelated stacks today:
 
 - **Recording** owns the only `IDXGIOutputDuplication` per session
-  (`DxgiOdCaptureSrc::Open`, `libs/recorder_core/src/dxgi_od_capture_src.cpp:286`
+  (`DxgiOdCaptureSrc::Open`, `libs/engine/src/dxgi_od_capture_src.cpp:286`
   DuplicateOutput1 / `:296` legacy fallback), pumped by the video thread
   (`video_thread.cpp:262 Run()`), on a device adapter-matched to the HMONITOR
   (`video_thread.cpp:296-326`). Mature recovery: `ClassifyOdAcquireFailure` /
@@ -84,7 +84,7 @@ explicit, logged degradation instead of a silent second capture.
 
 ### Overview
 
-`recorder_core::MonitorDuplicationHub` — engine-side, UI-agnostic (pure D3D11/Win32 +
+`exosnap::engine::MonitorDuplicationHub` — engine-side, UI-agnostic (pure D3D11/Win32 +
 callbacks, no Qt). It has two roles:
 
 1. **Arbitration (always):** it is the only party allowed to create an
@@ -115,7 +115,7 @@ covering the **recording** window, extended to FP16 to close hole (a) (Decision 
 
 ### Ownership & lifetime
 
-- `MonitorDuplicationHub` lives in `libs/recorder_core` (engine stays UI-agnostic; it
+- `MonitorDuplicationHub` lives in `libs/engine` (engine stays UI-agnostic; it
   never includes app headers, all outward flow is callbacks, mirroring
   `preview_shared_handle_cb`).
 - The single instance is **owned by `RecordingCoordinator`** (app), exactly like

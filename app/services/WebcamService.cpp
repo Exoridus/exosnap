@@ -10,8 +10,8 @@
 #include <mfidl.h>
 #include <mfreadwrite.h>
 
-#include <recorder_core/util/com_apartment.h>
-#include <recorder_core/util/mf_session.h>
+#include <exosnap/engine/util/com_apartment.h>
+#include <exosnap/engine/util/mf_session.h>
 
 #include <windows.h>
 #include <winrt/base.h>
@@ -705,13 +705,13 @@ void WebcamService::ThreadMain(const std::string& device_id, int width, int heig
     // destructor only calls MFShutdown() if MFStartup() actually succeeded,
     // and comApartment's destructor only calls CoUninitialize() if this call
     // owned the reference (S_OK/S_FALSE) -- never on RPC_E_CHANGED_MODE.
-    recorder_core::ComApartment comApartment(COINIT_MULTITHREADED);
+    exosnap::engine::ComApartment comApartment(COINIT_MULTITHREADED);
     if (!comApartment.usable()) {
         diagnostics::logEvent(diagnostics::LogSeverity::Warning, "webcam", "webcam.com_init_failed");
         running_.store(false);
         return;
     }
-    recorder_core::MfSession mfSession;
+    exosnap::engine::MfSession mfSession;
     if (!mfSession.usable()) {
         diagnostics::logEvent(diagnostics::LogSeverity::Warning, "webcam", "webcam.mf_startup_failed");
         running_.store(false);

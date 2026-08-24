@@ -8,7 +8,7 @@
 #include <QVariantList>
 #include <QtQmlIntegration/qqmlintegration.h>
 
-#include <recorder_core/mp4_remuxer.h>
+#include <exosnap/engine/mp4_remuxer.h>
 
 #include <cstdint>
 #include <vector>
@@ -167,8 +167,8 @@ class EditSessionAdapter : public QObject {
 
     std::vector<int64_t> keyframe_timestamps_;
     std::vector<RecordingMarker> markers_;
-    int64_t trim_start_us_ = recorder_core::TrimRange::kNoTimestamp;
-    int64_t trim_end_us_ = recorder_core::TrimRange::kNoTimestamp;
+    int64_t trim_start_us_ = exosnap::engine::TrimRange::kNoTimestamp;
+    int64_t trim_end_us_ = exosnap::engine::TrimRange::kNoTimestamp;
     qint64 duration_ms_ = 0;
     qint64 position_ms_ = 0;
     quint64 clip_generation_ = 0;

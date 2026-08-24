@@ -22,7 +22,7 @@ import argparse
 import json
 import sys
 
-# Histogram schema mirror of libs/recorder_core/src/perf_histogram.h. The summary
+# Histogram schema mirror of libs/engine/src/perf_histogram.h. The summary
 # record carries hist_lo_ms / hist_hi_ms / hist_buckets so these are only defaults.
 DEFAULT_LO_MS = 0.05
 DEFAULT_HI_MS = 500.0

@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - This plan does not touch FFmpeg vendoring, the ffmpeg-build repo, or any encoder/container feature work. It is a pure correctness fix to existing, already-shipped PCM-in-MKV behavior (ADR 0027, #195).
-- Full build (not just `--target exosnap`) before running tests — this project's convention for anything touching `recorder_core`.
+- Full build (not just `--target exosnap`) before running tests — this project's convention for anything touching `engine`.
 - Never interact with a running ExoSnap instance; this task has no UI surface, ctest is the verification path.
 - The fix must be provable via a demux-level test (open the written file with FFmpeg's own `avformat_open_input`/`avformat_find_stream_info` and assert the resulting `AVCodecID`), not merely a byte-search — a byte-search only proves "we wrote what we intended," not "what we intended is correct," which is precisely how the original bug shipped.
 
@@ -20,31 +20,31 @@
 ### Task 1: Fix the PCM CodecID strings and prove real FFmpeg-demuxer interop
 
 **Files:**
-- Modify: `libs/recorder_core/src/matroska_stream_writer.cpp:393-394`
-- Modify: `libs/recorder_core/src/matroska_stream_writer.h:106,143` (comments only)
-- Modify: `libs/recorder_core/src/pcm_audio_encoder.h:10,21,70` (comments only)
-- Modify: `libs/recorder_core/src/pcm_audio_encoder.cpp:163` (comment only)
-- Modify: `libs/recorder_core/src/audio_thread.cpp:77,82` (comments only)
-- Modify: `libs/recorder_core/src/mux_thread.cpp:191` (comment only)
-- Modify: `libs/recorder_core/src/recorder_session.cpp:259,263,313` (comments/log message)
-- Modify: `libs/recorder_core/tests/test_matroska_stream_writer.cpp`
-- Modify: `libs/recorder_core/CMakeLists.txt:1164-1170`
+- Modify: `libs/engine/src/matroska_stream_writer.cpp:393-394`
+- Modify: `libs/engine/src/matroska_stream_writer.h:106,143` (comments only)
+- Modify: `libs/engine/src/pcm_audio_encoder.h:10,21,70` (comments only)
+- Modify: `libs/engine/src/pcm_audio_encoder.cpp:163` (comment only)
+- Modify: `libs/engine/src/audio_thread.cpp:77,82` (comments only)
+- Modify: `libs/engine/src/mux_thread.cpp:191` (comment only)
+- Modify: `libs/engine/src/recorder_session.cpp:259,263,313` (comments/log message)
+- Modify: `libs/engine/tests/test_matroska_stream_writer.cpp`
+- Modify: `libs/engine/CMakeLists.txt:1164-1170`
 
 **Interfaces:**
-- Consumes: `recorder_core::MatroskaStreamWriter::Open(const MatroskaStreamConfig&) -> bool` (existing, unchanged signature), `recorder_core::StreamAudioCodec::Pcm` (existing enum value), `MatroskaStreamConfig::audio_float` (existing bool field).
+- Consumes: `exosnap::engine::MatroskaStreamWriter::Open(const MatroskaStreamConfig&) -> bool` (existing, unchanged signature), `exosnap::engine::StreamAudioCodec::Pcm` (existing enum value), `MatroskaStreamConfig::audio_float` (existing bool field).
 - Produces: no new public API. The two new tests are the only new surface, and they are test-only.
 
 **Background — read before starting:** The Matroska specification (IETF CELLAR draft, and mirrored verbatim in FFmpeg's `libavformat/matroska.c` `ff_mkv_codec_tags[]` table) defines PCM CodecIDs as `"A_PCM/INT/BIG"`, `"A_PCM/INT/LIT"`, and `"A_PCM/FLOAT/IEEE"` — every segment separated by `/`, matching the general Matroska CodecID convention (`V_MPEG4/ISO/AVC`, `S_TEXT/UTF8`, etc.). `matroska_stream_writer.cpp:393-394` currently writes `"A_PCM/INT_LIT"` and `"A_PCM/FLOAT_IEEE"` — the last separator is `_` instead of `/`. Any demuxer doing a literal string match against its codec table (FFmpeg's matroska demuxer does exactly this) will not recognize the track and will report `codec_id == AV_CODEC_ID_NONE` for it — this is the exact "audio stream demuxes as codec `none`" symptom recorded in project memory from 2026-07-12. The existing tests `Pcm_WritesPcmCodecIdAndBitDepth` and `PcmFloat_WritesFloatCodecIdAndBitDepth32` (`test_matroska_stream_writer.cpp:372-446`) currently assert the *buggy* strings are present — they were written against the bug and must be corrected, not just left passing.
 
 - [ ] **Step 1: Add FFmpeg to the test target's link libraries**
 
-  In `libs/recorder_core/CMakeLists.txt:1164-1170`, change:
+  In `libs/engine/CMakeLists.txt:1164-1170`, change:
   ```cmake
   exosnap_add_gtest(
       NAME test_matroska_stream_writer
-      TEST_PREFIX recorder_core.
+      TEST_PREFIX engine.
       SOURCES tests/test_matroska_stream_writer.cpp
-      LIBRARIES recorder_core EBML::ebml Matroska::matroska
+      LIBRARIES engine EBML::ebml Matroska::matroska
   )
   target_include_directories(test_matroska_stream_writer PRIVATE src)
   ```
@@ -52,9 +52,9 @@
   ```cmake
   exosnap_add_gtest(
       NAME test_matroska_stream_writer
-      TEST_PREFIX recorder_core.
+      TEST_PREFIX engine.
       SOURCES tests/test_matroska_stream_writer.cpp
-      LIBRARIES recorder_core EBML::ebml Matroska::matroska FFmpeg::mux
+      LIBRARIES engine EBML::ebml Matroska::matroska FFmpeg::mux
   )
   target_include_directories(test_matroska_stream_writer PRIVATE src)
   ```
@@ -62,7 +62,7 @@
 
 - [ ] **Step 2: Write the new failing demux-interop tests (against the still-buggy code)**
 
-  In `libs/recorder_core/tests/test_matroska_stream_writer.cpp`, add near the top (after the existing `#include` block at line 15):
+  In `libs/engine/tests/test_matroska_stream_writer.cpp`, add near the top (after the existing `#include` block at line 15):
   ```cpp
   extern "C" {
   #include <libavformat/avformat.h>
@@ -161,7 +161,7 @@
 
 - [ ] **Step 3: Run the new tests to verify they fail against the still-buggy writer**
 
-  Configure/build `recorder_core` tests (adjust build dir to your local preset), then:
+  Configure/build `engine` tests (adjust build dir to your local preset), then:
   ```
   ctest --test-dir build/windows-x64-debug -R "recorder_core.Pcm_CodecIdIsReadableByFfmpegMatroskaDemuxer|recorder_core.PcmFloat_CodecIdIsReadableByFfmpegMatroskaDemuxer" -V
   ```
@@ -169,7 +169,7 @@
 
 - [ ] **Step 4: Fix the CodecID strings**
 
-  In `libs/recorder_core/src/matroska_stream_writer.cpp:393-394`, change:
+  In `libs/engine/src/matroska_stream_writer.cpp:393-394`, change:
   ```cpp
               libebml::GetChild<libmatroska::KaxCodecID>(aud).SetValue(m_config.audio_float ? "A_PCM/FLOAT_IEEE"
                                                                                               : "A_PCM/INT_LIT");
@@ -182,7 +182,7 @@
 
 - [ ] **Step 5: Update the two existing tests that asserted the buggy strings**
 
-  In `libs/recorder_core/tests/test_matroska_stream_writer.cpp:395-398`, change:
+  In `libs/engine/tests/test_matroska_stream_writer.cpp:395-398`, change:
   ```cpp
       // CodecID "A_PCM/INT_LIT" present in the rendered container.
       const std::string kPcmId = "A_PCM/INT_LIT";
@@ -234,17 +234,17 @@
 - [ ] **Step 6: Update stale comments referencing the old (wrong) strings**
 
   These are comment-only occurrences (verified via grep — none of them feed a `SetValue`/write call); update the text so nothing in the codebase documents the wrong CodecID string anymore:
-  - `libs/recorder_core/src/matroska_stream_writer.h:106` and `:143`: replace `A_PCM/INT_LIT`/`A_PCM/FLOAT_IEEE` with `A_PCM/INT/LIT`/`A_PCM/FLOAT/IEEE`.
-  - `libs/recorder_core/src/pcm_audio_encoder.h:10,21,70`: same replacement.
-  - `libs/recorder_core/src/pcm_audio_encoder.cpp:163`: same replacement.
-  - `libs/recorder_core/src/audio_thread.cpp:77,82`: same replacement.
-  - `libs/recorder_core/src/mux_thread.cpp:191`: same replacement.
-  - `libs/recorder_core/src/recorder_session.cpp:259,313`: same replacement (comments).
-  - `libs/recorder_core/src/recorder_session.cpp:263`: this one is a user/log-facing error message (`"WebM and MP4 cannot carry A_PCM/INT_LIT in this build"`) — reword to not depend on the exact CodecID string, e.g. `"WebM and MP4 cannot carry PCM audio in this build"`.
+  - `libs/engine/src/matroska_stream_writer.h:106` and `:143`: replace `A_PCM/INT_LIT`/`A_PCM/FLOAT_IEEE` with `A_PCM/INT/LIT`/`A_PCM/FLOAT/IEEE`.
+  - `libs/engine/src/pcm_audio_encoder.h:10,21,70`: same replacement.
+  - `libs/engine/src/pcm_audio_encoder.cpp:163`: same replacement.
+  - `libs/engine/src/audio_thread.cpp:77,82`: same replacement.
+  - `libs/engine/src/mux_thread.cpp:191`: same replacement.
+  - `libs/engine/src/recorder_session.cpp:259,313`: same replacement (comments).
+  - `libs/engine/src/recorder_session.cpp:263`: this one is a user/log-facing error message (`"WebM and MP4 cannot carry A_PCM/INT_LIT in this build"`) — reword to not depend on the exact CodecID string, e.g. `"WebM and MP4 cannot carry PCM audio in this build"`.
 
-- [ ] **Step 7: Run the full recorder_core test suite to verify the fix and check for regressions**
+- [ ] **Step 7: Run the full engine test suite to verify the fix and check for regressions**
 
-  Full build (not just `--target exosnap` — this project's convention for anything touching `recorder_core`):
+  Full build (not just `--target exosnap` — this project's convention for anything touching `engine`):
   ```
   cmake --build build/windows-x64-debug
   ```
@@ -261,15 +261,15 @@
 - [ ] **Step 8: Commit**
 
   ```bash
-  git add libs/recorder_core/src/matroska_stream_writer.cpp \
-          libs/recorder_core/src/matroska_stream_writer.h \
-          libs/recorder_core/src/pcm_audio_encoder.h \
-          libs/recorder_core/src/pcm_audio_encoder.cpp \
-          libs/recorder_core/src/audio_thread.cpp \
-          libs/recorder_core/src/mux_thread.cpp \
-          libs/recorder_core/src/recorder_session.cpp \
-          libs/recorder_core/tests/test_matroska_stream_writer.cpp \
-          libs/recorder_core/CMakeLists.txt
+  git add libs/engine/src/matroska_stream_writer.cpp \
+          libs/engine/src/matroska_stream_writer.h \
+          libs/engine/src/pcm_audio_encoder.h \
+          libs/engine/src/pcm_audio_encoder.cpp \
+          libs/engine/src/audio_thread.cpp \
+          libs/engine/src/mux_thread.cpp \
+          libs/engine/src/recorder_session.cpp \
+          libs/engine/tests/test_matroska_stream_writer.cpp \
+          libs/engine/CMakeLists.txt
   git commit -m "$(cat <<'EOF'
   Fix non-standard Matroska PCM CodecID strings (A_PCM/INT_LIT -> A_PCM/INT/LIT)
 

@@ -29,6 +29,8 @@
 #include "UpdaterController.h"
 #include "UpdaterWindow.h"
 
+using namespace exosnap::updater;
+
 namespace {
 
 constexpr QChar kEllipsis(0x2026);
@@ -134,10 +136,8 @@ TEST_F(UpdaterTextLayoutTest, LongVersionsElideInTheMiddleAndStayInsideTheWindow
         // The whole reason this pill elides in the middle: the tail is what
         // identifies WHICH build the version stands for, so it has to survive.
         // ElideRight would have dropped exactly that half.
-        EXPECT_TRUE(pill->text().endsWith(pill->fullText().right(8)))
-            << name << " -> " << pill->text().toStdString();
-        EXPECT_TRUE(pill->text().startsWith(pill->fullText().left(8)))
-            << name << " -> " << pill->text().toStdString();
+        EXPECT_TRUE(pill->text().endsWith(pill->fullText().right(8))) << name << " -> " << pill->text().toStdString();
+        EXPECT_TRUE(pill->text().startsWith(pill->fullText().left(8))) << name << " -> " << pill->text().toStdString();
         EXPECT_FALSE(pill->text().endsWith(kEllipsis)) << name;
         // Nothing is lost by shortening.
         EXPECT_EQ(pill->toolTip(), pill->fullText()) << name;
@@ -283,7 +283,7 @@ TEST_F(UpdaterTextLayoutTest, EyebrowNamesTheRunAndTheTitleBarNeverChanges) {
 }
 
 TEST_F(UpdaterTextLayoutTest, TerminalFailureMovesTheEmphasisToTheInstalledVersion) {
-    const QString accent = QStringLiteral("#9bd9d2"); // updater_theme::mint()
+    const QString accent = QStringLiteral("#9bd9d2"); // theme::mint()
 
     UpdaterWindow working;
     working.render(DownloadingState());
@@ -316,9 +316,8 @@ TEST_F(UpdaterTextLayoutTest, SoftSuccessKeepsTheTargetEmphasisBecauseTheUpdateD
     Settle(window);
 
     EXPECT_EQ(window.findChild<QLabel*>(QStringLiteral("updaterEyebrow"))->text(), QStringLiteral("UPDATING EXOSNAP"));
-    EXPECT_TRUE(Eliding(window, "updaterToVersionPill")
-                    ->styleSheet()
-                    .contains(QStringLiteral("#9bd9d2"), Qt::CaseInsensitive));
+    EXPECT_TRUE(
+        Eliding(window, "updaterToVersionPill")->styleSheet().contains(QStringLiteral("#9bd9d2"), Qt::CaseInsensitive));
 }
 
 // ── Accessibility ───────────────────────────────────────────────────────────
@@ -377,7 +376,8 @@ TEST_F(UpdaterTextLayoutTest, StepListExposesEveryPhaseAndItsStatus) {
     QStringList names;
     for (const QWidget* row : steps->findChildren<QWidget*>(QString(), Qt::FindDirectChildrenOnly))
         names << row->accessibleName();
-    EXPECT_TRUE(names.contains(QStringLiteral("Downloading update, done"))) << names.join(QStringLiteral(" | ")).toStdString();
+    EXPECT_TRUE(names.contains(QStringLiteral("Downloading update, done")))
+        << names.join(QStringLiteral(" | ")).toStdString();
     EXPECT_TRUE(names.contains(QStringLiteral("Closing previous version, working")))
         << names.join(QStringLiteral(" | ")).toStdString();
     EXPECT_TRUE(names.contains(QStringLiteral("Launching ExoSnap, queued")))

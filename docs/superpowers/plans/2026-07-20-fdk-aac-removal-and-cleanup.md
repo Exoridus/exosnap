@@ -12,7 +12,7 @@
 
 - No FDK-AAC code, fetch, or license text may remain after Task 3. No `--enable-nonfree` or GPL-only FFmpeg components may be introduced.
 - AAC behavior must not change: AAC-LC only, 44.1 kHz and 48 kHz, mono and stereo, default bitrate 192 kbit/s (range 64–320 clamped), raw AAC access units (no ADTS), `CodecPrivateBytes()` returns `AudioSpecificConfig` for the Matroska `A_AAC` writer and MP4 remux path.
-- Every task must end with a full build (`recorder_core` + its tests) and the relevant `ctest` subset green before moving on. This project's `--target exosnap` alone does not build tests — do a full build.
+- Every task must end with a full build (`engine` + its tests) and the relevant `ctest` subset green before moving on. This project's `--target exosnap` alone does not build tests — do a full build.
 - Never interact with a running ExoSnap instance (no mouse/keyboard synthesis, no window automation). These are non-UI backend/build changes; no `--visual-test` or app launch is needed for any task in this plan.
 - Per explicit user authorization for this cleanup pass: merge each task directly to `main` after it's green — no PR required.
 - `docs/product-spec.md` needs no update — AAC-LC, container/codec matrix, and defaults are unchanged (ADR 0052 already states this).
@@ -23,11 +23,11 @@
 
 **Files:**
 - Modify: `cmake/VendorFFmpeg.cmake:15-17,34,41-42`
-- Test: `libs/recorder_core/tests/test_ffmpeg_aac_encoder.cpp` (existing file, no code changes — its `GTEST_SKIP()` guards are self-adapting and should stop skipping once linked against an encoder-enabled `avcodec`)
+- Test: `libs/engine/tests/test_ffmpeg_aac_encoder.cpp` (existing file, no code changes — its `GTEST_SKIP()` guards are self-adapting and should stop skipping once linked against an encoder-enabled `avcodec`)
 
 **Interfaces:**
 - Consumes: nothing new — `FFmpeg::avcodec` / `FFmpeg::avutil` / `FFmpeg::swresample` imported targets already exist.
-- Produces: an `avcodec` DLL where `avcodec_find_encoder(AV_CODEC_ID_AAC)` succeeds, which `FfmpegAacEncoder::Init()` (already implemented in `libs/recorder_core/src/ffmpeg_aac_encoder.cpp`) depends on.
+- Produces: an `avcodec` DLL where `avcodec_find_encoder(AV_CODEC_ID_AAC)` succeeds, which `FfmpegAacEncoder::Init()` (already implemented in `libs/engine/src/ffmpeg_aac_encoder.cpp`) depends on.
 
 Release `Exoridus/exosnap-ffmpeg-build` tag `r5` was published 2026-07-19 and adds `--enable-encoder=aac` to the configure whitelist (confirmed via `gh release view r5` — asset `ffmpeg-win64-lgpl-shared.zip`, DLL names unchanged: `avformat-62.dll avcodec-62.dll avutil-60.dll swresample-6.dll`). This was the external blocker ADR 0052 described ("the maintainer cuts the release by pushing the r5 tag") — it is no longer a blocker.
 
@@ -88,7 +88,7 @@ with:
 
 - [ ] **Step 4: Reconfigure and rebuild, confirming the new archive downloads**
 
-Run a clean CMake reconfigure so `FetchContent` re-resolves the URL (delete or repoint the existing `_deps/ffmpeg_prebuilt-subbuild` cache for this build tree if CMake does not pick up the URL change automatically — check the build directory's `_deps/ffmpeg_prebuilt-src` timestamp to confirm it re-downloaded). Then do a full build of `recorder_core` and its tests.
+Run a clean CMake reconfigure so `FetchContent` re-resolves the URL (delete or repoint the existing `_deps/ffmpeg_prebuilt-subbuild` cache for this build tree if CMake does not pick up the URL change automatically — check the build directory's `_deps/ffmpeg_prebuilt-src` timestamp to confirm it re-downloaded). Then do a full build of `engine` and its tests.
 
 - [ ] **Step 5: Run the FFmpeg AAC encoder tests and confirm the encode-path cases now PASS instead of SKIP**
 
@@ -110,21 +110,21 @@ git commit -m "Repin vendored FFmpeg to exosnap-ffmpeg-build r5 (adds AAC encode
 ### Task 1.5: Fix FfmpegAacEncoder's packet PTS computation (discovered by Task 1's repin)
 
 **Files:**
-- Modify: `libs/recorder_core/src/ffmpeg_aac_encoder.h:87` (add a new counter member)
-- Modify: `libs/recorder_core/src/ffmpeg_aac_encoder.cpp:165-189` (`ReceiveAvailable`), `:150-159` (`Init`'s reset block), `:322-330` (`Shutdown`'s reset block)
-- Test: `libs/recorder_core/tests/test_ffmpeg_aac_encoder.cpp` (existing file, no code changes needed — this task's acceptance signal is `FeedFullFrames_ProducesMonotonicPts` flipping from FAIL to PASS)
+- Modify: `libs/engine/src/ffmpeg_aac_encoder.h:87` (add a new counter member)
+- Modify: `libs/engine/src/ffmpeg_aac_encoder.cpp:165-189` (`ReceiveAvailable`), `:150-159` (`Init`'s reset block), `:322-330` (`Shutdown`'s reset block)
+- Test: `libs/engine/tests/test_ffmpeg_aac_encoder.cpp` (existing file, no code changes needed — this task's acceptance signal is `FeedFullFrames_ProducesMonotonicPts` flipping from FAIL to PASS)
 
 **Interfaces:**
 - Consumes: nothing new.
 - Produces: `EncodedAudioPacket::pts_ns` values that strictly increase packet-to-packet, matching `FdkAacEncoder`'s existing (proven-correct, about-to-be-deleted-in-Task-3) approach exactly.
 
-**Root cause (diagnosed by the Task 1 implementer, confirmed by re-reading the code):** `ReceiveAvailable` currently computes each packet's `pts_ns` by reading `m_pkt->pts` back out of the FFmpeg encode round-trip (`libs/recorder_core/src/ffmpeg_aac_encoder.cpp:179`, `int64_t pts = (m_pkt->pts != AV_NOPTS_VALUE) ? m_pkt->pts : 0;`). Against the real native AAC encoder (only reachable since Task 1's repin — every prior test run against r4 skipped this code path entirely because `Init()` always failed first), the first packets come back with `m_pkt->pts == AV_NOPTS_VALUE` — almost certainly because AAC-LC has encoder priming/lookahead delay and `AVFrame::time_base` is never set on `m_frame` before `avcodec_send_frame`, so avcodec's internal pts bookkeeping can't establish an output pts for the earliest packets. The code's `: 0` fallback silently maps every one of those to `pts_ns == 0`, so packet 0 and packet 1 both report `pts_ns == 0` — not strictly increasing, failing the test.
+**Root cause (diagnosed by the Task 1 implementer, confirmed by re-reading the code):** `ReceiveAvailable` currently computes each packet's `pts_ns` by reading `m_pkt->pts` back out of the FFmpeg encode round-trip (`libs/engine/src/ffmpeg_aac_encoder.cpp:179`, `int64_t pts = (m_pkt->pts != AV_NOPTS_VALUE) ? m_pkt->pts : 0;`). Against the real native AAC encoder (only reachable since Task 1's repin — every prior test run against r4 skipped this code path entirely because `Init()` always failed first), the first packets come back with `m_pkt->pts == AV_NOPTS_VALUE` — almost certainly because AAC-LC has encoder priming/lookahead delay and `AVFrame::time_base` is never set on `m_frame` before `avcodec_send_frame`, so avcodec's internal pts bookkeeping can't establish an output pts for the earliest packets. The code's `: 0` fallback silently maps every one of those to `pts_ns == 0`, so packet 0 and packet 1 both report `pts_ns == 0` — not strictly increasing, failing the test.
 
-`FdkAacEncoder` (`libs/recorder_core/src/fdk_aac_encoder.cpp`) never had this problem because it never reads a codec-provided pts at all: it tracks its own running per-channel output-sample counter (`m_accumulated_frames`), incremented by the fixed AAC-LC frame size (1024 samples) every time a packet is emitted, and computes `pkt.pts_ns` purely from that counter (`m_accumulated_frames * 1000000000ULL / m_sample_rate`). This is deterministic, has no dependency on what the codec round-trips back, and is exactly the pattern to port into `FfmpegAacEncoder`.
+`FdkAacEncoder` (`libs/engine/src/fdk_aac_encoder.cpp`) never had this problem because it never reads a codec-provided pts at all: it tracks its own running per-channel output-sample counter (`m_accumulated_frames`), incremented by the fixed AAC-LC frame size (1024 samples) every time a packet is emitted, and computes `pkt.pts_ns` purely from that counter (`m_accumulated_frames * 1000000000ULL / m_sample_rate`). This is deterministic, has no dependency on what the codec round-trips back, and is exactly the pattern to port into `FfmpegAacEncoder`.
 
 - [ ] **Step 1: Add a new counter member**
 
-In `libs/recorder_core/src/ffmpeg_aac_encoder.h`, add immediately after the existing `uint64_t m_input_samples = 0;` line (currently line 87):
+In `libs/engine/src/ffmpeg_aac_encoder.h`, add immediately after the existing `uint64_t m_input_samples = 0;` line (currently line 87):
 
 ```cpp
     uint64_t m_output_samples = 0; // per-channel samples represented by packets already emitted (drives pts_ns)
@@ -134,7 +134,7 @@ In `libs/recorder_core/src/ffmpeg_aac_encoder.h`, add immediately after the exis
 
 - [ ] **Step 2: Replace the pts computation in ReceiveAvailable**
 
-In `libs/recorder_core/src/ffmpeg_aac_encoder.cpp`, replace the body of `ReceiveAvailable` (currently lines 165-189):
+In `libs/engine/src/ffmpeg_aac_encoder.cpp`, replace the body of `ReceiveAvailable` (currently lines 165-189):
 
 ```cpp
 void FfmpegAacEncoder::ReceiveAvailable(uint64_t pts_origin_ns, std::vector<EncodedAudioPacket>& out_packets) {
@@ -203,7 +203,7 @@ void FfmpegAacEncoder::ReceiveAvailable(uint64_t pts_origin_ns, std::vector<Enco
 
 - [ ] **Step 3: Reset the new counter alongside the existing ones**
 
-In `libs/recorder_core/src/ffmpeg_aac_encoder.cpp`, in `Init`'s reset block (currently lines 152-157):
+In `libs/engine/src/ffmpeg_aac_encoder.cpp`, in `Init`'s reset block (currently lines 152-157):
 
 ```cpp
     m_sample_rate = sample_rate;
@@ -262,7 +262,7 @@ Expected: 21 tests run, 21 PASS or SKIP (only the two self-adapting `GTEST_SKIP(
 - [ ] **Step 6: Commit**
 
 ```bash
-git add libs/recorder_core/src/ffmpeg_aac_encoder.h libs/recorder_core/src/ffmpeg_aac_encoder.cpp
+git add libs/engine/src/ffmpeg_aac_encoder.h libs/engine/src/ffmpeg_aac_encoder.cpp
 git commit -m "Fix FfmpegAacEncoder packet PTS: derive from output-sample counter, not codec round-trip"
 ```
 
@@ -273,16 +273,16 @@ git commit -m "Fix FfmpegAacEncoder packet PTS: derive from output-sample counte
 ### Task 2: Cut AAC recording over to FfmpegAacEncoder
 
 **Files:**
-- Modify: `libs/recorder_core/src/audio_thread.cpp:99-118` (the `AudioCodec::AacMf` case in `MakeEncoderSetup`)
-- Test: existing `libs/recorder_core/tests/test_session_e2e_real_file.cpp` and any existing audio-thread AAC-path tests (run, don't modify) — these exercise the real recording path end-to-end and are the regression guard for this swap.
+- Modify: `libs/engine/src/audio_thread.cpp:99-118` (the `AudioCodec::AacMf` case in `MakeEncoderSetup`)
+- Test: existing `libs/engine/tests/test_session_e2e_real_file.cpp` and any existing audio-thread AAC-path tests (run, don't modify) — these exercise the real recording path end-to-end and are the regression guard for this swap.
 
 **Interfaces:**
-- Consumes: `recorder_core::FfmpegAacEncoder` (`libs/recorder_core/src/ffmpeg_aac_encoder.h`), specifically `SetBitrateKbps(uint32_t)` and the `IAudioEncoder` virtual contract — both already implemented and already used by `test_ffmpeg_aac_encoder.cpp`.
+- Consumes: `exosnap::engine::FfmpegAacEncoder` (`libs/engine/src/ffmpeg_aac_encoder.h`), specifically `SetBitrateKbps(uint32_t)` and the `IAudioEncoder` virtual contract — both already implemented and already used by `test_ffmpeg_aac_encoder.cpp`.
 - Produces: `MakeEncoderSetup`'s `AudioCodec::AacMf` branch now returns a `setup` whose `.encoder` is a `FfmpegAacEncoder`, matching the shape every other branch in that switch already uses.
 
 - [ ] **Step 1: Replace the FdkAacEncoder construction with FfmpegAacEncoder**
 
-In `libs/recorder_core/src/audio_thread.cpp`, replace the `case AudioCodec::AacMf:` block (lines 99-117 in the pre-change file) — delete the `TODO(ADR 0052)` comment block and the two lines it describes:
+In `libs/engine/src/audio_thread.cpp`, replace the `case AudioCodec::AacMf:` block (lines 99-117 in the pre-change file) — delete the `TODO(ADR 0052)` comment block and the two lines it describes:
 
 ```cpp
     case AudioCodec::AacMf: {
@@ -324,18 +324,18 @@ with:
 
 - [ ] **Step 3: Full build**
 
-Build `recorder_core`, `recorder_core`'s tests, and the `exosnap` app target (audio_thread.cpp is linked into more than just tests).
+Build `engine`, `engine`'s tests, and the `exosnap` app target (audio_thread.cpp is linked into more than just tests).
 
 - [ ] **Step 4: Run the audio/session tests that exercise real AAC encoding end-to-end**
 
 Run: `ctest --test-dir <build-dir> -R "test_session_e2e_real_file|audio_thread" -V`
 
-Expected: PASS. If any test asserts on FDK-specific error message text (e.g. `"FDK-AAC encoder init: "`), update that assertion's expected string to `"FFmpeg AAC encoder init: "` as part of this step — grep for the old string first: `grep -rn "FDK-AAC encoder init" libs/recorder_core/tests/`.
+Expected: PASS. If any test asserts on FDK-specific error message text (e.g. `"FDK-AAC encoder init: "`), update that assertion's expected string to `"FFmpeg AAC encoder init: "` as part of this step — grep for the old string first: `grep -rn "FDK-AAC encoder init" libs/engine/tests/`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add libs/recorder_core/src/audio_thread.cpp
+git add libs/engine/src/audio_thread.cpp
 git commit -m "Cut AudioCodec::AacMf over to FfmpegAacEncoder (ADR 0052)"
 ```
 
@@ -348,29 +348,29 @@ git commit -m "Cut AudioCodec::AacMf over to FfmpegAacEncoder (ADR 0052)"
 ### Task 3: Delete FdkAacEncoder and its dependency
 
 **Files:**
-- Delete: `libs/recorder_core/src/fdk_aac_encoder.h`
-- Delete: `libs/recorder_core/src/fdk_aac_encoder.cpp`
-- Delete: `libs/recorder_core/tests/test_fdk_aac_encoder.cpp`
-- Modify: `libs/recorder_core/CMakeLists.txt:284` (remove `src/fdk_aac_encoder.cpp` from the source list), `:383` (remove `fdk-aac` from `target_link_libraries`), `:574-580` (remove the `test_fdk_aac_encoder` `exosnap_add_gtest` block)
+- Delete: `libs/engine/src/fdk_aac_encoder.h`
+- Delete: `libs/engine/src/fdk_aac_encoder.cpp`
+- Delete: `libs/engine/tests/test_fdk_aac_encoder.cpp`
+- Modify: `libs/engine/CMakeLists.txt:284` (remove `src/fdk_aac_encoder.cpp` from the source list), `:383` (remove `fdk-aac` from `target_link_libraries`), `:574-580` (remove the `test_fdk_aac_encoder` `exosnap_add_gtest` block)
 - Modify: `third_party/CMakeLists.txt:89-114` (remove the entire `# --- fdk-aac-free ...` block)
 - Modify: `THIRD_PARTY_NOTICES.md:46-70` (remove the `### FDK-AAC (fdk-aac-free, LC-only fork)` section)
 - Modify: `tests/package/license_bundle_test.cpp:54,71` (remove `"fdk-aac.txt"` and `"FDK-AAC"` from whatever lists those lines belong to)
-- Modify: `libs/recorder_core/include/recorder_core/interfaces/IAudioEncoder.h:3` (update the stale comment)
-- Modify: `libs/recorder_core/tests/test_audio_encoding_params.cpp:12-16,29-33,138-159` (port the `FdkAacBitrateResolve_*` tests to `FfmpegAacEncoder`)
+- Modify: `libs/engine/include/exosnap/engine/interfaces/IAudioEncoder.h:3` (update the stale comment)
+- Modify: `libs/engine/tests/test_audio_encoding_params.cpp:12-16,29-33,138-159` (port the `FdkAacBitrateResolve_*` tests to `FfmpegAacEncoder`)
 
 **Interfaces:**
-- Consumes: `recorder_core::FfmpegAacEncoder::ResolveBitrateKbps(uint32_t) -> uint32_t` (already implemented, static, public — mirrors `FdkAacEncoder::ResolveBitrateKbps` exactly per `ffmpeg_aac_encoder.h`'s own doc comment).
+- Consumes: `exosnap::engine::FfmpegAacEncoder::ResolveBitrateKbps(uint32_t) -> uint32_t` (already implemented, static, public — mirrors `FdkAacEncoder::ResolveBitrateKbps` exactly per `ffmpeg_aac_encoder.h`'s own doc comment).
 - Produces: nothing new — this task only deletes.
 
 - [ ] **Step 1: Delete the FdkAacEncoder implementation and its test**
 
 ```bash
-git rm libs/recorder_core/src/fdk_aac_encoder.h libs/recorder_core/src/fdk_aac_encoder.cpp libs/recorder_core/tests/test_fdk_aac_encoder.cpp
+git rm libs/engine/src/fdk_aac_encoder.h libs/engine/src/fdk_aac_encoder.cpp libs/engine/tests/test_fdk_aac_encoder.cpp
 ```
 
 - [ ] **Step 2: Remove FdkAacEncoder from the CMake source list**
 
-In `libs/recorder_core/CMakeLists.txt`, delete this line (currently line 284, immediately before `src/ffmpeg_aac_encoder.cpp`):
+In `libs/engine/CMakeLists.txt`, delete this line (currently line 284, immediately before `src/ffmpeg_aac_encoder.cpp`):
 
 ```cmake
     src/fdk_aac_encoder.cpp
@@ -378,7 +378,7 @@ In `libs/recorder_core/CMakeLists.txt`, delete this line (currently line 284, im
 
 - [ ] **Step 3: Remove the fdk-aac link dependency**
 
-In the same file's `target_link_libraries(recorder_core PRIVATE ...)` block, delete this line (currently line 383, between `Matroska::matroska` and `FFmpeg::mux`):
+In the same file's `target_link_libraries(engine PRIVATE ...)` block, delete this line (currently line 383, between `Matroska::matroska` and `FFmpeg::mux`):
 
 ```cmake
         fdk-aac
@@ -391,9 +391,9 @@ In the same file, delete this whole block (currently lines 574-580):
 ```cmake
 exosnap_add_gtest(
     NAME test_fdk_aac_encoder
-    TEST_PREFIX recorder_core.
+    TEST_PREFIX engine.
     SOURCES tests/test_fdk_aac_encoder.cpp
-    LIBRARIES recorder_core
+    LIBRARIES engine
 )
 target_include_directories(test_fdk_aac_encoder PRIVATE src)
 
@@ -403,7 +403,7 @@ Also trim the now-stale sentence in the `test_ffmpeg_aac_encoder` block's leadin
 
 ```cmake
 # FfmpegAacEncoder (ADR 0052): native FFmpeg AAC-LC encoder, the sole AAC path
-# now that FdkAacEncoder has been removed. Links recorder_core (which carries
+# now that FdkAacEncoder has been removed. Links engine (which carries
 # the encoder + FFmpeg::mux/swresample transitively); the FFmpeg DLLs are
 # staged next to the test binary by exosnap_add_gtest.
 ```
@@ -422,7 +422,7 @@ In `tests/package/license_bundle_test.cpp`, remove `"fdk-aac.txt",` from the lis
 
 - [ ] **Step 8: Update the stale doc comment in IAudioEncoder.h**
 
-In `libs/recorder_core/include/recorder_core/interfaces/IAudioEncoder.h`, replace:
+In `libs/engine/include/exosnap/engine/interfaces/IAudioEncoder.h`, replace:
 
 ```cpp
 // Windows implementation: FdkAacEncoder.
@@ -436,12 +436,12 @@ with:
 
 - [ ] **Step 9: Port the FdkAacBitrateResolve tests to FfmpegAacEncoder**
 
-In `libs/recorder_core/tests/test_audio_encoding_params.cpp`:
+In `libs/engine/tests/test_audio_encoding_params.cpp`:
 
 Replace the include guard block (currently lines 13-15):
 
 ```cpp
-#if EXOSNAP_RECORDER_CORE_HAS_WASAPI_CAPTURE_SRC
+#if EXOSNAP_ENGINE_HAS_WASAPI_CAPTURE_SRC
 #include "fdk_aac_encoder.h"
 #endif
 ```
@@ -449,7 +449,7 @@ Replace the include guard block (currently lines 13-15):
 with:
 
 ```cpp
-#if EXOSNAP_RECORDER_CORE_HAS_WASAPI_CAPTURE_SRC
+#if EXOSNAP_ENGINE_HAS_WASAPI_CAPTURE_SRC
 #include "ffmpeg_aac_encoder.h"
 #endif
 ```
@@ -457,16 +457,16 @@ with:
 Replace the `using` block (currently lines 30-32):
 
 ```cpp
-#if EXOSNAP_RECORDER_CORE_HAS_WASAPI_CAPTURE_SRC
-using recorder_core::FdkAacEncoder;
+#if EXOSNAP_ENGINE_HAS_WASAPI_CAPTURE_SRC
+using exosnap::engine::FdkAacEncoder;
 #endif
 ```
 
 with:
 
 ```cpp
-#if EXOSNAP_RECORDER_CORE_HAS_WASAPI_CAPTURE_SRC
-using recorder_core::FfmpegAacEncoder;
+#if EXOSNAP_ENGINE_HAS_WASAPI_CAPTURE_SRC
+using exosnap::engine::FfmpegAacEncoder;
 #endif
 ```
 
@@ -520,18 +520,18 @@ TEST(AudioEncodingParamsTest, FfmpegAacBitrateResolve_AboveMax_ClampsTo320) {
 
 - [ ] **Step 10: Full clean reconfigure + build**
 
-A clean CMake reconfigure is important here since a whole `FetchContent` dependency (`fdk-aac`) was removed — stale generated build files can otherwise reference the deleted target. Build `recorder_core`, its full test suite, `tests/package` (license_bundle_test), and the `exosnap` app target.
+A clean CMake reconfigure is important here since a whole `FetchContent` dependency (`fdk-aac`) was removed — stale generated build files can otherwise reference the deleted target. Build `engine`, its full test suite, `tests/package` (license_bundle_test), and the `exosnap` app target.
 
-- [ ] **Step 11: Run the full recorder_core test suite plus the license bundle test**
+- [ ] **Step 11: Run the full engine test suite plus the license bundle test**
 
-Run: `ctest --test-dir <build-dir> -R "recorder_core\.|license_bundle" -V`
+Run: `ctest --test-dir <build-dir> -R "engine\.|license_bundle" -V`
 
 Expected: all PASS, zero references to `fdk`/`FDK` anywhere in build output or test names. Also grep the working tree to confirm nothing was missed: `grep -rli "fdk" --include=*.cpp --include=*.h --include=CMakeLists.txt --include=*.md .` should return nothing under `libs/`, `third_party/`, `tests/`, or `THIRD_PARTY_NOTICES.md` (the `docs/decisions/0043-*.md` and `docs/decisions/0052-*.md` ADR files are historical record and should still mention FDK-AAC by name — leave those untouched).
 
 - [ ] **Step 12: Commit**
 
 ```bash
-git add -A -- libs/recorder_core third_party/CMakeLists.txt THIRD_PARTY_NOTICES.md tests/package/license_bundle_test.cpp
+git add -A -- libs/engine third_party/CMakeLists.txt THIRD_PARTY_NOTICES.md tests/package/license_bundle_test.cpp
 git commit -m "Remove FDK-AAC now that FfmpegAacEncoder is the active AAC path (ADR 0052)"
 ```
 
@@ -542,13 +542,13 @@ git commit -m "Remove FDK-AAC now that FfmpegAacEncoder is the active AAC path (
 ### Task 4: Delete the orphaned NvencVideoEncoder header (CV-CLEAN-001)
 
 **Files:**
-- Delete: `libs/recorder_core/src/platform/windows/NvencVideoEncoder.h`
+- Delete: `libs/engine/src/platform/windows/NvencVideoEncoder.h`
 
 **Interfaces:**
 - Consumes: nothing.
 - Produces: nothing — pure dead-code removal.
 
-Confirmed dead: `libs/recorder_core/src/platform/windows/NvencVideoEncoder.h` (51 lines) has no corresponding `.cpp` and zero `#include` references anywhere in the tree (`grep -rln "platform/windows/NvencVideoEncoder.h"` returns nothing). The real, actively-used encoder is `libs/recorder_core/src/nvenc_video_encoder.h`/`.cpp` (96+ lines, included by `video_thread.cpp` and covered by `tests/test_nvenc_video_encoder_interface.cpp`, and is what `CMakeLists.txt` actually compiles). Do not touch the live one. Do not touch the other two files in `platform/windows/` (`WasapiLoopbackSrc.h`, `WgcCaptureSrc.h`) — they are out of scope for this task; verify they're still referenced elsewhere before assuming otherwise, but this task only removes the one confirmed-dead file.
+Confirmed dead: `libs/engine/src/platform/windows/NvencVideoEncoder.h` (51 lines) has no corresponding `.cpp` and zero `#include` references anywhere in the tree (`grep -rln "platform/windows/NvencVideoEncoder.h"` returns nothing). The real, actively-used encoder is `libs/engine/src/nvenc_video_encoder.h`/`.cpp` (96+ lines, included by `video_thread.cpp` and covered by `tests/test_nvenc_video_encoder_interface.cpp`, and is what `CMakeLists.txt` actually compiles). Do not touch the live one. Do not touch the other two files in `platform/windows/` (`WasapiLoopbackSrc.h`, `WgcCaptureSrc.h`) — they are out of scope for this task; verify they're still referenced elsewhere before assuming otherwise, but this task only removes the one confirmed-dead file.
 
 - [ ] **Step 1: Verify no references exist (repeat the check fresh, in case something changed since planning)**
 
@@ -559,12 +559,12 @@ Expected: no output. If something now references it, STOP — do not delete, re-
 - [ ] **Step 2: Delete the file**
 
 ```bash
-git rm libs/recorder_core/src/platform/windows/NvencVideoEncoder.h
+git rm libs/engine/src/platform/windows/NvencVideoEncoder.h
 ```
 
 - [ ] **Step 3: Full build**
 
-Build `recorder_core` and its tests. Since nothing referenced this file, the build should be unaffected — this step exists to catch anything the grep in Step 1 missed (e.g. a build-generated file list).
+Build `engine` and its tests. Since nothing referenced this file, the build should be unaffected — this step exists to catch anything the grep in Step 1 missed (e.g. a build-generated file list).
 
 - [ ] **Step 4: Run the NVENC interface test to confirm the live encoder is untouched**
 
@@ -575,7 +575,7 @@ Expected: PASS, unchanged from before this task.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add -A -- libs/recorder_core/src/platform/windows/NvencVideoEncoder.h
+git add -A -- libs/engine/src/platform/windows/NvencVideoEncoder.h
 git commit -m "Remove orphaned NvencVideoEncoder.h scaffold (dead code, zero includes)"
 ```
 
@@ -622,7 +622,7 @@ add_subdirectory(libs/recorder_facade)
 In `.github/workflows/ci.yml` around line 196, that line currently reads (as one shell-continuation fragment among several `-I` flags):
 
 ```
--I libs/recorder_core/include -I libs/capability/include -I libs/recorder_facade/include `
+-I libs/engine/include -I libs/capability/include -I libs/recorder_facade/include `
 ```
 
 Remove ` -I libs/recorder_facade/include` from it, leaving the other `-I` flags and the line-continuation backtick intact.

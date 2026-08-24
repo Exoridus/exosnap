@@ -8,6 +8,8 @@
 #include <update/swap_engine.h>
 #include <update/update_checker.h>
 
+namespace exosnap::updater {
+
 namespace {
 
 void ArgError(const QString& message) {
@@ -151,3 +153,5 @@ UpdaterArgs ArgsForManualStart(const UpdaterCommandLine& command_line) {
     // of anyone's operation and resolves everything itself.
     return args;
 }
+
+} // namespace exosnap::updater

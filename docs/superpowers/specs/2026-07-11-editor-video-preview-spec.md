@@ -41,28 +41,28 @@ Das ist der größte Ehrlichkeits-/Nutzbarkeits-Bruch der Edit-Fläche.
   DLL set … decoding frames to a displayable format is not wired up (planned for a later release)".
 
 **Engine: was bereits existiert und wiederverwendbar ist**
-- `libs/recorder_core/include/recorder_core/mp4_remuxer.h:108` —
+- `libs/engine/include/exosnap/engine/mp4_remuxer.h:108` —
   `ExtractKeyframeTimestamps(path)` liefert alle Video-Keyframe-PTS (µs, aufsteigend), ohne zu
   dekodieren. Wird heute schon für Trim-Snapping auf dem MKV-Master gerufen → der Matroska-Demuxer
   ist einsatzfähig. **Direkt als Seek-Index wiederverwendbar.**
-- `libs/recorder_core/src/yuv_to_bgra.h:45-62` — `ConvertYuv420ToBgra(PlanarYuv420Frame,
+- `libs/engine/src/yuv_to_bgra.h:45-62` — `ConvertYuv420ToBgra(PlanarYuv420Frame,
   YuvToBgraParams, out, stride)`: reine CPU-Konvertierung **NV12/P010 → BGRA8888**, matrix-/
   range-parametrisiert (BT.709, Full/Limited). Keine GPU-Abhängigkeit, thread-safe. **Erwartet eine
   interleavte UV-Plane und (10 Bit) MSB-Alignment 15:6** (`yuv_to_bgra.h:36-53`) — der Software-
   Decoder liefert planar/LSB-aligned, daher der Repack-Adapter in Schritt 2a.
-- `libs/recorder_core/src/yuv_to_bgra.h:85` — `ConvertAyuvToBgra(...)` für **packed** AYUV (der
+- `libs/engine/src/yuv_to_bgra.h:85` — `ConvertAyuvToBgra(...)` für **packed** AYUV (der
   Capture-Encode-Surface-Fall). Der Software-Decoder eines 8-bit-4:4:4-H.264/HEVC-Files
   (Expert-Option, `product-spec` §Not present) liefert dagegen **planares `yuv444p`** — dafür passt
   weder `ConvertYuv420ToBgra` (4:2:0/interleaved) noch `ConvertAyuvToBgra` (packed) direkt; MVP-
   Verhalten dazu ist in Section B / Schritt 2a definiert (neuer planarer `ConvertYuv444ToBgra` bzw.
   inerter Fallback).
-- `libs/recorder_core/src/hdr_preview.h:88-98` — `P010PqMonitorConverter(peak_scale)` +
+- `libs/engine/src/hdr_preview.h:88-98` — `P010PqMonitorConverter(peak_scale)` +
   `Convert(...)`: reine CPU-Konvertierung **P010 PQ/BT.2020 → tone-gemapptes SDR BGRA** über
   vorberechnete LUTs (dieselben Referenzkurven wie der Capture-Tonemap). Genau der Pfad, den ein
   dekodierter HDR10-Frame braucht.
-- `libs/recorder_core/CMakeLists.txt:940-961` — Tests `test_hdr_preview` und `test_yuv_to_bgra`
+- `libs/engine/CMakeLists.txt:940-961` — Tests `test_hdr_preview` und `test_yuv_to_bgra`
   bestätigen: die Farb-Konvertierungsmathematik existiert und ist CI-getestet, **ohne** swscale.
-- `libs/recorder_core/include/recorder_core/gpu_hdr_tonemap.h:23-39` — `HdrToneMapper`: GPU-Pass
+- `libs/engine/include/exosnap/engine/gpu_hdr_tonemap.h:23-39` — `HdrToneMapper`: GPU-Pass
   FP16 scRGB → SDR BGRA. Relevant nur, falls je ein GPU-Decode-Pfad FP16 liefert; der Software-
   Decode liefert P010, für das der CPU-`P010PqMonitorConverter` der passende Match ist.
 
@@ -209,7 +209,7 @@ Option A2) bringt es je nach `pix_fmt` ins vom Konverter erwartete Layout:
 - `yuv444p` (8-bit-4:4:4-Expert-Aufnahme, `product-spec` §Not present: „8-bit 4:4:4 … implemented as
   an Expert option") → **MVP-Verhalten definiert**: trivialer `yuv444p → BGRA`-Pfad (kein
   Chroma-Upsampling, dieselbe BT.709/Range-Matrix wie `ConvertYuv420ToBgra`; ein `ConvertYuv444ToBgra`
-  in `recorder_core`, ~analog `ConvertAyuvToBgra` aber planar). Solange dieser Pfad nicht steht, ist
+  in `engine`, ~analog `ConvertAyuvToBgra` aber planar). Solange dieser Pfad nicht steht, ist
   der **definierte Fallback** die inerte Player-Fläche (kein Garbage) — nie undefinierter Zustand.
 - Jedes andere/unerwartete `pix_fmt` → inerte Player-Fläche (definierter Fallback).
 
@@ -227,7 +227,7 @@ Das hält `EditContext` unverändert und ist robust gegen fehlende/veraltete Met
   Highlights sichtbar anders klippen — der User-live-Testfall „sieht HDR wie das Live-Preview aus"
   wäre nicht erfüllbar. **Entscheidung:** Beim Editor-Open den Display-Peak über **denselben
   DisplayConfig-Query** ermitteln, den der Capture-Pfad nutzt (vgl. `dxgi_od_capture_src.cpp` /
-  `libs/recorder_core/CMakeLists.txt:929-932`), und den `P010PqMonitorConverter` damit bauen. Ist
+  `libs/engine/CMakeLists.txt:929-932`), und den `P010PqMonitorConverter` damit bauen. Ist
   beim Editor-Open **kein** Display-Peak ermittelbar (Headless/Multi-Monitor-Edge), fällt der Editor
   auf den Referenz-Peak zurück — dann ist die Roll-off-Abweichung ein **explizit benannter Kauf**
   (in Spec/KNOWN_LIMITATIONS notiert), und der User-live-Test wird entsprechend als „im Normalfall
@@ -286,7 +286,7 @@ lizenzseitig aufnehmen:**
 _Verify:_ Build lädt r4; License-Staging produziert `ffmpeg.txt` **und** `dav1d.txt`; bestehende
 Remux-/Keyframe-Tests bleiben grün.
 
-**Schritt 2a — Planar→interleaved Repack-Adapter in `recorder_core` (eigenes Arbeitspaket).**
+**Schritt 2a — Planar→interleaved Repack-Adapter in `engine` (eigenes Arbeitspaket).**
 Reine CPU-Helfer, die den planaren Decoder-Output ins vom vorhandenen Konverter erwartete Layout
 bringen (s. Option A2 / Format-Auswahl):
 - `yuv420p` → `PlanarYuv420Frame` mit interleavter UV-Plane (U/V zeilenweise verweben, 8 Bit).
@@ -298,8 +298,8 @@ _Verify (CI, GPU-los):_ eigener Unit-Test `test_yuv_repack` — synthetische pla
 Konverter gegen Referenzpixel. **Dieser Test schließt die Lücke, die `test_yuv_to_bgra`/
 `test_hdr_preview` offenlassen** (die decken nur den bereits-interleavten Pfad ab).
 
-**Schritt 2b — `FramePreviewDecoder` in `recorder_core` (reiner Decode-Kern, UI-agnostisch).**
-Neue Klasse, Header in `libs/recorder_core/include/recorder_core/frame_preview_decoder.h`:
+**Schritt 2b — `FramePreviewDecoder` in `engine` (reiner Decode-Kern, UI-agnostisch).**
+Neue Klasse, Header in `libs/engine/include/exosnap/engine/frame_preview_decoder.h`:
 - `Open(path)` (MKV-Master) — **mit `FILE_SHARE_DELETE`-tauglichem Öffnen** (Custom-`AVIOContext`
   über einen mit `FILE_SHARE_READ|WRITE|DELETE` geöffneten Handle), damit ein offener Decoder den
   späteren Overwrite-`rename` auf den MKV-Master nicht blockiert (s. Schritt 3/4 + Risiken).
@@ -311,7 +311,7 @@ Neue Klasse, Header in `libs/recorder_core/include/recorder_core/frame_preview_d
   Fallback, kein Garbage).
 - Keine Qt-Typen (Engine bleibt UI-agnostisch). Kein swscale.
 _Verify (CI, GPU-los):_ **Ein committetes, vor-encodetes Binär-Fixture** in
-`libs/recorder_core/tests/data/` — ein via libavformat gemuxter synthetischer Stream ist **keine
+`libs/engine/tests/data/` — ein via libavformat gemuxter synthetischer Stream ist **keine
 gangbare Alternative**, weil r4 per Design **keine Encoder** enthält (und CI keine NVENC-GPU hat),
 also kein dekodierbarer Elementarstream zur Laufzeit erzeugbar ist. Fixtures explizit festgelegt:
 je ein winziges (~einige KB, wenige Frames, kleinste Auflösung) H.264-, HEVC- und AV1-MKV in **SDR**

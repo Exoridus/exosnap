@@ -1,7 +1,7 @@
 // CaptureSourceHub drives StepCaptureHub. These tests exist to prove exactly
 // that: every open, close, reopen and hold the hub performs is one the policy
 // asked for. The policy's own rules are pinned in
-// libs/recorder_core/tests/test_capture_hub_policy.cpp and are not restated here.
+// libs/engine/tests/test_capture_hub_policy.cpp and are not restated here.
 //
 // A FakeProducer stands in for the WGC session, so the loop runs with no GPU, no
 // WinRT and no threads. Pump() is stepped by hand, which is the only reason the
@@ -19,7 +19,7 @@
 namespace {
 
 using namespace exosnap;
-using recorder_core::HubFrameKind;
+using exosnap::engine::HubFrameKind;
 
 class FakeProducer : public HubSourceProducer {
   public:

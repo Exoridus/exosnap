@@ -14,7 +14,7 @@ stacking, clipping, hit-testing, or animating content over them.
 The recording engine and the idle capture hubs publish an NT-handle shared D3D11 texture guarded by
 a keyed mutex. DXGI Output Duplication supplies the normal monitor path; a WGC hub supplies window
 targets and the monitor fallback required when Output Duplication cannot serve the selected source.
-The Quick bridge must consume either resource without moving Qt concepts into `recorder_core`,
+The Quick bridge must consume either resource without moving Qt concepts into `engine`,
 without CPU readback, and without changing the shipping renderer.
 
 ## Decision

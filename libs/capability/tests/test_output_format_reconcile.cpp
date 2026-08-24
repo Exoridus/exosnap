@@ -276,7 +276,7 @@ TEST(ToHdrDisplayFactsTest, MapsEveryFieldTheNativeHdrPathReads) {
     probe.max_luminance_nits = 1015.0f;
     probe.min_luminance_nits = 0.05f;
 
-    const recorder_core::HdrDisplayFacts facts = ToHdrDisplayFacts(probe);
+    const exosnap::engine::HdrDisplayFacts facts = ToHdrDisplayFacts(probe);
 
     EXPECT_TRUE(facts.hdr_active);
     EXPECT_FLOAT_EQ(facts.red_primary_x, 0.68f);

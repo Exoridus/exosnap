@@ -79,7 +79,7 @@ std::vector<qint64> TimelineTileTimesMs(int tile_count, qint64 duration_ms, cons
     return times;
 }
 
-QImage WrapDecodedFrame(const recorder_core::DecodedVideoFrame& frame) {
+QImage WrapDecodedFrame(const exosnap::engine::DecodedVideoFrame& frame) {
     // Geometry first, keep-alive second. QImage refuses a frame it cannot
     // describe (no buffer, a zero side, a stride shorter than one row, a
     // dimension past what its int-based geometry can hold) by returning a null
@@ -122,7 +122,7 @@ void GenerateTimelineTiles(const std::vector<qint64>& times_ms, int row_height, 
             // must both be gone before the next decode allocates its own buffer.
             // QImage::scaled() produces an independent image, so nothing here
             // outlives the scope.
-            const std::optional<recorder_core::DecodedVideoFrame> frame = decode(time_ms * 1000);
+            const std::optional<exosnap::engine::DecodedVideoFrame> frame = decode(time_ms * 1000);
             if (!frame)
                 continue; // this tile stays empty; the rest of the strip still fills in
             const QImage full = WrapDecodedFrame(*frame);
@@ -208,7 +208,7 @@ void TimelineThumbnailSource::cancel() {
 void TimelineThumbnailSource::workerLoop() {
     // Constructed on the worker so the engine (and everything FFmpeg allocates
     // behind it) lives and dies on exactly one thread.
-    auto engine = std::make_unique<recorder_core::EditPlayerEngine>();
+    auto engine = std::make_unique<exosnap::engine::EditPlayerEngine>();
     bool open = false;
 
     for (;;) {

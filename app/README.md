@@ -56,5 +56,5 @@ app/
 - Dark theme: Fusion + centralized ExoSnap theme tokens + global QSS
 - `RecordingCoordinator` dispatches background thread callbacks to the main thread via
   `QMetaObject::invokeMethod(..., Qt::QueuedConnection)` — no WinRT required
-- Recording engine (`recorder_core`, `exosnap::capability`) is fully UI-agnostic
+- Recording engine (`engine`, `exosnap::capability`) is fully UI-agnostic
 - If Qt6 is not found at configure time the target degrades gracefully with a warning

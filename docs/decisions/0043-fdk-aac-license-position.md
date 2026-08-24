@@ -40,7 +40,7 @@ was able to determine — it does not match the position that is actually attrib
 license... Patent licensing is the user's responsibility") but does not address the GPL
 combination question at all.
 
-**This is not a peripheral dependency.** `FdkAacEncoder` (`libs/recorder_core/src/fdk_aac_encoder.{h,cpp}`)
+**This is not a peripheral dependency.** `FdkAacEncoder` (`libs/engine/src/fdk_aac_encoder.{h,cpp}`)
 is the **only** live AAC encoder in the audio pipeline — `audio_thread.cpp` constructs it directly
 and nothing else. AAC is not optional in the product: per `docs/product-spec.md` (§4, the
 container/codec matrix), **MP4 offers only AAC audio** — Opus, PCM, and FLAC are explicitly
@@ -50,7 +50,7 @@ this license question. AAC is also the audio codec of the built-in **Compatibili
 `EXOSNAP_WITH_PRESENTMON`) — it is unconditionally fetched, built as a static library, and linked
 into every configuration, official and self-built alike.
 
-The legacy `MfAacEncoder` (Media Foundation AAC-LC, `libs/recorder_core/src/mf_aac_encoder.{h,cpp}`)
+The legacy `MfAacEncoder` (Media Foundation AAC-LC, `libs/engine/src/mf_aac_encoder.{h,cpp}`)
 is still present in the tree — ADR 0038 records that the live pipeline switched from it to
 FDK-AAC and that it has been dead code ever since — but **an open PR (#176, "Dead code retires
 and every theme proves its QSS tokens resolve") currently proposes deleting it** (`MfAacEncoder`,
@@ -161,7 +161,7 @@ on purpose, as a codec the program is specifically designed to use.
 ### Does `fdk-aac-free` cover what ExoSnap actually needs?
 
 Yes, with no loss of functionality for ExoSnap specifically. `FdkAacEncoder::Init()`
-(`libs/recorder_core/src/fdk_aac_encoder.cpp:41`) hardcodes `AACENC_AOT = AOT_AAC_LC` — ExoSnap
+(`libs/engine/src/fdk_aac_encoder.cpp:41`) hardcodes `AACENC_AOT = AOT_AAC_LC` — ExoSnap
 has never used HE-AAC/SBR/PS. `KNOWN_LIMITATIONS.md` already documents the shipped format as
 "AAC-LC (`AAC` in the UI)." The functionality `fdk-aac-free` strips is functionality ExoSnap does
 not call. A swap would plausibly be a `FetchContent` source-URL change plus a licensing-text and
@@ -289,7 +289,7 @@ The decision landed together with this ADR:
   USAC-removal commit deleted; Fedora builds it via autotools) and fails to configure —
   worth re-evaluating if upstream repairs it. The fork ships the same upstream-style
   `CMakeLists.txt` and the same `fdk-aac` target name, so the FetchContent mechanics, the
-  static-link setup, and `recorder_core`'s link line are unchanged.
+  static-link setup, and `engine`'s link line are unchanged.
 - The incorrect "compatible with GPL 3.0 per FSF (2017)" comment is gone; the replacement
   states the actual position (FSF: free but GPL-incompatible in general; Fedora Legal
   precedent for the LC-only stripped fork) with the Bugzilla citation.

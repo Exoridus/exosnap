@@ -3,6 +3,8 @@
 #include <QFontMetrics>
 #include <QResizeEvent>
 
+namespace exosnap::updater {
+
 namespace {
 // The one character that makes a shortened string read as deliberate.
 const QString& Ellipsis() {
@@ -81,10 +83,11 @@ void ElidingLabel::applyElision() {
     // full string is the right answer then -- resizeEvent runs this again with a
     // real width. sizeHint() is a function of full_text_ only, so re-eliding on
     // every resize cannot oscillate.
-    const QString shown =
-        available <= 0 ? full_text_ : fontMetrics().elidedText(full_text_, elide_mode_, available);
+    const QString shown = available <= 0 ? full_text_ : fontMetrics().elidedText(full_text_, elide_mode_, available);
     elided_ = shown != full_text_;
     setToolTip(elided_ ? full_text_ : QString());
     if (QLabel::text() != shown)
         QLabel::setText(shown);
 }
+
+} // namespace exosnap::updater

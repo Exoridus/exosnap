@@ -29,7 +29,7 @@ resolution remain in their existing C++ owners.
 ## Architecture
 
 ```text
-recorder_core / capability and device services
+engine / capability and device services
                     |
                     v
 RecordingCoordinator + pure RecordViewModel

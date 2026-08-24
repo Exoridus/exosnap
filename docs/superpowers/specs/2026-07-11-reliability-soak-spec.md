@@ -46,10 +46,10 @@ User-Live-Lauf auf der Entwicklermaschine ist.
   `RecorderSession`: `EnumerateTargets()` (`main.cpp:295`), `session.Record(cfg)` blockierend
   (`main.cpp:407`), ein `stopper`-Thread ruft `session.Stop()` nach `--seconds` (`main.cpp:402-405`),
   MP4-Remux wie im App-Layer (`main.cpp:418-430`). **Korrektur zur Gate-Semantik:** das CMake-Gate ist
-  `if(NOT TARGET recorder_core)` (`tools/probes/probe_record/CMakeLists.txt:10-13`) — ein reines
+  `if(NOT TARGET engine)` (`tools/probes/probe_record/CMakeLists.txt:10-13`) — ein reines
   **Build-Gate** auf die NVENC-Header. Die sind aber **vendored** (`third_party/nvidia/nvEncodeAPI.h`
-  existiert), also **baut `recorder_core` und damit `probe_record` auch auf dem GPU-losen CI-Runner**
-  (dort laufen die `recorder_core`-Tests); nur das *Ausführen* des echten Aufnahmepfads braucht eine
+  existiert), also **baut `engine` und damit `probe_record` auch auf dem GPU-losen CI-Runner**
+  (dort laufen die `engine`-Tests); nur das *Ausführen* des echten Aufnahmepfads braucht eine
   GPU. „GPU-gated" ist also für den Build falsch — korrekt ist: **Build-Gate = NVENC-Header (hier immer
   erfüllt), Runtime-Gate = GPU vorhanden.** Der Treiber abonniert heute *keine* Callbacks; er meldet nur
   die Dateigröße (`main.cpp:432-436`).
@@ -66,8 +66,8 @@ User-Live-Lauf auf der Entwicklermaschine ist.
     `discontinuities` (`:173`), `MuxDiagnostics`/`QueueDiagnostics` Tiefen (`:181-216`).
   - `duration_skew_ms` wird in `session_stats_collector.cpp:77-81` aus den Media-Dauern berechnet.
 - **Die ehrliche Drift-Metrik-Mathematik ist gelandet (#191).** `AudioClockDriftEstimator`
-  (`libs/recorder_core/src/audio_clock_drift.h`, getestet in
-  `libs/recorder_core/tests/test_audio_clock_drift.cpp`): device-position/QPC-Paare, Vorzeichen
+  (`libs/engine/src/audio_clock_drift.h`, getestet in
+  `libs/engine/tests/test_audio_clock_drift.cpp`): device-position/QPC-Paare, Vorzeichen
   positiv = Audio führt (`test_audio_clock_drift.cpp:45-73`), robust gegen Discontinuity-Gaps
   (`:75-95`), gefensterte Glättung (`:97-112`). Dies *misst* Drift; die **Kompensation** (swr Richtung
   QPC) ist bewusst NICHT hier, sondern in `av-clock-slaving-spec` (H-3 Stufe 3). Diese Spec liefert
@@ -87,7 +87,7 @@ User-Live-Lauf auf der Entwicklermaschine ist.
   Produktversprechen aus `docs/product-spec.md:162` / §Crash recovery (`:486-503`).
   `RemuxToMkv`/`RemuxToProgressiveMp4` mit Progress-Callback: `mp4_remuxer.h:98-136`.
 - **Der „echte Datei"-E2E-Test existiert (Review-Basis „#186").**
-  `libs/recorder_core/tests/test_session_e2e_real_file.cpp` fährt echten `AudioThread` (echter
+  `libs/engine/tests/test_session_e2e_real_file.cpp` fährt echten `AudioThread` (echter
   libopus/libfdk-aac) + echten `MuxThread` + `MatroskaStreamWriter` + Finalize zu einer echten Datei
   und validiert sie mit der gevendorten libavformat als „fremder Player" (`DemuxAndInspect`,
   `:200-272`). Der GPU-Video-Pfad ist durch einen deterministischen In-Test-„video feeder" ersetzt
@@ -189,14 +189,14 @@ daher *keine* Timeline-Samples (Schritt 4) und *keine* Skew-Snapshots für die A
 `SessionStatsCollector` selbst gegen den geteilten `SessionState` (Start vor dem Feeder, Stop danach —
 derselbe Lebenszyklus wie in `Record`) und verdrahtet die Tool-Callbacks über `SessionState`. Das ist
 kein „no-op"-Detail: es **exponiert bewusst interne Engine-src-Header** (`session_internal.h`,
-`session_stats_collector.h` — heute PRIVATE `src`-Includes, `libs/recorder_core/CMakeLists.txt:1080`)
+`session_stats_collector.h` — heute PRIVATE `src`-Includes, `libs/engine/CMakeLists.txt:1080`)
 an `tools/soak`. Das ist die kleinste ehrliche Kopplung, die den CI-Zwilling messbar macht; sie ist
 hier als bewusste Entscheidung ausgewiesen und **nicht** unter „keine Engine-Änderung" versteckt
 (die Engine bleibt code-unverändert, aber ihre Test-Seam-Header werden für ein zweites Ziel sichtbar).
 Alternativ könnte der Feeder hinter eine schmale `synthetic_session`-Fassade gezogen werden, die den
 Collector kapselt und nur die öffentlichen Callback-Typen nach außen gibt — bevorzugt, wenn die
 Header-Exposition den Rest von `tools/soak` mitzöge; die Fassade lebt dann in
-`libs/recorder_core/testutil` (Schritt 2) und wird von Test und Tool geteilt.
+`libs/engine/testutil` (Schritt 2) und wird von Test und Tool geteilt.
 
 Der Soak-Report teilt bewusst *kein* neues Schema-Format neu, sondern ist so gebaut, dass er später das
 (geplante, noch nicht existierende) `session-<id>.json` aus `diagnostics-support-bundle-spec` §6.2
@@ -318,13 +318,13 @@ CI-Deckung existiert, bevor das GPU-Tool draufsattelt.
 
 2. **Synthetic-Feeder als Test-Seam-Bibliothek extrahieren.**
    Den In-Test-`video_feeder` + `MockAudioCaptureSource` aus `test_session_e2e_real_file.cpp:79-153,
-   320-415` in eine kleine wiederverwendbare Einheit (`libs/recorder_core/testutil/synthetic_session.*`
+   320-415` in eine kleine wiederverwendbare Einheit (`libs/engine/testutil/synthetic_session.*`
    o. ä.) heben, ohne das bestehende Verhalten zu ändern. **Test (CI):** der bestehende
    `test_session_e2e_real_file` läuft unverändert grün gegen die extrahierte Version (reiner Refactor).
 
 3. **`exosnap-soak` Tool-Skelett — echter Pfad + `--synthetic`.**
-   `tools/soak/CMakeLists.txt`: das Ziel **baut ganz normal auf CI** (`recorder_core` ist wegen der
-   vendored NVENC-Header immer als Target vorhanden, s. Ist-Zustand) — ein `if(TARGET recorder_core)`
+   `tools/soak/CMakeLists.txt`: das Ziel **baut ganz normal auf CI** (`engine` ist wegen der
+   vendored NVENC-Header immer als Target vorhanden, s. Ist-Zustand) — ein `if(TARGET engine)`
    gated hier real *nichts* und ist höchstens Defensive gegen einen künftig header-losen Build. Die
    echte Trennung ist **Runtime**: der `--synthetic`-Pfad läuft überall; der echte
    `RecorderSession::Record`-Pfad **muss bei fehlender GPU/NVENC sauber und sofort fehlschlagen**
@@ -511,8 +511,8 @@ CI-Deckung existiert, bevor das GPU-Tool draufsattelt.
   bestätigt den zusätzlichen nicht-gerenderten Cluster; Recording-Zeile (Process-Kill *und* Powerloss)
   um „+ 1 nicht-gerenderter Cluster (~`kClusterBoundaryMs`, ~2 s)" ergänzt.
 - **Einwand 5 (minor, „GPU-gated" falsch) — EINGEARBEITET.** `nvEncodeAPI.h` ist vendored
-  (`third_party/nvidia/nvEncodeAPI.h`), `recorder_core`/`probe_record` bauen auf CI; `if(TARGET
-  recorder_core)` gated nichts. Ist-Zustand-Bullet korrigiert (Build-Gate = NVENC-Header vs. Runtime-
+  (`third_party/nvidia/nvEncodeAPI.h`), `engine`/`probe_record` bauen auf CI; `if(TARGET
+  engine)` gated nichts. Ist-Zustand-Bullet korrigiert (Build-Gate = NVENC-Header vs. Runtime-
   Gate = GPU); Schritt 3 stellt fest, dass der echte Pfad zur Laufzeit sauber fehlschlägt statt hängt.
 - **Einwand 6 (minor, System-ffprobe-Abhängigkeit) — EINGEARBEITET.** Synthetic-CTest nutzt jetzt den
   gevendorten `DemuxAndInspect`-Demuxer (`test_session_e2e_real_file.cpp:200-272`) statt System-ffprobe;

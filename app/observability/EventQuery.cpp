@@ -4,7 +4,7 @@
 
 #include "diagnostics/AppLog.h"
 
-#include <recorder_core/logging/logging.h>
+#include <exosnap/engine/logging/logging.h>
 
 #include <QDateTime>
 #include <QJsonArray>
@@ -18,8 +18,8 @@
 namespace exosnap::observability {
 namespace {
 
-using recorder_core::logging::LogLevel;
-using recorder_core::logging::LogRecord;
+using exosnap::engine::logging::LogLevel;
+using exosnap::engine::logging::LogRecord;
 
 QString SeverityKey(LogLevel level) {
     switch (level) {
@@ -56,7 +56,7 @@ std::optional<LogLevel> SeverityFromKey(const QString& key) {
 }
 
 QString FieldValue(const LogRecord& record, const char* key) {
-    for (const recorder_core::logging::LogField& field : record.fields) {
+    for (const exosnap::engine::logging::LogField& field : record.fields) {
         if (field.key == key)
             return QString::fromStdString(field.value);
     }
@@ -98,7 +98,7 @@ QJsonObject EventToJson(const LogRecord& record) {
     json.insert(QStringLiteral("eventCode"), QString::fromStdString(record.message));
 
     QJsonObject fields;
-    for (const recorder_core::logging::LogField& field : record.fields)
+    for (const exosnap::engine::logging::LogField& field : record.fields)
         fields.insert(QString::fromStdString(field.key), QString::fromStdString(field.value));
     json.insert(QStringLiteral("fields"), fields);
 
@@ -134,7 +134,7 @@ QJsonObject QueryEvents(const EventQueryFilter& filter) {
     const int limit = filter.max <= 0 ? kDefaultEvents : std::min(filter.max, kMaxEvents);
     const std::optional<LogLevel> min_level = SeverityFromKey(filter.min_severity);
 
-    const std::vector<LogRecord> ring = recorder_core::logging::snapshot_ring_buffer();
+    const std::vector<LogRecord> ring = exosnap::engine::logging::snapshot_ring_buffer();
 
     // Newest first, and stop as soon as `limit` matched -- the walk is backwards
     // so a full ring with a narrow filter still costs at most one pass.

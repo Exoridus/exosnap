@@ -7,7 +7,7 @@ Status: implemented, 2026-07-14.
 A whole-branch review of `feat/edit-video-player` (11 tasks, 15 commits) found that the audio-master-
 clock pacing described in the original design
 (`docs/superpowers/specs/2026-07-14-edit-video-player-design.md:92-105`) was never actually wired up.
-`AudioClockMs`/`SelectFrameForClock` (`libs/recorder_core/src/playback_clock.{h,cpp}`) and
+`AudioClockMs`/`SelectFrameForClock` (`libs/engine/src/playback_clock.{h,cpp}`) and
 `WasapiAudioRenderer::FramesRendered()` are built and unit-tested but called nowhere outside their own
 tests. `EditPlayerEngine::StartPlaybackDecode` (`edit_player_engine.cpp:456-588`) delivers every
 decoded video frame immediately and unthrottled via its `on_video` callback;

@@ -17,12 +17,12 @@ QCoreApplication* ensureApplication() {
     return &app;
 }
 
-recorder_core::CaptureTarget monitor(uintptr_t id, const char* description) {
-    return {recorder_core::CaptureTarget::Kind::Monitor, id, description};
+exosnap::engine::CaptureTarget monitor(uintptr_t id, const char* description) {
+    return {exosnap::engine::CaptureTarget::Kind::Monitor, id, description};
 }
 
-recorder_core::CaptureTarget window(uintptr_t id, const char* description) {
-    return {recorder_core::CaptureTarget::Kind::Window, id, description};
+exosnap::engine::CaptureTarget window(uintptr_t id, const char* description) {
+    return {exosnap::engine::CaptureTarget::Kind::Window, id, description};
 }
 
 TEST(CaptureTargetNotifierTest, RuntimeMonitorAndWindowChangesAreDeduplicatedAndReasoned) {

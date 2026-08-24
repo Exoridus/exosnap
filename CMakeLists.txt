@@ -89,6 +89,7 @@ include(cmake/exosnap_asan.cmake)
 
 include(cmake/exosnap_warnings.cmake)
 include(cmake/exosnap_testing.cmake)
+include(cmake/exosnap_layering.cmake)
 
 # libebml/libmatroska ship cmake_minimum_required() floors below CMake's
 # current minimum. Setting the policy version minimum lets FetchContent configure
@@ -201,7 +202,7 @@ if(NOT Qt6_DIR)
     list(APPEND CMAKE_PREFIX_PATH "C:/Qt/6.11.1/msvc2022_64")
 endif()
 
-add_subdirectory(libs/recorder_core)
+add_subdirectory(libs/engine)
 add_subdirectory(libs/capability)
 add_subdirectory(libs/crash_capture)
 add_subdirectory(libs/update)
@@ -233,3 +234,20 @@ add_subdirectory(tools/soak)
 # `exosnap-envctl` host are guarded by if(WIN32) inside. Nothing here is linked
 # into exosnap.exe or exosnap-updater.exe, and nothing here is installed.
 add_subdirectory(tools/envctl)
+
+# ---------------------------------------------------------------------------
+# Layering, checked last on purpose.
+#
+# A target's link closure is only final once every add_subdirectory() above has
+# run. Asserting inside a library's own CMakeLists.txt looked tidier and was
+# wrong: it sees the state at that line, so a target_link_libraries() further
+# down the same file walks straight past it. That was caught by making the check
+# fail on purpose -- the first attempt reported success while Qt6::Gui was
+# linked into exosnap_capability.
+#
+# The engine knows how to capture, encode, mux and play back. It does not know
+# that a user interface exists. Everything that draws is an adapter above this
+# line, and adapters depend downward only.
+# ---------------------------------------------------------------------------
+exosnap_assert_no_ui_dependency(exosnap_engine)
+exosnap_assert_no_ui_dependency(exosnap_capability)

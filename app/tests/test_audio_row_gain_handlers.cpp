@@ -15,7 +15,7 @@ namespace exosnap {
 namespace {
 
 // Helper: find a source row by kind.
-recorder_core::AudioSourceRow* FindRow(capability::AudioUiState& s, recorder_core::AudioSourceKind k) {
+exosnap::engine::AudioSourceRow* FindRow(capability::AudioUiState& s, exosnap::engine::AudioSourceKind k) {
     for (auto& r : s.source_rows)
         if (r.kind == k)
             return &r;
@@ -177,7 +177,7 @@ TEST(AudioRowGainHandlers, MicRow_DefaultGain_PreservesMicGainLinear) {
     vm.audio_ui_state.mic_gain_linear = 2.0f;
 
     // Enable Mic so it appears in the plan.
-    auto* mic_row = FindRow(vm.audio_ui_state, recorder_core::AudioSourceKind::Mic);
+    auto* mic_row = FindRow(vm.audio_ui_state, exosnap::engine::AudioSourceKind::Mic);
     ASSERT_NE(mic_row, nullptr);
     mic_row->enabled = true;
     mic_row->gain_db = 0.0f;
@@ -193,7 +193,7 @@ TEST(AudioRowGainHandlers, MicRow_MutedViaRowModel_ProducesZeroLinearGain) {
     RecordViewModel vm;
     vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
 
-    auto* mic_row = FindRow(vm.audio_ui_state, recorder_core::AudioSourceKind::Mic);
+    auto* mic_row = FindRow(vm.audio_ui_state, exosnap::engine::AudioSourceKind::Mic);
     ASSERT_NE(mic_row, nullptr);
     mic_row->enabled = true;
     mic_row->muted = true;
@@ -203,7 +203,7 @@ TEST(AudioRowGainHandlers, MicRow_MutedViaRowModel_ProducesZeroLinearGain) {
     bool found = false;
     for (const auto& track : vm.audio_plan.plan.tracks) {
         for (std::size_t i = 0; i < track.sources.size(); ++i) {
-            if (track.sources[i] == recorder_core::AudioSourceKind::Mic) {
+            if (track.sources[i] == exosnap::engine::AudioSourceKind::Mic) {
                 ASSERT_LT(i, track.source_gain_linear.size());
                 EXPECT_FLOAT_EQ(track.source_gain_linear[i], 0.0f);
                 found = true;

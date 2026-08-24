@@ -6,7 +6,7 @@
 
 #include <capability/capability_set.h>
 #include <capability/user_config.h>
-#include <recorder_core/pipeline_diagnostics.h>
+#include <exosnap/engine/pipeline_diagnostics.h>
 
 #include <optional>
 #include <string>
@@ -30,7 +30,7 @@ class RecommendationEngine {
                          uint32_t monitor_refresh_rate = 0,
                          std::optional<uint64_t> output_drive_free_bytes = std::nullopt,
                          bool is_profile_supported = true, std::string output_filesystem_name = {},
-                         const recorder_core::RecordingDiagnosticsSnapshot* live_snapshot = nullptr,
+                         const exosnap::engine::RecordingDiagnosticsSnapshot* live_snapshot = nullptr,
                          const PresentSample* present = nullptr);
 
     DiagnosticChecklist Generate() const;

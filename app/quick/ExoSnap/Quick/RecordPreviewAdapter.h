@@ -13,8 +13,8 @@
 #include <QVariantMap>
 #include <QtQmlIntegration/qqmlintegration.h>
 
-#include <recorder_core/preview_tap.h>
-#include <recorder_core/recorder_session.h>
+#include <exosnap/engine/preview_tap.h>
+#include <exosnap/engine/recorder_session.h>
 
 #include <atomic>
 #include <functional>
@@ -115,11 +115,11 @@ class RecordPreviewAdapter : public QObject {
     void attachPreviewItem(ExoPreviewItem* item);
     void detachPreviewItem(ExoPreviewItem* item);
     void bindRecordingCoordinator(RecordingCoordinator* coordinator);
-    void setPreviewTarget(const recorder_core::CaptureTarget& target);
+    void setPreviewTarget(const exosnap::engine::CaptureTarget& target);
     void clearPreviewTarget();
     void observeRecordingState(UiRecordingState state);
-    void observeRecordingStats(const recorder_core::SessionStats& stats);
-    void observeRecordingDiagnostics(const recorder_core::RecordingDiagnosticsSnapshot& snapshot);
+    void observeRecordingStats(const exosnap::engine::SessionStats& stats);
+    void observeRecordingDiagnostics(const exosnap::engine::RecordingDiagnosticsSnapshot& snapshot);
     void requestReadyFrame(ReadyFrameComposition composition, ReadyFrameCaptureService::Callback callback);
 
   signals:
@@ -146,7 +146,7 @@ class RecordPreviewAdapter : public QObject {
     void updateMetrics();
     void setStatus(QString status);
     void setError(QString error);
-    void acceptRecordingTexture(void* handle, uint32_t width, uint32_t height, recorder_core::PreviewTapDesc tap);
+    void acceptRecordingTexture(void* handle, uint32_t width, uint32_t height, exosnap::engine::PreviewTapDesc tap);
     // Hands the current engine source to the item as a duplicate handle, or
     // records that it is being held until one is available. Idempotent, so every
     // event that can make a consumer appear may simply call it.
@@ -164,7 +164,7 @@ class RecordPreviewAdapter : public QObject {
 
     std::unique_ptr<DxgiCaptureHubService> dxgi_source_;
     std::unique_ptr<WgcCaptureHubService> wgc_source_;
-    std::optional<recorder_core::CaptureTarget> selected_target_;
+    std::optional<exosnap::engine::CaptureTarget> selected_target_;
     QPointer<ExoPreviewItem> item_;
     QTimer metrics_timer_;
     std::atomic<quint64> source_epoch_{0};
@@ -201,7 +201,7 @@ class RecordPreviewAdapter : public QObject {
         void* handle = nullptr;
         uint32_t width = 0;
         uint32_t height = 0;
-        recorder_core::PreviewTapDesc tap{};
+        exosnap::engine::PreviewTapDesc tap{};
     };
     EngineSource engine_source_;
     // Bumped per announcement, so a queued presentation from a previous feed can
@@ -213,8 +213,8 @@ class RecordPreviewAdapter : public QObject {
     HANDLE ready_source_handle_ = nullptr;
     uint32_t ready_source_width_ = 0;
     uint32_t ready_source_height_ = 0;
-    recorder_core::PreviewTapDesc ready_source_tap_;
-    recorder_core::CaptureTarget ready_source_target_;
+    exosnap::engine::PreviewTapDesc ready_source_tap_;
+    exosnap::engine::CaptureTarget ready_source_target_;
     bool ready_source_cursor_composited_ = false;
 
   public:

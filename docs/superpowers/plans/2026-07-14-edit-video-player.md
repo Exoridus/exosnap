@@ -7,7 +7,7 @@ with a real FFmpeg-decode + Qt-paint video player with synchronized audio, drivi
 already-built trim/scrub/playhead UI against real decoded frames instead of a synthetic clock.
 
 **Architecture:** A new companion-FFmpeg-build release enables the decoders that are currently
-completely absent from the vendored `avcodec`. A new UI-agnostic `recorder_core` engine
+completely absent from the vendored `avcodec`. A new UI-agnostic `engine` engine
 (`EditPlayerEngine` + `WasapiAudioRenderer` + `EditPlayerSession`) demuxes/decodes the MKV edit
 master, converts frames to BGRA on the CPU (no `swscale` — extends the existing tested
 `yuv_to_bgra` helper), and renders audio through a brand-new WASAPI render client that becomes the
@@ -21,7 +21,7 @@ UI, replacing only the synthetic clock's video/audio backing, not the UI itself.
 
 ## Global Constraints
 
-- Engine code (`libs/recorder_core`) must contain **no Qt types** — CLAUDE.md: "Keep the engine
+- Engine code (`libs/engine`) must contain **no Qt types** — CLAUDE.md: "Keep the engine
   UI-agnostic." Only `app/` files may include Qt headers.
 - **Never drive the running application** — no mouse/keyboard synthesis, no window automation.
   Starting `exosnap.exe` once to confirm no startup crash is allowed; nothing interactive.
@@ -34,7 +34,7 @@ UI, replacing only the synthetic clock's video/audio backing, not the UI itself.
   Default keyframe interval: 2 s (selectable 1 s / 0.5 s) — Settings → Advanced → Video.
 - `EditContext::mkv_master_path` is always the file to decode (the edit master; identical to
   `output_path` for MKV recordings) — never `output_path` directly, which may be a remuxed MP4.
-- Follow existing `recorder_core` conventions exactly: RAII guards for FFmpeg context types
+- Follow existing `engine` conventions exactly: RAII guards for FFmpeg context types
   (`InputCtxGuard`-style), `logging::log(LogLevel, component, message, fields)` for structured
   logs, `bool Method(..., std::string& out_error)` for fallible setup, trailing-underscore private
   members, PascalCase free functions / methods, snake_case locals.
@@ -213,22 +213,22 @@ struct was written for DXGI capture/encode surfaces). Reuses the exact same test
 no duplicated coefficient logic).
 
 **Files:**
-- Modify: `libs/recorder_core/src/yuv_to_bgra.h`
-- Modify: `libs/recorder_core/src/yuv_to_bgra.cpp`
-- Modify: `libs/recorder_core/tests/test_yuv_to_bgra.cpp`
+- Modify: `libs/engine/src/yuv_to_bgra.h`
+- Modify: `libs/engine/src/yuv_to_bgra.cpp`
+- Modify: `libs/engine/tests/test_yuv_to_bgra.cpp`
 
 **Interfaces:**
-- Produces: `recorder_core::FullPlanarYuv420Frame`, `recorder_core::ConvertFullPlanarYuv420ToBgra`
+- Produces: `exosnap::engine::FullPlanarYuv420Frame`, `exosnap::engine::ConvertFullPlanarYuv420ToBgra`
   — consumed by Task 5's `EditPlayerEngine`.
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `libs/recorder_core/tests/test_yuv_to_bgra.cpp` (add `ConvertFullPlanarYuv420ToBgra` and
+Append to `libs/engine/tests/test_yuv_to_bgra.cpp` (add `ConvertFullPlanarYuv420ToBgra` and
 `FullPlanarYuv420Frame` to the `using` block at the top alongside the existing ones):
 
 ```cpp
-using recorder_core::ConvertFullPlanarYuv420ToBgra;
-using recorder_core::FullPlanarYuv420Frame;
+using exosnap::engine::ConvertFullPlanarYuv420ToBgra;
+using exosnap::engine::FullPlanarYuv420Frame;
 ```
 
 Then, at the end of the file (before the final `DegenerateInputsAreNoOps` block, or after it — any
@@ -257,9 +257,9 @@ TEST(FullPlanarYuv420ToBgra, GoldenBt709Limited8Bit) {
     src.height = kH;
     src.bits_per_sample = 8;
 
-    recorder_core::YuvToBgraParams params;
-    params.matrix = recorder_core::MatrixCoefficients::Bt709;
-    params.range = recorder_core::ColorRange::Limited;
+    exosnap::engine::YuvToBgraParams params;
+    params.matrix = exosnap::engine::MatrixCoefficients::Bt709;
+    params.range = exosnap::engine::ColorRange::Limited;
 
     std::vector<uint8_t> out(kW * kH * 4, 0);
     ConvertFullPlanarYuv420ToBgra(src, params, out.data(), kW * 4);
@@ -293,9 +293,9 @@ TEST(FullPlanarYuv420ToBgra, GoldenBt709Limited10Bit) {
     src.height = kH;
     src.bits_per_sample = 10;
 
-    recorder_core::YuvToBgraParams params;
-    params.matrix = recorder_core::MatrixCoefficients::Bt709;
-    params.range = recorder_core::ColorRange::Limited;
+    exosnap::engine::YuvToBgraParams params;
+    params.matrix = exosnap::engine::MatrixCoefficients::Bt709;
+    params.range = exosnap::engine::ColorRange::Limited;
 
     std::vector<uint8_t> out(kW * kH * 4, 0);
     ConvertFullPlanarYuv420ToBgra(src, params, out.data(), kW * 4);
@@ -336,9 +336,9 @@ TEST(FullPlanarYuv420ToBgra, NonUniformChromaBlocksEveryPixel) {
     src.height = kH;
     src.bits_per_sample = 8;
 
-    recorder_core::YuvToBgraParams params;
-    params.matrix = recorder_core::MatrixCoefficients::Bt709;
-    params.range = recorder_core::ColorRange::Full;
+    exosnap::engine::YuvToBgraParams params;
+    params.matrix = exosnap::engine::MatrixCoefficients::Bt709;
+    params.range = exosnap::engine::ColorRange::Full;
 
     std::vector<uint8_t> out(kW * kH * 4, 0);
     ConvertFullPlanarYuv420ToBgra(src, params, out.data(), kW * 4);
@@ -358,7 +358,7 @@ TEST(FullPlanarYuv420ToBgra, NonUniformChromaBlocksEveryPixel) {
 TEST(FullPlanarYuv420ToBgra, DegenerateInputsAreNoOps) {
     std::vector<uint8_t> out(16, 0xAB);
     FullPlanarYuv420Frame src; // all zero/null by default
-    recorder_core::YuvToBgraParams params;
+    exosnap::engine::YuvToBgraParams params;
     ConvertFullPlanarYuv420ToBgra(src, params, out.data(), 4);
     for (uint8_t b : out)
         EXPECT_EQ(b, 0xAB);
@@ -375,7 +375,7 @@ Expected: FAIL — `FullPlanarYuv420Frame`/`ConvertFullPlanarYuv420ToBgra` not d
 
 - [ ] **Step 3: Add the struct to the header**
 
-In `libs/recorder_core/src/yuv_to_bgra.h`, after the existing `PlanarYuv420Frame` struct and before
+In `libs/engine/src/yuv_to_bgra.h`, after the existing `PlanarYuv420Frame` struct and before
 `ConvertYuv420ToBgra`'s declaration, add:
 
 ```cpp
@@ -415,7 +415,7 @@ void ConvertFullPlanarYuv420ToBgra(const FullPlanarYuv420Frame& src, const YuvTo
 
 - [ ] **Step 4: Implement in the .cpp**
 
-In `libs/recorder_core/src/yuv_to_bgra.cpp`, add after `ConvertYuv420ToBgra` (which already ends
+In `libs/engine/src/yuv_to_bgra.cpp`, add after `ConvertYuv420ToBgra` (which already ends
 at the closing brace before `ConvertAyuvToBgra`):
 
 ```cpp
@@ -496,7 +496,7 @@ Expected: PASS, all cases including the 4 new ones.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add libs/recorder_core/src/yuv_to_bgra.h libs/recorder_core/src/yuv_to_bgra.cpp libs/recorder_core/tests/test_yuv_to_bgra.cpp
+git add libs/engine/src/yuv_to_bgra.h libs/engine/src/yuv_to_bgra.cpp libs/engine/tests/test_yuv_to_bgra.cpp
 git commit -m "Add fully-planar YUV420 to BGRA conversion for software-decoded frames"
 ```
 
@@ -509,20 +509,20 @@ clock in milliseconds; given the clock and a small set of available decoded-vide
 decide which frame to show and how many older ones to drop. No FFmpeg, no COM, no Qt.
 
 **Files:**
-- Create: `libs/recorder_core/src/playback_clock.h`
-- Create: `libs/recorder_core/src/playback_clock.cpp`
-- Create: `libs/recorder_core/tests/test_playback_clock.cpp`
-- Modify: `libs/recorder_core/CMakeLists.txt`
+- Create: `libs/engine/src/playback_clock.h`
+- Create: `libs/engine/src/playback_clock.cpp`
+- Create: `libs/engine/tests/test_playback_clock.cpp`
+- Modify: `libs/engine/CMakeLists.txt`
 
 **Interfaces:**
-- Produces: `recorder_core::AudioClockMs(uint64_t frames_rendered, uint32_t sample_rate_hz)`,
-  `recorder_core::SelectFrameForClock(std::span<const int64_t> available_pts_ms, int64_t clock_ms)`
-  returning `recorder_core::FrameSelection { std::optional<size_t> index; size_t dropped_count; }`
+- Produces: `exosnap::engine::AudioClockMs(uint64_t frames_rendered, uint32_t sample_rate_hz)`,
+  `exosnap::engine::SelectFrameForClock(std::span<const int64_t> available_pts_ms, int64_t clock_ms)`
+  returning `exosnap::engine::FrameSelection { std::optional<size_t> index; size_t dropped_count; }`
   — consumed by Task 8's `EditPlayerSession`.
 
 - [ ] **Step 1: Write the failing tests**
 
-Create `libs/recorder_core/tests/test_playback_clock.cpp`:
+Create `libs/engine/tests/test_playback_clock.cpp`:
 
 ```cpp
 #include <gtest/gtest.h>
@@ -533,8 +533,8 @@ Create `libs/recorder_core/tests/test_playback_clock.cpp`:
 
 namespace {
 
-using recorder_core::AudioClockMs;
-using recorder_core::SelectFrameForClock;
+using exosnap::engine::AudioClockMs;
+using exosnap::engine::SelectFrameForClock;
 
 TEST(AudioClockMs, ZeroFramesIsZero) {
     EXPECT_EQ(AudioClockMs(0, 48000), 0);
@@ -598,7 +598,7 @@ TEST(SelectFrameForClock, ClockPastAllFramesSelectsLastAndDropsRest) {
 
 - [ ] **Step 2: Register the test target and confirm it fails**
 
-Add to `libs/recorder_core/CMakeLists.txt`, near the other pure/header-free-logic tests (e.g. next
+Add to `libs/engine/CMakeLists.txt`, near the other pure/header-free-logic tests (e.g. next
 to `test_preview_publish_gate`):
 
 ```cmake
@@ -607,7 +607,7 @@ to `test_preview_publish_gate`):
 # that clock. No FFmpeg/COM/Qt.
 exosnap_add_gtest(
     NAME test_playback_clock
-    TEST_PREFIX recorder_core.
+    TEST_PREFIX engine.
     SOURCES tests/test_playback_clock.cpp
             src/playback_clock.cpp
 )
@@ -623,7 +623,7 @@ Expected: FAIL — `playback_clock.h`/`.cpp` do not exist yet.
 
 - [ ] **Step 3: Create the header**
 
-Create `libs/recorder_core/src/playback_clock.h`:
+Create `libs/engine/src/playback_clock.h`:
 
 ```cpp
 #pragma once
@@ -645,7 +645,7 @@ Create `libs/recorder_core/src/playback_clock.h`:
 #include <optional>
 #include <span>
 
-namespace recorder_core {
+namespace exosnap::engine {
 
 // frames_rendered: cumulative audio frames written to the render endpoint.
 // sample_rate_hz: the render format's sample rate. Returns 0 if
@@ -667,19 +667,19 @@ struct FrameSelection {
 // first entry, returns {nullopt, 0} (nothing selected, nothing to drop yet).
 FrameSelection SelectFrameForClock(std::span<const int64_t> available_pts_ms, int64_t clock_ms) noexcept;
 
-} // namespace recorder_core
+} // namespace exosnap::engine
 ```
 
 - [ ] **Step 4: Implement**
 
-Create `libs/recorder_core/src/playback_clock.cpp`:
+Create `libs/engine/src/playback_clock.cpp`:
 
 ```cpp
 #include "playback_clock.h"
 
 #include <algorithm>
 
-namespace recorder_core {
+namespace exosnap::engine {
 
 int64_t AudioClockMs(uint64_t frames_rendered, uint32_t sample_rate_hz) noexcept {
     if (sample_rate_hz == 0)
@@ -704,7 +704,7 @@ FrameSelection SelectFrameForClock(std::span<const int64_t> available_pts_ms, in
     return sel;
 }
 
-} // namespace recorder_core
+} // namespace exosnap::engine
 ```
 
 - [ ] **Step 5: Run the tests and confirm they pass**
@@ -719,8 +719,8 @@ Expected: PASS, all 9 cases.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add libs/recorder_core/src/playback_clock.h libs/recorder_core/src/playback_clock.cpp \
-        libs/recorder_core/tests/test_playback_clock.cpp libs/recorder_core/CMakeLists.txt
+git add libs/engine/src/playback_clock.h libs/engine/src/playback_clock.cpp \
+        libs/engine/tests/test_playback_clock.cpp libs/engine/CMakeLists.txt
 git commit -m "Add pure playback-clock math for the Edit-page video player"
 ```
 
@@ -735,33 +735,33 @@ scrub/trim-handle-drag path). Continuous playback decode is Task 6, layered on t
 class.
 
 **Files:**
-- Create: `libs/recorder_core/include/recorder_core/edit_player_engine.h`
-- Create: `libs/recorder_core/src/edit_player_engine.cpp`
-- Create: `libs/recorder_core/tests/test_edit_player_engine.cpp`
-- Modify: `libs/recorder_core/CMakeLists.txt`
+- Create: `libs/engine/include/exosnap/engine/edit_player_engine.h`
+- Create: `libs/engine/src/edit_player_engine.cpp`
+- Create: `libs/engine/tests/test_edit_player_engine.cpp`
+- Modify: `libs/engine/CMakeLists.txt`
 
 **Interfaces:**
-- Consumes: `recorder_core::FullPlanarYuv420Frame`/`ConvertFullPlanarYuv420ToBgra` (Task 3),
-  `recorder_core::ColorMetadata`/`MatrixCoefficients`/`ColorRange` (existing `color_metadata.h`).
-- Produces: `recorder_core::DecodedVideoFrame` (BGRA bytes + dims + pts), `recorder_core::EditPlayerEngine`
+- Consumes: `exosnap::engine::FullPlanarYuv420Frame`/`ConvertFullPlanarYuv420ToBgra` (Task 3),
+  `exosnap::engine::ColorMetadata`/`MatrixCoefficients`/`ColorRange` (existing `color_metadata.h`).
+- Produces: `exosnap::engine::DecodedVideoFrame` (BGRA bytes + dims + pts), `exosnap::engine::EditPlayerEngine`
   with `Open`, `Close`, `HasVideoStream`, `HasAudioStream`, `DecodeFrameAt(int64_t target_us)` —
   consumed by Task 6 (continuous decode) and Task 8 (`EditPlayerSession`).
 
 - [ ] **Step 1: Write the failing tests**
 
-Create `libs/recorder_core/tests/test_edit_player_engine.cpp`:
+Create `libs/engine/tests/test_edit_player_engine.cpp`:
 
 ```cpp
 #include <gtest/gtest.h>
 
-#include "recorder_core/edit_player_engine.h"
+#include "exosnap/engine/edit_player_engine.h"
 
 #include <filesystem>
 #include <fstream>
 
 namespace {
 
-using recorder_core::EditPlayerEngine;
+using exosnap::engine::EditPlayerEngine;
 
 TEST(EditPlayerEngine, OpenNonexistentFileFails) {
     EditPlayerEngine engine;
@@ -805,7 +805,7 @@ in the Edit page — see Task 11.)
 
 - [ ] **Step 2: Register the test target and confirm it fails**
 
-Add to `libs/recorder_core/CMakeLists.txt`, after the `test_playback_clock` entry from Task 4:
+Add to `libs/engine/CMakeLists.txt`, after the `test_playback_clock` entry from Task 4:
 
 ```cmake
 # EditPlayerEngine: file-open/stream-discovery/error-path coverage only (no
@@ -813,11 +813,11 @@ Add to `libs/recorder_core/CMakeLists.txt`, after the `test_playback_clock` entr
 # real decode is user-live-verified, see the plan's Task 11).
 exosnap_add_gtest(
     NAME test_edit_player_engine
-    TEST_PREFIX recorder_core.
+    TEST_PREFIX engine.
     SOURCES tests/test_edit_player_engine.cpp
             src/edit_player_engine.cpp
             src/yuv_to_bgra.cpp
-    LIBRARIES recorder_core
+    LIBRARIES engine
 )
 target_include_directories(test_edit_player_engine PRIVATE src include)
 ```
@@ -831,7 +831,7 @@ Expected: FAIL — `recorder_core/edit_player_engine.h` does not exist yet.
 
 - [ ] **Step 3: Create the public header**
 
-Create `libs/recorder_core/include/recorder_core/edit_player_engine.h`:
+Create `libs/engine/include/exosnap/engine/edit_player_engine.h`:
 
 ```cpp
 #pragma once
@@ -841,7 +841,7 @@ Create `libs/recorder_core/include/recorder_core/edit_player_engine.h`:
 //
 // UI-agnostic (no Qt types) per CLAUDE.md. Opens the MKV edit master
 // (EditContext::mkv_master_path), decodes video frames to ready-to-paint BGRA
-// (internally reusing yuv_to_bgra.h -- a private recorder_core header never
+// (internally reusing yuv_to_bgra.h -- a private engine header never
 // exposed here, since decoders emit fully-planar YUV420/YUV420P10LE that this
 // engine converts before handing anything to a caller), and decodes audio to
 // a fixed 48 kHz stereo interleaved float32 PCM stream (matching the
@@ -852,7 +852,7 @@ Create `libs/recorder_core/include/recorder_core/edit_player_engine.h`:
 // (StartPlaybackDecode/StopPlaybackDecode) is declared here too but
 // implemented alongside this class's .cpp in the next task.
 
-#include <recorder_core/color_metadata.h>
+#include <exosnap/engine/color_metadata.h>
 
 #include <cstdint>
 #include <filesystem>
@@ -861,7 +861,7 @@ Create `libs/recorder_core/include/recorder_core/edit_player_engine.h`:
 #include <optional>
 #include <vector>
 
-namespace recorder_core {
+namespace exosnap::engine {
 
 // One decoded video frame, ready to paint: top-down BGRA8888, already
 // color-converted using the SOURCE FILE's own container color tags (falls
@@ -930,19 +930,19 @@ class EditPlayerEngine {
     std::unique_ptr<Impl> impl_;
 };
 
-} // namespace recorder_core
+} // namespace exosnap::engine
 ```
 
 - [ ] **Step 4: Implement `Open`/`Close`/stream discovery/`DecodeFrameAt`**
 
-Create `libs/recorder_core/src/edit_player_engine.cpp`. This step covers everything except
+Create `libs/engine/src/edit_player_engine.cpp`. This step covers everything except
 `StartPlaybackDecode`/`StopPlaybackDecode`, which get real bodies in Task 6 (this task's version
 compiles them as safe no-ops so the class is already usable standalone):
 
 ```cpp
-#include "recorder_core/edit_player_engine.h"
+#include "exosnap/engine/edit_player_engine.h"
 
-#include "recorder_core/logging/logging.h"
+#include "exosnap/engine/logging/logging.h"
 #include "yuv_to_bgra.h"
 
 extern "C" {
@@ -969,7 +969,7 @@ static inline const char* av_err2str_cpp(int errnum) noexcept {
 #endif
 #define av_err2str(e) av_err2str_cpp(e)
 
-namespace recorder_core {
+namespace exosnap::engine {
 
 namespace {
 
@@ -997,7 +997,7 @@ struct CodecCtxGuard {
     }
 };
 
-// Maps a container's own CICP color tags to recorder_core's color-metadata
+// Maps a container's own CICP color tags to the engine's color-metadata
 // enums, falling back to the product's SDR BT.709/Limited default when the
 // container left a tag unspecified -- matches the fallback mp4_remuxer.cpp
 // already applies when copying color description forward.
@@ -1269,7 +1269,7 @@ void EditPlayerEngine::StartPlaybackDecode(int64_t /*start_us*/, VideoFrameCallb
 void EditPlayerEngine::StopPlaybackDecode() {
 }
 
-} // namespace recorder_core
+} // namespace exosnap::engine
 ```
 
 - [ ] **Step 5: Run the tests and confirm they pass**
@@ -1281,13 +1281,13 @@ pwsh scripts/run-tests.ps1 -Filter test_edit_player_engine
 
 Expected: PASS, all 4 cases.
 
-- [ ] **Step 6: Add the new files to the `recorder_core` library target**
+- [ ] **Step 6: Add the new files to the `engine` library target**
 
-In `libs/recorder_core/CMakeLists.txt`, add to the `add_library(recorder_core STATIC ...)` list
+In `libs/engine/CMakeLists.txt`, add to the `add_library(engine STATIC ...)` list
 (around the existing `mp4_remuxer.h`/`.cpp` entries):
 
 ```cmake
-    include/recorder_core/edit_player_engine.h
+    include/exosnap/engine/edit_player_engine.h
     src/edit_player_engine.cpp
     src/playback_clock.h
     src/playback_clock.cpp
@@ -1296,7 +1296,7 @@ In `libs/recorder_core/CMakeLists.txt`, add to the `add_library(recorder_core ST
 Rebuild the full library to confirm no conflicts:
 
 ```powershell
-cmake --build --preset windows-x64-debug --target recorder_core
+cmake --build --preset windows-x64-debug --target engine
 ```
 
 Expected: exit 0.
@@ -1304,10 +1304,10 @@ Expected: exit 0.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add libs/recorder_core/include/recorder_core/edit_player_engine.h \
-        libs/recorder_core/src/edit_player_engine.cpp \
-        libs/recorder_core/tests/test_edit_player_engine.cpp \
-        libs/recorder_core/CMakeLists.txt
+git add libs/engine/include/exosnap/engine/edit_player_engine.h \
+        libs/engine/src/edit_player_engine.cpp \
+        libs/engine/tests/test_edit_player_engine.cpp \
+        libs/engine/CMakeLists.txt
 git commit -m "Add EditPlayerEngine: open/close, color-metadata mapping, single-frame seek decode"
 ```
 
@@ -1321,8 +1321,8 @@ until stopped. Audio is resampled to the engine's fixed 48 kHz stereo float32 ou
 `swresample` (mirrors `OutputFormatAudioSrc::BuildSwrContext`'s exact API usage).
 
 **Files:**
-- Modify: `libs/recorder_core/src/edit_player_engine.cpp`
-- Modify: `libs/recorder_core/tests/test_edit_player_engine.cpp`
+- Modify: `libs/engine/src/edit_player_engine.cpp`
+- Modify: `libs/engine/tests/test_edit_player_engine.cpp`
 
 **Interfaces:**
 - Consumes: Task 5's `EditPlayerEngine::Impl`, `DecodeForwardToTarget`.
@@ -1331,14 +1331,14 @@ until stopped. Audio is resampled to the engine's fixed 48 kHz stereo float32 ou
 
 - [ ] **Step 1: Write the failing test (thread lifecycle only)**
 
-Add to `libs/recorder_core/tests/test_edit_player_engine.cpp`, inside the anonymous namespace:
+Add to `libs/engine/tests/test_edit_player_engine.cpp`, inside the anonymous namespace:
 
 ```cpp
 TEST(EditPlayerEngine, StartStopPlaybackDecodeWithoutOpenIsSafeNoOp) {
     EditPlayerEngine engine;
     std::atomic<int> video_calls{0};
-    engine.StartPlaybackDecode(0, [&](recorder_core::DecodedVideoFrame) { ++video_calls; },
-                               [](recorder_core::DecodedAudioBlock) {});
+    engine.StartPlaybackDecode(0, [&](exosnap::engine::DecodedVideoFrame) { ++video_calls; },
+                               [](exosnap::engine::DecodedAudioBlock) {});
     engine.StopPlaybackDecode();
     EXPECT_EQ(video_calls.load(), 0);
 }
@@ -1372,7 +1372,7 @@ the lifecycle contract before the real implementation replaces the no-op).
 
 - [ ] **Step 3: Implement the real playback thread**
 
-In `libs/recorder_core/src/edit_player_engine.cpp`, add `#include <libswresample/swresample.h>`
+In `libs/engine/src/edit_player_engine.cpp`, add `#include <libswresample/swresample.h>`
 to the `extern "C"` block at the top, and add this RAII guard next to `CodecCtxGuard`:
 
 ```cpp
@@ -1551,7 +1551,7 @@ Expected: PASS, all 6 cases (4 from Task 5 + 2 new).
 - [ ] **Step 5: Rebuild the full library**
 
 ```powershell
-cmake --build --preset windows-x64-debug --target recorder_core
+cmake --build --preset windows-x64-debug --target engine
 ```
 
 Expected: exit 0.
@@ -1559,7 +1559,7 @@ Expected: exit 0.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add libs/recorder_core/src/edit_player_engine.cpp libs/recorder_core/tests/test_edit_player_engine.cpp
+git add libs/engine/src/edit_player_engine.cpp libs/engine/tests/test_edit_player_engine.cpp
 git commit -m "Add EditPlayerEngine continuous playback decode thread with audio resampling"
 ```
 
@@ -1574,27 +1574,27 @@ resamples to the device's own mix format if it differs, and exposes the render c
 frames actually written) that becomes the playback master clock (Task 4's `AudioClockMs`).
 
 **Files:**
-- Create: `libs/recorder_core/include/recorder_core/wasapi_audio_render.h`
-- Create: `libs/recorder_core/src/wasapi_audio_render.cpp`
-- Create: `libs/recorder_core/tests/test_wasapi_audio_render.cpp`
-- Modify: `libs/recorder_core/CMakeLists.txt`
+- Create: `libs/engine/include/exosnap/engine/wasapi_audio_render.h`
+- Create: `libs/engine/src/wasapi_audio_render.cpp`
+- Create: `libs/engine/tests/test_wasapi_audio_render.cpp`
+- Modify: `libs/engine/CMakeLists.txt`
 
 **Interfaces:**
-- Produces: `recorder_core::WasapiAudioRenderer` with `Init`, `Start`, `Stop`, `PushSamples`,
+- Produces: `exosnap::engine::WasapiAudioRenderer` with `Init`, `Start`, `Stop`, `PushSamples`,
   `FramesRendered`, `SampleRate`, `Shutdown` — consumed by Task 8's `EditPlayerSession`.
 
 - [ ] **Step 1: Write the failing test (pure ring-buffer math only, no real device)**
 
-Create `libs/recorder_core/tests/test_wasapi_audio_render.cpp`:
+Create `libs/engine/tests/test_wasapi_audio_render.cpp`:
 
 ```cpp
 #include <gtest/gtest.h>
 
-#include "recorder_core/wasapi_audio_render.h"
+#include "exosnap/engine/wasapi_audio_render.h"
 
 namespace {
 
-using recorder_core::WasapiAudioRenderer;
+using exosnap::engine::WasapiAudioRenderer;
 
 // Construction/destruction without Init() must be safe -- no COM object was
 // ever created, Shutdown() (called from the destructor) must handle that.
@@ -1630,17 +1630,17 @@ verification happens per Task 11.)
 
 - [ ] **Step 2: Register the test target and confirm it fails**
 
-Add to `libs/recorder_core/CMakeLists.txt`:
+Add to `libs/engine/CMakeLists.txt`:
 
 ```cmake
 # WasapiAudioRenderer lifecycle safety (construct/destruct/push/stop without a
 # real device session). No hardware in CI -- real render is user-live-verified.
 exosnap_add_gtest(
     NAME test_wasapi_audio_render
-    TEST_PREFIX recorder_core.
+    TEST_PREFIX engine.
     SOURCES tests/test_wasapi_audio_render.cpp
             src/wasapi_audio_render.cpp
-    LIBRARIES recorder_core
+    LIBRARIES engine
 )
 target_include_directories(test_wasapi_audio_render PRIVATE src include)
 ```
@@ -1654,7 +1654,7 @@ Expected: FAIL — header does not exist yet.
 
 - [ ] **Step 3: Create the public header**
 
-Create `libs/recorder_core/include/recorder_core/wasapi_audio_render.h`:
+Create `libs/engine/include/exosnap/engine/wasapi_audio_render.h`:
 
 ```cpp
 #pragma once
@@ -1686,17 +1686,17 @@ struct IMMDevice;
 struct IAudioClient;
 struct IAudioRenderClient;
 // Forward-declared at GLOBAL scope deliberately (not inside namespace
-// recorder_core below): the real definition lives in libswresample's
+// engine below): the real definition lives in libswresample's
 // swresample.h, which this public header must not include (keeps FFmpeg out
 // of the public API surface). Writing `struct SwrContext* resampler_` INSIDE
-// the recorder_core namespace block instead would declare a distinct
-// recorder_core::SwrContext type via elaborated-type-specifier injection --
+// the engine namespace block instead would declare a distinct
+// exosnap::engine::SwrContext type via elaborated-type-specifier injection --
 // a different type from the real ::SwrContext the .cpp's reinterpret_cast
 // needs to match. Declaring it here, before the namespace, ensures both this
 // header and wasapi_audio_render.cpp's casts refer to the same global type.
 struct SwrContext;
 
-namespace recorder_core {
+namespace exosnap::engine {
 
 class WasapiAudioRenderer {
   public:
@@ -1758,17 +1758,17 @@ class WasapiAudioRenderer {
     bool initialized_ = false;
 };
 
-} // namespace recorder_core
+} // namespace exosnap::engine
 ```
 
 - [ ] **Step 4: Implement**
 
-Create `libs/recorder_core/src/wasapi_audio_render.cpp`:
+Create `libs/engine/src/wasapi_audio_render.cpp`:
 
 ```cpp
-#include "recorder_core/wasapi_audio_render.h"
+#include "exosnap/engine/wasapi_audio_render.h"
 
-#include "recorder_core/logging/logging.h"
+#include "exosnap/engine/logging/logging.h"
 
 #include <Audioclient.h>
 #include <mmdeviceapi.h>
@@ -1780,7 +1780,7 @@ extern "C" {
 
 #include <algorithm>
 
-namespace recorder_core {
+namespace exosnap::engine {
 
 namespace {
 constexpr const char* kLogComponent = "wasapi_audio_render";
@@ -2073,7 +2073,7 @@ void WasapiAudioRenderer::Shutdown() {
     initialized_ = false;
 }
 
-} // namespace recorder_core
+} // namespace exosnap::engine
 ```
 
 Note: `AvSetMmThreadCharacteristicsW`/`AvRevertMmThreadCharacteristics` need `avrt.lib` — add it in
@@ -2088,20 +2088,20 @@ pwsh scripts/run-tests.ps1 -Filter test_wasapi_audio_render
 
 Expected: PASS, all 4 cases (none of them call `Init()`, so no real device is touched).
 
-- [ ] **Step 6: Add the new files + `avrt.lib` to the `recorder_core` library target**
+- [ ] **Step 6: Add the new files + `avrt.lib` to the `engine` library target**
 
-In `libs/recorder_core/CMakeLists.txt`, add to the source list:
+In `libs/engine/CMakeLists.txt`, add to the source list:
 
 ```cmake
-    include/recorder_core/wasapi_audio_render.h
+    include/exosnap/engine/wasapi_audio_render.h
     src/wasapi_audio_render.cpp
 ```
 
-and add `avrt.lib` to the existing `target_link_libraries(recorder_core PRIVATE ...)` list (next to
+and add `avrt.lib` to the existing `target_link_libraries(engine PRIVATE ...)` list (next to
 the other system libs like `ole32.lib`).
 
 ```powershell
-cmake --build --preset windows-x64-debug --target recorder_core
+cmake --build --preset windows-x64-debug --target engine
 ```
 
 Expected: exit 0.
@@ -2109,10 +2109,10 @@ Expected: exit 0.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add libs/recorder_core/include/recorder_core/wasapi_audio_render.h \
-        libs/recorder_core/src/wasapi_audio_render.cpp \
-        libs/recorder_core/tests/test_wasapi_audio_render.cpp \
-        libs/recorder_core/CMakeLists.txt
+git add libs/engine/include/exosnap/engine/wasapi_audio_render.h \
+        libs/engine/src/wasapi_audio_render.cpp \
+        libs/engine/tests/test_wasapi_audio_render.cpp \
+        libs/engine/CMakeLists.txt
 git commit -m "Add WasapiAudioRenderer: the Edit-page video player's audio-out and master clock"
 ```
 
@@ -2127,32 +2127,32 @@ the app layer is responsible for driving the wall-clock fallback in that case; t
 truthfully reports `HasAudioStream()`).
 
 **Files:**
-- Create: `libs/recorder_core/include/recorder_core/edit_player_session.h`
-- Create: `libs/recorder_core/src/edit_player_session.cpp`
-- Create: `libs/recorder_core/tests/test_edit_player_session.cpp`
-- Modify: `libs/recorder_core/CMakeLists.txt`
+- Create: `libs/engine/include/exosnap/engine/edit_player_session.h`
+- Create: `libs/engine/src/edit_player_session.cpp`
+- Create: `libs/engine/tests/test_edit_player_session.cpp`
+- Modify: `libs/engine/CMakeLists.txt`
 
 **Interfaces:**
-- Consumes: `recorder_core::EditPlayerEngine` (Task 5/6), `recorder_core::WasapiAudioRenderer`
-  (Task 7), `recorder_core::AudioClockMs`/`SelectFrameForClock` (Task 4).
-- Produces: `recorder_core::EditPlayerSession` with `Open`, `Close`, `HasAudioStream`, `Play`,
+- Consumes: `exosnap::engine::EditPlayerEngine` (Task 5/6), `exosnap::engine::WasapiAudioRenderer`
+  (Task 7), `exosnap::engine::AudioClockMs`/`SelectFrameForClock` (Task 4).
+- Produces: `exosnap::engine::EditPlayerSession` with `Open`, `Close`, `HasAudioStream`, `Play`,
   `Pause`, `SeekTo`, `SetOnFrameReady(std::function<void(DecodedVideoFrame)>)` — consumed by
   Task 10 (`EditExportPage` wiring).
 
 - [ ] **Step 1: Write the failing tests**
 
-Create `libs/recorder_core/tests/test_edit_player_session.cpp`:
+Create `libs/engine/tests/test_edit_player_session.cpp`:
 
 ```cpp
 #include <gtest/gtest.h>
 
-#include "recorder_core/edit_player_session.h"
+#include "exosnap/engine/edit_player_session.h"
 
 #include <filesystem>
 
 namespace {
 
-using recorder_core::EditPlayerSession;
+using exosnap::engine::EditPlayerSession;
 
 TEST(EditPlayerSession, OpenNonexistentFileFails) {
     EditPlayerSession session;
@@ -2184,14 +2184,14 @@ TEST(EditPlayerSession, CloseWithoutOpenIsSafeNoOp) {
 
 - [ ] **Step 2: Register the test target and confirm it fails**
 
-Add to `libs/recorder_core/CMakeLists.txt`:
+Add to `libs/engine/CMakeLists.txt`:
 
 ```cmake
 exosnap_add_gtest(
     NAME test_edit_player_session
-    TEST_PREFIX recorder_core.
+    TEST_PREFIX engine.
     SOURCES tests/test_edit_player_session.cpp
-    LIBRARIES recorder_core
+    LIBRARIES engine
 )
 target_include_directories(test_edit_player_session PRIVATE src include)
 ```
@@ -2205,7 +2205,7 @@ Expected: FAIL — header does not exist.
 
 - [ ] **Step 3: Create the public header**
 
-Create `libs/recorder_core/include/recorder_core/edit_player_session.h`:
+Create `libs/engine/include/exosnap/engine/edit_player_session.h`:
 
 ```cpp
 #pragma once
@@ -2223,14 +2223,14 @@ Create `libs/recorder_core/include/recorder_core/edit_player_session.h`:
 // onPreviewTick logic becomes the real fallback path, not a Qt concern this
 // class needs to duplicate).
 
-#include <recorder_core/edit_player_engine.h>
+#include <exosnap/engine/edit_player_engine.h>
 
 #include <filesystem>
 #include <functional>
 #include <memory>
 #include <string>
 
-namespace recorder_core {
+namespace exosnap::engine {
 
 class EditPlayerSession {
   public:
@@ -2280,23 +2280,23 @@ class EditPlayerSession {
     std::unique_ptr<Impl> impl_;
 };
 
-} // namespace recorder_core
+} // namespace exosnap::engine
 ```
 
 - [ ] **Step 4: Implement**
 
-Create `libs/recorder_core/src/edit_player_session.cpp`:
+Create `libs/engine/src/edit_player_session.cpp`:
 
 ```cpp
-#include "recorder_core/edit_player_session.h"
+#include "exosnap/engine/edit_player_session.h"
 
-#include "recorder_core/wasapi_audio_render.h"
+#include "exosnap/engine/wasapi_audio_render.h"
 
 #include <atomic>
 #include <mutex>
 #include <thread>
 
-namespace recorder_core {
+namespace exosnap::engine {
 
 struct EditPlayerSession::Impl {
     EditPlayerEngine engine;
@@ -2429,7 +2429,7 @@ void EditPlayerSession::SeekTo(int64_t target_us) {
     });
 }
 
-} // namespace recorder_core
+} // namespace exosnap::engine
 ```
 
 - [ ] **Step 5: Run the tests and confirm they pass**
@@ -2441,15 +2441,15 @@ pwsh scripts/run-tests.ps1 -Filter test_edit_player_session
 
 Expected: PASS, all 4 cases.
 
-- [ ] **Step 6: Add the new files to the `recorder_core` library target**
+- [ ] **Step 6: Add the new files to the `engine` library target**
 
 ```cmake
-    include/recorder_core/edit_player_session.h
+    include/exosnap/engine/edit_player_session.h
     src/edit_player_session.cpp
 ```
 
 ```powershell
-cmake --build --preset windows-x64-debug --target recorder_core
+cmake --build --preset windows-x64-debug --target engine
 ```
 
 Expected: exit 0.
@@ -2457,10 +2457,10 @@ Expected: exit 0.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add libs/recorder_core/include/recorder_core/edit_player_session.h \
-        libs/recorder_core/src/edit_player_session.cpp \
-        libs/recorder_core/tests/test_edit_player_session.cpp \
-        libs/recorder_core/CMakeLists.txt
+git add libs/engine/include/exosnap/engine/edit_player_session.h \
+        libs/engine/src/edit_player_session.cpp \
+        libs/engine/tests/test_edit_player_session.cpp \
+        libs/engine/CMakeLists.txt
 git commit -m "Add EditPlayerSession orchestrator (engine + audio renderer + scrub throttling)"
 ```
 
@@ -2739,7 +2739,7 @@ memory).
   does not already exist (check first — see Step 1).
 
 **Interfaces:**
-- Consumes: `recorder_core::EditPlayerSession`, `recorder_core::DecodedVideoFrame` (Task 8),
+- Consumes: `exosnap::engine::EditPlayerSession`, `exosnap::engine::DecodedVideoFrame` (Task 8),
   `exosnap::ui::widgets::EditPlayerSurface` (Task 9).
 
 - [ ] **Step 1: Check for existing `EditExportPage` widget tests**
@@ -2761,7 +2761,7 @@ and live/visual-verified UI wiring).
 In `app/pages/EditExportPage.h`, add near the top:
 
 ```cpp
-#include <recorder_core/edit_player_session.h>
+#include <exosnap/engine/edit_player_session.h>
 ```
 
 Replace the `player_sub_` member declaration:
@@ -2788,7 +2788,7 @@ class EditPlayerSurface;
 Add a new private member and a new private slot:
 
 ```cpp
-    std::unique_ptr<recorder_core::EditPlayerSession> player_session_;
+    std::unique_ptr<exosnap::engine::EditPlayerSession> player_session_;
 
   private slots:
     void onDecodedFrameReady(QImage frame); // marshalled onto the UI thread via invokeMethod
@@ -2822,13 +2822,13 @@ clock for a new clip), add, right after the existing keyframe-extraction block a
 
 ```cpp
     // --- Open the real decoder session for the new clip (replaces the previous one, if any) ---
-    player_session_ = std::make_unique<recorder_core::EditPlayerSession>();
+    player_session_ = std::make_unique<exosnap::engine::EditPlayerSession>();
     if (!ctx_.mkv_master_path.isEmpty()) {
         std::string open_err;
         const bool opened =
             player_session_->Open(std::filesystem::path(ctx_.mkv_master_path.toStdWString()), open_err);
         if (opened) {
-            player_session_->SetOnFrameReady([this](recorder_core::DecodedVideoFrame frame) {
+            player_session_->SetOnFrameReady([this](exosnap::engine::DecodedVideoFrame frame) {
                 QImage img(frame.bgra->data(), static_cast<int>(frame.width), static_cast<int>(frame.height),
                           static_cast<int>(frame.stride_bytes), QImage::Format_ARGB32);
                 // QImage does not own frame.bgra's storage; keep the shared_ptr alive for the
@@ -2912,7 +2912,7 @@ player shows the snapped boundary the user just landed on:
     // Show the frame at the (possibly snapped) boundary the handle landed on.
     if (player_session_) {
         const int64_t shown_us = (start_ms <= 0) ? trim_end_us_ : trim_start_us_;
-        if (shown_us != recorder_core::TrimRange::kNoTimestamp)
+        if (shown_us != exosnap::engine::TrimRange::kNoTimestamp)
             player_session_->SeekTo(shown_us);
     }
 ```

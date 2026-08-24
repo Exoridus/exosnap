@@ -245,14 +245,14 @@ exosnap_add_app_test_support(exosnap_output_model_test_support
     models/RecordingPreset.cpp
 )
 target_link_libraries(exosnap_output_model_test_support PUBLIC
-    Qt6::Core Qt6::Gui exosnap_capability recorder_core ole32.lib shell32.lib
+    Qt6::Core Qt6::Gui exosnap_capability exosnap_engine ole32.lib shell32.lib
 )
 
 # Linked after both, because the serializers read the models (SplitDurationMs,
 # SanitizePresetConfig's structs) and resolve the reports directory from AppLog.
 target_link_libraries(exosnap_observability PUBLIC
     exosnap_app_log_test_support exosnap_output_model_test_support
-    Qt6::Core exosnap_capability recorder_core
+    Qt6::Core exosnap_capability exosnap_engine
 )
 
 exosnap_add_app_test_support(exosnap_record_viewmodel_test_support
@@ -289,7 +289,7 @@ exosnap_add_app_test_support(exosnap_diagnostics_test_support
     diagnostics/SessionReport.cpp
 )
 target_link_libraries(exosnap_diagnostics_test_support PUBLIC
-    exosnap_output_model_test_support exosnap_capability recorder_core
+    exosnap_output_model_test_support exosnap_capability exosnap_engine
     exosnap::crash_capture
     dxgi.lib mmdevapi.lib dwmapi.lib shell32.lib
 )
@@ -308,7 +308,7 @@ exosnap_add_app_test_support(exosnap_device_service_test_support
     diagnostics/StructuredLog.cpp
 )
 target_link_libraries(exosnap_device_service_test_support PUBLIC
-    exosnap_app_log_test_support Qt6::Core Qt6::Gui exosnap_capability recorder_core
+    exosnap_app_log_test_support Qt6::Core Qt6::Gui exosnap_capability exosnap_engine
     ole32.lib mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib
 )
 
@@ -317,7 +317,7 @@ exosnap_add_gtest(
     TEST_PREFIX result.
     SOURCES
         tests/test_completed_result.cpp
-    LIBRARIES exosnap_record_viewmodel_test_support exosnap_capability recorder_core Qt6::Core Qt6::Gui
+    LIBRARIES exosnap_record_viewmodel_test_support exosnap_capability exosnap_engine Qt6::Core Qt6::Gui
 )
 target_include_directories(completed_result_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(completed_result_tests PRIVATE ole32.lib shell32.lib)
@@ -328,7 +328,7 @@ exosnap_add_gtest(
     TEST_PREFIX history_store.
     SOURCES
         tests/test_recording_history_store.cpp
-    LIBRARIES exosnap_app_log_test_support exosnap_record_viewmodel_test_support exosnap_capability recorder_core Qt6::Core
+    LIBRARIES exosnap_app_log_test_support exosnap_record_viewmodel_test_support exosnap_capability exosnap_engine Qt6::Core
 )
 target_include_directories(recording_history_store_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(recording_history_store_tests PRIVATE ole32.lib shell32.lib)
@@ -340,7 +340,7 @@ exosnap_add_gtest(
         tests/test_recording_preset.cpp
         models/RecordingPreset.cpp
         models/OutputSettingsModel.cpp
-    LIBRARIES exosnap_capability recorder_core
+    LIBRARIES exosnap_capability exosnap_engine
 )
 target_include_directories(recording_preset_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(recording_preset_tests PRIVATE ole32.lib shell32.lib)
@@ -352,7 +352,7 @@ exosnap_add_gtest(
     SOURCES
         tests/test_display_identity_resolver.cpp
         services/DisplayIdentityResolver.cpp
-    LIBRARIES exosnap_capability recorder_core
+    LIBRARIES exosnap_capability exosnap_engine
 )
 target_include_directories(display_identity_resolver_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
@@ -363,7 +363,7 @@ exosnap_add_gtest(
     SOURCES
         tests/test_window_target_facts.cpp
         diagnostics/WindowTargetFacts.cpp
-    LIBRARIES exosnap_capability recorder_core
+    LIBRARIES exosnap_capability exosnap_engine
 )
 target_include_directories(window_target_facts_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(window_target_facts_tests PRIVATE dwmapi.lib shell32.lib)
@@ -375,7 +375,7 @@ exosnap_add_gtest(
     SOURCES
         tests/test_window_evidence_accumulator.cpp
         diagnostics/WindowEvidenceAccumulator.cpp
-    LIBRARIES exosnap_capability recorder_core
+    LIBRARIES exosnap_capability exosnap_engine
 )
 target_include_directories(window_evidence_accumulator_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
@@ -387,7 +387,7 @@ exosnap_add_gtest(
         tests/test_window_capture_stall.cpp
         diagnostics/WindowCaptureStall.cpp
         diagnostics/WindowTargetFacts.cpp
-    LIBRARIES exosnap_capability recorder_core
+    LIBRARIES exosnap_capability exosnap_engine
 )
 target_include_directories(window_capture_stall_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(window_capture_stall_tests PRIVATE dwmapi.lib shell32.lib)
@@ -400,7 +400,7 @@ exosnap_add_gtest(
     SOURCES
         tests/test_audio_source_degradation.cpp
         diagnostics/AudioSourceDegradation.cpp
-    LIBRARIES exosnap_capability recorder_core
+    LIBRARIES exosnap_capability exosnap_engine
 )
 target_include_directories(audio_source_degradation_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
@@ -413,7 +413,7 @@ exosnap_add_gtest(
         tests/test_video_rate_control.cpp
         models/RecordingPreset.cpp
         models/OutputSettingsModel.cpp
-    LIBRARIES exosnap_capability recorder_core
+    LIBRARIES exosnap_capability exosnap_engine
 )
 target_include_directories(video_rate_control_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(video_rate_control_tests PRIVATE ole32.lib shell32.lib)
@@ -427,7 +427,7 @@ exosnap_add_gtest(
         settings/RecordingPresetStore.cpp
         models/RecordingPreset.cpp
         models/OutputSettingsModel.cpp
-    LIBRARIES exosnap_capability recorder_core Qt6::Core
+    LIBRARIES exosnap_capability exosnap_engine Qt6::Core
 )
 target_include_directories(audio_encoding_preset_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(audio_encoding_preset_tests PRIVATE ole32.lib shell32.lib tomlplusplus::tomlplusplus)
@@ -439,7 +439,7 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
         SOURCES
             tests/test_visual_scenarios.cpp
             visual_tests/VisualScenario.cpp
-        LIBRARIES Qt6::Core exosnap_capability recorder_core
+        LIBRARIES Qt6::Core exosnap_capability exosnap_engine
     )
     target_include_directories(visual_scenario_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_definitions(visual_scenario_tests PRIVATE EXOSNAP_ENABLE_VISUAL_TEST_HARNESS=1)
@@ -450,7 +450,7 @@ exosnap_add_gtest(
     TEST_PREFIX viewmodel.
     SOURCES
         tests/test_record_view_model_audio.cpp
-    LIBRARIES exosnap_record_viewmodel_test_support exosnap_capability recorder_core Qt6::Core
+    LIBRARIES exosnap_record_viewmodel_test_support exosnap_capability exosnap_engine Qt6::Core
 )
 target_include_directories(record_viewmodel_audio_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
@@ -459,7 +459,7 @@ exosnap_add_gtest(
     TEST_PREFIX region.
     SOURCES
         tests/test_region_model.cpp
-    LIBRARIES recorder_core
+    LIBRARIES exosnap_engine
 )
 target_include_directories(region_model_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
@@ -488,12 +488,12 @@ exosnap_add_gtest(
     SOURCES
         tests/test_error_message.cpp
         diagnostics/error_message.cpp
-    LIBRARIES exosnap_capability recorder_core Qt6::Core
+    LIBRARIES exosnap_capability exosnap_engine Qt6::Core
 )
 target_include_directories(error_message_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 # Engine -> AppLog bridge: drives the real InitializeEngineLogging() + a genuine
-# recorder_core::logging::log() call, so a green test means engine records really
+# exosnap::engine::logging::log() call, so a green test means engine records really
 # reach the application log.
 exosnap_add_gtest(
     NAME engine_log_bridge_tests
@@ -502,7 +502,7 @@ exosnap_add_gtest(
         tests/test_engine_log_bridge.cpp
         diagnostics/EngineLogBridge.cpp
         diagnostics/AppLog.cpp
-    LIBRARIES recorder_core Qt6::Core
+    LIBRARIES exosnap_engine Qt6::Core
 )
 target_include_directories(engine_log_bridge_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(engine_log_bridge_tests PROPERTIES AUTOMOC ON)
@@ -518,7 +518,7 @@ exosnap_add_gtest(
         diagnostics/StructuredLog.cpp
         diagnostics/EngineLogBridge.cpp
         diagnostics/AppLog.cpp
-    LIBRARIES recorder_core Qt6::Core
+    LIBRARIES exosnap_engine Qt6::Core
 )
 target_include_directories(structured_log_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(structured_log_tests PROPERTIES AUTOMOC ON)
@@ -531,7 +531,7 @@ exosnap_add_gtest(
     SOURCES
         tests/test_session_report.cpp
         diagnostics/SessionReport.cpp
-    LIBRARIES exosnap_capability recorder_core Qt6::Core Qt6::Gui
+    LIBRARIES exosnap_capability exosnap_engine Qt6::Core Qt6::Gui
 )
 target_include_directories(session_report_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(session_report_tests PRIVATE ole32.lib shell32.lib)
@@ -597,7 +597,7 @@ exosnap_add_gtest(
         exosnap_output_model_test_support
         exosnap_device_service_test_support
         exosnap_diagnostics_test_support
-        Qt6::Core Qt6::Gui exosnap_capability recorder_core
+        Qt6::Core Qt6::Gui exosnap_capability exosnap_engine
 )
 target_include_directories(output_settings_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 # ADR-0014: mfreadwrite.lib removed (MF/SinkWriter path deleted).
@@ -617,7 +617,7 @@ exosnap_add_gtest(
         tests/test_observability_snapshots.cpp
         diagnostics/EngineLogBridge.cpp
         diagnostics/StructuredLog.cpp
-    LIBRARIES exosnap_observability exosnap_capability recorder_core Qt6::Core Qt6::Gui
+    LIBRARIES exosnap_observability exosnap_capability exosnap_engine Qt6::Core Qt6::Gui
 )
 target_include_directories(observability_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(observability_tests PRIVATE ole32.lib shell32.lib)
@@ -699,7 +699,7 @@ exosnap_add_gtest(
         exosnap_output_model_test_support
         exosnap_device_service_test_support
         exosnap_diagnostics_test_support
-        Qt6::Core Qt6::Gui exosnap_capability recorder_core
+        Qt6::Core Qt6::Gui exosnap_capability exosnap_engine
 )
 target_include_directories(recording_admission_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(recording_admission_tests PRIVATE mfplat.lib mf.lib mfuuid.lib ole32.lib user32.lib)
@@ -720,7 +720,7 @@ exosnap_add_gtest(
         exosnap_output_model_test_support
         exosnap_device_service_test_support
         exosnap_diagnostics_test_support
-        Qt6::Core Qt6::Gui exosnap_capability recorder_core
+        Qt6::Core Qt6::Gui exosnap_capability exosnap_engine
 )
 target_include_directories(mp4_split_remux_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(mp4_split_remux_tests PRIVATE mfplat.lib mf.lib mfuuid.lib ole32.lib)
@@ -732,7 +732,7 @@ exosnap_add_gtest(
     SOURCES
         tests/test_app_settings_store.cpp
         settings/AppSettingsStore.cpp
-    LIBRARIES exosnap_capability recorder_core Qt6::Core
+    LIBRARIES exosnap_capability exosnap_engine Qt6::Core
 )
 target_include_directories(app_settings_store_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
@@ -741,7 +741,7 @@ exosnap_add_gtest(
     TEST_PREFIX diagnostics.
     SOURCES
         tests/test_diagnostics.cpp
-    LIBRARIES exosnap_diagnostics_test_support exosnap_capability recorder_core
+    LIBRARIES exosnap_diagnostics_test_support exosnap_capability exosnap_engine
 )
 target_include_directories(diagnostics_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
@@ -751,7 +751,7 @@ exosnap_add_gtest(
     TEST_PREFIX disk.
     SOURCES
         tests/test_low_disk_guard.cpp
-    LIBRARIES exosnap_diagnostics_test_support exosnap_capability recorder_core Qt6::Core
+    LIBRARIES exosnap_diagnostics_test_support exosnap_capability exosnap_engine Qt6::Core
 )
 target_include_directories(low_disk_guard_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
@@ -761,7 +761,7 @@ exosnap_add_gtest(
     TEST_PREFIX fs.
     SOURCES
         tests/test_filesystem_checks.cpp
-    LIBRARIES exosnap_diagnostics_test_support exosnap_capability recorder_core
+    LIBRARIES exosnap_diagnostics_test_support exosnap_capability exosnap_engine
 )
 target_include_directories(filesystem_checks_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
@@ -773,7 +773,7 @@ exosnap_add_gtest(
     TEST_PREFIX suite.
     SOURCES
         tests/test_codec_labels.cpp
-    LIBRARIES exosnap_capability recorder_core Qt6::Core
+    LIBRARIES exosnap_capability exosnap_engine Qt6::Core
 )
 target_include_directories(codec_labels_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
@@ -822,7 +822,7 @@ if(EXOSNAP_WITH_PRESENTMON)
     target_link_libraries(present_provider_tests PRIVATE PresentMon::consumer)
 endif()
 
-# Wave D: the app -> engine present overlay. Pure mapping; needs recorder_core for
+# Wave D: the app -> engine present overlay. Pure mapping; needs exosnap_engine for
 # the snapshot type but no ETW, no elevation and no recording.
 exosnap_add_gtest(
     NAME present_overlay_tests
@@ -830,7 +830,7 @@ exosnap_add_gtest(
     SOURCES
         tests/test_present_snapshot_overlay.cpp
         diagnostics/PresentSnapshotOverlay.cpp
-    LIBRARIES Qt6::Core recorder_core
+    LIBRARIES Qt6::Core exosnap_engine
 )
 target_include_directories(present_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
@@ -852,7 +852,7 @@ exosnap_add_gtest(
     SOURCES
         tests/test_global_hotkey_service.cpp
         services/GlobalHotkeyService.cpp
-    LIBRARIES Qt6::Core Qt6::Gui exosnap_capability recorder_core
+    LIBRARIES Qt6::Core Qt6::Gui exosnap_capability exosnap_engine
 )
 target_include_directories(hotkey_service_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(hotkey_service_tests PROPERTIES AUTOMOC ON)
@@ -866,7 +866,7 @@ exosnap_add_gtest(
         tests/test_timeline_thumbnail_source.cpp
         services/TimelineThumbnailSource.h
         services/TimelineThumbnailSource.cpp
-    LIBRARIES Qt6::Core Qt6::Gui recorder_core
+    LIBRARIES Qt6::Core Qt6::Gui exosnap_engine
 )
 target_include_directories(timeline_thumbnail_source_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 # One case opens a real clip to prove the worker releases the file handle on
@@ -950,7 +950,7 @@ exosnap_add_gtest(
     TEST_PREFIX webcam.
     SOURCES
         tests/test_webcam_placement.cpp
-    LIBRARIES recorder_core
+    LIBRARIES exosnap_engine
 )
 target_include_directories(webcam_placement_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
@@ -961,7 +961,7 @@ exosnap_add_gtest(
             models/RecordingPresetRegistry.cpp
             models/RecordingPreset.cpp
             models/OutputSettingsModel.cpp
-    LIBRARIES exosnap_capability recorder_core)
+    LIBRARIES exosnap_capability exosnap_engine)
 target_include_directories(recording_preset_registry_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(recording_preset_registry_tests PRIVATE ole32.lib shell32.lib)
 
@@ -972,7 +972,7 @@ exosnap_add_gtest(
             settings/RecordingPresetStore.cpp
             models/RecordingPreset.cpp
             models/OutputSettingsModel.cpp
-    LIBRARIES exosnap_capability recorder_core Qt6::Core)
+    LIBRARIES exosnap_capability exosnap_engine Qt6::Core)
 target_include_directories(recording_preset_store_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(recording_preset_store_tests PRIVATE ole32.lib shell32.lib tomlplusplus::tomlplusplus)
 
@@ -985,7 +985,7 @@ exosnap_add_gtest(
             models/RecordingPreset.cpp
             models/RecordingPresetRegistry.cpp
             models/OutputSettingsModel.cpp
-    LIBRARIES exosnap_capability recorder_core Qt6::Core)
+    LIBRARIES exosnap_capability exosnap_engine Qt6::Core)
 target_include_directories(preset_export_import_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(preset_export_import_tests PRIVATE ole32.lib shell32.lib tomlplusplus::tomlplusplus)
 
@@ -997,7 +997,7 @@ exosnap_add_gtest(
             settings/RecordingPresetStore.cpp
             models/RecordingPreset.cpp
             models/OutputSettingsModel.cpp
-    LIBRARIES exosnap_capability recorder_core Qt6::Core)
+    LIBRARIES exosnap_capability exosnap_engine Qt6::Core)
 target_include_directories(audio_gain_preset_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(audio_gain_preset_tests PRIVATE ole32.lib shell32.lib tomlplusplus::tomlplusplus)
 
@@ -1006,7 +1006,7 @@ exosnap_add_gtest(
     NAME audio_row_gain_handler_tests
     TEST_PREFIX audio_gain_handler.
     SOURCES tests/test_audio_row_gain_handlers.cpp
-    LIBRARIES exosnap_record_viewmodel_test_support exosnap_capability recorder_core Qt6::Core)
+    LIBRARIES exosnap_record_viewmodel_test_support exosnap_capability exosnap_engine Qt6::Core)
 target_include_directories(audio_row_gain_handler_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 # RECOVERY-MANIFEST-R1 tests
@@ -1016,7 +1016,7 @@ exosnap_add_gtest(
     SOURCES tests/test_recovery_manifest_store.cpp
             settings/RecoveryManifestStore.cpp
             diagnostics/AppLog.cpp
-    LIBRARIES exosnap_capability recorder_core Qt6::Core
+    LIBRARIES exosnap_capability exosnap_engine Qt6::Core
 )
 target_include_directories(recovery_manifest_store_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(recovery_manifest_store_tests PROPERTIES AUTOMOC ON)
@@ -1028,7 +1028,7 @@ exosnap_add_gtest(
     SOURCES tests/test_capability_cache_store.cpp
             settings/CapabilityCacheStore.cpp
             diagnostics/AppLog.cpp
-    LIBRARIES exosnap_capability recorder_core Qt6::Core
+    LIBRARIES exosnap_capability exosnap_engine Qt6::Core
 )
 target_include_directories(capability_cache_store_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(capability_cache_store_tests PROPERTIES AUTOMOC ON)
@@ -1041,7 +1041,7 @@ exosnap_add_gtest(
             services/RecoveryService.cpp
             services/AtomicFileOps.cpp
             diagnostics/AppLog.cpp
-    LIBRARIES exosnap_capability recorder_core Qt6::Core FFmpeg::mux
+    LIBRARIES exosnap_capability exosnap_engine Qt6::Core FFmpeg::mux
 )
 target_include_directories(recovery_service_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(recovery_service_tests PROPERTIES AUTOMOC ON)
@@ -1057,7 +1057,7 @@ exosnap_add_gtest(
             services/RecoveryService.cpp
             services/AtomicFileOps.cpp
             diagnostics/AppLog.cpp
-    LIBRARIES exosnap_capability recorder_core recorder_core_testutil Qt6::Core FFmpeg::mux
+    LIBRARIES exosnap_capability exosnap_engine exosnap_engine_testutil Qt6::Core FFmpeg::mux
 )
 target_include_directories(recovery_drill_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(recovery_drill_tests PROPERTIES AUTOMOC ON)
@@ -1078,7 +1078,7 @@ exosnap_add_gtest(
     TEST_PREFIX device.
     SOURCES
         tests/test_audio_device_notifier.cpp
-    LIBRARIES exosnap_device_service_test_support Qt6::Core exosnap_capability recorder_core)
+    LIBRARIES exosnap_device_service_test_support Qt6::Core exosnap_capability exosnap_engine)
 target_include_directories(audio_device_notifier_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(audio_device_notifier_tests PRIVATE ole32.lib)
 set_target_properties(audio_device_notifier_tests PROPERTIES AUTOMOC ON)
@@ -1088,7 +1088,7 @@ exosnap_add_gtest(
     TEST_PREFIX device.
     SOURCES
         tests/test_webcam_device_notifier.cpp
-    LIBRARIES exosnap_device_service_test_support Qt6::Core Qt6::Gui exosnap_capability recorder_core)
+    LIBRARIES exosnap_device_service_test_support Qt6::Core Qt6::Gui exosnap_capability exosnap_engine)
 target_include_directories(webcam_device_notifier_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(webcam_device_notifier_tests PRIVATE ole32.lib mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib)
 set_target_properties(webcam_device_notifier_tests PROPERTIES AUTOMOC ON)
@@ -1101,7 +1101,7 @@ exosnap_add_gtest(
     TEST_PREFIX webcam.
     SOURCES
         tests/test_webcam_read_policy.cpp
-    LIBRARIES exosnap_device_service_test_support Qt6::Core Qt6::Gui exosnap_capability recorder_core)
+    LIBRARIES exosnap_device_service_test_support Qt6::Core Qt6::Gui exosnap_capability exosnap_engine)
 target_include_directories(webcam_read_policy_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(webcam_read_policy_tests PRIVATE ole32.lib mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib)
 set_target_properties(webcam_read_policy_tests PROPERTIES AUTOMOC ON)
@@ -1114,7 +1114,7 @@ exosnap_add_gtest(
     TEST_PREFIX webcam.
     SOURCES
         tests/test_webcam_delivery.cpp
-    LIBRARIES exosnap_device_service_test_support Qt6::Core Qt6::Gui exosnap_capability recorder_core)
+    LIBRARIES exosnap_device_service_test_support Qt6::Core Qt6::Gui exosnap_capability exosnap_engine)
 target_include_directories(webcam_delivery_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(webcam_delivery_tests PRIVATE ole32.lib mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib)
 set_target_properties(webcam_delivery_tests PROPERTIES AUTOMOC ON)
@@ -1126,7 +1126,7 @@ exosnap_add_gtest(
     TEST_PREFIX webcam.
     SOURCES
         tests/test_webcam_open_failure_copy.cpp
-    LIBRARIES exosnap_device_service_test_support Qt6::Core Qt6::Gui exosnap_capability recorder_core)
+    LIBRARIES exosnap_device_service_test_support Qt6::Core Qt6::Gui exosnap_capability exosnap_engine)
 target_include_directories(webcam_open_failure_copy_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(webcam_open_failure_copy_tests PRIVATE ole32.lib mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib)
 set_target_properties(webcam_open_failure_copy_tests PROPERTIES AUTOMOC ON)
@@ -1140,7 +1140,7 @@ exosnap_add_gtest(
     SOURCES
         tests/test_capture_source_hub.cpp
         services/CaptureSourceHub.cpp
-    LIBRARIES recorder_core)
+    LIBRARIES exosnap_engine)
 target_include_directories(capture_source_hub_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 # Sharing and disposal: one hub per source key, born with the first consumer and
@@ -1152,7 +1152,7 @@ exosnap_add_gtest(
         tests/test_capture_hub_registry.cpp
         services/CaptureHubRegistry.cpp
         services/CaptureSourceHub.cpp
-    LIBRARIES recorder_core)
+    LIBRARIES exosnap_engine)
 target_include_directories(capture_hub_registry_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 # The layer above the registry: the hub services' command channel and lease
@@ -1166,7 +1166,7 @@ exosnap_add_gtest(
         services/CaptureHubGate.cpp
         services/CaptureHubRegistry.cpp
         services/CaptureSourceHub.cpp
-    LIBRARIES recorder_core)
+    LIBRARIES exosnap_engine)
 target_include_directories(capture_hub_command_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 # The sequential "Display N" label shared by picker, Record header and output
@@ -1184,7 +1184,7 @@ exosnap_add_gtest(
     TEST_PREFIX device.
     SOURCES
         tests/test_display_device_notifier.cpp
-    LIBRARIES exosnap_device_service_test_support Qt6::Core Qt6::Gui exosnap_capability recorder_core)
+    LIBRARIES exosnap_device_service_test_support Qt6::Core Qt6::Gui exosnap_capability exosnap_engine)
 target_include_directories(display_device_notifier_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(display_device_notifier_tests PRIVATE ole32.lib)
 set_target_properties(display_device_notifier_tests PROPERTIES AUTOMOC ON)
@@ -1194,7 +1194,7 @@ exosnap_add_gtest(
     TEST_PREFIX capture.targets.
     SOURCES
         tests/test_capture_target_notifier.cpp
-    LIBRARIES exosnap_device_service_test_support Qt6::Core Qt6::Gui exosnap_capability recorder_core)
+    LIBRARIES exosnap_device_service_test_support Qt6::Core Qt6::Gui exosnap_capability exosnap_engine)
 target_include_directories(capture_target_notifier_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(capture_target_notifier_tests PRIVATE ole32.lib user32.lib)
 set_target_properties(capture_target_notifier_tests PROPERTIES AUTOMOC ON)
@@ -1217,7 +1217,7 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
             exosnap_output_model_test_support
             exosnap_device_service_test_support
             exosnap_diagnostics_test_support
-            Qt6::Core Qt6::Gui exosnap_capability recorder_core
+            Qt6::Core Qt6::Gui exosnap_capability exosnap_engine
     )
     target_include_directories(capture_frame_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_definitions(capture_frame_tests PRIVATE
@@ -1235,7 +1235,7 @@ exosnap_add_gtest(
     SOURCES
         tests/test_notification_manager.cpp
         notifications/NotificationManager.cpp
-    LIBRARIES Qt6::Core exosnap_capability recorder_core
+    LIBRARIES Qt6::Core exosnap_capability exosnap_engine
 )
 target_include_directories(notification_manager_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(notification_manager_tests PROPERTIES AUTOMOC ON)
@@ -1258,7 +1258,7 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
             exosnap_output_model_test_support
             exosnap_device_service_test_support
             exosnap_diagnostics_test_support
-            Qt6::Core Qt6::Gui exosnap_capability recorder_core
+            Qt6::Core Qt6::Gui exosnap_capability exosnap_engine
     )
     target_include_directories(recording_marker_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_definitions(recording_marker_tests PRIVATE
@@ -1278,7 +1278,7 @@ exosnap_add_gtest(
     # shipping application does: QSystemTrayIcon is a QtWidgets type and needs a
     # QApplication. If this line ever spreads to another target, a Widgets type
     # crept back into something that is not the tray.
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability exosnap_engine
 )
 target_include_directories(tray_presence_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(tray_presence_tests PROPERTIES AUTOMOC ON)

@@ -70,9 +70,9 @@ TEST(DiagnosticsLiveTiles, TheEncoderTileReportsWhatIsRunningAndNotWhatWasReques
 }
 
 TEST(DiagnosticsLiveTiles, AnUnconfiguredEncoderFallsBackToTheStreamCodecAndNotToADefaultPreset) {
-    recorder_core::RecordingDiagnosticsSnapshot s = visual::MakeDiagnosticsLiveSnapshot(QStringLiteral("healthy"));
+    exosnap::engine::RecordingDiagnosticsSnapshot s = visual::MakeDiagnosticsLiveSnapshot(QStringLiteral("healthy"));
     s.encoder_init = {}; // valid == false: nothing has been configured
-    s.video_encoder.codec = recorder_core::VideoCodec::Hevc;
+    s.video_encoder.codec = exosnap::engine::VideoCodec::Hevc;
 
     const LiveTile encoder = Find(BuildLiveTiles(s), "encoder");
     EXPECT_EQ(encoder.value, "HEVC");
@@ -103,9 +103,9 @@ TEST(DiagnosticsLiveTiles, ABottleneckInAHealthyPipelineDoesNotColourAnything) {
     // The engine names a bottleneck long before it calls the pipeline unwell.
     // Colouring on attribution alone would paint a tile amber on a recording the
     // engine reported as Good, which is the one thing this surface must not do.
-    recorder_core::RecordingDiagnosticsSnapshot s = visual::MakeDiagnosticsLiveSnapshot(QStringLiteral("healthy"));
-    s.bottleneck = recorder_core::PipelineBottleneck::VideoEncoder;
-    s.health = recorder_core::PipelineHealth::Good;
+    exosnap::engine::RecordingDiagnosticsSnapshot s = visual::MakeDiagnosticsLiveSnapshot(QStringLiteral("healthy"));
+    s.bottleneck = exosnap::engine::PipelineBottleneck::VideoEncoder;
+    s.health = exosnap::engine::PipelineHealth::Good;
 
     for (const LiveTile& tile : BuildLiveTiles(s))
         EXPECT_EQ(tile.tone, TileTone::Neutral) << tile.key;
@@ -122,7 +122,7 @@ TEST(DiagnosticsLiveTiles, DiskPressureColoursStorageAndReportsTheShrinkingEstim
 }
 
 TEST(DiagnosticsLiveTiles, AnUnavailableRemainingTimeSaysSoInsteadOfShowingZero) {
-    recorder_core::RecordingDiagnosticsSnapshot s = visual::MakeDiagnosticsLiveSnapshot(QStringLiteral("healthy"));
+    exosnap::engine::RecordingDiagnosticsSnapshot s = visual::MakeDiagnosticsLiveSnapshot(QStringLiteral("healthy"));
     s.disk_fill_eta_seconds = -1.0;
 
     const LiveTile storage = Find(BuildLiveTiles(s), "storage");
@@ -165,9 +165,9 @@ TEST(DiagnosticsLiveTiles, ALostAudioSourceIsANoticeEvenWhileThePipelineIsHealth
 }
 
 TEST(DiagnosticsLiveTiles, AudioSyncReportsUnavailableDriftRatherThanPerfectSync) {
-    recorder_core::RecordingDiagnosticsSnapshot s = visual::MakeDiagnosticsLiveSnapshot(QStringLiteral("healthy"));
-    s.av_drift_availability = recorder_core::MetricAvailability::Unavailable;
-    s.peak_av_drift_availability = recorder_core::MetricAvailability::Unavailable;
+    exosnap::engine::RecordingDiagnosticsSnapshot s = visual::MakeDiagnosticsLiveSnapshot(QStringLiteral("healthy"));
+    s.av_drift_availability = exosnap::engine::MetricAvailability::Unavailable;
+    s.peak_av_drift_availability = exosnap::engine::MetricAvailability::Unavailable;
 
     const LiveTile audio = Find(BuildLiveTiles(s), "audioSync");
     // "+0.0 ms" would claim a measurement of perfect sync on a recording whose
@@ -178,7 +178,7 @@ TEST(DiagnosticsLiveTiles, AudioSyncReportsUnavailableDriftRatherThanPerfectSync
 }
 
 TEST(DiagnosticsLiveTiles, ARecordingWithoutAudioSaysSoInsteadOfShowingZeroDrift) {
-    recorder_core::RecordingDiagnosticsSnapshot s = visual::MakeDiagnosticsLiveSnapshot(QStringLiteral("healthy"));
+    exosnap::engine::RecordingDiagnosticsSnapshot s = visual::MakeDiagnosticsLiveSnapshot(QStringLiteral("healthy"));
     s.audio.active = false;
 
     const LiveTile audio = Find(BuildLiveTiles(s), "audioSync");
@@ -198,8 +198,9 @@ TEST(DiagnosticsLiveTiles, ACompletedSessionHasNoLiveSummaryEvenThoughItsNumbers
     // headed "live", they would report a stopped recording as a running one.
     EXPECT_TRUE(TilesFor("post").empty());
 
-    recorder_core::RecordingDiagnosticsSnapshot failed = visual::MakeDiagnosticsLiveSnapshot(QStringLiteral("healthy"));
-    failed.lifecycle = recorder_core::DiagnosticsLifecycle::Failed;
+    exosnap::engine::RecordingDiagnosticsSnapshot failed =
+        visual::MakeDiagnosticsLiveSnapshot(QStringLiteral("healthy"));
+    failed.lifecycle = exosnap::engine::DiagnosticsLifecycle::Failed;
     EXPECT_TRUE(BuildLiveTiles(failed).empty());
 }
 
@@ -211,7 +212,7 @@ TEST(DiagnosticsLiveTiles, TheTileAndTheStructuredSnapshotNeverDisagree) {
     // of them classified for itself -- which is exactly what this asserts they
     // do not do.
     for (const char* kind : {"healthy", "encoder", "disk", "judder", "degraded", "paused", "split"}) {
-        const recorder_core::RecordingDiagnosticsSnapshot snapshot =
+        const exosnap::engine::RecordingDiagnosticsSnapshot snapshot =
             visual::MakeDiagnosticsLiveSnapshot(QString::fromLatin1(kind));
         const QJsonObject json = observability::PipelineSnapshotToJson(snapshot);
         const LiveTile health = Find(BuildLiveTiles(snapshot), "pipelineHealth");

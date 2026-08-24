@@ -42,18 +42,18 @@ forced segment boundaries. `idrPeriod = gopLength` (belt-and-braces) stays set, 
 
 | File | Responsibility |
 |---|---|
-| `libs/recorder_core/src/nvenc_encoder.cpp` | `EncodeFrame`: reorder FORCEIDR-flag logic to depend on `phase.is_keyframe`; rewrite the stale "prediction" comment to describe the new "we force it" reality |
-| `libs/recorder_core/src/nvenc_encoder.h` | Rewrite `NextGopKeyframePhase`'s doc comment (still describes itself as a passive "predictor"; must now describe itself as the pure decision function that `EncodeFrame` actively enforces) |
-| `libs/recorder_core/tests/test_nvenc_gop_aq_config.cpp` | No code change required — existing `NextGopKeyframePhase` tests already cover the cadence math this plan relies on; this plan's task re-runs them as a regression gate |
+| `libs/engine/src/nvenc_encoder.cpp` | `EncodeFrame`: reorder FORCEIDR-flag logic to depend on `phase.is_keyframe`; rewrite the stale "prediction" comment to describe the new "we force it" reality |
+| `libs/engine/src/nvenc_encoder.h` | Rewrite `NextGopKeyframePhase`'s doc comment (still describes itself as a passive "predictor"; must now describe itself as the pure decision function that `EncodeFrame` actively enforces) |
+| `libs/engine/tests/test_nvenc_gop_aq_config.cpp` | No code change required — existing `NextGopKeyframePhase` tests already cover the cadence math this plan relies on; this plan's task re-runs them as a regression gate |
 
 ---
 
 ### Task 1: Force IDR on every predicted keyframe, not just segment boundaries
 
 **Files:**
-- Modify: `libs/recorder_core/src/nvenc_encoder.cpp:1155-1183` (`EncodeFrame`, the `pic.encodePicFlags`/`forcedIdr`/`NextGopKeyframePhase` block)
-- Modify: `libs/recorder_core/src/nvenc_encoder.h:140-148` (`NextGopKeyframePhase` doc comment)
-- Test: `libs/recorder_core/tests/test_nvenc_gop_aq_config.cpp` (no new test needed — regression run only, see Step 1)
+- Modify: `libs/engine/src/nvenc_encoder.cpp:1155-1183` (`EncodeFrame`, the `pic.encodePicFlags`/`forcedIdr`/`NextGopKeyframePhase` block)
+- Modify: `libs/engine/src/nvenc_encoder.h:140-148` (`NextGopKeyframePhase` doc comment)
+- Test: `libs/engine/tests/test_nvenc_gop_aq_config.cpp` (no new test needed — regression run only, see Step 1)
 
 **Interfaces:**
 - Consumes: `NextGopKeyframePhase(uint32_t frame_in_gop, uint32_t gop_length, bool forced_idr) -> GopKeyframePhase` (`nvenc_encoder.h:153`, unchanged signature/behavior).
@@ -66,7 +66,7 @@ Expected: PASS, all existing tests green (this is the baseline this task must no
 
 - [ ] **Step 2: Read the current `EncodeFrame` block to confirm it matches this plan's assumption**
 
-In `libs/recorder_core/src/nvenc_encoder.cpp`, confirm lines 1155-1183 currently read (adapt to the actual current line numbers if they've shifted, but the code shape should match):
+In `libs/engine/src/nvenc_encoder.cpp`, confirm lines 1155-1183 currently read (adapt to the actual current line numbers if they've shifted, but the code shape should match):
 
 ```cpp
     NV_ENC_PIC_PARAMS pic{};
@@ -147,7 +147,7 @@ Everything below this block (the code reading `phase`/`isKeyframe`/`m_frameInGop
 
 - [ ] **Step 4: Rewrite the `NextGopKeyframePhase` doc comment in `nvenc_encoder.h`**
 
-In `libs/recorder_core/src/nvenc_encoder.h`, the comment above `struct GopKeyframePhase` (currently lines 140-148) reads:
+In `libs/engine/src/nvenc_encoder.h`, the comment above `struct GopKeyframePhase` (currently lines 140-148) reads:
 
 ```cpp
 // ---------------------------------------------------------------------------
@@ -187,7 +187,7 @@ Expected: builds clean (this file only changes comments + the caller in `nvenc_e
 Run: `ctest --test-dir build/windows-x64-debug -R "NextGopKeyframePhase|ApplyGopToNvenc|ComputeGopLength|ApplySpatialAqToNvenc" -C Debug --output-on-failure`
 Expected: PASS, identical results to Step 1 (this task changes no pure-function behavior — it only changes how `EncodeFrame`, which has no unit-test seam, consumes an unchanged pure function).
 
-- [ ] **Step 6: Full recorder_core NVENC test suite (regression)**
+- [ ] **Step 6: Full engine NVENC test suite (regression)**
 
 Run: `ctest --test-dir build/windows-x64-debug -R "nvenc" -C Debug --output-on-failure`
 Expected: PASS, no regressions in any `recorder_core.test_nvenc_*` test (rc_params, color_config, chroma_config, gop_aq_config, preset_guid, flush_drain_policy, video_encoder_interface — none of these test `EncodeFrame` directly against real hardware, so none should be affected by this change; a regression here would indicate the reorder broke something the plan didn't anticipate).
@@ -208,7 +208,7 @@ Record the exact command(s) run and the `ffprobe` keyframe-index output in the t
 - [ ] **Step 8: Commit**
 
 ```bash
-git add libs/recorder_core/src/nvenc_encoder.cpp libs/recorder_core/src/nvenc_encoder.h
+git add libs/engine/src/nvenc_encoder.cpp libs/engine/src/nvenc_encoder.h
 git commit -m "fix(nvenc): drive keyframe cadence with an explicit FORCEIDR instead of relying on idrPeriod"
 ```
 

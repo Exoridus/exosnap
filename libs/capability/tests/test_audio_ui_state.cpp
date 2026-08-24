@@ -6,7 +6,7 @@
 namespace exosnap::capability {
 namespace {
 
-using K = recorder_core::AudioSourceKind;
+using K = exosnap::engine::AudioSourceKind;
 
 // Build a Window state where App+Sys are merged and Mic is disabled.
 AudioUiState WindowMergedState(std::optional<uint32_t> pid = std::nullopt) {
@@ -138,7 +138,7 @@ TEST(AudioUiStateTest, BuildAudioTrackPreview_MergedTrack_SinglePreviewEntry) {
     AudioPlanResult result;
     result.record_audio = true;
 
-    recorder_core::ResolvedAudioTrack merged;
+    exosnap::engine::ResolvedAudioTrack merged;
     merged.track_index = 0;
     merged.sources = {K::App, K::SystemOutput, K::Mic};
     result.plan.tracks.push_back(std::move(merged));

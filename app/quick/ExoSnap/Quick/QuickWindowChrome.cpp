@@ -43,6 +43,78 @@ struct IconVariant {
     WORD resource_id = 0;
 };
 
+// The scale factor to convert this window's physical pixels into the logical
+// units QML reports its geometry in.
+//
+// Deliberately NOT QWindow::devicePixelRatio(): that is a Qt-side cache updated
+// through the screen-changed signal path, while GetClientRect and the
+// WM_NCHITTEST coordinates it is compared against are live OS state. Windows
+// resizes a per-monitor-v2 window synchronously while handling WM_DPICHANGED, so
+// between that resize and Qt processing its own notification the two disagree —
+// and a hit test in that gap divides the new physical extents by the old ratio.
+// GetDpiForWindow is the same call generation as GetClientRect, which removes the
+// event-queue timing from this path entirely.
+double windowScaleFactor(HWND hwnd, const QQuickWindow* fallback) {
+    if (hwnd != nullptr) {
+        const UINT dpi = GetDpiForWindow(hwnd);
+        if (dpi > 0)
+            return static_cast<double>(dpi) / static_cast<double>(USER_DEFAULT_SCREEN_DPI);
+    }
+    // Pre-1607 Windows and a failed query both land here.
+    const double qt_ratio = fallback != nullptr ? fallback->devicePixelRatio() : 1.0;
+    return qt_ratio > 0.0 ? qt_ratio : 1.0;
+}
+
+// One line per window-state transition, under the same switch as the startup
+// geometry trace. The startup message trace deliberately stops at the first
+// frame, which is exactly when this becomes interesting: a maximize that Qt and
+// Windows disagree about is invisible in every other instrument, and the restore
+// rect Windows will return to is not observable from Qt at all.
+void traceWindowState(const char* reason, HWND hwnd, const QQuickWindow* window) {
+    if (!WindowGeometryTraceEnabled() || hwnd == nullptr)
+        return;
+
+    RECT rect{};
+    GetWindowRect(hwnd, &rect);
+
+    WINDOWPLACEMENT placement{};
+    placement.length = sizeof(placement);
+    const bool have_placement = GetWindowPlacement(hwnd, &placement) != FALSE;
+    const RECT& normal = placement.rcNormalPosition;
+
+    // The style is part of the line because WS_MAXIMIZE (0x01000000) is the bit
+    // Windows itself keys the maximized state on, and placement_flags because
+    // WPF_RESTORETOMAXIMIZED (0x0002) is the one that decides where a minimized
+    // window comes back to. A state that Qt believes in
+    // without that bit being set is not a maximized window, however large it is.
+    qInfo("window-state: %s zoomed=%d iconic=%d qt_visibility=%d window=%ld,%ld %ldx%ld restore=%ld,%ld %ldx%ld "
+          "show_cmd=%u placement_flags=0x%04x style=0x%08llx dpr=%.2f",
+          reason, IsZoomed(hwnd) != FALSE ? 1 : 0, IsIconic(hwnd) != FALSE ? 1 : 0,
+          window != nullptr ? static_cast<int>(window->visibility()) : -1, rect.left, rect.top, rect.right - rect.left,
+          rect.bottom - rect.top, have_placement ? normal.left : 0L, have_placement ? normal.top : 0L,
+          have_placement ? normal.right - normal.left : 0L, have_placement ? normal.bottom - normal.top : 0L,
+          have_placement ? placement.showCmd : 0u, have_placement ? placement.flags : 0u,
+          static_cast<unsigned long long>(GetWindowLongPtrW(hwnd, GWL_STYLE)),
+          window != nullptr ? window->devicePixelRatio() : 0.0);
+}
+
+const char* sysCommandName(WPARAM wparam) {
+    switch (wparam & 0xFFF0u) {
+    case SC_MAXIMIZE:
+        return "SC_MAXIMIZE";
+    case SC_RESTORE:
+        return "SC_RESTORE";
+    case SC_MINIMIZE:
+        return "SC_MINIMIZE";
+    case SC_SIZE:
+        return "SC_SIZE";
+    case SC_MOVE:
+        return "SC_MOVE";
+    default:
+        return "SC_other";
+    }
+}
+
 IconVariant iconVariantFor(QuickWindowChrome::IconState state) {
     switch (state) {
     case QuickWindowChrome::Recording:
@@ -108,13 +180,20 @@ void QuickWindowChrome::setTarget(QQuickWindow* window) {
     if (QCoreApplication::instance() != nullptr)
         QCoreApplication::instance()->installNativeEventFilter(this);
 
-    ensureResizableStyle();
+    ensureNativeFrameStyle();
+    refreshWindowMaximized();
     applyBorderColor("attach");
     TraceWindowGeometry("chrome-style-applied", window);
     emit targetChanged();
 }
 
 void QuickWindowChrome::detach() {
+    // detach() is the second writer of target_, reachable from QML, from the
+    // destructor and from the target's own destroyed() signal — so it owes the
+    // property the same notification setTarget() gives it, or a consumer binding
+    // to `target` never learns the window went away.
+    const bool had_target = !target_.isNull();
+
     if (QCoreApplication::instance() != nullptr)
         QCoreApplication::instance()->removeNativeEventFilter(this);
     if (!target_.isNull()) {
@@ -126,8 +205,15 @@ void QuickWindowChrome::detach() {
     target_ = nullptr;
     hwnd_ = nullptr;
     non_client_leave_tracked_ = false;
+    applied_border_valid_ = false;
+    applied_border_hwnd_ = nullptr;
+    // With no handle left there is nothing to be maximized, and the property has
+    // no other writer once the message stream is gone.
+    refreshWindowMaximized();
     setMaximizeButtonHovered(false);
     setMaximizeButtonPressed(false);
+    if (had_target)
+        emit targetChanged();
 }
 
 void QuickWindowChrome::refreshHandle() {
@@ -141,7 +227,7 @@ void QuickWindowChrome::refreshHandle() {
     }
     hwnd_ = fresh;
     non_client_leave_tracked_ = false;
-    ensureResizableStyle();
+    ensureNativeFrameStyle();
     applyBorderColor("handle-recreated");
 }
 
@@ -152,7 +238,7 @@ void QuickWindowChrome::applyNativeWindowStyle() {
     // that can make Qt recreate the platform window, and a stale HWND here would
     // style a window that no longer exists.
     refreshHandle();
-    ensureResizableStyle();
+    ensureNativeFrameStyle();
     TraceWindowGeometry("chrome-native-style", target_.data());
 }
 
@@ -294,6 +380,83 @@ void QuickWindowChrome::setNonClientActivationWorkaround(bool enabled) {
 // Window icon
 // ---------------------------------------------------------------------------
 
+void QuickWindowChrome::setWindowMaximized(bool maximized) {
+#if defined(Q_OS_WIN)
+    HWND hwnd = static_cast<HWND>(hwnd_);
+    if (hwnd == nullptr)
+        return;
+    const bool zoomed = IsZoomed(hwnd) != FALSE;
+    if (zoomed == maximized)
+        return;
+    // ShowWindow rather than QWindow::setVisibility/showMaximized: Qt answers the
+    // latter on a frameless window with a bare SetWindowPos onto the work area,
+    // which leaves Windows in SW_SHOWNORMAL and overwrites the restore rect with
+    // the maximized one. SW_MAXIMIZE also goes through WM_GETMINMAXINFO and
+    // WM_NCCALCSIZE below, so the taskbar clamp still applies.
+    ShowWindow(hwnd, maximized ? SW_MAXIMIZE : SW_RESTORE);
+    refreshWindowMaximized();
+#else
+    Q_UNUSED(maximized);
+#endif
+}
+
+void QuickWindowChrome::minimizeWindow() {
+#if defined(Q_OS_WIN)
+    HWND hwnd = static_cast<HWND>(hwnd_);
+    if (hwnd == nullptr)
+        return;
+    ShowWindow(hwnd, SW_MINIMIZE);
+#endif
+}
+
+void QuickWindowChrome::restoreWindow() {
+#if defined(Q_OS_WIN)
+    HWND hwnd = static_cast<HWND>(hwnd_);
+    if (hwnd == nullptr || IsIconic(hwnd) == FALSE)
+        return;
+    ShowWindow(hwnd, SW_RESTORE);
+    refreshWindowMaximized();
+#endif
+}
+
+bool QuickWindowChrome::willOccupyScreenMaximized() const {
+#if defined(Q_OS_WIN)
+    HWND hwnd = static_cast<HWND>(hwnd_);
+    if (hwnd == nullptr)
+        return false;
+    if (IsIconic(hwnd) == FALSE)
+        return IsZoomed(hwnd) != FALSE;
+    WINDOWPLACEMENT placement{};
+    placement.length = sizeof(placement);
+    if (GetWindowPlacement(hwnd, &placement) == FALSE || placement.showCmd != SW_SHOWMINIMIZED)
+        return false;
+    return (placement.flags & WPF_RESTORETOMAXIMIZED) != 0;
+#else
+    return false;
+#endif
+}
+
+void QuickWindowChrome::toggleMaximized() {
+    setWindowMaximized(!windowMaximized());
+}
+
+bool QuickWindowChrome::windowMaximized() const noexcept {
+    return window_maximized_;
+}
+
+void QuickWindowChrome::refreshWindowMaximized() {
+#if defined(Q_OS_WIN)
+    HWND hwnd = static_cast<HWND>(hwnd_);
+    const bool maximized = hwnd != nullptr && IsZoomed(hwnd) != FALSE;
+#else
+    const bool maximized = false;
+#endif
+    if (maximized == window_maximized_)
+        return;
+    window_maximized_ = maximized;
+    emit windowMaximizedChanged();
+}
+
 void QuickWindowChrome::applyWindowIcon(IconState state) {
 #if defined(Q_OS_WIN)
     const IconVariant variant = iconVariantFor(state);
@@ -336,21 +499,42 @@ void QuickWindowChrome::applyWindowIcon(IconState state) {
 // Win32 helpers
 // ---------------------------------------------------------------------------
 
-void QuickWindowChrome::ensureResizableStyle() const {
+void QuickWindowChrome::ensureNativeFrameStyle() const {
 #if defined(Q_OS_WIN)
     HWND hwnd = static_cast<HWND>(hwnd_);
     if (hwnd == nullptr)
         return;
 
-    // Aero Snap, Win+Arrow and the native resize drag are all gated on
-    // WS_THICKFRAME. A frameless Qt window does not get it, so it is re-added and
+    // Windows decides every native window gesture from the style bits, not from
+    // what the title band draws or from the HTCAPTION this class returns:
+    //
+    //   WS_THICKFRAME   native resize drag, Aero Snap to the screen edges, Win+Arrow
+    //   WS_MAXIMIZEBOX  double-click-to-maximize, drag-to-top-to-maximize, Win+Up,
+    //                   and the Windows 11 Snap Layouts flyout over HTMAXBUTTON
+    //   WS_MINIMIZEBOX  Win+Down and the taskbar's minimize/restore
+    //   WS_SYSMENU      the window menu on Alt+Space and on right-click
+    //
+    // A frameless Qt window carries none of them, so all four are re-added and
     // committed with SWP_FRAMECHANGED — without that flag Windows keeps using the
     // cached frame metrics and the style change has no observable effect.
-    LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
-    if ((style & WS_THICKFRAME) != 0)
+    //
+    // WS_CAPTION stays out: it is what would make Windows reserve non-client area
+    // again and draw a second title bar above the product's own band.
+    constexpr LONG_PTR kRequired = WS_THICKFRAME | WS_MAXIMIZEBOX | WS_MINIMIZEBOX | WS_SYSMENU;
+
+    const LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+    // A live top-level window always carries at least WS_CLIPSIBLINGS, so a zero
+    // style is the API's failure return rather than a real value. Writing
+    // `0 | kRequired` back would strip WS_VISIBLE and every clipping bit off the
+    // window; refusing the write leaves the gestures dead but the window intact,
+    // and the log line is what turns that into something findable.
+    if (style == 0) {
+        qWarning("QuickWindowChrome: GWL_STYLE read failed, leaving the window style untouched");
         return;
-    style |= WS_THICKFRAME;
-    SetWindowLongPtrW(hwnd, GWL_STYLE, style);
+    }
+    if ((style & kRequired) == kRequired)
+        return;
+    SetWindowLongPtrW(hwnd, GWL_STYLE, style | kRequired);
     SetWindowPos(hwnd, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
 #endif
 }
@@ -362,6 +546,14 @@ void QuickWindowChrome::applyBorderColor(const char* reason) const {
         return;
 
     const COLORREF colorref = RGB(border_color_.red(), border_color_.green(), border_color_.blue());
+    // WM_SIZE arrives continuously through an interactive resize and a single
+    // focus change delivers WM_NCACTIVATE, WM_ACTIVATE and WM_SETFOCUS, so this
+    // runs far more often than the colour changes. DwmSetWindowAttribute is a
+    // call into dwm.exe; repeating it with a value already applied buys nothing.
+    // Keyed by the HWND as well, because a recreated window has not been told.
+    if (applied_border_valid_ && applied_border_color_ == static_cast<quint32>(colorref) &&
+        applied_border_hwnd_ == hwnd_)
+        return;
     const HRESULT hr = DwmSetWindowAttribute(hwnd, kDwmwaBorderColor, &colorref, static_cast<DWORD>(sizeof(colorref)));
     if (FAILED(hr)) {
         // One line, once: pre-Windows-11 systems fail this every single activation
@@ -373,7 +565,11 @@ void QuickWindowChrome::applyBorderColor(const char* reason) const {
                                  << (reason != nullptr ? reason : "null") << " hr=0x"
                                  << QString::number(static_cast<quint32>(hr), 16);
         }
+        return;
     }
+    applied_border_color_ = static_cast<quint32>(colorref);
+    applied_border_valid_ = true;
+    applied_border_hwnd_ = hwnd_;
 #else
     Q_UNUSED(reason);
 #endif
@@ -400,10 +596,9 @@ qintptr QuickWindowChrome::resolveHitTest(qintptr lparam) const {
     // The one conversion point between the two coordinate spaces. GetClientRect is
     // used rather than QWindow::width()/height() because Qt's cached logical size
     // lags by a frame during a live resize drag, which is exactly when the border
-    // zones matter most.
-    double dpr = target_->devicePixelRatio();
-    if (!(dpr > 0.0))
-        dpr = 1.0;
+    // zones matter most — and the scale factor is taken from the same live source
+    // for the same reason.
+    const double dpr = windowScaleFactor(hwnd, target_.data());
     const double x = static_cast<double>(point.x) / dpr;
     const double y = static_cast<double>(point.y) / dpr;
     const double width = static_cast<double>(client.right - client.left) / dpr;
@@ -526,9 +721,10 @@ bool QuickWindowChrome::nativeEventFilter(const QByteArray& event_type, void* me
     case WM_GETMINMAXINFO: {
         auto* minmax = reinterpret_cast<MINMAXINFO*>(msg->lParam);
         if (minmax != nullptr && !target_.isNull()) {
-            double dpr = target_->devicePixelRatio();
-            if (!(dpr > 0.0))
-                dpr = 1.0;
+            // Same live source as the hit test: this message also arrives while a
+            // DPI transition is in flight, and a minimum track size scaled by the
+            // previous monitor's ratio is a minimum the user cannot resize past.
+            const double dpr = windowScaleFactor(hwnd, target_.data());
             // Windows honours a minimum size during the native resize drag ONLY
             // through this message — QWindow::minimumWidth alone is ignored once
             // WM_NCCALCSIZE made the frame ours.
@@ -576,6 +772,35 @@ bool QuickWindowChrome::nativeEventFilter(const QByteArray& event_type, void* me
         // Only the border refresh survives the port: the maximized state is read in
         // QML from Window.visibility, so nothing here has to track it.
         applyBorderColor("WM_SIZE");
+        refreshWindowMaximized();
+        traceWindowState(msg->wParam == SIZE_MAXIMIZED   ? "WM_SIZE/maximized"
+                         : msg->wParam == SIZE_RESTORED  ? "WM_SIZE/restored"
+                         : msg->wParam == SIZE_MINIMIZED ? "WM_SIZE/minimized"
+                                                         : "WM_SIZE/other",
+                         hwnd, target_.data());
+        return false;
+
+    case WM_SYSCOMMAND:
+        // Never handled here -- only observed. SC_MAXIMIZE/SC_RESTORE are how
+        // every native gesture (double-click, Win+arrow, the window menu) asks
+        // for a state change, so their presence or absence separates "Windows was
+        // never told" from "Windows was told and declined".
+        traceWindowState(sysCommandName(msg->wParam), hwnd, target_.data());
+        return false;
+
+    case WM_ENTERSIZEMOVE:
+        traceWindowState("enter-size-move", hwnd, target_.data());
+        return false;
+
+    case WM_EXITSIZEMOVE:
+        traceWindowState("exit-size-move", hwnd, target_.data());
+        return false;
+
+    case WM_WINDOWPOSCHANGED:
+        // WM_SIZE alone is not enough: a restore that changes no size (a maximized
+        // window snapped to the same extents) never sends one.
+        refreshWindowMaximized();
+        traceWindowState("window-pos-changed", hwnd, target_.data());
         return false;
 
     // -----------------------------------------------------------------------

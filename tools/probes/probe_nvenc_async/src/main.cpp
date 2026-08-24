@@ -1,5 +1,5 @@
 // Live-verify probe for the async NVENC path.
-// Drives the ACTUAL recorder_core NvencVideoEncoder / NvencEncoder classes
+// Drives the ACTUAL engine NvencVideoEncoder / NvencEncoder classes
 // (not a reimplementation of raw SDK calls, unlike probe_nvenc) through a
 // real D3D11 + NVENC async session, so the exact code shipped in the app is
 // what gets exercised here. Never touches the ExoSnap application itself —
@@ -28,7 +28,7 @@
 #include <string>
 #include <vector>
 
-using namespace recorder_core;
+using namespace exosnap::engine;
 using Microsoft::WRL::ComPtr;
 
 namespace {

@@ -272,7 +272,7 @@ if(NOT TARGET EBML::ebml)\n\
 endif()\n")
 endif()
 
-# Namespaced alias for direct use in recorder_core and tests.
+# Namespaced alias for direct use in exosnap_engine and tests.
 if(TARGET ebml AND NOT TARGET EBML::ebml)
     add_library(EBML::ebml ALIAS ebml)
 endif()
@@ -315,7 +315,7 @@ endif()
 # libebml's generate_export_header places ebml_export.h in the binary dir, but
 # the BUILD_INTERFACE generator expression on an ALIAS does not always propagate
 # to consumer compile commands when processed via OVERRIDE_FIND_PACKAGE.
-# Explicitly inject ebml-build into matroska (and transitively into recorder_core).
+# Explicitly inject ebml-build into matroska (and transitively into exosnap_engine).
 FetchContent_GetProperties(EBML BINARY_DIR _ebml_build_dir SOURCE_DIR _ebml_src_dir)
 # generate_export_header places ebml_export.h in the binary dir; copy it into the
 # source tree so that #include "ebml_export.h" in EbmlConfig.h resolves correctly

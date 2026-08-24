@@ -21,7 +21,7 @@ namespace exosnap::benchmark {
 // How a metric may be compared between the two frontends.
 enum class Comparability : uint8_t {
     // Same producer, same probe point. A delta is a real behavioural difference.
-    // Everything sourced from recorder_core is in this class: both frontends run
+    // Everything sourced from engine is in this class: both frontends run
     // one identical engine with one identical configuration.
     Identical,
 
@@ -164,7 +164,7 @@ struct PreviewMetrics {
 // ---------------------------------------------------------------------------
 // Recording metrics — the fully comparable half.
 //
-// Every field here is produced by recorder_core from one identical configuration,
+// Every field here is produced by engine from one identical configuration,
 // so each is Comparability::Identical by construction. This is the half that
 // answers the questions the A/B exists for: does the Quick frontend cost the
 // recording anything?

@@ -13,7 +13,7 @@
 #include "diagnostics/EngineLogBridge.h"
 #include "diagnostics/StructuredLog.h"
 
-#include <recorder_core/logging/logging.h>
+#include <exosnap/engine/logging/logging.h>
 
 namespace exosnap {
 namespace {
@@ -54,7 +54,7 @@ class StructuredLogTest : public ::testing::Test {
 
     static int CountEngineRecords(const std::string& message) {
         int count = 0;
-        for (const auto& record : recorder_core::logging::snapshot_ring_buffer()) {
+        for (const auto& record : exosnap::engine::logging::snapshot_ring_buffer()) {
             if (record.message == message)
                 ++count;
         }

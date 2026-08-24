@@ -47,47 +47,47 @@ std::string AudioCodecName(capability::AudioCodec a) {
     return "Unknown";
 }
 
-std::string AudioSourceKindName(recorder_core::AudioSourceKind k) {
+std::string AudioSourceKindName(exosnap::engine::AudioSourceKind k) {
     switch (k) {
-    case recorder_core::AudioSourceKind::App:
+    case exosnap::engine::AudioSourceKind::App:
         return "APP";
-    case recorder_core::AudioSourceKind::Mic:
+    case exosnap::engine::AudioSourceKind::Mic:
         return "MIC";
-    case recorder_core::AudioSourceKind::Sys:
+    case exosnap::engine::AudioSourceKind::Sys:
         return "SYS";
-    case recorder_core::AudioSourceKind::SystemOutput:
+    case exosnap::engine::AudioSourceKind::SystemOutput:
         return "SYS";
     }
     return "Unknown";
 }
 
-std::string MicChannelModeName(recorder_core::MicChannelMode m) {
+std::string MicChannelModeName(exosnap::engine::MicChannelMode m) {
     switch (m) {
-    case recorder_core::MicChannelMode::Auto:
+    case exosnap::engine::MicChannelMode::Auto:
         return "Auto";
-    case recorder_core::MicChannelMode::PreserveStereo:
+    case exosnap::engine::MicChannelMode::PreserveStereo:
         return "Preserve Stereo";
-    case recorder_core::MicChannelMode::MonoMix:
+    case exosnap::engine::MicChannelMode::MonoMix:
         return "Mono Mix";
-    case recorder_core::MicChannelMode::LeftToStereo:
+    case exosnap::engine::MicChannelMode::LeftToStereo:
         return "Left to Stereo";
-    case recorder_core::MicChannelMode::RightToStereo:
+    case exosnap::engine::MicChannelMode::RightToStereo:
         return "Right to Stereo";
     }
     return "Auto";
 }
 
-std::string QualityPresetName(recorder_core::QualityPreset q) {
+std::string QualityPresetName(exosnap::engine::QualityPreset q) {
     switch (q) {
-    case recorder_core::QualityPreset::Ultra:
+    case exosnap::engine::QualityPreset::Ultra:
         return "Ultra";
-    case recorder_core::QualityPreset::High:
+    case exosnap::engine::QualityPreset::High:
         return "High";
-    case recorder_core::QualityPreset::Balanced:
+    case exosnap::engine::QualityPreset::Balanced:
         return "Balanced";
-    case recorder_core::QualityPreset::Low:
+    case exosnap::engine::QualityPreset::Low:
         return "Low";
-    case recorder_core::QualityPreset::Draft:
+    case exosnap::engine::QualityPreset::Draft:
         return "Draft";
     }
     return "Balanced";
@@ -98,16 +98,16 @@ std::string QualityPresetName(recorder_core::QualityPreset q) {
 // product scale: a support log that only carried it would not say what the
 // encoder was actually configured with.
 std::string QualityName(uint32_t cq, capability::VideoCodec codec) {
-    const std::string tier = QualityPresetName(recorder_core::NearestQualityPreset(cq));
-    const std::string approx = recorder_core::IsCanonicalCq(cq) ? "" : "~";
-    const recorder_core::VideoCodec engine_codec =
-        codec == capability::VideoCodec::H264   ? recorder_core::VideoCodec::H264
-        : codec == capability::VideoCodec::Hevc ? recorder_core::VideoCodec::Hevc
-                                                : recorder_core::VideoCodec::Av1;
-    const std::string parameter = engine_codec == recorder_core::VideoCodec::Av1 ? " qindex " : " QP ";
+    const std::string tier = QualityPresetName(exosnap::engine::NearestQualityPreset(cq));
+    const std::string approx = exosnap::engine::IsCanonicalCq(cq) ? "" : "~";
+    const exosnap::engine::VideoCodec engine_codec =
+        codec == capability::VideoCodec::H264   ? exosnap::engine::VideoCodec::H264
+        : codec == capability::VideoCodec::Hevc ? exosnap::engine::VideoCodec::Hevc
+                                                : exosnap::engine::VideoCodec::Av1;
+    const std::string parameter = engine_codec == exosnap::engine::VideoCodec::Av1 ? " qindex " : " QP ";
     return "CQ " + std::to_string(cq) + " (" + approx + tier + "), " +
            std::string(capability::VisibleVideoCodecLabel(codec)) + parameter +
-           std::to_string(recorder_core::NvencNativeQuantizer(engine_codec, cq));
+           std::to_string(exosnap::engine::NvencNativeQuantizer(engine_codec, cq));
 }
 
 std::string ResolutionName(const OutputResolutionSettings& resolution) {

@@ -19,7 +19,7 @@ enum class LogSeverity {
     // from a routine, recoverable Error. Ranked above Error — a min-severity
     // filter set to Error still shows Critical entries (setMinSeverity's
     // static_cast<int> comparison depends on this ordering). Currently only
-    // reached via EngineLogBridge bridging recorder_core::logging::LogLevel::
+    // reached via EngineLogBridge bridging exosnap::engine::logging::LogLevel::
     // Critical; nothing in the app layer emits it directly (yet).
     Critical,
 };

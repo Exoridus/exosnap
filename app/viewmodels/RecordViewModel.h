@@ -8,7 +8,7 @@
 
 #include <capability/audio_track_preview.h>
 #include <capability/audio_ui_state.h>
-#include <recorder_core/recorder_session.h>
+#include <exosnap/engine/recorder_session.h>
 
 #include "models/CompletedRecording.h"
 #include "models/FilenameBuilder.h"
@@ -109,13 +109,13 @@ struct UiRecordingResult {
     uint32_t source_height = 0;
     uint32_t output_width = 0;
     uint32_t output_height = 0;
-    recorder_core::ContentRect content_rect;
+    exosnap::engine::ContentRect content_rect;
     uint32_t frame_rate_num = 60;
     uint32_t frame_rate_den = 1;
     bool cfr = true;
-    recorder_core::Container container = recorder_core::Container::WebM;
-    recorder_core::VideoCodec video_codec = recorder_core::VideoCodec::Av1;
-    recorder_core::AudioCodec audio_codec = recorder_core::AudioCodec::Opus;
+    exosnap::engine::Container container = exosnap::engine::Container::WebM;
+    exosnap::engine::VideoCodec video_codec = exosnap::engine::VideoCodec::Av1;
+    exosnap::engine::AudioCodec audio_codec = exosnap::engine::AudioCodec::Opus;
     std::vector<RecordingMarker> markers;
     std::wstring marker_sidecar_path;
 
@@ -148,7 +148,7 @@ class RecordViewModel {
     UiRecordingState state = UiRecordingState::LoadingCapabilities;
     std::wstring capability_status_text = L"Checking system capabilities...";
 
-    std::vector<recorder_core::CaptureTarget> targets;
+    std::vector<exosnap::engine::CaptureTarget> targets;
     // Bumped by whoever replaces `targets`. The Quick adapter republishes the
     // three target-option lists only when this moves: building them means one
     // QVariantMap of three QStrings per monitor AND per eligible top-level
@@ -187,13 +187,13 @@ class RecordViewModel {
     uint32_t result_source_height = 0;
     uint32_t result_output_width = 0;
     uint32_t result_output_height = 0;
-    recorder_core::ContentRect result_content_rect;
+    exosnap::engine::ContentRect result_content_rect;
     uint32_t result_frame_rate_num = 60;
     uint32_t result_frame_rate_den = 1;
     bool result_cfr = true;
-    recorder_core::Container result_container = recorder_core::Container::WebM;
-    recorder_core::VideoCodec result_video_codec = recorder_core::VideoCodec::Av1;
-    recorder_core::AudioCodec result_audio_codec = recorder_core::AudioCodec::Opus;
+    exosnap::engine::Container result_container = exosnap::engine::Container::WebM;
+    exosnap::engine::VideoCodec result_video_codec = exosnap::engine::VideoCodec::Av1;
+    exosnap::engine::AudioCodec result_audio_codec = exosnap::engine::AudioCodec::Opus;
     // 0.9.0 S1: edit master path (empty for split sessions / failures)
     std::wstring result_mkv_master_path;
     // Markers and sidecar path from the completed recording session
@@ -235,8 +235,8 @@ class RecordViewModel {
 
     // Region capture state (only relevant when capture_mode == CaptureMode::Region)
     bool has_region = false;
-    recorder_core::CaptureRegion region{}; // virtual screen coordinates
-    bool select_on_record = true;          // show overlay on each record start
+    exosnap::engine::CaptureRegion region{}; // virtual screen coordinates
+    bool select_on_record = true;            // show overlay on each record start
 
     // ---- Stable-display-identity cache (persistence/restore only) ----
     // Resolved once at selection/region-change time so the pure save path
@@ -269,7 +269,7 @@ class RecordViewModel {
 
     // Mutators
     void SetState(UiRecordingState new_state);
-    void UpdateStats(const recorder_core::SessionStats& stats);
+    void UpdateStats(const exosnap::engine::SessionStats& stats);
     // Update only the audio meter RMS fields — used by the high-cadence recording meter path.
     void UpdateMeterRms(const std::array<float, 3>& per_track_rms);
     void SetResult(const UiRecordingResult& result);
@@ -301,10 +301,10 @@ class RecordViewModel {
     static std::wstring FormatBytes(uint64_t bytes);
     static std::string DisplayLabelFromTarget(const std::string& raw_description);
     static std::string WindowLabelFromTarget(const std::string& raw_description);
-    static std::string TargetLabelFromCaptureTarget(const recorder_core::CaptureTarget& target);
-    static std::string LogSafeTargetLabel(const recorder_core::CaptureTarget& target);
-    static FilenameTargetContext FilenameContextFromCaptureTarget(const recorder_core::CaptureTarget& target);
-    static std::vector<int> SortWindowTargetIndices(const std::vector<recorder_core::CaptureTarget>& targets,
+    static std::string TargetLabelFromCaptureTarget(const exosnap::engine::CaptureTarget& target);
+    static std::string LogSafeTargetLabel(const exosnap::engine::CaptureTarget& target);
+    static FilenameTargetContext FilenameContextFromCaptureTarget(const exosnap::engine::CaptureTarget& target);
+    static std::vector<int> SortWindowTargetIndices(const std::vector<exosnap::engine::CaptureTarget>& targets,
                                                     const std::vector<int>& window_indices);
 
   private:

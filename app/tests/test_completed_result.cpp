@@ -15,7 +15,7 @@
 #include "viewmodels/RecordViewModel.h"
 
 #include <capability/audio_ui_state.h>
-#include <recorder_core/recorder_session.h>
+#include <exosnap/engine/recorder_session.h>
 
 #include <filesystem>
 
@@ -76,9 +76,9 @@ class CompletedResultTest : public ::testing::Test {
         result.frame_rate_num = 60;
         result.frame_rate_den = 1;
         result.cfr = true;
-        result.container = recorder_core::Container::Matroska;
-        result.video_codec = recorder_core::VideoCodec::H264;
-        result.audio_codec = recorder_core::AudioCodec::Aac;
+        result.container = exosnap::engine::Container::Matroska;
+        result.video_codec = exosnap::engine::VideoCodec::H264;
+        result.audio_codec = exosnap::engine::AudioCodec::Aac;
         return result;
     }
 
@@ -291,7 +291,7 @@ TEST_F(CompletedResultTest, ModelEquality_Identical) {
     a.duration_seconds = 5.0;
     a.source_width = 1920;
     a.output_width = 1920;
-    a.container = recorder_core::Container::Matroska;
+    a.container = exosnap::engine::Container::Matroska;
     a.succeeded = true;
 
     CompletedRecording b = a;
@@ -334,7 +334,7 @@ TEST_F(CompletedResultTest, SetResult_Success_CreatesCompletedRecording) {
     EXPECT_EQ(vm.current_completed_recording.file_path, path);
     EXPECT_EQ(vm.current_completed_recording.file_size_bytes, 1024 * 1024);
     EXPECT_DOUBLE_EQ(vm.current_completed_recording.duration_seconds, 15.5);
-    EXPECT_EQ(vm.current_completed_recording.container, recorder_core::Container::Matroska);
+    EXPECT_EQ(vm.current_completed_recording.container, exosnap::engine::Container::Matroska);
 }
 
 TEST_F(CompletedResultTest, SetResult_MultiSegment_CarriesSegmentsAndSummary) {
@@ -659,8 +659,8 @@ TEST_F(CompletedResultTest, ValidateRename_RejectsLongPath) {
 TEST_F(CompletedResultTest, ClearCompletedResult_PreservesAudioConfig) {
     RecordViewModel vm;
     vm.audio_ui_state.source_rows = {
-        {recorder_core::AudioSourceKind::Sys, true, false},
-        {recorder_core::AudioSourceKind::Mic, true, false},
+        {exosnap::engine::AudioSourceKind::Sys, true, false},
+        {exosnap::engine::AudioSourceKind::Mic, true, false},
     };
     vm.RebuildAudioPlan();
 

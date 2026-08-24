@@ -185,10 +185,10 @@ TEST_F(SettingsAdapterTest, AppSettingsEditIsSeparateFromConfigEdit) {
 
 TEST_F(SettingsAdapterTest, QualityPresetMapsToCanonicalCq) {
 
-    adapter.setQualityPreset(static_cast<int>(recorder_core::QualityPreset::Low));
+    adapter.setQualityPreset(static_cast<int>(exosnap::engine::QualityPreset::Low));
 
-    EXPECT_EQ(adapter.cq(), static_cast<int>(recorder_core::CanonicalCq(recorder_core::QualityPreset::Low)));
-    EXPECT_EQ(adapter.qualityPreset(), static_cast<int>(recorder_core::QualityPreset::Low));
+    EXPECT_EQ(adapter.cq(), static_cast<int>(exosnap::engine::CanonicalCq(exosnap::engine::QualityPreset::Low)));
+    EXPECT_EQ(adapter.qualityPreset(), static_cast<int>(exosnap::engine::QualityPreset::Low));
 }
 
 TEST_F(SettingsAdapterTest, QualityTierLabelsCarryNoCqNumber) {
@@ -227,10 +227,10 @@ TEST_F(SettingsAdapterTest, MaxFrameRateClampsConfiguredRateAndOptions) {
 }
 
 TEST_F(SettingsAdapterTest, BitrateIsOnlyRelevantForBitrateModes) {
-    adapter.setRateControl(static_cast<int>(recorder_core::RateControlMode::ConstantQuality));
+    adapter.setRateControl(static_cast<int>(exosnap::engine::RateControlMode::ConstantQuality));
     EXPECT_FALSE(adapter.bitrateRelevant());
 
-    adapter.setRateControl(static_cast<int>(recorder_core::RateControlMode::VariableBitrate));
+    adapter.setRateControl(static_cast<int>(exosnap::engine::RateControlMode::VariableBitrate));
     EXPECT_TRUE(adapter.bitrateRelevant());
 }
 

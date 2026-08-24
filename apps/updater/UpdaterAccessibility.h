@@ -1,5 +1,7 @@
 #pragma once
 
+namespace exosnap::updater {
+
 // Accessible interfaces for the updater's two custom-painted widgets.
 //
 // ProgressRing and StepListWidget draw their entire meaning with QPainter, so
@@ -13,3 +15,5 @@
 // exist in a test binary that never runs the updater's main().
 
 void EnsureUpdaterAccessibility();
+
+} // namespace exosnap::updater

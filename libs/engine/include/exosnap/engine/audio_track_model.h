@@ -1,0 +1,85 @@
+#pragma once
+
+#include <cmath>
+#include <cstdint>
+#include <string>
+#include <vector>
+
+namespace exosnap::engine {
+
+enum class AudioSourceKind {
+    App,
+    Mic,
+    Sys,
+    SystemOutput, // Full system output via WasapiLoopbackSrc; no PID required.
+};
+
+// ---------------------------------------------------------------------------
+// Per-row gain + mute (Audio v2 — 0.6.0)
+// ---------------------------------------------------------------------------
+
+// Minimum / maximum gain in dB for per-row gain control.
+inline constexpr float kMinGainDb = -60.0f;
+inline constexpr float kMaxGainDb = +24.0f;
+
+// Convert a dB gain value and muted flag to a linear multiplier.
+// Returns 0.0f when muted; otherwise pow(10, gain_db/20).
+// Input is expected to be in [kMinGainDb, kMaxGainDb]; clamping is the
+// caller's responsibility (SanitizePresetConfig does it for persisted state).
+[[nodiscard]] inline float GainDbToLinear(float gain_db, bool muted) noexcept {
+    if (muted) {
+        return 0.0f;
+    }
+    return std::powf(10.0f, gain_db / 20.0f);
+}
+
+struct AudioSourceRow {
+    AudioSourceKind kind = AudioSourceKind::App;
+    bool enabled = true;
+    bool merge_with_above = false;
+
+    // Per-row gain in dB (0 dB = unity). Range [-60, +24].
+    float gain_db = 0.0f;
+    // When true, this source contributes silence (GainDbToLinear returns 0).
+    bool muted = false;
+};
+
+struct ResolvedAudioTrack {
+    std::vector<AudioSourceKind> sources;
+    // Per-source linear gain multipliers, parallel to `sources`.
+    // Populated by ResolveAudioTracks from each row's gain_db and muted flag.
+    // Length always equals sources.size().
+    std::vector<float> source_gain_linear;
+    uint32_t track_index = 0;
+};
+
+struct AudioTrackPlan {
+    std::vector<ResolvedAudioTrack> tracks;
+};
+
+// Drop the rows a non-window capture target cannot serve, and rewrite the ones it
+// can serve differently. `window_target` false means Display or Region.
+//
+// This is the single home of the rule "App and Sys are process-scoped". Both the
+// live UI plan and the persisted preset run through it, so a stored row can never
+// reach the engine demanding a process id nobody can supply.
+[[nodiscard]] std::vector<AudioSourceRow> NormalizeSourceRowsForTarget(std::vector<AudioSourceRow> rows,
+                                                                       bool window_target);
+
+[[nodiscard]] AudioTrackPlan ResolveAudioTracks(const std::vector<AudioSourceRow>& rows);
+
+// Human-readable label for a single source, used to build the track name
+// muxed into a recording (see DeriveAudioTrackName below). SystemOutput is the
+// pid-free stand-in for Sys on a Display/Region target (see
+// NormalizeSourceRowsForTarget) and shares its label -- to the user it is
+// still "the system", regardless of which WASAPI path captured it.
+[[nodiscard]] std::string AudioSourceKindDisplayName(AudioSourceKind kind);
+
+// Name for a resolved audio track, derived from its sources: the display name
+// of a single-source track, or its sources' display names joined with " + "
+// in resolution order (the order NormalizeSourceRowsForTarget/ResolveAudioTracks
+// pushed them onto the track) for a merged one. Empty only if the track itself
+// has no sources, which ResolveAudioTracks never produces.
+[[nodiscard]] std::string DeriveAudioTrackName(const ResolvedAudioTrack& track);
+
+} // namespace exosnap::engine

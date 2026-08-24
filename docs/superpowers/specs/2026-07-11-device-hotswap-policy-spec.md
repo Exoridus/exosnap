@@ -216,9 +216,9 @@ Zwei Achsen entscheiden pro Gerätetyp:
 
 **Ehrlichkeit zur „Symmetrie über Subsysteme" (nach Review):** Die vier Pfade leben
 **nicht in derselben Schicht**. OD/WGC und der neue Audio-Pfad sind **Engine-Code**
-(`libs/recorder_core`, pure Resolver + Threads). Die **Webcam-Reconnect-Policy dagegen
+(`libs/engine`, pure Resolver + Threads). Die **Webcam-Reconnect-Policy dagegen
 lebt in der App-Schicht** (`app/services/WebcamService.cpp:481-528`, Test in
-`app/tests/test_webcam_read_policy.cpp` — **nicht** in `libs/recorder_core/tests`). Die
+`app/tests/test_webcam_read_policy.cpp` — **nicht** in `libs/engine/tests`). Die
 Symmetrie ist also eine *Verhaltens*-Symmetrie (alle degradieren würdevoll), keine
 Code-Symmetrie. Die neue Audio-Policy wird bewusst Engine-Code (UI-agnostisch); die
 Webcam bleibt, wo sie ist. Das ist offengelegt, damit „Symmetrie" nicht als „gleicher
@@ -373,8 +373,8 @@ Jeder Schritt ist eine PR-fähige Einheit mit eigenem Testansatz. Reihenfolge so
 die reinen Resolver (CI-grün, GPU-frei) vor der Thread-Integration landen.
 
 ### Schritt 1 — Pure Policy-Resolver für Audio-Geräteverlust (CI)
-**Dateien:** `libs/recorder_core/src/wasapi_capture_src.cpp/.h` (oder neue
-`audio_device_loss_policy.{h,cpp}`), `libs/recorder_core/tests/`.
+**Dateien:** `libs/engine/src/wasapi_capture_src.cpp/.h` (oder neue
+`audio_device_loss_policy.{h,cpp}`), `libs/engine/tests/`.
 - Neue pure Funktion analog `DecideOdReopen`, z. B.
   `AudioLossDecision DecideAudioDeviceLoss(bool reactivated, milliseconds elapsed,
   milliseconds poll_delay)` → `{MuteAndReactivate, RetryAfter}` (unbegrenzt, kein
@@ -417,7 +417,7 @@ gemeinsames `IAudioCaptureSource`-Interface.
   live-only (siehe Verify-Plan).
 
 ### Schritt 3 — Audio-Thread + MixedAudioSrc: stummschalten + weiterlaufen statt RecordFailure
-**Dateien:** `libs/recorder_core/src/audio_thread.cpp:335-341` (Pause-Pfad),
+**Dateien:** `libs/engine/src/audio_thread.cpp:335-341` (Pause-Pfad),
 `:355-365` (Haupt-Acquire), `:372-389` (Timing/Silence/Drift),
 **`mixed_audio_src.cpp:110-124, 126-179, 197-257`** (inneres Loch).
 - **Alle drei Verlust-Pfade explizit behandeln** (korrigiert nach Review), sonst bleibt
@@ -463,7 +463,7 @@ gemeinsames `IAudioCaptureSource`-Interface.
 
 ### Schritt 4 — WGC-Source-Loss als Integrations-Pin am Drain (nicht als pure Tautologie)
 **Dateien:** `video_thread.cpp:1420` (Closed-Callback), `:2269-2274` (Drain-Branch),
-`libs/recorder_core/tests/`.
+`libs/engine/tests/`.
 - **Korrigiert nach Review:** Der ursprünglich vorgeschlagene
   `DecideWgcSourceLost(bool item_closed) → EndCleanly` ist eine **konstante Funktion ohne
   Verzweigung** — ein Unit-Test darauf testet nichts und fängt die reale Regression
@@ -480,7 +480,7 @@ gemeinsames `IAudioCaptureSource`-Interface.
 
 ### Schritt 5 — Sichtbarkeit: Diagnostics-Karte + stehende Notification
 **Dateien:** `app/ui/widgets/LivePipelinePanel.cpp`, `app/notifications/*`,
-`app/MainWindow.cpp:3578-3622`, `libs/recorder_core/.../pipeline_diagnostics.h`.
+`app/MainWindow.cpp:3578-3622`, `libs/engine/.../pipeline_diagnostics.h`.
 - Live-Karte je degradiertem Track/Overlay (Audio-Track stumm, Webcam frozen,
   OD-Hold) — ruhig, ein Hinweis, kein Alarmton.
 - Stehende Notification bei Eintritt, Auflösung bei Rückkehr (neuer
@@ -520,7 +520,7 @@ ggf. neuer ADR `docs/decisions/00XX-device-loss-policy.md`.
 - **Bestehende Pins bleiben grün und dienen als Regressionsnetz:**
   `test_od_acquire_failure_classify.cpp`, `test_od_reopen_policy.cpp`,
   `test_capture_drain_step.cpp`, `test_wasapi_acquire_failure_classify.cpp`
-  (alle `libs/recorder_core/tests`) sowie `app/tests/test_webcam_read_policy.cpp`
+  (alle `libs/engine/tests`) sowie `app/tests/test_webcam_read_policy.cpp`
   (**App-Schicht**, s. Leitprinzip). (Der Audio-Klassifikator-Pin, der heute
   `DEVICE_INVALIDATED → Fail(=KillSession)` erwartet, muss auf `DegradeSource`
   angepasst werden — pre-1.0, kein Kompat-Zwang.)

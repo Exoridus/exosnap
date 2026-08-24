@@ -2,9 +2,9 @@
 
 namespace exosnap::diagnostics {
 
-bool AudioDegradationObservable(recorder_core::DiagnosticsLifecycle lifecycle) noexcept {
-    return lifecycle == recorder_core::DiagnosticsLifecycle::Recording ||
-           lifecycle == recorder_core::DiagnosticsLifecycle::Paused;
+bool AudioDegradationObservable(exosnap::engine::DiagnosticsLifecycle lifecycle) noexcept {
+    return lifecycle == exosnap::engine::DiagnosticsLifecycle::Recording ||
+           lifecycle == exosnap::engine::DiagnosticsLifecycle::Paused;
 }
 
 AudioDegradationSignal AudioSourceDegradationMonitor::Observe(const AudioDegradationSample& sample) noexcept {

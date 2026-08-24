@@ -4,7 +4,7 @@
 // Kept in its own translation unit, separate from AutoRecordHarness.cpp's recording
 // drive loop, so the parser's own gtest target (auto_record_harness_tests) needs
 // only Qt6::Core — not Qt6::Widgets, RecordingCoordinator, or any capability/
-// recorder_core dependency the recording logic pulls in.
+// engine dependency the recording logic pulls in.
 
 namespace exosnap::auto_record {
 namespace {
@@ -236,20 +236,10 @@ bool ParseAutoRecordOptions(const QStringList& args, AutoRecordOptions* out, QSt
                 return false;
             }
         } else if (arg == QStringLiteral("--screenshot-path")) {
-            // Belonged to the same removed preview mode. Nothing wrote the path,
-            // so a run that asked for it succeeded with no artefact. The
-            // mid-recording still is reported as `snapshot_path` on the result
-            // line instead; a picture of the UI is --visual-test's job.
-            if (error)
-                *error = QStringLiteral("--screenshot-path is not supported by --auto-record; use --capture-frame-at "
-                                        "for a mid-recording still (its path is reported as snapshot_path), or "
-                                        "--visual-test to photograph the window");
-            return false;
+            if (!require_value(&parsed.screenshot_path))
+                return false;
         } else if (arg == QStringLiteral("--capture-frame-in-ready")) {
-            if (error)
-                *error = QStringLiteral("--capture-frame-in-ready is not supported by --auto-record; "
-                                        "--still-frame-validation covers the Ready/Recording/Paused capture path");
-            return false;
+            parsed.capture_frame_in_ready = true;
         } else if (arg == QStringLiteral("--benchmark-scenario")) {
             if (!require_value(&parsed.benchmark_scenario))
                 return false;
@@ -290,6 +280,16 @@ bool ParseAutoRecordOptions(const QStringList& args, AutoRecordOptions* out, QSt
     if (parsed.benchmark_scenario.trimmed().isEmpty() && parsed.benchmark_warmup_seconds > 0) {
         if (error)
             *error = QStringLiteral("--benchmark-warmup requires --benchmark-scenario");
+        return false;
+    }
+
+    // A destination for a picture nobody takes is the same accepted no-op the
+    // Ready-capture wiring exists to remove.
+    if (!parsed.screenshot_path.trimmed().isEmpty() && !parsed.capture_frame_in_ready) {
+        if (error)
+            *error = QStringLiteral("--screenshot-path names where the Ready snapshot goes and requires "
+                                    "--capture-frame-in-ready; for a still from inside a recording use "
+                                    "--capture-frame-at, whose path is reported as snapshot_path");
         return false;
     }
 

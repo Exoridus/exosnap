@@ -21,21 +21,32 @@ AbstractButton {
     // rather than a surface tint.
     property bool danger: false
 
+    // Pointer state pushed in from the native chrome. The Maximize button's rect
+    // answers WM_NCHITTEST with HTMAXBUTTON so Windows can offer Snap Layouts,
+    // which reclassifies it as non-client: Qt then delivers no mouse event there
+    // and `hovered` stays false however long the pointer sits on it. The chrome
+    // reconstructs the state from the non-client message stream and hands it
+    // over here. False for every button whose rect stays client-side.
+    property bool nonClientHovered: false
+    property bool nonClientPressed: false
+
+    readonly property bool highlighted: root.hovered || root.nonClientHovered || root.nonClientPressed
+
     implicitWidth: 46
     implicitHeight: 40
     hoverEnabled: true
     Accessible.role: Accessible.Button
 
     background: Rectangle {
-        color: root.danger && root.hovered ? ExoTheme.error
-             : root.hovered ? ExoTheme.surfaceHover
+        color: root.danger && root.highlighted ? ExoTheme.error
+             : root.highlighted ? ExoTheme.surfaceHover
              : "transparent"
     }
 
     contentItem: Canvas {
         id: glyphCanvas
 
-        readonly property color tone: root.danger && root.hovered ? ExoTheme.errorInk : ExoTheme.textSecondary
+        readonly property color tone: root.danger && root.highlighted ? ExoTheme.errorInk : ExoTheme.textSecondary
         readonly property string kind: root.kind
 
         onToneChanged: requestPaint()

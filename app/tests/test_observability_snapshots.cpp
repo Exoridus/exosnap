@@ -59,14 +59,14 @@ QJsonValue At(const QJsonObject& root, std::initializer_list<const char*> path) 
 // A snapshot in the shape a healthy 60 fps recording produces. Individual cases
 // take this and break exactly the one thing they are about, so a failure names
 // the property rather than the fixture.
-recorder_core::RecordingDiagnosticsSnapshot HealthyRecording() {
-    recorder_core::RecordingDiagnosticsSnapshot s;
+exosnap::engine::RecordingDiagnosticsSnapshot HealthyRecording() {
+    exosnap::engine::RecordingDiagnosticsSnapshot s;
     s.valid = true;
     s.session_generation = 7;
-    s.lifecycle = recorder_core::DiagnosticsLifecycle::Recording;
+    s.lifecycle = exosnap::engine::DiagnosticsLifecycle::Recording;
     s.elapsed_seconds = 12.5;
-    s.health = recorder_core::PipelineHealth::Good;
-    s.bottleneck = recorder_core::PipelineBottleneck::None;
+    s.health = exosnap::engine::PipelineHealth::Good;
+    s.bottleneck = exosnap::engine::PipelineBottleneck::None;
 
     s.capture.target_fps = 60.0;
     s.capture.actual_fps = 59.98;
@@ -74,14 +74,14 @@ recorder_core::RecordingDiagnosticsSnapshot HealthyRecording() {
     s.capture.frames_emitted = 749;
     s.capture.frames_dropped_coalesced = 40; // benign
     s.capture.frames_dropped_cfr = 2;        // benign
-    s.capture.source_type = recorder_core::CaptureSourceType::Display;
+    s.capture.source_type = exosnap::engine::CaptureSourceType::Display;
 
-    s.capture.present_cadence_availability = recorder_core::MetricAvailability::Available;
+    s.capture.present_cadence_availability = exosnap::engine::MetricAvailability::Available;
     s.capture.source_present_interval_ms = 8.33;
     s.capture.source_present_jitter_ms = 1.2;
     s.capture.source_coalesce_ratio = 1.4;
 
-    s.capture.acquire_availability = recorder_core::MetricAvailability::Available;
+    s.capture.acquire_availability = exosnap::engine::MetricAvailability::Available;
     s.capture.acquire_latest_ms = 0.8;
     s.capture.acquire_average_ms = 0.7;
     s.capture.acquire_peak_ms = 2.1;
@@ -95,11 +95,11 @@ recorder_core::RecordingDiagnosticsSnapshot HealthyRecording() {
     s.video_encoder.latest_ms = 3.0;
     s.video_encoder.p99_ms = 3.1;
     s.video_encoder.output_fps = 59.9;
-    s.video_encoder.codec = recorder_core::VideoCodec::Av1;
+    s.video_encoder.codec = exosnap::engine::VideoCodec::Av1;
     s.video_encoder.width = 2560;
     s.video_encoder.height = 1440;
 
-    s.video_timing.availability = recorder_core::MetricAvailability::Available;
+    s.video_timing.availability = exosnap::engine::MetricAvailability::Available;
     s.video_timing.tick_p50_ms = 4.0;
     s.video_timing.tick_p99_ms = 6.0;
     s.video_timing.budget_ms = 16.67;
@@ -108,12 +108,12 @@ recorder_core::RecordingDiagnosticsSnapshot HealthyRecording() {
     s.audio.sample_rate = 48000;
     s.audio.channels = 2;
     s.audio.track_count = 1;
-    s.audio.codec = recorder_core::AudioCodec::Opus;
+    s.audio.codec = exosnap::engine::AudioCodec::Opus;
 
-    s.av_drift_availability = recorder_core::MetricAvailability::Available;
+    s.av_drift_availability = exosnap::engine::MetricAvailability::Available;
     s.av_drift_ms = 0.4;
     s.av_drift_raw_ms = 1.9;
-    s.peak_av_drift_availability = recorder_core::MetricAvailability::Available;
+    s.peak_av_drift_availability = exosnap::engine::MetricAvailability::Available;
     s.peak_av_drift_ms = 1.7;
 
     s.mux.packets_processed = 800;
@@ -129,7 +129,7 @@ recorder_core::RecordingDiagnosticsSnapshot HealthyRecording() {
 // ---------------------------------------------------------------------------
 
 TEST(PipelineSnapshotJson, IdleAnswersWithoutFabricatingAHealthyPipeline) {
-    const QJsonObject json = PipelineSnapshotToJson(recorder_core::RecordingDiagnosticsSnapshot{});
+    const QJsonObject json = PipelineSnapshotToJson(exosnap::engine::RecordingDiagnosticsSnapshot{});
 
     EXPECT_FALSE(json.value(QStringLiteral("valid")).toBool());
     EXPECT_EQ(json.value(QStringLiteral("lifecycle")).toString(), QStringLiteral("idle"));
@@ -143,7 +143,7 @@ TEST(PipelineSnapshotJson, IdleAnswersWithoutFabricatingAHealthyPipeline) {
 }
 
 TEST(PipelineSnapshotJson, ProblemDropsUseTheEngineDefinitionAndNotTheTotal) {
-    recorder_core::RecordingDiagnosticsSnapshot s = HealthyRecording();
+    exosnap::engine::RecordingDiagnosticsSnapshot s = HealthyRecording();
     s.capture.frames_dropped_backpressure = 3;
     s.capture.frames_dropped_processing_failure = 1;
 
@@ -159,9 +159,9 @@ TEST(PipelineSnapshotJson, ProblemDropsUseTheEngineDefinitionAndNotTheTotal) {
 }
 
 TEST(PipelineSnapshotJson, WindowCaptureReportsPresentCadenceAsUnsupportedNotMerelyMissing) {
-    recorder_core::RecordingDiagnosticsSnapshot s = HealthyRecording();
-    s.capture.source_type = recorder_core::CaptureSourceType::Window;
-    s.capture.present_cadence_availability = recorder_core::MetricAvailability::Unavailable;
+    exosnap::engine::RecordingDiagnosticsSnapshot s = HealthyRecording();
+    s.capture.source_type = exosnap::engine::CaptureSourceType::Window;
+    s.capture.present_cadence_availability = exosnap::engine::MetricAvailability::Unavailable;
 
     const QJsonObject json = PipelineSnapshotToJson(s);
     // WGC exposes no present timestamp at all, so this never becomes available by
@@ -173,8 +173,8 @@ TEST(PipelineSnapshotJson, WindowCaptureReportsPresentCadenceAsUnsupportedNotMer
 }
 
 TEST(PipelineSnapshotJson, DisplayCaptureBeforeWarmUpReportsCadenceAsUnavailable) {
-    recorder_core::RecordingDiagnosticsSnapshot s = HealthyRecording();
-    s.capture.present_cadence_availability = recorder_core::MetricAvailability::Unavailable;
+    exosnap::engine::RecordingDiagnosticsSnapshot s = HealthyRecording();
+    s.capture.present_cadence_availability = exosnap::engine::MetricAvailability::Unavailable;
 
     const QJsonObject json = PipelineSnapshotToJson(s);
     EXPECT_EQ(At(json, {"sourcePresentation", "cadenceAvailability"}).toString(), QStringLiteral("unavailable"));
@@ -207,14 +207,14 @@ TEST(PipelineSnapshotJson, EncoderInitIsOmittedUntilAnEncoderWasConfigured) {
     // P4, CQ 0). Publishing them would answer "what is running" with a guess.
     EXPECT_FALSE(before.value(QStringLiteral("encoderInit")).toObject().contains(QStringLiteral("preset")));
 
-    recorder_core::RecordingDiagnosticsSnapshot s = HealthyRecording();
+    exosnap::engine::RecordingDiagnosticsSnapshot s = HealthyRecording();
     s.encoder_init.valid = true;
-    s.encoder_init.codec = recorder_core::VideoCodec::Av1;
-    s.encoder_init.preset = recorder_core::NvencPreset::P6;
-    s.encoder_init.rc_mode = recorder_core::RateControlMode::ConstantQuality;
+    s.encoder_init.codec = exosnap::engine::VideoCodec::Av1;
+    s.encoder_init.preset = exosnap::engine::NvencPreset::P6;
+    s.encoder_init.rc_mode = exosnap::engine::RateControlMode::ConstantQuality;
     s.encoder_init.cq = 17;
     s.encoder_init.gop_length = 120;
-    s.encoder_init.bit_depth = recorder_core::BitDepth::Bit10;
+    s.encoder_init.bit_depth = exosnap::engine::BitDepth::Bit10;
 
     const QJsonObject after = PipelineSnapshotToJson(s);
     EXPECT_TRUE(At(after, {"encoderInit", "valid"}).toBool());
@@ -226,10 +226,10 @@ TEST(PipelineSnapshotJson, EncoderInitIsOmittedUntilAnEncoderWasConfigured) {
 }
 
 TEST(PipelineSnapshotJson, RawResidualAndSkewStayThreeSeparateFacts) {
-    recorder_core::RecordingDiagnosticsSnapshot s = HealthyRecording();
+    exosnap::engine::RecordingDiagnosticsSnapshot s = HealthyRecording();
     s.clock_slaving_active = true;
     s.clock_slaving_ppm = 42.0;
-    s.duration_skew_availability = recorder_core::MetricAvailability::Unavailable;
+    s.duration_skew_availability = exosnap::engine::MetricAvailability::Unavailable;
 
     const QJsonObject json = PipelineSnapshotToJson(s);
     EXPECT_EQ(At(json, {"avTiming", "avDriftMs"}).toDouble(), 0.4);
@@ -244,7 +244,7 @@ TEST(PipelineSnapshotJson, RawResidualAndSkewStayThreeSeparateFacts) {
 }
 
 TEST(PipelineSnapshotJson, NegativeDiskEtaIsUnavailableRatherThanZeroSecondsLeft) {
-    recorder_core::RecordingDiagnosticsSnapshot s = HealthyRecording();
+    exosnap::engine::RecordingDiagnosticsSnapshot s = HealthyRecording();
     s.disk_fill_eta_seconds = -1.0;
 
     const QJsonObject json = PipelineSnapshotToJson(s);
@@ -254,7 +254,7 @@ TEST(PipelineSnapshotJson, NegativeDiskEtaIsUnavailableRatherThanZeroSecondsLeft
 }
 
 TEST(PipelineSnapshotJson, ResamplerDrainReportsOnlyTracksThatReachedTheirDrain) {
-    recorder_core::RecordingDiagnosticsSnapshot s = HealthyRecording();
+    exosnap::engine::RecordingDiagnosticsSnapshot s = HealthyRecording();
     s.audio.resampler_drain_recorded[0] = true;
     s.audio.resampler_drained_frames[0] = 512;
     s.audio.resampler_undrained_frames[0] = 0;
@@ -268,9 +268,9 @@ TEST(PipelineSnapshotJson, ResamplerDrainReportsOnlyTracksThatReachedTheirDrain)
 }
 
 TEST(PipelineSnapshotJson, BottleneckAndHealthUseTheEnginesOwnVocabulary) {
-    recorder_core::RecordingDiagnosticsSnapshot s = HealthyRecording();
-    s.health = recorder_core::PipelineHealth::Warning;
-    s.bottleneck = recorder_core::PipelineBottleneck::VideoEncoder;
+    exosnap::engine::RecordingDiagnosticsSnapshot s = HealthyRecording();
+    s.health = exosnap::engine::PipelineHealth::Warning;
+    s.bottleneck = exosnap::engine::PipelineBottleneck::VideoEncoder;
     s.bottleneck_reason = "Encoder latency is approaching the frame budget.";
 
     const QJsonObject json = PipelineSnapshotToJson(s);
@@ -278,10 +278,10 @@ TEST(PipelineSnapshotJson, BottleneckAndHealthUseTheEnginesOwnVocabulary) {
     EXPECT_EQ(json.value(QStringLiteral("bottleneck")).toString(), QStringLiteral("VideoEncoder"));
     EXPECT_EQ(json.value(QStringLiteral("bottleneckReason")).toString(),
               QStringLiteral("Encoder latency is approaching the frame budget."));
-    // The strings come from recorder_core::ToString, so a renamed enumerator
+    // The strings come from exosnap::engine::ToString, so a renamed enumerator
     // changes both sides at once instead of silently changing the wire.
     EXPECT_EQ(json.value(QStringLiteral("bottleneck")).toString(),
-              QString::fromLatin1(recorder_core::ToString(s.bottleneck)));
+              QString::fromLatin1(exosnap::engine::ToString(s.bottleneck)));
 }
 
 // ---------------------------------------------------------------------------
@@ -430,9 +430,9 @@ TEST(SettingsSnapshotJson, AnUnprobedMachineDoesNotClaimTheConfigurationWasValid
 TEST(SettingsSnapshotJson, RunningLevelComesFromTheEncoderAndNotFromASecondCopyOfTheConfig) {
     SettingsSnapshotInputs inputs;
     inputs.requested = MakeDefaultPreset().config;
-    inputs.requested.output.nvenc_preset = recorder_core::NvencPreset::P7;
+    inputs.requested.output.nvenc_preset = exosnap::engine::NvencPreset::P7;
     inputs.effective = inputs.requested;
-    inputs.effective.output.nvenc_preset = recorder_core::NvencPreset::P6;
+    inputs.effective.output.nvenc_preset = exosnap::engine::NvencPreset::P6;
 
     // No encoder configured yet: `running` is invalid, not a mirror of effective.
     const QJsonObject idle = SettingsSnapshotToJson(inputs).value(QStringLiteral("running")).toObject();
@@ -440,7 +440,7 @@ TEST(SettingsSnapshotJson, RunningLevelComesFromTheEncoderAndNotFromASecondCopyO
     EXPECT_FALSE(idle.contains(QStringLiteral("encoderPreset")));
 
     inputs.running.valid = true;
-    inputs.running.preset = recorder_core::NvencPreset::P6;
+    inputs.running.preset = exosnap::engine::NvencPreset::P6;
     inputs.running.cq = 17;
     inputs.running_live = true;
 
@@ -471,9 +471,9 @@ TEST(SettingsSnapshotJson, AudioRowOrderAndMergeFlagsSurvive) {
     SettingsSnapshotInputs inputs;
     inputs.requested = MakeDefaultPreset().config;
     inputs.requested.audio.source_rows = {
-        {recorder_core::AudioSourceKind::App, false, false, 0.0f, false},
-        {recorder_core::AudioSourceKind::Sys, true, false, -3.0f, false},
-        {recorder_core::AudioSourceKind::Mic, true, true, 0.0f, true},
+        {exosnap::engine::AudioSourceKind::App, false, false, 0.0f, false},
+        {exosnap::engine::AudioSourceKind::Sys, true, false, -3.0f, false},
+        {exosnap::engine::AudioSourceKind::Mic, true, true, 0.0f, true},
     };
     inputs.effective = inputs.requested;
 

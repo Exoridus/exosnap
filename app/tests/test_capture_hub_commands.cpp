@@ -36,7 +36,7 @@
 namespace {
 
 using namespace exosnap;
-using recorder_core::HubFrameKind;
+using exosnap::engine::HubFrameKind;
 
 const CaptureSourceKey kDisplay1{CaptureSourceKey::Kind::DxgiMonitor, 0, L"\\\\.\\DISPLAY1"};
 const CaptureSourceKey kDisplay2{CaptureSourceKey::Kind::DxgiMonitor, 0, L"\\\\.\\DISPLAY2"};

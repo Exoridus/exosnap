@@ -19,6 +19,8 @@
 
 #include "UpdaterController.h" // StepStatus
 
+namespace exosnap::updater {
+
 class StepRow; // internal row widget (defined in the .cpp)
 
 class StepListWidget : public QWidget {
@@ -39,3 +41,5 @@ class StepListWidget : public QWidget {
     std::array<StepRow*, 5> rows_{};
     QColor fail_color_;
 };
+
+} // namespace exosnap::updater

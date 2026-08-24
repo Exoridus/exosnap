@@ -4,7 +4,7 @@
 
 namespace exosnap {
 
-using recorder_core::HubFrameKind;
+using exosnap::engine::HubFrameKind;
 
 CaptureSubscription::~CaptureSubscription() {
     Reset();

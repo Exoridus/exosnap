@@ -1,0 +1,329 @@
+#pragma once
+
+// MatroskaStreamWriter: incremental, constant-RAM Matroska/WebM container writer.
+//
+// Replaces the previous batch-collect-then-write-once muxer body. Instead of
+// accumulating the ENTIRE recording in RAM and writing it in one pass at EOS,
+// this writer:
+//
+//   1. Open()     — writes EBML head, Segment head (unknown size), a reserved
+//                   SeekHead placeholder, Segment Info (Duration placeholder),
+//                   and the Tracks element. The file is open and streaming.
+//   2. Push()     — enqueues a packet into a small bounded reorder window kept
+//                   sorted by PTS. As the window advances, packets that have
+//                   fallen behind the window horizon are emitted into Matroska
+//                   clusters and their backing bytes are freed immediately.
+//                   Peak RAM is O(window seconds), NOT O(session).
+//   3. Finalize() — drains the remaining window, writes the Cues element (one
+//                   entry per video keyframe — accumulated incrementally, tiny),
+//                   back-patches the real Duration, replaces the SeekHead
+//                   placeholder, and back-patches the Segment size, then closes.
+//
+// The writer is deliberately decoupled from SessionState / threading so it can
+// be unit-tested on synthetic packet streams with no GPU and no live session,
+// exactly like test_matroska_mux_structure.cpp. mux_thread.cpp owns the thread,
+// queue draining, codec-private readiness, A/V epoch alignment, and Annex-B ->
+// AVCC conversion, then feeds packets here one at a time.
+
+#include <exosnap/engine/color_metadata.h>
+
+#include <array>
+#include <atomic>
+#include <chrono>
+#include <cstdint>
+#include <deque>
+#include <memory>
+#include <string>
+#include <vector>
+
+// Forward declarations of the libebml / libmatroska types we hold by pointer so
+// this header does not drag third-party headers (and their MSVC warnings) into
+// every translation unit that only needs the interface.
+namespace libebml {
+class EbmlVoid;
+} // namespace libebml
+namespace libmatroska {
+class KaxSegment;
+class KaxInfo;
+class KaxTracks;
+class KaxTrackEntry;
+class KaxCluster;
+class KaxCues;
+} // namespace libmatroska
+
+namespace exosnap::engine {
+
+// Owns the writer's output FILE* directly (defined in matroska_stream_writer.cpp).
+// Forward-declared here so MatroskaStreamWriter can hold it by pointer without
+// dragging <cstdio>/<windows.h> into every translation unit that only needs the
+// writer's interface.
+class DurableFileIo;
+
+// Decides when a periodic durability flush (fflush + OS-level FlushFileBuffers)
+// is due, based on wall-clock time elapsed since the previous one. This is pure
+// decision logic with no file I/O and no real timer dependency, so cadence
+// correctness can be unit tested with synthetic steady_clock time points
+// (see test_matroska_stream_writer.cpp) instead of sleeping in real time.
+class DurabilityFlushScheduler {
+  public:
+    explicit DurabilityFlushScheduler(std::chrono::milliseconds interval) noexcept : m_interval(interval) {
+    }
+
+    // True if a flush is due "at" `now`: either none has ever been recorded, or
+    // at least `interval` has elapsed since the last one passed to MarkFlushed().
+    [[nodiscard]] bool IsDue(std::chrono::steady_clock::time_point now) const noexcept {
+        return !m_has_flushed || (now - m_last_flush) >= m_interval;
+    }
+
+    // Record that a flush happened "at" `now`. Call this after actually
+    // performing the flush (regardless of whether it succeeded — a failing
+    // disk should not be retried on every single cluster either).
+    void MarkFlushed(std::chrono::steady_clock::time_point now) noexcept {
+        m_has_flushed = true;
+        m_last_flush = now;
+    }
+
+  private:
+    std::chrono::milliseconds m_interval;
+    bool m_has_flushed = false;
+    std::chrono::steady_clock::time_point m_last_flush{};
+};
+
+// One encoded packet handed to the writer. track_num uses the same placeholder
+// scheme as the old muxer: 1 = video, 2+n = audio track n.
+struct MuxPacket {
+    uint64_t pts_ns = 0;
+    uint64_t track_num = 0;
+    bool is_key = false;
+    std::vector<uint8_t> bytes;
+};
+
+// Audio codec discriminator for the Matroska track header. Replaces the old
+// audio_is_opus bool so PCM can be represented explicitly.
+enum class StreamAudioCodec {
+    Aac,  // A_AAC
+    Opus, // A_OPUS
+    Pcm,  // A_PCM/INT/LIT (signed little-endian) or A_PCM/FLOAT/IEEE (32-bit
+          // float) -- see MatroskaStreamConfig::audio_float below.
+    Flac, // A_FLAC (CodecPrivate = native fLaC header: marker + STREAMINFO)
+};
+
+// Per-audio-track codec private payload.
+struct StreamAudioTrack {
+    std::vector<uint8_t> codec_private;
+
+    // Track name (KaxTrackName), e.g. "System" or "System + Microphone" for a
+    // merged track. The writer has no notion of AudioSourceKind or how a track
+    // was resolved -- the caller derives this string (see
+    // exosnap::engine::DeriveAudioTrackName) and hands it over ready to write.
+    // Empty means "no name known"; the writer then omits KaxTrackName entirely
+    // rather than writing an empty element.
+    std::string name;
+};
+
+// Static configuration resolved once before Open().
+struct MatroskaStreamConfig {
+    std::string output_path;
+
+    // Video
+    std::string video_codec_id;               // "V_MPEG4/ISO/AVC" or "V_AV1"
+    std::vector<uint8_t> video_codec_private; // AVCC record or AV1 config record
+    uint32_t encode_width = 0;
+    uint32_t encode_height = 0;
+    uint32_t frame_rate_num = 0;
+    uint32_t frame_rate_den = 0;
+
+    // Color description written into the video track's Colour element (ADR 0032).
+    // Defaults to SDR BT.709 limited-range 8-bit.
+    ColorMetadata color;
+
+    // Audio
+    StreamAudioCodec audio_codec = StreamAudioCodec::Aac;
+    uint32_t audio_track_count = 0;
+    std::array<StreamAudioTrack, 3> audio_tracks{}; // CodecPrivateData::kMaxAudioTracks
+
+    // Audio format (ADR 0030). These values are written into KaxTrackAudio for
+    // every audio track. bit_depth is only written for PCM and FLAC.
+    uint32_t audio_sample_rate = 48000;
+    uint32_t audio_channels = 2;
+    uint32_t audio_bit_depth = 16;
+
+    // True selects the "A_PCM/FLOAT/IEEE" CodecID instead of "A_PCM/INT/LIT"
+    // when audio_codec == StreamAudioCodec::Pcm. Ignored for every other
+    // codec. audio_bit_depth is still written as the KaxAudioBitDepth value
+    // (32 for float, enforced upstream by PcmAudioEncoder::SetFloatFormat and
+    // RecorderSession::Validate).
+    bool audio_float = false;
+
+    // Reorder/interleave window bounds. A packet is only emitted into a cluster
+    // once a packet at least window_ns newer (across all tracks) has arrived, so
+    // A/V streams whose PTS interleave within this horizon get sorted correctly.
+    // The window is ALSO bounded by count to cap RAM if one track stalls.
+    uint64_t reorder_window_ns = 3ULL * 1000000000ULL; // 3 seconds
+    size_t reorder_window_max_packets = 4096;          // hard ceiling
+};
+
+class MatroskaStreamWriter {
+  public:
+    MatroskaStreamWriter();
+    ~MatroskaStreamWriter();
+
+    MatroskaStreamWriter(const MatroskaStreamWriter&) = delete;
+    MatroskaStreamWriter& operator=(const MatroskaStreamWriter&) = delete;
+
+    // Open the output file and write the container preamble. Returns false on
+    // I/O error or invalid config (e.g. incomplete Opus CodecPrivate). On
+    // failure error() carries a human-readable reason and the file is closed.
+    bool Open(const MatroskaStreamConfig& config);
+
+    // Enqueue one packet. May write zero or more clusters as the window advances.
+    // Returns false if a write error occurred (state then becomes failed; further
+    // Push/Finalize calls are no-ops returning false).
+    bool Push(MuxPacket packet);
+
+    // Drain the window, write Cues, patch Duration/SeekHead/Segment size, close.
+    // Returns false on any I/O error; the file is closed regardless so a partial
+    // file is never left with a dangling handle.
+    bool Finalize();
+
+    // Optional cumulative-byte progress sink. When set, the writer publishes
+    // bytes_written() into it on every cluster flush — including the flushes that
+    // happen inside the blocking Finalize() drain — AND at each checkpoint of
+    // Finalize()'s back-patch phase (Cues render, SeekHead/Duration/Segment-size
+    // patches, final durability flush), so an out-of-thread observer (the
+    // shutdown sequence) can tell a slow-but-progressing finalize from a stalled
+    // one across the whole finalize call, not just its cluster-draining prefix.
+    // The sink must outlive the writer; the writer never reads it.
+    void SetProgressSink(std::atomic<uint64_t>* sink) noexcept {
+        m_progress_sink = sink;
+    }
+
+    // True once a write error has been recorded.
+    [[nodiscard]] bool failed() const noexcept {
+        return m_failed;
+    }
+    [[nodiscard]] const std::string& error() const noexcept {
+        return m_error;
+    }
+
+    // Diagnostics for tests / logging: peak number of packets and bytes held in
+    // the reorder window at any instant. Proves constant-RAM behavior.
+    [[nodiscard]] size_t peak_window_packets() const noexcept {
+        return m_peak_window_packets;
+    }
+    [[nodiscard]] uint64_t peak_window_bytes() const noexcept {
+        return m_peak_window_bytes;
+    }
+    [[nodiscard]] size_t current_window_packets() const noexcept {
+        return m_window.size();
+    }
+    [[nodiscard]] uint64_t current_window_bytes() const noexcept {
+        return m_cur_window_bytes;
+    }
+
+    // Filesystem write-boundary diagnostics. bytes_written is the cumulative file
+    // offset advanced by cluster renders; last_flush_ms is the most recent cluster
+    // Render() call duration. This is buffered write-call latency (stdio), NOT
+    // physical-media durability.
+    [[nodiscard]] uint64_t bytes_written() const noexcept {
+        return m_bytes_written;
+    }
+    [[nodiscard]] uint64_t flush_count() const noexcept {
+        return m_flush_count;
+    }
+    [[nodiscard]] double last_flush_ms() const noexcept {
+        return m_last_flush_ms;
+    }
+
+    // Cumulative number of durability flushes attempted (fflush + FlushFileBuffers),
+    // counted regardless of success/failure. For tests/diagnostics: proves the
+    // cadence below fires far less often than once per cluster.
+    [[nodiscard]] uint64_t durability_flush_count() const noexcept {
+        return m_durability_flush_count;
+    }
+
+    // Minimum spacing between durability flushes performed inside FlushCluster()
+    // (see DurabilityFlushScheduler above and FlushCluster()'s use of it in the
+    // .cpp). Deliberately NOT a user-facing setting (no UI scope). Clusters
+    // already land roughly every 2 s in steady-state recording (kClusterBoundaryMs
+    // in matroska_stream_writer.cpp), so this keeps the added OS-durability
+    // syscall on the same cadence as that steady rhythm instead of firing on
+    // every cluster — a pathological burst of clusters (e.g. Finalize()'s forced
+    // window drain, or an unusually short GOP) must not stall the writer behind
+    // physical I/O.
+    static constexpr std::chrono::milliseconds kDurabilityFlushInterval{2000};
+
+  private:
+    // Sorted-by-PTS reorder window entry.
+    struct WindowEntry {
+        uint64_t pts_ns = 0;
+        uint64_t track_num = 0;
+        bool is_key = false;
+        std::vector<uint8_t> bytes;
+    };
+
+    // Emit window entries whose PTS is behind the horizon (force=true drains all).
+    bool DrainWindow(bool force);
+    // Write a single resolved packet into the current/next cluster.
+    bool EmitPacket(const WindowEntry& e);
+    bool FlushCluster();
+    // Publish the current file position (clamped to a running max, so a
+    // transient backward seek/restore inside a back-patch never regresses the
+    // published value) into the progress sink, if one is set. Used both by
+    // FlushCluster() and by the Finalize() back-patch checkpoints.
+    void PublishProgress() noexcept;
+    void Fail(const std::string& reason);
+    void CloseIo();
+
+    MatroskaStreamConfig m_config;
+
+    // libebml/libmatroska objects whose lifetime must span Open()..Finalize().
+    DurableFileIo* m_io = nullptr;
+    std::unique_ptr<libmatroska::KaxSegment> m_segment;
+    std::unique_ptr<libebml::EbmlVoid> m_seekhead_void;
+    std::unique_ptr<libmatroska::KaxInfo> m_info;
+    std::unique_ptr<libmatroska::KaxTracks> m_tracks;
+    std::unique_ptr<libmatroska::KaxCues> m_cues;
+    std::vector<libmatroska::KaxTrackEntry*> m_track_entries; // owned by m_tracks
+
+    uint64_t m_segment_data_start = 0;
+
+    // Reorder window, kept sorted ascending by PTS (insertion sort on push — the
+    // window is small so this is cheap and keeps emission strictly monotone).
+    std::deque<WindowEntry> m_window;
+    uint64_t m_max_pushed_pts_ns = 0; // newest PTS seen across all tracks
+
+    // Active cluster state.
+    libmatroska::KaxCluster* m_cluster = nullptr;
+    bool m_first_cluster = true;
+    uint64_t m_cluster_start_ms = 0;
+    // Backing bytes for blocks in the current cluster must outlive its Render().
+    std::vector<std::vector<uint8_t>> m_cluster_bytes;
+    // Video keyframe cue points pending for the current cluster.
+    std::vector<uint64_t> m_pending_cue_ms;
+
+    uint64_t m_max_emitted_pts_ns = 0; // for final Duration
+    bool m_opened = false;
+    bool m_finalized = false;
+    bool m_failed = false;
+    std::string m_error;
+
+    size_t m_peak_window_packets = 0;
+    uint64_t m_peak_window_bytes = 0;
+    uint64_t m_cur_window_bytes = 0;
+
+    // Filesystem write-boundary counters (see bytes_written()/last_flush_ms()).
+    uint64_t m_bytes_written = 0;
+    uint64_t m_flush_count = 0;
+    double m_last_flush_ms = 0.0;
+
+    // Periodic durability flush (fflush + FlushFileBuffers) cadence gate and
+    // counter. See kDurabilityFlushInterval/durability_flush_count() above.
+    DurabilityFlushScheduler m_durability_flush_scheduler{kDurabilityFlushInterval};
+    uint64_t m_durability_flush_count = 0;
+
+    // Optional out-of-thread progress sink (SetProgressSink). Not owned.
+    std::atomic<uint64_t>* m_progress_sink = nullptr;
+};
+
+} // namespace exosnap::engine

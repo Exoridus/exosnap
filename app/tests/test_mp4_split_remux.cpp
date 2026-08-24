@@ -30,7 +30,7 @@
 #include <string>
 #include <thread>
 
-#include <recorder_core/recorder_session.h>
+#include <exosnap/engine/recorder_session.h>
 
 #include "diagnostics/DiskSpaceThresholds.h"
 #include "models/OutputSettingsModel.h"
@@ -264,8 +264,8 @@ TEST_F(Mp4SplitRemuxTest, ManifestLifecycle_SingleFileMp4_FullLifecycle) {
 // ─── 9. DeriveSegmentPath for .mkv.tmp follows expected naming ───────────────
 
 TEST_F(Mp4SplitRemuxTest, DeriveSegmentPath_MkvTmpConvention) {
-    using recorder_core::DeriveSegmentPath;
-    using recorder_core::DeriveTransientMkvPath;
+    using exosnap::engine::DeriveSegmentPath;
+    using exosnap::engine::DeriveTransientMkvPath;
 
     const std::filesystem::path mp4 = std::filesystem::temp_directory_path() / L"recording.mp4";
     const std::filesystem::path transient = DeriveTransientMkvPath(mp4);
@@ -298,7 +298,7 @@ TEST_F(Mp4SplitRemuxTest, DeriveSegmentPath_MkvTmpConvention) {
 
 TEST_F(Mp4SplitRemuxTest, DeriveTransientMkvPath_HasMkvTmpSuffix) {
     const std::filesystem::path mp4 = std::filesystem::temp_directory_path() / L"my_recording.mp4";
-    const std::filesystem::path transient = recorder_core::DeriveTransientMkvPath(mp4);
+    const std::filesystem::path transient = exosnap::engine::DeriveTransientMkvPath(mp4);
 
     EXPECT_EQ(transient.extension(), std::filesystem::path(L".tmp"));
     const std::wstring full = transient.wstring();

@@ -9,6 +9,8 @@
 
 #include "UpdaterArgs.h"
 
+using namespace exosnap::updater;
+
 namespace {
 
 using exosnap::update::InstallMode;

@@ -17,16 +17,16 @@
 #include "ui/CodecLabels.h"
 
 #include <capability/config_types.h>
-#include <recorder_core/codec_types.h>
-#include <recorder_core/frame_pacing.h>
-#include <recorder_core/pipeline_diagnostics.h>
+#include <exosnap/engine/codec_types.h>
+#include <exosnap/engine/frame_pacing.h>
+#include <exosnap/engine/pipeline_diagnostics.h>
 
 #include <QString>
 
 namespace exosnap::observability {
 
-[[nodiscard]] inline QString LifecycleName(recorder_core::DiagnosticsLifecycle value) {
-    using recorder_core::DiagnosticsLifecycle;
+[[nodiscard]] inline QString LifecycleName(exosnap::engine::DiagnosticsLifecycle value) {
+    using exosnap::engine::DiagnosticsLifecycle;
     switch (value) {
     case DiagnosticsLifecycle::Idle:
         return QStringLiteral("idle");
@@ -46,8 +46,8 @@ namespace exosnap::observability {
     return QStringLiteral("idle");
 }
 
-[[nodiscard]] inline QString CaptureSourceTypeName(recorder_core::CaptureSourceType value) {
-    using recorder_core::CaptureSourceType;
+[[nodiscard]] inline QString CaptureSourceTypeName(exosnap::engine::CaptureSourceType value) {
+    using exosnap::engine::CaptureSourceType;
     switch (value) {
     case CaptureSourceType::Display:
         return QStringLiteral("display");
@@ -61,8 +61,8 @@ namespace exosnap::observability {
     return QStringLiteral("unknown");
 }
 
-[[nodiscard]] inline QString PresentModeName(recorder_core::PresentMode value) {
-    using recorder_core::PresentMode;
+[[nodiscard]] inline QString PresentModeName(exosnap::engine::PresentMode value) {
+    using exosnap::engine::PresentMode;
     switch (value) {
     case PresentMode::Composed:
         return QStringLiteral("composed");
@@ -76,8 +76,8 @@ namespace exosnap::observability {
     return QStringLiteral("unknown");
 }
 
-[[nodiscard]] inline QString SplitTriggerName(recorder_core::DiagnosticsSplitTrigger value) {
-    using recorder_core::DiagnosticsSplitTrigger;
+[[nodiscard]] inline QString SplitTriggerName(exosnap::engine::DiagnosticsSplitTrigger value) {
+    using exosnap::engine::DiagnosticsSplitTrigger;
     switch (value) {
     case DiagnosticsSplitTrigger::None:
         return QStringLiteral("none");
@@ -93,8 +93,8 @@ namespace exosnap::observability {
     return QStringLiteral("none");
 }
 
-[[nodiscard]] inline QString EncoderPresetName(recorder_core::NvencPreset value) {
-    using recorder_core::NvencPreset;
+[[nodiscard]] inline QString EncoderPresetName(exosnap::engine::NvencPreset value) {
+    using exosnap::engine::NvencPreset;
     switch (value) {
     case NvencPreset::P1:
         return QStringLiteral("P1");
@@ -114,8 +114,8 @@ namespace exosnap::observability {
     return QStringLiteral("P4");
 }
 
-[[nodiscard]] inline QString RateControlName(recorder_core::RateControlMode value) {
-    using recorder_core::RateControlMode;
+[[nodiscard]] inline QString RateControlName(exosnap::engine::RateControlMode value) {
+    using exosnap::engine::RateControlMode;
     switch (value) {
     case RateControlMode::ConstantQuality:
         return QStringLiteral("constantQuality");
@@ -129,8 +129,8 @@ namespace exosnap::observability {
     return QStringLiteral("constantQuality");
 }
 
-[[nodiscard]] inline QString ChromaName(recorder_core::ChromaSubsampling value) {
-    return value == recorder_core::ChromaSubsampling::Cs444 ? QStringLiteral("4:4:4") : QStringLiteral("4:2:0");
+[[nodiscard]] inline QString ChromaName(exosnap::engine::ChromaSubsampling value) {
+    return value == exosnap::engine::ChromaSubsampling::Cs444 ? QStringLiteral("4:4:4") : QStringLiteral("4:2:0");
 }
 
 [[nodiscard]] inline QString ChromaName(capability::ChromaSubsampling value) {
@@ -145,8 +145,8 @@ namespace exosnap::observability {
     return QStringLiteral("4:2:0");
 }
 
-[[nodiscard]] inline int BitDepthValue(recorder_core::BitDepth value) noexcept {
-    return value == recorder_core::BitDepth::Bit10 ? 10 : 8;
+[[nodiscard]] inline int BitDepthValue(exosnap::engine::BitDepth value) noexcept {
+    return value == exosnap::engine::BitDepth::Bit10 ? 10 : 8;
 }
 
 [[nodiscard]] inline int BitDepthValue(capability::BitDepth value) noexcept {
@@ -161,8 +161,8 @@ namespace exosnap::observability {
     return ColorRangeName(value == capability::ColorRange::Full);
 }
 
-[[nodiscard]] inline QString HdrModeName(recorder_core::HdrMode value) {
-    using recorder_core::HdrMode;
+[[nodiscard]] inline QString HdrModeName(exosnap::engine::HdrMode value) {
+    using exosnap::engine::HdrMode;
     switch (value) {
     case HdrMode::Off:
         return QStringLiteral("off");
@@ -174,8 +174,8 @@ namespace exosnap::observability {
     return QStringLiteral("tonemapSdr");
 }
 
-[[nodiscard]] inline QString FramePacingName(recorder_core::FramePacingMode value) {
-    return value == recorder_core::FramePacingMode::Newest ? QStringLiteral("newest") : QStringLiteral("smooth");
+[[nodiscard]] inline QString FramePacingName(exosnap::engine::FramePacingMode value) {
+    return value == exosnap::engine::FramePacingMode::Newest ? QStringLiteral("newest") : QStringLiteral("smooth");
 }
 
 } // namespace exosnap::observability

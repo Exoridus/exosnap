@@ -5,10 +5,10 @@
 # MP4 remux-on-stop). Produces a real file for ffprobe/mediainfo/mkvinfo
 # verification of codec, container tags (hvc1 vs hev1), colour, and bit depth.
 #
-# Requires the full recorder_core build (NVENC headers present); skipped otherwise.
+# Requires the full exosnap_engine build (NVENC headers present); skipped otherwise.
 
-if(NOT TARGET recorder_core)
-    message(STATUS "probe_record: recorder_core target not available — skipping")
+if(NOT TARGET exosnap_engine)
+    message(STATUS "probe_record: exosnap_engine target not available — skipping")
     return()
 endif()
 
@@ -17,7 +17,7 @@ add_executable(probe_record
 )
 
 target_link_libraries(probe_record PRIVATE
-    recorder_core
+    exosnap_engine
     exosnap::warnings
     dxgi.lib
 )

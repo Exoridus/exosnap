@@ -430,15 +430,15 @@ Every task states explicitly which repo it operates in. Do not assume the workin
 **Repo:** the ExoSnap repo (this worktree or an equivalent checkout).
 
 **Files:**
-- Create: `libs/recorder_core/tests/test_ffmpeg_build_capabilities.cpp`
-- Modify: `libs/recorder_core/CMakeLists.txt` (register the new test target)
+- Create: `libs/engine/tests/test_ffmpeg_build_capabilities.cpp`
+- Modify: `libs/engine/CMakeLists.txt` (register the new test target)
 - Modify (temporarily — revert at the end of this task, see Step 5): `cmake/VendorFFmpeg.cmake`
 
 **Interfaces:**
 - Consumes: `avcodec_find_encoder_by_name(const char*) -> const AVCodec*` (existing FFmpeg API, same one used by `ffmpeg_aac_encoder.cpp:66`'s `avcodec_find_encoder`).
 - Produces: no new production API — this is a build-artifact capability check only (see the file's own header comment for why it deliberately does not become `X264VideoEncoder`/an encoder backend).
 
-**Background — read before starting:** `libs/recorder_core/src/ffmpeg_aac_encoder.cpp:66-72` already establishes the pattern this task follows: look up a codec by name/ID via `avcodec_find_encoder*`, and treat a null result as a clean, structured failure. That precedent (ADR 0052) tolerates a null result gracefully because it runs against *whatever* FFmpeg build happens to be pinned at the time. This task's tests are different in intent: they should **assert hard** (not skip) that `libx264`/`libx265` are present, because the whole point of this task is to prove the *candidate* r6 build actually has them before it is ever tagged as a real release — a null result here means Tasks 1-3 need fixing, not that the test should tolerate it.
+**Background — read before starting:** `libs/engine/src/ffmpeg_aac_encoder.cpp:66-72` already establishes the pattern this task follows: look up a codec by name/ID via `avcodec_find_encoder*`, and treat a null result as a clean, structured failure. That precedent (ADR 0052) tolerates a null result gracefully because it runs against *whatever* FFmpeg build happens to be pinned at the time. This task's tests are different in intent: they should **assert hard** (not skip) that `libx264`/`libx265` are present, because the whole point of this task is to prove the *candidate* r6 build actually has them before it is ever tagged as a real release — a null result here means Tasks 1-3 need fixing, not that the test should tolerate it.
 
 - [ ] **Step 1: Point VendorFFmpeg.cmake at the local candidate artifact (temporary)**
 
@@ -454,7 +454,7 @@ Every task states explicitly which repo it operates in. Do not assume the workin
 
 - [ ] **Step 2: Write the capability-proof test**
 
-  Create `libs/recorder_core/tests/test_ffmpeg_build_capabilities.cpp`:
+  Create `libs/engine/tests/test_ffmpeg_build_capabilities.cpp`:
   ```cpp
   #include <gtest/gtest.h>
 
@@ -486,11 +486,11 @@ Every task states explicitly which repo it operates in. Do not assume the workin
 
 - [ ] **Step 3: Register the test target**
 
-  In `libs/recorder_core/CMakeLists.txt`, add near the other small FFmpeg-only test target (`test_output_format_audio_src`, around line 214-220):
+  In `libs/engine/CMakeLists.txt`, add near the other small FFmpeg-only test target (`test_output_format_audio_src`, around line 214-220):
   ```cmake
   exosnap_add_gtest(
       NAME test_ffmpeg_build_capabilities
-      TEST_PREFIX recorder_core.
+      TEST_PREFIX engine.
       SOURCES tests/test_ffmpeg_build_capabilities.cpp
       LIBRARIES FFmpeg::mux
   )
@@ -504,9 +504,9 @@ Every task states explicitly which repo it operates in. Do not assume the workin
   ```
   Expected: **PASS** on both tests. If either fails, go back to Task 1/Task 2 in the ffmpeg-build repo, fix the configure flags, push, re-run Task 4 to get a fresh candidate artifact, and re-point Step 1's `file://` URL at the new zip.
 
-  Also run the full recorder_core suite once to confirm the new (GPL, larger) DLLs don't regress anything already depending on the old LGPL artifact:
+  Also run the full engine suite once to confirm the new (GPL, larger) DLLs don't regress anything already depending on the old LGPL artifact:
   ```
-  ctest --test-dir build/windows-x64-debug -R "recorder_core\." -V
+  ctest --test-dir build/windows-x64-debug -R "engine\." -V
   ```
   Expected: **PASS** (no regressions — nothing in this plan changes any existing muxer/demuxer/decoder/aac-encoder behavior).
 
@@ -656,7 +656,7 @@ Every task states explicitly which repo it operates in. Do not assume the workin
 
   ```
   cmake --build build/windows-x64-debug
-  ctest --test-dir build/windows-x64-debug -R "recorder_core\." -V
+  ctest --test-dir build/windows-x64-debug -R "engine\." -V
   ```
   Expected: **PASS**, including `FfmpegBuildCapabilitiesTest.LibX264EncoderIsRegistered` and `LibX265EncoderIsRegistered` (Task 5), now running against the real, immutable `r6` artifact instead of the throwaway local candidate.
 

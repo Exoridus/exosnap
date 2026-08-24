@@ -1,7 +1,7 @@
 #pragma once
 
-#include <recorder_core/codec_types.h>
-#include <recorder_core/frame_pacing.h>
+#include <exosnap/engine/codec_types.h>
+#include <exosnap/engine/frame_pacing.h>
 
 namespace exosnap {
 
@@ -16,12 +16,12 @@ enum class KeyframeIntervalMode {
 struct VideoSettingsModel {
     // Constant-quality target (1 = best, 51 = worst). The three named presets are
     // shorthands for canonical values, not a separate setting: the selected
-    // segment is derived via recorder_core::NearestQualityPreset(cq).
-    uint32_t cq = recorder_core::CanonicalCq(recorder_core::QualityPreset::Balanced);
-    recorder_core::RateControlMode rate_control = recorder_core::RateControlMode::ConstantQuality;
+    // segment is derived via exosnap::engine::NearestQualityPreset(cq).
+    uint32_t cq = exosnap::engine::CanonicalCq(exosnap::engine::QualityPreset::Balanced);
+    exosnap::engine::RateControlMode rate_control = exosnap::engine::RateControlMode::ConstantQuality;
     uint32_t bitrate_kbps = 20000; // Used for VariableBitrate and ConstantBitrate modes
     bool cfr = true;
-    recorder_core::FramePacingMode frame_pacing = recorder_core::FramePacingMode::Smooth;
+    exosnap::engine::FramePacingMode frame_pacing = exosnap::engine::FramePacingMode::Smooth;
     bool capture_cursor = true;
     uint32_t frame_rate_num = 60;
     uint32_t frame_rate_den = 1;

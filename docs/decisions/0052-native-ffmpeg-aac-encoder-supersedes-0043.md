@@ -34,7 +34,7 @@ product's Compatibility/MP4 path.
 
 1. Adopt **FFmpeg's native AAC-LC encoder** as ExoSnap's AAC encoder, wrapped
    behind the existing `IAudioEncoder` contract as `FfmpegAacEncoder`
-   (`libs/recorder_core/src/ffmpeg_aac_encoder.{h,cpp}`). It matches the
+   (`libs/engine/src/ffmpeg_aac_encoder.{h,cpp}`). It matches the
    `FdkAacEncoder` behaviour that recording depends on: AAC-LC only, 44.1/48 kHz,
    mono/stereo, default **192 kbit/s** (identical default), and raw AAC access
    units plus an `AudioSpecificConfig` published via `AVCodecContext::extradata`
@@ -72,7 +72,7 @@ product's Compatibility/MP4 path.
    `SetBitrateKbps`/`IAudioEncoder` shape). The `test_ffmpeg_aac_encoder`
    encode-path cases stop skipping and exercise the real encoder.
 4. **Remove FDK-AAC** — delete `fdk_aac_encoder.{h,cpp}` + its test, drop the
-   `fdk-aac` fetch from `third_party/CMakeLists.txt` and the `recorder_core` link
+   `fdk-aac` fetch from `third_party/CMakeLists.txt` and the `engine` link
    line, and remove the FDK-AAC entry from `THIRD_PARTY_NOTICES.md` and
    `licenses/fdk-aac.txt`.
 

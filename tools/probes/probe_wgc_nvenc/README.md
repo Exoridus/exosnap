@@ -65,7 +65,7 @@ frames rather than synthetic data.
 - No MKV, MP4, or any container beyond minimal IVF.
 - No Opus, AAC.
 - No FFmpeg.
-- No `recorder_core` integration.
+- No `engine` integration.
 - No WinUI.
 - No frame scaling or cropping (source must match encode dimensions).
 - No color space accuracy (BT.601 coefficients used; see known limitations).

@@ -83,7 +83,7 @@ Write-Host ''
 Write-Host 'Scope'
 
 Test-Case 'a .cpp change requires a build and the whole suite' {
-    $scope = Get-VerifyScope -ChangedFiles @('libs/recorder_core/src/muxer.cpp')
+    $scope = Get-VerifyScope -ChangedFiles @('libs/engine/src/muxer.cpp')
     Assert-True $scope.RequiresBuild 'a compiled source change must require a build'
     Assert-True $scope.RequiresTests 'a compiled source change must require tests'
     Assert-True $scope.RequiresFullTests 'a compiled source change may not narrow the suite'
@@ -101,7 +101,7 @@ Test-Case 'a C++ test under app/ runs its own tests, not only the Quick ones' {
 }
 
 Test-Case 'a header change escalates to the full test suite' {
-    $scope = Get-VerifyScope -ChangedFiles @('libs/recorder_core/include/recorder_core/session.h')
+    $scope = Get-VerifyScope -ChangedFiles @('libs/engine/include/exosnap/engine/session.h')
     Assert-True $scope.RequiresFullTests 'a header must escalate: its dependents are not resolved'
     Assert-Equal '' $scope.TestFilter 'a full-suite run carries no filter'
     Assert-True ($scope.EscalationReasons.Count -gt 0) 'the escalation has to be stated, not silent'
@@ -152,7 +152,7 @@ Test-Case 'a script change runs the script tests and nothing heavier' {
 }
 
 Test-Case 'an unrecognised file type escalates rather than being ignored' {
-    $scope = Get-VerifyScope -ChangedFiles @('libs/recorder_core/src/mystery.zzz')
+    $scope = Get-VerifyScope -ChangedFiles @('libs/engine/src/mystery.zzz')
     Assert-True $scope.RequiresFullTests 'an unknown type must widen, never narrow'
     Assert-True ($scope.EscalationReasons -join ' ') -match 'unrecognised'
 }
@@ -166,7 +166,7 @@ Test-Case 'an empty change set verifies everything' {
 }
 
 Test-Case 'mixed Quick and engine changes widen to the full suite' {
-    $scope = Get-VerifyScope -ChangedFiles @('libs/recorder_core/src/muxer.cpp', 'app/quick/ExoSnap/Quick/x.cpp')
+    $scope = Get-VerifyScope -ChangedFiles @('libs/engine/src/muxer.cpp', 'app/quick/ExoSnap/Quick/x.cpp')
     Assert-True $scope.RequiresFullTests 'two disjoint areas must not be narrowed into one filter'
     Assert-Equal '' $scope.TestFilter 'a widened run carries no filter'
 }
@@ -175,7 +175,7 @@ Write-Host ''
 Write-Host 'Fast is not Full'
 
 Test-Case 'Full contains every check Fast can contain' {
-    $narrow = Get-VerifyScope -ChangedFiles @('libs/recorder_core/src/muxer.cpp')
+    $narrow = Get-VerifyScope -ChangedFiles @('libs/engine/src/muxer.cpp')
     $wide = Get-VerifyScope -ChangedFiles @()
     $fastNames = @((New-VerifyPlan -Mode 'Fast' -Scope $wide).Checks.Name)
     $fullNames = @((New-VerifyPlan -Mode 'Full' -Scope $narrow).Checks.Name)
@@ -312,9 +312,9 @@ Test-Case 'clang-tidy depends on the build too' {
 
 Test-Case 'no plan ever lets tests run without a build in scope' {
     foreach ($files in @(
-            @('libs/recorder_core/src/muxer.cpp'),
+            @('libs/engine/src/muxer.cpp'),
             @('app/quick/ExoSnap/Quick/RecordPage.qml'),
-            @('libs/recorder_core/include/recorder_core/session.h'),
+            @('libs/engine/include/exosnap/engine/session.h'),
             @('CMakeLists.txt'),
             @('scripts/verify.ps1'),
             @('.github/workflows/ci.yml'),
@@ -441,7 +441,7 @@ Test-Case 'the console summary names every check and its status' {
 Test-Case 'the JSON summary records the run truthfully' {
     $path = Join-Path ([IO.Path]::GetTempPath()) "verify-tests/$([guid]::NewGuid().ToString('n'))/latest.json"
     try {
-        $scope = Get-VerifyScope -ChangedFiles @('libs/recorder_core/src/muxer.cpp')
+        $scope = Get-VerifyScope -ChangedFiles @('libs/engine/src/muxer.cpp')
         $plan = New-VerifyPlan -Mode 'Fast' -Scope $scope
         $run = Invoke-VerifyPlan -Plan $plan -Executor (New-FakeExecutor -FailingChecks @('build'))
         Save-VerifyResult -Run $run -Path $path -Head 'abc1234' -Base 'def5678' -Dirty $true -Scope $scope | Out-Null

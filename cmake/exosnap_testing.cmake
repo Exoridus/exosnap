@@ -134,8 +134,8 @@ function(exosnap_add_gtest)
   # `-C <config>` (already the case in every preset and CI invocation).
   #
   # TEST_PREFIX semantics are preserved by folding the prefix into the single
-  # entry name, e.g. TEST_PREFIX "recorder_core." + NAME "test_mp4_remuxer"
-  # -> CTest entry "recorder_core.test_mp4_remuxer".
+  # entry name, e.g. TEST_PREFIX "engine." + NAME "test_mp4_remuxer"
+  # -> CTest entry "engine.test_mp4_remuxer".
   set(_exosnap_test_name "${ARG_TEST_PREFIX}${ARG_NAME}")
   add_test(NAME "${_exosnap_test_name}" COMMAND ${ARG_NAME})
 

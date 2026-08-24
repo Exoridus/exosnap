@@ -2,7 +2,7 @@
 
 // RecordVisualStateNames.h -- the accepted values of --record-visual-state.
 //
-// Deliberately tiny and dependency-free (no Qt, no recorder_core): the shipping
+// Deliberately tiny and dependency-free (no Qt, no engine): the shipping
 // frontend's scenario branches and the visual-scenario catalogue both include
 // it, and a shared name is the only thing that stops the two from disagreeing
 // about what a scenario is called.

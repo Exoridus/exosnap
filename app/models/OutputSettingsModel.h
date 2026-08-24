@@ -1,8 +1,8 @@
 #pragma once
 
 #include <capability/config_types.h>
-#include <recorder_core/codec_types.h>
-#include <recorder_core/output_geometry.h>
+#include <exosnap/engine/codec_types.h>
+#include <exosnap/engine/output_geometry.h>
 
 #include <cstdint>
 #include <filesystem>
@@ -24,7 +24,7 @@ struct OutputResolutionSettings {
     OutputResolutionMode mode = OutputResolutionMode::Native;
     uint32_t custom_width = 0;
     uint32_t custom_height = 0;
-    recorder_core::OutputFitMode fit = recorder_core::OutputFitMode::Contain;
+    exosnap::engine::OutputFitMode fit = exosnap::engine::OutputFitMode::Contain;
 };
 
 // Automatic recording split (SPLIT-RECORDING-R1). Off keeps single-file behavior;
@@ -103,11 +103,11 @@ struct OutputSettingsModel {
     // default; H.264 previously used P6 (visible default change, expert-
     // overridable — see ADR 0039). Takes effect from the next recording
     // (not applied live).
-    recorder_core::NvencPreset nvenc_preset = recorder_core::NvencPreset::P4;
+    exosnap::engine::NvencPreset nvenc_preset = exosnap::engine::NvencPreset::P4;
     // HDR handling mode. Model only for now — no UI control yet; the expert
     // HDR control will gate on capability::QueryHdr10Native(). Default
-    // TonemapSdr — see recorder_core::HdrMode.
-    recorder_core::HdrMode hdr_mode = recorder_core::HdrMode::TonemapSdr;
+    // TonemapSdr — see exosnap::engine::HdrMode.
+    exosnap::engine::HdrMode hdr_mode = exosnap::engine::HdrMode::TonemapSdr;
     OutputResolutionSettings resolution;
     SplitRecordingSettings split;
 
@@ -127,11 +127,11 @@ struct OutputSettingsModel {
 // recording" remains the correct, intentional semantics; only the live-mirror gap is fixed.
 void MergeFormatSelection(OutputSettingsModel& live, const OutputSettingsModel& incoming);
 
-[[nodiscard]] std::optional<recorder_core::FrameSize> PresetOutputSize(OutputResolutionMode mode) noexcept;
+[[nodiscard]] std::optional<exosnap::engine::FrameSize> PresetOutputSize(OutputResolutionMode mode) noexcept;
 [[nodiscard]] const wchar_t* OutputResolutionModeName(OutputResolutionMode mode) noexcept;
-[[nodiscard]] const wchar_t* OutputFitModeName(recorder_core::OutputFitMode mode) noexcept;
-[[nodiscard]] std::optional<recorder_core::FrameSize>
-ResolveRequestedOutputSize(const OutputResolutionSettings& settings, recorder_core::FrameSize source) noexcept;
+[[nodiscard]] const wchar_t* OutputFitModeName(exosnap::engine::OutputFitMode mode) noexcept;
+[[nodiscard]] std::optional<exosnap::engine::FrameSize>
+ResolveRequestedOutputSize(const OutputResolutionSettings& settings, exosnap::engine::FrameSize source) noexcept;
 void SanitizeOutputResolution(OutputResolutionSettings& settings) noexcept;
 
 } // namespace exosnap

@@ -9,8 +9,8 @@
 #include <QString>
 #include <QThreadPool>
 
-#include <recorder_core/preview_tap.h>
-#include <recorder_core/recorder_session.h>
+#include <exosnap/engine/preview_tap.h>
+#include <exosnap/engine/recorder_session.h>
 
 #include <cstdint>
 #include <functional>
@@ -24,8 +24,8 @@ struct ReadyFrameSource {
     void* shared_handle = nullptr;
     uint32_t width = 0;
     uint32_t height = 0;
-    recorder_core::PreviewTapDesc tap;
-    recorder_core::CaptureTarget target;
+    exosnap::engine::PreviewTapDesc tap;
+    exosnap::engine::CaptureTarget target;
     bool cursor_already_composited = false;
 };
 

@@ -17,7 +17,7 @@ to pick the right frame. `EditExportPage`'s existing 33 ms preview timer drives 
 
 ## Global Constraints
 
-- Engine code (`libs/recorder_core`) must contain **no Qt types** — CLAUDE.md: "Keep the engine
+- Engine code (`libs/engine`) must contain **no Qt types** — CLAUDE.md: "Keep the engine
   UI-agnostic." Only `app/` files may include Qt headers.
 - **Never drive the running application** — no mouse/keyboard synthesis, no window automation.
   Starting `exosnap.exe` once to confirm no startup crash is allowed; nothing interactive.
@@ -25,7 +25,7 @@ to pick the right frame. `EditExportPage`'s existing 33 ms preview timer drives 
   step for the user** — this project's existing `test_wasapi_audio_render.cpp` deliberately never
   calls `Init()` (no real WASAPI render device assumed available in CI); every test in this plan
   follows that same constraint.
-- Follow existing `recorder_core` conventions exactly: trailing-underscore private members,
+- Follow existing `engine` conventions exactly: trailing-underscore private members,
   PascalCase free functions/methods, snake_case locals, `bool Method(..., std::string& out_error)`
   for fallible setup.
 - Run `pwsh scripts/run-tests.ps1 -Filter <binary>` for focused verification during each task (not
@@ -37,9 +37,9 @@ to pick the right frame. `EditExportPage`'s existing 33 ms preview timer drives 
 ## Task 1: `WasapiAudioRenderer` — bounded, blocking ring buffer (the pacing point)
 
 **Files:**
-- Modify: `libs/recorder_core/include/recorder_core/wasapi_audio_render.h`
-- Modify: `libs/recorder_core/src/wasapi_audio_render.cpp`
-- Test: `libs/recorder_core/tests/test_wasapi_audio_render.cpp`
+- Modify: `libs/engine/include/exosnap/engine/wasapi_audio_render.h`
+- Modify: `libs/engine/src/wasapi_audio_render.cpp`
+- Test: `libs/engine/tests/test_wasapi_audio_render.cpp`
 
 **Interfaces:**
 - Produces: `WasapiAudioRenderer(uint32_t ring_capacity_frames = kDefaultRingCapacityFrames)` —
@@ -50,7 +50,7 @@ to pick the right frame. `EditExportPage`'s existing 33 ms preview timer drives 
 
 - [ ] **Step 1: Write the failing test**
 
-Add to the end of `libs/recorder_core/tests/test_wasapi_audio_render.cpp`, before the closing
+Add to the end of `libs/engine/tests/test_wasapi_audio_render.cpp`, before the closing
 `} // namespace`:
 
 ```cpp
@@ -60,7 +60,7 @@ TEST(WasapiAudioRenderer, PushSamplesBlocksWhenRingIsFullAndStopWakesIt) {
     // is open (Init() clears it via Shutdown() at the top of Init(), so
     // nothing pushed pre-Init can leak into playback) -- this test never
     // calls Init(), matching this file's existing no-real-device convention.
-    recorder_core::WasapiAudioRenderer renderer(/*ring_capacity_frames=*/4);
+    exosnap::engine::WasapiAudioRenderer renderer(/*ring_capacity_frames=*/4);
 
     const std::vector<float> chunk(8, 0.0f); // 4 stereo frames == exactly the capacity
     renderer.PushSamples(chunk.data(), 4);   // fills the ring; must return immediately
@@ -102,14 +102,14 @@ default constructor does).
 
 - [ ] **Step 3: Add the capacity constant and constructor to the header**
 
-In `libs/recorder_core/include/recorder_core/wasapi_audio_render.h`, add after the includes and
+In `libs/engine/include/exosnap/engine/wasapi_audio_render.h`, add after the includes and
 before `struct IMMDevice;`:
 
 ```cpp
 #include <condition_variable>
 ```
 
-Add inside `namespace recorder_core {`, before `class WasapiAudioRenderer {`:
+Add inside `namespace exosnap::engine {`, before `class WasapiAudioRenderer {`:
 
 ```cpp
 // Ring capacity used unless a caller overrides it. 1 second @ 48 kHz stereo
@@ -153,7 +153,7 @@ Add two new private members, next to the existing `ring_mutex_`/`ring_` declarat
 
 - [ ] **Step 4: Update the constructor, `PushSamples`, `RenderThreadMain`, and `Stop` in the .cpp**
 
-In `libs/recorder_core/src/wasapi_audio_render.cpp`, replace:
+In `libs/engine/src/wasapi_audio_render.cpp`, replace:
 
 ```cpp
 WasapiAudioRenderer::WasapiAudioRenderer() = default;
@@ -284,7 +284,7 @@ step's changes must not require `Init()` for either.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add libs/recorder_core/include/recorder_core/wasapi_audio_render.h libs/recorder_core/src/wasapi_audio_render.cpp libs/recorder_core/tests/test_wasapi_audio_render.cpp
+git add libs/engine/include/exosnap/engine/wasapi_audio_render.h libs/engine/src/wasapi_audio_render.cpp libs/engine/tests/test_wasapi_audio_render.cpp
 git commit -m "WasapiAudioRenderer's ring buffer becomes a bounded, blocking pacing point"
 ```
 
@@ -293,9 +293,9 @@ git commit -m "WasapiAudioRenderer's ring buffer becomes a bounded, blocking pac
 ## Task 2: `EditPlayerSession` — bounded video queue, `PollFrame()`, shutdown ordering
 
 **Files:**
-- Modify: `libs/recorder_core/include/recorder_core/edit_player_session.h`
-- Modify: `libs/recorder_core/src/edit_player_session.cpp`
-- Test: `libs/recorder_core/tests/test_edit_player_session.cpp`
+- Modify: `libs/engine/include/exosnap/engine/edit_player_session.h`
+- Modify: `libs/engine/src/edit_player_session.cpp`
+- Test: `libs/engine/tests/test_edit_player_session.cpp`
 
 **Interfaces:**
 - Consumes: `WasapiAudioRenderer::FramesRendered()`, `WasapiAudioRenderer::SampleRate()` (existing),
@@ -307,7 +307,7 @@ git commit -m "WasapiAudioRenderer's ring buffer becomes a bounded, blocking pac
 
 - [ ] **Step 1: Write the failing tests**
 
-Add to the end of `libs/recorder_core/tests/test_edit_player_session.cpp`, before the closing
+Add to the end of `libs/engine/tests/test_edit_player_session.cpp`, before the closing
 `} // namespace`:
 
 ```cpp
@@ -336,7 +336,7 @@ Expected: FAIL to compile — `PollFrame`/`CurrentPositionMs` are not declared o
 
 - [ ] **Step 3: Declare the new methods in the header**
 
-In `libs/recorder_core/include/recorder_core/edit_player_session.h`, add `#include <optional>` next
+In `libs/engine/include/exosnap/engine/edit_player_session.h`, add `#include <optional>` next
 to the existing includes, then add these two public methods after `SeekTo`'s declaration (before the
 closing `private:`):
 
@@ -361,7 +361,7 @@ closing `private:`):
 
 - [ ] **Step 4: Implement the video queue, `PollFrame`, `CurrentPositionMs`, and the shutdown-order fix in the .cpp**
 
-In `libs/recorder_core/src/edit_player_session.cpp`, add these includes at the top:
+In `libs/engine/src/edit_player_session.cpp`, add these includes at the top:
 
 ```cpp
 #include "playback_clock.h"
@@ -482,7 +482,7 @@ void EditPlayerSession::Pause() {
 ```
 
 Add the two new methods after `SeekTo`'s implementation, before the closing
-`} // namespace recorder_core`:
+`} // namespace exosnap::engine`:
 
 ```cpp
 std::optional<DecodedVideoFrame> EditPlayerSession::PollFrame() {
@@ -531,10 +531,10 @@ pwsh scripts/run-tests.ps1 -Filter test_edit_player_session
 
 Expected: PASS, all 6 cases (4 existing + 2 new).
 
-- [ ] **Step 6: Full recorder_core rebuild**
+- [ ] **Step 6: Full engine rebuild**
 
 ```bash
-cmake --build --preset windows-x64-debug --target recorder_core
+cmake --build --preset windows-x64-debug --target engine
 ```
 
 Expected: exit 0 (confirms `edit_player_engine.cpp`'s existing callers of `EditPlayerSession` still
@@ -543,7 +543,7 @@ link — none exist yet outside `EditExportPage`, checked in Task 3).
 - [ ] **Step 7: Commit**
 
 ```bash
-git add libs/recorder_core/include/recorder_core/edit_player_session.h libs/recorder_core/src/edit_player_session.cpp libs/recorder_core/tests/test_edit_player_session.cpp
+git add libs/engine/include/exosnap/engine/edit_player_session.h libs/engine/src/edit_player_session.cpp libs/engine/tests/test_edit_player_session.cpp
 git commit -m "EditPlayerSession gains a bounded video queue and a clock-paced PollFrame()"
 ```
 
@@ -630,14 +630,14 @@ In `app/pages/EditExportPage.h`, add this private static method declaration next
 `refreshPlayButton()`/`updatePlayerHeight()`:
 
 ```cpp
-    static QImage DecodedFrameToQImage(const recorder_core::DecodedVideoFrame& frame);
+    static QImage DecodedFrameToQImage(const exosnap::engine::DecodedVideoFrame& frame);
 ```
 
 In `app/pages/EditExportPage.cpp`, add the implementation just above `onPreviewTick()` (in the
 "Preview playback clock" section):
 
 ```cpp
-QImage EditExportPage::DecodedFrameToQImage(const recorder_core::DecodedVideoFrame& frame) {
+QImage EditExportPage::DecodedFrameToQImage(const exosnap::engine::DecodedVideoFrame& frame) {
     const QImage img(frame.bgra->data(), static_cast<int>(frame.width), static_cast<int>(frame.height),
                      static_cast<int>(frame.stride_bytes), QImage::Format_ARGB32);
     return img.copy(); // detach: frame.bgra's buffer lifetime is not guaranteed beyond this call
@@ -647,7 +647,7 @@ QImage EditExportPage::DecodedFrameToQImage(const recorder_core::DecodedVideoFra
 Replace the existing `SetOnFrameReady` registration (in `setEditContext`, around line 727):
 
 ```cpp
-            player_session_->SetOnFrameReady([this](recorder_core::DecodedVideoFrame frame) {
+            player_session_->SetOnFrameReady([this](exosnap::engine::DecodedVideoFrame frame) {
                 // Invoked from the session's internal decode/seek threads --
                 // never touch player_surface_ here. The QImage below is a
                 // zero-copy view over frame.bgra; .copy() detaches it while
@@ -663,7 +663,7 @@ Replace the existing `SetOnFrameReady` registration (in `setEditContext`, around
 with:
 
 ```cpp
-            player_session_->SetOnFrameReady([this](recorder_core::DecodedVideoFrame frame) {
+            player_session_->SetOnFrameReady([this](exosnap::engine::DecodedVideoFrame frame) {
                 // Invoked from the session's internal seek-worker thread
                 // (scrub/trim-drag path only -- continuous playback frames
                 // now go through PollFrame() in onPreviewTick() instead, see
@@ -827,7 +827,7 @@ git commit -m "EditExportPage plays back paced by the audio clock when a clip ha
 
 **Files:** none (verification only).
 
-- [ ] **Step 1: Full recorder_core + app rebuild**
+- [ ] **Step 1: Full engine + app rebuild**
 
 ```bash
 cmake --build --preset windows-x64-debug-exosnap

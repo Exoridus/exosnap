@@ -38,7 +38,7 @@
 
 #include <cstdint>
 
-#include <recorder_core/pipeline_diagnostics.h>
+#include <exosnap/engine/pipeline_diagnostics.h>
 
 namespace exosnap::diagnostics {
 
@@ -104,7 +104,7 @@ enum class WindowStallCause : uint8_t {
 // PURE. True only for DiagnosticsLifecycle::Recording. Paused, Initializing,
 // Stopping, Completed, Failed and Idle all legitimately produce no capture
 // frames, and the starve clock must not run through them.
-[[nodiscard]] bool CaptureProgressExpected(recorder_core::DiagnosticsLifecycle lifecycle) noexcept;
+[[nodiscard]] bool CaptureProgressExpected(exosnap::engine::DiagnosticsLifecycle lifecycle) noexcept;
 
 // PURE. Cause of a confirmed stall. Positive evidence required:
 //   minimized                                 -> Minimized

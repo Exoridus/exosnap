@@ -323,10 +323,10 @@ TEST(DiagnosticsEnvironment, ConfigRowsMirrorTheSummaryEntries) {
 
 namespace {
 
-recorder_core::RecordingDiagnosticsSnapshot MakeLiveSnapshot(uint64_t generation, uint64_t backpressure_drops) {
-    recorder_core::RecordingDiagnosticsSnapshot snapshot;
+exosnap::engine::RecordingDiagnosticsSnapshot MakeLiveSnapshot(uint64_t generation, uint64_t backpressure_drops) {
+    exosnap::engine::RecordingDiagnosticsSnapshot snapshot;
     snapshot.valid = true;
-    snapshot.lifecycle = recorder_core::DiagnosticsLifecycle::Recording;
+    snapshot.lifecycle = exosnap::engine::DiagnosticsLifecycle::Recording;
     snapshot.session_generation = generation;
     snapshot.capture.target_fps = 60.0;
     snapshot.capture.actual_fps = 60.0;
@@ -418,10 +418,10 @@ TEST(FixActionDispatch, FramePacingFixMutatesOnlyVideoSettings) {
     capability::CapabilitySet caps;
     OutputSettingsModel output;
     VideoSettingsModel video;
-    video.frame_pacing = recorder_core::FramePacingMode::Newest;
+    video.frame_pacing = exosnap::engine::FramePacingMode::Newest;
     const FixResult result = ApplyAutoFix("fix.frame_pacing.smooth", caps, output, video);
     EXPECT_EQ(result.outcome, FixOutcome::SettingsChanged);
-    EXPECT_EQ(video.frame_pacing, recorder_core::FramePacingMode::Smooth);
+    EXPECT_EQ(video.frame_pacing, exosnap::engine::FramePacingMode::Smooth);
 }
 
 TEST(FixActionDispatch, ColorRangeFixSwitchesToLimited) {

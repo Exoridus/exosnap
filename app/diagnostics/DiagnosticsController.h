@@ -12,8 +12,8 @@
 #include <capability/config_types.h>
 #include <capability/resolver.h>
 #include <capability/user_config.h>
-#include <recorder_core/pipeline_diagnostics.h>
-#include <recorder_core/recorder_session.h>
+#include <exosnap/engine/pipeline_diagnostics.h>
+#include <exosnap/engine/recorder_session.h>
 
 #include <chrono>
 #include <cstdint>
@@ -207,7 +207,7 @@ struct LiveTile {
 // question -- "how did it go", which the Edit review step owns -- and leaving
 // them on a page headed "live" would report a recording that has stopped as one
 // that is still running.
-[[nodiscard]] std::vector<LiveTile> BuildLiveTiles(const recorder_core::RecordingDiagnosticsSnapshot& snapshot);
+[[nodiscard]] std::vector<LiveTile> BuildLiveTiles(const exosnap::engine::RecordingDiagnosticsSnapshot& snapshot);
 
 // ── Fact / configuration tables ─────────────────────────────────────────────────
 
@@ -277,7 +277,7 @@ struct PipelineStage {
 // drop since session start as "recent", which reads as a permanent bottleneck.
 class PipelineCardBuilder {
   public:
-    [[nodiscard]] std::vector<PipelineStage> BuildLive(const recorder_core::RecordingDiagnosticsSnapshot& snapshot);
+    [[nodiscard]] std::vector<PipelineStage> BuildLive(const exosnap::engine::RecordingDiagnosticsSnapshot& snapshot);
 
     // Idle / pre-check readiness. Stages 0-2 are only meaningful while recording;
     // 3-5 report the static encoder / muxer / output-path probes.
@@ -392,7 +392,7 @@ class DiagnosticsController {
     void SetConfig(Config config);
     void SetProbeResult(ProbeResult probe);
     void SetDisplayFacts(DisplayFacts facts) noexcept;
-    void SetSelectedCaptureTarget(std::optional<recorder_core::CaptureTarget> target);
+    void SetSelectedCaptureTarget(std::optional<exosnap::engine::CaptureTarget> target);
     void SetCaptureWindowEvidence(std::optional<WindowTargetFacts> facts, const WindowHubEvidence& hub);
     void SetSavedDisplayUnresolved(bool unresolved, std::string label);
     void SetElevated(bool elevated) noexcept;
@@ -403,7 +403,7 @@ class DiagnosticsController {
     // at all rather than from a default-zero one. Same shape as SetPresentSample.
     void SetDpcLatency(std::optional<DpcLatencyReading> reading);
     void SetPresentSample(std::optional<PresentSample> sample);
-    void SetLiveSnapshot(const recorder_core::RecordingDiagnosticsSnapshot& snapshot);
+    void SetLiveSnapshot(const exosnap::engine::RecordingDiagnosticsSnapshot& snapshot);
 
     // The structured checklist the last Evaluate() produced, and the environment
     // facts alongside it. Retained rather than rebuilt on demand: running the
@@ -419,7 +419,7 @@ class DiagnosticsController {
     // The last live pipeline snapshot fed in by the recording path. This is a
     // pass-through of the engine's own value -- the controller neither smooths
     // nor re-derives it.
-    [[nodiscard]] const recorder_core::RecordingDiagnosticsSnapshot& liveSnapshot() const noexcept;
+    [[nodiscard]] const exosnap::engine::RecordingDiagnosticsSnapshot& liveSnapshot() const noexcept;
 
     [[nodiscard]] bool dataReady() const noexcept;
     [[nodiscard]] bool hasLastRecording() const noexcept;
@@ -443,7 +443,7 @@ class DiagnosticsController {
     Config config_;
     ProbeResult probe_;
     DisplayFacts display_{};
-    std::optional<recorder_core::CaptureTarget> selected_target_;
+    std::optional<exosnap::engine::CaptureTarget> selected_target_;
     std::optional<WindowTargetFacts> capture_window_facts_;
     WindowHubEvidence capture_window_hub_;
     bool saved_display_unresolved_ = false;
@@ -454,7 +454,7 @@ class DiagnosticsController {
     bool data_ready_ = false;
     std::optional<DpcLatencyReading> dpc_;
     std::optional<PresentSample> present_;
-    recorder_core::RecordingDiagnosticsSnapshot live_{};
+    exosnap::engine::RecordingDiagnosticsSnapshot live_{};
     SelfTestReport self_test_;
     std::vector<KeyValueRow> config_rows_;
     // What the last Evaluate() computed, kept so the structured surface and the

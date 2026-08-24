@@ -11,7 +11,7 @@
 #include <QProcess>
 #include <QVariantMap>
 
-#include <recorder_core/mp4_remuxer.h>
+#include <exosnap/engine/mp4_remuxer.h>
 
 #include <algorithm>
 #include <limits>
@@ -226,16 +226,17 @@ void EditExportAdapter::startExport() {
     const std::filesystem::path output =
         DeriveExportOutputPath(std::filesystem::path(context.output_path.toStdWString()), overwriteSelected(), to_mp4);
 
-    recorder_core::TrimRange trim;
+    exosnap::engine::TrimRange trim;
     trim.start_us = session_->trimStartUs();
     trim.end_us = session_->trimEndUs();
 
     // Markers ride along as a retimed JSON sidecar -- never as container
     // chapters. Planned here, on the GUI thread, so the export thread races
     // nothing.
-    const qint64 window_start_ms = trim.start_us != recorder_core::TrimRange::kNoTimestamp ? trim.start_us / 1000 : 0;
-    const qint64 window_end_ms =
-        trim.end_us != recorder_core::TrimRange::kNoTimestamp ? trim.end_us / 1000 : std::numeric_limits<qint64>::max();
+    const qint64 window_start_ms = trim.start_us != exosnap::engine::TrimRange::kNoTimestamp ? trim.start_us / 1000 : 0;
+    const qint64 window_end_ms = trim.end_us != exosnap::engine::TrimRange::kNoTimestamp
+                                     ? trim.end_us / 1000
+                                     : std::numeric_limits<qint64>::max();
     MarkerExportPlan marker_plan =
         PlanMarkerSidecarForExport(output, RetimeMarkersForTrim(session_->markers(), window_start_ms, window_end_ms));
 
@@ -265,9 +266,9 @@ void EditExportAdapter::startExport() {
             return true;
         };
 
-        recorder_core::RemuxResult result =
-            to_mp4 ? recorder_core::RemuxToProgressiveMp4(master, temp_output, progress_cb, trim)
-                   : recorder_core::RemuxToMkv(master, temp_output, progress_cb, trim);
+        exosnap::engine::RemuxResult result =
+            to_mp4 ? exosnap::engine::RemuxToProgressiveMp4(master, temp_output, progress_cb, trim)
+                   : exosnap::engine::RemuxToMkv(master, temp_output, progress_cb, trim);
 
         bool ok = result.success;
         std::string error = result.message;

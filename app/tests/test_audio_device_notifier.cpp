@@ -53,8 +53,8 @@ struct SignalSink {
 // Helpers
 // ---------------------------------------------------------------------------
 
-static recorder_core::AudioInputDeviceInfo MakeDevice(std::string id, std::string name, bool is_default = false) {
-    recorder_core::AudioInputDeviceInfo d;
+static exosnap::engine::AudioInputDeviceInfo MakeDevice(std::string id, std::string name, bool is_default = false) {
+    exosnap::engine::AudioInputDeviceInfo d;
     d.device_id = std::move(id);
     d.display_name = std::move(name);
     d.is_default = is_default;

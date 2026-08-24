@@ -58,6 +58,15 @@ class QuickWindowChrome : public QObject, public QAbstractNativeEventFilter {
                    interactiveRectsChanged FINAL)
     Q_PROPERTY(QRectF maximizeButtonRect READ maximizeButtonRect WRITE setMaximizeButtonRect NOTIFY
                    maximizeButtonRectChanged FINAL)
+    // MEASURED, and the reason this is a Win32 fact rather than Window.visibility:
+    // setting `visibility = Window.Maximized` on this frameless window produces a
+    // single SetWindowPos onto the work area and nothing else -- no WM_SHOWWINDOW,
+    // no WS_MAXIMIZE, no SC_MAXIMIZE. The window is then work-area sized while
+    // Windows still has it in SW_SHOWNORMAL, so it stays resizable and Windows
+    // records the work-area rect as the rect to un-maximize to. IsZoomed() is the
+    // only value every path agrees on, including the ones Windows performs on its
+    // own (Snap, double-click, Win+arrow, drag-to-restore).
+    Q_PROPERTY(bool windowMaximized READ windowMaximized NOTIFY windowMaximizedChanged FINAL)
     Q_PROPERTY(bool maximizeButtonHovered READ maximizeButtonHovered NOTIFY maximizeButtonHoveredChanged FINAL)
     Q_PROPERTY(bool maximizeButtonPressed READ maximizeButtonPressed NOTIFY maximizeButtonPressedChanged FINAL)
     Q_PROPERTY(QColor borderColor READ borderColor WRITE setBorderColor NOTIFY borderColorChanged FINAL)
@@ -97,21 +106,53 @@ class QuickWindowChrome : public QObject, public QAbstractNativeEventFilter {
     // that changes such a property; today the only callers are C++.
     Q_INVOKABLE void refreshHandle();
 
-    // Re-asserts WS_THICKFRAME once Qt has written the window style for the last
-    // time, and must be called then rather than at attach.
+    // Re-asserts the window styles the native gestures are gated on, once Qt has
+    // written the window style for the last time, and must be called then rather
+    // than at attach.
     //
     // MEASURED: attach happens while the HWND still carries the framed style Qt
     // creates it with (WS_CAPTION|WS_THICKFRAME|WS_SYSMENU|...), so the check in
-    // ensureResizableStyle finds the bit already set and returns. Qt then applies
-    // Qt::FramelessWindowHint, which rewrites the whole style to WS_POPUP and
-    // takes WS_THICKFRAME with it -- and with it the native resize drag, Aero
-    // Snap and Win+Arrow, none of which look wrong in a screenshot.
+    // ensureNativeFrameStyle finds the bits already set and returns. Qt then
+    // applies Qt::FramelessWindowHint, which rewrites the whole style to WS_POPUP
+    // and takes all of them with it -- and with them the native resize drag, Aero
+    // Snap, Win+Arrow, double-click-to-maximize and the window menu, none of
+    // which look wrong in a screenshot.
     Q_INVOKABLE void applyNativeWindowStyle();
 
     // Incremental builders so QML can assemble the exclusion list from repeaters
     // without materialising a JS array first.
     Q_INVOKABLE void clearInteractiveRects();
     Q_INVOKABLE void addInteractiveRect(const QRectF& rect);
+
+    // Maximizes or restores through ShowWindow, which is what keeps Windows'
+    // own WINDOWPLACEMENT bookkeeping intact: the rect the window un-maximizes to
+    // is the one it last stood on, maintained by Windows rather than tracked
+    // alongside it.
+    Q_INVOKABLE void setWindowMaximized(bool maximized);
+    Q_INVOKABLE void toggleMaximized();
+
+    // Minimizes through ShowWindow for the same reason as the two above: Windows
+    // records WPF_RESTORETOMAXIMIZED in the placement when a MAXIMIZED window is
+    // minimized, and that flag is the only thing that brings it back maximized
+    // from the taskbar.
+    Q_INVOKABLE void minimizeWindow();
+
+    // Un-minimizes without deciding what to un-minimize INTO. SW_RESTORE is the
+    // gesture the taskbar button performs, so a window that was maximized comes
+    // back maximized; Qt's showNormal() forces WindowNoState and does not.
+    // A window that is not iconic is left alone.
+    Q_INVOKABLE void restoreWindow();
+
+    // What this window will occupy the screen with once it is shown again --
+    // the value to bank before hiding it to the tray.
+    //
+    // Two sources, and which one applies is documented, not guessed:
+    // IsZoomed answers for a window that is not minimized. For one that IS,
+    // WPF_RESTORETOMAXIMIZED is the authority ("the restored window will be
+    // maximized, regardless of whether it was maximized before it was
+    // minimized"), and it is valid ONLY while showCmd is SW_SHOWMINIMIZED --
+    // which is exactly the case being asked about here.
+    [[nodiscard]] Q_INVOKABLE bool willOccupyScreenMaximized() const;
 
     // Sets QWindow::icon and posts WM_SETICON for ICON_SMALL/ICON_BIG. Qt's own
     // icon path updates the frame; the taskbar BUTTON only follows WM_SETICON.
@@ -131,6 +172,8 @@ class QuickWindowChrome : public QObject, public QAbstractNativeEventFilter {
 
     [[nodiscard]] QRectF maximizeButtonRect() const noexcept;
     void setMaximizeButtonRect(const QRectF& rect);
+
+    [[nodiscard]] bool windowMaximized() const noexcept;
 
     [[nodiscard]] bool maximizeButtonHovered() const noexcept;
     [[nodiscard]] bool maximizeButtonPressed() const noexcept;
@@ -152,15 +195,16 @@ class QuickWindowChrome : public QObject, public QAbstractNativeEventFilter {
     void resizeBorderThicknessChanged();
     void interactiveRectsChanged();
     void maximizeButtonRectChanged();
+    void windowMaximizedChanged();
     void maximizeButtonHoveredChanged();
     void maximizeButtonPressedChanged();
     void borderColorChanged();
     void snapLayoutsEnabledChanged();
     void nonClientActivationWorkaroundChanged();
 
-    // Emitted on a completed NC click on maximizeButtonRect. QML owns the
-    // resulting visibility change (Window.Maximized <-> Window.Windowed) because
-    // the maximized state is read back from Window.visibility, not from Win32.
+    // Emitted on a completed NC click on maximizeButtonRect. The shell routes it
+    // back into toggleMaximized() rather than acting on it here, so the button and
+    // the title-bar control share one path.
     void maximizeButtonClicked();
 
   private:
@@ -173,6 +217,7 @@ class QuickWindowChrome : public QObject, public QAbstractNativeEventFilter {
     int resize_border_thickness_ = kDefaultResizeBorderThickness;
     QList<QRectF> interactive_rects_;
     QRectF maximize_button_rect_;
+    bool window_maximized_ = false;
     bool maximize_button_hovered_ = false;
     bool maximize_button_pressed_ = false;
     QColor border_color_;
@@ -182,15 +227,30 @@ class QuickWindowChrome : public QObject, public QAbstractNativeEventFilter {
     // WM_NCMOUSEMOVE.
     bool non_client_leave_tracked_ = false;
 
+    // What the DWM border attribute was last set to, and on which handle. Mutable
+    // because applyBorderColor is const: it changes the window, never this object's
+    // observable state. `quint32` rather than COLORREF to keep <windows.h> out of a
+    // header moc-generated translation units include.
+    mutable quint32 applied_border_color_ = 0;
+    mutable bool applied_border_valid_ = false;
+    mutable void* applied_border_hwnd_ = nullptr;
+
+    // Re-reads IsZoomed and emits on a real change. Called from the message
+    // stream rather than from a state setter: the state has writers this process
+    // never sees -- Snap, the window menu, Win+arrow, the drag that pulls a
+    // maximized window loose.
+    void refreshWindowMaximized();
+
     void setMaximizeButtonHovered(bool hovered);
     void setMaximizeButtonPressed(bool pressed);
 
-    // Reads the live client rect and devicePixelRatio, then resolves the HT* code.
-    // Returns HTNOWHERE-equivalent 0 only if the window is gone.
+    // Reads the live client rect and scale factor, then resolves the HT* code.
+    // A window that is gone falls back to HTCLIENT: Windows already resolved the
+    // point to this HWND, so claiming HTNOWHERE for it would be a lie.
     [[nodiscard]] qintptr resolveHitTest(qintptr lparam) const;
 
     void applyBorderColor(const char* reason) const;
-    void ensureResizableStyle() const;
+    void ensureNativeFrameStyle() const;
 };
 
 } // namespace exosnap::quick

@@ -327,6 +327,17 @@ Item {
                 function onChromeChanged(): void {
                     Qt.callLater(titleBar.refreshChromeGeometry);
                 }
+
+                // Maximizing moves every window button by the difference between
+                // the restored and the maximized width. Relying on the band's own
+                // width change to notice is not enough: the state flip and the
+                // resize do not arrive as one event, and a rect left describing
+                // the restored window puts the buttons outside every known
+                // rectangle, where the hit test answers HTCAPTION and the band
+                // drags instead of minimizing or maximizing.
+                function onWindowMaximizedChanged(): void {
+                    Qt.callLater(titleBar.refreshChromeGeometry);
+                }
             }
 
             RowLayout {
@@ -471,6 +482,14 @@ Item {
                     Layout.fillWidth: true
                     Layout.maximumWidth: implicitWidth
                     Layout.minimumWidth: 0
+                    // The pill is elastic and its text changes with the recording
+                    // state, so every state transition shifts the bell and all
+                    // three window buttons sideways. Without this the pushed-down
+                    // rects keep describing where those items used to be, and the
+                    // Maximize button's HTMAXBUTTON rect in particular ends up
+                    // beside the button: the band answers HTCAPTION where the
+                    // button now is, so it drags instead of maximizing.
+                    onWidthChanged: Qt.callLater(titleBar.refreshChromeGeometry)
                 }
 
                 NotificationBell {
@@ -503,6 +522,14 @@ Item {
                     kind: root.windowMaximized ? "restore" : "maximize"
                     Accessible.name: root.windowMaximized ? qsTr("Restore") : qsTr("Maximize")
                     Layout.minimumWidth: implicitWidth
+                    // This button's rect answers HTMAXBUTTON, so Qt delivers no
+                    // mouse event over it and `hovered` never becomes true. Only
+                    // the pointer state is taken from the chrome here: activation
+                    // arrives as QuickWindowChrome::maximizeButtonClicked, which
+                    // the window itself already acts on. Handling it here as well
+                    // toggles the window twice per click.
+                    nonClientHovered: root.chrome ? root.chrome.maximizeButtonHovered : false
+                    nonClientPressed: root.chrome ? root.chrome.maximizeButtonPressed : false
                     onClicked: root.maximizeRestoreRequested()
                 }
 

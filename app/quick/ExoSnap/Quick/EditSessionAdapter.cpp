@@ -65,8 +65,8 @@ void EditSessionAdapter::setEditContext(const EditContext& context) {
 
     keyframe_timestamps_.clear();
     trim_snap_ready_ = false;
-    trim_start_us_ = recorder_core::TrimRange::kNoTimestamp;
-    trim_end_us_ = recorder_core::TrimRange::kNoTimestamp;
+    trim_start_us_ = exosnap::engine::TrimRange::kNoTimestamp;
+    trim_end_us_ = exosnap::engine::TrimRange::kNoTimestamp;
     position_ms_ = 0;
 
     applyReport(context_);
@@ -130,16 +130,16 @@ qint64 EditSessionAdapter::durationMs() const noexcept {
 }
 
 qint64 EditSessionAdapter::trimStartMs() const noexcept {
-    return trim_start_us_ != recorder_core::TrimRange::kNoTimestamp ? trim_start_us_ / 1000 : 0;
+    return trim_start_us_ != exosnap::engine::TrimRange::kNoTimestamp ? trim_start_us_ / 1000 : 0;
 }
 
 qint64 EditSessionAdapter::trimEndMs() const noexcept {
-    return trim_end_us_ != recorder_core::TrimRange::kNoTimestamp ? trim_end_us_ / 1000 : duration_ms_;
+    return trim_end_us_ != exosnap::engine::TrimRange::kNoTimestamp ? trim_end_us_ / 1000 : duration_ms_;
 }
 
 bool EditSessionAdapter::trimmed() const noexcept {
-    return duration_ms_ > 0 && (trim_start_us_ != recorder_core::TrimRange::kNoTimestamp ||
-                                trim_end_us_ != recorder_core::TrimRange::kNoTimestamp);
+    return duration_ms_ > 0 && (trim_start_us_ != exosnap::engine::TrimRange::kNoTimestamp ||
+                                trim_end_us_ != exosnap::engine::TrimRange::kNoTimestamp);
 }
 
 bool EditSessionAdapter::trimSnapReady() const noexcept {
@@ -203,10 +203,10 @@ void EditSessionAdapter::requestTrim(qint64 start_ms, qint64 end_ms) {
     const qint64 clamped_start = ClampTrimStartMs(start_ms, clamped_end);
 
     const int64_t start_us = clamped_start <= 0
-                                 ? recorder_core::TrimRange::kNoTimestamp
+                                 ? exosnap::engine::TrimRange::kNoTimestamp
                                  : SnapTrimBoundaryUs(clamped_start * 1000, keyframe_timestamps_, markers_);
     const int64_t end_us = clamped_end >= duration_ms_
-                               ? recorder_core::TrimRange::kNoTimestamp
+                               ? exosnap::engine::TrimRange::kNoTimestamp
                                : SnapTrimBoundaryUs(clamped_end * 1000, keyframe_timestamps_, markers_);
 
     setTrimUs(start_us, end_us);
@@ -214,7 +214,7 @@ void EditSessionAdapter::requestTrim(qint64 start_ms, qint64 end_ms) {
     // Show the frame at the boundary that actually moved. A drag of the in-point
     // is answered by the in-point; a drag of the out-point by the out-point.
     const int64_t shown_us = clamped_start <= 0 ? end_us : start_us;
-    if (shown_us != recorder_core::TrimRange::kNoTimestamp)
+    if (shown_us != exosnap::engine::TrimRange::kNoTimestamp)
         emit seekRequested(shown_us / 1000);
 }
 
@@ -266,8 +266,8 @@ void EditSessionAdapter::close() {
     context_ = EditContext{};
     keyframe_timestamps_.clear();
     trim_snap_ready_ = false;
-    trim_start_us_ = recorder_core::TrimRange::kNoTimestamp;
-    trim_end_us_ = recorder_core::TrimRange::kNoTimestamp;
+    trim_start_us_ = exosnap::engine::TrimRange::kNoTimestamp;
+    trim_end_us_ = exosnap::engine::TrimRange::kNoTimestamp;
     duration_ms_ = 0;
     position_ms_ = 0;
     open_ = false;
@@ -359,18 +359,18 @@ void EditSessionAdapter::applyReport(const EditContext& context) {
     if (has_snapshot) {
         QString health = QStringLiteral("Unknown");
         switch (snapshot.health) {
-        case recorder_core::PipelineHealth::Good:
+        case exosnap::engine::PipelineHealth::Good:
             health = QStringLiteral("Good");
             break;
-        case recorder_core::PipelineHealth::Warning:
+        case exosnap::engine::PipelineHealth::Warning:
             health = QStringLiteral("Warning");
             report_severity_ = ReportSeverity::Warning;
             break;
-        case recorder_core::PipelineHealth::Critical:
+        case exosnap::engine::PipelineHealth::Critical:
             health = QStringLiteral("Critical");
             report_severity_ = ReportSeverity::Critical;
             break;
-        case recorder_core::PipelineHealth::Unavailable:
+        case exosnap::engine::PipelineHealth::Unavailable:
             health = QStringLiteral("Unavailable");
             break;
         default:
@@ -432,7 +432,7 @@ void EditSessionAdapter::startKeyframeScan() {
     const std::filesystem::path master(context_.mkv_master_path.toStdWString());
     QPointer<EditSessionAdapter> guard(this);
     keyframe_pool_.start([this, guard, generation, master]() {
-        std::vector<int64_t> keyframes = recorder_core::ExtractKeyframeTimestamps(master);
+        std::vector<int64_t> keyframes = exosnap::engine::ExtractKeyframeTimestamps(master);
         QMetaObject::invokeMethod(
             this,
             [this, guard, generation, keyframes = std::move(keyframes)]() mutable {

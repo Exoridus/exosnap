@@ -19,7 +19,7 @@
 #include <QString>
 #include <QStringList>
 
-namespace recorder_core {
+namespace exosnap::engine {
 struct RecorderConfig;
 }
 
@@ -45,7 +45,7 @@ struct EffectiveRecordingConfig {
 // Excludes everything that legitimately differs between two comparable runs:
 // the output path, the capture target's transient handles, and the webcam frame
 // provider pointer. Everything that changes what is encoded is included.
-[[nodiscard]] EffectiveRecordingConfig DescribeEffectiveConfig(const recorder_core::RecorderConfig& config);
+[[nodiscard]] EffectiveRecordingConfig DescribeEffectiveConfig(const exosnap::engine::RecorderConfig& config);
 
 [[nodiscard]] EffectiveRecordingConfig UnavailableEffectiveConfig();
 

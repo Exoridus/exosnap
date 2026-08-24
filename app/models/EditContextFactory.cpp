@@ -42,7 +42,7 @@ EditContext MakeEditContext(const CompletedRecording& recording) {
 
 EditContext MakeEditContextForCurrentSession(const CompletedRecording& recording, const QString& mkv_master_path,
                                              double peak_av_drift_ms, bool av_drift_available,
-                                             const recorder_core::RecordingDiagnosticsSnapshot& completed_snapshot) {
+                                             const exosnap::engine::RecordingDiagnosticsSnapshot& completed_snapshot) {
     EditContext ctx = MakeEditContext(recording);
     // An empty master path means the session never learned one; keep the
     // fallback rather than handing the player an empty file name.

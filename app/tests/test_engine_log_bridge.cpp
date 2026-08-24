@@ -1,7 +1,7 @@
 // The engine's logger used to stay uninitialised in production: every log() call
 // returned early, so the capture path's decisions never reached the user. These tests
 // drive the real bridge — InitializeEngineLogging() plus a genuine
-// recorder_core::logging::log() call — and assert the record lands in AppLog.
+// exosnap::engine::logging::log() call — and assert the record lands in AppLog.
 
 #include <gtest/gtest.h>
 
@@ -11,7 +11,7 @@
 #include "diagnostics/AppLog.h"
 #include "diagnostics/EngineLogBridge.h"
 
-#include <recorder_core/logging/logging.h>
+#include <exosnap/engine/logging/logging.h>
 
 namespace exosnap {
 namespace {
@@ -53,8 +53,8 @@ class EngineLogBridgeTest : public ::testing::Test {
 };
 
 TEST_F(EngineLogBridgeTest, EngineRecordsReachTheApplicationLog) {
-    const recorder_core::logging::LogField field{"mode", "hdr10-native"};
-    recorder_core::logging::log(recorder_core::logging::LogLevel::Info, "capture.hdr", "resolved", {&field, 1});
+    const exosnap::engine::logging::LogField field{"mode", "hdr10-native"};
+    exosnap::engine::logging::log(exosnap::engine::logging::LogLevel::Info, "capture.hdr", "resolved", {&field, 1});
 
     const auto entry = FindLast(QStringLiteral("capture.hdr"));
     ASSERT_TRUE(entry.has_value()) << "an engine record must appear in AppLog";
@@ -65,8 +65,8 @@ TEST_F(EngineLogBridgeTest, EngineRecordsReachTheApplicationLog) {
 }
 
 TEST_F(EngineLogBridgeTest, EngineSeveritiesMapOntoApplicationSeverities) {
-    recorder_core::logging::log(recorder_core::logging::LogLevel::Warn, "capture.warn", "degraded");
-    recorder_core::logging::log(recorder_core::logging::LogLevel::Error, "capture.err", "lost");
+    exosnap::engine::logging::log(exosnap::engine::logging::LogLevel::Warn, "capture.warn", "degraded");
+    exosnap::engine::logging::log(exosnap::engine::logging::LogLevel::Error, "capture.err", "lost");
 
     const auto warn = FindLast(QStringLiteral("capture.warn"));
     const auto err = FindLast(QStringLiteral("capture.err"));
@@ -80,8 +80,8 @@ TEST_F(EngineLogBridgeTest, EngineSeveritiesMapOntoApplicationSeverities) {
 // losing the distinction between a genuinely fatal engine state and a routine,
 // recoverable error in the Logs page.
 TEST_F(EngineLogBridgeTest, CriticalStaysDistinctFromError) {
-    recorder_core::logging::log(recorder_core::logging::LogLevel::Error, "capture.err2", "lost");
-    recorder_core::logging::log(recorder_core::logging::LogLevel::Critical, "capture.crit", "fatal");
+    exosnap::engine::logging::log(exosnap::engine::logging::LogLevel::Error, "capture.err2", "lost");
+    exosnap::engine::logging::log(exosnap::engine::logging::LogLevel::Critical, "capture.crit", "fatal");
 
     const auto err = FindLast(QStringLiteral("capture.err2"));
     const auto crit = FindLast(QStringLiteral("capture.crit"));
@@ -96,7 +96,7 @@ TEST_F(EngineLogBridgeTest, CriticalStaysDistinctFromError) {
 // half-destroyed AppLog during application teardown.
 TEST_F(EngineLogBridgeTest, RecordsAfterShutdownDoNotReachTheApplicationLog) {
     ShutdownEngineLogging();
-    recorder_core::logging::log(recorder_core::logging::LogLevel::Info, "capture.after", "late");
+    exosnap::engine::logging::log(exosnap::engine::logging::LogLevel::Info, "capture.after", "late");
     EXPECT_FALSE(FindLast(QStringLiteral("capture.after")).has_value());
 
     InitializeEngineLogging(); // restore for TearDown symmetry

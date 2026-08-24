@@ -1,6 +1,6 @@
 // probe_edit_playback — MEASUREMENT ONLY, no product code changed. Backs the
 // 2026-08-01 investigation into whether EditPlayerEngine::StartPlaybackDecode
-// (libs/recorder_core/src/edit_player_engine.cpp) can sustain real-time
+// (libs/engine/src/edit_player_engine.cpp) can sustain real-time
 // playback of 1440p60 H.264 source material, or whether its decode path
 // (decode + YUV->BGRA convert + per-frame allocation) is the bottleneck
 // behind the reported stutter. Also the regression guard for the decoupled
@@ -8,7 +8,7 @@
 // step B must keep running to completion, never hang on teardown.
 //
 // Never touches the ExoSnap application itself; opens the given file
-// READ-ONLY via the real recorder_core::EditPlayerEngine class (same code the
+// READ-ONLY via the real exosnap::engine::EditPlayerEngine class (same code the
 // product uses) plus a small amount of standalone libavcodec/libavformat code
 // for the FFmpeg-threading check in step E. Writes nothing.
 //
@@ -101,7 +101,7 @@
 // assertion held (regardless of what the pure measurement steps themselves
 // show), 1 on a hard failure (bad args, Open failed, or step E's assertion).
 
-#include <recorder_core/edit_player_engine.h>
+#include <exosnap/engine/edit_player_engine.h>
 
 #include "step_g_simd.h"
 #include "yuv_to_bgra.h"
@@ -141,7 +141,7 @@ static inline const char* av_err2str_cpp(int errnum) noexcept {
 namespace {
 
 // ---- Step A: Open() ----
-bool StepA_Open(recorder_core::EditPlayerEngine& engine, const std::string& path) {
+bool StepA_Open(exosnap::engine::EditPlayerEngine& engine, const std::string& path) {
     printf("=== [A] Open ===\n");
     std::string err;
     const bool ok = engine.Open(path, err);
@@ -156,7 +156,7 @@ bool StepA_Open(recorder_core::EditPlayerEngine& engine, const std::string& path
 }
 
 // ---- Step B: real playback-decode throughput, max speed, 10s wall clock ----
-void StepB_PlaybackThroughput(recorder_core::EditPlayerEngine& engine, int64_t kStartUs) {
+void StepB_PlaybackThroughput(exosnap::engine::EditPlayerEngine& engine, int64_t kStartUs) {
     printf("=== [B] Playback-decode throughput (start_us=%lld, 10s wall clock, no pacing) ===\n",
            static_cast<long long>(kStartUs));
 
@@ -166,7 +166,7 @@ void StepB_PlaybackThroughput(recorder_core::EditPlayerEngine& engine, int64_t k
     std::atomic<uint32_t> firstWidth{0};
     std::atomic<uint32_t> firstHeight{0};
 
-    auto onVideo = [&](recorder_core::RawDecodedVideoFrame frame) {
+    auto onVideo = [&](exosnap::engine::RawDecodedVideoFrame frame) {
         videoFrames.fetch_add(1, std::memory_order_relaxed);
         bool expected = false;
         if (gotFirstFrame.compare_exchange_strong(expected, true)) {
@@ -177,7 +177,7 @@ void StepB_PlaybackThroughput(recorder_core::EditPlayerEngine& engine, int64_t k
         // destructed immediately, no WASAPI render, no pacing/sleep — this is
         // the maximum throughput the decode path can sustain.
     };
-    auto onAudio = [&](recorder_core::DecodedAudioBlock /*block*/) {
+    auto onAudio = [&](exosnap::engine::DecodedAudioBlock /*block*/) {
         audioBlocks.fetch_add(1, std::memory_order_relaxed);
     };
 
@@ -217,7 +217,7 @@ void StepB_PlaybackThroughput(recorder_core::EditPlayerEngine& engine, int64_t k
 // design most likely to regress into a hang. A single start/stop (step B)
 // does not exercise the reap path a SECOND start takes. Each cycle here must
 // terminate; if one hangs, this probe hangs, which is the signal.
-void StepB2_RepeatedStartStop(recorder_core::EditPlayerEngine& engine, int64_t kStartUs) {
+void StepB2_RepeatedStartStop(exosnap::engine::EditPlayerEngine& engine, int64_t kStartUs) {
     printf("=== [B2] Repeated start/stop on the same open engine (3 cycles, 300ms each) ===\n");
 
     constexpr int kCycles = 3;
@@ -226,8 +226,8 @@ void StepB2_RepeatedStartStop(recorder_core::EditPlayerEngine& engine, int64_t k
         std::atomic<uint64_t> audioBlocks{0};
         const auto t0 = std::chrono::steady_clock::now();
         engine.StartPlaybackDecode(
-            kStartUs, [&](recorder_core::RawDecodedVideoFrame) { videoFrames.fetch_add(1, std::memory_order_relaxed); },
-            [&](recorder_core::DecodedAudioBlock) { audioBlocks.fetch_add(1, std::memory_order_relaxed); }, {});
+            kStartUs, [&](exosnap::engine::RawDecodedVideoFrame) { videoFrames.fetch_add(1, std::memory_order_relaxed); },
+            [&](exosnap::engine::DecodedAudioBlock) { audioBlocks.fetch_add(1, std::memory_order_relaxed); }, {});
         std::this_thread::sleep_for(std::chrono::milliseconds(300));
         engine.StopPlaybackDecode();
         const double elapsedMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
@@ -262,7 +262,7 @@ void StepC_ConvertCost() {
     // allocation cost (that is step D).
     std::vector<uint8_t> bgra(static_cast<size_t>(kWidth) * kHeight * 4);
 
-    recorder_core::FullPlanarYuv420Frame src;
+    exosnap::engine::FullPlanarYuv420Frame src;
     src.y_plane = yPlane.data();
     src.y_stride_bytes = kWidth;
     src.u_plane = uPlane.data();
@@ -273,12 +273,12 @@ void StepC_ConvertCost() {
     src.height = kHeight;
     src.bits_per_sample = 8;
 
-    recorder_core::YuvToBgraParams params; // defaults: Bt709 / Limited
+    exosnap::engine::YuvToBgraParams params; // defaults: Bt709 / Limited
 
     constexpr int kIters = 100;
     const auto t0 = std::chrono::steady_clock::now();
     for (int i = 0; i < kIters; ++i) {
-        recorder_core::ConvertFullPlanarYuv420ToBgra(src, params, bgra.data(), kWidth * 4);
+        exosnap::engine::ConvertFullPlanarYuv420ToBgra(src, params, bgra.data(), kWidth * 4);
     }
     const auto t1 = std::chrono::steady_clock::now();
     const double totalMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
@@ -289,7 +289,7 @@ void StepC_ConvertCost() {
 //
 // 2026-08-01 follow-up: the editor player just gained a decode path for the
 // Expert 4:4:4 chroma option's recordings (AV_PIX_FMT_YUV444P, 8-bit only --
-// see recorder_core::ConvertFullPlanar444ToBgra). Same measurement shape as
+// see exosnap::engine::ConvertFullPlanar444ToBgra). Same measurement shape as
 // step C, same resolution and iteration count, so the two numbers are
 // directly comparable. No a-priori estimate here: the per-pixel arithmetic
 // drops the 4:2:0 pair/block bookkeeping (less work), but the chroma INPUT
@@ -311,7 +311,7 @@ void StepC2_Convert444CostAt(uint32_t kWidth, uint32_t kHeight) {
 
     std::vector<uint8_t> bgra(static_cast<size_t>(kWidth) * kHeight * 4);
 
-    recorder_core::FullPlanar444Frame src;
+    exosnap::engine::FullPlanar444Frame src;
     src.y_plane = yPlane.data();
     src.y_stride_bytes = kWidth;
     src.u_plane = uPlane.data();
@@ -321,22 +321,22 @@ void StepC2_Convert444CostAt(uint32_t kWidth, uint32_t kHeight) {
     src.width = kWidth;
     src.height = kHeight;
 
-    recorder_core::YuvToBgraParams params; // defaults: Bt709 / Limited
+    exosnap::engine::YuvToBgraParams params; // defaults: Bt709 / Limited
 
     constexpr int kIters = 100;
 
     const auto tScalar0 = std::chrono::steady_clock::now();
     for (int i = 0; i < kIters; ++i)
-        recorder_core::ConvertFullPlanar444ToBgraScalar(src, params, bgra.data(), kWidth * 4);
+        exosnap::engine::ConvertFullPlanar444ToBgraScalar(src, params, bgra.data(), kWidth * 4);
     const auto tScalar1 = std::chrono::steady_clock::now();
     const double scalarMs = std::chrono::duration<double, std::milli>(tScalar1 - tScalar0).count() / kIters;
 
-    const bool simdSupported = recorder_core::CpuSupportsYuvToBgraSimd();
+    const bool simdSupported = exosnap::engine::CpuSupportsYuvToBgraSimd();
     double simdMs = -1.0;
     if (simdSupported) {
         const auto tSimd0 = std::chrono::steady_clock::now();
         for (int i = 0; i < kIters; ++i)
-            recorder_core::ConvertFullPlanar444ToBgraSimd(src, params, bgra.data(), kWidth * 4);
+            exosnap::engine::ConvertFullPlanar444ToBgraSimd(src, params, bgra.data(), kWidth * 4);
         const auto tSimd1 = std::chrono::steady_clock::now();
         simdMs = std::chrono::duration<double, std::milli>(tSimd1 - tSimd0).count() / kIters;
     }
@@ -612,7 +612,7 @@ void StepG_SimdVariants() {
     for (size_t i = 0; i < vPlane.size(); ++i)
         vPlane[i] = static_cast<uint8_t>((i * 7) & 0xFF);
 
-    recorder_core::FullPlanarYuv420Frame src;
+    exosnap::engine::FullPlanarYuv420Frame src;
     src.y_plane = yPlane.data();
     src.y_stride_bytes = kWidth;
     src.u_plane = uPlane.data();
@@ -623,7 +623,7 @@ void StepG_SimdVariants() {
     src.height = kHeight;
     src.bits_per_sample = 8;
 
-    recorder_core::YuvToBgraParams params; // defaults: Bt709 / Limited, matches production default path
+    exosnap::engine::YuvToBgraParams params; // defaults: Bt709 / Limited, matches production default path
 
     const size_t bufBytes = static_cast<size_t>(kWidth) * kHeight * 4u;
     std::vector<uint8_t> outBaseline(bufBytes);
@@ -641,7 +641,7 @@ void StepG_SimdVariants() {
     };
 
     const double msBaseline = timeIt(
-        [&] { recorder_core::ConvertFullPlanarYuv420ToBgra(src, params, outBaseline.data(), kWidth * 4u); });
+        [&] { exosnap::engine::ConvertFullPlanarYuv420ToBgra(src, params, outBaseline.data(), kWidth * 4u); });
     const double msAutoVec =
         timeIt([&] { probe_g::ConvertFullPlanarYuv420ToBgra_AutoVec(src, params, outAutoVec.data(), kWidth * 4u); });
     const double msSse =
@@ -703,7 +703,7 @@ void StepG_SimdVariants() {
 // stutter pattern tied to the 120ms video cadence. The regression this
 // guards against is audio gaps correlated with the video stall, which would
 // mean the two paths are still coupled somewhere.
-void StepH_AudioContinuityUnderSlowVideo(recorder_core::EditPlayerEngine& engine, int64_t kStartUs) {
+void StepH_AudioContinuityUnderSlowVideo(exosnap::engine::EditPlayerEngine& engine, int64_t kStartUs) {
     printf("=== [H] Audio continuity while video is artificially throttled (120ms/frame, 10s wall clock) ===\n");
 
     struct AudioArrival {
@@ -718,7 +718,7 @@ void StepH_AudioContinuityUnderSlowVideo(recorder_core::EditPlayerEngine& engine
 
     std::atomic<uint64_t> videoFrames{0};
 
-    auto onVideo = [&](recorder_core::RawDecodedVideoFrame /*frame*/) {
+    auto onVideo = [&](exosnap::engine::RawDecodedVideoFrame /*frame*/) {
         videoFrames.fetch_add(1, std::memory_order_relaxed);
         // Simulates a video path that cannot keep up -- e.g. an unusually
         // large keyframe, a page fault, another process taking the core, or
@@ -729,7 +729,7 @@ void StepH_AudioContinuityUnderSlowVideo(recorder_core::EditPlayerEngine& engine
         std::this_thread::sleep_for(std::chrono::milliseconds(120));
     };
 
-    auto onAudio = [&](recorder_core::DecodedAudioBlock block) {
+    auto onAudio = [&](exosnap::engine::DecodedAudioBlock block) {
         const auto now = std::chrono::steady_clock::now();
         std::lock_guard<std::mutex> lock(arrivalsMutex);
         arrivals.push_back(AudioArrival{now, block.pts_us, block.frame_count});
@@ -838,7 +838,7 @@ void StepH_AudioContinuityUnderSlowVideo(recorder_core::EditPlayerEngine& engine
 // This is the one thing the other steps cannot see: they all start at a fixed
 // position and only ever compare deliveries against each other, never against
 // the position that was actually asked for.
-void StepI_SeekAlignment(recorder_core::EditPlayerEngine& engine, int64_t startUs) {
+void StepI_SeekAlignment(exosnap::engine::EditPlayerEngine& engine, int64_t startUs) {
     printf("=== [I] Seek alignment (start_us=%lld) ===\n", static_cast<long long>(startUs));
 
     std::mutex m;
@@ -847,14 +847,14 @@ void StepI_SeekAlignment(recorder_core::EditPlayerEngine& engine, int64_t startU
     int64_t firstVideoPts = 0;
     int64_t firstAudioPts = 0;
 
-    auto onVideo = [&](recorder_core::RawDecodedVideoFrame frame) {
+    auto onVideo = [&](exosnap::engine::RawDecodedVideoFrame frame) {
         std::lock_guard<std::mutex> lock(m);
         if (!haveVideo) {
             haveVideo = true;
             firstVideoPts = frame.pts_us;
         }
     };
-    auto onAudio = [&](recorder_core::DecodedAudioBlock block) {
+    auto onAudio = [&](exosnap::engine::DecodedAudioBlock block) {
         std::lock_guard<std::mutex> lock(m);
         if (!haveAudio) {
             haveAudio = true;
@@ -928,7 +928,7 @@ int main(int argc, char** argv) {
     }
     printf("[probe] path=%s start_us=%lld\n", path.c_str(), static_cast<long long>(startUs));
 
-    recorder_core::EditPlayerEngine engine;
+    exosnap::engine::EditPlayerEngine engine;
     if (!StepA_Open(engine, path)) {
         return 1;
     }

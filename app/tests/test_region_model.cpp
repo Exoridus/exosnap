@@ -1,15 +1,15 @@
 #include <gtest/gtest.h>
 
+#include <exosnap/engine/recorder_session.h>
 #include <filesystem>
-#include <recorder_core/recorder_session.h>
 
 namespace {
 
-using recorder_core::CaptureRegion;
-using recorder_core::CaptureTarget;
-using recorder_core::ErrorPhase;
-using recorder_core::RecorderConfig;
-using recorder_core::RecorderSession;
+using exosnap::engine::CaptureRegion;
+using exosnap::engine::CaptureTarget;
+using exosnap::engine::ErrorPhase;
+using exosnap::engine::RecorderConfig;
+using exosnap::engine::RecorderSession;
 
 // ---------------------------------------------------------------------------
 // CaptureRegion::IsValid
@@ -74,9 +74,9 @@ static RecorderConfig MakeBaseConfig() {
     cfg.output_path = std::filesystem::temp_directory_path() / "region_test_output.mkv";
     cfg.target.kind = CaptureTarget::Kind::Monitor;
     cfg.target.native_id = 1; // non-zero sentinel
-    cfg.container = recorder_core::Container::Matroska;
-    cfg.video_codec = recorder_core::VideoCodec::H264;
-    cfg.audio_codec = recorder_core::AudioCodec::Aac;
+    cfg.container = exosnap::engine::Container::Matroska;
+    cfg.video_codec = exosnap::engine::VideoCodec::H264;
+    cfg.audio_codec = exosnap::engine::AudioCodec::Aac;
     cfg.frame_rate_num = 60;
     cfg.frame_rate_den = 1;
     cfg.record_audio = false;
@@ -93,7 +93,7 @@ TEST(CaptureRegionValidation, ValidCropOnMonitorPasses) {
     region.height = 480;
     cfg.crop_region = region;
 
-    recorder_core::RecorderResult result;
+    exosnap::engine::RecorderResult result;
     EXPECT_TRUE(session.Validate(cfg, &result));
 }
 
@@ -102,7 +102,7 @@ TEST(CaptureRegionValidation, NoCropOnMonitorPasses) {
     RecorderConfig cfg = MakeBaseConfig();
     // crop_region not set
 
-    recorder_core::RecorderResult result;
+    exosnap::engine::RecorderResult result;
     EXPECT_TRUE(session.Validate(cfg, &result));
 }
 
@@ -116,7 +116,7 @@ TEST(CaptureRegionValidation, CropOnWindowTargetFails) {
     region.height = 480;
     cfg.crop_region = region;
 
-    recorder_core::RecorderResult result;
+    exosnap::engine::RecorderResult result;
     EXPECT_FALSE(session.Validate(cfg, &result));
     EXPECT_EQ(result.error_phase, ErrorPhase::Prepare);
 }
@@ -130,7 +130,7 @@ TEST(CaptureRegionValidation, TooSmallCropFails) {
     region.height = CaptureRegion::kMinDimension;
     cfg.crop_region = region;
 
-    recorder_core::RecorderResult result;
+    exosnap::engine::RecorderResult result;
     EXPECT_FALSE(session.Validate(cfg, &result));
     EXPECT_EQ(result.error_phase, ErrorPhase::Prepare);
 }
@@ -144,7 +144,7 @@ TEST(CaptureRegionValidation, BothDimensionsAtMinimumPasses) {
     region.height = CaptureRegion::kMinDimension;
     cfg.crop_region = region;
 
-    recorder_core::RecorderResult result;
+    exosnap::engine::RecorderResult result;
     EXPECT_TRUE(session.Validate(cfg, &result));
 }
 

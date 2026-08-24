@@ -5,7 +5,7 @@
 // _mm_mullo_epi32/_mm_packus_epi32, both effectively universal today).
 //
 // Follows the same 4:2:0 structure as the scalar original
-// (recorder_core::ConvertFullPlanarYuv420ToBgra, yuv_to_bgra.cpp): one
+// (exosnap::engine::ConvertFullPlanarYuv420ToBgra, yuv_to_bgra.cpp): one
 // chroma sample pair feeds two horizontal pixels; coefficients come from the
 // same fixed-point ComputeCoefs math (see fixed_coefs_copy.h).
 
@@ -40,8 +40,8 @@ inline __m128i ClampAndDup8(__m128i lo4, __m128i hi4) {
 
 } // namespace
 
-void ConvertFullPlanarYuv420ToBgra_SSE(const recorder_core::FullPlanarYuv420Frame& src,
-                                        const recorder_core::YuvToBgraParams& params, uint8_t* out_bgra,
+void ConvertFullPlanarYuv420ToBgra_SSE(const exosnap::engine::FullPlanarYuv420Frame& src,
+                                        const exosnap::engine::YuvToBgraParams& params, uint8_t* out_bgra,
                                         uint32_t out_stride_bytes) {
     if (src.width == 0 || src.height == 0 || src.y_plane == nullptr || src.u_plane == nullptr ||
         src.v_plane == nullptr || out_bgra == nullptr)

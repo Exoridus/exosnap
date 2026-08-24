@@ -28,6 +28,8 @@
 #include <update/update_types.h>
 #include <update_handoff/handoff.h>
 
+namespace exosnap::updater {
+
 // What argv alone can say. Deliberately separate from UpdaterArgs: parsing the
 // command line touches no file, so it stays pure and the IO failure modes of the
 // handoff document have their own vocabulary.
@@ -128,3 +130,5 @@ struct ManualContext {
 // machine. Kept as a function so "manual mode carries no target, no transaction
 // and no handed-over manifest" is stated once.
 [[nodiscard]] UpdaterArgs ArgsForManualStart(const UpdaterCommandLine& command_line);
+
+} // namespace exosnap::updater

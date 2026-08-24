@@ -12,8 +12,8 @@
 #include "soak_metrics.h"
 #include "soak_process_sampler.h"
 
-#include <recorder_core/pipeline_diagnostics.h>
-#include <recorder_core/session_stats.h>
+#include <exosnap/engine/pipeline_diagnostics.h>
+#include <exosnap/engine/session_stats.h>
 
 #include <atomic>
 #include <fstream>
@@ -34,8 +34,8 @@ class SoakRunner {
     // Thread-safe engine callback sinks — pass straight to
     // RecorderSession::SetStatsCallback / SetDiagnosticsCallback (or the synthetic
     // session's equivalents).
-    void OnStats(const recorder_core::SessionStats& stats);
-    void OnDiagnostics(const recorder_core::RecordingDiagnosticsSnapshot& diag);
+    void OnStats(const exosnap::engine::SessionStats& stats);
+    void OnDiagnostics(const exosnap::engine::RecordingDiagnosticsSnapshot& diag);
 
     // Start/stop the sampler thread. Start records t=0; Stop takes a final sample.
     void Start(double sample_interval_s);
@@ -66,8 +66,8 @@ class SoakRunner {
     std::ofstream jsonl_;
 
     mutable std::mutex latch_mutex_;
-    recorder_core::SessionStats last_stats_{};
-    recorder_core::RecordingDiagnosticsSnapshot last_diag_{};
+    exosnap::engine::SessionStats last_stats_{};
+    exosnap::engine::RecordingDiagnosticsSnapshot last_diag_{};
     bool have_stats_ = false;
     bool have_diag_ = false;
 

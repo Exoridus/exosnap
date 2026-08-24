@@ -2,7 +2,7 @@
 
 // EventQuery.h -- a bounded, read-only view of the structured event stream.
 //
-// The authoritative owner is recorder_core::logging: every structured event, from
+// The authoritative owner is exosnap::engine::logging: every structured event, from
 // the engine and from diagnostics::logEvent alike, goes through one logger, which
 // keeps a bounded in-memory ring (LoggerConfig::ringCapacity) alongside the JSONL
 // file. This queries THAT ring.

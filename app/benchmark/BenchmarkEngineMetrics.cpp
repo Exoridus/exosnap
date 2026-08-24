@@ -16,26 +16,26 @@ Metric Value(bool valid, double value, const char* probe) {
 // A metric the engine itself marks Unavailable must stay unavailable here. The
 // engine's rule — "metrics that cannot be measured are marked Unavailable rather
 // than reported as a fake zero" — would otherwise be undone at the report boundary.
-Metric Gated(bool valid, recorder_core::MetricAvailability availability, double value, const char* probe) {
-    const bool measured = valid && availability == recorder_core::MetricAvailability::Available;
+Metric Gated(bool valid, exosnap::engine::MetricAvailability availability, double value, const char* probe) {
+    const bool measured = valid && availability == exosnap::engine::MetricAvailability::Available;
     return measured ? MakeMetric(value, kSame, probe) : UnavailableMetric(kSame, probe);
 }
 
 } // namespace
 
-RecordingMetrics RecordingMetricsFromSnapshot(const recorder_core::RecordingDiagnosticsSnapshot& terminal,
-                                              const recorder_core::RecordingDiagnosticsSnapshot& baseline,
+RecordingMetrics RecordingMetricsFromSnapshot(const exosnap::engine::RecordingDiagnosticsSnapshot& terminal,
+                                              const exosnap::engine::RecordingDiagnosticsSnapshot& baseline,
                                               double measured_seconds) {
     const bool valid = terminal.valid;
-    const recorder_core::CaptureDiagnostics& capture = terminal.capture;
-    const recorder_core::EncoderDiagnostics& encoder = terminal.video_encoder;
+    const exosnap::engine::CaptureDiagnostics& capture = terminal.capture;
+    const exosnap::engine::EncoderDiagnostics& encoder = terminal.video_encoder;
 
     // Only difference against a baseline from the SAME session. A baseline from a
     // previous cycle would produce counters that look small because they were
     // subtracted against a larger number, i.e. a run that appears to have dropped
     // nothing precisely because it dropped more.
     const bool differenced = baseline.valid && baseline.session_generation == terminal.session_generation;
-    const recorder_core::CaptureDiagnostics& base = baseline.capture;
+    const exosnap::engine::CaptureDiagnostics& base = baseline.capture;
     const char* const window = differenced ? " over the measured window" : " over the whole session (no baseline)";
 
     // Saturating subtraction: a counter that somehow moved backwards must not wrap
@@ -47,9 +47,9 @@ RecordingMetrics RecordingMetricsFromSnapshot(const recorder_core::RecordingDiag
     };
 
     RecordingMetrics metrics;
-    metrics.target_fps = Value(valid, capture.target_fps, "recorder_core CaptureDiagnostics::target_fps");
+    metrics.target_fps = Value(valid, capture.target_fps, "engine CaptureDiagnostics::target_fps");
     metrics.actual_fps = Value(valid, capture.actual_fps,
-                               "recorder_core CaptureDiagnostics::actual_fps — the engine's rate over its LAST "
+                               "engine CaptureDiagnostics::actual_fps — the engine's rate over its LAST "
                                "publish interval, not a run average");
 
     const uint64_t emitted = delta(capture.frames_emitted, base.frames_emitted);
@@ -60,30 +60,30 @@ RecordingMetrics RecordingMetricsFromSnapshot(const recorder_core::RecordingDiag
             : UnavailableMetric(kSame, "derived: needs a valid snapshot and a non-zero measured window");
 
     metrics.frames_captured = Counter(valid, delta(capture.frames_captured, base.frames_captured),
-                                      "recorder_core CaptureDiagnostics::frames_captured (frames the capture "
+                                      "engine CaptureDiagnostics::frames_captured (frames the capture "
                                       "backend actually produced)");
-    metrics.frames_emitted = Counter(valid, emitted, "recorder_core CaptureDiagnostics::frames_emitted");
+    metrics.frames_emitted = Counter(valid, emitted, "engine CaptureDiagnostics::frames_emitted");
     metrics.frames_duplicated = Counter(valid, delta(capture.frames_duplicated, base.frames_duplicated),
-                                        "recorder_core CaptureDiagnostics::frames_duplicated (CFR hold)");
+                                        "engine CaptureDiagnostics::frames_duplicated (CFR hold)");
 
     metrics.frames_dropped_coalesced =
         Counter(valid, delta(capture.frames_dropped_coalesced, base.frames_dropped_coalesced),
-                "recorder_core: newer frame replaced an unconsumed one");
+                "engine: newer frame replaced an unconsumed one");
     metrics.frames_dropped_cfr = Counter(valid, delta(capture.frames_dropped_cfr, base.frames_dropped_cfr),
-                                         "recorder_core: scheduled CFR tick had nothing to encode yet");
+                                         "engine: scheduled CFR tick had nothing to encode yet");
     metrics.frames_dropped_backpressure =
         Counter(valid, delta(capture.frames_dropped_backpressure, base.frames_dropped_backpressure),
-                "recorder_core: all encoder input slots in flight");
+                "engine: all encoder input slots in flight");
     metrics.frames_dropped_processing_failure =
         Counter(valid, delta(capture.frames_dropped_processing_failure, base.frames_dropped_processing_failure),
-                "recorder_core: frame conversion failed");
+                "engine: frame conversion failed");
     // The engine's own definition of a drop that cost real picture — backpressure
     // plus processing failure, excluding the two benign pacing categories. Using
     // the engine's accessor rather than re-adding the fields keeps this report and
     // every user-facing drop surface on one definition.
     metrics.frames_dropped_problematic =
         Counter(valid, delta(capture.frames_dropped_problem(), base.frames_dropped_problem()),
-                "recorder_core CaptureDiagnostics::frames_dropped_problem() (backpressure + processing failure)");
+                "engine CaptureDiagnostics::frames_dropped_problem() (backpressure + processing failure)");
 
     // Stated once, on the metrics whose meaning depends on it.
     for (Metric* counter :
@@ -94,59 +94,59 @@ RecordingMetrics RecordingMetricsFromSnapshot(const recorder_core::RecordingDiag
     }
 
     metrics.acquire_average_ms = Gated(valid, capture.acquire_availability, capture.acquire_average_ms,
-                                       "recorder_core: capture acquire+copy CPU duration, average");
+                                       "engine: capture acquire+copy CPU duration, average");
     metrics.acquire_peak_ms = Gated(valid, capture.acquire_availability, capture.acquire_peak_ms,
-                                    "recorder_core: capture acquire+copy CPU duration, peak");
+                                    "engine: capture acquire+copy CPU duration, peak");
 
     metrics.encoder_queue_depth =
-        Counter(valid, encoder.backlog, "recorder_core EncoderDiagnostics::backlog (submitted - encoded)");
+        Counter(valid, encoder.backlog, "engine EncoderDiagnostics::backlog (submitted - encoded)");
     metrics.encoder_latency_ms =
-        Value(valid, encoder.p99_ms, "recorder_core EncoderDiagnostics::p99_ms (submit -> bitstream ready)");
+        Value(valid, encoder.p99_ms, "engine EncoderDiagnostics::p99_ms (submit -> bitstream ready)");
     // A running peak, not a sum: differencing it would be meaningless, so it is
     // reported as the session peak and labelled as such.
     metrics.mux_queue_depth =
-        Counter(valid, terminal.video_queue.peak_depth, "recorder_core: post-encode mux queue peak depth (session)");
+        Counter(valid, terminal.video_queue.peak_depth, "engine: post-encode mux queue peak depth (session)");
     metrics.audio_frames_dropped =
         Gated(valid, terminal.audio.discontinuity_availability,
               static_cast<double>(differenced && terminal.audio.discontinuities >= baseline.audio.discontinuities
                                       ? terminal.audio.discontinuities - baseline.audio.discontinuities
                                       : terminal.audio.discontinuities),
-              "recorder_core AudioDiagnostics::discontinuities");
+              "engine AudioDiagnostics::discontinuities");
     metrics.audio_frames_dropped.probe += window;
 
     metrics.av_drift_ms = Gated(valid, terminal.av_drift_availability, terminal.av_drift_ms,
-                                "recorder_core: residual A/V drift as it lands in the file");
+                                "engine: residual A/V drift as it lands in the file");
 
     // Session totals, NOT differenced against the warm-up baseline. The funnel is
     // only readable as a whole, and the one-shot shared-texture creation happens
     // during the warm-up: subtracting it would report a session that never
     // created a texture and still published through it.
-    const recorder_core::PreviewTapDiagnostics& tap = terminal.preview_tap;
+    const exosnap::engine::PreviewTapDiagnostics& tap = terminal.preview_tap;
     metrics.preview_tap_frames_seen =
-        Counter(valid, tap.frames_seen, "recorder_core: ticks that reached the preview tap with a frame (session)");
+        Counter(valid, tap.frames_seen, "engine: ticks that reached the preview tap with a frame (session)");
     metrics.preview_tap_gate_passes =
-        Counter(valid, tap.gate_passes, "recorder_core: tap ticks the ~30 Hz publish gate let through (session)");
+        Counter(valid, tap.gate_passes, "engine: tap ticks the ~30 Hz publish gate let through (session)");
     metrics.preview_tap_shared_texture_ready =
         Counter(valid, tap.shared_texture_ready ? 1 : 0,
-                "recorder_core: 1 once the shared texture exists and its handle reached the consumer");
+                "engine: 1 once the shared texture exists and its handle reached the consumer");
     metrics.preview_tap_publish_attempts =
-        Counter(valid, tap.publish_attempts, "recorder_core: PreviewSharedTexture::TryPublish calls (session)");
+        Counter(valid, tap.publish_attempts, "engine: PreviewSharedTexture::TryPublish calls (session)");
     metrics.preview_tap_publish_successes =
-        Counter(valid, tap.publish_successes, "recorder_core: TryPublish calls that took the keyed mutex (session)");
+        Counter(valid, tap.publish_successes, "engine: TryPublish calls that took the keyed mutex (session)");
     metrics.preview_tap_publish_mutex_misses =
         Counter(valid, tap.publish_mutex_misses,
-                "recorder_core: TryPublish calls that lost the 0 ms keyed-mutex acquire, WAIT_TIMEOUT (session)");
+                "engine: TryPublish calls that lost the 0 ms keyed-mutex acquire, WAIT_TIMEOUT (session)");
     metrics.preview_tap_publish_abandoned =
         Counter(valid, tap.publish_abandoned,
-                "recorder_core: TryPublish calls that found the keyed mutex abandoned — the shared surface is "
+                "engine: TryPublish calls that found the keyed mutex abandoned — the shared surface is "
                 "inconsistent and this transport generation cannot recover (session)");
     metrics.preview_tap_publish_failures =
-        Counter(valid, tap.publish_failures, "recorder_core: TryPublish acquires that failed outright (session)");
+        Counter(valid, tap.publish_failures, "engine: TryPublish acquires that failed outright (session)");
     metrics.preview_tap_publish_release_failures =
         Counter(valid, tap.publish_release_failures,
-                "recorder_core: copies made and then failed to release the key to the consumer (session)");
+                "engine: copies made and then failed to release the key to the consumer (session)");
     metrics.preview_tap_published_edges =
-        Counter(valid, tap.published_edges, "recorder_core: publish edges delivered to the consumer (session)");
+        Counter(valid, tap.published_edges, "engine: publish edges delivered to the consumer (session)");
     return metrics;
 }
 

@@ -49,8 +49,8 @@ inline void StoreBgra8(uint8_t* out, __m128i Bd, __m128i Gd, __m128i Rd, __m128i
 
 } // namespace
 
-void ConvertFullPlanarYuv420ToBgra_AVX2(const recorder_core::FullPlanarYuv420Frame& src,
-                                         const recorder_core::YuvToBgraParams& params, uint8_t* out_bgra,
+void ConvertFullPlanarYuv420ToBgra_AVX2(const exosnap::engine::FullPlanarYuv420Frame& src,
+                                         const exosnap::engine::YuvToBgraParams& params, uint8_t* out_bgra,
                                          uint32_t out_stride_bytes) {
     if (src.width == 0 || src.height == 0 || src.y_plane == nullptr || src.u_plane == nullptr ||
         src.v_plane == nullptr || out_bgra == nullptr)

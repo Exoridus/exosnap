@@ -25,7 +25,7 @@ void EditPlayerWorker::open(const QString& master_path, qint64 duration_ms, doub
     close();
     duration_ms_ = duration_ms;
     screen_hz_ = screen_hz;
-    session_ = std::make_unique<recorder_core::EditPlayerSession>();
+    session_ = std::make_unique<exosnap::engine::EditPlayerSession>();
     std::string error;
     if (!session_->Open(std::filesystem::path(master_path.toStdWString()), error)) {
         session_.reset();
@@ -36,7 +36,7 @@ void EditPlayerWorker::open(const QString& master_path, qint64 duration_ms, doub
     // with no UI-thread hop: the item's mailbox is thread-safe by design, and a
     // per-frame hop would undo the point of the GPU path.
     auto sink = sink_;
-    session_->SetOnFrameReady([sink](recorder_core::RawDecodedVideoFrame frame) { sink->deliver(std::move(frame)); });
+    session_->SetOnFrameReady([sink](exosnap::engine::RawDecodedVideoFrame frame) { sink->deliver(std::move(frame)); });
     ensureTimer();
     tick_timer_->setInterval(EditPreviewTickMsFor(session_->VideoFrameRate(), screen_hz_));
     // Poster frame: show the clip's first frame instead of the placeholder while

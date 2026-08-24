@@ -50,6 +50,12 @@ class RecordViewModelAdapter : public QObject {
     Q_PROPERTY(bool countdownActive READ countdownActive NOTIFY changed FINAL)
     Q_PROPERTY(bool preparing READ preparing NOTIFY changed FINAL)
     Q_PROPERTY(bool finalizing READ finalizing NOTIFY changed FINAL)
+    // How far the post-recording remux has got, 0..1, or -1 while no fraction is
+    // known -- which is every moment of Stopping, and the first instant of
+    // Saving before the remuxer has reported. Deliberately NOT folded into
+    // `finalizing`: a bar that starts at 0 % because nothing has been measured
+    // yet claims progress it does not have.
+    Q_PROPERTY(qreal savingProgress READ savingProgress NOTIFY savingProgressChanged FINAL)
     Q_PROPERTY(bool blocked READ blocked NOTIFY changed FINAL)
     Q_PROPERTY(bool failed READ failed NOTIFY changed FINAL)
 
@@ -136,6 +142,10 @@ class RecordViewModelAdapter : public QObject {
     [[nodiscard]] bool countdownActive() const noexcept;
     [[nodiscard]] bool preparing() const noexcept;
     [[nodiscard]] bool finalizing() const noexcept;
+    [[nodiscard]] qreal savingProgress() const noexcept;
+    // Fed by RecordingCoordinator's remux progress. Negative clears it, which is
+    // what leaving the Saving state does.
+    void setSavingProgress(float fraction);
     [[nodiscard]] bool blocked() const noexcept;
     [[nodiscard]] bool failed() const noexcept;
     [[nodiscard]] const QVariantList& targetOptions() const noexcept;
@@ -209,6 +219,7 @@ class RecordViewModelAdapter : public QObject {
     Q_INVOKABLE void clearNotice();
 
   signals:
+    void savingProgressChanged();
     void activeChanged();
     void stateTextChanged();
     void elapsedTextChanged();
@@ -234,6 +245,9 @@ class RecordViewModelAdapter : public QObject {
     void openEditorRequested();
 
   private:
+    // -1 means "not known", which is the resting value; see the property.
+    qreal saving_progress_ = -1.0;
+
     // Reads every property whose NOTIFY is `changed()`, in declaration order.
     [[nodiscard]] QVariantList changedPropertySnapshot() const;
     // Emits `changed()` only when that snapshot actually moved. The single funnel

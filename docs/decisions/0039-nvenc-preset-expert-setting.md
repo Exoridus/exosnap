@@ -25,7 +25,7 @@ and `RateControlMode` (ADR 0009) selects CQP/VBR/CBR.
 ## Decision
 
 1. **One uniform model, no per-codec branching.** A canonical
-   `recorder_core::NvencPreset { P1..P7 }` enum, carried as `RecorderConfig::nvenc_preset`
+   `exosnap::engine::NvencPreset { P1..P7 }` enum, carried as `RecorderConfig::nvenc_preset`
    and `OutputSettingsModel::nvenc_preset`, resolved to the SDK GUID by the pure, testable
    `NvencPresetToGuid()` mapping (same pattern as `ApplyColorMetadataToNvenc`). The mapping
    applies identically to H.264, HEVC, and AV1 — P1–P7 exist uniformly for all three

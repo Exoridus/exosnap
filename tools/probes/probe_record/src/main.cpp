@@ -33,11 +33,11 @@
 #include <dxgi1_6.h>
 #include <wrl/client.h>
 
-#include <recorder_core/codec_types.h>
-#include <recorder_core/hdr_color_space.h>
-#include <recorder_core/hdr_native.h>
-#include <recorder_core/mp4_remuxer.h>
-#include <recorder_core/recorder_session.h>
+#include <exosnap/engine/codec_types.h>
+#include <exosnap/engine/hdr_color_space.h>
+#include <exosnap/engine/hdr_native.h>
+#include <exosnap/engine/mp4_remuxer.h>
+#include <exosnap/engine/recorder_session.h>
 
 #include <atomic>
 #include <chrono>
@@ -47,7 +47,7 @@
 #include <string>
 #include <thread>
 
-using namespace recorder_core;
+using namespace exosnap::engine;
 
 namespace {
 
@@ -165,7 +165,7 @@ HdrDisplayFacts QueryMonitorHdrFacts(HMONITOR hmonitor) {
             if (SUCCEEDED(output->GetDesc(&desc)) && desc.Monitor == hmonitor && SUCCEEDED(output.As(&out6))) {
                 DXGI_OUTPUT_DESC1 d{};
                 if (SUCCEEDED(out6->GetDesc1(&d))) {
-                    facts.hdr_active = recorder_core::IsHdrColorSpace(d.ColorSpace);
+                    facts.hdr_active = exosnap::engine::IsHdrColorSpace(d.ColorSpace);
                     facts.red_primary_x = d.RedPrimary[0];
                     facts.red_primary_y = d.RedPrimary[1];
                     facts.green_primary_x = d.GreenPrimary[0];

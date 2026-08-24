@@ -4,7 +4,7 @@
 
 #include "ui/CodecLabels.h"
 
-// capability:: lives in exosnap::capability (nested); recorder_core:: is global.
+// capability:: lives in exosnap::capability (nested); exosnap::engine:: is global.
 // Sit in namespace exosnap so the unqualified capability:: resolves like it does
 // in ConfigPage/RecordPage.
 namespace exosnap {
@@ -25,10 +25,10 @@ TEST(CodecLabelsTest, ContainerCanonCasingAgreesAcrossEnumFamilies) {
     EXPECT_EQ(containerLabel(capability::Container::Mp4), QStringLiteral("MP4"));
     EXPECT_EQ(containerLabel(capability::Container::WebM), QStringLiteral("WebM"));
 
-    EXPECT_EQ(containerLabel(recorder_core::Container::Matroska), containerLabel(capability::Container::Matroska));
-    EXPECT_EQ(containerLabel(recorder_core::Container::Mp4), containerLabel(capability::Container::Mp4));
-    EXPECT_EQ(containerLabel(recorder_core::Container::WebM), containerLabel(capability::Container::WebM));
-    EXPECT_EQ(containerLabel(recorder_core::Container::WebM), QStringLiteral("WebM"));
+    EXPECT_EQ(containerLabel(exosnap::engine::Container::Matroska), containerLabel(capability::Container::Matroska));
+    EXPECT_EQ(containerLabel(exosnap::engine::Container::Mp4), containerLabel(capability::Container::Mp4));
+    EXPECT_EQ(containerLabel(exosnap::engine::Container::WebM), containerLabel(capability::Container::WebM));
+    EXPECT_EQ(containerLabel(exosnap::engine::Container::WebM), QStringLiteral("WebM"));
 }
 
 TEST(CodecLabelsTest, VideoCodecCanonCasing) {
@@ -36,9 +36,9 @@ TEST(CodecLabelsTest, VideoCodecCanonCasing) {
     EXPECT_EQ(videoCodecLabel(capability::VideoCodec::Hevc), QStringLiteral("HEVC"));
     EXPECT_EQ(videoCodecLabel(capability::VideoCodec::Av1), QStringLiteral("AV1"));
 
-    EXPECT_EQ(videoCodecLabel(recorder_core::VideoCodec::H264), QStringLiteral("H.264"));
-    EXPECT_EQ(videoCodecLabel(recorder_core::VideoCodec::Hevc), QStringLiteral("HEVC"));
-    EXPECT_EQ(videoCodecLabel(recorder_core::VideoCodec::Av1), QStringLiteral("AV1"));
+    EXPECT_EQ(videoCodecLabel(exosnap::engine::VideoCodec::H264), QStringLiteral("H.264"));
+    EXPECT_EQ(videoCodecLabel(exosnap::engine::VideoCodec::Hevc), QStringLiteral("HEVC"));
+    EXPECT_EQ(videoCodecLabel(exosnap::engine::VideoCodec::Av1), QStringLiteral("AV1"));
 }
 
 TEST(CodecLabelsTest, AudioCodecCanonCasingNeverUppercaseOpus) {
@@ -47,10 +47,10 @@ TEST(CodecLabelsTest, AudioCodecCanonCasingNeverUppercaseOpus) {
     EXPECT_EQ(audioCodecLabel(capability::AudioCodec::Pcm), QStringLiteral("PCM"));
     EXPECT_EQ(audioCodecLabel(capability::AudioCodec::Flac), QStringLiteral("FLAC"));
 
-    EXPECT_EQ(audioCodecLabel(recorder_core::AudioCodec::Opus), QStringLiteral("Opus"));
-    EXPECT_EQ(audioCodecLabel(recorder_core::AudioCodec::Aac), QStringLiteral("AAC"));
-    EXPECT_EQ(audioCodecLabel(recorder_core::AudioCodec::Pcm), QStringLiteral("PCM"));
-    EXPECT_EQ(audioCodecLabel(recorder_core::AudioCodec::Flac), QStringLiteral("FLAC"));
+    EXPECT_EQ(audioCodecLabel(exosnap::engine::AudioCodec::Opus), QStringLiteral("Opus"));
+    EXPECT_EQ(audioCodecLabel(exosnap::engine::AudioCodec::Aac), QStringLiteral("AAC"));
+    EXPECT_EQ(audioCodecLabel(exosnap::engine::AudioCodec::Pcm), QStringLiteral("PCM"));
+    EXPECT_EQ(audioCodecLabel(exosnap::engine::AudioCodec::Flac), QStringLiteral("FLAC"));
 }
 
 TEST(CodecLabelsTest, FrameRateLabelFormats) {

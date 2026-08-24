@@ -18,7 +18,7 @@
 #include <d3d11.h>
 #include <wrl/client.h>
 
-#include <recorder_core/edit_frame_gpu_converter.h>
+#include <exosnap/engine/edit_frame_gpu_converter.h>
 
 #include <algorithm>
 #include <cmath>
@@ -109,7 +109,7 @@ class EditPlayerTextureNode final : public QSGNode {
             return false;
         }
 
-        frame_converter_ = std::make_unique<recorder_core::EditFrameGpuConverter>();
+        frame_converter_ = std::make_unique<exosnap::engine::EditFrameGpuConverter>();
         std::string converter_error;
         if (!frame_converter_->Init(device_, context_, converter_error)) {
             error = QStringLiteral("Initializing the editor GPU colour conversion failed: %1")
@@ -151,7 +151,7 @@ class EditPlayerTextureNode final : public QSGNode {
         return true;
     }
 
-    bool upload(const recorder_core::RawDecodedVideoFrame& frame, QString& error) {
+    bool upload(const exosnap::engine::RawDecodedVideoFrame& frame, QString& error) {
         if (!ensureTextures(frame.width, frame.height, error))
             return false;
 
@@ -247,7 +247,7 @@ class EditPlayerTextureNode final : public QSGNode {
     ID3D11DeviceContext* context_ = nullptr;
     ComPtr<ID3D11Texture2D> converted_texture_;
     ComPtr<ID3D11Texture2D> display_texture_;
-    std::unique_ptr<recorder_core::EditFrameGpuConverter> frame_converter_;
+    std::unique_ptr<exosnap::engine::EditFrameGpuConverter> frame_converter_;
     std::unique_ptr<QuickPreviewRgbaConverter> rgba_converter_;
 
     uint32_t width_ = 0;
@@ -307,7 +307,7 @@ const QString& ExoEditPlayerItem::errorText() const noexcept {
     return error_text_;
 }
 
-void ExoEditPlayerItem::presentFrame(recorder_core::RawDecodedVideoFrame frame) {
+void ExoEditPlayerItem::presentFrame(exosnap::engine::RawDecodedVideoFrame frame) {
     // Present-gate, ahead of any GPU work: the playback clock has already passed
     // this frame's own timestamp, so drawing it would show the past.
     const int64_t clock = clock_us_.load(std::memory_order_relaxed);

@@ -4,8 +4,8 @@
 
 namespace exosnap::capability {
 
-recorder_core::RecorderConfig ToRecorderCoreConfig(const UserRecorderConfig& config, const CapabilitySet& caps,
-                                                   ResolveResult* validation) {
+exosnap::engine::RecorderConfig ToRecorderCoreConfig(const UserRecorderConfig& config, const CapabilitySet& caps,
+                                                     ResolveResult* validation) {
     SettingsResolver resolver(caps);
     ResolveResult resolved = resolver.ValidateConfig(config);
 
@@ -98,17 +98,17 @@ recorder_core::RecorderConfig ToRecorderCoreConfig(const UserRecorderConfig& con
         throw std::invalid_argument(failure.invalidity.back().message);
     }
 
-    recorder_core::RecorderConfig core_config;
-    core_config.chroma = (final_config.chroma == ChromaSubsampling::Cs444) ? recorder_core::ChromaSubsampling::Cs444
-                                                                           : recorder_core::ChromaSubsampling::Cs420;
-    core_config.bit_depth =
-        (final_config.bit_depth == BitDepth::Bit10) ? recorder_core::BitDepth::Bit10 : recorder_core::BitDepth::Bit8;
+    exosnap::engine::RecorderConfig core_config;
+    core_config.chroma = (final_config.chroma == ChromaSubsampling::Cs444) ? exosnap::engine::ChromaSubsampling::Cs444
+                                                                           : exosnap::engine::ChromaSubsampling::Cs420;
+    core_config.bit_depth = (final_config.bit_depth == BitDepth::Bit10) ? exosnap::engine::BitDepth::Bit10
+                                                                        : exosnap::engine::BitDepth::Bit8;
     // Colour range (0.7.0): always valid for every codec/container, so it is NOT
     // part of the combo allow-list above — just carry it through to the engine.
     // Primaries/transfer/matrix stay BT.709 SDR (the ColorMetadata defaults).
-    core_config.color.range = (final_config.color_range == ColorRange::Limited) ? recorder_core::ColorRange::Limited
-                                                                                : recorder_core::ColorRange::Full;
-    // HDR mode passes straight through — the same recorder_core::HdrMode enum
+    core_config.color.range = (final_config.color_range == ColorRange::Limited) ? exosnap::engine::ColorRange::Limited
+                                                                                : exosnap::engine::ColorRange::Full;
+    // HDR mode passes straight through — the same exosnap::engine::HdrMode enum
     // is shared by UserRecorderConfig and RecorderConfig, so there is no
     // per-value mapping to do. No BT.2020/PQ ColorMetadata is derived here
     // yet; that needs runtime display facts, still to be wired up.
@@ -119,66 +119,66 @@ recorder_core::RecorderConfig ToRecorderCoreConfig(const UserRecorderConfig& con
     core_config.output_height = final_config.output_height;
 
     if (is_webm_av1_opus) {
-        core_config.container = recorder_core::Container::WebM;
-        core_config.video_codec = recorder_core::VideoCodec::Av1;
-        core_config.audio_codec = recorder_core::AudioCodec::Opus;
+        core_config.container = exosnap::engine::Container::WebM;
+        core_config.video_codec = exosnap::engine::VideoCodec::Av1;
+        core_config.audio_codec = exosnap::engine::AudioCodec::Opus;
     } else if (is_mkv_av1_opus) {
-        core_config.container = recorder_core::Container::Matroska;
-        core_config.video_codec = recorder_core::VideoCodec::Av1;
-        core_config.audio_codec = recorder_core::AudioCodec::Opus;
+        core_config.container = exosnap::engine::Container::Matroska;
+        core_config.video_codec = exosnap::engine::VideoCodec::Av1;
+        core_config.audio_codec = exosnap::engine::AudioCodec::Opus;
     } else if (is_mkv_h264_aac) {
-        core_config.container = recorder_core::Container::Matroska;
-        core_config.video_codec = recorder_core::VideoCodec::H264;
-        core_config.audio_codec = recorder_core::AudioCodec::Aac;
+        core_config.container = exosnap::engine::Container::Matroska;
+        core_config.video_codec = exosnap::engine::VideoCodec::H264;
+        core_config.audio_codec = exosnap::engine::AudioCodec::Aac;
     } else if (is_mkv_h264_opus) {
-        core_config.container = recorder_core::Container::Matroska;
-        core_config.video_codec = recorder_core::VideoCodec::H264;
-        core_config.audio_codec = recorder_core::AudioCodec::Opus;
+        core_config.container = exosnap::engine::Container::Matroska;
+        core_config.video_codec = exosnap::engine::VideoCodec::H264;
+        core_config.audio_codec = exosnap::engine::AudioCodec::Opus;
     } else if (is_mkv_av1_pcm) {
-        core_config.container = recorder_core::Container::Matroska;
-        core_config.video_codec = recorder_core::VideoCodec::Av1;
-        core_config.audio_codec = recorder_core::AudioCodec::Pcm;
+        core_config.container = exosnap::engine::Container::Matroska;
+        core_config.video_codec = exosnap::engine::VideoCodec::Av1;
+        core_config.audio_codec = exosnap::engine::AudioCodec::Pcm;
     } else if (is_mkv_h264_pcm) {
-        core_config.container = recorder_core::Container::Matroska;
-        core_config.video_codec = recorder_core::VideoCodec::H264;
-        core_config.audio_codec = recorder_core::AudioCodec::Pcm;
+        core_config.container = exosnap::engine::Container::Matroska;
+        core_config.video_codec = exosnap::engine::VideoCodec::H264;
+        core_config.audio_codec = exosnap::engine::AudioCodec::Pcm;
     } else if (is_mkv_av1_flac) {
-        core_config.container = recorder_core::Container::Matroska;
-        core_config.video_codec = recorder_core::VideoCodec::Av1;
-        core_config.audio_codec = recorder_core::AudioCodec::Flac;
+        core_config.container = exosnap::engine::Container::Matroska;
+        core_config.video_codec = exosnap::engine::VideoCodec::Av1;
+        core_config.audio_codec = exosnap::engine::AudioCodec::Flac;
     } else if (is_mkv_h264_flac) {
-        core_config.container = recorder_core::Container::Matroska;
-        core_config.video_codec = recorder_core::VideoCodec::H264;
-        core_config.audio_codec = recorder_core::AudioCodec::Flac;
+        core_config.container = exosnap::engine::Container::Matroska;
+        core_config.video_codec = exosnap::engine::VideoCodec::H264;
+        core_config.audio_codec = exosnap::engine::AudioCodec::Flac;
     } else if (is_mkv_hevc_aac) {
-        core_config.container = recorder_core::Container::Matroska;
-        core_config.video_codec = recorder_core::VideoCodec::Hevc;
-        core_config.audio_codec = recorder_core::AudioCodec::Aac;
+        core_config.container = exosnap::engine::Container::Matroska;
+        core_config.video_codec = exosnap::engine::VideoCodec::Hevc;
+        core_config.audio_codec = exosnap::engine::AudioCodec::Aac;
     } else if (is_mkv_hevc_opus) {
-        core_config.container = recorder_core::Container::Matroska;
-        core_config.video_codec = recorder_core::VideoCodec::Hevc;
-        core_config.audio_codec = recorder_core::AudioCodec::Opus;
+        core_config.container = exosnap::engine::Container::Matroska;
+        core_config.video_codec = exosnap::engine::VideoCodec::Hevc;
+        core_config.audio_codec = exosnap::engine::AudioCodec::Opus;
     } else if (is_mkv_hevc_pcm) {
-        core_config.container = recorder_core::Container::Matroska;
-        core_config.video_codec = recorder_core::VideoCodec::Hevc;
-        core_config.audio_codec = recorder_core::AudioCodec::Pcm;
+        core_config.container = exosnap::engine::Container::Matroska;
+        core_config.video_codec = exosnap::engine::VideoCodec::Hevc;
+        core_config.audio_codec = exosnap::engine::AudioCodec::Pcm;
     } else if (is_mkv_hevc_flac) {
-        core_config.container = recorder_core::Container::Matroska;
-        core_config.video_codec = recorder_core::VideoCodec::Hevc;
-        core_config.audio_codec = recorder_core::AudioCodec::Flac;
+        core_config.container = exosnap::engine::Container::Matroska;
+        core_config.video_codec = exosnap::engine::VideoCodec::Hevc;
+        core_config.audio_codec = exosnap::engine::AudioCodec::Flac;
     } else if (is_mp4_h264_aac) {
-        core_config.container = recorder_core::Container::Mp4;
-        core_config.video_codec = recorder_core::VideoCodec::H264;
-        core_config.audio_codec = recorder_core::AudioCodec::Aac;
+        core_config.container = exosnap::engine::Container::Mp4;
+        core_config.video_codec = exosnap::engine::VideoCodec::H264;
+        core_config.audio_codec = exosnap::engine::AudioCodec::Aac;
     } else if (is_mp4_hevc_aac) {
-        core_config.container = recorder_core::Container::Mp4;
-        core_config.video_codec = recorder_core::VideoCodec::Hevc;
-        core_config.audio_codec = recorder_core::AudioCodec::Aac;
+        core_config.container = exosnap::engine::Container::Mp4;
+        core_config.video_codec = exosnap::engine::VideoCodec::Hevc;
+        core_config.audio_codec = exosnap::engine::AudioCodec::Aac;
     } else {
         // is_mkv_av1_aac
-        core_config.container = recorder_core::Container::Matroska;
-        core_config.video_codec = recorder_core::VideoCodec::Av1;
-        core_config.audio_codec = recorder_core::AudioCodec::Aac;
+        core_config.container = exosnap::engine::Container::Matroska;
+        core_config.video_codec = exosnap::engine::VideoCodec::Av1;
+        core_config.audio_codec = exosnap::engine::AudioCodec::Aac;
     }
 
     return core_config;

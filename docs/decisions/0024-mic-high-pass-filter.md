@@ -26,7 +26,7 @@ Add a 2nd-order Butterworth high-pass biquad (`HighPassFilter`) and a thin
 The decorator wraps the mic capture source and runs the enabled stages on its
 audio before the rest of the pipeline sees it.
 
-### DSP model (`libs/recorder_core/src/high_pass_filter.{h,cpp}`)
+### DSP model (`libs/engine/src/high_pass_filter.{h,cpp}`)
 
 - RBJ audio-EQ cookbook high-pass coefficients with `Q = 1/sqrt(2)`
   (Butterworth, maximally flat passband), evaluated at `Configure` time.
@@ -39,7 +39,7 @@ audio before the rest of the pipeline sees it.
 - `Reset` clears the per-channel registers; `Process` is allocation-free and
   `noexcept`. State carries across `Process` calls so a stream can be blocked.
 
-### Mic-DSP chain (`libs/recorder_core/src/mic_dsp_audio_src.{h,cpp}`)
+### Mic-DSP chain (`libs/engine/src/mic_dsp_audio_src.{h,cpp}`)
 
 `MicDspAudioSrc` is an `IAudioCaptureSource` decorator constructed from a
 `std::unique_ptr<IAudioCaptureSource> inner` and a `MicDspConfig`. `MicDspConfig`

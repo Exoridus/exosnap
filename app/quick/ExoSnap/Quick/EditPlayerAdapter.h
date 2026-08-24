@@ -8,7 +8,7 @@
 #include <QTimer>
 #include <QtQmlIntegration/qqmlintegration.h>
 
-#include <recorder_core/edit_player_session.h>
+#include <exosnap/engine/edit_player_session.h>
 
 #include <memory>
 #include <mutex>
@@ -31,7 +31,7 @@ class EditPlayerFrameSink {
   public:
     void attach(ExoEditPlayerItem* item);
     void detach(const ExoEditPlayerItem* item);
-    void deliver(recorder_core::RawDecodedVideoFrame frame);
+    void deliver(exosnap::engine::RawDecodedVideoFrame frame);
     void publishClock(int64_t media_time_us);
     void clear();
 

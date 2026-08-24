@@ -2,15 +2,15 @@
 
 #include <utility>
 
-#include <recorder_core/logging/logging.h>
+#include <exosnap/engine/logging/logging.h>
 
 namespace exosnap {
 
-using recorder_core::CaptureHubDecision;
-using recorder_core::CaptureHubEvent;
-using recorder_core::HubFrameKind;
-using recorder_core::ResolveHubFrame;
-using recorder_core::StepCaptureHub;
+using exosnap::engine::CaptureHubDecision;
+using exosnap::engine::CaptureHubEvent;
+using exosnap::engine::HubFrameKind;
+using exosnap::engine::ResolveHubFrame;
+using exosnap::engine::StepCaptureHub;
 
 CaptureSourceHub::CaptureSourceHub(std::unique_ptr<HubSourceProducer> producer) : producer_(std::move(producer)) {
 }
@@ -60,8 +60,8 @@ void CaptureSourceHub::LogOpenFailure(const std::string& err) {
     if (err == last_open_error_)
         return;
     last_open_error_ = err;
-    recorder_core::logging::log(
-        recorder_core::logging::LogLevel::Warn, "capture_hub",
+    exosnap::engine::logging::log(
+        exosnap::engine::logging::LogLevel::Warn, "capture_hub",
         "capture source failed to open: " + (err.empty() ? std::string("no reason given") : err), {});
 }
 

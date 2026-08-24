@@ -51,7 +51,7 @@ alarmistisch**, Engine UI-agnostisch, Policy im Resolver, keine versteckte MVP-E
     `setMinSeverity`/`minSeverity` `:459-467`); nullopt = „Off".
   - Export: `exportHistoryToFile` (`AppLog.cpp:403-431`) schreibt die In-Memory-History als Freitext.
 
-- **Engine-Log (strukturiert, JSON-Lines).** `libs/recorder_core/src/logging/logging.cpp`. `log()`
+- **Engine-Log (strukturiert, JSON-Lines).** `libs/engine/src/logging/logging.cpp`. `log()`
   (`:106-154`) serialisiert **pro Record ein JSON-Objekt** mit `timestamp_unix_ms`, `level`,
   `component`, `message`, `fields{}` (`:133-146`). `LogRecord`/`LogField`/`LoggerConfig`
   (`logging.h:15-40`). Ring-Buffer 512 (`snapshot_ring_buffer` `:156-160`), `minimumLevel = Info`.
@@ -65,7 +65,7 @@ alarmistisch**, Engine UI-agnostisch, Policy im Resolver, keine versteckte MVP-E
 - **Bridge.** `app/diagnostics/EngineLogBridge.cpp`. `InitializeEngineLogging` (`:44-60`) setzt
   `config.filePath = <logdir>/engine.jsonl` (`:49`) und einen Sink, der jeden Engine-Record in eine
   AppLog-Freitextzeile **flacht** (`Flatten` `:34-40`, hängt `key=value` an die Message an). D.h.
-  App→Engine-Abhängigkeit existiert bereits (App darf `recorder_core::logging::log` rufen).
+  App→Engine-Abhängigkeit existiert bereits (App darf `exosnap::engine::logging::log` rufen).
 
 ### Session-Identität
 
@@ -199,7 +199,7 @@ Konkret:
      `session = AppLog::sessionId()`.
 3. **App-seitiger strukturierter Entry-Point.** Neuer Header `app/diagnostics/StructuredLog.h`:
    `logEvent(LogSeverity, subsystem, event_code, std::initializer_list<LogField>)`. Er forwardet
-   **ausschließlich** an `recorder_core::logging::log(level, subsystem, event_code, fields)` → landet
+   **ausschließlich** an `exosnap::engine::logging::log(level, subsystem, event_code, fields)` → landet
    mit Session-ID im JSONL. Die vertraute AppLog-Freitextzeile erzeugt **er nicht selbst**, sondern
    der bereits existierende `EngineLogBridge`-Sink (`EngineLogBridge.cpp`), der **jeden** Engine-Record
    flacht: `component`→AppLog-category, `Flatten(record)`→`message = event_code` + `key=value`-Anhang.
@@ -294,7 +294,7 @@ Pure, testbare Kernfunktion: `BuildSessionReportJson(const SessionReportInputs&)
 App-Typen wie `UiRecordingResult` konsumiert). Der Schreiber (`QSaveFile` + Prune) ist eine dünne
 Schale drumherum.
 
-**JSON-Bibliothek im App-Layer = Qt-JSON (bewusst).** `nlohmann::json` ist an `recorder_core`
+**JSON-Bibliothek im App-Layer = Qt-JSON (bewusst).** `nlohmann::json` ist an `engine`
 **PRIVATE** gelinkt und im gesamten `app/`-Baum bisher **ungenutzt** (Grep: 0 Treffer). Es über eine
 neue `target_link_libraries(app … nlohmann_json)`-Zeile in die UI-Schicht zu ziehen, wäre unnötige
 Kopplung: der App-Layer ist durchgehend Qt, und die etablierten App-JSON-Schreiber
@@ -446,10 +446,10 @@ Jeder Schritt ist eine PR-fähige Einheit mit eigenem Testansatz. Reihenfolge = 
 
 **Schritt 1 — Log-Schema-Foundation (D1).**
 Dateien: `app/diagnostics/AppLog.{h,cpp}` (Session-ID + `sessionId()`, Banner),
-`libs/recorder_core/include/recorder_core/logging/logging.h` (+`baseFields` **und
-`maxFileBytes`/`maxFileCount`** in `LoggerConfig`), `libs/recorder_core/src/logging/logging.cpp`
+`libs/engine/include/exosnap/engine/logging/logging.h` (+`baseFields` **und
+`maxFileBytes`/`maxFileCount`** in `LoggerConfig`), `libs/engine/src/logging/logging.cpp`
 (`rotating_file_sink_mt` mit den Config-Schwellwerten + baseFields), neues
-`app/diagnostics/StructuredLog.{h,cpp}` (`logEvent` — forwardet **nur** an `recorder_core::logging::log`,
+`app/diagnostics/StructuredLog.{h,cpp}` (`logEvent` — forwardet **nur** an `exosnap::engine::logging::log`,
 **kein** direkter `AppLog::write`), `app/diagnostics/EngineLogBridge.cpp` (session-Feld setzen).
 Konventionsliste der `event_code`-Tokens (`>= Info`) in der ADR.
 Test: JSONL-Zeile enthält `session`; Rotation greift bei **klein gesetztem `maxFileBytes`** (zweite
@@ -458,7 +458,7 @@ Engine-Record** — Regressionstest gegen Doppel-Zeilen (Sink-Spy + AppLog-Histo
 `logEvent(Debug, …)` erzeugt bei `minimumLevel=Info` **keine** Ausgabe.
 
 **Schritt 2 — `EncoderInitInfo` + `peak_av_drift_ms` auf dem Snapshot (D2a + D2b-Peak).**
-Dateien: `libs/recorder_core/include/recorder_core/pipeline_diagnostics.h` (neue `EncoderInitInfo`-Struct
+Dateien: `libs/engine/include/exosnap/engine/pipeline_diagnostics.h` (neue `EncoderInitInfo`-Struct
 + Feld; zusätzlich `peak_av_drift_ms` + `peak_av_drift_availability`), Engine-Encoder-Befüllung
 (`nvenc_encoder.cpp` / der `SessionStatsCollector`-Pfad) für `EncoderInitInfo`, **Peak-Akkumulation im
 `pipeline_diagnostics_aggregator`** (laufendes Maximum von `|av_drift_ms|` pro Session), zusätzlich
@@ -608,7 +608,7 @@ eingearbeitet.
 - **[minor] Level-Interaktion offen** — *eingearbeitet.* Bestätigt: Engine `minimumLevel=Info` verwirft
   `logEvent(Debug)`; AppLog-„Off" ist unabhängig. Neuer D1-Punkt 4 legt `logEvent`-Konvention `>= Info`
   fest und entscheidet Offene Frage 5 (JSONL läuft entkoppelt vom AppLog-Level weiter).
-- **[minor] nlohmann PRIVATE an recorder_core** — *eingearbeitet.* Bestätigt: 0 Treffer im `app/`-Baum,
+- **[minor] nlohmann PRIVATE an engine** — *eingearbeitet.* Bestätigt: 0 Treffer im `app/`-Baum,
   PRIVATE-Link. Entscheidung: gesamter App-Layer-JSON dieser Spec nutzt **`QJsonDocument`** (konsistent
   mit `RecoveryManifestStore`/History); `BuildSessionReportJson` liefert `QByteArray`. Kein
   nlohmann-Link in `app`.

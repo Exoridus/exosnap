@@ -27,6 +27,8 @@
 
 #include <update/update_flow_state.h>
 
+namespace exosnap::updater_control {
+
 class UpdaterControlSource {
   public:
     virtual ~UpdaterControlSource() = default;
@@ -65,3 +67,5 @@ class UpdaterControlSource {
     // response and then the connection closing -- that IS the completion.
     virtual bool Close(QString* error) = 0;
 };
+
+} // namespace exosnap::updater_control

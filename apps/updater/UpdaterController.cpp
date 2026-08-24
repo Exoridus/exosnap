@@ -2,6 +2,8 @@
 
 #include <algorithm>
 
+namespace exosnap::updater {
+
 namespace {
 
 using exosnap::update::UpdatePhase;
@@ -492,3 +494,5 @@ void UpdaterController::onFailure(FailureCase c, const QString& detail) {
         break;
     }
 }
+
+} // namespace exosnap::updater

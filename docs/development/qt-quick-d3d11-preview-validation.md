@@ -57,7 +57,7 @@ Public Qt APIs used: `QQuickItem::updatePaintNode`, `QSGImageNode`, `QSGClipNode
 
 No private Qt API is used. `QNativeInterface` is public but Qt documents it as platform/version
 specific without source or binary compatibility guarantees. The bridge contains that coupling in
-`ExoPreviewItem.cpp`; it does not leak into adapters, QML, or `recorder_core`.
+`ExoPreviewItem.cpp`; it does not leak into adapters, QML, or `engine`.
 
 ## UI and composition proof
 

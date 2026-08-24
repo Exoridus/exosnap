@@ -3,7 +3,7 @@
 #include "DiagnosticsPresentation.h"
 
 #include <capability/support_level.h>
-#include <recorder_core/pipeline_health.h>
+#include <exosnap/engine/pipeline_health.h>
 
 #include <algorithm>
 #include <cctype>
@@ -77,13 +77,13 @@ bool BlankOrWhitespace(const std::string& text) noexcept {
     return std::all_of(text.begin(), text.end(), [](unsigned char c) { return std::isspace(c) != 0; });
 }
 
-StageStatus StatusOf(recorder_core::StageHealth health) noexcept {
+StageStatus StatusOf(exosnap::engine::StageHealth health) noexcept {
     switch (health) {
-    case recorder_core::StageHealth::Healthy:
+    case exosnap::engine::StageHealth::Healthy:
         return StageStatus::Ok;
-    case recorder_core::StageHealth::Busy:
+    case exosnap::engine::StageHealth::Busy:
         return StageStatus::Hotspot;
-    case recorder_core::StageHealth::Bottleneck:
+    case exosnap::engine::StageHealth::Bottleneck:
         return StageStatus::Over;
     }
     return StageStatus::Ok;
@@ -192,15 +192,15 @@ namespace {
 
 // The engine's health verdict, rendered. Not a re-classification: this maps one
 // enumerator onto one tone and nothing else decides a colour anywhere below.
-TileTone ToneOfHealth(recorder_core::PipelineHealth health) noexcept {
+TileTone ToneOfHealth(exosnap::engine::PipelineHealth health) noexcept {
     switch (health) {
-    case recorder_core::PipelineHealth::Critical:
+    case exosnap::engine::PipelineHealth::Critical:
         return TileTone::Blocker;
-    case recorder_core::PipelineHealth::Warning:
+    case exosnap::engine::PipelineHealth::Warning:
         return TileTone::Notice;
-    case recorder_core::PipelineHealth::Good:
-    case recorder_core::PipelineHealth::Idle:
-    case recorder_core::PipelineHealth::Unavailable:
+    case exosnap::engine::PipelineHealth::Good:
+    case exosnap::engine::PipelineHealth::Idle:
+    case exosnap::engine::PipelineHealth::Unavailable:
         return TileTone::Neutral;
     }
     return TileTone::Neutral;
@@ -210,96 +210,96 @@ TileTone ToneOfHealth(recorder_core::PipelineHealth health) noexcept {
 // the engine named its stage as the bottleneck AND said the pipeline is unwell.
 // Without the second half every tile would light up the moment a bottleneck was
 // merely identified in a healthy pipeline.
-TileTone ToneOfStage(const recorder_core::RecordingDiagnosticsSnapshot& s,
-                     std::initializer_list<recorder_core::PipelineBottleneck> stages) noexcept {
-    if (s.health != recorder_core::PipelineHealth::Warning && s.health != recorder_core::PipelineHealth::Critical)
+TileTone ToneOfStage(const exosnap::engine::RecordingDiagnosticsSnapshot& s,
+                     std::initializer_list<exosnap::engine::PipelineBottleneck> stages) noexcept {
+    if (s.health != exosnap::engine::PipelineHealth::Warning && s.health != exosnap::engine::PipelineHealth::Critical)
         return TileTone::Neutral;
-    for (const recorder_core::PipelineBottleneck stage : stages) {
+    for (const exosnap::engine::PipelineBottleneck stage : stages) {
         if (s.bottleneck == stage)
             return ToneOfHealth(s.health);
     }
     return TileTone::Neutral;
 }
 
-std::string BottleneckLabel(recorder_core::PipelineBottleneck bottleneck) {
+std::string BottleneckLabel(exosnap::engine::PipelineBottleneck bottleneck) {
     switch (bottleneck) {
-    case recorder_core::PipelineBottleneck::None:
+    case exosnap::engine::PipelineBottleneck::None:
         return "No sustained bottleneck";
-    case recorder_core::PipelineBottleneck::Capture:
+    case exosnap::engine::PipelineBottleneck::Capture:
         return "Capture";
-    case recorder_core::PipelineBottleneck::Compositor:
+    case exosnap::engine::PipelineBottleneck::Compositor:
         return "Compositor";
-    case recorder_core::PipelineBottleneck::VideoEncoder:
+    case exosnap::engine::PipelineBottleneck::VideoEncoder:
         return "Video encoder";
-    case recorder_core::PipelineBottleneck::Audio:
+    case exosnap::engine::PipelineBottleneck::Audio:
         return "Audio";
-    case recorder_core::PipelineBottleneck::Muxer:
+    case exosnap::engine::PipelineBottleneck::Muxer:
         return "Muxer";
-    case recorder_core::PipelineBottleneck::Disk:
+    case exosnap::engine::PipelineBottleneck::Disk:
         return "Disk";
-    case recorder_core::PipelineBottleneck::Unknown:
+    case exosnap::engine::PipelineBottleneck::Unknown:
         return "Not enough evidence yet";
     }
     return "Not enough evidence yet";
 }
 
-std::string HealthLabel(recorder_core::PipelineHealth health) {
+std::string HealthLabel(exosnap::engine::PipelineHealth health) {
     switch (health) {
-    case recorder_core::PipelineHealth::Good:
+    case exosnap::engine::PipelineHealth::Good:
         return "Good";
-    case recorder_core::PipelineHealth::Warning:
+    case exosnap::engine::PipelineHealth::Warning:
         return "Warning";
-    case recorder_core::PipelineHealth::Critical:
+    case exosnap::engine::PipelineHealth::Critical:
         return "Critical";
-    case recorder_core::PipelineHealth::Idle:
+    case exosnap::engine::PipelineHealth::Idle:
         return "Idle";
-    case recorder_core::PipelineHealth::Unavailable:
+    case exosnap::engine::PipelineHealth::Unavailable:
         return "Unavailable";
     }
     return "Unavailable";
 }
 
-std::string CodecName(recorder_core::VideoCodec codec) {
+std::string CodecName(exosnap::engine::VideoCodec codec) {
     switch (codec) {
-    case recorder_core::VideoCodec::Av1:
+    case exosnap::engine::VideoCodec::Av1:
         return "AV1";
-    case recorder_core::VideoCodec::Hevc:
+    case exosnap::engine::VideoCodec::Hevc:
         return "HEVC";
-    case recorder_core::VideoCodec::H264:
+    case exosnap::engine::VideoCodec::H264:
         return "H.264";
     }
     return "AV1";
 }
 
-std::string PresetName(recorder_core::NvencPreset preset) {
+std::string PresetName(exosnap::engine::NvencPreset preset) {
     switch (preset) {
-    case recorder_core::NvencPreset::P1:
+    case exosnap::engine::NvencPreset::P1:
         return "P1";
-    case recorder_core::NvencPreset::P2:
+    case exosnap::engine::NvencPreset::P2:
         return "P2";
-    case recorder_core::NvencPreset::P3:
+    case exosnap::engine::NvencPreset::P3:
         return "P3";
-    case recorder_core::NvencPreset::P4:
+    case exosnap::engine::NvencPreset::P4:
         return "P4";
-    case recorder_core::NvencPreset::P5:
+    case exosnap::engine::NvencPreset::P5:
         return "P5";
-    case recorder_core::NvencPreset::P6:
+    case exosnap::engine::NvencPreset::P6:
         return "P6";
-    case recorder_core::NvencPreset::P7:
+    case exosnap::engine::NvencPreset::P7:
         return "P7";
     }
     return "P4";
 }
 
-std::string PresentModeLabel(recorder_core::PresentMode mode) {
+std::string PresentModeLabel(exosnap::engine::PresentMode mode) {
     switch (mode) {
-    case recorder_core::PresentMode::Composed:
+    case exosnap::engine::PresentMode::Composed:
         return "Composed";
-    case recorder_core::PresentMode::IndependentFlip:
+    case exosnap::engine::PresentMode::IndependentFlip:
         return "Independent flip";
-    case recorder_core::PresentMode::ExclusiveFullscreen:
+    case exosnap::engine::PresentMode::ExclusiveFullscreen:
         return "Exclusive fullscreen";
-    case recorder_core::PresentMode::Unknown:
+    case exosnap::engine::PresentMode::Unknown:
         return "Unknown";
     }
     return "Unknown";
@@ -326,7 +326,7 @@ std::string Join(const std::string& left, const std::string& right) {
     return left + " " + kMiddot + " " + right;
 }
 
-LiveTile PipelineHealthTile(const recorder_core::RecordingDiagnosticsSnapshot& s) {
+LiveTile PipelineHealthTile(const exosnap::engine::RecordingDiagnosticsSnapshot& s) {
     LiveTile tile;
     tile.key = "pipelineHealth";
     tile.title = "Pipeline health";
@@ -340,16 +340,16 @@ LiveTile PipelineHealthTile(const recorder_core::RecordingDiagnosticsSnapshot& s
     return tile;
 }
 
-LiveTile FramePacingTile(const recorder_core::RecordingDiagnosticsSnapshot& s) {
+LiveTile FramePacingTile(const exosnap::engine::RecordingDiagnosticsSnapshot& s) {
     LiveTile tile;
     tile.key = "framePacing";
     tile.title = "Frame pacing";
     tile.value = Number(s.capture.actual_fps, 2) + " fps";
     tile.sub = "Target " + Number(s.capture.target_fps, 0) + " fps";
-    if (s.capture.present_cadence_availability == recorder_core::MetricAvailability::Available)
+    if (s.capture.present_cadence_availability == exosnap::engine::MetricAvailability::Available)
         tile.sub = Join(tile.sub, "jitter " + Number(s.capture.source_present_jitter_ms, 1) + " ms");
 
-    if (s.capture.present_mode_availability == recorder_core::MetricAvailability::Available) {
+    if (s.capture.present_mode_availability == exosnap::engine::MetricAvailability::Available) {
         tile.detail = Join(PresentModeLabel(s.capture.source_present_mode),
                            s.capture.source_tearing ? std::string("tearing active") : std::string("no tearing"));
     } else {
@@ -358,11 +358,11 @@ LiveTile FramePacingTile(const recorder_core::RecordingDiagnosticsSnapshot& s) {
         tile.detail = "Present diagnostics unavailable (elevation + opt-in)";
     }
     tile.tone =
-        ToneOfStage(s, {recorder_core::PipelineBottleneck::Capture, recorder_core::PipelineBottleneck::Compositor});
+        ToneOfStage(s, {exosnap::engine::PipelineBottleneck::Capture, exosnap::engine::PipelineBottleneck::Compositor});
     return tile;
 }
 
-LiveTile EncoderTile(const recorder_core::RecordingDiagnosticsSnapshot& s) {
+LiveTile EncoderTile(const exosnap::engine::RecordingDiagnosticsSnapshot& s) {
     LiveTile tile;
     tile.key = "encoder";
     tile.title = "Encoder";
@@ -371,7 +371,7 @@ LiveTile EncoderTile(const recorder_core::RecordingDiagnosticsSnapshot& s) {
     // configured -- never to the configured preset, which is a request.
     if (s.encoder_init.valid) {
         tile.value = CodecName(s.encoder_init.codec) + " " + kMiddot + " " + PresetName(s.encoder_init.preset);
-        if (s.encoder_init.rc_mode == recorder_core::RateControlMode::ConstantQuality)
+        if (s.encoder_init.rc_mode == exosnap::engine::RateControlMode::ConstantQuality)
             tile.value += std::string(" ") + kMiddot + " CQ " + Number(static_cast<uint64_t>(s.encoder_init.cq));
     } else {
         tile.value = CodecName(s.video_encoder.codec);
@@ -385,11 +385,11 @@ LiveTile EncoderTile(const recorder_core::RecordingDiagnosticsSnapshot& s) {
         tile.sub = "No frame encoded yet";
     }
     tile.detail = "Backlog " + Number(s.video_encoder.backlog);
-    tile.tone = ToneOfStage(s, {recorder_core::PipelineBottleneck::VideoEncoder});
+    tile.tone = ToneOfStage(s, {exosnap::engine::PipelineBottleneck::VideoEncoder});
     return tile;
 }
 
-LiveTile AudioSyncTile(const recorder_core::RecordingDiagnosticsSnapshot& s) {
+LiveTile AudioSyncTile(const exosnap::engine::RecordingDiagnosticsSnapshot& s) {
     LiveTile tile;
     tile.key = "audioSync";
     tile.title = "Audio sync";
@@ -400,7 +400,7 @@ LiveTile AudioSyncTile(const recorder_core::RecordingDiagnosticsSnapshot& s) {
         return tile;
     }
 
-    if (s.av_drift_availability == recorder_core::MetricAvailability::Available) {
+    if (s.av_drift_availability == exosnap::engine::MetricAvailability::Available) {
         const std::string sign = s.av_drift_ms >= 0.0 ? "+" : "";
         tile.value = sign + Number(s.av_drift_ms, 1) + " ms";
     } else {
@@ -413,7 +413,7 @@ LiveTile AudioSyncTile(const recorder_core::RecordingDiagnosticsSnapshot& s) {
     tile.sub = Join(tile.sub, s.audio.channels == 1 ? std::string("Mono") : std::string("Stereo"));
 
     std::string detail;
-    if (s.peak_av_drift_availability == recorder_core::MetricAvailability::Available)
+    if (s.peak_av_drift_availability == exosnap::engine::MetricAvailability::Available)
         detail = "peak " + Number(s.peak_av_drift_ms, 1) + " ms";
     if (s.clock_slaving_active)
         detail = Join(detail, "correcting " + Number(s.clock_slaving_ppm, 0) + " ppm");
@@ -422,7 +422,7 @@ LiveTile AudioSyncTile(const recorder_core::RecordingDiagnosticsSnapshot& s) {
     }
     tile.detail = detail;
 
-    tile.tone = ToneOfStage(s, {recorder_core::PipelineBottleneck::Audio});
+    tile.tone = ToneOfStage(s, {exosnap::engine::PipelineBottleneck::Audio});
     // A degraded source is a MEASURED problem in its own right (ADR 0046) and is
     // reported as one even while the engine still calls the pipeline healthy --
     // the recording keeps running, which is why it never escalates past Notice.
@@ -431,7 +431,7 @@ LiveTile AudioSyncTile(const recorder_core::RecordingDiagnosticsSnapshot& s) {
     return tile;
 }
 
-LiveTile StorageTile(const recorder_core::RecordingDiagnosticsSnapshot& s) {
+LiveTile StorageTile(const exosnap::engine::RecordingDiagnosticsSnapshot& s) {
     LiveTile tile;
     tile.key = "storage";
     tile.title = "Storage";
@@ -441,7 +441,7 @@ LiveTile StorageTile(const recorder_core::RecordingDiagnosticsSnapshot& s) {
     // free-space reading), which is a different answer from "no time left".
     tile.detail = s.disk_fill_eta_seconds >= 0.0 ? "Est. remaining " + CoarseDuration(s.disk_fill_eta_seconds)
                                                  : "Remaining time unavailable";
-    tile.tone = ToneOfStage(s, {recorder_core::PipelineBottleneck::Disk, recorder_core::PipelineBottleneck::Muxer});
+    tile.tone = ToneOfStage(s, {exosnap::engine::PipelineBottleneck::Disk, exosnap::engine::PipelineBottleneck::Muxer});
     if (s.disk.write_failures > 0 && tile.tone == TileTone::Neutral)
         tile.tone = TileTone::Notice;
     return tile;
@@ -449,9 +449,9 @@ LiveTile StorageTile(const recorder_core::RecordingDiagnosticsSnapshot& s) {
 
 } // namespace
 
-std::vector<LiveTile> BuildLiveTiles(const recorder_core::RecordingDiagnosticsSnapshot& snapshot) {
-    const bool live = snapshot.lifecycle == recorder_core::DiagnosticsLifecycle::Recording ||
-                      snapshot.lifecycle == recorder_core::DiagnosticsLifecycle::Paused;
+std::vector<LiveTile> BuildLiveTiles(const exosnap::engine::RecordingDiagnosticsSnapshot& snapshot) {
+    const bool live = snapshot.lifecycle == exosnap::engine::DiagnosticsLifecycle::Recording ||
+                      snapshot.lifecycle == exosnap::engine::DiagnosticsLifecycle::Paused;
     if (!snapshot.valid || !live)
         return {};
     return {PipelineHealthTile(snapshot), FramePacingTile(snapshot), EncoderTile(snapshot), AudioSyncTile(snapshot),
@@ -876,10 +876,10 @@ std::vector<PipelineStage> PipelineCardBuilder::BuildStatic(bool data_ready, boo
     return stages;
 }
 
-std::vector<PipelineStage> PipelineCardBuilder::BuildLive(const recorder_core::RecordingDiagnosticsSnapshot& s) {
-    using recorder_core::MetricAvailability;
-    using recorder_core::StageId;
-    using recorder_core::StageSignals;
+std::vector<PipelineStage> PipelineCardBuilder::BuildLive(const exosnap::engine::RecordingDiagnosticsSnapshot& s) {
+    using exosnap::engine::MetricAvailability;
+    using exosnap::engine::StageId;
+    using exosnap::engine::StageSignals;
 
     const double budget_ms = (s.capture.target_fps > 0.0) ? 1000.0 / s.capture.target_fps : (1000.0 / 60.0);
 
@@ -947,14 +947,14 @@ std::vector<PipelineStage> PipelineCardBuilder::BuildLive(const recorder_core::R
     disk.budget_ms = kDiskBudgetMs;
 
     const StageSignals signals[] = {capture, queue, comp, enc, mux, disk};
-    const recorder_core::PipelineHealthVerdict verdict = recorder_core::ResolvePipelineHealth(signals, budget_ms);
+    const exosnap::engine::PipelineHealthVerdict verdict = exosnap::engine::ResolvePipelineHealth(signals, budget_ms);
 
     const auto health_of = [&](StageId id) {
         for (const auto& sv : verdict.per_stage) {
             if (sv.id == id)
                 return sv.health;
         }
-        return recorder_core::StageHealth::Healthy;
+        return exosnap::engine::StageHealth::Healthy;
     };
     const auto ms = [&](double value, bool available) {
         return available ? Number(value, 1) + " ms" : std::string(kDash);
@@ -1076,7 +1076,7 @@ void DiagnosticsController::SetDisplayFacts(DisplayFacts facts) noexcept {
     display_ = facts;
 }
 
-void DiagnosticsController::SetSelectedCaptureTarget(std::optional<recorder_core::CaptureTarget> target) {
+void DiagnosticsController::SetSelectedCaptureTarget(std::optional<exosnap::engine::CaptureTarget> target) {
     selected_target_ = std::move(target);
 }
 
@@ -1111,7 +1111,7 @@ void DiagnosticsController::SetPresentSample(std::optional<PresentSample> sample
     present_ = std::move(sample);
 }
 
-void DiagnosticsController::SetLiveSnapshot(const recorder_core::RecordingDiagnosticsSnapshot& snapshot) {
+void DiagnosticsController::SetLiveSnapshot(const exosnap::engine::RecordingDiagnosticsSnapshot& snapshot) {
     live_ = snapshot;
     if (!liveRecording())
         pipeline_.Reset();
@@ -1142,8 +1142,8 @@ const std::vector<KeyValueRow>& DiagnosticsController::configRows() const noexce
 }
 
 bool DiagnosticsController::liveRecording() const noexcept {
-    return live_.valid && (live_.lifecycle == recorder_core::DiagnosticsLifecycle::Recording ||
-                           live_.lifecycle == recorder_core::DiagnosticsLifecycle::Paused);
+    return live_.valid && (live_.lifecycle == exosnap::engine::DiagnosticsLifecycle::Recording ||
+                           live_.lifecycle == exosnap::engine::DiagnosticsLifecycle::Paused);
 }
 
 const DiagnosticChecklist& DiagnosticsController::lastChecklist() const noexcept {
@@ -1162,7 +1162,7 @@ bool DiagnosticsController::selfTestValid() const noexcept {
     return probe_.self_test_valid;
 }
 
-const recorder_core::RecordingDiagnosticsSnapshot& DiagnosticsController::liveSnapshot() const noexcept {
+const exosnap::engine::RecordingDiagnosticsSnapshot& DiagnosticsController::liveSnapshot() const noexcept {
     return live_;
 }
 
@@ -1183,7 +1183,7 @@ DiagnosticsSnapshot DiagnosticsController::Evaluate() {
     }
 
     constexpr uint32_t kMonitorRefreshUnknown = 0;
-    const recorder_core::RecordingDiagnosticsSnapshot* live = live_.valid ? &live_ : nullptr;
+    const exosnap::engine::RecordingDiagnosticsSnapshot* live = live_.valid ? &live_ : nullptr;
     const PresentSample* present = (present_.has_value() && present_->available) ? &present_.value() : nullptr;
 
     RecommendationEngine engine(config_.caps, config_.user_config, kMonitorRefreshUnknown, probe_.free_bytes,
@@ -1229,7 +1229,7 @@ DiagnosticsSnapshot DiagnosticsController::Evaluate() {
     tile_inputs.audio_channels = config_.audio.audio_channels;
     if (selected_target_.has_value()) {
         tile_inputs.target_selected = true;
-        tile_inputs.target_is_window = selected_target_->kind == recorder_core::CaptureTarget::Kind::Window;
+        tile_inputs.target_is_window = selected_target_->kind == exosnap::engine::CaptureTarget::Kind::Window;
         tile_inputs.target_description = selected_target_->description;
     } else {
         tile_inputs.target_is_window = config_.audio.target_kind == capability::CaptureTargetKind::Window;

@@ -11,7 +11,7 @@
 #include <QCoreApplication>
 #include <QMetaObject>
 
-#include <recorder_core/recorder_session.h>
+#include <exosnap/engine/recorder_session.h>
 
 #include <windows.h>
 
@@ -57,7 +57,7 @@ bool previewTraceEnabled() {
     return enabled;
 }
 
-QString targetDescription(const recorder_core::CaptureTarget& target) {
+QString targetDescription(const exosnap::engine::CaptureTarget& target) {
     const QString description = QString::fromUtf8(target.description);
     return description.isEmpty() ? QStringLiteral("Primary display") : description;
 }
@@ -369,7 +369,7 @@ void RecordPreviewAdapter::bindRecordingCoordinator(RecordingCoordinator* coordi
     });
     coordinator->SetPreviewFramePublishedCallback(makeFramePublishedSink());
     coordinator->SetPreviewSharedHandleReadyCallback(
-        [safe_self](void* handle, uint32_t width, uint32_t height, recorder_core::PreviewTapDesc tap) {
+        [safe_self](void* handle, uint32_t width, uint32_t height, exosnap::engine::PreviewTapDesc tap) {
             auto handle_owner = std::make_shared<QueuedSharedHandle>(handle);
             QMetaObject::invokeMethod(
                 QCoreApplication::instance(),
@@ -398,7 +398,7 @@ void RecordPreviewAdapter::bindRecordingCoordinator(RecordingCoordinator* coordi
         });
 }
 
-void RecordPreviewAdapter::setPreviewTarget(const recorder_core::CaptureTarget& target) {
+void RecordPreviewAdapter::setPreviewTarget(const exosnap::engine::CaptureTarget& target) {
     const bool changed = !selected_target_.has_value() || selected_target_->kind != target.kind ||
                          selected_target_->native_id != target.native_id ||
                          selected_target_->description != target.description;
@@ -449,7 +449,7 @@ void RecordPreviewAdapter::observeRecordingState(UiRecordingState state) {
     }
 }
 
-void RecordPreviewAdapter::observeRecordingStats(const recorder_core::SessionStats& stats) {
+void RecordPreviewAdapter::observeRecordingStats(const exosnap::engine::SessionStats& stats) {
     recording_captured_frames_ = stats.video_frames_captured;
     recording_encoded_packets_ = stats.encoded_video_packets;
     // No signal. Neither of these two counters backs a Q_PROPERTY: they are read
@@ -460,7 +460,7 @@ void RecordPreviewAdapter::observeRecordingStats(const recorder_core::SessionSta
     // eight properties, none of which this function touches.
 }
 
-void RecordPreviewAdapter::observeRecordingDiagnostics(const recorder_core::RecordingDiagnosticsSnapshot& snapshot) {
+void RecordPreviewAdapter::observeRecordingDiagnostics(const exosnap::engine::RecordingDiagnosticsSnapshot& snapshot) {
     const qulonglong dropped = snapshot.capture.frames_dropped_problem();
     if (recording_dropped_frames_ == dropped)
         return;
@@ -517,7 +517,7 @@ std::function<void()> RecordPreviewAdapter::makeFramePublishedSink() {
 }
 
 void RecordPreviewAdapter::acceptRecordingTexture(void* handle, uint32_t width, uint32_t height,
-                                                  recorder_core::PreviewTapDesc tap) {
+                                                  exosnap::engine::PreviewTapDesc tap) {
     if (handle == nullptr)
         return;
     ++engine_source_announcements_;
@@ -591,7 +591,7 @@ void RecordPreviewAdapter::startPreview() {
     if (!active_ || item_ == nullptr)
         return;
 
-    recorder_core::CaptureTarget target;
+    exosnap::engine::CaptureTarget target;
     const bool available = selected_target_.has_value() && selected_target_->native_id != 0;
     if (available)
         target = *selected_target_;
@@ -619,7 +619,7 @@ void RecordPreviewAdapter::startPreview() {
     QPointer<ExoPreviewItem> safe_item(item_);
     const auto cursor_composited = std::make_shared<std::atomic_bool>(false);
     const auto sink = [safe_self, safe_item, epoch, target, cursor_composited](
-                          void* handle, uint32_t width, uint32_t height, recorder_core::PreviewTapDesc tap) {
+                          void* handle, uint32_t width, uint32_t height, exosnap::engine::PreviewTapDesc tap) {
         auto handle_owner = std::make_shared<QueuedSharedHandle>(handle);
         // The receiver is unconditionally the application object, never the item.
         // This lambda runs on the capture pump thread, and Unsubscribe() is
@@ -656,15 +656,15 @@ void RecordPreviewAdapter::startPreview() {
             Qt::QueuedConnection);
     };
     bool subscribed = false;
-    if (target.kind == recorder_core::CaptureTarget::Kind::Monitor && dxgi_source_ != nullptr) {
+    if (target.kind == exosnap::engine::CaptureTarget::Kind::Monitor && dxgi_source_ != nullptr) {
         subscribed =
             dxgi_source_->Subscribe(reinterpret_cast<HMONITOR>(target.native_id), sink, makeFramePublishedSink());
     }
     if (!subscribed && wgc_source_ != nullptr) {
         cursor_composited->store(true, std::memory_order_release);
         CaptureSourceKey key;
-        key.kind = target.kind == recorder_core::CaptureTarget::Kind::Window ? CaptureSourceKey::Kind::Window
-                                                                             : CaptureSourceKey::Kind::Monitor;
+        key.kind = target.kind == exosnap::engine::CaptureTarget::Kind::Window ? CaptureSourceKey::Kind::Window
+                                                                               : CaptureSourceKey::Kind::Monitor;
         key.native_id = target.native_id;
         subscribed = wgc_source_->Subscribe(std::move(key), sink, makeFramePublishedSink());
     }

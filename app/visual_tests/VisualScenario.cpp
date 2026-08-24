@@ -2,7 +2,7 @@
 
 #include "RecordVisualStateNames.h"
 
-#include <recorder_core/webcam_placement.h>
+#include <exosnap/engine/webcam_placement.h>
 
 #include <algorithm>
 #include <cmath>
@@ -940,21 +940,21 @@ const QVector<VisualScenario> kScenarios = {
      .container = capability::Container::Matroska,
      .video_codec = capability::VideoCodec::Av1,
      .audio_codec = capability::AudioCodec::Opus,
-     .hdr_mode = recorder_core::HdrMode::TonemapSdr},
+     .hdr_mode = exosnap::engine::HdrMode::TonemapSdr},
     {.id = QStringLiteral("settings-hdr-native-hdr10"),
      .title = QStringLiteral("Settings / HDR / Record native HDR10"),
      .page = VisualPage::Settings,
      .container = capability::Container::Matroska,
      .video_codec = capability::VideoCodec::Av1,
      .audio_codec = capability::AudioCodec::Opus,
-     .hdr_mode = recorder_core::HdrMode::Hdr10},
+     .hdr_mode = exosnap::engine::HdrMode::Hdr10},
     {.id = QStringLiteral("settings-hdr-h264-disabled"),
      .title = QStringLiteral("Settings / HDR / Disabled with H.264"),
      .page = VisualPage::Settings,
      .container = capability::Container::Mp4,
      .video_codec = capability::VideoCodec::H264,
      .audio_codec = capability::AudioCodec::Aac,
-     .hdr_mode = recorder_core::HdrMode::TonemapSdr},
+     .hdr_mode = exosnap::engine::HdrMode::TonemapSdr},
 
     {.id = QStringLiteral("record-output-native"),
      .title = QStringLiteral("Record / Output / Native"),
@@ -2176,7 +2176,7 @@ bool ValidateVisualScenario(const VisualScenario& scenario, QString* error) {
     }
     // quality_cq is optional (0 = unset); a non-zero seed must be a real NVENC CQ value.
     if (scenario.quality_cq != 0 &&
-        (scenario.quality_cq < recorder_core::kCqMin || scenario.quality_cq > recorder_core::kCqMax)) {
+        (scenario.quality_cq < exosnap::engine::kCqMin || scenario.quality_cq > exosnap::engine::kCqMax)) {
         return fail(QStringLiteral("Invalid visual-test quality (CQ) value"));
     }
     if (scenario.content_width > 0 && scenario.content_height > 0 && scenario.effective_width > 0 &&
@@ -2201,8 +2201,8 @@ bool ValidateVisualScenario(const VisualScenario& scenario, QString* error) {
 
     // Webcam PiP placement must be a valid, bounds-safe normalized rectangle.
     if (scenario.webcam_pip_enabled) {
-        constexpr float kMin = recorder_core::WebcamPlacement::kMinSize;
-        constexpr float kMax = recorder_core::WebcamPlacement::kMaxSize;
+        constexpr float kMin = exosnap::engine::WebcamPlacement::kMinSize;
+        constexpr float kMax = exosnap::engine::WebcamPlacement::kMaxSize;
         const float x = scenario.webcam_x;
         const float y = scenario.webcam_y;
         const float w = scenario.webcam_w;

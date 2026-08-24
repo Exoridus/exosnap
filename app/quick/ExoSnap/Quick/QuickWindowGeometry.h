@@ -98,6 +98,12 @@ void InstallWindowGeometryTrace(QQuickWindow* window);
 void InstallStartupMessageTrace();
 void StopStartupMessageTrace();
 
+// Keeps the message trace running past the first frame. The self-stop above
+// exists so a live drag cannot flood the log; a harness that drives a bounded
+// state sequence needs the opposite, because the messages that decide a
+// maximize are exactly the ones that arrive after the window is up.
+void SetStartupMessageTracePersistent(bool persistent);
+
 // Tracks a live window and reports the geometry worth persisting. Owns nothing
 // but its timer; the sink decides where the value goes.
 class QuickWindowGeometry : public QObject {

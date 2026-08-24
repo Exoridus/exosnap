@@ -27,7 +27,7 @@ There is no shared texture to open. Three further differences compound it:
   late frames* against a media clock. That gate is playback policy, not an optimisation.
 - **Conversion.** The preview converts BGRA8/RGB10A2 → RGBA. The editor needs planar YUV at 8 and
   10 bits, 4:2:0 and 4:4:4, with colour matrix, range, and HDR10 PQ tone-mapping — that is
-  `recorder_core::EditFrameGpuConverter`.
+  `exosnap::engine::EditFrameGpuConverter`.
 
 Separately, the Widgets timeline is a 30 KB custom-painted widget, which invites a custom
 `QQuickItem` with a hand-built scene graph. Measurement says otherwise.

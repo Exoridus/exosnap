@@ -9,7 +9,7 @@
 
 #include "BenchmarkMetrics.h"
 
-#include <recorder_core/pipeline_diagnostics.h>
+#include <exosnap/engine/pipeline_diagnostics.h>
 
 namespace exosnap::benchmark {
 
@@ -29,8 +29,8 @@ namespace exosnap::benchmark {
 // acquire timings are rolling-window statistics. Subtracting those would be
 // arithmetic on quantities that are not sums. `measured_window_emitted_fps` is
 // the honest run-level rate, derived from the differenced emitted count.
-[[nodiscard]] RecordingMetrics RecordingMetricsFromSnapshot(const recorder_core::RecordingDiagnosticsSnapshot& terminal,
-                                                            const recorder_core::RecordingDiagnosticsSnapshot& baseline,
-                                                            double measured_seconds);
+[[nodiscard]] RecordingMetrics
+RecordingMetricsFromSnapshot(const exosnap::engine::RecordingDiagnosticsSnapshot& terminal,
+                             const exosnap::engine::RecordingDiagnosticsSnapshot& baseline, double measured_seconds);
 
 } // namespace exosnap::benchmark

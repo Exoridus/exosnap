@@ -98,8 +98,9 @@ double dockLevel(float rms) {
     return std::clamp((db + 60.0) / 60.0, 0.0, 1.0);
 }
 
-bool isSystemRow(const recorder_core::AudioSourceRow& row) {
-    return row.kind == recorder_core::AudioSourceKind::Sys || row.kind == recorder_core::AudioSourceKind::SystemOutput;
+bool isSystemRow(const exosnap::engine::AudioSourceRow& row) {
+    return row.kind == exosnap::engine::AudioSourceKind::Sys ||
+           row.kind == exosnap::engine::AudioSourceKind::SystemOutput;
 }
 
 bool locksCaptureTargets(UiRecordingState state) {
@@ -455,7 +456,15 @@ void QuickApplication::initializeRecordWorkflow() {
     // a plain struct, so it never blocks on the native probe and never touches
     // GUI state from the recording worker.
     recording_coordinator_->SetWindowExclusiveEvidenceProvider(
-        [this](const recorder_core::CaptureTarget& target) { return resolveWindowExclusiveEvidence(target); });
+        [this](const exosnap::engine::CaptureTarget& target) { return resolveWindowExclusiveEvidence(target); });
+
+    // QCR: the Widgets Record page consumed this and turned "Saving…" into
+    // "Saving… N%". It went out with that shell in the cutover, and
+    // PostRemuxProgress has been firing into an unset callback ever since --
+    // producer kept, consumer deleted. The Saving state is the one part of a
+    // recording the user cannot see the end of, so the number is the whole point.
+    recording_coordinator_->SetRemuxProgressCallback(
+        [this](float fraction) { record_view_model_adapter_.setSavingProgress(fraction); });
 
     recording_coordinator_->SetRecoveryManifestStore(&recovery_manifest_store_);
     recording_coordinator_->SetOutputSettings(live_config_.output);
@@ -477,6 +486,11 @@ void QuickApplication::initializeRecordWorkflow() {
     wireRecordCommands();
 
     recording_coordinator_->SetStateChangedCallback([this](UiRecordingState state) {
+        // Cleared on the way out of Saving, and on the way in: a fraction left
+        // over from the previous recording would show as that recording's
+        // progress for as long as the next remux takes to report.
+        if (state != UiRecordingState::Saving)
+            record_view_model_adapter_.setSavingProgress(-1.0f);
         record_preview_adapter_.observeRecordingState(state);
         const UiRecordingState previous = record_view_model_.state;
         // A seeded visual scenario owns the state for the rest of the process.
@@ -545,53 +559,54 @@ void QuickApplication::initializeRecordWorkflow() {
             refreshCaptureTargets(capture_target_notifier_.currentSnapshot(), DiscoveryReason::Rescan);
         }
     });
-    recording_coordinator_->SetStatsUpdatedCallback([this](const recorder_core::SessionStats& stats) {
+    recording_coordinator_->SetStatsUpdatedCallback([this](const exosnap::engine::SessionStats& stats) {
         record_view_model_.UpdateStats(stats);
         record_preview_adapter_.observeRecordingStats(stats);
         updateMeters();
         synchronizeRecordState();
     });
-    recording_coordinator_->SetDiagnosticsCallback([this](const recorder_core::RecordingDiagnosticsSnapshot& measured) {
-        // ADR 0033 / Wave D. The engine measures no presentation, so the present
-        // fields arrive Unavailable on every snapshot; the elevation- and opt-in-gated
-        // ETW consumer is the only producer and it lives here. Overlaying ONCE at the
-        // single fan-out point is what makes the Diagnostics surface, the
-        // capture-stall classifier's exclusive-fullscreen refinement and
-        // `pipeline.snapshot` answer from the same measurement instead of three.
-        //
-        // This runs on the GUI thread (PostDiagnostics queues it onto the application
-        // object), which is the thread PresentMonEtwSession::Latest() requires.
-        recorder_core::RecordingDiagnosticsSnapshot snapshot = measured;
-        if (present_provider_ != nullptr) {
-            const diagnostics::PresentSample sample = present_provider_->Sample();
-            diagnostics::ApplyPresentSample(snapshot.capture, sample);
-            diagnostics_adapter_.setPresentSample(sample.available ? std::optional<diagnostics::PresentSample>(sample)
-                                                                   : std::nullopt);
-        }
-        record_view_model_.av_drift_available =
-            snapshot.av_drift_availability == recorder_core::MetricAvailability::Available;
-        record_view_model_.av_drift_ms = record_view_model_.av_drift_available ? snapshot.av_drift_ms : 0.0;
-        record_view_model_.dropped_frames = snapshot.capture.frames_dropped_problem();
-        // Peak A/V drift is accumulated in the engine aggregator (one source of
-        // truth shared with the session report); latch the availability so a
-        // metric that stopped being reported before the last frame still counts.
-        if (snapshot.peak_av_drift_availability == recorder_core::MetricAvailability::Available) {
-            av_drift_ever_available_ = true;
-            peak_av_drift_ms_ = snapshot.peak_av_drift_ms;
-        }
-        if (snapshot.lifecycle == recorder_core::DiagnosticsLifecycle::Completed)
-            last_completed_snapshot_ = snapshot;
-        record_preview_adapter_.observeRecordingDiagnostics(snapshot);
-        // The coordinator holds exactly one diagnostics callback, so every
-        // consumer has to be fanned out from this single registration. The
-        // Diagnostics area used to install its own, which silently replaced this
-        // one and left dropped_frames, av_drift and the Edit report badge at zero
-        // for the whole session.
-        diagnostics_adapter_.applyLiveDiagnostics(snapshot);
-        observeWindowCaptureStall(snapshot);
-        observeAudioSourceDegradation(snapshot);
-        synchronizeRecordState();
-    });
+    recording_coordinator_->SetDiagnosticsCallback(
+        [this](const exosnap::engine::RecordingDiagnosticsSnapshot& measured) {
+            // ADR 0033 / Wave D. The engine measures no presentation, so the present
+            // fields arrive Unavailable on every snapshot; the elevation- and opt-in-gated
+            // ETW consumer is the only producer and it lives here. Overlaying ONCE at the
+            // single fan-out point is what makes the Diagnostics surface, the
+            // capture-stall classifier's exclusive-fullscreen refinement and
+            // `pipeline.snapshot` answer from the same measurement instead of three.
+            //
+            // This runs on the GUI thread (PostDiagnostics queues it onto the application
+            // object), which is the thread PresentMonEtwSession::Latest() requires.
+            exosnap::engine::RecordingDiagnosticsSnapshot snapshot = measured;
+            if (present_provider_ != nullptr) {
+                const diagnostics::PresentSample sample = present_provider_->Sample();
+                diagnostics::ApplyPresentSample(snapshot.capture, sample);
+                diagnostics_adapter_.setPresentSample(
+                    sample.available ? std::optional<diagnostics::PresentSample>(sample) : std::nullopt);
+            }
+            record_view_model_.av_drift_available =
+                snapshot.av_drift_availability == exosnap::engine::MetricAvailability::Available;
+            record_view_model_.av_drift_ms = record_view_model_.av_drift_available ? snapshot.av_drift_ms : 0.0;
+            record_view_model_.dropped_frames = snapshot.capture.frames_dropped_problem();
+            // Peak A/V drift is accumulated in the engine aggregator (one source of
+            // truth shared with the session report); latch the availability so a
+            // metric that stopped being reported before the last frame still counts.
+            if (snapshot.peak_av_drift_availability == exosnap::engine::MetricAvailability::Available) {
+                av_drift_ever_available_ = true;
+                peak_av_drift_ms_ = snapshot.peak_av_drift_ms;
+            }
+            if (snapshot.lifecycle == exosnap::engine::DiagnosticsLifecycle::Completed)
+                last_completed_snapshot_ = snapshot;
+            record_preview_adapter_.observeRecordingDiagnostics(snapshot);
+            // The coordinator holds exactly one diagnostics callback, so every
+            // consumer has to be fanned out from this single registration. The
+            // Diagnostics area used to install its own, which silently replaced this
+            // one and left dropped_frames, av_drift and the Edit report badge at zero
+            // for the whole session.
+            diagnostics_adapter_.applyLiveDiagnostics(snapshot);
+            observeWindowCaptureStall(snapshot);
+            observeAudioSourceDegradation(snapshot);
+            synchronizeRecordState();
+        });
     recording_coordinator_->SetResultReadyCallback([this](const UiRecordingResult& result) {
         record_view_model_.SetResult(result);
         // Only a failure earns a page banner. A SUCCESSFUL stop used to add a
@@ -627,14 +642,31 @@ void QuickApplication::initializeRecordWorkflow() {
         if (result.succeeded && settings_.open_editor_when_finished)
             openEditorForCurrentRecording();
     });
-    QPointer<RecordViewModelAdapter> safe_record_adapter(&record_view_model_adapter_);
-    recording_coordinator_->SetFrameCapturedCallback([safe_record_adapter](bool success, const QString& path,
-                                                                           const QString& error) {
-        if (safe_record_adapter == nullptr)
-            return;
-        safe_record_adapter->setNoticeText(success ? QStringLiteral("Frame saved · %1").arg(QFileInfo(path).fileName())
-                                                   : (error.isEmpty() ? QStringLiteral("Frame capture failed") : error),
-                                           success ? QStringLiteral("success") : QStringLiteral("error"));
+    // A toast, not the page notice. The banner above the Preview Surface is for
+    // UNRESOLVED conditions; a frame that has been written is a confirmation, and
+    // a confirmation there pushes the preview down the moment the user is looking
+    // at it. The recording-saved banner was removed for exactly that reason and
+    // this one was left behind.
+    //
+    // The failure is a toast for the same reason the recovery-manifest failure
+    // below is: it is a completed local-write failure, not a state the page can
+    // offer to resolve.
+    recording_coordinator_->SetFrameCapturedCallback([this](bool success, const QString& path, const QString& error) {
+        notifications::NotificationEvent event;
+        if (success) {
+            event.type = notifications::NotificationType::FrameCaptured;
+            event.title = QStringLiteral("Frame saved");
+            // The file name, never the path: a toast carrying a full path grows
+            // as wide as the deepest folder the user happens to record into.
+            event.body = QFileInfo(path).fileName();
+            event.action = notifications::NotificationAction::OpenFolder;
+            event.action_payload = path;
+        } else {
+            event.type = notifications::NotificationType::CaptureActionFailed;
+            event.title = QStringLiteral("Frame capture failed");
+            event.body = error.isEmpty() ? QStringLiteral("The frame could not be written.") : error;
+        }
+        notifications_adapter_.manager().Enqueue(std::move(event));
     });
     recording_coordinator_->SetSplitFeedbackCallback([this](bool accepted, const QString& message) {
         if (!accepted)
@@ -710,8 +742,8 @@ void QuickApplication::initializeRecordWorkflow() {
     for (int index = 0; index < static_cast<int>(record_view_model_.targets.size()); ++index) {
         const auto& target = record_view_model_.targets[static_cast<std::size_t>(index)];
         const bool kind_matches = initial_mode == CaptureMode::Window
-                                      ? target.kind == recorder_core::CaptureTarget::Kind::Window
-                                      : target.kind == recorder_core::CaptureTarget::Kind::Monitor;
+                                      ? target.kind == exosnap::engine::CaptureTarget::Kind::Window
+                                      : target.kind == exosnap::engine::CaptureTarget::Kind::Monitor;
         if (!kind_matches)
             continue;
         if (initial_mode != CaptureMode::Window && !live_config_.capture.display_id.empty() &&
@@ -731,7 +763,7 @@ void QuickApplication::initializeRecordWorkflow() {
         initial_mode = CaptureMode::Monitor;
         for (int index = 0; index < static_cast<int>(record_view_model_.targets.size()); ++index) {
             if (record_view_model_.targets[static_cast<std::size_t>(index)].kind ==
-                recorder_core::CaptureTarget::Kind::Monitor) {
+                exosnap::engine::CaptureTarget::Kind::Monitor) {
                 initial_index = index;
                 break;
             }
@@ -904,7 +936,7 @@ void QuickApplication::publishDisplayDerivedState() {
     // Same resolver the coordinator's own native-HDR10 decision uses
     // (FindTargetDisplayFacts over the probed display facts).
     bool hdr_active = false;
-    if (const std::optional<recorder_core::CaptureTarget> target = selectedCaptureTarget(); target.has_value()) {
+    if (const std::optional<exosnap::engine::CaptureTarget> target = selectedCaptureTarget(); target.has_value()) {
         const capability::DisplayHdrFacts* facts = FindTargetDisplayFacts(*target, displays);
         hdr_active = facts != nullptr && facts->hdr_active;
     }
@@ -993,7 +1025,7 @@ void QuickApplication::wireRecordCommands() {
                      &record_view_model_adapter_, [this]() { openEditorForCurrentRecording(); });
     QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::splitRequested, &record_view_model_adapter_,
                      [this]() {
-                         recording_coordinator_->RequestSplit(recorder_core::SplitTriggerSource::ManualButton);
+                         recording_coordinator_->RequestSplit(exosnap::engine::SplitTriggerSource::ManualButton);
                          synchronizeRecordState();
                      });
     QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::selectTargetRequested,
@@ -1071,7 +1103,7 @@ void QuickApplication::selectTarget(int target_index, CaptureMode mode) {
         return;
     }
     const auto& target = record_view_model_.targets[static_cast<std::size_t>(target_index)];
-    if ((mode == CaptureMode::Window) != (target.kind == recorder_core::CaptureTarget::Kind::Window))
+    if ((mode == CaptureMode::Window) != (target.kind == exosnap::engine::CaptureTarget::Kind::Window))
         return;
 
     record_view_model_.selected_target_index = target_index;
@@ -1130,7 +1162,7 @@ void QuickApplication::refreshCaptureTargets(const CaptureTargetSnapshot& snapsh
         return;
     }
 
-    std::optional<recorder_core::CaptureTarget> previous;
+    std::optional<exosnap::engine::CaptureTarget> previous;
     if (record_view_model_.selected_target_index >= 0 &&
         record_view_model_.selected_target_index < static_cast<int>(record_view_model_.targets.size())) {
         previous = record_view_model_.targets[static_cast<size_t>(record_view_model_.selected_target_index)];
@@ -1158,7 +1190,7 @@ void QuickApplication::refreshCaptureTargets(const CaptureTargetSnapshot& snapsh
         !live_config_.capture.window_key.empty()) {
         for (int index = 0; index < static_cast<int>(record_view_model_.targets.size()); ++index) {
             const auto& candidate = record_view_model_.targets[static_cast<size_t>(index)];
-            if (candidate.kind == recorder_core::CaptureTarget::Kind::Window &&
+            if (candidate.kind == exosnap::engine::CaptureTarget::Kind::Window &&
                 RecordViewModel::TargetLabelFromCaptureTarget(candidate) == live_config_.capture.window_key) {
                 resolved_index = index;
                 break;
@@ -1172,7 +1204,7 @@ void QuickApplication::refreshCaptureTargets(const CaptureTargetSnapshot& snapsh
             const uintptr_t monitor = displays[match->index].hmonitor;
             for (int index = 0; index < static_cast<int>(record_view_model_.targets.size()); ++index) {
                 const auto& candidate = record_view_model_.targets[static_cast<size_t>(index)];
-                if (candidate.kind == recorder_core::CaptureTarget::Kind::Monitor && candidate.native_id == monitor) {
+                if (candidate.kind == exosnap::engine::CaptureTarget::Kind::Monitor && candidate.native_id == monitor) {
                     resolved_index = index;
                     break;
                 }
@@ -1192,7 +1224,7 @@ void QuickApplication::refreshCaptureTargets(const CaptureTargetSnapshot& snapsh
         const auto& target = record_view_model_.targets[static_cast<size_t>(resolved_index)];
         record_preview_adapter_.setPreviewTarget(target);
         updateOutputTargetContext(target);
-        if (target.kind == recorder_core::CaptureTarget::Kind::Window) {
+        if (target.kind == exosnap::engine::CaptureTarget::Kind::Window) {
             DWORD process_id = 0;
             GetWindowThreadProcessId(reinterpret_cast<HWND>(target.native_id), &process_id);
             record_view_model_.audio_ui_state.selected_window_pid = process_id;
@@ -1216,7 +1248,7 @@ void QuickApplication::refreshCaptureTargets(const CaptureTargetSnapshot& snapsh
     synchronizeRecordState();
 }
 
-void QuickApplication::updateOutputTargetContext(const recorder_core::CaptureTarget& target) {
+void QuickApplication::updateOutputTargetContext(const exosnap::engine::CaptureTarget& target) {
     FilenameTargetContext context = RecordViewModel::FilenameContextFromCaptureTarget(target);
     context.video_codec = live_config_.output.video_codec;
     context.audio_codec = live_config_.output.audio_codec;
@@ -1229,7 +1261,7 @@ void QuickApplication::selectRegion(const QRectF& normalized_rect) {
     const auto& target = record_view_model_.targets[static_cast<std::size_t>(record_view_model_.selected_target_index)];
     MONITORINFO monitor{};
     monitor.cbSize = sizeof(monitor);
-    if (target.kind != recorder_core::CaptureTarget::Kind::Monitor ||
+    if (target.kind != exosnap::engine::CaptureTarget::Kind::Monitor ||
         GetMonitorInfoW(reinterpret_cast<HMONITOR>(target.native_id), &monitor) == FALSE) {
         record_view_model_adapter_.setNoticeText(QStringLiteral("The selected display is no longer available."));
         return;
@@ -1237,7 +1269,7 @@ void QuickApplication::selectRegion(const QRectF& normalized_rect) {
     const QRectF bounded = normalized_rect.normalized().intersected(QRectF(0.0, 0.0, 1.0, 1.0));
     const int monitor_width = monitor.rcMonitor.right - monitor.rcMonitor.left;
     const int monitor_height = monitor.rcMonitor.bottom - monitor.rcMonitor.top;
-    recorder_core::CaptureRegion region;
+    exosnap::engine::CaptureRegion region;
     region.x = monitor.rcMonitor.left + static_cast<int32_t>(std::lround(bounded.x() * monitor_width));
     region.y = monitor.rcMonitor.top + static_cast<int32_t>(std::lround(bounded.y() * monitor_height));
     region.width = static_cast<int32_t>(std::lround(bounded.width() * monitor_width));
@@ -1309,7 +1341,7 @@ bool QuickApplication::startRecordingNow() {
         record_view_model_.selected_target_index >= static_cast<int>(record_view_model_.targets.size()))
         return false;
     const auto& target = record_view_model_.targets[static_cast<std::size_t>(record_view_model_.selected_target_index)];
-    std::optional<recorder_core::CaptureRegion> crop;
+    std::optional<exosnap::engine::CaptureRegion> crop;
     if (record_view_model_.capture_mode == CaptureMode::Region) {
         if (!record_view_model_.has_region || !record_view_model_.region.IsValid())
             return false;
@@ -1370,8 +1402,8 @@ void QuickApplication::toggleSource(const QString& key) {
         return;
     for (auto& row : record_view_model_.audio_ui_state.source_rows) {
         const bool match = (key == QStringLiteral("system") && isSystemRow(row)) ||
-                           (key == QStringLiteral("app") && row.kind == recorder_core::AudioSourceKind::App) ||
-                           (key == QStringLiteral("microphone") && row.kind == recorder_core::AudioSourceKind::Mic);
+                           (key == QStringLiteral("app") && row.kind == exosnap::engine::AudioSourceKind::App) ||
+                           (key == QStringLiteral("microphone") && row.kind == exosnap::engine::AudioSourceKind::Mic);
         if (match) {
             if (key == QStringLiteral("microphone") && !microphone_available_)
                 return;
@@ -1499,7 +1531,7 @@ void QuickApplication::initializeSettingsArea() {
     QObject::connect(&audio_notifier_, &AudioDeviceNotifier::snapshotChanged, &settings_adapter_,
                      [this](const AudioDeviceSnapshot& snapshot, DiscoveryReason) {
                          QVariantList devices;
-                         for (const recorder_core::AudioInputDeviceInfo& device : snapshot.inputs) {
+                         for (const exosnap::engine::AudioInputDeviceInfo& device : snapshot.inputs) {
                              QVariantMap entry;
                              entry.insert(QStringLiteral("value"), QString::fromStdString(device.device_id));
                              entry.insert(QStringLiteral("label"), QString::fromStdString(device.display_name));
@@ -1635,7 +1667,7 @@ void QuickApplication::refreshDiagnosticsData() {
     diagnostics_adapter_.setCapabilitySet(capabilities_);
 }
 
-std::optional<recorder_core::CaptureTarget> QuickApplication::selectedCaptureTarget() const {
+std::optional<exosnap::engine::CaptureTarget> QuickApplication::selectedCaptureTarget() const {
     const int selected = record_view_model_.selected_target_index;
     if (selected < 0 || selected >= static_cast<int>(record_view_model_.targets.size()))
         return std::nullopt;
@@ -1658,9 +1690,9 @@ void QuickApplication::updateCaptureEvidenceTarget() {
     if (visualScenarioLatched())
         return;
 
-    const std::optional<recorder_core::CaptureTarget> target = selectedCaptureTarget();
+    const std::optional<exosnap::engine::CaptureTarget> target = selectedCaptureTarget();
     uintptr_t hwnd = 0;
-    if (target.has_value() && target->kind == recorder_core::CaptureTarget::Kind::Window)
+    if (target.has_value() && target->kind == exosnap::engine::CaptureTarget::Kind::Window)
         hwnd = target->native_id;
     // The engine owns the capture from the countdown to the last saved byte; the
     // probe keeps its subscription but stops pumping so the source is not copied
@@ -1670,8 +1702,8 @@ void QuickApplication::updateCaptureEvidenceTarget() {
     // Diagnostics reads the target itself for the capture-source readiness tile
     // and the HDR blocker card. Both are resolved here rather than in the probe:
     // they are facts about the SELECTION, not measurements of the window.
-    const auto same_target = [](const std::optional<recorder_core::CaptureTarget>& lhs,
-                                const std::optional<recorder_core::CaptureTarget>& rhs) {
+    const auto same_target = [](const std::optional<exosnap::engine::CaptureTarget>& lhs,
+                                const std::optional<exosnap::engine::CaptureTarget>& rhs) {
         if (lhs.has_value() != rhs.has_value())
             return false;
         if (!lhs.has_value())
@@ -1745,8 +1777,8 @@ void QuickApplication::refreshCaptureWindowEvidence() {
 }
 
 diagnostics::ExclusiveEvidence
-QuickApplication::resolveWindowExclusiveEvidence(const recorder_core::CaptureTarget& target) const {
-    if (!window_evidence_probe_ || target.kind != recorder_core::CaptureTarget::Kind::Window)
+QuickApplication::resolveWindowExclusiveEvidence(const exosnap::engine::CaptureTarget& target) const {
+    if (!window_evidence_probe_ || target.kind != exosnap::engine::CaptureTarget::Kind::Window)
         return diagnostics::ExclusiveEvidence::None;
     return diagnostics::ResolveSnapshotEvidence(window_evidence_probe_->CurrentSnapshot(), target.native_id, false);
 }
@@ -1768,10 +1800,10 @@ QuickApplication::resolveWindowExclusiveEvidence(const recorder_core::CaptureTar
 // session-generation filtered), the monitor is a plain main-thread member, and
 // the only thing handed back across a thread boundary is an atomic increment on
 // the coordinator. No capture-thread state is dereferenced.
-void QuickApplication::observeWindowCaptureStall(const recorder_core::RecordingDiagnosticsSnapshot& snapshot) {
+void QuickApplication::observeWindowCaptureStall(const exosnap::engine::RecordingDiagnosticsSnapshot& snapshot) {
     diagnostics::WindowStallSample sample;
     sample.session_generation = snapshot.session_generation;
-    sample.is_window_target = snapshot.capture.source_type == recorder_core::CaptureSourceType::Window;
+    sample.is_window_target = snapshot.capture.source_type == exosnap::engine::CaptureSourceType::Window;
     sample.capture_expected = diagnostics::CaptureProgressExpected(snapshot.lifecycle);
     sample.frames_captured = snapshot.capture.frames_captured;
     sample.elapsed_seconds = snapshot.elapsed_seconds;
@@ -1799,8 +1831,8 @@ void QuickApplication::observeWindowCaptureStall(const recorder_core::RecordingD
     // opt-in-gated). It only ever refines the cause; it never decides whether the
     // stall is reported.
     const bool present_fse =
-        snapshot.capture.present_mode_availability == recorder_core::MetricAvailability::Available &&
-        snapshot.capture.source_present_mode == recorder_core::PresentMode::ExclusiveFullscreen;
+        snapshot.capture.present_mode_availability == exosnap::engine::MetricAvailability::Available &&
+        snapshot.capture.source_present_mode == exosnap::engine::PresentMode::ExclusiveFullscreen;
 
     const diagnostics::WindowStallVerdict verdict = diagnostics::ClassifyConfirmedStall(facts, present_fse);
     capture_stall_monitor_.ApplyVerdict(verdict);
@@ -1857,7 +1889,7 @@ void QuickApplication::clearWindowCaptureStallWarning() {
 // Threading: everything here runs on the Qt main thread. The snapshot arrives
 // through RecordingCoordinator::PostDiagnostics's queued connection (already
 // session-generation filtered), and the latch is a plain main-thread member.
-void QuickApplication::observeAudioSourceDegradation(const recorder_core::RecordingDiagnosticsSnapshot& snapshot) {
+void QuickApplication::observeAudioSourceDegradation(const exosnap::engine::RecordingDiagnosticsSnapshot& snapshot) {
     diagnostics::AudioDegradationSample sample;
     sample.session_generation = snapshot.session_generation;
     sample.valid = snapshot.valid;
@@ -1908,7 +1940,7 @@ void QuickApplication::selectHostingMonitorForSelectedWindow() {
     if (selected < 0 || selected >= static_cast<int>(record_view_model_.targets.size()))
         return;
     const auto& current = record_view_model_.targets[static_cast<std::size_t>(selected)];
-    if (current.kind != recorder_core::CaptureTarget::Kind::Window || current.native_id == 0) {
+    if (current.kind != exosnap::engine::CaptureTarget::Kind::Window || current.native_id == 0) {
         diagnostics::AppLog::info(QStringLiteral("target"),
                                   QStringLiteral("record-the-monitor-instead: no window target selected - no-op"));
         return;
@@ -1918,7 +1950,7 @@ void QuickApplication::selectHostingMonitorForSelectedWindow() {
     const auto monitor_id = reinterpret_cast<uintptr_t>(monitor);
     for (std::size_t index = 0; index < record_view_model_.targets.size(); ++index) {
         const auto& candidate = record_view_model_.targets[index];
-        if (candidate.kind == recorder_core::CaptureTarget::Kind::Monitor && candidate.native_id == monitor_id) {
+        if (candidate.kind == exosnap::engine::CaptureTarget::Kind::Monitor && candidate.native_id == monitor_id) {
             selectTarget(static_cast<int>(index), CaptureMode::Monitor);
             diagnostics::AppLog::info(
                 QStringLiteral("target"),
@@ -2423,7 +2455,7 @@ void QuickApplication::applyEditVisualScenario() {
     context.completed_snapshot.valid = true;
     context.completed_snapshot.session_generation = 7;
     context.completed_snapshot.capture.frames_emitted = 9240;
-    context.completed_snapshot.health = recorder_core::PipelineHealth::Good;
+    context.completed_snapshot.health = exosnap::engine::PipelineHealth::Good;
     context.markers = {
         RecordingMarker{18000, RecordingMarkerType::General, "Intro"},
         RecordingMarker{47500, RecordingMarkerType::Highlight, "Highlight"},
@@ -2432,7 +2464,7 @@ void QuickApplication::applyEditVisualScenario() {
     };
 
     if (scenario == QStringLiteral("edit-report-warning")) {
-        context.completed_snapshot.health = recorder_core::PipelineHealth::Warning;
+        context.completed_snapshot.health = exosnap::engine::PipelineHealth::Warning;
         context.completed_snapshot.capture.frames_dropped_backpressure = 122;
         context.peak_av_drift_ms = 41.0;
     } else if (scenario == QStringLiteral("edit-long-filename")) {
@@ -3147,9 +3179,9 @@ bool QuickApplication::applyOverlayVisualScenario(const QString& scenario) {
         result.hresult_text = L"0x80004005";
         result.error_detail = L"Container::Matroska requires VideoCodec::Av1, VideoCodec::H264, or VideoCodec::Hevc";
         result.output_file_bytes = 0;
-        result.container = recorder_core::Container::Matroska;
-        result.video_codec = recorder_core::VideoCodec::Av1;
-        result.audio_codec = recorder_core::AudioCodec::Opus;
+        result.container = exosnap::engine::Container::Matroska;
+        result.video_codec = exosnap::engine::VideoCodec::Av1;
+        result.audio_codec = exosnap::engine::AudioCodec::Opus;
         const auto report = models::BuildRecordingFailureReport(result);
         if (!report)
             return false;
@@ -3228,13 +3260,22 @@ bool QuickApplication::applyOverlayVisualScenario(const QString& scenario) {
         } else if (variant == QLatin1String("warning")) {
             record_view_model_.dropped_frames = 3;
             record_view_model_.SetState(UiRecordingState::Recording);
+        } else if (variant == QLatin1String("countdown")) {
+            // The countdown owns the screen BEFORE the capture is live, which is
+            // why it is its own variant rather than a flag on the recording one.
+            record_view_model_.SetState(UiRecordingState::Countdown);
         } else if (variant == QLatin1String("recording") || variant == QLatin1String("diagnostics") ||
-                   variant == QLatin1String("diagnostics-technical")) {
+                   variant == QLatin1String("diagnostics-technical") || variant == QLatin1String("controls")) {
             record_view_model_.SetState(UiRecordingState::Recording);
         } else {
             return false;
         }
 
+        // The quick-control pill is opt-in and off by default, so the variant
+        // that photographs it has to turn it on. It is the one capture-excluded
+        // overlay that takes mouse input (ADR 0016), which is exactly why its
+        // appearance has to be checkable like the others'.
+        settings_.show_quick_controls = variant == QLatin1String("controls");
         settings_.show_recording_overlay = true;
         settings_.show_diagnostics_overlay =
             variant == QLatin1String("diagnostics") || variant == QLatin1String("diagnostics-technical");
@@ -3252,6 +3293,22 @@ bool QuickApplication::applyOverlayVisualScenario(const QString& scenario) {
         // force the window on by hand -- photographing a state the product
         // cannot reach and presenting it as evidence.
         record_view_model_adapter_.synchronize();
+        if (variant == QLatin1String("countdown")) {
+            // Seeded on the members the live refresh reads, not on the adapter:
+            // refreshCountdownState() re-pushes these on its own schedule, so a
+            // value written straight into the adapter is overwritten with the
+            // real (zero) one before the grab, and the overlay stays invisible
+            // on `remainingSeconds > 0`.
+            //
+            // Mid-count, not at a boundary: a ring photographed at 3/3 or 0/3 is
+            // a full or an empty circle, and either hides an arc drawn from the
+            // wrong end.
+            live_config_.countdown_seconds = 3;
+            countdown_remaining_ = 2;
+            countdown_progress_ = 0.35;
+            record_view_model_adapter_.setCountdownState(live_config_.countdown_seconds, countdown_remaining_,
+                                                         countdown_progress_);
+        }
         overlay_adapter_.synchronize();
         return true;
     }
@@ -3785,6 +3842,15 @@ void QuickApplication::hideWindowToTray() {
     // whatever the last debounced sample happened to be.
     if (window_geometry_)
         window_geometry_->flush();
+    // Banked for the same reason as the geometry, and BEFORE the hide: a hidden
+    // window keeps its show state, but nothing readable after the restore still
+    // distinguishes "was maximized" from "was windowed" once Qt's show has run.
+    // The window may already be minimized here (the user minimized it and then
+    // chose Hide), which is why this asks the chrome rather than reading
+    // IsZoomed: a minimized window is never zoomed, and the answer for it lives
+    // in WPF_RESTORETOMAXIMIZED instead.
+    if (auto* chrome = root_window_->findChild<QuickWindowChrome*>())
+        hidden_while_maximized_ = chrome->willOccupyScreenMaximized();
     root_window_->hide();
     if (tray_presence_)
         tray_presence_->setWindowVisible(false);
@@ -3808,11 +3874,29 @@ void QuickApplication::hideWindowToTray() {
 void QuickApplication::restoreWindowFromTray() {
     if (!root_window_)
         return;
-    // showNormal() rather than show(): a window hidden while minimized comes back
-    // minimized otherwise, which reads to the user as the tray click doing
-    // nothing at all.
-    if (root_window_->visibility() == QWindow::Minimized || !root_window_->isVisible())
-        root_window_->showNormal();
+    // Two steps, and Qt decides neither of them.
+    //
+    // show() is unavoidable: a hidden window has to become visible to Qt again
+    // or the scene graph never resumes. What it must NOT be trusted with is the
+    // window STATE. This used to be showNormal(), which Qt documents as
+    // "setWindowStates(Qt::WindowNoState) and then setVisible(true)" -- it does
+    // not lose the maximized state, it deletes it on purpose. MEASURED: a window
+    // that went to the tray maximized came back windowed.
+    //
+    // So the state is re-applied natively afterwards, from the value banked
+    // before the hide rather than from anything read now: by this point Qt's own
+    // show has already picked a show command, and neither IsZoomed nor
+    // WPF_RESTORETOMAXIMIZED still describes what the user put away.
+    const bool restore_maximized = hidden_while_maximized_;
+    hidden_while_maximized_ = false;
+    if (!root_window_->isVisible())
+        root_window_->show();
+    if (auto* chrome = root_window_->findChild<QuickWindowChrome*>()) {
+        if (restore_maximized)
+            chrome->setWindowMaximized(true);
+        else
+            chrome->restoreWindow();
+    }
     root_window_->raise();
     root_window_->requestActivate();
     if (tray_presence_) {
@@ -3970,17 +4054,21 @@ bool QuickApplication::load(bool no_activate) {
         // is shown takes focus because Windows gives it focus, and a --no-activate
         // start withholds it through Qt::WindowDoesNotAcceptFocus in the flags,
         // which is already set by the time we get here.
-        if (auto* chrome = root_window->findChild<QuickWindowChrome*>())
+        auto* chrome = root_window->findChild<QuickWindowChrome*>();
+        if (chrome != nullptr)
             chrome->applyNativeWindowStyle();
         ApplyStartupWindowGeometry(root_window, restored.rect);
         TraceWindowGeometry("pre-show", root_window);
-        // showMaximized() rather than an initial `visibility`, and after the rect
-        // above: a maximized window still needs a restore rect, and the rect it
-        // un-maximizes to is whatever it stood on when it was maximized.
-        if (restored.maximized)
-            root_window->showMaximized();
-        else
-            root_window->show();
+        // Shown windowed first and maximized afterwards, never QWindow::
+        // showMaximized(): on this frameless window Qt answers that with a plain
+        // SetWindowPos onto the work area, which leaves Windows in SW_SHOWNORMAL
+        // and makes the work-area rect the rect the window un-maximizes to. The
+        // ordering matters for the same reason it did before -- a maximized window
+        // still needs the restore rect underneath it, and that is the rect placed
+        // above.
+        root_window->show();
+        if (restored.maximized && chrome != nullptr)
+            chrome->setWindowMaximized(true);
         TraceWindowGeometry("post-show", root_window);
 
         // Seeded with the rect the window is ACTUALLY on -- the resolved one --
@@ -4165,7 +4253,7 @@ unsigned long QuickApplication::presentTargetPidForSelection() const {
     // filter the idle desktop uses.
     if (!pushed_selected_target_.has_value())
         return 0;
-    if (pushed_selected_target_->kind != recorder_core::CaptureTarget::Kind::Window)
+    if (pushed_selected_target_->kind != exosnap::engine::CaptureTarget::Kind::Window)
         return 0;
     const auto hwnd = reinterpret_cast<HWND>(static_cast<uintptr_t>(pushed_selected_target_->native_id));
     if (hwnd == nullptr || ::IsWindow(hwnd) == FALSE)
@@ -4207,17 +4295,17 @@ bool QuickApplication::prepareRecordingBenchmark(uint32_t frame_rate, QString& e
     return true;
 }
 
-bool QuickApplication::selectCaptureTargetForAutomation(recorder_core::CaptureTarget::Kind kind,
+bool QuickApplication::selectCaptureTargetForAutomation(exosnap::engine::CaptureTarget::Kind kind,
                                                         const QString& title_filter) {
     for (std::size_t index = 0; index < record_view_model_.targets.size(); ++index) {
-        const recorder_core::CaptureTarget& target = record_view_model_.targets[index];
+        const exosnap::engine::CaptureTarget& target = record_view_model_.targets[index];
         if (target.kind != kind)
             continue;
-        if (kind == recorder_core::CaptureTarget::Kind::Window &&
+        if (kind == exosnap::engine::CaptureTarget::Kind::Window &&
             !QString::fromStdString(target.description).contains(title_filter, Qt::CaseInsensitive))
             continue;
         const CaptureMode mode =
-            kind == recorder_core::CaptureTarget::Kind::Window ? CaptureMode::Window : CaptureMode::Monitor;
+            kind == exosnap::engine::CaptureTarget::Kind::Window ? CaptureMode::Window : CaptureMode::Monitor;
         selectTarget(static_cast<int>(index), mode);
         // selectTarget can decline (a running recording locks the source), so the
         // caller is told what actually happened rather than that a call was made.

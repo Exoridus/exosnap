@@ -1,10 +1,10 @@
 #include <gtest/gtest.h>
 
-#include <recorder_core/webcam_placement.h>
+#include <exosnap/engine/webcam_placement.h>
 
 #include <cmath>
 
-namespace recorder_core {
+namespace exosnap::engine {
 namespace {
 
 // Helper: assert a mapped rect is entirely inside the content rectangle.
@@ -183,4 +183,4 @@ TEST(WebcamPlacementTest, PreviewAndOutputDifferOnlyByScaling) {
 }
 
 } // namespace
-} // namespace recorder_core
+} // namespace exosnap::engine

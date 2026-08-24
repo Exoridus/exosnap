@@ -89,7 +89,7 @@ if(EXOSNAP_WITH_PRESENTMON)
 endif()
 ```
 
-- [ ] **Step 2: Wire link + compile-def** in the root `CMakeLists.txt`, immediately after the `app`/`exosnap` target is defined (search for where `recorder_core` is linked to `exosnap`). The app target consumes it because `PresentMonEtwSession.cpp` lives in `app/diagnostics`:
+- [ ] **Step 2: Wire link + compile-def** in the root `CMakeLists.txt`, immediately after the `app`/`exosnap` target is defined (search for where `engine` is linked to `exosnap`). The app target consumes it because `PresentMonEtwSession.cpp` lives in `app/diagnostics`:
 
 ```cmake
 if(EXOSNAP_WITH_PRESENTMON)
@@ -408,10 +408,10 @@ git commit -m "feat(diagnostics): exclusive-fullscreen killer check + borderless
 ```cpp
 TEST(RecommendationEngineTest, JudderDetailNamesPresentModeAttribution) {
     using namespace exosnap::diagnostics;
-    recorder_core::RecordingDiagnosticsSnapshot snap;
+    exosnap::engine::RecordingDiagnosticsSnapshot snap;
     snap.valid = true;
     snap.video_encoder.cfr = true;
-    snap.capture.present_cadence_availability = recorder_core::MetricAvailability::Available;
+    snap.capture.present_cadence_availability = exosnap::engine::MetricAvailability::Available;
     snap.capture.source_present_jitter_ms = 6.0;     // > kJitterMs
     snap.capture.source_coalesce_ratio = 2.0;        // > kCoalesceRatio
     capability::CapabilitySet caps; capability::UserRecorderConfig config;
@@ -843,20 +843,20 @@ if (present_provider_ != nullptr) {
         live_snapshot_.capture.source_present_mode = ToSnapshotMode(ps.mode);
         live_snapshot_.capture.source_tearing = ps.tearing;
         live_snapshot_.capture.present_mode_availability =
-            recorder_core::MetricAvailability::Available;
+            exosnap::engine::MetricAvailability::Available;
     }
 }
 ```
 
-Add a small `ToSnapshotMode` translator (the diagnostics `PresentMode` enum and the recorder_core `PresentMode` enum are distinct types with identical members — `pipeline_diagnostics.h:68` vs `PresentProvider.h:9`):
+Add a small `ToSnapshotMode` translator (the diagnostics `PresentMode` enum and the engine `PresentMode` enum are distinct types with identical members — `pipeline_diagnostics.h:68` vs `PresentProvider.h:9`):
 
 ```cpp
-static recorder_core::PresentMode ToSnapshotMode(diagnostics::PresentMode m) {
+static exosnap::engine::PresentMode ToSnapshotMode(diagnostics::PresentMode m) {
     switch (m) {
-        case diagnostics::PresentMode::Composed: return recorder_core::PresentMode::Composed;
-        case diagnostics::PresentMode::IndependentFlip: return recorder_core::PresentMode::IndependentFlip;
-        case diagnostics::PresentMode::ExclusiveFullscreen: return recorder_core::PresentMode::ExclusiveFullscreen;
-        default: return recorder_core::PresentMode::Unknown;
+        case diagnostics::PresentMode::Composed: return exosnap::engine::PresentMode::Composed;
+        case diagnostics::PresentMode::IndependentFlip: return exosnap::engine::PresentMode::IndependentFlip;
+        case diagnostics::PresentMode::ExclusiveFullscreen: return exosnap::engine::PresentMode::ExclusiveFullscreen;
+        default: return exosnap::engine::PresentMode::Unknown;
     }
 }
 ```
@@ -1056,6 +1056,6 @@ git commit -m "docs(adr-0033): record delivered PresentMon subset/pin + DPC-mini
 ## Self-Review
 
 - **Spec coverage:** Vendoring (T1) ✓ · real ETW session (T5) ✓ · provider→snapshot bridge (T6–T7) ✓ · correlation enrichment (T4) ✓ · killer-check (T3) ✓ · DPC minimal (T8–T9) ✓ · graceful-unavailable (T2/T6 tests) ✓ · render verify (T10) ✓ · ADR (T11) ✓. The CFR-resampler and release mechanics are explicitly deferred to their own slices per the locked slicing decision.
-- **Type consistency:** `RecommendationEngine` constructor is extended once (Task 3) to its final 8-arg form `(caps, config, refresh, free_bytes, profile_supported, fs_name, live_snapshot*, present*)`; `SetDpcLatency`/`DpcLatencyReading` added in Task 8. `diagnostics::PresentMode` (4-value, `PresentProvider.h`) vs `recorder_core::PresentMode` (snapshot) are bridged by `ToSnapshotMode` (Task 7). `MapPresentEvent`/`RawPresentEvent` defined in Task 2 and consumed in Task 5.
+- **Type consistency:** `RecommendationEngine` constructor is extended once (Task 3) to its final 8-arg form `(caps, config, refresh, free_bytes, profile_supported, fs_name, live_snapshot*, present*)`; `SetDpcLatency`/`DpcLatencyReading` added in Task 8. `diagnostics::PresentMode` (4-value, `PresentProvider.h`) vs `exosnap::engine::PresentMode` (snapshot) are bridged by `ToSnapshotMode` (Task 7). `MapPresentEvent`/`RawPresentEvent` defined in Task 2 and consumed in Task 5.
 - **Placeholders:** the only `...` are inside the explicitly-labelled ETW-I/O skeletons (T5/T9), which must be completed against the pinned PresentMon API — this is called out as the honest verification boundary, not a hidden TODO. All pure-function tasks carry complete code.
 - **Known traps embedded:** test targets that compile diagnostics sources directly are updated in T2/T6/T7/T9; full build before commit (T10); provider compiles with `EXOSNAP_HAS_PRESENTMON` undefined (T5/T6 `#else`).

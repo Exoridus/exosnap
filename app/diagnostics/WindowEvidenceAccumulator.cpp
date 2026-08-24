@@ -5,7 +5,7 @@ namespace exosnap::diagnostics {
 void WindowEvidenceAccumulator::Reset(TimePoint now) noexcept {
     started_ = true;
     subscribed_at_ = now;
-    last_kind_ = recorder_core::HubFrameKind::None;
+    last_kind_ = exosnap::engine::HubFrameKind::None;
     last_generation_ = 0;
     had_fresh_frame_ = false;
     last_fresh_frame_ = now;
@@ -13,7 +13,7 @@ void WindowEvidenceAccumulator::Reset(TimePoint now) noexcept {
     fresh_since_shape_ = false;
 }
 
-void WindowEvidenceAccumulator::Update(TimePoint now, recorder_core::HubFrameKind kind, uint64_t generation,
+void WindowEvidenceAccumulator::Update(TimePoint now, exosnap::engine::HubFrameKind kind, uint64_t generation,
                                        WindowShape shape) noexcept {
     if (!started_) {
         Reset(now);

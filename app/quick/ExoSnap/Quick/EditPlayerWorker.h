@@ -7,7 +7,7 @@
 #include <QString>
 #include <QTimer>
 
-#include <recorder_core/edit_player_session.h>
+#include <exosnap/engine/edit_player_session.h>
 
 #include <memory>
 
@@ -53,7 +53,7 @@ class EditPlayerWorker : public QObject {
     void onTick();
 
     std::shared_ptr<EditPlayerFrameSink> sink_;
-    std::unique_ptr<recorder_core::EditPlayerSession> session_;
+    std::unique_ptr<exosnap::engine::EditPlayerSession> session_;
     QTimer* tick_timer_ = nullptr;
     QElapsedTimer elapsed_;
     qint64 duration_ms_ = 0;

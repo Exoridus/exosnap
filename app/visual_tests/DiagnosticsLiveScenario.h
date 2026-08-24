@@ -18,7 +18,7 @@
 //
 // Pure and harness-only. Nothing in a shipping code path calls it.
 
-#include <recorder_core/pipeline_diagnostics.h>
+#include <exosnap/engine/pipeline_diagnostics.h>
 
 #include <QString>
 
@@ -38,6 +38,6 @@ namespace exosnap::visual {
 //
 // An unrecognised kind returns an invalid snapshot, which renders as no live
 // tiles at all -- the honest result for "no scenario".
-[[nodiscard]] recorder_core::RecordingDiagnosticsSnapshot MakeDiagnosticsLiveSnapshot(const QString& kind);
+[[nodiscard]] exosnap::engine::RecordingDiagnosticsSnapshot MakeDiagnosticsLiveSnapshot(const QString& kind);
 
 } // namespace exosnap::visual

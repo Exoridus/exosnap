@@ -92,6 +92,54 @@ its cause is gone.
 Combine with `--hwnd-audit` for a run that measures all of this and exits without
 ever activating the window.
 
+## Maximize and restore — `--window-maximize-cycle`
+
+`exosnap.exe --window-maximize-cycle` drives the shell's own `toggleMaximized()`
+once in each direction and checks the result against Windows, then exits:
+
+```
+window-cycle: baseline     zoomed=0 iconic=0 show_cmd=1 ws_maximize=0 restore_to_max=0 window=120,80 1920x1050 restore=120,80 1920x1050
+window-cycle: windowed resize edges=6/6
+window-cycle: maximized    zoomed=1 iconic=0 show_cmd=3 ws_maximize=1 restore_to_max=1 window=0,0 3840x2088   restore=120,80 1920x1050
+window-cycle: maximized resize edges=0/6
+window-cycle: minimized    zoomed=0 iconic=1 show_cmd=2 ws_maximize=0 restore_to_max=1 window=-32000,-32000 160x28
+window-cycle: un-minimized zoomed=1 iconic=0 show_cmd=3 ws_maximize=1 restore_to_max=1 window=0,0 3840x2088
+window-cycle: restored     zoomed=0 iconic=0 show_cmd=1 ws_maximize=0 restore_to_max=0 window=120,80 1920x1050 restore=120,80 1920x1050
+window-cycle: PASS maximize and restore round-tripped
+```
+
+The run places the window on a rect that is deliberately not the work area before
+it starts. A window persisted at work-area size would otherwise satisfy the
+round-trip assertion whatever the restore did.
+
+Five assertions, none of which a unit test can reach — `QT_QPA_PLATFORM=offscreen`
+has no HWND, so `IsZoomed`, `WINDOWPLACEMENT` and `WS_MAXIMIZE` do not exist there:
+
+1. **The window is really zoomed** while maximized. `Window.visibility` is not
+   evidence: setting it to `Window.Maximized` on this frameless window produces a
+   single `SetWindowPos` onto the work area and leaves Windows in
+   `SW_SHOWNORMAL`, which looks maximized and behaves like a normal window.
+2. **`rcNormalPosition` survives the maximize.** A window that resizes into the
+   maximized state instead of entering it overwrites the rect it must return to,
+   and the damage is only visible one restore later.
+3. **The resize edges answer in exactly one state.** Six `WM_NCHITTEST` probes,
+   sent straight to the window rather than performed with a cursor: all six must
+   resolve to a resize code while windowed and none of them while maximized.
+4. **A window minimized while maximized comes back maximized.** The taskbar
+   button sends the same `SC_RESTORE` the harness sends, and Windows decides
+   where to return from `WPF_RESTORETOMAXIMIZED` in the placement — a flag only a
+   native minimize sets. `restore_to_max` on the `minimized` line is the value to
+   read; it going to 0 there is the whole defect.
+5. **The restore rect round-trips** back to the baseline exactly.
+
+Exit codes: `1` state, `2` geometry, `3` no window, `4` normalisation, `5` hit
+test, `6` minimize/restore. The run isolates its config directory, stays out of the single-instance
+guard, and drives no input — the toggle is the same QML function the Maximize
+button calls.
+
+Dragging a maximized window's title bar downward is the one contract point this
+cannot reach: that is Windows' own move loop and needs a real drag.
+
 ## Preview presentation — `EXOSNAP_PREVIEW_TRACE=1`
 
 Writes one `preview-trace:` line per Record-preview presentation lifecycle

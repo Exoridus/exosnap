@@ -138,14 +138,26 @@ ApplicationWindow {
         // accent so a light theme does not get a dark border and vice versa.
         borderColor: ExoTheme.line
 
-        // Qt owns the maximized state (Window.visibility), Win32 only reports
-        // the click. Reading it back from IsZoomed here would introduce a second
-        // notion of "maximized" that can disagree with the binding below.
+        // Win32 owns the maximized state and QML reads it back from
+        // windowMaximized. MEASURED: `visibility = Window.Maximized` on this
+        // frameless window is a SetWindowPos onto the work area and nothing more,
+        // so the window ends up maximized-sized while Windows still has it
+        // normal -- resizable, and with the work-area rect recorded as the rect
+        // to un-maximize to. Windows also changes this state on its own (Snap,
+        // double-click, Win+arrow), which no Qt-side notion can lead.
         onMaximizeButtonClicked: root.toggleMaximized()
     }
 
     function toggleMaximized(): void {
-        root.visibility = root.visibility === Window.Maximized ? Window.Windowed : Window.Maximized;
+        windowChrome.toggleMaximized();
+    }
+
+    // Routed through the chrome for the same reason as toggleMaximized(): the
+    // window state belongs to Win32 here, and only a native minimize records
+    // WPF_RESTORETOMAXIMIZED, which is what brings a maximized window back
+    // maximized from the taskbar.
+    function minimizeWindow(): void {
+        windowChrome.minimizeWindow();
     }
 
     ExoConfirmDialog {
@@ -282,8 +294,8 @@ ApplicationWindow {
         // the window coordinates the hit test compares against are the same
         // space — no mapping is needed on the way down.
         chrome: windowChrome
-        windowMaximized: root.visibility === Window.Maximized
-        onMinimizeRequested: root.showMinimized()
+        windowMaximized: windowChrome.windowMaximized
+        onMinimizeRequested: root.minimizeWindow()
         onMaximizeRestoreRequested: root.toggleMaximized()
         onCloseRequested: root.close()
         shell: root.shell

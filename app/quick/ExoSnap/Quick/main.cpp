@@ -131,6 +131,8 @@ QString harnessConfigId(const QStringList& arguments) {
         return QStringLiteral("quick-visual-test");
     if (arguments.contains(QStringLiteral("--hwnd-audit")))
         return QStringLiteral("quick-hwnd-audit");
+    if (arguments.contains(QStringLiteral("--window-maximize-cycle")))
+        return QStringLiteral("quick-window-cycle");
     if (arguments.contains(QStringLiteral("--auto-record")))
         return QStringLiteral("quick-auto-record");
     if (arguments.contains(QStringLiteral("--auto-edit")))
@@ -254,15 +256,28 @@ void saveOverlayWindowGrabs(const QString& screenshot_path) {
     const QString stem = dot > 0 ? screenshot_path.left(dot) : screenshot_path;
     const QString suffix = dot > 0 ? screenshot_path.mid(dot) : QStringLiteral(".png");
 
+    // Every candidate is REPORTED, grabbed or not. A capture-excluded overlay
+    // that is simply not visible produces no file, and a silent short write is
+    // how a scenario comes to cover four windows while its caller believes it
+    // covered five -- the same failure the notification toast already caused
+    // once by having no objectName at all.
     for (QWindow* window : QGuiApplication::topLevelWindows()) {
-        if (window == nullptr || !window->isVisible())
-            continue;
-        if (!window->objectName().startsWith(QLatin1String("quickOverlay")))
+        if (window == nullptr || !window->objectName().startsWith(QLatin1String("quickOverlay")))
             continue;
         auto* quick_window = qobject_cast<QQuickWindow*>(window);
-        if (quick_window == nullptr)
+        if (quick_window == nullptr) {
+            qInfo("overlay-grab: %s skipped (not a QQuickWindow)", qPrintable(window->objectName()));
             continue;
-        (void)quick_window->grabWindow().save(stem + QLatin1Char('.') + window->objectName() + suffix);
+        }
+        if (!window->isVisible()) {
+            qInfo("overlay-grab: %s skipped (not visible) geometry=%dx%d", qPrintable(window->objectName()),
+                  window->width(), window->height());
+            continue;
+        }
+        const QString path = stem + QLatin1Char('.') + window->objectName() + suffix;
+        const bool saved = quick_window->grabWindow().save(path);
+        qInfo("overlay-grab: %s %s %dx%d", qPrintable(window->objectName()), saved ? "saved" : "SAVE FAILED",
+              window->width(), window->height());
     }
 }
 
@@ -692,9 +707,14 @@ int main(int argc, char* argv[]) {
     constexpr bool auto_edit_requested = false;
 #endif
     const bool navigation_lifecycle_test = arguments.contains(QStringLiteral("--navigation-lifecycle-test"));
-    const bool diagnostic_mode = preview_mode || auto_record_requested || auto_edit_requested ||
-                                 navigation_lifecycle_test || arguments.contains(QStringLiteral("--smoke-test")) ||
-                                 arguments.contains(QStringLiteral("--visual-test"));
+    // Isolated and exempt from the single-instance guard like every other
+    // harness, but NOT started no-activate: the state it drives is the window
+    // state, and a window Windows was told not to activate is not the window the
+    // user maximizes.
+    const bool maximize_cycle = arguments.contains(QStringLiteral("--window-maximize-cycle"));
+    const bool diagnostic_mode =
+        preview_mode || auto_record_requested || auto_edit_requested || navigation_lifecycle_test || maximize_cycle ||
+        arguments.contains(QStringLiteral("--smoke-test")) || arguments.contains(QStringLiteral("--visual-test"));
 
     // A harness runs the *real* application, and the real application persists
     // its live configuration while it runs. Aimed at the developer's own config
@@ -734,12 +754,16 @@ int main(int argc, char* argv[]) {
     // where the persisted rect is resolved and the window is created. Also
     // available as EXOSNAP_WINDOW_TRACE=1 so a launch that cannot take extra argv
     // (a shortcut, the updater's relaunch) can still be traced.
-    if (arguments.contains(QStringLiteral("--window-trace"))) {
+    if (arguments.contains(QStringLiteral("--window-trace")) || maximize_cycle) {
         exosnap::quick::SetWindowGeometryTraceEnabled(true);
         // Before the window exists: the messages that decide its first rect are
         // sent during creation, so a filter installed afterwards would miss the
         // only part of the sequence worth measuring.
         exosnap::quick::InstallStartupMessageTrace();
+        // The cycle happens after the first frame, which is where the trace
+        // normally stops itself.
+        if (maximize_cycle)
+            exosnap::quick::SetStartupMessageTracePersistent(true);
     }
 
     // Harness-only: controlled text expansion for the 860x700 layout regression
@@ -773,7 +797,7 @@ int main(int argc, char* argv[]) {
                                            navigation_lifecycle_test ||
                                            arguments.contains(QStringLiteral("--visual-test")));
 
-    if (!quick_application.load(diagnostic_mode))
+    if (!quick_application.load(diagnostic_mode && !maximize_cycle))
         return -1;
 
     const auto roots = quick_application.engine().rootObjects();
@@ -1142,10 +1166,12 @@ int main(int argc, char* argv[]) {
             const LONG_PTR style = hwnd != nullptr ? GetWindowLongPtrW(hwnd, GWL_STYLE) : 0;
             const LONG_PTR ex_style = hwnd != nullptr ? GetWindowLongPtrW(hwnd, GWL_EXSTYLE) : 0;
             const NonClientInset inset = hwnd != nullptr ? nonClientInset(hwnd) : NonClientInset{};
-            qInfo("quick-hwnd-audit: style=0x%08llx exstyle=0x%08llx caption=%d thickframe=%d border=%d",
+            qInfo("quick-hwnd-audit: style=0x%08llx exstyle=0x%08llx caption=%d thickframe=%d border=%d "
+                  "maximizebox=%d minimizebox=%d sysmenu=%d",
                   static_cast<unsigned long long>(style), static_cast<unsigned long long>(ex_style),
                   (style & WS_CAPTION) == WS_CAPTION ? 1 : 0, (style & WS_THICKFRAME) != 0 ? 1 : 0,
-                  (style & WS_BORDER) != 0 ? 1 : 0);
+                  (style & WS_BORDER) != 0 ? 1 : 0, (style & WS_MAXIMIZEBOX) != 0 ? 1 : 0,
+                  (style & WS_MINIMIZEBOX) != 0 ? 1 : 0, (style & WS_SYSMENU) != 0 ? 1 : 0);
             qInfo("quick-hwnd-audit: nonclient_inset=%d,%d,%d,%d native_titlebar=%d", inset.left, inset.top,
                   inset.right, inset.bottom, inset.top > 0 ? 1 : 0);
 
@@ -1169,21 +1195,241 @@ int main(int argc, char* argv[]) {
             // its own must have Windows reserve nothing outside its client rect,
             // or a native caption is being drawn above the product's.
             //
-            // WS_THICKFRAME must be present. It is now asserted rather than only
-            // reported: it is the single bit keeping the native resize drag, Aero
-            // Snap and Win+Arrow alive on a frameless window, and it went missing
-            // silently once before — Qt rewrites the whole style when it applies
-            // Qt::FramelessWindowHint, and the bit was being set before that
-            // rather than after. The old objection to asserting it (that Qt then
-            // believes the window has an 8/31 px frame and misplaces it) does not
-            // survive measurement: with the frameless hint applied Qt reports
-            // frame margins of 0,0,0,0 with the bit set, which is what
+            // The gesture style bits must be present. They are asserted rather
+            // than only reported: WS_THICKFRAME carries the native resize drag,
+            // Aero Snap and Win+Arrow; WS_MAXIMIZEBOX carries
+            // double-click-to-maximize, drag-to-top and the Snap Layouts flyout;
+            // WS_MINIMIZEBOX and WS_SYSMENU carry Win+Down and the window menu.
+            // None of them look wrong in a screenshot, and WS_THICKFRAME went
+            // missing silently once before -- Qt rewrites the whole style when it
+            // applies Qt::FramelessWindowHint, and the bit was being set before
+            // that rather than after. The old objection to asserting it (that Qt
+            // then believes the window has an 8/31 px frame and misplaces it) does
+            // not survive measurement: with the frameless hint applied Qt reports
+            // frame margins of 0,0,0,0 with the bits set, which is what
             // qt_frame_margins above exists to keep honest.
             exosnap::quick::TraceWindowGeometry("settled", root_window);
 
-            const bool chrome_clean = hwnd != nullptr && inset.isEmpty() && (style & WS_THICKFRAME) != 0;
+            constexpr LONG_PTR kGestureStyles = WS_THICKFRAME | WS_MAXIMIZEBOX | WS_MINIMIZEBOX | WS_SYSMENU;
+            const bool chrome_clean = hwnd != nullptr && inset.isEmpty() && (style & kGestureStyles) == kGestureStyles;
             app.exit(children == 0 && chrome_clean ? 0 : 1);
         });
+    }
+
+    // Harness-only: drives the product's own maximize/restore path and checks the
+    // result against Windows rather than against Qt.
+    //
+    // The window state is the one part of the chrome no fixture can reach.
+    // QT_QPA_PLATFORM=offscreen has no HWND, so IsZoomed, WINDOWPLACEMENT and the
+    // WS_MAXIMIZE bit -- the only authoritative answers to "is this window
+    // maximized" -- do not exist there. The alternative is a developer performing
+    // the gesture by hand, which is not a regression check.
+    //
+    // argv-configured, never input synthesis: the toggle is the same QML function
+    // the Maximize button calls, so a run exercises the shipped path.
+    if (arguments.contains(QStringLiteral("--window-maximize-cycle"))) {
+        struct CycleState {
+            int step = 0;
+            int windowed_edges = 0;
+            RECT baseline{};
+        };
+        auto state = std::make_shared<CycleState>();
+        auto* cycle = new QTimer(&app);
+        cycle->setInterval(700);
+        QObject::connect(cycle, &QTimer::timeout, &app, [&app, root_window, cycle, state]() {
+            const HWND hwnd = root_window != nullptr ? reinterpret_cast<HWND>(root_window->winId()) : nullptr;
+            if (hwnd == nullptr) {
+                cycle->stop();
+                app.exit(3);
+                return;
+            }
+            const auto sameRect = [](const RECT& a, const RECT& b) {
+                return a.left == b.left && a.top == b.top && a.right == b.right && a.bottom == b.bottom;
+            };
+            // WM_NCHITTEST sent straight to the window, which is how the resize
+            // gating becomes observable without a mouse: the message reaches the
+            // same filter a real drag would, moves no cursor and takes no focus.
+            const auto hitTest = [hwnd](LONG x, LONG y) {
+                return static_cast<LRESULT>(
+                    SendMessageW(hwnd, WM_NCHITTEST, 0, MAKELPARAM(static_cast<WORD>(x), static_cast<WORD>(y))));
+            };
+            const auto resizeEdgeCount = [&hitTest](const RECT& rect) {
+                const LONG mid_x = (rect.left + rect.right) / 2;
+                const LONG mid_y = (rect.top + rect.bottom) / 2;
+                const POINT probes[] = {{mid_x, rect.top + 1},         {mid_x, rect.bottom - 2},
+                                        {rect.left + 1, mid_y},        {rect.right - 2, mid_y},
+                                        {rect.left + 1, rect.top + 1}, {rect.right - 2, rect.bottom - 2}};
+                int edges = 0;
+                for (const POINT& probe : probes) {
+                    const LRESULT code = hitTest(probe.x, probe.y);
+                    if (code >= HTLEFT && code <= HTBOTTOMRIGHT)
+                        ++edges;
+                }
+                return edges;
+            };
+            const auto report = [hwnd](const char* stage, RECT* normal_out) {
+                RECT rect{};
+                GetWindowRect(hwnd, &rect);
+                WINDOWPLACEMENT placement{};
+                placement.length = sizeof(placement);
+                const bool have_placement = GetWindowPlacement(hwnd, &placement) != FALSE;
+                const RECT& normal = placement.rcNormalPosition;
+                // restore_to_max is printed as "-" unless showCmd is
+                // SW_SHOWMINIMIZED. WPF_RESTORETOMAXIMIZED is documented as
+                // valid ONLY then, so reporting the raw bit in any other state
+                // publishes a number that carries no meaning -- and a reader
+                // (this one included) will reason from it anyway.
+                const bool restore_flag_valid = have_placement && placement.showCmd == SW_SHOWMINIMIZED;
+                const char* restore_to_max =
+                    !restore_flag_valid ? "-" : ((placement.flags & WPF_RESTORETOMAXIMIZED) != 0 ? "1" : "0");
+                qInfo("window-cycle: %s zoomed=%d iconic=%d show_cmd=%u ws_maximize=%d restore_to_max=%s "
+                      "window=%ld,%ld %ldx%ld restore=%ld,%ld %ldx%ld",
+                      stage, IsZoomed(hwnd) != FALSE ? 1 : 0, IsIconic(hwnd) != FALSE ? 1 : 0,
+                      have_placement ? placement.showCmd : 0u,
+                      (GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_MAXIMIZE) != 0 ? 1 : 0, restore_to_max, rect.left,
+                      rect.top, rect.right - rect.left, rect.bottom - rect.top, normal.left, normal.top,
+                      normal.right - normal.left, normal.bottom - normal.top);
+                if (normal_out != nullptr)
+                    *normal_out = normal;
+                return rect;
+            };
+
+            switch (state->step) {
+            case 0: {
+                // Normalisation, not the path under test: the previous run may
+                // have persisted a maximized window, and the cycle has to start
+                // from a known windowed state either way.
+                ShowWindow(hwnd, SW_RESTORE);
+                // Placed on a rect that is deliberately NOT the work area. A
+                // persisted window that already fills it makes the round-trip
+                // assertion below true whatever the restore does.
+                MONITORINFO monitor_info{};
+                monitor_info.cbSize = sizeof(monitor_info);
+                const HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+                if (monitor != nullptr && GetMonitorInfoW(monitor, &monitor_info) != FALSE) {
+                    const RECT& work = monitor_info.rcWork;
+                    SetWindowPos(hwnd, nullptr, work.left + 120, work.top + 80, (work.right - work.left) / 2,
+                                 (work.bottom - work.top) / 2, SWP_NOZORDER | SWP_NOACTIVATE);
+                }
+                break;
+            }
+            case 1:
+                state->baseline = report("baseline", nullptr);
+                if (IsZoomed(hwnd) != FALSE) {
+                    qWarning("window-cycle: FAIL the window is still zoomed after SW_RESTORE");
+                    cycle->stop();
+                    app.exit(4);
+                    return;
+                }
+                // Asserted in BOTH states, because "no resize edge while maximized"
+                // is worthless on its own: a hit test that answered HTCLIENT
+                // everywhere would satisfy it and leave the window unresizable.
+                state->windowed_edges = resizeEdgeCount(state->baseline);
+                qInfo("window-cycle: windowed resize edges=%d/6", state->windowed_edges);
+                if (state->windowed_edges != 6) {
+                    qWarning("window-cycle: FAIL a windowed window must answer all six resize probes");
+                    cycle->stop();
+                    app.exit(5);
+                    return;
+                }
+                QMetaObject::invokeMethod(root_window, "toggleMaximized");
+                break;
+            case 2: {
+                RECT normal{};
+                const RECT maximized = report("maximized", &normal);
+                // Checked against Windows, not against Window.visibility: a QML
+                // state that no Win32 fact agrees with is exactly the defect this
+                // harness exists to catch, and reading it back from QML would
+                // report success on it.
+                if (IsZoomed(hwnd) == FALSE) {
+                    qWarning("window-cycle: FAIL the window is not zoomed after toggleMaximized() "
+                             "(%ldx%ld, still SW_SHOWNORMAL)",
+                             maximized.right - maximized.left, maximized.bottom - maximized.top);
+                    cycle->stop();
+                    app.exit(1);
+                    return;
+                }
+                // The restore rect has to survive the maximize untouched. It is a
+                // separate assertion from the round trip below because it fails
+                // earlier and says why: a window that resizes into the maximized
+                // state instead of entering it overwrites this rect on the way in.
+                if (!sameRect(normal, state->baseline)) {
+                    qWarning("window-cycle: FAIL the restore rect became %ld,%ld %ldx%ld while maximizing "
+                             "(it was %ld,%ld %ldx%ld)",
+                             normal.left, normal.top, normal.right - normal.left, normal.bottom - normal.top,
+                             state->baseline.left, state->baseline.top, state->baseline.right - state->baseline.left,
+                             state->baseline.bottom - state->baseline.top);
+                    cycle->stop();
+                    app.exit(2);
+                    return;
+                }
+                const int maximized_edges = resizeEdgeCount(maximized);
+                qInfo("window-cycle: maximized resize edges=%d/6", maximized_edges);
+                if (maximized_edges != 0) {
+                    qWarning("window-cycle: FAIL a maximized window answered %d resize probes", maximized_edges);
+                    cycle->stop();
+                    app.exit(5);
+                    return;
+                }
+                // Minimize and un-minimize WHILE STILL MAXIMIZED. The taskbar
+                // button sends exactly the SC_RESTORE used below, so the sequence
+                // is the real one without any input: Windows must bring a window
+                // that was maximized back MAXIMIZED, which it decides from
+                // WPF_RESTORETOMAXIMIZED in the placement.
+                // The shell's own function, not QWindow::showMinimized(): that is
+                // the path the Minimize button takes.
+                QMetaObject::invokeMethod(root_window, "minimizeWindow");
+                break;
+            }
+            case 3: {
+                report("minimized", nullptr);
+                if (IsIconic(hwnd) == FALSE) {
+                    qWarning("window-cycle: FAIL the window is not iconic after showMinimized()");
+                    cycle->stop();
+                    app.exit(6);
+                    return;
+                }
+                SendMessageW(hwnd, WM_SYSCOMMAND, SC_RESTORE, 0);
+                break;
+            }
+            case 4: {
+                report("un-minimized", nullptr);
+                if (IsZoomed(hwnd) == FALSE) {
+                    qWarning("window-cycle: FAIL a window minimized while maximized came back windowed");
+                    cycle->stop();
+                    app.exit(6);
+                    return;
+                }
+                QMetaObject::invokeMethod(root_window, "toggleMaximized");
+                break;
+            }
+            case 5: {
+                const RECT restored = report("restored", nullptr);
+                cycle->stop();
+                if (!sameRect(restored, state->baseline)) {
+                    qWarning("window-cycle: FAIL restored to %ld,%ld %ldx%ld but the window started at %ld,%ld %ldx%ld",
+                             restored.left, restored.top, restored.right - restored.left,
+                             restored.bottom - restored.top, state->baseline.left, state->baseline.top,
+                             state->baseline.right - state->baseline.left,
+                             state->baseline.bottom - state->baseline.top);
+                    app.exit(2);
+                    return;
+                }
+                if (IsZoomed(hwnd) != FALSE) {
+                    qWarning("window-cycle: FAIL the window is still zoomed after the second toggleMaximized()");
+                    app.exit(1);
+                    return;
+                }
+                qInfo("window-cycle: PASS maximize and restore round-tripped");
+                app.exit(0);
+                return;
+            }
+            default:
+                break;
+            }
+            ++state->step;
+        });
+        cycle->start();
     }
 
     const QString benchmark_path = optionValue(arguments, QStringLiteral("--preview-benchmark"));
@@ -1303,7 +1549,7 @@ int main(int argc, char* argv[]) {
                 WaitingForResult,
             };
             Phase phase = Phase::WaitingForReadyFrame;
-            recorder_core::CaptureTarget target;
+            exosnap::engine::CaptureTarget target;
             QJsonArray frames;
             int attempts = 0;
         };
@@ -1313,7 +1559,7 @@ int main(int argc, char* argv[]) {
         bool target_found = false;
         if (coordinator != nullptr && quick_application.prepareRecordingBenchmark(60, preparation_error)) {
             for (const auto& target : coordinator->EnumerateTargets()) {
-                if (target.kind == recorder_core::CaptureTarget::Kind::Monitor) {
+                if (target.kind == exosnap::engine::CaptureTarget::Kind::Monitor) {
                     state->target = target;
                     target_found = true;
                     break;

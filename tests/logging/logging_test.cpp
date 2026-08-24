@@ -1,6 +1,6 @@
+#include <exosnap/engine/logging/logging.h>
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
-#include <recorder_core/logging/logging.h>
 
 #include <filesystem>
 #include <fstream>
@@ -9,18 +9,18 @@
 
 namespace {
 
-using recorder_core::logging::LogField;
-using recorder_core::logging::LoggerConfig;
-using recorder_core::logging::LogLevel;
+using exosnap::engine::logging::LogField;
+using exosnap::engine::logging::LoggerConfig;
+using exosnap::engine::logging::LogLevel;
 
 class LoggingTest : public ::testing::Test {
   protected:
     void SetUp() override {
-        recorder_core::logging::shutdown();
+        exosnap::engine::logging::shutdown();
     }
 
     void TearDown() override {
-        recorder_core::logging::shutdown();
+        exosnap::engine::logging::shutdown();
         for (const auto& p : tempFiles_) {
             std::error_code ec;
             std::filesystem::remove(p, ec);
@@ -60,19 +60,19 @@ class LoggingTest : public ::testing::Test {
 };
 
 TEST_F(LoggingTest, ToStringReturnsStableLevelNames) {
-    EXPECT_EQ(recorder_core::logging::to_string(LogLevel::Trace), "trace");
-    EXPECT_EQ(recorder_core::logging::to_string(LogLevel::Debug), "debug");
-    EXPECT_EQ(recorder_core::logging::to_string(LogLevel::Info), "info");
-    EXPECT_EQ(recorder_core::logging::to_string(LogLevel::Warn), "warn");
-    EXPECT_EQ(recorder_core::logging::to_string(LogLevel::Error), "error");
-    EXPECT_EQ(recorder_core::logging::to_string(LogLevel::Critical), "critical");
+    EXPECT_EQ(exosnap::engine::logging::to_string(LogLevel::Trace), "trace");
+    EXPECT_EQ(exosnap::engine::logging::to_string(LogLevel::Debug), "debug");
+    EXPECT_EQ(exosnap::engine::logging::to_string(LogLevel::Info), "info");
+    EXPECT_EQ(exosnap::engine::logging::to_string(LogLevel::Warn), "warn");
+    EXPECT_EQ(exosnap::engine::logging::to_string(LogLevel::Error), "error");
+    EXPECT_EQ(exosnap::engine::logging::to_string(LogLevel::Critical), "critical");
 }
 
 TEST_F(LoggingTest, InitializeRejectsZeroRingCapacity) {
     LoggerConfig cfg;
     cfg.filePath = makeTempPath();
     cfg.ringCapacity = 0;
-    EXPECT_THROW(recorder_core::logging::initialize(cfg), std::invalid_argument);
+    EXPECT_THROW(exosnap::engine::logging::initialize(cfg), std::invalid_argument);
 }
 
 TEST_F(LoggingTest, RingBufferKeepsNewestRecordsInChronologicalOrder) {
@@ -81,13 +81,13 @@ TEST_F(LoggingTest, RingBufferKeepsNewestRecordsInChronologicalOrder) {
     cfg.filePath = path;
     cfg.ringCapacity = 2;
     cfg.minimumLevel = LogLevel::Info;
-    recorder_core::logging::initialize(cfg);
+    exosnap::engine::logging::initialize(cfg);
 
-    recorder_core::logging::log(LogLevel::Info, "comp", "first");
-    recorder_core::logging::log(LogLevel::Info, "comp", "second");
-    recorder_core::logging::log(LogLevel::Info, "comp", "third");
+    exosnap::engine::logging::log(LogLevel::Info, "comp", "first");
+    exosnap::engine::logging::log(LogLevel::Info, "comp", "second");
+    exosnap::engine::logging::log(LogLevel::Info, "comp", "third");
 
-    auto snapshot = recorder_core::logging::snapshot_ring_buffer();
+    auto snapshot = exosnap::engine::logging::snapshot_ring_buffer();
     ASSERT_EQ(snapshot.size(), 2);
     EXPECT_EQ(snapshot[0].message, "second");
     EXPECT_EQ(snapshot[1].message, "third");
@@ -98,17 +98,17 @@ TEST_F(LoggingTest, MinimumLevelFiltersBothSinks) {
     LoggerConfig cfg;
     cfg.filePath = path;
     cfg.minimumLevel = LogLevel::Warn;
-    recorder_core::logging::initialize(cfg);
+    exosnap::engine::logging::initialize(cfg);
 
-    recorder_core::logging::log(LogLevel::Info, "comp", "info_msg");
-    recorder_core::logging::log(LogLevel::Error, "comp", "error_msg");
+    exosnap::engine::logging::log(LogLevel::Info, "comp", "info_msg");
+    exosnap::engine::logging::log(LogLevel::Error, "comp", "error_msg");
 
-    auto snapshot = recorder_core::logging::snapshot_ring_buffer();
+    auto snapshot = exosnap::engine::logging::snapshot_ring_buffer();
     ASSERT_EQ(snapshot.size(), 1);
     EXPECT_EQ(snapshot[0].level, LogLevel::Error);
     EXPECT_EQ(snapshot[0].message, "error_msg");
 
-    recorder_core::logging::shutdown();
+    exosnap::engine::logging::shutdown();
 
     auto content = readFile(path);
     auto j = nlohmann::json::parse(content);
@@ -121,14 +121,14 @@ TEST_F(LoggingTest, FileSinkWritesStructuredJsonLines) {
     LoggerConfig cfg;
     cfg.filePath = path;
     cfg.minimumLevel = LogLevel::Info;
-    recorder_core::logging::initialize(cfg);
+    exosnap::engine::logging::initialize(cfg);
 
     std::vector<LogField> fields;
     fields.push_back({"key1", "value1"});
     fields.push_back({"key2", "value2"});
-    recorder_core::logging::log(LogLevel::Info, "test_comp", "test message", fields);
+    exosnap::engine::logging::log(LogLevel::Info, "test_comp", "test message", fields);
 
-    recorder_core::logging::shutdown();
+    exosnap::engine::logging::shutdown();
 
     auto content = readFile(path);
     auto j = nlohmann::json::parse(content);
@@ -149,22 +149,22 @@ TEST_F(LoggingTest, ReinitializeClearsPreviousRingBuffer) {
     LoggerConfig cfgA;
     cfgA.filePath = pathA;
     cfgA.ringCapacity = 10;
-    recorder_core::logging::initialize(cfgA);
-    recorder_core::logging::log(LogLevel::Info, "comp", "msg_a");
+    exosnap::engine::logging::initialize(cfgA);
+    exosnap::engine::logging::log(LogLevel::Info, "comp", "msg_a");
 
-    EXPECT_EQ(recorder_core::logging::snapshot_ring_buffer().size(), 1);
+    EXPECT_EQ(exosnap::engine::logging::snapshot_ring_buffer().size(), 1);
 
     LoggerConfig cfgB;
     cfgB.filePath = pathB;
     cfgB.ringCapacity = 10;
-    recorder_core::logging::initialize(cfgB);
+    exosnap::engine::logging::initialize(cfgB);
 
-    EXPECT_TRUE(recorder_core::logging::snapshot_ring_buffer().empty());
+    EXPECT_TRUE(exosnap::engine::logging::snapshot_ring_buffer().empty());
 
-    recorder_core::logging::log(LogLevel::Info, "comp", "msg_b");
-    EXPECT_EQ(recorder_core::logging::snapshot_ring_buffer().size(), 1);
+    exosnap::engine::logging::log(LogLevel::Info, "comp", "msg_b");
+    EXPECT_EQ(exosnap::engine::logging::snapshot_ring_buffer().size(), 1);
 
-    recorder_core::logging::shutdown();
+    exosnap::engine::logging::shutdown();
 
     auto contentB = readFile(pathB);
     auto jB = nlohmann::json::parse(contentB);
@@ -177,19 +177,19 @@ TEST_F(LoggingTest, ReinitializeClearsPreviousRingBuffer) {
 // Without a sink the engine's decisions never reach the host application: they land in
 // a JSONL file nobody reads. The host installs one to mirror them into its own log.
 TEST_F(LoggingTest, SinkReceivesEveryAcceptedRecord) {
-    std::vector<recorder_core::logging::LogRecord> seen;
+    std::vector<exosnap::engine::logging::LogRecord> seen;
 
     LoggerConfig cfg;
     cfg.filePath = makeTempPath();
-    cfg.minimumLevel = recorder_core::logging::LogLevel::Info;
-    cfg.sink = [&seen](const recorder_core::logging::LogRecord& r) { seen.push_back(r); };
-    recorder_core::logging::initialize(cfg);
+    cfg.minimumLevel = exosnap::engine::logging::LogLevel::Info;
+    cfg.sink = [&seen](const exosnap::engine::logging::LogRecord& r) { seen.push_back(r); };
+    exosnap::engine::logging::initialize(cfg);
 
     const LogField field{"mode", "hdr10-native"};
-    recorder_core::logging::log(recorder_core::logging::LogLevel::Info, "capture", "resolved", {&field, 1});
-    recorder_core::logging::log(recorder_core::logging::LogLevel::Debug, "capture", "below_minimum");
+    exosnap::engine::logging::log(exosnap::engine::logging::LogLevel::Info, "capture", "resolved", {&field, 1});
+    exosnap::engine::logging::log(exosnap::engine::logging::LogLevel::Debug, "capture", "below_minimum");
 
-    recorder_core::logging::shutdown();
+    exosnap::engine::logging::shutdown();
 
     ASSERT_EQ(seen.size(), 1u) << "records below the minimum level must not reach the sink";
     EXPECT_EQ(seen[0].component, "capture");
@@ -207,17 +207,17 @@ TEST_F(LoggingTest, SinkMayLogReentrantlyWithoutDeadlock) {
 
     LoggerConfig cfg;
     cfg.filePath = makeTempPath();
-    cfg.sink = [&](const recorder_core::logging::LogRecord&) {
+    cfg.sink = [&](const exosnap::engine::logging::LogRecord&) {
         ++calls;
         if (depth == 0) {
             ++depth;
-            recorder_core::logging::log(recorder_core::logging::LogLevel::Info, "sink", "reentrant");
+            exosnap::engine::logging::log(exosnap::engine::logging::LogLevel::Info, "sink", "reentrant");
         }
     };
-    recorder_core::logging::initialize(cfg);
+    exosnap::engine::logging::initialize(cfg);
 
-    recorder_core::logging::log(recorder_core::logging::LogLevel::Info, "capture", "outer");
-    recorder_core::logging::shutdown();
+    exosnap::engine::logging::log(exosnap::engine::logging::LogLevel::Info, "capture", "outer");
+    exosnap::engine::logging::shutdown();
 
     EXPECT_EQ(calls, 2) << "the reentrant record must also reach the sink";
 }

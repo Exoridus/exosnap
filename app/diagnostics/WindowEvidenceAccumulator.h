@@ -30,7 +30,7 @@ class WindowEvidenceAccumulator {
     // One pump sample. A generation that differs from the last non-zero one is a
     // genuinely new frame. `shape` is the window's current shape (from the ~1 Hz
     // fact poll); the transition Normal -> FullscreenShaped arms the correlation.
-    void Update(TimePoint now, recorder_core::HubFrameKind kind, uint64_t generation, WindowShape shape) noexcept;
+    void Update(TimePoint now, exosnap::engine::HubFrameKind kind, uint64_t generation, WindowShape shape) noexcept;
 
     // The evidence snapshot as of `now` (which may be later than the last Update).
     [[nodiscard]] WindowHubEvidence Evidence(TimePoint now) const noexcept;
@@ -38,7 +38,7 @@ class WindowEvidenceAccumulator {
   private:
     bool started_ = false;
     TimePoint subscribed_at_{};
-    recorder_core::HubFrameKind last_kind_ = recorder_core::HubFrameKind::None;
+    exosnap::engine::HubFrameKind last_kind_ = exosnap::engine::HubFrameKind::None;
     uint64_t last_generation_ = 0;
     bool had_fresh_frame_ = false;
     TimePoint last_fresh_frame_{};

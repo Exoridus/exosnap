@@ -4,7 +4,7 @@
 
 **Goal:** Make the six "CAPTURE PIPELINE" step cards on the Diagnostics page live during recording — each card showing a health status (Healthy / Busy / Bottleneck), a CPU/GPU resource tag, and one cheap secondary number — using data the pipeline already collects plus negligible CPU `QueryPerformanceCounter`/`steady_clock` brackets.
 
-**Architecture:** A new pure, UI-free `ResolvePipelineHealth` resolver (recorder_core) classifies each stage from per-stage signals; the engine feeds three new cheap CPU-timing rolling windows into the existing `PipelineDiagnosticsAggregator`; the `RecordingDiagnosticsSnapshot` carries the new durations; the Diagnostics page (UI) builds `StageSignals` from the snapshot, calls the resolver, and renders verdicts onto the existing `PipelineFlow`/`PipelineStepCard` widgets at a throttled 2 Hz. The engine stays UI-agnostic; the resolver is the only shared classification logic.
+**Architecture:** A new pure, UI-free `ResolvePipelineHealth` resolver (engine) classifies each stage from per-stage signals; the engine feeds three new cheap CPU-timing rolling windows into the existing `PipelineDiagnosticsAggregator`; the `RecordingDiagnosticsSnapshot` carries the new durations; the Diagnostics page (UI) builds `StageSignals` from the snapshot, calls the resolver, and renders verdicts onto the existing `PipelineFlow`/`PipelineStepCard` widgets at a throttled 2 Hz. The engine stays UI-agnostic; the resolver is the only shared classification logic.
 
 **Tech Stack:** C++20 (`std::span`, `std::chrono::steady_clock`), GoogleTest, Qt 6.9 Widgets, CMake (VS 2022 generator tree `build/windows-x64-debug`), `exosnap_add_gtest` test macro.
 
@@ -30,22 +30,22 @@ Copied verbatim from the design spec and project rules. Every task's requirement
 
 | File | Responsibility |
 |------|----------------|
-| `libs/recorder_core/include/recorder_core/pipeline_health.h` | NEW. Pure types `StageId`, `StageHealth`, `StageSignals`, `StageVerdict`, `PipelineHealthVerdict` + `ResolvePipelineHealth(span, frame_budget_ms)` declaration. UI-free. |
-| `libs/recorder_core/src/pipeline_health.cpp` | NEW. `ResolvePipelineHealth` implementation + pinned thresholds. |
-| `libs/recorder_core/tests/test_pipeline_health.cpp` | NEW. Pure unit tests for the resolver. |
-| `libs/recorder_core/include/recorder_core/pipeline_diagnostics.h` | MODIFY. New snapshot fields: acquire (Capture), vpblt (Compositor), mux-process (Mux) latest/avg/peak + availability flags. No GPU-timing fields. |
-| `libs/recorder_core/src/pipeline_diagnostics_aggregator.h` | MODIFY. New `acquire_window_`/`vpblt_window_`/`mux_window_` + `*_observed_` flags + `OnAcquireLatency`/`OnVpbltSubmit`/`OnMuxLatency` declarations. |
-| `libs/recorder_core/src/pipeline_diagnostics_aggregator.cpp` | MODIFY. Implement the three taps; clear in `Reset`; populate the new snapshot fields in `BuildSnapshot`. |
-| `libs/recorder_core/tests/test_pipeline_diagnostics.cpp` | MODIFY. Aggregator tests for the three new windows. |
-| `libs/recorder_core/src/video_thread.cpp` | MODIFY. Cheap brackets around Acquire (DXGI-OD + WGC drain) and around `VideoProcessorBlt` (CFR + VFR); feed `OnAcquireLatency`/`OnVpbltSubmit`. |
-| `libs/recorder_core/src/mux_thread.cpp` | MODIFY. Cheap bracket around the mux drain loop; feed `OnMuxLatency`. (Queue depth already wired via `OnVideoQueueDepth`.) |
+| `libs/engine/include/exosnap/engine/pipeline_health.h` | NEW. Pure types `StageId`, `StageHealth`, `StageSignals`, `StageVerdict`, `PipelineHealthVerdict` + `ResolvePipelineHealth(span, frame_budget_ms)` declaration. UI-free. |
+| `libs/engine/src/pipeline_health.cpp` | NEW. `ResolvePipelineHealth` implementation + pinned thresholds. |
+| `libs/engine/tests/test_pipeline_health.cpp` | NEW. Pure unit tests for the resolver. |
+| `libs/engine/include/exosnap/engine/pipeline_diagnostics.h` | MODIFY. New snapshot fields: acquire (Capture), vpblt (Compositor), mux-process (Mux) latest/avg/peak + availability flags. No GPU-timing fields. |
+| `libs/engine/src/pipeline_diagnostics_aggregator.h` | MODIFY. New `acquire_window_`/`vpblt_window_`/`mux_window_` + `*_observed_` flags + `OnAcquireLatency`/`OnVpbltSubmit`/`OnMuxLatency` declarations. |
+| `libs/engine/src/pipeline_diagnostics_aggregator.cpp` | MODIFY. Implement the three taps; clear in `Reset`; populate the new snapshot fields in `BuildSnapshot`. |
+| `libs/engine/tests/test_pipeline_diagnostics.cpp` | MODIFY. Aggregator tests for the three new windows. |
+| `libs/engine/src/video_thread.cpp` | MODIFY. Cheap brackets around Acquire (DXGI-OD + WGC drain) and around `VideoProcessorBlt` (CFR + VFR); feed `OnAcquireLatency`/`OnVpbltSubmit`. |
+| `libs/engine/src/mux_thread.cpp` | MODIFY. Cheap bracket around the mux drain loop; feed `OnMuxLatency`. (Queue depth already wired via `OnVideoQueueDepth`.) |
 | `app/ui/widgets/PipelineStepCard.{h,cpp}` | MODIFY. Card face: resource-tag label + secondary-number label + tooltip, plus `Status` mapping for Busy/Bottleneck. |
 | `app/ui/widgets/PipelineFlow.{h,cpp}` | MODIFY. `setStepLive(...)` convenience to push status + note + resource + number + tooltip. |
 | `app/tests/test_pipeline_flow.cpp` | MODIFY. Widget test for the new card face. |
 | `app/pages/DiagnosticsPage.{h,cpp}` | MODIFY. Build `StageSignals` from the snapshot, call `ResolvePipelineHealth`, push verdicts to the six cards; 2 Hz throttle; idle↔live transition. |
 | `app/tests/test_diagnostics_page.cpp` | MODIFY. UI tests for live cards, idle reset, "—" when unavailable. |
 | `app/MainWindow.cpp` | MODIFY (Task 5/6). Extend `makeLiveDiagnosticsSnapshot` to set the new synthetic fields so the existing diagnostics visual scenarios render real numbers. |
-| `libs/recorder_core/CMakeLists.txt` | MODIFY. Register `pipeline_health_tests` after the existing `frame_pacing_tests` block (main block, after the NVENC `endif()`). |
+| `libs/engine/CMakeLists.txt` | MODIFY. Register `pipeline_health_tests` after the existing `frame_pacing_tests` block (main block, after the NVENC `endif()`). |
 | `docs/superpowers/specs/2026-06-27-capture-card-live-wiring-design.md` | MODIFY (Task 6). Mark delivered. |
 | `docs/roadmap.md` | MODIFY (Task 6). Roadmap line. |
 
@@ -62,15 +62,15 @@ Copied verbatim from the design spec and project rules. Every task's requirement
 ## Task 1: Pure `ResolvePipelineHealth` resolver (TDD)
 
 **Files:**
-- Create: `libs/recorder_core/include/recorder_core/pipeline_health.h`
-- Create: `libs/recorder_core/src/pipeline_health.cpp`
-- Test: `libs/recorder_core/tests/test_pipeline_health.cpp`
-- Modify: `libs/recorder_core/CMakeLists.txt` (register `pipeline_health_tests`)
+- Create: `libs/engine/include/exosnap/engine/pipeline_health.h`
+- Create: `libs/engine/src/pipeline_health.cpp`
+- Test: `libs/engine/tests/test_pipeline_health.cpp`
+- Modify: `libs/engine/CMakeLists.txt` (register `pipeline_health_tests`)
 
 **Interfaces:**
 - Produces (used by Task 5):
-  - `enum class recorder_core::StageId : uint8_t { SourceCapture, FrameQueue, Compositor, Encoder, Muxer, Disk }`
-  - `enum class recorder_core::StageHealth : uint8_t { Healthy, Busy, Bottleneck }`
+  - `enum class exosnap::engine::StageId : uint8_t { SourceCapture, FrameQueue, Compositor, Encoder, Muxer, Disk }`
+  - `enum class exosnap::engine::StageHealth : uint8_t { Healthy, Busy, Bottleneck }`
   - `struct StageSignals { StageId id; bool available; bool is_duration_stage; bool can_bottleneck; double avg_ms; double budget_ms; double fps_ratio; uint32_t recent_drops; uint32_t queue_depth; uint32_t queue_busy_threshold; }`
   - `struct StageVerdict { StageId id; StageHealth health; }`
   - `struct PipelineHealthVerdict { std::vector<StageVerdict> per_stage; bool has_bottleneck; StageId bottleneck; }`
@@ -88,18 +88,18 @@ Copied verbatim from the design spec and project rules. Every task's requirement
 
 - [ ] **Step 1: Write the failing test**
 
-Create `libs/recorder_core/tests/test_pipeline_health.cpp`:
+Create `libs/engine/tests/test_pipeline_health.cpp`:
 
 ```cpp
 #include <gtest/gtest.h>
 
-#include "recorder_core/pipeline_health.h"
+#include "exosnap/engine/pipeline_health.h"
 
 #include <vector>
 
 namespace {
 
-using namespace recorder_core;
+using namespace exosnap::engine;
 
 // 60 fps budget = 16.667 ms.
 constexpr double kBudget = 1000.0 / 60.0;
@@ -226,7 +226,7 @@ TEST(ResolvePipelineHealth, MostDownstreamBottleneckWins) {
 
 - [ ] **Step 2: Register the test target**
 
-In `libs/recorder_core/CMakeLists.txt`, immediately after the `frame_pacing_tests` block (currently ending at line ~706 with `target_include_directories(frame_pacing_tests ...)`), append. This is in the **main block, after the NVENC `endif()`** — do NOT add it inside the NVENC-fallback `if/else` (which duplicates registrations):
+In `libs/engine/CMakeLists.txt`, immediately after the `frame_pacing_tests` block (currently ending at line ~706 with `target_include_directories(frame_pacing_tests ...)`), append. This is in the **main block, after the NVENC `endif()`** — do NOT add it inside the NVENC-fallback `if/else` (which duplicates registrations):
 
 ```cmake
 # Capture-card live wiring (0.8.0): pure stage-health resolver (no D3D/NVENC/Qt).
@@ -249,7 +249,7 @@ Expected: FAIL — `pipeline_health.h: No such file or directory` (header/impl n
 
 - [ ] **Step 4: Write the header**
 
-Create `libs/recorder_core/include/recorder_core/pipeline_health.h`:
+Create `libs/engine/include/exosnap/engine/pipeline_health.h`:
 
 ```cpp
 #pragma once
@@ -265,7 +265,7 @@ Create `libs/recorder_core/include/recorder_core/pipeline_health.h`:
 #include <span>
 #include <vector>
 
-namespace recorder_core {
+namespace exosnap::engine {
 
 // Canonical capture-pipeline stages, left to right (mirrors PipelineFlow card order).
 enum class StageId : uint8_t {
@@ -328,17 +328,17 @@ struct PipelineHealthVerdict {
     return "Healthy";
 }
 
-} // namespace recorder_core
+} // namespace exosnap::engine
 ```
 
 - [ ] **Step 5: Write the implementation**
 
-Create `libs/recorder_core/src/pipeline_health.cpp`:
+Create `libs/engine/src/pipeline_health.cpp`:
 
 ```cpp
-#include "recorder_core/pipeline_health.h"
+#include "exosnap/engine/pipeline_health.h"
 
-namespace recorder_core {
+namespace exosnap::engine {
 
 namespace {
 
@@ -432,7 +432,7 @@ PipelineHealthVerdict ResolvePipelineHealth(std::span<const StageSignals> stages
     return v;
 }
 
-} // namespace recorder_core
+} // namespace exosnap::engine
 ```
 
 - [ ] **Step 6: Build and run the test to verify it passes**
@@ -447,10 +447,10 @@ Expected: PASS — all 11 `pipeline_health.*` tests green.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add libs/recorder_core/include/recorder_core/pipeline_health.h \
-        libs/recorder_core/src/pipeline_health.cpp \
-        libs/recorder_core/tests/test_pipeline_health.cpp \
-        libs/recorder_core/CMakeLists.txt
+git add libs/engine/include/exosnap/engine/pipeline_health.h \
+        libs/engine/src/pipeline_health.cpp \
+        libs/engine/tests/test_pipeline_health.cpp \
+        libs/engine/CMakeLists.txt
 git commit -m "feat(diagnostics): pure ResolvePipelineHealth stage-health resolver (TDD)"
 ```
 
@@ -459,10 +459,10 @@ git commit -m "feat(diagnostics): pure ResolvePipelineHealth stage-health resolv
 ## Task 2: Snapshot fields + aggregator CPU-timing windows (TDD)
 
 **Files:**
-- Modify: `libs/recorder_core/include/recorder_core/pipeline_diagnostics.h`
-- Modify: `libs/recorder_core/src/pipeline_diagnostics_aggregator.h`
-- Modify: `libs/recorder_core/src/pipeline_diagnostics_aggregator.cpp`
-- Test: `libs/recorder_core/tests/test_pipeline_diagnostics.cpp` (existing target `test_pipeline_diagnostics`)
+- Modify: `libs/engine/include/exosnap/engine/pipeline_diagnostics.h`
+- Modify: `libs/engine/src/pipeline_diagnostics_aggregator.h`
+- Modify: `libs/engine/src/pipeline_diagnostics_aggregator.cpp`
+- Test: `libs/engine/tests/test_pipeline_diagnostics.cpp` (existing target `test_pipeline_diagnostics`)
 
 **Interfaces:**
 - Consumes: `RollingTimeWindow`, `MetricAvailability`, `RecordingDiagnosticsSnapshot` (Task 0 / existing).
@@ -478,7 +478,7 @@ Note: the Frame-Queue depth gauge is **already** in the snapshot (`s.video_queue
 
 - [ ] **Step 1: Write the failing aggregator tests**
 
-Append to `libs/recorder_core/tests/test_pipeline_diagnostics.cpp` (before the final closing `} // namespace`; the file already provides `MakeConfig`, `MakeStats`, `At`):
+Append to `libs/engine/tests/test_pipeline_diagnostics.cpp` (before the final closing `} // namespace`; the file already provides `MakeConfig`, `MakeStats`, `At`):
 
 ```cpp
 // ---------------------------------------------------------------------------
@@ -548,7 +548,7 @@ Expected: FAIL — `OnAcquireLatency` / `acquire_availability` are not members.
 
 - [ ] **Step 3: Add the snapshot fields**
 
-In `libs/recorder_core/include/recorder_core/pipeline_diagnostics.h`, extend `CaptureDiagnostics` (after the present-mode block, before `frames_dropped_total()`):
+In `libs/engine/include/exosnap/engine/pipeline_diagnostics.h`, extend `CaptureDiagnostics` (after the present-mode block, before `frames_dropped_total()`):
 
 ```cpp
     // Acquire+copy CPU duration (Source Capture card). steady_clock bracket around the
@@ -583,7 +583,7 @@ Extend `MuxDiagnostics` (after `availability`):
 
 - [ ] **Step 4: Add the aggregator windows, flags, and tap declarations**
 
-In `libs/recorder_core/src/pipeline_diagnostics_aggregator.h`:
+In `libs/engine/src/pipeline_diagnostics_aggregator.h`:
 
 Add tap declarations in the worker-inputs block, right after `OnCompositorSubmit` (keep the grouping sensible):
 
@@ -608,7 +608,7 @@ Add member windows + flags. Place the acquire window near the capture members, t
 
 - [ ] **Step 5: Implement the taps, Reset clearing, and BuildSnapshot population**
 
-In `libs/recorder_core/src/pipeline_diagnostics_aggregator.cpp`:
+In `libs/engine/src/pipeline_diagnostics_aggregator.cpp`:
 
 Add tap implementations (after `OnCompositorSubmit`, near the other worker inputs):
 
@@ -691,10 +691,10 @@ Expected: PASS — the 5 new `CaptureCardWiring.*` cases green, all prior cases 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add libs/recorder_core/include/recorder_core/pipeline_diagnostics.h \
-        libs/recorder_core/src/pipeline_diagnostics_aggregator.h \
-        libs/recorder_core/src/pipeline_diagnostics_aggregator.cpp \
-        libs/recorder_core/tests/test_pipeline_diagnostics.cpp
+git add libs/engine/include/exosnap/engine/pipeline_diagnostics.h \
+        libs/engine/src/pipeline_diagnostics_aggregator.h \
+        libs/engine/src/pipeline_diagnostics_aggregator.cpp \
+        libs/engine/tests/test_pipeline_diagnostics.cpp
 git commit -m "feat(diagnostics): acquire/vpblt/mux-process CPU-timing windows in aggregator (TDD)"
 ```
 
@@ -703,8 +703,8 @@ git commit -m "feat(diagnostics): acquire/vpblt/mux-process CPU-timing windows i
 ## Task 3: Engine instrumentation wiring (compile + dev-sanity)
 
 **Files:**
-- Modify: `libs/recorder_core/src/video_thread.cpp` (Acquire drains; `VideoProcessorBlt` CFR + VFR)
-- Modify: `libs/recorder_core/src/mux_thread.cpp` (mux drain loop)
+- Modify: `libs/engine/src/video_thread.cpp` (Acquire drains; `VideoProcessorBlt` CFR + VFR)
+- Modify: `libs/engine/src/mux_thread.cpp` (mux drain loop)
 
 **Interfaces:**
 - Consumes: `m_state.diagnostics.OnAcquireLatency / OnVpbltSubmit / OnMuxLatency` (Task 2).
@@ -714,7 +714,7 @@ No GPU queries. Brackets use `std::chrono::steady_clock::now()`, mirroring the e
 
 - [ ] **Step 1: Bracket the DXGI-OD acquire drain (Source Capture)**
 
-In `libs/recorder_core/src/video_thread.cpp`, the DXGI-OD branch begins at the `if (useOdCapture) {` around line 1511 with `while (true) {` at ~1514. Wrap the whole OD drain loop. Add a timestamp just before `while (true) {`:
+In `libs/engine/src/video_thread.cpp`, the DXGI-OD branch begins at the `if (useOdCapture) {` around line 1511 with `while (true) {` at ~1514. Wrap the whole OD drain loop. Add a timestamp just before `while (true) {`:
 
 ```cpp
             if (useOdCapture) {
@@ -786,13 +786,13 @@ In the CFR encode path, the `VideoProcessorBlt` call is at ~1766. Bracket only t
 The VFR path has its own `VideoProcessorBlt` near line ~2030 (the second `compositeFrameGpu`/`VideoProcessorBlt` block, mirror of the CFR one, guarded by the VFR branch). Apply the identical bracket around that `VideoProcessorBlt(...)` call. Find it via:
 
 ```bash
-grep -n "VideoProcessorBlt" libs/recorder_core/src/video_thread.cpp
+grep -n "VideoProcessorBlt" libs/engine/src/video_thread.cpp
 ```
 Expect two call sites (CFR + VFR). Wrap the second the same way as Step 3 (vp_t0 / vp_t1 / `OnVpbltSubmit`). Do not alter any other VFR logic.
 
 - [ ] **Step 5: Bracket the mux drain loop (Muxer)**
 
-In `libs/recorder_core/src/mux_thread.cpp`, the streaming drain loop (lines 525-532) dequeues and `std::visit`s each `MuxItem`. Bracket the whole inner drain and feed `OnMuxLatency` once per non-empty batch:
+In `libs/engine/src/mux_thread.cpp`, the streaming drain loop (lines 525-532) dequeues and `std::visit`s each `MuxItem`. Bracket the whole inner drain and feed `OnMuxLatency` once per non-empty batch:
 
 ```cpp
         const uint32_t mux_queue_depth = static_cast<uint32_t>(m_state.mux_queue.size());
@@ -824,7 +824,7 @@ In `libs/recorder_core/src/mux_thread.cpp`, the streaming drain loop (lines 525-
 
 - [ ] **Step 6: Full build to verify compile + link**
 
-Run (full build — recorder_core feeds many test targets):
+Run (full build — engine feeds many test targets):
 ```bash
 cmake --build build/windows-x64-debug
 ```
@@ -833,7 +833,7 @@ Expected: build succeeds, no errors. The diagnostics aggregator now receives acq
 - [ ] **Step 7: Commit**
 
 ```bash
-git add libs/recorder_core/src/video_thread.cpp libs/recorder_core/src/mux_thread.cpp
+git add libs/engine/src/video_thread.cpp libs/engine/src/mux_thread.cpp
 git commit -m "feat(diagnostics): cheap CPU brackets for acquire/vpblt/mux feeding live cards"
 ```
 
@@ -1051,7 +1051,7 @@ TEST_F(DiagnosticsPageTest, CaptureCardsLiveDuringRecording) {
     auto s = MakeRecordingSnapshot();
     s.video_encoder.average_ms = 2.1;
     s.mux.process_average_ms = 0.5;
-    s.mux.process_availability = recorder_core::MetricAvailability::Available;
+    s.mux.process_availability = exosnap::engine::MetricAvailability::Available;
     s.disk.average_write_ms = 0.8;
     page.applyLiveDiagnostics(s);
 
@@ -1083,7 +1083,7 @@ TEST_F(DiagnosticsPageTest, MuxNumberDashWhenUnavailable) {
     DiagnosticsPage page;
     LoadData(page);
     auto s = MakeRecordingSnapshot();
-    s.mux.process_availability = recorder_core::MetricAvailability::Unavailable;
+    s.mux.process_availability = exosnap::engine::MetricAvailability::Unavailable;
     page.applyLiveDiagnostics(s);
 
     auto* flow = page.findChild<PipelineFlow*>(QStringLiteral("pipelineFlow"));
@@ -1096,8 +1096,8 @@ TEST_F(DiagnosticsPageTest, IdleAfterRecordingRestoresStaticCards) {
     LoadData(page);
     page.applyLiveDiagnostics(MakeRecordingSnapshot());
 
-    recorder_core::RecordingDiagnosticsSnapshot idle;
-    idle.lifecycle = recorder_core::DiagnosticsLifecycle::Idle;
+    exosnap::engine::RecordingDiagnosticsSnapshot idle;
+    idle.lifecycle = exosnap::engine::DiagnosticsLifecycle::Idle;
     idle.valid = false;
     page.applyLiveDiagnostics(idle);
 
@@ -1119,16 +1119,16 @@ Expected: FAIL — cards are not yet wired live (capture card still Planned duri
 
 - [ ] **Step 3: Add the header includes + members**
 
-In `app/pages/DiagnosticsPage.h`, add the include near the other recorder_core include:
+In `app/pages/DiagnosticsPage.h`, add the include near the other engine include:
 
 ```cpp
-#include <recorder_core/pipeline_health.h>
+#include <exosnap/engine/pipeline_health.h>
 ```
 
 Add a private method declaration (after `refreshPipeline();`):
 
 ```cpp
-    void updatePipelineCards(const recorder_core::RecordingDiagnosticsSnapshot& snapshot);
+    void updatePipelineCards(const exosnap::engine::RecordingDiagnosticsSnapshot& snapshot);
 ```
 
 Add members (after `last_live_snapshot_`):
@@ -1161,18 +1161,18 @@ In `app/pages/DiagnosticsPage.cpp`, at the end of `applyLiveDiagnostics` (after 
 Add the implementation (after `applyLiveDiagnostics`, before `// --- Helpers ---`):
 
 ```cpp
-void DiagnosticsPage::updatePipelineCards(const recorder_core::RecordingDiagnosticsSnapshot& s) {
-    using recorder_core::MetricAvailability;
-    using recorder_core::StageHealth;
-    using recorder_core::StageId;
-    using recorder_core::StageSignals;
+void DiagnosticsPage::updatePipelineCards(const exosnap::engine::RecordingDiagnosticsSnapshot& s) {
+    using exosnap::engine::MetricAvailability;
+    using exosnap::engine::StageHealth;
+    using exosnap::engine::StageId;
+    using exosnap::engine::StageSignals;
     using Status = ui::widgets::PipelineStepCard::Status;
 
     if (!pipeline_flow_)
         return;
 
-    const bool recording = s.valid && (s.lifecycle == recorder_core::DiagnosticsLifecycle::Recording ||
-                                       s.lifecycle == recorder_core::DiagnosticsLifecycle::Paused);
+    const bool recording = s.valid && (s.lifecycle == exosnap::engine::DiagnosticsLifecycle::Recording ||
+                                       s.lifecycle == exosnap::engine::DiagnosticsLifecycle::Paused);
     if (!recording) {
         // Idle / stopping / completed → restore the static readiness cards.
         refreshPipeline();
@@ -1253,7 +1253,7 @@ void DiagnosticsPage::updatePipelineCards(const recorder_core::RecordingDiagnost
     disk.budget_ms = kDiskBudgetMs;
 
     const StageSignals stages[] = {capture, queue, comp, enc, mux, disk};
-    const recorder_core::PipelineHealthVerdict verdict = recorder_core::ResolvePipelineHealth(stages, budget_ms);
+    const exosnap::engine::PipelineHealthVerdict verdict = exosnap::engine::ResolvePipelineHealth(stages, budget_ms);
 
     auto to_status = [](StageHealth h) -> Status {
         switch (h) {
@@ -1402,7 +1402,7 @@ git commit -m "feat(diagnostics): live capture cards via ResolvePipelineHealth (
 
 - [ ] **Step 1: Full build (no `--target`)**
 
-So every test target picks up the new translation units (recorder_core feeds many):
+So every test target picks up the new translation units (engine feeds many):
 ```bash
 cmake --build build/windows-x64-debug
 ```

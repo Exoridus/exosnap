@@ -392,9 +392,9 @@ tab"; updated for "overlay" vs. the original "mode/stack replacement"):
 
 ## Consequences
 
-- `EditExportPage` couples to `recorder_core` (for `mp4_remuxer.h`, `pipeline_diagnostics.h`).
+- `EditExportPage` couples to `engine` (for `mp4_remuxer.h`, `pipeline_diagnostics.h`).
   The `edit_export_page_tests` and `edit_export_overlay_tests` CMake targets therefore link
-  `recorder_core`.
+  `engine`.
 - Export runs on a `std::thread`; results are marshalled back to the UI thread via
   `QMetaObject::invokeMethod(..., Qt::QueuedConnection)`.
 - Atomic overwrite: write to `.tmp`, then `std::filesystem::rename` temp → final.

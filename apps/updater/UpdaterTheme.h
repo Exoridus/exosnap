@@ -17,7 +17,9 @@
 #include <QRectF>
 #include <QString>
 
-namespace updater_theme {
+namespace exosnap::updater {
+
+namespace theme {
 
 // ── Palette (dark-default) ──────────────────────────────────────────────────
 inline QColor bg() {
@@ -178,9 +180,8 @@ inline void paintRefresh(QPainter& p, const QRectF& r, const QColor& c, double s
     // near-complete single arc blurred into the letter "C" at 150-200% scale.
     QPainterPath upper;
     upper.moveTo(r.left() + r.width() * 0.18, r.top() + r.height() * 0.48);
-    upper.cubicTo(r.left() + r.width() * 0.20, r.top() + r.height() * 0.18,
-                  r.left() + r.width() * 0.55, r.top() + r.height() * 0.08,
-                  r.left() + r.width() * 0.79, r.top() + r.height() * 0.27);
+    upper.cubicTo(r.left() + r.width() * 0.20, r.top() + r.height() * 0.18, r.left() + r.width() * 0.55,
+                  r.top() + r.height() * 0.08, r.left() + r.width() * 0.79, r.top() + r.height() * 0.27);
     upper.moveTo(r.left() + r.width() * 0.79, r.top() + r.height() * 0.08);
     upper.lineTo(r.left() + r.width() * 0.79, r.top() + r.height() * 0.27);
     upper.lineTo(r.left() + r.width() * 0.60, r.top() + r.height() * 0.27);
@@ -188,9 +189,8 @@ inline void paintRefresh(QPainter& p, const QRectF& r, const QColor& c, double s
 
     QPainterPath lower;
     lower.moveTo(r.left() + r.width() * 0.82, r.top() + r.height() * 0.52);
-    lower.cubicTo(r.left() + r.width() * 0.80, r.top() + r.height() * 0.82,
-                  r.left() + r.width() * 0.45, r.top() + r.height() * 0.92,
-                  r.left() + r.width() * 0.21, r.top() + r.height() * 0.73);
+    lower.cubicTo(r.left() + r.width() * 0.80, r.top() + r.height() * 0.82, r.left() + r.width() * 0.45,
+                  r.top() + r.height() * 0.92, r.left() + r.width() * 0.21, r.top() + r.height() * 0.73);
     lower.moveTo(r.left() + r.width() * 0.21, r.top() + r.height() * 0.92);
     lower.lineTo(r.left() + r.width() * 0.21, r.top() + r.height() * 0.73);
     lower.lineTo(r.left() + r.width() * 0.40, r.top() + r.height() * 0.73);
@@ -219,4 +219,6 @@ inline void paintShieldCheck(QPainter& p, const QRectF& r, const QColor& c, doub
     paintCheck(p, inner, c, stroke);
 }
 
-} // namespace updater_theme
+} // namespace theme
+
+} // namespace exosnap::updater

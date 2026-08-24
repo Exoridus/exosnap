@@ -25,7 +25,7 @@ target_include_directories(exosnap_capability PRIVATE "${CMAKE_SOURCE_DIR}/third
 
 target_link_libraries(exosnap_capability
   PUBLIC
-    recorder_core
+    exosnap_engine
   PRIVATE
     exosnap::warnings
     dxgi

@@ -74,6 +74,30 @@ QRect nativeLogicalGeometry(QQuickWindow* window) {
                  static_cast<int>(std::lround((rect.bottom - rect.top) / dpr)));
 }
 
+// MEASURED: Qt answers `setVisibility(Maximized)` on this frameless window with a
+// bare SetWindowPos onto the work area, so QWindow::visibility() reports a state
+// Windows does not have. Persisting on Qt's answer therefore recorded the
+// maximized rect as the restore rect -- the exact failure this class exists to
+// prevent. IsZoomed/IsIconic are the values every path agrees on.
+struct NativeWindowState {
+    bool maximized = false;
+    bool minimized = false;
+    bool known = false;
+};
+
+NativeWindowState nativeWindowState(QQuickWindow* window) {
+    NativeWindowState state;
+    if (window == nullptr || window->handle() == nullptr)
+        return state;
+    auto hwnd = reinterpret_cast<HWND>(window->winId());
+    if (hwnd == nullptr)
+        return state;
+    state.maximized = IsZoomed(hwnd) != FALSE;
+    state.minimized = IsIconic(hwnd) != FALSE;
+    state.known = true;
+    return state;
+}
+
 void applyNativeLogicalGeometry(QQuickWindow* window, const QRect& logical) {
     auto hwnd = reinterpret_cast<HWND>(window->winId());
     if (hwnd == nullptr || logical.width() <= 0 || logical.height() <= 0)
@@ -258,6 +282,7 @@ class StartupMessageTrace : public QAbstractNativeEventFilter {
 };
 
 std::unique_ptr<StartupMessageTrace> g_message_trace;
+bool g_message_trace_persistent = false;
 
 } // namespace
 
@@ -322,8 +347,12 @@ void InstallStartupMessageTrace() {
     QCoreApplication::instance()->installNativeEventFilter(g_message_trace.get());
 }
 
+void SetStartupMessageTracePersistent(bool persistent) {
+    g_message_trace_persistent = persistent;
+}
+
 void StopStartupMessageTrace() {
-    if (!g_message_trace)
+    if (!g_message_trace || g_message_trace_persistent)
         return;
     g_message_trace->stop();
     if (QCoreApplication::instance() != nullptr)
@@ -448,11 +477,27 @@ void QuickWindowGeometry::detach() {
 void QuickWindowGeometry::sampleAndSchedule() {
     if (window_ == nullptr || !armed_ || detached_)
         return;
+    const NativeWindowState native = nativeWindowState(window_);
+    const QWindow::Visibility visibility = window_->visibility();
+    const bool maximized = native.known ? native.maximized : visibility == QWindow::Maximized;
+    const bool minimized = native.known ? native.minimized : visibility == QWindow::Minimized;
+    // Sampled here rather than only in sampleVisibility(): Windows changes this
+    // state without Qt necessarily reporting a visibility change, and the geometry
+    // signals are the one notification that always arrives.
+    //
+    // Never while minimized: a minimized window is not zoomed whatever it was
+    // before, so believing IsZoomed there would persist "not maximized" for a
+    // window that has to come back maximized.
+    if (!minimized && current_.maximized != maximized) {
+        current_.maximized = maximized;
+        dirty_ = true;
+        persist_timer_.start();
+    }
     // Only a Windowed window has a meaningful restore rect. While maximized,
     // minimized or full-screen the reported geometry is the screen (or, when
     // minimized on Windows, an off-screen placeholder) -- persisting either
     // would destroy the rect the window has to un-maximize back to.
-    if (window_->visibility() != QWindow::Windowed)
+    if (maximized || minimized || visibility == QWindow::Hidden)
         return;
     // The NATIVE rect, not window_->geometry(): for this frameless window they
     // are the same thing once it is on screen, but only the native one is what
@@ -472,19 +517,11 @@ void QuickWindowGeometry::sampleAndSchedule() {
 void QuickWindowGeometry::sampleVisibility() {
     if (window_ == nullptr || detached_)
         return;
-    const QWindow::Visibility visibility = window_->visibility();
-    // Minimized is not a persisted state: a window minimized at quit must come
-    // back as whatever it was before, not as a window that cannot be seen.
-    if (visibility == QWindow::Minimized || visibility == QWindow::Hidden)
+    // Hidden is not a state to persist anything from: it is the window on its way
+    // up or on its way out, and neither carries a placement the next launch wants.
+    if (window_->visibility() == QWindow::Hidden)
         return;
-    const bool maximized = visibility == QWindow::Maximized || visibility == QWindow::FullScreen;
-    if (current_.maximized != maximized) {
-        current_.maximized = maximized;
-        dirty_ = true;
-        persist_timer_.start();
-    }
-    if (visibility == QWindow::Windowed)
-        sampleAndSchedule();
+    sampleAndSchedule();
 }
 
 void QuickWindowGeometry::flush() {

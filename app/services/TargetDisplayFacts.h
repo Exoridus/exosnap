@@ -6,7 +6,7 @@
 #include <windows.h>
 
 #include <capability/runtime_snapshot.h>
-#include <recorder_core/recorder_session.h>
+#include <exosnap/engine/recorder_session.h>
 
 namespace exosnap {
 
@@ -27,14 +27,14 @@ namespace exosnap {
 // pulls in DiagnosticsPage.cpp / RecordingCoordinator.cpp gets it without extra
 // build wiring. Both callers already include <windows.h>.
 [[nodiscard]] inline const capability::DisplayHdrFacts*
-FindTargetDisplayFacts(const recorder_core::CaptureTarget& target,
+FindTargetDisplayFacts(const exosnap::engine::CaptureTarget& target,
                        const std::vector<capability::DisplayHdrFacts>& displays) {
     HMONITOR monitor = nullptr;
     switch (target.kind) {
-    case recorder_core::CaptureTarget::Kind::Monitor:
+    case exosnap::engine::CaptureTarget::Kind::Monitor:
         monitor = reinterpret_cast<HMONITOR>(target.native_id);
         break;
-    case recorder_core::CaptureTarget::Kind::Window:
+    case exosnap::engine::CaptureTarget::Kind::Window:
         monitor = MonitorFromWindow(reinterpret_cast<HWND>(target.native_id), MONITOR_DEFAULTTONEAREST);
         break;
     }

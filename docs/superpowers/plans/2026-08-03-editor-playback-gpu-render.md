@@ -21,7 +21,7 @@ allocation and the conversion cost that makes 4:4:4/4K/240fps unplayable, while 
 
 **Architecture:** `EditPlayerEngine`'s decode thread stops converting and instead hands out
 ref-counted decoded planes (a new `RawDecodedVideoFrame`, FFmpeg-agnostic). A new pure-D3D11
-class, `EditFrameGpuConverter` (`libs/recorder_core`, UI-agnostic, same shape as `HdrToneMapper`),
+class, `EditFrameGpuConverter` (`libs/engine`, UI-agnostic, same shape as `HdrToneMapper`),
 uploads those planes as textures and runs a shader pass. A new app-layer class,
 `EditPlayerRenderer` (`app/services`, Qt-aware), owns a D3D11 device/swap chain/render thread
 behind a native child HWND hosted by `EditPlayerSurface`, mirroring `DxgiPreviewRenderer`/
@@ -35,7 +35,7 @@ unchanged), GoogleTest + a WARP (software) D3D11 device for headless shader test
 
 - Spec: `docs/superpowers/specs/2026-08-03-editor-playback-gpu-render-design.md`. Every task below
   implements a named section of it; do not deviate from its Non-goals section.
-- `recorder_core` stays UI-agnostic (no Qt types) — this is an existing project rule
+- `engine` stays UI-agnostic (no Qt types) — this is an existing project rule
   (`CLAUDE.md`), and `edit_player_engine.h`'s own header comment states it explicitly. The new
   `RawDecodedVideoFrame` struct must not include any Qt or FFmpeg type in its public shape (see
   Task 1).
@@ -56,12 +56,12 @@ unchanged), GoogleTest + a WARP (software) D3D11 device for headless shader test
 
 | File | Responsibility | Task |
 |---|---|---|
-| `libs/recorder_core/include/recorder_core/edit_player_engine.h` | + `DecodedPixelFormat`, `RawDecodedVideoFrame`, `RawVideoFrameCallback`; + `StartPlaybackDecodeRaw`/`DecodeFrameAtRaw` declarations | 1 (declare), 3 (implement) |
-| `libs/recorder_core/src/edit_player_engine.cpp` | Real `StartPlaybackDecodeRaw`/`DecodeFrameAtRaw` bodies; FFmpeg decoder thread-count fix | 1 (stub bodies + threading fix), 3 (real bodies) |
-| `libs/recorder_core/include/recorder_core/edit_frame_gpu_converter.h` | `EditFrameGpuConverter` public interface | 1 |
-| `libs/recorder_core/src/edit_frame_gpu_converter.cpp` | Real shader implementation | 1 (stub), 2 (real) |
-| `libs/recorder_core/tests/test_edit_frame_gpu_converter.cpp` | WARP-device shader correctness tests | 2 |
-| `libs/recorder_core/tests/test_edit_player_engine.cpp` | + AVFrame-refcount-through-queue test | 3 |
+| `libs/engine/include/exosnap/engine/edit_player_engine.h` | + `DecodedPixelFormat`, `RawDecodedVideoFrame`, `RawVideoFrameCallback`; + `StartPlaybackDecodeRaw`/`DecodeFrameAtRaw` declarations | 1 (declare), 3 (implement) |
+| `libs/engine/src/edit_player_engine.cpp` | Real `StartPlaybackDecodeRaw`/`DecodeFrameAtRaw` bodies; FFmpeg decoder thread-count fix | 1 (stub bodies + threading fix), 3 (real bodies) |
+| `libs/engine/include/exosnap/engine/edit_frame_gpu_converter.h` | `EditFrameGpuConverter` public interface | 1 |
+| `libs/engine/src/edit_frame_gpu_converter.cpp` | Real shader implementation | 1 (stub), 2 (real) |
+| `libs/engine/tests/test_edit_frame_gpu_converter.cpp` | WARP-device shader correctness tests | 2 |
+| `libs/engine/tests/test_edit_player_engine.cpp` | + AVFrame-refcount-through-queue test | 3 |
 | `app/services/EditPlayerRenderer.h` / `.cpp` | D3D11 device/swap chain/render thread behind a native child HWND | 1 (stub), 4 (real) |
 | `app/ui/widgets/EditPlayerSurface.h` / `.cpp` | Becomes a native-child-HWND host (like `PreviewSurface`) instead of a `QWidget::paintEvent` painter | 4 |
 | `app/pages/EditExportPage.cpp` / `.h` | Wire the Raw callback into `EditPlayerRenderer` instead of `onDecodedFrameReady(QImage)` | 4 |
@@ -72,13 +72,13 @@ unchanged), GoogleTest + a WARP (software) D3D11 device for headless shader test
 ## Task 1: Prep — shared types, stubs, threading fix (sequential, base commit)
 
 **Files:**
-- Modify: `libs/recorder_core/include/recorder_core/edit_player_engine.h`
-- Modify: `libs/recorder_core/src/edit_player_engine.cpp`
-- Create: `libs/recorder_core/include/recorder_core/edit_frame_gpu_converter.h`
-- Create: `libs/recorder_core/src/edit_frame_gpu_converter.cpp` (stub)
+- Modify: `libs/engine/include/exosnap/engine/edit_player_engine.h`
+- Modify: `libs/engine/src/edit_player_engine.cpp`
+- Create: `libs/engine/include/exosnap/engine/edit_frame_gpu_converter.h`
+- Create: `libs/engine/src/edit_frame_gpu_converter.cpp` (stub)
 - Create: `app/services/EditPlayerRenderer.h`
 - Create: `app/services/EditPlayerRenderer.cpp` (stub)
-- Modify: `libs/recorder_core/CMakeLists.txt`, `app/CMakeLists.txt` (new source files + test targets)
+- Modify: `libs/engine/CMakeLists.txt`, `app/CMakeLists.txt` (new source files + test targets)
 
 **Interfaces produced (every later task builds against these signatures verbatim):**
 
@@ -142,10 +142,10 @@ void StartPlaybackDecodeRaw(int64_t start_us, RawVideoFrameCallback on_video, Au
 ```
 
 ```cpp
-// edit_frame_gpu_converter.h (new file, namespace recorder_core)
+// edit_frame_gpu_converter.h (new file, namespace exosnap::engine)
 #pragma once
 
-#include <recorder_core/edit_player_engine.h> // RawDecodedVideoFrame
+#include <exosnap/engine/edit_player_engine.h> // RawDecodedVideoFrame
 
 #include <d3d11.h>
 #include <winrt/base.h>
@@ -153,7 +153,7 @@ void StartPlaybackDecodeRaw(int64_t start_us, RawVideoFrameCallback on_video, Au
 #include <string>
 #include <unordered_map>
 
-namespace recorder_core {
+namespace exosnap::engine {
 
 // GPU replacement for yuv_to_bgra.h's CPU conversion, for the editor playback
 // path only. Same shape as HdrToneMapper (gpu_hdr_tonemap.h): borrowed
@@ -183,16 +183,16 @@ class EditFrameGpuConverter {
     // private section entirely; nothing outside this class reaches into it.
 };
 
-} // namespace recorder_core
+} // namespace exosnap::engine
 ```
 
 **Prep stub body** (`edit_frame_gpu_converter.cpp` — compiles, runs, does nothing color-correct
 yet; Task 2 replaces this file's contents entirely):
 
 ```cpp
-#include <recorder_core/edit_frame_gpu_converter.h>
+#include <exosnap/engine/edit_frame_gpu_converter.h>
 
-namespace recorder_core {
+namespace exosnap::engine {
 
 bool EditFrameGpuConverter::Init(ID3D11Device* device, ID3D11DeviceContext* context, std::string& err) {
     if (device == nullptr || context == nullptr) {
@@ -224,7 +224,7 @@ bool EditFrameGpuConverter::Convert(const RawDecodedVideoFrame& frame, ID3D11Tex
     return true;
 }
 
-} // namespace recorder_core
+} // namespace exosnap::engine
 ```
 
 **`EditPlayerRenderer` stub** (`app/services/EditPlayerRenderer.h`/`.cpp` — Task 4 replaces the
@@ -234,8 +234,8 @@ body, keeps the public interface):
 // app/services/EditPlayerRenderer.h
 #pragma once
 
-#include <recorder_core/edit_frame_gpu_converter.h>
-#include <recorder_core/edit_player_engine.h>
+#include <exosnap/engine/edit_frame_gpu_converter.h>
+#include <exosnap/engine/edit_player_engine.h>
 
 #include <cstdint>
 #include <memory>
@@ -262,7 +262,7 @@ class EditPlayerRenderer {
     // Presents one decoded frame. Thread-safety/threading model: Task 4 decides
     // and documents here (own render thread vs. caller's thread) as part of its
     // implementation -- not fixed by this stub.
-    void PresentFrame(recorder_core::RawDecodedVideoFrame frame, float hdr_peak_scale);
+    void PresentFrame(exosnap::engine::RawDecodedVideoFrame frame, float hdr_peak_scale);
     void ShowPlaceholder(const std::wstring& text);
     void Shutdown();
 
@@ -272,7 +272,7 @@ class EditPlayerRenderer {
     Microsoft::WRL::ComPtr<ID3D11Device> d3dDevice_;
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> d3dContext_;
     Microsoft::WRL::ComPtr<IDXGISwapChain1> swapChain_;
-    std::unique_ptr<recorder_core::EditFrameGpuConverter> converter_;
+    std::unique_ptr<exosnap::engine::EditFrameGpuConverter> converter_;
 };
 
 } // namespace exosnap
@@ -305,7 +305,7 @@ bool EditPlayerRenderer::Initialize(HWND parentHwnd, uint32_t hwndWidth, uint32_
 }
 
 void EditPlayerRenderer::Resize(uint32_t, uint32_t) {}
-void EditPlayerRenderer::PresentFrame(recorder_core::RawDecodedVideoFrame, float) {}
+void EditPlayerRenderer::PresentFrame(exosnap::engine::RawDecodedVideoFrame, float) {}
 void EditPlayerRenderer::ShowPlaceholder(const std::wstring&) {}
 void EditPlayerRenderer::Shutdown() {}
 
@@ -332,7 +332,7 @@ if (codec_ctx->thread_count <= 0) {
 - [ ] **Step 2:** Apply the FFmpeg `thread_count` fix at the video decoder's `avcodec_open2` call
       site.
 - [ ] **Step 3:** Create `edit_frame_gpu_converter.h`/`.cpp` exactly as above; add both to
-      `libs/recorder_core/CMakeLists.txt`'s source list and a new
+      `libs/engine/CMakeLists.txt`'s source list and a new
       `test_edit_frame_gpu_converter` test target (empty test file with one placeholder-free smoke
       test: construct `EditFrameGpuConverter`, `Init()` against a WARP device — see Task 2 for how
       to create one — assert it returns `true`).
@@ -340,7 +340,7 @@ if (codec_ctx->thread_count <= 0) {
       `app/CMakeLists.txt`.
 - [ ] **Step 5:** Full build (`cmake --build build/windows-x64-debug --config Debug`) and full
       existing test suite (`ctest --test-dir build/windows-x64-debug -C Debug -R
-      "recorder_core\.|edit_export"`) — must be unchanged/green; this task adds new code but
+      "engine\.|edit_export"`) — must be unchanged/green; this task adds new code but
       changes no existing behavior.
 - [ ] **Step 6:** Commit: `prep(editor-playback): add GPU converter/renderer seams + FFmpeg decoder threading fix`.
 
@@ -351,16 +351,16 @@ if (codec_ctx->thread_count <= 0) {
 **Depends on:** Task 1's `edit_frame_gpu_converter.h` (interface only — do not wait for Tasks 3/4).
 
 **Files:**
-- Modify (replace stub body entirely): `libs/recorder_core/src/edit_frame_gpu_converter.cpp`
-- Create: `libs/recorder_core/tests/test_edit_frame_gpu_converter.cpp`
+- Modify (replace stub body entirely): `libs/engine/src/edit_frame_gpu_converter.cpp`
+- Create: `libs/engine/tests/test_edit_frame_gpu_converter.cpp`
 
-**Reference material to read first:** `libs/recorder_core/src/gpu_hdr_tonemap.cpp` (the exact
+**Reference material to read first:** `libs/engine/src/gpu_hdr_tonemap.cpp` (the exact
 structural template: `D3DCompile`, `CreateVertexShader`/`CreatePixelShader`, SRV/RTV caching,
 sampler + constant buffer creation, the `Draw(3, 0)` full-screen-triangle convention, unbinding
-after draw) and `libs/recorder_core/tests/test_gpu_hdr_tonemap.cpp` (the WARP-device test
-pattern this task's tests must follow). `libs/recorder_core/src/yuv_to_bgra.cpp`'s `WeightsFor`/
+after draw) and `libs/engine/tests/test_gpu_hdr_tonemap.cpp` (the WARP-device test
+pattern this task's tests must follow). `libs/engine/src/yuv_to_bgra.cpp`'s `WeightsFor`/
 `ComputeCoefs` (the exact matrix/range math to mirror, in float instead of fixed-point) and
-`libs/recorder_core/src/hdr_preview.cpp`/`hdr_pq.h`/`hdr_tonemap.h` (the exact HDR10 PQ tone-map
+`libs/engine/src/hdr_preview.cpp`/`hdr_pq.h`/`hdr_tonemap.h` (the exact HDR10 PQ tone-map
 chain to port).
 
 **Interfaces produced:** none beyond what Task 1 already declared in the header — this task only
@@ -555,7 +555,7 @@ owned by this class), and follows `HdrToneMapper::Convert`'s exact draw sequence
 - [ ] **Step 2:** Implement the real `edit_frame_gpu_converter.cpp` (shaders above, texture
       upload/caching, constant-buffer computation mirroring `ComputeCoefs`) until all tests pass.
 - [ ] **Step 3:** Run `ctest --test-dir build/windows-x64-debug -C Debug -R test_edit_frame_gpu_converter`
-      and the full `recorder_core` suite once, confirm nothing else regressed.
+      and the full `engine` suite once, confirm nothing else regressed.
 - [ ] **Step 4:** Commit: `feat(edit): GPU YUV->BGRA + HDR10 tone-map shader for editor playback`.
 
 ---
@@ -566,9 +566,9 @@ owned by this class), and follows `HdrToneMapper::Convert`'s exact draw sequence
 Does not depend on Task 2 or Task 4.
 
 **Files:**
-- Modify: `libs/recorder_core/src/edit_player_engine.cpp` (replace the Task 1 stub bodies of
+- Modify: `libs/engine/src/edit_player_engine.cpp` (replace the Task 1 stub bodies of
   `DecodeFrameAtRaw`/`StartPlaybackDecodeRaw` with real implementations)
-- Modify: `libs/recorder_core/tests/test_edit_player_engine.cpp`
+- Modify: `libs/engine/tests/test_edit_player_engine.cpp`
 
 **What changes:** the existing `ConvertToDecodedFrame` (BGRA path, `edit_player_engine.cpp:702-758`)
 stays untouched and in use by the old `StartPlaybackDecode`/`DecodeFrameAt`. Alongside it, a new
@@ -638,8 +638,8 @@ pair keeps its own separately-typed queue, since both code paths coexist until T
       `probe_edit_playback`'s step E to assert `ctx->thread_count > 1` post-fix (it already prints
       the value; add the assertion) and confirm step B's throughput did not regress.
 - [ ] **Step 4:** Implement `WrapRawDecodedFrame` and the two real method bodies until all tests
-      pass. Run the full `recorder_core` suite once (`ctest --test-dir build/windows-x64-debug -C
-      Debug -R "recorder_core\."`) to confirm the untouched BGRA path still passes unchanged.
+      pass. Run the full `engine` suite once (`ctest --test-dir build/windows-x64-debug -C
+      Debug -R "engine\."`) to confirm the untouched BGRA path still passes unchanged.
 - [ ] **Step 5:** Commit: `feat(edit): raw-frame playback decode path + FFmpeg decoder threading fix`.
 
 ---
