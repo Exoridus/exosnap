@@ -353,7 +353,7 @@ void DiagnosticsAdapter::setCapabilitySet(const capability::CapabilitySet& caps)
     caps_ = caps;
 }
 
-void DiagnosticsAdapter::setSelectedCaptureTarget(std::optional<recorder_core::CaptureTarget> target) {
+void DiagnosticsAdapter::setSelectedCaptureTarget(std::optional<exosnap::engine::CaptureTarget> target) {
     controller_.SetSelectedCaptureTarget(std::move(target));
     refreshSnapshot();
 }
@@ -403,7 +403,7 @@ void DiagnosticsAdapter::setPresentSample(std::optional<diagnostics::PresentSamp
     controller_.SetPresentSample(std::move(sample));
 }
 
-void DiagnosticsAdapter::applyLiveDiagnostics(const recorder_core::RecordingDiagnosticsSnapshot& snapshot) {
+void DiagnosticsAdapter::applyLiveDiagnostics(const exosnap::engine::RecordingDiagnosticsSnapshot& snapshot) {
     controller_.SetLiveSnapshot(snapshot);
 
     if (!controller_.liveRecording()) {

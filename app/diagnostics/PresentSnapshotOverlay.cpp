@@ -2,21 +2,21 @@
 
 namespace exosnap::diagnostics {
 
-recorder_core::PresentMode ToSnapshotPresentMode(PresentMode mode) noexcept {
+exosnap::engine::PresentMode ToSnapshotPresentMode(PresentMode mode) noexcept {
     switch (mode) {
     case PresentMode::Composed:
-        return recorder_core::PresentMode::Composed;
+        return exosnap::engine::PresentMode::Composed;
     case PresentMode::IndependentFlip:
-        return recorder_core::PresentMode::IndependentFlip;
+        return exosnap::engine::PresentMode::IndependentFlip;
     case PresentMode::ExclusiveFullscreen:
-        return recorder_core::PresentMode::ExclusiveFullscreen;
+        return exosnap::engine::PresentMode::ExclusiveFullscreen;
     case PresentMode::Unknown:
         break;
     }
-    return recorder_core::PresentMode::Unknown;
+    return exosnap::engine::PresentMode::Unknown;
 }
 
-void ApplyPresentSample(recorder_core::CaptureDiagnostics& capture, const std::optional<PresentSample>& sample) {
+void ApplyPresentSample(exosnap::engine::CaptureDiagnostics& capture, const std::optional<PresentSample>& sample) {
     if (!sample.has_value() || !sample->available)
         return;
     // A session that is open but has not yet decoded a present reports available ==
@@ -28,7 +28,7 @@ void ApplyPresentSample(recorder_core::CaptureDiagnostics& capture, const std::o
 
     capture.source_present_mode = ToSnapshotPresentMode(sample->mode);
     capture.source_tearing = sample->tearing;
-    capture.present_mode_availability = recorder_core::MetricAvailability::Available;
+    capture.present_mode_availability = exosnap::engine::MetricAvailability::Available;
 }
 
 } // namespace exosnap::diagnostics

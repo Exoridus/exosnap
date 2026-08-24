@@ -4,7 +4,7 @@
 // Kept in its own translation unit, separate from AutoRecordHarness.cpp's recording
 // drive loop, so the parser's own gtest target (auto_record_harness_tests) needs
 // only Qt6::Core — not Qt6::Widgets, RecordingCoordinator, or any capability/
-// recorder_core dependency the recording logic pulls in.
+// engine dependency the recording logic pulls in.
 
 namespace exosnap::auto_record {
 namespace {

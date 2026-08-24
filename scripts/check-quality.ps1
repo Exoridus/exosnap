@@ -305,7 +305,7 @@ elseif ($cppcheck) {
         '--library=windows',
         '--library=qt',
         '-q',
-        '-I', 'libs/recorder_core/include',
+        '-I', 'libs/engine/include',
         '-I', 'libs/capability/include',
         # Vendored third-party sources are not ours to analyze (matches the /W0
         # treatment in libs/update/CMakeLists.txt). Monocypher's header uses a
@@ -337,7 +337,7 @@ elseif ($cppcheck) {
         '--library=windows',
         '--library=qt',
         '-q',
-        '-I', 'libs/recorder_core/include',
+        '-I', 'libs/engine/include',
         '-I', 'libs/capability/include',
         '-i', 'libs/update/third_party',
         'libs',

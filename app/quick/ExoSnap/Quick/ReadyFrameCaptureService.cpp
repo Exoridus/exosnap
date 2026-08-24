@@ -1,10 +1,10 @@
 #include "ReadyFrameCaptureService.h"
 
-#include "../../../../libs/recorder_core/src/gpu_compositor.h"
+#include "../../../../libs/engine/src/gpu_compositor.h"
 
-#include <recorder_core/cursor_sprite.h>
-#include <recorder_core/gpu_hdr_tonemap.h>
-#include <recorder_core/webcam_placement.h>
+#include <exosnap/engine/cursor_sprite.h>
+#include <exosnap/engine/gpu_hdr_tonemap.h>
+#include <exosnap/engine/webcam_placement.h>
 
 #include <QMetaObject>
 #include <QThreadPool>
@@ -189,24 +189,24 @@ bool cropToBgra(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11Textur
     return true;
 }
 
-bool drawWebcam(recorder_core::GpuCompositor& compositor, const WebcamSettings& settings, const QImage& input,
+bool drawWebcam(exosnap::engine::GpuCompositor& compositor, const WebcamSettings& settings, const QImage& input,
                 int width, int height, std::string& error) {
     if (!settings.enabled || input.isNull())
         return true;
     const QImage frame = input.convertToFormat(QImage::Format_ARGB32);
-    recorder_core::WebcamPlacement placement;
+    exosnap::engine::WebcamPlacement placement;
     placement.x = settings.overlay.x_norm;
     placement.y = settings.overlay.y_norm;
     placement.w = settings.overlay.w_norm;
     placement.h = settings.overlay.h_norm;
     placement.mirror = settings.mirror;
-    const recorder_core::WebcamPixelRect rect =
-        recorder_core::MapWebcamPlacementToContent(placement, 0, 0, width, height);
+    const exosnap::engine::WebcamPixelRect rect =
+        exosnap::engine::MapWebcamPlacementToContent(placement, 0, 0, width, height);
     if (!rect.IsValid())
         return true;
 
     const auto key = settings.chroma_key.active_color();
-    recorder_core::ChromaKeyParams chroma;
+    exosnap::engine::ChromaKeyParams chroma;
     chroma.enabled = settings.chroma_key.enabled;
     chroma.r = key.r;
     chroma.g = key.g;
@@ -218,9 +218,9 @@ bool drawWebcam(recorder_core::GpuCompositor& compositor, const WebcamSettings& 
                                  settings.opacity);
 }
 
-bool drawCursor(recorder_core::GpuCompositor& compositor, const ReadyFrameSource& source, const QRect& crop,
+bool drawCursor(exosnap::engine::GpuCompositor& compositor, const ReadyFrameSource& source, const QRect& crop,
                 std::string& error) {
-    if (source.cursor_already_composited || source.target.kind != recorder_core::CaptureTarget::Kind::Monitor)
+    if (source.cursor_already_composited || source.target.kind != exosnap::engine::CaptureTarget::Kind::Monitor)
         return true;
     CURSORINFO cursor_info{};
     cursor_info.cbSize = sizeof(cursor_info);
@@ -237,17 +237,17 @@ bool drawCursor(recorder_core::GpuCompositor& compositor, const ReadyFrameSource
     if (monitor_width <= 0 || monitor_height <= 0)
         return true;
 
-    recorder_core::Win32CursorBitmap bitmap;
-    if (!recorder_core::CaptureWin32CursorBitmap(cursor_info.hCursor, bitmap))
+    exosnap::engine::Win32CursorBitmap bitmap;
+    if (!exosnap::engine::CaptureWin32CursorBitmap(cursor_info.hCursor, bitmap))
         return true;
-    const int32_t x = recorder_core::ScaleCoordinateToSource(cursor_info.ptScreenPos.x - monitor_info.rcMonitor.left,
-                                                             static_cast<int32_t>(source.width), monitor_width) -
+    const int32_t x = exosnap::engine::ScaleCoordinateToSource(cursor_info.ptScreenPos.x - monitor_info.rcMonitor.left,
+                                                               static_cast<int32_t>(source.width), monitor_width) -
                       bitmap.hotspot_x - crop.x();
-    const int32_t y = recorder_core::ScaleCoordinateToSource(cursor_info.ptScreenPos.y - monitor_info.rcMonitor.top,
-                                                             static_cast<int32_t>(source.height), monitor_height) -
+    const int32_t y = exosnap::engine::ScaleCoordinateToSource(cursor_info.ptScreenPos.y - monitor_info.rcMonitor.top,
+                                                               static_cast<int32_t>(source.height), monitor_height) -
                       bitmap.hotspot_y - crop.y();
-    const recorder_core::CursorSpriteClip clip =
-        recorder_core::ClipCursorSprite(x, y, bitmap.width, bitmap.height, crop.width(), crop.height());
+    const exosnap::engine::CursorSpriteClip clip =
+        exosnap::engine::ClipCursorSprite(x, y, bitmap.width, bitmap.height, crop.width(), crop.height());
     if (!clip.visible)
         return true;
 
@@ -258,7 +258,7 @@ bool drawCursor(recorder_core::GpuCompositor& compositor, const ReadyFrameSource
         std::memcpy(clipped.data() + static_cast<size_t>(row) * clip.w * 4, bitmap.bgra.data() + source_offset,
                     static_cast<size_t>(clip.w) * 4);
     }
-    const recorder_core::WebcamPixelRect rect{clip.x, clip.y, clip.w, clip.h};
+    const exosnap::engine::WebcamPixelRect rect{clip.x, clip.y, clip.w, clip.h};
     return compositor.DrawCursor(clipped.data(), clip.w, clip.h, rect, error);
 }
 
@@ -346,7 +346,7 @@ void captureOnWorker(ReadyFrameSource source, ReadyFrameComposition composition,
 
     ID3D11Texture2D* display_source = local.Get();
     ComPtr<ID3D11Texture2D> tone_mapped;
-    if (source.tap.transform != recorder_core::PreviewTapTransform::None) {
+    if (source.tap.transform != exosnap::engine::PreviewTapTransform::None) {
         D3D11_TEXTURE2D_DESC tone_desc{};
         tone_desc.Width = source.width;
         tone_desc.Height = source.height;
@@ -357,8 +357,8 @@ void captureOnWorker(ReadyFrameSource source, ReadyFrameComposition composition,
         tone_desc.Usage = D3D11_USAGE_DEFAULT;
         tone_desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
         result = device->CreateTexture2D(&tone_desc, nullptr, tone_mapped.GetAddressOf());
-        recorder_core::HdrToneMapper mapper;
-        const bool sdr_scrgb = source.tap.transform == recorder_core::PreviewTapTransform::ScrgbSdr;
+        exosnap::engine::HdrToneMapper mapper;
+        const bool sdr_scrgb = source.tap.transform == exosnap::engine::PreviewTapTransform::ScrgbSdr;
         if (FAILED(result) ||
             !mapper.Init(device.Get(), context.Get(), source.width, source.height, source.tap.peak_scale, sdr_scrgb,
                          error, source.tap.paper_white_scale) ||
@@ -379,7 +379,7 @@ void captureOnWorker(ReadyFrameSource source, ReadyFrameComposition composition,
         return;
     }
 
-    recorder_core::GpuCompositor compositor;
+    exosnap::engine::GpuCompositor compositor;
     if (!compositor.Init(device.Get(), context.Get(), crop.width(), crop.height(), error) ||
         !compositor.BeginFrame(bgra.Get(), error) ||
         !drawWebcam(compositor, composition.webcam, composition.webcam_frame, crop.width(), crop.height(), error) ||

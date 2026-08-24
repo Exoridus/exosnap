@@ -630,10 +630,10 @@ class SettingsAdapter : public QObject {
     void commitAppSettingsEdit();
     [[nodiscard]] models::RecordingOverlayContent resolvedRecordingOverlayContent() const;
     [[nodiscard]] models::DiagnosticsOverlayContent resolvedDiagnosticsOverlayContent() const;
-    [[nodiscard]] recorder_core::AudioSourceRow* findRow(recorder_core::AudioSourceKind kind);
-    [[nodiscard]] const recorder_core::AudioSourceRow* findRow(recorder_core::AudioSourceKind kind) const;
-    void setRowEnabled(recorder_core::AudioSourceKind kind, bool enabled);
-    void setRowSeparate(recorder_core::AudioSourceKind kind, bool separate);
+    [[nodiscard]] exosnap::engine::AudioSourceRow* findRow(exosnap::engine::AudioSourceKind kind);
+    [[nodiscard]] const exosnap::engine::AudioSourceRow* findRow(exosnap::engine::AudioSourceKind kind) const;
+    void setRowEnabled(exosnap::engine::AudioSourceKind kind, bool enabled);
+    void setRowSeparate(exosnap::engine::AudioSourceKind kind, bool separate);
 
     RecordingPresetConfig config_;
     PersistedAppSettings app_settings_;

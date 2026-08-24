@@ -46,7 +46,7 @@ class CaptureSubscription {
 
     // None while the source has never produced; Held once it has stopped; Live
     // while it produces. An empty subscription reports None.
-    [[nodiscard]] recorder_core::HubFrameKind Frame() const;
+    [[nodiscard]] exosnap::engine::HubFrameKind Frame() const;
 
     // The last good frame, whatever the source is doing now. Empty texture while
     // Frame() is None.

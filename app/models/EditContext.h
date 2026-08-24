@@ -15,7 +15,7 @@
 #include <vector>
 
 #include "RecordingMarker.h"
-#include <recorder_core/pipeline_diagnostics.h>
+#include <exosnap/engine/pipeline_diagnostics.h>
 
 namespace exosnap {
 
@@ -34,7 +34,7 @@ struct EditContext {
     // Post-flight data (from RecordPage diagnostics tracking)
     double peak_av_drift_ms = 0.0;
     bool av_drift_available = false;
-    recorder_core::RecordingDiagnosticsSnapshot completed_snapshot;
+    exosnap::engine::RecordingDiagnosticsSnapshot completed_snapshot;
 
     // Markers pre-loaded from the recording session (fallback if sidecar cannot be read)
     std::vector<RecordingMarker> markers;

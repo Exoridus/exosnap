@@ -80,7 +80,7 @@ class LiveVerifySource {
     // costs, different availability stories and different consumers; a client
     // that wants the pipeline should not be made to pay for a display probe.
 
-    // The live recording pipeline, from recorder_core::RecordingDiagnosticsSnapshot.
+    // The live recording pipeline, from exosnap::engine::RecordingDiagnosticsSnapshot.
     [[nodiscard]] virtual QJsonObject PipelineSnapshot() const = 0;
     // requested / effective / running recording configuration, plus app settings.
     [[nodiscard]] virtual QJsonObject SettingsSnapshot() const = 0;

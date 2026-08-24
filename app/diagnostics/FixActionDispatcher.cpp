@@ -16,7 +16,7 @@ FixResult ApplyAutoFix(std::string_view fix_id, const capability::CapabilitySet&
     }
 
     if (fix_id == "fix.frame_pacing.smooth") {
-        video.frame_pacing = recorder_core::FramePacingMode::Smooth;
+        video.frame_pacing = exosnap::engine::FramePacingMode::Smooth;
         return {FixOutcome::SettingsChanged};
     }
 

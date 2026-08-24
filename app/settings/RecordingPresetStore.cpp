@@ -159,123 +159,123 @@ std::optional<capability::AudioCodec> AudioCodecFromString(QStringView s) {
     return std::nullopt;
 }
 
-QString NvencPresetToString(recorder_core::NvencPreset v) {
+QString NvencPresetToString(exosnap::engine::NvencPreset v) {
     switch (v) {
-    case recorder_core::NvencPreset::P1:
+    case exosnap::engine::NvencPreset::P1:
         return QStringLiteral("p1");
-    case recorder_core::NvencPreset::P2:
+    case exosnap::engine::NvencPreset::P2:
         return QStringLiteral("p2");
-    case recorder_core::NvencPreset::P3:
+    case exosnap::engine::NvencPreset::P3:
         return QStringLiteral("p3");
-    case recorder_core::NvencPreset::P4:
+    case exosnap::engine::NvencPreset::P4:
         return QStringLiteral("p4");
-    case recorder_core::NvencPreset::P5:
+    case exosnap::engine::NvencPreset::P5:
         return QStringLiteral("p5");
-    case recorder_core::NvencPreset::P6:
+    case exosnap::engine::NvencPreset::P6:
         return QStringLiteral("p6");
-    case recorder_core::NvencPreset::P7:
+    case exosnap::engine::NvencPreset::P7:
         return QStringLiteral("p7");
     }
     return QStringLiteral("p4");
 }
 
-std::optional<recorder_core::NvencPreset> NvencPresetFromString(QStringView s) {
+std::optional<exosnap::engine::NvencPreset> NvencPresetFromString(QStringView s) {
     const QString n = s.trimmed().toString().toLower();
     if (n == QStringLiteral("p1"))
-        return recorder_core::NvencPreset::P1;
+        return exosnap::engine::NvencPreset::P1;
     if (n == QStringLiteral("p2"))
-        return recorder_core::NvencPreset::P2;
+        return exosnap::engine::NvencPreset::P2;
     if (n == QStringLiteral("p3"))
-        return recorder_core::NvencPreset::P3;
+        return exosnap::engine::NvencPreset::P3;
     if (n == QStringLiteral("p4"))
-        return recorder_core::NvencPreset::P4;
+        return exosnap::engine::NvencPreset::P4;
     if (n == QStringLiteral("p5"))
-        return recorder_core::NvencPreset::P5;
+        return exosnap::engine::NvencPreset::P5;
     if (n == QStringLiteral("p6"))
-        return recorder_core::NvencPreset::P6;
+        return exosnap::engine::NvencPreset::P6;
     if (n == QStringLiteral("p7"))
-        return recorder_core::NvencPreset::P7;
+        return exosnap::engine::NvencPreset::P7;
     return std::nullopt;
 }
 
-QString HdrModeToString(recorder_core::HdrMode v) {
+QString HdrModeToString(exosnap::engine::HdrMode v) {
     switch (v) {
-    case recorder_core::HdrMode::Off:
+    case exosnap::engine::HdrMode::Off:
         return QStringLiteral("off");
-    case recorder_core::HdrMode::TonemapSdr:
+    case exosnap::engine::HdrMode::TonemapSdr:
         return QStringLiteral("tonemap_sdr");
-    case recorder_core::HdrMode::Hdr10:
+    case exosnap::engine::HdrMode::Hdr10:
         return QStringLiteral("hdr10");
     }
     return QStringLiteral("tonemap_sdr");
 }
 
-std::optional<recorder_core::HdrMode> HdrModeFromString(QStringView s) {
+std::optional<exosnap::engine::HdrMode> HdrModeFromString(QStringView s) {
     const QString n = s.trimmed().toString().toLower();
     if (n == QStringLiteral("off"))
-        return recorder_core::HdrMode::Off;
+        return exosnap::engine::HdrMode::Off;
     if (n == QStringLiteral("tonemap_sdr"))
-        return recorder_core::HdrMode::TonemapSdr;
+        return exosnap::engine::HdrMode::TonemapSdr;
     if (n == QStringLiteral("hdr10"))
-        return recorder_core::HdrMode::Hdr10;
+        return exosnap::engine::HdrMode::Hdr10;
     return std::nullopt;
 }
 
-QString RateControlModeToString(recorder_core::RateControlMode v) {
+QString RateControlModeToString(exosnap::engine::RateControlMode v) {
     switch (v) {
-    case recorder_core::RateControlMode::ConstantQuality:
+    case exosnap::engine::RateControlMode::ConstantQuality:
         return QStringLiteral("cq");
-    case recorder_core::RateControlMode::VariableBitrate:
+    case exosnap::engine::RateControlMode::VariableBitrate:
         return QStringLiteral("vbr");
-    case recorder_core::RateControlMode::ConstantBitrate:
+    case exosnap::engine::RateControlMode::ConstantBitrate:
         return QStringLiteral("cbr");
-    case recorder_core::RateControlMode::Lossless:
+    case exosnap::engine::RateControlMode::Lossless:
         return QStringLiteral("lossless");
     }
     return QStringLiteral("cq");
 }
 
-std::optional<recorder_core::RateControlMode> RateControlModeFromString(QStringView s) {
+std::optional<exosnap::engine::RateControlMode> RateControlModeFromString(QStringView s) {
     const QString n = s.trimmed().toString().toLower();
     if (n == QStringLiteral("cq"))
-        return recorder_core::RateControlMode::ConstantQuality;
+        return exosnap::engine::RateControlMode::ConstantQuality;
     if (n == QStringLiteral("vbr"))
-        return recorder_core::RateControlMode::VariableBitrate;
+        return exosnap::engine::RateControlMode::VariableBitrate;
     if (n == QStringLiteral("cbr"))
-        return recorder_core::RateControlMode::ConstantBitrate;
+        return exosnap::engine::RateControlMode::ConstantBitrate;
     if (n == QStringLiteral("lossless"))
-        return recorder_core::RateControlMode::Lossless;
+        return exosnap::engine::RateControlMode::Lossless;
     return std::nullopt;
 }
 
-QString MicChannelModeToString(recorder_core::MicChannelMode v) {
+QString MicChannelModeToString(exosnap::engine::MicChannelMode v) {
     switch (v) {
-    case recorder_core::MicChannelMode::Auto:
+    case exosnap::engine::MicChannelMode::Auto:
         return QStringLiteral("auto");
-    case recorder_core::MicChannelMode::PreserveStereo:
+    case exosnap::engine::MicChannelMode::PreserveStereo:
         return QStringLiteral("preserve");
-    case recorder_core::MicChannelMode::MonoMix:
+    case exosnap::engine::MicChannelMode::MonoMix:
         return QStringLiteral("mono_mix");
-    case recorder_core::MicChannelMode::LeftToStereo:
+    case exosnap::engine::MicChannelMode::LeftToStereo:
         return QStringLiteral("left");
-    case recorder_core::MicChannelMode::RightToStereo:
+    case exosnap::engine::MicChannelMode::RightToStereo:
         return QStringLiteral("right");
     }
     return QStringLiteral("auto");
 }
 
-std::optional<recorder_core::MicChannelMode> MicChannelModeFromString(QStringView s) {
+std::optional<exosnap::engine::MicChannelMode> MicChannelModeFromString(QStringView s) {
     const QString n = s.trimmed().toString().toLower();
     if (n == QStringLiteral("auto"))
-        return recorder_core::MicChannelMode::Auto;
+        return exosnap::engine::MicChannelMode::Auto;
     if (n == QStringLiteral("preserve"))
-        return recorder_core::MicChannelMode::PreserveStereo;
+        return exosnap::engine::MicChannelMode::PreserveStereo;
     if (n == QStringLiteral("mono_mix"))
-        return recorder_core::MicChannelMode::MonoMix;
+        return exosnap::engine::MicChannelMode::MonoMix;
     if (n == QStringLiteral("left"))
-        return recorder_core::MicChannelMode::LeftToStereo;
+        return exosnap::engine::MicChannelMode::LeftToStereo;
     if (n == QStringLiteral("right"))
-        return recorder_core::MicChannelMode::RightToStereo;
+        return exosnap::engine::MicChannelMode::RightToStereo;
     return std::nullopt;
 }
 
@@ -298,30 +298,30 @@ std::optional<capability::CaptureTargetKind> CaptureTargetKindFromString(QString
     return std::nullopt;
 }
 
-QString AudioSourceKindToString(recorder_core::AudioSourceKind v) {
+QString AudioSourceKindToString(exosnap::engine::AudioSourceKind v) {
     switch (v) {
-    case recorder_core::AudioSourceKind::App:
+    case exosnap::engine::AudioSourceKind::App:
         return QStringLiteral("app");
-    case recorder_core::AudioSourceKind::Mic:
+    case exosnap::engine::AudioSourceKind::Mic:
         return QStringLiteral("mic");
-    case recorder_core::AudioSourceKind::Sys:
+    case exosnap::engine::AudioSourceKind::Sys:
         return QStringLiteral("sys");
-    case recorder_core::AudioSourceKind::SystemOutput:
+    case exosnap::engine::AudioSourceKind::SystemOutput:
         return QStringLiteral("system_output");
     }
     return QStringLiteral("sys");
 }
 
-std::optional<recorder_core::AudioSourceKind> AudioSourceKindFromString(QStringView s) {
+std::optional<exosnap::engine::AudioSourceKind> AudioSourceKindFromString(QStringView s) {
     const QString n = s.trimmed().toString().toLower();
     if (n == QStringLiteral("app"))
-        return recorder_core::AudioSourceKind::App;
+        return exosnap::engine::AudioSourceKind::App;
     if (n == QStringLiteral("mic"))
-        return recorder_core::AudioSourceKind::Mic;
+        return exosnap::engine::AudioSourceKind::Mic;
     if (n == QStringLiteral("sys"))
-        return recorder_core::AudioSourceKind::Sys;
+        return exosnap::engine::AudioSourceKind::Sys;
     if (n == QStringLiteral("system_output"))
-        return recorder_core::AudioSourceKind::SystemOutput;
+        return exosnap::engine::AudioSourceKind::SystemOutput;
     return std::nullopt;
 }
 
@@ -460,45 +460,45 @@ std::optional<SplitSizeMode> SplitSizeModeFromString(QStringView s) {
     return std::nullopt;
 }
 
-QString OutputFitModeToString(recorder_core::OutputFitMode v) {
+QString OutputFitModeToString(exosnap::engine::OutputFitMode v) {
     switch (v) {
-    case recorder_core::OutputFitMode::Contain:
+    case exosnap::engine::OutputFitMode::Contain:
         return QStringLiteral("contain");
     }
     return QStringLiteral("contain");
 }
 
-std::optional<recorder_core::OutputFitMode> OutputFitModeFromString(QStringView s) {
+std::optional<exosnap::engine::OutputFitMode> OutputFitModeFromString(QStringView s) {
     const QString n = s.trimmed().toString().toLower();
     if (n == QStringLiteral("contain") || n == QStringLiteral("fit"))
-        return recorder_core::OutputFitMode::Contain;
+        return exosnap::engine::OutputFitMode::Contain;
     return std::nullopt;
 }
 
-QString OpusFrameDurationToString(recorder_core::OpusFrameDuration v) {
+QString OpusFrameDurationToString(exosnap::engine::OpusFrameDuration v) {
     switch (v) {
-    case recorder_core::OpusFrameDuration::Ms20:
+    case exosnap::engine::OpusFrameDuration::Ms20:
         return QStringLiteral("20ms");
-    case recorder_core::OpusFrameDuration::Ms10:
+    case exosnap::engine::OpusFrameDuration::Ms10:
         return QStringLiteral("10ms");
-    case recorder_core::OpusFrameDuration::Ms5:
+    case exosnap::engine::OpusFrameDuration::Ms5:
         return QStringLiteral("5ms");
-    case recorder_core::OpusFrameDuration::Ms2_5:
+    case exosnap::engine::OpusFrameDuration::Ms2_5:
         return QStringLiteral("2.5ms");
     }
     return QStringLiteral("20ms");
 }
 
-std::optional<recorder_core::OpusFrameDuration> OpusFrameDurationFromString(QStringView s) {
+std::optional<exosnap::engine::OpusFrameDuration> OpusFrameDurationFromString(QStringView s) {
     const QString n = s.trimmed().toString().toLower();
     if (n == QStringLiteral("20ms"))
-        return recorder_core::OpusFrameDuration::Ms20;
+        return exosnap::engine::OpusFrameDuration::Ms20;
     if (n == QStringLiteral("10ms"))
-        return recorder_core::OpusFrameDuration::Ms10;
+        return exosnap::engine::OpusFrameDuration::Ms10;
     if (n == QStringLiteral("5ms"))
-        return recorder_core::OpusFrameDuration::Ms5;
+        return exosnap::engine::OpusFrameDuration::Ms5;
     if (n == QStringLiteral("2.5ms"))
-        return recorder_core::OpusFrameDuration::Ms2_5;
+        return exosnap::engine::OpusFrameDuration::Ms2_5;
     return std::nullopt;
 }
 
@@ -838,7 +838,7 @@ RecordingPresetConfig ConfigFromToml(const toml::table& tbl) {
     auto& vid = config.video;
     {
         const int64_t cq = TomlInt(tbl["video"]["cq"], static_cast<int64_t>(vid.cq));
-        if (cq >= recorder_core::kCqMin && cq <= recorder_core::kCqMax)
+        if (cq >= exosnap::engine::kCqMin && cq <= exosnap::engine::kCqMax)
             vid.cq = static_cast<uint32_t>(cq);
     }
     {
@@ -867,7 +867,7 @@ RecordingPresetConfig ConfigFromToml(const toml::table& tbl) {
         }
     }
     // CFR frame pacing (ADR 0035). Default 0 = Smooth; out-of-range clamped by SanitizePresetConfig.
-    vid.frame_pacing = static_cast<recorder_core::FramePacingMode>(TomlInt(tbl["video"]["frame_pacing"], 0));
+    vid.frame_pacing = static_cast<exosnap::engine::FramePacingMode>(TomlInt(tbl["video"]["frame_pacing"], 0));
 
     // --- Audio ---
     auto& aud = config.audio;
@@ -915,7 +915,7 @@ RecordingPresetConfig ConfigFromToml(const toml::table& tbl) {
     {
         const auto fd =
             OpusFrameDurationFromString(QString::fromStdString(TomlStr(tbl["audio"]["opus_frame_duration"])));
-        aud.opus_frame_duration = fd.value_or(recorder_core::OpusFrameDuration::Ms20);
+        aud.opus_frame_duration = fd.value_or(exosnap::engine::OpusFrameDuration::Ms20);
     }
     {
         const int64_t cplx = TomlInt(tbl["audio"]["opus_complexity"], 10);
@@ -985,7 +985,7 @@ RecordingPresetConfig ConfigFromToml(const toml::table& tbl) {
                     const auto kind = AudioSourceKindFromString(QString::fromStdString(TomlStr((*row_tbl)["kind"])));
                     if (!kind.has_value())
                         continue;
-                    recorder_core::AudioSourceRow row;
+                    exosnap::engine::AudioSourceRow row;
                     row.kind = *kind;
                     row.enabled = TomlBool((*row_tbl)["enabled"], true);
                     row.merge_with_above = TomlBool((*row_tbl)["merge"], false);

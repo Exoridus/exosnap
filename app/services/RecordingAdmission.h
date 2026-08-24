@@ -29,7 +29,7 @@
 // display facts + resolved config on the worker, window facts + measured hub
 // evidence on the UI thread) and this decides.
 
-#include <recorder_core/codec_types.h>
+#include <exosnap/engine/codec_types.h>
 
 #include "../diagnostics/WindowTargetFacts.h"
 
@@ -46,7 +46,7 @@ enum class AdmissionBlocker {
 // Everything the admission decision reads. Defaults describe an unremarkable SDR
 // monitor recording, so a caller that supplies nothing is never blocked.
 struct AdmissionFacts {
-    recorder_core::HdrMode hdr_mode = recorder_core::HdrMode::Off;
+    exosnap::engine::HdrMode hdr_mode = exosnap::engine::HdrMode::Off;
     // Whether the selected video codec can carry a native HDR10 signal. Comes from
     // the capability annotation (caps.QueryHdr10Native), never a codec-name
     // compare — the same source RecommendationEngine::checkHdrH264Blocker uses, so

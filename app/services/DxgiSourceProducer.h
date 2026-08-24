@@ -28,8 +28,8 @@
 
 #include <winrt/base.h>
 
-#include <recorder_core/dxgi_od_capture_src.h>
-#include <recorder_core/hdr_native.h>
+#include <exosnap/engine/dxgi_od_capture_src.h>
+#include <exosnap/engine/hdr_native.h>
 
 #include "services/CaptureSourceHub.h"
 
@@ -59,7 +59,7 @@ class DxgiSourceProducer final : public HubSourceProducer {
 
     // HDR facts of the duplicated display, sampled at Open (see
     // DxgiOdCaptureSrc). Feed ResolveRawCaptureTapDesc for FP16 frames.
-    [[nodiscard]] const recorder_core::HdrDisplayFacts& DisplayFacts() const noexcept {
+    [[nodiscard]] const exosnap::engine::HdrDisplayFacts& DisplayFacts() const noexcept {
         return od_.DisplayFacts();
     }
 
@@ -68,7 +68,7 @@ class DxgiSourceProducer final : public HubSourceProducer {
 
     winrt::com_ptr<ID3D11Device> device_;
     winrt::com_ptr<ID3D11DeviceContext> context_;
-    recorder_core::DxgiOdCaptureSrc od_;
+    exosnap::engine::DxgiOdCaptureSrc od_;
 
     // The hub retries a failed reopen on every pump tick (unbounded, no backoff
     // by design). A reopen here enumerates the topology and creates a D3D

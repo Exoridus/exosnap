@@ -40,15 +40,15 @@ class TimelineThumbnailSourceTest : public ::testing::Test {
 
 // A decoded frame whose buffer reports its own lifetime, so a test can prove
 // the tile loop is not sitting on the frames it has already scaled.
-recorder_core::DecodedVideoFrame MakeFrame(int64_t pts_us, uint32_t width, uint32_t height,
-                                           std::atomic<int>* live_buffers) {
+exosnap::engine::DecodedVideoFrame MakeFrame(int64_t pts_us, uint32_t width, uint32_t height,
+                                             std::atomic<int>* live_buffers) {
     const size_t bytes = static_cast<size_t>(width) * height * 4;
     auto* raw = new uint8_t[bytes];
     for (size_t i = 0; i < bytes; ++i)
         raw[i] = static_cast<uint8_t>(i & 0xFF);
     if (live_buffers != nullptr)
         live_buffers->fetch_add(1);
-    recorder_core::DecodedVideoFrame frame;
+    exosnap::engine::DecodedVideoFrame frame;
     frame.pts_us = pts_us;
     frame.width = width;
     frame.height = height;
@@ -165,7 +165,7 @@ TEST_F(TimelineThumbnailSourceTest, AFailedDecodeLeavesTheRemainingTilesAlone) {
 
     GenerateTimelineTiles(
         {0, 1000, 2000, 3000}, 40,
-        [](int64_t target_us) -> std::optional<recorder_core::DecodedVideoFrame> {
+        [](int64_t target_us) -> std::optional<exosnap::engine::DecodedVideoFrame> {
             if (target_us == 1'000'000)
                 return std::nullopt; // this position carries nothing decodable
             return MakeFrame(target_us, 320, 180, nullptr);
@@ -232,7 +232,7 @@ TEST_F(TimelineThumbnailSourceTest, ACancelledRunStopsDecoding) {
 TEST_F(TimelineThumbnailSourceTest, WrappingADecodedFrameDoesNotCopyItsBuffer) {
     std::atomic<int> live_buffers{0};
     {
-        const recorder_core::DecodedVideoFrame frame = MakeFrame(0, 64, 36, &live_buffers);
+        const exosnap::engine::DecodedVideoFrame frame = MakeFrame(0, 64, 36, &live_buffers);
         ASSERT_EQ(live_buffers.load(), 1);
         {
             const QImage wrapped = WrapDecodedFrame(frame);
@@ -253,7 +253,7 @@ TEST_F(TimelineThumbnailSourceTest, WrappingADecodedFrameDoesNotCopyItsBuffer) {
 TEST_F(TimelineThumbnailSourceTest, AnUnusableFrameGeometryStrandsNothing) {
     std::atomic<int> live_buffers{0};
 
-    const auto expect_released = [&live_buffers](recorder_core::DecodedVideoFrame frame) {
+    const auto expect_released = [&live_buffers](exosnap::engine::DecodedVideoFrame frame) {
         {
             const QImage wrapped = WrapDecodedFrame(frame);
             EXPECT_TRUE(wrapped.isNull());
@@ -263,14 +263,14 @@ TEST_F(TimelineThumbnailSourceTest, AnUnusableFrameGeometryStrandsNothing) {
     };
 
     {
-        recorder_core::DecodedVideoFrame zero_width = MakeFrame(0, 0, 36, &live_buffers);
+        exosnap::engine::DecodedVideoFrame zero_width = MakeFrame(0, 0, 36, &live_buffers);
         zero_width.stride_bytes = 0;
         expect_released(std::move(zero_width));
     }
     EXPECT_EQ(live_buffers.load(), 0);
 
     {
-        recorder_core::DecodedVideoFrame zero_height = MakeFrame(0, 64, 0, &live_buffers);
+        exosnap::engine::DecodedVideoFrame zero_height = MakeFrame(0, 64, 0, &live_buffers);
         expect_released(std::move(zero_height));
     }
     EXPECT_EQ(live_buffers.load(), 0);
@@ -278,14 +278,14 @@ TEST_F(TimelineThumbnailSourceTest, AnUnusableFrameGeometryStrandsNothing) {
     {
         // A stride that cannot hold one row: QImage refuses it, and so must the
         // wrapper -- accepting it would read past the allocation.
-        recorder_core::DecodedVideoFrame short_stride = MakeFrame(0, 64, 36, &live_buffers);
+        exosnap::engine::DecodedVideoFrame short_stride = MakeFrame(0, 64, 36, &live_buffers);
         short_stride.stride_bytes = 64 * 4 - 4;
         expect_released(std::move(short_stride));
     }
     EXPECT_EQ(live_buffers.load(), 0);
 
     {
-        recorder_core::DecodedVideoFrame no_buffer = MakeFrame(0, 64, 36, &live_buffers);
+        exosnap::engine::DecodedVideoFrame no_buffer = MakeFrame(0, 64, 36, &live_buffers);
         no_buffer.bgra.reset();
         {
             const QImage wrapped = WrapDecodedFrame(no_buffer);

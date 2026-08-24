@@ -63,7 +63,7 @@ number and NVENC status code.
 - No MKV, MP4, or any container beyond the minimal IVF written for AV1.
 - No Opus, AAC, or any audio codec.
 - No FFmpeg.
-- No `recorder_core` integration.
+- No `engine` integration.
 - No WinUI.
 - No real capture content; all frames are synthetic.
 - No quality verification (no `ffprobe`, no VMAF, no SSIM).

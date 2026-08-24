@@ -171,8 +171,8 @@ TEST(ConfigSummaryTest, FromCurrentSettings_HasExpectedFields) {
 
     capability::AudioUiState audio;
     audio.source_rows = {
-        {recorder_core::AudioSourceKind::SystemOutput, true, false},
-        {recorder_core::AudioSourceKind::Mic, true, true},
+        {exosnap::engine::AudioSourceKind::SystemOutput, true, false},
+        {exosnap::engine::AudioSourceKind::Mic, true, true},
     };
 
     auto summary = ConfigSummary::FromCurrentSettings(output, video, audio, std::filesystem::path(L"C:/settings.ini"),
@@ -259,9 +259,9 @@ TEST(ConfigSummaryTest, FromCurrentSettings_AudioRoutingWithMerge) {
 
     capability::AudioUiState audio;
     audio.source_rows = {
-        {recorder_core::AudioSourceKind::SystemOutput, true, false},
-        {recorder_core::AudioSourceKind::Mic, false, false},
-        {recorder_core::AudioSourceKind::Sys, true, true},
+        {exosnap::engine::AudioSourceKind::SystemOutput, true, false},
+        {exosnap::engine::AudioSourceKind::Mic, false, false},
+        {exosnap::engine::AudioSourceKind::Sys, true, true},
     };
 
     auto summary = ConfigSummary::FromCurrentSettings(output, video, audio, std::filesystem::path(), "test", "");
@@ -281,7 +281,7 @@ TEST(ConfigSummaryTest, UserConfigFromSettings_UsesActiveOutputSelection) {
     output.container = capability::Container::WebM;
     output.video_codec = capability::VideoCodec::Av1;
     output.audio_codec = capability::AudioCodec::Opus;
-    output.hdr_mode = recorder_core::HdrMode::Hdr10;
+    output.hdr_mode = exosnap::engine::HdrMode::Hdr10;
 
     VideoSettingsModel video;
     video.cfr = false;
@@ -296,7 +296,7 @@ TEST(ConfigSummaryTest, UserConfigFromSettings_UsesActiveOutputSelection) {
     EXPECT_EQ(config.frame_rate_den, 1u);
     // hdr_mode must be carried at this seam; dropping it silently resets the
     // Diagnostics config summary to TonemapSdr regardless of the actual selection.
-    EXPECT_EQ(config.hdr_mode, recorder_core::HdrMode::Hdr10)
+    EXPECT_EQ(config.hdr_mode, exosnap::engine::HdrMode::Hdr10)
         << "UserConfigFromSettings must carry hdr_mode through like every other output field";
 }
 
@@ -564,11 +564,11 @@ TEST(RecommendationEngineTest, Generate_RefreshRateMatch_NoWarn) {
 // --- Live present-cadence correlation (v0.8.0 / ADR 0033) ---
 
 namespace {
-recorder_core::RecordingDiagnosticsSnapshot MakeJudderSnapshot(bool cfr, double jitter_ms, double coalesce_ratio) {
-    recorder_core::RecordingDiagnosticsSnapshot live;
+exosnap::engine::RecordingDiagnosticsSnapshot MakeJudderSnapshot(bool cfr, double jitter_ms, double coalesce_ratio) {
+    exosnap::engine::RecordingDiagnosticsSnapshot live;
     live.valid = true;
     live.video_encoder.cfr = cfr;
-    live.capture.present_cadence_availability = recorder_core::MetricAvailability::Available;
+    live.capture.present_cadence_availability = exosnap::engine::MetricAvailability::Available;
     live.capture.source_present_jitter_ms = jitter_ms;
     live.capture.source_coalesce_ratio = coalesce_ratio;
     return live;
@@ -669,10 +669,10 @@ TEST(DiagnosticTierTest, MeasuredJudderIsTier2) {
 }
 
 namespace {
-recorder_core::RecordingDiagnosticsSnapshot MakeDegradedAudioSnapshot(uint32_t degraded, uint32_t tracks) {
-    recorder_core::RecordingDiagnosticsSnapshot live;
+exosnap::engine::RecordingDiagnosticsSnapshot MakeDegradedAudioSnapshot(uint32_t degraded, uint32_t tracks) {
+    exosnap::engine::RecordingDiagnosticsSnapshot live;
     live.valid = true;
-    live.lifecycle = recorder_core::DiagnosticsLifecycle::Recording;
+    live.lifecycle = exosnap::engine::DiagnosticsLifecycle::Recording;
     live.audio.active = true;
     live.audio.sample_rate = 48000;
     live.audio.channels = 2;
@@ -1653,9 +1653,9 @@ TEST(RecommendationEngineTest, FewModeFlipsRaiseNoModeFlipNotice) {
 
 TEST(RecommendationEngineTest, HighDiskWriteLatencyRaisesWriteStallNotice) {
     using namespace exosnap::diagnostics;
-    recorder_core::RecordingDiagnosticsSnapshot snap;
+    exosnap::engine::RecordingDiagnosticsSnapshot snap;
     snap.valid = true;
-    snap.disk.latency_availability = recorder_core::MetricAvailability::Available;
+    snap.disk.latency_availability = exosnap::engine::MetricAvailability::Available;
     snap.disk.peak_write_ms = 150.0; // > 100 ms threshold
     capability::CapabilitySet caps;
     capability::UserRecorderConfig config;
@@ -1673,18 +1673,18 @@ TEST(RecommendationEngineTest, LowOrUnavailableDiskWriteRaisesNoWriteStallNotice
     capability::CapabilitySet caps;
     capability::UserRecorderConfig config;
     // Below threshold, available.
-    recorder_core::RecordingDiagnosticsSnapshot low;
+    exosnap::engine::RecordingDiagnosticsSnapshot low;
     low.valid = true;
-    low.disk.latency_availability = recorder_core::MetricAvailability::Available;
+    low.disk.latency_availability = exosnap::engine::MetricAvailability::Available;
     low.disk.peak_write_ms = 20.0;
     const DiagnosticChecklist low_list =
         RecommendationEngine(caps, config, 0, 0, true, "NTFS", &low, nullptr).Generate();
     EXPECT_TRUE(std::none_of(low_list.results.begin(), low_list.results.end(),
                              [](const DiagnosticResult& r) { return r.id == "rec.disk.writestall"; }));
     // High latency but Unavailable (e.g. MP4 remux) must stay silent.
-    recorder_core::RecordingDiagnosticsSnapshot unavail;
+    exosnap::engine::RecordingDiagnosticsSnapshot unavail;
     unavail.valid = true;
-    unavail.disk.latency_availability = recorder_core::MetricAvailability::Unavailable;
+    unavail.disk.latency_availability = exosnap::engine::MetricAvailability::Unavailable;
     unavail.disk.peak_write_ms = 500.0;
     const DiagnosticChecklist list =
         RecommendationEngine(caps, config, 0, 0, true, "NTFS", &unavail, nullptr).Generate();
@@ -1694,10 +1694,10 @@ TEST(RecommendationEngineTest, LowOrUnavailableDiskWriteRaisesNoWriteStallNotice
 
 TEST(RecommendationEngineTest, JudderDetailNamesPresentModeAttribution) {
     using namespace exosnap::diagnostics;
-    recorder_core::RecordingDiagnosticsSnapshot snap;
+    exosnap::engine::RecordingDiagnosticsSnapshot snap;
     snap.valid = true;
     snap.video_encoder.cfr = true;
-    snap.capture.present_cadence_availability = recorder_core::MetricAvailability::Available;
+    snap.capture.present_cadence_availability = exosnap::engine::MetricAvailability::Available;
     snap.capture.source_present_jitter_ms = 9.0; // > kJitterMs (8 ms)
     snap.capture.source_coalesce_ratio = 2.0;    // no longer a trigger; present here but ignored
     capability::CapabilitySet caps;
@@ -1755,7 +1755,7 @@ TEST(RecommendationEngineTest, JudderInNewestOffersSmoothPacingAutoFix) {
     capability::UserRecorderConfig config;
     config.frame_rate_num = 60;
     config.frame_rate_den = 1;
-    config.frame_pacing = recorder_core::FramePacingMode::Newest; // triggers the pacing result
+    config.frame_pacing = exosnap::engine::FramePacingMode::Newest; // triggers the pacing result
 
     const auto live = MakeJudderSnapshot(/*cfr=*/true, /*jitter_ms=*/9.0, /*coalesce_ratio=*/1.0);
     RecommendationEngine engine(caps, config, 0, std::nullopt, true, "", &live);
@@ -1781,7 +1781,7 @@ TEST(RecommendationEngineTest, JudderInSmoothOffersNoPacingFix) {
     capability::UserRecorderConfig config;
     config.frame_rate_num = 60;
     config.frame_rate_den = 1;
-    config.frame_pacing = recorder_core::FramePacingMode::Smooth; // already correct — no fix offered
+    config.frame_pacing = exosnap::engine::FramePacingMode::Smooth; // already correct — no fix offered
 
     const auto live = MakeJudderSnapshot(/*cfr=*/true, /*jitter_ms=*/9.0, /*coalesce_ratio=*/1.0);
     RecommendationEngine engine(caps, config, 0, std::nullopt, true, "", &live);
@@ -1809,7 +1809,7 @@ capability::UserRecorderConfig MakeH264Config() {
 TEST(RecommendationEngineTest, Hdr10PlusH264OnActiveHdrDisplayRaisesBlocker) {
     const capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
     capability::UserRecorderConfig config = MakeH264Config();
-    config.hdr_mode = recorder_core::HdrMode::Hdr10;
+    config.hdr_mode = exosnap::engine::HdrMode::Hdr10;
 
     RecommendationEngine engine(caps, config, 0, std::nullopt, true, "NTFS", nullptr, nullptr);
     engine.SetCaptureTargetHdrActive(true); // the capture-target display is HDR-active
@@ -1836,7 +1836,7 @@ TEST(RecommendationEngineTest, Hdr10PlusH264OnActiveHdrDisplay_Av1UnavailablePro
     caps.video_codecs[capability::VideoCodec::Av1] = {capability::SupportLevel::NotImplemented,
                                                       "AV1 NVENC not supported on this GPU"};
     capability::UserRecorderConfig config = MakeH264Config();
-    config.hdr_mode = recorder_core::HdrMode::Hdr10;
+    config.hdr_mode = exosnap::engine::HdrMode::Hdr10;
 
     RecommendationEngine engine(caps, config, 0, std::nullopt, true, "NTFS", nullptr, nullptr);
     engine.SetCaptureTargetHdrActive(true);
@@ -1863,7 +1863,7 @@ TEST(RecommendationEngineTest, Hdr10PlusH264OnMp4ProposesHevcDespiteAv1CapableGp
     const capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
     capability::UserRecorderConfig config = MakeH264Config();
     config.container = capability::Container::Mp4;
-    config.hdr_mode = recorder_core::HdrMode::Hdr10;
+    config.hdr_mode = exosnap::engine::HdrMode::Hdr10;
 
     RecommendationEngine engine(caps, config, 0, std::nullopt, true, "NTFS", nullptr, nullptr);
     engine.SetCaptureTargetHdrActive(true);
@@ -1883,7 +1883,7 @@ TEST(RecommendationEngineTest, Hdr10PlusH264OnSdrDisplayRaisesNoBlocker) {
     // is no real conflict — the calm-diagnostics line means no blocker.
     const capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
     capability::UserRecorderConfig config = MakeH264Config();
-    config.hdr_mode = recorder_core::HdrMode::Hdr10;
+    config.hdr_mode = exosnap::engine::HdrMode::Hdr10;
 
     RecommendationEngine engine(caps, config, 0, std::nullopt, true, "NTFS", nullptr, nullptr);
     engine.SetCaptureTargetHdrActive(false); // SDR desktop
@@ -1898,7 +1898,7 @@ TEST(RecommendationEngineTest, TonemapSdrPlusH264OnActiveHdrDisplayRaisesNoBlock
     // H.264 + Tone-Map-to-SDR is explicitly NOT a conflict (SDR 8-bit output).
     const capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
     capability::UserRecorderConfig config = MakeH264Config();
-    config.hdr_mode = recorder_core::HdrMode::TonemapSdr;
+    config.hdr_mode = exosnap::engine::HdrMode::TonemapSdr;
 
     RecommendationEngine engine(caps, config, 0, std::nullopt, true, "NTFS", nullptr, nullptr);
     engine.SetCaptureTargetHdrActive(true);
@@ -1916,7 +1916,7 @@ TEST(RecommendationEngineTest, Hdr10PlusAv1OrHevcOnActiveHdrDisplayRaisesNoBlock
         config.container = capability::Container::Matroska;
         config.video_codec = codec;
         config.audio_codec = capability::AudioCodec::Opus;
-        config.hdr_mode = recorder_core::HdrMode::Hdr10;
+        config.hdr_mode = exosnap::engine::HdrMode::Hdr10;
 
         RecommendationEngine engine(caps, config, 0, std::nullopt, true, "NTFS", nullptr, nullptr);
         engine.SetCaptureTargetHdrActive(true);
@@ -1984,7 +1984,7 @@ TEST(ExclusiveWindowCard, ProvenBlackRaisesBlockerWithMonitorFix) {
     RecommendationEngine engine(caps, config, 0, std::nullopt, true);
     // FullscreenShaped + hub produced nothing for >= 2 s == ProvenBlack.
     engine.SetCaptureWindowEvidence(FullscreenShapedFacts(),
-                                    WindowHubEvidence{recorder_core::HubFrameKind::None, 3.0, 0.0, false});
+                                    WindowHubEvidence{exosnap::engine::HubFrameKind::None, 3.0, 0.0, false});
     const DiagnosticChecklist list = engine.Generate();
     const DiagnosticResult* r = FindResult(list, "rec.capture.exclusive_window");
     ASSERT_NE(r, nullptr);
@@ -2005,7 +2005,7 @@ TEST(ExclusiveWindowCard, SuspectedWithQunsRaisesNotice) {
     RecommendationEngine engine(caps, config, 0, std::nullopt, true);
     WindowTargetFacts facts = FullscreenShapedFacts();
     facts.quns_d3d_fullscreen = true; // fullscreen signal, but no measured black proof
-    engine.SetCaptureWindowEvidence(facts, WindowHubEvidence{recorder_core::HubFrameKind::Live, 5.0, 0.0, true});
+    engine.SetCaptureWindowEvidence(facts, WindowHubEvidence{exosnap::engine::HubFrameKind::Live, 5.0, 0.0, true});
     const DiagnosticChecklist list = engine.Generate();
     const DiagnosticResult* r = FindResult(list, "rec.capture.exclusive_window");
     ASSERT_NE(r, nullptr);
@@ -2019,7 +2019,7 @@ TEST(ExclusiveWindowCard, BorderlessThatWorksIsSilent) {
     RecommendationEngine engine(caps, config, 0, std::nullopt, true);
     // FullscreenShaped, producing frames, no signal: the normal borderless case.
     engine.SetCaptureWindowEvidence(FullscreenShapedFacts(),
-                                    WindowHubEvidence{recorder_core::HubFrameKind::Live, 5.0, 0.1, true});
+                                    WindowHubEvidence{exosnap::engine::HubFrameKind::Live, 5.0, 0.1, true});
     const DiagnosticChecklist list = engine.Generate();
     EXPECT_EQ(FindResult(list, "rec.capture.exclusive_window"), nullptr);
 }
@@ -2034,7 +2034,7 @@ TEST(ExclusiveWindowCard, DedupesGenericPresentExclusiveCard) {
     present.mode = PresentMode::ExclusiveFullscreen;
     RecommendationEngine engine(caps, config, 0, std::nullopt, true, "", nullptr, &present);
     engine.SetCaptureWindowEvidence(FullscreenShapedFacts(),
-                                    WindowHubEvidence{recorder_core::HubFrameKind::None, 3.0, 0.0, false});
+                                    WindowHubEvidence{exosnap::engine::HubFrameKind::None, 3.0, 0.0, false});
     const DiagnosticChecklist list = engine.Generate();
     EXPECT_NE(FindResult(list, "rec.capture.exclusive_window"), nullptr);
     EXPECT_EQ(FindResult(list, "rec.present.exclusive"), nullptr) << "one problem must raise exactly one card";

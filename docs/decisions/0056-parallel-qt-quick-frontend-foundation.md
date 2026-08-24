@@ -35,7 +35,7 @@ whose values changed.
 The dependency direction is:
 
 ```text
-recorder_core / capability (no UI framework)
+engine / capability (no UI framework)
                 ^
                 |
 pure app models and RecordViewModel (unchanged)
@@ -54,7 +54,7 @@ runtime embedding or mixed window hierarchy.
 
 ## Unchanged layers
 
-- `recorder_core`, capture, encode, mux, diagnostics, and capability libraries
+- `engine`, capture, encode, mux, diagnostics, and capability libraries
 - `RecordViewModel`, `PresentationState`, and `PresentationStateBuilder`
 - `RecordingCoordinator` and its callback/state-policy ownership
 - `MainWindow`, `RecordPage`, and the shipping Widgets executable

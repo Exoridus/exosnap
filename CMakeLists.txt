@@ -201,7 +201,7 @@ if(NOT Qt6_DIR)
     list(APPEND CMAKE_PREFIX_PATH "C:/Qt/6.11.1/msvc2022_64")
 endif()
 
-add_subdirectory(libs/recorder_core)
+add_subdirectory(libs/engine)
 add_subdirectory(libs/capability)
 add_subdirectory(libs/crash_capture)
 add_subdirectory(libs/update)

@@ -6,7 +6,7 @@
 #include <QObject>
 #include <QTimer>
 
-#include <recorder_core/recorder_session.h>
+#include <exosnap/engine/recorder_session.h>
 
 #include <functional>
 #include <vector>
@@ -16,7 +16,7 @@
 namespace exosnap {
 
 struct CaptureTargetSnapshot {
-    std::vector<recorder_core::CaptureTarget> targets;
+    std::vector<exosnap::engine::CaptureTarget> targets;
 
     [[nodiscard]] bool operator==(const CaptureTargetSnapshot& other) const noexcept;
     [[nodiscard]] bool operator!=(const CaptureTargetSnapshot& other) const noexcept;

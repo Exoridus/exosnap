@@ -3,7 +3,7 @@
 // PipelineSnapshotJson.h -- the serialization boundary for the recording
 // pipeline's live telemetry.
 //
-// The authoritative owner is recorder_core::RecordingDiagnosticsSnapshot, built
+// The authoritative owner is exosnap::engine::RecordingDiagnosticsSnapshot, built
 // on a worker thread by SessionStatsCollector out of the per-session
 // PipelineDiagnosticsAggregator. This file adds NO measurement, NO smoothing and
 // NO classification of its own: every number below already exists, already has a
@@ -28,7 +28,7 @@
 // Pure and free of Qt GUI types: a snapshot in, a QJsonObject out. That is what
 // makes the whole surface testable from fixtures without a recording.
 
-#include <recorder_core/pipeline_diagnostics.h>
+#include <exosnap/engine/pipeline_diagnostics.h>
 
 #include <QJsonObject>
 
@@ -40,6 +40,6 @@ namespace exosnap::observability {
 // well-formed object: `valid`, `lifecycle` and `health` are answered, and the
 // measurement groups are omitted rather than filled with zeros that would read
 // as a perfectly healthy idle pipeline.
-[[nodiscard]] QJsonObject PipelineSnapshotToJson(const recorder_core::RecordingDiagnosticsSnapshot& snapshot);
+[[nodiscard]] QJsonObject PipelineSnapshotToJson(const exosnap::engine::RecordingDiagnosticsSnapshot& snapshot);
 
 } // namespace exosnap::observability

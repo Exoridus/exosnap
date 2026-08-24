@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <capability/capability_set.h>
-#include <recorder_core/codec_types.h>
+#include <exosnap/engine/codec_types.h>
 
 #include "models/RecordingPreset.h"
 #include "models/VideoSettingsModel.h"
@@ -20,12 +20,12 @@ namespace exosnap {
 
 TEST(VideoSettingsModel, Defaults_QualityIsBalanced) {
     const VideoSettingsModel m = VideoSettingsModel::Defaults();
-    EXPECT_EQ(m.cq, recorder_core::CanonicalCq(recorder_core::QualityPreset::Balanced));
+    EXPECT_EQ(m.cq, exosnap::engine::CanonicalCq(exosnap::engine::QualityPreset::Balanced));
 }
 
 TEST(VideoSettingsModel, Defaults_RateControlIsConstantQuality) {
     const VideoSettingsModel m = VideoSettingsModel::Defaults();
-    EXPECT_EQ(m.rate_control, recorder_core::RateControlMode::ConstantQuality);
+    EXPECT_EQ(m.rate_control, exosnap::engine::RateControlMode::ConstantQuality);
 }
 
 TEST(VideoSettingsModel, Defaults_BitrateIs20000) {
@@ -47,7 +47,7 @@ TEST(VideoSettingsModel, Defaults_OtherFieldsUnchanged) {
 
 TEST(SanitizePresetConfig, BitrateBelowMinIsClamped) {
     auto cfg = MakeDefaultPreset().config;
-    cfg.video.rate_control = recorder_core::RateControlMode::VariableBitrate;
+    cfg.video.rate_control = exosnap::engine::RateControlMode::VariableBitrate;
     cfg.video.bitrate_kbps = 0u;
     const auto result = SanitizePresetConfig(cfg);
     EXPECT_GE(result.video.bitrate_kbps, 1000u);
@@ -55,7 +55,7 @@ TEST(SanitizePresetConfig, BitrateBelowMinIsClamped) {
 
 TEST(SanitizePresetConfig, BitrateAboveMaxIsClamped) {
     auto cfg = MakeDefaultPreset().config;
-    cfg.video.rate_control = recorder_core::RateControlMode::ConstantBitrate;
+    cfg.video.rate_control = exosnap::engine::RateControlMode::ConstantBitrate;
     cfg.video.bitrate_kbps = 999999u;
     const auto result = SanitizePresetConfig(cfg);
     EXPECT_LE(result.video.bitrate_kbps, 200000u);
@@ -70,15 +70,15 @@ TEST(SanitizePresetConfig, BitrateInRangeIsPreserved) {
 
 TEST(SanitizePresetConfig, LosslessModeFallsBackToConstantQuality) {
     auto cfg = MakeDefaultPreset().config;
-    cfg.video.rate_control = recorder_core::RateControlMode::Lossless;
+    cfg.video.rate_control = exosnap::engine::RateControlMode::Lossless;
     const auto result = SanitizePresetConfig(cfg);
-    EXPECT_EQ(result.video.rate_control, recorder_core::RateControlMode::ConstantQuality);
+    EXPECT_EQ(result.video.rate_control, exosnap::engine::RateControlMode::ConstantQuality);
 }
 
 TEST(SanitizePresetConfig, DefaultPresetRateControlIsPreserved) {
     // Default preset must remain ConstantQuality (no behavior change for existing users).
     const auto cfg = SanitizePresetConfig(MakeDefaultPreset().config);
-    EXPECT_EQ(cfg.video.rate_control, recorder_core::RateControlMode::ConstantQuality);
+    EXPECT_EQ(cfg.video.rate_control, exosnap::engine::RateControlMode::ConstantQuality);
 }
 
 // ===========================================================================
@@ -88,7 +88,7 @@ TEST(SanitizePresetConfig, DefaultPresetRateControlIsPreserved) {
 TEST(NormalizedConfigEquals, DifferentRateControlNotEqual) {
     auto a = MakeDefaultPreset().config;
     auto b = a;
-    b.video.rate_control = recorder_core::RateControlMode::VariableBitrate;
+    b.video.rate_control = exosnap::engine::RateControlMode::VariableBitrate;
     EXPECT_FALSE(NormalizedConfigEquals(a, b));
 }
 
@@ -112,7 +112,7 @@ TEST(NormalizedConfigEquals, SameRateControlAndBitrateEqual) {
 TEST(ConfigDirtyEquivalent, DifferentRateControlIsDirty) {
     auto a = MakeDefaultPreset().config;
     auto b = a;
-    b.video.rate_control = recorder_core::RateControlMode::ConstantBitrate;
+    b.video.rate_control = exosnap::engine::RateControlMode::ConstantBitrate;
     EXPECT_FALSE(ConfigDirtyEquivalent(a, b));
 }
 
@@ -137,31 +137,31 @@ capability::CapabilitySet MakeMinimalCapSet() {
 
 TEST(CapabilitySetRateControl, ConstantQuality_IsAvailable) {
     const auto caps = MakeMinimalCapSet();
-    const auto ann = caps.QueryRateControlMode(recorder_core::RateControlMode::ConstantQuality);
+    const auto ann = caps.QueryRateControlMode(exosnap::engine::RateControlMode::ConstantQuality);
     EXPECT_EQ(ann.level, capability::SupportLevel::Available);
 }
 
 TEST(CapabilitySetRateControl, VariableBitrate_IsAvailable) {
     const auto caps = MakeMinimalCapSet();
-    const auto ann = caps.QueryRateControlMode(recorder_core::RateControlMode::VariableBitrate);
+    const auto ann = caps.QueryRateControlMode(exosnap::engine::RateControlMode::VariableBitrate);
     EXPECT_EQ(ann.level, capability::SupportLevel::Available);
 }
 
 TEST(CapabilitySetRateControl, ConstantBitrate_IsAvailable) {
     const auto caps = MakeMinimalCapSet();
-    const auto ann = caps.QueryRateControlMode(recorder_core::RateControlMode::ConstantBitrate);
+    const auto ann = caps.QueryRateControlMode(exosnap::engine::RateControlMode::ConstantBitrate);
     EXPECT_EQ(ann.level, capability::SupportLevel::Available);
 }
 
 TEST(CapabilitySetRateControl, Lossless_IsNotImplemented) {
     const auto caps = MakeMinimalCapSet();
-    const auto ann = caps.QueryRateControlMode(recorder_core::RateControlMode::Lossless);
+    const auto ann = caps.QueryRateControlMode(exosnap::engine::RateControlMode::Lossless);
     EXPECT_EQ(ann.level, capability::SupportLevel::NotImplemented);
 }
 
 TEST(CapabilitySetRateControl, Lossless_IsNotSelectable) {
     const auto caps = MakeMinimalCapSet();
-    const auto ann = caps.QueryRateControlMode(recorder_core::RateControlMode::Lossless);
+    const auto ann = caps.QueryRateControlMode(exosnap::engine::RateControlMode::Lossless);
     EXPECT_FALSE(capability::IsSelectable(ann.level));
 }
 

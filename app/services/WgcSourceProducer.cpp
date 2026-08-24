@@ -11,7 +11,7 @@
 
 #include <winrt/Windows.Foundation.h>
 
-#include <recorder_core/wgc_acquire_classify.h>
+#include <exosnap/engine/wgc_acquire_classify.h>
 
 #include "../diagnostics/AppLog.h"
 
@@ -179,12 +179,12 @@ ProducerPoll WgcSourceProducer::PollFrame(HubFrame& out) {
         // Same classification the recording worker applies, so one HRESULT never
         // means two different things in one product. The ACTION differs by design:
         // a preview holds its last frame where a recording ends the session.
-        switch (recorder_core::ClassifyWgcAcquireFailure(e.code().value)) {
-        case recorder_core::WgcAcquireFailure::DeviceLost:
+        switch (exosnap::engine::ClassifyWgcAcquireFailure(e.code().value)) {
+        case exosnap::engine::WgcAcquireFailure::DeviceLost:
             return ProducerPoll::Fatal;
-        case recorder_core::WgcAcquireFailure::SourceLost:
+        case exosnap::engine::WgcAcquireFailure::SourceLost:
             return ProducerPoll::Lost;
-        case recorder_core::WgcAcquireFailure::Unexpected:
+        case exosnap::engine::WgcAcquireFailure::Unexpected:
             // Held like a source loss -- a preview must not take the app down --
             // but never silently: an unclassified code here is the one thing that
             // would otherwise look identical to an ordinary blank.

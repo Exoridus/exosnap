@@ -1,19 +1,19 @@
 #pragma once
 
-// Private copy of recorder_core's fixed-point YUV->BGRA coefficient math
-// (libs/recorder_core/src/yuv_to_bgra.cpp, anonymous namespace) for the SIMD
+// Private copy of the engine's fixed-point YUV->BGRA coefficient math
+// (libs/engine/src/yuv_to_bgra.cpp, anonymous namespace) for the SIMD
 // measurement probe (step G, 2026-08-01 SIMD-vs-scalar investigation).
 //
 // MEASUREMENT ONLY -- production code is untouched. This exists purely so
 // the auto-vectorized and hand-written SIMD variants living in this probe's
 // own translation units use bit-identical coefficient math to the real
-// recorder_core::ConvertFullPlanarYuv420ToBgra baseline, which is required
+// exosnap::engine::ConvertFullPlanarYuv420ToBgra baseline, which is required
 // for the pixel-exact correctness comparison in step G to mean anything.
 //
 // Kept as `inline` functions (not an anonymous namespace) so this header can
 // be included from multiple probe .cpp files without violating ODR.
 
-#include <recorder_core/color_metadata.h>
+#include <exosnap/engine/color_metadata.h>
 
 #include <cstdint>
 
@@ -25,8 +25,8 @@ struct MatrixWeights {
 };
 
 // Mirrors yuv_to_bgra.cpp's WeightsFor() exactly.
-inline MatrixWeights WeightsFor(recorder_core::MatrixCoefficients matrix) noexcept {
-    using recorder_core::MatrixCoefficients;
+inline MatrixWeights WeightsFor(exosnap::engine::MatrixCoefficients matrix) noexcept {
+    using exosnap::engine::MatrixCoefficients;
     switch (matrix) {
     case MatrixCoefficients::Bt601:
         return {0.299, 0.114};
@@ -53,7 +53,7 @@ constexpr int kFixedShift = 16;
 constexpr int32_t kFixedRound = 1 << (kFixedShift - 1);
 
 // Mirrors yuv_to_bgra.cpp's ComputeCoefs() exactly.
-inline FixedCoefs ComputeCoefs(recorder_core::MatrixCoefficients matrix, recorder_core::ColorRange range,
+inline FixedCoefs ComputeCoefs(exosnap::engine::MatrixCoefficients matrix, exosnap::engine::ColorRange range,
                                 uint32_t bits_per_sample) noexcept {
     const MatrixWeights w = WeightsFor(matrix);
     const double kg = 1.0 - w.kr - w.kb;
@@ -63,7 +63,7 @@ inline FixedCoefs ComputeCoefs(recorder_core::MatrixCoefficients matrix, recorde
     const double gv = rv * w.kr / kg;
 
     const bool ten_bit = bits_per_sample > 8;
-    const bool limited = range == recorder_core::ColorRange::Limited;
+    const bool limited = range == exosnap::engine::ColorRange::Limited;
 
     double y_scale;
     double c_scale;

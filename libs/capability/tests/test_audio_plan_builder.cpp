@@ -9,7 +9,7 @@
 namespace exosnap::capability {
 namespace {
 
-using K = recorder_core::AudioSourceKind;
+using K = exosnap::engine::AudioSourceKind;
 
 void ExpectSingleSourceTrack(const AudioPlanResult& result, size_t track_pos, K expected_kind) {
     ASSERT_LT(track_pos, result.plan.tracks.size());
@@ -434,22 +434,22 @@ TEST(AudioPlanBuilderTest, Preview_LabelsAreCorrect) {
     AudioPlanResult result;
     result.record_audio = true;
 
-    recorder_core::ResolvedAudioTrack t0;
+    exosnap::engine::ResolvedAudioTrack t0;
     t0.track_index = 0;
     t0.sources = {K::App};
     result.plan.tracks.push_back(t0);
 
-    recorder_core::ResolvedAudioTrack t1;
+    exosnap::engine::ResolvedAudioTrack t1;
     t1.track_index = 1;
     t1.sources = {K::Sys};
     result.plan.tracks.push_back(t1);
 
-    recorder_core::ResolvedAudioTrack t2;
+    exosnap::engine::ResolvedAudioTrack t2;
     t2.track_index = 2;
     t2.sources = {K::SystemOutput};
     result.plan.tracks.push_back(t2);
 
-    recorder_core::ResolvedAudioTrack t3;
+    exosnap::engine::ResolvedAudioTrack t3;
     t3.track_index = 3;
     t3.sources = {K::Mic};
     result.plan.tracks.push_back(t3);
@@ -477,7 +477,7 @@ TEST(AudioPlanBuilderTest, Preview_LabelsAreCorrect) {
 TEST(AudioPlanBuilderTest, Preview_NoAudio_ReturnsEmpty) {
     AudioPlanResult result;
     result.record_audio = false;
-    recorder_core::ResolvedAudioTrack track;
+    exosnap::engine::ResolvedAudioTrack track;
     track.track_index = 0;
     track.sources = {K::App};
     result.plan.tracks.push_back(track);

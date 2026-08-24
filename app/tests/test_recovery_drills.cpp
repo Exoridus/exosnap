@@ -33,7 +33,7 @@ extern "C" {
 #include <libavutil/avutil.h>
 }
 
-#include <recorder_core/mp4_remuxer.h>
+#include <exosnap/engine/mp4_remuxer.h>
 
 #include "services/AtomicFileOps.h"
 #include "services/RecoveryService.h"
@@ -60,14 +60,14 @@ RecoveryManifestEntry MakeEntry(const QString& id, const QString& artefact, cons
 }
 
 // Write a real MKV via the shared synthetic session (real MatroskaStreamWriter).
-bool WriteSyntheticMkv(const QString& path, recorder_core::VideoCodec vc, recorder_core::AudioCodec ac,
+bool WriteSyntheticMkv(const QString& path, exosnap::engine::VideoCodec vc, exosnap::engine::AudioCodec ac,
                        double seconds) {
-    recorder_core::testutil::SyntheticSessionConfig cfg;
+    exosnap::engine::testutil::SyntheticSessionConfig cfg;
     cfg.video_codec = vc;
     cfg.audio_codec = ac;
     cfg.output_path = path.toStdString();
     cfg.target_seconds = seconds;
-    return recorder_core::testutil::SyntheticSession(cfg).Run().success;
+    return exosnap::engine::testutil::SyntheticSession(cfg).Run().success;
 }
 
 bool TruncateInPlaceToFraction(const QString& path, double frac) {
@@ -105,7 +105,7 @@ TEST(RecoveryDrill, RecordingOrderedStop_FinalizedMkvRenamesToPlayableFile) {
     RecoveryService service(store);
 
     const QString artefact = QDir(tmp.path()).filePath(QStringLiteral("rec.mkv.tmp"));
-    ASSERT_TRUE(WriteSyntheticMkv(artefact, recorder_core::VideoCodec::Av1, recorder_core::AudioCodec::Opus, 2.0));
+    ASSERT_TRUE(WriteSyntheticMkv(artefact, exosnap::engine::VideoCodec::Av1, exosnap::engine::AudioCodec::Opus, 2.0));
 
     const QString final_out = QDir(tmp.path()).filePath(QStringLiteral("rec.mkv"));
     auto e = MakeEntry(QStringLiteral("rec-ordered"), artefact, QStringLiteral("mkv"), final_out, /*finalized=*/true);
@@ -129,7 +129,7 @@ TEST(RecoveryDrill, RecordingProcessKill_NonFinalizedPartialRepairsOrPreserves) 
     RecoveryService service(store);
 
     const QString artefact = QDir(tmp.path()).filePath(QStringLiteral("killed.mkv.tmp"));
-    ASSERT_TRUE(WriteSyntheticMkv(artefact, recorder_core::VideoCodec::H264, recorder_core::AudioCodec::Aac, 4.0));
+    ASSERT_TRUE(WriteSyntheticMkv(artefact, exosnap::engine::VideoCodec::H264, exosnap::engine::AudioCodec::Aac, 4.0));
     ASSERT_TRUE(TruncateInPlaceToFraction(artefact, 0.6)); // drop the trailer + tail clusters
 
     const QString final_out = QDir(tmp.path()).filePath(QStringLiteral("killed.mkv"));
@@ -158,7 +158,7 @@ TEST(RecoveryDrill, RemuxMp4Ordered_ValidMkvProducesPlayableMp4) {
     RecoveryService service(store);
 
     const QString artefact = QDir(tmp.path()).filePath(QStringLiteral("clip.mkv.tmp"));
-    ASSERT_TRUE(WriteSyntheticMkv(artefact, recorder_core::VideoCodec::H264, recorder_core::AudioCodec::Aac, 2.0));
+    ASSERT_TRUE(WriteSyntheticMkv(artefact, exosnap::engine::VideoCodec::H264, exosnap::engine::AudioCodec::Aac, 2.0));
 
     const QString final_out = QDir(tmp.path()).filePath(QStringLiteral("clip.mp4"));
     auto e = MakeEntry(QStringLiteral("mp4-ordered"), artefact, QStringLiteral("mp4"), final_out, /*finalized=*/false);
@@ -184,7 +184,7 @@ TEST(RecoveryDrill, RemuxMp4ProcessKill_ReplacesStalePartialAtTargetPath) {
     RecoveryService service(store);
 
     const QString artefact = QDir(tmp.path()).filePath(QStringLiteral("session.mkv.tmp"));
-    ASSERT_TRUE(WriteSyntheticMkv(artefact, recorder_core::VideoCodec::H264, recorder_core::AudioCodec::Aac, 2.0));
+    ASSERT_TRUE(WriteSyntheticMkv(artefact, exosnap::engine::VideoCodec::H264, exosnap::engine::AudioCodec::Aac, 2.0));
 
     // A corrupt half-MP4 already at the user-visible target (the killed remux).
     const QString final_out = QDir(tmp.path()).filePath(QStringLiteral("session.mp4"));
@@ -234,7 +234,8 @@ TEST(RecoveryDrill, LiveRemuxMp4_NeverWritesTargetMidFlightThenPublishesAtomical
     ASSERT_TRUE(tmp.isValid());
 
     const QString transient_q = QDir(tmp.path()).filePath(QStringLiteral("live.mkv.tmp"));
-    ASSERT_TRUE(WriteSyntheticMkv(transient_q, recorder_core::VideoCodec::H264, recorder_core::AudioCodec::Aac, 2.0));
+    ASSERT_TRUE(
+        WriteSyntheticMkv(transient_q, exosnap::engine::VideoCodec::H264, exosnap::engine::AudioCodec::Aac, 2.0));
 
     const std::filesystem::path transient(transient_q.toStdWString());
     const std::filesystem::path final_mp4(QDir(tmp.path()).filePath(QStringLiteral("live.mp4")).toStdWString());
@@ -254,7 +255,7 @@ TEST(RecoveryDrill, LiveRemuxMp4_NeverWritesTargetMidFlightThenPublishesAtomical
         return true;
     };
 
-    const auto result = recorder_core::RemuxToProgressiveMp4(transient, temp, progress_cb);
+    const auto result = exosnap::engine::RemuxToProgressiveMp4(transient, temp, progress_cb);
     ASSERT_TRUE(result.success) << result.message;
     EXPECT_TRUE(progressed) << "progress callback should fire so the mid-flight check runs";
 
@@ -277,7 +278,8 @@ TEST(RecoveryDrill, LiveRemuxMp4_CancelLeavesTargetUntouchedAndRemovesTemp) {
     ASSERT_TRUE(tmp.isValid());
 
     const QString transient_q = QDir(tmp.path()).filePath(QStringLiteral("live2.mkv.tmp"));
-    ASSERT_TRUE(WriteSyntheticMkv(transient_q, recorder_core::VideoCodec::H264, recorder_core::AudioCodec::Aac, 2.0));
+    ASSERT_TRUE(
+        WriteSyntheticMkv(transient_q, exosnap::engine::VideoCodec::H264, exosnap::engine::AudioCodec::Aac, 2.0));
 
     const std::filesystem::path transient(transient_q.toStdWString());
     const QString final_q = QDir(tmp.path()).filePath(QStringLiteral("live2.mp4"));
@@ -300,7 +302,7 @@ TEST(RecoveryDrill, LiveRemuxMp4_CancelLeavesTargetUntouchedAndRemovesTemp) {
         fired = true;
         return false;
     };
-    auto result = recorder_core::RemuxToProgressiveMp4(transient, temp, cancel_cb);
+    auto result = exosnap::engine::RemuxToProgressiveMp4(transient, temp, cancel_cb);
 
     // The live failure branch removes the abandoned temp; the target is never touched.
     if (!result.success) {

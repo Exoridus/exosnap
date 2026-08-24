@@ -7,7 +7,7 @@
 #include <functional>
 #include <thread>
 
-#include <recorder_core/preview_tap.h>
+#include <exosnap/engine/preview_tap.h>
 
 namespace exosnap {
 
@@ -17,7 +17,7 @@ namespace exosnap {
 class WgcCaptureHubService {
   public:
     using HandleSink =
-        std::function<void(void* nt_handle, uint32_t width, uint32_t height, recorder_core::PreviewTapDesc tap)>;
+        std::function<void(void* nt_handle, uint32_t width, uint32_t height, exosnap::engine::PreviewTapDesc tap)>;
     // Per-frame publish edge, mirroring DxgiCaptureHubService::FramePublishedSink
     // (see there for why the transport needs one). Pump thread; no payload.
     using FramePublishedSink = std::function<void()>;

@@ -1,7 +1,7 @@
 // Step G, variant 2 (auto-vectorization): this TU is compiled with
 // /arch:AVX2 (see CMakeLists.txt) and nothing else -- the loop body below is
 // an unmodified, 1:1 copy of the 8-bit branch of
-// recorder_core::ConvertFullPlanarYuv420ToBgra (libs/recorder_core/src/yuv_to_bgra.cpp).
+// exosnap::engine::ConvertFullPlanarYuv420ToBgra (libs/engine/src/yuv_to_bgra.cpp).
 // The only variable is the compiler's target ISA; this answers the cheapest
 // possible question first: does /arch:AVX2 alone let the MSVC
 // auto-vectorizer turn this into SIMD code, with zero source changes?
@@ -11,8 +11,8 @@
 
 namespace probe_g {
 
-void ConvertFullPlanarYuv420ToBgra_AutoVec(const recorder_core::FullPlanarYuv420Frame& src,
-                                            const recorder_core::YuvToBgraParams& params, uint8_t* out_bgra,
+void ConvertFullPlanarYuv420ToBgra_AutoVec(const exosnap::engine::FullPlanarYuv420Frame& src,
+                                            const exosnap::engine::YuvToBgraParams& params, uint8_t* out_bgra,
                                             uint32_t out_stride_bytes) {
     if (src.width == 0 || src.height == 0 || src.y_plane == nullptr || src.u_plane == nullptr ||
         src.v_plane == nullptr || out_bgra == nullptr)

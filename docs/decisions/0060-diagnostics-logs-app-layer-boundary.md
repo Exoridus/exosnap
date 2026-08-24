@@ -33,7 +33,7 @@ frontend renders the jank.
 Introduce an app-layer owner below both frontends and above the existing services:
 
 ```text
-recorder_core / diagnostics services / AppLog     (UI-framework independent, unchanged)
+engine / diagnostics services / AppLog     (UI-framework independent, unchanged)
                         ^
                         |
 DiagnosticsController · DiagnosticsProbe · FixActionDispatcher · LogViewPolicy

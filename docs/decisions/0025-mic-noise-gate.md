@@ -27,7 +27,7 @@ new wrapper.
 Add a stereo-linked downward noise gate (`NoiseGate`) as the second stage of the
 `MicDspAudioSrc` chain, after the high-pass filter.
 
-### DSP model (`libs/recorder_core/src/noise_gate.{h,cpp}`)
+### DSP model (`libs/engine/src/noise_gate.{h,cpp}`)
 
 - **Stereo-linked detection**: the gate decision uses the loudest channel of each
   frame (`max(|sample|)` across channels, like the brickwall limiter), and one

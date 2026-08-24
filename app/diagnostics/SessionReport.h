@@ -2,7 +2,7 @@
 
 #include "../viewmodels/RecordViewModel.h"
 
-#include <recorder_core/pipeline_diagnostics.h>
+#include <exosnap/engine/pipeline_diagnostics.h>
 
 #include <QByteArray>
 #include <QString>
@@ -30,7 +30,7 @@ struct SessionReportInputs {
     UiRecordingResult result;
 
     bool has_snapshot = false;
-    recorder_core::RecordingDiagnosticsSnapshot snapshot;
+    exosnap::engine::RecordingDiagnosticsSnapshot snapshot;
 
     // Requested config, stringified by the caller so a failed recording (no
     // snapshot) still records what was asked for. Independent of the snapshot.

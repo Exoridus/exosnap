@@ -741,10 +741,10 @@ QJsonObject QuickLiveVerifySource::EnvironmentSnapshot() const {
     }
 
     const AudioDeviceSnapshot audio = application_.audioDeviceNotifier().currentSnapshot();
-    const auto map_endpoints = [](const QVector<recorder_core::AudioInputDeviceInfo>& source) {
+    const auto map_endpoints = [](const QVector<exosnap::engine::AudioInputDeviceInfo>& source) {
         std::vector<observability::AudioEndpointFacts> endpoints;
         endpoints.reserve(static_cast<std::size_t>(source.size()));
-        for (const recorder_core::AudioInputDeviceInfo& device : source)
+        for (const exosnap::engine::AudioInputDeviceInfo& device : source)
             endpoints.push_back({QString::fromStdString(device.display_name), device.is_default});
         return endpoints;
     };
@@ -850,8 +850,8 @@ bool QuickLiveVerifySource::MoveWindowToScreen(const QString& screen_name, QStri
 }
 
 bool QuickLiveVerifySource::SelectRecordTarget(const QString& kind, const QString& title_filter, QString* error) {
-    const auto target_kind = kind == QStringLiteral("window") ? recorder_core::CaptureTarget::Kind::Window
-                                                              : recorder_core::CaptureTarget::Kind::Monitor;
+    const auto target_kind = kind == QStringLiteral("window") ? exosnap::engine::CaptureTarget::Kind::Window
+                                                              : exosnap::engine::CaptureTarget::Kind::Monitor;
     if (!application_.selectCaptureTargetForAutomation(target_kind, title_filter)) {
         *error = QStringLiteral("No %1 target matched").arg(kind);
         return false;

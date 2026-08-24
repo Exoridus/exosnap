@@ -12,7 +12,7 @@
 #include <gtest/gtest.h>
 
 using namespace exosnap::diagnostics;
-using recorder_core::HubFrameKind;
+using exosnap::engine::HubFrameKind;
 
 namespace {
 

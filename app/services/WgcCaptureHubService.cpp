@@ -4,7 +4,7 @@
 #include "services/CaptureHubRegistry.h"
 #include "services/WgcSourceProducer.h"
 
-#include <recorder_core/preview_shared_texture.h>
+#include <exosnap/engine/preview_shared_texture.h>
 
 #include <d3d11.h>
 #include <winrt/base.h>
@@ -112,7 +112,7 @@ void WgcCaptureHubService::WorkerProc(std::stop_token stop_token) {
     CaptureHubGateState gate;
     SubscribePayload desired;
 
-    recorder_core::PreviewSharedTexture shared;
+    exosnap::engine::PreviewSharedTexture shared;
     uint32_t shared_width = 0;
     uint32_t shared_height = 0;
     DXGI_FORMAT shared_format = DXGI_FORMAT_UNKNOWN;
@@ -142,7 +142,7 @@ void WgcCaptureHubService::WorkerProc(std::stop_token stop_token) {
             shared_width = description.Width;
             shared_height = description.Height;
             shared_format = description.Format;
-            recorder_core::PreviewTapDesc tap{};
+            exosnap::engine::PreviewTapDesc tap{};
             sink(handle, shared_width, shared_height, tap);
         }
         // A contention drop deliberately does NOT signal: it means the consumer
@@ -198,7 +198,7 @@ void WgcCaptureHubService::WorkerProc(std::stop_token stop_token) {
                 sink = std::move(desired.sink);
                 frame_sink = std::move(desired.frame_sink);
                 subscription = registry.Subscribe(
-                    current_key, [&publish](const HubFrame& frame, recorder_core::HubFrameKind) { publish(frame); });
+                    current_key, [&publish](const HubFrame& frame, exosnap::engine::HubFrameKind) { publish(frame); });
             }
             if (action.acknowledge_release) {
                 // Published only now: after this point the gate refuses to open

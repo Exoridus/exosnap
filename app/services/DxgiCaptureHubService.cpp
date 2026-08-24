@@ -4,8 +4,8 @@
 #include "CaptureHubRegistry.h"
 #include "DxgiSourceProducer.h"
 
-#include <recorder_core/dxgi_od_capture_src.h>
-#include <recorder_core/preview_shared_texture.h>
+#include <exosnap/engine/dxgi_od_capture_src.h>
+#include <exosnap/engine/preview_shared_texture.h>
 
 #include <winrt/base.h>
 
@@ -26,7 +26,7 @@ constexpr std::chrono::milliseconds kPumpTick{15};
 bool MonitorIsOnDefaultAdapter(HMONITOR monitor) {
     std::string err;
     winrt::com_ptr<IDXGIAdapter1> monitorAdapter;
-    if (!recorder_core::FindAdapterForMonitor(monitor, monitorAdapter.put(), err))
+    if (!exosnap::engine::FindAdapterForMonitor(monitor, monitorAdapter.put(), err))
         return false;
     DXGI_ADAPTER_DESC1 monitorDesc{};
     if (FAILED(monitorAdapter->GetDesc1(&monitorDesc)))
@@ -147,7 +147,7 @@ void DxgiCaptureHubService::WorkerProc(std::stop_token stop_token) {
 
     // Publisher state: the shared texture lives on the producer's device and is
     // recreated whenever the desktop's size or format changes.
-    recorder_core::PreviewSharedTexture shared;
+    exosnap::engine::PreviewSharedTexture shared;
     uint32_t sharedW = 0;
     uint32_t sharedH = 0;
     DXGI_FORMAT sharedFmt = DXGI_FORMAT_UNKNOWN;
@@ -177,10 +177,10 @@ void DxgiCaptureHubService::WorkerProc(std::stop_token stop_token) {
             return;
         D3D11_TEXTURE2D_DESC desc{};
         frame.texture->GetDesc(&desc);
-        const recorder_core::HdrDisplayFacts& facts = producer->DisplayFacts();
-        if (recorder_core::ShouldRepublishCaptureTap(shared.Valid(), sharedW, sharedH, sharedFmt, desc.Width,
-                                                     desc.Height, desc.Format, lastHdrActive, lastMaxLuminanceNits,
-                                                     facts.hdr_active, facts.max_luminance_nits)) {
+        const exosnap::engine::HdrDisplayFacts& facts = producer->DisplayFacts();
+        if (exosnap::engine::ShouldRepublishCaptureTap(shared.Valid(), sharedW, sharedH, sharedFmt, desc.Width,
+                                                       desc.Height, desc.Format, lastHdrActive, lastMaxLuminanceNits,
+                                                       facts.hdr_active, facts.max_luminance_nits)) {
             HANDLE handle = nullptr;
             std::string err;
             if (!shared.Create(producer->Device(), desc.Width, desc.Height, desc.Format, &handle, err)) {
@@ -195,7 +195,7 @@ void DxgiCaptureHubService::WorkerProc(std::stop_token stop_token) {
             sharedFmt = desc.Format;
             lastHdrActive = facts.hdr_active;
             lastMaxLuminanceNits = facts.max_luminance_nits;
-            const recorder_core::PreviewTapDesc tap = recorder_core::ResolveRawCaptureTapDesc(
+            const exosnap::engine::PreviewTapDesc tap = exosnap::engine::ResolveRawCaptureTapDesc(
                 desc.Format, facts.hdr_active, facts.sdr_white_level_nits, facts.max_luminance_nits);
             // Ownership of the NT handle transfers to the sink.
             sink(handle, sharedW, sharedH, tap);
@@ -251,7 +251,7 @@ void DxgiCaptureHubService::WorkerProc(std::stop_token stop_token) {
                 currentKey.kind = CaptureSourceKey::Kind::DxgiMonitor;
                 currentKey.device_name = desired.device_name;
                 subscription = registry.Subscribe(
-                    currentKey, [&publish](const HubFrame& frame, recorder_core::HubFrameKind) { publish(frame); });
+                    currentKey, [&publish](const HubFrame& frame, exosnap::engine::HubFrameKind) { publish(frame); });
                 diagnostics::AppLog::debug(QStringLiteral("dxgi-hub"), QStringLiteral("subscribed to display feed"));
             }
             if (action.acknowledge_release) {

@@ -1,13 +1,13 @@
 exosnap_add_gtest(
   NAME recorder_smoke_tests
   SOURCES smoke/smoke_test.cpp
-  LIBRARIES recorder_core
+  LIBRARIES exosnap_engine
 )
 
 exosnap_add_gtest(
   NAME recorder_logging_tests
   SOURCES logging/logging_test.cpp
-  LIBRARIES recorder_core nlohmann_json::nlohmann_json
+  LIBRARIES exosnap_engine nlohmann_json::nlohmann_json
 )
 
 exosnap_add_gtest(

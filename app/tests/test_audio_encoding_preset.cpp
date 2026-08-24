@@ -14,7 +14,7 @@
 #include <QTextStream>
 
 #include <capability/audio_ui_state.h>
-#include <recorder_core/recorder_session.h>
+#include <exosnap/engine/recorder_session.h>
 
 #include "models/RecordingPreset.h"
 #include "settings/RecordingPresetStore.h"
@@ -22,7 +22,7 @@
 namespace exosnap {
 namespace {
 
-using recorder_core::OpusFrameDuration;
+using exosnap::engine::OpusFrameDuration;
 
 // ===========================================================================
 // Default preset audio encoding defaults

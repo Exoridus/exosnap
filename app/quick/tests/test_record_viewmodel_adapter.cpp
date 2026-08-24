@@ -121,7 +121,7 @@ TEST(RecordViewModelAdapterTest, AStateChangeStillInvalidatesTheBroadSignalExact
 TEST(RecordViewModelAdapterTest, TargetOptionsAreRebuiltOnlyWhenTheTargetVectorIsReplaced) {
     RecordViewModel source;
     source.targets = {
-        {recorder_core::CaptureTarget::Kind::Monitor, 1, "Display 1: 2560x1440 at (0, 0)"},
+        {exosnap::engine::CaptureTarget::Kind::Monitor, 1, "Display 1: 2560x1440 at (0, 0)"},
     };
     source.selected_target_index = 0;
     RecordViewModelAdapter adapter(&source);
@@ -137,7 +137,7 @@ TEST(RecordViewModelAdapterTest, TargetOptionsAreRebuiltOnlyWhenTheTargetVectorI
 
     // A rescan that replaces the vector bumps the stamp; the lists are rebuilt
     // and, because they differ, republished.
-    source.targets.push_back({recorder_core::CaptureTarget::Kind::Window, 2, "Editor — project.qml"});
+    source.targets.push_back({exosnap::engine::CaptureTarget::Kind::Window, 2, "Editor — project.qml"});
     ++source.targets_revision;
     adapter.synchronize();
     EXPECT_EQ(option_changes, 1);
@@ -153,15 +153,15 @@ TEST(RecordViewModelAdapterTest, TargetOptionsAreRebuiltOnlyWhenTheTargetVectorI
 
 TEST(RecordViewModelAdapterTest, ANewSourceRebuildsTheTargetOptionsRegardlessOfItsStamp) {
     RecordViewModel first;
-    first.targets = {{recorder_core::CaptureTarget::Kind::Monitor, 1, "Display 1: 2560x1440 at (0, 0)"}};
+    first.targets = {{exosnap::engine::CaptureTarget::Kind::Monitor, 1, "Display 1: 2560x1440 at (0, 0)"}};
     RecordViewModelAdapter adapter(&first);
     ASSERT_EQ(adapter.targetOptions().size(), 1);
 
     // Same revision number (both start at 0), different view model.
     RecordViewModel second;
     second.targets = {
-        {recorder_core::CaptureTarget::Kind::Monitor, 7, "Display 2: 1920x1080 at (2560, 0)"},
-        {recorder_core::CaptureTarget::Kind::Window, 9, "Terminal"},
+        {exosnap::engine::CaptureTarget::Kind::Monitor, 7, "Display 2: 1920x1080 at (2560, 0)"},
+        {exosnap::engine::CaptureTarget::Kind::Window, 9, "Terminal"},
     };
     adapter.setSource(&second);
 
@@ -192,7 +192,7 @@ TEST(RecordViewModelAdapterTest, DetachingSourceClearsTheBoundarySnapshot) {
 // existing answer, and so a future enumerator has to be entered here on purpose.
 TEST(RecordViewModelAdapterTest, SourceSelectionIsClosedForEveryInFlightState) {
     RecordViewModel source;
-    source.targets.push_back({recorder_core::CaptureTarget::Kind::Monitor, 1, "Display 1: 1920x1080 at (0, 0)"});
+    source.targets.push_back({exosnap::engine::CaptureTarget::Kind::Monitor, 1, "Display 1: 1920x1080 at (0, 0)"});
     source.selected_target_index = 0;
     RecordViewModelAdapter adapter(&source);
 
@@ -227,7 +227,7 @@ TEST(RecordViewModelAdapterTest, SourceSelectionIsClosedForEveryInFlightState) {
 
 TEST(RecordViewModelAdapterTest, MapsRecordingStateActionsAndTone) {
     RecordViewModel source;
-    source.targets.push_back({recorder_core::CaptureTarget::Kind::Monitor, 1, "Display 1: 1920x1080 at (0, 0)"});
+    source.targets.push_back({exosnap::engine::CaptureTarget::Kind::Monitor, 1, "Display 1: 1920x1080 at (0, 0)"});
     source.selected_target_index = 0;
     RecordViewModelAdapter adapter(&source);
 
@@ -268,7 +268,7 @@ TEST(RecordViewModelAdapterTest, MapsRecordingStateActionsAndTone) {
 // caution tone. A future state added to the switch inherits this.
 TEST(RecordViewModelAdapterTest, NormalStatesNeverReportTheWarningTone) {
     RecordViewModel source;
-    source.targets.push_back({recorder_core::CaptureTarget::Kind::Monitor, 1, "Display 1: 1920x1080 at (0, 0)"});
+    source.targets.push_back({exosnap::engine::CaptureTarget::Kind::Monitor, 1, "Display 1: 1920x1080 at (0, 0)"});
     source.selected_target_index = 0;
     RecordViewModelAdapter adapter(&source);
 
@@ -302,8 +302,8 @@ TEST(RecordViewModelAdapterTest, MapsBlockedAndFailedStatesTextually) {
 TEST(RecordViewModelAdapterTest, BuildsTypedDisplayAndWindowTargetOptions) {
     RecordViewModel source;
     source.targets = {
-        {recorder_core::CaptureTarget::Kind::Monitor, 1, "Display 1: 2560x1440 at (0, 0)"},
-        {recorder_core::CaptureTarget::Kind::Window, 2, "Editor — project.qml"},
+        {exosnap::engine::CaptureTarget::Kind::Monitor, 1, "Display 1: 2560x1440 at (0, 0)"},
+        {exosnap::engine::CaptureTarget::Kind::Window, 2, "Editor — project.qml"},
     };
     source.selected_target_index = 1;
     source.capture_mode = CaptureMode::Window;
@@ -319,7 +319,7 @@ TEST(RecordViewModelAdapterTest, BuildsTypedDisplayAndWindowTargetOptions) {
 
 TEST(RecordViewModelAdapterTest, RegionSelectionBlocksStartAndNormalizesCrop) {
     RecordViewModel source;
-    source.targets.push_back({recorder_core::CaptureTarget::Kind::Monitor, 1, "Display 1: 1920x1080 at (0, 0)"});
+    source.targets.push_back({exosnap::engine::CaptureTarget::Kind::Monitor, 1, "Display 1: 1920x1080 at (0, 0)"});
     source.selected_target_index = 0;
     source.capture_mode = CaptureMode::Region;
     source.SetState(UiRecordingState::Ready);
@@ -342,9 +342,9 @@ TEST(RecordViewModelAdapterTest, MapsAudioAndDeviceAvailabilityWithoutResolvingP
     RecordViewModel source;
     source.audio_ui_state.target_kind = capability::CaptureTargetKind::Window;
     source.audio_ui_state.source_rows = {
-        {recorder_core::AudioSourceKind::Sys, true, false},
-        {recorder_core::AudioSourceKind::App, false, false},
-        {recorder_core::AudioSourceKind::Mic, true, false},
+        {exosnap::engine::AudioSourceKind::Sys, true, false},
+        {exosnap::engine::AudioSourceKind::App, false, false},
+        {exosnap::engine::AudioSourceKind::Mic, true, false},
     };
     RecordViewModelAdapter adapter(&source);
     adapter.setDeviceState(false, true, true, QStringLiteral("Device is busy"));

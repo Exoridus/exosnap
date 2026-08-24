@@ -43,7 +43,7 @@ void EditPlayerFrameSink::detach(const ExoEditPlayerItem* item) {
         item_ = nullptr;
 }
 
-void EditPlayerFrameSink::deliver(recorder_core::RawDecodedVideoFrame frame) {
+void EditPlayerFrameSink::deliver(exosnap::engine::RawDecodedVideoFrame frame) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (item_ != nullptr)
         item_->presentFrame(std::move(frame));

@@ -29,7 +29,7 @@ Add a stereo-linked automatic gain control (`AutomaticGainControl`) as the third
 stage of the `MicDspAudioSrc` chain, after the high-pass filter and the noise
 gate.
 
-### DSP model (`libs/recorder_core/src/automatic_gain_control.{h,cpp}`)
+### DSP model (`libs/engine/src/automatic_gain_control.{h,cpp}`)
 
 - **Stereo-linked detection**: a smoothed level envelope is derived from the
   loudest channel of each frame (`max(|sample|)` across channels, one-pole

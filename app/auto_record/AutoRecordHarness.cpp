@@ -18,9 +18,9 @@
 #include <capability/capability_builder.h>
 #include <capability/capability_set.h>
 #include <capability/config_types.h>
-#include <recorder_core/audio_track_model.h>
-#include <recorder_core/codec_types.h>
-#include <recorder_core/recorder_session.h>
+#include <exosnap/engine/audio_track_model.h>
+#include <exosnap/engine/codec_types.h>
+#include <exosnap/engine/recorder_session.h>
 
 #include "../models/OutputSettingsModel.h"
 #include "../models/VideoSettingsModel.h"
@@ -85,38 +85,38 @@ capability::BitDepth MapBitDepth(int bit_depth) {
     return bit_depth == 10 ? capability::BitDepth::Bit10 : capability::BitDepth::Bit8;
 }
 
-recorder_core::HdrMode MapHdrMode(HdrMode mode) {
+exosnap::engine::HdrMode MapHdrMode(HdrMode mode) {
     switch (mode) {
     case HdrMode::Tonemap:
-        return recorder_core::HdrMode::TonemapSdr;
+        return exosnap::engine::HdrMode::TonemapSdr;
     case HdrMode::Native:
-        return recorder_core::HdrMode::Hdr10;
+        return exosnap::engine::HdrMode::Hdr10;
     case HdrMode::Off:
     default:
-        return recorder_core::HdrMode::Off;
+        return exosnap::engine::HdrMode::Off;
     }
 }
 
-recorder_core::AudioSourceKind RowKindFromName(const QString& name) {
+exosnap::engine::AudioSourceKind RowKindFromName(const QString& name) {
     if (name == QStringLiteral("app"))
-        return recorder_core::AudioSourceKind::App;
+        return exosnap::engine::AudioSourceKind::App;
     if (name == QStringLiteral("mic"))
-        return recorder_core::AudioSourceKind::Mic;
+        return exosnap::engine::AudioSourceKind::Mic;
     // "sys": keep the process-scoped Sys kind. BuildAudioPlan() normalizes Sys → the
     // pid-free SystemOutput for a Display/Region target (NormalizeSourceRowsForTarget),
     // so this is correct for every target kind without special-casing here.
-    return recorder_core::AudioSourceKind::Sys;
+    return exosnap::engine::AudioSourceKind::Sys;
 }
 
 // The option struct spells the canonical CQ range as plain integers so its
-// parser can be tested without linking recorder_core. This is where the two
+// parser can be tested without linking the engine. This is where the two
 // definitions meet, so this is where they are held together.
-static_assert(AutoRecordOptions::kCqMin == static_cast<int>(recorder_core::kCqMin));
-static_assert(AutoRecordOptions::kCqMax == static_cast<int>(recorder_core::kCqMax));
+static_assert(AutoRecordOptions::kCqMin == static_cast<int>(exosnap::engine::kCqMin));
+static_assert(AutoRecordOptions::kCqMax == static_cast<int>(exosnap::engine::kCqMax));
 static_assert(AutoRecordOptions::kCqDefault ==
-              static_cast<int>(recorder_core::CanonicalCq(recorder_core::QualityPreset::Balanced)));
-static_assert(AutoRecordOptions::kNvencPresetMin == static_cast<int>(recorder_core::NvencPreset::P1) + 1);
-static_assert(AutoRecordOptions::kNvencPresetMax == static_cast<int>(recorder_core::NvencPreset::P7) + 1);
+              static_cast<int>(exosnap::engine::CanonicalCq(exosnap::engine::QualityPreset::Balanced)));
+static_assert(AutoRecordOptions::kNvencPresetMin == static_cast<int>(exosnap::engine::NvencPreset::P1) + 1);
+static_assert(AutoRecordOptions::kNvencPresetMax == static_cast<int>(exosnap::engine::NvencPreset::P7) + 1);
 
 OutputSettingsModel BuildOutputSettings(const AutoRecordOptions& options) {
     OutputSettingsModel settings = OutputSettingsModel::Defaults();
@@ -129,7 +129,7 @@ OutputSettingsModel BuildOutputSettings(const AutoRecordOptions& options) {
     settings.bit_depth = MapBitDepth(options.bit_depth);
     settings.chroma_subsampling = MapChroma(options.chroma);
     settings.hdr_mode = MapHdrMode(options.hdr_mode);
-    settings.nvenc_preset = static_cast<recorder_core::NvencPreset>(options.nvenc_preset - 1);
+    settings.nvenc_preset = static_cast<exosnap::engine::NvencPreset>(options.nvenc_preset - 1);
     return settings;
 }
 
@@ -138,7 +138,7 @@ capability::AudioUiState BuildAudioUiState(const AutoRecordOptions& options) {
     state.target_kind = (options.target == TargetKind::Window) ? capability::CaptureTargetKind::Window
                                                                : capability::CaptureTargetKind::Display;
     for (const QString& row_name : options.audio_rows) {
-        recorder_core::AudioSourceRow row;
+        exosnap::engine::AudioSourceRow row;
         row.kind = RowKindFromName(row_name);
         row.enabled = true;
         row.merge_with_above = (!options.merge_above.isEmpty() && row_name == options.merge_above);
@@ -192,7 +192,7 @@ QString RegionNotSupportedError() {
 // Mirrors the CLI options into the report's recording configuration verbatim, so a
 // reader never has to reconstruct what was actually recorded from the flags used.
 benchmark::RunConfig BuildBenchmarkRunConfig(const AutoRecordOptions& options, benchmark::Frontend frontend,
-                                             int run_index, const recorder_core::CaptureTarget& target) {
+                                             int run_index, const exosnap::engine::CaptureTarget& target) {
     benchmark::RunConfig config;
     config.frontend = frontend;
     config.scenario = options.benchmark_scenario.trimmed();
@@ -268,18 +268,18 @@ int RunAutoRecordOnCoordinator(QCoreApplication& app, exosnap::RecordingCoordina
     // Select a capture target.
     //   Monitor → the first display-kind target.
     //   Window  → the first window-kind target whose description contains the requested title.
-    const std::vector<recorder_core::CaptureTarget> targets = coordinator.EnumerateTargets();
-    recorder_core::CaptureTarget selected_target;
+    const std::vector<exosnap::engine::CaptureTarget> targets = coordinator.EnumerateTargets();
+    exosnap::engine::CaptureTarget selected_target;
     bool found_target = false;
     for (const auto& target : targets) {
         if (options.target == TargetKind::Monitor) {
-            if (target.kind == recorder_core::CaptureTarget::Kind::Monitor) {
+            if (target.kind == exosnap::engine::CaptureTarget::Kind::Monitor) {
                 selected_target = target;
                 found_target = true;
                 break;
             }
         } else { // TargetKind::Window
-            if (target.kind == recorder_core::CaptureTarget::Kind::Window &&
+            if (target.kind == exosnap::engine::CaptureTarget::Kind::Window &&
                 QString::fromStdString(target.description).contains(options.target_window_title, Qt::CaseInsensitive)) {
                 selected_target = target;
                 found_target = true;
@@ -362,7 +362,7 @@ int RunAutoRecordOnCoordinator(QCoreApplication& app, exosnap::RecordingCoordina
         // engine reports is cumulative for the session, so without this the report's
         // frame and drop counts would include the warm-up — the interval the warm-up
         // exists to keep out of the measurement.
-        recorder_core::RecordingDiagnosticsSnapshot baseline_snapshot;
+        exosnap::engine::RecordingDiagnosticsSnapshot baseline_snapshot;
 
         if (!coordinator.StartRecording(selected_target, audio_state)) {
             return FailWith(
@@ -422,7 +422,7 @@ int RunAutoRecordOnCoordinator(QCoreApplication& app, exosnap::RecordingCoordina
             if (hooks.onMeasurementStart)
                 hooks.onMeasurementStart();
             if (!coordinator.LastDiagnosticsSnapshot(&baseline_snapshot))
-                baseline_snapshot = recorder_core::RecordingDiagnosticsSnapshot{};
+                baseline_snapshot = exosnap::engine::RecordingDiagnosticsSnapshot{};
             process_sampler.Start();
             measurement_started = true;
             stopTimer.start((options.duration_seconds + pause_budget_seconds) * 1000);
@@ -508,15 +508,15 @@ int RunAutoRecordOnCoordinator(QCoreApplication& app, exosnap::RecordingCoordina
             // accessor rather than taking its single diagnostics callback slot — the
             // frontend owns that slot, and displacing it is a known way to silently
             // zero every drop counter for the session.
-            recorder_core::RecordingDiagnosticsSnapshot snapshot;
+            exosnap::engine::RecordingDiagnosticsSnapshot snapshot;
             if (!coordinator.LastDiagnosticsSnapshot(&snapshot))
-                snapshot = recorder_core::RecordingDiagnosticsSnapshot{};
+                snapshot = exosnap::engine::RecordingDiagnosticsSnapshot{};
 
             // Read back what the engine was actually handed. Not derived from the
             // options above: a frontend can commit settings of its own between the
             // CLI parse and StartRecording, and that is precisely the defect that
             // invalidated an earlier Widgets-vs-Quick comparison.
-            recorder_core::RecorderConfig committed;
+            exosnap::engine::RecorderConfig committed;
             const benchmark::EffectiveRecordingConfig effective = coordinator.LastCommittedRecorderConfig(&committed)
                                                                       ? benchmark::DescribeEffectiveConfig(committed)
                                                                       : benchmark::UnavailableEffectiveConfig();

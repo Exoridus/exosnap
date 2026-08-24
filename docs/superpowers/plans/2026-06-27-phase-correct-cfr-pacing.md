@@ -6,7 +6,7 @@
 
 **Architecture:** A small GPU ring of recently-captured textures (each tagged with its `LastPresentTime` QPC) replaces the single "latest" texture in the CFR path of `video_thread.cpp`. Per tick, a **pure** selection function picks the phase-nearest unemitted ring entry; only the selected entry is composited→encoded (no blending, near-zero overhead). DXGI-OD only (it has `LastPresentTime`); WGC capture and the `Newest` mode fall back to today's newest-at-tick. The testable core — ring sizing and the selection/drop-accounting decision — is extracted as pure functions; the GPU ring mechanics are dev-machine-verified by a real recording.
 
-**Tech Stack:** C++20, D3D11 (capture textures), `recorder_core` (engine), Qt 6.9 (settings UI), GoogleTest, toml++ (preset).
+**Tech Stack:** C++20, D3D11 (capture textures), `engine` (engine), Qt 6.9 (settings UI), GoogleTest, toml++ (preset).
 
 ## Global Constraints
 
@@ -28,11 +28,11 @@ Apply to every task. Verbatim from ADR 0035 + the locked design decisions:
 
 | File | Responsibility | New? |
 |------|----------------|------|
-| `libs/recorder_core/include/recorder_core/frame_pacing.h` | Pure: `FramePacingMode`, `ComputePacingRingSize`, `PacingDecision`, `SelectFrameForSlot` | Create |
-| `libs/recorder_core/src/frame_pacing.cpp` | Implementations of the pure pacing functions | Create |
-| `libs/recorder_core/include/recorder_core/recorder_session.h` | Add `FramePacingMode cfr_pacing_mode = Smooth` to `RecorderConfig` (near `cfr`, ~line 289) | Modify |
-| `libs/recorder_core/src/video_thread.cpp` | CFR path (1416–1711): GPU ring + phase-correct selection + accounting | Modify |
-| `app/models/VideoSettingsModel.h` | Add `recorder_core::FramePacingMode frame_pacing = Smooth` (near `cfr`, line 11) | Modify |
+| `libs/engine/include/exosnap/engine/frame_pacing.h` | Pure: `FramePacingMode`, `ComputePacingRingSize`, `PacingDecision`, `SelectFrameForSlot` | Create |
+| `libs/engine/src/frame_pacing.cpp` | Implementations of the pure pacing functions | Create |
+| `libs/engine/include/exosnap/engine/recorder_session.h` | Add `FramePacingMode cfr_pacing_mode = Smooth` to `RecorderConfig` (near `cfr`, ~line 289) | Modify |
+| `libs/engine/src/video_thread.cpp` | CFR path (1416–1711): GPU ring + phase-correct selection + accounting | Modify |
+| `app/models/VideoSettingsModel.h` | Add `exosnap::engine::FramePacingMode frame_pacing = Smooth` (near `cfr`, line 11) | Modify |
 | `app/models/RecordingPreset.{h,cpp}` | Default + sanitize the field; bump `kPresetSchemaVersion` 18→19 | Modify |
 | `app/settings/RecordingPresetStore.cpp` | TOML serialize/deserialize `frame_pacing` | Modify |
 | `app/MainWindow.cpp` | Map `VideoSettingsModel.frame_pacing` → `RecorderConfig.cfr_pacing_mode` in live-config capture; handle `fix.frame_pacing.smooth` | Modify |
@@ -45,14 +45,14 @@ Apply to every task. Verbatim from ADR 0035 + the locked design decisions:
 ## Task 1: Settings plumbing — `FramePacingMode` + preset schema 18→19
 
 **Files:**
-- Modify: `libs/recorder_core/include/recorder_core/recorder_session.h` (RecorderConfig, ~line 289)
+- Modify: `libs/engine/include/exosnap/engine/recorder_session.h` (RecorderConfig, ~line 289)
 - Modify: `app/models/VideoSettingsModel.h` (line 11 area)
 - Modify: `app/models/RecordingPreset.{h,cpp}` (default + sanitize + `kPresetSchemaVersion` line 19)
 - Modify: `app/settings/RecordingPresetStore.cpp` (~line 554 write / ~816 read)
 - Test: `app/tests/test_audio_encoding_preset.cpp` (the preset roundtrip suite) — or the existing preset-store test file
 
 **Interfaces:**
-- Produces: `enum class recorder_core::FramePacingMode : uint8_t { Smooth = 0, Newest = 1 };` (declared in `frame_pacing.h`, Task 2 creates that header — but the enum is needed here first, so **Task 1 creates `frame_pacing.h` with only the enum**; Task 2 adds the functions). `RecorderConfig.cfr_pacing_mode`, `VideoSettingsModel.frame_pacing`, `RecordingPreset…video.frame_pacing`, all default `Smooth`. `kPresetSchemaVersion == 19`.
+- Produces: `enum class exosnap::engine::FramePacingMode : uint8_t { Smooth = 0, Newest = 1 };` (declared in `frame_pacing.h`, Task 2 creates that header — but the enum is needed here first, so **Task 1 creates `frame_pacing.h` with only the enum**; Task 2 adds the functions). `RecorderConfig.cfr_pacing_mode`, `VideoSettingsModel.frame_pacing`, `RecordingPreset…video.frame_pacing`, all default `Smooth`. `kPresetSchemaVersion == 19`.
 
 - [ ] **Step 1: Create `frame_pacing.h` with the enum only:**
 
@@ -60,7 +60,7 @@ Apply to every task. Verbatim from ADR 0035 + the locked design decisions:
 #pragma once
 #include <cstdint>
 
-namespace recorder_core {
+namespace exosnap::engine {
 
 // CFR output pacing. Smooth = phase-correct present-time-nearest selection (default,
 // the recording use case). Newest = lowest-latency newest-at-tick (and the WGC fallback).
@@ -69,7 +69,7 @@ enum class FramePacingMode : uint8_t {
     Newest = 1,
 };
 
-} // namespace recorder_core
+} // namespace exosnap::engine
 ```
 
 - [ ] **Step 2: Add the field to `RecorderConfig`** (`recorder_session.h`, right after the `bool cfr = true;` at ~line 289). Include `frame_pacing.h` at the top:
@@ -83,14 +83,14 @@ enum class FramePacingMode : uint8_t {
 - [ ] **Step 3: Add to `VideoSettingsModel.h`** (after `bool cfr = true;`, line 11), include `recorder_core/frame_pacing.h`:
 
 ```cpp
-    recorder_core::FramePacingMode frame_pacing = recorder_core::FramePacingMode::Smooth;
+    exosnap::engine::FramePacingMode frame_pacing = exosnap::engine::FramePacingMode::Smooth;
 ```
 
 - [ ] **Step 4: Write the failing preset-roundtrip test.** In the preset store test file, add a case asserting the field defaults to `Smooth` and survives a save→load roundtrip when set to `Newest`:
 
 ```cpp
 TEST(RecordingPresetStore, FramePacingRoundtrips) {
-    using recorder_core::FramePacingMode;
+    using exosnap::engine::FramePacingMode;
     RecordingPreset p = RecordingPreset::Defaults();
     EXPECT_EQ(p.config.video.frame_pacing, FramePacingMode::Smooth);   // default
     p.config.video.frame_pacing = FramePacingMode::Newest;
@@ -108,7 +108,7 @@ TEST(RecordingPresetStore, FramePacingRoundtrips) {
 Run: `cmake --build build/windows-x64-debug --target <preset-store-test-target>` then ctest the case.
 Expected: FAIL — `frame_pacing` not a member / not serialized.
 
-- [ ] **Step 6: Default + sanitize + bump schema.** In `RecordingPreset.h` bump `inline constexpr int kPresetSchemaVersion = 18;` → `19`. In the defaults builder (~line 111 area) set `preset.config.video.frame_pacing = recorder_core::FramePacingMode::Smooth;`. In the sanitize path (`RecordingPreset.cpp`), clamp any out-of-range integer value to `Smooth` (mirror how `cfr`/enum fields are sanitized). In `RecordingPresetStore.cpp` write the field as an integer (`vid_tbl.emplace("frame_pacing", static_cast<int>(vid.frame_pacing));` near line 554) and read it back (`vid.frame_pacing = static_cast<FramePacingMode>(TomlInt(tbl["video"]["frame_pacing"], 0));` near line 816, default 0 = Smooth).
+- [ ] **Step 6: Default + sanitize + bump schema.** In `RecordingPreset.h` bump `inline constexpr int kPresetSchemaVersion = 18;` → `19`. In the defaults builder (~line 111 area) set `preset.config.video.frame_pacing = exosnap::engine::FramePacingMode::Smooth;`. In the sanitize path (`RecordingPreset.cpp`), clamp any out-of-range integer value to `Smooth` (mirror how `cfr`/enum fields are sanitized). In `RecordingPresetStore.cpp` write the field as an integer (`vid_tbl.emplace("frame_pacing", static_cast<int>(vid.frame_pacing));` near line 554) and read it back (`vid.frame_pacing = static_cast<FramePacingMode>(TomlInt(tbl["video"]["frame_pacing"], 0));` near line 816, default 0 = Smooth).
 
 - [ ] **Step 7: Run to verify it passes**
 
@@ -120,7 +120,7 @@ Expected: PASS.
 - [ ] **Step 9: Commit**
 
 ```bash
-git add libs/recorder_core/include/recorder_core/frame_pacing.h libs/recorder_core/include/recorder_core/recorder_session.h app/models/VideoSettingsModel.h app/models/RecordingPreset.h app/models/RecordingPreset.cpp app/settings/RecordingPresetStore.cpp app/MainWindow.cpp <preset-test-file>
+git add libs/engine/include/exosnap/engine/frame_pacing.h libs/engine/include/exosnap/engine/recorder_session.h app/models/VideoSettingsModel.h app/models/RecordingPreset.h app/models/RecordingPreset.cpp app/settings/RecordingPresetStore.cpp app/MainWindow.cpp <preset-test-file>
 git commit -m "feat(pacing): FramePacingMode setting + preset schema 18->19 (ADR 0035)"
 ```
 
@@ -129,19 +129,19 @@ git commit -m "feat(pacing): FramePacingMode setting + preset schema 18->19 (ADR
 ## Task 2: Pure ring-size helper `ComputePacingRingSize` (TDD)
 
 **Files:**
-- Modify: `libs/recorder_core/include/recorder_core/frame_pacing.h` (add declaration)
-- Create: `libs/recorder_core/src/frame_pacing.cpp`
-- Test: `libs/recorder_core/tests/test_frame_pacing.cpp` (new gtest; add target to `libs/recorder_core/CMakeLists.txt`)
+- Modify: `libs/engine/include/exosnap/engine/frame_pacing.h` (add declaration)
+- Create: `libs/engine/src/frame_pacing.cpp`
+- Test: `libs/engine/tests/test_frame_pacing.cpp` (new gtest; add target to `libs/engine/CMakeLists.txt`)
 
 **Interfaces:**
-- Produces: `std::size_t recorder_core::ComputePacingRingSize(uint32_t monitor_refresh_hz, uint32_t output_fps);`
+- Produces: `std::size_t exosnap::engine::ComputePacingRingSize(uint32_t monitor_refresh_hz, uint32_t output_fps);`
 
 - [ ] **Step 1: Write the failing test** `test_frame_pacing.cpp`:
 
 ```cpp
-#include "recorder_core/frame_pacing.h"
+#include "exosnap/engine/frame_pacing.h"
 #include <gtest/gtest.h>
-using namespace recorder_core;
+using namespace exosnap::engine;
 
 TEST(PacingRingSize, AdaptiveFromRatio) {
     EXPECT_EQ(ComputePacingRingSize(144, 60), 5u);  // ceil(144/60)=3, +2 = 5
@@ -157,7 +157,7 @@ TEST(PacingRingSize, UnknownRefreshFallsBackTo8) {
 }
 ```
 
-- [ ] **Step 2: Add the gtest target** to `libs/recorder_core/CMakeLists.txt` (mirror an existing `recorder_core` unit-test target; `frame_pacing.cpp` is pure, links no D3D):
+- [ ] **Step 2: Add the gtest target** to `libs/engine/CMakeLists.txt` (mirror an existing `engine` unit-test target; `frame_pacing.cpp` is pure, links no D3D):
 
 ```cmake
 exosnap_add_gtest(
@@ -168,7 +168,7 @@ exosnap_add_gtest(
 target_include_directories(frame_pacing_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 ```
 
-(Match the repo's actual `exosnap_add_gtest` signature used by other `recorder_core` tests.)
+(Match the repo's actual `exosnap_add_gtest` signature used by other `engine` tests.)
 
 - [ ] **Step 3: Run → FAIL** (`ComputePacingRingSize` undefined).
 
@@ -176,7 +176,7 @@ target_include_directories(frame_pacing_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR
 
 ```cpp
 #include <cstddef>
-// ... inside namespace recorder_core ...
+// ... inside namespace exosnap::engine ...
 // Ring size for phase-correct pacing: clamp(ceil(refresh/fps)+2, 4, 12); 8 when refresh
 // or fps is unknown (0). Sized for the source-faster-than-output case (e.g. 240->60).
 [[nodiscard]] std::size_t ComputePacingRingSize(uint32_t monitor_refresh_hz, uint32_t output_fps);
@@ -185,10 +185,10 @@ target_include_directories(frame_pacing_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR
 - [ ] **Step 5: Implement in `frame_pacing.cpp`:**
 
 ```cpp
-#include "recorder_core/frame_pacing.h"
+#include "exosnap/engine/frame_pacing.h"
 #include <algorithm>
 
-namespace recorder_core {
+namespace exosnap::engine {
 
 std::size_t ComputePacingRingSize(uint32_t monitor_refresh_hz, uint32_t output_fps) {
     constexpr std::size_t kMin = 4, kMax = 12, kFallback = 8;
@@ -199,7 +199,7 @@ std::size_t ComputePacingRingSize(uint32_t monitor_refresh_hz, uint32_t output_f
     return std::clamp(ratio + 2, kMin, kMax);
 }
 
-} // namespace recorder_core
+} // namespace exosnap::engine
 ```
 
 - [ ] **Step 6: Run → PASS.** `ctest --test-dir build/windows-x64-debug -R "frame_pacing\." -j6`
@@ -207,7 +207,7 @@ std::size_t ComputePacingRingSize(uint32_t monitor_refresh_hz, uint32_t output_f
 - [ ] **Step 7: Commit**
 
 ```bash
-git add libs/recorder_core/include/recorder_core/frame_pacing.h libs/recorder_core/src/frame_pacing.cpp libs/recorder_core/tests/test_frame_pacing.cpp libs/recorder_core/CMakeLists.txt
+git add libs/engine/include/exosnap/engine/frame_pacing.h libs/engine/src/frame_pacing.cpp libs/engine/tests/test_frame_pacing.cpp libs/engine/CMakeLists.txt
 git commit -m "feat(pacing): adaptive ring-size helper + tests"
 ```
 
@@ -216,8 +216,8 @@ git commit -m "feat(pacing): adaptive ring-size helper + tests"
 ## Task 3: Pure frame-selection `SelectFrameForSlot` (TDD)
 
 **Files:**
-- Modify: `libs/recorder_core/include/recorder_core/frame_pacing.h`, `libs/recorder_core/src/frame_pacing.cpp`
-- Test: `libs/recorder_core/tests/test_frame_pacing.cpp`
+- Modify: `libs/engine/include/exosnap/engine/frame_pacing.h`, `libs/engine/src/frame_pacing.cpp`
+- Test: `libs/engine/tests/test_frame_pacing.cpp`
 
 **Interfaces:**
 - Produces:
@@ -321,7 +321,7 @@ PacingDecision SelectFrameForSlot(std::span<const uint64_t> ring_present_qpc,
 - [ ] **Step 6: Commit**
 
 ```bash
-git add libs/recorder_core/include/recorder_core/frame_pacing.h libs/recorder_core/src/frame_pacing.cpp libs/recorder_core/tests/test_frame_pacing.cpp
+git add libs/engine/include/exosnap/engine/frame_pacing.h libs/engine/src/frame_pacing.cpp libs/engine/tests/test_frame_pacing.cpp
 git commit -m "feat(pacing): pure phase-correct frame selection + drop accounting + tests"
 ```
 
@@ -330,7 +330,7 @@ git commit -m "feat(pacing): pure phase-correct frame selection + drop accountin
 ## Task 4: GPU ring + phase-correct selection in the CFR scheduler (hot-path, dev-verified)
 
 **Files:**
-- Modify: `libs/recorder_core/src/video_thread.cpp` (CFR path 1416–1711: drain 1473–1521, selection 1611–1612, accounting 1516/1549/1665/1671)
+- Modify: `libs/engine/src/video_thread.cpp` (CFR path 1416–1711: drain 1473–1521, selection 1611–1612, accounting 1516/1549/1665/1671)
 
 **Interfaces:**
 - Consumes: `ComputePacingRingSize`, `SelectFrameForSlot`, `PacingDecision`, `m_state.config.cfr_pacing_mode`.
@@ -379,7 +379,7 @@ Expected: links. (No unit test — selection logic is covered by Task 3.)
 - [ ] **Step 6: Commit**
 
 ```bash
-git add libs/recorder_core/src/video_thread.cpp
+git add libs/engine/src/video_thread.cpp
 git commit -m "feat(pacing): GPU ring + phase-correct selection in the CFR scheduler (DXGI-OD)"
 ```
 
@@ -453,7 +453,7 @@ TEST(RecommendationEngineTest, JudderInSmoothOffersNoPacingFix) {
 - [ ] **Step 3: Thread the mode + emit the result.** Add `FramePacingMode frame_pacing = FramePacingMode::Smooth;` to `capability::UserRecorderConfig` (and populate it where `UserConfigFromSettings` builds it from `VideoSettingsModel`). In `checkRefreshRateMismatch`, after pushing the existing judder result, when the live-judder arm fired (or the static mismatch) **and** `config_.frame_pacing == FramePacingMode::Newest`, push a second result:
 
 ```cpp
-if (config_.frame_pacing == recorder_core::FramePacingMode::Newest) {
+if (config_.frame_pacing == exosnap::engine::FramePacingMode::Newest) {
     DiagnosticResult pr = MakeResult(
         "rec.pacing.smooth", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
         "Smooth frame pacing recommended",
@@ -474,7 +474,7 @@ if (config_.frame_pacing == recorder_core::FramePacingMode::Newest) {
 }
 ```
 
-- [ ] **Step 4: MainWindow Auto-apply.** In the FixAction handler (~691–731), add to the Auto branch: `else if (fix_id == QStringLiteral("fix.frame_pacing.smooth")) video_settings_.frame_pacing = recorder_core::FramePacingMode::Smooth;` then persist + refresh the ConfigPage select (so the change is visible). It is Auto, so it applies after the existing confirm/preview using `changes_summary`.
+- [ ] **Step 4: MainWindow Auto-apply.** In the FixAction handler (~691–731), add to the Auto branch: `else if (fix_id == QStringLiteral("fix.frame_pacing.smooth")) video_settings_.frame_pacing = exosnap::engine::FramePacingMode::Smooth;` then persist + refresh the ConfigPage select (so the change is visible). It is Auto, so it applies after the existing confirm/preview using `changes_summary`.
 
 - [ ] **Step 5: Run → PASS.** `ctest --test-dir build/windows-x64-debug -R "diagnostics\." -j6`
 
@@ -495,7 +495,7 @@ git commit -m "feat(pacing): judder-recommends-Smooth Auto FixAction (ADR 0035 c
 - [ ] **Step 1: Full build (no `--target`)** so all test targets compile with the new `frame_pacing.cpp` dependency.
 
 Run: `cmake --build build/windows-x64-debug`
-Expected: clean. If a `recorder_core`-consuming test target fails to find `frame_pacing.*`, add the source to its target (it's a new engine TU).
+Expected: clean. If a `engine`-consuming test target fails to find `frame_pacing.*`, add the source to its target (it's a new engine TU).
 
 - [ ] **Step 2: Full ctest.**
 
@@ -520,4 +520,4 @@ git commit -m "docs: record phase-correct CFR pacing delivered; move to 0.8.0 (A
 - **Spec coverage (ADR 0035):** GPU-only selection-not-blending (T3/T4) ✓ · ring of textures + LastPresentTime (T4) ✓ · adaptive ring size (T2) ✓ · no elevation / DXGI-OD only, WGC fallback (T4) ✓ · Smooth/Newest modes, default Smooth (T1/T5) ✓ · drop/dup accounting truthful (T3 `newly_dropped` + T4 eviction) ✓ · VFR unaffected (T4 touches only CFR+OD path) ✓ · diagnostics recommends Smooth FixAction (T6) ✓ · schema bump+reset (T1) ✓.
 - **Placeholders:** the only non-literal regions are the explicitly-labelled hot-path GPU wiring (T4) — its decision logic is fully specified + unit-tested in T3; the D3D texture mechanics are the honest dev-verify boundary. Pure tasks (T2/T3) carry complete code + tests.
 - **Type consistency:** `FramePacingMode{Smooth=0,Newest=1}` defined once (T1, `frame_pacing.h`); `ComputePacingRingSize` (T2) and `SelectFrameForSlot`/`PacingDecision` (T3) declared in the same header and consumed in T4; `RecorderConfig.cfr_pacing_mode` (T1) read in T4; `VideoSettingsModel.frame_pacing` (T1) used in T5/T6; `capability::UserRecorderConfig.frame_pacing` (T6) drives the conditional FixAction.
-- **Known traps embedded:** preset schema test pins the version number (update to 19, T1); full build before commit catches any recorder_core test target needing the new TU (T7); the ring round-robin→ascending linearisation is called out explicitly (T4 Step 3).
+- **Known traps embedded:** preset schema test pins the version number (update to 19, T1); full build before commit catches any engine test target needing the new TU (T7); the ring round-robin→ascending linearisation is called out explicitly (T4 Step 3).

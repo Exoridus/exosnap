@@ -113,7 +113,7 @@
 - Test: `app/tests/test_preview_surface_webcam.cpp` and/or `app/tests/test_dxgi_preview_pushed_source.cpp`
 
 **Interfaces:**
-- Consumes: Task 1's guard removal (hover/click/Escape already work regardless of `dxgi_active_`). `DxgiPreviewRenderer::SetWebcamOverlayState(bool enabled, bool selected, float nx, float ny, float nw, float nh, bool mirror, float opacity, const recorder_core::ChromaKeyParams& chroma)` and `SetWebcamOverlayFrame(...)` (existing, unchanged — called with the *animated* rect instead of `webcam_rect_norm_` while `magnify_progress_ > 0`). `PreviewSurface::webcamEnlargedTargetRect() const -> QRectF`, `webcamPixelRect() const -> QRectF` (existing).
+- Consumes: Task 1's guard removal (hover/click/Escape already work regardless of `dxgi_active_`). `DxgiPreviewRenderer::SetWebcamOverlayState(bool enabled, bool selected, float nx, float ny, float nw, float nh, bool mirror, float opacity, const exosnap::engine::ChromaKeyParams& chroma)` and `SetWebcamOverlayFrame(...)` (existing, unchanged — called with the *animated* rect instead of `webcam_rect_norm_` while `magnify_progress_ > 0`). `PreviewSurface::webcamEnlargedTargetRect() const -> QRectF`, `webcamPixelRect() const -> QRectF` (existing).
 - Produces: `void PreviewSurface::syncEnlargedWebcamToDxgi()` — pushes the dim scrim sprite (slot 2) and the interpolated webcam overlay rect; called every animation tick while `magnify_progress_ > 0` and once more on settle/collapse to restore the normal `syncWebcamOverlayToDxgi()` state.
 
 **Note:** There is no third sprite for a hover icon in this version of the plan (Task 1 replaced it with a cursor). Only the scrim needs a new OSD slot.
@@ -192,7 +192,7 @@
       const float nh = static_cast<float>(draw_rect.height() / frame_rect.height());
 
       const WebcamChromaKeySettings::ActiveRgb key = webcam_chroma_.active_color();
-      recorder_core::ChromaKeyParams chroma;
+      exosnap::engine::ChromaKeyParams chroma;
       chroma.enabled = webcam_chroma_.enabled;
       chroma.r = key.r;
       chroma.g = key.g;

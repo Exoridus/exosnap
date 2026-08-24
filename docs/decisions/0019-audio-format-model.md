@@ -89,7 +89,7 @@ kept visible regardless of the active audio codec to avoid layout shifts on code
   recordings. Existing recordings (before 0.5.0) are unaffected.
 - Preset schema version 5 is incompatible with schema version 4; preset files from 0.4.x and
   earlier are silently reset on first launch.
-- The engine (`recorder_core`) is codec-agnostic: `RecorderConfig::audio_bitrate_kbps` is passed
+- The engine (`engine`) is codec-agnostic: `RecorderConfig::audio_bitrate_kbps` is passed
   to the encoder implementations; the codec-specific clamping and default resolution happens
   inside each encoder, not in the coordinator or UI layer.
 - AAC bitrate control is wired to FDK-AAC and MF AAC but both use the same `audio_bitrate_kbps`

@@ -1,13 +1,13 @@
 #include "BenchmarkEffectiveConfig.h"
 
-#include <recorder_core/recorder_session.h>
+#include <exosnap/engine/recorder_session.h>
 
 #include <QCryptographicHash>
 
 namespace exosnap::benchmark {
 namespace {
 
-using namespace recorder_core;
+using namespace exosnap::engine;
 
 const char* Name(Container value) {
     switch (value) {
@@ -214,7 +214,7 @@ EffectiveRecordingConfig UnavailableEffectiveConfig() {
     return EffectiveRecordingConfig{};
 }
 
-EffectiveRecordingConfig DescribeEffectiveConfig(const recorder_core::RecorderConfig& config) {
+EffectiveRecordingConfig DescribeEffectiveConfig(const exosnap::engine::RecorderConfig& config) {
     FieldBuilder builder;
 
     // ---- Container / codecs -------------------------------------------------

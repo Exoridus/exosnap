@@ -51,7 +51,7 @@ TEST(RecordingAdmissionTest, PlainSdrRecordingIsAdmitted) {
 
 TEST(RecordingAdmissionTest, Hdr10OnACodecWithoutHdr10OnAnHdrDisplayIsBlocked) {
     AdmissionFacts facts = SdrMonitorFacts();
-    facts.hdr_mode = recorder_core::HdrMode::Hdr10;
+    facts.hdr_mode = exosnap::engine::HdrMode::Hdr10;
     facts.codec_can_carry_hdr10 = false; // H.264
     facts.target_display_hdr_active = true;
     EXPECT_EQ(EvaluateRecordingAdmission(facts), AdmissionBlocker::Hdr10CodecConflict);
@@ -59,7 +59,7 @@ TEST(RecordingAdmissionTest, Hdr10OnACodecWithoutHdr10OnAnHdrDisplayIsBlocked) {
 
 TEST(RecordingAdmissionTest, Hdr10OnAnHdr10CapableCodecIsAdmitted) {
     AdmissionFacts facts = SdrMonitorFacts();
-    facts.hdr_mode = recorder_core::HdrMode::Hdr10;
+    facts.hdr_mode = exosnap::engine::HdrMode::Hdr10;
     facts.codec_can_carry_hdr10 = true; // AV1 / HEVC
     facts.target_display_hdr_active = true;
     EXPECT_EQ(EvaluateRecordingAdmission(facts), AdmissionBlocker::None);
@@ -69,7 +69,7 @@ TEST(RecordingAdmissionTest, Hdr10OnAnHdr10CapableCodecIsAdmitted) {
 // to block on — the diagnostics card stays silent there for the same reason.
 TEST(RecordingAdmissionTest, Hdr10OnAnSdrDisplayIsAdmitted) {
     AdmissionFacts facts = SdrMonitorFacts();
-    facts.hdr_mode = recorder_core::HdrMode::Hdr10;
+    facts.hdr_mode = exosnap::engine::HdrMode::Hdr10;
     facts.codec_can_carry_hdr10 = false;
     facts.target_display_hdr_active = false;
     EXPECT_EQ(EvaluateRecordingAdmission(facts), AdmissionBlocker::None);
@@ -78,7 +78,7 @@ TEST(RecordingAdmissionTest, Hdr10OnAnSdrDisplayIsAdmitted) {
 // H.264 + tone-map-to-SDR outputs SDR 8-bit. Explicitly not a conflict.
 TEST(RecordingAdmissionTest, ToneMapToSdrOnAnHdrDisplayIsAdmitted) {
     AdmissionFacts facts = SdrMonitorFacts();
-    facts.hdr_mode = recorder_core::HdrMode::TonemapSdr;
+    facts.hdr_mode = exosnap::engine::HdrMode::TonemapSdr;
     facts.codec_can_carry_hdr10 = false;
     facts.target_display_hdr_active = true;
     EXPECT_EQ(EvaluateRecordingAdmission(facts), AdmissionBlocker::None);
@@ -185,9 +185,9 @@ template <typename Pred> bool PumpUntil(Pred predicate, int max_iterations = 150
     return predicate();
 }
 
-recorder_core::CaptureTarget MonitorTarget() {
-    recorder_core::CaptureTarget target;
-    target.kind = recorder_core::CaptureTarget::Kind::Monitor;
+exosnap::engine::CaptureTarget MonitorTarget() {
+    exosnap::engine::CaptureTarget target;
+    target.kind = exosnap::engine::CaptureTarget::Kind::Monitor;
     // A real primary HMONITOR: the HDR facts are matched through the monitor's
     // Windows device name, so a synthetic handle would resolve to nothing and the
     // HDR gate could never fire.
@@ -228,7 +228,7 @@ capability::DisplayHdrFacts HdrActiveDisplay(std::string name) {
 // space, configured with the given container/codec pair.
 void MakeReadyCoordinator(RecordingCoordinator& coordinator, const std::filesystem::path& folder,
                           capability::Container container, capability::VideoCodec video, capability::AudioCodec audio,
-                          recorder_core::HdrMode hdr_mode = recorder_core::HdrMode::TonemapSdr) {
+                          exosnap::engine::HdrMode hdr_mode = exosnap::engine::HdrMode::TonemapSdr) {
     OutputSettingsModel settings;
     settings.output_folder = folder;
     settings.container = container;
@@ -254,7 +254,7 @@ TEST(RecordingAdmissionStartTest, Hdr10WithH264OnAnHdrDisplayFailsTheStart) {
     RecordingCoordinator coordinator;
     const std::filesystem::path folder = UniqueTempDir(L"hdr_h264");
     MakeReadyCoordinator(coordinator, folder, capability::Container::Mp4, capability::VideoCodec::H264,
-                         capability::AudioCodec::Aac, recorder_core::HdrMode::Hdr10);
+                         capability::AudioCodec::Aac, exosnap::engine::HdrMode::Hdr10);
 
     StubFreeSpace plenty(500ULL * 1024 * 1024 * 1024);
     coordinator.SetDiskSpaceProvider(&plenty);
@@ -294,7 +294,7 @@ TEST(RecordingAdmissionStartTest, Hdr10WithAv1OnAnHdrDisplayPassesAdmission) {
     RecordingCoordinator coordinator;
     const std::filesystem::path folder = UniqueTempDir(L"hdr_av1");
     MakeReadyCoordinator(coordinator, folder, capability::Container::Matroska, capability::VideoCodec::Av1,
-                         capability::AudioCodec::Opus, recorder_core::HdrMode::Hdr10);
+                         capability::AudioCodec::Opus, exosnap::engine::HdrMode::Hdr10);
 
     StubFreeSpace plenty(500ULL * 1024 * 1024 * 1024);
     coordinator.SetDiskSpaceProvider(&plenty);
@@ -374,15 +374,15 @@ TEST(RecordingAdmissionStartTest, ProvenBlackWindowTargetFailsTheStart) {
     coordinator.SetDiskSpaceProvider(&plenty);
     coordinator.SetDisplayFactsProvider([] { return std::vector<capability::DisplayHdrFacts>{}; });
     coordinator.SetWindowExclusiveEvidenceProvider(
-        [](const recorder_core::CaptureTarget&) { return ExclusiveEvidence::ProvenBlack; });
+        [](const exosnap::engine::CaptureTarget&) { return ExclusiveEvidence::ProvenBlack; });
 
     std::vector<UiRecordingState> states;
     coordinator.SetStateChangedCallback([&](UiRecordingState s) { states.push_back(s); });
     std::optional<UiRecordingResult> failure;
     coordinator.SetResultReadyCallback([&](const UiRecordingResult& r) { failure = r; });
 
-    recorder_core::CaptureTarget window;
-    window.kind = recorder_core::CaptureTarget::Kind::Window;
+    exosnap::engine::CaptureTarget window;
+    window.kind = exosnap::engine::CaptureTarget::Kind::Window;
     window.native_id = reinterpret_cast<uint64_t>(GetDesktopWindow());
     window.description = "[window]";
 
@@ -414,15 +414,15 @@ TEST(RecordingAdmissionStartTest, SuspectedWindowTargetPassesAdmission) {
     GatedDisplayFacts gate({});
     coordinator.SetDisplayFactsProvider(gate.Provider());
     coordinator.SetWindowExclusiveEvidenceProvider(
-        [](const recorder_core::CaptureTarget&) { return ExclusiveEvidence::Suspected; });
+        [](const exosnap::engine::CaptureTarget&) { return ExclusiveEvidence::Suspected; });
 
     std::vector<UiRecordingState> states;
     coordinator.SetStateChangedCallback([&](UiRecordingState s) { states.push_back(s); });
     std::optional<UiRecordingResult> failure;
     coordinator.SetResultReadyCallback([&](const UiRecordingResult& r) { failure = r; });
 
-    recorder_core::CaptureTarget window;
-    window.kind = recorder_core::CaptureTarget::Kind::Window;
+    exosnap::engine::CaptureTarget window;
+    window.kind = exosnap::engine::CaptureTarget::Kind::Window;
     window.native_id = reinterpret_cast<uint64_t>(GetDesktopWindow());
     window.description = "[window]";
 
@@ -452,12 +452,12 @@ TEST(RecordingAdmissionStartTest, DiskHardStopStillBlocksAndKeepsItsOwnReason) {
     // HDR10 + a ProvenBlack window below: both admission blockers would apply, so
     // the disk gate winning proves it still runs first.
     MakeReadyCoordinator(coordinator, folder, capability::Container::Matroska, capability::VideoCodec::Av1,
-                         capability::AudioCodec::Opus, recorder_core::HdrMode::Hdr10);
+                         capability::AudioCodec::Opus, exosnap::engine::HdrMode::Hdr10);
 
     StubFreeSpace empty(diagnostics::kHardStopFreeBytes / 2);
     coordinator.SetDiskSpaceProvider(&empty);
     coordinator.SetWindowExclusiveEvidenceProvider(
-        [](const recorder_core::CaptureTarget&) { return ExclusiveEvidence::ProvenBlack; });
+        [](const exosnap::engine::CaptureTarget&) { return ExclusiveEvidence::ProvenBlack; });
 
     std::optional<UiRecordingResult> failure;
     coordinator.SetResultReadyCallback([&](const UiRecordingResult& r) { failure = r; });
@@ -570,8 +570,8 @@ TEST(RecoveryProtectionTest, FailedManifestAddIsReportedAndDoesNotBlockTheStart)
     // checks (no display facts resolve for it, so the HDR gate stays silent) and
     // the engine's capture open then fails immediately — no capture is ever
     // duplicated and no output file is produced.
-    recorder_core::CaptureTarget bogus;
-    bogus.kind = recorder_core::CaptureTarget::Kind::Monitor;
+    exosnap::engine::CaptureTarget bogus;
+    bogus.kind = exosnap::engine::CaptureTarget::Kind::Monitor;
     bogus.native_id = 1;
     bogus.description = "\\\\.\\DISPLAY_NONE";
 

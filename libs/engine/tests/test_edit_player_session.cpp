@@ -1,0 +1,46 @@
+#include <gtest/gtest.h>
+
+#include "exosnap/engine/edit_player_session.h"
+
+#include <filesystem>
+
+namespace {
+
+using exosnap::engine::EditPlayerSession;
+
+TEST(EditPlayerSession, OpenNonexistentFileFails) {
+    EditPlayerSession session;
+    std::string err;
+    EXPECT_FALSE(session.Open(std::filesystem::path("Z:/does/not/exist.mkv"), err));
+}
+
+TEST(EditPlayerSession, ClosedSessionReportsNoAudioStream) {
+    EditPlayerSession session;
+    EXPECT_FALSE(session.HasAudioStream());
+}
+
+TEST(EditPlayerSession, PlayPauseSeekWithoutOpenAreSafeNoOps) {
+    EditPlayerSession session;
+    session.Play();
+    session.Pause();
+    session.SeekTo(0);
+    SUCCEED();
+}
+
+TEST(EditPlayerSession, CloseWithoutOpenIsSafeNoOp) {
+    EditPlayerSession session;
+    session.Close();
+    SUCCEED();
+}
+
+TEST(EditPlayerSession, CurrentPositionMsWithoutAudioStreamIsZero) {
+    EditPlayerSession session;
+    EXPECT_EQ(session.CurrentPositionMs(), 0);
+}
+
+TEST(EditPlayerSession, ClosedSessionReportsUnknownFrameRate) {
+    EditPlayerSession session;
+    EXPECT_DOUBLE_EQ(session.VideoFrameRate(), 0.0);
+}
+
+} // namespace

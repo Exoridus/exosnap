@@ -41,11 +41,11 @@ reject it.
 
 ### Engine model and encoder
 
-- `recorder_core::AudioCodec` gains `Pcm` (the enum was `{AacMf, Opus}`).
-  `capability::AudioCodec::Pcm` ↔ `recorder_core::AudioCodec::Pcm` everywhere the
+- `exosnap::engine::AudioCodec` gains `Pcm` (the enum was `{AacMf, Opus}`).
+  `capability::AudioCodec::Pcm` ↔ `exosnap::engine::AudioCodec::Pcm` everywhere the
   two enums are mapped (`RecordingCoordinator::ApplyOutputSettingsToRecorderConfig`,
   `translation.cpp`, the visual-harness scenario mapper, history/label helpers).
-- `PcmAudioEncoder` (`libs/recorder_core/src/pcm_audio_encoder.{h,cpp}`)
+- `PcmAudioEncoder` (`libs/engine/src/pcm_audio_encoder.{h,cpp}`)
   implements the existing `IAudioEncoder` interface so the audio thread and mux
   path treat it identically to Opus/AAC. It is a **passthrough**: each
   `FeedFloat32` call converts the interleaved Float32 buffer to interleaved S16LE
@@ -70,7 +70,7 @@ reject it.
 - The audio-track builder adds a PCM path: CodecID `A_PCM/INT_LIT`, **no**
   CodecPrivate, and `KaxAudioBitDepth = 16` in the track audio header (alongside
   the existing 48000 Hz / 2-channel fields). `mux_thread.cpp` maps
-  `recorder_core::AudioCodec` → `StreamAudioCodec`.
+  `exosnap::engine::AudioCodec` → `StreamAudioCodec`.
 
 ### Validation and capability gating
 

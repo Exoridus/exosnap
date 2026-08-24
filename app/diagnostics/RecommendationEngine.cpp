@@ -44,7 +44,7 @@ RecommendationEngine::RecommendationEngine(const capability::CapabilitySet& caps
                                            const capability::UserRecorderConfig& config, uint32_t monitor_refresh_rate,
                                            std::optional<uint64_t> output_drive_free_bytes, bool is_profile_supported,
                                            std::string output_filesystem_name,
-                                           const recorder_core::RecordingDiagnosticsSnapshot* live_snapshot,
+                                           const exosnap::engine::RecordingDiagnosticsSnapshot* live_snapshot,
                                            const PresentSample* present)
     : caps_(caps), config_(config), monitor_refresh_rate_(monitor_refresh_rate),
       output_drive_free_bytes_(output_drive_free_bytes), is_profile_supported_(is_profile_supported),
@@ -52,7 +52,7 @@ RecommendationEngine::RecommendationEngine(const capability::CapabilitySet& caps
     // Consume the optional live snapshot only when it carries a real present-cadence
     // measurement (DXGI OD path, past warm-up). Everything else stays neutral.
     if (live_snapshot != nullptr && live_snapshot->valid &&
-        live_snapshot->capture.present_cadence_availability == recorder_core::MetricAvailability::Available) {
+        live_snapshot->capture.present_cadence_availability == exosnap::engine::MetricAvailability::Available) {
         live_present_available_ = true;
         live_cfr_ = live_snapshot->video_encoder.cfr;
         live_present_jitter_ms_ = live_snapshot->capture.source_present_jitter_ms;
@@ -64,7 +64,7 @@ RecommendationEngine::RecommendationEngine(const capability::CapabilitySet& caps
     // Consume live disk-write latency only when the writer reports it (streaming Matroska;
     // the MP4 post-stop remux marks it Unavailable rather than a fake zero).
     if (live_snapshot != nullptr && live_snapshot->valid &&
-        live_snapshot->disk.latency_availability == recorder_core::MetricAvailability::Available) {
+        live_snapshot->disk.latency_availability == exosnap::engine::MetricAvailability::Available) {
         live_disk_write_available_ = true;
         live_disk_peak_write_ms_ = live_snapshot->disk.peak_write_ms;
     }
@@ -171,7 +171,7 @@ void RecommendationEngine::checkRefreshRateMismatch(DiagnosticChecklist& checkli
     // result (one primary fix_action per result) to switch to Smooth (phase-correct) pacing.
     // Smooth is the default and already eliminates this class of judder, so no fix is needed
     // when the user is already on Smooth.
-    if (config_.frame_pacing == recorder_core::FramePacingMode::Newest) {
+    if (config_.frame_pacing == exosnap::engine::FramePacingMode::Newest) {
         DiagnosticResult pr = MakeResult(
             "rec.pacing.smooth", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
             DiagnosticTier::MeasuredProblem, "Phase-correct frame pacing recommended",
@@ -344,7 +344,7 @@ void RecommendationEngine::checkHdrH264Blocker(DiagnosticChecklist& checklist) c
     //   3. The capture target's display is HDR-active. HDR10 auto-detects: on an SDR
     //      desktop the native path never engages, so there is no real conflict. The
     //      caller supplies this via SetCaptureTargetHdrActive (default false).
-    if (config_.hdr_mode != recorder_core::HdrMode::Hdr10) {
+    if (config_.hdr_mode != exosnap::engine::HdrMode::Hdr10) {
         return;
     }
     if (capability::IsSelectable(caps_.QueryHdr10Native(config_.video_codec).level)) {

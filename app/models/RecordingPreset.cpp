@@ -2,8 +2,8 @@
 
 #include <capability/container_compat_registry.h>
 #include <capability/resolver.h>
-#include <recorder_core/audio_track_model.h>
-#include <recorder_core/codec_types.h>
+#include <exosnap/engine/audio_track_model.h>
+#include <exosnap/engine/codec_types.h>
 
 #include <algorithm>
 #include <cctype>
@@ -44,8 +44,8 @@ namespace {
 }
 
 // Compares two AudioTrackPlan values for structural equality.
-[[nodiscard]] bool AudioTrackPlansEqual(const recorder_core::AudioTrackPlan& a,
-                                        const recorder_core::AudioTrackPlan& b) noexcept {
+[[nodiscard]] bool AudioTrackPlansEqual(const exosnap::engine::AudioTrackPlan& a,
+                                        const exosnap::engine::AudioTrackPlan& b) noexcept {
     if (a.tracks.size() != b.tracks.size()) {
         return false;
     }
@@ -60,9 +60,9 @@ namespace {
 }
 
 // Returns the set of enabled AudioSourceKind values from a row vector.
-[[nodiscard]] std::set<recorder_core::AudioSourceKind>
-EnabledSourceKinds(const std::vector<recorder_core::AudioSourceRow>& rows) {
-    std::set<recorder_core::AudioSourceKind> result;
+[[nodiscard]] std::set<exosnap::engine::AudioSourceKind>
+EnabledSourceKinds(const std::vector<exosnap::engine::AudioSourceRow>& rows) {
+    std::set<exosnap::engine::AudioSourceKind> result;
     for (const auto& row : rows) {
         if (row.enabled) {
             result.insert(row.kind);
@@ -113,9 +113,9 @@ RecordingPreset MakeDefaultPreset() {
     preset.config.output.audio_codec = capability::AudioCodec::Opus;
 
     // Video
-    preset.config.video.cq = recorder_core::CanonicalCq(recorder_core::QualityPreset::High);
+    preset.config.video.cq = exosnap::engine::CanonicalCq(exosnap::engine::QualityPreset::High);
     preset.config.video.cfr = true;
-    preset.config.video.frame_pacing = recorder_core::FramePacingMode::Smooth;
+    preset.config.video.frame_pacing = exosnap::engine::FramePacingMode::Smooth;
     preset.config.video.capture_cursor = true;
     preset.config.video.frame_rate_num = 60;
     preset.config.video.frame_rate_den = 1;
@@ -123,10 +123,10 @@ RecordingPreset MakeDefaultPreset() {
     // Audio
     preset.config.audio.target_kind = capability::CaptureTargetKind::Display;
     preset.config.audio.source_rows = {
-        {recorder_core::AudioSourceKind::SystemOutput, true, false},
-        {recorder_core::AudioSourceKind::Mic, false, false},
+        {exosnap::engine::AudioSourceKind::SystemOutput, true, false},
+        {exosnap::engine::AudioSourceKind::Mic, false, false},
     };
-    preset.config.audio.mic_channel_mode = recorder_core::MicChannelMode::Auto;
+    preset.config.audio.mic_channel_mode = exosnap::engine::MicChannelMode::Auto;
     preset.config.audio.selected_mic_device_id = std::nullopt;
     preset.config.audio.mic_gain_linear = 1.0f;
     preset.config.audio.selected_window_pid = std::nullopt;
@@ -180,7 +180,7 @@ std::vector<RecordingPreset> MakeBuiltInPresets() {
     RecordingPreset quality = MakeDefaultPreset();
     quality.id = std::string(kQualityPresetId);
     quality.name = "Quality";
-    quality.config.video.cq = recorder_core::CanonicalCq(recorder_core::QualityPreset::Ultra);
+    quality.config.video.cq = exosnap::engine::CanonicalCq(exosnap::engine::QualityPreset::Ultra);
     result.push_back(std::move(quality));
 
     // Compact: the smallest files that still read, for long screen recordings.
@@ -192,8 +192,8 @@ std::vector<RecordingPreset> MakeBuiltInPresets() {
     RecordingPreset compact = MakeDefaultPreset();
     compact.id = std::string(kCompactPresetId);
     compact.name = "Compact";
-    compact.config.video.cq = recorder_core::CanonicalCq(recorder_core::QualityPreset::Low);
-    compact.config.output.nvenc_preset = recorder_core::NvencPreset::P6;
+    compact.config.video.cq = exosnap::engine::CanonicalCq(exosnap::engine::QualityPreset::Low);
+    compact.config.output.nvenc_preset = exosnap::engine::NvencPreset::P6;
     result.push_back(std::move(compact));
 
     // Performance: maximum encoder headroom at the default quality tier. P2
@@ -203,7 +203,7 @@ std::vector<RecordingPreset> MakeBuiltInPresets() {
     RecordingPreset performance = MakeDefaultPreset();
     performance.id = std::string(kPerformancePresetId);
     performance.name = "Performance";
-    performance.config.output.nvenc_preset = recorder_core::NvencPreset::P2;
+    performance.config.output.nvenc_preset = exosnap::engine::NvencPreset::P2;
     result.push_back(std::move(performance));
 
     // Compatibility: editing, upload, GPUs without AV1 encode (pre-RTX-40). It
@@ -289,11 +289,11 @@ RecordingPresetConfig SanitizePresetConfig(RecordingPresetConfig config) {
     {
         const int fp = static_cast<int>(config.video.frame_pacing);
         if (fp < 0 || fp > 1) {
-            config.video.frame_pacing = recorder_core::FramePacingMode::Smooth;
+            config.video.frame_pacing = exosnap::engine::FramePacingMode::Smooth;
         }
     }
     // Video: rate_control — default to ConstantQuality if an unknown value slips through.
-    using RC = recorder_core::RateControlMode;
+    using RC = exosnap::engine::RateControlMode;
     if (config.video.rate_control != RC::ConstantQuality && config.video.rate_control != RC::VariableBitrate &&
         config.video.rate_control != RC::ConstantBitrate && config.video.rate_control != RC::Lossless) {
         config.video.rate_control = RC::ConstantQuality;
@@ -316,7 +316,7 @@ RecordingPresetConfig SanitizePresetConfig(RecordingPresetConfig config) {
     // state (receded vs. live) follows the target, and that derivation belongs to
     // PresentationStateBuilder — sanitize no longer strips or rewrites source rows here.
     // The actual recording-time audio plan still normalizes away the App row for a
-    // non-Window target (recorder_core::NormalizeSourceRowsForTarget, via BuildAudioPlan),
+    // non-Window target (exosnap::engine::NormalizeSourceRowsForTarget, via BuildAudioPlan),
     // since a display/region capture genuinely has no process to scope it to.
 
     // Audio: the first source row has no row above it, so a stored "merge with above"
@@ -335,10 +335,10 @@ RecordingPresetConfig SanitizePresetConfig(RecordingPresetConfig config) {
     for (auto& row : config.audio.source_rows) {
         if (!std::isfinite(row.gain_db)) {
             row.gain_db = 0.0f;
-        } else if (row.gain_db < recorder_core::kMinGainDb) {
-            row.gain_db = recorder_core::kMinGainDb;
-        } else if (row.gain_db > recorder_core::kMaxGainDb) {
-            row.gain_db = recorder_core::kMaxGainDb;
+        } else if (row.gain_db < exosnap::engine::kMinGainDb) {
+            row.gain_db = exosnap::engine::kMinGainDb;
+        } else if (row.gain_db > exosnap::engine::kMaxGainDb) {
+            row.gain_db = exosnap::engine::kMaxGainDb;
         }
         // muted is bool — no sanitization needed.
     }
@@ -348,8 +348,8 @@ RecordingPresetConfig SanitizePresetConfig(RecordingPresetConfig config) {
     // broadest safe range (Opus's, the wider of the two -- see codec_types.h).
     // Codec-specific clamping (kOpusBitrateKbpsMin/Max vs. kAacBitrateKbpsMin/Max)
     // happens in the engine/UI.
-    if (config.audio.audio_bitrate_kbps > recorder_core::kOpusBitrateKbpsMax) {
-        config.audio.audio_bitrate_kbps = recorder_core::kOpusBitrateKbpsMax;
+    if (config.audio.audio_bitrate_kbps > exosnap::engine::kOpusBitrateKbpsMax) {
+        config.audio.audio_bitrate_kbps = exosnap::engine::kOpusBitrateKbpsMax;
     }
     // opus_complexity: clamp to [0, 10].
     if (config.audio.opus_complexity < 0) {
@@ -359,7 +359,7 @@ RecordingPresetConfig SanitizePresetConfig(RecordingPresetConfig config) {
     }
     // opus_frame_duration: reset unknown values to the default (20 ms).
     {
-        using D = recorder_core::OpusFrameDuration;
+        using D = exosnap::engine::OpusFrameDuration;
         const int d = static_cast<int>(config.audio.opus_frame_duration);
         if (d != static_cast<int>(D::Ms20) && d != static_cast<int>(D::Ms10) && d != static_cast<int>(D::Ms5) &&
             d != static_cast<int>(D::Ms2_5)) {
@@ -709,8 +709,8 @@ bool NormalizedConfigEquals(const RecordingPresetConfig& a, const RecordingPrese
 
     // Semantic audio-row equality: same resolved plan AND same enabled-source set.
     {
-        const recorder_core::AudioTrackPlan plan_a = recorder_core::ResolveAudioTracks(a.audio.source_rows);
-        const recorder_core::AudioTrackPlan plan_b = recorder_core::ResolveAudioTracks(b.audio.source_rows);
+        const exosnap::engine::AudioTrackPlan plan_a = exosnap::engine::ResolveAudioTracks(a.audio.source_rows);
+        const exosnap::engine::AudioTrackPlan plan_b = exosnap::engine::ResolveAudioTracks(b.audio.source_rows);
         if (!AudioTrackPlansEqual(plan_a, plan_b)) {
             return false;
         }
@@ -988,8 +988,8 @@ std::string_view ConfigDirtyDifference(const RecordingPresetConfig& a, const Rec
 
     // Semantic audio-row equality: same resolved plan AND same enabled-source set.
     {
-        const recorder_core::AudioTrackPlan plan_a = recorder_core::ResolveAudioTracks(a.audio.source_rows);
-        const recorder_core::AudioTrackPlan plan_b = recorder_core::ResolveAudioTracks(b.audio.source_rows);
+        const exosnap::engine::AudioTrackPlan plan_a = exosnap::engine::ResolveAudioTracks(a.audio.source_rows);
+        const exosnap::engine::AudioTrackPlan plan_b = exosnap::engine::ResolveAudioTracks(b.audio.source_rows);
         if (!AudioTrackPlansEqual(plan_a, plan_b)) {
             return "audio.source_rows (resolved track plan)";
         }

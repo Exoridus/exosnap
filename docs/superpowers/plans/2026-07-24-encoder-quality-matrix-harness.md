@@ -4,14 +4,14 @@
 
 **Goal:** Build a dev-only harness that objectively measures NVENC quality-per-bitrate (SSIM/VMAF/BD-rate) against ExoSnap's real encoder code path, so future encoder-quality changes have evidence instead of guesswork.
 
-**Architecture:** A new pure-function library slice in `libs/recorder_core` (Y4M parsing, I420→NV12 conversion, IVF framing — CI-tested, no GPU) backs a new dev-only CLI probe (`tools/probes/probe_encode_file`, gated behind `EXOSNAP_BUILD_PROBES=ON`, never packaged) that drives the real `NvencVideoEncoder`. A Python orchestration script (`scripts/dev/encoder_quality_matrix.py`) sweeps preset/rate-control combinations through the probe, scores each against a reference clip with an external `ffmpeg` (`libvmaf`), and computes BD-rate.
+**Architecture:** A new pure-function library slice in `libs/engine` (Y4M parsing, I420→NV12 conversion, IVF framing — CI-tested, no GPU) backs a new dev-only CLI probe (`tools/probes/probe_encode_file`, gated behind `EXOSNAP_BUILD_PROBES=ON`, never packaged) that drives the real `NvencVideoEncoder`. A Python orchestration script (`scripts/dev/encoder_quality_matrix.py`) sweeps preset/rate-control combinations through the probe, scores each against a reference clip with an external `ffmpeg` (`libvmaf`), and computes BD-rate.
 
-**Tech Stack:** C++20 (recorder_core conventions), Python 3 stdlib only, external `ffmpeg` CLI with `libvmaf` (developer machine only, never vendored).
+**Tech Stack:** C++20 (engine conventions), Python 3 stdlib only, external `ffmpeg` CLI with `libvmaf` (developer machine only, never vendored).
 
 ## Global Constraints
 
 - Nothing in this plan ships in the product build or the packaged installer — every new file lives under `tools/probes/` (gated `EXOSNAP_BUILD_PROBES=ON`, default OFF) or `scripts/dev/`/`docs/development/`.
-- No `libvmaf`/quality-metric dependency is vendored or linked into `recorder_core` or any shipped binary — metrics only ever run through the developer's own `ffmpeg` CLI, invoked as a subprocess from the Python script.
+- No `libvmaf`/quality-metric dependency is vendored or linked into `engine` or any shipped binary — metrics only ever run through the developer's own `ffmpeg` CLI, invoked as a subprocess from the Python script.
 - 8-bit 4:2:0 only in this pass (`ChromaSubsampling::Cs420`, `BitDepth::Bit8`, `DXGI_FORMAT_NV12`). No 10-bit/P010, no HDR.
 - Pure functions (Y4M parsing, I420→NV12, IVF framing, BD-rate math) get CI-run unit tests with no GPU dependency. The GPU-driving parts (`probe_encode_file`'s `main.cpp`, the Python script's actual encode/measure loop) are dev-only, verified manually/live — never added to CI, matching how every other `tools/probes/*` target and every live-hardware check in this project already works.
 - `encoder_quality_matrix.py` is stdlib-only (no numpy/pandas/etc.), matching `scripts/dev/analyze-encode-perf.py`.
@@ -22,10 +22,10 @@
 ## File Structure
 
 **New, CI-tested pure functions (product library, but zero product-runtime cost — nothing calls them except the new probe and their own tests):**
-- `libs/recorder_core/src/y4m_reader.h` / `.cpp` — parses a YUV4MPEG2 header line and reads one raw I420 frame at a time from an in-memory buffer.
-- `libs/recorder_core/src/yuv_convert.h` / `.cpp` — converts one I420 frame (3 separate planes) to one NV12 frame (Y plane + interleaved UV plane) as a flat byte buffer ready for a single `UpdateSubresource` call.
-- `libs/recorder_core/src/elementary_stream_writer.h` / `.cpp` — builds IVF file/frame headers for AV1 output. (H.264/HEVC need no framing function: NVENC already emits Annex-B start-coded bitstream — see `annexb_to_avcc.cpp` for existing confirmation of this — so those two codecs are a direct byte concatenation in `main.cpp`, not a separate pure function.)
-- `libs/recorder_core/tests/test_y4m_reader.cpp`, `test_yuv_convert.cpp`, `test_elementary_stream_writer.cpp` — new gtest targets, registered in `libs/recorder_core/CMakeLists.txt` next to the existing `test_nvenc_*` registrations.
+- `libs/engine/src/y4m_reader.h` / `.cpp` — parses a YUV4MPEG2 header line and reads one raw I420 frame at a time from an in-memory buffer.
+- `libs/engine/src/yuv_convert.h` / `.cpp` — converts one I420 frame (3 separate planes) to one NV12 frame (Y plane + interleaved UV plane) as a flat byte buffer ready for a single `UpdateSubresource` call.
+- `libs/engine/src/elementary_stream_writer.h` / `.cpp` — builds IVF file/frame headers for AV1 output. (H.264/HEVC need no framing function: NVENC already emits Annex-B start-coded bitstream — see `annexb_to_avcc.cpp` for existing confirmation of this — so those two codecs are a direct byte concatenation in `main.cpp`, not a separate pure function.)
+- `libs/engine/tests/test_y4m_reader.cpp`, `test_yuv_convert.cpp`, `test_elementary_stream_writer.cpp` — new gtest targets, registered in `libs/engine/CMakeLists.txt` next to the existing `test_nvenc_*` registrations.
 
 **New dev-only probe (never built by CI, never packaged):**
 - `tools/probes/probe_encode_file/CMakeLists.txt`
@@ -42,29 +42,29 @@
 ### Task 1: Y4M reader (pure, CI-tested)
 
 **Files:**
-- Create: `libs/recorder_core/src/y4m_reader.h`
-- Create: `libs/recorder_core/src/y4m_reader.cpp`
-- Test: `libs/recorder_core/tests/test_y4m_reader.cpp`
+- Create: `libs/engine/src/y4m_reader.h`
+- Create: `libs/engine/src/y4m_reader.cpp`
+- Test: `libs/engine/tests/test_y4m_reader.cpp`
 
 **Interfaces:**
 - Consumes: nothing outside the standard library.
-- Produces: `recorder_core::Y4mHeader { width, height, fps_num, fps_den, header_bytes }`,
-  `recorder_core::ParseY4mHeader(std::string_view, std::string& out_error) -> std::optional<Y4mHeader>`,
-  `recorder_core::I420FrameSize(uint32_t width, uint32_t height) -> size_t`,
-  `recorder_core::Y4mFrame { data_offset, data_size, next_offset }`,
-  `recorder_core::ReadY4mFrame(std::string_view data, size_t offset, uint32_t width, uint32_t height, std::string& out_error) -> std::optional<Y4mFrame>`.
+- Produces: `exosnap::engine::Y4mHeader { width, height, fps_num, fps_den, header_bytes }`,
+  `exosnap::engine::ParseY4mHeader(std::string_view, std::string& out_error) -> std::optional<Y4mHeader>`,
+  `exosnap::engine::I420FrameSize(uint32_t width, uint32_t height) -> size_t`,
+  `exosnap::engine::Y4mFrame { data_offset, data_size, next_offset }`,
+  `exosnap::engine::ReadY4mFrame(std::string_view data, size_t offset, uint32_t width, uint32_t height, std::string& out_error) -> std::optional<Y4mFrame>`.
   Task 5 (the probe's `main.cpp`) calls all four of these by name.
 
 - [ ] **Step 1: Write the failing test**
 
-Create `libs/recorder_core/tests/test_y4m_reader.cpp`:
+Create `libs/engine/tests/test_y4m_reader.cpp`:
 
 ```cpp
 #include "../src/y4m_reader.h"
 
 #include <gtest/gtest.h>
 
-namespace recorder_core {
+namespace exosnap::engine {
 namespace {
 
 TEST(ParseY4mHeader, ParsesWidthHeightFpsAndHeaderLength) {
@@ -167,7 +167,7 @@ TEST(ReadY4mFrame, RejectsTruncatedFrameData) {
 }
 
 } // namespace
-} // namespace recorder_core
+} // namespace exosnap::engine
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -177,7 +177,7 @@ Expected: FAIL — `y4m_reader.h` does not exist yet (compile error).
 
 - [ ] **Step 3: Write the header**
 
-Create `libs/recorder_core/src/y4m_reader.h`:
+Create `libs/engine/src/y4m_reader.h`:
 
 ```cpp
 #pragma once
@@ -192,7 +192,7 @@ Create `libs/recorder_core/src/y4m_reader.h`:
 #include <string>
 #include <string_view>
 
-namespace recorder_core {
+namespace exosnap::engine {
 
 struct Y4mHeader {
     uint32_t width = 0;
@@ -236,19 +236,19 @@ struct Y4mFrame {
 std::optional<Y4mFrame> ReadY4mFrame(std::string_view data, size_t offset, uint32_t width, uint32_t height,
                                      std::string& out_error);
 
-} // namespace recorder_core
+} // namespace exosnap::engine
 ```
 
 - [ ] **Step 4: Write the implementation**
 
-Create `libs/recorder_core/src/y4m_reader.cpp`:
+Create `libs/engine/src/y4m_reader.cpp`:
 
 ```cpp
 #include "y4m_reader.h"
 
 #include <charconv>
 
-namespace recorder_core {
+namespace exosnap::engine {
 
 namespace {
 
@@ -373,19 +373,19 @@ std::optional<Y4mFrame> ReadY4mFrame(std::string_view data, size_t offset, uint3
     return frame;
 }
 
-} // namespace recorder_core
+} // namespace exosnap::engine
 ```
 
 - [ ] **Step 5: Register the gtest target**
 
-In `libs/recorder_core/CMakeLists.txt`, find the block registering `test_split_sentinel_policy` (added for the async NVENC work — search for `NAME test_split_sentinel_policy`) and add immediately after its `target_include_directories` line:
+In `libs/engine/CMakeLists.txt`, find the block registering `test_split_sentinel_policy` (added for the async NVENC work — search for `NAME test_split_sentinel_policy`) and add immediately after its `target_include_directories` line:
 
 ```cmake
 # test_y4m_reader: pure unit tests for the YUV4MPEG2 header/frame parser
 # backing the encoder quality matrix harness's probe (no GPU needed).
 exosnap_add_gtest(
     NAME test_y4m_reader
-    TEST_PREFIX recorder_core.
+    TEST_PREFIX engine.
     SOURCES tests/test_y4m_reader.cpp src/y4m_reader.cpp
 )
 target_include_directories(test_y4m_reader PRIVATE src)
@@ -400,9 +400,9 @@ Expected: all `recorder_core.ParseY4mHeader.*`, `recorder_core.I420FrameSize.*`,
 - [ ] **Step 7: Commit**
 
 ```bash
-git add libs/recorder_core/src/y4m_reader.h libs/recorder_core/src/y4m_reader.cpp \
-        libs/recorder_core/tests/test_y4m_reader.cpp libs/recorder_core/CMakeLists.txt
-git commit -m "feat(recorder_core): add a pure YUV4MPEG2 header/frame reader"
+git add libs/engine/src/y4m_reader.h libs/engine/src/y4m_reader.cpp \
+        libs/engine/tests/test_y4m_reader.cpp libs/engine/CMakeLists.txt
+git commit -m "feat(engine): add a pure YUV4MPEG2 header/frame reader"
 ```
 
 ---
@@ -410,25 +410,25 @@ git commit -m "feat(recorder_core): add a pure YUV4MPEG2 header/frame reader"
 ### Task 2: I420→NV12 converter (pure, CI-tested)
 
 **Files:**
-- Create: `libs/recorder_core/src/yuv_convert.h`
-- Create: `libs/recorder_core/src/yuv_convert.cpp`
-- Test: `libs/recorder_core/tests/test_yuv_convert.cpp`
+- Create: `libs/engine/src/yuv_convert.h`
+- Create: `libs/engine/src/yuv_convert.cpp`
+- Test: `libs/engine/tests/test_yuv_convert.cpp`
 
 **Interfaces:**
 - Consumes: nothing beyond the standard library. Independent of Task 1 (takes raw plane pointers, not a `Y4mFrame`).
-- Produces: `recorder_core::ConvertI420ToNv12(const uint8_t* i420, uint32_t width, uint32_t height, std::vector<uint8_t>& out_nv12)`.
+- Produces: `exosnap::engine::ConvertI420ToNv12(const uint8_t* i420, uint32_t width, uint32_t height, std::vector<uint8_t>& out_nv12)`.
   Task 5's `main.cpp` calls this by name; its output buffer is what gets passed straight to `ID3D11DeviceContext::UpdateSubresource`.
 
 - [ ] **Step 1: Write the failing test**
 
-Create `libs/recorder_core/tests/test_yuv_convert.cpp`:
+Create `libs/engine/tests/test_yuv_convert.cpp`:
 
 ```cpp
 #include "../src/yuv_convert.h"
 
 #include <gtest/gtest.h>
 
-namespace recorder_core {
+namespace exosnap::engine {
 namespace {
 
 TEST(ConvertI420ToNv12, OutputSizeMatchesNv12Layout) {
@@ -480,7 +480,7 @@ TEST(ConvertI420ToNv12, HandlesLargerEvenDimensions) {
 }
 
 } // namespace
-} // namespace recorder_core
+} // namespace exosnap::engine
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -490,7 +490,7 @@ Expected: FAIL — `yuv_convert.h` does not exist yet.
 
 - [ ] **Step 3: Write the header**
 
-Create `libs/recorder_core/src/yuv_convert.h`:
+Create `libs/engine/src/yuv_convert.h`:
 
 ```cpp
 #pragma once
@@ -505,7 +505,7 @@ Create `libs/recorder_core/src/yuv_convert.h`:
 #include <cstdint>
 #include <vector>
 
-namespace recorder_core {
+namespace exosnap::engine {
 
 // Converts one I420 frame (width*height Y bytes, then (width/2)*(height/2) U
 // bytes, then (width/2)*(height/2) V bytes — see Y4mFrame/I420FrameSize) into
@@ -514,17 +514,17 @@ namespace recorder_core {
 // `out_nv12` is resized to exactly the NV12 frame size and fully overwritten.
 void ConvertI420ToNv12(const uint8_t* i420, uint32_t width, uint32_t height, std::vector<uint8_t>& out_nv12);
 
-} // namespace recorder_core
+} // namespace exosnap::engine
 ```
 
 - [ ] **Step 4: Write the implementation**
 
-Create `libs/recorder_core/src/yuv_convert.cpp`:
+Create `libs/engine/src/yuv_convert.cpp`:
 
 ```cpp
 #include "yuv_convert.h"
 
-namespace recorder_core {
+namespace exosnap::engine {
 
 void ConvertI420ToNv12(const uint8_t* i420, uint32_t width, uint32_t height, std::vector<uint8_t>& out_nv12) {
     const size_t lumaSize = static_cast<size_t>(width) * height;
@@ -546,19 +546,19 @@ void ConvertI420ToNv12(const uint8_t* i420, uint32_t width, uint32_t height, std
     }
 }
 
-} // namespace recorder_core
+} // namespace exosnap::engine
 ```
 
 - [ ] **Step 5: Register the gtest target**
 
-In `libs/recorder_core/CMakeLists.txt`, immediately after the `test_y4m_reader` block from Task 1, add:
+In `libs/engine/CMakeLists.txt`, immediately after the `test_y4m_reader` block from Task 1, add:
 
 ```cmake
 # test_yuv_convert: pure unit tests for I420->NV12 conversion backing the
 # encoder quality matrix harness's probe (no GPU needed).
 exosnap_add_gtest(
     NAME test_yuv_convert
-    TEST_PREFIX recorder_core.
+    TEST_PREFIX engine.
     SOURCES tests/test_yuv_convert.cpp src/yuv_convert.cpp
 )
 target_include_directories(test_yuv_convert PRIVATE src)
@@ -573,9 +573,9 @@ Expected: all `recorder_core.ConvertI420ToNv12.*` cases PASS.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add libs/recorder_core/src/yuv_convert.h libs/recorder_core/src/yuv_convert.cpp \
-        libs/recorder_core/tests/test_yuv_convert.cpp libs/recorder_core/CMakeLists.txt
-git commit -m "feat(recorder_core): add a pure I420-to-NV12 converter"
+git add libs/engine/src/yuv_convert.h libs/engine/src/yuv_convert.cpp \
+        libs/engine/tests/test_yuv_convert.cpp libs/engine/CMakeLists.txt
+git commit -m "feat(engine): add a pure I420-to-NV12 converter"
 ```
 
 ---
@@ -583,26 +583,26 @@ git commit -m "feat(recorder_core): add a pure I420-to-NV12 converter"
 ### Task 3: Elementary stream writer — IVF framing for AV1 (pure, CI-tested)
 
 **Files:**
-- Create: `libs/recorder_core/src/elementary_stream_writer.h`
-- Create: `libs/recorder_core/src/elementary_stream_writer.cpp`
-- Test: `libs/recorder_core/tests/test_elementary_stream_writer.cpp`
+- Create: `libs/engine/src/elementary_stream_writer.h`
+- Create: `libs/engine/src/elementary_stream_writer.cpp`
+- Test: `libs/engine/tests/test_elementary_stream_writer.cpp`
 
 **Interfaces:**
 - Consumes: nothing beyond the standard library.
-- Produces: `recorder_core::BuildIvfFileHeader(width, height, fps_num, fps_den, frame_count) -> std::vector<uint8_t>` (32 bytes),
-  `recorder_core::BuildIvfFrameHeader(frame_size_bytes, frame_index) -> std::vector<uint8_t>` (12 bytes).
+- Produces: `exosnap::engine::BuildIvfFileHeader(width, height, fps_num, fps_den, frame_count) -> std::vector<uint8_t>` (32 bytes),
+  `exosnap::engine::BuildIvfFrameHeader(frame_size_bytes, frame_index) -> std::vector<uint8_t>` (12 bytes).
   Task 5's `main.cpp` calls both by name when `--vcodec av1` is selected; H.264/HEVC skip this file entirely and write `EncodedVideoPacket::bytes` directly (NVENC already emits Annex-B start codes for those two codecs — confirmed by the existing `annexb_to_avcc.cpp`/`annexb_to_hvcc.cpp` converters, which only make sense if the input already has start codes).
 
 - [ ] **Step 1: Write the failing test**
 
-Create `libs/recorder_core/tests/test_elementary_stream_writer.cpp`:
+Create `libs/engine/tests/test_elementary_stream_writer.cpp`:
 
 ```cpp
 #include "../src/elementary_stream_writer.h"
 
 #include <gtest/gtest.h>
 
-namespace recorder_core {
+namespace exosnap::engine {
 namespace {
 
 uint16_t ReadU16Le(const std::vector<uint8_t>& b, size_t off) {
@@ -667,7 +667,7 @@ TEST(BuildIvfFrameHeader, HandlesLargeFrameIndex) {
 }
 
 } // namespace
-} // namespace recorder_core
+} // namespace exosnap::engine
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -677,7 +677,7 @@ Expected: FAIL — `elementary_stream_writer.h` does not exist yet.
 
 - [ ] **Step 3: Write the header**
 
-Create `libs/recorder_core/src/elementary_stream_writer.h`:
+Create `libs/engine/src/elementary_stream_writer.h`:
 
 ```cpp
 #pragma once
@@ -693,7 +693,7 @@ Create `libs/recorder_core/src/elementary_stream_writer.h`:
 #include <cstdint>
 #include <vector>
 
-namespace recorder_core {
+namespace exosnap::engine {
 
 // Builds the 32-byte IVF file header: "DKIF" signature, u16 version (0), u16
 // header length (32), 4-byte FourCC ("AV01"), u16 width, u16 height, u32
@@ -709,17 +709,17 @@ std::vector<uint8_t> BuildIvfFileHeader(uint32_t width, uint32_t height, uint32_
 // ffmpeg/ffprobe to reconstruct correct timing).
 std::vector<uint8_t> BuildIvfFrameHeader(uint32_t frame_size_bytes, uint64_t frame_index);
 
-} // namespace recorder_core
+} // namespace exosnap::engine
 ```
 
 - [ ] **Step 4: Write the implementation**
 
-Create `libs/recorder_core/src/elementary_stream_writer.cpp`:
+Create `libs/engine/src/elementary_stream_writer.cpp`:
 
 ```cpp
 #include "elementary_stream_writer.h"
 
-namespace recorder_core {
+namespace exosnap::engine {
 
 namespace {
 
@@ -771,12 +771,12 @@ std::vector<uint8_t> BuildIvfFrameHeader(uint32_t frame_size_bytes, uint64_t fra
     return out;
 }
 
-} // namespace recorder_core
+} // namespace exosnap::engine
 ```
 
 - [ ] **Step 5: Register the gtest target**
 
-In `libs/recorder_core/CMakeLists.txt`, immediately after the `test_yuv_convert` block from Task 2, add:
+In `libs/engine/CMakeLists.txt`, immediately after the `test_yuv_convert` block from Task 2, add:
 
 ```cmake
 # test_elementary_stream_writer: pure unit tests for IVF header framing
@@ -784,7 +784,7 @@ In `libs/recorder_core/CMakeLists.txt`, immediately after the `test_yuv_convert`
 # probe (no GPU needed).
 exosnap_add_gtest(
     NAME test_elementary_stream_writer
-    TEST_PREFIX recorder_core.
+    TEST_PREFIX engine.
     SOURCES tests/test_elementary_stream_writer.cpp src/elementary_stream_writer.cpp
 )
 target_include_directories(test_elementary_stream_writer PRIVATE src)
@@ -799,9 +799,9 @@ Expected: all `recorder_core.BuildIvfFileHeader.*` and `recorder_core.BuildIvfFr
 - [ ] **Step 7: Commit**
 
 ```bash
-git add libs/recorder_core/src/elementary_stream_writer.h libs/recorder_core/src/elementary_stream_writer.cpp \
-        libs/recorder_core/tests/test_elementary_stream_writer.cpp libs/recorder_core/CMakeLists.txt
-git commit -m "feat(recorder_core): add pure IVF header builders for AV1 elementary-stream output"
+git add libs/engine/src/elementary_stream_writer.h libs/engine/src/elementary_stream_writer.cpp \
+        libs/engine/tests/test_elementary_stream_writer.cpp libs/engine/CMakeLists.txt
+git commit -m "feat(engine): add pure IVF header builders for AV1 elementary-stream output"
 ```
 
 ---
@@ -814,7 +814,7 @@ git commit -m "feat(recorder_core): add pure IVF header builders for AV1 element
 - Modify: `tools/probes/CMakeLists.txt:12` (after the existing `add_subdirectory(probe_nvenc_async)` line)
 
 **Interfaces:**
-- Consumes: `ParseY4mHeader`, `I420FrameSize`, `ReadY4mFrame` (Task 1); `ConvertI420ToNv12` (Task 2); `BuildIvfFileHeader`, `BuildIvfFrameHeader` (Task 3); `recorder_core::NvencVideoEncoder` and its `Open/Configure/RegisterSlotTexture/AcquireFreeSlot/EncodeFrame/ReapCompleted/Flush/Destroy` (existing, `nvenc_video_encoder.h`); `recorder_core::VideoCodec`, `NvencPreset`, `RateControlMode`, `ColorMetadata::Sdr709()` (existing, `codec_types.h`/`color_metadata.h`).
+- Consumes: `ParseY4mHeader`, `I420FrameSize`, `ReadY4mFrame` (Task 1); `ConvertI420ToNv12` (Task 2); `BuildIvfFileHeader`, `BuildIvfFrameHeader` (Task 3); `exosnap::engine::NvencVideoEncoder` and its `Open/Configure/RegisterSlotTexture/AcquireFreeSlot/EncodeFrame/ReapCompleted/Flush/Destroy` (existing, `nvenc_video_encoder.h`); `exosnap::engine::VideoCodec`, `NvencPreset`, `RateControlMode`, `ColorMetadata::Sdr709()` (existing, `codec_types.h`/`color_metadata.h`).
 - Produces: the `probe_encode_file` executable. Task 6 (the Python script) invokes it as a subprocess and reads its stdout/exit code and the file it writes at `--out`.
 
 - [ ] **Step 1: Write the CMake target**
@@ -827,10 +827,10 @@ Create `tools/probes/probe_encode_file/CMakeLists.txt`:
 # writes a raw elementary stream. Backs scripts/dev/encoder_quality_matrix.py.
 # Never packaged.
 #
-# Requires the full recorder_core build (NVENC headers present); skipped otherwise.
+# Requires the full engine build (NVENC headers present); skipped otherwise.
 
-if(NOT TARGET recorder_core)
-    message(STATUS "probe_encode_file: recorder_core target not available — skipping")
+if(NOT TARGET engine)
+    message(STATUS "probe_encode_file: exosnap_engine target not available — skipping")
     return()
 endif()
 
@@ -839,13 +839,13 @@ add_executable(probe_encode_file
 )
 
 target_link_libraries(probe_encode_file PRIVATE
-    recorder_core
+    engine
     exosnap::warnings
     d3d11.lib
 )
 
 target_include_directories(probe_encode_file PRIVATE
-    "${CMAKE_SOURCE_DIR}/libs/recorder_core/src"
+    "${CMAKE_SOURCE_DIR}/libs/engine/src"
 )
 
 target_compile_definitions(probe_encode_file PRIVATE NOMINMAX)
@@ -906,8 +906,8 @@ Create `tools/probes/probe_encode_file/src/main.cpp`:
 #include "y4m_reader.h"
 #include "yuv_convert.h"
 
-#include <recorder_core/codec_types.h>
-#include <recorder_core/color_metadata.h>
+#include <exosnap/engine/codec_types.h>
+#include <exosnap/engine/color_metadata.h>
 
 #include <cstdio>
 #include <cstring>
@@ -915,7 +915,7 @@ Create `tools/probes/probe_encode_file/src/main.cpp`:
 #include <string>
 #include <vector>
 
-using namespace recorder_core;
+using namespace exosnap::engine;
 using Microsoft::WRL::ComPtr;
 
 namespace {

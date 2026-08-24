@@ -83,7 +83,7 @@ just as clean — one pass/fail, decided before any frame is decoded, not discov
 
 ## Architecture
 
-Hook point: `EditPlayerEngine::Open()`, `libs/recorder_core/src/edit_player_engine.cpp:553-576`
+Hook point: `EditPlayerEngine::Open()`, `libs/engine/src/edit_player_engine.cpp:553-576`
 (video decoder open block), immediately before the existing `avcodec_open2(vctx, vcodec, nullptr)`
 call, which itself is unchanged either way:
 
@@ -178,7 +178,7 @@ implemented as such from the start.
 2026-08-01) existed unmerged in `exosnap-ffmpeg-build`; verified locally against this codebase's
 new code (real D3D11 frames now flow through `DeinterleaveHwReadbackFrame`, P010 rescale included,
 on both the plain and HDR10 fixtures), then tagged and released as **r7**. `cmake/VendorFFmpeg.cmake`
-is now pinned to r7; every FFmpeg-touching recorder_core test passes against it. The rest of this
+is now pinned to r7; every FFmpeg-touching engine test passes against it. The rest of this
 section is kept as the empirical record of how the gap was found.
 
 Confirmed empirically 2026-08-03 while implementing the pieces above (`TryAttachD3D11VA`,

@@ -222,7 +222,7 @@ TEST(DiagnosticsAdapterTest, ProvenBlackWindowEvidenceRaisesTheExclusiveFullscre
 
     // FullscreenShaped and the capture API produced nothing for >= 2 s.
     adapter.setCaptureWindowEvidence(FullscreenShapedFacts(),
-                                     diagnostics::WindowHubEvidence{recorder_core::HubFrameKind::None, 5.0, 0.0,
+                                     diagnostics::WindowHubEvidence{exosnap::engine::HubFrameKind::None, 5.0, 0.0,
                                                                     /*fresh_frame_since_fullscreen_shape=*/false});
     EXPECT_TRUE(HasIssueTitled(adapter, QStringLiteral("exclusive fullscreen")));
 
@@ -237,7 +237,7 @@ TEST(DiagnosticsAdapterTest, HdrTargetFactRaisesTheHdrBlockerCard) {
     diagnostics::DiagnosticsController::Config config = MakeCaptureConfig();
     config.caps.video_codecs[capability::VideoCodec::H264] = {capability::SupportLevel::Available, ""};
     config.user_config.video_codec = capability::VideoCodec::H264;
-    config.user_config.hdr_mode = recorder_core::HdrMode::Hdr10;
+    config.user_config.hdr_mode = exosnap::engine::HdrMode::Hdr10;
     adapter.setDiagnosticConfig(std::move(config));
 
     // The recording gate already blocks this pairing. Without the display fact
@@ -332,8 +332,8 @@ TEST(DiagnosticsAdapterTest, SelectedCaptureTargetDrivesTheSourceTile) {
     DiagnosticsAdapter adapter;
     adapter.setDiagnosticConfig(MakeCaptureConfig());
 
-    recorder_core::CaptureTarget window;
-    window.kind = recorder_core::CaptureTarget::Kind::Window;
+    exosnap::engine::CaptureTarget window;
+    window.kind = exosnap::engine::CaptureTarget::Kind::Window;
     window.native_id = 0x1234;
     window.description = "Some Game";
     adapter.setSelectedCaptureTarget(window);
@@ -452,9 +452,9 @@ TEST(DiagnosticsAdapterTest, LiveSnapshotSwitchesThePipelineToMeasuredStages) {
     DiagnosticsAdapter adapter;
     adapter.setDiagnosticConfig(MakeConfig());
 
-    recorder_core::RecordingDiagnosticsSnapshot snapshot;
+    exosnap::engine::RecordingDiagnosticsSnapshot snapshot;
     snapshot.valid = true;
-    snapshot.lifecycle = recorder_core::DiagnosticsLifecycle::Recording;
+    snapshot.lifecycle = exosnap::engine::DiagnosticsLifecycle::Recording;
     snapshot.session_generation = 1;
     snapshot.capture.target_fps = 60.0;
     snapshot.capture.actual_fps = 59.4;
@@ -476,11 +476,11 @@ TEST(DiagnosticsAdapterTest, LiveTilesAppearWithARecordingAndVanishWhenItEnds) {
     EXPECT_FALSE(adapter.liveTilesVisible());
     EXPECT_TRUE(adapter.liveTiles().isEmpty());
 
-    recorder_core::RecordingDiagnosticsSnapshot snapshot;
+    exosnap::engine::RecordingDiagnosticsSnapshot snapshot;
     snapshot.valid = true;
-    snapshot.lifecycle = recorder_core::DiagnosticsLifecycle::Recording;
+    snapshot.lifecycle = exosnap::engine::DiagnosticsLifecycle::Recording;
     snapshot.session_generation = 1;
-    snapshot.health = recorder_core::PipelineHealth::Good;
+    snapshot.health = exosnap::engine::PipelineHealth::Good;
     snapshot.capture.target_fps = 60.0;
     snapshot.capture.actual_fps = 59.98;
     adapter.applyLiveDiagnostics(snapshot);
@@ -494,7 +494,7 @@ TEST(DiagnosticsAdapterTest, LiveTilesAppearWithARecordingAndVanishWhenItEnds) {
     // Leaving the recording lifecycle clears them on that very edge, not at the
     // next throttled tick: a live summary of a recording that has stopped is a
     // stale claim about something that is no longer happening.
-    snapshot.lifecycle = recorder_core::DiagnosticsLifecycle::Completed;
+    snapshot.lifecycle = exosnap::engine::DiagnosticsLifecycle::Completed;
     adapter.applyLiveDiagnostics(snapshot);
     EXPECT_FALSE(adapter.liveTilesVisible());
     EXPECT_TRUE(adapter.liveTiles().isEmpty());

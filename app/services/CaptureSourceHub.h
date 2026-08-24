@@ -4,7 +4,7 @@
 // last good frame whenever the source stops producing.
 //
 // The hub decides nothing. Every open, close, reopen and hold comes out of
-// recorder_core::StepCaptureHub; this class performs the actions that decision
+// exosnap::engine::StepCaptureHub; this class performs the actions that decision
 // asks for and drives the producer accordingly. Keep it that way -- the policy's
 // tests are only a pin on real behaviour for as long as it holds.
 //
@@ -28,7 +28,7 @@
 
 #include <winrt/base.h>
 
-#include <recorder_core/capture_hub_policy.h>
+#include <exosnap/engine/capture_hub_policy.h>
 
 namespace exosnap {
 
@@ -65,7 +65,7 @@ class CaptureSourceHub {
   public:
     // Called with each new frame. Never called for a held frame -- a hold is not
     // a new frame; consumers that need it ask HeldFrame().
-    using FrameCallback = std::function<void(const HubFrame&, recorder_core::HubFrameKind)>;
+    using FrameCallback = std::function<void(const HubFrame&, exosnap::engine::HubFrameKind)>;
 
     explicit CaptureSourceHub(std::unique_ptr<HubSourceProducer> producer);
     ~CaptureSourceHub();
@@ -83,7 +83,7 @@ class CaptureSourceHub {
     // non-blocking when there is nothing to own.
     void Pump();
 
-    [[nodiscard]] recorder_core::HubFrameKind Frame() const;
+    [[nodiscard]] exosnap::engine::HubFrameKind Frame() const;
     [[nodiscard]] HubFrame HeldFrame() const;
 
     // Zero means nobody is watching: the capture is closed and the hub may be
@@ -103,14 +103,14 @@ class CaptureSourceHub {
     // out, so consumers see the recorded image rather than a still.
     void ForwardFrame(const HubFrame& frame);
 
-    [[nodiscard]] recorder_core::CaptureHubState StateForTest() const {
+    [[nodiscard]] exosnap::engine::CaptureHubState StateForTest() const {
         return state_;
     }
 
   private:
     // Steps the policy, adopts the new state and performs the actions it asked
     // for. Returns the decision so callers can read grant_lease.
-    recorder_core::CaptureHubDecision Apply(recorder_core::CaptureHubEvent event);
+    exosnap::engine::CaptureHubDecision Apply(exosnap::engine::CaptureHubEvent event);
     void OpenProducer();
     void CloseProducer();
     void Deliver(const HubFrame& frame);
@@ -123,7 +123,7 @@ class CaptureSourceHub {
     // every attempt: once per distinct cause, not once per tick.
     std::string last_open_error_;
 
-    recorder_core::CaptureHubState state_{};
+    exosnap::engine::CaptureHubState state_{};
     HubFrame held_{};
 
     mutable std::mutex subscribers_mutex_;

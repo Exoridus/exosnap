@@ -106,8 +106,8 @@ TEST(EditSessionAdapterTrim, FullRangeIsNoTrimAtAll) {
 
     session.requestTrim(0, 100'000);
 
-    EXPECT_EQ(session.trimStartUs(), recorder_core::TrimRange::kNoTimestamp);
-    EXPECT_EQ(session.trimEndUs(), recorder_core::TrimRange::kNoTimestamp);
+    EXPECT_EQ(session.trimStartUs(), exosnap::engine::TrimRange::kNoTimestamp);
+    EXPECT_EQ(session.trimEndUs(), exosnap::engine::TrimRange::kNoTimestamp);
     EXPECT_FALSE(session.trimmed());
     EXPECT_EQ(session.trimStartMs(), 0);
     EXPECT_EQ(session.trimEndMs(), 100'000);
@@ -162,7 +162,7 @@ TEST(EditSessionAdapterReport, MapsPipelineHealthOntoTheHeaderSeverity) {
 
     EditContext good = MakeContext();
     good.completed_snapshot.valid = true;
-    good.completed_snapshot.health = recorder_core::PipelineHealth::Good;
+    good.completed_snapshot.health = exosnap::engine::PipelineHealth::Good;
     session.setEditContext(good);
     EXPECT_EQ(session.reportSeverityValue(), static_cast<int>(EditSessionAdapter::Neutral));
     // The header states a verdict in every case, so a healthy recording names
@@ -171,14 +171,14 @@ TEST(EditSessionAdapterReport, MapsPipelineHealthOntoTheHeaderSeverity) {
 
     EditContext warning = MakeContext();
     warning.completed_snapshot.valid = true;
-    warning.completed_snapshot.health = recorder_core::PipelineHealth::Warning;
+    warning.completed_snapshot.health = exosnap::engine::PipelineHealth::Warning;
     session.setEditContext(warning);
     EXPECT_EQ(session.reportSeverityValue(), static_cast<int>(EditSessionAdapter::Warning));
     EXPECT_EQ(session.reportLabel(), QStringLiteral("Warning"));
 
     EditContext critical = MakeContext();
     critical.completed_snapshot.valid = true;
-    critical.completed_snapshot.health = recorder_core::PipelineHealth::Critical;
+    critical.completed_snapshot.health = exosnap::engine::PipelineHealth::Critical;
     session.setEditContext(critical);
     EXPECT_EQ(session.reportSeverityValue(), static_cast<int>(EditSessionAdapter::Critical));
     EXPECT_EQ(session.reportLabel(), QStringLiteral("Critical"));

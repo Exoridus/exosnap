@@ -6,8 +6,8 @@
 #include "WebcamSettings.h"
 
 #include <capability/audio_ui_state.h>
-#include <recorder_core/audio_track_model.h>
-#include <recorder_core/recorder_session.h>
+#include <exosnap/engine/audio_track_model.h>
+#include <exosnap/engine/recorder_session.h>
 
 #include <string>
 #include <string_view>

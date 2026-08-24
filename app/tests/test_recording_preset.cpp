@@ -7,8 +7,8 @@
 #include <unordered_set>
 
 #include <capability/audio_ui_state.h>
-#include <recorder_core/audio_track_model.h>
-#include <recorder_core/recorder_session.h>
+#include <exosnap/engine/audio_track_model.h>
+#include <exosnap/engine/recorder_session.h>
 
 #include "models/RecordingPreset.h"
 
@@ -46,23 +46,23 @@ TEST(RecordingPreset, MakeBuiltInPresets_FourPresets_ExpectedValues) {
     EXPECT_EQ(b[0].id, kDefaultPresetId);
     EXPECT_EQ(b[0].name, "Default");
     EXPECT_EQ(b[0].config.video.cq, 19u);
-    EXPECT_EQ(b[0].config.output.nvenc_preset, recorder_core::NvencPreset::P4);
+    EXPECT_EQ(b[0].config.output.nvenc_preset, exosnap::engine::NvencPreset::P4);
 
     EXPECT_EQ(b[1].id, kQualityPresetId);
     EXPECT_EQ(b[1].name, "Quality");
     EXPECT_EQ(b[1].config.video.cq, 16u);
-    EXPECT_EQ(b[1].config.output.nvenc_preset, recorder_core::NvencPreset::P4);
+    EXPECT_EQ(b[1].config.output.nvenc_preset, exosnap::engine::NvencPreset::P4);
     EXPECT_EQ(b[1].config.output.container, capability::Container::Matroska);
 
     EXPECT_EQ(b[2].id, kCompactPresetId);
     EXPECT_EQ(b[2].name, "Compact");
     EXPECT_EQ(b[2].config.video.cq, 30u);
-    EXPECT_EQ(b[2].config.output.nvenc_preset, recorder_core::NvencPreset::P6);
+    EXPECT_EQ(b[2].config.output.nvenc_preset, exosnap::engine::NvencPreset::P6);
 
     EXPECT_EQ(b[3].id, kPerformancePresetId);
     EXPECT_EQ(b[3].name, "Performance");
     EXPECT_EQ(b[3].config.video.cq, 19u);
-    EXPECT_EQ(b[3].config.output.nvenc_preset, recorder_core::NvencPreset::P2);
+    EXPECT_EQ(b[3].config.output.nvenc_preset, exosnap::engine::NvencPreset::P2);
     EXPECT_EQ(b[3].config.output.container, capability::Container::Matroska);
 
     EXPECT_EQ(b[4].id, kCompatibilityPresetId);
@@ -71,7 +71,7 @@ TEST(RecordingPreset, MakeBuiltInPresets_FourPresets_ExpectedValues) {
     EXPECT_EQ(b[4].config.output.video_codec, capability::VideoCodec::H264);
     EXPECT_EQ(b[4].config.output.audio_codec, capability::AudioCodec::Aac);
     EXPECT_EQ(b[4].config.video.cq, 19u);
-    EXPECT_EQ(b[4].config.output.nvenc_preset, recorder_core::NvencPreset::P4);
+    EXPECT_EQ(b[4].config.output.nvenc_preset, exosnap::engine::NvencPreset::P4);
 
     // No built-in claims an environment field.
     const OutputSettingsModel defaults = OutputSettingsModel::Defaults();
@@ -123,12 +123,12 @@ TEST(RecordingPreset, DefaultPreset_OutputResolutionNativeContain) {
     EXPECT_EQ(p.config.output.resolution.mode, OutputResolutionMode::Native);
     EXPECT_EQ(p.config.output.resolution.custom_width, 0u);
     EXPECT_EQ(p.config.output.resolution.custom_height, 0u);
-    EXPECT_EQ(p.config.output.resolution.fit, recorder_core::OutputFitMode::Contain);
+    EXPECT_EQ(p.config.output.resolution.fit, exosnap::engine::OutputFitMode::Contain);
 }
 
 TEST(RecordingPreset, DefaultPreset_VideoSettings) {
     const RecordingPreset p = MakeDefaultPreset();
-    EXPECT_EQ(p.config.video.cq, recorder_core::CanonicalCq(recorder_core::QualityPreset::High));
+    EXPECT_EQ(p.config.video.cq, exosnap::engine::CanonicalCq(exosnap::engine::QualityPreset::High));
     EXPECT_TRUE(p.config.video.cfr);
     EXPECT_TRUE(p.config.video.capture_cursor);
     EXPECT_EQ(p.config.video.frame_rate_num, 60u);
@@ -175,17 +175,17 @@ TEST(RecordingPreset, DefaultPreset_AudioRows) {
     const RecordingPreset p = MakeDefaultPreset();
     // Computer audio (SystemOutput) enabled; mic disabled.
     ASSERT_EQ(p.config.audio.source_rows.size(), 2u);
-    EXPECT_EQ(p.config.audio.source_rows[0].kind, recorder_core::AudioSourceKind::SystemOutput);
+    EXPECT_EQ(p.config.audio.source_rows[0].kind, exosnap::engine::AudioSourceKind::SystemOutput);
     EXPECT_TRUE(p.config.audio.source_rows[0].enabled);
     EXPECT_FALSE(p.config.audio.source_rows[0].merge_with_above);
-    EXPECT_EQ(p.config.audio.source_rows[1].kind, recorder_core::AudioSourceKind::Mic);
+    EXPECT_EQ(p.config.audio.source_rows[1].kind, exosnap::engine::AudioSourceKind::Mic);
     EXPECT_FALSE(p.config.audio.source_rows[1].enabled);
 }
 
 TEST(RecordingPreset, DefaultPreset_AudioMiscFields) {
     const RecordingPreset p = MakeDefaultPreset();
     EXPECT_EQ(p.config.audio.target_kind, capability::CaptureTargetKind::Display);
-    EXPECT_EQ(p.config.audio.mic_channel_mode, recorder_core::MicChannelMode::Auto);
+    EXPECT_EQ(p.config.audio.mic_channel_mode, exosnap::engine::MicChannelMode::Auto);
     EXPECT_FALSE(p.config.audio.selected_mic_device_id.has_value());
     EXPECT_FLOAT_EQ(p.config.audio.mic_gain_linear, 1.0f);
     EXPECT_FALSE(p.config.audio.selected_window_pid.has_value());
@@ -237,7 +237,7 @@ TEST(RecordingPreset, DefaultPreset_SanitizeRoundTrip) {
 // ACTIVE state (rendered receded vs. live) follows the capture target — that
 // derivation happens in PresentationStateBuilder, not here. The actual
 // recording-time audio plan still drops the App row for a non-Window target
-// (recorder_core::NormalizeSourceRowsForTarget, invoked from BuildAudioPlan),
+// (exosnap::engine::NormalizeSourceRowsForTarget, invoked from BuildAudioPlan),
 // since a display/region capture genuinely has no process to scope it to.
 // ===========================================================================
 
@@ -245,13 +245,13 @@ namespace {
 bool HasAppRow(const RecordingPresetConfig& cfg) {
     return std::any_of(
         cfg.audio.source_rows.begin(), cfg.audio.source_rows.end(),
-        [](const recorder_core::AudioSourceRow& r) { return r.kind == recorder_core::AudioSourceKind::App; });
+        [](const exosnap::engine::AudioSourceRow& r) { return r.kind == exosnap::engine::AudioSourceKind::App; });
 }
 
 RecordingPresetConfig WithAppRow(capability::CaptureTargetKind target) {
     RecordingPresetConfig cfg = MakeDefaultPreset().config;
     cfg.audio.target_kind = target;
-    cfg.audio.source_rows.push_back({recorder_core::AudioSourceKind::App, true, false});
+    cfg.audio.source_rows.push_back({exosnap::engine::AudioSourceKind::App, true, false});
     cfg.audio.selected_window_pid = 4242u;
     return cfg;
 }
@@ -263,7 +263,7 @@ TEST(RecordingPreset, Sanitize_AppAudioRow_KeptForDisplayTarget) {
         << "the application-audio row is a persisted setting and survives every capture target";
     const auto it = std::find_if(
         sanitized.audio.source_rows.begin(), sanitized.audio.source_rows.end(),
-        [](const recorder_core::AudioSourceRow& r) { return r.kind == recorder_core::AudioSourceKind::App; });
+        [](const exosnap::engine::AudioSourceRow& r) { return r.kind == exosnap::engine::AudioSourceKind::App; });
     ASSERT_NE(it, sanitized.audio.source_rows.end());
     EXPECT_TRUE(it->enabled);
     EXPECT_FALSE(it->merge_with_above);
@@ -283,7 +283,7 @@ TEST(RecordingPreset, Sanitize_AppAudioRow_LeavesSystemAndMicAlone) {
     const RecordingPresetConfig after = SanitizePresetConfig(before);
     ASSERT_EQ(after.audio.source_rows.size(), before.audio.source_rows.size());
     for (std::size_t i = 0; i < before.audio.source_rows.size(); ++i) {
-        if (before.audio.source_rows[i].kind == recorder_core::AudioSourceKind::App) {
+        if (before.audio.source_rows[i].kind == exosnap::engine::AudioSourceKind::App) {
             continue;
         }
         EXPECT_EQ(after.audio.source_rows[i].kind, before.audio.source_rows[i].kind);
@@ -294,8 +294,8 @@ TEST(RecordingPreset, Sanitize_AppAudioRow_LeavesSystemAndMicAlone) {
 // true there is meaningless state that the resolver would have to guess about.
 TEST(RecordingPreset, Sanitize_FirstSourceRow_MergeWithAboveIsCleared) {
     RecordingPresetConfig cfg = MakeDefaultPreset().config;
-    cfg.audio.source_rows = {{recorder_core::AudioSourceKind::SystemOutput, true, /*merge_with_above=*/true},
-                             {recorder_core::AudioSourceKind::Mic, true, /*merge_with_above=*/true}};
+    cfg.audio.source_rows = {{exosnap::engine::AudioSourceKind::SystemOutput, true, /*merge_with_above=*/true},
+                             {exosnap::engine::AudioSourceKind::Mic, true, /*merge_with_above=*/true}};
 
     const RecordingPresetConfig s = SanitizePresetConfig(cfg);
 
@@ -427,11 +427,11 @@ TEST(RecordingPreset, NormalizedEquals_ColorRangeDifference_NotEqual) {
 // through sanitize regardless of codec (the preset is never capability-gated —
 // P1..P7 exist uniformly for H.264, HEVC, and AV1).
 TEST(RecordingPreset, Sanitize_NvencPreset_DefaultIsP4_AndPreservedForAllCodecs) {
-    EXPECT_EQ(MakeDefaultPreset().config.output.nvenc_preset, recorder_core::NvencPreset::P4);
+    EXPECT_EQ(MakeDefaultPreset().config.output.nvenc_preset, exosnap::engine::NvencPreset::P4);
 
     for (const auto codec : {capability::VideoCodec::H264, capability::VideoCodec::Hevc, capability::VideoCodec::Av1}) {
         for (const auto preset :
-             {recorder_core::NvencPreset::P1, recorder_core::NvencPreset::P4, recorder_core::NvencPreset::P7}) {
+             {exosnap::engine::NvencPreset::P1, exosnap::engine::NvencPreset::P4, exosnap::engine::NvencPreset::P7}) {
             RecordingPresetConfig cfg = MakeDefaultPreset().config;
             cfg.output.container = capability::Container::Matroska;
             cfg.output.video_codec = codec;
@@ -447,9 +447,9 @@ TEST(RecordingPreset, Sanitize_NvencPreset_DefaultIsP4_AndPreservedForAllCodecs)
 // nvenc_preset participates in dirty/normalized equality.
 TEST(RecordingPreset, NormalizedEquals_NvencPresetDifference_NotEqual) {
     RecordingPresetConfig a = MakeDefaultPreset().config;
-    a.output.nvenc_preset = recorder_core::NvencPreset::P1;
+    a.output.nvenc_preset = exosnap::engine::NvencPreset::P1;
     RecordingPresetConfig b = a;
-    b.output.nvenc_preset = recorder_core::NvencPreset::P7;
+    b.output.nvenc_preset = exosnap::engine::NvencPreset::P7;
 
     EXPECT_FALSE(NormalizedConfigEquals(a, b));
     EXPECT_FALSE(ConfigDirtyEquivalent(a, b));
@@ -962,7 +962,7 @@ TEST(RecordingPreset, NormalizedEquals_OutputContainerChange_NotEqual) {
 TEST(RecordingPreset, NormalizedEquals_VideoQualityChange_NotEqual) {
     RecordingPresetConfig a = MakeDefaultPreset().config;
     RecordingPresetConfig b = a;
-    b.video.cq = recorder_core::CanonicalCq(recorder_core::QualityPreset::Low);
+    b.video.cq = exosnap::engine::CanonicalCq(exosnap::engine::QualityPreset::Low);
     EXPECT_FALSE(NormalizedConfigEquals(a, b));
 }
 
@@ -1008,8 +1008,8 @@ TEST(RecordingPreset, NormalizedEquals_SemanticAudioOrder_PlanEquivalent_Equal) 
     // Swap so Mic(disabled) comes first; plan-equivalent because disabled rows
     // do not contribute to tracks or to the enabled-source set.
     b.audio.source_rows = {
-        {recorder_core::AudioSourceKind::Mic, false, false},
-        {recorder_core::AudioSourceKind::SystemOutput, true, false},
+        {exosnap::engine::AudioSourceKind::Mic, false, false},
+        {exosnap::engine::AudioSourceKind::SystemOutput, true, false},
     };
 
     EXPECT_TRUE(NormalizedConfigEquals(a, b));
@@ -1081,7 +1081,7 @@ TEST(RecordingPreset, DirtyEquivalent_CaptureRegionChange_StillEquivalent) {
 TEST(RecordingPreset, DirtyEquivalent_VideoQualityChange_NotEquivalent) {
     RecordingPresetConfig a = MakeDefaultPreset().config;
     RecordingPresetConfig b = a;
-    b.video.cq = recorder_core::CanonicalCq(recorder_core::QualityPreset::Low);
+    b.video.cq = exosnap::engine::CanonicalCq(exosnap::engine::QualityPreset::Low);
     EXPECT_FALSE(ConfigDirtyEquivalent(a, b));
 }
 
@@ -1373,7 +1373,7 @@ TEST(RecordingPreset, DirtyEquivalent_BitDepthDifference_NotChanged) {
 TEST(RecordingPreset, DirtyEquivalent_HdrModeDifference_NotChanged) {
     RecordingPresetConfig a = MakeDefaultPreset().config;
     RecordingPresetConfig b = a;
-    b.output.hdr_mode = recorder_core::HdrMode::Hdr10;
+    b.output.hdr_mode = exosnap::engine::HdrMode::Hdr10;
 
     EXPECT_FALSE(NormalizedConfigEquals(a, b));
     EXPECT_TRUE(ConfigDirtyEquivalent(a, b));
@@ -1386,7 +1386,7 @@ TEST(RecordingPreset, WithEnvironmentFields_PreservesLiveEnvironment) {
     RecordingPresetConfig live = MakeDefaultPreset().config;
     live.output.video_codec = capability::VideoCodec::Hevc;
     live.output.bit_depth = capability::BitDepth::Bit10;
-    live.output.hdr_mode = recorder_core::HdrMode::Hdr10;
+    live.output.hdr_mode = exosnap::engine::HdrMode::Hdr10;
     live.capture.kind = PresetCaptureKind::Window;
     live.capture.window_key = "game.exe";
 
@@ -1395,7 +1395,7 @@ TEST(RecordingPreset, WithEnvironmentFields_PreservesLiveEnvironment) {
 
     const RecordingPresetConfig applied = WithEnvironmentFields(preset, live);
     EXPECT_EQ(applied.output.bit_depth, capability::BitDepth::Bit10);
-    EXPECT_EQ(applied.output.hdr_mode, recorder_core::HdrMode::Hdr10);
+    EXPECT_EQ(applied.output.hdr_mode, exosnap::engine::HdrMode::Hdr10);
     EXPECT_EQ(applied.capture.kind, PresetCaptureKind::Window);
     EXPECT_EQ(applied.capture.window_key, "game.exe");
     EXPECT_EQ(applied.video.cq, 16u);
@@ -1427,7 +1427,7 @@ TEST(RecordingPreset, WithEnvironmentFields_UndoOverlaysCurrentEnvironment_NotPr
     // would restore verbatim, pre-fix): an older capture target/bit depth/HDR.
     RecordingPresetConfig pre_switch_snapshot = MakeDefaultPreset().config;
     pre_switch_snapshot.output.bit_depth = capability::BitDepth::Bit10;
-    pre_switch_snapshot.output.hdr_mode = recorder_core::HdrMode::Hdr10;
+    pre_switch_snapshot.output.hdr_mode = exosnap::engine::HdrMode::Hdr10;
     pre_switch_snapshot.capture.kind = PresetCaptureKind::Window;
     pre_switch_snapshot.capture.window_key = "old-game.exe";
     pre_switch_snapshot.video.cq = 22; // intent field the snapshot must restore
@@ -1436,7 +1436,7 @@ TEST(RecordingPreset, WithEnvironmentFields_UndoOverlaysCurrentEnvironment_NotPr
     // was on screen, before the user clicked Undo.
     RecordingPresetConfig current_env = MakeDefaultPreset().config;
     current_env.output.bit_depth = capability::BitDepth::Bit8;
-    current_env.output.hdr_mode = recorder_core::HdrMode::Off;
+    current_env.output.hdr_mode = exosnap::engine::HdrMode::Off;
     current_env.capture.kind = PresetCaptureKind::Display;
     current_env.capture.window_key.clear();
 
@@ -1444,7 +1444,7 @@ TEST(RecordingPreset, WithEnvironmentFields_UndoOverlaysCurrentEnvironment_NotPr
 
     // Environment fields come from the CURRENT state, not the stale snapshot.
     EXPECT_EQ(undone.output.bit_depth, capability::BitDepth::Bit8);
-    EXPECT_EQ(undone.output.hdr_mode, recorder_core::HdrMode::Off);
+    EXPECT_EQ(undone.output.hdr_mode, exosnap::engine::HdrMode::Off);
     EXPECT_EQ(undone.capture.kind, PresetCaptureKind::Display);
     // Everything else (the user's actual intent being restored) still comes
     // from the pre-switch snapshot.
@@ -1457,7 +1457,7 @@ TEST(RecordingPreset, StripEnvironmentFields_ResetsToModelDefaults) {
     RecordingPresetConfig live = MakeDefaultPreset().config;
     live.output.video_codec = capability::VideoCodec::Hevc;
     live.output.bit_depth = capability::BitDepth::Bit10;
-    live.output.hdr_mode = recorder_core::HdrMode::Hdr10;
+    live.output.hdr_mode = exosnap::engine::HdrMode::Hdr10;
     live.capture.kind = PresetCaptureKind::Region;
     live.capture.has_region = true;
     live.capture.region_w_norm = 0.5f;

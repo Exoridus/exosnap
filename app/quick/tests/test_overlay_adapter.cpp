@@ -254,8 +254,8 @@ TEST_F(OverlayAdapterTest, MeasuredDropsSwitchTheLiveHudToWarning) {
 // No monitor target means no rectangle, and the QML falls back to its own
 // screen. An empty rect must not be reported as a zero-origin monitor.
 TEST_F(OverlayAdapterTest, WindowTargetsYieldNoMonitorGeometry) {
-    recorder_core::CaptureTarget window_target;
-    window_target.kind = recorder_core::CaptureTarget::Kind::Window;
+    exosnap::engine::CaptureTarget window_target;
+    window_target.kind = exosnap::engine::CaptureTarget::Kind::Window;
     window_target.native_id = 0x1234;
     model_.targets.push_back(window_target);
     model_.selected_target_index = 0;
@@ -278,8 +278,8 @@ class OverlayMonitorGeometryTest : public OverlayAdapterTest {
     void SetUp() override {
         OverlayAdapterTest::SetUp();
 
-        recorder_core::CaptureTarget monitor;
-        monitor.kind = recorder_core::CaptureTarget::Kind::Monitor;
+        exosnap::engine::CaptureTarget monitor;
+        monitor.kind = exosnap::engine::CaptureTarget::Kind::Monitor;
         monitor.native_id = 0xABCD;
         model_.targets.push_back(monitor);
         model_.selected_target_index = 0;

@@ -65,7 +65,7 @@ the shipping Widgets navigation remains fully functional.
 - `exosnap` remains the shipping executable and does not link Qt Quick or QML.
 - `exosnap_quick_spike` remains opt-in through `EXOSNAP_BUILD_QUICK_SPIKE=ON`.
 - Widgets `AboutPage` remains present and behaviorally unchanged.
-- `recorder_core`, recording policy, preview, DXGI rendering, Settings, Diagnostics, Logs, Record,
+- `engine`, recording policy, preview, DXGI rendering, Settings, Diagnostics, Logs, Record,
   and Editor are unchanged.
 - The Quick target uses the existing brand and font resources without copying their assets.
 

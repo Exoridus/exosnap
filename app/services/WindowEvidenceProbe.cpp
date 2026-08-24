@@ -120,7 +120,7 @@ void WindowEvidenceProbe::WorkerMain(std::stop_token stop_token) {
             current_hwnd = want_hwnd;
             if (current_hwnd != 0) {
                 CaptureSourceKey key{CaptureSourceKey::Kind::Window, current_hwnd, {}};
-                subscription = registry.Subscribe(key, [](const HubFrame&, recorder_core::HubFrameKind) {});
+                subscription = registry.Subscribe(key, [](const HubFrame&, exosnap::engine::HubFrameKind) {});
                 accumulator.Reset(now);
             }
             // A target switch invalidates every accumulated fact at once: the old

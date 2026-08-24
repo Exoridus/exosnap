@@ -24,7 +24,7 @@ kein neues sichtbares Verhalten.
 
 ## Ausgangslage (verifiziert)
 
-- `IVideoEncoder` (`libs/recorder_core/include/recorder_core/interfaces/IVideoEncoder.h`) ist in
+- `IVideoEncoder` (`libs/engine/include/exosnap/engine/interfaces/IVideoEncoder.h`) ist in
   seiner Signatur sauber (keine NVENC-Typen), deckt aber nur einen Teil der Encoder-API ab:
   `Open`, `Configure`, `RegisterSlotTexture`, `SlotCount`, `AcquireFreeSlot`, `EncodeFrame`,
   `Flush`, `ReapCompleted`, `RequestKeyframe`, `Destroy`.
@@ -77,7 +77,7 @@ Parametertyp (siehe Entscheidungen).
 
 ### 2. `VideoEncoderFactory`
 
-Neuer Typ in `libs/recorder_core/include/recorder_core/interfaces/VideoEncoderFactory.h` +
+Neuer Typ in `libs/engine/include/exosnap/engine/interfaces/VideoEncoderFactory.h` +
 zugehöriger `.cpp`:
 
 ```cpp
@@ -108,13 +108,13 @@ Vendor-Wert den `FakeVideoEncoder` liefert.
 
 ### 4. Teststrategie
 
-`FakeVideoEncoder` (neu, `libs/recorder_core/tests/fakes/fake_video_encoder.h`): implementiert
+`FakeVideoEncoder` (neu, `libs/engine/tests/fakes/fake_video_encoder.h`): implementiert
 `IVideoEncoder` vollständig gegen einfache In-Memory-Zustände — konfigurierbare Slot-Anzahl,
 `EncodeFrame` erzeugt einen synthetischen `EncodedVideoPacket` pro Aufruf (fixe Größe,
 inkrementierender PTS), `Open`/`Configure`/`Flush` erfolgreich per Default, mit Hooks zum
 Erzwingen von Fehlern (`out_error` setzen, `false` zurückgeben) für Fehlerpfad-Tests.
 
-Neue Testdatei `libs/recorder_core/tests/test_video_thread_encoder_dispatch.cpp` deckt, was
+Neue Testdatei `libs/engine/tests/test_video_thread_encoder_dispatch.cpp` deckt, was
 bisher nur über echte Hardware indirekt geprüft war:
 
 - Slot-Erschöpfung/`ReleaseSlot`-Pfade

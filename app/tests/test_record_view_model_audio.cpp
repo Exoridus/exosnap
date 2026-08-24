@@ -8,7 +8,7 @@ namespace exosnap {
 namespace {
 
 // Helper: find a source row by kind.
-const recorder_core::AudioSourceRow* FindRow(const capability::AudioUiState& s, recorder_core::AudioSourceKind k) {
+const exosnap::engine::AudioSourceRow* FindRow(const capability::AudioUiState& s, exosnap::engine::AudioSourceKind k) {
     for (const auto& r : s.source_rows)
         if (r.kind == k)
             return &r;
@@ -108,7 +108,7 @@ TEST(RecordViewModelAudioTest, RecordViewModel_ApplyTargetKind_DisplayKeepsAppRo
 
     vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
     for (auto& r : vm.audio_ui_state.source_rows) {
-        if (r.kind == recorder_core::AudioSourceKind::App) {
+        if (r.kind == exosnap::engine::AudioSourceKind::App) {
             r.enabled = true;
             r.merge_with_above = true;
         }
@@ -117,13 +117,13 @@ TEST(RecordViewModelAudioTest, RecordViewModel_ApplyTargetKind_DisplayKeepsAppRo
     vm.ApplyTargetKind(capability::CaptureTargetKind::Display);
 
     const auto& rows = vm.audio_ui_state.source_rows;
-    const auto it = std::find_if(rows.begin(), rows.end(), [](const recorder_core::AudioSourceRow& r) {
-        return r.kind == recorder_core::AudioSourceKind::App;
+    const auto it = std::find_if(rows.begin(), rows.end(), [](const exosnap::engine::AudioSourceRow& r) {
+        return r.kind == exosnap::engine::AudioSourceKind::App;
     });
     ASSERT_NE(it, rows.end()) << "the App row must survive a switch to a Display target";
     EXPECT_TRUE(it->enabled);
     EXPECT_TRUE(it->merge_with_above);
-    EXPECT_EQ(rows.front().kind, recorder_core::AudioSourceKind::App)
+    EXPECT_EQ(rows.front().kind, exosnap::engine::AudioSourceKind::App)
         << "the carried App row keeps its canonical front position";
 
     // ...but it must not reach the audio plan for a Display target.
@@ -143,14 +143,14 @@ TEST(RecordViewModelAudioTest, RecordViewModel_TrackPreviewUpdatesOnOutputToggle
 
     // Disable Sys.
     for (auto& r : vm.audio_ui_state.source_rows)
-        if (r.kind == recorder_core::AudioSourceKind::Sys)
+        if (r.kind == exosnap::engine::AudioSourceKind::Sys)
             r.enabled = false;
     vm.RebuildAudioPlan();
     ASSERT_EQ(vm.audio_track_preview.size(), 2u);
 
     // Disable App too.
     for (auto& r : vm.audio_ui_state.source_rows)
-        if (r.kind == recorder_core::AudioSourceKind::App)
+        if (r.kind == exosnap::engine::AudioSourceKind::App)
             r.enabled = false;
     vm.RebuildAudioPlan();
     ASSERT_EQ(vm.audio_track_preview.size(), 1u);
@@ -158,7 +158,7 @@ TEST(RecordViewModelAudioTest, RecordViewModel_TrackPreviewUpdatesOnOutputToggle
 
     // Disable Mic too.
     for (auto& r : vm.audio_ui_state.source_rows)
-        if (r.kind == recorder_core::AudioSourceKind::Mic)
+        if (r.kind == exosnap::engine::AudioSourceKind::Mic)
             r.enabled = false;
     vm.RebuildAudioPlan();
     EXPECT_TRUE(vm.audio_track_preview.empty());
@@ -176,14 +176,14 @@ TEST(RecordViewModelAudioTest, RecordViewModel_TrackPreviewUpdatesOnMicToggle) {
 
     // Disable Mic.
     for (auto& r : vm.audio_ui_state.source_rows)
-        if (r.kind == recorder_core::AudioSourceKind::Mic)
+        if (r.kind == exosnap::engine::AudioSourceKind::Mic)
             r.enabled = false;
     vm.RebuildAudioPlan();
     ASSERT_EQ(vm.audio_track_preview.size(), 2u);
 
     // Enable Mic again.
     for (auto& r : vm.audio_ui_state.source_rows)
-        if (r.kind == recorder_core::AudioSourceKind::Mic)
+        if (r.kind == exosnap::engine::AudioSourceKind::Mic)
             r.enabled = true;
     vm.RebuildAudioPlan();
     ASSERT_EQ(vm.audio_track_preview.size(), 3u);
@@ -233,7 +233,7 @@ TEST(RecordViewModelAudioTest, RecordViewModel_UpdateStats_MapsPerTrackRmsToSour
 
     vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
 
-    recorder_core::SessionStats stats;
+    exosnap::engine::SessionStats stats;
     stats.per_track_rms[0] = 0.25f;
 
     vm.UpdateStats(stats);
@@ -253,7 +253,7 @@ TEST(RecordViewModelAudioTest, RecordViewModel_UpdateStats_MapsPerTrackRmsToSour
 TEST(RecordViewModelAudioTest, RecordViewModel_UpdateStats_DoesNotSetDroppedFramesFromRawStat) {
     RecordViewModel vm;
 
-    recorder_core::SessionStats stats;
+    exosnap::engine::SessionStats stats;
     stats.dropped_or_skipped_video_frames = 5000; // e.g. 144 Hz -> 60 fps CFR pacing
     vm.UpdateStats(stats);
 
@@ -266,11 +266,11 @@ TEST(RecordViewModelAudioTest, RecordViewModel_UpdateStats_MapsMicRms) {
     vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
     // Enable Mic so it becomes track 1 (App=track 0, Mic=track 1).
     for (auto& r : vm.audio_ui_state.source_rows)
-        if (r.kind == recorder_core::AudioSourceKind::Mic)
+        if (r.kind == exosnap::engine::AudioSourceKind::Mic)
             r.enabled = true;
     vm.RebuildAudioPlan();
 
-    recorder_core::SessionStats stats;
+    exosnap::engine::SessionStats stats;
     stats.per_track_rms[1] = 0.75f;
 
     vm.UpdateStats(stats);
@@ -288,13 +288,13 @@ TEST(RecordViewModelAudioTest, RecordViewModel_UpdateStats_MergedWindowRmsGoesTo
     for (auto& r : vm.audio_ui_state.source_rows)
         r.enabled = true;
     for (auto& r : vm.audio_ui_state.source_rows) {
-        if (r.kind == recorder_core::AudioSourceKind::Mic || r.kind == recorder_core::AudioSourceKind::Sys) {
+        if (r.kind == exosnap::engine::AudioSourceKind::Mic || r.kind == exosnap::engine::AudioSourceKind::Sys) {
             r.merge_with_above = true;
         }
     }
     vm.RebuildAudioPlan();
 
-    recorder_core::SessionStats stats;
+    exosnap::engine::SessionStats stats;
     stats.per_track_rms[0] = 0.4f;
 
     vm.UpdateStats(stats);
@@ -312,7 +312,7 @@ TEST(RecordViewModelAudioTest, RecordViewModel_UpdateStats_IgnoresInvalidTrackNu
         capability::AudioTrackPreview{99, "sys", "invalid"},
     };
 
-    recorder_core::SessionStats stats;
+    exosnap::engine::SessionStats stats;
     stats.per_track_rms[0] = 0.9f;
     stats.per_track_rms[1] = 0.8f;
     stats.per_track_rms[2] = 0.7f;
@@ -341,12 +341,12 @@ TEST(RecordViewModelAudioTest, RecordViewModel_ApplyTargetKindPreservingAudio_Ke
     vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
     // Disable Sys and enable Mic.
     for (auto& r : vm.audio_ui_state.source_rows) {
-        if (r.kind == recorder_core::AudioSourceKind::Sys)
+        if (r.kind == exosnap::engine::AudioSourceKind::Sys)
             r.enabled = false;
-        if (r.kind == recorder_core::AudioSourceKind::Mic)
+        if (r.kind == exosnap::engine::AudioSourceKind::Mic)
             r.enabled = true;
     }
-    vm.audio_ui_state.mic_channel_mode = recorder_core::MicChannelMode::MonoMix;
+    vm.audio_ui_state.mic_channel_mode = exosnap::engine::MicChannelMode::MonoMix;
     const auto saved_rows = vm.audio_ui_state.source_rows;
 
     vm.ApplyTargetKindPreservingAudio(capability::CaptureTargetKind::Display);
@@ -358,7 +358,7 @@ TEST(RecordViewModelAudioTest, RecordViewModel_ApplyTargetKindPreservingAudio_Ke
         EXPECT_EQ(vm.audio_ui_state.source_rows[i].enabled, saved_rows[i].enabled);
         EXPECT_EQ(vm.audio_ui_state.source_rows[i].merge_with_above, saved_rows[i].merge_with_above);
     }
-    EXPECT_EQ(vm.audio_ui_state.mic_channel_mode, recorder_core::MicChannelMode::MonoMix);
+    EXPECT_EQ(vm.audio_ui_state.mic_channel_mode, exosnap::engine::MicChannelMode::MonoMix);
 }
 
 TEST(RecordViewModelAudioTest, RecordViewModel_ApplyTargetKindPreservingAudio_WindowModeKeepsAppAvailability) {
@@ -369,7 +369,7 @@ TEST(RecordViewModelAudioTest, RecordViewModel_ApplyTargetKindPreservingAudio_Wi
     for (auto& r : vm.audio_ui_state.source_rows)
         r.merge_with_above = false;
     for (auto& r : vm.audio_ui_state.source_rows) {
-        if (r.kind == recorder_core::AudioSourceKind::App || r.kind == recorder_core::AudioSourceKind::Sys)
+        if (r.kind == exosnap::engine::AudioSourceKind::App || r.kind == exosnap::engine::AudioSourceKind::Sys)
             r.enabled = true;
     }
 
@@ -402,7 +402,7 @@ TEST(RecordViewModelAudioTest, RecordViewModel_UpdateMeterRms_MapsMicTrack) {
     vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
     // Enable Mic so it becomes track 1 (App=track 0, Mic=track 1, Sys still off).
     for (auto& r : vm.audio_ui_state.source_rows)
-        if (r.kind == recorder_core::AudioSourceKind::Mic)
+        if (r.kind == exosnap::engine::AudioSourceKind::Mic)
             r.enabled = true;
     vm.RebuildAudioPlan();
 
@@ -433,7 +433,7 @@ TEST(RecordViewModelAudioTest, RecordViewModel_UpdateMeterRms_DisabledSourceStay
     vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
     // Enable Mic to get 2 tracks; Sys stays off.
     for (auto& r : vm.audio_ui_state.source_rows)
-        if (r.kind == recorder_core::AudioSourceKind::Mic)
+        if (r.kind == exosnap::engine::AudioSourceKind::Mic)
             r.enabled = true;
     vm.RebuildAudioPlan();
 
@@ -453,7 +453,7 @@ TEST(RecordViewModelAudioTest, RecordViewModel_UpdateMeterRms_MergedTrackFillsAl
     for (auto& r : vm.audio_ui_state.source_rows)
         r.enabled = true;
     for (auto& r : vm.audio_ui_state.source_rows) {
-        if (r.kind == recorder_core::AudioSourceKind::Mic || r.kind == recorder_core::AudioSourceKind::Sys)
+        if (r.kind == exosnap::engine::AudioSourceKind::Mic || r.kind == exosnap::engine::AudioSourceKind::Sys)
             r.merge_with_above = true;
     }
     vm.RebuildAudioPlan();
@@ -472,11 +472,11 @@ TEST(RecordViewModelAudioTest, RecordViewModel_UpdateStats_StillMapsRmsCorrectly
     vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
     // Enable Mic to get 2 tracks (App=0, Mic=1).
     for (auto& r : vm.audio_ui_state.source_rows)
-        if (r.kind == recorder_core::AudioSourceKind::Mic)
+        if (r.kind == exosnap::engine::AudioSourceKind::Mic)
             r.enabled = true;
     vm.RebuildAudioPlan();
 
-    recorder_core::SessionStats stats;
+    exosnap::engine::SessionStats stats;
     stats.per_track_rms[0] = 0.3f;
     stats.per_track_rms[1] = 0.7f;
 
@@ -508,31 +508,31 @@ TEST(RecordViewModelAudioTest, RecordViewModel_WindowLabelFromTarget_MissingAppN
 }
 
 TEST(RecordViewModelAudioTest, RecordViewModel_SortWindowTargetIndices_SortsByAppThenTitleCaseInsensitive) {
-    std::vector<recorder_core::CaptureTarget> targets;
-    targets.push_back({recorder_core::CaptureTarget::Kind::Window, 100, "zeta panel \xE2\x80\x94 brave"});
-    targets.push_back(
-        {recorder_core::CaptureTarget::Kind::Window, 101, "Debug und 2 weitere Registerkarten \xE2\x80\x94 Explorer"});
-    targets.push_back({recorder_core::CaptureTarget::Kind::Window, 102, "Alpha document \xE2\x80\x94 Brave"});
+    std::vector<exosnap::engine::CaptureTarget> targets;
+    targets.push_back({exosnap::engine::CaptureTarget::Kind::Window, 100, "zeta panel \xE2\x80\x94 brave"});
+    targets.push_back({exosnap::engine::CaptureTarget::Kind::Window, 101,
+                       "Debug und 2 weitere Registerkarten \xE2\x80\x94 Explorer"});
+    targets.push_back({exosnap::engine::CaptureTarget::Kind::Window, 102, "Alpha document \xE2\x80\x94 Brave"});
 
     const std::vector<int> sorted = RecordViewModel::SortWindowTargetIndices(targets, {0, 1, 2});
     EXPECT_EQ(sorted, (std::vector<int>{2, 0, 1}));
 }
 
 TEST(RecordViewModelAudioTest, RecordViewModel_SortWindowTargetIndices_PreservesOriginalTargetIndices) {
-    std::vector<recorder_core::CaptureTarget> targets;
-    targets.push_back({recorder_core::CaptureTarget::Kind::Monitor, 1, R"(\\.\DISPLAY1)"});
-    targets.push_back({recorder_core::CaptureTarget::Kind::Window, 2, "Main \xE2\x80\x94 Zebra"});
-    targets.push_back({recorder_core::CaptureTarget::Kind::Window, 3, "Alpha \xE2\x80\x94 AlphaApp"});
-    targets.push_back({recorder_core::CaptureTarget::Kind::Window, 4, "Gamma \xE2\x80\x94 AlphaApp"});
-    targets.push_back({recorder_core::CaptureTarget::Kind::Window, 5, "Window with no app"});
+    std::vector<exosnap::engine::CaptureTarget> targets;
+    targets.push_back({exosnap::engine::CaptureTarget::Kind::Monitor, 1, R"(\\.\DISPLAY1)"});
+    targets.push_back({exosnap::engine::CaptureTarget::Kind::Window, 2, "Main \xE2\x80\x94 Zebra"});
+    targets.push_back({exosnap::engine::CaptureTarget::Kind::Window, 3, "Alpha \xE2\x80\x94 AlphaApp"});
+    targets.push_back({exosnap::engine::CaptureTarget::Kind::Window, 4, "Gamma \xE2\x80\x94 AlphaApp"});
+    targets.push_back({exosnap::engine::CaptureTarget::Kind::Window, 5, "Window with no app"});
 
     const std::vector<int> sorted = RecordViewModel::SortWindowTargetIndices(targets, {4, 1, 3, 2});
     EXPECT_EQ(sorted, (std::vector<int>{2, 3, 4, 1}));
 }
 
 TEST(RecordViewModelAudioTest, RecordViewModel_FilenameContextFromCaptureTarget_MonitorTarget) {
-    const recorder_core::CaptureTarget monitor_target{recorder_core::CaptureTarget::Kind::Monitor, 10,
-                                                      R"(\\.\DISPLAY1)"};
+    const exosnap::engine::CaptureTarget monitor_target{exosnap::engine::CaptureTarget::Kind::Monitor, 10,
+                                                        R"(\\.\DISPLAY1)"};
 
     const FilenameTargetContext context = RecordViewModel::FilenameContextFromCaptureTarget(monitor_target);
     EXPECT_EQ(context.app_name, L"Desktop");
@@ -542,8 +542,8 @@ TEST(RecordViewModelAudioTest, RecordViewModel_FilenameContextFromCaptureTarget_
 }
 
 TEST(RecordViewModelAudioTest, RecordViewModel_FilenameContextFromCaptureTarget_WindowTarget) {
-    const recorder_core::CaptureTarget window_target{recorder_core::CaptureTarget::Kind::Window, 11,
-                                                     "Claude Design - Brave"};
+    const exosnap::engine::CaptureTarget window_target{exosnap::engine::CaptureTarget::Kind::Window, 11,
+                                                       "Claude Design - Brave"};
 
     const FilenameTargetContext context = RecordViewModel::FilenameContextFromCaptureTarget(window_target);
     EXPECT_EQ(context.app_name, L"Brave");
@@ -553,10 +553,10 @@ TEST(RecordViewModelAudioTest, RecordViewModel_FilenameContextFromCaptureTarget_
 }
 
 TEST(RecordViewModelAudioTest, RecordViewModel_TargetLabelFromCaptureTarget_UsesSelectedTargetLabel) {
-    const recorder_core::CaptureTarget monitor_target{recorder_core::CaptureTarget::Kind::Monitor, 12,
-                                                      R"(\\.\DISPLAY2)"};
-    const recorder_core::CaptureTarget window_target{recorder_core::CaptureTarget::Kind::Window, 13,
-                                                     "Claude Design - Brave"};
+    const exosnap::engine::CaptureTarget monitor_target{exosnap::engine::CaptureTarget::Kind::Monitor, 12,
+                                                        R"(\\.\DISPLAY2)"};
+    const exosnap::engine::CaptureTarget window_target{exosnap::engine::CaptureTarget::Kind::Window, 13,
+                                                       "Claude Design - Brave"};
 
     EXPECT_EQ(RecordViewModel::TargetLabelFromCaptureTarget(monitor_target), "Desktop - Display 2");
     EXPECT_EQ(RecordViewModel::TargetLabelFromCaptureTarget(window_target), "Brave - Claude Design");
@@ -569,8 +569,8 @@ TEST(RecordViewModelAudioTest, RecordViewModel_TargetLabelFromCaptureTarget_Uses
 // description is a technical display identifier, never personal, so it is
 // unaffected and matches the normal (UI-facing) label.
 TEST(RecordViewModelAudioTest, RecordViewModel_LogSafeTargetLabel_WindowTitleReplacedWithPlaceholder) {
-    const recorder_core::CaptureTarget window_target{recorder_core::CaptureTarget::Kind::Window, 13,
-                                                     "Claude Design - Brave"};
+    const exosnap::engine::CaptureTarget window_target{exosnap::engine::CaptureTarget::Kind::Window, 13,
+                                                       "Claude Design - Brave"};
 
     const std::string label = RecordViewModel::LogSafeTargetLabel(window_target);
     EXPECT_EQ(label, "[window]");
@@ -579,8 +579,8 @@ TEST(RecordViewModelAudioTest, RecordViewModel_LogSafeTargetLabel_WindowTitleRep
 }
 
 TEST(RecordViewModelAudioTest, RecordViewModel_LogSafeTargetLabel_MonitorDescriptionUnchanged) {
-    const recorder_core::CaptureTarget monitor_target{recorder_core::CaptureTarget::Kind::Monitor, 12,
-                                                      R"(\\.\DISPLAY2)"};
+    const exosnap::engine::CaptureTarget monitor_target{exosnap::engine::CaptureTarget::Kind::Monitor, 12,
+                                                        R"(\\.\DISPLAY2)"};
 
     EXPECT_EQ(RecordViewModel::LogSafeTargetLabel(monitor_target),
               RecordViewModel::TargetLabelFromCaptureTarget(monitor_target));
@@ -594,11 +594,11 @@ TEST(RecordViewModelAudioTest, RecordViewModel_LogSafeTargetLabel_MonitorDescrip
 TEST(RecordViewModelAudioTest, RecordViewModel_DisplayToWindow_AddsAppRow) {
     RecordViewModel vm;
     vm.ApplyTargetKind(capability::CaptureTargetKind::Display);
-    ASSERT_EQ(FindRow(vm.audio_ui_state, recorder_core::AudioSourceKind::App), nullptr);
+    ASSERT_EQ(FindRow(vm.audio_ui_state, exosnap::engine::AudioSourceKind::App), nullptr);
 
     vm.ApplyTargetKindPreservingAudio(capability::CaptureTargetKind::Window);
 
-    const auto* app_row = FindRow(vm.audio_ui_state, recorder_core::AudioSourceKind::App);
+    const auto* app_row = FindRow(vm.audio_ui_state, exosnap::engine::AudioSourceKind::App);
     ASSERT_NE(app_row, nullptr);
     EXPECT_TRUE(app_row->enabled);
     EXPECT_FALSE(app_row->merge_with_above);
@@ -609,7 +609,7 @@ TEST(RecordViewModelAudioTest, RecordViewModel_DisplayToWindow_PreservesExisting
     vm.ApplyTargetKind(capability::CaptureTargetKind::Display);
     // Disable SystemOutput; Mic is OFF by default policy.
     for (auto& r : vm.audio_ui_state.source_rows) {
-        if (r.kind == recorder_core::AudioSourceKind::SystemOutput)
+        if (r.kind == exosnap::engine::AudioSourceKind::SystemOutput)
             r.enabled = false;
     }
 
@@ -624,13 +624,13 @@ TEST(RecordViewModelAudioTest, RecordViewModel_DisplayToWindow_PreservesExisting
     vm.ApplyTargetKind(capability::CaptureTargetKind::Display);
     // Disable Mic.
     for (auto& r : vm.audio_ui_state.source_rows)
-        if (r.kind == recorder_core::AudioSourceKind::Mic)
+        if (r.kind == exosnap::engine::AudioSourceKind::Mic)
             r.enabled = false;
 
     vm.ApplyTargetKindPreservingAudio(capability::CaptureTargetKind::Window);
 
     EXPECT_FALSE(vm.audio_ui_state.IsMicEnabled());
-    EXPECT_NE(FindRow(vm.audio_ui_state, recorder_core::AudioSourceKind::App), nullptr);
+    EXPECT_NE(FindRow(vm.audio_ui_state, exosnap::engine::AudioSourceKind::App), nullptr);
 }
 
 TEST(RecordViewModelAudioTest, RecordViewModel_WindowToWindow_NoDuplicateAppRow) {
@@ -643,7 +643,7 @@ TEST(RecordViewModelAudioTest, RecordViewModel_WindowToWindow_NoDuplicateAppRow)
     EXPECT_EQ(vm.audio_ui_state.source_rows.size(), row_count);
     int app_count = 0;
     for (const auto& r : vm.audio_ui_state.source_rows)
-        if (r.kind == recorder_core::AudioSourceKind::App)
+        if (r.kind == exosnap::engine::AudioSourceKind::App)
             ++app_count;
     EXPECT_EQ(app_count, 1);
 }
@@ -652,12 +652,12 @@ TEST(RecordViewModelAudioTest, RecordViewModel_WindowToWindow_PreservesAppEnable
     RecordViewModel vm;
     vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
     for (auto& r : vm.audio_ui_state.source_rows)
-        if (r.kind == recorder_core::AudioSourceKind::App)
+        if (r.kind == exosnap::engine::AudioSourceKind::App)
             r.enabled = false;
 
     vm.ApplyTargetKindPreservingAudio(capability::CaptureTargetKind::Window);
 
-    const auto* app_row = FindRow(vm.audio_ui_state, recorder_core::AudioSourceKind::App);
+    const auto* app_row = FindRow(vm.audio_ui_state, exosnap::engine::AudioSourceKind::App);
     ASSERT_NE(app_row, nullptr);
     EXPECT_FALSE(app_row->enabled);
 }
@@ -686,7 +686,7 @@ TEST(RecordViewModelAudioTest, RecordViewModel_WindowToDisplay_PreservesAppRowIn
     vm.ApplyTargetKindPreservingAudio(capability::CaptureTargetKind::Display);
 
     EXPECT_EQ(vm.audio_ui_state.target_kind, capability::CaptureTargetKind::Display);
-    EXPECT_NE(FindRow(vm.audio_ui_state, recorder_core::AudioSourceKind::App), nullptr);
+    EXPECT_NE(FindRow(vm.audio_ui_state, exosnap::engine::AudioSourceKind::App), nullptr);
 }
 
 TEST(RecordViewModelAudioTest, RecordViewModel_DisplayToWindow_AppBecomesActive) {
@@ -713,7 +713,7 @@ TEST(RecordViewModelAudioTest, RecordViewModel_DisplayToWindow_AppRowIsFirst) {
     vm.ApplyTargetKindPreservingAudio(capability::CaptureTargetKind::Window);
 
     ASSERT_FALSE(vm.audio_ui_state.source_rows.empty());
-    EXPECT_EQ(vm.audio_ui_state.source_rows.front().kind, recorder_core::AudioSourceKind::App);
+    EXPECT_EQ(vm.audio_ui_state.source_rows.front().kind, exosnap::engine::AudioSourceKind::App);
 }
 
 // ---------------------------------------------------------------------------
@@ -738,7 +738,7 @@ TEST(RecordViewModelAudioTest, RecordViewModel_RegionUsesDisplayPolicy) {
 }
 
 TEST(RecordViewModelAudioTest, RecordViewModel_WindowPreferencesSurviveWindowDisplayWindow) {
-    using K = recorder_core::AudioSourceKind;
+    using K = exosnap::engine::AudioSourceKind;
     RecordViewModel vm;
     vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
     // Disable App, enable Sys.
@@ -757,7 +757,7 @@ TEST(RecordViewModelAudioTest, RecordViewModel_WindowPreferencesSurviveWindowDis
 }
 
 TEST(RecordViewModelAudioTest, RecordViewModel_DisplaySysPreferenceSurvivesWindowSwitch) {
-    using K = recorder_core::AudioSourceKind;
+    using K = exosnap::engine::AudioSourceKind;
     RecordViewModel vm;
     vm.ApplyTargetKind(capability::CaptureTargetKind::Display);
     // Disable Computer audio.
@@ -772,7 +772,7 @@ TEST(RecordViewModelAudioTest, RecordViewModel_DisplaySysPreferenceSurvivesWindo
 }
 
 TEST(RecordViewModelAudioTest, RecordViewModel_MicPreferenceSurvivesAllTransitions) {
-    using K = recorder_core::AudioSourceKind;
+    using K = exosnap::engine::AudioSourceKind;
     RecordViewModel vm;
     vm.ApplyTargetKind(capability::CaptureTargetKind::Display);
     // Enable Mic from Display state.
@@ -791,7 +791,7 @@ TEST(RecordViewModelAudioTest, RecordViewModel_MicPreferenceSurvivesAllTransitio
 }
 
 TEST(RecordViewModelAudioTest, RecordViewModel_MergeStatePreservedAcrossTransitions) {
-    using K = recorder_core::AudioSourceKind;
+    using K = exosnap::engine::AudioSourceKind;
     RecordViewModel vm;
     vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
     for (auto& r : vm.audio_ui_state.source_rows)
@@ -829,7 +829,7 @@ TEST(RecordViewModelAudioTest, RecordViewModel_DisplayDefault_OnlySysIsActive) {
 TEST(RecordViewModelStateGuardTest, CanStart_Ready_WithTargets_ReturnsTrue) {
     RecordViewModel vm;
     vm.SetState(UiRecordingState::Ready);
-    vm.targets = {recorder_core::CaptureTarget{}};
+    vm.targets = {exosnap::engine::CaptureTarget{}};
     vm.selected_target_index = 0;
     EXPECT_TRUE(vm.CanStart());
 }
@@ -851,7 +851,7 @@ TEST(RecordViewModelStateGuardTest, CanStart_TransientRecordingStatesReturnFalse
                                          UiRecordingState::RegionSelecting, UiRecordingState::Stopping}) {
         RecordViewModel vm;
         vm.SetState(state);
-        vm.targets = {recorder_core::CaptureTarget{}};
+        vm.targets = {exosnap::engine::CaptureTarget{}};
         vm.selected_target_index = 0;
         EXPECT_FALSE(vm.CanStart());
     }
@@ -860,7 +860,7 @@ TEST(RecordViewModelStateGuardTest, CanStart_TransientRecordingStatesReturnFalse
 TEST(RecordViewModelStateGuardTest, CanStart_Blocked_ReturnsFalse) {
     RecordViewModel vm;
     vm.SetState(UiRecordingState::Blocked);
-    vm.targets = {recorder_core::CaptureTarget{}};
+    vm.targets = {exosnap::engine::CaptureTarget{}};
     vm.selected_target_index = 0;
     EXPECT_FALSE(vm.CanStart());
 }
@@ -875,7 +875,7 @@ TEST(RecordViewModelStateGuardTest, CanStart_NoTargets_ReturnsFalse) {
 TEST(RecordViewModelStateGuardTest, CanStart_Completed_ReturnsTrue) {
     RecordViewModel vm;
     vm.SetState(UiRecordingState::Completed);
-    vm.targets = {recorder_core::CaptureTarget{}};
+    vm.targets = {exosnap::engine::CaptureTarget{}};
     vm.selected_target_index = 0;
     EXPECT_TRUE(vm.CanStart());
 }
@@ -883,7 +883,7 @@ TEST(RecordViewModelStateGuardTest, CanStart_Completed_ReturnsTrue) {
 TEST(RecordViewModelStateGuardTest, CanStart_Failed_ReturnsTrue) {
     RecordViewModel vm;
     vm.SetState(UiRecordingState::Failed);
-    vm.targets = {recorder_core::CaptureTarget{}};
+    vm.targets = {exosnap::engine::CaptureTarget{}};
     vm.selected_target_index = 0;
     EXPECT_TRUE(vm.CanStart());
 }

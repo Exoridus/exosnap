@@ -6,22 +6,22 @@
 namespace exosnap::capability {
 
 bool AudioUiState::IsAppEnabled() const noexcept {
-    return std::any_of(source_rows.begin(), source_rows.end(), [](const recorder_core::AudioSourceRow& r) {
-        return r.kind == recorder_core::AudioSourceKind::App && r.enabled;
+    return std::any_of(source_rows.begin(), source_rows.end(), [](const exosnap::engine::AudioSourceRow& r) {
+        return r.kind == exosnap::engine::AudioSourceKind::App && r.enabled;
     });
 }
 
 bool AudioUiState::IsSysEnabled() const noexcept {
-    return std::any_of(source_rows.begin(), source_rows.end(), [](const recorder_core::AudioSourceRow& r) {
-        return (r.kind == recorder_core::AudioSourceKind::Sys ||
-                r.kind == recorder_core::AudioSourceKind::SystemOutput) &&
+    return std::any_of(source_rows.begin(), source_rows.end(), [](const exosnap::engine::AudioSourceRow& r) {
+        return (r.kind == exosnap::engine::AudioSourceKind::Sys ||
+                r.kind == exosnap::engine::AudioSourceKind::SystemOutput) &&
                r.enabled;
     });
 }
 
 bool AudioUiState::IsMicEnabled() const noexcept {
-    return std::any_of(source_rows.begin(), source_rows.end(), [](const recorder_core::AudioSourceRow& r) {
-        return r.kind == recorder_core::AudioSourceKind::Mic && r.enabled;
+    return std::any_of(source_rows.begin(), source_rows.end(), [](const exosnap::engine::AudioSourceRow& r) {
+        return r.kind == exosnap::engine::AudioSourceKind::Mic && r.enabled;
     });
 }
 
@@ -69,16 +69,16 @@ AudioPlanResult BuildAudioPlan(const AudioUiState& state) {
     // resolving, or a stored app row survives into the plan and the engine refuses to
     // prepare for want of a process id.
     const bool window_target = state.target_kind == CaptureTargetKind::Window;
-    result.plan = recorder_core::ResolveAudioTracks(
-        recorder_core::NormalizeSourceRowsForTarget(state.source_rows, window_target));
+    result.plan = exosnap::engine::ResolveAudioTracks(
+        exosnap::engine::NormalizeSourceRowsForTarget(state.source_rows, window_target));
 
     // Sys is the App row's complement and is just as process-scoped, so the pid has to
     // follow the plan rather than the App row alone: a window recording with Sys on and
     // App off still needs the process it excludes.
     const bool plan_needs_pid =
         std::any_of(result.plan.tracks.begin(), result.plan.tracks.end(), [](const auto& track) {
-            return std::any_of(track.sources.begin(), track.sources.end(), [](recorder_core::AudioSourceKind kind) {
-                return kind == recorder_core::AudioSourceKind::App || kind == recorder_core::AudioSourceKind::Sys;
+            return std::any_of(track.sources.begin(), track.sources.end(), [](exosnap::engine::AudioSourceKind kind) {
+                return kind == exosnap::engine::AudioSourceKind::App || kind == exosnap::engine::AudioSourceKind::Sys;
             });
         });
     if (window_target && plan_needs_pid) {
@@ -110,19 +110,19 @@ std::vector<AudioTrackPreview> BuildAudioTrackPreview(const AudioPlanResult& res
             item.display_label = "Mixed Audio";
         } else {
             switch (track.sources.front()) {
-            case recorder_core::AudioSourceKind::App:
+            case exosnap::engine::AudioSourceKind::App:
                 item.source_key = "app";
                 item.display_label = "Application Audio";
                 break;
-            case recorder_core::AudioSourceKind::Sys:
+            case exosnap::engine::AudioSourceKind::Sys:
                 item.source_key = "sys";
                 item.display_label = "Other System Audio";
                 break;
-            case recorder_core::AudioSourceKind::Mic:
+            case exosnap::engine::AudioSourceKind::Mic:
                 item.source_key = "mic";
                 item.display_label = "Microphone";
                 break;
-            case recorder_core::AudioSourceKind::SystemOutput:
+            case exosnap::engine::AudioSourceKind::SystemOutput:
                 item.source_key = "system_output";
                 item.display_label = "System Audio";
                 break;

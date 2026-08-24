@@ -114,7 +114,7 @@ class QuickApplication {
     // shows exactly what is about to be recorded. Mirrors
     // RecordPage::selectCaptureTargetForAutomation on the Widgets side, which is
     // what lets the frontend A/B benchmark put both frontends in the same state.
-    [[nodiscard]] bool selectCaptureTargetForAutomation(recorder_core::CaptureTarget::Kind kind,
+    [[nodiscard]] bool selectCaptureTargetForAutomation(exosnap::engine::CaptureTarget::Kind kind,
                                                         const QString& title_filter);
     // Automation only (--auto-edit chained onto --auto-record). Opens the Editor
     // on the recording this process just finished, through the same
@@ -486,9 +486,9 @@ class QuickApplication {
     // interval after the decision that scheduled it.
     void startMeterServices();
     void refreshCaptureTargets(const CaptureTargetSnapshot& snapshot, DiscoveryReason reason);
-    void updateOutputTargetContext(const recorder_core::CaptureTarget& target);
+    void updateOutputTargetContext(const exosnap::engine::CaptureTarget& target);
     void persistLiveConfig();
-    [[nodiscard]] std::optional<recorder_core::CaptureTarget> selectedCaptureTarget() const;
+    [[nodiscard]] std::optional<exosnap::engine::CaptureTarget> selectedCaptureTarget() const;
 
     // QCR-110. Points the exclusive-fullscreen probe at whatever is selected now,
     // pauses it while the recording engine owns the capture, and pushes the
@@ -510,14 +510,14 @@ class QuickApplication {
     // for any target the snapshot does not describe, so a retarget can never be
     // judged by the previous window's evidence.
     [[nodiscard]] diagnostics::ExclusiveEvidence
-    resolveWindowExclusiveEvidence(const recorder_core::CaptureTarget& target) const;
+    resolveWindowExclusiveEvidence(const exosnap::engine::CaptureTarget& target) const;
 
     // QCR-804. Feeds one live diagnostics snapshot to the mid-recording capture
     // stall monitor and acts on what it reports: classify a confirmed starvation,
     // raise the standing warning, or clear it when frames come back. Driven only
     // by the coordinator's diagnostics callback (~5 Hz, Qt main thread) — no timer
     // and no probe of its own.
-    void observeWindowCaptureStall(const recorder_core::RecordingDiagnosticsSnapshot& snapshot);
+    void observeWindowCaptureStall(const exosnap::engine::RecordingDiagnosticsSnapshot& snapshot);
     // Announces the present-attribution boundary. `pid` is the captured window's
     // process for Window targets and 0 for Display/Region (whose presenter is the
     // dominant one, exactly like the idle desktop).
@@ -545,7 +545,7 @@ class QuickApplication {
     // is capturing again. Same shape and same driver as the capture-stall path
     // above — the pipeline's existing AudioDiagnostics health facts, no second
     // detection.
-    void observeAudioSourceDegradation(const recorder_core::RecordingDiagnosticsSnapshot& snapshot);
+    void observeAudioSourceDegradation(const exosnap::engine::RecordingDiagnosticsSnapshot& snapshot);
     // Dismisses the standing audio-degradation toast if one is up. Called when
     // every source recovers and again when the session leaves Recording/Paused —
     // the toast says the recording continues, which stops being true then.
@@ -675,7 +675,7 @@ class QuickApplication {
     // Post-flight numbers the Edit surface's report badge reads. Latched from
     // the diagnostics stream during the session (the final snapshot arrives
     // before the result callback) and reset on every fresh start.
-    recorder_core::RecordingDiagnosticsSnapshot last_completed_snapshot_;
+    exosnap::engine::RecordingDiagnosticsSnapshot last_completed_snapshot_;
     double peak_av_drift_ms_ = 0.0;
     bool av_drift_ever_available_ = false;
     float preflight_system_rms_ = 0.0f;
@@ -711,7 +711,7 @@ class QuickApplication {
     StartAdmission last_start_admission_ = StartAdmission::RefusedByState;
     // The selection Diagnostics currently holds. Same reason as the two below:
     // pushing it re-runs the recommendation checklist, so only a real change may.
-    std::optional<recorder_core::CaptureTarget> pushed_selected_target_;
+    std::optional<exosnap::engine::CaptureTarget> pushed_selected_target_;
     // What refreshCaptureWindowEvidence() last handed to Diagnostics. Kept so an
     // unchanged snapshot costs one comparison instead of a checklist rebuild.
     std::optional<WindowEvidenceProbe::Snapshot> pushed_window_evidence_;

@@ -37,7 +37,7 @@ Countdown-Ende) und dem Start des Aufnahme-Threads blockiert der GUI-Thread durc
 Der eigentliche schwere Geräte-Open (Capture + NVENC) läuft bereits off-thread in
 `RecordingThreadProc` → `session_.Record()` (`RecordingCoordinator.cpp:1377,1379`); auch
 `session_.Validate()` ist entgegen der Review-Formulierung **billig und rein** (nur
-Container/Codec-/Pfad-Regeln, kein Geräte-Open — `libs/recorder_core/src/recorder_session.cpp:155`
+Container/Codec-/Pfad-Regeln, kein Geräte-Open — `libs/engine/src/recorder_session.cpp:155`
 ff.). Der GUI-Stall stammt also aus DXGI-Facts, Webcam-Start, Release-Handshake und den
 FS-/Disk-Operationen.
 

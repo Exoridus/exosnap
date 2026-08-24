@@ -10,7 +10,7 @@
 //   D.  OS: RtlGetVersion via ntdll.dll
 //
 // AAC audio capability is not probed here: since ADR 0052, AAC is encoded by
-// FFmpeg's bundled native AAC-LC encoder (libs/recorder_core/src/ffmpeg_aac_encoder.cpp),
+// FFmpeg's bundled native AAC-LC encoder (libs/engine/src/ffmpeg_aac_encoder.cpp),
 // which ships with every build and requires no Media Foundation component. It
 // is therefore always available; see CapabilityBuilder::BuildStaticValidatedBaseline().
 //
@@ -30,7 +30,7 @@
 #include <dxgi.h>
 #include <dxgi1_6.h> // IDXGIOutput6::GetDesc1 (per-display HDR facts)
 
-#include <recorder_core/hdr_color_space.h> // one definition of "HDR is on"
+#include <exosnap/engine/hdr_color_space.h> // one definition of "HDR is on"
 
 // COM smart pointer support
 #include <wrl/client.h>
@@ -429,7 +429,7 @@ void ProbeDisplays(std::vector<DisplayHdrFacts>& displays) {
                         facts.name.resize(static_cast<size_t>(len - 1));
                         WideCharToMultiByte(CP_UTF8, 0, d.DeviceName, -1, facts.name.data(), len, nullptr, nullptr);
                     }
-                    facts.hdr_active = recorder_core::IsHdrColorSpace(d.ColorSpace);
+                    facts.hdr_active = exosnap::engine::IsHdrColorSpace(d.ColorSpace);
                     facts.bits_per_color = d.BitsPerColor;
                     facts.red_primary_x = d.RedPrimary[0];
                     facts.red_primary_y = d.RedPrimary[1];

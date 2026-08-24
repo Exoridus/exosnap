@@ -4,11 +4,11 @@
 #include "services/DisplayNumbering.h"
 #include "services/TargetDisplayFacts.h"
 
-#include "../../libs/recorder_core/src/loopback_meter_service.h"
-#include "../../libs/recorder_core/src/mic_meter_service.h"
+#include "../../libs/engine/src/loopback_meter_service.h"
+#include "../../libs/engine/src/mic_meter_service.h"
 
-#include <recorder_core/hdr_native.h>
-#include <recorder_core/mp4_remuxer.h>
+#include <exosnap/engine/hdr_native.h>
+#include <exosnap/engine/mp4_remuxer.h>
 
 #include <capability/capability_builder.h>
 #include <capability/runtime_snapshot.h>
@@ -68,7 +68,7 @@ static std::wstring ToWide(const std::string& s) {
     return w;
 }
 
-// Wraps recorder_core::DeriveSegmentPath for the app layer. A derivation
+// Wraps exosnap::engine::DeriveSegmentPath for the app layer. A derivation
 // failure (a genuine filesystem probe error, or the bounded collision scan
 // exhausted -- see recorder_session.h) is logged loudly via AppLog::error
 // rather than silently reused; the caller gets std::nullopt back and is
@@ -78,7 +78,7 @@ static std::wstring ToWide(const std::string& s) {
 // aborting the whole recording/remux session).
 static std::optional<std::filesystem::path> DeriveSegmentPathLogged(const std::filesystem::path& base, uint32_t index,
                                                                     const char* context) {
-    const recorder_core::SegmentPathResult result = recorder_core::DeriveSegmentPath(base, index);
+    const exosnap::engine::SegmentPathResult result = exosnap::engine::DeriveSegmentPath(base, index);
     if (!result.success) {
         diagnostics::AppLog::error(QStringLiteral("split"),
                                    QStringLiteral("DeriveSegmentPath failed (%1) base=\"%2\" index=%3: %4")
@@ -104,9 +104,9 @@ static std::string TrimAscii(const std::string& value) {
     return value.substr(first, last - first);
 }
 
-static recorder_core::WebcamOverlayLive ToLiveWebcamOverlay(const WebcamSettings& settings) {
+static exosnap::engine::WebcamOverlayLive ToLiveWebcamOverlay(const WebcamSettings& settings) {
     const WebcamSettings sanitized = SanitizeWebcamSettings(settings);
-    recorder_core::WebcamOverlayLive overlay;
+    exosnap::engine::WebcamOverlayLive overlay;
     overlay.enabled = sanitized.enabled;
     overlay.overlay_x_norm = sanitized.overlay.x_norm;
     overlay.overlay_y_norm = sanitized.overlay.y_norm;
@@ -200,9 +200,9 @@ static std::string BuildProcessName(const std::string& app_name) {
     return process_name;
 }
 
-static FilenameTargetContext BuildFilenameContextFromTarget(const recorder_core::CaptureTarget& target) {
+static FilenameTargetContext BuildFilenameContextFromTarget(const exosnap::engine::CaptureTarget& target) {
     FilenameTargetContext context;
-    if (target.kind == recorder_core::CaptureTarget::Kind::Monitor) {
+    if (target.kind == exosnap::engine::CaptureTarget::Kind::Monitor) {
         const std::string display = DisplayLabelFromTargetDescription(target.description);
         context.app_name = L"Desktop";
         context.process_name = L"desktop";
@@ -222,10 +222,10 @@ static FilenameTargetContext BuildFilenameContextFromTarget(const recorder_core:
     return context;
 }
 
-static bool PlanRequiresTargetPid(const recorder_core::AudioTrackPlan& plan) {
+static bool PlanRequiresTargetPid(const exosnap::engine::AudioTrackPlan& plan) {
     for (const auto& track : plan.tracks) {
         for (const auto source : track.sources) {
-            if (source == recorder_core::AudioSourceKind::App || source == recorder_core::AudioSourceKind::Sys) {
+            if (source == exosnap::engine::AudioSourceKind::App || source == exosnap::engine::AudioSourceKind::Sys) {
                 return true;
             }
         }
@@ -233,14 +233,14 @@ static bool PlanRequiresTargetPid(const recorder_core::AudioTrackPlan& plan) {
     return false;
 }
 
-void ApplyOutputSettingsToRecorderConfig(recorder_core::RecorderConfig& config, const OutputSettingsModel& settings) {
+void ApplyOutputSettingsToRecorderConfig(exosnap::engine::RecorderConfig& config, const OutputSettingsModel& settings) {
     // Plain pass-throughs with no capability-layer equivalent only. The
     // container/codec/depth/chroma decisions are NOT re-applied here: the
     // resolver made them and ToRecorderCoreConfig already stamped its answer
     // into `config` — overwriting any of those fields from the raw settings
     // would let this copy drift from (and silently undo) a resolver fallback.
     //
-    // OutputSettingsModel::nvenc_preset already uses recorder_core::NvencPreset
+    // OutputSettingsModel::nvenc_preset already uses exosnap::engine::NvencPreset
     // directly (no capability:: mirror type exists for it), so this is a plain copy.
     config.nvenc_preset = settings.nvenc_preset;
     config.output_width = 0;
@@ -328,9 +328,9 @@ static std::wstring BuildCapabilityStatusText(const capability::UserRecorderConf
 
 RecordingCoordinator::RecordingCoordinator()
     : output_settings_(OutputSettingsModel::Defaults()),
-      mic_meter_service_(std::make_unique<recorder_core::MicMeterService>()),
-      sys_meter_service_(std::make_unique<recorder_core::LoopbackMeterService>()),
-      app_meter_service_(std::make_unique<recorder_core::LoopbackMeterService>()) {
+      mic_meter_service_(std::make_unique<exosnap::engine::MicMeterService>()),
+      sys_meter_service_(std::make_unique<exosnap::engine::LoopbackMeterService>()),
+      app_meter_service_(std::make_unique<exosnap::engine::LoopbackMeterService>()) {
     // One screenshot write at a time — see the snapshot_pool_ declaration.
     snapshot_pool_.setMaxThreadCount(1);
 }
@@ -458,10 +458,10 @@ void RecordingCoordinator::PostRecoveryProtectionLost(QString detail) {
 }
 
 diagnostics::ExclusiveEvidence
-RecordingCoordinator::ResolveWindowExclusiveEvidence(const recorder_core::CaptureTarget& target) const {
+RecordingCoordinator::ResolveWindowExclusiveEvidence(const exosnap::engine::CaptureTarget& target) const {
     // Monitor capture can record exclusive fullscreen; only a window target can be
     // rendered black by it.
-    if (target.kind != recorder_core::CaptureTarget::Kind::Window || target.native_id == 0)
+    if (target.kind != exosnap::engine::CaptureTarget::Kind::Window || target.native_id == 0)
         return diagnostics::ExclusiveEvidence::None;
     if (!window_exclusive_evidence_provider_)
         return diagnostics::ExclusiveEvidence::None;
@@ -717,8 +717,8 @@ void RecordingCoordinator::RevalidateCapabilities() {
         PostStateChange(new_state);
 }
 
-std::vector<recorder_core::CaptureTarget> RecordingCoordinator::EnumerateTargets() {
-    return recorder_core::RecorderSession::EnumerateTargets();
+std::vector<exosnap::engine::CaptureTarget> RecordingCoordinator::EnumerateTargets() {
+    return exosnap::engine::RecorderSession::EnumerateTargets();
 }
 
 void RecordingCoordinator::SetWebcamSettings(const WebcamSettings& settings) {
@@ -789,9 +789,9 @@ void RecordingCoordinator::SetWebcamStatusCallback(QObject* receiver, WebcamServ
     webcam_service_.SetStatusCallback(receiver, std::move(cb));
 }
 
-bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& target,
+bool RecordingCoordinator::StartRecording(const exosnap::engine::CaptureTarget& target,
                                           const capability::AudioUiState& audio_ui_state,
-                                          std::optional<recorder_core::CaptureRegion> crop_region) {
+                                          std::optional<exosnap::engine::CaptureRegion> crop_region) {
     StopMicMeter();
 
     // ── Thin gate (UI thread) ────────────────────────────────────────────────
@@ -854,7 +854,7 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
 }
 
 void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx) {
-    const recorder_core::CaptureTarget& target = ctx.target;
+    const exosnap::engine::CaptureTarget& target = ctx.target;
     const std::filesystem::path effective_folder = EffectiveOutputFolderFor(ctx.output_settings);
 
     // Whether this prepare opened the shared webcam device (vs. an idle PiP preview
@@ -945,7 +945,7 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
 
         UiRecordingResult result;
         result.succeeded = false;
-        result.error_phase = FormatErrorPhase(recorder_core::ErrorPhase::Prepare);
+        result.error_phase = FormatErrorPhase(exosnap::engine::ErrorPhase::Prepare);
         result.error_detail = FolderValidationMessage(folder_check);
         FillResultFormat(result, ctx);
         PostResult(std::move(result));
@@ -1018,7 +1018,7 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
     {
         std::lock_guard<std::mutex> lock(diagnostics_guard_mutex_);
         has_last_snapshot_ = false;
-        last_snapshot_ = recorder_core::RecordingDiagnosticsSnapshot{};
+        last_snapshot_ = exosnap::engine::RecordingDiagnosticsSnapshot{};
     }
     // Same reasoning for the capture-stall count (QCR-804): the report for this
     // recording must not inherit the previous one's episodes.
@@ -1074,7 +1074,7 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
     // early-returns, so no UI-thread reader competes for it.
     const capability::DisplayHdrFacts* target_display_facts = FindTargetDisplayFacts(target, RefreshedDisplayFacts());
     if (const capability::DisplayHdrFacts* facts = target_display_facts) {
-        if (recorder_core::IsHdr10NativeEffective(config.hdr_mode, facts->hdr_active, config.video_codec)) {
+        if (exosnap::engine::IsHdr10NativeEffective(config.hdr_mode, facts->hdr_active, config.video_codec)) {
             // Derive BT.2020/PQ colour metadata, pin 10-bit, and snap chroma back to
             // 4:2:0 — 4:4:4 (AYUV) is 8-bit only, so a leftover Cs444 selection would
             // otherwise reach Validate() as Cs444 + Bit10 and fail the recording start
@@ -1082,7 +1082,7 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
             // are engine-owned (ToHdrDisplayFacts / ApplyHdr10NativeEncode); the
             // coordinator only plumbs the target's facts through.
             const bool chroma_snapped =
-                recorder_core::ApplyHdr10NativeEncode(config, capability::ToHdrDisplayFacts(*facts));
+                exosnap::engine::ApplyHdr10NativeEncode(config, capability::ToHdrDisplayFacts(*facts));
             diagnostics::AppLog::info(
                 QStringLiteral("record.hdr"),
                 QStringLiteral("mode=hdr10-native primaries=bt2020 transfer=pq bitdepth=10 range=limited"));
@@ -1122,7 +1122,7 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
             UiRecordingResult result;
             result.succeeded = false;
             result.output_path = output_path.wstring();
-            result.error_phase = FormatErrorPhase(recorder_core::ErrorPhase::Prepare);
+            result.error_phase = FormatErrorPhase(exosnap::engine::ErrorPhase::Prepare);
             result.error_detail = detail;
             FillResultFormat(result, ctx);
             PostResult(std::move(result));
@@ -1160,7 +1160,7 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
     }
 
     capability::AudioUiState audio_state = ctx.audio_ui_state;
-    if (target.kind == recorder_core::CaptureTarget::Kind::Window && target.native_id != 0) {
+    if (target.kind == exosnap::engine::CaptureTarget::Kind::Window && target.native_id != 0) {
         HWND hwnd = reinterpret_cast<HWND>(target.native_id);
         DWORD pid = 0;
         if (::GetWindowThreadProcessId(hwnd, &pid) != 0 && pid != 0) {
@@ -1213,7 +1213,7 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
         UiRecordingResult result;
         result.succeeded = false;
         result.output_path = output_path.wstring();
-        result.error_phase = FormatErrorPhase(recorder_core::ErrorPhase::Prepare);
+        result.error_phase = FormatErrorPhase(exosnap::engine::ErrorPhase::Prepare);
         result.error_detail = L"Window target PID unavailable; the selected window may have been closed.";
         FillResultFormat(result, ctx);
         PostResult(std::move(result));
@@ -1221,7 +1221,7 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
         return;
     }
 
-    recorder_core::RecorderResult validate_result;
+    exosnap::engine::RecorderResult validate_result;
     if (!session_.Validate(config, &validate_result)) {
         diagnostics::AppLog::error(
             QStringLiteral("record.failure"),
@@ -1251,16 +1251,16 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
         has_last_committed_config_ = true;
     }
 
-    session_.SetStatsCallback([this](const recorder_core::SessionStats& stats) { PostStats(stats); });
-    session_.SetMeterCallback([this](const recorder_core::MeterSnapshot& m) { PostRecordingMeter(m.per_track_rms); });
+    session_.SetStatsCallback([this](const exosnap::engine::SessionStats& stats) { PostStats(stats); });
+    session_.SetMeterCallback([this](const exosnap::engine::MeterSnapshot& m) { PostRecordingMeter(m.per_track_rms); });
     session_.SetDiagnosticsCallback(
-        [this](const recorder_core::RecordingDiagnosticsSnapshot& snapshot) { PostDiagnostics(snapshot); });
+        [this](const exosnap::engine::RecordingDiagnosticsSnapshot& snapshot) { PostDiagnostics(snapshot); });
     // Forward the shared WYSIWYG preview handle to whoever registered. Bridges the
     // engine's uintptr_t handle to the app-facing void*; ownership transfers along.
     if (on_preview_shared_handle_ready_) {
         auto cb = on_preview_shared_handle_ready_;
         session_.SetPreviewSharedHandleCallback(
-            [cb](uintptr_t nt_handle, uint32_t w, uint32_t h, recorder_core::PreviewTapDesc tap) {
+            [cb](uintptr_t nt_handle, uint32_t w, uint32_t h, exosnap::engine::PreviewTapDesc tap) {
                 cb(reinterpret_cast<void*>(nt_handle), w, h, tap);
             });
     } else {
@@ -1274,7 +1274,7 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
         segments_.clear();
     }
     split_pending_.store(false);
-    session_.SetSegmentCallback([this](const recorder_core::CompletedSegment& seg) { OnSegmentCompleted(seg); });
+    session_.SetSegmentCallback([this](const exosnap::engine::CompletedSegment& seg) { OnSegmentCompleted(seg); });
 
     // Webcam device open (documented up to several hundred ms). While
     // prepare_in_flight_ is set the worker is the sole accessor of webcam_service_:
@@ -1323,11 +1323,11 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
     // actually write (transient .mkv.tmp for MP4 target, final .mkv for MKV target).
     SetCurrentManifestId({});
     if (recovery_manifest_store_ != nullptr) {
-        const bool is_mp4 = (config.container == recorder_core::Container::Mp4);
+        const bool is_mp4 = (config.container == exosnap::engine::Container::Mp4);
         RecoveryManifestEntry entry;
         entry.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
         entry.artefact_path =
-            is_mp4 ? QString::fromStdWString(recorder_core::DeriveTransientMkvPath(output_path).wstring())
+            is_mp4 ? QString::fromStdWString(exosnap::engine::DeriveTransientMkvPath(output_path).wstring())
                    : QString::fromStdWString(output_path.wstring());
         entry.intended_container = is_mp4 ? QStringLiteral("mp4") : QStringLiteral("mkv");
         entry.final_output_path = QString::fromStdWString(output_path.wstring());
@@ -1380,7 +1380,7 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
     PostStateChange(UiRecordingState::Recording);
 
     {
-        const bool is_monitor = (target.kind == recorder_core::CaptureTarget::Kind::Monitor);
+        const bool is_monitor = (target.kind == exosnap::engine::CaptureTarget::Kind::Monitor);
         const QString backend = is_monitor ? QStringLiteral("dxgi_od") : QStringLiteral("wgc");
         // Privacy (ADR 0045): a window's title must not reach the on-disk log at
         // the source. Monitor descriptions are technical device identifiers
@@ -1394,9 +1394,9 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
 
     // Start the low-disk guard monitor thread (LOW-DISK-GUARD-R1).
     {
-        const bool is_mp4 = (config.container == recorder_core::Container::Mp4);
+        const bool is_mp4 = (config.container == exosnap::engine::Container::Mp4);
         const std::filesystem::path transient_mkv =
-            is_mp4 ? recorder_core::DeriveTransientMkvPath(output_path) : std::filesystem::path{};
+            is_mp4 ? exosnap::engine::DeriveTransientMkvPath(output_path) : std::filesystem::path{};
         StartDiskMonitor(effective_folder, is_mp4, transient_mkv);
     }
 
@@ -1523,21 +1523,21 @@ void RecordingCoordinator::ResumeRecording() {
     PostStateChange(UiRecordingState::Recording);
 }
 
-static const char* SplitTriggerName(recorder_core::SplitTriggerSource source) {
+static const char* SplitTriggerName(exosnap::engine::SplitTriggerSource source) {
     switch (source) {
-    case recorder_core::SplitTriggerSource::AutomaticDuration:
+    case exosnap::engine::SplitTriggerSource::AutomaticDuration:
         return "auto";
-    case recorder_core::SplitTriggerSource::AutomaticSize:
+    case exosnap::engine::SplitTriggerSource::AutomaticSize:
         return "size";
-    case recorder_core::SplitTriggerSource::ManualButton:
+    case exosnap::engine::SplitTriggerSource::ManualButton:
         return "button";
-    case recorder_core::SplitTriggerSource::Hotkey:
+    case exosnap::engine::SplitTriggerSource::Hotkey:
         return "hotkey";
     }
     return "unknown";
 }
 
-bool RecordingCoordinator::RequestSplit(recorder_core::SplitTriggerSource source) {
+bool RecordingCoordinator::RequestSplit(exosnap::engine::SplitTriggerSource source) {
     // Central state validation: a split is meaningful only during an active
     // session. Reject honestly elsewhere instead of silently swallowing.
     const auto st = State();
@@ -1587,11 +1587,11 @@ bool RecordingCoordinator::IsSplitPending() const noexcept {
     return split_pending_.load();
 }
 
-void RecordingCoordinator::SetSplitSettings(const recorder_core::RecordingSplitSettings& settings) {
+void RecordingCoordinator::SetSplitSettings(const exosnap::engine::RecordingSplitSettings& settings) {
     split_settings_ = settings;
 }
 
-recorder_core::RecordingSplitSettings RecordingCoordinator::SplitSettings() const noexcept {
+exosnap::engine::RecordingSplitSettings RecordingCoordinator::SplitSettings() const noexcept {
     return split_settings_;
 }
 
@@ -1612,7 +1612,7 @@ void RecordingCoordinator::PostSplitFeedback(bool accepted, QString message) {
         Qt::QueuedConnection);
 }
 
-void RecordingCoordinator::OnSegmentCompleted(const recorder_core::CompletedSegment& segment) {
+void RecordingCoordinator::OnSegmentCompleted(const exosnap::engine::CompletedSegment& segment) {
     // Fired from the mux worker thread as each segment is finalized (including the
     // final one at session end). Accumulate for the multi-segment result and clear
     // the pending flag — the next segment has started.
@@ -1773,7 +1773,7 @@ void RecordingCoordinator::OnSegmentCompleted(const recorder_core::CompletedSegm
 }
 
 bool RecordingCoordinator::StartMicMeter(std::optional<std::string> device_id,
-                                         recorder_core::MicChannelMode channel_mode) {
+                                         exosnap::engine::MicChannelMode channel_mode) {
     if (!mic_meter_service_) {
         return false;
     }
@@ -1797,7 +1797,7 @@ bool RecordingCoordinator::StartMicMeter(std::optional<std::string> device_id,
     // IsRunning(), which the guard above already reads, so the next call retries.
     const bool started = mic_meter_service_->Start(
         device_id, channel_mode, [this](float rms_linear) { PostMicMeter(rms_linear); }, error,
-        recorder_core::MeterStartMode::Deferred);
+        exosnap::engine::MeterStartMode::Deferred);
     if (!started) {
         mic_meter_config_valid_ = false;
         mic_meter_device_id_.reset();
@@ -1834,7 +1834,7 @@ bool RecordingCoordinator::StartSysMeter() {
     }
     std::string error;
     return sys_meter_service_->Start(
-        0u, [this](float rms_linear) { PostSysMeter(rms_linear); }, error, recorder_core::MeterStartMode::Deferred);
+        0u, [this](float rms_linear) { PostSysMeter(rms_linear); }, error, exosnap::engine::MeterStartMode::Deferred);
 }
 
 void RecordingCoordinator::StopSysMeter() {
@@ -1860,7 +1860,7 @@ bool RecordingCoordinator::StartAppMeter(uint32_t target_pid) {
     std::string error;
     return app_meter_service_->Start(
         target_pid, [this](float rms_linear) { PostAppMeter(rms_linear); }, error,
-        recorder_core::MeterStartMode::Deferred);
+        exosnap::engine::MeterStartMode::Deferred);
 }
 
 void RecordingCoordinator::StopAppMeter() {
@@ -1873,7 +1873,7 @@ bool RecordingCoordinator::IsAppMeterRunning() const noexcept {
     return app_meter_service_ && app_meter_service_->IsRunning();
 }
 
-void RecordingCoordinator::RecordingThreadProc(const recorder_core::RecorderConfig& config,
+void RecordingCoordinator::RecordingThreadProc(const exosnap::engine::RecorderConfig& config,
                                                const std::filesystem::path& output_path) {
     auto result = session_.Record(config);
     is_recording_ = false;
@@ -1988,7 +1988,7 @@ void RecordingCoordinator::RecordingThreadProc(const recorder_core::RecorderConf
     // For split recordings: one or more intermediate segment remux jobs may already
     // be running in the background (kicked off by OnSegmentCompleted).  We need to
     // also remux the FINAL segment and then wait for ALL jobs to complete.
-    const bool needs_remux = result.succeeded && (config.container == recorder_core::Container::Mp4);
+    const bool needs_remux = result.succeeded && (config.container == exosnap::engine::Container::Mp4);
     if (needs_remux) {
         // Determine whether any intermediate segments were already scheduled.
         bool has_split_segments = false;
@@ -1999,7 +1999,7 @@ void RecordingCoordinator::RecordingThreadProc(const recorder_core::RecorderConf
 
         if (!has_split_segments) {
             // ── Single-file MP4 path (no splits) — unchanged from the original flow ──
-            const std::filesystem::path transient_mkv = recorder_core::DeriveTransientMkvPath(output_path);
+            const std::filesystem::path transient_mkv = exosnap::engine::DeriveTransientMkvPath(output_path);
             // Mark the manifest entry as finalized before remux. A failed write is
             // conservative — the entry stays finalized=false and recovery repairs an
             // already-clean artefact — but it is still a lost write, so it is logged.
@@ -2024,7 +2024,7 @@ void RecordingCoordinator::RecordingThreadProc(const recorder_core::RecorderConf
         // The segments_ list accumulated from the engine includes ALL segments,
         // including the final one (the engine fires SegmentCallback for the last
         // segment when Record() stops).  Identify the final segment.
-        recorder_core::CompletedSegment final_seg;
+        exosnap::engine::CompletedSegment final_seg;
         {
             std::lock_guard<std::mutex> lock(segments_mutex_);
             if (!segments_.empty())
@@ -2170,7 +2170,7 @@ void RecordingCoordinator::RunRemuxJob(const std::filesystem::path& transient_mk
         // rename it onto the final path. A kill/powerloss mid-remux leaves only the
         // temp — the user-visible output path never holds a half-written MP4 (ADR-0014).
         const std::filesystem::path remux_temp = MakeSiblingTempPath(final_mp4);
-        auto remux_result = recorder_core::RemuxToProgressiveMp4(transient_mkv, remux_temp, progress_cb);
+        auto remux_result = exosnap::engine::RemuxToProgressiveMp4(transient_mkv, remux_temp, progress_cb);
 
         if (remux_result.success) {
             if (const unsigned long move_err = AtomicReplaceInPlace(remux_temp, final_mp4); move_err != 0) {
@@ -2179,8 +2179,8 @@ void RecordingCoordinator::RunRemuxJob(const std::filesystem::path& transient_mk
                 // demote this to a remux failure: drop the temp, keep the MKV.
                 std::error_code cleanup_ec;
                 std::filesystem::remove(remux_temp, cleanup_ec);
-                remux_result = recorder_core::RemuxResult::Fail(0, "Atomic move to final output failed (Win32 error " +
-                                                                       std::to_string(move_err) + ")");
+                remux_result = exosnap::engine::RemuxResult::Fail(
+                    0, "Atomic move to final output failed (Win32 error " + std::to_string(move_err) + ")");
             }
         } else {
             // Failed or cancelled: the target path was never written. Drop the temp so
@@ -2323,14 +2323,14 @@ bool RecordingCoordinator::RunSegmentRemuxWork(const std::filesystem::path& tran
     // atomically rename it onto the segment path. A kill mid-remux leaves only the
     // temp — the segment output path never holds a half-written MP4 (ADR-0014).
     const std::filesystem::path segment_temp = MakeSiblingTempPath(output_mp4);
-    auto result = recorder_core::RemuxToProgressiveMp4(transient_mkv, segment_temp, progress_cb);
+    auto result = exosnap::engine::RemuxToProgressiveMp4(transient_mkv, segment_temp, progress_cb);
 
     if (result.success) {
         if (const unsigned long move_err = AtomicReplaceInPlace(segment_temp, output_mp4); move_err != 0) {
             std::error_code cleanup_ec;
             std::filesystem::remove(segment_temp, cleanup_ec);
-            result = recorder_core::RemuxResult::Fail(0, "Atomic move to segment output failed (Win32 error " +
-                                                             std::to_string(move_err) + ")");
+            result = exosnap::engine::RemuxResult::Fail(0, "Atomic move to segment output failed (Win32 error " +
+                                                               std::to_string(move_err) + ")");
         }
     } else {
         // Failed or cancelled: the segment path was never written. Drop the temp.
@@ -2642,7 +2642,7 @@ void RecordingCoordinator::SetStatsUpdatedCallback(StatsUpdatedCallback cb) {
 void RecordingCoordinator::SetDiagnosticsCallback(DiagnosticsUpdatedCallback cb) {
     on_diagnostics_updated_ = std::move(cb);
 }
-bool RecordingCoordinator::LastDiagnosticsSnapshot(recorder_core::RecordingDiagnosticsSnapshot* out) {
+bool RecordingCoordinator::LastDiagnosticsSnapshot(exosnap::engine::RecordingDiagnosticsSnapshot* out) {
     if (out == nullptr)
         return false;
     // Same mutex PostDiagnostics writes under: the snapshot is published from the
@@ -2654,7 +2654,7 @@ bool RecordingCoordinator::LastDiagnosticsSnapshot(recorder_core::RecordingDiagn
     return true;
 }
 
-bool RecordingCoordinator::LastCommittedRecorderConfig(recorder_core::RecorderConfig* out) const {
+bool RecordingCoordinator::LastCommittedRecorderConfig(exosnap::engine::RecorderConfig* out) const {
     if (out == nullptr)
         return false;
     std::lock_guard<std::mutex> lock(committed_config_mutex_);
@@ -2951,10 +2951,10 @@ void RecordingCoordinator::WriteSessionReportForResult(const UiRecordingResult& 
         break;
     }
     switch (resolved_user_config_.hdr_mode) {
-    case recorder_core::HdrMode::Hdr10:
+    case exosnap::engine::HdrMode::Hdr10:
         inputs.hdr_mode = QStringLiteral("hdr10");
         break;
-    case recorder_core::HdrMode::TonemapSdr:
+    case exosnap::engine::HdrMode::TonemapSdr:
         inputs.hdr_mode = QStringLiteral("tonemap-sdr");
         break;
     default:
@@ -2965,11 +2965,11 @@ void RecordingCoordinator::WriteSessionReportForResult(const UiRecordingResult& 
     inputs.capture_backend = QStringLiteral("unknown");
     if (inputs.has_snapshot) {
         switch (inputs.snapshot.capture.source_type) {
-        case recorder_core::CaptureSourceType::Display:
+        case exosnap::engine::CaptureSourceType::Display:
             inputs.capture_backend = QStringLiteral("dxgi-od");
             break;
-        case recorder_core::CaptureSourceType::Window:
-        case recorder_core::CaptureSourceType::Region:
+        case exosnap::engine::CaptureSourceType::Window:
+        case exosnap::engine::CaptureSourceType::Region:
             inputs.capture_backend = QStringLiteral("wgc");
             break;
         default:
@@ -3013,7 +3013,7 @@ void RecordingCoordinator::PostResult(UiRecordingResult result) {
         QCoreApplication::instance(), [cb, r = std::move(result)]() { cb(r); }, Qt::QueuedConnection);
 }
 
-void RecordingCoordinator::PostStats(recorder_core::SessionStats stats) {
+void RecordingCoordinator::PostStats(exosnap::engine::SessionStats stats) {
     {
         std::lock_guard<std::mutex> lock(markers_mutex_);
         last_elapsed_seconds_ = stats.elapsed_seconds;
@@ -3030,7 +3030,7 @@ void RecordingCoordinator::PostStats(recorder_core::SessionStats stats) {
         QCoreApplication::instance(), [cb, s = std::move(stats)]() { cb(s); }, Qt::QueuedConnection);
 }
 
-void RecordingCoordinator::PostDiagnostics(recorder_core::RecordingDiagnosticsSnapshot snapshot) {
+void RecordingCoordinator::PostDiagnostics(exosnap::engine::RecordingDiagnosticsSnapshot snapshot) {
     // Generation guard: drop snapshots from an older session so a stale recording's
     // late callback can never update a newer recording's view. Applied on the posting
     // side (never capturing `this` into the queued lambda, matching the other Post*).
@@ -3065,8 +3065,8 @@ void RecordingCoordinator::PostDiagnostics(recorder_core::RecordingDiagnosticsSn
 }
 
 void RecordingCoordinator::EmitInitializingDiagnostics() {
-    recorder_core::RecordingDiagnosticsSnapshot init;
-    init.lifecycle = recorder_core::DiagnosticsLifecycle::Initializing;
+    exosnap::engine::RecordingDiagnosticsSnapshot init;
+    init.lifecycle = exosnap::engine::DiagnosticsLifecycle::Initializing;
     init.valid = false;
     {
         std::lock_guard<std::mutex> lock(diagnostics_guard_mutex_);
@@ -3161,25 +3161,25 @@ std::wstring RecordingCoordinator::FormatHResult(int32_t hr) {
     return buf;
 }
 
-std::wstring RecordingCoordinator::FormatErrorPhase(recorder_core::ErrorPhase phase) {
+std::wstring RecordingCoordinator::FormatErrorPhase(exosnap::engine::ErrorPhase phase) {
     switch (phase) {
-    case recorder_core::ErrorPhase::None:
+    case exosnap::engine::ErrorPhase::None:
         return {};
-    case recorder_core::ErrorPhase::Prepare:
+    case exosnap::engine::ErrorPhase::Prepare:
         return L"Prepare";
-    case recorder_core::ErrorPhase::VideoCapture:
+    case exosnap::engine::ErrorPhase::VideoCapture:
         return L"Video Capture";
-    case recorder_core::ErrorPhase::VideoEncode:
+    case exosnap::engine::ErrorPhase::VideoEncode:
         return L"Video Encoder";
-    case recorder_core::ErrorPhase::AudioCapture:
+    case exosnap::engine::ErrorPhase::AudioCapture:
         return L"Audio Capture";
-    case recorder_core::ErrorPhase::AudioEncode:
+    case exosnap::engine::ErrorPhase::AudioEncode:
         return L"Audio Encoder";
-    case recorder_core::ErrorPhase::Mux:
+    case exosnap::engine::ErrorPhase::Mux:
         return L"Mux";
-    case recorder_core::ErrorPhase::Finalize:
+    case exosnap::engine::ErrorPhase::Finalize:
         return L"Finalize";
-    case recorder_core::ErrorPhase::Shutdown:
+    case exosnap::engine::ErrorPhase::Shutdown:
         return L"Shutdown";
     default:
         return L"Unknown";
@@ -3273,7 +3273,7 @@ void RecordingCoordinator::WriteMarkerSidecar() {
     }
 }
 
-void RecordingCoordinator::WriteSegmentMarkerSidecar(const recorder_core::CompletedSegment& segment) {
+void RecordingCoordinator::WriteSegmentMarkerSidecar(const exosnap::engine::CompletedSegment& segment) {
     std::vector<RecordingMarker> snapshot;
     {
         std::lock_guard<std::mutex> lock(markers_mutex_);

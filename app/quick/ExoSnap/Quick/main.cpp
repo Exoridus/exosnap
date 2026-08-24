@@ -1549,7 +1549,7 @@ int main(int argc, char* argv[]) {
                 WaitingForResult,
             };
             Phase phase = Phase::WaitingForReadyFrame;
-            recorder_core::CaptureTarget target;
+            exosnap::engine::CaptureTarget target;
             QJsonArray frames;
             int attempts = 0;
         };
@@ -1559,7 +1559,7 @@ int main(int argc, char* argv[]) {
         bool target_found = false;
         if (coordinator != nullptr && quick_application.prepareRecordingBenchmark(60, preparation_error)) {
             for (const auto& target : coordinator->EnumerateTargets()) {
-                if (target.kind == recorder_core::CaptureTarget::Kind::Monitor) {
+                if (target.kind == exosnap::engine::CaptureTarget::Kind::Monitor) {
                     state->target = target;
                     target_found = true;
                     break;

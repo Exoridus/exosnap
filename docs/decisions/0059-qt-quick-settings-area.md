@@ -81,7 +81,7 @@ remembers what the user is in the middle of typing.
 
 - `exosnap` remains the shipping executable and is unchanged.
 - Widgets `ConfigPage` remains present and behaviourally unchanged as the parity reference.
-- `recorder_core`, recording policy, preview, and the Record area are unchanged.
+- `engine`, recording policy, preview, and the Record area are unchanged.
 - `app/CMakeLists.txt` gains `QuickDialogs2` to the Quick-only `find_package` component list; the
   shipping target's dependency graph is untouched.
 

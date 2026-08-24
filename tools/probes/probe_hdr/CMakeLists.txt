@@ -7,14 +7,14 @@
 #   2. Which displays are HDR-capable / currently in HDR mode, and what mastering
 #      info (primaries, luminance) do they report (IDXGIOutput6::GetDesc1)?
 #
-# Pure D3D11/DXGI — no recorder_core dependency. Built only with -DEXOSNAP_BUILD_PROBES=ON.
+# Pure D3D11/DXGI — no exosnap_engine dependency. Built only with -DEXOSNAP_BUILD_PROBES=ON.
 
 add_executable(probe_hdr
     src/main.cpp
 )
 
 target_link_libraries(probe_hdr PRIVATE
-    recorder_core # IsHdrColorSpace — one definition of "HDR is on"
+    exosnap_engine # IsHdrColorSpace — one definition of "HDR is on"
     d3d11.lib
     dxgi.lib
     exosnap::warnings

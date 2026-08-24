@@ -19,7 +19,7 @@
 // Nothing here knows what a pipeline, a setting or an environment is. The domain
 // surfaces do.
 
-#include <recorder_core/pipeline_diagnostics.h>
+#include <exosnap/engine/pipeline_diagnostics.h>
 
 #include <QJsonObject>
 #include <QJsonValue>
@@ -45,13 +45,13 @@ inline constexpr const char* kRequiresElevation = "requiresElevation";
 inline constexpr const char* kRequiresOptIn = "requiresOptIn";
 } // namespace availability
 
-[[nodiscard]] inline QString AvailabilityKey(recorder_core::MetricAvailability value) {
-    return QString::fromLatin1(value == recorder_core::MetricAvailability::Available ? availability::kAvailable
-                                                                                     : availability::kUnavailable);
+[[nodiscard]] inline QString AvailabilityKey(exosnap::engine::MetricAvailability value) {
+    return QString::fromLatin1(value == exosnap::engine::MetricAvailability::Available ? availability::kAvailable
+                                                                                       : availability::kUnavailable);
 }
 
-[[nodiscard]] inline bool IsAvailable(recorder_core::MetricAvailability value) noexcept {
-    return value == recorder_core::MetricAvailability::Available;
+[[nodiscard]] inline bool IsAvailable(exosnap::engine::MetricAvailability value) noexcept {
+    return value == exosnap::engine::MetricAvailability::Available;
 }
 
 // A number that is only meaningful when `available`. The whole point of the
@@ -60,7 +60,7 @@ inline constexpr const char* kRequiresOptIn = "requiresOptIn";
     return available ? QJsonValue(value) : QJsonValue(QJsonValue::Null);
 }
 
-[[nodiscard]] inline QJsonValue Metric(double value, recorder_core::MetricAvailability availability_value) {
+[[nodiscard]] inline QJsonValue Metric(double value, exosnap::engine::MetricAvailability availability_value) {
     return Metric(value, IsAvailable(availability_value));
 }
 

@@ -49,18 +49,18 @@ WebM and MP4 reject it.
   MSVC. The exported target is **`FLAC::FLAC`** (an ALIAS of `FLAC`), which
   propagates its `include/` directory via `INTERFACE`. License `COPYING.Xiph` is
   staged to `licenses/flac.txt` and referenced in `THIRD_PARTY_NOTICES.md`.
-  `recorder_core` links `FLAC::FLAC` (both the full and skeleton builds).
+  `engine` links `FLAC::FLAC` (both the full and skeleton builds).
 - No Ogg dependency: `A_FLAC` carries native FLAC frames (not Ogg-FLAC).
 
 ### Engine model and encoder
 
-- `recorder_core::AudioCodec` gains `Flac` (the enum was `{AacMf, Opus, Pcm}`);
+- `exosnap::engine::AudioCodec` gains `Flac` (the enum was `{AacMf, Opus, Pcm}`);
   `capability::AudioCodec` likewise gains `Flac` (its `AllAudioCodecs()` array
-  grows 3 → 4). `capability::AudioCodec::Flac` ↔ `recorder_core::AudioCodec::Flac`
+  grows 3 → 4). `capability::AudioCodec::Flac` ↔ `exosnap::engine::AudioCodec::Flac`
   everywhere the two enums are mapped
   (`RecordingCoordinator::ApplyOutputSettingsToRecorderConfig`, `translation.cpp`,
   the visual-harness scenario mapper, history/label helpers).
-- `FlacAudioEncoder` (`libs/recorder_core/src/flac_audio_encoder.{h,cpp}`) wraps
+- `FlacAudioEncoder` (`libs/engine/src/flac_audio_encoder.{h,cpp}`) wraps
   libFLAC's stream encoder behind the existing `IAudioEncoder` interface so the
   audio thread and mux path treat it like Opus/AAC/PCM. `Init` creates a
   `FLAC__StreamEncoder`, sets channels / `bits_per_sample=16` / sample rate /
@@ -97,7 +97,7 @@ WebM and MP4 reject it.
   `fLaC` header copied into `KaxCodecPrivate`, and `KaxAudioBitDepth = 16` in the
   track audio header (alongside 48000 Hz / 2-channel). A CodecPrivate that does
   not begin with the `fLaC` marker is rejected at `Open()`. `mux_thread.cpp` maps
-  `recorder_core::AudioCodec::Flac` → `StreamAudioCodec::Flac`.
+  `exosnap::engine::AudioCodec::Flac` → `StreamAudioCodec::Flac`.
 
 ### Validation and capability gating
 

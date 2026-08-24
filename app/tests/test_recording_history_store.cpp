@@ -13,7 +13,7 @@
 #include "settings/RecordingHistoryStore.h"
 #include "viewmodels/RecordViewModel.h"
 
-#include <recorder_core/recorder_session.h>
+#include <exosnap/engine/recorder_session.h>
 
 namespace exosnap {
 namespace {
@@ -44,9 +44,9 @@ CompletedRecording MakeTestRecording(const QString& path, int index = 0) {
     rec.frame_rate_num = 60;
     rec.frame_rate_den = 1;
     rec.cfr = true;
-    rec.container = recorder_core::Container::Matroska;
-    rec.video_codec = recorder_core::VideoCodec::Av1;
-    rec.audio_codec = recorder_core::AudioCodec::Opus;
+    rec.container = exosnap::engine::Container::Matroska;
+    rec.video_codec = exosnap::engine::VideoCodec::Av1;
+    rec.audio_codec = exosnap::engine::AudioCodec::Opus;
     rec.completed_at = QDateTime::fromString(
         QStringLiteral("2026-06-09T12:34:%1.789Z").arg(56 + index, 2, 10, QChar('0')), Qt::ISODateWithMs);
     return rec;
@@ -124,9 +124,9 @@ TEST(RecordingHistoryStoreTest, ValidEntriesRoundTrip) {
     ASSERT_EQ(loaded.size(), 2);
     EXPECT_EQ(loaded[0].file_path, file1);
     EXPECT_EQ(loaded[1].file_path, file2);
-    EXPECT_EQ(loaded[0].container, recorder_core::Container::Matroska);
-    EXPECT_EQ(loaded[0].video_codec, recorder_core::VideoCodec::Av1);
-    EXPECT_EQ(loaded[0].audio_codec, recorder_core::AudioCodec::Opus);
+    EXPECT_EQ(loaded[0].container, exosnap::engine::Container::Matroska);
+    EXPECT_EQ(loaded[0].video_codec, exosnap::engine::VideoCodec::Av1);
+    EXPECT_EQ(loaded[0].audio_codec, exosnap::engine::AudioCodec::Opus);
     EXPECT_EQ(loaded[0].source_width, 2560u);
     EXPECT_EQ(loaded[0].source_height, 1440u);
     EXPECT_EQ(loaded[0].duration_seconds, 10.0);
@@ -460,7 +460,7 @@ TEST(RecordingHistoryStoreTest, AacPersistsAsAac_LegacySpellingDropsEntry) {
     const auto recordings = store.Load();
     ASSERT_EQ(recordings.size(), 1);
     EXPECT_EQ(recordings[0].file_path, aac_path);
-    EXPECT_EQ(recordings[0].audio_codec, recorder_core::AudioCodec::Aac);
+    EXPECT_EQ(recordings[0].audio_codec, exosnap::engine::AudioCodec::Aac);
 
     // Re-saving spells it "aac" on disk.
     ASSERT_TRUE(store.Save(recordings));

@@ -15,7 +15,7 @@ a human clicking through the UI.
 the existing `WriteVisualScreenshot()` helper for image capture.
 
 **Tech Stack:** C++20, Qt 6.9 Widgets, existing `RecordingCoordinator` / `capability::` /
-`recorder_core::` libraries. No new third-party dependency.
+`exosnap::engine::` libraries. No new third-party dependency.
 
 ## Global Constraints
 
@@ -47,7 +47,7 @@ the existing `WriteVisualScreenshot()` helper for image capture.
   `EXOSNAP_ENABLE_AUTO_RECORD_HARNESS` option + file list next to it, plus register
   `test_auto_record_harness.cpp` next to wherever `test_output_settings.cpp` /
   `test_low_disk_guard.cpp` are registered, per the `exosnap_add_gtest` convention in
-  `libs/recorder_core/CMakeLists.txt` — this app uses its own equivalent registration call in
+  `libs/engine/CMakeLists.txt` — this app uses its own equivalent registration call in
   `app/CMakeLists.txt`; find it by grepping for `test_output_settings`).
 
 **Interfaces:**
@@ -451,7 +451,7 @@ the existing `WriteVisualScreenshot()` helper for image capture.
   #include <QTextStream>
 
   #include <capability/capability_builder.h>       // BuildFromHardwareQuery — confirm exact header path
-  #include <recorder_core/audio_track_model.h>      // AudioSourceRow, AudioSourceKind
+  #include <exosnap/engine/audio_track_model.h>      // AudioSourceRow, AudioSourceKind
 
   #include "../services/RecordingCoordinator.h"
   #include "../models/OutputSettingsModel.h"
@@ -460,16 +460,16 @@ the existing `WriteVisualScreenshot()` helper for image capture.
   namespace exosnap::auto_record {
   namespace {
 
-  recorder_core::AudioSourceKind RowKindFromName(const QString& name) {
-      if (name == QStringLiteral("app")) return recorder_core::AudioSourceKind::App;
-      if (name == QStringLiteral("mic")) return recorder_core::AudioSourceKind::Mic;
-      return recorder_core::AudioSourceKind::Sys;
+  exosnap::engine::AudioSourceKind RowKindFromName(const QString& name) {
+      if (name == QStringLiteral("app")) return exosnap::engine::AudioSourceKind::App;
+      if (name == QStringLiteral("mic")) return exosnap::engine::AudioSourceKind::Mic;
+      return exosnap::engine::AudioSourceKind::Sys;
   }
 
   capability::AudioUiState BuildAudioUiState(const AutoRecordOptions& options) {
       capability::AudioUiState state;
       for (const QString& row_name : options.audio_rows) {
-          recorder_core::AudioSourceRow row;
+          exosnap::engine::AudioSourceRow row;
           row.kind = RowKindFromName(row_name);
           row.enabled = true;
           row.merge_with_above = (row_name == options.merge_above);
@@ -515,13 +515,13 @@ the existing `WriteVisualScreenshot()` helper for image capture.
       // read app/models/VideoSettingsModel.h once for the exact field names.
       coordinator.SetVideoSettings(video_settings);
 
-      // recorder_core::CaptureTarget's exact fields (native_id, title, kind, ...) are in
-      // libs/recorder_core — read that struct once. Matching rule: TargetKind::Monitor -> first
+      // exosnap::engine::CaptureTarget's exact fields (native_id, title, kind, ...) are in
+      // libs/engine — read that struct once. Matching rule: TargetKind::Monitor -> first
       // display-kind target; TargetKind::Window -> first target whose title contains
       // options.target_window_title; TargetKind::Region uses the Monitor match plus a crop_region
       // (Region is out of v1 checklist scope — leave found_target false with a clear error for it).
-      const std::vector<recorder_core::CaptureTarget> targets = coordinator.EnumerateTargets();
-      recorder_core::CaptureTarget selected_target;
+      const std::vector<exosnap::engine::CaptureTarget> targets = coordinator.EnumerateTargets();
+      exosnap::engine::CaptureTarget selected_target;
       bool found_target = false;
       for (const auto& target : targets) {
           // implement the matching rule above
@@ -583,7 +583,7 @@ the existing `WriteVisualScreenshot()` helper for image capture.
   `feedback_build_full_test_suite` project convention: verify with the full build, not a narrow
   target).
   Expected: builds clean. Fix any field-name mismatches found in Step 3 by reading the real struct
-  definitions (`libs/recorder_core/include/recorder_core/*.h`, `app/models/*.h`).
+  definitions (`libs/engine/include/exosnap/engine/*.h`, `app/models/*.h`).
 
 - [ ] **Step 5: Run the manual smoke from Step 2 once**
 
@@ -626,7 +626,7 @@ the existing `WriteVisualScreenshot()` helper for image capture.
   frozen-fixture path we must avoid), and (c) wait for the real preview-live log line
   (`"preview-live %1 ms"`, `app/pages/RecordPage.cpp:2601`) before proceeding. If no public method
   exists to select a target without clicking, add one — a plain setter, e.g.
-  `RecordPage::selectCaptureTargetForAutomation(const recorder_core::CaptureTarget&)` — documented
+  `RecordPage::selectCaptureTargetForAutomation(const exosnap::engine::CaptureTarget&)` — documented
   as automation-only in its doc comment, calling whatever private method the source-picker's click
   handler already calls internally (find it by grepping for the source-picker's click slot).
 

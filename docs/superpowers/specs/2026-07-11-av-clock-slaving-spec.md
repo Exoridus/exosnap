@@ -18,9 +18,9 @@ Video und Audio laufen auf zwei physisch verschiedenen Uhren:
 
 - **Video** wird auf der QPC-Zeitachse gepaced: CFR-Slots sind `frame_index × frame_interval`
   gegen `QueryPerformanceCounter` (Scheduler in `video_thread.cpp`, Pacing-Policy in
-  `libs/recorder_core/include/recorder_core/frame_pacing.h:19-35`).
+  `libs/engine/include/exosnap/engine/frame_pacing.h:19-35`).
 - **Audio-PTS** entsteht aus dem akkumulierten Sample-Zähler (`encoderAccumulatedFrames` in
-  `libs/recorder_core/src/audio_thread.cpp:302`, fortgeschrieben je `FeedFloat32`), tickt also
+  `libs/engine/src/audio_thread.cpp:302`, fortgeschrieben je `FeedFloat32`), tickt also
   mit dem Quarz der Soundkarte.
 
 Konsumer-Quarze weichen typisch 10–100 ppm voneinander ab. 50 ppm sind **360 ms Drift über
@@ -46,27 +46,27 @@ Anzeige in den Diagnostics.
 
 ### Messung (Stufe 2, vorhanden)
 
-- `libs/recorder_core/src/audio_clock_drift.h:40-98` — `AudioClockDriftEstimator`: pro
+- `libs/engine/src/audio_clock_drift.h:40-98` — `AudioClockDriftEstimator`: pro
   Capture-Paket `AddObservation(device_position_ns, qpc_position_ns)`;
   `drift_ms = qpc_elapsed − device_elapsed` (Zeile 59), normalisiert auf die erste Beobachtung,
   geglättet über ein Rolling-Window von 128 Paketen ≈ 1,3 s (Zeile 44). **Vorzeichen-Konvention
   (Zeile 23-25): positiv = Audio-Geräte-Uhr läuft LANGSAM gegenüber QPC → Audio-Events landen auf
   früheren PTS → Audio führt vor Video.** Pure, hardware-frei, getestet
-  (`libs/recorder_core/tests/test_audio_clock_drift.cpp`, registriert in
-  `libs/recorder_core/CMakeLists.txt:1030-1036`).
-- `libs/recorder_core/include/recorder_core/interfaces/IAudioCaptureSource.h:31-34` —
+  (`libs/engine/tests/test_audio_clock_drift.cpp`, registriert in
+  `libs/engine/CMakeLists.txt:1030-1036`).
+- `libs/engine/include/exosnap/engine/interfaces/IAudioCaptureSource.h:31-34` —
   `AudioDeviceTiming { device_position_ns, qpc_position_ns }`; Interface-Methode
   `LastBufferDeviceTiming` (Zeile 83-86, Default `false`).
 - Timing liefern alle drei gerätegebundenen Quellen: `wasapi_loopback_src.h:48-52`,
   `wasapi_process_loopback_src.cpp:454-458` (`qpcPos * 100` → ns; `qpcPos == 0` ⇒ ungültig),
   `wasapi_capture_src.h:107` ff. Decorators leiten durch: `output_format_audio_src.cpp:245-248`,
   `mic_dsp_audio_src.cpp:161-164`.
-- `libs/recorder_core/src/audio_thread.cpp:306-308` — je AudioThread ein Estimator; Zeile
+- `libs/engine/src/audio_thread.cpp:306-308` — je AudioThread ein Estimator; Zeile
   372-378: pro Paket `AddObservation` + `m_state.diagnostics.OnAudioClockDrift(track_id_, DriftMs())`.
 
 ### Kompensations-Ansatzpunkt: OutputFormatAudioSrc
 
-- `libs/recorder_core/src/output_format_audio_src.h:43-92` — Decorator (ADR 0030), der jeden
+- `libs/engine/src/output_format_audio_src.h:43-92` — Decorator (ADR 0030), der jeden
   Track auf Ziel-`{sample_rate, channels}`/Float32 bringt. **Jeder** AudioThread wrappt seine
   Quelle darin (`audio_thread.cpp:157-166`; Opus fest 48 kHz, sonst `config.audio_sample_rate`).
 - Zwei Betriebsarten (`output_format_audio_src.cpp`):
@@ -81,7 +81,7 @@ Anzeige in den Diagnostics.
 
 ### Discontinuity-Gap-Fill (Stufe 1, vorhanden)
 
-- `libs/recorder_core/src/discontinuity_gap.h:29-41` — Gap-Länge aus dem Device-Position-Sprung,
+- `libs/engine/src/discontinuity_gap.h:29-41` — Gap-Länge aus dem Device-Position-Sprung,
   geclampt auf 10 s (Zeile 20). `IAudioCaptureSource.h:12-23` transportiert `gap_frames` im
   `RawAudioBuffer`.
 - `audio_thread.cpp:289-300` (`feedGapSilence`) + Zeile 382-384: gemessene Gaps werden als
@@ -123,7 +123,7 @@ Anzeige in den Diagnostics.
 `limiter_enabled` als Vorbild: `libs/capability/include/capability/audio_ui_state.h:56`
 (AudioUiState) → `libs/capability/src/audio_ui_state.cpp:40-41` (Plan-Pass-through) →
 `app/services/RecordingCoordinator.cpp:836` (→ `RecorderConfig`) →
-`libs/recorder_core/include/recorder_core/recorder_session.h:405` → TOML-Persistenz
+`libs/engine/include/exosnap/engine/recorder_session.h:405` → TOML-Persistenz
 `app/settings/RecordingPresetStore.cpp:636/921` → UI `app/pages/ConfigPage.cpp:4049-4051`
 (`limiterCheck` in `audio_expert_section_`).
 
@@ -361,7 +361,7 @@ sichtbar, als Information, nicht als Alarm:
     einmal pro Session, wenn `|p| == kMaxPpm` **und** |R| über 60 s weiter wächst — d. h. die
     Drift übersteigt die Korrekturfähigkeit (defekte Hardware/Treiber). Kein Toast, kein
     Blocker; Diagnostics-Log reicht, das Residual ist ohnehin sichtbar.
-- **Logging** (`recorder_core::logging`, `logging.h:48`): Komponente `audio.clock_slaving` —
+- **Logging** (`exosnap::engine::logging`, `logging.h:48`): Komponente `audio.clock_slaving` —
   Info bei Engage (Felder: `track`, `drift_ms`), Debug bei ppm-Änderung, Warn bei Saturation
   (einmalig). Kein 1-Hz-Spam.
 
@@ -402,9 +402,9 @@ sichtbar, als Information, nicht als Alarm:
 ## Implementierungsschritte (reihenfolgetreu; jeder Schritt PR-fähig mit Tests)
 
 **Schritt 1 — Purer Regler (`ClockSlavingController`).**
-Neu: `libs/recorder_core/src/clock_slaving.h` (Header-only, Bauart `audio_clock_drift.h`),
-`libs/recorder_core/tests/test_clock_slaving.cpp`; Test-Registrierung in
-`libs/recorder_core/CMakeLists.txt` nach dem Muster `test_audio_clock_drift` (Zeile 1030-1036;
+Neu: `libs/engine/src/clock_slaving.h` (Header-only, Bauart `audio_clock_drift.h`),
+`libs/engine/tests/test_clock_slaving.cpp`; Test-Registrierung in
+`libs/engine/CMakeLists.txt` nach dem Muster `test_audio_clock_drift` (Zeile 1030-1036;
 Achtung: Registrierungen existieren doppelt für beide Build-Zweige, z. B. Zeile 202-209 und
 781-788 beim OutputFormat-Test — beide pflegen).
 API: `bool Update(double drift_ms, double applied_ms, uint64_t qpc_now_ns)` (true = neuen Wert

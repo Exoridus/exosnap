@@ -62,7 +62,7 @@ probe helps isolate whether the issue is in the API layer or the integration.
 A probe should be removed when:
 - The subsystem it tests has a production-level self-test or diagnostic
 - The underlying API is no longer used by ExoSnap
-- The probe duplicates capabilities available in `recorder_core` tests
+- The probe duplicates capabilities available in `engine` tests
 
 ## Usage
 

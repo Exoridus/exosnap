@@ -18,76 +18,76 @@ constexpr int kSchemaVersion = 2;
 
 // ---- Serialization helpers ----
 
-QString CodecToString(recorder_core::Container c) {
+QString CodecToString(exosnap::engine::Container c) {
     switch (c) {
-    case recorder_core::Container::WebM:
+    case exosnap::engine::Container::WebM:
         return QStringLiteral("webm");
-    case recorder_core::Container::Matroska:
+    case exosnap::engine::Container::Matroska:
         return QStringLiteral("mkv");
-    case recorder_core::Container::Mp4:
+    case exosnap::engine::Container::Mp4:
         return QStringLiteral("mp4");
     }
     return QString();
 }
 
-std::optional<recorder_core::Container> StringToContainer(const QString& s) {
+std::optional<exosnap::engine::Container> StringToContainer(const QString& s) {
     const QString lower = s.trimmed().toLower();
     if (lower == QStringLiteral("webm"))
-        return recorder_core::Container::WebM;
+        return exosnap::engine::Container::WebM;
     if (lower == QStringLiteral("mkv") || lower == QStringLiteral("matroska"))
-        return recorder_core::Container::Matroska;
+        return exosnap::engine::Container::Matroska;
     if (lower == QStringLiteral("mp4"))
-        return recorder_core::Container::Mp4;
+        return exosnap::engine::Container::Mp4;
     return std::nullopt;
 }
 
-QString VideoCodecToString(recorder_core::VideoCodec c) {
+QString VideoCodecToString(exosnap::engine::VideoCodec c) {
     switch (c) {
-    case recorder_core::VideoCodec::Av1:
+    case exosnap::engine::VideoCodec::Av1:
         return QStringLiteral("av1");
-    case recorder_core::VideoCodec::H264:
+    case exosnap::engine::VideoCodec::H264:
         return QStringLiteral("h264");
-    case recorder_core::VideoCodec::Hevc:
+    case exosnap::engine::VideoCodec::Hevc:
         return QStringLiteral("hevc");
     }
     return QString();
 }
 
-std::optional<recorder_core::VideoCodec> StringToVideoCodec(const QString& s) {
+std::optional<exosnap::engine::VideoCodec> StringToVideoCodec(const QString& s) {
     const QString lower = s.trimmed().toLower();
     if (lower == QStringLiteral("av1"))
-        return recorder_core::VideoCodec::Av1;
+        return exosnap::engine::VideoCodec::Av1;
     if (lower == QStringLiteral("h264"))
-        return recorder_core::VideoCodec::H264;
+        return exosnap::engine::VideoCodec::H264;
     if (lower == QStringLiteral("hevc") || lower == QStringLiteral("h265"))
-        return recorder_core::VideoCodec::Hevc;
+        return exosnap::engine::VideoCodec::Hevc;
     return std::nullopt;
 }
 
-QString AudioCodecToString(recorder_core::AudioCodec c) {
+QString AudioCodecToString(exosnap::engine::AudioCodec c) {
     switch (c) {
-    case recorder_core::AudioCodec::Aac:
+    case exosnap::engine::AudioCodec::Aac:
         return QStringLiteral("aac");
-    case recorder_core::AudioCodec::Opus:
+    case exosnap::engine::AudioCodec::Opus:
         return QStringLiteral("opus");
-    case recorder_core::AudioCodec::Pcm:
+    case exosnap::engine::AudioCodec::Pcm:
         return QStringLiteral("pcm");
-    case recorder_core::AudioCodec::Flac:
+    case exosnap::engine::AudioCodec::Flac:
         return QStringLiteral("flac");
     }
     return QString();
 }
 
-std::optional<recorder_core::AudioCodec> StringToAudioCodec(const QString& s) {
+std::optional<exosnap::engine::AudioCodec> StringToAudioCodec(const QString& s) {
     const QString lower = s.trimmed().toLower();
     if (lower == QStringLiteral("aac"))
-        return recorder_core::AudioCodec::Aac;
+        return exosnap::engine::AudioCodec::Aac;
     if (lower == QStringLiteral("opus"))
-        return recorder_core::AudioCodec::Opus;
+        return exosnap::engine::AudioCodec::Opus;
     if (lower == QStringLiteral("pcm"))
-        return recorder_core::AudioCodec::Pcm;
+        return exosnap::engine::AudioCodec::Pcm;
     if (lower == QStringLiteral("flac"))
-        return recorder_core::AudioCodec::Flac;
+        return exosnap::engine::AudioCodec::Flac;
     return std::nullopt;
 }
 

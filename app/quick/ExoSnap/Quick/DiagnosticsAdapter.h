@@ -127,7 +127,7 @@ class DiagnosticsAdapter : public QObject {
     // ── Host-side input (C++ only) ─────────────────────────────────────────────
     void setDiagnosticConfig(diagnostics::DiagnosticsController::Config config);
     void setCapabilitySet(const capability::CapabilitySet& caps);
-    void setSelectedCaptureTarget(std::optional<recorder_core::CaptureTarget> target);
+    void setSelectedCaptureTarget(std::optional<exosnap::engine::CaptureTarget> target);
     void setSavedDisplayUnresolved(bool unresolved, const std::string& label);
     void setCaptureWindowEvidence(std::optional<diagnostics::WindowTargetFacts> facts,
                                   const diagnostics::WindowHubEvidence& hub);
@@ -146,7 +146,7 @@ class DiagnosticsAdapter : public QObject {
     // which reports exactly as an unavailable one does -- nothing.
     void setDpcLatencyProvider(diagnostics::IDpcLatencyProvider* provider);
     void setPresentSample(std::optional<diagnostics::PresentSample> sample);
-    void applyLiveDiagnostics(const recorder_core::RecordingDiagnosticsSnapshot& snapshot);
+    void applyLiveDiagnostics(const exosnap::engine::RecordingDiagnosticsSnapshot& snapshot);
     // Emitted by the composition root once an assisted fix has resolved to a
     // Settings section, so the page can route the navigation.
     void requestSettingsNavigation();

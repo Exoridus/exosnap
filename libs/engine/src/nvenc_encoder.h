@@ -1,0 +1,653 @@
+#pragma once
+
+// NVENC encoder wrapper (AV1 and H.264).
+// All D3D11 context / video context usage is EXCLUSIVE to VideoThread.
+// See D3D11 threading contract in video_thread.cpp.
+
+#include <array>
+#include <chrono>
+#include <cstdint>
+#include <queue>
+#include <string>
+#include <vector>
+
+#include <d3d11.h>
+#include <windows.h>
+
+#include "nvEncodeAPI.h"
+
+#include <exosnap/engine/codec_types.h>
+#include <exosnap/engine/color_metadata.h>
+#include <exosnap/engine/pipeline_diagnostics.h>
+
+namespace exosnap::engine {
+
+struct EncodedVideoPacket;
+
+// NVENC error helpers
+const char* NvencStatusName(NVENCSTATUS st) noexcept;
+
+// ---------------------------------------------------------------------------
+// Bounded flush-drain policy — pure, testable. The shutdown flush drains the
+// encoder's buffered frames with a non-blocking lock (doNotWait=1) and consults
+// this after each attempt. Guarantees the drain always terminates: on a lost or
+// hung device the lock stays busy forever, so once the time budget is exceeded
+// the drain aborts and the caller finalises anyway (no join-timeout wedge). No
+// GPU/NVENC session required.
+// ---------------------------------------------------------------------------
+enum class FlushDrainStep {
+    Consume,      // NV_ENC_SUCCESS: a packet is ready — take it and continue draining.
+    Retry,        // NV_ENC_ERR_LOCK_BUSY within budget — brief wait, then poll again.
+    AbortTimeout, // LOCK_BUSY past the budget — device not delivering: stop the drain.
+    AbortError,   // Any other status — stop the drain.
+};
+FlushDrainStep NextFlushDrainStep(NVENCSTATUS lock_status, double elapsed_ms, double budget_ms) noexcept;
+
+// ---------------------------------------------------------------------------
+// Bounded event-drain policy — pure, testable. Same shape as
+// FlushDrainStep/NextFlushDrainStep, generalised from an NVENCSTATUS lock
+// result to a Win32 WaitForSingleObject result: the async-mode submit path
+// (waiting for a free output slot's completion event) and the async-mode
+// flush drain (waiting for the remaining pending frames' completion events)
+// both consult this after every wait. Same anti-wedge guarantee as the sync
+// flush drain: a device that never signals (Device-Lost) must not hang
+// forever — past the budget the wait aborts and the caller proceeds. No
+// GPU/NVENC session required.
+// ---------------------------------------------------------------------------
+enum class EventDrainStep {
+    Consume,      // WAIT_OBJECT_0: the event fired — a packet is ready, take it.
+    Retry,        // WAIT_TIMEOUT within budget — brief wait, then poll again.
+    AbortTimeout, // WAIT_TIMEOUT past the budget — device not signalling: stop.
+    AbortError,   // Any other result (WAIT_FAILED, WAIT_ABANDONED, ...) — stop.
+};
+EventDrainStep NextEventDrainStep(DWORD wait_result, double elapsed_ms, double budget_ms) noexcept;
+
+// ---------------------------------------------------------------------------
+// FindFreeOutputSlot — pure, testable round-robin scan for a free async
+// output-ring slot. Same round-robin-from-cursor pattern as
+// AcquireFreeSlot (member function, mutates m_slots for the 8-slot input
+// ring), generalised into a pure function over an explicit in-flight array so
+// the output ring's free/in-flight bookkeeping is unit-testable without a
+// live NVENC session. "Oldest in-flight" needs no separate helper: with
+// frameIntervalP=1 (no B-frames/lookahead) output order == submission order,
+// so the oldest is always the PendingFrame FIFO head. No GPU/NVENC session.
+// ---------------------------------------------------------------------------
+struct FreeOutputSlotResult {
+    int32_t slot_idx = -1;   // -1 if every slot in [0, count) is in-flight
+    int32_t next_cursor = 0; // cursor to pass on the next call
+};
+FreeOutputSlotResult FindFreeOutputSlot(const bool* in_flight, int32_t count, int32_t cursor) noexcept;
+
+// ---------------------------------------------------------------------------
+// ApplyColorMetadataToNvenc — pure, testable mapping from ColorMetadata to the
+// NVENC bitstream-level color signaling fields (fix for color-range-signaling
+// bug: without this the AV1/H.264/HEVC bitstream itself carries no color
+// description, and — critically for AV1 — ffmpeg/most decoders derive
+// color_range/matrix/primaries/transfer from the BITSTREAM, not the Matroska
+// container Colour element, so an untagged bitstream shows up as
+// color_range=tv (studio) + unknown matrix/primaries/transfer even though the
+// container is tagged correctly. H.264/HEVC VUI use ITU-T Annex E flag/value
+// semantics (videoFullRangeFlag: 0=limited/1=full); AV1's NV_ENC_CONFIG_AV1
+// colorRange uses the same 0=studio/1=full convention. No GPU/NVENC session
+// required — operates on a plain NV_ENC_CONFIG value.
+// ---------------------------------------------------------------------------
+void ApplyColorMetadataToNvenc(NV_ENC_CONFIG& cfg, VideoCodec codec, const ColorMetadata& color) noexcept;
+
+// ---------------------------------------------------------------------------
+// NvencPresetToGuid — pure, testable mapping from the canonical NvencPreset
+// (P1..P7) to the NVENC SDK preset GUID. No GPU/NVENC session required.
+// Applies uniformly across codecs — the caller passes the resulting GUID to
+// nvEncGetEncodePresetConfigEx regardless of which codec GUID is also passed.
+// ---------------------------------------------------------------------------
+GUID NvencPresetToGuid(NvencPreset preset) noexcept;
+
+// ---------------------------------------------------------------------------
+// Chroma / input-format helpers — pure, testable, no GPU/NVENC session.
+//
+// NvencInputFormat: the NVENC input buffer format for a bit depth + chroma.
+//   4:2:0  8-bit -> NV12 (semi-planar)
+//   4:2:0 10-bit -> YUV420_10BIT (P010, semi-planar 16 bpc)
+//   4:4:4  8-bit -> AYUV (packed A8Y8U8V8 — the DirectX 4:4:4 format NVENC
+//                   consumes; planar YUV444 has no single D3D11 texture form).
+//   4:4:4 10-bit is out of scope and never produced (blocked upstream).
+//
+// NvencChromaFormatIDC: the NV_ENC_CONFIG chromaFormatIDC value (1 = 4:2:0,
+//   3 = 4:4:4) — see nvEncodeAPI.h H.264/HEVC config fields.
+//
+// Nvenc444ProfileGuid: the profile GUID enabling 4:4:4 for a codec — H.264
+//   High 4:4:4 Predictive, HEVC Range Extensions (FREXT). Returns an all-zero
+//   GUID for AV1 (NVENC AV1 is 4:2:0-only); callers must not enable 4:4:4 then.
+// ---------------------------------------------------------------------------
+NV_ENC_BUFFER_FORMAT NvencInputFormat(BitDepth depth, ChromaSubsampling chroma) noexcept;
+uint32_t NvencChromaFormatIDC(ChromaSubsampling chroma) noexcept;
+GUID Nvenc444ProfileGuid(VideoCodec codec) noexcept;
+
+// ---------------------------------------------------------------------------
+// RcParams — pure value type for NVENC rate-control parameters.
+// Used by ComputeNvencRcParams (testable without GPU).
+// ---------------------------------------------------------------------------
+
+struct RcParams {
+    // NV_ENC_PARAMS_RC_MODE value — NV_ENC_PARAMS_RC_CONSTQP, _VBR, or _CBR
+    uint32_t rateControlMode = 0;
+    // constQP fields (valid for ConstantQuality; zero otherwise)
+    uint32_t qpIntra = 0;
+    uint32_t qpInterP = 0;
+    uint32_t qpInterB = 0;
+    // Bitrate fields (NV_ENC_RC_PARAMS::averageBitRate / maxBitRate, in bps)
+    uint32_t averageBitRate = 0;
+    uint32_t maxBitRate = 0;
+};
+
+// ---------------------------------------------------------------------------
+// NvencConstQpForCodec — the intra/inter constQP pair for a canonical CQ.
+//
+// The canonical-to-native conversion itself is product policy and lives with
+// CanonicalCq in recorder_core/codec_types.h (NvencNativeQuantizer). This adds
+// only the inter-frame offset: +2 in the CANONICAL domain, converted through
+// the same curve, so it lands wherever +2 canonical actually lands in that
+// codec rather than being scaled by a ratio nothing measured.
+// ---------------------------------------------------------------------------
+struct ConstQp {
+    uint32_t intra = 0;
+    uint32_t inter = 0;
+};
+ConstQp NvencConstQpForCodec(VideoCodec codec, uint32_t cq) noexcept;
+
+// Pure, testable mapping from canonical rate-control mode to NVENC parameters.
+// No GPU or NVENC session required. Used by FetchPresetConfig().
+// NVENC SDK field names: rcParams.rateControlMode, rcParams.averageBitRate,
+//   rcParams.maxBitRate, rcParams.constQP.{qpIntra, qpInterP, qpInterB}.
+RcParams ComputeNvencRcParams(VideoCodec codec, RateControlMode mode, uint32_t cq, uint32_t bitrate_kbps);
+
+// ---------------------------------------------------------------------------
+// GOP / keyframe helpers — pure, testable, no GPU/NVENC session.
+//
+// ComputeGopLength: gopLength = round(keyframe_interval_secs * fps), fps =
+//   num/den. Falls back to 120 (the historical 2 s @ 60 fps default) for a
+//   degenerate frame rate, and never returns 0 (an all-1-GOP infinite stream).
+//
+// ApplyGopToNvenc: writes gopLength and the codec-specific idrPeriod into an
+//   NV_ENC_CONFIG, keeping idrPeriod == gopLength for H.264/HEVC/AV1 (each codec
+//   config struct carries its own idrPeriod field). The value it writes is the
+//   HARDWARE BACKSTOP, not the cadence — see ComputeNvencGopBackstop.
+// ---------------------------------------------------------------------------
+uint32_t ComputeGopLength(float keyframe_interval_secs, uint32_t frame_rate_num, uint32_t frame_rate_den) noexcept;
+void ApplyGopToNvenc(NV_ENC_CONFIG& cfg, VideoCodec codec, uint32_t gop_length) noexcept;
+
+// ---------------------------------------------------------------------------
+// ComputeNvencGopBackstop — pure. The frame-count GOP/IDR period programmed into
+// NVENC, which is a BACKSTOP only: keyframe positions are enforced per
+// submission with NV_ENC_PIC_FLAG_FORCEIDR on the media-time cadence
+// (NextGopKeyframePhase). NVENC's own gopLength/idrPeriod timer counts SUBMITTED
+// PICTURES, so it only agrees with a media-time cadence while exactly one frame
+// is submitted per frame interval:
+//
+//   CFR — the scheduler submits at most one frame per tick, and the paths that
+//     skip a tick submit FEWER frames per media-time GOP. The forced IDR
+//     therefore always arrives at or before submission index gop_length, so the
+//     backstop can never fire first. gop_length is kept verbatim (it is also
+//     what the driver's rate control models as a GOP).
+//   VFR — PTS pass through from the source, and the loop submits every frame the
+//     source produces. A source faster than the configured rate (a 144 Hz window
+//     recorded at 60 fps) reaches gop_length submissions in ~0.83 s of media
+//     time, i.e. well before the 2 s media-time boundary. NVENC would insert an
+//     IDR nobody predicted: permanent keyframe_prediction_mismatches, perpetual
+//     emergency re-anchoring, and HDR10 metadata attached to the wrong picture.
+//     The backstop is therefore disabled (NVENC_INFINITE_GOPLENGTH — the
+//     documented pattern for a client that drives IDRs itself; valid because
+//     frameIntervalP is 1 / no B-frames).
+// ---------------------------------------------------------------------------
+uint32_t ComputeNvencGopBackstop(uint32_t gop_length, bool constant_frame_rate) noexcept;
+
+// ---------------------------------------------------------------------------
+// ApplyAdaptiveQuantizationToNvenc — pure, testable. Pins the whole AQ state
+// explicitly, so it is ours rather than whatever the driver's per-preset default
+// happens to be. Both flavours are off.
+//
+// Spatial AQ redistributes bits from detailed regions to flat ones. That is a
+// trade against a bit budget, and CONSTQP has no budget to trade against.
+// Measured over two 1440p60 clips (high-entropy motion, and scrolling small
+// text): at the same QP it costs up to 45% more bitrate and still scores lower
+// on VMAF as well as PSNR, and at matched bitrate it is neutral at the top of
+// the ladder and negative below it. NVIDIA's own preset configuration returns
+// enableAQ = 0 for all three codecs, and the guide recommends AQ in use-case
+// rows whose rate control is VBR or CBR. Revisit if the product ever moves to
+// VBR + targetQuality — that is the configuration the recommendation belongs to.
+//
+// Temporal AQ additionally has a capability gate (NV_ENC_CAPS_SUPPORT_TEMPORAL_AQ)
+// and is not documented as valid without lookahead, which this pipeline does not
+// use. aqStrength stays 0 (driver auto-selection) so nothing is implied about a
+// strength while AQ is off. No GPU/NVENC session required.
+// ---------------------------------------------------------------------------
+void ApplyAdaptiveQuantizationToNvenc(NV_ENC_CONFIG& cfg) noexcept;
+
+// ---------------------------------------------------------------------------
+// ComputeFrameIntervalNs — pure. Nominal frame duration in nanoseconds for the
+// configured rate (1e9 * den / num), with the same degenerate-rate fallback
+// family as ComputeGopLength (60 fps). Feeds the PTS-based keyframe cadence:
+// gop duration = gopLength * interval, keyframe tolerance = interval / 2.
+// ---------------------------------------------------------------------------
+uint64_t ComputeFrameIntervalNs(uint32_t frame_rate_num, uint32_t frame_rate_den) noexcept;
+
+// ---------------------------------------------------------------------------
+// NextGopKeyframePhase — pure, testable IDR cadence decision. EncodeFrame does
+// not merely predict IDR placement from NVENC's idrPeriod timer — it actively
+// sets NV_ENC_PIC_FLAG_FORCEIDR on every submission this function marks as a
+// keyframe, so cadence is an enforced fact rather than an assumption about
+// driver behavior (idrPeriod stays set as a belt-and-braces backstop only).
+//
+// The cadence is derived from MEDIA TIME (the submission's PTS), not from a
+// submitted-frame counter: the CFR scheduler advances the timeline without
+// submitting a frame on some paths (composite-failure drops, the
+// sustained-lag resync skip), and a counter would stretch the keyframe
+// interval in media time by every such gap. A frame is a keyframe when it is
+// forced, when it opens the stream (no GOP anchor yet), or when its PTS has
+// reached the current GOP's end (anchor + gop duration, with half a frame
+// interval of tolerance so rounding in the caller's PTS math cannot slip the
+// boundary frame past the threshold). Every keyframe re-anchors the GOP at
+// its own PTS. With no B-frames and no lookahead (frameIntervalP=1) output
+// order == submission order. No GPU/NVENC session.
+// ---------------------------------------------------------------------------
+struct GopKeyframePhase {
+    bool is_keyframe = false;
+    uint64_t gop_start_pts_ns = 0; // PTS anchoring the (possibly new) current GOP
+};
+GopKeyframePhase NextGopKeyframePhase(uint64_t pts_ns, bool have_gop_start, uint64_t gop_start_pts_ns,
+                                      uint64_t gop_duration_ns, uint64_t frame_interval_ns, bool forced_idr) noexcept;
+
+// ---------------------------------------------------------------------------
+// ResyncGopStartFromActual — pure order/keyframe hardening (warn-first).
+// Since keyframe cadence is enforced at submission time via FORCEIDR, the
+// submission-side GOP anchor is authoritative whenever the completed packet's
+// actual pictureType confirms the prediction — under async buffering the
+// submission side is already several frames ahead of the packet being
+// consumed, and rewinding the anchor from that delayed viewpoint stretched
+// every GOP by the in-flight depth (~13 % at 0.5 s / 60 fps). Only an
+// UNPREDICTED real IDR resyncs: the anchor moves to that packet's PTS
+// (emergency self-healing; live-verified as never occurring, counted via
+// keyframe_prediction_mismatches) — but never backwards past an anchor a
+// newer submission-side keyframe already set. A predicted-but-missing IDR
+// leaves the anchor untouched — warn-only, a single miss is not evidence the
+// whole cadence has shifted. No GPU/NVENC session.
+// ---------------------------------------------------------------------------
+uint64_t ResyncGopStartFromActual(bool predicted_keyframe, bool actual_is_idr, uint64_t packet_pts_ns,
+                                  uint64_t gop_start_pts_ns) noexcept;
+
+// ---------------------------------------------------------------------------
+// Pure message formatters for the encoder's two output-order validations.
+// Kept pure so the exact wording is unit-testable without a GPU/NVENC
+// session.
+//
+// FormatOutputTsMismatchError: a timestamp-echo mismatch is fatal — the call
+// site logs it once and aborts the encode, so no once-per-session guard is
+// needed (it cannot recur within a session).
+// FormatKeyframePredictionMismatchWarning stays warn-only (a predicted
+// keyframe landing on a non-IDR frame is legal, just off-cadence SEI/OBU
+// placement); its call site still guards it behind a once-per-session flag
+// so a sustained mismatch does not spam the log.
+// ---------------------------------------------------------------------------
+std::string FormatOutputTsMismatchError(uint64_t expected_output_ts, uint64_t actual_output_ts);
+std::string FormatKeyframePredictionMismatchWarning(bool predicted_keyframe, bool actual_keyframe);
+
+// ---------------------------------------------------------------------------
+// InputSlot — one NVENC GPU input resource in the slot ring
+// ---------------------------------------------------------------------------
+
+struct InputSlot {
+    NV_ENC_REGISTERED_PTR registeredResource = nullptr;
+    NV_ENC_INPUT_PTR mappedResource = nullptr;
+    bool in_flight = false;
+    bool mapped = false;
+};
+
+// ---------------------------------------------------------------------------
+// NvencEncoder
+// ---------------------------------------------------------------------------
+
+class NvencEncoder {
+  public:
+    NvencEncoder() = default;
+    ~NvencEncoder();
+
+    NvencEncoder(const NvencEncoder&) = delete;
+    NvencEncoder& operator=(const NvencEncoder&) = delete;
+
+    // Set codec before calling Open(). Defaults to Av1.
+    void SetCodec(VideoCodec codec) noexcept {
+        m_codec = codec;
+    }
+
+    // Set encoder bit depth before calling Open()/FetchPresetConfig(). Defaults to Bit8.
+    // Bit10 selects P010 (NV_ENC_BUFFER_FORMAT_YUV420_10BIT) input and the HEVC Main10 /
+    // AV1 10-bit profile. Only valid for Hevc and Av1 (validated upstream).
+    void SetBitDepth(BitDepth depth) noexcept {
+        m_bitDepth = depth;
+    }
+
+    // Set the chroma subsampling before calling Open()/FetchPresetConfig().
+    // Defaults to Cs420. Cs444 selects AYUV input, chromaFormatIDC=3, and the
+    // codec's 4:4:4 profile (H.264 High 4:4:4 / HEVC FREXT); it is valid only for
+    // Hevc and H264 at 8-bit (validated upstream — AV1 and 10-bit are
+    // rejected before reaching the encoder).
+    void SetChroma(ChromaSubsampling chroma) noexcept {
+        m_chroma = chroma;
+    }
+
+    // Set quality tier before calling FetchPresetConfig(). Defaults to Balanced.
+    // Only meaningful for ConstantQuality mode.
+    void SetCq(uint32_t cq) noexcept {
+        m_cq = cq;
+    }
+
+    // Set the NVENC speed/quality preset (P1..P7) before calling
+    // FetchPresetConfig(). Defaults to P4. Applies uniformly for every codec —
+    // see NvencPresetToGuid.
+    void SetPreset(NvencPreset preset) noexcept {
+        m_preset = preset;
+    }
+
+    // Set canonical rate-control mode and target bitrate (kbps).
+    // Must be called before FetchPresetConfig(). Defaults: ConstantQuality / 20000.
+    void SetRateControl(RateControlMode mode, uint32_t bitrate_kbps) noexcept {
+        m_rateControlMode = mode;
+        m_bitrate_kbps = bitrate_kbps;
+    }
+
+    // Set the color description that must be signaled in the encoded bitstream
+    // (VUI for H.264/HEVC, NV_ENC_CONFIG_AV1 color fields for AV1). Must be
+    // called before FetchPresetConfig(). Defaults to ColorMetadata::Sdr709().
+    // This is the SAME ColorMetadata driving the VideoProcessor conversion
+    // (video_thread.cpp) and the Matroska Colour element (matroska_stream_writer.cpp)
+    // so all three writer paths agree — see color_metadata.h.
+    void SetColor(const ColorMetadata& color) noexcept {
+        m_color = color;
+    }
+
+    // Set keyframe interval in seconds. Must be called before InitEncoder().
+    // Controls gopLength and idrPeriod: gopLength = round(secs * fps).
+    // Default 2.0 s matches the pre-0.9.0 hardcoded value.
+    void SetKeyframeIntervalSecs(float secs) noexcept {
+        m_keyframeIntervalSecs = (secs > 0.0f) ? secs : 2.0f;
+    }
+
+    // Tell the encoder whether the caller submits on a constant-frame-rate
+    // schedule. Must be called before InitEncoder(). Only affects the hardware
+    // GOP backstop (ComputeNvencGopBackstop) — the keyframe cadence itself is
+    // media-time based either way. Defaults to true (the shipped default profile).
+    void SetConstantFrameRate(bool cfr) noexcept {
+        m_constantFrameRate = cfr;
+    }
+
+    // Resolved encoder initialization parameters, valid after a successful
+    // InitEncoder() (i.e. after Configure()). Plain data for diagnostics / the
+    // session report — carries no NVENC types. hdr_mode is not known here (it is a
+    // pipeline-level concept); the caller fills it from the session config.
+    [[nodiscard]] EncoderInitInfo GetInitInfo() const noexcept {
+        EncoderInitInfo info;
+        info.valid = m_gopLength > 0; // set by InitEncoder
+        info.codec = m_codec;
+        info.preset = m_preset;
+        info.rc_mode = m_rateControlMode;
+        info.target_bitrate_kbps = m_encodeConfig.rcParams.averageBitRate / 1000;
+        info.max_bitrate_kbps = m_encodeConfig.rcParams.maxBitRate / 1000;
+        info.cq = m_cq;
+        info.gop_length = m_gopLength;
+        info.bframes = m_encodeConfig.frameIntervalP > 0 ? m_encodeConfig.frameIntervalP - 1 : 0;
+        info.lookahead_frames = m_encodeConfig.rcParams.enableLookahead ? m_encodeConfig.rcParams.lookaheadDepth : 0;
+        info.temporal_aq = m_encodeConfig.rcParams.enableTemporalAQ != 0;
+        info.spatial_aq = m_encodeConfig.rcParams.enableAQ != 0;
+        info.bit_depth = m_bitDepth;
+        info.chroma = m_chroma;
+        info.color_full_range = (m_color.range == ColorRange::Full);
+        return info;
+    }
+
+    // Load nvEncodeAPI64.dll and open a D3D11 encode session.
+    // device must remain valid for the lifetime of this encoder.
+    bool Open(ID3D11Device* device, std::string& out_error);
+
+    // Query AV1 GUID and NV12 format support.
+    bool QueryAv1Nv12Support(std::string& out_error);
+
+    // Query H.264 GUID and NV12 format support.
+    bool QueryH264Nv12Support(std::string& out_error);
+
+    // Query HEVC (H.265) GUID and NV12 format support.
+    bool QueryHevcNv12Support(std::string& out_error);
+
+    // Honest 4:4:4 gate for the current codec (call after Open(), before
+    // InitEncoder). Verifies the GPU advertises NV_ENC_CAPS_SUPPORT_YUV444_ENCODE
+    // and that the AYUV input format is enumerated for the codec. Only meaningful
+    // for H264/Hevc; fails honestly (out_error set) when 4:4:4 is
+    // unavailable so the session can refuse rather than mis-encode.
+    bool QueryYuv444Support(std::string& out_error);
+
+    // Fetch preset config and set chromaFormatIDC=1 (YUV420).
+    bool FetchPresetConfig(std::string& out_error);
+
+    // Initialize the encoder for the given dimensions and frame rate.
+    bool InitEncoder(uint32_t width, uint32_t height, uint32_t frame_rate_num, uint32_t frame_rate_den,
+                     std::string& out_error);
+
+    // Create bitstream buffer.  Must be called after InitEncoder.
+    bool CreateBitstreamBuffer(std::string& out_error);
+
+    // Register one slot's D3D11 texture with NVENC (NV12 for 8-bit, P010 for 10-bit).
+    // Must be called after InitEncoder, once per slot (0..7).
+    bool RegisterSlotTexture(int32_t slot_idx, ID3D11Texture2D* texture, std::string& out_error);
+
+    // Acquire the next free input slot for writing.
+    // Returns slot index (0–7) or -1 if none free.
+    int32_t AcquireFreeSlot();
+
+    // Release a slot that was acquired but not submitted (error path only).
+    // Clears in_flight without calling NVENC — safe only if EncodeFrame was not called.
+    void ReleaseSlot(int32_t slot_idx) noexcept;
+
+    // Arm a forced IDR (keyframe) on the NEXT submitted frame. Used at a segment
+    // boundary so the first frame of a new segment is a self-contained keyframe
+    // with fresh SPS/PPS (no dependent frame precedes it). One-shot: the flag is
+    // consumed by the next EncodeFrame call.
+    void RequestKeyframe() noexcept {
+        m_forceIdrNext = true;
+    }
+
+    // Submit one NV12 frame for encoding on a specific slot.
+    // slot_idx must be a slot previously acquired via AcquireFreeSlot.
+    // pts_ns is the capture-time PTS in nanoseconds.
+    // Appends 0..k completed packets to out_packets: 0..1 in sync mode. An
+    // async submission always appends 0 of its own output here — that arrives
+    // later via ReapCompleted — but MAY append one older packet as a side
+    // effect of a bounded wait for a free output-ring slot.
+    // Returns false only on a fatal encode error (out_error set).
+    bool EncodeFrame(int32_t slot_idx, uint64_t pts_ns, uint32_t width, uint32_t height,
+                     std::vector<EncodedVideoPacket>& out_packets, std::string& out_error);
+
+    // Drain packets completed since the last EncodeFrame/ReapCompleted call
+    // (async mode only — a no-op returning true in sync mode, since sync
+    // output is always consumed inline by EncodeFrame). Waits up to
+    // wait_head_ms for the oldest pending frame's completion event; once that
+    // one is consumed (or immediately, if wait_head_ms is 0 and nothing is yet
+    // ready), drains any further already-signalled packets without additional
+    // waiting.
+    bool ReapCompleted(std::vector<EncodedVideoPacket>& out_packets, std::string& out_error, uint32_t wait_head_ms = 0);
+
+    // Flush all buffered frames (EOS drain).
+    // Appends any remaining packets to out_packets.
+    bool Flush(std::vector<EncodedVideoPacket>& out_packets, std::string& out_error);
+
+    // Unregister all slot resources.  Safe to call multiple times.
+    void UnregisterAllSlots();
+
+    // Destroy bitstream buffer and encoder session.
+    void Destroy();
+
+  private:
+    HMODULE m_dll = nullptr;
+    NV_ENCODE_API_FUNCTION_LIST m_funcs{};
+    void* m_encoder = nullptr;
+    NV_ENC_PRESET_CONFIG m_presetConfig{};
+    NV_ENC_CONFIG m_encodeConfig{};
+    // Sync-mode single output buffer (unchanged — the sync path remains fully
+    // intact as the capability fallback). Unused when m_asyncMode is true.
+    NV_ENC_OUTPUT_PTR m_bitstreamBuffer = nullptr;
+
+    // Async-mode output ring. kMaxOutputResources is the allocation ceiling
+    // (covers the observed P6/P7 pipeline depth, plus headroom for a future
+    // higher-depth pipeline once lookahead/B-frames need one);
+    // m_activeDepth (1..kMaxOutputResources) is how many of them are
+    // actually used by Submit/Reap this session. All kMaxOutputResources
+    // bitstream buffers and events are created unconditionally, so any depth up
+    // to the ceiling costs no additional video memory over depth 1.
+    //
+    // Depth 2 is the measured optimum: at depth 1 every submission first waits
+    // for the previous frame's completion event, which costs ~0.64 ms per frame
+    // (360 frames, AV1 P4, 1440p60); depth 2 removes that and depth 4 adds
+    // nothing further. Output is byte-identical at depths 1, 2 and 4 — the depth
+    // only pipelines submission against completion, it never changes an encode
+    // decision.
+    static constexpr int32_t kMaxOutputResources = 4;
+    struct OutputResource {
+        NV_ENC_OUTPUT_PTR bitstream = nullptr;
+        HANDLE event = nullptr;
+        bool in_flight = false;
+    };
+    std::array<OutputResource, kMaxOutputResources> m_outputResources{};
+    int32_t m_activeDepth = 2;
+    int32_t m_outputCursor = 0;
+    bool m_asyncMode = false;
+    // Async mode only: EOS submissions carry no output buffer, but the SDK's
+    // async contract still requires a valid completionEvent on every
+    // NvEncEncodePicture call — this one is reserved for that purpose.
+    HANDLE m_eosEvent = nullptr;
+
+    // Input-slot ring: 8 independent NV12 input resources
+    std::array<InputSlot, 8> m_slots;
+    int32_t m_slotCursor = 0;
+
+    VideoCodec m_codec = VideoCodec::Av1;
+    BitDepth m_bitDepth = BitDepth::Bit8;
+    ChromaSubsampling m_chroma = ChromaSubsampling::Cs420;
+    uint32_t m_cq = CanonicalCq(QualityPreset::Balanced);
+    RateControlMode m_rateControlMode = RateControlMode::ConstantQuality;
+    uint32_t m_bitrate_kbps = 20000;
+    ColorMetadata m_color = ColorMetadata::Sdr709();
+    float m_keyframeIntervalSecs = 2.0f; // default 2 s — matches pre-0.9.0 hardcoded value
+    bool m_constantFrameRate = true;     // submission regime; see ComputeNvencGopBackstop
+
+    // NVENC speed/quality preset (P1..P7), user-selectable expert setting.
+    // Default P4 — matches the prior hardcoded AV1/HEVC default; H.264 previously
+    // used P6 (visible default change, expert-overridable — see ADR 0039). P6 on
+    // AV1/HEVC has internal pipeline depth that causes NV_ENC_ERR_NEED_MORE_INPUT
+    // on every frame even with lookahead disabled; EncodeFrame already buffers/
+    // drains this case via the m_pending FIFO, so higher presets are not
+    // fatal, but they increase encode latency and 8-slot input-ring pressure.
+    NvencPreset m_preset = NvencPreset::P4;
+    // Resolved via NvencPresetToGuid(m_preset) in FetchPresetConfig(); the member
+    // initializer here is only the value before FetchPresetConfig() first runs.
+    GUID m_presetGuid = NV_ENC_PRESET_P4_GUID;
+    const NV_ENC_TUNING_INFO m_tuningInfo = NV_ENC_TUNING_INFO_HIGH_QUALITY;
+
+    // One entry per submitted frame not yet returned as output. Consolidates the
+    // former parallel PTS/slot FIFOs into a single record so the submit timestamp
+    // travels with each in-flight frame; the consuming lock computes the true
+    // submit->ready latency from it (carried out on EncodedVideoPacket::
+    // encode_latency_ms). Output order == submission order today (frameIntervalP=1,
+    // no lookahead), so front() is always the next output — behaviour-identical to
+    // the previous two-FIFO scheme.
+    struct PendingFrame {
+        uint64_t pts_ns = 0;
+        int32_t slot_idx = -1;
+        std::chrono::steady_clock::time_point submit_time{};
+        // Order-validation fields: the inputTimeStamp submitted for this frame
+        // (compared against lockBS.outputTimeStamp on consume — a mismatch is
+        // fatal, see LockAndConsumeBitstream) and the submission-side keyframe
+        // prediction (compared against the actual lockBS.pictureType, warn-only).
+        uint64_t input_ts = 0;
+        bool predicted_keyframe = false;
+        // Which output-ring slot this submission's bitstream/event lives in
+        // (async mode only; -1/unused in sync mode, which has a single shared
+        // m_bitstreamBuffer and no completion event).
+        int32_t out_idx = -1;
+    };
+    std::queue<PendingFrame> m_pending;
+
+    int m_needMoreInputCount = 0;
+
+    // Once-per-session log guard for the keyframe-prediction mismatch, which
+    // stays warn-only (a predicted keyframe landing on a non-IDR frame is
+    // legal, just off-cadence SEI/OBU placement). The outputTimeStamp mismatch
+    // has no guard: it is fatal, so it can by construction never log more than
+    // once (the encode aborts on the first occurrence). The cumulative
+    // counter for the keyframe case lives in the diagnostics aggregator
+    // (EncoderDiagnostics::keyframe_prediction_mismatches), fed per-packet
+    // like encode_latency_ms — NvencEncoder has no aggregator reference.
+    // Reset in InitEncoder.
+    bool m_loggedKeyframePredictionMismatch = false;
+
+    // Per-instance monotonic frame index for NVENC inputTimeStamp
+    uint64_t m_frameIdx = 0;
+
+    // One-shot forced-IDR request consumed by the next EncodeFrame submission.
+    bool m_forceIdrNext = false;
+
+    // In-band HDR10 metadata (HEVC SEI / AV1 metadata OBU) injected on every
+    // keyframe. Built once by BuildHdrBitstreamPayloads() when the session is
+    // HDR10-native; the payload byte buffers and the NVENC payload-descriptor
+    // array are owned members so their pointers stay valid across the
+    // synchronous NvEncEncodePicture call (NVENC reads them during that call).
+    // Empty / count 0 for SDR and tone-map-SDR sessions, so their bitstream is
+    // byte-identical to before this feature.
+    std::vector<uint8_t> m_hdrMdcvPayload;
+    std::vector<uint8_t> m_hdrCllPayload;
+    std::array<NV_ENC_SEI_PAYLOAD, 2> m_hdrPayloadEntries{};
+    uint32_t m_hdrPayloadCount = 0;
+    // Deterministic IDR cadence tracking in MEDIA TIME (see NextGopKeyframePhase:
+    // keyframes are scheduled from the submission PTS against the GOP anchor, so
+    // CFR timeline gaps that never reach the encoder cannot stretch the keyframe
+    // interval). Also used to attach HDR metadata on keyframes. m_gopLength stays
+    // the frame-count GOP for NVENC config + diagnostics; the ns fields derive
+    // from it in InitEncoder.
+    uint32_t m_gopLength = 0;
+    uint64_t m_gopDurationNs = 0;
+    uint64_t m_frameIntervalNs = 0;
+    bool m_haveGopStart = false;  // false until the first submission anchors a GOP
+    uint64_t m_gopStartPtsNs = 0; // PTS of the current GOP's keyframe
+
+    // Build the per-keyframe HDR metadata payloads for the current codec + color.
+    // No-op (clears state) unless the session is HDR10-native on HEVC/AV1.
+    void BuildHdrBitstreamPayloads();
+
+    // Lock one bitstream and return an EncodedVideoPacket.
+    // Also releases the associated input slot (unmap + mark free).
+    // Lock and consume one buffered output frame. non_blocking sets doNotWait=1
+    // so a not-yet-ready output returns NV_ENC_ERR_LOCK_BUSY immediately (nothing
+    // is consumed — safe to retry) instead of blocking; out_lock_status, when
+    // provided, receives the raw nvEncLockBitstream status for the drain policy.
+    bool LockAndConsumeBitstream(EncodedVideoPacket& out_packet, std::string& out_error, bool non_blocking = false,
+                                 NVENCSTATUS* out_lock_status = nullptr);
+
+    // Async mode only: bounded wait on one specific completion event, then
+    // lock+consume via LockAndConsumeBitstream (non-blocking — the event being
+    // signalled already guarantees the output is ready). Retries on the shared
+    // NextEventDrainStep policy until Consume, or the budget/an error aborts
+    // the wait. Shared by EncodeFrame's output-ring-full wait and Flush's
+    // async drain loop, which both need the same bounded-wait behavior.
+    EventDrainStep WaitAndConsumeOneAsync(HANDLE event, double budget_ms, EncodedVideoPacket& out_packet,
+                                          std::string& out_error);
+
+    // Async-mode Flush: submits EOS on its reserved event, then drains all
+    // remaining PendingFrames on the same bounded NextEventDrainStep policy as
+    // WaitAndConsumeOneAsync (2000 ms budget per progress, matching the
+    // existing sync flush drain's anti-wedge guarantee).
+    bool FlushAsync(std::vector<EncodedVideoPacket>& out_packets, std::string& out_error);
+
+    // Tear down the async output ring — every event unregistered + closed
+    // first, then every bitstream buffer destroyed. Safe to call multiple
+    // times and on partial state (rollback from a failed
+    // CreateBitstreamBuffer, or normal Destroy()).
+    void DestroyOutputRing() noexcept;
+};
+
+} // namespace exosnap::engine

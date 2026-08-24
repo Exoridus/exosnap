@@ -4,8 +4,8 @@
 
 namespace exosnap::soak {
 
-using recorder_core::MetricAvailability;
-using recorder_core::PipelineHealth;
+using exosnap::engine::MetricAvailability;
+using exosnap::engine::PipelineHealth;
 
 SoakRunner::SoakRunner(SoakThresholds thresholds, IProcessSampler& sampler, std::string jsonl_path)
     : thresholds_(thresholds), policy_(thresholds), sampler_(sampler), jsonl_path_(std::move(jsonl_path)) {
@@ -18,13 +18,13 @@ SoakRunner::~SoakRunner() {
     Stop();
 }
 
-void SoakRunner::OnStats(const recorder_core::SessionStats& stats) {
+void SoakRunner::OnStats(const exosnap::engine::SessionStats& stats) {
     std::lock_guard lk(latch_mutex_);
     last_stats_ = stats;
     have_stats_ = true;
 }
 
-void SoakRunner::OnDiagnostics(const recorder_core::RecordingDiagnosticsSnapshot& diag) {
+void SoakRunner::OnDiagnostics(const exosnap::engine::RecordingDiagnosticsSnapshot& diag) {
     std::lock_guard lk(latch_mutex_);
     last_diag_ = diag;
     have_diag_ = true;

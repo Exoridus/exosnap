@@ -120,7 +120,7 @@ and publishing a real player compatibility matrix. **FLAC-in-MP4 stays deferred*
 
 ### Config / model surface
 
-- `recorder_core::RecorderConfig` gains `audio_sample_rate`, `audio_channels`, `audio_bit_depth`,
+- `exosnap::engine::RecorderConfig` gains `audio_sample_rate`, `audio_channels`, `audio_bit_depth`,
   `flac_compression_level`, and `audio_pcm_float`.
 - `capability::AudioUiState` + `AudioPlanResult` gain the same five fields; `BuildAudioPlan` passes
   them through; the coordinator maps them into `RecorderConfig`.

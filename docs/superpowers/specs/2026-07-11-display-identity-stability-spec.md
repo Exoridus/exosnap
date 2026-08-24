@@ -33,7 +33,7 @@ Preview, HDR) bleibt unberührt.
 
 - `PresetCaptureTarget` (`app/models/RecordingPreset.h:78-87`) speichert die
   Capture-Auswahl als **beschreibungsbasierte Strings**: `display_key`, `window_key`,
-  `region_display_key` plus `has_region` + `region` (`recorder_core::CaptureRegion`,
+  `region_display_key` plus `has_region` + `region` (`exosnap::engine::CaptureRegion`,
   Virtual-Screen-Koordinaten). Kommentar dort: „Raw platform handles (HWND, HMONITOR)
   are never stored … keys are description-based and matched at restore time."
 - Serialisiert wird das 1:1 als TOML-`[capture]`-Tabelle
@@ -105,7 +105,7 @@ Preview, HDR) bleibt unberührt.
   (SetupAPI / DISPLAYCONFIG_PATH_INFO)" als aufgeschobene stabile Identität
   (`app/services/DisplayDeviceNotifier.h:22-29`).
 - **DisplayConfig-API ist bereits im Einsatz:** `QuerySdrWhiteLevelNits`
-  (`libs/recorder_core/src/dxgi_od_capture_src.cpp:63-107`) läuft die aktiven Pfade
+  (`libs/engine/src/dxgi_od_capture_src.cpp:63-107`) läuft die aktiven Pfade
   via `GetDisplayConfigBufferSizes` + `QueryDisplayConfig` durch, matcht per
   `DISPLAYCONFIG_SOURCE_DEVICE_NAME.viewGdiDeviceName` gegen `MONITORINFOEXW.szDevice`
   und liest dann Target-Infos über `path.targetInfo.adapterId/id`. **Exakt dieser Loop
@@ -268,7 +268,7 @@ Statt absoluter Virtual-Screen-Koordinaten wird die Region als **`StableDisplayI
 Anker-Displays + normalisierte Koordinaten (0..1) relativ zu dessen aktueller Geometrie**
 gespeichert.
 
-**Koordinatenraum — verbindlich physisch.** `recorder_core::CaptureRegion` (`view_model_.region`)
+**Koordinatenraum — verbindlich physisch.** `exosnap::engine::CaptureRegion` (`view_model_.region`)
 ist in **physischen Virtual-Screen-Pixeln** definiert (`app/pages/RecordPage.cpp:286-287`
 `rcMonitor`-Kommentar; `:2307-2308` „virtual-screen physical pixels"). Die Anker-Geometrie
 zum Normalisieren **und** zum Zurückrechnen MUSS deshalb ebenfalls physisch sein: die

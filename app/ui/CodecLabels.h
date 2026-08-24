@@ -6,14 +6,14 @@
 
 #include <capability/codec_selection.h>
 #include <capability/config_types.h>
-#include <recorder_core/codec_types.h>
+#include <exosnap/engine/codec_types.h>
 
 #include "../models/OutputSettingsModel.h"
 
 // Canonical user-visible labels for codecs / containers / formats / frame rates.
 //
 // Single source of truth — keep ALL display labels routed through here so the
-// two enum families (capability:: and recorder_core::) never drift apart again
+// two enum families (capability:: and exosnap::engine::) never drift apart again
 // (a WEBM-vs-WebB divergence between ConfigPage and RecordPage is exactly what
 // motivated this). Casing canon (see feedback_codec_naming_canon): acronyms are
 // ALL-CAPS (MKV, MP4, AAC, PCM, FLAC, HEVC, AV1); proper names keep their
@@ -35,13 +35,13 @@ inline QString containerLabel(capability::Container container) {
     return QStringLiteral("MKV");
 }
 
-inline QString containerLabel(recorder_core::Container container) {
+inline QString containerLabel(exosnap::engine::Container container) {
     switch (container) {
-    case recorder_core::Container::Matroska:
+    case exosnap::engine::Container::Matroska:
         return QStringLiteral("MKV");
-    case recorder_core::Container::Mp4:
+    case exosnap::engine::Container::Mp4:
         return QStringLiteral("MP4");
-    case recorder_core::Container::WebM:
+    case exosnap::engine::Container::WebM:
         return QStringLiteral("WebM");
     }
     return QStringLiteral("MKV");
@@ -54,13 +54,13 @@ inline QString videoCodecLabel(capability::VideoCodec codec) {
     return QString::fromUtf8(label.data(), static_cast<int>(label.size()));
 }
 
-inline QString videoCodecLabel(recorder_core::VideoCodec codec) {
+inline QString videoCodecLabel(exosnap::engine::VideoCodec codec) {
     switch (codec) {
-    case recorder_core::VideoCodec::H264:
+    case exosnap::engine::VideoCodec::H264:
         return QStringLiteral("H.264");
-    case recorder_core::VideoCodec::Hevc:
+    case exosnap::engine::VideoCodec::Hevc:
         return QStringLiteral("HEVC");
-    case recorder_core::VideoCodec::Av1:
+    case exosnap::engine::VideoCodec::Av1:
         return QStringLiteral("AV1");
     }
     return QStringLiteral("AV1");
@@ -80,15 +80,15 @@ inline QString audioCodecLabel(capability::AudioCodec codec) {
     return QStringLiteral("AAC");
 }
 
-inline QString audioCodecLabel(recorder_core::AudioCodec codec) {
+inline QString audioCodecLabel(exosnap::engine::AudioCodec codec) {
     switch (codec) {
-    case recorder_core::AudioCodec::Opus:
+    case exosnap::engine::AudioCodec::Opus:
         return QStringLiteral("Opus");
-    case recorder_core::AudioCodec::Aac:
+    case exosnap::engine::AudioCodec::Aac:
         return QStringLiteral("AAC");
-    case recorder_core::AudioCodec::Pcm:
+    case exosnap::engine::AudioCodec::Pcm:
         return QStringLiteral("PCM");
-    case recorder_core::AudioCodec::Flac:
+    case exosnap::engine::AudioCodec::Flac:
         return QStringLiteral("FLAC");
     }
     return QStringLiteral("AAC");

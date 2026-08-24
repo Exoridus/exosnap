@@ -60,39 +60,39 @@ bool EqualsAsciiInsensitive(const std::string_view a, const std::string_view b) 
     return true;
 }
 
-std::wstring ContainerLabel(recorder_core::Container container) {
+std::wstring ContainerLabel(exosnap::engine::Container container) {
     switch (container) {
-    case recorder_core::Container::Matroska:
+    case exosnap::engine::Container::Matroska:
         return L"MKV";
-    case recorder_core::Container::Mp4:
+    case exosnap::engine::Container::Mp4:
         return L"MP4";
-    case recorder_core::Container::WebM:
+    case exosnap::engine::Container::WebM:
         return L"WebM";
     }
     return L"MKV";
 }
 
-std::wstring VideoCodecLabel(recorder_core::VideoCodec codec) {
+std::wstring VideoCodecLabel(exosnap::engine::VideoCodec codec) {
     switch (codec) {
-    case recorder_core::VideoCodec::H264:
+    case exosnap::engine::VideoCodec::H264:
         return L"H.264";
-    case recorder_core::VideoCodec::Hevc:
+    case exosnap::engine::VideoCodec::Hevc:
         return L"HEVC";
-    case recorder_core::VideoCodec::Av1:
+    case exosnap::engine::VideoCodec::Av1:
         return L"AV1";
     }
     return L"AV1";
 }
 
-std::wstring AudioCodecLabel(recorder_core::AudioCodec codec) {
+std::wstring AudioCodecLabel(exosnap::engine::AudioCodec codec) {
     switch (codec) {
-    case recorder_core::AudioCodec::Aac:
+    case exosnap::engine::AudioCodec::Aac:
         return L"AAC";
-    case recorder_core::AudioCodec::Opus:
+    case exosnap::engine::AudioCodec::Opus:
         return L"Opus";
-    case recorder_core::AudioCodec::Pcm:
+    case exosnap::engine::AudioCodec::Pcm:
         return L"PCM";
-    case recorder_core::AudioCodec::Flac:
+    case exosnap::engine::AudioCodec::Flac:
         return L"FLAC";
     }
     return L"Opus";
@@ -424,7 +424,7 @@ void RecordViewModel::UpdateMeterRms(const std::array<float, 3>& per_track_rms) 
     }
 }
 
-void RecordViewModel::UpdateStats(const recorder_core::SessionStats& stats) {
+void RecordViewModel::UpdateStats(const exosnap::engine::SessionStats& stats) {
     elapsed_text = FormatElapsed(stats.elapsed_seconds);
     elapsed_seconds = stats.elapsed_seconds;
     frames_captured = stats.video_frames_captured;
@@ -575,18 +575,18 @@ void RecordViewModel::ResetStats() {
     result_frame_rate_num = 60;
     result_frame_rate_den = 1;
     result_cfr = true;
-    result_container = recorder_core::Container::WebM;
-    result_video_codec = recorder_core::VideoCodec::Av1;
-    result_audio_codec = recorder_core::AudioCodec::Opus;
+    result_container = exosnap::engine::Container::WebM;
+    result_video_codec = exosnap::engine::VideoCodec::Av1;
+    result_audio_codec = exosnap::engine::AudioCodec::Opus;
     live_stats_available = false;
 }
 
 void RecordViewModel::ApplyTargetKind(capability::CaptureTargetKind kind) {
     audio_ui_state.target_kind = kind;
     audio_ui_state.selected_window_pid.reset();
-    audio_ui_state.mic_channel_mode = recorder_core::MicChannelMode::Auto;
+    audio_ui_state.mic_channel_mode = exosnap::engine::MicChannelMode::Auto;
 
-    using K = recorder_core::AudioSourceKind;
+    using K = exosnap::engine::AudioSourceKind;
     if (kind == capability::CaptureTargetKind::Window) {
         // Window: Application audio ON; Other system audio and Microphone OFF by default.
         audio_ui_state.source_rows = {
@@ -601,11 +601,12 @@ void RecordViewModel::ApplyTargetKind(capability::CaptureTargetKind kind) {
         // other, so a target switch must not silently discard it — carry an existing App
         // row over instead of rebuilding without it. Only its ACTIVE state (receded vs.
         // live) follows the target, and the engine strips the row from the recording-time
-        // plan anyway (recorder_core::NormalizeSourceRowsForTarget, via BuildAudioPlan),
+        // plan anyway (exosnap::engine::NormalizeSourceRowsForTarget, via BuildAudioPlan),
         // since a display/region capture has no process to scope it to.
-        const auto existing_app = std::find_if(audio_ui_state.source_rows.begin(), audio_ui_state.source_rows.end(),
-                                               [](const recorder_core::AudioSourceRow& r) { return r.kind == K::App; });
-        std::optional<recorder_core::AudioSourceRow> carried_app;
+        const auto existing_app =
+            std::find_if(audio_ui_state.source_rows.begin(), audio_ui_state.source_rows.end(),
+                         [](const exosnap::engine::AudioSourceRow& r) { return r.kind == K::App; });
+        std::optional<exosnap::engine::AudioSourceRow> carried_app;
         if (existing_app != audio_ui_state.source_rows.end())
             carried_app = *existing_app;
 
@@ -628,13 +629,13 @@ void RecordViewModel::ApplyTargetKindPreservingAudio(capability::CaptureTargetKi
     }
 
     if (kind == capability::CaptureTargetKind::Window) {
-        using K = recorder_core::AudioSourceKind;
+        using K = exosnap::engine::AudioSourceKind;
         const bool has_app = std::any_of(audio_ui_state.source_rows.begin(), audio_ui_state.source_rows.end(),
-                                         [](const recorder_core::AudioSourceRow& r) { return r.kind == K::App; });
+                                         [](const exosnap::engine::AudioSourceRow& r) { return r.kind == K::App; });
         if (!has_app) {
             // App is first in canonical Window row order (App, Mic, Sys).
             audio_ui_state.source_rows.insert(audio_ui_state.source_rows.begin(),
-                                              recorder_core::AudioSourceRow{K::App, true, false});
+                                              exosnap::engine::AudioSourceRow{K::App, true, false});
         }
     }
 
@@ -729,7 +730,7 @@ std::string RecordViewModel::WindowLabelFromTarget(const std::string& raw_descri
     return BuildWindowLabelParts(raw_description).label;
 }
 
-std::string RecordViewModel::TargetLabelFromCaptureTarget(const recorder_core::CaptureTarget& target) {
+std::string RecordViewModel::TargetLabelFromCaptureTarget(const exosnap::engine::CaptureTarget& target) {
     const FilenameTargetContext context = FilenameContextFromCaptureTarget(target);
     std::string label = ToUtf8(context.target_name);
 
@@ -737,14 +738,14 @@ std::string RecordViewModel::TargetLabelFromCaptureTarget(const recorder_core::C
         return label;
     }
 
-    if (target.kind == recorder_core::CaptureTarget::Kind::Monitor) {
+    if (target.kind == exosnap::engine::CaptureTarget::Kind::Monitor) {
         return "Desktop - " + DisplayLabelFromTarget(target.description);
     }
 
     return WindowLabelFromTarget(target.description);
 }
 
-std::string RecordViewModel::LogSafeTargetLabel(const recorder_core::CaptureTarget& target) {
+std::string RecordViewModel::LogSafeTargetLabel(const exosnap::engine::CaptureTarget& target) {
     // Privacy (ADR 0045): a window's title (and the app-name/title label built
     // from it) is potentially sensitive -- document titles, chat partner names,
     // private tab titles -- and must be neutralized at the LOG SOURCE, not only
@@ -754,16 +755,16 @@ std::string RecordViewModel::LogSafeTargetLabel(const recorder_core::CaptureTarg
     // they are logged verbatim; only "which window" is replaced with a stable
     // placeholder, matching the [path]/[user]/[machine] convention already used
     // by the crash scrubber.
-    if (target.kind == recorder_core::CaptureTarget::Kind::Monitor) {
+    if (target.kind == exosnap::engine::CaptureTarget::Kind::Monitor) {
         return TargetLabelFromCaptureTarget(target);
     }
     return "[window]";
 }
 
-FilenameTargetContext RecordViewModel::FilenameContextFromCaptureTarget(const recorder_core::CaptureTarget& target) {
+FilenameTargetContext RecordViewModel::FilenameContextFromCaptureTarget(const exosnap::engine::CaptureTarget& target) {
     FilenameTargetContext context;
 
-    if (target.kind == recorder_core::CaptureTarget::Kind::Monitor) {
+    if (target.kind == exosnap::engine::CaptureTarget::Kind::Monitor) {
         const std::string display_label = DisplayLabelFromTarget(target.description);
         context.app_name = L"Desktop";
         context.window_title = ToWideUtf8(display_label);
@@ -790,7 +791,7 @@ FilenameTargetContext RecordViewModel::FilenameContextFromCaptureTarget(const re
     return context;
 }
 
-std::vector<int> RecordViewModel::SortWindowTargetIndices(const std::vector<recorder_core::CaptureTarget>& targets,
+std::vector<int> RecordViewModel::SortWindowTargetIndices(const std::vector<exosnap::engine::CaptureTarget>& targets,
                                                           const std::vector<int>& window_indices) {
     struct SortEntry {
         int target_index = -1;
@@ -807,7 +808,7 @@ std::vector<int> RecordViewModel::SortWindowTargetIndices(const std::vector<reco
         }
 
         const auto& target = targets[static_cast<std::size_t>(target_index)];
-        if (target.kind != recorder_core::CaptureTarget::Kind::Window) {
+        if (target.kind != exosnap::engine::CaptureTarget::Kind::Window) {
             continue;
         }
 

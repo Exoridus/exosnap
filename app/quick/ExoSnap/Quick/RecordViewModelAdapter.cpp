@@ -30,10 +30,10 @@ QString clockText(const QString& value) {
     return QStringLiteral("00:00:00");
 }
 
-bool hasRow(const capability::AudioUiState& state, recorder_core::AudioSourceKind kind) {
+bool hasRow(const capability::AudioUiState& state, exosnap::engine::AudioSourceKind kind) {
     return std::any_of(state.source_rows.begin(), state.source_rows.end(), [kind](const auto& row) {
-        return row.kind == kind || (kind == recorder_core::AudioSourceKind::Sys &&
-                                    row.kind == recorder_core::AudioSourceKind::SystemOutput);
+        return row.kind == kind || (kind == exosnap::engine::AudioSourceKind::Sys &&
+                                    row.kind == exosnap::engine::AudioSourceKind::SystemOutput);
     });
 }
 
@@ -322,7 +322,7 @@ bool RecordViewModelAdapter::webcamEnabled() const noexcept {
 
 bool RecordViewModelAdapter::appAudioVisible() const noexcept {
     return source_ != nullptr && source_->audio_ui_state.target_kind == capability::CaptureTargetKind::Window &&
-           hasRow(source_->audio_ui_state, recorder_core::AudioSourceKind::App);
+           hasRow(source_->audio_ui_state, exosnap::engine::AudioSourceKind::App);
 }
 
 bool RecordViewModelAdapter::microphoneAvailable() const noexcept {
@@ -633,7 +633,7 @@ void RecordViewModelAdapter::rebuildPresentation() {
         QVariantList window_target_options;
         for (qsizetype index = 0; index < static_cast<qsizetype>(source_->targets.size()); ++index) {
             const auto& target = source_->targets[static_cast<std::size_t>(index)];
-            const bool window = target.kind == recorder_core::CaptureTarget::Kind::Window;
+            const bool window = target.kind == exosnap::engine::CaptureTarget::Kind::Window;
             const QVariantMap option{
                 {QStringLiteral("targetIndex"), index},
                 {QStringLiteral("label"),
@@ -674,8 +674,8 @@ void RecordViewModelAdapter::rebuildPresentation() {
         return;
     const auto& target = source_->targets[static_cast<std::size_t>(index)];
     source_name_ = QString::fromStdString(RecordViewModel::TargetLabelFromCaptureTarget(target));
-    source_kind_text_ =
-        target.kind == recorder_core::CaptureTarget::Kind::Window ? QStringLiteral("WINDOW") : QStringLiteral("SCREEN");
+    source_kind_text_ = target.kind == exosnap::engine::CaptureTarget::Kind::Window ? QStringLiteral("WINDOW")
+                                                                                    : QStringLiteral("SCREEN");
     source_detail_text_ = QString::fromUtf8(target.description);
 }
 

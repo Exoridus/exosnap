@@ -174,7 +174,7 @@ harness modes and the AddressSanitizer build.
 
 ```text
 app/          application source (UI, models, recording pipeline)
-libs/         internal libraries (recorder_core, capability, etc.)
+libs/         internal libraries (engine, capability, etc.)
 docs/
   roadmap.md  version roadmap and architecture guardrails
   decisions/  architecture decision records (ADRs)

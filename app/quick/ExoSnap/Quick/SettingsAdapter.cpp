@@ -58,49 +58,49 @@ QString fromWide(const std::wstring& value) {
 
 // The two enumerations carry the same three codecs in a different order, so a
 // cast between them is silently wrong.
-recorder_core::VideoCodec toRecorderCodec(VideoCodec codec) noexcept {
+exosnap::engine::VideoCodec toRecorderCodec(VideoCodec codec) noexcept {
     switch (codec) {
     case VideoCodec::H264:
-        return recorder_core::VideoCodec::H264;
+        return exosnap::engine::VideoCodec::H264;
     case VideoCodec::Hevc:
-        return recorder_core::VideoCodec::Hevc;
+        return exosnap::engine::VideoCodec::Hevc;
     case VideoCodec::Av1:
         break;
     }
-    return recorder_core::VideoCodec::Av1;
+    return exosnap::engine::VideoCodec::Av1;
 }
 
-QString nvencPresetLabel(recorder_core::NvencPreset preset) {
+QString nvencPresetLabel(exosnap::engine::NvencPreset preset) {
     switch (preset) {
-    case recorder_core::NvencPreset::P1:
+    case exosnap::engine::NvencPreset::P1:
         return QObject::tr("P1 · Fastest");
-    case recorder_core::NvencPreset::P2:
+    case exosnap::engine::NvencPreset::P2:
         return QStringLiteral("P2");
-    case recorder_core::NvencPreset::P3:
+    case exosnap::engine::NvencPreset::P3:
         return QStringLiteral("P3");
-    case recorder_core::NvencPreset::P4:
+    case exosnap::engine::NvencPreset::P4:
         return QObject::tr("P4 · Balanced");
-    case recorder_core::NvencPreset::P5:
+    case exosnap::engine::NvencPreset::P5:
         return QStringLiteral("P5");
-    case recorder_core::NvencPreset::P6:
+    case exosnap::engine::NvencPreset::P6:
         return QStringLiteral("P6");
-    case recorder_core::NvencPreset::P7:
+    case exosnap::engine::NvencPreset::P7:
         return QObject::tr("P7 · Best quality");
     }
     return QStringLiteral("P4");
 }
 
-QString qualityPresetLabel(recorder_core::QualityPreset preset) {
+QString qualityPresetLabel(exosnap::engine::QualityPreset preset) {
     switch (preset) {
-    case recorder_core::QualityPreset::Ultra:
+    case exosnap::engine::QualityPreset::Ultra:
         return QObject::tr("Ultra");
-    case recorder_core::QualityPreset::High:
+    case exosnap::engine::QualityPreset::High:
         return QObject::tr("High");
-    case recorder_core::QualityPreset::Balanced:
+    case exosnap::engine::QualityPreset::Balanced:
         return QObject::tr("Balanced");
-    case recorder_core::QualityPreset::Low:
+    case exosnap::engine::QualityPreset::Low:
         return QObject::tr("Low");
-    case recorder_core::QualityPreset::Draft:
+    case exosnap::engine::QualityPreset::Draft:
         return QObject::tr("Draft");
     }
     return QObject::tr("Balanced");
@@ -108,8 +108,8 @@ QString qualityPresetLabel(recorder_core::QualityPreset preset) {
 
 constexpr std::array kFrameRateLadder = {24u, 30u, 48u, 50u, 60u, 90u, 120u, 144u, 165u, 240u};
 
-bool isSysKind(recorder_core::AudioSourceKind kind) noexcept {
-    return kind == recorder_core::AudioSourceKind::Sys || kind == recorder_core::AudioSourceKind::SystemOutput;
+bool isSysKind(exosnap::engine::AudioSourceKind kind) noexcept {
+    return kind == exosnap::engine::AudioSourceKind::Sys || kind == exosnap::engine::AudioSourceKind::SystemOutput;
 }
 
 } // namespace
@@ -636,9 +636,9 @@ void SettingsAdapter::rebuildOptions() {
         const auto hdr10 = caps_set_ ? caps_.QueryHdr10Native(out.video_codec) : capability::SupportAnnotation{};
         const bool hdr10_selectable = caps_set_ && capability::IsSelectable(hdr10);
         hdr_mode_options_.append(
-            makeOption(static_cast<int>(recorder_core::HdrMode::TonemapSdr), tr("Tone-map to SDR")));
-        hdr_mode_options_.append(makeOption(static_cast<int>(recorder_core::HdrMode::Hdr10), tr("Record native HDR10"),
-                                            hdr10_selectable, fromAnnotation(hdr10)));
+            makeOption(static_cast<int>(exosnap::engine::HdrMode::TonemapSdr), tr("Tone-map to SDR")));
+        hdr_mode_options_.append(makeOption(static_cast<int>(exosnap::engine::HdrMode::Hdr10),
+                                            tr("Record native HDR10"), hdr10_selectable, fromAnnotation(hdr10)));
         if (!hdr10_selectable) {
             hdr_hint_ = fromAnnotation(hdr10);
             if (hdr_hint_.isEmpty()) {
@@ -648,16 +648,16 @@ void SettingsAdapter::rebuildOptions() {
     }
 
     encoder_preset_options_.clear();
-    for (int i = static_cast<int>(recorder_core::NvencPreset::P1);
-         i <= static_cast<int>(recorder_core::NvencPreset::P7); ++i) {
-        encoder_preset_options_.append(makeOption(i, nvencPresetLabel(static_cast<recorder_core::NvencPreset>(i))));
+    for (int i = static_cast<int>(exosnap::engine::NvencPreset::P1);
+         i <= static_cast<int>(exosnap::engine::NvencPreset::P7); ++i) {
+        encoder_preset_options_.append(makeOption(i, nvencPresetLabel(static_cast<exosnap::engine::NvencPreset>(i))));
     }
 
     quality_preset_options_.clear();
-    for (const recorder_core::QualityPreset preset :
-         {recorder_core::QualityPreset::Ultra, recorder_core::QualityPreset::High,
-          recorder_core::QualityPreset::Balanced, recorder_core::QualityPreset::Low,
-          recorder_core::QualityPreset::Draft}) {
+    for (const exosnap::engine::QualityPreset preset :
+         {exosnap::engine::QualityPreset::Ultra, exosnap::engine::QualityPreset::High,
+          exosnap::engine::QualityPreset::Balanced, exosnap::engine::QualityPreset::Low,
+          exosnap::engine::QualityPreset::Draft}) {
         // The tier name alone. The CQ number used to lead this label, from when
         // it was the value the encoder was handed; it is now a product scale
         // that each codec maps onto its own quantizer, so printing it here would
@@ -667,23 +667,23 @@ void SettingsAdapter::rebuildOptions() {
     }
 
     rate_control_options_.clear();
-    for (const recorder_core::RateControlMode mode :
-         {recorder_core::RateControlMode::ConstantQuality, recorder_core::RateControlMode::VariableBitrate,
-          recorder_core::RateControlMode::ConstantBitrate}) {
+    for (const exosnap::engine::RateControlMode mode :
+         {exosnap::engine::RateControlMode::ConstantQuality, exosnap::engine::RateControlMode::VariableBitrate,
+          exosnap::engine::RateControlMode::ConstantBitrate}) {
         const auto annotation = caps_set_ ? caps_.QueryRateControlMode(mode) : capability::SupportAnnotation{};
         const bool selectable = !caps_set_ || capability::IsSelectable(annotation);
         QString label;
         switch (mode) {
-        case recorder_core::RateControlMode::ConstantQuality:
+        case exosnap::engine::RateControlMode::ConstantQuality:
             label = tr("Constant quality");
             break;
-        case recorder_core::RateControlMode::VariableBitrate:
+        case exosnap::engine::RateControlMode::VariableBitrate:
             label = tr("Variable bitrate");
             break;
-        case recorder_core::RateControlMode::ConstantBitrate:
+        case exosnap::engine::RateControlMode::ConstantBitrate:
             label = tr("Constant bitrate");
             break;
-        case recorder_core::RateControlMode::Lossless:
+        case exosnap::engine::RateControlMode::Lossless:
             break;
         }
         rate_control_options_.append(makeOption(static_cast<int>(mode), label, selectable, fromAnnotation(annotation)));
@@ -706,8 +706,8 @@ void SettingsAdapter::rebuildOptions() {
     timing_options_.append(makeOption(0, tr("Variable frame rate")));
 
     frame_pacing_options_.clear();
-    frame_pacing_options_.append(makeOption(static_cast<int>(recorder_core::FramePacingMode::Smooth), tr("Smooth")));
-    frame_pacing_options_.append(makeOption(static_cast<int>(recorder_core::FramePacingMode::Newest), tr("Newest")));
+    frame_pacing_options_.append(makeOption(static_cast<int>(exosnap::engine::FramePacingMode::Smooth), tr("Smooth")));
+    frame_pacing_options_.append(makeOption(static_cast<int>(exosnap::engine::FramePacingMode::Newest), tr("Newest")));
 
     keyframe_interval_options_.clear();
     keyframe_interval_options_.append(makeOption(static_cast<int>(KeyframeIntervalMode::Seconds2), tr("2 s")));
@@ -728,15 +728,15 @@ void SettingsAdapter::rebuildOptions() {
     }
 
     mic_channel_mode_options_.clear();
-    mic_channel_mode_options_.append(makeOption(static_cast<int>(recorder_core::MicChannelMode::Auto), tr("Auto")));
+    mic_channel_mode_options_.append(makeOption(static_cast<int>(exosnap::engine::MicChannelMode::Auto), tr("Auto")));
     mic_channel_mode_options_.append(
-        makeOption(static_cast<int>(recorder_core::MicChannelMode::PreserveStereo), tr("Preserve stereo")));
+        makeOption(static_cast<int>(exosnap::engine::MicChannelMode::PreserveStereo), tr("Preserve stereo")));
     mic_channel_mode_options_.append(
-        makeOption(static_cast<int>(recorder_core::MicChannelMode::MonoMix), tr("Mono mix")));
+        makeOption(static_cast<int>(exosnap::engine::MicChannelMode::MonoMix), tr("Mono mix")));
     mic_channel_mode_options_.append(
-        makeOption(static_cast<int>(recorder_core::MicChannelMode::LeftToStereo), tr("Left channel to stereo")));
+        makeOption(static_cast<int>(exosnap::engine::MicChannelMode::LeftToStereo), tr("Left channel to stereo")));
     mic_channel_mode_options_.append(
-        makeOption(static_cast<int>(recorder_core::MicChannelMode::RightToStereo), tr("Right channel to stereo")));
+        makeOption(static_cast<int>(exosnap::engine::MicChannelMode::RightToStereo), tr("Right channel to stereo")));
 
     audio_sample_rate_options_.clear();
     for (const uint32_t rate : {44100u, 48000u, 96000u}) {
@@ -757,13 +757,13 @@ void SettingsAdapter::rebuildOptions() {
 
     opus_frame_duration_options_.clear();
     opus_frame_duration_options_.append(
-        makeOption(static_cast<int>(recorder_core::OpusFrameDuration::Ms20), tr("20 ms")));
+        makeOption(static_cast<int>(exosnap::engine::OpusFrameDuration::Ms20), tr("20 ms")));
     opus_frame_duration_options_.append(
-        makeOption(static_cast<int>(recorder_core::OpusFrameDuration::Ms10), tr("10 ms")));
+        makeOption(static_cast<int>(exosnap::engine::OpusFrameDuration::Ms10), tr("10 ms")));
     opus_frame_duration_options_.append(
-        makeOption(static_cast<int>(recorder_core::OpusFrameDuration::Ms5), tr("5 ms")));
+        makeOption(static_cast<int>(exosnap::engine::OpusFrameDuration::Ms5), tr("5 ms")));
     opus_frame_duration_options_.append(
-        makeOption(static_cast<int>(recorder_core::OpusFrameDuration::Ms2_5), tr("2.5 ms")));
+        makeOption(static_cast<int>(exosnap::engine::OpusFrameDuration::Ms2_5), tr("2.5 ms")));
 
     // Webcam capture formats. Values are the pixel height; the adapter pairs it
     // with the matching width so QML never carries a resolution table.
@@ -888,7 +888,7 @@ void SettingsAdapter::rebuildDerivedText() {
 // Audio row helpers
 // ---------------------------------------------------------------------------
 
-recorder_core::AudioSourceRow* SettingsAdapter::findRow(recorder_core::AudioSourceKind kind) {
+exosnap::engine::AudioSourceRow* SettingsAdapter::findRow(exosnap::engine::AudioSourceKind kind) {
     for (auto& row : config_.audio.source_rows) {
         if (row.kind == kind || (isSysKind(kind) && isSysKind(row.kind))) {
             return &row;
@@ -897,12 +897,12 @@ recorder_core::AudioSourceRow* SettingsAdapter::findRow(recorder_core::AudioSour
     return nullptr;
 }
 
-const recorder_core::AudioSourceRow* SettingsAdapter::findRow(recorder_core::AudioSourceKind kind) const {
+const exosnap::engine::AudioSourceRow* SettingsAdapter::findRow(exosnap::engine::AudioSourceKind kind) const {
     return const_cast<SettingsAdapter*>(this)->findRow(kind);
 }
 
-void SettingsAdapter::setRowEnabled(recorder_core::AudioSourceKind kind, bool enabled) {
-    if (recorder_core::AudioSourceRow* row = findRow(kind)) {
+void SettingsAdapter::setRowEnabled(exosnap::engine::AudioSourceKind kind, bool enabled) {
+    if (exosnap::engine::AudioSourceRow* row = findRow(kind)) {
         if (row->enabled == enabled) {
             return;
         }
@@ -911,7 +911,7 @@ void SettingsAdapter::setRowEnabled(recorder_core::AudioSourceKind kind, bool en
         if (!enabled) {
             return;
         }
-        recorder_core::AudioSourceRow new_row;
+        exosnap::engine::AudioSourceRow new_row;
         new_row.kind = kind;
         new_row.enabled = true;
         config_.audio.source_rows.push_back(new_row);
@@ -919,8 +919,8 @@ void SettingsAdapter::setRowEnabled(recorder_core::AudioSourceKind kind, bool en
     applyConfigEdit();
 }
 
-void SettingsAdapter::setRowSeparate(recorder_core::AudioSourceKind kind, bool separate) {
-    recorder_core::AudioSourceRow* row = findRow(kind);
+void SettingsAdapter::setRowSeparate(exosnap::engine::AudioSourceKind kind, bool separate) {
+    exosnap::engine::AudioSourceRow* row = findRow(kind);
     if (row == nullptr || row->merge_with_above == !separate) {
         return;
     }
@@ -1008,19 +1008,19 @@ const QVariantList& SettingsAdapter::qualityPresetOptions() const noexcept {
     return quality_preset_options_;
 }
 int SettingsAdapter::qualityPreset() const noexcept {
-    return static_cast<int>(recorder_core::NearestQualityPreset(config_.video.cq));
+    return static_cast<int>(exosnap::engine::NearestQualityPreset(config_.video.cq));
 }
 int SettingsAdapter::cq() const noexcept {
     return static_cast<int>(config_.video.cq);
 }
 QString SettingsAdapter::nativeQuantizerHint() const {
-    const recorder_core::VideoCodec codec = toRecorderCodec(config_.output.video_codec);
-    const uint32_t native = recorder_core::NvencNativeQuantizer(codec, config_.video.cq);
-    const uint32_t ceiling = recorder_core::NvencNativeQuantizerCeiling(codec);
+    const exosnap::engine::VideoCodec codec = toRecorderCodec(config_.output.video_codec);
+    const uint32_t native = exosnap::engine::NvencNativeQuantizer(codec, config_.video.cq);
+    const uint32_t ceiling = exosnap::engine::NvencNativeQuantizerCeiling(codec);
     // "qindex" for AV1, "QP" for the other two: the codec's own name for the
     // parameter, so the number can be matched against the codec's documentation
     // rather than read as a second ExoSnap scale.
-    const QString parameter = codec == recorder_core::VideoCodec::Av1 ? tr("qindex") : tr("QP");
+    const QString parameter = codec == exosnap::engine::VideoCodec::Av1 ? tr("qindex") : tr("QP");
     return tr("%1 %2 %3 of %4")
         .arg(ui::videoCodecLabel(codec), parameter, QString::number(native), QString::number(ceiling));
 }
@@ -1031,8 +1031,8 @@ int SettingsAdapter::rateControl() const noexcept {
     return static_cast<int>(config_.video.rate_control);
 }
 bool SettingsAdapter::bitrateRelevant() const noexcept {
-    return config_.video.rate_control == recorder_core::RateControlMode::VariableBitrate ||
-           config_.video.rate_control == recorder_core::RateControlMode::ConstantBitrate;
+    return config_.video.rate_control == exosnap::engine::RateControlMode::VariableBitrate ||
+           config_.video.rate_control == exosnap::engine::RateControlMode::ConstantBitrate;
 }
 int SettingsAdapter::bitrateKbps() const noexcept {
     return static_cast<int>(config_.video.bitrate_kbps);
@@ -1151,21 +1151,21 @@ bool SettingsAdapter::appAudioEnabled() const noexcept {
     return config_.audio.IsAppEnabled();
 }
 bool SettingsAdapter::appAudioSeparate() const noexcept {
-    const auto* row = findRow(recorder_core::AudioSourceKind::App);
+    const auto* row = findRow(exosnap::engine::AudioSourceKind::App);
     return row == nullptr || !row->merge_with_above;
 }
 bool SettingsAdapter::systemAudioEnabled() const noexcept {
     return config_.audio.IsSysEnabled();
 }
 bool SettingsAdapter::systemAudioSeparate() const noexcept {
-    const auto* row = findRow(recorder_core::AudioSourceKind::Sys);
+    const auto* row = findRow(exosnap::engine::AudioSourceKind::Sys);
     return row == nullptr || !row->merge_with_above;
 }
 bool SettingsAdapter::microphoneEnabled() const noexcept {
     return config_.audio.IsMicEnabled();
 }
 bool SettingsAdapter::microphoneSeparate() const noexcept {
-    const auto* row = findRow(recorder_core::AudioSourceKind::Mic);
+    const auto* row = findRow(exosnap::engine::AudioSourceKind::Mic);
     return row == nullptr || !row->merge_with_above;
 }
 const QVariantList& SettingsAdapter::microphoneDeviceOptions() const noexcept {
@@ -1594,7 +1594,7 @@ void SettingsAdapter::setColorRange(int value) {
 }
 
 void SettingsAdapter::setHdrMode(int value) {
-    const auto mode = static_cast<recorder_core::HdrMode>(value);
+    const auto mode = static_cast<exosnap::engine::HdrMode>(value);
     if (config_.output.hdr_mode == mode) {
         return;
     }
@@ -1603,7 +1603,7 @@ void SettingsAdapter::setHdrMode(int value) {
 }
 
 void SettingsAdapter::setEncoderPreset(int value) {
-    const auto preset = static_cast<recorder_core::NvencPreset>(value);
+    const auto preset = static_cast<exosnap::engine::NvencPreset>(value);
     if (config_.output.nvenc_preset == preset) {
         return;
     }
@@ -1612,7 +1612,7 @@ void SettingsAdapter::setEncoderPreset(int value) {
 }
 
 void SettingsAdapter::setQualityPreset(int value) {
-    const uint32_t canonical = recorder_core::CanonicalCq(static_cast<recorder_core::QualityPreset>(value));
+    const uint32_t canonical = exosnap::engine::CanonicalCq(static_cast<exosnap::engine::QualityPreset>(value));
     if (config_.video.cq == canonical) {
         return;
     }
@@ -1622,7 +1622,7 @@ void SettingsAdapter::setQualityPreset(int value) {
 
 void SettingsAdapter::setCq(int value) {
     const auto clamped = static_cast<uint32_t>(
-        std::clamp(value, static_cast<int>(recorder_core::kCqMin), static_cast<int>(recorder_core::kCqMax)));
+        std::clamp(value, static_cast<int>(exosnap::engine::kCqMin), static_cast<int>(exosnap::engine::kCqMax)));
     if (config_.video.cq == clamped) {
         return;
     }
@@ -1631,7 +1631,7 @@ void SettingsAdapter::setCq(int value) {
 }
 
 void SettingsAdapter::setRateControl(int value) {
-    const auto mode = static_cast<recorder_core::RateControlMode>(value);
+    const auto mode = static_cast<exosnap::engine::RateControlMode>(value);
     if (config_.video.rate_control == mode) {
         return;
     }
@@ -1670,7 +1670,7 @@ void SettingsAdapter::setCfr(bool value) {
 }
 
 void SettingsAdapter::setFramePacing(int value) {
-    const auto mode = static_cast<recorder_core::FramePacingMode>(value);
+    const auto mode = static_cast<exosnap::engine::FramePacingMode>(value);
     if (config_.video.frame_pacing == mode) {
         return;
     }
@@ -1806,22 +1806,22 @@ void SettingsAdapter::setSplitCustomSizeMb(int value) {
 }
 
 void SettingsAdapter::setAppAudioEnabled(bool value) {
-    setRowEnabled(recorder_core::AudioSourceKind::App, value);
+    setRowEnabled(exosnap::engine::AudioSourceKind::App, value);
 }
 void SettingsAdapter::setAppAudioSeparate(bool value) {
-    setRowSeparate(recorder_core::AudioSourceKind::App, value);
+    setRowSeparate(exosnap::engine::AudioSourceKind::App, value);
 }
 void SettingsAdapter::setSystemAudioEnabled(bool value) {
-    setRowEnabled(recorder_core::AudioSourceKind::Sys, value);
+    setRowEnabled(exosnap::engine::AudioSourceKind::Sys, value);
 }
 void SettingsAdapter::setSystemAudioSeparate(bool value) {
-    setRowSeparate(recorder_core::AudioSourceKind::Sys, value);
+    setRowSeparate(exosnap::engine::AudioSourceKind::Sys, value);
 }
 void SettingsAdapter::setMicrophoneEnabled(bool value) {
-    setRowEnabled(recorder_core::AudioSourceKind::Mic, value);
+    setRowEnabled(exosnap::engine::AudioSourceKind::Mic, value);
 }
 void SettingsAdapter::setMicrophoneSeparate(bool value) {
-    setRowSeparate(recorder_core::AudioSourceKind::Mic, value);
+    setRowSeparate(exosnap::engine::AudioSourceKind::Mic, value);
 }
 
 void SettingsAdapter::setMicrophoneDeviceId(const QString& value) {
@@ -1837,7 +1837,7 @@ void SettingsAdapter::setMicrophoneDeviceId(const QString& value) {
 }
 
 void SettingsAdapter::setMicChannelMode(int value) {
-    const auto mode = static_cast<recorder_core::MicChannelMode>(value);
+    const auto mode = static_cast<exosnap::engine::MicChannelMode>(value);
     if (config_.audio.mic_channel_mode == mode) {
         return;
     }
@@ -1925,7 +1925,7 @@ void SettingsAdapter::setClockSlavingEnabled(bool value) {
 }
 
 void SettingsAdapter::setOpusFrameDuration(int value) {
-    const auto duration = static_cast<recorder_core::OpusFrameDuration>(value);
+    const auto duration = static_cast<exosnap::engine::OpusFrameDuration>(value);
     if (config_.audio.opus_frame_duration == duration) {
         return;
     }

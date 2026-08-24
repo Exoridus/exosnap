@@ -122,12 +122,12 @@ bool OverlayAdapter::refreshMonitorGeometry() {
     if (source_ != nullptr) {
         const int index = source_->selected_target_index;
         if (index >= 0 && index < static_cast<int>(source_->targets.size())) {
-            const recorder_core::CaptureTarget& target = source_->targets[static_cast<std::size_t>(index)];
+            const exosnap::engine::CaptureTarget& target = source_->targets[static_cast<std::size_t>(index)];
             // Window targets have no monitor rectangle of their own here. The
             // Widgets overlays fall back to the primary screen in that case and
             // so do these -- following a window as it is dragged between
             // displays is a separate feature, not a port detail.
-            if (target.kind == recorder_core::CaptureTarget::Kind::Monitor)
+            if (target.kind == exosnap::engine::CaptureTarget::Kind::Monitor)
                 native_id = target.native_id;
         }
     }

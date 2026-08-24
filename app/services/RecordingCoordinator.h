@@ -23,8 +23,8 @@
 #include <capability/runtime_snapshot.h>
 #include <capability/translation.h>
 #include <capability/user_config.h>
-#include <recorder_core/mp4_remuxer.h>
-#include <recorder_core/recorder_session.h>
+#include <exosnap/engine/mp4_remuxer.h>
+#include <exosnap/engine/recorder_session.h>
 
 #include "../diagnostics/DiskSpaceProvider.h"
 #include "../diagnostics/WindowTargetFacts.h"
@@ -38,18 +38,18 @@
 #include "RecordingAdmission.h"
 #include "WebcamService.h"
 
-namespace recorder_core {
+namespace exosnap::engine {
 class MicMeterService;
 class LoopbackMeterService;
-} // namespace recorder_core
+} // namespace exosnap::engine
 
 namespace exosnap {
 
 class RecordingCoordinator {
   public:
     using StateChangedCallback = std::function<void(UiRecordingState)>;
-    using StatsUpdatedCallback = std::function<void(const recorder_core::SessionStats&)>;
-    using DiagnosticsUpdatedCallback = std::function<void(const recorder_core::RecordingDiagnosticsSnapshot&)>;
+    using StatsUpdatedCallback = std::function<void(const exosnap::engine::SessionStats&)>;
+    using DiagnosticsUpdatedCallback = std::function<void(const exosnap::engine::RecordingDiagnosticsSnapshot&)>;
     using ResultReadyCallback = std::function<void(const UiRecordingResult&)>;
     using MicMeterUpdatedCallback = std::function<void(float rms_linear)>;
     using SysMeterUpdatedCallback = std::function<void(float rms_linear)>;
@@ -100,7 +100,7 @@ class RecordingCoordinator {
     // Unset — the default — yields ExclusiveEvidence::None, and the admission gate
     // then never blocks on exclusive fullscreen: nothing measured, nothing proven.
     using WindowExclusiveEvidenceProvider =
-        std::function<diagnostics::ExclusiveEvidence(const recorder_core::CaptureTarget&)>;
+        std::function<diagnostics::ExclusiveEvidence(const exosnap::engine::CaptureTarget&)>;
     void SetWindowExclusiveEvidenceProvider(WindowExclusiveEvidenceProvider provider);
 
     // QCR-804. Records that the mid-recording window-capture stall monitor
@@ -126,9 +126,9 @@ class RecordingCoordinator {
     // Returns false if the coordinator is currently recording (not in Ready /
     // Completed / Failed / ArmedFromRecovery state).
     struct RecoverySessionInfo {
-        RecoveryManifestEntry manifest_entry; // the candidate being continued
-        recorder_core::CaptureTarget target;  // capture target to resume on
-        bool target_valid = false;            // false when target needs re-selection
+        RecoveryManifestEntry manifest_entry;  // the candidate being continued
+        exosnap::engine::CaptureTarget target; // capture target to resume on
+        bool target_valid = false;             // false when target needs re-selection
     };
     bool ArmFromRecovery(const RecoverySessionInfo& info);
 
@@ -183,9 +183,9 @@ class RecordingCoordinator {
     void OnCapabilityFailure(std::wstring message);
     void RevalidateCapabilities();
 
-    std::vector<recorder_core::CaptureTarget> EnumerateTargets();
-    bool StartRecording(const recorder_core::CaptureTarget& target, const capability::AudioUiState& audio_ui_state,
-                        std::optional<recorder_core::CaptureRegion> crop_region = std::nullopt);
+    std::vector<exosnap::engine::CaptureTarget> EnumerateTargets();
+    bool StartRecording(const exosnap::engine::CaptureTarget& target, const capability::AudioUiState& audio_ui_state,
+                        std::optional<exosnap::engine::CaptureRegion> crop_region = std::nullopt);
 
     // Webcam overlay
     void SetWebcamSettings(const WebcamSettings& settings);
@@ -224,15 +224,15 @@ class RecordingCoordinator {
     // session is active (Recording or Paused) and no split transition is already
     // in flight; otherwise rejected honestly (logged, no-op). Returns true if the
     // request was accepted and forwarded to the engine.
-    bool RequestSplit(recorder_core::SplitTriggerSource source);
+    bool RequestSplit(exosnap::engine::SplitTriggerSource source);
 
     // True while a split boundary is pending (request forwarded, new segment not
     // yet started). Used to gate the UI so concurrent requests are coalesced.
     [[nodiscard]] bool IsSplitPending() const noexcept;
 
     // Configure automatic/manual split policy applied at the next StartRecording.
-    void SetSplitSettings(const recorder_core::RecordingSplitSettings& settings);
-    [[nodiscard]] recorder_core::RecordingSplitSettings SplitSettings() const noexcept;
+    void SetSplitSettings(const exosnap::engine::RecordingSplitSettings& settings);
+    [[nodiscard]] exosnap::engine::RecordingSplitSettings SplitSettings() const noexcept;
 
     void AddMarker(RecordingMarkerType type = RecordingMarkerType::General);
     // A SNAPSHOT, deliberately by value. This used to return `const&` while taking
@@ -246,7 +246,7 @@ class RecordingCoordinator {
     // too. Not noexcept: the copy allocates.
     [[nodiscard]] std::vector<RecordingMarker> Markers() const;
     [[nodiscard]] std::filesystem::path MarkerSidecarPath() const;
-    bool StartMicMeter(std::optional<std::string> device_id, recorder_core::MicChannelMode channel_mode);
+    bool StartMicMeter(std::optional<std::string> device_id, exosnap::engine::MicChannelMode channel_mode);
     void StopMicMeter();
     [[nodiscard]] bool IsMicMeterRunning() const noexcept;
 
@@ -283,7 +283,7 @@ class RecordingCoordinator {
     // to zero for a whole session. A reader that only needs the terminal numbers — the
     // benchmark harness, chiefly — must not have to take the one callback slot away
     // from the frontend that owns it.
-    [[nodiscard]] bool LastDiagnosticsSnapshot(recorder_core::RecordingDiagnosticsSnapshot* out);
+    [[nodiscard]] bool LastDiagnosticsSnapshot(exosnap::engine::RecordingDiagnosticsSnapshot* out);
 
     // Read-back of the RecorderConfig the most recent StartRecording actually
     // handed the engine, captured after session_.Validate() accepted it. Returns
@@ -295,7 +295,7 @@ class RecordingCoordinator {
     // seeding OutputSettingsModel::Defaults() while the Widgets path used the
     // CLI-committed values, so the two sides silently recorded different formats).
     // This is the committed truth, not the requested one.
-    [[nodiscard]] bool LastCommittedRecorderConfig(recorder_core::RecorderConfig* out) const;
+    [[nodiscard]] bool LastCommittedRecorderConfig(exosnap::engine::RecorderConfig* out) const;
     void SetResultReadyCallback(ResultReadyCallback cb);
     void SetMicMeterUpdatedCallback(MicMeterUpdatedCallback cb);
     void SetSysMeterUpdatedCallback(SysMeterUpdatedCallback cb);
@@ -315,11 +315,11 @@ class RecordingCoordinator {
     // StartRecording. The callback must return fast and must not make D3D calls
     // on the calling thread.
     using PreviewSharedHandleReadyCallback =
-        std::function<void(void* nt_handle, uint32_t width, uint32_t height, recorder_core::PreviewTapDesc tap)>;
+        std::function<void(void* nt_handle, uint32_t width, uint32_t height, exosnap::engine::PreviewTapDesc tap)>;
     void SetPreviewSharedHandleReadyCallback(PreviewSharedHandleReadyCallback cb);
 
     // Register the per-frame publish edge for the same WYSIWYG tap
-    // (recorder_core::PreviewFramePublishedCallback). Fires from the engine's
+    // (exosnap::engine::PreviewFramePublishedCallback). Fires from the engine's
     // video thread after each frame that actually reached the shared texture,
     // so a preview consumer can schedule one redraw per new frame instead of
     // polling. No payload; same fast-return / no-D3D contract as above.
@@ -401,11 +401,11 @@ class RecordingCoordinator {
     // free to mutate output_settings_/video_settings_/etc. during Preparing without
     // tearing a std::wstring/std::filesystem::path across the thread boundary.
     struct PrepareContext {
-        recorder_core::CaptureTarget target;
+        exosnap::engine::CaptureTarget target;
         capability::AudioUiState audio_ui_state;
-        std::optional<recorder_core::CaptureRegion> crop_region;
+        std::optional<exosnap::engine::CaptureRegion> crop_region;
         OutputSettingsModel output_settings;
-        recorder_core::RecordingSplitSettings split_settings;
+        exosnap::engine::RecordingSplitSettings split_settings;
         VideoSettingsModel video_settings;
         WebcamSettings webcam_settings;
         capability::UserRecorderConfig resolved_user_config;
@@ -423,7 +423,7 @@ class RecordingCoordinator {
     // free-space query, filesystem work, DXGI display-facts refresh, webcam open,
     // or the capture-lease handshake. Reads only from `ctx`.
     void PrepareAndRecordThreadProc(const PrepareContext& ctx);
-    void RecordingThreadProc(const recorder_core::RecorderConfig& config, const std::filesystem::path& output_path);
+    void RecordingThreadProc(const exosnap::engine::RecorderConfig& config, const std::filesystem::path& output_path);
     // (Re)start or stop the shared webcam capture based on enabled/recording/preview state.
     void SyncWebcamService(bool force_restart);
     void PostStateChange(UiRecordingState new_state);
@@ -437,8 +437,8 @@ class RecordingCoordinator {
     // recording, from the result plus the stashed final snapshot. Best-effort:
     // a write failure is logged and never blocks posting the result.
     void WriteSessionReportForResult(const UiRecordingResult& result);
-    void PostStats(recorder_core::SessionStats stats);
-    void PostDiagnostics(recorder_core::RecordingDiagnosticsSnapshot snapshot);
+    void PostStats(exosnap::engine::SessionStats stats);
+    void PostDiagnostics(exosnap::engine::RecordingDiagnosticsSnapshot snapshot);
     // Emit a single Initializing diagnostics snapshot so the Diagnostics page shows an
     // "initializing" state during preparation, before the engine produces live data.
     void EmitInitializingDiagnostics();
@@ -458,9 +458,9 @@ class RecordingCoordinator {
     // Write a per-segment marker sidecar adjacent to `segment_media_path`,
     // containing only markers whose session time falls in this segment, rebased to
     // segment-local time. No sidecar is written when the segment has zero markers.
-    void WriteSegmentMarkerSidecar(const recorder_core::CompletedSegment& segment);
+    void WriteSegmentMarkerSidecar(const exosnap::engine::CompletedSegment& segment);
     static std::wstring FormatHResult(int32_t hr);
-    static std::wstring FormatErrorPhase(recorder_core::ErrorPhase phase);
+    static std::wstring FormatErrorPhase(exosnap::engine::ErrorPhase phase);
 
     // Recovery manifest store (nullable — injected by MainWindow via SetRecoveryManifestStore).
     RecoveryManifestStore* recovery_manifest_store_ = nullptr;
@@ -501,7 +501,7 @@ class RecordingCoordinator {
     // Resolves the exclusive-fullscreen verdict for a window target. UI thread
     // only — it reads the injected evidence provider and Win32 window state.
     [[nodiscard]] diagnostics::ExclusiveEvidence
-    ResolveWindowExclusiveEvidence(const recorder_core::CaptureTarget& target) const;
+    ResolveWindowExclusiveEvidence(const exosnap::engine::CaptureTarget& target) const;
 
     // Stable per-recording session id, minted at StartRecording independent of the
     // (nullable) recovery store and NOT cleared before PostResult. This — not
@@ -562,10 +562,10 @@ class RecordingCoordinator {
     bool has_output_target_context_ = false;
     FilenameTargetContext output_target_context_;
 
-    recorder_core::RecorderSession session_;
-    std::unique_ptr<recorder_core::MicMeterService> mic_meter_service_;
-    std::unique_ptr<recorder_core::LoopbackMeterService> sys_meter_service_;
-    std::unique_ptr<recorder_core::LoopbackMeterService> app_meter_service_;
+    exosnap::engine::RecorderSession session_;
+    std::unique_ptr<exosnap::engine::MicMeterService> mic_meter_service_;
+    std::unique_ptr<exosnap::engine::LoopbackMeterService> sys_meter_service_;
+    std::unique_ptr<exosnap::engine::LoopbackMeterService> app_meter_service_;
     std::jthread recording_thread_;
     std::atomic<bool> is_recording_{false};
     std::atomic<bool> is_paused_{false};
@@ -602,16 +602,16 @@ class RecordingCoordinator {
     bool markers_limit_reported_ = false;
 
     // Split recording (SPLIT-RECORDING-R1)
-    recorder_core::RecordingSplitSettings split_settings_{};
+    exosnap::engine::RecordingSplitSettings split_settings_{};
     // True between a forwarded split request and the next segment being reported
     // by the engine. Guards against concurrent/coalesced requests.
     std::atomic<bool> split_pending_{false};
     // Segments accumulated from the engine SegmentCallback (mux worker thread).
     mutable std::mutex segments_mutex_;
-    std::vector<recorder_core::CompletedSegment> segments_;
+    std::vector<exosnap::engine::CompletedSegment> segments_;
     SplitFeedbackCallback on_split_feedback_;
     void PostSplitFeedback(bool accepted, QString message);
-    void OnSegmentCompleted(const recorder_core::CompletedSegment& segment);
+    void OnSegmentCompleted(const exosnap::engine::CompletedSegment& segment);
 
     // ADR-0014: remux-on-stop state.
     std::jthread remux_thread_;
@@ -729,20 +729,20 @@ class RecordingCoordinator {
     StatsUpdatedCallback on_stats_updated_;
     DiagnosticsUpdatedCallback on_diagnostics_updated_;
     // Rejects stale-session diagnostics snapshots before they reach the UI.
-    recorder_core::DiagnosticsSessionGuard diagnostics_guard_;
+    exosnap::engine::DiagnosticsSessionGuard diagnostics_guard_;
     std::mutex diagnostics_guard_mutex_;
     // Most recent accepted diagnostics snapshot, stashed so PostResult can write the
     // session report from the end-of-session counters. The stop path emits the final
     // Completed snapshot before PostResult; an error path leaves the last snapshot
     // seen, whose unavailable metrics stay unavailable (never fake zeros). Guarded by
     // diagnostics_guard_mutex_.
-    recorder_core::RecordingDiagnosticsSnapshot last_snapshot_;
+    exosnap::engine::RecordingDiagnosticsSnapshot last_snapshot_;
     bool has_last_snapshot_ = false;
     // The RecorderConfig the engine was actually handed, published by the prepare
     // worker once session_.Validate() has accepted it. Written on the recording
     // thread, read on the UI thread, hence its own mutex.
     mutable std::mutex committed_config_mutex_;
-    recorder_core::RecorderConfig last_committed_config_;
+    exosnap::engine::RecorderConfig last_committed_config_;
     bool has_last_committed_config_ = false;
     ResultReadyCallback on_result_ready_;
     MicMeterUpdatedCallback on_mic_meter_updated_;
@@ -756,7 +756,7 @@ class RecordingCoordinator {
     ReadyFrameRequester ready_frame_requester_;
 
     std::optional<std::string> mic_meter_device_id_;
-    recorder_core::MicChannelMode mic_meter_channel_mode_ = recorder_core::MicChannelMode::Auto;
+    exosnap::engine::MicChannelMode mic_meter_channel_mode_ = exosnap::engine::MicChannelMode::Auto;
     bool mic_meter_config_valid_ = false;
 
     // Runs the screenshot PNG encode + write off the thread that delivered the

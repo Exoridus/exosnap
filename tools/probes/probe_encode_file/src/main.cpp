@@ -37,8 +37,8 @@
 #include "y4m_reader.h"
 #include "yuv_convert.h"
 
-#include <recorder_core/codec_types.h>
-#include <recorder_core/color_metadata.h>
+#include <exosnap/engine/codec_types.h>
+#include <exosnap/engine/color_metadata.h>
 
 #include <algorithm>
 #include <chrono>
@@ -48,7 +48,7 @@
 #include <string>
 #include <vector>
 
-using namespace recorder_core;
+using namespace exosnap::engine;
 using Microsoft::WRL::ComPtr;
 
 namespace {

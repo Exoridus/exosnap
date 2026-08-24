@@ -114,9 +114,9 @@ if ($ListChecks) {
 # ---------------------------------------------------------------------------
 $CanaryTriggers = @('.clang-tidy', 'scripts/run-clang-tidy-blocking.ps1')
 $CanarySources = @(
-    'libs/recorder_core/src/audio_thread.cpp'
+    'libs/engine/src/audio_thread.cpp'
     'app/quick/ExoSnap/Quick/QuickApplication.cpp'
-    'libs/recorder_core/tests/test_split_sentinel_policy.cpp'
+    'libs/engine/tests/test_split_sentinel_policy.cpp'
 )
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path

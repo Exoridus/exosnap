@@ -89,7 +89,7 @@ Two corrections after live verification:
 The 10-bit encode path is now implemented (ValidUnvalidated → GPU-verified on an
 RTX 5070 Ti / NVENC):
 
-- `recorder_core::BitDepth::Bit10` is a real engine value. When selected with
+- `exosnap::engine::BitDepth::Bit10` is a real engine value. When selected with
   HEVC or AV1, the `VideoProcessor` converts BGRA → **P010**
   (`DXGI_FORMAT_P010`) instead of NV12, the P010 textures are registered with
   NVENC as `NV_ENC_BUFFER_FORMAT_YUV420_10BIT`, and the encoder uses the HEVC
@@ -191,15 +191,15 @@ than assumed):
 - `libs/capability/include/capability/user_config.h`
   (`UserRecorderConfig::color_range`) — the default for direct engine API
   consumers that bypass the preset/UI layer.
-- `libs/recorder_core/include/recorder_core/color_metadata.h`
+- `libs/engine/include/exosnap/engine/color_metadata.h`
   (`ColorMetadata::range`, and thus `ColorMetadata::Sdr709()`) — technically
   inert for the normal flow (`capability::translation.cpp`'s
   `ToRecorderCoreConfig` always sets `core_config.color.range` explicitly from
   `UserRecorderConfig::color_range`, never leaving the struct default in
-  place), but kept in sync for any direct `recorder_core` consumer (tests,
+  place), but kept in sync for any direct `engine` consumer (tests,
   `tools/probes/probe_record`) that constructs a default `ColorMetadata`
   without going through `capability`.
-- `libs/recorder_core/src/yuv_to_bgra.h` (`YuvToBgraParams::range`) — likewise
+- `libs/engine/src/yuv_to_bgra.h` (`YuvToBgraParams::range`) — likewise
   inert in production (`video_thread.cpp`'s CaptureFrame and live-preview call
   sites always explicitly assign `.range` from the live session config before
   converting — verified, not assumed), kept in sync for consistency.

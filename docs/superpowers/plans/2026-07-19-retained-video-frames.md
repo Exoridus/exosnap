@@ -4,16 +4,16 @@
 
 **Goal:** Introduce explicit visual generation counters for screen/webcam/cursor/overlay/color-pipeline state, use them to stop DXGI cursor-only events from being treated as desktop presents, recomposite a held WGC/OD frame whenever cursor or overlay state moved (not just webcam), and reuse the already-converted NV12/P010 reference frame and its encoder-slot copies when nothing visible changed — with diagnostics counters proving each reuse actually fires.
 
-**Architecture:** Pure, unit-testable value types and classifiers (`VisualFrameKey`, `ClassifyOdAcquire`) live in new `libs/recorder_core/include/recorder_core/` headers with their own gtest targets. `VideoThread` (`libs/recorder_core/src/video_thread.cpp`) is the only place that wires them into the live D3D11/DXGI capture loop — it already contains the CFR duplicate-frame cache (`refNv12`) and the held-screen recomposite gate (`ShouldRecompositeHeldScreen`, `libs/recorder_core/include/recorder_core/frame_pacing.h`) this plan formalizes and extends. No UI/app-layer files change except `WebcamService`'s frame-provider interface, which gains a generation out-parameter.
+**Architecture:** Pure, unit-testable value types and classifiers (`VisualFrameKey`, `ClassifyOdAcquire`) live in new `libs/engine/include/exosnap/engine/` headers with their own gtest targets. `VideoThread` (`libs/engine/src/video_thread.cpp`) is the only place that wires them into the live D3D11/DXGI capture loop — it already contains the CFR duplicate-frame cache (`refNv12`) and the held-screen recomposite gate (`ShouldRecompositeHeldScreen`, `libs/engine/include/exosnap/engine/frame_pacing.h`) this plan formalizes and extends. No UI/app-layer files change except `WebcamService`'s frame-provider interface, which gains a generation out-parameter.
 
-**Tech Stack:** C++20 (recorder_core already builds with `cxx_std_20`; `std::span`/defaulted `operator<=>` are already in use), GoogleTest via the repo's `exosnap_add_gtest()` CMake helper, Windows D3D11/DXGI Output Duplication.
+**Tech Stack:** C++20 (engine already builds with `cxx_std_20`; `std::span`/defaulted `operator<=>` are already in use), GoogleTest via the repo's `exosnap_add_gtest()` CMake helper, Windows D3D11/DXGI Output Duplication.
 
 ## Global Constraints
 
 - C++20. Use defaulted `operator<=>`/`operator==` on aggregates the same way `frame_pacing.h`'s existing types do.
-- New pure-logic types/classifiers go in `libs/recorder_core/include/recorder_core/*.h` (header-only where practical) with a dedicated `tests/test_*.cpp` gtest target registered **only in the full (non-skeleton) build block** of `libs/recorder_core/CMakeLists.txt` — i.e. after the `return()` at line 261, following the placement of `frame_pacing_tests` (~line 1295-1302). This matches how `frame_pacing.h`/`ShouldRecompositeHeldScreen` are already tested in isolation from the D3D11-heavy parts of `recorder_core`.
+- New pure-logic types/classifiers go in `libs/engine/include/exosnap/engine/*.h` (header-only where practical) with a dedicated `tests/test_*.cpp` gtest target registered **only in the full (non-skeleton) build block** of `libs/engine/CMakeLists.txt` — i.e. after the `return()` at line 261, following the placement of `frame_pacing_tests` (~line 1295-1302). This matches how `frame_pacing.h`/`ShouldRecompositeHeldScreen` are already tested in isolation from the D3D11-heavy parts of `engine`.
 - Diagnostics counters follow the exact existing pattern in `PipelineDiagnosticsAggregator`: a private `uint64_t foo_ = 0;` member, a public `void OnFoo() noexcept { std::lock_guard lk(mutex_); ++foo_; }`, and a field copied into `RecordingDiagnosticsSnapshot` inside `BuildSnapshot()`.
-- Do not modify `NvencEncoder`/`InputSlot` (`libs/recorder_core/src/nvenc_encoder.h`) — encoder-slot content identity is tracked as new `VideoThread`-local state, not inside the NVENC wrapper, exactly as the source spec's `EncoderSlotState` is described as a separate concept from NVENC's own slot bookkeeping.
+- Do not modify `NvencEncoder`/`InputSlot` (`libs/engine/src/nvenc_encoder.h`) — encoder-slot content identity is tracked as new `VideoThread`-local state, not inside the NVENC wrapper, exactly as the source spec's `EncoderSlotState` is described as a separate concept from NVENC's own slot bookkeeping.
 - Out of scope for this plan (explicitly deferred, not partially started): `CV-RETAIN-005` (pipeline "recipe" dispatch) and `CV-RETAIN-006` (overlay-pass state bundling) — the source document itself rates both as low-confidence/likely-small wins ("Der Gewinn ist wahrscheinlich klein" / "wahrscheinlich kleiner als ExoJS' Commandbuffer-Cache"). Revisit only after the diagnostics counters this plan adds (Task 9) show the earlier, higher-confidence reuse stages are not enough. Also out of scope: `CV-WEBCAM-002`'s full copy-out-API-to-shared-snapshot rewrite — Task 3 adds the generation counter only; eliminating the per-tick CPU copy in `WebcamService::TryGetFrame` needs that separate, larger rewrite.
 - Every task that touches `video_thread.cpp` must build the full app target (not just the affected gtest) before being marked done, since that file has no direct unit test harness of its own — correctness there is proven by the pure-logic unit tests of the helpers it calls, plus a full build succeeding. Follow [[feedback_build_full_test_suite]]: `--target exosnap` alone does not build tests.
 
@@ -22,14 +22,14 @@
 ### Task 1: `VisualFrameKey` and `VisualGenerations` types (CV-RETAIN-001)
 
 **Files:**
-- Create: `libs/recorder_core/include/recorder_core/visual_generations.h`
-- Test: `libs/recorder_core/tests/test_visual_generations.cpp`
-- Modify: `libs/recorder_core/CMakeLists.txt` (register the new test target)
+- Create: `libs/engine/include/exosnap/engine/visual_generations.h`
+- Test: `libs/engine/tests/test_visual_generations.cpp`
+- Modify: `libs/engine/CMakeLists.txt` (register the new test target)
 
 **Interfaces:**
 - Produces:
   ```cpp
-  namespace recorder_core {
+  namespace exosnap::engine {
   struct VisualGenerations {
       uint64_t screen = 0;
       uint64_t webcam = 0;
@@ -46,18 +46,18 @@
       auto operator<=>(const VisualFrameKey&) const = default;
   };
   [[nodiscard]] constexpr VisualFrameKey MakeVisualFrameKey(const VisualGenerations& gens) noexcept;
-  }  // namespace recorder_core
+  }  // namespace exosnap::engine
   ```
 
 - [ ] **Step 1: Write the failing test**
 
-Create `libs/recorder_core/tests/test_visual_generations.cpp`:
+Create `libs/engine/tests/test_visual_generations.cpp`:
 
 ```cpp
-#include "recorder_core/visual_generations.h"
+#include "exosnap/engine/visual_generations.h"
 #include <gtest/gtest.h>
 
-using namespace recorder_core;
+using namespace exosnap::engine;
 
 TEST(VisualFrameKey, DefaultKeysAreEqual) {
     EXPECT_EQ(VisualFrameKey{}, VisualFrameKey{});
@@ -116,13 +116,13 @@ TEST(MakeVisualFrameKeyTest, IsConstexprEvaluable) {
 }
 ```
 
-Add the CMake target in `libs/recorder_core/CMakeLists.txt` immediately after the `frame_pacing_tests` block (after line ~1302):
+Add the CMake target in `libs/engine/CMakeLists.txt` immediately after the `frame_pacing_tests` block (after line ~1302):
 
 ```cmake
 # Retained-frame plan: VisualFrameKey/VisualGenerations — pure value types, no D3D/NVENC.
 exosnap_add_gtest(
     NAME test_visual_generations
-    TEST_PREFIX recorder_core.
+    TEST_PREFIX engine.
     SOURCES tests/test_visual_generations.cpp
 )
 target_include_directories(test_visual_generations PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -135,13 +135,13 @@ Expected: FAIL — `recorder_core/visual_generations.h: No such file or director
 
 - [ ] **Step 3: Write minimal implementation**
 
-Create `libs/recorder_core/include/recorder_core/visual_generations.h`:
+Create `libs/engine/include/exosnap/engine/visual_generations.h`:
 
 ```cpp
 #pragma once
 #include <cstdint>
 
-namespace recorder_core {
+namespace exosnap::engine {
 
 // One monotonically-increasing counter per independently-changing visual
 // input. Each counter is bumped only when that specific input actually
@@ -176,21 +176,21 @@ struct VisualFrameKey {
     return VisualFrameKey{gens.screen, gens.webcam, gens.cursor, gens.overlay, gens.color_pipeline};
 }
 
-}  // namespace recorder_core
+}  // namespace exosnap::engine
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cmake --build build/windows-x64-debug --target test_visual_generations`
-Then: `ctest --test-dir build/windows-x64-debug -R "recorder_core\.(VisualFrameKey|MakeVisualFrameKeyTest)" --output-on-failure`
+Then: `ctest --test-dir build/windows-x64-debug -R "engine\.(VisualFrameKey|MakeVisualFrameKeyTest)" --output-on-failure`
 Expected: PASS, 6 tests.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add libs/recorder_core/include/recorder_core/visual_generations.h \
-        libs/recorder_core/tests/test_visual_generations.cpp \
-        libs/recorder_core/CMakeLists.txt
+git add libs/engine/include/exosnap/engine/visual_generations.h \
+        libs/engine/tests/test_visual_generations.cpp \
+        libs/engine/CMakeLists.txt
 git commit -m "Add VisualFrameKey/VisualGenerations (CV-RETAIN-001)"
 ```
 
@@ -199,15 +199,15 @@ git commit -m "Add VisualFrameKey/VisualGenerations (CV-RETAIN-001)"
 ### Task 2: DXGI acquire classification helper (CV-CURSOR-001, pure logic)
 
 **Files:**
-- Create: `libs/recorder_core/include/recorder_core/od_acquire_classify.h`
-- Test: `libs/recorder_core/tests/test_od_acquire_classify.cpp`
-- Modify: `libs/recorder_core/CMakeLists.txt`
+- Create: `libs/engine/include/exosnap/engine/od_acquire_classify.h`
+- Test: `libs/engine/tests/test_od_acquire_classify.cpp`
+- Modify: `libs/engine/CMakeLists.txt`
 
 **Interfaces:**
 - Consumes: nothing (pure booleans in, enum out — no dependency on Task 1).
 - Produces:
   ```cpp
-  namespace recorder_core {
+  namespace exosnap::engine {
   enum class OdAcquireKind : uint8_t { DesktopPresent, CursorOnly, Ignorable };
   [[nodiscard]] constexpr OdAcquireKind ClassifyOdAcquire(bool has_present, bool has_mouse_update,
                                                           bool cursor_capture_enabled) noexcept;
@@ -217,13 +217,13 @@ git commit -m "Add VisualFrameKey/VisualGenerations (CV-RETAIN-001)"
 
 - [ ] **Step 1: Write the failing test**
 
-Create `libs/recorder_core/tests/test_od_acquire_classify.cpp`:
+Create `libs/engine/tests/test_od_acquire_classify.cpp`:
 
 ```cpp
-#include "recorder_core/od_acquire_classify.h"
+#include "exosnap/engine/od_acquire_classify.h"
 #include <gtest/gtest.h>
 
-using namespace recorder_core;
+using namespace exosnap::engine;
 
 TEST(ClassifyOdAcquire, PresentIsAlwaysDesktopPresent) {
     EXPECT_EQ(ClassifyOdAcquire(/*has_present=*/true, /*has_mouse_update=*/false, /*cursor_capture_enabled=*/false),
@@ -246,14 +246,14 @@ TEST(ClassifyOdAcquire, NeitherPresentNorMouseUpdateIsIgnorable) {
 }
 ```
 
-Register in `libs/recorder_core/CMakeLists.txt`, right after the `test_visual_generations` block added in Task 1:
+Register in `libs/engine/CMakeLists.txt`, right after the `test_visual_generations` block added in Task 1:
 
 ```cmake
 # Retained-frame plan: separates DXGI cursor-only acquires from real desktop
 # presents (CV-CURSOR-001) — pure logic, no D3D/NVENC.
 exosnap_add_gtest(
     NAME test_od_acquire_classify
-    TEST_PREFIX recorder_core.
+    TEST_PREFIX engine.
     SOURCES tests/test_od_acquire_classify.cpp
 )
 target_include_directories(test_od_acquire_classify PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -266,13 +266,13 @@ Expected: FAIL — `recorder_core/od_acquire_classify.h: No such file or directo
 
 - [ ] **Step 3: Write minimal implementation**
 
-Create `libs/recorder_core/include/recorder_core/od_acquire_classify.h`:
+Create `libs/engine/include/exosnap/engine/od_acquire_classify.h`:
 
 ```cpp
 #pragma once
 #include <cstdint>
 
-namespace recorder_core {
+namespace exosnap::engine {
 
 // What one successful DXGI Output Duplication AcquireNextFrame actually
 // delivered. DXGI can wake the acquire with only a cursor move/visibility/
@@ -295,21 +295,21 @@ enum class OdAcquireKind : uint8_t {
     return OdAcquireKind::Ignorable;
 }
 
-}  // namespace recorder_core
+}  // namespace exosnap::engine
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cmake --build build/windows-x64-debug --target test_od_acquire_classify`
-Then: `ctest --test-dir build/windows-x64-debug -R "recorder_core\.ClassifyOdAcquire" --output-on-failure`
+Then: `ctest --test-dir build/windows-x64-debug -R "engine\.ClassifyOdAcquire" --output-on-failure`
 Expected: PASS, 4 tests.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add libs/recorder_core/include/recorder_core/od_acquire_classify.h \
-        libs/recorder_core/tests/test_od_acquire_classify.cpp \
-        libs/recorder_core/CMakeLists.txt
+git add libs/engine/include/exosnap/engine/od_acquire_classify.h \
+        libs/engine/tests/test_od_acquire_classify.cpp \
+        libs/engine/CMakeLists.txt
 git commit -m "Add ClassifyOdAcquire to separate cursor-only DXGI events from desktop presents (CV-CURSOR-001)"
 ```
 
@@ -318,10 +318,10 @@ git commit -m "Add ClassifyOdAcquire to separate cursor-only DXGI events from de
 ### Task 3: Webcam frame generation counter (CV-RETAIN-002)
 
 **Files:**
-- Modify: `libs/recorder_core/include/recorder_core/recorder_session.h:43` (`WebcamFrameProvider::TryGetFrame` signature)
+- Modify: `libs/engine/include/exosnap/engine/recorder_session.h:43` (`WebcamFrameProvider::TryGetFrame` signature)
 - Modify: `app/services/WebcamService.h:148,162,187-192` (declaration + new member)
 - Modify: `app/services/WebcamService.cpp:713,730-736` (`StoreFrame`/`TryGetFrame` bodies)
-- Modify: `libs/recorder_core/src/video_thread.cpp:1153` (the one call site — updated in Task 4, not here, to avoid touching `video_thread.cpp` twice in unrelated tasks; this task keeps the interface change buildable by passing a throwaway local)
+- Modify: `libs/engine/src/video_thread.cpp:1153` (the one call site — updated in Task 4, not here, to avoid touching `video_thread.cpp` twice in unrelated tasks; this task keeps the interface change buildable by passing a throwaway local)
 
 **Interfaces:**
 - Consumes: nothing new.
@@ -329,7 +329,7 @@ git commit -m "Add ClassifyOdAcquire to separate cursor-only DXGI events from de
 
 - [ ] **Step 1: Update the interface**
 
-`libs/recorder_core/include/recorder_core/recorder_session.h:43`, change:
+`libs/engine/include/exosnap/engine/recorder_session.h:43`, change:
 
 ```cpp
     virtual bool TryGetFrame(int& out_width, int& out_height, std::vector<uint8_t>& out_bgra) = 0;
@@ -401,7 +401,7 @@ bool WebcamService::TryGetFrame(int& out_width, int& out_height, std::vector<uin
 
 - [ ] **Step 4: Make the one remaining caller compile**
 
-`libs/recorder_core/src/video_thread.cpp:1153` currently reads:
+`libs/engine/src/video_thread.cpp:1153` currently reads:
 
 ```cpp
 const bool gotCam = m_state.config.webcam.frame_provider->TryGetFrame(camW, camH, camBgra);
@@ -422,9 +422,9 @@ Expected: builds clean (no other `TryGetFrame` overriders/callers exist — conf
 - [ ] **Step 6: Commit**
 
 ```bash
-git add libs/recorder_core/include/recorder_core/recorder_session.h \
+git add libs/engine/include/exosnap/engine/recorder_session.h \
         app/services/WebcamService.h app/services/WebcamService.cpp \
-        libs/recorder_core/src/video_thread.cpp
+        libs/engine/src/video_thread.cpp
 git commit -m "Add a per-sample generation counter to WebcamFrameProvider (CV-RETAIN-002)"
 ```
 
@@ -433,15 +433,15 @@ git commit -m "Add a per-sample generation counter to WebcamFrameProvider (CV-RE
 ### Task 4: Wire generations and cursor/desktop classification into the phase-correct (CFR) OD path (CV-CURSOR-001, CV-CURSOR-002, CV-PACING-001)
 
 **Files:**
-- Modify: `libs/recorder_core/src/video_thread.cpp` (state declaration near `odCursorVisible`; acquire block at lines 2469-2530; webcam draw lambda at line 1153)
+- Modify: `libs/engine/src/video_thread.cpp` (state declaration near `odCursorVisible`; acquire block at lines 2469-2530; webcam draw lambda at line 1153)
 
 **Interfaces:**
-- Consumes: `recorder_core::VisualGenerations`/`MakeVisualFrameKey` (Task 1), `recorder_core::ClassifyOdAcquire`/`OdAcquireKind` (Task 2), `WebcamFrameProvider::TryGetFrame(..., uint64_t&)` (Task 3).
+- Consumes: `exosnap::engine::VisualGenerations`/`MakeVisualFrameKey` (Task 1), `exosnap::engine::ClassifyOdAcquire`/`OdAcquireKind` (Task 2), `WebcamFrameProvider::TryGetFrame(..., uint64_t&)` (Task 3).
 - Produces: a `VisualGenerations visualGenerations{}` VideoThread-local, live-updated every tick, that Tasks 6-8 read.
 
 - [ ] **Step 1: Declare the shared generation state**
 
-`libs/recorder_core/src/video_thread.cpp` — run `grep -n "bool odCursorVisible = false" libs/recorder_core/src/video_thread.cpp` to find the declaration shared by both the CFR and VFR acquire paths (both read/write `odCursorVisible`/`odCursorPosX`/`odCursorPosY`/`odCursorShapeValid`, confirmed at lines 2513-2515 and 3013-3015). Add immediately after that declaration group:
+`libs/engine/src/video_thread.cpp` — run `grep -n "bool odCursorVisible = false" libs/engine/src/video_thread.cpp` to find the declaration shared by both the CFR and VFR acquire paths (both read/write `odCursorVisible`/`odCursorPosX`/`odCursorPosY`/`odCursorShapeValid`, confirmed at lines 2513-2515 and 3013-3015). Add immediately after that declaration group:
 
 ```cpp
     VisualGenerations visualGenerations{};
@@ -453,13 +453,13 @@ git commit -m "Add a per-sample generation counter to WebcamFrameProvider (CV-RE
 Add the include at the top of the file (alongside the other `recorder_core/*.h` includes already there):
 
 ```cpp
-#include "recorder_core/visual_generations.h"
-#include "recorder_core/od_acquire_classify.h"
+#include "exosnap/engine/visual_generations.h"
+#include "exosnap/engine/od_acquire_classify.h"
 ```
 
 - [ ] **Step 2: Replace the unconditional ring-write with classification**
 
-**Before editing, run `grep -n "diag_recording\|odSrc.ReleaseFrame\|rawTex->Release" libs/recorder_core/src/video_thread.cpp | sed -n '1,40p'` and read lines 2460-2540 in full.** The existing code declares `const bool diag_recording = !m_state.pause_requested.load();` once at line 2481 (just above the block you are replacing) and nowhere else in this branch — your replacement below must NOT redeclare it, since it stays in scope. The existing code also calls `rawTex->Release()` exactly once (old line 2507, right after the `if (usePhaseCorrect) {...} else {...}` block you are replacing) and `odSrc.ReleaseFrame()` exactly once (old line 2517, further down, after the cursor-shape/position update). Your replacement must preserve that "exactly once per acquired frame" invariant on every one of the three classification branches — verify this with the grep above after editing (each of `rawTex->Release()` / `odSrc.ReleaseFrame()` must still appear exactly once per code path, not once per branch times three).
+**Before editing, run `grep -n "diag_recording\|odSrc.ReleaseFrame\|rawTex->Release" libs/engine/src/video_thread.cpp | sed -n '1,40p'` and read lines 2460-2540 in full.** The existing code declares `const bool diag_recording = !m_state.pause_requested.load();` once at line 2481 (just above the block you are replacing) and nowhere else in this branch — your replacement below must NOT redeclare it, since it stays in scope. The existing code also calls `rawTex->Release()` exactly once (old line 2507, right after the `if (usePhaseCorrect) {...} else {...}` block you are replacing) and `odSrc.ReleaseFrame()` exactly once (old line 2517, further down, after the cursor-shape/position update). Your replacement must preserve that "exactly once per acquired frame" invariant on every one of the three classification branches — verify this with the grep above after editing (each of `rawTex->Release()` / `odSrc.ReleaseFrame()` must still appear exactly once per code path, not once per branch times three).
 
 Replace the block at `video_thread.cpp:2482-2506` (the `if (usePhaseCorrect) { ... } else { d3dContext->CopyResource(odCapturedTex.get(), rawTex); }` that currently always copies and always stamps a present QPC) — leaving the pre-existing `diag_recording` declaration at line 2481 and the pre-existing `rawTex->Release()` at (old) line 2507 exactly where they are — with:
 
@@ -569,7 +569,7 @@ Expected: fails until Task 9 adds `OnScreenGenerationChanged`/`OnCursorOnlyCaptu
 - [ ] **Step 6: Commit**
 
 ```bash
-git add libs/recorder_core/src/video_thread.cpp
+git add libs/engine/src/video_thread.cpp
 git commit -m "Classify DXGI cursor-only vs desktop-present acquires in the phase-correct OD path (CV-CURSOR-001/002, CV-PACING-001)"
 ```
 
@@ -578,7 +578,7 @@ git commit -m "Classify DXGI cursor-only vs desktop-present acquires in the phas
 ### Task 5: Apply the same classification to the VFR OD path (CV-CURSOR-001/002 parity)
 
 **Files:**
-- Modify: `libs/recorder_core/src/video_thread.cpp:2995-3040` (VFR acquire block)
+- Modify: `libs/engine/src/video_thread.cpp:2995-3040` (VFR acquire block)
 
 **Interfaces:**
 - Consumes: `visualGenerations`, `ClassifyOdAcquire` (already in scope from Task 4).
@@ -666,7 +666,7 @@ Replace that **entire** range with the VFR-appropriate mirror of Task 4 Steps 2-
                         m_state.diagnostics.OnFrameCaptured();
 ```
 
-After editing, run `grep -n "diag_recording\|odSrc.ReleaseFrame\|rawTex->Release" libs/recorder_core/src/video_thread.cpp` and confirm there is still exactly one `diag_recording` declaration in this function's VFR branch (not two) and exactly one `odSrc.ReleaseFrame()` / one `rawTex->Release()` reached per acquired frame on every classification path (the `Ignorable` branch's own copies inside its `continue`-guarded block, or the shared ones at the bottom for `DesktopPresent`/`CursorOnly` — never both for the same acquire).
+After editing, run `grep -n "diag_recording\|odSrc.ReleaseFrame\|rawTex->Release" libs/engine/src/video_thread.cpp` and confirm there is still exactly one `diag_recording` declaration in this function's VFR branch (not two) and exactly one `odSrc.ReleaseFrame()` / one `rawTex->Release()` reached per acquired frame on every classification path (the `Ignorable` branch's own copies inside its `continue`-guarded block, or the shared ones at the bottom for `DesktopPresent`/`CursorOnly` — never both for the same acquire).
 
 - [ ] **Step 2: Build**
 
@@ -676,7 +676,7 @@ Expected: PASS (same diagnostics methods as Task 4, already added by Task 9 if s
 - [ ] **Step 3: Commit**
 
 ```bash
-git add libs/recorder_core/src/video_thread.cpp
+git add libs/engine/src/video_thread.cpp
 git commit -m "Apply DXGI cursor-only/desktop-present classification to the VFR OD path"
 ```
 
@@ -685,9 +685,9 @@ git commit -m "Apply DXGI cursor-only/desktop-present classification to the VFR 
 ### Task 6: Recomposite the held frame on any dynamic overlay change, not just webcam (CV-CURSOR-003)
 
 **Files:**
-- Modify: `libs/recorder_core/include/recorder_core/frame_pacing.h:75-82` (rename the third parameter for clarity)
-- Modify: `libs/recorder_core/tests/test_frame_pacing.cpp:145-179` (update comments to match, arguments are positional so behavior is untouched)
-- Modify: `libs/recorder_core/src/video_thread.cpp:2757-2762` (call site)
+- Modify: `libs/engine/include/exosnap/engine/frame_pacing.h:75-82` (rename the third parameter for clarity)
+- Modify: `libs/engine/tests/test_frame_pacing.cpp:145-179` (update comments to match, arguments are positional so behavior is untouched)
+- Modify: `libs/engine/src/video_thread.cpp:2757-2762` (call site)
 
 **Interfaces:**
 - Consumes: `ShouldRecompositeHeldScreen` (existing), `visualGenerations` (Task 4/5).
@@ -695,7 +695,7 @@ git commit -m "Apply DXGI cursor-only/desktop-present classification to the VFR 
 
 - [ ] **Step 1: Rename the parameter (no behavior change — confirm existing tests still pass)**
 
-`libs/recorder_core/include/recorder_core/frame_pacing.h:75-82`, change:
+`libs/engine/include/exosnap/engine/frame_pacing.h:75-82`, change:
 
 ```cpp
 [[nodiscard]] constexpr bool ShouldRecompositeHeldScreen(bool has_fresh_source, bool od_holding,
@@ -773,7 +773,7 @@ with:
 
 Every place `frameWritten = true;` is set from an actual composite (not the duplicate-reuse branch) must stamp `lastCompositedKey = currentVisualKey; haveLastCompositedKey = true;`. Locate them:
 
-Run: `grep -n "frameWritten = true" libs/recorder_core/src/video_thread.cpp`
+Run: `grep -n "frameWritten = true" libs/engine/src/video_thread.cpp`
 
 This must show the native-HDR10 branch (after `performSnapshotIfRequested(slot);` near old line 2801-2802) and the SDR branch (near old line 2865-2866) — both already identified in this plan's research as the two places `refNv12`/`refNv12Valid` get written. Add the stamp immediately after each of those two `frameWritten = true;` lines (NOT after the duplicate-reuse branch's `frameWritten = true;` at old line 2872 — a duplicate reuses the previous key by definition, it does not advance it).
 
@@ -785,9 +785,9 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add libs/recorder_core/include/recorder_core/frame_pacing.h \
-        libs/recorder_core/tests/test_frame_pacing.cpp \
-        libs/recorder_core/src/video_thread.cpp
+git add libs/engine/include/exosnap/engine/frame_pacing.h \
+        libs/engine/tests/test_frame_pacing.cpp \
+        libs/engine/src/video_thread.cpp
 git commit -m "Recomposite the held WGC/OD frame on cursor or overlay change, not only webcam (CV-CURSOR-003)"
 ```
 
@@ -796,7 +796,7 @@ git commit -m "Recomposite the held WGC/OD frame on cursor or overlay change, no
 ### Task 7: Formalize the YUV reference-frame cache with a `VisualFrameKey` tag (CV-RETAIN-003)
 
 **Files:**
-- Modify: `libs/recorder_core/src/video_thread.cpp:2310-2311` (declare the tagged cache alongside `refNv12`), `:2797-2800`, `:2860-2863` (stamp the key on write), `:2869-2874` (duplicate-reuse diagnostics)
+- Modify: `libs/engine/src/video_thread.cpp:2310-2311` (declare the tagged cache alongside `refNv12`), `:2797-2800`, `:2860-2863` (stamp the key on write), `:2869-2874` (duplicate-reuse diagnostics)
 
 **Interfaces:**
 - Consumes: `VisualFrameKey`, `lastCompositedKey`/`currentVisualKey` (Task 6).
@@ -876,7 +876,7 @@ Expected: fails until Task 9 adds `OnReusedYuvFrame`/`OnFullComposition` — seq
 - [ ] **Step 5: Commit**
 
 ```bash
-git add libs/recorder_core/src/video_thread.cpp
+git add libs/engine/src/video_thread.cpp
 git commit -m "Tag the CFR YUV reference-frame cache with VisualFrameKey (CV-RETAIN-003)"
 ```
 
@@ -885,7 +885,7 @@ git commit -m "Tag the CFR YUV reference-frame cache with VisualFrameKey (CV-RET
 ### Task 8: Skip the redundant encoder-slot copy once a slot already holds the current generation (CV-RETAIN-004)
 
 **Files:**
-- Modify: `libs/recorder_core/src/video_thread.cpp` (declare per-slot content tracking near `refNv12`; guard the duplicate-copy branch from Task 7)
+- Modify: `libs/engine/src/video_thread.cpp` (declare per-slot content tracking near `refNv12`; guard the duplicate-copy branch from Task 7)
 
 **Interfaces:**
 - Consumes: `refNv12Key`/`refNv12Valid` (Task 7), `slot` (existing local — the NVENC slot index acquired earlier in the same tick via `nvenc.AcquireFreeSlot()`).
@@ -970,7 +970,7 @@ Expected: fails until Task 9 adds `OnYuvSlotCopy`/`OnYuvSlotCopySkipped` — seq
 - [ ] **Step 6: Commit**
 
 ```bash
-git add libs/recorder_core/src/video_thread.cpp
+git add libs/engine/src/video_thread.cpp
 git commit -m "Skip the CFR duplicate CopyResource when the encoder slot already holds the current YUV generation (CV-RETAIN-004)"
 ```
 
@@ -979,10 +979,10 @@ git commit -m "Skip the CFR duplicate CopyResource when the encoder slot already
 ### Task 9: Diagnostics counters (spec section 13)
 
 **Files:**
-- Modify: `libs/recorder_core/src/pipeline_diagnostics_aggregator.h` (declare 10 new `On*()` methods + private counters, near the existing `OnFrameDuplicated`/capture-counter groups)
-- Modify: `libs/recorder_core/src/pipeline_diagnostics_aggregator.cpp` (implement each, mirroring `OnFrameDuplicated`'s body at `.cpp:305-308`)
-- Modify: `libs/recorder_core/include/recorder_core/pipeline_diagnostics.h` (add matching fields to `RecordingDiagnosticsSnapshot`, near `frames_duplicated` at line 96)
-- Modify: `libs/recorder_core/tests/test_pipeline_diagnostics.cpp` (one assertion per new counter)
+- Modify: `libs/engine/src/pipeline_diagnostics_aggregator.h` (declare 10 new `On*()` methods + private counters, near the existing `OnFrameDuplicated`/capture-counter groups)
+- Modify: `libs/engine/src/pipeline_diagnostics_aggregator.cpp` (implement each, mirroring `OnFrameDuplicated`'s body at `.cpp:305-308`)
+- Modify: `libs/engine/include/exosnap/engine/pipeline_diagnostics.h` (add matching fields to `RecordingDiagnosticsSnapshot`, near `frames_duplicated` at line 96)
+- Modify: `libs/engine/tests/test_pipeline_diagnostics.cpp` (one assertion per new counter)
 
 Run this task **before** Task 4 (or interleave immediately after Task 4 Step 4 and before its Step 5 build-verify) — Tasks 4, 5, 7 and 8 all call methods this task adds, and none of them will compile standalone otherwise. The steps below are self-contained regardless of when they run.
 
@@ -991,7 +991,7 @@ Run this task **before** Task 4 (or interleave immediately after Task 4 Step 4 a
 
 - [ ] **Step 1: Write the failing test**
 
-Add to `libs/recorder_core/tests/test_pipeline_diagnostics.cpp`, following the file's existing pattern for other counters (grep for `OnFrameDuplicated` in that file to match the exact `Reset()`/`BuildSnapshot()` fixture idiom already used, then add a parallel case):
+Add to `libs/engine/tests/test_pipeline_diagnostics.cpp`, following the file's existing pattern for other counters (grep for `OnFrameDuplicated` in that file to match the exact `Reset()`/`BuildSnapshot()` fixture idiom already used, then add a parallel case):
 
 ```cpp
 TEST(PipelineDiagnosticsAggregator, RetainedFrameCountersRoundTrip) {
@@ -1030,11 +1030,11 @@ TEST(PipelineDiagnosticsAggregator, RetainedFrameCountersRoundTrip) {
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `cmake --build build/windows-x64-debug --target test_pipeline_diagnostics`
-Expected: FAIL — `no member named 'OnScreenGenerationChanged' in 'recorder_core::PipelineDiagnosticsAggregator'` (and similarly for the other seven).
+Expected: FAIL — `no member named 'OnScreenGenerationChanged' in 'exosnap::engine::PipelineDiagnosticsAggregator'` (and similarly for the other seven).
 
 - [ ] **Step 3: Declare the methods and counters**
 
-In `libs/recorder_core/src/pipeline_diagnostics_aggregator.h`, add near the existing `OnFrameDuplicated()` declaration (line 347):
+In `libs/engine/src/pipeline_diagnostics_aggregator.h`, add near the existing `OnFrameDuplicated()` declaration (line 347):
 
 ```cpp
     // Retained-frame reuse (CV-RETAIN-001..004, CV-CURSOR-001..003, CV-PACING-001).
@@ -1063,7 +1063,7 @@ and near `frames_duplicated_` (line 468):
 
 - [ ] **Step 4: Implement, matching `OnFrameDuplicated`'s body exactly**
 
-In `libs/recorder_core/src/pipeline_diagnostics_aggregator.cpp`, near the existing `OnFrameDuplicated()` definition (`.cpp:305-308`):
+In `libs/engine/src/pipeline_diagnostics_aggregator.cpp`, near the existing `OnFrameDuplicated()` definition (`.cpp:305-308`):
 
 ```cpp
 void PipelineDiagnosticsAggregator::OnScreenGenerationChanged() noexcept {
@@ -1117,7 +1117,7 @@ Also reset every new counter to 0 inside `Reset()` — grep for where `frames_du
 
 - [ ] **Step 5: Add the snapshot fields**
 
-In `libs/recorder_core/include/recorder_core/pipeline_diagnostics.h`, next to `uint64_t frames_duplicated = 0;` (line 96):
+In `libs/engine/include/exosnap/engine/pipeline_diagnostics.h`, next to `uint64_t frames_duplicated = 0;` (line 96):
 
 ```cpp
     uint64_t screen_generation_changes = 0;
@@ -1139,10 +1139,10 @@ Expected: PASS.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add libs/recorder_core/src/pipeline_diagnostics_aggregator.h \
-        libs/recorder_core/src/pipeline_diagnostics_aggregator.cpp \
-        libs/recorder_core/include/recorder_core/pipeline_diagnostics.h \
-        libs/recorder_core/tests/test_pipeline_diagnostics.cpp
+git add libs/engine/src/pipeline_diagnostics_aggregator.h \
+        libs/engine/src/pipeline_diagnostics_aggregator.cpp \
+        libs/engine/include/exosnap/engine/pipeline_diagnostics.h \
+        libs/engine/tests/test_pipeline_diagnostics.cpp
 git commit -m "Add retained-frame reuse diagnostics counters (spec section 13)"
 ```
 

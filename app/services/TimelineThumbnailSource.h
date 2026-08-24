@@ -28,7 +28,7 @@
 #include <thread>
 #include <vector>
 
-#include <recorder_core/edit_player_engine.h>
+#include <exosnap/engine/edit_player_engine.h>
 
 namespace exosnap {
 
@@ -64,12 +64,12 @@ struct TimelineThumbnail {
 
 // Decodes the frame at `target_us`, or nullopt when the file carries nothing
 // decodable there.
-using TimelineFrameDecoder = std::function<std::optional<recorder_core::DecodedVideoFrame>(int64_t target_us)>;
+using TimelineFrameDecoder = std::function<std::optional<exosnap::engine::DecodedVideoFrame>(int64_t target_us)>;
 
 // Wraps a decoded frame in a QImage WITHOUT copying it: the image holds a
 // reference to the decoder's own allocation and releases it through the cleanup
 // hook. Copying instead would memcpy ~15 MB per frame at 1440p.
-[[nodiscard]] QImage WrapDecodedFrame(const recorder_core::DecodedVideoFrame& frame);
+[[nodiscard]] QImage WrapDecodedFrame(const exosnap::engine::DecodedVideoFrame& frame);
 
 // Decodes one tile per entry of `times_ms`, handing each to `emit_tile` as it
 // finishes so the strip fills in progressively instead of appearing at once.

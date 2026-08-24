@@ -65,7 +65,7 @@ bool DxgiSourceProducer::Open(std::string& err) {
     // Adapter-matched device, recreated per open: required for DuplicateOutput
     // on multi-GPU systems, and what makes a DEVICE_REMOVED recoverable here.
     winrt::com_ptr<IDXGIAdapter1> adapter;
-    if (!recorder_core::FindAdapterForMonitor(monitor, adapter.put(), err)) {
+    if (!exosnap::engine::FindAdapterForMonitor(monitor, adapter.put(), err)) {
         return false;
     }
 
@@ -112,7 +112,7 @@ ProducerPoll DxgiSourceProducer::PollFrame(HubFrame& out) {
         // producer recreates its device per open, so even a DEVICE_REMOVED is
         // worth retrying here (unlike the engine mid-session, which must end the
         // recording cleanly instead).
-        return recorder_core::ClassifyOdAcquireFailure(hr) == recorder_core::OdAcquireFailAction::Idle
+        return exosnap::engine::ClassifyOdAcquireFailure(hr) == exosnap::engine::OdAcquireFailAction::Idle
                    ? ProducerPoll::NoFrame
                    : ProducerPoll::Lost;
     }

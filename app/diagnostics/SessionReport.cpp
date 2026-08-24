@@ -16,7 +16,7 @@
 namespace exosnap::diagnostics {
 namespace {
 
-using recorder_core::MetricAvailability;
+using exosnap::engine::MetricAvailability;
 
 // A metric value that is either a real number or the string "unavailable" — never
 // a fabricated zero (honest-diagnostics rule).
@@ -27,25 +27,25 @@ QJsonValue MetricOrUnavailable(double value, MetricAvailability availability) {
     return value;
 }
 
-QString RateControlLabel(recorder_core::RateControlMode mode) {
+QString RateControlLabel(exosnap::engine::RateControlMode mode) {
     switch (mode) {
-    case recorder_core::RateControlMode::ConstantQuality:
+    case exosnap::engine::RateControlMode::ConstantQuality:
         return QStringLiteral("CQ");
-    case recorder_core::RateControlMode::VariableBitrate:
+    case exosnap::engine::RateControlMode::VariableBitrate:
         return QStringLiteral("VBR");
-    case recorder_core::RateControlMode::ConstantBitrate:
+    case exosnap::engine::RateControlMode::ConstantBitrate:
         return QStringLiteral("CBR");
-    case recorder_core::RateControlMode::Lossless:
+    case exosnap::engine::RateControlMode::Lossless:
         return QStringLiteral("Lossless");
     }
     return QStringLiteral("CQ");
 }
 
-QString PresetLabel(recorder_core::NvencPreset preset) {
+QString PresetLabel(exosnap::engine::NvencPreset preset) {
     return QStringLiteral("P%1").arg(static_cast<int>(preset) + 1);
 }
 
-QJsonObject BuildEncoderInit(const recorder_core::EncoderInitInfo& init) {
+QJsonObject BuildEncoderInit(const exosnap::engine::EncoderInitInfo& init) {
     QJsonObject o;
     o[QStringLiteral("codec")] = ui::videoCodecLabel(init.codec);
     o[QStringLiteral("preset")] = PresetLabel(init.preset);
@@ -58,7 +58,7 @@ QJsonObject BuildEncoderInit(const recorder_core::EncoderInitInfo& init) {
     o[QStringLiteral("lookahead_frames")] = static_cast<double>(init.lookahead_frames);
     o[QStringLiteral("temporal_aq")] = init.temporal_aq;
     o[QStringLiteral("spatial_aq")] = init.spatial_aq;
-    o[QStringLiteral("bit_depth")] = (init.bit_depth == recorder_core::BitDepth::Bit10) ? 10 : 8;
+    o[QStringLiteral("bit_depth")] = (init.bit_depth == exosnap::engine::BitDepth::Bit10) ? 10 : 8;
     o[QStringLiteral("color_full_range")] = init.color_full_range;
     return o;
 }
@@ -187,8 +187,8 @@ QByteArray BuildSessionReportJson(const SessionReportInputs& inputs) {
         counters[QStringLiteral("clock_slaving_active")] = s.clock_slaving_active;
 
         root[QStringLiteral("counters")] = counters;
-        root[QStringLiteral("pipeline_health")] = QString::fromUtf8(recorder_core::ToString(s.health));
-        root[QStringLiteral("bottleneck")] = QString::fromUtf8(recorder_core::ToString(s.bottleneck));
+        root[QStringLiteral("pipeline_health")] = QString::fromUtf8(exosnap::engine::ToString(s.health));
+        root[QStringLiteral("bottleneck")] = QString::fromUtf8(exosnap::engine::ToString(s.bottleneck));
 
         // ---- Audio end-of-session facts ----
         // degraded_sources is the count still lost when the recording ended;

@@ -265,7 +265,7 @@ touch recorder_core.
   conditional detail rows (split, limiter, mic stages, codec-conditional
   audio rows), column/card placement, preset toolbar unchanged-behavior
   regression.
-- recorder_core tests: new quality tiers map to canonical CQs; free fps value
+- engine tests: new quality tiers map to canonical CQs; free fps value
   round-trips through preset save/load and is clamped 1–240.
 - Visual: `--visual-test` render states for Settings Default and Expert after
   the port.

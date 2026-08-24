@@ -15,7 +15,7 @@
 
 #include <QCoreApplication>
 
-#include <recorder_core/recorder_session.h>
+#include <exosnap/engine/recorder_session.h>
 
 #include "diagnostics/DiskSpaceProvider.h"
 #include "diagnostics/DiskSpaceThresholds.h"
@@ -30,7 +30,7 @@
 
 namespace exosnap {
 
-void ApplyOutputSettingsToRecorderConfig(recorder_core::RecorderConfig& config, const OutputSettingsModel& settings);
+void ApplyOutputSettingsToRecorderConfig(exosnap::engine::RecorderConfig& config, const OutputSettingsModel& settings);
 
 namespace {
 
@@ -565,7 +565,7 @@ TEST(OutputSettingsTest, Defaults_VideoCodecIsH264) {
 TEST(OutputSettingsTest, DefaultResolutionIsNativeContain) {
     const OutputSettingsModel defaults = OutputSettingsModel::Defaults();
     EXPECT_EQ(defaults.resolution.mode, OutputResolutionMode::Native);
-    EXPECT_EQ(defaults.resolution.fit, recorder_core::OutputFitMode::Contain);
+    EXPECT_EQ(defaults.resolution.fit, exosnap::engine::OutputFitMode::Contain);
 }
 
 TEST(OutputSettingsTest, FixedResolutionModesResolveToCanonicalSizes) {
@@ -708,7 +708,7 @@ TEST(OutputSettingsTest, ResolveRequestedOutputSize_Custom_InvalidBounds_Returns
 }
 
 TEST(OutputSettingsTest, ApplyOutputResolution_Custom_PassesAlignedSizeToRecorderConfig) {
-    recorder_core::RecorderConfig config{};
+    exosnap::engine::RecorderConfig config{};
 
     OutputSettingsModel settings = OutputSettingsModel::Defaults();
     settings.resolution.mode = OutputResolutionMode::Custom;
@@ -719,7 +719,7 @@ TEST(OutputSettingsTest, ApplyOutputResolution_Custom_PassesAlignedSizeToRecorde
     ApplyOutputSettingsToRecorderConfig(config, settings);
     EXPECT_EQ(config.output_width, 1918u);
     EXPECT_EQ(config.output_height, 1078u);
-    EXPECT_EQ(config.output_fit, recorder_core::OutputFitMode::Contain);
+    EXPECT_EQ(config.output_fit, exosnap::engine::OutputFitMode::Contain);
 }
 
 TEST(OutputSettingsTest, FixedModesStillBehavior_Unchanged) {
@@ -732,7 +732,7 @@ TEST(OutputSettingsTest, FixedModesStillBehavior_Unchanged) {
 }
 
 TEST(OutputGeometryTest, ContainRect_16x9Into16x9FillsOutput) {
-    const auto rect = recorder_core::ResolveContainRect({1920, 1080}, {1280, 720});
+    const auto rect = exosnap::engine::ResolveContainRect({1920, 1080}, {1280, 720});
     ASSERT_TRUE(rect.has_value());
     EXPECT_EQ(rect->x, 0u);
     EXPECT_EQ(rect->y, 0u);
@@ -741,7 +741,7 @@ TEST(OutputGeometryTest, ContainRect_16x9Into16x9FillsOutput) {
 }
 
 TEST(OutputGeometryTest, ContainRect_4x3Into16x9LetterboxesHorizontally) {
-    const auto rect = recorder_core::ResolveContainRect({1024, 768}, {1920, 1080});
+    const auto rect = exosnap::engine::ResolveContainRect({1024, 768}, {1920, 1080});
     ASSERT_TRUE(rect.has_value());
     EXPECT_EQ(rect->width, 1440u);
     EXPECT_EQ(rect->height, 1080u);
@@ -750,7 +750,7 @@ TEST(OutputGeometryTest, ContainRect_4x3Into16x9LetterboxesHorizontally) {
 }
 
 TEST(OutputGeometryTest, ContainRect_PortraitIntoLandscapeCenters) {
-    const auto rect = recorder_core::ResolveContainRect({1080, 1920}, {1920, 1080});
+    const auto rect = exosnap::engine::ResolveContainRect({1080, 1920}, {1920, 1080});
     ASSERT_TRUE(rect.has_value());
     EXPECT_EQ(rect->width, 608u);
     EXPECT_EQ(rect->height, 1080u);
@@ -759,7 +759,7 @@ TEST(OutputGeometryTest, ContainRect_PortraitIntoLandscapeCenters) {
 }
 
 TEST(OutputGeometryTest, ContainRect_NeverLeavesOutput) {
-    const auto rect = recorder_core::ResolveContainRect({1234, 321}, {1280, 720});
+    const auto rect = exosnap::engine::ResolveContainRect({1234, 321}, {1280, 720});
     ASSERT_TRUE(rect.has_value());
     EXPECT_LE(rect->x + rect->width, 1280u);
     EXPECT_LE(rect->y + rect->height, 720u);
@@ -778,33 +778,33 @@ TEST(OutputSettingsTest, Mp4Profile_ExtensionIsMp4) {
 // validation replaced for the container) and record an invalid combination.
 
 TEST(OutputSettingsTest, ApplyOutputSettings_DoesNotOverrideResolvedAudioCodec) {
-    recorder_core::RecorderConfig config{};
-    config.audio_codec = recorder_core::AudioCodec::Opus; // resolver's answer
+    exosnap::engine::RecorderConfig config{};
+    config.audio_codec = exosnap::engine::AudioCodec::Opus; // resolver's answer
 
     OutputSettingsModel settings = OutputSettingsModel::Defaults();
     settings.audio_codec = capability::AudioCodec::Aac; // raw, unresolved wish
 
     ApplyOutputSettingsToRecorderConfig(config, settings);
-    EXPECT_EQ(config.audio_codec, recorder_core::AudioCodec::Opus)
+    EXPECT_EQ(config.audio_codec, exosnap::engine::AudioCodec::Opus)
         << "the apply step must keep the resolver-stamped audio codec, not the raw settings value";
 }
 
 TEST(OutputSettingsTest, ApplyOutputSettings_DoesNotOverrideResolvedContainerOrVideoCodec) {
-    recorder_core::RecorderConfig config{};
-    config.container = recorder_core::Container::Mp4; // resolver's answer
-    config.video_codec = recorder_core::VideoCodec::H264;
+    exosnap::engine::RecorderConfig config{};
+    config.container = exosnap::engine::Container::Mp4; // resolver's answer
+    config.video_codec = exosnap::engine::VideoCodec::H264;
 
     OutputSettingsModel settings = OutputSettingsModel::Defaults();
     settings.container = capability::Container::WebM; // raw, unresolved wish
     settings.video_codec = capability::VideoCodec::Av1;
 
     ApplyOutputSettingsToRecorderConfig(config, settings);
-    EXPECT_EQ(config.container, recorder_core::Container::Mp4);
-    EXPECT_EQ(config.video_codec, recorder_core::VideoCodec::H264);
+    EXPECT_EQ(config.container, exosnap::engine::Container::Mp4);
+    EXPECT_EQ(config.video_codec, exosnap::engine::VideoCodec::H264);
 }
 
 TEST(OutputSettingsTest, ApplyOutputResolution_PassesFixedSizeToRecorderConfig) {
-    recorder_core::RecorderConfig config{};
+    exosnap::engine::RecorderConfig config{};
 
     OutputSettingsModel settings = OutputSettingsModel::Defaults();
     settings.resolution.mode = OutputResolutionMode::FHD1080;
@@ -812,11 +812,11 @@ TEST(OutputSettingsTest, ApplyOutputResolution_PassesFixedSizeToRecorderConfig) 
     ApplyOutputSettingsToRecorderConfig(config, settings);
     EXPECT_EQ(config.output_width, 1920u);
     EXPECT_EQ(config.output_height, 1080u);
-    EXPECT_EQ(config.output_fit, recorder_core::OutputFitMode::Contain);
+    EXPECT_EQ(config.output_fit, exosnap::engine::OutputFitMode::Contain);
 }
 
 TEST(OutputSettingsTest, ApplyOutputResolution_NativeUsesRuntimeSourceSize) {
-    recorder_core::RecorderConfig config{};
+    exosnap::engine::RecorderConfig config{};
     config.output_width = 1920;
     config.output_height = 1080;
 
@@ -1090,7 +1090,7 @@ TEST(SplitSizeSettingsTest, MergeFormatSelection_CarriesSplitSettings) {
 // H.264 previously used P6 (visible default change — see ADR 0039).
 TEST(OutputSettingsTest, Defaults_NvencPresetIsP4) {
     const OutputSettingsModel defaults = OutputSettingsModel::Defaults();
-    EXPECT_EQ(defaults.nvenc_preset, recorder_core::NvencPreset::P4);
+    EXPECT_EQ(defaults.nvenc_preset, exosnap::engine::NvencPreset::P4);
 }
 
 // Red-proof (same class of bug as MergeFormatSelection_CarriesSplitSettings):
@@ -1102,14 +1102,14 @@ TEST(OutputSettingsTest, Defaults_NvencPresetIsP4) {
 // this test fail.
 TEST(OutputSettingsTest, MergeFormatSelection_CarriesNvencPreset) {
     OutputSettingsModel live = OutputSettingsModel::Defaults();
-    live.nvenc_preset = recorder_core::NvencPreset::P4;
+    live.nvenc_preset = exosnap::engine::NvencPreset::P4;
 
     OutputSettingsModel incoming = live;
-    incoming.nvenc_preset = recorder_core::NvencPreset::P7;
+    incoming.nvenc_preset = exosnap::engine::NvencPreset::P7;
 
     MergeFormatSelection(live, incoming);
 
-    EXPECT_EQ(live.nvenc_preset, recorder_core::NvencPreset::P7)
+    EXPECT_EQ(live.nvenc_preset, exosnap::engine::NvencPreset::P7)
         << "MergeFormatSelection must carry a live encoder-preset edit into output_settings_";
 }
 
@@ -1119,14 +1119,14 @@ TEST(OutputSettingsTest, MergeFormatSelection_CarriesNvencPreset) {
 // drop it, same as every other output field.
 TEST(OutputSettingsTest, MergeFormatSelection_CarriesHdrMode) {
     OutputSettingsModel live = OutputSettingsModel::Defaults();
-    live.hdr_mode = recorder_core::HdrMode::TonemapSdr;
+    live.hdr_mode = exosnap::engine::HdrMode::TonemapSdr;
 
     OutputSettingsModel incoming = live;
-    incoming.hdr_mode = recorder_core::HdrMode::Hdr10;
+    incoming.hdr_mode = exosnap::engine::HdrMode::Hdr10;
 
     MergeFormatSelection(live, incoming);
 
-    EXPECT_EQ(live.hdr_mode, recorder_core::HdrMode::Hdr10)
+    EXPECT_EQ(live.hdr_mode, exosnap::engine::HdrMode::Hdr10)
         << "MergeFormatSelection must carry hdr_mode through like every other output field";
 }
 
@@ -1135,14 +1135,14 @@ TEST(OutputSettingsTest, MergeFormatSelection_CarriesHdrMode) {
 // Without this line the combo could be wired end-to-end through the UI and
 // still never reach the NVENC encoder at recording start.
 TEST(OutputSettingsTest, ApplyOutputSettingsToRecorderConfig_CarriesNvencPreset) {
-    recorder_core::RecorderConfig config{};
-    config.nvenc_preset = recorder_core::NvencPreset::P4;
+    exosnap::engine::RecorderConfig config{};
+    config.nvenc_preset = exosnap::engine::NvencPreset::P4;
 
     OutputSettingsModel settings = OutputSettingsModel::Defaults();
-    settings.nvenc_preset = recorder_core::NvencPreset::P1;
+    settings.nvenc_preset = exosnap::engine::NvencPreset::P1;
 
     ApplyOutputSettingsToRecorderConfig(config, settings);
-    EXPECT_EQ(config.nvenc_preset, recorder_core::NvencPreset::P1);
+    EXPECT_EQ(config.nvenc_preset, exosnap::engine::NvencPreset::P1);
 }
 
 // ── EXOSNAP_OUTPUT_DIR override (DF-HISTORY) ─────────────────────────────────
@@ -1317,8 +1317,8 @@ TEST(StartFailureFormatTest, FailureResultCarriesTheConfiguredFormat) {
     std::optional<UiRecordingResult> failure;
     coordinator.SetResultReadyCallback([&](const UiRecordingResult& r) { failure = r; });
 
-    recorder_core::CaptureTarget target;
-    target.kind = recorder_core::CaptureTarget::Kind::Monitor;
+    exosnap::engine::CaptureTarget target;
+    target.kind = exosnap::engine::CaptureTarget::Kind::Monitor;
     target.native_id = 1; // never touched: the folder guard fires first
     target.description = "\\\\.\\DISPLAY1";
     // The device work (and the folder guard) now runs on the preparation worker
@@ -1342,7 +1342,7 @@ TEST(StartFailureFormatTest, FailureResultCarriesTheConfiguredFormat) {
     EXPECT_EQ(failure->container, expected.container);
     EXPECT_EQ(failure->video_codec, expected.video_codec);
     EXPECT_EQ(failure->audio_codec, expected.audio_codec);
-    EXPECT_EQ(failure->container, recorder_core::Container::Mp4); // not the WebM default
+    EXPECT_EQ(failure->container, exosnap::engine::Container::Mp4); // not the WebM default
 
     std::error_code cleanup_ec;
     std::filesystem::remove(file_as_folder, cleanup_ec);
@@ -1372,9 +1372,9 @@ void MakeReadyCoordinator(RecordingCoordinator& coordinator, const std::filesyst
     coordinator.OnCapabilitiesReady(caps);
 }
 
-recorder_core::CaptureTarget MonitorTarget() {
-    recorder_core::CaptureTarget target;
-    target.kind = recorder_core::CaptureTarget::Kind::Monitor;
+exosnap::engine::CaptureTarget MonitorTarget() {
+    exosnap::engine::CaptureTarget target;
+    target.kind = exosnap::engine::CaptureTarget::Kind::Monitor;
     target.native_id = 1;
     target.description = "\\\\.\\DISPLAY1";
     return target;

@@ -14,7 +14,7 @@
 
 #include <wrl/client.h>
 
-#include <recorder_core/audio_input_device.h>
+#include <exosnap/engine/audio_input_device.h>
 
 #include "diagnostics/AppLog.h"
 
@@ -185,10 +185,10 @@ struct AudioDeviceNotifier::ComState {
 
 static AudioDeviceSnapshot DefaultEnumerator() {
     AudioDeviceSnapshot snap;
-    const auto inputs_vec = recorder_core::EnumerateAudioInputDevices();
-    snap.inputs = QVector<recorder_core::AudioInputDeviceInfo>(inputs_vec.begin(), inputs_vec.end());
-    const auto outputs_vec = recorder_core::EnumerateAudioOutputDevices();
-    snap.outputs = QVector<recorder_core::AudioInputDeviceInfo>(outputs_vec.begin(), outputs_vec.end());
+    const auto inputs_vec = exosnap::engine::EnumerateAudioInputDevices();
+    snap.inputs = QVector<exosnap::engine::AudioInputDeviceInfo>(inputs_vec.begin(), inputs_vec.end());
+    const auto outputs_vec = exosnap::engine::EnumerateAudioOutputDevices();
+    snap.outputs = QVector<exosnap::engine::AudioInputDeviceInfo>(outputs_vec.begin(), outputs_vec.end());
 
     for (const auto& d : snap.inputs) {
         if (d.is_default) {
@@ -369,11 +369,11 @@ AudioDeviceSnapshot AudioDeviceNotifier::buildSnapshot() const {
     AudioDeviceSnapshot snap = enumerator_();
 
     std::sort(snap.inputs.begin(), snap.inputs.end(),
-              [](const recorder_core::AudioInputDeviceInfo& a, const recorder_core::AudioInputDeviceInfo& b) {
+              [](const exosnap::engine::AudioInputDeviceInfo& a, const exosnap::engine::AudioInputDeviceInfo& b) {
                   return a.device_id < b.device_id;
               });
     std::sort(snap.outputs.begin(), snap.outputs.end(),
-              [](const recorder_core::AudioInputDeviceInfo& a, const recorder_core::AudioInputDeviceInfo& b) {
+              [](const exosnap::engine::AudioInputDeviceInfo& a, const exosnap::engine::AudioInputDeviceInfo& b) {
                   return a.device_id < b.device_id;
               });
 

@@ -243,19 +243,19 @@ TEST(TranslationTest, ToRecorderCoreConfigAcceptsDefaultMkvAv1OpusCombo) {
     const CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
     ResolveResult validation;
     // Default UserRecorderConfig is MKV + AV1 + Opus (primary profile)
-    const recorder_core::RecorderConfig translated = ToRecorderCoreConfig(UserRecorderConfig{}, caps, &validation);
+    const exosnap::engine::RecorderConfig translated = ToRecorderCoreConfig(UserRecorderConfig{}, caps, &validation);
 
     EXPECT_TRUE(validation.succeeded);
-    EXPECT_EQ(translated.container, recorder_core::Container::Matroska);
-    EXPECT_EQ(translated.video_codec, recorder_core::VideoCodec::Av1);
-    EXPECT_EQ(translated.audio_codec, recorder_core::AudioCodec::Opus);
-    EXPECT_EQ(translated.chroma, recorder_core::ChromaSubsampling::Cs420);
-    EXPECT_EQ(translated.bit_depth, recorder_core::BitDepth::Bit8);
+    EXPECT_EQ(translated.container, exosnap::engine::Container::Matroska);
+    EXPECT_EQ(translated.video_codec, exosnap::engine::VideoCodec::Av1);
+    EXPECT_EQ(translated.audio_codec, exosnap::engine::AudioCodec::Opus);
+    EXPECT_EQ(translated.chroma, exosnap::engine::ChromaSubsampling::Cs420);
+    EXPECT_EQ(translated.bit_depth, exosnap::engine::BitDepth::Bit8);
     // fix/color-range-signaling: default colour range is Limited (16-235,
     // broadcast/studio) — common consumer players (verified: VLC) ignore the
     // range flag entirely and always expand limited->full, so Full-range
     // recordings looked permanently crushed/dark there regardless of tagging.
-    EXPECT_EQ(translated.color.range, recorder_core::ColorRange::Limited);
+    EXPECT_EQ(translated.color.range, exosnap::engine::ColorRange::Limited);
 }
 
 // Colour range is always valid for every codec/container — it is NOT part of
@@ -266,13 +266,14 @@ TEST(TranslationTest, ToRecorderCoreConfigMapsColorRange) {
     // Default (Limited, fix/color-range-signaling).
     {
         ResolveResult validation;
-        const recorder_core::RecorderConfig translated = ToRecorderCoreConfig(UserRecorderConfig{}, caps, &validation);
+        const exosnap::engine::RecorderConfig translated =
+            ToRecorderCoreConfig(UserRecorderConfig{}, caps, &validation);
         EXPECT_TRUE(validation.succeeded);
-        EXPECT_EQ(translated.color.range, recorder_core::ColorRange::Limited);
+        EXPECT_EQ(translated.color.range, exosnap::engine::ColorRange::Limited);
         // Primaries/transfer/matrix stay BT.709 SDR.
-        EXPECT_EQ(translated.color.primaries, recorder_core::ColorPrimaries::Bt709);
-        EXPECT_EQ(translated.color.transfer, recorder_core::TransferCharacteristics::Bt709);
-        EXPECT_EQ(translated.color.matrix, recorder_core::MatrixCoefficients::Bt709);
+        EXPECT_EQ(translated.color.primaries, exosnap::engine::ColorPrimaries::Bt709);
+        EXPECT_EQ(translated.color.transfer, exosnap::engine::TransferCharacteristics::Bt709);
+        EXPECT_EQ(translated.color.matrix, exosnap::engine::MatrixCoefficients::Bt709);
     }
 
     // Full (opt-in).
@@ -280,15 +281,15 @@ TEST(TranslationTest, ToRecorderCoreConfigMapsColorRange) {
         UserRecorderConfig config;
         config.color_range = ColorRange::Full;
         ResolveResult validation;
-        const recorder_core::RecorderConfig translated = ToRecorderCoreConfig(config, caps, &validation);
+        const exosnap::engine::RecorderConfig translated = ToRecorderCoreConfig(config, caps, &validation);
         EXPECT_TRUE(validation.succeeded);
-        EXPECT_EQ(translated.color.range, recorder_core::ColorRange::Full);
+        EXPECT_EQ(translated.color.range, exosnap::engine::ColorRange::Full);
     }
 }
 
 // HdrMode passes straight through to RecorderConfig unchanged —
-// capability::UserRecorderConfig and recorder_core::RecorderConfig reuse the
-// SAME recorder_core::HdrMode enum (no per-layer duplication, same pattern as
+// capability::UserRecorderConfig and exosnap::engine::RecorderConfig reuse the
+// SAME exosnap::engine::HdrMode enum (no per-layer duplication, same pattern as
 // NvencPreset/FramePacingMode). Default is TonemapSdr; Off and Hdr10 both
 // round-trip too. No BT.2020/PQ ColorMetadata is derived here — that needs
 // runtime display facts, still to be wired up.
@@ -298,30 +299,31 @@ TEST(TranslationTest, ToRecorderCoreConfigMapsHdrMode) {
     // Default (TonemapSdr).
     {
         ResolveResult validation;
-        const recorder_core::RecorderConfig translated = ToRecorderCoreConfig(UserRecorderConfig{}, caps, &validation);
+        const exosnap::engine::RecorderConfig translated =
+            ToRecorderCoreConfig(UserRecorderConfig{}, caps, &validation);
         EXPECT_TRUE(validation.succeeded);
-        EXPECT_EQ(translated.hdr_mode, recorder_core::HdrMode::TonemapSdr);
+        EXPECT_EQ(translated.hdr_mode, exosnap::engine::HdrMode::TonemapSdr);
     }
     // Off.
     {
         UserRecorderConfig config;
-        config.hdr_mode = recorder_core::HdrMode::Off;
+        config.hdr_mode = exosnap::engine::HdrMode::Off;
         ResolveResult validation;
-        const recorder_core::RecorderConfig translated = ToRecorderCoreConfig(config, caps, &validation);
+        const exosnap::engine::RecorderConfig translated = ToRecorderCoreConfig(config, caps, &validation);
         EXPECT_TRUE(validation.succeeded);
-        EXPECT_EQ(translated.hdr_mode, recorder_core::HdrMode::Off);
+        EXPECT_EQ(translated.hdr_mode, exosnap::engine::HdrMode::Off);
     }
     // Hdr10 (expert opt-in) — passes through; ColorMetadata is untouched for
     // now (still BT.709 SDR defaults).
     {
         UserRecorderConfig config;
-        config.hdr_mode = recorder_core::HdrMode::Hdr10;
+        config.hdr_mode = exosnap::engine::HdrMode::Hdr10;
         ResolveResult validation;
-        const recorder_core::RecorderConfig translated = ToRecorderCoreConfig(config, caps, &validation);
+        const exosnap::engine::RecorderConfig translated = ToRecorderCoreConfig(config, caps, &validation);
         EXPECT_TRUE(validation.succeeded);
-        EXPECT_EQ(translated.hdr_mode, recorder_core::HdrMode::Hdr10);
-        EXPECT_EQ(translated.color.primaries, recorder_core::ColorPrimaries::Bt709);
-        EXPECT_EQ(translated.color.transfer, recorder_core::TransferCharacteristics::Bt709);
+        EXPECT_EQ(translated.hdr_mode, exosnap::engine::HdrMode::Hdr10);
+        EXPECT_EQ(translated.color.primaries, exosnap::engine::ColorPrimaries::Bt709);
+        EXPECT_EQ(translated.color.transfer, exosnap::engine::TransferCharacteristics::Bt709);
     }
 }
 
@@ -333,12 +335,12 @@ TEST(TranslationTest, ToRecorderCoreConfigAcceptsWebMAv1OpusCombo) {
     config.audio_codec = AudioCodec::Opus;
 
     ResolveResult validation;
-    const recorder_core::RecorderConfig translated = ToRecorderCoreConfig(config, caps, &validation);
+    const exosnap::engine::RecorderConfig translated = ToRecorderCoreConfig(config, caps, &validation);
 
     EXPECT_TRUE(validation.succeeded);
-    EXPECT_EQ(translated.container, recorder_core::Container::WebM);
-    EXPECT_EQ(translated.video_codec, recorder_core::VideoCodec::Av1);
-    EXPECT_EQ(translated.audio_codec, recorder_core::AudioCodec::Opus);
+    EXPECT_EQ(translated.container, exosnap::engine::Container::WebM);
+    EXPECT_EQ(translated.video_codec, exosnap::engine::VideoCodec::Av1);
+    EXPECT_EQ(translated.audio_codec, exosnap::engine::AudioCodec::Opus);
 }
 
 TEST(TranslationTest, ToRecorderCoreConfigAcceptsMkvAv1AacCombo) {
@@ -350,12 +352,12 @@ TEST(TranslationTest, ToRecorderCoreConfigAcceptsMkvAv1AacCombo) {
     config.audio_codec = AudioCodec::Aac;
 
     ResolveResult validation;
-    const recorder_core::RecorderConfig translated = ToRecorderCoreConfig(config, caps, &validation);
+    const exosnap::engine::RecorderConfig translated = ToRecorderCoreConfig(config, caps, &validation);
 
     EXPECT_TRUE(validation.succeeded);
-    EXPECT_EQ(translated.container, recorder_core::Container::Matroska);
-    EXPECT_EQ(translated.video_codec, recorder_core::VideoCodec::Av1);
-    EXPECT_EQ(translated.audio_codec, recorder_core::AudioCodec::Aac);
+    EXPECT_EQ(translated.container, exosnap::engine::Container::Matroska);
+    EXPECT_EQ(translated.video_codec, exosnap::engine::VideoCodec::Av1);
+    EXPECT_EQ(translated.audio_codec, exosnap::engine::AudioCodec::Aac);
 }
 
 TEST(TranslationTest, ToRecorderCoreConfigAcceptsMkvAv1OpusCombo) {
@@ -367,17 +369,17 @@ TEST(TranslationTest, ToRecorderCoreConfigAcceptsMkvAv1OpusCombo) {
     config.audio_codec = AudioCodec::Opus;
 
     ResolveResult validation;
-    const recorder_core::RecorderConfig translated = ToRecorderCoreConfig(config, caps, &validation);
+    const exosnap::engine::RecorderConfig translated = ToRecorderCoreConfig(config, caps, &validation);
 
     EXPECT_TRUE(validation.succeeded);
-    EXPECT_EQ(translated.container, recorder_core::Container::Matroska);
-    EXPECT_EQ(translated.video_codec, recorder_core::VideoCodec::Av1);
-    EXPECT_EQ(translated.audio_codec, recorder_core::AudioCodec::Opus);
+    EXPECT_EQ(translated.container, exosnap::engine::Container::Matroska);
+    EXPECT_EQ(translated.video_codec, exosnap::engine::VideoCodec::Av1);
+    EXPECT_EQ(translated.audio_codec, exosnap::engine::AudioCodec::Opus);
 }
 
 TEST(TranslationTest, ToRecorderCoreConfigAcceptsMkvAv1PcmCombo) {
     // 0.6.0 Audio v2: MKV + AV1 + PCM is Allowed (ValidUnvalidated) and must
-    // translate to recorder_core with audio_codec = Pcm.
+    // translate to engine with audio_codec = Pcm.
     const CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
 
     UserRecorderConfig config;
@@ -386,12 +388,12 @@ TEST(TranslationTest, ToRecorderCoreConfigAcceptsMkvAv1PcmCombo) {
     config.audio_codec = AudioCodec::Pcm;
 
     ResolveResult validation;
-    const recorder_core::RecorderConfig translated = ToRecorderCoreConfig(config, caps, &validation);
+    const exosnap::engine::RecorderConfig translated = ToRecorderCoreConfig(config, caps, &validation);
 
     EXPECT_TRUE(validation.succeeded);
-    EXPECT_EQ(translated.container, recorder_core::Container::Matroska);
-    EXPECT_EQ(translated.video_codec, recorder_core::VideoCodec::Av1);
-    EXPECT_EQ(translated.audio_codec, recorder_core::AudioCodec::Pcm);
+    EXPECT_EQ(translated.container, exosnap::engine::Container::Matroska);
+    EXPECT_EQ(translated.video_codec, exosnap::engine::VideoCodec::Av1);
+    EXPECT_EQ(translated.audio_codec, exosnap::engine::AudioCodec::Pcm);
 }
 
 TEST(TranslationTest, ToRecorderCoreConfigAcceptsMkvH264PcmCombo) {
@@ -403,17 +405,17 @@ TEST(TranslationTest, ToRecorderCoreConfigAcceptsMkvH264PcmCombo) {
     config.audio_codec = AudioCodec::Pcm;
 
     ResolveResult validation;
-    const recorder_core::RecorderConfig translated = ToRecorderCoreConfig(config, caps, &validation);
+    const exosnap::engine::RecorderConfig translated = ToRecorderCoreConfig(config, caps, &validation);
 
     EXPECT_TRUE(validation.succeeded);
-    EXPECT_EQ(translated.container, recorder_core::Container::Matroska);
-    EXPECT_EQ(translated.video_codec, recorder_core::VideoCodec::H264);
-    EXPECT_EQ(translated.audio_codec, recorder_core::AudioCodec::Pcm);
+    EXPECT_EQ(translated.container, exosnap::engine::Container::Matroska);
+    EXPECT_EQ(translated.video_codec, exosnap::engine::VideoCodec::H264);
+    EXPECT_EQ(translated.audio_codec, exosnap::engine::AudioCodec::Pcm);
 }
 
 TEST(TranslationTest, ToRecorderCoreConfigAcceptsMkvAv1FlacCombo) {
     // 0.6.0 Audio v2: MKV + AV1 + FLAC is Allowed (ValidUnvalidated) and must
-    // translate to recorder_core with audio_codec = Flac.
+    // translate to engine with audio_codec = Flac.
     const CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
 
     UserRecorderConfig config;
@@ -422,12 +424,12 @@ TEST(TranslationTest, ToRecorderCoreConfigAcceptsMkvAv1FlacCombo) {
     config.audio_codec = AudioCodec::Flac;
 
     ResolveResult validation;
-    const recorder_core::RecorderConfig translated = ToRecorderCoreConfig(config, caps, &validation);
+    const exosnap::engine::RecorderConfig translated = ToRecorderCoreConfig(config, caps, &validation);
 
     EXPECT_TRUE(validation.succeeded);
-    EXPECT_EQ(translated.container, recorder_core::Container::Matroska);
-    EXPECT_EQ(translated.video_codec, recorder_core::VideoCodec::Av1);
-    EXPECT_EQ(translated.audio_codec, recorder_core::AudioCodec::Flac);
+    EXPECT_EQ(translated.container, exosnap::engine::Container::Matroska);
+    EXPECT_EQ(translated.video_codec, exosnap::engine::VideoCodec::Av1);
+    EXPECT_EQ(translated.audio_codec, exosnap::engine::AudioCodec::Flac);
 }
 
 TEST(TranslationTest, ToRecorderCoreConfigAcceptsMkvH264FlacCombo) {
@@ -439,12 +441,12 @@ TEST(TranslationTest, ToRecorderCoreConfigAcceptsMkvH264FlacCombo) {
     config.audio_codec = AudioCodec::Flac;
 
     ResolveResult validation;
-    const recorder_core::RecorderConfig translated = ToRecorderCoreConfig(config, caps, &validation);
+    const exosnap::engine::RecorderConfig translated = ToRecorderCoreConfig(config, caps, &validation);
 
     EXPECT_TRUE(validation.succeeded);
-    EXPECT_EQ(translated.container, recorder_core::Container::Matroska);
-    EXPECT_EQ(translated.video_codec, recorder_core::VideoCodec::H264);
-    EXPECT_EQ(translated.audio_codec, recorder_core::AudioCodec::Flac);
+    EXPECT_EQ(translated.container, exosnap::engine::Container::Matroska);
+    EXPECT_EQ(translated.video_codec, exosnap::engine::VideoCodec::H264);
+    EXPECT_EQ(translated.audio_codec, exosnap::engine::AudioCodec::Flac);
 }
 
 TEST(TranslationTest, ToRecorderCoreConfigAcceptsMp4H264AacCombo) {
@@ -456,12 +458,12 @@ TEST(TranslationTest, ToRecorderCoreConfigAcceptsMp4H264AacCombo) {
     config.audio_codec = AudioCodec::Aac;
 
     ResolveResult validation;
-    const recorder_core::RecorderConfig translated = ToRecorderCoreConfig(config, caps, &validation);
+    const exosnap::engine::RecorderConfig translated = ToRecorderCoreConfig(config, caps, &validation);
 
     EXPECT_TRUE(validation.succeeded);
-    EXPECT_EQ(translated.container, recorder_core::Container::Mp4);
-    EXPECT_EQ(translated.video_codec, recorder_core::VideoCodec::H264);
-    EXPECT_EQ(translated.audio_codec, recorder_core::AudioCodec::Aac);
+    EXPECT_EQ(translated.container, exosnap::engine::Container::Mp4);
+    EXPECT_EQ(translated.video_codec, exosnap::engine::VideoCodec::H264);
+    EXPECT_EQ(translated.audio_codec, exosnap::engine::AudioCodec::Aac);
 }
 
 TEST(TranslationTest, ToRecorderCoreConfigAcceptsMkvH264AacCombo) {
@@ -473,12 +475,12 @@ TEST(TranslationTest, ToRecorderCoreConfigAcceptsMkvH264AacCombo) {
     config.audio_codec = AudioCodec::Aac;
 
     ResolveResult validation;
-    const recorder_core::RecorderConfig translated = ToRecorderCoreConfig(config, caps, &validation);
+    const exosnap::engine::RecorderConfig translated = ToRecorderCoreConfig(config, caps, &validation);
 
     EXPECT_TRUE(validation.succeeded);
-    EXPECT_EQ(translated.container, recorder_core::Container::Matroska);
-    EXPECT_EQ(translated.video_codec, recorder_core::VideoCodec::H264);
-    EXPECT_EQ(translated.audio_codec, recorder_core::AudioCodec::Aac);
+    EXPECT_EQ(translated.container, exosnap::engine::Container::Matroska);
+    EXPECT_EQ(translated.video_codec, exosnap::engine::VideoCodec::H264);
+    EXPECT_EQ(translated.audio_codec, exosnap::engine::AudioCodec::Aac);
 }
 
 TEST(TranslationTest, ToRecorderCoreConfigAcceptsMkvH264OpusCombo) {
@@ -495,17 +497,17 @@ TEST(TranslationTest, ToRecorderCoreConfigAcceptsMkvH264OpusCombo) {
     config.audio_codec = AudioCodec::Opus;
 
     ResolveResult validation;
-    const recorder_core::RecorderConfig translated = ToRecorderCoreConfig(config, caps, &validation);
+    const exosnap::engine::RecorderConfig translated = ToRecorderCoreConfig(config, caps, &validation);
 
     EXPECT_TRUE(validation.succeeded);
-    EXPECT_EQ(translated.container, recorder_core::Container::Matroska);
-    EXPECT_EQ(translated.video_codec, recorder_core::VideoCodec::H264);
-    EXPECT_EQ(translated.audio_codec, recorder_core::AudioCodec::Opus);
+    EXPECT_EQ(translated.container, exosnap::engine::Container::Matroska);
+    EXPECT_EQ(translated.video_codec, exosnap::engine::VideoCodec::H264);
+    EXPECT_EQ(translated.audio_codec, exosnap::engine::AudioCodec::Opus);
 }
 
 TEST(TranslationTest, ToRecorderCoreConfigAcceptsMkvHevcAacCombo) {
     // 0.7.0: MKV + HEVC is ValidUnvalidated in the baseline, so ToRecorderCoreConfig
-    // must translate it to recorder_core::VideoCodec::Hevc.
+    // must translate it to exosnap::engine::VideoCodec::Hevc.
     const CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
 
     UserRecorderConfig config;
@@ -514,12 +516,12 @@ TEST(TranslationTest, ToRecorderCoreConfigAcceptsMkvHevcAacCombo) {
     config.audio_codec = AudioCodec::Aac;
 
     ResolveResult validation;
-    const recorder_core::RecorderConfig translated = ToRecorderCoreConfig(config, caps, &validation);
+    const exosnap::engine::RecorderConfig translated = ToRecorderCoreConfig(config, caps, &validation);
 
     EXPECT_TRUE(validation.succeeded);
-    EXPECT_EQ(translated.container, recorder_core::Container::Matroska);
-    EXPECT_EQ(translated.video_codec, recorder_core::VideoCodec::Hevc);
-    EXPECT_EQ(translated.audio_codec, recorder_core::AudioCodec::Aac);
+    EXPECT_EQ(translated.container, exosnap::engine::Container::Matroska);
+    EXPECT_EQ(translated.video_codec, exosnap::engine::VideoCodec::Hevc);
+    EXPECT_EQ(translated.audio_codec, exosnap::engine::AudioCodec::Aac);
 }
 
 } // namespace

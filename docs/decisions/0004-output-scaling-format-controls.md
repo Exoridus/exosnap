@@ -30,7 +30,7 @@ Before this change the recorder encoded the captured source size, or the Region 
 
 If a Window capture texture changes size during a session, recording fails honestly and asks for a restart rather than silently feeding mismatched textures into a fixed encoder configuration.
 
-The recorder computes one shared contain-fit rectangle with `recorder_core::ResolveContainRect`. The video path uses it for GPU source scaling and letterbox placement. Webcam placement remains relative to the captured content rectangle, so PiP stays out of letterbox bars. DXGI cursor composition remains above webcam in the compositor before scaling.
+The recorder computes one shared contain-fit rectangle with `exosnap::engine::ResolveContainRect`. The video path uses it for GPU source scaling and letterbox placement. Webcam placement remains relative to the captured content rectangle, so PiP stays out of letterbox bars. DXGI cursor composition remains above webcam in the compositor before scaling.
 
 The GPU path remains:
 

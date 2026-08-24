@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - Pre-1.0: breaking changes to persisted formats are allowed; incompatible data is repaired or reset, never migrated wholesale (exception: the targeted `color_range full→limited` migration, ADR 0032, is preserved).
-- The engine (`libs/recorder_core`) remains UI-agnostic and is not touched by this plan.
+- The engine (`libs/engine`) remains UI-agnostic and is not touched by this plan.
 - Default profile stays **MKV + AV1 + Opus + CFR 60 fps** (unchanged `MakeDefaultPreset()`).
 - No internal slice/task names, plan references, or codenames in commits, PRs, or code comments.
 - Test runner: `pwsh scripts/run-tests.ps1 -Filter <binary-regex>` (matches test **binary** names, e.g. `recording_preset_store_tests`). Full suite once at the final gate. Add `-Build` when sources changed since the last build.
@@ -115,7 +115,7 @@ TEST(RecordingPreset, DirtyEquivalent_BitDepthDifference_NotChanged) {
 TEST(RecordingPreset, DirtyEquivalent_HdrModeDifference_NotChanged) {
     RecordingPresetConfig a = MakeDefaultPreset().config;
     RecordingPresetConfig b = a;
-    b.output.hdr_mode = recorder_core::HdrMode::Hdr10;
+    b.output.hdr_mode = exosnap::engine::HdrMode::Hdr10;
 
     EXPECT_FALSE(NormalizedConfigEquals(a, b));
     EXPECT_TRUE(ConfigDirtyEquivalent(a, b));
@@ -128,7 +128,7 @@ TEST(RecordingPreset, WithEnvironmentFields_PreservesLiveEnvironment) {
     RecordingPresetConfig live = MakeDefaultPreset().config;
     live.output.video_codec = capability::VideoCodec::HevcNvenc;
     live.output.bit_depth = capability::BitDepth::Bit10;
-    live.output.hdr_mode = recorder_core::HdrMode::Hdr10;
+    live.output.hdr_mode = exosnap::engine::HdrMode::Hdr10;
     live.capture.kind = PresetCaptureKind::Window;
     live.capture.window_key = "game.exe";
 
@@ -137,7 +137,7 @@ TEST(RecordingPreset, WithEnvironmentFields_PreservesLiveEnvironment) {
 
     const RecordingPresetConfig applied = WithEnvironmentFields(preset, live);
     EXPECT_EQ(applied.output.bit_depth, capability::BitDepth::Bit10);
-    EXPECT_EQ(applied.output.hdr_mode, recorder_core::HdrMode::Hdr10);
+    EXPECT_EQ(applied.output.hdr_mode, exosnap::engine::HdrMode::Hdr10);
     EXPECT_EQ(applied.capture.kind, PresetCaptureKind::Window);
     EXPECT_EQ(applied.capture.window_key, "game.exe");
     EXPECT_EQ(applied.video.cq, 16u);
@@ -164,10 +164,10 @@ TEST(RecordingPreset, StripEnvironmentFields_ResetsToModelDefaults) {
     RecordingPresetConfig live = MakeDefaultPreset().config;
     live.output.video_codec = capability::VideoCodec::HevcNvenc;
     live.output.bit_depth = capability::BitDepth::Bit10;
-    live.output.hdr_mode = recorder_core::HdrMode::Hdr10;
+    live.output.hdr_mode = exosnap::engine::HdrMode::Hdr10;
     live.capture.kind = PresetCaptureKind::Region;
     live.capture.has_region = true;
-    live.capture.region = recorder_core::CaptureRegion{0, 0, 1280, 720};
+    live.capture.region = exosnap::engine::CaptureRegion{0, 0, 1280, 720};
 
     const OutputSettingsModel defaults = OutputSettingsModel::Defaults();
     const RecordingPresetConfig stripped = StripEnvironmentFields(live);
@@ -306,18 +306,18 @@ TEST(RecordingPreset, MakeBuiltInPresets_FourPresets_ExpectedValues) {
     EXPECT_EQ(b[0].id, kDefaultPresetId);
     EXPECT_EQ(b[0].name, "Default");
     EXPECT_EQ(b[0].config.video.cq, 19u);
-    EXPECT_EQ(b[0].config.output.nvenc_preset, recorder_core::NvencPreset::P4);
+    EXPECT_EQ(b[0].config.output.nvenc_preset, exosnap::engine::NvencPreset::P4);
 
     EXPECT_EQ(b[1].id, kQualityPresetId);
     EXPECT_EQ(b[1].name, "Quality");
     EXPECT_EQ(b[1].config.video.cq, 16u);
-    EXPECT_EQ(b[1].config.output.nvenc_preset, recorder_core::NvencPreset::P6);
+    EXPECT_EQ(b[1].config.output.nvenc_preset, exosnap::engine::NvencPreset::P6);
     EXPECT_EQ(b[1].config.output.container, capability::Container::Matroska);
 
     EXPECT_EQ(b[2].id, kEfficiencyPresetId);
     EXPECT_EQ(b[2].name, "Efficiency");
     EXPECT_EQ(b[2].config.video.cq, 30u);
-    EXPECT_EQ(b[2].config.output.nvenc_preset, recorder_core::NvencPreset::P6);
+    EXPECT_EQ(b[2].config.output.nvenc_preset, exosnap::engine::NvencPreset::P6);
 
     EXPECT_EQ(b[3].id, kCompatibilityPresetId);
     EXPECT_EQ(b[3].name, "Compatibility");
@@ -325,7 +325,7 @@ TEST(RecordingPreset, MakeBuiltInPresets_FourPresets_ExpectedValues) {
     EXPECT_EQ(b[3].config.output.video_codec, capability::VideoCodec::H264Nvenc);
     EXPECT_EQ(b[3].config.output.audio_codec, capability::AudioCodec::AacMf);
     EXPECT_EQ(b[3].config.video.cq, 19u);
-    EXPECT_EQ(b[3].config.output.nvenc_preset, recorder_core::NvencPreset::P4);
+    EXPECT_EQ(b[3].config.output.nvenc_preset, exosnap::engine::NvencPreset::P4);
 
     // No built-in claims an environment field.
     const OutputSettingsModel defaults = OutputSettingsModel::Defaults();
@@ -496,7 +496,7 @@ std::vector<RecordingPreset> MakeBuiltInPresets() {
     quality.id = std::string(kQualityPresetId);
     quality.name = "Quality";
     quality.config.video.cq = 16;
-    quality.config.output.nvenc_preset = recorder_core::NvencPreset::P6;
+    quality.config.output.nvenc_preset = exosnap::engine::NvencPreset::P6;
     result.push_back(std::move(quality));
 
     // Efficiency: small files at usable quality. P6 buys compression with GPU
@@ -504,8 +504,8 @@ std::vector<RecordingPreset> MakeBuiltInPresets() {
     RecordingPreset efficiency = MakeDefaultPreset();
     efficiency.id = std::string(kEfficiencyPresetId);
     efficiency.name = "Efficiency";
-    efficiency.config.video.cq = recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Small);
-    efficiency.config.output.nvenc_preset = recorder_core::NvencPreset::P6;
+    efficiency.config.video.cq = exosnap::engine::CanonicalCq(exosnap::engine::NvencQualityPreset::Small);
+    efficiency.config.output.nvenc_preset = exosnap::engine::NvencPreset::P6;
     result.push_back(std::move(efficiency));
 
     // Compatibility: editing, upload, GPUs without AV1 encode (pre-RTX-40).

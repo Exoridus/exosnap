@@ -33,7 +33,7 @@ struct AutoRecordOptions {
     // Canonical CQ for the run, 1-51, defaulting to the Balanced tier. Spelled as
     // plain integers because this struct is parsed before anything else exists
     // and its test target links Qt only; AutoRecordHarness.cpp static_asserts
-    // them against recorder_core's canonical values, so the duplication cannot
+    // them against the engine's canonical values, so the duplication cannot
     // drift silently.
     static constexpr int kCqMin = 1;
     static constexpr int kCqMax = 51;

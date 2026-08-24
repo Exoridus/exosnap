@@ -1,18 +1,18 @@
 # probe_nvenc_async — live-verify probe for the async NVENC path. Drives
-# the ACTUAL recorder_core
+# the ACTUAL exosnap_engine
 # NvencVideoEncoder/NvencEncoder classes through a real D3D11 + NVENC async
 # session (not a reimplementation of raw SDK calls, unlike probe_nvenc), so
 # the exact shipped code is what gets exercised. Never touches the ExoSnap
 # application itself.
 #
-# Requires the full recorder_core build (NVENC headers present); skipped
-# otherwise. Needs recorder_core's private src/ headers (NvencVideoEncoder is
+# Requires the full exosnap_engine build (NVENC headers present); skipped
+# otherwise. Needs exosnap_engine's private src/ headers (NvencVideoEncoder is
 # not part of the public include/recorder_core API), so this target adds that
-# include path explicitly rather than relying on recorder_core's own (PRIVATE)
+# include path explicitly rather than relying on exosnap_engine's own (PRIVATE)
 # one.
 
-if(NOT TARGET recorder_core)
-    message(STATUS "probe_nvenc_async: recorder_core target not available — skipping")
+if(NOT TARGET exosnap_engine)
+    message(STATUS "probe_nvenc_async: exosnap_engine target not available — skipping")
     return()
 endif()
 
@@ -21,14 +21,14 @@ add_executable(probe_nvenc_async
 )
 
 target_link_libraries(probe_nvenc_async PRIVATE
-    recorder_core
+    exosnap_engine
     exosnap::warnings
     d3d11.lib
     dxgi.lib
 )
 
 target_include_directories(probe_nvenc_async PRIVATE
-    "${CMAKE_SOURCE_DIR}/libs/recorder_core/src"
+    "${CMAKE_SOURCE_DIR}/libs/engine/src"
     "${CMAKE_SOURCE_DIR}/third_party/nvidia"
 )
 

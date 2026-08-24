@@ -14,7 +14,7 @@
 #include <vector>
 
 #include "RecordingMarker.h"
-#include <recorder_core/recorder_session.h>
+#include <exosnap/engine/recorder_session.h>
 
 namespace exosnap {
 
@@ -75,9 +75,9 @@ struct CompletedRecording {
     uint32_t frame_rate_den = 1;
     bool cfr = true;
 
-    recorder_core::Container container = recorder_core::Container::WebM;
-    recorder_core::VideoCodec video_codec = recorder_core::VideoCodec::Av1;
-    recorder_core::AudioCodec audio_codec = recorder_core::AudioCodec::Opus;
+    exosnap::engine::Container container = exosnap::engine::Container::WebM;
+    exosnap::engine::VideoCodec video_codec = exosnap::engine::VideoCodec::Av1;
+    exosnap::engine::AudioCodec audio_codec = exosnap::engine::AudioCodec::Opus;
 
     bool is_display_target = false;
     QDateTime completed_at;

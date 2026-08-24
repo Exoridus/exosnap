@@ -534,7 +534,7 @@ target_link_libraries(exosnap
         # owners directly, so neither is downstream of the other.
         exosnap_observability
         exosnap_miniz
-        recorder_core
+        exosnap_engine
         tomlplusplus::tomlplusplus
         d3d11
         d3dcompiler
@@ -620,7 +620,7 @@ foreach(_producer IN LISTS _exosnap_diag_producers)
     endif()
 endforeach()
 
-# recorder_core links the FFmpeg-backed recording path even though this slice
+# exosnap_engine links the FFmpeg-backed recording path even though this slice
 # only consumes its preview transport. Keep the development executable
 # launchable from the build tree, matching the shipping target's staging rule.
 foreach(_exosnap_ffmpeg_dll IN LISTS EXOSNAP_FFMPEG_DLLS)
@@ -1036,7 +1036,7 @@ target_link_libraries(edit_timeline_qml_tests
         Qt6::QuickControls2
         Qt6::QuickTest
         exosnap_app_log_test_support
-        recorder_core
+        exosnap_engine
         exosnap::warnings
 )
 
@@ -1077,7 +1077,7 @@ exosnap_add_gtest(
         Qt6::Quick
         exosnap_record_viewmodel_test_support
         exosnap::capability
-        recorder_core
+        exosnap_engine
 )
 
 target_include_directories(record_viewmodel_qml_adapter_tests
@@ -1143,7 +1143,7 @@ exosnap_add_gtest(
         Qt6::Qml
         exosnap_output_model_test_support
         exosnap::capability
-        recorder_core
+        exosnap_engine
 )
 
 target_include_directories(settings_qml_adapter_tests
@@ -1214,7 +1214,7 @@ exosnap_add_gtest(
         Qt6::Qml
         exosnap_app_log_test_support
         exosnap::capability
-        recorder_core
+        exosnap_engine
 )
 
 target_include_directories(device_qml_adapter_tests
@@ -1235,7 +1235,7 @@ exosnap_add_gtest(
     LIBRARIES
         Qt6::Core
         Qt6::Gui
-        recorder_core
+        exosnap_engine
         d3d11
         d3dcompiler
         dxgi
@@ -1273,7 +1273,7 @@ exosnap_add_gtest(
         # keeps that from quietly becoming two readings of it.
         exosnap_observability
         exosnap::capability
-        recorder_core
+        exosnap_engine
 )
 
 target_include_directories(diagnostics_policy_tests
@@ -1416,7 +1416,7 @@ exosnap_add_gtest(
         exosnap_miniz
         exosnap::capability
         exosnap::update
-        recorder_core
+        exosnap_engine
 )
 
 target_include_directories(diagnostics_qml_adapter_tests
@@ -1487,7 +1487,7 @@ exosnap_add_gtest(
         Qt6::Qml
         Qt6::Quick
         exosnap_app_log_test_support
-        recorder_core
+        exosnap_engine
 )
 
 target_include_directories(edit_qml_adapter_tests
@@ -1518,7 +1518,7 @@ exosnap_add_gtest(
         Qt6::Qml
         Qt6::Test
         exosnap_capability
-        recorder_core
+        exosnap_engine
         FFmpeg::mux
 )
 
@@ -1560,7 +1560,7 @@ exosnap_add_gtest(
         Qt6::Qml
         Qt6::Test
         exosnap_capability
-        recorder_core
+        exosnap_engine
         FFmpeg::mux
 )
 
@@ -1596,7 +1596,7 @@ exosnap_add_gtest(
         Qt6::Qml
         exosnap_record_viewmodel_test_support
         exosnap::capability
-        recorder_core
+        exosnap_engine
 )
 
 target_include_directories(overlay_qml_adapter_tests
@@ -1626,7 +1626,7 @@ exosnap_add_gtest(
         Qt6::Qml
         Qt6::Test
         exosnap_capability
-        recorder_core
+        exosnap_engine
 )
 
 target_include_directories(recording_error_qml_adapter_tests
@@ -1660,7 +1660,7 @@ exosnap_add_gtest(
         Qt6::Qml
         Qt6::Test
         exosnap_capability
-        recorder_core
+        exosnap_engine
 )
 
 target_include_directories(notification_toast_qml_tests

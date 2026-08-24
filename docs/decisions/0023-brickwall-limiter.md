@@ -24,7 +24,7 @@ Add a stereo-linked feedforward peak limiter (`BrickwallLimiter`) and apply it t
 the mixed Float32 output inside `MixedAudioSrc`, replacing the hard clamp when
 enabled.
 
-### DSP model (`libs/recorder_core/src/brickwall_limiter.{h,cpp}`)
+### DSP model (`libs/engine/src/brickwall_limiter.{h,cpp}`)
 
 Per interleaved frame:
 

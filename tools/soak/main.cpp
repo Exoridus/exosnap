@@ -29,8 +29,8 @@ extern "C" {
 #include <libavutil/avutil.h>
 }
 
-#include <recorder_core/codec_types.h>
-#include <recorder_core/recorder_session.h>
+#include <exosnap/engine/codec_types.h>
+#include <exosnap/engine/recorder_session.h>
 
 #include "clapper_schedule.h"
 #include "soak_metrics.h"
@@ -49,7 +49,7 @@ extern "C" {
 #include <string>
 #include <thread>
 
-using namespace recorder_core;
+using namespace exosnap::engine;
 
 namespace {
 
@@ -406,14 +406,14 @@ int main(int argc, char* argv[]) {
     std::string err;
 
     if (synthetic) {
-        recorder_core::testutil::SyntheticSessionConfig cfg;
+        exosnap::engine::testutil::SyntheticSessionConfig cfg;
         cfg.video_codec = vcodec;
         cfg.audio_codec = acodec;
         cfg.output_path = out_s;
         cfg.target_seconds = duration_s;
         cfg.realtime_pace = realtime;
         cfg.drive_stats_collector = true;
-        recorder_core::testutil::SyntheticSession session(cfg);
+        exosnap::engine::testutil::SyntheticSession session(cfg);
         session.SetStatsCallback([&](const SessionStats& s) { runner.OnStats(s); });
         session.SetDiagnosticsCallback([&](const RecordingDiagnosticsSnapshot& d) { runner.OnDiagnostics(d); });
         runner.Start(sample_ms / 1000.0);

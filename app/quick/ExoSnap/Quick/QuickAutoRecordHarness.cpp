@@ -281,8 +281,8 @@ int RunQuickAutoRecord(QCoreApplication& app, QuickApplication& application, QQu
     coordinator->SetVideoSettings(preview_video_settings);
 
     const auto want_kind = options.target == auto_record::TargetKind::Window
-                               ? recorder_core::CaptureTarget::Kind::Window
-                               : recorder_core::CaptureTarget::Kind::Monitor;
+                               ? exosnap::engine::CaptureTarget::Kind::Window
+                               : exosnap::engine::CaptureTarget::Kind::Monitor;
     if (!application.selectCaptureTargetForAutomation(want_kind, options.target_window_title)) {
         const QString what = options.target == auto_record::TargetKind::Monitor
                                  ? QStringLiteral("monitor")

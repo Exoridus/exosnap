@@ -197,7 +197,7 @@ has nothing to attach to. Three ownership differences, not one:
    deliberately drops late frames against a media clock. That gate is playback policy and must
    survive into the item.
 3. Conversion differs: preview needs BGRA8/RGB10A2→RGBA; the editor needs planar YUV with matrix,
-   range and HDR10 PQ tone-mapping — i.e. `recorder_core::EditFrameGpuConverter`.
+   range and HDR10 PQ tone-mapping — i.e. `exosnap::engine::EditFrameGpuConverter`.
 
 **Build `ExoEditPlayerItem` as a sibling that reuses the skeleton, not the transport:**
 `updatePaintNode` with `QSGImageNode` under `QSGClipNode`, generation counters,

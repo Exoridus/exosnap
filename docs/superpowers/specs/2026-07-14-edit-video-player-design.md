@@ -60,7 +60,7 @@ the user; the ExoSnap-side decode module cannot be implemented before that relea
 
 ## Architecture
 
-### Engine: new decode module in `libs/recorder_core`
+### Engine: new decode module in `libs/engine`
 
 A new, UI-agnostic component (no Qt types in its interface — same posture as `mp4_remuxer` and
 `yuv_to_bgra`, unit-testable without a window or audio device) that:
@@ -82,7 +82,7 @@ A new, UI-agnostic component (no Qt types in its interface — same posture as `
 ### Video pixel path: extend `yuv_to_bgra`, do not reach for `swscale`
 
 Software decoders for H.264/HEVC/AV1 produce fully-planar `YUV420P` (separate Y/U/V planes), not the
-semi-planar NV12/P010 layout `recorder_core::ConvertYuv420ToBgra` currently expects (that helper was
+semi-planar NV12/P010 layout `exosnap::engine::ConvertYuv420ToBgra` currently expects (that helper was
 written for the DXGI capture/encode surfaces, which are semi-planar). Since `swscale` is not
 vendored and adding it means another companion-repo change, `yuv_to_bgra.h`/`.cpp` gets a sibling
 struct + function for fully-planar YUV420 (separate Y/U/V pointers and strides) sharing the exact

@@ -24,7 +24,7 @@
 
 #include <cstdint>
 
-#include <recorder_core/pipeline_diagnostics.h>
+#include <exosnap/engine/pipeline_diagnostics.h>
 
 namespace exosnap::diagnostics {
 
@@ -39,7 +39,7 @@ struct AudioDegradationSample {
     // RecordingDiagnosticsSnapshot::valid — false means "idle / no data", which
     // is not a measurement of health and must never raise anything.
     bool valid = false;
-    recorder_core::DiagnosticsLifecycle lifecycle = recorder_core::DiagnosticsLifecycle::Idle;
+    exosnap::engine::DiagnosticsLifecycle lifecycle = exosnap::engine::DiagnosticsLifecycle::Idle;
     // AudioDiagnostics::source_degraded / degraded_sources.
     bool source_degraded = false;
     uint32_t degraded_sources = 0;
@@ -56,7 +56,7 @@ enum class AudioDegradationSignal : uint8_t {
 // audio threads keep the endpoints open across a pause, so a device unplugged
 // while paused is a real outage the user will hit on resume. Initializing,
 // Stopping, Completed, Failed and Idle report no health at all.
-[[nodiscard]] bool AudioDegradationObservable(recorder_core::DiagnosticsLifecycle lifecycle) noexcept;
+[[nodiscard]] bool AudioDegradationObservable(exosnap::engine::DiagnosticsLifecycle lifecycle) noexcept;
 
 // PURE. Owns the whole latching contract:
 //

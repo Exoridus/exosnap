@@ -30,7 +30,7 @@
 
 #include <windows.h>
 
-#include <recorder_core/preview_tap.h>
+#include <exosnap/engine/preview_tap.h>
 
 #include "services/CaptureHubCommandQueue.h"
 
@@ -47,7 +47,7 @@ class DxgiCaptureHubService {
     // after the first frame, and again if the desktop changes size or format.
     // Ownership of the NT handle transfers to the sink (open, then CloseHandle).
     using HandleSink =
-        std::function<void(void* nt_handle, uint32_t width, uint32_t height, recorder_core::PreviewTapDesc tap)>;
+        std::function<void(void* nt_handle, uint32_t width, uint32_t height, exosnap::engine::PreviewTapDesc tap)>;
     // Fired on the pump thread after every frame that actually reached the
     // shared texture — the "there is something new to take" edge the keyed-mutex
     // transport itself cannot express. A consumer without it can only poll, and

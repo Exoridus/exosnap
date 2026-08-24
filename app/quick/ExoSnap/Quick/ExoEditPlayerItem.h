@@ -7,7 +7,7 @@
 #include <QString>
 #include <QtQmlIntegration/qqmlintegration.h>
 
-#include <recorder_core/edit_player_engine.h>
+#include <exosnap/engine/edit_player_engine.h>
 
 #include <atomic>
 #include <cstdint>
@@ -63,7 +63,7 @@ class ExoEditPlayerItem : public QQuickItem {
 
     // Called from the decoder's own worker thread. Newest-wins: an undrawn frame
     // is superseded rather than queued.
-    void presentFrame(recorder_core::RawDecodedVideoFrame frame);
+    void presentFrame(exosnap::engine::RawDecodedVideoFrame frame);
     // Playback clock in absolute media time (µs), or negative for "no clock".
     // Safe from any thread; read by the present gate above.
     void setClockUs(int64_t media_time_us) noexcept;
@@ -87,7 +87,7 @@ class ExoEditPlayerItem : public QQuickItem {
     // Render-thread transport state. Public only so the scene-graph node
     // implemented in the .cpp can consume it; this is not a QML API.
     struct PendingFrame {
-        std::optional<recorder_core::RawDecodedVideoFrame> frame;
+        std::optional<exosnap::engine::RawDecodedVideoFrame> frame;
         quint64 generation = 0;
         bool clear = false;
     };

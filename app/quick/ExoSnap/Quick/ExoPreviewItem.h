@@ -10,7 +10,7 @@
 #include <QRectF>
 #include <QSize>
 
-#include <recorder_core/preview_tap.h>
+#include <exosnap/engine/preview_tap.h>
 
 #include <array>
 #include <atomic>
@@ -60,7 +60,7 @@ class ExoPreviewItem : public QQuickItem {
 
     // GUI-thread handoff. Ownership of nt_handle transfers to this item. The
     // handle is opened and closed on the scene-graph render thread.
-    void presentSharedTexture(void* nt_handle, uint32_t width, uint32_t height, recorder_core::PreviewTapDesc tap);
+    void presentSharedTexture(void* nt_handle, uint32_t width, uint32_t height, exosnap::engine::PreviewTapDesc tap);
     void clearSharedTexture();
 
     // GUI thread. One scene update because something the preview shows may have
@@ -90,7 +90,7 @@ class ExoPreviewItem : public QQuickItem {
         void* handle = nullptr;
         uint32_t width = 0;
         uint32_t height = 0;
-        recorder_core::PreviewTapDesc tap{};
+        exosnap::engine::PreviewTapDesc tap{};
         quint64 generation = 0;
         bool clear = false;
     };

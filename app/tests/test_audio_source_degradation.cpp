@@ -15,7 +15,7 @@
 #include <gtest/gtest.h>
 
 using namespace exosnap::diagnostics;
-using recorder_core::DiagnosticsLifecycle;
+using exosnap::engine::DiagnosticsLifecycle;
 
 namespace {
 

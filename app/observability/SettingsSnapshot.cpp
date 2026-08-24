@@ -42,8 +42,8 @@ QString SplitModeName(SplitRecordingMode mode) {
     return QStringLiteral("off");
 }
 
-QString MicChannelModeName(recorder_core::MicChannelMode mode) {
-    using recorder_core::MicChannelMode;
+QString MicChannelModeName(exosnap::engine::MicChannelMode mode) {
+    using exosnap::engine::MicChannelMode;
     switch (mode) {
     case MicChannelMode::Auto:
         return QStringLiteral("auto");
@@ -59,8 +59,8 @@ QString MicChannelModeName(recorder_core::MicChannelMode mode) {
     return QStringLiteral("auto");
 }
 
-QString AudioSourceKindName(recorder_core::AudioSourceKind kind) {
-    using recorder_core::AudioSourceKind;
+QString AudioSourceKindName(exosnap::engine::AudioSourceKind kind) {
+    using exosnap::engine::AudioSourceKind;
     switch (kind) {
     case AudioSourceKind::App:
         return QStringLiteral("app");
@@ -127,7 +127,7 @@ QJsonObject AudioConfigJson(const capability::AudioUiState& audio) {
     json.insert(QStringLiteral("pcmFloat"), audio.audio_pcm_float);
     json.insert(QStringLiteral("flacCompressionLevel"), audio.flac_compression_level);
     json.insert(QStringLiteral("opusFrameDurationSamples"),
-                static_cast<double>(recorder_core::OpusFrameSizeSamples(audio.opus_frame_duration)));
+                static_cast<double>(exosnap::engine::OpusFrameSizeSamples(audio.opus_frame_duration)));
     json.insert(QStringLiteral("opusComplexity"), audio.opus_complexity);
     json.insert(QStringLiteral("limiterEnabled"), audio.limiter_enabled);
     json.insert(QStringLiteral("limiterCeilingDb"), static_cast<double>(audio.limiter_ceiling_db));
@@ -152,7 +152,7 @@ QJsonObject AudioConfigJson(const capability::AudioUiState& audio) {
     // what makes a row share a track with the one above it. Serialized in order,
     // never as a set.
     QJsonArray rows;
-    for (const recorder_core::AudioSourceRow& row : audio.source_rows) {
+    for (const exosnap::engine::AudioSourceRow& row : audio.source_rows) {
         QJsonObject entry;
         entry.insert(QStringLiteral("source"), AudioSourceKindName(row.kind));
         entry.insert(QStringLiteral("enabled"), row.enabled);
@@ -328,7 +328,7 @@ QJsonObject ConstraintsJson(const capability::ResolveResult& resolution, bool pr
     return json;
 }
 
-QJsonObject RunningJson(const recorder_core::EncoderInitInfo& init, bool live) {
+QJsonObject RunningJson(const exosnap::engine::EncoderInitInfo& init, bool live) {
     QJsonObject json;
     json.insert(QStringLiteral("valid"), init.valid);
     json.insert(QStringLiteral("live"), live);

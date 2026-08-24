@@ -2,7 +2,7 @@
 
 #include "services/AtomicFileOps.h"
 
-#include <recorder_core/mp4_remuxer.h>
+#include <exosnap/engine/mp4_remuxer.h>
 
 #include <QDir>
 #include <QFileInfo>
@@ -15,9 +15,9 @@ namespace exosnap {
 namespace {
 
 // Build a no-op or wrapping RemuxProgressCallback from the caller's bool-returning lambda.
-recorder_core::RemuxProgressCallback WrapProgress(std::function<bool(float)> cb) {
+exosnap::engine::RemuxProgressCallback WrapProgress(std::function<bool(float)> cb) {
     if (!cb)
-        return recorder_core::RemuxNoopCallback();
+        return exosnap::engine::RemuxNoopCallback();
     return [cb = std::move(cb)](float f) -> bool { return cb(f); };
 }
 
@@ -167,7 +167,7 @@ RecoveryActionResult RecoveryService::Finish(const RecoveryManifestEntry& entry,
         // half-written MKV.
         const std::filesystem::path repair_target = resolve_remux_target(preferred);
         const std::filesystem::path temp = MakeSiblingTempPath(repair_target);
-        const auto result = recorder_core::RemuxToMkv(artefact, temp, WrapProgress(std::move(progress_cb)));
+        const auto result = exosnap::engine::RemuxToMkv(artefact, temp, WrapProgress(std::move(progress_cb)));
         if (!result.success) {
             // The repair did not complete cleanly — the artefact (the original,
             // possibly-unfinalized MKV) is the only trustworthy recording and
@@ -211,7 +211,7 @@ RecoveryActionResult RecoveryService::Finish(const RecoveryManifestEntry& entry,
     const std::filesystem::path target = resolve_remux_target(preferred);
     const std::filesystem::path temp = MakeSiblingTempPath(target);
 
-    const auto result = recorder_core::RemuxToProgressiveMp4(artefact, temp, WrapProgress(std::move(progress_cb)));
+    const auto result = exosnap::engine::RemuxToProgressiveMp4(artefact, temp, WrapProgress(std::move(progress_cb)));
     if (!result.success) {
         // The remux did not complete cleanly — the artefact (playable MKV) is the
         // only trustworthy recording and must be kept. Remove the abandoned temp; the

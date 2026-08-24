@@ -4,7 +4,7 @@
 
 **Goal:** Implement the Edit/Output/Save workflow (0.9.0 S1) — Quick Trim engine, keyframe-interval setting, marker sidecar load, EditExportPage wiring (Review post-flight / Edit trim / Output stream-copy / atomic Save), and MKV master retention for MP4 sessions.
 
-**Architecture:** The engine (recorder_core) remains UI-agnostic; all trim/remux logic extends `mp4_remuxer` with a `TrimRange` overload and `ExtractKeyframeTimestamps()` utility. The app layer retains the MKV master after MP4 remux (renamed companion file) and passes it to `EditExportPage` via an extended `EditContext`. The export path re-uses the existing `RemuxToProgressiveMp4` / `RemuxToMkv` functions with a trim range applied.
+**Architecture:** The engine (engine) remains UI-agnostic; all trim/remux logic extends `mp4_remuxer` with a `TrimRange` overload and `ExtractKeyframeTimestamps()` utility. The app layer retains the MKV master after MP4 remux (renamed companion file) and passes it to `EditExportPage` via an extended `EditContext`. The export path re-uses the existing `RemuxToProgressiveMp4` / `RemuxToMkv` functions with a trim range applied.
 
 **Tech Stack:** C++20 (Windows/MSVC), Qt 6.9 Widgets, libavformat (already linked via `FFmpeg::mux`), GTest, CMake Ninja preset `windows-x64-debug`.
 
@@ -12,7 +12,7 @@
 
 - Build preset: `windows-x64-debug` in `build/windows-x64-debug` (VS-tree; do NOT re-configure).
 - Run exe only with `C:\Qt\6.9.0\msvc2022_64\bin` prepended to PATH.
-- Do NOT touch `libs/recorder_core/src/video_thread.cpp` or `WebcamService.*`.
+- Do NOT touch `libs/engine/src/video_thread.cpp` or `WebcamService.*`.
 - No re-encode anywhere — stream-copy only.
 - No auto-open of EditExportPage on stop.
 - No MVP expansion beyond the locked model.
@@ -27,15 +27,15 @@
 ## File Map
 
 ### Created
-- `libs/recorder_core/tests/test_remux_trim.cpp` — trim range + keyframe extraction tests
+- `libs/engine/tests/test_remux_trim.cpp` — trim range + keyframe extraction tests
 - `app/tests/test_edit_context.cpp` — EditContext model + marker sidecar round-trip tests
 
 ### Modified
-- `libs/recorder_core/include/recorder_core/mp4_remuxer.h` — `TrimRange`, `ExtractKeyframeTimestamps()`, trimmed overloads
-- `libs/recorder_core/src/mp4_remuxer.cpp` — implement trim via `av_seek_frame` + PTS cutoff
-- `libs/recorder_core/CMakeLists.txt` — register `test_remux_trim` test target
-- `libs/recorder_core/include/recorder_core/recorder_session.h` — add `keyframe_interval_secs` to `RecorderConfig`
-- `libs/recorder_core/src/nvenc_encoder.cpp` — use `keyframe_interval_secs` in `InitEncoder`
+- `libs/engine/include/exosnap/engine/mp4_remuxer.h` — `TrimRange`, `ExtractKeyframeTimestamps()`, trimmed overloads
+- `libs/engine/src/mp4_remuxer.cpp` — implement trim via `av_seek_frame` + PTS cutoff
+- `libs/engine/CMakeLists.txt` — register `test_remux_trim` test target
+- `libs/engine/include/exosnap/engine/recorder_session.h` — add `keyframe_interval_secs` to `RecorderConfig`
+- `libs/engine/src/nvenc_encoder.cpp` — use `keyframe_interval_secs` in `InitEncoder`
 - `app/models/VideoSettingsModel.h` — add `KeyframeIntervalMode` enum + field
 - `app/models/SettingsHintText.h` — add `kKeyframeInterval` hint text
 - `app/services/RecordingCoordinator.h` — add `mkv_master_path_` field + `MkvMasterPath()` accessor
@@ -57,10 +57,10 @@
 ## Task 1: Engine — Trim Range + Keyframe Extraction
 
 **Files:**
-- Modify: `libs/recorder_core/include/recorder_core/mp4_remuxer.h`
-- Modify: `libs/recorder_core/src/mp4_remuxer.cpp`
-- Create: `libs/recorder_core/tests/test_remux_trim.cpp`
-- Modify: `libs/recorder_core/CMakeLists.txt`
+- Modify: `libs/engine/include/exosnap/engine/mp4_remuxer.h`
+- Modify: `libs/engine/src/mp4_remuxer.cpp`
+- Create: `libs/engine/tests/test_remux_trim.cpp`
+- Modify: `libs/engine/CMakeLists.txt`
 
 **Interfaces:**
 - Produces:
@@ -71,7 +71,7 @@
 
 - [ ] **Step 1: Write the failing tests**
 
-Create `libs/recorder_core/tests/test_remux_trim.cpp`:
+Create `libs/engine/tests/test_remux_trim.cpp`:
 
 ```cpp
 // test_remux_trim.cpp — tests for TrimRange remux and keyframe extraction
@@ -86,16 +86,16 @@ static inline const char* av_err2str_trim_test(int e) noexcept {
 }
 #include <gtest/gtest.h>
 #include "matroska_stream_writer.h"
-#include "recorder_core/mp4_remuxer.h"
+#include "exosnap/engine/mp4_remuxer.h"
 #include <filesystem>
 #include <cstdio>
 #include <vector>
 #include <algorithm>
 
-using namespace recorder_core;
-using recorder_core::MatroskaStreamConfig;
-using recorder_core::MatroskaStreamWriter;
-using recorder_core::MuxPacket;
+using namespace exosnap::engine;
+using exosnap::engine::MatroskaStreamConfig;
+using exosnap::engine::MatroskaStreamWriter;
+using exosnap::engine::MuxPacket;
 
 // ---------- helpers ----------
 
@@ -248,14 +248,14 @@ TEST_F(TrimTest, TrimToMkv) {
 
 - [ ] **Step 2: Register test in CMakeLists — verify it fails to compile**
 
-In `libs/recorder_core/CMakeLists.txt`, find the block after `add_executable(test_mp4_remuxer ...)` block and add:
+In `libs/engine/CMakeLists.txt`, find the block after `add_executable(test_mp4_remuxer ...)` block and add:
 
 ```cmake
     add_executable(test_remux_trim tests/test_remux_trim.cpp)
     target_link_libraries(test_remux_trim PRIVATE
         GTest::gtest_main
         exosnap::warnings
-        recorder_core EBML::ebml Matroska::matroska FFmpeg::mux
+        engine EBML::ebml Matroska::matroska FFmpeg::mux
     )
     target_include_directories(test_remux_trim PRIVATE src)
     foreach(_ffmpeg_dll IN LISTS EXOSNAP_FFMPEG_DLLS)
@@ -267,7 +267,7 @@ In `libs/recorder_core/CMakeLists.txt`, find the block after `add_executable(tes
         )
     endforeach()
     include(GoogleTest)
-    gtest_discover_tests(test_remux_trim TEST_PREFIX "recorder_core.")
+    gtest_discover_tests(test_remux_trim TEST_PREFIX "engine.")
 ```
 
 Run: `cmake --build build/windows-x64-debug --target test_remux_trim 2>&1 | head -30`
@@ -275,7 +275,7 @@ Expected: compile error — `TrimRange` and `ExtractKeyframeTimestamps` not defi
 
 - [ ] **Step 3: Add TrimRange + ExtractKeyframeTimestamps to the header**
 
-In `libs/recorder_core/include/recorder_core/mp4_remuxer.h`, after the `RemuxNoopCallback()` inline function, add:
+In `libs/engine/include/exosnap/engine/mp4_remuxer.h`, after the `RemuxNoopCallback()` inline function, add:
 
 ```cpp
 // Trim window: both fields are in AV_TIME_BASE microseconds (same unit as
@@ -314,7 +314,7 @@ Also add `#include <cstdint>` and `#include <vector>` if not already present at 
 
 - [ ] **Step 4: Implement trim + keyframe extraction in mp4_remuxer.cpp**
 
-Add these inside the `recorder_core` namespace in `libs/recorder_core/src/mp4_remuxer.cpp`:
+Add these inside the `engine` namespace in `libs/engine/src/mp4_remuxer.cpp`:
 
 ```cpp
 // ExtractKeyframeTimestamps — scan for keyframe PTS without decoding.
@@ -458,10 +458,10 @@ Expected: All TrimTest.* PASS. Record pass count.
 - [ ] **Step 6: Commit**
 
 ```powershell
-git add libs/recorder_core/include/recorder_core/mp4_remuxer.h
-git add libs/recorder_core/src/mp4_remuxer.cpp
-git add libs/recorder_core/tests/test_remux_trim.cpp
-git add libs/recorder_core/CMakeLists.txt
+git add libs/engine/include/exosnap/engine/mp4_remuxer.h
+git add libs/engine/src/mp4_remuxer.cpp
+git add libs/engine/tests/test_remux_trim.cpp
+git add libs/engine/CMakeLists.txt
 git commit -m "feat(engine): add TrimRange stream-copy + ExtractKeyframeTimestamps to remuxer"
 ```
 
@@ -470,8 +470,8 @@ git commit -m "feat(engine): add TrimRange stream-copy + ExtractKeyframeTimestam
 ## Task 2: Keyframe-Interval Setting
 
 **Files:**
-- Modify: `libs/recorder_core/include/recorder_core/recorder_session.h` — add `keyframe_interval_secs` to `RecorderConfig`
-- Modify: `libs/recorder_core/src/nvenc_encoder.cpp` — use field in `InitEncoder`
+- Modify: `libs/engine/include/exosnap/engine/recorder_session.h` — add `keyframe_interval_secs` to `RecorderConfig`
+- Modify: `libs/engine/src/nvenc_encoder.cpp` — use field in `InitEncoder`
 - Modify: `app/models/VideoSettingsModel.h` — add `KeyframeIntervalMode` enum + field
 - Modify: `app/models/SettingsHintText.h` — add hint text
 - Modify: `app/services/RecordingCoordinator.cpp` — map mode → `RecorderConfig.keyframe_interval_secs`
@@ -486,7 +486,7 @@ git commit -m "feat(engine): add TrimRange stream-copy + ExtractKeyframeTimestam
 
 - [ ] **Step 1: Add field to RecorderConfig**
 
-In `libs/recorder_core/include/recorder_core/recorder_session.h`, inside `struct RecorderConfig`, add after `frame_rate_den`:
+In `libs/engine/include/exosnap/engine/recorder_session.h`, inside `struct RecorderConfig`, add after `frame_rate_den`:
 
 ```cpp
     // Keyframe interval in seconds. Used by NVENC as: gopLength = round(interval_secs * fps).
@@ -497,7 +497,7 @@ In `libs/recorder_core/include/recorder_core/recorder_session.h`, inside `struct
 
 - [ ] **Step 2: Wire keyframe_interval_secs in NvencEncoder::InitEncoder**
 
-In `libs/recorder_core/src/nvenc_encoder.cpp`, find the existing `kGopFrames` computation (~line 579):
+In `libs/engine/src/nvenc_encoder.cpp`, find the existing `kGopFrames` computation (~line 579):
 
 ```cpp
     // 2-second keyframe interval — recording-friendly default.
@@ -533,7 +533,7 @@ Then in `InitEncoder`, replace the hardcoded `2ull`:
 Search for where `NvencEncoder` is constructed and its setters are called in the codebase. This is typically in `nvenc_video_encoder.cpp` or `video_thread.cpp`. Since `video_thread.cpp` is off-limits, check `nvenc_video_encoder.cpp`:
 
 ```powershell
-grep -n "SetCodec\|SetRateControl\|SetBitDepth\|NvencEncoder" "libs/recorder_core/src/nvenc_video_encoder.cpp" | head -20
+grep -n "SetCodec\|SetRateControl\|SetBitDepth\|NvencEncoder" "libs/engine/src/nvenc_video_encoder.cpp" | head -20
 ```
 
 In `nvenc_video_encoder.cpp`, find where other setters are called and add:
@@ -553,11 +553,11 @@ enum class KeyframeIntervalMode {
 };
 
 struct VideoSettingsModel {
-    recorder_core::NvencQualityPreset quality = recorder_core::NvencQualityPreset::Balanced;
-    recorder_core::RateControlMode rate_control = recorder_core::RateControlMode::ConstantQuality;
+    exosnap::engine::NvencQualityPreset quality = exosnap::engine::NvencQualityPreset::Balanced;
+    exosnap::engine::RateControlMode rate_control = exosnap::engine::RateControlMode::ConstantQuality;
     uint32_t bitrate_kbps = 20000;
     bool cfr = true;
-    recorder_core::FramePacingMode frame_pacing = recorder_core::FramePacingMode::Smooth;
+    exosnap::engine::FramePacingMode frame_pacing = exosnap::engine::FramePacingMode::Smooth;
     bool capture_cursor = true;
     uint32_t frame_rate_num = 60;
     uint32_t frame_rate_den = 1;
@@ -646,10 +646,10 @@ Expected: clean build. Launch app and verify the Keyframe Interval combo appears
 - [ ] **Step 9: Commit**
 
 ```powershell
-git add libs/recorder_core/include/recorder_core/recorder_session.h
-git add libs/recorder_core/src/nvenc_encoder.cpp
-git add libs/recorder_core/src/nvenc_encoder.h
-git add libs/recorder_core/src/nvenc_video_encoder.cpp
+git add libs/engine/include/exosnap/engine/recorder_session.h
+git add libs/engine/src/nvenc_encoder.cpp
+git add libs/engine/src/nvenc_encoder.h
+git add libs/engine/src/nvenc_video_encoder.cpp
 git add app/models/VideoSettingsModel.h
 git add app/models/SettingsHintText.h
 git add app/services/RecordingCoordinator.cpp
@@ -742,7 +742,7 @@ In `RecordingCoordinator.cpp`, in `RecordingThreadProc` (or wherever `ui_result`
     // Set the edit master path:
     //   - MKV target: the output file IS the edit master.
     //   - MP4 target: set after remux in RunRemuxJob (stored in mkv_master_path_).
-    if (config.container != recorder_core::Container::Mp4) {
+    if (config.container != exosnap::engine::Container::Mp4) {
         ui_result.mkv_master_path = output_path.wstring();
     }
     // MP4 path: mkv_master_path_ is filled by RunRemuxJob and propagated there.
@@ -799,7 +799,7 @@ In `app/pages/EditExportPage.h`, add before the `EditExportPage` class:
 ```cpp
 #include <QString>
 #include <vector>
-#include <recorder_core/pipeline_diagnostics.h>
+#include <exosnap/engine/pipeline_diagnostics.h>
 #include "../models/RecordingMarker.h"
 
 namespace exosnap {
@@ -821,7 +821,7 @@ struct EditContext {
     // Post-flight data (from RecordPage diagnostics tracking)
     double peak_av_drift_ms = 0.0;
     bool av_drift_available = false;
-    recorder_core::RecordingDiagnosticsSnapshot completed_snapshot;
+    exosnap::engine::RecordingDiagnosticsSnapshot completed_snapshot;
 
     // Markers (loaded from sidecar — EditExportPage loads the sidecar itself
     // using mkv_master_path; this vector is a pre-loaded fallback from the
@@ -965,7 +965,7 @@ void EditExportPage::setEditContext(const EditContext& ctx) {
     // Load keyframe timestamps for snap (async-safe: run on calling thread, quick for typical files)
     keyframe_timestamps_.clear();
     if (!ctx_.mkv_master_path.isEmpty()) {
-        keyframe_timestamps_ = recorder_core::ExtractKeyframeTimestamps(
+        keyframe_timestamps_ = exosnap::engine::ExtractKeyframeTimestamps(
             std::filesystem::path(ctx_.mkv_master_path.toStdWString()));
     }
 
@@ -995,8 +995,8 @@ Add members to `EditExportPage.h`:
 
 Add include to EditExportPage.h:
 ```cpp
-#include <recorder_core/mp4_remuxer.h>
-#include <recorder_core/pipeline_diagnostics.h>
+#include <exosnap/engine/mp4_remuxer.h>
+#include <exosnap/engine/pipeline_diagnostics.h>
 #include "../models/RecordingMarker.h"
 #include <vector>
 ```
@@ -1074,7 +1074,7 @@ In `setEditContext`, populate review labels (after loading ctx_):
     const auto& snap = ctx_.completed_snapshot;
     const bool has_snap = snap.valid || snap.session_generation > 0;
     if (review_drop_label_) {
-        if (has_snap && snap.frame_drop_availability == recorder_core::MetricAvailability::Available) {
+        if (has_snap && snap.frame_drop_availability == exosnap::engine::MetricAvailability::Available) {
             review_drop_label_->setText(
                 QStringLiteral("Frame drops: %1%").arg(snap.frame_drop_percent, 0, 'f', 1));
         } else {
@@ -1092,9 +1092,9 @@ In `setEditContext`, populate review labels (after loading ctx_):
     if (review_health_label_ && has_snap) {
         const char* health_str = "Unknown";
         switch (snap.health) {
-        case recorder_core::PipelineHealth::Good:    health_str = "Good";    break;
-        case recorder_core::PipelineHealth::Warning: health_str = "Warning"; break;
-        case recorder_core::PipelineHealth::Error:   health_str = "Error";   break;
+        case exosnap::engine::PipelineHealth::Good:    health_str = "Good";    break;
+        case exosnap::engine::PipelineHealth::Warning: health_str = "Warning"; break;
+        case exosnap::engine::PipelineHealth::Error:   health_str = "Error";   break;
         default: break;
         }
         review_health_label_->setText(
@@ -1295,7 +1295,7 @@ Add required includes to `EditExportPage.cpp`:
 #include <QDialogButtonBox>
 #include <algorithm>
 #include "../models/RecordingMarker.h"
-#include <recorder_core/mp4_remuxer.h>
+#include <exosnap/engine/mp4_remuxer.h>
 #include <filesystem>
 ```
 
@@ -1360,7 +1360,7 @@ void EditExportPage::runExport() {
         output_path = base.parent_path() / (base.stem().wstring() + L"_edit" + ext);
     }
 
-    recorder_core::TrimRange tr;
+    exosnap::engine::TrimRange tr;
     tr.start_us = trim_start_us_;
     tr.end_us   = trim_end_us_;
 
@@ -1381,11 +1381,11 @@ void EditExportPage::runExport() {
             return true;
         };
 
-        recorder_core::RemuxResult res;
+        exosnap::engine::RemuxResult res;
         if (to_mp4) {
-            res = recorder_core::RemuxToProgressiveMp4(master, temp_output, progress_cb, tr);
+            res = exosnap::engine::RemuxToProgressiveMp4(master, temp_output, progress_cb, tr);
         } else {
-            res = recorder_core::RemuxToMkv(master, temp_output, progress_cb, tr);
+            res = exosnap::engine::RemuxToMkv(master, temp_output, progress_cb, tr);
         }
 
         bool ok = res.success;

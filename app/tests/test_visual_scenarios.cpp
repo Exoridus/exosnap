@@ -350,7 +350,7 @@ TEST(VisualScenarioTest, ScenarioParserAcceptsOptionalQualityCq) {
     scenario.quality_cq = 16;
     EXPECT_TRUE(ValidateVisualScenario(scenario, &error));
 
-    // Out of recorder_core::kCqMin..kCqMax (1-51) is rejected.
+    // Out of exosnap::engine::kCqMin..kCqMax (1-51) is rejected.
     scenario.quality_cq = 52;
     EXPECT_FALSE(ValidateVisualScenario(scenario, &error));
     EXPECT_TRUE(error.contains(QStringLiteral("quality"), Qt::CaseInsensitive));

@@ -3,8 +3,8 @@
 namespace exosnap::visual {
 namespace {
 
-using recorder_core::MetricAvailability;
-using recorder_core::RecordingDiagnosticsSnapshot;
+using exosnap::engine::MetricAvailability;
+using exosnap::engine::RecordingDiagnosticsSnapshot;
 
 // A 60 fps 2560x1440 AV1 recording that is going well. Every scenario below
 // starts here and breaks exactly one thing, so a capture difference is the
@@ -13,17 +13,17 @@ RecordingDiagnosticsSnapshot Baseline() {
     RecordingDiagnosticsSnapshot s;
     s.valid = true;
     s.session_generation = 1;
-    s.lifecycle = recorder_core::DiagnosticsLifecycle::Recording;
+    s.lifecycle = exosnap::engine::DiagnosticsLifecycle::Recording;
     s.elapsed_seconds = 184.0;
-    s.health = recorder_core::PipelineHealth::Good;
-    s.bottleneck = recorder_core::PipelineBottleneck::None;
+    s.health = exosnap::engine::PipelineHealth::Good;
+    s.bottleneck = exosnap::engine::PipelineBottleneck::None;
 
     s.capture.target_fps = 60.0;
     s.capture.actual_fps = 59.98;
     s.capture.frames_captured = 11040;
     s.capture.frames_emitted = 11038;
     s.capture.frames_dropped_coalesced = 622;
-    s.capture.source_type = recorder_core::CaptureSourceType::Display;
+    s.capture.source_type = exosnap::engine::CaptureSourceType::Display;
     s.capture.present_cadence_availability = MetricAvailability::Available;
     s.capture.source_present_interval_ms = 8.33;
     s.capture.source_present_jitter_ms = 1.2;
@@ -39,7 +39,7 @@ RecordingDiagnosticsSnapshot Baseline() {
     s.compositor.peak_ms = 1.9;
     s.compositor.frames_composed = 11038;
 
-    s.video_encoder.codec = recorder_core::VideoCodec::Av1;
+    s.video_encoder.codec = exosnap::engine::VideoCodec::Av1;
     s.video_encoder.width = 2560;
     s.video_encoder.height = 1440;
     s.video_encoder.frames_submitted = 11038;
@@ -52,9 +52,9 @@ RecordingDiagnosticsSnapshot Baseline() {
     s.video_encoder.output_fps = 59.97;
 
     s.encoder_init.valid = true;
-    s.encoder_init.codec = recorder_core::VideoCodec::Av1;
-    s.encoder_init.preset = recorder_core::NvencPreset::P6;
-    s.encoder_init.rc_mode = recorder_core::RateControlMode::ConstantQuality;
+    s.encoder_init.codec = exosnap::engine::VideoCodec::Av1;
+    s.encoder_init.preset = exosnap::engine::NvencPreset::P6;
+    s.encoder_init.rc_mode = exosnap::engine::RateControlMode::ConstantQuality;
     s.encoder_init.cq = 17;
     s.encoder_init.gop_length = 120;
 
@@ -68,7 +68,7 @@ RecordingDiagnosticsSnapshot Baseline() {
     s.audio.sample_rate = 48000;
     s.audio.channels = 2;
     s.audio.track_count = 1;
-    s.audio.codec = recorder_core::AudioCodec::Opus;
+    s.audio.codec = exosnap::engine::AudioCodec::Opus;
     s.audio.packets_encoded = 9200;
     s.audio.bytes_encoded = 3'400'000;
 
@@ -98,7 +98,7 @@ RecordingDiagnosticsSnapshot Baseline() {
 
 // Present diagnostics as they look when the user HAS opted in and is running
 // elevated. Off in every other scenario, which is the shipped default.
-void WithPresentObserved(RecordingDiagnosticsSnapshot& s, recorder_core::PresentMode mode, bool tearing) {
+void WithPresentObserved(RecordingDiagnosticsSnapshot& s, exosnap::engine::PresentMode mode, bool tearing) {
     s.capture.present_mode_availability = MetricAvailability::Available;
     s.capture.source_present_mode = mode;
     s.capture.source_tearing = tearing;
@@ -113,7 +113,7 @@ RecordingDiagnosticsSnapshot MakeDiagnosticsLiveSnapshot(const QString& kind) {
     RecordingDiagnosticsSnapshot s = Baseline();
 
     if (kind == QLatin1String("healthy")) {
-        WithPresentObserved(s, recorder_core::PresentMode::IndependentFlip, /*tearing=*/false);
+        WithPresentObserved(s, exosnap::engine::PresentMode::IndependentFlip, /*tearing=*/false);
         return s;
     }
     if (kind == QLatin1String("present-unavailable")) {
@@ -123,8 +123,8 @@ RecordingDiagnosticsSnapshot MakeDiagnosticsLiveSnapshot(const QString& kind) {
         return s;
     }
     if (kind == QLatin1String("encoder")) {
-        s.health = recorder_core::PipelineHealth::Warning;
-        s.bottleneck = recorder_core::PipelineBottleneck::VideoEncoder;
+        s.health = exosnap::engine::PipelineHealth::Warning;
+        s.bottleneck = exosnap::engine::PipelineBottleneck::VideoEncoder;
         s.bottleneck_reason = "Encoder latency is approaching the frame budget.";
         s.video_encoder.latest_ms = 14.8;
         s.video_encoder.average_ms = 13.1;
@@ -138,8 +138,8 @@ RecordingDiagnosticsSnapshot MakeDiagnosticsLiveSnapshot(const QString& kind) {
         return s;
     }
     if (kind == QLatin1String("disk")) {
-        s.health = recorder_core::PipelineHealth::Warning;
-        s.bottleneck = recorder_core::PipelineBottleneck::Disk;
+        s.health = exosnap::engine::PipelineHealth::Warning;
+        s.bottleneck = exosnap::engine::PipelineBottleneck::Disk;
         s.bottleneck_reason = "Write latency is above the sustained output rate.";
         s.disk.throughput_mib_s = 21.0;
         s.disk.latest_write_ms = 48.0;
@@ -151,10 +151,10 @@ RecordingDiagnosticsSnapshot MakeDiagnosticsLiveSnapshot(const QString& kind) {
         return s;
     }
     if (kind == QLatin1String("judder")) {
-        s.health = recorder_core::PipelineHealth::Warning;
-        s.bottleneck = recorder_core::PipelineBottleneck::Capture;
+        s.health = exosnap::engine::PipelineHealth::Warning;
+        s.bottleneck = exosnap::engine::PipelineBottleneck::Capture;
         s.bottleneck_reason = "The source is presenting irregularly.";
-        WithPresentObserved(s, recorder_core::PresentMode::Composed, /*tearing=*/true);
+        WithPresentObserved(s, exosnap::engine::PresentMode::Composed, /*tearing=*/true);
         s.capture.source_present_jitter_ms = 7.9;
         s.capture.actual_fps = 58.1;
         return s;
@@ -168,14 +168,14 @@ RecordingDiagnosticsSnapshot MakeDiagnosticsLiveSnapshot(const QString& kind) {
         return s;
     }
     if (kind == QLatin1String("paused")) {
-        s.lifecycle = recorder_core::DiagnosticsLifecycle::Paused;
+        s.lifecycle = exosnap::engine::DiagnosticsLifecycle::Paused;
         return s;
     }
     if (kind == QLatin1String("split")) {
         s.split.split_pending = true;
         s.split.completed_segments = 2;
         s.split.current_segment = 3;
-        s.split.last_trigger = recorder_core::DiagnosticsSplitTrigger::AutomaticDuration;
+        s.split.last_trigger = exosnap::engine::DiagnosticsSplitTrigger::AutomaticDuration;
         s.split.last_finalize_ms = 42.0;
         s.mux.segment_count = 3;
         s.mux.split_transitions = 2;
@@ -183,7 +183,7 @@ RecordingDiagnosticsSnapshot MakeDiagnosticsLiveSnapshot(const QString& kind) {
         return s;
     }
     if (kind == QLatin1String("post")) {
-        s.lifecycle = recorder_core::DiagnosticsLifecycle::Completed;
+        s.lifecycle = exosnap::engine::DiagnosticsLifecycle::Completed;
         s.duration_skew_availability = MetricAvailability::Available;
         s.duration_skew_ms = 12.0;
         return s;

@@ -93,15 +93,15 @@ TEST(SoakSynthetic, ProducesValidFileAndNonEmptyTimeline) {
 
     SoakRunner runner(SoakThresholds{}, sampler, jsonl);
 
-    recorder_core::testutil::SyntheticSessionConfig cfg;
+    exosnap::engine::testutil::SyntheticSessionConfig cfg;
     cfg.output_path = mkv;
     cfg.target_seconds = 2.5;
     cfg.realtime_pace = true;
     cfg.drive_stats_collector = true;
-    recorder_core::testutil::SyntheticSession session(cfg);
-    session.SetStatsCallback([&](const recorder_core::SessionStats& s) { runner.OnStats(s); });
+    exosnap::engine::testutil::SyntheticSession session(cfg);
+    session.SetStatsCallback([&](const exosnap::engine::SessionStats& s) { runner.OnStats(s); });
     session.SetDiagnosticsCallback(
-        [&](const recorder_core::RecordingDiagnosticsSnapshot& d) { runner.OnDiagnostics(d); });
+        [&](const exosnap::engine::RecordingDiagnosticsSnapshot& d) { runner.OnDiagnostics(d); });
 
     runner.Start(0.2);
     const auto result = session.Run();

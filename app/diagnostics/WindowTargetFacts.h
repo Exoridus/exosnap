@@ -22,7 +22,7 @@
 
 #include <windows.h>
 
-#include <recorder_core/capture_hub_policy.h> // recorder_core::HubFrameKind
+#include <exosnap/engine/capture_hub_policy.h> // exosnap::engine::HubFrameKind
 
 namespace exosnap::diagnostics {
 
@@ -47,7 +47,7 @@ struct WindowTargetFacts {
 // Measured evidence from the selected-window WGC probe (S2a). A pure snapshot —
 // no Qt, no COM — copied out of WindowEvidenceProbe under its mutex.
 struct WindowHubEvidence {
-    recorder_core::HubFrameKind kind = recorder_core::HubFrameKind::None;
+    exosnap::engine::HubFrameKind kind = exosnap::engine::HubFrameKind::None;
     double seconds_subscribed = 0.0;        // how long the probe has been subscribed
     double seconds_since_fresh_frame = 0.0; // since the last new frame (Held only)
     // A fresh frame arrived AFTER the window was observed to become
