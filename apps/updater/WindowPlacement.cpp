@@ -1,5 +1,7 @@
 #include "WindowPlacement.h"
 
+namespace exosnap::updater {
+
 QRect PlaceWindowNearAnchor(QSize window_size, QPoint anchor_center, QRect available) {
     QRect target(anchor_center.x() - window_size.width() / 2, anchor_center.y() - window_size.height() / 2,
                  window_size.width(), window_size.height());
@@ -20,3 +22,5 @@ QRect PlaceWindowNearAnchor(QSize window_size, QPoint anchor_center, QRect avail
 
     return target;
 }
+
+} // namespace exosnap::updater

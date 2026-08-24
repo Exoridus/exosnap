@@ -10,6 +10,8 @@
 #include "ProgressRing.h"
 #include "StepListWidget.h"
 
+namespace exosnap::updater {
+
 namespace {
 
 // Role ProgressBar plus the value interface, which is what makes a screen
@@ -19,7 +21,8 @@ namespace {
 class ProgressRingAccessible : public QAccessibleWidget, public QAccessibleValueInterface {
   public:
     explicit ProgressRingAccessible(ProgressRing* ring)
-        : QAccessibleWidget(ring, QAccessible::ProgressBar, QStringLiteral("Update progress")) {}
+        : QAccessibleWidget(ring, QAccessible::ProgressBar, QStringLiteral("Update progress")) {
+    }
 
     void* interface_cast(QAccessible::InterfaceType type) override {
         if (type == QAccessible::ValueInterface)
@@ -37,7 +40,8 @@ class ProgressRingAccessible : public QAccessibleWidget, public QAccessibleValue
         return ring()->value() * 100.0;
     }
     // A readout, not a control: assistive tools may not drive an update.
-    void setCurrentValue(const QVariant&) override {}
+    void setCurrentValue(const QVariant&) override {
+    }
     QVariant maximumValue() const override {
         return 100.0;
     }
@@ -60,15 +64,21 @@ class ProgressRingAccessible : public QAccessibleWidget, public QAccessibleValue
 class StepListAccessible : public QAccessibleWidget {
   public:
     explicit StepListAccessible(StepListWidget* list)
-        : QAccessibleWidget(list, QAccessible::List, QStringLiteral("Update steps")) {}
+        : QAccessibleWidget(list, QAccessible::List, QStringLiteral("Update steps")) {
+    }
 };
 
 QAccessibleInterface* UpdaterAccessibleFactory(const QString& key, QObject* object) {
-    if (key == QLatin1StringView("ProgressRing")) {
+    // QAccessible keys on QMetaObject::className(), which carries the full
+    // namespace: moving these widgets into exosnap::updater changed the key from
+    // "ProgressRing" to "exosnap::updater::ProgressRing" and silently unhooked
+    // both factories. Matched on the unqualified tail so the key survives the
+    // next namespace move as well.
+    if (key.endsWith(QLatin1StringView("ProgressRing"))) {
         if (auto* ring = qobject_cast<ProgressRing*>(object))
             return new ProgressRingAccessible(ring);
     }
-    if (key == QLatin1StringView("StepListWidget")) {
+    if (key.endsWith(QLatin1StringView("StepListWidget"))) {
         if (auto* list = qobject_cast<StepListWidget*>(object))
             return new StepListAccessible(list);
     }
@@ -84,3 +94,5 @@ void EnsureUpdaterAccessibility() {
     }();
     Q_UNUSED(installed);
 }
+
+} // namespace exosnap::updater

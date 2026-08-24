@@ -2,6 +2,8 @@
 
 #include <utility>
 
+namespace exosnap::updater {
+
 UpdaterAutomation::UpdaterAutomation(QJsonObject identity, Intents intents)
     : identity_(std::move(identity)), intents_(std::move(intents)) {
 }
@@ -75,3 +77,5 @@ bool UpdaterAutomation::Cancel(QString* error) {
 bool UpdaterAutomation::Close(QString* error) {
     return Invoke(intents_.close, "updater.close", error);
 }
+
+} // namespace exosnap::updater

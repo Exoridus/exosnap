@@ -3,18 +3,20 @@
 #include <QFont>
 #include <QHBoxLayout>
 #include <QLabel>
-#include <QPainter>
 #include <QPaintEvent>
+#include <QPainter>
 #include <QRectF>
 #include <QVBoxLayout>
 
 #include "UpdaterTheme.h"
 
+namespace exosnap::updater {
+
 namespace {
 
 const std::array<QString, 5>& CanonLabels() {
     static const std::array<QString, 5> kLabels = {
-        QStringLiteral("Downloading update"), QStringLiteral("Closing previous version"),
+        QStringLiteral("Downloading update"),   QStringLiteral("Closing previous version"),
         QStringLiteral("Installing new files"), QStringLiteral("Verifying installation"),
         QStringLiteral("Launching ExoSnap"),
     };
@@ -29,9 +31,8 @@ constexpr int kRowVPad = 11;
 // ── A single checklist row: painted glyph + separator, QLabels for text ──────
 class StepRow : public QWidget {
   public:
-    StepRow(const QString& label, bool first, QWidget* parent = nullptr)
-        : QWidget(parent), first_(first) {
-        using namespace updater_theme;
+    StepRow(const QString& label, bool first, QWidget* parent = nullptr) : QWidget(parent), first_(first) {
+        using namespace theme;
         auto* row = new QHBoxLayout(this);
         row->setContentsMargins(kGlyph + 12, kRowVPad, 0, kRowVPad);
         row->setSpacing(12);
@@ -57,7 +58,7 @@ class StepRow : public QWidget {
 
   protected:
     void paintEvent(QPaintEvent*) override {
-        using namespace updater_theme;
+        using namespace theme;
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing, true);
 
@@ -108,7 +109,7 @@ class StepRow : public QWidget {
 
   private:
     void applyStatus() {
-        using namespace updater_theme;
+        using namespace theme;
         const bool emphasise = status_ == StepStatus::Working || status_ == StepStatus::Failed;
         QFont lf = ui(14, emphasise ? QFont::DemiBold : QFont::Medium);
         label_->setFont(lf);
@@ -119,14 +120,23 @@ class StepRow : public QWidget {
         QString text;
         QColor tagColor;
         switch (status_) {
-        case StepStatus::Done: text = QStringLiteral("done"); tagColor = mut(); break;
-        case StepStatus::Working: text = QStringLiteral("working"); tagColor = mint(); break;
+        case StepStatus::Done:
+            text = QStringLiteral("done");
+            tagColor = mut();
+            break;
+        case StepStatus::Working:
+            text = QStringLiteral("working");
+            tagColor = mint();
+            break;
         case StepStatus::Failed:
             text = manual_ ? QStringLiteral("manual") : QStringLiteral("failed");
             tagColor = fail_color_;
             break;
         case StepStatus::Queued:
-        default: text = QStringLiteral("queued"); tagColor = dim(); break;
+        default:
+            text = QStringLiteral("queued");
+            tagColor = dim();
+            break;
         }
         tag_->setText(text);
         // "Installing new files, working" -- the row's whole meaning in one
@@ -134,25 +144,24 @@ class StepRow : public QWidget {
         // therefore invisible to a screen reader. StepListWidget's accessible
         // interface (role List) walks these rows in order.
         setAccessibleName(QStringLiteral("%1, %2").arg(label_->text(), text));
-        tag_->setStyleSheet(
-            QStringLiteral("color:rgba(%1,%2,%3,%4);background:transparent;")
-                .arg(tagColor.red())
-                .arg(tagColor.green())
-                .arg(tagColor.blue())
-                .arg(tagColor.alphaF()));
+        tag_->setStyleSheet(QStringLiteral("color:rgba(%1,%2,%3,%4);background:transparent;")
+                                .arg(tagColor.red())
+                                .arg(tagColor.green())
+                                .arg(tagColor.blue())
+                                .arg(tagColor.alphaF()));
     }
 
     bool first_ = false;
     bool manual_ = false;
     StepStatus status_ = StepStatus::Queued;
-    QColor fail_color_ = updater_theme::caution();
+    QColor fail_color_ = theme::caution();
     QLabel* label_ = nullptr;
     QLabel* tag_ = nullptr;
 };
 
 // ── StepListWidget ───────────────────────────────────────────────────────────
 StepListWidget::StepListWidget(QWidget* parent) : QWidget(parent) {
-    fail_color_ = updater_theme::caution();
+    fail_color_ = theme::caution();
 
     auto* col = new QVBoxLayout(this);
     col->setContentsMargins(16, 6, 16, 6);
@@ -180,7 +189,7 @@ const std::array<QString, 5>& StepListWidget::labels() {
 }
 
 void StepListWidget::paintEvent(QPaintEvent*) {
-    using namespace updater_theme;
+    using namespace theme;
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing, true);
     const QRectF r = rect().adjusted(0.5, 0.5, -0.5, -0.5);
@@ -188,3 +197,5 @@ void StepListWidget::paintEvent(QPaintEvent*) {
     p.setBrush(surf());
     p.drawRoundedRect(r, 12, 12);
 }
+
+} // namespace exosnap::updater

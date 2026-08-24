@@ -31,6 +31,8 @@
 #include <update/update_handoff.h>
 #include <update/zip_extract.h>
 
+namespace exosnap::updater {
+
 namespace fs = std::filesystem;
 
 using exosnap::update::DownloadProgress;
@@ -986,3 +988,5 @@ bool UpdaterWorker::runLaunch() {
     emit allDone();
     return true;
 }
+
+} // namespace exosnap::updater

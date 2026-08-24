@@ -23,6 +23,8 @@
 #include <update/update_flow_state.h>
 #include <update/update_types.h>
 
+namespace exosnap::updater {
+
 // The pipeline vocabulary now lives in the update strand (see
 // update_flow_state.h) because it is published state, not a private detail of
 // this window. These names keep every existing call site -- and every test --
@@ -138,3 +140,5 @@ class UpdaterController {
     UpdaterUiState state_;
     exosnap::update::UpdateFlowState flow_;
 };
+
+} // namespace exosnap::updater

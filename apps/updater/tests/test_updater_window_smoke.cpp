@@ -26,6 +26,8 @@
 #include "UpdaterController.h"
 #include "UpdaterWindow.h"
 
+using namespace exosnap::updater;
+
 namespace {
 
 QApplication* EnsureApplication() {

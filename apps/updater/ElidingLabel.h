@@ -24,6 +24,8 @@
 
 class QResizeEvent;
 
+namespace exosnap::updater {
+
 class ElidingLabel : public QLabel {
     Q_OBJECT
   public:
@@ -64,3 +66,5 @@ class ElidingLabel : public QLabel {
     Qt::TextElideMode elide_mode_ = Qt::ElideRight;
     bool elided_ = false;
 };
+
+} // namespace exosnap::updater

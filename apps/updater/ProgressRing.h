@@ -18,6 +18,8 @@
 
 #include "UpdaterController.h" // TerminalVariant
 
+namespace exosnap::updater {
+
 class ProgressRing : public QWidget {
     Q_OBJECT
   public:
@@ -45,3 +47,5 @@ class ProgressRing : public QWidget {
     bool indeterminate_ = false;
     TerminalVariant variant_ = TerminalVariant::None;
 };
+
+} // namespace exosnap::updater

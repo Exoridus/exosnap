@@ -33,7 +33,9 @@
 
 #include <update/update_flow_state.h>
 
-class UpdaterAutomation : public UpdaterControlSource {
+namespace exosnap::updater {
+
+class UpdaterAutomation : public updater_control::UpdaterControlSource {
   public:
     // The six product actions, wired by main.cpp to the same slots the footer
     // buttons drive. An unset callback answers false with a filled error rather
@@ -80,3 +82,5 @@ class UpdaterAutomation : public UpdaterControlSource {
     exosnap::update::UpdateFlowState state_;
     std::uint64_t revision_ = 0;
 };
+
+} // namespace exosnap::updater

@@ -34,6 +34,9 @@ class QCloseEvent;
 class QLabel;
 class QPushButton;
 class QVBoxLayout;
+
+namespace exosnap::updater {
+
 class ElidingLabel;
 class ProgressRing;
 class StepListWidget;
@@ -106,3 +109,5 @@ class UpdaterWindow : public QWidget {
     QVBoxLayout* footer_layout_ = nullptr;
     QList<QPushButton*> footer_buttons_;
 };
+
+} // namespace exosnap::updater

@@ -24,6 +24,8 @@
 #include "UpdaterAccessibility.h"
 #include "UpdaterTheme.h"
 
+namespace exosnap::updater {
+
 namespace {
 void EnsureUpdaterResources() {
     static const bool initialized = [] {
@@ -36,7 +38,7 @@ void EnsureUpdaterResources() {
 
 namespace {
 
-using namespace updater_theme;
+using namespace theme;
 
 constexpr int kWindowWidth = 520;
 constexpr int kWindowHeight = 680;
@@ -1043,3 +1045,5 @@ void UpdaterWindow::paintEvent(QPaintEvent*) {
     p.setBrush(Qt::NoBrush);
     p.drawRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5));
 }
+
+} // namespace exosnap::updater

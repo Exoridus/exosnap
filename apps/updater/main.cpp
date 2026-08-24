@@ -68,6 +68,10 @@
 #include "UpdaterWorker.h"
 #include "WindowPlacement.h"
 
+// main() itself stays at global scope; everything it drives lives in the
+// updater namespace.
+using namespace exosnap::updater;
+
 namespace {
 
 constexpr char kPreviewFrom[] = "0.9.0-rc4";

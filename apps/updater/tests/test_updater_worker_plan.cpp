@@ -25,6 +25,8 @@
 
 #include "UpdaterWorker.h"
 
+using namespace exosnap::updater;
+
 namespace fs = std::filesystem;
 
 namespace {

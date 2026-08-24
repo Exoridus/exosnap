@@ -23,6 +23,7 @@ namespace {
 
 using exosnap::UpdateService;
 namespace upd = exosnap::update;
+using exosnap::updater::ParseUpdaterCommandLine;
 
 // -- UpdaterStagingFileList -------------------------------------------------
 

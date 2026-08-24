@@ -28,6 +28,8 @@
 #include "UpdaterArgs.h"
 #include "UpdaterController.h" // UpStep / FailureCase
 
+namespace exosnap::updater {
+
 // ---------------------------------------------------------------------------
 // Pure planning helpers
 // ---------------------------------------------------------------------------
@@ -264,5 +266,8 @@ class UpdaterWorker : public QObject {
     std::unique_ptr<void, decltype(&ClosePackageLock)> locked_package_{nullptr, &ClosePackageLock};
 };
 
-Q_DECLARE_METATYPE(UpStep)
-Q_DECLARE_METATYPE(FailureCase)
+} // namespace exosnap::updater
+
+// Outside the namespace on purpose: Q_DECLARE_METATYPE must be at global scope.
+Q_DECLARE_METATYPE(exosnap::updater::UpStep)
+Q_DECLARE_METATYPE(exosnap::updater::FailureCase)
