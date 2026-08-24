@@ -1529,3 +1529,17 @@ exosnap_add_gtest(
 )
 target_include_directories(test_analyze_encode_perf PRIVATE src)
 target_compile_definitions(test_analyze_encode_perf PRIVATE EXOSNAP_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+
+# The audio capture seam with no device behind it. Windows has no user-mode
+# virtual audio device (that is a kernel driver), and this reaches states a real
+# card will not produce on demand anyway: a measured gap, an unmeasured
+# discontinuity, a drifting device clock, digital silence that is not a dead
+# endpoint. The fake is itself tested -- an instrument that lies makes every
+# result taken with it look like evidence.
+exosnap_add_gtest(
+    NAME test_fake_audio_capture_source
+    TEST_PREFIX engine.
+    SOURCES tests/test_fake_audio_capture_source.cpp
+)
+target_include_directories(test_fake_audio_capture_source
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/tests)
