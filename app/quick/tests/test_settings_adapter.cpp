@@ -85,6 +85,75 @@ TEST_F(SettingsAdapterTest, WebMForcesAv1AndOpus) {
 }
 
 // ---------------------------------------------------------------------------
+// The dropdowns offer exactly what the engine accepts
+//
+// This is the boundary the defect sat on: the registry classified MP4 + AV1 and
+// MP4 + PCM/FLAC as Experimental, CapabilitySet translated that to
+// NotImplemented, and the adapter's own filter still offered them -- so the user
+// could pick a combination the recorder then reconciled away. The capability
+// matrix test pins the registry side; this pins the side that decides what the
+// user sees, so a filter that goes back to consulting only the per-codec
+// capability (QueryVideoCodec, which knows nothing about the container) fails
+// here rather than in a recording.
+//
+// Options stay VISIBLE and carry their reason -- that is the established
+// contract (see ProhibitedCodecOptionStaysVisibleButUnselectable); what must not
+// happen is `selectable == true`.
+// ---------------------------------------------------------------------------
+
+TEST_F(SettingsAdapterTest, Mp4OffersOnlyItsVettedVideoCodecs) {
+    adapter.setContainer(static_cast<int>(Container::Mp4));
+    ASSERT_EQ(adapter.container(), static_cast<int>(Container::Mp4));
+
+    const QVariantList options = adapter.videoCodecOptions();
+
+    for (const VideoCodec codec : {VideoCodec::H264, VideoCodec::Hevc}) {
+        const QVariantMap entry = optionFor(options, static_cast<int>(codec));
+        ASSERT_FALSE(entry.isEmpty()) << static_cast<int>(codec);
+        EXPECT_TRUE(entry.value(QStringLiteral("selectable")).toBool()) << static_cast<int>(codec);
+    }
+
+    // AV1-in-MP4 is muxable and deliberately not offered in 0.9.
+    const QVariantMap av1 = optionFor(options, static_cast<int>(VideoCodec::Av1));
+    ASSERT_FALSE(av1.isEmpty());
+    EXPECT_FALSE(av1.value(QStringLiteral("selectable")).toBool());
+    EXPECT_FALSE(av1.value(QStringLiteral("reason")).toString().isEmpty());
+}
+
+TEST_F(SettingsAdapterTest, Mp4OffersAacAndNothingElse) {
+    adapter.setContainer(static_cast<int>(Container::Mp4));
+
+    const QVariantList options = adapter.audioCodecOptions();
+
+    const QVariantMap aac = optionFor(options, static_cast<int>(AudioCodec::Aac));
+    ASSERT_FALSE(aac.isEmpty());
+    EXPECT_TRUE(aac.value(QStringLiteral("selectable")).toBool());
+
+    // Opus is Prohibited, PCM and FLAC are Experimental. Three different registry
+    // levels, one user-visible answer.
+    for (const AudioCodec codec : {AudioCodec::Opus, AudioCodec::Pcm, AudioCodec::Flac}) {
+        const QVariantMap entry = optionFor(options, static_cast<int>(codec));
+        ASSERT_FALSE(entry.isEmpty()) << static_cast<int>(codec);
+        EXPECT_FALSE(entry.value(QStringLiteral("selectable")).toBool()) << static_cast<int>(codec);
+        EXPECT_FALSE(entry.value(QStringLiteral("reason")).toString().isEmpty()) << static_cast<int>(codec);
+    }
+}
+
+// The counter-check: MKV must keep offering AV1, or the two cases above would
+// pass just as well against a filter that rejects everything.
+TEST_F(SettingsAdapterTest, MatroskaStillOffersAv1AndOpus) {
+    adapter.setContainer(static_cast<int>(Container::Matroska));
+
+    const QVariantMap av1 = optionFor(adapter.videoCodecOptions(), static_cast<int>(VideoCodec::Av1));
+    ASSERT_FALSE(av1.isEmpty());
+    EXPECT_TRUE(av1.value(QStringLiteral("selectable")).toBool());
+
+    const QVariantMap opus = optionFor(adapter.audioCodecOptions(), static_cast<int>(AudioCodec::Opus));
+    ASSERT_FALSE(opus.isEmpty());
+    EXPECT_TRUE(opus.value(QStringLiteral("selectable")).toBool());
+}
+
+// ---------------------------------------------------------------------------
 // Edit notification contract
 // ---------------------------------------------------------------------------
 

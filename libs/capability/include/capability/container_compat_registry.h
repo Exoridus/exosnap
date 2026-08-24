@@ -38,11 +38,17 @@ enum class ContainerCompatLevel {
 [[nodiscard]] std::string_view ToString(ContainerCompatLevel level) noexcept;
 
 // Returns true when the level permits the combination to be offered in the UI.
-// Recommended, Allowed, and Experimental are selectable; Fallback and Prohibited
-// are not user-selectable.
+//
+// Only Recommended and Allowed. Experimental means technically muxable and
+// deliberately NOT offered until it is validated -- the same conclusion
+// CapabilitySet reaches by translating Experimental to SupportLevel::
+// NotImplemented, which IsSelectable() rejects. The two must agree: while this
+// predicate also accepted Experimental, the Settings dropdowns offered
+// combinations (MP4 + AV1, MP4 + PCM/FLAC) that the engine then reconciled away,
+// and the container matrix documented them as supported.
+// test_compatibility_matrix.cpp holds the two ends together.
 [[nodiscard]] inline constexpr bool IsContainerCompatSelectable(ContainerCompatLevel level) noexcept {
-    return level == ContainerCompatLevel::Recommended || level == ContainerCompatLevel::Allowed ||
-           level == ContainerCompatLevel::Experimental;
+    return level == ContainerCompatLevel::Recommended || level == ContainerCompatLevel::Allowed;
 }
 
 // Returns true when the level is a hard block — must not be recorded.

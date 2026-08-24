@@ -110,9 +110,9 @@ cross-vendor quality/compat matrix stays at the 1.0 gate by definition.
 ## Final container / codec / audio matrix (1.0 target)
 
 **This is the target matrix for `1.0`, not the currently-shipped state** — see `KNOWN_LIMITATIONS.md`
-for what a given build actually offers (e.g. MP4 audio today is AAC only; PCM-in-MP4 is deferred,
-ADR 0030). The UI must only offer **vetted** combinations — never a theoretically-muxable pairing
-without a tested player/editor matrix.
+for what a given build actually offers (e.g. MP4 audio today is AAC only, MP4 video is H.264 or HEVC
+only, and both PCM-in-MP4 and AV1-in-MP4 are deferred; ADR 0030). The UI must only offer **vetted**
+combinations — never a theoretically-muxable pairing without a tested player/editor matrix.
 
 | Container       | Video           | Audio                                                |
 |-----------------|-----------------|------------------------------------------------------|

@@ -49,7 +49,7 @@ enough to lossless that the measurement is about the candidate rather than about
 the reference. Everything else about the run is the normal harness path.
 
 ```
-exosnap.exe --auto-record --enable-preview --target monitor --duration 30             --frame-rate 60 --cq 1 --container mkv --video-codec av1             --audio-codec opus --chroma 420 --bit-depth 8 --hdr off --audio-rows sys
+exosnap.exe --auto-record --target monitor --duration 30             --frame-rate 60 --cq 1 --container mkv --video-codec av1             --audio-codec opus --chroma 420 --bit-depth 8 --hdr off --audio-rows sys
 ```
 
 `--auto-record` is only compiled into a Release build configured with

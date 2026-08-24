@@ -85,6 +85,11 @@ committed, per the standing live-recording-verification approval.
 --screenshot-path=<path>            # preview mode only
 ```
 
+> **Superseded in 0.9.** The off-screen preview mode did not survive the Qt Quick cutover:
+> `--enable-preview`, `--screenshot-path` and `--capture-frame-in-ready` are rejected with an error
+> rather than accepted and ignored. `--capture-frame-at` remains and now reports the written PNG as
+> `snapshot_path`; a missing artefact fails the run.
+
 Invalid combinations (e.g. `--chroma=444 --bit-depth=10`) are **not** pre-validated by the harness —
 they pass through to the real capability resolver, so its reconcile-to-4:2:0 behavior is exercised
 and verifiable rather than silently avoided.

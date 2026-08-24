@@ -85,14 +85,10 @@ if (-not (Test-Path $BuildDir -PathType Container)) {
 }
 
 # --- Qt / DLL resolution -----------------------------------------------------
-$qtBin = 'C:\Qt\6.11.1\msvc2022_64\bin'
-$qtPlugins = 'C:\Qt\6.11.1\msvc2022_64\plugins'
-if (Test-Path $qtBin -PathType Container) {
-    $env:PATH = "$qtBin;$env:PATH"
-}
-if (Test-Path $qtPlugins -PathType Container) {
-    $env:QT_PLUGIN_PATH = $qtPlugins
-}
+# Resolved from .qt-version, never spelled out here: a hard-coded path keeps
+# working after a Qt uplift, against the previous Qt.
+Import-Module (Join-Path $PSScriptRoot 'lib/QtEnvironment.psm1') -Force
+Add-QtToPath -RepoRoot $repoRoot -IncludePlugins | Out-Null
 $env:QT_QPA_PLATFORM = 'offscreen'
 
 # --- Isolated, throwaway config dir -----------------------------------------

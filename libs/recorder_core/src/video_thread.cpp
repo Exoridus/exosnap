@@ -25,6 +25,7 @@
 #include <recorder_core/preview_tap.h>
 #include <recorder_core/util/com_apartment.h>
 #include <recorder_core/visual_generations.h>
+#include <recorder_core/wgc_acquire_classify.h>
 
 #include <recorder_core/frame_pacing.h>
 #include <recorder_core/logging/logging.h>
@@ -142,6 +143,46 @@ DXGI_FORMAT DemoteToneMapFormatIfUnsupportedVpInput(ID3D11VideoProcessorEnumerat
                  "this driver; falling back to BGRA8 (8-bit tone-map precision)",
                  {});
     return DXGI_FORMAT_B8G8R8A8_UNORM;
+}
+
+// Turns a caught WGC acquire exception into the session's own outcome.
+//
+// A swallowed exception here is invisible in the worst possible way: the encode
+// loop keeps emitting the last held frame, so a source that has permanently
+// stopped delivering looks like a healthy recording for as long as the user
+// leaves it running. Every class therefore terminates the session -- source loss
+// through the same clean path the item's Closed event uses (`source_lost`, no
+// failure), device loss and anything unclassified as an explicit failure that
+// names its HRESULT.
+//
+// `source_lost` is set for every class so the caller's existing loop exit runs
+// unchanged; RecordFailure additionally raises stop_requested.
+void HandleWgcAcquireException(SessionState& state, int32_t hr, const char* context, bool& source_lost) {
+    source_lost = true;
+    char buf[160];
+    switch (ClassifyWgcAcquireFailure(hr)) {
+    case WgcAcquireFailure::SourceLost:
+        snprintf(buf, sizeof(buf), "WGC %s: capture source lost 0x%08X", context, static_cast<unsigned int>(hr));
+        logging::log(logging::LogLevel::Warn, "video_thread", buf, {});
+        return;
+    case WgcAcquireFailure::DeviceLost:
+        snprintf(buf, sizeof(buf), "WGC %s: capture device lost 0x%08X", context, static_cast<unsigned int>(hr));
+        state.RecordFailure(hr, ErrorPhase::VideoCapture, buf);
+        return;
+    case WgcAcquireFailure::Unexpected:
+        snprintf(buf, sizeof(buf), "WGC %s: unexpected acquire failure 0x%08X", context, static_cast<unsigned int>(hr));
+        state.RecordFailure(hr, ErrorPhase::VideoCapture, buf);
+        return;
+    }
+}
+
+// Non-WinRT exceptions carry no HRESULT to classify. They still must not be
+// swallowed: the catch is a boundary, not a retry.
+void HandleWgcUnknownException(SessionState& state, const char* context, bool& source_lost) {
+    source_lost = true;
+    char buf[160];
+    snprintf(buf, sizeof(buf), "WGC %s: non-WinRT exception during frame acquire", context);
+    state.RecordFailure(E_UNEXPECTED, ErrorPhase::VideoCapture, buf);
 }
 
 } // namespace
@@ -1801,8 +1842,13 @@ void VideoThread::Run() {
                     } else {
                         Sleep(1);
                     }
+                } catch (const winrt::hresult_error& e) {
+                    // Without this the real cause would be masked: the loop would
+                    // keep retrying until the 5 s guard expired and then report a
+                    // first-frame timeout for a device that was already gone.
+                    HandleWgcAcquireException(m_state, e.code().value, "first frame", sourceLost);
                 } catch (...) {
-                    Sleep(1);
+                    HandleWgcUnknownException(m_state, "first frame", sourceLost);
                 }
             }
         }
@@ -2851,7 +2897,10 @@ void VideoThread::Run() {
                             }
                         }
                     }
+                } catch (const winrt::hresult_error& e) {
+                    HandleWgcAcquireException(m_state, e.code().value, "CFR drain", sourceLost);
                 } catch (...) {
+                    HandleWgcUnknownException(m_state, "CFR drain", sourceLost);
                 }
                 if (!m_state.pause_requested.load()) {
                     const auto acq_t1 = std::chrono::steady_clock::now();
@@ -3489,7 +3538,10 @@ void VideoThread::Run() {
                             }
                         }
                     }
+                } catch (const winrt::hresult_error& e) {
+                    HandleWgcAcquireException(m_state, e.code().value, "VFR drain", sourceLost);
                 } catch (...) {
+                    HandleWgcUnknownException(m_state, "VFR drain", sourceLost);
                 }
                 // Seed the first WGC frame from the wait loop so a static
                 // window still encodes at least one real frame (WGC only
@@ -3762,8 +3814,14 @@ end_encode_loop:
             try {
                 item.Closed(closedToken);
             } catch (...) {
+                // Teardown, and deliberately silent: the session has already
+                // ended, the file is finalized below, and a revoke/Close that
+                // throws on a source that is already gone has nothing left to
+                // report. Unlike the acquire paths above, nothing downstream can
+                // mistake this for a running recording.
             }
         } catch (...) {
+            // Same boundary as above, for Close() on the session or the pool.
         }
     }
 

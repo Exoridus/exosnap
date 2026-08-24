@@ -390,10 +390,10 @@ if ($StaticOnly) {
 # launch test executables that link Qt (0xc0000135 otherwise in worktrees).
 # ---------------------------------------------------------------------------
 
-$qtBin = 'C:\Qt\6.11.1\msvc2022_64\bin'
-if (Test-Path $qtBin -PathType Container) {
-    $env:PATH = "$qtBin;$env:PATH"
-}
+# Resolved from .qt-version (see scripts/lib/QtEnvironment.psm1), so a Qt uplift
+# does not leave this script pointing at the previous install.
+Import-Module (Join-Path $PSScriptRoot 'lib/QtEnvironment.psm1') -Force
+Add-QtToPath -RepoRoot $repoRoot | Out-Null
 
 Invoke-QuietNative -Name 'cmake configure' -FilePath 'cmake' -Arguments @('--preset', 'windows-x64-debug')
 Invoke-QuietNative -Name 'cmake build' -FilePath 'cmake' -Arguments @('--build', '--preset', 'windows-x64-debug')
