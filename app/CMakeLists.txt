@@ -670,6 +670,19 @@ exosnap_add_gtest(
 )
 target_include_directories(auto_record_harness_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
+# The registry of every long option this binary understands. Five parsers read
+# argv and each skips what it does not own, so an unregistered option used to be
+# skipped by all of them -- a harness run that succeeded without doing its job.
+exosnap_add_gtest(
+    NAME command_line_flag_tests
+    TEST_PREFIX cli.
+    SOURCES
+        tests/test_command_line_flags.cpp
+        cli/CommandLineFlags.cpp
+    LIBRARIES Qt6::Core
+)
+target_include_directories(command_line_flag_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
 # QCR-101 / QCR-103: the recording admission gate (diagnostic blockers enforced on
 # the real start path) and recovery-manifest persistence honesty.
 exosnap_add_gtest(

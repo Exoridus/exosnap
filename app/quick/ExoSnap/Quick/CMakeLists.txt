@@ -241,6 +241,8 @@ target_sources(exosnap
         # The dev feed override (--update-base-url): the seam that lets a
         # non-official build exercise its own update check, and therefore the
         # whole app-to-updater handoff, against a controlled feed.
+        ${PROJECT_SOURCE_DIR}/app/cli/CommandLineFlags.cpp
+        ${PROJECT_SOURCE_DIR}/app/cli/CommandLineFlags.h
         ${PROJECT_SOURCE_DIR}/app/services/UpdateFeedOverride.cpp
         ${PROJECT_SOURCE_DIR}/app/services/UpdateFeedOverride.h
         ${PROJECT_SOURCE_DIR}/app/models/AboutInfo.cpp

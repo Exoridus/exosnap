@@ -15,6 +15,7 @@
 #include "auto_record/AutoRecordHarness.h"
 #endif
 #include "bootstrap/ProductionBootstrap.h"
+#include "cli/CommandLineFlags.h"
 #include "diagnostics/NativeWindowFacts.h"
 #include "diagnostics/StartupClock.h"
 #include "live_verify/LiveVerifyCommandPolicy.h"
@@ -609,6 +610,19 @@ int main(int argc, char* argv[]) {
     exosnap::bootstrap::ApplyApplicationMetadata();
 
     const QStringList arguments = QCoreApplication::arguments();
+
+    // Before any parser looks at argv. Five parsers read the full argument list
+    // and each skips what it does not own, which means a misspelled harness
+    // option was ignored by all five: the run then succeeded without performing
+    // the check it was asked for. Fail closed here instead, once, against the
+    // registry of every option this binary understands.
+    {
+        QString flag_error;
+        if (!exosnap::cli::ValidateCommandLine(arguments, &flag_error)) {
+            reportStartupError(flag_error);
+            return 2;
+        }
+    }
 
     // The Live Verify control channel. Explicit argv opt-in and nothing else: no
     // Debug default, no environment variable, no "looks like a developer
