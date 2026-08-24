@@ -23,6 +23,8 @@
 #include "RecoveryAdapter.h"
 #include "SettingsAdapter.h"
 #include "ShellAdapter.h"
+#include "ShellPresenceAdapter.h"
+#include "TaskbarPresence.h"
 #include "WhatsNewAdapter.h"
 
 #include "diagnostics/AudioSourceDegradation.h"
@@ -346,11 +348,31 @@ class QuickApplication {
     // tray, which is also what makes EvaluateMinimize refuse to hide -- there
     // would be no way back to the window.
     void initializeTray();
-    // Pushes the current recording state onto the tray icon/tooltip AND onto the
-    // window icon, which is what the taskbar button shows. Called from the same
-    // place the Record surface is synchronized, so neither surface can disagree
-    // with the window about whether a recording is running.
+    // Binds the shell projection to the window: the chrome's registered
+    // TaskbarButtonCreated message, its WM_COMMAND route and its handle identity
+    // on one side, the taskbar surfaces on the other. Runs from load() for the
+    // same reason initializeTray() does -- it needs the root window.
+    void initializeShellPresence();
+    // Feeds the current recording state into the shell projection. Called from
+    // the same place the Record surface is synchronized, so no shell surface can
+    // disagree with the window about whether a recording is running.
     void refreshTrayState();
+    // Renders the projection onto every shell surface: the tray icon and menu,
+    // the window icon (which is what the taskbar BUTTON shows), and the taskbar
+    // button's badge and thumbnail transport. Also runs on each heartbeat tick,
+    // which is why every writer below is change-guarded.
+    void applyShellPresence();
+    // Routes a shell-raised action into the SAME request the in-app transport
+    // makes. Not a second interpretation of what Pause means.
+    void performShellAction(ShellAction action);
+    // Binds the three long operations that publish a fraction to the one taskbar
+    // progress bar. Each takes a lease, so a callback that outlives its operation
+    // cannot move the next one's bar.
+    void wireTaskbarProgress();
+
+    TaskbarProgressLease saving_progress_lease_;
+    TaskbarProgressLease recovery_progress_lease_;
+    TaskbarProgressLease export_progress_lease_;
     // The window-icon variant currently applied. Held because refreshTrayState()
     // also runs on the diagnostics tick, and re-applying the icon there would be a
     // taskbar redraw per tick for no change.
@@ -761,6 +783,13 @@ class QuickApplication {
     // Null when the platform reports no system tray. Declared before engine_ for
     // the same reason window_geometry_ is: it outlives the window it acts on.
     std::unique_ptr<ui::tray::TrayPresence> tray_presence_;
+    // The shell's view of the session, and the two clocks it needs: the recording
+    // heartbeat and the bounded Saved dwell. Every shell surface reads this one
+    // object rather than the recording state directly.
+    ShellPresenceAdapter shell_presence_;
+    // The Windows taskbar button. Present whether or not a tray is: a session
+    // with the notification area disabled still has a taskbar.
+    TaskbarPresence taskbar_presence_;
     // The engine owns the window; this only observes it. A QPointer because the
     // engine can destroy the window while this object is still alive, and every
     // tray action would otherwise act on a dangling pointer.

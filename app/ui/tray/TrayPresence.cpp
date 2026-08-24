@@ -1,27 +1,84 @@
 #include "TrayPresence.h"
 
+#include "models/RecordingPulse.h"
+
 #include <QAction>
-#include <QFile>
 #include <QIcon>
 #include <QMenu>
 #include <QSystemTrayIcon>
-#include <QWidget>
 
 namespace exosnap::ui::tray {
 
-// ---------------------------------------------------------------------------
-// TrayPresenceStateMapper
-// ---------------------------------------------------------------------------
+namespace {
 
-TrayIconState TrayIconStateFromStatusLabel(const QString& status_label) {
-    const QString upper = status_label.trimmed().toUpper();
-    if (upper == QStringLiteral("PAUSED"))
-        return TrayIconState::Paused;
-    if (upper == QStringLiteral("REC") || upper == QStringLiteral("RECORDING") || upper == QStringLiteral("STARTING") ||
-        upper == QStringLiteral("COUNTDOWN"))
-        return TrayIconState::Recording;
-    return TrayIconState::Idle;
+// The pre-rendered heartbeat. Windows has no animated-icon API, so the pulse is
+// a swap between these; they are loaded once into a static QIcon cache because
+// the swap runs for the whole length of a recording.
+//
+// The peak frame IS the plain recording mark, so the beat is trough, rise, peak,
+// fall over four frames (models/RecordingPulse.h).
+const QIcon& RecordingPulseIcon(int frame) {
+    static const QIcon frames[kRecordingPulseFrameCount] = {
+        QIcon(QStringLiteral(":/brand/exosnap-logo-recording-p0.ico")),
+        QIcon(QStringLiteral(":/brand/exosnap-logo-recording-p1.ico")),
+        QIcon(QStringLiteral(":/brand/exosnap-logo-recording.ico")),
+        QIcon(QStringLiteral(":/brand/exosnap-logo-recording-p1.ico")),
+    };
+    const int index = (frame >= 0 && frame < kRecordingPulseFrameCount) ? frame : 0;
+    return frames[index];
 }
+
+const QIcon& StaticIcon(ShellIconState state) {
+    static const QIcon idle(QStringLiteral(":/brand/exosnap-logo-idle.ico"));
+    static const QIcon paused(QStringLiteral(":/brand/exosnap-logo-paused.ico"));
+    static const QIcon saved(QStringLiteral(":/brand/exosnap-logo-saved.ico"));
+    static const QIcon recording(QStringLiteral(":/brand/exosnap-logo-recording.ico"));
+
+    switch (state) {
+    case ShellIconState::Recording:
+        return recording;
+    case ShellIconState::Paused:
+        return paused;
+    case ShellIconState::Saved:
+        return saved;
+    case ShellIconState::Idle:
+        break;
+    }
+    return idle;
+}
+
+QString ActionLabel(ShellAction action) {
+    switch (action) {
+    case ShellAction::Start:
+        return QObject::tr("Start recording");
+    case ShellAction::Pause:
+        return QObject::tr("Pause recording");
+    case ShellAction::Resume:
+        return QObject::tr("Resume recording");
+    case ShellAction::Stop:
+        return QObject::tr("Stop recording");
+    case ShellAction::None:
+        break;
+    }
+    return {};
+}
+
+// Applies one projection row to one menu entry. An entry whose action is not
+// valid in this state is hidden rather than shown-and-failing; the Record entry
+// is the documented exception, because a start that is momentarily refused has a
+// reason and a vanished entry does not.
+void ApplyAppearance(QAction* action, const ShellButtonAppearance& appearance, bool keep_visible_when_disabled) {
+    if (action == nullptr)
+        return;
+    const bool visible = appearance.visible && (appearance.enabled || keep_visible_when_disabled);
+    action->setVisible(visible);
+    action->setEnabled(appearance.enabled);
+    const QString label = ActionLabel(appearance.action);
+    if (!label.isEmpty())
+        action->setText(label);
+}
+
+} // namespace
 
 // ---------------------------------------------------------------------------
 // TrayPresence
@@ -38,19 +95,23 @@ TrayPresence::TrayPresence(QObject* parent) : QObject(parent) {
     // delete below.
     tray_menu_ = new QMenu();
 
-    show_hide_action_ = tray_menu_->addAction(QStringLiteral("Show window"));
-    record_toggle_action_ = tray_menu_->addAction(QStringLiteral("Start recording"));
+    show_hide_action_ = tray_menu_->addAction(tr("Show window"));
+    record_action_ = tray_menu_->addAction(ActionLabel(ShellAction::Start));
+    pause_resume_action_ = tray_menu_->addAction(ActionLabel(ShellAction::Pause));
+    stop_action_ = tray_menu_->addAction(ActionLabel(ShellAction::Stop));
     tray_menu_->addSeparator();
     // NOTIFY-SKIN-R1: clickable mirror for over-game toasts.
     // Clicking this focuses/shows the ExoSnap window (the spec's named mechanism).
     // Label is updated as "Notifications (N)" when N > 0, else hidden.
-    notifications_action_ = tray_menu_->addAction(QStringLiteral("Notifications"));
+    notifications_action_ = tray_menu_->addAction(tr("Notifications"));
     notifications_action_->setVisible(false); // hidden until there are unread items
     tray_menu_->addSeparator();
-    quit_action_ = tray_menu_->addAction(QStringLiteral("Quit ExoSnap"));
+    quit_action_ = tray_menu_->addAction(tr("Quit ExoSnap"));
 
     connect(show_hide_action_, &QAction::triggered, this, &TrayPresence::onShowHideTriggered);
-    connect(record_toggle_action_, &QAction::triggered, this, &TrayPresence::recordToggleRequested);
+    connect(record_action_, &QAction::triggered, this, [this]() { requestAction(ShellButton::Record); });
+    connect(pause_resume_action_, &QAction::triggered, this, [this]() { requestAction(ShellButton::PauseResume); });
+    connect(stop_action_, &QAction::triggered, this, [this]() { requestAction(ShellButton::Stop); });
     // Notifications action: clicking focuses the window and clears the badge.
     connect(notifications_action_, &QAction::triggered, this, [this]() {
         clearUnreadCount();
@@ -63,6 +124,7 @@ TrayPresence::TrayPresence(QObject* parent) : QObject(parent) {
     connect(tray_icon_, &QSystemTrayIcon::activated, this, &TrayPresence::onTrayActivated);
 
     applyIcon();
+    applyMenuState();
     rebuildTooltip();
 }
 
@@ -73,70 +135,51 @@ TrayPresence::~TrayPresence() {
     tray_menu_ = nullptr;
 }
 
-void TrayPresence::applyState(TrayIconState state, const QString& status_label, const QString& elapsed_text) {
-    // QCR-714. Every QuickApplication::synchronizeRecordState() ends here, and
-    // that runs on the diagnostics and metrics cadences as well as on real state
-    // changes — so this was constructing a QIcon from a resource, re-setting the
-    // tray icon, rebuilding the tooltip string and rewriting two menu-item
-    // properties several times a second to arrive at exactly what was already
-    // there. The adapters upstream are all change-guarded; this leaf was not.
-    if (state_applied_ && state_ == state && status_label_ == status_label && elapsed_text_ == elapsed_text) {
+void TrayPresence::applyState(const ShellPresenceState& state, const QString& elapsed_text, int pulse_frame) {
+    // Every synchronizeRecordState() ends here, and that runs on the
+    // diagnostics and metrics cadences as well as on real state changes -- so
+    // this was constructing a QIcon from a resource, re-setting the tray icon,
+    // rebuilding the tooltip and rewriting menu-item properties several times a
+    // second to arrive at exactly what was already there. The adapters upstream
+    // are all change-guarded; this leaf was not.
+    if (state_applied_ && state_ == state && elapsed_text_ == elapsed_text && pulse_frame_ == pulse_frame)
         return;
-    }
+
+    const bool icon_changed = !state_applied_ || state_.icon_state != state.icon_state || pulse_frame_ != pulse_frame;
+    const bool menu_changed = !state_applied_ || state_ != state;
 
     state_applied_ = true;
     state_ = state;
-    status_label_ = status_label;
     elapsed_text_ = elapsed_text;
+    pulse_frame_ = pulse_frame;
 
-    applyIcon();
+    if (icon_changed)
+        applyIcon();
+    if (menu_changed)
+        applyMenuState();
     rebuildTooltip();
-
-    // Update the "Start/Stop recording" menu item label. No `default:` — a
-    // fourth tray state must fail the build rather than silently present itself
-    // to the user as "Idle".
-    if (record_toggle_action_) {
-        switch (state_) {
-        case TrayIconState::Recording:
-            record_toggle_action_->setText(QStringLiteral("Stop recording"));
-            break;
-        case TrayIconState::Paused:
-            record_toggle_action_->setText(QStringLiteral("Stop recording"));
-            break;
-        case TrayIconState::Idle:
-            record_toggle_action_->setText(QStringLiteral("Start recording"));
-            break;
-        }
-        // Disable "Start recording" when idle+blocked; always enabled while recording/paused.
-        const bool can_toggle = (state_ != TrayIconState::Idle) || !recording_blocked_;
-        record_toggle_action_->setEnabled(can_toggle);
-    }
 }
 
 void TrayPresence::updateElapsedText(const QString& elapsed_text) {
+    if (elapsed_text_ == elapsed_text)
+        return;
     elapsed_text_ = elapsed_text;
     rebuildTooltip();
 }
 
 void TrayPresence::setWindowVisible(bool visible) {
     window_visible_ = visible;
-    if (show_hide_action_)
-        show_hide_action_->setText(visible ? QStringLiteral("Hide window") : QStringLiteral("Show window"));
-}
-
-void TrayPresence::setRecordingBlocked(bool blocked) {
-    recording_blocked_ = blocked;
-    if (record_toggle_action_ && state_ == TrayIconState::Idle)
-        record_toggle_action_->setEnabled(!blocked);
+    if (show_hide_action_ != nullptr)
+        show_hide_action_->setText(visible ? tr("Hide window") : tr("Show window"));
 }
 
 void TrayPresence::show() {
-    if (tray_icon_)
+    if (tray_icon_ != nullptr)
         tray_icon_->show();
 }
 
 void TrayPresence::hide() {
-    if (tray_icon_)
+    if (tray_icon_ != nullptr)
         tray_icon_->hide();
 }
 
@@ -147,17 +190,20 @@ QString TrayPresence::currentTooltip() const {
     //   "ExoSnap — Paused"
     QString tip = QStringLiteral("ExoSnap — ");
 
-    switch (state_) {
-    case TrayIconState::Recording:
-        tip += QStringLiteral("Recording");
+    switch (state_.icon_state) {
+    case ShellIconState::Recording:
+        tip += tr("Recording");
         if (!elapsed_text_.isEmpty())
             tip += QLatin1Char(' ') + elapsed_text_;
         break;
-    case TrayIconState::Paused:
-        tip += QStringLiteral("Paused");
+    case ShellIconState::Paused:
+        tip += tr("Paused");
         break;
-    case TrayIconState::Idle:
-        tip += QStringLiteral("Ready");
+    case ShellIconState::Saved:
+        tip += tr("Saved");
+        break;
+    case ShellIconState::Idle:
+        tip += tr("Ready");
         break;
     }
 
@@ -165,36 +211,36 @@ QString TrayPresence::currentTooltip() const {
 }
 
 void TrayPresence::rebuildTooltip() {
-    if (tray_icon_)
+    if (tray_icon_ != nullptr)
         tray_icon_->setToolTip(currentTooltip());
 }
 
 void TrayPresence::applyIcon() {
-    if (!tray_icon_)
+    if (tray_icon_ == nullptr)
         return;
 
-    static const QString kIdlePath = QStringLiteral(":/brand/exosnap-logo-idle.ico");
-    static const QString kRecordingPath = QStringLiteral(":/brand/exosnap-logo-recording.ico");
-    static const QString kPausedPath = QStringLiteral(":/brand/exosnap-logo-paused.ico");
-
-    const QString& icon_path = [this]() -> const QString& {
-        switch (state_) {
-        case TrayIconState::Recording:
-            return kRecordingPath;
-        case TrayIconState::Paused:
-            return kPausedPath;
-        case TrayIconState::Idle:
-            return kIdlePath;
-        }
-        return kIdlePath;
-    }();
-
-    QIcon icon(icon_path);
+    const QIcon& icon = state_.icon_state == ShellIconState::Recording ? RecordingPulseIcon(pulse_frame_)
+                                                                       : StaticIcon(state_.icon_state);
     if (icon.isNull()) {
-        // Fall back: keep existing icon rather than blanking the tray.
+        // Keep the existing icon rather than blanking the tray.
         return;
     }
     tray_icon_->setIcon(icon);
+}
+
+void TrayPresence::applyMenuState() {
+    // Record stays visible while it is refused; the other two disappear, because
+    // there is genuinely nothing to pause or stop.
+    ApplyAppearance(record_action_, ShellButtonFor(ShellButton::Record, state_), /*keep_visible_when_disabled=*/true);
+    ApplyAppearance(pause_resume_action_, ShellButtonFor(ShellButton::PauseResume, state_), false);
+    ApplyAppearance(stop_action_, ShellButtonFor(ShellButton::Stop, state_), false);
+}
+
+void TrayPresence::requestAction(ShellButton button) {
+    const ShellButtonAppearance appearance = ShellButtonFor(button, state_);
+    if (!appearance.visible || !appearance.enabled || appearance.action == ShellAction::None)
+        return;
+    emit shellActionRequested(appearance.action);
 }
 
 // ---------------------------------------------------------------------------
@@ -214,7 +260,7 @@ void TrayPresence::clearUnreadCount() {
 }
 
 void TrayPresence::rebuildNotificationsLabel() {
-    if (!notifications_action_)
+    if (notifications_action_ == nullptr)
         return;
 
     if (unread_count_ <= 0) {
@@ -222,7 +268,7 @@ void TrayPresence::rebuildNotificationsLabel() {
         return;
     }
 
-    notifications_action_->setText(QStringLiteral("Notifications (%1)").arg(unread_count_));
+    notifications_action_->setText(tr("Notifications (%1)").arg(unread_count_));
     notifications_action_->setVisible(true);
 }
 

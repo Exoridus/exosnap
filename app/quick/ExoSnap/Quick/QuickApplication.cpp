@@ -464,8 +464,12 @@ void QuickApplication::initializeRecordWorkflow() {
     // PostRemuxProgress has been firing into an unset callback ever since --
     // producer kept, consumer deleted. The Saving state is the one part of a
     // recording the user cannot see the end of, so the number is the whole point.
-    recording_coordinator_->SetRemuxProgressCallback(
-        [this](float fraction) { record_view_model_adapter_.setSavingProgress(fraction); });
+    recording_coordinator_->SetRemuxProgressCallback([this](float fraction) {
+        record_view_model_adapter_.setSavingProgress(fraction);
+        // Refused unless this lease is the current owner, so a remux that
+        // reports after its own session was torn down moves nothing.
+        taskbar_presence_.updateProgress(saving_progress_lease_, static_cast<double>(fraction));
+    });
 
     recording_coordinator_->SetRecoveryManifestStore(&recovery_manifest_store_);
     recording_coordinator_->SetOutputSettings(live_config_.output);
@@ -490,8 +494,22 @@ void QuickApplication::initializeRecordWorkflow() {
         // Cleared on the way out of Saving, and on the way in: a fraction left
         // over from the previous recording would show as that recording's
         // progress for as long as the next remux takes to report.
-        if (state != UiRecordingState::Saving)
+        if (state == UiRecordingState::Saving) {
+            if (!saving_progress_lease_.valid())
+                saving_progress_lease_ = taskbar_presence_.acquireProgress(TaskbarProgressOwner::RecordingSave);
+        } else {
             record_view_model_adapter_.setSavingProgress(-1.0f);
+            if (saving_progress_lease_.valid()) {
+                // Every way out of Saving releases the bar. Failed is the one
+                // that leaves it red -- a remux the user never saw fail is a file
+                // they think they have.
+                if (state == UiRecordingState::Failed)
+                    taskbar_presence_.failProgress(saving_progress_lease_);
+                else
+                    taskbar_presence_.finishProgress(saving_progress_lease_);
+                saving_progress_lease_ = {};
+            }
+        }
         record_preview_adapter_.observeRecordingState(state);
         const UiRecordingState previous = record_view_model_.state;
         // A seeded visual scenario owns the state for the rest of the process.
@@ -3722,9 +3740,16 @@ void QuickApplication::initializeTray() {
     QObject::connect(tray_presence_.get(), &ui::tray::TrayPresence::hideWindowRequested, &shell_adapter_,
                      [this]() { hideWindowToTray(); });
     // Same entry point the global hotkey uses, so the tray cannot develop its own
-    // idea of what "toggle recording" means.
+    // idea of what "toggle recording" means. This is the double-click gesture,
+    // which has no state to read -- the menu's transport entries carry a resolved
+    // action instead, below.
     QObject::connect(tray_presence_.get(), &ui::tray::TrayPresence::recordToggleRequested, &shell_adapter_,
                      [this]() { triggerHotkeyAction(HotkeyAction::ToggleRecording); });
+    // The menu's transport entries and the taskbar's thumbnail buttons raise the
+    // same signal with the same projection-resolved intent, and land in the same
+    // handler.
+    QObject::connect(tray_presence_.get(), &ui::tray::TrayPresence::shellActionRequested, &shell_adapter_,
+                     [this](ShellAction action) { performShellAction(action); });
     // Routed through the window rather than QCoreApplication::quit() so the
     // attempt still passes onClosing -> requestClose() and therefore the guards:
     // "Quit" from the tray must still ask about a running recording.
@@ -3772,57 +3797,190 @@ void QuickApplication::initializeTray() {
 }
 
 void QuickApplication::refreshTrayState() {
-    // NO early return on a missing tray. This function drives TWO surfaces, and
-    // only one of them is the tray: the window icon below is what the TASKBAR
-    // button shows, and it exists whether or not a tray does. Returning here left
-    // the taskbar on the idle logo through a whole recording for every session
-    // without one -- a machine with the notification area disabled, and every
-    // --auto-record / --auto-edit / --visual-test run, which suppress the tray on
-    // purpose. The regression stayed open for exactly the sessions least likely
-    // to be watched.
+    // NO early return on a missing tray. This drives every shell surface, and
+    // only one of them is the tray: the window icon is what the TASKBAR button
+    // shows, and the taskbar exists whether or not a notification area does.
+    // Returning here left the taskbar on the idle logo through a whole recording
+    // for every session without one -- a machine with the notification area
+    // disabled, and every --auto-record / --auto-edit / --visual-test run, which
+    // suppress the tray on purpose.
     //
-    // Derived from the view model's own booleans rather than by re-parsing the
-    // status string: the label is presentation and may be localized, the state is
-    // not. Countdown and Preparing read as Recording, matching the Widgets
-    // mapping — the capture is committed from the user's point of view.
-    const UiRecordingState state = record_view_model_.state;
-    ui::tray::TrayIconState tray_state = ui::tray::TrayIconState::Idle;
-    if (state == UiRecordingState::Paused) {
-        tray_state = ui::tray::TrayIconState::Paused;
-    } else if (state == UiRecordingState::Recording || state == UiRecordingState::Countdown ||
-               state == UiRecordingState::Preparing) {
-        tray_state = ui::tray::TrayIconState::Recording;
-    }
+    // The view model's own Can* answers are handed over rather than re-derived:
+    // one projection, read by the tray, the taskbar and the in-app transport.
+    shell_presence_.setRecordingState(record_view_model_.state, record_view_model_adapter_.canStart(),
+                                      record_view_model_adapter_.canStop(), record_view_model_adapter_.canPause(),
+                                      record_view_model_adapter_.canResume(),
+                                      record_view_model_.HasCompletedRecording());
+    // Also called directly, not only from the projection's own change signal: the
+    // elapsed text moves on the metrics cadence without the state changing at all,
+    // and the tray tooltip is the surface that shows it.
+    applyShellPresence();
+}
+
+void QuickApplication::applyShellPresence() {
+    const ShellPresenceState& state = shell_presence_.presence();
+
     if (tray_presence_) {
-        tray_presence_->applyState(tray_state, record_view_model_adapter_.stateText().toUpper(),
-                                   record_view_model_adapter_.elapsedText());
-        tray_presence_->setRecordingBlocked(record_view_model_adapter_.blocked() &&
-                                            tray_state == ui::tray::TrayIconState::Idle);
+        tray_presence_->applyState(state, record_view_model_adapter_.elapsedText(), shell_presence_.pulseFrame());
     }
 
-    // The WINDOW icon, which is what the taskbar button shows -- a different surface
-    // from the tray icon above, and the one the Widgets frontend used to swap. The
-    // cutover carried the mechanism over (QuickWindowChrome::applyWindowIcon, the
-    // three .ico variants, their resource ids) and left the call behind, so the
-    // taskbar button has shown the idle logo through every recording since. Driven
-    // from the same state as the tray so the two surfaces cannot disagree.
+    // The WINDOW icon, which is what the taskbar button shows -- a different
+    // surface from the tray icon above, and the one the Widgets frontend used to
+    // swap. Driven from the same projection so the two cannot disagree.
     QuickWindowChrome::IconState icon_state = QuickWindowChrome::Idle;
-    if (tray_state == ui::tray::TrayIconState::Paused) {
-        icon_state = QuickWindowChrome::Paused;
-    } else if (tray_state == ui::tray::TrayIconState::Recording) {
+    switch (state.icon_state) {
+    case ShellIconState::Recording:
         icon_state = QuickWindowChrome::Recording;
+        break;
+    case ShellIconState::Paused:
+        icon_state = QuickWindowChrome::Paused;
+        break;
+    case ShellIconState::Saved:
+        icon_state = QuickWindowChrome::Saved;
+        break;
+    case ShellIconState::Idle:
+        break;
     }
-    // Only on a real change. This function runs from synchronizeRecordState(), which
-    // the diagnostics tick also reaches while recording -- and applyWindowIcon loads
-    // an icon and sends two WM_SETICONs, which is a taskbar redraw each time. The tray
-    // above is idempotent internally; this is not.
+    // Only on a real change, and deliberately NOT pulsed: applyWindowIcon loads an
+    // icon and sends two WM_SETICONs, which is a full taskbar redraw. The
+    // heartbeat belongs on the overlay badge, which is the surface Windows draws
+    // for exactly that purpose.
     if (icon_state != window_icon_state_) {
         window_icon_state_ = icon_state;
         if (root_window_) {
             if (auto* chrome = root_window_->findChild<QuickWindowChrome*>())
                 chrome->applyWindowIcon(icon_state);
         }
+        // The tray icon and the taskbar badge are shell chrome outside our
+        // window: QQuickWindow::grabWindow renders our scene graph and cannot
+        // see either. This line is the timestamped counterpart to a developer
+        // looking at the screen, which is the only way they CAN be confirmed.
+        static const char* const kIconStateNames[] = {"idle", "recording", "paused", "saved"};
+        diagnostics::AppLog::info(QStringLiteral("shell"),
+                                  QStringLiteral("shell presence -> %1 (tray + taskbar badge + window icon)")
+                                      .arg(QString::fromLatin1(kIconStateNames[static_cast<int>(icon_state)])));
     }
+
+    taskbar_presence_.setPresence(state, shell_presence_.taskbarPulseLevel());
+}
+
+void QuickApplication::performShellAction(ShellAction action) {
+    // The same requests the transport dock makes. A shell surface that called the
+    // coordinator directly would be a second opinion about what Pause means, and
+    // the projection has already decided that this action is legal here.
+    switch (action) {
+    case ShellAction::Start:
+        record_view_model_adapter_.requestStart();
+        break;
+    case ShellAction::Pause:
+        record_view_model_adapter_.requestPause();
+        break;
+    case ShellAction::Resume:
+        record_view_model_adapter_.requestResume();
+        break;
+    case ShellAction::Stop:
+        record_view_model_adapter_.requestStop();
+        break;
+    case ShellAction::None:
+        break;
+    }
+}
+
+void QuickApplication::initializeShellPresence() {
+    // The heartbeat and the Saved dwell both tick without any recording-state
+    // change behind them, so the surfaces are re-rendered from the projection's
+    // own signals rather than only from synchronizeRecordState().
+    QObject::connect(&shell_presence_, &ShellPresenceAdapter::presenceChanged, &shell_presence_,
+                     [this]() { applyShellPresence(); });
+    QObject::connect(&shell_presence_, &ShellPresenceAdapter::pulseChanged, &shell_presence_,
+                     [this]() { applyShellPresence(); });
+
+    QObject::connect(&taskbar_presence_, &TaskbarPresence::actionRequested, &taskbar_presence_,
+                     [this](ShellAction action) {
+                         diagnostics::AppLog::info(
+                             QStringLiteral("shell"),
+                             QStringLiteral("taskbar transport requested action %1").arg(static_cast<int>(action)));
+                         performShellAction(action);
+                     });
+
+    // Before the window checks below: the three long operations publish whether
+    // or not there is a taskbar button to draw on, and the ledger holds their
+    // state until there is.
+    wireTaskbarProgress();
+
+    if (!root_window_)
+        return;
+    auto* chrome = root_window_->findChild<QuickWindowChrome*>();
+    if (chrome == nullptr)
+        return;
+
+    // The chrome owns the shell HWND and the only native event filter this
+    // process installs. A second filter would be a second thing to keep in step
+    // with the window's identity.
+    chrome->setNativeCommandHandler([this](quint64 wparam) { return taskbar_presence_.handleCommand(wparam); });
+    QObject::connect(chrome, &QuickWindowChrome::taskbarButtonCreated, &taskbar_presence_,
+                     [this, chrome]() { taskbar_presence_.notifyShellReady(chrome->nativeHandle()); });
+    QObject::connect(chrome, &QuickWindowChrome::nativeHandleChanged, &taskbar_presence_,
+                     [this, chrome]() { taskbar_presence_.setHandle(chrome->nativeHandle()); });
+
+    // The chrome attached from QML before this wiring existed, so its first
+    // handle notification is already past. Nothing is applied yet -- Explorer
+    // still has to announce the button.
+    taskbar_presence_.setHandle(chrome->nativeHandle());
+
+    applyShellPresence();
+}
+
+void QuickApplication::wireTaskbarProgress() {
+    // Edit export. The adapter owns the run's lifecycle, so its state is the
+    // authority on which way the operation ended.
+    QObject::connect(&edit_export_adapter_, &EditExportAdapter::stateChanged, &edit_export_adapter_, [this]() {
+        switch (edit_export_adapter_.state()) {
+        case EditExportAdapter::Running:
+            if (!export_progress_lease_.valid())
+                export_progress_lease_ = taskbar_presence_.acquireProgress(TaskbarProgressOwner::EditExport);
+            break;
+        case EditExportAdapter::Done:
+            taskbar_presence_.finishProgress(export_progress_lease_);
+            export_progress_lease_ = {};
+            break;
+        case EditExportAdapter::Failed:
+            taskbar_presence_.failProgress(export_progress_lease_);
+            export_progress_lease_ = {};
+            break;
+        case EditExportAdapter::Options:
+            // Reached from Cancelling once the thread has been joined, and from
+            // reset(). Either way the run is over and owes the bar nothing.
+            taskbar_presence_.cancelProgress(export_progress_lease_);
+            export_progress_lease_ = {};
+            break;
+        case EditExportAdapter::Cancelling:
+            break;
+        }
+    });
+    QObject::connect(&edit_export_adapter_, &EditExportAdapter::progressChanged, &edit_export_adapter_, [this]() {
+        taskbar_presence_.updateProgress(export_progress_lease_,
+                                         static_cast<double>(edit_export_adapter_.progressPercent()) / 100.0);
+    });
+
+    // Recovery finish. Same shape, different producer: a repair remux publishes a
+    // fraction and can be cancelled.
+    QObject::connect(&recovery_adapter_, &RecoveryAdapter::busyChanged, &recovery_adapter_, [this]() {
+        if (recovery_adapter_.busy() && !recovery_progress_lease_.valid())
+            recovery_progress_lease_ = taskbar_presence_.acquireProgress(TaskbarProgressOwner::RecoveryFinish);
+    });
+    QObject::connect(&recovery_adapter_, &RecoveryAdapter::actionProgressChanged, &recovery_adapter_,
+                     [this](double fraction) { taskbar_presence_.updateProgress(recovery_progress_lease_, fraction); });
+    QObject::connect(&recovery_adapter_, &RecoveryAdapter::actionFinished, &recovery_adapter_,
+                     [this](bool success, bool cancelled) {
+                         if (cancelled)
+                             taskbar_presence_.cancelProgress(recovery_progress_lease_);
+                         else if (success)
+                             taskbar_presence_.finishProgress(recovery_progress_lease_);
+                         else
+                             taskbar_presence_.failProgress(recovery_progress_lease_);
+                         recovery_progress_lease_ = {};
+                     });
 }
 
 void QuickApplication::hideWindowToTray() {
@@ -3989,6 +4147,7 @@ bool QuickApplication::load(bool no_activate) {
         {QStringLiteral("crashReport"), QVariant::fromValue(&crash_report_adapter_)},
         {QStringLiteral("whatsNew"), QVariant::fromValue(&whats_new_adapter_)},
         {QStringLiteral("overlays"), QVariant::fromValue(&overlay_adapter_)},
+        {QStringLiteral("shellPresence"), QVariant::fromValue(&shell_presence_)},
         {QStringLiteral("noActivate"), no_activate},
         // ADR 0033, and deliberately an initial property rather than a
         // navigation emitted once the engine has loaded. By that point a
@@ -4121,6 +4280,11 @@ bool QuickApplication::load(bool no_activate) {
     // hand. See applyTraySuppression().
     if (!tray_suppressed_)
         initializeTray();
+
+    // Unconditional, unlike the tray: a session with the notification area
+    // disabled still has a taskbar button, and the harness modes that suppress
+    // the tray are exactly the ones that would otherwise never exercise this.
+    initializeShellPresence();
 
 #if defined(Q_OS_WIN)
     // Registration needs a live HWND, which only exists once the window has been

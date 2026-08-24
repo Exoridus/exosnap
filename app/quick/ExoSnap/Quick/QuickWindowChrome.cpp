@@ -38,6 +38,15 @@ namespace {
 // its default frame.
 constexpr DWORD kDwmwaBorderColor = 34;
 
+// Explorer's announcement that a window's taskbar button exists. Registered once
+// per process -- RegisterWindowMessage returns the same value for the same string
+// for the lifetime of the session, and 0 when the atom table refuses, which is
+// the one value no real message can have.
+UINT taskbarButtonCreatedMessage() {
+    static const UINT message = RegisterWindowMessageW(L"TaskbarButtonCreated");
+    return message;
+}
+
 // Resource ids and .ico paths for the three window-icon variants, kept in the same
 // order as QuickWindowChrome::IconState.
 struct IconVariant {
@@ -123,6 +132,8 @@ IconVariant iconVariantFor(QuickWindowChrome::IconState state) {
         return {":/brand/exosnap-logo-recording.ico", IDI_EXOSNAP_APP_ICON_RECORDING};
     case QuickWindowChrome::Paused:
         return {":/brand/exosnap-logo-paused.ico", IDI_EXOSNAP_APP_ICON_PAUSED};
+    case QuickWindowChrome::Saved:
+        return {":/brand/exosnap-logo-saved.ico", IDI_EXOSNAP_APP_ICON_SAVED};
     case QuickWindowChrome::Idle:
         break;
     }
@@ -169,6 +180,7 @@ void QuickWindowChrome::setTarget(QQuickWindow* window) {
     window->create();
     hwnd_ = reinterpret_cast<void*>(window->winId());
     affinity_.setHandle(hwnd_);
+    emit nativeHandleChanged();
     TraceWindowGeometry("chrome-hwnd-created", window);
 
     // A screen change is the moment the DWM border wants re-applying, and the
@@ -205,9 +217,12 @@ void QuickWindowChrome::detach() {
         // QML author writes can be caught by this disconnect.
         QObject::disconnect(target_, nullptr, this, nullptr);
     }
+    const bool had_handle = hwnd_ != nullptr;
     target_ = nullptr;
     hwnd_ = nullptr;
     affinity_.setHandle(nullptr);
+    if (had_handle)
+        emit nativeHandleChanged();
     non_client_leave_tracked_ = false;
     applied_border_valid_ = false;
     applied_border_hwnd_ = nullptr;
@@ -236,6 +251,9 @@ void QuickWindowChrome::refreshHandle() {
     // This is the one place a real identity change is observed, so it is also the
     // place any future per-HWND shell integration re-asserts itself from.
     affinity_.setHandle(fresh);
+    // A recreated window's taskbar button is a new button with none of the
+    // previous one's registrations, and Explorer announces it separately.
+    emit nativeHandleChanged();
     applyBorderColor("handle-recreated");
 }
 
@@ -434,6 +452,18 @@ bool QuickWindowChrome::requestMinimizeToTray() {
         return false;
     emit minimizeToTrayRequested();
     return true;
+}
+
+void QuickWindowChrome::setNativeCommandHandler(std::function<bool(quint64)> handler) {
+    native_command_handler_ = std::move(handler);
+}
+
+bool QuickWindowChrome::handleNativeCommand(quint64 wparam) {
+    return native_command_handler_ && native_command_handler_(wparam);
+}
+
+void* QuickWindowChrome::nativeHandle() const noexcept {
+    return hwnd_;
 }
 
 void QuickWindowChrome::setCaptureExcluded(bool excluded) {
@@ -732,7 +762,27 @@ bool QuickWindowChrome::nativeEventFilter(const QByteArray& event_type, void* me
             *result = static_cast<qintptr>(value);
     };
 
+    // Not a switch case: the value is only known at runtime, and 0 (a refused
+    // registration) must never match a real message.
+    const UINT taskbar_created = taskbarButtonCreatedMessage();
+    if (taskbar_created != 0 && msg->message == taskbar_created) {
+        emit taskbarButtonCreated();
+        // Deliberately not consumed. The message is a broadcast notification and
+        // other components in the process may want it too.
+        return false;
+    }
+
     switch (msg->message) {
+    case WM_COMMAND:
+        // THBN_CLICKED from the thumbnail toolbar arrives here. The handler
+        // decides whether it was one of ours; anything else falls through, which
+        // is what keeps this filter out of the way of the rest of the process.
+        if (handleNativeCommand(static_cast<quint64>(msg->wParam))) {
+            store(0);
+            return true;
+        }
+        return false;
+
     case WM_NCHITTEST: {
         store(static_cast<LRESULT>(resolveHitTest(static_cast<qintptr>(msg->lParam))));
         return true;

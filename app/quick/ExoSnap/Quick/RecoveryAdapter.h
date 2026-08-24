@@ -149,6 +149,13 @@ class RecoveryAdapter : public QObject {
     void candidatesChanged();
     void surfaceOpenChanged();
     void busyChanged();
+    // How far the running action has got, in [0, 1]. Emitted for a consumer that
+    // shows ONE operation rather than rows -- the taskbar progress bar. The rows
+    // read the model's ProgressRole and are unaffected.
+    void actionProgressChanged(double fraction);
+    // A finished action, and whether it succeeded. The busy flag alone cannot say
+    // which: it drops on a failure, a cancellation and a success alike.
+    void actionFinished(bool success, bool cancelled);
     void continueRequested(const exosnap::RecoveryManifestEntry& entry);
 
   private:

@@ -215,6 +215,10 @@ qt_add_qml_module(exosnap
         QuickWindowChrome.h
         QuickWindowGeometry.cpp
         QuickWindowGeometry.h
+        ShellPresenceAdapter.cpp
+        ShellPresenceAdapter.h
+        TaskbarPresence.cpp
+        TaskbarPresence.h
 )
 
 target_sources(exosnap
@@ -258,6 +262,15 @@ target_sources(exosnap
         ${PROJECT_SOURCE_DIR}/app/models/CloseGuardPolicy.h
         ${PROJECT_SOURCE_DIR}/app/models/WindowPresencePolicy.cpp
         ${PROJECT_SOURCE_DIR}/app/models/WindowPresencePolicy.h
+        # The one projection the tray, the taskbar button and the in-app
+        # transport all read, plus the heartbeat they share and the lease that
+        # decides who owns the taskbar progress bar.
+        ${PROJECT_SOURCE_DIR}/app/models/ShellPresence.cpp
+        ${PROJECT_SOURCE_DIR}/app/models/ShellPresence.h
+        ${PROJECT_SOURCE_DIR}/app/models/RecordingPulse.cpp
+        ${PROJECT_SOURCE_DIR}/app/models/RecordingPulse.h
+        ${PROJECT_SOURCE_DIR}/app/models/TaskbarProgressLease.cpp
+        ${PROJECT_SOURCE_DIR}/app/models/TaskbarProgressLease.h
         ${PROJECT_SOURCE_DIR}/app/models/RecordingFailurePolicy.cpp
         ${PROJECT_SOURCE_DIR}/app/models/RecordingFailurePolicy.h
         ${PROJECT_SOURCE_DIR}/app/models/OverlayContentPolicy.cpp
@@ -1504,6 +1517,74 @@ target_include_directories(window_presence_tests
 
 target_compile_definitions(window_presence_tests PRIVATE NOMINMAX)
 set_target_properties(window_presence_tests PROPERTIES AUTOMOC ON)
+
+# The shell's own view of the recording session: the projection every shell
+# surface reads, the heartbeat they share, and who owns the taskbar progress bar.
+# All three are pure -- no COM, no window, no timers -- which is what lets the
+# stale-callback and ownership-race cases be written at all.
+exosnap_add_gtest(
+    NAME shell_presence_tests
+    TEST_PREFIX quick_shell_presence.
+    SOURCES
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_shell_presence.cpp
+        ${PROJECT_SOURCE_DIR}/app/models/ShellPresence.cpp
+        ${PROJECT_SOURCE_DIR}/app/models/ShellPresence.h
+        ${PROJECT_SOURCE_DIR}/app/models/RecordingPulse.cpp
+        ${PROJECT_SOURCE_DIR}/app/models/RecordingPulse.h
+        ${PROJECT_SOURCE_DIR}/app/models/TaskbarProgressLease.cpp
+        ${PROJECT_SOURCE_DIR}/app/models/TaskbarProgressLease.h
+    LIBRARIES
+        Qt6::Core
+        exosnap::capability
+        exosnap_engine
+)
+
+target_include_directories(shell_presence_tests
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${PROJECT_SOURCE_DIR}/app
+)
+
+target_compile_definitions(shell_presence_tests PRIVATE NOMINMAX)
+
+# The two surfaces that turn the projection into something a user sees: the
+# adapter that owns the heartbeat and the Saved dwell, and the taskbar button
+# with its readiness lifecycle. The platform calls go through an injectable seam,
+# so the lifecycle and every refusal are testable without Explorer.
+exosnap_add_gtest(
+    NAME shell_surface_tests
+    TEST_PREFIX quick_shell_surface.
+    SOURCES
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_shell_surfaces.cpp
+        ShellPresenceAdapter.cpp
+        ShellPresenceAdapter.h
+        TaskbarPresence.cpp
+        TaskbarPresence.h
+        ${PROJECT_SOURCE_DIR}/app/models/ShellPresence.cpp
+        ${PROJECT_SOURCE_DIR}/app/models/RecordingPulse.cpp
+        ${PROJECT_SOURCE_DIR}/app/models/TaskbarProgressLease.cpp
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/AppLog.cpp
+    LIBRARIES
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Qml
+        Qt6::Test
+        exosnap::capability
+        exosnap_engine
+        # ITaskbarList3 is created through CoCreateInstance, and its CLSID/IID
+        # come out of uuid.lib.
+        ole32
+        uuid
+)
+
+target_include_directories(shell_surface_tests
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${PROJECT_SOURCE_DIR}/app
+)
+
+target_compile_definitions(shell_surface_tests PRIVATE NOMINMAX)
+set_target_properties(shell_surface_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
     NAME edit_qml_adapter_tests

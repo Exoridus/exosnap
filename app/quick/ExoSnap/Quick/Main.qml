@@ -22,6 +22,7 @@ ApplicationWindow {
     required property CrashReportAdapter crashReport
     required property WhatsNewAdapter whatsNew
     required property OverlayAdapter overlays
+    required property ShellPresenceAdapter shellPresence
     // Set once every close guard has cleared, so the re-issued close() is not
     // caught by the same guards again.
     property bool closeApproved: false
@@ -224,6 +225,7 @@ ApplicationWindow {
         showElapsed: root.settingsAdapter.recordingOverlayElapsed
         showOutputSize: root.settingsAdapter.recordingOverlayOutputSize
         showSourceName: root.settingsAdapter.recordingOverlaySourceName
+        recordingPulse: root.shellPresence.pulseIntensity
     }
 
     OverlayDiagnostics {

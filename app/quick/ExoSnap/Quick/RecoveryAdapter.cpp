@@ -230,7 +230,11 @@ void RecoveryAdapter::finish(int index) {
     finish_pool_.start([this, service, entry, index]() {
         const RecoveryActionResult result = service->Finish(entry, [this, index](float progress) -> bool {
             QMetaObject::invokeMethod(
-                this, [this, index, progress]() { model_.setProgress(index, static_cast<double>(progress)); },
+                this,
+                [this, index, progress]() {
+                    model_.setProgress(index, static_cast<double>(progress));
+                    emit actionProgressChanged(static_cast<double>(progress));
+                },
                 Qt::QueuedConnection);
             return !cancel_requested_.load();
         });
@@ -246,6 +250,7 @@ void RecoveryAdapter::finish(int index) {
 void RecoveryAdapter::onFinishComplete(int index, bool success, const QString& message) {
     model_.setBusy(index, false);
     setBusyIndex(-1);
+    emit actionFinished(success, cancel_requested_.load());
 
     if (success) {
         diagnostics::AppLog::info(QStringLiteral("recovery"), QStringLiteral("Recovery finish succeeded"));

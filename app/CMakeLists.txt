@@ -1274,6 +1274,8 @@ exosnap_add_gtest(
     SOURCES
         tests/test_tray_presence.cpp
         ui/tray/TrayPresence.cpp
+        models/ShellPresence.cpp
+        models/RecordingPulse.cpp
     # The one test target that still links Qt6::Widgets, for the same reason the
     # shipping application does: QSystemTrayIcon is a QtWidgets type and needs a
     # QApplication. If this line ever spreads to another target, a Widgets type

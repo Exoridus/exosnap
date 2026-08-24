@@ -1393,7 +1393,30 @@ release (0.11 per ADR 0022).
 
 ## 9. Presence and notifications
 
-- **Tray icon** with idle / recording / paused states and an **unread notification badge**.
+- **Tray icon** with **idle / recording / paused / saved** states and an **unread notification
+  badge**. Saved is green, is shown for the same dwell as the "Saved" notification, and then returns
+  to idle on its own; a starting recording takes the icon back immediately, whether or not that dwell
+  has run out. An icon that stayed green would have stopped describing the application and started
+  describing history.
+- **While a recording is running the tray icon and the taskbar badge pulse.** Windows has no
+  animated-icon API, so the pulse is a timer swapping pre-rendered frames: four frames over 880 ms, a
+  gentle fade of the coral centre rather than a blink. A countdown shows the recording state but
+  holds it still, which is what separates "committed" from "capturing" at a glance. Paused, saved and
+  idle are static. The on-screen recording pill breathes on the same beat.
+- **Tray menu** — Show/Hide window, the transport, Notifications while any are unread, and Quit. The
+  transport offers exactly what the state allows: **Start recording** while idle, **Pause** and
+  **Stop** while recording, **Resume** and **Stop** while paused. An action that is not possible is
+  hidden rather than shown-and-failing, except Start, which stays visible and greyed while a
+  recording is being prepared or saved — a control that vanishes reads as a bug, a greyed one reads
+  as a reason.
+- **Taskbar button** — the same transport as a thumbnail toolbar under the taskbar preview
+  (Record, Pause/Resume, Stop, following the same table as the tray menu), a **state badge** over the
+  application icon in the same four states as the tray, and a **progress bar** for the long
+  operations: the save after a recording stops, a recovery finish, and an edit export. The bar shows
+  one operation at a time; a second long operation running at the same time reports in its own
+  surface rather than sharing the bar, and a failed operation leaves the bar red until the next one
+  starts. Taskbar integration is a convenience and never a dependency: if Windows refuses any part of
+  it, the buttons and badge are simply absent and recording is unaffected.
 - **Notification hub** — the canonical notification center is a **bell icon with a notification hub
   panel in the app header**. **The hub is the record: every notification lands there**, persists until
   dismissed, and keeps its action (recover, undo, show in folder, …). The **system-tray icon
