@@ -29,6 +29,9 @@ concurrency:
 
 env:
   SCCACHE_GHA_ENABLED: "true"
+  # Same reason as ci.yml: the stats step sits behind the test steps, and an
+  # idled-out server reports zeros instead of the run's real hit rate.
+  SCCACHE_IDLE_TIMEOUT: "0"
 
 jobs:
   # PR-CI tiering: this build is slow (10-20 min, fetches+builds sentry-native
