@@ -351,10 +351,32 @@ jobs:
       # recorded dependency graph. A full-tree pass of this check set measures
       # ~5.6 CPU-hours — nearly all of it clang re-parsing Qt headers — so the full
       # form stays a local / on-demand operation and CI runs the scoped one.
+      # Analysing one Qt-heavy translation unit costs ~44 s, nearly all of it
+      # clang re-parsing the same Qt headers, and a header change fans the
+      # scoped set out to well over a hundred units. The cache keys each unit
+      # on its full recorded input set, so the units a follow-up push did not
+      # touch replay their stored verdict instead of being analysed again --
+      # which is what makes the second and later pushes of a review cycle
+      # cheap. The first push of a header-changing PR still analyses
+      # everything that header reaches: those inputs genuinely changed.
+      #
+      # Restored by prefix, saved under a run-unique key, because a cache entry
+      # cannot be overwritten once written. GitHub evicts by age and by the
+      # repository's cache budget; entries are a few hundred bytes each, so the
+      # set is never what fills it.
+      - name: Restore clang-tidy result cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/clang-tidy-cache
+          key: clang-tidy-blocking-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            clang-tidy-blocking-${{ runner.os }}-
+
       - name: clang-tidy blocking check set (windows-x64-ninja-debug)
         run: >-
           pwsh -NonInteractive -File scripts/run-clang-tidy-blocking.ps1
           -BuildDir build/windows-x64-ninja-debug -Base HEAD^
+          -CacheDir "${{ runner.temp }}/clang-tidy-cache"
 
       - name: sccache stats
         if: always()
