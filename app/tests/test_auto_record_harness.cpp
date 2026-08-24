@@ -179,26 +179,49 @@ TEST(AutoRecordHarness, RejectsNvencPresetOutsideTheRange) {
     }
 }
 
-// The three flags of the removed off-screen preview mode. They parsed cleanly and
-// then did nothing, so a run could ask for an artefact, be told it succeeded, and
-// produce none. An accepted no-op is the defect; an explicit rejection is not.
-TEST(AutoRecordHarness, RejectsRemovedPreviewModeFlags) {
-    for (const QString& flag : {QStringLiteral("--enable-preview"), QStringLiteral("--capture-frame-in-ready")}) {
-        AutoRecordOptions opts;
-        QString error;
-        const QStringList args = {QStringLiteral("exosnap.exe"), QStringLiteral("--auto-record"), flag};
-        EXPECT_FALSE(ParseAutoRecordOptions(args, &opts, &error)) << flag.toStdString();
-        EXPECT_FALSE(error.isEmpty()) << flag.toStdString();
-    }
+// --enable-preview was the switch into the Widgets-era off-screen preview mode,
+// which did not survive the cutover: nothing reads the field. An accepted no-op is
+// the defect; an explicit rejection is not. Its two former companions are NOT in
+// this list -- they drive the Ready-frame capture and are tested below.
+TEST(AutoRecordHarness, RejectsEnablePreview) {
+    AutoRecordOptions opts;
+    QString error;
+    const QStringList args = {QStringLiteral("exosnap.exe"), QStringLiteral("--auto-record"),
+                              QStringLiteral("--enable-preview")};
+    EXPECT_FALSE(ParseAutoRecordOptions(args, &opts, &error));
+    EXPECT_FALSE(error.isEmpty());
 }
 
-TEST(AutoRecordHarness, RejectsScreenshotPath) {
+TEST(AutoRecordHarness, ParsesReadyFrameCapture) {
+    AutoRecordOptions opts;
+    QString error;
+    const QStringList args = {QStringLiteral("exosnap.exe"), QStringLiteral("--auto-record"),
+                              QStringLiteral("--capture-frame-in-ready"), QStringLiteral("--screenshot-path"),
+                              QStringLiteral("ready.png")};
+    ASSERT_TRUE(ParseAutoRecordOptions(args, &opts, &error)) << error.toStdString();
+    EXPECT_TRUE(opts.capture_frame_in_ready);
+    EXPECT_EQ(opts.screenshot_path, QStringLiteral("ready.png"));
+}
+
+TEST(AutoRecordHarness, ReadyFrameCaptureNeedsNoDestination) {
+    AutoRecordOptions opts;
+    QString error;
+    const QStringList args = {QStringLiteral("exosnap.exe"), QStringLiteral("--auto-record"),
+                              QStringLiteral("--capture-frame-in-ready")};
+    ASSERT_TRUE(ParseAutoRecordOptions(args, &opts, &error)) << error.toStdString();
+    EXPECT_TRUE(opts.capture_frame_in_ready);
+    EXPECT_TRUE(opts.screenshot_path.isEmpty());
+}
+
+// A destination without a capture is an accepted no-op of exactly the kind the
+// Ready-capture wiring exists to remove.
+TEST(AutoRecordHarness, RejectsScreenshotPathWithoutReadyCapture) {
     AutoRecordOptions opts;
     QString error;
     const QStringList args = {QStringLiteral("exosnap.exe"), QStringLiteral("--auto-record"),
                               QStringLiteral("--screenshot-path"), QStringLiteral("shot.png")};
     EXPECT_FALSE(ParseAutoRecordOptions(args, &opts, &error));
-    EXPECT_TRUE(error.contains(QStringLiteral("--capture-frame-at"))) << error.toStdString();
+    EXPECT_TRUE(error.contains(QStringLiteral("--capture-frame-in-ready"))) << error.toStdString();
 }
 
 // A capture at or past the stop deadline never fires. Accepting it would make the

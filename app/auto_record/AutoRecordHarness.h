@@ -52,6 +52,20 @@ struct AutoRecordOptions {
     // -1 disables it. When set, the run only succeeds if the PNG actually reached
     // disk; its path is reported as `snapshot_path` on the JSON result line.
     int capture_frame_at_seconds = -1;
+
+    // Photograph the IDLE preview instead of running a recording at all. The
+    // Ready branch goes through the coordinator's own ReadyFrameCaptureService,
+    // so the picture carries the preview's transform rather than a composition
+    // the harness assembled itself -- which is what makes it comparable against
+    // a frame decoded from a recording of the same desktop, and therefore the
+    // one automated way to separate a preview-side HDR/SDR mistake from an
+    // engine-side one. No recording is started when this is set.
+    bool capture_frame_in_ready = false;
+
+    // Where the Ready snapshot should end up. Empty leaves it wherever the
+    // engine named and placed it; a path MOVES it there afterwards rather than
+    // teaching the engine a second naming rule.
+    QString screenshot_path;
     int repeat_cycles = 1; // run N start/stop cycles on the same coordinator
                            // (warm capture-hub state) instead of exiting after one
 

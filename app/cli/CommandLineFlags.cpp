@@ -35,12 +35,12 @@ constexpr std::array kFlags = {
     KnownFlag{"--benchmark-output", FlagArity::Value},
     KnownFlag{"--benchmark-notes", FlagArity::Value},
     KnownFlag{"--benchmark-warmup", FlagArity::Value},
-    // Withdrawn with the off-screen preview mode. Still listed, and still
-    // parsed, so the caller gets the auto-record parser's specific message
-    // naming the replacement rather than a bare "unknown option".
-    KnownFlag{"--enable-preview", FlagArity::None},
-    KnownFlag{"--screenshot-path", FlagArity::Value},
     KnownFlag{"--capture-frame-in-ready", FlagArity::None},
+    KnownFlag{"--screenshot-path", FlagArity::Value},
+    // Withdrawn with the off-screen preview mode, and still listed on purpose:
+    // the auto-record parser owns the message that says so, and claiming it here
+    // first would replace that with a bare "unknown option".
+    KnownFlag{"--enable-preview", FlagArity::None},
 
     // --- app/quick/ExoSnap/Quick/QuickAutoEditHarness.cpp ---
     KnownFlag{"--auto-edit", FlagArity::None},
@@ -64,6 +64,7 @@ constexpr std::array kFlags = {
     KnownFlag{"--preview-visual-test", FlagArity::None},
     KnownFlag{"--preview-benchmark", FlagArity::None},
     KnownFlag{"--benchmark-seconds", FlagArity::Value},
+    KnownFlag{"--window-maximize-cycle", FlagArity::None},
     KnownFlag{"--still-frame-validation", FlagArity::Value},
     KnownFlag{"--target-refresh-validation", FlagArity::Value},
     KnownFlag{"--visual-test", FlagArity::Value},
