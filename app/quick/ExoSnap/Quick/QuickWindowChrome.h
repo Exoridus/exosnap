@@ -12,6 +12,10 @@
 #include <QQuickWindow>
 #include <QtQmlIntegration/qqmlintegration.h>
 
+#include "MainWindowAffinity.h"
+
+#include <functional>
+
 namespace exosnap::quick {
 
 // Win32 non-client chrome for the borderless Quick shell.
@@ -135,7 +139,46 @@ class QuickWindowChrome : public QObject, public QAbstractNativeEventFilter {
     // records WPF_RESTORETOMAXIMIZED in the placement when a MAXIMIZED window is
     // minimized, and that flag is the only thing that brings it back maximized
     // from the taskbar.
+    //
+    // Consults the minimize-to-tray provider first, so the title bar's own button
+    // resolves exactly as Win+Down and the window menu do.
     Q_INVOKABLE void minimizeWindow();
+
+    // Answers "should a minimize hide the window to the tray instead?". Set once
+    // by the application, which owns the persisted preference and knows whether a
+    // tray exists at all (models/WindowPresencePolicy). Absent means the ordinary
+    // taskbar minimize -- the safe answer, because hiding a window with no
+    // restore path strands the user.
+    //
+    // Deliberately NOT a QML-side check on the button: SC_MINIMIZE reaches this
+    // object from the window menu, from Win+Down and from a click on the taskbar
+    // button of the active window, none of which QML ever sees. One provider, one
+    // outcome, whatever asked.
+    void setMinimizeToTrayProvider(std::function<bool()> provider);
+
+    // Answers a WM_SYSCOMMAND. Returns true when the command was taken over and
+    // Windows must not perform it -- today only SC_MINIMIZE, and only while the
+    // provider says the minimize belongs in the tray.
+    //
+    // Public rather than buried in the filter so the native route is reachable
+    // without a live message pump: what has to be provable is that it and
+    // minimizeWindow() consult the SAME provider, which is exactly the thing a
+    // QML-side check on the visible button would break.
+    [[nodiscard]] bool handleSysCommand(quint64 wparam);
+
+    // WDA_EXCLUDEFROMCAPTURE for the shell window. Applied immediately, and
+    // re-applied whenever the native handle changes identity -- display affinity
+    // is per-HWND and does not survive a recreate.
+    //
+    // Fail-OPEN, unlike the overlays' CaptureExclusion: a refused platform call
+    // leaves the window visible and usable and is logged (MainWindowAffinity).
+    void setCaptureExcluded(bool excluded);
+    [[nodiscard]] bool captureExcluded() const noexcept;
+    // What actually happened, which is not the same question: a window that is
+    // present in a capture because the call was refused looks exactly like one
+    // whose setting is off.
+    [[nodiscard]] bool captureExclusionApplied() const noexcept;
+    void setAffinityFunctionForTest(MainWindowAffinity::AffinityFunction fn);
 
     // Un-minimizes without deciding what to un-minimize INTO. SW_RESTORE is the
     // gesture the taskbar button performs, so a window that was maximized comes
@@ -207,6 +250,12 @@ class QuickWindowChrome : public QObject, public QAbstractNativeEventFilter {
     // the title-bar control share one path.
     void maximizeButtonClicked();
 
+    // A minimize request that the provider resolved to "hide to the tray". The
+    // hide itself belongs to the application: it banks the window geometry and
+    // the maximized state first, and it owns the tray icon that brings the window
+    // back.
+    void minimizeToTrayRequested();
+
   private:
     // `hwnd_` is the raw HWND but is typed as void* so this header stays free of
     // <windows.h> — it is included by moc-generated TUs and by any QML consumer.
@@ -226,6 +275,9 @@ class QuickWindowChrome : public QObject, public QAbstractNativeEventFilter {
     // TrackMouseEvent is one-shot; this stops us re-arming it on every single
     // WM_NCMOUSEMOVE.
     bool non_client_leave_tracked_ = false;
+
+    std::function<bool()> minimize_to_tray_provider_;
+    MainWindowAffinity affinity_;
 
     // What the DWM border attribute was last set to, and on which handle. Mutable
     // because applyBorderColor is const: it changes the window, never this object's
@@ -251,6 +303,11 @@ class QuickWindowChrome : public QObject, public QAbstractNativeEventFilter {
 
     void applyBorderColor(const char* reason) const;
     void ensureNativeFrameStyle() const;
+
+    // Consults the provider and, when it says so, emits minimizeToTrayRequested.
+    // Returns whether the minimize was taken over -- the caller must then NOT
+    // perform the ordinary one.
+    [[nodiscard]] bool requestMinimizeToTray();
 };
 
 } // namespace exosnap::quick

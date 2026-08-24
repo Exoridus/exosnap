@@ -156,6 +156,11 @@ ApplicationWindow {
     // window state belongs to Win32 here, and only a native minimize records
     // WPF_RESTORETOMAXIMIZED, which is what brings a maximized window back
     // maximized from the taskbar.
+    //
+    // The chrome also decides whether this minimize goes to the taskbar or to the
+    // tray, and deliberately not this button: SC_MINIMIZE reaches the chrome from
+    // the window menu, Win+Down and the taskbar button, none of which QML sees. A
+    // check here would leave those routes on the other behaviour.
     function minimizeWindow(): void {
         windowChrome.minimizeWindow();
     }

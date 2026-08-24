@@ -299,6 +299,9 @@ class QuickApplication {
     // automation, and turning it off suppressed nothing at all. Per product-spec §9 it
     // gates only the toast glance -- the hub records every event regardless.
     void applyShowNotifications();
+    // Pushes `hide_window_from_capture` onto the shell window. Fail-open: a
+    // refused platform call leaves the window visible and logs it.
+    void applyWindowCaptureExclusion();
     // Opens or closes the kernel DPC/ISR trace against the same gate the present
     // provider evaluates (opt-in AND elevation). Graceful: an unelevated process or a
     // refused session simply keeps measuring nothing, and nothing is then reported.
@@ -338,10 +341,10 @@ class QuickApplication {
     // Close guards: samples what is in flight and applies the effects the user
     // confirmed. The ordering and wording live in models/CloseGuardPolicy.
     void initializeShell();
-    // Tray presence and the close-to-tray contract. Requires the root window, so
-    // it runs from load() rather than from the constructor. Absent entirely when
-    // the platform reports no system tray, which is also what makes
-    // ShouldHideToTray refuse to hide — there would be no way back to the window.
+    // Tray presence. Requires the root window, so it runs from load() rather than
+    // from the constructor. Absent entirely when the platform reports no system
+    // tray, which is also what makes EvaluateMinimize refuse to hide -- there
+    // would be no way back to the window.
     void initializeTray();
     // Pushes the current recording state onto the tray icon/tooltip AND onto the
     // window icon, which is what the taskbar button shows. Called from the same
@@ -762,10 +765,6 @@ class QuickApplication {
     // engine can destroy the window while this object is still alive, and every
     // tray action would otherwise act on a dangling pointer.
     QPointer<QQuickWindow> root_window_;
-    // Latched by the tray "Quit" action and consumed by the very next close
-    // attempt, exactly as the Widgets shell's force_quit_ is: it is what makes
-    // that one close bypass the hide-to-tray branch and reach the guards.
-    bool force_quit_ = false;
     QQmlApplicationEngine engine_;
 
     // Declared last so it is destroyed FIRST: its destructor waits for the

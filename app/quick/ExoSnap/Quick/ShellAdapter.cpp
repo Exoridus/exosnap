@@ -5,7 +5,7 @@ namespace exosnap::quick {
 namespace {
 
 // Stable keys for the close-decision signal. The whole point of reporting this
-// path is that its three "nothing happened" outcomes are indistinguishable to the
+// path is that its "nothing happened" outcomes are indistinguishable to the
 // user -- and, until now, to a support bundle as well.
 [[nodiscard]] const char* CloseGuardKindKey(CloseGuardKind kind) noexcept {
     switch (kind) {
@@ -30,10 +30,6 @@ ShellAdapter::ShellAdapter(QObject* parent) : QObject(parent) {
 
 void ShellAdapter::setStateProvider(std::function<CloseGuardState()> provider) {
     state_provider_ = std::move(provider);
-}
-
-void ShellAdapter::setHideToTrayProvider(std::function<bool()> provider) {
-    hide_to_tray_provider_ = std::move(provider);
 }
 
 int ShellAdapter::currentPage() const noexcept {
@@ -111,7 +107,7 @@ bool ShellAdapter::requestClose() {
     const CloseGuardState state = currentState();
     const CloseGuardPrompt prompt = EvaluateCloseGuard(state);
 
-    // Reported for every outcome, because three of them look identical from the
+    // Reported for every outcome, because all but one look identical from the
     // outside: the window simply stays. A user saying "Quit did nothing" has no way
     // to tell a silent block from an unseen prompt from a teardown that hung, and
     // until this signal existed neither did a support bundle.
@@ -123,18 +119,6 @@ bool ShellAdapter::requestClose() {
         emit closeDecided(QString::fromLatin1(kind), state.recording, state.exporting, state.remuxing);
     };
 
-    // The tear-down guards run AHEAD of close-to-tray, and that ordering is the
-    // product rule: a running recording, export or remux is asked about whichever
-    // way the preference is set, because what the user is answering is "close for
-    // real", not "hide". Confirming therefore always ends in a full close --
-    // confirmCloseGuard() emits closeApproved, which the window honours without
-    // consulting this function again, so the tray branch below is never reached.
-    //
-    // This deliberately reverses the earlier order, where a hide short-circuited
-    // everything on the argument that hiding tears nothing down. That argument is
-    // sound for the hide itself and wrong about the question: with close-to-tray on,
-    // "close" during a recording used to silently mean "hide", and the user never
-    // found out that the thing they asked to close was still running.
     switch (prompt.kind) {
     case CloseGuardKind::ConfirmRemux:
     case CloseGuardKind::ConfirmExport:
@@ -143,28 +127,14 @@ bool ShellAdapter::requestClose() {
         publish(prompt);
         return false;
     case CloseGuardKind::BlockSilently:
-    case CloseGuardKind::Allow:
-        break;
-    }
-
-    // Close-to-tray sits below the tear-down guards and ABOVE the finalize block,
-    // because a finalize in flight is precisely the case where not ending the
-    // process is the safe answer -- and hiding is not ending it. Nothing is torn
-    // down here, so the half-written container the finalize guard exists to prevent
-    // cannot arise.
-    if (hide_to_tray_provider_ && hide_to_tray_provider_()) {
-        // Any prompt still standing belongs to a previous, abandoned attempt.
-        cancelCloseGuard();
-        report("hideToTray");
-        emit hideToTrayRequested();
-        return false;
-    }
-
-    if (prompt.kind == CloseGuardKind::BlockSilently) {
-        // The finalizing overlay is already on screen; no prompt, no close.
+        // The finalizing overlay is already on screen; no prompt, no close, and
+        // no alternative route that would let the half-written container the
+        // guard exists to prevent arise anyway.
         report(CloseGuardKindKey(prompt.kind));
         clearPrompt();
         return false;
+    case CloseGuardKind::Allow:
+        break;
     }
 
     report(CloseGuardKindKey(CloseGuardKind::Allow));

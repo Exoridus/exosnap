@@ -21,6 +21,7 @@
 #include "models/HotkeyStartupConflicts.h"
 #include "models/OutputSettingsModel.h"
 #include "models/VideoSettingsModel.h"
+#include "models/WindowPresencePolicy.h"
 #include "ui/CodecLabels.h"
 #include "ui/theme/ExoSnapMetrics.h"
 #include "visual_tests/DiagnosticsLiveScenario.h"
@@ -2000,6 +2001,7 @@ void QuickApplication::wireSettingsCommands() {
         applyDeveloperLogLevel();
         applyCrashReportPolicy();
         applyShowNotifications();
+        applyWindowCaptureExclusion();
         // ADR 0033. Turning the opt-in on opens the ETW session immediately when the
         // process is already elevated, and does nothing at all when it is not --
         // there is no relaunch prompt here, because a settings toggle is not consent
@@ -2125,6 +2127,17 @@ void QuickApplication::saveAndPublishAppSettings(SettingsWriteIntent intent) {
     // turns show_recording_overlay / show_diagnostics_overlay from stored
     // preferences into settings that take effect the moment they are toggled.
     overlay_adapter_.setAppSettings(settings_);
+    applyWindowCaptureExclusion();
+}
+
+// The shell window's own capture exclusion. Pushed rather than polled, for the
+// same reason the overlay gates are: a toggle in Settings has to reach the window
+// while the user is still looking at the switch.
+void QuickApplication::applyWindowCaptureExclusion() {
+    if (root_window_ == nullptr)
+        return;
+    if (auto* chrome = root_window_->findChild<QuickWindowChrome*>())
+        chrome->setCaptureExcluded(settings_.hide_window_from_capture);
 }
 
 void QuickApplication::applySettingsConfigEdit() {
@@ -3660,11 +3673,6 @@ void QuickApplication::initializeShell() {
                                           .arg(recording ? 1 : 0)
                                           .arg(exporting ? 1 : 0)
                                           .arg(remuxing ? 1 : 0));
-            // One close attempt, one decision, one place the latch is cleared. A
-            // tray "Quit" that ends at a prompt the user then cancels must not leave
-            // the next ordinary close behaving like a hard quit.
-            force_quit_ = false;
-
             // An APPROVED close ends the process, and does so explicitly rather than
             // leaving it to quitOnLastWindowClosed. Qt quits when the last visible
             // "primary window (i.e. top level window with no transient parent)"
@@ -3700,8 +3708,8 @@ void QuickApplication::initializeShell() {
 
 void QuickApplication::initializeTray() {
     // No tray on this platform/session means no way back to a hidden window, so
-    // there is deliberately no icon AND no close-to-tray: ShouldHideToTray reads
-    // tray availability as its third input for exactly this reason.
+    // there is deliberately no icon AND no minimize-to-tray: EvaluateMinimize
+    // reads tray availability as its second input for exactly this reason.
     if (!QSystemTrayIcon::isSystemTrayAvailable())
         return;
 
@@ -3729,7 +3737,6 @@ void QuickApplication::initializeTray() {
             QStringLiteral("shell"),
             QStringLiteral("tray Quit requested (window=%1)")
                 .arg(root_window_ != nullptr ? QStringLiteral("present") : QStringLiteral("absent")));
-        force_quit_ = true;
         // A visible window is asked to close, so the request travels the same path
         // an ordinary close does and inherits the guards for free.
         if (root_window_ != nullptr && root_window_->isVisible()) {
@@ -3744,22 +3751,6 @@ void QuickApplication::initializeTray() {
         if (shell_adapter_.requestClose())
             flushPendingPersists();
     });
-
-    shell_adapter_.setHideToTrayProvider([this]() {
-        // Reads the latch; does NOT consume it. Since the tear-down guards moved
-        // ahead of this branch, a tray "Quit" during a recording never reaches the
-        // provider at all -- it raises a prompt first -- so consuming the latch here
-        // would leave it set whenever the user was asked something. It is cleared
-        // instead on closeDecided, which fires exactly once per close attempt for
-        // every outcome, including the ones that never get this far.
-        return ui::tray::ShouldHideToTray(settings_.keep_running_in_tray, force_quit_, tray_presence_ != nullptr);
-    });
-
-    // Two callers, one hide: the close-to-tray preference, and the tray menu's
-    // own "Hide window" entry. A second copy of this body is how the two would
-    // drift apart on the geometry flush or on the one-time notice.
-    QObject::connect(&shell_adapter_, &ShellAdapter::hideToTrayRequested, &shell_adapter_,
-                     [this]() { hideWindowToTray(); });
 
     // The unread badge mirrors the in-window bell: a toast raised while the
     // window is hidden is otherwise invisible.
@@ -3855,19 +3846,11 @@ void QuickApplication::hideWindowToTray() {
     if (tray_presence_)
         tray_presence_->setWindowVisible(false);
 
-    // One-time notice, so the first hide can never look like a crash. The
-    // flag is persisted immediately: a user who then kills the process must
-    // not be told again on the next run.
-    if (!settings_.tray_close_notice_shown) {
-        settings_.tray_close_notice_shown = true;
-        saveAndPublishAppSettings();
-        if (tray_presence_) {
-            tray_presence_->showMessage(
-                QStringLiteral("ExoSnap is still running"),
-                QStringLiteral("ExoSnap is running in the tray. Right-click the tray icon to quit."),
-                QSystemTrayIcon::Information, 4000);
-        }
-    }
+    // No one-time "still running" notice. The window is only ever hidden by a
+    // gesture that already MEANS "put this away" -- a minimize with the preference
+    // on, or the tray menu's own Hide entry -- so nothing surprising is left to
+    // explain. The notice existed because close-to-tray turned a close into a
+    // hide, which is the behaviour that is gone.
     diagnostics::AppLog::info(QStringLiteral("tray"), QStringLiteral("Window hidden to tray"));
 }
 
@@ -4055,8 +4038,22 @@ bool QuickApplication::load(bool no_activate) {
         // start withholds it through Qt::WindowDoesNotAcceptFocus in the flags,
         // which is already set by the time we get here.
         auto* chrome = root_window->findChild<QuickWindowChrome*>();
-        if (chrome != nullptr)
+        if (chrome != nullptr) {
             chrome->applyNativeWindowStyle();
+            // One provider for every minimize route. The chrome asks it from the
+            // title bar's own button AND from the SC_MINIMIZE the window menu,
+            // Win+Down and the taskbar button send, so a QML-side check on the
+            // button alone would leave the native routes on the old behaviour.
+            chrome->setMinimizeToTrayProvider([this]() {
+                return EvaluateMinimize(settings_.minimize_to_tray, tray_presence_ != nullptr) ==
+                       MinimizeOutcome::HideToTray;
+            });
+            QObject::connect(chrome, &QuickWindowChrome::minimizeToTrayRequested, chrome,
+                             [this]() { hideWindowToTray(); });
+            // Applied while the window is still hidden, so a shell that opted into
+            // capture exclusion is never on screen for a frame without it.
+            chrome->setCaptureExcluded(settings_.hide_window_from_capture);
+        }
         ApplyStartupWindowGeometry(root_window, restored.rect);
         TraceWindowGeometry("pre-show", root_window);
         // Shown windowed first and maximized afterwards, never QWindow::

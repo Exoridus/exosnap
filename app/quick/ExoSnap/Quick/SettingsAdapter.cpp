@@ -1298,8 +1298,12 @@ bool SettingsAdapter::showNotifications() const noexcept {
 bool SettingsAdapter::showQuickControls() const noexcept {
     return app_settings_.show_quick_controls;
 }
-bool SettingsAdapter::keepRunningInTray() const noexcept {
-    return app_settings_.keep_running_in_tray;
+bool SettingsAdapter::minimizeToTray() const noexcept {
+    return app_settings_.minimize_to_tray;
+}
+
+bool SettingsAdapter::hideWindowFromCapture() const noexcept {
+    return app_settings_.hide_window_from_capture;
 }
 bool SettingsAdapter::openEditorWhenFinished() const noexcept {
     return app_settings_.open_editor_when_finished;
@@ -2053,11 +2057,19 @@ void SettingsAdapter::setShowQuickControls(bool value) {
     commitAppSettingsEdit();
 }
 
-void SettingsAdapter::setKeepRunningInTray(bool value) {
-    if (app_settings_.keep_running_in_tray == value) {
+void SettingsAdapter::setMinimizeToTray(bool value) {
+    if (app_settings_.minimize_to_tray == value) {
         return;
     }
-    app_settings_.keep_running_in_tray = value;
+    app_settings_.minimize_to_tray = value;
+    commitAppSettingsEdit();
+}
+
+void SettingsAdapter::setHideWindowFromCapture(bool value) {
+    if (app_settings_.hide_window_from_capture == value) {
+        return;
+    }
+    app_settings_.hide_window_from_capture = value;
     commitAppSettingsEdit();
 }
 

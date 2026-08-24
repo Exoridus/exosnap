@@ -119,13 +119,18 @@ struct PersistedAppSettings {
     // setting behind it at all.
     bool open_editor_when_finished = true;
 
-    // TRAY-CLOSE-TO-TRAY-R1: whether the window hides to the tray instead of
-    // quitting when the user clicks the window's close button. Default OFF.
-    bool keep_running_in_tray = false;
+    // Whether MINIMIZING hides the window to the tray instead of sending it to
+    // the taskbar. Default OFF. Closing is not affected by any preference: the
+    // close button always closes.
+    bool minimize_to_tray = false;
 
-    // TRAY-CLOSE-TO-TRAY-R1: whether the one-time close-to-tray notice has
-    // already been shown to the user. Default false (not yet shown).
-    bool tray_close_notice_shown = false;
+    // Whether the shell window carries WDA_EXCLUDEFROMCAPTURE. Default OFF.
+    // Unconditional while on -- not scoped to a recording -- so the label
+    // ("Hide the ExoSnap window from screen capture") is true whenever the
+    // setting is. Reaches every screen capture on the machine, ExoSnap's own and
+    // any other application's. The five overlays are excluded regardless and
+    // this setting does not touch them.
+    bool hide_window_from_capture = false;
 
     // QUICK-PILL-R1: whether the interactive quick-control pill overlay is shown
     // during recording. Default OFF.  The pill is capture-excluded (via

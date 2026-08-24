@@ -179,6 +179,28 @@ TEST_F(SettingsAdapterTest, AppSettingsEditIsSeparateFromConfigEdit) {
     EXPECT_EQ(adapter.appSettings().show_notifications, adapter.showNotifications());
 }
 
+// The two window-presence switches, which are app settings rather than recording
+// configuration: they change what the WINDOW does, and nothing about the file.
+TEST_F(SettingsAdapterTest, WindowPresenceSwitchesDefaultOffAndRoundTrip) {
+    EXPECT_FALSE(adapter.minimizeToTray());
+    EXPECT_FALSE(adapter.hideWindowFromCapture());
+
+    SignalCounter config_spy(adapter, &SettingsAdapter::configEdited);
+    SignalCounter app_spy(adapter, &SettingsAdapter::appSettingsEdited);
+
+    adapter.setMinimizeToTray(true);
+    adapter.setHideWindowFromCapture(true);
+
+    EXPECT_EQ(config_spy.count(), 0);
+    EXPECT_EQ(app_spy.count(), 2);
+    EXPECT_TRUE(adapter.appSettings().minimize_to_tray);
+    EXPECT_TRUE(adapter.appSettings().hide_window_from_capture);
+
+    // Idempotent, so a re-published settings struct does not look like an edit.
+    adapter.setMinimizeToTray(true);
+    EXPECT_EQ(app_spy.count(), 2);
+}
+
 // ---------------------------------------------------------------------------
 // Quality / frame-rate mapping
 // ---------------------------------------------------------------------------

@@ -140,12 +140,6 @@ void TrayPresence::hide() {
         tray_icon_->hide();
 }
 
-void TrayPresence::showMessage(const QString& title, const QString& message, QSystemTrayIcon::MessageIcon icon,
-                               int msecs) {
-    if (tray_icon_ && tray_icon_->isVisible())
-        tray_icon_->showMessage(title, message, icon, msecs);
-}
-
 QString TrayPresence::currentTooltip() const {
     // Tooltip format per Mappe "Tray behavior" SpecBox:
     //   "ExoSnap — Ready"
@@ -250,18 +244,6 @@ void TrayPresence::onShowHideTriggered() {
         return;
     }
     emit activateWindowRequested();
-}
-
-// ---------------------------------------------------------------------------
-// ShouldHideToTray (TRAY-CLOSE-TO-TRAY-R1)
-// ---------------------------------------------------------------------------
-
-bool ShouldHideToTray(bool keep_running_in_tray, bool force_quit, bool tray_available) noexcept {
-    // Hide to tray only when:
-    //   • the user has opted in (keep_running_in_tray == true), AND
-    //   • this is not a forced quit (e.g. from tray menu "Quit"), AND
-    //   • the system tray is actually available.
-    return keep_running_in_tray && !force_quit && tray_available;
 }
 
 } // namespace exosnap::ui::tray

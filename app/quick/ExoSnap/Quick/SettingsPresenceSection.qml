@@ -10,8 +10,9 @@ ExoCard {
     // The three capture-excluded overlays moved to SettingsOverlaysSection when
     // they gained content configuration, and the PresentMon opt-in to Developer:
     // an elevation-gated measurement probe is not presence. What stays is how the
-    // app announces itself while it runs -- a toast, the tray, and what happens
-    // when a recording finishes.
+    // app announces itself while it runs -- a toast, what happens when a recording
+    // finishes, and the pair below: where the window goes when it is put away, and
+    // whether it is in anyone's capture while it stays.
     title: qsTr("App behaviour")
 
     ExoSettingRow {
@@ -30,16 +31,35 @@ ExoCard {
     }
 
     ExoSettingRow {
-        label: qsTr("Keep running in tray")
+        label: qsTr("Minimize ExoSnap to the system tray")
+        hint: qsTr("Minimizing hides the window; the tray icon brings it back")
         stacked: root.stacked
         controlWidth: 60
         Layout.fillWidth: true
 
         ExoSwitch {
-            checked: root.settings.keepRunningInTray
-            Accessible.name: qsTr("Keep running in tray")
+            checked: root.settings.minimizeToTray
+            Accessible.name: qsTr("Minimize ExoSnap to the system tray")
             Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
-            onToggledByUser: value => root.settings.keepRunningInTray = value
+            onToggledByUser: value => root.settings.minimizeToTray = value
+        }
+    }
+
+    ExoSettingRow {
+        label: qsTr("Hide the ExoSnap window from screen capture")
+        // The reach is the part the label cannot carry: this is a Windows
+        // property of the window itself, so it applies to every capture on the
+        // machine, not only ExoSnap's own.
+        hint: qsTr("Applies to all capture software — calls, screen sharing, screenshots")
+        stacked: root.stacked
+        controlWidth: 60
+        Layout.fillWidth: true
+
+        ExoSwitch {
+            checked: root.settings.hideWindowFromCapture
+            Accessible.name: qsTr("Hide the ExoSnap window from screen capture")
+            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
+            onToggledByUser: value => root.settings.hideWindowFromCapture = value
         }
     }
 

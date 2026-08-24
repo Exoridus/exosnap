@@ -325,8 +325,10 @@ QVector<KeyDescriptor> BuildKeys() {
         BoolKey("app.expertMode", "Expert mode", &SettingsAdapter::expertMode, &SettingsAdapter::setExpertMode));
     keys.append(BoolKey("app.showNotifications", "Show notification toasts", &SettingsAdapter::showNotifications,
                         &SettingsAdapter::setShowNotifications));
-    keys.append(BoolKey("app.keepRunningInTray", "Close to tray", &SettingsAdapter::keepRunningInTray,
-                        &SettingsAdapter::setKeepRunningInTray));
+    keys.append(BoolKey("app.minimizeToTray", "Minimize to the system tray", &SettingsAdapter::minimizeToTray,
+                        &SettingsAdapter::setMinimizeToTray));
+    keys.append(BoolKey("app.hideWindowFromCapture", "Hide the window from screen capture",
+                        &SettingsAdapter::hideWindowFromCapture, &SettingsAdapter::setHideWindowFromCapture));
     keys.append(BoolKey("app.openEditorWhenFinished", "Open the editor after a recording",
                         &SettingsAdapter::openEditorWhenFinished, &SettingsAdapter::setOpenEditorWhenFinished));
     keys.append(BoolKey("app.checkUpdatesOnStart", "Check for updates on startup", &SettingsAdapter::autoUpdateCheck,

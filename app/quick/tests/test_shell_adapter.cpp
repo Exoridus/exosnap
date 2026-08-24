@@ -241,114 +241,38 @@ TEST_F(ShellAdapterTest, FinalizeStartedWhileThePromptWasUpKeepsTheWindowOpen) {
 }
 
 // ---------------------------------------------------------------------------
-// Close-to-tray
+// Close means close
 // ---------------------------------------------------------------------------
-// The decision table this branch implements:
+// There is no preference that turns a close into something else. The only inputs
+// are the four in-flight conditions, and the only outcomes are the ones
+// CloseGuardPolicy names. Close-to-tray used to sit between them: with it on, a
+// close during a recording silently meant "hide", and the user never learned that
+// the thing they asked to close was still running.
 //
-//   close-to-tray  recording in flight  ->  outcome
-//   OFF            no                       full close
-//   OFF            yes                      prompt; confirming closes for real
-//   ON             yes                      prompt; confirming closes for real
-//   ON             no                       hide to tray
-//
-// The tear-down guards therefore run AHEAD of the tray branch. They did not
-// always: a hide used to short-circuit everything, on the argument that hiding
-// tears nothing down. That is true of the hide and false of the question -- with
-// close-to-tray on, "close" during a recording silently meant "hide", and the user
-// never learned that the thing they asked to close was still running.
+// Minimize-to-tray replaces it -- a different gesture, decided in
+// models/WindowPresencePolicy and never on this path.
 
-TEST_F(ShellAdapterTest, HideToTrayShortCircuitsTheCloseWithoutApprovingIt) {
-    SignalCounter hide(&adapter_, &ShellAdapter::hideToTrayRequested);
-    SignalCounter approved(&adapter_, &ShellAdapter::closeApproved);
-    adapter_.setHideToTrayProvider([]() { return true; });
-
-    EXPECT_FALSE(adapter_.requestClose());
-    EXPECT_EQ(hide.count(), 1);
-    EXPECT_EQ(approved.count(), 0);
-    EXPECT_FALSE(adapter_.closeGuardActive());
-}
-
-TEST_F(ShellAdapterTest, HideToTrayStillAsksAboutARunningRecording) {
-    // The inverted rule. A recording outranks the preference: the user is asked,
-    // and what they are answering is "close for real".
-    state_.recording = true;
-    SignalCounter hide(&adapter_, &ShellAdapter::hideToTrayRequested);
-    adapter_.setHideToTrayProvider([]() { return true; });
-
-    EXPECT_FALSE(adapter_.requestClose());
-    EXPECT_EQ(hide.count(), 0) << "a running recording must not be hidden away unasked";
-    EXPECT_TRUE(adapter_.closeGuardActive());
-    EXPECT_EQ(adapter_.closeGuardProceedLabel(), QStringLiteral("Stop recording and close"));
-}
-
-TEST_F(ShellAdapterTest, ConfirmingWithCloseToTrayOnClosesForRealRatherThanHiding) {
-    state_.recording = true;
-    SignalCounter hide(&adapter_, &ShellAdapter::hideToTrayRequested);
-    SignalCounter approved(&adapter_, &ShellAdapter::closeApproved);
-    adapter_.setHideToTrayProvider([]() { return true; });
-
-    EXPECT_FALSE(adapter_.requestClose());
-    ASSERT_TRUE(adapter_.closeGuardActive());
-
-    state_.recording = false;
-    adapter_.confirmCloseGuard();
-    EXPECT_EQ(approved.count(), 1) << "confirming a close must approve a close, not a hide";
-    EXPECT_EQ(hide.count(), 0);
-}
-
-TEST_F(ShellAdapterTest, CancellingTheRecordingPromptLeavesTheWindowOpenNotHidden) {
-    state_.recording = true;
-    SignalCounter hide(&adapter_, &ShellAdapter::hideToTrayRequested);
-    SignalCounter stop(&adapter_, &ShellAdapter::stopRecordingRequested);
-    adapter_.setHideToTrayProvider([]() { return true; });
-
-    EXPECT_FALSE(adapter_.requestClose());
-    adapter_.cancelCloseGuard();
-    EXPECT_EQ(stop.count(), 0);
-    EXPECT_EQ(hide.count(), 0);
-    EXPECT_FALSE(adapter_.closeGuardActive());
-}
-
-TEST_F(ShellAdapterTest, HideToTrayStillSkipsTheFinalizeBlock) {
-    // Unchanged, and for the original reason: the finalize guard exists to prevent
-    // a half-written container, which needs the process to end. Hiding does not end
-    // it, so the guard has nothing to protect against here.
-    state_.finalizing = true;
-    SignalCounter hide(&adapter_, &ShellAdapter::hideToTrayRequested);
-    adapter_.setHideToTrayProvider([]() { return true; });
-
-    EXPECT_FALSE(adapter_.requestClose());
-    EXPECT_EQ(hide.count(), 1);
-}
-
-TEST_F(ShellAdapterTest, ProviderDecliningLeavesTheGuardsInCharge) {
-    state_.recording = true;
-    SignalCounter hide(&adapter_, &ShellAdapter::hideToTrayRequested);
-    adapter_.setHideToTrayProvider([]() { return false; });
-
-    EXPECT_FALSE(adapter_.requestClose());
-    EXPECT_EQ(hide.count(), 0);
-    EXPECT_TRUE(adapter_.closeGuardActive());
-    EXPECT_EQ(adapter_.closeGuardProceedLabel(), QStringLiteral("Stop recording and close"));
-}
-
-TEST_F(ShellAdapterTest, EveryCloseAttemptReportsExactlyOneDecision) {
-    // The application clears the force-quit latch on this signal and quits on an
-    // "allow", so a close that reported nothing would strand both.
+TEST_F(ShellAdapterTest, NothingInFlightClosesForReal) {
     QStringList kinds;
     QObject::connect(&adapter_, &ShellAdapter::closeDecided, &adapter_,
                      [&kinds](const QString& kind, bool, bool, bool) { kinds.append(kind); });
 
-    adapter_.setHideToTrayProvider([]() { return false; });
+    EXPECT_TRUE(adapter_.requestClose());
+    EXPECT_FALSE(adapter_.closeGuardActive());
+    ASSERT_EQ(kinds.size(), 1);
+    EXPECT_EQ(kinds.at(0), QStringLiteral("allow"));
+}
+
+TEST_F(ShellAdapterTest, EveryCloseAttemptReportsExactlyOneDecision) {
+    // The application quits on an "allow", so a close that reported nothing would
+    // strand the process with no window.
+    QStringList kinds;
+    QObject::connect(&adapter_, &ShellAdapter::closeDecided, &adapter_,
+                     [&kinds](const QString& kind, bool, bool, bool) { kinds.append(kind); });
+
     EXPECT_TRUE(adapter_.requestClose());
     ASSERT_EQ(kinds.size(), 1);
     EXPECT_EQ(kinds.at(0), QStringLiteral("allow"));
-
-    kinds.clear();
-    adapter_.setHideToTrayProvider([]() { return true; });
-    EXPECT_FALSE(adapter_.requestClose());
-    ASSERT_EQ(kinds.size(), 1);
-    EXPECT_EQ(kinds.at(0), QStringLiteral("hideToTray"));
 
     kinds.clear();
     state_.recording = true;
@@ -358,51 +282,50 @@ TEST_F(ShellAdapterTest, EveryCloseAttemptReportsExactlyOneDecision) {
 
     kinds.clear();
     state_.recording = false;
+    state_.exporting = true;
+    EXPECT_FALSE(adapter_.requestClose());
+    ASSERT_EQ(kinds.size(), 1);
+    EXPECT_EQ(kinds.at(0), QStringLiteral("confirmExport"));
+
+    kinds.clear();
+    state_.exporting = false;
+    state_.remuxing = true;
+    EXPECT_FALSE(adapter_.requestClose());
+    ASSERT_EQ(kinds.size(), 1);
+    EXPECT_EQ(kinds.at(0), QStringLiteral("confirmRemux"));
+
+    kinds.clear();
+    state_.remuxing = false;
     state_.finalizing = true;
-    adapter_.setHideToTrayProvider([]() { return false; });
     EXPECT_FALSE(adapter_.requestClose());
     ASSERT_EQ(kinds.size(), 1);
     EXPECT_EQ(kinds.at(0), QStringLiteral("blockSilently"));
 }
 
-TEST_F(ShellAdapterTest, ForceQuitAfterAHideStillReachesTheGuards) {
-    // The tray sequence: close once while idle (hides), start recording, then
-    // "Quit" from the tray menu, which flips the provider for that one attempt.
-    // The hide is set up while idle deliberately -- under the current rule a close
-    // during a recording never reaches the tray branch in the first place.
-    bool force_quit = false;
-    adapter_.setHideToTrayProvider([&force_quit]() { return !force_quit; });
-
-    EXPECT_FALSE(adapter_.requestClose());
-    EXPECT_FALSE(adapter_.closeGuardActive());
-
+TEST_F(ShellAdapterTest, ARecordingIsAlwaysAskedAboutAndConfirmingClosesForReal) {
     state_.recording = true;
-    force_quit = true;
+    SignalCounter approved(&adapter_, &ShellAdapter::closeApproved);
+
     EXPECT_FALSE(adapter_.requestClose());
-    EXPECT_TRUE(adapter_.closeGuardActive());
+    ASSERT_TRUE(adapter_.closeGuardActive());
+    EXPECT_EQ(adapter_.closeGuardProceedLabel(), QStringLiteral("Stop recording and close"));
+
+    state_.recording = false;
+    adapter_.confirmCloseGuard();
+    EXPECT_EQ(approved.count(), 1);
 }
 
-TEST_F(ShellAdapterTest, HideDiscardsAPromptLeftOverFromAnAbandonedAttempt) {
-    // A guard was raised, the user walked away, the recording then ended on its
-    // own, and the next close resolved to a hide. Leaving the dialog standing would
-    // reappear it over a window that is no longer closing, and its stale waivers
-    // would carry into the next attempt.
+TEST_F(ShellAdapterTest, APromptLeftOverFromAnAbandonedAttemptDoesNotSurviveTheNextClose) {
+    // A guard was raised, the user walked away, and the recording then ended on
+    // its own. The next close must start from a clean slate rather than
+    // reappearing a dialog for work that is no longer running.
     state_.recording = true;
     EXPECT_FALSE(adapter_.requestClose());
     ASSERT_TRUE(adapter_.closeGuardActive());
 
     state_.recording = false;
-    adapter_.setHideToTrayProvider([]() { return true; });
-    EXPECT_FALSE(adapter_.requestClose());
-    EXPECT_FALSE(adapter_.closeGuardActive());
-}
-
-TEST_F(ShellAdapterTest, NoProviderMeansNoTrayBranchAtAll) {
-    // The platform reported no system tray, so nothing set a provider. Closing
-    // must behave exactly as it did before close-to-tray existed.
-    SignalCounter hide(&adapter_, &ShellAdapter::hideToTrayRequested);
     EXPECT_TRUE(adapter_.requestClose());
-    EXPECT_EQ(hide.count(), 0);
+    EXPECT_FALSE(adapter_.closeGuardActive());
 }
 
 // ── Navigation model ────────────────────────────────────────────────────────

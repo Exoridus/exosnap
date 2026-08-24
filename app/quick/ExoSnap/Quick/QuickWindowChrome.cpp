@@ -2,6 +2,8 @@
 
 #include "QuickWindowGeometry.h"
 
+#include "models/WindowPresencePolicy.h"
+
 #include <QCoreApplication>
 #include <QDebug>
 #include <QIcon>
@@ -166,6 +168,7 @@ void QuickWindowChrome::setTarget(QQuickWindow* window) {
     // never hand back a null handle that would silently disable every handler.
     window->create();
     hwnd_ = reinterpret_cast<void*>(window->winId());
+    affinity_.setHandle(hwnd_);
     TraceWindowGeometry("chrome-hwnd-created", window);
 
     // A screen change is the moment the DWM border wants re-applying, and the
@@ -204,6 +207,7 @@ void QuickWindowChrome::detach() {
     }
     target_ = nullptr;
     hwnd_ = nullptr;
+    affinity_.setHandle(nullptr);
     non_client_leave_tracked_ = false;
     applied_border_valid_ = false;
     applied_border_hwnd_ = nullptr;
@@ -228,6 +232,10 @@ void QuickWindowChrome::refreshHandle() {
     hwnd_ = fresh;
     non_client_leave_tracked_ = false;
     ensureNativeFrameStyle();
+    // Display affinity is per-HWND and a recreated window comes back without it.
+    // This is the one place a real identity change is observed, so it is also the
+    // place any future per-HWND shell integration re-asserts itself from.
+    affinity_.setHandle(fresh);
     applyBorderColor("handle-recreated");
 }
 
@@ -401,12 +409,47 @@ void QuickWindowChrome::setWindowMaximized(bool maximized) {
 }
 
 void QuickWindowChrome::minimizeWindow() {
+    // Same question the SC_MINIMIZE branch of the filter asks, so the title bar's
+    // button cannot resolve differently from Win+Down or the window menu.
+    if (requestMinimizeToTray())
+        return;
 #if defined(Q_OS_WIN)
     HWND hwnd = static_cast<HWND>(hwnd_);
     if (hwnd == nullptr)
         return;
     ShowWindow(hwnd, SW_MINIMIZE);
 #endif
+}
+
+void QuickWindowChrome::setMinimizeToTrayProvider(std::function<bool()> provider) {
+    minimize_to_tray_provider_ = std::move(provider);
+}
+
+bool QuickWindowChrome::handleSysCommand(quint64 wparam) {
+    return IsMinimizeSysCommand(wparam) && requestMinimizeToTray();
+}
+
+bool QuickWindowChrome::requestMinimizeToTray() {
+    if (!minimize_to_tray_provider_ || !minimize_to_tray_provider_())
+        return false;
+    emit minimizeToTrayRequested();
+    return true;
+}
+
+void QuickWindowChrome::setCaptureExcluded(bool excluded) {
+    affinity_.setExcludedFromCapture(excluded);
+}
+
+bool QuickWindowChrome::captureExcluded() const noexcept {
+    return affinity_.excludedFromCapture();
+}
+
+bool QuickWindowChrome::captureExclusionApplied() const noexcept {
+    return affinity_.applied();
+}
+
+void QuickWindowChrome::setAffinityFunctionForTest(MainWindowAffinity::AffinityFunction fn) {
+    affinity_.setAffinityFunctionForTest(std::move(fn));
 }
 
 void QuickWindowChrome::restoreWindow() {
@@ -781,11 +824,24 @@ bool QuickWindowChrome::nativeEventFilter(const QByteArray& event_type, void* me
         return false;
 
     case WM_SYSCOMMAND:
-        // Never handled here -- only observed. SC_MAXIMIZE/SC_RESTORE are how
-        // every native gesture (double-click, Win+arrow, the window menu) asks
-        // for a state change, so their presence or absence separates "Windows was
-        // never told" from "Windows was told and declined".
+        // Observed for every command -- SC_MAXIMIZE/SC_RESTORE are how every
+        // native gesture (double-click, Win+arrow, the window menu) asks for a
+        // state change, so their presence or absence separates "Windows was never
+        // told" from "Windows was told and declined".
         traceWindowState(sysCommandName(msg->wParam), hwnd, target_.data());
+        // SC_MINIMIZE is the one command this filter also ANSWERS. Every native
+        // minimize route arrives here -- the window menu, Win+Down, and a click on
+        // the taskbar button of the active window -- so taking it over is what
+        // makes them share the title bar button's policy instead of quietly
+        // minimizing past it.
+        //
+        // Win+D and "show desktop" are deliberately NOT covered: they are a
+        // shell-wide desktop toggle whose windows come back with the same gesture,
+        // and a window hidden to the tray would not.
+        if (handleSysCommand(static_cast<quint64>(msg->wParam))) {
+            store(0);
+            return true;
+        }
         return false;
 
     case WM_ENTERSIZEMOVE:

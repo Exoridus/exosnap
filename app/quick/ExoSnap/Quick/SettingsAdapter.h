@@ -187,7 +187,9 @@ class SettingsAdapter : public QObject {
     Q_PROPERTY(bool diagnosticsOverlaySize READ diagnosticsOverlaySize NOTIFY appSettingsChanged FINAL)
     Q_PROPERTY(bool diagnosticsOverlayMutedSources READ diagnosticsOverlayMutedSources NOTIFY appSettingsChanged FINAL)
     Q_PROPERTY(bool showQuickControls READ showQuickControls WRITE setShowQuickControls NOTIFY appSettingsChanged FINAL)
-    Q_PROPERTY(bool keepRunningInTray READ keepRunningInTray WRITE setKeepRunningInTray NOTIFY appSettingsChanged FINAL)
+    Q_PROPERTY(bool minimizeToTray READ minimizeToTray WRITE setMinimizeToTray NOTIFY appSettingsChanged FINAL)
+    Q_PROPERTY(bool hideWindowFromCapture READ hideWindowFromCapture WRITE setHideWindowFromCapture NOTIFY
+                   appSettingsChanged FINAL)
     Q_PROPERTY(bool openEditorWhenFinished READ openEditorWhenFinished WRITE setOpenEditorWhenFinished NOTIFY
                    appSettingsChanged FINAL)
     Q_PROPERTY(bool presentDiagnosticsOptIn READ presentDiagnosticsOptIn WRITE setPresentDiagnosticsOptIn NOTIFY
@@ -400,7 +402,8 @@ class SettingsAdapter : public QObject {
     [[nodiscard]] bool showDiagnosticsOverlay() const noexcept;
     [[nodiscard]] bool showNotifications() const noexcept;
     [[nodiscard]] bool showQuickControls() const noexcept;
-    [[nodiscard]] bool keepRunningInTray() const noexcept;
+    [[nodiscard]] bool minimizeToTray() const noexcept;
+    [[nodiscard]] bool hideWindowFromCapture() const noexcept;
     [[nodiscard]] bool openEditorWhenFinished() const noexcept;
     [[nodiscard]] bool presentDiagnosticsOptIn() const noexcept;
 
@@ -547,7 +550,8 @@ class SettingsAdapter : public QObject {
     void setRecordingOverlayPreset(const QString& value);
     void setDiagnosticsOverlayPreset(const QString& value);
     void setShowQuickControls(bool value);
-    void setKeepRunningInTray(bool value);
+    void setMinimizeToTray(bool value);
+    void setHideWindowFromCapture(bool value);
     void setOpenEditorWhenFinished(bool value);
     void setPresentDiagnosticsOptIn(bool value);
     void setAppearanceId(const QString& value);
