@@ -1,12 +1,13 @@
 #include "ui/brand/ShellIconRenderer.h"
 
-#include "models/RecordingPulse.h"
 #include "ui/brand/BrandMark.h"
+#include "ui/brand/BrandMarkSvg.h"
 #include "ui/theme/ExoSnapThemes.h"
 
 #include <QPainter>
 #include <QPainterPath>
 #include <QStringList>
+#include <QSvgRenderer>
 
 #include <algorithm>
 
@@ -50,36 +51,38 @@ using theme::ThemeKind;
     return kExoAccents.front();
 }
 
-[[nodiscard]] QString IconStateToken(ShellIconState state) {
-    switch (state) {
-    case ShellIconState::Recording:
+[[nodiscard]] QString KindToken(BrandMarkKind kind) {
+    switch (kind) {
+    case BrandMarkKind::Brand:
+        return QStringLiteral("brand");
+    case BrandMarkKind::Recording:
         return QStringLiteral("recording");
-    case ShellIconState::Paused:
+    case BrandMarkKind::Processing:
+        return QStringLiteral("processing");
+    case BrandMarkKind::Paused:
         return QStringLiteral("paused");
-    case ShellIconState::Saved:
+    case BrandMarkKind::Saved:
         return QStringLiteral("saved");
-    case ShellIconState::Idle:
+    case BrandMarkKind::Warning:
+        return QStringLiteral("warning");
+    case BrandMarkKind::Error:
+        return QStringLiteral("error");
+    case BrandMarkKind::Idle:
         break;
     }
     return QStringLiteral("idle");
 }
 
-[[nodiscard]] bool IconStateFromToken(const QString& token, ShellIconState& out) {
-    if (token == QLatin1String("idle")) {
-        out = ShellIconState::Idle;
-        return true;
-    }
-    if (token == QLatin1String("recording")) {
-        out = ShellIconState::Recording;
-        return true;
-    }
-    if (token == QLatin1String("paused")) {
-        out = ShellIconState::Paused;
-        return true;
-    }
-    if (token == QLatin1String("saved")) {
-        out = ShellIconState::Saved;
-        return true;
+[[nodiscard]] bool KindFromToken(const QString& token, BrandMarkKind& out) {
+    static constexpr BrandMarkKind kKinds[] = {
+        BrandMarkKind::Brand,  BrandMarkKind::Idle,  BrandMarkKind::Recording, BrandMarkKind::Processing,
+        BrandMarkKind::Paused, BrandMarkKind::Saved, BrandMarkKind::Warning,   BrandMarkKind::Error,
+    };
+    for (const BrandMarkKind kind : kKinds) {
+        if (token == KindToken(kind)) {
+            out = kind;
+            return true;
+        }
     }
     return false;
 }
@@ -142,17 +145,6 @@ inline constexpr int kMaxPx = 512;
     return image;
 }
 
-// Stroke semantics are the SVG's: the stroke is centred on the path, so a ring
-// of radius r and width w spans r - w/2 to r + w/2.
-void StrokeRing(QPainter& painter, double scale, double radius, double width, const QColor& colour) {
-    QPen pen(colour);
-    pen.setWidthF(width * scale);
-    painter.setPen(pen);
-    painter.setBrush(Qt::NoBrush);
-    const double r = radius * scale;
-    painter.drawEllipse(QPointF(kCenter * scale, kCenter * scale), r, r);
-}
-
 void FillDisc(QPainter& painter, double scale, double cx, double cy, double radius, const QColor& colour) {
     painter.setPen(Qt::NoPen);
     painter.setBrush(colour);
@@ -172,40 +164,46 @@ QColor ResolveAccent(const QString& appearance_id, const QString& accent_id) {
     return QColor(QString::fromLatin1(appearance.kind == ThemeKind::Dark ? accent.dark : accent.light));
 }
 
-QColor ResolveSemantic(ShellIconState state, const QString& appearance_id, const QString& accent_id) {
-    const ExoAppearance& appearance = AppearanceFor(appearance_id);
+BrandMarkKind BrandMarkKindFor(ShellIconState state) noexcept {
     switch (state) {
     case ShellIconState::Recording:
-        return QColor(QString::fromLatin1(appearance.error));
+        return BrandMarkKind::Recording;
+    case ShellIconState::Processing:
+        return BrandMarkKind::Processing;
     case ShellIconState::Paused:
-        return QColor(QString::fromLatin1(appearance.caution));
+        return BrandMarkKind::Paused;
     case ShellIconState::Saved:
-        return QColor(QString::fromLatin1(appearance.success));
+        return BrandMarkKind::Saved;
+    case ShellIconState::Error:
+        return BrandMarkKind::Error;
     case ShellIconState::Idle:
         break;
     }
-    // Idle is not a state, it is the brand: the mark carries the accent in both
-    // rings, which is what makes a recording read as a change rather than as a
-    // different logo.
-    return ResolveAccent(appearance_id, accent_id);
+    // Idle shows the brand drawing, which is what makes every other state read
+    // as a change to the mark rather than as a different logo.
+    return BrandMarkKind::Idle;
 }
 
-double PulseOpacity(ShellIconState state, int pulse_frame) noexcept {
-    if (state != ShellIconState::Recording)
-        return 1.0;
-    // 0.40 at the trough to 1.00 at the peak. The floor is not zero: an inner
-    // ring that fades out entirely reads as the mark breaking rather than
-    // breathing, and the outer ring is deliberately never modulated at all.
-    constexpr double kFloor = 0.40;
-    return kFloor + (1.0 - kFloor) * RecordingPulseIntensity(pulse_frame);
+BrandMarkPalette ResolvePalette(const QString& appearance_id, const QString& accent_id) {
+    const ExoAppearance& appearance = AppearanceFor(appearance_id);
+    BrandMarkPalette palette;
+    palette.accent = ResolveAccent(appearance_id, accent_id);
+    palette.recording = QColor(QString::fromLatin1(appearance.error));
+    palette.caution = QColor(QString::fromLatin1(appearance.caution));
+    palette.success = QColor(QString::fromLatin1(appearance.success));
+    palette.outer_opacity = appearance.kind == ThemeKind::Dark ? kOuterOpacityDark : kOuterOpacityLight;
+    return palette;
 }
 
 QString MarkImageId(const ShellMarkRequest& request) {
-    return QStringLiteral("mark/%1/%2/%3/%4/%5")
-        .arg(IconStateToken(request.state))
+    return QStringLiteral("mark/%1/%2/%3/%4/%5/%6")
+        .arg(KindToken(request.kind))
         .arg(ClampPx(request.px))
-        .arg(request.state == ShellIconState::Recording ? request.pulse_frame : 0)
-        .arg(AppearanceToken(request.appearance_id), AccentToken(request.accent_id));
+        // A static mark drops the frame, so a counter that kept moving after the
+        // state settled cannot multiply its cache entries.
+        .arg(BrandMarkIsAnimated(request.kind) ? request.frame : 0)
+        .arg(request.standalone ? QStringLiteral("shell") : QStringLiteral("inline"),
+             AppearanceToken(request.appearance_id), AccentToken(request.accent_id));
 }
 
 QString GlyphImageId(const ShellGlyphRequest& request) {
@@ -217,20 +215,23 @@ QString GlyphImageId(const ShellGlyphRequest& request) {
 
 bool ParseMarkImageId(const QString& id, ShellMarkRequest& out) {
     const QStringList parts = id.split(QLatin1Char('/'));
-    if (parts.size() != 6 || parts.at(0) != QLatin1String("mark"))
+    if (parts.size() != 7 || parts.at(0) != QLatin1String("mark"))
         return false;
     ShellMarkRequest request;
-    if (!IconStateFromToken(parts.at(1), request.state))
+    if (!KindFromToken(parts.at(1), request.kind))
         return false;
     bool ok = false;
     request.px = parts.at(2).toInt(&ok);
     if (!ok)
         return false;
-    request.pulse_frame = parts.at(3).toInt(&ok);
+    request.frame = parts.at(3).toInt(&ok);
     if (!ok)
         return false;
-    request.appearance_id = parts.at(4);
-    request.accent_id = parts.at(5);
+    if (parts.at(4) != QLatin1String("shell") && parts.at(4) != QLatin1String("inline"))
+        return false;
+    request.standalone = parts.at(4) == QLatin1String("shell");
+    request.appearance_id = parts.at(5);
+    request.accent_id = parts.at(6);
     out = request;
     return true;
 }
@@ -255,24 +256,24 @@ bool ParseGlyphImageId(const QString& id, ShellGlyphRequest& out) {
 QImage RenderMark(const ShellMarkRequest& request) {
     const int px = ClampPx(request.px);
     const OpticalProfile& profile = OpticalProfileFor(px);
-    const double scale = static_cast<double>(px) / kGrid;
-    const double content = kStandaloneContentScale * profile.content_scale;
+
+    const QByteArray svg = ThemedBrandMarkSvg(request.kind, request.frame,
+                                              ResolvePalette(request.appearance_id, request.accent_id), profile);
+    QSvgRenderer renderer(svg);
+    if (!renderer.isValid())
+        return {};
 
     QImage image = NewCanvas(px);
     QPainter painter(&image);
     painter.setRenderHint(QPainter::Antialiasing, true);
-
-    QColor outer = ResolveAccent(request.appearance_id, request.accent_id);
-    outer.setAlphaF(static_cast<float>(std::clamp(kOuterOpacity * profile.outer_opacity_scale, 0.0, 1.0)));
-
-    QColor inner = ResolveSemantic(request.state, request.appearance_id, request.accent_id);
-    inner.setAlphaF(static_cast<float>(std::clamp(PulseOpacity(request.state, request.pulse_frame), 0.0, 1.0)));
-
-    StrokeRing(painter, scale, kOuterRadius * content, kOuterStroke * content * profile.outer_stroke_scale, outer);
-    StrokeRing(painter, scale, kInnerRadius * content * profile.inner_radius_scale,
-               kInnerStroke * content * profile.inner_stroke_scale, inner);
-    FillDisc(painter, scale, kCenter, kCenter, kDotRadius * content * profile.dot_radius_scale, inner);
-
+    // The margin is reserved by shrinking the target rectangle rather than by
+    // insetting the drawing: the asset is a square viewBox, so a smaller target
+    // is the same mark with room around it, and no coordinate inside the asset
+    // has to be touched to get one.
+    const double content = request.standalone ? kStandaloneContentScale * profile.content_scale : 1.0;
+    const double side = px * std::min(content, 1.0);
+    const double origin = (px - side) / 2.0;
+    renderer.render(&painter, QRectF(origin, origin, side, side));
     painter.end();
     return image;
 }
@@ -293,10 +294,10 @@ QImage RenderGlyph(const ShellGlyphRequest& request) {
     switch (request.glyph) {
     case ShellGlyph::Record:
     case ShellGlyph::Stop:
-        colour = ResolveSemantic(ShellIconState::Recording, request.appearance_id, request.accent_id);
+        colour = ResolvePalette(request.appearance_id, request.accent_id).recording;
         break;
     case ShellGlyph::Pause:
-        colour = ResolveSemantic(ShellIconState::Paused, request.appearance_id, request.accent_id);
+        colour = ResolvePalette(request.appearance_id, request.accent_id).caution;
         break;
     case ShellGlyph::Resume:
         colour = ResolveAccent(request.appearance_id, request.accent_id);

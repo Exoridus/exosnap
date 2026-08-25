@@ -32,13 +32,22 @@ namespace exosnap {
 // Four frames over one period: trough, rise, peak, fall. Three would have no
 // symmetric midpoint and would read as a stutter; more frames buy nothing at
 // 16 px, where the difference between adjacent steps is already below what the
-// eye resolves at this cadence.
+// eye resolves at this cadence. The frames themselves are assets
+// (app/assets/brand/marks/recording-f*.svg) -- what a frame LOOKS like is the
+// designer cut's business, and only its timing is here.
 inline constexpr int kRecordingPulseFrameCount = 4;
 
-// 4 x 220 ms = 880 ms per beat, near a resting heart rate. Fast enough to read
-// as alive, slow enough that the tray does not flicker, and 4.5 icon swaps per
-// second is a rate the shell absorbs without a visible redraw cost.
-inline constexpr int kRecordingPulseIntervalMs = 220;
+// 4 x 250 ms = one second per beat, near a resting heart rate. Fast enough to
+// read as alive, slow enough that the tray does not flicker, and four icon swaps
+// a second is a rate the shell absorbs without a visible redraw cost.
+inline constexpr int kRecordingPulseIntervalMs = 250;
+
+// The processing animation runs at the same cadence and frame count. One value
+// rather than two: the two sequences were authored together and a difference
+// between them would be a decision, which is what a second named constant with
+// its own reason would then say.
+inline constexpr int kProcessingFrameIntervalMs = kRecordingPulseIntervalMs;
+inline constexpr int kProcessingFrameCount = kRecordingPulseFrameCount;
 
 // How many full beats a recording entry plays before the shell goes static.
 // Two: one alone reads as a glitch, and by the third the eye has stopped
@@ -49,17 +58,12 @@ inline constexpr int kRecordingPulseTransitionCycles = 2;
 inline constexpr int kRecordingPulseTransitionTicks = kRecordingPulseTransitionCycles * kRecordingPulseFrameCount;
 
 // Where the beat ends, and what a static recording therefore shows: the peak,
-// which is the mark at full weight. Ending anywhere else would leave the tray
-// permanently mid-breath.
+// which is the frame drawn at full weight. Ending anywhere else would leave the
+// tray permanently mid-breath.
 inline constexpr int kRecordingPulsePeakFrame = kRecordingPulseFrameCount / 2;
 
 // Advances one tick, wrapping. Out-of-range and negative inputs come back to
 // frame 0 rather than propagating: this indexes an icon array.
 [[nodiscard]] int NextRecordingPulseFrame(int frame, int frame_count = kRecordingPulseFrameCount) noexcept;
-
-// Where the frame sits in the beat: 0.0 at the trough, 1.0 at the peak. A
-// triangle rather than a sine -- at four frames the two produce the same three
-// numbers, and the triangle says what it is.
-[[nodiscard]] double RecordingPulseIntensity(int frame, int frame_count = kRecordingPulseFrameCount) noexcept;
 
 } // namespace exosnap

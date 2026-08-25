@@ -1276,10 +1276,14 @@ exosnap_add_gtest(
     TEST_PREFIX brand.
     SOURCES
         tests/test_shell_icon_renderer.cpp
+        ui/brand/BrandMarkSvg.cpp
         ui/brand/ShellIconRenderer.cpp
-        models/RecordingPulse.cpp
-    LIBRARIES Qt6::Core Qt6::Gui
+        assets/brand/exosnap_marks.qrc
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Svg
 )
+# The mark suite is compiled into the test binary, because what the renderer
+# reads at runtime is the resource and not the working directory.
+set_target_properties(shell_icon_renderer_tests PROPERTIES AUTORCC ON)
 target_include_directories(shell_icon_renderer_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 # The drift guard between the checked-in brand artefacts and the canonical

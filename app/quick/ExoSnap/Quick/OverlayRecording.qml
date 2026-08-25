@@ -145,10 +145,13 @@ Window {
         height: 10
         opacity: glyph.kind === "recording" ? glyph.breath : 1.0
 
-        // Animated here rather than followed from the shell's heartbeat. This is
-        // a scene graph, so a breathing dot costs nothing and can run for as long
+        // Animated here rather than followed from the shell's frames. This is a
+        // scene graph, so a breathing dot costs nothing and can run for as long
         // as the recording does; the tray and the taskbar swap whole icons, so
-        // theirs is a short transition instead. Same state, two cadences.
+        // theirs is a short transition instead. Same beat, two policies -- the
+        // PERIOD is the canonical one, and only its amplitude is this surface's
+        // own: at 10 px over arbitrary captured content, the shell frames' few
+        // percent of opacity would not read at all.
         SequentialAnimation {
             running: glyph.kind === "recording"
             loops: Animation.Infinite
@@ -158,7 +161,7 @@ Window {
                 property: "breath"
                 from: 1.0
                 to: 0.55
-                duration: 440
+                duration: Brand.recordingBeatMs / 2
                 easing.type: Easing.InOutSine
             }
 
@@ -167,7 +170,7 @@ Window {
                 property: "breath"
                 from: 0.55
                 to: 1.0
-                duration: 440
+                duration: Brand.recordingBeatMs / 2
                 easing.type: Easing.InOutSine
             }
         }

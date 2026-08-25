@@ -24,16 +24,4 @@ int NextRecordingPulseFrame(int frame, int frame_count) noexcept {
     return (current + 1) % frame_count;
 }
 
-double RecordingPulseIntensity(int frame, int frame_count) noexcept {
-    if (frame_count <= 1)
-        return 0.0;
-    const int current = NormalizeFrame(frame, frame_count);
-    const int half = frame_count / 2;
-    if (half <= 0)
-        return 0.0;
-    // Distance from the trough, folded at the peak: 0, 1, ... half, ... 1.
-    const int distance = current <= half ? current : frame_count - current;
-    return static_cast<double>(distance) / static_cast<double>(half);
-}
-
 } // namespace exosnap

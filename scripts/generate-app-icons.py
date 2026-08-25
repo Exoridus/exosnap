@@ -22,9 +22,15 @@ runtime by ``app/ui/brand/ShellIconRenderer``.
 
 SOURCE OF TRUTH
 ---------------
-``app/ui/brand/BrandMark.h`` is the only place the geometry exists. This script
-parses it; it does not restate it. A renamed or deleted constant fails here
-rather than silently producing an icon that no longer matches the application.
+The mark's geometry lives in ``app/assets/brand/marks/brand.svg``, written by
+``scripts/generate-brand-marks.py`` from ``marks/parameters.json``. The optical
+corrections live in ``app/ui/brand/BrandMark.h``, because they are a property of
+the raster rather than of the drawing, and the transport glyphs live there too --
+they are shell chrome and the designer suite has no composition for them.
+
+This script parses both; it restates neither. A renamed constant or a changed
+asset shape fails here rather than silently producing an icon that no longer
+matches the application.
 
 Usage:  python scripts/generate-app-icons.py
 """
@@ -41,9 +47,37 @@ REPO = pathlib.Path(__file__).resolve().parent.parent
 BRAND_MARK_H = REPO / "app" / "ui" / "brand" / "BrandMark.h"
 THEMES_H = REPO / "app" / "ui" / "theme" / "ExoSnapThemes.h"
 OUT_DIR = REPO / "app" / "assets" / "brand"
+MARKS_DIR = OUT_DIR / "marks"
+BRAND_SVG = MARKS_DIR / "brand.svg"
 
 
 # --- the canonical geometry, parsed rather than repeated -------------------------------------
+
+class Circle:
+    """One ``<circle>`` of the canonical mark, as the asset states it."""
+
+    def __init__(self, attributes: dict[str, str]) -> None:
+        self.r = float(attributes["r"])
+        self.stroke = attributes.get("stroke")
+        self.stroke_width = float(attributes.get("stroke-width", 0.0))
+        self.fill = attributes.get("fill", "none")
+        self.opacity = float(attributes.get("opacity", 1.0))
+
+
+def parse_mark_circles(source: str) -> list[Circle]:
+    """The brand mark's three circles, in paint order.
+
+    A parse rather than a copy: the radii and weights are the asset's, and this
+    script is the one place that has to agree with it. The assertion is the
+    point -- a mark that stopped being three circles is a design change that has
+    to be looked at here, not one that silently produces a wrong .ico.
+    """
+    circles = [Circle(dict(re.findall(r'([\w-]+)="([^"]+)"', body)))
+               for body in re.findall(r"<circle ([^/]*)/>", source)]
+    if len(circles) != 3:
+        raise SystemExit(f"{BRAND_SVG}: expected 3 circles, found {len(circles)}")
+    return circles
+
 
 class BrandMark:
     """The constants of app/ui/brand/BrandMark.h, as attributes."""
@@ -128,9 +162,9 @@ SHELL_ICO_SIZES = [16, 20, 24, 32, 40, 48]
 
 
 class Renderer:
-    def __init__(self, mark: BrandMark, accent: tuple[int, int, int]) -> None:
+    def __init__(self, mark: BrandMark, circles: list[Circle]) -> None:
         self.mark = mark
-        self.accent = accent
+        self.circles = circles
         self.grid = mark.value("kGrid")
         self.center = mark.value("kCenter")
 
@@ -154,22 +188,26 @@ class Renderer:
         draw.ellipse(box, fill=rgba)
 
     def mark_frame(self, px: int) -> Image.Image:
-        """The application icon at one size: the aperture in the default accent,
-        with the optical profile that size resolves to."""
+        """The application icon at one size: the canonical mark, with the optical
+        profile that size resolves to.
+
+        The colours are the asset's own. This icon is the identity of the FILE
+        and carries no session and no user accent, so there is nothing here to
+        resolve against a theme."""
         m = self.mark
         profile = m.profile_for(px)
         img, draw, scale = self._canvas(px)
         content = m.value("kStandaloneContentScale") * profile["content_scale"]
 
-        outer_alpha = min(1.0, m.value("kOuterOpacity") * profile["outer_opacity_scale"])
-        self._ring(draw, scale, m.value("kOuterRadius") * content,
-                   m.value("kOuterStroke") * content * profile["outer_stroke_scale"],
-                   self.accent + (round(255 * outer_alpha),))
-        self._ring(draw, scale, m.value("kInnerRadius") * content * profile["inner_radius_scale"],
-                   m.value("kInnerStroke") * content * profile["inner_stroke_scale"],
-                   self.accent + (255,))
-        self._disc(draw, scale, m.value("kDotRadius") * content * profile["dot_radius_scale"],
-                   self.accent + (255,))
+        for circle in self.circles:
+            alpha = round(255 * min(1.0, circle.opacity * (
+                profile["outer_opacity_scale"] if circle.opacity < 1.0 else 1.0)))
+            if circle.stroke is not None:
+                self._ring(draw, scale, circle.r * content,
+                           circle.stroke_width * content * profile["stroke_scale"],
+                           _rgb(circle.stroke) + (alpha,))
+            else:
+                self._disc(draw, scale, circle.r * content, _rgb(circle.fill) + (alpha,))
         return img.resize((px, px), Image.Resampling.LANCZOS)
 
     def thumb_frame(self, px: int, shape: str, rgb) -> Image.Image:
@@ -207,47 +245,40 @@ def write_ico(frames: list[Image.Image], stem: str) -> None:
     print(f"wrote {path.name} ({path.stat().st_size} bytes, {len(sizes)} frames)")
 
 
-def write_svg(mark: BrandMark, accent_hex: str) -> None:
-    """The mark as a vector, at the unmodified brand geometry.
+def write_svg(brand_svg: str) -> None:
+    """The mark as a vector, for documentation, design hand-off and the package
+    manifests that point at a raw URL.
 
-    Inline in a document the mark is not a shell icon: it has no small-size
-    rasterization to correct for and no standalone margin to reserve, so neither
-    the optical profiles nor the content inset apply.
+    A copy of the canonical asset rather than a second drawing of it: what it is
+    FOR is a stable path, and the shapes are already written down once.
     """
-    m = mark.value
-    svg = (
-        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {m("kGrid"):g} {m("kGrid"):g}">\n'
-        f'  <!-- Generated by scripts/generate-app-icons.py from app/ui/brand/BrandMark.h. Do not edit. -->\n'
-        f'  <circle cx="{m("kCenter"):g}" cy="{m("kCenter"):g}" r="{m("kOuterRadius"):g}" fill="none"'
-        f' stroke="{accent_hex}" stroke-width="{m("kOuterStroke"):g}" opacity="{m("kOuterOpacity"):g}"/>\n'
-        f'  <circle cx="{m("kCenter"):g}" cy="{m("kCenter"):g}" r="{m("kInnerRadius"):g}" fill="none"'
-        f' stroke="{accent_hex}" stroke-width="{m("kInnerStroke"):g}"/>\n'
-        f'  <circle cx="{m("kCenter"):g}" cy="{m("kCenter"):g}" r="{m("kDotRadius"):g}" fill="{accent_hex}"/>\n'
-        f'</svg>\n'
-    )
     path = OUT_DIR / "exosnap-logo.svg"
-    path.write_text(svg, encoding="utf-8", newline="\n")
+    path.write_text(brand_svg, encoding="utf-8", newline="\n")
     print(f"wrote {path.name} ({path.stat().st_size} bytes)")
 
 
 def main() -> int:
     mark = BrandMark(BRAND_MARK_H.read_text(encoding="utf-8"))
     themes = THEMES_H.read_text(encoding="utf-8")
+    brand_svg = BRAND_SVG.read_text(encoding="utf-8")
 
-    # The application icon and the SVG carry the SHIPPED DEFAULT accent, which is
-    # the only one a build-time artefact can carry: it is the identity of the
-    # executable, not of a session.
+    # The asset is authored in the shipped default accent, which is the only one
+    # a build-time artefact can carry: this is the identity of the executable,
+    # not of a session. If the two ever part company that is a decision, so it is
+    # asserted rather than papered over.
     accent_hex = re.search(r'"aqua",.*?"(#[0-9A-Fa-f]{6})"', themes, re.DOTALL).group(1)
+    if accent_hex.upper() not in brand_svg.upper():
+        raise SystemExit(f"{BRAND_SVG}: authored accent is not the shipped default {accent_hex}")
 
     coral = _rgb(parse_theme_colour(themes, "dark", _ERROR))
     amber = _rgb(parse_theme_colour(themes, "dark", _CAUTION))
     accent = _rgb(accent_hex)
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    renderer = Renderer(mark, accent)
+    renderer = Renderer(mark, parse_mark_circles(brand_svg))
 
     write_ico([renderer.mark_frame(px) for px in APP_ICO_SIZES], "exosnap-app")
-    write_svg(mark, accent_hex)
+    write_svg(brand_svg)
 
     thumbs = {
         "exosnap-thumb-record": ("disc", coral),

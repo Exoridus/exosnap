@@ -27,6 +27,9 @@ set_source_files_properties(ExoTheme.qml PROPERTIES
 qt_add_executable(exosnap WIN32
     main.cpp
     ${PROJECT_SOURCE_DIR}/app/assets/brand/exosnap_brand.qrc
+    # The mark suite, loaded by the runtime renderer rather than by QML: it is
+    # recoloured for the running theme before anything rasterizes it.
+    ${PROJECT_SOURCE_DIR}/app/assets/brand/exosnap_marks.qrc
     ${PROJECT_SOURCE_DIR}/app/assets/fonts/exosnap_fonts.qrc
 )
 
@@ -222,9 +225,8 @@ qt_add_qml_module(exosnap
         TaskbarPresence.h
         TrayAdapter.cpp
         TrayAdapter.h
-        # The canonical mark geometry, so ExoBrandMark.qml draws the same
-        # circles the shell renderer and the icon generator do.
-        BrandMarkGeometry.h
+        # How QML addresses the rendered mark and the canonical beat.
+        Brand.h
 )
 
 target_sources(exosnap
@@ -426,6 +428,8 @@ target_sources(exosnap
         ShellIconProvider.cpp
         ShellIconProvider.h
         ${PROJECT_SOURCE_DIR}/app/ui/brand/BrandMark.h
+        ${PROJECT_SOURCE_DIR}/app/ui/brand/BrandMarkSvg.cpp
+        ${PROJECT_SOURCE_DIR}/app/ui/brand/BrandMarkSvg.h
         ${PROJECT_SOURCE_DIR}/app/ui/brand/ShellIconRenderer.cpp
         ${PROJECT_SOURCE_DIR}/app/ui/brand/ShellIconRenderer.h
 )
@@ -533,6 +537,9 @@ target_link_libraries(exosnap
     PRIVATE
         Qt6::Core
         Qt6::Gui
+        # The brand marks are SVG assets recoloured at load, so the renderer
+        # rasterizes them rather than a build step doing it ahead of time.
+        Qt6::Svg
         Qt6::Qml
         Qt6::Quick
         Qt6::QuickControls2
@@ -1579,11 +1586,14 @@ exosnap_add_gtest(
         ${PROJECT_SOURCE_DIR}/app/models/ShellPresence.cpp
         ${PROJECT_SOURCE_DIR}/app/models/RecordingPulse.cpp
         ${PROJECT_SOURCE_DIR}/app/models/TaskbarProgressLease.cpp
+        ${PROJECT_SOURCE_DIR}/app/ui/brand/BrandMarkSvg.cpp
         ${PROJECT_SOURCE_DIR}/app/ui/brand/ShellIconRenderer.cpp
+        ${PROJECT_SOURCE_DIR}/app/assets/brand/exosnap_marks.qrc
         ${PROJECT_SOURCE_DIR}/app/diagnostics/AppLog.cpp
     LIBRARIES
         Qt6::Core
         Qt6::Gui
+        Qt6::Svg
         Qt6::Qml
         Qt6::Test
         exosnap::capability
@@ -1593,6 +1603,8 @@ exosnap_add_gtest(
         ole32
         uuid
 )
+
+set_target_properties(shell_surface_tests PROPERTIES AUTORCC ON)
 
 target_include_directories(shell_surface_tests
     PRIVATE

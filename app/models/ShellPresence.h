@@ -39,6 +39,10 @@ enum class ShellPhase {
     Paused,
     // Stopping or remuxing. Terminal, but not finished.
     Finalizing,
+    // The last recording failed. Not a transitional phase: it stays until the
+    // session moves on, because a failure the user has not seen yet is exactly
+    // what a shell surface is for.
+    Failed,
     // A recording that finished successfully, for a bounded dwell. Time-boxed
     // because an icon that stays green has stopped describing the application
     // and started describing history.
@@ -51,8 +55,13 @@ enum class ShellPhase {
 enum class ShellIconState {
     Idle,
     Recording,
+    // Work the user cannot interrupt and did not ask to watch: finalizing a
+    // recording. Preparing is deliberately NOT this -- from the user's point of
+    // view the capture has already begun, so it reads as Recording.
+    Processing,
     Paused,
     Saved,
+    Error,
 };
 
 // A product intent a shell surface can ask for. `None` is the answer to a click
@@ -115,6 +124,8 @@ struct ShellPresenceState {
     // one. What makes the transport read as working rather than as broken.
     bool busy = false;
     bool saved = false;
+    // The last recording failed and nothing has superseded that yet.
+    bool failed = false;
 };
 
 [[nodiscard]] bool operator==(const ShellPresenceState& lhs, const ShellPresenceState& rhs) noexcept;

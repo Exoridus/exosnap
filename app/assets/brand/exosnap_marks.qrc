@@ -1,0 +1,18 @@
+<RCC>
+    <qresource prefix="/brand">
+        <file>marks/brand.svg</file>
+        <file>marks/idle.svg</file>
+        <file>marks/paused.svg</file>
+        <file>marks/saved.svg</file>
+        <file>marks/warning.svg</file>
+        <file>marks/error.svg</file>
+        <file>marks/recording-f0.svg</file>
+        <file>marks/recording-f1.svg</file>
+        <file>marks/recording-f2.svg</file>
+        <file>marks/recording-f3.svg</file>
+        <file>marks/processing-f0.svg</file>
+        <file>marks/processing-f1.svg</file>
+        <file>marks/processing-f2.svg</file>
+        <file>marks/processing-f3.svg</file>
+    </qresource>
+</RCC>

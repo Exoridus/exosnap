@@ -1,75 +1,39 @@
 import QtQuick
-import QtQuick.Shapes
 
-// The ExoSnap mark: an aperture, drawn rather than loaded.
+// The ExoSnap mark.
 //
-// `qrc:/brand/exosnap-logo.svg` carries one fixed accent, which was written for
-// a dark band. Put in the title bar the mark appears on every page of every
-// theme, and on a light appearance a pale mint mark on an off-white band is very
-// nearly invisible. Drawn, it takes the theme's accent instead. Same mark,
-// legible in both.
+// The drawing is `app/assets/brand/marks/brand.svg` -- the same asset the tray
+// and the taskbar button render -- recoloured for the running theme on its way
+// through the shell image provider. It is not drawn here, and its coordinates
+// are not repeated here: one mark, one source, four surfaces.
 //
-// The coordinates are not repeated here: BrandMarkGeometry publishes the
-// canonical ones (ui/brand/BrandMark.h), which the runtime shell renderer and
-// the build-time icon generator read as well.
+// Rasterized at the size it is displayed at rather than scaled from a fixed one:
+// the provider applies the optical correction the target size needs, which is
+// the whole reason a 16 px mark and a 48 px mark are not the same image scaled.
+// An Item rather than a bare Image for the same reason: an Image takes its
+// implicit size from its source, and the source here is chosen FROM the size.
 Item {
     id: root
-
-    property color color: ExoTheme.accent
-
-    // Authored on the canonical grid and scaled, so the ring weights stay in
-    // proportion at any size the caller asks for.
-    readonly property real unit: Math.min(root.width, root.height) / BrandMarkGeometry.grid
 
     implicitWidth: 18
     implicitHeight: 18
 
-    Shape {
+    Image {
+        id: mark
+
         anchors.fill: parent
-        preferredRendererType: Shape.CurveRenderer
 
-        ShapePath {
-            strokeColor: Qt.alpha(root.color, BrandMarkGeometry.outerOpacity)
-            strokeWidth: BrandMarkGeometry.outerStroke * root.unit
-            fillColor: "transparent"
+        // The device pixels the mark will occupy. Never zero: a provider asked
+        // for a zero-pixel raster returns nothing, and the mark would then stay
+        // missing until something resized it.
+        readonly property int rasterSize: Math.max(1, Math.round(Math.min(mark.width, mark.height) * Screen.devicePixelRatio))
 
-            PathAngleArc {
-                centerX: BrandMarkGeometry.center * root.unit
-                centerY: BrandMarkGeometry.center * root.unit
-                radiusX: BrandMarkGeometry.outerRadius * root.unit
-                radiusY: BrandMarkGeometry.outerRadius * root.unit
-                startAngle: 0
-                sweepAngle: 360
-            }
-        }
-
-        ShapePath {
-            strokeColor: root.color
-            strokeWidth: BrandMarkGeometry.innerStroke * root.unit
-            fillColor: "transparent"
-
-            PathAngleArc {
-                centerX: BrandMarkGeometry.center * root.unit
-                centerY: BrandMarkGeometry.center * root.unit
-                radiusX: BrandMarkGeometry.innerRadius * root.unit
-                radiusY: BrandMarkGeometry.innerRadius * root.unit
-                startAngle: 0
-                sweepAngle: 360
-            }
-        }
-
-        ShapePath {
-            strokeWidth: 0
-            fillColor: root.color
-
-            PathAngleArc {
-                centerX: BrandMarkGeometry.center * root.unit
-                centerY: BrandMarkGeometry.center * root.unit
-                radiusX: BrandMarkGeometry.dotRadius * root.unit
-                radiusY: BrandMarkGeometry.dotRadius * root.unit
-                startAngle: 0
-                sweepAngle: 360
-            }
-        }
+        // The palette ids rather than resolved colours: the renderer reads the
+        // same theme table the application does, and resolving them here would be
+        // a second answer to one question.
+        source: Brand.source(mark.rasterSize, QuickThemeTokens.appearanceId, QuickThemeTokens.accentId)
+        sourceSize: Qt.size(mark.rasterSize, mark.rasterSize)
+        fillMode: Image.PreserveAspectFit
+        smooth: true
     }
 }

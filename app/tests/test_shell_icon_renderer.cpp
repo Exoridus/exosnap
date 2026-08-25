@@ -7,16 +7,31 @@
 
 #include "models/RecordingPulse.h"
 #include "ui/brand/BrandMark.h"
+#include "ui/brand/BrandMarkSvg.h"
 #include "ui/brand/ShellIconRenderer.h"
 #include "ui/theme/ExoSnapThemes.h"
 
 #include <QColor>
+#include <QDir>
 #include <QImage>
+#include <QList>
+#include <QPainter>
+#include <QProcessEnvironment>
+#include <QRegularExpression>
+
+#include <cmath>
+#include <cstring>
+#include <iterator>
 
 #include <gtest/gtest.h>
 
 using exosnap::ShellIconState;
+using exosnap::ui::brand::BrandMarkAssetPath;
+using exosnap::ui::brand::BrandMarkIsAnimated;
+using exosnap::ui::brand::BrandMarkKind;
+using exosnap::ui::brand::BrandMarkKindFor;
 using exosnap::ui::brand::GlyphImageId;
+using exosnap::ui::brand::kBrandMarkFrameCount;
 using exosnap::ui::brand::kLargeProfile;
 using exosnap::ui::brand::kMediumProfile;
 using exosnap::ui::brand::kMediumProfileMaxPx;
@@ -26,42 +41,51 @@ using exosnap::ui::brand::MarkImageId;
 using exosnap::ui::brand::OpticalProfileFor;
 using exosnap::ui::brand::ParseGlyphImageId;
 using exosnap::ui::brand::ParseMarkImageId;
-using exosnap::ui::brand::PulseOpacity;
 using exosnap::ui::brand::RenderGlyph;
 using exosnap::ui::brand::RenderMark;
 using exosnap::ui::brand::ResolveAccent;
-using exosnap::ui::brand::ResolveSemantic;
+using exosnap::ui::brand::ResolvePalette;
 using exosnap::ui::brand::ShellGlyph;
 using exosnap::ui::brand::ShellGlyphRequest;
 using exosnap::ui::brand::ShellIconCache;
 using exosnap::ui::brand::ShellIconImageUrl;
 using exosnap::ui::brand::ShellMarkRequest;
+using exosnap::ui::brand::ThemedBrandMarkSvg;
 
 namespace {
 
-ShellMarkRequest Mark(ShellIconState state, int px = 32) {
+// Every drawing the suite ships, so a sweep cannot silently skip one.
+constexpr BrandMarkKind kAllKinds[] = {
+    BrandMarkKind::Brand,  BrandMarkKind::Idle,  BrandMarkKind::Recording, BrandMarkKind::Processing,
+    BrandMarkKind::Paused, BrandMarkKind::Saved, BrandMarkKind::Warning,   BrandMarkKind::Error,
+};
+
+ShellMarkRequest Mark(BrandMarkKind kind, int px = 64) {
     ShellMarkRequest request;
-    request.state = state;
+    request.kind = kind;
     request.px = px;
     request.appearance_id = QStringLiteral("dark");
     request.accent_id = QStringLiteral("aqua");
     return request;
 }
 
-// The dominant hue of the mark's INNER half: the ring and the dot, which are
-// what the state colours. Sampled rather than read from one pixel, because a
-// 16 px ring is an antialiased approximation of a circle and no single pixel is
-// reliably on it.
-QColor InnerAverage(const QImage& image) {
-    const int side = image.width();
-    const int lo = side * 3 / 8;
-    const int hi = side * 5 / 8;
+// The average colour of an annulus, as a fraction of the image's side. Sampled
+// rather than read from one pixel, because an antialiased ring has no pixel that
+// is reliably fully on it.
+QColor RingAverage(const QImage& image, double inner_fraction, double outer_fraction) {
+    const double side = image.width();
+    const double centre = side / 2.0;
     double r = 0.0;
     double g = 0.0;
     double b = 0.0;
     double weight = 0.0;
-    for (int y = lo; y < hi; ++y) {
-        for (int x = lo; x < hi; ++x) {
+    for (int y = 0; y < image.height(); ++y) {
+        for (int x = 0; x < image.width(); ++x) {
+            const double dx = x + 0.5 - centre;
+            const double dy = y + 0.5 - centre;
+            const double distance = std::sqrt(dx * dx + dy * dy) / side;
+            if (distance < inner_fraction || distance > outer_fraction)
+                continue;
             const QColor pixel = image.pixelColor(x, y);
             const double alpha = pixel.alphaF();
             r += pixel.redF() * alpha;
@@ -74,6 +98,18 @@ QColor InnerAverage(const QImage& image) {
         return QColor(Qt::transparent);
     return QColor::fromRgbF(static_cast<float>(r / weight), static_cast<float>(g / weight),
                             static_cast<float>(b / weight));
+}
+
+// The centre dot, and the inner ring with whatever glyph sits inside it. The
+// bands are wide enough to survive the optical profiles moving the drawing
+// slightly and narrow enough to exclude the outer ring, which is the accent in
+// every state.
+QColor DotAverage(const QImage& image) {
+    return RingAverage(image, 0.0, 0.09);
+}
+
+QColor InnerAverage(const QImage& image) {
+    return RingAverage(image, 0.14, 0.30);
 }
 
 double CoveredAlpha(const QImage& image) {
@@ -94,71 +130,115 @@ int HueDistance(const QColor& lhs, const QColor& rhs) {
     return std::min(raw, 360 - raw);
 }
 
+double StrokeWidthIn(const QByteArray& svg) {
+    const QString text = QString::fromUtf8(svg);
+    const int start = text.indexOf(QStringLiteral("stroke-width=\""));
+    if (start < 0)
+        return 0.0;
+    const int from = start + int(std::strlen("stroke-width=\""));
+    return text.mid(from, text.indexOf(QLatin1Char('"'), from) - from).toDouble();
+}
+
+double OuterOpacityIn(const QByteArray& svg) {
+    const QString text = QString::fromUtf8(svg);
+    const int start = text.indexOf(QStringLiteral("opacity=\""));
+    if (start < 0)
+        return 0.0;
+    const int from = start + int(std::strlen("opacity=\""));
+    return text.mid(from, text.indexOf(QLatin1Char('"'), from) - from).toDouble();
+}
+
 } // namespace
+
+// -- the suite ---------------------------------------------------------------
+
+TEST(ShellIconRenderer, EveryMarkInTheInventoryRenders) {
+    // The resource is compiled into this binary, so a missing or misnamed asset
+    // fails here rather than as an empty tray icon on a user's machine.
+    for (const BrandMarkKind kind : kAllKinds) {
+        const QImage image = RenderMark(Mark(kind));
+        EXPECT_FALSE(image.isNull()) << BrandMarkAssetPath(kind).toStdString() << " did not render";
+        EXPECT_GT(CoveredAlpha(image), 0.0) << BrandMarkAssetPath(kind).toStdString() << " rendered empty";
+    }
+}
+
+TEST(ShellIconRenderer, EveryMarkIsVisiblyItsOwnDrawing) {
+    QList<QImage> rendered;
+    for (const BrandMarkKind kind : kAllKinds) {
+        if (kind == BrandMarkKind::Brand)
+            continue; // Brand and Idle are deliberately the same drawing.
+        rendered.append(RenderMark(Mark(kind)));
+    }
+    for (int i = 0; i < rendered.size(); ++i) {
+        for (int j = i + 1; j < rendered.size(); ++j)
+            EXPECT_NE(rendered.at(i), rendered.at(j)) << "marks " << i << " and " << j << " are the same image";
+    }
+}
+
+TEST(ShellIconRenderer, IdleIsTheBrandMark) {
+    // Two names for one drawing: the product's identity, and the state that has
+    // nothing else to say. If they ever diverge it is a design decision, and this
+    // is where it gets noticed.
+    EXPECT_EQ(RenderMark(Mark(BrandMarkKind::Idle)), RenderMark(Mark(BrandMarkKind::Brand)));
+}
 
 // -- determinism -------------------------------------------------------------
 
 TEST(ShellIconRenderer, TheSameRequestProducesTheSameImage) {
-    const QImage first = RenderMark(Mark(ShellIconState::Recording));
-    const QImage second = RenderMark(Mark(ShellIconState::Recording));
-    EXPECT_EQ(first, second);
+    EXPECT_EQ(RenderMark(Mark(BrandMarkKind::Recording)), RenderMark(Mark(BrandMarkKind::Recording)));
 }
 
 TEST(ShellIconRenderer, TheRequestedSizeIsTheImageSize) {
     for (const int px : {16, 20, 24, 32, 48, 64, 256}) {
-        const QImage image = RenderMark(Mark(ShellIconState::Idle, px));
+        const QImage image = RenderMark(Mark(BrandMarkKind::Idle, px));
         EXPECT_EQ(image.width(), px);
         EXPECT_EQ(image.height(), px);
     }
 }
 
 TEST(ShellIconRenderer, TheBackgroundIsTransparent) {
-    const QImage image = RenderMark(Mark(ShellIconState::Idle, 32));
-    // The corners of a 32-unit grid holding a circle of radius 14.5 are outside
-    // the mark in every profile.
+    const QImage image = RenderMark(Mark(BrandMarkKind::Idle, 32));
     EXPECT_EQ(image.pixelColor(0, 0).alpha(), 0);
     EXPECT_EQ(image.pixelColor(image.width() - 1, 0).alpha(), 0);
     EXPECT_EQ(image.pixelColor(0, image.height() - 1).alpha(), 0);
     EXPECT_EQ(image.pixelColor(image.width() - 1, image.height() - 1).alpha(), 0);
-    // ... and something was actually drawn.
     EXPECT_GT(CoveredAlpha(image), 0.0);
 }
 
 // -- state semantics ---------------------------------------------------------
 
-TEST(ShellIconRenderer, TheFourStatesAreVisiblyDifferent) {
-    const QImage idle = RenderMark(Mark(ShellIconState::Idle));
-    const QImage recording = RenderMark(Mark(ShellIconState::Recording));
-    const QImage paused = RenderMark(Mark(ShellIconState::Paused));
-    const QImage saved = RenderMark(Mark(ShellIconState::Saved));
-
-    EXPECT_NE(idle, recording);
-    EXPECT_NE(recording, paused);
-    EXPECT_NE(paused, saved);
-    EXPECT_NE(saved, idle);
-}
-
-TEST(ShellIconRenderer, EachStateCarriesItsOwnSemanticColourInTheInnerRing) {
+TEST(ShellIconRenderer, EachMarkCarriesItsOwnSemanticColourInside) {
     const auto& dark = exosnap::ui::theme::kExoAppearances.front();
     ASSERT_STREQ(dark.id, "dark");
 
-    const QColor recording = InnerAverage(RenderMark(Mark(ShellIconState::Recording)));
-    const QColor paused = InnerAverage(RenderMark(Mark(ShellIconState::Paused)));
-    const QColor saved = InnerAverage(RenderMark(Mark(ShellIconState::Saved)));
-
-    EXPECT_LE(HueDistance(recording, QColor(QString::fromLatin1(dark.error))), 12);
-    EXPECT_LE(HueDistance(paused, QColor(QString::fromLatin1(dark.caution))), 12);
-    EXPECT_LE(HueDistance(saved, QColor(QString::fromLatin1(dark.success))), 12);
+    EXPECT_LE(
+        HueDistance(InnerAverage(RenderMark(Mark(BrandMarkKind::Recording))), QColor(QString::fromLatin1(dark.error))),
+        12);
+    EXPECT_LE(
+        HueDistance(InnerAverage(RenderMark(Mark(BrandMarkKind::Paused))), QColor(QString::fromLatin1(dark.caution))),
+        12);
+    EXPECT_LE(
+        HueDistance(InnerAverage(RenderMark(Mark(BrandMarkKind::Warning))), QColor(QString::fromLatin1(dark.caution))),
+        12);
+    EXPECT_LE(
+        HueDistance(InnerAverage(RenderMark(Mark(BrandMarkKind::Saved))), QColor(QString::fromLatin1(dark.success))),
+        12);
+    EXPECT_LE(
+        HueDistance(InnerAverage(RenderMark(Mark(BrandMarkKind::Error))), QColor(QString::fromLatin1(dark.error))), 12);
 }
 
-TEST(ShellIconRenderer, IdleIsTheAccentRatherThanAState) {
-    const QColor idle = InnerAverage(RenderMark(Mark(ShellIconState::Idle)));
-    const QColor accent = ResolveAccent(QStringLiteral("dark"), QStringLiteral("aqua"));
-    EXPECT_LE(HueDistance(idle, accent), 12);
+TEST(ShellIconRenderer, TheBrandMarkIsTheAccentWithTheRecordingDot) {
+    const QImage image = RenderMark(Mark(BrandMarkKind::Idle));
+    const auto& dark = exosnap::ui::theme::kExoAppearances.front();
+    EXPECT_LE(HueDistance(InnerAverage(image), ResolveAccent(QStringLiteral("dark"), QStringLiteral("aqua"))), 12);
+    // The dot is the recording colour even at rest: the aperture is trained on
+    // something, and that is what makes a running recording read as a change of
+    // weight rather than as a different logo.
+    EXPECT_LE(HueDistance(DotAverage(image), QColor(QString::fromLatin1(dark.error))), 12);
 }
 
 TEST(ShellIconRenderer, AnAccentChangeMovesTheBrandButNotTheState) {
-    ShellMarkRequest aqua = Mark(ShellIconState::Recording);
+    ShellMarkRequest aqua = Mark(BrandMarkKind::Recording);
     ShellMarkRequest magenta = aqua;
     magenta.accent_id = QStringLiteral("magenta");
 
@@ -179,35 +259,82 @@ TEST(ShellIconRenderer, AnAppearanceChangeResolvesTheAccentForThatAppearance) {
     EXPECT_LE(HueDistance(dark, light), 12);
 }
 
+TEST(ShellIconRenderer, TheLightAppearanceCarriesTheHeavierOuterRing) {
+    // The one difference between the two themes' marks. A pale ring that reads
+    // on near-black disappears on near-white, and the suite is authored at the
+    // dark value.
+    const auto& profile = kLargeProfile;
+    const double dark = OuterOpacityIn(ThemedBrandMarkSvg(
+        BrandMarkKind::Idle, 0, ResolvePalette(QStringLiteral("dark"), QStringLiteral("aqua")), profile));
+    const double light = OuterOpacityIn(ThemedBrandMarkSvg(
+        BrandMarkKind::Idle, 0, ResolvePalette(QStringLiteral("light"), QStringLiteral("aqua")), profile));
+    EXPECT_DOUBLE_EQ(dark, exosnap::ui::brand::kOuterOpacityDark);
+    EXPECT_DOUBLE_EQ(light, exosnap::ui::brand::kOuterOpacityLight);
+    EXPECT_GT(light, dark);
+}
+
 TEST(ShellIconRenderer, AnUnknownPaletteIdFallsBackToTheShippedDefault) {
     EXPECT_EQ(ResolveAccent(QStringLiteral("from-a-build-that-never-existed"), QStringLiteral("chartreuse")),
               ResolveAccent(QStringLiteral("dark"), QStringLiteral("aqua")));
-    EXPECT_EQ(ResolveSemantic(ShellIconState::Recording, QStringLiteral("nonsense"), QStringLiteral("nonsense")),
-              ResolveSemantic(ShellIconState::Recording, QStringLiteral("dark"), QStringLiteral("aqua")));
+    EXPECT_EQ(ResolvePalette(QStringLiteral("nonsense"), QStringLiteral("nonsense")).recording,
+              ResolvePalette(QStringLiteral("dark"), QStringLiteral("aqua")).recording);
 }
 
-// -- the heartbeat -----------------------------------------------------------
+TEST(ShellIconRenderer, TheShellStatesMapOntoTheDrawingsThatExist) {
+    EXPECT_EQ(BrandMarkKindFor(ShellIconState::Idle), BrandMarkKind::Idle);
+    EXPECT_EQ(BrandMarkKindFor(ShellIconState::Recording), BrandMarkKind::Recording);
+    EXPECT_EQ(BrandMarkKindFor(ShellIconState::Processing), BrandMarkKind::Processing);
+    EXPECT_EQ(BrandMarkKindFor(ShellIconState::Paused), BrandMarkKind::Paused);
+    EXPECT_EQ(BrandMarkKindFor(ShellIconState::Saved), BrandMarkKind::Saved);
+    EXPECT_EQ(BrandMarkKindFor(ShellIconState::Error), BrandMarkKind::Error);
+}
 
-TEST(ShellIconRenderer, OnlyRecordingModulatesItsOpacity) {
-    for (const ShellIconState state : {ShellIconState::Idle, ShellIconState::Paused, ShellIconState::Saved}) {
-        for (int frame = 0; frame < 4; ++frame)
-            EXPECT_DOUBLE_EQ(PulseOpacity(state, frame), 1.0);
+// -- the animations ----------------------------------------------------------
+
+TEST(ShellIconRendererAnimation, OnlyTheTwoSequencesHaveFrames) {
+    for (const BrandMarkKind kind : kAllKinds) {
+        const bool animated = kind == BrandMarkKind::Recording || kind == BrandMarkKind::Processing;
+        EXPECT_EQ(BrandMarkIsAnimated(kind), animated);
     }
 }
 
-TEST(ShellIconRenderer, TheBeatRisesFromATroughToAFullyWeightedPeak) {
-    const double trough = PulseOpacity(ShellIconState::Recording, 0);
-    const double peak = PulseOpacity(ShellIconState::Recording, exosnap::kRecordingPulsePeakFrame);
-    EXPECT_GT(trough, 0.0);
-    EXPECT_LT(trough, peak);
-    EXPECT_DOUBLE_EQ(peak, 1.0);
+TEST(ShellIconRendererAnimation, EveryFrameOfASequenceIsItsOwnDrawing) {
+    for (const BrandMarkKind kind : {BrandMarkKind::Recording, BrandMarkKind::Processing}) {
+        QList<QImage> frames;
+        for (int frame = 0; frame < kBrandMarkFrameCount; ++frame) {
+            ShellMarkRequest request = Mark(kind);
+            request.frame = frame;
+            frames.append(RenderMark(request));
+        }
+        for (int i = 0; i < frames.size(); ++i) {
+            for (int j = i + 1; j < frames.size(); ++j)
+                EXPECT_NE(frames.at(i), frames.at(j)) << "frames " << i << " and " << j << " are identical";
+        }
+    }
 }
 
-TEST(ShellIconRenderer, TheTroughFrameDrawsLessInkThanThePeak) {
-    ShellMarkRequest trough = Mark(ShellIconState::Recording, 32);
+TEST(ShellIconRendererAnimation, TheBeatRisesFromItsTroughToThePeakItRestsOn) {
+    // The transition ends on the peak, so the last frame of the beat and the
+    // static recording mark are the same image. A trough that carried as much
+    // ink as the peak would be no beat at all.
+    ShellMarkRequest trough = Mark(BrandMarkKind::Recording, 32);
     ShellMarkRequest peak = trough;
-    peak.pulse_frame = exosnap::kRecordingPulsePeakFrame;
+    peak.frame = exosnap::kRecordingPulsePeakFrame;
     EXPECT_LT(CoveredAlpha(RenderMark(trough)), CoveredAlpha(RenderMark(peak)));
+}
+
+TEST(ShellIconRendererAnimation, AFrameCounterThatRanPastTheEndStillNamesAFrame) {
+    // The counter indexes a beat, not an array. Wrapping rather than clamping is
+    // what keeps a tick delivered late from asking for a resource that is not
+    // there.
+    EXPECT_EQ(BrandMarkAssetPath(BrandMarkKind::Recording, kBrandMarkFrameCount),
+              BrandMarkAssetPath(BrandMarkKind::Recording, 0));
+    EXPECT_EQ(BrandMarkAssetPath(BrandMarkKind::Recording, -1),
+              BrandMarkAssetPath(BrandMarkKind::Recording, kBrandMarkFrameCount - 1));
+}
+
+TEST(ShellIconRendererAnimation, AStaticMarkIgnoresTheFrame) {
+    EXPECT_EQ(BrandMarkAssetPath(BrandMarkKind::Paused, 3), BrandMarkAssetPath(BrandMarkKind::Paused, 0));
 }
 
 // -- optical profiles --------------------------------------------------------
@@ -223,31 +350,54 @@ TEST(ShellIconRendererOpticalSizing, TheProfileBoundariesAreDeterministic) {
 }
 
 TEST(ShellIconRendererOpticalSizing, SmallSizesAreCorrectedAndLargeOnesAreNot) {
-    EXPECT_GT(kSmallProfile.outer_stroke_scale, kMediumProfile.outer_stroke_scale);
-    EXPECT_GT(kMediumProfile.outer_stroke_scale, kLargeProfile.outer_stroke_scale);
-    EXPECT_DOUBLE_EQ(kLargeProfile.outer_stroke_scale, 1.0);
-    EXPECT_DOUBLE_EQ(kLargeProfile.inner_stroke_scale, 1.0);
-    EXPECT_DOUBLE_EQ(kLargeProfile.inner_radius_scale, 1.0);
-    EXPECT_DOUBLE_EQ(kLargeProfile.dot_radius_scale, 1.0);
+    EXPECT_GT(kSmallProfile.stroke_scale, kMediumProfile.stroke_scale);
+    EXPECT_GT(kMediumProfile.stroke_scale, kLargeProfile.stroke_scale);
+    EXPECT_GT(kSmallProfile.outer_opacity_scale, kLargeProfile.outer_opacity_scale);
+    EXPECT_DOUBLE_EQ(kLargeProfile.stroke_scale, 1.0);
     EXPECT_DOUBLE_EQ(kLargeProfile.outer_opacity_scale, 1.0);
     EXPECT_DOUBLE_EQ(kLargeProfile.content_scale, 1.0);
 }
 
+TEST(ShellIconRendererOpticalSizing, TheCorrectionReachesTheDrawingAndNotOnlyTheProfile) {
+    const auto palette = ResolvePalette(QStringLiteral("dark"), QStringLiteral("aqua"));
+    const double large = StrokeWidthIn(ThemedBrandMarkSvg(BrandMarkKind::Idle, 0, palette, kLargeProfile));
+    const double small = StrokeWidthIn(ThemedBrandMarkSvg(BrandMarkKind::Idle, 0, palette, kSmallProfile));
+    ASSERT_GT(large, 0.0);
+    EXPECT_GT(small, large);
+    EXPECT_NEAR(small, large * kSmallProfile.stroke_scale, 1e-6);
+}
+
+TEST(ShellIconRendererOpticalSizing, TheBarsOfAGlyphAreCorrectedToo) {
+    // They are fills, so the stroke correction never reaches them. A pause glyph
+    // left uncorrected is the one thin thing in an otherwise thickened mark.
+    const auto palette = ResolvePalette(QStringLiteral("dark"), QStringLiteral("aqua"));
+    const QString large = QString::fromUtf8(ThemedBrandMarkSvg(BrandMarkKind::Paused, 0, palette, kLargeProfile));
+    const QString small = QString::fromUtf8(ThemedBrandMarkSvg(BrandMarkKind::Paused, 0, palette, kSmallProfile));
+    const QRegularExpression width(QStringLiteral("<rect[^>]*width=\"([0-9.]+)\""));
+    const double large_bar = width.match(large).captured(1).toDouble();
+    const double small_bar = width.match(small).captured(1).toDouble();
+    ASSERT_GT(large_bar, 0.0);
+    EXPECT_NEAR(small_bar, large_bar * kSmallProfile.stroke_scale, 1e-6);
+    // Widened about its own centre: a bar that grew to the right would walk out
+    // of the aperture. The tolerance is the document's own precision -- the
+    // substituted numbers are written to six significant digits, which is a
+    // twentieth of a device pixel at 16 px and well under a thousandth here.
+    const QRegularExpression x(QStringLiteral("<rect x=\"([0-9.-]+)\""));
+    EXPECT_NEAR(x.match(small).captured(1).toDouble() + small_bar / 2.0,
+                x.match(large).captured(1).toDouble() + large_bar / 2.0, 1e-3);
+}
+
 TEST(ShellIconRendererOpticalSizing, ASmallMarkKeepsARealGapBetweenTheDotAndTheInnerRing) {
-    // The reason the small profile pushes the inner ring outwards.
-    //
     // At 16 px there are eight device pixels from the centre to the edge, and all
-    // three elements plus two gaps have to fit in them. With the unmodified
-    // radius the gap between the dot and the inner ring comes out ONE antialiased
-    // column wide, and one column of partial coverage does not read as a hole:
-    // the dot and the ring merge into a blob and the mark stops being an
-    // aperture. The corrected geometry leaves two.
+    // three elements plus two gaps have to fit in them. One column of partial
+    // coverage does not read as a hole: the dot and the ring would merge into a
+    // blob and the mark would stop being an aperture.
     //
     // Measured along the centre row, walking outwards from the dot.
     constexpr double kInk = 0.30;
     constexpr int kRequiredGapColumns = 2;
 
-    const QImage image = RenderMark(Mark(ShellIconState::Idle, 16));
+    const QImage image = RenderMark(Mark(BrandMarkKind::Idle, 16));
     const int mid = image.height() / 2;
     int x = image.width() / 2 - 1;
 
@@ -263,6 +413,16 @@ TEST(ShellIconRendererOpticalSizing, ASmallMarkKeepsARealGapBetweenTheDotAndTheI
     EXPECT_GE(gap, kRequiredGapColumns) << "only " << gap << " column(s) between the dot and the inner ring at 16 px";
     ASSERT_GE(x, 0) << "no inner ring outside the dot";
     EXPECT_GT(image.pixelColor(x, mid).alphaF(), 0.5) << "the inner ring is too faint to read at 16 px";
+}
+
+TEST(ShellIconRendererOpticalSizing, AShellIconReservesMarginAndAnInlineOneDoesNot) {
+    ShellMarkRequest standalone = Mark(BrandMarkKind::Idle, 64);
+    ShellMarkRequest inline_mark = standalone;
+    inline_mark.standalone = false;
+    // The inline mark fills its box, so it draws more ink at the same size. A
+    // mark placed by a layout that reserved a tray icon's margin reads as too
+    // small for the space it was given.
+    EXPECT_GT(CoveredAlpha(RenderMark(inline_mark)), CoveredAlpha(RenderMark(standalone)));
 }
 
 // -- glyphs ------------------------------------------------------------------
@@ -294,26 +454,37 @@ TEST(ShellIconRendererGlyphs, TheFourTransportShapesAreDistinct) {
 // -- image ids ---------------------------------------------------------------
 
 TEST(ShellIconRendererIds, AMarkIdRoundTrips) {
-    ShellMarkRequest request = Mark(ShellIconState::Recording, 24);
-    request.pulse_frame = 3;
+    ShellMarkRequest request = Mark(BrandMarkKind::Recording, 24);
+    request.frame = 3;
+    request.standalone = false;
     request.accent_id = QStringLiteral("sky");
 
     ShellMarkRequest parsed;
     ASSERT_TRUE(ParseMarkImageId(MarkImageId(request), parsed));
-    EXPECT_EQ(parsed.state, request.state);
+    EXPECT_EQ(parsed.kind, request.kind);
     EXPECT_EQ(parsed.px, request.px);
-    EXPECT_EQ(parsed.pulse_frame, request.pulse_frame);
+    EXPECT_EQ(parsed.frame, request.frame);
+    EXPECT_EQ(parsed.standalone, request.standalone);
     EXPECT_EQ(parsed.appearance_id, request.appearance_id);
     EXPECT_EQ(parsed.accent_id, request.accent_id);
 }
 
-TEST(ShellIconRendererIds, AStaticStateDropsTheHeartbeatFrameFromTheId) {
+TEST(ShellIconRendererIds, AStaticMarkDropsTheFrameFromTheId) {
     // Otherwise the same paused icon would have four URLs, and Qt Quick's pixmap
     // cache would hold four copies of one image.
-    ShellMarkRequest a = Mark(ShellIconState::Paused);
+    ShellMarkRequest a = Mark(BrandMarkKind::Paused);
     ShellMarkRequest b = a;
-    b.pulse_frame = 3;
+    b.frame = 3;
     EXPECT_EQ(MarkImageId(a), MarkImageId(b));
+}
+
+TEST(ShellIconRendererIds, TheMarginIsPartOfTheKey) {
+    // The same mark at the same size is two different images depending on it, and
+    // one URL that renders two ways is a stale icon nothing invalidates.
+    ShellMarkRequest standalone = Mark(BrandMarkKind::Idle);
+    ShellMarkRequest inline_mark = standalone;
+    inline_mark.standalone = false;
+    EXPECT_NE(MarkImageId(standalone), MarkImageId(inline_mark));
 }
 
 TEST(ShellIconRendererIds, AGlyphIdRoundTrips) {
@@ -334,23 +505,24 @@ TEST(ShellIconRendererIds, AGlyphIdRoundTrips) {
 TEST(ShellIconRendererIds, MalformedIdsAreRefusedRatherThanGuessed) {
     ShellMarkRequest mark;
     ShellGlyphRequest glyph;
-    EXPECT_FALSE(ParseMarkImageId(QStringLiteral("mark/recording/32/0/dark"), mark));
-    EXPECT_FALSE(ParseMarkImageId(QStringLiteral("mark/spinning/32/0/dark/aqua"), mark));
-    EXPECT_FALSE(ParseMarkImageId(QStringLiteral("mark/recording/big/0/dark/aqua"), mark));
+    EXPECT_FALSE(ParseMarkImageId(QStringLiteral("mark/recording/32/0/shell/dark"), mark));
+    EXPECT_FALSE(ParseMarkImageId(QStringLiteral("mark/spinning/32/0/shell/dark/aqua"), mark));
+    EXPECT_FALSE(ParseMarkImageId(QStringLiteral("mark/recording/big/0/shell/dark/aqua"), mark));
+    EXPECT_FALSE(ParseMarkImageId(QStringLiteral("mark/recording/32/0/floating/dark/aqua"), mark));
     EXPECT_FALSE(ParseMarkImageId(QStringLiteral("glyph/pause/16/dark/aqua"), mark));
     EXPECT_FALSE(ParseGlyphImageId(QStringLiteral("glyph/rewind/16/dark/aqua"), glyph));
 }
 
 TEST(ShellIconRendererIds, TheUrlAddressesTheProvider) {
-    EXPECT_EQ(ShellIconImageUrl(QStringLiteral("mark/idle/16/0/dark/aqua")),
-              QStringLiteral("image://exosnap-shell/mark/idle/16/0/dark/aqua"));
+    EXPECT_EQ(ShellIconImageUrl(QStringLiteral("mark/idle/16/0/shell/dark/aqua")),
+              QStringLiteral("image://exosnap-shell/mark/idle/16/0/shell/dark/aqua"));
 }
 
 // -- the cache ---------------------------------------------------------------
 
 TEST(ShellIconRendererCache, OneEntryPerDistinctKey) {
     ShellIconCache cache;
-    const ShellMarkRequest recording = Mark(ShellIconState::Recording);
+    const ShellMarkRequest recording = Mark(BrandMarkKind::Recording);
 
     (void)cache.mark(recording);
     (void)cache.mark(recording);
@@ -367,9 +539,22 @@ TEST(ShellIconRendererCache, OneEntryPerDistinctKey) {
     EXPECT_EQ(cache.sizeForTest(), 3);
 }
 
+TEST(ShellIconRendererCache, AWholeRecordingCostsTheFramesAndNoMore) {
+    // The beat is a transition, so a recording of any length is a fixed handful
+    // of rasters. A cache that grew with the recording would be an allocation on
+    // a timer for as long as the session lasts.
+    ShellIconCache cache;
+    for (int tick = 0; tick < 200; ++tick) {
+        ShellMarkRequest request = Mark(BrandMarkKind::Recording, 16);
+        request.frame = tick % kBrandMarkFrameCount;
+        (void)cache.mark(request);
+    }
+    EXPECT_EQ(cache.sizeForTest(), kBrandMarkFrameCount);
+}
+
 TEST(ShellIconRendererCache, ACachedImageIsTheRenderedOne) {
     ShellIconCache cache;
-    const ShellMarkRequest request = Mark(ShellIconState::Saved, 20);
+    const ShellMarkRequest request = Mark(BrandMarkKind::Saved, 20);
     EXPECT_EQ(cache.mark(request), RenderMark(request));
     EXPECT_EQ(cache.mark(request), RenderMark(request));
 }
@@ -379,7 +564,7 @@ TEST(ShellIconRendererCache, NoThemeVariantCanGoStale) {
     // the previous accent's raster -- which is the one cache bug a tray icon
     // would show for the rest of the session.
     ShellIconCache cache;
-    ShellMarkRequest aqua = Mark(ShellIconState::Idle);
+    ShellMarkRequest aqua = Mark(BrandMarkKind::Idle);
     ShellMarkRequest magenta = aqua;
     magenta.accent_id = QStringLiteral("magenta");
 
@@ -391,8 +576,54 @@ TEST(ShellIconRendererCache, NoThemeVariantCanGoStale) {
 
 TEST(ShellIconRendererCache, ClearEmptiesIt) {
     ShellIconCache cache;
-    (void)cache.mark(Mark(ShellIconState::Idle));
+    (void)cache.mark(Mark(BrandMarkKind::Idle));
     ASSERT_GT(cache.sizeForTest(), 0);
     cache.clear();
     EXPECT_EQ(cache.sizeForTest(), 0);
+}
+
+// -- optical evidence --------------------------------------------------------
+
+TEST(ShellIconRendererEvidence, WritesTheSizeSweepWhenAskedFor) {
+    // The optical profiles are chosen from rendered evidence rather than derived,
+    // so the evidence has to be reproducible: set EXOSNAP_SHELL_ICON_EVIDENCE_DIR
+    // and this writes one sheet per appearance, every mark at every shell size,
+    // exactly as the notification area would receive them.
+    //
+    // Off by default. It writes files, and a test that writes files on every run
+    // is a test that fails on a read-only checkout.
+    const QString directory =
+        QProcessEnvironment::systemEnvironment().value(QStringLiteral("EXOSNAP_SHELL_ICON_EVIDENCE_DIR"));
+    if (directory.isEmpty())
+        GTEST_SKIP() << "set EXOSNAP_SHELL_ICON_EVIDENCE_DIR to write the sweep";
+    ASSERT_TRUE(QDir().mkpath(directory)) << directory.toStdString();
+
+    const QList<int> sizes{16, 20, 24, 32, 40, 48, 64, 96, 128, 256};
+    constexpr int kCell = 272;
+    constexpr int kMargin = 8;
+
+    for (const QString& appearance : {QStringLiteral("dark"), QStringLiteral("light")}) {
+        QImage sheet(kMargin + int(sizes.size()) * kCell, kMargin + std::size(kAllKinds) * kCell,
+                     QImage::Format_ARGB32_Premultiplied);
+        sheet.fill(appearance == QStringLiteral("dark") ? QColor(0x0E, 0x0E, 0x10) : QColor(0xE7, 0xE9, 0xED));
+        QPainter painter(&sheet);
+        int row = 0;
+        for (const BrandMarkKind kind : kAllKinds) {
+            int column = 0;
+            for (const int px : sizes) {
+                ShellMarkRequest request = Mark(kind, px);
+                request.appearance_id = appearance;
+                const QImage image = RenderMark(request);
+                painter.drawImage(kMargin + column * kCell, kMargin + row * kCell, image);
+                // The same raster again, magnified with no smoothing, because
+                // what a 16 px icon does is only visible per pixel.
+                painter.drawImage(QRect(kMargin + column * kCell, kMargin + row * kCell + 40, 224, 224), image);
+                ++column;
+            }
+            ++row;
+        }
+        painter.end();
+        const QString path = QStringLiteral("%1/shell-icon-sweep-%2.png").arg(directory, appearance);
+        EXPECT_TRUE(sheet.save(path)) << path.toStdString();
+    }
 }
