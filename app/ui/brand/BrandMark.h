@@ -149,14 +149,20 @@ inline constexpr double kStandaloneContentScale = 0.88;
 // so this is where they live. Written down once because a pause bar that is one
 // width in the menu and another in the toolbar is two shapes, and the second one
 // drifts.
-inline constexpr double kGlyphDiscRadius = 8.0;
-inline constexpr double kGlyphSquareHalf = 7.0;
-inline constexpr double kGlyphBarWidth = 3.6;
-inline constexpr double kGlyphBarHeight = 15.0;
-inline constexpr double kGlyphBarGap = 3.4;
-inline constexpr double kGlyphTriangleBackX = 11.5;
-inline constexpr double kGlyphTriangleTipX = 23.5;
-inline constexpr double kGlyphTriangleHalfHeight = 8.0;
+// Sized to sit INSIDE the chrome that draws them rather than to fill it. The
+// thumbnail toolbar gives each glyph a button of its own and Explorer draws that
+// button's ground; a shape that reached the edges read as a coloured tile with a
+// hole in it rather than as a control.
+inline constexpr double kGlyphDiscRadius = 7.0;
+inline constexpr double kGlyphSquareHalf = 6.1;
+inline constexpr double kGlyphSquareCorner = 1.4;
+inline constexpr double kGlyphBarWidth = 3.2;
+inline constexpr double kGlyphBarHeight = 13.2;
+inline constexpr double kGlyphBarGap = 3.2;
+inline constexpr double kGlyphBarCorner = 1.0;
+inline constexpr double kGlyphTriangleBackX = 12.2;
+inline constexpr double kGlyphTriangleTipX = 22.4;
+inline constexpr double kGlyphTriangleHalfHeight = 7.1;
 
 // The menu's non-transport entries. Outlines rather than fills: the four above
 // are actions on a recording and carry a semantic colour, while these four say

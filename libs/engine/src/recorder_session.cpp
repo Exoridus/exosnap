@@ -1012,9 +1012,17 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
 
     // Fill in elapsed_seconds from wall-clock time (stats_callback snapshots compute this per-tick
     // but never write it back to m_state.stats, so the final stats always shows 0 without this).
+    //
+    // Minus everything the session spent paused, which the stats collector
+    // accumulated as it watched `pause_requested`. A paused capture writes no
+    // frames, so counting that time here would report a duration the file does
+    // not have -- and would disagree with the clock the user was watching.
     {
         const auto recording_wall_end = std::chrono::steady_clock::now();
-        result.stats.elapsed_seconds = std::chrono::duration<double>(recording_wall_end - recording_wall_start).count();
+        const auto captured =
+            recording_wall_end - recording_wall_start - std::chrono::nanoseconds(state_ptr->paused_ns.load());
+        const double seconds = std::chrono::duration<double>(captured).count();
+        result.stats.elapsed_seconds = seconds > 0.0 ? seconds : 0.0;
     }
 
     // Defensive: if nominally succeeded but no output file was produced

@@ -227,16 +227,33 @@ class Renderer:
             self._disc(draw, scale, m.value("kGlyphDiscRadius"), rgba)
         elif shape == "square":
             half = m.value("kGlyphSquareHalf")
-            draw.rectangle([(self.center - half) * scale, (self.center - half) * scale,
-                            (self.center + half) * scale, (self.center + half) * scale], fill=rgba)
+            corner = m.value("kGlyphSquareCorner")
+            draw.rounded_rectangle([(self.center - half) * scale, (self.center - half) * scale,
+                                    (self.center + half) * scale, (self.center + half) * scale],
+                                   radius=corner * scale, fill=rgba)
         elif shape == "bars":
             bar_w = m.value("kGlyphBarWidth")
             bar_h = m.value("kGlyphBarHeight")
             gap = m.value("kGlyphBarGap")
+            corner = m.value("kGlyphBarCorner")
             for direction in (-1, 1):
                 x = self.center + direction * (gap / 2.0 + bar_w / 2.0)
-                draw.rectangle([(x - bar_w / 2.0) * scale, (self.center - bar_h / 2.0) * scale,
-                                (x + bar_w / 2.0) * scale, (self.center + bar_h / 2.0) * scale], fill=rgba)
+                draw.rounded_rectangle([(x - bar_w / 2.0) * scale, (self.center - bar_h / 2.0) * scale,
+                                        (x + bar_w / 2.0) * scale, (self.center + bar_h / 2.0) * scale],
+                                       radius=corner * scale, fill=rgba)
+        elif shape == "folder":
+            # Stroked rather than filled, matching the tray menu's own folder:
+            # the row it labels is about a place, not about a recording.
+            left = self.center - m.value("kGlyphFolderHalfWidth")
+            right = self.center + m.value("kGlyphFolderHalfWidth")
+            top = m.value("kGlyphFolderTopY")
+            body = m.value("kGlyphFolderBodyY")
+            bottom = m.value("kGlyphFolderBottomY")
+            tab = m.value("kGlyphFolderTabWidth")
+            points = [(left, bottom), (left, top), (left + tab, top), (left + tab + 1.8, body),
+                      (right, body), (right, bottom)]
+            draw.line([(x * scale, y * scale) for x, y in points] + [(left * scale, bottom * scale)],
+                      fill=rgba, width=max(1, round(m.value("kGlyphStroke") * scale)), joint="curve")
         elif shape == "triangle":
             back = m.value("kGlyphTriangleBackX")
             tip = m.value("kGlyphTriangleTipX")
@@ -336,6 +353,9 @@ def main() -> int:
         "exosnap-thumb-pause": ("bars", amber),
         "exosnap-thumb-resume": ("triangle", accent),
         "exosnap-thumb-stop": ("square", coral),
+        # Not transport: the thumbnail strip's fourth button opens the recording
+        # destination, which is safe in every state and therefore never greyed.
+        "exosnap-thumb-folder": ("folder", accent),
     }
     for stem, (shape, rgb) in thumbs.items():
         write_ico([renderer.thumb_frame(px, shape, rgb) for px in SHELL_ICO_SIZES], stem)

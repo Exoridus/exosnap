@@ -832,6 +832,17 @@ exosnap_add_gtest(
 )
 target_include_directories(test_audio_duration_stats PRIVATE src)
 
+# The recording clock's pause arithmetic. Reaches into src/ for the collector's
+# header, which is where the one function that answers "how long is this
+# recording" lives.
+exosnap_add_gtest(
+    NAME test_captured_seconds
+    TEST_PREFIX engine.
+    SOURCES tests/test_captured_seconds.cpp
+    LIBRARIES exosnap_engine
+)
+target_include_directories(test_captured_seconds PRIVATE src)
+
 exosnap_add_gtest(
     NAME test_audio_meter
     TEST_PREFIX engine.

@@ -229,7 +229,8 @@ TEST(BrandGeometry, TheGeneratorStillFindsEveryConstantItReads) {
     for (const QString& name :
          {QStringLiteral("kGrid"), QStringLiteral("kCenter"), QStringLiteral("kStandaloneContentScale"),
           QStringLiteral("kGlyphDiscRadius"), QStringLiteral("kGlyphSquareHalf"), QStringLiteral("kGlyphBarWidth"),
-          QStringLiteral("kGlyphBarHeight"), QStringLiteral("kGlyphBarGap"), QStringLiteral("kGlyphTriangleBackX"),
+          QStringLiteral("kGlyphBarHeight"), QStringLiteral("kGlyphBarGap"), QStringLiteral("kGlyphBarCorner"),
+          QStringLiteral("kGlyphSquareCorner"), QStringLiteral("kGlyphTriangleBackX"),
           QStringLiteral("kGlyphTriangleTipX"), QStringLiteral("kGlyphTriangleHalfHeight"),
           QStringLiteral("kSmallProfileMaxPx"), QStringLiteral("kMediumProfileMaxPx")}) {
         const QRegularExpression declaration(
@@ -268,9 +269,10 @@ TEST(BrandGeometry, TheShellIconsThatAreStillFilesAreThere) {
     // What the runtime renderer does NOT paint: the executable's own identity,
     // and the thumbnail toolbar, whose THUMBBUTTON::hIcon takes a handle out of
     // the PE resource table rather than a QImage.
-    for (const QString& asset : {QStringLiteral("exosnap-app.ico"), QStringLiteral("exosnap-thumb-record.ico"),
-                                 QStringLiteral("exosnap-thumb-pause.ico"), QStringLiteral("exosnap-thumb-resume.ico"),
-                                 QStringLiteral("exosnap-thumb-stop.ico")}) {
+    for (const QString& asset :
+         {QStringLiteral("exosnap-app.ico"), QStringLiteral("exosnap-thumb-record.ico"),
+          QStringLiteral("exosnap-thumb-pause.ico"), QStringLiteral("exosnap-thumb-resume.ico"),
+          QStringLiteral("exosnap-thumb-stop.ico"), QStringLiteral("exosnap-thumb-folder.ico")}) {
         QFile file(QStringLiteral(EXOSNAP_BRAND_SOURCE_DIR) + QStringLiteral("/assets/brand/") + asset);
         EXPECT_TRUE(file.exists()) << asset.toStdString() << " is referenced by exosnap.rc but is not on disk";
     }

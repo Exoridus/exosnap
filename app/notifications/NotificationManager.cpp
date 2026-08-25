@@ -7,6 +7,10 @@ namespace exosnap::notifications {
 NotificationManager::NotificationManager(QObject* parent) : QObject(parent) {
     timer_ = new QTimer(this);
     timer_->setSingleShot(true);
+    // Precise, not the default coarse timer. Qt gives a coarse timer 5 % of
+    // slack in EITHER direction, which for a ten-second toast is half a second
+    // early -- and an early wake-up finds nothing expired.
+    timer_->setTimerType(Qt::PreciseTimer);
     connect(timer_, &QTimer::timeout, this, &NotificationManager::onTimerFired);
 }
 
@@ -134,6 +138,19 @@ bool NotificationManager::IsStanding(NotificationType type) noexcept {
     return DismissIntervalMs(type) == 0;
 }
 
+void NotificationManager::FireDismissTimerForTest() {
+    // A single-shot timer is already stopped by the time its handler runs.
+    // Stopping it here is what makes this an early WAKE-UP rather than a bare
+    // call into the handler -- without it the test cannot see the defect,
+    // because the timer it should have re-armed was never disarmed.
+    timer_->stop();
+    onTimerFired();
+}
+
+bool NotificationManager::DismissTimerArmedForTest() const {
+    return timer_ != nullptr && timer_->isActive();
+}
+
 void NotificationManager::rescheduleTimer() {
     timer_->stop();
 
@@ -176,10 +193,13 @@ void NotificationManager::onTimerFired() {
         }
     }
 
-    if (changed) {
-        rescheduleTimer();
+    // Rearmed unconditionally, and that is the fix rather than a tidy-up. A
+    // timer that fires a millisecond early finds nothing expired; rescheduling
+    // only on a change left the toast on screen with nothing armed to remove it,
+    // which is exactly how a timed toast became a permanent one.
+    rescheduleTimer();
+    if (changed)
         emit visibleSetChanged();
-    }
 }
 
 } // namespace exosnap::notifications

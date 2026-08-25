@@ -115,6 +115,8 @@ SessionStatsCollector::~SessionStatsCollector() {
 
 void SessionStatsCollector::Start() {
     m_start_time = std::chrono::steady_clock::now();
+    m_paused_since.reset();
+    m_state.paused_ns.store(0);
     m_stop.store(false);
     m_thread = std::thread([this] { Run(); });
 }
@@ -123,6 +125,32 @@ void SessionStatsCollector::Stop() {
     m_stop.store(true);
     if (m_thread.joinable())
         m_thread.join();
+}
+
+void SessionStatsCollector::AccumulatePause(std::chrono::steady_clock::time_point now) {
+    const bool paused = m_state.pause_requested.load();
+    if (paused && !m_paused_since) {
+        m_paused_since = now;
+        return;
+    }
+    if (!paused && m_paused_since) {
+        const auto held = now - *m_paused_since;
+        m_state.paused_ns.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(held).count());
+        m_paused_since.reset();
+    }
+}
+
+double CapturedSeconds(std::chrono::nanoseconds since_start, std::chrono::nanoseconds paused_total,
+                       std::chrono::nanoseconds open_pause) noexcept {
+    const double seconds = std::chrono::duration<double>(since_start - paused_total - open_pause).count();
+    return seconds > 0.0 ? seconds : 0.0;
+}
+
+double SessionStatsCollector::CapturedSecondsAt(std::chrono::steady_clock::time_point now) const {
+    const auto open = m_paused_since ? std::chrono::duration_cast<std::chrono::nanoseconds>(now - *m_paused_since)
+                                     : std::chrono::nanoseconds::zero();
+    return CapturedSeconds(std::chrono::duration_cast<std::chrono::nanoseconds>(now - m_start_time),
+                           std::chrono::nanoseconds(m_state.paused_ns.load()), open);
 }
 
 void SessionStatsCollector::Run() {
@@ -137,6 +165,7 @@ void SessionStatsCollector::Run() {
         if (m_stop.load())
             break;
         ++tick;
+        AccumulatePause(std::chrono::steady_clock::now());
 
         // High-cadence meter snapshot (~30 Hz)
         if (m_state.meter_callback) {
@@ -161,7 +190,7 @@ void SessionStatsCollector::Run() {
                 stats_copy = m_state.stats;
             }
             const auto now = std::chrono::steady_clock::now();
-            const double elapsed = std::chrono::duration<double>(now - m_start_time).count();
+            const double elapsed = CapturedSecondsAt(now);
             stats_copy.elapsed_seconds = elapsed;
 
             const DiagnosticsLifecycle lifecycle = m_state.stop_requested.load()    ? DiagnosticsLifecycle::Stopping
@@ -236,7 +265,7 @@ void SessionStatsCollector::Run() {
             }
 
             auto now = std::chrono::steady_clock::now();
-            snapshot.elapsed_seconds = std::chrono::duration<double>(now - m_start_time).count();
+            snapshot.elapsed_seconds = CapturedSecondsAt(now);
 
             if (snapshot.video_duration_ns > 0 && snapshot.audio_duration_ns > 0) {
                 double vd = static_cast<double>(snapshot.video_duration_ns) / 1e6; // ms

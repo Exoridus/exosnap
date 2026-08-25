@@ -79,6 +79,37 @@ TEST_F(NotificationManagerTest, Enqueue_SequenceIsMonotonicallyIncreasing) {
 }
 
 // ── Timed vs. standing classification ────────────────────────────────────────
+TEST(NotificationManagerTiming, AnEarlyWakeUpLeavesTheTimerArmed) {
+    // The defect that made the "Recording saved" toast permanent. Qt gives a
+    // coarse timer 5 % of slack in either direction -- half a second on a
+    // ten-second toast -- so the handler routinely runs before anything has
+    // expired. Rescheduling only when something was removed disarmed the one
+    // thing that would ever remove it.
+    EnsureApp();
+    NotificationManager mgr;
+    mgr.Enqueue(MakeEvent(NotificationType::Saved));
+    ASSERT_EQ(mgr.VisibleEvents().size(), 1);
+    ASSERT_TRUE(mgr.DismissTimerArmedForTest());
+
+    mgr.FireDismissTimerForTest();
+
+    EXPECT_EQ(mgr.VisibleEvents().size(), 1) << "nothing had expired yet";
+    EXPECT_TRUE(mgr.DismissTimerArmedForTest()) << "the toast is now on screen with nothing to remove it";
+}
+
+TEST(NotificationManagerTiming, NothingIsArmedOnceOnlyStandingToastsRemain) {
+    // The other half: a timer left running with nothing to expire would wake the
+    // application for no reason for as long as the condition holds.
+    EnsureApp();
+    NotificationManager mgr;
+    mgr.Enqueue(MakeEvent(NotificationType::LowStorage));
+    ASSERT_TRUE(NotificationManager::IsStanding(NotificationType::LowStorage));
+    EXPECT_FALSE(mgr.DismissTimerArmedForTest());
+
+    mgr.FireDismissTimerForTest();
+    EXPECT_FALSE(mgr.DismissTimerArmedForTest());
+}
+
 // Standing is exactly DismissIntervalMs == 0, and it means one specific thing: a
 // CONDITION that is true right now and that will CLEAR ITSELF when it stops being
 // true. Everything else is an event that already happened, and events are timed.

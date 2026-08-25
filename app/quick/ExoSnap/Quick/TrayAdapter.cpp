@@ -20,6 +20,8 @@ using ui::brand::ShellMarkRequest;
         return TrayAdapter::tr("Resume recording");
     case ShellAction::Stop:
         return TrayAdapter::tr("Stop recording");
+    case ShellAction::OpenOutputFolder:
+        return TrayAdapter::tr("Open output folder");
     case ShellAction::None:
         break;
     }
@@ -39,6 +41,9 @@ using ui::brand::ShellMarkRequest;
         return true;
     case ShellAction::Stop:
         out = ShellGlyph::Stop;
+        return true;
+    case ShellAction::OpenOutputFolder:
+        out = ShellGlyph::Folder;
         return true;
     case ShellAction::None:
         break;

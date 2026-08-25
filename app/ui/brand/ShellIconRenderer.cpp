@@ -328,14 +328,20 @@ QImage RenderGlyph(const ShellGlyphRequest& request) {
         FillDisc(painter, scale, kCenter, kCenter, kGlyphDiscRadius, colour);
         break;
     case ShellGlyph::Stop:
-        painter.drawRect(QRectF((kCenter - kGlyphSquareHalf) * scale, (kCenter - kGlyphSquareHalf) * scale,
-                                2.0 * kGlyphSquareHalf * scale, 2.0 * kGlyphSquareHalf * scale));
+        // Softened corners, because it sits beside a disc and a triangle whose
+        // edges are curves: a hard square among them reads as the odd one out
+        // rather than as the same family at a different shape.
+        painter.drawRoundedRect(QRectF((kCenter - kGlyphSquareHalf) * scale, (kCenter - kGlyphSquareHalf) * scale,
+                                       2.0 * kGlyphSquareHalf * scale, 2.0 * kGlyphSquareHalf * scale),
+                                kGlyphSquareCorner * scale, kGlyphSquareCorner * scale);
         break;
     case ShellGlyph::Pause:
         for (const double direction : {-1.0, 1.0}) {
             const double x = kCenter + direction * (kGlyphBarGap / 2.0 + kGlyphBarWidth / 2.0);
-            painter.drawRect(QRectF((x - kGlyphBarWidth / 2.0) * scale, (kCenter - kGlyphBarHeight / 2.0) * scale,
-                                    kGlyphBarWidth * scale, kGlyphBarHeight * scale));
+            painter.drawRoundedRect(QRectF((x - kGlyphBarWidth / 2.0) * scale,
+                                           (kCenter - kGlyphBarHeight / 2.0) * scale, kGlyphBarWidth * scale,
+                                           kGlyphBarHeight * scale),
+                                    kGlyphBarCorner * scale, kGlyphBarCorner * scale);
         }
         break;
     case ShellGlyph::Resume: {

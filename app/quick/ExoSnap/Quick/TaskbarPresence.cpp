@@ -51,6 +51,8 @@ constexpr qint32 kSucceeded = 0;
         return IDI_EXOSNAP_THUMB_RESUME;
     case ShellAction::Stop:
         return IDI_EXOSNAP_THUMB_STOP;
+    case ShellAction::OpenOutputFolder:
+        return IDI_EXOSNAP_THUMB_FOLDER;
     case ShellAction::None:
         break;
     }
@@ -67,6 +69,8 @@ constexpr qint32 kSucceeded = 0;
         return QCoreApplication::translate("TaskbarPresence", "Resume recording");
     case ShellAction::Stop:
         return QCoreApplication::translate("TaskbarPresence", "Stop recording");
+    case ShellAction::OpenOutputFolder:
+        return QCoreApplication::translate("TaskbarPresence", "Open output folder");
     case ShellAction::None:
         break;
     }
@@ -167,7 +171,7 @@ class WindowsTaskbarShell final : public TaskbarShell {
     qint32 withButtons(void* hwnd, const QVector<ThumbButtonSpec>& buttons, bool add) {
         if (taskbar_ == nullptr)
             return static_cast<qint32>(E_POINTER);
-        // Documented ceiling for a thumbnail toolbar. The product registers three.
+        // Documented ceiling for a thumbnail toolbar. The product registers four.
         if (buttons.isEmpty() || buttons.size() > 7)
             return static_cast<qint32>(E_INVALIDARG);
 
@@ -392,12 +396,14 @@ bool TaskbarPresence::shellAvailable() const noexcept {
 QVector<ThumbButtonSpec> TaskbarPresence::ButtonsFor(const ShellPresenceState& state) {
     // Fixed order and fixed ids. The set cannot change after registration, so the
     // slot a button occupies is part of its identity.
-    const ShellButton buttons[] = {ShellButton::Record, ShellButton::PauseResume, ShellButton::Stop};
-    const int ids[] = {kShellButtonIdRecord, kShellButtonIdPauseResume, kShellButtonIdStop};
+    const ShellButton buttons[] = {ShellButton::Record, ShellButton::PauseResume, ShellButton::Stop,
+                                   ShellButton::OpenFolder};
+    const int ids[] = {kShellButtonIdRecord, kShellButtonIdPauseResume, kShellButtonIdStop, kShellButtonIdOpenFolder};
+    constexpr int kCount = 4;
 
     QVector<ThumbButtonSpec> specs;
-    specs.reserve(3);
-    for (int i = 0; i < 3; ++i) {
+    specs.reserve(kCount);
+    for (int i = 0; i < kCount; ++i) {
         const ShellButtonAppearance appearance = ShellButtonFor(buttons[i], state);
         specs.push_back(ThumbButtonSpec{ids[i], appearance.action, appearance.visible, appearance.enabled});
     }

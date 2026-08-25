@@ -73,15 +73,24 @@ enum class ShellAction {
     Pause,
     Resume,
     Stop,
+    // Not transport. Opening the recording destination is safe in every
+    // state and destroys nothing, which is why it is the one shell action
+    // with no state to check.
+    OpenOutputFolder,
 };
 
-// The three registered taskbar thumbnail buttons. Pause and Resume share one
-// slot: the set is fixed after ThumbBarAddButtons, so spending two registrations
-// on mutually exclusive actions wastes one.
+// The registered taskbar thumbnail buttons. Pause and Resume share one slot:
+// the set is fixed after ThumbBarAddButtons, so spending two registrations on
+// mutually exclusive actions wastes one.
 enum class ShellButton {
     Record,
     PauseResume,
     Stop,
+    // Always present and always enabled. The strip is a fixed set registered
+    // once, so a button that came and went would leave a hole rather than
+    // closing up -- and there is no state in which opening the destination is
+    // the wrong thing to offer.
+    OpenFolder,
 };
 
 // Native command ids for the thumbnail buttons, carried in the low word of a
@@ -91,6 +100,7 @@ enum class ShellButton {
 inline constexpr int kShellButtonIdRecord = 0x7A01;
 inline constexpr int kShellButtonIdPauseResume = 0x7A02;
 inline constexpr int kShellButtonIdStop = 0x7A03;
+inline constexpr int kShellButtonIdOpenFolder = 0x7A04;
 
 // Everything the projection reads. Assembled by the caller from the recording
 // view model, so the Can* predicates arrive as their owner computed them rather

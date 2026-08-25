@@ -8,6 +8,7 @@
 #include <set>
 
 using exosnap::kRecordingPulseFrameCount;
+using exosnap::kShellButtonIdOpenFolder;
 using exosnap::kShellButtonIdPauseResume;
 using exosnap::kShellButtonIdRecord;
 using exosnap::kShellButtonIdStop;
@@ -16,6 +17,7 @@ using exosnap::ProjectShellPresence;
 using exosnap::ResolveShellCommand;
 using exosnap::ShellAction;
 using exosnap::ShellButton;
+using exosnap::ShellButtonAppearance;
 using exosnap::ShellButtonFor;
 using exosnap::ShellButtonFromCommandId;
 using exosnap::ShellIconState;
@@ -265,10 +267,35 @@ TEST(ShellCommandDispatch, KnownIdsMapToTheirButton) {
     EXPECT_EQ(button, ShellButton::Stop);
 }
 
+TEST(ShellButtons, TheFolderButtonIsOfferedInEveryState) {
+    // The one button on the strip with no state to check. The set is registered
+    // once and cannot change, so a button that came and went would leave a hole
+    // rather than closing up -- and opening the destination is safe whatever the
+    // session is doing.
+    for (const UiRecordingState state :
+         {UiRecordingState::Ready, UiRecordingState::Recording, UiRecordingState::Paused, UiRecordingState::Saving,
+          UiRecordingState::Failed, UiRecordingState::Blocked}) {
+        const ShellPresenceState presence = ProjectShellPresence(InputFor(state));
+        const ShellButtonAppearance appearance = ShellButtonFor(ShellButton::OpenFolder, presence);
+        EXPECT_TRUE(appearance.visible) << static_cast<int>(state);
+        EXPECT_TRUE(appearance.enabled) << static_cast<int>(state);
+        EXPECT_EQ(appearance.action, ShellAction::OpenOutputFolder) << static_cast<int>(state);
+    }
+}
+
+TEST(ShellCommandDispatch, TheFolderIdOpensTheFolderWhateverTheSessionIsDoing) {
+    for (const UiRecordingState state :
+         {UiRecordingState::Ready, UiRecordingState::Recording, UiRecordingState::Paused, UiRecordingState::Failed}) {
+        const ShellPresenceState presence = ProjectShellPresence(InputFor(state));
+        EXPECT_EQ(ResolveShellCommand(kShellButtonIdOpenFolder, presence), ShellAction::OpenOutputFolder)
+            << static_cast<int>(state);
+    }
+}
+
 TEST(ShellCommandDispatch, AnUnknownIdIsNotOurs) {
     ShellButton button = ShellButton::Record;
     EXPECT_FALSE(ShellButtonFromCommandId(0, button));
-    EXPECT_FALSE(ShellButtonFromCommandId(kShellButtonIdStop + 1, button));
+    EXPECT_FALSE(ShellButtonFromCommandId(kShellButtonIdOpenFolder + 1, button));
 }
 
 TEST(ShellCommandDispatch, RecordIdStartsFromIdle) {

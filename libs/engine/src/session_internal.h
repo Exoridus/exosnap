@@ -157,6 +157,16 @@ struct SessionState {
     // Video threads adjust their epoch on resume so PTS continues seamlessly.
     std::atomic<bool> pause_requested{false};
 
+    // Nanoseconds this session has spent paused, accumulated by the stats
+    // collector as it observes `pause_requested` change.
+    //
+    // Elapsed time is what the user reads as "how long is my recording", and a
+    // paused capture writes no frames -- a clock that kept counting through a
+    // pause promised a file longer than the one that lands. The collector is
+    // where it is measured because it is the one thing already ticking; the
+    // session end reads it so the final result agrees with what the UI showed.
+    std::atomic<long long> paused_ns{0};
+
     // ---------------------------------------------------------------------------
     // Split recording coordination (SPLIT-RECORDING-R1 / SPLIT-BY-SIZE-R1)
     // ---------------------------------------------------------------------------

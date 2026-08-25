@@ -1440,8 +1440,10 @@ release (0.11 per ADR 0022).
 - **Clicking the tray icon** brings the window back; **double-clicking it** starts or stops a
   recording, the same gesture the global hotkey carries; **right-clicking it** opens the menu.
 - **Taskbar button** — the same transport as a thumbnail toolbar under the taskbar preview
-  (Record, Pause/Resume, Stop, following the same table as the tray menu), the state in the button's
-  own icon as described above, and a **progress bar** for the long
+  (Record, Pause/Resume, Stop, following the same table as the tray menu), a fourth button that
+  **opens the output folder** and is offered in every state — the strip is registered once and cannot
+  change, and opening the destination is safe whatever the session is doing — the state in the
+  button's own icon as described above, and a **progress bar** for the long
   operations: the save after a recording stops, a recovery finish, and an edit export. The bar shows
   one operation at a time; a second long operation running at the same time reports in its own
   surface rather than sharing the bar, and a failed operation leaves the bar red until the next one

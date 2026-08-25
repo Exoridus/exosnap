@@ -619,7 +619,7 @@ TEST_F(TaskbarPresenceTest, ReadinessArmsTheCurrentHandleAndRegistersTheFullSet)
     EXPECT_TRUE(presence_.buttonsRegistered());
     EXPECT_EQ(shell_->log.add_buttons, 1);
     // The set is fixed after registration, so all three slots go up front.
-    EXPECT_EQ(shell_->last_buttons.size(), 3);
+    EXPECT_EQ(shell_->last_buttons.size(), 4);
 }
 
 TEST_F(TaskbarPresenceTest, ARepeatedAnnouncementReArmsWithoutDuplicatingTheSet) {
@@ -634,7 +634,7 @@ TEST_F(TaskbarPresenceTest, ARepeatedAnnouncementReArmsWithoutDuplicatingTheSet)
 
     presence_.notifyShellReady(kHandleA);
     EXPECT_EQ(shell_->log.add_buttons, 2);
-    EXPECT_EQ(shell_->last_buttons.size(), 3);
+    EXPECT_EQ(shell_->last_buttons.size(), 4);
     EXPECT_TRUE(presence_.buttonsRegistered());
     // The interface behind it is re-created: a proxy to a dead Explorer is not
     // reusable.
@@ -659,7 +659,7 @@ TEST_F(TaskbarPresenceTest, TheDesiredStateIsReAppliedOnceTheShellIsReady) {
     ASSERT_EQ(shell_->log.add_buttons, 0);
 
     presence_.notifyShellReady(kHandleA);
-    ASSERT_EQ(shell_->last_buttons.size(), 3);
+    ASSERT_EQ(shell_->last_buttons.size(), 4);
     EXPECT_FALSE(shell_->last_buttons[0].visible); // Record
     EXPECT_TRUE(shell_->last_buttons[1].visible);  // Pause
     EXPECT_TRUE(shell_->last_buttons[2].visible);  // Stop
@@ -689,7 +689,7 @@ TEST_F(TaskbarPresenceTest, TheNewHandleNeedsItsOwnReadinessAndThenGetsTheFullSt
     presence_.notifyShellReady(kHandleB);
     EXPECT_TRUE(presence_.ready());
     EXPECT_TRUE(presence_.buttonsRegistered());
-    ASSERT_EQ(shell_->last_buttons.size(), 3);
+    ASSERT_EQ(shell_->last_buttons.size(), 4);
     // Paused: Record hidden, Resume and Stop offered.
     EXPECT_FALSE(shell_->last_buttons[0].visible);
     EXPECT_TRUE(shell_->last_buttons[1].visible);

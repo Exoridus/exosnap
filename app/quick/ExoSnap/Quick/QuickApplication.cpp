@@ -3963,6 +3963,9 @@ void QuickApplication::performShellAction(ShellAction action) {
     case ShellAction::Stop:
         record_view_model_adapter_.requestStop();
         break;
+    case ShellAction::OpenOutputFolder:
+        openConfiguredOutputFolder();
+        break;
     case ShellAction::None:
         break;
     }

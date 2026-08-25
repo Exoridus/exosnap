@@ -18,6 +18,15 @@ Dialog {
     // let a stray Return key trigger it.
     property bool defaultIsCancel: true
 
+    // Wide enough for the buttons, which name a consequence rather than saying
+    // "OK": "Stop recording and close" beside "Cancel" does not fit the 420 a
+    // body of text wants, and a footer wider than its dialog is what pushed the
+    // proceed button out of the panel.
+    readonly property real footerWidth: footerRow.implicitWidth + 2 * ExoTheme.spacingLg
+    // NOT `availableWidth`: Popup already declares that one FINAL, and shadowing
+    // it makes the whole component fail to load.
+    readonly property real widestAllowed: (parent?.width ?? 420) - 2 * ExoTheme.spacingXl
+
     modal: true
     // Without this the popup never takes active focus, and everything the dialog
     // claims about the keyboard stops being true: CloseOnEscape is documented to
@@ -26,7 +35,7 @@ Dialog {
     // shell behind the modal keeps answering Tab and Return.
     focus: true
     anchors.centerIn: Overlay.overlay
-    width: Math.min(420, (parent?.width ?? 420) - 2 * ExoTheme.spacingXl)
+    width: Math.min(Math.max(420, root.footerWidth), root.widestAllowed)
     padding: ExoTheme.spacingLg
     closePolicy: Popup.CloseOnEscape
 
@@ -62,26 +71,40 @@ Dialog {
         }
     }
 
-    footer: RowLayout {
-        spacing: ExoTheme.spacingSm
+    // The margins belong to the ROW, not to one button in it. Set on the last
+    // child they applied to that child alone, which left the two buttons on
+    // different baselines and the proceed button hard against the panel edge.
+    footer: Item {
+        implicitWidth: footerRow.implicitWidth + 2 * ExoTheme.spacingLg
+        implicitHeight: footerRow.implicitHeight + ExoTheme.spacingLg
 
-        Item {
-            Layout.fillWidth: true
-        }
+        RowLayout {
+            id: footerRow
 
-        ExoButton {
-            text: root.cancelText
-            quiet: true
-            focus: root.defaultIsCancel
-            onClicked: root.reject()
-        }
+            anchors.fill: parent
+            anchors.leftMargin: ExoTheme.spacingLg
+            anchors.rightMargin: ExoTheme.spacingLg
+            anchors.bottomMargin: ExoTheme.spacingLg
+            spacing: ExoTheme.spacingSm
 
-        ExoButton {
-            text: root.proceedText
-            focus: !root.defaultIsCancel
-            Layout.rightMargin: ExoTheme.spacingLg
-            Layout.bottomMargin: ExoTheme.spacingLg
-            onClicked: root.accept()
+            Item {
+                Layout.fillWidth: true
+            }
+
+            ExoButton {
+                text: root.cancelText
+                quiet: true
+                focus: root.defaultIsCancel
+                Layout.alignment: Qt.AlignVCenter
+                onClicked: root.reject()
+            }
+
+            ExoButton {
+                text: root.proceedText
+                focus: !root.defaultIsCancel
+                Layout.alignment: Qt.AlignVCenter
+                onClicked: root.accept()
+            }
         }
     }
 }

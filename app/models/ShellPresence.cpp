@@ -132,6 +132,15 @@ ShellButtonAppearance ShellButtonFor(ShellButton button, const ShellPresenceStat
         }
         return appearance;
 
+    case ShellButton::OpenFolder:
+        // No state is consulted on purpose. The destination exists whether or
+        // not a recording does, and opening it cannot lose anything; a folder
+        // that has gone missing is reported by the one place that opens it.
+        appearance.visible = true;
+        appearance.enabled = true;
+        appearance.action = ShellAction::OpenOutputFolder;
+        return appearance;
+
     case ShellButton::Stop:
         appearance.visible = state.recording || state.paused;
         appearance.enabled = appearance.visible && state.can_stop;
@@ -152,6 +161,9 @@ bool ShellButtonFromCommandId(int command_id, ShellButton& out) noexcept {
         return true;
     case kShellButtonIdStop:
         out = ShellButton::Stop;
+        return true;
+    case kShellButtonIdOpenFolder:
+        out = ShellButton::OpenFolder;
         return true;
     default:
         return false;
