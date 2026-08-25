@@ -39,13 +39,18 @@ namespace {
     return QStringLiteral("idle");
 }
 
-// Every stroke in the suite, scaled. The dash pattern beside it is deliberately
-// untouched: lengthening the dashes with the stroke would close the gaps the
-// processing arc is made of.
-void ScaleStrokes(QString& svg, double scale) {
+// The two RINGS, scaled. Nothing else in the drawing is touched, and that is the
+// whole point: a correction that reached the check, the cross, the warning glyph
+// and the transport bars as well thickened them against a ring that had not
+// moved, and the aperture's void closed up. The rings are what a small raster
+// loses; the glyph inside one is what it has least room for.
+//
+// The dash pattern is likewise untouched: lengthening the dashes with the stroke
+// would close the gaps the processing arc is made of.
+void ScaleRingStrokes(QString& svg, double scale) {
     if (qFuzzyCompare(scale, 1.0))
         return;
-    static const QRegularExpression pattern(QStringLiteral("stroke-width=\"([0-9.]+)\""));
+    static const QRegularExpression pattern(QStringLiteral("(<circle\\b[^>]*?stroke-width=\")([0-9.]+)(\")"));
     QString out;
     out.reserve(svg.size());
     qsizetype cursor = 0;
@@ -53,37 +58,7 @@ void ScaleStrokes(QString& svg, double scale) {
     while (it.hasNext()) {
         const QRegularExpressionMatch match = it.next();
         out += QStringView(svg).mid(cursor, match.capturedStart() - cursor);
-        out += QStringLiteral("stroke-width=\"%1\"").arg(Number(match.captured(1).toDouble() * scale));
-        cursor = match.capturedEnd();
-    }
-    out += QStringView(svg).mid(cursor);
-    svg = out;
-}
-
-// The upright bars of the pause and processing glyphs are fills, not strokes, so
-// the stroke correction never reaches them. They are widened about their own
-// centre -- the height is left alone, because what a small raster loses is the
-// narrow dimension.
-void WidenBars(QString& svg, double scale) {
-    if (qFuzzyCompare(scale, 1.0))
-        return;
-    static const QRegularExpression pattern(
-        QStringLiteral("<rect x=\"([0-9.-]+)\" y=\"([0-9.-]+)\" width=\"([0-9.]+)\" height=\"([0-9.]+)\""
-                       " rx=\"([0-9.]+)\" ry=\"([0-9.]+)\""));
-    QString out;
-    out.reserve(svg.size());
-    qsizetype cursor = 0;
-    QRegularExpressionMatchIterator it = pattern.globalMatch(svg);
-    while (it.hasNext()) {
-        const QRegularExpressionMatch match = it.next();
-        const double x = match.captured(1).toDouble();
-        const double width = match.captured(3).toDouble();
-        const double widened = width * scale;
-        const double radius = match.captured(5).toDouble() * scale;
-        out += QStringView(svg).mid(cursor, match.capturedStart() - cursor);
-        out += QStringLiteral("<rect x=\"%1\" y=\"%2\" width=\"%3\" height=\"%4\" rx=\"%5\" ry=\"%6\"")
-                   .arg(Number(x + (width - widened) / 2.0), match.captured(2), Number(widened), match.captured(4),
-                        Number(radius), Number(radius));
+        out += match.captured(1) + Number(match.captured(2).toDouble() * scale) + match.captured(3);
         cursor = match.capturedEnd();
     }
     out += QStringView(svg).mid(cursor);
@@ -124,8 +99,7 @@ QByteArray ThemedBrandMarkSvg(BrandMarkKind kind, int frame, const BrandMarkPale
     svg.replace(QStringLiteral("opacity=\"%1\"").arg(Number(kReferenceOuterOpacity)),
                 QStringLiteral("opacity=\"%1\"").arg(Number(opacity)));
 
-    ScaleStrokes(svg, profile.stroke_scale);
-    WidenBars(svg, profile.stroke_scale);
+    ScaleRingStrokes(svg, profile.ring_stroke_scale);
 
     return svg.toUtf8();
 }

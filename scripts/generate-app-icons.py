@@ -37,8 +37,10 @@ Usage:  python scripts/generate-app-icons.py
 
 from __future__ import annotations
 
+import io
 import pathlib
 import re
+import struct
 import sys
 
 from PIL import Image, ImageDraw
@@ -160,6 +162,12 @@ APP_ICO_SIZES = [16, 20, 24, 32, 40, 48, 60, 64, 72, 80, 96, 128, 256]
 # icon needs would only bloat the executable.
 SHELL_ICO_SIZES = [16, 20, 24, 32, 40, 48]
 
+# Above this, a frame is stored as PNG; at or below it, as an uncompressed DIB.
+# The shell surfaces that decode small PNG frames badly are the small ones, and a
+# DIB costs width * height * 4 bytes -- the whole large end of the icon as DIB
+# would be a quarter of a megabyte in the executable for no benefit.
+PNG_FRAME_MIN_PX = 64
+
 
 class Renderer:
     def __init__(self, mark: BrandMark, circles: list[Circle]) -> None:
@@ -204,7 +212,7 @@ class Renderer:
                 profile["outer_opacity_scale"] if circle.opacity < 1.0 else 1.0)))
             if circle.stroke is not None:
                 self._ring(draw, scale, circle.r * content,
-                           circle.stroke_width * content * profile["stroke_scale"],
+                           circle.stroke_width * content * profile["ring_stroke_scale"],
                            _rgb(circle.stroke) + (alpha,))
             else:
                 self._disc(draw, scale, circle.r * content, _rgb(circle.fill) + (alpha,))
@@ -238,11 +246,54 @@ class Renderer:
         return img.resize((px, px), Image.Resampling.LANCZOS)
 
 
+def _bmp_frame(image: Image.Image) -> bytes:
+    """One .ico directory entry's payload, as a classic DIB.
+
+    NOT PNG, and that is the point. Windows has accepted PNG-compressed frames
+    since Vista, but several shell surfaces still decode the small ones
+    incorrectly -- the icon beside the file name in Explorer's details pane is
+    the one that shows it -- and the guidance has always been that PNG is for the
+    256 px frame. The frames below that are therefore written the old way: a
+    BITMAPINFOHEADER whose height is doubled for the mask, 32-bit BGRA bottom-up
+    pixels, and an AND mask that is all zeroes because the alpha channel is what
+    actually carries the transparency.
+    """
+    width, height = image.size
+    pixels = image.convert("RGBA").load()
+    body = bytearray()
+    for y in range(height - 1, -1, -1):
+        for x in range(width):
+            r, g, b, a = pixels[x, y]
+            body += bytes((b, g, r, a))
+    # The AND mask is padded to a 4-byte boundary per row.
+    mask_stride = ((width + 31) // 32) * 4
+    mask = bytes(mask_stride * height)
+    header = struct.pack("<IiiHHIIiiII", 40, width, height * 2, 1, 32, 0, len(body) + len(mask), 0, 0, 0, 0)
+    return bytes(header) + bytes(body) + mask
+
+
 def write_ico(frames: list[Image.Image], stem: str) -> None:
-    sizes = [(frame.width, frame.height) for frame in frames]
+    """The container, written here rather than by Pillow, so the frame encoding
+    is a decision this file makes and not one the imaging library makes for it."""
+    payloads = []
+    for frame in frames:
+        if frame.width > PNG_FRAME_MIN_PX:
+            buffer = io.BytesIO()
+            frame.save(buffer, format="PNG")
+            payloads.append(buffer.getvalue())
+        else:
+            payloads.append(_bmp_frame(frame))
+
+    offset = 6 + 16 * len(frames)
+    directory = bytearray(struct.pack("<HHH", 0, 1, len(frames)))
+    for frame, payload in zip(frames, payloads):
+        directory += struct.pack("<BBBBHHII", frame.width % 256, frame.height % 256, 0, 0, 1, 32,
+                                 len(payload), offset)
+        offset += len(payload)
+
     path = OUT_DIR / f"{stem}.ico"
-    frames[-1].save(path, format="ICO", sizes=sizes, append_images=frames[:-1])
-    print(f"wrote {path.name} ({path.stat().st_size} bytes, {len(sizes)} frames)")
+    path.write_bytes(bytes(directory) + b"".join(payloads))
+    print(f"wrote {path.name} ({path.stat().st_size} bytes, {len(frames)} frames)")
 
 
 def write_svg(brand_svg: str) -> None:

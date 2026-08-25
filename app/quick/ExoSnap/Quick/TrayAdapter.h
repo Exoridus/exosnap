@@ -19,6 +19,7 @@
 #include <QtQmlIntegration/qqmlintegration.h>
 
 #include "models/ShellPresence.h"
+#include "ui/brand/ShellIconRenderer.h"
 
 namespace exosnap::quick {
 
@@ -42,6 +43,15 @@ class TrayAdapter : public QObject {
     // "Show window" / "Hide window" -- one entry, and the label decides which of
     // the two signals it raises. It used to raise the window under both.
     Q_PROPERTY(QString showHideText READ showHideText NOTIFY appearanceChanged FINAL)
+
+    // The non-transport entries' glyphs. Constant shapes, but not constant URLs:
+    // they carry the palette, so a theme change repaints them with everything
+    // else. A menu where three rows have an icon and four do not reads as three
+    // unfinished rows.
+    Q_PROPERTY(QString showHideIcon READ showHideIcon NOTIFY appearanceChanged FINAL)
+    Q_PROPERTY(QString outputFolderIcon READ outputFolderIcon NOTIFY appearanceChanged FINAL)
+    Q_PROPERTY(QString notificationsIcon READ notificationsIcon NOTIFY appearanceChanged FINAL)
+    Q_PROPERTY(QString quitIcon READ quitIcon NOTIFY appearanceChanged FINAL)
 
     // One transport row each: `{ visible, enabled, text, icon }`. Assembled from
     // the appearance table, not from the recording state.
@@ -105,6 +115,10 @@ class TrayAdapter : public QObject {
     [[nodiscard]] QString iconSource() const;
     [[nodiscard]] QString tooltip() const;
     [[nodiscard]] QString showHideText() const;
+    [[nodiscard]] QString showHideIcon() const;
+    [[nodiscard]] QString outputFolderIcon() const;
+    [[nodiscard]] QString notificationsIcon() const;
+    [[nodiscard]] QString quitIcon() const;
     [[nodiscard]] QVariantMap recordItem() const;
     [[nodiscard]] QVariantMap pauseResumeItem() const;
     [[nodiscard]] QVariantMap stopItem() const;
@@ -150,6 +164,7 @@ class TrayAdapter : public QObject {
 
   private:
     [[nodiscard]] QVariantMap rowFor(ShellButton button, bool keep_visible_when_disabled) const;
+    [[nodiscard]] QString glyphUrl(ui::brand::ShellGlyph glyph) const;
 
     ShellPresenceState state_;
     QString elapsed_text_;

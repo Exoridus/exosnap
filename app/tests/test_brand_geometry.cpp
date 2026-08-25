@@ -236,7 +236,7 @@ TEST(BrandGeometry, TheGeneratorStillFindsEveryConstantItReads) {
         const QRegularExpression declaration(QStringLiteral("inline constexpr OpticalProfile %1\\{").arg(profile));
         EXPECT_TRUE(declaration.match(header).hasMatch()) << profile.toStdString() << " is not parseable";
     }
-    EXPECT_TRUE(header.contains(QStringLiteral(".stroke_scale = ")));
+    EXPECT_TRUE(header.contains(QStringLiteral(".ring_stroke_scale = ")));
     EXPECT_TRUE(header.contains(QStringLiteral(".outer_opacity_scale = ")));
     EXPECT_TRUE(header.contains(QStringLiteral(".content_scale = ")));
 }

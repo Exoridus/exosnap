@@ -45,6 +45,12 @@ enum class ShellGlyph {
     Pause,
     Resume,
     Stop,
+    // The menu's other entries. Not transport, and drawn as outlines rather than
+    // as filled shapes for that reason.
+    Window,
+    Folder,
+    Notifications,
+    Quit,
 };
 
 // Everything a mark's appearance depends on. Note what is absent: the physical

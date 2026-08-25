@@ -85,10 +85,13 @@ inline constexpr double kOuterOpacityLight = 0.82;
 // second, simpler composition, which is a different mark rather than a
 // correction to this one.
 struct OpticalProfile {
-    // Multiplies every stroke, and the width of every upright bar -- the pause
-    // and processing glyphs are fills rather than strokes, and a correction that
-    // reached only the rings would leave them the one thin thing left.
-    double stroke_scale;
+    // Multiplies the two RINGS' stroke widths, and nothing else. Deliberately not
+    // the glyphs: a correction that thickened the check, the cross, the warning
+    // triangle and the transport bars as well grew them against an aperture that
+    // had not moved, and the void inside the inner ring closed up. What a small
+    // raster loses is the ring; what it has least room for is the glyph inside
+    // one.
+    double ring_stroke_scale;
     // Multiplies the outer ring's opacity. A ring that is thin AND pale is the
     // first thing to disappear.
     double outer_opacity_scale;
@@ -104,19 +107,19 @@ inline constexpr int kSmallProfileMaxPx = 20;
 inline constexpr int kMediumProfileMaxPx = 48;
 
 inline constexpr OpticalProfile kSmallProfile{
-    .stroke_scale = 1.12,
+    .ring_stroke_scale = 1.25,
     .outer_opacity_scale = 1.30,
-    .content_scale = 1.12,
-};
-
-inline constexpr OpticalProfile kMediumProfile{
-    .stroke_scale = 1.08,
-    .outer_opacity_scale = 1.12,
     .content_scale = 1.06,
 };
 
+inline constexpr OpticalProfile kMediumProfile{
+    .ring_stroke_scale = 1.10,
+    .outer_opacity_scale = 1.12,
+    .content_scale = 1.03,
+};
+
 inline constexpr OpticalProfile kLargeProfile{
-    .stroke_scale = 1.0,
+    .ring_stroke_scale = 1.0,
     .outer_opacity_scale = 1.0,
     .content_scale = 1.0,
 };
@@ -154,5 +157,33 @@ inline constexpr double kGlyphBarGap = 3.4;
 inline constexpr double kGlyphTriangleBackX = 11.5;
 inline constexpr double kGlyphTriangleTipX = 23.5;
 inline constexpr double kGlyphTriangleHalfHeight = 8.0;
+
+// The menu's non-transport entries. Outlines rather than fills: the four above
+// are actions on a recording and carry a semantic colour, while these four say
+// what a row is ABOUT, and a filled shape at that weight would shout louder than
+// the words beside it.
+inline constexpr double kGlyphStroke = 1.9;
+// Window: a rounded frame with its title band.
+inline constexpr double kGlyphWindowHalfWidth = 9.0;
+inline constexpr double kGlyphWindowHalfHeight = 7.0;
+inline constexpr double kGlyphWindowCorner = 1.8;
+inline constexpr double kGlyphWindowBandY = 11.6;
+// Folder: a back panel with a tab, and a front panel over it.
+inline constexpr double kGlyphFolderHalfWidth = 9.0;
+inline constexpr double kGlyphFolderTopY = 9.6;
+inline constexpr double kGlyphFolderBodyY = 12.2;
+inline constexpr double kGlyphFolderBottomY = 22.4;
+inline constexpr double kGlyphFolderTabWidth = 6.4;
+// Bell: a dome on a lip, with a clapper below it.
+inline constexpr double kGlyphBellHalfWidth = 6.6;
+inline constexpr double kGlyphBellTopY = 8.6;
+inline constexpr double kGlyphBellLipY = 20.0;
+inline constexpr double kGlyphBellClapperY = 22.6;
+inline constexpr double kGlyphBellClapperRadius = 1.7;
+// Quit: the power mark -- a broken ring with a stem through the gap.
+inline constexpr double kGlyphPowerRadius = 7.2;
+inline constexpr double kGlyphPowerGapDegrees = 100.0;
+inline constexpr double kGlyphPowerStemTopY = 6.6;
+inline constexpr double kGlyphPowerStemBottomY = 15.0;
 
 } // namespace exosnap::ui::brand

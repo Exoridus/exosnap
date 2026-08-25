@@ -27,6 +27,7 @@ Platform.SystemTrayIcon {
     menu: Platform.Menu {
         Platform.MenuItem {
             text: root.tray.showHideText
+            icon.source: root.tray.showHideIcon
             onTriggered: root.tray.triggerShowHide()
         }
 
@@ -60,6 +61,7 @@ Platform.SystemTrayIcon {
 
         Platform.MenuItem {
             text: qsTr("Open output folder")
+            icon.source: root.tray.outputFolderIcon
             onTriggered: root.tray.triggerOpenOutputFolder()
         }
 
@@ -68,6 +70,7 @@ Platform.SystemTrayIcon {
         // otherwise invisible.
         Platform.MenuItem {
             text: root.tray.notificationsText
+            icon.source: root.tray.notificationsIcon
             visible: root.tray.notificationsVisible
             onTriggered: root.tray.triggerNotifications()
         }
@@ -76,6 +79,7 @@ Platform.SystemTrayIcon {
 
         Platform.MenuItem {
             text: qsTr("Quit ExoSnap")
+            icon.source: root.tray.quitIcon
             onTriggered: root.tray.triggerQuit()
         }
     }

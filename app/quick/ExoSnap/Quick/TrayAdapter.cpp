@@ -167,6 +167,31 @@ QString TrayAdapter::showHideText() const {
     return window_visible_ ? tr("Hide window") : tr("Show window");
 }
 
+QString TrayAdapter::glyphUrl(ui::brand::ShellGlyph glyph) const {
+    ShellGlyphRequest request;
+    request.glyph = glyph;
+    request.px = icon_px_;
+    request.appearance_id = appearance_id_;
+    request.accent_id = accent_id_;
+    return ui::brand::ShellIconImageUrl(ui::brand::GlyphImageId(request));
+}
+
+QString TrayAdapter::showHideIcon() const {
+    return glyphUrl(ui::brand::ShellGlyph::Window);
+}
+
+QString TrayAdapter::outputFolderIcon() const {
+    return glyphUrl(ui::brand::ShellGlyph::Folder);
+}
+
+QString TrayAdapter::notificationsIcon() const {
+    return glyphUrl(ui::brand::ShellGlyph::Notifications);
+}
+
+QString TrayAdapter::quitIcon() const {
+    return glyphUrl(ui::brand::ShellGlyph::Quit);
+}
+
 QVariantMap TrayAdapter::rowFor(ShellButton button, bool keep_visible_when_disabled) const {
     const ShellButtonAppearance appearance = ShellButtonFor(button, state_);
 
@@ -177,12 +202,7 @@ QVariantMap TrayAdapter::rowFor(ShellButton button, bool keep_visible_when_disab
 
     ShellGlyph glyph{};
     if (GlyphForAction(appearance.action, glyph)) {
-        ShellGlyphRequest request;
-        request.glyph = glyph;
-        request.px = icon_px_;
-        request.appearance_id = appearance_id_;
-        request.accent_id = accent_id_;
-        row.insert(QStringLiteral("icon"), ui::brand::ShellIconImageUrl(ui::brand::GlyphImageId(request)));
+        row.insert(QStringLiteral("icon"), glyphUrl(glyph));
     } else {
         row.insert(QStringLiteral("icon"), QString());
     }

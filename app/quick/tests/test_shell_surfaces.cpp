@@ -1031,6 +1031,30 @@ TEST(TrayAdapterMenu, EveryTransportRowCarriesAGlyph) {
                     .startsWith(QStringLiteral("image://exosnap-shell/glyph/stop/")));
 }
 
+TEST(TrayAdapterMenu, EveryOtherRowCarriesAGlyphToo) {
+    // The four rows that are not transport. A menu where three rows have an icon
+    // and four do not reads as three unfinished rows.
+    TrayAdapter tray;
+    tray.setAppearance(QStringLiteral("dark"), QStringLiteral("aqua"));
+    tray.setIconPixelSize(16);
+
+    const QStringList icons{tray.showHideIcon(), tray.outputFolderIcon(), tray.notificationsIcon(), tray.quitIcon()};
+    for (const QString& icon : icons) {
+        EXPECT_TRUE(icon.startsWith(QStringLiteral("image://exosnap-shell/glyph/"))) << icon.toStdString();
+    }
+    // And they are four different glyphs, not one drawn four times.
+    EXPECT_EQ(QSet<QString>(icons.begin(), icons.end()).size(), icons.size());
+}
+
+TEST(TrayAdapterMenu, TheMenuGlyphsFollowTheAccent) {
+    TrayAdapter tray;
+    tray.setAppearance(QStringLiteral("dark"), QStringLiteral("aqua"));
+    tray.setIconPixelSize(16);
+    const QString aqua = tray.quitIcon();
+    tray.setAppearance(QStringLiteral("dark"), QStringLiteral("magenta"));
+    EXPECT_NE(tray.quitIcon(), aqua);
+}
+
 TEST(TrayAdapterMenu, OpenOutputFolderAndQuitAreRoutedOutwards) {
     TrayAdapter tray;
     QSignalSpy folder(&tray, &TrayAdapter::openOutputFolderRequested);

@@ -6,6 +6,7 @@
 
 #include <QPainter>
 #include <QPainterPath>
+#include <QPen>
 #include <QStringList>
 #include <QSvgRenderer>
 
@@ -95,6 +96,14 @@ using theme::ThemeKind;
         return QStringLiteral("resume");
     case ShellGlyph::Stop:
         return QStringLiteral("stop");
+    case ShellGlyph::Window:
+        return QStringLiteral("window");
+    case ShellGlyph::Folder:
+        return QStringLiteral("folder");
+    case ShellGlyph::Notifications:
+        return QStringLiteral("notifications");
+    case ShellGlyph::Quit:
+        return QStringLiteral("quit");
     case ShellGlyph::Record:
         break;
     }
@@ -102,21 +111,15 @@ using theme::ThemeKind;
 }
 
 [[nodiscard]] bool GlyphFromToken(const QString& token, ShellGlyph& out) {
-    if (token == QLatin1String("record")) {
-        out = ShellGlyph::Record;
-        return true;
-    }
-    if (token == QLatin1String("pause")) {
-        out = ShellGlyph::Pause;
-        return true;
-    }
-    if (token == QLatin1String("resume")) {
-        out = ShellGlyph::Resume;
-        return true;
-    }
-    if (token == QLatin1String("stop")) {
-        out = ShellGlyph::Stop;
-        return true;
+    static constexpr ShellGlyph kGlyphs[] = {
+        ShellGlyph::Record, ShellGlyph::Pause,         ShellGlyph::Resume, ShellGlyph::Stop,
+        ShellGlyph::Window, ShellGlyph::Notifications, ShellGlyph::Folder, ShellGlyph::Quit,
+    };
+    for (const ShellGlyph glyph : kGlyphs) {
+        if (token == GlyphToken(glyph)) {
+            out = glyph;
+            return true;
+        }
     }
     return false;
 }
@@ -300,9 +303,22 @@ QImage RenderGlyph(const ShellGlyphRequest& request) {
         colour = ResolvePalette(request.appearance_id, request.accent_id).caution;
         break;
     case ShellGlyph::Resume:
+    // The four that are not transport. They say what a row is ABOUT rather than
+    // what it does to a recording, so they carry the accent and no semantic.
+    case ShellGlyph::Window:
+    case ShellGlyph::Folder:
+    case ShellGlyph::Notifications:
+    case ShellGlyph::Quit:
         colour = ResolveAccent(request.appearance_id, request.accent_id);
         break;
     }
+
+    // Outlines are stroked at a weight that survives the same 16 px the marks
+    // do; the transport shapes below override this with a fill.
+    QPen outline(colour);
+    outline.setWidthF(kGlyphStroke * scale);
+    outline.setCapStyle(Qt::RoundCap);
+    outline.setJoinStyle(Qt::RoundJoin);
 
     painter.setPen(Qt::NoPen);
     painter.setBrush(colour);
@@ -329,6 +345,71 @@ QImage RenderGlyph(const ShellGlyphRequest& request) {
         path.lineTo(kGlyphTriangleTipX * scale, kCenter * scale);
         path.closeSubpath();
         painter.drawPath(path);
+        break;
+    }
+
+    case ShellGlyph::Window: {
+        painter.setPen(outline);
+        painter.setBrush(Qt::NoBrush);
+        const QRectF frame((kCenter - kGlyphWindowHalfWidth) * scale, (kCenter - kGlyphWindowHalfHeight) * scale,
+                           2.0 * kGlyphWindowHalfWidth * scale, 2.0 * kGlyphWindowHalfHeight * scale);
+        painter.drawRoundedRect(frame, kGlyphWindowCorner * scale, kGlyphWindowCorner * scale);
+        // The title band, which is what makes it a window rather than a card.
+        painter.drawLine(QPointF((kCenter - kGlyphWindowHalfWidth) * scale, kGlyphWindowBandY * scale),
+                         QPointF((kCenter + kGlyphWindowHalfWidth) * scale, kGlyphWindowBandY * scale));
+        break;
+    }
+
+    case ShellGlyph::Folder: {
+        painter.setPen(outline);
+        painter.setBrush(Qt::NoBrush);
+        QPainterPath path;
+        const double left = kCenter - kGlyphFolderHalfWidth;
+        const double right = kCenter + kGlyphFolderHalfWidth;
+        path.moveTo(left * scale, kGlyphFolderBottomY * scale);
+        path.lineTo(left * scale, kGlyphFolderTopY * scale);
+        path.lineTo((left + kGlyphFolderTabWidth) * scale, kGlyphFolderTopY * scale);
+        path.lineTo((left + kGlyphFolderTabWidth + 1.8) * scale, kGlyphFolderBodyY * scale);
+        path.lineTo(right * scale, kGlyphFolderBodyY * scale);
+        path.lineTo(right * scale, kGlyphFolderBottomY * scale);
+        path.closeSubpath();
+        painter.drawPath(path);
+        break;
+    }
+
+    case ShellGlyph::Notifications: {
+        painter.setPen(outline);
+        painter.setBrush(Qt::NoBrush);
+        QPainterPath path;
+        const double left = kCenter - kGlyphBellHalfWidth;
+        const double right = kCenter + kGlyphBellHalfWidth;
+        // A dome that meets its lip, rather than a closed shape: at 16 px a bell
+        // drawn as one outline loses the lip and reads as a balloon.
+        path.moveTo(left * scale, kGlyphBellLipY * scale);
+        path.lineTo(left * scale, (kGlyphBellTopY + 5.6) * scale);
+        path.quadTo(kCenter * scale, (kGlyphBellTopY - 2.6) * scale, right * scale, (kGlyphBellTopY + 5.6) * scale);
+        path.lineTo(right * scale, kGlyphBellLipY * scale);
+        path.closeSubpath();
+        painter.drawPath(path);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(colour);
+        FillDisc(painter, scale, kCenter, kGlyphBellClapperY, kGlyphBellClapperRadius, colour);
+        break;
+    }
+
+    case ShellGlyph::Quit: {
+        painter.setPen(outline);
+        painter.setBrush(Qt::NoBrush);
+        // The power mark: an arc with a gap at the top and a stem through it. The
+        // gap is what separates it from the aperture, which is three closed
+        // circles and is the last thing Quit should look like.
+        const QRectF ring((kCenter - kGlyphPowerRadius) * scale, (kCenter - kGlyphPowerRadius) * scale,
+                          2.0 * kGlyphPowerRadius * scale, 2.0 * kGlyphPowerRadius * scale);
+        const int start = static_cast<int>((90.0 + kGlyphPowerGapDegrees / 2.0) * 16.0);
+        const int span = static_cast<int>((360.0 - kGlyphPowerGapDegrees) * 16.0);
+        painter.drawArc(ring, start, span);
+        painter.drawLine(QPointF(kCenter * scale, kGlyphPowerStemTopY * scale),
+                         QPointF(kCenter * scale, kGlyphPowerStemBottomY * scale));
         break;
     }
     }

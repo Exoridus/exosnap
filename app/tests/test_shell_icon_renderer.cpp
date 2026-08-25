@@ -60,6 +60,11 @@ constexpr BrandMarkKind kAllKinds[] = {
     BrandMarkKind::Paused, BrandMarkKind::Saved, BrandMarkKind::Warning,   BrandMarkKind::Error,
 };
 
+constexpr ShellGlyph kAllGlyphs[] = {
+    ShellGlyph::Record, ShellGlyph::Pause,         ShellGlyph::Resume, ShellGlyph::Stop,
+    ShellGlyph::Window, ShellGlyph::Notifications, ShellGlyph::Folder, ShellGlyph::Quit,
+};
+
 ShellMarkRequest Mark(BrandMarkKind kind, int px = 64) {
     ShellMarkRequest request;
     request.kind = kind;
@@ -350,10 +355,10 @@ TEST(ShellIconRendererOpticalSizing, TheProfileBoundariesAreDeterministic) {
 }
 
 TEST(ShellIconRendererOpticalSizing, SmallSizesAreCorrectedAndLargeOnesAreNot) {
-    EXPECT_GT(kSmallProfile.stroke_scale, kMediumProfile.stroke_scale);
-    EXPECT_GT(kMediumProfile.stroke_scale, kLargeProfile.stroke_scale);
+    EXPECT_GT(kSmallProfile.ring_stroke_scale, kMediumProfile.ring_stroke_scale);
+    EXPECT_GT(kMediumProfile.ring_stroke_scale, kLargeProfile.ring_stroke_scale);
     EXPECT_GT(kSmallProfile.outer_opacity_scale, kLargeProfile.outer_opacity_scale);
-    EXPECT_DOUBLE_EQ(kLargeProfile.stroke_scale, 1.0);
+    EXPECT_DOUBLE_EQ(kLargeProfile.ring_stroke_scale, 1.0);
     EXPECT_DOUBLE_EQ(kLargeProfile.outer_opacity_scale, 1.0);
     EXPECT_DOUBLE_EQ(kLargeProfile.content_scale, 1.0);
 }
@@ -364,27 +369,26 @@ TEST(ShellIconRendererOpticalSizing, TheCorrectionReachesTheDrawingAndNotOnlyThe
     const double small = StrokeWidthIn(ThemedBrandMarkSvg(BrandMarkKind::Idle, 0, palette, kSmallProfile));
     ASSERT_GT(large, 0.0);
     EXPECT_GT(small, large);
-    EXPECT_NEAR(small, large * kSmallProfile.stroke_scale, 1e-6);
+    EXPECT_NEAR(small, large * kSmallProfile.ring_stroke_scale, 1e-6);
 }
 
-TEST(ShellIconRendererOpticalSizing, TheBarsOfAGlyphAreCorrectedToo) {
-    // They are fills, so the stroke correction never reaches them. A pause glyph
-    // left uncorrected is the one thin thing in an otherwise thickened mark.
+TEST(ShellIconRendererOpticalSizing, TheGlyphsAreLeftAtTheirAuthoredWeight) {
+    // The correction reaches the rings and stops there. Thickening the glyph as
+    // well grew it against an aperture that had not moved, and at 16 px the void
+    // inside the inner ring closed up entirely.
     const auto palette = ResolvePalette(QStringLiteral("dark"), QStringLiteral("aqua"));
-    const QString large = QString::fromUtf8(ThemedBrandMarkSvg(BrandMarkKind::Paused, 0, palette, kLargeProfile));
-    const QString small = QString::fromUtf8(ThemedBrandMarkSvg(BrandMarkKind::Paused, 0, palette, kSmallProfile));
-    const QRegularExpression width(QStringLiteral("<rect[^>]*width=\"([0-9.]+)\""));
-    const double large_bar = width.match(large).captured(1).toDouble();
-    const double small_bar = width.match(small).captured(1).toDouble();
-    ASSERT_GT(large_bar, 0.0);
-    EXPECT_NEAR(small_bar, large_bar * kSmallProfile.stroke_scale, 1e-6);
-    // Widened about its own centre: a bar that grew to the right would walk out
-    // of the aperture. The tolerance is the document's own precision -- the
-    // substituted numbers are written to six significant digits, which is a
-    // twentieth of a device pixel at 16 px and well under a thousandth here.
-    const QRegularExpression x(QStringLiteral("<rect x=\"([0-9.-]+)\""));
-    EXPECT_NEAR(x.match(small).captured(1).toDouble() + small_bar / 2.0,
-                x.match(large).captured(1).toDouble() + large_bar / 2.0, 1e-3);
+    const QString large = QString::fromUtf8(ThemedBrandMarkSvg(BrandMarkKind::Saved, 0, palette, kLargeProfile));
+    const QString small = QString::fromUtf8(ThemedBrandMarkSvg(BrandMarkKind::Saved, 0, palette, kSmallProfile));
+
+    // The check is a <path>, and its stroke is the same in both.
+    const QRegularExpression check(QStringLiteral("<path[^>]*stroke-width=\"([0-9.]+)\""));
+    EXPECT_DOUBLE_EQ(check.match(small).captured(1).toDouble(), check.match(large).captured(1).toDouble());
+
+    // The pause bars are fills, and they are untouched for the same reason.
+    const QString bars_large = QString::fromUtf8(ThemedBrandMarkSvg(BrandMarkKind::Paused, 0, palette, kLargeProfile));
+    const QString bars_small = QString::fromUtf8(ThemedBrandMarkSvg(BrandMarkKind::Paused, 0, palette, kSmallProfile));
+    const QRegularExpression bar(QStringLiteral("<rect[^>]*width=\"([0-9.]+)\""));
+    EXPECT_DOUBLE_EQ(bar.match(bars_small).captured(1).toDouble(), bar.match(bars_large).captured(1).toDouble());
 }
 
 TEST(ShellIconRendererOpticalSizing, ASmallMarkKeepsARealGapBetweenTheDotAndTheInnerRing) {
@@ -427,27 +431,39 @@ TEST(ShellIconRendererOpticalSizing, AShellIconReservesMarginAndAnInlineOneDoesN
 
 // -- glyphs ------------------------------------------------------------------
 
-TEST(ShellIconRendererGlyphs, TheFourTransportShapesAreDistinct) {
-    auto render = [](ShellGlyph glyph) {
+TEST(ShellIconRendererGlyphs, EveryMenuShapeIsItsOwn) {
+    // Every row of the tray menu carries one. A menu where three rows have an
+    // icon and four do not reads as three unfinished rows.
+    QList<QImage> rendered;
+    for (const ShellGlyph glyph : kAllGlyphs) {
         ShellGlyphRequest request;
         request.glyph = glyph;
         request.px = 32;
         request.appearance_id = QStringLiteral("dark");
         request.accent_id = QStringLiteral("aqua");
-        return RenderGlyph(request);
-    };
-    const QImage record = render(ShellGlyph::Record);
-    const QImage pause = render(ShellGlyph::Pause);
-    const QImage resume = render(ShellGlyph::Resume);
-    const QImage stop = render(ShellGlyph::Stop);
-
-    EXPECT_NE(record, pause);
-    EXPECT_NE(pause, resume);
-    EXPECT_NE(resume, stop);
-    EXPECT_NE(stop, record);
-    for (const QImage& image : {record, pause, resume, stop}) {
+        const QImage image = RenderGlyph(request);
         EXPECT_EQ(image.pixelColor(0, 0).alpha(), 0);
-        EXPECT_GT(CoveredAlpha(image), 0.0);
+        EXPECT_GT(CoveredAlpha(image), 0.0) << "glyph " << static_cast<int>(glyph) << " drew nothing";
+        rendered.append(image);
+    }
+    for (int i = 0; i < rendered.size(); ++i) {
+        for (int j = i + 1; j < rendered.size(); ++j)
+            EXPECT_NE(rendered.at(i), rendered.at(j)) << "glyphs " << i << " and " << j << " are the same image";
+    }
+}
+
+TEST(ShellIconRendererGlyphs, EveryGlyphIdRoundTrips) {
+    // The menu addresses them by URL, so a token that parses back to a different
+    // glyph is a row with the wrong icon and nothing to notice it.
+    for (const ShellGlyph glyph : kAllGlyphs) {
+        ShellGlyphRequest request;
+        request.glyph = glyph;
+        request.px = 16;
+        request.appearance_id = QStringLiteral("dark");
+        request.accent_id = QStringLiteral("aqua");
+        ShellGlyphRequest parsed;
+        ASSERT_TRUE(ParseGlyphImageId(GlyphImageId(request), parsed)) << GlyphImageId(request).toStdString();
+        EXPECT_EQ(parsed.glyph, glyph) << GlyphImageId(request).toStdString();
     }
 }
 
@@ -625,5 +641,30 @@ TEST(ShellIconRendererEvidence, WritesTheSizeSweepWhenAskedFor) {
         painter.end();
         const QString path = QStringLiteral("%1/shell-icon-sweep-%2.png").arg(directory, appearance);
         EXPECT_TRUE(sheet.save(path)) << path.toStdString();
+
+        // The menu glyphs, at the sizes a menu row actually draws one.
+        const QList<int> glyph_sizes{16, 20, 24, 32};
+        QImage strip(kMargin + int(glyph_sizes.size()) * kCell, kMargin + std::size(kAllGlyphs) * kCell,
+                     QImage::Format_ARGB32_Premultiplied);
+        strip.fill(appearance == QStringLiteral("dark") ? QColor(0x0E, 0x0E, 0x10) : QColor(0xE7, 0xE9, 0xED));
+        QPainter glyph_painter(&strip);
+        int glyph_row = 0;
+        for (const ShellGlyph glyph : kAllGlyphs) {
+            int column = 0;
+            for (const int px : glyph_sizes) {
+                ShellGlyphRequest request;
+                request.glyph = glyph;
+                request.px = px;
+                request.appearance_id = appearance;
+                request.accent_id = QStringLiteral("aqua");
+                const QImage image = RenderGlyph(request);
+                glyph_painter.drawImage(QRect(kMargin + column * kCell, kMargin + glyph_row * kCell, 224, 224), image);
+                ++column;
+            }
+            ++glyph_row;
+        }
+        glyph_painter.end();
+        const QString glyph_path = QStringLiteral("%1/menu-glyphs-%2.png").arg(directory, appearance);
+        EXPECT_TRUE(strip.save(glyph_path)) << glyph_path.toStdString();
     }
 }
