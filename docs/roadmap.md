@@ -162,6 +162,57 @@ produces one remuxed progressive MP4 per segment.
 
 ---
 
+## Shell and interaction polish (0.10.0)
+
+Three items the Qt Quick cutover left behind or never had. None of them is a
+redesign; each is a property the Widgets shell had, or a convention the platform
+expects, that the port did not carry over.
+
+### Keyboard-only operation, properly
+
+The port kept the *naming*: 252 `Accessible.*` declarations across 65 QML files,
+which is what a screen reader reads out. What it did not keep is the *path*: 13
+`activeFocusOnTab` declarations and 18 explicit key handlers in the whole
+frontend, and no test anywhere asserts a focus order. So the state is "labelled
+but unproven".
+
+What this wave owes:
+
+- A deliberate focus order per surface, rather than whatever the scene-graph
+  order happens to produce.
+- A visible focus ring on everything that can hold focus. `ExoTheme.focusRingWidth`
+  exists and is used in places; it needs to be everywhere or nowhere.
+- Modal surfaces that trap focus and return it where it came from.
+- Tests. A focus-order test is cheap in Qt Quick Test and is the only thing that
+  keeps this from decaying the way it just did.
+
+### Direct destination shortcuts
+
+`Alt`+`1`..`5` for the five destinations. The application has no menu bar and
+therefore no Alt mnemonics to collide with, and the destinations are a `Repeater`
+in `AppShell.qml`, so the binding is one line per tab. Product-visible, so it
+belongs in `docs/product-spec.md` and beside the recording hotkeys rather than
+only in code.
+
+### Preview real estate
+
+The Record page spends a full toolbar row above the preview, and the preview
+carries a "Ready" pill that repeats the status pill in the title band. Both cost
+height that the thing the page exists for could have.
+
+The shape to aim for: drop the toolbar row, drop the redundant "Ready" overlay,
+and float what is left over the preview itself -- the source name where the pill
+was (top left), the format summary in a bottom corner, "Change source" at the top
+right. Use the same gap between the title band and the preview that already sits
+between the preview and the record bar, so the page reads as one rhythm.
+
+The one real conflict is the webcam PiP, which is dragged inside that same
+rectangle and would fight the floating controls for the corners. Resolved by the
+drag itself: fade the overlay controls out on drag start and back in on drop, so
+the two never compete for the same pixels.
+
+---
+
 ## Cross-cutting foundations
 
 These underpin multiple versions and must not be scattered into UI `if`-chains:

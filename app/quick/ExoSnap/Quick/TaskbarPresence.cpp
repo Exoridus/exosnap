@@ -51,26 +51,12 @@ constexpr qint32 kSucceeded = 0;
         return IDI_EXOSNAP_THUMB_RESUME;
     case ShellAction::Stop:
         return IDI_EXOSNAP_THUMB_STOP;
+    case ShellAction::OpenOutputFolder:
+        return IDI_EXOSNAP_THUMB_FOLDER;
     case ShellAction::None:
         break;
     }
     return IDI_EXOSNAP_THUMB_RECORD;
-}
-
-// 0 for a state with no badge. Idle clears the overlay rather than drawing a
-// neutral one: an application that is not doing anything has nothing to report.
-[[nodiscard]] int BadgeResource(ShellIconState state, int pulse_level) noexcept {
-    switch (state) {
-    case ShellIconState::Recording:
-        return pulse_level > 0 ? IDI_EXOSNAP_BADGE_RECORDING : IDI_EXOSNAP_BADGE_RECORDING_DIM;
-    case ShellIconState::Paused:
-        return IDI_EXOSNAP_BADGE_PAUSED;
-    case ShellIconState::Saved:
-        return IDI_EXOSNAP_BADGE_SAVED;
-    case ShellIconState::Idle:
-        break;
-    }
-    return 0;
 }
 
 [[nodiscard]] QString ThumbTooltip(ShellAction action) {
@@ -83,23 +69,9 @@ constexpr qint32 kSucceeded = 0;
         return QCoreApplication::translate("TaskbarPresence", "Resume recording");
     case ShellAction::Stop:
         return QCoreApplication::translate("TaskbarPresence", "Stop recording");
+    case ShellAction::OpenOutputFolder:
+        return QCoreApplication::translate("TaskbarPresence", "Open output folder");
     case ShellAction::None:
-        break;
-    }
-    return {};
-}
-
-// The accessible description Windows reads out for the overlay badge. An
-// unlabelled overlay is a coloured dot to a screen reader.
-[[nodiscard]] QString BadgeDescription(ShellIconState state) {
-    switch (state) {
-    case ShellIconState::Recording:
-        return QCoreApplication::translate("TaskbarPresence", "Recording");
-    case ShellIconState::Paused:
-        return QCoreApplication::translate("TaskbarPresence", "Paused");
-    case ShellIconState::Saved:
-        return QCoreApplication::translate("TaskbarPresence", "Recording saved");
-    case ShellIconState::Idle:
         break;
     }
     return {};
@@ -183,17 +155,6 @@ class WindowsTaskbarShell final : public TaskbarShell {
         return withButtons(hwnd, buttons, /*add=*/false);
     }
 
-    qint32 setOverlayIcon(void* hwnd, ShellIconState state, int pulse_level) override {
-        if (taskbar_ == nullptr)
-            return static_cast<qint32>(E_POINTER);
-        const int resource_id = BadgeResource(state, pulse_level);
-        // A null HICON is the documented way to remove the overlay.
-        HICON icon = resource_id != 0 ? SharedIcon(resource_id, icon_size_) : nullptr;
-        const QString description = BadgeDescription(state);
-        return static_cast<qint32>(taskbar_->SetOverlayIcon(static_cast<HWND>(hwnd), icon,
-                                                            reinterpret_cast<const wchar_t*>(description.utf16())));
-    }
-
     qint32 setProgressState(void* hwnd, TaskbarProgressState state) override {
         if (taskbar_ == nullptr)
             return static_cast<qint32>(E_POINTER);
@@ -210,7 +171,7 @@ class WindowsTaskbarShell final : public TaskbarShell {
     qint32 withButtons(void* hwnd, const QVector<ThumbButtonSpec>& buttons, bool add) {
         if (taskbar_ == nullptr)
             return static_cast<qint32>(E_POINTER);
-        // Documented ceiling for a thumbnail toolbar. The product registers three.
+        // Documented ceiling for a thumbnail toolbar. The product registers four.
         if (buttons.isEmpty() || buttons.size() > 7)
             return static_cast<qint32>(E_INVALIDARG);
 
@@ -321,11 +282,7 @@ void TaskbarPresence::armShell() {
     reportResult("ThumbBarAddButtons", add_hr);
     buttons_registered_ = Succeeded(add_hr);
 
-    const qint32 overlay_hr = shell_->setOverlayIcon(hwnd_, desired_.icon_state, desired_pulse_level_);
-    reportResult("SetOverlayIcon", overlay_hr);
-
     applied_ = desired_;
-    applied_pulse_level_ = desired_pulse_level_;
     applied_valid_ = true;
 
     // An operation that is still running owes the new taskbar button its state.
@@ -337,9 +294,8 @@ bool TaskbarPresence::ready() const noexcept {
     return ready_;
 }
 
-void TaskbarPresence::setPresence(const ShellPresenceState& state, int pulse_level) {
+void TaskbarPresence::setPresence(const ShellPresenceState& state) {
     desired_ = state;
-    desired_pulse_level_ = pulse_level;
     applyPresence();
 }
 
@@ -440,12 +396,14 @@ bool TaskbarPresence::shellAvailable() const noexcept {
 QVector<ThumbButtonSpec> TaskbarPresence::ButtonsFor(const ShellPresenceState& state) {
     // Fixed order and fixed ids. The set cannot change after registration, so the
     // slot a button occupies is part of its identity.
-    const ShellButton buttons[] = {ShellButton::Record, ShellButton::PauseResume, ShellButton::Stop};
-    const int ids[] = {kShellButtonIdRecord, kShellButtonIdPauseResume, kShellButtonIdStop};
+    const ShellButton buttons[] = {ShellButton::Record, ShellButton::PauseResume, ShellButton::Stop,
+                                   ShellButton::OpenFolder};
+    const int ids[] = {kShellButtonIdRecord, kShellButtonIdPauseResume, kShellButtonIdStop, kShellButtonIdOpenFolder};
+    constexpr int kCount = 4;
 
     QVector<ThumbButtonSpec> specs;
-    specs.reserve(3);
-    for (int i = 0; i < 3; ++i) {
+    specs.reserve(kCount);
+    for (int i = 0; i < kCount; ++i) {
         const ShellButtonAppearance appearance = ShellButtonFor(buttons[i], state);
         specs.push_back(ThumbButtonSpec{ids[i], appearance.action, appearance.visible, appearance.enabled});
     }
@@ -457,17 +415,11 @@ void TaskbarPresence::applyPresence() {
         return;
 
     const bool transport_changed = !applied_valid_ || applied_ != desired_;
-    const bool badge_changed =
-        !applied_valid_ || applied_.icon_state != desired_.icon_state || applied_pulse_level_ != desired_pulse_level_;
 
     if (transport_changed && buttons_registered_)
         reportResult("ThumbBarUpdateButtons", shell_->updateButtons(hwnd_, ButtonsFor(desired_)));
 
-    if (badge_changed)
-        reportResult("SetOverlayIcon", shell_->setOverlayIcon(hwnd_, desired_.icon_state, desired_pulse_level_));
-
     applied_ = desired_;
-    applied_pulse_level_ = desired_pulse_level_;
     applied_valid_ = true;
 }
 
@@ -493,7 +445,6 @@ void TaskbarPresence::applyProgress() {
 
 void TaskbarPresence::resetApplied() {
     applied_ = ShellPresenceState{};
-    applied_pulse_level_ = 0;
     applied_valid_ = false;
 }
 

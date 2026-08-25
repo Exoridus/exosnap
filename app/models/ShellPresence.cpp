@@ -13,8 +13,9 @@ namespace {
     switch (state) {
     case UiRecordingState::Ready:
     case UiRecordingState::Completed:
-    case UiRecordingState::Failed:
         return ShellPhase::Idle;
+    case UiRecordingState::Failed:
+        return ShellPhase::Failed;
     case UiRecordingState::LoadingCapabilities:
     case UiRecordingState::Blocked:
     case UiRecordingState::RegionSelecting:
@@ -49,11 +50,15 @@ namespace {
         return ShellIconState::Paused;
     case ShellPhase::Saved:
         return ShellIconState::Saved;
+    // Neither coral nor green is true while the file is being written, and the
+    // processing mark is the one that says so. What keeps it from flashing on
+    // every stop is the settle in quick::ShellPresenceAdapter, not this table.
+    case ShellPhase::Finalizing:
+        return ShellIconState::Processing;
+    case ShellPhase::Failed:
+        return ShellIconState::Error;
     case ShellPhase::Idle:
     case ShellPhase::Blocked:
-    // Finalizing has no badge of its own: the recording is over and the file is
-    // not there yet, and neither coral nor green is true of that moment.
-    case ShellPhase::Finalizing:
         return ShellIconState::Idle;
     }
     return ShellIconState::Idle;
@@ -64,7 +69,8 @@ namespace {
 bool operator==(const ShellPresenceState& lhs, const ShellPresenceState& rhs) noexcept {
     return lhs.phase == rhs.phase && lhs.icon_state == rhs.icon_state && lhs.can_start == rhs.can_start &&
            lhs.can_pause == rhs.can_pause && lhs.can_resume == rhs.can_resume && lhs.can_stop == rhs.can_stop &&
-           lhs.recording == rhs.recording && lhs.paused == rhs.paused && lhs.busy == rhs.busy && lhs.saved == rhs.saved;
+           lhs.recording == rhs.recording && lhs.paused == rhs.paused && lhs.busy == rhs.busy &&
+           lhs.saved == rhs.saved && lhs.failed == rhs.failed;
 }
 
 bool operator!=(const ShellPresenceState& lhs, const ShellPresenceState& rhs) noexcept {
@@ -91,6 +97,7 @@ ShellPresenceState ProjectShellPresence(const ShellPresenceInput& input) noexcep
     state.recording = state.phase == ShellPhase::Recording;
     state.paused = state.phase == ShellPhase::Paused;
     state.busy = state.phase == ShellPhase::Preparing || state.phase == ShellPhase::Finalizing;
+    state.failed = state.phase == ShellPhase::Failed;
     state.saved = state.phase == ShellPhase::Saved;
 
     return state;
@@ -125,6 +132,15 @@ ShellButtonAppearance ShellButtonFor(ShellButton button, const ShellPresenceStat
         }
         return appearance;
 
+    case ShellButton::OpenFolder:
+        // No state is consulted on purpose. The destination exists whether or
+        // not a recording does, and opening it cannot lose anything; a folder
+        // that has gone missing is reported by the one place that opens it.
+        appearance.visible = true;
+        appearance.enabled = true;
+        appearance.action = ShellAction::OpenOutputFolder;
+        return appearance;
+
     case ShellButton::Stop:
         appearance.visible = state.recording || state.paused;
         appearance.enabled = appearance.visible && state.can_stop;
@@ -145,6 +161,9 @@ bool ShellButtonFromCommandId(int command_id, ShellButton& out) noexcept {
         return true;
     case kShellButtonIdStop:
         out = ShellButton::Stop;
+        return true;
+    case kShellButtonIdOpenFolder:
+        out = ShellButton::OpenFolder;
         return true;
     default:
         return false;

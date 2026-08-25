@@ -5,6 +5,12 @@ Reference: `docs/design/exosnap-hybrid-target.md`
 
 Last refreshed: 2026-06-03
 
+> **Historical.** This plan describes the Qt Widgets / QSS build, which shipped
+> and was then replaced by the Qt Quick frontend (ADR 0064). The classes it names
+> -- `BrandMarkWidget`, `OperationalTitleBar`, `AboutDialog` -- no longer exist.
+> The mark is `app/assets/brand/marks`, drawn by `ui/brand/ShellIconRenderer`.
+> Kept for the design rationale, not as a description of the code.
+
 ---
 
 ## Overview

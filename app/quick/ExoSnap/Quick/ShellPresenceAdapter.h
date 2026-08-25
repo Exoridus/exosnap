@@ -2,20 +2,22 @@
 
 // The one place the shell's view of the recording session is assembled.
 //
-// Everything below it -- the tray icon, the taskbar overlay badge, the taskbar
+// Everything below it -- the tray icon, the window/taskbar icon, the taskbar
 // thumbnail buttons, the in-app recording indicator -- reads this object and
 // nothing else. What it adds to the pure projection in models/ShellPresence.h is
-// the two pieces of state that need a clock: the recording heartbeat, and the
-// bounded dwell after a recording is saved.
+// the state that needs a clock: the recording-entry heartbeat, the processing
+// sequence, the settle that keeps a fast stop from flashing, and the bounded
+// dwell after a recording is saved.
 //
-// Both clocks are owned here rather than by their surfaces. Three timers ticking
-// at the same nominal rate drift apart within a minute, and the tray and the
-// taskbar would then be describing one recording out of step.
+// Both clocks are owned here rather than by their surfaces. Two timers ticking at
+// the same nominal rate drift apart within a minute, and the tray and the taskbar
+// would then be describing one recording out of step.
 
 #include <QObject>
 #include <QTimer>
 #include <QtQmlIntegration/qqmlintegration.h>
 
+#include "models/RecordingPulse.h"
 #include "models/ShellPresence.h"
 
 namespace exosnap {
@@ -33,10 +35,10 @@ class ShellPresenceAdapter : public QObject {
     Q_PROPERTY(bool paused READ paused NOTIFY presenceChanged FINAL)
     Q_PROPERTY(bool busy READ busy NOTIFY presenceChanged FINAL)
     Q_PROPERTY(bool saved READ saved NOTIFY presenceChanged FINAL)
-    // 0.0 at the trough, 1.0 at the peak, and a flat 0.0 whenever the pulse is
-    // not running. An in-app indicator binds its own animation amplitude to this
-    // rather than starting a second timer.
-    Q_PROPERTY(qreal pulseIntensity READ pulseIntensity NOTIFY pulseChanged FINAL)
+    // Deliberately no pulse property. The application's own recording indicator
+    // animates itself for as long as the recording runs; the shell's beat is a
+    // short transition on a different cadence, and a QML surface following it
+    // would be following the wrong one.
 
   public:
     explicit ShellPresenceAdapter(QObject* parent = nullptr);
@@ -58,13 +60,15 @@ class ShellPresenceAdapter : public QObject {
     [[nodiscard]] bool busy() const noexcept;
     [[nodiscard]] bool saved() const noexcept;
 
-    // The frame the shell surfaces render. Stable while the pulse is stopped, so
-    // a static state always draws the same icon.
-    [[nodiscard]] int pulseFrame() const noexcept;
-    [[nodiscard]] qreal pulseIntensity() const noexcept;
-    // The same phase quantized for the taskbar overlay, which is redrawn by
-    // Explorer and does not want every frame.
-    [[nodiscard]] int taskbarPulseLevel() const noexcept;
+    // The frame of whichever animated mark the shell is currently showing: the
+    // recording beat, the processing sequence, or zero for a static one. One
+    // accessor rather than one per animation, because the surfaces render one
+    // mark and asking them to pick would be asking them to re-derive the state.
+    [[nodiscard]] int markFrame() const noexcept;
+    // Whether the recording beat is running. True for as long as the recording
+    // is, and false the moment it is not: the beat IS the recording state, not
+    // an announcement of having entered it.
+    [[nodiscard]] bool shellPulseActive() const noexcept;
 
     // ---- test seams ------------------------------------------------------
     // The dwell is a wall-clock duration measured in seconds; a test that waited
@@ -75,8 +79,20 @@ class ShellPresenceAdapter : public QObject {
     // that is no longer current is the stale-callback case, and it must change
     // nothing.
     void expireSavedDwellForTest(quint64 generation);
+    // Runs one beat tick. The timer is stopped the moment the recording is not
+    // running, so a test that keeps calling this is exercising the same guard a
+    // queued timeout delivered after a state change hits.
     void advancePulseForTest();
     [[nodiscard]] bool pulseRunningForTest() const;
+    // The finalizing settle is a quarter second of wall clock; a test that waited
+    // it out would be measuring QTimer.
+    void setFinalizingSettleMsForTest(int ms);
+    // The processing sequence runs for as long as finalizing lasts, which a test
+    // cannot wait out and should not have to.
+    void advanceProcessingForTest();
+    [[nodiscard]] bool processingRunningForTest() const;
+    [[nodiscard]] bool finalizingSettleRunningForTest() const;
+    void expireFinalizingSettleForTest();
 
   signals:
     void presenceChanged();
@@ -87,14 +103,38 @@ class ShellPresenceAdapter : public QObject {
     void clearSavedDwell();
     void onSavedDwellExpired(quint64 generation);
     void republish();
+    // What the shell surfaces should SHOW, which is not always what the phase
+    // says. See the comment on the settle timer below.
+    [[nodiscard]] ShellIconState settleIconState(const ShellPresenceState& projected);
+    void onFinalizingSettled();
     void syncPulseTimer();
     void onPulseTick();
+    void syncProcessingTimer();
+    void onProcessingTick();
 
     ShellPresenceInput input_;
     ShellPresenceState state_;
 
     QTimer pulse_timer_;
-    int pulse_frame_ = 0;
+    int pulse_frame_ = kRecordingPulseFirstFrame;
+
+    // Finalizing has no colour of its own -- the recording is over and the file is
+    // not there yet -- so it projects to the neutral mark. Painting that the
+    // instant a stop begins puts a neutral FLASH between the coral recording and
+    // the green result, because for a stream-copy container finalizing is over in
+    // well under a tenth of a second. So the neutral mark waits: if the operation
+    // finishes first, the shell goes straight from recording to saved, and if it
+    // does not, neutral plus the taskbar's progress bar is exactly the right
+    // thing to show.
+    QTimer finalizing_timer_;
+    bool finalizing_settled_ = false;
+
+    // Runs for as long as the shell shows the processing mark. Unbounded on
+    // purpose, and bounded in practice by the operation it describes: unlike the
+    // recording beat there is no state here that lasts for hours, and the
+    // taskbar's progress bar is running beside it for the same reason.
+    QTimer processing_timer_;
+    int processing_frame_ = 0;
 
     QTimer saved_timer_;
     // Bumped on every arm AND every clear, which is what makes a timeout that
@@ -103,6 +143,10 @@ class ShellPresenceAdapter : public QObject {
     // stop.
     quint64 saved_generation_ = 0;
     bool had_completed_recording_ = false;
+    // The edge the beat is restarted on. A flag rather than a comparison against
+    // the previous state, because republish() runs on cadences that do not
+    // change the phase at all.
+    bool was_recording_ = false;
 };
 
 } // namespace exosnap::quick

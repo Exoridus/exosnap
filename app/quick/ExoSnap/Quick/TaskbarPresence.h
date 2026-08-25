@@ -1,7 +1,15 @@
 #pragma once
 
-// The Windows taskbar button as a product surface: thumbnail transport buttons,
-// the state badge over the icon, and the progress bar.
+// The Windows taskbar button as a product surface: the thumbnail transport
+// buttons and the progress bar.
+//
+// NOT the button's icon. That is the window's icon, which the chrome owns and
+// which carries the session's state as the same rendered mark the notification
+// area shows. An overlay badge used to carry it instead, and the two surfaces
+// then said different things about one session: a coral aperture in the tray,
+// and a mint aperture with a coral dot stuck in its corner on the taskbar. The
+// dot also read as an unread-notification badge, which is what that corner means
+// everywhere else in Windows.
 //
 // WHY THE LIFECYCLE IS THE HARD PART
 // ----------------------------------
@@ -61,9 +69,6 @@ class TaskbarShell {
     virtual qint32 initialize() = 0;
     virtual qint32 addButtons(void* hwnd, const QVector<ThumbButtonSpec>& buttons) = 0;
     virtual qint32 updateButtons(void* hwnd, const QVector<ThumbButtonSpec>& buttons) = 0;
-    // `pulse_level` indexes the quantized recording heartbeat; it is meaningful
-    // only for ShellIconState::Recording. Idle clears the badge.
-    virtual qint32 setOverlayIcon(void* hwnd, ShellIconState state, int pulse_level) = 0;
     virtual qint32 setProgressState(void* hwnd, TaskbarProgressState state) = 0;
     virtual qint32 setProgressValue(void* hwnd, quint64 completed, quint64 total) = 0;
 };
@@ -105,7 +110,12 @@ class TaskbarPresence : public QObject {
 
     // The desired product state. Stored whether or not the shell can receive it
     // yet, and re-applied in full the moment it can.
-    void setPresence(const ShellPresenceState& state, int pulse_level);
+    //
+    // Only the thumbnail strip and the progress bar are this class's business.
+    // What the button ICON shows is the window's icon, which the chrome owns --
+    // the same rendered mark the notification area draws, so the two surfaces
+    // cannot say different things about one session.
+    void setPresence(const ShellPresenceState& state);
 
     // A WM_COMMAND wParam. Returns whether it was one of our thumbnail buttons,
     // which is what tells the filter to consume it. A recognised button whose
@@ -162,12 +172,10 @@ class TaskbarPresence : public QObject {
     bool buttons_registered_ = false;
 
     ShellPresenceState desired_;
-    int desired_pulse_level_ = 0;
     // What the shell was last told, so an unchanged state costs no COM call.
     // Reset with the handle: a new taskbar button has been told nothing.
     bool applied_valid_ = false;
     ShellPresenceState applied_;
-    int applied_pulse_level_ = 0;
 
     TaskbarProgressLedger progress_;
     bool progress_dirty_ = false;

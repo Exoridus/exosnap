@@ -47,6 +47,7 @@
 #include <QScreen>
 #include <QSize>
 #include <QStringList>
+#include <QStyleFactory>
 #include <QTextStream>
 #include <QTimer>
 #include <QVariantMap>
@@ -595,6 +596,27 @@ int main(int argc, char* argv[]) {
     const exosnap::bootstrap::PreAppResult pre_app = exosnap::bootstrap::RunPreApplicationPhase();
 
     QQuickWindow::setGraphicsApi(QSGRendererInterface::Direct3D11);
+
+    // No DWM redirection bitmap for this process's windows.
+    //
+    // A Qt Quick window renders nothing until it is visible, and between the two
+    // DWM composes the window from a redirection bitmap nobody has written to --
+    // an opaque, system near-white buffer. MEASURED before this line: a blank
+    // block covering 68 % of the window rect for two to three frames at every
+    // start. WS_EX_NOREDIRECTIONBITMAP removes the buffer itself, so there is
+    // nothing to show; the same three-run measurement afterwards finds no frame
+    // above the noise floor.
+    //
+    // The flag needs the flip swap-chain model and a D3D backend, which the line
+    // above already pins. Set through Qt's own switch rather than by rewriting
+    // the ex-style after creation: the style has to be present when the window is
+    // CREATED, which is exactly the moment we would be too late for.
+    //
+    // qputenv, not a hard override: an operator debugging a compositing problem
+    // can still force the redirection surface back on from the environment.
+    if (!qEnvironmentVariableIsSet("QT_QPA_DISABLE_REDIRECTION_SURFACE"))
+        qputenv("QT_QPA_DISABLE_REDIRECTION_SURFACE", "1");
+
     QApplication app(argc, argv);
     // quitOnLastWindowClosed is deliberately left at Qt's default. Close-to-tray
     // REFUSES the close (requestClose() returns false) and only then hides the
@@ -620,6 +642,18 @@ int main(int argc, char* argv[]) {
     // qtquickcontrols2.conf, so neither the environment nor a command line can
     // take the application somewhere else.
     QQuickStyle::setStyle(QStringLiteral("Basic"));
+
+    // The WIDGETS style, which is a different question and matters for exactly
+    // one surface: the tray menu. Qt.labs.platform documents its Menu as native
+    // on macOS, iOS, Android and GTK+ Linux, and as a Qt Widgets fallback
+    // everywhere else -- so on Windows that menu is a QMenu.
+    //
+    // The Windows styles paint a menu from the platform's own theme parts and
+    // largely ignore the application palette, which left the tray menu in the
+    // system's chrome underneath a themed application. Fusion honours the
+    // palette QuickThemeTokens sets, so the one Widgets surface this product has
+    // looks like the product.
+    QApplication::setStyle(QStyleFactory::create(QStringLiteral("Fusion")));
 
     const exosnap::bootstrap::PostAppResult post_app = exosnap::bootstrap::MarkApplicationConstructed();
     exosnap::bootstrap::ApplyApplicationMetadata();

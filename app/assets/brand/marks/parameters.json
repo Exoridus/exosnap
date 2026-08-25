@@ -1,0 +1,20 @@
+{
+  "grid": 32,
+  "geometry": {
+    "outer_r": 13.7,
+    "outer_w": 1.75,
+    "inner_r": 7.4,
+    "inner_w": 1.4,
+    "center_r": 2.75
+  },
+  "outer_opacity": {
+    "dark": 0.64,
+    "light": 0.82
+  },
+  "reference_colors": {
+    "accent": "#9BD9D2",
+    "recording": "#E0786C",
+    "caution": "#E7C875",
+    "success": "#8FD0AF"
+  }
+}

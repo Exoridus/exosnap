@@ -39,6 +39,10 @@ enum class ShellPhase {
     Paused,
     // Stopping or remuxing. Terminal, but not finished.
     Finalizing,
+    // The last recording failed. Not a transitional phase: it stays until the
+    // session moves on, because a failure the user has not seen yet is exactly
+    // what a shell surface is for.
+    Failed,
     // A recording that finished successfully, for a bounded dwell. Time-boxed
     // because an icon that stays green has stopped describing the application
     // and started describing history.
@@ -51,8 +55,13 @@ enum class ShellPhase {
 enum class ShellIconState {
     Idle,
     Recording,
+    // Work the user cannot interrupt and did not ask to watch: finalizing a
+    // recording. Preparing is deliberately NOT this -- from the user's point of
+    // view the capture has already begun, so it reads as Recording.
+    Processing,
     Paused,
     Saved,
+    Error,
 };
 
 // A product intent a shell surface can ask for. `None` is the answer to a click
@@ -64,15 +73,24 @@ enum class ShellAction {
     Pause,
     Resume,
     Stop,
+    // Not transport. Opening the recording destination is safe in every
+    // state and destroys nothing, which is why it is the one shell action
+    // with no state to check.
+    OpenOutputFolder,
 };
 
-// The three registered taskbar thumbnail buttons. Pause and Resume share one
-// slot: the set is fixed after ThumbBarAddButtons, so spending two registrations
-// on mutually exclusive actions wastes one.
+// The registered taskbar thumbnail buttons. Pause and Resume share one slot:
+// the set is fixed after ThumbBarAddButtons, so spending two registrations on
+// mutually exclusive actions wastes one.
 enum class ShellButton {
     Record,
     PauseResume,
     Stop,
+    // Always present and always enabled. The strip is a fixed set registered
+    // once, so a button that came and went would leave a hole rather than
+    // closing up -- and there is no state in which opening the destination is
+    // the wrong thing to offer.
+    OpenFolder,
 };
 
 // Native command ids for the thumbnail buttons, carried in the low word of a
@@ -82,6 +100,7 @@ enum class ShellButton {
 inline constexpr int kShellButtonIdRecord = 0x7A01;
 inline constexpr int kShellButtonIdPauseResume = 0x7A02;
 inline constexpr int kShellButtonIdStop = 0x7A03;
+inline constexpr int kShellButtonIdOpenFolder = 0x7A04;
 
 // Everything the projection reads. Assembled by the caller from the recording
 // view model, so the Can* predicates arrive as their owner computed them rather
@@ -115,6 +134,8 @@ struct ShellPresenceState {
     // one. What makes the transport read as working rather than as broken.
     bool busy = false;
     bool saved = false;
+    // The last recording failed and nothing has superseded that yet.
+    bool failed = false;
 };
 
 [[nodiscard]] bool operator==(const ShellPresenceState& lhs, const ShellPresenceState& rhs) noexcept;

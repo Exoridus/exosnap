@@ -145,6 +145,13 @@ class NotificationManager : public QObject {
     // from the same per-type timings the manager uses.
     [[nodiscard]] static int DismissIntervalMs(NotificationType type) noexcept;
 
+    // ---- test seams ------------------------------------------------------
+    // Runs the dismiss handler directly. Called before anything has expired it
+    // reproduces an early wake-up, which a coarse timer delivers routinely and
+    // which must leave the timer armed rather than disarmed.
+    void FireDismissTimerForTest();
+    [[nodiscard]] bool DismissTimerArmedForTest() const;
+
     // True when the type reports a condition that still holds: it never
     // auto-dismisses and stacks instead of being replaced.
     [[nodiscard]] static bool IsStanding(NotificationType type) noexcept;

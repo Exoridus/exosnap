@@ -2,6 +2,7 @@
 
 #include <QColor>
 #include <QObject>
+#include <QPalette>
 #include <QString>
 #include <QVariantList>
 #include <QtQmlIntegration/qqmlintegration.h>
@@ -113,6 +114,20 @@ class QuickThemeTokens : public QObject {
     // migrated id — resolves to the shipped default.
     [[nodiscard]] static QString migratedAppearanceId(const QString& legacy_theme_id);
     [[nodiscard]] static QString migratedAccentId(const QString& legacy_theme_id);
+
+    // The Qt Widgets palette these tokens resolve to.
+    //
+    // This product has exactly one Widgets surface: the tray menu.
+    // Qt.labs.platform documents its Menu as a native menu on macOS, iOS,
+    // Android and GTK+ Linux, and as a Qt Widgets FALLBACK everywhere else --
+    // which is why the application links Qt Widgets and constructs a
+    // QApplication at all. A QMenu takes its colours from the application
+    // palette, so leaving that palette unset put a light system menu underneath
+    // a dark application.
+    //
+    // Pure, and applied by setAppearance(). A palette that could only be
+    // observed through QGuiApplication would need one to be tested.
+    [[nodiscard]] QPalette widgetsPalette() const;
 
     [[nodiscard]] const QString& appearanceId() const noexcept;
     [[nodiscard]] const QString& accentId() const noexcept;

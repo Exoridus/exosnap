@@ -1,222 +1,367 @@
 #!/usr/bin/env python3
-"""Generate ExoSnap application icons from the canonical brand-mark design.
+"""Generate ExoSnap's build-time brand artefacts from the canonical mark geometry.
 
-The brand mark is the same 32x32 "aperture" design that app/ui/brand/BrandMarkWidget.cpp
-paints in the running UI: a faint accent outer ring, a solid inner ring, and a centre dot.
-The inner ring + dot change colour by state, exactly like the title-bar brand mark:
+WHAT IS BUILT HERE AND WHAT IS NOT
+----------------------------------
+Only the artefacts whose appearance the build already knows are files:
 
-    idle      -> accent  #9BD9D2 (Studio Mint)   == ExoSnapPalette::kAccent
-    recording -> coral   #E0786C                 == ExoSnapPalette::kErr
-    paused    -> amber   #E6C57C                 == ExoSnapPalette::kWarn
-    saved     -> green   #84CBA2                 == the dark theme's `success`
+  * ``exosnap-app.ico`` -- the multi-resolution application icon. It is the
+    executable's identity in Explorer, on the desktop, in Start and in Alt+Tab,
+    it carries no session state and no accent, and Windows wants it out of the
+    PE resource table.
+  * the thumbnail-toolbar glyphs, which ``THUMBBUTTON::hIcon`` takes as HICONs
+    and which depend on nothing the user can change.
+  * ``exosnap-logo.svg`` -- the mark as a vector, for documentation and design
+    hand-off.
 
-Three further families come out of the same geometry, so the shell surfaces cannot
-drift from the mark:
+The state marks are NOT here. Their outer ring is the user's accent and their
+inner ring is the session's semantic colour, so as files they would be one icon
+per (state x accent x appearance x heartbeat frame). Both surfaces that show one
+-- the notification area and the running window's own icon -- get it painted at
+runtime by ``app/ui/brand/ShellIconRenderer``.
 
-  * recording pulse frames -- the recording mark with the inner ring and dot at a
-    lower opacity. Windows has no animated-icon API, so the tray heartbeat is a
-    timer swapping these static frames. The peak frame IS exosnap-logo-recording.
-  * taskbar overlay badges -- a filled disc, not the aperture. The badge is drawn
-    into the corner of the taskbar button at roughly a third of its size, where
-    the mark's thin rings are mush; a disc in the state colour is not.
-  * thumbnail toolbar glyphs -- the transport controls Windows draws under the
-    taskbar thumbnail.
+SOURCE OF TRUTH
+---------------
+The mark's geometry lives in ``app/assets/brand/marks/brand.svg``, written by
+``scripts/generate-brand-marks.py`` from ``marks/parameters.json``. The optical
+corrections live in ``app/ui/brand/BrandMark.h``, because they are a property of
+the raster rather than of the drawing, and the transport glyphs live there too --
+they are shell chrome and the designer suite has no composition for them.
 
-The outer ring always stays accent at 0.45 opacity. Geometry and stroke weights are kept in
-1:1 sync with BrandMarkWidget so the window/taskbar icon matches the in-app mark.
-
-Rendering is supersampled on a large canvas and downsampled (LANCZOS) into a multi-resolution
-.ico so the thin strokes stay crisp from 16 px to 256 px.
+This script parses both; it restates neither. A renamed constant or a changed
+asset shape fails here rather than silently producing an icon that no longer
+matches the application.
 
 Usage:  python scripts/generate-app-icons.py
-Output: app/assets/brand/exosnap-{logo,badge,thumb}-*.ico
 """
 
 from __future__ import annotations
 
+import io
 import pathlib
+import re
+import struct
+import sys
 
 from PIL import Image, ImageDraw
 
-# --- design constants (32x32 grid, mirror of BrandMarkWidget) ---------------------------------
-DESIGN = 32.0
-CENTER = DESIGN / 2.0  # (16, 16)
+REPO = pathlib.Path(__file__).resolve().parent.parent
+BRAND_MARK_H = REPO / "app" / "ui" / "brand" / "BrandMark.h"
+THEMES_H = REPO / "app" / "ui" / "theme" / "ExoSnapThemes.h"
+OUT_DIR = REPO / "app" / "assets" / "brand"
+MARKS_DIR = OUT_DIR / "marks"
+BRAND_SVG = MARKS_DIR / "brand.svg"
 
-ACCENT = (0x9B, 0xD9, 0xD2)   # kAccent  — idle
-CORAL = (0xE0, 0x78, 0x6C)    # kErr     — recording
-AMBER = (0xE6, 0xC5, 0x7C)    # kWarn    — paused
-GREEN = (0x84, 0xCB, 0xA2)    # success  — saved
-INK = (0x0E, 0x0E, 0x10)      # the page ground, used as a knockout on the badges
 
-OUTER_R, OUTER_W, OUTER_ALPHA = 14.5, 1.5, 0.45
-INNER_R, INNER_W = 6.2, 1.6
-DOT_R = 2.4
+# --- the canonical geometry, parsed rather than repeated -------------------------------------
 
-# Inset the whole mark inside the icon canvas. BrandMarkWidget fills the 32x32 grid edge to
-# edge (good inline in the UI), but as a standalone taskbar / alt-tab icon the mark needs a
-# little breathing room. 0.88 keeps the design proportions while adding a modest margin.
-CONTENT_SCALE = 0.88
+class Circle:
+    """One ``<circle>`` of the canonical mark, as the asset states it."""
 
-MASTER = 1024  # supersample canvas
-ICO_SIZES = [16, 24, 32, 48, 64, 128, 256]
+    def __init__(self, attributes: dict[str, str]) -> None:
+        self.r = float(attributes["r"])
+        self.stroke = attributes.get("stroke")
+        self.stroke_width = float(attributes.get("stroke-width", 0.0))
+        self.fill = attributes.get("fill", "none")
+        self.opacity = float(attributes.get("opacity", 1.0))
 
-OUT_DIR = pathlib.Path(__file__).resolve().parent.parent / "app" / "assets" / "brand"
-VARIANTS = {
-    "exosnap-logo-idle": ACCENT,
-    "exosnap-logo-recording": CORAL,
-    "exosnap-logo-paused": AMBER,
-    "exosnap-logo-saved": GREEN,
-}
 
-# The recording heartbeat, as opacity of the inner ring and dot. The peak is the
-# plain recording mark, so only the two lower steps are separate files; the frame
-# order the shell plays is trough, mid, peak, mid (models/RecordingPulse.h).
+def parse_mark_circles(source: str) -> list[Circle]:
+    """The brand mark's three circles, in paint order.
+
+    A parse rather than a copy: the radii and weights are the asset's, and this
+    script is the one place that has to agree with it. The assertion is the
+    point -- a mark that stopped being three circles is a design change that has
+    to be looked at here, not one that silently produces a wrong .ico.
+    """
+    circles = [Circle(dict(re.findall(r'([\w-]+)="([^"]+)"', body)))
+               for body in re.findall(r"<circle ([^/]*)/>", source)]
+    if len(circles) != 3:
+        raise SystemExit(f"{BRAND_SVG}: expected 3 circles, found {len(circles)}")
+    return circles
+
+
+class BrandMark:
+    """The constants of app/ui/brand/BrandMark.h, as attributes."""
+
+    _SCALAR = re.compile(r"^inline constexpr (?:double|int) (k\w+) = ([-\d.]+);", re.MULTILINE)
+    _PROFILE = re.compile(
+        r"inline constexpr OpticalProfile (k\w+)\{(.*?)\};", re.DOTALL)
+    _FIELD = re.compile(r"\.(\w+)\s*=\s*([-\d.]+)")
+
+    def __init__(self, source: str) -> None:
+        self._scalars = {name: float(value) for name, value in self._SCALAR.findall(source)}
+        self._profiles = {
+            name: {field: float(value) for field, value in self._FIELD.findall(body)}
+            for name, body in self._PROFILE.findall(source)
+        }
+        if not self._scalars or not self._profiles:
+            raise SystemExit(f"{BRAND_MARK_H}: no constants parsed -- has the header's shape changed?")
+
+    def value(self, name: str) -> float:
+        try:
+            return self._scalars[name]
+        except KeyError:
+            raise SystemExit(f"{BRAND_MARK_H}: missing constant {name}") from None
+
+    def profile(self, name: str) -> dict[str, float]:
+        try:
+            return self._profiles[name]
+        except KeyError:
+            raise SystemExit(f"{BRAND_MARK_H}: missing optical profile {name}") from None
+
+    def profile_for(self, px: int) -> dict[str, float]:
+        """Mirror of OpticalProfileFor(). The one rule this file implements rather
+        than reads, because it is control flow and not a number."""
+        if px <= self.value("kSmallProfileMaxPx"):
+            return self.profile("kSmallProfile")
+        if px <= self.value("kMediumProfileMaxPx"):
+            return self.profile("kMediumProfile")
+        return self.profile("kLargeProfile")
+
+
+def parse_theme_colour(source: str, appearance_id: str, index: int) -> str:
+    """One colour out of ExoSnapThemes.h's appearance table, by position.
+
+    The table is a C++ aggregate, so the fields are positional; `index` counts
+    the quoted values after the appearance id. Fragile enough to be worth the
+    assertion below, and still better than a second copy of the palette.
+    """
+    start = source.index(f'"{appearance_id}",')
+    values = re.findall(r'"(#[0-9A-Fa-f]{6}|rgba\([^"]*\))"', source[start:])
+    return values[index]
+
+
+# Positions in ExoAppearance, counting only the colour-valued fields from the
+# appearance id onwards: bg surf surf2 raise line line2 ink text1 mut dim, then
+# the three semantic ones.
+_CAUTION, _ERROR = 11, 12
+
+
+def _rgb(value: str) -> tuple[int, int, int]:
+    return tuple(int(value[i:i + 2], 16) for i in (1, 3, 5))  # type: ignore[return-value]
+
+
+# --- rendering -------------------------------------------------------------------------------
+
+# Supersample factor. The .ico frames are rasterized per target size so the
+# optical profile that size resolves to is the one applied, and each is drawn
+# large and reduced with LANCZOS because PIL has no analytic antialiasing.
+SUPERSAMPLE = 16
+
+# The frame sizes the application icon carries.
 #
-# Opacity rather than scale: at 16 px a scale pulse of the 2.4-unit dot moves it by
-# well under a pixel and reads as noise. The outer ring is deliberately left alone
-# so the mark never looks like it is disappearing.
-PULSE_FRAMES = {
-    "exosnap-logo-recording-p0": 0.40,
-    "exosnap-logo-recording-p1": 0.72,
-}
+# Windows shell scale factors are 100/125/150/200/250/300/400 %, applied to the
+# 16, 32 and 48 px base metrics; 256 is the jumbo view. The set below is the
+# union of what those produce, minus the sizes no context selects exactly.
+# Anything not listed is downscaled by the shell from the next one up, which is
+# what the large frames are for.
+APP_ICO_SIZES = [16, 20, 24, 32, 40, 48, 60, 64, 72, 80, 96, 128, 256]
 
-# The badges and the thumbnail glyphs are shell chrome at 16-48 px. The big layers
-# an application icon needs would only bloat the executable.
+# Thumbnail glyphs are shell chrome at 16-48 px. The large frames an application
+# icon needs would only bloat the executable.
 SHELL_ICO_SIZES = [16, 20, 24, 32, 40, 48]
 
-BADGE_R = 13.0        # a nearly full-bleed disc: the badge IS the shape
-BADGE_RIM_W = 2.0     # dark rim, so the badge reads on a light taskbar too
-# The dimmed recording badge. Darkened rather than made transparent: the badge sits
-# on top of the application icon, and a translucent one would show it through.
-BADGE_DIM = 0.62
+# Above this, a frame is stored as PNG; at or below it, as an uncompressed DIB.
+# The shell surfaces that decode small PNG frames badly are the small ones, and a
+# DIB costs width * height * 4 bytes -- the whole large end of the icon as DIB
+# would be a quarter of a megabyte in the executable for no benefit.
+PNG_FRAME_MIN_PX = 64
 
 
-def _ring(draw: ImageDraw.ImageDraw, scale: float, radius: float, width: float, rgba) -> None:
-    """Stroke a circle centred on `radius` (SVG semantics: stroke centred on the path)."""
-    outer = radius + width / 2.0
-    bbox = [
-        (CENTER - outer) * scale,
-        (CENTER - outer) * scale,
-        (CENTER + outer) * scale,
-        (CENTER + outer) * scale,
-    ]
-    draw.ellipse(bbox, outline=rgba, width=max(1, round(width * scale)))
+class Renderer:
+    def __init__(self, mark: BrandMark, circles: list[Circle]) -> None:
+        self.mark = mark
+        self.circles = circles
+        self.grid = mark.value("kGrid")
+        self.center = mark.value("kCenter")
+
+    def _canvas(self, px: int) -> tuple[Image.Image, ImageDraw.ImageDraw, float]:
+        side = px * SUPERSAMPLE
+        img = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+        return img, ImageDraw.Draw(img), side / self.grid
+
+    def _ring(self, draw, scale: float, radius: float, width: float, rgba) -> None:
+        outer = radius + width / 2.0
+        box = [(self.center - outer) * scale, (self.center - outer) * scale,
+               (self.center + outer) * scale, (self.center + outer) * scale]
+        draw.ellipse(box, outline=rgba, width=max(1, round(width * scale)))
+
+    def _disc(self, draw, scale: float, radius: float, rgba, cx: float | None = None,
+              cy: float | None = None) -> None:
+        cx = self.center if cx is None else cx
+        cy = self.center if cy is None else cy
+        box = [(cx - radius) * scale, (cy - radius) * scale,
+               (cx + radius) * scale, (cy + radius) * scale]
+        draw.ellipse(box, fill=rgba)
+
+    def mark_frame(self, px: int) -> Image.Image:
+        """The application icon at one size: the canonical mark, with the optical
+        profile that size resolves to.
+
+        The colours are the asset's own. This icon is the identity of the FILE
+        and carries no session and no user accent, so there is nothing here to
+        resolve against a theme."""
+        m = self.mark
+        profile = m.profile_for(px)
+        img, draw, scale = self._canvas(px)
+        content = m.value("kStandaloneContentScale") * profile["content_scale"]
+
+        for circle in self.circles:
+            alpha = round(255 * min(1.0, circle.opacity * (
+                profile["outer_opacity_scale"] if circle.opacity < 1.0 else 1.0)))
+            if circle.stroke is not None:
+                self._ring(draw, scale, circle.r * content,
+                           circle.stroke_width * content * profile["ring_stroke_scale"],
+                           _rgb(circle.stroke) + (alpha,))
+            else:
+                self._disc(draw, scale, circle.r * content, _rgb(circle.fill) + (alpha,))
+        return img.resize((px, px), Image.Resampling.LANCZOS)
+
+    def thumb_frame(self, px: int, shape: str, rgb) -> Image.Image:
+        m = self.mark
+        img, draw, scale = self._canvas(px)
+        rgba = tuple(rgb) + (255,)
+
+        if shape == "disc":
+            self._disc(draw, scale, m.value("kGlyphDiscRadius"), rgba)
+        elif shape == "square":
+            half = m.value("kGlyphSquareHalf")
+            corner = m.value("kGlyphSquareCorner")
+            draw.rounded_rectangle([(self.center - half) * scale, (self.center - half) * scale,
+                                    (self.center + half) * scale, (self.center + half) * scale],
+                                   radius=corner * scale, fill=rgba)
+        elif shape == "bars":
+            bar_w = m.value("kGlyphBarWidth")
+            bar_h = m.value("kGlyphBarHeight")
+            gap = m.value("kGlyphBarGap")
+            corner = m.value("kGlyphBarCorner")
+            for direction in (-1, 1):
+                x = self.center + direction * (gap / 2.0 + bar_w / 2.0)
+                draw.rounded_rectangle([(x - bar_w / 2.0) * scale, (self.center - bar_h / 2.0) * scale,
+                                        (x + bar_w / 2.0) * scale, (self.center + bar_h / 2.0) * scale],
+                                       radius=corner * scale, fill=rgba)
+        elif shape == "folder":
+            # Stroked rather than filled, matching the tray menu's own folder:
+            # the row it labels is about a place, not about a recording.
+            left = self.center - m.value("kGlyphFolderHalfWidth")
+            right = self.center + m.value("kGlyphFolderHalfWidth")
+            top = m.value("kGlyphFolderTopY")
+            body = m.value("kGlyphFolderBodyY")
+            bottom = m.value("kGlyphFolderBottomY")
+            tab = m.value("kGlyphFolderTabWidth")
+            points = [(left, bottom), (left, top), (left + tab, top), (left + tab + 1.8, body),
+                      (right, body), (right, bottom)]
+            draw.line([(x * scale, y * scale) for x, y in points] + [(left * scale, bottom * scale)],
+                      fill=rgba, width=max(1, round(m.value("kGlyphStroke") * scale)), joint="curve")
+        elif shape == "triangle":
+            back = m.value("kGlyphTriangleBackX")
+            tip = m.value("kGlyphTriangleTipX")
+            half = m.value("kGlyphTriangleHalfHeight")
+            points = [(back, self.center - half), (back, self.center + half), (tip, self.center)]
+            draw.polygon([(x * scale, y * scale) for x, y in points], fill=rgba)
+        return img.resize((px, px), Image.Resampling.LANCZOS)
 
 
-def _disc(draw: ImageDraw.ImageDraw, scale: float, radius: float, rgba) -> None:
-    bbox = [
-        (CENTER - radius) * scale,
-        (CENTER - radius) * scale,
-        (CENTER + radius) * scale,
-        (CENTER + radius) * scale,
-    ]
-    draw.ellipse(bbox, fill=rgba)
+def _bmp_frame(image: Image.Image) -> bytes:
+    """One .ico directory entry's payload, as a classic DIB.
+
+    NOT PNG, and that is the point. Windows has accepted PNG-compressed frames
+    since Vista, but several shell surfaces still decode the small ones
+    incorrectly -- the icon beside the file name in Explorer's details pane is
+    the one that shows it -- and the guidance has always been that PNG is for the
+    256 px frame. The frames below that are therefore written the old way: a
+    BITMAPINFOHEADER whose height is doubled for the mask, 32-bit BGRA bottom-up
+    pixels, and an AND mask that is all zeroes because the alpha channel is what
+    actually carries the transparency.
+    """
+    width, height = image.size
+    pixels = image.convert("RGBA").load()
+    body = bytearray()
+    for y in range(height - 1, -1, -1):
+        for x in range(width):
+            r, g, b, a = pixels[x, y]
+            body += bytes((b, g, r, a))
+    # The AND mask is padded to a 4-byte boundary per row.
+    mask_stride = ((width + 31) // 32) * 4
+    mask = bytes(mask_stride * height)
+    header = struct.pack("<IiiHHIIiiII", 40, width, height * 2, 1, 32, 0, len(body) + len(mask), 0, 0, 0, 0)
+    return bytes(header) + bytes(body) + mask
 
 
-def render_master(inner_rgb, inner_alpha: float = 1.0) -> Image.Image:
-    img = Image.new("RGBA", (MASTER, MASTER), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-    scale = MASTER / DESIGN
+def write_ico(frames: list[Image.Image], stem: str) -> None:
+    """The container, written here rather than by Pillow, so the frame encoding
+    is a decision this file makes and not one the imaging library makes for it."""
+    payloads = []
+    for frame in frames:
+        if frame.width > PNG_FRAME_MIN_PX:
+            buffer = io.BytesIO()
+            frame.save(buffer, format="PNG")
+            payloads.append(buffer.getvalue())
+        else:
+            payloads.append(_bmp_frame(frame))
 
-    cs = CONTENT_SCALE
-    inner = inner_rgb + (round(255 * inner_alpha),)
-    _ring(draw, scale, OUTER_R * cs, OUTER_W * cs, ACCENT + (round(255 * OUTER_ALPHA),))
-    _ring(draw, scale, INNER_R * cs, INNER_W * cs, inner)
-    _disc(draw, scale, DOT_R * cs, inner)
-    return img
+    offset = 6 + 16 * len(frames)
+    directory = bytearray(struct.pack("<HHH", 0, 1, len(frames)))
+    for frame, payload in zip(frames, payloads):
+        directory += struct.pack("<BBBBHHII", frame.width % 256, frame.height % 256, 0, 0, 1, 32,
+                                 len(payload), offset)
+        offset += len(payload)
 
-
-def _darken(rgb, factor: float):
-    return tuple(round(channel * factor) for channel in rgb)
-
-
-def render_badge_master(rgb, glyph: str) -> Image.Image:
-    """The taskbar overlay badge: a filled disc with a dark rim and a knockout glyph."""
-    img = Image.new("RGBA", (MASTER, MASTER), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-    scale = MASTER / DESIGN
-
-    _disc(draw, scale, BADGE_R, rgb + (255,))
-    _ring(draw, scale, BADGE_R - BADGE_RIM_W / 2.0, BADGE_RIM_W, INK + (255,))
-
-    knockout = INK + (255,)
-    if glyph == "pause":
-        bar_w, bar_h, gap = 2.2, 10.0, 2.6
-        for direction in (-1, 1):
-            x = CENTER + direction * (gap / 2.0 + bar_w / 2.0)
-            draw.rectangle(
-                [(x - bar_w / 2.0) * scale, (CENTER - bar_h / 2.0) * scale,
-                 (x + bar_w / 2.0) * scale, (CENTER + bar_h / 2.0) * scale],
-                fill=knockout,
-            )
-    elif glyph == "check":
-        # Two strokes rather than a font glyph: a font would have to be present on
-        # whichever machine runs this script.
-        points = [(10.6, 16.4), (14.4, 20.2), (21.6, 12.2)]
-        draw.line([(x * scale, y * scale) for x, y in points],
-                  fill=knockout, width=round(3.0 * scale), joint="curve")
-    return img
+    path = OUT_DIR / f"{stem}.ico"
+    path.write_bytes(bytes(directory) + b"".join(payloads))
+    print(f"wrote {path.name} ({path.stat().st_size} bytes, {len(frames)} frames)")
 
 
-def render_thumb_master(shape: str, rgb) -> Image.Image:
-    """A thumbnail-toolbar transport glyph, drawn on the same 32-unit grid."""
-    img = Image.new("RGBA", (MASTER, MASTER), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-    scale = MASTER / DESIGN
-    rgba = rgb + (255,)
+def write_svg(brand_svg: str) -> None:
+    """The mark as a vector, for documentation, design hand-off and the package
+    manifests that point at a raw URL.
 
-    if shape == "disc":
-        _disc(draw, scale, 8.0, rgba)
-    elif shape == "square":
-        half = 7.0
-        draw.rectangle([(CENTER - half) * scale, (CENTER - half) * scale,
-                        (CENTER + half) * scale, (CENTER + half) * scale], fill=rgba)
-    elif shape == "bars":
-        bar_w, bar_h, gap = 3.6, 15.0, 3.4
-        for direction in (-1, 1):
-            x = CENTER + direction * (gap / 2.0 + bar_w / 2.0)
-            draw.rectangle([(x - bar_w / 2.0) * scale, (CENTER - bar_h / 2.0) * scale,
-                            (x + bar_w / 2.0) * scale, (CENTER + bar_h / 2.0) * scale], fill=rgba)
-    elif shape == "triangle":
-        points = [(11.5, 8.0), (11.5, 24.0), (23.5, 16.0)]
-        draw.polygon([(x * scale, y * scale) for x, y in points], fill=rgba)
-    return img
+    A copy of the canonical asset rather than a second drawing of it: what it is
+    FOR is a stable path, and the shapes are already written down once.
+    """
+    path = OUT_DIR / "exosnap-logo.svg"
+    path.write_text(brand_svg, encoding="utf-8", newline="\n")
+    print(f"wrote {path.name} ({path.stat().st_size} bytes)")
 
 
-def write_ico(master: Image.Image, stem: str, sizes) -> None:
-    frames = [master.resize((s, s), Image.Resampling.LANCZOS) for s in sizes]
-    ico_path = OUT_DIR / f"{stem}.ico"
-    frames[-1].save(ico_path, format="ICO", sizes=[(s, s) for s in sizes],
-                    append_images=frames[:-1])
-    print(f"wrote {ico_path.name} ({ico_path.stat().st_size} bytes)")
+def main() -> int:
+    mark = BrandMark(BRAND_MARK_H.read_text(encoding="utf-8"))
+    themes = THEMES_H.read_text(encoding="utf-8")
+    brand_svg = BRAND_SVG.read_text(encoding="utf-8")
 
+    # The asset is authored in the shipped default accent, which is the only one
+    # a build-time artefact can carry: this is the identity of the executable,
+    # not of a session. If the two ever part company that is a decision, so it is
+    # asserted rather than papered over.
+    accent_hex = re.search(r'"aqua",.*?"(#[0-9A-Fa-f]{6})"', themes, re.DOTALL).group(1)
+    if accent_hex.upper() not in brand_svg.upper():
+        raise SystemExit(f"{BRAND_SVG}: authored accent is not the shipped default {accent_hex}")
 
-def main() -> None:
+    coral = _rgb(parse_theme_colour(themes, "dark", _ERROR))
+    amber = _rgb(parse_theme_colour(themes, "dark", _CAUTION))
+    accent = _rgb(accent_hex)
+
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    for stem, inner in VARIANTS.items():
-        write_ico(render_master(inner), stem, ICO_SIZES)
+    renderer = Renderer(mark, parse_mark_circles(brand_svg))
 
-    for stem, opacity in PULSE_FRAMES.items():
-        write_ico(render_master(CORAL, inner_alpha=opacity), stem, SHELL_ICO_SIZES)
-
-    badges = {
-        "exosnap-badge-recording": (CORAL, ""),
-        "exosnap-badge-recording-dim": (_darken(CORAL, BADGE_DIM), ""),
-        "exosnap-badge-paused": (AMBER, "pause"),
-        "exosnap-badge-saved": (GREEN, "check"),
-    }
-    for stem, (rgb, glyph) in badges.items():
-        write_ico(render_badge_master(rgb, glyph), stem, SHELL_ICO_SIZES)
+    write_ico([renderer.mark_frame(px) for px in APP_ICO_SIZES], "exosnap-app")
+    write_svg(brand_svg)
 
     thumbs = {
-        "exosnap-thumb-record": ("disc", CORAL),
-        "exosnap-thumb-pause": ("bars", AMBER),
-        "exosnap-thumb-resume": ("triangle", ACCENT),
-        "exosnap-thumb-stop": ("square", CORAL),
+        "exosnap-thumb-record": ("disc", coral),
+        "exosnap-thumb-pause": ("bars", amber),
+        "exosnap-thumb-resume": ("triangle", accent),
+        "exosnap-thumb-stop": ("square", coral),
+        # Not transport: the thumbnail strip's fourth button opens the recording
+        # destination, which is safe in every state and therefore never greyed.
+        "exosnap-thumb-folder": ("folder", accent),
     }
     for stem, (shape, rgb) in thumbs.items():
-        write_ico(render_thumb_master(shape, rgb), stem, SHELL_ICO_SIZES)
+        write_ico([renderer.thumb_frame(px, shape, rgb) for px in SHELL_ICO_SIZES], stem)
+
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

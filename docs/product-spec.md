@@ -1393,25 +1393,57 @@ release (0.11 per ADR 0022).
 
 ## 9. Presence and notifications
 
-- **Tray icon** with **idle / recording / paused / saved** states and an **unread notification
-  badge**. Saved is green, is shown for the same dwell as the "Saved" notification, and then returns
-  to idle on its own; a starting recording takes the icon back immediately, whether or not that dwell
-  has run out. An icon that stayed green would have stopped describing the application and started
-  describing history.
-- **While a recording is running the tray icon and the taskbar badge pulse.** Windows has no
-  animated-icon API, so the pulse is a timer swapping pre-rendered frames: four frames over 880 ms, a
-  gentle fade of the coral centre rather than a blink. A countdown shows the recording state but
-  holds it still, which is what separates "committed" from "capturing" at a glance. Paused, saved and
-  idle are static. The on-screen recording pill breathes on the same beat.
-- **Tray menu** — Show/Hide window, the transport, Notifications while any are unread, and Quit. The
-  transport offers exactly what the state allows: **Start recording** while idle, **Pause** and
-  **Stop** while recording, **Resume** and **Stop** while paused. An action that is not possible is
-  hidden rather than shown-and-failing, except Start, which stays visible and greyed while a
-  recording is being prepared or saved — a control that vanishes reads as a bug, a greyed one reads
-  as a reason.
+- **Tray icon** with **idle / recording / processing / paused / saved / failed** states and an
+  **unread notification badge**. Saved is green, is shown for the same dwell as the "Saved"
+  notification, and then returns to idle on its own; a starting recording takes the icon back
+  immediately, whether or not that dwell has run out. An icon that stayed green would have stopped
+  describing the application and started describing history. **Processing** is the mark for work the
+  user cannot interrupt — the save or remux after a stop — and appears only once that work has lasted
+  long enough to be worth reporting; a stream-copy save is usually over before it does. **Failed** is
+  coral with a cross and stays until the next recording, because a failure nobody has seen yet is
+  what a shell surface is for.
+- **The tray icon carries the chosen accent.** The mark's outer ring is whichever accent the
+  Appearance settings are on and follows a change immediately, with no restart; the inner ring and
+  what is inside it is the session's state colour, so the accent is never a second state channel. At
+  the sizes Windows draws a notification-area icon the mark is drawn with heavier strokes and less
+  margin than the full-size logo — the same drawing, corrected so it survives 16 pixels. At 16 pixels
+  the colour is what carries the state: there is not room inside the aperture for a pause bar or a
+  spinner to read, and the glyph starts to tell from 20 pixels up.
+- **The mark beats for as long as the recording runs.** The tray icon and the taskbar button
+  pulse on a second-and-a-half loop while a capture is live: the light travels outwards from the
+  centre dot to the inner ring and back, and rests at the bottom of the loop before starting
+  again. Only the BRIGHTNESS moves. Nothing in the mark changes size, which is what makes a
+  permanent beat readable at 16 pixels -- a beat that moved the rings differed from frame to
+  frame by less than a screen pixel there and read as a flicker rather than as a heartbeat.
+  **Pausing stops the beat on the spot**, and resuming starts it again from the bottom of the
+  loop. A countdown shows the recording state but holds it still, which separates "committed"
+  from "capturing" at a glance; paused, saved, failed and idle are static. **Processing also
+  animates for as long as it lasts**, because what bounds it is the operation itself and the
+  taskbar's progress bar is running beside it. **Inside the application the recording indicator
+  breathes on the same loop** -- the on-screen pill swings further, because a ten-pixel dot over
+  a full-screen game has to carry further than a tray icon does.
+- **The taskbar button shows the same mark as the tray.** One image, two surfaces: while a recording
+  runs the button's icon is the coral mark and beats with it, paused it is amber, saved it is green,
+  and failed is a coral cross. What Explorer, the desktop and Start show is a different thing and does
+  not change — that is the icon of the *file*, in the shipped accent, whatever the application is
+  doing.
+- **Tray menu** — Show/Hide window, the transport, **Open output folder**, Notifications while any are
+  unread, and Quit. Every entry carries a glyph, and the menu is drawn in the application's own
+  appearance rather than the system's. The transport offers exactly what the state allows: **Start recording** while
+  idle, **Pause** and **Stop** while recording, **Resume** and **Stop** while paused. An action that
+  is not possible is hidden rather than shown-and-failing, except Start, which stays visible and
+  greyed while a recording is being prepared or saved — a control that vanishes reads as a bug, a
+  greyed one reads as a reason. **Open output folder** opens the configured recording destination in
+  Explorer and is offered in every state; if that folder does not exist, nothing is opened and
+  nothing is created — a missing destination is a settings problem, and Settings is where it is
+  reported.
+- **Clicking the tray icon** brings the window back; **double-clicking it** starts or stops a
+  recording, the same gesture the global hotkey carries; **right-clicking it** opens the menu.
 - **Taskbar button** — the same transport as a thumbnail toolbar under the taskbar preview
-  (Record, Pause/Resume, Stop, following the same table as the tray menu), a **state badge** over the
-  application icon in the same four states as the tray, and a **progress bar** for the long
+  (Record, Pause/Resume, Stop, following the same table as the tray menu), a fourth button that
+  **opens the output folder** and is offered in every state — the strip is registered once and cannot
+  change, and opening the destination is safe whatever the session is doing — the state in the
+  button's own icon as described above, and a **progress bar** for the long
   operations: the save after a recording stops, a recovery finish, and an edit export. The bar shows
   one operation at a time; a second long operation running at the same time reports in its own
   surface rather than sharing the bar, and a failed operation leaves the bar red until the next one

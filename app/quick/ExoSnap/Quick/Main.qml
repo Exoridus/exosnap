@@ -23,6 +23,7 @@ ApplicationWindow {
     required property WhatsNewAdapter whatsNew
     required property OverlayAdapter overlays
     required property ShellPresenceAdapter shellPresence
+    required property TrayAdapter trayAdapter
     // Set once every close guard has cleared, so the re-issued close() is not
     // caught by the same guards again.
     property bool closeApproved: false
@@ -202,6 +203,15 @@ ApplicationWindow {
         }
     }
 
+    // ── Windows shell surfaces ───────────────────────────────────────────────
+    //
+    // The notification-area icon. Not a window and not part of the scene: it
+    // lives here because it is a declarative surface of the same application,
+    // and because it must outlive the shell window being hidden to it.
+    ShellTray {
+        tray: root.trayAdapter
+    }
+
     // ── Capture-excluded overlays ────────────────────────────────────────────
     //
     // Four separate top-level windows on the monitor being recorded, not
@@ -225,7 +235,6 @@ ApplicationWindow {
         showElapsed: root.settingsAdapter.recordingOverlayElapsed
         showOutputSize: root.settingsAdapter.recordingOverlayOutputSize
         showSourceName: root.settingsAdapter.recordingOverlaySourceName
-        recordingPulse: root.shellPresence.pulseIntensity
     }
 
     OverlayDiagnostics {

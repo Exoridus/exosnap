@@ -3,48 +3,56 @@
 // The one heartbeat the shell surfaces share.
 //
 // Windows has no animated-icon API: Shell_NotifyIcon and
-// ITaskbarList3::SetOverlayIcon each take a single HICON. An animation is
-// therefore a timer swapping pre-rendered frames, and the cost of that timer is
-// paid for the whole length of a recording -- which is what makes the frame
-// count and the interval a product decision rather than an animation budget.
+// ITaskbarList3::SetOverlayIcon each take a single HICON, so an animation is a
+// timer swapping whole icons.
 //
-// One phase, read by every surface. A tray timer, a taskbar timer and a QML
-// timer would drift apart within a minute and the two icons would then be
-// describing the same recording out of step.
+// WHAT MAKES A PERMANENT BEAT AFFORDABLE
+// --------------------------------------
+// The frames modulate BRIGHTNESS and nothing else. An earlier candidate moved
+// the radii as well, and at 16 px two adjacent frames of that differ by well
+// under a device pixel: it read as a flicker in the corner of the screen rather
+// than as a heartbeat, which is why it ran for two cycles and then stopped.
+// Brightness has no sub-pixel problem, so the beat runs for as long as the
+// recording does -- which is what a recording indicator is for.
+//
+// The cost is four icon swaps a second on the UI thread. Capture and encode
+// never see it: they are on their own threads, and the shell call is not on any
+// path they touch.
+//
+// One phase, read by every shell surface. A tray timer and a taskbar timer would
+// drift apart, and the two icons would then describe the same recording out of
+// step.
 
 #include <QtGlobal>
 
 namespace exosnap {
 
-// Four frames over one period: trough, rise, peak, fall. Three would have no
-// symmetric midpoint and would read as a stutter; more frames buy nothing at
-// 16 px, where the difference between adjacent steps is already below what the
-// eye resolves at this cadence.
-inline constexpr int kRecordingPulseFrameCount = 4;
+// Six frames over one period. The light travels outwards from the centre dot to
+// the inner ring and back, and the first and last frames are the same: the loop
+// rests at the bottom for two ticks, which is what makes it a heartbeat rather
+// than a metronome. The frames themselves are assets
+// (app/assets/brand/marks/recording-f*.svg); only their timing is here.
+inline constexpr int kRecordingPulseFrameCount = 6;
 
-// 4 x 220 ms = 880 ms per beat, near a resting heart rate. Fast enough to read
-// as alive, slow enough that the tray does not flicker, and 4.5 icon swaps per
-// second is a rate the shell absorbs without a visible redraw cost.
-inline constexpr int kRecordingPulseIntervalMs = 220;
+// 250 ms a frame, so a second and a half per beat. Slow enough that the
+// notification area does not flicker, fast enough that the mark reads as alive,
+// and four icon swaps a second is a rate the shell absorbs without a visible
+// redraw cost.
+inline constexpr int kRecordingPulseIntervalMs = 250;
 
-// The taskbar overlay badge is a small square in the corner of a taskbar button,
-// and Explorer redraws the whole button for every SetOverlayIcon. Two levels is
-// what stays legible at that size and halves the shell update rate, while still
-// being derived from the same phase as the tray.
-inline constexpr int kTaskbarPulseLevels = 2;
+// Where a recording's beat starts. The bottom of the loop, so every recording
+// begins at the same point of the same beat rather than wherever the previous
+// one left off.
+inline constexpr int kRecordingPulseFirstFrame = 0;
+
+// The processing animation runs at the same cadence. Its frame count differs
+// because its loop has no rest in it: a spinner that paused would read as the
+// operation having stalled.
+inline constexpr int kProcessingFrameIntervalMs = kRecordingPulseIntervalMs;
+inline constexpr int kProcessingFrameCount = 4;
 
 // Advances one tick, wrapping. Out-of-range and negative inputs come back to
 // frame 0 rather than propagating: this indexes an icon array.
 [[nodiscard]] int NextRecordingPulseFrame(int frame, int frame_count = kRecordingPulseFrameCount) noexcept;
-
-// Where the frame sits in the beat: 0.0 at the trough, 1.0 at the peak. A
-// triangle rather than a sine -- at four frames the two produce the same three
-// numbers, and the triangle says what it is.
-[[nodiscard]] double RecordingPulseIntensity(int frame, int frame_count = kRecordingPulseFrameCount) noexcept;
-
-// The intensity quantized into `levels` steps, for a surface that cannot or
-// should not render every frame. Same phase, coarser rendering.
-[[nodiscard]] int RecordingPulseLevel(int frame, int levels = kTaskbarPulseLevels,
-                                      int frame_count = kRecordingPulseFrameCount) noexcept;
 
 } // namespace exosnap

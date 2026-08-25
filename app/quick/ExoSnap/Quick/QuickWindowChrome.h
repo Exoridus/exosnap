@@ -2,6 +2,7 @@
 
 #include <QAbstractNativeEventFilter>
 #include <QColor>
+#include <QIcon>
 #include <QList>
 #include <QObject>
 #include <QPointer>
@@ -83,13 +84,6 @@ class QuickWindowChrome : public QObject, public QAbstractNativeEventFilter {
                    setNonClientActivationWorkaround NOTIFY nonClientActivationWorkaroundChanged FINAL)
 
   public:
-    // Window/taskbar icon variants. The three .ico files and the three Win32
-    // resource ids are the same assets the Widgets shell switched between in
-    // MainWindow::switchRecordingIcon; Paused takes precedence over Recording
-    // there and the caller is expected to keep that precedence.
-    enum IconState { Idle, Recording, Paused, Saved };
-    Q_ENUM(IconState)
-
     // The default title band height matches ui::theme::ExoSnapMetrics::kTitlebarHeight (40).
     static constexpr int kDefaultTitleBarHeight = 40;
     // The Widgets shell used an 8 px grab band (resizeZoneFromLocalPoint).
@@ -212,9 +206,14 @@ class QuickWindowChrome : public QObject, public QAbstractNativeEventFilter {
     // which is exactly the case being asked about here.
     [[nodiscard]] Q_INVOKABLE bool willOccupyScreenMaximized() const;
 
-    // Sets QWindow::icon and posts WM_SETICON for ICON_SMALL/ICON_BIG. Qt's own
-    // icon path updates the frame; the taskbar BUTTON only follows WM_SETICON.
-    Q_INVOKABLE void applyWindowIcon(IconState state);
+    // Sets the LIVE WINDOW's icon, which is what its frame and its taskbar button
+    // show. `icon` should carry a pixmap at each of the two Windows icon metrics,
+    // because Qt picks the nearest one per metric rather than scaling.
+    //
+    // The executable's own icon is a different thing and is not touched here:
+    // Explorer, the desktop and Start read the PE resource table, which WM_SETICON
+    // does not reach.
+    void applyWindowIcon(const QIcon& icon);
 
     [[nodiscard]] QQuickWindow* target() const noexcept;
     void setTarget(QQuickWindow* window);
