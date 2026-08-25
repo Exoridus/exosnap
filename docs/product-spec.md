@@ -1409,27 +1409,27 @@ release (0.11 per ADR 0022).
   margin than the full-size logo — the same drawing, corrected so it survives 16 pixels. At 16 pixels
   the colour is what carries the state: there is not room inside the aperture for a pause bar or a
   spinner to read, and the glyph starts to tell from 20 pixels up.
-- **Entering a recording plays a short heartbeat, and then the shell holds still.** The tray icon and
-  the taskbar button beat twice as the recording starts and settle on the static recording state. They
-  do not pulse for the length of the recording: Windows has no animated-icon API, so a permanent
-  pulse means swapping the notification-area icon and redrawing the taskbar button for hours, and at
-  that size it reads as a flicker in the corner of the screen rather than as a heartbeat. **Resuming
-  a paused recording plays the same short beat**, because re-entering capturing is the same event as
-  entering it. A countdown shows the recording state but holds it still, which separates "committed"
-  from "capturing" at a glance; paused, saved, failed and idle are static. **Processing is the one
-  shell state that animates for as long as it lasts**, because what bounds it is the operation itself
-  and the taskbar's progress bar is running beside it. **Inside the application the recording
-  indicator breathes for as long as the recording runs** — the on-screen pill is a surface that can
-  animate for free, and the shell is not. It breathes on the same one-second period the shell beats
-  at; only how far it swings is its own, because a ten-pixel dot over a full-screen game has to carry
-  further than a tray icon does.
+- **The mark beats for as long as the recording runs.** The tray icon and the taskbar button
+  pulse on a second-and-a-half loop while a capture is live: the light travels outwards from the
+  centre dot to the inner ring and back, and rests at the bottom of the loop before starting
+  again. Only the BRIGHTNESS moves. Nothing in the mark changes size, which is what makes a
+  permanent beat readable at 16 pixels -- a beat that moved the rings differed from frame to
+  frame by less than a screen pixel there and read as a flicker rather than as a heartbeat.
+  **Pausing stops the beat on the spot**, and resuming starts it again from the bottom of the
+  loop. A countdown shows the recording state but holds it still, which separates "committed"
+  from "capturing" at a glance; paused, saved, failed and idle are static. **Processing also
+  animates for as long as it lasts**, because what bounds it is the operation itself and the
+  taskbar's progress bar is running beside it. **Inside the application the recording indicator
+  breathes on the same loop** -- the on-screen pill swings further, because a ten-pixel dot over
+  a full-screen game has to carry further than a tray icon does.
 - **The taskbar button shows the same mark as the tray.** One image, two surfaces: while a recording
-  runs the button's icon is the coral mark, paused it is amber, saved it is green, failed is a coral
-  cross, and it plays the same short entry heartbeat. What Explorer, the desktop and Start show is a different thing and does
+  runs the button's icon is the coral mark and beats with it, paused it is amber, saved it is green,
+  and failed is a coral cross. What Explorer, the desktop and Start show is a different thing and does
   not change — that is the icon of the *file*, in the shipped accent, whatever the application is
   doing.
 - **Tray menu** — Show/Hide window, the transport, **Open output folder**, Notifications while any are
-  unread, and Quit. The transport offers exactly what the state allows: **Start recording** while
+  unread, and Quit. Every entry carries a glyph, and the menu is drawn in the application's own
+  appearance rather than the system's. The transport offers exactly what the state allows: **Start recording** while
   idle, **Pause** and **Stop** while recording, **Resume** and **Stop** while paused. An action that
   is not possible is hidden rather than shown-and-failing, except Start, which stays visible and
   greyed while a recording is being prepared or saved — a control that vanishes reads as a bug, a

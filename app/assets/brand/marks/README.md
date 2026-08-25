@@ -1,7 +1,14 @@
 # The ExoSnap mark suite
 
 Every drawing the product shows for itself: the brand mark, the five session
-states, and the two four-frame animations.
+states, and the two animations -- a six-frame recording beat and a four-frame
+processing loop.
+
+The recording frames modulate BRIGHTNESS only. The designer cut's candidate
+moved the radii as well, and at 16 px two adjacent frames of that differ by
+well under a device pixel: it read as a flicker rather than as a heartbeat,
+which is why the shell used to play it twice and then stop. Brightness has no
+sub-pixel problem, so the beat now runs for as long as the recording does.
 
 ## What is authoritative
 

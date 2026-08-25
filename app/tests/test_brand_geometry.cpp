@@ -28,7 +28,10 @@ namespace brand = exosnap::ui::brand;
 
 namespace {
 
-constexpr int kFrameCount = 4;
+// The two sequences have different lengths: the recording beat rests at the
+// bottom of its loop for two ticks, and the processing arc has no rest.
+constexpr int kRecordingFrameCount = 6;
+constexpr int kProcessingFrameCount = 4;
 
 QString ReadRepoFile(const QString& relative) {
     QFile file(QStringLiteral(EXOSNAP_BRAND_SOURCE_DIR) + QLatin1Char('/') + relative);
@@ -45,10 +48,10 @@ QString MarkPath(const QString& stem) {
 QStringList MarkStems() {
     QStringList stems{QStringLiteral("brand"), QStringLiteral("idle"),    QStringLiteral("paused"),
                       QStringLiteral("saved"), QStringLiteral("warning"), QStringLiteral("error")};
-    for (int frame = 0; frame < kFrameCount; ++frame) {
+    for (int frame = 0; frame < kRecordingFrameCount; ++frame)
         stems << QStringLiteral("recording-f%1").arg(frame);
+    for (int frame = 0; frame < kProcessingFrameCount; ++frame)
         stems << QStringLiteral("processing-f%1").arg(frame);
-    }
     return stems;
 }
 
@@ -127,12 +130,17 @@ TEST(BrandGeometry, TheApertureIsTheOneInTheParameters) {
     }
 }
 
-TEST(BrandGeometry, TheStaticStatesShareTheInnerRing) {
-    // The animated frames modulate it on purpose; the static ones must not, or
-    // switching between two states would move the ring as well as recolour it.
+TEST(BrandGeometry, TheInnerRingIsTheOneInTheParameters) {
+    // Including every recording frame: the beat modulates brightness and NOTHING
+    // else, which is what makes it affordable to run for the length of a
+    // recording. A frame that moved the ring would differ from its neighbour by
+    // well under a device pixel at 16 px, and that reads as a flicker.
     const QJsonObject geometry = Parameters().value(QStringLiteral("geometry")).toObject();
-    for (const QString& stem : {QStringLiteral("brand"), QStringLiteral("idle"), QStringLiteral("paused"),
-                                QStringLiteral("saved"), QStringLiteral("warning"), QStringLiteral("error")}) {
+    QStringList stems{QStringLiteral("brand"), QStringLiteral("idle"),    QStringLiteral("paused"),
+                      QStringLiteral("saved"), QStringLiteral("warning"), QStringLiteral("error")};
+    for (int frame = 0; frame < kRecordingFrameCount; ++frame)
+        stems << QStringLiteral("recording-f%1").arg(frame);
+    for (const QString& stem : stems) {
         const QString svg = ReadRepoFile(MarkPath(stem));
         ASSERT_FALSE(svg.isEmpty()) << stem.toStdString();
         ExpectAttribute(svg, stem, 1, QStringLiteral("r"), geometry.value(QStringLiteral("inner_r")).toDouble());

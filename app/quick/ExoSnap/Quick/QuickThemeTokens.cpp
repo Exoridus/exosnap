@@ -124,19 +124,11 @@ void QuickThemeTokens::setAppearance(const QString& appearance_id, const QString
     accent_ink_ = parseToken(dark_ ? accent.dark_ink : accent.light_ink);
     overlay_accent_ = parseToken(accent.dark);
 
-    // The one token this product cannot deliver through a QML property. Text's
-    // linkColor reaches only the StyledText parser; MarkdownText and RichText go
-    // through QTextDocument, which colours anchors from the application palette's
-    // Link role. Left alone it is whatever the platform theme supplies -- on a
-    // machine whose Windows accent is green, the release notes draw their links
-    // in the colour this product reserves for "ready".
-    if (QGuiApplication::instance() != nullptr) {
-        QPalette palette = QGuiApplication::palette();
-        if (palette.color(QPalette::Link) != accent_) {
-            palette.setColor(QPalette::Link, accent_);
-            QGuiApplication::setPalette(palette);
-        }
-    }
+    // Applied here rather than built here: the palette is a pure function of the
+    // resolved tokens, which is what lets a test check it without an application
+    // object to hang it on.
+    if (QGuiApplication::instance() != nullptr)
+        QGuiApplication::setPalette(widgetsPalette());
 
     // Ink for content on a success- or caution-FILLED surface, completing the
     // set the table already curates for the two fills whose hue moves: the
@@ -324,6 +316,38 @@ QColor QuickThemeTokens::overlayError() noexcept {
 }
 QColor QuickThemeTokens::overlayAccent() const noexcept {
     return overlay_accent_;
+}
+
+QPalette QuickThemeTokens::widgetsPalette() const {
+    QPalette palette = QGuiApplication::instance() != nullptr ? QGuiApplication::palette() : QPalette();
+
+    // Menu ground and ink. `surfaceRaised` rather than `background`: a menu is a
+    // surface that floats above the window, and the same rung the application's
+    // own popovers sit on is what makes it look like part of this product.
+    palette.setColor(QPalette::Window, surface_raised_);
+    palette.setColor(QPalette::WindowText, text_);
+    palette.setColor(QPalette::Base, surface_raised_);
+    palette.setColor(QPalette::Text, text_);
+    palette.setColor(QPalette::Button, surface_raised_);
+    palette.setColor(QPalette::ButtonText, text_);
+    palette.setColor(QPalette::ToolTipBase, surface_raised_);
+    palette.setColor(QPalette::ToolTipText, text_);
+
+    // The hovered row. Accent and its own ink, the same pair every primary
+    // control in the application uses, so a highlighted menu row cannot be a
+    // different colour from the control that opened it.
+    palette.setColor(QPalette::Highlight, accent_);
+    palette.setColor(QPalette::HighlightedText, accent_ink_);
+
+    // A refused row. `dim` is the rung the product already draws an unavailable
+    // control's icon in, and it clears the 3:1 the contrast gate holds a
+    // non-text element to on this surface.
+    palette.setColor(QPalette::Disabled, QPalette::WindowText, text_dim_);
+    palette.setColor(QPalette::Disabled, QPalette::Text, text_dim_);
+    palette.setColor(QPalette::Disabled, QPalette::ButtonText, text_dim_);
+
+    palette.setColor(QPalette::Link, accent_);
+    return palette;
 }
 
 } // namespace exosnap::quick

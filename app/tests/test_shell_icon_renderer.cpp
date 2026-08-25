@@ -18,6 +18,7 @@
 #include <QPainter>
 #include <QProcessEnvironment>
 #include <QRegularExpression>
+#include <QSet>
 
 #include <cmath>
 #include <cstring>
@@ -27,11 +28,11 @@
 
 using exosnap::ShellIconState;
 using exosnap::ui::brand::BrandMarkAssetPath;
+using exosnap::ui::brand::BrandMarkFrameCount;
 using exosnap::ui::brand::BrandMarkIsAnimated;
 using exosnap::ui::brand::BrandMarkKind;
 using exosnap::ui::brand::BrandMarkKindFor;
 using exosnap::ui::brand::GlyphImageId;
-using exosnap::ui::brand::kBrandMarkFrameCount;
 using exosnap::ui::brand::kLargeProfile;
 using exosnap::ui::brand::kMediumProfile;
 using exosnap::ui::brand::kMediumProfileMaxPx;
@@ -64,6 +65,10 @@ constexpr ShellGlyph kAllGlyphs[] = {
     ShellGlyph::Record, ShellGlyph::Pause,         ShellGlyph::Resume, ShellGlyph::Stop,
     ShellGlyph::Window, ShellGlyph::Notifications, ShellGlyph::Folder, ShellGlyph::Quit,
 };
+
+QString KindName(BrandMarkKind kind) {
+    return kind == BrandMarkKind::Recording ? QStringLiteral("recording") : QStringLiteral("processing");
+}
 
 ShellMarkRequest Mark(BrandMarkKind kind, int px = 64) {
     ShellMarkRequest request;
@@ -300,42 +305,82 @@ TEST(ShellIconRendererAnimation, OnlyTheTwoSequencesHaveFrames) {
     for (const BrandMarkKind kind : kAllKinds) {
         const bool animated = kind == BrandMarkKind::Recording || kind == BrandMarkKind::Processing;
         EXPECT_EQ(BrandMarkIsAnimated(kind), animated);
+        EXPECT_EQ(BrandMarkFrameCount(kind) > 1, animated);
     }
 }
 
-TEST(ShellIconRendererAnimation, EveryFrameOfASequenceIsItsOwnDrawing) {
+TEST(ShellIconRendererAnimation, ASequenceMovesOnEveryTickExceptItsRest) {
+    // The recording loop's last frame repeats its first on purpose -- that pause
+    // at the bottom is what makes it a heartbeat. Every other pair differs, or
+    // the sequence would be holding still where it should be moving.
     for (const BrandMarkKind kind : {BrandMarkKind::Recording, BrandMarkKind::Processing}) {
         QList<QImage> frames;
-        for (int frame = 0; frame < kBrandMarkFrameCount; ++frame) {
+        for (int frame = 0; frame < BrandMarkFrameCount(kind); ++frame) {
             ShellMarkRequest request = Mark(kind);
             request.frame = frame;
-            frames.append(RenderMark(request));
+            const QImage image = RenderMark(request);
+            ASSERT_FALSE(image.isNull()) << BrandMarkAssetPath(kind, frame).toStdString() << " did not render";
+            frames.append(image);
         }
+        const int last = int(frames.size()) - 1;
         for (int i = 0; i < frames.size(); ++i) {
-            for (int j = i + 1; j < frames.size(); ++j)
+            for (int j = i + 1; j < frames.size(); ++j) {
+                if (kind == BrandMarkKind::Recording && i == 0 && j == last)
+                    continue;
                 EXPECT_NE(frames.at(i), frames.at(j)) << "frames " << i << " and " << j << " are identical";
+            }
         }
     }
 }
 
-TEST(ShellIconRendererAnimation, TheBeatRisesFromItsTroughToThePeakItRestsOn) {
-    // The transition ends on the peak, so the last frame of the beat and the
-    // static recording mark are the same image. A trough that carried as much
-    // ink as the peak would be no beat at all.
-    ShellMarkRequest trough = Mark(BrandMarkKind::Recording, 32);
-    ShellMarkRequest peak = trough;
-    peak.frame = exosnap::kRecordingPulsePeakFrame;
-    EXPECT_LT(CoveredAlpha(RenderMark(trough)), CoveredAlpha(RenderMark(peak)));
+TEST(ShellIconRendererAnimation, TheBeatIsBrightnessAndNothingElse) {
+    // What makes a permanent beat affordable at 16 px. A frame that moved a
+    // radius as well would differ from its neighbour by well under a device
+    // pixel, and that reads as a flicker rather than as a heartbeat.
+    const auto palette = ResolvePalette(QStringLiteral("dark"), QStringLiteral("aqua"));
+    const QRegularExpression radius(QStringLiteral("<circle[^>]*r=\"([0-9.]+)\"[^>]*stroke-width"));
+    QSet<QString> inner_radii;
+    QSet<QString> opacities;
+    for (int frame = 0; frame < BrandMarkFrameCount(BrandMarkKind::Recording); ++frame) {
+        const QString svg =
+            QString::fromUtf8(ThemedBrandMarkSvg(BrandMarkKind::Recording, frame, palette, kLargeProfile));
+        QRegularExpressionMatchIterator it = radius.globalMatch(svg);
+        while (it.hasNext())
+            inner_radii.insert(it.next().captured(1));
+        opacities.insert(svg);
+    }
+    // Two radii across the whole loop: the outer ring and the inner one, neither
+    // of which moves.
+    EXPECT_EQ(inner_radii.size(), 2);
+    // And the frames are nonetheless different, which is the brightness. One
+    // fewer than the frame count, because the loop's rest repeats its first
+    // frame.
+    EXPECT_EQ(opacities.size(), BrandMarkFrameCount(BrandMarkKind::Recording) - 1);
+}
+
+TEST(ShellIconRendererAnimation, TheLoopRestsAtItsDimmestFrame) {
+    // The first and last frames are the same drawing on purpose: the beat pauses
+    // at the bottom, which is what makes it a heartbeat rather than a metronome.
+    const int last = BrandMarkFrameCount(BrandMarkKind::Recording) - 1;
+    ShellMarkRequest first = Mark(BrandMarkKind::Recording, 32);
+    ShellMarkRequest rest = first;
+    rest.frame = last;
+    EXPECT_EQ(RenderMark(first), RenderMark(rest));
+
+    // And the middle of the loop is brighter than either end.
+    ShellMarkRequest peak = first;
+    peak.frame = 2;
+    EXPECT_GT(CoveredAlpha(RenderMark(peak)), CoveredAlpha(RenderMark(first)));
 }
 
 TEST(ShellIconRendererAnimation, AFrameCounterThatRanPastTheEndStillNamesAFrame) {
     // The counter indexes a beat, not an array. Wrapping rather than clamping is
     // what keeps a tick delivered late from asking for a resource that is not
     // there.
-    EXPECT_EQ(BrandMarkAssetPath(BrandMarkKind::Recording, kBrandMarkFrameCount),
+    EXPECT_EQ(BrandMarkAssetPath(BrandMarkKind::Recording, BrandMarkFrameCount(BrandMarkKind::Recording)),
               BrandMarkAssetPath(BrandMarkKind::Recording, 0));
     EXPECT_EQ(BrandMarkAssetPath(BrandMarkKind::Recording, -1),
-              BrandMarkAssetPath(BrandMarkKind::Recording, kBrandMarkFrameCount - 1));
+              BrandMarkAssetPath(BrandMarkKind::Recording, BrandMarkFrameCount(BrandMarkKind::Recording) - 1));
 }
 
 TEST(ShellIconRendererAnimation, AStaticMarkIgnoresTheFrame) {
@@ -562,10 +607,10 @@ TEST(ShellIconRendererCache, AWholeRecordingCostsTheFramesAndNoMore) {
     ShellIconCache cache;
     for (int tick = 0; tick < 200; ++tick) {
         ShellMarkRequest request = Mark(BrandMarkKind::Recording, 16);
-        request.frame = tick % kBrandMarkFrameCount;
+        request.frame = tick % BrandMarkFrameCount(BrandMarkKind::Recording);
         (void)cache.mark(request);
     }
-    EXPECT_EQ(cache.sizeForTest(), kBrandMarkFrameCount);
+    EXPECT_EQ(cache.sizeForTest(), BrandMarkFrameCount(BrandMarkKind::Recording));
 }
 
 TEST(ShellIconRendererCache, ACachedImageIsTheRenderedOne) {
@@ -666,5 +711,28 @@ TEST(ShellIconRendererEvidence, WritesTheSizeSweepWhenAskedFor) {
         glyph_painter.end();
         const QString glyph_path = QStringLiteral("%1/menu-glyphs-%2.png").arg(directory, appearance);
         EXPECT_TRUE(strip.save(glyph_path)) << glyph_path.toStdString();
+
+        // The two loops, frame by frame, at the sizes the shell plays them at.
+        for (const BrandMarkKind kind : {BrandMarkKind::Recording, BrandMarkKind::Processing}) {
+            const int count = BrandMarkFrameCount(kind);
+            QImage loop(kMargin + count * kCell, kMargin + int(glyph_sizes.size()) * kCell,
+                        QImage::Format_ARGB32_Premultiplied);
+            loop.fill(appearance == QStringLiteral("dark") ? QColor(0x0E, 0x0E, 0x10) : QColor(0xE7, 0xE9, 0xED));
+            QPainter loop_painter(&loop);
+            int size_row = 0;
+            for (const int px : glyph_sizes) {
+                for (int frame = 0; frame < count; ++frame) {
+                    ShellMarkRequest request = Mark(kind, px);
+                    request.frame = frame;
+                    request.appearance_id = appearance;
+                    loop_painter.drawImage(QRect(kMargin + frame * kCell, kMargin + size_row * kCell, 224, 224),
+                                           RenderMark(request));
+                }
+                ++size_row;
+            }
+            loop_painter.end();
+            const QString loop_path = QStringLiteral("%1/loop-%2-%3.png").arg(directory, KindName(kind), appearance);
+            EXPECT_TRUE(loop.save(loop_path)) << loop_path.toStdString();
+        }
     }
 }

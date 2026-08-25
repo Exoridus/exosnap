@@ -17,6 +17,7 @@
 #include <QTimer>
 #include <QtQmlIntegration/qqmlintegration.h>
 
+#include "models/RecordingPulse.h"
 #include "models/ShellPresence.h"
 
 namespace exosnap {
@@ -64,8 +65,9 @@ class ShellPresenceAdapter : public QObject {
     // accessor rather than one per animation, because the surfaces render one
     // mark and asking them to pick would be asking them to re-derive the state.
     [[nodiscard]] int markFrame() const noexcept;
-    // Whether the recording-entry beat is still playing. It ends on its own after
-    // a fixed couple of cycles, which is what makes the shell go static.
+    // Whether the recording beat is running. True for as long as the recording
+    // is, and false the moment it is not: the beat IS the recording state, not
+    // an announcement of having entered it.
     [[nodiscard]] bool shellPulseActive() const noexcept;
 
     // ---- test seams ------------------------------------------------------
@@ -77,12 +79,11 @@ class ShellPresenceAdapter : public QObject {
     // that is no longer current is the stale-callback case, and it must change
     // nothing.
     void expireSavedDwellForTest(quint64 generation);
-    // Runs one beat tick. The real timer is stopped as soon as the transition
-    // ends, so a test that keeps calling this is exercising the same guard a
+    // Runs one beat tick. The timer is stopped the moment the recording is not
+    // running, so a test that keeps calling this is exercising the same guard a
     // queued timeout delivered after a state change hits.
     void advancePulseForTest();
     [[nodiscard]] bool pulseRunningForTest() const;
-    [[nodiscard]] int pulseTicksRemainingForTest() const noexcept;
     // The finalizing settle is a quarter second of wall clock; a test that waited
     // it out would be measuring QTimer.
     void setFinalizingSettleMsForTest(int ms);
@@ -115,10 +116,7 @@ class ShellPresenceAdapter : public QObject {
     ShellPresenceState state_;
 
     QTimer pulse_timer_;
-    int pulse_frame_ = 0;
-    // Counts the entry beat down. Zero means the shell is showing a static
-    // state, whether or not a recording is running.
-    int pulse_ticks_remaining_ = 0;
+    int pulse_frame_ = kRecordingPulseFirstFrame;
 
     // Finalizing has no colour of its own -- the recording is over and the file is
     // not there yet -- so it projects to the neutral mark. Painting that the
@@ -145,9 +143,9 @@ class ShellPresenceAdapter : public QObject {
     // stop.
     quint64 saved_generation_ = 0;
     bool had_completed_recording_ = false;
-    // The edge the entry beat is armed on. A flag rather than a comparison
-    // against the previous state, because republish() runs on cadences that do
-    // not change the phase at all.
+    // The edge the beat is restarted on. A flag rather than a comparison against
+    // the previous state, because republish() runs on cadences that do not
+    // change the phase at all.
     bool was_recording_ = false;
 };
 

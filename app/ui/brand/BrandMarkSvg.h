@@ -38,12 +38,21 @@ enum class BrandMarkKind {
     Error,
 };
 
-// Frames in an animated mark. The cadence and how long a surface plays them for
-// belong to models/RecordingPulse.h; this is only how many files there are.
-inline constexpr int kBrandMarkFrameCount = 4;
+// Frames each animated mark ships. The two sequences differ: the recording beat
+// rests at the bottom of its loop for two ticks, which is what makes it read as
+// a heartbeat rather than as a metronome, and the processing arc has no rest.
+//
+// The cadence belongs to models/RecordingPulse.h; this is only how many files
+// there are.
+inline constexpr int kRecordingMarkFrameCount = 6;
+inline constexpr int kProcessingMarkFrameCount = 4;
 
 // Whether `kind` is a sequence rather than a single drawing.
 [[nodiscard]] bool BrandMarkIsAnimated(BrandMarkKind kind) noexcept;
+
+// How many frames `kind` has. One for a static drawing, so a caller can index
+// it without asking whether it is animated first.
+[[nodiscard]] int BrandMarkFrameCount(BrandMarkKind kind) noexcept;
 
 // The Qt resource path of one drawing. `frame` is ignored for a static kind and
 // wrapped into range for an animated one, so an out-of-date frame counter cannot

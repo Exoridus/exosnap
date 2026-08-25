@@ -40,10 +40,9 @@ REPO = pathlib.Path(__file__).resolve().parent.parent
 MARKS_DIR = REPO / "app" / "assets" / "brand" / "marks"
 PARAMETERS = MARKS_DIR / "parameters.json"
 
-# Frames per animated state. Four: the shell renders them as whole-icon swaps and
-# a fifth buys nothing at 16 px. app/models/RecordingPulse.h holds the cadence and
-# is the authority on how long the shell plays them for.
-FRAME_COUNT = 4
+# Frames per animated state. The shell renders them as whole-icon swaps;
+# app/models/RecordingPulse.h holds the cadence.
+PROCESSING_FRAME_COUNT = 4
 
 
 def num(value: float, decimals: int = 2) -> str:
@@ -182,15 +181,27 @@ class Marks:
 
     # --- animations ---------------------------------------------------------
 
-    # The recording beat, as modulations of the canonical aperture: trough, rise,
-    # peak, fall. Multipliers rather than absolute radii, so moving the inner ring
-    # moves the beat with it. Frame 2 is the peak and is what a static recording
-    # rests on.
-    RECORDING_FRAMES = [
-        {"ring_r": 0.9784, "ring_w": 0.8429, "ring_o": 0.76, "dot_r": 0.8945, "dot_o": 0.98},
-        {"ring_r": 0.9865, "ring_w": 0.8786, "ring_o": 0.84, "dot_r": 1.1055, "dot_o": 1.00},
-        {"ring_r": 1.0108, "ring_w": 1.0571, "ring_o": 1.00, "dot_r": 0.9964, "dot_o": 0.94},
-        {"ring_r": 0.9919, "ring_w": 0.9286, "ring_o": 0.88, "dot_r": 0.9236, "dot_o": 0.90},
+    # The recording beat: the canonical aperture at three brightness levels, with
+    # the light travelling outwards from the dot to the ring and back.
+    #
+    # ALPHA ONLY, and deliberately so. The designer cut's recording candidate
+    # modulated the radii as well, and at 16 px two adjacent frames of that differ
+    # by well under a device pixel -- it read as a flicker in the corner of the
+    # screen rather than as a heartbeat. Brightness has no sub-pixel problem at
+    # any size.
+    #
+    # The first and last frames are the same on purpose: the loop rests at the
+    # bottom for two ticks, which is what makes it a heartbeat rather than a
+    # metronome.
+    DIM, MID, BRIGHT = 0.42, 0.70, 1.0
+    RECORDING_LEVELS = [
+        # (dot, ring)
+        (DIM, DIM),
+        (MID, DIM),
+        (BRIGHT, MID),
+        (MID, BRIGHT),
+        (DIM, MID),
+        (DIM, DIM),
     ]
 
     # The processing animation: the inner ring becomes a rotating dashed arc and
@@ -207,19 +218,18 @@ class Marks:
     ]
 
     def recording_frame(self, index: int) -> str:
-        frame = self.RECORDING_FRAMES[index]
+        dot, ring = self.RECORDING_LEVELS[index]
         return self.document([
             self.outer_ring(),
-            self.circle(self.inner_r * frame["ring_r"], stroke=self.recording,
-                        width=self.inner_w * frame["ring_w"], opacity=frame["ring_o"]),
-            self.disc(self.center_r * frame["dot_r"], self.recording, opacity=frame["dot_o"]),
+            self.circle(self.inner_r, stroke=self.recording, width=self.inner_w, opacity=ring),
+            self.disc(self.center_r, self.recording, opacity=dot),
         ])
 
     def processing_frame(self, index: int) -> str:
         segment = 2.0 * math.pi * self.inner_r / self.PROCESSING_DASH_COUNT
         dash = segment * self.PROCESSING_DASH_FRACTION
         gap = segment - dash
-        offset = -index * segment / FRAME_COUNT
+        offset = -index * segment / PROCESSING_FRAME_COUNT
         arc = self.circle(
             self.inner_r, stroke=self.accent, width=self.inner_w,
             extra=(f'stroke-linecap="round" stroke-dasharray="{num(dash, 5)} {num(gap, 5)}"'
@@ -247,8 +257,9 @@ class Marks:
             "warning.svg": self.warning(),
             "error.svg": self.error(),
         }
-        for index in range(FRAME_COUNT):
+        for index in range(len(self.RECORDING_LEVELS)):
             files[f"recording-f{index}.svg"] = self.recording_frame(index)
+        for index in range(PROCESSING_FRAME_COUNT):
             files[f"processing-f{index}.svg"] = self.processing_frame(index)
         return files
 

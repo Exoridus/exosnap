@@ -2,6 +2,9 @@
 
 #include "QuickThemeTokens.h"
 
+#include <QGuiApplication>
+#include <QPalette>
+
 #include <capability/capability_builder.h>
 
 #include <QVariantMap>
@@ -454,6 +457,28 @@ TEST_F(SettingsAdapterTest, AppearanceAndAccentOptionsOnlyOfferShippedIds) {
         tokens.setAppearance(QStringLiteral("dark"), id);
         EXPECT_EQ(tokens.accentId(), id);
     }
+}
+
+TEST_F(SettingsAdapterTest, TheWidgetsPaletteFollowsTheAppearance) {
+    // The tray menu is a QMenu: Qt.labs.platform's Menu is native only on macOS,
+    // iOS, Android and GTK+ Linux, and falls back to Qt Widgets everywhere else.
+    // A QMenu takes its colours from the application palette, so an unset palette
+    // is a light menu underneath a dark application.
+    QuickThemeTokens dark;
+    dark.setAppearance(QStringLiteral("dark"), QStringLiteral("aqua"));
+    const QPalette dark_palette = dark.widgetsPalette();
+    EXPECT_EQ(dark_palette.color(QPalette::Window), dark.surfaceRaised());
+    EXPECT_EQ(dark_palette.color(QPalette::WindowText), dark.text());
+    EXPECT_EQ(dark_palette.color(QPalette::Highlight), dark.accent());
+    EXPECT_EQ(dark_palette.color(QPalette::HighlightedText), dark.accentInk());
+    EXPECT_EQ(dark_palette.color(QPalette::Disabled, QPalette::Text), dark.textDim());
+
+    QuickThemeTokens light;
+    light.setAppearance(QStringLiteral("light"), QStringLiteral("aqua"));
+    const QPalette light_palette = light.widgetsPalette();
+    EXPECT_EQ(light_palette.color(QPalette::Window), light.surfaceRaised());
+    EXPECT_NE(light_palette.color(QPalette::Window), dark_palette.color(QPalette::Window))
+        << "the menu did not follow the appearance change";
 }
 
 TEST_F(SettingsAdapterTest, UnknownAppearanceOrAccentFallsBackToTheShippedDefault) {

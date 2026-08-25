@@ -139,10 +139,6 @@ bool ShellPresenceAdapter::pulseRunningForTest() const {
     return pulse_timer_.isActive();
 }
 
-int ShellPresenceAdapter::pulseTicksRemainingForTest() const noexcept {
-    return pulse_ticks_remaining_;
-}
-
 void ShellPresenceAdapter::armSavedDwell() {
     ++saved_generation_;
     input_.saved_dwell_active = true;
@@ -207,57 +203,42 @@ void ShellPresenceAdapter::republish() {
 }
 
 void ShellPresenceAdapter::syncPulseTimer() {
-    // The beat marks an ENTRY into Recording, so it is armed on the edge and not
-    // by the state being true. Resume is such an edge: re-entering capturing is
-    // the same event as entering it, and the shell says so the same way.
-    //
-    // A countdown does not beat. It shows the recording badge and holds it
-    // still, which is what makes "committed" and "capturing" tell apart.
+    // The beat runs while the capture does, and not a tick longer. A countdown
+    // does not beat: it shows the recording badge and holds it still, which is
+    // what makes "committed" and "capturing" tell apart at a glance.
     const bool recording = state_.phase == ShellPhase::Recording;
-    if (recording && !was_recording_) {
+    if (recording) {
+        if (was_recording_)
+            return;
         was_recording_ = true;
-        // Every entry starts at the trough, so the beat is in the same place
-        // relative to the recording each time.
-        pulse_frame_ = 0;
-        pulse_ticks_remaining_ = kRecordingPulseTransitionTicks;
+        // Every entry starts at the bottom of the loop, so the beat sits in the
+        // same place relative to the recording each time -- including a resume,
+        // which is the same event as an entry.
+        pulse_frame_ = kRecordingPulseFirstFrame;
         pulse_timer_.start();
         emit pulseChanged();
         return;
     }
-    if (recording)
-        return;
 
     was_recording_ = false;
-    if (!pulse_timer_.isActive() && pulse_frame_ == kRecordingPulsePeakFrame && pulse_ticks_remaining_ == 0)
+    if (!pulse_timer_.isActive() && pulse_frame_ == kRecordingPulseFirstFrame)
         return;
     // Leaving Recording cancels the beat outright -- Pause, Stop and Finalizing
     // are all static, and a surviving tick would repaint one of them with a
     // recording frame.
     pulse_timer_.stop();
-    pulse_ticks_remaining_ = 0;
-    pulse_frame_ = kRecordingPulsePeakFrame;
+    pulse_frame_ = kRecordingPulseFirstFrame;
     emit pulseChanged();
 }
 
 void ShellPresenceAdapter::onPulseTick() {
-    // The countdown is the ONLY guard, and it is zeroed the moment the state
-    // leaves Recording. Qt can deliver a queued timeout after stop(), and a tick
-    // that repainted a paused tray with a recording frame would leave the shell
-    // describing a recording that has stopped -- with nothing left to correct it,
-    // because the beat that would have moved on is gone too.
-    if (pulse_ticks_remaining_ <= 0)
+    // The state is the ONLY guard. Qt can deliver a queued timeout after stop(),
+    // and a tick that repainted a paused tray with a recording frame would leave
+    // the shell describing a recording that has stopped -- with nothing left to
+    // correct it, because the beat that would have moved on is gone too.
+    if (state_.phase != ShellPhase::Recording)
         return;
-
-    --pulse_ticks_remaining_;
-    if (pulse_ticks_remaining_ <= 0) {
-        // The transition is over. It ends on the peak, which IS the static
-        // recording mark, so the last frame of the beat and the state it settles
-        // into are the same image.
-        pulse_timer_.stop();
-        pulse_frame_ = kRecordingPulsePeakFrame;
-    } else {
-        pulse_frame_ = NextRecordingPulseFrame(pulse_frame_);
-    }
+    pulse_frame_ = NextRecordingPulseFrame(pulse_frame_);
     emit pulseChanged();
 }
 

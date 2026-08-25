@@ -18,11 +18,9 @@
 
 using exosnap::kProcessingFrameCount;
 using exosnap::kProcessingFrameIntervalMs;
+using exosnap::kRecordingPulseFirstFrame;
 using exosnap::kRecordingPulseFrameCount;
 using exosnap::kRecordingPulseIntervalMs;
-using exosnap::kRecordingPulsePeakFrame;
-using exosnap::kRecordingPulseTransitionCycles;
-using exosnap::kRecordingPulseTransitionTicks;
 using exosnap::kShellButtonIdPauseResume;
 using exosnap::kShellButtonIdRecord;
 using exosnap::kShellButtonIdStop;
@@ -198,20 +196,20 @@ TEST(ShellPresenceAdapterPulse, ACountdownShowsTheRecordingBadgeButHoldsItStill)
     EXPECT_FALSE(adapter.pulseRunningForTest());
 }
 
-TEST(ShellPresenceAdapterPulse, ARecordingThatOutlastsTheBeatRestsOnThePeakFrame) {
-    // The transition ends on the peak, which IS the static recording mark, so the
-    // last frame of the beat and the state it settles into are the same image.
+TEST(ShellPresenceAdapterPulse, TheBeatRunsForAsLongAsTheRecordingDoes) {
+    // Not a transition any more. The frames modulate brightness only, which has
+    // no sub-pixel problem at 16 px, so the mark can keep beating instead of
+    // announcing the state change and then going still.
     EnsureApplication();
     ShellPresenceAdapter adapter;
     adapter.setRecordingState(UiRecordingState::Recording, false, true, true, false, false);
-    adapter.advancePulseForTest();
-    ASSERT_NE(adapter.markFrame(), kRecordingPulsePeakFrame);
+    ASSERT_TRUE(adapter.shellPulseActive());
 
-    for (int tick = 0; tick < kRecordingPulseTransitionTicks; ++tick)
+    for (int tick = 0; tick < kRecordingPulseFrameCount * 5; ++tick) {
         adapter.advancePulseForTest();
-    EXPECT_FALSE(adapter.shellPulseActive());
+        EXPECT_TRUE(adapter.shellPulseActive()) << "the beat stopped at tick " << tick;
+    }
     EXPECT_EQ(adapter.presence().icon_state, ShellIconState::Recording);
-    EXPECT_EQ(adapter.markFrame(), kRecordingPulsePeakFrame);
 }
 
 TEST(ShellPresenceAdapterPulse, AStaticMarkHasNoFrameAtAll) {
@@ -228,81 +226,60 @@ TEST(ShellPresenceAdapterPulse, AStaticMarkHasNoFrameAtAll) {
     EXPECT_EQ(adapter.markFrame(), 0);
 }
 
-TEST(ShellPresenceAdapterPulse, EveryRecordingStartsAtTheTrough) {
+TEST(ShellPresenceAdapterPulse, EveryRecordingStartsAtTheBottomOfTheLoop) {
     EnsureApplication();
     ShellPresenceAdapter adapter;
     adapter.setRecordingState(UiRecordingState::Recording, false, true, true, false, false);
     adapter.advancePulseForTest();
-    ASSERT_NE(adapter.markFrame(), 0);
+    ASSERT_NE(adapter.markFrame(), kRecordingPulseFirstFrame);
 
     adapter.setRecordingState(UiRecordingState::Ready, true, false, false, false, false);
     adapter.setRecordingState(UiRecordingState::Recording, false, true, true, false, false);
-    EXPECT_EQ(adapter.markFrame(), 0);
+    EXPECT_EQ(adapter.markFrame(), kRecordingPulseFirstFrame);
 }
 
 TEST(ShellPresenceAdapterPulse, ThePhaseWrapsThroughTheWholeBeat) {
     EnsureApplication();
     ShellPresenceAdapter adapter;
     adapter.setRecordingState(UiRecordingState::Recording, false, true, true, false, false);
-    for (int i = 0; i < kRecordingPulseFrameCount; ++i)
-        adapter.advancePulseForTest();
-    EXPECT_EQ(adapter.markFrame(), 0);
-}
-
-// -- ShellPresenceAdapter: the beat is a transition, not a state --------------
-
-TEST(ShellPresenceAdapterPulse, TheBeatIsArmedForExactlyTheConfiguredNumberOfCycles) {
-    EnsureApplication();
-    ShellPresenceAdapter adapter;
-    adapter.setRecordingState(UiRecordingState::Recording, false, true, true, false, false);
-    EXPECT_EQ(adapter.pulseTicksRemainingForTest(), kRecordingPulseTransitionTicks);
-    EXPECT_EQ(kRecordingPulseTransitionTicks, kRecordingPulseTransitionCycles * kRecordingPulseFrameCount);
-}
-
-TEST(ShellPresenceAdapterPulse, TheBeatEndsAndTheRecordingStaysStatic) {
-    EnsureApplication();
-    ShellPresenceAdapter adapter;
-    adapter.setRecordingState(UiRecordingState::Recording, false, true, true, false, false);
-    for (int i = 0; i < kRecordingPulseTransitionTicks; ++i) {
-        EXPECT_TRUE(adapter.shellPulseActive()) << "stopped early at tick " << i;
+    QSet<int> seen;
+    for (int i = 0; i < kRecordingPulseFrameCount; ++i) {
+        seen.insert(adapter.markFrame());
         adapter.advancePulseForTest();
     }
-    EXPECT_FALSE(adapter.shellPulseActive());
-    // The peak IS the static recording mark, so the beat's last frame and the
-    // state it settles into are the same image.
-    EXPECT_EQ(adapter.markFrame(), kRecordingPulsePeakFrame);
-    EXPECT_EQ(adapter.presence().icon_state, ShellIconState::Recording);
+    EXPECT_EQ(seen.size(), kRecordingPulseFrameCount);
+    EXPECT_EQ(adapter.markFrame(), kRecordingPulseFirstFrame);
 }
 
-TEST(ShellPresenceAdapterPulse, AFinishedBeatDoesNotRestartWhileTheRecordingRuns) {
+TEST(ShellPresenceAdapterPulse, TheMetricsCadenceDoesNotRestartTheBeat) {
+    // republish() runs several times a second on state that has not changed. A
+    // beat rearmed by each of those would sit on its first frame forever.
     EnsureApplication();
     ShellPresenceAdapter adapter;
     adapter.setRecordingState(UiRecordingState::Recording, false, true, true, false, false);
-    for (int i = 0; i < kRecordingPulseTransitionTicks; ++i)
-        adapter.advancePulseForTest();
-    ASSERT_FALSE(adapter.shellPulseActive());
+    adapter.advancePulseForTest();
+    adapter.advancePulseForTest();
+    const int frame = adapter.markFrame();
+    ASSERT_NE(frame, kRecordingPulseFirstFrame);
 
-    // The metrics cadence republishes the same state several times a second.
     for (int i = 0; i < 5; ++i)
         adapter.setRecordingState(UiRecordingState::Recording, false, true, true, false, false);
-    EXPECT_FALSE(adapter.shellPulseActive());
-    EXPECT_EQ(adapter.markFrame(), kRecordingPulsePeakFrame);
+    EXPECT_TRUE(adapter.shellPulseActive());
+    EXPECT_EQ(adapter.markFrame(), frame) << "the beat restarted on a republish";
 }
 
-TEST(ShellPresenceAdapterPulse, ResumeStartsTheTransitionAgain) {
+TEST(ShellPresenceAdapterPulse, ResumeStartsTheBeatAgainFromTheBottom) {
     EnsureApplication();
     ShellPresenceAdapter adapter;
     adapter.setRecordingState(UiRecordingState::Recording, false, true, true, false, false);
-    for (int i = 0; i < kRecordingPulseTransitionTicks; ++i)
-        adapter.advancePulseForTest();
-    ASSERT_FALSE(adapter.shellPulseActive());
+    adapter.advancePulseForTest();
 
     adapter.setRecordingState(UiRecordingState::Paused, false, true, false, true, false);
     ASSERT_FALSE(adapter.shellPulseActive());
     // Re-entering capturing is the same event as entering it.
     adapter.setRecordingState(UiRecordingState::Recording, false, true, true, false, false);
     EXPECT_TRUE(adapter.shellPulseActive());
-    EXPECT_EQ(adapter.pulseTicksRemainingForTest(), kRecordingPulseTransitionTicks);
+    EXPECT_EQ(adapter.markFrame(), kRecordingPulseFirstFrame);
 }
 
 TEST(ShellPresenceAdapterPulse, StoppingCancelsTheBeat) {
@@ -314,7 +291,7 @@ TEST(ShellPresenceAdapterPulse, StoppingCancelsTheBeat) {
 
     adapter.setRecordingState(UiRecordingState::Stopping, false, false, false, false, false);
     EXPECT_FALSE(adapter.shellPulseActive());
-    EXPECT_EQ(adapter.pulseTicksRemainingForTest(), 0);
+    EXPECT_EQ(adapter.markFrame(), 0);
 }
 
 TEST(ShellPresenceAdapterPulse, AStalePulseTickCannotRepaintALaterState) {
@@ -508,13 +485,13 @@ TEST(ShellPresenceAdapterProcessing, TheTimerActuallyRunsOnItsOwn) {
     EXPECT_TRUE(SpinUntil([&adapter]() { return adapter.markFrame() != 0; }, 4000));
 }
 
-TEST(ShellPresenceAdapterProcessing, TheTwoSequencesShareOneCadence) {
-    // They were authored together at 250 ms a frame. A difference between them
-    // would be a decision, and there is nowhere for one to hide: this is the
-    // whole of it.
+TEST(ShellPresenceAdapterProcessing, TheTwoSequencesShareOneCadenceAndNotOneLength) {
+    // One tick rate, so a stop that crosses from one sequence to the other does
+    // not change pace. Different lengths on purpose: the recording loop rests at
+    // the bottom, and a spinner that paused would read as a stalled operation.
     EXPECT_EQ(kProcessingFrameIntervalMs, kRecordingPulseIntervalMs);
-    EXPECT_EQ(kProcessingFrameCount, kRecordingPulseFrameCount);
     EXPECT_EQ(kRecordingPulseIntervalMs, 250);
+    EXPECT_NE(kProcessingFrameCount, kRecordingPulseFrameCount);
 }
 
 TEST(ShellPresenceAdapterSaved, ASuccessfulRecordingTurnsTheBadgeGreenForADwell) {

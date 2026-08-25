@@ -71,6 +71,18 @@ bool BrandMarkIsAnimated(BrandMarkKind kind) noexcept {
     return kind == BrandMarkKind::Recording || kind == BrandMarkKind::Processing;
 }
 
+int BrandMarkFrameCount(BrandMarkKind kind) noexcept {
+    switch (kind) {
+    case BrandMarkKind::Recording:
+        return kRecordingMarkFrameCount;
+    case BrandMarkKind::Processing:
+        return kProcessingMarkFrameCount;
+    default:
+        break;
+    }
+    return 1;
+}
+
 QString BrandMarkAssetPath(BrandMarkKind kind, int frame) {
     const QString stem = Stem(kind);
     if (!BrandMarkIsAnimated(kind))
@@ -78,7 +90,8 @@ QString BrandMarkAssetPath(BrandMarkKind kind, int frame) {
     // Wrapped rather than clamped or refused: the frame arrives from a counter
     // that indexes a beat, and a counter that ran past the end is still asking
     // for a real frame of it.
-    const int index = ((frame % kBrandMarkFrameCount) + kBrandMarkFrameCount) % kBrandMarkFrameCount;
+    const int count = BrandMarkFrameCount(kind);
+    const int index = ((frame % count) + count) % count;
     return QStringLiteral(":/brand/marks/%1-f%2.svg").arg(stem).arg(index);
 }
 
