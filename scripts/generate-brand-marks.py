@@ -76,6 +76,12 @@ class Marks:
         self.recording = colours["recording"]
         self.caution = colours["caution"]
         self.success = colours["success"]
+        # Not drawn by anything this script writes. `marks/wordmark.svg` is
+        # authored outlines rather than derived geometry, and it is the only
+        # asset in the suite that carries body ink -- but its colour belongs in
+        # the one palette table, because the runtime substitutes all five from
+        # the same list.
+        self.ink = colours["ink"]
 
     # --- primitives ---------------------------------------------------------
 

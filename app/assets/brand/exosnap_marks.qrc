@@ -1,6 +1,7 @@
 <RCC>
     <qresource prefix="/brand">
         <file>marks/brand.svg</file>
+        <file>marks/wordmark.svg</file>
         <file>marks/idle.svg</file>
         <file>marks/paused.svg</file>
         <file>marks/saved.svg</file>

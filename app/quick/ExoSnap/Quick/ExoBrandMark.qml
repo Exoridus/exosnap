@@ -15,6 +15,16 @@ import QtQuick
 Item {
     id: root
 
+    // The shell state the mark draws, and the frame of it -- both
+    // ShellPresenceAdapter's, passed through untouched. Deliberately NOT named
+    // `state`: Item declares a FINAL `state` of its own, and a property that
+    // shadows it makes this component silently unloadable.
+    //
+    // The default is the projection's Idle, which is the brand drawing, so a
+    // surface that has no session to show (the About card) binds nothing.
+    property int markState: 0
+    property int markFrame: 0
+
     implicitWidth: 18
     implicitHeight: 18
 
@@ -31,7 +41,7 @@ Item {
         // The palette ids rather than resolved colours: the renderer reads the
         // same theme table the application does, and resolving them here would be
         // a second answer to one question.
-        source: Brand.source(mark.rasterSize, QuickThemeTokens.appearanceId, QuickThemeTokens.accentId)
+        source: Brand.source(mark.rasterSize, QuickThemeTokens.appearanceId, QuickThemeTokens.accentId, root.markState, root.markFrame)
         sourceSize: Qt.size(mark.rasterSize, mark.rasterSize)
         fillMode: Image.PreserveAspectFit
         smooth: true

@@ -27,11 +27,13 @@
 #include <gtest/gtest.h>
 
 using exosnap::ShellIconState;
+using exosnap::ui::brand::BrandMarkAspect;
 using exosnap::ui::brand::BrandMarkAssetPath;
 using exosnap::ui::brand::BrandMarkFrameCount;
 using exosnap::ui::brand::BrandMarkIsAnimated;
 using exosnap::ui::brand::BrandMarkKind;
 using exosnap::ui::brand::BrandMarkKindFor;
+using exosnap::ui::brand::BrandMarkPalette;
 using exosnap::ui::brand::GlyphImageId;
 using exosnap::ui::brand::kLargeProfile;
 using exosnap::ui::brand::kMediumProfile;
@@ -122,6 +124,32 @@ QColor InnerAverage(const QImage& image) {
     return RingAverage(image, 0.14, 0.30);
 }
 
+// The average colour of the covered pixels in a horizontal band, as fractions of
+// the image width. Alpha-weighted, because glyph edges are antialiased against
+// nothing and a plain mean would drag every colour towards black.
+QColor AverageInk(const QImage& image, double from_fraction, double to_fraction) {
+    const int from = qBound(0, qRound(from_fraction * image.width()), image.width());
+    const int to = qBound(from, qRound(to_fraction * image.width()), image.width());
+    double r = 0.0;
+    double g = 0.0;
+    double b = 0.0;
+    double weight = 0.0;
+    for (int y = 0; y < image.height(); ++y) {
+        for (int x = from; x < to; ++x) {
+            const QColor pixel = image.pixelColor(x, y);
+            const double alpha = pixel.alphaF();
+            r += pixel.redF() * alpha;
+            g += pixel.greenF() * alpha;
+            b += pixel.blueF() * alpha;
+            weight += alpha;
+        }
+    }
+    if (weight <= 0.0)
+        return QColor(Qt::transparent);
+    return QColor::fromRgbF(static_cast<float>(r / weight), static_cast<float>(g / weight),
+                            static_cast<float>(b / weight));
+}
+
 double CoveredAlpha(const QImage& image) {
     double total = 0.0;
     for (int y = 0; y < image.height(); ++y) {
@@ -196,6 +224,58 @@ TEST(ShellIconRenderer, IdleIsTheBrandMark) {
 
 TEST(ShellIconRenderer, TheSameRequestProducesTheSameImage) {
     EXPECT_EQ(RenderMark(Mark(BrandMarkKind::Recording)), RenderMark(Mark(BrandMarkKind::Recording)));
+}
+
+TEST(ShellIconRenderer, TheApertureMarksAreSquare) {
+    // The renderer takes its aspect from the asset now. Every drawing in the
+    // aperture suite is authored on a square grid, so this is the half of that
+    // change nothing may notice.
+    for (const BrandMarkKind kind : kAllKinds) {
+        const QImage image = RenderMark(Mark(kind, 40));
+        EXPECT_EQ(image.width(), 40) << BrandMarkAssetPath(kind).toStdString();
+        EXPECT_EQ(image.height(), 40) << BrandMarkAssetPath(kind).toStdString();
+    }
+}
+
+TEST(ShellIconRenderer, TheWordmarkRendersAtTheAspectItsViewBoxAsks) {
+    // `px` is the raster HEIGHT. A wordmark forced into a square would either be
+    // letterboxed to a fifth of the height it asked for or squeezed flat, and
+    // both look like a bug in the title band rather than a bug in the renderer.
+    const QImage image = RenderMark(Mark(BrandMarkKind::Wordmark, 32));
+    ASSERT_FALSE(image.isNull());
+    EXPECT_EQ(image.height(), 32);
+    EXPECT_EQ(image.width(), qRound(32.0 * BrandMarkAspect(BrandMarkKind::Wordmark)));
+    EXPECT_GT(image.width(), 3 * image.height());
+    EXPECT_GT(CoveredAlpha(image), 0.0);
+}
+
+TEST(ShellIconRenderer, TheWordmarkReadsAsInkThenAccent) {
+    // The two halves of the product name carry different roles, and a
+    // substitution that missed the ink literal would leave `exo` in the
+    // designer's near-white on a light appearance -- invisible, and nothing else
+    // would catch it.
+    const QImage image = RenderMark(Mark(BrandMarkKind::Wordmark, 64));
+    ASSERT_FALSE(image.isNull());
+
+    const QColor exo = AverageInk(image, 0.0, 0.40);
+    const QColor snap = AverageInk(image, 0.48, 1.0);
+    const BrandMarkPalette palette = ResolvePalette(QStringLiteral("dark"), QStringLiteral("aqua"));
+
+    EXPECT_LT(HueDistance(snap, palette.accent), 20) << "`snap` is not the accent";
+    // Ink is a near-neutral, so it is asserted by saturation rather than by hue.
+    EXPECT_LT(exo.saturation(), 40) << "`exo` is not drawn in the appearance's ink";
+    EXPECT_GT(exo.lightness(), 200) << "`exo` is not the dark appearance's near-white ink";
+}
+
+TEST(ShellIconRenderer, TheWordmarkInkFollowsTheAppearance) {
+    // The whole reason the wordmark stopped being two Labels is that a raster
+    // must follow the theme the labels did.
+    ShellMarkRequest request = Mark(BrandMarkKind::Wordmark, 64);
+    const QColor dark = AverageInk(RenderMark(request), 0.0, 0.40);
+    request.appearance_id = QStringLiteral("light");
+    const QColor light = AverageInk(RenderMark(request), 0.0, 0.40);
+    EXPECT_GT(dark.lightness(), 200);
+    EXPECT_LT(light.lightness(), 80);
 }
 
 TEST(ShellIconRenderer, TheRequestedSizeIsTheImageSize) {

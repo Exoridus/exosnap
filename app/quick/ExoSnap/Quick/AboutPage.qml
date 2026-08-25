@@ -75,30 +75,12 @@ Item {
                             spacing: ExoTheme.spacingXs
                             Layout.fillWidth: true
 
-                            Row {
-                                spacing: 0
-
-                                Label {
-                                    text: "exo"  // the wordmark is never translated; see AppShell
-                                    textFormat: Text.PlainText
-                                    color: ExoTheme.text
-                                    font {
-                                        family: ExoTheme.sansFamily
-                                        pixelSize: ExoTheme.fontValueLarge
-                                        weight: Font.DemiBold
-                                    }
-                                }
-
-                                Label {
-                                    text: "snap"
-                                    textFormat: Text.PlainText
-                                    color: ExoTheme.accent
-                                    font {
-                                        family: ExoTheme.sansFamily
-                                        pixelSize: ExoTheme.fontValueLarge
-                                        weight: Font.DemiBold
-                                    }
-                                }
+                            ExoBrandWordmark {
+                                typePixelSize: ExoTheme.fontValueLarge
+                                Layout.preferredWidth: implicitWidth
+                                Layout.preferredHeight: implicitHeight
+                                Accessible.role: Accessible.StaticText
+                                Accessible.name: "exosnap"
                             }
 
                             Label {

@@ -68,6 +68,8 @@ using theme::ThemeKind;
         return QStringLiteral("warning");
     case BrandMarkKind::Error:
         return QStringLiteral("error");
+    case BrandMarkKind::Wordmark:
+        return QStringLiteral("wordmark");
     case BrandMarkKind::Idle:
         break;
     }
@@ -76,8 +78,9 @@ using theme::ThemeKind;
 
 [[nodiscard]] bool KindFromToken(const QString& token, BrandMarkKind& out) {
     static constexpr BrandMarkKind kKinds[] = {
-        BrandMarkKind::Brand,  BrandMarkKind::Idle,  BrandMarkKind::Recording, BrandMarkKind::Processing,
-        BrandMarkKind::Paused, BrandMarkKind::Saved, BrandMarkKind::Warning,   BrandMarkKind::Error,
+        BrandMarkKind::Brand,      BrandMarkKind::Idle,   BrandMarkKind::Recording,
+        BrandMarkKind::Processing, BrandMarkKind::Paused, BrandMarkKind::Saved,
+        BrandMarkKind::Warning,    BrandMarkKind::Error,  BrandMarkKind::Wordmark,
     };
     for (const BrandMarkKind kind : kKinds) {
         if (token == KindToken(kind)) {
@@ -142,8 +145,8 @@ inline constexpr int kMaxPx = 512;
     return id.isEmpty() ? QString::fromLatin1(kDefaultAccentId) : id;
 }
 
-[[nodiscard]] QImage NewCanvas(int px) {
-    QImage image(px, px, QImage::Format_ARGB32_Premultiplied);
+[[nodiscard]] QImage NewCanvas(int width, int height) {
+    QImage image(width, height, QImage::Format_ARGB32_Premultiplied);
     image.fill(Qt::transparent);
     return image;
 }
@@ -187,6 +190,20 @@ BrandMarkKind BrandMarkKindFor(ShellIconState state) noexcept {
     return BrandMarkKind::Idle;
 }
 
+BrandMarkKind BrandMarkKindForStateValue(int state) noexcept {
+    const ShellIconState typed = static_cast<ShellIconState>(state);
+    switch (typed) {
+    case ShellIconState::Idle:
+    case ShellIconState::Recording:
+    case ShellIconState::Processing:
+    case ShellIconState::Paused:
+    case ShellIconState::Saved:
+    case ShellIconState::Error:
+        return BrandMarkKindFor(typed);
+    }
+    return BrandMarkKind::Idle;
+}
+
 BrandMarkPalette ResolvePalette(const QString& appearance_id, const QString& accent_id) {
     const ExoAppearance& appearance = AppearanceFor(appearance_id);
     BrandMarkPalette palette;
@@ -194,6 +211,7 @@ BrandMarkPalette ResolvePalette(const QString& appearance_id, const QString& acc
     palette.recording = QColor(QString::fromLatin1(appearance.error));
     palette.caution = QColor(QString::fromLatin1(appearance.caution));
     palette.success = QColor(QString::fromLatin1(appearance.success));
+    palette.ink = QColor(QString::fromLatin1(appearance.ink));
     palette.outer_opacity = appearance.kind == ThemeKind::Dark ? kOuterOpacityDark : kOuterOpacityLight;
     return palette;
 }
@@ -266,17 +284,23 @@ QImage RenderMark(const ShellMarkRequest& request) {
     if (!renderer.isValid())
         return {};
 
-    QImage image = NewCanvas(px);
+    // `px` is the raster HEIGHT, and the width follows the asset. Every drawing
+    // in the aperture suite is square and gets px x px as before; the wordmark
+    // is close to four times as wide as it is tall, and a square canvas would
+    // letterbox it down to a fifth of the height the caller asked for.
+    const QSizeF box = renderer.viewBoxF().size();
+    const double aspect = box.height() > 0.0 ? box.width() / box.height() : 1.0;
+    const int width = std::max(1, qRound(px * aspect));
+
+    QImage image = NewCanvas(width, px);
     QPainter painter(&image);
     painter.setRenderHint(QPainter::Antialiasing, true);
     // The margin is reserved by shrinking the target rectangle rather than by
-    // insetting the drawing: the asset is a square viewBox, so a smaller target
-    // is the same mark with room around it, and no coordinate inside the asset
-    // has to be touched to get one.
-    const double content = request.standalone ? kStandaloneContentScale * profile.content_scale : 1.0;
-    const double side = px * std::min(content, 1.0);
-    const double origin = (px - side) / 2.0;
-    renderer.render(&painter, QRectF(origin, origin, side, side));
+    // insetting the drawing: a smaller target is the same mark with room around
+    // it, and no coordinate inside the asset has to be touched to get one.
+    const double content = std::min(request.standalone ? kStandaloneContentScale * profile.content_scale : 1.0, 1.0);
+    const double height = px * content;
+    renderer.render(&painter, QRectF((width - height * aspect) / 2.0, (px - height) / 2.0, height * aspect, height));
     painter.end();
     return image;
 }
@@ -285,7 +309,7 @@ QImage RenderGlyph(const ShellGlyphRequest& request) {
     const int px = ClampPx(request.px);
     const double scale = static_cast<double>(px) / kGrid;
 
-    QImage image = NewCanvas(px);
+    QImage image = NewCanvas(px, px);
     QPainter painter(&image);
     painter.setRenderHint(QPainter::Antialiasing, true);
 

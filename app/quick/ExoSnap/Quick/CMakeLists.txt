@@ -66,6 +66,7 @@ qt_add_qml_module(exosnap
         EditTimeline.qml
         ExoBadge.qml
         ExoBrandMark.qml
+        ExoBrandWordmark.qml
         ExoButton.qml
         ExoCard.qml
         ExoCheckBox.qml

@@ -320,6 +320,7 @@ ApplicationWindow {
         recordingError: root.recordingError
         crashReport: root.crashReport
         whatsNew: root.whatsNew
+        shellPresence: root.shellPresence
         aboutViewModel: root.aboutViewModel
         recordViewModel: root.recordViewModel
         previewAdapter: root.previewAdapter

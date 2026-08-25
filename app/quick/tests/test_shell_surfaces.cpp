@@ -173,6 +173,49 @@ template <typename Predicate> bool SpinUntil(Predicate predicate, int budget_ms 
 
 } // namespace
 
+// -- ShellPresenceAdapter: what QML can see -----------------------------------
+
+TEST(ShellPresenceAdapterQml, TheMarkAndItsFrameReachQmlAsProperties) {
+    // Read through the meta-object rather than through the accessors: the Top Bar
+    // binds to `iconState` and `markFrame` by name, and an accessor that exists
+    // without a Q_PROPERTY beside it is a mark that never changes.
+    EnsureApplication();
+    ShellPresenceAdapter adapter;
+    adapter.setRecordingState(UiRecordingState::Recording, false, true, true, false, false);
+
+    EXPECT_EQ(adapter.property("iconState").toInt(), static_cast<int>(ShellIconState::Recording));
+    EXPECT_EQ(adapter.property("markFrame").toInt(), adapter.markFrame());
+
+    const int before = adapter.property("markFrame").toInt();
+    adapter.advancePulseForTest();
+    EXPECT_NE(adapter.property("markFrame").toInt(), before);
+}
+
+TEST(ShellPresenceAdapterQml, TheStateQmlSeesIsTheSettledOneTheShellShows) {
+    // Not the raw phase. A stop that finalizes instantly must not put a neutral
+    // flash in the title band any more than it may put one in the tray, and the
+    // way to guarantee that is for both to read the same property.
+    EnsureApplication();
+    ShellPresenceAdapter adapter;
+    adapter.setFinalizingSettleMsForTest(10000);
+    adapter.setRecordingState(UiRecordingState::Recording, false, true, true, false, false);
+    adapter.setRecordingState(UiRecordingState::Stopping, false, false, false, false, false);
+
+    EXPECT_EQ(adapter.property("iconState").toInt(), static_cast<int>(ShellIconState::Recording));
+    adapter.expireFinalizingSettleForTest();
+    EXPECT_EQ(adapter.property("iconState").toInt(), static_cast<int>(adapter.presence().icon_state));
+}
+
+TEST(ShellPresenceAdapterQml, AStateChangeNotifiesTheBinding) {
+    EnsureApplication();
+    ShellPresenceAdapter adapter;
+    adapter.setRecordingState(UiRecordingState::Ready, true, false, false, false, false);
+    QSignalSpy spy(&adapter, &ShellPresenceAdapter::presenceChanged);
+    adapter.setRecordingState(UiRecordingState::Recording, false, true, true, false, false);
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_EQ(adapter.property("iconState").toInt(), static_cast<int>(ShellIconState::Recording));
+}
+
 // -- ShellPresenceAdapter: pulse --------------------------------------------
 
 TEST(ShellPresenceAdapterPulse, RunsOnlyWhileRecording) {
