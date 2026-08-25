@@ -6,10 +6,13 @@
 // THUMBBUTTON::hIcon take handles. Loading them out of the executable's own
 // resources with LR_SHARED lets the OS cache one handle per (id, size) tuple, so
 // the recording heartbeat swaps icons without allocating anything per frame.
-#define IDI_EXOSNAP_APP_ICON 101           // idle / ready aperture mark
-#define IDI_EXOSNAP_APP_ICON_RECORDING 102 // recording variant (coral inner ring + dot)
-#define IDI_EXOSNAP_APP_ICON_PAUSED 103    // paused variant (amber inner ring + dot)
-#define IDI_EXOSNAP_APP_ICON_SAVED 104     // saved variant (green inner ring + dot)
+
+// The application's identity, and the FIRST resource id in the table -- Explorer
+// and the shell take the lowest-numbered icon as the executable's own. It is a
+// multi-resolution aperture mark in the shipped default accent and it carries no
+// session state: what a recording looks like is the taskbar overlay badge below,
+// not a different application icon.
+#define IDI_EXOSNAP_APP_ICON 101
 
 // Taskbar overlay badges. A filled disc rather than the aperture mark: the badge
 // occupies about a third of the taskbar button, where the mark's thin rings are

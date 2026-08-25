@@ -33,10 +33,10 @@ class ShellPresenceAdapter : public QObject {
     Q_PROPERTY(bool paused READ paused NOTIFY presenceChanged FINAL)
     Q_PROPERTY(bool busy READ busy NOTIFY presenceChanged FINAL)
     Q_PROPERTY(bool saved READ saved NOTIFY presenceChanged FINAL)
-    // 0.0 at the trough, 1.0 at the peak, and a flat 0.0 whenever the pulse is
-    // not running. An in-app indicator binds its own animation amplitude to this
-    // rather than starting a second timer.
-    Q_PROPERTY(qreal pulseIntensity READ pulseIntensity NOTIFY pulseChanged FINAL)
+    // Deliberately no pulse property. The application's own recording indicator
+    // animates itself for as long as the recording runs; the shell's beat is a
+    // short transition on a different cadence, and a QML surface following it
+    // would be following the wrong one.
 
   public:
     explicit ShellPresenceAdapter(QObject* parent = nullptr);
@@ -58,10 +58,12 @@ class ShellPresenceAdapter : public QObject {
     [[nodiscard]] bool busy() const noexcept;
     [[nodiscard]] bool saved() const noexcept;
 
-    // The frame the shell surfaces render. Stable while the pulse is stopped, so
-    // a static state always draws the same icon.
+    // The frame the shell surfaces render. After the entry beat it rests on the
+    // peak, so a static recording always draws the mark at full weight.
     [[nodiscard]] int pulseFrame() const noexcept;
-    [[nodiscard]] qreal pulseIntensity() const noexcept;
+    // Whether the recording-entry beat is still playing. It ends on its own after
+    // a fixed couple of cycles, which is what makes the shell go static.
+    [[nodiscard]] bool shellPulseActive() const noexcept;
     // The same phase quantized for the taskbar overlay, which is redrawn by
     // Explorer and does not want every frame.
     [[nodiscard]] int taskbarPulseLevel() const noexcept;
@@ -75,8 +77,12 @@ class ShellPresenceAdapter : public QObject {
     // that is no longer current is the stale-callback case, and it must change
     // nothing.
     void expireSavedDwellForTest(quint64 generation);
+    // Runs one beat tick. The real timer is stopped as soon as the transition
+    // ends, so a test that keeps calling this is exercising the same guard a
+    // queued timeout delivered after a state change hits.
     void advancePulseForTest();
     [[nodiscard]] bool pulseRunningForTest() const;
+    [[nodiscard]] int pulseTicksRemainingForTest() const noexcept;
 
   signals:
     void presenceChanged();
@@ -95,6 +101,9 @@ class ShellPresenceAdapter : public QObject {
 
     QTimer pulse_timer_;
     int pulse_frame_ = 0;
+    // Counts the entry beat down. Zero means the shell is showing a static
+    // state, whether or not a recording is running.
+    int pulse_ticks_remaining_ = 0;
 
     QTimer saved_timer_;
     // Bumped on every arm AND every clear, which is what makes a timeout that
@@ -103,6 +112,10 @@ class ShellPresenceAdapter : public QObject {
     // stop.
     quint64 saved_generation_ = 0;
     bool had_completed_recording_ = false;
+    // The edge the entry beat is armed on. A flag rather than a comparison
+    // against the previous state, because republish() runs on cadences that do
+    // not change the phase at all.
+    bool was_recording_ = false;
 };
 
 } // namespace exosnap::quick

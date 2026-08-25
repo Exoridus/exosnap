@@ -3,14 +3,27 @@
 // The one heartbeat the shell surfaces share.
 //
 // Windows has no animated-icon API: Shell_NotifyIcon and
-// ITaskbarList3::SetOverlayIcon each take a single HICON. An animation is
-// therefore a timer swapping pre-rendered frames, and the cost of that timer is
-// paid for the whole length of a recording -- which is what makes the frame
-// count and the interval a product decision rather than an animation budget.
+// ITaskbarList3::SetOverlayIcon each take a single HICON, so an animation is a
+// timer swapping whole icons.
 //
-// One phase, read by every surface. A tray timer, a taskbar timer and a QML
-// timer would drift apart within a minute and the two icons would then be
-// describing the same recording out of step.
+// THE SHELL BEAT IS A TRANSITION, NOT A STATE
+// -------------------------------------------
+// It runs for a fixed couple of cycles as a recording begins and then holds
+// still. A permanent one would keep swapping the notification-area icon and
+// redrawing the taskbar button for hours -- and at 16 px the difference between
+// two adjacent frames is barely a pixel, so what it buys after the first second
+// is a flicker in the corner of the screen rather than a heartbeat. What the
+// beat is FOR is the moment the state changed; once the user has seen that, the
+// static recording mark is the honest thing to show.
+//
+// The application's own surfaces are not bound by this. They are a scene graph
+// and can animate a dot for free, so the recording indicator inside the window
+// breathes for as long as the recording runs. Shell cadence and in-app cadence
+// are separate on purpose: the same semantic state, two animation policies.
+//
+// One phase, read by every shell surface. A tray timer and a taskbar timer would
+// drift apart and the two icons would then describe the same recording out of
+// step.
 
 #include <QtGlobal>
 
@@ -26,6 +39,19 @@ inline constexpr int kRecordingPulseFrameCount = 4;
 // as alive, slow enough that the tray does not flicker, and 4.5 icon swaps per
 // second is a rate the shell absorbs without a visible redraw cost.
 inline constexpr int kRecordingPulseIntervalMs = 220;
+
+// How many full beats a recording entry plays before the shell goes static.
+// Two: one alone reads as a glitch, and by the third the eye has stopped
+// treating it as information.
+inline constexpr int kRecordingPulseTransitionCycles = 2;
+
+// Total ticks in that transition.
+inline constexpr int kRecordingPulseTransitionTicks = kRecordingPulseTransitionCycles * kRecordingPulseFrameCount;
+
+// Where the beat ends, and what a static recording therefore shows: the peak,
+// which is the mark at full weight. Ending anywhere else would leave the tray
+// permanently mid-breath.
+inline constexpr int kRecordingPulsePeakFrame = kRecordingPulseFrameCount / 2;
 
 // The taskbar overlay badge is a small square in the corner of a taskbar button,
 // and Explorer redraws the whole button for every SetOverlayIcon. Two levels is

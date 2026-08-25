@@ -37,7 +37,7 @@ namespace {
 // turns a successful update into a "the new version never started" report.
 constexpr const wchar_t* kSingleInstanceMutexName = L"ExoSnap_SingleInstance_Mutex";
 
-constexpr const char* kAppIconResourcePath = ":/brand/exosnap-logo-idle.ico";
+constexpr const char* kAppIconResourcePath = ":/brand/exosnap-app.ico";
 
 void LogPerfMilestone(const QString& label, qint64 elapsed_ms) {
     diagnostics::AppLog::info(QStringLiteral("perf"), QStringLiteral("%1 %2 ms").arg(label).arg(elapsed_ms));

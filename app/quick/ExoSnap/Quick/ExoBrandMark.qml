@@ -3,23 +3,23 @@ import QtQuick.Shapes
 
 // The ExoSnap mark: an aperture, drawn rather than loaded.
 //
-// `qrc:/brand/exosnap-logo.svg` hardcodes #9BD9D2, which was written for a dark
-// band. Put in the title bar it appears on every page of every theme, and on
-// `light-paper` a pale mint mark on an off-white band is very nearly invisible.
-// The geometry here is the SVG's, coordinate for coordinate (a 32-unit box: a
-// 14.5 ring at 45 % opacity, a 6.2 ring, a 2.4 dot) — only the colour changes,
-// from one fixed value to the theme's accent. Same mark, legible in all four.
+// `qrc:/brand/exosnap-logo.svg` carries one fixed accent, which was written for
+// a dark band. Put in the title bar the mark appears on every page of every
+// theme, and on a light appearance a pale mint mark on an off-white band is very
+// nearly invisible. Drawn, it takes the theme's accent instead. Same mark,
+// legible in both.
 //
-// The asset stays: it is still the source the .ico window-icon variants are
-// generated from.
+// The coordinates are not repeated here: BrandMarkGeometry publishes the
+// canonical ones (ui/brand/BrandMark.h), which the runtime shell renderer and
+// the build-time icon generator read as well.
 Item {
     id: root
 
     property color color: ExoTheme.accent
 
-    // Authored on the SVG's 32-unit grid and scaled, so the ring weights stay in
+    // Authored on the canonical grid and scaled, so the ring weights stay in
     // proportion at any size the caller asks for.
-    readonly property real unit: Math.min(root.width, root.height) / 32
+    readonly property real unit: Math.min(root.width, root.height) / BrandMarkGeometry.grid
 
     implicitWidth: 18
     implicitHeight: 18
@@ -29,15 +29,15 @@ Item {
         preferredRendererType: Shape.CurveRenderer
 
         ShapePath {
-            strokeColor: Qt.alpha(root.color, 0.45)
-            strokeWidth: 1.5 * root.unit
+            strokeColor: Qt.alpha(root.color, BrandMarkGeometry.outerOpacity)
+            strokeWidth: BrandMarkGeometry.outerStroke * root.unit
             fillColor: "transparent"
 
             PathAngleArc {
-                centerX: 16 * root.unit
-                centerY: 16 * root.unit
-                radiusX: 14.5 * root.unit
-                radiusY: 14.5 * root.unit
+                centerX: BrandMarkGeometry.center * root.unit
+                centerY: BrandMarkGeometry.center * root.unit
+                radiusX: BrandMarkGeometry.outerRadius * root.unit
+                radiusY: BrandMarkGeometry.outerRadius * root.unit
                 startAngle: 0
                 sweepAngle: 360
             }
@@ -45,14 +45,14 @@ Item {
 
         ShapePath {
             strokeColor: root.color
-            strokeWidth: 1.6 * root.unit
+            strokeWidth: BrandMarkGeometry.innerStroke * root.unit
             fillColor: "transparent"
 
             PathAngleArc {
-                centerX: 16 * root.unit
-                centerY: 16 * root.unit
-                radiusX: 6.2 * root.unit
-                radiusY: 6.2 * root.unit
+                centerX: BrandMarkGeometry.center * root.unit
+                centerY: BrandMarkGeometry.center * root.unit
+                radiusX: BrandMarkGeometry.innerRadius * root.unit
+                radiusY: BrandMarkGeometry.innerRadius * root.unit
                 startAngle: 0
                 sweepAngle: 360
             }
@@ -63,10 +63,10 @@ Item {
             fillColor: root.color
 
             PathAngleArc {
-                centerX: 16 * root.unit
-                centerY: 16 * root.unit
-                radiusX: 2.4 * root.unit
-                radiusY: 2.4 * root.unit
+                centerX: BrandMarkGeometry.center * root.unit
+                centerY: BrandMarkGeometry.center * root.unit
+                radiusX: BrandMarkGeometry.dotRadius * root.unit
+                radiusY: BrandMarkGeometry.dotRadius * root.unit
                 startAngle: 0
                 sweepAngle: 360
             }

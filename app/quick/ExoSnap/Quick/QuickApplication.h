@@ -14,7 +14,7 @@
 #include "NotificationsAdapter.h"
 #include "OverlayAdapter.h"
 #include "QuickThemeTokens.h"
-#include "QuickWindowChrome.h" // IconState -- the window/taskbar icon variant held below
+#include "QuickWindowChrome.h"
 #include "QuickWindowGeometry.h"
 #include "RecordPreviewAdapter.h"
 #include "RecordViewModelAdapter.h"
@@ -23,8 +23,10 @@
 #include "RecoveryAdapter.h"
 #include "SettingsAdapter.h"
 #include "ShellAdapter.h"
+#include "ShellIconProvider.h"
 #include "ShellPresenceAdapter.h"
 #include "TaskbarPresence.h"
+#include "TrayAdapter.h"
 #include "WhatsNewAdapter.h"
 
 #include "diagnostics/AudioSourceDegradation.h"
@@ -46,7 +48,6 @@
 #include "settings/AppSettingsStore.h"
 #include "settings/RecordingPresetStore.h"
 #include "settings/RecoveryManifestStore.h"
-#include "ui/tray/TrayPresence.h"
 #include "viewmodels/RecordViewModel.h"
 
 #include <capability/resolver.h>
@@ -365,6 +366,10 @@ class QuickApplication {
     // Routes a shell-raised action into the SAME request the in-app transport
     // makes. Not a second interpretation of what Pause means.
     void performShellAction(ShellAction action);
+    // Opens the configured recording destination in Explorer. Shared by the tray
+    // menu and anything else that offers it, so there is one answer to where
+    // recordings go.
+    void openConfiguredOutputFolder();
     // Binds the three long operations that publish a fraction to the one taskbar
     // progress bar. Each takes a lease, so a callback that outlives its operation
     // cannot move the next one's bar.
@@ -376,7 +381,6 @@ class QuickApplication {
     // The window-icon variant currently applied. Held because refreshTrayState()
     // also runs on the diagnostics tick, and re-applying the icon there would be a
     // taskbar redraw per tick for no change.
-    QuickWindowChrome::IconState window_icon_state_ = QuickWindowChrome::Idle;
     // Brings the window back from the tray (tray icon click, "Show window", or
     // the unread-notifications mirror).
     // Banks the geometry, hides the window and raises the one-time notice.
@@ -780,9 +784,21 @@ class QuickApplication {
     // it outlives the window it tracks; it holds a QPointer, so the window dying
     // first is safe.
     std::unique_ptr<QuickWindowGeometry> window_geometry_;
-    // Null when the platform reports no system tray. Declared before engine_ for
-    // the same reason window_geometry_ is: it outlives the window it acts on.
-    std::unique_ptr<ui::tray::TrayPresence> tray_presence_;
+    // Declared before engine_ for the same reason window_geometry_ is: it
+    // outlives the window it acts on.
+    //
+    // Constructed unconditionally, because Main.qml binds to it as a required
+    // property. Whether an icon actually appears is TrayAdapter::active(), which
+    // is false when the platform has no notification area or a harness mode
+    // suppressed it.
+    TrayAdapter tray_adapter_;
+    // The renderer behind image://exosnap-shell/... Owned by the engine once
+    // registered, so this only records that the registration happened.
+    bool shell_icon_provider_registered_ = false;
+    // The last state written to the shell surfaces, so the log line that stands
+    // in for a developer looking at the screen fires on transitions and not on
+    // every metrics tick.
+    ShellIconState shell_icon_state_ = ShellIconState::Idle;
     // The shell's view of the session, and the two clocks it needs: the recording
     // heartbeat and the bounded Saved dwell. Every shell surface reads this one
     // object rather than the recording state directly.

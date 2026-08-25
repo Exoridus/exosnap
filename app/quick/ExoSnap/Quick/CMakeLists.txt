@@ -133,6 +133,7 @@ qt_add_qml_module(exosnap
         SettingsPresetBar.qml
         SettingsOverlaysSection.qml
         SettingsPresetFileDialog.qml
+        ShellTray.qml
         SettingsPresetNameDialog.qml
         SettingsQualitySection.qml
         SettingsUpdatesSection.qml
@@ -219,6 +220,11 @@ qt_add_qml_module(exosnap
         ShellPresenceAdapter.h
         TaskbarPresence.cpp
         TaskbarPresence.h
+        TrayAdapter.cpp
+        TrayAdapter.h
+        # The canonical mark geometry, so ExoBrandMark.qml draws the same
+        # circles the shell renderer and the icon generator do.
+        BrandMarkGeometry.h
 )
 
 target_sources(exosnap
@@ -414,14 +420,14 @@ target_sources(exosnap
         # the clamp rules a second time.
         ${PROJECT_SOURCE_DIR}/app/ui/WindowGeometryPolicy.cpp
         ${PROJECT_SOURCE_DIR}/app/ui/WindowGeometryPolicy.h
-        # The one genuinely Qt Widgets-bound file this frontend compiles, and the
-        # same one the Widgets target builds -- not a Quick-flavoured copy. Qt has
-        # no Quick/QML system-tray type, so QSystemTrayIcon (and with it
-        # QApplication) is the documented intentional remainder of Qt6::Widgets in
-        # the shipped Quick application. See the cutover plan, "Intentional
-        # remaining Widgets dependency".
-        ${PROJECT_SOURCE_DIR}/app/ui/tray/TrayPresence.cpp
-        ${PROJECT_SOURCE_DIR}/app/ui/tray/TrayPresence.h
+        # The runtime brand renderer and the image provider that publishes it.
+        # Not a QML type: QML reaches it through image:// URLs, which is the
+        # only icon boundary Qt.labs.platform's SystemTrayIcon offers.
+        ShellIconProvider.cpp
+        ShellIconProvider.h
+        ${PROJECT_SOURCE_DIR}/app/ui/brand/BrandMark.h
+        ${PROJECT_SOURCE_DIR}/app/ui/brand/ShellIconRenderer.cpp
+        ${PROJECT_SOURCE_DIR}/app/ui/brand/ShellIconRenderer.h
 )
 
 # ---- Frontend A/B benchmark harness ----
@@ -531,9 +537,15 @@ target_link_libraries(exosnap
         Qt6::Quick
         Qt6::QuickControls2
         Qt6::QuickDialogs2
-        # Solely for QSystemTrayIcon (via ui/tray/TrayPresence). Nothing this
-        # application draws is a QWidget. Do not grow this dependency: any other
-        # Widgets type appearing here means a Quick equivalent was skipped.
+        # The declarative system tray (ShellTray.qml). A labs module, and
+        # deliberately behind a thin C++ model so a future incompatibility is a
+        # QML-only port.
+        Qt6::LabsPlatform
+        # Required BY Qt6::LabsPlatform, which documents Qt Widgets as its
+        # fallback and imports Qt6Widgets.dll unconditionally -- so the module
+        # needs QApplication rather than QGuiApplication. Nothing this
+        # application draws is a QWidget, and nothing should: any Widgets type
+        # appearing in our own sources means a Quick equivalent was skipped.
         Qt6::Widgets
         exosnap::warnings
         exosnap::capability
@@ -1547,10 +1559,12 @@ target_include_directories(shell_presence_tests
 
 target_compile_definitions(shell_presence_tests PRIVATE NOMINMAX)
 
-# The two surfaces that turn the projection into something a user sees: the
-# adapter that owns the heartbeat and the Saved dwell, and the taskbar button
-# with its readiness lifecycle. The platform calls go through an injectable seam,
-# so the lifecycle and every refusal are testable without Explorer.
+# The three surfaces that turn the projection into something a user sees: the
+# adapter that owns the entry heartbeat and the Saved dwell, the taskbar button
+# with its readiness lifecycle, and the tray's model. The platform calls go
+# through an injectable seam, so the lifecycle and every refusal are testable
+# without Explorer -- and the tray's model is a plain QObject, so its menu is
+# assertable without a notification area.
 exosnap_add_gtest(
     NAME shell_surface_tests
     TEST_PREFIX quick_shell_surface.
@@ -1560,9 +1574,12 @@ exosnap_add_gtest(
         ShellPresenceAdapter.h
         TaskbarPresence.cpp
         TaskbarPresence.h
+        TrayAdapter.cpp
+        TrayAdapter.h
         ${PROJECT_SOURCE_DIR}/app/models/ShellPresence.cpp
         ${PROJECT_SOURCE_DIR}/app/models/RecordingPulse.cpp
         ${PROJECT_SOURCE_DIR}/app/models/TaskbarProgressLease.cpp
+        ${PROJECT_SOURCE_DIR}/app/ui/brand/ShellIconRenderer.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/AppLog.cpp
     LIBRARIES
         Qt6::Core

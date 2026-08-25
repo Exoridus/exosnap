@@ -117,7 +117,7 @@ if(WIN32)
     # generic executable icon in the taskbar while the user is watching it
     # replace ExoSnap. Forward slashes on purpose: the resource compiler accepts
     # them and a configured Windows path would otherwise embed escape sequences.
-    set(EXOSNAP_UPDATER_ICON "${PROJECT_SOURCE_DIR}/app/assets/brand/exosnap-logo-idle.ico")
+    set(EXOSNAP_UPDATER_ICON "${PROJECT_SOURCE_DIR}/app/assets/brand/exosnap-app.ico")
     if(NOT EXISTS "${EXOSNAP_UPDATER_ICON}")
         message(FATAL_ERROR "Updater icon not found: ${EXOSNAP_UPDATER_ICON}")
     endif()

@@ -1398,17 +1398,35 @@ release (0.11 per ADR 0022).
   to idle on its own; a starting recording takes the icon back immediately, whether or not that dwell
   has run out. An icon that stayed green would have stopped describing the application and started
   describing history.
-- **While a recording is running the tray icon and the taskbar badge pulse.** Windows has no
-  animated-icon API, so the pulse is a timer swapping pre-rendered frames: four frames over 880 ms, a
-  gentle fade of the coral centre rather than a blink. A countdown shows the recording state but
-  holds it still, which is what separates "committed" from "capturing" at a glance. Paused, saved and
-  idle are static. The on-screen recording pill breathes on the same beat.
-- **Tray menu** — Show/Hide window, the transport, Notifications while any are unread, and Quit. The
-  transport offers exactly what the state allows: **Start recording** while idle, **Pause** and
-  **Stop** while recording, **Resume** and **Stop** while paused. An action that is not possible is
-  hidden rather than shown-and-failing, except Start, which stays visible and greyed while a
-  recording is being prepared or saved — a control that vanishes reads as a bug, a greyed one reads
-  as a reason.
+- **The tray icon carries the chosen accent.** The mark's outer ring is whichever accent the
+  Appearance settings are on and follows a change immediately, with no restart; the inner ring and
+  the centre dot are the session's state colour, so the accent is never a second state channel. At
+  the sizes Windows draws a notification-area icon the mark is drawn with heavier strokes and a wider
+  aperture than the full-size logo — the same three circles, corrected so they survive 16 pixels.
+- **Entering a recording plays a short heartbeat, and then the shell holds still.** The tray icon and
+  the taskbar badge beat twice as the recording starts and settle on the static recording state. They
+  do not pulse for the length of the recording: Windows has no animated-icon API, so a permanent
+  pulse means swapping the notification-area icon and redrawing the taskbar button for hours, and at
+  that size it reads as a flicker in the corner of the screen rather than as a heartbeat. **Resuming
+  a paused recording plays the same short beat**, because re-entering capturing is the same event as
+  entering it. A countdown shows the recording state but holds it still, which separates "committed"
+  from "capturing" at a glance; paused, saved and idle are static. **Inside the application the
+  recording indicator breathes for as long as the recording runs** — the on-screen pill is a surface
+  that can animate for free, and the shell is not.
+- **The application icon never changes.** What Explorer, the desktop, Start and Alt+Tab show is one
+  multi-resolution mark in the shipped accent, in every state. A recording reaches the taskbar as the
+  button's own state badge, not as a different application icon.
+- **Tray menu** — Show/Hide window, the transport, **Open output folder**, Notifications while any are
+  unread, and Quit. The transport offers exactly what the state allows: **Start recording** while
+  idle, **Pause** and **Stop** while recording, **Resume** and **Stop** while paused. An action that
+  is not possible is hidden rather than shown-and-failing, except Start, which stays visible and
+  greyed while a recording is being prepared or saved — a control that vanishes reads as a bug, a
+  greyed one reads as a reason. **Open output folder** opens the configured recording destination in
+  Explorer and is offered in every state; if that folder does not exist, nothing is opened and
+  nothing is created — a missing destination is a settings problem, and Settings is where it is
+  reported.
+- **Clicking the tray icon** brings the window back; **double-clicking it** starts or stops a
+  recording, the same gesture the global hotkey carries; **right-clicking it** opens the menu.
 - **Taskbar button** — the same transport as a thumbnail toolbar under the taskbar preview
   (Record, Pause/Resume, Stop, following the same table as the tray menu), a **state badge** over the
   application icon in the same four states as the tray, and a **progress bar** for the long

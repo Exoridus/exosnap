@@ -1,5 +1,6 @@
 #include "ShellPresenceAdapter.h"
 #include "TaskbarPresence.h"
+#include "TrayAdapter.h"
 #include "models/RecordingPulse.h"
 #include "models/ShellPresence.h"
 #include "models/TaskbarProgressLease.h"
@@ -15,11 +16,13 @@
 #include <vector>
 
 using exosnap::kRecordingPulseFrameCount;
+using exosnap::kRecordingPulsePeakFrame;
+using exosnap::kRecordingPulseTransitionCycles;
+using exosnap::kRecordingPulseTransitionTicks;
 using exosnap::kShellButtonIdPauseResume;
 using exosnap::kShellButtonIdRecord;
 using exosnap::kShellButtonIdStop;
 using exosnap::ProjectShellPresence;
-using exosnap::RecordingPulseIntensity;
 using exosnap::ShellAction;
 using exosnap::ShellIconState;
 using exosnap::ShellPresenceInput;
@@ -32,6 +35,7 @@ using exosnap::quick::ShellPresenceAdapter;
 using exosnap::quick::TaskbarPresence;
 using exosnap::quick::TaskbarShell;
 using exosnap::quick::ThumbButtonSpec;
+using exosnap::quick::TrayAdapter;
 
 namespace {
 
@@ -200,17 +204,16 @@ TEST(ShellPresenceAdapterPulse, ACountdownShowsTheRecordingBadgeButHoldsItStill)
     EXPECT_FALSE(adapter.pulseRunningForTest());
 }
 
-TEST(ShellPresenceAdapterPulse, AStoppedPulseReportsTheTroughRatherThanItsLastFrame) {
+TEST(ShellPresenceAdapterPulse, LeavingRecordingSettlesOnTheStaticRecordingFrame) {
     EnsureApplication();
     ShellPresenceAdapter adapter;
     adapter.setRecordingState(UiRecordingState::Recording, false, true, true, false, false);
     adapter.advancePulseForTest();
-    adapter.advancePulseForTest();
-    ASSERT_GT(adapter.pulseIntensity(), 0.0);
+    ASSERT_NE(adapter.pulseFrame(), kRecordingPulsePeakFrame);
 
     adapter.setRecordingState(UiRecordingState::Paused, false, true, false, true, false);
-    EXPECT_DOUBLE_EQ(adapter.pulseIntensity(), 0.0);
-    EXPECT_EQ(adapter.taskbarPulseLevel(), 0);
+    EXPECT_FALSE(adapter.shellPulseActive());
+    EXPECT_EQ(adapter.pulseFrame(), kRecordingPulsePeakFrame);
 }
 
 TEST(ShellPresenceAdapterPulse, EveryRecordingStartsAtTheTrough) {
@@ -232,7 +235,99 @@ TEST(ShellPresenceAdapterPulse, ThePhaseWrapsThroughTheWholeBeat) {
     for (int i = 0; i < kRecordingPulseFrameCount; ++i)
         adapter.advancePulseForTest();
     EXPECT_EQ(adapter.pulseFrame(), 0);
-    EXPECT_DOUBLE_EQ(adapter.pulseIntensity(), RecordingPulseIntensity(0));
+}
+
+// -- ShellPresenceAdapter: the beat is a transition, not a state --------------
+
+TEST(ShellPresenceAdapterPulse, TheBeatIsArmedForExactlyTheConfiguredNumberOfCycles) {
+    EnsureApplication();
+    ShellPresenceAdapter adapter;
+    adapter.setRecordingState(UiRecordingState::Recording, false, true, true, false, false);
+    EXPECT_EQ(adapter.pulseTicksRemainingForTest(), kRecordingPulseTransitionTicks);
+    EXPECT_EQ(kRecordingPulseTransitionTicks, kRecordingPulseTransitionCycles * kRecordingPulseFrameCount);
+}
+
+TEST(ShellPresenceAdapterPulse, TheBeatEndsAndTheRecordingStaysStatic) {
+    EnsureApplication();
+    ShellPresenceAdapter adapter;
+    adapter.setRecordingState(UiRecordingState::Recording, false, true, true, false, false);
+    for (int i = 0; i < kRecordingPulseTransitionTicks; ++i) {
+        EXPECT_TRUE(adapter.shellPulseActive()) << "stopped early at tick " << i;
+        adapter.advancePulseForTest();
+    }
+    EXPECT_FALSE(adapter.shellPulseActive());
+    // The peak IS the static recording mark, so the beat's last frame and the
+    // state it settles into are the same image.
+    EXPECT_EQ(adapter.pulseFrame(), kRecordingPulsePeakFrame);
+    EXPECT_EQ(adapter.presence().icon_state, ShellIconState::Recording);
+}
+
+TEST(ShellPresenceAdapterPulse, AFinishedBeatDoesNotRestartWhileTheRecordingRuns) {
+    EnsureApplication();
+    ShellPresenceAdapter adapter;
+    adapter.setRecordingState(UiRecordingState::Recording, false, true, true, false, false);
+    for (int i = 0; i < kRecordingPulseTransitionTicks; ++i)
+        adapter.advancePulseForTest();
+    ASSERT_FALSE(adapter.shellPulseActive());
+
+    // The metrics cadence republishes the same state several times a second.
+    for (int i = 0; i < 5; ++i)
+        adapter.setRecordingState(UiRecordingState::Recording, false, true, true, false, false);
+    EXPECT_FALSE(adapter.shellPulseActive());
+    EXPECT_EQ(adapter.pulseFrame(), kRecordingPulsePeakFrame);
+}
+
+TEST(ShellPresenceAdapterPulse, ResumeStartsTheTransitionAgain) {
+    EnsureApplication();
+    ShellPresenceAdapter adapter;
+    adapter.setRecordingState(UiRecordingState::Recording, false, true, true, false, false);
+    for (int i = 0; i < kRecordingPulseTransitionTicks; ++i)
+        adapter.advancePulseForTest();
+    ASSERT_FALSE(adapter.shellPulseActive());
+
+    adapter.setRecordingState(UiRecordingState::Paused, false, true, false, true, false);
+    ASSERT_FALSE(adapter.shellPulseActive());
+    // Re-entering capturing is the same event as entering it.
+    adapter.setRecordingState(UiRecordingState::Recording, false, true, true, false, false);
+    EXPECT_TRUE(adapter.shellPulseActive());
+    EXPECT_EQ(adapter.pulseTicksRemainingForTest(), kRecordingPulseTransitionTicks);
+}
+
+TEST(ShellPresenceAdapterPulse, StoppingCancelsTheBeat) {
+    EnsureApplication();
+    ShellPresenceAdapter adapter;
+    adapter.setRecordingState(UiRecordingState::Recording, false, true, true, false, false);
+    adapter.advancePulseForTest();
+    ASSERT_TRUE(adapter.shellPulseActive());
+
+    adapter.setRecordingState(UiRecordingState::Stopping, false, false, false, false, false);
+    EXPECT_FALSE(adapter.shellPulseActive());
+    EXPECT_EQ(adapter.pulseTicksRemainingForTest(), 0);
+}
+
+TEST(ShellPresenceAdapterPulse, AStalePulseTickCannotRepaintALaterState) {
+    EnsureApplication();
+    ShellPresenceAdapter adapter;
+    adapter.setRecordingState(UiRecordingState::Recording, false, true, true, false, false);
+    adapter.advancePulseForTest();
+    adapter.setRecordingState(UiRecordingState::Paused, false, true, false, true, false);
+    const int settled = adapter.pulseFrame();
+
+    // The tick Qt had already queued when the state changed.
+    adapter.advancePulseForTest();
+    EXPECT_EQ(adapter.pulseFrame(), settled);
+    EXPECT_FALSE(adapter.shellPulseActive());
+    EXPECT_EQ(adapter.presence().icon_state, ShellIconState::Paused);
+}
+
+TEST(ShellPresenceAdapterPulse, TheTaskbarLevelPeaksWhenTheBeatSettles) {
+    EnsureApplication();
+    ShellPresenceAdapter adapter;
+    adapter.setRecordingState(UiRecordingState::Recording, false, true, true, false, false);
+    EXPECT_EQ(adapter.taskbarPulseLevel(), 0);
+    for (int i = 0; i < kRecordingPulseTransitionTicks; ++i)
+        adapter.advancePulseForTest();
+    EXPECT_EQ(adapter.taskbarPulseLevel(), exosnap::kTaskbarPulseLevels - 1);
 }
 
 TEST(ShellPresenceAdapterPulse, TheTimerActuallyTicksOnItsOwn) {
@@ -699,4 +794,234 @@ TEST_F(TaskbarPresenceTest, WithNoPlatformShellAtAllNothingCrashes) {
     bare.finishProgress(lease);
     EXPECT_FALSE(bare.shellAvailable());
     EXPECT_TRUE(bare.handleCommand(Click(kShellButtonIdPauseResume)));
+}
+
+// ---------------------------------------------------------------------------
+// TrayAdapter -- the notification area's model
+// ---------------------------------------------------------------------------
+//
+// The tray itself is QML on Qt.labs.platform and needs a real notification area
+// to exist. What it BINDS to does not, which is the reason the split is there:
+// the menu's rows, its labels and the intent behind a click are all assertable
+// with no shell involved at all.
+
+namespace {
+
+ShellPresenceState PresenceFor(UiRecordingState state, bool can_start, bool can_stop, bool can_pause, bool can_resume) {
+    ShellPresenceInput input;
+    input.state = state;
+    input.can_start = can_start;
+    input.can_stop = can_stop;
+    input.can_pause = can_pause;
+    input.can_resume = can_resume;
+    return ProjectShellPresence(input);
+}
+
+} // namespace
+
+TEST(TrayAdapterMenu, IdleOffersOnlyStart) {
+    TrayAdapter tray;
+    tray.setPresence(PresenceFor(UiRecordingState::Ready, true, false, false, false), {}, 0);
+
+    EXPECT_TRUE(tray.recordItem().value(QStringLiteral("visible")).toBool());
+    EXPECT_TRUE(tray.recordItem().value(QStringLiteral("enabled")).toBool());
+    EXPECT_FALSE(tray.pauseResumeItem().value(QStringLiteral("visible")).toBool());
+    EXPECT_FALSE(tray.stopItem().value(QStringLiteral("visible")).toBool());
+}
+
+TEST(TrayAdapterMenu, RecordingOffersPauseAndStop) {
+    TrayAdapter tray;
+    tray.setPresence(PresenceFor(UiRecordingState::Recording, false, true, true, false), {}, 0);
+
+    EXPECT_FALSE(tray.recordItem().value(QStringLiteral("visible")).toBool());
+    EXPECT_TRUE(tray.pauseResumeItem().value(QStringLiteral("visible")).toBool());
+    EXPECT_EQ(tray.pauseResumeItem().value(QStringLiteral("text")).toString(), QStringLiteral("Pause recording"));
+    EXPECT_TRUE(tray.stopItem().value(QStringLiteral("visible")).toBool());
+}
+
+TEST(TrayAdapterMenu, PausedSwapsTheOneEntryToResume) {
+    TrayAdapter tray;
+    tray.setPresence(PresenceFor(UiRecordingState::Paused, false, true, false, true), {}, 0);
+
+    EXPECT_EQ(tray.pauseResumeItem().value(QStringLiteral("text")).toString(), QStringLiteral("Resume recording"));
+    EXPECT_TRUE(tray.stopItem().value(QStringLiteral("visible")).toBool());
+}
+
+TEST(TrayAdapterMenu, ARefusedStartIsGreyedRatherThanGone) {
+    TrayAdapter tray;
+    // Saving: the session is finishing, so a start exists as an action but is not
+    // allowed yet. A vanished entry would read as a bug; a greyed one reads as a
+    // reason.
+    tray.setPresence(PresenceFor(UiRecordingState::Saving, false, false, false, false), {}, 0);
+
+    EXPECT_TRUE(tray.recordItem().value(QStringLiteral("visible")).toBool());
+    EXPECT_FALSE(tray.recordItem().value(QStringLiteral("enabled")).toBool());
+}
+
+TEST(TrayAdapterMenu, EveryTransportRowCarriesAGlyph) {
+    TrayAdapter tray;
+    tray.setPresence(PresenceFor(UiRecordingState::Recording, false, true, true, false), {}, 0);
+
+    EXPECT_TRUE(tray.pauseResumeItem()
+                    .value(QStringLiteral("icon"))
+                    .toString()
+                    .startsWith(QStringLiteral("image://exosnap-shell/glyph/pause/")));
+    EXPECT_TRUE(tray.stopItem()
+                    .value(QStringLiteral("icon"))
+                    .toString()
+                    .startsWith(QStringLiteral("image://exosnap-shell/glyph/stop/")));
+}
+
+TEST(TrayAdapterMenu, OpenOutputFolderAndQuitAreRoutedOutwards) {
+    TrayAdapter tray;
+    QSignalSpy folder(&tray, &TrayAdapter::openOutputFolderRequested);
+    QSignalSpy quit(&tray, &TrayAdapter::quitRequested);
+
+    tray.triggerOpenOutputFolder();
+    tray.triggerQuit();
+    EXPECT_EQ(folder.count(), 1);
+    EXPECT_EQ(quit.count(), 1);
+}
+
+TEST(TrayAdapterAction, AnEntryTheStateRefusesRaisesNothing) {
+    TrayAdapter tray;
+    tray.setPresence(PresenceFor(UiRecordingState::Recording, false, true, false, false), {}, 0);
+    QSignalSpy spy(&tray, &TrayAdapter::shellActionRequested);
+
+    // Pause is offered by the phase but refused by the session's own predicate:
+    // an accelerator between the state change and the repaint must not slip
+    // through.
+    tray.triggerTransport(TrayAdapter::PauseResumeRow);
+    EXPECT_EQ(spy.count(), 0);
+}
+
+TEST(TrayAdapterAction, ARowRaisesTheIntentTheTableResolved) {
+    TrayAdapter tray;
+    tray.setPresence(PresenceFor(UiRecordingState::Paused, false, true, false, true), {}, 0);
+    QSignalSpy spy(&tray, &TrayAdapter::shellActionRequested);
+
+    tray.triggerTransport(TrayAdapter::PauseResumeRow);
+    ASSERT_EQ(spy.count(), 1);
+    EXPECT_EQ(spy.at(0).at(0).value<ShellAction>(), ShellAction::Resume);
+}
+
+TEST(TrayAdapterAction, TheStopRowStops) {
+    TrayAdapter tray;
+    tray.setPresence(PresenceFor(UiRecordingState::Recording, false, true, true, false), {}, 0);
+    QSignalSpy spy(&tray, &TrayAdapter::shellActionRequested);
+
+    tray.triggerTransport(TrayAdapter::StopRow);
+    ASSERT_EQ(spy.count(), 1);
+    EXPECT_EQ(spy.at(0).at(0).value<ShellAction>(), ShellAction::Stop);
+}
+
+TEST(TrayAdapterShowHide, TheLabelDecidesWhichSignalTheEntryRaises) {
+    TrayAdapter tray;
+    QSignalSpy show(&tray, &TrayAdapter::activateWindowRequested);
+    QSignalSpy hide(&tray, &TrayAdapter::hideWindowRequested);
+
+    tray.setWindowVisible(true);
+    ASSERT_EQ(tray.showHideText(), QStringLiteral("Hide window"));
+    tray.triggerShowHide();
+    EXPECT_EQ(hide.count(), 1);
+    EXPECT_EQ(show.count(), 0);
+
+    tray.setWindowVisible(false);
+    ASSERT_EQ(tray.showHideText(), QStringLiteral("Show window"));
+    tray.triggerShowHide();
+    EXPECT_EQ(show.count(), 1);
+    EXPECT_EQ(hide.count(), 1);
+}
+
+TEST(TrayAdapterActivation, ALeftClickAsksForTheWindowAndADoubleClickTogglesRecording) {
+    TrayAdapter tray;
+    QSignalSpy activate(&tray, &TrayAdapter::activateWindowRequested);
+    QSignalSpy toggle(&tray, &TrayAdapter::recordToggleRequested);
+
+    tray.handleActivation(TrayAdapter::TriggerActivation);
+    EXPECT_EQ(activate.count(), 1);
+    EXPECT_EQ(toggle.count(), 0);
+
+    tray.handleActivation(TrayAdapter::DoubleClickActivation);
+    EXPECT_EQ(toggle.count(), 1);
+
+    // A right click opens the menu, which the platform does itself.
+    tray.handleActivation(TrayAdapter::ContextActivation);
+    EXPECT_EQ(activate.count(), 1);
+    EXPECT_EQ(toggle.count(), 1);
+}
+
+TEST(TrayAdapterNotifications, TheEntryAppearsWithACountAndClearsOnUse) {
+    TrayAdapter tray;
+    EXPECT_FALSE(tray.notificationsVisible());
+
+    tray.incrementUnreadCount();
+    tray.incrementUnreadCount();
+    EXPECT_TRUE(tray.notificationsVisible());
+    EXPECT_EQ(tray.notificationsText(), QStringLiteral("Notifications (2)"));
+
+    QSignalSpy activate(&tray, &TrayAdapter::activateWindowRequested);
+    tray.triggerNotifications();
+    EXPECT_EQ(activate.count(), 1);
+    EXPECT_EQ(tray.unreadCount(), 0);
+    EXPECT_FALSE(tray.notificationsVisible());
+}
+
+TEST(TrayAdapterIcon, TheUrlCarriesTheStateTheSizeAndThePalette) {
+    TrayAdapter tray;
+    tray.setAppearance(QStringLiteral("light"), QStringLiteral("violet"));
+    tray.setIconPixelSize(24);
+    tray.setPresence(PresenceFor(UiRecordingState::Paused, false, true, false, true), {}, 0);
+
+    EXPECT_EQ(tray.iconSource(), QStringLiteral("image://exosnap-shell/mark/paused/24/0/light/violet"));
+}
+
+TEST(TrayAdapterIcon, TheHeartbeatFrameIsPartOfTheUrl) {
+    TrayAdapter tray;
+    tray.setPresence(PresenceFor(UiRecordingState::Recording, false, true, true, false), {}, 0);
+    const QString trough = tray.iconSource();
+    tray.setPresence(PresenceFor(UiRecordingState::Recording, false, true, true, false), {}, 2);
+    EXPECT_NE(tray.iconSource(), trough);
+}
+
+TEST(TrayAdapterIcon, AStaticStateIgnoresTheHeartbeatFrame) {
+    // Otherwise a tray that was mid-beat when the recording paused would have a
+    // different URL for the same paused icon, and would repaint for nothing.
+    TrayAdapter tray;
+    tray.setPresence(PresenceFor(UiRecordingState::Paused, false, true, false, true), {}, 0);
+    const QString paused = tray.iconSource();
+    tray.setPresence(PresenceFor(UiRecordingState::Paused, false, true, false, true), {}, 3);
+    EXPECT_EQ(tray.iconSource(), paused);
+}
+
+TEST(TrayAdapterIcon, AnAccentChangeRepaintsWithoutARestart) {
+    TrayAdapter tray;
+    tray.setAppearance(QStringLiteral("dark"), QStringLiteral("aqua"));
+    const QString before = tray.iconSource();
+    QSignalSpy spy(&tray, &TrayAdapter::appearanceChanged);
+
+    tray.setAppearance(QStringLiteral("dark"), QStringLiteral("magenta"));
+    EXPECT_EQ(spy.count(), 1);
+    EXPECT_NE(tray.iconSource(), before);
+}
+
+TEST(TrayAdapterTooltip, ItNamesTheStateAndCarriesTheClockOnlyWhileRecording) {
+    TrayAdapter tray;
+    tray.setPresence(PresenceFor(UiRecordingState::Ready, true, false, false, false), QStringLiteral("04:17"), 0);
+    EXPECT_EQ(tray.tooltip(), QString::fromUtf8("ExoSnap \xE2\x80\x94 Ready"));
+
+    tray.setPresence(PresenceFor(UiRecordingState::Recording, false, true, true, false), QStringLiteral("04:17"), 0);
+    EXPECT_EQ(tray.tooltip(), QString::fromUtf8("ExoSnap \xE2\x80\x94 Recording 04:17"));
+
+    tray.setPresence(PresenceFor(UiRecordingState::Paused, false, true, false, true), QStringLiteral("04:17"), 0);
+    EXPECT_EQ(tray.tooltip(), QString::fromUtf8("ExoSnap \xE2\x80\x94 Paused"));
+}
+
+TEST(TrayAdapterAvailability, ItIsInactiveUntilTheApplicationSaysThereIsATray) {
+    TrayAdapter tray;
+    // The QML tray binds its visibility to this, so a session with no
+    // notification area instantiates the same object and shows nothing.
+    EXPECT_FALSE(tray.active());
+    tray.setActive(true);
+    EXPECT_TRUE(tray.active());
 }

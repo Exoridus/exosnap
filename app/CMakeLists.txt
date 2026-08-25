@@ -53,7 +53,7 @@ endif()
 # single symbol from it. Dropping the component would still build and still run
 # here, and would ship a package whose logo silently fails to load.
 find_package(Qt6 6.11 QUIET COMPONENTS
-    Core Gui Widgets Svg Qml Quick QuickControls2 QuickDialogs2 QuickTest Test)
+    Core Gui Widgets Svg Qml Quick QuickControls2 QuickDialogs2 QuickTest Test LabsPlatform)
 
 # A stand-in `exosnap` custom target is created on the deliberate opt-out path
 # below, so add_subdirectory(app) always leaves a target named `exosnap`
@@ -76,7 +76,7 @@ find_package(Qt6 6.11 QUIET COMPONENTS
 # -DEXOSNAP_BUILD_APP=OFF, instead of being inferred from a failed probe.
 if(EXOSNAP_BUILD_APP AND NOT Qt6_FOUND)
     message(FATAL_ERROR
-        "Qt 6.11 or newer with the Qml/Quick/QuickControls2/QuickDialogs2/QuickTest/Svg "
+        "Qt 6.11 or newer with the Qml/Quick/QuickControls2/QuickDialogs2/QuickTest/Svg/LabsPlatform "
         "components was not found, and EXOSNAP_BUILD_APP is ON.\n"
         "  Install Qt 6.11+ and point CMAKE_PREFIX_PATH or Qt6_DIR at it, or configure "
         "with -DEXOSNAP_BUILD_APP=OFF to build the engine, tools and tests without the "
@@ -100,7 +100,7 @@ qt_standard_project_setup(REQUIRES 6.11)
 # cmake/exosnap_testing.cmake can only copy a module whose imported target
 # actually exists. Without it a QuickTest binary builds and then fails to START
 # with 0xC0000135.
-find_package(Qt6 6.11 REQUIRED COMPONENTS Qml Quick QuickControls2 QuickDialogs2 QuickTest Test)
+find_package(Qt6 6.11 REQUIRED COMPONENTS Qml Quick QuickControls2 QuickDialogs2 QuickTest Test LabsPlatform)
 
 # Qt test executables need Qt DLLs on PATH during gtest_discover_tests (POST_BUILD)
 # and during CTest execution. Add Qt's bin directory to the environment so both work.
@@ -1267,23 +1267,34 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
     set_target_properties(recording_marker_tests PROPERTIES AUTOMOC ON)
 endif()
 
-# TRAY-PRESENCE-R1 tests
+# The runtime brand renderer: the mark, the transport glyphs, the optical
+# profiles, the image-provider ids and the cache. No window, no engine and no
+# tray -- QPainter on a QImage is all it needs, which is what makes the icons
+# assertable rather than only lookable-at.
 exosnap_add_gtest(
-    NAME tray_presence_tests
-    TEST_PREFIX tray.
+    NAME shell_icon_renderer_tests
+    TEST_PREFIX brand.
     SOURCES
-        tests/test_tray_presence.cpp
-        ui/tray/TrayPresence.cpp
-        models/ShellPresence.cpp
+        tests/test_shell_icon_renderer.cpp
+        ui/brand/ShellIconRenderer.cpp
         models/RecordingPulse.cpp
-    # The one test target that still links Qt6::Widgets, for the same reason the
-    # shipping application does: QSystemTrayIcon is a QtWidgets type and needs a
-    # QApplication. If this line ever spreads to another target, a Widgets type
-    # crept back into something that is not the tray.
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability exosnap_engine
+    LIBRARIES Qt6::Core Qt6::Gui
 )
-target_include_directories(tray_presence_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-set_target_properties(tray_presence_tests PROPERTIES AUTOMOC ON)
+target_include_directories(shell_icon_renderer_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+# The drift guard between the checked-in brand artefacts and the canonical
+# geometry. It reads the .svg and the header as text rather than importing
+# either, because what it is guarding against is exactly the two disagreeing.
+exosnap_add_gtest(
+    NAME brand_geometry_tests
+    TEST_PREFIX brand.geometry.
+    SOURCES
+        tests/test_brand_geometry.cpp
+    LIBRARIES Qt6::Core
+)
+target_include_directories(brand_geometry_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(brand_geometry_tests PRIVATE
+    EXOSNAP_BRAND_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 
 # Pure unit tests for HumanizeEngineDetail (RecordingErrorPanel's raw-enum → canon
 # label mapping). Dependency-light: QString only.

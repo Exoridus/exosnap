@@ -47,13 +47,6 @@ UINT taskbarButtonCreatedMessage() {
     return message;
 }
 
-// Resource ids and .ico paths for the three window-icon variants, kept in the same
-// order as QuickWindowChrome::IconState.
-struct IconVariant {
-    const char* qrc_path = nullptr;
-    WORD resource_id = 0;
-};
-
 // The scale factor to convert this window's physical pixels into the logical
 // units QML reports its geometry in.
 //
@@ -124,20 +117,6 @@ const char* sysCommandName(WPARAM wparam) {
     default:
         return "SC_other";
     }
-}
-
-IconVariant iconVariantFor(QuickWindowChrome::IconState state) {
-    switch (state) {
-    case QuickWindowChrome::Recording:
-        return {":/brand/exosnap-logo-recording.ico", IDI_EXOSNAP_APP_ICON_RECORDING};
-    case QuickWindowChrome::Paused:
-        return {":/brand/exosnap-logo-paused.ico", IDI_EXOSNAP_APP_ICON_PAUSED};
-    case QuickWindowChrome::Saved:
-        return {":/brand/exosnap-logo-saved.ico", IDI_EXOSNAP_APP_ICON_SAVED};
-    case QuickWindowChrome::Idle:
-        break;
-    }
-    return {":/brand/exosnap-logo-idle.ico", IDI_EXOSNAP_APP_ICON};
 }
 
 #endif // Q_OS_WIN
@@ -530,13 +509,16 @@ void QuickWindowChrome::refreshWindowMaximized() {
     emit windowMaximizedChanged();
 }
 
-void QuickWindowChrome::applyWindowIcon(IconState state) {
+void QuickWindowChrome::applyWindowIcon() {
 #if defined(Q_OS_WIN)
-    const IconVariant variant = iconVariantFor(state);
-
-    const QIcon icon(QString::fromLatin1(variant.qrc_path));
+    // The application icon, and only ever the application icon. A window icon
+    // that changed with the session put the recording state on the taskbar
+    // BUTTON, which is where the button's own overlay badge belongs -- and a
+    // WM_SETICON is a full taskbar redraw, so a state that pulses would have
+    // redrawn it several times a second for the length of a recording.
+    const QIcon icon(QStringLiteral(":/brand/exosnap-app.ico"));
     if (icon.isNull()) {
-        qWarning().noquote() << "QuickWindowChrome: icon load failed from" << variant.qrc_path;
+        qWarning().noquote() << "QuickWindowChrome: icon load failed from :/brand/exosnap-app.ico";
     } else if (!target_.isNull()) {
         // Qt's Windows platform plugin turns setIcon into WM_SETICON for both
         // ICON_SMALL and ICON_BIG, so this alone already updates frame + taskbar.
@@ -551,20 +533,20 @@ void QuickWindowChrome::applyWindowIcon(IconState state) {
         return;
 
     // Belt-and-braces path carried over from the Widgets shell: the EXE's own icon
-    // resources. It contributes only if exosnap.rc is compiled into this target;
-    // when it is not, LoadImageW fails and the Qt path above is the whole story.
-    // LR_SHARED is safe because the OS caches per (instance, id, size) tuple and
-    // the three variants use distinct ids.
-    HICON small_icon = static_cast<HICON>(
-        LoadImageW(instance, MAKEINTRESOURCEW(variant.resource_id), IMAGE_ICON, 16, 16, LR_DEFAULTCOLOR | LR_SHARED));
-    HICON big_icon = static_cast<HICON>(
-        LoadImageW(instance, MAKEINTRESOURCEW(variant.resource_id), IMAGE_ICON, 32, 32, LR_DEFAULTCOLOR | LR_SHARED));
+    // resource, which is the multi-resolution one Explorer shows. It contributes
+    // only if exosnap.rc is compiled into this target; when it is not, LoadImageW
+    // fails and the Qt path above is the whole story. LR_SHARED is safe because
+    // the OS caches per (instance, id, size) tuple.
+    HICON small_icon = static_cast<HICON>(LoadImageW(instance, MAKEINTRESOURCEW(IDI_EXOSNAP_APP_ICON), IMAGE_ICON,
+                                                     GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON),
+                                                     LR_DEFAULTCOLOR | LR_SHARED));
+    HICON big_icon = static_cast<HICON>(LoadImageW(instance, MAKEINTRESOURCEW(IDI_EXOSNAP_APP_ICON), IMAGE_ICON,
+                                                   GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON),
+                                                   LR_DEFAULTCOLOR | LR_SHARED));
     if (small_icon != nullptr)
         SendMessageW(hwnd, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(small_icon));
     if (big_icon != nullptr)
         SendMessageW(hwnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(big_icon));
-#else
-    Q_UNUSED(state);
 #endif
 }
 

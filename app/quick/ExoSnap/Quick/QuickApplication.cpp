@@ -71,6 +71,24 @@
 namespace exosnap::quick {
 namespace {
 
+// The raster the notification area will ask for, in device pixels.
+//
+// Shell_NotifyIcon takes one HICON at one size, and Qt's Windows tray backend
+// asks the QIcon for exactly SM_CXSMICON. Rendering the mark at that size means
+// nothing rescales it -- which is the whole point of the optical profiles, since
+// a single large raster reduced to 16 px cannot have thicker strokes there.
+//
+// The metric is DPI-scaled by the system, so a 150 % display reports 24 rather
+// than 16 and the mark follows it.
+[[nodiscard]] int TrayIconPixelSize() {
+#if defined(Q_OS_WIN)
+    const int px = GetSystemMetrics(SM_CXSMICON);
+    return px > 0 ? px : 16;
+#else
+    return 16;
+#endif
+}
+
 models::AboutInfo buildAboutInfo(const PersistedAppSettings& settings) {
     const bool is_scoop = UpdateService::IsScoopManagedInstall(QCoreApplication::applicationDirPath());
     return models::BuildAboutInfo(settings.update_channel, exosnap::update::DetectInstallMode(), is_scoop);
@@ -2355,6 +2373,9 @@ void QuickApplication::applyThemeFromSettings() {
                                                                     QStringLiteral("QuickThemeTokens"))) {
         tokens->setAppearance(settings_.appearance_id, settings_.accent_id);
     }
+    // The tray mark carries the accent too, and it is not part of the scene, so
+    // it does not follow the token singleton. Same ids, one call, no restart.
+    tray_adapter_.setAppearance(settings_.appearance_id, settings_.accent_id);
 }
 
 void QuickApplication::persistLiveConfig() {
@@ -3731,29 +3752,39 @@ void QuickApplication::initializeTray() {
     if (!QSystemTrayIcon::isSystemTrayAvailable())
         return;
 
-    tray_presence_ = std::make_unique<ui::tray::TrayPresence>();
+    // The notification area's icon metric, in device pixels. Rendering at any
+    // other size means the shell rescales the mark, which is what the optical
+    // profiles exist to avoid.
+    tray_adapter_.setIconPixelSize(TrayIconPixelSize());
+    tray_adapter_.setAppearance(settings_.appearance_id, settings_.accent_id);
+    tray_adapter_.setActive(true);
 
-    QObject::connect(tray_presence_.get(), &ui::tray::TrayPresence::activateWindowRequested, &shell_adapter_,
+    QObject::connect(&tray_adapter_, &TrayAdapter::activateWindowRequested, &shell_adapter_,
                      [this]() { restoreWindowFromTray(); });
     // The same menu entry under its other label. It reported "Hide window" and
     // then raised the window, because both labels emitted the one signal.
-    QObject::connect(tray_presence_.get(), &ui::tray::TrayPresence::hideWindowRequested, &shell_adapter_,
+    QObject::connect(&tray_adapter_, &TrayAdapter::hideWindowRequested, &shell_adapter_,
                      [this]() { hideWindowToTray(); });
     // Same entry point the global hotkey uses, so the tray cannot develop its own
     // idea of what "toggle recording" means. This is the double-click gesture,
     // which has no state to read -- the menu's transport entries carry a resolved
     // action instead, below.
-    QObject::connect(tray_presence_.get(), &ui::tray::TrayPresence::recordToggleRequested, &shell_adapter_,
+    QObject::connect(&tray_adapter_, &TrayAdapter::recordToggleRequested, &shell_adapter_,
                      [this]() { triggerHotkeyAction(HotkeyAction::ToggleRecording); });
     // The menu's transport entries and the taskbar's thumbnail buttons raise the
     // same signal with the same projection-resolved intent, and land in the same
     // handler.
-    QObject::connect(tray_presence_.get(), &ui::tray::TrayPresence::shellActionRequested, &shell_adapter_,
+    QObject::connect(&tray_adapter_, &TrayAdapter::shellActionRequested, &shell_adapter_,
                      [this](ShellAction action) { performShellAction(action); });
+    // The configured output directory, through the same helper the Saved toast's
+    // "Open folder" action uses. A second folder resolution in QML would be a
+    // second answer to where recordings go.
+    QObject::connect(&tray_adapter_, &TrayAdapter::openOutputFolderRequested, &shell_adapter_,
+                     [this]() { openConfiguredOutputFolder(); });
     // Routed through the window rather than QCoreApplication::quit() so the
     // attempt still passes onClosing -> requestClose() and therefore the guards:
     // "Quit" from the tray must still ask about a running recording.
-    QObject::connect(tray_presence_.get(), &ui::tray::TrayPresence::quitRequested, &shell_adapter_, [this]() {
+    QObject::connect(&tray_adapter_, &TrayAdapter::quitRequested, &shell_adapter_, [this]() {
         // Logged because a tray Quit that is then refused by a close guard is
         // completely silent to the user: no prompt, no toast, the window simply
         // stays. Paired with the shell's own close-decision line, the log then says
@@ -3769,10 +3800,10 @@ void QuickApplication::initializeTray() {
             return;
         }
         // No window to deliver a close event to -- it is hidden in the tray.
-        // Routing the request
-        // through a window in that state is how a tray Quit came to do nothing at
-        // all, so ask the shell directly: same guard chain, same decision, and the
-        // approved case quits through closeDecided like every other close.
+        // Routing the request through a window in that state is how a tray Quit
+        // came to do nothing at all, so ask the shell directly: same guard chain,
+        // same decision, and the approved case quits through closeDecided like
+        // every other close.
         if (shell_adapter_.requestClose())
             flushPendingPersists();
     });
@@ -3780,19 +3811,23 @@ void QuickApplication::initializeTray() {
     // The unread badge mirrors the in-window bell: a toast raised while the
     // window is hidden is otherwise invisible.
     QObject::connect(&notifications_adapter_.manager(), &notifications::NotificationManager::eventRecorded,
-                     tray_presence_.get(), [this](const notifications::NotificationEvent&) {
-                         if (tray_presence_ && root_window_ && !root_window_->isVisible())
-                             tray_presence_->incrementUnreadCount();
+                     &tray_adapter_, [this](const notifications::NotificationEvent&) {
+                         if (root_window_ && !root_window_->isVisible())
+                             tray_adapter_.incrementUnreadCount();
                      });
 
     if (root_window_) {
-        tray_presence_->setWindowVisible(root_window_->isVisible());
-        QObject::connect(root_window_, &QWindow::activeChanged, tray_presence_.get(), [this]() {
-            if (tray_presence_ && root_window_ && root_window_->isActive())
-                tray_presence_->clearUnreadCount();
+        tray_adapter_.setWindowVisible(root_window_->isVisible());
+        QObject::connect(root_window_, &QWindow::activeChanged, &tray_adapter_, [this]() {
+            if (root_window_ && root_window_->isActive())
+                tray_adapter_.clearUnreadCount();
         });
+        // The notification area's icon metric follows the display the shell is
+        // on, so a window dragged to a differently scaled monitor needs the mark
+        // re-rendered at the new size.
+        QObject::connect(root_window_, &QWindow::screenChanged, &tray_adapter_,
+                         [this](QScreen*) { tray_adapter_.setIconPixelSize(TrayIconPixelSize()); });
     }
-    tray_presence_->show();
     refreshTrayState();
 }
 
@@ -3820,48 +3855,44 @@ void QuickApplication::refreshTrayState() {
 void QuickApplication::applyShellPresence() {
     const ShellPresenceState& state = shell_presence_.presence();
 
-    if (tray_presence_) {
-        tray_presence_->applyState(state, record_view_model_adapter_.elapsedText(), shell_presence_.pulseFrame());
-    }
+    tray_adapter_.setPresence(state, record_view_model_adapter_.elapsedText(), shell_presence_.pulseFrame());
 
-    // The WINDOW icon, which is what the taskbar button shows -- a different
-    // surface from the tray icon above, and the one the Widgets frontend used to
-    // swap. Driven from the same projection so the two cannot disagree.
-    QuickWindowChrome::IconState icon_state = QuickWindowChrome::Idle;
-    switch (state.icon_state) {
-    case ShellIconState::Recording:
-        icon_state = QuickWindowChrome::Recording;
-        break;
-    case ShellIconState::Paused:
-        icon_state = QuickWindowChrome::Paused;
-        break;
-    case ShellIconState::Saved:
-        icon_state = QuickWindowChrome::Saved;
-        break;
-    case ShellIconState::Idle:
-        break;
-    }
-    // Only on a real change, and deliberately NOT pulsed: applyWindowIcon loads an
-    // icon and sends two WM_SETICONs, which is a full taskbar redraw. The
-    // heartbeat belongs on the overlay badge, which is the surface Windows draws
-    // for exactly that purpose.
-    if (icon_state != window_icon_state_) {
-        window_icon_state_ = icon_state;
-        if (root_window_) {
-            if (auto* chrome = root_window_->findChild<QuickWindowChrome*>())
-                chrome->applyWindowIcon(icon_state);
-        }
+    // The window icon is NOT part of this. It is the application's identity and
+    // stays the executable's own multi-resolution mark in every state: what a
+    // session is doing reaches the taskbar as the button's overlay badge, which
+    // is the surface Windows draws for exactly that purpose. A window icon that
+    // followed the state meant a WM_SETICON -- a full taskbar redraw -- on every
+    // transition, and would have meant one per heartbeat frame.
+    if (state.icon_state != shell_icon_state_) {
+        shell_icon_state_ = state.icon_state;
         // The tray icon and the taskbar badge are shell chrome outside our
         // window: QQuickWindow::grabWindow renders our scene graph and cannot
         // see either. This line is the timestamped counterpart to a developer
         // looking at the screen, which is the only way they CAN be confirmed.
         static const char* const kIconStateNames[] = {"idle", "recording", "paused", "saved"};
         diagnostics::AppLog::info(QStringLiteral("shell"),
-                                  QStringLiteral("shell presence -> %1 (tray + taskbar badge + window icon)")
-                                      .arg(QString::fromLatin1(kIconStateNames[static_cast<int>(icon_state)])));
+                                  QStringLiteral("shell presence -> %1 (tray + taskbar badge)")
+                                      .arg(QString::fromLatin1(kIconStateNames[static_cast<int>(state.icon_state)])));
     }
 
     taskbar_presence_.setPresence(state, shell_presence_.taskbarPulseLevel());
+}
+
+void QuickApplication::openConfiguredOutputFolder() {
+    const std::filesystem::path& folder = live_config_.output.output_folder;
+    if (folder.empty())
+        return;
+    // Never created here. An output folder that does not exist yet is a settings
+    // problem the Settings page reports, and silently making the directory would
+    // hide a mistyped path until the first recording failed to land where the
+    // user expected.
+    const QString path = QString::fromStdWString(folder.wstring());
+    if (!QFileInfo::exists(path)) {
+        diagnostics::AppLog::warning(QStringLiteral("shell"),
+                                     QStringLiteral("output folder does not exist: %1").arg(path));
+        return;
+    }
+    QDesktopServices::openUrl(QUrl::fromLocalFile(path));
 }
 
 void QuickApplication::performShellAction(ShellAction action) {
@@ -4001,8 +4032,7 @@ void QuickApplication::hideWindowToTray() {
     if (auto* chrome = root_window_->findChild<QuickWindowChrome*>())
         hidden_while_maximized_ = chrome->willOccupyScreenMaximized();
     root_window_->hide();
-    if (tray_presence_)
-        tray_presence_->setWindowVisible(false);
+    tray_adapter_.setWindowVisible(false);
 
     // No one-time "still running" notice. The window is only ever hidden by a
     // gesture that already MEANS "put this away" -- a minimize with the preference
@@ -4040,10 +4070,8 @@ void QuickApplication::restoreWindowFromTray() {
     }
     root_window_->raise();
     root_window_->requestActivate();
-    if (tray_presence_) {
-        tray_presence_->setWindowVisible(true);
-        tray_presence_->clearUnreadCount();
-    }
+    tray_adapter_.setWindowVisible(true);
+    tray_adapter_.clearUnreadCount();
 }
 
 CloseGuardState QuickApplication::sampleCloseGuardState() const {
@@ -4114,6 +4142,12 @@ bool QuickApplication::load(bool no_activate) {
         engine_.addImageProvider(QLatin1String(kEditTileProviderId), edit_tile_provider_);
         edit_tile_provider_registered_ = true;
     }
+    if (!shell_icon_provider_registered_) {
+        // The engine takes ownership. Registered before the first load because
+        // the tray binds its icon URL as soon as Main.qml is instantiated.
+        engine_.addImageProvider(QLatin1String(kShellIconProviderId), new ShellIconProvider);
+        shell_icon_provider_registered_ = true;
+    }
     // Resolved before the engine loads so the window is created at its final
     // placement rather than jumping there after the first frame.
     const QSize minimum_size(ui::theme::ExoSnapMetrics::kMinWindowWidth, ui::theme::ExoSnapMetrics::kMinWindowHeight);
@@ -4148,6 +4182,7 @@ bool QuickApplication::load(bool no_activate) {
         {QStringLiteral("whatsNew"), QVariant::fromValue(&whats_new_adapter_)},
         {QStringLiteral("overlays"), QVariant::fromValue(&overlay_adapter_)},
         {QStringLiteral("shellPresence"), QVariant::fromValue(&shell_presence_)},
+        {QStringLiteral("trayAdapter"), QVariant::fromValue(&tray_adapter_)},
         {QStringLiteral("noActivate"), no_activate},
         // ADR 0033, and deliberately an initial property rather than a
         // navigation emitted once the engine has loaded. By that point a
@@ -4204,7 +4239,7 @@ bool QuickApplication::load(bool no_activate) {
             // Win+Down and the taskbar button send, so a QML-side check on the
             // button alone would leave the native routes on the old behaviour.
             chrome->setMinimizeToTrayProvider([this]() {
-                return EvaluateMinimize(settings_.minimize_to_tray, tray_presence_ != nullptr) ==
+                return EvaluateMinimize(settings_.minimize_to_tray, tray_adapter_.active()) ==
                        MinimizeOutcome::HideToTray;
             });
             QObject::connect(chrome, &QuickWindowChrome::minimizeToTrayRequested, chrome,

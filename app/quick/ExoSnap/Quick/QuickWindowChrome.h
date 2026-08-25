@@ -83,13 +83,6 @@ class QuickWindowChrome : public QObject, public QAbstractNativeEventFilter {
                    setNonClientActivationWorkaround NOTIFY nonClientActivationWorkaroundChanged FINAL)
 
   public:
-    // Window/taskbar icon variants. The three .ico files and the three Win32
-    // resource ids are the same assets the Widgets shell switched between in
-    // MainWindow::switchRecordingIcon; Paused takes precedence over Recording
-    // there and the caller is expected to keep that precedence.
-    enum IconState { Idle, Recording, Paused, Saved };
-    Q_ENUM(IconState)
-
     // The default title band height matches ui::theme::ExoSnapMetrics::kTitlebarHeight (40).
     static constexpr int kDefaultTitleBarHeight = 40;
     // The Widgets shell used an 8 px grab band (resizeZoneFromLocalPoint).
@@ -212,9 +205,13 @@ class QuickWindowChrome : public QObject, public QAbstractNativeEventFilter {
     // which is exactly the case being asked about here.
     [[nodiscard]] Q_INVOKABLE bool willOccupyScreenMaximized() const;
 
-    // Sets QWindow::icon and posts WM_SETICON for ICON_SMALL/ICON_BIG. Qt's own
-    // icon path updates the frame; the taskbar BUTTON only follows WM_SETICON.
-    Q_INVOKABLE void applyWindowIcon(IconState state);
+    // Sets QWindow::icon and posts WM_SETICON for ICON_SMALL/ICON_BIG from the
+    // executable's own multi-resolution icon. Qt's icon path updates the frame;
+    // the taskbar BUTTON only follows WM_SETICON.
+    //
+    // Idempotent and state-free: the session's state reaches the taskbar as the
+    // button's overlay badge, never as a different application icon.
+    Q_INVOKABLE void applyWindowIcon();
 
     [[nodiscard]] QQuickWindow* target() const noexcept;
     void setTarget(QQuickWindow* window);
