@@ -5,8 +5,9 @@
 // Everything below it -- the tray icon, the window/taskbar icon, the taskbar
 // thumbnail buttons, the in-app recording indicator -- reads this object and
 // nothing else. What it adds to the pure projection in models/ShellPresence.h is
-// the two pieces of state that need a clock: the recording-entry heartbeat, and
-// the bounded dwell after a recording is saved.
+// the state that needs a clock: the recording-entry heartbeat, the processing
+// sequence, the settle that keeps a fast stop from flashing, and the bounded
+// dwell after a recording is saved.
 //
 // Both clocks are owned here rather than by their surfaces. Two timers ticking at
 // the same nominal rate drift apart within a minute, and the tray and the taskbar
@@ -58,9 +59,11 @@ class ShellPresenceAdapter : public QObject {
     [[nodiscard]] bool busy() const noexcept;
     [[nodiscard]] bool saved() const noexcept;
 
-    // The frame the shell surfaces render. After the entry beat it rests on the
-    // peak, so a static recording always draws the mark at full weight.
-    [[nodiscard]] int pulseFrame() const noexcept;
+    // The frame of whichever animated mark the shell is currently showing: the
+    // recording beat, the processing sequence, or zero for a static one. One
+    // accessor rather than one per animation, because the surfaces render one
+    // mark and asking them to pick would be asking them to re-derive the state.
+    [[nodiscard]] int markFrame() const noexcept;
     // Whether the recording-entry beat is still playing. It ends on its own after
     // a fixed couple of cycles, which is what makes the shell go static.
     [[nodiscard]] bool shellPulseActive() const noexcept;
@@ -83,6 +86,10 @@ class ShellPresenceAdapter : public QObject {
     // The finalizing settle is a quarter second of wall clock; a test that waited
     // it out would be measuring QTimer.
     void setFinalizingSettleMsForTest(int ms);
+    // The processing sequence runs for as long as finalizing lasts, which a test
+    // cannot wait out and should not have to.
+    void advanceProcessingForTest();
+    [[nodiscard]] bool processingRunningForTest() const;
     [[nodiscard]] bool finalizingSettleRunningForTest() const;
     void expireFinalizingSettleForTest();
 
@@ -101,6 +108,8 @@ class ShellPresenceAdapter : public QObject {
     void onFinalizingSettled();
     void syncPulseTimer();
     void onPulseTick();
+    void syncProcessingTimer();
+    void onProcessingTick();
 
     ShellPresenceInput input_;
     ShellPresenceState state_;
@@ -121,6 +130,13 @@ class ShellPresenceAdapter : public QObject {
     // thing to show.
     QTimer finalizing_timer_;
     bool finalizing_settled_ = false;
+
+    // Runs for as long as the shell shows the processing mark. Unbounded on
+    // purpose, and bounded in practice by the operation it describes: unlike the
+    // recording beat there is no state here that lasts for hours, and the
+    // taskbar's progress bar is running beside it for the same reason.
+    QTimer processing_timer_;
+    int processing_frame_ = 0;
 
     QTimer saved_timer_;
     // Bumped on every arm AND every clear, which is what makes a timeout that

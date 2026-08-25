@@ -8,6 +8,7 @@
 
 #include <QCoreApplication>
 #include <QElapsedTimer>
+#include <QSet>
 #include <QSignalSpy>
 
 #include <gtest/gtest.h>
@@ -15,7 +16,10 @@
 #include <memory>
 #include <vector>
 
+using exosnap::kProcessingFrameCount;
+using exosnap::kProcessingFrameIntervalMs;
 using exosnap::kRecordingPulseFrameCount;
+using exosnap::kRecordingPulseIntervalMs;
 using exosnap::kRecordingPulsePeakFrame;
 using exosnap::kRecordingPulseTransitionCycles;
 using exosnap::kRecordingPulseTransitionTicks;
@@ -194,16 +198,34 @@ TEST(ShellPresenceAdapterPulse, ACountdownShowsTheRecordingBadgeButHoldsItStill)
     EXPECT_FALSE(adapter.pulseRunningForTest());
 }
 
-TEST(ShellPresenceAdapterPulse, LeavingRecordingSettlesOnTheStaticRecordingFrame) {
+TEST(ShellPresenceAdapterPulse, ARecordingThatOutlastsTheBeatRestsOnThePeakFrame) {
+    // The transition ends on the peak, which IS the static recording mark, so the
+    // last frame of the beat and the state it settles into are the same image.
     EnsureApplication();
     ShellPresenceAdapter adapter;
     adapter.setRecordingState(UiRecordingState::Recording, false, true, true, false, false);
     adapter.advancePulseForTest();
-    ASSERT_NE(adapter.pulseFrame(), kRecordingPulsePeakFrame);
+    ASSERT_NE(adapter.markFrame(), kRecordingPulsePeakFrame);
+
+    for (int tick = 0; tick < kRecordingPulseTransitionTicks; ++tick)
+        adapter.advancePulseForTest();
+    EXPECT_FALSE(adapter.shellPulseActive());
+    EXPECT_EQ(adapter.presence().icon_state, ShellIconState::Recording);
+    EXPECT_EQ(adapter.markFrame(), kRecordingPulsePeakFrame);
+}
+
+TEST(ShellPresenceAdapterPulse, AStaticMarkHasNoFrameAtAll) {
+    // Leaving Recording cancels the beat, and the mark the shell then shows is a
+    // single drawing. Reporting a leftover frame number for it would put a
+    // recording frame's index in a paused icon's URL.
+    EnsureApplication();
+    ShellPresenceAdapter adapter;
+    adapter.setRecordingState(UiRecordingState::Recording, false, true, true, false, false);
+    adapter.advancePulseForTest();
 
     adapter.setRecordingState(UiRecordingState::Paused, false, true, false, true, false);
     EXPECT_FALSE(adapter.shellPulseActive());
-    EXPECT_EQ(adapter.pulseFrame(), kRecordingPulsePeakFrame);
+    EXPECT_EQ(adapter.markFrame(), 0);
 }
 
 TEST(ShellPresenceAdapterPulse, EveryRecordingStartsAtTheTrough) {
@@ -211,11 +233,11 @@ TEST(ShellPresenceAdapterPulse, EveryRecordingStartsAtTheTrough) {
     ShellPresenceAdapter adapter;
     adapter.setRecordingState(UiRecordingState::Recording, false, true, true, false, false);
     adapter.advancePulseForTest();
-    ASSERT_NE(adapter.pulseFrame(), 0);
+    ASSERT_NE(adapter.markFrame(), 0);
 
     adapter.setRecordingState(UiRecordingState::Ready, true, false, false, false, false);
     adapter.setRecordingState(UiRecordingState::Recording, false, true, true, false, false);
-    EXPECT_EQ(adapter.pulseFrame(), 0);
+    EXPECT_EQ(adapter.markFrame(), 0);
 }
 
 TEST(ShellPresenceAdapterPulse, ThePhaseWrapsThroughTheWholeBeat) {
@@ -224,7 +246,7 @@ TEST(ShellPresenceAdapterPulse, ThePhaseWrapsThroughTheWholeBeat) {
     adapter.setRecordingState(UiRecordingState::Recording, false, true, true, false, false);
     for (int i = 0; i < kRecordingPulseFrameCount; ++i)
         adapter.advancePulseForTest();
-    EXPECT_EQ(adapter.pulseFrame(), 0);
+    EXPECT_EQ(adapter.markFrame(), 0);
 }
 
 // -- ShellPresenceAdapter: the beat is a transition, not a state --------------
@@ -248,7 +270,7 @@ TEST(ShellPresenceAdapterPulse, TheBeatEndsAndTheRecordingStaysStatic) {
     EXPECT_FALSE(adapter.shellPulseActive());
     // The peak IS the static recording mark, so the beat's last frame and the
     // state it settles into are the same image.
-    EXPECT_EQ(adapter.pulseFrame(), kRecordingPulsePeakFrame);
+    EXPECT_EQ(adapter.markFrame(), kRecordingPulsePeakFrame);
     EXPECT_EQ(adapter.presence().icon_state, ShellIconState::Recording);
 }
 
@@ -264,7 +286,7 @@ TEST(ShellPresenceAdapterPulse, AFinishedBeatDoesNotRestartWhileTheRecordingRuns
     for (int i = 0; i < 5; ++i)
         adapter.setRecordingState(UiRecordingState::Recording, false, true, true, false, false);
     EXPECT_FALSE(adapter.shellPulseActive());
-    EXPECT_EQ(adapter.pulseFrame(), kRecordingPulsePeakFrame);
+    EXPECT_EQ(adapter.markFrame(), kRecordingPulsePeakFrame);
 }
 
 TEST(ShellPresenceAdapterPulse, ResumeStartsTheTransitionAgain) {
@@ -301,11 +323,11 @@ TEST(ShellPresenceAdapterPulse, AStalePulseTickCannotRepaintALaterState) {
     adapter.setRecordingState(UiRecordingState::Recording, false, true, true, false, false);
     adapter.advancePulseForTest();
     adapter.setRecordingState(UiRecordingState::Paused, false, true, false, true, false);
-    const int settled = adapter.pulseFrame();
+    const int settled = adapter.markFrame();
 
     // The tick Qt had already queued when the state changed.
     adapter.advancePulseForTest();
-    EXPECT_EQ(adapter.pulseFrame(), settled);
+    EXPECT_EQ(adapter.markFrame(), settled);
     EXPECT_FALSE(adapter.shellPulseActive());
     EXPECT_EQ(adapter.presence().icon_state, ShellIconState::Paused);
 }
@@ -316,17 +338,17 @@ TEST(ShellPresenceAdapterPulse, TheTimerActuallyTicksOnItsOwn) {
     EnsureApplication();
     ShellPresenceAdapter adapter;
     adapter.setRecordingState(UiRecordingState::Recording, false, true, true, false, false);
-    ASSERT_EQ(adapter.pulseFrame(), 0);
-    EXPECT_TRUE(SpinUntil([&adapter]() { return adapter.pulseFrame() != 0; }));
+    ASSERT_EQ(adapter.markFrame(), 0);
+    EXPECT_TRUE(SpinUntil([&adapter]() { return adapter.markFrame() != 0; }));
 }
 
 // -- ShellPresenceAdapter: the finalizing flash ------------------------------
 //
-// Finalizing projects to the neutral mark, and for a stream-copy container it is
-// over in well under a tenth of a second. Painting it straight away put a neutral
+// Finalizing projects to the processing mark, and for a stream-copy container it
+// is over in well under a tenth of a second. Painting it straight away put a
 // FLASH between the coral recording and the green result on both shell surfaces.
 
-TEST(ShellPresenceAdapterFinalizing, AShortStopNeverShowsTheNeutralMark) {
+TEST(ShellPresenceAdapterFinalizing, AShortStopNeverShowsTheProcessingMark) {
     EnsureApplication();
     ShellPresenceAdapter adapter;
     adapter.setRecordingState(UiRecordingState::Recording, false, true, true, false, false);
@@ -349,10 +371,10 @@ TEST(ShellPresenceAdapterFinalizing, AFinalizingThatLastsIsShown) {
     adapter.setRecordingState(UiRecordingState::Saving, false, false, false, false, false);
     ASSERT_TRUE(adapter.finalizingSettleRunningForTest());
 
-    // A remux long enough to be worth reporting: the neutral mark, and the
+    // A remux long enough to be worth reporting: the processing mark, and the
     // taskbar's progress bar beside it.
     adapter.expireFinalizingSettleForTest();
-    EXPECT_EQ(adapter.presence().icon_state, ShellIconState::Idle);
+    EXPECT_EQ(adapter.presence().icon_state, ShellIconState::Processing);
     EXPECT_EQ(adapter.presence().phase, ShellPhase::Finalizing);
 }
 
@@ -386,7 +408,7 @@ TEST(ShellPresenceAdapterFinalizing, ASecondFinalizingSettlesAgainFromScratch) {
     adapter.setRecordingState(UiRecordingState::Recording, false, true, true, false, false);
     adapter.setRecordingState(UiRecordingState::Saving, false, false, false, false, false);
     adapter.expireFinalizingSettleForTest();
-    ASSERT_EQ(adapter.presence().icon_state, ShellIconState::Idle);
+    ASSERT_EQ(adapter.presence().icon_state, ShellIconState::Processing);
 
     adapter.setRecordingState(UiRecordingState::Completed, true, false, false, false, true);
     adapter.setRecordingState(UiRecordingState::Recording, false, true, true, false, false);
@@ -405,10 +427,95 @@ TEST(ShellPresenceAdapterFinalizing, TheSettleTimerActuallyRunsOnItsOwn) {
     adapter.setRecordingState(UiRecordingState::Recording, false, true, true, false, false);
     adapter.setRecordingState(UiRecordingState::Saving, false, false, false, false, false);
     ASSERT_EQ(adapter.presence().icon_state, ShellIconState::Recording);
-    EXPECT_TRUE(SpinUntil([&adapter]() { return adapter.presence().icon_state == ShellIconState::Idle; }));
+    EXPECT_TRUE(SpinUntil([&adapter]() { return adapter.presence().icon_state == ShellIconState::Processing; }));
 }
 
 // -- ShellPresenceAdapter: saved dwell ---------------------------------------
+
+// -- ShellPresenceAdapter: the processing sequence ---------------------------
+//
+// Unlike the recording beat this one is not a transition: it runs for as long as
+// the operation it describes does. What bounds it is the operation, and the
+// taskbar's progress bar is running beside it for the same reason.
+
+TEST(ShellPresenceAdapterProcessing, TheSequenceWaitsForTheSettle) {
+    EnsureApplication();
+    ShellPresenceAdapter adapter;
+    adapter.setRecordingState(UiRecordingState::Recording, false, true, true, false, false);
+    adapter.setRecordingState(UiRecordingState::Saving, false, false, false, false, false);
+    // The mark is still the recording one, so animating would animate THAT.
+    ASSERT_EQ(adapter.presence().icon_state, ShellIconState::Recording);
+    EXPECT_FALSE(adapter.processingRunningForTest());
+
+    adapter.expireFinalizingSettleForTest();
+    ASSERT_EQ(adapter.presence().icon_state, ShellIconState::Processing);
+    EXPECT_TRUE(adapter.processingRunningForTest());
+    EXPECT_EQ(adapter.markFrame(), 0) << "the sequence starts at its first frame";
+}
+
+TEST(ShellPresenceAdapterProcessing, TheSequenceAdvancesAndWraps) {
+    EnsureApplication();
+    ShellPresenceAdapter adapter;
+    adapter.setRecordingState(UiRecordingState::Saving, false, false, false, false, false);
+    adapter.expireFinalizingSettleForTest();
+    ASSERT_EQ(adapter.presence().icon_state, ShellIconState::Processing);
+
+    QSet<int> seen;
+    for (int tick = 0; tick < kProcessingFrameCount * 2; ++tick) {
+        seen.insert(adapter.markFrame());
+        adapter.advanceProcessingForTest();
+    }
+    EXPECT_EQ(seen.size(), kProcessingFrameCount);
+    EXPECT_EQ(adapter.markFrame(), 0) << "two full cycles land back on the first frame";
+}
+
+TEST(ShellPresenceAdapterProcessing, LeavingProcessingStopsTheSequence) {
+    EnsureApplication();
+    ShellPresenceAdapter adapter;
+    adapter.setRecordingState(UiRecordingState::Saving, false, false, false, false, false);
+    adapter.expireFinalizingSettleForTest();
+    adapter.advanceProcessingForTest();
+    ASSERT_TRUE(adapter.processingRunningForTest());
+
+    adapter.setRecordingState(UiRecordingState::Completed, true, false, false, false, true);
+    EXPECT_FALSE(adapter.processingRunningForTest());
+    EXPECT_EQ(adapter.markFrame(), 0) << "a static mark has no frame";
+}
+
+TEST(ShellPresenceAdapterProcessing, AStaleTickCannotRepaintALaterState) {
+    // Qt delivers a queued timeout even after stop(), and a tick that moved the
+    // frame under a saved mark would put a processing frame's URL on a green one.
+    EnsureApplication();
+    ShellPresenceAdapter adapter;
+    adapter.setRecordingState(UiRecordingState::Saving, false, false, false, false, false);
+    adapter.expireFinalizingSettleForTest();
+    adapter.setRecordingState(UiRecordingState::Completed, true, false, false, false, true);
+    ASSERT_EQ(adapter.presence().icon_state, ShellIconState::Saved);
+
+    adapter.advanceProcessingForTest();
+    EXPECT_EQ(adapter.presence().icon_state, ShellIconState::Saved);
+    EXPECT_EQ(adapter.markFrame(), 0);
+}
+
+TEST(ShellPresenceAdapterProcessing, TheTimerActuallyRunsOnItsOwn) {
+    // The seam above drives the handler directly; this is the counter-check that
+    // there is a real timer behind it.
+    EnsureApplication();
+    ShellPresenceAdapter adapter;
+    adapter.setRecordingState(UiRecordingState::Saving, false, false, false, false, false);
+    adapter.expireFinalizingSettleForTest();
+    ASSERT_EQ(adapter.markFrame(), 0);
+    EXPECT_TRUE(SpinUntil([&adapter]() { return adapter.markFrame() != 0; }, 4000));
+}
+
+TEST(ShellPresenceAdapterProcessing, TheTwoSequencesShareOneCadence) {
+    // They were authored together at 250 ms a frame. A difference between them
+    // would be a decision, and there is nowhere for one to hide: this is the
+    // whole of it.
+    EXPECT_EQ(kProcessingFrameIntervalMs, kRecordingPulseIntervalMs);
+    EXPECT_EQ(kProcessingFrameCount, kRecordingPulseFrameCount);
+    EXPECT_EQ(kRecordingPulseIntervalMs, 250);
+}
 
 TEST(ShellPresenceAdapterSaved, ASuccessfulRecordingTurnsTheBadgeGreenForADwell) {
     EnsureApplication();
@@ -424,7 +531,24 @@ TEST(ShellPresenceAdapterSaved, AFailedRecordingIsNeverGreen) {
     ShellPresenceAdapter adapter;
     adapter.setRecordingState(UiRecordingState::Failed, true, false, false, false, false);
     EXPECT_FALSE(adapter.saved());
-    EXPECT_EQ(adapter.presence().icon_state, ShellIconState::Idle);
+    // Its own mark rather than the neutral one: a failure the user has not seen
+    // yet is exactly what a shell surface is for, and it is not "idle".
+    EXPECT_EQ(adapter.presence().icon_state, ShellIconState::Error);
+    EXPECT_TRUE(adapter.presence().failed);
+}
+
+TEST(ShellPresenceAdapterSaved, AFailureIsNotAStateTheUserIsStuckIn) {
+    // Unbounded on purpose -- unlike the Saved dwell there is no good moment to
+    // stop reporting it -- but a new session clears it on its first transition.
+    EnsureApplication();
+    ShellPresenceAdapter adapter;
+    adapter.setRecordingState(UiRecordingState::Failed, true, false, false, false, false);
+    ASSERT_EQ(adapter.presence().icon_state, ShellIconState::Error);
+    EXPECT_TRUE(adapter.presence().can_start) << "a failed recording must still offer a new one";
+
+    adapter.setRecordingState(UiRecordingState::Recording, false, true, true, false, false);
+    EXPECT_EQ(adapter.presence().icon_state, ShellIconState::Recording);
+    EXPECT_FALSE(adapter.presence().failed);
 }
 
 TEST(ShellPresenceAdapterSaved, TheDwellExpiresBackToIdle) {
@@ -1008,7 +1132,7 @@ TEST(TrayAdapterIcon, TheUrlCarriesTheStateTheSizeAndThePalette) {
     tray.setIconPixelSize(24);
     tray.setPresence(PresenceFor(UiRecordingState::Paused, false, true, false, true), {}, 0);
 
-    EXPECT_EQ(tray.iconSource(), QStringLiteral("image://exosnap-shell/mark/paused/24/0/light/violet"));
+    EXPECT_EQ(tray.iconSource(), QStringLiteral("image://exosnap-shell/mark/paused/24/0/shell/light/violet"));
 }
 
 TEST(TrayAdapterIcon, TheHeartbeatFrameIsPartOfTheUrl) {

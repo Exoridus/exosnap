@@ -13,7 +13,6 @@ using exosnap::kShellButtonIdRecord;
 using exosnap::kShellButtonIdStop;
 using exosnap::NextRecordingPulseFrame;
 using exosnap::ProjectShellPresence;
-using exosnap::RecordingPulseIntensity;
 using exosnap::ResolveShellCommand;
 using exosnap::ShellAction;
 using exosnap::ShellButton;
@@ -159,11 +158,16 @@ TEST(ShellPresenceProjection, ADwellCannotPaintALiveRecordingGreen) {
 }
 
 TEST(ShellPresenceProjection, AFailedRecordingIsNotSaved) {
+    // A dwell that outlived its recording must not be able to paint a failure
+    // green. Failed has a phase of its own, which is also what keeps the guard
+    // readable: the dwell is only ever honoured on top of Completed.
     ShellPresenceInput input = InputFor(UiRecordingState::Failed);
     input.saved_dwell_active = true;
     const ShellPresenceState state = ProjectShellPresence(input);
-    EXPECT_EQ(state.phase, ShellPhase::Idle);
+    EXPECT_EQ(state.phase, ShellPhase::Failed);
+    EXPECT_EQ(state.icon_state, ShellIconState::Error);
     EXPECT_FALSE(state.saved);
+    EXPECT_TRUE(state.failed);
 }
 
 TEST(ShellPresenceProjection, ABlockedResultSurfaceKeepsTheIdlePhaseWithoutTheAffordance) {
@@ -325,15 +329,6 @@ TEST(RecordingPulseMath, AnOutOfRangeFrameComesBackInsideTheArray) {
         EXPECT_GE(next, 0) << bogus;
         EXPECT_LT(next, kRecordingPulseFrameCount) << bogus;
     }
-    EXPECT_DOUBLE_EQ(RecordingPulseIntensity(-1), RecordingPulseIntensity(0));
-    EXPECT_DOUBLE_EQ(RecordingPulseIntensity(kRecordingPulseFrameCount), RecordingPulseIntensity(0));
-}
-
-TEST(RecordingPulseMath, IntensityIsATriangleFromTroughToPeakAndBack) {
-    EXPECT_DOUBLE_EQ(RecordingPulseIntensity(0), 0.0);
-    EXPECT_DOUBLE_EQ(RecordingPulseIntensity(1), 0.5);
-    EXPECT_DOUBLE_EQ(RecordingPulseIntensity(2), 1.0);
-    EXPECT_DOUBLE_EQ(RecordingPulseIntensity(3), 0.5);
 }
 
 TEST(TaskbarProgressLedgerTest, StartsUnheldAndSilent) {

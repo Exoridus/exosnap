@@ -26,6 +26,10 @@ ShellPresenceAdapter::ShellPresenceAdapter(QObject* parent) : QObject(parent) {
     pulse_timer_.setTimerType(Qt::CoarseTimer);
     QObject::connect(&pulse_timer_, &QTimer::timeout, this, &ShellPresenceAdapter::onPulseTick);
 
+    processing_timer_.setInterval(kProcessingFrameIntervalMs);
+    processing_timer_.setTimerType(Qt::CoarseTimer);
+    QObject::connect(&processing_timer_, &QTimer::timeout, this, &ShellPresenceAdapter::onProcessingTick);
+
     finalizing_timer_.setSingleShot(true);
     finalizing_timer_.setInterval(kFinalizingSettleMs);
     QObject::connect(&finalizing_timer_, &QTimer::timeout, this, &ShellPresenceAdapter::onFinalizingSettled);
@@ -79,8 +83,16 @@ bool ShellPresenceAdapter::saved() const noexcept {
     return state_.saved;
 }
 
-int ShellPresenceAdapter::pulseFrame() const noexcept {
-    return pulse_frame_;
+int ShellPresenceAdapter::markFrame() const noexcept {
+    switch (state_.icon_state) {
+    case ShellIconState::Recording:
+        return pulse_frame_;
+    case ShellIconState::Processing:
+        return processing_frame_;
+    default:
+        break;
+    }
+    return 0;
 }
 
 bool ShellPresenceAdapter::shellPulseActive() const noexcept {
@@ -109,6 +121,14 @@ bool ShellPresenceAdapter::finalizingSettleRunningForTest() const {
 
 void ShellPresenceAdapter::expireFinalizingSettleForTest() {
     onFinalizingSettled();
+}
+
+void ShellPresenceAdapter::advanceProcessingForTest() {
+    onProcessingTick();
+}
+
+bool ShellPresenceAdapter::processingRunningForTest() const {
+    return processing_timer_.isActive();
 }
 
 void ShellPresenceAdapter::advancePulseForTest() {
@@ -180,6 +200,7 @@ void ShellPresenceAdapter::republish() {
     state_ = projected;
 
     syncPulseTimer();
+    syncProcessingTimer();
 
     if (changed)
         emit presenceChanged();
@@ -237,6 +258,34 @@ void ShellPresenceAdapter::onPulseTick() {
     } else {
         pulse_frame_ = NextRecordingPulseFrame(pulse_frame_);
     }
+    emit pulseChanged();
+}
+
+void ShellPresenceAdapter::syncProcessingTimer() {
+    if (state_.icon_state == ShellIconState::Processing) {
+        if (!processing_timer_.isActive()) {
+            // Entered from a static mark, so the sequence starts at its first
+            // frame rather than wherever the last operation left it.
+            processing_frame_ = 0;
+            processing_timer_.start();
+            emit pulseChanged();
+        }
+        return;
+    }
+    if (!processing_timer_.isActive() && processing_frame_ == 0)
+        return;
+    processing_timer_.stop();
+    processing_frame_ = 0;
+    emit pulseChanged();
+}
+
+void ShellPresenceAdapter::onProcessingTick() {
+    // The state is the guard, the way the beat's countdown is: a queued timeout
+    // delivered after the operation finished would otherwise repaint a saved or
+    // idle mark with a processing frame.
+    if (state_.icon_state != ShellIconState::Processing)
+        return;
+    processing_frame_ = NextRecordingPulseFrame(processing_frame_, kProcessingFrameCount);
     emit pulseChanged();
 }
 

@@ -97,7 +97,7 @@ namespace {
 // so supplying both is what keeps the small icon on the SMALL optical profile and
 // the big one on the medium profile. A single raster would be rescaled into one
 // of the two and lose exactly the correction the profiles exist for.
-[[nodiscard]] QIcon RenderWindowIcon(ui::brand::ShellIconCache& cache, ShellIconState state, int pulse_frame,
+[[nodiscard]] QIcon RenderWindowIcon(ui::brand::ShellIconCache& cache, ShellIconState state, int frame,
                                      const QString& appearance_id, const QString& accent_id) {
 #if defined(Q_OS_WIN)
     const int small_px = GetSystemMetrics(SM_CXSMICON) > 0 ? GetSystemMetrics(SM_CXSMICON) : 16;
@@ -109,9 +109,9 @@ namespace {
     QIcon icon;
     for (const int px : {small_px, big_px}) {
         ui::brand::ShellMarkRequest request;
-        request.state = state;
+        request.kind = ui::brand::BrandMarkKindFor(state);
         request.px = px;
-        request.pulse_frame = pulse_frame;
+        request.frame = frame;
         request.appearance_id = appearance_id;
         request.accent_id = accent_id;
         const QImage image = cache.mark(request);
@@ -3886,9 +3886,9 @@ void QuickApplication::refreshTrayState() {
 
 void QuickApplication::applyShellPresence() {
     const ShellPresenceState& state = shell_presence_.presence();
-    const int pulse_frame = shell_presence_.pulseFrame();
+    const int mark_frame = shell_presence_.markFrame();
 
-    tray_adapter_.setPresence(state, record_view_model_adapter_.elapsedText(), pulse_frame);
+    tray_adapter_.setPresence(state, record_view_model_adapter_.elapsedText(), mark_frame);
 
     // The WINDOW icon carries the same rendered mark the notification area does.
     // Two surfaces, one image.
@@ -3904,11 +3904,11 @@ void QuickApplication::applyShellPresence() {
     // recording, not one per frame for its whole length. The executable's own
     // icon is untouched -- Explorer, the desktop and Start read the PE resource
     // table, which WM_SETICON does not reach.
-    if (state.icon_state != shell_icon_state_ || pulse_frame != shell_pulse_frame_) {
-        shell_pulse_frame_ = pulse_frame;
+    if (state.icon_state != shell_icon_state_ || mark_frame != shell_mark_frame_) {
+        shell_mark_frame_ = mark_frame;
         if (root_window_ != nullptr) {
             if (auto* chrome = root_window_->findChild<QuickWindowChrome*>()) {
-                chrome->applyWindowIcon(RenderWindowIcon(window_icon_cache_, state.icon_state, pulse_frame,
+                chrome->applyWindowIcon(RenderWindowIcon(window_icon_cache_, state.icon_state, mark_frame,
                                                          settings_.appearance_id, settings_.accent_id));
             }
         }
@@ -3920,7 +3920,7 @@ void QuickApplication::applyShellPresence() {
         // window: QQuickWindow::grabWindow renders our scene graph and cannot
         // see either. This line is the timestamped counterpart to a developer
         // looking at the screen, which is the only way they CAN be confirmed.
-        static const char* const kIconStateNames[] = {"idle", "recording", "paused", "saved"};
+        static const char* const kIconStateNames[] = {"idle", "recording", "processing", "paused", "saved", "error"};
         diagnostics::AppLog::info(QStringLiteral("shell"),
                                   QStringLiteral("shell presence -> %1 (tray + window/taskbar icon)")
                                       .arg(QString::fromLatin1(kIconStateNames[static_cast<int>(state.icon_state)])));

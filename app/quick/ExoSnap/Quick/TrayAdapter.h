@@ -33,7 +33,7 @@ class TrayAdapter : public QObject {
     // one code path.
     Q_PROPERTY(bool active READ active NOTIFY activeChanged FINAL)
 
-    // An image-provider URL carrying the state, the size, the heartbeat frame and
+    // An image-provider URL carrying the mark, the size, the animation frame and
     // the resolved palette. It changes only when one of those does, which is what
     // keeps Qt Quick's pixmap cache doing the work instead of the painter.
     Q_PROPERTY(QString iconSource READ iconSource NOTIFY appearanceChanged FINAL)
@@ -82,9 +82,9 @@ class TrayAdapter : public QObject {
 
     // ---- inputs, from the application -----------------------------------
     void setActive(bool active);
-    // `pulse_frame` indexes the recording heartbeat and is ignored in every state
-    // but Recording.
-    void setPresence(const ShellPresenceState& state, const QString& elapsed_text, int pulse_frame);
+    // `mark_frame` indexes whichever animated mark the state shows, and is
+    // ignored by a static one.
+    void setPresence(const ShellPresenceState& state, const QString& elapsed_text, int mark_frame);
     // The elapsed clock moves on the metrics cadence without the state changing,
     // and the tooltip is the surface that shows it.
     void setElapsedText(const QString& elapsed_text);
@@ -126,7 +126,7 @@ class TrayAdapter : public QObject {
 
     // Read-only introspection for tests.
     [[nodiscard]] ShellIconState currentIconState() const noexcept;
-    [[nodiscard]] int currentPulseFrame() const noexcept;
+    [[nodiscard]] int currentMarkFrame() const noexcept;
 
   signals:
     void activeChanged();
@@ -156,7 +156,7 @@ class TrayAdapter : public QObject {
     QString appearance_id_;
     QString accent_id_;
     int icon_px_ = 16;
-    int pulse_frame_ = 0;
+    int mark_frame_ = 0;
     bool active_ = false;
     bool window_visible_ = true;
     int unread_count_ = 0;

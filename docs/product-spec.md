@@ -1393,16 +1393,22 @@ release (0.11 per ADR 0022).
 
 ## 9. Presence and notifications
 
-- **Tray icon** with **idle / recording / paused / saved** states and an **unread notification
-  badge**. Saved is green, is shown for the same dwell as the "Saved" notification, and then returns
-  to idle on its own; a starting recording takes the icon back immediately, whether or not that dwell
-  has run out. An icon that stayed green would have stopped describing the application and started
-  describing history.
+- **Tray icon** with **idle / recording / processing / paused / saved / failed** states and an
+  **unread notification badge**. Saved is green, is shown for the same dwell as the "Saved"
+  notification, and then returns to idle on its own; a starting recording takes the icon back
+  immediately, whether or not that dwell has run out. An icon that stayed green would have stopped
+  describing the application and started describing history. **Processing** is the mark for work the
+  user cannot interrupt — the save or remux after a stop — and appears only once that work has lasted
+  long enough to be worth reporting; a stream-copy save is usually over before it does. **Failed** is
+  coral with a cross and stays until the next recording, because a failure nobody has seen yet is
+  what a shell surface is for.
 - **The tray icon carries the chosen accent.** The mark's outer ring is whichever accent the
   Appearance settings are on and follows a change immediately, with no restart; the inner ring and
-  the centre dot are the session's state colour, so the accent is never a second state channel. At
-  the sizes Windows draws a notification-area icon the mark is drawn with heavier strokes and a wider
-  aperture than the full-size logo — the same three circles, corrected so they survive 16 pixels.
+  what is inside it is the session's state colour, so the accent is never a second state channel. At
+  the sizes Windows draws a notification-area icon the mark is drawn with heavier strokes and less
+  margin than the full-size logo — the same drawing, corrected so it survives 16 pixels. At 16 pixels
+  the colour is what carries the state: there is not room inside the aperture for a pause bar or a
+  spinner to read, and the glyph starts to tell from 20 pixels up.
 - **Entering a recording plays a short heartbeat, and then the shell holds still.** The tray icon and
   the taskbar button beat twice as the recording starts and settle on the static recording state. They
   do not pulse for the length of the recording: Windows has no animated-icon API, so a permanent
@@ -1410,12 +1416,16 @@ release (0.11 per ADR 0022).
   that size it reads as a flicker in the corner of the screen rather than as a heartbeat. **Resuming
   a paused recording plays the same short beat**, because re-entering capturing is the same event as
   entering it. A countdown shows the recording state but holds it still, which separates "committed"
-  from "capturing" at a glance; paused, saved and idle are static. **Inside the application the
-  recording indicator breathes for as long as the recording runs** — the on-screen pill is a surface
-  that can animate for free, and the shell is not.
+  from "capturing" at a glance; paused, saved, failed and idle are static. **Processing is the one
+  shell state that animates for as long as it lasts**, because what bounds it is the operation itself
+  and the taskbar's progress bar is running beside it. **Inside the application the recording
+  indicator breathes for as long as the recording runs** — the on-screen pill is a surface that can
+  animate for free, and the shell is not. It breathes on the same one-second period the shell beats
+  at; only how far it swings is its own, because a ten-pixel dot over a full-screen game has to carry
+  further than a tray icon does.
 - **The taskbar button shows the same mark as the tray.** One image, two surfaces: while a recording
-  runs the button's icon is the coral mark, paused it is amber, saved it is green, and it plays the
-  same short entry heartbeat. What Explorer, the desktop and Start show is a different thing and does
+  runs the button's icon is the coral mark, paused it is amber, saved it is green, failed is a coral
+  cross, and it plays the same short entry heartbeat. What Explorer, the desktop and Start show is a different thing and does
   not change — that is the icon of the *file*, in the shipped accent, whatever the application is
   doing.
 - **Tray menu** — Show/Hide window, the transport, **Open output folder**, Notifications while any are

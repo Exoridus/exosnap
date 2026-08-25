@@ -70,12 +70,12 @@ void TrayAdapter::setActive(bool active) {
     emit activeChanged();
 }
 
-void TrayAdapter::setPresence(const ShellPresenceState& state, const QString& elapsed_text, int pulse_frame) {
-    if (state_ == state && elapsed_text_ == elapsed_text && pulse_frame_ == pulse_frame)
+void TrayAdapter::setPresence(const ShellPresenceState& state, const QString& elapsed_text, int mark_frame) {
+    if (state_ == state && elapsed_text_ == elapsed_text && mark_frame_ == mark_frame)
         return;
     state_ = state;
     elapsed_text_ = elapsed_text;
-    pulse_frame_ = pulse_frame;
+    mark_frame_ = mark_frame;
     emit appearanceChanged();
 }
 
@@ -126,9 +126,9 @@ bool TrayAdapter::active() const noexcept {
 
 QString TrayAdapter::iconSource() const {
     ShellMarkRequest request;
-    request.state = state_.icon_state;
+    request.kind = ui::brand::BrandMarkKindFor(state_.icon_state);
     request.px = icon_px_;
-    request.pulse_frame = pulse_frame_;
+    request.frame = mark_frame_;
     request.appearance_id = appearance_id_;
     request.accent_id = accent_id_;
     return ui::brand::ShellIconImageUrl(ui::brand::MarkImageId(request));
@@ -149,6 +149,12 @@ QString TrayAdapter::tooltip() const {
         break;
     case ShellIconState::Saved:
         tip += tr("Saved");
+        break;
+    case ShellIconState::Processing:
+        tip += tr("Finishing recording");
+        break;
+    case ShellIconState::Error:
+        tip += tr("Recording failed");
         break;
     case ShellIconState::Idle:
         tip += tr("Ready");
@@ -255,8 +261,8 @@ ShellIconState TrayAdapter::currentIconState() const noexcept {
     return state_.icon_state;
 }
 
-int TrayAdapter::currentPulseFrame() const noexcept {
-    return pulse_frame_;
+int TrayAdapter::currentMarkFrame() const noexcept {
+    return mark_frame_;
 }
 
 } // namespace exosnap::quick

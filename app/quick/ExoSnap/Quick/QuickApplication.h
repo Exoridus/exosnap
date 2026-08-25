@@ -806,7 +806,7 @@ class QuickApplication {
     // The heartbeat frame the window icon currently shows. Tracked separately
     // from the state because the entry beat changes the icon without changing the
     // state, and -1 so the first publish always writes through.
-    int shell_pulse_frame_ = -1;
+    int shell_mark_frame_ = -1;
     // The shell's view of the session, and the two clocks it needs: the recording
     // heartbeat and the bounded Saved dwell. Every shell surface reads this one
     // object rather than the recording state directly.
