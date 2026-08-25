@@ -15,8 +15,17 @@ sub-pixel problem, so the beat now runs for as long as the recording does.
 `parameters.json` holds the aperture — five numbers, the two themes' outer-ring
 opacities, and the reference palette. It is the only place those exist.
 
-The `.svg` files are **generated** from it by `scripts/generate-brand-marks.py`
-and checked in, because the runtime loads them out of Qt resources and a shape
+`wordmark.svg` is the one drawing here that is **not** generated: it is the
+product name as outlines — Hanken Grotesk SemiBold, converted at a type size of
+26 units with the baseline at `y = 0` — and outlines have no parameters to derive
+them from. It lives here because it goes through the same colour substitution as
+the aperture suite, and it is the only asset in the directory that is not square.
+Its box is padded above the letters so that centring the box centres the x-height
+band; a wordmark that is all lowercase has a descender and no ascender, so
+centring its ink hangs the name low beside a round mark.
+
+The other `.svg` files are **generated** from `parameters.json` by
+`scripts/generate-brand-marks.py` and checked in, because the runtime loads them out of Qt resources and a shape
 change should be visible in a diff. Do not hand-edit one: the next run of the
 script overwrites it, and `brand_geometry_tests` fails in the meantime.
 
@@ -42,6 +51,7 @@ The files carry the designer's reference palette:
 | `#E0786C` | recording / error                             |
 | `#E7C875` | caution — paused, warning                     |
 | `#8FD0AF` | success — saved                               |
+| `#F1F1EF` | ink — body text, the wordmark's `exo` alone   |
 
 None of them ships. `app/ui/brand/BrandMarkSvg.cpp` substitutes the running
 theme's accent and semantic colours for each, and the outer ring's `0.64` for
@@ -55,4 +65,6 @@ is not in this table would ship unrecoloured, so the drift guard refuses one.
   resource table, and they carry no session and no accent.
 - The optical corrections small rasters need, which are a property of the raster
   rather than of the drawing and live in `app/ui/brand/BrandMark.h`.
-- Wordmarks, which are a separate asset and unrelated to this suite.
+- Anything about how the wordmark is placed beside the mark. The Top Bar owns
+  that, and it is the reference for it: a later asset that merges the two takes
+  its scale, gap and vertical centring from the band, not from a legacy file.

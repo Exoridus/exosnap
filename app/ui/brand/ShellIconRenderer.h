@@ -59,6 +59,9 @@ enum class ShellGlyph {
 // multiplied out, because that is the only form Shell_NotifyIcon accepts.
 struct ShellMarkRequest {
     BrandMarkKind kind = BrandMarkKind::Idle;
+    // The raster's HEIGHT. The width follows the asset's own viewBox, which is
+    // the same number for every drawing in the aperture suite and close to four
+    // times this for the wordmark.
     int px = 16;
     // Indexes an animated mark's frames. Meaningful only for a kind that has
     // them; every other mark renders from its single asset.
@@ -94,6 +97,12 @@ inline constexpr char kShellIconProviderId[] = "exosnap-shell";
 // this: a drawing exists for states the product does not currently reach, and
 // deciding which of them it does is the projection's job, not the renderer's.
 [[nodiscard]] BrandMarkKind BrandMarkKindFor(ShellIconState state) noexcept;
+// The same mapping, from the underlying value. QML reads the shell's state as a
+// number -- models/ShellPresence.h is engine code with no Qt Quick integration to
+// register -- and this is where that number becomes a drawing again, so no QML
+// surface has to know what the states are. A value outside the enumeration
+// resolves to the brand mark rather than to nothing.
+[[nodiscard]] BrandMarkKind BrandMarkKindForStateValue(int state) noexcept;
 
 // The image-provider id these requests travel as, and back.
 //
@@ -111,7 +120,8 @@ inline constexpr char kShellIconProviderId[] = "exosnap-shell";
 [[nodiscard]] BrandMarkPalette ResolvePalette(const QString& appearance_id, const QString& accent_id);
 
 // Paints one mark. Transparent background, premultiplied ARGB, exactly `px`
-// square. Callable with no QGuiApplication, which is what makes it testable.
+// high and as wide as the asset's aspect asks. Callable with no QGuiApplication,
+// which is what makes it testable.
 [[nodiscard]] QImage RenderMark(const ShellMarkRequest& request);
 [[nodiscard]] QImage RenderGlyph(const ShellGlyphRequest& request);
 

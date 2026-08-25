@@ -3,6 +3,7 @@
 #include <QFile>
 #include <QRegularExpression>
 #include <QRegularExpressionMatchIterator>
+#include <QStringList>
 
 #include <algorithm>
 
@@ -33,6 +34,8 @@ namespace {
         return QStringLiteral("warning");
     case BrandMarkKind::Error:
         return QStringLiteral("error");
+    case BrandMarkKind::Wordmark:
+        return QStringLiteral("wordmark");
     case BrandMarkKind::Idle:
         break;
     }
@@ -95,6 +98,30 @@ QString BrandMarkAssetPath(BrandMarkKind kind, int frame) {
     return QStringLiteral(":/brand/marks/%1-f%2.svg").arg(stem).arg(index);
 }
 
+QSizeF BrandMarkViewBox(BrandMarkKind kind, int frame) {
+    QFile file(BrandMarkAssetPath(kind, frame));
+    if (!file.open(QIODevice::ReadOnly))
+        return {1.0, 1.0};
+    // The attribute rather than QSvgRenderer: the box is asked for on a QML
+    // binding and by the layout that sizes the wordmark, and parsing a whole
+    // document to read four numbers off its root element is the wrong order of
+    // cost.
+    static const QRegularExpression view_box(QStringLiteral("viewBox=\"([^\"]*)\""));
+    const QRegularExpressionMatch match = view_box.match(QString::fromUtf8(file.readAll()));
+    if (!match.hasMatch())
+        return {1.0, 1.0};
+    const QStringList parts = match.captured(1).split(QRegularExpression(QStringLiteral("[ ,]+")), Qt::SkipEmptyParts);
+    if (parts.size() != 4)
+        return {1.0, 1.0};
+    const QSizeF box(parts.at(2).toDouble(), parts.at(3).toDouble());
+    return box.width() > 0.0 && box.height() > 0.0 ? box : QSizeF{1.0, 1.0};
+}
+
+double BrandMarkAspect(BrandMarkKind kind, int frame) {
+    const QSizeF box = BrandMarkViewBox(kind, frame);
+    return box.width() / box.height();
+}
+
 QByteArray ThemedBrandMarkSvg(BrandMarkKind kind, int frame, const BrandMarkPalette& palette,
                               const OpticalProfile& profile) {
     QFile file(BrandMarkAssetPath(kind, frame));
@@ -107,6 +134,7 @@ QByteArray ThemedBrandMarkSvg(BrandMarkKind kind, int frame, const BrandMarkPale
     svg.replace(QLatin1String(kReferenceRecording), palette.recording.name(QColor::HexRgb));
     svg.replace(QLatin1String(kReferenceCaution), palette.caution.name(QColor::HexRgb));
     svg.replace(QLatin1String(kReferenceSuccess), palette.success.name(QColor::HexRgb));
+    svg.replace(QLatin1String(kReferenceInk), palette.ink.name(QColor::HexRgb));
 
     const double opacity = std::clamp(palette.outer_opacity * profile.outer_opacity_scale, 0.0, 1.0);
     svg.replace(QStringLiteral("opacity=\"%1\"").arg(Number(kReferenceOuterOpacity)),

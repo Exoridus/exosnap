@@ -50,6 +50,11 @@ inline constexpr char kReferenceAccent[] = "#9BD9D2";
 inline constexpr char kReferenceRecording[] = "#E0786C";
 inline constexpr char kReferenceCaution[] = "#E7C875";
 inline constexpr char kReferenceSuccess[] = "#8FD0AF";
+// The wordmark's own role, and the only one the aperture suite never uses: the
+// `exo` half of the product name is body ink rather than a semantic colour, so
+// on a light appearance it has to become near-black instead of staying the dark
+// theme's near-white.
+inline constexpr char kReferenceInk[] = "#F1F1EF";
 
 // The outer ring's opacity, likewise as the literal the suite carries. The suite
 // is written at the dark value; the light appearance needs a heavier ring to
@@ -139,6 +144,21 @@ inline constexpr OpticalProfile kLargeProfile{
 // application icon against the taskbar's own edges, and a full-bleed ring reads
 // as a crop rather than as a circle.
 inline constexpr double kStandaloneContentScale = 0.88;
+
+// ---------------------------------------------------------------------------
+// The wordmark
+// ---------------------------------------------------------------------------
+// `marks/wordmark.svg` is the product name as outlines rather than as text --
+// Hanken Grotesk SemiBold, converted at a type size of this many units, with the
+// baseline at y = 0. So a caller that wants the wordmark to sit at the same type
+// size a label would have used scales the asset by (pixelSize / this), and the
+// only number the layout needs is the one the font already gave it.
+//
+// The asset's box is padded above the outlines so that centring the BOX centres
+// the x-height band. A wordmark that is all lowercase has a descender and no
+// ascender, so centring its ink instead hangs the name visibly low beside a
+// round mark.
+inline constexpr double kWordmarkEmUnits = 26.0;
 
 // ---------------------------------------------------------------------------
 // Transport glyphs

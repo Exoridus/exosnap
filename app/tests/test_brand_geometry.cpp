@@ -17,6 +17,7 @@
 #include <QFile>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QList>
 #include <QRegularExpression>
 #include <QSet>
 #include <QString>
@@ -53,6 +54,27 @@ QStringList MarkStems() {
     for (int frame = 0; frame < kProcessingFrameCount; ++frame)
         stems << QStringLiteral("processing-f%1").arg(frame);
     return stems;
+}
+
+// The one drawing in the directory that is NOT generated. It is a wordmark --
+// Hanken Grotesk SemiBold converted to outlines -- so there is no parameter to
+// derive it from, and it shares only the colour table with the aperture suite.
+QString WordmarkPath() {
+    return QStringLiteral("assets/brand/marks/wordmark.svg");
+}
+
+// The viewBox of an asset, as four numbers in the order the attribute spells
+// them.
+QList<double> ViewBox(const QString& svg) {
+    const QRegularExpression attribute(QStringLiteral("viewBox=\"([^\"]*)\""));
+    const QRegularExpressionMatch match = attribute.match(svg);
+    if (!match.hasMatch())
+        return {};
+    QList<double> values;
+    const QStringList parts = match.captured(1).split(QRegularExpression(QStringLiteral("[ ,]+")), Qt::SkipEmptyParts);
+    for (const QString& part : parts)
+        values << part.toDouble();
+    return values;
 }
 
 QJsonObject Parameters() {
@@ -105,6 +127,10 @@ TEST(BrandGeometry, NoMarkOutsideTheSuiteIsShipped) {
     QStringList expected;
     for (const QString& stem : MarkStems())
         expected << stem + QStringLiteral(".svg");
+    // The wordmark is authored rather than generated -- outlines have no
+    // parameters -- but it lives here because it goes through the same colour
+    // substitution, and the directory is what the resource file lists.
+    expected << QStringLiteral("wordmark.svg");
     expected.sort();
     QStringList sorted = found;
     sorted.sort();
@@ -156,7 +182,8 @@ TEST(BrandGeometry, EveryColourInTheSuiteIsOneTheRuntimeSubstitutes) {
     const QSet<QString> tokens{QString::fromLatin1(brand::kReferenceAccent).toUpper(),
                                QString::fromLatin1(brand::kReferenceRecording).toUpper(),
                                QString::fromLatin1(brand::kReferenceCaution).toUpper(),
-                               QString::fromLatin1(brand::kReferenceSuccess).toUpper()};
+                               QString::fromLatin1(brand::kReferenceSuccess).toUpper(),
+                               QString::fromLatin1(brand::kReferenceInk).toUpper()};
     const QRegularExpression colour(QStringLiteral("#[0-9A-Fa-f]{6}"));
     for (const QString& stem : MarkStems()) {
         const QString svg = ReadRepoFile(MarkPath(stem));
@@ -199,6 +226,8 @@ TEST(BrandGeometry, TheParametersAndTheRuntimeAgreeOnThePalette) {
               QString::fromLatin1(brand::kReferenceCaution).toUpper());
     EXPECT_EQ(colours.value(QStringLiteral("success")).toString().toUpper(),
               QString::fromLatin1(brand::kReferenceSuccess).toUpper());
+    EXPECT_EQ(colours.value(QStringLiteral("ink")).toString().toUpper(),
+              QString::fromLatin1(brand::kReferenceInk).toUpper());
 
     const QJsonObject opacity = parameters.value(QStringLiteral("outer_opacity")).toObject();
     EXPECT_DOUBLE_EQ(opacity.value(QStringLiteral("dark")).toDouble(), brand::kReferenceOuterOpacity);
@@ -206,6 +235,66 @@ TEST(BrandGeometry, TheParametersAndTheRuntimeAgreeOnThePalette) {
     EXPECT_DOUBLE_EQ(opacity.value(QStringLiteral("light")).toDouble(), brand::kOuterOpacityLight);
     EXPECT_GT(brand::kOuterOpacityLight, brand::kOuterOpacityDark)
         << "the light appearance needs the heavier ring, not the lighter one";
+}
+
+TEST(BrandGeometry, TheWordmarkIsDrawnInTwoSubstitutableColours) {
+    // Two literals and no others: the product name reads `exo` in the running
+    // appearance's ink and `snap` in the user's accent, which is the one place
+    // the accent appears in body-sized artwork. A third colour here would ship
+    // the designer's palette into a user's theme.
+    const QString svg = ReadRepoFile(WordmarkPath());
+    ASSERT_FALSE(svg.isEmpty()) << "assets/brand/marks/wordmark.svg is missing or unreadable";
+
+    const QRegularExpression colour(QStringLiteral("#[0-9A-Fa-f]{6}"));
+    QSet<QString> found;
+    QRegularExpressionMatchIterator it = colour.globalMatch(svg);
+    while (it.hasNext())
+        found.insert(it.next().captured(0).toUpper());
+
+    const QSet<QString> expected{QString::fromLatin1(brand::kReferenceInk).toUpper(),
+                                 QString::fromLatin1(brand::kReferenceAccent).toUpper()};
+    EXPECT_EQ(found, expected);
+}
+
+TEST(BrandGeometry, TheWordmarkIsWiderThanItIsTall) {
+    // The aperture suite is square and the renderer used to assume every mark
+    // was. This is the asset that proves otherwise, so the ratio is asserted
+    // rather than left to whatever the renderer happens to do with it.
+    const QString svg = ReadRepoFile(WordmarkPath());
+    ASSERT_FALSE(svg.isEmpty());
+    const QList<double> box = ViewBox(svg);
+    ASSERT_EQ(box.size(), 4);
+    EXPECT_GT(box.at(2), 3.0 * box.at(3)) << "the wordmark stopped being a wordmark-shaped box";
+}
+
+TEST(BrandGeometry, TheWordmarkBoxIsOneEmOfTypeOrThereabouts) {
+    // The Top Bar sizes the wordmark from the type size the label beside it
+    // would have used, by scaling the viewBox by (pixelSize / kWordmarkEmUnits).
+    // That only lands where the text did while the asset's units really are the
+    // type size it was cut at: a re-export at a different size would silently
+    // shrink or grow the product name in the title band.
+    const QString svg = ReadRepoFile(WordmarkPath());
+    ASSERT_FALSE(svg.isEmpty());
+    const QList<double> box = ViewBox(svg);
+    ASSERT_EQ(box.size(), 4);
+    EXPECT_NEAR(box.at(3) / brand::kWordmarkEmUnits, 0.9, 0.05);
+}
+
+TEST(BrandGeometry, TheWordmarkBoxIsCentredOnItsXHeight) {
+    // Vertical placement is the asset's own business rather than the layout's:
+    // the box is padded so that centering it centers the x-height band, which is
+    // what puts the product name on the same optical line as the round mark
+    // beside it. Centering the INK box instead would hang the name low, because
+    // `p` descends and nothing ascends.
+    const QString svg = ReadRepoFile(WordmarkPath());
+    ASSERT_FALSE(svg.isEmpty());
+    const QList<double> box = ViewBox(svg);
+    ASSERT_EQ(box.size(), 4);
+    const double centre = box.at(1) + box.at(3) / 2.0;
+    // The outlines are authored with the baseline at y = 0 and y growing
+    // downwards, so the x-height band is [-xHeight, 0].
+    const double x_height = 0.493 * brand::kWordmarkEmUnits;
+    EXPECT_NEAR(centre, -x_height / 2.0, 0.05);
 }
 
 TEST(BrandGeometry, ThePublishedLogoIsTheCanonicalMark) {

@@ -17,6 +17,7 @@
 
 #include <QByteArray>
 #include <QColor>
+#include <QSizeF>
 #include <QString>
 
 #include "ui/brand/BrandMark.h"
@@ -36,6 +37,10 @@ enum class BrandMarkKind {
     Saved,
     Warning,
     Error,
+    // The product name as outlines. Not a state and never reached from one: it
+    // is the other half of the identity, it is the only asset in the suite that
+    // is not square, and it is the only one drawn in the appearance's ink.
+    Wordmark,
 };
 
 // Frames each animated mark ships. The two sequences differ: the recording beat
@@ -59,6 +64,16 @@ inline constexpr int kProcessingMarkFrameCount = 4;
 // produce a missing-resource icon.
 [[nodiscard]] QString BrandMarkAssetPath(BrandMarkKind kind, int frame = 0);
 
+// The asset's own viewBox, as the file declares it. A square grid for every
+// drawing in the aperture suite, and a box a little under four times as wide as
+// it is tall for the wordmark. A unit square for an unreadable resource, so a
+// caller that skipped the missing-asset check gets a square rather than a
+// division by zero.
+[[nodiscard]] QSizeF BrandMarkViewBox(BrandMarkKind kind, int frame = 0);
+
+// The same box as width over height.
+[[nodiscard]] double BrandMarkAspect(BrandMarkKind kind, int frame = 0);
+
 // The colours a mark is rendered in. Resolved by the caller, because the shell
 // renderer and the in-application mark must resolve them exactly once and from
 // the same table.
@@ -67,6 +82,9 @@ struct BrandMarkPalette {
     QColor recording;
     QColor caution;
     QColor success;
+    // Body ink. Used by the wordmark alone -- the aperture suite carries no
+    // neutral -- and therefore the one palette entry a mark can render without.
+    QColor ink;
     // The outer ring's opacity BEFORE the optical profile scales it. Dark and
     // light differ here and nowhere else.
     double outer_opacity = kOuterOpacityDark;
