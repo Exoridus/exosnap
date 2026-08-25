@@ -595,6 +595,27 @@ int main(int argc, char* argv[]) {
     const exosnap::bootstrap::PreAppResult pre_app = exosnap::bootstrap::RunPreApplicationPhase();
 
     QQuickWindow::setGraphicsApi(QSGRendererInterface::Direct3D11);
+
+    // No DWM redirection bitmap for this process's windows.
+    //
+    // A Qt Quick window renders nothing until it is visible, and between the two
+    // DWM composes the window from a redirection bitmap nobody has written to --
+    // an opaque, system near-white buffer. MEASURED before this line: a blank
+    // block covering 68 % of the window rect for two to three frames at every
+    // start. WS_EX_NOREDIRECTIONBITMAP removes the buffer itself, so there is
+    // nothing to show; the same three-run measurement afterwards finds no frame
+    // above the noise floor.
+    //
+    // The flag needs the flip swap-chain model and a D3D backend, which the line
+    // above already pins. Set through Qt's own switch rather than by rewriting
+    // the ex-style after creation: the style has to be present when the window is
+    // CREATED, which is exactly the moment we would be too late for.
+    //
+    // qputenv, not a hard override: an operator debugging a compositing problem
+    // can still force the redirection surface back on from the environment.
+    if (!qEnvironmentVariableIsSet("QT_QPA_DISABLE_REDIRECTION_SURFACE"))
+        qputenv("QT_QPA_DISABLE_REDIRECTION_SURFACE", "1");
+
     QApplication app(argc, argv);
     // quitOnLastWindowClosed is deliberately left at Qt's default. Close-to-tray
     // REFUSES the close (requestClose() returns false) and only then hides the

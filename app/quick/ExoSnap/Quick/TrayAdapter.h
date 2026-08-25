@@ -57,7 +57,7 @@ class TrayAdapter : public QObject {
   public:
     // Which of our three transport rows a QML callback is talking about. Mirrors
     // ShellButton; exposed separately because QML needs an enum it can name.
-    enum TransportRow {
+    enum TransportRow : int {
         RecordRow,
         PauseResumeRow,
         StopRow,
@@ -69,7 +69,7 @@ class TrayAdapter : public QObject {
     // included: the enum is a QtGui platform-interface detail, and this maps a
     // GESTURE onto a product intent, which is a decision worth having in one
     // testable place.
-    enum ActivationReason {
+    enum ActivationReason : int {
         UnknownActivation = 0,
         ContextActivation = 1,
         DoubleClickActivation = 2,

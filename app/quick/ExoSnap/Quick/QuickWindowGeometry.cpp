@@ -61,54 +61,78 @@ QScreen* screenForSavedPosition(const PersistedWindowGeometry& saved) {
 // it back the same way, so the two ends can never disagree about which rectangle
 // the saved numbers describe.
 
-QRect nativeLogicalGeometry(QQuickWindow* window) {
-    auto hwnd = reinterpret_cast<HWND>(window->winId());
-    RECT rect{};
-    if (hwnd == nullptr || GetWindowRect(hwnd, &rect) == FALSE)
-        return window->geometry();
-    double dpr = window->devicePixelRatio();
-    if (!(dpr > 0.0))
-        dpr = 1.0;
-    return QRect(static_cast<int>(std::lround(rect.left / dpr)), static_cast<int>(std::lround(rect.top / dpr)),
-                 static_cast<int>(std::lround((rect.right - rect.left) / dpr)),
-                 static_cast<int>(std::lround((rect.bottom - rect.top) / dpr)));
-}
-
-// MEASURED: Qt answers `setVisibility(Maximized)` on this frameless window with a
-// bare SetWindowPos onto the work area, so QWindow::visibility() reports a state
-// Windows does not have. Persisting on Qt's answer therefore recorded the
-// maximized rect as the restore rect -- the exact failure this class exists to
-// prevent. IsZoomed/IsIconic are the values every path agrees on.
-struct NativeWindowState {
+// The window's placement, as Windows itself keeps it.
+//
+// WINDOWPLACEMENT is the documented mechanism for saving and restoring a window,
+// and it answers three questions the previous GetWindowRect/SetWindowPos pair
+// could not:
+//
+//  * `rcNormalPosition` is the RESTORE rect -- the rectangle the window returns
+//    to -- and the system maintains it. GetWindowRect reports where the window
+//    IS, so while maximized or minimized it reports the screen or an off-screen
+//    placeholder, which is why sampling used to be refused in those states. The
+//    restore rect is meaningful in all of them.
+//  * `showCmd` carries normal/maximized/minimized in the same structure, so the
+//    state and the rect can never be persisted out of step with each other.
+//  * The coordinates are WORKSPACE coordinates, which already exclude the
+//    taskbar and any app bars. Microsoft documents that passing them to
+//    screen-coordinate functions such as SetWindowPos makes a window "creep"
+//    across the desktop -- so nothing here converts them, and both ends of the
+//    round trip go through the same pair of calls.
+struct NativePlacement {
+    // Workspace coordinates, physical pixels, exactly as Windows stores them.
+    QRect normal;
     bool maximized = false;
     bool minimized = false;
-    bool known = false;
+    bool valid = false;
 };
 
-NativeWindowState nativeWindowState(QQuickWindow* window) {
-    NativeWindowState state;
+NativePlacement nativePlacement(const QQuickWindow* window) {
+    NativePlacement out;
     if (window == nullptr || window->handle() == nullptr)
-        return state;
-    auto hwnd = reinterpret_cast<HWND>(window->winId());
+        return out;
+    auto hwnd = reinterpret_cast<HWND>(const_cast<QQuickWindow*>(window)->winId());
     if (hwnd == nullptr)
-        return state;
-    state.maximized = IsZoomed(hwnd) != FALSE;
-    state.minimized = IsIconic(hwnd) != FALSE;
-    state.known = true;
-    return state;
+        return out;
+    WINDOWPLACEMENT placement{};
+    placement.length = sizeof(placement);
+    if (GetWindowPlacement(hwnd, &placement) == FALSE)
+        return out;
+    const RECT& r = placement.rcNormalPosition;
+    out.normal = QRect(r.left, r.top, r.right - r.left, r.bottom - r.top);
+    out.minimized = placement.showCmd == SW_SHOWMINIMIZED;
+    // A minimized window is not zoomed whatever it was before; WPF_RESTORETOMAXIMIZED
+    // is where Windows keeps "comes back maximized", and it is the only place that
+    // survives the minimize.
+    out.maximized =
+        placement.showCmd == SW_SHOWMAXIMIZED || (out.minimized && (placement.flags & WPF_RESTORETOMAXIMIZED) != 0);
+    out.valid = true;
+    return out;
 }
 
-void applyNativeLogicalGeometry(QQuickWindow* window, const QRect& logical) {
+// `show` is passed through to WINDOWPLACEMENT::showCmd. SW_HIDE is the value the
+// startup path wants: it records the restore rect on a window that is not on
+// screen yet WITHOUT showing it, so the first show stays where the lifecycle put
+// it and no frame reaches the desktop early.
+bool applyNativePlacement(QQuickWindow* window, const QRect& normal, UINT show) {
+    if (window == nullptr || normal.width() <= 0 || normal.height() <= 0)
+        return false;
     auto hwnd = reinterpret_cast<HWND>(window->winId());
-    if (hwnd == nullptr || logical.width() <= 0 || logical.height() <= 0)
-        return;
-    double dpr = window->devicePixelRatio();
-    if (!(dpr > 0.0))
-        dpr = 1.0;
-    SetWindowPos(hwnd, nullptr, static_cast<int>(std::lround(logical.x() * dpr)),
-                 static_cast<int>(std::lround(logical.y() * dpr)), static_cast<int>(std::lround(logical.width() * dpr)),
-                 static_cast<int>(std::lround(logical.height() * dpr)),
-                 SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+    if (hwnd == nullptr)
+        return false;
+    WINDOWPLACEMENT placement{};
+    placement.length = sizeof(placement);
+    // Read first so the minimized/maximized corner points Windows already keeps
+    // are carried over rather than zeroed.
+    if (GetWindowPlacement(hwnd, &placement) == FALSE)
+        return false;
+    placement.rcNormalPosition =
+        RECT{normal.left(), normal.top(), normal.left() + normal.width(), normal.top() + normal.height()};
+    placement.showCmd = show;
+    // WPF_SETMINPOSITION is the only flag that would make ptMinPosition
+    // authoritative, and nothing here sets that point.
+    placement.flags = 0;
+    return SetWindowPlacement(hwnd, &placement) != FALSE;
 }
 
 // ── Startup geometry trace ──────────────────────────────────────────────────
@@ -289,17 +313,25 @@ bool g_message_trace_persistent = false;
 void ApplyStartupWindowGeometry(QQuickWindow* window, const QRect& logical) {
     if (window == nullptr || logical.width() <= 0 || logical.height() <= 0)
         return;
+    // Qt is told as well: it keeps its own geometry and the scene is laid out
+    // against it, so leaving it behind would put QML and Windows on different
+    // rectangles.
     window->setGeometry(logical);
-    const QRect actual = nativeLogicalGeometry(window);
-    if (actual == logical)
+
+    // SW_HIDE, deliberately. This records the restore rect on a window that is
+    // not on screen yet; the lifecycle's own show() is what makes it visible,
+    // and a showCmd that showed it here would put a frame on the desktop before
+    // anything has been rendered into it.
+    if (!applyNativePlacement(window, logical, SW_HIDE))
         return;
-    // Not a warning: a DPI-rounded edge is a legitimate one-pixel disagreement,
-    // and the line is here so the correction is never silent, not to raise an
-    // alarm. A LARGE disagreement is the interesting case and shows up in the
-    // same line.
-    qInfo("window-geometry: pre-show placement corrected to %d,%d %dx%d (Qt placed it at %d,%d %dx%d)", logical.x(),
-          logical.y(), logical.width(), logical.height(), actual.x(), actual.y(), actual.width(), actual.height());
-    applyNativeLogicalGeometry(window, logical);
+    if (!WindowGeometryTraceEnabled())
+        return;
+    const NativePlacement placed = nativePlacement(window);
+    if (placed.valid && placed.normal != logical) {
+        qInfo("window-geometry: pre-show placement asked for %d,%d %dx%d, Windows kept %d,%d %dx%d", logical.x(),
+              logical.y(), logical.width(), logical.height(), placed.normal.x(), placed.normal.y(),
+              placed.normal.width(), placed.normal.height());
+    }
 }
 
 bool WindowGeometryTraceEnabled() {
@@ -362,35 +394,45 @@ void StopStartupMessageTrace() {
 
 ResolvedWindowGeometry ResolveWindowGeometry(const PersistedWindowGeometry& saved, const QSize& minimum,
                                              const QSize& fallback_size) {
-    QScreen* target = nullptr;
-    const bool has_saved_rect = saved.width > 0 && saved.height > 0;
-    if (has_saved_rect)
-        target = screenForSavedPosition(saved);
-
-    // Saved position landed on no connected monitor -- or there is no saved
-    // position at all. Either way the window is centred on the primary screen
-    // rather than restored to coordinates nothing can display.
-    const bool center_on_primary = target == nullptr;
-    if (target == nullptr)
-        target = QGuiApplication::primaryScreen();
-
-    const QRect saved_rect = has_saved_rect ? QRect(saved.x, saved.y, saved.width, saved.height) : QRect();
-
     ResolvedWindowGeometry resolved;
-    resolved.maximized = has_saved_rect && saved.maximized;
 
-    if (target == nullptr) {
-        // No screens at all (headless/offscreen platform plugin). Nothing to
-        // clamp against; hand back the saved or default size unchanged.
-        resolved.rect = has_saved_rect ? saved_rect : QRect(QPoint(0, 0), fallback_size);
+    // A saved rect is handed back UNCHANGED, and deliberately so.
+    //
+    // It came out of WINDOWPLACEMENT and it goes back in through
+    // SetWindowPlacement, which places into the workspace itself: a rect on a
+    // monitor that is no longer connected, or one that would sit under the
+    // taskbar, is Windows' problem to solve and Windows already solves it. The
+    // clamp that used to live here compared those workspace coordinates against
+    // QScreen::availableGeometry(), which is screen coordinates -- the mixing
+    // Microsoft documents as the cause of windows creeping across the desktop.
+    // On a taskbar-at-the-bottom setup the two happen to coincide, which is
+    // exactly why a bug like that survives review.
+    //
+    // The one thing still decided here is the SIZE, because a rect smaller than
+    // the shell's minimum is not something the window manager can know about.
+    if (saved.width > 0 && saved.height > 0) {
+        resolved.rect =
+            QRect(saved.x, saved.y, std::max(saved.width, minimum.width()), std::max(saved.height, minimum.height()));
+        resolved.maximized = saved.maximized;
         return resolved;
     }
 
-    // Everything from here is screen-independent and therefore lives in the pure
-    // policy, where it can be tested against work areas this machine does not
-    // have. This function's own job is only to decide WHICH screen.
+    // No saved rect: the first-launch decision, which is a different problem and
+    // still ours. It is computed from the primary screen's work area in SCREEN
+    // coordinates and never travels through WINDOWPLACEMENT, so the two
+    // coordinate systems still never meet.
+    QScreen* primary = QGuiApplication::primaryScreen();
+    if (primary == nullptr) {
+        // No screens at all (offscreen platform plugin). Nothing to centre
+        // against; hand back the default size at the origin.
+        QSize size = fallback_size;
+        size.setWidth(std::max(size.width(), minimum.width()));
+        size.setHeight(std::max(size.height(), minimum.height()));
+        resolved.rect = QRect(QPoint(0, 0), size);
+        return resolved;
+    }
     const ui::StartupWindowPlacement placement = ui::ResolveStartupWindowPlacement(
-        saved_rect, saved.maximized, target->availableGeometry(), minimum, fallback_size, center_on_primary);
+        QRect(), false, primary->availableGeometry(), minimum, fallback_size, /*center_on_primary=*/true);
     resolved.rect = placement.rect;
     resolved.maximized = placement.maximized;
     return resolved;
@@ -447,9 +489,22 @@ QuickWindowGeometry::QuickWindowGeometry(QQuickWindow* window, PersistedWindowGe
             if (armed_ || detached_ || window_ == nullptr)
                 return;
             armed_ = true;
+            // One write the moment sampling is allowed, and unconditionally.
+            //
+            // Without it a window that is never moved persists nothing at all:
+            // every later write is triggered by a CHANGE, and `current_` was
+            // constructed from the geometry the window was just placed on, so the
+            // first sample matches it and reports nothing to do. The sink compares
+            // against what is on DISK, which is a different question and the one
+            // that matters here -- so "restore where I left it" used to work only
+            // for someone who had dragged the window at least once.
+            sampleAndSchedule();
+            dirty_ = true;
+            persist_timer_.start();
             if (current_.maximized || window_->visibility() != QWindow::Windowed)
                 return;
-            const QRect actual = nativeLogicalGeometry(window_);
+            const NativePlacement placed = nativePlacement(window_);
+            const QRect actual = placed.valid ? placed.normal : window_->geometry();
             if (actual == intended) {
                 if (WindowGeometryTraceEnabled())
                     qInfo("window-geometry: first frame on %d,%d %dx%d as placed", intended.x(), intended.y(),
@@ -477,39 +532,34 @@ void QuickWindowGeometry::detach() {
 void QuickWindowGeometry::sampleAndSchedule() {
     if (window_ == nullptr || !armed_ || detached_)
         return;
-    const NativeWindowState native = nativeWindowState(window_);
-    const QWindow::Visibility visibility = window_->visibility();
-    const bool maximized = native.known ? native.maximized : visibility == QWindow::Maximized;
-    const bool minimized = native.known ? native.minimized : visibility == QWindow::Minimized;
-    // Sampled here rather than only in sampleVisibility(): Windows changes this
-    // state without Qt necessarily reporting a visibility change, and the geometry
-    // signals are the one notification that always arrives.
+    const NativePlacement placement = nativePlacement(window_);
+    if (!placement.valid)
+        return;
+
+    // Both facts come out of the SAME WINDOWPLACEMENT read, so the rect and the
+    // maximized flag can never be persisted describing different moments.
     //
-    // Never while minimized: a minimized window is not zoomed whatever it was
-    // before, so believing IsZoomed there would persist "not maximized" for a
-    // window that has to come back maximized.
-    if (!minimized && current_.maximized != maximized) {
-        current_.maximized = maximized;
-        dirty_ = true;
-        persist_timer_.start();
+    // And both are sampled in every state. The restore rect is what Windows will
+    // un-maximize or un-minimize back to, so it stays meaningful while the window
+    // is maximized or minimized -- which is exactly when the old GetWindowRect
+    // reported the screen instead and sampling had to be refused.
+    bool changed = false;
+    if (current_.maximized != placement.maximized) {
+        current_.maximized = placement.maximized;
+        changed = true;
     }
-    // Only a Windowed window has a meaningful restore rect. While maximized,
-    // minimized or full-screen the reported geometry is the screen (or, when
-    // minimized on Windows, an off-screen placeholder) -- persisting either
-    // would destroy the rect the window has to un-maximize back to.
-    if (maximized || minimized || visibility == QWindow::Hidden)
+    const QRect& normal = placement.normal;
+    if (normal.width() > 0 && normal.height() > 0 &&
+        (current_.x != normal.x() || current_.y != normal.y() || current_.width != normal.width() ||
+         current_.height != normal.height())) {
+        current_.x = normal.x();
+        current_.y = normal.y();
+        current_.width = normal.width();
+        current_.height = normal.height();
+        changed = true;
+    }
+    if (!changed)
         return;
-    // The NATIVE rect, not window_->geometry(): for this frameless window they
-    // are the same thing once it is on screen, but only the native one is what
-    // the restore above can reproduce exactly. Persisting Qt's value is what let
-    // the launch-to-launch expansion accumulate.
-    const QRect frame = nativeLogicalGeometry(window_);
-    if (frame.width() <= 0 || frame.height() <= 0)
-        return;
-    current_.x = frame.x();
-    current_.y = frame.y();
-    current_.width = frame.width();
-    current_.height = frame.height();
     dirty_ = true;
     persist_timer_.start();
 }
