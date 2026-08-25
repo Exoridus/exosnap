@@ -1,8 +1,5 @@
 #include "models/RecordingPulse.h"
 
-#include <algorithm>
-#include <cmath>
-
 namespace exosnap {
 
 namespace {
@@ -37,15 +34,6 @@ double RecordingPulseIntensity(int frame, int frame_count) noexcept {
     // Distance from the trough, folded at the peak: 0, 1, ... half, ... 1.
     const int distance = current <= half ? current : frame_count - current;
     return static_cast<double>(distance) / static_cast<double>(half);
-}
-
-int RecordingPulseLevel(int frame, int levels, int frame_count) noexcept {
-    if (levels <= 1)
-        return 0;
-    const double intensity = RecordingPulseIntensity(frame, frame_count);
-    const int top = levels - 1;
-    const int level = static_cast<int>(std::lround(intensity * static_cast<double>(top)));
-    return std::clamp(level, 0, top);
 }
 
 } // namespace exosnap

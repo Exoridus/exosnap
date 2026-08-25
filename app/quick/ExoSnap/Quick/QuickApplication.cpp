@@ -36,7 +36,9 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QGuiApplication>
+#include <QIcon>
 #include <QMetaObject>
+#include <QPixmap>
 #include <QPointer>
 #include <QQuickWindow>
 #include <QScreen>
@@ -87,6 +89,36 @@ namespace {
 #else
     return 16;
 #endif
+}
+
+// The window icon, at both Windows icon metrics.
+//
+// Qt picks the nearest pixmap out of a QIcon per metric rather than scaling one,
+// so supplying both is what keeps the small icon on the SMALL optical profile and
+// the big one on the medium profile. A single raster would be rescaled into one
+// of the two and lose exactly the correction the profiles exist for.
+[[nodiscard]] QIcon RenderWindowIcon(ui::brand::ShellIconCache& cache, ShellIconState state, int pulse_frame,
+                                     const QString& appearance_id, const QString& accent_id) {
+#if defined(Q_OS_WIN)
+    const int small_px = GetSystemMetrics(SM_CXSMICON) > 0 ? GetSystemMetrics(SM_CXSMICON) : 16;
+    const int big_px = GetSystemMetrics(SM_CXICON) > 0 ? GetSystemMetrics(SM_CXICON) : 32;
+#else
+    const int small_px = 16;
+    const int big_px = 32;
+#endif
+    QIcon icon;
+    for (const int px : {small_px, big_px}) {
+        ui::brand::ShellMarkRequest request;
+        request.state = state;
+        request.px = px;
+        request.pulse_frame = pulse_frame;
+        request.appearance_id = appearance_id;
+        request.accent_id = accent_id;
+        const QImage image = cache.mark(request);
+        if (!image.isNull())
+            icon.addPixmap(QPixmap::fromImage(image));
+    }
+    return icon;
 }
 
 models::AboutInfo buildAboutInfo(const PersistedAppSettings& settings) {
@@ -3854,28 +3886,47 @@ void QuickApplication::refreshTrayState() {
 
 void QuickApplication::applyShellPresence() {
     const ShellPresenceState& state = shell_presence_.presence();
+    const int pulse_frame = shell_presence_.pulseFrame();
 
-    tray_adapter_.setPresence(state, record_view_model_adapter_.elapsedText(), shell_presence_.pulseFrame());
+    tray_adapter_.setPresence(state, record_view_model_adapter_.elapsedText(), pulse_frame);
 
-    // The window icon is NOT part of this. It is the application's identity and
-    // stays the executable's own multi-resolution mark in every state: what a
-    // session is doing reaches the taskbar as the button's overlay badge, which
-    // is the surface Windows draws for exactly that purpose. A window icon that
-    // followed the state meant a WM_SETICON -- a full taskbar redraw -- on every
-    // transition, and would have meant one per heartbeat frame.
+    // The WINDOW icon carries the same rendered mark the notification area does.
+    // Two surfaces, one image.
+    //
+    // It used to be the static application icon, with the session's state drawn
+    // as an ITaskbarList3 overlay badge instead -- and the two then said
+    // different things about one recording: a coral aperture in the tray, and a
+    // mint aperture with a coral dot stuck in its corner on the taskbar. That
+    // corner is where Windows puts unread-notification counts everywhere else,
+    // so the dot read as one.
+    //
+    // Affordable because the beat is a transition: a handful of WM_SETICONs per
+    // recording, not one per frame for its whole length. The executable's own
+    // icon is untouched -- Explorer, the desktop and Start read the PE resource
+    // table, which WM_SETICON does not reach.
+    if (state.icon_state != shell_icon_state_ || pulse_frame != shell_pulse_frame_) {
+        shell_pulse_frame_ = pulse_frame;
+        if (root_window_ != nullptr) {
+            if (auto* chrome = root_window_->findChild<QuickWindowChrome*>()) {
+                chrome->applyWindowIcon(RenderWindowIcon(window_icon_cache_, state.icon_state, pulse_frame,
+                                                         settings_.appearance_id, settings_.accent_id));
+            }
+        }
+    }
+
     if (state.icon_state != shell_icon_state_) {
         shell_icon_state_ = state.icon_state;
-        // The tray icon and the taskbar badge are shell chrome outside our
+        // The tray icon and the taskbar button are shell chrome outside our
         // window: QQuickWindow::grabWindow renders our scene graph and cannot
         // see either. This line is the timestamped counterpart to a developer
         // looking at the screen, which is the only way they CAN be confirmed.
         static const char* const kIconStateNames[] = {"idle", "recording", "paused", "saved"};
         diagnostics::AppLog::info(QStringLiteral("shell"),
-                                  QStringLiteral("shell presence -> %1 (tray + taskbar badge)")
+                                  QStringLiteral("shell presence -> %1 (tray + window/taskbar icon)")
                                       .arg(QString::fromLatin1(kIconStateNames[static_cast<int>(state.icon_state)])));
     }
 
-    taskbar_presence_.setPresence(state, shell_presence_.taskbarPulseLevel());
+    taskbar_presence_.setPresence(state);
 }
 
 void QuickApplication::openConfiguredOutputFolder() {

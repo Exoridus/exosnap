@@ -25,6 +25,7 @@ using exosnap::kShellButtonIdStop;
 using exosnap::ProjectShellPresence;
 using exosnap::ShellAction;
 using exosnap::ShellIconState;
+using exosnap::ShellPhase;
 using exosnap::ShellPresenceInput;
 using exosnap::ShellPresenceState;
 using exosnap::TaskbarProgressOwner;
@@ -85,7 +86,6 @@ class FakeTaskbarShell : public TaskbarShell {
         int initialize = 0;
         int add_buttons = 0;
         int update_buttons = 0;
-        int overlay = 0;
         int progress_state = 0;
         int progress_value = 0;
     };
@@ -94,15 +94,12 @@ class FakeTaskbarShell : public TaskbarShell {
         bool initialize = false;
         bool add_buttons = false;
         bool update_buttons = false;
-        bool overlay = false;
         bool progress = false;
     };
 
     Log log;
     Failures fail;
     QVector<ThumbButtonSpec> last_buttons;
-    ShellIconState last_overlay = ShellIconState::Idle;
-    int last_pulse_level = -1;
     TaskbarProgressState last_progress_state = TaskbarProgressState::NoProgress;
     quint64 last_completed = 0;
     quint64 last_total = 0;
@@ -123,13 +120,6 @@ class FakeTaskbarShell : public TaskbarShell {
         handles.push_back(hwnd);
         last_buttons = buttons;
         return fail.update_buttons ? kFail : kOk;
-    }
-    qint32 setOverlayIcon(void* hwnd, ShellIconState state, int pulse_level) override {
-        ++log.overlay;
-        handles.push_back(hwnd);
-        last_overlay = state;
-        last_pulse_level = pulse_level;
-        return fail.overlay ? kFail : kOk;
     }
     qint32 setProgressState(void* hwnd, TaskbarProgressState state) override {
         ++log.progress_state;
@@ -320,16 +310,6 @@ TEST(ShellPresenceAdapterPulse, AStalePulseTickCannotRepaintALaterState) {
     EXPECT_EQ(adapter.presence().icon_state, ShellIconState::Paused);
 }
 
-TEST(ShellPresenceAdapterPulse, TheTaskbarLevelPeaksWhenTheBeatSettles) {
-    EnsureApplication();
-    ShellPresenceAdapter adapter;
-    adapter.setRecordingState(UiRecordingState::Recording, false, true, true, false, false);
-    EXPECT_EQ(adapter.taskbarPulseLevel(), 0);
-    for (int i = 0; i < kRecordingPulseTransitionTicks; ++i)
-        adapter.advancePulseForTest();
-    EXPECT_EQ(adapter.taskbarPulseLevel(), exosnap::kTaskbarPulseLevels - 1);
-}
-
 TEST(ShellPresenceAdapterPulse, TheTimerActuallyTicksOnItsOwn) {
     // The seam above drives the handler directly; this is the counter-check that
     // there is a timer behind it at all.
@@ -338,6 +318,94 @@ TEST(ShellPresenceAdapterPulse, TheTimerActuallyTicksOnItsOwn) {
     adapter.setRecordingState(UiRecordingState::Recording, false, true, true, false, false);
     ASSERT_EQ(adapter.pulseFrame(), 0);
     EXPECT_TRUE(SpinUntil([&adapter]() { return adapter.pulseFrame() != 0; }));
+}
+
+// -- ShellPresenceAdapter: the finalizing flash ------------------------------
+//
+// Finalizing projects to the neutral mark, and for a stream-copy container it is
+// over in well under a tenth of a second. Painting it straight away put a neutral
+// FLASH between the coral recording and the green result on both shell surfaces.
+
+TEST(ShellPresenceAdapterFinalizing, AShortStopNeverShowsTheNeutralMark) {
+    EnsureApplication();
+    ShellPresenceAdapter adapter;
+    adapter.setRecordingState(UiRecordingState::Recording, false, true, true, false, false);
+    ASSERT_EQ(adapter.presence().icon_state, ShellIconState::Recording);
+
+    adapter.setRecordingState(UiRecordingState::Stopping, false, false, false, false, false);
+    // The PHASE is honest -- the transport knows the session is finalizing --
+    // while the ICON holds what it had.
+    EXPECT_EQ(adapter.presence().phase, ShellPhase::Finalizing);
+    EXPECT_EQ(adapter.presence().icon_state, ShellIconState::Recording);
+
+    adapter.setRecordingState(UiRecordingState::Completed, true, false, false, false, true);
+    EXPECT_EQ(adapter.presence().icon_state, ShellIconState::Saved);
+}
+
+TEST(ShellPresenceAdapterFinalizing, AFinalizingThatLastsIsShown) {
+    EnsureApplication();
+    ShellPresenceAdapter adapter;
+    adapter.setRecordingState(UiRecordingState::Recording, false, true, true, false, false);
+    adapter.setRecordingState(UiRecordingState::Saving, false, false, false, false, false);
+    ASSERT_TRUE(adapter.finalizingSettleRunningForTest());
+
+    // A remux long enough to be worth reporting: the neutral mark, and the
+    // taskbar's progress bar beside it.
+    adapter.expireFinalizingSettleForTest();
+    EXPECT_EQ(adapter.presence().icon_state, ShellIconState::Idle);
+    EXPECT_EQ(adapter.presence().phase, ShellPhase::Finalizing);
+}
+
+TEST(ShellPresenceAdapterFinalizing, LeavingFinalizingCancelsTheSettle) {
+    EnsureApplication();
+    ShellPresenceAdapter adapter;
+    adapter.setRecordingState(UiRecordingState::Recording, false, true, true, false, false);
+    adapter.setRecordingState(UiRecordingState::Stopping, false, false, false, false, false);
+    ASSERT_TRUE(adapter.finalizingSettleRunningForTest());
+
+    adapter.setRecordingState(UiRecordingState::Completed, true, false, false, false, true);
+    EXPECT_FALSE(adapter.finalizingSettleRunningForTest());
+}
+
+TEST(ShellPresenceAdapterFinalizing, AStaleSettleCallbackCannotRepaintALaterState) {
+    EnsureApplication();
+    ShellPresenceAdapter adapter;
+    adapter.setRecordingState(UiRecordingState::Recording, false, true, true, false, false);
+    adapter.setRecordingState(UiRecordingState::Stopping, false, false, false, false, false);
+    adapter.setRecordingState(UiRecordingState::Completed, true, false, false, false, true);
+    ASSERT_EQ(adapter.presence().icon_state, ShellIconState::Saved);
+
+    // The timeout Qt had already queued when the stop finished.
+    adapter.expireFinalizingSettleForTest();
+    EXPECT_EQ(adapter.presence().icon_state, ShellIconState::Saved);
+}
+
+TEST(ShellPresenceAdapterFinalizing, ASecondFinalizingSettlesAgainFromScratch) {
+    EnsureApplication();
+    ShellPresenceAdapter adapter;
+    adapter.setRecordingState(UiRecordingState::Recording, false, true, true, false, false);
+    adapter.setRecordingState(UiRecordingState::Saving, false, false, false, false, false);
+    adapter.expireFinalizingSettleForTest();
+    ASSERT_EQ(adapter.presence().icon_state, ShellIconState::Idle);
+
+    adapter.setRecordingState(UiRecordingState::Completed, true, false, false, false, true);
+    adapter.setRecordingState(UiRecordingState::Recording, false, true, true, false, false);
+    adapter.setRecordingState(UiRecordingState::Stopping, false, false, false, false, false);
+    // Not still "settled" from the previous recording.
+    EXPECT_EQ(adapter.presence().icon_state, ShellIconState::Recording);
+    EXPECT_TRUE(adapter.finalizingSettleRunningForTest());
+}
+
+TEST(ShellPresenceAdapterFinalizing, TheSettleTimerActuallyRunsOnItsOwn) {
+    // The seam above drives the handler directly; this is the counter-check that
+    // there is a timer behind it.
+    EnsureApplication();
+    ShellPresenceAdapter adapter;
+    adapter.setFinalizingSettleMsForTest(10);
+    adapter.setRecordingState(UiRecordingState::Recording, false, true, true, false, false);
+    adapter.setRecordingState(UiRecordingState::Saving, false, false, false, false, false);
+    ASSERT_EQ(adapter.presence().icon_state, ShellIconState::Recording);
+    EXPECT_TRUE(SpinUntil([&adapter]() { return adapter.presence().icon_state == ShellIconState::Idle; }));
 }
 
 // -- ShellPresenceAdapter: saved dwell ---------------------------------------
@@ -429,12 +497,11 @@ TEST(ShellPresenceAdapterSaved, PresenceChangedFiresOnlyOnARealChange) {
 
 TEST_F(TaskbarPresenceTest, NothingIsSentBeforeTheShellSaysItIsReady) {
     presence_.setHandle(kHandleA);
-    presence_.setPresence(PresenceFor(UiRecordingState::Recording), 1);
+    presence_.setPresence(PresenceFor(UiRecordingState::Recording));
 
     EXPECT_FALSE(presence_.ready());
     EXPECT_EQ(shell_->log.add_buttons, 0);
     EXPECT_EQ(shell_->log.update_buttons, 0);
-    EXPECT_EQ(shell_->log.overlay, 0);
 }
 
 TEST_F(TaskbarPresenceTest, ReadinessForAnotherWindowIsIgnored) {
@@ -461,16 +528,13 @@ TEST_F(TaskbarPresenceTest, ARepeatedAnnouncementReArmsWithoutDuplicatingTheSet)
     // transport for the rest of the session -- so it re-arms, and the set it
     // registers is still exactly the same three slots.
     bringUp();
-    presence_.setPresence(PresenceFor(UiRecordingState::Recording), 1);
+    presence_.setPresence(PresenceFor(UiRecordingState::Recording));
     ASSERT_EQ(shell_->log.add_buttons, 1);
 
     presence_.notifyShellReady(kHandleA);
     EXPECT_EQ(shell_->log.add_buttons, 2);
     EXPECT_EQ(shell_->last_buttons.size(), 3);
     EXPECT_TRUE(presence_.buttonsRegistered());
-    // And the desired state is on the new button, not left over on the old one.
-    EXPECT_EQ(shell_->last_overlay, ShellIconState::Recording);
-    EXPECT_EQ(shell_->last_pulse_level, 1);
     // The interface behind it is re-created: a proxy to a dead Explorer is not
     // reusable.
     EXPECT_EQ(shell_->log.initialize, 2);
@@ -490,12 +554,10 @@ TEST_F(TaskbarPresenceTest, ARunningOperationIsRePublishedToTheNewTaskbarButton)
 
 TEST_F(TaskbarPresenceTest, TheDesiredStateIsReAppliedOnceTheShellIsReady) {
     presence_.setHandle(kHandleA);
-    presence_.setPresence(PresenceFor(UiRecordingState::Recording), 1);
-    ASSERT_EQ(shell_->log.overlay, 0);
+    presence_.setPresence(PresenceFor(UiRecordingState::Recording));
+    ASSERT_EQ(shell_->log.add_buttons, 0);
 
     presence_.notifyShellReady(kHandleA);
-    EXPECT_EQ(shell_->last_overlay, ShellIconState::Recording);
-    EXPECT_EQ(shell_->last_pulse_level, 1);
     ASSERT_EQ(shell_->last_buttons.size(), 3);
     EXPECT_FALSE(shell_->last_buttons[0].visible); // Record
     EXPECT_TRUE(shell_->last_buttons[1].visible);  // Pause
@@ -504,7 +566,7 @@ TEST_F(TaskbarPresenceTest, TheDesiredStateIsReAppliedOnceTheShellIsReady) {
 
 TEST_F(TaskbarPresenceTest, AHandleIdentityChangeDropsReadinessAndTheAppliedState) {
     bringUp();
-    presence_.setPresence(PresenceFor(UiRecordingState::Recording), 1);
+    presence_.setPresence(PresenceFor(UiRecordingState::Recording));
     ASSERT_TRUE(presence_.ready());
 
     presence_.setHandle(kHandleB);
@@ -512,21 +574,24 @@ TEST_F(TaskbarPresenceTest, AHandleIdentityChangeDropsReadinessAndTheAppliedStat
     EXPECT_FALSE(presence_.buttonsRegistered());
 
     // A new taskbar button has been told nothing, so nothing may be sent to it.
-    const int before = shell_->log.overlay + shell_->log.update_buttons + shell_->log.add_buttons;
-    presence_.setPresence(PresenceFor(UiRecordingState::Paused), 0);
-    EXPECT_EQ(shell_->log.overlay + shell_->log.update_buttons + shell_->log.add_buttons, before);
+    const int before = shell_->log.update_buttons + shell_->log.add_buttons;
+    presence_.setPresence(PresenceFor(UiRecordingState::Paused));
+    EXPECT_EQ(shell_->log.update_buttons + shell_->log.add_buttons, before);
 }
 
 TEST_F(TaskbarPresenceTest, TheNewHandleNeedsItsOwnReadinessAndThenGetsTheFullState) {
     bringUp();
-    presence_.setPresence(PresenceFor(UiRecordingState::Recording), 1);
+    presence_.setPresence(PresenceFor(UiRecordingState::Recording));
     presence_.setHandle(kHandleB);
-    presence_.setPresence(PresenceFor(UiRecordingState::Paused), 0);
+    presence_.setPresence(PresenceFor(UiRecordingState::Paused));
 
     presence_.notifyShellReady(kHandleB);
     EXPECT_TRUE(presence_.ready());
     EXPECT_TRUE(presence_.buttonsRegistered());
-    EXPECT_EQ(shell_->last_overlay, ShellIconState::Paused);
+    ASSERT_EQ(shell_->last_buttons.size(), 3);
+    // Paused: Record hidden, Resume and Stop offered.
+    EXPECT_FALSE(shell_->last_buttons[0].visible);
+    EXPECT_TRUE(shell_->last_buttons[1].visible);
     EXPECT_EQ(shell_->handles.back(), kHandleB);
 }
 
@@ -540,39 +605,16 @@ TEST_F(TaskbarPresenceTest, TheSameHandleAgainChangesNothing) {
 
 TEST_F(TaskbarPresenceTest, AnUnchangedStateCostsNoShellCall) {
     bringUp();
-    presence_.setPresence(PresenceFor(UiRecordingState::Recording), 1);
-    const int overlay = shell_->log.overlay;
+    presence_.setPresence(PresenceFor(UiRecordingState::Recording));
     const int updates = shell_->log.update_buttons;
 
-    presence_.setPresence(PresenceFor(UiRecordingState::Recording), 1);
-    EXPECT_EQ(shell_->log.overlay, overlay);
+    presence_.setPresence(PresenceFor(UiRecordingState::Recording));
     EXPECT_EQ(shell_->log.update_buttons, updates);
 }
-
-TEST_F(TaskbarPresenceTest, ANewPulseLevelRedrawsOnlyTheBadge) {
-    bringUp();
-    presence_.setPresence(PresenceFor(UiRecordingState::Recording), 0);
-    const int updates = shell_->log.update_buttons;
-    const int overlay = shell_->log.overlay;
-
-    presence_.setPresence(PresenceFor(UiRecordingState::Recording), 1);
-    EXPECT_EQ(shell_->log.overlay, overlay + 1);
-    // The transport did not change, so the strip is not resent.
-    EXPECT_EQ(shell_->log.update_buttons, updates);
-}
-
-TEST_F(TaskbarPresenceTest, IdleClearsTheBadge) {
-    bringUp();
-    presence_.setPresence(PresenceFor(UiRecordingState::Recording), 1);
-    presence_.setPresence(PresenceFor(UiRecordingState::Ready), 0);
-    EXPECT_EQ(shell_->last_overlay, ShellIconState::Idle);
-}
-
-// -- TaskbarPresence: buttons -----------------------------------------------
 
 TEST_F(TaskbarPresenceTest, RecordButtonStartsFromIdle) {
     bringUp();
-    presence_.setPresence(PresenceFor(UiRecordingState::Ready), 0);
+    presence_.setPresence(PresenceFor(UiRecordingState::Ready));
     QSignalSpy spy(&presence_, &TaskbarPresence::actionRequested);
     EXPECT_TRUE(presence_.handleCommand(Click(kShellButtonIdRecord)));
     ASSERT_EQ(spy.count(), 1);
@@ -583,12 +625,12 @@ TEST_F(TaskbarPresenceTest, TheSharedButtonPausesThenResumes) {
     bringUp();
     QSignalSpy spy(&presence_, &TaskbarPresence::actionRequested);
 
-    presence_.setPresence(PresenceFor(UiRecordingState::Recording), 0);
+    presence_.setPresence(PresenceFor(UiRecordingState::Recording));
     EXPECT_TRUE(presence_.handleCommand(Click(kShellButtonIdPauseResume)));
     ASSERT_EQ(spy.count(), 1);
     EXPECT_EQ(spy.at(0).at(0).value<ShellAction>(), ShellAction::Pause);
 
-    presence_.setPresence(PresenceFor(UiRecordingState::Paused), 0);
+    presence_.setPresence(PresenceFor(UiRecordingState::Paused));
     EXPECT_TRUE(presence_.handleCommand(Click(kShellButtonIdPauseResume)));
     ASSERT_EQ(spy.count(), 2);
     EXPECT_EQ(spy.at(1).at(0).value<ShellAction>(), ShellAction::Resume);
@@ -596,7 +638,7 @@ TEST_F(TaskbarPresenceTest, TheSharedButtonPausesThenResumes) {
 
 TEST_F(TaskbarPresenceTest, StopButtonStops) {
     bringUp();
-    presence_.setPresence(PresenceFor(UiRecordingState::Recording), 0);
+    presence_.setPresence(PresenceFor(UiRecordingState::Recording));
     QSignalSpy spy(&presence_, &TaskbarPresence::actionRequested);
     EXPECT_TRUE(presence_.handleCommand(Click(kShellButtonIdStop)));
     ASSERT_EQ(spy.count(), 1);
@@ -605,7 +647,7 @@ TEST_F(TaskbarPresenceTest, StopButtonStops) {
 
 TEST_F(TaskbarPresenceTest, AnUnknownCommandIsNotOursAndAsksForNothing) {
     bringUp();
-    presence_.setPresence(PresenceFor(UiRecordingState::Recording), 0);
+    presence_.setPresence(PresenceFor(UiRecordingState::Recording));
     QSignalSpy spy(&presence_, &TaskbarPresence::actionRequested);
     EXPECT_FALSE(presence_.handleCommand(Click(0x1234)));
     EXPECT_EQ(spy.count(), 0);
@@ -615,7 +657,7 @@ TEST_F(TaskbarPresenceTest, AWmCommandThatIsNotAThumbnailClickIsNotOurs) {
     // The filter is process-wide, and WM_COMMAND carries menu and accelerator
     // notifications too. Only THBN_CLICKED in the high word makes it ours.
     bringUp();
-    presence_.setPresence(PresenceFor(UiRecordingState::Recording), 0);
+    presence_.setPresence(PresenceFor(UiRecordingState::Recording));
     QSignalSpy spy(&presence_, &TaskbarPresence::actionRequested);
     EXPECT_FALSE(presence_.handleCommand(static_cast<quint64>(kShellButtonIdStop)));
     EXPECT_EQ(spy.count(), 0);
@@ -625,7 +667,7 @@ TEST_F(TaskbarPresenceTest, ACommandFromAStaleStripIsConsumedAndDoesNothing) {
     // Explorer delivers the click against the strip it last painted, which can
     // be a state the session has already left.
     bringUp();
-    presence_.setPresence(PresenceFor(UiRecordingState::Saving), 0);
+    presence_.setPresence(PresenceFor(UiRecordingState::Saving));
     QSignalSpy spy(&presence_, &TaskbarPresence::actionRequested);
 
     EXPECT_TRUE(presence_.handleCommand(Click(kShellButtonIdStop)));
@@ -637,7 +679,7 @@ TEST_F(TaskbarPresenceTest, ACommandFromAStaleStripIsConsumedAndDoesNothing) {
 TEST_F(TaskbarPresenceTest, TheStripAClickIsResolvedAgainstIsTheStripThatWasSent) {
     bringUp();
     const ShellPresenceState recording = PresenceFor(UiRecordingState::Recording);
-    presence_.setPresence(recording, 0);
+    presence_.setPresence(recording);
     const QVector<ThumbButtonSpec> expected = TaskbarPresence::ButtonsFor(recording);
     ASSERT_EQ(shell_->last_buttons.size(), expected.size());
     for (int i = 0; i < expected.size(); ++i) {
@@ -734,7 +776,7 @@ TEST_F(TaskbarPresenceTest, ARefusedInitializationLeavesEverythingElseWorking) {
 
     // And the product state still tracks: a refused shell costs a button, never
     // a recording.
-    presence_.setPresence(PresenceFor(UiRecordingState::Recording), 1);
+    presence_.setPresence(PresenceFor(UiRecordingState::Recording));
     const auto lease = presence_.acquireProgress(TaskbarProgressOwner::RecordingSave);
     EXPECT_TRUE(lease.valid());
     presence_.updateProgress(lease, 0.5);
@@ -742,35 +784,28 @@ TEST_F(TaskbarPresenceTest, ARefusedInitializationLeavesEverythingElseWorking) {
     EXPECT_TRUE(presence_.handleCommand(Click(kShellButtonIdPauseResume)));
 }
 
-TEST_F(TaskbarPresenceTest, ARefusedAddButtonsStillLeavesTheBadgeAndProgressWorking) {
+TEST_F(TaskbarPresenceTest, ARefusedAddButtonsStillLeavesProgressWorking) {
     shell_->fail.add_buttons = true;
     bringUp();
 
     EXPECT_TRUE(presence_.shellAvailable());
     EXPECT_FALSE(presence_.buttonsRegistered());
 
-    presence_.setPresence(PresenceFor(UiRecordingState::Recording), 1);
-    EXPECT_EQ(shell_->last_overlay, ShellIconState::Recording);
+    presence_.setPresence(PresenceFor(UiRecordingState::Recording));
     // Nothing was registered, so nothing is updated -- but the class carries on.
     EXPECT_EQ(shell_->log.update_buttons, 0);
+    const auto lease = presence_.acquireProgress(TaskbarProgressOwner::RecordingSave);
+    presence_.updateProgress(lease, 0.4);
+    EXPECT_EQ(shell_->last_progress_state, TaskbarProgressState::Normal);
 }
 
 TEST_F(TaskbarPresenceTest, ARefusedUpdateButtonsDoesNotStopLaterStates) {
     bringUp();
     shell_->fail.update_buttons = true;
-    presence_.setPresence(PresenceFor(UiRecordingState::Recording), 0);
+    presence_.setPresence(PresenceFor(UiRecordingState::Recording));
     shell_->fail.update_buttons = false;
-    presence_.setPresence(PresenceFor(UiRecordingState::Paused), 0);
-    EXPECT_EQ(shell_->last_overlay, ShellIconState::Paused);
+    presence_.setPresence(PresenceFor(UiRecordingState::Paused));
     EXPECT_GE(shell_->log.update_buttons, 2);
-}
-
-TEST_F(TaskbarPresenceTest, ARefusedOverlayIconDoesNotStopTheButtons) {
-    bringUp();
-    shell_->fail.overlay = true;
-    presence_.setPresence(PresenceFor(UiRecordingState::Recording), 0);
-    EXPECT_GE(shell_->log.update_buttons, 1);
-    EXPECT_TRUE(presence_.handleCommand(Click(kShellButtonIdStop)));
 }
 
 TEST_F(TaskbarPresenceTest, ARefusedProgressCallDoesNotBreakTheLedger) {
@@ -788,7 +823,7 @@ TEST_F(TaskbarPresenceTest, WithNoPlatformShellAtAllNothingCrashes) {
     bare.setShellForTest(nullptr);
     bare.setHandle(kHandleA);
     bare.notifyShellReady(kHandleA);
-    bare.setPresence(PresenceFor(UiRecordingState::Recording), 1);
+    bare.setPresence(PresenceFor(UiRecordingState::Recording));
     const auto lease = bare.acquireProgress(TaskbarProgressOwner::RecordingSave);
     bare.updateProgress(lease, 0.5);
     bare.finishProgress(lease);

@@ -124,26 +124,11 @@ inline constexpr OpticalProfile kLargeProfile{
 }
 
 // ---------------------------------------------------------------------------
-// Taskbar overlay badge
-// ---------------------------------------------------------------------------
-// Not the aperture. The badge is drawn into the corner of the taskbar button at
-// roughly a third of its size, where the mark's thin rings are mush; a filled
-// disc in the state colour is not. The rim is dark so the badge reads on a light
-// taskbar as well as on a dark one.
-inline constexpr double kBadgeRadius = 13.0;
-inline constexpr double kBadgeRimStroke = 2.0;
-// The heartbeat's trough, as a darkening factor rather than an opacity: the
-// badge sits ON the application icon, and a translucent one would show it
-// through.
-inline constexpr double kBadgeDimFactor = 0.62;
-
-// ---------------------------------------------------------------------------
 // Transport glyphs
 // ---------------------------------------------------------------------------
-// One set of shapes, on the same 32-unit grid, for the thumbnail toolbar, the
-// badge knockouts and the tray menu items. Written down once because a pause bar
-// that is 2.2 units wide in the badge and 3.6 in the toolbar is two shapes, and
-// the second one drifts.
+// One set of shapes, on the same 32-unit grid, for the thumbnail toolbar and the
+// tray menu items. Written down once because a pause bar that is one width in
+// the menu and another in the toolbar is two shapes, and the second one drifts.
 inline constexpr double kGlyphDiscRadius = 8.0;
 inline constexpr double kGlyphSquareHalf = 7.0;
 inline constexpr double kGlyphBarWidth = 3.6;
@@ -152,18 +137,5 @@ inline constexpr double kGlyphBarGap = 3.4;
 inline constexpr double kGlyphTriangleBackX = 11.5;
 inline constexpr double kGlyphTriangleTipX = 23.5;
 inline constexpr double kGlyphTriangleHalfHeight = 8.0;
-
-// The knockout inside a badge, which has the rim to clear and therefore its own
-// proportions.
-inline constexpr double kBadgeGlyphBarWidth = 2.2;
-inline constexpr double kBadgeGlyphBarHeight = 10.0;
-inline constexpr double kBadgeGlyphBarGap = 2.6;
-inline constexpr double kBadgeCheckStroke = 3.0;
-inline constexpr double kBadgeCheckStartX = 10.6;
-inline constexpr double kBadgeCheckStartY = 16.4;
-inline constexpr double kBadgeCheckElbowX = 14.4;
-inline constexpr double kBadgeCheckElbowY = 20.2;
-inline constexpr double kBadgeCheckEndX = 21.6;
-inline constexpr double kBadgeCheckEndY = 12.2;
 
 } // namespace exosnap::ui::brand

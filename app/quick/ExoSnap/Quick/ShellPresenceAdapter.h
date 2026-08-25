@@ -2,15 +2,15 @@
 
 // The one place the shell's view of the recording session is assembled.
 //
-// Everything below it -- the tray icon, the taskbar overlay badge, the taskbar
+// Everything below it -- the tray icon, the window/taskbar icon, the taskbar
 // thumbnail buttons, the in-app recording indicator -- reads this object and
 // nothing else. What it adds to the pure projection in models/ShellPresence.h is
-// the two pieces of state that need a clock: the recording heartbeat, and the
-// bounded dwell after a recording is saved.
+// the two pieces of state that need a clock: the recording-entry heartbeat, and
+// the bounded dwell after a recording is saved.
 //
-// Both clocks are owned here rather than by their surfaces. Three timers ticking
-// at the same nominal rate drift apart within a minute, and the tray and the
-// taskbar would then be describing one recording out of step.
+// Both clocks are owned here rather than by their surfaces. Two timers ticking at
+// the same nominal rate drift apart within a minute, and the tray and the taskbar
+// would then be describing one recording out of step.
 
 #include <QObject>
 #include <QTimer>
@@ -64,9 +64,6 @@ class ShellPresenceAdapter : public QObject {
     // Whether the recording-entry beat is still playing. It ends on its own after
     // a fixed couple of cycles, which is what makes the shell go static.
     [[nodiscard]] bool shellPulseActive() const noexcept;
-    // The same phase quantized for the taskbar overlay, which is redrawn by
-    // Explorer and does not want every frame.
-    [[nodiscard]] int taskbarPulseLevel() const noexcept;
 
     // ---- test seams ------------------------------------------------------
     // The dwell is a wall-clock duration measured in seconds; a test that waited
@@ -83,6 +80,11 @@ class ShellPresenceAdapter : public QObject {
     void advancePulseForTest();
     [[nodiscard]] bool pulseRunningForTest() const;
     [[nodiscard]] int pulseTicksRemainingForTest() const noexcept;
+    // The finalizing settle is a quarter second of wall clock; a test that waited
+    // it out would be measuring QTimer.
+    void setFinalizingSettleMsForTest(int ms);
+    [[nodiscard]] bool finalizingSettleRunningForTest() const;
+    void expireFinalizingSettleForTest();
 
   signals:
     void presenceChanged();
@@ -93,6 +95,10 @@ class ShellPresenceAdapter : public QObject {
     void clearSavedDwell();
     void onSavedDwellExpired(quint64 generation);
     void republish();
+    // What the shell surfaces should SHOW, which is not always what the phase
+    // says. See the comment on the settle timer below.
+    [[nodiscard]] ShellIconState settleIconState(const ShellPresenceState& projected);
+    void onFinalizingSettled();
     void syncPulseTimer();
     void onPulseTick();
 
@@ -104,6 +110,17 @@ class ShellPresenceAdapter : public QObject {
     // Counts the entry beat down. Zero means the shell is showing a static
     // state, whether or not a recording is running.
     int pulse_ticks_remaining_ = 0;
+
+    // Finalizing has no colour of its own -- the recording is over and the file is
+    // not there yet -- so it projects to the neutral mark. Painting that the
+    // instant a stop begins puts a neutral FLASH between the coral recording and
+    // the green result, because for a stream-copy container finalizing is over in
+    // well under a tenth of a second. So the neutral mark waits: if the operation
+    // finishes first, the shell goes straight from recording to saved, and if it
+    // does not, neutral plus the taskbar's progress bar is exactly the right
+    // thing to show.
+    QTimer finalizing_timer_;
+    bool finalizing_settled_ = false;
 
     QTimer saved_timer_;
     // Bumped on every arm AND every clear, which is what makes a timeout that

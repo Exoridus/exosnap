@@ -509,44 +509,21 @@ void QuickWindowChrome::refreshWindowMaximized() {
     emit windowMaximizedChanged();
 }
 
-void QuickWindowChrome::applyWindowIcon() {
+void QuickWindowChrome::applyWindowIcon(const QIcon& icon) {
 #if defined(Q_OS_WIN)
-    // The application icon, and only ever the application icon. A window icon
-    // that changed with the session put the recording state on the taskbar
-    // BUTTON, which is where the button's own overlay badge belongs -- and a
-    // WM_SETICON is a full taskbar redraw, so a state that pulses would have
-    // redrawn it several times a second for the length of a recording.
-    const QIcon icon(QStringLiteral(":/brand/exosnap-app.ico"));
-    if (icon.isNull()) {
-        qWarning().noquote() << "QuickWindowChrome: icon load failed from :/brand/exosnap-app.ico";
-    } else if (!target_.isNull()) {
-        // Qt's Windows platform plugin turns setIcon into WM_SETICON for both
-        // ICON_SMALL and ICON_BIG, so this alone already updates frame + taskbar.
-        target_->setIcon(icon);
-    }
-
-    HWND hwnd = static_cast<HWND>(hwnd_);
-    if (hwnd == nullptr)
+    if (icon.isNull() || target_.isNull())
         return;
-    HINSTANCE instance = GetModuleHandleW(nullptr);
-    if (instance == nullptr)
-        return;
-
-    // Belt-and-braces path carried over from the Widgets shell: the EXE's own icon
-    // resource, which is the multi-resolution one Explorer shows. It contributes
-    // only if exosnap.rc is compiled into this target; when it is not, LoadImageW
-    // fails and the Qt path above is the whole story. LR_SHARED is safe because
-    // the OS caches per (instance, id, size) tuple.
-    HICON small_icon = static_cast<HICON>(LoadImageW(instance, MAKEINTRESOURCEW(IDI_EXOSNAP_APP_ICON), IMAGE_ICON,
-                                                     GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON),
-                                                     LR_DEFAULTCOLOR | LR_SHARED));
-    HICON big_icon = static_cast<HICON>(LoadImageW(instance, MAKEINTRESOURCEW(IDI_EXOSNAP_APP_ICON), IMAGE_ICON,
-                                                   GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON),
-                                                   LR_DEFAULTCOLOR | LR_SHARED));
-    if (small_icon != nullptr)
-        SendMessageW(hwnd, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(small_icon));
-    if (big_icon != nullptr)
-        SendMessageW(hwnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(big_icon));
+    // Qt's Windows platform plugin turns setIcon into WM_SETICON for both
+    // ICON_SMALL and ICON_BIG, picking the pixmap nearest each metric out of the
+    // QIcon -- which is why the caller supplies one rendered at each size rather
+    // than one raster for Windows to rescale.
+    //
+    // This does NOT touch the executable's icon. Explorer, the desktop and Start
+    // read the PE resource table; WM_SETICON reaches the live window's frame and
+    // its taskbar button, and nothing else.
+    target_->setIcon(icon);
+#else
+    Q_UNUSED(icon);
 #endif
 }
 

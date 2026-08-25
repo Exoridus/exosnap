@@ -9,16 +9,16 @@ Only the artefacts whose appearance the build already knows are files:
     executable's identity in Explorer, on the desktop, in Start and in Alt+Tab,
     it carries no session state and no accent, and Windows wants it out of the
     PE resource table.
-  * the taskbar overlay badges and the thumbnail-toolbar glyphs, which
-    ``SetOverlayIcon`` and ``THUMBBUTTON::hIcon`` take as HICONs and which
-    depend on nothing the user can change.
+  * the thumbnail-toolbar glyphs, which ``THUMBBUTTON::hIcon`` takes as HICONs
+    and which depend on nothing the user can change.
   * ``exosnap-logo.svg`` -- the mark as a vector, for documentation and design
     hand-off.
 
-The tray mark is NOT here. Its outer ring is the user's accent and its inner
-ring is the session's semantic colour, so as files it would be one icon per
-(state x accent x appearance x heartbeat frame). It is painted at runtime by
-``app/ui/brand/ShellIconRenderer``.
+The state marks are NOT here. Their outer ring is the user's accent and their
+inner ring is the session's semantic colour, so as files they would be one icon
+per (state x accent x appearance x heartbeat frame). Both surfaces that show one
+-- the notification area and the running window's own icon -- get it painted at
+runtime by ``app/ui/brand/ShellIconRenderer``.
 
 SOURCE OF TRUTH
 ---------------
@@ -99,7 +99,7 @@ def parse_theme_colour(source: str, appearance_id: str, index: int) -> str:
 # Positions in ExoAppearance, counting only the colour-valued fields from the
 # appearance id onwards: bg surf surf2 raise line line2 ink text1 mut dim, then
 # the three semantic ones.
-_SUCCESS, _CAUTION, _ERROR = 10, 11, 12
+_CAUTION, _ERROR = 11, 12
 
 
 def _rgb(value: str) -> tuple[int, int, int]:
@@ -122,11 +122,9 @@ SUPERSAMPLE = 16
 # what the large frames are for.
 APP_ICO_SIZES = [16, 20, 24, 32, 40, 48, 60, 64, 72, 80, 96, 128, 256]
 
-# Badges and thumbnail glyphs are shell chrome at 16-48 px. The large frames an
-# application icon needs would only bloat the executable.
+# Thumbnail glyphs are shell chrome at 16-48 px. The large frames an application
+# icon needs would only bloat the executable.
 SHELL_ICO_SIZES = [16, 20, 24, 32, 40, 48]
-
-INK = (0x0E, 0x0E, 0x10)  # the dark appearance's page ground, used as a badge knockout
 
 
 class Renderer:
@@ -174,35 +172,6 @@ class Renderer:
                    self.accent + (255,))
         return img.resize((px, px), Image.Resampling.LANCZOS)
 
-    def badge_frame(self, px: int, rgb, glyph: str) -> Image.Image:
-        m = self.mark
-        img, draw, scale = self._canvas(px)
-        radius = m.value("kBadgeRadius")
-        rim = m.value("kBadgeRimStroke")
-
-        self._disc(draw, scale, radius, tuple(rgb) + (255,))
-        self._ring(draw, scale, radius - rim / 2.0, rim, INK + (255,))
-
-        knockout = INK + (255,)
-        if glyph == "pause":
-            bar_w = m.value("kBadgeGlyphBarWidth")
-            bar_h = m.value("kBadgeGlyphBarHeight")
-            gap = m.value("kBadgeGlyphBarGap")
-            for direction in (-1, 1):
-                x = self.center + direction * (gap / 2.0 + bar_w / 2.0)
-                draw.rectangle([(x - bar_w / 2.0) * scale, (self.center - bar_h / 2.0) * scale,
-                                (x + bar_w / 2.0) * scale, (self.center + bar_h / 2.0) * scale],
-                               fill=knockout)
-        elif glyph == "check":
-            # Two strokes rather than a font glyph: a font would have to be
-            # present on whichever machine runs this script.
-            points = [(m.value("kBadgeCheckStartX"), m.value("kBadgeCheckStartY")),
-                      (m.value("kBadgeCheckElbowX"), m.value("kBadgeCheckElbowY")),
-                      (m.value("kBadgeCheckEndX"), m.value("kBadgeCheckEndY"))]
-            draw.line([(x * scale, y * scale) for x, y in points], fill=knockout,
-                      width=round(m.value("kBadgeCheckStroke") * scale), joint="curve")
-        return img.resize((px, px), Image.Resampling.LANCZOS)
-
     def thumb_frame(self, px: int, shape: str, rgb) -> Image.Image:
         m = self.mark
         img, draw, scale = self._canvas(px)
@@ -229,10 +198,6 @@ class Renderer:
             points = [(back, self.center - half), (back, self.center + half), (tip, self.center)]
             draw.polygon([(x * scale, y * scale) for x, y in points], fill=rgba)
         return img.resize((px, px), Image.Resampling.LANCZOS)
-
-
-def darken(rgb, factor: float):
-    return tuple(round(channel * factor) for channel in rgb)
 
 
 def write_ico(frames: list[Image.Image], stem: str) -> None:
@@ -276,7 +241,6 @@ def main() -> int:
 
     coral = _rgb(parse_theme_colour(themes, "dark", _ERROR))
     amber = _rgb(parse_theme_colour(themes, "dark", _CAUTION))
-    green = _rgb(parse_theme_colour(themes, "dark", _SUCCESS))
     accent = _rgb(accent_hex)
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -284,15 +248,6 @@ def main() -> int:
 
     write_ico([renderer.mark_frame(px) for px in APP_ICO_SIZES], "exosnap-app")
     write_svg(mark, accent_hex)
-
-    badges = {
-        "exosnap-badge-recording": (coral, ""),
-        "exosnap-badge-recording-dim": (darken(coral, mark.value("kBadgeDimFactor")), ""),
-        "exosnap-badge-paused": (amber, "pause"),
-        "exosnap-badge-saved": (green, "check"),
-    }
-    for stem, (rgb, glyph) in badges.items():
-        write_ico([renderer.badge_frame(px, rgb, glyph) for px in SHELL_ICO_SIZES], stem)
 
     thumbs = {
         "exosnap-thumb-record": ("disc", coral),

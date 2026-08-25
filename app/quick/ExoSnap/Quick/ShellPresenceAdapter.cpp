@@ -14,12 +14,21 @@ namespace {
 // is a second named constant with a stated reason.
 constexpr int kSavedDwellMs = notifications::NotificationManager::kDismissMs_Saved;
 
+// How long finalizing has to last before the shell says so. Above the threshold
+// where a changed icon reads as a state rather than as a glitch, and well below
+// any remux a user would notice waiting for.
+constexpr int kFinalizingSettleMs = 250;
+
 } // namespace
 
 ShellPresenceAdapter::ShellPresenceAdapter(QObject* parent) : QObject(parent) {
     pulse_timer_.setInterval(kRecordingPulseIntervalMs);
     pulse_timer_.setTimerType(Qt::CoarseTimer);
     QObject::connect(&pulse_timer_, &QTimer::timeout, this, &ShellPresenceAdapter::onPulseTick);
+
+    finalizing_timer_.setSingleShot(true);
+    finalizing_timer_.setInterval(kFinalizingSettleMs);
+    QObject::connect(&finalizing_timer_, &QTimer::timeout, this, &ShellPresenceAdapter::onFinalizingSettled);
 
     saved_timer_.setSingleShot(true);
     saved_timer_.setInterval(kSavedDwellMs);
@@ -78,10 +87,6 @@ bool ShellPresenceAdapter::shellPulseActive() const noexcept {
     return pulse_timer_.isActive();
 }
 
-int ShellPresenceAdapter::taskbarPulseLevel() const noexcept {
-    return RecordingPulseLevel(pulse_frame_);
-}
-
 void ShellPresenceAdapter::setSavedDwellMsForTest(int ms) {
     saved_timer_.setInterval(ms);
 }
@@ -92,6 +97,18 @@ quint64 ShellPresenceAdapter::savedDwellGenerationForTest() const noexcept {
 
 void ShellPresenceAdapter::expireSavedDwellForTest(quint64 generation) {
     onSavedDwellExpired(generation);
+}
+
+void ShellPresenceAdapter::setFinalizingSettleMsForTest(int ms) {
+    finalizing_timer_.setInterval(ms);
+}
+
+bool ShellPresenceAdapter::finalizingSettleRunningForTest() const {
+    return finalizing_timer_.isActive();
+}
+
+void ShellPresenceAdapter::expireFinalizingSettleForTest() {
+    onFinalizingSettled();
 }
 
 void ShellPresenceAdapter::advancePulseForTest() {
@@ -130,8 +147,35 @@ void ShellPresenceAdapter::onSavedDwellExpired(quint64 generation) {
     republish();
 }
 
+ShellIconState ShellPresenceAdapter::settleIconState(const ShellPresenceState& projected) {
+    if (projected.phase != ShellPhase::Finalizing) {
+        finalizing_timer_.stop();
+        finalizing_settled_ = false;
+        return projected.icon_state;
+    }
+    if (finalizing_settled_)
+        return projected.icon_state;
+    if (!finalizing_timer_.isActive())
+        finalizing_timer_.start();
+    // Hold whatever the shell is already showing. Coral, for the ordinary stop.
+    return state_.icon_state;
+}
+
+void ShellPresenceAdapter::onFinalizingSettled() {
+    // Nothing to do if the operation already finished: the phase moved on and the
+    // timer's own stop raced this callback.
+    if (state_.phase != ShellPhase::Finalizing)
+        return;
+    finalizing_settled_ = true;
+    republish();
+}
+
 void ShellPresenceAdapter::republish() {
-    const ShellPresenceState projected = ProjectShellPresence(input_);
+    ShellPresenceState projected = ProjectShellPresence(input_);
+    // The one field the adapter overrides. Everything else -- the phase, the
+    // affordances -- stays exactly as the pure projection computed it, so a menu
+    // never offers something because an icon is lagging.
+    projected.icon_state = settleIconState(projected);
     const bool changed = projected != state_;
     state_ = projected;
 

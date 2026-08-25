@@ -53,12 +53,6 @@ inline constexpr int kRecordingPulseTransitionTicks = kRecordingPulseTransitionC
 // permanently mid-breath.
 inline constexpr int kRecordingPulsePeakFrame = kRecordingPulseFrameCount / 2;
 
-// The taskbar overlay badge is a small square in the corner of a taskbar button,
-// and Explorer redraws the whole button for every SetOverlayIcon. Two levels is
-// what stays legible at that size and halves the shell update rate, while still
-// being derived from the same phase as the tray.
-inline constexpr int kTaskbarPulseLevels = 2;
-
 // Advances one tick, wrapping. Out-of-range and negative inputs come back to
 // frame 0 rather than propagating: this indexes an icon array.
 [[nodiscard]] int NextRecordingPulseFrame(int frame, int frame_count = kRecordingPulseFrameCount) noexcept;
@@ -67,10 +61,5 @@ inline constexpr int kTaskbarPulseLevels = 2;
 // triangle rather than a sine -- at four frames the two produce the same three
 // numbers, and the triangle says what it is.
 [[nodiscard]] double RecordingPulseIntensity(int frame, int frame_count = kRecordingPulseFrameCount) noexcept;
-
-// The intensity quantized into `levels` steps, for a surface that cannot or
-// should not render every frame. Same phase, coarser rendering.
-[[nodiscard]] int RecordingPulseLevel(int frame, int levels = kTaskbarPulseLevels,
-                                      int frame_count = kRecordingPulseFrameCount) noexcept;
 
 } // namespace exosnap

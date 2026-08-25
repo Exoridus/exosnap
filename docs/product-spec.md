@@ -1404,7 +1404,7 @@ release (0.11 per ADR 0022).
   the sizes Windows draws a notification-area icon the mark is drawn with heavier strokes and a wider
   aperture than the full-size logo — the same three circles, corrected so they survive 16 pixels.
 - **Entering a recording plays a short heartbeat, and then the shell holds still.** The tray icon and
-  the taskbar badge beat twice as the recording starts and settle on the static recording state. They
+  the taskbar button beat twice as the recording starts and settle on the static recording state. They
   do not pulse for the length of the recording: Windows has no animated-icon API, so a permanent
   pulse means swapping the notification-area icon and redrawing the taskbar button for hours, and at
   that size it reads as a flicker in the corner of the screen rather than as a heartbeat. **Resuming
@@ -1413,9 +1413,11 @@ release (0.11 per ADR 0022).
   from "capturing" at a glance; paused, saved and idle are static. **Inside the application the
   recording indicator breathes for as long as the recording runs** — the on-screen pill is a surface
   that can animate for free, and the shell is not.
-- **The application icon never changes.** What Explorer, the desktop, Start and Alt+Tab show is one
-  multi-resolution mark in the shipped accent, in every state. A recording reaches the taskbar as the
-  button's own state badge, not as a different application icon.
+- **The taskbar button shows the same mark as the tray.** One image, two surfaces: while a recording
+  runs the button's icon is the coral mark, paused it is amber, saved it is green, and it plays the
+  same short entry heartbeat. What Explorer, the desktop and Start show is a different thing and does
+  not change — that is the icon of the *file*, in the shipped accent, whatever the application is
+  doing.
 - **Tray menu** — Show/Hide window, the transport, **Open output folder**, Notifications while any are
   unread, and Quit. The transport offers exactly what the state allows: **Start recording** while
   idle, **Pause** and **Stop** while recording, **Resume** and **Stop** while paused. An action that
@@ -1428,8 +1430,8 @@ release (0.11 per ADR 0022).
 - **Clicking the tray icon** brings the window back; **double-clicking it** starts or stops a
   recording, the same gesture the global hotkey carries; **right-clicking it** opens the menu.
 - **Taskbar button** — the same transport as a thumbnail toolbar under the taskbar preview
-  (Record, Pause/Resume, Stop, following the same table as the tray menu), a **state badge** over the
-  application icon in the same four states as the tray, and a **progress bar** for the long
+  (Record, Pause/Resume, Stop, following the same table as the tray menu), the state in the button's
+  own icon as described above, and a **progress bar** for the long
   operations: the save after a recording stops, a recovery finish, and an edit export. The bar shows
   one operation at a time; a second long operation running at the same time reports in its own
   surface rather than sharing the bar, and a failed operation leaves the bar red until the next one

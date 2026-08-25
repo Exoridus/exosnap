@@ -14,7 +14,6 @@ using exosnap::kShellButtonIdStop;
 using exosnap::NextRecordingPulseFrame;
 using exosnap::ProjectShellPresence;
 using exosnap::RecordingPulseIntensity;
-using exosnap::RecordingPulseLevel;
 using exosnap::ResolveShellCommand;
 using exosnap::ShellAction;
 using exosnap::ShellButton;
@@ -336,23 +335,6 @@ TEST(RecordingPulseMath, IntensityIsATriangleFromTroughToPeakAndBack) {
     EXPECT_DOUBLE_EQ(RecordingPulseIntensity(2), 1.0);
     EXPECT_DOUBLE_EQ(RecordingPulseIntensity(3), 0.5);
 }
-
-TEST(RecordingPulseMath, TwoLevelsQuantizeTheSamePhaseIntoHalfTheUpdates) {
-    EXPECT_EQ(RecordingPulseLevel(0, 2), 0);
-    EXPECT_EQ(RecordingPulseLevel(1, 2), 1);
-    EXPECT_EQ(RecordingPulseLevel(2, 2), 1);
-    EXPECT_EQ(RecordingPulseLevel(3, 2), 1);
-}
-
-TEST(RecordingPulseMath, ALevelIsAlwaysAValidIndex) {
-    for (int frame = -2; frame < kRecordingPulseFrameCount + 2; ++frame) {
-        const int level = RecordingPulseLevel(frame, 3);
-        EXPECT_GE(level, 0);
-        EXPECT_LE(level, 2);
-    }
-}
-
-// -- Taskbar progress lease -------------------------------------------------
 
 TEST(TaskbarProgressLedgerTest, StartsUnheldAndSilent) {
     TaskbarProgressLedger ledger;

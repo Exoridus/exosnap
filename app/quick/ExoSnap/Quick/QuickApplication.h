@@ -795,10 +795,18 @@ class QuickApplication {
     // The renderer behind image://exosnap-shell/... Owned by the engine once
     // registered, so this only records that the registration happened.
     bool shell_icon_provider_registered_ = false;
+    // The renderer behind the WINDOW icon. Separate from the engine-owned image
+    // provider because this side needs QIcons rather than URLs -- WM_SETICON does
+    // not go through Qt Quick.
+    ui::brand::ShellIconCache window_icon_cache_;
     // The last state written to the shell surfaces, so the log line that stands
     // in for a developer looking at the screen fires on transitions and not on
     // every metrics tick.
     ShellIconState shell_icon_state_ = ShellIconState::Idle;
+    // The heartbeat frame the window icon currently shows. Tracked separately
+    // from the state because the entry beat changes the icon without changing the
+    // state, and -1 so the first publish always writes through.
+    int shell_pulse_frame_ = -1;
     // The shell's view of the session, and the two clocks it needs: the recording
     // heartbeat and the bounded Saved dwell. Every shell surface reads this one
     // object rather than the recording state directly.

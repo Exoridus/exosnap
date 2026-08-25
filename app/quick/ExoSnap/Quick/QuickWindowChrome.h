@@ -2,6 +2,7 @@
 
 #include <QAbstractNativeEventFilter>
 #include <QColor>
+#include <QIcon>
 #include <QList>
 #include <QObject>
 #include <QPointer>
@@ -205,13 +206,14 @@ class QuickWindowChrome : public QObject, public QAbstractNativeEventFilter {
     // which is exactly the case being asked about here.
     [[nodiscard]] Q_INVOKABLE bool willOccupyScreenMaximized() const;
 
-    // Sets QWindow::icon and posts WM_SETICON for ICON_SMALL/ICON_BIG from the
-    // executable's own multi-resolution icon. Qt's icon path updates the frame;
-    // the taskbar BUTTON only follows WM_SETICON.
+    // Sets the LIVE WINDOW's icon, which is what its frame and its taskbar button
+    // show. `icon` should carry a pixmap at each of the two Windows icon metrics,
+    // because Qt picks the nearest one per metric rather than scaling.
     //
-    // Idempotent and state-free: the session's state reaches the taskbar as the
-    // button's overlay badge, never as a different application icon.
-    Q_INVOKABLE void applyWindowIcon();
+    // The executable's own icon is a different thing and is not touched here:
+    // Explorer, the desktop and Start read the PE resource table, which WM_SETICON
+    // does not reach.
+    void applyWindowIcon(const QIcon& icon);
 
     [[nodiscard]] QQuickWindow* target() const noexcept;
     void setTarget(QQuickWindow* window);

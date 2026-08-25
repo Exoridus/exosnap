@@ -86,28 +86,14 @@ TEST(BrandGeometry, TheGeneratorStillFindsEveryConstantItReads) {
     const QString header = ReadRepoFile(QStringLiteral("ui/brand/BrandMark.h"));
     ASSERT_FALSE(header.isEmpty());
 
-    for (const QString& name : {QStringLiteral("kGrid"),
-                                QStringLiteral("kCenter"),
-                                QStringLiteral("kOuterRadius"),
-                                QStringLiteral("kOuterStroke"),
-                                QStringLiteral("kOuterOpacity"),
-                                QStringLiteral("kInnerRadius"),
-                                QStringLiteral("kInnerStroke"),
-                                QStringLiteral("kDotRadius"),
-                                QStringLiteral("kStandaloneContentScale"),
-                                QStringLiteral("kBadgeRadius"),
-                                QStringLiteral("kBadgeRimStroke"),
-                                QStringLiteral("kBadgeDimFactor"),
-                                QStringLiteral("kGlyphDiscRadius"),
-                                QStringLiteral("kGlyphSquareHalf"),
-                                QStringLiteral("kGlyphBarWidth"),
-                                QStringLiteral("kGlyphBarHeight"),
-                                QStringLiteral("kGlyphBarGap"),
-                                QStringLiteral("kGlyphTriangleBackX"),
-                                QStringLiteral("kGlyphTriangleTipX"),
-                                QStringLiteral("kGlyphTriangleHalfHeight"),
-                                QStringLiteral("kSmallProfileMaxPx"),
-                                QStringLiteral("kMediumProfileMaxPx")}) {
+    for (const QString& name :
+         {QStringLiteral("kGrid"), QStringLiteral("kCenter"), QStringLiteral("kOuterRadius"),
+          QStringLiteral("kOuterStroke"), QStringLiteral("kOuterOpacity"), QStringLiteral("kInnerRadius"),
+          QStringLiteral("kInnerStroke"), QStringLiteral("kDotRadius"), QStringLiteral("kStandaloneContentScale"),
+          QStringLiteral("kGlyphDiscRadius"), QStringLiteral("kGlyphSquareHalf"), QStringLiteral("kGlyphBarWidth"),
+          QStringLiteral("kGlyphBarHeight"), QStringLiteral("kGlyphBarGap"), QStringLiteral("kGlyphTriangleBackX"),
+          QStringLiteral("kGlyphTriangleTipX"), QStringLiteral("kGlyphTriangleHalfHeight"),
+          QStringLiteral("kSmallProfileMaxPx"), QStringLiteral("kMediumProfileMaxPx")}) {
         const QRegularExpression declaration(
             QStringLiteral("^inline constexpr (?:double|int) %1 = [-\\d.]+;$").arg(name),
             QRegularExpression::MultilineOption);
@@ -126,14 +112,11 @@ TEST(BrandGeometry, TheGeneratorStillFindsEveryConstantItReads) {
 
 TEST(BrandGeometry, TheShellIconsThatAreStillFilesAreThere) {
     // What the runtime renderer does NOT paint: the executable's own identity,
-    // and the HICON-shaped surfaces (SetOverlayIcon, THUMBBUTTON) that take a
-    // handle out of the PE resource table rather than a QImage.
-    for (const QString& asset :
-         {QStringLiteral("exosnap-app.ico"), QStringLiteral("exosnap-badge-recording.ico"),
-          QStringLiteral("exosnap-badge-recording-dim.ico"), QStringLiteral("exosnap-badge-paused.ico"),
-          QStringLiteral("exosnap-badge-saved.ico"), QStringLiteral("exosnap-thumb-record.ico"),
-          QStringLiteral("exosnap-thumb-pause.ico"), QStringLiteral("exosnap-thumb-resume.ico"),
-          QStringLiteral("exosnap-thumb-stop.ico")}) {
+    // and the thumbnail toolbar, whose THUMBBUTTON::hIcon takes a handle out of
+    // the PE resource table rather than a QImage.
+    for (const QString& asset : {QStringLiteral("exosnap-app.ico"), QStringLiteral("exosnap-thumb-record.ico"),
+                                 QStringLiteral("exosnap-thumb-pause.ico"), QStringLiteral("exosnap-thumb-resume.ico"),
+                                 QStringLiteral("exosnap-thumb-stop.ico")}) {
         QFile file(QStringLiteral(EXOSNAP_BRAND_SOURCE_DIR) + QStringLiteral("/assets/brand/") + asset);
         EXPECT_TRUE(file.exists()) << asset.toStdString() << " is referenced by exosnap.rc but is not on disk";
     }
@@ -142,11 +125,15 @@ TEST(BrandGeometry, TheShellIconsThatAreStillFilesAreThere) {
 TEST(BrandGeometry, NoPerStateApplicationIconSurvived) {
     // The state marks are painted at runtime now, from the accent the user
     // picked. A reappearing file here means somebody added a palette variant back
-    // as an asset, which is the file-count spiral the renderer replaced.
+    // as an asset, which is the file-count spiral the renderer replaced -- or put
+    // the taskbar's state back on an overlay badge, which said something
+    // different from the tray about one session.
     for (const QString& gone :
          {QStringLiteral("exosnap-logo-idle.ico"), QStringLiteral("exosnap-logo-recording.ico"),
           QStringLiteral("exosnap-logo-paused.ico"), QStringLiteral("exosnap-logo-saved.ico"),
-          QStringLiteral("exosnap-logo-recording-p0.ico"), QStringLiteral("exosnap-logo-recording-p1.ico")}) {
+          QStringLiteral("exosnap-logo-recording-p0.ico"), QStringLiteral("exosnap-logo-recording-p1.ico"),
+          QStringLiteral("exosnap-badge-recording.ico"), QStringLiteral("exosnap-badge-recording-dim.ico"),
+          QStringLiteral("exosnap-badge-paused.ico"), QStringLiteral("exosnap-badge-saved.ico")}) {
         QFile file(QStringLiteral(EXOSNAP_BRAND_SOURCE_DIR) + QStringLiteral("/assets/brand/") + gone);
         EXPECT_FALSE(file.exists()) << gone.toStdString() << " is a per-state icon asset";
     }
