@@ -24,6 +24,7 @@ Item {
     required property RecordingErrorAdapter recordingError
     required property CrashReportAdapter crashReport
     required property WhatsNewAdapter whatsNew
+    required property ShellPresenceAdapter shellPresence
     property bool benchmarkInteractionActive: false
 
     // Supplied by Main. Optional so the shell still loads in a QML test or a
@@ -351,47 +352,34 @@ Item {
                 // chrome bar already draw. The shell was the one surface still
                 // spelling the product "ExoSnap" in plain body text, which made
                 // the band read as a generic window rather than as this product.
+                // The mark carries the session, exactly as the tray icon and the
+                // taskbar button do and from the same projection: one recording,
+                // one state, three surfaces that cannot disagree.
                 ExoBrandMark {
+                    markState: root.shellPresence.iconState
+                    markFrame: root.shellPresence.markFrame
                     Layout.preferredWidth: 18
                     Layout.preferredHeight: 18
                     Layout.alignment: Qt.AlignVCenter
+                    Accessible.ignored: true
                 }
 
-                Row {
+                // Artwork rather than text, so the product name cannot be
+                // translated, hyphenated, font-substituted, or grown by the
+                // text-expansion harness -- which used to put 80 px of pressure
+                // on the navigation that no real translation will ever apply.
+                ExoBrandWordmark {
+                    typePixelSize: ExoTheme.fontBrand
+                    Layout.preferredWidth: implicitWidth
+                    Layout.preferredHeight: implicitHeight
                     Layout.leftMargin: ExoTheme.spacingSm - ExoTheme.spacingXs
                     // The one gap in the band that separates identity from
                     // navigation, so it is the first thing to give when five
                     // destinations have to fit beside three window buttons.
                     Layout.rightMargin: root.compactNav ? ExoTheme.spacingMd : ExoTheme.spacingXl
                     Layout.alignment: Qt.AlignVCenter
-
-                    // NOT translatable, and now said so. A product name is the
-                    // one string in a UI that must read identically in every
-                    // language, and marking it `qsTr` also made the
-                    // text-expansion harness (QCR-511) grow the wordmark — which
-                    // measured 80 px of pressure on the navigation that no real
-                    // translation will ever apply.
-                    Label {
-                        text: "exo"
-                        textFormat: Text.PlainText
-                        color: ExoTheme.text
-                        font {
-                            family: ExoTheme.sansFamily
-                            pixelSize: ExoTheme.fontBrand
-                            weight: Font.DemiBold
-                        }
-                    }
-
-                    Label {
-                        text: "snap"
-                        textFormat: Text.PlainText
-                        color: ExoTheme.accent
-                        font {
-                            family: ExoTheme.sansFamily
-                            pixelSize: ExoTheme.fontBrand
-                            weight: Font.DemiBold
-                        }
-                    }
+                    Accessible.role: Accessible.StaticText
+                    Accessible.name: "exosnap"
                 }
 
                 Repeater {

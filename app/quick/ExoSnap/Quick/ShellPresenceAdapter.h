@@ -35,10 +35,18 @@ class ShellPresenceAdapter : public QObject {
     Q_PROPERTY(bool paused READ paused NOTIFY presenceChanged FINAL)
     Q_PROPERTY(bool busy READ busy NOTIFY presenceChanged FINAL)
     Q_PROPERTY(bool saved READ saved NOTIFY presenceChanged FINAL)
-    // Deliberately no pulse property. The application's own recording indicator
-    // animates itself for as long as the recording runs; the shell's beat is a
-    // short transition on a different cadence, and a QML surface following it
-    // would be following the wrong one.
+    // The mark, as an int rather than as a typed enum: models/ShellPresence.h is
+    // engine code and has no Qt Quick integration to register, and the only QML
+    // that reads this hands it straight back to ui/brand. A surface that turned
+    // the number into a decision would be the second state derivation this
+    // object exists to prevent.
+    Q_PROPERTY(int iconState READ iconStateValue NOTIFY presenceChanged FINAL)
+    // The frame of that mark. The in-application mark used to be told there was
+    // nothing here to follow, which was true while the shell's beat was a short
+    // transition on its own cadence. It is not: the beat now runs for as long as
+    // the recording does, and the title band showing a different frame from the
+    // tray icon beside it is one recording told two ways.
+    Q_PROPERTY(int markFrame READ markFrame NOTIFY pulseChanged FINAL)
 
   public:
     explicit ShellPresenceAdapter(QObject* parent = nullptr);
@@ -59,6 +67,9 @@ class ShellPresenceAdapter : public QObject {
     [[nodiscard]] bool paused() const noexcept;
     [[nodiscard]] bool busy() const noexcept;
     [[nodiscard]] bool saved() const noexcept;
+    // The settled mark -- what the shell SHOWS -- as the underlying value of
+    // ShellIconState.
+    [[nodiscard]] int iconStateValue() const noexcept;
 
     // The frame of whichever animated mark the shell is currently showing: the
     // recording beat, the processing sequence, or zero for a static one. One

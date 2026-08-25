@@ -63,6 +63,10 @@ void ShellPresenceAdapter::setRecordingState(UiRecordingState state, bool can_st
     republish();
 }
 
+int ShellPresenceAdapter::iconStateValue() const noexcept {
+    return static_cast<int>(state_.icon_state);
+}
+
 const ShellPresenceState& ShellPresenceAdapter::presence() const noexcept {
     return state_;
 }
