@@ -95,8 +95,12 @@ TEST(ClockSlaving, SlewLimit_RampsAt125PpmPerSecond) {
 
 TEST(ClockSlaving, PpmCap_NeverExceedsKMaxPpm) {
     ClockSlavingController c;
+    // 200 ms: far past the 30 ms residual that already commands the cap, and
+    // still a drift a pair of clocks could physically produce -- the
+    // plausibility gate rejects a value no crystal can reach, and a test that
+    // drove one would be exercising the gate instead of the cap.
     for (uint64_t i = 0; i < 100; ++i) {
-        c.Update(10000.0, 0.0, i * kSecondNs);
+        c.Update(200.0, 0.0, i * kSecondNs);
     }
     EXPECT_NEAR(c.Ppm(), ClockSlavingController::kMaxPpm, 1e-9);
     EXPECT_LE(c.Ppm(), ClockSlavingController::kMaxPpm + 1e-9);
@@ -131,6 +135,8 @@ TEST(ClockSlaving, UpdateGating_OncePerPeriodOverQpc) {
 // the output by the current ppm. Residual R = D - A must converge to the
 // stationary residual R_ss = r * kControlHorizonS / 1000 that a P-controller
 // leaves — NOT to zero (that would demand the deliberately-omitted PI integrator).
+} // namespace
+
 namespace {
 struct LoopResult {
     double residual_ms = 0.0;
@@ -150,7 +156,6 @@ LoopResult SimulateClosedLoop(double rate_ppm, int seconds) {
     }
     return {drift_ms - applied_ms, c.Ppm()};
 }
-} // namespace
 
 TEST(ClockSlaving, ClosedLoop_100ppm_ConvergesToStationaryResidual) {
     // R_ss at 100 ppm, 60 s horizon = 6 ms. Assert < 7 ms (R_ss + 1 ms margin).
@@ -183,6 +188,54 @@ TEST(ClockSlaving, ClosedLoop_500ppm_ResidualBoundedAtCapCase) {
     EXPECT_LT(std::abs(r.residual_ms), 32.0);
     EXPECT_GT(std::abs(r.residual_ms), 29.0); // parks near the 30 ms stationary value
     EXPECT_NEAR(r.final_ppm, ClockSlavingController::kMaxPpm, 1.0);
+}
+
+TEST(ClockSlaving, ImplausibleDrift_DoesNotEngage_AndLatchesFaulted) {
+    // A frozen device position reads as drift the size of the stall. The engage
+    // latch is permanent, so accepting one such sample would arm slaving for the
+    // whole session on a measurement that describes nothing.
+    ClockSlavingController c;
+    const uint64_t t = 600ULL * 1'000'000'000ULL; // 600 s in
+    EXPECT_FALSE(c.Update(0.0, 0.0, 0));          // establishes the elapsed origin
+    EXPECT_FALSE(c.Update(830'000.0, 0.0, t));
+    EXPECT_FALSE(c.Engaged());
+    EXPECT_DOUBLE_EQ(c.Ppm(), 0.0);
+    EXPECT_TRUE(c.MeasurementFaulted());
+}
+
+TEST(ClockSlaving, FaultLatches_AcrossLaterPlausibleSamples) {
+    // A metric that silently returns to green hides the fault from every report
+    // that reads it afterwards.
+    ClockSlavingController c;
+    EXPECT_FALSE(c.Update(0.0, 0.0, 0));
+    EXPECT_FALSE(c.Update(500'000.0, 0.0, 300ULL * 1'000'000'000ULL));
+    ASSERT_TRUE(c.MeasurementFaulted());
+    for (uint64_t i = 301; i < 400; ++i) {
+        c.Update(20.0, 0.0, i * 1'000'000'000ULL);
+    }
+    EXPECT_TRUE(c.MeasurementFaulted());
+}
+
+TEST(ClockSlaving, LargeButPlausibleDrift_StillEngages) {
+    // The gate must not swallow the case slaving exists for. 200 ms after an
+    // hour is a wildly out-of-spec crystal and still physically reachable.
+    ClockSlavingController c;
+    EXPECT_FALSE(c.Update(0.0, 0.0, 0));
+    const uint64_t t = 3600ULL * 1'000'000'000ULL;
+    EXPECT_TRUE(c.Update(200.0, 0.0, t));
+    EXPECT_TRUE(c.Engaged());
+    EXPECT_FALSE(c.MeasurementFaulted());
+    EXPECT_GT(c.Ppm(), 0.0);
+}
+
+TEST(ClockSlaving, EarlyOffsetUnderTheFloor_IsNotAFault) {
+    // Seconds into a session the rate-derived bound is near zero; the floor is
+    // what keeps an ordinary startup offset from being called impossible.
+    ClockSlavingController c;
+    EXPECT_FALSE(c.Update(0.0, 0.0, 0));
+    EXPECT_TRUE(c.Update(40.0, 0.0, 2ULL * 1'000'000'000ULL));
+    EXPECT_FALSE(c.MeasurementFaulted());
+    EXPECT_TRUE(c.Engaged());
 }
 
 } // namespace

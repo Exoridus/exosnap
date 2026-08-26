@@ -164,6 +164,19 @@ TEST(DiagnosticsLiveTiles, ALostAudioSourceIsANoticeEvenWhileThePipelineIsHealth
     EXPECT_EQ(Find(tiles, "pipelineHealth").value, "Good");
 }
 
+TEST(DiagnosticsLiveTiles, AudioSyncSeparatesAFaultedMeasurementFromAnAbsentOne) {
+    exosnap::engine::RecordingDiagnosticsSnapshot s = visual::MakeDiagnosticsLiveSnapshot(QStringLiteral("healthy"));
+    s.av_drift_availability = exosnap::engine::MetricAvailability::Faulted;
+
+    const LiveTile audio = Find(BuildLiveTiles(s), "audioSync");
+    // "Unavailable" invites waiting for a number that already arrived and was
+    // wrong. The tile says which of the two happened, and says what broke
+    // without claiming a defect in the recording that nothing measured.
+    EXPECT_EQ(audio.value, "Not measurable");
+    EXPECT_NE(audio.detail.find("audio device stopped reporting its clock"), std::string::npos);
+    EXPECT_EQ(audio.tone, TileTone::Neutral);
+}
+
 TEST(DiagnosticsLiveTiles, AudioSyncReportsUnavailableDriftRatherThanPerfectSync) {
     exosnap::engine::RecordingDiagnosticsSnapshot s = visual::MakeDiagnosticsLiveSnapshot(QStringLiteral("healthy"));
     s.av_drift_availability = exosnap::engine::MetricAvailability::Unavailable;

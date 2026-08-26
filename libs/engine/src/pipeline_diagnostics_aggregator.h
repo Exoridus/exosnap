@@ -423,7 +423,8 @@ class PipelineDiagnosticsAggregator {
     // compensation (equals raw before slaving engages); applied_ppm is the
     // current compensation rate (0 = not compensating). Tracks without an
     // attributable device clock (multi-source merges) never report.
-    void OnAudioClockSlaving(uint32_t track_id, double raw_drift_ms, double residual_ms, double applied_ppm) noexcept;
+    void OnAudioClockSlaving(uint32_t track_id, double raw_drift_ms, double residual_ms, double applied_ppm,
+                             bool measurement_faulted = false) noexcept;
     // Free-space poll for disk-fill ETA (called from the stats collector at ~5 Hz)
     void UpdateFreeDiskBytes(uint64_t free_bytes) noexcept;
 
@@ -592,6 +593,9 @@ class PipelineDiagnosticsAggregator {
     std::array<double, 3> audio_clock_residual_ms_{};
     std::array<double, 3> audio_clock_ppm_{};
     std::array<bool, 3> audio_clock_valid_{};
+    // Latched per track: this track's drift figures are known-invalid, so the
+    // snapshot must say so instead of publishing them as measurements.
+    std::array<bool, 3> audio_clock_faulted_{};
 
     // Peak |av_drift_ms| (residual) this session (running maximum). Single source
     // of truth for both the live UI and the session report.

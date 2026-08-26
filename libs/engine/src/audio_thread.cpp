@@ -368,6 +368,13 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
     const bool clock_slaving_enabled = m_state.config.audio_clock_slaving_enabled;
     bool clock_slaving_logged_engage = false;
     bool clock_slaving_logged_saturation = false;
+    bool clock_slaving_logged_fault = false;
+    // Latched independently of the slaving setting: with slaving off the
+    // controller is never fed, and the drift figures still reach diagnostics --
+    // they must not be reported as measurements when they are not.
+    bool drift_measurement_faulted = false;
+    bool drift_first_qpc_valid = false;
+    uint64_t drift_first_qpc_ns = 0;
 
     // --- Device hot-swap / source-degradation state (ADR 0046) ---
     // bare_degraded: the sole (non-merged) source lost its endpoint; the thread
@@ -430,7 +437,13 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
         publishAudioEpoch(lastAccountedQpcNs, encoderAccumulatedFrames);
         std::vector<EncodedAudioPacket> pkts;
         feedGapSilence(static_cast<uint32_t>(framesToFill), encoderAccumulatedFrames, pkts);
-        lastAccountedQpcNs += (framesToFill * 1000000000ULL) / sample_rate;
+        const uint64_t filledNs = (framesToFill * 1000000000ULL) / sample_rate;
+        lastAccountedQpcNs += filledNs;
+        // The wall clock ran over a stretch the device did not measure: this
+        // silence came from the clock, not from device samples, so it is not a
+        // clock difference. Left unreported it would show up as drift of exactly
+        // the length of the quiet stretch (audio_clock_drift.h).
+        drift_estimator.NotifySilenceFilled(filledNs);
         silenceFilledFramesSincePacket += framesToFill;
         {
             std::lock_guard slk(m_state.stats_mutex);
@@ -685,6 +698,25 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
                     const double raw_drift = drift_estimator.DriftMs();
                     double residual = raw_drift; // no slaving => residual is the raw drift
                     double applied_ppm = 0.0;
+
+                    if (!drift_first_qpc_valid) {
+                        drift_first_qpc_valid = true;
+                        drift_first_qpc_ns = timing.qpc_position_ns;
+                    }
+                    const double drift_elapsed_s =
+                        static_cast<double>(timing.qpc_position_ns - drift_first_qpc_ns) / 1e9;
+                    if (std::abs(raw_drift) > PlausibleDriftBoundMs(drift_elapsed_s)) {
+                        drift_measurement_faulted = true;
+                        if (!clock_slaving_logged_fault) {
+                            clock_slaving_logged_fault = true;
+                            logging::LogField f[] = {{"track", std::to_string(track_id_)},
+                                                     {"drift_ms", std::to_string(raw_drift)},
+                                                     {"elapsed_s", std::to_string(drift_elapsed_s)}};
+                            logging::log(logging::LogLevel::Warn, "audio.clock_drift",
+                                         "drift measurement implausible; reported as faulted, not slaved",
+                                         std::span<const logging::LogField>(f, std::size(f)));
+                        }
+                    }
                     if (clock_slaving_enabled && output_format_src_ != nullptr) {
                         const double applied = output_format_src_->AppliedCompensationMs();
                         if (clock_controller.Update(raw_drift, applied, timing.qpc_position_ns)) {
@@ -721,7 +753,8 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
                                          std::span<const logging::LogField>(f, std::size(f)));
                         }
                     }
-                    m_state.diagnostics.OnAudioClockSlaving(track_id_, raw_drift, residual, applied_ppm);
+                    m_state.diagnostics.OnAudioClockSlaving(track_id_, raw_drift, residual, applied_ppm,
+                                                            drift_measurement_faulted);
                 }
             }
 

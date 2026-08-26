@@ -1,5 +1,6 @@
 #include "diagnostics/SessionReport.h"
 
+#include "observability/ObservabilityJson.h"
 #include "ui/CodecLabels.h"
 
 #include <QDir>
@@ -18,11 +19,15 @@ namespace {
 
 using exosnap::engine::MetricAvailability;
 
-// A metric value that is either a real number or the string "unavailable" — never
-// a fabricated zero (honest-diagnostics rule).
+// A metric value that is either a real number or the availability word — never a
+// fabricated zero (honest-diagnostics rule). The word rather than a bare
+// "unavailable" for every non-measurement: a release gate reading these counters
+// has to tell a measurement that never arrived from one that arrived wrong, and
+// it shares the vocabulary with every other observability surface so the two
+// cannot drift apart.
 QJsonValue MetricOrUnavailable(double value, MetricAvailability availability) {
     if (availability != MetricAvailability::Available) {
-        return QStringLiteral("unavailable");
+        return exosnap::observability::AvailabilityKey(availability);
     }
     return value;
 }

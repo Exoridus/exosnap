@@ -243,6 +243,20 @@ TEST(PipelineSnapshotJson, RawResidualAndSkewStayThreeSeparateFacts) {
     EXPECT_EQ(At(json, {"avTiming", "durationSkewAvailability"}).toString(), QStringLiteral("unavailable"));
 }
 
+TEST(PipelineSnapshotJson, FaultedDriftPublishesTheWordAndNoNumber) {
+    // "faulted" and "unavailable" send a reader to different places: one is a
+    // measurement that will arrive, the other is one that arrived wrong. Either
+    // way the number itself must not be published.
+    exosnap::engine::RecordingDiagnosticsSnapshot s = HealthyRecording();
+    s.av_drift_availability = exosnap::engine::MetricAvailability::Faulted;
+
+    const QJsonObject json = PipelineSnapshotToJson(s);
+    EXPECT_EQ(At(json, {"avTiming", "avDriftAvailability"}).toString(), QStringLiteral("faulted"));
+    EXPECT_TRUE(At(json, {"avTiming", "avDriftMs"}).isNull());
+    EXPECT_TRUE(At(json, {"avTiming", "rawAvDriftMs"}).isNull());
+    EXPECT_TRUE(At(json, {"avTiming", "clockSlavingPpm"}).isNull());
+}
+
 TEST(PipelineSnapshotJson, NegativeDiskEtaIsUnavailableRatherThanZeroSecondsLeft) {
     exosnap::engine::RecordingDiagnosticsSnapshot s = HealthyRecording();
     s.disk_fill_eta_seconds = -1.0;

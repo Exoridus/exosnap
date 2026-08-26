@@ -24,6 +24,11 @@ namespace exosnap::engine {
 enum class MetricAvailability : uint8_t {
     Available,
     Unavailable,
+    // Sampled, and known to be wrong: the measurement's own preconditions were
+    // violated (see PlausibleDriftBoundMs). Distinct from Unavailable on
+    // purpose -- "nothing measured yet" invites waiting, "measured and invalid"
+    // must not be read as a number at all.
+    Faulted,
 };
 
 // Deterministic, evidence-based bottleneck classification.

@@ -29,6 +29,11 @@
 // discontinuity gap fill uses to repair the sample timeline — so both axes
 // advance together across the gap.
 //
+// A source that stops delivering packets ENTIRELY is the opposite case and the
+// caller must say so (NotifySilenceFilled): the device position freezes while
+// QPC keeps running, so the quiet stretch would otherwise be reported as drift
+// of exactly its own length.
+//
 // Pure and hardware-free; unit-tested with synthetic position sequences.
 
 #include <cstddef>
@@ -74,6 +79,21 @@ class AudioClockDriftEstimator {
                 sum_ += window_[i];
             }
         }
+    }
+
+    // Wall-clock time the caller covered with synthetic silence instead of with
+    // device samples (audio_silence_fill.h). WASAPI loopback on an idle render
+    // endpoint delivers no packets at all, so its device position stands still
+    // while QPC advances; that span is not a clock difference and has to leave
+    // both axes. Shifting the QPC baseline does exactly that for every later
+    // observation. Samples already in the window keep the value they were
+    // correct with when they were taken, so the shift takes full effect over the
+    // next window rather than instantly.
+    void NotifySilenceFilled(uint64_t filled_ns) noexcept {
+        if (!has_baseline_) {
+            return; // nothing normalized yet: the first observation sets the baseline
+        }
+        base_qpc_ns_ += filled_ns;
     }
 
     [[nodiscard]] bool HasEstimate() const noexcept {

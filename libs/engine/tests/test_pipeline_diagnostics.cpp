@@ -948,6 +948,37 @@ TEST(PipelineDiagnostics, AvDriftLargestMagnitudeAcrossTracks_Signed) {
     EXPECT_EQ(s.av_drift_availability, MetricAvailability::Available);
 }
 
+TEST(PipelineDiagnostics, AvDriftFaultedTrackIsNotSurfacedAsAMeasurement) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    agg.OnAudioClockSlaving(0, 830000.0, 830000.0, 0.0, /*measurement_faulted=*/true);
+    const auto s = agg.BuildSnapshot(At(50), MakeStats(), DiagnosticsLifecycle::Recording, 0.05);
+    EXPECT_EQ(s.av_drift_availability, MetricAvailability::Faulted);
+    EXPECT_DOUBLE_EQ(s.av_drift_ms, 0.0);
+}
+
+TEST(PipelineDiagnostics, AvDriftHealthyTrackWinsOverAFaultedOne) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    // The faulted track carries the largest magnitude by construction, so a
+    // plain worst-of-all rank would let one broken source define the number for
+    // every healthy one.
+    agg.OnAudioClockSlaving(0, 830000.0, 830000.0, 0.0, /*measurement_faulted=*/true);
+    agg.OnAudioClockSlaving(1, -4.0, -4.0, 0.0);
+    const auto s = agg.BuildSnapshot(At(50), MakeStats(), DiagnosticsLifecycle::Recording, 0.05);
+    EXPECT_EQ(s.av_drift_availability, MetricAvailability::Available);
+    EXPECT_DOUBLE_EQ(s.av_drift_ms, -4.0);
+}
+
+TEST(PipelineDiagnostics, AvDriftFaultLatchesForTheSession) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    agg.OnAudioClockSlaving(0, 830000.0, 830000.0, 0.0, /*measurement_faulted=*/true);
+    agg.OnAudioClockSlaving(0, 2.0, 2.0, 0.0);
+    const auto s = agg.BuildSnapshot(At(50), MakeStats(), DiagnosticsLifecycle::Recording, 0.05);
+    EXPECT_EQ(s.av_drift_availability, MetricAvailability::Faulted);
+}
+
 TEST(PipelineDiagnostics, AvDriftOutOfRangeTrackIgnored) {
     PipelineDiagnosticsAggregator agg;
     agg.Reset(1, MakeConfig());

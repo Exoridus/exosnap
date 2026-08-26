@@ -187,6 +187,7 @@ void PipelineDiagnosticsAggregator::Reset(uint64_t generation, const Diagnostics
     audio_clock_residual_ms_.fill(0.0);
     audio_clock_ppm_.fill(0.0);
     audio_clock_valid_.fill(false);
+    audio_clock_faulted_.fill(false);
     peak_av_drift_ms_ = 0.0;
     peak_av_drift_valid_ = false;
     encoder_init_ = EncoderInitInfo{};
@@ -577,7 +578,7 @@ void PipelineDiagnosticsAggregator::SetSplitPending(bool pending) noexcept {
 }
 
 void PipelineDiagnosticsAggregator::OnAudioClockSlaving(uint32_t track_id, double raw_drift_ms, double residual_ms,
-                                                        double applied_ppm) noexcept {
+                                                        double applied_ppm, bool measurement_faulted) noexcept {
     std::lock_guard lk(mutex_);
     if (track_id >= audio_clock_valid_.size()) {
         return;
@@ -586,6 +587,9 @@ void PipelineDiagnosticsAggregator::OnAudioClockSlaving(uint32_t track_id, doubl
     audio_clock_residual_ms_[track_id] = residual_ms;
     audio_clock_ppm_[track_id] = applied_ppm;
     audio_clock_valid_[track_id] = true;
+    if (measurement_faulted) {
+        audio_clock_faulted_[track_id] = true;
+    }
 }
 
 void PipelineDiagnosticsAggregator::SetEncoderInitInfo(const EncoderInitInfo& info) noexcept {
@@ -841,8 +845,17 @@ RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_p
     s.clock_slaving_ppm = 0.0;
     s.clock_slaving_active = false;
     s.av_drift_availability = MetricAvailability::Unavailable;
+    // A track whose measurement is known-invalid is excluded from the choice
+    // rather than competing for it: it carries the largest magnitude by
+    // construction, so ranking it would let one broken source define the number
+    // for every healthy one.
+    bool any_faulted = false;
     for (std::size_t i = 0; i < audio_clock_valid_.size(); ++i) {
         if (!audio_clock_valid_[i]) {
+            continue;
+        }
+        if (audio_clock_faulted_[i]) {
+            any_faulted = true;
             continue;
         }
         if (s.av_drift_availability == MetricAvailability::Unavailable ||
@@ -857,6 +870,9 @@ RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_p
         if (audio_clock_ppm_[i] != 0.0 || std::abs(audio_clock_raw_ms_[i] - audio_clock_residual_ms_[i]) > 1e-9) {
             s.clock_slaving_active = true;
         }
+    }
+    if (s.av_drift_availability != MetricAvailability::Available && any_faulted) {
+        s.av_drift_availability = MetricAvailability::Faulted;
     }
 
     // Running peak of the residual magnitude, so the live UI and the session

@@ -94,6 +94,71 @@ TEST(AudioClockDrift, DiscontinuityGap_NoJump) {
     EXPECT_NEAR(est.DriftMs(), 0.0, 1e-9);
 }
 
+TEST(AudioClockDrift, SilentStallReportedAsFill_NoDrift) {
+    // The opposite of a device underrun: the source hands over nothing at all,
+    // so its device position FREEZES while QPC keeps running (WASAPI loopback on
+    // an idle render endpoint). The worker covers the stretch with wall-clock
+    // silence and says so; without that report the quiet stretch reads as drift
+    // of exactly its own length.
+    AudioClockDriftEstimator est(/*window_size=*/16);
+    uint64_t device_ns = 0;
+    uint64_t qpc_ns = 0;
+    for (int i = 0; i < 100; ++i) {
+        est.AddObservation(device_ns, qpc_ns);
+        device_ns += kPacketNs;
+        qpc_ns += kPacketNs;
+    }
+    ASSERT_NEAR(est.DriftMs(), 0.0, 1e-9);
+
+    // 37 s of silence: the device produced nothing, so only QPC advances.
+    constexpr uint64_t kStallNs = 37'000'000'000ULL;
+    qpc_ns += kStallNs;
+    est.NotifySilenceFilled(kStallNs);
+
+    for (int i = 0; i < 100; ++i) {
+        est.AddObservation(device_ns, qpc_ns);
+        device_ns += kPacketNs;
+        qpc_ns += kPacketNs;
+    }
+    EXPECT_NEAR(est.DriftMs(), 0.0, 1e-9);
+}
+
+TEST(AudioClockDrift, SilenceFillBeforeFirstObservation_Ignored) {
+    // A fill can precede the first packet: a recording that opens during a quiet
+    // stretch is held by the clock from the start. There is no baseline to shift
+    // yet, and the first observation must still normalize to zero.
+    AudioClockDriftEstimator est;
+    est.NotifySilenceFilled(5'000'000'000ULL);
+    est.AddObservation(1'000'000'000ULL, 900'000'000'000ULL);
+    EXPECT_DOUBLE_EQ(est.DriftMs(), 0.0);
+}
+
+TEST(AudioClockDrift, RealRateErrorSurvivesASilenceFill) {
+    // The fill must remove the stalled span and nothing else: a genuine rate
+    // error before and after it still accumulates.
+    AudioClockDriftEstimator est(/*window_size=*/8);
+    uint64_t qpc_ns = 0;
+    uint64_t device_ns = 0;
+    for (int i = 0; i < 3000; ++i) { // 30 s at -0.01 % (device slow => positive)
+        qpc_ns += kPacketNs;
+        device_ns += kPacketNs - (kPacketNs / 10000);
+        est.AddObservation(device_ns, qpc_ns);
+    }
+    const double before = est.DriftMs();
+    EXPECT_NEAR(before, 3.0, 0.1);
+
+    constexpr uint64_t kStallNs = 20'000'000'000ULL;
+    qpc_ns += kStallNs;
+    est.NotifySilenceFilled(kStallNs);
+
+    for (int i = 0; i < 3000; ++i) {
+        qpc_ns += kPacketNs;
+        device_ns += kPacketNs - (kPacketNs / 10000);
+        est.AddObservation(device_ns, qpc_ns);
+    }
+    EXPECT_NEAR(est.DriftMs(), 6.0, 0.2); // kept accumulating, no step from the stall
+}
+
 TEST(AudioClockDrift, QpcJitterIsSmoothed) {
     // +-0.5 ms of alternating QPC timestamp jitter on otherwise ideal clocks:
     // the windowed mean must stay an order of magnitude below the per-packet

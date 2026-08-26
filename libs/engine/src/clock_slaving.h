@@ -36,6 +36,14 @@
 
 namespace exosnap::engine {
 
+// Largest |drift| a pair of real clocks can have produced over `elapsed_s`.
+// Anything beyond it is a broken observation rather than a fast crystal, and
+// both the controller and the diagnostics path have to agree on that -- a drift
+// figure that is reported as a measurement on one path and rejected on the other
+// is worse than either answer alone. The constants live in the controller
+// because they are the correction envelope it is built around.
+[[nodiscard]] double PlausibleDriftBoundMs(double elapsed_s) noexcept;
+
 class ClockSlavingController {
   public:
     // --- Fixed control parameters (constants, not settings) ---------------
@@ -61,6 +69,18 @@ class ClockSlavingController {
     // Below this the swr adjustment is meaningless noise; quantizing avoids
     // perpetual tiny restamps and log/diag churn.
     static constexpr double kMinPpmStep = 10.0;
+    // Plausibility bound on the measurement itself, as a multiple of the largest
+    // rate error this controller can correct. Two clocks cannot diverge faster
+    // than their rate difference allows, so a drift beyond kMaxPpm * this factor
+    // over the elapsed span did not come from a crystal -- it came from a broken
+    // observation (a device position that stopped advancing, a stale baseline).
+    // Slaving on such a number would drive the resampler from something that
+    // describes nothing.
+    static constexpr double kImplausibleRateFactor = 10.0;
+    // Floor for that bound, so an ordinary fixed offset early in a session is
+    // never mistaken for a fault. Far above the ~45 ms lip-sync threshold, far
+    // below any value a real device produces.
+    static constexpr double kImplausibleFloorMs = 1000.0;
 
     ClockSlavingController() = default;
 
@@ -71,6 +91,22 @@ class ClockSlavingController {
     // gating lives here, driven by qpc_now_ns.
     bool Update(double drift_ms, double applied_ms, uint64_t qpc_now_ns) noexcept {
         residual_ms_ = drift_ms - applied_ms;
+
+        if (!has_first_) {
+            has_first_ = true;
+            first_qpc_ns_ = qpc_now_ns;
+        }
+
+        // Plausibility gate, evaluated BEFORE the engage latch on purpose: the
+        // latch is permanent, so a single impossible sample would otherwise arm
+        // slaving for the whole session on a measurement fault. A faulted
+        // measurement is latched too, because a metric that silently returns to
+        // green hides the fault from every report that reads it afterwards.
+        const double elapsed_s = static_cast<double>(qpc_now_ns - first_qpc_ns_) / 1e9;
+        if (std::abs(drift_ms) > PlausibleDriftBoundMs(elapsed_s)) {
+            measurement_faulted_ = true;
+            return false;
+        }
 
         // Engage latch: once crossed, stays engaged for the rest of the session.
         if (!engaged_ && std::abs(drift_ms) > kEngageThresholdMs) {
@@ -131,6 +167,14 @@ class ClockSlavingController {
         return engaged_;
     }
 
+    // True once a drift value arrived that no pair of clocks could produce
+    // (latched). The controller ignored it; a reader must treat this track's
+    // drift figures as invalid rather than as a measurement that happens to be
+    // large.
+    [[nodiscard]] bool MeasurementFaulted() const noexcept {
+        return measurement_faulted_;
+    }
+
     // Latest residual D - A (ms) — the misalignment that actually lands in the
     // file, refreshed on every Update() call regardless of the update gate.
     [[nodiscard]] double ResidualMs() const noexcept {
@@ -139,10 +183,23 @@ class ClockSlavingController {
 
   private:
     bool engaged_ = false;
+    bool measurement_faulted_ = false;
+    bool has_first_ = false;
+    uint64_t first_qpc_ns_ = 0;
     bool has_eval_ = false;
     uint64_t last_eval_ns_ = 0;
     double ppm_ = 0.0;
     double residual_ms_ = 0.0;
 };
+
+[[nodiscard]] inline double PlausibleDriftBoundMs(double elapsed_s) noexcept {
+    const double rate_bound =
+        ClockSlavingController::kMaxPpm * ClockSlavingController::kImplausibleRateFactor * elapsed_s / 1000.0;
+    // Not std::max: this header is included from translation units that pull in
+    // windows.h without NOMINMAX, where `max` is a function-like macro and the
+    // call would expand into a parse error.
+    return rate_bound > ClockSlavingController::kImplausibleFloorMs ? rate_bound
+                                                                    : ClockSlavingController::kImplausibleFloorMs;
+}
 
 } // namespace exosnap::engine

@@ -118,6 +118,20 @@ TEST(SessionReport, UnavailableInsteadOfFakeZero) {
     EXPECT_EQ(counters[QStringLiteral("peak_av_drift_ms")].toString(), QStringLiteral("unavailable"));
 }
 
+TEST(SessionReport, FaultedDriftIsNotReportedAsMerelyUnavailable) {
+    // The soak gate reads these counters. "unavailable" for a measurement that
+    // arrived and was impossible would hide exactly the fault the gate exists
+    // to notice, and every drift-derived counter must carry the same word --
+    // they all come from the same track.
+    SessionReportInputs in = MakeInputs();
+    in.snapshot.av_drift_availability = exosnap::engine::MetricAvailability::Faulted;
+    const QJsonObject counters = Parse(BuildSessionReportJson(in))[QStringLiteral("counters")].toObject();
+    EXPECT_EQ(counters[QStringLiteral("av_drift_ms")].toString(), QStringLiteral("faulted"));
+    EXPECT_EQ(counters[QStringLiteral("av_drift_raw_ms")].toString(), QStringLiteral("faulted"));
+    EXPECT_EQ(counters[QStringLiteral("clock_slaving_ppm")].toString(), QStringLiteral("faulted"));
+    EXPECT_EQ(counters[QStringLiteral("clock_slaving_compensation_ms")].toString(), QStringLiteral("faulted"));
+}
+
 TEST(SessionReport, NoSnapshotYieldsUnavailableSections) {
     SessionReportInputs in = MakeInputs();
     in.has_snapshot = false;
