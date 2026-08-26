@@ -37,6 +37,50 @@ TEST(ClockSlaving, BelowThreshold_JustUnder_NeverEngages) {
     EXPECT_DOUBLE_EQ(c.Ppm(), 0.0);
 }
 
+TEST(ClockSlaving, ModestRate_EngagesFromTheRateNotFromTheAccumulatedError) {
+    // 30 ppm, which is an ordinary crystal. The error it produces needs eight
+    // minutes to reach the 15 ms engage threshold, and every second of that is
+    // drift in the file. The rate is measurable after one minute, and that is
+    // what has to arm the correction.
+    ClockSlavingController c;
+    int engaged_at_s = -1;
+    for (int t = 0; t <= 300; ++t) {
+        c.Update(/*drift*/ 0.03 * t, /*applied*/ 0.0, static_cast<uint64_t>(t) * kSecondNs);
+        if (engaged_at_s < 0 && c.Engaged())
+            engaged_at_s = t;
+    }
+    ASSERT_GE(engaged_at_s, 0) << "never engaged inside five minutes";
+    EXPECT_LE(engaged_at_s, 90) << "waited for the error instead of reading the rate";
+    // The drift the file carries at that point, versus the 15 ms it used to take.
+    EXPECT_LT(0.03 * engaged_at_s, 3.0);
+}
+
+TEST(ClockSlaving, RateTooSmallToMatter_KeepsThePassthrough) {
+    // 5 ppm reaches 3 ms over the ten-minute projection horizon -- far under the
+    // engage threshold and far under audibility. Engaging would put every such
+    // device through the resampler permanently for nothing, and the passthrough
+    // is the thing being protected.
+    ClockSlavingController c;
+    for (int t = 0; t <= 600; ++t) {
+        c.Update(0.005 * t, 0.0, static_cast<uint64_t>(t) * kSecondNs);
+    }
+    EXPECT_FALSE(c.Engaged());
+    EXPECT_DOUBLE_EQ(c.Ppm(), 0.0);
+}
+
+TEST(ClockSlaving, ConstantOffsetIsNotARate) {
+    // A fixed head start between the two clocks stays fixed: the slope is zero,
+    // so the feed-forward path must not read it as a rate. Measuring
+    // drift/elapsed instead of the slope would report 167 ppm at one minute and
+    // engage on an offset that is not growing.
+    ClockSlavingController c;
+    for (int t = 0; t <= 600; ++t) {
+        c.Update(10.0, 0.0, static_cast<uint64_t>(t) * kSecondNs);
+    }
+    EXPECT_FALSE(c.Engaged());
+    EXPECT_DOUBLE_EQ(c.Ppm(), 0.0);
+}
+
 TEST(ClockSlaving, Engage_Latches_StaysEngagedAfterDriftDropsBack) {
     ClockSlavingController c;
     EXPECT_FALSE(c.Engaged());
@@ -157,12 +201,14 @@ LoopResult SimulateClosedLoop(double rate_ppm, int seconds) {
     return {drift_ms - applied_ms, c.Ppm()};
 }
 
-TEST(ClockSlaving, ClosedLoop_100ppm_ConvergesToStationaryResidual) {
-    // R_ss at 100 ppm, 60 s horizon = 6 ms. Assert < 7 ms (R_ss + 1 ms margin).
-    // A tighter bound would implicitly demand a PI integrator; it is deliberately
-    // NOT tighter.
+TEST(ClockSlaving, ClosedLoop_100ppm_ConvergesToZeroResidual) {
+    // The P-only controller parked here at R_ss = 100 * 60 / 1000 = 6 ms, and the
+    // bound used to be 7. Feed-forward carries the standing rate, which leaves
+    // the P term free to close the misalignment instead of sustaining the rate,
+    // so the fixed point is zero. Bound at 1 ms: loose enough for the slewed
+    // approach, far below the 6 ms the old design could not get under.
     const LoopResult r = SimulateClosedLoop(/*ppm*/ 100.0, /*seconds*/ 30 * 60);
-    EXPECT_LT(std::abs(r.residual_ms), 7.0);
+    EXPECT_LT(std::abs(r.residual_ms), 1.0);
     // The rate settles in a ±20 ppm band around the true 100 ppm error and does
     // not run away.
     EXPECT_GT(r.final_ppm, 80.0);
@@ -171,22 +217,22 @@ TEST(ClockSlaving, ClosedLoop_100ppm_ConvergesToStationaryResidual) {
 
 TEST(ClockSlaving, ClosedLoop_NegativeRate_Symmetric) {
     const LoopResult r = SimulateClosedLoop(/*ppm*/ -100.0, /*seconds*/ 30 * 60);
-    EXPECT_LT(std::abs(r.residual_ms), 7.0);
+    EXPECT_LT(std::abs(r.residual_ms), 1.0);
     EXPECT_LT(r.final_ppm, -80.0);
     EXPECT_GT(r.final_ppm, -120.0);
 }
 
-TEST(ClockSlaving, ClosedLoop_500ppm_ResidualBoundedAtCapCase) {
-    // At 500 ppm the rate saturates at kMaxPpm and the residual parks at the
-    // R_ss table's cap-grenzfall of 30 ms. Once the rate hits the cap it equals
-    // the true drift rate, so the residual freezes wherever the slewed approach
-    // left it — a couple of ms above the 30 ms stationary value. Bound it at the
-    // R_ss cap value plus a slew-overshoot margin (still far under the ~45 ms
-    // audibility threshold); a tighter bound would demand anti-windup the P-only
-    // design deliberately omits.
+TEST(ClockSlaving, ClosedLoop_500ppm_ResidualFreezesAtTheCap) {
+    // 500 ppm is the one rate the correction envelope cannot beat: p saturates at
+    // kMaxPpm, which is exactly the drift rate, so compensation tracks drift and
+    // the residual stops moving instead of closing. What is left is whatever
+    // accumulated before the cap was reached -- which feed-forward shortens,
+    // because the rate is commanded outright rather than climbed to through the
+    // error it produces. Bound it, and pin that it does not close: a test that
+    // only asserted "small" would pass on a controller that never engaged.
     const LoopResult r = SimulateClosedLoop(/*ppm*/ 500.0, /*seconds*/ 60 * 60);
-    EXPECT_LT(std::abs(r.residual_ms), 32.0);
-    EXPECT_GT(std::abs(r.residual_ms), 29.0); // parks near the 30 ms stationary value
+    EXPECT_LT(std::abs(r.residual_ms), 25.0);
+    EXPECT_GT(std::abs(r.residual_ms), 5.0);
     EXPECT_NEAR(r.final_ppm, ClockSlavingController::kMaxPpm, 1.0);
 }
 

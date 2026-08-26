@@ -8,13 +8,26 @@
 // output timeline back onto the QPC axis by asking the resampler for a tiny,
 // sub-audible rate change (ppm) — never a sample drop/insert, never a PTS jump.
 //
-// It is a deliberate P (proportional) controller with an engage latch, NOT a PI
-// controller: at a real rate error r ppm it leaves a bounded stationary residual
-// R_ss = r * kControlHorizonS / 1000 ms (3-6 ms at typical 50-100 ppm crystals).
-// A PI integrator would drive that residual to zero but at the cost of windup
-// handling and tuning for a few ms that are already far below the ~45 ms lip-sync
-// perception threshold. The latch (engage once, never disengage) makes the
-// behaviour monotone and explainable instead of a sawtooth of engage/disengage.
+// Measured feed-forward plus a proportional term on the residual, with an engage
+// latch. Still not a PI controller: the standing rate comes from the device's own
+// measured rate error, not from an integral, so there is no windup state to
+// unwind and nothing to tune for it.
+//
+// The feed-forward term is what removes the ramp. A P-only controller reacts to
+// the error a rate difference has already produced, so it can do nothing until
+// that error is large enough to act on: at 30 ppm the drift climbs for eight
+// minutes before crossing the engage threshold, and every clip cut out of those
+// eight minutes carries the offset. The rate itself is measurable long before
+// that -- drift divided by elapsed -- and applying it directly holds the drift
+// near zero from the moment the estimate is trustworthy.
+//
+// The P term still earns its place: feed-forward alone freezes the residual
+// wherever engagement found it (A tracks D, so D - A stops moving). Together the
+// fixed point is residual = 0, which a P-only design could not reach -- it parked
+// at R_ss = r * kControlHorizonS / 1000.
+//
+// The latch (engage once, never disengage) makes the behaviour monotone and
+// explainable instead of a sawtooth of engage/disengage.
 //
 // Sign convention (consistent across the three layers estimator -> controller ->
 // swresample):
@@ -81,6 +94,20 @@ class ClockSlavingController {
     // never mistaken for a fault. Far above the ~45 ms lip-sync threshold, far
     // below any value a real device produces.
     static constexpr double kImplausibleFloorMs = 1000.0;
+    // How long the rate is measured over. At the engage-relevant rates a minute
+    // of accumulation is several ms against an estimator that smooths ~1.3 s, so
+    // the slope is signal rather than jitter.
+    static constexpr double kRateEstimateMinS = 60.0;
+    // Drift at this point is the reference the slope is measured FROM. Late
+    // enough that the device has settled and the estimator's window has filled,
+    // early enough not to spend the measurement window on it.
+    static constexpr double kRateReferenceAtS = 5.0;
+    // Any non-zero rate crosses the engage threshold eventually, so "should this
+    // device be corrected" is a question about a horizon, not about a rate. A
+    // device whose measured rate would carry it past kEngageThresholdMs within
+    // this long is corrected now instead of after the error has accumulated;
+    // one that would not is left in its byte-identical passthrough.
+    static constexpr double kProjectionHorizonS = 600.0;
 
     ClockSlavingController() = default;
 
@@ -108,8 +135,32 @@ class ClockSlavingController {
             return false;
         }
 
+        // The device's own rate error, in ppm, as the SLOPE of the drift from a
+        // reference sample -- never as drift/elapsed, which would read a constant
+        // offset as a rate that merely decays. A fixed head start between the two
+        // clocks is not a rate difference and must not be corrected as one.
+        //
+        // Unaffected by anything this controller has done: resampling shifts
+        // neither the device-position axis nor the QPC axis, so the estimator's
+        // drift stays a measurement of the two clocks and not of the correction.
+        if (!has_rate_reference_ && elapsed_s >= kRateReferenceAtS) {
+            has_rate_reference_ = true;
+            rate_reference_ms_ = drift_ms;
+            rate_reference_s_ = elapsed_s;
+        }
+        double rate_ppm = 0.0;
+        if (has_rate_reference_) {
+            const double span_s = elapsed_s - rate_reference_s_;
+            if (span_s >= kRateEstimateMinS) {
+                rate_ppm = (drift_ms - rate_reference_ms_) * 1000.0 / span_s;
+            }
+        }
+
         // Engage latch: once crossed, stays engaged for the rest of the session.
-        if (!engaged_ && std::abs(drift_ms) > kEngageThresholdMs) {
+        // Either the error is already worth correcting, or the measured rate says
+        // it will be within kProjectionHorizonS.
+        if (!engaged_ && (std::abs(drift_ms) > kEngageThresholdMs ||
+                          std::abs(rate_ppm) * kProjectionHorizonS / 1000.0 > kEngageThresholdMs)) {
             engaged_ = true;
         }
         if (!engaged_) {
@@ -131,7 +182,9 @@ class ClockSlavingController {
             last_eval_ns_ = qpc_now_ns;
         }
 
-        double p_target = residual_ms_ / kControlHorizonS * 1000.0;
+        // Feed-forward + proportional. The first holds the rate, the second
+        // closes whatever misalignment is already on the timeline.
+        double p_target = rate_ppm + residual_ms_ / kControlHorizonS * 1000.0;
         if (p_target > kMaxPpm) {
             p_target = kMaxPpm;
         } else if (p_target < -kMaxPpm) {
@@ -186,6 +239,9 @@ class ClockSlavingController {
     bool measurement_faulted_ = false;
     bool has_first_ = false;
     uint64_t first_qpc_ns_ = 0;
+    bool has_rate_reference_ = false;
+    double rate_reference_ms_ = 0.0;
+    double rate_reference_s_ = 0.0;
     bool has_eval_ = false;
     uint64_t last_eval_ns_ = 0;
     double ppm_ = 0.0;

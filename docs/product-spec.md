@@ -498,8 +498,9 @@ scale without hard clipping.
 **Microphone DSP chain.** The mic path has a four-stage chain applied in order:
 **high-pass filter → noise gate → AGC → RNNoise** neural noise suppression. **Every stage is off by
 default** and toggled individually — there is no master switch — and capture is byte-identical when
-all stages are off, **unless audio clock slaving has engaged** (> 15 ms of measured device-clock
-drift); disable *Audio clock slaving* (expert) for bit-exact capture.
+all stages are off, **unless audio clock slaving has engaged** (measured device-clock drift past
+~15 ms, or a measured rate that would reach it within ten minutes); disable *Audio clock slaving*
+(expert) for bit-exact capture.
 
 **Channel / sample-format model.** Output **sample rate** (44.1 / 48 / 96 kHz), **channel count**
 (mono or stereo), and **bit depth** for lossless codecs (PCM 16/24/32-bit int or 32-bit float; FLAC
@@ -1150,15 +1151,25 @@ than showing a guess (a single gain-adjusted source still reports).
 
 **Audio clock slaving.** Because the audio device crystal and the video (QPC) clock differ by tens of
 ppm, a long recording would drift out of sync (50 ppm ≈ 360 ms over 2 h). On by default and
-codec-independent, clock slaving gently corrects this: once the measured drift crosses ~15 ms the
-audio output timeline is resampled by a sub-audible amount (≤ 0.05 %, well under the pitch
-perception threshold), pulling audio back onto the video clock. The A/V drift number then shows the
-**residual** — what actually remains in the file — with the raw drift and the applied correction
-visible in diagnostics. The correction is a gentle proportional pull with a fixed rate cap, so a
-severe clock error leaves a small bounded residual rather than an audible artifact. It only engages
-on real, measured drift, so most recordings never trigger it; the *Audio clock slaving* expert
-toggle turns it off for byte-exact archival capture. A multi-source merged track is not slaved (it
-mixes several device clocks).
+codec-independent, clock slaving gently corrects this: the audio output timeline is resampled by a
+sub-audible amount (≤ 0.05 %, well under the pitch perception threshold), pulling audio back onto
+the video clock. The A/V drift number then shows the **residual** — what actually remains in the
+file — with the raw drift and the applied correction visible in diagnostics.
+
+It engages on either of two facts: the measured drift has already crossed ~15 ms, or the measured
+**rate** says it will within ten minutes. The second is what keeps the first ten minutes of a
+recording in sync rather than watching the error grow to the threshold — at 30 ppm that took eight
+minutes, and every clip cut out of them carried the offset. The rate is read as the slope of the
+drift after a minute of measurement, never as drift divided by elapsed time, so a fixed head start
+between the two clocks is not mistaken for a rate.
+
+A device whose rate is too small to matter over that horizon is never engaged and keeps its
+byte-identical passthrough, which is why most recordings still never trigger it. Once engaged, the
+correction is the measured rate plus a proportional pull on whatever misalignment is already on the
+timeline, under a fixed rate cap: the residual closes to zero instead of parking, and a clock error
+beyond the cap leaves a small bounded residual rather than an audible artifact. The *Audio clock
+slaving* expert toggle turns it off for byte-exact archival capture. A multi-source merged track is
+not slaved (it mixes several device clocks).
 
 **Post-flight report card.** After each recording, a report card surfaces frame-drop %, peak A/V
 drift, and overall pipeline health. When a recording had **real** frame drops, a caution toast
