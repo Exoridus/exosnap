@@ -3,6 +3,7 @@
 #include <QObject>
 #include <QRectF>
 #include <QString>
+#include <QStringList>
 #include <QVariantList>
 #include <QtQmlIntegration/qqmlintegration.h>
 
@@ -76,6 +77,11 @@ class RecordViewModelAdapter : public QObject {
     Q_PROPERTY(bool microphoneEnabled READ microphoneEnabled NOTIFY changed FINAL)
     Q_PROPERTY(bool webcamEnabled READ webcamEnabled NOTIFY changed FINAL)
     Q_PROPERTY(bool appAudioVisible READ appAudioVisible NOTIFY changed FINAL)
+    // The source keys ("system", "app", "microphone") whose toggle still acts
+    // while a recording runs. A source that was off when the session started has
+    // no track to put silence into, so it is absent here and stays locked for
+    // the run.
+    Q_PROPERTY(QStringList liveToggleableSources READ liveToggleableSources NOTIFY changed FINAL)
     Q_PROPERTY(bool microphoneAvailable READ microphoneAvailable NOTIFY changed FINAL)
     Q_PROPERTY(bool webcamAvailable READ webcamAvailable NOTIFY changed FINAL)
     Q_PROPERTY(bool webcamError READ webcamError NOTIFY changed FINAL)
@@ -164,6 +170,8 @@ class RecordViewModelAdapter : public QObject {
     [[nodiscard]] bool microphoneEnabled() const noexcept;
     [[nodiscard]] bool webcamEnabled() const noexcept;
     [[nodiscard]] bool appAudioVisible() const noexcept;
+    [[nodiscard]] const QStringList& liveToggleableSources() const noexcept;
+    void setLiveToggleableSources(QStringList keys);
     [[nodiscard]] bool microphoneAvailable() const noexcept;
     [[nodiscard]] bool webcamAvailable() const noexcept;
     [[nodiscard]] bool webcamError() const noexcept;
@@ -287,6 +295,7 @@ class RecordViewModelAdapter : public QObject {
     QString format_text_;
     QRectF normalized_source_rect_{0.0, 0.0, 1.0, 1.0};
     bool region_selection_needed_ = false;
+    QStringList live_toggleable_sources_;
     bool microphone_available_ = true;
     bool webcam_available_ = true;
     bool webcam_enabled_ = false;

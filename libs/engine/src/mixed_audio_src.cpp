@@ -66,6 +66,18 @@ MixedAudioSrc::MixedAudioSrc(std::vector<std::unique_ptr<IAudioCaptureSource>> s
       limiter_ceiling_linear_((limiter_ceiling_linear > 0.0f) ? limiter_ceiling_linear : 1.0f) {
 }
 
+void MixedAudioSrc::SetSourceMuted(std::size_t index, bool muted) noexcept {
+    if (index >= 32) {
+        return;
+    }
+    const uint32_t bit = 1u << index;
+    if (muted) {
+        source_mute_mask_.fetch_or(bit, std::memory_order_relaxed);
+    } else {
+        source_mute_mask_.fetch_and(~bit, std::memory_order_relaxed);
+    }
+}
+
 bool MixedAudioSrc::Init(std::string& out_error) {
     if (sources_.empty()) {
         out_error = "MixedAudioSrc::Init: at least one audio source is required";
@@ -182,7 +194,11 @@ void MixedAudioSrc::PumpOnePacketPerSource(bool& any_discontinuity) {
             // Silent / null packets occupy the source timeline as literal
             // silence — they are appended as zeros (preserving frame count) so
             // this source's stream stays sample-aligned with the others.
-            if (!src_buf.silent && src_buf.bytes != nullptr) {
+            // A muted inner is treated exactly as a silent packet: the FIFO
+            // keeps the zeros it was cleared to, so nothing about the mix
+            // cadence or the other sources changes.
+            const bool inner_muted = i < 32 && (source_mute_mask_.load(std::memory_order_relaxed) & (1u << i)) != 0;
+            if (!inner_muted && !src_buf.silent && src_buf.bytes != nullptr) {
                 if (scratch_buffer_.size() < static_cast<size_t>(frames) * kOutputChannels) {
                     scratch_buffer_.assign(static_cast<size_t>(frames) * kOutputChannels, 0.0f);
                 }

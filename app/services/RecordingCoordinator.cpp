@@ -721,6 +721,13 @@ std::vector<exosnap::engine::CaptureTarget> RecordingCoordinator::EnumerateTarge
     return exosnap::engine::RecorderSession::EnumerateTargets();
 }
 
+void RecordingCoordinator::SetAudioSourceMuted(exosnap::engine::AudioSourceKind kind, bool muted) {
+    if (!is_recording_.load()) {
+        return;
+    }
+    session_.SetAudioSourceMuted(kind, muted);
+}
+
 void RecordingCoordinator::SetWebcamSettings(const WebcamSettings& settings) {
     const WebcamSettings sanitized = SanitizeWebcamSettings(settings);
     const bool device_changed = sanitized.device_id != webcam_settings_.device_id;

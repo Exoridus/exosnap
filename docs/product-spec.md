@@ -458,6 +458,15 @@ the rows into final tracks; the UI never duplicates track-resolution logic. Per-
 **mute** controls are live and interactive on the **Record page**; the Settings → Audio panel shows
 the rows as locked previews.
 
+**Switching a source off and on during a recording.** The transport's `SYS`, `APP` and `MIC` toggles
+keep working while a recording runs, like the camera toggle already did. Switching one off does not
+remove its track: the track keeps running for the full length of the recording and carries silence
+until the source is switched back on, and switching back on resumes on the next packet because
+nothing was closed. A track that started at the first unmute would carry a container-level offset,
+and neither Matroska nor MP4 can express a hole inside a track, so one continuous timeline is the
+only shape that survives the container and stays trimmable afterwards. A source that was **off when
+the recording started** was never resolved into a track, so its toggle stays locked for that run.
+
 - Per-source **gain** ranges roughly **−60 to +24 dB** (default 0 dB), shown as an "X.X dB" value.
 - Each row has a **mute** button (labelled **"M"**); a muted source contributes silence. Default is
   not muted.
@@ -1046,11 +1055,15 @@ it** — a raised bar with darker controls read as holes punched into the transp
 thing meant to be pressed the darkest thing on the page.
 
 - **Left — the sources.** One round icon button per audio/video source (`APP`, `SYS`, `MIC`, camera),
-  each carrying its live level as an arc on its own edge. These are icons, not labels: they are the
-  most-used controls on the page and the four abbreviations that preceded them said nothing about
-  what they toggled. Every one has a tooltip and an accessible name spelling the source out in full,
-  and a source that cannot be used (no microphone, camera that will not open) stays visible and
-  disabled rather than disappearing.
+  each carrying its live level as the button's own ground, rising from the bottom. The fill is
+  themed up to roughly 72 % of the meter scale, caution amber from there to 90 %, and error coral
+  above it; the zones sit on the meter scale rather than on the drawn height, so a given loudness
+  always has the same colour. These are icons, not labels: they are the most-used controls on the
+  page and the four abbreviations that preceded them said nothing about what they toggled. Every one
+  has a tooltip and an accessible name spelling the source out in full. A source whose device is
+  merely unusable right now (a camera that will not open) stays visible and disabled with the reason
+  in its tooltip; a source with **no device attached at all** is not shown, because a control that
+  can never act and has no reason worth reading is noise.
 - **Centre — the elapsed time**, the largest element on the page. It is neutral while idle, coral
   while recording and accent while paused, using tabular figures so the digits do not shift.
 - **Right — the actions**, in two tiers: the per-recording secondary actions (capture frame, add

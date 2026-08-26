@@ -1140,6 +1140,25 @@ void QuickApplication::synchronizeRecordState() {
                                          live_config_.webcam.chroma_key.tolerance,
                                          live_config_.webcam.chroma_key.softness,
                                          live_config_.webcam.chroma_key.spill_reduction);
+    // Latched at the first live state and cleared when the session ends: it lists
+    // the sources that were resolved into a track, which is what a live mute can
+    // reach. Refilling it as rows change would let a source muted mid-run drop
+    // out of its own list.
+    if (!locksCaptureTargets(record_view_model_.state)) {
+        live_toggleable_sources_.clear();
+    } else if (live_toggleable_sources_.isEmpty()) {
+        for (const auto& row : record_view_model_.audio_ui_state.source_rows) {
+            if (!row.enabled)
+                continue;
+            if (isSystemRow(row))
+                live_toggleable_sources_.append(QStringLiteral("system"));
+            else if (row.kind == exosnap::engine::AudioSourceKind::App)
+                live_toggleable_sources_.append(QStringLiteral("app"));
+            else if (row.kind == exosnap::engine::AudioSourceKind::Mic)
+                live_toggleable_sources_.append(QStringLiteral("microphone"));
+        }
+    }
+    record_view_model_adapter_.setLiveToggleableSources(live_toggleable_sources_);
     record_view_model_adapter_.setCountdownState(live_config_.countdown_seconds, countdown_remaining_,
                                                  countdown_progress_);
     record_view_model_adapter_.setPreviewFrameReady(record_preview_adapter_.frameReady());
@@ -1467,7 +1486,13 @@ void QuickApplication::toggleSource(const QString& key) {
         synchronizeRecordState();
         return;
     }
-    if (!record_view_model_adapter_.canSelectSource())
+    // While a session runs the toggle is a live mute rather than a configuration
+    // edit: the track stays, and it carries silence until the source comes back.
+    // Only a source that HAS a track can be muted -- one that was off when the
+    // recording started was never resolved into a track, and there is nothing to
+    // put silence into.
+    const bool session_live = !record_view_model_adapter_.canSelectSource();
+    if (session_live && !live_toggleable_sources_.contains(key))
         return;
     for (auto& row : record_view_model_.audio_ui_state.source_rows) {
         const bool match = (key == QStringLiteral("system") && isSystemRow(row)) ||
@@ -1477,6 +1502,20 @@ void QuickApplication::toggleSource(const QString& key) {
             if (key == QStringLiteral("microphone") && !microphone_available_)
                 return;
             row.enabled = !row.enabled;
+            if (session_live) {
+                // Both system kinds: a row is Sys or SystemOutput depending on
+                // whether the capture is PID-scoped, and the transport addresses
+                // them as one control.
+                const bool muted = !row.enabled;
+                if (key == QStringLiteral("system")) {
+                    recording_coordinator_->SetAudioSourceMuted(exosnap::engine::AudioSourceKind::Sys, muted);
+                    recording_coordinator_->SetAudioSourceMuted(exosnap::engine::AudioSourceKind::SystemOutput, muted);
+                } else if (key == QStringLiteral("app")) {
+                    recording_coordinator_->SetAudioSourceMuted(exosnap::engine::AudioSourceKind::App, muted);
+                } else {
+                    recording_coordinator_->SetAudioSourceMuted(exosnap::engine::AudioSourceKind::Mic, muted);
+                }
+            }
             break;
         }
     }

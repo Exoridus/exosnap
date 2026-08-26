@@ -157,6 +157,17 @@ struct SessionState {
     // Video threads adjust their epoch on resume so PTS continues seamlessly.
     std::atomic<bool> pause_requested{false};
 
+    // Live mute, one bit per AudioSourceKind (AudioSourceKindBit). A muted
+    // source keeps its track running at full length and contributes silence for
+    // as long as the mute stands.
+    //
+    // Silence rather than a gap on purpose: a muxer places a track by its first
+    // packet, so a track that started at the first unmute would carry a
+    // container-level offset, and neither Matroska nor MP4 can express a hole
+    // inside a track at all. One continuous timeline is the only shape that
+    // survives the container and stays trivially trimmable afterwards.
+    std::atomic<uint32_t> audio_mute_mask{0};
+
     // Nanoseconds this session has spent paused, accumulated by the stats
     // collector as it observes `pause_requested` change.
     //

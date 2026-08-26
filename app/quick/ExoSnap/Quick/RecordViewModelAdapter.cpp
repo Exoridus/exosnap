@@ -325,6 +325,18 @@ bool RecordViewModelAdapter::appAudioVisible() const noexcept {
            hasRow(source_->audio_ui_state, exosnap::engine::AudioSourceKind::App);
 }
 
+const QStringList& RecordViewModelAdapter::liveToggleableSources() const noexcept {
+    return live_toggleable_sources_;
+}
+
+void RecordViewModelAdapter::setLiveToggleableSources(QStringList keys) {
+    if (live_toggleable_sources_ == keys) {
+        return;
+    }
+    live_toggleable_sources_ = std::move(keys);
+    emit changed();
+}
+
 bool RecordViewModelAdapter::microphoneAvailable() const noexcept {
     return microphone_available_;
 }

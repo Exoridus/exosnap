@@ -669,6 +669,13 @@ class RecorderSession {
     // Register a callback invoked from the mux worker thread as each media
     // segment is finalized (including the final one). Must be set before
     // Record(). For single-file recordings, fires exactly once.
+    // Mute or unmute one audio source kind while a recording runs. The track it
+    // belongs to keeps running at full length and carries silence for as long as
+    // the mute stands; nothing is re-opened, so unmuting resumes on the next
+    // packet. Ignored between sessions -- the source rows are what a new session
+    // starts from.
+    void SetAudioSourceMuted(AudioSourceKind kind, bool muted) noexcept;
+
     void SetSegmentCallback(SegmentCallback cb);
 
     // Thread-safe live webcam overlay update. Safe to call from any thread while

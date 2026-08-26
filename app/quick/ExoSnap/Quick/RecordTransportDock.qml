@@ -93,8 +93,11 @@ Rectangle {
             accessibleLabel: qsTr("System audio")
             checkedState: root.recordViewModel.systemAudioEnabled
             meterLevel: root.recordViewModel.systemMeter
-            available: root.recordViewModel.canSelectSource && !root.recordViewModel.blocked
-                       && !root.recordViewModel.failed
+            // A running session no longer locks this: the toggle becomes a live
+            // mute, and the track keeps its full length either way.
+            available: (root.recordViewModel.canSelectSource
+                        || root.recordViewModel.liveToggleableSources.includes("system"))
+                       && !root.recordViewModel.blocked && !root.recordViewModel.failed
             unavailableReason: root.sourceLockReason
             onClicked: root.recordViewModel.requestToggleSource("system")
         }
@@ -106,8 +109,11 @@ Rectangle {
             accessibleLabel: qsTr("Application audio")
             checkedState: root.recordViewModel.appAudioEnabled
             meterLevel: root.recordViewModel.appMeter
-            available: root.recordViewModel.canSelectSource && !root.recordViewModel.blocked
-                       && !root.recordViewModel.failed
+            // A running session no longer locks this: the toggle becomes a live
+            // mute, and the track keeps its full length either way.
+            available: (root.recordViewModel.canSelectSource
+                        || root.recordViewModel.liveToggleableSources.includes("app"))
+                       && !root.recordViewModel.blocked && !root.recordViewModel.failed
             unavailableReason: root.sourceLockReason
             visible: root.recordViewModel.appAudioVisible
             onClicked: root.recordViewModel.requestToggleSource("app")
@@ -120,7 +126,9 @@ Rectangle {
             accessibleLabel: qsTr("Microphone")
             checkedState: root.recordViewModel.microphoneEnabled
             meterLevel: root.recordViewModel.microphoneMeter
-            available: root.recordViewModel.canSelectSource && root.recordViewModel.microphoneAvailable
+            available: (root.recordViewModel.canSelectSource
+                        || root.recordViewModel.liveToggleableSources.includes("microphone"))
+                       && root.recordViewModel.microphoneAvailable
                        && !root.recordViewModel.blocked && !root.recordViewModel.failed
             // The device fact outranks the session lock: with no microphone
             // attached, "locked while a recording runs" would be true and

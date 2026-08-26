@@ -9,6 +9,7 @@
 #include "exosnap/engine/audio_meter.h"
 #include "ffmpeg_aac_encoder.h"
 #include "flac_audio_encoder.h"
+#include "mixed_audio_src.h"
 #include "opus_audio_encoder.h"
 #include "output_format_audio_src.h"
 #include "pcm_audio_encoder.h"
@@ -124,8 +125,12 @@ EncoderSetup MakeEncoderSetup(const RecorderConfig& config) {
 } // namespace
 
 AudioThread::AudioThread(std::shared_ptr<SessionState> state, std::unique_ptr<IAudioCaptureSource> source,
-                         uint32_t track_id)
-    : m_state_ptr(std::move(state)), m_state(*m_state_ptr), source_(std::move(source)), track_id_(track_id) {
+                         uint32_t track_id, std::vector<AudioSourceKind> source_kinds)
+    : m_state_ptr(std::move(state)), m_state(*m_state_ptr), source_(std::move(source)),
+      source_kinds_(std::move(source_kinds)), track_id_(track_id) {
+    // Resolved here, while source_ is still the raw capture source: Run() wraps
+    // it in the output-format decorator, after which the mixer is unreachable.
+    mixed_src_ = dynamic_cast<MixedAudioSrc*>(source_.get());
 }
 
 AudioThread::~AudioThread() {
@@ -397,6 +402,8 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
     // discontinuity gap covering the SAME stretch is not filled a second time.
     bool silent_stalled = false;
     uint64_t silenceFilledFramesSincePacket = 0;
+    // Last mask pushed into the mixer, so an unchanged mute costs one load.
+    uint32_t last_mute_mask = 0;
 
     // Publish this track's measured zero point: the wall-clock instant audio PTS
     // 0 sits at (av_epoch_align.h). Called from EVERY path that first puts
@@ -644,6 +651,21 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
             continue;
         }
 
+        // The live mute, applied once per drain rather than per packet. A mixer
+        // owns its own per-inner mute so a merged track can silence one source
+        // and keep the rest; a bare single source has no mixer to ask, so the
+        // loop feeds silence for the frames it just acquired -- same length,
+        // same cadence, same PTS.
+        const uint32_t mute_mask = m_state.audio_mute_mask.load(std::memory_order_relaxed);
+        if (mixed_src_ != nullptr && mute_mask != last_mute_mask) {
+            for (std::size_t si = 0; si < source_kinds_.size(); ++si) {
+                mixed_src_->SetSourceMuted(si, (mute_mask & AudioSourceKindBit(source_kinds_[si])) != 0);
+            }
+            last_mute_mask = mute_mask;
+        }
+        const bool track_muted = mixed_src_ == nullptr && source_kinds_.size() == 1 &&
+                                 (mute_mask & AudioSourceKindBit(source_kinds_[0])) != 0;
+
         bool anyWork = false;
         while (source_->PendingFrameCount() > 0) {
             RawAudioBuffer raw{};
@@ -764,7 +786,7 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
                 feedGapSilence(gapFramesToFeed, encoderAccumulatedFrames, pkts);
             }
             const size_t totalSamples = static_cast<size_t>(raw.num_frames) * static_cast<size_t>(channels);
-            if (raw.silent) {
+            if (raw.silent || track_muted) {
                 std::vector<float> silence(totalSamples, 0.0f);
                 enc.FeedFloat32(silence.data(), silence.size(), 0, encoderAccumulatedFrames, sample_rate, channels,
                                 pkts);

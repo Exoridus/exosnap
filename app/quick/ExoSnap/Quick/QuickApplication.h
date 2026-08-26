@@ -710,6 +710,7 @@ class QuickApplication {
     float preflight_system_rms_ = 0.0f;
     float preflight_app_rms_ = 0.0f;
     float preflight_microphone_rms_ = 0.0f;
+    QStringList live_toggleable_sources_;
     bool microphone_available_ = true;
     bool webcam_available_ = true;
     QString webcam_error_;

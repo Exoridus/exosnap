@@ -188,6 +188,11 @@ class RecordingCoordinator {
                         std::optional<exosnap::engine::CaptureRegion> crop_region = std::nullopt);
 
     // Webcam overlay
+    // Mute or unmute one audio source kind while a recording runs. No-op when
+    // no session is in flight: between recordings the source rows are the truth
+    // and a new session starts from them.
+    void SetAudioSourceMuted(exosnap::engine::AudioSourceKind kind, bool muted);
+
     void SetWebcamSettings(const WebcamSettings& settings);
     void SetWebcamFrameCallback(WebcamService::FrameCallback cb);
     void SetWebcamFrameCallback(QObject* receiver, WebcamService::FrameCallback cb);

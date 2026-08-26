@@ -286,6 +286,79 @@ TEST(MixedAudioSrcTest, MixedAudioSrc_OneSourceData_OtherSilent_OutputIsHalfScal
     mixer.Shutdown();
 }
 
+TEST(MixedAudioSrcTest, MixedAudioSrc_MutedSource_ContributesSilence_OthersUnchanged) {
+    // A live mute (the transport toggle during a recording) must silence one
+    // inner source and leave the mix cadence and the survivors exactly as they
+    // were: both sources at 1.0 sum to 1.0 at base gain 0.5, so muting one has
+    // to land on 0.5 rather than on a re-normalised 1.0.
+    const auto src_bytes = MakeFloat32Bytes(MixedAudioSrc::kMixFrameCount, 2, 1.0f);
+
+    std::vector<std::unique_ptr<IAudioCaptureSource>> sources;
+    auto* s0 = new MockAudioCaptureSource();
+    auto* s1 = new MockAudioCaptureSource();
+    for (auto* src : {s0, s1}) {
+        src->SetPendingFrames(MixedAudioSrc::kMixFrameCount);
+        src->SetData(src_bytes);
+    }
+    sources.push_back(std::unique_ptr<IAudioCaptureSource>(s0));
+    sources.push_back(std::unique_ptr<IAudioCaptureSource>(s1));
+
+    MixedAudioSrc mixer(std::move(sources), MakeUnityGains(2));
+    std::string err;
+    ASSERT_TRUE(mixer.Init(err));
+
+    mixer.SetSourceMuted(0, true);
+    RawAudioBuffer buf{};
+    ASSERT_TRUE(mixer.AcquireBuffer(buf, err));
+    EXPECT_EQ(buf.num_frames, MixedAudioSrc::kMixFrameCount);
+    const float* samples = reinterpret_cast<const float*>(buf.bytes);
+    for (uint32_t i = 0; i < MixedAudioSrc::kMixFrameCount * 2u; ++i) {
+        EXPECT_NEAR(samples[i], 0.5f, 1e-5f) << "muted mix at index " << i;
+    }
+    mixer.ReleaseBuffer();
+
+    // Unmuting resumes on the next packet: nothing was re-opened.
+    for (auto* src : {s0, s1}) {
+        src->SetPendingFrames(MixedAudioSrc::kMixFrameCount);
+        src->SetData(src_bytes);
+    }
+    mixer.SetSourceMuted(0, false);
+    RawAudioBuffer resumed{};
+    ASSERT_TRUE(mixer.AcquireBuffer(resumed, err));
+    const float* resumed_samples = reinterpret_cast<const float*>(resumed.bytes);
+    for (uint32_t i = 0; i < MixedAudioSrc::kMixFrameCount * 2u; ++i) {
+        EXPECT_NEAR(resumed_samples[i], 1.0f, 1e-5f) << "resumed mix at index " << i;
+    }
+    mixer.ReleaseBuffer();
+    mixer.Shutdown();
+}
+
+TEST(MixedAudioSrcTest, MixedAudioSrc_MuteOutOfRangeIndex_IsIgnored) {
+    // The mask is 32 bits wide; an index past it must not wrap onto source 0 and
+    // silence a track nobody asked to mute.
+    const auto src_bytes = MakeFloat32Bytes(MixedAudioSrc::kMixFrameCount, 2, 1.0f);
+
+    std::vector<std::unique_ptr<IAudioCaptureSource>> sources;
+    auto* s0 = new MockAudioCaptureSource();
+    s0->SetPendingFrames(MixedAudioSrc::kMixFrameCount);
+    s0->SetData(src_bytes);
+    sources.push_back(std::unique_ptr<IAudioCaptureSource>(s0));
+
+    MixedAudioSrc mixer(std::move(sources), MakeUnityGains(1));
+    std::string err;
+    ASSERT_TRUE(mixer.Init(err));
+
+    mixer.SetSourceMuted(32, true);
+    mixer.SetSourceMuted(64, true);
+    RawAudioBuffer buf{};
+    ASSERT_TRUE(mixer.AcquireBuffer(buf, err));
+    const float* samples = reinterpret_cast<const float*>(buf.bytes);
+    EXPECT_NEAR(samples[0], 1.0f, 1e-5f);
+
+    mixer.ReleaseBuffer();
+    mixer.Shutdown();
+}
+
 TEST(MixedAudioSrcTest, MixedAudioSrc_TwoSourcesData_SummedAndClamped) {
     // Both sources output 1.0f stereo.
     // base_gain = 0.5 -> per-source contribution 0.5 -> sum 1.0 -> no clamping needed.

@@ -462,6 +462,19 @@ void RecorderSession::RequestSplit(SplitTriggerSource source) {
     st->split_request_seq.fetch_add(1);
 }
 
+void RecorderSession::SetAudioSourceMuted(AudioSourceKind kind, bool muted) noexcept {
+    if (!m_impl->recording.load()) {
+        return;
+    }
+    const auto st = m_impl->State();
+    const uint32_t bit = AudioSourceKindBit(kind);
+    if (muted) {
+        st->audio_mute_mask.fetch_or(bit, std::memory_order_relaxed);
+    } else {
+        st->audio_mute_mask.fetch_and(~bit, std::memory_order_relaxed);
+    }
+}
+
 void RecorderSession::SetSegmentCallback(SegmentCallback cb) {
     // Stored on the Impl (not the SessionState) so the callback survives the
     // fresh-state swap after a leaked worker; Record() copies it in.
@@ -664,7 +677,8 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
         // Video-only path: no audio workers.
     } else if (config.audio_track_plan.tracks.empty()) {
         auto source = std::make_unique<WasapiLoopbackSrc>();
-        audioWorkers.push_back(std::make_shared<AudioThread>(state_ptr, std::move(source), 0));
+        audioWorkers.push_back(std::make_shared<AudioThread>(
+            state_ptr, std::move(source), 0, std::vector<AudioSourceKind>{AudioSourceKind::SystemOutput}));
     } else {
         audioWorkers.reserve(config.audio_track_plan.tracks.size());
         for (const auto& track : config.audio_track_plan.tracks) {
@@ -730,7 +744,7 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
             }
 
             audioWorkers.push_back(
-                std::make_shared<AudioThread>(state_ptr, std::move(track_source), track.track_index));
+                std::make_shared<AudioThread>(state_ptr, std::move(track_source), track.track_index, track.sources));
         }
     }
 
