@@ -1287,6 +1287,21 @@ target_include_directories(ready_frame_capture_tests
 
 target_compile_definitions(ready_frame_capture_tests PRIVATE NOMINMAX)
 
+# Whether a HoverHandler's cursorShape reaches the window at all. A QML test can
+# only read the handler's own property, which proves the declaration and nothing
+# about the cursor a user sees; this drives a real QQuickWindow with posted hover
+# events and asserts the shape the window ends up carrying.
+exosnap_add_gtest(
+    NAME hover_cursor_tests
+    TEST_PREFIX quick_hover_cursor.
+    SOURCES ${EXOSNAP_QUICK_TESTS_DIR}/test_hover_cursor.cpp
+    LIBRARIES
+        Qt6::Gui
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::Test
+)
+
 # Diagnostics/Logs presentation policy extracted out of the Widgets DiagnosticsPage,
 # LogsPage and MainWindow. Registered here rather than in app/CMakeLists.txt so the
 # Phase-B migration keeps its shared-file footprint to the Quick module.
