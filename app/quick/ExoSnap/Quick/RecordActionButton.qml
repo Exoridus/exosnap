@@ -72,6 +72,11 @@ FocusScope {
 
     HoverHandler {
         id: hover
+
+        // The scope stays enabled while the action is unavailable so it can
+        // still speak its reason, so the cursor is what has to say the control
+        // cannot be pressed.
+        cursorShape: root.available ? Qt.PointingHandCursor : Qt.ArrowCursor
     }
 
     Button {

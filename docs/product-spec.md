@@ -1242,7 +1242,16 @@ mono values) and **Export** (the output choices plus the progress and result of 
 below). One action — **Export** — sits **bottom-right**, matching the Record page's transport
 actions; it starts the export straight away and is unavailable while one is running. When an export
 is possible, Export is the **accent-filled primary action**: it is the one thing this surface exists
-to do, and an outlined control there was indistinguishable from a dismiss button.
+to do, and an outlined control there was indistinguishable from a dismiss button. It also takes the
+**pill shape** the Record page gives its own primary control, so a surface's one defining action is
+recognisable by shape and not only by fill; ordinary buttons elsewhere keep the standard rung.
+
+**The player's transport toggle is drawn on demand, not permanently.** The picture is what the
+surface is for, so the central play/pause control stands while the preview is **paused**, while the
+pointer or the keyboard is on it, and for a moment after a transport change so the new state is
+legible; it fades out while the clip **plays** and while the playhead is being **dragged**, which is
+exactly when an element over the picture hides the frame the user is looking for. Fading never
+removes it from the keyboard: it stays a tab stop and stays operable throughout (§10).
 
 **It is a workspace, not a dialog.** Ownership is unchanged — it is still a layer over the Record
 page rather than a navigation destination (ADR 0022), and Record remains its parent context — but it
@@ -1617,6 +1626,12 @@ cover on its own — the desktop notification toast is its own always-on-top win
 same navigation intents from outside the shell. An open **edit session** is
 not one of those — the shortcuts and the tabs share one navigation contract, and under it the
 session is state of the Record destination (§2).
+
+**The pointer says what a control does.** Anything that can be clicked shows the **pointing hand**;
+a control that is present but **unavailable** shows the plain arrow, because a greyed control that
+still offers the hand is inviting a press that will not happen. A text field shows the **I-beam**, a
+draggable element the **open hand** and, while it is being dragged, the **closed hand**, and a frame
+that can be moved or resized the matching **move / resize** cursor.
 
 **Every interactive control is reachable and operable with the keyboard alone.** A control that is
 semantically a button, a toggle or a selectable item appears in the tab order, shows a focus ring

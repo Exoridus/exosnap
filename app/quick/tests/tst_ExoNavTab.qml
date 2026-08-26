@@ -44,6 +44,26 @@ TestCase {
         compare(selected, unselected, "selected " + selected + " vs unselected " + unselected);
     }
 
+    // The contract the width exists for, stated on the label instead of on a
+    // metric: whatever the tab is sized from, neither weight may elide inside
+    // it. "Diagnostics" is the case that broke — it measures WIDER at Medium
+    // than at DemiBold, so a tab sized from the selected weight alone was one
+    // pixel too narrow for its own unselected label and elided at every window
+    // width, free space in the band included.
+    function test_neither_weight_elides_at_the_tabs_own_width() {
+        let tab = createTemporaryObject(tabComponent, testCase);
+        verify(tab);
+        tab.text = "Diagnostics";
+        tab.width = tab.implicitWidth;
+
+        tab.selected = false;
+        verify(!tab.contentItem.truncated,
+               "unselected label elided at width " + tab.width + " (needs " + tab.contentItem.implicitWidth + ")");
+        tab.selected = true;
+        verify(!tab.contentItem.truncated,
+               "selected label elided at width " + tab.width + " (needs " + tab.contentItem.implicitWidth + ")");
+    }
+
     function test_the_tab_is_sized_for_the_bold_label() {
         // Sizing from the lighter weight would fit the selected label only by
         // eliding it, which is the same defect seen from the other side.

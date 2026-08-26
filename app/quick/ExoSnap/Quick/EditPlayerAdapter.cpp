@@ -125,6 +125,10 @@ bool EditPlayerAdapter::clipOpen() const noexcept {
     return clip_open_;
 }
 
+bool EditPlayerAdapter::scrubbing() const noexcept {
+    return scrubbing_;
+}
+
 const QString& EditPlayerAdapter::placeholderText() const noexcept {
     return placeholder_text_;
 }
@@ -181,12 +185,22 @@ void EditPlayerAdapter::setPlaying(bool playing) {
 void EditPlayerAdapter::beginScrub() {
     resume_after_scrub_ = playing_;
     setPlaying(false);
+    if (!scrubbing_) {
+        scrubbing_ = true;
+        emit scrubbingChanged();
+    }
 }
 
 void EditPlayerAdapter::endScrub() {
     if (resume_after_scrub_)
         setPlaying(true);
     resume_after_scrub_ = false;
+    // After the resume, not before: a surface that hides itself while scrubbing
+    // and while playing would otherwise flash for the one frame between the two.
+    if (scrubbing_) {
+        scrubbing_ = false;
+        emit scrubbingChanged();
+    }
 }
 
 void EditPlayerAdapter::openClip(const QString& master_path, qint64 duration_ms) {

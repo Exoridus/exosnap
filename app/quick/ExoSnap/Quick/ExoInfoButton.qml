@@ -68,6 +68,10 @@ AbstractButton {
             popover.close();
     }
 
+    HoverHandler {
+        cursorShape: Qt.PointingHandCursor
+    }
+
     Timer {
         id: hoverTimer
 

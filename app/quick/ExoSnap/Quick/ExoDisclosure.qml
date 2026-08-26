@@ -46,6 +46,11 @@ ColumnLayout {
             root.expanded = !root.expanded;
         }
 
+        // Only the header is a control; the body it opens is content.
+        HoverHandler {
+            cursorShape: Qt.PointingHandCursor
+        }
+
         background: Rectangle {
             color: header.hovered ? ExoTheme.surfaceHover : "transparent"
             // The shared focus treatment: the `text` rung as a hairline, the

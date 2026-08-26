@@ -1,7 +1,9 @@
 #include <gtest/gtest.h>
 
+#include <QColor>
 #include <QGuiApplication>
 #include <QImage>
+#include <QSize>
 
 #include <algorithm>
 #include <atomic>
@@ -369,6 +371,101 @@ TEST_F(TimelineThumbnailSourceTest, ClosingTheClipIsIdempotentAndForgetsTheFrame
     QCoreApplication::processEvents();
     EXPECT_EQ(source.videoWidth(), 0);
     EXPECT_EQ(source.videoHeight(), 0);
+}
+
+QImage MakeTile(int width, int height, QRgb fill) {
+    QImage image(width, height, QImage::Format_ARGB32_Premultiplied);
+    image.fill(fill);
+    return image;
+}
+
+TEST_F(TimelineThumbnailSourceTest, CacheReturnsWhatItWasGivenForTheSameTimeAndRowHeight) {
+    TimelineTileCache cache;
+    cache.Insert(1500, 48, MakeTile(85, 48, qRgb(10, 20, 30)));
+
+    const QImage* hit = cache.Lookup(1500, 48);
+    ASSERT_NE(hit, nullptr);
+    EXPECT_EQ(hit->pixel(0, 0), qRgb(10, 20, 30));
+    EXPECT_EQ(hit->size(), QSize(85, 48));
+
+    // The row height is part of the key: a tile scaled for one row cannot stand
+    // in for another, and a time nobody decoded is a miss rather than a
+    // neighbour.
+    EXPECT_EQ(cache.Lookup(1500, 20), nullptr);
+    EXPECT_EQ(cache.Lookup(1600, 48), nullptr);
+}
+
+TEST_F(TimelineThumbnailSourceTest, CachedTilesSurviveTheDecodersOwnBuffer) {
+    // WrapDecodedFrame hands out an image that borrows the decoder's allocation,
+    // and the tile loop releases each frame before the next decode. A cache that
+    // stored the borrowed view would hand back freed pixels on the next run.
+    std::atomic<int> live_buffers{0};
+    TimelineTileCache cache;
+    {
+        const auto frame = MakeFrame(0, 16, 16, &live_buffers);
+        ASSERT_EQ(live_buffers.load(), 1);
+        cache.Insert(0, 16, WrapDecodedFrame(frame));
+    }
+    EXPECT_EQ(live_buffers.load(), 0);
+
+    const QImage* hit = cache.Lookup(0, 16);
+    ASSERT_NE(hit, nullptr);
+    EXPECT_FALSE(hit->isNull());
+    EXPECT_EQ(hit->size(), QSize(16, 16));
+}
+
+TEST_F(TimelineThumbnailSourceTest, CacheEvictsTheLeastRecentlyUsedTileToStayInsideItsBudget) {
+    const QImage tile = MakeTile(32, 32, qRgb(1, 2, 3));
+    const auto tile_bytes = static_cast<std::size_t>(tile.sizeInBytes());
+    // Room for two tiles, so inserting a third has to give one up.
+    TimelineTileCache cache(tile_bytes * 2 + tile_bytes / 2);
+
+    cache.Insert(0, 32, tile);
+    cache.Insert(1000, 32, tile);
+    // Touching the older entry makes the NEWER one the least recently used.
+    ASSERT_NE(cache.Lookup(0, 32), nullptr);
+    cache.Insert(2000, 32, tile);
+
+    EXPECT_NE(cache.Lookup(0, 32), nullptr);
+    EXPECT_EQ(cache.Lookup(1000, 32), nullptr);
+    EXPECT_NE(cache.Lookup(2000, 32), nullptr);
+    EXPECT_LE(cache.sizeBytes(), tile_bytes * 2 + tile_bytes / 2);
+}
+
+TEST_F(TimelineThumbnailSourceTest, CacheRefusesATileLargerThanItsWholeBudget) {
+    const QImage tile = MakeTile(64, 64, qRgb(4, 5, 6));
+    TimelineTileCache cache(static_cast<std::size_t>(tile.sizeInBytes()) / 2);
+    cache.Insert(0, 64, tile);
+
+    // Storing it would mean evicting everything to hold one entry that still
+    // does not fit.
+    EXPECT_EQ(cache.Lookup(0, 64), nullptr);
+    EXPECT_EQ(cache.count(), 0u);
+    EXPECT_EQ(cache.sizeBytes(), 0u);
+}
+
+TEST_F(TimelineThumbnailSourceTest, ClearDropsEveryTileAndItsAccounting) {
+    TimelineTileCache cache;
+    cache.Insert(0, 48, MakeTile(85, 48, qRgb(7, 8, 9)));
+    cache.Insert(500, 48, MakeTile(85, 48, qRgb(7, 8, 9)));
+    ASSERT_GT(cache.sizeBytes(), 0u);
+
+    cache.Clear();
+
+    EXPECT_EQ(cache.count(), 0u);
+    EXPECT_EQ(cache.sizeBytes(), 0u);
+    EXPECT_EQ(cache.Lookup(0, 48), nullptr);
+}
+
+TEST_F(TimelineThumbnailSourceTest, ReinsertingTheSameKeyDoesNotDoubleCountItsBytes) {
+    const QImage tile = MakeTile(40, 40, qRgb(9, 9, 9));
+    TimelineTileCache cache;
+    cache.Insert(250, 40, tile);
+    const std::size_t after_first = cache.sizeBytes();
+    cache.Insert(250, 40, tile);
+
+    EXPECT_EQ(cache.count(), 1u);
+    EXPECT_EQ(cache.sizeBytes(), after_first);
 }
 
 TEST_F(TimelineThumbnailSourceTest, EachRequestGetsItsOwnRunId) {

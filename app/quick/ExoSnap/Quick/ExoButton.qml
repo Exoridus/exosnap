@@ -31,6 +31,13 @@ Button {
     // full-height button there leaves a 1 px margin and reads as the toolbar's
     // subject rather than as an action inside it.
     property bool compact: false
+    // The pill shape the Record page already gives its transport controls, for
+    // the one action a surface exists to perform. Opt-in rather than the default
+    // rung: the product distinguishes a primary control from an ordinary button
+    // by shape on Record (RecordActionButton, RecordTransportDock), and applying
+    // that to every ExoButton would take the distinction away instead of
+    // carrying it over.
+    property bool pill: false
 
     readonly property bool _iconOnly: root.glyph !== ExoGlyph.Invalid
     readonly property bool _hasLeadingGlyph: !root._iconOnly && root.leadingGlyph !== ExoGlyph.Invalid
@@ -143,7 +150,16 @@ Button {
         border.color: root.visualFocus ? ExoTheme.text
                       : root._destructive ? ExoTheme.error
                       : root.selected ? ExoTheme.accent : ExoTheme.lineStrong
-        radius: ExoTheme.radiusSm
+        radius: root.pill ? ExoTheme.radiusPill : ExoTheme.radiusSm
         visible: !root.quiet || root._primary || root._destructive || root.down || root.hovered || root.visualFocus || root.selected
+    }
+
+    // In Qt Widgets the cursor was a widget property and 45 call sites set it;
+    // in Qt Quick it has to be declared per component, and the shared controls
+    // are where that costs one declaration instead of one per caller. A disabled
+    // control keeps the arrow on purpose: the hand says "press this", and a
+    // greyed-out button has nothing to press.
+    HoverHandler {
+        cursorShape: root.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
     }
 }

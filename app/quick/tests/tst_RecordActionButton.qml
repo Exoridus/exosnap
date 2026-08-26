@@ -35,6 +35,28 @@ Item {
             compare(button.round, true)
         }
 
+        // The Record button is the one the developer noticed: its scope stays
+        // enabled while the action is unavailable so it can still speak its
+        // reason, so the cursor is the only thing left to say it cannot be
+        // pressed.
+        function cursorShapeOf(item) {
+            for (let i = 0; i < item.data.length; ++i) {
+                const child = item.data[i];
+                if (child && child.cursorShape !== undefined)
+                    return child.cursorShape;
+            }
+            return -1;
+        }
+
+        function test_the_cursor_follows_availability() {
+            let button = createTemporaryObject(actionButtonComponent, root, { activated: false })
+            verify(!!button, "Component exists")
+            compare(cursorShapeOf(button), Qt.PointingHandCursor)
+
+            button.available = false
+            compare(cursorShapeOf(button), Qt.ArrowCursor)
+        }
+
         function test_mouseActivation() {
             let button = createTemporaryObject(actionButtonComponent, root, { activated: false })
             verify(!!button, "Component exists")

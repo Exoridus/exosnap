@@ -345,6 +345,11 @@ Item {
                         objectName: "editOverlayExportButton"
                         text: qsTr("Export")
                         tone: root.exporter.canExport ? "primary" : "neutral"
+                        // The shape the Record page gives its own primary
+                        // control, for the same reason: this is the action the
+                        // workspace exists to perform, and it is the only one in
+                        // the footer.
+                        pill: true
                         enabled: root.exporter.canExport
                         Layout.minimumWidth: 150
                         Layout.alignment: Qt.AlignVCenter
