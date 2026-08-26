@@ -448,6 +448,66 @@ function Get-LiveVerifyTranscript {
     return $Connection.Transcript
 }
 
+function Compare-LiveVerifyStateField {
+    <#
+    .SYNOPSIS
+        Names the observable fields that differ between two automation states.
+    .DESCRIPTION
+        Returns one "field: before -> after" string per difference, over the
+        union of both sides' properties, so a field that appears or disappears
+        is a difference rather than something the walk skips. Nested objects are
+        compared by their rendered value, which is enough to name what moved --
+        this exists to make a revision change readable, not to be a general
+        structural diff.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] $Before, [Parameter(Mandatory)] $After)
+
+    $names = @(@($Before.PSObject.Properties.Name) + @($After.PSObject.Properties.Name) | Sort-Object -Unique)
+    $differences = @()
+    foreach ($name in $names) {
+        $left = if ($Before.PSObject.Properties.Name -contains $name) { $Before.$name } else { $null }
+        $right = if ($After.PSObject.Properties.Name -contains $name) { $After.$name } else { $null }
+        if ("$left" -ne "$right") { $differences += "${name}: $left -> $right" }
+    }
+    return $differences
+}
+
+function Wait-LiveVerifyStateQuiet {
+    <#
+    .SYNOPSIS
+        Waits until the automation state stops advancing on its own.
+    .DESCRIPTION
+        stateRevision is one counter over the WHOLE observable product state, so
+        any assertion of the form "this command must not move the revision" also
+        measures whatever else the application was still settling -- device
+        enumeration and the first source resolution keep it moving for a while
+        after launch. Waiting for a quiet window first is what makes such an
+        assertion about the command instead of about the timing.
+
+        Returns @{ Quiet; Revision }. Quiet:$false means the state never went
+        still within the timeout, which the caller must report rather than
+        silently attribute to whatever it was about to do.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] $Connection,
+        [int] $QuietMs = 750,
+        [int] $TimeoutMs = 8000,
+        [string] $EventName = 'ui.stateChanged',
+        [string] $StateCommand = 'ui.getState'
+    )
+    $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMs)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        $revision = $Connection.StateRevision
+        $moved = Wait-LiveVerifyRevision -Connection $Connection -After $revision -TimeoutMs $QuietMs `
+            -EventName $EventName -StateCommand $StateCommand
+        if ($null -eq $moved) { return @{ Quiet = $true; Revision = $revision } }
+    }
+    return @{ Quiet = $false; Revision = $Connection.StateRevision }
+}
+
 Export-ModuleMember -Function New-LiveVerifyPipeName, New-LiveVerifyRunId, Connect-LiveVerify,
     Invoke-LiveVerifyCommand, Wait-LiveVerifyEvent, Wait-LiveVerifyState, Wait-LiveVerifyRevision,
-    Get-LiveVerifyState, Get-LiveVerifyTranscript
+    Get-LiveVerifyState, Get-LiveVerifyTranscript, Wait-LiveVerifyStateQuiet,
+    Compare-LiveVerifyStateField

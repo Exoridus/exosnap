@@ -68,6 +68,31 @@ Test-Case 'an unknown role is refused rather than silently used' {
     }
 }
 
+Test-Case 'the state comparison names the fields that differ' {
+    # A revision that moved is a number. What a reader needs is which observable
+    # field moved, because that is what separates a navigation defect from a
+    # source that was still resolving.
+    $before = [pscustomobject]@{ page = 'record'; canStart = $false; recordingState = 'idle' }
+    $after = [pscustomobject]@{ page = 'record'; canStart = $true; recordingState = 'idle' }
+    $moved = @(Compare-LiveVerifyStateField -Before $before -After $after)
+    Assert-Equal 1 $moved.Count 'exactly one field differs'
+    Assert-Equal 'canStart: False -> True' $moved[0] 'the difference is named with both values'
+}
+
+Test-Case 'an identical state compares as no difference' {
+    $state = [pscustomobject]@{ page = 'settings'; canStart = $true }
+    Assert-Equal 0 @(Compare-LiveVerifyStateField -Before $state -After $state).Count `
+        'nothing differs between a state and itself'
+}
+
+Test-Case 'a field that only one side carries is reported, not skipped' {
+    $before = [pscustomobject]@{ page = 'record' }
+    $after = [pscustomobject]@{ page = 'record'; blockingSurface = 'recovery' }
+    $moved = @(Compare-LiveVerifyStateField -Before $before -After $after)
+    Assert-Equal 1 $moved.Count 'the appearing field is a difference'
+    Assert-Equal 'blockingSurface:  -> recovery' $moved[0] 'an absent side reads as empty'
+}
+
 Write-Host ''
 Write-Host "$($script:Ran - $script:Failures)/$($script:Ran) passed"
 exit ($script:Failures -gt 0 ? 1 : 0)
