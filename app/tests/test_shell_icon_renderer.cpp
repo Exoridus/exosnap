@@ -516,6 +516,135 @@ TEST(ShellIconRendererOpticalSizing, TheGlyphsAreLeftAtTheirAuthoredWeight) {
     EXPECT_DOUBLE_EQ(bar.match(bars_small).captured(1).toDouble(), bar.match(bars_large).captured(1).toDouble());
 }
 
+// The farthest point of a glyph from the mark's centre, in grid units, with the
+// element's own stroke half-width added. Absolute M/L/H/V only: the aperture
+// suite is authored that way, and a curve appearing in it must fail loudly here
+// rather than be measured by a parser that silently ignores its control points.
+[[nodiscard]] double GlyphOuterRadius(const QString& svg) {
+    static const QRegularExpression element(QStringLiteral("<(path|rect)[^>]*>"));
+    static const QRegularExpression stroke_width(QStringLiteral("stroke-width=\"([0-9.]+)\""));
+    static const QRegularExpression path_data(QStringLiteral(" d=\"([^\"]*)\""));
+    static const QRegularExpression attribute(QStringLiteral("[ ](x|y|width|height)=\"([0-9.]+)\""));
+    static const QRegularExpression token(QStringLiteral("([MLHVZmlhvz])|(-?[0-9.]+)"));
+
+    double farthest = 0.0;
+    const auto consider = [&farthest](double x, double y, double half) {
+        farthest = std::max(farthest, std::hypot(x - 16.0, y - 16.0) + half);
+    };
+
+    auto it = element.globalMatch(svg);
+    while (it.hasNext()) {
+        const QString tag = it.next().captured(0);
+        const double half =
+            stroke_width.match(tag).hasMatch() ? stroke_width.match(tag).captured(1).toDouble() / 2.0 : 0.0;
+        if (tag.startsWith(QLatin1String("<rect"))) {
+            double x = 0.0, y = 0.0, w = 0.0, h = 0.0;
+            auto attributes = attribute.globalMatch(tag);
+            while (attributes.hasNext()) {
+                const QRegularExpressionMatch m = attributes.next();
+                const double value = m.captured(2).toDouble();
+                if (m.captured(1) == QLatin1String("x")) {
+                    x = value;
+                } else if (m.captured(1) == QLatin1String("y")) {
+                    y = value;
+                } else if (m.captured(1) == QLatin1String("width")) {
+                    w = value;
+                } else {
+                    h = value;
+                }
+            }
+            for (const double cx : {x, x + w}) {
+                for (const double cy : {y, y + h})
+                    consider(cx, cy, half);
+            }
+            continue;
+        }
+        QString command;
+        QList<double> numbers;
+        double x = 0.0, y = 0.0;
+        const auto flush = [&]() {
+            if (command == QLatin1String("M") || command == QLatin1String("L")) {
+                for (int i = 0; i + 1 < numbers.size(); i += 2) {
+                    x = numbers.at(i);
+                    y = numbers.at(i + 1);
+                    consider(x, y, half);
+                }
+            } else if (command == QLatin1String("H")) {
+                for (const double value : numbers) {
+                    x = value;
+                    consider(x, y, half);
+                }
+            } else if (command == QLatin1String("V")) {
+                for (const double value : numbers) {
+                    y = value;
+                    consider(x, y, half);
+                }
+            } else if (!command.isEmpty() && command != QLatin1String("Z")) {
+                ADD_FAILURE() << "unsupported path command '" << command.toStdString()
+                              << "' in an aperture asset; this measurement would be wrong";
+            }
+            numbers.clear();
+        };
+        auto tokens = token.globalMatch(path_data.match(tag).captured(1));
+        while (tokens.hasNext()) {
+            const QRegularExpressionMatch m = tokens.next();
+            if (m.captured(1).isEmpty()) {
+                numbers.append(m.captured(2).toDouble());
+                continue;
+            }
+            flush();
+            command = m.captured(1).toUpper();
+        }
+        flush();
+    }
+    return farthest;
+}
+
+// Where the inner ring's inner edge sits, in grid units, for the SVG as themed --
+// so a profile that thickened the ring is accounted for.
+[[nodiscard]] double InnerRingInnerEdge(const QString& svg) {
+    static const QRegularExpression circle(QStringLiteral("<circle[^>]*>"));
+    static const QRegularExpression radius(QStringLiteral(" r=\"([0-9.]+)\""));
+    static const QRegularExpression stroke_width(QStringLiteral("stroke-width=\"([0-9.]+)\""));
+    double edge = 0.0;
+    auto it = circle.globalMatch(svg);
+    while (it.hasNext()) {
+        const QString tag = it.next().captured(0);
+        if (!tag.contains(QLatin1String("fill=\"none\"")))
+            continue; // a filled circle is a dot or the warning's period, not a ring
+        const double r = radius.match(tag).captured(1).toDouble();
+        const double half = stroke_width.match(tag).captured(1).toDouble() / 2.0;
+        if (r > 10.0)
+            continue; // the outer ring
+        edge = r - half;
+    }
+    return edge;
+}
+
+TEST(ShellIconRendererOpticalSizing, EveryGlyphStaysInsideTheApertureAtTheSmallestProfile) {
+    // The aperture is the void between the glyph and the inner ring, and it is
+    // what makes the suite read as one mark with a changing centre. A glyph whose
+    // outermost point reaches the ring closes it, and the icon then reads as
+    // drawn at the wrong size next to every other state.
+    //
+    // Measured at the SMALL profile because that is where the ring is thickest:
+    // ring_stroke_scale grows the ring inwards while the glyph is deliberately
+    // left at its authored weight, so the small profile is the tightest case and
+    // the one the notification area actually uses.
+    constexpr double kRequiredClearance = 0.5;
+
+    const auto palette = ResolvePalette(QStringLiteral("dark"), QStringLiteral("aqua"));
+    for (const BrandMarkKind kind :
+         {BrandMarkKind::Saved, BrandMarkKind::Warning, BrandMarkKind::Error, BrandMarkKind::Paused}) {
+        const QString svg = QString::fromUtf8(ThemedBrandMarkSvg(kind, 0, palette, kSmallProfile));
+        const double edge = InnerRingInnerEdge(svg);
+        ASSERT_GT(edge, 0.0) << "no inner ring found";
+        const double outer = GlyphOuterRadius(svg);
+        EXPECT_LE(outer, edge - kRequiredClearance) << "the glyph reaches " << outer << " of an inner edge at " << edge
+                                                    << "; it closes the aperture instead of sitting inside it";
+    }
+}
+
 TEST(ShellIconRendererOpticalSizing, ASmallMarkKeepsARealGapBetweenTheDotAndTheInnerRing) {
     // At 16 px there are eight device pixels from the centre to the edge, and all
     // three elements plus two gaps have to fit in them. One column of partial
