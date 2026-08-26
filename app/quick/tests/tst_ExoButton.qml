@@ -39,6 +39,28 @@ Item {
         name: "ExoButtonTests"
         when: windowShown
 
+        // The Widgets shell set the pointer cursor as a widget property, in 45
+        // places. Qt Quick has no such property, so it lives on the shared
+        // controls instead -- and the disabled case is part of it: a greyed
+        // button that still offers the hand is telling the user to press it.
+        function cursorShapeOf(item) {
+            for (let i = 0; i < item.data.length; ++i) {
+                const child = item.data[i];
+                if (child && child.cursorShape !== undefined)
+                    return child.cursorShape;
+            }
+            return -1;
+        }
+
+        function test_the_button_carries_a_pointer_cursor() {
+            let button = createTemporaryObject(exoButtonComponent, root, { backendSelected: false })
+            verify(!!button, "Component exists")
+            compare(cursorShapeOf(button), Qt.PointingHandCursor)
+
+            button.enabled = false
+            compare(cursorShapeOf(button), Qt.ArrowCursor)
+        }
+
         function test_selectsFromAuthoritativeState() {
             let button = createTemporaryObject(exoButtonComponent, root, { backendSelected: false })
             verify(!!button, "Component exists")

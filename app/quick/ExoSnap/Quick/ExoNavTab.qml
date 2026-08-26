@@ -19,10 +19,16 @@ Button {
     // bell and three window buttons all share one 40 px band at the 860 px
     // minimum window, and a per-tab minimum width is what pushed the close
     // button off the right edge there.
-    // Measured at the SELECTED weight in every state. The label goes DemiBold on
-    // selection, and sizing the tab from the live label made every tab in the row
-    // shift by the few pixels that weight costs each time the selection moved.
-    implicitWidth: Math.ceil(selectedMetrics.advanceWidth) + leftPadding + rightPadding
+    // Measured at BOTH weights, and sized to the wider of the two, in every
+    // state. Sizing the tab from the live label made every tab in the row shift
+    // by the few pixels the weight change costs each time the selection moved;
+    // sizing it from the selected weight alone assumed DemiBold is always the
+    // wider one, which it is not — "Diagnostics" measures 73 px at Medium and
+    // 72 at DemiBold, and the tab that was one pixel too narrow for its own
+    // unselected label elided at every window width, 800 px of free space
+    // included.
+    implicitWidth: Math.ceil(Math.max(selectedMetrics.implicitWidth, unselectedMetrics.implicitWidth))
+                   + leftPadding + rightPadding
     // The full 40 px band, not a shorter centred cell: the previous height left
     // a spacingXs sliver above and below the tab where the hover/press block and
     // the focus ring stopped short of the band's own top and bottom edges, while
@@ -73,14 +79,33 @@ Button {
         }
     }
 
-    TextMetrics {
+    // Labels rather than TextMetrics, and that is not interchangeable either:
+    // TextMetrics reports the sum of the glyph advances, while a Text item lays
+    // the same string out and rounds the result up. Measuring with the item type
+    // that actually draws is what makes the number the label's own.
+    Label {
         id: selectedMetrics
 
+        visible: false
         text: root.text
+        textFormat: Text.PlainText
         font {
             family: ExoTheme.sansFamily
             pixelSize: ExoTheme.fontBody
             weight: Font.DemiBold
+        }
+    }
+
+    Label {
+        id: unselectedMetrics
+
+        visible: false
+        text: root.text
+        textFormat: Text.PlainText
+        font {
+            family: ExoTheme.sansFamily
+            pixelSize: ExoTheme.fontBody
+            weight: Font.Medium
         }
     }
 

@@ -55,6 +55,11 @@ class EditPlayerAdapter : public QObject {
 
     Q_PROPERTY(bool playing READ playing NOTIFY playingChanged FINAL)
     Q_PROPERTY(bool clipOpen READ clipOpen NOTIFY clipOpenChanged FINAL)
+    // A scrub is in progress. Distinct from `playing`, which a scrub forces
+    // false: the surface has to be able to tell "the user is dragging the
+    // playhead" from "the preview is paused", because what it draws over the
+    // picture differs between the two.
+    Q_PROPERTY(bool scrubbing READ scrubbing NOTIFY scrubbingChanged FINAL)
     Q_PROPERTY(QString placeholderText READ placeholderText NOTIFY placeholderTextChanged FINAL)
     // Is the Edit workspace the surface the user is looking at? Bound by the
     // shell from the navigation state (QCR-001) -- the same shape
@@ -73,6 +78,7 @@ class EditPlayerAdapter : public QObject {
 
     [[nodiscard]] bool playing() const noexcept;
     [[nodiscard]] bool clipOpen() const noexcept;
+    [[nodiscard]] bool scrubbing() const noexcept;
     [[nodiscard]] const QString& placeholderText() const noexcept;
     [[nodiscard]] bool surfaceVisible() const noexcept;
 
@@ -100,6 +106,7 @@ class EditPlayerAdapter : public QObject {
   signals:
     void playingChanged();
     void clipOpenChanged();
+    void scrubbingChanged();
     void placeholderTextChanged();
     void surfaceVisibleChanged();
 
@@ -120,6 +127,7 @@ class EditPlayerAdapter : public QObject {
     bool playing_ = false;
     bool clip_open_ = false;
     bool resume_after_scrub_ = false;
+    bool scrubbing_ = false;
     // True until the shell says otherwise: a session that is handed a clip is
     // handed it on Record, which is the page the workspace is visible on.
     bool surface_visible_ = true;

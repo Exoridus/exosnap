@@ -3,7 +3,10 @@
 #include <QMetaObject>
 #include <QSize>
 
+#include <exosnap/engine/logging/logging.h>
+
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <memory>
@@ -154,6 +157,54 @@ TimelineThumbnailSource::~TimelineThumbnailSource() {
         worker_.join();
 }
 
+TimelineTileCache::TimelineTileCache(std::size_t capacity_bytes) noexcept : capacity_bytes_(capacity_bytes) {
+}
+
+const QImage* TimelineTileCache::Lookup(qint64 time_ms, int row_height) {
+    const auto it = entries_.find(Key{row_height, time_ms});
+    if (it == entries_.end())
+        return nullptr;
+    it->second.last_used = ++use_counter_;
+    return &it->second.image;
+}
+
+void TimelineTileCache::Insert(qint64 time_ms, int row_height, const QImage& image) {
+    if (image.isNull())
+        return;
+    const auto bytes = static_cast<std::size_t>(std::max<qsizetype>(0, image.sizeInBytes()));
+    if (bytes == 0 || bytes > capacity_bytes_)
+        return;
+
+    const Key key{row_height, time_ms};
+    if (const auto existing = entries_.find(key); existing != entries_.end()) {
+        size_bytes_ -= existing->second.bytes;
+        entries_.erase(existing);
+    }
+    EvictUntilFits(bytes);
+    // A deep copy, unconditionally: WrapDecodedFrame() hands out an image that
+    // only BORROWS the decoder's frame buffer, and that buffer is released as
+    // soon as the next tile decodes. A shared copy would outlive its pixels.
+    entries_.emplace(key, Entry{image.copy(), ++use_counter_, bytes});
+    size_bytes_ += bytes;
+}
+
+void TimelineTileCache::Clear() noexcept {
+    entries_.clear();
+    size_bytes_ = 0;
+}
+
+void TimelineTileCache::EvictUntilFits(std::size_t incoming_bytes) {
+    while (!entries_.empty() && size_bytes_ + incoming_bytes > capacity_bytes_) {
+        auto oldest = entries_.begin();
+        for (auto it = entries_.begin(); it != entries_.end(); ++it) {
+            if (it->second.last_used < oldest->second.last_used)
+                oldest = it;
+        }
+        size_bytes_ -= oldest->second.bytes;
+        entries_.erase(oldest);
+    }
+}
+
 void TimelineThumbnailSource::cancelLocked() {
     cancelled_.store(true, std::memory_order_relaxed);
     pending_tiles_.reset();
@@ -210,6 +261,9 @@ void TimelineThumbnailSource::workerLoop() {
     // behind it) lives and dies on exactly one thread.
     auto engine = std::make_unique<exosnap::engine::EditPlayerEngine>();
     bool open = false;
+    // Worker-owned: every read and write happens on this thread, so the cache
+    // needs no lock of its own.
+    TimelineTileCache tile_cache;
 
     for (;;) {
         std::optional<OpenJob> open_job;
@@ -240,12 +294,16 @@ void TimelineThumbnailSource::workerLoop() {
 
         if (close_job) {
             engine->Close();
+            tile_cache.Clear();
             open = false;
             continue;
         }
 
         if (open_job) {
             engine->Close();
+            // The key carries no clip identity, so the tiles of the clip being
+            // replaced have to go before the new one decodes anything.
+            tile_cache.Clear();
             std::string error;
             open = engine->Open(open_job->path, error);
             const int w = open ? engine->VideoWidth() : 0;
@@ -292,19 +350,57 @@ void TimelineThumbnailSource::workerLoop() {
             continue;
         }
 
+        const auto started = std::chrono::steady_clock::now();
+        const int row_height = tile_job->row_height;
         int emitted = 0;
+        const auto publish = [this, run_id, &emitted](qint64 time_ms, const QImage& image) {
+            ++emitted;
+            // One tile at a time onto the owner's thread: the strip fills in
+            // progressively instead of arriving as one late batch.
+            QMetaObject::invokeMethod(
+                this, [this, time_ms, image, run_id]() { emit tileReady(time_ms, image, run_id); },
+                Qt::QueuedConnection);
+        };
+
+        // The cached positions first, and all of them before any decode starts:
+        // after a resize that is most of the strip, and publishing them up front
+        // is what turns a re-decode of the whole track into a relayout.
+        std::vector<qint64> to_decode;
+        to_decode.reserve(tile_job->times_ms.size());
+        int from_cache = 0;
+        for (const qint64 time_ms : tile_job->times_ms) {
+            if (cancelled_.load(std::memory_order_relaxed))
+                break;
+            if (const QImage* cached = tile_cache.Lookup(time_ms, row_height)) {
+                ++from_cache;
+                publish(time_ms, *cached);
+            } else {
+                to_decode.push_back(time_ms);
+            }
+        }
+
         GenerateTimelineTiles(
-            tile_job->times_ms, tile_job->row_height,
-            [&engine](int64_t target_us) { return engine->DecodeFrameAt(target_us); },
-            [this, run_id, &emitted](TimelineThumbnail&& tile) {
-                ++emitted;
-                // One tile at a time onto the owner's thread: the strip fills
-                // in progressively instead of arriving as one late batch.
-                QMetaObject::invokeMethod(
-                    this, [this, tile, run_id]() { emit tileReady(tile.time_ms, tile.image, run_id); },
-                    Qt::QueuedConnection);
+            to_decode, row_height, [&engine](int64_t target_us) { return engine->DecodeFrameAt(target_us); },
+            [&tile_cache, &publish, row_height](TimelineThumbnail&& tile) {
+                tile_cache.Insert(tile.time_ms, row_height, tile.image);
+                publish(tile.time_ms, tile.image);
             },
             cancelled_);
+
+        const auto elapsed_ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count();
+        const bool run_cancelled = cancelled_.load(std::memory_order_relaxed);
+        const exosnap::engine::logging::LogField fields[] = {
+            {"run_id", std::to_string(run_id)},
+            {"tiles", std::to_string(emitted)},
+            {"cached", std::to_string(from_cache)},
+            {"decoded", std::to_string(emitted - from_cache)},
+            {"duration_ms", std::to_string(elapsed_ms)},
+            {"cache_bytes", std::to_string(tile_cache.sizeBytes())},
+            {"cancelled", run_cancelled ? "true" : "false"},
+        };
+        exosnap::engine::logging::log(exosnap::engine::logging::LogLevel::Debug, "timeline_thumbnails",
+                                      "tile run finished", fields);
         finish(emitted);
     }
 

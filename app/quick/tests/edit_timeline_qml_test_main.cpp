@@ -61,16 +61,24 @@ class Setup final : public QObject {
         player_ = new EditPlayerAdapter(this);
 
         session_->setEditContext(FixtureContext());
+        // A SECOND player, seeded with an open clip. The timeline's own cases
+        // assert what the keyboard does when nothing is open, so the transport
+        // cases -- which need the opposite -- cannot share that adapter.
+        // Nothing decodes either way: the fixture carries no master path.
+        transport_player_ = new EditPlayerAdapter(this);
+        transport_player_->setClipStateForTest(/*clip_open=*/true, /*duration_ms=*/100'000);
 
         engine->rootContext()->setContextProperty(QStringLiteral("testSession"), session_);
         engine->rootContext()->setContextProperty(QStringLiteral("testTimeline"), timeline_);
         engine->rootContext()->setContextProperty(QStringLiteral("testPlayer"), player_);
+        engine->rootContext()->setContextProperty(QStringLiteral("testTransportPlayer"), transport_player_);
     }
 
   private:
     EditSessionAdapter* session_ = nullptr;
     EditTimelineAdapter* timeline_ = nullptr;
     EditPlayerAdapter* player_ = nullptr;
+    EditPlayerAdapter* transport_player_ = nullptr;
 };
 
 QUICK_TEST_MAIN_WITH_SETUP(edit_timeline, Setup)

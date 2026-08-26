@@ -55,6 +55,8 @@ FocusScope {
 
     HoverHandler {
         id: hover
+
+        cursorShape: root.available ? Qt.PointingHandCursor : Qt.ArrowCursor
     }
 
     Button {

@@ -107,6 +107,10 @@ Item {
                                                                : qsTr("Start recording")
             onClicked: root.startNow()
 
+            HoverHandler {
+                cursorShape: root.mainEnabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+            }
+
             background: Rectangle {
                 color: mainFace.down ? Qt.darker(root.fill, 1.14)
                      : mainFace.hovered && mainFace.enabled ? Qt.lighter(root.fill, 1.08) : "transparent"
@@ -207,6 +211,8 @@ Item {
 
             HoverHandler {
                 id: chevronHover
+
+                cursorShape: root.chevronEnabled ? Qt.PointingHandCursor : Qt.ArrowCursor
             }
         }
     }

@@ -1040,6 +1040,7 @@ qt_add_qml_module(edit_timeline_qml_tests
         ${PROJECT_SOURCE_DIR}/app/services/TimelineThumbnailSource.cpp
         ${PROJECT_SOURCE_DIR}/app/services/TimelineThumbnailSource.h
     QML_FILES
+        EditPlayer.qml
         EditTimeline.qml
         ExoTheme.qml
 )

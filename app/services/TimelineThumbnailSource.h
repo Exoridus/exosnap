@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <thread>
@@ -81,6 +82,70 @@ using TimelineFrameDecoder = std::function<std::optional<exosnap::engine::Decode
 void GenerateTimelineTiles(const std::vector<qint64>& times_ms, int row_height, const TimelineFrameDecoder& decode,
                            const std::function<void(TimelineThumbnail&&)>& emit_tile,
                            const std::atomic<bool>& cancelled);
+
+// ---- Tile cache (pure) ----
+
+// Bounded store of finished tiles, keyed by the clip time a tile stands for and
+// the row height it was scaled to.
+//
+// A resize does not change WHICH frames the strip shows, only how many of them:
+// tile times are snapped to keyframes, so a track that grows asks for the
+// positions it already had plus a few new ones. Without a cache every resize
+// re-decoded the whole strip, and a window drag re-decoded it once per
+// intermediate width.
+//
+// Bounded by total pixel bytes rather than by entry count: a tile's size follows
+// the row height and the clip's aspect, so a fixed number of entries would mean
+// a different memory ceiling for every recording. Eviction is least-recently-
+// used, because a resize looks the surviving positions up again immediately.
+class TimelineTileCache {
+  public:
+    static constexpr std::size_t kDefaultCapacityBytes = 16u * 1024u * 1024u;
+
+    explicit TimelineTileCache(std::size_t capacity_bytes = kDefaultCapacityBytes) noexcept;
+
+    // The stored tile, or nullptr. Counts as a use for eviction order, so this
+    // is deliberately not const.
+    [[nodiscard]] const QImage* Lookup(qint64 time_ms, int row_height);
+
+    // Stores a copy. A tile larger than the whole capacity is not stored at all
+    // rather than emptying the cache to hold one entry.
+    void Insert(qint64 time_ms, int row_height, const QImage& image);
+
+    // Every cached tile belongs to one clip; the caller clears on every open and
+    // close. The key deliberately carries no clip identity: holding tiles for a
+    // clip nobody is looking at is memory spent on a strip that is not drawn.
+    void Clear() noexcept;
+
+    [[nodiscard]] std::size_t sizeBytes() const noexcept {
+        return size_bytes_;
+    }
+    [[nodiscard]] std::size_t count() const noexcept {
+        return entries_.size();
+    }
+
+  private:
+    struct Key {
+        int row_height = 0;
+        qint64 time_ms = 0;
+
+        [[nodiscard]] bool operator<(const Key& other) const noexcept {
+            return row_height != other.row_height ? row_height < other.row_height : time_ms < other.time_ms;
+        }
+    };
+    struct Entry {
+        QImage image;
+        std::uint64_t last_used = 0;
+        std::size_t bytes = 0;
+    };
+
+    void EvictUntilFits(std::size_t incoming_bytes);
+
+    std::map<Key, Entry> entries_;
+    std::size_t capacity_bytes_ = kDefaultCapacityBytes;
+    std::size_t size_bytes_ = 0;
+    std::uint64_t use_counter_ = 0;
+};
 
 // ---- Worker ----
 
