@@ -978,6 +978,30 @@ void VideoThread::Run() {
     int32_t odCursorPosY = 0;
     DXGI_OUTDUPL_POINTER_SHAPE_INFO odCursorShapeInfo{};
     std::vector<uint8_t> odCursorBitmap;
+
+    // --- Win32 seed for the OD cursor (see seedOdCursorFromWin32) -----------
+    // Output Duplication reports pointer position and shape as CHANGES, never as
+    // an initial state, so both flags above stay false until the pointer first
+    // moves. A recording of a desktop nobody touches would therefore carry no
+    // cursor at all despite capture_cursor being on. GetCursorInfo has the
+    // current state at any instant and fills the gap until DXGI speaks.
+    bool odPointerReportedByDxgi = false;
+    HCURSOR odSeedCursorHandle = nullptr;
+    Win32CursorBitmap odSeedCursorBitmap;
+    // Screen coordinates from GetCursorInfo are virtual-desktop; DXGI pointer
+    // positions are output-local. This origin is the one conversion between them
+    // and is used by nothing else.
+    POINT odDesktopOrigin{0, 0};
+    bool odDesktopOriginValid = false;
+    if (useOdCapture) {
+        MONITORINFO odMonitorInfo{};
+        odMonitorInfo.cbSize = sizeof(odMonitorInfo);
+        if (GetMonitorInfoW(reinterpret_cast<HMONITOR>(target.native_id), &odMonitorInfo) != FALSE) {
+            odDesktopOrigin.x = odMonitorInfo.rcMonitor.left;
+            odDesktopOrigin.y = odMonitorInfo.rcMonitor.top;
+            odDesktopOriginValid = true;
+        }
+    }
     std::vector<uint8_t> odCursorUploadBgra;
     HCURSOR wgcCursorHandle = nullptr;
     Win32CursorBitmap wgcCursorBitmap;
@@ -1292,6 +1316,61 @@ void VideoThread::Run() {
         return true;
     };
 
+    // Fill in the pointer state Output Duplication has not reported yet. Runs on
+    // every composited frame until DXGI delivers its own pointer update, then
+    // never again: DXGI's shape is the authoritative one (it carries masked and
+    // monochrome types this synthesis cannot express), and a seed that kept
+    // overwriting it would fight the capture backend.
+    auto seedOdCursorFromWin32 = [&]() {
+        if (!useOdCapture || !m_state.config.capture_cursor || odPointerReportedByDxgi || !odDesktopOriginValid) {
+            return;
+        }
+
+        CURSORINFO cursorInfo{};
+        cursorInfo.cbSize = sizeof(cursorInfo);
+        if (GetCursorInfo(&cursorInfo) == FALSE || (cursorInfo.flags & CURSOR_SHOWING) == 0 ||
+            cursorInfo.hCursor == nullptr) {
+            if (odCursorVisible) {
+                odCursorVisible = false;
+                ++visualGenerations.cursor;
+            }
+            return;
+        }
+
+        if (cursorInfo.hCursor != odSeedCursorHandle || odSeedCursorBitmap.bgra.empty()) {
+            Win32CursorBitmap next;
+            if (!CaptureWin32CursorBitmap(cursorInfo.hCursor, next)) {
+                return;
+            }
+            odSeedCursorHandle = cursorInfo.hCursor;
+            odSeedCursorBitmap = std::move(next);
+            odCursorShapeInfo = DXGI_OUTDUPL_POINTER_SHAPE_INFO{};
+            odCursorShapeInfo.Type = DXGI_OUTDUPL_POINTER_SHAPE_TYPE_COLOR;
+            odCursorShapeInfo.Width = static_cast<UINT>(odSeedCursorBitmap.width);
+            odCursorShapeInfo.Height = static_cast<UINT>(odSeedCursorBitmap.height);
+            odCursorShapeInfo.Pitch = static_cast<UINT>(odSeedCursorBitmap.width) * 4u;
+            odCursorShapeInfo.HotSpot.x = static_cast<UINT>(odSeedCursorBitmap.hotspot_x);
+            odCursorShapeInfo.HotSpot.y = static_cast<UINT>(odSeedCursorBitmap.hotspot_y);
+            odCursorBitmap = odSeedCursorBitmap.bgra;
+            odCursorShapeValid = true;
+            ++visualGenerations.cursor;
+        }
+
+        // DXGI's PointerPosition is the sprite's top-left; GetCursorInfo reports
+        // the hotspot. Subtracting it here keeps both producers on one
+        // convention, which is what lets drawCursorGpu stay untouched.
+        const int32_t x =
+            static_cast<int32_t>(cursorInfo.ptScreenPos.x - odDesktopOrigin.x) - odSeedCursorBitmap.hotspot_x;
+        const int32_t y =
+            static_cast<int32_t>(cursorInfo.ptScreenPos.y - odDesktopOrigin.y) - odSeedCursorBitmap.hotspot_y;
+        if (!odCursorVisible || x != odCursorPosX || y != odCursorPosY) {
+            odCursorVisible = true;
+            odCursorPosX = x;
+            odCursorPosY = y;
+            ++visualGenerations.cursor;
+        }
+    };
+
     auto drawCursorGpu = [&]() -> bool {
         if (!useOdCapture || !m_state.config.capture_cursor || !odCursorVisible || !odCursorShapeValid) {
             return true;
@@ -1451,6 +1530,11 @@ void VideoThread::Run() {
         if (!gpuCompositorReady || source == nullptr) {
             return source;
         }
+
+        // Before cursorActive is decided, not after: on a desktop nobody touches
+        // there is no pointer update to hang this off, and the frames that need
+        // the cursor are exactly the ones nothing else refreshes.
+        seedOdCursorFromWin32();
 
         const bool webcamActive = overlay.enabled && webcamProviderAvailable;
         const bool cursorActive =
@@ -1791,6 +1875,7 @@ void VideoThread::Run() {
                             odCursorShapeValid = true;
                     }
                     if (info.LastMouseUpdateTime.QuadPart != 0) {
+                        odPointerReportedByDxgi = true;
                         odCursorVisible = info.PointerPosition.Visible != FALSE;
                         odCursorPosX = info.PointerPosition.Position.x;
                         odCursorPosY = info.PointerPosition.Position.y;
@@ -2796,6 +2881,7 @@ void VideoThread::Run() {
                         }
                     }
                     if (info.LastMouseUpdateTime.QuadPart != 0) {
+                        odPointerReportedByDxgi = true;
                         const bool visibilityChanged = odCursorVisible != (info.PointerPosition.Visible != FALSE);
                         const bool positionChanged = odCursorPosX != info.PointerPosition.Position.x ||
                                                      odCursorPosY != info.PointerPosition.Position.y;
@@ -3444,6 +3530,7 @@ void VideoThread::Run() {
                         }
                     }
                     if (info.LastMouseUpdateTime.QuadPart != 0) {
+                        odPointerReportedByDxgi = true;
                         const bool visibilityChanged = odCursorVisible != (info.PointerPosition.Visible != FALSE);
                         const bool positionChanged = odCursorPosX != info.PointerPosition.Position.x ||
                                                      odCursorPosY != info.PointerPosition.Position.y;

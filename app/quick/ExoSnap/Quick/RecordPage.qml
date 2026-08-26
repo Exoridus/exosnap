@@ -410,13 +410,64 @@ Item {
                         }
 
                         Rectangle {
+                            id: webcamFrameChrome
+
                             color: Qt.rgba(0, 0, 0, 0)
                             border.width: 1
                             border.color: root.recordViewModel.webcamError ? ExoTheme.error : ExoTheme.lineStrong
                             radius: ExoTheme.radiusSm
+                            // `pressed` as well as `containsMouse`: a drag that
+                            // leaves the frame's own bounds is still a drag, and
+                            // chrome that blinks out mid-gesture reads as a dropped
+                            // grab.
                             visible: root.recordViewModel.webcamError || webcamOverlay.activeFocus
                                      || webcamDrag.containsMouse || webcamResize.containsMouse
+                                     || webcamDrag.pressed || webcamResize.pressed
                             anchors.fill: parent
+                        }
+
+                        // The four corners of the editable frame. What was here was a
+                        // single filled square at the bottom right, which reads as a
+                        // stray box rather than as a frame with corners; brackets
+                        // state all four without covering the picture.
+                        Repeater {
+                            model: 4
+
+                            delegate: Item {
+                                id: webcamCorner
+
+                                required property int index
+
+                                readonly property bool atRight: webcamCorner.index === 1 || webcamCorner.index === 2
+                                readonly property bool atBottom: webcamCorner.index >= 2
+                                // Bottom right is the resize grip, so it is the one
+                                // corner that answers the pointer.
+                                readonly property bool grip: webcamCorner.index === 2
+                                readonly property color ink:
+                                    (webcamCorner.grip && (webcamResize.containsMouse || webcamResize.pressed))
+                                    ? ExoTheme.accent
+                                    : (root.recordViewModel.webcamError ? ExoTheme.error : ExoTheme.lineStrong)
+
+                                width: 14
+                                height: 14
+                                visible: webcamFrameChrome.visible
+                                x: webcamCorner.atRight ? parent.width - width : 0
+                                y: webcamCorner.atBottom ? parent.height - height : 0
+
+                                Rectangle {
+                                    width: parent.width
+                                    height: 2
+                                    color: webcamCorner.ink
+                                    y: webcamCorner.atBottom ? parent.height - height : 0
+                                }
+
+                                Rectangle {
+                                    width: 2
+                                    height: parent.height
+                                    color: webcamCorner.ink
+                                    x: webcamCorner.atRight ? parent.width - width : 0
+                                }
+                            }
                         }
 
                         MouseArea {
@@ -429,16 +480,24 @@ Item {
                             enabled: root.recordViewModel.webcamOverlayEditable
                             hoverEnabled: true
                             cursorShape: enabled ? Qt.SizeAllCursor : Qt.ArrowCursor
+                            // Both points live in previewStage coordinates, never in
+                            // this MouseArea's: the overlay MOVES as draftRect
+                            // changes, so a delta measured against the item itself
+                            // shrinks by exactly the amount already applied. The drag
+                            // then crawls behind the pointer and stalls once it
+                            // catches up, without ever losing the grab -- which is
+                            // what makes it look like lag rather than like a bug.
                             onPressed: mouse => {
                                 webcamOverlay.forceActiveFocus()
-                                pressPoint = Qt.point(mouse.x, mouse.y)
+                                pressPoint = webcamDrag.mapToItem(previewStage, mouse.x, mouse.y)
                                 pressRect = webcamOverlay.draftRect
                             }
                             onPositionChanged: mouse => {
                                 if (!pressed)
                                     return
-                                const dx = (mouse.x - pressPoint.x) / Math.max(1, previewStage.width)
-                                const dy = (mouse.y - pressPoint.y) / Math.max(1, previewStage.height)
+                                const at = webcamDrag.mapToItem(previewStage, mouse.x, mouse.y)
+                                const dx = (at.x - pressPoint.x) / Math.max(1, previewStage.width)
+                                const dy = (at.y - pressPoint.y) / Math.max(1, previewStage.height)
                                 webcamOverlay.draftRect = Qt.rect(
                                             Math.max(0, Math.min(1 - pressRect.width, pressRect.x + dx)),
                                             Math.max(0, Math.min(1 - pressRect.height, pressRect.y + dy)),
@@ -447,17 +506,15 @@ Item {
                             onReleased: root.recordViewModel.requestWebcamOverlayRect(webcamOverlay.draftRect)
                         }
 
-                        Rectangle {
+                        Item {
+                            // Hit area only. The bottom-right bracket above is what
+                            // the eye reads, and it takes the accent while this is
+                            // hovered or held.
                             width: 14
                             height: 14
-                            color: ExoTheme.accent
-                            radius: 3
-                            visible: root.recordViewModel.webcamOverlayEditable
-                                     && (webcamDrag.containsMouse || webcamResize.containsMouse || webcamResize.pressed)
                             anchors {
                                 right: parent.right
                                 bottom: parent.bottom
-                                margins: 3
                             }
 
                             MouseArea {
@@ -470,16 +527,20 @@ Item {
                                 enabled: root.recordViewModel.webcamOverlayEditable
                                 hoverEnabled: true
                                 cursorShape: Qt.SizeFDiagCursor
+                                // previewStage coordinates for the same reason the
+                                // drag uses them: the grip is anchored to a frame
+                                // that grows under it.
                                 onPressed: mouse => {
                                     mouse.accepted = true
-                                    pressPoint = Qt.point(mouse.x, mouse.y)
+                                    pressPoint = webcamResize.mapToItem(previewStage, mouse.x, mouse.y)
                                     pressRect = webcamOverlay.draftRect
                                 }
                                 onPositionChanged: mouse => {
                                     if (!pressed)
                                         return
-                                    const dw = (mouse.x - pressPoint.x) / Math.max(1, previewStage.width)
-                                    const dh = (mouse.y - pressPoint.y) / Math.max(1, previewStage.height)
+                                    const at = webcamResize.mapToItem(previewStage, mouse.x, mouse.y)
+                                    const dw = (at.x - pressPoint.x) / Math.max(1, previewStage.width)
+                                    const dh = (at.y - pressPoint.y) / Math.max(1, previewStage.height)
                                     const delta = Math.max(dw, dh)
                                     const maxDelta = Math.min(1 - pressRect.x - pressRect.width,
                                                               1 - pressRect.y - pressRect.height)

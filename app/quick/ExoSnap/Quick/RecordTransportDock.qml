@@ -125,8 +125,11 @@ Rectangle {
             // The device fact outranks the session lock: with no microphone
             // attached, "locked while a recording runs" would be true and
             // useless — plugging one in is what changes the answer.
-            unavailableReason: !root.recordViewModel.microphoneAvailable
-                               ? qsTr("Unavailable — no microphone was detected.") : root.sourceLockReason
+            unavailableReason: root.sourceLockReason
+            // No microphone attached at all: the control has nothing to offer and
+            // no reason worth reading, so it is not shown -- the same rule the
+            // application-audio toggle already follows.
+            visible: root.recordViewModel.microphoneAvailable
             onClicked: root.recordViewModel.requestToggleSource("microphone")
         }
 
@@ -140,14 +143,17 @@ Rectangle {
             meterLevel: 0
             available: root.recordViewModel.webcamAvailable && !root.recordViewModel.finalizing
                        && !root.recordViewModel.blocked && !root.recordViewModel.failed
+            // No camera attached at all: not shown, like the microphone toggle.
+            // A camera that IS attached and will not open stays visible -- device
+            // presence is what this flag reports, and its error is something the
+            // user can act on.
+            visible: root.recordViewModel.webcamAvailable
             // The engine's own words when it has them. `webcamErrorText` is the
             // reason the camera would not open, which no generic sentence here
             // could improve on.
             unavailableReason: root.recordViewModel.webcamError
                                ? qsTr("Can't be opened — %1").arg(root.recordViewModel.webcamErrorText)
-                               : !root.recordViewModel.webcamAvailable
-                                 ? qsTr("Unavailable — no camera was detected.")
-                                 : root.recordViewModel.finalizing
+                               : root.recordViewModel.finalizing
                                    ? qsTr("Unavailable — the recording is still being written.")
                                    // The camera is not part of the capture setup
                                    // the recording lock covers, so it never

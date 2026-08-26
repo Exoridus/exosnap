@@ -109,37 +109,60 @@ FocusScope {
                                               root.errorState, button.visualFocus)
             radius: height / 2
 
-            // The live level, as an arc hugging the button's own edge rather than a
-            // bar floating inside it — a circle has no bottom edge to sit a bar on.
+            // The live level as the button's own ground, rising from the bottom.
+            // It is the control's background rather than a mark drawn on top, so
+            // it never competes with the glyph for the same pixels.
             Canvas {
-                id: meterArc
+                id: meterFill
 
-                // Deliberately NOT gated on `available`. The toggles are locked
-                // for the whole recording, which is precisely when the live
-                // level is the thing being watched.
+                // Deliberately NOT gated on `available`. The toggles can be locked
+                // for a recording, which is precisely when the live level is the
+                // thing being watched.
                 readonly property real level: Math.max(0, Math.min(1, root.meterLevel))
-                readonly property color ink: root.checkedState ? ExoTheme.accent : ExoTheme.textDim
+                // Zone edges on the METER scale, not on the drawn height: the
+                // colour at a given loudness must not move as the fill grows,
+                // otherwise the same level reads differently from one frame to the
+                // next.
+                readonly property real cautionAt: 0.72
+                readonly property real alarmAt: 0.9
+                readonly property color baseInk: root.checkedState ? ExoTheme.accent : ExoTheme.textDim
+                readonly property color cautionInk: ExoTheme.warning
+                readonly property color alarmInk: ExoTheme.error
 
                 anchors.fill: parent
-                visible: meterArc.level > 0
+                visible: meterFill.level > 0
 
                 onLevelChanged: requestPaint()
-                onInkChanged: requestPaint()
+                onBaseInkChanged: requestPaint()
+                onCautionInkChanged: requestPaint()
+                onAlarmInkChanged: requestPaint()
 
                 onPaint: {
                     const ctx = getContext("2d");
                     ctx.reset();
-                    if (meterArc.level <= 0)
+                    if (meterFill.level <= 0)
                         return;
-                    ctx.strokeStyle = meterArc.ink;
-                    ctx.lineWidth = 2;
-                    ctx.lineCap = "round";
+
+                    // Clipped to the control's own circle: a straight band would
+                    // square off the corners of a round button.
                     ctx.beginPath();
-                    // Starts at the bottom and sweeps both ways, so a quiet source
-                    // shows a short mark under the icon instead of a lopsided one.
-                    const sweep = Math.PI * 0.9 * meterArc.level;
-                    ctx.arc(width / 2, height / 2, width / 2 - 2, Math.PI / 2 - sweep / 2, Math.PI / 2 + sweep / 2);
-                    ctx.stroke();
+                    ctx.arc(width / 2, height / 2, Math.min(width, height) / 2 - 1, 0, 2 * Math.PI);
+                    ctx.clip();
+
+                    // Denser than the resting background (dockFill tints at 0.22)
+                    // so the level reads as a level, and still transparent enough
+                    // that the border and glyph stay the control's identity.
+                    const band = function (from, to, tone) {
+                        if (meterFill.level <= from)
+                            return;
+                        const top = Math.min(meterFill.level, to);
+                        ctx.fillStyle = Qt.rgba(tone.r, tone.g, tone.b, 0.38);
+                        ctx.fillRect(0, height * (1 - top), width, height * (top - from));
+                    };
+
+                    band(0, meterFill.cautionAt, meterFill.baseInk);
+                    band(meterFill.cautionAt, meterFill.alarmAt, meterFill.cautionInk);
+                    band(meterFill.alarmAt, 1, meterFill.alarmInk);
                 }
             }
         }
