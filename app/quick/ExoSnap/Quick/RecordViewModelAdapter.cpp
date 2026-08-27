@@ -738,6 +738,9 @@ void RecordViewModelAdapter::requestOpenEditor() {
 void RecordViewModelAdapter::requestDismissResult() {
     emit dismissResultRequested();
 }
+void RecordViewModelAdapter::requestRevealRecording() {
+    emit revealRecordingRequested();
+}
 void RecordViewModelAdapter::clearNotice() {
     setNoticeText({});
 }

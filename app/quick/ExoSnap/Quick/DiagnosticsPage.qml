@@ -340,14 +340,19 @@ Item {
                                 }
                             }
 
-                            // The one action the verdict band offers, so it takes
-                            // the primary rung: accent-filled and on the taller
-                            // CTA height, matching the Widgets reference. Left
-                            // neutral it rendered as a text run beside the
-                            // timestamp above it.
+                            // The one action the verdict band offers -- and a
+                            // NEUTRAL one, not the accent.
+                            //
+                            // The band is already carrying a colour, and that
+                            // colour is the verdict. An accent-filled slab inside
+                            // it put a second, unrelated hue in the same container
+                            // and read as the loudest thing on a page whose point
+                            // is the state it is reporting. It still needs chrome
+                            // (left quiet it rendered as a text run beside the
+                            // timestamp above it), so it keeps the bordered
+                            // neutral treatment and gives up the fill.
                             ExoButton {
                                 text: root.diagnostics.checking ? qsTr("Checking…") : qsTr("Run Check")
-                                tone: "primary"
                                 enabled: !root.diagnostics.checking
                                 Layout.alignment: Qt.AlignRight
                                 onClicked: root.diagnostics.runCheck()

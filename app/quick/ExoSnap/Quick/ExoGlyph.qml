@@ -60,7 +60,8 @@ Item {
         Display,
         Region,
         ExternalLink,
-        Back
+        Back,
+        Folder
     }
 
     // An ExoGlyph.Kind value. Declared `int` because a QML-declared enum is not
@@ -154,7 +155,10 @@ Item {
         // U-turn or a circular-arrow "undo": nothing is undone by returning to
         // the idle transport, the finished recording stays exactly where it was
         // written.
-        "M14.5 9H4.5 M8.5 4.5L4 9L8.5 13.5"
+        "M14.5 9H4.5 M8.5 4.5L4 9L8.5 13.5",
+        // Folder -- a tabbed folder, closed. Deliberately not an open one: the
+        // action reveals a file that is already there, it does not put one in.
+        "M2.5 5.2V14H15.5V6.8H9L7.4 5.2Z"
     ]
 
     // Kinds drawn as a filled silhouette instead of a stroked outline.

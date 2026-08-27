@@ -1108,7 +1108,10 @@ thing meant to be pressed the darkest thing on the page.
   After a successful recording the recommended action is **Edit**, because opening what was just
   recorded is what the product is for and starting the next one is not. Record is **not** shown
   beside it: the way out of a finished run is a round **back** glyph that returns the transport to
-  its idle arrangement, where Record lives. Nothing is undone by it — the recording stays exactly
+  its idle arrangement, where Record lives. The round slot before it becomes a **folder** glyph that
+  reveals the recording in Explorer — the one thing a user reaches for between finishing a take and
+  deciding what to do with it. **Capture frame is hidden** in this state: it is an action *on* a
+  recording in progress, and beside a finished one it offered to photograph nothing. Nothing is undone by it — the recording stays exactly
   where it was written, and the manifest and the result are untouched. Until that glyph existed the
   only exit from Completed was to start the next recording, which made "I am done looking at this"
   and "record again" the same button and left two text pills on a bar the rest of which is round

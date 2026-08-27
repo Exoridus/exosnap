@@ -48,7 +48,8 @@ Item {
         "Warning": ExoGlyph.Warning,
         "Info": ExoGlyph.Info,
         "ExternalLink": ExoGlyph.ExternalLink,
-        "Back": ExoGlyph.Back
+        "Back": ExoGlyph.Back,
+        "Folder": ExoGlyph.Folder
     })
 
     Component {

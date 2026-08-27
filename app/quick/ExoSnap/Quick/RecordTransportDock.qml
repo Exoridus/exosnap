@@ -224,7 +224,12 @@ Rectangle {
             // preview has produced a frame there is nothing to capture. Saying so
             // is the difference between "broken" and "not yet".
             unavailableReason: qsTr("Unavailable — the preview has not produced a frame yet.")
-            visible: !root.recordViewModel.preparing && !root.recordViewModel.finalizing
+            // Not beside a finished run. Capturing a still of the preview is an
+            // action ON a recording in progress; once the recording is over the
+            // control it points at is gone, and the button next to the result was
+            // offering to photograph nothing.
+            visible: !root.recordViewModel.preparing && !root.recordViewModel.finalizing &&
+                     !root.recordViewModel.resultPending
             onClicked: root.recordViewModel.requestCaptureFrame()
         }
 
@@ -306,6 +311,24 @@ Rectangle {
         // Hidden rather than disabled when the recording cannot be edited at all
         // (split recording, missing file, failed run) — a permanently dead button
         // next to a successful result reads as a defect.
+        // What the round slot beside a result is FOR: the file. Reveals the
+        // recording in Explorer, which is the one thing a user reaches for
+        // between finishing a take and deciding what to do with it, and the one
+        // action the completed bar could not offer without leaving the page.
+        RecordActionButton {
+            id: revealButton
+
+            compact: root.compactControls
+            accessibleLabel: qsTr("Show the recording in Explorer")
+            text: qsTr("Folder")
+            glyph: ExoGlyph.Folder
+            round: true
+            available: root.recordViewModel.canOpenEditor
+            unavailableReason: qsTr("The recording is no longer on disk.")
+            visible: root.recordViewModel.resultPending
+            onClicked: root.recordViewModel.requestRevealRecording()
+        }
+
         // The way OUT of a finished run, and the reason Record no longer has to be
         // two things at once. Until this existed the only exit from Completed was
         // to start the next recording, so "I am done looking at this" and "record
@@ -322,7 +345,7 @@ Rectangle {
             glyph: ExoGlyph.Back
             round: true
             visible: root.recordViewModel.resultPending
-            Layout.leftMargin: root.actionGap
+            Layout.leftMargin: root.clusterSpacing
             onClicked: root.recordViewModel.requestDismissResult()
         }
 

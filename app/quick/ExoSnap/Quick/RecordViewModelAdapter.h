@@ -230,6 +230,7 @@ class RecordViewModelAdapter : public QObject {
     Q_INVOKABLE void requestCountdownSeconds(int seconds);
     Q_INVOKABLE void requestOpenEditor();
     Q_INVOKABLE void requestDismissResult();
+    Q_INVOKABLE void requestRevealRecording();
     Q_INVOKABLE void clearNotice();
 
   signals:
@@ -258,6 +259,7 @@ class RecordViewModelAdapter : public QObject {
     void countdownSecondsRequested(int seconds);
     void openEditorRequested();
     void dismissResultRequested();
+    void revealRecordingRequested();
 
   private:
     // -1 means "not known", which is the resting value; see the property.

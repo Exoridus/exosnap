@@ -50,6 +50,10 @@ Item {
     readonly property bool outlined: !root.counting
     readonly property color fill: root.outlined ? ExoTheme.surfaceRaised : ExoTheme.accent
     readonly property color ink: root.outlined ? ExoTheme.accent : ExoTheme.accentInk
+    // The accent hairline is what carries "primary" once the fill is gone. An
+    // unavailable Record keeps the ordinary line instead: a control that cannot
+    // start must not be the most emphasised thing on the bar.
+    readonly property color frameColor: root.mainEnabled || root.busy ? ExoTheme.accent : ExoTheme.line
 
     // -1 is "no fraction measured yet", which covers all of Stopping and the
     // first instant of Saving. The bare "Finalizing…" is what that must read as;
@@ -78,14 +82,6 @@ Item {
         // round control sits on, so a Record button that cannot start would have
         // read as the most ordinary control on the bar.
         color: root.mainEnabled || root.busy ? root.fill : ExoTheme.surface
-        // An outlined pill sits on the dock's raised-control fill, the same step
-        // the round peers take — without a border it would dissolve into them
-        // instead of reading as a control of its own.
-        border.width: (root.mainEnabled || root.busy) && !root.outlined ? 0 : 1
-        // The accent hairline is what carries "primary" once the fill is gone. An
-        // unavailable Record keeps the ordinary line instead: a control that
-        // cannot start must not be the most emphasised thing on the bar.
-        border.color: root.outlined && (root.mainEnabled || root.busy) ? ExoTheme.accent : ExoTheme.line
         radius: height / 2
     }
 
@@ -170,8 +166,13 @@ Item {
             id: divider
 
             width: 1
-            height: parent.height - 2 * ExoTheme.spacingMd
-            color: Qt.alpha(root.ink, 0.35)
+            // Full height on an outlined pill, inset on a filled one. The inset
+            // rule belongs to a solid slab, where a short line reads as a seam in
+            // one surface; drawn the same way inside an outline it floats free of
+            // the frame it is supposed to divide, which is what made the split
+            // Record button look misdrawn.
+            height: root.outlined ? parent.height : parent.height - 2 * ExoTheme.spacingMd
+            color: root.outlined ? root.frameColor : Qt.alpha(root.ink, 0.35)
             anchors.verticalCenter: parent.verticalCenter
             visible: root.chevronEnabled || root.mainEnabled
         }
@@ -223,6 +224,21 @@ Item {
                 cursorShape: root.chevronEnabled ? Qt.PointingHandCursor : Qt.ArrowCursor
             }
         }
+    }
+
+    // The frame, drawn LAST and over everything.
+    //
+    // Each face paints its own hover and press fill across its whole rectangle,
+    // border included, so an outline declared on the fill underneath is erased
+    // the moment the pointer arrives -- on one half of the pill only, which is
+    // what read as a broken border. A separate transparent frame on top cannot be
+    // covered by either face.
+    Rectangle {
+        anchors.fill: parent
+        color: "transparent"
+        border.width: root.outlined ? 1 : 0
+        border.color: root.frameColor
+        radius: height / 2
     }
 
     // Hover opens it, as in the Widgets shell. It deliberately does NOT close on
