@@ -1300,6 +1300,20 @@ target_include_directories(brand_geometry_tests PRIVATE ${CMAKE_CURRENT_SOURCE_D
 target_compile_definitions(brand_geometry_tests PRIVATE
     EXOSNAP_BRAND_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 
+# The third party to the same agreement: the generator that WRITES the suite.
+# brand_geometry_tests compares the checked-in .svg against the canonical header,
+# and both stayed consistent while the generator quietly stopped reproducing
+# either -- so the next person to run it would have silently reverted a shipped
+# correction. --check writes nothing and exits non-zero on drift.
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_EXECUTABLE)
+    add_test(
+        NAME brand.geometry.marks_match_the_generator
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/scripts/generate-brand-marks.py" --check
+    )
+    set_tests_properties(brand.geometry.marks_match_the_generator PROPERTIES TIMEOUT 60)
+endif()
+
 # Pure unit tests for HumanizeEngineDetail (RecordingErrorPanel's raw-enum → canon
 # label mapping). Dependency-light: QString only.
 exosnap_add_gtest(

@@ -93,6 +93,39 @@ TestCase {
         compare(knob.x, 64 - knob.width - 3);
     }
 
+    // Blocked is a state, and a blocked switch that is ON still has to read as
+    // ON. The previous treatment dropped the accent fill for the plain recessed
+    // surface, which made a locked-on switch identical to a locked-off one --
+    // during a recording, when "is my system audio being captured?" is the
+    // question the row exists to answer.
+    function test_a_blocked_switch_still_says_whether_it_is_on() {
+        let on = createTemporaryObject(switchComponent, testCase, { checked: true, enabled: false });
+        let off = createTemporaryObject(switchComponent, testCase, { checked: false, enabled: false });
+        verify(on);
+        verify(off);
+
+        verify(!Qt.colorEqual(on.indicator.color, off.indicator.color),
+               "a blocked ON switch must not paint the same track as a blocked OFF one");
+        verify(!Qt.colorEqual(on.indicator.border.color, off.indicator.border.color),
+               "a blocked ON switch keeps the accent hairline");
+    }
+
+    // And it still has to read as blocked. The knob is what carries that: full
+    // ink on a live control, the dimmest rung on a blocked one, in both checked
+    // states -- otherwise "off" and "off and unusable" are the same picture.
+    function test_a_blocked_switch_dims_its_knob_in_both_states() {
+        let live = createTemporaryObject(switchComponent, testCase, { checked: false, enabled: true });
+        let blockedOff = createTemporaryObject(switchComponent, testCase, { checked: false, enabled: false });
+        let blockedOn = createTemporaryObject(switchComponent, testCase, { checked: true, enabled: false });
+        verify(live);
+        verify(blockedOff);
+        verify(blockedOn);
+
+        verify(!Qt.colorEqual(knobOf(live).color, knobOf(blockedOff).color),
+               "off and blocked-off must not paint the same knob");
+        compare(knobOf(blockedOn).color, knobOf(blockedOff).color);
+    }
+
     // Toggled while the control is not being rendered — the case an Animator
     // genuinely cannot animate. It still has to arrive at the right place once
     // the control is shown again.

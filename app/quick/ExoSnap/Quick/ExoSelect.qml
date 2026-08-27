@@ -45,7 +45,7 @@ ComboBox {
     hoverEnabled: true
 
     HoverHandler {
-        cursorShape: Qt.PointingHandCursor
+        cursorShape: root.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
     }
 
     contentItem: Label {

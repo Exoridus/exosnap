@@ -180,6 +180,15 @@ The accent drives selection: the active nav underline, the primary action, activ
 rings and selected-card tint. Content drawn *on* a filled accent surface uses a curated contrasting
 ink per accent and appearance, never a derived one.
 
+**Blocked is a state, not the absence of one.** A control the product has taken away — a setting
+locked for the length of a recording, a webcam row with no camera attached — reads as blocked at a
+glance: its label, its hint and the control itself all step down to the dimmest ink rung together,
+and the control loses its raised fill and its hover response. A control that is **on** while blocked
+keeps its accent, because "which sources am I recording?" is exactly the question a locked recording
+raises; it says *not interactive* through the flat fill and the dimmed knob instead of by pretending
+to be off. A row is dimmed only when **every** control in it is blocked — one live control beside an
+inert one keeps the row at full strength.
+
 **Light** is one base, rebuilt rather than inherited. It distinguishes four surface rungs —
 application background, primary surface, raised control surface, and hover/selected — none of which
 is pure white, plus restrained borders. Both light themes it replaces set the raised-control surface

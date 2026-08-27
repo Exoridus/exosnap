@@ -1046,6 +1046,26 @@ int main(int argc, char* argv[]) {
         QTimer::singleShot(0, &app, [&quick_application, record_visual_state]() {
             (void)quick_application.applyRecordVisualScenario(record_visual_state);
         });
+
+        // The scenario forces the Record page, because that is what it is a
+        // scenario OF. An explicit --visual-page has to win anyway: "Settings
+        // while a recording is running" is a state of the Settings page, and
+        // without this it could only be described, never photographed. Queued
+        // after the scenario's own singleShot, which is the only ordering that
+        // survives it.
+        if (!visual_page.isEmpty()) {
+            QTimer::singleShot(0, &app, [root_window, visual_page]() {
+                bool page_ok = false;
+                const int page_index = visual_page.toInt(&page_ok);
+                if (!page_ok)
+                    return;
+                if (auto* shell = root_window != nullptr
+                                      ? root_window->findChild<QObject*>(QStringLiteral("quickAppShell"))
+                                      : nullptr) {
+                    shell->setProperty("currentPage", page_index);
+                }
+            });
+        }
     }
 
     // Harness-only: seeds one of the runtime overlay surfaces (recovery,

@@ -1167,7 +1167,15 @@ void QuickApplication::synchronizeRecordState() {
     // container and codec are fixed for the session once the encoder is up.
     // Sampling this once during initialization left every Settings row unlocked
     // for the whole run, because nothing re-evaluated it on a state change.
-    settings_adapter_.setControlsLocked(recording_coordinator_->State() != UiRecordingState::Ready);
+    //
+    // A visual scenario has no coordinator behind it, so under one the view model
+    // is the authority. Without this, `--record-visual-state recording` rendered
+    // the Settings page in its idle arrangement -- every locked row editable and
+    // no lock banner -- which is exactly the state that decides whether a blocked
+    // control reads as blocked.
+    settings_adapter_.setControlsLocked(pending_record_visual_state_.isEmpty()
+                                            ? recording_coordinator_->State() != UiRecordingState::Ready
+                                            : record_view_model_.state != UiRecordingState::Ready);
     // The single edge that re-points the exclusive-fullscreen probe: every
     // selection change and every recording-state change already lands here, and
     // the unchanged case costs one comparison.
@@ -4745,6 +4753,12 @@ bool QuickApplication::applyRecordVisualScenario(const QString& scenario) {
     } else {
         return false;
     }
+    // The rest of the shell, not only the Record page. controlsLocked is driven
+    // by the recording COORDINATOR, which a scenario never starts, so "Settings
+    // during a recording" -- the arrangement that decides whether a blocked
+    // control reads as blocked -- rendered as an ordinary idle Settings page
+    // under a scenario that called itself `recording`. A scenario that names a
+    // state has to produce it everywhere the state is visible.
     synchronizeRecordState();
     return true;
 }
