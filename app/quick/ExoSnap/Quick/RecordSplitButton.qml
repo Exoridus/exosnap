@@ -68,10 +68,30 @@ Item {
 
     objectName: "quickRecordSplitButton"
     implicitHeight: root.compact ? ExoTheme.controlHeight : ExoTheme.controlHeightLarge
+
+    // The PILL is measured; the main face takes what is left.
+    //
+    // It used to be the other way round -- the main face reserved room for the
+    // longest label and the pill was that plus its chevron. That reservation only
+    // made sense while the label was centred inside the FACE. Centred on the pill
+    // it turns into dead space: the word sits in the middle of 173 px while being
+    // 60 px wide, so Record floated with a hole to the left of it.
+    //
+    // The width is the label plus one chevron's worth of air on each side, and a
+    // small pad on top of that. The chevron then occupies the right-hand
+    // clearance, which is what makes a word centred across both faces look
+    // centred rather than pushed; without the pad the label's right edge lands
+    // exactly on the divider and reads as crowding it. The floor is the width
+    // every other recommended action reserves.
+    readonly property int minimumWidth: root.compact ? 112 : 132
+
     // The divider is a child of the Row below, and a positioner skips invisible
     // children — so counting it unconditionally declared the pill 1 px wider
     // than it composes in exactly the states where the divider is hidden.
-    implicitWidth: mainFace.implicitWidth + (divider.visible ? divider.width : 0) + chevronFace.width
+    readonly property int trailingWidth: (divider.visible ? divider.width : 0) + chevronFace.width
+
+    implicitWidth: Math.max(root.minimumWidth,
+                            mainRow.implicitWidth + 2 * (chevronFace.width + ExoTheme.spacingSm))
 
     Rectangle {
         id: pill
@@ -93,9 +113,10 @@ Item {
 
             // Room for the widest state label, so the pill does not resize under
             // the pointer when the recording moves from Record to Preparing….
-            implicitWidth: Math.max(root.compact ? 112 : 132,
-                                    mainRow.implicitWidth + 2 * (root.compact ? ExoTheme.spacingLg
-                                                                             : ExoTheme.spacingXl))
+            // Everything the chevron does not take. The label is not laid out in
+            // here any more, so this face has no width of its own to ask for: it
+            // is the pill's clickable area, and the pill is what was measured.
+            width: Math.max(0, root.width - root.trailingWidth)
             height: parent.height
             hoverEnabled: true
             enabled: root.mainEnabled
