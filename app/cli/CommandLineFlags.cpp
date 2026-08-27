@@ -73,6 +73,7 @@ constexpr std::array kFlags = {
     KnownFlag{"--visual-delay-ms", FlagArity::Value},
     KnownFlag{"--visual-page", FlagArity::Value},
     KnownFlag{"--visual-popup", FlagArity::Value},
+    KnownFlag{"--visual-dialog", FlagArity::Value},
     KnownFlag{"--visual-appearance", FlagArity::Value},
     KnownFlag{"--visual-accent", FlagArity::Value},
     KnownFlag{"--settings-visual-bottom", FlagArity::None},

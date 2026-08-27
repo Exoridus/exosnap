@@ -115,8 +115,11 @@ int visualCaptureDelayMs(const QStringList& arguments) {
     // did silently before, so nobody noticed the cards below the fold were never
     // in the sweep. An explicit --visual-delay-ms still wins over this.
     constexpr int kSettingsBottomCaptureDelayMs = 2000;
+    // A dialog has the same problem from the other end: the surface that owns it
+    // is loader-built, so the open call cannot fire until the page exists.
     const int default_delay_ms = arguments.contains(QStringLiteral("--settings-visual-bottom")) ||
-                                         arguments.contains(QStringLiteral("--visual-scroll"))
+                                         arguments.contains(QStringLiteral("--visual-scroll")) ||
+                                         arguments.contains(QStringLiteral("--visual-dialog"))
                                      ? kSettingsBottomCaptureDelayMs
                                      : kDefaultCaptureDelayMs;
     const int option_index = arguments.indexOf(QStringLiteral("--visual-delay-ms"));
@@ -984,6 +987,41 @@ int main(int argc, char* argv[]) {
                 if (auto* notifications = quick_application.notificationsAdapter())
                     notifications->openHub();
             }
+        });
+    }
+
+    // Harness-only: raises one of the modal surfaces that nothing but an
+    // interaction reaches. Without it the confirm and preset dialogs could only
+    // be reviewed by reading their source, which is how a Qt default dialog --
+    // system buttons, no ExoSnap control anywhere on it -- went unnoticed inside
+    // a product that styles everything else.
+    //
+    // On a timer for the same reason --visual-scroll is: the Settings page is
+    // built by the shell's loader, so its preset bar does not exist yet at this
+    // point in startup. The capture delay is raised to match.
+    const QString visual_dialog = optionValue(arguments, QStringLiteral("--visual-dialog"));
+    if (!visual_dialog.isEmpty()) {
+        QTimer::singleShot(900, &app, [root_window, visual_dialog]() {
+            if (root_window == nullptr)
+                return;
+            // Settings owns its own dialogs; everything else on this list belongs
+            // to the shell, which is the root object itself.
+            QObject* host = visual_dialog.startsWith(QLatin1String("preset-"))
+                                ? root_window->findChild<QObject*>(QStringLiteral("quickSettingsPage"))
+                                : static_cast<QObject*>(root_window);
+            if (host == nullptr) {
+                qWarning("--visual-dialog: no Settings page; is --visual-page set to Settings?");
+                return;
+            }
+            // Typed args, not QVariant: a QML function declared with a typed
+            // signature registers a typed meta-method, and a QVariant call
+            // against it fails to match and returns false without invoking
+            // anything.
+            bool opened = false;
+            QMetaObject::invokeMethod(host, "openHarnessDialog", Q_RETURN_ARG(bool, opened),
+                                      Q_ARG(QString, visual_dialog));
+            if (!opened)
+                qWarning("--visual-dialog: no dialog named %s", qPrintable(visual_dialog));
         });
     }
 

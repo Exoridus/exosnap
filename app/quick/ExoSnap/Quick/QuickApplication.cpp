@@ -254,6 +254,53 @@ QString captureSourceUnavailableNotice() {
 constexpr int kDefaultWindowWidth = ui::theme::ExoSnapMetrics::kPreferredWindowWidth;
 constexpr int kDefaultWindowHeight = ui::theme::ExoSnapMetrics::kPreferredWindowHeight;
 
+// Harness-only, env-configured: a deterministic capture-target list standing in
+// for whatever this machine happens to have open. The picker's LIST behaviour --
+// how it groups, sorts, and what it does once the window section outgrows the
+// popup -- cannot be reviewed against a real desktop, because that evidence
+// changes with every window the developer opens between two captures.
+//
+// A window target's description is "<title> - <application>"; the label the
+// picker shows is derived from it, never stored here.
+std::optional<std::vector<exosnap::engine::CaptureTarget>> HarnessCaptureTargets() {
+    static const std::optional<std::vector<exosnap::engine::CaptureTarget>> targets =
+        []() -> std::optional<std::vector<exosnap::engine::CaptureTarget>> {
+        const QByteArray scenario = qgetenv("EXOSNAP_VISUAL_SOURCE_SCENARIO");
+        if (scenario != "many-windows")
+            return std::nullopt;
+
+        using exosnap::engine::CaptureTarget;
+        std::vector<CaptureTarget> seeded;
+        const auto monitor = [&seeded](const char* description) {
+            seeded.push_back(CaptureTarget{CaptureTarget::Kind::Monitor, seeded.size() + 1, description});
+        };
+        const auto window = [&seeded](const char* description) {
+            seeded.push_back(CaptureTarget{CaptureTarget::Kind::Window, seeded.size() + 1, description});
+        };
+
+        monitor(R"(\\.\DISPLAY1)");
+        monitor(R"(\\.\DISPLAY2)");
+
+        window("exosnap - QuickApplication.cpp - Visual Studio Code");
+        window("Sprint review, full walkthrough with the diagnostics overlay enabled - Google Chrome");
+        window("#engineering - Slack");
+        window("Inbox (14) - Outlook");
+        window("Untitled - Notepad");
+        window("Task Manager");
+        window("exosnap - File Explorer");
+        window("Steam");
+        window("Discord");
+        window("OBS 30.1.2 - Profile: Untitled - Scenes: Untitled");
+        window("Spotify Premium");
+        window("Windows PowerShell");
+        window("design-review-result.md - Obsidian");
+        window("Blender");
+        window("Figma - ExoSnap design system");
+        return seeded;
+    }();
+    return targets;
+}
+
 } // namespace
 
 QuickApplication::QuickApplication()
@@ -786,8 +833,11 @@ void QuickApplication::initializeRecordWorkflow() {
             webcam_frame_delivery_timer_.start();
     });
 
-    capture_target_notifier_.setEnumerator(
-        [this]() { return CaptureTargetSnapshot{recording_coordinator_->EnumerateTargets()}; });
+    capture_target_notifier_.setEnumerator([this]() {
+        if (auto seeded = HarnessCaptureTargets())
+            return CaptureTargetSnapshot{std::move(*seeded)};
+        return CaptureTargetSnapshot{recording_coordinator_->EnumerateTargets()};
+    });
     capture_target_notifier_.start();
     record_view_model_.targets = capture_target_notifier_.currentSnapshot().targets;
     ++record_view_model_.targets_revision;
@@ -1738,10 +1788,7 @@ void QuickApplication::initializeDiagnosticsArea() {
     // Single global Expert state, shared with Settings (AppSettingsStore).
     QObject::connect(&diagnostics_adapter_, &DiagnosticsAdapter::expertModeChanged, &diagnostics_adapter_,
                      [this](bool enabled) {
-                         // A harness override is in-memory only: rendering the Expert
-                         // taxonomy for review must never rewrite the developer's own
-                         // persisted Expert setting.
-                         if (visual_expert_override_ || settings_.expert_mode_enabled == enabled)
+                         if (settings_.expert_mode_enabled == enabled)
                              return;
                          settings_.expert_mode_enabled = enabled;
                          settings_adapter_.setAppSettings(settings_);
@@ -2131,6 +2178,13 @@ void QuickApplication::wireSettingsCommands() {
         const bool previous_present_optin = settings_.present_diagnostics_optin;
         settings_ = settings_adapter_.appSettings();
         persistAppSettings(SettingsWriteIntent::UserEdit);
+        // Expert mode is one product setting behind two surfaces. The Diagnostics
+        // adapter keeps its own copy, seeded once at startup, so without this the
+        // Settings toggle moved Settings alone and Diagnostics stayed in the
+        // arrangement it was built with until the next launch. The write is
+        // idempotent and the reverse connection drops out on an unchanged value,
+        // so the two directions do not loop.
+        diagnostics_adapter_.setExpertMode(settings_.expert_mode_enabled);
         if (settings_.update_channel != previous_update_channel)
             applyUpdateChannel();
         applyThemeFromSettings();
@@ -2523,6 +2577,48 @@ void QuickApplication::persistLiveConfig() {
 // Harness-only, env-configured (never mouse/keyboard synthesis, never a window):
 // seeds deterministic Diagnostics/Logs content so a --visual-test capture shows a
 // stated state instead of whatever this machine happened to be doing.
+// Harness-only, env-configured: fills the notification hub, which is empty on a
+// healthy machine and therefore only ever photographed in its "all caught up"
+// state. What needs reviewing is the opposite -- several advisories at once,
+// mixed severities, and a body long enough to test the entry's wrapping.
+void QuickApplication::applyShellVisualScenarios() {
+    if (qgetenv("EXOSNAP_VISUAL_NOTIFICATION_SCENARIO") != "many")
+        return;
+
+    using notifications::NotificationAction;
+    using notifications::NotificationEvent;
+    using notifications::NotificationType;
+
+    const auto enqueue = [this](NotificationType type, QString title, QString body,
+                                NotificationAction action = NotificationAction::None) {
+        NotificationEvent event;
+        event.type = type;
+        event.title = std::move(title);
+        event.body = std::move(body);
+        event.action = action;
+        notifications_adapter_.manager().Enqueue(std::move(event));
+    };
+
+    enqueue(NotificationType::Saved, QStringLiteral("Recording saved"),
+            QStringLiteral("2026-08-10 21-14-08.mkv - 2:34, 412 MB"), NotificationAction::Edit);
+    enqueue(NotificationType::UpdateAvailable, QStringLiteral("ExoSnap 0.9.1 is available"),
+            QStringLiteral("You are on 0.9.0. The update installs on the next restart."),
+            NotificationAction::OpenUpdate);
+    enqueue(NotificationType::FramesDropped, QStringLiteral("Frames were dropped"),
+            QStringLiteral("122 frames did not reach the encoder during the last recording."),
+            NotificationAction::OpenDiagnostics);
+    enqueue(NotificationType::HotkeyConflict, QStringLiteral("A hotkey could not be registered"),
+            QStringLiteral("Ctrl+Shift+R is held by another application, so the shortcut is inactive this "
+                           "session. Rebind it in Settings, or close whatever holds it and restart ExoSnap."),
+            NotificationAction::OpenHotkeys);
+    enqueue(NotificationType::SettingsSaveFailed, QStringLiteral("Settings could not be saved"),
+            QStringLiteral("The settings file is open in another program and could not be written. The change "
+                           "you just made will be lost when ExoSnap restarts, and every further change will "
+                           "fail the same way until the file is released."));
+    enqueue(NotificationType::RecoveryAvailable, QStringLiteral("A recording can be recovered"),
+            QStringLiteral("An unfinished recording from 09 Aug 2026 was found."), NotificationAction::OpenRecovery);
+}
+
 void QuickApplication::applyDiagnosticsVisualScenarios() {
     const QByteArray log_scenario = qgetenv("EXOSNAP_VISUAL_LOG_SCENARIO");
     if (!log_scenario.isEmpty()) {
@@ -2555,13 +2651,6 @@ void QuickApplication::applyDiagnosticsVisualScenarios() {
             entries.push_back(entry(6, diagnostics::LogSeverity::Debug, "Audio", "System loopback meter started"));
         }
         logs_adapter_.setSyntheticEntries(std::move(entries));
-    }
-
-    // Reviewing the Expert taxonomy must not mean flipping the developer's own
-    // persisted Expert setting, so the harness overrides it in-memory only.
-    if (qgetenv("EXOSNAP_VISUAL_DIAG_EXPERT") == "1") {
-        visual_expert_override_ = true;
-        diagnostics_adapter_.setExpertMode(true);
     }
 
     const QByteArray diag_scenario = qgetenv("EXOSNAP_VISUAL_DIAG_SCENARIO");
@@ -4348,6 +4437,7 @@ bool QuickApplication::load(bool no_activate) {
     });
     applyThemeFromSettings();
     applyDiagnosticsVisualScenarios();
+    applyShellVisualScenarios();
     applyEditVisualScenario();
     engine_.loadFromModule("ExoSnap.Quick", "Main");
     if (engine_.rootObjects().isEmpty()) {

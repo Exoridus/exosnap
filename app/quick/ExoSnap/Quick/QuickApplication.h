@@ -343,6 +343,7 @@ class QuickApplication {
     // content so a --visual-test capture never photographs whatever this
     // machine happened to be doing. Never creates or drives a window.
     void applyDiagnosticsVisualScenarios();
+    void applyShellVisualScenarios();
     void initializeEditArea();
     // Close guards: samples what is in flight and applies the effects the user
     // confirmed. The ordering and wording live in models/CloseGuardPolicy.
@@ -767,7 +768,6 @@ class QuickApplication {
     std::optional<models::RecordingFailureReport> pending_recording_failure_;
     bool pending_recording_failure_can_send_ = false;
     // Harness-only Expert override; suppresses the persist of expert_mode_enabled.
-    bool visual_expert_override_ = false;
     // Set when the preset store had to repair fields while loading. Raised as a
     // notification once the manager exists, never swallowed.
     bool preset_store_repaired_ = false;

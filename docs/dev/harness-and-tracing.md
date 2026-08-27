@@ -208,3 +208,42 @@ the transition that broke them.
 (`publishSignals`, `wakeups`, `renderPasses`, `owed`) as structured state; prefer
 it over parsing these lines, which stay useful as secondary evidence. See
 [live-verify.md](live-verify.md).
+
+## Deterministic captures — `--visual-test`
+
+`--visual-test <path>` renders one screenshot and exits. The process runs in its
+own scratch config directory, so a capture never reads or writes the developer's
+settings, and every capture-excluded overlay on screen is grabbed into its own
+`<path>.quickOverlay<Name>.png` beside it.
+
+A capture is only evidence if it is reproducible, which is what the rest of these
+options are for: without them the picture shows whatever this machine happened to
+be doing, and two captures a week apart are not comparable. Each one seeds a
+stated state instead. None of them synthesizes input.
+
+| Option | Selects |
+|---|---|
+| `--visual-test-size WxH` | Window size. The review baseline is `1440x1000` |
+| `--visual-delay-ms N` | Delay before the shutter. Raised automatically for the options that need a built page |
+| `--visual-appearance dark\|light`, `--visual-accent <id>` | Theme. Pinned in both directions — omitting them means the product default, never the previous run's |
+| `--visual-page N` | Nav destination, in product order: Record, Settings, Diagnostics, Logs, About |
+| `--visual-expert` | Expert mode, one switch for both surfaces that have two arrangements |
+| `--visual-scroll F` | Scroll position as a fraction of the page's own scrollable height |
+| `--visual-popup source-picker\|notification-hub` | A popup that is built on first use |
+| `--visual-dialog <name>` | A modal surface nothing but an interaction raises: `close-guard`, `preset-delete`, `preset-rename`, `preset-save-as` |
+| `--record-visual-state <name>` | A Record-page state. One name per product state, no aliases |
+| `--overlay-visual-state <name>` | A runtime overlay: recovery, recording error, crash report |
+| `--desktop-pattern` | A synthetic window behind the preview, so the preview frame's content is fixed too |
+
+Content is seeded through the environment, in the same spirit:
+
+| Variable | Seeds |
+|---|---|
+| `EXOSNAP_VISUAL_EDIT_SCENARIO` | The Edit surface: `edit-default`, `edit-trimmed`, `edit-timeline-multitrack`, `edit-timeline-loading`, `edit-timeline-unavailable`, `edit-export-running`, `edit-export-done`, `edit-export-failed`, `edit-report-warning`, `edit-long-filename` |
+| `EXOSNAP_VISUAL_LOG_SCENARIO`, `EXOSNAP_VISUAL_DIAG_SCENARIO`, `EXOSNAP_VISUAL_DIAG_LIVE` | Logs and Diagnostics content |
+| `EXOSNAP_VISUAL_NOTIFICATION_SCENARIO=many` | Six advisories in the notification hub, mixed severities. The empty state is the only one a healthy machine produces |
+| `EXOSNAP_VISUAL_SOURCE_SCENARIO=many-windows` | Two displays and fifteen windows in the source picker, in place of whatever is open |
+
+The Edit fixture deliberately opens nothing: it never starts a decode or an
+export, so the player area reads `Preview unavailable` and the timeline tiles are
+placeholders. Everything around them is the real surface.

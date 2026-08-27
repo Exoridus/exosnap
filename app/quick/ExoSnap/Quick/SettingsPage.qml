@@ -93,6 +93,12 @@ Item {
         return scroll.scrollToEnd();
     }
 
+    // Harness-only: the page owns the sections, so a --visual-dialog request
+    // lands here and is forwarded to whichever one holds the dialog.
+    function openHarnessDialog(name: string): bool {
+        return presetSection.openHarnessDialog(name);
+    }
+
     // Repeating, not one-shot: the request arrives during startup, when the
     // column layout has not settled and contentHeight is still 0, and anything
     // that rebuilds the content afterwards (the harness applying an appearance,
