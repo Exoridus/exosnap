@@ -129,37 +129,6 @@ Item {
                 visible: mainFace.visualFocus
             }
 
-            Row {
-                id: mainRow
-
-                spacing: ExoTheme.spacingSm
-                anchors.centerIn: parent
-
-                // Only Cancel draws a glyph. The record dot beside the word
-                // "Record" restated the label and read as a stray bullet at the
-                // pill's size; the cross is what keeps Cancel from being read as
-                // Record at a glance, which is the job the glyph was there for.
-                ExoGlyph {
-                    kind: ExoGlyph.Close
-                    color: root.mainEnabled || root.busy ? root.ink : ExoTheme.textDim
-                    width: 16
-                    height: 16
-                    anchors.verticalCenter: parent.verticalCenter
-                    visible: root.counting && !root.busy
-                }
-
-                Label {
-                    text: root.mainText
-                    textFormat: Text.PlainText
-                    anchors.verticalCenter: parent.verticalCenter
-                    color: root.mainEnabled || root.busy ? root.ink : ExoTheme.textDim
-                    font {
-                        family: ExoTheme.sansFamily
-                        pixelSize: root.compact ? ExoTheme.fontBody : ExoTheme.fontSectionTitle
-                        weight: Font.DemiBold
-                    }
-                }
-            }
         }
 
         Rectangle {
@@ -222,6 +191,44 @@ Item {
                 id: chevronHover
 
                 cursorShape: root.chevronEnabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+            }
+        }
+    }
+
+    // The label is centred on the WHOLE pill, not on the face that carries the
+    // click. Centred inside the main face it sat visibly left of the control's
+    // own middle, because the chevron is part of the same pill and the eye reads
+    // the pill as the button. It is a sibling of the faces rather than a child of
+    // one so it can be positioned against the whole width; the faces keep their
+    // own hit areas and their own hover fills underneath it.
+    Row {
+        id: mainRow
+
+        spacing: ExoTheme.spacingSm
+        anchors.centerIn: parent
+
+        // Only Cancel draws a glyph. The record dot beside the word "Record"
+        // restated the label and read as a stray bullet at the pill's size; the
+        // cross is what keeps Cancel from being read as Record at a glance, which
+        // is the job the glyph was there for.
+        ExoGlyph {
+            kind: ExoGlyph.Close
+            color: root.mainEnabled || root.busy ? root.ink : ExoTheme.textDim
+            width: 16
+            height: 16
+            anchors.verticalCenter: parent.verticalCenter
+            visible: root.counting && !root.busy
+        }
+
+        Label {
+            text: root.mainText
+            textFormat: Text.PlainText
+            anchors.verticalCenter: parent.verticalCenter
+            color: root.mainEnabled || root.busy ? root.ink : ExoTheme.textDim
+            font {
+                family: ExoTheme.sansFamily
+                pixelSize: root.compact ? ExoTheme.fontBody : ExoTheme.fontSectionTitle
+                weight: Font.DemiBold
             }
         }
     }

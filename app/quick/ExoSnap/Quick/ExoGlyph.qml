@@ -61,7 +61,8 @@ Item {
         Region,
         ExternalLink,
         Back,
-        Folder
+        Folder,
+        SplitTrack
     }
 
     // An ExoGlyph.Kind value. Declared `int` because a QML-declared enum is not
@@ -151,14 +152,21 @@ Item {
         // this action leaves ExoSnap for the browser. Deliberately not the same
         // shape as AppWindow, which is a capture TARGET inside the product.
         "M10.5 3.5H15.5V8.5 M15.5 3.5L9 10 M13 10.5V14.5H3.5V5H7.5",
-        // Back -- a left arrow on the same 18-unit grid as the rest. Not a
-        // U-turn or a circular-arrow "undo": nothing is undone by returning to
-        // the idle transport, the finished recording stays exactly where it was
-        // written.
-        "M14.5 9H4.5 M8.5 4.5L4 9L8.5 13.5",
+        // Back -- the return-key arrow: a stroke that comes down the right, turns
+        // left and ends in a head. A plain left arrow says "previous" (the item
+        // before this one); this shape says "go back out of here", which is what
+        // the completed transport's action does. Not a circular-arrow "undo"
+        // either: nothing is undone, the recording stays where it was written.
+        "M14.5 4.5V10.5H5.5 M9.5 6.5L5.5 10.5L9.5 14.5",
         // Folder -- a tabbed folder, closed. Deliberately not an open one: the
         // action reveals a file that is already there, it does not put one in.
-        "M2.5 5.2V14H15.5V6.8H9L7.4 5.2Z"
+        "M2.5 5.2V14H15.5V6.8H9L7.4 5.2Z",
+        // SplitTrack -- one track cut into two pieces, with the cut drawn through
+        // the gap. Replaces a pair of scissors, which says TRIM: an edit that
+        // removes something from one file. This action removes nothing and edits
+        // nothing -- it closes the current output and opens the next one, and the
+        // recording carries on either way.
+        "M2.5 6.4H7V11.6H2.5Z M11 6.4H15.5V11.6H11Z M9 3.4V14.6"
     ]
 
     // Kinds drawn as a filled silhouette instead of a stroked outline.

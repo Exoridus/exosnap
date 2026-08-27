@@ -49,8 +49,16 @@ FocusScope {
 
     signal clicked()
 
+    // One width for every recommended action, not one per label. Stop, Resume and
+    // Edit are the same control in three states of the same session, and sizing
+    // each to its own word moved the round cluster beside them every time the
+    // state changed. The number is the Record pill's main face, so the whole
+    // family lines up; Record itself is that plus its chevron, which is the one
+    // difference the layout cannot hide.
+    readonly property int emphasisedWidth: root.compact ? 112 : 132
+
     implicitWidth: root.round ? root._size
-                              : Math.max(root.emphasised ? (root.compact ? 88 : 104) : (root.compact ? 72 : 84),
+                              : Math.max(root.emphasised ? root.emphasisedWidth : (root.compact ? 72 : 84),
                                          button.contentItem.implicitWidth + 2 * ExoTheme.spacingLg)
     implicitHeight: root._size
 

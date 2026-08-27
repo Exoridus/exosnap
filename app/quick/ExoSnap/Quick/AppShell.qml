@@ -282,6 +282,16 @@ Item {
             Layout.fillWidth: true
             Layout.preferredHeight: root.titleBarHeight
 
+            // The band is a TOOLBAR, so it takes the surface rung rather than the
+            // page ground. In Light that is the whole point of a grey ground: the
+            // chrome and the cards are the near-white things, the page is what
+            // they sit on. Left at the page colour the band ran straight into the
+            // content with only its hairline between them.
+            Rectangle {
+                anchors.fill: parent
+                color: ExoTheme.surface
+            }
+
             // The band's own rects, in shell coordinates. Recomputed whenever
             // anything that can move them changes — the width (every resize),
             // the selected page (the selected tab is bolder and therefore

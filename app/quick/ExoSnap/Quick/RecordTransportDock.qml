@@ -246,7 +246,7 @@ Rectangle {
             compact: root.compactControls
             accessibleLabel: qsTr("Split recording")
             text: qsTr("Split")
-            glyph: ExoGlyph.Scissors
+            glyph: ExoGlyph.SplitTrack
             available: root.recordViewModel.splitEnabled
             // Two real causes, and only the first is worth a sentence: a manual
             // split needs a Matroska container, or one is already in flight. The
@@ -345,7 +345,6 @@ Rectangle {
             glyph: ExoGlyph.Back
             round: true
             visible: root.recordViewModel.resultPending
-            Layout.leftMargin: root.clusterSpacing
             onClicked: root.recordViewModel.requestDismissResult()
         }
 
@@ -360,7 +359,7 @@ Rectangle {
             emphasisColor: ExoTheme.accent
             emphasisTextColor: ExoTheme.accentInk
             visible: root.recordViewModel.canOpenEditor
-            Layout.leftMargin: root.clusterSpacing
+            Layout.leftMargin: root.actionGap
             onClicked: root.recordViewModel.requestOpenEditor()
         }
 
