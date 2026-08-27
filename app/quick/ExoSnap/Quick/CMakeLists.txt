@@ -920,6 +920,10 @@ qt_add_qml_module(record_controls_qml_tests
         # `x`. Whether the binding survives that is exactly the kind of question
         # a comment cannot answer.
         ExoSwitch.qml
+        # The only shared control with neither a focusPolicy nor an
+        # activeFocusOnTab, and it paints a focus ring. Whether Tab can reach it
+        # is a question only a Tab press answers.
+        ExoSlider.qml
         # The shared text input owns its draft while it has the focus. That
         # contract is the whole fix, and it is one property write away from
         # being undone.
