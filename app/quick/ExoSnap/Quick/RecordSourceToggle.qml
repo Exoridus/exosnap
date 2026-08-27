@@ -53,12 +53,6 @@ FocusScope {
     Accessible.name: root.accessibleLabel
     Accessible.description: root.available ? "" : root.unavailableReason
 
-    HoverHandler {
-        id: hover
-
-        cursorShape: root.available ? Qt.PointingHandCursor : Qt.ArrowCursor
-    }
-
     Button {
         id: button
 
@@ -171,6 +165,24 @@ FocusScope {
     // The reason belongs on its own line under the name: "Webcam" then
     // "Unavailable — no camera was detected." reads as one control with a
     // status, where a single run reads as a long control name.
+    // The hover surface, deliberately in FRONT of the Button rather than behind it.
+    //
+    // A Controls item that fills its parent swallows an ancestor's HoverHandler:
+    // the cursor that handler asks for never reaches the desktop. A handler moved
+    // onto the Button itself works only while the Button is ENABLED, and this
+    // control's whole point is that it stays hoverable when it is not. An Item
+    // accepts no mouse buttons, so the Button underneath still receives every
+    // press, and hover reaches a handler that no disabled state can switch off.
+    Item {
+        anchors.fill: parent
+
+        HoverHandler {
+            id: hover
+
+            cursorShape: root.available ? Qt.PointingHandCursor : Qt.ArrowCursor
+        }
+    }
+
     ToolTip {
         parent: root
         visible: root.hovered

@@ -70,15 +70,6 @@ FocusScope {
             root.clicked();
     }
 
-    HoverHandler {
-        id: hover
-
-        // The scope stays enabled while the action is unavailable so it can
-        // still speak its reason, so the cursor is what has to say the control
-        // cannot be pressed.
-        cursorShape: root.available ? Qt.PointingHandCursor : Qt.ArrowCursor
-    }
-
     Button {
         id: button
 
@@ -149,6 +140,24 @@ FocusScope {
                           : !root.available ? ExoTheme.line
                           : root.emphasisOutlined ? root.emphasisColor : "transparent"
             radius: root.round ? height / 2 : ExoTheme.radiusPill
+        }
+    }
+
+    // The hover surface, deliberately in FRONT of the Button rather than behind it.
+    //
+    // A Controls item that fills its parent swallows an ancestor's HoverHandler:
+    // the cursor that handler asks for never reaches the desktop. A handler moved
+    // onto the Button itself works only while the Button is ENABLED, and this
+    // control's whole point is that it stays hoverable when it is not. An Item
+    // accepts no mouse buttons, so the Button underneath still receives every
+    // press, and hover reaches a handler that no disabled state can switch off.
+    Item {
+        anchors.fill: parent
+
+        HoverHandler {
+            id: hover
+
+            cursorShape: root.available ? Qt.PointingHandCursor : Qt.ArrowCursor
         }
     }
 

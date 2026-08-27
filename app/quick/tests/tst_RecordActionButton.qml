@@ -39,11 +39,22 @@ Item {
         // enabled while the action is unavailable so it can still speak its
         // reason, so the cursor is the only thing left to say it cannot be
         // pressed.
+        // Recursive: the handler lives on a transparent surface in front of the
+        // Button, not directly on the scope. A Controls item that fills its parent
+        // swallows the parent's hover, so a handler declared on the scope asks for
+        // a cursor the desktop never shows -- see test_hover_cursor_native.cpp.
         function cursorShapeOf(item) {
+            if (!item || !item.data)
+                return -1;
             for (let i = 0; i < item.data.length; ++i) {
                 const child = item.data[i];
-                if (child && child.cursorShape !== undefined)
+                if (!child)
+                    continue;
+                if (child.cursorShape !== undefined)
                     return child.cursorShape;
+                const nested = cursorShapeOf(child);
+                if (nested !== -1)
+                    return nested;
             }
             return -1;
         }

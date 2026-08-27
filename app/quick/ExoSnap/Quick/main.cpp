@@ -33,6 +33,7 @@
 // post-1.0). Everything the application draws is still Qt Quick.
 #include <QApplication>
 #include <QCoreApplication>
+#include <QElapsedTimer>
 #include <QGuiApplication>
 #include <QIcon>
 #include <QImage>
@@ -64,6 +65,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdio>
+#include <functional>
 #include <memory>
 
 namespace {
@@ -134,6 +136,8 @@ QString harnessConfigId(const QStringList& arguments) {
         return QStringLiteral("quick-hwnd-audit");
     if (arguments.contains(QStringLiteral("--window-maximize-cycle")))
         return QStringLiteral("quick-window-cycle");
+    if (arguments.contains(QStringLiteral("--cursor-audit")))
+        return QStringLiteral("quick-cursor-audit");
     if (arguments.contains(QStringLiteral("--auto-record")))
         return QStringLiteral("quick-auto-record");
     if (arguments.contains(QStringLiteral("--auto-edit")))
@@ -1247,6 +1251,211 @@ int main(int argc, char* argv[]) {
             constexpr LONG_PTR kGestureStyles = WS_THICKFRAME | WS_MAXIMIZEBOX | WS_MINIMIZEBOX | WS_SYSMENU;
             const bool chrome_clean = hwnd != nullptr && inset.isEmpty() && (style & kGestureStyles) == kGestureStyles;
             app.exit(children == 0 && chrome_clean ? 0 : 1);
+        });
+    }
+
+    // Harness-only: does a declared pointing hand actually reach the desktop?
+    //
+    // Every clickable control in this product declares
+    // `HoverHandler { cursorShape: Qt.PointingHandCursor }`, and a QML test can
+    // only confirm that the declaration exists. The cursor a user sees is set by
+    // SetCursor() inside Qt's Windows plugin, which runs only while the platform
+    // layer believes the pointer is inside the window -- and it learns that from
+    // real mouse messages, not from a delivered QMouseEvent. So the audit walks
+    // the live scene, reports the pointer over each hand-declaring control with
+    // WM_MOUSEMOVE, and compares two answers: what Qt thinks the window cursor is
+    // and what the OS is actually carrying. A control where those disagree is the
+    // defect; a control where both say arrow is a declaration that never fires.
+    //
+    // WM_MOUSEMOVE is SENT to our own window. It moves no pointer, takes no focus
+    // and synthesizes no input, which is the same trade --window-maximize-cycle
+    // already makes with WM_NCHITTEST.
+    if (arguments.contains(QStringLiteral("--cursor-audit"))) {
+        QTimer::singleShot(2500, &app, [&app, root_window]() {
+            const HWND hwnd = root_window != nullptr ? reinterpret_cast<HWND>(root_window->winId()) : nullptr;
+            if (hwnd == nullptr || root_window->contentItem() == nullptr) {
+                qWarning("cursor-audit: FAIL no window to probe");
+                app.exit(2);
+                return;
+            }
+
+            const HCURSOR hand = LoadCursorW(nullptr, IDC_HAND);
+            const HCURSOR arrow = LoadCursorW(nullptr, IDC_ARROW);
+            const HCURSOR entry_cursor = GetCursor();
+            const double dpr = root_window->devicePixelRatio();
+            auto* shell = root_window->findChild<QObject*>(QStringLiteral("quickAppShell"));
+
+            const auto settle = [](int ms) {
+                QElapsedTimer timer;
+                timer.start();
+                while (!timer.hasExpired(ms))
+                    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+            };
+
+            // A QQuickItem's own class name is usually QQuickItem or a generated
+            // QMLTYPE, neither of which names a control. The nearest ancestor that
+            // came from a .qml file does.
+            const auto describe = [](QQuickItem* item) {
+                for (QQuickItem* node = item; node != nullptr; node = node->parentItem()) {
+                    if (!node->objectName().isEmpty())
+                        return node->objectName();
+                    const QString type = QString::fromLatin1(node->metaObject()->className());
+                    if (type.startsWith(QLatin1String("Exo")) || type.startsWith(QLatin1String("Record")) ||
+                        type.startsWith(QLatin1String("Settings")) || type.startsWith(QLatin1String("Edit")) ||
+                        type.startsWith(QLatin1String("Notification")) ||
+                        type.startsWith(QLatin1String("Diagnostics"))) {
+                        return type.section(QLatin1Char('_'), 0, 0);
+                    }
+                }
+                return QStringLiteral("unnamed");
+            };
+
+            struct Probe {
+                QQuickItem* item = nullptr;
+                QString name;
+            };
+
+            int total = 0;
+            int agreed = 0;
+            int disabled = 0;
+            int clipped = 0;
+            int qt_only = 0;
+            int neither = 0;
+
+            // Every navigation destination, because the pages are built on first
+            // use: an audit that only ever sees Record reports on a fifth of the
+            // product's controls and calls that clean.
+            const QStringList page_names{QStringLiteral("record"), QStringLiteral("settings"),
+                                         QStringLiteral("diagnostics"), QStringLiteral("logs"),
+                                         QStringLiteral("about")};
+            for (int page = 0; page < page_names.size(); ++page) {
+                if (shell != nullptr)
+                    shell->setProperty("currentPage", page);
+                settle(page == 0 ? 300 : 900);
+
+                QList<Probe> probes;
+                // The VISUAL tree, not findChildren(): an item created by a Loader,
+                // a Repeater or a page document is not a QObject child of the shell,
+                // and a QObject walk from the content item sees a fraction of the
+                // scene. Handlers are QObject children of the item they act on, so
+                // the two walks have to be nested.
+                const std::function<void(QQuickItem*)> visit = [&](QQuickItem* item) {
+                    if (item == nullptr)
+                        return;
+                    for (QObject* object : item->children()) {
+                        if (object == nullptr || !object->inherits("QQuickHoverHandler"))
+                            continue;
+                        if (object->property("cursorShape").toInt() != static_cast<int>(Qt::PointingHandCursor))
+                            continue;
+                        if (!item->isVisible() || item->width() <= 0.0 || item->height() <= 0.0)
+                            continue;
+                        probes.append(Probe{item, describe(item)});
+                        break;
+                    }
+                    for (QQuickItem* child : item->childItems())
+                        visit(child);
+                };
+                visit(root_window->contentItem());
+
+                int page_probed = 0;
+                int page_failed = 0;
+                for (const Probe& probe : probes) {
+                    const QPointF centre =
+                        probe.item->mapToScene(QPointF(probe.item->width() / 2.0, probe.item->height() / 2.0));
+                    if (centre.x() < 0.0 || centre.y() < 0.0 || centre.x() >= root_window->width() ||
+                        centre.y() >= root_window->height()) {
+                        continue;
+                    }
+                    // Inside the window rect is not the same as on screen. A row
+                    // scrolled past the end of its view still reports a scene
+                    // position over the page, and hovering it reaches whatever is
+                    // actually drawn there -- which is a scrolled-away control, not
+                    // a cursor defect.
+                    bool clipped_away = false;
+                    for (QQuickItem* node = probe.item->parentItem(); node != nullptr; node = node->parentItem()) {
+                        if (!node->clip())
+                            continue;
+                        if (!node->contains(node->mapFromScene(centre))) {
+                            clipped_away = true;
+                            break;
+                        }
+                    }
+                    if (clipped_away) {
+                        ++clipped;
+                        continue;
+                    }
+                    const auto x = static_cast<WORD>(std::lround(centre.x() * dpr));
+                    const auto y = static_cast<WORD>(std::lround(centre.y() * dpr));
+                    const auto probeOnce = [&]() {
+                        SendMessageW(hwnd, WM_MOUSEMOVE, 0, MAKELPARAM(x, y));
+                        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+                    };
+                    probeOnce();
+
+                    Qt::CursorShape qt_shape = root_window->cursor().shape();
+                    HCURSOR os_cursor = GetCursor();
+                    // GetCursor() reads state the machine's real pointer also
+                    // writes: a developer moving the mouse across another window
+                    // mid-run lands as a one-probe disagreement. A second reading
+                    // costs nothing on a clean run and removes that whole class of
+                    // false report; a real defect fails both times.
+                    if (qt_shape != Qt::PointingHandCursor || os_cursor != hand) {
+                        settle(60);
+                        probeOnce();
+                        qt_shape = root_window->cursor().shape();
+                        os_cursor = GetCursor();
+                    }
+                    const bool qt_hand = qt_shape == Qt::PointingHandCursor;
+                    const bool os_hand = os_cursor == hand;
+                    ++total;
+                    ++page_probed;
+                    // A disabled control is not a defect with the arrow on it: Qt
+                    // delivers no hover to a disabled item, and the arrow is what
+                    // the product wants there anyway. Counted, so a page that went
+                    // entirely disabled cannot pass as a page that was audited.
+                    if (!probe.item->isEnabled()) {
+                        ++disabled;
+                        if (os_hand)
+                            qWarning("cursor-audit: %s/%s at %.0f,%.0f is DISABLED but shows a pointing hand",
+                                     qPrintable(page_names.at(page)), qPrintable(probe.name), centre.x(), centre.y());
+                        continue;
+                    }
+                    if (qt_hand && os_hand) {
+                        ++agreed;
+                        continue;
+                    }
+                    // Only the disagreements are named. A clean run over two hundred
+                    // controls is a summary line, not a wall of evidence nobody reads.
+                    ++page_failed;
+                    if (qt_hand)
+                        ++qt_only;
+                    else
+                        ++neither;
+                    qWarning("cursor-audit: %s/%s at %.0f,%.0f qt_shape=%d os=%s verdict=%s",
+                             qPrintable(page_names.at(page)), qPrintable(probe.name), centre.x(), centre.y(),
+                             static_cast<int>(qt_shape),
+                             os_cursor == hand    ? "IDC_HAND"
+                             : os_cursor == arrow ? "IDC_ARROW"
+                                                  : "other",
+                             qt_hand ? "os-lost-it" : "never-fired");
+                }
+                qInfo("cursor-audit: page=%s probed=%d failed=%d", qPrintable(page_names.at(page)), page_probed,
+                      page_failed);
+            }
+
+            // The pointer is not really here, so whatever the desktop was carrying
+            // before this ran is what it must carry after.
+            if (entry_cursor != nullptr)
+                SetCursor(entry_cursor);
+
+            if (total == 0) {
+                qWarning("cursor-audit: FAIL no visible control declares a pointing hand");
+                app.exit(3);
+                return;
+            }
+            qInfo("cursor-audit: probes=%d agreed=%d disabled=%d clipped=%d os_lost_it=%d never_fired=%d", total,
+                  agreed, disabled, clipped, qt_only, neither);
+            app.exit(qt_only == 0 && neither == 0 ? 0 : 1);
         });
     }
 

@@ -65,6 +65,7 @@ constexpr std::array kFlags = {
     KnownFlag{"--preview-benchmark", FlagArity::None},
     KnownFlag{"--benchmark-seconds", FlagArity::Value},
     KnownFlag{"--window-maximize-cycle", FlagArity::None},
+    KnownFlag{"--cursor-audit", FlagArity::None},
     KnownFlag{"--still-frame-validation", FlagArity::Value},
     KnownFlag{"--target-refresh-validation", FlagArity::Value},
     KnownFlag{"--visual-test", FlagArity::Value},

@@ -92,6 +92,48 @@ its cause is gone.
 Combine with `--hwnd-audit` for a run that measures all of this and exits without
 ever activating the window.
 
+## Pointing hand — `--cursor-audit`
+
+`exosnap.exe --cursor-audit` visits every navigation destination, reports the
+pointer over the centre of each control that declares
+`HoverHandler { cursorShape: Qt.PointingHandCursor }`, and compares two answers:
+the shape Qt believes the window carries and the cursor `GetCursor()` says the OS
+is actually showing. Only disagreements are named; a clean page is one line.
+
+```
+cursor-audit: page=record probed=13 failed=0
+cursor-audit: page=settings probed=47 failed=0
+cursor-audit: page=diagnostics probed=9 failed=0
+cursor-audit: page=logs probed=13 failed=0
+cursor-audit: page=about probed=11 failed=0
+cursor-audit: probes=93 agreed=86 disabled=7 clipped=1 os_lost_it=0 never_fired=0
+```
+
+Two verdicts, and they point at different layers:
+
+- `never-fired` — Qt's own window cursor never became a pointing hand, so no
+  handler was reached at that point. The declaration exists and nothing delivers
+  hover to it.
+- `os-lost-it` — Qt set the cursor and the desktop shows something else. That is
+  a platform-layer problem, not a QML one.
+
+`disabled` and `clipped` are neither: Qt delivers no hover to a disabled item, and
+a row scrolled past the end of its view is not on screen at the position it
+reports. Both are counted so a page that went entirely disabled cannot pass as a
+page that was audited.
+
+The pointer is never moved. `WM_MOUSEMOVE` is sent to the application's own
+window, which takes no focus and synthesizes no input, and the desktop cursor is
+restored to whatever it was carrying before the run. `GetCursor()` does read
+state the machine's real pointer also writes, so a disagreement is re-probed once
+before it is reported.
+
+The lasting reason this mode exists: a QML test can only prove the declaration is
+there, and `QCoreApplication::sendEvent()` never teaches Qt's platform layer that
+the pointer is inside the window — so `SetCursor()` never runs and the assertion
+passes on a build where no user sees a cursor. `app/quick/tests/test_hover_cursor_native.cpp`
+covers the same question on synthetic windows; this mode covers the shipping one.
+
 ## Maximize and restore — `--window-maximize-cycle`
 
 `exosnap.exe --window-maximize-cycle` drives the shell's own `toggleMaximized()`

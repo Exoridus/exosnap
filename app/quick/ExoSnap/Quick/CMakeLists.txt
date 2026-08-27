@@ -1093,6 +1093,18 @@ set_tests_properties(quick.qml.record_preview_smoke PROPERTIES
     SKIP_RETURN_CODE 3
 )
 
+# Walks every navigation destination, reports the pointer over each control that
+# declares a pointing hand, and compares what Qt thinks the window cursor is with
+# what the OS is actually carrying. Needs the native platform plugin and a real
+# HWND, so it is labelled live and runs alone -- GetCursor() reads state the
+# machine's own pointer shares.
+add_test(NAME quick.qml.cursor_audit COMMAND exosnap --cursor-audit)
+set_tests_properties(quick.qml.cursor_audit PROPERTIES
+    LABELS "quick;live"
+    ENVIRONMENT_MODIFICATION "QT_QPA_PLATFORM=set:windows"
+    RUN_SERIAL TRUE
+)
+
 add_test(NAME quick.qml.record_preview_lifecycle COMMAND exosnap --preview-lifecycle-test)
 set_tests_properties(quick.qml.record_preview_lifecycle PROPERTIES
     LABELS "quick;live"
@@ -1300,6 +1312,28 @@ exosnap_add_gtest(
         Qt6::Qml
         Qt6::Quick
         Qt6::Test
+)
+
+# The other half of the same question, and the half that can fail: a real HWND
+# driven by WM_MOUSEMOVE, asserting the cursor the OS ends up carrying. Needs the
+# native platform plugin -- under offscreen there is no HWND to send to and the
+# cases skip, which is why this is a separate binary with its own environment.
+exosnap_add_gtest(
+    NAME hover_cursor_native_tests
+    TEST_PREFIX quick_hover_cursor_native.
+    SOURCES ${EXOSNAP_QUICK_TESTS_DIR}/test_hover_cursor_native.cpp
+    LABELS "quick;live"
+    LIBRARIES
+        Qt6::Gui
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::Test
+)
+
+set_tests_properties(quick_hover_cursor_native.hover_cursor_native_tests PROPERTIES
+    ENVIRONMENT_MODIFICATION "QT_QPA_PLATFORM=set:windows"
+    RUN_SERIAL TRUE
 )
 
 # Diagnostics/Logs presentation policy extracted out of the Widgets DiagnosticsPage,
