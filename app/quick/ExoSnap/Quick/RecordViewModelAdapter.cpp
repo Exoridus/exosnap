@@ -260,6 +260,11 @@ bool RecordViewModelAdapter::failed() const noexcept {
     return source_ != nullptr && source_->state == UiRecordingState::Failed;
 }
 
+bool RecordViewModelAdapter::resultPending() const noexcept {
+    return source_ != nullptr &&
+           (source_->state == UiRecordingState::Completed || source_->state == UiRecordingState::Failed);
+}
+
 const QVariantList& RecordViewModelAdapter::targetOptions() const noexcept {
     return target_options_;
 }
@@ -729,6 +734,9 @@ void RecordViewModelAdapter::requestCountdownSeconds(int seconds) {
 }
 void RecordViewModelAdapter::requestOpenEditor() {
     emit openEditorRequested();
+}
+void RecordViewModelAdapter::requestDismissResult() {
+    emit dismissResultRequested();
 }
 void RecordViewModelAdapter::clearNotice() {
     setNoticeText({});

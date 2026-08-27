@@ -1,5 +1,7 @@
 #include "QuickApplication.h"
 
+#include "services/SystemAppearance.h"
+
 #include "QuickWindowChrome.h"
 
 #include "services/DisplayIdentityEnumerator.h"
@@ -1092,6 +1094,15 @@ void QuickApplication::wireRecordCommands() {
                      &record_view_model_adapter_, [this]() { recording_coordinator_->AddMarker(); });
     QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::openEditorRequested,
                      &record_view_model_adapter_, [this]() { openEditorForCurrentRecording(); });
+    QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::dismissResultRequested,
+                     &record_view_model_adapter_, [this]() {
+                         recording_coordinator_->DismissResult();
+                         // The notice belongs to the run being left behind; a
+                         // failure banner that outlives its result would describe
+                         // a recording the transport no longer shows.
+                         record_view_model_adapter_.clearNotice();
+                         synchronizeRecordState();
+                     });
     QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::splitRequested, &record_view_model_adapter_,
                      [this]() {
                          recording_coordinator_->RequestSplit(exosnap::engine::SplitTriggerSource::ManualButton);
@@ -2453,8 +2464,29 @@ void QuickApplication::applyThemeFromSettings() {
         tokens->setAppearance(settings_.appearance_id, settings_.accent_id);
     }
     // The tray mark carries the accent too, and it is not part of the scene, so
-    // it does not follow the token singleton. Same ids, one call, no restart.
-    tray_adapter_.setAppearance(settings_.appearance_id, settings_.accent_id);
+    // it does not follow the token singleton.
+    //
+    // The APPEARANCE it takes is the shell's, not the application's. The
+    // notification area is composited onto the taskbar, which is drawn in the
+    // Windows theme whatever ExoSnap is set to: a product running in Light on a
+    // dark taskbar was rendering its mark for a ground it never touches. The
+    // ACCENT stays the application's -- it is the product's identity, not the
+    // shell's, and Windows has no opinion about it.
+    tray_adapter_.setAppearance(shellAppearanceId(), settings_.accent_id);
+}
+
+QString QuickApplication::shellAppearanceId() const {
+    return exosnap::services::ShellAppearanceId(settings_.appearance_id);
+}
+
+void QuickApplication::refreshShellChromeAppearance() {
+    tray_adapter_.setAppearance(shellAppearanceId(), settings_.accent_id);
+    // The window icon is only re-rendered when the presence CHANGES, so a shell
+    // theme switch has to invalidate that guard: a session sitting still would
+    // otherwise keep the icon it was given under the old taskbar theme until the
+    // next recording state change. -1 is not a frame any mark has.
+    shell_mark_frame_ = -1;
+    applyShellPresence();
 }
 
 void QuickApplication::persistLiveConfig() {
@@ -3955,8 +3987,10 @@ void QuickApplication::applyShellPresence() {
         shell_mark_frame_ = mark_frame;
         if (root_window_ != nullptr) {
             if (auto* chrome = root_window_->findChild<QuickWindowChrome*>()) {
+                // Same argument as the tray mark: this image ends up on the
+                // taskbar button, which is shell chrome.
                 chrome->applyWindowIcon(RenderWindowIcon(window_icon_cache_, state.icon_state, mark_frame,
-                                                         settings_.appearance_id, settings_.accent_id));
+                                                         shellAppearanceId(), settings_.accent_id));
             }
         }
     }
@@ -4054,6 +4088,11 @@ void QuickApplication::initializeShellPresence() {
                      [this, chrome]() { taskbar_presence_.notifyShellReady(chrome->nativeHandle()); });
     QObject::connect(chrome, &QuickWindowChrome::nativeHandleChanged, &taskbar_presence_,
                      [this, chrome]() { taskbar_presence_.setHandle(chrome->nativeHandle()); });
+    // The taskbar theme can change while the process runs, and the two marks
+    // drawn onto it have to follow. Nothing inside the window moves: the
+    // application's own appearance is a product setting, not a system one.
+    QObject::connect(chrome, &QuickWindowChrome::shellColorsChanged, chrome,
+                     [this]() { refreshShellChromeAppearance(); });
 
     // The chrome attached from QML before this wiring existed, so its first
     // handle notification is already past. Nothing is applied yet -- Explorer

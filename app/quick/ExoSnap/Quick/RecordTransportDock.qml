@@ -306,6 +306,26 @@ Rectangle {
         // Hidden rather than disabled when the recording cannot be edited at all
         // (split recording, missing file, failed run) — a permanently dead button
         // next to a successful result reads as a defect.
+        // The way OUT of a finished run, and the reason Record no longer has to be
+        // two things at once. Until this existed the only exit from Completed was
+        // to start the next recording, so "I am done looking at this" and "record
+        // again" were the same button -- and the bar carried two text pills where
+        // the rest of the transport carries round glyphs.
+        //
+        // Nothing is undone by it: the recording stays where it was written.
+        RecordActionButton {
+            id: dismissButton
+
+            compact: root.compactControls
+            accessibleLabel: qsTr("Back to the transport")
+            text: qsTr("Back")
+            glyph: ExoGlyph.Back
+            round: true
+            visible: root.recordViewModel.resultPending
+            Layout.leftMargin: root.actionGap
+            onClicked: root.recordViewModel.requestDismissResult()
+        }
+
         RecordActionButton {
             id: editButton
 
@@ -317,7 +337,7 @@ Rectangle {
             emphasisColor: ExoTheme.accent
             emphasisTextColor: ExoTheme.accentInk
             visible: root.recordViewModel.canOpenEditor
-            Layout.leftMargin: root.actionGap
+            Layout.leftMargin: root.clusterSpacing
             onClicked: root.recordViewModel.requestOpenEditor()
         }
 
@@ -326,12 +346,13 @@ Rectangle {
 
             recordViewModel: root.recordViewModel
             compact: root.compactControls
-            // Only one accent pill on the bar at a time. While Edit holds it,
-            // Record keeps its split behaviour and its chevron and gives up the
-            // emphasis.
-            subdued: editButton.visible
-            visible: !root.recordViewModel.recording && !root.recordViewModel.paused
-            Layout.leftMargin: editButton.visible ? root.clusterSpacing : root.actionGap
+            // Not shown beside a result. Record is the idle transport's action;
+            // reaching it is what the Back glyph is for, and keeping both on the
+            // bar is what made the gap between them read as two clusters that had
+            // drifted apart rather than as one.
+            visible: !root.recordViewModel.recording && !root.recordViewModel.paused &&
+                     !root.recordViewModel.resultPending
+            Layout.leftMargin: root.actionGap
         }
     }
 

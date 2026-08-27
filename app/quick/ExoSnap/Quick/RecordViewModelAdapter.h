@@ -59,6 +59,10 @@ class RecordViewModelAdapter : public QObject {
     Q_PROPERTY(qreal savingProgress READ savingProgress NOTIFY savingProgressChanged FINAL)
     Q_PROPERTY(bool blocked READ blocked NOTIFY changed FINAL)
     Q_PROPERTY(bool failed READ failed NOTIFY changed FINAL)
+    // A run that is over, one way or the other. The transport swaps its whole
+    // right-hand cluster on this: the way OUT of a finished run is a separate
+    // action from starting the next one.
+    Q_PROPERTY(bool resultPending READ resultPending NOTIFY changed FINAL)
 
     Q_PROPERTY(QVariantList targetOptions READ targetOptions NOTIFY targetOptionsChanged FINAL)
     Q_PROPERTY(QVariantList displayTargetOptions READ displayTargetOptions NOTIFY targetOptionsChanged FINAL)
@@ -154,6 +158,7 @@ class RecordViewModelAdapter : public QObject {
     void setSavingProgress(float fraction);
     [[nodiscard]] bool blocked() const noexcept;
     [[nodiscard]] bool failed() const noexcept;
+    [[nodiscard]] bool resultPending() const noexcept;
     [[nodiscard]] const QVariantList& targetOptions() const noexcept;
     [[nodiscard]] const QVariantList& displayTargetOptions() const noexcept;
     [[nodiscard]] const QVariantList& windowTargetOptions() const noexcept;
@@ -224,6 +229,7 @@ class RecordViewModelAdapter : public QObject {
     Q_INVOKABLE void requestWebcamOverlayRect(QRectF normalized_rect);
     Q_INVOKABLE void requestCountdownSeconds(int seconds);
     Q_INVOKABLE void requestOpenEditor();
+    Q_INVOKABLE void requestDismissResult();
     Q_INVOKABLE void clearNotice();
 
   signals:
@@ -251,6 +257,7 @@ class RecordViewModelAdapter : public QObject {
     void webcamOverlayRectRequested(QRectF normalized_rect);
     void countdownSecondsRequested(int seconds);
     void openEditorRequested();
+    void dismissResultRequested();
 
   private:
     // -1 means "not known", which is the resting value; see the property.

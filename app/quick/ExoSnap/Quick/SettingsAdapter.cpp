@@ -938,6 +938,12 @@ bool SettingsAdapter::expertMode() const noexcept {
 bool SettingsAdapter::controlsLocked() const noexcept {
     return controls_locked_;
 }
+QString SettingsAdapter::encodeAdapterName() const {
+    // Straight from the capability set the probe already produced at startup --
+    // NOT from the Diagnostics adapter scan, which is a DXGI enumeration the user
+    // pays for by expanding a panel. A settings row must not start one.
+    return QString::fromStdString(caps_.gpu_adapter_name);
+}
 const QVariantList& SettingsAdapter::containerOptions() const noexcept {
     return container_options_;
 }

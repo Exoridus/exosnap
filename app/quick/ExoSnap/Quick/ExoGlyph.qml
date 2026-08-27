@@ -59,7 +59,8 @@ Item {
         Info,
         Display,
         Region,
-        ExternalLink
+        ExternalLink,
+        Back
     }
 
     // An ExoGlyph.Kind value. Declared `int` because a QML-declared enum is not
@@ -148,7 +149,12 @@ Item {
         // ExternalLink — an open frame with an arrow leaving through its corner:
         // this action leaves ExoSnap for the browser. Deliberately not the same
         // shape as AppWindow, which is a capture TARGET inside the product.
-        "M10.5 3.5H15.5V8.5 M15.5 3.5L9 10 M13 10.5V14.5H3.5V5H7.5"
+        "M10.5 3.5H15.5V8.5 M15.5 3.5L9 10 M13 10.5V14.5H3.5V5H7.5",
+        // Back -- a left arrow on the same 18-unit grid as the rest. Not a
+        // U-turn or a circular-arrow "undo": nothing is undone by returning to
+        // the idle transport, the finished recording stays exactly where it was
+        // written.
+        "M14.5 9H4.5 M8.5 4.5L4 9L8.5 13.5"
     ]
 
     // Kinds drawn as a filled silhouette instead of a stroked outline.

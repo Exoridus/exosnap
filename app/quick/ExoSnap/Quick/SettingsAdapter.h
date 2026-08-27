@@ -39,6 +39,10 @@ class SettingsAdapter : public QObject {
     // ---- Global tier / lock -------------------------------------------------
     Q_PROPERTY(bool expertMode READ expertMode WRITE setExpertMode NOTIFY appSettingsChanged FINAL)
     Q_PROPERTY(bool controlsLocked READ controlsLocked NOTIFY controlsLockedChanged FINAL)
+    // The adapter the encode is running on, as a fact rather than as a choice.
+    // Empty until the capability probe has named one; the row that shows it says
+    // so rather than inventing a placeholder.
+    Q_PROPERTY(QString encodeAdapterName READ encodeAdapterName NOTIFY optionsChanged FINAL)
 
     // ---- Container & codecs -------------------------------------------------
     Q_PROPERTY(QVariantList containerOptions READ containerOptions NOTIFY optionsChanged FINAL)
@@ -284,6 +288,7 @@ class SettingsAdapter : public QObject {
     // ---- Property readers ---------------------------------------------------
     [[nodiscard]] bool expertMode() const noexcept;
     [[nodiscard]] bool controlsLocked() const noexcept;
+    [[nodiscard]] QString encodeAdapterName() const;
 
     [[nodiscard]] const QVariantList& containerOptions() const noexcept;
     [[nodiscard]] int container() const noexcept;

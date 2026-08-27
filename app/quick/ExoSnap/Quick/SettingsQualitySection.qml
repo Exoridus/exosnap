@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
 ExoCard {
@@ -165,6 +166,38 @@ Screen content with small text degrades earlier than video does, so the useful r
             Layout.fillWidth: true
             Accessible.name: qsTr("Keyframe interval")
             onValueActivated: value => root.settings.keyframeInterval = value
+        }
+    }
+
+    // A FACT, not a choice, and the row is shaped so it cannot be mistaken for
+    // one: no control, no chevron, no affordance. The encode device is not
+    // selectable (product spec 2.1) -- the capture path creates one D3D11 device
+    // and NVENC opens on that same device -- but "which GPU is this running on"
+    // is the first thing a user checks when quality or performance surprises
+    // them, and sending them to Diagnostics for it made a settled fact feel like
+    // a diagnostic.
+    ExoSettingRow {
+        label: qsTr("Encoding on")
+        hint: root.settings.encodeAdapterName.length > 0
+              ? qsTr("Fixed by the capture device — not a setting")
+              : qsTr("Named once the capability probe has run")
+        stacked: root.stacked
+        controlWidth: 260
+        Layout.fillWidth: true
+
+        Label {
+            text: root.settings.encodeAdapterName.length > 0 ? root.settings.encodeAdapterName
+                                                             : qsTr("Detecting…")
+            textFormat: Text.PlainText
+            elide: Text.ElideRight
+            horizontalAlignment: root.stacked ? Text.AlignLeft : Text.AlignRight
+            verticalAlignment: Text.AlignVCenter
+            color: root.settings.encodeAdapterName.length > 0 ? ExoTheme.text : ExoTheme.textDim
+            Layout.fillWidth: true
+            font {
+                family: ExoTheme.sansFamily
+                pixelSize: ExoTheme.fontBody
+            }
         }
     }
 

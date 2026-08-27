@@ -144,6 +144,13 @@ Consequences the UI must respect:
 
 - Diagnostics states which adapter is *actually* carrying the encode, and every other detected
   adapter reads as **not encoding** — a fact about now, never a promise about a backend.
+- Settings names that adapter too, as a read-only **"Encoding on"** row in *Video quality & timing*
+  with the hint *"Fixed by the capture device — not a setting"*. It is shaped so it cannot be
+  mistaken for a control: no select, no chevron, no affordance. "Which GPU is this running on" is
+  the first thing a user checks when quality or performance surprises them, and sending them to a
+  diagnostics panel for a settled fact made the fact feel provisional. The name comes from the
+  startup capability probe, never from the Diagnostics adapter scan — a settings row must not start
+  a DXGI enumeration.
 - Unshipped encoder backends (AMD/AMF, Intel Quick Sync, software x264/SVT-AV1) do **not** appear
   in production UI at all. Roadmap belongs in the repository roadmap, not in a product surface
   where it reads as an available capability.
@@ -183,19 +190,26 @@ ink per accent and appearance, never a derived one.
 **Blocked is a state, not the absence of one.** A control the product has taken away — a setting
 locked for the length of a recording, a webcam row with no camera attached — reads as blocked at a
 glance: its label, its hint and the control itself all step down to the dimmest ink rung together,
-and the control loses its raised fill and its hover response. A control that is **on** while blocked
-keeps its accent, because "which sources am I recording?" is exactly the question a locked recording
-raises; it says *not interactive* through the flat fill and the dimmed knob instead of by pretending
-to be off. A row is dimmed only when **every** control in it is blocked — one live control beside an
+and the control loses its raised fill and its hover response. **The accent goes**, because the accent
+means live and selectable. What stays is the *shape* of the state: a blocked switch that is on keeps
+a filled track with its knob at the right end, filled in the dim ink rung rather than in the accent,
+so a locked page still answers "which sources am I recording?" without any control on it looking
+pressable. A row is dimmed only when **every** control in it is blocked — one live control beside an
 inert one keeps the row at full strength.
 
 **Light** is one base, rebuilt rather than inherited. It distinguishes four surface rungs —
 application background, primary surface, raised control surface, and hover/selected — none of which
 is pure white, plus restrained borders. Both light themes it replaces set the raised-control surface
 *and* the hover surface to pure white, which collapsed two rungs into one; that is why the light UI
-read as flat, and why a hovered control looked identical to a resting one. The page is a light cool
-neutral so a near-white control has something to sit on, and hover steps back *down* towards the
-page — there is no headroom above white to step up into.
+read as flat, and why a hovered control looked identical to a resting one. Hover steps back *down*
+towards the page — there is no headroom above white to step up into.
+
+The **ground is grey and the content on it is near-white**. The page carries most of the window's
+area, so a page only a step or two below its cards makes the whole surface glare and leaves the cards
+nothing to sit against; the ground drops rather than the cards dimming, which keeps the content
+bright and takes the glare out of the frame around it. Separation comes from the value steps alone —
+**no elevation shadows**. This is a tool surface, and a drop shadow under every card would be
+decoration standing in for a hierarchy the steps already carry.
 
 An installation that stored one of the four old theme ids is migrated to the closest pair on first
 launch and keeps the colour it had:
@@ -1077,19 +1091,32 @@ thing meant to be pressed the darkest thing on the page.
 - **Centre — the elapsed time**, the largest element on the page. It is neutral while idle, coral
   while recording and accent while paused, using tabular figures so the digits do not shift.
 - **Right — the actions**, in two tiers: the per-recording secondary actions (capture frame, add
-  marker, split, pause) as round icon buttons, then the one recommended action — **Record**,
-  **Resume**, **Stop** or, once a recording has finished, **Edit** — as a wider filled pill. There is
-  never more than one filled pill. While a recording is **paused**, Resume holds that pill and Stop
+  marker, split, pause) as round icon buttons, then the one recommended action as a wider pill.
+  There is never more than one **filled** pill, and a filled pill means *something is happening
+  now*: **Stop** while recording, **Resume** while paused, **Edit** once a recording has finished,
+  and **Cancel** during a countdown. While a recording is **paused**, Resume holds the fill and Stop
   keeps its size and its coral but gives up its fill, so the bar still answers "what now?" with one
   control.
 
+  **Record is an outlined pill, not a filled one**, and carries no glyph beside its label. The idle
+  bar has nothing in flight to announce; a solid accent slab there made the transport shout about a
+  recording that has not started, and the record dot beside the word *Record* only restated the
+  label. The countdown is the exception and keeps the fill, because then something *is* happening
+  and cancelling it is the one available action — which is also why Cancel is the one state that
+  still draws a glyph, so it is never read as Record at a glance.
+
   After a successful recording the recommended action is **Edit**, because opening what was just
-  recorded is what the product is for and starting the next one is not. Record is not removed — it
-  keeps its split button and its countdown chevron and steps down to a plain outlined pill beside
-  Edit, so there is always a way on from the completed state. Edit is hidden, not disabled, when the
-  recording cannot be edited at all (a split recording, a missing file, a failed run): a permanently
-  dead button next to a successful result reads as a defect. It is never a separate control floating
-  between the Preview Surface and the dock — the page is one Preview Surface, 16 px, one dock.
+  recorded is what the product is for and starting the next one is not. Record is **not** shown
+  beside it: the way out of a finished run is a round **back** glyph that returns the transport to
+  its idle arrangement, where Record lives. Nothing is undone by it — the recording stays exactly
+  where it was written, and the manifest and the result are untouched. Until that glyph existed the
+  only exit from Completed was to start the next recording, which made "I am done looking at this"
+  and "record again" the same button and left two text pills on a bar the rest of which is round
+  glyphs. Edit is hidden, not disabled, when the recording cannot be edited at all (a split
+  recording, a missing file, a failed run): a permanently dead button next to a successful result
+  reads as a defect — the back glyph is still there, so the state is never a dead end. It is never a
+  separate control floating between the Preview Surface and the dock — the page is one Preview
+  Surface, 16 px, one dock.
 
 **Page notice.** A single inline banner sits above the Preview Surface for conditions the page itself
 cannot fix. Its colour states what the message **means** — a refused export is an error, an

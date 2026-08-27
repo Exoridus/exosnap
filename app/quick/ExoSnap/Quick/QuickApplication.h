@@ -489,6 +489,10 @@ class QuickApplication {
     // live_config_ itself keeps the unpinned value.
     [[nodiscard]] WebcamSettings webcamSettingsForCapture() const;
     void applyThemeFromSettings();
+    // The appearance the WINDOWS SHELL is drawing, for the two marks that are
+    // composited onto it rather than onto an ExoSnap surface.
+    [[nodiscard]] QString shellAppearanceId() const;
+    void refreshShellChromeAppearance();
     void initializeHotkeys();
     void refreshHotkeyRows();
     void triggerHotkeyAction(HotkeyAction action);

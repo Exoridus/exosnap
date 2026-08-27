@@ -134,20 +134,32 @@ inline constexpr std::array<ExoAppearance, 2> kExoAppearances = {{
         "light",
         "Light",
         ThemeKind::Light,
-        "Cool daylight \xE2\x80\x94 restrained neutrals, near-white surfaces.",
-        "#E7E9ED",
-        "#F2F3F6",
-        "#FDFDFE",
-        "#EAECF1",
+        "Cool daylight \xE2\x80\x94 a grey ground with near-white surfaces on it.",
+        // The ground is grey and the things ON it are near-white, which is the
+        // arrangement a light UI needs to stop reading as one bright sheet. The
+        // page carries most of the window's area and sat only two steps below
+        // its cards, so the whole surface glared and the cards had nothing to
+        // sit against. Dropping the ground rather than dimming the cards keeps
+        // the content bright and takes the glare out of the frame around it.
+        //
+        // Separation comes from the value steps alone. No elevation shadows:
+        // this is a tool surface, and a drop shadow under every card would be
+        // decoration standing in for a hierarchy the steps already carry.
+        "#DCE0E7",
+        "#F4F5F8",
+        "#FCFCFD",
+        "#E8EAF0",
         "rgba(20, 26, 38, 0.12)",
         "rgba(20, 26, 38, 0.22)",
         "#171B24",
         "#3D4351",
         "#545A68",
-        // Darkened from #868D9C. `dim` is what an unavailable control draws its
-        // icon in, and against the page background it landed at 2.74:1 — under
-        // the 3:1 the contrast gate holds a non-text UI element to.
-        "#798192",
+        // `dim` is what an unavailable control draws its icon in, and it is
+        // measured against the PAGE background -- so it follows the ground down
+        // every time the ground moves. At the value it held before the ground
+        // was darkened it lands at 2.97:1, just under the 3:1 the contrast gate
+        // holds a non-text UI element to.
+        "#6F7787",
         // success / caution darkened from #1E9E63 / #B5801C, and error from
         // #CE4B36. All three are drawn as rings, dots and pill grounds on the
         // page background, where they sat at 2.82 / 2.85 against the 3:1 bar;

@@ -258,6 +258,8 @@ target_sources(exosnap
         # whole app-to-updater handoff, against a controlled feed.
         ${PROJECT_SOURCE_DIR}/app/cli/CommandLineFlags.cpp
         ${PROJECT_SOURCE_DIR}/app/cli/CommandLineFlags.h
+        ${PROJECT_SOURCE_DIR}/app/services/SystemAppearance.cpp
+        ${PROJECT_SOURCE_DIR}/app/services/SystemAppearance.h
         ${PROJECT_SOURCE_DIR}/app/services/UpdateFeedOverride.cpp
         ${PROJECT_SOURCE_DIR}/app/services/UpdateFeedOverride.h
         ${PROJECT_SOURCE_DIR}/app/models/AboutInfo.cpp

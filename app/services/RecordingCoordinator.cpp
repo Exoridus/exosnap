@@ -1522,6 +1522,20 @@ void RecordingCoordinator::PauseRecording() {
     PostStateChange(UiRecordingState::Paused);
 }
 
+void RecordingCoordinator::DismissResult() {
+    const auto state = State();
+    if (state != UiRecordingState::Completed && state != UiRecordingState::Failed)
+        return;
+    // The same three-way landing the recovery cancel path uses: Ready only when
+    // capabilities are loaded AND valid, Blocked when they are loaded and are
+    // not, and nothing at all before they arrive -- OnCapabilitiesReady owns the
+    // state until then, and posting Ready here would claim a readiness no probe
+    // has established.
+    if (!has_caps_)
+        return;
+    PostStateChange(validation_result_.succeeded ? UiRecordingState::Ready : UiRecordingState::Blocked);
+}
+
 void RecordingCoordinator::ResumeRecording() {
     if (!is_paused_.load())
         return;

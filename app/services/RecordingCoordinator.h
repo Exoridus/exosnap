@@ -224,6 +224,15 @@ class RecordingCoordinator {
     void PauseRecording();
     void ResumeRecording();
 
+    // Leaves a finished or failed run behind and returns the transport to its
+    // idle arrangement. Nothing is undone: the recording stays exactly where it
+    // was written, and the manifest and the result are untouched. Until this
+    // existed, the only way out of Completed was to start the next recording,
+    // which made "I am done looking at this" and "record again" the same button.
+    //
+    // A no-op in every other state, so a stray call can never interrupt a run.
+    void DismissResult();
+
     // Typed split command path (SPLIT-RECORDING-R1). Routes the manual button and
     // the global hotkey through the exact same entry point. Accepted only while a
     // session is active (Recording or Paused) and no split transition is already

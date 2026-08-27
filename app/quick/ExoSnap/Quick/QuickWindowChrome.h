@@ -259,6 +259,12 @@ class QuickWindowChrome : public QObject, public QAbstractNativeEventFilter {
     void snapLayoutsEnabledChanged();
     void nonClientActivationWorkaroundChanged();
 
+    // The Windows shell theme changed under a running process. Carried here
+    // because WM_SETTINGCHANGE is a broadcast to top-level windows and this class
+    // already owns the only one we have; the surfaces that care are the tray icon
+    // and the taskbar button, neither of which is part of the scene.
+    void shellColorsChanged();
+
     // Emitted on a completed NC click on maximizeButtonRect. The shell routes it
     // back into toggleMaximized() rather than acting on it here, so the button and
     // the title-bar control share one path.

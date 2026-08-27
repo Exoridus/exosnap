@@ -23,12 +23,6 @@ Item {
     // One rung down at the 860 px minimum window, in step with the rest of the
     // transport — see RecordActionButton.
     property bool compact: false
-    // Gives up the accent while another control on the bar is the state's one
-    // recommended action (Completed hands it to Edit). Nothing about the
-    // behaviour changes — the split, the chevron and the countdown menu are
-    // untouched; only the pill stops claiming to be the thing to press.
-    property bool subdued: false
-
     readonly property bool counting: root.recordViewModel.countdownActive
     readonly property bool busy: root.recordViewModel.preparing || root.recordViewModel.finalizing
     readonly property bool mainEnabled: root.counting || root.recordViewModel.canStart
@@ -36,9 +30,8 @@ Item {
     // "start in 5 seconds" beside it would be two answers to one question.
     readonly property bool chevronEnabled: !root.counting && !root.busy && root.recordViewModel.canStart
 
-    // A countdown outranks `subdued`: cancelling it is unambiguously the action
-    // in flight, whatever else is on the bar — so it keeps the accent fill
-    // rather than giving it up.
+    // The countdown is the one state that keeps the accent FILL: cancelling it is
+    // unambiguously the action in flight, whatever else is on the bar.
     //
     // It used to take the ERROR fill, which said "destructive" about a button
     // that stops something from starting. Nothing has been recorded yet, no file
@@ -46,9 +39,17 @@ Item {
     // its primary action, and it is drawn like one. The face's own glyph carries
     // the difference — a cross rather than the record dot — so Cancel and Record
     // are never confused at a glance despite sharing a colour.
-    readonly property color fill: root.subdued && !root.counting ? ExoTheme.surfaceRaised : ExoTheme.accent
-    readonly property color ink: root.subdued && !root.counting ? ExoTheme.text : ExoTheme.accentInk
-    readonly property bool outlined: root.subdued && !root.counting
+    // Outlined, not filled -- the same treatment Stop wears while paused, which
+    // is the loudest the bar ever needs a resting action to be. A solid accent
+    // slab is the transport's way of saying "this is happening now": it belongs
+    // to Stop and to Resume, and Record borrowing it made the idle bar shout
+    // about a recording that has not started.
+    //
+    // A countdown is the exception and keeps the fill, because then something IS
+    // happening and cancelling it is the one available action.
+    readonly property bool outlined: !root.counting
+    readonly property color fill: root.outlined ? ExoTheme.surfaceRaised : ExoTheme.accent
+    readonly property color ink: root.outlined ? ExoTheme.accent : ExoTheme.accentInk
 
     // -1 is "no fraction measured yet", which covers all of Stopping and the
     // first instant of Saving. The bare "Finalizing…" is what that must read as;
@@ -77,11 +78,14 @@ Item {
         // round control sits on, so a Record button that cannot start would have
         // read as the most ordinary control on the bar.
         color: root.mainEnabled || root.busy ? root.fill : ExoTheme.surface
-        // A subdued pill sits on the dock's raised-control fill, which is the
-        // same step the round peers take — without a border it would dissolve
-        // into them instead of reading as a control of its own.
+        // An outlined pill sits on the dock's raised-control fill, the same step
+        // the round peers take — without a border it would dissolve into them
+        // instead of reading as a control of its own.
         border.width: (root.mainEnabled || root.busy) && !root.outlined ? 0 : 1
-        border.color: ExoTheme.line
+        // The accent hairline is what carries "primary" once the fill is gone. An
+        // unavailable Record keeps the ordinary line instead: a control that
+        // cannot start must not be the most emphasised thing on the bar.
+        border.color: root.outlined && (root.mainEnabled || root.busy) ? ExoTheme.accent : ExoTheme.line
         radius: height / 2
     }
 
@@ -135,13 +139,17 @@ Item {
                 spacing: ExoTheme.spacingSm
                 anchors.centerIn: parent
 
+                // Only Cancel draws a glyph. The record dot beside the word
+                // "Record" restated the label and read as a stray bullet at the
+                // pill's size; the cross is what keeps Cancel from being read as
+                // Record at a glance, which is the job the glyph was there for.
                 ExoGlyph {
-                    kind: root.counting ? ExoGlyph.Close : ExoGlyph.Record
+                    kind: ExoGlyph.Close
                     color: root.mainEnabled || root.busy ? root.ink : ExoTheme.textDim
                     width: 16
                     height: 16
                     anchors.verticalCenter: parent.verticalCenter
-                    visible: !root.busy
+                    visible: root.counting && !root.busy
                 }
 
                 Label {

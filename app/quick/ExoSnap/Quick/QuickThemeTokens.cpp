@@ -144,8 +144,20 @@ void QuickThemeTokens::setAppearance(const QString& appearance_id, const QString
     // design-system derivation, not a palette value). Derived from this
     // appearance's own base so both appearances stay consistent instead of
     // hardcoding one palette's values.
-    warning_surface_ = blend(background_, warning_, dark_ ? 0.13 : 0.16);
-    error_surface_ = blend(background_, error_, dark_ ? 0.13 : 0.16);
+    //
+    // From `surface`, not from `background`: a notice is CONTENT and sits on a
+    // card with the rest of it. Tinting the page ground instead tied the notice
+    // to whatever the frame was doing -- when Light's ground was darkened to stop
+    // the UI glaring, the notice went with it and its three text rungs fell from
+    // 4.5:1 to 4.2:1 on a surface no page colour should have reached.
+    //
+    // Light tints harder than it used to (0.20 rather than 0.16) because it is
+    // now tinting a lighter base. The strength is not a taste setting: the
+    // indicator rung has to stay UNREADABLE on its own tinted ground, which is
+    // the whole reason `warningText` and its two peers exist, and a ground too
+    // close to the card stops making that case.
+    warning_surface_ = blend(surface_, warning_, dark_ ? 0.13 : 0.20);
+    error_surface_ = blend(surface_, error_, dark_ ? 0.13 : 0.20);
 
     // The modal scrim. A semantic role, not a translucent copy of the current
     // page background: it means "the application behind this is not the thing

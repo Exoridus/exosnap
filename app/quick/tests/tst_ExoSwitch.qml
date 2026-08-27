@@ -106,8 +106,8 @@ TestCase {
 
         verify(!Qt.colorEqual(on.indicator.color, off.indicator.color),
                "a blocked ON switch must not paint the same track as a blocked OFF one");
-        verify(!Qt.colorEqual(on.indicator.border.color, off.indicator.border.color),
-               "a blocked ON switch keeps the accent hairline");
+        verify(!Qt.colorEqual(knobOf(on).color, on.indicator.color),
+               "the knob has to read against its own filled track");
     }
 
     // And it still has to read as blocked. The knob is what carries that: full
@@ -123,7 +123,9 @@ TestCase {
 
         verify(!Qt.colorEqual(knobOf(live).color, knobOf(blockedOff).color),
                "off and blocked-off must not paint the same knob");
-        compare(knobOf(blockedOn).color, knobOf(blockedOff).color);
+        // And blocked must not borrow the accent, in either checked state.
+        verify(!Qt.colorEqual(blockedOn.indicator.color, ExoTheme.accent),
+               "a blocked switch must not paint the accent");
     }
 
     // Toggled while the control is not being rendered — the case an Animator
