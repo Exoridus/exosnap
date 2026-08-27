@@ -157,14 +157,24 @@ Item {
                     // to the divider. A single rounded rectangle would round its
                     // bottom corners away from the divider and show the black
                     // stage through them.
+                    //
+                    // The radius is the surface's MINUS the 1 px inset this item
+                    // sits at. Two concentric rounded rects are only concentric
+                    // when their radii differ by the inset; drawn at the same
+                    // radius the inner corner cuts across the outer arc and
+                    // leaves a sliver of black stage inside the border -- read as
+                    // a mismatched corner, and most visible in Light where the
+                    // toolbar ground is near-white against it.
+                    readonly property int cornerRadius: ExoTheme.radiusLg - 1
+
                     Rectangle {
                         color: ExoTheme.surface
-                        radius: ExoTheme.radiusLg
+                        radius: previewToolbar.cornerRadius
                         anchors.fill: parent
                     }
 
                     Rectangle {
-                        height: ExoTheme.radiusLg
+                        height: previewToolbar.cornerRadius
                         color: ExoTheme.surface
                         anchors {
                             right: parent.right

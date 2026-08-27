@@ -4690,6 +4690,13 @@ bool QuickApplication::canOpenEditor() const {
 // claiming to test a difference that does not exist: the same SetState call
 // produced both. A scenario name that contradicts, or merely duplicates, the
 // state it selects is worse than no scenario.
+void QuickApplication::applyHarnessExpertMode(bool expert) {
+    // Through the adapter, not straight into a QML property: the Appearance
+    // card's own toggle reads the same value, and a capture showing an Expert
+    // page under a switch that says Simple is worse evidence than none.
+    settings_adapter_.setExpertMode(expert);
+}
+
 bool QuickApplication::applyRecordVisualScenario(const QString& scenario) {
     const QString normalized = scenario.trimmed().toLower();
     pending_record_visual_state_ = normalized;

@@ -115,7 +115,8 @@ int visualCaptureDelayMs(const QStringList& arguments) {
     // did silently before, so nobody noticed the cards below the fold were never
     // in the sweep. An explicit --visual-delay-ms still wins over this.
     constexpr int kSettingsBottomCaptureDelayMs = 2000;
-    const int default_delay_ms = arguments.contains(QStringLiteral("--settings-visual-bottom"))
+    const int default_delay_ms = arguments.contains(QStringLiteral("--settings-visual-bottom")) ||
+                                         arguments.contains(QStringLiteral("--visual-scroll"))
                                      ? kSettingsBottomCaptureDelayMs
                                      : kDefaultCaptureDelayMs;
     const int option_index = arguments.indexOf(QStringLiteral("--visual-delay-ms"));
@@ -1025,6 +1026,67 @@ int main(int argc, char* argv[]) {
     // silently -- every capture taken with the flag showed the top of the page
     // while claiming to show its end, and the cards below the fold (Appearance
     // among them) had never actually been photographed.
+    // Harness-only: Expert mode, for a capture of the surfaces that have two
+    // arrangements. Settings and Diagnostics both key off the SAME product
+    // setting, so this is one switch rather than one per page -- and it goes
+    // through the settings adapter, which is what the Appearance card's own
+    // controls read, so a capture cannot show an Expert page under a toggle that
+    // says Simple.
+    //
+    // Applied in BOTH directions, always. The harness config directory is scratch
+    // but it is not fresh: it survives between runs and the application persists
+    // Expert mode into it, so a capture taken after a --visual-expert run came out
+    // in Expert while claiming to be the default view. Same trap the appearance
+    // options already document, and the same fix -- pin it rather than leave it.
+    {
+        const bool expert = arguments.contains(QStringLiteral("--visual-expert"));
+        QTimer::singleShot(0, &app,
+                           [&quick_application, expert]() { quick_application.applyHarnessExpertMode(expert); });
+    }
+
+    // Harness-only: where a long page is scrolled, as a fraction of its own
+    // scrollable height. A page that needs three screens to show its sections
+    // cannot be reviewed from one capture of its top, and a reviewer given only
+    // the top reports the rest as missing.
+    const QString visual_scroll = optionValue(arguments, QStringLiteral("--visual-scroll"));
+    if (!visual_scroll.isEmpty()) {
+        bool fraction_ok = false;
+        const double fraction = visual_scroll.toDouble(&fraction_ok);
+        if (fraction_ok) {
+            // On a TIMER, not on a queued call. The page is loader-built, its two
+            // breakpoint compositions settle afterwards, and contentHeight is not
+            // final until the sections have been laid out -- exactly the reason
+            // --settings-visual-bottom raises the capture delay to 2 s. Scrolling
+            // before that silently photographs the top.
+            QTimer::singleShot(1200, &app, [root_window, fraction]() {
+                if (root_window == nullptr || root_window->contentItem() == nullptr)
+                    return;
+                // The VISUAL tree, not findChildren(): a page built by a Loader is
+                // not a QObject child of the shell, and a QObject walk from the
+                // content item never reaches the flickable that holds it. Same
+                // reason --cursor-audit walks childItems().
+                int scrolled = 0;
+                const std::function<void(QQuickItem*)> visit = [&](QQuickItem* item) {
+                    if (item == nullptr)
+                        return;
+                    if (item->inherits("QQuickFlickable")) {
+                        const double content = item->property("contentHeight").toDouble();
+                        const double range = content - item->height();
+                        if (range > 0.0) {
+                            item->setProperty("contentY", std::clamp(fraction, 0.0, 1.0) * range);
+                            ++scrolled;
+                        }
+                    }
+                    for (QQuickItem* child : item->childItems())
+                        visit(child);
+                };
+                visit(root_window->contentItem());
+                if (scrolled == 0)
+                    qWarning("--visual-scroll: nothing on this page scrolls");
+            });
+        }
+    }
+
     if (arguments.contains(QStringLiteral("--settings-visual-bottom"))) {
         QTimer::singleShot(0, &app, [root_window]() {
             auto* page = root_window != nullptr ? root_window->findChild<QObject*>(QStringLiteral("quickSettingsPage"))

@@ -1,5 +1,8 @@
 #include <gtest/gtest.h>
 
+#include <chrono>
+#include <thread>
+
 #include "session_stop_reset.h"
 
 using exosnap::engine::PendingStopTracker;
@@ -76,4 +79,46 @@ TEST(PendingStopTracker, StartsClean) {
     PendingStopTracker tracker;
 
     EXPECT_FALSE(tracker.Consume());
+}
+
+// ---------------------------------------------------------------------------
+// capture_end_ns -- when the CAPTURE ended, as opposed to when Record() returns.
+//
+// The reported duration used to be measured to the end of Record(), which is
+// after the producer drain and the whole container finalize. Both are work done
+// after the last captured frame, both are O(duration) and disk-bound, and the
+// elapsed time therefore jumped forward at Stop by however long finalizing took.
+// ---------------------------------------------------------------------------
+
+TEST(CaptureEndInstant, AFreshSessionHasNotRecordedOne) {
+    SessionState state;
+    EXPECT_EQ(state.capture_end_ns.load(), 0) << "a session that has not stopped must not claim an end";
+}
+
+TEST(CaptureEndInstant, TheFinalizeThatFollowsDoesNotMoveIt) {
+    SessionState state;
+    state.NoteCaptureEnded();
+    const int64_t at_stop = state.capture_end_ns.load();
+    ASSERT_NE(at_stop, 0);
+
+    // Stands in for the drain and the finalize: everything Record() still does
+    // after the capture is over.
+    std::this_thread::sleep_for(std::chrono::milliseconds(40));
+    state.NoteCaptureEnded();
+
+    EXPECT_EQ(state.capture_end_ns.load(), at_stop) << "the instant moved while the container was still being written";
+}
+
+// A failure raised while a user stop is already draining must not re-date the
+// recording: RecordFailure raises the same stop token and would otherwise claim
+// the later instant.
+TEST(CaptureEndInstant, AFailureDuringTheDrainKeepsTheFirstInstant) {
+    SessionState state;
+    state.NoteCaptureEnded();
+    const int64_t at_stop = state.capture_end_ns.load();
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    state.RecordFailure(1, exosnap::engine::ErrorPhase::Shutdown, "late failure");
+
+    EXPECT_EQ(state.capture_end_ns.load(), at_stop);
 }

@@ -173,6 +173,9 @@ class QuickApplication {
     // launch should reopen at, so nothing is written back.
     void applyHarnessWindowSize(const QSize& size);
     [[nodiscard]] bool applyRecordVisualScenario(const QString& scenario);
+    // Harness-only: the Expert/Simple arrangement, through the same path the
+    // Appearance card's own toggle uses.
+    void applyHarnessExpertMode(bool expert);
     // Harness-only (--overlay-visual-state). Seeds one of the runtime overlay
     // surfaces with deterministic content so a --visual-test capture can
     // photograph it without a real crash, a real failed recording, or a real

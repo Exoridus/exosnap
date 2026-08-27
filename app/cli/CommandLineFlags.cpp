@@ -76,6 +76,8 @@ constexpr std::array kFlags = {
     KnownFlag{"--visual-appearance", FlagArity::Value},
     KnownFlag{"--visual-accent", FlagArity::Value},
     KnownFlag{"--settings-visual-bottom", FlagArity::None},
+    KnownFlag{"--visual-expert", FlagArity::None},
+    KnownFlag{"--visual-scroll", FlagArity::Value},
     KnownFlag{"--record-visual-state", FlagArity::Value},
     KnownFlag{"--record-visual-menu", FlagArity::None},
     KnownFlag{"--overlay-visual-state", FlagArity::Value},

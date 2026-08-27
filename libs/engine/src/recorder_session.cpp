@@ -437,6 +437,9 @@ void RecorderSession::Stop() {
         m_impl->pending_stop.NoteStop(m_impl->recording.load());
     }
     st->pause_requested.store(false);
+    // Before the flag, so no worker can observe the stop and start draining while
+    // the instant that stop happened is still unrecorded.
+    st->NoteCaptureEnded();
     st->stop_requested.store(true);
     st->SignalStopEvent();
     st->premux_cv.notify_all();
@@ -1032,7 +1035,14 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
     // frames, so counting that time here would report a duration the file does
     // not have -- and would disagree with the clock the user was watching.
     {
-        const auto recording_wall_end = std::chrono::steady_clock::now();
+        // The end of the CAPTURE, not the end of this function. Falls back to now()
+        // only for a session that ended without anyone raising a stop, which is a
+        // path that should not exist -- and is still better measured long than
+        // reported as zero.
+        const int64_t recorded_end_ns = state_ptr->capture_end_ns.load(std::memory_order_relaxed);
+        const auto recording_wall_end =
+            recorded_end_ns != 0 ? std::chrono::steady_clock::time_point(std::chrono::nanoseconds(recorded_end_ns))
+                                 : std::chrono::steady_clock::now();
         const auto captured =
             recording_wall_end - recording_wall_start - std::chrono::nanoseconds(state_ptr->paused_ns.load());
         const double seconds = std::chrono::duration<double>(captured).count();
