@@ -19,7 +19,7 @@ ExoCard {
         label: qsTr("Notifications")
         hint: qsTr("Toasts for saved / low disk / stops")
         stacked: root.stacked
-        controlWidth: 60
+        controlWidth: ExoTheme.controlSlotSwitch
         Layout.fillWidth: true
 
         ExoSwitch {
@@ -34,7 +34,7 @@ ExoCard {
         label: qsTr("Minimize ExoSnap to the system tray")
         hint: qsTr("Minimizing hides the window; the tray icon brings it back")
         stacked: root.stacked
-        controlWidth: 60
+        controlWidth: ExoTheme.controlSlotSwitch
         Layout.fillWidth: true
 
         ExoSwitch {
@@ -52,7 +52,7 @@ ExoCard {
         // machine, not only ExoSnap's own.
         hint: qsTr("Applies to all capture software — calls, screen sharing, screenshots")
         stacked: root.stacked
-        controlWidth: 60
+        controlWidth: ExoTheme.controlSlotSwitch
         Layout.fillWidth: true
 
         ExoSwitch {
@@ -66,7 +66,7 @@ ExoCard {
     ExoSettingRow {
         label: qsTr("Open editor when finished")
         stacked: root.stacked
-        controlWidth: 60
+        controlWidth: ExoTheme.controlSlotSwitch
         Layout.fillWidth: true
 
         ExoSwitch {

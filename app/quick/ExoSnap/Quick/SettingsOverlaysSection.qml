@@ -43,7 +43,7 @@ ExoCard {
         label: qsTr("Recording overlay")
         hint: qsTr("Status pill on the recorded screen while capturing")
         stacked: root.stacked
-        controlWidth: 60
+        controlWidth: ExoTheme.controlSlotSwitch
         Layout.fillWidth: true
 
         ExoSwitch {
@@ -102,7 +102,7 @@ ExoCard {
         label: qsTr("Diagnostics overlay")
         hint: qsTr("Live measurements on the recorded screen while capturing")
         stacked: root.stacked
-        controlWidth: 60
+        controlWidth: ExoTheme.controlSlotSwitch
         Layout.fillWidth: true
 
         ExoSwitch {
@@ -176,7 +176,7 @@ ExoCard {
         label: qsTr("Quick control pill")
         hint: qsTr("Floating pause / stop / capture controls while recording")
         stacked: root.stacked
-        controlWidth: 60
+        controlWidth: ExoTheme.controlSlotSwitch
         Layout.fillWidth: true
 
         ExoSwitch {

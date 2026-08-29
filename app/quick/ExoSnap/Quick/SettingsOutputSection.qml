@@ -17,9 +17,10 @@ ExoCard {
 
     ExoSettingRow {
         label: qsTr("Destination folder")
+        // A path field and the Browse button beside it.
+        controlWidth: ExoTheme.controlSlotWide
         warning: root.settings.folderValidation
         stacked: root.stacked
-        controlWidth: 320
         Layout.fillWidth: true
 
         RowLayout {
@@ -115,8 +116,9 @@ ExoCard {
     // file name alone never says where the file lands.
     ExoSettingRow {
         label: qsTr("Saves as")
+        // The resolved filename, which is a whole path and needs the room.
+        controlWidth: ExoTheme.controlSlotWide
         stacked: root.stacked
-        controlWidth: 320
         Layout.fillWidth: true
 
         Label {
@@ -195,7 +197,7 @@ ExoCard {
         label: qsTr("Split recording")
         hint: root.settings.splitSummary
         stacked: root.stacked
-        controlWidth: 60
+        controlWidth: ExoTheme.controlSlotSwitch
         Layout.fillWidth: true
 
         ExoSwitch {
@@ -238,7 +240,7 @@ ExoCard {
     ExoSettingRow {
         label: qsTr("Split by size")
         stacked: root.stacked
-        controlWidth: 60
+        controlWidth: ExoTheme.controlSlotSwitch
         Layout.fillWidth: true
 
         ExoSwitch {

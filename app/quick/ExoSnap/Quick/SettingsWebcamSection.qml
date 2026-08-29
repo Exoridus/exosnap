@@ -26,7 +26,7 @@ ExoCard {
         label: qsTr("Include webcam")
         hint: qsTr("Adds a picture-in-picture overlay to the recording")
         stacked: root.stacked
-        controlWidth: 60
+        controlWidth: ExoTheme.controlSlotSwitch
         Layout.fillWidth: true
 
         ExoSwitch {
@@ -57,7 +57,7 @@ ExoCard {
         label: qsTr("Capture format")
         stacked: root.stacked
         // Resolution and frame rate share this slot.
-        controlWidth: 320
+        controlWidth: ExoTheme.controlSlotWide
         Layout.fillWidth: true
 
         RowLayout {
@@ -88,7 +88,7 @@ ExoCard {
         label: qsTr("Mirror image")
         hint: qsTr("Applied to the preview and the recording alike")
         stacked: root.stacked
-        controlWidth: 60
+        controlWidth: ExoTheme.controlSlotSwitch
         Layout.fillWidth: true
 
         ExoSwitch {
@@ -138,7 +138,7 @@ ExoCard {
         label: qsTr("Chroma key")
         hint: qsTr("Removes a solid background colour behind you")
         stacked: root.stacked
-        controlWidth: 60
+        controlWidth: ExoTheme.controlSlotSwitch
         Layout.fillWidth: true
 
         ExoSwitch {

@@ -16,7 +16,7 @@ ColumnLayout {
         label: qsTr("High-pass filter")
         hint: qsTr("Removes low-frequency rumble below the cutoff frequency")
         stacked: root.stacked
-        controlWidth: 60
+        controlWidth: ExoTheme.controlSlotSwitch
         Layout.fillWidth: true
 
         ExoSwitch {
@@ -51,7 +51,7 @@ ColumnLayout {
     ExoSettingRow {
         label: qsTr("Noise gate")
         stacked: root.stacked
-        controlWidth: 60
+        controlWidth: ExoTheme.controlSlotSwitch
         Layout.fillWidth: true
 
         ExoSwitch {
@@ -85,7 +85,7 @@ ColumnLayout {
     ExoSettingRow {
         label: qsTr("Automatic gain control")
         stacked: root.stacked
-        controlWidth: 60
+        controlWidth: ExoTheme.controlSlotSwitch
         Layout.fillWidth: true
 
         ExoSwitch {
@@ -120,7 +120,7 @@ ColumnLayout {
         label: qsTr("RNNoise suppression")
         hint: qsTr("Neural background-noise suppression")
         stacked: root.stacked
-        controlWidth: 60
+        controlWidth: ExoTheme.controlSlotSwitch
         Layout.fillWidth: true
 
         ExoSwitch {

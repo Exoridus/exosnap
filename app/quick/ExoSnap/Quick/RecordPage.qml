@@ -41,6 +41,22 @@ Item {
                                        : root.recordViewModel.sourceKindText === "REGION" ? ExoGlyph.Region
                                        : ExoGlyph.Display
 
+    // The stage takes the session's colour only when there is a session to
+    // report. Ready is `neutral` and the momentary transitions are `busy`, and
+    // both fall through ExoTheme.toneColor to success -- which is right for the
+    // title bar's pill, where a green dot beside "Ready" means the product is
+    // ready, and wrong for a 1000 px frame, where it claims a recording finished
+    // before one has run. Those two states take the structural line instead.
+    //
+    // `busy` is included deliberately: a countdown that tints the stage would
+    // change its colour three times in three seconds.
+    readonly property color stageBorder: {
+        const tone = root.recordViewModel.stateTone;
+        if (tone === "neutral" || tone === "busy")
+            return ExoTheme.line;
+        return ExoTheme.toneColor(tone, false);
+    }
+
     // ONE gap on this page: the same step between the bands and from every band
     // to the window edge. Record is a stage page, not a page of cards -- the
     // 24 px card inset put a wider band under the transport than between the
@@ -164,12 +180,9 @@ Item {
                 height: previewSurface.frameWidth / previewSurface.sourceAspect
                 color: "#08080A"
                 border.width: 1
-                // The stage states the session state. It is the same mapping the
-                // status pill in its corner reads, through ExoTheme.toneColor, so
-                // the two can never disagree about what "recording" looks like.
-                // Resolved against the page ground, not the stage: the border sits
-                // between the two.
-                border.color: ExoTheme.toneColor(root.recordViewModel.stateTone, false)
+                // See root.stageBorder: the state's colour while a session has
+                // something to report, the structural line otherwise.
+                border.color: root.stageBorder
                 // The largest surface in the product sits on the largest radius
                 // in the scale, the same rung cards use. At radiusMd it read as
                 // a scaled-up control rather than as the page's stage.
