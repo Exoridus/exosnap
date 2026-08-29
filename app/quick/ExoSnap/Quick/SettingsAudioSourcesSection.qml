@@ -63,10 +63,11 @@ ExoCard {
     ExoSettingRow {
         label: qsTr("Microphone device")
         stacked: root.stacked
+        // A device select and the Rescan button beside it.
+        controlWidth: ExoTheme.controlSlotWide
         // Wider than the default slot because a device name and Rescan share it:
         // at 220 the select keeps ~125 px and elides every real device name away.
         // Matches the Destination folder row, which pairs a field with Browse.
-        controlWidth: 320
         Layout.fillWidth: true
 
         RowLayout {

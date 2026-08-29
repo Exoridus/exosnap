@@ -178,33 +178,50 @@ Screen content with small text degrades earlier than video does, so the useful r
     // a diagnostic.
     ExoSettingRow {
         label: qsTr("Encoding on")
+        // An adapter name is a long value -- "NVIDIA GeForce RTX 5070 Ti" elides
+        // in the shared slot -- so this row takes the wide one, for the same
+        // reason the resolved output path does.
+        controlWidth: ExoTheme.controlSlotWide
         hint: root.settings.encodeAdapterName.length > 0
-              ? qsTr("Fixed by the capture device — not a setting")
-              : qsTr("Named once the capability probe has run")
+              // Short enough to survive the narrower label column this row's
+              // wide value slot leaves. "Fixed by" already carries "not a
+              // setting"; spelled out, the sentence elided instead.
+              ? qsTr("Fixed by the capture device")
+              : qsTr("Named after the capability probe")
         stacked: root.stacked
-        controlWidth: 260
         Layout.fillWidth: true
 
-        Label {
-            text: root.settings.encodeAdapterName.length > 0 ? root.settings.encodeAdapterName
-                                                             : qsTr("Detecting…")
-            textFormat: Text.PlainText
-            elide: Text.ElideRight
-            horizontalAlignment: root.stacked ? Text.AlignLeft : Text.AlignRight
-            verticalAlignment: Text.AlignVCenter
-            color: root.settings.encodeAdapterName.length > 0 ? ExoTheme.text : ExoTheme.textDim
+        // A select that is disabled by contract rather than by state. The answer
+        // is a device name that can be absent, still being probed, or one of
+        // several, and right-aligned bare text had no way to say which of those
+        // it was showing -- "Detecting..." in the same rung as a real adapter
+        // name read as an adapter called Detecting.
+        //
+        // Disabled permanently, and not a door to a future selector: the encoder
+        // opens on the device the capture already opened, so there is nothing
+        // here to choose. Offering the choice would mean offering a combination
+        // the pipeline cannot honour.
+        ExoSelect {
+            options: root.settings.encodeAdapterName.length > 0
+                     ? [{
+                         label: root.settings.encodeAdapterName,
+                         value: root.settings.encodeAdapterName,
+                         selectable: true,
+                         reason: ""
+                     }]
+                     : []
+            value: root.settings.encodeAdapterName
+            placeholderText: qsTr("(detecting…)")
+            enabled: false
             Layout.fillWidth: true
-            font {
-                family: ExoTheme.sansFamily
-                pixelSize: ExoTheme.fontBody
-            }
+            Accessible.name: qsTr("Encoding on")
         }
     }
 
     ExoSettingRow {
         label: qsTr("Capture cursor")
         stacked: root.stacked
-        controlWidth: 60
+        controlWidth: ExoTheme.controlSlotSwitch
         Layout.fillWidth: true
 
         ExoSwitch {

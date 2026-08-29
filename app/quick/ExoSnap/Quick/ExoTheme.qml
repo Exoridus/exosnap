@@ -114,6 +114,29 @@ QtObject {
     // floor for a comfortable desktop hit target; 44 is its kPrimaryCtaHeight, so
     // the one recommended action on a surface is visibly larger than the row of
     // secondary ones next to it.
+    // The value slot: one width for every select, field, stepper and segmented
+    // control, so within a card they all begin at the same x.
+    //
+    // 220 against a 536 px card, which is the ~40/60 split the label column needs.
+    // It was briefly 320 to match what the design canon appeared to use; that
+    // reading came from measuring a 2x mock as though it were 1x. The canon's slot
+    // is ~155 logical px against a 526 px card, NARROWER than this. At 320 the
+    // label column fell to 216 and every hint line in the product elided --
+    // "MKV recommended - MP4 most co...", "Stereo preserves L/R - Mono mixes ..."
+    // -- which is the cost the audio row's own comment had warned about.
+    readonly property int controlSlot: 220
+    // A switch-only row takes its own, much narrower slot. A switch is 44 px and
+    // right-aligns either way, so a wide slot would change nothing about where
+    // the switch sits while taking 260 px away from a label that often carries a
+    // full sentence ("Hide the ExoSnap window from screen capture").
+    // The wide slot, for the rows where two controls share the value side: a
+    // field and the button that fills it, or a switch, its meter and the mix
+    // column. Deliberately a second token rather than a literal per row, so
+    // "these rows are wider, and they are wider for the same reason" is stated
+    // once.
+    readonly property int controlSlotWide: 320
+    readonly property int controlSlotSwitch: 60
+
     readonly property int controlHeight: 36
     readonly property int controlHeightCompact: 30
     readonly property int controlHeightLarge: 44

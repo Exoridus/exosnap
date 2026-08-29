@@ -103,7 +103,7 @@ ExoCard {
     ExoSettingRow {
         label: qsTr("Brickwall limiter")
         stacked: root.stacked
-        controlWidth: 60
+        controlWidth: ExoTheme.controlSlotSwitch
         Layout.fillWidth: true
 
         ExoSwitch {
@@ -152,7 +152,7 @@ ExoCard {
         label: qsTr("A/V clock slaving")
         info: qsTr("The audio device and the video capture run off different clocks and drift apart by a few parts per million. Slaving resamples audio onto the video clock so a multi-hour recording stays in sync. Turn it off only when you need bit-exact audio samples.")
         stacked: root.stacked
-        controlWidth: 60
+        controlWidth: ExoTheme.controlSlotSwitch
         visible: root.settings.expertMode
         Layout.fillWidth: true
 

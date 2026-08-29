@@ -29,7 +29,7 @@ ExoCard {
         label: qsTr("Check for updates automatically")
         hint: qsTr("Checks GitHub Releases when ExoSnap starts")
         stacked: root.stacked
-        controlWidth: 60
+        controlWidth: ExoTheme.controlSlotSwitch
         Layout.fillWidth: true
 
         ExoSwitch {

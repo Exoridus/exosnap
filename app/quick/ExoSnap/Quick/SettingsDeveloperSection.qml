@@ -43,7 +43,7 @@ ExoCard {
         label: qsTr("Present, tearing & latency diagnostics")
         hint: qsTr("Elevation-gated PresentMon observation · opt-in")
         stacked: root.stacked
-        controlWidth: 60
+        controlWidth: ExoTheme.controlSlotSwitch
         visible: root.settings.expertMode
         Layout.fillWidth: true
 

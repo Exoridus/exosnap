@@ -20,7 +20,7 @@ GridLayout {
     property string info: ""
     property string warning: ""
     property bool stacked: false
-    property int controlWidth: 220
+    property int controlWidth: ExoTheme.controlSlot
 
     Component.onCompleted: {
         if (root.hint !== "" && root.info !== "") {

@@ -21,11 +21,11 @@ ExoSettingRow {
     // No default hint: "Include this source" restated the switch beside it on
     // every row. The one row that owes an explanation (Application audio, while
     // a window is not the capture target) passes its own.
-    // Toggle + level meter + mix checkbox share this slot. Set against both
-    // ends: below ~320 the row carrying the mix checkbox squeezes the meter
-    // back into a stub, and above it the label column loses the Application
-    // audio row's explanatory line to elision.
-    controlWidth: 320
+    // Switch, level meter and mix column share the value side, so this row takes
+    // the wide slot. Sized against both ends: narrower and the meter squeezes
+    // back into a stub, wider and this row's own explanatory line ("Only while
+    // capturing a window") elides away.
+    controlWidth: ExoTheme.controlSlotWide
 
     RowLayout {
         spacing: ExoTheme.spacingSm
