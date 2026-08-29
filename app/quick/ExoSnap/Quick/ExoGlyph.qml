@@ -64,7 +64,8 @@ Item {
         Folder,
         SplitTrack,
         Clock,
-        PreviewBroken
+        PreviewBroken,
+        Layers
     }
 
     // An ExoGlyph.Kind value. Declared `int` because a QML-declared enum is not
@@ -178,7 +179,12 @@ Item {
         // The strike is what separates "no preview will come" from "no preview
         // yet": the frame alone reads as an image that is still loading.
         "M2.5 3.5H15.5V14.5H2.5Z M2.5 11.4L6.4 8.1L9.6 10.9 M11.6 6.3A1 1 0 1 0 13.6 6.3A1 1 0 1 0 11.6 6.3"
-            + " M3.6 15.4L14.4 2.6"
+            + " M3.6 15.4L14.4 2.6",
+        // Layers -- choosing a capture source. A stack of candidate surfaces, one
+        // of which becomes the recorded one. Not a Display: the same action picks
+        // a window or a region, and an icon that names one of the three claims
+        // the choice has already been made.
+        "M9 2.5L15.5 6L9 9.5L2.5 6Z M2.5 10.4L9 13.9L15.5 10.4"
     ]
 
     // Kinds drawn as a filled silhouette instead of a stroked outline.

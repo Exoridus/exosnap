@@ -52,7 +52,8 @@ Item {
         "Folder": ExoGlyph.Folder,
         "SplitTrack": ExoGlyph.SplitTrack,
         "Clock": ExoGlyph.Clock,
-        "PreviewBroken": ExoGlyph.PreviewBroken
+        "PreviewBroken": ExoGlyph.PreviewBroken,
+        "Layers": ExoGlyph.Layers
     })
 
     Component {

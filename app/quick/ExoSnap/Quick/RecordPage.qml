@@ -41,19 +41,16 @@ Item {
                                        : root.recordViewModel.sourceKindText === "REGION" ? ExoGlyph.Region
                                        : ExoGlyph.Display
 
-    // One rhythm for the page: the shared page inset (24) to every window edge,
-    // one scale step less (16) between the two bands. It used to be 12 between
-    // the bands with a 12 px top inset against 24 everywhere else, so the strip
-    // sat closer to the title bar than the transport did to the bottom edge and
-    // the page did not share the inset every other page uses.
+    // ONE gap on this page: the same step between the bands and from every band
+    // to the window edge. Record is a stage page, not a page of cards -- the
+    // 24 px card inset put a wider band under the transport than between the
+    // transport and the preview, which read as the stage hanging high, and it
+    // spent the page's largest dimension on air rather than on the picture.
     ColumnLayout {
         spacing: ExoTheme.spacingLg
         anchors {
             fill: parent
-            topMargin: ExoTheme.pagePadding
-            rightMargin: ExoTheme.pagePadding
-            bottomMargin: ExoTheme.pagePadding
-            leftMargin: ExoTheme.pagePadding
+            margins: ExoTheme.spacingLg
         }
 
         // UNRESOLVED conditions only: a source that is gone, a region too small
@@ -135,55 +132,8 @@ Item {
             }
 
             ExoButton {
-                id: recentButton
-
-                text: qsTr("Recent")
-                leadingGlyph: root.width >= 980 ? ExoGlyph.Clock : ExoGlyph.Invalid
-                glyph: root.width < 980 ? ExoGlyph.Clock : ExoGlyph.Invalid
-                compact: true
-                enabled: root.recordViewModel.recentRecordingOptions.length > 0
-                Accessible.description: enabled ? qsTr("Open a recent recording")
-                                                : qsTr("No recent recordings")
-                Layout.alignment: Qt.AlignVCenter
-                onClicked: recentMenu.open()
-
-                ToolTip.visible: hovered && root.width < 980
-                ToolTip.delay: 400
-                ToolTip.text: qsTr("Recent recordings")
-
-                ExoMenu {
-                    id: recentMenu
-
-                    y: recentButton.height
-
-                    ExoMenuItem {
-                        text: qsTr("No recent recordings")
-                        enabled: false
-                        visible: root.recordViewModel.recentRecordingOptions.length === 0
-                    }
-
-                    Instantiator {
-                        model: root.recordViewModel.recentRecordingOptions
-
-                        delegate: ExoMenuItem {
-                            required property var modelData
-
-                            text: modelData.label
-                            enabled: modelData.available
-                            Accessible.description: modelData.available
-                                                    ? qsTr("Open recording from %1").arg(modelData.completedAt)
-                                                    : qsTr("Recording file no longer exists")
-                            onTriggered: root.recordViewModel.requestOpenRecent(modelData.path)
-                        }
-
-                        onObjectAdded: (index, object) => recentMenu.insertItem(index, object)
-                        onObjectRemoved: (index, object) => recentMenu.removeItem(object)
-                    }
-                }
-            }
-
-            ExoButton {
                 text: qsTr("Change source")
+                leadingGlyph: ExoGlyph.Layers
                 compact: true
                 enabled: root.recordViewModel.canSelectSource
                 Accessible.description: enabled ? "" : qsTr("The capture setup is locked while a recording runs")
@@ -214,15 +164,12 @@ Item {
                 height: previewSurface.frameWidth / previewSurface.sourceAspect
                 color: "#08080A"
                 border.width: 1
-                // Structural, never semantic. This border used to take the
-                // state's colour — red while recording, amber while paused or
-                // counting down, green once a recording had saved — which made
-                // the largest object on the page into a ~1000 px status light
-                // repeating what the status pill in its own corner, the shell's
-                // pill and the transport's one recommended action all already
-                // said. A surface border says "this is one bounded surface"; it
-                // is not a place to encode state.
-                border.color: ExoTheme.line
+                // The stage states the session state. It is the same mapping the
+                // status pill in its corner reads, through ExoTheme.toneColor, so
+                // the two can never disagree about what "recording" looks like.
+                // Resolved against the page ground, not the stage: the border sits
+                // between the two.
+                border.color: ExoTheme.toneColor(root.recordViewModel.stateTone, false)
                 // The largest surface in the product sits on the largest radius
                 // in the scale, the same rung cards use. At radiusMd it read as
                 // a scaled-up control rather than as the page's stage.
@@ -243,6 +190,7 @@ Item {
                         right: parent.right
                         bottom: parent.bottom
                         left: parent.left
+                        topMargin: 1
                         rightMargin: 1
                         bottomMargin: 1
                         leftMargin: 1
@@ -253,9 +201,6 @@ Item {
                         previewAdapter: root.previewAdapter
                         normalizedSourceRect: root.recordViewModel.normalizedSourceRect
                         cornerRadius: ExoTheme.radiusLg
-                        // Square where it meets the divider, rounded where it meets
-                        // the surface's own bottom corners.
-                        topCornerRadius: 0
                         anchors.fill: parent
                     }
 
@@ -287,6 +232,7 @@ Item {
 
                         ExoButton {
                             text: qsTr("Choose source")
+                            leadingGlyph: ExoGlyph.Layers
                             tone: "primary"
                             enabled: root.recordViewModel.canSelectSource
                             anchors.horizontalCenter: parent.horizontalCenter
