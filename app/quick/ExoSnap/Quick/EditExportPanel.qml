@@ -172,6 +172,7 @@ Rectangle {
                 // choice the user has to make and cannot win.
                 ExoButton {
                     text: qsTr("Show in folder")
+                    leadingGlyph: ExoGlyph.Folder
                     compact: true
                     visible: root.succeeded
                     onClicked: root.exporter.revealFile()
@@ -179,6 +180,10 @@ Rectangle {
 
                 ExoButton {
                     text: root.exporter.destinationFailure ? qsTr("Choose another folder") : qsTr("Try again")
+                    // The glyph follows the label: only one of the two branches
+                    // opens a folder, and "Try again" with a folder icon promises
+                    // a dialog that never comes.
+                    leadingGlyph: root.exporter.destinationFailure ? ExoGlyph.Folder : ExoGlyph.Invalid
                     compact: true
                     visible: !root.succeeded
                     enabled: root.exporter.destinationFailure

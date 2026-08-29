@@ -207,17 +207,20 @@ Item {
                         // equals.
                         ExoButton {
                             text: qsTr("GitHub")
+                            leadingGlyph: ExoGlyph.ExternalLink
                             onClicked: root.aboutViewModel.openGitHub()
                         }
 
                         ExoButton {
                             enabled: !root.aboutViewModel.copying
                             text: root.aboutViewModel.copying ? qsTr("Copying…") : qsTr("Copy details")
+                            leadingGlyph: ExoGlyph.Copy
                             onClicked: root.aboutViewModel.copyDetails()
                         }
 
                         ExoButton {
                             text: qsTr("Release notes")
+                            leadingGlyph: ExoGlyph.ExternalLink
                             onClicked: root.aboutViewModel.openReleaseNotes()
                         }
 

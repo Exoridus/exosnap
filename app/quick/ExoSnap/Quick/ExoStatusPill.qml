@@ -17,47 +17,10 @@ Rectangle {
     // inside the band.
     property bool onSurface: false
 
-    // Three semantic tones (recording / error / warning), one success tone, and
-    // two that are deliberately NOT semantic: a paused session takes the accent
-    // its Resume action carries, and a momentary transition takes a quiet
-    // neutral. Caution amber stays with `warning`, which is the only tone a real
-    // warning uses.
-    readonly property color toneColor: root.tone === "recording" ? root._error
-                                     : root.tone === "error" ? root._error
-                                     : root.tone === "warning" ? root._warning
-                                     : root.tone === "success" ? root._success
-                                     : root.tone === "paused" ? root._paused
-                                     // The one tone that has to resolve per
-                                     // ground. `busy` is deliberately a quiet
-                                     // neutral, and Light has no LIGHT neutral —
-                                     // `textMuted` there measures 2.998:1 as a
-                                     // dot on the pill's near-black ground,
-                                     // which the contrast gate rejects (and
-                                     // rejected, before this line existed). The
-                                     // semantic tones need no such split because
-                                     // they are designed to read on both.
-                                     : root.tone === "busy" ? (root.onSurface ? root.onSurfaceInk : ExoTheme.textMuted)
-                                     : root._success
+    // The mapping itself lives in ExoTheme.toneColor, which the Record stage's
+    // border reads too.
+    readonly property color toneColor: ExoTheme.toneColor(root.tone, root.onSurface)
 
-    // Over the preview the ground is near-black in BOTH appearances, so every
-    // tone resolves against the Dark appearance there; in the title band the
-    // ground is an appearance surface and the appearance tones are right.
-    readonly property color _error: root.onSurface ? ExoTheme.overlayError : ExoTheme.error
-    readonly property color _warning: root.onSurface ? ExoTheme.overlayWarning : ExoTheme.warning
-    readonly property color _paused: root.onSurface ? ExoTheme.overlayPaused : ExoTheme.paused
-    readonly property color _success: root.onSurface ? ExoTheme.overlaySuccess : ExoTheme.success
-    readonly property color _accent: root.onSurface ? ExoTheme.overlayAccent : ExoTheme.accent
-
-    // Over the preview the pill has its own near-black ground in BOTH
-    // appearances — it has to, because what is behind it is arbitrary captured
-    // content — so its label cannot take an appearance colour. Light's
-    // `textMuted` on that ground measures 3.06:1 and Light's `error` 4.42:1,
-    // both under the 4.5:1 the contrast gate holds text to.
-    //
-    // This was the first surface in the product to need that, and it solved it
-    // with a literal. `ExoTheme.overlayInk` is that same value, named: the Dark
-    // appearance's own ink, which is what a fixed-dark ground takes everywhere
-    // now (the desktop overlays, the live-metrics readout, this pill).
     readonly property color onSurfaceInk: ExoTheme.overlayInk
 
     // Derived from the label's OWN implicit width, not from the Row's — the Row

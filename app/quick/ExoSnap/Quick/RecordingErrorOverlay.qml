@@ -64,6 +64,7 @@ ExoOverlayCard {
         ExoButton {
             objectName: "recordingErrorSendButton"
             text: qsTr("Send report")
+            leadingGlyph: ExoGlyph.Send
             tone: "primary"
             visible: root.error.canSendReport
             onClicked: root.error.sendReport()

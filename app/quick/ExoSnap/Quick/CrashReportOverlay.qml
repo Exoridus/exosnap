@@ -169,6 +169,7 @@ ExoOverlayCard {
         ExoButton {
             objectName: "crashOpenFolderButton"
             text: qsTr("Open crash folder")
+            leadingGlyph: ExoGlyph.Folder
             enabled: root.crash.crashFolderAvailable
             onClicked: root.crash.openCrashFolder()
         },
@@ -185,6 +186,7 @@ ExoOverlayCard {
         ExoButton {
             objectName: "crashSendButton"
             text: qsTr("Send report")
+            leadingGlyph: ExoGlyph.Send
             tone: "primary"
             onClicked: root.crash.sendReport()
         }

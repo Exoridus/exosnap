@@ -64,7 +64,12 @@ Item {
         Folder,
         SplitTrack,
         Clock,
-        PreviewBroken
+        PreviewBroken,
+        Layers,
+        Copy,
+        Refresh,
+        Run,
+        Send
     }
 
     // An ExoGlyph.Kind value. Declared `int` because a QML-declared enum is not
@@ -178,7 +183,28 @@ Item {
         // The strike is what separates "no preview will come" from "no preview
         // yet": the frame alone reads as an image that is still loading.
         "M2.5 3.5H15.5V14.5H2.5Z M2.5 11.4L6.4 8.1L9.6 10.9 M11.6 6.3A1 1 0 1 0 13.6 6.3A1 1 0 1 0 11.6 6.3"
-            + " M3.6 15.4L14.4 2.6"
+            + " M3.6 15.4L14.4 2.6",
+        // Layers -- choosing a capture source. A stack of candidate surfaces, one
+        // of which becomes the recorded one. Not a Display: the same action picks
+        // a window or a region, and an icon that names one of the three claims
+        // the choice has already been made.
+        "M9 2.5L15.5 6L9 9.5L2.5 6Z M2.5 10.4L9 13.9L15.5 10.4",
+        // Copy -- two sheets, the front one offset off the back one. The offset is
+        // the whole icon: a single sheet is a document, two are a duplicate.
+        "M2.5 6.5H11.5V15.5H2.5Z M6.5 6.5V2.5H15.5V11.5H11.5",
+        // Refresh -- a ring open at the top with the arrow head on the opening, so
+        // the direction is stated rather than implied. The two arcs of a full ring
+        // would meet at opposite ends of a diameter; this one is a single 270
+        // degree sweep and needs no second arc.
+        "M15.5 9A6.5 6.5 0 1 1 9 2.5 M6.3 3.4L9 2.5L9.9 5.2",
+        // Run -- a play triangle, stroked like the rest of the set rather than
+        // filled: Pause and Stop are the filled pair, and a filled triangle beside
+        // them would read as a third transport control instead of "start this".
+        "M6 3.5L14.5 9L6 14.5Z",
+        // Send -- out of the machine and away, drawn as an arrow leaving a tray.
+        // Not a paper plane: at 18 px a plane is four strokes that resolve into a
+        // smudge, and it says "message" where this says "upload".
+        "M9 2.5V12 M5.6 5.9L9 2.5L12.4 5.9 M2.5 12.5V15.5H15.5V12.5"
     ]
 
     // Kinds drawn as a filled silhouette instead of a stroked outline.

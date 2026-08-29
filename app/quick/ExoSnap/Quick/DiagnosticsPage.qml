@@ -180,6 +180,7 @@ Item {
             // read like the muted mode label two items to its right.
             ExoButton {
                 text: root.diagnostics.bundleBusy ? qsTr("Creating…") : qsTr("Create support bundle")
+                leadingGlyph: ExoGlyph.Folder
                 visible: root.diagnostics.expertMode
                 enabled: !root.diagnostics.bundleBusy
                 Accessible.description: qsTr("Create a diagnostic package to share with support")
@@ -353,6 +354,7 @@ Item {
                             // neutral treatment and gives up the fill.
                             ExoButton {
                                 text: root.diagnostics.checking ? qsTr("Checking…") : qsTr("Run Check")
+                                leadingGlyph: ExoGlyph.Run
                                 enabled: !root.diagnostics.checking
                                 Layout.alignment: Qt.AlignRight
                                 onClicked: root.diagnostics.runCheck()
@@ -563,6 +565,7 @@ Item {
 
                                     ExoButton {
                                         text: qsTr("Run Self-Test")
+                                        leadingGlyph: ExoGlyph.Run
                                         enabled: !root.diagnostics.checking
                                         onClicked: root.diagnostics.runCheck()
                                     }
@@ -655,6 +658,7 @@ Item {
 
                                 ExoButton {
                                     text: qsTr("Open last report")
+                                    leadingGlyph: ExoGlyph.ExternalLink
                                     enabled: root.diagnostics.hasLastRecording
                                     Layout.alignment: Qt.AlignLeft
                                     onClicked: root.diagnostics.openLastReport()

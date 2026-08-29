@@ -344,6 +344,31 @@ QtObject {
     // protect a reading measure would be the wrong trade for a tool surface.
     readonly property int contentMaxWidth: 1160
 
+    // The session state as a colour, for every surface that states it: the status
+    // pill, the shell's own pill, the Record stage's border. One mapping, because
+    // two copies of it are two answers to "what does recording look like".
+    //
+    // `onSurface` picks the ground. Over the live preview and the desktop overlays
+    // the ground is near-black in BOTH appearances, so the overlay tones apply; in
+    // a title band or on a page it is an appearance surface and the appearance
+    // tones do. Only `busy` needs that split for contrast reasons -- Light has no
+    // light neutral, and `textMuted` on a near-black pill measures 2.998:1, which
+    // the contrast gate rejects.
+    //
+    // `paused` deliberately resolves to the accent its own Resume action carries
+    // rather than to a caution colour: a paused session is not a problem.
+    function toneColor(tone: string, onSurface: bool): color {
+        if (tone === "recording" || tone === "error")
+            return onSurface ? root.overlayError : root.error;
+        if (tone === "warning")
+            return onSurface ? root.overlayWarning : root.warning;
+        if (tone === "paused")
+            return onSurface ? root.overlayPaused : root.paused;
+        if (tone === "busy")
+            return onSurface ? root.overlayInk : root.textMuted;
+        return onSurface ? root.overlaySuccess : root.success;
+    }
+
     function isRegular(w: real): bool {
         return w >= root.widthRegular;
     }

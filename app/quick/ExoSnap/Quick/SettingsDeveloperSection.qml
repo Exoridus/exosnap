@@ -66,6 +66,7 @@ ExoCard {
 
         ExoButton {
             text: qsTr("Open Diagnostics")
+            leadingGlyph: ExoGlyph.Chip
             Layout.alignment: Qt.AlignRight
             onClicked: root.settings.openDiagnostics()
         }
