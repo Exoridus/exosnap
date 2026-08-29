@@ -12,6 +12,25 @@ Rectangle {
     required property SettingsAdapter settings
     required property bool stacked
 
+    // Harness-only: raises one of this bar's dialogs for a --visual-test capture.
+    // Both are behind a menu item, so nothing that avoids synthesizing input can
+    // otherwise photograph them.
+    function openHarnessDialog(name: string): bool {
+        if (name === "preset-delete") {
+            deleteDialog.open();
+            return true;
+        }
+        if (name === "preset-rename") {
+            nameDialog.openFor(true);
+            return true;
+        }
+        if (name === "preset-save-as") {
+            nameDialog.openFor(false);
+            return true;
+        }
+        return false;
+    }
+
     implicitHeight: bar.implicitHeight + 2 * ExoTheme.cardPaddingCompact
     color: ExoTheme.surface
     border.width: 1

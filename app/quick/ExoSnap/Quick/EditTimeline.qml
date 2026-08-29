@@ -454,19 +454,74 @@ Item {
     // condition, in the same dim rung — a strip without thumbnails is a missing
     // convenience, not an error surface, and trim, playback and export are
     // unaffected.
-    Text {
+    //
+    // The two conditions are told apart by their mark, not only by their words:
+    // work in flight carries a moving indeterminate bar, while a terminal
+    // failure carries a static glyph. A sentence alone left the two states
+    // looking identical at a glance, which is how "generating" managed to read
+    // as a hang.
+    Row {
+        id: previewStateHint
+
         x: root.trackX
         height: root.labelZoneHeight
-        verticalAlignment: Text.AlignVCenter
-        text: root.timeline.previewState === "unavailable" ? qsTr("Preview unavailable")
-                                                           : qsTr("Generating previews…")
-        textFormat: Text.PlainText
+        spacing: ExoTheme.spacingXs
         visible: root.interactive && root.dragTarget === ""
                  && (root.timeline.generatingPreviews || root.timeline.previewsUnavailable)
-        color: ExoTheme.textDim
-        font {
-            family: ExoTheme.monoFamily
-            pixelSize: ExoTheme.fontEyebrow
+
+        readonly property bool unavailable: root.timeline.previewState === "unavailable"
+
+        // Indeterminate by construction: nothing upstream counts tiles toward a
+        // total, so a fraction here would be invented. The sweep says "still
+        // working" and claims nothing about how far along it is.
+        Item {
+            width: 48
+            height: 3
+            anchors.verticalCenter: parent.verticalCenter
+            visible: !previewStateHint.unavailable
+            clip: true
+
+            Rectangle {
+                id: sweep
+
+                width: 18
+                height: parent.height
+                radius: height / 2
+                color: ExoTheme.textDim
+
+                SequentialAnimation on x {
+                    running: previewStateHint.visible && !previewStateHint.unavailable
+                    loops: Animation.Infinite
+
+                    NumberAnimation {
+                        from: -sweep.width
+                        to: 48
+                        duration: 1100
+                        easing.type: Easing.InOutQuad
+                    }
+                }
+            }
+        }
+
+        ExoGlyph {
+            kind: ExoGlyph.PreviewBroken
+            color: ExoTheme.textDim
+            width: 12
+            height: 12
+            anchors.verticalCenter: parent.verticalCenter
+            visible: previewStateHint.unavailable
+        }
+
+        Text {
+            anchors.verticalCenter: parent.verticalCenter
+            text: previewStateHint.unavailable ? qsTr("Timeline previews unavailable")
+                                               : qsTr("Generating timeline previews…")
+            textFormat: Text.PlainText
+            color: ExoTheme.textDim
+            font {
+                family: ExoTheme.monoFamily
+                pixelSize: ExoTheme.fontEyebrow
+            }
         }
     }
 

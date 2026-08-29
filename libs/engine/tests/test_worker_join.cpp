@@ -55,6 +55,42 @@ class FakeWorker {
     std::thread thread_;
 };
 
+// A worker's exit, expressed as the thing WaitForMultipleObjects actually
+// observes: a signalable kernel handle. A thread handle IS one, so the wait
+// cannot tell the two apart -- but a thread reaches its signaled state when the
+// scheduler gets to it, and an event reaches it when the test says so.
+//
+// That difference is the whole point. Asserting "this worker finished within the
+// budget" against a thread makes the assertion a statement about how busy the
+// machine is: under a parallel CTest run a thread that only has to observe a
+// flag and return can miss a 100 ms budget, and the test fails while the code is
+// correct. Every case below that pins a worker to a SPECIFIC signaled state uses
+// an event, so the state is a fact the test established rather than an outcome
+// it hoped for. FakeWorker stays where a real thread handle is what is under
+// test.
+class FakeWorkerEvent {
+  public:
+    FakeWorkerEvent() : handle_(CreateEventW(nullptr, TRUE, FALSE, nullptr)) {
+    }
+    ~FakeWorkerEvent() {
+        if (handle_ != nullptr)
+            CloseHandle(handle_);
+    }
+    FakeWorkerEvent(const FakeWorkerEvent&) = delete;
+    FakeWorkerEvent& operator=(const FakeWorkerEvent&) = delete;
+
+    [[nodiscard]] HANDLE Handle() const noexcept {
+        return handle_;
+    }
+    // The worker exited. Manual-reset, so it stays exited.
+    void SignalExit() const {
+        SetEvent(handle_);
+    }
+
+  private:
+    HANDLE handle_ = nullptr;
+};
+
 using namespace std::chrono_literals;
 
 } // namespace
@@ -65,18 +101,33 @@ using namespace std::chrono_literals;
 // Pre-fix, the 50 ms budget would have elapsed ~350 ms before the stop and all
 // workers would have been reported as TIMEOUT (the actual crash signature:
 // "join timeout: v=TIMEOUT a0=TIMEOUT m=TIMEOUT", hr=0x800705B4).
+//
+// The elapsed assertion is a LOWER bound, which is the only kind a wall clock
+// can carry honestly: a busy machine can make the wait return later, never
+// earlier, so the measurement means the same thing under any load. What the
+// workers do is not left to the scheduler either -- they exit exactly when the
+// stopper says so.
 TEST(WorkerJoinTest, LongRunBeforeStopIsNotATimeout) {
     std::atomic<bool> stop{false};
-    std::vector<FakeWorker> workers(3);
-    std::vector<HANDLE> handles;
-    for (auto& w : workers) {
-        w.Start(&stop, /*drain=*/0ms);
-        handles.push_back(w.NativeHandle());
-    }
+    const FakeWorkerEvent w0;
+    const FakeWorkerEvent w1;
+    const FakeWorkerEvent w2;
+    ASSERT_NE(w0.Handle(), nullptr);
+    ASSERT_NE(w1.Handle(), nullptr);
+    ASSERT_NE(w2.Handle(), nullptr);
+    const std::vector<HANDLE> handles{w0.Handle(), w1.Handle(), w2.Handle()};
 
     const auto t0 = std::chrono::steady_clock::now();
-    std::thread stopper([&stop] {
+    std::thread stopper([&] {
+        // A long recording: nothing is signaled and no stop is pending, so the
+        // wait has nothing to return for.
         std::this_thread::sleep_for(400ms);
+        // Drained first, then the stop, which is the order the engine produces:
+        // whichever of the two Phase 1 observes, it observes it now and not at
+        // the budget.
+        w0.SignalExit();
+        w1.SignalExit();
+        w2.SignalExit();
         stop.store(true);
     });
 
@@ -87,9 +138,6 @@ TEST(WorkerJoinTest, LongRunBeforeStopIsNotATimeout) {
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
 
     stopper.join();
-    for (auto& w : workers) {
-        w.Join();
-    }
 
     EXPECT_TRUE(r.all_signaled);
     EXPECT_FALSE(r.wait_failed);
@@ -101,16 +149,20 @@ TEST(WorkerJoinTest, LongRunBeforeStopIsNotATimeout) {
 // The join budget still protects against a worker that hangs AFTER stop: it must
 // be reported as not-signaled (so the caller emits the join-timeout detail and
 // the destructor detaches it) instead of blocking forever.
+//
+// Both outcomes are established before the wait runs -- one worker has exited,
+// the other never will -- so the only thing the budget decides here is when the
+// wait gives up, which is what the test is about.
 TEST(WorkerJoinTest, HungWorkerAfterStopReportedAsTimeout) {
     std::atomic<bool> stop{false};
-    std::vector<FakeWorker> workers(2);
-    std::vector<HANDLE> handles;
-    workers[0].Start(&stop, /*drain=*/0ms);   // exits promptly on stop
-    workers[1].Start(&stop, /*drain=*/800ms); // lingers well past the 100 ms budget
-    handles.push_back(workers[0].NativeHandle());
-    handles.push_back(workers[1].NativeHandle());
+    const FakeWorkerEvent prompt;
+    const FakeWorkerEvent hung;
+    ASSERT_NE(prompt.Handle(), nullptr);
+    ASSERT_NE(hung.Handle(), nullptr);
+    const std::vector<HANDLE> handles{prompt.Handle(), hung.Handle()};
 
-    stop.store(true); // request stop immediately
+    prompt.SignalExit(); // drained and exited
+    stop.store(true);    // request stop; `hung` never exits
 
     const WorkerJoinResult r =
         WaitForWorkersThenJoin(handles, stop, /*join_budget_ms=*/100, /*stop_poll_interval_ms=*/10);
@@ -118,18 +170,19 @@ TEST(WorkerJoinTest, HungWorkerAfterStopReportedAsTimeout) {
     EXPECT_FALSE(r.all_signaled);
     EXPECT_FALSE(r.wait_failed);
     ASSERT_EQ(r.signaled.size(), 2u);
-    EXPECT_TRUE(r.signaled[0]);  // prompt worker joined within the budget
-    EXPECT_FALSE(r.signaled[1]); // hung worker timed out
-
-    // Let the lingering worker finish so the fixture tears down cleanly.
-    for (auto& w : workers) {
-        w.Join();
-    }
+    EXPECT_TRUE(r.signaled[0]);
+    EXPECT_FALSE(r.signaled[1]);
 }
 
 // Edge case for the Phase-1 bWaitAll probe: a worker that exits on its own
 // without stop ever being set must not hang the wait — the probe detects the
 // exit and falls through to the (immediately satisfied) join.
+//
+// Real thread handles, deliberately: this is the one case where what is under
+// test is a THREAD reaching its signaled state without anyone asking it to. No
+// budget rides on how soon that happens -- Phase 1 is unbounded while stop stays
+// false and only leaves once both handles are signaled, which leaves Phase 2
+// already satisfied. The budget below is never reached at any load.
 TEST(WorkerJoinTest, WorkersSelfExitingWithoutStopDoNotHang) {
     std::atomic<bool> stop{false};
     std::vector<FakeWorker> workers(2);

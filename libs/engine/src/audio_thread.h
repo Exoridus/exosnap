@@ -4,14 +4,17 @@
 
 #include "session_internal.h"
 
+#include <exosnap/engine/audio_track_model.h>
 #include <exosnap/engine/interfaces/IAudioCaptureSource.h>
 
 #include <memory>
 #include <thread>
+#include <vector>
 
 namespace exosnap::engine {
 
 class IAudioEncoder;
+class MixedAudioSrc;
 class OutputFormatAudioSrc;
 
 // Ownership contract (shared by all session workers): the object must be owned
@@ -22,7 +25,12 @@ class OutputFormatAudioSrc;
 // flag and run out; nothing is ever detached without that ownership handoff.
 class AudioThread : public std::enable_shared_from_this<AudioThread> {
   public:
-    AudioThread(std::shared_ptr<SessionState> state, std::unique_ptr<IAudioCaptureSource> source, uint32_t track_id);
+    // `source_kinds` lists the kinds this track carries, in the order the mixer
+    // holds them. It exists for the live mute: the transport addresses sources
+    // by kind, and a merged track has to be able to silence one of them without
+    // touching the others.
+    AudioThread(std::shared_ptr<SessionState> state, std::unique_ptr<IAudioCaptureSource> source, uint32_t track_id,
+                std::vector<AudioSourceKind> source_kinds = {});
     ~AudioThread();
 
     AudioThread(const AudioThread&) = delete;
@@ -53,6 +61,11 @@ class AudioThread : public std::enable_shared_from_this<AudioThread> {
     std::shared_ptr<SessionState> m_state_ptr;
     SessionState& m_state; // = *m_state_ptr (kept as a reference for Run())
     std::unique_ptr<IAudioCaptureSource> source_;
+    std::vector<AudioSourceKind> source_kinds_;
+    // Non-owning view of source_ when it is a mixer, resolved before the
+    // OutputFormatAudioSrc wrapper hides it. Null for a bare single source,
+    // which the encode loop mutes by feeding silence instead.
+    MixedAudioSrc* mixed_src_ = nullptr;
     // Typed, non-owning view of the OutputFormatAudioSrc wrapper that source_
     // points at after Run() wraps the raw capture source (ADR 0030). Lets the
     // clock-slaving controller drive its compensation without an interface

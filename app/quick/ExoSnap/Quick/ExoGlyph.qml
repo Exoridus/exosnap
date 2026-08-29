@@ -59,7 +59,12 @@ Item {
         Info,
         Display,
         Region,
-        ExternalLink
+        ExternalLink,
+        Back,
+        Folder,
+        SplitTrack,
+        Clock,
+        PreviewBroken
     }
 
     // An ExoGlyph.Kind value. Declared `int` because a QML-declared enum is not
@@ -148,7 +153,29 @@ Item {
         // ExternalLink — an open frame with an arrow leaving through its corner:
         // this action leaves ExoSnap for the browser. Deliberately not the same
         // shape as AppWindow, which is a capture TARGET inside the product.
-        "M10.5 3.5H15.5V8.5 M15.5 3.5L9 10 M13 10.5V14.5H3.5V5H7.5"
+        "M10.5 3.5H15.5V8.5 M15.5 3.5L9 10 M13 10.5V14.5H3.5V5H7.5",
+        // Back -- the return-key arrow: a stroke that comes down the right, turns
+        // left and ends in a head. A plain left arrow says "previous" (the item
+        // before this one); this shape says "go back out of here", which is what
+        // the completed transport's action does. Not a circular-arrow "undo"
+        // either: nothing is undone, the recording stays where it was written.
+        "M14.5 4.5V10.5H5.5 M9.5 6.5L5.5 10.5L9.5 14.5",
+        // Folder -- a tabbed folder, closed. Deliberately not an open one: the
+        // action reveals a file that is already there, it does not put one in.
+        "M2.5 5.2V14H15.5V6.8H9L7.4 5.2Z",
+        // SplitTrack -- one track cut into two pieces, with the cut drawn through
+        // the gap. Replaces a pair of scissors, which says TRIM: an edit that
+        // removes something from one file. This action removes nothing and edits
+        // nothing -- it closes the current output and opens the next one, and the
+        // recording carries on either way.
+        "M2.5 6.4H7V11.6H2.5Z M11 6.4H15.5V11.6H11Z M9 3.4V14.6",
+        // Clock -- recent recordings and completion time.
+        "M9 2.5A6.5 6.5 0 1 0 15.5 9A6.5 6.5 0 1 0 9 2.5 M9 5V9L12 10.8",
+        // PreviewBroken -- a picture frame with its corner mark, struck through.
+        // The strike is what separates "no preview will come" from "no preview
+        // yet": the frame alone reads as an image that is still loading.
+        "M2.5 3.5H15.5V14.5H2.5Z M2.5 11.4L6.4 8.1L9.6 10.9 M11.6 6.3A1 1 0 1 0 13.6 6.3A1 1 0 1 0 11.6 6.3"
+            + " M3.6 15.4L14.4 2.6"
     ]
 
     // Kinds drawn as a filled silhouette instead of a stroked outline.

@@ -17,27 +17,54 @@ Switch {
 
     onClicked: root.toggledByUser(root.checked)
 
+    // A disabled control keeps the arrow, the same rule ExoButton states: the
+    // hand says "press this", and a blocked switch has nothing to press.
     HoverHandler {
-        cursorShape: Qt.PointingHandCursor
+        cursorShape: root.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
     }
+
+    // Blocked is a state of its own, not the absence of one -- and a blocked
+    // switch that is ON still has to answer "is this setting on?", which is
+    // exactly the question a locked recording raises.
+    //
+    // The accent is what goes, because the accent means "live and selectable".
+    // What stays is the SHAPE of on: a filled track with the knob at the right
+    // end. Filled in the dim ink rung rather than in the accent, so the control
+    // reads as greyed out at a glance and still states which sources are being
+    // recorded when the whole page is locked. Off and blocked keeps the plain
+    // recessed surface, so the two are never the same picture.
+    readonly property color _trackColor: !root.enabled
+                                         ? (root.checked ? ExoTheme.textDim : ExoTheme.surface)
+                                         : root.checked ? (root.hovered ? ExoTheme.hoverTint(ExoTheme.accent)
+                                                                        : ExoTheme.accent)
+                                                        : (root.hovered ? ExoTheme.hoverTint(ExoTheme.surfaceHover)
+                                                                        : ExoTheme.surfaceHover)
+
+    readonly property color _borderColor: root.visualFocus ? ExoTheme.text
+                                          : !root.enabled ? ExoTheme.line
+                                          : root.checked ? ExoTheme.accent : ExoTheme.lineStrong
+
+    // The knob keeps the same relationship to its track in every state: it reads
+    // AGAINST the fill. On a filled track that is the surface itself, on an empty
+    // one it is ink -- dimmed while blocked, full strength while live.
+    readonly property color _knobColor: !root.enabled ? (root.checked ? ExoTheme.surface : ExoTheme.textDim)
+                                        : root.checked ? ExoTheme.accentInk : ExoTheme.textSecondary
 
     indicator: Rectangle {
         implicitWidth: 44
         implicitHeight: 24
         x: root.leftPadding
         y: root.topPadding + (root.availableHeight - height) / 2
-        color: !root.enabled ? ExoTheme.surface
-                             : root.checked ? (root.hovered ? ExoTheme.hoverTint(ExoTheme.accent) : ExoTheme.accent)
-                                            : (root.hovered ? ExoTheme.hoverTint(ExoTheme.surfaceHover) : ExoTheme.surfaceHover)
+        color: root._trackColor
         border.width: 1
-        border.color: root.visualFocus ? ExoTheme.text : root.checked && root.enabled ? ExoTheme.accent : ExoTheme.lineStrong
+        border.color: root._borderColor
         radius: height / 2
 
         Rectangle {
             x: root.checked ? parent.width - width - 3 : 3
             width: 18
             height: 18
-            color: root.checked && root.enabled ? ExoTheme.accentInk : ExoTheme.textSecondary
+            color: root._knobColor
             radius: height / 2
             anchors.verticalCenter: parent.verticalCenter
 

@@ -541,6 +541,32 @@ TEST(OutputSettingsTest, ResolveAvailableOutputPath_Exhausted_ReturnsNullopt) {
     std::filesystem::remove_all(dir, ec);
 }
 
+TEST(OutputSettingsTest, ValuablePartialPath_AppendsToCompleteFinalName) {
+    const std::filesystem::path final_path = L"C:\\Videos\\recording.mkv";
+
+    EXPECT_EQ(exosnap::engine::DeriveValuablePartialPath(final_path), L"C:\\Videos\\recording.mkv.partial");
+    EXPECT_EQ(exosnap::engine::DeriveValuablePartialPath(L"C:\\Videos\\recording.mp4"),
+              L"C:\\Videos\\recording.mp4.partial");
+}
+
+TEST(OutputSettingsTest, ResolveAvailableOutputPath_SkipsValuablePartialCollision) {
+    const std::filesystem::path dir = UniqueTempPath(L"partial_collision");
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    ASSERT_FALSE(ec);
+
+    const auto base = dir / L"recording.mkv";
+    {
+        std::ofstream touch(exosnap::engine::DeriveValuablePartialPath(base), std::ios::binary);
+    }
+
+    const auto resolved = ResolveAvailableOutputPath(base);
+
+    ASSERT_TRUE(resolved.has_value());
+    EXPECT_EQ(*resolved, dir / L"recording (1).mkv");
+    std::filesystem::remove_all(dir, ec);
+}
+
 TEST(OutputSettingsTest, Defaults_FolderNotEmpty) {
     const OutputSettingsModel defaults = OutputSettingsModel::Defaults();
     EXPECT_FALSE(defaults.output_folder.empty());
@@ -845,16 +871,26 @@ TEST(OutputSettingsTest, OutputFolderPolicy_UnknownEnvironmentVariableRejected) 
     EXPECT_EQ(normalized.result, OutputFolderPolicyResult::UnsupportedEnvironmentVariable);
 }
 
-TEST(OutputSettingsTest, OutputFolderPolicy_TrailingSlashesAreStrippedForNonRoot) {
+TEST(OutputSettingsTest, OutputFolderPolicy_PreservesEnteredTrailingSlashes) {
     const auto normalized = NormalizeOutputFolderInput(L"C:\\Recordings\\\\");
     EXPECT_EQ(normalized.result, OutputFolderPolicyResult::Ok);
-    EXPECT_EQ(normalized.normalized_input, L"C:\\Recordings");
+    EXPECT_EQ(normalized.entered_input, L"C:\\Recordings\\\\");
 }
 
 TEST(OutputSettingsTest, OutputFolderPolicy_RootPathPreserved) {
     const auto normalized = NormalizeOutputFolderInput(L"C:\\");
     EXPECT_EQ(normalized.result, OutputFolderPolicyResult::Ok);
-    EXPECT_EQ(normalized.normalized_input, L"C:\\");
+    EXPECT_EQ(normalized.entered_input, L"C:\\");
+}
+
+TEST(OutputSettingsTest, OutputFolderPolicy_PreservesUncAndJunctionSyntax) {
+    const std::wstring entered = L"\\\\server\\share\\CaptureRoot\\Junction\\..\\Session";
+
+    const auto normalized = NormalizeOutputFolderInput(entered);
+
+    EXPECT_EQ(normalized.result, OutputFolderPolicyResult::Ok);
+    EXPECT_EQ(normalized.entered_input, entered);
+    EXPECT_EQ(normalized.resolved_path, std::filesystem::path(entered));
 }
 
 TEST(OutputSettingsTest, FilenamePatternPolicy_StripsLeadingPrefixes) {

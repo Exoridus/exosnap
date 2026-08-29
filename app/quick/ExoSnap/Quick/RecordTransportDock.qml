@@ -93,8 +93,11 @@ Rectangle {
             accessibleLabel: qsTr("System audio")
             checkedState: root.recordViewModel.systemAudioEnabled
             meterLevel: root.recordViewModel.systemMeter
-            available: root.recordViewModel.canSelectSource && !root.recordViewModel.blocked
-                       && !root.recordViewModel.failed
+            // A running session no longer locks this: the toggle becomes a live
+            // mute, and the track keeps its full length either way.
+            available: (root.recordViewModel.canSelectSource
+                        || root.recordViewModel.liveToggleableSources.includes("system"))
+                       && !root.recordViewModel.blocked && !root.recordViewModel.failed
             unavailableReason: root.sourceLockReason
             onClicked: root.recordViewModel.requestToggleSource("system")
         }
@@ -106,8 +109,11 @@ Rectangle {
             accessibleLabel: qsTr("Application audio")
             checkedState: root.recordViewModel.appAudioEnabled
             meterLevel: root.recordViewModel.appMeter
-            available: root.recordViewModel.canSelectSource && !root.recordViewModel.blocked
-                       && !root.recordViewModel.failed
+            // A running session no longer locks this: the toggle becomes a live
+            // mute, and the track keeps its full length either way.
+            available: (root.recordViewModel.canSelectSource
+                        || root.recordViewModel.liveToggleableSources.includes("app"))
+                       && !root.recordViewModel.blocked && !root.recordViewModel.failed
             unavailableReason: root.sourceLockReason
             visible: root.recordViewModel.appAudioVisible
             onClicked: root.recordViewModel.requestToggleSource("app")
@@ -120,13 +126,18 @@ Rectangle {
             accessibleLabel: qsTr("Microphone")
             checkedState: root.recordViewModel.microphoneEnabled
             meterLevel: root.recordViewModel.microphoneMeter
-            available: root.recordViewModel.canSelectSource && root.recordViewModel.microphoneAvailable
+            available: (root.recordViewModel.canSelectSource
+                        || root.recordViewModel.liveToggleableSources.includes("microphone"))
+                       && root.recordViewModel.microphoneAvailable
                        && !root.recordViewModel.blocked && !root.recordViewModel.failed
             // The device fact outranks the session lock: with no microphone
             // attached, "locked while a recording runs" would be true and
             // useless — plugging one in is what changes the answer.
-            unavailableReason: !root.recordViewModel.microphoneAvailable
-                               ? qsTr("Unavailable — no microphone was detected.") : root.sourceLockReason
+            unavailableReason: root.sourceLockReason
+            // No microphone attached at all: the control has nothing to offer and
+            // no reason worth reading, so it is not shown -- the same rule the
+            // application-audio toggle already follows.
+            visible: root.recordViewModel.microphoneAvailable
             onClicked: root.recordViewModel.requestToggleSource("microphone")
         }
 
@@ -140,14 +151,17 @@ Rectangle {
             meterLevel: 0
             available: root.recordViewModel.webcamAvailable && !root.recordViewModel.finalizing
                        && !root.recordViewModel.blocked && !root.recordViewModel.failed
+            // No camera attached at all: not shown, like the microphone toggle.
+            // A camera that IS attached and will not open stays visible -- device
+            // presence is what this flag reports, and its error is something the
+            // user can act on.
+            visible: root.recordViewModel.webcamAvailable
             // The engine's own words when it has them. `webcamErrorText` is the
             // reason the camera would not open, which no generic sentence here
             // could improve on.
             unavailableReason: root.recordViewModel.webcamError
                                ? qsTr("Can't be opened — %1").arg(root.recordViewModel.webcamErrorText)
-                               : !root.recordViewModel.webcamAvailable
-                                 ? qsTr("Unavailable — no camera was detected.")
-                                 : root.recordViewModel.finalizing
+                               : root.recordViewModel.finalizing
                                    ? qsTr("Unavailable — the recording is still being written.")
                                    // The camera is not part of the capture setup
                                    // the recording lock covers, so it never
@@ -174,7 +188,7 @@ Rectangle {
         // here, which put caution on a number that is simply not advancing —
         // it takes the accent the Resume action beside it carries instead.
         color: root.recordViewModel.recording ? ExoTheme.error
-                                              : root.recordViewModel.paused ? ExoTheme.accent : ExoTheme.text
+                                              : root.recordViewModel.paused ? ExoTheme.paused : ExoTheme.text
         anchors {
             horizontalCenter: parent.horizontalCenter
             verticalCenter: parent.verticalCenter
@@ -210,7 +224,12 @@ Rectangle {
             // preview has produced a frame there is nothing to capture. Saying so
             // is the difference between "broken" and "not yet".
             unavailableReason: qsTr("Unavailable — the preview has not produced a frame yet.")
-            visible: !root.recordViewModel.preparing && !root.recordViewModel.finalizing
+            // Not beside a finished run. Capturing a still of the preview is an
+            // action ON a recording in progress; once the recording is over the
+            // control it points at is gone, and the button next to the result was
+            // offering to photograph nothing.
+            visible: !root.recordViewModel.preparing && !root.recordViewModel.finalizing &&
+                     !root.recordViewModel.resultPending
             onClicked: root.recordViewModel.requestCaptureFrame()
         }
 
@@ -227,7 +246,7 @@ Rectangle {
             compact: root.compactControls
             accessibleLabel: qsTr("Split recording")
             text: qsTr("Split")
-            glyph: ExoGlyph.Scissors
+            glyph: ExoGlyph.SplitTrack
             available: root.recordViewModel.splitEnabled
             // Two real causes, and only the first is worth a sentence: a manual
             // split needs a Matroska container, or one is already in flight. The
@@ -292,6 +311,43 @@ Rectangle {
         // Hidden rather than disabled when the recording cannot be edited at all
         // (split recording, missing file, failed run) — a permanently dead button
         // next to a successful result reads as a defect.
+        // What the round slot beside a result is FOR: the file. Reveals the
+        // recording in Explorer, which is the one thing a user reaches for
+        // between finishing a take and deciding what to do with it, and the one
+        // action the completed bar could not offer without leaving the page.
+        RecordActionButton {
+            id: revealButton
+
+            compact: root.compactControls
+            accessibleLabel: qsTr("Show the recording in Explorer")
+            text: qsTr("Folder")
+            glyph: ExoGlyph.Folder
+            round: true
+            available: root.recordViewModel.canOpenEditor
+            unavailableReason: qsTr("The recording is no longer on disk.")
+            visible: root.recordViewModel.resultPending
+            onClicked: root.recordViewModel.requestRevealRecording()
+        }
+
+        // The way OUT of a finished run, and the reason Record no longer has to be
+        // two things at once. Until this existed the only exit from Completed was
+        // to start the next recording, so "I am done looking at this" and "record
+        // again" were the same button -- and the bar carried two text pills where
+        // the rest of the transport carries round glyphs.
+        //
+        // Nothing is undone by it: the recording stays where it was written.
+        RecordActionButton {
+            id: dismissButton
+
+            compact: root.compactControls
+            accessibleLabel: qsTr("Back to the transport")
+            text: qsTr("Back")
+            glyph: ExoGlyph.Back
+            round: true
+            visible: root.recordViewModel.resultPending
+            onClicked: root.recordViewModel.requestDismissResult()
+        }
+
         RecordActionButton {
             id: editButton
 
@@ -312,12 +368,13 @@ Rectangle {
 
             recordViewModel: root.recordViewModel
             compact: root.compactControls
-            // Only one accent pill on the bar at a time. While Edit holds it,
-            // Record keeps its split behaviour and its chevron and gives up the
-            // emphasis.
-            subdued: editButton.visible
-            visible: !root.recordViewModel.recording && !root.recordViewModel.paused
-            Layout.leftMargin: editButton.visible ? root.clusterSpacing : root.actionGap
+            // Not shown beside a result. Record is the idle transport's action;
+            // reaching it is what the Back glyph is for, and keeping both on the
+            // bar is what made the gap between them read as two clusters that had
+            // drifted apart rather than as one.
+            visible: !root.recordViewModel.recording && !root.recordViewModel.paused &&
+                     !root.recordViewModel.resultPending
+            Layout.leftMargin: root.actionGap
         }
     }
 

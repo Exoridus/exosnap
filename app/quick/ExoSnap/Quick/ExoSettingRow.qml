@@ -31,6 +31,54 @@ GridLayout {
 
     default property alias control: controlHost.data
 
+    // A blocked row dims as a whole. The lock is applied per CONTROL across this
+    // product (`enabled: !settings.controlsLocked`), so a row whose control is
+    // greyed out kept a full-strength label beside it and read as an ordinary
+    // setting the user had simply failed to notice was inert. Read off the first
+    // hosted control: rows with two controls (a resolution and a frame rate) gate
+    // both on the same condition.
+    // Layouts are recursed into, controls are not. A row whose slot holds a
+    // RowLayout of a resolution and a frame rate has to see both; descending into
+    // a control's own internals would reach things like a Select's unselectable
+    // option delegates and dim the row for them.
+    function _slotState(host) {
+        let total = 0;
+        let live = 0;
+        const kids = host.children;
+        for (let i = 0; i < kids.length; ++i) {
+            const child = kids[i];
+            if (!child)
+                continue;
+            if (String(child).indexOf("Layout") !== -1) {
+                const inner = root._slotState(child);
+                total += inner.total;
+                live += inner.live;
+                continue;
+            }
+            // A CONTROL, not everything in the slot. `hoverEnabled` is what every
+            // Qt Quick Control carries and no plain Item does, which is the
+            // cheapest honest way to tell the switch apart from the level meter
+            // and the unit label sitting beside it -- both of which stay enabled
+            // whatever the control next to them is doing.
+            if (child.hoverEnabled === undefined)
+                continue;
+            total += 1;
+            if (child.enabled !== false)
+                live += 1;
+        }
+        return { total: total, live: live };
+    }
+
+    // Dim only when EVERY control in the slot is blocked. One live control is
+    // enough to keep the label at full strength: the Microphone row's slot holds
+    // a switch beside a "Mix into previous track" box that gates on something
+    // else entirely, and dimming its label because the box was inert said the
+    // switch could not be used either.
+    readonly property bool controlEnabled: {
+        const state = root._slotState(controlHost);
+        return state.total === 0 || state.live > 0;
+    }
+
     columns: root.stacked ? 1 : 2
     columnSpacing: ExoTheme.spacingLg
     rowSpacing: ExoTheme.spacingXs
@@ -51,6 +99,11 @@ GridLayout {
                 textFormat: Text.PlainText
                 wrapMode: root.info === "" ? Text.WordWrap : Text.NoWrap
                 elide: root.info === "" ? Text.ElideNone : Text.ElideRight
+                // The label keeps its text rung when the row is locked. What a
+                // running recording takes away is the ability to CHANGE the
+                // setting, not the user's need to read which setting it is, and
+                // a whole page of labels on the disabled rung answers nothing.
+                // Only the interaction chrome and the secondary hint recede.
                 color: ExoTheme.text
                 Layout.fillWidth: root.info === ""
                 font {
@@ -76,7 +129,7 @@ GridLayout {
             textFormat: Text.PlainText
             elide: Text.ElideRight
             visible: root.hint !== ""
-            color: ExoTheme.textMuted
+            color: root.controlEnabled ? ExoTheme.textMuted : ExoTheme.textDim
             Layout.fillWidth: true
             font {
                 family: ExoTheme.sansFamily

@@ -33,6 +33,7 @@
 // post-1.0). Everything the application draws is still Qt Quick.
 #include <QApplication>
 #include <QCoreApplication>
+#include <QElapsedTimer>
 #include <QGuiApplication>
 #include <QIcon>
 #include <QImage>
@@ -64,6 +65,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdio>
+#include <functional>
 #include <memory>
 
 namespace {
@@ -113,7 +115,11 @@ int visualCaptureDelayMs(const QStringList& arguments) {
     // did silently before, so nobody noticed the cards below the fold were never
     // in the sweep. An explicit --visual-delay-ms still wins over this.
     constexpr int kSettingsBottomCaptureDelayMs = 2000;
-    const int default_delay_ms = arguments.contains(QStringLiteral("--settings-visual-bottom"))
+    // A dialog has the same problem from the other end: the surface that owns it
+    // is loader-built, so the open call cannot fire until the page exists.
+    const int default_delay_ms = arguments.contains(QStringLiteral("--settings-visual-bottom")) ||
+                                         arguments.contains(QStringLiteral("--visual-scroll")) ||
+                                         arguments.contains(QStringLiteral("--visual-dialog"))
                                      ? kSettingsBottomCaptureDelayMs
                                      : kDefaultCaptureDelayMs;
     const int option_index = arguments.indexOf(QStringLiteral("--visual-delay-ms"));
@@ -134,6 +140,8 @@ QString harnessConfigId(const QStringList& arguments) {
         return QStringLiteral("quick-hwnd-audit");
     if (arguments.contains(QStringLiteral("--window-maximize-cycle")))
         return QStringLiteral("quick-window-cycle");
+    if (arguments.contains(QStringLiteral("--cursor-audit")))
+        return QStringLiteral("quick-cursor-audit");
     if (arguments.contains(QStringLiteral("--auto-record")))
         return QStringLiteral("quick-auto-record");
     if (arguments.contains(QStringLiteral("--auto-edit")))
@@ -422,19 +430,12 @@ int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplic
     if (shell->property("currentPage").toInt() != 1)
         return failNavigationLifecycle("navigateToSettingsRequested did not navigate");
 
-    // ── QCR-001: an open edit session is state of Record, not a modality ────
-    //
-    // This block used to assert the opposite ("navigation not locked during an
-    // edit session"). That contract was never a product decision: the Widgets
-    // shell that shipped until the cutover let the nav tabs navigate for the
-    // whole edit session, the Quick port lost it in `enabled: !editOverlayOpen`,
-    // and Wave 0 canonised the regression on the false premise that the code had
-    // always disabled them. What follows is the intended contract instead.
+    // An edit session is an ephemeral workspace on Record, not a navigation
+    // destination or a modal blocker.
     shell->setProperty("currentPage", 0);
     exosnap::quick::EditSessionAdapter* session = application.editSessionAdapter();
-    exosnap::quick::EditPlayerAdapter* player = application.editPlayerAdapter();
     exosnap::quick::EditExportAdapter* exporter = application.editExportAdapter();
-    if (session == nullptr || player == nullptr || exporter == nullptr)
+    if (session == nullptr || exporter == nullptr)
         return failNavigationLifecycle("no edit adapters");
 
     session->setEditContext(navigationTestEditContext());
@@ -466,58 +467,32 @@ int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplic
     // returning. Product state, not QML internals.
     session->requestTrim(22000, 118000);
     session->requestSeek(41000);
-    const QString clip_path = session->clipPath();
     const qint64 trim_start = session->trimStartMs();
     const qint64 trim_end = session->trimEndMs();
     const qint64 position = session->positionMs();
     if (trim_start != 22000 || trim_end != 118000 || position != 41000)
         return failNavigationLifecycle("the fixture clip did not take the trim and the position");
 
-    // Every destination stays reachable, and reaching it neither closes the
-    // session nor leaves the workspace lying over the page that replaced it.
+    // Every destination stays reachable. The Edit workspace is ephemeral:
+    // leaving Record closes it without a discard prompt and returning does not
+    // resurrect the clip.
     for (int page = 1; page <= 4; ++page) {
         if (!invokeNavigateTo(shell, page))
             return failNavigationLifecycle("navigateTo is not invokable");
         if (shell->property("currentPage").toInt() != page)
             return failNavigationLifecycle("a destination was refused during an edit session");
-        if (!shell->property("editOverlayOpen").toBool())
-            return failNavigationLifecycle("navigation closed the edit session");
+        if (shell->property("editOverlayOpen").toBool())
+            return failNavigationLifecycle("navigation kept the edit session open");
         if (shell->property("editOverlayVisible").toBool() || workspace->property("visible").toBool())
             return failNavigationLifecycle("the edit workspace stayed visible off Record");
-        if (findShellPage(window, "quickEditOverlay") != workspace)
-            return failNavigationLifecycle("the edit workspace was rebuilt by a page change");
     }
 
-    // Back on Record: the same workspace, the same session, the same numbers.
+    // Back on Record: no stale workspace or edit state is restored.
     if (!invokeNavigateTo(shell, 0))
         return failNavigationLifecycle("navigateTo is not invokable");
-    if (!shell->property("editOverlayVisible").toBool() || !workspace->property("visible").toBool())
-        return failNavigationLifecycle("returning to Record did not show the edit workspace");
-    if (findShellPage(window, "quickEditOverlay") != workspace)
-        return failNavigationLifecycle("returning to Record built a second edit workspace");
-    if (session->clipPath() != clip_path || session->trimStartMs() != trim_start || session->trimEndMs() != trim_end ||
-        session->positionMs() != position)
-        return failNavigationLifecycle("the edit session lost state across a page change");
-
-    // Playback: leaving Record pauses, keeps the position, and does not resume
-    // on the way back.
-    player->setClipStateForTest(/*clip_open=*/true, session->durationMs());
-    player->setPlaying(true);
-    if (!player->playing())
-        return failNavigationLifecycle("the fixture player refused to play");
-    if (!invokeNavigateTo(shell, 1))
-        return failNavigationLifecycle("navigateTo is not invokable");
-    if (player->playing())
-        return failNavigationLifecycle("playback kept running off Record");
-    if (session->positionMs() != position)
-        return failNavigationLifecycle("pausing on a page change moved the playhead");
-    if (!invokeNavigateTo(shell, 0))
-        return failNavigationLifecycle("navigateTo is not invokable");
-    if (player->playing())
-        return failNavigationLifecycle("returning to Record resumed playback on its own");
-    if (session->positionMs() != position)
-        return failNavigationLifecycle("returning to Record moved the playhead");
-    player->setClipStateForTest(/*clip_open=*/false, 0);
+    if (shell->property("editOverlayOpen").toBool() || shell->property("editOverlayVisible").toBool() ||
+        workspace->property("visible").toBool() || !session->clipPath().isEmpty())
+        return failNavigationLifecycle("returning to Record restored an ephemeral edit session");
 
     // Export: a page change is not a cancel. The run lives on a thread the
     // adapter owns, so it is unaffected by which QML item is on screen -- this
@@ -543,7 +518,7 @@ int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplic
     emit shell_adapter->navigateToPageRequested(exosnap::quick::ShellAdapter::LogsPage);
     if (shell->property("currentPage").toInt() != 3)
         return failNavigationLifecycle("the adapter navigation path did not reach the shell");
-    if (!shell->property("editOverlayOpen").toBool() || shell->property("editOverlayVisible").toBool() ||
+    if (shell->property("editOverlayOpen").toBool() || shell->property("editOverlayVisible").toBool() ||
         workspace->property("visible").toBool())
         return failNavigationLifecycle("the adapter navigation path used a different edit contract");
 
@@ -982,6 +957,41 @@ int main(int argc, char* argv[]) {
         });
     }
 
+    // Harness-only: raises one of the modal surfaces that nothing but an
+    // interaction reaches. Without it the confirm and preset dialogs could only
+    // be reviewed by reading their source, which is how a Qt default dialog --
+    // system buttons, no ExoSnap control anywhere on it -- went unnoticed inside
+    // a product that styles everything else.
+    //
+    // On a timer for the same reason --visual-scroll is: the Settings page is
+    // built by the shell's loader, so its preset bar does not exist yet at this
+    // point in startup. The capture delay is raised to match.
+    const QString visual_dialog = optionValue(arguments, QStringLiteral("--visual-dialog"));
+    if (!visual_dialog.isEmpty()) {
+        QTimer::singleShot(900, &app, [root_window, visual_dialog]() {
+            if (root_window == nullptr)
+                return;
+            // Settings owns its own dialogs; everything else on this list belongs
+            // to the shell, which is the root object itself.
+            QObject* host = visual_dialog.startsWith(QLatin1String("preset-"))
+                                ? root_window->findChild<QObject*>(QStringLiteral("quickSettingsPage"))
+                                : static_cast<QObject*>(root_window);
+            if (host == nullptr) {
+                qWarning("--visual-dialog: no Settings page; is --visual-page set to Settings?");
+                return;
+            }
+            // Typed args, not QVariant: a QML function declared with a typed
+            // signature registers a typed meta-method, and a QVariant call
+            // against it fails to match and returns false without invoking
+            // anything.
+            bool opened = false;
+            QMetaObject::invokeMethod(host, "openHarnessDialog", Q_RETURN_ARG(bool, opened),
+                                      Q_ARG(QString, visual_dialog));
+            if (!opened)
+                qWarning("--visual-dialog: no dialog named %s", qPrintable(visual_dialog));
+        });
+    }
+
     // Harness-only: renders a --visual-test capture in the named appearance and
     // accent.
     //
@@ -1021,6 +1031,67 @@ int main(int argc, char* argv[]) {
     // silently -- every capture taken with the flag showed the top of the page
     // while claiming to show its end, and the cards below the fold (Appearance
     // among them) had never actually been photographed.
+    // Harness-only: Expert mode, for a capture of the surfaces that have two
+    // arrangements. Settings and Diagnostics both key off the SAME product
+    // setting, so this is one switch rather than one per page -- and it goes
+    // through the settings adapter, which is what the Appearance card's own
+    // controls read, so a capture cannot show an Expert page under a toggle that
+    // says Simple.
+    //
+    // Applied in BOTH directions, always. The harness config directory is scratch
+    // but it is not fresh: it survives between runs and the application persists
+    // Expert mode into it, so a capture taken after a --visual-expert run came out
+    // in Expert while claiming to be the default view. Same trap the appearance
+    // options already document, and the same fix -- pin it rather than leave it.
+    {
+        const bool expert = arguments.contains(QStringLiteral("--visual-expert"));
+        QTimer::singleShot(0, &app,
+                           [&quick_application, expert]() { quick_application.applyHarnessExpertMode(expert); });
+    }
+
+    // Harness-only: where a long page is scrolled, as a fraction of its own
+    // scrollable height. A page that needs three screens to show its sections
+    // cannot be reviewed from one capture of its top, and a reviewer given only
+    // the top reports the rest as missing.
+    const QString visual_scroll = optionValue(arguments, QStringLiteral("--visual-scroll"));
+    if (!visual_scroll.isEmpty()) {
+        bool fraction_ok = false;
+        const double fraction = visual_scroll.toDouble(&fraction_ok);
+        if (fraction_ok) {
+            // On a TIMER, not on a queued call. The page is loader-built, its two
+            // breakpoint compositions settle afterwards, and contentHeight is not
+            // final until the sections have been laid out -- exactly the reason
+            // --settings-visual-bottom raises the capture delay to 2 s. Scrolling
+            // before that silently photographs the top.
+            QTimer::singleShot(1200, &app, [root_window, fraction]() {
+                if (root_window == nullptr || root_window->contentItem() == nullptr)
+                    return;
+                // The VISUAL tree, not findChildren(): a page built by a Loader is
+                // not a QObject child of the shell, and a QObject walk from the
+                // content item never reaches the flickable that holds it. Same
+                // reason --cursor-audit walks childItems().
+                int scrolled = 0;
+                const std::function<void(QQuickItem*)> visit = [&](QQuickItem* item) {
+                    if (item == nullptr)
+                        return;
+                    if (item->inherits("QQuickFlickable")) {
+                        const double content = item->property("contentHeight").toDouble();
+                        const double range = content - item->height();
+                        if (range > 0.0) {
+                            item->setProperty("contentY", std::clamp(fraction, 0.0, 1.0) * range);
+                            ++scrolled;
+                        }
+                    }
+                    for (QQuickItem* child : item->childItems())
+                        visit(child);
+                };
+                visit(root_window->contentItem());
+                if (scrolled == 0)
+                    qWarning("--visual-scroll: nothing on this page scrolls");
+            });
+        }
+    }
+
     if (arguments.contains(QStringLiteral("--settings-visual-bottom"))) {
         QTimer::singleShot(0, &app, [root_window]() {
             auto* page = root_window != nullptr ? root_window->findChild<QObject*>(QStringLiteral("quickSettingsPage"))
@@ -1042,6 +1113,26 @@ int main(int argc, char* argv[]) {
         QTimer::singleShot(0, &app, [&quick_application, record_visual_state]() {
             (void)quick_application.applyRecordVisualScenario(record_visual_state);
         });
+
+        // The scenario forces the Record page, because that is what it is a
+        // scenario OF. An explicit --visual-page has to win anyway: "Settings
+        // while a recording is running" is a state of the Settings page, and
+        // without this it could only be described, never photographed. Queued
+        // after the scenario's own singleShot, which is the only ordering that
+        // survives it.
+        if (!visual_page.isEmpty()) {
+            QTimer::singleShot(0, &app, [root_window, visual_page]() {
+                bool page_ok = false;
+                const int page_index = visual_page.toInt(&page_ok);
+                if (!page_ok)
+                    return;
+                if (auto* shell = root_window != nullptr
+                                      ? root_window->findChild<QObject*>(QStringLiteral("quickAppShell"))
+                                      : nullptr) {
+                    shell->setProperty("currentPage", page_index);
+                }
+            });
+        }
     }
 
     // Harness-only: seeds one of the runtime overlay surfaces (recovery,
@@ -1247,6 +1338,211 @@ int main(int argc, char* argv[]) {
             constexpr LONG_PTR kGestureStyles = WS_THICKFRAME | WS_MAXIMIZEBOX | WS_MINIMIZEBOX | WS_SYSMENU;
             const bool chrome_clean = hwnd != nullptr && inset.isEmpty() && (style & kGestureStyles) == kGestureStyles;
             app.exit(children == 0 && chrome_clean ? 0 : 1);
+        });
+    }
+
+    // Harness-only: does a declared pointing hand actually reach the desktop?
+    //
+    // Every clickable control in this product declares
+    // `HoverHandler { cursorShape: Qt.PointingHandCursor }`, and a QML test can
+    // only confirm that the declaration exists. The cursor a user sees is set by
+    // SetCursor() inside Qt's Windows plugin, which runs only while the platform
+    // layer believes the pointer is inside the window -- and it learns that from
+    // real mouse messages, not from a delivered QMouseEvent. So the audit walks
+    // the live scene, reports the pointer over each hand-declaring control with
+    // WM_MOUSEMOVE, and compares two answers: what Qt thinks the window cursor is
+    // and what the OS is actually carrying. A control where those disagree is the
+    // defect; a control where both say arrow is a declaration that never fires.
+    //
+    // WM_MOUSEMOVE is SENT to our own window. It moves no pointer, takes no focus
+    // and synthesizes no input, which is the same trade --window-maximize-cycle
+    // already makes with WM_NCHITTEST.
+    if (arguments.contains(QStringLiteral("--cursor-audit"))) {
+        QTimer::singleShot(2500, &app, [&app, root_window]() {
+            const HWND hwnd = root_window != nullptr ? reinterpret_cast<HWND>(root_window->winId()) : nullptr;
+            if (hwnd == nullptr || root_window->contentItem() == nullptr) {
+                qWarning("cursor-audit: FAIL no window to probe");
+                app.exit(2);
+                return;
+            }
+
+            const HCURSOR hand = LoadCursorW(nullptr, IDC_HAND);
+            const HCURSOR arrow = LoadCursorW(nullptr, IDC_ARROW);
+            const HCURSOR entry_cursor = GetCursor();
+            const double dpr = root_window->devicePixelRatio();
+            auto* shell = root_window->findChild<QObject*>(QStringLiteral("quickAppShell"));
+
+            const auto settle = [](int ms) {
+                QElapsedTimer timer;
+                timer.start();
+                while (!timer.hasExpired(ms))
+                    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+            };
+
+            // A QQuickItem's own class name is usually QQuickItem or a generated
+            // QMLTYPE, neither of which names a control. The nearest ancestor that
+            // came from a .qml file does.
+            const auto describe = [](QQuickItem* item) {
+                for (QQuickItem* node = item; node != nullptr; node = node->parentItem()) {
+                    if (!node->objectName().isEmpty())
+                        return node->objectName();
+                    const QString type = QString::fromLatin1(node->metaObject()->className());
+                    if (type.startsWith(QLatin1String("Exo")) || type.startsWith(QLatin1String("Record")) ||
+                        type.startsWith(QLatin1String("Settings")) || type.startsWith(QLatin1String("Edit")) ||
+                        type.startsWith(QLatin1String("Notification")) ||
+                        type.startsWith(QLatin1String("Diagnostics"))) {
+                        return type.section(QLatin1Char('_'), 0, 0);
+                    }
+                }
+                return QStringLiteral("unnamed");
+            };
+
+            struct Probe {
+                QQuickItem* item = nullptr;
+                QString name;
+            };
+
+            int total = 0;
+            int agreed = 0;
+            int disabled = 0;
+            int clipped = 0;
+            int qt_only = 0;
+            int neither = 0;
+
+            // Every navigation destination, because the pages are built on first
+            // use: an audit that only ever sees Record reports on a fifth of the
+            // product's controls and calls that clean.
+            const QStringList page_names{QStringLiteral("record"), QStringLiteral("settings"),
+                                         QStringLiteral("diagnostics"), QStringLiteral("logs"),
+                                         QStringLiteral("about")};
+            for (int page = 0; page < page_names.size(); ++page) {
+                if (shell != nullptr)
+                    shell->setProperty("currentPage", page);
+                settle(page == 0 ? 300 : 900);
+
+                QList<Probe> probes;
+                // The VISUAL tree, not findChildren(): an item created by a Loader,
+                // a Repeater or a page document is not a QObject child of the shell,
+                // and a QObject walk from the content item sees a fraction of the
+                // scene. Handlers are QObject children of the item they act on, so
+                // the two walks have to be nested.
+                const std::function<void(QQuickItem*)> visit = [&](QQuickItem* item) {
+                    if (item == nullptr)
+                        return;
+                    for (QObject* object : item->children()) {
+                        if (object == nullptr || !object->inherits("QQuickHoverHandler"))
+                            continue;
+                        if (object->property("cursorShape").toInt() != static_cast<int>(Qt::PointingHandCursor))
+                            continue;
+                        if (!item->isVisible() || item->width() <= 0.0 || item->height() <= 0.0)
+                            continue;
+                        probes.append(Probe{item, describe(item)});
+                        break;
+                    }
+                    for (QQuickItem* child : item->childItems())
+                        visit(child);
+                };
+                visit(root_window->contentItem());
+
+                int page_probed = 0;
+                int page_failed = 0;
+                for (const Probe& probe : probes) {
+                    const QPointF centre =
+                        probe.item->mapToScene(QPointF(probe.item->width() / 2.0, probe.item->height() / 2.0));
+                    if (centre.x() < 0.0 || centre.y() < 0.0 || centre.x() >= root_window->width() ||
+                        centre.y() >= root_window->height()) {
+                        continue;
+                    }
+                    // Inside the window rect is not the same as on screen. A row
+                    // scrolled past the end of its view still reports a scene
+                    // position over the page, and hovering it reaches whatever is
+                    // actually drawn there -- which is a scrolled-away control, not
+                    // a cursor defect.
+                    bool clipped_away = false;
+                    for (QQuickItem* node = probe.item->parentItem(); node != nullptr; node = node->parentItem()) {
+                        if (!node->clip())
+                            continue;
+                        if (!node->contains(node->mapFromScene(centre))) {
+                            clipped_away = true;
+                            break;
+                        }
+                    }
+                    if (clipped_away) {
+                        ++clipped;
+                        continue;
+                    }
+                    const auto x = static_cast<WORD>(std::lround(centre.x() * dpr));
+                    const auto y = static_cast<WORD>(std::lround(centre.y() * dpr));
+                    const auto probeOnce = [&]() {
+                        SendMessageW(hwnd, WM_MOUSEMOVE, 0, MAKELPARAM(x, y));
+                        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+                    };
+                    probeOnce();
+
+                    Qt::CursorShape qt_shape = root_window->cursor().shape();
+                    HCURSOR os_cursor = GetCursor();
+                    // GetCursor() reads state the machine's real pointer also
+                    // writes: a developer moving the mouse across another window
+                    // mid-run lands as a one-probe disagreement. A second reading
+                    // costs nothing on a clean run and removes that whole class of
+                    // false report; a real defect fails both times.
+                    if (qt_shape != Qt::PointingHandCursor || os_cursor != hand) {
+                        settle(60);
+                        probeOnce();
+                        qt_shape = root_window->cursor().shape();
+                        os_cursor = GetCursor();
+                    }
+                    const bool qt_hand = qt_shape == Qt::PointingHandCursor;
+                    const bool os_hand = os_cursor == hand;
+                    ++total;
+                    ++page_probed;
+                    // A disabled control is not a defect with the arrow on it: Qt
+                    // delivers no hover to a disabled item, and the arrow is what
+                    // the product wants there anyway. Counted, so a page that went
+                    // entirely disabled cannot pass as a page that was audited.
+                    if (!probe.item->isEnabled()) {
+                        ++disabled;
+                        if (os_hand)
+                            qWarning("cursor-audit: %s/%s at %.0f,%.0f is DISABLED but shows a pointing hand",
+                                     qPrintable(page_names.at(page)), qPrintable(probe.name), centre.x(), centre.y());
+                        continue;
+                    }
+                    if (qt_hand && os_hand) {
+                        ++agreed;
+                        continue;
+                    }
+                    // Only the disagreements are named. A clean run over two hundred
+                    // controls is a summary line, not a wall of evidence nobody reads.
+                    ++page_failed;
+                    if (qt_hand)
+                        ++qt_only;
+                    else
+                        ++neither;
+                    qWarning("cursor-audit: %s/%s at %.0f,%.0f qt_shape=%d os=%s verdict=%s",
+                             qPrintable(page_names.at(page)), qPrintable(probe.name), centre.x(), centre.y(),
+                             static_cast<int>(qt_shape),
+                             os_cursor == hand    ? "IDC_HAND"
+                             : os_cursor == arrow ? "IDC_ARROW"
+                                                  : "other",
+                             qt_hand ? "os-lost-it" : "never-fired");
+                }
+                qInfo("cursor-audit: page=%s probed=%d failed=%d", qPrintable(page_names.at(page)), page_probed,
+                      page_failed);
+            }
+
+            // The pointer is not really here, so whatever the desktop was carrying
+            // before this ran is what it must carry after.
+            if (entry_cursor != nullptr)
+                SetCursor(entry_cursor);
+
+            if (total == 0) {
+                qWarning("cursor-audit: FAIL no visible control declares a pointing hand");
+                app.exit(3);
+                return;
+            }
+            qInfo("cursor-audit: probes=%d agreed=%d disabled=%d clipped=%d os_lost_it=%d never_fired=%d", total,
+                  agreed, disabled, clipped, qt_only, neither);
+            app.exit(qt_only == 0 && neither == 0 ? 0 : 1);
         });
     }
 

@@ -256,6 +256,8 @@ target_link_libraries(exosnap_observability PUBLIC
 )
 
 exosnap_add_app_test_support(exosnap_record_viewmodel_test_support
+    models/CaptureTargetPresentation.cpp
+    services/DisplayNumbering.cpp
     viewmodels/RecordViewModel.cpp
     diagnostics/error_message.cpp
     settings/RecordingHistoryStore.cpp
@@ -591,6 +593,7 @@ exosnap_add_gtest(
         services/RecordingCoordinator.cpp
         services/RecordingAdmission.cpp
         services/AtomicFileOps.cpp
+        models/CaptureTargetPresentation.cpp
         services/DisplayNumbering.cpp
         settings/RecoveryManifestStore.cpp
     LIBRARIES
@@ -693,6 +696,7 @@ exosnap_add_gtest(
         services/RecordingCoordinator.cpp
         services/RecordingAdmission.cpp
         services/AtomicFileOps.cpp
+        models/CaptureTargetPresentation.cpp
         services/DisplayNumbering.cpp
         settings/RecoveryManifestStore.cpp
     LIBRARIES
@@ -714,6 +718,7 @@ exosnap_add_gtest(
         services/RecordingCoordinator.cpp
         services/RecordingAdmission.cpp
         services/AtomicFileOps.cpp
+        models/CaptureTargetPresentation.cpp
         services/DisplayNumbering.cpp
         settings/RecoveryManifestStore.cpp
     LIBRARIES
@@ -1209,6 +1214,7 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
             services/RecordingCoordinator.cpp
             services/RecordingAdmission.cpp
             services/AtomicFileOps.cpp
+            models/CaptureTargetPresentation.cpp
             services/DisplayNumbering.cpp
             settings/RecoveryManifestStore.cpp
             services/GlobalHotkeyService.cpp
@@ -1250,6 +1256,7 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
             services/RecordingCoordinator.cpp
             services/RecordingAdmission.cpp
             services/AtomicFileOps.cpp
+            models/CaptureTargetPresentation.cpp
             services/DisplayNumbering.cpp
             settings/RecoveryManifestStore.cpp
             services/GlobalHotkeyService.cpp
@@ -1299,6 +1306,20 @@ exosnap_add_gtest(
 target_include_directories(brand_geometry_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(brand_geometry_tests PRIVATE
     EXOSNAP_BRAND_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+
+# The third party to the same agreement: the generator that WRITES the suite.
+# brand_geometry_tests compares the checked-in .svg against the canonical header,
+# and both stayed consistent while the generator quietly stopped reproducing
+# either -- so the next person to run it would have silently reverted a shipped
+# correction. --check writes nothing and exits non-zero on drift.
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_EXECUTABLE)
+    add_test(
+        NAME brand.geometry.marks_match_the_generator
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/scripts/generate-brand-marks.py" --check
+    )
+    set_tests_properties(brand.geometry.marks_match_the_generator PROPERTIES TIMEOUT 60)
+endif()
 
 # Pure unit tests for HumanizeEngineDetail (RecordingErrorPanel's raw-enum → canon
 # label mapping). Dependency-light: QString only.

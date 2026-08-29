@@ -24,6 +24,11 @@ namespace exosnap::engine {
 enum class MetricAvailability : uint8_t {
     Available,
     Unavailable,
+    // Sampled, and known to be wrong: the measurement's own preconditions were
+    // violated (see PlausibleDriftBoundMs). Distinct from Unavailable on
+    // purpose -- "nothing measured yet" invites waiting, "measured and invalid"
+    // must not be read as a number at all.
+    Faulted,
 };
 
 // Deterministic, evidence-based bottleneck classification.
@@ -256,6 +261,7 @@ struct AudioDiagnostics {
     // the device returns). source_degraded == degraded_sources > 0. A calm,
     // measured live notice — never a blocker.
     uint32_t degraded_sources = 0;
+    uint32_t degraded_source_kinds = 0;
     bool source_degraded = false;
     // Latched post-flight fact: at least one audio capture source was lost
     // mid-recording and degraded to honest silence at some point this session,

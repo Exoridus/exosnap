@@ -29,15 +29,18 @@
 namespace exosnap::engine {
 
 // ---------------------------------------------------------------------------
-// DeriveTransientMkvPath
+// DeriveValuablePartialPath
 // ---------------------------------------------------------------------------
 
+std::filesystem::path DeriveValuablePartialPath(const std::filesystem::path& final_output_path) {
+    return final_output_path.parent_path() / (final_output_path.filename().wstring() + L".partial");
+}
+
 std::filesystem::path DeriveTransientMkvPath(const std::filesystem::path& mp4_output_path) {
-    // Replace .mp4 extension with .mkv.tmp so the transient file sits next to the
-    // intended output without colliding with any real MKV the user might have.
-    std::filesystem::path result = mp4_output_path;
-    result.replace_extension(L".mkv.tmp");
-    return result;
+    if (mp4_output_path.extension() == L".partial") {
+        return mp4_output_path;
+    }
+    return DeriveValuablePartialPath(mp4_output_path);
 }
 
 // ---------------------------------------------------------------------------
@@ -437,6 +440,9 @@ void RecorderSession::Stop() {
         m_impl->pending_stop.NoteStop(m_impl->recording.load());
     }
     st->pause_requested.store(false);
+    // Before the flag, so no worker can observe the stop and start draining while
+    // the instant that stop happened is still unrecorded.
+    st->NoteCaptureEnded();
     st->stop_requested.store(true);
     st->SignalStopEvent();
     st->premux_cv.notify_all();
@@ -460,6 +466,19 @@ void RecorderSession::RequestSplit(SplitTriggerSource source) {
     const auto st = m_impl->State();
     st->split_last_trigger.store(static_cast<uint32_t>(source));
     st->split_request_seq.fetch_add(1);
+}
+
+void RecorderSession::SetAudioSourceMuted(AudioSourceKind kind, bool muted) noexcept {
+    if (!m_impl->recording.load()) {
+        return;
+    }
+    const auto st = m_impl->State();
+    const uint32_t bit = AudioSourceKindBit(kind);
+    if (muted) {
+        st->audio_mute_mask.fetch_or(bit, std::memory_order_relaxed);
+    } else {
+        st->audio_mute_mask.fetch_and(~bit, std::memory_order_relaxed);
+    }
 }
 
 void RecorderSession::SetSegmentCallback(SegmentCallback cb) {
@@ -664,7 +683,8 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
         // Video-only path: no audio workers.
     } else if (config.audio_track_plan.tracks.empty()) {
         auto source = std::make_unique<WasapiLoopbackSrc>();
-        audioWorkers.push_back(std::make_shared<AudioThread>(state_ptr, std::move(source), 0));
+        audioWorkers.push_back(std::make_shared<AudioThread>(
+            state_ptr, std::move(source), 0, std::vector<AudioSourceKind>{AudioSourceKind::SystemOutput}));
     } else {
         audioWorkers.reserve(config.audio_track_plan.tracks.size());
         for (const auto& track : config.audio_track_plan.tracks) {
@@ -730,7 +750,7 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
             }
 
             audioWorkers.push_back(
-                std::make_shared<AudioThread>(state_ptr, std::move(track_source), track.track_index));
+                std::make_shared<AudioThread>(state_ptr, std::move(track_source), track.track_index, track.sources));
         }
     }
 
@@ -1018,7 +1038,14 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
     // frames, so counting that time here would report a duration the file does
     // not have -- and would disagree with the clock the user was watching.
     {
-        const auto recording_wall_end = std::chrono::steady_clock::now();
+        // The end of the CAPTURE, not the end of this function. Falls back to now()
+        // only for a session that ended without anyone raising a stop, which is a
+        // path that should not exist -- and is still better measured long than
+        // reported as zero.
+        const int64_t recorded_end_ns = state_ptr->capture_end_ns.load(std::memory_order_relaxed);
+        const auto recording_wall_end =
+            recorded_end_ns != 0 ? std::chrono::steady_clock::time_point(std::chrono::nanoseconds(recorded_end_ns))
+                                 : std::chrono::steady_clock::now();
         const auto captured =
             recording_wall_end - recording_wall_start - std::chrono::nanoseconds(state_ptr->paused_ns.load());
         const double seconds = std::chrono::duration<double>(captured).count();

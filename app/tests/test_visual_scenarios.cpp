@@ -30,6 +30,9 @@ TEST(VisualScenarioTest, RequiredScenariosAreRegistered) {
         QStringLiteral("record-recording"),
         QStringLiteral("record-paused"),
         QStringLiteral("record-completed"),
+        QStringLiteral("record-output-unwritable"),
+        QStringLiteral("settings-output-unwritable"),
+        QStringLiteral("record-output-preparing"),
         QStringLiteral("settings-display"),
         QStringLiteral("settings-window"),
         QStringLiteral("settings-region"),
@@ -154,6 +157,25 @@ TEST(VisualScenarioTest, RequiredScenariosAreRegistered) {
 
     for (const QString& id : required)
         EXPECT_NE(FindVisualScenario(id), nullptr) << id.toStdString();
+}
+
+TEST(VisualScenarioTest, OutputAdmissionScenariosCarryDeterministicRoutesAndStates) {
+    const VisualScenario* record_unwritable = FindVisualScenario(QStringLiteral("record-output-unwritable"));
+    const VisualScenario* settings_unwritable = FindVisualScenario(QStringLiteral("settings-output-unwritable"));
+    const VisualScenario* preparing = FindVisualScenario(QStringLiteral("record-output-preparing"));
+
+    ASSERT_NE(record_unwritable, nullptr);
+    EXPECT_EQ(record_unwritable->page, VisualPage::Record);
+    EXPECT_EQ(record_unwritable->record_visual_state, QStringLiteral("output-unwritable"));
+
+    ASSERT_NE(settings_unwritable, nullptr);
+    EXPECT_EQ(settings_unwritable->page, VisualPage::Settings);
+    EXPECT_EQ(settings_unwritable->record_visual_state, QStringLiteral("output-unwritable"));
+
+    ASSERT_NE(preparing, nullptr);
+    EXPECT_EQ(preparing->page, VisualPage::Record);
+    EXPECT_EQ(preparing->record_state, VisualRecordState::Preparing);
+    EXPECT_EQ(preparing->record_visual_state, QStringLiteral("preparing"));
 }
 
 // 45. Every webcam scenario is registered with the expected routing + state.
@@ -646,7 +668,6 @@ TEST(VisualScenarioTest, OtherScenarios_DoNotDriveAudioDegradedNotification) {
         if (s.id == QStringLiteral("record-recording-audio-degraded"))
             continue;
         EXPECT_EQ(s.audio_degraded_notification_count, 0) << s.id.toStdString();
-        EXPECT_TRUE(s.record_visual_state.isEmpty()) << s.id.toStdString();
     }
 }
 

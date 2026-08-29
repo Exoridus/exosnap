@@ -194,6 +194,10 @@ uint32_t MicDspAudioSrc::DegradedSourceCount() const {
     return inner_ ? inner_->DegradedSourceCount() : 0;
 }
 
+uint32_t MicDspAudioSrc::DegradedSourceIndexMask() const {
+    return inner_ ? inner_->DegradedSourceIndexMask() : 0;
+}
+
 void MicDspAudioSrc::Shutdown() {
     inner_->Shutdown();
     initialized_ = false;

@@ -63,7 +63,7 @@ Window {
     readonly property color stateTone: {
         switch (root.overlayState) {
         case OverlayAdapter.Paused:
-            return ExoTheme.overlayAccent;
+            return ExoTheme.overlayPaused;
         case OverlayAdapter.Warning:
             return ExoTheme.overlayWarning;
         default:

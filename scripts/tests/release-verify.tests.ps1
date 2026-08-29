@@ -724,6 +724,146 @@ Test-Case 'no scenario reads a field the contract does not cover' {
         'window.moveToScreen takes a screen NAME, never an index'
 }
 
+Test-Case 'a momentarily unrendered publish is not a frozen preview' {
+    # The rc11 defect in the gate itself: `owed` is
+    # published_generation > presented_generation, which a live preview crosses
+    # between every publish and the render pass that follows it. One sample of it
+    # therefore fails a healthy preview at whatever rate that window occupies, and
+    # passes a preview that has published nothing at all.
+    . (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
+    $live = @(
+        [pscustomobject]@{ consumedFrames = 429; updateGate = [pscustomobject]@{ owed = $true; renderPasses = 502 } }
+        [pscustomobject]@{ consumedFrames = 441; updateGate = [pscustomobject]@{ owed = $true; renderPasses = 515 } }
+    )
+    Assert-Equal 'PASS' (Get-PreviewFreezeVerdict -Samples $live).Result `
+        'frames kept being consumed, so the preview is not frozen'
+}
+
+Test-Case 'a preview that stops consuming while a publish is owed is a FAIL' {
+    . (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
+    $frozen = @(
+        [pscustomobject]@{ consumedFrames = 429; updateGate = [pscustomobject]@{ owed = $true; renderPasses = 502 } }
+        [pscustomobject]@{ consumedFrames = 429; updateGate = [pscustomobject]@{ owed = $true; renderPasses = 502 } }
+        [pscustomobject]@{ consumedFrames = 429; updateGate = [pscustomobject]@{ owed = $true; renderPasses = 502 } }
+    )
+    Assert-Equal 'FAIL' (Get-PreviewFreezeVerdict -Samples $frozen).Result `
+        'a standing debt with no progress is the freeze this gate exists for'
+}
+
+Test-Case 'an idle preview is not reported as a pass' {
+    # The other half of the same defect. A preview that published nothing can never
+    # owe a render pass, so a bare `-not owed` reads as green for a gate nobody ran.
+    . (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
+    $idle = @(
+        [pscustomobject]@{ consumedFrames = 0; updateGate = [pscustomobject]@{ owed = $false; renderPasses = 9 } }
+        [pscustomobject]@{ consumedFrames = 0; updateGate = [pscustomobject]@{ owed = $false; renderPasses = 11 } }
+    )
+    Assert-Equal 'UNVERIFIED' (Get-PreviewFreezeVerdict -Samples $idle).Result `
+        'no frame was consumed, so nothing was proven about presenting one'
+}
+
+Test-Case 'one sample cannot decide whether a preview is frozen' {
+    . (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
+    $single = @([pscustomobject]@{ consumedFrames = 429; updateGate = [pscustomobject]@{ owed = $true; renderPasses = 502 } })
+    Assert-Equal 'UNVERIFIED' (Get-PreviewFreezeVerdict -Samples $single).Result `
+        'a transient boolean needs at least two observations'
+}
+
+Test-Case 'the mixed-display scenario decides through the sampled verdict' {
+    . (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
+    $source = Get-Content -LiteralPath (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1') -Raw
+    Assert-True ($source -match 'Get-PreviewFreezeVerdict -Samples') `
+        'REL-DISP-MIXED-001 must decide on a series of samples, never on one'
+}
+
+function New-HealthySoakReport {
+    # The shape session.latest returns, with every post-check of
+    # docs/release-checklist.md section 7 satisfied.
+    return [pscustomobject]@{
+        segments = @([pscustomobject]@{ index = 0; duration_seconds = 1802.278; finalized = $true })
+        audio = [pscustomobject]@{
+            degraded_occurred = $false
+            resampler_drain = @(
+                [pscustomobject]@{ track = 0; undrained_frames = 0 }
+                [pscustomobject]@{ track = 1; undrained_frames = 0 })
+        }
+        counters = [pscustomobject]@{
+            audio_discontinuities = 0
+            mux_failures = 0
+            encoder_keyframe_prediction_mismatches = 0
+            av_drift_ms = 12.5
+            peak_av_drift_ms = 31.0
+            duration_skew_ms = 320.5
+            frames_dropped = [pscustomobject]@{ processing_failure = 0; backpressure = 0; coalesced = 66021; cfr = 0 }
+        }
+    }
+}
+
+Test-Case 'a clean soak report passes' {
+    . (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
+    $verdict = Get-ReleaseSoakVerdict -Report (New-HealthySoakReport) -ContainerSeconds 1802.278 `
+        -ExpectedSeconds 1800 -AudioSpanSeconds @(1802.254, 1802.030)
+    Assert-Equal 'PASS' $verdict.Result "a clean report must pass: $($verdict.Message)"
+}
+
+Test-Case 'the soak gate reads the post-checks the checklist names' {
+    # Measured against rc11: the scenario collected 60 drift samples and a session
+    # report carrying audio_discontinuities = 2, and returned PASS on container
+    # duration alone. Every counter below was already in the evidence, unread.
+    . (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
+    $cases = @(
+        @{ Name = 'audio_discontinuities'; Apply = { param($r) $r.counters.audio_discontinuities = 2 } }
+        @{ Name = 'mux_failures'; Apply = { param($r) $r.counters.mux_failures = 1 } }
+        @{ Name = 'processing_failure'; Apply = { param($r) $r.counters.frames_dropped.processing_failure = 3 } }
+        @{ Name = 'backpressure'; Apply = { param($r) $r.counters.frames_dropped.backpressure = 4 } }
+        @{ Name = 'keyframe'; Apply = { param($r) $r.counters.encoder_keyframe_prediction_mismatches = 1 } }
+        @{ Name = 'undrained'; Apply = { param($r) $r.audio.resampler_drain[1].undrained_frames = 5 } }
+        @{ Name = 'degraded'; Apply = { param($r) $r.audio.degraded_occurred = $true } }
+        @{ Name = 'finalized'; Apply = { param($r) $r.segments[0].finalized = $false } }
+    )
+    foreach ($case in $cases) {
+        $report = New-HealthySoakReport
+        & $case.Apply $report
+        $verdict = Get-ReleaseSoakVerdict -Report $report -ContainerSeconds 1802.278 `
+            -ExpectedSeconds 1800 -AudioSpanSeconds @(1802.254, 1802.030)
+        Assert-Equal 'FAIL' $verdict.Result "$($case.Name) must fail the gate"
+    }
+}
+
+Test-Case 'an audio track that stops early fails even with a full container' {
+    # The failure a container-duration check cannot see: video runs the whole
+    # recording, the audio drain dropped the tail.
+    . (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
+    $verdict = Get-ReleaseSoakVerdict -Report (New-HealthySoakReport) -ContainerSeconds 1802.278 `
+        -ExpectedSeconds 1800 -AudioSpanSeconds @(1802.254, 900.0)
+    Assert-Equal 'FAIL' $verdict.Result 'a half-length audio track must fail'
+}
+
+Test-Case 'a container much shorter than the recording fails' {
+    . (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
+    $verdict = Get-ReleaseSoakVerdict -Report (New-HealthySoakReport) -ContainerSeconds 1200 `
+        -ExpectedSeconds 1800 -AudioSpanSeconds @(1200, 1200)
+    Assert-Equal 'FAIL' $verdict.Result 'a 10-minute-short container must fail'
+}
+
+Test-Case 'the envelope session.latest actually returns is unwrapped' {
+    # session.latest answers { available, report }, not the report itself. Reading
+    # the counters off the envelope finds nothing and reports UNVERIFIED, which
+    # costs a 30-minute run to discover.
+    . (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
+    $envelope = [pscustomobject]@{ available = $true; report = (New-HealthySoakReport) }
+    $verdict = Get-ReleaseSoakVerdict -Report $envelope -ContainerSeconds 1802.278 `
+        -ExpectedSeconds 1800 -AudioSpanSeconds @(1802.254, 1802.030)
+    Assert-Equal 'PASS' $verdict.Result "the envelope must be unwrapped: $($verdict.Message)"
+}
+
+Test-Case 'a missing session report is unverified, not a pass' {
+    . (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
+    $verdict = Get-ReleaseSoakVerdict -Report $null -ContainerSeconds 1802.278 `
+        -ExpectedSeconds 1800 -AudioSpanSeconds @(1802.2)
+    Assert-Equal 'UNVERIFIED' $verdict.Result 'no report means the post-checks were not performed'
+}
+
 Write-Host ''
 Write-Host "$script:Passed/$($script:Passed + $script:Failed) passed"
 if ($script:Failed -gt 0) { exit 1 }

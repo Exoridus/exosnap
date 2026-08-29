@@ -29,6 +29,7 @@
 #include "../diagnostics/DiskSpaceProvider.h"
 #include "../diagnostics/WindowTargetFacts.h"
 #include "../models/FilenameBuilder.h"
+#include "../models/OutputPathValidator.h"
 #include "../models/OutputSettingsModel.h"
 #include "../models/RecordingMarker.h"
 #include "../models/VideoSettingsModel.h"
@@ -182,12 +183,18 @@ class RecordingCoordinator {
     void OnCapabilitiesReady(const exosnap::capability::CapabilitySet& caps);
     void OnCapabilityFailure(std::wstring message);
     void RevalidateCapabilities();
+    void ApplyOutputFolderValidation(FolderValidationResult result);
 
     std::vector<exosnap::engine::CaptureTarget> EnumerateTargets();
     bool StartRecording(const exosnap::engine::CaptureTarget& target, const capability::AudioUiState& audio_ui_state,
                         std::optional<exosnap::engine::CaptureRegion> crop_region = std::nullopt);
 
     // Webcam overlay
+    // Mute or unmute one audio source kind while a recording runs. No-op when
+    // no session is in flight: between recordings the source rows are the truth
+    // and a new session starts from them.
+    void SetAudioSourceMuted(exosnap::engine::AudioSourceKind kind, bool muted);
+
     void SetWebcamSettings(const WebcamSettings& settings);
     void SetWebcamFrameCallback(WebcamService::FrameCallback cb);
     void SetWebcamFrameCallback(QObject* receiver, WebcamService::FrameCallback cb);
@@ -218,6 +225,15 @@ class RecordingCoordinator {
     void CancelPreparing();
     void PauseRecording();
     void ResumeRecording();
+
+    // Leaves a finished or failed run behind and returns the transport to its
+    // idle arrangement. Nothing is undone: the recording stays exactly where it
+    // was written, and the manifest and the result are untouched. Until this
+    // existed, the only way out of Completed was to start the next recording,
+    // which made "I am done looking at this" and "record again" the same button.
+    //
+    // A no-op in every other state, so a stray call can never interrupt a run.
+    void DismissResult();
 
     // Typed split command path (SPLIT-RECORDING-R1). Routes the manual button and
     // the global hotkey through the exact same entry point. Accepted only while a
@@ -584,6 +600,7 @@ class RecordingCoordinator {
 
     std::atomic<UiRecordingState> state_{UiRecordingState::LoadingCapabilities};
     std::wstring capability_status_text_;
+    FolderValidationResult output_folder_validation_ = FolderValidationResult::Ok;
     // Written by the preparation worker; read on the UI thread and on the mux
     // worker thread. The mutex prevents a torn read of the std::filesystem::path
     // across those boundaries, so EVERY reader goes through CurrentOutputPath()

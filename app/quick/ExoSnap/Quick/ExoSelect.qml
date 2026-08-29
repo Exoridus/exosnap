@@ -45,7 +45,7 @@ ComboBox {
     hoverEnabled: true
 
     HoverHandler {
-        cursorShape: Qt.PointingHandCursor
+        cursorShape: root.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
     }
 
     contentItem: Label {
@@ -53,7 +53,12 @@ ComboBox {
         textFormat: Text.PlainText
         elide: Text.ElideRight
         verticalAlignment: Text.AlignVCenter
-        color: root.currentIndex === -1 ? ExoTheme.textDim : root.enabled ? ExoTheme.text : ExoTheme.textDim
+        // A locked select still states its current value on a readable rung:
+        // the chevron and the control's fill carry "not changeable" on their
+        // own. Only the empty selection stays on the disabled rung, because
+        // there is no value to read there.
+        color: root.currentIndex === -1 ? ExoTheme.textDim
+             : root.enabled ? ExoTheme.text : ExoTheme.textSecondary
         leftPadding: ExoTheme.spacingMd
         rightPadding: root.indicator.width + ExoTheme.spacingMd
         font {

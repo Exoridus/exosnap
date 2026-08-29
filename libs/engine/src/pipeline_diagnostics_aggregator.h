@@ -404,7 +404,8 @@ class PipelineDiagnosticsAggregator {
     // of its total. Level-based (the current state, not an event), reported each
     // drain iteration; the snapshot sums across tracks. track_id is bounded by
     // CodecPrivateData::kMaxAudioTracks.
-    void OnAudioSourceHealth(uint32_t track_id, uint32_t degraded_sources, uint32_t total_sources) noexcept;
+    void OnAudioSourceHealth(uint32_t track_id, uint32_t degraded_sources, uint32_t total_sources,
+                             uint32_t degraded_source_kinds = 0) noexcept;
     // Queues
     void OnVideoQueueDepth(uint32_t depth) noexcept;  // post-encode mux queue
     void OnAudioPremuxDepth(uint32_t depth) noexcept; // bounded premux
@@ -423,7 +424,8 @@ class PipelineDiagnosticsAggregator {
     // compensation (equals raw before slaving engages); applied_ppm is the
     // current compensation rate (0 = not compensating). Tracks without an
     // attributable device clock (multi-source merges) never report.
-    void OnAudioClockSlaving(uint32_t track_id, double raw_drift_ms, double residual_ms, double applied_ppm) noexcept;
+    void OnAudioClockSlaving(uint32_t track_id, double raw_drift_ms, double residual_ms, double applied_ppm,
+                             bool measurement_faulted = false) noexcept;
     // Free-space poll for disk-fill ETA (called from the stats collector at ~5 Hz)
     void UpdateFreeDiskBytes(uint64_t free_bytes) noexcept;
 
@@ -527,6 +529,7 @@ class PipelineDiagnosticsAggregator {
     // Per-track degraded/total capture-source counts (ADR 0046). Array size
     // mirrors CodecPrivateData::kMaxAudioTracks; summed in BuildSnapshot.
     std::array<uint32_t, 3> audio_degraded_sources_{};
+    std::array<uint32_t, 3> audio_degraded_source_kinds_{};
     std::array<uint32_t, 3> audio_total_sources_{};
 
     // Queues
@@ -592,6 +595,9 @@ class PipelineDiagnosticsAggregator {
     std::array<double, 3> audio_clock_residual_ms_{};
     std::array<double, 3> audio_clock_ppm_{};
     std::array<bool, 3> audio_clock_valid_{};
+    // Latched per track: this track's drift figures are known-invalid, so the
+    // snapshot must say so instead of publishing them as measurements.
+    std::array<bool, 3> audio_clock_faulted_{};
 
     // Peak |av_drift_ms| (residual) this session (running maximum). Single source
     // of truth for both the live UI and the session report.

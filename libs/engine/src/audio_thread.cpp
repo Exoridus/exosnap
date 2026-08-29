@@ -9,6 +9,7 @@
 #include "exosnap/engine/audio_meter.h"
 #include "ffmpeg_aac_encoder.h"
 #include "flac_audio_encoder.h"
+#include "mixed_audio_src.h"
 #include "opus_audio_encoder.h"
 #include "output_format_audio_src.h"
 #include "pcm_audio_encoder.h"
@@ -124,8 +125,12 @@ EncoderSetup MakeEncoderSetup(const RecorderConfig& config) {
 } // namespace
 
 AudioThread::AudioThread(std::shared_ptr<SessionState> state, std::unique_ptr<IAudioCaptureSource> source,
-                         uint32_t track_id)
-    : m_state_ptr(std::move(state)), m_state(*m_state_ptr), source_(std::move(source)), track_id_(track_id) {
+                         uint32_t track_id, std::vector<AudioSourceKind> source_kinds)
+    : m_state_ptr(std::move(state)), m_state(*m_state_ptr), source_(std::move(source)),
+      source_kinds_(std::move(source_kinds)), track_id_(track_id) {
+    // Resolved here, while source_ is still the raw capture source: Run() wraps
+    // it in the output-format decorator, after which the mixer is unreachable.
+    mixed_src_ = dynamic_cast<MixedAudioSrc*>(source_.get());
 }
 
 AudioThread::~AudioThread() {
@@ -368,6 +373,13 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
     const bool clock_slaving_enabled = m_state.config.audio_clock_slaving_enabled;
     bool clock_slaving_logged_engage = false;
     bool clock_slaving_logged_saturation = false;
+    bool clock_slaving_logged_fault = false;
+    // Latched independently of the slaving setting: with slaving off the
+    // controller is never fed, and the drift figures still reach diagnostics --
+    // they must not be reported as measurements when they are not.
+    bool drift_measurement_faulted = false;
+    bool drift_first_qpc_valid = false;
+    uint64_t drift_first_qpc_ns = 0;
 
     // --- Device hot-swap / source-degradation state (ADR 0046) ---
     // bare_degraded: the sole (non-merged) source lost its endpoint; the thread
@@ -380,6 +392,17 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
     bool bare_degraded = false;
     uint64_t lastAccountedQpcNs = QpcNowNs();
     auto lastReinitAttempt = std::chrono::steady_clock::now();
+    const auto degradedSourceKinds = [this]() {
+        if (source_kinds_.size() == 1 && source_->DegradedSourceCount() > 0)
+            return AudioSourceKindBit(source_kinds_.front());
+        const uint32_t indexes = source_->DegradedSourceIndexMask();
+        uint32_t kinds = 0;
+        for (size_t i = 0; i < source_kinds_.size() && i < 32; ++i) {
+            if ((indexes & (1u << static_cast<uint32_t>(i))) != 0)
+                kinds |= AudioSourceKindBit(source_kinds_[i]);
+        }
+        return kinds;
+    };
 
     // --- Silent-stall state (audio_silence_fill.h) ---
     // silent_stalled: a healthy source has stopped delivering packets entirely
@@ -390,6 +413,8 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
     // discontinuity gap covering the SAME stretch is not filled a second time.
     bool silent_stalled = false;
     uint64_t silenceFilledFramesSincePacket = 0;
+    // Last mask pushed into the mixer, so an unchanged mute costs one load.
+    uint32_t last_mute_mask = 0;
 
     // Publish this track's measured zero point: the wall-clock instant audio PTS
     // 0 sits at (av_epoch_align.h). Called from EVERY path that first puts
@@ -430,7 +455,13 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
         publishAudioEpoch(lastAccountedQpcNs, encoderAccumulatedFrames);
         std::vector<EncodedAudioPacket> pkts;
         feedGapSilence(static_cast<uint32_t>(framesToFill), encoderAccumulatedFrames, pkts);
-        lastAccountedQpcNs += (framesToFill * 1000000000ULL) / sample_rate;
+        const uint64_t filledNs = (framesToFill * 1000000000ULL) / sample_rate;
+        lastAccountedQpcNs += filledNs;
+        // The wall clock ran over a stretch the device did not measure: this
+        // silence came from the clock, not from device samples, so it is not a
+        // clock difference. Left unreported it would show up as drift of exactly
+        // the length of the quiet stretch (audio_clock_drift.h).
+        drift_estimator.NotifySilenceFilled(filledNs);
         silenceFilledFramesSincePacket += framesToFill;
         {
             std::lock_guard slk(m_state.stats_mutex);
@@ -505,7 +536,8 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
         // wall-clock silence and throttled-reactivate. The dead source is not
         // polled at all until it comes back — polling it would only re-fail.
         if (bare_degraded) {
-            m_state.diagnostics.OnAudioSourceHealth(track_id_, 1, 1);
+            const uint32_t kind = source_kinds_.empty() ? 0 : AudioSourceKindBit(source_kinds_.front());
+            m_state.diagnostics.OnAudioSourceHealth(track_id_, 1, 1, kind);
             if (!emitSilenceForElapsed()) {
                 failed = true;
                 break;
@@ -557,7 +589,7 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
         {
             const uint32_t total_sources = source_->CaptureSourceCount();
             const uint32_t degraded_sources = source_->DegradedSourceCount();
-            m_state.diagnostics.OnAudioSourceHealth(track_id_, degraded_sources, total_sources);
+            m_state.diagnostics.OnAudioSourceHealth(track_id_, degraded_sources, total_sources, degradedSourceKinds());
             if (degraded_sources > 0) {
                 markDegradedOccurred();
                 // Every inner is down: the mixer emits nothing at all, so this
@@ -601,7 +633,7 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
                             break;
                         }
                         m_state.diagnostics.OnAudioSourceHealth(track_id_, source_->DegradedSourceCount(),
-                                                                total_sources);
+                                                                total_sources, degradedSourceKinds());
                     }
                 }
             }
@@ -630,6 +662,21 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
             waitForCaptureWork();
             continue;
         }
+
+        // The live mute, applied once per drain rather than per packet. A mixer
+        // owns its own per-inner mute so a merged track can silence one source
+        // and keep the rest; a bare single source has no mixer to ask, so the
+        // loop feeds silence for the frames it just acquired -- same length,
+        // same cadence, same PTS.
+        const uint32_t mute_mask = m_state.audio_mute_mask.load(std::memory_order_relaxed);
+        if (mixed_src_ != nullptr && mute_mask != last_mute_mask) {
+            for (std::size_t si = 0; si < source_kinds_.size(); ++si) {
+                mixed_src_->SetSourceMuted(si, (mute_mask & AudioSourceKindBit(source_kinds_[si])) != 0);
+            }
+            last_mute_mask = mute_mask;
+        }
+        const bool track_muted = mixed_src_ == nullptr && source_kinds_.size() == 1 &&
+                                 (mute_mask & AudioSourceKindBit(source_kinds_[0])) != 0;
 
         bool anyWork = false;
         while (source_->PendingFrameCount() > 0) {
@@ -685,6 +732,25 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
                     const double raw_drift = drift_estimator.DriftMs();
                     double residual = raw_drift; // no slaving => residual is the raw drift
                     double applied_ppm = 0.0;
+
+                    if (!drift_first_qpc_valid) {
+                        drift_first_qpc_valid = true;
+                        drift_first_qpc_ns = timing.qpc_position_ns;
+                    }
+                    const double drift_elapsed_s =
+                        static_cast<double>(timing.qpc_position_ns - drift_first_qpc_ns) / 1e9;
+                    if (std::abs(raw_drift) > PlausibleDriftBoundMs(drift_elapsed_s)) {
+                        drift_measurement_faulted = true;
+                        if (!clock_slaving_logged_fault) {
+                            clock_slaving_logged_fault = true;
+                            logging::LogField f[] = {{"track", std::to_string(track_id_)},
+                                                     {"drift_ms", std::to_string(raw_drift)},
+                                                     {"elapsed_s", std::to_string(drift_elapsed_s)}};
+                            logging::log(logging::LogLevel::Warn, "audio.clock_drift",
+                                         "drift measurement implausible; reported as faulted, not slaved",
+                                         std::span<const logging::LogField>(f, std::size(f)));
+                        }
+                    }
                     if (clock_slaving_enabled && output_format_src_ != nullptr) {
                         const double applied = output_format_src_->AppliedCompensationMs();
                         if (clock_controller.Update(raw_drift, applied, timing.qpc_position_ns)) {
@@ -721,7 +787,8 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
                                          std::span<const logging::LogField>(f, std::size(f)));
                         }
                     }
-                    m_state.diagnostics.OnAudioClockSlaving(track_id_, raw_drift, residual, applied_ppm);
+                    m_state.diagnostics.OnAudioClockSlaving(track_id_, raw_drift, residual, applied_ppm,
+                                                            drift_measurement_faulted);
                 }
             }
 
@@ -731,7 +798,7 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
                 feedGapSilence(gapFramesToFeed, encoderAccumulatedFrames, pkts);
             }
             const size_t totalSamples = static_cast<size_t>(raw.num_frames) * static_cast<size_t>(channels);
-            if (raw.silent) {
+            if (raw.silent || track_muted) {
                 std::vector<float> silence(totalSamples, 0.0f);
                 enc.FeedFloat32(silence.data(), silence.size(), 0, encoderAccumulatedFrames, sample_rate, channels,
                                 pkts);
@@ -795,7 +862,8 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
             const uint32_t degraded_after = source_->DegradedSourceCount();
             if (degraded_after > 0) {
                 markDegradedOccurred();
-                m_state.diagnostics.OnAudioSourceHealth(track_id_, degraded_after, source_->CaptureSourceCount());
+                m_state.diagnostics.OnAudioSourceHealth(track_id_, degraded_after, source_->CaptureSourceCount(),
+                                                        degradedSourceKinds());
             }
         }
 

@@ -69,26 +69,130 @@ Item {
             // the sentence does.
             tone: root.recordViewModel.noticeTone
             dismissible: true
+            actionText: root.recordViewModel.blocked ? qsTr("Open Diagnostics")
+                                                     : qsTr("Change source")
             visible: text.length > 0
             Layout.fillWidth: true
             onDismissed: root.recordViewModel.clearNotice()
+            onActionTriggered: {
+                if (root.recordViewModel.blocked)
+                    root.shell.navigateToPageRequested(ShellAdapter.DiagnosticsPage);
+                else
+                    root.openSourcePicker();
+            }
+        }
+
+        RowLayout {
+            spacing: ExoTheme.spacingSm
+            Layout.fillWidth: true
+            Layout.preferredHeight: ExoTheme.controlHeightCompact
+
+            ExoGlyph {
+                kind: root.sourceGlyph
+                color: ExoTheme.textMuted
+                Layout.alignment: Qt.AlignVCenter
+                implicitWidth: 18
+                implicitHeight: 18
+            }
+
+            Label {
+                text: root.recordViewModel.sourceName
+                textFormat: Text.PlainText
+                elide: Text.ElideRight
+                color: ExoTheme.text
+                Layout.fillWidth: true
+                Layout.minimumWidth: 120
+                Accessible.name: qsTr("%1: %2").arg(root.recordViewModel.sourceKindText)
+                                                 .arg(root.recordViewModel.sourceName)
+                font {
+                    family: ExoTheme.sansFamily
+                    pixelSize: ExoTheme.fontBody
+                    weight: Font.DemiBold
+                }
+            }
+
+            ExoBadge {
+                text: qsTr("LOCKED")
+                tone: "neutral"
+                visible: !root.recordViewModel.canSelectSource
+                Layout.alignment: Qt.AlignVCenter
+            }
+
+            Label {
+                text: root.recordViewModel.formatText
+                textFormat: Text.PlainText
+                elide: Text.ElideRight
+                horizontalAlignment: Text.AlignRight
+                color: ExoTheme.textMuted
+                Layout.preferredWidth: 240
+                Layout.minimumWidth: 0
+                Layout.maximumWidth: 320
+                Layout.alignment: Qt.AlignVCenter
+                font {
+                    family: ExoTheme.monoFamily
+                    pixelSize: ExoTheme.fontCaption
+                }
+            }
+
+            ExoButton {
+                id: recentButton
+
+                text: qsTr("Recent")
+                leadingGlyph: root.width >= 980 ? ExoGlyph.Clock : ExoGlyph.Invalid
+                glyph: root.width < 980 ? ExoGlyph.Clock : ExoGlyph.Invalid
+                compact: true
+                enabled: root.recordViewModel.recentRecordingOptions.length > 0
+                Accessible.description: enabled ? qsTr("Open a recent recording")
+                                                : qsTr("No recent recordings")
+                Layout.alignment: Qt.AlignVCenter
+                onClicked: recentMenu.open()
+
+                ToolTip.visible: hovered && root.width < 980
+                ToolTip.delay: 400
+                ToolTip.text: qsTr("Recent recordings")
+
+                ExoMenu {
+                    id: recentMenu
+
+                    y: recentButton.height
+
+                    ExoMenuItem {
+                        text: qsTr("No recent recordings")
+                        enabled: false
+                        visible: root.recordViewModel.recentRecordingOptions.length === 0
+                    }
+
+                    Instantiator {
+                        model: root.recordViewModel.recentRecordingOptions
+
+                        delegate: ExoMenuItem {
+                            required property var modelData
+
+                            text: modelData.label
+                            enabled: modelData.available
+                            Accessible.description: modelData.available
+                                                    ? qsTr("Open recording from %1").arg(modelData.completedAt)
+                                                    : qsTr("Recording file no longer exists")
+                            onTriggered: root.recordViewModel.requestOpenRecent(modelData.path)
+                        }
+
+                        onObjectAdded: (index, object) => recentMenu.insertItem(index, object)
+                        onObjectRemoved: (index, object) => recentMenu.removeItem(object)
+                    }
+                }
+            }
+
+            ExoButton {
+                text: qsTr("Change source")
+                compact: true
+                enabled: root.recordViewModel.canSelectSource
+                Accessible.description: enabled ? "" : qsTr("The capture setup is locked while a recording runs")
+                Layout.alignment: Qt.AlignVCenter
+                onClicked: root.openSourcePicker()
+            }
         }
 
         // ── Preview Surface ──────────────────────────────────────────────────
-        //
-        // One surface, two parts: a compact toolbar that says what is being
-        // captured and what it will be written as, and the live frame below it.
-        // They used to be two: a full-width context card across the top of the
-        // page and, under it, the preview. Two rounded rectangles a scale step
-        // apart said the same thing twice — the card named the source, the
-        // preview showed it — and the card's own height plus the gap to the
-        // preview cost the page's subject about 70 px of stage for a row of text
-        // that never changes while recording.
-        //
-        // The toolbar is chrome ON the stage, not a second page header: it
-        // recedes (secondary text rung, muted ink, one hairline divider) and it
-        // shares the stage's border, radius and width, so the preview reads as
-        // the page's one object.
         Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
@@ -97,11 +201,6 @@ Item {
             Rectangle {
                 id: previewSurface
 
-                // 38 px: two rungs under the shell's 40 px title band, so the
-                // two never read as a pair of title bars, and tall enough for a
-                // 30 px compact button with air either side.
-                readonly property int toolbarHeight: 38
-
                 readonly property real sourceAspect: {
                     const sourceWidth = root.previewAdapter.sourceSize.width
                                         * root.recordViewModel.normalizedSourceRect.width
@@ -109,20 +208,10 @@ Item {
                                          * root.recordViewModel.normalizedSourceRect.height
                     return sourceHeight > 0 ? sourceWidth / sourceHeight : 16 / 9
                 }
-                // The video is still fitted to the source's aspect ratio and the
-                // toolbar rides on top of it, so the edge of the frame is still
-                // the edge of the recording — there is no letterboxing inside
-                // the stage, only chrome above it.
-                readonly property real stageHeight: Math.max(0, parent.height - previewSurface.toolbarHeight)
-                readonly property real frameWidth: Math.min(parent.width,
-                                                            previewSurface.stageHeight * previewSurface.sourceAspect)
+                readonly property real frameWidth: Math.min(parent.width, parent.height * previewSurface.sourceAspect)
 
                 width: previewSurface.frameWidth
-                height: previewSurface.frameWidth / previewSurface.sourceAspect + previewSurface.toolbarHeight
-                // The surface IS the stage: black under the frame, with the
-                // toolbar painting its own ground over the top of it. One
-                // rectangle rather than two means the rounded bottom corners
-                // are the frame's own, so nothing has to be clipped to them.
+                height: previewSurface.frameWidth / previewSurface.sourceAspect
                 color: "#08080A"
                 border.width: 1
                 // Structural, never semantic. This border used to take the
@@ -140,145 +229,6 @@ Item {
                 radius: ExoTheme.radiusLg
                 anchors.centerIn: parent
 
-                // ── Preview toolbar ──────────────────────────────────────────
-                Item {
-                    id: previewToolbar
-
-                    height: previewSurface.toolbarHeight
-                    anchors {
-                        top: parent.top
-                        right: parent.right
-                        left: parent.left
-                        margins: 1
-                    }
-
-                    // Two rectangles for one ground: the rounded one supplies
-                    // the surface's top corners, the square one fills back down
-                    // to the divider. A single rounded rectangle would round its
-                    // bottom corners away from the divider and show the black
-                    // stage through them.
-                    Rectangle {
-                        color: ExoTheme.surface
-                        radius: ExoTheme.radiusLg
-                        anchors.fill: parent
-                    }
-
-                    Rectangle {
-                        height: ExoTheme.radiusLg
-                        color: ExoTheme.surface
-                        anchors {
-                            right: parent.right
-                            bottom: parent.bottom
-                            left: parent.left
-                        }
-                    }
-
-                    RowLayout {
-                        spacing: ExoTheme.spacingSm
-                        anchors {
-                            fill: parent
-                            rightMargin: ExoTheme.spacingSm
-                            leftMargin: ExoTheme.spacingMd
-                        }
-
-                        ExoGlyph {
-                            kind: root.sourceGlyph
-                            color: ExoTheme.textMuted
-                            Layout.alignment: Qt.AlignVCenter
-                            implicitWidth: 16
-                            implicitHeight: 16
-                        }
-
-                        // On the body rung, not the section-title rung it used
-                        // to sit on in the context card. This is chrome now, and
-                        // the thing it labels — the frame right below it — is
-                        // what the user actually reads.
-                        Label {
-                            text: root.recordViewModel.sourceName
-                            textFormat: Text.PlainText
-                            elide: Text.ElideRight
-                            color: ExoTheme.text
-                            Layout.fillWidth: true
-                            Layout.alignment: Qt.AlignVCenter
-                            Accessible.name: qsTr("%1: %2").arg(root.recordViewModel.sourceKindText)
-                                                           .arg(root.recordViewModel.sourceName)
-                            font {
-                                family: ExoTheme.sansFamily
-                                pixelSize: ExoTheme.fontBody
-                                weight: Font.DemiBold
-                            }
-                        }
-
-                        // Neutral, not `notice`. The capture setup is locked for
-                        // the duration of a recording BY DESIGN — changing the
-                        // source mid-file is not a thing the product allows, so
-                        // there is nothing here for the user to attend to and
-                        // caution amber promised otherwise. It stays as a quiet
-                        // statement of fact beside the disabled action it
-                        // explains.
-                        ExoBadge {
-                            text: qsTr("LOCKED")
-                            tone: "neutral"
-                            visible: !root.recordViewModel.canSelectSource
-                            Layout.alignment: Qt.AlignVCenter
-                        }
-
-                        // One understated run, not a badge per property. At the
-                        // 860 px minimum window it is the first thing to give
-                        // up room, because the source identity and the way back
-                        // to the picker are what the toolbar exists for.
-                        Label {
-                            text: root.recordViewModel.formatText
-                            textFormat: Text.PlainText
-                            elide: Text.ElideRight
-                            horizontalAlignment: Text.AlignRight
-                            // `textMuted`, not `textDim`. This is live secondary
-                            // metadata a user reads, so it belongs on a text rung
-                            // — `textDim` is the disabled/decorative rung and
-                            // lands at roughly 3:1 on this surface, under the
-                            // 4.5:1 the contrast gate holds text to.
-                            color: ExoTheme.textMuted
-                            Layout.maximumWidth: 320
-                            Layout.minimumWidth: 0
-                            Layout.alignment: Qt.AlignVCenter
-                            font {
-                                family: ExoTheme.monoFamily
-                                pixelSize: ExoTheme.fontCaption
-                            }
-                        }
-
-                        ExoButton {
-                            text: qsTr("Change source")
-                            // Compact, but NOT quiet. A quiet button carries no
-                            // chrome at rest, and at the end of a row that is
-                            // otherwise "Display 1 · 60 CFR · AV1 · Opus · MKV"
-                            // it read as one more piece of metadata: the only
-                            // thing on the toolbar the user can press looked
-                            // exactly like the four things they cannot. One
-                            // control boundary on the raised control fill is
-                            // enough to say "press me" — the compact rung keeps
-                            // it well below the Record pill at the other end of
-                            // the page.
-                            compact: true
-                            enabled: root.recordViewModel.canSelectSource
-                            Layout.alignment: Qt.AlignVCenter
-                            onClicked: root.openSourcePicker()
-                        }
-                    }
-
-                    // The one internal division. A second border or a filled
-                    // toolbar band would turn the surface back into two cards.
-                    Rectangle {
-                        height: 1
-                        color: ExoTheme.line
-                        anchors {
-                            right: parent.right
-                            bottom: parent.bottom
-                            left: parent.left
-                        }
-                    }
-                }
-
                 // ── The frame ────────────────────────────────────────────────
                 //
                 // No fill of its own: the surface behind it already is the black
@@ -289,7 +239,7 @@ Item {
                     id: previewStage
 
                     anchors {
-                        top: previewToolbar.bottom
+                        top: parent.top
                         right: parent.right
                         bottom: parent.bottom
                         left: parent.left
@@ -307,6 +257,41 @@ Item {
                         // the surface's own bottom corners.
                         topCornerRadius: 0
                         anchors.fill: parent
+                    }
+
+                    Column {
+                        spacing: ExoTheme.spacingMd
+                        visible: !root.recordViewModel.selectedTargetAvailable
+                        anchors.centerIn: parent
+
+                        Label {
+                            text: qsTr("Choose what to record")
+                            color: ExoTheme.text
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            font {
+                                family: ExoTheme.sansFamily
+                                pixelSize: ExoTheme.fontTitle
+                                weight: Font.DemiBold
+                            }
+                        }
+
+                        Label {
+                            text: qsTr("Select a screen, window, or region to continue.")
+                            color: ExoTheme.textMuted
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            font {
+                                family: ExoTheme.sansFamily
+                                pixelSize: ExoTheme.fontBody
+                            }
+                        }
+
+                        ExoButton {
+                            text: qsTr("Choose source")
+                            tone: "primary"
+                            enabled: root.recordViewModel.canSelectSource
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            onClicked: root.openSourcePicker()
+                        }
                     }
 
                     FocusScope {
@@ -410,13 +395,64 @@ Item {
                         }
 
                         Rectangle {
+                            id: webcamFrameChrome
+
                             color: Qt.rgba(0, 0, 0, 0)
                             border.width: 1
                             border.color: root.recordViewModel.webcamError ? ExoTheme.error : ExoTheme.lineStrong
                             radius: ExoTheme.radiusSm
+                            // `pressed` as well as `containsMouse`: a drag that
+                            // leaves the frame's own bounds is still a drag, and
+                            // chrome that blinks out mid-gesture reads as a dropped
+                            // grab.
                             visible: root.recordViewModel.webcamError || webcamOverlay.activeFocus
                                      || webcamDrag.containsMouse || webcamResize.containsMouse
+                                     || webcamDrag.pressed || webcamResize.pressed
                             anchors.fill: parent
+                        }
+
+                        // The four corners of the editable frame. What was here was a
+                        // single filled square at the bottom right, which reads as a
+                        // stray box rather than as a frame with corners; brackets
+                        // state all four without covering the picture.
+                        Repeater {
+                            model: 4
+
+                            delegate: Item {
+                                id: webcamCorner
+
+                                required property int index
+
+                                readonly property bool atRight: webcamCorner.index === 1 || webcamCorner.index === 2
+                                readonly property bool atBottom: webcamCorner.index >= 2
+                                // Bottom right is the resize grip, so it is the one
+                                // corner that answers the pointer.
+                                readonly property bool grip: webcamCorner.index === 2
+                                readonly property color ink:
+                                    (webcamCorner.grip && (webcamResize.containsMouse || webcamResize.pressed))
+                                    ? ExoTheme.accent
+                                    : (root.recordViewModel.webcamError ? ExoTheme.error : ExoTheme.lineStrong)
+
+                                width: 14
+                                height: 14
+                                visible: webcamFrameChrome.visible
+                                x: webcamCorner.atRight ? parent.width - width : 0
+                                y: webcamCorner.atBottom ? parent.height - height : 0
+
+                                Rectangle {
+                                    width: parent.width
+                                    height: 2
+                                    color: webcamCorner.ink
+                                    y: webcamCorner.atBottom ? parent.height - height : 0
+                                }
+
+                                Rectangle {
+                                    width: 2
+                                    height: parent.height
+                                    color: webcamCorner.ink
+                                    x: webcamCorner.atRight ? parent.width - width : 0
+                                }
+                            }
                         }
 
                         MouseArea {
@@ -429,16 +465,24 @@ Item {
                             enabled: root.recordViewModel.webcamOverlayEditable
                             hoverEnabled: true
                             cursorShape: enabled ? Qt.SizeAllCursor : Qt.ArrowCursor
+                            // Both points live in previewStage coordinates, never in
+                            // this MouseArea's: the overlay MOVES as draftRect
+                            // changes, so a delta measured against the item itself
+                            // shrinks by exactly the amount already applied. The drag
+                            // then crawls behind the pointer and stalls once it
+                            // catches up, without ever losing the grab -- which is
+                            // what makes it look like lag rather than like a bug.
                             onPressed: mouse => {
                                 webcamOverlay.forceActiveFocus()
-                                pressPoint = Qt.point(mouse.x, mouse.y)
+                                pressPoint = webcamDrag.mapToItem(previewStage, mouse.x, mouse.y)
                                 pressRect = webcamOverlay.draftRect
                             }
                             onPositionChanged: mouse => {
                                 if (!pressed)
                                     return
-                                const dx = (mouse.x - pressPoint.x) / Math.max(1, previewStage.width)
-                                const dy = (mouse.y - pressPoint.y) / Math.max(1, previewStage.height)
+                                const at = webcamDrag.mapToItem(previewStage, mouse.x, mouse.y)
+                                const dx = (at.x - pressPoint.x) / Math.max(1, previewStage.width)
+                                const dy = (at.y - pressPoint.y) / Math.max(1, previewStage.height)
                                 webcamOverlay.draftRect = Qt.rect(
                                             Math.max(0, Math.min(1 - pressRect.width, pressRect.x + dx)),
                                             Math.max(0, Math.min(1 - pressRect.height, pressRect.y + dy)),
@@ -447,17 +491,15 @@ Item {
                             onReleased: root.recordViewModel.requestWebcamOverlayRect(webcamOverlay.draftRect)
                         }
 
-                        Rectangle {
+                        Item {
+                            // Hit area only. The bottom-right bracket above is what
+                            // the eye reads, and it takes the accent while this is
+                            // hovered or held.
                             width: 14
                             height: 14
-                            color: ExoTheme.accent
-                            radius: 3
-                            visible: root.recordViewModel.webcamOverlayEditable
-                                     && (webcamDrag.containsMouse || webcamResize.containsMouse || webcamResize.pressed)
                             anchors {
                                 right: parent.right
                                 bottom: parent.bottom
-                                margins: 3
                             }
 
                             MouseArea {
@@ -470,16 +512,20 @@ Item {
                                 enabled: root.recordViewModel.webcamOverlayEditable
                                 hoverEnabled: true
                                 cursorShape: Qt.SizeFDiagCursor
+                                // previewStage coordinates for the same reason the
+                                // drag uses them: the grip is anchored to a frame
+                                // that grows under it.
                                 onPressed: mouse => {
                                     mouse.accepted = true
-                                    pressPoint = Qt.point(mouse.x, mouse.y)
+                                    pressPoint = webcamResize.mapToItem(previewStage, mouse.x, mouse.y)
                                     pressRect = webcamOverlay.draftRect
                                 }
                                 onPositionChanged: mouse => {
                                     if (!pressed)
                                         return
-                                    const dw = (mouse.x - pressPoint.x) / Math.max(1, previewStage.width)
-                                    const dh = (mouse.y - pressPoint.y) / Math.max(1, previewStage.height)
+                                    const at = webcamResize.mapToItem(previewStage, mouse.x, mouse.y)
+                                    const dw = (at.x - pressPoint.x) / Math.max(1, previewStage.width)
+                                    const dh = (at.y - pressPoint.y) / Math.max(1, previewStage.height)
                                     const delta = Math.max(dw, dh)
                                     const maxDelta = Math.min(1 - pressRect.x - pressRect.width,
                                                               1 - pressRect.y - pressRect.height)
@@ -624,6 +670,10 @@ Item {
 
                     RegionSelectionOverlay {
                         recordViewModel: root.recordViewModel
+                        // The preview maps the capture 1:1, so its pixel size
+                        // is what turns the normalized selection into the
+                        // dimension label's real numbers.
+                        sourcePixelSize: root.previewAdapter.sourceSize
                         visible: root.recordViewModel.regionSelectionNeeded
                         anchors.fill: parent
                     }

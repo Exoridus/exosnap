@@ -77,6 +77,9 @@ class IAudioCaptureSource {
     virtual uint32_t DegradedSourceCount() const {
         return 0;
     }
+    virtual uint32_t DegradedSourceIndexMask() const {
+        return 0;
+    }
 
     // Number of frames ready in the pending buffer (0 = none).
     virtual uint32_t PendingFrameCount() = 0;

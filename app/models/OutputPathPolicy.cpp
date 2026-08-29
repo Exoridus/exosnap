@@ -146,23 +146,6 @@ bool IsAbsoluteWindowsPath(const std::wstring& input) {
     return path.is_absolute();
 }
 
-std::wstring StripTrailingSeparatorsPreservingRoot(const std::wstring& input) {
-    std::wstring normalized = input;
-    for (wchar_t& c : normalized) {
-        if (c == L'/') {
-            c = L'\\';
-        }
-    }
-
-    const std::filesystem::path path(normalized);
-    const std::wstring root = path.root_path().native();
-    while (normalized.size() > root.size() && !normalized.empty() &&
-           (normalized.back() == L'\\' || normalized.back() == L'/')) {
-        normalized.pop_back();
-    }
-    return normalized;
-}
-
 std::vector<std::wstring> SplitBySlash(const std::wstring& value) {
     std::vector<std::wstring> segments;
     std::wstring current;
@@ -239,9 +222,7 @@ NormalizedOutputFolder NormalizeOutputFolderInput(const std::wstring& raw_input)
         return normalized;
     }
 
-    const std::wstring trimmed_separators = StripTrailingSeparatorsPreservingRoot(*env_expanded);
-    std::filesystem::path path(trimmed_separators);
-    path = path.lexically_normal();
+    const std::filesystem::path path(*env_expanded);
     if (path.empty()) {
         normalized.result = OutputFolderPolicyResult::InvalidPath;
         return normalized;
@@ -249,7 +230,7 @@ NormalizedOutputFolder NormalizeOutputFolderInput(const std::wstring& raw_input)
 
     normalized.result = OutputFolderPolicyResult::Ok;
     normalized.resolved_path = path;
-    normalized.normalized_input = path.wstring();
+    normalized.entered_input = trimmed;
     return normalized;
 }
 

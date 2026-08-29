@@ -1,6 +1,8 @@
 #include "RecordViewModel.h"
 
 #include "../diagnostics/error_message.h"
+#include "../models/CaptureTargetPresentation.h"
+#include "../services/DisplayNumbering.h"
 #include "../settings/RecordingHistoryStore.h"
 
 #include <algorithm>
@@ -8,7 +10,6 @@
 #include <cstddef>
 #include <filesystem>
 #include <optional>
-#include <string_view>
 #include <windows.h>
 
 namespace exosnap {
@@ -26,38 +27,6 @@ std::string TrimAscii(const std::string& value) {
     }
 
     return value.substr(first, last - first);
-}
-
-bool StartsWithAsciiInsensitive(const std::string_view value, const std::string_view prefix) {
-    if (prefix.size() > value.size()) {
-        return false;
-    }
-
-    for (std::size_t i = 0; i < prefix.size(); ++i) {
-        const unsigned char a = static_cast<unsigned char>(value[i]);
-        const unsigned char b = static_cast<unsigned char>(prefix[i]);
-        if (std::tolower(a) != std::tolower(b)) {
-            return false;
-        }
-    }
-
-    return true;
-}
-
-bool EqualsAsciiInsensitive(const std::string_view a, const std::string_view b) {
-    if (a.size() != b.size()) {
-        return false;
-    }
-
-    for (std::size_t i = 0; i < a.size(); ++i) {
-        const unsigned char lhs = static_cast<unsigned char>(a[i]);
-        const unsigned char rhs = static_cast<unsigned char>(b[i]);
-        if (std::tolower(lhs) != std::tolower(rhs)) {
-            return false;
-        }
-    }
-
-    return true;
 }
 
 std::wstring ContainerLabel(exosnap::engine::Container container) {
@@ -115,171 +84,6 @@ std::string ToLowerAscii(const std::string& value) {
         result.push_back(static_cast<char>(std::tolower(ch)));
     }
     return result;
-}
-
-std::wstring ToWideUtf8(const std::string& value) {
-    if (value.empty()) {
-        return {};
-    }
-
-    const int count = MultiByteToWideChar(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), nullptr, 0);
-    if (count <= 0) {
-        return {};
-    }
-
-    std::wstring result(static_cast<std::size_t>(count), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), result.data(), count);
-    return result;
-}
-
-std::string ToUtf8(const std::wstring& value) {
-    if (value.empty()) {
-        return {};
-    }
-
-    const int count =
-        WideCharToMultiByte(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
-    if (count <= 0) {
-        return {};
-    }
-
-    std::string result(static_cast<std::size_t>(count), '\0');
-    WideCharToMultiByte(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), result.data(), count, nullptr,
-                        nullptr);
-    return result;
-}
-
-std::string BuildProcessNameFromApp(const std::string& app_name) {
-    const std::string trimmed = TrimAscii(app_name);
-    if (trimmed.empty()) {
-        return "window";
-    }
-
-    std::string process_name;
-    process_name.reserve(trimmed.size());
-    for (const unsigned char ch : trimmed) {
-        if (std::isalnum(ch) == 0) {
-            continue;
-        }
-        process_name.push_back(static_cast<char>(std::tolower(ch)));
-    }
-
-    if (process_name.empty()) {
-        return "window";
-    }
-    return process_name;
-}
-
-bool IsHexHandleOnly(const std::string_view value) {
-    std::size_t cursor = 0;
-    if (value.size() >= 2 && value[0] == '0' && (value[1] == 'x' || value[1] == 'X')) {
-        cursor = 2;
-    }
-    if ((value.size() - cursor) < 5) {
-        return false;
-    }
-    for (std::size_t i = cursor; i < value.size(); ++i) {
-        if (std::isxdigit(static_cast<unsigned char>(value[i])) == 0) {
-            return false;
-        }
-    }
-    return true;
-}
-
-bool IsInternalWindowToken(const std::string& raw_value) {
-    const std::string value = TrimAscii(raw_value);
-    if (value.empty()) {
-        return true;
-    }
-    if (IsHexHandleOnly(value)) {
-        return true;
-    }
-    if (StartsWithAsciiInsensitive(value, "hwnd:")) {
-        return true;
-    }
-    if (StartsWithAsciiInsensitive(value, "window:")) {
-        return true;
-    }
-    if (EqualsAsciiInsensitive(value, "(unnamed)") || EqualsAsciiInsensitive(value, "unnamed")) {
-        return true;
-    }
-    return false;
-}
-
-bool FindWindowLabelSeparator(const std::string& value, std::size_t* out_pos, std::size_t* out_size) {
-    const std::string separators[] = {" \xE2\x80\x94 ", " - "};
-
-    bool found = false;
-    std::size_t best_pos = 0;
-    std::size_t best_size = 0;
-
-    for (const auto& separator : separators) {
-        const std::size_t candidate = value.rfind(separator);
-        if (candidate == std::string::npos) {
-            continue;
-        }
-        if (!found || candidate > best_pos) {
-            found = true;
-            best_pos = candidate;
-            best_size = separator.size();
-        }
-    }
-
-    if (!found) {
-        return false;
-    }
-
-    *out_pos = best_pos;
-    *out_size = best_size;
-    return true;
-}
-
-struct WindowLabelParts {
-    std::string label = "Window";
-    std::string app_name;
-    std::string window_title;
-    bool has_app_name = false;
-};
-
-WindowLabelParts BuildWindowLabelParts(const std::string& raw_description) {
-    WindowLabelParts parts;
-    const std::string value = TrimAscii(raw_description);
-    const bool value_is_internal = IsInternalWindowToken(value);
-
-    if (value_is_internal) {
-        return parts;
-    }
-
-    // Fallback: preserve the existing user-facing label when no app/title split is available.
-    parts.label = value;
-
-    std::size_t separator_pos = 0;
-    std::size_t separator_size = 0;
-    if (!FindWindowLabelSeparator(value, &separator_pos, &separator_size)) {
-        return parts;
-    }
-
-    const std::string raw_title = TrimAscii(value.substr(0, separator_pos));
-    const std::string raw_app_name = TrimAscii(value.substr(separator_pos + separator_size));
-
-    if (raw_app_name.empty() || IsInternalWindowToken(raw_app_name)) {
-        return parts;
-    }
-
-    parts.has_app_name = true;
-    parts.app_name = raw_app_name;
-
-    if (!raw_title.empty() && !IsInternalWindowToken(raw_title) && !EqualsAsciiInsensitive(raw_title, raw_app_name)) {
-        parts.window_title = raw_title;
-    }
-
-    if (parts.window_title.empty()) {
-        parts.label = parts.app_name;
-    } else {
-        parts.label = parts.app_name + " \xE2\x80\x94 " + parts.window_title;
-    }
-
-    return parts;
 }
 
 } // namespace
@@ -702,47 +506,19 @@ std::wstring RecordViewModel::FormatBytes(uint64_t bytes) {
 }
 
 std::string RecordViewModel::DisplayLabelFromTarget(const std::string& raw_description) {
-    std::string value = TrimAscii(raw_description);
-    if (value.empty()) {
-        return "Display";
-    }
-
-    if (StartsWithAsciiInsensitive(value, R"(\\.\)")) {
-        value.erase(0, 4);
-    } else if (StartsWithAsciiInsensitive(value, "//./")) {
-        value.erase(0, 4);
-    }
-
-    if (value.size() > 7 && StartsWithAsciiInsensitive(value, "DISPLAY")) {
-        const std::string suffix = value.substr(7);
-        const bool digits_only = !suffix.empty() && std::all_of(suffix.begin(), suffix.end(), [](const char ch) {
-            return std::isdigit(static_cast<unsigned char>(ch)) != 0;
-        });
-        if (digits_only) {
-            return "Display " + suffix;
-        }
-    }
-
-    return value;
+    return SequentialDisplayLabel(raw_description, {});
 }
 
 std::string RecordViewModel::WindowLabelFromTarget(const std::string& raw_description) {
-    return BuildWindowLabelParts(raw_description).label;
+    const exosnap::engine::CaptureTarget target{exosnap::engine::CaptureTarget::Kind::Window, 0, raw_description};
+    return ResolveCaptureTargetPresentation(target, CaptureTargetPresentationKind::Window).label;
 }
 
 std::string RecordViewModel::TargetLabelFromCaptureTarget(const exosnap::engine::CaptureTarget& target) {
-    const FilenameTargetContext context = FilenameContextFromCaptureTarget(target);
-    std::string label = ToUtf8(context.target_name);
-
-    if (!label.empty()) {
-        return label;
-    }
-
-    if (target.kind == exosnap::engine::CaptureTarget::Kind::Monitor) {
-        return "Desktop - " + DisplayLabelFromTarget(target.description);
-    }
-
-    return WindowLabelFromTarget(target.description);
+    const CaptureTargetPresentationKind kind = target.kind == exosnap::engine::CaptureTarget::Kind::Window
+                                                   ? CaptureTargetPresentationKind::Window
+                                                   : CaptureTargetPresentationKind::Display;
+    return ResolveCaptureTargetPresentation(target, kind).label;
 }
 
 std::string RecordViewModel::LogSafeTargetLabel(const exosnap::engine::CaptureTarget& target) {
@@ -762,33 +538,10 @@ std::string RecordViewModel::LogSafeTargetLabel(const exosnap::engine::CaptureTa
 }
 
 FilenameTargetContext RecordViewModel::FilenameContextFromCaptureTarget(const exosnap::engine::CaptureTarget& target) {
-    FilenameTargetContext context;
-
-    if (target.kind == exosnap::engine::CaptureTarget::Kind::Monitor) {
-        const std::string display_label = DisplayLabelFromTarget(target.description);
-        context.app_name = L"Desktop";
-        context.window_title = ToWideUtf8(display_label);
-        context.process_name = L"desktop";
-        context.target_name = L"Desktop - " + context.window_title;
-        return context;
-    }
-
-    const WindowLabelParts parts = BuildWindowLabelParts(target.description);
-    const std::string app_name = parts.has_app_name ? TrimAscii(parts.app_name) : TrimAscii(parts.label);
-    std::string title = TrimAscii(parts.window_title);
-
-    const std::string fallback_app = app_name.empty() ? std::string("Window") : app_name;
-    if (title.empty()) {
-        title = fallback_app;
-    }
-
-    const std::string process_name = BuildProcessNameFromApp(fallback_app);
-
-    context.app_name = ToWideUtf8(fallback_app);
-    context.window_title = ToWideUtf8(title);
-    context.process_name = ToWideUtf8(process_name);
-    context.target_name = context.app_name + L" - " + context.window_title;
-    return context;
+    const CaptureTargetPresentationKind kind = target.kind == exosnap::engine::CaptureTarget::Kind::Window
+                                                   ? CaptureTargetPresentationKind::Window
+                                                   : CaptureTargetPresentationKind::Display;
+    return ResolveCaptureTargetPresentation(target, kind).filename;
 }
 
 std::vector<int> RecordViewModel::SortWindowTargetIndices(const std::vector<exosnap::engine::CaptureTarget>& targets,
@@ -812,11 +565,11 @@ std::vector<int> RecordViewModel::SortWindowTargetIndices(const std::vector<exos
             continue;
         }
 
-        const WindowLabelParts parts = BuildWindowLabelParts(target.description);
-        const std::string app_value = parts.has_app_name ? parts.app_name : parts.label;
-        const std::string title_value = parts.has_app_name ? parts.window_title : std::string{};
+        const CaptureTargetPresentation presentation =
+            ResolveCaptureTargetPresentation(target, CaptureTargetPresentationKind::Window);
 
-        entries.push_back({target_index, ToLowerAscii(TrimAscii(app_value)), ToLowerAscii(TrimAscii(title_value))});
+        entries.push_back({target_index, ToLowerAscii(TrimAscii(presentation.app_name)),
+                           ToLowerAscii(TrimAscii(presentation.title))});
     }
 
     std::stable_sort(entries.begin(), entries.end(), [](const SortEntry& lhs, const SortEntry& rhs) {

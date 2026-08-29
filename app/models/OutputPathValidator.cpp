@@ -1,5 +1,7 @@
 #include "OutputPathValidator.h"
 
+#include <exosnap/engine/recorder_session.h>
+
 #include <fstream>
 
 namespace exosnap {
@@ -75,12 +77,19 @@ std::wstring FolderValidationMessage(FolderValidationResult result) {
 }
 
 std::optional<std::filesystem::path> ResolveAvailableOutputPath(const std::filesystem::path& base_path) {
+    const auto is_available = [](const std::filesystem::path& candidate, std::error_code& ec) {
+        if (std::filesystem::exists(candidate, ec) || ec) {
+            return false;
+        }
+        return !std::filesystem::exists(exosnap::engine::DeriveValuablePartialPath(candidate), ec) && !ec;
+    };
+
     std::error_code ec;
-    if (!std::filesystem::exists(base_path, ec)) {
+    if (is_available(base_path, ec)) {
         return base_path;
     }
     if (ec) {
-        return base_path;
+        return std::nullopt;
     }
 
     const auto stem = base_path.stem().wstring();
@@ -89,7 +98,7 @@ std::optional<std::filesystem::path> ResolveAvailableOutputPath(const std::files
 
     for (int suffix = 1; suffix < 1000; ++suffix) {
         const auto candidate = parent / (std::wstring(stem) + L" (" + std::to_wstring(suffix) + L")" + ext);
-        if (!std::filesystem::exists(candidate, ec) && !ec) {
+        if (is_available(candidate, ec)) {
             return candidate;
         }
         if (ec) {

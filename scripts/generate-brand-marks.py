@@ -143,35 +143,45 @@ class Marks:
     def saved(self) -> str:
         # A check, not a tick mark: the short arm is deliberately short, because
         # at 16 px two arms of similar length read as a V.
-        short = self.inner_r * 0.649
-        long_ = self.inner_r * 0.919
-        elbow_x = self.center - self.inner_r * 0.216
-        elbow_y = self.center + self.inner_r * 0.514
-        path = (f'M{num(elbow_x - short * 0.667, 1)} {num(elbow_y - short * 0.667, 1)}'
-                f'L{num(elbow_x, 1)} {num(elbow_y, 1)}'
-                f'L{num(elbow_x + long_ * 0.941, 1)} {num(elbow_y - long_ * 1.014, 1)}')
+        #
+        # Every coefficient is a fraction of the INNER radius, and the arms are
+        # given as explicit deltas from the elbow rather than as one length times
+        # two ratios. Measured against the outer ring instead, the stroke touched
+        # the aperture it is meant to sit inside at the smallest rendered profile.
+        # test_shell_icon_renderer pins the clearance at every shipped size.
+        elbow_x = self.center - self.inner_r * 0.194595
+        elbow_y = self.center + self.inner_r * 0.462162
+        short = self.inner_r * 0.389189
+        long_dx = self.inner_r * 0.778378
+        long_dy = self.inner_r * 0.839189
+        path = (f'M{num(elbow_x - short)} {num(elbow_y - short)}'
+                f'L{num(elbow_x)} {num(elbow_y)}'
+                f'L{num(elbow_x + long_dx)} {num(elbow_y - long_dy)}')
         return self.document([
             self.outer_ring(),
             self.circle(self.inner_r, stroke=self.success, width=self.inner_w),
-            f'<path d="{path}" fill="none" stroke="{self.success}" stroke-width="{num(self.inner_w * 1.357)}"'
+            f'<path d="{path}" fill="none" stroke="{self.success}" stroke-width="{num(self.inner_w * 1.214286)}"'
             f' stroke-linecap="round" stroke-linejoin="round"/>',
         ])
 
     def warning(self) -> str:
-        half = self.inner_r * 0.655
-        top = self.center - self.inner_r * 0.655
-        bottom = self.center + self.inner_r * 0.480
+        # Same correction as `saved`: the triangle, its stem and its dot are all
+        # measured off the inner radius, so the glyph clears the aperture at the
+        # smallest profile instead of resting on it.
+        half = self.inner_r * 0.586486
+        top = self.center - self.inner_r * 0.586486
+        bottom = self.center + self.inner_r * 0.429730
         return self.document([
             self.outer_ring(),
             self.circle(self.inner_r, stroke=self.caution, width=self.inner_w),
-            f'<path d="M{num(self.center, 1)} {num(top, 2)}L{num(self.center + half, 2)} {num(bottom, 2)}'
-            f'H{num(self.center - half, 2)}Z" fill="none" stroke="{self.caution}"'
+            f'<path d="M{num(self.center)} {num(top)}L{num(self.center + half)} {num(bottom)}'
+            f'H{num(self.center - half)}Z" fill="none" stroke="{self.caution}"'
             f' stroke-width="{num(self.inner_w * 0.893)}" stroke-linejoin="round"/>',
-            f'<path d="M{num(self.center, 1)} {fixed(self.center - self.inner_r * 0.297)}'
-            f'V{fixed(self.center + self.inner_r * 0.135)}" fill="none" stroke="{self.caution}"'
+            f'<path d="M{num(self.center)} {num(self.center - self.inner_r * 0.266216)}'
+            f'V{num(self.center + self.inner_r * 0.121622)}" fill="none" stroke="{self.caution}"'
             f' stroke-width="{num(self.inner_w * 0.964)}" stroke-linecap="round" stroke-linejoin="round"/>',
-            f'<circle cx="{num(self.center, 1)}" cy="{num(self.center + self.inner_r * 0.351)}"'
-            f' r="{num(self.center_r * 0.247)}" fill="{self.caution}"/>',
+            f'<circle cx="{num(self.center)}" cy="{num(self.center + self.inner_r * 0.314865)}"'
+            f' r="{num(self.center_r * 0.221818)}" fill="{self.caution}"/>',
         ])
 
     def error(self) -> str:

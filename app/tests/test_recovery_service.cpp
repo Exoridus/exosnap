@@ -233,8 +233,7 @@ TEST(RecoveryServiceTest, KeepAsMkvFinalizedRenames) {
     RecoveryManifestStore store(store_path);
     RecoveryService service(store);
 
-    // Artefact: a .mkv.tmp (finalized engine output)
-    const QString artefact = QDir(tmp.path()).filePath(QStringLiteral("recording.mkv.tmp"));
+    const QString artefact = QDir(tmp.path()).filePath(QStringLiteral("recording.mkv.partial"));
     ASSERT_TRUE(CreateDummyFile(artefact));
 
     const auto e = MakeEntry(QStringLiteral("keep-id"), artefact, QStringLiteral("mkv"), /*finalized=*/true);
@@ -289,7 +288,7 @@ TEST(RecoveryServiceTest, KeepAsMkvHandlesCollision) {
     RecoveryManifestStore store(store_path);
     RecoveryService service(store);
 
-    const QString artefact = QDir(tmp.path()).filePath(QStringLiteral("recording.mkv.tmp"));
+    const QString artefact = QDir(tmp.path()).filePath(QStringLiteral("recording.mkv.partial"));
     ASSERT_TRUE(CreateDummyFile(artefact));
 
     // Pre-create the "natural" target to force collision resolution.
@@ -333,6 +332,25 @@ TEST(RecoveryServiceTest, ScanReturnsSizeMetadata) {
     EXPECT_EQ(candidates[0].artefact_size_bytes, 1024);
 }
 
+TEST(RecoveryServiceTest, ScanKeepsLegacyMkvTmpManifestEntriesReadable) {
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    const QString store_path = QDir(tmp.path()).filePath(QStringLiteral("manifest.json"));
+    RecoveryManifestStore store(store_path);
+    RecoveryService service(store);
+
+    const QString legacy_artefact = QDir(tmp.path()).filePath(QStringLiteral("legacy.mkv.tmp"));
+    ASSERT_TRUE(CreateDummyFile(legacy_artefact));
+    ASSERT_TRUE(store.Add(MakeEntry(QStringLiteral("legacy-id"), legacy_artefact, QStringLiteral("mp4"))));
+
+    const auto candidates = service.Scan();
+
+    ASSERT_EQ(candidates.size(), 1);
+    EXPECT_EQ(candidates.front().entry.id, QStringLiteral("legacy-id"));
+    EXPECT_EQ(candidates.front().entry.artefact_path, legacy_artefact);
+}
+
 // =============================================================================
 // ADR-0015: Finish tests
 // =============================================================================
@@ -346,7 +364,7 @@ TEST(RecoveryServiceTest, FinishMkvFinalizedRenames) {
     RecoveryManifestStore store(store_path);
     RecoveryService service(store);
 
-    const QString artefact = QDir(tmp.path()).filePath(QStringLiteral("session.mkv.tmp"));
+    const QString artefact = QDir(tmp.path()).filePath(QStringLiteral("session.mkv.partial"));
     ASSERT_TRUE(CreateDummyFile(artefact));
 
     auto e = MakeEntry(QStringLiteral("finish-mkv-id"), artefact, QStringLiteral("mkv"), /*finalized=*/true);
@@ -362,6 +380,29 @@ TEST(RecoveryServiceTest, FinishMkvFinalizedRenames) {
     EXPECT_TRUE(store.Entries().isEmpty());
     // Renamed file at final output path.
     EXPECT_TRUE(QFileInfo::exists(QDir(tmp.path()).filePath(QStringLiteral("session.mkv"))));
+}
+
+TEST(RecoveryServiceTest, FinishMkvFinalizedPartialWithoutFinalPathRestoresFinalFilename) {
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    const QString store_path = QDir(tmp.path()).filePath(QStringLiteral("manifest.json"));
+    RecoveryManifestStore store(store_path);
+    RecoveryService service(store);
+
+    const QString artefact = QDir(tmp.path()).filePath(QStringLiteral("session.mkv.partial"));
+    ASSERT_TRUE(CreateDummyFile(artefact));
+
+    auto entry = MakeEntry(QStringLiteral("finish-partial-id"), artefact, QStringLiteral("mkv"), true);
+    entry.final_output_path.clear();
+    ASSERT_TRUE(store.Add(entry));
+
+    const auto result = service.Finish(entry);
+
+    EXPECT_TRUE(result.success) << result.message;
+    EXPECT_FALSE(QFileInfo::exists(artefact));
+    EXPECT_TRUE(QFileInfo::exists(QDir(tmp.path()).filePath(QStringLiteral("session.mkv"))));
+    EXPECT_TRUE(store.Entries().isEmpty());
 }
 
 // 7. Finish with MKV-intended + finalized=false → does NOT crash on bad path
@@ -405,7 +446,7 @@ TEST(RecoveryServiceTest, FinishFallsBackToConfiguredOutputFolder) {
     service.SetFallbackOutputFolder(tmp_fallback.path());
 
     // Create artefact in artefact dir.
-    const QString artefact = QDir(tmp_artefact.path()).filePath(QStringLiteral("rec.mkv.tmp"));
+    const QString artefact = QDir(tmp_artefact.path()).filePath(QStringLiteral("rec.mkv.partial"));
     ASSERT_TRUE(CreateDummyFile(artefact));
 
     // Set final_output_path to a dir that does NOT exist.
@@ -440,7 +481,7 @@ TEST(RecoveryServiceTest, FinishMkvNonFinalizedRemovesPartialOutputOnMidStreamFa
     RecoveryService service(store);
 
     // Valid MKV artefact (5 s PCM ≈ 1 MB) named like a crash artefact.
-    const QString artefact = QDir(tmp.path()).filePath(QStringLiteral("session.mkv.tmp"));
+    const QString artefact = QDir(tmp.path()).filePath(QStringLiteral("session.mkv.partial"));
     ASSERT_TRUE(BuildPcmMkvFixture(artefact, /*seconds=*/5.0));
     const qint64 artefact_size = QFileInfo(artefact).size();
     ASSERT_GT(artefact_size, 4096) << "MKV fixture unexpectedly small";
@@ -474,7 +515,7 @@ TEST(RecoveryServiceTest, FinishMp4NonFinalizedPreservesEntryOnRemuxFail) {
     RecoveryManifestStore store(store_path);
     RecoveryService service(store);
 
-    const QString artefact = QDir(tmp.path()).filePath(QStringLiteral("rec.mkv.tmp"));
+    const QString artefact = QDir(tmp.path()).filePath(QStringLiteral("rec.mp4.partial"));
     ASSERT_TRUE(CreateDummyFile(artefact, QByteArray("not a real mkv")));
 
     auto e = MakeEntry(QStringLiteral("mp4-finish-id"), artefact, QStringLiteral("mp4"), /*finalized=*/false);
@@ -498,7 +539,7 @@ TEST(RecoveryServiceTest, FinishFallsBackToArtefactParentWhenNothingExists) {
     // Set a non-existent fallback.
     service.SetFallbackOutputFolder(QStringLiteral("C:/DoesNotExist99999"));
 
-    const QString artefact = QDir(tmp.path()).filePath(QStringLiteral("lastresort.mkv.tmp"));
+    const QString artefact = QDir(tmp.path()).filePath(QStringLiteral("lastresort.mkv.partial"));
     ASSERT_TRUE(CreateDummyFile(artefact));
 
     // final_output_path points to a non-existent dir.

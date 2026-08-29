@@ -258,6 +258,8 @@ target_sources(exosnap
         # whole app-to-updater handoff, against a controlled feed.
         ${PROJECT_SOURCE_DIR}/app/cli/CommandLineFlags.cpp
         ${PROJECT_SOURCE_DIR}/app/cli/CommandLineFlags.h
+        ${PROJECT_SOURCE_DIR}/app/services/SystemAppearance.cpp
+        ${PROJECT_SOURCE_DIR}/app/services/SystemAppearance.h
         ${PROJECT_SOURCE_DIR}/app/services/UpdateFeedOverride.cpp
         ${PROJECT_SOURCE_DIR}/app/services/UpdateFeedOverride.h
         ${PROJECT_SOURCE_DIR}/app/models/AboutInfo.cpp
@@ -414,6 +416,8 @@ target_sources(exosnap
         ${PROJECT_SOURCE_DIR}/app/services/RecoveryService.h
         ${PROJECT_SOURCE_DIR}/app/settings/RecordingHistoryStore.cpp
         ${PROJECT_SOURCE_DIR}/app/settings/RecordingHistoryStore.h
+        ${PROJECT_SOURCE_DIR}/app/models/CaptureTargetPresentation.cpp
+        ${PROJECT_SOURCE_DIR}/app/models/CaptureTargetPresentation.h
         ${PROJECT_SOURCE_DIR}/app/viewmodels/RecordViewModel.cpp
         ${PROJECT_SOURCE_DIR}/app/viewmodels/RecordViewModel.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/error_message.cpp
@@ -920,6 +924,10 @@ qt_add_qml_module(record_controls_qml_tests
         # `x`. Whether the binding survives that is exactly the kind of question
         # a comment cannot answer.
         ExoSwitch.qml
+        # The only shared control with neither a focusPolicy nor an
+        # activeFocusOnTab, and it paints a focus ring. Whether Tab can reach it
+        # is a question only a Tab press answers.
+        ExoSlider.qml
         # The shared text input owns its draft while it has the focus. That
         # contract is the whole fix, and it is one property write away from
         # being undone.
@@ -1012,6 +1020,9 @@ qt_add_qml_module(edit_timeline_qml_tests
     OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/tests/ExoSnap/Quick/EditTestControls"
     DEPENDENCIES
         QtQuick
+        # The timeline's preview-state hint draws ExoGlyph, which is built on
+        # Shape/PathSvg; an unlisted import is one qmllint cannot resolve.
+        QtQuick.Shapes
     # Compiling the adapters into this module registers them under this URI, so
     # EditTimeline.qml resolves the same types it does in the shipping module.
     # Same reason QuickThemeTokens is here: every colour in the strip goes
@@ -1042,6 +1053,7 @@ qt_add_qml_module(edit_timeline_qml_tests
     QML_FILES
         EditPlayer.qml
         EditTimeline.qml
+        ExoGlyph.qml
         ExoTheme.qml
 )
 
@@ -1085,12 +1097,97 @@ set_tests_properties(quick.qml.edit_timeline PROPERTIES
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${_exosnap_quick_qt_prefix}/bin"
 )
 
+# The Record source picker's QML contract. A third QML test executable, for the
+# reason the edit runner states: RecordSourcePicker takes a REQUIRED, C++-typed
+# adapter (RecordViewModelAdapter) that cannot be stubbed from QML, so the
+# runner builds one over a seeded RecordViewModel and hands it over as a context
+# property. Its tests live in their own tests_record/ directory because
+# QUICK_TEST_MAIN scans its source dir recursively and the runners must not load
+# each other's cases.
+qt_add_executable(record_source_picker_qml_tests
+    ${EXOSNAP_QUICK_TESTS_DIR}/record_picker_qml_test_main.cpp
+    ${PROJECT_SOURCE_DIR}/app/assets/fonts/exosnap_fonts.qrc
+)
+
+set_target_properties(record_source_picker_qml_tests PROPERTIES AUTORCC ON)
+
+qt_add_qml_module(record_source_picker_qml_tests
+    URI ExoSnap.Quick.RecordPickerTestControls
+    OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/tests/ExoSnap/Quick/RecordPickerTestControls"
+    DEPENDENCIES
+        QtQuick
+        # ExoGlyph draws with Shape/PathSvg; without this qmllint cannot resolve
+        # its base type and stops publishing the Kind enum.
+        QtQuick.Shapes
+    SOURCES
+        RecordViewModelAdapter.cpp
+        RecordViewModelAdapter.h
+        QuickThemeTokens.cpp
+        QuickThemeTokens.h
+    QML_FILES
+        ExoButton.qml
+        ExoGlyph.qml
+        ExoScrollBar.qml
+        ExoSearchField.qml
+        ExoSegmentedControl.qml
+        ExoTheme.qml
+        RecordSourcePicker.qml
+)
+
+target_compile_definitions(record_source_picker_qml_tests
+    PRIVATE
+        NOMINMAX
+        QUICK_TEST_SOURCE_DIR="${PROJECT_SOURCE_DIR}/app/quick/tests_record"
+)
+
+target_include_directories(record_source_picker_qml_tests
+    PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}"
+        "${PROJECT_SOURCE_DIR}/app"
+)
+
+target_compile_options(record_source_picker_qml_tests
+    PRIVATE
+        $<$<CXX_COMPILER_ID:MSVC>:/wd4702>
+)
+
+target_link_libraries(record_source_picker_qml_tests
+    PRIVATE
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickTest
+        exosnap_record_viewmodel_test_support
+        exosnap::capability
+        exosnap_engine
+)
+
+add_test(NAME quick.qml.record_source_picker COMMAND record_source_picker_qml_tests)
+set_tests_properties(quick.qml.record_source_picker PROPERTIES
+    LABELS "quick"
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QML_IMPORT_PATH=${_exosnap_quick_qt_prefix}/qml"
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${_exosnap_quick_qt_prefix}/bin"
+)
+
 add_test(NAME quick.qml.record_preview_smoke COMMAND exosnap --preview-smoke-test)
 set_tests_properties(quick.qml.record_preview_smoke PROPERTIES
     LABELS "quick;live"
     ENVIRONMENT_MODIFICATION "QT_QPA_PLATFORM=set:windows"
     RUN_SERIAL TRUE
     SKIP_RETURN_CODE 3
+)
+
+# Walks every navigation destination, reports the pointer over each control that
+# declares a pointing hand, and compares what Qt thinks the window cursor is with
+# what the OS is actually carrying. Needs the native platform plugin and a real
+# HWND, so it is labelled live and runs alone -- GetCursor() reads state the
+# machine's own pointer shares.
+add_test(NAME quick.qml.cursor_audit COMMAND exosnap --cursor-audit)
+set_tests_properties(quick.qml.cursor_audit PROPERTIES
+    LABELS "quick;live"
+    ENVIRONMENT_MODIFICATION "QT_QPA_PLATFORM=set:windows"
+    RUN_SERIAL TRUE
 )
 
 add_test(NAME quick.qml.record_preview_lifecycle COMMAND exosnap --preview-lifecycle-test)
@@ -1286,6 +1383,43 @@ target_include_directories(ready_frame_capture_tests
 )
 
 target_compile_definitions(ready_frame_capture_tests PRIVATE NOMINMAX)
+
+# Whether a HoverHandler's cursorShape reaches the window at all. A QML test can
+# only read the handler's own property, which proves the declaration and nothing
+# about the cursor a user sees; this drives a real QQuickWindow with posted hover
+# events and asserts the shape the window ends up carrying.
+exosnap_add_gtest(
+    NAME hover_cursor_tests
+    TEST_PREFIX quick_hover_cursor.
+    SOURCES ${EXOSNAP_QUICK_TESTS_DIR}/test_hover_cursor.cpp
+    LIBRARIES
+        Qt6::Gui
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::Test
+)
+
+# The other half of the same question, and the half that can fail: a real HWND
+# driven by WM_MOUSEMOVE, asserting the cursor the OS ends up carrying. Needs the
+# native platform plugin -- under offscreen there is no HWND to send to and the
+# cases skip, which is why this is a separate binary with its own environment.
+exosnap_add_gtest(
+    NAME hover_cursor_native_tests
+    TEST_PREFIX quick_hover_cursor_native.
+    SOURCES ${EXOSNAP_QUICK_TESTS_DIR}/test_hover_cursor_native.cpp
+    LABELS "quick;live"
+    LIBRARIES
+        Qt6::Gui
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::Test
+)
+
+set_tests_properties(quick_hover_cursor_native.hover_cursor_native_tests PROPERTIES
+    ENVIRONMENT_MODIFICATION "QT_QPA_PLATFORM=set:windows"
+    RUN_SERIAL TRUE
+)
 
 # Diagnostics/Logs presentation policy extracted out of the Widgets DiagnosticsPage,
 # LogsPage and MainWindow. Registered here rather than in app/CMakeLists.txt so the

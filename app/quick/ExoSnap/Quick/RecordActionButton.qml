@@ -49,8 +49,16 @@ FocusScope {
 
     signal clicked()
 
+    // One width for every recommended action, not one per label. Stop, Resume and
+    // Edit are the same control in three states of the same session, and sizing
+    // each to its own word moved the round cluster beside them every time the
+    // state changed. The number is the Record pill's main face, so the whole
+    // family lines up; Record itself is that plus its chevron, which is the one
+    // difference the layout cannot hide.
+    readonly property int emphasisedWidth: root.compact ? 112 : 132
+
     implicitWidth: root.round ? root._size
-                              : Math.max(root.emphasised ? (root.compact ? 88 : 104) : (root.compact ? 72 : 84),
+                              : Math.max(root.emphasised ? root.emphasisedWidth : (root.compact ? 72 : 84),
                                          button.contentItem.implicitWidth + 2 * ExoTheme.spacingLg)
     implicitHeight: root._size
 
@@ -68,15 +76,6 @@ FocusScope {
     Accessible.onPressAction: {
         if (root.available)
             root.clicked();
-    }
-
-    HoverHandler {
-        id: hover
-
-        // The scope stays enabled while the action is unavailable so it can
-        // still speak its reason, so the cursor is what has to say the control
-        // cannot be pressed.
-        cursorShape: root.available ? Qt.PointingHandCursor : Qt.ArrowCursor
     }
 
     Button {
@@ -149,6 +148,24 @@ FocusScope {
                           : !root.available ? ExoTheme.line
                           : root.emphasisOutlined ? root.emphasisColor : "transparent"
             radius: root.round ? height / 2 : ExoTheme.radiusPill
+        }
+    }
+
+    // The hover surface, deliberately in FRONT of the Button rather than behind it.
+    //
+    // A Controls item that fills its parent swallows an ancestor's HoverHandler:
+    // the cursor that handler asks for never reaches the desktop. A handler moved
+    // onto the Button itself works only while the Button is ENABLED, and this
+    // control's whole point is that it stays hoverable when it is not. An Item
+    // accepts no mouse buttons, so the Button underneath still receives every
+    // press, and hover reaches a handler that no disabled state can switch off.
+    Item {
+        anchors.fill: parent
+
+        HoverHandler {
+            id: hover
+
+            cursorShape: root.available ? Qt.PointingHandCursor : Qt.ArrowCursor
         }
     }
 

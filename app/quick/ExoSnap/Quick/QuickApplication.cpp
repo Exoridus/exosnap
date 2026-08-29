@@ -1,5 +1,7 @@
 #include "QuickApplication.h"
 
+#include "services/SystemAppearance.h"
+
 #include "QuickWindowChrome.h"
 
 #include "services/DisplayIdentityEnumerator.h"
@@ -40,6 +42,7 @@
 #include <QMetaObject>
 #include <QPixmap>
 #include <QPointer>
+#include <QProcess>
 #include <QQuickWindow>
 #include <QScreen>
 #include <QStandardPaths>
@@ -250,6 +253,53 @@ QString captureSourceUnavailableNotice() {
 // ExoSnapMetrics rather than as a second literal here.
 constexpr int kDefaultWindowWidth = ui::theme::ExoSnapMetrics::kPreferredWindowWidth;
 constexpr int kDefaultWindowHeight = ui::theme::ExoSnapMetrics::kPreferredWindowHeight;
+
+// Harness-only, env-configured: a deterministic capture-target list standing in
+// for whatever this machine happens to have open. The picker's LIST behaviour --
+// how it groups, sorts, and what it does once the window section outgrows the
+// popup -- cannot be reviewed against a real desktop, because that evidence
+// changes with every window the developer opens between two captures.
+//
+// A window target's description is "<title> - <application>"; the label the
+// picker shows is derived from it, never stored here.
+std::optional<std::vector<exosnap::engine::CaptureTarget>> HarnessCaptureTargets() {
+    static const std::optional<std::vector<exosnap::engine::CaptureTarget>> targets =
+        []() -> std::optional<std::vector<exosnap::engine::CaptureTarget>> {
+        const QByteArray scenario = qgetenv("EXOSNAP_VISUAL_SOURCE_SCENARIO");
+        if (scenario != "many-windows")
+            return std::nullopt;
+
+        using exosnap::engine::CaptureTarget;
+        std::vector<CaptureTarget> seeded;
+        const auto monitor = [&seeded](const char* description) {
+            seeded.push_back(CaptureTarget{CaptureTarget::Kind::Monitor, seeded.size() + 1, description});
+        };
+        const auto window = [&seeded](const char* description) {
+            seeded.push_back(CaptureTarget{CaptureTarget::Kind::Window, seeded.size() + 1, description});
+        };
+
+        monitor(R"(\\.\DISPLAY1)");
+        monitor(R"(\\.\DISPLAY2)");
+
+        window("exosnap - QuickApplication.cpp - Visual Studio Code");
+        window("Sprint review, full walkthrough with the diagnostics overlay enabled - Google Chrome");
+        window("#engineering - Slack");
+        window("Inbox (14) - Outlook");
+        window("Untitled - Notepad");
+        window("Task Manager");
+        window("exosnap - File Explorer");
+        window("Steam");
+        window("Discord");
+        window("OBS 30.1.2 - Profile: Untitled - Scenes: Untitled");
+        window("Spotify Premium");
+        window("Windows PowerShell");
+        window("design-review-result.md - Obsidian");
+        window("Blender");
+        window("Figma - ExoSnap design system");
+        return seeded;
+    }();
+    return targets;
+}
 
 } // namespace
 
@@ -569,6 +619,15 @@ void QuickApplication::initializeRecordWorkflow() {
         if (!visualScenarioLatched())
             record_view_model_.SetState(state);
         record_view_model_.capability_status_text = recording_coordinator_->CapabilityStatusText();
+        if (state == UiRecordingState::Blocked) {
+            blocked_page_notice_ = QString::fromStdWString(record_view_model_.capability_status_text);
+            if (blocked_page_notice_.isEmpty())
+                blocked_page_notice_ = QStringLiteral("Recording is blocked by the current system configuration.");
+            record_view_model_adapter_.setNoticeText(blocked_page_notice_, QStringLiteral("error"));
+        } else if (!blocked_page_notice_.isEmpty() && record_view_model_adapter_.noticeText() == blocked_page_notice_) {
+            record_view_model_adapter_.setNoticeText({}, QStringLiteral("warning"));
+            blocked_page_notice_.clear();
+        }
         // A fresh start (not a resume) invalidates the previous session's
         // post-flight numbers. They feed the Edit surface's report badge, so
         // carrying them over would attribute one recording's drops to the next.
@@ -783,8 +842,11 @@ void QuickApplication::initializeRecordWorkflow() {
             webcam_frame_delivery_timer_.start();
     });
 
-    capture_target_notifier_.setEnumerator(
-        [this]() { return CaptureTargetSnapshot{recording_coordinator_->EnumerateTargets()}; });
+    capture_target_notifier_.setEnumerator([this]() {
+        if (auto seeded = HarnessCaptureTargets())
+            return CaptureTargetSnapshot{std::move(*seeded)};
+        return CaptureTargetSnapshot{recording_coordinator_->EnumerateTargets()};
+    });
     capture_target_notifier_.start();
     record_view_model_.targets = capture_target_notifier_.currentSnapshot().targets;
     ++record_view_model_.targets_revision;
@@ -853,6 +915,10 @@ void QuickApplication::initializeRecordWorkflow() {
                      [this](const CaptureTargetSnapshot& snapshot, DiscoveryReason reason) {
                          refreshCaptureTargets(snapshot, reason);
                      });
+    QObject::connect(&shell_adapter_, &ShellAdapter::sourcePickerOpenChanged, &record_view_model_adapter_, [this]() {
+        if (shell_adapter_.sourcePickerOpen())
+            record_view_model_adapter_.requestTargetStillRefresh();
+    });
 
     // A monitor arriving, leaving or being re-arranged also re-orders the DXGI
     // outputs and can change what each one reports, so the display facts are
@@ -1092,6 +1158,38 @@ void QuickApplication::wireRecordCommands() {
                      &record_view_model_adapter_, [this]() { recording_coordinator_->AddMarker(); });
     QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::openEditorRequested,
                      &record_view_model_adapter_, [this]() { openEditorForCurrentRecording(); });
+    QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::revealRecordingRequested,
+                     &record_view_model_adapter_, [this]() {
+                         const QString path = record_view_model_.current_completed_recording.file_path;
+                         if (path.isEmpty())
+                             return;
+                         // "explorer /select,<path>" opens the containing folder AND
+                         // highlights the file, so it strictly contains what a plain
+                         // "open the output folder" would do. Same call the export
+                         // panel makes, for the same reason.
+                         QProcess::startDetached(QStringLiteral("explorer"),
+                                                 {QStringLiteral("/select,"), QDir::toNativeSeparators(path)});
+                     });
+    QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::openRecentRequested,
+                     &record_view_model_adapter_, [](const QString& path) {
+                         if (!path.isEmpty())
+                             QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+                     });
+    QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::revealRecentRequested,
+                     &record_view_model_adapter_, [](const QString& path) {
+                         if (!path.isEmpty())
+                             QProcess::startDetached(QStringLiteral("explorer"),
+                                                     {QStringLiteral("/select,"), QDir::toNativeSeparators(path)});
+                     });
+    QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::dismissResultRequested,
+                     &record_view_model_adapter_, [this]() {
+                         recording_coordinator_->DismissResult();
+                         // The notice belongs to the run being left behind; a
+                         // failure banner that outlives its result would describe
+                         // a recording the transport no longer shows.
+                         record_view_model_adapter_.clearNotice();
+                         synchronizeRecordState();
+                     });
     QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::splitRequested, &record_view_model_adapter_,
                      [this]() {
                          recording_coordinator_->RequestSplit(exosnap::engine::SplitTriggerSource::ManualButton);
@@ -1140,6 +1238,25 @@ void QuickApplication::synchronizeRecordState() {
                                          live_config_.webcam.chroma_key.tolerance,
                                          live_config_.webcam.chroma_key.softness,
                                          live_config_.webcam.chroma_key.spill_reduction);
+    // Latched at the first live state and cleared when the session ends: it lists
+    // the sources that were resolved into a track, which is what a live mute can
+    // reach. Refilling it as rows change would let a source muted mid-run drop
+    // out of its own list.
+    if (!locksCaptureTargets(record_view_model_.state)) {
+        live_toggleable_sources_.clear();
+    } else if (live_toggleable_sources_.isEmpty()) {
+        for (const auto& row : record_view_model_.audio_ui_state.source_rows) {
+            if (!row.enabled)
+                continue;
+            if (isSystemRow(row))
+                live_toggleable_sources_.append(QStringLiteral("system"));
+            else if (row.kind == exosnap::engine::AudioSourceKind::App)
+                live_toggleable_sources_.append(QStringLiteral("app"));
+            else if (row.kind == exosnap::engine::AudioSourceKind::Mic)
+                live_toggleable_sources_.append(QStringLiteral("microphone"));
+        }
+    }
+    record_view_model_adapter_.setLiveToggleableSources(live_toggleable_sources_);
     record_view_model_adapter_.setCountdownState(live_config_.countdown_seconds, countdown_remaining_,
                                                  countdown_progress_);
     record_view_model_adapter_.setPreviewFrameReady(record_preview_adapter_.frameReady());
@@ -1148,7 +1265,14 @@ void QuickApplication::synchronizeRecordState() {
     // container and codec are fixed for the session once the encoder is up.
     // Sampling this once during initialization left every Settings row unlocked
     // for the whole run, because nothing re-evaluated it on a state change.
-    settings_adapter_.setControlsLocked(recording_coordinator_->State() != UiRecordingState::Ready);
+    //
+    // A visual scenario has no coordinator behind it, so under one the view model
+    // is the authority. Without this, `--record-visual-state recording` rendered
+    // the Settings page in its idle arrangement -- every locked row editable and
+    // no lock banner -- which is exactly the state that decides whether a blocked
+    // control reads as blocked.
+    settings_adapter_.setControlsLocked(locksCaptureTargets(
+        pending_record_visual_state_.isEmpty() ? recording_coordinator_->State() : record_view_model_.state));
     // The single edge that re-points the exclusive-fullscreen probe: every
     // selection change and every recording-state change already lands here, and
     // the unchanged case costs one comparison.
@@ -1315,6 +1439,8 @@ void QuickApplication::refreshCaptureTargets(const CaptureTargetSnapshot& snapsh
                                   .arg(QLatin1StringView(DiscoveryReasonName(reason))));
     updateMeterServices();
     synchronizeRecordState();
+    if (shell_adapter_.sourcePickerOpen())
+        record_view_model_adapter_.requestTargetStillRefresh();
 }
 
 void QuickApplication::updateOutputTargetContext(const exosnap::engine::CaptureTarget& target) {
@@ -1467,7 +1593,13 @@ void QuickApplication::toggleSource(const QString& key) {
         synchronizeRecordState();
         return;
     }
-    if (!record_view_model_adapter_.canSelectSource())
+    // While a session runs the toggle is a live mute rather than a configuration
+    // edit: the track stays, and it carries silence until the source comes back.
+    // Only a source that HAS a track can be muted -- one that was off when the
+    // recording started was never resolved into a track, and there is nothing to
+    // put silence into.
+    const bool session_live = !record_view_model_adapter_.canSelectSource();
+    if (session_live && !live_toggleable_sources_.contains(key))
         return;
     for (auto& row : record_view_model_.audio_ui_state.source_rows) {
         const bool match = (key == QStringLiteral("system") && isSystemRow(row)) ||
@@ -1477,6 +1609,20 @@ void QuickApplication::toggleSource(const QString& key) {
             if (key == QStringLiteral("microphone") && !microphone_available_)
                 return;
             row.enabled = !row.enabled;
+            if (session_live) {
+                // Both system kinds: a row is Sys or SystemOutput depending on
+                // whether the capture is PID-scoped, and the transport addresses
+                // them as one control.
+                const bool muted = !row.enabled;
+                if (key == QStringLiteral("system")) {
+                    recording_coordinator_->SetAudioSourceMuted(exosnap::engine::AudioSourceKind::Sys, muted);
+                    recording_coordinator_->SetAudioSourceMuted(exosnap::engine::AudioSourceKind::SystemOutput, muted);
+                } else if (key == QStringLiteral("app")) {
+                    recording_coordinator_->SetAudioSourceMuted(exosnap::engine::AudioSourceKind::App, muted);
+                } else {
+                    recording_coordinator_->SetAudioSourceMuted(exosnap::engine::AudioSourceKind::Mic, muted);
+                }
+            }
             break;
         }
     }
@@ -1593,7 +1739,31 @@ void QuickApplication::initializeSettingsArea() {
     overlay_adapter_.setAppSettings(settings_);
     settings_adapter_.setCapabilities(capabilities_);
     settings_adapter_.setConfig(live_config_);
-    settings_adapter_.setControlsLocked(recording_coordinator_->State() != UiRecordingState::Ready);
+    settings_adapter_.setControlsLocked(locksCaptureTargets(recording_coordinator_->State()));
+
+    QObject::connect(&settings_adapter_, &SettingsAdapter::outputValidationFinished, &settings_adapter_,
+                     [this](FolderValidationResult result) {
+                         // The deterministic blocker has no unwritable directory behind it;
+                         // a real validation finishing later must not erase the seeded state.
+                         if (pending_record_visual_state_ == QLatin1String(visual::record_state::kOutputUnwritable)) {
+                             result = FolderValidationResult::NotWritable;
+                             settings_adapter_.applyOutputFolderValidation(result);
+                         }
+                         recording_coordinator_->ApplyOutputFolderValidation(result);
+                     });
+    QObject::connect(&shell_adapter_, &ShellAdapter::currentPageChanged, &settings_adapter_, [this]() {
+        if (shell_adapter_.currentPage() == ShellAdapter::SettingsPage) {
+            settings_adapter_.requestOutputValidation(SettingsAdapter::OutputValidationTrigger::OutputCardReveal);
+        }
+    });
+    QObject::connect(qGuiApp, &QGuiApplication::applicationStateChanged, &settings_adapter_,
+                     [this](Qt::ApplicationState state) {
+                         if (state == Qt::ApplicationActive) {
+                             settings_adapter_.requestOutputValidation(
+                                 SettingsAdapter::OutputValidationTrigger::ApplicationActivation);
+                         }
+                     });
+    settings_adapter_.requestOutputValidation(SettingsAdapter::OutputValidationTrigger::Startup);
 
     publishRefreshRateDerivedState();
 
@@ -1667,10 +1837,7 @@ void QuickApplication::initializeDiagnosticsArea() {
     // Single global Expert state, shared with Settings (AppSettingsStore).
     QObject::connect(&diagnostics_adapter_, &DiagnosticsAdapter::expertModeChanged, &diagnostics_adapter_,
                      [this](bool enabled) {
-                         // A harness override is in-memory only: rendering the Expert
-                         // taxonomy for review must never rewrite the developer's own
-                         // persisted Expert setting.
-                         if (visual_expert_override_ || settings_.expert_mode_enabled == enabled)
+                         if (settings_.expert_mode_enabled == enabled)
                              return;
                          settings_.expert_mode_enabled = enabled;
                          settings_adapter_.setAppSettings(settings_);
@@ -1965,6 +2132,7 @@ void QuickApplication::observeAudioSourceDegradation(const exosnap::engine::Reco
     sample.lifecycle = snapshot.lifecycle;
     sample.source_degraded = snapshot.audio.source_degraded;
     sample.degraded_sources = snapshot.audio.degraded_sources;
+    sample.degraded_source_kinds = snapshot.audio.degraded_source_kinds;
 
     switch (audio_degradation_monitor_.Observe(sample)) {
     case diagnostics::AudioDegradationSignal::None:
@@ -1981,6 +2149,7 @@ void QuickApplication::observeAudioSourceDegradation(const exosnap::engine::Reco
     }
 
     const uint32_t degraded = audio_degradation_monitor_.degraded_sources();
+    const uint32_t degraded_kinds = audio_degradation_monitor_.degraded_source_kinds();
     diagnostics::AppLog::warning(
         QStringLiteral("audio"),
         QStringLiteral("%1 audio capture source(s) lost their device and are contributing silence; recording continues")
@@ -1989,11 +2158,18 @@ void QuickApplication::observeAudioSourceDegradation(const exosnap::engine::Reco
     // one — the manager has no update API, so the standing toast is replaced by
     // dismissing the tracked sequence and enqueueing the new body.
     clearAudioSourceDegradedWarning();
-    audio_degraded_toast_sequence_ =
-        notifications_adapter_.manager().Enqueue(notifications::MakeAudioSourceDegradedEvent(degraded));
+    auto event = notifications::MakeAudioSourceDegradedEvent(degraded, degraded_kinds);
+    audio_degraded_page_notice_ = event.body;
+    record_view_model_adapter_.setNoticeText(audio_degraded_page_notice_, QStringLiteral("warning"));
+    audio_degraded_toast_sequence_ = notifications_adapter_.manager().Enqueue(std::move(event));
 }
 
 void QuickApplication::clearAudioSourceDegradedWarning() {
+    if (!audio_degraded_page_notice_.isEmpty() &&
+        record_view_model_adapter_.noticeText() == audio_degraded_page_notice_) {
+        record_view_model_adapter_.setNoticeText({}, QStringLiteral("warning"));
+    }
+    audio_degraded_page_notice_.clear();
     if (audio_degraded_toast_sequence_ == 0)
         return;
     notifications_adapter_.manager().Dismiss(audio_degraded_toast_sequence_);
@@ -2060,6 +2236,13 @@ void QuickApplication::wireSettingsCommands() {
         const bool previous_present_optin = settings_.present_diagnostics_optin;
         settings_ = settings_adapter_.appSettings();
         persistAppSettings(SettingsWriteIntent::UserEdit);
+        // Expert mode is one product setting behind two surfaces. The Diagnostics
+        // adapter keeps its own copy, seeded once at startup, so without this the
+        // Settings toggle moved Settings alone and Diagnostics stayed in the
+        // arrangement it was built with until the next launch. The write is
+        // idempotent and the reverse connection drops out on an unchanged value,
+        // so the two directions do not loop.
+        diagnostics_adapter_.setExpertMode(settings_.expert_mode_enabled);
         if (settings_.update_channel != previous_update_channel)
             applyUpdateChannel();
         applyThemeFromSettings();
@@ -2406,8 +2589,29 @@ void QuickApplication::applyThemeFromSettings() {
         tokens->setAppearance(settings_.appearance_id, settings_.accent_id);
     }
     // The tray mark carries the accent too, and it is not part of the scene, so
-    // it does not follow the token singleton. Same ids, one call, no restart.
-    tray_adapter_.setAppearance(settings_.appearance_id, settings_.accent_id);
+    // it does not follow the token singleton.
+    //
+    // The APPEARANCE it takes is the shell's, not the application's. The
+    // notification area is composited onto the taskbar, which is drawn in the
+    // Windows theme whatever ExoSnap is set to: a product running in Light on a
+    // dark taskbar was rendering its mark for a ground it never touches. The
+    // ACCENT stays the application's -- it is the product's identity, not the
+    // shell's, and Windows has no opinion about it.
+    tray_adapter_.setAppearance(shellAppearanceId(), settings_.accent_id);
+}
+
+QString QuickApplication::shellAppearanceId() const {
+    return exosnap::services::ShellAppearanceId(settings_.appearance_id);
+}
+
+void QuickApplication::refreshShellChromeAppearance() {
+    tray_adapter_.setAppearance(shellAppearanceId(), settings_.accent_id);
+    // The window icon is only re-rendered when the presence CHANGES, so a shell
+    // theme switch has to invalidate that guard: a session sitting still would
+    // otherwise keep the icon it was given under the old taskbar theme until the
+    // next recording state change. -1 is not a frame any mark has.
+    shell_mark_frame_ = -1;
+    applyShellPresence();
 }
 
 void QuickApplication::persistLiveConfig() {
@@ -2431,6 +2635,48 @@ void QuickApplication::persistLiveConfig() {
 // Harness-only, env-configured (never mouse/keyboard synthesis, never a window):
 // seeds deterministic Diagnostics/Logs content so a --visual-test capture shows a
 // stated state instead of whatever this machine happened to be doing.
+// Harness-only, env-configured: fills the notification hub, which is empty on a
+// healthy machine and therefore only ever photographed in its "all caught up"
+// state. What needs reviewing is the opposite -- several advisories at once,
+// mixed severities, and a body long enough to test the entry's wrapping.
+void QuickApplication::applyShellVisualScenarios() {
+    if (qgetenv("EXOSNAP_VISUAL_NOTIFICATION_SCENARIO") != "many")
+        return;
+
+    using notifications::NotificationAction;
+    using notifications::NotificationEvent;
+    using notifications::NotificationType;
+
+    const auto enqueue = [this](NotificationType type, QString title, QString body,
+                                NotificationAction action = NotificationAction::None) {
+        NotificationEvent event;
+        event.type = type;
+        event.title = std::move(title);
+        event.body = std::move(body);
+        event.action = action;
+        notifications_adapter_.manager().Enqueue(std::move(event));
+    };
+
+    enqueue(NotificationType::Saved, QStringLiteral("Recording saved"),
+            QStringLiteral("2026-08-10 21-14-08.mkv - 2:34, 412 MB"), NotificationAction::Edit);
+    enqueue(NotificationType::UpdateAvailable, QStringLiteral("ExoSnap 0.9.1 is available"),
+            QStringLiteral("You are on 0.9.0. The update installs on the next restart."),
+            NotificationAction::OpenUpdate);
+    enqueue(NotificationType::FramesDropped, QStringLiteral("Frames were dropped"),
+            QStringLiteral("122 frames did not reach the encoder during the last recording."),
+            NotificationAction::OpenDiagnostics);
+    enqueue(NotificationType::HotkeyConflict, QStringLiteral("A hotkey could not be registered"),
+            QStringLiteral("Ctrl+Shift+R is held by another application, so the shortcut is inactive this "
+                           "session. Rebind it in Settings, or close whatever holds it and restart ExoSnap."),
+            NotificationAction::OpenHotkeys);
+    enqueue(NotificationType::SettingsSaveFailed, QStringLiteral("Settings could not be saved"),
+            QStringLiteral("The settings file is open in another program and could not be written. The change "
+                           "you just made will be lost when ExoSnap restarts, and every further change will "
+                           "fail the same way until the file is released."));
+    enqueue(NotificationType::RecoveryAvailable, QStringLiteral("A recording can be recovered"),
+            QStringLiteral("An unfinished recording from 09 Aug 2026 was found."), NotificationAction::OpenRecovery);
+}
+
 void QuickApplication::applyDiagnosticsVisualScenarios() {
     const QByteArray log_scenario = qgetenv("EXOSNAP_VISUAL_LOG_SCENARIO");
     if (!log_scenario.isEmpty()) {
@@ -2463,13 +2709,6 @@ void QuickApplication::applyDiagnosticsVisualScenarios() {
             entries.push_back(entry(6, diagnostics::LogSeverity::Debug, "Audio", "System loopback meter started"));
         }
         logs_adapter_.setSyntheticEntries(std::move(entries));
-    }
-
-    // Reviewing the Expert taxonomy must not mean flipping the developer's own
-    // persisted Expert setting, so the harness overrides it in-memory only.
-    if (qgetenv("EXOSNAP_VISUAL_DIAG_EXPERT") == "1") {
-        visual_expert_override_ = true;
-        diagnostics_adapter_.setExpertMode(true);
     }
 
     const QByteArray diag_scenario = qgetenv("EXOSNAP_VISUAL_DIAG_SCENARIO");
@@ -3229,7 +3468,7 @@ bool QuickApplication::applyOverlayVisualScenario(const QString& scenario) {
         QVector<RecoveryCandidate> candidates;
         RecoveryCandidate crashed;
         crashed.entry.id = QStringLiteral("visual-1");
-        crashed.entry.artefact_path = QStringLiteral("C:/Recordings/Session 2026-08-10 21-14.mkv.tmp");
+        crashed.entry.artefact_path = QStringLiteral("C:/Recordings/Session 2026-08-10 21-14.mkv.partial");
         crashed.entry.final_output_path = QStringLiteral("C:/Recordings/Session 2026-08-10 21-14.mkv");
         crashed.entry.intended_container = QStringLiteral("mkv");
         crashed.entry.started_at = QStringLiteral("2026-08-10T21:14:03Z");
@@ -3646,11 +3885,14 @@ void QuickApplication::dispatchNotificationAction(notifications::NotificationAct
         break;
     }
     case NotificationAction::OpenUpdate:
-    case NotificationAction::ChangeFolder:
     case NotificationAction::OpenHotkeys:
         // All three land on Settings: updates, output folder and hotkeys are
         // embedded sections there, not pages of their own.
         emit shell_adapter_.navigateToPageRequested(ShellAdapter::SettingsPage);
+        break;
+    case NotificationAction::ChangeFolder:
+        emit shell_adapter_.navigateToPageRequested(ShellAdapter::SettingsPage);
+        settings_adapter_.requestSettingsFocus(SettingsAdapter::FocusTarget::OutputDestination);
         break;
     case NotificationAction::OpenDiagnostics:
         emit shell_adapter_.navigateToPageRequested(ShellAdapter::DiagnosticsPage);
@@ -3908,8 +4150,10 @@ void QuickApplication::applyShellPresence() {
         shell_mark_frame_ = mark_frame;
         if (root_window_ != nullptr) {
             if (auto* chrome = root_window_->findChild<QuickWindowChrome*>()) {
+                // Same argument as the tray mark: this image ends up on the
+                // taskbar button, which is shell chrome.
                 chrome->applyWindowIcon(RenderWindowIcon(window_icon_cache_, state.icon_state, mark_frame,
-                                                         settings_.appearance_id, settings_.accent_id));
+                                                         shellAppearanceId(), settings_.accent_id));
             }
         }
     }
@@ -4007,6 +4251,11 @@ void QuickApplication::initializeShellPresence() {
                      [this, chrome]() { taskbar_presence_.notifyShellReady(chrome->nativeHandle()); });
     QObject::connect(chrome, &QuickWindowChrome::nativeHandleChanged, &taskbar_presence_,
                      [this, chrome]() { taskbar_presence_.setHandle(chrome->nativeHandle()); });
+    // The taskbar theme can change while the process runs, and the two marks
+    // drawn onto it have to follow. Nothing inside the window moves: the
+    // application's own appearance is a product setting, not a system one.
+    QObject::connect(chrome, &QuickWindowChrome::shellColorsChanged, chrome,
+                     [this]() { refreshShellChromeAppearance(); });
 
     // The chrome attached from QML before this wiring existed, so its first
     // handle notification is already past. Nothing is applied yet -- Explorer
@@ -4047,6 +4296,28 @@ void QuickApplication::wireTaskbarProgress() {
         taskbar_presence_.updateProgress(export_progress_lease_,
                                          static_cast<double>(edit_export_adapter_.progressPercent()) / 100.0);
     });
+    QObject::connect(&edit_export_adapter_, &EditExportAdapter::exportCompleted, &edit_export_adapter_,
+                     [this](const QString& output_path) {
+                         if (shell_adapter_.editSurfaceVisible())
+                             return;
+                         notifications::NotificationEvent event;
+                         event.type = notifications::NotificationType::Saved;
+                         event.title = QStringLiteral("Export complete");
+                         event.body = QFileInfo(output_path).fileName();
+                         event.action = notifications::NotificationAction::OpenFolder;
+                         event.action_payload = output_path;
+                         notifications_adapter_.manager().Enqueue(std::move(event));
+                     });
+    QObject::connect(&edit_export_adapter_, &EditExportAdapter::exportFailed, &edit_export_adapter_,
+                     [this](const QString& error) {
+                         if (shell_adapter_.editSurfaceVisible())
+                             return;
+                         notifications::NotificationEvent event;
+                         event.type = notifications::NotificationType::UnexpectedStop;
+                         event.title = QStringLiteral("Export failed");
+                         event.body = error;
+                         notifications_adapter_.manager().Enqueue(std::move(event));
+                     });
 
     // Recovery finish. Same shape, different producer: a repair remux publishes a
     // fraction and can be cancelled.
@@ -4249,6 +4520,7 @@ bool QuickApplication::load(bool no_activate) {
     });
     applyThemeFromSettings();
     applyDiagnosticsVisualScenarios();
+    applyShellVisualScenarios();
     applyEditVisualScenario();
     engine_.loadFromModule("ExoSnap.Quick", "Main");
     if (engine_.rootObjects().isEmpty()) {
@@ -4591,6 +4863,13 @@ bool QuickApplication::canOpenEditor() const {
 // claiming to test a difference that does not exist: the same SetState call
 // produced both. A scenario name that contradicts, or merely duplicates, the
 // state it selects is worse than no scenario.
+void QuickApplication::applyHarnessExpertMode(bool expert) {
+    // Through the adapter, not straight into a QML property: the Appearance
+    // card's own toggle reads the same value, and a capture showing an Expert
+    // page under a switch that says Simple is worse evidence than none.
+    settings_adapter_.setExpertMode(expert);
+}
+
 bool QuickApplication::applyRecordVisualScenario(const QString& scenario) {
     const QString normalized = scenario.trimmed().toLower();
     pending_record_visual_state_ = normalized;
@@ -4646,6 +4925,8 @@ bool QuickApplication::applyRecordVisualScenario(const QString& scenario) {
         countdown_progress_ = 1.0;
         live_config_.countdown_seconds = 3;
         record_view_model_.SetState(UiRecordingState::Countdown);
+    } else if (normalized == QLatin1String(visual::record_state::kPreparing)) {
+        record_view_model_.SetState(UiRecordingState::Preparing);
     } else if (normalized == QLatin1String(visual::record_state::kPaused)) {
         record_view_model_.SetState(UiRecordingState::Paused);
         record_view_model_.live_stats_available = true;
@@ -4703,9 +4984,23 @@ bool QuickApplication::applyRecordVisualScenario(const QString& scenario) {
         microphone_available_ = false;
         webcam_available_ = false;
         record_preview_adapter_.clearPreviewTarget();
+    } else if (normalized == QLatin1String(visual::record_state::kOutputUnwritable)) {
+        record_view_model_.SetState(UiRecordingState::Blocked);
+        record_view_model_.capability_status_text = FolderValidationMessage(FolderValidationResult::NotWritable);
+        record_view_model_adapter_.setNoticeText(
+            QStringLiteral("The output folder is not writable. Choose another folder in Settings."),
+            QStringLiteral("error"));
+        settings_adapter_.applyOutputFolderValidation(FolderValidationResult::NotWritable);
+        settings_adapter_.requestSettingsFocus(SettingsAdapter::FocusTarget::OutputDestination);
     } else {
         return false;
     }
+    // The rest of the shell, not only the Record page. controlsLocked is driven
+    // by the recording COORDINATOR, which a scenario never starts, so "Settings
+    // during a recording" -- the arrangement that decides whether a blocked
+    // control reads as blocked -- rendered as an ordinary idle Settings page
+    // under a scenario that called itself `recording`. A scenario that names a
+    // state has to produce it everywhere the state is visible.
     synchronizeRecordState();
     return true;
 }

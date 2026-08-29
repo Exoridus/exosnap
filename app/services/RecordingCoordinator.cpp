@@ -1,7 +1,7 @@
 #include "RecordingCoordinator.h"
 
+#include "models/CaptureTargetPresentation.h"
 #include "services/AtomicFileOps.h"
-#include "services/DisplayNumbering.h"
 #include "services/TargetDisplayFacts.h"
 
 #include "../../libs/engine/src/loopback_meter_service.h"
@@ -68,6 +68,42 @@ static std::wstring ToWide(const std::string& s) {
     return w;
 }
 
+class PartialArtifactTransaction {
+  public:
+    explicit PartialArtifactTransaction(std::filesystem::path path) : path_(std::move(path)) {
+    }
+
+    PartialArtifactTransaction(const PartialArtifactTransaction&) = delete;
+    PartialArtifactTransaction& operator=(const PartialArtifactTransaction&) = delete;
+
+    [[nodiscard]] std::error_code Create() {
+        const HANDLE file = CreateFileW(path_.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_NEW,
+                                        FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (file == INVALID_HANDLE_VALUE) {
+            return {static_cast<int>(GetLastError()), std::system_category()};
+        }
+        CloseHandle(file);
+        created_ = true;
+        return {};
+    }
+
+    void Commit() noexcept {
+        created_ = false;
+    }
+
+    ~PartialArtifactTransaction() {
+        if (!created_) {
+            return;
+        }
+        std::error_code ignored;
+        std::filesystem::remove(path_, ignored);
+    }
+
+  private:
+    std::filesystem::path path_;
+    bool created_ = false;
+};
+
 // Wraps exosnap::engine::DeriveSegmentPath for the app layer. A derivation
 // failure (a genuine filesystem probe error, or the bounded collision scan
 // exhausted -- see recorder_session.h) is logged loudly via AppLog::error
@@ -88,20 +124,6 @@ static std::optional<std::filesystem::path> DeriveSegmentPathLogged(const std::f
         return std::nullopt;
     }
     return result.path;
-}
-
-static std::string TrimAscii(const std::string& value) {
-    std::size_t first = 0;
-    while (first < value.size() && std::isspace(static_cast<unsigned char>(value[first])) != 0) {
-        ++first;
-    }
-
-    std::size_t last = value.size();
-    while (last > first && std::isspace(static_cast<unsigned char>(value[last - 1])) != 0) {
-        --last;
-    }
-
-    return value.substr(first, last - first);
 }
 
 static exosnap::engine::WebcamOverlayLive ToLiveWebcamOverlay(const WebcamSettings& settings) {
@@ -127,99 +149,11 @@ static exosnap::engine::WebcamOverlayLive ToLiveWebcamOverlay(const WebcamSettin
     return overlay;
 }
 
-static std::string DisplayLabelFromTargetDescription(const std::string& raw_description) {
-    // Sequential numbering, shared with the source picker: the user who
-    // selected "Display 2" must find "Display 2" in the Record header and the
-    // output filename, not the raw GDI number ("DISPLAY7") behind it.
-    return SequentialDisplayLabel(raw_description, BuildDisplaySequenceMap());
-}
-
-struct WindowTargetParts {
-    std::string app_name;
-    std::string title;
-};
-
-static WindowTargetParts ParseWindowTargetParts(const std::string& raw_description) {
-    WindowTargetParts parts{};
-    const std::string value = TrimAscii(raw_description);
-    if (value.empty()) {
-        return parts;
-    }
-
-    const std::string separators[] = {" \xE2\x80\x94 ", " - "};
-    bool found_separator = false;
-    std::size_t separator_pos = 0;
-    std::size_t separator_size = 0;
-    for (const auto& separator : separators) {
-        const std::size_t candidate = value.rfind(separator);
-        if (candidate == std::string::npos) {
-            continue;
-        }
-        if (!found_separator || candidate > separator_pos) {
-            found_separator = true;
-            separator_pos = candidate;
-            separator_size = separator.size();
-        }
-    }
-
-    if (!found_separator) {
-        parts.app_name = value;
-        parts.title = value;
-        return parts;
-    }
-
-    const std::string raw_title = TrimAscii(value.substr(0, separator_pos));
-    const std::string raw_app = TrimAscii(value.substr(separator_pos + separator_size));
-
-    parts.app_name = raw_app.empty() ? value : raw_app;
-    if (!raw_title.empty() && raw_title != parts.app_name) {
-        parts.title = raw_title;
-    }
-
-    if (parts.title.empty()) {
-        parts.title = parts.app_name;
-    }
-
-    return parts;
-}
-
-static std::string BuildProcessName(const std::string& app_name) {
-    std::string process_name;
-    process_name.reserve(app_name.size());
-
-    for (const unsigned char ch : app_name) {
-        if (std::isalnum(ch) == 0) {
-            continue;
-        }
-        process_name.push_back(static_cast<char>(std::tolower(ch)));
-    }
-
-    if (process_name.empty()) {
-        return "window";
-    }
-    return process_name;
-}
-
 static FilenameTargetContext BuildFilenameContextFromTarget(const exosnap::engine::CaptureTarget& target) {
-    FilenameTargetContext context;
-    if (target.kind == exosnap::engine::CaptureTarget::Kind::Monitor) {
-        const std::string display = DisplayLabelFromTargetDescription(target.description);
-        context.app_name = L"Desktop";
-        context.process_name = L"desktop";
-        context.window_title = ToWide(display);
-        context.target_name = L"Desktop - " + context.window_title;
-        return context;
-    }
-
-    const WindowTargetParts parts = ParseWindowTargetParts(target.description);
-    const std::string app = parts.app_name.empty() ? std::string("Window") : parts.app_name;
-    const std::string title = parts.title.empty() ? app : parts.title;
-
-    context.app_name = ToWide(app);
-    context.window_title = ToWide(title);
-    context.process_name = ToWide(BuildProcessName(app));
-    context.target_name = context.app_name + L" - " + context.window_title;
-    return context;
+    const CaptureTargetPresentationKind kind = target.kind == exosnap::engine::CaptureTarget::Kind::Window
+                                                   ? CaptureTargetPresentationKind::Window
+                                                   : CaptureTargetPresentationKind::Display;
+    return ResolveCaptureTargetPresentation(target, kind).filename;
 }
 
 static bool PlanRequiresTargetPid(const exosnap::engine::AudioTrackPlan& plan) {
@@ -670,7 +604,7 @@ void RecordingCoordinator::OnCapabilitiesReady(const exosnap::capability::Capabi
     const capability::ResolveResult validation = resolver.ValidateConfig(resolved_user_config_);
     validation_result_ = validation;
     resolved_user_config_ = validation.resolved_config;
-    if (validation.succeeded) {
+    if (validation.succeeded && output_folder_validation_ == FolderValidationResult::Ok) {
         capability_status_text_ = BuildCapabilityStatusText(validation.resolved_config);
         // Use PostStateChange (not a bare state_ assignment) so the UI's state-changed
         // callback fires. Without this the Record page stays stuck on "Checking…" forever
@@ -678,6 +612,9 @@ void RecordingCoordinator::OnCapabilitiesReady(const exosnap::capability::Capabi
         // callback (there is no pull). Regression introduced when the synchronous fallback
         // probe was removed in the fast-startup wave.
         PostStateChange(UiRecordingState::Ready);
+    } else if (output_folder_validation_ != FolderValidationResult::Ok) {
+        capability_status_text_ = FolderValidationMessage(output_folder_validation_);
+        PostStateChange(UiRecordingState::Blocked);
     } else {
         capability_status_text_ =
             validation.invalidity.empty() ? L"Recording unavailable" : ToWide(validation.invalidity.front().message);
@@ -707,18 +644,41 @@ void RecordingCoordinator::RevalidateCapabilities() {
     const capability::ResolveResult result = resolver.ValidateConfig(resolved_user_config_);
     validation_result_ = result;
 
-    const UiRecordingState new_state = result.succeeded ? UiRecordingState::Ready : UiRecordingState::Blocked;
-    capability_status_text_ =
-        result.succeeded
-            ? BuildCapabilityStatusText(result.resolved_config)
-            : (result.invalidity.empty() ? L"Recording unavailable" : ToWide(result.invalidity.front().message));
+    const bool ready = result.succeeded && output_folder_validation_ == FolderValidationResult::Ok;
+    const UiRecordingState new_state = ready ? UiRecordingState::Ready : UiRecordingState::Blocked;
+    if (output_folder_validation_ != FolderValidationResult::Ok) {
+        capability_status_text_ = FolderValidationMessage(output_folder_validation_);
+    } else {
+        capability_status_text_ =
+            result.succeeded
+                ? BuildCapabilityStatusText(result.resolved_config)
+                : (result.invalidity.empty() ? L"Recording unavailable" : ToWide(result.invalidity.front().message));
+    }
 
     if (new_state != state_)
         PostStateChange(new_state);
 }
 
+void RecordingCoordinator::ApplyOutputFolderValidation(FolderValidationResult result) {
+    output_folder_validation_ = result;
+    const bool busy = state_ == UiRecordingState::Preparing || state_ == UiRecordingState::Recording ||
+                      state_ == UiRecordingState::Paused || state_ == UiRecordingState::Stopping ||
+                      state_ == UiRecordingState::Saving || state_ == UiRecordingState::ArmedFromRecovery;
+    if (busy || !has_caps_) {
+        return;
+    }
+    RevalidateCapabilities();
+}
+
 std::vector<exosnap::engine::CaptureTarget> RecordingCoordinator::EnumerateTargets() {
     return exosnap::engine::RecorderSession::EnumerateTargets();
+}
+
+void RecordingCoordinator::SetAudioSourceMuted(exosnap::engine::AudioSourceKind kind, bool muted) {
+    if (!is_recording_.load()) {
+        return;
+    }
+    session_.SetAudioSourceMuted(kind, muted);
 }
 
 void RecordingCoordinator::SetWebcamSettings(const WebcamSettings& settings) {
@@ -997,6 +957,26 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
         return;
     }
 
+    const std::filesystem::path partial_path = exosnap::engine::DeriveValuablePartialPath(output_path);
+    PartialArtifactTransaction partial_artifact(partial_path);
+    if (const std::error_code create_error = partial_artifact.Create()) {
+        diagnostics::AppLog::error(
+            QStringLiteral("record.failure"),
+            QStringLiteral("phase=Prepare category=CreatePartial output_path=\"%1\" detail=\"%2\"")
+                .arg(QString::fromStdWString(output_path.wstring()), QString::fromStdString(create_error.message())));
+
+        PostStateChange(UiRecordingState::Failed);
+        UiRecordingResult result;
+        result.succeeded = false;
+        result.output_path = output_path.wstring();
+        result.error_phase = FormatErrorPhase(exosnap::engine::ErrorPhase::Prepare);
+        result.error_detail = L"Failed to create the recording partial artifact: " + ToWide(create_error.message());
+        FillResultFormat(result, ctx);
+        PostResult(std::move(result));
+        prepare_in_flight_.store(false);
+        return;
+    }
+
     // Cancellation checkpoint 1 — after the disk/filesystem work.
     if (prepare_cancel_requested_.load()) {
         cancel_unwind();
@@ -1131,7 +1111,7 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
         }
     }
 
-    config.output_path = output_path;
+    config.output_path = partial_path;
     config.split = ctx.split_settings;
 
     config.webcam.enabled = ctx.webcam_settings.enabled && !ctx.webcam_settings.device_id.empty();
@@ -1320,15 +1300,14 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
 
     // Recovery manifest entry — written before the engine starts so a hard crash
     // leaves a traceable artefact. The artefact_path is the file the engine will
-    // actually write (transient .mkv.tmp for MP4 target, final .mkv for MKV target).
+    // actually write (the valuable .partial artifact for every container).
     SetCurrentManifestId({});
     if (recovery_manifest_store_ != nullptr) {
         const bool is_mp4 = (config.container == exosnap::engine::Container::Mp4);
         RecoveryManifestEntry entry;
         entry.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
         entry.artefact_path =
-            is_mp4 ? QString::fromStdWString(exosnap::engine::DeriveTransientMkvPath(output_path).wstring())
-                   : QString::fromStdWString(output_path.wstring());
+            QString::fromStdWString(exosnap::engine::DeriveValuablePartialPath(output_path).wstring());
         entry.intended_container = is_mp4 ? QStringLiteral("mp4") : QStringLiteral("mkv");
         entry.final_output_path = QString::fromStdWString(output_path.wstring());
         entry.started_at = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
@@ -1373,6 +1352,7 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
         cancel_unwind();
         return;
     }
+    partial_artifact.Commit();
     prepare_in_flight_.store(false);
     disk_stop_reason_bytes_free_ = 0;
     disk_stop_reason_threshold_ = 0;
@@ -1513,6 +1493,20 @@ void RecordingCoordinator::PauseRecording() {
     is_paused_.store(true);
     session_.Pause();
     PostStateChange(UiRecordingState::Paused);
+}
+
+void RecordingCoordinator::DismissResult() {
+    const auto state = State();
+    if (state != UiRecordingState::Completed && state != UiRecordingState::Failed)
+        return;
+    // The same three-way landing the recovery cancel path uses: Ready only when
+    // capabilities are loaded AND valid, Blocked when they are loaded and are
+    // not, and nothing at all before they arrive -- OnCapabilitiesReady owns the
+    // state until then, and posting Ready here would claim a readiness no probe
+    // has established.
+    if (!has_caps_)
+        return;
+    PostStateChange(validation_result_.succeeded ? UiRecordingState::Ready : UiRecordingState::Blocked);
 }
 
 void RecordingCoordinator::ResumeRecording() {
@@ -1659,7 +1653,7 @@ void RecordingCoordinator::OnSegmentCompleted(const exosnap::engine::CompletedSe
     //     as current_manifest_id_ when it processes the final segment.
     if (was_split_boundary && segment.succeeded && session_is_mp4_) {
         // Derive the expected MP4 output path for this segment from the transient MKV path.
-        // segment.path is a .mkv.tmp (or _part-NNN.mkv.tmp) file; derive the .mp4 side.
+        // segment.path is a valuable .partial artifact; derive the final .mp4 sibling.
         // The base output path is the session's output path (the .mp4 path the user
         // asked for). Taken through the accessor, not off the member: this runs on
         // the mux worker thread, which the engine does not always join before
@@ -1886,7 +1880,7 @@ void RecordingCoordinator::RecordingThreadProc(const exosnap::engine::RecorderCo
 
     UiRecordingResult ui_result;
     // For MP4 sessions, output_path is the final .mp4; the engine actually wrote
-    // to the transient .mkv.tmp path (ADR-0014). We expose the final path to the UI.
+    // to the valuable .partial artifact. We expose the final path to the UI.
     ui_result.succeeded = result.succeeded;
     ui_result.output_path = output_path.wstring();
     ui_result.error_phase = FormatErrorPhase(result.error_phase);
@@ -2119,12 +2113,44 @@ void RecordingCoordinator::RecordingThreadProc(const exosnap::engine::RecorderCo
         return;
     }
 
-    // MKV target: engine succeeded → artefact is the final file; remove entry.
-    // Engine failed → leave the entry so recovery UI can offer repair.
+    if (result.succeeded) {
+        auto publish = [&](const std::filesystem::path& partial, const std::filesystem::path& final) {
+            if (const unsigned long move_error = AtomicReplaceInPlace(partial, final); move_error != 0) {
+                ui_result.succeeded = false;
+                ui_result.error_phase = L"Publish";
+                ui_result.error_detail =
+                    L"Failed to publish the completed recording (Win32 error " + std::to_wstring(move_error) + L").";
+                diagnostics::AppLog::error(
+                    QStringLiteral("record.failure"),
+                    QStringLiteral("phase=Publish partial_path=\"%1\" output_path=\"%2\" win32_error=%3")
+                        .arg(QString::fromStdWString(partial.wstring()), QString::fromStdWString(final.wstring()))
+                        .arg(move_error));
+                return false;
+            }
+            return true;
+        };
+
+        if (ui_result.segments.empty()) {
+            publish(config.output_path, output_path);
+        } else {
+            for (auto& segment : ui_result.segments) {
+                const auto final_segment = DeriveSegmentPathLogged(output_path, static_cast<uint32_t>(segment.index),
+                                                                   "completed recording publication");
+                if (!final_segment.has_value() ||
+                    !publish(std::filesystem::path(segment.file_path.toStdWString()), *final_segment)) {
+                    break;
+                }
+                segment.file_path = QString::fromStdWString(final_segment->wstring());
+            }
+        }
+    }
+
+    // A clean MKV/WebM artifact is now published at its final name. On engine or
+    // publication failure the valuable partial and manifest entry stay available
+    // for recovery.
     const QString mkv_manifest_id = TakeCurrentManifestId();
     if (recovery_manifest_store_ != nullptr && !mkv_manifest_id.isEmpty()) {
-        // On failure the entry stays — recovery UI will surface it.
-        if (result.succeeded && !recovery_manifest_store_->Remove(mkv_manifest_id)) {
+        if (ui_result.succeeded && !recovery_manifest_store_->Remove(mkv_manifest_id)) {
             diagnostics::AppLog::warning(
                 QStringLiteral("recovery.manifest"),
                 QStringLiteral("could not remove the manifest entry for a completed MKV recording; it will be "
@@ -2133,11 +2159,12 @@ void RecordingCoordinator::RecordingThreadProc(const exosnap::engine::RecorderCo
     }
 
     // 0.9.0 S1: for MKV recordings the output file IS the edit master.
-    if (result.succeeded)
+    if (ui_result.succeeded)
         ui_result.mkv_master_path = output_path.wstring();
 
+    const bool published = ui_result.succeeded;
     PostResult(std::move(ui_result));
-    PostStateChange(result.succeeded ? UiRecordingState::Completed : UiRecordingState::Failed);
+    PostStateChange(published ? UiRecordingState::Completed : UiRecordingState::Failed);
     // is_recording_ is already false here; restore the idle preview capture if the
     // Record page still wants a live PiP, otherwise release the device.
     SyncWebcamService(false);
@@ -2166,7 +2193,7 @@ void RecordingCoordinator::RunRemuxJob(const std::filesystem::path& transient_mk
             return true;
         };
 
-        // Remux to a sibling ".part" temp on the target's own volume, then atomically
+        // Remux to a sibling ".tmp" staging file on the target's own volume, then atomically
         // rename it onto the final path. A kill/powerloss mid-remux leaves only the
         // temp — the user-visible output path never holds a half-written MP4 (ADR-0014).
         const std::filesystem::path remux_temp = MakeSiblingTempPath(final_mp4);
@@ -2184,7 +2211,7 @@ void RecordingCoordinator::RunRemuxJob(const std::filesystem::path& transient_mk
             }
         } else {
             // Failed or cancelled: the target path was never written. Drop the temp so
-            // no half-written ".part" lingers. (Cancellation already removes it inside
+            // no half-written ".tmp" lingers. (Cancellation already removes it inside
             // RemuxToProgressiveMp4 — this is a harmless no-op there.)
             std::error_code cleanup_ec;
             std::filesystem::remove(remux_temp, cleanup_ec);
@@ -2319,7 +2346,7 @@ bool RecordingCoordinator::RunSegmentRemuxWork(const std::filesystem::path& tran
 
     auto progress_cb = [this](float /*fraction*/) -> bool { return !remux_cancel_requested_.load(); };
 
-    // Remux to a sibling ".part" temp on the segment output's own volume, then
+    // Remux to a sibling ".tmp" staging file on the segment output's own volume, then
     // atomically rename it onto the segment path. A kill mid-remux leaves only the
     // temp — the segment output path never holds a half-written MP4 (ADR-0014).
     const std::filesystem::path segment_temp = MakeSiblingTempPath(output_mp4);
@@ -2382,7 +2409,7 @@ bool RecordingCoordinator::RunSegmentRemuxWork(const std::filesystem::path& tran
         }
         // The segment's transient MKV is retained above (it is never deleted on
         // this path) — it is the only trustworthy artefact for this segment. The
-        // failed/cancelled remux only ever wrote to the ".part" temp (already
+        // failed/cancelled remux only ever wrote to the ".tmp" staging file (already
         // removed above), so the segment output path was never touched: any file
         // sitting there is left exactly as it was.
         // Manifest entry stays; recovery UI will offer re-export.

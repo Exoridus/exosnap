@@ -4,6 +4,7 @@
 
 #include "brickwall_limiter.h"
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -57,6 +58,12 @@ class MixedAudioSrc final : public IAudioCaptureSource {
                            std::vector<float> source_gain_multipliers, bool limiter_enabled = false,
                            float limiter_ceiling_linear = 1.0f);
 
+    // Live mute of one inner source. A muted inner contributes silence exactly
+    // as a silent packet does, so the mix keeps its cadence and the surviving
+    // sources are untouched. Safe to call from another thread while the mixer
+    // runs; out-of-range indexes are ignored.
+    void SetSourceMuted(std::size_t index, bool muted) noexcept;
+
     bool Init(std::string& out_error) override;
     // Reactivate every currently-degraded inner source (ADR 0046). Each inner is
     // reacquired with its own identity rules (a PID-keyed loopback may refuse and
@@ -77,6 +84,7 @@ class MixedAudioSrc final : public IAudioCaptureSource {
     // audio thread surface a partly-degraded merged track without ending it.
     uint32_t CaptureSourceCount() const override;
     uint32_t DegradedSourceCount() const override;
+    uint32_t DegradedSourceIndexMask() const override;
 
     // Single-source pass-through of the inner device timing (H-3). A one-source
     // mixer is the gain-wrapped single track (a MIC row with gain != 1); it has
@@ -98,6 +106,8 @@ class MixedAudioSrc final : public IAudioCaptureSource {
 
     std::vector<std::unique_ptr<IAudioCaptureSource>> sources_;
     std::vector<float> source_gain_multipliers_;
+    // One bit per inner source; see SetSourceMuted.
+    std::atomic<uint32_t> source_mute_mask_{0};
 
     // Per-source FIFO of gain-applied interleaved Float32 stereo samples. Holds
     // the surplus a source delivered beyond what has been mixed so far.

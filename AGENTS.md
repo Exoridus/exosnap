@@ -28,6 +28,30 @@ Agents may consult it when relevant, but it is never a source of truth and must
 never be referenced from committed source or public documentation. If a decision
 becomes a durable contract, promote the conclusion into `docs/` instead.
 
+## Command environment
+
+The primary development environment is Windows 11 x64 with PowerShell 7. Run
+repository commands through `pwsh` and use Windows paths and PowerShell quoting.
+Use `rg` and `rg --files` for repository search, then native PowerShell cmdlets
+such as `Get-ChildItem`, `Select-String`, and `Get-Content` when needed.
+Do not pass shell wildcard expressions as path arguments to native `rg`; PowerShell
+does not reliably expand them. Use an explicit search root with `--glob`, or pass
+explicit file paths instead.
+
+A native Windows Coreutils package may put individual commands such as `grep`,
+`head`, or `tail` on `PATH`. Their presence does not imply a GNU/Linux shell or
+a complete GNU toolset: do not assume `sh`, `sed`, or `awk` exists, and do not
+invoke the Windows `bash.exe` WSL launcher for repository work. Keep filesystem
+operations in PowerShell rather than passing discovered paths between shells.
+
+Media validation tools are installed: MPV Player (`mpv`, not `mvp`), VLC, and
+the FFmpeg tools `ffprobe`, `ffmpeg`, and `ffplay`. The FFmpeg tools resolve on
+`PATH`; a long-lived agent process may predate the MPV/VLC PATH update, so use
+`Get-Command` first and resolve the installed executable when necessary rather
+than declaring the tool unavailable. Prefer `ffprobe` for non-interactive media
+inspection. Do not launch a GUI player or let it take focus without the same-turn
+coordination required for driving any running application.
+
 ## Architecture
 
 - Keep the recording engine independent from UI concerns, and capture, encode,

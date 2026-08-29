@@ -23,17 +23,16 @@ exosnap::engine::RemuxProgressCallback WrapProgress(std::function<bool(float)> c
 
 // Derive a stem name for the output file from the manifest entry.
 // Prefer the final_output_path stem (the recording's intended filename without extension);
-// fall back to the artefact stem with ".tmp" stripped.
+// fall back to the artefact stem with the live-artifact suffix stripped.
 std::wstring DeriveStemFromEntry(const RecoveryManifestEntry& entry) {
     if (!entry.final_output_path.isEmpty()) {
         std::filesystem::path p(entry.final_output_path.toStdWString());
-        // Strip double-extension for .mkv.tmp artefacts used as final_output_path proxy.
-        if (p.extension() == L".tmp")
+        if (p.extension() == L".tmp" || p.extension() == L".partial")
             p.replace_extension(L"");
         return p.stem().wstring();
     }
     std::filesystem::path artefact(entry.artefact_path.toStdWString());
-    if (artefact.extension() == L".tmp")
+    if (artefact.extension() == L".tmp" || artefact.extension() == L".partial")
         artefact.replace_extension(L"");
     return artefact.stem().wstring();
 }
@@ -203,7 +202,7 @@ RecoveryActionResult RecoveryService::Finish(const RecoveryManifestEntry& entry,
     // MP4-intended path (finalized or not — we always remux MKV → MP4).
     //
     // Remux to a sibling temp on the target's own volume, then atomically rename it
-    // onto the target. A kill/powerloss mid-remux leaves only the ".part" temp — the
+    // onto the target. A kill/powerloss mid-remux leaves only the ".tmp" staging file - the
     // user-visible target path never holds a half-written MP4. When a corrupt partial
     // from an earlier interrupted remux already sits at the target, the atomic replace
     // overwrites it in place instead of side-stepping to a fresh name and stranding it.

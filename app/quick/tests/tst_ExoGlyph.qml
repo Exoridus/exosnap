@@ -47,7 +47,12 @@ Item {
         "Dot": ExoGlyph.Dot,
         "Warning": ExoGlyph.Warning,
         "Info": ExoGlyph.Info,
-        "ExternalLink": ExoGlyph.ExternalLink
+        "ExternalLink": ExoGlyph.ExternalLink,
+        "Back": ExoGlyph.Back,
+        "Folder": ExoGlyph.Folder,
+        "SplitTrack": ExoGlyph.SplitTrack,
+        "Clock": ExoGlyph.Clock,
+        "PreviewBroken": ExoGlyph.PreviewBroken
     })
 
     Component {

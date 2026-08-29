@@ -156,14 +156,16 @@ Item {
     function navigateTo(page: int): void {
         if (!root.navigationAllowed)
             return;
+        if (root.editOverlayVisible && page !== ShellAdapter.RecordPage)
+            root.editSession.close();
         root.currentPage = page;
     }
 
     // The whole policy, in one expression.
     //
-    // An open edit session is deliberately NOT in it (QCR-001): navigating away
-    // from Record does not close it, does not ask about unsaved trim points and
-    // does not end the clip — it only stops showing it. Three of the four
+    // An open edit session is not a navigation guard. Leaving Record closes its
+    // ephemeral workspace without a prompt; an export already running owns a
+    // snapshot and continues independently. Three of the four
     // surfaces that ARE in it are modal about a question the user has not
     // answered yet, and a page swapped behind one of them is a page the user
     // never asked for.
@@ -281,6 +283,16 @@ Item {
 
             Layout.fillWidth: true
             Layout.preferredHeight: root.titleBarHeight
+
+            // The band is a TOOLBAR, so it takes the surface rung rather than the
+            // page ground. In Light that is the whole point of a grey ground: the
+            // chrome and the cards are the near-white things, the page is what
+            // they sit on. Left at the page colour the band ran straight into the
+            // content with only its hairline between them.
+            Rectangle {
+                anchors.fill: parent
+                color: ExoTheme.surface
+            }
 
             // The band's own rects, in shell coordinates. Recomputed whenever
             // anything that can move them changes — the width (every resize),

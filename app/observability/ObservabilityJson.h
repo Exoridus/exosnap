@@ -43,11 +43,21 @@ inline constexpr const char* kUnsupported = "unsupported";
 inline constexpr const char* kRequiresElevation = "requiresElevation";
 // The measurement exists but the user has not opted in to it.
 inline constexpr const char* kRequiresOptIn = "requiresOptIn";
+// Sampled, and known to be wrong: the measurement's own preconditions were
+// violated. A reader must discard the number rather than wait for a better one.
+inline constexpr const char* kFaulted = "faulted";
 } // namespace availability
 
 [[nodiscard]] inline QString AvailabilityKey(exosnap::engine::MetricAvailability value) {
-    return QString::fromLatin1(value == exosnap::engine::MetricAvailability::Available ? availability::kAvailable
-                                                                                       : availability::kUnavailable);
+    switch (value) {
+    case exosnap::engine::MetricAvailability::Available:
+        return QString::fromLatin1(availability::kAvailable);
+    case exosnap::engine::MetricAvailability::Faulted:
+        return QString::fromLatin1(availability::kFaulted);
+    case exosnap::engine::MetricAvailability::Unavailable:
+        break;
+    }
+    return QString::fromLatin1(availability::kUnavailable);
 }
 
 [[nodiscard]] inline bool IsAvailable(exosnap::engine::MetricAvailability value) noexcept {

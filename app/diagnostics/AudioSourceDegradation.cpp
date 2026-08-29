@@ -34,13 +34,15 @@ AudioDegradationSignal AudioSourceDegradationMonitor::Observe(const AudioDegrada
     // count) reads the same way rather than raising a notice about no sources.
     const bool observable = sample.valid && AudioDegradationObservable(sample.lifecycle);
     const uint32_t count = (observable && sample.source_degraded) ? sample.degraded_sources : 0;
+    const uint32_t kinds = count > 0 ? sample.degraded_source_kinds : 0;
 
-    if (count == degraded_sources_) {
+    if (count == degraded_sources_ && kinds == degraded_source_kinds_) {
         return AudioDegradationSignal::None; // unchanged — never re-announce
     }
 
     if (count == 0) {
         degraded_sources_ = 0;
+        degraded_source_kinds_ = 0;
         return AudioDegradationSignal::Clear;
     }
 
@@ -50,6 +52,7 @@ AudioDegradationSignal AudioSourceDegradationMonitor::Observe(const AudioDegrada
         ++reported_episodes_;
     }
     degraded_sources_ = count;
+    degraded_source_kinds_ = kinds;
     return AudioDegradationSignal::Raise;
 }
 
@@ -59,6 +62,7 @@ void AudioSourceDegradationMonitor::Reset() noexcept {
     // are already over, and dropping it would let a late snapshot from the
     // previous session re-arm the latch it was just reset for.
     degraded_sources_ = 0;
+    degraded_source_kinds_ = 0;
     reported_episodes_ = 0;
 }
 

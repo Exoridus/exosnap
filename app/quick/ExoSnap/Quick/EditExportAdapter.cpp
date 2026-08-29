@@ -105,6 +105,10 @@ const QString& EditExportAdapter::errorText() const noexcept {
     return error_text_;
 }
 
+bool EditExportAdapter::destinationFailure() const noexcept {
+    return destination_failure_;
+}
+
 const QString& EditExportAdapter::containerKey() const noexcept {
     return container_key_;
 }
@@ -163,7 +167,7 @@ QString EditExportAdapter::overwritePrompt() const {
 }
 
 bool EditExportAdapter::canExport() const noexcept {
-    return !running();
+    return !running() && state_ != State::Failed;
 }
 
 void EditExportAdapter::setState(State state) {
@@ -178,6 +182,7 @@ void EditExportAdapter::reset() {
         return;
     progress_percent_ = 0;
     error_text_.clear();
+    destination_failure_ = false;
     emit progressChanged();
     emit resultChanged();
     setState(State::Options);
@@ -191,6 +196,13 @@ void EditExportAdapter::publishProgress(int percent) {
 }
 
 void EditExportAdapter::retry() {
+    startExport();
+}
+
+void EditExportAdapter::retryInFolder(const QUrl& folder) {
+    if (state_ != State::Failed || !destination_failure_ || !folder.isLocalFile() || output_path_.empty())
+        return;
+    retry_output_path_ = std::filesystem::path(folder.toLocalFile().toStdWString()) / output_path_.filename();
     startExport();
 }
 
@@ -209,6 +221,7 @@ void EditExportAdapter::startExport() {
 
     const EditContext& context = session_->editContext();
     error_text_.clear();
+    destination_failure_ = false;
     progress_percent_ = 0;
     last_published_percent_ = -1;
     emit progressChanged();
@@ -223,8 +236,9 @@ void EditExportAdapter::startExport() {
 
     const bool to_mp4 = container_key_ == QStringLiteral("mp4");
     const std::filesystem::path master(context.mkv_master_path.toStdWString());
-    const std::filesystem::path output =
-        DeriveExportOutputPath(std::filesystem::path(context.output_path.toStdWString()), overwriteSelected(), to_mp4);
+    const std::filesystem::path output = retry_output_path_.value_or(
+        DeriveExportOutputPath(std::filesystem::path(context.output_path.toStdWString()), overwriteSelected(), to_mp4));
+    retry_output_path_.reset();
 
     exosnap::engine::TrimRange trim;
     trim.start_us = session_->trimStartUs();
@@ -332,14 +346,22 @@ void EditExportAdapter::finishRun(bool ok, const QString& error, const QString& 
     }
 
     error_text_ = error.isEmpty() ? QStringLiteral("Unknown error") : error;
+    const QString lower_error = error_text_.toLower();
+    destination_failure_ =
+        lower_error.contains(QStringLiteral("save output")) || lower_error.contains(QStringLiteral("permission")) ||
+        lower_error.contains(QStringLiteral("denied")) || lower_error.contains(QStringLiteral("disk")) ||
+        lower_error.contains(QStringLiteral("space")) || lower_error.contains(QStringLiteral("directory")) ||
+        lower_error.contains(QStringLiteral("path"));
     emit resultChanged();
     setState(State::Failed);
+    emit exportFailed(error_text_);
 }
 
 void EditExportAdapter::applyVisualState(State state, int percent, const QString& output_path, const QString& error) {
     progress_percent_ = std::clamp(percent, 0, 100);
     output_path_ = std::filesystem::path(output_path.toStdWString());
     error_text_ = error;
+    destination_failure_ = state == State::Failed;
     emit progressChanged();
     emit resultChanged();
     setState(state);

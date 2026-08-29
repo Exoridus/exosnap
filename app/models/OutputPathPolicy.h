@@ -17,7 +17,7 @@ enum class OutputFolderPolicyResult {
 struct NormalizedOutputFolder {
     OutputFolderPolicyResult result = OutputFolderPolicyResult::InvalidPath;
     std::filesystem::path resolved_path;
-    std::wstring normalized_input;
+    std::wstring entered_input;
 };
 
 enum class FilenamePatternPolicyResult {

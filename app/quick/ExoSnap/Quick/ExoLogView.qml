@@ -14,6 +14,9 @@ Rectangle {
 
     required property var model
     property bool autoScroll: true
+    readonly property int timeLaneWidth: 82
+    readonly property int levelLaneWidth: 62
+    readonly property int categoryLaneWidth: 140
 
     // Inclusive selection range over the entries' own SEQUENCE numbers, not
     // over row indices. A row index means nothing across a model change: the
@@ -94,6 +97,58 @@ Rectangle {
         }
     }
 
+    Rectangle {
+        id: header
+
+        anchors {
+            top: parent.top
+            left: parent.left
+            right: parent.right
+            margins: 1
+        }
+        height: 28
+        color: ExoTheme.surfaceRaised
+
+        Row {
+            spacing: ExoTheme.spacingSm
+            anchors {
+                fill: parent
+                leftMargin: ExoTheme.spacingSm
+                rightMargin: ExoTheme.spacingMd
+            }
+
+            Repeater {
+                model: [
+                    { label: qsTr("Time"), width: root.timeLaneWidth },
+                    { label: qsTr("Level"), width: root.levelLaneWidth },
+                    { label: qsTr("Category"), width: root.categoryLaneWidth },
+                    { label: qsTr("Message"), width: 0 }
+                ]
+
+                Label {
+                    required property var modelData
+                    width: modelData.width > 0 ? modelData.width : Math.max(0, header.width - x)
+                    height: header.height
+                    text: modelData.label
+                    color: ExoTheme.textMuted
+                    verticalAlignment: Text.AlignVCenter
+                    font {
+                        family: ExoTheme.sansFamily
+                        pixelSize: ExoTheme.fontCaption
+                        weight: Font.DemiBold
+                    }
+                }
+            }
+        }
+
+        Rectangle {
+            anchors.bottom: parent.bottom
+            width: parent.width
+            height: 1
+            color: ExoTheme.lineStrong
+        }
+    }
+
     ListView {
         id: list
 
@@ -103,8 +158,13 @@ Rectangle {
         objectName: "logList"
 
         anchors {
-            fill: parent
-            margins: 1
+            top: header.bottom
+            left: parent.left
+            right: parent.right
+            bottom: parent.bottom
+            leftMargin: 1
+            rightMargin: 1
+            bottomMargin: 1
         }
         clip: true
         model: root.model
@@ -210,6 +270,7 @@ Rectangle {
                     leftMargin: ExoTheme.spacingSm
                 }
                 text: row.timestampText
+                width: root.timeLaneWidth
                 textFormat: Text.PlainText
                 color: ExoTheme.textDim
                 font {
@@ -229,7 +290,7 @@ Rectangle {
                 }
                 // Fixed lane width so the category column always starts on the same
                 // character position, whatever the level label's own length.
-                width: 62
+                width: root.levelLaneWidth
                 text: "[" + row.severityLabel + "]"
                 textFormat: Text.PlainText
                 elide: Text.ElideRight
@@ -251,7 +312,7 @@ Rectangle {
                 }
                 // Fixed lane, like the level column: the message must always start on
                 // the same x, whatever the category's own length.
-                width: 140
+                width: root.categoryLaneWidth
                 text: row.category === "" ? "" : "[" + row.category + "]"
                 textFormat: Text.PlainText
                 elide: Text.ElideRight
@@ -286,7 +347,7 @@ Rectangle {
     }
 
     Label {
-        anchors.centerIn: parent
+        anchors.centerIn: list
         text: qsTr("No log entries match the current filter.")
         textFormat: Text.PlainText
         visible: list.count === 0

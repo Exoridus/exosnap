@@ -26,7 +26,7 @@ Rectangle {
                                      : root.tone === "error" ? root._error
                                      : root.tone === "warning" ? root._warning
                                      : root.tone === "success" ? root._success
-                                     : root.tone === "paused" ? root._accent
+                                     : root.tone === "paused" ? root._paused
                                      // The one tone that has to resolve per
                                      // ground. `busy` is deliberately a quiet
                                      // neutral, and Light has no LIGHT neutral —
@@ -44,6 +44,7 @@ Rectangle {
     // ground is an appearance surface and the appearance tones are right.
     readonly property color _error: root.onSurface ? ExoTheme.overlayError : ExoTheme.error
     readonly property color _warning: root.onSurface ? ExoTheme.overlayWarning : ExoTheme.warning
+    readonly property color _paused: root.onSurface ? ExoTheme.overlayPaused : ExoTheme.paused
     readonly property color _success: root.onSurface ? ExoTheme.overlaySuccess : ExoTheme.success
     readonly property color _accent: root.onSurface ? ExoTheme.overlayAccent : ExoTheme.accent
 

@@ -12,7 +12,7 @@ namespace exosnap {
 // sessions whose artefacts may need repair or export.
 struct RecoveryManifestEntry {
     QString id;                 // UUID (random, stable for entry lifetime)
-    QString artefact_path;      // actual file on disk (.mkv or .mkv.tmp)
+    QString artefact_path;      // actual live artifact on disk; legacy .mkv.tmp remains readable
     QString intended_container; // "mkv" or "mp4"
     QString final_output_path;  // desired output path (may differ from artefact)
     QString started_at;         // ISO-8601 timestamp

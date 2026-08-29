@@ -23,12 +23,6 @@ Item {
     // One rung down at the 860 px minimum window, in step with the rest of the
     // transport — see RecordActionButton.
     property bool compact: false
-    // Gives up the accent while another control on the bar is the state's one
-    // recommended action (Completed hands it to Edit). Nothing about the
-    // behaviour changes — the split, the chevron and the countdown menu are
-    // untouched; only the pill stops claiming to be the thing to press.
-    property bool subdued: false
-
     readonly property bool counting: root.recordViewModel.countdownActive
     readonly property bool busy: root.recordViewModel.preparing || root.recordViewModel.finalizing
     readonly property bool mainEnabled: root.counting || root.recordViewModel.canStart
@@ -36,9 +30,8 @@ Item {
     // "start in 5 seconds" beside it would be two answers to one question.
     readonly property bool chevronEnabled: !root.counting && !root.busy && root.recordViewModel.canStart
 
-    // A countdown outranks `subdued`: cancelling it is unambiguously the action
-    // in flight, whatever else is on the bar — so it keeps the accent fill
-    // rather than giving it up.
+    // The countdown is the one state that keeps the accent FILL: cancelling it is
+    // unambiguously the action in flight, whatever else is on the bar.
     //
     // It used to take the ERROR fill, which said "destructive" about a button
     // that stops something from starting. Nothing has been recorded yet, no file
@@ -46,9 +39,21 @@ Item {
     // its primary action, and it is drawn like one. The face's own glyph carries
     // the difference — a cross rather than the record dot — so Cancel and Record
     // are never confused at a glance despite sharing a colour.
-    readonly property color fill: root.subdued && !root.counting ? ExoTheme.surfaceRaised : ExoTheme.accent
-    readonly property color ink: root.subdued && !root.counting ? ExoTheme.text : ExoTheme.accentInk
-    readonly property bool outlined: root.subdued && !root.counting
+    // Outlined, not filled -- the same treatment Stop wears while paused, which
+    // is the loudest the bar ever needs a resting action to be. A solid accent
+    // slab is the transport's way of saying "this is happening now": it belongs
+    // to Stop and to Resume, and Record borrowing it made the idle bar shout
+    // about a recording that has not started.
+    //
+    // A countdown is the exception and keeps the fill, because then something IS
+    // happening and cancelling it is the one available action.
+    readonly property bool outlined: !root.counting
+    readonly property color fill: root.outlined ? ExoTheme.surfaceRaised : ExoTheme.accent
+    readonly property color ink: root.outlined ? ExoTheme.accent : ExoTheme.accentInk
+    // The accent hairline is what carries "primary" once the fill is gone. An
+    // unavailable Record keeps the ordinary line instead: a control that cannot
+    // start must not be the most emphasised thing on the bar.
+    readonly property color frameColor: root.mainEnabled || root.busy ? ExoTheme.accent : ExoTheme.line
 
     // -1 is "no fraction measured yet", which covers all of Stopping and the
     // first instant of Saving. The bare "Finalizing…" is what that must read as;
@@ -63,10 +68,21 @@ Item {
 
     objectName: "quickRecordSplitButton"
     implicitHeight: root.compact ? ExoTheme.controlHeight : ExoTheme.controlHeightLarge
+
+    // The MAIN FACE is what the label is centred in, so the face is what the
+    // width is built from: the label plus equal air either side of it, and the
+    // chevron's own lane added on top. The floor is the width every other
+    // recommended action reserves, so the round cluster beside the pill does not
+    // move when the state label changes length.
+    readonly property int minimumWidth: root.compact ? 112 : 132
+
     // The divider is a child of the Row below, and a positioner skips invisible
     // children — so counting it unconditionally declared the pill 1 px wider
     // than it composes in exactly the states where the divider is hidden.
-    implicitWidth: mainFace.implicitWidth + (divider.visible ? divider.width : 0) + chevronFace.width
+    readonly property int trailingWidth: (divider.visible ? divider.width : 0) + chevronFace.width
+
+    implicitWidth: Math.max(root.minimumWidth,
+                            mainRow.implicitWidth + 2 * ExoTheme.spacingLg + root.trailingWidth)
 
     Rectangle {
         id: pill
@@ -77,11 +93,6 @@ Item {
         // round control sits on, so a Record button that cannot start would have
         // read as the most ordinary control on the bar.
         color: root.mainEnabled || root.busy ? root.fill : ExoTheme.surface
-        // A subdued pill sits on the dock's raised-control fill, which is the
-        // same step the round peers take — without a border it would dissolve
-        // into them instead of reading as a control of its own.
-        border.width: (root.mainEnabled || root.busy) && !root.outlined ? 0 : 1
-        border.color: ExoTheme.line
         radius: height / 2
     }
 
@@ -93,9 +104,10 @@ Item {
 
             // Room for the widest state label, so the pill does not resize under
             // the pointer when the recording moves from Record to Preparing….
-            implicitWidth: Math.max(root.compact ? 112 : 132,
-                                    mainRow.implicitWidth + 2 * (root.compact ? ExoTheme.spacingLg
-                                                                             : ExoTheme.spacingXl))
+            // Everything the chevron does not take. The label is not laid out in
+            // here any more, so this face has no width of its own to ask for: it
+            // is the pill's clickable area, and the pill is what was measured.
+            width: Math.max(0, root.width - root.trailingWidth)
             height: parent.height
             hoverEnabled: true
             enabled: root.mainEnabled
@@ -129,41 +141,19 @@ Item {
                 visible: mainFace.visualFocus
             }
 
-            Row {
-                id: mainRow
-
-                spacing: ExoTheme.spacingSm
-                anchors.centerIn: parent
-
-                ExoGlyph {
-                    kind: root.counting ? ExoGlyph.Close : ExoGlyph.Record
-                    color: root.mainEnabled || root.busy ? root.ink : ExoTheme.textDim
-                    width: 16
-                    height: 16
-                    anchors.verticalCenter: parent.verticalCenter
-                    visible: !root.busy
-                }
-
-                Label {
-                    text: root.mainText
-                    textFormat: Text.PlainText
-                    anchors.verticalCenter: parent.verticalCenter
-                    color: root.mainEnabled || root.busy ? root.ink : ExoTheme.textDim
-                    font {
-                        family: ExoTheme.sansFamily
-                        pixelSize: root.compact ? ExoTheme.fontBody : ExoTheme.fontSectionTitle
-                        weight: Font.DemiBold
-                    }
-                }
-            }
         }
 
         Rectangle {
             id: divider
 
             width: 1
-            height: parent.height - 2 * ExoTheme.spacingMd
-            color: Qt.alpha(root.ink, 0.35)
+            // Full height on an outlined pill, inset on a filled one. The inset
+            // rule belongs to a solid slab, where a short line reads as a seam in
+            // one surface; drawn the same way inside an outline it floats free of
+            // the frame it is supposed to divide, which is what made the split
+            // Record button look misdrawn.
+            height: root.outlined ? parent.height : parent.height - 2 * ExoTheme.spacingMd
+            color: root.outlined ? root.frameColor : Qt.alpha(root.ink, 0.35)
             anchors.verticalCenter: parent.verticalCenter
             visible: root.chevronEnabled || root.mainEnabled
         }
@@ -215,6 +205,62 @@ Item {
                 cursorShape: root.chevronEnabled ? Qt.PointingHandCursor : Qt.ArrowCursor
             }
         }
+    }
+
+    // The label is centred in the MAIN FACE -- the half that starts the
+    // recording -- not across the pill as a whole. The chevron is a second,
+    // separately hit-tested action with its own lane, so a word centred over
+    // both of them reads as pushed toward the chevron rather than as the label
+    // of the face it belongs to. It stays a sibling of the faces rather than a
+    // child of one, so the faces keep their own hit areas and hover fills
+    // underneath it; its horizontal position is therefore computed rather than
+    // anchored.
+    Row {
+        id: mainRow
+
+        spacing: ExoTheme.spacingSm
+        x: Math.round((root.width - root.trailingWidth - mainRow.width) / 2)
+        anchors.verticalCenter: parent.verticalCenter
+
+        // Only Cancel draws a glyph. The record dot beside the word "Record"
+        // restated the label and read as a stray bullet at the pill's size; the
+        // cross is what keeps Cancel from being read as Record at a glance, which
+        // is the job the glyph was there for.
+        ExoGlyph {
+            kind: ExoGlyph.Close
+            color: root.mainEnabled || root.busy ? root.ink : ExoTheme.textDim
+            width: 16
+            height: 16
+            anchors.verticalCenter: parent.verticalCenter
+            visible: root.counting && !root.busy
+        }
+
+        Label {
+            text: root.mainText
+            textFormat: Text.PlainText
+            anchors.verticalCenter: parent.verticalCenter
+            color: root.mainEnabled || root.busy ? root.ink : ExoTheme.textDim
+            font {
+                family: ExoTheme.sansFamily
+                pixelSize: root.compact ? ExoTheme.fontBody : ExoTheme.fontSectionTitle
+                weight: Font.DemiBold
+            }
+        }
+    }
+
+    // The frame, drawn LAST and over everything.
+    //
+    // Each face paints its own hover and press fill across its whole rectangle,
+    // border included, so an outline declared on the fill underneath is erased
+    // the moment the pointer arrives -- on one half of the pill only, which is
+    // what read as a broken border. A separate transparent frame on top cannot be
+    // covered by either face.
+    Rectangle {
+        anchors.fill: parent
+        color: "transparent"
+        border.width: root.outlined ? 1 : 0
+        border.color: root.frameColor
+        radius: height / 2
     }
 
     // Hover opens it, as in the Widgets shell. It deliberately does NOT close on

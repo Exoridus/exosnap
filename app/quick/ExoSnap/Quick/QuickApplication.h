@@ -173,6 +173,9 @@ class QuickApplication {
     // launch should reopen at, so nothing is written back.
     void applyHarnessWindowSize(const QSize& size);
     [[nodiscard]] bool applyRecordVisualScenario(const QString& scenario);
+    // Harness-only: the Expert/Simple arrangement, through the same path the
+    // Appearance card's own toggle uses.
+    void applyHarnessExpertMode(bool expert);
     // Harness-only (--overlay-visual-state). Seeds one of the runtime overlay
     // surfaces with deterministic content so a --visual-test capture can
     // photograph it without a real crash, a real failed recording, or a real
@@ -340,6 +343,7 @@ class QuickApplication {
     // content so a --visual-test capture never photographs whatever this
     // machine happened to be doing. Never creates or drives a window.
     void applyDiagnosticsVisualScenarios();
+    void applyShellVisualScenarios();
     void initializeEditArea();
     // Close guards: samples what is in flight and applies the effects the user
     // confirmed. The ordering and wording live in models/CloseGuardPolicy.
@@ -489,6 +493,10 @@ class QuickApplication {
     // live_config_ itself keeps the unpinned value.
     [[nodiscard]] WebcamSettings webcamSettingsForCapture() const;
     void applyThemeFromSettings();
+    // The appearance the WINDOWS SHELL is drawing, for the two marks that are
+    // composited onto it rather than onto an ExoSnap surface.
+    [[nodiscard]] QString shellAppearanceId() const;
+    void refreshShellChromeAppearance();
     void initializeHotkeys();
     void refreshHotkeyRows();
     void triggerHotkeyAction(HotkeyAction action);
@@ -710,6 +718,7 @@ class QuickApplication {
     float preflight_system_rms_ = 0.0f;
     float preflight_app_rms_ = 0.0f;
     float preflight_microphone_rms_ = 0.0f;
+    QStringList live_toggleable_sources_;
     bool microphone_available_ = true;
     bool webcam_available_ = true;
     QString webcam_error_;
@@ -737,6 +746,8 @@ class QuickApplication {
     // Sequence of the standing audio-degradation toast while it is up, 0 when
     // none is. The hub keeps its own permanent record either way.
     uint64_t audio_degraded_toast_sequence_ = 0;
+    QString audio_degraded_page_notice_;
+    QString blocked_page_notice_;
     StartAdmission last_start_admission_ = StartAdmission::RefusedByState;
     // The selection Diagnostics currently holds. Same reason as the two below:
     // pushing it re-runs the recommendation checklist, so only a real change may.
@@ -759,7 +770,6 @@ class QuickApplication {
     std::optional<models::RecordingFailureReport> pending_recording_failure_;
     bool pending_recording_failure_can_send_ = false;
     // Harness-only Expert override; suppresses the persist of expert_mode_enabled.
-    bool visual_expert_override_ = false;
     // Set when the preset store had to repair fields while loading. Raised as a
     // notification once the manager exists, never swallowed.
     bool preset_store_repaired_ = false;

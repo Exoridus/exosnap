@@ -14,6 +14,13 @@ enum class AudioSourceKind {
     SystemOutput, // Full system output via WasapiLoopbackSrc; no PID required.
 };
 
+// Bit for a kind in a live mute mask. A mask rather than a per-row flag because
+// the transport addresses sources by kind, and one kind can appear on more than
+// one track -- muting it has to reach all of them.
+[[nodiscard]] inline constexpr uint32_t AudioSourceKindBit(AudioSourceKind kind) noexcept {
+    return 1u << static_cast<uint32_t>(kind);
+}
+
 // ---------------------------------------------------------------------------
 // Per-row gain + mute (Audio v2 — 0.6.0)
 // ---------------------------------------------------------------------------

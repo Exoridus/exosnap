@@ -43,6 +43,7 @@ struct AudioDegradationSample {
     // AudioDiagnostics::source_degraded / degraded_sources.
     bool source_degraded = false;
     uint32_t degraded_sources = 0;
+    uint32_t degraded_source_kinds = 0;
 };
 
 // What the monitor asks the caller to do after one sample.
@@ -86,6 +87,9 @@ class AudioSourceDegradationMonitor {
     [[nodiscard]] uint32_t degraded_sources() const noexcept {
         return degraded_sources_;
     }
+    [[nodiscard]] uint32_t degraded_source_kinds() const noexcept {
+        return degraded_source_kinds_;
+    }
 
     // How many independent outages were reported this session (a count change
     // within one outage is the same episode). Exposed for logging and tests.
@@ -97,6 +101,7 @@ class AudioSourceDegradationMonitor {
     bool have_generation_ = false;
     uint64_t generation_ = 0;
     uint32_t degraded_sources_ = 0;
+    uint32_t degraded_source_kinds_ = 0;
     uint32_t reported_episodes_ = 0;
 };
 

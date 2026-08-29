@@ -167,6 +167,19 @@ ApplicationWindow {
         windowChrome.minimizeWindow();
     }
 
+    // Harness-only: raises a modal surface a --visual-test capture cannot reach,
+    // because nothing but an interaction raises it. The close guard is asked for
+    // through the real request, not by opening the dialog directly: its text
+    // comes from whichever guard actually applies, and a capture of an empty
+    // prompt would be evidence of nothing.
+    function openHarnessDialog(name: string): bool {
+        if (name === "close-guard") {
+            root.shell.requestClose();
+            return root.shell.closeGuardActive;
+        }
+        return false;
+    }
+
     ExoConfirmDialog {
         id: closeGuardDialog
 

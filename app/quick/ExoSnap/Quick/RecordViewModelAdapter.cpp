@@ -1,7 +1,9 @@
 #include "RecordViewModelAdapter.h"
 
+#include "models/CaptureTargetPresentation.h"
 #include "viewmodels/RecordViewModel.h"
 
+#include <QFileInfo>
 #include <QMetaObject>
 #include <QMetaProperty>
 #include <QStringList>
@@ -37,10 +39,47 @@ bool hasRow(const capability::AudioUiState& state, exosnap::engine::AudioSourceK
     });
 }
 
+QString targetIdentity(const exosnap::engine::CaptureTarget& target) {
+    const QString kind = target.kind == exosnap::engine::CaptureTarget::Kind::Window ? QStringLiteral("window")
+                                                                                     : QStringLiteral("display");
+    return kind + QLatin1Char(':') + QString::number(static_cast<qulonglong>(target.native_id));
+}
+
 } // namespace
 
 RecordViewModelAdapter::RecordViewModelAdapter(const RecordViewModel* source, QObject* parent)
-    : QObject(parent), source_(source) {
+    : QObject(parent), source_(source), region_preset_options_(QVariantList{
+                                            QVariantMap{
+                                                {QStringLiteral("key"), QStringLiteral("custom")},
+                                                {QStringLiteral("label"), tr("Draw custom")},
+                                                {QStringLiteral("aspect"), 0.0},
+                                                {QStringLiteral("draw"), true},
+                                            },
+                                            QVariantMap{
+                                                {QStringLiteral("key"), QStringLiteral("16:9")},
+                                                {QStringLiteral("label"), QStringLiteral("16:9")},
+                                                {QStringLiteral("aspect"), 16.0 / 9.0},
+                                                {QStringLiteral("draw"), false},
+                                            },
+                                            QVariantMap{
+                                                {QStringLiteral("key"), QStringLiteral("9:16")},
+                                                {QStringLiteral("label"), QStringLiteral("9:16")},
+                                                {QStringLiteral("aspect"), 9.0 / 16.0},
+                                                {QStringLiteral("draw"), false},
+                                            },
+                                            QVariantMap{
+                                                {QStringLiteral("key"), QStringLiteral("1:1")},
+                                                {QStringLiteral("label"), QStringLiteral("1:1")},
+                                                {QStringLiteral("aspect"), 1.0},
+                                                {QStringLiteral("draw"), false},
+                                            },
+                                            QVariantMap{
+                                                {QStringLiteral("key"), QStringLiteral("4:5")},
+                                                {QStringLiteral("label"), QStringLiteral("4:5")},
+                                                {QStringLiteral("aspect"), 4.0 / 5.0},
+                                                {QStringLiteral("draw"), false},
+                                            },
+                                        }) {
     // Which properties `changed()` speaks for, asked of moc rather than written
     // down. There are 49 of them today and the list is exactly the set a
     // Q_PROPERTY declaration puts in it, so a property added with
@@ -260,6 +299,11 @@ bool RecordViewModelAdapter::failed() const noexcept {
     return source_ != nullptr && source_->state == UiRecordingState::Failed;
 }
 
+bool RecordViewModelAdapter::resultPending() const noexcept {
+    return source_ != nullptr &&
+           (source_->state == UiRecordingState::Completed || source_->state == UiRecordingState::Failed);
+}
+
 const QVariantList& RecordViewModelAdapter::targetOptions() const noexcept {
     return target_options_;
 }
@@ -270,6 +314,35 @@ const QVariantList& RecordViewModelAdapter::displayTargetOptions() const noexcep
 
 const QVariantList& RecordViewModelAdapter::windowTargetOptions() const noexcept {
     return window_target_options_;
+}
+
+int RecordViewModelAdapter::targetCount() const noexcept {
+    return target_options_.size();
+}
+
+const QString& RecordViewModelAdapter::selectedTargetIdentity() const noexcept {
+    return selected_target_identity_;
+}
+
+bool RecordViewModelAdapter::selectedTargetAvailable() const noexcept {
+    return selected_target_available_;
+}
+
+QVariantList RecordViewModelAdapter::filteredTargetOptions(const QString& kind, const QString& query) const {
+    QVariantList result;
+    const QString normalized_kind = kind.trimmed().toLower();
+    const QString normalized_query = query.trimmed();
+    for (const QVariant& value : target_options_) {
+        const QVariantMap row = value.toMap();
+        if (!normalized_kind.isEmpty() && row.value(QStringLiteral("kind")).toString() != normalized_kind)
+            continue;
+        if (!normalized_query.isEmpty() &&
+            !row.value(QStringLiteral("label")).toString().contains(normalized_query, Qt::CaseInsensitive)) {
+            continue;
+        }
+        result.push_back(row);
+    }
+    return result;
 }
 
 int RecordViewModelAdapter::selectedTargetIndex() const noexcept {
@@ -304,6 +377,41 @@ bool RecordViewModelAdapter::regionSelectionNeeded() const noexcept {
     return region_selection_needed_;
 }
 
+const QVariantList& RecordViewModelAdapter::regionPresetOptions() const noexcept {
+    return region_preset_options_;
+}
+
+const QVariantList& RecordViewModelAdapter::recentRecordingOptions() const noexcept {
+    return recent_recording_options_;
+}
+
+// Exhaustive with no `default:`: a state added later must answer here on
+// purpose, and /W4 /WX turns an unhandled enumerator into a build failure. The
+// permissive answer is the one that lets the region be edited while a capture
+// owns it, so the lock must fail CLOSED.
+bool RecordViewModelAdapter::regionEditingLocked() const noexcept {
+    if (source_ == nullptr)
+        return false;
+    switch (source_->state) {
+    case UiRecordingState::Countdown:
+    case UiRecordingState::Recording:
+    case UiRecordingState::Paused:
+    case UiRecordingState::ArmedFromRecovery:
+    case UiRecordingState::Stopping:
+    case UiRecordingState::Saving:
+        return true;
+    case UiRecordingState::LoadingCapabilities:
+    case UiRecordingState::Ready:
+    case UiRecordingState::Preparing:
+    case UiRecordingState::RegionSelecting:
+    case UiRecordingState::Blocked:
+    case UiRecordingState::Completed:
+    case UiRecordingState::Failed:
+        return false;
+    }
+    return false;
+}
+
 bool RecordViewModelAdapter::systemAudioEnabled() const noexcept {
     return source_ != nullptr && source_->audio_ui_state.IsSysEnabled();
 }
@@ -323,6 +431,18 @@ bool RecordViewModelAdapter::webcamEnabled() const noexcept {
 bool RecordViewModelAdapter::appAudioVisible() const noexcept {
     return source_ != nullptr && source_->audio_ui_state.target_kind == capability::CaptureTargetKind::Window &&
            hasRow(source_->audio_ui_state, exosnap::engine::AudioSourceKind::App);
+}
+
+const QStringList& RecordViewModelAdapter::liveToggleableSources() const noexcept {
+    return live_toggleable_sources_;
+}
+
+void RecordViewModelAdapter::setLiveToggleableSources(QStringList keys) {
+    if (live_toggleable_sources_ == keys) {
+        return;
+    }
+    live_toggleable_sources_ = std::move(keys);
+    emit changed();
 }
 
 bool RecordViewModelAdapter::microphoneAvailable() const noexcept {
@@ -528,11 +648,11 @@ void RecordViewModelAdapter::setNoticeText(QString text, QString tone) {
 }
 
 void RecordViewModelAdapter::synchronize() {
+    const QString previous_state_text = state_text_;
     const QString state_text = source_ != nullptr ? wide(source_->state_text) : QString{};
     const QString elapsed_text = source_ != nullptr ? wide(source_->elapsed_text) : QString{};
     const QString output_size_text = source_ != nullptr ? wide(source_->output_size_text) : QString{};
     const bool live_stats_available = source_ != nullptr && source_->live_stats_available;
-    const bool state_changed = state_text_ != state_text;
     const bool elapsed_changed = elapsed_text_ != elapsed_text;
     const bool output_changed = output_size_text_ != output_size_text;
     const bool stats_changed = live_stats_available_ != live_stats_available;
@@ -543,8 +663,12 @@ void RecordViewModelAdapter::synchronize() {
     live_stats_available_ = live_stats_available;
     updateCapturedFps();
     rebuildPresentation();
+    rebuildRecentRecordings();
 
-    if (state_changed)
+    if (!selected_target_available_ && state_text_ == QStringLiteral("Ready"))
+        state_text_ = QStringLiteral("No source");
+
+    if (previous_state_text != state_text_)
         emit stateTextChanged();
     if (elapsed_changed)
         emit elapsedTextChanged();
@@ -609,6 +733,9 @@ void RecordViewModelAdapter::rebuildPresentation() {
     source_detail_text_ = QStringLiteral("Choose a screen, window, or region.");
     if (source_ == nullptr) {
         target_options_revision_.reset();
+        target_options_selected_index_.reset();
+        selected_target_identity_.clear();
+        selected_target_available_ = false;
         if (!target_options_.isEmpty()) {
             target_options_.clear();
             display_target_options_.clear();
@@ -618,27 +745,47 @@ void RecordViewModelAdapter::rebuildPresentation() {
         return;
     }
 
-    // The three option lists are rebuilt only when the capture-target vector was
-    // actually replaced. Building them means a QVariantMap of three QStrings per
-    // monitor AND per eligible top-level window, with each label produced by
-    // TargetLabelFromCaptureTarget's string parsing — and it used to run on every
-    // synchronize(), i.e. 8-10 times a second, only for the deep compare below to
-    // throw the result away. The stamp is bumped by whoever assigns
-    // RecordViewModel::targets; `nullopt` means "no list has been built for this
-    // source yet", which is what makes a setSource() rebuild.
-    if (!target_options_revision_.has_value() || *target_options_revision_ != source_->targets_revision) {
+    // Building the structured rows allocates several strings per target, so it
+    // follows the target revision and selection rather than the 8-10 Hz general
+    // synchronization cadence.
+    const int selected_index = source_->selected_target_index;
+    if (selected_index >= 0 && selected_index < static_cast<int>(source_->targets.size()))
+        selected_target_identity_ = targetIdentity(source_->targets[static_cast<std::size_t>(selected_index)]);
+    selected_target_available_ =
+        !selected_target_identity_.isEmpty() && selected_index >= 0 &&
+        selected_index < static_cast<int>(source_->targets.size()) &&
+        targetIdentity(source_->targets[static_cast<std::size_t>(selected_index)]) == selected_target_identity_;
+
+    if (!target_options_revision_.has_value() || *target_options_revision_ != source_->targets_revision ||
+        !target_options_selected_index_.has_value() || *target_options_selected_index_ != selected_index) {
         target_options_revision_ = source_->targets_revision;
+        target_options_selected_index_ = selected_index;
         QVariantList target_options;
         QVariantList display_target_options;
         QVariantList window_target_options;
         for (qsizetype index = 0; index < static_cast<qsizetype>(source_->targets.size()); ++index) {
             const auto& target = source_->targets[static_cast<std::size_t>(index)];
             const bool window = target.kind == exosnap::engine::CaptureTarget::Kind::Window;
+            const QString identity = targetIdentity(target);
+            const CaptureTargetPresentation presentation = ResolveCaptureTargetPresentation(
+                target, window ? CaptureTargetPresentationKind::Window : CaptureTargetPresentationKind::Display);
+            // The distinguishing display suffix survives elision because the
+            // shared resolver, not the QML document, owns this label too.
+            const QString region_label =
+                window ? QString{}
+                       : QString::fromStdString(
+                             ResolveCaptureTargetPresentation(target, CaptureTargetPresentationKind::Region).label);
+            const QString thumbnail_source = target_stills_.value(identity);
             const QVariantMap option{
                 {QStringLiteral("targetIndex"), index},
-                {QStringLiteral("label"),
-                 QString::fromStdString(RecordViewModel::TargetLabelFromCaptureTarget(target))},
+                {QStringLiteral("identity"), identity},
+                {QStringLiteral("label"), QString::fromStdString(presentation.label)},
                 {QStringLiteral("kind"), window ? QStringLiteral("window") : QStringLiteral("display")},
+                {QStringLiteral("regionLabel"), region_label},
+                {QStringLiteral("thumbnailState"),
+                 thumbnail_source.isEmpty() ? QStringLiteral("placeholder") : QStringLiteral("ready")},
+                {QStringLiteral("thumbnailSource"), thumbnail_source},
+                {QStringLiteral("selected"), index == selected_index},
             };
             target_options.push_back(option);
             (window ? window_target_options : display_target_options).push_back(option);
@@ -679,6 +826,52 @@ void RecordViewModelAdapter::rebuildPresentation() {
     source_detail_text_ = QString::fromUtf8(target.description);
 }
 
+// Cheap enough to run on the general synchronization cadence only because it
+// leaves early on the unchanged case: the deep compare below is over a handful
+// of rows, and the list changes once per finished recording.
+void RecordViewModelAdapter::rebuildRecentRecordings() {
+    QVariantList rows;
+    if (source_ != nullptr) {
+        for (const CompletedRecording& recording : source_->recent_recordings) {
+            if (recording.file_path.isEmpty())
+                continue;
+            rows.push_back(QVariantMap{
+                {QStringLiteral("path"), recording.file_path},
+                {QStringLiteral("label"), recording.fileName()},
+                {QStringLiteral("available"), recording.fileExists()},
+                {QStringLiteral("completedAt"), recording.completed_at.isValid()
+                                                    ? recording.completed_at.toString(QStringLiteral("HH:mm"))
+                                                    : QString{}},
+            });
+        }
+    }
+    if (recent_recording_options_ == rows)
+        return;
+    recent_recording_options_ = std::move(rows);
+    emit recentRecordingsChanged();
+}
+
+void RecordViewModelAdapter::setTargetStill(QString identity, QString source) {
+    if (identity.isEmpty() || source.isEmpty())
+        return;
+    if (target_stills_.value(identity) == source)
+        return;
+    target_stills_.insert(std::move(identity), std::move(source));
+    target_options_revision_.reset();
+    rebuildPresentation();
+}
+
+void RecordViewModelAdapter::requestTargetStillRefresh() {
+    for (const QVariant& value : target_options_) {
+        const QVariantMap row = value.toMap();
+        if (row.value(QStringLiteral("selected")).toBool())
+            continue;
+        emit targetStillRefreshRequested(row.value(QStringLiteral("identity")).toString(),
+                                         row.value(QStringLiteral("targetIndex")).toInt(),
+                                         row.value(QStringLiteral("kind")).toString());
+    }
+}
+
 void RecordViewModelAdapter::requestStart() {
     emit startRequested();
 }
@@ -706,6 +899,9 @@ void RecordViewModelAdapter::requestSelectTarget(int target_index, int capture_m
 void RecordViewModelAdapter::requestSelectRegion(QRectF normalized_rect) {
     emit selectRegionRequested(normalized_rect);
 }
+void RecordViewModelAdapter::requestRegionPreset(const QString& key) {
+    emit regionPresetRequested(key);
+}
 void RecordViewModelAdapter::requestToggleSource(const QString& key) {
     emit toggleSourceRequested(key);
 }
@@ -717,6 +913,22 @@ void RecordViewModelAdapter::requestCountdownSeconds(int seconds) {
 }
 void RecordViewModelAdapter::requestOpenEditor() {
     emit openEditorRequested();
+}
+void RecordViewModelAdapter::requestDismissResult() {
+    emit dismissResultRequested();
+}
+void RecordViewModelAdapter::requestRevealRecording() {
+    emit revealRecordingRequested();
+}
+void RecordViewModelAdapter::requestOpenRecent(const QString& file_path) {
+    if (file_path.isEmpty())
+        return;
+    emit openRecentRequested(file_path);
+}
+void RecordViewModelAdapter::requestRevealRecent(const QString& file_path) {
+    if (file_path.isEmpty())
+        return;
+    emit revealRecentRequested(file_path);
 }
 void RecordViewModelAdapter::clearNotice() {
     setNoticeText({});

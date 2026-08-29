@@ -1022,19 +1022,23 @@ function Get-ReleaseScenarioCatalog {
             $probe = $probeRaw | ConvertFrom-Json
             $duration = [double]$probe.format.duration
             $expected = $minutes * 60.0
-            # No new threshold is invented here: the engine already owns the drift policy
-            # and reports its own verdict. What is asserted is container-level -- that the
-            # file is as long as the recording was, so a drain that quietly dropped the
-            # tail cannot pass.
-            $skew = [Math]::Abs($duration - $expected)
-            if ($skew -gt ($expected * 0.02)) {
-                return @{ Result = 'FAIL'
-                    Message      = "container duration ${duration}s vs ${expected}s recorded (skew ${skew}s)"
-                    Evidence     = $evidence
+            # No new threshold is invented here: the checklist's own soak post-checks
+            # are applied to the report this scenario already fetches. A container
+            # duration alone cannot see a drain that dropped an audio tail, a muxer
+            # that failed, or a segment that was never finalized.
+            $audioIndexes = @($probe.streams | Where-Object { $_.codec_type -eq 'audio' } |
+                    ForEach-Object { [int]$_.index })
+            if ($audioIndexes.Count -eq 0) {
+                return @{ Result = 'FAIL'; Message = 'the soak recording carries no audio track'
+                    Evidence = $evidence
                 }
             }
-            return @{ Result = 'PASS'
-                Message      = "$minutes min recorded, container ${duration}s, $($samples.Count) drift samples captured"
+            $spans = @(Get-ReleaseAudioPacketSpan -FfprobePath $ffprobe -Path $result.outputPath `
+                    -StreamIndexes $audioIndexes)
+            $verdict = Get-ReleaseSoakVerdict -Report $report -ContainerSeconds $duration `
+                -ExpectedSeconds $expected -AudioSpanSeconds $spans
+            return @{ Result = $verdict.Result
+                Message      = "$minutes min recorded, $($samples.Count) drift samples; $($verdict.Message)"
                 Evidence     = $evidence
             }
         }
@@ -1169,6 +1173,16 @@ function Get-ReleaseScenarioCatalog {
             # topology change, which is the one thing a mixed-monitor gate must not do.
             $target = @($displays | Where-Object { -not $_.primary }) | Select-Object -First 1
             if ($null -eq $target) { $target = $displays[1] }
+            # The gate is about what the crossing does to a LIVE preview. Judging one
+            # that never delivered a frame would pass on the strength of nothing
+            # having been published, so the precondition is established first and
+            # reported as its own outcome when it cannot be.
+            $before = Get-ReleasePreviewProgress -Connection $conn -TimeoutMs 10000
+            if (-not $before.Live) {
+                return @{ Result = 'UNVERIFIED'
+                    Message      = "the preview never consumed a frame before the crossing ($($before.Message))"
+                }
+            }
             $moved = Invoke-LiveVerifyCommand -Connection $conn -Command 'window.moveToScreen' `
                 -Parameters @{ screen = "$($target.name)" }
             if (-not $moved.ok) {
@@ -1176,27 +1190,22 @@ function Get-ReleaseScenarioCatalog {
             }
             [void](Wait-LiveVerifyEvent -Connection $conn -EventName 'window.screenChanged' -TimeoutMs 15000)
             $windows = (Invoke-LiveVerifyCommand -Connection $conn -Command 'windows.snapshot').result
-            $preview = (Invoke-LiveVerifyCommand -Connection $conn -Command 'preview.snapshot').result
+            # The defect this catches is the preview freezing after a monitor crossing:
+            # a frame published that no render pass ever presents. That condition is
+            # structured state under `updateGate`, but it is a debt a healthy preview
+            # takes on and settles once per frame, so it is sampled over a window and
+            # judged on progress -- see Get-PreviewFreezeVerdict.
+            $samples = @(for ($i = 0; $i -lt 6; $i++) {
+                    if ($i -gt 0) { Start-Sleep -Milliseconds 250 }
+                    (Invoke-LiveVerifyCommand -Connection $conn -Command 'preview.snapshot').result
+                })
             $evidence = @(
                 Save-LiveVerifyEvidence -Context $ctx -CheckId 'REL-DISP-MIXED-001' -Name 'windows.json' -Value $windows
-                Save-LiveVerifyEvidence -Context $ctx -CheckId 'REL-DISP-MIXED-001' -Name 'preview.json' -Value $preview
+                Save-LiveVerifyEvidence -Context $ctx -CheckId 'REL-DISP-MIXED-001' -Name 'preview.json' -Value $samples
             )
-            # The defect this catches is the preview freezing after a monitor crossing:
-            # a frame published with no render pass following it. `owed` is that
-            # condition as structured state, so it is asserted rather than eyeballed.
-            # It lives under `updateGate`, which is the bookkeeping that decides whether
-            # a published frame still owes a render pass -- not a top-level property of
-            # the preview.
-            $owed = Get-ReleaseSnapshotValue -Object $preview -Path 'updateGate.owed'
-            $renderPasses = Get-ReleaseSnapshotValue -Object $preview -Path 'updateGate.renderPasses'
-            if ($owed) {
-                return @{ Result = 'FAIL'
-                    Message      = 'after the screen change a published preview frame is still owed a render pass (frozen preview)'
-                    Evidence     = $evidence
-                }
-            }
-            return @{ Result = 'PASS'
-                Message      = "moved to '$($target.name)' of $($displays.Count) displays; preview renders=$renderPasses owed=$owed"
+            $verdict = Get-PreviewFreezeVerdict -Samples $samples
+            return @{ Result = $verdict.Result
+                Message      = "moved to '$($target.name)' of $($displays.Count) displays; $($verdict.Message)"
                 Evidence     = $evidence
             }
         }
@@ -1926,4 +1935,194 @@ function Wait-ReleaseRecordingState {
         $state = Get-LiveVerifyState -Connection $Connection
     }
     return $state
+}
+
+function Get-PreviewFreezeVerdict {
+    <#
+    .SYNOPSIS
+        Decides from a series of preview snapshots whether the preview is frozen.
+    .DESCRIPTION
+        `updateGate.owed` is `published_generation > presented_generation`, which a
+        healthy preview crosses between every publish and the render pass that
+        follows it. It is therefore not a verdict on its own: one sample fails a
+        live preview at whatever share of the frame period that window occupies,
+        and passes a preview that has published nothing at all.
+
+        Progress is what separates the two. A preview that keeps consuming frames
+        is presenting them, whatever a single instant of the debt flag says; a
+        standing debt with no consumed frame is the stall this gate exists for;
+        and a preview that never published anything proves nothing either way.
+
+        Returns @{ Result; Message } with Result PASS, FAIL or UNVERIFIED.
+    #>
+    param([Parameter(Mandatory)] [object[]] $Samples)
+
+    if ($Samples.Count -lt 2) {
+        return @{ Result = 'UNVERIFIED'; Message = 'a transient publish debt needs at least two observations' }
+    }
+    $first = $Samples[0]
+    $last = $Samples[-1]
+    $consumedFrom = Get-ReleaseSnapshotValue -Object $first -Path 'consumedFrames'
+    $consumedTo = Get-ReleaseSnapshotValue -Object $last -Path 'consumedFrames'
+    $rendersFrom = Get-ReleaseSnapshotValue -Object $first -Path 'updateGate.renderPasses'
+    $rendersTo = Get-ReleaseSnapshotValue -Object $last -Path 'updateGate.renderPasses'
+    if ($null -eq $consumedFrom -or $null -eq $consumedTo -or $null -eq $rendersTo) {
+        return @{ Result = 'UNVERIFIED'; Message = 'the preview snapshots carry no consumedFrames/updateGate counters' }
+    }
+    $owedThroughout = @($Samples | Where-Object {
+            (Get-ReleaseSnapshotValue -Object $_ -Path 'updateGate.owed') -ne $true }).Count -eq 0
+
+    if ([double]$consumedTo -gt [double]$consumedFrom) {
+        return @{ Result  = 'PASS'
+            Message = "preview kept presenting: consumed $consumedFrom -> $consumedTo, renders $rendersFrom -> $rendersTo"
+        }
+    }
+    if ($owedThroughout) {
+        return @{ Result  = 'FAIL'
+            Message = "a published preview frame stayed unrendered across $($Samples.Count) samples (frozen preview); consumed stuck at $consumedTo, renders $rendersFrom -> $rendersTo"
+        }
+    }
+    return @{ Result  = 'UNVERIFIED'
+        Message = "the preview consumed no frame during the window (consumed $consumedTo), so presenting one was never exercised"
+    }
+}
+
+function Get-ReleasePreviewProgress {
+    <#
+    .SYNOPSIS
+        Waits until the preview has consumed a new frame, or the timeout expires.
+    .DESCRIPTION
+        Returns @{ Live; Message; Snapshot } where Live means a frame was consumed
+        while watching -- the only evidence that the preview is presenting rather
+        than merely reporting itself active.
+    #>
+    param([Parameter(Mandatory)] $Connection, [int] $TimeoutMs = 10000)
+
+    $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMs)
+    $snapshot = (Invoke-LiveVerifyCommand -Connection $Connection -Command 'preview.snapshot').result
+    $baseline = Get-ReleaseSnapshotValue -Object $snapshot -Path 'consumedFrames'
+    if ($null -eq $baseline) {
+        return @{ Live = $false; Message = 'the preview snapshot carries no consumedFrames'; Snapshot = $snapshot }
+    }
+    while ([DateTime]::UtcNow -lt $deadline) {
+        Start-Sleep -Milliseconds 200
+        $snapshot = (Invoke-LiveVerifyCommand -Connection $Connection -Command 'preview.snapshot').result
+        $current = Get-ReleaseSnapshotValue -Object $snapshot -Path 'consumedFrames'
+        if ($null -ne $current -and [double]$current -gt [double]$baseline) {
+            return @{ Live = $true; Message = "consumed $baseline -> $current"; Snapshot = $snapshot }
+        }
+    }
+    $status = Get-ReleaseSnapshotValue -Object $snapshot -Path 'statusText'
+    return @{ Live = $false; Message = "consumedFrames stayed at $baseline; status '$status'"; Snapshot = $snapshot }
+}
+
+function Get-ReleaseSoakVerdict {
+    <#
+    .SYNOPSIS
+        Applies the soak post-checks of docs/release-checklist.md section 7 to one
+        session report.
+    .DESCRIPTION
+        The container being as long as the recording is the weakest of the checks
+        the checklist lists, and on its own it passes a run whose audio drain
+        dropped its tail, whose muxer failed, or whose segments were never
+        finalized. Every counter below is already in the report the scenario
+        fetches, so reading them invents no threshold -- it stops discarding the
+        evidence.
+
+        `AudioSpanSeconds` is the first-to-last packet span of each audio stream,
+        measured independently of the report, because "the track exists" and "the
+        track covers the recording" are different statements.
+
+        The A/V drift counters are reported, never asserted: they carry the audio
+        device's own clock residual, which the engine already judges and logs
+        (`audio.clock_slaving` saturation). A device whose clock leaves the
+        correction envelope is a statement about that device, and the file it
+        produced can still be correct.
+
+        Returns @{ Result; Message } with Result PASS, FAIL or UNVERIFIED.
+    #>
+    param(
+        $Report,
+        [Parameter(Mandatory)] [double] $ContainerSeconds,
+        [Parameter(Mandatory)] [double] $ExpectedSeconds,
+        [Parameter(Mandatory)] [double[]] $AudioSpanSeconds
+    )
+
+    # session.latest answers an envelope, { available, report }; a caller holding
+    # the report itself is equally valid. Both are accepted so the gate cannot be
+    # wired to the wrong one and report UNVERIFIED after a 30-minute recording.
+    if ($null -ne $Report -and $null -ne (Get-ReleaseSnapshotValue -Object $Report -Path 'report')) {
+        $Report = Get-ReleaseSnapshotValue -Object $Report -Path 'report'
+    }
+    if ($null -eq $Report -or $null -eq (Get-ReleaseSnapshotValue -Object $Report -Path 'counters')) {
+        return @{ Result = 'UNVERIFIED'; Message = 'no session report, so the soak post-checks were not performed' }
+    }
+
+    $problems = @()
+    $skew = [Math]::Abs($ContainerSeconds - $ExpectedSeconds)
+    if ($skew -gt ($ExpectedSeconds * 0.02)) {
+        $problems += "container ${ContainerSeconds}s vs ${ExpectedSeconds}s recorded (skew ${skew}s)"
+    }
+    foreach ($span in $AudioSpanSeconds) {
+        if ($span -lt ($ContainerSeconds * 0.99)) {
+            $problems += "an audio track spans ${span}s of a ${ContainerSeconds}s container"
+        }
+    }
+
+    $counters = Get-ReleaseSnapshotValue -Object $Report -Path 'counters'
+    foreach ($path in @('audio_discontinuities', 'mux_failures', 'encoder_keyframe_prediction_mismatches',
+            'frames_dropped.processing_failure', 'frames_dropped.backpressure')) {
+        $value = Get-ReleaseSnapshotValue -Object $counters -Path $path
+        if ($null -eq $value) { $problems += "counters.$path is absent from the report"; continue }
+        if ([double]$value -ne 0) { $problems += "counters.$path = $value" }
+    }
+
+    if ((Get-ReleaseSnapshotValue -Object $Report -Path 'audio.degraded_occurred') -eq $true) {
+        $problems += 'audio.degraded_occurred is true'
+    }
+    foreach ($drain in @(Get-ReleaseSnapshotValue -Object $Report -Path 'audio.resampler_drain')) {
+        $undrained = Get-ReleaseSnapshotValue -Object $drain -Path 'undrained_frames'
+        if ($null -ne $undrained -and [double]$undrained -ne 0) {
+            $problems += "track $($drain.track) left $undrained undrained frame(s)"
+        }
+    }
+    foreach ($segment in @(Get-ReleaseSnapshotValue -Object $Report -Path 'segments')) {
+        if ((Get-ReleaseSnapshotValue -Object $segment -Path 'finalized') -ne $true) {
+            $problems += "segment $($segment.index) is not finalized"
+        }
+    }
+
+    $drift = Get-ReleaseSnapshotValue -Object $counters -Path 'av_drift_ms'
+    $peak = Get-ReleaseSnapshotValue -Object $counters -Path 'peak_av_drift_ms'
+    $reported = "av_drift_ms $drift, peak $peak (device clock residual, reported not asserted)"
+
+    if ($problems.Count -gt 0) {
+        return @{ Result = 'FAIL'; Message = ($problems -join '; ') + "; $reported" }
+    }
+    return @{ Result  = 'PASS'
+        Message = "container ${ContainerSeconds}s, audio spans $($AudioSpanSeconds -join 's, ')s, " +
+        "post-checks clean; $reported"
+    }
+}
+
+function Get-ReleaseAudioPacketSpan {
+    <#
+    .SYNOPSIS
+        First-to-last packet span, in seconds, of every audio stream in a file.
+    .DESCRIPTION
+        Measured from the packets rather than from a container duration tag: a
+        live-muxed MKV carries no per-stream DURATION, so the tag a caller would
+        otherwise read is simply absent and every stream would look full length.
+    #>
+    param([Parameter(Mandatory)] [string] $FfprobePath, [Parameter(Mandatory)] [string] $Path,
+        [Parameter(Mandatory)] [int[]] $StreamIndexes)
+
+    $spans = @()
+    foreach ($index in $StreamIndexes) {
+        $times = @(& $FfprobePath -v error -select_streams $index -show_entries packet=pts_time `
+                -of csv=p=0 -- "$Path" 2>$null | Where-Object { $_ })
+        if ($times.Count -eq 0) { $spans += 0.0; continue }
+        $spans += ([double]$times[-1] - [double]$times[0])
+    }
+    return $spans
 }

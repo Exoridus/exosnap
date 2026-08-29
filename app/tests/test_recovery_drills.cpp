@@ -13,7 +13,7 @@
 // The Remux×Kill cell asserts the durability guarantee: after a kill that left a
 // corrupt half-MP4 at the user-visible final path, recovery must place a playable
 // MP4 there and leave no corrupt stub behind. RecoveryService::Finish now remuxes
-// to a sibling ".part" temp and atomically renames it onto the target (replacing
+// to a sibling ".tmp" staging file and atomically renames it onto the target (replacing
 // any stale partial in place), so this is a hard assertion rather than an xfail.
 
 #define WIN32_LEAN_AND_MEAN
@@ -210,8 +210,8 @@ TEST(RecoveryDrill, RemuxMp4ProcessKill_ReplacesStalePartialAtTargetPath) {
     EXPECT_FALSE(QFileInfo::exists(sidestepped)) << "recovery must not strand a duplicate at a fresh name";
 
     // No transient left behind.
-    const QString leftover_temp = QDir(tmp.path()).filePath(QStringLiteral("session.mp4.part"));
-    EXPECT_FALSE(QFileInfo::exists(leftover_temp)) << "the .part temp must be gone after the atomic rename";
+    const QString leftover_temp = QDir(tmp.path()).filePath(QStringLiteral("session.mp4.tmp"));
+    EXPECT_FALSE(QFileInfo::exists(leftover_temp)) << "the .tmp staging file must be gone after the atomic rename";
 
     // The manifest entry is cleared on success.
     EXPECT_TRUE(store.Entries().isEmpty());
@@ -219,7 +219,7 @@ TEST(RecoveryDrill, RemuxMp4ProcessKill_ReplacesStalePartialAtTargetPath) {
 
 // =============================================================================
 // LIVE remux (RecordingCoordinator) durability. The live remux-on-stop and the
-// per-segment background remux both write to a sibling ".part" temp on the
+// per-segment background remux both write to a sibling ".tmp" staging file on the
 // target's own volume and only atomically rename it onto the final path on
 // success — the same primitives (MakeSiblingTempPath / AtomicReplaceInPlace) the
 // crash-recovery path uses. These drills exercise that exact sequence so the
@@ -228,7 +228,7 @@ TEST(RecoveryDrill, RemuxMp4ProcessKill_ReplacesStalePartialAtTargetPath) {
 // =============================================================================
 
 // The final output path is never written mid-remux; the finished file appears
-// there only via the atomic rename. Before that, the bytes live in "<name>.part".
+// there only via the atomic rename. Before that, the bytes live in "<name>.tmp".
 TEST(RecoveryDrill, LiveRemuxMp4_NeverWritesTargetMidFlightThenPublishesAtomically) {
     QTemporaryDir tmp;
     ASSERT_TRUE(tmp.isValid());
@@ -242,7 +242,7 @@ TEST(RecoveryDrill, LiveRemuxMp4_NeverWritesTargetMidFlightThenPublishesAtomical
 
     // The temp is a sibling on the same directory (== same volume) as the target.
     const std::filesystem::path temp = MakeSiblingTempPath(final_mp4);
-    EXPECT_EQ(temp.filename().wstring(), L"live.mp4.part");
+    EXPECT_EQ(temp.filename().wstring(), L"live.mp4.tmp");
     EXPECT_EQ(temp.parent_path(), final_mp4.parent_path());
 
     bool progressed = false;
@@ -271,8 +271,22 @@ TEST(RecoveryDrill, LiveRemuxMp4_NeverWritesTargetMidFlightThenPublishesAtomical
     EXPECT_FALSE(std::filesystem::exists(temp, ec)) << "the temp was renamed away";
 }
 
+TEST(RecoveryDrill, DisposableSiblingStagingPath_CollisionRetainsTmpExtension) {
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    const std::filesystem::path target(QDir(tmp.path()).filePath(QStringLiteral("live.mp4")).toStdWString());
+    QFile first(QString::fromStdWString((target.parent_path() / L"live.mp4.tmp").wstring()));
+    ASSERT_TRUE(first.open(QIODevice::WriteOnly));
+    first.close();
+
+    const std::filesystem::path staging = MakeDisposableSiblingStagingPath(target);
+
+    EXPECT_EQ(staging.filename().wstring(), L"live.mp4.1.tmp");
+}
+
 // A kill/cancel mid-remux leaves the target untouched (a pre-existing good file
-// survives byte-for-byte) and removes the ".part" temp — no half-file anywhere.
+// survives byte-for-byte) and removes the ".tmp" staging file - no half-file anywhere.
 TEST(RecoveryDrill, LiveRemuxMp4_CancelLeavesTargetUntouchedAndRemovesTemp) {
     QTemporaryDir tmp;
     ASSERT_TRUE(tmp.isValid());
@@ -314,7 +328,7 @@ TEST(RecoveryDrill, LiveRemuxMp4_CancelLeavesTargetUntouchedAndRemovesTemp) {
     EXPECT_TRUE(fired);
 
     std::error_code ec;
-    EXPECT_FALSE(std::filesystem::exists(temp, ec)) << "the .part temp must be cleaned up on cancel";
+    EXPECT_FALSE(std::filesystem::exists(temp, ec)) << "the .tmp staging file must be cleaned up on cancel";
 
     // The target still holds the untouched sentinel — no half-written MP4.
     ASSERT_TRUE(std::filesystem::exists(final_mp4, ec));

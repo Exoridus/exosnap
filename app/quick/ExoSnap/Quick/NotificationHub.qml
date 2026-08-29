@@ -52,7 +52,7 @@ Popup {
     y: (root.parent ? root.parent.height : 0) + ExoTheme.spacingXs
     x: root.parent ? root.parent.width - root.width : 0
     width: 380
-    height: 460
+    height: root.notifications.hasEntries ? 460 : 190
     padding: 0
     modal: false
     focus: true
@@ -408,14 +408,44 @@ Popup {
                         Repeater {
                             model: entryDelegate.actions
 
-                            ExoButton {
+                            AbstractButton {
                                 id: actionButton
 
                                 required property var modelData
 
-                                text: actionButton.modelData.label
-                                quiet: true
+                                hoverEnabled: true
+                                focusPolicy: Qt.StrongFocus
+                                padding: ExoTheme.spacingXs
+                                Accessible.name: actionButton.modelData.label
                                 onClicked: root.notifications.triggerAction(entryDelegate.index, actionButton.modelData.action)
+
+                                background: Rectangle {
+                                    color: actionButton.hovered ? ExoTheme.surfaceRaised : "transparent"
+                                    border.width: actionButton.visualFocus ? ExoTheme.focusRingWidth : 0
+                                    border.color: ExoTheme.text
+                                    radius: ExoTheme.radiusXs
+                                }
+
+                                contentItem: RowLayout {
+                                    spacing: ExoTheme.spacingXs
+
+                                    Label {
+                                        text: actionButton.modelData.label
+                                        color: ExoTheme.accent
+                                        font {
+                                            family: ExoTheme.sansFamily
+                                            pixelSize: ExoTheme.fontSecondary
+                                            weight: Font.Medium
+                                        }
+                                    }
+
+                                    ExoChevron {
+                                        direction: 270
+                                        tone: ExoTheme.accent
+                                        Layout.preferredWidth: 12
+                                        Layout.preferredHeight: 12
+                                    }
+                                }
                             }
                         }
 

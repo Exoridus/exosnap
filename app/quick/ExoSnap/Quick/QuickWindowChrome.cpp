@@ -11,6 +11,7 @@
 #include <QWindow>
 
 #include <cmath>
+#include <cwchar>
 
 #if defined(Q_OS_WIN)
 #include <windows.h>
@@ -852,6 +853,19 @@ bool QuickWindowChrome::nativeEventFilter(const QByteArray& event_type, void* me
             return true;
         }
         return false;
+
+    case WM_SETTINGCHANGE: {
+        // Windows announces a theme switch by broadcasting this with the string
+        // "ImmersiveColorSet" in lParam. Every other WM_SETTINGCHANGE (a metric,
+        // a policy, a locale) arrives here too, so the string is the filter --
+        // reacting to all of them would re-render the shell marks on every
+        // unrelated system change.
+        const auto* area = reinterpret_cast<const wchar_t*>(msg->lParam);
+        if (area != nullptr && std::wcscmp(area, L"ImmersiveColorSet") == 0)
+            emit shellColorsChanged();
+        // Never consumed: it is a broadcast notification and Qt wants it too.
+        return false;
+    }
 
     case WM_ENTERSIZEMOVE:
         traceWindowState("enter-size-move", hwnd, target_.data());

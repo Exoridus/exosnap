@@ -400,9 +400,15 @@ LiveTile AudioSyncTile(const exosnap::engine::RecordingDiagnosticsSnapshot& s) {
         return tile;
     }
 
+    const bool drift_faulted = s.av_drift_availability == exosnap::engine::MetricAvailability::Faulted;
     if (s.av_drift_availability == exosnap::engine::MetricAvailability::Available) {
         const std::string sign = s.av_drift_ms >= 0.0 ? "+" : "";
         tile.value = sign + Number(s.av_drift_ms, 1) + " ms";
+    } else if (drift_faulted) {
+        // Sampled and known-wrong. "Unavailable" would send the reader off to
+        // wait for a value that already arrived, and a number would be a sync
+        // claim the measurement cannot carry.
+        tile.value = "Not measurable";
     } else {
         // A multi-source merge mixes several device clocks and does not report.
         // Zero here would claim perfect sync on a recording nobody measured.
@@ -419,6 +425,12 @@ LiveTile AudioSyncTile(const exosnap::engine::RecordingDiagnosticsSnapshot& s) {
         detail = Join(detail, "correcting " + Number(s.clock_slaving_ppm, 0) + " ppm");
     if (s.audio.source_degraded) {
         detail = Join(detail, Number(static_cast<uint64_t>(s.audio.degraded_sources)) + " source(s) silent");
+    }
+    if (drift_faulted) {
+        // States what happened to the measurement, not what it might mean for
+        // the file: the recorded timeline is held by the wall clock either way,
+        // and an alarm about an unmeasured defect would be an invention.
+        detail = Join(detail, "audio device stopped reporting its clock");
     }
     tile.detail = detail;
 

@@ -662,7 +662,8 @@ is verified automatically before and after your drag.
                     # default for screen capture, so it is what acceptance should
                     # be exercising anyway.
                     '--audio-rows', 'sys',
-                    '--auto-edit', '--export-container', 'mkv', '--auto-edit-report', $reportPath)
+                    '--container', 'mkv',
+                    '--auto-edit', '--auto-edit-report', $reportPath)
                 # Establish whether the artifact even HAS the harness, because a
                 # Release build without EXOSNAP_BUILD_BENCHMARK_HARNESS=ON does
                 # not know these options: it ignores them and opens a normal
@@ -1107,15 +1108,32 @@ judge what you see, not an older Light screenshot.
                 if ($response.result.page -ne $page) { $problems += "ui.navigate($page) landed on $($response.result.page)" }
 
                 # Idempotent: the same destination again is a successful no-op,
-                # settled, and leaves the revision where it was.
-                $revision = $response.stateRevision
+                # settled, and leaves the revision where it was. stateRevision
+                # counts every observable change in the application, not just
+                # this command's, so the comparison is only about navigation
+                # once the state has gone quiet -- otherwise a source still
+                # resolving after launch is read as a navigation side effect.
+                $settled = Wait-LiveVerifyStateQuiet -Connection $connection
+                $revision = $settled.Revision
+                $before = Get-LiveVerifyState -Connection $connection
                 $again = Invoke-LiveVerifyCommand -Connection $connection -Command 'ui.navigate' `
                     -Parameters @{ page = $page }
                 if (-not $again.ok) { $problems += "a repeated ui.navigate($page) was refused" }
-                elseif ($again.stateRevision -ne $revision) {
-                    $problems += "a repeated ui.navigate($page) moved the revision $revision -> $($again.stateRevision)"
+                elseif (-not $settled.Quiet) {
+                    $problems += ("the state never went quiet before the repeated ui.navigate($page), " +
+                        'so its idempotency was not measured')
                 }
-                $visited += @{ page = $page; settled = $response.settled; stateRevision = $revision }
+                elseif ($again.stateRevision -ne $revision) {
+                    # Name what moved. A bare revision number sends the next
+                    # reader looking for a navigation defect that may not be one.
+                    $after = Get-LiveVerifyState -Connection $connection
+                    $moved = @(Compare-LiveVerifyStateField -Before $before -After $after)
+                    $detail = if ($moved.Count -gt 0) { $moved -join ', ' } else { 'no observable field differs' }
+                    $problems += ("a repeated ui.navigate($page) moved the revision " +
+                        "$revision -> $($again.stateRevision) ($detail)")
+                }
+                $visited += @{ page = $page; settled = $response.settled; stateRevision = $revision
+                    quiet = $settled.Quiet }
             }
 
             $unknown = Invoke-LiveVerifyCommand -Connection $connection -Command 'ui.navigate' `

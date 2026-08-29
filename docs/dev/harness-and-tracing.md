@@ -92,6 +92,48 @@ its cause is gone.
 Combine with `--hwnd-audit` for a run that measures all of this and exits without
 ever activating the window.
 
+## Pointing hand — `--cursor-audit`
+
+`exosnap.exe --cursor-audit` visits every navigation destination, reports the
+pointer over the centre of each control that declares
+`HoverHandler { cursorShape: Qt.PointingHandCursor }`, and compares two answers:
+the shape Qt believes the window carries and the cursor `GetCursor()` says the OS
+is actually showing. Only disagreements are named; a clean page is one line.
+
+```
+cursor-audit: page=record probed=13 failed=0
+cursor-audit: page=settings probed=47 failed=0
+cursor-audit: page=diagnostics probed=9 failed=0
+cursor-audit: page=logs probed=13 failed=0
+cursor-audit: page=about probed=11 failed=0
+cursor-audit: probes=93 agreed=86 disabled=7 clipped=1 os_lost_it=0 never_fired=0
+```
+
+Two verdicts, and they point at different layers:
+
+- `never-fired` — Qt's own window cursor never became a pointing hand, so no
+  handler was reached at that point. The declaration exists and nothing delivers
+  hover to it.
+- `os-lost-it` — Qt set the cursor and the desktop shows something else. That is
+  a platform-layer problem, not a QML one.
+
+`disabled` and `clipped` are neither: Qt delivers no hover to a disabled item, and
+a row scrolled past the end of its view is not on screen at the position it
+reports. Both are counted so a page that went entirely disabled cannot pass as a
+page that was audited.
+
+The pointer is never moved. `WM_MOUSEMOVE` is sent to the application's own
+window, which takes no focus and synthesizes no input, and the desktop cursor is
+restored to whatever it was carrying before the run. `GetCursor()` does read
+state the machine's real pointer also writes, so a disagreement is re-probed once
+before it is reported.
+
+The lasting reason this mode exists: a QML test can only prove the declaration is
+there, and `QCoreApplication::sendEvent()` never teaches Qt's platform layer that
+the pointer is inside the window — so `SetCursor()` never runs and the assertion
+passes on a build where no user sees a cursor. `app/quick/tests/test_hover_cursor_native.cpp`
+covers the same question on synthetic windows; this mode covers the shipping one.
+
 ## Maximize and restore — `--window-maximize-cycle`
 
 `exosnap.exe --window-maximize-cycle` drives the shell's own `toggleMaximized()`
@@ -166,3 +208,42 @@ the transition that broke them.
 (`publishSignals`, `wakeups`, `renderPasses`, `owed`) as structured state; prefer
 it over parsing these lines, which stay useful as secondary evidence. See
 [live-verify.md](live-verify.md).
+
+## Deterministic captures — `--visual-test`
+
+`--visual-test <path>` renders one screenshot and exits. The process runs in its
+own scratch config directory, so a capture never reads or writes the developer's
+settings, and every capture-excluded overlay on screen is grabbed into its own
+`<path>.quickOverlay<Name>.png` beside it.
+
+A capture is only evidence if it is reproducible, which is what the rest of these
+options are for: without them the picture shows whatever this machine happened to
+be doing, and two captures a week apart are not comparable. Each one seeds a
+stated state instead. None of them synthesizes input.
+
+| Option | Selects |
+|---|---|
+| `--visual-test-size WxH` | Window size. The review baseline is `1440x1000` |
+| `--visual-delay-ms N` | Delay before the shutter. Raised automatically for the options that need a built page |
+| `--visual-appearance dark\|light`, `--visual-accent <id>` | Theme. Pinned in both directions — omitting them means the product default, never the previous run's |
+| `--visual-page N` | Nav destination, in product order: Record, Settings, Diagnostics, Logs, About |
+| `--visual-expert` | Expert mode, one switch for both surfaces that have two arrangements |
+| `--visual-scroll F` | Scroll position as a fraction of the page's own scrollable height |
+| `--visual-popup source-picker\|notification-hub` | A popup that is built on first use |
+| `--visual-dialog <name>` | A modal surface nothing but an interaction raises: `close-guard`, `preset-delete`, `preset-rename`, `preset-save-as` |
+| `--record-visual-state <name>` | A Record-page state. One name per product state, no aliases |
+| `--overlay-visual-state <name>` | A runtime overlay: recovery, recording error, crash report |
+| `--desktop-pattern` | A synthetic window behind the preview, so the preview frame's content is fixed too |
+
+Content is seeded through the environment, in the same spirit:
+
+| Variable | Seeds |
+|---|---|
+| `EXOSNAP_VISUAL_EDIT_SCENARIO` | The Edit surface: `edit-default`, `edit-trimmed`, `edit-timeline-multitrack`, `edit-timeline-loading`, `edit-timeline-unavailable`, `edit-export-running`, `edit-export-done`, `edit-export-failed`, `edit-report-warning`, `edit-long-filename` |
+| `EXOSNAP_VISUAL_LOG_SCENARIO`, `EXOSNAP_VISUAL_DIAG_SCENARIO`, `EXOSNAP_VISUAL_DIAG_LIVE` | Logs and Diagnostics content |
+| `EXOSNAP_VISUAL_NOTIFICATION_SCENARIO=many` | Six advisories in the notification hub, mixed severities. The empty state is the only one a healthy machine produces |
+| `EXOSNAP_VISUAL_SOURCE_SCENARIO=many-windows` | Two displays and fifteen windows in the source picker, in place of whatever is open |
+
+The Edit fixture deliberately opens nothing: it never starts a decode or an
+export, so the player area reads `Preview unavailable` and the timeline tiles are
+placeholders. Everything around them is the real surface.

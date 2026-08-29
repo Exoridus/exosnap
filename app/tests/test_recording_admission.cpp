@@ -502,6 +502,71 @@ TEST(RecordingAdmissionStartTest, UnwritableOutputFolderStillBlocksAndKeepsItsOw
     std::filesystem::remove_all(dir, ec);
 }
 
+TEST(RecordingAdmissionStartTest, LaterPreparationFailureRollsBackCreatedPartialArtifact) {
+    int argc = 0;
+    QCoreApplication app(argc, nullptr);
+
+    RecordingCoordinator coordinator;
+    const std::filesystem::path folder = UniqueTempDir(L"partial_rollback");
+    MakeReadyCoordinator(coordinator, folder, capability::Container::Matroska, capability::VideoCodec::Av1,
+                         capability::AudioCodec::Opus);
+
+    StubFreeSpace plenty(500ULL * 1024 * 1024 * 1024);
+    coordinator.SetDiskSpaceProvider(&plenty);
+    GatedDisplayFacts gate({});
+    coordinator.SetDisplayFactsProvider(gate.Provider());
+
+    capability::AudioUiState audio;
+    audio.target_kind = capability::CaptureTargetKind::Window;
+    audio.source_rows = {{exosnap::engine::AudioSourceKind::App, true, false}};
+
+    exosnap::engine::CaptureTarget window;
+    window.kind = exosnap::engine::CaptureTarget::Kind::Window;
+    window.native_id = 1;
+    window.description = "[window]";
+
+    std::optional<UiRecordingResult> failure;
+    coordinator.SetResultReadyCallback([&](const UiRecordingResult& result) { failure = result; });
+
+    EXPECT_TRUE(coordinator.StartRecording(window, audio, std::nullopt));
+    gate.WaitEntered();
+
+    const std::filesystem::path final_path = coordinator.CurrentOutputPath();
+    ASSERT_FALSE(final_path.empty());
+    const std::filesystem::path partial_path = exosnap::engine::DeriveValuablePartialPath(final_path);
+    EXPECT_TRUE(std::filesystem::exists(partial_path));
+
+    gate.Release();
+    ASSERT_TRUE(PumpUntil([&] { return failure.has_value(); }));
+    EXPECT_EQ(failure->error_detail, L"Window target PID unavailable; the selected window may have been closed.");
+    EXPECT_FALSE(std::filesystem::exists(partial_path));
+
+    std::error_code ec;
+    std::filesystem::remove_all(folder, ec);
+}
+
+TEST(RecordingAdmissionStartTest, PreIntentOutputValidationBlocksWithoutCreatingAFailedResult) {
+    RecordingCoordinator coordinator;
+    const std::filesystem::path folder = UniqueTempDir(L"preintent_validation");
+    MakeReadyCoordinator(coordinator, folder, capability::Container::Matroska, capability::VideoCodec::Av1,
+                         capability::AudioCodec::Opus);
+
+    std::optional<UiRecordingResult> failure;
+    coordinator.SetResultReadyCallback([&](const UiRecordingResult& result) { failure = result; });
+
+    coordinator.ApplyOutputFolderValidation(FolderValidationResult::NotWritable);
+
+    EXPECT_EQ(coordinator.State(), UiRecordingState::Blocked);
+    EXPECT_EQ(coordinator.CapabilityStatusText(), FolderValidationMessage(FolderValidationResult::NotWritable));
+    EXPECT_FALSE(failure.has_value());
+
+    coordinator.ApplyOutputFolderValidation(FolderValidationResult::Ok);
+    EXPECT_EQ(coordinator.State(), UiRecordingState::Ready);
+
+    std::error_code ec;
+    std::filesystem::remove_all(folder, ec);
+}
+
 // ─── 3. Recovery-manifest persistence honesty (QCR-103) ──────────────────────
 
 // A store whose file can never be written: its directory component is a regular
@@ -596,6 +661,83 @@ TEST(RecoveryProtectionTest, FailedManifestAddIsReportedAndDoesNotBlockTheStart)
     std::error_code ec;
     std::filesystem::remove_all(folder, ec);
     std::filesystem::remove_all(store_dir, ec);
+}
+
+TEST(RecoveryProtectionTest, NewMp4SessionManifestTracksTheValuablePartialArtifact) {
+    int argc = 0;
+    QCoreApplication app(argc, nullptr);
+
+    RecordingCoordinator coordinator;
+    const std::filesystem::path folder = UniqueTempDir(L"manifest_partial_path");
+    MakeReadyCoordinator(coordinator, folder, capability::Container::Mp4, capability::VideoCodec::H264,
+                         capability::AudioCodec::Aac);
+
+    const QString store_path = QString::fromStdWString((folder / L"recovery-manifest.json").wstring());
+    RecoveryManifestStore store(store_path);
+    coordinator.SetRecoveryManifestStore(&store);
+
+    StubFreeSpace plenty(500ULL * 1024 * 1024 * 1024);
+    coordinator.SetDiskSpaceProvider(&plenty);
+    coordinator.SetDisplayFactsProvider([] { return std::vector<capability::DisplayHdrFacts>{}; });
+
+    exosnap::engine::CaptureTarget bogus;
+    bogus.kind = exosnap::engine::CaptureTarget::Kind::Monitor;
+    bogus.native_id = 1;
+    bogus.description = "\\\\.\\DISPLAY_NONE";
+
+    EXPECT_TRUE(coordinator.StartRecording(bogus, capability::AudioUiState{}, std::nullopt));
+    ASSERT_TRUE(PumpUntil([&] { return !store.Entries().isEmpty(); }));
+
+    const auto entries = store.Entries();
+    ASSERT_EQ(entries.size(), 1);
+    const std::filesystem::path final_path(entries.front().final_output_path.toStdWString());
+    EXPECT_EQ(std::filesystem::path(entries.front().artefact_path.toStdWString()),
+              exosnap::engine::DeriveValuablePartialPath(final_path));
+
+    coordinator.StopRecording();
+    PumpUntil([&] {
+        const UiRecordingState state = coordinator.State();
+        return state != UiRecordingState::Preparing && state != UiRecordingState::Recording &&
+               state != UiRecordingState::Stopping && state != UiRecordingState::Saving;
+    });
+
+    std::error_code ec;
+    std::filesystem::remove_all(folder, ec);
+}
+
+TEST(RecoveryProtectionTest, NewMkvSessionCommitsTheValuablePartialAsEngineOutput) {
+    int argc = 0;
+    QCoreApplication app(argc, nullptr);
+
+    RecordingCoordinator coordinator;
+    const std::filesystem::path folder = UniqueTempDir(L"mkv_partial_output");
+    MakeReadyCoordinator(coordinator, folder, capability::Container::Matroska, capability::VideoCodec::Av1,
+                         capability::AudioCodec::Opus);
+
+    StubFreeSpace plenty(500ULL * 1024 * 1024 * 1024);
+    coordinator.SetDiskSpaceProvider(&plenty);
+    coordinator.SetDisplayFactsProvider([] { return std::vector<capability::DisplayHdrFacts>{}; });
+
+    exosnap::engine::CaptureTarget bogus;
+    bogus.kind = exosnap::engine::CaptureTarget::Kind::Monitor;
+    bogus.native_id = 1;
+    bogus.description = "\\\\.\\DISPLAY_NONE";
+
+    EXPECT_TRUE(coordinator.StartRecording(bogus, capability::AudioUiState{}, std::nullopt));
+
+    exosnap::engine::RecorderConfig committed;
+    ASSERT_TRUE(PumpUntil([&] { return coordinator.LastCommittedRecorderConfig(&committed); }));
+    EXPECT_EQ(committed.output_path, exosnap::engine::DeriveValuablePartialPath(coordinator.CurrentOutputPath()));
+
+    coordinator.StopRecording();
+    PumpUntil([&] {
+        const UiRecordingState state = coordinator.State();
+        return state != UiRecordingState::Preparing && state != UiRecordingState::Recording &&
+               state != UiRecordingState::Stopping && state != UiRecordingState::Saving;
+    });
+
+    std::error_code ec;
+    std::filesystem::remove_all(folder, ec);
 }
 
 } // namespace

@@ -139,6 +139,27 @@ struct SessionState {
     // Cooperative stop token set by Stop() or any fatal worker failure
     std::atomic<bool> stop_requested{false};
 
+    // When the CAPTURE ended, as a steady_clock count in nanoseconds. 0 until a
+    // stop is requested; the first request wins, so a failure that arrives while
+    // a user stop is already draining cannot move it.
+    //
+    // The reported duration is measured to this instant and not to the moment
+    // Record() returns. Everything between them -- the producer drain and the
+    // container finalize -- is work done AFTER the last captured frame, and it is
+    // O(duration) and disk-bound: on a long recording finalising to a slow disk
+    // it is seconds. Measured to the return, the elapsed time jumped forward at
+    // Stop by exactly that much, and the file was reported longer than it is.
+    std::atomic<int64_t> capture_end_ns{0};
+
+    // Idempotent: only the first caller records the instant.
+    void NoteCaptureEnded() noexcept {
+        int64_t expected = 0;
+        const auto now =
+            std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
+                .count();
+        capture_end_ns.compare_exchange_strong(expected, now, std::memory_order_relaxed);
+    }
+
     // Win32 mirror of stop_requested for producers that block in
     // WaitForMultipleObjects (the event-driven WASAPI capture drain): set
     // wherever stop_requested is raised through Stop()/RecordFailure() so a
@@ -156,6 +177,17 @@ struct SessionState {
     // Cooperative pause token — threads drain their source but discard output.
     // Video threads adjust their epoch on resume so PTS continues seamlessly.
     std::atomic<bool> pause_requested{false};
+
+    // Live mute, one bit per AudioSourceKind (AudioSourceKindBit). A muted
+    // source keeps its track running at full length and contributes silence for
+    // as long as the mute stands.
+    //
+    // Silence rather than a gap on purpose: a muxer places a track by its first
+    // packet, so a track that started at the first unmute would carry a
+    // container-level offset, and neither Matroska nor MP4 can express a hole
+    // inside a track at all. One continuous timeline is the only shape that
+    // survives the container and stays trivially trimmable afterwards.
+    std::atomic<uint32_t> audio_mute_mask{0};
 
     // Nanoseconds this session has spent paused, accumulated by the stats
     // collector as it observes `pause_requested` change.
@@ -470,6 +502,7 @@ struct SessionState {
                 failure.error_detail = detail;
             }
         }
+        NoteCaptureEnded();
         stop_requested.store(true);
         SignalStopEvent();
         premux_cv.notify_all();

@@ -415,6 +415,10 @@ uint32_t OutputFormatAudioSrc::DegradedSourceCount() const {
     return inner_ ? inner_->DegradedSourceCount() : 0;
 }
 
+uint32_t OutputFormatAudioSrc::DegradedSourceIndexMask() const {
+    return inner_ ? inner_->DegradedSourceIndexMask() : 0;
+}
+
 void OutputFormatAudioSrc::Shutdown() {
     if (swr_ != nullptr) {
         swr_free(&swr_);
