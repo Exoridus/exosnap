@@ -11,6 +11,13 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
+#include <condition_variable>
+#include <mutex>
+#include <optional>
+#include <thread>
+#include <vector>
+
 namespace exosnap::quick {
 namespace {
 
@@ -717,6 +724,67 @@ TEST_F(SettingsAdapterTest, NonLocalUrlIsIgnoredForOutputFolder) {
     adapter.setOutputFolderFromUrl(QUrl(QStringLiteral("https://example.invalid/share")));
 
     EXPECT_EQ(adapter.outputFolder(), before);
+}
+
+TEST_F(SettingsAdapterTest, OutputValidationRequestsCoverEveryLifecycleTrigger) {
+    std::vector<SettingsAdapter::OutputValidationTrigger> triggers;
+    QObject::connect(&adapter, &SettingsAdapter::outputValidationRequested, &adapter,
+                     [&](SettingsAdapter::OutputValidationTrigger trigger) { triggers.push_back(trigger); });
+
+    adapter.requestOutputValidation(SettingsAdapter::OutputValidationTrigger::Startup);
+    adapter.setOutputFolder(adapter.outputFolder() + QStringLiteral("_edited"));
+    adapter.requestOutputValidation(SettingsAdapter::OutputValidationTrigger::ApplicationActivation);
+    adapter.requestOutputValidation(SettingsAdapter::OutputValidationTrigger::OutputCardReveal);
+
+    EXPECT_EQ(triggers,
+              (std::vector<SettingsAdapter::OutputValidationTrigger>{
+                  SettingsAdapter::OutputValidationTrigger::Startup, SettingsAdapter::OutputValidationTrigger::PathEdit,
+                  SettingsAdapter::OutputValidationTrigger::ApplicationActivation,
+                  SettingsAdapter::OutputValidationTrigger::OutputCardReveal}));
+}
+
+TEST_F(SettingsAdapterTest, OutputValidationRunsOffTheRequestingThread) {
+    const std::thread::id requesting_thread = std::this_thread::get_id();
+    std::thread::id validation_thread;
+    std::mutex mutex;
+    std::condition_variable completed;
+    bool finished = false;
+    adapter.setOutputFolderValidator([&](const std::filesystem::path&) {
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            validation_thread = std::this_thread::get_id();
+            finished = true;
+        }
+        completed.notify_one();
+        return FolderValidationResult::Ok;
+    });
+
+    adapter.requestOutputValidation(SettingsAdapter::OutputValidationTrigger::Startup);
+
+    std::unique_lock<std::mutex> lock(mutex);
+    ASSERT_TRUE(completed.wait_for(lock, std::chrono::seconds(2), [&] { return finished; }));
+    EXPECT_NE(validation_thread, requesting_thread);
+}
+
+TEST_F(SettingsAdapterTest, OutputDestinationFocusRequestUsesTypedTarget) {
+    std::optional<SettingsAdapter::FocusTarget> requested;
+    QObject::connect(&adapter, &SettingsAdapter::settingsFocusRequested, &adapter,
+                     [&](SettingsAdapter::FocusTarget target) { requested = target; });
+
+    adapter.requestSettingsFocus(SettingsAdapter::FocusTarget::OutputDestination);
+
+    ASSERT_TRUE(requested.has_value());
+    EXPECT_EQ(*requested, SettingsAdapter::FocusTarget::OutputDestination);
+}
+
+TEST_F(SettingsAdapterTest, ApplyingOutputValidationPublishesTheInlineFolderMessage) {
+    adapter.applyOutputFolderValidation(FolderValidationResult::NotWritable);
+
+    EXPECT_EQ(adapter.folderValidation(),
+              QString::fromStdWString(FolderValidationMessage(FolderValidationResult::NotWritable)));
+
+    adapter.applyOutputFolderValidation(FolderValidationResult::Ok);
+    EXPECT_TRUE(adapter.folderValidation().isEmpty());
 }
 
 } // namespace

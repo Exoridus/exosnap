@@ -4,8 +4,8 @@
 // These tests focus on the pure-logic layer that does NOT require a live
 // encoder or display capture device:
 //
-//   1. DeriveTransientMkvPath — extension substitution (mp4 → mkv.tmp)
-//   2. DeriveTransientMkvPath edge cases — nested extensions, no extension
+//   1. Valuable live-artifact derivation
+//   2. Path derivation edge cases
 //   3. OpusMp4GatingAfterMfRemoval — Opus+MP4 is still rejected (codec-gate)
 //   4. Mp4ValidationAcceptsAacH264 — Mp4+H264+AAC is accepted
 //   5. Mp4ValidationRejectsAv1     — Mp4+AV1 is rejected
@@ -29,7 +29,7 @@ namespace {
 using exosnap::engine::AudioCodec;
 using exosnap::engine::CaptureTarget;
 using exosnap::engine::Container;
-using exosnap::engine::DeriveTransientMkvPath;
+using exosnap::engine::DeriveValuablePartialPath;
 using exosnap::engine::RecorderConfig;
 using exosnap::engine::RecorderResult;
 using exosnap::engine::RecorderSession;
@@ -52,54 +52,48 @@ static RecorderConfig MakeMp4Config() {
 }
 
 // ---------------------------------------------------------------------------
-// DeriveTransientMkvPath tests
+// Valuable live-artifact path tests
 // ---------------------------------------------------------------------------
 
-TEST(Mp4RemuxPipelineFlowTest, DeriveTransientMkvPath_BasicSubstitution) {
-    // Standard case: "recording.mp4" → "recording.mkv.tmp"
+TEST(Mp4RemuxPipelineFlowTest, DeriveValuablePartialPath_AppendsToCompleteFinalName) {
     const std::filesystem::path input = L"C:\\Videos\\recording.mp4";
-    const std::filesystem::path result = DeriveTransientMkvPath(input);
+    const std::filesystem::path result = DeriveValuablePartialPath(input);
 
-    EXPECT_EQ(result.extension().wstring(), L".tmp");
+    EXPECT_EQ(result.extension().wstring(), L".partial");
     EXPECT_NE(result, input);
-
-    // Stem of result should be "recording.mkv" so that the full filename is
-    // "recording.mkv.tmp".
-    EXPECT_EQ(result.filename().wstring(), L"recording.mkv.tmp");
+    EXPECT_EQ(result.filename().wstring(), L"recording.mp4.partial");
     EXPECT_EQ(result.parent_path().wstring(), input.parent_path().wstring());
 }
 
-TEST(Mp4RemuxPipelineFlowTest, DeriveTransientMkvPath_PreservesDirectory) {
+TEST(Mp4RemuxPipelineFlowTest, DeriveValuablePartialPath_PreservesDirectory) {
     const std::filesystem::path input = L"D:\\Captures\\session 2025\\clip.mp4";
-    const std::filesystem::path result = DeriveTransientMkvPath(input);
+    const std::filesystem::path result = DeriveValuablePartialPath(input);
 
     EXPECT_EQ(result.parent_path().wstring(), input.parent_path().wstring());
-    EXPECT_EQ(result.filename().wstring(), L"clip.mkv.tmp");
+    EXPECT_EQ(result.filename().wstring(), L"clip.mp4.partial");
 }
 
-TEST(Mp4RemuxPipelineFlowTest, DeriveTransientMkvPath_NoExtension) {
-    // Path without extension: still appends ".mkv.tmp" by replacing empty ext.
+TEST(Mp4RemuxPipelineFlowTest, DeriveValuablePartialPath_NoExtension) {
     const std::filesystem::path input = L"C:\\Videos\\noext";
-    const std::filesystem::path result = DeriveTransientMkvPath(input);
+    const std::filesystem::path result = DeriveValuablePartialPath(input);
 
-    // replace_extension(".mkv.tmp") on a path with no extension appends the ext.
-    EXPECT_EQ(result.filename().wstring(), L"noext.mkv.tmp");
+    EXPECT_EQ(result.filename().wstring(), L"noext.partial");
 }
 
-TEST(Mp4RemuxPipelineFlowTest, DeriveTransientMkvPath_RelativePath) {
+TEST(Mp4RemuxPipelineFlowTest, DeriveValuablePartialPath_RelativePath) {
     // Works for relative paths as well (used in tests / portable scenarios).
     const std::filesystem::path input = L"recording.mp4";
-    const std::filesystem::path result = DeriveTransientMkvPath(input);
+    const std::filesystem::path result = DeriveValuablePartialPath(input);
 
-    EXPECT_EQ(result.wstring(), L"recording.mkv.tmp");
+    EXPECT_EQ(result.wstring(), L"recording.mp4.partial");
 }
 
-TEST(Mp4RemuxPipelineFlowTest, DeriveTransientMkvPath_IsIdempotentOnStem) {
+TEST(Mp4RemuxPipelineFlowTest, DeriveValuablePartialPath_DistinguishesFinalNames) {
     // Two different MP4 output paths must not share the same transient path.
     const std::filesystem::path a = L"C:\\Videos\\clip_a.mp4";
     const std::filesystem::path b = L"C:\\Videos\\clip_b.mp4";
 
-    EXPECT_NE(DeriveTransientMkvPath(a), DeriveTransientMkvPath(b));
+    EXPECT_NE(DeriveValuablePartialPath(a), DeriveValuablePartialPath(b));
 }
 
 // ---------------------------------------------------------------------------

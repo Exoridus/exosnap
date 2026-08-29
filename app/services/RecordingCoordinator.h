@@ -29,6 +29,7 @@
 #include "../diagnostics/DiskSpaceProvider.h"
 #include "../diagnostics/WindowTargetFacts.h"
 #include "../models/FilenameBuilder.h"
+#include "../models/OutputPathValidator.h"
 #include "../models/OutputSettingsModel.h"
 #include "../models/RecordingMarker.h"
 #include "../models/VideoSettingsModel.h"
@@ -182,6 +183,7 @@ class RecordingCoordinator {
     void OnCapabilitiesReady(const exosnap::capability::CapabilitySet& caps);
     void OnCapabilityFailure(std::wstring message);
     void RevalidateCapabilities();
+    void ApplyOutputFolderValidation(FolderValidationResult result);
 
     std::vector<exosnap::engine::CaptureTarget> EnumerateTargets();
     bool StartRecording(const exosnap::engine::CaptureTarget& target, const capability::AudioUiState& audio_ui_state,
@@ -598,6 +600,7 @@ class RecordingCoordinator {
 
     std::atomic<UiRecordingState> state_{UiRecordingState::LoadingCapabilities};
     std::wstring capability_status_text_;
+    FolderValidationResult output_folder_validation_ = FolderValidationResult::Ok;
     // Written by the preparation worker; read on the UI thread and on the mux
     // worker thread. The mutex prevents a torn read of the std::filesystem::path
     // across those boundaries, so EVERY reader goes through CurrentOutputPath()

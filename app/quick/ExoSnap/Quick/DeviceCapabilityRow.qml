@@ -4,9 +4,6 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-// One capability-matrix row: label left, evidence right. The evidence is either
-// a mono value string or a list of per-codec chips — never both, and which one
-// applies is decided by the adapter.
 Item {
     id: root
 
@@ -15,23 +12,35 @@ Item {
     required property var chips
     required property bool firstRow
 
-    implicitHeight: rowLayout.implicitHeight + 2 * ExoTheme.spacingSm
+    function cellFor(codec: string): var {
+        for (let i = 0; i < root.chips.length; ++i) {
+            const chip = root.chips[i];
+            if (chip.label.indexOf(codec) !== 0)
+                continue;
+            const match = chip.label.match(/\((\d+)\)/);
+            return {
+                available: chip.available,
+                text: match ? qsTr("Max %1").arg(match[1])
+                            : chip.available ? qsTr("Available") : qsTr("Unavailable")
+            };
+        }
+        return { available: false, text: qsTr("Unavailable") };
+    }
+
+    implicitHeight: grid.implicitHeight + 2 * ExoTheme.spacingSm
 
     Rectangle {
         height: 1
         color: ExoTheme.line
         visible: !root.firstRow
-        anchors {
-            top: parent.top
-            right: parent.right
-            left: parent.left
-        }
+        anchors { top: parent.top; right: parent.right; left: parent.left }
     }
 
-    RowLayout {
-        id: rowLayout
+    GridLayout {
+        id: grid
 
-        spacing: ExoTheme.spacingMd
+        columns: 4
+        columnSpacing: ExoTheme.spacingMd
         anchors {
             fill: parent
             topMargin: ExoTheme.spacingSm
@@ -40,61 +49,45 @@ Item {
 
         Label {
             text: root.label
-            textFormat: Text.PlainText
             wrapMode: Text.WordWrap
             color: ExoTheme.textSecondary
-            Layout.minimumWidth: 120
-            Layout.maximumWidth: 200
-            Layout.alignment: Qt.AlignVCenter
-            font {
-                family: ExoTheme.sansFamily
-                pixelSize: ExoTheme.fontSecondary
-            }
+            Layout.preferredWidth: 190
+            font { family: ExoTheme.sansFamily; pixelSize: ExoTheme.fontSecondary }
         }
 
-        Item {
-            Layout.fillWidth: true
-        }
-
-        // The row is one line by contract, and this is the label that says so.
-        // It used to declare `wrapMode` and no width policy at all: with neither
-        // `Layout.fillWidth` nor a maximum it was never given a width to wrap
-        // inside, so the wrap was inert while the only thing a too-long value
-        // could do was overrun the card. fillWidth + elide is the pairing every
-        // other long-text label in the file set uses, and it makes the overflow
-        // behaviour an ellipsis rather than a silently taller row. It stays
-        // right-aligned because it is the last visible item, so its box ends at
-        // the row's right edge either way.
         Label {
             objectName: "capabilityRowValue"
-
             text: root.valueText
-            textFormat: Text.PlainText
-            elide: Text.ElideRight
-            horizontalAlignment: Text.AlignRight
             visible: root.valueText !== ""
             color: ExoTheme.text
+            elide: Text.ElideRight
+            Layout.columnSpan: 3
             Layout.fillWidth: true
-            Layout.alignment: Qt.AlignVCenter
-            font {
-                family: ExoTheme.monoFamily
-                pixelSize: ExoTheme.fontSecondary
-            }
+            font { family: ExoTheme.monoFamily; pixelSize: ExoTheme.fontSecondary }
         }
 
-        Row {
-            spacing: ExoTheme.spacingXs
-            visible: root.chips.length > 0
-            Layout.alignment: Qt.AlignVCenter
+        Repeater {
+            model: root.valueText === "" ? ["H.264", "HEVC", "AV1"] : []
 
-            Repeater {
-                model: root.chips
+            RowLayout {
+                required property string modelData
+                readonly property var cell: root.cellFor(modelData)
+                spacing: ExoTheme.spacingXs
+                Layout.fillWidth: true
 
-                DeviceCodecChip {
-                    required property var modelData
+                ExoGlyph {
+                    kind: parent.cell.available ? ExoGlyph.Check : ExoGlyph.Close
+                    color: parent.cell.available ? ExoTheme.successText : ExoTheme.textDim
+                    Layout.preferredWidth: 12
+                    Layout.preferredHeight: 12
+                }
 
-                    label: modelData.label
-                    available: modelData.available
+                Label {
+                    text: parent.cell.text
+                    color: parent.cell.available ? ExoTheme.text : ExoTheme.textDim
+                    elide: Text.ElideRight
+                    Layout.fillWidth: true
+                    font { family: ExoTheme.monoFamily; pixelSize: ExoTheme.fontCaption }
                 }
             }
         }

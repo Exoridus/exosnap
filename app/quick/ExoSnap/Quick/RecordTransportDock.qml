@@ -188,7 +188,7 @@ Rectangle {
         // here, which put caution on a number that is simply not advancing —
         // it takes the accent the Resume action beside it carries instead.
         color: root.recordViewModel.recording ? ExoTheme.error
-                                              : root.recordViewModel.paused ? ExoTheme.accent : ExoTheme.text
+                                              : root.recordViewModel.paused ? ExoTheme.paused : ExoTheme.text
         anchors {
             horizontalCenter: parent.horizontalCenter
             verticalCenter: parent.verticalCenter

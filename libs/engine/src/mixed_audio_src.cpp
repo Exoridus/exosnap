@@ -360,6 +360,15 @@ uint32_t MixedAudioSrc::DegradedSourceCount() const {
     return degraded;
 }
 
+uint32_t MixedAudioSrc::DegradedSourceIndexMask() const {
+    uint32_t mask = 0;
+    for (size_t i = 0; i < source_degraded_.size() && i < 32; ++i) {
+        if (source_degraded_[i])
+            mask |= 1u << static_cast<uint32_t>(i);
+    }
+    return mask;
+}
+
 void MixedAudioSrc::ReleaseBuffer() {
     // Source packets are acquired and released inside PumpOnePacketPerSource;
     // the mixed buffer this exposes is owned by mix_buffer_, so there is nothing

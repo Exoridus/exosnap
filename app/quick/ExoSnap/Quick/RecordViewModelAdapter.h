@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QHash>
 #include <QObject>
 #include <QRectF>
 #include <QString>
@@ -67,6 +68,9 @@ class RecordViewModelAdapter : public QObject {
     Q_PROPERTY(QVariantList targetOptions READ targetOptions NOTIFY targetOptionsChanged FINAL)
     Q_PROPERTY(QVariantList displayTargetOptions READ displayTargetOptions NOTIFY targetOptionsChanged FINAL)
     Q_PROPERTY(QVariantList windowTargetOptions READ windowTargetOptions NOTIFY targetOptionsChanged FINAL)
+    Q_PROPERTY(int targetCount READ targetCount NOTIFY targetOptionsChanged FINAL)
+    Q_PROPERTY(QString selectedTargetIdentity READ selectedTargetIdentity NOTIFY targetOptionsChanged FINAL)
+    Q_PROPERTY(bool selectedTargetAvailable READ selectedTargetAvailable NOTIFY targetOptionsChanged FINAL)
     Q_PROPERTY(int selectedTargetIndex READ selectedTargetIndex NOTIFY changed FINAL)
     Q_PROPERTY(int captureMode READ captureMode NOTIFY changed FINAL)
     Q_PROPERTY(QString sourceName READ sourceName NOTIFY changed FINAL)
@@ -75,6 +79,14 @@ class RecordViewModelAdapter : public QObject {
     Q_PROPERTY(QString formatText READ formatText NOTIFY changed FINAL)
     Q_PROPERTY(QRectF normalizedSourceRect READ normalizedSourceRect NOTIFY changed FINAL)
     Q_PROPERTY(bool regionSelectionNeeded READ regionSelectionNeeded NOTIFY changed FINAL)
+    // Region-tab preset cards, in the order the Region tab shows them: Draw
+    // custom first and strongest, then the four aspect presets. Product policy,
+    // so it lives here rather than in the QML document.
+    Q_PROPERTY(QVariantList regionPresetOptions READ regionPresetOptions NOTIFY changed FINAL)
+    // False while the user is still composing the rectangle (the overlay's
+    // handles, dimension label and confirm stay live); true from the countdown
+    // onward, when the capture owns the region and editing must hide and lock.
+    Q_PROPERTY(bool regionEditingLocked READ regionEditingLocked NOTIFY changed FINAL)
 
     Q_PROPERTY(bool systemAudioEnabled READ systemAudioEnabled NOTIFY changed FINAL)
     Q_PROPERTY(bool appAudioEnabled READ appAudioEnabled NOTIFY changed FINAL)
@@ -125,6 +137,13 @@ class RecordViewModelAdapter : public QObject {
     // the part of it that depends only on the view model, so the affordance can
     // be a binding rather than a button that does nothing when pressed.
     Q_PROPERTY(bool canOpenEditor READ canOpenEditor NOTIFY changed FINAL)
+    // The Record context strip's Recent menu: the finished recordings this
+    // session knows about, newest first, each carrying the path the menu acts
+    // on and the label the shared resolver produced for the run's target. Rows
+    // whose file no longer exists are published as unavailable rather than
+    // dropped, so a menu entry never silently changes meaning between the frame
+    // the user read it in and the frame they pressed it.
+    Q_PROPERTY(QVariantList recentRecordingOptions READ recentRecordingOptions NOTIFY recentRecordingsChanged FINAL)
 
   public:
     explicit RecordViewModelAdapter(const RecordViewModel* source = nullptr, QObject* parent = nullptr);
@@ -162,6 +181,10 @@ class RecordViewModelAdapter : public QObject {
     [[nodiscard]] const QVariantList& targetOptions() const noexcept;
     [[nodiscard]] const QVariantList& displayTargetOptions() const noexcept;
     [[nodiscard]] const QVariantList& windowTargetOptions() const noexcept;
+    [[nodiscard]] int targetCount() const noexcept;
+    [[nodiscard]] const QString& selectedTargetIdentity() const noexcept;
+    [[nodiscard]] bool selectedTargetAvailable() const noexcept;
+    [[nodiscard]] Q_INVOKABLE QVariantList filteredTargetOptions(const QString& kind, const QString& query) const;
     [[nodiscard]] int selectedTargetIndex() const noexcept;
     [[nodiscard]] int captureMode() const noexcept;
     [[nodiscard]] const QString& sourceName() const noexcept;
@@ -170,6 +193,9 @@ class RecordViewModelAdapter : public QObject {
     [[nodiscard]] const QString& formatText() const noexcept;
     [[nodiscard]] QRectF normalizedSourceRect() const noexcept;
     [[nodiscard]] bool regionSelectionNeeded() const noexcept;
+    [[nodiscard]] const QVariantList& regionPresetOptions() const noexcept;
+    [[nodiscard]] const QVariantList& recentRecordingOptions() const noexcept;
+    [[nodiscard]] bool regionEditingLocked() const noexcept;
     [[nodiscard]] bool systemAudioEnabled() const noexcept;
     [[nodiscard]] bool appAudioEnabled() const noexcept;
     [[nodiscard]] bool microphoneEnabled() const noexcept;
@@ -214,6 +240,7 @@ class RecordViewModelAdapter : public QObject {
     // keeps the banner it already had; the callers that state a tone are the
     // ones whose message is not a warning.
     void setNoticeText(QString text, QString tone = QStringLiteral("warning"));
+    void setTargetStill(QString identity, QString source);
     void synchronize();
 
     Q_INVOKABLE void requestStart();
@@ -225,13 +252,21 @@ class RecordViewModelAdapter : public QObject {
     Q_INVOKABLE void requestSplit();
     Q_INVOKABLE void requestSelectTarget(int target_index, int capture_mode);
     Q_INVOKABLE void requestSelectRegion(QRectF normalized_rect);
+    // The Region tab's preset choice. "custom" means draw-from-scratch; the
+    // aspect keys carry an editable starting rectangle. Routing through the
+    // adapter (rather than direct QML-to-QML wiring) keeps the picker and the
+    // overlay decoupled surfaces that only share the C++ boundary.
+    Q_INVOKABLE void requestRegionPreset(const QString& key);
     Q_INVOKABLE void requestToggleSource(const QString& key);
     Q_INVOKABLE void requestWebcamOverlayRect(QRectF normalized_rect);
     Q_INVOKABLE void requestCountdownSeconds(int seconds);
     Q_INVOKABLE void requestOpenEditor();
     Q_INVOKABLE void requestDismissResult();
     Q_INVOKABLE void requestRevealRecording();
+    Q_INVOKABLE void requestOpenRecent(const QString& file_path);
+    Q_INVOKABLE void requestRevealRecent(const QString& file_path);
     Q_INVOKABLE void clearNotice();
+    Q_INVOKABLE void requestTargetStillRefresh();
 
   signals:
     void savingProgressChanged();
@@ -242,6 +277,8 @@ class RecordViewModelAdapter : public QObject {
     void liveStatsAvailableChanged();
     void webcamFrameChanged();
     void targetOptionsChanged();
+    void recentRecordingsChanged();
+    void targetStillRefreshRequested(QString identity, int target_index, QString kind);
     void metersChanged();
     void changed();
 
@@ -254,12 +291,15 @@ class RecordViewModelAdapter : public QObject {
     void splitRequested();
     void selectTargetRequested(int target_index, int capture_mode);
     void selectRegionRequested(QRectF normalized_rect);
+    void regionPresetRequested(QString key);
     void toggleSourceRequested(QString key);
     void webcamOverlayRectRequested(QRectF normalized_rect);
     void countdownSecondsRequested(int seconds);
     void openEditorRequested();
     void dismissResultRequested();
     void revealRecordingRequested();
+    void openRecentRequested(QString file_path);
+    void revealRecentRequested(QString file_path);
 
   private:
     // -1 means "not known", which is the resting value; see the property.
@@ -271,6 +311,7 @@ class RecordViewModelAdapter : public QObject {
     // for the broad signal out of synchronize().
     void publishChanged();
     void rebuildPresentation();
+    void rebuildRecentRecordings();
     // Advances the fps delta window. Called from synchronize(), i.e. on the
     // engine's stats cadence, so the window is measured against the same clock
     // the frame counter is.
@@ -284,6 +325,7 @@ class RecordViewModelAdapter : public QObject {
     // The RecordViewModel::targets_revision the three option lists were built
     // from. Unset means "not built for this source yet".
     std::optional<std::uint64_t> target_options_revision_;
+    std::optional<int> target_options_selected_index_;
     bool active_ = false;
     QString state_text_;
     QString elapsed_text_;
@@ -298,12 +340,17 @@ class RecordViewModelAdapter : public QObject {
     QVariantList target_options_;
     QVariantList display_target_options_;
     QVariantList window_target_options_;
+    QHash<QString, QString> target_stills_;
+    QString selected_target_identity_;
+    bool selected_target_available_ = false;
     QString source_name_;
     QString source_kind_text_;
     QString source_detail_text_;
     QString format_text_;
     QRectF normalized_source_rect_{0.0, 0.0, 1.0, 1.0};
     bool region_selection_needed_ = false;
+    QVariantList region_preset_options_;
+    QVariantList recent_recording_options_;
     QStringList live_toggleable_sources_;
     bool microphone_available_ = true;
     bool webcam_available_ = true;

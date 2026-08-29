@@ -16,6 +16,7 @@ Rectangle {
     id: root
 
     required property EditExportAdapter exporter
+    signal chooseAnotherFolderRequested()
 
     readonly property bool showsStatus: root.exporter.state !== EditExportAdapter.Options
     readonly property bool succeeded: root.exporter.state === EditExportAdapter.Done
@@ -177,11 +178,11 @@ Rectangle {
                 }
 
                 ExoButton {
-                    text: qsTr("Retry")
+                    text: root.exporter.destinationFailure ? qsTr("Choose another folder") : qsTr("Try again")
                     compact: true
                     visible: !root.succeeded
-                    enabled: root.exporter.canExport
-                    onClicked: root.exporter.retry()
+                    enabled: root.exporter.destinationFailure
+                    onClicked: root.chooseAnotherFolderRequested()
                 }
             }
         }
@@ -236,6 +237,17 @@ Rectangle {
                 value: root.exporter.saveModeKey
                 Layout.fillWidth: true
                 onValueActivated: value => root.exporter.saveModeKey = value
+            }
+        }
+
+        Label {
+            text: qsTr("Changes are applied only when exported.")
+            textFormat: Text.PlainText
+            color: ExoTheme.textMuted
+            Layout.fillWidth: true
+            font {
+                family: ExoTheme.sansFamily
+                pixelSize: ExoTheme.fontCaption
             }
         }
 

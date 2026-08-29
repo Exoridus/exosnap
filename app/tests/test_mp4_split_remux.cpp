@@ -7,8 +7,8 @@
 //   4. Crash during remux (finalized=true entry survives)
 //   5. Three-segment independent lifecycle
 //   6. Single-file MP4 session lifecycle (regression guard)
-//   7. Segment path derivation for .mkv.tmp convention
-//   8. DeriveTransientMkvPath produces .mkv.tmp
+//   7. Segment path derivation for valuable .partial artifacts
+//   8. DeriveTransientMkvPath produces .partial
 //   9. Output settings split mode propagation through coordinator
 //  10. IsSplitPending / IsRemuxing coordinator state guards
 //
@@ -129,7 +129,7 @@ TEST_F(Mp4SplitRemuxTest, ManifestLifecycle_AddFinalizeRemove) {
 
     // Segment 0: created before recording starts, finalized=false.
     ASSERT_TRUE(store.Add(
-        MakeManifestEntry(QStringLiteral("seg0"), QStringLiteral("/tmp/rec.mkv.tmp"), QStringLiteral("mp4"))));
+        MakeManifestEntry(QStringLiteral("seg0"), QStringLiteral("/tmp/rec.mp4.partial"), QStringLiteral("mp4"))));
     EXPECT_EQ(store.Entries().size(), 1);
     EXPECT_FALSE(store.Entries()[0].finalized);
 
@@ -138,8 +138,8 @@ TEST_F(Mp4SplitRemuxTest, ManifestLifecycle_AddFinalizeRemove) {
     EXPECT_TRUE(store.Entries()[0].finalized);
 
     // Segment 1: created when segment 0 completes.
-    ASSERT_TRUE(store.Add(
-        MakeManifestEntry(QStringLiteral("seg1"), QStringLiteral("/tmp/rec.mkv_part-002.tmp"), QStringLiteral("mp4"))));
+    ASSERT_TRUE(store.Add(MakeManifestEntry(QStringLiteral("seg1"), QStringLiteral("/tmp/rec_part-002.mp4.partial"),
+                                            QStringLiteral("mp4"))));
     EXPECT_EQ(store.Entries().size(), 2);
 
     // Segment 0 remux success: remove its entry.
@@ -162,7 +162,7 @@ TEST_F(Mp4SplitRemuxTest, ManifestLifecycle_CrashBeforeFinalize_EntryPersists) {
     {
         RecoveryManifestStore store(store_path);
         ASSERT_TRUE(store.Add(
-            MakeManifestEntry(QStringLiteral("live"), QStringLiteral("/tmp/live.mkv.tmp"), QStringLiteral("mp4"))));
+            MakeManifestEntry(QStringLiteral("live"), QStringLiteral("/tmp/live.mp4.partial"), QStringLiteral("mp4"))));
         // Crash: no UpdateFinalized, no Remove.
     }
 
@@ -182,7 +182,7 @@ TEST_F(Mp4SplitRemuxTest, ManifestLifecycle_CrashDuringRemux_FinalizedEntryPersi
     {
         RecoveryManifestStore store(store_path);
         ASSERT_TRUE(store.Add(
-            MakeManifestEntry(QStringLiteral("seg0"), QStringLiteral("/tmp/rec.mkv.tmp"), QStringLiteral("mp4"))));
+            MakeManifestEntry(QStringLiteral("seg0"), QStringLiteral("/tmp/rec.mp4.partial"), QStringLiteral("mp4"))));
         ASSERT_TRUE(store.UpdateFinalized(QStringLiteral("seg0"), true));
         // Crash during remux: do NOT call Remove.
     }
@@ -203,13 +203,13 @@ TEST_F(Mp4SplitRemuxTest, ManifestLifecycle_ThreeSegmentsIndependent) {
     RecoveryManifestStore store(store_path);
 
     // Segment 0 created at StartRecording.
-    ASSERT_TRUE(
-        store.Add(MakeManifestEntry(QStringLiteral("s0"), QStringLiteral("/tmp/rec.mkv.tmp"), QStringLiteral("mp4"))));
+    ASSERT_TRUE(store.Add(
+        MakeManifestEntry(QStringLiteral("s0"), QStringLiteral("/tmp/rec.mp4.partial"), QStringLiteral("mp4"))));
 
     // Segment 0 completes: finalize + create segment 1 entry.
     ASSERT_TRUE(store.UpdateFinalized(QStringLiteral("s0"), true));
-    ASSERT_TRUE(store.Add(
-        MakeManifestEntry(QStringLiteral("s1"), QStringLiteral("/tmp/rec.mkv_part-002.tmp"), QStringLiteral("mp4"))));
+    ASSERT_TRUE(store.Add(MakeManifestEntry(QStringLiteral("s1"), QStringLiteral("/tmp/rec_part-002.mp4.partial"),
+                                            QStringLiteral("mp4"))));
     EXPECT_EQ(store.Entries().size(), 2);
 
     // Segment 0 remux succeeds: remove s0.
@@ -218,8 +218,8 @@ TEST_F(Mp4SplitRemuxTest, ManifestLifecycle_ThreeSegmentsIndependent) {
 
     // Segment 1 completes: finalize + create segment 2 entry.
     ASSERT_TRUE(store.UpdateFinalized(QStringLiteral("s1"), true));
-    ASSERT_TRUE(store.Add(
-        MakeManifestEntry(QStringLiteral("s2"), QStringLiteral("/tmp/rec.mkv_part-003.tmp"), QStringLiteral("mp4"))));
+    ASSERT_TRUE(store.Add(MakeManifestEntry(QStringLiteral("s2"), QStringLiteral("/tmp/rec_part-003.mp4.partial"),
+                                            QStringLiteral("mp4"))));
     EXPECT_EQ(store.Entries().size(), 2);
 
     // Segment 1 remux succeeds: remove s1.
@@ -243,7 +243,7 @@ TEST_F(Mp4SplitRemuxTest, ManifestLifecycle_SingleFileMp4_FullLifecycle) {
 
     RecoveryManifestEntry e;
     e.id = QStringLiteral("single-session");
-    e.artefact_path = QStringLiteral("/tmp/output.mkv.tmp");
+    e.artefact_path = QStringLiteral("/tmp/output.mp4.partial");
     e.intended_container = QStringLiteral("mp4");
     e.final_output_path = QStringLiteral("/tmp/output.mp4");
     e.started_at = QStringLiteral("2026-06-13T00:00:00Z");
@@ -261,9 +261,9 @@ TEST_F(Mp4SplitRemuxTest, ManifestLifecycle_SingleFileMp4_FullLifecycle) {
     QFile::remove(store_path);
 }
 
-// ─── 9. DeriveSegmentPath for .mkv.tmp follows expected naming ───────────────
+// 9. DeriveSegmentPath for .partial follows expected naming
 
-TEST_F(Mp4SplitRemuxTest, DeriveSegmentPath_MkvTmpConvention) {
+TEST_F(Mp4SplitRemuxTest, DeriveSegmentPath_PartialConvention) {
     using exosnap::engine::DeriveSegmentPath;
     using exosnap::engine::DeriveTransientMkvPath;
 
@@ -294,16 +294,20 @@ TEST_F(Mp4SplitRemuxTest, DeriveSegmentPath_MkvTmpConvention) {
     EXPECT_NE(mp4_seg1, mp4);
 }
 
-// ─── 10. DeriveTransientMkvPath produces .mkv.tmp suffix ─────────────────────
+// ─── 10. New MP4 live artefacts preserve the final extension ─────────────────
 
-TEST_F(Mp4SplitRemuxTest, DeriveTransientMkvPath_HasMkvTmpSuffix) {
+TEST_F(Mp4SplitRemuxTest, DeriveTransientMkvPath_UsesValuablePartialName) {
     const std::filesystem::path mp4 = std::filesystem::temp_directory_path() / L"my_recording.mp4";
     const std::filesystem::path transient = exosnap::engine::DeriveTransientMkvPath(mp4);
 
-    EXPECT_EQ(transient.extension(), std::filesystem::path(L".tmp"));
-    const std::wstring full = transient.wstring();
-    ASSERT_GE(full.size(), 8u);
-    EXPECT_EQ(full.substr(full.size() - 8), L".mkv.tmp");
+    EXPECT_EQ(transient, exosnap::engine::DeriveValuablePartialPath(mp4));
+    EXPECT_EQ(transient.filename(), std::filesystem::path(L"my_recording.mp4.partial"));
+}
+
+TEST_F(Mp4SplitRemuxTest, DeriveTransientMkvPath_DoesNotDuplicatePartialSuffix) {
+    const std::filesystem::path partial = std::filesystem::temp_directory_path() / L"my_recording.mp4.partial";
+
+    EXPECT_EQ(exosnap::engine::DeriveTransientMkvPath(partial), partial);
 }
 
 // ─── 11. Split mode Off propagates to coordinator ────────────────────────────
@@ -542,11 +546,11 @@ TEST_F(Mp4SplitRemuxTest, ReapDropsFinishedJobsAndLeavesRunningOnesAlone) {
     RecordingCoordinator coordinator;
     const auto dir = SplitTempDir(L"mixed");
 
-    coordinator.ScheduleSegmentRemuxForTest(dir / L"a.mkv.tmp", dir / L"a.mp4", QString(), [] { return true; });
-    coordinator.ScheduleSegmentRemuxForTest(dir / L"b.mkv.tmp", dir / L"b.mp4", QString(), [] { return true; });
+    coordinator.ScheduleSegmentRemuxForTest(dir / L"a.mp4.partial", dir / L"a.mp4", QString(), [] { return true; });
+    coordinator.ScheduleSegmentRemuxForTest(dir / L"b.mp4.partial", dir / L"b.mp4", QString(), [] { return true; });
 
     ReleasableWork running;
-    coordinator.ScheduleSegmentRemuxForTest(dir / L"c.mkv.tmp", dir / L"c.mp4", QString(), running.Body(true));
+    coordinator.ScheduleSegmentRemuxForTest(dir / L"c.mp4.partial", dir / L"c.mp4", QString(), running.Body(true));
     running.WaitStarted();
 
     EXPECT_EQ(coordinator.SegmentRemuxJobCountForTest(), 3u);
@@ -576,7 +580,7 @@ TEST_F(Mp4SplitRemuxTest, ManySegmentsDoNotAccumulateJobHandles) {
     // is that a completed job leaves the container at all.
     constexpr int kSegments = 40;
     for (int i = 0; i < kSegments; ++i) {
-        coordinator.ScheduleSegmentRemuxForTest(dir / (L"seg" + std::to_wstring(i) + L".mkv.tmp"),
+        coordinator.ScheduleSegmentRemuxForTest(dir / (L"seg" + std::to_wstring(i) + L".mp4.partial"),
                                                 dir / (L"seg" + std::to_wstring(i) + L".mp4"), QString(),
                                                 [] { return true; });
         ASSERT_TRUE(ReapUntil(coordinator, [&] { return coordinator.SegmentRemuxJobCountForTest() == 0u; }))
@@ -595,7 +599,7 @@ TEST_F(Mp4SplitRemuxTest, PendingReserveCountsRunningJobsOnly) {
     RecordingCoordinator coordinator;
     const auto dir = SplitTempDir(L"reserve");
     constexpr size_t kBytes = 4096;
-    const auto transient = WriteSizedFile(dir / L"seg.mkv.tmp", kBytes);
+    const auto transient = WriteSizedFile(dir / L"seg.mp4.partial", kBytes);
 
     ReleasableWork work;
     coordinator.ScheduleSegmentRemuxForTest(transient, dir / L"seg.mp4", QString(), work.Body(true));
@@ -619,7 +623,7 @@ TEST_F(Mp4SplitRemuxTest, FailedRemuxRetainedMkvIsNotReservedForever) {
     RecordingCoordinator coordinator;
     const auto dir = SplitTempDir(L"failed");
     constexpr size_t kBytes = 8192;
-    const auto transient = WriteSizedFile(dir / L"failed.mkv.tmp", kBytes);
+    const auto transient = WriteSizedFile(dir / L"failed.mp4.partial", kBytes);
 
     coordinator.ScheduleSegmentRemuxForTest(transient, dir / L"failed.mp4", QString(), [] { return false; });
 
@@ -638,8 +642,9 @@ TEST_F(Mp4SplitRemuxTest, DrainStillReportsAFailureThatWasAlreadyReaped) {
     RecordingCoordinator coordinator;
     const auto dir = SplitTempDir(L"drain_fail");
 
-    coordinator.ScheduleSegmentRemuxForTest(dir / L"ok.mkv.tmp", dir / L"ok.mp4", QString(), [] { return true; });
-    coordinator.ScheduleSegmentRemuxForTest(dir / L"bad.mkv.tmp", dir / L"bad.mp4", QString(), [] { return false; });
+    coordinator.ScheduleSegmentRemuxForTest(dir / L"ok.mp4.partial", dir / L"ok.mp4", QString(), [] { return true; });
+    coordinator.ScheduleSegmentRemuxForTest(dir / L"bad.mp4.partial", dir / L"bad.mp4", QString(),
+                                            [] { return false; });
 
     ASSERT_TRUE(ReapUntil(coordinator, [&] { return coordinator.SegmentRemuxJobCountForTest() == 0u; }));
     EXPECT_FALSE(coordinator.DrainSegmentRemuxJobsForTest(false))
@@ -655,7 +660,7 @@ TEST_F(Mp4SplitRemuxTest, DrainReportsSuccessWhenEverySegmentSucceeded) {
     const auto dir = SplitTempDir(L"drain_ok");
 
     for (int i = 0; i < 4; ++i) {
-        coordinator.ScheduleSegmentRemuxForTest(dir / (L"s" + std::to_wstring(i) + L".mkv.tmp"),
+        coordinator.ScheduleSegmentRemuxForTest(dir / (L"s" + std::to_wstring(i) + L".mp4.partial"),
                                                 dir / (L"s" + std::to_wstring(i) + L".mp4"), QString(),
                                                 [] { return true; });
     }

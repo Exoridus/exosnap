@@ -62,7 +62,9 @@ Item {
         ExternalLink,
         Back,
         Folder,
-        SplitTrack
+        SplitTrack,
+        Clock,
+        PreviewBroken
     }
 
     // An ExoGlyph.Kind value. Declared `int` because a QML-declared enum is not
@@ -166,7 +168,14 @@ Item {
         // removes something from one file. This action removes nothing and edits
         // nothing -- it closes the current output and opens the next one, and the
         // recording carries on either way.
-        "M2.5 6.4H7V11.6H2.5Z M11 6.4H15.5V11.6H11Z M9 3.4V14.6"
+        "M2.5 6.4H7V11.6H2.5Z M11 6.4H15.5V11.6H11Z M9 3.4V14.6",
+        // Clock -- recent recordings and completion time.
+        "M9 2.5A6.5 6.5 0 1 0 15.5 9A6.5 6.5 0 1 0 9 2.5 M9 5V9L12 10.8",
+        // PreviewBroken -- a picture frame with its corner mark, struck through.
+        // The strike is what separates "no preview will come" from "no preview
+        // yet": the frame alone reads as an image that is still loading.
+        "M2.5 3.5H15.5V14.5H2.5Z M2.5 11.4L6.4 8.1L9.6 10.9 M11.6 6.3A1 1 0 1 0 13.6 6.3A1 1 0 1 0 11.6 6.3"
+            + " M3.6 15.4L14.4 2.6"
     ]
 
     // Kinds drawn as a filled silhouette instead of a stroked outline.

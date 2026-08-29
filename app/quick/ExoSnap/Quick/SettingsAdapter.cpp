@@ -9,7 +9,10 @@
 #include <capability/container_compat_registry.h>
 
 #include <QDir>
+#include <QMetaObject>
+#include <QPointer>
 #include <QStringList>
+#include <QThreadPool>
 #include <QVariantMap>
 
 #include <algorithm>
@@ -117,6 +120,49 @@ bool isSysKind(exosnap::engine::AudioSourceKind kind) noexcept {
 SettingsAdapter::SettingsAdapter(QObject* parent) : QObject(parent) {
     rebuildOptions();
     rebuildDerivedText();
+}
+
+void SettingsAdapter::setOutputFolderValidator(OutputFolderValidator validator) {
+    output_folder_validator_ = validator ? std::move(validator) : OutputFolderValidator(ValidateOutputFolder);
+}
+
+void SettingsAdapter::requestOutputValidation(OutputValidationTrigger trigger) {
+    emit outputValidationRequested(trigger);
+
+    const std::filesystem::path path = config_.output.output_folder;
+    const OutputFolderValidator validator = output_folder_validator_;
+    const uint64_t revision = output_validation_revision_.fetch_add(1) + 1;
+    const QPointer<SettingsAdapter> self(this);
+    QThreadPool::globalInstance()->start([self, path, validator, revision]() {
+        const FolderValidationResult result = validator(path);
+        if (self.isNull()) {
+            return;
+        }
+        QMetaObject::invokeMethod(
+            self.data(),
+            [self, result, revision]() {
+                if (self.isNull() || self->output_validation_revision_.load() != revision) {
+                    return;
+                }
+                self->applyOutputFolderValidation(result);
+                emit self->outputValidationFinished(result);
+            },
+            Qt::QueuedConnection);
+    });
+}
+
+void SettingsAdapter::applyOutputFolderValidation(FolderValidationResult result) {
+    const QString message =
+        result == FolderValidationResult::Ok ? QString() : fromWide(FolderValidationMessage(result));
+    if (folder_validation_ == message) {
+        return;
+    }
+    folder_validation_ = message;
+    emit configChanged();
+}
+
+void SettingsAdapter::requestSettingsFocus(FocusTarget target) {
+    emit settingsFocusRequested(target);
 }
 
 // ---------------------------------------------------------------------------
@@ -807,10 +853,6 @@ void SettingsAdapter::rebuildDerivedText() {
                          ? example_filename_
                          : QDir::toNativeSeparators(
                                QDir(QString::fromStdWString(out.output_folder.wstring())).filePath(example_filename_));
-
-    const FolderValidationResult folder_result = ValidateOutputFolder(out.output_folder);
-    folder_validation_ =
-        folder_result == FolderValidationResult::Ok ? QString() : fromWide(FolderValidationMessage(folder_result));
 
     const NormalizedFilenamePattern pattern = NormalizeFilenamePatternInput(out.naming_pattern);
     pattern_validation_ = pattern.result == FilenamePatternPolicyResult::Ok
@@ -1715,6 +1757,7 @@ void SettingsAdapter::setOutputFolder(const QString& value) {
     }
     config_.output.output_folder = resolved;
     applyConfigEdit();
+    requestOutputValidation(OutputValidationTrigger::PathEdit);
 }
 
 void SettingsAdapter::setNamingPattern(const QString& value) {

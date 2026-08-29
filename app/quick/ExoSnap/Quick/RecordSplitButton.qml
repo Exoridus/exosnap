@@ -69,20 +69,11 @@ Item {
     objectName: "quickRecordSplitButton"
     implicitHeight: root.compact ? ExoTheme.controlHeight : ExoTheme.controlHeightLarge
 
-    // The PILL is measured; the main face takes what is left.
-    //
-    // It used to be the other way round -- the main face reserved room for the
-    // longest label and the pill was that plus its chevron. That reservation only
-    // made sense while the label was centred inside the FACE. Centred on the pill
-    // it turns into dead space: the word sits in the middle of 173 px while being
-    // 60 px wide, so Record floated with a hole to the left of it.
-    //
-    // The width is the label plus one chevron's worth of air on each side, and a
-    // small pad on top of that. The chevron then occupies the right-hand
-    // clearance, which is what makes a word centred across both faces look
-    // centred rather than pushed; without the pad the label's right edge lands
-    // exactly on the divider and reads as crowding it. The floor is the width
-    // every other recommended action reserves.
+    // The MAIN FACE is what the label is centred in, so the face is what the
+    // width is built from: the label plus equal air either side of it, and the
+    // chevron's own lane added on top. The floor is the width every other
+    // recommended action reserves, so the round cluster beside the pill does not
+    // move when the state label changes length.
     readonly property int minimumWidth: root.compact ? 112 : 132
 
     // The divider is a child of the Row below, and a positioner skips invisible
@@ -91,7 +82,7 @@ Item {
     readonly property int trailingWidth: (divider.visible ? divider.width : 0) + chevronFace.width
 
     implicitWidth: Math.max(root.minimumWidth,
-                            mainRow.implicitWidth + 2 * (chevronFace.width + ExoTheme.spacingSm))
+                            mainRow.implicitWidth + 2 * ExoTheme.spacingLg + root.trailingWidth)
 
     Rectangle {
         id: pill
@@ -216,17 +207,20 @@ Item {
         }
     }
 
-    // The label is centred on the WHOLE pill, not on the face that carries the
-    // click. Centred inside the main face it sat visibly left of the control's
-    // own middle, because the chevron is part of the same pill and the eye reads
-    // the pill as the button. It is a sibling of the faces rather than a child of
-    // one so it can be positioned against the whole width; the faces keep their
-    // own hit areas and their own hover fills underneath it.
+    // The label is centred in the MAIN FACE -- the half that starts the
+    // recording -- not across the pill as a whole. The chevron is a second,
+    // separately hit-tested action with its own lane, so a word centred over
+    // both of them reads as pushed toward the chevron rather than as the label
+    // of the face it belongs to. It stays a sibling of the faces rather than a
+    // child of one, so the faces keep their own hit areas and hover fills
+    // underneath it; its horizontal position is therefore computed rather than
+    // anchored.
     Row {
         id: mainRow
 
         spacing: ExoTheme.spacingSm
-        anchors.centerIn: parent
+        x: Math.round((root.width - root.trailingWidth - mainRow.width) / 2)
+        anchors.verticalCenter: parent.verticalCenter
 
         // Only Cancel draws a glyph. The record dot beside the word "Record"
         // restated the label and read as a stray bullet at the pill's size; the

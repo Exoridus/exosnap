@@ -59,12 +59,12 @@ setting does not live in Diagnostics.
 
 - **Record** — the operational view: capture target, readiness, live preview before recording, and
   the live runtime (technical) view while recording.
-- **Settings** — unified recording configuration, hosting embedded sections: **Recording format ·
-  Video quality & timing · Audio sources · Audio encoding · Output · Webcam · Overlays · App behaviour · Hotkeys · Updates ·
-  Appearance · Developer**. There is no separate Advanced section — a global **Expert** toggle
-  (shared with Diagnostics) reveals additional rows in place within a section rather than hiding or
-  revealing a whole card; every section, including Developer, is visible in both modes (§12).
-  Hotkeys is an embedded full-width card, not a separate nav item.
+- **Settings** - unified recording configuration in two balanced card columns. The left column is
+  **Recording format · Audio sources · Output · App behaviour · Hotkeys · Appearance**; the right is
+  **Video quality & timing · Audio encoding · Webcam · Overlays · Updates · Support & diagnostics**.
+  There is no separate Advanced section - a global **Expert** toggle (shared with Diagnostics)
+  reveals additional rows in place within a section rather than hiding or revealing a whole card
+  (§12). Hotkeys is an embedded card, not a separate nav item.
 - **Diagnostics** — the live, changeable environment as readiness cards (disk, display, audio,
   elevation, blockers), plus a **Hardware capabilities** section: one card per detected DXGI
   adapter (iGPU/dGPU), with the per-adapter capability matrix for whichever card is being
@@ -87,47 +87,30 @@ setting does not live in Diagnostics.
   ID, architecture, configuration, official flag, install mode, channel, executable path and its
   SHA-256 — the hash is computed lazily off the UI thread on first click).
 
-**Edit / Output / Save** is a post-stop **overlay over the Record page**, not a nav item. After
-recording stops, the surface opens over Record as **one view**: player, trim timeline, a right
-rail with the details and export cards, and the post-flight report as an icon at the right end of
-its header. The overlay spans the client area below the real title bar, so the window keeps its
-title band and can be moved, minimized and closed for the whole edit session. Its backdrop is
-opaque, so the Record page does not show through. **Back** (or Escape / backdrop click, except
-while exporting) closes the overlay and returns to Record; when trim points or markers are set it
-asks before discarding them.
+**Edit / Output / Save** is a post-stop **workspace over the Record page**, not a nav item and not a
+persisted project editor. After recording stops, the surface opens over Record as **one view**:
+player, trim timeline, a right rail with the details and export cards, and the post-flight report at
+the right end of its header. It spans the client area below the real title bar, so the window keeps
+its title band and can be moved, minimized and closed throughout.
 
-**An open edit session is state of the Record destination, not a modality of the application.**
+**Edit state is deliberately temporary.** Trim points and future cut operations are an in-memory
+export recipe, not a saved project. **Back**, Escape, opening another clip, or navigating to
+Settings, Diagnostics, Logs or About closes the workspace and discards that recipe immediately,
+without a dirty badge, confirmation, draft file or recovery offer. Returning to Record shows the
+normal Completed state; opening Edit again starts clean from the source recording. This keeps the
+post-stop editor suitable for quick trimming and cutting without introducing project identity,
+draft cleanup, conflict resolution or replacement prompts.
 
-- The five top-level destinations stay **available** for the whole edit session — the tabs and
-  `Ctrl+1`…`Ctrl+5` alike.
-- Navigating to Settings, Diagnostics, Logs or About **does not close the session** and asks
-  nothing. There is no unsaved-edits prompt on the navigation path; navigation is unconditional
-  everywhere in the product.
-- The workspace is **left, not ended**: it is visible on Record and only on Record. Nothing is
-  unloaded, so no page is ever swapped underneath a surface that still covers it.
-- Returning to Record shows the **same session** — the same clip, trim, markers, playhead,
-  timeline strip and export state, down to where the details rail was scrolled to.
-- Leaving Record **pauses playback** and keeps the position. Video and audio out of a surface the
-  user is not looking at is both surprising on another page and decoder work nobody asked for.
-  Coming back leaves it paused where it was; starting it again is the user's own action.
-- A **running export keeps running** across a page change. It belongs to the session, not to the
-  page, and returning to Record shows its current state. Close / Discard / Exit keep their own
-  protections; navigation is not one of them.
-- The session still ends only through **Back / Escape**, which still asks before discarding trim
-  points or markers that were set.
-- **Blocking surfaces** (recovery, crash report, recording error) do block navigation — they are
-  modal about a question the user has not answered yet. An edit session is not that.
-- The window controls are unaffected: the band remains draggable and Minimize/Maximize/Close keep
-  working.
+The five top-level destinations and `Ctrl+1`...`Ctrl+5` stay available, and navigation is
+unconditional. A **running export is the exception to the workspace lifetime**: pressing Export has
+already committed a snapshot of the current recipe, so that operation keeps running independently
+after navigation and reports its result through the notification system. Navigation does not cancel
+or roll it back. Blocking surfaces (recovery, crash report, recording error) still block navigation
+because they are modal about a question the user has not answered; Edit is not. The window controls
+remain unaffected.
 
 Every navigation intent answers to this one contract — a tab, a keyboard shortcut, a notification
 action, a jump from the Diagnostics page. There is no second path with different rules.
-
-> **Corrected 2026-08-16.** This paragraph previously stated the opposite — that the five tabs are
-> *disabled* while an edit session is open — on the premise that the shipped code had always
-> disabled them. That premise was false: the Widgets shell that shipped until the Qt Quick cutover
-> let the tabs navigate for the whole edit session, and the lock arrived as an unnoticed porting
-> regression. See the QCR-001 entry in the cutover backlog.
 
 ### 2.1 The encode device is not a user choice
 
@@ -158,6 +141,10 @@ Consequences the UI must respect:
   first: the DXGI adapter LUID identifies an adapter only within the current desktop session and
   must not be persisted across reboots.
 
+All shipped interface copy is English in the current release and is wrapped for Qt translation as
+it is introduced. English is the fallback locale. User-visible recovery and error copy follows the
+same rule; implementation-only identifiers and log fields are not localized.
+
 ### 2.2 Appearance and accent
 
 The product has exactly **two base appearances** — **Dark** (the default) and **Light** — and a
@@ -177,25 +164,28 @@ themes existed mainly because neither could carry the other's accent.
 | Magenta | Warm pink — the most assertive of the four |
 
 The list is deliberately small, and deliberately all cool. **Coral, amber and green are the
-product's semantic colours** — recording/error, caution, ready/success — and an accent sharing one
-of those hues would make an ordinary selection read as a state. **Semantic meaning wins over palette
-breadth**: no state colour is ever derived from the accent, and switching accent never changes what
-recording, caution or ready look like. There is no free colour picker, no user-defined surface
-colour, and no separate primary/background/surface customisation.
+product's semantic colours**: recording/error, attention/held, and ready/success. Paused has its own
+semantic `paused` role whose shipped value is amber; warnings use the separate `warning` role even
+though it is also amber. A pause glyph or the word `Paused`, and a warning glyph or warning copy,
+always supplies the second cue. An accent sharing one of these hues would make an ordinary selection
+read as a state. **Semantic meaning wins over palette breadth**: no state colour is ever derived from
+the accent, and switching accent never changes what recording, paused, warning or ready look like.
+There is no free colour picker, no user-defined surface colour, and no separate
+primary/background/surface customisation.
 
 The accent drives selection: the active nav underline, the primary action, active toggles, focus
 rings and selected-card tint. Content drawn *on* a filled accent surface uses a curated contrasting
 ink per accent and appearance, never a derived one.
 
-**Blocked is a state, not the absence of one.** A control the product has taken away — a setting
-locked for the length of a recording, a webcam row with no camera attached — reads as blocked at a
-glance: its label, its hint and the control itself all step down to the dimmest ink rung together,
-and the control loses its raised fill and its hover response. **The accent goes**, because the accent
-means live and selectable. What stays is the *shape* of the state: a blocked switch that is on keeps
-a filled track with its knob at the right end, filled in the dim ink rung rather than in the accent,
-so a locked page still answers "which sources am I recording?" without any control on it looking
-pressable. A row is dimmed only when **every** control in it is blocked — one live control beside an
-inert one keeps the row at full strength.
+**Blocked is a state, not the absence of one.** A control the product has taken away - a setting
+locked for the length of a recording, a webcam row with no camera attached - reads as blocked at a
+glance. Its label and current value remain readable; the interaction chrome, hint and secondary ink
+step down, and the control loses its raised fill and hover response. **The accent goes**, because the
+accent means live and selectable. What stays is the *shape* of the state: a blocked switch that is on
+keeps a filled track with its knob at the right end, filled in the dim ink rung rather than in the
+accent, so a locked page still answers "which sources am I recording?" without any control on it
+looking pressable. A row is dimmed only when **every** control in it is blocked; one live control
+beside an inert one keeps the row at full strength.
 
 **Light** is one base, rebuilt rather than inherited. It distinguishes four surface rungs —
 application background, primary surface, raised control surface, and hover/selected — none of which
@@ -288,7 +278,7 @@ was last closed comes back maximized without showing its normal size first.
 Every nav destination that has a page title states it the same way: the destination's name on the
 page-title rung, on the same axis as its own content, with that page's controls (Expert toggle,
 Rescan, filters) on the right of the same row. Three destinations opt out. **Record** has no page
-title — its Preview Toolbar names the capture target instead, because the preview is that page's
+title - its flat context strip names the capture target instead, because the preview is that page's
 subject. **About** has no header at all, being a single centred identity card. **Settings** has no
 page title either: its first band is already a toolbar (the preset selector, its dirty badge and the
 preset actions), so a heading above it repeated the selected navigation tab word for word and pushed
@@ -390,6 +380,12 @@ already offers the way back.
 Preset names are unique case-insensitively (leading and trailing whitespace trimmed); built-in names
 are reserved. The naming dialogs reject a collision and let the user correct it; on import a
 collision is resolved with a numeric suffix ("Name (2)", "Name (3)", …).
+
+Preset **Rename** and **Save as new** use a compact ExoSnap overlay card rather than a generic Qt
+input dialog. Cancel is on the left and the named action, **Rename** or **Save preset**, is on the
+right; there is no generic `OK`. The existing uniqueness rule controls whether the named action is
+available. Folder and file selection remain native Windows dialogs, including output folders,
+preset import/export and one-time export recovery destinations.
 
 Presets are stored in a human-readable TOML store and can be exported and imported for sharing.
 Values are validated and sanitized before storage; invalid values are clamped rather than rejected
@@ -785,27 +781,33 @@ Three capture targets:
 Cursor capture is a toggle (on by default). Single-frame capture (a "capture frame" action) is
 available during recording via an on-screen dock control and a hotkey.
 
-**The source picker is a named list, not a thumbnail grid.** "Change source" opens a modal picker
-with two sections: **Displays**, where each display is one row carrying its own
-`Region on <display>` action beside it, and **Application windows**, a scrolling list of the currently
-capturable windows. A source is identified by its name — the display's sequential "Display N" label
-(see below) or the window's title — and picking one selects it and closes the picker. The picker
-opens no capture of its own and therefore holds nothing to release.
+**Source picker.** `Change source` opens a modal application surface with three tabs:
+**Displays**, **Windows**, and **Region**. Displays and Windows use selectable cards with a cached
+still thumbnail, source-kind glyph, resolved target label, and an explicit selected state. A missing
+thumbnail uses a stable placeholder rather than collapsing the card. Cards are fully clickable,
+keyboard focusable and accessible; double-click or Enter confirms the focused card. A fixed footer
+contains Cancel and the named confirm action. The refresh icon has a tooltip and accessible name.
 
-The **live** picture of the chosen source is the Record page's own preview, which the picker returns
-to. That is deliberate: a grid of live thumbnails means one capture per visible source, all running
-at once, before the user has decided what to record — and every one of them competing with the
-preview for the same sources. One live preview of the one selected source answers the same question
-for the cost of one capture.
+The Windows tab reports its result count, offers search, and uses a visible scrollbar whenever its
+cards overflow. Cards reflow from two columns to one at the narrow layout. Opening or refreshing the
+picker refreshes unselected cached stills; at most the selected target may run a live preview. A
+selection survives refresh when the same target identity remains. If it disappears, the picker says
+so and leaves the selection unresolved rather than silently choosing another target.
+
+The Region tab puts **Draw custom** first and gives it the strongest emphasis, followed by
+**16:9**, **9:16**, **1:1**, and **4:5** presets. Draw custom enters an immediate snipping-style drag
+overlay. A preset creates an editable starting rectangle rather than committing a fixed crop. The
+rectangle, dimension label, and resize handles remain visible and editable until recording starts;
+recording hides and locks them. Region labels retain the distinguishing part of the display name
+when space is tight instead of eliding every row to the same prefix.
 
 **Record preview box (content-fit).** The Record-page preview box follows the **current source's
 aspect ratio** — width-driven and vertically centered in the available space (height-clamped and
 horizontally centered for sources taller than the area) — so **the edge of the box is the edge of
 the recording**: there are no letterbox/pillarbox fill bars inside the box, and genuinely black
-recorded content is distinguishable from padding. The box carries a **1px line on its edge** in the
-current state's tone — quiet in the neutral state, and the recording / paused / warning / blocked
-tone otherwise (plus the existing recording scanline treatment); that line is the Preview Surface's
-own border, so the toolbar above the frame is inside the same ring (§8). The box follows
+recorded content is distinguishable from padding. The box carries a **1px neutral structural line on
+its edge** in every state. State is communicated by the local status pill, timer and actions, never
+by turning the largest surface into a status light. The box follows
 aspect changes live: switching targets, changing a region, or the captured source changing its own
 dimensions re-fits the box. With no source selected (or before the source's dimensions are known)
 the box keeps its default full-area size. The preview's meta/stats text rows (top target line,
@@ -847,7 +849,9 @@ the recorded frame, rendered the way SDR players will approximate it. The one ex
 already-PQ 10-bit desktop, where no shareable frame exists and the preview keeps its own capture (see
 KNOWN_LIMITATIONS).
 
-**Webcam PiP.** A webcam picture-in-picture overlay is **composited into the recording** (it is an
+**Webcam PiP.** Webcam is not a fourth capture-target tab. Its device lives in Settings > Webcam,
+its session enable control lives in the Record transport, and its position and size are adjusted in
+the preview. The picture-in-picture overlay is **composited into the recording** (it is an
 in-video element, not an on-screen-only overlay) and rendered WYSIWYG with a real mirror option and a
 selectable overlay placement. In a constant-frame-rate recording the PiP keeps moving at the encode
 cadence even while the desktop is perfectly still: a screen capture only produces a frame when the
@@ -970,6 +974,12 @@ plug/unplug cycles (`\\.\DISPLAY6`, `\\.\DISPLAY7` on a two-display desktop); th
 header and the output filename all use the same numbering. A display that just left the topology
 falls back to its raw number rather than borrowing another display's.
 
+**Target labels have one C++ resolver.** The picker, Record context, Recent menu, output naming and
+notifications consume the same resolved label instead of reconstructing one in QML. Application
+labels prefer a stable app name plus a concise document or page title when both add information, for
+example `Brave - Claude Design`. If no distinct app name exists, the raw window title is used, for
+example `Task Manager`. Identical parts are never repeated.
+
 **Fullscreen capture matrix.** How a target behaves depends on the app's presentation mode:
 
 - **Windowed** and **Borderless / windowed-fullscreen (FSO, flip-model)** record correctly on
@@ -1029,27 +1039,25 @@ blocked with a diagnostic message rather than silently falling back. Blocking is
 admitted, so a blocker holds even if the Diagnostics page was never opened. The start is refused with
 the blocker's own reason — never a generic failure.
 
-**Page composition.** The Record page is two things on one rhythm: the **Preview Surface** and the
-**transport dock**, with the shared 24 px page inset around them and 16 px between them.
+**No source is not Ready.** When no capture source is selected, the shell and Record status read
+`No source` or `Unavailable`, the preview placeholder explains that a source must be chosen, Record
+remains visible but disabled, and a separate **Choose source** action opens the picker. This expected
+empty state raises no first-run toast. A source that disappears is likewise never represented as
+Ready and is never silently replaced.
 
-The **Preview Surface** is one surface with two parts — a compact **Preview Toolbar** and, directly
-below it, the live frame — sharing one border, one radius and one width, divided only by a hairline.
-It replaces a separate full-width context card that sat above the preview: two rounded rectangles a
-scale step apart said the same thing twice (the card named the source, the preview showed it), and
-the card's height plus the gap to the preview cost the page's subject roughly 70 px of stage for a
-row of text that never changes while recording.
+**Page composition.** The Record page is a flat **context strip**, the separate **preview**, and the
+**transport dock** on one rhythm, with the shared 24 px page inset and stable gaps. The context strip
+has no card background, outer frame or shared border with the preview. It carries, left to right, a
+capture-kind glyph and the shared resolved source name; at the right, the resolved format summary,
+**Recent**, and **Change source**. Recent shows text plus a clock glyph when space permits and keeps
+the clock-only accessible action at minimum width. Its menu uses the same target labels as the
+picker. At the 860 px minimum the strip stays one line: the format summary yields first, while source
+identity and access to Recent and Change source remain.
 
-The toolbar is **38 px** — two rungs under the shell's 40 px title band, so the two never read as a
-pair of title bars — and it is chrome *on* the stage, not a second page header. It carries, left to
-right: a glyph for the capture-target kind (display / window / region), the source name, a
-**LOCKED** badge while a running recording has fixed that choice, and at the right end the resolved
-format summary as one understated run plus **Change source**. There is no separate `SCREEN` /
-`WINDOW` eyebrow — the glyph and the source name already say it, and the accessible name still
-states it in words. At the 860 px minimum window the toolbar stays **one line** and never grows: the
-format summary gives up room first, the source identity and the way back to the picker never do.
-
-The frame below the toolbar is the page's subject and takes all remaining height. It keeps the
-source's aspect ratio. The Preview Surface's border is **structural and neutral in every state** —
+The context strip and transport preserve their height and action slots in every lifecycle state.
+Controls locked by a running recording stay in their slot with a readable reason and accessible
+description rather than moving neighboring content. The preview is the page's subject and takes all
+remaining height. It keeps the source's aspect ratio. Its border is **structural and neutral in every state** -
 it says "this is one bounded surface", never what the engine is doing. It used to take the state's
 colour, which turned the largest object on the page into a roughly 1 000 px status light repeating
 what the state pill in its own corner, the shell's status pill and the transport's one recommended
@@ -1065,13 +1073,15 @@ unresolved — through the page notice. The **LOCKED** badge is a neutral statem
 caution: the capture setup is locked for the duration of a recording by design, so there is nothing
 for the user to attend to.
 
-**State colour vocabulary.** Coral means recording, destructive or error; amber means an actual
-caution; green means ready or success; the accent means selection, focus or the primary interactive
-emphasis; everything else is neutral. **Countdown, Paused and Locked are normal states and never use
-amber.** Paused takes the accent — the same colour its Resume action carries — and the momentary
-transitions (countdown, preparing, stopping, saving) take a quiet neutral. Cancelling a countdown is
-not destructive and is not drawn as such: it is the accent-filled primary action of that state, told
-apart from Record by its glyph rather than by its colour.
+**State colour vocabulary.** Coral means recording, destructive or error; amber communicates
+attention, including both warning and the deliberately held **Paused** state; green means ready or
+success; the accent means selection, focus or primary interactive emphasis; everything else is
+neutral. Paused uses the semantic `paused` role in the status pill, timer, on-screen overlay, tray
+and taskbar. It is distinguished from a warning by its pause glyph or `Paused` label. **Resume stays
+accent**, because it is an action rather than a state. Warning uses the separate semantic `warning`
+role and a warning glyph or explanatory copy. Countdown, Preparing, Stopping, Saving and Locked are
+quiet neutral states. Cancelling a countdown is not destructive and is drawn as the accent-filled
+primary action of that state, told apart from Record by its glyph rather than by its colour.
 
 **Transport dock.** The Record page's controls sit in one bar along the bottom, in three
 groups of deliberately different weight. The **dock is the recessed base and its controls sit on
@@ -1089,7 +1099,8 @@ thing meant to be pressed the darkest thing on the page.
   in its tooltip; a source with **no device attached at all** is not shown, because a control that
   can never act and has no reason worth reading is noise.
 - **Centre — the elapsed time**, the largest element on the page. It is neutral while idle, coral
-  while recording and accent while paused, using tabular figures so the digits do not shift.
+  while recording and the semantic paused amber while paused, using tabular figures so the digits do
+  not shift.
 - **Right — the actions**, in two tiers: the per-recording secondary actions (capture frame, add
   marker, split, pause) as round icon buttons, then the one recommended action as a wider pill.
   There is never more than one **filled** pill, and a filled pill means *something is happening
@@ -1121,7 +1132,7 @@ thing meant to be pressed the darkest thing on the page.
   separate control floating between the Preview Surface and the dock — the page is one Preview
   Surface, 16 px, one dock.
 
-**Page notice.** A single inline banner sits above the Preview Surface for conditions the page itself
+**Page notice.** A single compact inline banner sits above the context strip for conditions the page itself
 cannot fix. Its colour states what the message **means** — a refused export is an error, an
 unavailable display is a caution — and never the same tone for all of them. It names a produced file
 by **file name**, never by full path: a path is unbounded, so a banner carrying one grows as wide as
@@ -1132,6 +1143,13 @@ nor a saved frame raises a page notice.** A captured frame reports itself as a b
 the file name and an **Open folder** action; a capture that failed reports itself the same way,
 because a write that did not happen is a finished event and not a state the page can offer to
 resolve.
+
+`Blocked` always names the concrete blocker and presents its next useful action, such as **Open
+Diagnostics**, **Change source**, or the relevant Settings action. During recording, loss of an audio
+source raises an amber notice that names the source and says that recording continues without it;
+Stop remains the dominant recording action. The notice updates in place as sources recover or
+degrade and disappears when all recover. Neither condition relies on the notification hub as its
+only visible explanation.
 
 It used to: a full-width "Recording saved · name.mkv" banner appeared above the
 Preview Surface, and because the preview is the page's fill-height element that banner came straight
@@ -1172,6 +1190,12 @@ moment of the click. The default countdown is 0 s, so for most starts Preparing 
 the user sees. Pressing the record hotkey during Preparing cancels the pending start and returns to
 Ready (quietly, with a log entry — no dialog); a device step already in flight finishes before the
 cancel takes effect.
+
+Preparing is a transactional admission phase. The app revalidates the destination, creates the
+session's partial artifact, initializes the muxer and encoder, and opens every selected source before
+it transitions to Recording. A failure rolls back opened resources and reports the actionable cause.
+A failed startup or precondition before an explicit start is `Blocked`; a failure after the user's
+explicit start is `Failed` or `Error`, never a false Ready state.
 
 **Live monitoring.** While recording, low-cost instrumentation (aggregated off-thread, ~1–4 Hz, no
 per-frame image analysis) tracks dropped/duplicated frames, A/V drift, and disk-fill ETA, and
@@ -1250,6 +1274,22 @@ segment-size field (**Split by size**) appear only while their toggle is on. Tog
 the "off" state — it changes no persisted value beyond the split mode itself, so presets and exported
 TOML round-trip identically.
 
+**Output destination and live artifacts.** The default recording destination is the Windows Known
+Folder `FOLDERID_Videos` plus `ExoSnap`, respecting folder redirection. Live artifacts are created on
+the configured output volume, never in the system temporary directory. The valuable unfinished file
+uses the final base name plus the final extension and `.partial`, for example
+`Recording.mkv.partial`; disposable staging uses `.tmp`. A clean MKV/WebM session is atomically
+renamed from its `.partial` name to the final name. Crash repair may use a separate `.tmp` artifact,
+but if repair fails the original `.partial` is preserved.
+
+The configured path is preserved as entered and supports redirected folders, symbolic links,
+junctions, mapped drives and UNC paths. Validation is asynchronous for network destinations and runs
+at startup, after path edits, on application activation, after relevant network changes, whenever
+Settings > Output opens, and during final start preparation. Missing, unreachable or unwritable
+destinations are `Blocked`/error conditions: Record remains the stable disabled CTA, a startup
+notification opens Settings > Output, the destination row receives focus and shows the inline
+error. There is no permanent `Check again` action because these lifecycle events recheck it.
+
 **Low-disk guard.** A configurable soft **warning threshold** (default around 2 GB free) shows a
 Diagnostics notice but still allows recording; a lower **hard-stop threshold** (default around
 500 MB free) blocks recording at start and stops a running recording gracefully. For MP4 sessions the
@@ -1257,10 +1297,11 @@ effective hard-stop threshold is raised to account for the transient MKV and out
 during remux (roughly 2× file size), and for split MP4 sessions it is raised further by the sum of
 pending background remux jobs plus the live segment estimate.
 
-When the output volume **cannot be queried at all** (an unreachable network share, a denied volume),
-the guard cannot measure and therefore does not fire: recording proceeds and a warning is written to
-the log stating that low-disk protection is inactive for that session. A volume that reports **zero
-bytes free** is a full disk, not a failed query, and is blocked like any other hard-stop.
+When destination admission has proven that the path is reachable and writable but its volume's free
+space **cannot be queried**, the guard cannot measure and therefore does not fire: recording proceeds
+and a warning is written to the log stating that low-disk protection is inactive for that session.
+An unreachable or denied destination fails admission instead. A volume that reports **zero bytes
+free** is a full disk, not a failed query, and is blocked like any other hard-stop.
 
 **Filesystem checks.** ExoSnap detects the output volume's filesystem. A **FAT32** volume raises a
 Diagnostics **notice** about the 4 GiB per-file limit; recording is **not** blocked and short clips
@@ -1326,9 +1367,9 @@ the application was waiting on an answer to — and covered the shell's own mini
 close buttons, so a window with the editor open could not be closed or dragged by its own chrome.
 
 While the workspace is open Record stays marked as the current destination, because the workspace
-belongs to it. The navigation tabs stay **available**: leaving Record hides the workspace without
-ending the session, and coming back shows the same one (§2). Back is the way out of the session
-itself, and it is a navigation action drawn as one, with the shared chevron.
+belongs to it. The navigation tabs stay **available**: leaving Record ends the temporary edit session
+without confirmation, exactly like Back or Escape, and returning shows the normal Completed state
+(§2). Back is a navigation action drawn as one, with the shared chevron.
 
 **Header.** One line: `‹ Back`, the title, the clip's file name, and the post-flight **report
 status** at the right end. The file name is the only element allowed to give up room and elides in
@@ -1344,10 +1385,10 @@ the label zone, the loading hint and the clock row sat outside it on the bare pa
 next to two bordered panels the timeline read as loose furniture. Nested elements do not repeat their
 container's border.
 
-By default, a successful recording opens straight into this overlay, preloaded with the clip —
-the product's post-record path is editing, not a bare "recording saved" notice. The **Open editor
-when finished** toggle (Settings → Output) turns this off: with it off, a "Recording saved" toast
-with Edit / Show-in-folder actions appears instead and the user returns to Record.
+A successful recording normally remains in the Completed state with **Edit** as the recommended
+action. The **Open editor when finished** toggle (Settings > Output, off by default) may open this
+workspace over Record, preloaded with the new clip; it never navigates to a sixth top-level page. With
+the toggle off, a `Recording saved` toast offers Edit and Show in folder.
 
 The surface scales with the window. The right rail narrows as the window gets tighter and scrolls
 when its two cards need more height than the window offers, but it is never hidden — it carries
@@ -1376,23 +1417,23 @@ or duration readout above the strip:
 - **Thumbnails.** The video row shows frames decoded from the recording, each drawn **left-aligned
   at its own timestamp** so a tile answers "from here on it looks like this". Tile width follows
   the recording's aspect ratio and the number of tiles follows the available width, so resizing
-  the window re-lays the strip. While tiles are still arriving, a muted **"Generating previews…"**
-  hint sits in the quiet zone above the row stack and disappears once every tile the current width
-  can hold has landed — no spinner, and no placeholder/skeleton tiles in the meantime. Tiles appear
-  as they finish decoding; a position whose frame is
+  the window re-lays the strip. While tiles are still arriving, a compact indeterminate progress
+  indicator and **`Generating timeline previews...`** sit in the quiet zone above the row stack and
+  disappear once every tile the current width can hold has landed. Tiles appear as they finish
+  decoding; a position whose frame is
   not (yet) available leaves the row empty there rather than showing a placeholder.
   When the clip carries **nothing decodable at all** — it cannot be opened, it has no video stream, or
-  a decode pass finished having produced no frame — the hint says **"Preview unavailable"** instead,
-  in the same quiet rung and the same place, and stays there. That is a terminal statement, not a
-  spinner: no tile is coming. The strip is the only thing affected — trim, playback, markers and
+  a decode pass finished having produced no frame - a static broken-preview glyph and **`Timeline
+  previews unavailable`** replace the progress treatment and stay there. That is a terminal
+  statement: no tile is coming. The strip is the only thing affected - trim, playback, markers and
   export all keep working on a clip whose thumbnails cannot be produced. Cancelling a run (resizing
   the window, switching clips, closing Edit) is never treated as a failure.
 - **Trim handles.** Draggable in/out handles sit at the start and end of the timeline; the
   trimmed-away ranges are dimmed. The handles constrain each other (they can never cross), and on
   release the cut point snaps to the nearest keyframe at or before the requested time and, within
   50 ms, to the nearest marker — trim stays **keyframe-accurate and lossless** (stream copy, no
-  re-encode). The trim is applied only when the user clicks **Save & export**; until then nothing
-  on disk changes.
+  re-encode). The trim is applied only when the user clicks **Export**; until then nothing on disk
+  changes. The Export card states `Changes are applied only when exported.`
 - **Playhead.** A white playhead line moves through the timeline while the preview is playing
   (play/pause toggle on the player area). **Scrubbing** — dragging the playhead or pressing
   anywhere on the track — jumps the preview position there; playback pauses for the duration of
@@ -1423,8 +1464,12 @@ replace; the destructive choice is not the default button.
 
 The same card reports the run, and it reports it **directly under the card's heading, above the
 output choices** — so a result is visible without scrolling and without anything above it shifting.
-There is a progress bar with **Cancel** while it is going, the result with **Show in folder** when it
-succeeds, and the real error text with **Retry** when it does not.
+There is a progress bar with **Cancel** while it is going and the result with **Show in folder** when
+it succeeds. A failure has exactly one retry route: the primary Export action remains unavailable
+while the failure result is present. If the destination is missing, unwritable or full, the result
+offers **Choose another folder** through the native Windows folder picker and retries once to that
+one-time destination. It may also offer **Open output folder** when useful. A raw Retry that cannot
+change the cause and parallel Retry/Export actions are not shown.
 
 A successful run names the file on **its own line and the folder on a second one**, each elided in
 the middle, with the full path on hover. The two were one wrap-anywhere run, which in the narrow rail
@@ -1438,11 +1483,14 @@ compact, so the finished state is not conspicuously taller than the other three.
 state the card reserves no space for the status it is not showing. The output choices stay visible
 throughout — greyed out while a run is in flight — so a finished export leaves the settings in
 place for the next one; at the minimum window size they are what scrolls out of view. A **keyframe
-interval** selector (Settings →
-Advanced → Video: 2 s default / 1 s / 0.5 s) trades a little file size for finer trim accuracy. The
-original recording is never mutated during export; not-yet-exported edits are discarded on dismiss.
-Dismissing the surface ends the edit session rather than only hiding it: the clip is closed, the
-preview decoder and the thumbnail strip's decoder are released, and the recording can be moved,
+interval** selector (Settings > Recording format: 2 s default / 1 s / 0.5 s) trades a little file
+size for finer trim accuracy. The original recording is never mutated during export. Trim points,
+markers and future edit operations are a temporary in-memory export recipe and are never written as
+drafts or project state. Back, Escape, tab navigation or opening another clip discards an unexported
+recipe immediately, without a dirty badge, prompt or recovery entry. A running export owns an
+immutable snapshot of the recipe and continues after the workspace closes; completion or failure is
+reported through notifications. Dismissing the surface closes the clip; the preview decoder and the
+thumbnail strip's decoder are released, and the recording can be moved,
 renamed or deleted again without quitting ExoSnap. Opening Edit afterwards starts from a clean
 session.
 
@@ -1530,6 +1578,9 @@ release (0.11 per ADR 0022).
   inline notices use, and an accessible name that starts with the severity ("Warning. Storage running
   low."). Colour alone would say nothing to a user who cannot separate those hues and nothing at all
   to a screen reader.
+  The empty hub is content-sized around its empty-state message instead of retaining the filled
+  panel's height. Entry actions use a compact text-button treatment with defined action colour and a
+  small chevron; they never read as unmarked body copy and never become large primary buttons.
 - **The bell's unread dot** carries urgency, not a count. It appears whenever anything is unread and
   takes its colour from the **worst** unread entry — **mint** when nothing unread is more than a
   notice, **amber** when at least one is a warning (frames dropped, a source degraded, a dead hotkey,
@@ -1686,9 +1737,9 @@ surface (recovery, crash report, recording error, release notes) or an unanswere
 open, for the same reason the navigation tabs are: nothing may swap the page under a surface that
 still covers it. The close prompt is named separately because it is the one case a scrim cannot
 cover on its own — the desktop notification toast is its own always-on-top window and reaches the
-same navigation intents from outside the shell. An open **edit session** is
-not one of those — the shortcuts and the tabs share one navigation contract, and under it the
-session is state of the Record destination (§2).
+same navigation intents from outside the shell. An open **edit workspace** is not one of those: the
+shortcuts and tabs share one navigation contract, and either closes the temporary edit recipe
+without confirmation before navigating (§2).
 
 **The pointer says what a control does.** Anything that can be clicked shows the **pointing hand**;
 a control that is present but **unavailable** shows the plain arrow, because a greyed control that
@@ -1752,7 +1803,10 @@ headline + subline, the Run-check control, and the last-check timestamp), then a
 a completed recording exists — that reflows from four columns down to two as the window narrows. Any
 Tier-1/Tier-2 card follows, then one bundled Tier-3 tip chip integrated into the same layout. The
 per-adapter capability matrix follows below, inside the collapsed **Hardware capabilities** section
-(§2) — health first, technical capability second.
+(§2) - health first, technical capability second. Its rows are capabilities and its columns are
+**H.264**, **HEVC**, and **AV1**, so codec differences can be read vertically. Values such as maximum
+B-frames live in the cells; raw probe details remain below the matrix. The self-test table remains a
+separate component-by-component result list because repeated Pass results are meaningful there.
 
 **FixAction model.** Each detected issue can carry a typed, executable fix action with a safety
 class, never applied silently:
@@ -1809,6 +1863,8 @@ The Logs page states how much of the stream is currently shown ("Showing 22 of 2
 search") as the page header's own subtitle, beside the title, rather than as a separate band between
 the toolbar and the list. The log list itself is deliberately full-width — a log line is data, and
 truncating it to protect a reading measure would be the wrong trade on a tool surface.
+It has one thin sticky header row, **Time | Level | Category | Message**, aligned to the data columns
+and without additional card chrome.
 
 **Present / tearing / latency diagnostics.** An opt-in, elevation-gated provider (PresentMon, the
 engine behind FrameView) enriches window/game-capture diagnosis and feeds judder correlation. A
@@ -1834,15 +1890,27 @@ one a reader cannot tell apart from a measurement.
 
 ## 12. Settings model (Default / Expert)
 
-Settings uses a **Default / Expert split** drawn around an explicit gating criterion rather than by
-how a control looks. A row is Expert-only when at least one holds: misconfiguring it can produce an
-incompatible or broken file (**bit depth, color range, chroma subsampling, rate control**); it is
-meaningless without format expertise (**NVENC encoder preset, keyframe interval, Opus frame
-duration/complexity**); or it protects pipeline integrity and disabling it can ruin a long recording
-(**audio clock slaving**). Everything else is Default-visible even when it looks technical — mic
-gain, mic channel mode, audio bitrate, channel count, audio bit depth and FLAC compression, the
-brickwall limiter, microphone post-processing, and automatic split all live in Default. The Expert
-toggle is a single global state shared with the Diagnostics page.
+Settings targets a **technically experienced or technically inclined user who is not expected to be
+an audio/video specialist**. Default therefore keeps container and codec choices visible, together
+with frequent and useful recording controls, but presents curated, human-readable values. It does
+not hide the format of the file the user is creating. Expert reveals raw, specialized or unsafe
+mechanics in place. The Default quality control is the named five-tier quality choice; Expert
+replaces it with explicit rate-control and numeric fields.
+
+The **Default / Expert split** follows that audience contract rather than how technical a label
+looks. A row is Expert-only when at least one holds: misconfiguring it can produce an incompatible or
+broken file (**bit depth, color range, chroma subsampling, rate control**); it is meaningless without
+format expertise (**NVENC encoder preset, keyframe interval, Opus frame duration/complexity**); or it
+protects pipeline integrity and disabling it can ruin a long recording (**audio clock slaving**).
+Everything else is Default-visible even when it looks technical - mic gain, mic channel mode, audio
+bitrate, channel count, audio bit depth and FLAC compression, the brickwall limiter, microphone
+post-processing, and automatic split. The Expert toggle is one global state shared with Diagnostics.
+
+Cards use this fixed two-column order. Left: **Recording format**, **Audio sources**, **Output**,
+**App behaviour**, **Hotkeys**, **Appearance**. Right: **Video quality & timing**, **Audio encoding**,
+**Webcam**, **Overlays**, **Updates**, **Support & diagnostics**. Frequently used rows lead within a
+card, and related rows may form calm visual groups. At the bottom of both Default and Expert, the two
+columns end within approximately one card height of each other.
 
 Expert mode adds, in place within their existing section: **Bit depth**, **Color range**, **NVENC
 encoder preset**, **Keyframe interval**, and **Chroma subsampling** (Recording format); the
@@ -1872,10 +1940,11 @@ it also lets the two halves sit in different columns, which is what evens the pa
 adds its rows. The split is a section boundary, not an Expert gate: both cards are present in
 Default, and Expert still only reveals rows inside them.
 
-**No section is Expert-gated.** Every embedded Settings section, including **Developer** (a logging
-level, an honest disabled "planned" NVTX/profiling-markers row, and crash-report consent), is visible
-in both Default and Expert; Expert only reveals additional rows in place inside a section, it never
-hides or reveals a whole section.
+**No section is Expert-gated.** Every embedded Settings section, including **Support & diagnostics**
+(logging level, an honest disabled `planned` profiling-markers row, crash-report consent and support
+tools), is visible in both Default and Expert. Expert only reveals additional rows in place inside a
+section; it never hides or reveals a whole section. Locked rows retain readable labels and current
+values while their interaction chrome and secondary hints recede (§2.2).
 
 Settings offers inline info hints (hover
 popovers on info-i icons and the countdown chevron) and search. Info-i placement is **selective**:
@@ -2031,6 +2100,11 @@ unimplemented behavior.
   **Open ExoSnap + Close**, and non-retryable results show **Close** only. The ambiguous
   **Open current version** label is not used.
 
+  The updater remains a Qt Widgets executable in this product wave. A later rendering-only Qt Quick
+  port may not redesign it: the fixed 520 x 680 geometry, layout, visual output, state model,
+  accessibility contract, automation surface and behavioral/visual tests remain compatibility
+  requirements.
+
   The window shows **one** progress language at a time. Until the run has measured something — the
   pre-flight frame it opens on — the ring carries **no percentage and no arc**, and the status line
   under it says what is happening; a percentage appears only once there is real progress behind it,
@@ -2127,7 +2201,7 @@ unimplemented behavior.
   has scrolled off screen is one the user can commit without seeing. It is
   draft state only: Send + remember commits `Send automatically`; Don't send + remember commits
   `Never send`; either action without remember leaves `Ask every time`; close, Escape and backdrop
-  dismissals never change policy. Settings → Developer → **Crash reports** exposes all three
+  dismissals never change policy. Settings → Support & diagnostics → **Crash reports** exposes all three
   choices and applies the corresponding consent state immediately.
 - A Send action without remember is one-shot consent. The app releases and flushes the pending
   Sentry envelope, then resets sentry-native consent to unknown, so later reports in the same

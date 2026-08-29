@@ -84,6 +84,7 @@ class MixedAudioSrc final : public IAudioCaptureSource {
     // audio thread surface a partly-degraded merged track without ending it.
     uint32_t CaptureSourceCount() const override;
     uint32_t DegradedSourceCount() const override;
+    uint32_t DegradedSourceIndexMask() const override;
 
     // Single-source pass-through of the inner device timing (H-3). A one-source
     // mixer is the gain-wrapped single track (a MIC row with gain != 1); it has

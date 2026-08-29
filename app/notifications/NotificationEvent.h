@@ -1,7 +1,10 @@
 #pragma once
 
 #include <QString>
+#include <QStringList>
 #include <cstdint>
+
+#include <exosnap/engine/audio_track_model.h>
 
 namespace exosnap::notifications {
 
@@ -159,9 +162,31 @@ struct NotificationEvent {
 // (CLAUDE.md: prefer explicit models and pure resolver logic where possible).
 // degraded_count must be >= 1 — the caller (MainWindow) never raises this
 // notification for a count of 0; it dismisses the standing toast instead.
-[[nodiscard]] inline NotificationEvent MakeAudioSourceDegradedEvent(uint32_t degraded_count) {
+[[nodiscard]] inline NotificationEvent MakeAudioSourceDegradedEvent(uint32_t degraded_count,
+                                                                    uint32_t degraded_source_kinds = 0) {
     NotificationEvent event;
     event.type = NotificationType::AudioSourceDegraded;
+    QStringList sources;
+    using exosnap::engine::AudioSourceKind;
+    using exosnap::engine::AudioSourceKindBit;
+    if ((degraded_source_kinds & AudioSourceKindBit(AudioSourceKind::Mic)) != 0)
+        sources << QStringLiteral("Microphone");
+    if ((degraded_source_kinds &
+         (AudioSourceKindBit(AudioSourceKind::Sys) | AudioSourceKindBit(AudioSourceKind::SystemOutput))) != 0)
+        sources << QStringLiteral("System audio");
+    if ((degraded_source_kinds & AudioSourceKindBit(AudioSourceKind::App)) != 0)
+        sources << QStringLiteral("Application audio");
+    if (!sources.isEmpty()) {
+        event.title = sources.size() == 1 ? QStringLiteral("%1 went silent").arg(sources.front())
+                                          : QStringLiteral("Audio sources went silent");
+        event.body = QStringLiteral("%1 lost %2 device. Recording continues without %3 while ExoSnap retries the "
+                                    "connection.")
+                         .arg(sources.join(QStringLiteral(", ")),
+                              sources.size() == 1 ? QStringLiteral("its") : QStringLiteral("their"),
+                              sources.size() == 1 ? QStringLiteral("it") : QStringLiteral("them"));
+        event.action = NotificationAction::OpenDiagnostics;
+        return event;
+    }
     event.title =
         degraded_count == 1 ? QStringLiteral("Audio source went silent") : QStringLiteral("Audio sources went silent");
     event.body = degraded_count == 1 ? QStringLiteral("An audio source lost its device. Recording continues — "

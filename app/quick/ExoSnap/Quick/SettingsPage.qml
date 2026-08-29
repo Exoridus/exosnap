@@ -93,6 +93,30 @@ Item {
         return scroll.scrollToEnd();
     }
 
+    function focusOutputDestination(): void {
+        outputFocusTimer.remainingAttempts = 8;
+        outputFocusTimer.restart();
+    }
+
+    // The Settings page is loaded lazily, and its proxy-based layout settles
+    // over several frames. A single reveal can therefore target pre-layout
+    // geometry and be reset before the destination field receives focus.
+    Timer {
+        id: outputFocusTimer
+
+        property int remainingAttempts: 0
+
+        interval: 150
+        repeat: true
+        onTriggered: {
+            scroll.revealItem(outputSection);
+            outputSection.focusDestination();
+            remainingAttempts -= 1;
+            if (remainingAttempts <= 0)
+                stop();
+        }
+    }
+
     // Harness-only: the page owns the sections, so a --visual-dialog request
     // lands here and is forwarded to whichever one holds the dialog.
     function openHarnessDialog(name: string): bool {
@@ -111,6 +135,20 @@ Item {
         interval: 250
         repeat: true
         onTriggered: scroll.contentItem.contentY = Math.max(0, scroll.contentHeight - scroll.height)
+    }
+
+    Connections {
+        target: root.settings
+
+        function onSettingsFocusRequested(target: int): void {
+            if (target === SettingsAdapter.OutputDestination)
+                root.focusOutputDestination();
+        }
+    }
+
+    Component.onCompleted: {
+        if (root.settings.folderValidation.length > 0)
+            root.focusOutputDestination();
     }
 
     // ── The sections themselves, instantiated exactly once ───────────────────
@@ -289,16 +327,16 @@ Item {
 
                     LayoutItemProxy { target: presetSection }
                     LayoutItemProxy { target: formatSection }
-                    LayoutItemProxy { target: qualitySection }
                     LayoutItemProxy { target: audioSourcesSection }
-                    LayoutItemProxy { target: audioEncodingSection }
                     LayoutItemProxy { target: outputSection }
-                    LayoutItemProxy { target: webcamSection }
-                    LayoutItemProxy { target: overlaysSection }
                     LayoutItemProxy { target: presenceSection }
                     LayoutItemProxy { target: hotkeysSection }
-                    LayoutItemProxy { target: updatesSection }
                     LayoutItemProxy { target: appearanceSection }
+                    LayoutItemProxy { target: qualitySection }
+                    LayoutItemProxy { target: audioEncodingSection }
+                    LayoutItemProxy { target: webcamSection }
+                    LayoutItemProxy { target: overlaysSection }
+                    LayoutItemProxy { target: updatesSection }
                     LayoutItemProxy { target: developerSection }
                 }
 
@@ -334,10 +372,11 @@ Item {
                             Layout.alignment: Qt.AlignTop
 
                             LayoutItemProxy { target: formatSection }
-                            LayoutItemProxy { target: qualitySection }
                             LayoutItemProxy { target: audioSourcesSection }
                             LayoutItemProxy { target: outputSection }
                             LayoutItemProxy { target: presenceSection }
+                            LayoutItemProxy { target: hotkeysSection }
+                            LayoutItemProxy { target: appearanceSection }
 
                             Item {
                                 Layout.fillHeight: true
@@ -350,12 +389,11 @@ Item {
                             Layout.preferredWidth: 1
                             Layout.alignment: Qt.AlignTop
 
-                            LayoutItemProxy { target: webcamSection }
+                            LayoutItemProxy { target: qualitySection }
                             LayoutItemProxy { target: audioEncodingSection }
+                            LayoutItemProxy { target: webcamSection }
                             LayoutItemProxy { target: overlaysSection }
-                            LayoutItemProxy { target: hotkeysSection }
                             LayoutItemProxy { target: updatesSection }
-                            LayoutItemProxy { target: appearanceSection }
                             LayoutItemProxy { target: developerSection }
 
                             Item {

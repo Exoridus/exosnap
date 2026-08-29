@@ -50,7 +50,9 @@ Item {
         "ExternalLink": ExoGlyph.ExternalLink,
         "Back": ExoGlyph.Back,
         "Folder": ExoGlyph.Folder,
-        "SplitTrack": ExoGlyph.SplitTrack
+        "SplitTrack": ExoGlyph.SplitTrack,
+        "Clock": ExoGlyph.Clock,
+        "PreviewBroken": ExoGlyph.PreviewBroken
     })
 
     Component {

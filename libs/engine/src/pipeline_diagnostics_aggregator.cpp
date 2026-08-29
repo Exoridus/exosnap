@@ -134,6 +134,7 @@ void PipelineDiagnosticsAggregator::Reset(uint64_t generation, const Diagnostics
     audio_queue_peak_ = 0;
     audio_discontinuities_ = 0;
     audio_degraded_sources_.fill(0);
+    audio_degraded_source_kinds_.fill(0);
     audio_total_sources_.fill(0);
 
     video_queue_depth_ = 0;
@@ -473,10 +474,12 @@ void PipelineDiagnosticsAggregator::OnAudioDiscontinuity() noexcept {
 }
 
 void PipelineDiagnosticsAggregator::OnAudioSourceHealth(uint32_t track_id, uint32_t degraded_sources,
-                                                        uint32_t total_sources) noexcept {
+                                                        uint32_t total_sources,
+                                                        uint32_t degraded_source_kinds) noexcept {
     std::lock_guard lk(mutex_);
     if (track_id < audio_degraded_sources_.size()) {
         audio_degraded_sources_[track_id] = degraded_sources;
+        audio_degraded_source_kinds_[track_id] = degraded_source_kinds;
         audio_total_sources_[track_id] = total_sources;
     }
 }
@@ -740,10 +743,13 @@ RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_p
     au.codec = stats.audio_codec;
     au.track_count = cfg_.audio_track_count;
     uint32_t degraded_total = 0;
-    for (const uint32_t d : audio_degraded_sources_) {
-        degraded_total += d;
+    uint32_t degraded_kinds = 0;
+    for (size_t i = 0; i < audio_degraded_sources_.size(); ++i) {
+        degraded_total += audio_degraded_sources_[i];
+        degraded_kinds |= audio_degraded_source_kinds_[i];
     }
     au.degraded_sources = degraded_total;
+    au.degraded_source_kinds = degraded_kinds;
     au.source_degraded = degraded_total > 0;
     // Post-flight audio facts owned by the audio workers, passed through unchanged:
     // the latched "a source was lost at some point" bit and the per-track resampler

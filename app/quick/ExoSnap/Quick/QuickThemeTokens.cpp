@@ -260,6 +260,9 @@ QColor QuickThemeTokens::accentInk() const noexcept {
 QColor QuickThemeTokens::warning() const noexcept {
     return warning_;
 }
+QColor QuickThemeTokens::paused() const noexcept {
+    return warning_;
+}
 QColor QuickThemeTokens::warningSurface() const noexcept {
     return warning_surface_;
 }
@@ -321,6 +324,9 @@ QColor QuickThemeTokens::overlaySuccess() noexcept {
     return parseToken(darkAppearance().success);
 }
 QColor QuickThemeTokens::overlayWarning() noexcept {
+    return parseToken(darkAppearance().caution);
+}
+QColor QuickThemeTokens::overlayPaused() noexcept {
     return parseToken(darkAppearance().caution);
 }
 QColor QuickThemeTokens::overlayError() noexcept {

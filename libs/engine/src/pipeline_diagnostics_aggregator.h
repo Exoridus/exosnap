@@ -404,7 +404,8 @@ class PipelineDiagnosticsAggregator {
     // of its total. Level-based (the current state, not an event), reported each
     // drain iteration; the snapshot sums across tracks. track_id is bounded by
     // CodecPrivateData::kMaxAudioTracks.
-    void OnAudioSourceHealth(uint32_t track_id, uint32_t degraded_sources, uint32_t total_sources) noexcept;
+    void OnAudioSourceHealth(uint32_t track_id, uint32_t degraded_sources, uint32_t total_sources,
+                             uint32_t degraded_source_kinds = 0) noexcept;
     // Queues
     void OnVideoQueueDepth(uint32_t depth) noexcept;  // post-encode mux queue
     void OnAudioPremuxDepth(uint32_t depth) noexcept; // bounded premux
@@ -528,6 +529,7 @@ class PipelineDiagnosticsAggregator {
     // Per-track degraded/total capture-source counts (ADR 0046). Array size
     // mirrors CodecPrivateData::kMaxAudioTracks; summed in BuildSnapshot.
     std::array<uint32_t, 3> audio_degraded_sources_{};
+    std::array<uint32_t, 3> audio_degraded_source_kinds_{};
     std::array<uint32_t, 3> audio_total_sources_{};
 
     // Queues

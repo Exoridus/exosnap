@@ -256,6 +256,8 @@ target_link_libraries(exosnap_observability PUBLIC
 )
 
 exosnap_add_app_test_support(exosnap_record_viewmodel_test_support
+    models/CaptureTargetPresentation.cpp
+    services/DisplayNumbering.cpp
     viewmodels/RecordViewModel.cpp
     diagnostics/error_message.cpp
     settings/RecordingHistoryStore.cpp
@@ -591,6 +593,7 @@ exosnap_add_gtest(
         services/RecordingCoordinator.cpp
         services/RecordingAdmission.cpp
         services/AtomicFileOps.cpp
+        models/CaptureTargetPresentation.cpp
         services/DisplayNumbering.cpp
         settings/RecoveryManifestStore.cpp
     LIBRARIES
@@ -693,6 +696,7 @@ exosnap_add_gtest(
         services/RecordingCoordinator.cpp
         services/RecordingAdmission.cpp
         services/AtomicFileOps.cpp
+        models/CaptureTargetPresentation.cpp
         services/DisplayNumbering.cpp
         settings/RecoveryManifestStore.cpp
     LIBRARIES
@@ -714,6 +718,7 @@ exosnap_add_gtest(
         services/RecordingCoordinator.cpp
         services/RecordingAdmission.cpp
         services/AtomicFileOps.cpp
+        models/CaptureTargetPresentation.cpp
         services/DisplayNumbering.cpp
         settings/RecoveryManifestStore.cpp
     LIBRARIES
@@ -1209,6 +1214,7 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
             services/RecordingCoordinator.cpp
             services/RecordingAdmission.cpp
             services/AtomicFileOps.cpp
+            models/CaptureTargetPresentation.cpp
             services/DisplayNumbering.cpp
             settings/RecoveryManifestStore.cpp
             services/GlobalHotkeyService.cpp
@@ -1250,6 +1256,7 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
             services/RecordingCoordinator.cpp
             services/RecordingAdmission.cpp
             services/AtomicFileOps.cpp
+            models/CaptureTargetPresentation.cpp
             services/DisplayNumbering.cpp
             settings/RecoveryManifestStore.cpp
             services/GlobalHotkeyService.cpp

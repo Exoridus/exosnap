@@ -416,6 +416,8 @@ target_sources(exosnap
         ${PROJECT_SOURCE_DIR}/app/services/RecoveryService.h
         ${PROJECT_SOURCE_DIR}/app/settings/RecordingHistoryStore.cpp
         ${PROJECT_SOURCE_DIR}/app/settings/RecordingHistoryStore.h
+        ${PROJECT_SOURCE_DIR}/app/models/CaptureTargetPresentation.cpp
+        ${PROJECT_SOURCE_DIR}/app/models/CaptureTargetPresentation.h
         ${PROJECT_SOURCE_DIR}/app/viewmodels/RecordViewModel.cpp
         ${PROJECT_SOURCE_DIR}/app/viewmodels/RecordViewModel.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/error_message.cpp
@@ -1018,6 +1020,9 @@ qt_add_qml_module(edit_timeline_qml_tests
     OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/tests/ExoSnap/Quick/EditTestControls"
     DEPENDENCIES
         QtQuick
+        # The timeline's preview-state hint draws ExoGlyph, which is built on
+        # Shape/PathSvg; an unlisted import is one qmllint cannot resolve.
+        QtQuick.Shapes
     # Compiling the adapters into this module registers them under this URI, so
     # EditTimeline.qml resolves the same types it does in the shipping module.
     # Same reason QuickThemeTokens is here: every colour in the strip goes
@@ -1048,6 +1053,7 @@ qt_add_qml_module(edit_timeline_qml_tests
     QML_FILES
         EditPlayer.qml
         EditTimeline.qml
+        ExoGlyph.qml
         ExoTheme.qml
 )
 
@@ -1086,6 +1092,79 @@ target_link_libraries(edit_timeline_qml_tests
 
 add_test(NAME quick.qml.edit_timeline COMMAND edit_timeline_qml_tests)
 set_tests_properties(quick.qml.edit_timeline PROPERTIES
+    LABELS "quick"
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QML_IMPORT_PATH=${_exosnap_quick_qt_prefix}/qml"
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${_exosnap_quick_qt_prefix}/bin"
+)
+
+# The Record source picker's QML contract. A third QML test executable, for the
+# reason the edit runner states: RecordSourcePicker takes a REQUIRED, C++-typed
+# adapter (RecordViewModelAdapter) that cannot be stubbed from QML, so the
+# runner builds one over a seeded RecordViewModel and hands it over as a context
+# property. Its tests live in their own tests_record/ directory because
+# QUICK_TEST_MAIN scans its source dir recursively and the runners must not load
+# each other's cases.
+qt_add_executable(record_source_picker_qml_tests
+    ${EXOSNAP_QUICK_TESTS_DIR}/record_picker_qml_test_main.cpp
+    ${PROJECT_SOURCE_DIR}/app/assets/fonts/exosnap_fonts.qrc
+)
+
+set_target_properties(record_source_picker_qml_tests PROPERTIES AUTORCC ON)
+
+qt_add_qml_module(record_source_picker_qml_tests
+    URI ExoSnap.Quick.RecordPickerTestControls
+    OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/tests/ExoSnap/Quick/RecordPickerTestControls"
+    DEPENDENCIES
+        QtQuick
+        # ExoGlyph draws with Shape/PathSvg; without this qmllint cannot resolve
+        # its base type and stops publishing the Kind enum.
+        QtQuick.Shapes
+    SOURCES
+        RecordViewModelAdapter.cpp
+        RecordViewModelAdapter.h
+        QuickThemeTokens.cpp
+        QuickThemeTokens.h
+    QML_FILES
+        ExoButton.qml
+        ExoGlyph.qml
+        ExoScrollBar.qml
+        ExoSearchField.qml
+        ExoSegmentedControl.qml
+        ExoTheme.qml
+        RecordSourcePicker.qml
+)
+
+target_compile_definitions(record_source_picker_qml_tests
+    PRIVATE
+        NOMINMAX
+        QUICK_TEST_SOURCE_DIR="${PROJECT_SOURCE_DIR}/app/quick/tests_record"
+)
+
+target_include_directories(record_source_picker_qml_tests
+    PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}"
+        "${PROJECT_SOURCE_DIR}/app"
+)
+
+target_compile_options(record_source_picker_qml_tests
+    PRIVATE
+        $<$<CXX_COMPILER_ID:MSVC>:/wd4702>
+)
+
+target_link_libraries(record_source_picker_qml_tests
+    PRIVATE
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickTest
+        exosnap_record_viewmodel_test_support
+        exosnap::capability
+        exosnap_engine
+)
+
+add_test(NAME quick.qml.record_source_picker COMMAND record_source_picker_qml_tests)
+set_tests_properties(quick.qml.record_source_picker PROPERTIES
     LABELS "quick"
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QML_IMPORT_PATH=${_exosnap_quick_qt_prefix}/qml"
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${_exosnap_quick_qt_prefix}/bin"

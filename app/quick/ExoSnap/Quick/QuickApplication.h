@@ -746,6 +746,8 @@ class QuickApplication {
     // Sequence of the standing audio-degradation toast while it is up, 0 when
     // none is. The hub keeps its own permanent record either way.
     uint64_t audio_degraded_toast_sequence_ = 0;
+    QString audio_degraded_page_notice_;
+    QString blocked_page_notice_;
     StartAdmission last_start_admission_ = StartAdmission::RefusedByState;
     // The selection Diagnostics currently holds. Same reason as the two below:
     // pushing it re-runs the recommendation checklist, so only a real change may.

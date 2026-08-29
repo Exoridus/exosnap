@@ -1,6 +1,7 @@
 #pragma once
 
 #include "models/CrashReportPolicy.h"
+#include "models/OutputPathValidator.h"
 #include "models/OverlayContentPolicy.h"
 #include "models/RecordingPreset.h"
 #include "settings/AppSettingsStore.h"
@@ -13,6 +14,9 @@
 #include <QVariantList>
 #include <QtQmlIntegration/qqmlintegration.h>
 
+#include <atomic>
+#include <cstdint>
+#include <functional>
 #include <vector>
 
 namespace exosnap::quick {
@@ -35,6 +39,15 @@ class SettingsAdapter : public QObject {
     Q_OBJECT
     QML_ELEMENT
     QML_UNCREATABLE("SettingsAdapter is provided by the application")
+
+  public:
+    enum class OutputValidationTrigger { Startup, PathEdit, ApplicationActivation, OutputCardReveal };
+    Q_ENUM(OutputValidationTrigger)
+
+    enum class FocusTarget { OutputDestination };
+    Q_ENUM(FocusTarget)
+
+    using OutputFolderValidator = std::function<FolderValidationResult(const std::filesystem::path&)>;
 
     // ---- Global tier / lock -------------------------------------------------
     Q_PROPERTY(bool expertMode READ expertMode WRITE setExpertMode NOTIFY appSettingsChanged FINAL)
@@ -263,6 +276,11 @@ class SettingsAdapter : public QObject {
 
   public:
     explicit SettingsAdapter(QObject* parent = nullptr);
+
+    void setOutputFolderValidator(OutputFolderValidator validator);
+    void requestOutputValidation(OutputValidationTrigger trigger);
+    void applyOutputFolderValidation(FolderValidationResult result);
+    void requestSettingsFocus(FocusTarget target);
 
     // ---- Composition-root seams (never called from QML) ---------------------
     void setConfig(RecordingPresetConfig config);
@@ -629,6 +647,9 @@ class SettingsAdapter : public QObject {
     void updatePrimaryActionRequested();
     void whatsNewRequested();
     void diagnosticsRequested();
+    void outputValidationRequested(OutputValidationTrigger trigger);
+    void outputValidationFinished(FolderValidationResult result);
+    void settingsFocusRequested(FocusTarget target);
 
   private:
     // Re-runs shared reconciliation + sanitization over the live config, then
@@ -702,6 +723,8 @@ class SettingsAdapter : public QObject {
     QString mic_post_processing_summary_;
     QString audio_encoding_summary_;
     QString audio_summary_;
+    OutputFolderValidator output_folder_validator_ = ValidateOutputFolder;
+    std::atomic<uint64_t> output_validation_revision_{0};
 
     QVariantList hotkey_rows_;
     int capturing_hotkey_action_ = -1;

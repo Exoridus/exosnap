@@ -21,6 +21,7 @@ QtObject {
     readonly property color accent: QuickThemeTokens.accent
     readonly property color accentInk: QuickThemeTokens.accentInk
     readonly property color warning: QuickThemeTokens.warning
+    readonly property color paused: QuickThemeTokens.paused
     readonly property color warningSurface: QuickThemeTokens.warningSurface
     readonly property color error: QuickThemeTokens.error
     readonly property color errorInk: QuickThemeTokens.errorInk
@@ -59,6 +60,7 @@ QtObject {
     readonly property color overlayInkDim: QuickThemeTokens.overlayInkDim
     readonly property color overlaySuccess: QuickThemeTokens.overlaySuccess
     readonly property color overlayWarning: QuickThemeTokens.overlayWarning
+    readonly property color overlayPaused: QuickThemeTokens.overlayPaused
     readonly property color overlayError: QuickThemeTokens.overlayError
 
     // The ground a modal/interruption surface lays over the application. Its

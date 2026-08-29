@@ -41,6 +41,7 @@ class QuickThemeTokens : public QObject {
     Q_PROPERTY(QColor accent READ accent NOTIFY changed FINAL)
     Q_PROPERTY(QColor accentInk READ accentInk NOTIFY changed FINAL)
     Q_PROPERTY(QColor warning READ warning NOTIFY changed FINAL)
+    Q_PROPERTY(QColor paused READ paused NOTIFY changed FINAL)
     Q_PROPERTY(QColor warningSurface READ warningSurface NOTIFY changed FINAL)
     Q_PROPERTY(QColor error READ error NOTIFY changed FINAL)
     Q_PROPERTY(QColor errorInk READ errorInk NOTIFY changed FINAL)
@@ -87,6 +88,7 @@ class QuickThemeTokens : public QObject {
     Q_PROPERTY(QColor overlayInkDim READ overlayInkDim CONSTANT FINAL)
     Q_PROPERTY(QColor overlaySuccess READ overlaySuccess CONSTANT FINAL)
     Q_PROPERTY(QColor overlayWarning READ overlayWarning CONSTANT FINAL)
+    Q_PROPERTY(QColor overlayPaused READ overlayPaused CONSTANT FINAL)
     Q_PROPERTY(QColor overlayError READ overlayError CONSTANT FINAL)
     // The one that is NOT constant: the accent is a user choice, so a fixed-dark
     // surface follows it — it just takes the dark resolution of whichever accent
@@ -145,6 +147,7 @@ class QuickThemeTokens : public QObject {
     [[nodiscard]] QColor accent() const noexcept;
     [[nodiscard]] QColor accentInk() const noexcept;
     [[nodiscard]] QColor warning() const noexcept;
+    [[nodiscard]] QColor paused() const noexcept;
     [[nodiscard]] QColor warningSurface() const noexcept;
     [[nodiscard]] QColor error() const noexcept;
     [[nodiscard]] QColor errorInk() const noexcept;
@@ -167,6 +170,7 @@ class QuickThemeTokens : public QObject {
     [[nodiscard]] static QColor overlayInkDim() noexcept;
     [[nodiscard]] static QColor overlaySuccess() noexcept;
     [[nodiscard]] static QColor overlayWarning() noexcept;
+    [[nodiscard]] static QColor overlayPaused() noexcept;
     [[nodiscard]] static QColor overlayError() noexcept;
     [[nodiscard]] QColor overlayAccent() const noexcept;
 

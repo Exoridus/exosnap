@@ -430,19 +430,12 @@ int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplic
     if (shell->property("currentPage").toInt() != 1)
         return failNavigationLifecycle("navigateToSettingsRequested did not navigate");
 
-    // ── QCR-001: an open edit session is state of Record, not a modality ────
-    //
-    // This block used to assert the opposite ("navigation not locked during an
-    // edit session"). That contract was never a product decision: the Widgets
-    // shell that shipped until the cutover let the nav tabs navigate for the
-    // whole edit session, the Quick port lost it in `enabled: !editOverlayOpen`,
-    // and Wave 0 canonised the regression on the false premise that the code had
-    // always disabled them. What follows is the intended contract instead.
+    // An edit session is an ephemeral workspace on Record, not a navigation
+    // destination or a modal blocker.
     shell->setProperty("currentPage", 0);
     exosnap::quick::EditSessionAdapter* session = application.editSessionAdapter();
-    exosnap::quick::EditPlayerAdapter* player = application.editPlayerAdapter();
     exosnap::quick::EditExportAdapter* exporter = application.editExportAdapter();
-    if (session == nullptr || player == nullptr || exporter == nullptr)
+    if (session == nullptr || exporter == nullptr)
         return failNavigationLifecycle("no edit adapters");
 
     session->setEditContext(navigationTestEditContext());
@@ -474,58 +467,32 @@ int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplic
     // returning. Product state, not QML internals.
     session->requestTrim(22000, 118000);
     session->requestSeek(41000);
-    const QString clip_path = session->clipPath();
     const qint64 trim_start = session->trimStartMs();
     const qint64 trim_end = session->trimEndMs();
     const qint64 position = session->positionMs();
     if (trim_start != 22000 || trim_end != 118000 || position != 41000)
         return failNavigationLifecycle("the fixture clip did not take the trim and the position");
 
-    // Every destination stays reachable, and reaching it neither closes the
-    // session nor leaves the workspace lying over the page that replaced it.
+    // Every destination stays reachable. The Edit workspace is ephemeral:
+    // leaving Record closes it without a discard prompt and returning does not
+    // resurrect the clip.
     for (int page = 1; page <= 4; ++page) {
         if (!invokeNavigateTo(shell, page))
             return failNavigationLifecycle("navigateTo is not invokable");
         if (shell->property("currentPage").toInt() != page)
             return failNavigationLifecycle("a destination was refused during an edit session");
-        if (!shell->property("editOverlayOpen").toBool())
-            return failNavigationLifecycle("navigation closed the edit session");
+        if (shell->property("editOverlayOpen").toBool())
+            return failNavigationLifecycle("navigation kept the edit session open");
         if (shell->property("editOverlayVisible").toBool() || workspace->property("visible").toBool())
             return failNavigationLifecycle("the edit workspace stayed visible off Record");
-        if (findShellPage(window, "quickEditOverlay") != workspace)
-            return failNavigationLifecycle("the edit workspace was rebuilt by a page change");
     }
 
-    // Back on Record: the same workspace, the same session, the same numbers.
+    // Back on Record: no stale workspace or edit state is restored.
     if (!invokeNavigateTo(shell, 0))
         return failNavigationLifecycle("navigateTo is not invokable");
-    if (!shell->property("editOverlayVisible").toBool() || !workspace->property("visible").toBool())
-        return failNavigationLifecycle("returning to Record did not show the edit workspace");
-    if (findShellPage(window, "quickEditOverlay") != workspace)
-        return failNavigationLifecycle("returning to Record built a second edit workspace");
-    if (session->clipPath() != clip_path || session->trimStartMs() != trim_start || session->trimEndMs() != trim_end ||
-        session->positionMs() != position)
-        return failNavigationLifecycle("the edit session lost state across a page change");
-
-    // Playback: leaving Record pauses, keeps the position, and does not resume
-    // on the way back.
-    player->setClipStateForTest(/*clip_open=*/true, session->durationMs());
-    player->setPlaying(true);
-    if (!player->playing())
-        return failNavigationLifecycle("the fixture player refused to play");
-    if (!invokeNavigateTo(shell, 1))
-        return failNavigationLifecycle("navigateTo is not invokable");
-    if (player->playing())
-        return failNavigationLifecycle("playback kept running off Record");
-    if (session->positionMs() != position)
-        return failNavigationLifecycle("pausing on a page change moved the playhead");
-    if (!invokeNavigateTo(shell, 0))
-        return failNavigationLifecycle("navigateTo is not invokable");
-    if (player->playing())
-        return failNavigationLifecycle("returning to Record resumed playback on its own");
-    if (session->positionMs() != position)
-        return failNavigationLifecycle("returning to Record moved the playhead");
-    player->setClipStateForTest(/*clip_open=*/false, 0);
+    if (shell->property("editOverlayOpen").toBool() || shell->property("editOverlayVisible").toBool() ||
+        workspace->property("visible").toBool() || !session->clipPath().isEmpty())
+        return failNavigationLifecycle("returning to Record restored an ephemeral edit session");
 
     // Export: a page change is not a cancel. The run lives on a thread the
     // adapter owns, so it is unaffected by which QML item is on screen -- this
@@ -551,7 +518,7 @@ int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplic
     emit shell_adapter->navigateToPageRequested(exosnap::quick::ShellAdapter::LogsPage);
     if (shell->property("currentPage").toInt() != 3)
         return failNavigationLifecycle("the adapter navigation path did not reach the shell");
-    if (!shell->property("editOverlayOpen").toBool() || shell->property("editOverlayVisible").toBool() ||
+    if (shell->property("editOverlayOpen").toBool() || shell->property("editOverlayVisible").toBool() ||
         workspace->property("visible").toBool())
         return failNavigationLifecycle("the adapter navigation path used a different edit contract");
 

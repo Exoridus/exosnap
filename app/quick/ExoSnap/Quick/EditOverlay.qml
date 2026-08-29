@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Dialogs
 import QtQuick.Layouts
 
 // Edit/Output/Save surface (ADR 0022): still a LAYER over the Record page
@@ -296,6 +297,7 @@ Item {
                         EditExportPanel {
                             exporter: root.exporter
                             Layout.fillWidth: true
+                            onChooseAnotherFolderRequested: retryFolderDialog.open()
                         }
 
                         Item {
@@ -371,12 +373,11 @@ Item {
         onAccepted: root.exporter.startExport()
     }
 
-    ExoConfirmDialog {
-        id: discardDialog
+    FolderDialog {
+        id: retryFolderDialog
 
-        title: qsTr("Discard edits")
-        bodyText: qsTr("The trim points and markers on this clip are not exported yet.")
-        onAccepted: root.session.close()
+        title: qsTr("Choose another export folder")
+        onAccepted: root.exporter.retryInFolder(selectedFolder)
     }
 
     function startExport(): void {
@@ -388,15 +389,6 @@ Item {
     }
 
     function requestClose(): void {
-        // A running export is never silently abandoned, and neither is a trim the
-        // user set but has not exported.
-        if (root.exporter.running) {
-            return;
-        }
-        if (root.session.hasUnsavedEdits) {
-            discardDialog.open();
-            return;
-        }
         root.session.close();
     }
 

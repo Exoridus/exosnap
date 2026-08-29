@@ -619,6 +619,15 @@ void QuickApplication::initializeRecordWorkflow() {
         if (!visualScenarioLatched())
             record_view_model_.SetState(state);
         record_view_model_.capability_status_text = recording_coordinator_->CapabilityStatusText();
+        if (state == UiRecordingState::Blocked) {
+            blocked_page_notice_ = QString::fromStdWString(record_view_model_.capability_status_text);
+            if (blocked_page_notice_.isEmpty())
+                blocked_page_notice_ = QStringLiteral("Recording is blocked by the current system configuration.");
+            record_view_model_adapter_.setNoticeText(blocked_page_notice_, QStringLiteral("error"));
+        } else if (!blocked_page_notice_.isEmpty() && record_view_model_adapter_.noticeText() == blocked_page_notice_) {
+            record_view_model_adapter_.setNoticeText({}, QStringLiteral("warning"));
+            blocked_page_notice_.clear();
+        }
         // A fresh start (not a resume) invalidates the previous session's
         // post-flight numbers. They feed the Edit surface's report badge, so
         // carrying them over would attribute one recording's drops to the next.
@@ -906,6 +915,10 @@ void QuickApplication::initializeRecordWorkflow() {
                      [this](const CaptureTargetSnapshot& snapshot, DiscoveryReason reason) {
                          refreshCaptureTargets(snapshot, reason);
                      });
+    QObject::connect(&shell_adapter_, &ShellAdapter::sourcePickerOpenChanged, &record_view_model_adapter_, [this]() {
+        if (shell_adapter_.sourcePickerOpen())
+            record_view_model_adapter_.requestTargetStillRefresh();
+    });
 
     // A monitor arriving, leaving or being re-arranged also re-orders the DXGI
     // outputs and can change what each one reports, so the display facts are
@@ -1157,6 +1170,17 @@ void QuickApplication::wireRecordCommands() {
                          QProcess::startDetached(QStringLiteral("explorer"),
                                                  {QStringLiteral("/select,"), QDir::toNativeSeparators(path)});
                      });
+    QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::openRecentRequested,
+                     &record_view_model_adapter_, [](const QString& path) {
+                         if (!path.isEmpty())
+                             QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+                     });
+    QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::revealRecentRequested,
+                     &record_view_model_adapter_, [](const QString& path) {
+                         if (!path.isEmpty())
+                             QProcess::startDetached(QStringLiteral("explorer"),
+                                                     {QStringLiteral("/select,"), QDir::toNativeSeparators(path)});
+                     });
     QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::dismissResultRequested,
                      &record_view_model_adapter_, [this]() {
                          recording_coordinator_->DismissResult();
@@ -1247,9 +1271,8 @@ void QuickApplication::synchronizeRecordState() {
     // the Settings page in its idle arrangement -- every locked row editable and
     // no lock banner -- which is exactly the state that decides whether a blocked
     // control reads as blocked.
-    settings_adapter_.setControlsLocked(pending_record_visual_state_.isEmpty()
-                                            ? recording_coordinator_->State() != UiRecordingState::Ready
-                                            : record_view_model_.state != UiRecordingState::Ready);
+    settings_adapter_.setControlsLocked(locksCaptureTargets(
+        pending_record_visual_state_.isEmpty() ? recording_coordinator_->State() : record_view_model_.state));
     // The single edge that re-points the exclusive-fullscreen probe: every
     // selection change and every recording-state change already lands here, and
     // the unchanged case costs one comparison.
@@ -1416,6 +1439,8 @@ void QuickApplication::refreshCaptureTargets(const CaptureTargetSnapshot& snapsh
                                   .arg(QLatin1StringView(DiscoveryReasonName(reason))));
     updateMeterServices();
     synchronizeRecordState();
+    if (shell_adapter_.sourcePickerOpen())
+        record_view_model_adapter_.requestTargetStillRefresh();
 }
 
 void QuickApplication::updateOutputTargetContext(const exosnap::engine::CaptureTarget& target) {
@@ -1714,7 +1739,31 @@ void QuickApplication::initializeSettingsArea() {
     overlay_adapter_.setAppSettings(settings_);
     settings_adapter_.setCapabilities(capabilities_);
     settings_adapter_.setConfig(live_config_);
-    settings_adapter_.setControlsLocked(recording_coordinator_->State() != UiRecordingState::Ready);
+    settings_adapter_.setControlsLocked(locksCaptureTargets(recording_coordinator_->State()));
+
+    QObject::connect(&settings_adapter_, &SettingsAdapter::outputValidationFinished, &settings_adapter_,
+                     [this](FolderValidationResult result) {
+                         // The deterministic blocker has no unwritable directory behind it;
+                         // a real validation finishing later must not erase the seeded state.
+                         if (pending_record_visual_state_ == QLatin1String(visual::record_state::kOutputUnwritable)) {
+                             result = FolderValidationResult::NotWritable;
+                             settings_adapter_.applyOutputFolderValidation(result);
+                         }
+                         recording_coordinator_->ApplyOutputFolderValidation(result);
+                     });
+    QObject::connect(&shell_adapter_, &ShellAdapter::currentPageChanged, &settings_adapter_, [this]() {
+        if (shell_adapter_.currentPage() == ShellAdapter::SettingsPage) {
+            settings_adapter_.requestOutputValidation(SettingsAdapter::OutputValidationTrigger::OutputCardReveal);
+        }
+    });
+    QObject::connect(qGuiApp, &QGuiApplication::applicationStateChanged, &settings_adapter_,
+                     [this](Qt::ApplicationState state) {
+                         if (state == Qt::ApplicationActive) {
+                             settings_adapter_.requestOutputValidation(
+                                 SettingsAdapter::OutputValidationTrigger::ApplicationActivation);
+                         }
+                     });
+    settings_adapter_.requestOutputValidation(SettingsAdapter::OutputValidationTrigger::Startup);
 
     publishRefreshRateDerivedState();
 
@@ -2083,6 +2132,7 @@ void QuickApplication::observeAudioSourceDegradation(const exosnap::engine::Reco
     sample.lifecycle = snapshot.lifecycle;
     sample.source_degraded = snapshot.audio.source_degraded;
     sample.degraded_sources = snapshot.audio.degraded_sources;
+    sample.degraded_source_kinds = snapshot.audio.degraded_source_kinds;
 
     switch (audio_degradation_monitor_.Observe(sample)) {
     case diagnostics::AudioDegradationSignal::None:
@@ -2099,6 +2149,7 @@ void QuickApplication::observeAudioSourceDegradation(const exosnap::engine::Reco
     }
 
     const uint32_t degraded = audio_degradation_monitor_.degraded_sources();
+    const uint32_t degraded_kinds = audio_degradation_monitor_.degraded_source_kinds();
     diagnostics::AppLog::warning(
         QStringLiteral("audio"),
         QStringLiteral("%1 audio capture source(s) lost their device and are contributing silence; recording continues")
@@ -2107,11 +2158,18 @@ void QuickApplication::observeAudioSourceDegradation(const exosnap::engine::Reco
     // one — the manager has no update API, so the standing toast is replaced by
     // dismissing the tracked sequence and enqueueing the new body.
     clearAudioSourceDegradedWarning();
-    audio_degraded_toast_sequence_ =
-        notifications_adapter_.manager().Enqueue(notifications::MakeAudioSourceDegradedEvent(degraded));
+    auto event = notifications::MakeAudioSourceDegradedEvent(degraded, degraded_kinds);
+    audio_degraded_page_notice_ = event.body;
+    record_view_model_adapter_.setNoticeText(audio_degraded_page_notice_, QStringLiteral("warning"));
+    audio_degraded_toast_sequence_ = notifications_adapter_.manager().Enqueue(std::move(event));
 }
 
 void QuickApplication::clearAudioSourceDegradedWarning() {
+    if (!audio_degraded_page_notice_.isEmpty() &&
+        record_view_model_adapter_.noticeText() == audio_degraded_page_notice_) {
+        record_view_model_adapter_.setNoticeText({}, QStringLiteral("warning"));
+    }
+    audio_degraded_page_notice_.clear();
     if (audio_degraded_toast_sequence_ == 0)
         return;
     notifications_adapter_.manager().Dismiss(audio_degraded_toast_sequence_);
@@ -3410,7 +3468,7 @@ bool QuickApplication::applyOverlayVisualScenario(const QString& scenario) {
         QVector<RecoveryCandidate> candidates;
         RecoveryCandidate crashed;
         crashed.entry.id = QStringLiteral("visual-1");
-        crashed.entry.artefact_path = QStringLiteral("C:/Recordings/Session 2026-08-10 21-14.mkv.tmp");
+        crashed.entry.artefact_path = QStringLiteral("C:/Recordings/Session 2026-08-10 21-14.mkv.partial");
         crashed.entry.final_output_path = QStringLiteral("C:/Recordings/Session 2026-08-10 21-14.mkv");
         crashed.entry.intended_container = QStringLiteral("mkv");
         crashed.entry.started_at = QStringLiteral("2026-08-10T21:14:03Z");
@@ -3827,11 +3885,14 @@ void QuickApplication::dispatchNotificationAction(notifications::NotificationAct
         break;
     }
     case NotificationAction::OpenUpdate:
-    case NotificationAction::ChangeFolder:
     case NotificationAction::OpenHotkeys:
         // All three land on Settings: updates, output folder and hotkeys are
         // embedded sections there, not pages of their own.
         emit shell_adapter_.navigateToPageRequested(ShellAdapter::SettingsPage);
+        break;
+    case NotificationAction::ChangeFolder:
+        emit shell_adapter_.navigateToPageRequested(ShellAdapter::SettingsPage);
+        settings_adapter_.requestSettingsFocus(SettingsAdapter::FocusTarget::OutputDestination);
         break;
     case NotificationAction::OpenDiagnostics:
         emit shell_adapter_.navigateToPageRequested(ShellAdapter::DiagnosticsPage);
@@ -4235,6 +4296,28 @@ void QuickApplication::wireTaskbarProgress() {
         taskbar_presence_.updateProgress(export_progress_lease_,
                                          static_cast<double>(edit_export_adapter_.progressPercent()) / 100.0);
     });
+    QObject::connect(&edit_export_adapter_, &EditExportAdapter::exportCompleted, &edit_export_adapter_,
+                     [this](const QString& output_path) {
+                         if (shell_adapter_.editSurfaceVisible())
+                             return;
+                         notifications::NotificationEvent event;
+                         event.type = notifications::NotificationType::Saved;
+                         event.title = QStringLiteral("Export complete");
+                         event.body = QFileInfo(output_path).fileName();
+                         event.action = notifications::NotificationAction::OpenFolder;
+                         event.action_payload = output_path;
+                         notifications_adapter_.manager().Enqueue(std::move(event));
+                     });
+    QObject::connect(&edit_export_adapter_, &EditExportAdapter::exportFailed, &edit_export_adapter_,
+                     [this](const QString& error) {
+                         if (shell_adapter_.editSurfaceVisible())
+                             return;
+                         notifications::NotificationEvent event;
+                         event.type = notifications::NotificationType::UnexpectedStop;
+                         event.title = QStringLiteral("Export failed");
+                         event.body = error;
+                         notifications_adapter_.manager().Enqueue(std::move(event));
+                     });
 
     // Recovery finish. Same shape, different producer: a repair remux publishes a
     // fraction and can be cancelled.
@@ -4842,6 +4925,8 @@ bool QuickApplication::applyRecordVisualScenario(const QString& scenario) {
         countdown_progress_ = 1.0;
         live_config_.countdown_seconds = 3;
         record_view_model_.SetState(UiRecordingState::Countdown);
+    } else if (normalized == QLatin1String(visual::record_state::kPreparing)) {
+        record_view_model_.SetState(UiRecordingState::Preparing);
     } else if (normalized == QLatin1String(visual::record_state::kPaused)) {
         record_view_model_.SetState(UiRecordingState::Paused);
         record_view_model_.live_stats_available = true;
@@ -4899,6 +4984,14 @@ bool QuickApplication::applyRecordVisualScenario(const QString& scenario) {
         microphone_available_ = false;
         webcam_available_ = false;
         record_preview_adapter_.clearPreviewTarget();
+    } else if (normalized == QLatin1String(visual::record_state::kOutputUnwritable)) {
+        record_view_model_.SetState(UiRecordingState::Blocked);
+        record_view_model_.capability_status_text = FolderValidationMessage(FolderValidationResult::NotWritable);
+        record_view_model_adapter_.setNoticeText(
+            QStringLiteral("The output folder is not writable. Choose another folder in Settings."),
+            QStringLiteral("error"));
+        settings_adapter_.applyOutputFolderValidation(FolderValidationResult::NotWritable);
+        settings_adapter_.requestSettingsFocus(SettingsAdapter::FocusTarget::OutputDestination);
     } else {
         return false;
     }

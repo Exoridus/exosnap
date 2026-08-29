@@ -99,7 +99,12 @@ GridLayout {
                 textFormat: Text.PlainText
                 wrapMode: root.info === "" ? Text.WordWrap : Text.NoWrap
                 elide: root.info === "" ? Text.ElideNone : Text.ElideRight
-                color: root.controlEnabled ? ExoTheme.text : ExoTheme.textDim
+                // The label keeps its text rung when the row is locked. What a
+                // running recording takes away is the ability to CHANGE the
+                // setting, not the user's need to read which setting it is, and
+                // a whole page of labels on the disabled rung answers nothing.
+                // Only the interaction chrome and the secondary hint recede.
+                color: ExoTheme.text
                 Layout.fillWidth: root.info === ""
                 font {
                     family: ExoTheme.sansFamily

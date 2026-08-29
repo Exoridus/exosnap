@@ -7,7 +7,7 @@ ExoCard {
     required property SettingsAdapter settings
     required property bool stacked
 
-    title: qsTr("Developer")
+    title: qsTr("Support & diagnostics")
 
     ExoSettingRow {
         label: qsTr("Log level")

@@ -11,6 +11,10 @@ ExoCard {
     title: qsTr("Output")
     subtitle: root.settings.outputSummary
 
+    function focusDestination(): void {
+        destinationField.forceActiveFocus(Qt.OtherFocusReason);
+    }
+
     ExoSettingRow {
         label: qsTr("Destination folder")
         warning: root.settings.folderValidation
@@ -23,6 +27,8 @@ ExoCard {
             Layout.fillWidth: true
 
             ExoTextField {
+                id: destinationField
+
                 value: root.settings.outputFolder
                 enabled: !root.settings.controlsLocked
                 Layout.fillWidth: true

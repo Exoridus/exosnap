@@ -4,9 +4,9 @@
 
 // Shared atomic-publish primitives for remux output (ADR-0014 durability).
 //
-// A remux writes to a sibling ".part" temp on the target's own volume and then
+// A remux writes to a sibling ".tmp" staging file on the target's own volume and then
 // atomically renames it onto the final path. A kill/powerloss mid-remux then
-// leaves only the ".part" temp — the user-visible target path never holds a
+// leaves only the ".tmp" staging file - the user-visible target path never holds a
 // half-written file. Both the live (RecordingCoordinator) and the crash-recovery
 // (RecoveryService) remux paths use these helpers so the guarantee is identical.
 namespace exosnap {
@@ -16,10 +16,13 @@ namespace exosnap {
 // recording's own intended destination or an unrelated stranger's file.
 bool PathsEqual(const std::filesystem::path& a, const std::filesystem::path& b);
 
-// Pick a unique transient path in the SAME directory (hence same volume) as the
+// Pick a unique disposable staging path in the SAME directory (hence same volume) as the
 // final target, so the post-remux move is a within-volume atomic rename. A crash
-// mid-remux then leaves only this ".part" temp, never a half-written file at the
+// mid-remux then leaves only this ".tmp" file, never a half-written file at the
 // user-visible target path.
+std::filesystem::path MakeDisposableSiblingStagingPath(const std::filesystem::path& target);
+
+// Compatibility name for existing remux call sites.
 std::filesystem::path MakeSiblingTempPath(const std::filesystem::path& target);
 
 // Atomically move `from` onto `to`, replacing any existing file at `to`. On a

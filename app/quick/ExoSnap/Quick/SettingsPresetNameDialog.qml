@@ -1,11 +1,8 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
-// Name entry for "Save as new…" and "Rename". The accept button stays disabled
-// while the adapter's shared uniqueness rule rejects the typed name, so the
-// dialog can never submit a name the registry would refuse.
-Dialog {
+Popup {
     id: root
 
     required property SettingsAdapter settings
@@ -20,30 +17,55 @@ Dialog {
         root.open();
     }
 
-    title: root.renaming ? qsTr("Rename preset") : qsTr("Save preset as")
-    modal: true
-    anchors.centerIn: root.parent
-    standardButtons: Dialog.Ok | Dialog.Cancel
-
-    Component.onCompleted: root.standardButton(Dialog.Ok).enabled = Qt.binding(() => !root.nameRejected)
-
-    onAccepted: {
-        if (root.renaming) {
-            root.settings.renamePreset(nameField.text);
-        } else {
-            root.settings.savePresetAs(nameField.text);
-        }
+    function submit(): void {
+        if (root.nameRejected)
+            return;
+        const name = nameField.text.trim();
+        if (root.renaming)
+            root.settings.renamePreset(name);
+        else
+            root.settings.savePresetAs(name);
+        root.close();
     }
 
-    ColumnLayout {
-        spacing: ExoTheme.spacingSm
+    parent: Overlay.overlay
+    x: Math.round((parent.width - width) / 2)
+    y: Math.round((parent.height - height) / 2)
+    width: 380
+    padding: ExoTheme.spacingLg
+    modal: true
+    focus: true
+    closePolicy: Popup.CloseOnEscape
+    onOpened: nameField.forceActiveFocus()
+
+    background: Rectangle {
+        color: ExoTheme.surfaceRaised
+        border.width: 1
+        border.color: ExoTheme.lineStrong
+        radius: ExoTheme.radiusLg
+    }
+
+    contentItem: ColumnLayout {
+        spacing: ExoTheme.spacingMd
+
+        Label {
+            text: root.renaming ? qsTr("Rename preset") : qsTr("Save preset as")
+            color: ExoTheme.text
+            Layout.fillWidth: true
+            font {
+                family: ExoTheme.sansFamily
+                pixelSize: ExoTheme.fontTitle
+                weight: Font.DemiBold
+            }
+        }
 
         ExoTextField {
             id: nameField
 
             placeholderText: qsTr("Preset name")
-            Layout.preferredWidth: 280
+            Layout.fillWidth: true
             Accessible.name: qsTr("Preset name")
+            Keys.onReturnPressed: root.submit()
         }
 
         Label {
@@ -51,11 +73,30 @@ Dialog {
             textFormat: Text.PlainText
             wrapMode: Text.WordWrap
             visible: root.nameRejected
-            color: ExoTheme.warning
-            Layout.preferredWidth: 280
+            color: ExoTheme.warningText
+            Layout.fillWidth: true
             font {
                 family: ExoTheme.sansFamily
                 pixelSize: ExoTheme.fontCaption
+            }
+        }
+
+        RowLayout {
+            spacing: ExoTheme.spacingSm
+            Layout.fillWidth: true
+
+            ExoButton {
+                text: qsTr("Cancel")
+                onClicked: root.close()
+            }
+
+            Item { Layout.fillWidth: true }
+
+            ExoButton {
+                text: root.renaming ? qsTr("Rename preset") : qsTr("Save preset")
+                tone: "primary"
+                enabled: !root.nameRejected
+                onClicked: root.submit()
             }
         }
     }

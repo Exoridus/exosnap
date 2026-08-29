@@ -22,10 +22,12 @@ inline constexpr const char* kRecording = "recording";
 // raised through the production notification path.
 inline constexpr const char* kRecordingAudioDegraded = "recording-audio-degraded";
 inline constexpr const char* kCountdown = "countdown";
+inline constexpr const char* kPreparing = "preparing";
 inline constexpr const char* kPaused = "paused";
 inline constexpr const char* kCompleted = "completed";
 inline constexpr const char* kBlocked = "blocked";
 inline constexpr const char* kFailed = "failed";
 inline constexpr const char* kUnavailable = "unavailable";
+inline constexpr const char* kOutputUnwritable = "output-unwritable";
 
 } // namespace exosnap::visual::record_state

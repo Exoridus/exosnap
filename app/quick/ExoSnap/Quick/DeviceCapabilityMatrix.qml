@@ -120,32 +120,28 @@ Rectangle {
             }
         }
 
-        Label {
-            text: qsTr("CODEC SUPPORT")
-            textFormat: Text.PlainText
-            color: ExoTheme.textMuted
+        GridLayout {
+            columns: 4
+            columnSpacing: ExoTheme.spacingMd
             Layout.topMargin: ExoTheme.spacingXs
             Layout.fillWidth: true
-            font {
-                family: ExoTheme.monoFamily
-                pixelSize: ExoTheme.fontEyebrow
-                letterSpacing: 1
-                weight: Font.DemiBold
-            }
-        }
 
-        Flow {
-            spacing: ExoTheme.spacingSm
-            Layout.fillWidth: true
+            Item { Layout.preferredWidth: 190 }
 
             Repeater {
-                model: root.device.codecChips
+                model: ["H.264", "HEVC", "AV1"]
 
-                DeviceCodecChip {
-                    required property var modelData
-
-                    label: modelData.label
-                    available: modelData.available
+                Label {
+                    required property string modelData
+                    text: modelData
+                    color: ExoTheme.textMuted
+                    horizontalAlignment: Text.AlignLeft
+                    Layout.fillWidth: true
+                    font {
+                        family: ExoTheme.monoFamily
+                        pixelSize: ExoTheme.fontEyebrow
+                        weight: Font.DemiBold
+                    }
                 }
             }
         }
@@ -155,6 +151,14 @@ Rectangle {
             Layout.topMargin: ExoTheme.spacingXs
             Layout.fillWidth: true
 
+            DeviceCapabilityRow {
+                firstRow: true
+                label: qsTr("Codec support")
+                valueText: ""
+                chips: root.device.codecChips
+                Layout.fillWidth: true
+            }
+
             Repeater {
                 model: root.device.capabilityRows
 
@@ -162,7 +166,7 @@ Rectangle {
                     required property int index
                     required property var model
 
-                    firstRow: index === 0
+                    firstRow: false
                     label: model.label
                     valueText: model.valueText
                     chips: model.chips

@@ -2,11 +2,13 @@
 
 #include <QObject>
 #include <QString>
+#include <QUrl>
 #include <QVariantList>
 #include <QtQmlIntegration/qqmlintegration.h>
 
 #include <atomic>
 #include <filesystem>
+#include <optional>
 #include <thread>
 
 namespace exosnap::quick {
@@ -54,6 +56,7 @@ class EditExportAdapter : public QObject {
     Q_PROPERTY(QString outputFileName READ outputFileName NOTIFY resultChanged FINAL)
     Q_PROPERTY(QString outputFolder READ outputFolder NOTIFY resultChanged FINAL)
     Q_PROPERTY(QString errorText READ errorText NOTIFY resultChanged FINAL)
+    Q_PROPERTY(bool destinationFailure READ destinationFailure NOTIFY resultChanged FINAL)
 
     Q_PROPERTY(QString containerKey READ containerKey WRITE setContainerKey NOTIFY optionsChanged FINAL)
     Q_PROPERTY(QString saveModeKey READ saveModeKey WRITE setSaveModeKey NOTIFY optionsChanged FINAL)
@@ -89,6 +92,7 @@ class EditExportAdapter : public QObject {
     [[nodiscard]] QString outputFileName() const;
     [[nodiscard]] QString outputFolder() const;
     [[nodiscard]] const QString& errorText() const noexcept;
+    [[nodiscard]] bool destinationFailure() const noexcept;
 
     [[nodiscard]] const QString& containerKey() const noexcept;
     void setContainerKey(const QString& key);
@@ -105,6 +109,7 @@ class EditExportAdapter : public QObject {
     // job: this method assumes it has already been answered.
     Q_INVOKABLE void startExport();
     Q_INVOKABLE void retry();
+    Q_INVOKABLE void retryInFolder(const QUrl& folder);
     Q_INVOKABLE void cancel();
     Q_INVOKABLE void reset();
     Q_INVOKABLE void revealFile();
@@ -120,6 +125,7 @@ class EditExportAdapter : public QObject {
     void resultChanged();
     void optionsChanged();
     void exportCompleted(const QString& output_path);
+    void exportFailed(const QString& error);
 
   private:
     void setState(State state);
@@ -132,7 +138,9 @@ class EditExportAdapter : public QObject {
     QString container_key_ = QStringLiteral("mkv");
     QString save_mode_key_ = QStringLiteral("new");
     QString error_text_;
+    bool destination_failure_ = false;
     std::filesystem::path output_path_;
+    std::optional<std::filesystem::path> retry_output_path_;
 
     std::thread export_thread_;
     std::atomic<bool> export_cancel_{false};

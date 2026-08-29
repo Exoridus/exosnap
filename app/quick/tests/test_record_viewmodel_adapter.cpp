@@ -19,7 +19,7 @@ TEST(RecordViewModelAdapterTest, CopiesRepresentativeStateAtConstruction) {
 
     RecordViewModelAdapter adapter(&source);
 
-    EXPECT_EQ(adapter.stateText(), QStringLiteral("Ready"));
+    EXPECT_EQ(adapter.stateText(), QStringLiteral("No source"));
     EXPECT_EQ(adapter.elapsedText(), QStringLiteral("00:01:23"));
     EXPECT_EQ(adapter.outputSizeText(), QStringLiteral("42.0 MB"));
     EXPECT_TRUE(adapter.liveStatsAvailable());
@@ -315,6 +315,179 @@ TEST(RecordViewModelAdapterTest, BuildsTypedDisplayAndWindowTargetOptions) {
     EXPECT_EQ(adapter.targetOptions().at(1).toMap().value(QStringLiteral("kind")).toString(), QStringLiteral("window"));
     EXPECT_EQ(adapter.sourceKindText(), QStringLiteral("WINDOW"));
     EXPECT_FALSE(adapter.sourceName().isEmpty());
+}
+
+TEST(RecordViewModelAdapterTest, PickerRowsExposeStableIdentityPresentationAndSelection) {
+    RecordViewModel source;
+    source.targets = {
+        {exosnap::engine::CaptureTarget::Kind::Monitor, 41, R"(\\.\DISPLAY1)"},
+        {exosnap::engine::CaptureTarget::Kind::Window, 73, "Claude Design - Brave"},
+    };
+    source.selected_target_index = 1;
+    source.capture_mode = CaptureMode::Window;
+    RecordViewModelAdapter adapter(&source);
+
+    ASSERT_EQ(adapter.targetCount(), 2);
+    const QVariantMap display = adapter.targetOptions().at(0).toMap();
+    const QVariantMap window = adapter.targetOptions().at(1).toMap();
+    EXPECT_EQ(display.value(QStringLiteral("identity")).toString(), QStringLiteral("display:41"));
+    EXPECT_EQ(display.value(QStringLiteral("kind")).toString(), QStringLiteral("display"));
+    EXPECT_EQ(display.value(QStringLiteral("thumbnailState")).toString(), QStringLiteral("placeholder"));
+    EXPECT_FALSE(display.value(QStringLiteral("selected")).toBool());
+    EXPECT_EQ(window.value(QStringLiteral("identity")).toString(), QStringLiteral("window:73"));
+    EXPECT_EQ(window.value(QStringLiteral("label")).toString(), QStringLiteral("Brave - Claude Design"));
+    EXPECT_TRUE(window.value(QStringLiteral("selected")).toBool());
+    EXPECT_EQ(adapter.selectedTargetIdentity(), QStringLiteral("window:73"));
+    EXPECT_TRUE(adapter.selectedTargetAvailable());
+}
+
+TEST(RecordViewModelAdapterTest, PickerFilterMatchesKindAndResolvedLabel) {
+    RecordViewModel source;
+    source.targets = {
+        {exosnap::engine::CaptureTarget::Kind::Monitor, 41, R"(\\.\DISPLAY1)"},
+        {exosnap::engine::CaptureTarget::Kind::Window, 73, "Claude Design - Brave"},
+        {exosnap::engine::CaptureTarget::Kind::Window, 74, "Task Manager"},
+    };
+    RecordViewModelAdapter adapter(&source);
+
+    const QVariantList matches = adapter.filteredTargetOptions(QStringLiteral("window"), QStringLiteral("claude"));
+
+    ASSERT_EQ(matches.size(), 1);
+    EXPECT_EQ(matches.front().toMap().value(QStringLiteral("identity")).toString(), QStringLiteral("window:73"));
+}
+
+TEST(RecordViewModelAdapterTest, CachedStillSurvivesRefreshAndOtherTargetsKeepAPlaceholder) {
+    RecordViewModel source;
+    source.targets = {
+        {exosnap::engine::CaptureTarget::Kind::Window, 73, "Claude Design - Brave"},
+        {exosnap::engine::CaptureTarget::Kind::Window, 74, "Task Manager"},
+    };
+    RecordViewModelAdapter adapter(&source);
+    adapter.setTargetStill(QStringLiteral("window:73"), QStringLiteral("image://capture-target/window-73?v=1"));
+
+    source.targets[0].description = "Renamed document - Brave";
+    ++source.targets_revision;
+    adapter.synchronize();
+
+    EXPECT_EQ(adapter.targetOptions().at(0).toMap().value(QStringLiteral("thumbnailState")).toString(),
+              QStringLiteral("ready"));
+    EXPECT_EQ(adapter.targetOptions().at(0).toMap().value(QStringLiteral("thumbnailSource")).toString(),
+              QStringLiteral("image://capture-target/window-73?v=1"));
+    EXPECT_EQ(adapter.targetOptions().at(1).toMap().value(QStringLiteral("thumbnailState")).toString(),
+              QStringLiteral("placeholder"));
+}
+
+TEST(RecordViewModelAdapterTest, StillRefreshRequestsOnlyUnselectedOneShotTargets) {
+    RecordViewModel source;
+    source.targets = {
+        {exosnap::engine::CaptureTarget::Kind::Monitor, 41, R"(\\.\DISPLAY1)"},
+        {exosnap::engine::CaptureTarget::Kind::Window, 73, "Claude Design - Brave"},
+        {exosnap::engine::CaptureTarget::Kind::Window, 74, "Task Manager"},
+    };
+    source.selected_target_index = 1;
+    RecordViewModelAdapter adapter(&source);
+    QStringList requests;
+    QObject::connect(&adapter, &RecordViewModelAdapter::targetStillRefreshRequested,
+                     [&requests](const QString& identity, int, const QString&) { requests.push_back(identity); });
+
+    adapter.requestTargetStillRefresh();
+
+    EXPECT_EQ(requests, (QStringList{QStringLiteral("display:41"), QStringLiteral("window:74")}));
+}
+
+TEST(RecordViewModelAdapterTest, RegionPresetsLeadWithDrawCustomAndCoverTheNamedRatios) {
+    RecordViewModel source;
+    RecordViewModelAdapter adapter(&source);
+
+    const QVariantList presets = adapter.regionPresetOptions();
+
+    ASSERT_EQ(presets.size(), 5);
+    const QVariantMap draw_custom = presets.at(0).toMap();
+    EXPECT_EQ(draw_custom.value(QStringLiteral("key")).toString(), QStringLiteral("custom"));
+    EXPECT_EQ(draw_custom.value(QStringLiteral("label")).toString(), QStringLiteral("Draw custom"));
+    EXPECT_TRUE(draw_custom.value(QStringLiteral("draw")).toBool());
+
+    const QList<QPair<QString, double>> expected{
+        {QStringLiteral("16:9"), 16.0 / 9.0},
+        {QStringLiteral("9:16"), 9.0 / 16.0},
+        {QStringLiteral("1:1"), 1.0},
+        {QStringLiteral("4:5"), 4.0 / 5.0},
+    };
+    for (int i = 0; i < expected.size(); ++i) {
+        const QVariantMap preset = presets.at(i + 1).toMap();
+        EXPECT_EQ(preset.value(QStringLiteral("key")).toString(), expected.at(i).first) << i;
+        EXPECT_DOUBLE_EQ(preset.value(QStringLiteral("aspect")).toDouble(), expected.at(i).second) << i;
+        EXPECT_FALSE(preset.value(QStringLiteral("draw")).toBool()) << i;
+    }
+}
+
+TEST(RecordViewModelAdapterTest, RegionEditingLocksOnlyWhileTheCaptureIsLive) {
+    RecordViewModel source;
+    source.targets.push_back({exosnap::engine::CaptureTarget::Kind::Monitor, 1, "Display 1: 1920x1080 at (0, 0)"});
+    source.selected_target_index = 0;
+    RecordViewModelAdapter adapter(&source);
+
+    // The rectangle is the thing the user is still composing, so every state
+    // before the capture itself is live leaves it editable -- including the
+    // region-selection state whose overlay IS the editor.
+    for (const auto state : {UiRecordingState::Ready, UiRecordingState::RegionSelecting, UiRecordingState::Blocked,
+                             UiRecordingState::Completed, UiRecordingState::Failed}) {
+        source.SetState(state);
+        adapter.synchronize();
+        EXPECT_FALSE(adapter.regionEditingLocked()) << "state " << static_cast<int>(state);
+    }
+
+    // From the countdown onward the capture owns the region.
+    for (const auto state :
+         {UiRecordingState::Countdown, UiRecordingState::Recording, UiRecordingState::Paused,
+          UiRecordingState::ArmedFromRecovery, UiRecordingState::Stopping, UiRecordingState::Saving}) {
+        source.SetState(state);
+        adapter.synchronize();
+        EXPECT_TRUE(adapter.regionEditingLocked()) << "state " << static_cast<int>(state);
+    }
+}
+
+TEST(RecordViewModelAdapterTest, DisplayRowsCarryTheResolvedRegionLabel) {
+    RecordViewModel source;
+    source.targets = {
+        {exosnap::engine::CaptureTarget::Kind::Monitor, 41, R"(\\.\DISPLAY1)"},
+        {exosnap::engine::CaptureTarget::Kind::Window, 73, "Claude Design - Brave"},
+    };
+    RecordViewModelAdapter adapter(&source);
+
+    const QVariantMap display = adapter.targetOptions().at(0).toMap();
+    const QVariantMap window = adapter.targetOptions().at(1).toMap();
+    EXPECT_EQ(display.value(QStringLiteral("regionLabel")).toString(), QStringLiteral("Region on Display 1"));
+    EXPECT_EQ(window.value(QStringLiteral("regionLabel")).toString(), QString{});
+}
+
+TEST(RecordViewModelAdapterTest, RegionPresetRequestRoutesThroughTheNarrowSignal) {
+    RecordViewModel source;
+    RecordViewModelAdapter adapter(&source);
+    QString requested;
+    QObject::connect(&adapter, &RecordViewModelAdapter::regionPresetRequested,
+                     [&requested](const QString& key) { requested = key; });
+
+    adapter.requestRegionPreset(QStringLiteral("9:16"));
+
+    EXPECT_EQ(requested, QStringLiteral("9:16"));
+}
+
+TEST(RecordViewModelAdapterTest, DisappearedSelectionRemainsNamedButUnresolved) {
+    RecordViewModel source;
+    source.targets = {{exosnap::engine::CaptureTarget::Kind::Window, 73, "Claude Design - Brave"}};
+    source.selected_target_index = 0;
+    RecordViewModelAdapter adapter(&source);
+    ASSERT_EQ(adapter.selectedTargetIdentity(), QStringLiteral("window:73"));
+
+    source.targets.clear();
+    source.selected_target_index = -1;
+    ++source.targets_revision;
+    adapter.synchronize();
+
+    EXPECT_EQ(adapter.selectedTargetIdentity(), QStringLiteral("window:73"));
+    EXPECT_FALSE(adapter.selectedTargetAvailable());
+    EXPECT_EQ(adapter.targetCount(), 0);
 }
 
 TEST(RecordViewModelAdapterTest, RegionSelectionBlocksStartAndNormalizesCrop) {

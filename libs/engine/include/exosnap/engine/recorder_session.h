@@ -604,11 +604,11 @@ using SegmentPathExistsProbe = std::function<bool(const std::filesystem::path&, 
 SegmentPathResult DeriveSegmentPath(const std::filesystem::path& base, std::uint32_t index,
                                     const SegmentPathExistsProbe& exists_probe = nullptr);
 
-// Derive the transient MKV path used when recording with Container::Mp4
-// (ADR-0014: remux-on-stop architecture). The engine records to this MKV file;
-// on successful stop the app layer remuxes it to the final MP4 and deletes it.
-// The transient path is the requested MP4 path with extension replaced by ".mkv.tmp".
-// Example: "recording.mp4" -> "recording.mkv.tmp"
+// Returns the valuable live artifact for a final output path. The complete
+// final filename is preserved and ".partial" is appended.
+std::filesystem::path DeriveValuablePartialPath(const std::filesystem::path& final_output_path);
+
+// Returns the valuable MKV-backed live artifact for an MP4 output path.
 std::filesystem::path DeriveTransientMkvPath(const std::filesystem::path& mp4_output_path);
 
 // ---------------------------------------------------------------------------

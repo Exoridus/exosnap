@@ -17,8 +17,10 @@ Rectangle {
     required property string text
     property string tone: "warning"
     property bool dismissible: false
+    property string actionText: ""
 
     signal dismissed()
+    signal actionTriggered()
 
     readonly property color _accentTone: root.tone === "error" ? ExoTheme.error
                                        : root.tone === "success" ? ExoTheme.success
@@ -50,7 +52,7 @@ Rectangle {
                                       : qsTr("Warning")
 
     implicitHeight: Math.max(noticeLabel.implicitHeight + 2 * ExoTheme.spacingSm,
-                             dismissButton.visible ? dismissButton.implicitHeight + ExoTheme.spacingSm : 0)
+                             actionRow.visible ? actionRow.implicitHeight + ExoTheme.spacingSm : 0)
     color: root._fill
     border.width: 1
     border.color: root._accentTone
@@ -85,8 +87,8 @@ Rectangle {
             fill: parent
             margins: ExoTheme.spacingSm
             leftMargin: ExoTheme.spacingMd + toneGlyph.width + ExoTheme.spacingSm
-            rightMargin: dismissButton.visible
-                         ? dismissButton.width + 2 * ExoTheme.spacingSm : ExoTheme.spacingMd
+            rightMargin: actionRow.visible
+                         ? actionRow.width + 2 * ExoTheme.spacingSm : ExoTheme.spacingMd
         }
         font {
             family: ExoTheme.sansFamily
@@ -94,18 +96,32 @@ Rectangle {
         }
     }
 
-    ExoButton {
-        id: dismissButton
+    Row {
+        id: actionRow
 
-        text: qsTr("Dismiss")
-        quiet: true
-        visible: root.dismissible
-        Accessible.name: qsTr("Dismiss notification")
-        onClicked: root.dismissed()
+        spacing: ExoTheme.spacingXs
+        visible: root.actionText !== "" || root.dismissible
         anchors {
             right: parent.right
             verticalCenter: parent.verticalCenter
             rightMargin: ExoTheme.spacingSm
+        }
+
+        ExoButton {
+            text: root.actionText
+            quiet: true
+            visible: root.actionText !== ""
+            onClicked: root.actionTriggered()
+        }
+
+        ExoButton {
+            id: dismissButton
+
+            text: qsTr("Dismiss")
+            quiet: true
+            visible: root.dismissible
+            Accessible.name: qsTr("Dismiss notification")
+            onClicked: root.dismissed()
         }
     }
 }

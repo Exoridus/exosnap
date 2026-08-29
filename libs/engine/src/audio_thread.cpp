@@ -392,6 +392,17 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
     bool bare_degraded = false;
     uint64_t lastAccountedQpcNs = QpcNowNs();
     auto lastReinitAttempt = std::chrono::steady_clock::now();
+    const auto degradedSourceKinds = [this]() {
+        if (source_kinds_.size() == 1 && source_->DegradedSourceCount() > 0)
+            return AudioSourceKindBit(source_kinds_.front());
+        const uint32_t indexes = source_->DegradedSourceIndexMask();
+        uint32_t kinds = 0;
+        for (size_t i = 0; i < source_kinds_.size() && i < 32; ++i) {
+            if ((indexes & (1u << static_cast<uint32_t>(i))) != 0)
+                kinds |= AudioSourceKindBit(source_kinds_[i]);
+        }
+        return kinds;
+    };
 
     // --- Silent-stall state (audio_silence_fill.h) ---
     // silent_stalled: a healthy source has stopped delivering packets entirely
@@ -525,7 +536,8 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
         // wall-clock silence and throttled-reactivate. The dead source is not
         // polled at all until it comes back — polling it would only re-fail.
         if (bare_degraded) {
-            m_state.diagnostics.OnAudioSourceHealth(track_id_, 1, 1);
+            const uint32_t kind = source_kinds_.empty() ? 0 : AudioSourceKindBit(source_kinds_.front());
+            m_state.diagnostics.OnAudioSourceHealth(track_id_, 1, 1, kind);
             if (!emitSilenceForElapsed()) {
                 failed = true;
                 break;
@@ -577,7 +589,7 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
         {
             const uint32_t total_sources = source_->CaptureSourceCount();
             const uint32_t degraded_sources = source_->DegradedSourceCount();
-            m_state.diagnostics.OnAudioSourceHealth(track_id_, degraded_sources, total_sources);
+            m_state.diagnostics.OnAudioSourceHealth(track_id_, degraded_sources, total_sources, degradedSourceKinds());
             if (degraded_sources > 0) {
                 markDegradedOccurred();
                 // Every inner is down: the mixer emits nothing at all, so this
@@ -621,7 +633,7 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
                             break;
                         }
                         m_state.diagnostics.OnAudioSourceHealth(track_id_, source_->DegradedSourceCount(),
-                                                                total_sources);
+                                                                total_sources, degradedSourceKinds());
                     }
                 }
             }
@@ -850,7 +862,8 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
             const uint32_t degraded_after = source_->DegradedSourceCount();
             if (degraded_after > 0) {
                 markDegradedOccurred();
-                m_state.diagnostics.OnAudioSourceHealth(track_id_, degraded_after, source_->CaptureSourceCount());
+                m_state.diagnostics.OnAudioSourceHealth(track_id_, degraded_after, source_->CaptureSourceCount(),
+                                                        degradedSourceKinds());
             }
         }
 

@@ -55,7 +55,9 @@ SpinBox {
         validator: root.validator
         inputMethodHints: Qt.ImhFormattedNumbersOnly
         selectByMouse: true
-        color: root.enabled ? ExoTheme.text : ExoTheme.textDim
+        // The number itself stays readable while locked; the stepper glyphs and
+        // the frame below already carry that it cannot be changed.
+        color: root.enabled ? ExoTheme.text : ExoTheme.textSecondary
         selectionColor: ExoTheme.accent
         selectedTextColor: ExoTheme.accentInk
         leftPadding: ExoTheme.spacingMd

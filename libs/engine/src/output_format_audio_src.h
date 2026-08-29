@@ -68,6 +68,7 @@ class OutputFormatAudioSrc final : public IAudioCaptureSource {
     void* BufferReadyEvent() const override;
     uint32_t CaptureSourceCount() const override;
     uint32_t DegradedSourceCount() const override;
+    uint32_t DegradedSourceIndexMask() const override;
     void Shutdown() override;
 
     // --- A/V clock slaving (H-3) --------------------------------------------

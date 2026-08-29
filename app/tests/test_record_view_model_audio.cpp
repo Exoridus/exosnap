@@ -2,6 +2,7 @@
 
 #include <algorithm>
 
+#include "models/CaptureTargetPresentation.h"
 #include "viewmodels/RecordViewModel.h"
 
 namespace exosnap {
@@ -495,12 +496,61 @@ TEST(RecordViewModelAudioTest, RecordViewModel_DisplayLabelFromTarget_Normalizes
 
 TEST(RecordViewModelAudioTest, RecordViewModel_WindowLabelFromTarget_AppNameFirst_Brave) {
     EXPECT_EQ(RecordViewModel::WindowLabelFromTarget("ExoSnap UI-Brand-Integration \xE2\x80\x94 Brave"),
-              "Brave \xE2\x80\x94 ExoSnap UI-Brand-Integration");
+              "Brave - ExoSnap UI-Brand-Integration");
+}
+
+TEST(CaptureTargetPresentationTest, BraveCombinesStableAppNameWithDocumentTitle) {
+    const exosnap::engine::CaptureTarget target{exosnap::engine::CaptureTarget::Kind::Window, 17,
+                                                "Claude Design - Brave"};
+
+    const CaptureTargetPresentation presentation =
+        ResolveCaptureTargetPresentation(target, CaptureTargetPresentationKind::Window);
+
+    EXPECT_EQ(presentation.label, "Brave - Claude Design");
+}
+
+TEST(CaptureTargetPresentationTest, RawApplicationTitlesRemainUsefulLabels) {
+    const exosnap::engine::CaptureTarget task_manager{exosnap::engine::CaptureTarget::Kind::Window, 18, "Task Manager"};
+    const exosnap::engine::CaptureTarget steam{exosnap::engine::CaptureTarget::Kind::Window, 19, "Steam"};
+
+    EXPECT_EQ(ResolveCaptureTargetPresentation(task_manager, CaptureTargetPresentationKind::Window).label,
+              "Task Manager");
+    EXPECT_EQ(ResolveCaptureTargetPresentation(steam, CaptureTargetPresentationKind::Window).label, "Steam");
+}
+
+TEST(CaptureTargetPresentationTest, EqualApplicationAndTitleAreNotRepeated) {
+    const exosnap::engine::CaptureTarget target{exosnap::engine::CaptureTarget::Kind::Window, 20, "Steam - Steam"};
+
+    EXPECT_EQ(ResolveCaptureTargetPresentation(target, CaptureTargetPresentationKind::Window).label, "Steam");
+}
+
+TEST(CaptureTargetPresentationTest, DisplayAndRegionUseTheSameSequentialDisplayNumber) {
+    const exosnap::engine::CaptureTarget target{exosnap::engine::CaptureTarget::Kind::Monitor, 21, R"(\\.\DISPLAY6)"};
+    const std::unordered_map<std::wstring, int> displays{{L"\\\\.\\DISPLAY6", 1}};
+
+    const CaptureTargetPresentation display =
+        ResolveCaptureTargetPresentation(target, CaptureTargetPresentationKind::Display, displays);
+    const CaptureTargetPresentation region =
+        ResolveCaptureTargetPresentation(target, CaptureTargetPresentationKind::Region, displays);
+
+    EXPECT_EQ(display.label, "Desktop - Display 1");
+    EXPECT_EQ(region.label, "Region on Display 1");
+}
+
+TEST(CaptureTargetPresentationTest, FilenameTargetNameMatchesTheResolvedLabel) {
+    const exosnap::engine::CaptureTarget target{exosnap::engine::CaptureTarget::Kind::Window, 22,
+                                                "Claude Design - Brave"};
+
+    const CaptureTargetPresentation presentation =
+        ResolveCaptureTargetPresentation(target, CaptureTargetPresentationKind::Window);
+
+    EXPECT_EQ(presentation.filename.target_name, L"Brave - Claude Design");
+    EXPECT_EQ(presentation.label, QString::fromStdWString(presentation.filename.target_name).toStdString());
 }
 
 TEST(RecordViewModelAudioTest, RecordViewModel_WindowLabelFromTarget_AppNameFirst_Explorer) {
     EXPECT_EQ(RecordViewModel::WindowLabelFromTarget("Debug und 2 weitere Registerkarten \xE2\x80\x94 Explorer"),
-              "Explorer \xE2\x80\x94 Debug und 2 weitere Registerkarten");
+              "Explorer - Debug und 2 weitere Registerkarten");
 }
 
 TEST(RecordViewModelAudioTest, RecordViewModel_WindowLabelFromTarget_MissingAppNameFallsBackToExistingLabel) {

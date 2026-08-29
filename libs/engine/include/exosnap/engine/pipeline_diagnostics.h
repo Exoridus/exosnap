@@ -261,6 +261,7 @@ struct AudioDiagnostics {
     // the device returns). source_degraded == degraded_sources > 0. A calm,
     // measured live notice — never a blocker.
     uint32_t degraded_sources = 0;
+    uint32_t degraded_source_kinds = 0;
     bool source_degraded = false;
     // Latched post-flight fact: at least one audio capture source was lost
     // mid-recording and degraded to honest silence at some point this session,

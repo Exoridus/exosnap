@@ -29,7 +29,9 @@ TextField {
 
     implicitHeight: ExoTheme.controlHeight
     selectByMouse: true
-    color: root.enabled ? ExoTheme.text : ExoTheme.textDim
+    // Same rule as the locked select: the value stays readable, the field's
+    // fill and border say it cannot be edited.
+    color: root.enabled ? ExoTheme.text : ExoTheme.textSecondary
     placeholderTextColor: ExoTheme.textDim
     selectionColor: ExoTheme.accent
     selectedTextColor: ExoTheme.accentInk

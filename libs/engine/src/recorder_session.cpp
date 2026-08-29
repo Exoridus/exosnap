@@ -29,15 +29,18 @@
 namespace exosnap::engine {
 
 // ---------------------------------------------------------------------------
-// DeriveTransientMkvPath
+// DeriveValuablePartialPath
 // ---------------------------------------------------------------------------
 
+std::filesystem::path DeriveValuablePartialPath(const std::filesystem::path& final_output_path) {
+    return final_output_path.parent_path() / (final_output_path.filename().wstring() + L".partial");
+}
+
 std::filesystem::path DeriveTransientMkvPath(const std::filesystem::path& mp4_output_path) {
-    // Replace .mp4 extension with .mkv.tmp so the transient file sits next to the
-    // intended output without colliding with any real MKV the user might have.
-    std::filesystem::path result = mp4_output_path;
-    result.replace_extension(L".mkv.tmp");
-    return result;
+    if (mp4_output_path.extension() == L".partial") {
+        return mp4_output_path;
+    }
+    return DeriveValuablePartialPath(mp4_output_path);
 }
 
 // ---------------------------------------------------------------------------
