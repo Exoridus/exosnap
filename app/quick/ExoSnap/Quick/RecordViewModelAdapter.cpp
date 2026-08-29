@@ -39,12 +39,6 @@ bool hasRow(const capability::AudioUiState& state, exosnap::engine::AudioSourceK
     });
 }
 
-QString targetIdentity(const exosnap::engine::CaptureTarget& target) {
-    const QString kind = target.kind == exosnap::engine::CaptureTarget::Kind::Window ? QStringLiteral("window")
-                                                                                     : QStringLiteral("display");
-    return kind + QLatin1Char(':') + QString::number(static_cast<qulonglong>(target.native_id));
-}
-
 } // namespace
 
 RecordViewModelAdapter::RecordViewModelAdapter(const RecordViewModel* source, QObject* parent)
@@ -750,11 +744,11 @@ void RecordViewModelAdapter::rebuildPresentation() {
     // synchronization cadence.
     const int selected_index = source_->selected_target_index;
     if (selected_index >= 0 && selected_index < static_cast<int>(source_->targets.size()))
-        selected_target_identity_ = targetIdentity(source_->targets[static_cast<std::size_t>(selected_index)]);
+        selected_target_identity_ = TargetIdentity(source_->targets[static_cast<std::size_t>(selected_index)]);
     selected_target_available_ =
         !selected_target_identity_.isEmpty() && selected_index >= 0 &&
         selected_index < static_cast<int>(source_->targets.size()) &&
-        targetIdentity(source_->targets[static_cast<std::size_t>(selected_index)]) == selected_target_identity_;
+        TargetIdentity(source_->targets[static_cast<std::size_t>(selected_index)]) == selected_target_identity_;
 
     if (!target_options_revision_.has_value() || *target_options_revision_ != source_->targets_revision ||
         !target_options_selected_index_.has_value() || *target_options_selected_index_ != selected_index) {
@@ -766,7 +760,7 @@ void RecordViewModelAdapter::rebuildPresentation() {
         for (qsizetype index = 0; index < static_cast<qsizetype>(source_->targets.size()); ++index) {
             const auto& target = source_->targets[static_cast<std::size_t>(index)];
             const bool window = target.kind == exosnap::engine::CaptureTarget::Kind::Window;
-            const QString identity = targetIdentity(target);
+            const QString identity = TargetIdentity(target);
             const CaptureTargetPresentation presentation = ResolveCaptureTargetPresentation(
                 target, window ? CaptureTargetPresentationKind::Window : CaptureTargetPresentationKind::Display);
             // The distinguishing display suffix survives elision because the
@@ -776,14 +770,16 @@ void RecordViewModelAdapter::rebuildPresentation() {
                        : QString::fromStdString(
                              ResolveCaptureTargetPresentation(target, CaptureTargetPresentationKind::Region).label);
             const QString thumbnail_source = target_stills_.value(identity);
+            const QString thumbnail_state = thumbnail_source.isEmpty()                ? QStringLiteral("placeholder")
+                                            : stale_target_stills_.contains(identity) ? QStringLiteral("stale")
+                                                                                      : QStringLiteral("ready");
             const QVariantMap option{
                 {QStringLiteral("targetIndex"), index},
                 {QStringLiteral("identity"), identity},
                 {QStringLiteral("label"), QString::fromStdString(presentation.label)},
                 {QStringLiteral("kind"), window ? QStringLiteral("window") : QStringLiteral("display")},
                 {QStringLiteral("regionLabel"), region_label},
-                {QStringLiteral("thumbnailState"),
-                 thumbnail_source.isEmpty() ? QStringLiteral("placeholder") : QStringLiteral("ready")},
+                {QStringLiteral("thumbnailState"), thumbnail_state},
                 {QStringLiteral("thumbnailSource"), thumbnail_source},
                 {QStringLiteral("selected"), index == selected_index},
             };
@@ -851,25 +847,40 @@ void RecordViewModelAdapter::rebuildRecentRecordings() {
     emit recentRecordingsChanged();
 }
 
+QString RecordViewModelAdapter::TargetIdentity(const exosnap::engine::CaptureTarget& target) {
+    const QString kind = target.kind == exosnap::engine::CaptureTarget::Kind::Window ? QStringLiteral("window")
+                                                                                     : QStringLiteral("display");
+    return kind + QLatin1Char(':') + QString::number(static_cast<qulonglong>(target.native_id));
+}
+
 void RecordViewModelAdapter::setTargetStill(QString identity, QString source) {
     if (identity.isEmpty() || source.isEmpty())
         return;
-    if (target_stills_.value(identity) == source)
+    const bool was_stale = stale_target_stills_.remove(identity);
+    if (!was_stale && target_stills_.value(identity) == source)
         return;
     target_stills_.insert(std::move(identity), std::move(source));
     target_options_revision_.reset();
     rebuildPresentation();
 }
 
-void RecordViewModelAdapter::requestTargetStillRefresh() {
-    for (const QVariant& value : target_options_) {
-        const QVariantMap row = value.toMap();
-        if (row.value(QStringLiteral("selected")).toBool())
-            continue;
-        emit targetStillRefreshRequested(row.value(QStringLiteral("identity")).toString(),
-                                         row.value(QStringLiteral("targetIndex")).toInt(),
-                                         row.value(QStringLiteral("kind")).toString());
-    }
+void RecordViewModelAdapter::setTargetStillUnavailable(const QString& identity) {
+    // A target that never delivered a still has nothing to go stale: it stays a
+    // placeholder, and the card's geometry never changes either way.
+    if (identity.isEmpty() || !target_stills_.contains(identity))
+        return;
+    if (stale_target_stills_.contains(identity))
+        return;
+    stale_target_stills_.insert(identity);
+    target_options_revision_.reset();
+    rebuildPresentation();
+}
+
+void RecordViewModelAdapter::setVisibleTargetIdentities(const QStringList& identities) {
+    if (visible_target_identities_ == identities)
+        return;
+    visible_target_identities_ = identities;
+    emit visibleTargetIdentitiesChanged(visible_target_identities_);
 }
 
 void RecordViewModelAdapter::requestStart() {

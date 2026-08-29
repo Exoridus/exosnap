@@ -198,6 +198,8 @@ qt_add_qml_module(exosnap
         ReadyFrameCaptureService.h
         RecordWebcamFrameProvider.cpp
         RecordWebcamFrameProvider.h
+        CaptureTargetStillProvider.cpp
+        CaptureTargetStillProvider.h
         OverlayAdapter.cpp
         OverlayAdapter.h
         RecordViewModelAdapter.cpp
@@ -371,6 +373,8 @@ target_sources(exosnap
         ${PROJECT_SOURCE_DIR}/app/services/WgcCaptureHubService.h
         ${PROJECT_SOURCE_DIR}/app/services/WgcSourceProducer.cpp
         ${PROJECT_SOURCE_DIR}/app/services/WgcSourceProducer.h
+        ${PROJECT_SOURCE_DIR}/app/services/CaptureTargetStillService.cpp
+        ${PROJECT_SOURCE_DIR}/app/services/CaptureTargetStillService.h
         # QCR-110: the production producer of exclusive-fullscreen evidence. Both
         # the Diagnostics card and the recording-admission gate read its snapshot;
         # without it in the shipping target the gate is inert.
@@ -1207,6 +1211,8 @@ exosnap_add_gtest(
         RecordViewModelAdapter.h
         RecordWebcamFrameProvider.cpp
         RecordWebcamFrameProvider.h
+        CaptureTargetStillProvider.cpp
+        CaptureTargetStillProvider.h
     LIBRARIES
         Qt6::Core
         Qt6::Quick
@@ -1499,6 +1505,8 @@ exosnap_add_gtest(
         ${EXOSNAP_QUICK_TESTS_DIR}/test_webcam_chroma_key.cpp
         RecordWebcamFrameProvider.cpp
         RecordWebcamFrameProvider.h
+        CaptureTargetStillProvider.cpp
+        CaptureTargetStillProvider.h
     LIBRARIES
         Qt6::Core
         Qt6::Gui

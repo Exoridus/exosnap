@@ -786,13 +786,22 @@ available during recording via an on-screen dock control and a hotkey.
 still thumbnail, source-kind glyph, resolved target label, and an explicit selected state. A missing
 thumbnail uses a stable placeholder rather than collapsing the card. Cards are fully clickable,
 keyboard focusable and accessible; double-click or Enter confirms the focused card. A fixed footer
-contains Cancel and the named confirm action. The refresh icon has a tooltip and accessible name.
+contains Cancel and the named confirm action.
 
 The Windows tab reports its result count, offers search, and uses a visible scrollbar whenever its
-cards overflow. Cards reflow from two columns to one at the narrow layout. Opening or refreshing the
-picker refreshes unselected cached stills; at most the selected target may run a live preview. A
-selection survives refresh when the same target identity remains. If it disappears, the picker says
-so and leaves the selection unresolved rather than silently choosing another target.
+cards overflow. Cards reflow from two columns to one at the narrow layout. A selection survives
+refresh when the same target identity remains. If it disappears, the picker says so and leaves the
+selection unresolved rather than silently choosing another target.
+
+**Thumbnail freshness.** Thumbnails refresh on their own; the picker offers no manual refresh
+control. Only the cards inside the scrolled viewport are refreshed, one target at a time on a fixed
+interval, so the cost is the same whether two cards or forty are on screen and the perceived refresh
+rate rises as fewer cards compete. A closed picker refreshes nothing. A target that stops being
+capturable -- minimized, cloaked, behind the secure desktop, or on a display that went to standby --
+keeps its last thumbnail, shown dimmed, and is never reverted to the placeholder: the card's geometry
+does not change and the grid does not flicker. Only a target that has never delivered a thumbnail
+shows the placeholder. Thumbnails are held in memory for the session and are never written to disk;
+a target that disappears loses its thumbnail with it.
 
 The Region tab puts **Draw custom** first and gives it the strongest emphasis, followed by
 **16:9**, **9:16**, **1:1**, and **4:5** presets. Draw custom enters an immediate snipping-style drag

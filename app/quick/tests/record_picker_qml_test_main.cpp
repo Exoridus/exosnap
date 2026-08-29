@@ -55,6 +55,16 @@ class RecordPickerTestDriver final : public QObject {
         adapter_.setSource(&source_);
     }
 
+    // The still service is a C++ collaborator the QML test does not have, so
+    // the two edges it drives are reachable from the test instead.
+    Q_INVOKABLE void deliverStill(const QString& identity, const QString& source) {
+        adapter_.setTargetStill(identity, source);
+    }
+
+    Q_INVOKABLE void failStill(const QString& identity) {
+        adapter_.setTargetStillUnavailable(identity);
+    }
+
   private:
     RecordViewModel source_;
     RecordViewModelAdapter adapter_;

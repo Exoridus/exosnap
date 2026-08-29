@@ -363,7 +363,7 @@ TEST(RecordViewModelAdapterTest, CachedStillSurvivesRefreshAndOtherTargetsKeepAP
         {exosnap::engine::CaptureTarget::Kind::Window, 74, "Task Manager"},
     };
     RecordViewModelAdapter adapter(&source);
-    adapter.setTargetStill(QStringLiteral("window:73"), QStringLiteral("image://capture-target/window-73?v=1"));
+    adapter.setTargetStill(QStringLiteral("window:73"), QStringLiteral("image://capture-target/window-73/1"));
 
     source.targets[0].description = "Renamed document - Brave";
     ++source.targets_revision;
@@ -372,27 +372,58 @@ TEST(RecordViewModelAdapterTest, CachedStillSurvivesRefreshAndOtherTargetsKeepAP
     EXPECT_EQ(adapter.targetOptions().at(0).toMap().value(QStringLiteral("thumbnailState")).toString(),
               QStringLiteral("ready"));
     EXPECT_EQ(adapter.targetOptions().at(0).toMap().value(QStringLiteral("thumbnailSource")).toString(),
-              QStringLiteral("image://capture-target/window-73?v=1"));
+              QStringLiteral("image://capture-target/window-73/1"));
     EXPECT_EQ(adapter.targetOptions().at(1).toMap().value(QStringLiteral("thumbnailState")).toString(),
               QStringLiteral("placeholder"));
 }
 
-TEST(RecordViewModelAdapterTest, StillRefreshRequestsOnlyUnselectedOneShotTargets) {
+TEST(RecordViewModelAdapterTest, VisibleIdentitiesAreForwardedOnceInLayoutOrder) {
     RecordViewModel source;
     source.targets = {
         {exosnap::engine::CaptureTarget::Kind::Monitor, 41, R"(\\.\DISPLAY1)"},
         {exosnap::engine::CaptureTarget::Kind::Window, 73, "Claude Design - Brave"},
+    };
+    RecordViewModelAdapter adapter(&source);
+    QList<QStringList> published;
+    QObject::connect(&adapter, &RecordViewModelAdapter::visibleTargetIdentitiesChanged,
+                     [&published](const QStringList& identities) { published.push_back(identities); });
+
+    const QStringList visible{QStringLiteral("window:73"), QStringLiteral("display:41")};
+    adapter.setVisibleTargetIdentities(visible);
+    // The unchanged set is not republished: the still service would restart its
+    // round robin from the top and never finish a pass while the user scrolls.
+    adapter.setVisibleTargetIdentities(visible);
+    adapter.setVisibleTargetIdentities({});
+
+    ASSERT_EQ(published.size(), 2);
+    EXPECT_EQ(published.at(0), visible);
+    EXPECT_TRUE(published.at(1).isEmpty());
+}
+
+TEST(RecordViewModelAdapterTest, AnUnavailableTargetKeepsItsStillAndGoesStale) {
+    RecordViewModel source;
+    source.targets = {
+        {exosnap::engine::CaptureTarget::Kind::Window, 73, "Claude Design - Brave"},
         {exosnap::engine::CaptureTarget::Kind::Window, 74, "Task Manager"},
     };
-    source.selected_target_index = 1;
     RecordViewModelAdapter adapter(&source);
-    QStringList requests;
-    QObject::connect(&adapter, &RecordViewModelAdapter::targetStillRefreshRequested,
-                     [&requests](const QString& identity, int, const QString&) { requests.push_back(identity); });
+    adapter.setTargetStill(QStringLiteral("window:73"), QStringLiteral("image://capture-target/window-73/1"));
 
-    adapter.requestTargetStillRefresh();
+    adapter.setTargetStillUnavailable(QStringLiteral("window:73"));
+    // A target that never delivered a still has nothing to lose and stays a
+    // placeholder rather than announcing a failure the card cannot show.
+    adapter.setTargetStillUnavailable(QStringLiteral("window:74"));
 
-    EXPECT_EQ(requests, (QStringList{QStringLiteral("display:41"), QStringLiteral("window:74")}));
+    EXPECT_EQ(adapter.targetOptions().at(0).toMap().value(QStringLiteral("thumbnailState")).toString(),
+              QStringLiteral("stale"));
+    EXPECT_EQ(adapter.targetOptions().at(0).toMap().value(QStringLiteral("thumbnailSource")).toString(),
+              QStringLiteral("image://capture-target/window-73/1"));
+    EXPECT_EQ(adapter.targetOptions().at(1).toMap().value(QStringLiteral("thumbnailState")).toString(),
+              QStringLiteral("placeholder"));
+
+    adapter.setTargetStill(QStringLiteral("window:73"), QStringLiteral("image://capture-target/window-73/2"));
+    EXPECT_EQ(adapter.targetOptions().at(0).toMap().value(QStringLiteral("thumbnailState")).toString(),
+              QStringLiteral("ready"));
 }
 
 TEST(RecordViewModelAdapterTest, RegionPresetsLeadWithDrawCustomAndCoverTheNamedRatios) {

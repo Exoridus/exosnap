@@ -307,7 +307,8 @@ QuickApplication::QuickApplication()
     : settings_(settings_store_.Load()), recovery_service_(recovery_manifest_store_),
       about_view_model_(buildAboutInfo(settings_)), record_view_model_adapter_(&record_view_model_),
       overlay_adapter_(&record_view_model_), recording_coordinator_(std::make_unique<RecordingCoordinator>()),
-      webcam_frame_provider_(new RecordWebcamFrameProvider), edit_tile_provider_(new EditTimelineTileProvider) {
+      webcam_frame_provider_(new RecordWebcamFrameProvider), target_still_provider_(new CaptureTargetStillProvider),
+      edit_tile_provider_(new EditTimelineTileProvider) {
     // QCR-201. Latched here for the same reason preset_store_repaired_ is: the
     // load runs in the constructor, long before initializeNotifications() exists
     // to report it. The write block itself needs no latch — it follows from
@@ -417,6 +418,12 @@ QuickApplication::~QuickApplication() {
         window_geometry_->flush();
     if (!webcam_provider_registered_)
         delete webcam_frame_provider_;
+    // Stopped before the provider it feeds is destroyed: the worker emits into
+    // this object, and a queued emission from a joined thread is one that never
+    // arrives rather than one that arrives late.
+    target_still_service_.stop();
+    if (!target_still_provider_registered_)
+        delete target_still_provider_;
     if (!edit_tile_provider_registered_)
         delete edit_tile_provider_;
 }
@@ -847,6 +854,43 @@ void QuickApplication::initializeRecordWorkflow() {
             return CaptureTargetSnapshot{std::move(*seeded)};
         return CaptureTargetSnapshot{recording_coordinator_->EnumerateTargets()};
     });
+    // Target stills for the source picker. The service runs only while the
+    // picker reports visible cards, and the identities it is handed are resolved
+    // here rather than in QML because the capture target is engine state.
+    QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::visibleTargetIdentitiesChanged,
+                     &record_view_model_adapter_, [this](const QStringList& identities) {
+                         if (identities.isEmpty()) {
+                             target_still_service_.setVisibleTargets({});
+                             target_still_service_.stop();
+                             return;
+                         }
+                         // Built in the order QML listed them, which is the order the
+                         // cards are laid out in: the first pass after opening then
+                         // fills the grid top down instead of in target-list order.
+                         std::vector<CaptureTargetStillService::Request> requests;
+                         requests.reserve(static_cast<std::size_t>(identities.size()));
+                         for (const QString& identity : identities) {
+                             for (const exosnap::engine::CaptureTarget& target : record_view_model_.targets) {
+                                 if (RecordViewModelAdapter::TargetIdentity(target) != identity)
+                                     continue;
+                                 requests.push_back({identity, target});
+                                 break;
+                             }
+                         }
+                         target_still_service_.setVisibleTargets(std::move(requests));
+                         target_still_service_.start();
+                     });
+    QObject::connect(&target_still_service_, &CaptureTargetStillService::stillReady, &record_view_model_adapter_,
+                     [this](const QString& identity, const QImage& image) {
+                         if (target_still_provider_ == nullptr)
+                             return;
+                         record_view_model_adapter_.setTargetStill(
+                             identity, target_still_provider_->submitStill(identity, image));
+                     });
+    QObject::connect(
+        &target_still_service_, &CaptureTargetStillService::stillUnavailable, &record_view_model_adapter_,
+        [this](const QString& identity) { record_view_model_adapter_.setTargetStillUnavailable(identity); });
+
     capture_target_notifier_.start();
     record_view_model_.targets = capture_target_notifier_.currentSnapshot().targets;
     ++record_view_model_.targets_revision;
@@ -915,11 +959,6 @@ void QuickApplication::initializeRecordWorkflow() {
                      [this](const CaptureTargetSnapshot& snapshot, DiscoveryReason reason) {
                          refreshCaptureTargets(snapshot, reason);
                      });
-    QObject::connect(&shell_adapter_, &ShellAdapter::sourcePickerOpenChanged, &record_view_model_adapter_, [this]() {
-        if (shell_adapter_.sourcePickerOpen())
-            record_view_model_adapter_.requestTargetStillRefresh();
-    });
-
     // A monitor arriving, leaving or being re-arranged also re-orders the DXGI
     // outputs and can change what each one reports, so the display facts are
     // re-read on the same event rather than left at what startup measured.
@@ -1362,6 +1401,13 @@ void QuickApplication::refreshCaptureTargets(const CaptureTargetSnapshot& snapsh
     }
     record_view_model_.targets = snapshot.targets;
     ++record_view_model_.targets_revision;
+    if (target_still_provider_ != nullptr) {
+        QSet<QString> live;
+        live.reserve(static_cast<qsizetype>(record_view_model_.targets.size()));
+        for (const exosnap::engine::CaptureTarget& target : record_view_model_.targets)
+            live.insert(RecordViewModelAdapter::TargetIdentity(target));
+        target_still_provider_->retainOnly(live);
+    }
     record_view_model_.target_display_names.clear();
     record_view_model_.target_display_names.reserve(record_view_model_.targets.size());
     for (const auto& target : record_view_model_.targets) {
@@ -1439,8 +1485,6 @@ void QuickApplication::refreshCaptureTargets(const CaptureTargetSnapshot& snapsh
                                   .arg(QLatin1StringView(DiscoveryReasonName(reason))));
     updateMeterServices();
     synchronizeRecordState();
-    if (shell_adapter_.sourcePickerOpen())
-        record_view_model_adapter_.requestTargetStillRefresh();
 }
 
 void QuickApplication::updateOutputTargetContext(const exosnap::engine::CaptureTarget& target) {
@@ -4462,6 +4506,10 @@ bool QuickApplication::load(bool no_activate) {
     if (!webcam_provider_registered_) {
         engine_.addImageProvider(QStringLiteral("record-webcam"), webcam_frame_provider_);
         webcam_provider_registered_ = true;
+    }
+    if (!target_still_provider_registered_) {
+        engine_.addImageProvider(CaptureTargetStillProvider::providerId(), target_still_provider_);
+        target_still_provider_registered_ = true;
     }
     if (!edit_tile_provider_registered_) {
         engine_.addImageProvider(QLatin1String(kEditTileProviderId), edit_tile_provider_);
