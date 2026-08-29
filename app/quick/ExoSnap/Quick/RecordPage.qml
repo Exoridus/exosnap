@@ -270,7 +270,7 @@ Item {
                             anchors.horizontalCenter: parent.horizontalCenter
                             font {
                                 family: ExoTheme.sansFamily
-                                pixelSize: ExoTheme.fontTitle
+                                pixelSize: ExoTheme.fontPageTitle
                                 weight: Font.DemiBold
                             }
                         }

@@ -51,26 +51,34 @@ ExoSettingRow {
             active: root.sourceEnabled && !root.locked
             Layout.fillWidth: true
             Layout.minimumWidth: 72
-            // Capped, or the row without a mix checkbox stretches the bar across
-            // the whole card and it stops reading as a meter beside its switch.
+            // Capped, or in the stacked layout the bar stretches across the whole
+            // card and stops reading as a meter beside its switch.
             Layout.maximumWidth: 180
             Layout.alignment: Qt.AlignVCenter
         }
 
-        // Takes the width the capped meter leaves, so the checkbox stays flush
-        // against the card's right edge in both row shapes.
+        // The mix column occupies its width in EVERY row, whether or not this row
+        // can offer the option, because the meter before it is what absorbs the
+        // leftover. Letting it collapse made one card show the same level at two
+        // different bar lengths -- and made a bar change length under the user,
+        // since System audio only offers the option while Application audio is
+        // visible. A meter whose length depends on its neighbour is not a meter.
         Item {
-            Layout.fillWidth: true
-        }
+            Layout.preferredWidth: mixOption.implicitWidth
+            Layout.fillHeight: true
 
-        ExoCheckBox {
-            text: qsTr("Mix into previous track")
-            checked: !root.separateTrack
-            enabled: !root.locked && root.sourceEnabled
-            visible: root.showMixOption
-            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
-            Accessible.name: qsTr("Mix %1 into the previous track").arg(root.label)
-            onToggledByUser: value => root.separateToggled(!value)
+            ExoCheckBox {
+                id: mixOption
+
+                text: qsTr("Mix into previous track")
+                checked: !root.separateTrack
+                enabled: !root.locked && root.sourceEnabled
+                visible: root.showMixOption
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                Accessible.name: qsTr("Mix %1 into the previous track").arg(root.label)
+                onToggledByUser: value => root.separateToggled(!value)
+            }
         }
     }
 }
