@@ -354,7 +354,9 @@ The **live configuration is the source of truth**. It is persisted silently and 
 app restarts into exactly the state it was closed in. A preset is a named snapshot the live
 configuration is compared against: when the two differ, the selector shows `Name (changed)` as a calm
 hint. There is no Save button, no unsaved-changes warning, and no discard dialog. A write failure
-(disk full, file locked, …) is not silent either — the change may be lost, so a notification says so.
+(disk full, file locked, …) is not silent either — the change may be lost, so a notification says so,
+and it offers **Send report**: a failed write is the store's problem, not a setting the user can
+correct.
 
 Capture identity, video bit depth, and HDR mode are **environment facts**, not preset content.
 Presets neither store nor override them, and a difference in them never counts as a change. Switching
@@ -386,6 +388,11 @@ input dialog. Cancel is on the left and the named action, **Rename** or **Save p
 right; there is no generic `OK`. The existing uniqueness rule controls whether the named action is
 available. Folder and file selection remain native Windows dialogs, including output folders,
 preset import/export and one-time export recovery destinations.
+
+A failed preset import or export reports itself as a toast, not as a Record-page notice: the transfer
+is started from Settings and is over the moment it fails, so a notice would appear on a page the user
+is not looking at and stay there until they went to dismiss it. Nothing in the live configuration
+changes, and the toast offers **Send report** for the same reason a failed settings write does.
 
 Presets are stored in a human-readable TOML store and can be exported and imported for sharing.
 Values are validated and sanitized before storage; invalid values are clamped rather than rejected
@@ -492,8 +499,11 @@ the recording started** was never resolved into a track, so its toggle stays loc
 - The **Mic row hides its gain slider** (mic level lives on the dedicated mic gain control); its mute
   button is always shown.
 
-**`Mix into previous track`.** The per-row control names the track the source joins, not the row's
-position on screen. `Merge with above` was the first wording; it described where the control sat
+**`Mix into previous track`.** It is a line of its own under the source row, indented beneath the
+label it qualifies, rather than a third control in the row's value slot. Inside the slot it had to
+reserve its width in every row including the ones that cannot offer it, or the level meter beside it
+would change length depending on a neighbouring row's state. The control names the track the source
+joins, not the row's position on screen. `Merge with above` was the first wording; it described where the control sat
 rather than what it did, and stopped being true the moment the rows were laid out differently
 (narrow single column, a receding `APP` row, a future reordering). "Previous" refers to the product
 order `APP`, `SYS`, `MIC` fixed above, which is the model the engine resolves tracks from, so the
@@ -1283,8 +1293,13 @@ segment-size field (**Split by size**) appear only while their toggle is on. Tog
 the "off" state — it changes no persisted value beyond the split mode itself, so presets and exported
 TOML round-trip identically.
 
-**Output destination and live artifacts.** The default recording destination is the Windows Known
-Folder `FOLDERID_Videos` plus `ExoSnap`, respecting folder redirection. Live artifacts are created on
+**Output destination and live artifacts.** The destination is presented as one control: a chip
+carrying a folder mark, the path, and a trailing ellipsis, which opens the native folder dialog. It
+replaced a path field with a Browse button beside it — two controls for one value, where the field
+took the slot's width, still elided a real folder away, and was almost never typed into. The path is
+elided from the LEFT, because the tail is what identifies a folder. A consequence stated plainly: a
+path can no longer be typed or pasted, only chosen. The default recording destination is the Windows
+Known Folder `FOLDERID_Videos` plus `ExoSnap`, respecting folder redirection. Live artifacts are created on
 the configured output volume, never in the system temporary directory. The valuable unfinished file
 uses the final base name plus the final extension and `.partial`, for example
 `Recording.mkv.partial`; disposable staging uses `.tmp`. A clean MKV/WebM session is atomically

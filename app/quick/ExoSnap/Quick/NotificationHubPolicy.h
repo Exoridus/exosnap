@@ -116,6 +116,8 @@ namespace exosnap::notifications {
         return QStringLiteral("Undo");
     case NotificationAction::OpenHotkeys:
         return QStringLiteral("Rebind");
+    case NotificationAction::SendReport:
+        return QStringLiteral("Send report");
     }
     // Only reachable through a cast from an out-of-range value.
     return QString();

@@ -456,6 +456,10 @@ class QuickApplication {
     // handoff, and the updater reports the honest appWontClose instead.
     void closeForUpdaterHandoff();
     void dispatchNotificationAction(notifications::NotificationAction action, const QString& payload);
+    // The one consent-and-send path. Every surface that offers a Send-report
+    // control routes through it.
+    void sendNonFatalReport(const QString& phase, const QString& detail);
+    void publishPresetTransferFailure(const QString& title, const QString& error);
     void publishRecordingResultNotification(const UiRecordingResult& result);
     [[nodiscard]] CloseGuardState sampleCloseGuardState() const;
     // Flushes anything a debounced timer still owes to disk. Runs on the way

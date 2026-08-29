@@ -126,6 +126,7 @@ qt_add_qml_module(exosnap
         SettingsAudioSourcesSection.qml
         SettingsAudioSourceRow.qml
         SettingsChromaSlider.qml
+        SettingsDestinationChip.qml
         SettingsDeveloperSection.qml
         SettingsFormatSection.qml
         SettingsHotkeysSection.qml

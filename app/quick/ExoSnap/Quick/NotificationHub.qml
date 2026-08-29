@@ -237,6 +237,11 @@ Popup {
             boundsBehavior: Flickable.StopAtBounds
             Layout.fillWidth: true
             Layout.fillHeight: true
+            // The popup's bottom corners are rounded and an unread entry paints a
+            // full-width tint. Without this inset the last row squared them off,
+            // so the hub's own shape depended on whether its newest advisory had
+            // been read.
+            Layout.bottomMargin: ExoTheme.radiusLg
 
             Accessible.role: Accessible.List
             Accessible.name: qsTr("Notification history")

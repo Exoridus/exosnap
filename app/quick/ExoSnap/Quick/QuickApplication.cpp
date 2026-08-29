@@ -2512,6 +2512,21 @@ void QuickApplication::refreshPresetState() {
                                      !dirty_field.empty());
 }
 
+// A preset import or export is started from Settings and is over the moment it
+// fails, so it is a toast rather than a Record-page notice: the notice would
+// have appeared on a page the user was not looking at, and stayed there until
+// they went to dismiss it. The report action is offered because the failure is
+// the store's, not something the user can correct.
+void QuickApplication::publishPresetTransferFailure(const QString& title, const QString& error) {
+    notifications::NotificationEvent event;
+    event.type = notifications::NotificationType::PresetTransferFailed;
+    event.title = title;
+    event.body = error.isEmpty() ? QStringLiteral("The preset file could not be read or written.") : error;
+    event.action = notifications::NotificationAction::SendReport;
+    event.action_payload = QStringLiteral("%1 · %2").arg(title, event.body);
+    notifications_adapter_.manager().Enqueue(std::move(event));
+}
+
 void QuickApplication::exportSelectedPreset(const QString& path) {
     if (path.isEmpty())
         return;
@@ -2521,8 +2536,7 @@ void QuickApplication::exportSelectedPreset(const QString& path) {
     preset.config = StripEnvironmentFields(live_config_);
     QString error;
     if (!RecordingPresetStore::ExportPresetToFile(preset, path, &error))
-        record_view_model_adapter_.setNoticeText(QStringLiteral("Preset export failed · %1").arg(error),
-                                                 QStringLiteral("error"));
+        publishPresetTransferFailure(QStringLiteral("Preset export failed"), error);
 }
 
 void QuickApplication::importPresetsFromFile(const QString& path) {
@@ -2536,8 +2550,7 @@ void QuickApplication::importPresetsFromFile(const QString& path) {
     QString error;
     const QVector<RecordingPreset> imported = RecordingPresetStore::ImportPresetsFromFile(path, existing_ids, &error);
     if (imported.isEmpty()) {
-        record_view_model_adapter_.setNoticeText(QStringLiteral("Preset import failed · %1").arg(error),
-                                                 QStringLiteral("error"));
+        publishPresetTransferFailure(QStringLiteral("Preset import failed"), error);
         return;
     }
     for (const RecordingPreset& preset : imported)
@@ -2673,6 +2686,10 @@ void QuickApplication::persistLiveConfig() {
     event.type = notifications::NotificationType::SettingsSaveFailed;
     event.title = QStringLiteral("Settings could not be saved");
     event.body = error.isEmpty() ? QStringLiteral("The change may be lost when ExoSnap restarts.") : error;
+    // A failed write is the store's problem, not a setting the user can correct,
+    // so the only action worth offering is the one that tells us about it.
+    event.action = notifications::NotificationAction::SendReport;
+    event.action_payload = QStringLiteral("%1 · %2").arg(event.title, event.body);
     notifications_adapter_.manager().Enqueue(std::move(event));
 }
 
@@ -3486,20 +3503,28 @@ void QuickApplication::initializeRecovery() {
     surface_arbiter_.requestRecovery();
 }
 
+// Pressing a Send-report control IS the consent: granted here, then forwarded as
+// a scrubbed non-fatal report. Paths inside `detail` are stripped inside
+// crash_capture, never here.
+//
+// One function for every surface that offers it. A second consent path would be
+// a second place for the meaning of consent to drift from what crash_capture
+// enforces.
+void QuickApplication::sendNonFatalReport(const QString& phase, const QString& detail) {
+    crash_capture::GiveUserConsent();
+    crash_capture::ReportNonFatalError(phase.toStdString(), detail.toStdString());
+    diagnostics::AppLog::info(QStringLiteral("report"), QStringLiteral("user sent error report phase=%1").arg(phase));
+}
+
 void QuickApplication::initializeRecordingError() {
     QObject::connect(
         &recording_error_adapter_, &RecordingErrorAdapter::sendReportRequested, &recording_error_adapter_, [this]() {
             const models::RecordingFailureReport& report = recording_error_adapter_.report();
-            // Clicking Send IS the consent: granted here, attached
-            // with allow-listed codec context, then forwarded as a
-            // scrubbed non-fatal report. Paths inside `detail` are
-            // stripped inside crash_capture, never here.
-            crash_capture::GiveUserConsent();
+            // The codec context is this surface's own: only a recording failure
+            // knows which container and codecs were in play.
             crash_capture::SetEncoderContext("nvenc", report.container.toStdString(), report.video_codec.toStdString(),
                                              report.audio_codec.toStdString());
-            crash_capture::ReportNonFatalError(report.phase.toStdString(), report.detail.toStdString());
-            diagnostics::AppLog::info(QStringLiteral("record.failure"),
-                                      QStringLiteral("user sent error report phase=%1").arg(report.phase));
+            sendNonFatalReport(report.phase, report.detail);
         });
 
     QObject::connect(&recording_error_adapter_, &RecordingErrorAdapter::openLogsRequested, &recording_error_adapter_,
@@ -3949,6 +3974,12 @@ void QuickApplication::dispatchNotificationAction(notifications::NotificationAct
         // desktop toast is its own always-on-top window and takes clicks that
         // the modal scrim inside the shell never sees.
         surface_arbiter_.requestRecovery();
+        break;
+    case NotificationAction::SendReport:
+        // The phase names the failing subsystem, the payload is the detail line
+        // the notification already showed. Nothing is collected that the user
+        // was not looking at when they pressed the button.
+        sendNonFatalReport(QStringLiteral("notification"), payload);
         break;
     case NotificationAction::None:
     case NotificationAction::Discard:

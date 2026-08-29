@@ -102,6 +102,7 @@ class NotificationManager : public QObject {
     static constexpr int kDismissMs_SettingsSaveFailed = kDwellAction;
     // NOLINTNEXTLINE(readability-identifier-naming)
     static constexpr int kDismissMs_CaptureActionFailed = kDwellAction;
+    static constexpr int kDismissMs_PresetTransferFailed = kDwellAction;
     // Timed, not standing: it reports a write that already failed, matching the
     // treatment of the other completed-failure reports.
     // NOLINTNEXTLINE(readability-identifier-naming)

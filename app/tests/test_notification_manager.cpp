@@ -150,8 +150,8 @@ TEST_F(NotificationManagerTest, TimedDwellsAreExactlyTwoValues) {
           NotificationType::PresetSwitched, NotificationType::OverlayOmitted, NotificationType::HotkeyConflict,
           NotificationType::SettingsSaveFailed, NotificationType::CaptureActionFailed,
           NotificationType::RecoveryProtectionUnavailable, NotificationType::SettingsLoadFailed,
-          NotificationType::LowStorage, NotificationType::AudioSourceDegraded,
-          NotificationType::WindowCaptureStalled}) {
+          NotificationType::LowStorage, NotificationType::AudioSourceDegraded, NotificationType::FrameCaptured,
+          NotificationType::PresetTransferFailed, NotificationType::WindowCaptureStalled}) {
         const int dwell = NotificationManager::DismissIntervalMs(type);
         EXPECT_TRUE(dwell == 0 || dwell == NotificationManager::kDwellBrief ||
                     dwell == NotificationManager::kDwellAction)
@@ -612,8 +612,12 @@ TEST(AdvisoryStatusForTypeTest, EveryTypeResolvesToAKnownStatus) {
         NotificationType::SettingsSaveFailed,  NotificationType::AudioSourceDegraded,
         NotificationType::CaptureActionFailed, NotificationType::RecoveryProtectionUnavailable,
         NotificationType::SettingsLoadFailed,  NotificationType::WindowCaptureStalled,
+        NotificationType::FrameCaptured,       NotificationType::PresetTransferFailed,
     };
-    ASSERT_EQ(std::size(kAll), 16u) << "a NotificationType was added without a severity decision";
+    // The count is a reminder, not a proof: it compares this list against itself,
+    // so a type added here and nowhere else still passes. FrameCaptured was
+    // missing from it for exactly that reason.
+    ASSERT_EQ(std::size(kAll), 18u) << "a NotificationType was added without a severity decision";
 
     for (const NotificationType type : kAll) {
         const QString status = AdvisoryStatusForType(type);
