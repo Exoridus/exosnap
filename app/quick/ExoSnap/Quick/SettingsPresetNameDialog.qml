@@ -54,7 +54,7 @@ Popup {
             Layout.fillWidth: true
             font {
                 family: ExoTheme.sansFamily
-                pixelSize: ExoTheme.fontTitle
+                pixelSize: ExoTheme.fontSectionTitle
                 weight: Font.DemiBold
             }
         }

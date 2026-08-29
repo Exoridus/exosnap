@@ -169,8 +169,11 @@ Item {
         // nothing -- it closes the current output and opens the next one, and the
         // recording carries on either way.
         "M2.5 6.4H7V11.6H2.5Z M11 6.4H15.5V11.6H11Z M9 3.4V14.6",
-        // Clock -- recent recordings and completion time.
-        "M9 2.5A6.5 6.5 0 1 0 15.5 9A6.5 6.5 0 1 0 9 2.5 M9 5V9L12 10.8",
+        // Clock -- recent recordings and completion time. The two arcs meet at
+        // opposite ends of a diameter; endpoints only a quarter turn apart make
+        // each large-arc sweep 270 degrees and the circle renders as two
+        // overlapping rings.
+        "M9 2.5A6.5 6.5 0 1 0 9 15.5A6.5 6.5 0 1 0 9 2.5 M9 5V9L12 10.8",
         // PreviewBroken -- a picture frame with its corner mark, struck through.
         // The strike is what separates "no preview will come" from "no preview
         // yet": the frame alone reads as an image that is still loading.
