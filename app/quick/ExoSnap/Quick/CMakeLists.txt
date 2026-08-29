@@ -1234,6 +1234,29 @@ target_compile_definitions(record_viewmodel_qml_adapter_tests
 )
 
 exosnap_add_gtest(
+    NAME capture_target_still_tests
+    TEST_PREFIX quick_stills.
+    SOURCES
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_capture_target_still_service.cpp
+        ${PROJECT_SOURCE_DIR}/app/services/CaptureTargetStillService.cpp
+        ${PROJECT_SOURCE_DIR}/app/services/CaptureTargetStillService.h
+        ${PROJECT_SOURCE_DIR}/app/services/WgcSourceProducer.cpp
+        ${PROJECT_SOURCE_DIR}/app/services/WgcSourceProducer.h
+    LIBRARIES
+        exosnap_app_log_test_support
+        Qt6::Core
+        Qt6::Gui
+        exosnap_engine
+        d3d11.lib
+        dxgi.lib
+        runtimeobject.lib
+        ole32.lib
+    # A real desktop session with DWM composition: the probe window has to be
+    # rendered before it can be captured.
+    LABELS live
+)
+
+exosnap_add_gtest(
     NAME about_viewmodel_qml_adapter_tests
     TEST_PREFIX quick_about_adapter.
     SOURCES
