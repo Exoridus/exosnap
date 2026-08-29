@@ -83,10 +83,18 @@ ExoCard {
                 onValueActivated: value => root.settings.microphoneDeviceId = value
             }
 
+            // Icon-only for the same reason as Browse: the device select beside
+            // it is what needs the width, and device names are long.
             ExoButton {
-                text: qsTr("Rescan")
+                glyph: ExoGlyph.Refresh
+                compact: true
                 enabled: !root.settings.controlsLocked
+                Accessible.name: qsTr("Rescan")
                 onClicked: root.settings.rescanAudioDevices()
+
+                ToolTip.visible: hovered
+                ToolTip.delay: 400
+                ToolTip.text: qsTr("Rescan")
             }
         }
     }

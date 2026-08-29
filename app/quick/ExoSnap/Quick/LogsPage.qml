@@ -155,18 +155,21 @@ Item {
                 // clipboard and to disk.
                 ExoButton {
                     text: qsTr("Copy")
+                    leadingGlyph: ExoGlyph.Copy
                     enabled: root.logs.canCopy
                     onClicked: root.logs.copyVisible()
                 }
 
                 ExoButton {
                     text: qsTr("Export…")
+                    leadingGlyph: ExoGlyph.Folder
                     enabled: root.logs.canExport
                     onClicked: exportDialog.open()
                 }
 
                 ExoButton {
                     text: qsTr("Create support bundle")
+                    leadingGlyph: ExoGlyph.Folder
                     Accessible.description: qsTr("Create a diagnostic package to share with support")
                     onClicked: bundleDialog.open()
                 }

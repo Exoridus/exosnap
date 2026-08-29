@@ -36,10 +36,19 @@ ExoCard {
                 onCommitted: value => root.settings.outputFolder = value
             }
 
+            // Icon-only on purpose: labelled, this button took 88 px out of a
+            // 320 px slot and the path field elided a real folder away. A small
+            // button beside a path field is also what Win32 has always done.
             ExoButton {
-                text: qsTr("Browse…")
+                glyph: ExoGlyph.Folder
+                compact: true
                 enabled: !root.settings.controlsLocked
+                Accessible.name: qsTr("Browse…")
                 onClicked: folderDialog.open()
+
+                ToolTip.visible: hovered
+                ToolTip.delay: 400
+                ToolTip.text: qsTr("Browse…")
             }
         }
     }

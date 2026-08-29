@@ -58,6 +58,7 @@ ColumnLayout {
 
         ExoButton {
             text: root.device.scanning ? qsTr("Scanning…") : qsTr("Rescan")
+            leadingGlyph: ExoGlyph.Refresh
             quiet: true
             enabled: !root.device.scanning
             Accessible.name: qsTr("Rescan adapters")
