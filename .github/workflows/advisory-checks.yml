@@ -61,6 +61,8 @@ jobs:
     name: advisory-unused-checks
     runs-on: windows-2022
     # ~2x the observed worst case (45 min: full-tree clang-tidy + cppcheck).
+    # Without an explicit ceiling a stalled step (observed: some steps hang
+    # rather than fail) ran to GitHub's 6h job default, eating runner time.
     timeout-minutes: 90
     # NO job-level continue-on-error: only the FINDINGS must never block (their
     # steps carry their own continue-on-error below). If the toolchain setup,
@@ -68,12 +70,6 @@ jobs:
     # continue-on-error would report an overall success over a run that never
     # actually analyzed anything. Being its own workflow file, a red nightly
     # never touches the ci.yml badge (see the header above).
-    #
-    # No job here had an explicit timeout, so a hang (observed: some step stalls
-    # indefinitely rather than failing) ran to GitHub's default 6h job ceiling,
-    # eating runner time. 45 min is generous for a full Qt+Ninja debug build
-    # plus the clang-tidy/cppcheck advisory passes.
-    timeout-minutes: 45
     # Deliberately NOT given a `concurrency:` group: cancelling a slow job
     # mid-run reports conclusion "cancelled", which reads as a failed check on
     # an otherwise-green commit. Ungrouped, every trigger gets its own
