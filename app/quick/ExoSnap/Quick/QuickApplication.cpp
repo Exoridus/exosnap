@@ -17,6 +17,7 @@
 #include "diagnostics/FixActionDispatcher.h"
 #include "diagnostics/PresentSnapshotOverlay.h"
 #include "diagnostics/StartupClock.h"
+#include "models/AudioMeterScale.h"
 #include "models/CompletedRecording.h"
 #include "models/EditContextFactory.h"
 #include "models/FrameRateLimits.h"
@@ -69,6 +70,7 @@
 #include <cmath>
 #include <exception>
 #include <iterator>
+#include <limits>
 #include <optional>
 #include <utility>
 #include <windows.h>
@@ -145,11 +147,37 @@ QString formatLabel(const RecordingPresetConfig& config) {
              ui::containerLabel(config.output.container));
 }
 
+// Harness-only, env-configured (never input synthesis): three readings in dBFS,
+// "system,app,mic", so a capture can show the meter at a stated loudness instead
+// of at whatever this machine happened to be playing. "-inf" is silence.
+std::optional<std::array<double, 3>> HarnessMeterDbfs() {
+    static const std::optional<std::array<double, 3>> seeded = []() -> std::optional<std::array<double, 3>> {
+        const QString raw = QString::fromLocal8Bit(qgetenv("EXOSNAP_VISUAL_METER_DBFS")).trimmed();
+        if (raw.isEmpty())
+            return std::nullopt;
+        const QStringList parts = raw.split(QLatin1Char(','), Qt::SkipEmptyParts);
+        if (parts.size() != 3)
+            return std::nullopt;
+        std::array<double, 3> values{};
+        for (qsizetype index = 0; index < 3; ++index) {
+            const QString field = parts.at(index).trimmed();
+            if (field.compare(QLatin1String("-inf"), Qt::CaseInsensitive) == 0) {
+                values[static_cast<std::size_t>(index)] = -std::numeric_limits<double>::infinity();
+                continue;
+            }
+            bool ok = false;
+            const double value = field.toDouble(&ok);
+            if (!ok)
+                return std::nullopt;
+            values[static_cast<std::size_t>(index)] = value;
+        }
+        return values;
+    }();
+    return seeded;
+}
+
 double dockLevel(float rms) {
-    if (rms <= 0.0f)
-        return 0.0;
-    const double db = std::max(-60.0, 20.0 * std::log10(static_cast<double>(rms)));
-    return std::clamp((db + 60.0) / 60.0, 0.0, 1.0);
+    return models::MeterLevelFromDbfs(models::MeterDbfsFromRms(rms));
 }
 
 bool isSystemRow(const exosnap::engine::AudioSourceRow& row) {
@@ -1179,6 +1207,10 @@ void QuickApplication::reapplyVisualScenarios() {
         (void)applyRecordVisualScenario(pending_record_visual_state_);
     if (!pending_overlay_visual_state_.isEmpty())
         (void)applyOverlayVisualScenario(pending_overlay_visual_state_);
+    // Seeded meters are published from here as well: nothing else calls
+    // updateMeters() in a capture run, because no meter service is started.
+    if (HarnessMeterDbfs())
+        updateMeters();
     reapplying_visual_scenarios_ = false;
 }
 
@@ -1680,6 +1712,13 @@ void QuickApplication::toggleSource(const QString& key) {
 }
 
 void QuickApplication::updateMeters() {
+    if (const auto seeded = HarnessMeterDbfs()) {
+        const auto& db = *seeded;
+        record_view_model_adapter_.setMeters(models::MeterLevelFromDbfs(db[0]), models::MeterLevelFromDbfs(db[1]),
+                                             models::MeterLevelFromDbfs(db[2]));
+        settings_adapter_.setMeters(db[0], db[1], db[2]);
+        return;
+    }
     const bool session = record_view_model_.state == UiRecordingState::Recording ||
                          record_view_model_.state == UiRecordingState::Paused ||
                          record_view_model_.state == UiRecordingState::Stopping;
@@ -1694,7 +1733,11 @@ void QuickApplication::updateMeters() {
                              : session ? record_view_model_.audio_rms_mic
                                        : 0.0f;
     record_view_model_adapter_.setMeters(dockLevel(system), dockLevel(app), dockLevel(microphone));
-    settings_adapter_.setMeters(dockLevel(system), dockLevel(app), dockLevel(microphone));
+    // Settings takes the decibels: its rows state the reading as a number beside
+    // the bar, and deriving that back out of a 0..1 position would be a second
+    // opinion on the same signal.
+    settings_adapter_.setMeters(models::MeterDbfsFromRms(system), models::MeterDbfsFromRms(app),
+                                models::MeterDbfsFromRms(microphone));
 }
 
 void QuickApplication::updateWebcamOverlay(const QRectF& normalized_rect) {

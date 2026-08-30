@@ -1,5 +1,6 @@
 #pragma once
 
+#include "models/AudioMeterScale.h"
 #include "models/CrashReportPolicy.h"
 #include "models/OutputPathValidator.h"
 #include "models/OverlayContentPolicy.h"
@@ -171,6 +172,12 @@ class SettingsAdapter : public QObject {
     Q_PROPERTY(double systemMeter READ systemMeter NOTIFY metersChanged FINAL)
     Q_PROPERTY(double appMeter READ appMeter NOTIFY metersChanged FINAL)
     Q_PROPERTY(double microphoneMeter READ microphoneMeter NOTIFY metersChanged FINAL)
+    // The same readings as decibels, which is what the rows print beside the
+    // bar. Negative infinity means the source produced nothing at all -- not the
+    // same statement as a level sitting at the floor.
+    Q_PROPERTY(double systemMeterDb READ systemMeterDb NOTIFY metersChanged FINAL)
+    Q_PROPERTY(double appMeterDb READ appMeterDb NOTIFY metersChanged FINAL)
+    Q_PROPERTY(double microphoneMeterDb READ microphoneMeterDb NOTIFY metersChanged FINAL)
     Q_PROPERTY(QString micPostProcessingSummary READ micPostProcessingSummary NOTIFY configChanged FINAL)
     Q_PROPERTY(QString audioEncodingSummary READ audioEncodingSummary NOTIFY configChanged FINAL)
     Q_PROPERTY(QString audioSummary READ audioSummary NOTIFY configChanged FINAL)
@@ -294,7 +301,9 @@ class SettingsAdapter : public QObject {
     void setWebcamDevices(QVariantList devices);
     // Dock-level (0..1) meter values, forwarded from the same computation that
     // drives the Record page so both areas can never disagree.
-    void setMeters(double system, double app, double microphone);
+    // In dBFS, not in meter positions: this adapter owns the conversion so the
+    // bar and the number can never disagree.
+    void setMeters(double system_dbfs, double app_dbfs, double microphone_dbfs);
     void setHdrDisplayPresent(bool present);
     void setPresetState(QVariantList options, QString selected_id, bool dirty);
     // rows: { action, label, binding, isDefault } per hotkey action.
@@ -417,6 +426,9 @@ class SettingsAdapter : public QObject {
     [[nodiscard]] double systemMeter() const noexcept;
     [[nodiscard]] double appMeter() const noexcept;
     [[nodiscard]] double microphoneMeter() const noexcept;
+    [[nodiscard]] double systemMeterDb() const noexcept;
+    [[nodiscard]] double appMeterDb() const noexcept;
+    [[nodiscard]] double microphoneMeterDb() const noexcept;
     [[nodiscard]] const QString& micPostProcessingSummary() const noexcept;
     [[nodiscard]] const QString& audioEncodingSummary() const noexcept;
     [[nodiscard]] const QString& audioSummary() const noexcept;
@@ -738,9 +750,11 @@ class SettingsAdapter : public QObject {
     bool preset_dirty_ = false;
     bool preset_built_in_ = false;
 
-    double system_meter_ = 0.0;
-    double app_meter_ = 0.0;
-    double microphone_meter_ = 0.0;
+    // Stored as decibels; the 0..1 positions are derived on read. Keeping both
+    // as state would let them drift apart, which is the defect this replaced.
+    double system_meter_db_ = -std::numeric_limits<double>::infinity();
+    double app_meter_db_ = -std::numeric_limits<double>::infinity();
+    double microphone_meter_db_ = -std::numeric_limits<double>::infinity();
 
     QString update_state_ = QStringLiteral("uptodate");
     QString update_status_text_;

@@ -251,14 +251,19 @@ void SettingsAdapter::setWebcamDevices(QVariantList devices) {
     emit configChanged();
 }
 
-void SettingsAdapter::setMeters(double system, double app, double microphone) {
-    if (qFuzzyCompare(system_meter_ + 1.0, system + 1.0) && qFuzzyCompare(app_meter_ + 1.0, app + 1.0) &&
-        qFuzzyCompare(microphone_meter_ + 1.0, microphone + 1.0)) {
+void SettingsAdapter::setMeters(double system_dbfs, double app_dbfs, double microphone_dbfs) {
+    // Compared as the stored decibels rather than through qFuzzyCompare, which
+    // has no answer for the infinity that means silence.
+    const auto same = [](double left, double right) {
+        return left == right || (std::isinf(left) && std::isinf(right) && std::signbit(left) == std::signbit(right));
+    };
+    if (same(system_meter_db_, system_dbfs) && same(app_meter_db_, app_dbfs) &&
+        same(microphone_meter_db_, microphone_dbfs)) {
         return;
     }
-    system_meter_ = system;
-    app_meter_ = app;
-    microphone_meter_ = microphone;
+    system_meter_db_ = system_dbfs;
+    app_meter_db_ = app_dbfs;
+    microphone_meter_db_ = microphone_dbfs;
     emit metersChanged();
 }
 
@@ -1316,13 +1321,22 @@ bool SettingsAdapter::micRnnoiseEnabled() const noexcept {
     return config_.audio.mic_rnnoise_enabled;
 }
 double SettingsAdapter::systemMeter() const noexcept {
-    return system_meter_;
+    return models::MeterLevelFromDbfs(system_meter_db_);
 }
 double SettingsAdapter::appMeter() const noexcept {
-    return app_meter_;
+    return models::MeterLevelFromDbfs(app_meter_db_);
 }
 double SettingsAdapter::microphoneMeter() const noexcept {
-    return microphone_meter_;
+    return models::MeterLevelFromDbfs(microphone_meter_db_);
+}
+double SettingsAdapter::systemMeterDb() const noexcept {
+    return system_meter_db_;
+}
+double SettingsAdapter::appMeterDb() const noexcept {
+    return app_meter_db_;
+}
+double SettingsAdapter::microphoneMeterDb() const noexcept {
+    return microphone_meter_db_;
 }
 const QString& SettingsAdapter::micPostProcessingSummary() const noexcept {
     return mic_post_processing_summary_;

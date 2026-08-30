@@ -12,7 +12,9 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <thread>
@@ -785,6 +787,33 @@ TEST_F(SettingsAdapterTest, ApplyingOutputValidationPublishesTheInlineFolderMess
 
     adapter.applyOutputFolderValidation(FolderValidationResult::Ok);
     EXPECT_TRUE(adapter.folderValidation().isEmpty());
+}
+
+TEST_F(SettingsAdapterTest, MeterReadingsAreDecibelsAndTheBarIsDerivedFromThem) {
+    adapter.setMeters(-30.0, 0.0, -std::numeric_limits<double>::infinity());
+
+    EXPECT_DOUBLE_EQ(adapter.systemMeterDb(), -30.0);
+    EXPECT_DOUBLE_EQ(adapter.systemMeter(), 0.5);
+    EXPECT_DOUBLE_EQ(adapter.appMeterDb(), 0.0);
+    EXPECT_DOUBLE_EQ(adapter.appMeter(), 1.0);
+
+    // Silence is not the bottom of the scale. A source producing nothing and one
+    // sitting at -60 dB are different facts, and the row prints them differently.
+    EXPECT_TRUE(std::isinf(adapter.microphoneMeterDb()));
+    EXPECT_DOUBLE_EQ(adapter.microphoneMeter(), 0.0);
+}
+
+TEST_F(SettingsAdapterTest, UnchangedMeterReadingsDoNotRepublish) {
+    SignalCounter meters(adapter, &SettingsAdapter::metersChanged);
+
+    const double silence = -std::numeric_limits<double>::infinity();
+    adapter.setMeters(-12.0, silence, silence);
+    adapter.setMeters(-12.0, silence, silence);
+
+    // The infinity that means silence compares equal to itself here; a plain
+    // fuzzy compare has no answer for it, and republishing on every tick would
+    // rebuild three rows at meter cadence.
+    EXPECT_EQ(meters.count(), 1);
 }
 
 } // namespace

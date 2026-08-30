@@ -499,6 +499,22 @@ the recording started** was never resolved into a track, so its toggle stays loc
 - The **Mic row hides its gain slider** (mic level lives on the dedicated mic gain control); its mute
   button is always shown.
 
+**The source meter.** Each source row carries a segmented level meter and, beside it, the same
+reading as a number in dBFS. The scale IS decibels: the adapter is given the reading and derives the
+meter position from it, so the bar and the number cannot disagree. Sixteen segments, coloured by the
+Record dock's zones on the same scale -- themed up to roughly 72 % of the scale, caution amber to
+90 %, error coral above -- so a given loudness reads the same on both surfaces. The loudest segment
+of the last 1.4 s is held at half strength and then steps down, because a transient that is over
+before the eye arrives is otherwise unreadable. A source that is producing nothing prints an infinity
+symbol rather than the bottom of the scale: silence and a level sitting at -60 dB are different
+facts. An inactive source keeps its meter frame, so "off" and "on but silent" are not the same
+picture.
+
+**Microphone rows.** `Microphone device`, `Microphone channels`, `Microphone gain` and `Microphone
+post-processing` are qualifiers of the Microphone source, and are drawn as a group indented behind a
+rule under it rather than at the same rank as the three sources. At equal rank they read as four more
+sources.
+
 **`Mix into previous track`.** It is a line of its own under the source row, indented beneath the
 label it qualifies, rather than a third control in the row's value slot. Inside the slot it had to
 reserve its width in every row including the ones that cannot offer it, or the level meter beside it
