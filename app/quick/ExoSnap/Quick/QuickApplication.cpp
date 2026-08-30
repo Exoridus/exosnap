@@ -2388,8 +2388,6 @@ void QuickApplication::wireSettingsCommands() {
                      [this](const QString& path) { exportSelectedPreset(path); });
     QObject::connect(&settings_adapter_, &SettingsAdapter::importPresetsRequested, &settings_adapter_,
                      [this](const QString& path) { importPresetsFromFile(path); });
-    QObject::connect(&settings_adapter_, &SettingsAdapter::audioRescanRequested, &settings_adapter_,
-                     [this]() { audio_notifier_.rescan(); });
 }
 
 void QuickApplication::syncConfigMirrors() {

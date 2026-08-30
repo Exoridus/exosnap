@@ -2238,9 +2238,6 @@ void SettingsAdapter::setOutputFolderFromUrl(const QUrl& url) {
     }
     setOutputFolder(url.toLocalFile());
 }
-void SettingsAdapter::rescanAudioDevices() {
-    emit audioRescanRequested();
-}
 void SettingsAdapter::checkForUpdates() {
     emit checkForUpdatesRequested();
 }

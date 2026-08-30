@@ -608,7 +608,6 @@ class SettingsAdapter : public QObject {
     Q_INVOKABLE void exportPresetToUrl(const QUrl& url);
     Q_INVOKABLE void importPresetsFromUrl(const QUrl& url);
     Q_INVOKABLE void setOutputFolderFromUrl(const QUrl& url);
-    Q_INVOKABLE void rescanAudioDevices();
     // Hotkey rebinding. The adapter only carries intent; validation, conflict
     // detection and Win32 registration stay in GlobalHotkeyService.
     Q_INVOKABLE void beginHotkeyCapture(int action);
@@ -654,7 +653,6 @@ class SettingsAdapter : public QObject {
     void resetChangesRequested();
     void exportPresetRequested(QString path);
     void importPresetsRequested(QString path);
-    void audioRescanRequested();
     void checkForUpdatesRequested();
     void updatePrimaryActionRequested();
     void whatsNewRequested();
