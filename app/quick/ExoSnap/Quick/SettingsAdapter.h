@@ -45,7 +45,10 @@ class SettingsAdapter : public QObject {
     enum class OutputValidationTrigger { Startup, PathEdit, ApplicationActivation, OutputCardReveal };
     Q_ENUM(OutputValidationTrigger)
 
-    enum class FocusTarget { OutputDestination };
+    // Deep-link destinations a notification action can jump to. The page reveals
+    // the matching card, marks it as landed on, and only then moves the focus:
+    // focusing first scrolls the reveal back out from under itself.
+    enum class FocusTarget { OutputDestination, AudioSources, Format, Webcam, Presence, Appearance, Hotkeys, Updates };
     Q_ENUM(FocusTarget)
 
     using OutputFolderValidator = std::function<FolderValidationResult(const std::filesystem::path&)>;
@@ -127,6 +130,20 @@ class SettingsAdapter : public QObject {
     Q_PROPERTY(QString splitSummary READ splitSummary NOTIFY configChanged FINAL)
 
     // ---- Audio --------------------------------------------------------------
+    // What the sources are scoped to. App and Sys are process-scoped complements
+    // of each other, so the same row means something different depending on the
+    // capture target: naming the target is what makes the source list readable.
+    Q_PROPERTY(QString captureTargetName READ captureTargetName NOTIFY captureTargetChanged FINAL)
+    Q_PROPERTY(QString audioTargetSummary READ audioTargetSummary NOTIFY configChanged FINAL)
+    // Per-row explanations. They carry the meaning that MOVES; the labels stay
+    // put, so a row keeps its identity across a target change.
+    Q_PROPERTY(QString appAudioHint READ appAudioHint NOTIFY configChanged FINAL)
+    Q_PROPERTY(QString systemAudioHint READ systemAudioHint NOTIFY configChanged FINAL)
+    // The resolved plan, one entry per track: { track, label }. The engine owns
+    // track resolution; this is the UI reading back what it decided.
+    Q_PROPERTY(QVariantList audioTrackRows READ audioTrackRows NOTIFY configChanged FINAL)
+    Q_PROPERTY(bool microphoneConnected READ microphoneConnected NOTIFY microphoneDevicesChanged FINAL)
+    Q_PROPERTY(QString microphoneSummary READ microphoneSummary NOTIFY configChanged FINAL)
     Q_PROPERTY(bool appAudioVisible READ appAudioVisible NOTIFY configChanged FINAL)
     Q_PROPERTY(bool appAudioEnabled READ appAudioEnabled WRITE setAppAudioEnabled NOTIFY configChanged FINAL)
     Q_PROPERTY(bool appAudioSeparate READ appAudioSeparate WRITE setAppAudioSeparate NOTIFY configChanged FINAL)
@@ -304,6 +321,9 @@ class SettingsAdapter : public QObject {
     // In dBFS, not in meter positions: this adapter owns the conversion so the
     // bar and the number can never disagree.
     void setMeters(double system_dbfs, double app_dbfs, double microphone_dbfs);
+    // The human name of what is being captured ("Display 1", "Chrome"). Empty
+    // while nothing is selected, which the source hints fall back to.
+    void setCaptureTargetName(const QString& name);
     void setHdrDisplayPresent(bool present);
     void setPresetState(QVariantList options, QString selected_id, bool dirty);
     // rows: { action, label, binding, isDefault } per hotkey action.
@@ -432,6 +452,13 @@ class SettingsAdapter : public QObject {
     [[nodiscard]] const QString& micPostProcessingSummary() const noexcept;
     [[nodiscard]] const QString& audioEncodingSummary() const noexcept;
     [[nodiscard]] const QString& audioSummary() const noexcept;
+    [[nodiscard]] const QString& captureTargetName() const noexcept;
+    [[nodiscard]] const QString& audioTargetSummary() const noexcept;
+    [[nodiscard]] const QString& appAudioHint() const noexcept;
+    [[nodiscard]] const QString& systemAudioHint() const noexcept;
+    [[nodiscard]] const QVariantList& audioTrackRows() const noexcept;
+    [[nodiscard]] bool microphoneConnected() const noexcept;
+    [[nodiscard]] const QString& microphoneSummary() const noexcept;
 
     [[nodiscard]] bool showRecordingOverlay() const noexcept;
     [[nodiscard]] bool showDiagnosticsOverlay() const noexcept;
@@ -630,6 +657,7 @@ class SettingsAdapter : public QObject {
     void appSettingsChanged();
     void controlsLockedChanged();
     void microphoneDevicesChanged();
+    void captureTargetChanged();
     void webcamDevicesChanged();
     void metersChanged();
     void updateStatusChanged();
@@ -667,6 +695,11 @@ class SettingsAdapter : public QObject {
     void applyConfigEdit();
     void rebuildOptions();
     void rebuildDerivedText();
+    // The target-dependent half of the audio card: the summary line, the two
+    // hints that state what App and Sys mean for THIS target, and the resolved
+    // track list. Depends on the capture target as well as on the config, so it
+    // runs from both.
+    void rebuildAudioTargetStrings();
     void commitAppSettingsEdit();
     [[nodiscard]] models::RecordingOverlayContent resolvedRecordingOverlayContent() const;
     [[nodiscard]] models::DiagnosticsOverlayContent resolvedDiagnosticsOverlayContent() const;
@@ -733,6 +766,12 @@ class SettingsAdapter : public QObject {
     QString mic_post_processing_summary_;
     QString audio_encoding_summary_;
     QString audio_summary_;
+    QString capture_target_name_;
+    QString audio_target_summary_;
+    QString app_audio_hint_;
+    QString system_audio_hint_;
+    QString microphone_summary_;
+    QVariantList audio_track_rows_;
     OutputFolderValidator output_folder_validator_ = ValidateOutputFolder;
     std::atomic<uint64_t> output_validation_revision_{0};
 

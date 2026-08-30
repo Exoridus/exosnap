@@ -291,6 +291,83 @@ TEST_F(SettingsAdapterTest, AudioSummaryListsEnabledSourcesInProductOrder) {
     EXPECT_EQ(adapter.audioSummary(), QStringLiteral("System audio · Microphone"));
 }
 
+// The row labels are stable across a target change; the hints are what move.
+// Sys is App's complement, so "System audio" is a different recording under a
+// window target than under a display one, and only these lines say so.
+TEST_F(SettingsAdapterTest, SystemAudioHintNamesTheWholeMixOnADisplayTarget) {
+    auto config = adapter.config();
+    config.audio.target_kind = capability::CaptureTargetKind::Display;
+    adapter.setConfig(config);
+    adapter.setCaptureTargetName(QStringLiteral("Display 1"));
+
+    EXPECT_FALSE(adapter.appAudioVisible());
+    EXPECT_EQ(adapter.systemAudioHint(), QStringLiteral("Everything the computer plays"));
+    EXPECT_TRUE(adapter.appAudioHint().isEmpty());
+    EXPECT_TRUE(adapter.audioTargetSummary().startsWith(QStringLiteral("Recording Display 1")));
+}
+
+TEST_F(SettingsAdapterTest, SystemAudioHintExcludesTheCapturedProcessOnAWindowTarget) {
+    auto config = adapter.config();
+    config.audio.target_kind = capability::CaptureTargetKind::Window;
+    adapter.setConfig(config);
+    adapter.setCaptureTargetName(QStringLiteral("Chrome"));
+
+    EXPECT_TRUE(adapter.appAudioVisible());
+    EXPECT_EQ(adapter.appAudioHint(), QStringLiteral("Chrome only"));
+    EXPECT_EQ(adapter.systemAudioHint(), QStringLiteral("Everything except Chrome"));
+}
+
+// A hint that reads "Everything except " is worse than a generic one, and the
+// Settings page can be built before a capture target has been resolved.
+TEST_F(SettingsAdapterTest, HintsFallBackToTheTargetKindBeforeANameArrives) {
+    auto config = adapter.config();
+    config.audio.target_kind = capability::CaptureTargetKind::Window;
+    adapter.setConfig(config);
+    adapter.setCaptureTargetName(QString());
+
+    EXPECT_EQ(adapter.systemAudioHint(), QStringLiteral("Everything except the captured window"));
+}
+
+// The ledger reads the engine's plan back rather than re-deriving it, so a
+// merged track has to show both of its sources and not a generic label.
+TEST_F(SettingsAdapterTest, TrackLedgerReportsTheResolvedPlan) {
+    auto config = adapter.config();
+    config.audio.target_kind = capability::CaptureTargetKind::Display;
+    adapter.setConfig(config);
+    adapter.setSystemAudioEnabled(true);
+    adapter.setMicrophoneEnabled(true);
+    adapter.setMicrophoneSeparate(false);
+
+    const QVariantList rows = adapter.audioTrackRows();
+    ASSERT_EQ(rows.size(), 1);
+    EXPECT_EQ(rows.at(0).toMap().value(QStringLiteral("track")).toString(), QStringLiteral("Track 1"));
+    EXPECT_EQ(rows.at(0).toMap().value(QStringLiteral("label")).toString(),
+              QStringLiteral("System audio + Microphone"));
+
+    adapter.setMicrophoneSeparate(true);
+    ASSERT_EQ(adapter.audioTrackRows().size(), 2);
+    EXPECT_EQ(adapter.audioTrackRows().at(1).toMap().value(QStringLiteral("label")).toString(),
+              QStringLiteral("Microphone"));
+}
+
+TEST_F(SettingsAdapterTest, TrackLedgerIsEmptyWhenNoSourceIsEnabled) {
+    adapter.setAppAudioEnabled(false);
+    adapter.setSystemAudioEnabled(false);
+    adapter.setMicrophoneEnabled(false);
+
+    EXPECT_TRUE(adapter.audioTrackRows().isEmpty());
+    EXPECT_TRUE(adapter.audioTargetSummary().endsWith(QStringLiteral("no audio")));
+}
+
+// The microphone card states the missing device once in its own summary instead
+// of leaving four greyed rows to imply it.
+TEST_F(SettingsAdapterTest, MicrophoneSummaryReportsAMissingDevice) {
+    adapter.setMicrophoneDevices({});
+
+    EXPECT_FALSE(adapter.microphoneConnected());
+    EXPECT_EQ(adapter.microphoneSummary(), QStringLiteral("No microphone connected"));
+}
+
 // ---------------------------------------------------------------------------
 // Codec-gated relevance
 // ---------------------------------------------------------------------------

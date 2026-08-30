@@ -10,11 +10,29 @@ Rectangle {
 
     default property alias content: contentColumn.data
 
+    // Deep-link landing cue: a jump from a notification scrolls this card into
+    // view, and without a mark the jump is invisible whenever the card was on
+    // screen already. `land()` colours the border for a beat and clears itself.
+    //
+    // The border already exists, so only its colour changes -- nothing moves, and
+    // there is no animation to suppress under a reduced-motion setting.
+    readonly property bool landed: landingTimer.running
+
+    function land(): void {
+        landingTimer.restart();
+    }
+
     implicitHeight: layout.implicitHeight + 2 * ExoTheme.cardPadding
     color: ExoTheme.surface
     border.width: 1
-    border.color: ExoTheme.line
+    border.color: root.landed ? ExoTheme.accent : ExoTheme.line
     radius: ExoTheme.radiusLg
+
+    Timer {
+        id: landingTimer
+
+        interval: 1200
+    }
 
     ColumnLayout {
         id: layout

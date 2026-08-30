@@ -239,7 +239,11 @@ void SettingsAdapter::setMaxFrameRate(int max_fps) {
 
 void SettingsAdapter::setMicrophoneDevices(QVariantList devices) {
     microphone_devices_ = std::move(devices);
+    // The microphone card's own summary names the selected device and says so
+    // when there is none, so it moves with this list and not only with config.
+    rebuildAudioTargetStrings();
     emit microphoneDevicesChanged();
+    emit configChanged();
 }
 
 void SettingsAdapter::setWebcamDevices(QVariantList devices) {
@@ -921,6 +925,8 @@ void SettingsAdapter::rebuildDerivedText() {
     }
     audio_summary_ = sources.isEmpty() ? tr("No audio") : sources.join(QStringLiteral(" · "));
 
+    rebuildAudioTargetStrings();
+
     // The encoding card's own at-a-glance line. Codec first because it decides
     // which of the rows under it even apply.
     QStringList encoding_parts{ui::audioCodecLabel(out.audio_codec)};
@@ -1346,6 +1352,116 @@ const QString& SettingsAdapter::audioEncodingSummary() const noexcept {
 }
 const QString& SettingsAdapter::audioSummary() const noexcept {
     return audio_summary_;
+}
+const QString& SettingsAdapter::captureTargetName() const noexcept {
+    return capture_target_name_;
+}
+const QString& SettingsAdapter::audioTargetSummary() const noexcept {
+    return audio_target_summary_;
+}
+const QString& SettingsAdapter::appAudioHint() const noexcept {
+    return app_audio_hint_;
+}
+const QString& SettingsAdapter::systemAudioHint() const noexcept {
+    return system_audio_hint_;
+}
+const QVariantList& SettingsAdapter::audioTrackRows() const noexcept {
+    return audio_track_rows_;
+}
+bool SettingsAdapter::microphoneConnected() const noexcept {
+    return !microphone_devices_.isEmpty();
+}
+const QString& SettingsAdapter::microphoneSummary() const noexcept {
+    return microphone_summary_;
+}
+
+void SettingsAdapter::setCaptureTargetName(const QString& name) {
+    if (capture_target_name_ == name)
+        return;
+    capture_target_name_ = name;
+    rebuildAudioTargetStrings();
+    emit captureTargetChanged();
+    // The hints and the summary hang off configChanged, and they just moved.
+    emit configChanged();
+}
+
+void SettingsAdapter::rebuildAudioTargetStrings() {
+    const auto& audio = config_.audio;
+    const bool window_target = audio.target_kind == capability::CaptureTargetKind::Window;
+    // Falls back to the kind when no name has been pushed yet -- at startup the
+    // Settings page can be built before a capture target has been resolved, and
+    // a hint reading "Everything except " is worse than a generic one.
+    const QString target = capture_target_name_.isEmpty()
+                               ? (window_target ? tr("the captured window") : tr("the desktop"))
+                               : capture_target_name_;
+
+    app_audio_hint_ = window_target ? tr("%1 only").arg(target) : QString();
+    system_audio_hint_ = window_target ? tr("Everything except %1").arg(target) : tr("Everything the computer plays");
+
+    // The engine resolves rows into tracks; this reads that decision back rather
+    // than re-deriving it, so the card can never disagree with the file.
+    const auto plan = capability::BuildAudioPlan(audio);
+    audio_track_rows_.clear();
+    audio_track_rows_.reserve(static_cast<qsizetype>(plan.plan.tracks.size()));
+    for (std::size_t i = 0; i < plan.plan.tracks.size(); ++i) {
+        const auto& track = plan.plan.tracks[i];
+        if (track.sources.empty())
+            continue;
+        QStringList names;
+        names.reserve(static_cast<qsizetype>(track.sources.size()));
+        for (const auto kind : track.sources) {
+            switch (kind) {
+            case exosnap::engine::AudioSourceKind::App:
+                names.append(tr("Application audio"));
+                break;
+            case exosnap::engine::AudioSourceKind::Sys:
+            case exosnap::engine::AudioSourceKind::SystemOutput:
+                names.append(tr("System audio"));
+                break;
+            case exosnap::engine::AudioSourceKind::Mic:
+                names.append(tr("Microphone"));
+                break;
+            default:
+                break;
+            }
+        }
+        if (names.isEmpty())
+            continue;
+        QVariantMap row;
+        row.insert(QStringLiteral("track"), tr("Track %1").arg(i + 1));
+        row.insert(QStringLiteral("label"), names.join(tr(" + ")));
+        audio_track_rows_.append(row);
+    }
+
+    // Names the target BEFORE the list, so a source list that is two rows long
+    // here and three rows long there reads as a consequence of a stated fact
+    // rather than as a row that comes and goes.
+    audio_target_summary_ =
+        audio_track_rows_.isEmpty()
+            ? tr("Recording %1 · no audio").arg(target)
+            : tr("Recording %1 · %2")
+                  .arg(target,
+                       audio_track_rows_.size() == 1 ? tr("1 track") : tr("%1 tracks").arg(audio_track_rows_.size()));
+
+    QStringList mic_parts;
+    if (!microphoneConnected()) {
+        mic_parts.append(tr("No microphone connected"));
+    } else {
+        const QString device = microphoneDeviceId();
+        for (const QVariant& option : microphone_devices_) {
+            const QVariantMap entry = option.toMap();
+            if (entry.value(QStringLiteral("value")).toString() == device) {
+                mic_parts.append(entry.value(QStringLiteral("label")).toString());
+                break;
+            }
+        }
+        if (mic_parts.isEmpty())
+            mic_parts.append(tr("No microphone selected"));
+        mic_parts.append(micGainDb() == 0.0 ? tr("no gain") : tr("%1 dB gain").arg(micGainDb(), 0, 'f', 0));
+        mic_parts.append(mic_post_processing_summary_ == tr("Off") ? tr("no processing")
+                                                                   : mic_post_processing_summary_);
+    }
+    microphone_summary_ = mic_parts.join(QStringLiteral(" · "));
 }
 
 bool SettingsAdapter::showRecordingOverlay() const noexcept {

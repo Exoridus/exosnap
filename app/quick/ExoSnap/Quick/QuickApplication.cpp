@@ -1298,6 +1298,19 @@ void QuickApplication::synchronizeRecordState() {
     const bool mkv = live_config_.output.container == capability::Container::Matroska ||
                      live_config_.output.container == capability::Container::WebM;
     record_view_model_adapter_.setFormatText(formatLabel(live_config_));
+    // The Settings audio card scopes its sources to the capture target by name:
+    // "Everything except Chrome" is a different recording from "Everything the
+    // computer plays", and the two are the same row.
+    {
+        const int target_index = record_view_model_.selected_target_index;
+        // The label the Record page shows, not the raw device path: "Display 1",
+        // not "\\.\DISPLAY1".
+        settings_adapter_.setCaptureTargetName(
+            target_index >= 0 && target_index < static_cast<int>(record_view_model_.targets.size())
+                ? QString::fromStdString(RecordViewModel::TargetLabelFromCaptureTarget(
+                      record_view_model_.targets[static_cast<std::size_t>(target_index)]))
+                : QString());
+    }
     record_view_model_adapter_.setDeviceState(microphone_available_, webcam_available_, live_config_.webcam.enabled,
                                               webcam_error_);
     record_view_model_adapter_.setWebcamPresentation(

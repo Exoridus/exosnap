@@ -93,6 +93,7 @@ qt_add_qml_module(exosnap
         ExoSegmentedControl.qml
         ExoSelect.qml
         ExoLevelMeter.qml
+        ExoLevelMeterScale.qml
         ExoSettingRow.qml
         ExoSlider.qml
         ExoStatusPill.qml
@@ -125,6 +126,8 @@ qt_add_qml_module(exosnap
         SettingsAudioEncodingSection.qml
         SettingsAudioSourcesSection.qml
         SettingsAudioSourceRow.qml
+        SettingsAudioTrackLedger.qml
+        SettingsMicrophoneSection.qml
         SettingsChromaSlider.qml
         SettingsDestinationChip.qml
         SettingsDeveloperSection.qml

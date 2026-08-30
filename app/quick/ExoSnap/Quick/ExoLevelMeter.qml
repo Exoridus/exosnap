@@ -21,10 +21,10 @@ Item {
     readonly property real cautionAt: 0.72
     readonly property real alarmAt: 0.9
 
-    // Sixteen, not the old Widgets meter's twenty-two: at the width this slot
-    // gives, twenty-two cells are 8 px wide and the meter reads as a dashed
-    // rule rather than as a scale.
-    readonly property int segmentCount: 16
+    // Sixteen suits the narrow slot in the Record dock. A meter that spans a
+    // whole card raises it: cell width is what decides legibility, so more width
+    // has to buy more cells rather than fatter ones.
+    property int segmentCount: 16
     readonly property real _clamped: Math.max(0, Math.min(1, root.level))
     // A segment lights when the level reaches its own lower edge, so the count
     // of lit cells is the reading. Rounding to nearest would light a cell the

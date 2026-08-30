@@ -499,27 +499,40 @@ the recording started** was never resolved into a track, so its toggle stays loc
 - The **Mic row hides its gain slider** (mic level lives on the dedicated mic gain control); its mute
   button is always shown.
 
-**The source meter.** Each source row carries a segmented level meter and, beside it, the same
-reading as a number in dBFS. The scale IS decibels: the adapter is given the reading and derives the
-meter position from it, so the bar and the number cannot disagree. Sixteen segments, coloured by the
-Record dock's zones on the same scale -- themed up to roughly 72 % of the scale, caution amber to
-90 %, error coral above -- so a given loudness reads the same on both surfaces. The loudest segment
-of the last 1.4 s is held at half strength and then steps down, because a transient that is over
-before the eye arrives is otherwise unreadable. A source that is producing nothing prints an infinity
-symbol rather than the bottom of the scale: silence and a level sitting at -60 dB are different
-facts. An inactive source keeps its meter frame, so "off" and "on but silent" are not the same
-picture.
+**Source rows are blocks, not rows.** A source carries four statements -- whether it is included,
+which source it is, what it is reading, and which track it lands on -- and four statements do not fit
+in one control slot. The header holds three fixed columns: the switch and the label with its hint on
+the left, the reading right-aligned in a fixed 68 px column, and the **Mix into previous track**
+control in a fixed 172 px column. The mix column keeps its width even on a row that cannot offer the
+control, so the reading column has one right edge across the whole card; the slot is left empty
+rather than filled with a placeholder dash, and the control in it is not focusable while it is only
+holding the column open.
 
-**Microphone rows.** `Microphone device`, `Microphone channels`, `Microphone gain` and `Microphone
-post-processing` are qualifiers of the Microphone source, and are drawn as a group indented behind a
-rule under it rather than at the same rank as the three sources. At equal rank they read as four more
-sources.
+**The source meter.** The level occupies a line of its own under the header, at the card's full
+width, with a dBFS ruler beneath it marking -60, -40, -20, -6 and 0. Thirty-two segments here against
+the Record dock's sixteen: the extra width buys resolution, not fatter cells. The scale IS decibels:
+the adapter is given the reading and derives the meter position from it, so the bar, the ruler and
+the number cannot disagree. Zones follow the Record dock on the same scale -- themed up to roughly
+72 % of the scale, caution amber to 90 %, error coral above -- so a given loudness reads the same on
+both surfaces. The loudest segment of the last 1.4 s is held at half strength and then steps down,
+because a transient that is over before the eye arrives is otherwise unreadable. A source that is
+producing nothing prints an infinity symbol rather than the bottom of the scale: silence and a level
+sitting at -60 dB are different facts. **A source that is switched off draws no meter at all** and
+collapses to its header: a greyed bar the width of the card states nothing while taking as much of
+the eye as the live one beside it.
 
-**`Mix into previous track`.** It is a line of its own under the source row, indented beneath the
-label it qualifies, rather than a third control in the row's value slot. Inside the slot it had to
-reserve its width in every row including the ones that cannot offer it, or the level meter beside it
-would change length depending on a neighbouring row's state. The control names the track the source
-joins, not the row's position on screen. `Merge with above` was the first wording; it described where the control sat
+**Microphone settings are their own card.** `Device`, `Channels`, `Gain` and `Post-processing` sit in
+a **Microphone** card directly below **Audio sources**, not as rows inside it. They are details of one
+device, and a card boundary states that without an indent; inside the sources card at equal rank they
+read as four more sources, and behind an indent they reintroduce the sub-grouping the card layout does
+not use. The labels drop the word "Microphone" because the card title carries it -- it previously
+stood four times in a row to make up for structure that was missing. The card's summary line names the
+selected device, the gain and the processing state, and states `No microphone connected` once there
+rather than leaving four greyed rows to imply it.
+
+**`Mix into previous track`.** It is the third column of the source block's header, in a slot of fixed
+width that every row reserves whether or not it can offer the control. The control names the track the
+source joins, not the row's position on screen. `Merge with above` was the first wording; it described where the control sat
 rather than what it did, and stopped being true the moment the rows were laid out differently
 (narrow single column, a receding `APP` row, a future reordering). "Previous" refers to the product
 order `APP`, `SYS`, `MIC` fixed above, which is the model the engine resolves tracks from, so the
