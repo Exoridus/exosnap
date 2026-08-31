@@ -1088,8 +1088,10 @@ void DiagnosticsController::SetDisplayFacts(DisplayFacts facts) noexcept {
     display_ = facts;
 }
 
-void DiagnosticsController::SetSelectedCaptureTarget(std::optional<exosnap::engine::CaptureTarget> target) {
+void DiagnosticsController::SetSelectedCaptureTarget(std::optional<exosnap::engine::CaptureTarget> target,
+                                                     std::string presented_label) {
     selected_target_ = std::move(target);
+    selected_target_label_ = std::move(presented_label);
 }
 
 void DiagnosticsController::SetCaptureWindowEvidence(std::optional<WindowTargetFacts> facts,
@@ -1242,7 +1244,11 @@ DiagnosticsSnapshot DiagnosticsController::Evaluate() {
     if (selected_target_.has_value()) {
         tile_inputs.target_selected = true;
         tile_inputs.target_is_window = selected_target_->kind == exosnap::engine::CaptureTarget::Kind::Window;
-        tile_inputs.target_description = selected_target_->description;
+        // The presented label when the caller has one -- the raw description
+        // is a device path, which is not what the rest of the product calls
+        // this target.
+        tile_inputs.target_description =
+            selected_target_label_.empty() ? selected_target_->description : selected_target_label_;
     } else {
         tile_inputs.target_is_window = config_.audio.target_kind == capability::CaptureTargetKind::Window;
     }

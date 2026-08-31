@@ -31,7 +31,10 @@ QVariant LogEntryModel::data(const QModelIndex& index, int role) const {
     case SequenceRole:
         return QVariant::fromValue(entry.sequence);
     case TimestampTextRole:
-        return entry.timestamp.toString(QStringLiteral("yyyy-MM-ddTHH:mm:ss.zzz"));
+        // Time of day only. The view lane is one column of a table read at a
+        // glance during a session; the date belongs to the exported history and
+        // the log file, both of which format their own stamps.
+        return entry.timestamp.toString(QStringLiteral("HH:mm:ss.zzz"));
     case SeverityKeyRole:
         return AppLog::severityKey(entry.severity);
     case SeverityLabelRole:

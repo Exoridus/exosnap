@@ -392,7 +392,8 @@ class DiagnosticsController {
     void SetConfig(Config config);
     void SetProbeResult(ProbeResult probe);
     void SetDisplayFacts(DisplayFacts facts) noexcept;
-    void SetSelectedCaptureTarget(std::optional<exosnap::engine::CaptureTarget> target);
+    void SetSelectedCaptureTarget(std::optional<exosnap::engine::CaptureTarget> target,
+                                  std::string presented_label = {});
     void SetCaptureWindowEvidence(std::optional<WindowTargetFacts> facts, const WindowHubEvidence& hub);
     void SetSavedDisplayUnresolved(bool unresolved, std::string label);
     void SetElevated(bool elevated) noexcept;
@@ -444,6 +445,9 @@ class DiagnosticsController {
     ProbeResult probe_;
     DisplayFacts display_{};
     std::optional<exosnap::engine::CaptureTarget> selected_target_;
+    // What the product calls this target. Empty falls back to the engine's own
+    // description, which for a monitor is a device path.
+    std::string selected_target_label_;
     std::optional<WindowTargetFacts> capture_window_facts_;
     WindowHubEvidence capture_window_hub_;
     bool saved_display_unresolved_ = false;

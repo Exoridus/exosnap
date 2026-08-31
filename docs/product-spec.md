@@ -286,8 +286,10 @@ the page's real controls a rung further down. The Expert toggle Settings would h
 heading rides the right end of the preset toolbar instead.
 
 **In-window modal surfaces** — the crash-report consent surface, the recovery prompt and the
-recording-error surface — share one shape. Their **scrim covers the whole shell including the title
-band**, because a window that still looks operable behind a modal is lying about what a click will
+recording-error surface — share one shape. Every modal surface, this shape and the dialogs alike
+(source picker, close guard, preset naming), dims the shell behind it with the same scrim: a modal
+always makes the window recede, never brighten. Their **scrim covers the whole shell including the
+title band**, because a window that still looks operable behind a modal is lying about what a click will
 do; the **card itself stays inside the usable content region**, below that band, so a modal never
 sits on the brand, the navigation or the window buttons. The card is **not drawn as a window**: it
 has no title bar, no second wordmark and no imitation chrome of its own — the surface names itself
@@ -1917,7 +1919,8 @@ search") as the page header's own subtitle, beside the title, rather than as a s
 the toolbar and the list. The log list itself is deliberately full-width — a log line is data, and
 truncating it to protect a reading measure would be the wrong trade on a tool surface.
 It has one thin sticky header row, **Time | Level | Category | Message**, aligned to the data columns
-and without additional card chrome.
+and without additional card chrome. **Time** is the time of day (`HH:mm:ss.zzz`); the date belongs to
+the exported history and the log file, which carry their own full stamps.
 
 **Present / tearing / latency diagnostics.** An opt-in, elevation-gated provider (PresentMon, the
 engine behind FrameView) enriches window/game-capture diagnosis and feeds judder correlation. A

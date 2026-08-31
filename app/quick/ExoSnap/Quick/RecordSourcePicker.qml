@@ -68,6 +68,12 @@ Popup {
     height: Math.min(560, parent ? parent.height - 48 : 560)
     anchors.centerIn: parent
     modal: true
+    // The style's own modal veil lightens the shell in the dark palette, which
+    // reads as the window coming forward rather than stepping back. Same scrim
+    // token as the in-window overlay cards, so every modal recedes alike.
+    Overlay.modal: Rectangle {
+        color: ExoTheme.overlayScrim
+    }
     focus: true
     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
     padding: ExoTheme.spacingXl

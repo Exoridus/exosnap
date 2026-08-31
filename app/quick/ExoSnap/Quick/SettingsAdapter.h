@@ -73,6 +73,8 @@ class SettingsAdapter : public QObject {
     Q_PROPERTY(QVariantList chromaOptions READ chromaOptions NOTIFY optionsChanged FINAL)
     Q_PROPERTY(int chroma READ chroma WRITE setChroma NOTIFY configChanged FINAL)
     Q_PROPERTY(QString chromaHint READ chromaHint NOTIFY optionsChanged FINAL)
+    Q_PROPERTY(bool bitDepthRelevant READ bitDepthRelevant NOTIFY optionsChanged FINAL)
+    Q_PROPERTY(bool chromaRelevant READ chromaRelevant NOTIFY optionsChanged FINAL)
     Q_PROPERTY(QVariantList colorRangeOptions READ colorRangeOptions NOTIFY optionsChanged FINAL)
     Q_PROPERTY(int colorRange READ colorRange WRITE setColorRange NOTIFY configChanged FINAL)
     Q_PROPERTY(QVariantList hdrModeOptions READ hdrModeOptions NOTIFY optionsChanged FINAL)
@@ -348,6 +350,11 @@ class SettingsAdapter : public QObject {
     [[nodiscard]] const QVariantList& chromaOptions() const noexcept;
     [[nodiscard]] int chroma() const noexcept;
     [[nodiscard]] const QString& chromaHint() const noexcept;
+    // Whether the row applies at all to the selected codec on this GPU, as
+    // opposed to applying and being unavailable: a row that fails its relevance
+    // gate is not shown rather than shown-and-disabled.
+    [[nodiscard]] bool bitDepthRelevant() const noexcept;
+    [[nodiscard]] bool chromaRelevant() const noexcept;
     [[nodiscard]] const QVariantList& colorRangeOptions() const noexcept;
     [[nodiscard]] int colorRange() const noexcept;
     [[nodiscard]] const QVariantList& hdrModeOptions() const noexcept;
@@ -751,6 +758,9 @@ class SettingsAdapter : public QObject {
     QVariantList webcam_resolution_options_;
     QVariantList webcam_frame_rate_options_;
     QVariantList chroma_key_color_options_;
+
+    bool bit_depth_relevant_ = false;
+    bool chroma_relevant_ = false;
 
     QString chroma_hint_;
     QString hdr_hint_;

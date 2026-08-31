@@ -28,6 +28,11 @@ Dialog {
     readonly property real widestAllowed: (parent?.width ?? 420) - 2 * ExoTheme.spacingXl
 
     modal: true
+    // See RecordSourcePicker: the style's default veil lightens the shell in
+    // dark mode instead of dimming it.
+    Overlay.modal: Rectangle {
+        color: ExoTheme.overlayScrim
+    }
     // Without this the popup never takes active focus, and everything the dialog
     // claims about the keyboard stops being true: CloseOnEscape is documented to
     // need activeFocus, so Escape reaches the window instead of the guard, and

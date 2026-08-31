@@ -3,6 +3,7 @@
 #include "diagnostics/AppLog.h"
 #include "diagnostics/DiagnosticsProbe.h"
 #include "diagnostics/FixActionDispatcher.h"
+#include "models/CaptureTargetPresentation.h"
 
 #include <QCoreApplication>
 #include <QDateTime>
@@ -354,7 +355,16 @@ void DiagnosticsAdapter::setCapabilitySet(const capability::CapabilitySet& caps)
 }
 
 void DiagnosticsAdapter::setSelectedCaptureTarget(std::optional<exosnap::engine::CaptureTarget> target) {
-    controller_.SetSelectedCaptureTarget(std::move(target));
+    // Naming the target is presentation, and this is where the product's own
+    // label lives; the controller would otherwise report a device path.
+    std::string label;
+    if (target.has_value()) {
+        label = ResolveCaptureTargetPresentation(*target, target->kind == exosnap::engine::CaptureTarget::Kind::Window
+                                                              ? CaptureTargetPresentationKind::Window
+                                                              : CaptureTargetPresentationKind::Display)
+                    .label;
+    }
+    controller_.SetSelectedCaptureTarget(std::move(target), std::move(label));
     refreshSnapshot();
 }
 

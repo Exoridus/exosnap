@@ -248,6 +248,33 @@ TEST_F(SettingsAdapterTest, NativeQuantizerHintNamesTheSelectedCodecsOwnParamete
     EXPECT_EQ(adapter.nativeQuantizerHint(), QStringLiteral("HEVC QP 19 of 51"));
 }
 
+TEST_F(SettingsAdapterTest, BitDepthAndChromaRelevanceFollowTheSelectedCodec) {
+    // Relevance is a codec question, so it survives the current configuration:
+    // a codec that carries neither 10-bit nor 4:4:4 hides both rows instead of
+    // showing them permanently unavailable.
+    adapter.setVideoCodec(static_cast<int>(VideoCodec::Av1));
+    EXPECT_TRUE(adapter.bitDepthRelevant());
+    EXPECT_FALSE(adapter.chromaRelevant());
+
+    adapter.setVideoCodec(static_cast<int>(VideoCodec::Hevc));
+    EXPECT_TRUE(adapter.bitDepthRelevant());
+    EXPECT_TRUE(adapter.chromaRelevant());
+
+    adapter.setVideoCodec(static_cast<int>(VideoCodec::H264));
+    EXPECT_FALSE(adapter.bitDepthRelevant());
+    EXPECT_TRUE(adapter.chromaRelevant());
+}
+
+TEST_F(SettingsAdapterTest, ChromaRowStaysRelevantWhileTenBitBlocksIt) {
+    // The one conflict the row is there to explain: 4:4:4 is unavailable at
+    // 10-bit and fixable in place, so the row stays.
+    adapter.setVideoCodec(static_cast<int>(VideoCodec::Hevc));
+    adapter.setBitDepth(static_cast<int>(capability::BitDepth::Bit10));
+
+    EXPECT_TRUE(adapter.chromaRelevant());
+    EXPECT_FALSE(adapter.chromaHint().isEmpty());
+}
+
 TEST_F(SettingsAdapterTest, MaxFrameRateClampsConfiguredRateAndOptions) {
     adapter.setFrameRate(240);
     ASSERT_EQ(adapter.frameRate(), 240);

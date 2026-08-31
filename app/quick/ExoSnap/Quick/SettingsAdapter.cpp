@@ -653,6 +653,13 @@ void SettingsAdapter::rebuildOptions() {
     }
 
     bit_depth_options_.clear();
+    // Relevance asks the codec question, not the current-configuration one: a
+    // codec that carries 10-bit keeps the row even while the active chroma
+    // blocks the value, so the conflict stays fixable in place instead of the
+    // row vanishing under the user.
+    bit_depth_relevant_ =
+        caps_set_ && capability::IsSelectable(caps_.QueryCombo(out.container, out.video_codec, out.audio_codec,
+                                                               ChromaSubsampling::Cs420, BitDepth::Bit10));
     for (const BitDepth value : capability::AllBitDepths()) {
         const auto annotation =
             caps_set_ ? caps_.QueryCombo(out.container, out.video_codec, out.audio_codec, out.chroma_subsampling, value)
@@ -664,6 +671,12 @@ void SettingsAdapter::rebuildOptions() {
 
     chroma_options_.clear();
     chroma_hint_.clear();
+    // 4:4:4 at 8-bit is the question "can this codec carry it on this GPU at
+    // all". Asking at the active bit depth would hide the row for the one
+    // conflict it is meant to explain.
+    chroma_relevant_ =
+        caps_set_ && capability::IsSelectable(caps_.QueryCombo(out.container, out.video_codec, out.audio_codec,
+                                                               ChromaSubsampling::Cs444, BitDepth::Bit8));
     for (const ChromaSubsampling value : {ChromaSubsampling::Cs420, ChromaSubsampling::Cs444}) {
         const auto annotation =
             caps_set_ ? caps_.QueryCombo(out.container, out.video_codec, out.audio_codec, value, out.bit_depth)
@@ -1044,6 +1057,12 @@ int SettingsAdapter::hdrMode() const noexcept {
 }
 const QString& SettingsAdapter::hdrHint() const noexcept {
     return hdr_hint_;
+}
+bool SettingsAdapter::bitDepthRelevant() const noexcept {
+    return bit_depth_relevant_;
+}
+bool SettingsAdapter::chromaRelevant() const noexcept {
+    return chroma_relevant_;
 }
 bool SettingsAdapter::hdrRelevant() const noexcept {
     return hdr_display_present_;

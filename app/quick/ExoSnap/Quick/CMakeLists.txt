@@ -1614,6 +1614,8 @@ exosnap_add_gtest(
         ${PROJECT_SOURCE_DIR}/app/diagnostics/ZipWriter.cpp
         ${PROJECT_SOURCE_DIR}/app/services/SupportBundleService.cpp
         ${PROJECT_SOURCE_DIR}/app/services/SupportBundleService.h
+        ${PROJECT_SOURCE_DIR}/app/models/CaptureTargetPresentation.cpp
+        ${PROJECT_SOURCE_DIR}/app/services/DisplayNumbering.cpp
     LIBRARIES
         Qt6::Core
         Qt6::Gui

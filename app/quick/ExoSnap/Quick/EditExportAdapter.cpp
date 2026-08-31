@@ -90,7 +90,10 @@ int EditExportAdapter::progressPercent() const noexcept {
 }
 
 QString EditExportAdapter::outputPath() const {
-    return QString::fromStdWString(output_path_.wstring());
+    // Both getters are read by people, not by the filesystem: a path built from
+    // a URL keeps its forward slashes, and the same folder then reads one way
+    // here and another way in Settings.
+    return QDir::toNativeSeparators(QString::fromStdWString(output_path_.wstring()));
 }
 
 QString EditExportAdapter::outputFileName() const {
@@ -98,7 +101,7 @@ QString EditExportAdapter::outputFileName() const {
 }
 
 QString EditExportAdapter::outputFolder() const {
-    return QString::fromStdWString(output_path_.parent_path().wstring());
+    return QDir::toNativeSeparators(QString::fromStdWString(output_path_.parent_path().wstring()));
 }
 
 const QString& EditExportAdapter::errorText() const noexcept {
