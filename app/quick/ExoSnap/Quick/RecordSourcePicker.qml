@@ -65,7 +65,12 @@ Popup {
 
     parent: Overlay.overlay
     width: Math.min(680, parent ? parent.width - 48 : 680)
-    height: Math.min(560, parent ? parent.height - 48 : 560)
+    // Tall enough for a long window list, no taller than what is being shown:
+    // two monitors under a 560 box left a third of the surface empty, which
+    // reads as a list that failed to load rather than as a short one. The floor
+    // keeps the dialog from resizing noticeably as the tabs are stepped through.
+    readonly property real preferredHeight: pickerContent.implicitHeight + topPadding + bottomPadding
+    height: Math.min(560, Math.max(420, preferredHeight), parent ? parent.height - 48 : 560)
     anchors.centerIn: parent
     modal: true
     // The style's own modal veil lightens the shell in the dark palette, which
@@ -157,6 +162,8 @@ Popup {
     }
 
     contentItem: ColumnLayout {
+        id: pickerContent
+
         spacing: ExoTheme.spacingLg
 
         Label {
@@ -187,6 +194,9 @@ Popup {
             visible: root.currentTab === 0
             Layout.fillWidth: true
             Layout.fillHeight: true
+            // The grid's own content is the only thing here that knows how tall
+            // this tab wants to be; a GridView reports no implicit height.
+            Layout.preferredHeight: displaysGrid.contentHeight
 
             GridView {
                 id: displaysGrid
