@@ -12,45 +12,23 @@ ExoCard {
     subtitle: root.settings.outputSummary
 
     function focusDestination(): void {
-        destinationField.forceActiveFocus(Qt.OtherFocusReason);
+        destinationChip.forceActiveFocus(Qt.OtherFocusReason);
     }
 
     ExoSettingRow {
         label: qsTr("Destination folder")
-        // A path field and the Browse button beside it.
         controlWidth: ExoTheme.controlSlotWide
         warning: root.settings.folderValidation
         stacked: root.stacked
         Layout.fillWidth: true
 
-        RowLayout {
-            spacing: ExoTheme.spacingSm
+        SettingsDestinationChip {
+            id: destinationChip
+
+            path: root.settings.outputFolder
+            enabled: !root.settings.controlsLocked
             Layout.fillWidth: true
-
-            ExoTextField {
-                id: destinationField
-
-                value: root.settings.outputFolder
-                enabled: !root.settings.controlsLocked
-                Layout.fillWidth: true
-                Accessible.name: qsTr("Destination folder")
-                onCommitted: value => root.settings.outputFolder = value
-            }
-
-            // Icon-only on purpose: labelled, this button took 88 px out of a
-            // 320 px slot and the path field elided a real folder away. A small
-            // button beside a path field is also what Win32 has always done.
-            ExoButton {
-                glyph: ExoGlyph.Folder
-                compact: true
-                enabled: !root.settings.controlsLocked
-                Accessible.name: qsTr("Browse…")
-                onClicked: folderDialog.open()
-
-                ToolTip.visible: hovered
-                ToolTip.delay: 400
-                ToolTip.text: qsTr("Browse…")
-            }
+            onClicked: folderDialog.open()
         }
     }
 

@@ -2,6 +2,7 @@
 
 #include "AboutViewModelAdapter.h"
 #include "BlockingSurfaceArbiter.h"
+#include "CaptureTargetStillProvider.h"
 #include "CrashReportAdapter.h"
 #include "DeviceAdapter.h"
 #include "DiagnosticsAdapter.h"
@@ -38,6 +39,7 @@
 #include "models/RecordingPresetRegistry.h"
 #include "services/AudioDeviceNotifier.h"
 #include "services/CaptureTargetNotifier.h"
+#include "services/CaptureTargetStillService.h"
 #include "services/GlobalHotkeyService.h"
 #include "services/RecordingCountdownController.h"
 #include "services/RecoveryService.h"
@@ -454,6 +456,10 @@ class QuickApplication {
     // handoff, and the updater reports the honest appWontClose instead.
     void closeForUpdaterHandoff();
     void dispatchNotificationAction(notifications::NotificationAction action, const QString& payload);
+    // The one consent-and-send path. Every surface that offers a Send-report
+    // control routes through it.
+    void sendNonFatalReport(const QString& phase, const QString& detail);
+    void publishPresetTransferFailure(const QString& title, const QString& error);
     void publishRecordingResultNotification(const UiRecordingResult& result);
     [[nodiscard]] CloseGuardState sampleCloseGuardState() const;
     // Flushes anything a debounced timer still owes to disk. Runs on the way
@@ -646,6 +652,10 @@ class QuickApplication {
     std::unique_ptr<WindowEvidenceProbe> window_evidence_probe_;
     std::unique_ptr<RecordingCoordinator> recording_coordinator_;
     CaptureTargetNotifier capture_target_notifier_;
+    // Runs only while the source picker has cards on screen. Declared after the
+    // notifier because it resolves the identities it is given against the target
+    // list the notifier maintains.
+    CaptureTargetStillService target_still_service_;
     AudioDeviceNotifier audio_notifier_;
     WebcamDeviceNotifier webcam_notifier_;
     GlobalHotkeyService hotkey_service_;
@@ -723,6 +733,9 @@ class QuickApplication {
     bool webcam_available_ = true;
     QString webcam_error_;
     RecordWebcamFrameProvider* webcam_frame_provider_ = nullptr;
+    // Engine-owned once registered, like the two providers below.
+    CaptureTargetStillProvider* target_still_provider_ = nullptr;
+    bool target_still_provider_registered_ = false;
     // Engine-owned once registered (addImageProvider takes ownership), same
     // lifetime rule the webcam provider above follows.
     EditTimelineTileProvider* edit_tile_provider_ = nullptr;

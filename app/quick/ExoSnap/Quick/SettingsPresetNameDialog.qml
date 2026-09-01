@@ -34,6 +34,11 @@ Popup {
     width: 380
     padding: ExoTheme.spacingLg
     modal: true
+    // See RecordSourcePicker: the style's default veil lightens the shell in
+    // dark mode instead of dimming it.
+    Overlay.modal: Rectangle {
+        color: ExoTheme.overlayScrim
+    }
     focus: true
     closePolicy: Popup.CloseOnEscape
     onOpened: nameField.forceActiveFocus()
@@ -72,7 +77,10 @@ Popup {
             text: qsTr("Enter a name that is not already in use.")
             textFormat: Text.PlainText
             wrapMode: Text.WordWrap
-            visible: root.nameRejected
+            // An empty field is a dialog that has not been used yet, not a
+            // name that was refused. The Save button already states that
+            // nothing can be saved yet.
+            visible: root.nameRejected && nameField.text.trim().length > 0
             color: ExoTheme.warningText
             Layout.fillWidth: true
             font {

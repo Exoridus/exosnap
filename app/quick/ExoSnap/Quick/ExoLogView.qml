@@ -14,7 +14,7 @@ Rectangle {
 
     required property var model
     property bool autoScroll: true
-    readonly property int timeLaneWidth: 82
+    readonly property int timeLaneWidth: 96
     readonly property int levelLaneWidth: 62
     readonly property int categoryLaneWidth: 140
 
@@ -271,6 +271,10 @@ Rectangle {
                 }
                 text: row.timestampText
                 width: root.timeLaneWidth
+                // The lane is fixed so the level column starts on one x for
+                // every row; without an elide a longer stamp paints across it
+                // instead of being cut at the lane edge.
+                elide: Text.ElideRight
                 textFormat: Text.PlainText
                 color: ExoTheme.textDim
                 font {

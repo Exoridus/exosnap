@@ -42,6 +42,9 @@ enum class NotificationType : uint8_t {
                                    // what it could) and from SettingsSaveFailed (a write that was lost):
                                    // nothing has been written yet, and nothing will be until the user
                                    // deliberately changes a setting.
+    PresetTransferFailed,          // importing or exporting a preset file failed. Nothing in the live
+                                   // configuration changed, so this reports an action that did not happen
+                                   // rather than a setting that was lost.
     WindowCaptureStalled,          // an active WINDOW capture stopped producing frames mid-recording
                                    // (QCR-804). The recording keeps running and the file keeps growing —
                                    // the CFR pacer holds the last frame — so this is a standing caution,
@@ -68,6 +71,9 @@ enum class NotificationAction : uint8_t {
     OpenDiagnostics,  // navigate to the Diagnostics page for the frame-drop breakdown (FramesDropped type)
     UndoPresetSwitch, // restore the previous live config and selection (PresetSwitched type)
     OpenHotkeys,      // navigate to Settings → Hotkeys to rebind a shortcut (HotkeyConflict type)
+    SendReport,       // send a scrubbed non-fatal report for an internal failure the user cannot fix.
+                      // Pressing it IS the consent, the same rule the recording-error surface follows;
+                      // `action_payload` carries the detail line the report is built from.
 };
 
 // ---------------------------------------------------------------------------
@@ -120,8 +126,9 @@ struct NotificationEvent {
     // Something failed, was lost, or ended the recording.
     case NotificationType::LowStorage: // crosses the hard-stop threshold and stops recording
     case NotificationType::UnexpectedStop:
-    case NotificationType::SettingsSaveFailed:  // the change may be lost
-    case NotificationType::CaptureActionFailed: // the requested action did not happen
+    case NotificationType::SettingsSaveFailed:   // the change may be lost
+    case NotificationType::CaptureActionFailed:  // the requested action did not happen
+    case NotificationType::PresetTransferFailed: // the import or export did not happen
         return QStringLiteral("error");
 
     // Degraded, but the user keeps working — including RecoveryAvailable, which

@@ -62,8 +62,9 @@ logs/
 manifest.json
 
 #Internal scratch / agent workspace (not tracked in repo)
-.workspace/
-.claude/
-.superpowers/
-.agents/
-skills-lock.json
+/.workspace/
+/.claude/
+/.superpowers/
+/.agents/
+/.opencode/
+/skills-lock.json

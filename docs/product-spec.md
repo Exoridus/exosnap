@@ -286,8 +286,10 @@ the page's real controls a rung further down. The Expert toggle Settings would h
 heading rides the right end of the preset toolbar instead.
 
 **In-window modal surfaces** — the crash-report consent surface, the recovery prompt and the
-recording-error surface — share one shape. Their **scrim covers the whole shell including the title
-band**, because a window that still looks operable behind a modal is lying about what a click will
+recording-error surface — share one shape. Every modal surface, this shape and the dialogs alike
+(source picker, close guard, preset naming), dims the shell behind it with the same scrim: a modal
+always makes the window recede, never brighten. Their **scrim covers the whole shell including the
+title band**, because a window that still looks operable behind a modal is lying about what a click will
 do; the **card itself stays inside the usable content region**, below that band, so a modal never
 sits on the brand, the navigation or the window buttons. The card is **not drawn as a window**: it
 has no title bar, no second wordmark and no imitation chrome of its own — the surface names itself
@@ -354,7 +356,9 @@ The **live configuration is the source of truth**. It is persisted silently and 
 app restarts into exactly the state it was closed in. A preset is a named snapshot the live
 configuration is compared against: when the two differ, the selector shows `Name (changed)` as a calm
 hint. There is no Save button, no unsaved-changes warning, and no discard dialog. A write failure
-(disk full, file locked, …) is not silent either — the change may be lost, so a notification says so.
+(disk full, file locked, …) is not silent either — the change may be lost, so a notification says so,
+and it offers **Send report**: a failed write is the store's problem, not a setting the user can
+correct.
 
 Capture identity, video bit depth, and HDR mode are **environment facts**, not preset content.
 Presets neither store nor override them, and a difference in them never counts as a change. Switching
@@ -386,6 +390,11 @@ input dialog. Cancel is on the left and the named action, **Rename** or **Save p
 right; there is no generic `OK`. The existing uniqueness rule controls whether the named action is
 available. Folder and file selection remain native Windows dialogs, including output folders,
 preset import/export and one-time export recovery destinations.
+
+A failed preset import or export reports itself as a toast, not as a Record-page notice: the transfer
+is started from Settings and is over the moment it fails, so a notice would appear on a page the user
+is not looking at and stay there until they went to dismiss it. Nothing in the live configuration
+changes, and the toast offers **Send report** for the same reason a failed settings write does.
 
 Presets are stored in a human-readable TOML store and can be exported and imported for sharing.
 Values are validated and sanitized before storage; invalid values are clamped rather than rejected
@@ -492,8 +501,40 @@ the recording started** was never resolved into a track, so its toggle stays loc
 - The **Mic row hides its gain slider** (mic level lives on the dedicated mic gain control); its mute
   button is always shown.
 
-**`Mix into previous track`.** The per-row control names the track the source joins, not the row's
-position on screen. `Merge with above` was the first wording; it described where the control sat
+**Source rows are blocks, not rows.** A source carries four statements -- whether it is included,
+which source it is, what it is reading, and which track it lands on -- and four statements do not fit
+in one control slot. The header holds three fixed columns: the switch and the label with its hint on
+the left, the reading right-aligned in a fixed 68 px column, and the **Mix into previous track**
+control in a fixed 172 px column. The mix column keeps its width even on a row that cannot offer the
+control, so the reading column has one right edge across the whole card; the slot is left empty
+rather than filled with a placeholder dash, and the control in it is not focusable while it is only
+holding the column open.
+
+**The source meter.** The level occupies a line of its own under the header, at the card's full
+width, with a dBFS ruler beneath it marking -60, -40, -20, -6 and 0. Thirty-two segments here against
+the Record dock's sixteen: the extra width buys resolution, not fatter cells. The scale IS decibels:
+the adapter is given the reading and derives the meter position from it, so the bar, the ruler and
+the number cannot disagree. Zones follow the Record dock on the same scale -- themed up to roughly
+72 % of the scale, caution amber to 90 %, error coral above -- so a given loudness reads the same on
+both surfaces. The loudest segment of the last 1.4 s is held at half strength and then steps down,
+because a transient that is over before the eye arrives is otherwise unreadable. A source that is
+producing nothing prints an infinity symbol rather than the bottom of the scale: silence and a level
+sitting at -60 dB are different facts. **A source that is switched off draws no meter at all** and
+collapses to its header: a greyed bar the width of the card states nothing while taking as much of
+the eye as the live one beside it.
+
+**Microphone settings are their own card.** `Device`, `Channels`, `Gain` and `Post-processing` sit in
+a **Microphone** card directly below **Audio sources**, not as rows inside it. They are details of one
+device, and a card boundary states that without an indent; inside the sources card at equal rank they
+read as four more sources, and behind an indent they reintroduce the sub-grouping the card layout does
+not use. The labels drop the word "Microphone" because the card title carries it -- it previously
+stood four times in a row to make up for structure that was missing. The card's summary line names the
+selected device, the gain and the processing state, and states `No microphone connected` once there
+rather than leaving four greyed rows to imply it.
+
+**`Mix into previous track`.** It is the third column of the source block's header, in a slot of fixed
+width that every row reserves whether or not it can offer the control. The control names the track the
+source joins, not the row's position on screen. `Merge with above` was the first wording; it described where the control sat
 rather than what it did, and stopped being true the moment the rows were laid out differently
 (narrow single column, a receding `APP` row, a future reordering). "Previous" refers to the product
 order `APP`, `SYS`, `MIC` fixed above, which is the model the engine resolves tracks from, so the
@@ -786,13 +827,22 @@ available during recording via an on-screen dock control and a hotkey.
 still thumbnail, source-kind glyph, resolved target label, and an explicit selected state. A missing
 thumbnail uses a stable placeholder rather than collapsing the card. Cards are fully clickable,
 keyboard focusable and accessible; double-click or Enter confirms the focused card. A fixed footer
-contains Cancel and the named confirm action. The refresh icon has a tooltip and accessible name.
+contains Cancel and the named confirm action.
 
 The Windows tab reports its result count, offers search, and uses a visible scrollbar whenever its
-cards overflow. Cards reflow from two columns to one at the narrow layout. Opening or refreshing the
-picker refreshes unselected cached stills; at most the selected target may run a live preview. A
-selection survives refresh when the same target identity remains. If it disappears, the picker says
-so and leaves the selection unresolved rather than silently choosing another target.
+cards overflow. Cards reflow from two columns to one at the narrow layout. A selection survives
+refresh when the same target identity remains. If it disappears, the picker says so and leaves the
+selection unresolved rather than silently choosing another target.
+
+**Thumbnail freshness.** Thumbnails refresh on their own; the picker offers no manual refresh
+control. Only the cards inside the scrolled viewport are refreshed, one target at a time on a fixed
+interval, so the cost is the same whether two cards or forty are on screen and the perceived refresh
+rate rises as fewer cards compete. A closed picker refreshes nothing. A target that stops being
+capturable -- minimized, cloaked, behind the secure desktop, or on a display that went to standby --
+keeps its last thumbnail, shown dimmed, and is never reverted to the placeholder: the card's geometry
+does not change and the grid does not flicker. Only a target that has never delivered a thumbnail
+shows the placeholder. Thumbnails are held in memory for the session and are never written to disk;
+a target that disappears loses its thumbnail with it.
 
 The Region tab puts **Draw custom** first and gives it the strongest emphasis, followed by
 **16:9**, **9:16**, **1:1**, and **4:5** presets. Draw custom enters an immediate snipping-style drag
@@ -1274,8 +1324,13 @@ segment-size field (**Split by size**) appear only while their toggle is on. Tog
 the "off" state — it changes no persisted value beyond the split mode itself, so presets and exported
 TOML round-trip identically.
 
-**Output destination and live artifacts.** The default recording destination is the Windows Known
-Folder `FOLDERID_Videos` plus `ExoSnap`, respecting folder redirection. Live artifacts are created on
+**Output destination and live artifacts.** The destination is presented as one control: a chip
+carrying a folder mark, the path, and a trailing ellipsis, which opens the native folder dialog. It
+replaced a path field with a Browse button beside it — two controls for one value, where the field
+took the slot's width, still elided a real folder away, and was almost never typed into. The path is
+elided from the LEFT, because the tail is what identifies a folder. A consequence stated plainly: a
+path can no longer be typed or pasted, only chosen. The default recording destination is the Windows
+Known Folder `FOLDERID_Videos` plus `ExoSnap`, respecting folder redirection. Live artifacts are created on
 the configured output volume, never in the system temporary directory. The valuable unfinished file
 uses the final base name plus the final extension and `.partial`, for example
 `Recording.mkv.partial`; disposable staging uses `.tmp`. A clean MKV/WebM session is atomically
@@ -1864,7 +1919,8 @@ search") as the page header's own subtitle, beside the title, rather than as a s
 the toolbar and the list. The log list itself is deliberately full-width — a log line is data, and
 truncating it to protect a reading measure would be the wrong trade on a tool surface.
 It has one thin sticky header row, **Time | Level | Category | Message**, aligned to the data columns
-and without additional card chrome.
+and without additional card chrome. **Time** is the time of day (`HH:mm:ss.zzz`); the date belongs to
+the exported history and the log file, which carry their own full stamps.
 
 **Present / tearing / latency diagnostics.** An opt-in, elevation-gated provider (PresentMon, the
 engine behind FrameView) enriches window/game-capture diagnosis and feeds judder correlation. A

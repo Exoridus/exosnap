@@ -70,10 +70,9 @@ GridLayout {
     }
 
     // Dim only when EVERY control in the slot is blocked. One live control is
-    // enough to keep the label at full strength: the Microphone row's slot holds
-    // a switch beside a "Mix into previous track" box that gates on something
-    // else entirely, and dimming its label because the box was inert said the
-    // switch could not be used either.
+    // enough to keep the label at full strength: a slot holding two controls that
+    // gate on different conditions would otherwise dim its whole label for the
+    // one that happens to be inert, saying the other could not be used either.
     readonly property bool controlEnabled: {
         const state = root._slotState(controlHost);
         return state.total === 0 || state.live > 0;

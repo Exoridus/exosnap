@@ -239,7 +239,11 @@ void SettingsAdapter::setMaxFrameRate(int max_fps) {
 
 void SettingsAdapter::setMicrophoneDevices(QVariantList devices) {
     microphone_devices_ = std::move(devices);
+    // The microphone card's own summary names the selected device and says so
+    // when there is none, so it moves with this list and not only with config.
+    rebuildAudioTargetStrings();
     emit microphoneDevicesChanged();
+    emit configChanged();
 }
 
 void SettingsAdapter::setWebcamDevices(QVariantList devices) {
@@ -251,14 +255,19 @@ void SettingsAdapter::setWebcamDevices(QVariantList devices) {
     emit configChanged();
 }
 
-void SettingsAdapter::setMeters(double system, double app, double microphone) {
-    if (qFuzzyCompare(system_meter_ + 1.0, system + 1.0) && qFuzzyCompare(app_meter_ + 1.0, app + 1.0) &&
-        qFuzzyCompare(microphone_meter_ + 1.0, microphone + 1.0)) {
+void SettingsAdapter::setMeters(double system_dbfs, double app_dbfs, double microphone_dbfs) {
+    // Compared as the stored decibels rather than through qFuzzyCompare, which
+    // has no answer for the infinity that means silence.
+    const auto same = [](double left, double right) {
+        return left == right || (std::isinf(left) && std::isinf(right) && std::signbit(left) == std::signbit(right));
+    };
+    if (same(system_meter_db_, system_dbfs) && same(app_meter_db_, app_dbfs) &&
+        same(microphone_meter_db_, microphone_dbfs)) {
         return;
     }
-    system_meter_ = system;
-    app_meter_ = app;
-    microphone_meter_ = microphone;
+    system_meter_db_ = system_dbfs;
+    app_meter_db_ = app_dbfs;
+    microphone_meter_db_ = microphone_dbfs;
     emit metersChanged();
 }
 
@@ -644,6 +653,13 @@ void SettingsAdapter::rebuildOptions() {
     }
 
     bit_depth_options_.clear();
+    // Relevance asks the codec question, not the current-configuration one: a
+    // codec that carries 10-bit keeps the row even while the active chroma
+    // blocks the value, so the conflict stays fixable in place instead of the
+    // row vanishing under the user.
+    bit_depth_relevant_ =
+        caps_set_ && capability::IsSelectable(caps_.QueryCombo(out.container, out.video_codec, out.audio_codec,
+                                                               ChromaSubsampling::Cs420, BitDepth::Bit10));
     for (const BitDepth value : capability::AllBitDepths()) {
         const auto annotation =
             caps_set_ ? caps_.QueryCombo(out.container, out.video_codec, out.audio_codec, out.chroma_subsampling, value)
@@ -655,6 +671,12 @@ void SettingsAdapter::rebuildOptions() {
 
     chroma_options_.clear();
     chroma_hint_.clear();
+    // 4:4:4 at 8-bit is the question "can this codec carry it on this GPU at
+    // all". Asking at the active bit depth would hide the row for the one
+    // conflict it is meant to explain.
+    chroma_relevant_ =
+        caps_set_ && capability::IsSelectable(caps_.QueryCombo(out.container, out.video_codec, out.audio_codec,
+                                                               ChromaSubsampling::Cs444, BitDepth::Bit8));
     for (const ChromaSubsampling value : {ChromaSubsampling::Cs420, ChromaSubsampling::Cs444}) {
         const auto annotation =
             caps_set_ ? caps_.QueryCombo(out.container, out.video_codec, out.audio_codec, value, out.bit_depth)
@@ -916,6 +938,8 @@ void SettingsAdapter::rebuildDerivedText() {
     }
     audio_summary_ = sources.isEmpty() ? tr("No audio") : sources.join(QStringLiteral(" · "));
 
+    rebuildAudioTargetStrings();
+
     // The encoding card's own at-a-glance line. Codec first because it decides
     // which of the rows under it even apply.
     QStringList encoding_parts{ui::audioCodecLabel(out.audio_codec)};
@@ -1033,6 +1057,12 @@ int SettingsAdapter::hdrMode() const noexcept {
 }
 const QString& SettingsAdapter::hdrHint() const noexcept {
     return hdr_hint_;
+}
+bool SettingsAdapter::bitDepthRelevant() const noexcept {
+    return bit_depth_relevant_;
+}
+bool SettingsAdapter::chromaRelevant() const noexcept {
+    return chroma_relevant_;
 }
 bool SettingsAdapter::hdrRelevant() const noexcept {
     return hdr_display_present_;
@@ -1316,13 +1346,22 @@ bool SettingsAdapter::micRnnoiseEnabled() const noexcept {
     return config_.audio.mic_rnnoise_enabled;
 }
 double SettingsAdapter::systemMeter() const noexcept {
-    return system_meter_;
+    return models::MeterLevelFromDbfs(system_meter_db_);
 }
 double SettingsAdapter::appMeter() const noexcept {
-    return app_meter_;
+    return models::MeterLevelFromDbfs(app_meter_db_);
 }
 double SettingsAdapter::microphoneMeter() const noexcept {
-    return microphone_meter_;
+    return models::MeterLevelFromDbfs(microphone_meter_db_);
+}
+double SettingsAdapter::systemMeterDb() const noexcept {
+    return system_meter_db_;
+}
+double SettingsAdapter::appMeterDb() const noexcept {
+    return app_meter_db_;
+}
+double SettingsAdapter::microphoneMeterDb() const noexcept {
+    return microphone_meter_db_;
 }
 const QString& SettingsAdapter::micPostProcessingSummary() const noexcept {
     return mic_post_processing_summary_;
@@ -1332,6 +1371,116 @@ const QString& SettingsAdapter::audioEncodingSummary() const noexcept {
 }
 const QString& SettingsAdapter::audioSummary() const noexcept {
     return audio_summary_;
+}
+const QString& SettingsAdapter::captureTargetName() const noexcept {
+    return capture_target_name_;
+}
+const QString& SettingsAdapter::audioTargetSummary() const noexcept {
+    return audio_target_summary_;
+}
+const QString& SettingsAdapter::appAudioHint() const noexcept {
+    return app_audio_hint_;
+}
+const QString& SettingsAdapter::systemAudioHint() const noexcept {
+    return system_audio_hint_;
+}
+const QVariantList& SettingsAdapter::audioTrackRows() const noexcept {
+    return audio_track_rows_;
+}
+bool SettingsAdapter::microphoneConnected() const noexcept {
+    return !microphone_devices_.isEmpty();
+}
+const QString& SettingsAdapter::microphoneSummary() const noexcept {
+    return microphone_summary_;
+}
+
+void SettingsAdapter::setCaptureTargetName(const QString& name) {
+    if (capture_target_name_ == name)
+        return;
+    capture_target_name_ = name;
+    rebuildAudioTargetStrings();
+    emit captureTargetChanged();
+    // The hints and the summary hang off configChanged, and they just moved.
+    emit configChanged();
+}
+
+void SettingsAdapter::rebuildAudioTargetStrings() {
+    const auto& audio = config_.audio;
+    const bool window_target = audio.target_kind == capability::CaptureTargetKind::Window;
+    // Falls back to the kind when no name has been pushed yet -- at startup the
+    // Settings page can be built before a capture target has been resolved, and
+    // a hint reading "Everything except " is worse than a generic one.
+    const QString target = capture_target_name_.isEmpty()
+                               ? (window_target ? tr("the captured window") : tr("the desktop"))
+                               : capture_target_name_;
+
+    app_audio_hint_ = window_target ? tr("%1 only").arg(target) : QString();
+    system_audio_hint_ = window_target ? tr("Everything except %1").arg(target) : tr("Everything the computer plays");
+
+    // The engine resolves rows into tracks; this reads that decision back rather
+    // than re-deriving it, so the card can never disagree with the file.
+    const auto plan = capability::BuildAudioPlan(audio);
+    audio_track_rows_.clear();
+    audio_track_rows_.reserve(static_cast<qsizetype>(plan.plan.tracks.size()));
+    for (std::size_t i = 0; i < plan.plan.tracks.size(); ++i) {
+        const auto& track = plan.plan.tracks[i];
+        if (track.sources.empty())
+            continue;
+        QStringList names;
+        names.reserve(static_cast<qsizetype>(track.sources.size()));
+        for (const auto kind : track.sources) {
+            switch (kind) {
+            case exosnap::engine::AudioSourceKind::App:
+                names.append(tr("Application audio"));
+                break;
+            case exosnap::engine::AudioSourceKind::Sys:
+            case exosnap::engine::AudioSourceKind::SystemOutput:
+                names.append(tr("System audio"));
+                break;
+            case exosnap::engine::AudioSourceKind::Mic:
+                names.append(tr("Microphone"));
+                break;
+            default:
+                break;
+            }
+        }
+        if (names.isEmpty())
+            continue;
+        QVariantMap row;
+        row.insert(QStringLiteral("track"), tr("Track %1").arg(i + 1));
+        row.insert(QStringLiteral("label"), names.join(tr(" + ")));
+        audio_track_rows_.append(row);
+    }
+
+    // Names the target BEFORE the list, so a source list that is two rows long
+    // here and three rows long there reads as a consequence of a stated fact
+    // rather than as a row that comes and goes.
+    audio_target_summary_ =
+        audio_track_rows_.isEmpty()
+            ? tr("Recording %1 · no audio").arg(target)
+            : tr("Recording %1 · %2")
+                  .arg(target,
+                       audio_track_rows_.size() == 1 ? tr("1 track") : tr("%1 tracks").arg(audio_track_rows_.size()));
+
+    QStringList mic_parts;
+    if (!microphoneConnected()) {
+        mic_parts.append(tr("No microphone connected"));
+    } else {
+        const QString device = microphoneDeviceId();
+        for (const QVariant& option : microphone_devices_) {
+            const QVariantMap entry = option.toMap();
+            if (entry.value(QStringLiteral("value")).toString() == device) {
+                mic_parts.append(entry.value(QStringLiteral("label")).toString());
+                break;
+            }
+        }
+        if (mic_parts.isEmpty())
+            mic_parts.append(tr("No microphone selected"));
+        mic_parts.append(micGainDb() == 0.0 ? tr("no gain") : tr("%1 dB gain").arg(micGainDb(), 0, 'f', 0));
+        mic_parts.append(mic_post_processing_summary_ == tr("Off") ? tr("no processing")
+                                                                   : mic_post_processing_summary_);
+    }
+    microphone_summary_ = mic_parts.join(QStringLiteral(" · "));
 }
 
 bool SettingsAdapter::showRecordingOverlay() const noexcept {
@@ -2223,9 +2372,6 @@ void SettingsAdapter::setOutputFolderFromUrl(const QUrl& url) {
         return;
     }
     setOutputFolder(url.toLocalFile());
-}
-void SettingsAdapter::rescanAudioDevices() {
-    emit audioRescanRequested();
 }
 void SettingsAdapter::checkForUpdates() {
     emit checkForUpdatesRequested();

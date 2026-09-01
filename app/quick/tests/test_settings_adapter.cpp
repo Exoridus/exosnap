@@ -12,7 +12,9 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <thread>
@@ -246,6 +248,33 @@ TEST_F(SettingsAdapterTest, NativeQuantizerHintNamesTheSelectedCodecsOwnParamete
     EXPECT_EQ(adapter.nativeQuantizerHint(), QStringLiteral("HEVC QP 19 of 51"));
 }
 
+TEST_F(SettingsAdapterTest, BitDepthAndChromaRelevanceFollowTheSelectedCodec) {
+    // Relevance is a codec question, so it survives the current configuration:
+    // a codec that carries neither 10-bit nor 4:4:4 hides both rows instead of
+    // showing them permanently unavailable.
+    adapter.setVideoCodec(static_cast<int>(VideoCodec::Av1));
+    EXPECT_TRUE(adapter.bitDepthRelevant());
+    EXPECT_FALSE(adapter.chromaRelevant());
+
+    adapter.setVideoCodec(static_cast<int>(VideoCodec::Hevc));
+    EXPECT_TRUE(adapter.bitDepthRelevant());
+    EXPECT_TRUE(adapter.chromaRelevant());
+
+    adapter.setVideoCodec(static_cast<int>(VideoCodec::H264));
+    EXPECT_FALSE(adapter.bitDepthRelevant());
+    EXPECT_TRUE(adapter.chromaRelevant());
+}
+
+TEST_F(SettingsAdapterTest, ChromaRowStaysRelevantWhileTenBitBlocksIt) {
+    // The one conflict the row is there to explain: 4:4:4 is unavailable at
+    // 10-bit and fixable in place, so the row stays.
+    adapter.setVideoCodec(static_cast<int>(VideoCodec::Hevc));
+    adapter.setBitDepth(static_cast<int>(capability::BitDepth::Bit10));
+
+    EXPECT_TRUE(adapter.chromaRelevant());
+    EXPECT_FALSE(adapter.chromaHint().isEmpty());
+}
+
 TEST_F(SettingsAdapterTest, MaxFrameRateClampsConfiguredRateAndOptions) {
     adapter.setFrameRate(240);
     ASSERT_EQ(adapter.frameRate(), 240);
@@ -287,6 +316,83 @@ TEST_F(SettingsAdapterTest, AudioSummaryListsEnabledSourcesInProductOrder) {
     adapter.setMicrophoneEnabled(true);
 
     EXPECT_EQ(adapter.audioSummary(), QStringLiteral("System audio · Microphone"));
+}
+
+// The row labels are stable across a target change; the hints are what move.
+// Sys is App's complement, so "System audio" is a different recording under a
+// window target than under a display one, and only these lines say so.
+TEST_F(SettingsAdapterTest, SystemAudioHintNamesTheWholeMixOnADisplayTarget) {
+    auto config = adapter.config();
+    config.audio.target_kind = capability::CaptureTargetKind::Display;
+    adapter.setConfig(config);
+    adapter.setCaptureTargetName(QStringLiteral("Display 1"));
+
+    EXPECT_FALSE(adapter.appAudioVisible());
+    EXPECT_EQ(adapter.systemAudioHint(), QStringLiteral("Everything the computer plays"));
+    EXPECT_TRUE(adapter.appAudioHint().isEmpty());
+    EXPECT_TRUE(adapter.audioTargetSummary().startsWith(QStringLiteral("Recording Display 1")));
+}
+
+TEST_F(SettingsAdapterTest, SystemAudioHintExcludesTheCapturedProcessOnAWindowTarget) {
+    auto config = adapter.config();
+    config.audio.target_kind = capability::CaptureTargetKind::Window;
+    adapter.setConfig(config);
+    adapter.setCaptureTargetName(QStringLiteral("Chrome"));
+
+    EXPECT_TRUE(adapter.appAudioVisible());
+    EXPECT_EQ(adapter.appAudioHint(), QStringLiteral("Chrome only"));
+    EXPECT_EQ(adapter.systemAudioHint(), QStringLiteral("Everything except Chrome"));
+}
+
+// A hint that reads "Everything except " is worse than a generic one, and the
+// Settings page can be built before a capture target has been resolved.
+TEST_F(SettingsAdapterTest, HintsFallBackToTheTargetKindBeforeANameArrives) {
+    auto config = adapter.config();
+    config.audio.target_kind = capability::CaptureTargetKind::Window;
+    adapter.setConfig(config);
+    adapter.setCaptureTargetName(QString());
+
+    EXPECT_EQ(adapter.systemAudioHint(), QStringLiteral("Everything except the captured window"));
+}
+
+// The ledger reads the engine's plan back rather than re-deriving it, so a
+// merged track has to show both of its sources and not a generic label.
+TEST_F(SettingsAdapterTest, TrackLedgerReportsTheResolvedPlan) {
+    auto config = adapter.config();
+    config.audio.target_kind = capability::CaptureTargetKind::Display;
+    adapter.setConfig(config);
+    adapter.setSystemAudioEnabled(true);
+    adapter.setMicrophoneEnabled(true);
+    adapter.setMicrophoneSeparate(false);
+
+    const QVariantList rows = adapter.audioTrackRows();
+    ASSERT_EQ(rows.size(), 1);
+    EXPECT_EQ(rows.at(0).toMap().value(QStringLiteral("track")).toString(), QStringLiteral("Track 1"));
+    EXPECT_EQ(rows.at(0).toMap().value(QStringLiteral("label")).toString(),
+              QStringLiteral("System audio + Microphone"));
+
+    adapter.setMicrophoneSeparate(true);
+    ASSERT_EQ(adapter.audioTrackRows().size(), 2);
+    EXPECT_EQ(adapter.audioTrackRows().at(1).toMap().value(QStringLiteral("label")).toString(),
+              QStringLiteral("Microphone"));
+}
+
+TEST_F(SettingsAdapterTest, TrackLedgerIsEmptyWhenNoSourceIsEnabled) {
+    adapter.setAppAudioEnabled(false);
+    adapter.setSystemAudioEnabled(false);
+    adapter.setMicrophoneEnabled(false);
+
+    EXPECT_TRUE(adapter.audioTrackRows().isEmpty());
+    EXPECT_TRUE(adapter.audioTargetSummary().endsWith(QStringLiteral("no audio")));
+}
+
+// The microphone card states the missing device once in its own summary instead
+// of leaving four greyed rows to imply it.
+TEST_F(SettingsAdapterTest, MicrophoneSummaryReportsAMissingDevice) {
+    adapter.setMicrophoneDevices({});
+
+    EXPECT_FALSE(adapter.microphoneConnected());
+    EXPECT_EQ(adapter.microphoneSummary(), QStringLiteral("No microphone connected"));
 }
 
 // ---------------------------------------------------------------------------
@@ -785,6 +891,33 @@ TEST_F(SettingsAdapterTest, ApplyingOutputValidationPublishesTheInlineFolderMess
 
     adapter.applyOutputFolderValidation(FolderValidationResult::Ok);
     EXPECT_TRUE(adapter.folderValidation().isEmpty());
+}
+
+TEST_F(SettingsAdapterTest, MeterReadingsAreDecibelsAndTheBarIsDerivedFromThem) {
+    adapter.setMeters(-30.0, 0.0, -std::numeric_limits<double>::infinity());
+
+    EXPECT_DOUBLE_EQ(adapter.systemMeterDb(), -30.0);
+    EXPECT_DOUBLE_EQ(adapter.systemMeter(), 0.5);
+    EXPECT_DOUBLE_EQ(adapter.appMeterDb(), 0.0);
+    EXPECT_DOUBLE_EQ(adapter.appMeter(), 1.0);
+
+    // Silence is not the bottom of the scale. A source producing nothing and one
+    // sitting at -60 dB are different facts, and the row prints them differently.
+    EXPECT_TRUE(std::isinf(adapter.microphoneMeterDb()));
+    EXPECT_DOUBLE_EQ(adapter.microphoneMeter(), 0.0);
+}
+
+TEST_F(SettingsAdapterTest, UnchangedMeterReadingsDoNotRepublish) {
+    SignalCounter meters(adapter, &SettingsAdapter::metersChanged);
+
+    const double silence = -std::numeric_limits<double>::infinity();
+    adapter.setMeters(-12.0, silence, silence);
+    adapter.setMeters(-12.0, silence, silence);
+
+    // The infinity that means silence compares equal to itself here; a plain
+    // fuzzy compare has no answer for it, and republishing on every tick would
+    // rebuild three rows at meter cadence.
+    EXPECT_EQ(meters.count(), 1);
 }
 
 } // namespace

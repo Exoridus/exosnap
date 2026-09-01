@@ -93,6 +93,7 @@ qt_add_qml_module(exosnap
         ExoSegmentedControl.qml
         ExoSelect.qml
         ExoLevelMeter.qml
+        ExoLevelMeterScale.qml
         ExoSettingRow.qml
         ExoSlider.qml
         ExoStatusPill.qml
@@ -125,7 +126,10 @@ qt_add_qml_module(exosnap
         SettingsAudioEncodingSection.qml
         SettingsAudioSourcesSection.qml
         SettingsAudioSourceRow.qml
+        SettingsAudioTrackLedger.qml
+        SettingsMicrophoneSection.qml
         SettingsChromaSlider.qml
+        SettingsDestinationChip.qml
         SettingsDeveloperSection.qml
         SettingsFormatSection.qml
         SettingsHotkeysSection.qml
@@ -198,6 +202,8 @@ qt_add_qml_module(exosnap
         ReadyFrameCaptureService.h
         RecordWebcamFrameProvider.cpp
         RecordWebcamFrameProvider.h
+        CaptureTargetStillProvider.cpp
+        CaptureTargetStillProvider.h
         OverlayAdapter.cpp
         OverlayAdapter.h
         RecordViewModelAdapter.cpp
@@ -371,6 +377,8 @@ target_sources(exosnap
         ${PROJECT_SOURCE_DIR}/app/services/WgcCaptureHubService.h
         ${PROJECT_SOURCE_DIR}/app/services/WgcSourceProducer.cpp
         ${PROJECT_SOURCE_DIR}/app/services/WgcSourceProducer.h
+        ${PROJECT_SOURCE_DIR}/app/services/CaptureTargetStillService.cpp
+        ${PROJECT_SOURCE_DIR}/app/services/CaptureTargetStillService.h
         # QCR-110: the production producer of exclusive-fullscreen evidence. Both
         # the Diagnostics card and the recording-admission gate read its snapshot;
         # without it in the shipping target the gate is inert.
@@ -1207,6 +1215,8 @@ exosnap_add_gtest(
         RecordViewModelAdapter.h
         RecordWebcamFrameProvider.cpp
         RecordWebcamFrameProvider.h
+        CaptureTargetStillProvider.cpp
+        CaptureTargetStillProvider.h
     LIBRARIES
         Qt6::Core
         Qt6::Quick
@@ -1224,6 +1234,29 @@ target_include_directories(record_viewmodel_qml_adapter_tests
 target_compile_definitions(record_viewmodel_qml_adapter_tests
     PRIVATE
         NOMINMAX
+)
+
+exosnap_add_gtest(
+    NAME capture_target_still_tests
+    TEST_PREFIX quick_stills.
+    SOURCES
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_capture_target_still_service.cpp
+        ${PROJECT_SOURCE_DIR}/app/services/CaptureTargetStillService.cpp
+        ${PROJECT_SOURCE_DIR}/app/services/CaptureTargetStillService.h
+        ${PROJECT_SOURCE_DIR}/app/services/WgcSourceProducer.cpp
+        ${PROJECT_SOURCE_DIR}/app/services/WgcSourceProducer.h
+    LIBRARIES
+        exosnap_app_log_test_support
+        Qt6::Core
+        Qt6::Gui
+        exosnap_engine
+        d3d11.lib
+        dxgi.lib
+        runtimeobject.lib
+        ole32.lib
+    # A real desktop session with DWM composition: the probe window has to be
+    # rendered before it can be captured.
+    LABELS live
 )
 
 exosnap_add_gtest(
@@ -1499,6 +1532,8 @@ exosnap_add_gtest(
         ${EXOSNAP_QUICK_TESTS_DIR}/test_webcam_chroma_key.cpp
         RecordWebcamFrameProvider.cpp
         RecordWebcamFrameProvider.h
+        CaptureTargetStillProvider.cpp
+        CaptureTargetStillProvider.h
     LIBRARIES
         Qt6::Core
         Qt6::Gui
@@ -1579,6 +1614,8 @@ exosnap_add_gtest(
         ${PROJECT_SOURCE_DIR}/app/diagnostics/ZipWriter.cpp
         ${PROJECT_SOURCE_DIR}/app/services/SupportBundleService.cpp
         ${PROJECT_SOURCE_DIR}/app/services/SupportBundleService.h
+        ${PROJECT_SOURCE_DIR}/app/models/CaptureTargetPresentation.cpp
+        ${PROJECT_SOURCE_DIR}/app/services/DisplayNumbering.cpp
     LIBRARIES
         Qt6::Core
         Qt6::Gui

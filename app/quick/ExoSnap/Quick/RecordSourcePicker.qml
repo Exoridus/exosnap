@@ -32,6 +32,31 @@ Popup {
         return all.length >= 0 ? recordViewModel.filteredTargetOptions("window", filterQuery) : []
     }
 
+    // The identities the two grids currently have inside their viewport, in
+    // layout order. The still service walks exactly this list, so a card that
+    // is scrolled away stops costing a capture.
+    function identitiesInView(grid: GridView, rows: var): var {
+        if (!grid || !grid.visible || grid.cellHeight <= 0 || rows.length === 0)
+            return []
+        const columns = Math.max(1, root.pickerColumns)
+        const firstRow = Math.max(0, Math.floor(grid.contentY / grid.cellHeight))
+        const lastRow = Math.floor((grid.contentY + grid.height - 1) / grid.cellHeight)
+        const identities = []
+        for (let index = firstRow * columns; index <= (lastRow + 1) * columns - 1 && index < rows.length; ++index)
+            identities.push(rows[index].identity)
+        return identities
+    }
+
+    function publishVisibleTargets(): void {
+        let identities = []
+        if (root.visible && root.currentTab === 0)
+            identities = root.identitiesInView(displaysGrid, root.recordViewModel.displayTargetOptions)
+        else if (root.visible && root.currentTab === 1)
+            identities = root.identitiesInView(windowsGrid, root.windowRows)
+        // The Region tab's cards are preset rectangles, not capture targets.
+        root.recordViewModel.setVisibleTargetIdentities(identities)
+    }
+
     // Two columns while the popup is wide, one when the window narrows.
     function columnsForWidth(availableWidth: real): int {
         return availableWidth >= 520 ? 2 : 1
@@ -40,12 +65,39 @@ Popup {
 
     parent: Overlay.overlay
     width: Math.min(680, parent ? parent.width - 48 : 680)
-    height: Math.min(560, parent ? parent.height - 48 : 560)
+    // Tall enough for a long window list, no taller than what is being shown:
+    // two monitors under a 560 box left a third of the surface empty, which
+    // reads as a list that failed to load rather than as a short one. The floor
+    // keeps the dialog from resizing noticeably as the tabs are stepped through.
+    readonly property real preferredHeight: pickerContent.implicitHeight + topPadding + bottomPadding
+    height: Math.min(560, Math.max(420, preferredHeight), parent ? parent.height - 48 : 560)
     anchors.centerIn: parent
     modal: true
+    // The style's own modal veil lightens the shell in the dark palette, which
+    // reads as the window coming forward rather than stepping back. Same scrim
+    // token as the in-window overlay cards, so every modal recedes alike.
+    Overlay.modal: Rectangle {
+        color: ExoTheme.overlayScrim
+    }
     focus: true
     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
     padding: ExoTheme.spacingXl
+
+    // Through the delay like every other trigger: the page that just became
+    // current has no laid-out viewport yet, and publishing an empty set in that
+    // frame would stop the service and restart it one frame later.
+    onCurrentTabChanged: visiblePublishDelay.restart()
+    onPickerColumnsChanged: visiblePublishDelay.restart()
+    onWindowRowsChanged: visiblePublishDelay.restart()
+
+    Timer {
+        id: visiblePublishDelay
+
+        // Scrolling emits contentY continuously; republishing on every pixel
+        // would reorder the round robin faster than a single grab completes.
+        interval: 150
+        onTriggered: root.publishVisibleTargets()
+    }
 
     onAboutToShow: {
         pendingTargetIndex = recordViewModel.selectedTargetIndex
@@ -53,10 +105,15 @@ Popup {
         pendingPresetKey = ""
         filterQuery = ""
         windowSearch.text = ""
-        // Opening refreshes the cached stills of the unselected targets; the
-        // selected target stays on its live preview instead.
-        recordViewModel.requestTargetStillRefresh()
     }
+
+    // Not onAboutToShow: the popup is not visible yet there, and the grids have
+    // no height to derive a viewport from.
+    onOpened: visiblePublishDelay.restart()
+
+    // The service is told the picker is gone rather than being left to poll a
+    // hidden popup: a closed picker must not capture anything at all.
+    onClosed: recordViewModel.setVisibleTargetIdentities([])
 
     function commit(): void {
         if (currentTab === 2) {
@@ -105,35 +162,19 @@ Popup {
     }
 
     contentItem: ColumnLayout {
+        id: pickerContent
+
         spacing: ExoTheme.spacingLg
 
-        RowLayout {
+        Label {
+            text: qsTr("Choose capture source")
+            textFormat: Text.PlainText
+            color: ExoTheme.text
             Layout.fillWidth: true
-
-            Label {
-                text: qsTr("Choose capture source")
-                textFormat: Text.PlainText
-                color: ExoTheme.text
-                Layout.fillWidth: true
-                font {
-                    family: ExoTheme.sansFamily
-                    pixelSize: ExoTheme.fontPageTitle
-                    weight: Font.DemiBold
-                }
-            }
-
-            ExoButton {
-                id: refreshButton
-
-                objectName: "refreshButton"
-                text: qsTr("Refresh previews")
-                quiet: true
-                compact: true
-                onClicked: root.recordViewModel.requestTargetStillRefresh()
-                ToolTip.visible: hovered
-                ToolTip.delay: 400
-                ToolTip.text: qsTr("Refresh the cached preview stills")
-                Accessible.name: qsTr("Refresh previews")
+            font {
+                family: ExoTheme.sansFamily
+                pixelSize: ExoTheme.fontPageTitle
+                weight: Font.DemiBold
             }
         }
 
@@ -153,6 +194,9 @@ Popup {
             visible: root.currentTab === 0
             Layout.fillWidth: true
             Layout.fillHeight: true
+            // The grid's own content is the only thing here that knows how tall
+            // this tab wants to be; a GridView reports no implicit height.
+            Layout.preferredHeight: displaysGrid.contentHeight
 
             GridView {
                 id: displaysGrid
@@ -167,6 +211,8 @@ Popup {
                 cellWidth: Math.floor((width - cardGap * (root.pickerColumns - 1)) / root.pickerColumns)
                 cellHeight: 148
                 boundsBehavior: Flickable.StopAtBounds
+                onContentYChanged: visiblePublishDelay.restart()
+                onHeightChanged: visiblePublishDelay.restart()
                 ScrollBar.vertical: ExoScrollBar {
                 }
 
@@ -225,6 +271,8 @@ Popup {
                     cellWidth: Math.floor((width - cardGap * (root.pickerColumns - 1)) / root.pickerColumns)
                     cellHeight: 148
                     boundsBehavior: Flickable.StopAtBounds
+                    onContentYChanged: visiblePublishDelay.restart()
+                    onHeightChanged: visiblePublishDelay.restart()
                     ScrollBar.vertical: ExoScrollBar {
                         objectName: "windowsScrollBar"
                     }
@@ -380,7 +428,11 @@ Popup {
             Image {
                 anchors.fill: parent
                 source: card.thumbnailSource
-                visible: card.thumbnailState === "ready"
+                visible: card.thumbnailState !== "placeholder"
+                // A target that stopped being capturable keeps its last still,
+                // dimmed. Clearing it would resize nothing but would make every
+                // minimized window flicker back to a glyph and out again.
+                opacity: card.thumbnailState === "stale" ? 0.45 : 1.0
                 fillMode: Image.PreserveAspectCrop
                 asynchronous: true
                 sourceSize: Qt.size(width, height)
@@ -389,7 +441,7 @@ Popup {
             ExoGlyph {
                 anchors.centerIn: parent
                 kind: card.kind === "window" ? ExoGlyph.AppWindow : ExoGlyph.Display
-                visible: card.thumbnailState !== "ready"
+                visible: card.thumbnailState === "placeholder"
                 color: ExoTheme.textDim
                 width: 22
                 height: 22

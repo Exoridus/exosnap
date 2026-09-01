@@ -344,6 +344,23 @@ TEST(DiagnosticsAdapterTest, SelectedCaptureTargetDrivesTheSourceTile) {
     EXPECT_EQ(tile.value(QStringLiteral("sub")).toString(), QStringLiteral("Some Game"));
 }
 
+TEST(DiagnosticsAdapterTest, MonitorTargetTileNamesTheDisplayNotTheDevicePath) {
+    EnsureApplication();
+    DiagnosticsAdapter adapter;
+    adapter.setDiagnosticConfig(MakeCaptureConfig());
+
+    exosnap::engine::CaptureTarget monitor;
+    monitor.kind = exosnap::engine::CaptureTarget::Kind::Monitor;
+    monitor.native_id = 0x1;
+    monitor.description = R"(\\.\DISPLAY1)";
+    adapter.setSelectedCaptureTarget(monitor);
+
+    const QVariantMap tile = TileWithKey(adapter.tiles(), QStringLiteral("target"));
+    ASSERT_FALSE(tile.isEmpty());
+    EXPECT_EQ(tile.value(QStringLiteral("value")).toString(), QStringLiteral("Screen"));
+    EXPECT_EQ(tile.value(QStringLiteral("sub")).toString(), QStringLiteral("Desktop - Display 1"));
+}
+
 TEST(DiagnosticsAdapterTest, InvalidProfileProducesBlockerCards) {
     EnsureApplication();
     DiagnosticsAdapter adapter;

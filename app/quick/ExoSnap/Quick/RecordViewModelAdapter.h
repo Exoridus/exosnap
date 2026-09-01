@@ -3,6 +3,7 @@
 #include <QHash>
 #include <QObject>
 #include <QRectF>
+#include <QSet>
 #include <QString>
 #include <QStringList>
 #include <QVariantList>
@@ -15,6 +16,10 @@
 namespace exosnap {
 
 class RecordViewModel;
+
+namespace engine {
+struct CaptureTarget;
+}
 
 namespace quick {
 
@@ -240,7 +245,14 @@ class RecordViewModelAdapter : public QObject {
     // keeps the banner it already had; the callers that state a tone are the
     // ones whose message is not a warning.
     void setNoticeText(QString text, QString tone = QStringLiteral("warning"));
+    // The identity the picker rows carry. Public because the still service is
+    // told which identities are visible and has to resolve them back to the
+    // capture targets they name.
+    [[nodiscard]] static QString TargetIdentity(const exosnap::engine::CaptureTarget& target);
     void setTargetStill(QString identity, QString source);
+    // A target whose grab failed twice in a row. Its last still is kept and the
+    // card marks it stale; a target that never had one stays a placeholder.
+    void setTargetStillUnavailable(const QString& identity);
     void synchronize();
 
     Q_INVOKABLE void requestStart();
@@ -266,7 +278,10 @@ class RecordViewModelAdapter : public QObject {
     Q_INVOKABLE void requestOpenRecent(const QString& file_path);
     Q_INVOKABLE void requestRevealRecent(const QString& file_path);
     Q_INVOKABLE void clearNotice();
-    Q_INVOKABLE void requestTargetStillRefresh();
+    // The identities the picker currently has on screen, in layout order. The
+    // still service walks exactly this set, so scrolling past a card is what
+    // stops paying for it.
+    Q_INVOKABLE void setVisibleTargetIdentities(const QStringList& identities);
 
   signals:
     void savingProgressChanged();
@@ -278,7 +293,7 @@ class RecordViewModelAdapter : public QObject {
     void webcamFrameChanged();
     void targetOptionsChanged();
     void recentRecordingsChanged();
-    void targetStillRefreshRequested(QString identity, int target_index, QString kind);
+    void visibleTargetIdentitiesChanged(QStringList identities);
     void metersChanged();
     void changed();
 
@@ -341,6 +356,8 @@ class RecordViewModelAdapter : public QObject {
     QVariantList display_target_options_;
     QVariantList window_target_options_;
     QHash<QString, QString> target_stills_;
+    QSet<QString> stale_target_stills_;
+    QStringList visible_target_identities_;
     QString selected_target_identity_;
     bool selected_target_available_ = false;
     QString source_name_;

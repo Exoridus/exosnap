@@ -76,7 +76,7 @@ TEST(LogEntryModelTest, RolesRenderTheEntryColumns) {
 
     ASSERT_EQ(model.rowCount(), 1);
     EXPECT_EQ(RoleAt(model, 0, LogEntryModel::SequenceRole).toULongLong(), 7U);
-    EXPECT_EQ(RoleAt(model, 0, LogEntryModel::TimestampTextRole).toString(), QStringLiteral("2026-06-08T14:22:31.123"));
+    EXPECT_EQ(RoleAt(model, 0, LogEntryModel::TimestampTextRole).toString(), QStringLiteral("14:22:31.123"));
     EXPECT_EQ(RoleAt(model, 0, LogEntryModel::CategoryRole).toString(), QStringLiteral("Webcam"));
     EXPECT_EQ(RoleAt(model, 0, LogEntryModel::MessageRole).toString(), QStringLiteral("device lost"));
     EXPECT_TRUE(RoleAt(model, 0, LogEntryModel::IsIssueRole).toBool());

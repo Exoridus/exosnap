@@ -62,6 +62,7 @@ Item {
         "format": formatSection,
         "quality": qualitySection,
         "audio": audioSourcesSection,
+        "microphone": microphoneSection,
         "audio-encoding": audioEncodingSection,
         "output": outputSection,
         "webcam": webcamSection,
@@ -96,6 +97,40 @@ Item {
     function focusOutputDestination(): void {
         outputFocusTimer.remainingAttempts = 8;
         outputFocusTimer.restart();
+    }
+
+    // The card is the unit a deep link arrives at. Output is the one destination
+    // that also focuses a field, because its action exists so the user can retype
+    // a folder; the others only have to be found.
+    function sectionForFocusTarget(target: int): var {
+        switch (target) {
+        case SettingsAdapter.OutputDestination:
+            return outputSection;
+        case SettingsAdapter.AudioSources:
+            return audioSourcesSection;
+        case SettingsAdapter.Format:
+            return formatSection;
+        case SettingsAdapter.Webcam:
+            return webcamSection;
+        case SettingsAdapter.Presence:
+            return presenceSection;
+        case SettingsAdapter.Appearance:
+            return appearanceSection;
+        case SettingsAdapter.Hotkeys:
+            return hotkeysSection;
+        case SettingsAdapter.Updates:
+            return updatesSection;
+        }
+        return null;
+    }
+
+    // The mark says "this one" for a beat. Without it a jump into a card that was
+    // already on screen scrolls nothing and looks like nothing happened.
+    function landOnSection(section: var): void {
+        if (!section)
+            return;
+        scroll.revealItem(section);
+        section.land();
     }
 
     // The Settings page is loaded lazily, and its proxy-based layout settles
@@ -141,6 +176,9 @@ Item {
         target: root.settings
 
         function onSettingsFocusRequested(target: int): void {
+            root.landOnSection(root.sectionForFocusTarget(target));
+            // Focus AFTER the reveal: focusing first scrolls the field into view
+            // on its own terms and undoes the position the reveal just set.
             if (target === SettingsAdapter.OutputDestination)
                 root.focusOutputDestination();
         }
@@ -188,6 +226,15 @@ Item {
 
     SettingsAudioSourcesSection {
         id: audioSourcesSection
+
+        settings: root.settings
+        stacked: root.stackedRows
+        visible: false
+        Layout.fillWidth: true
+    }
+
+    SettingsMicrophoneSection {
+        id: microphoneSection
 
         settings: root.settings
         stacked: root.stackedRows
@@ -328,6 +375,7 @@ Item {
                     LayoutItemProxy { target: presetSection }
                     LayoutItemProxy { target: formatSection }
                     LayoutItemProxy { target: audioSourcesSection }
+                    LayoutItemProxy { target: microphoneSection }
                     LayoutItemProxy { target: outputSection }
                     LayoutItemProxy { target: presenceSection }
                     LayoutItemProxy { target: hotkeysSection }
@@ -373,6 +421,7 @@ Item {
 
                             LayoutItemProxy { target: formatSection }
                             LayoutItemProxy { target: audioSourcesSection }
+                            LayoutItemProxy { target: microphoneSection }
                             LayoutItemProxy { target: outputSection }
                             LayoutItemProxy { target: presenceSection }
                             LayoutItemProxy { target: hotkeysSection }

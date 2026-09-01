@@ -1,84 +1,152 @@
 import QtQuick
+import QtQuick.Controls
 import QtQuick.Layouts
 
-// One audio source: include it, and whether it starts its own track or mixes
-// onto the track above. Track resolution itself stays engine-side; this row only
-// submits the two editable flags.
-ExoSettingRow {
+// One audio source as a block, not as a settings row.
+//
+// A source carries four statements -- included or not, which source it is, what
+// it is reading, and which track it lands on -- and four statements do not fit
+// in one control slot. The header spends the width on three FIXED columns, and
+// the level gets a line of its own underneath at the card's full width, where a
+// meter is wide enough to be read as a measurement.
+//
+// Track resolution itself stays engine-side; this block only submits the two
+// editable flags.
+ColumnLayout {
     id: root
 
+    required property string label
     required property bool sourceEnabled
     required property bool separateTrack
     required property bool locked
     required property real meterLevel
+    required property bool stacked
+    // The same reading as the meter, in dBFS. Negative infinity means the source
+    // produced nothing at all, which is not the same statement as a level at the
+    // bottom of the scale and is not printed as one.
+    required property real meterDb
+    property string hint: ""
     // False only for a source row that renders as the topmost VISIBLE row:
-    // "mix into previous track" is meaningless when there is no visible row above it.
+    // "mix into previous track" is meaningless when there is no visible row above
+    // it. The column keeps its width regardless -- see below.
     property bool showMixOption: true
 
     signal sourceToggled(bool value)
     signal separateToggled(bool value)
 
-    // No default hint: "Include this source" restated the switch beside it on
-    // every row. The one row that owes an explanation (Application audio, while
-    // a window is not the capture target) passes its own.
-    // Switch, level meter and mix column share the value side, so this row takes
-    // the wide slot. Sized against both ends: narrower and the meter squeezes
-    // back into a stub, wider and this row's own explanatory line ("Only while
-    // capturing a window") elides away.
-    controlWidth: ExoTheme.controlSlotWide
+    readonly property bool _live: root.sourceEnabled && !root.locked
+
+    spacing: ExoTheme.spacingSm
 
     RowLayout {
-        spacing: ExoTheme.spacingSm
+        spacing: ExoTheme.spacingMd
         Layout.fillWidth: true
 
         ExoSwitch {
             checked: root.sourceEnabled
             enabled: !root.locked
             Accessible.name: qsTr("Enable %1").arg(root.label)
-            Layout.alignment: Qt.AlignVCenter
+            Layout.alignment: Qt.AlignTop
             onToggledByUser: value => root.sourceToggled(value)
         }
 
-        // The meter absorbs the row's leftover width, which is also what keeps the
-        // checkbox after it flush against the card's right edge. It used to be a
-        // fixed 80 px with an empty spacer doing that job, and the result read as
-        // a stub with a hole beside it rather than as a level indicator.
-        ExoLevelMeter {
-            level: root.meterLevel
-            // Not `sourceEnabled` alone: a receding row (Application audio while
-            // a window is not the target) is enabled in settings and contributing
-            // nothing, and a live-looking meter there claims otherwise.
-            active: root.sourceEnabled && !root.locked
+        ColumnLayout {
+            spacing: 0
             Layout.fillWidth: true
-            Layout.minimumWidth: 72
-            // Capped, or in the stacked layout the bar stretches across the whole
-            // card and stops reading as a meter beside its switch.
-            Layout.maximumWidth: 180
-            Layout.alignment: Qt.AlignVCenter
+
+            Label {
+                text: root.label
+                textFormat: Text.PlainText
+                elide: Text.ElideRight
+                color: ExoTheme.text
+                Layout.fillWidth: true
+                font {
+                    family: ExoTheme.sansFamily
+                    pixelSize: ExoTheme.fontBody
+                }
+            }
+
+            // The hint is where the MEANING lives. "System audio" records
+            // everything on a display target and everything except one process on
+            // a window target; the label stays put across that change so the row
+            // keeps its identity, and this line says which of the two it is.
+            Label {
+                text: root.hint
+                textFormat: Text.PlainText
+                elide: Text.ElideRight
+                visible: root.hint !== ""
+                color: root._live ? ExoTheme.textMuted : ExoTheme.textDim
+                Layout.fillWidth: true
+                font {
+                    family: ExoTheme.sansFamily
+                    pixelSize: ExoTheme.fontCaption
+                }
+            }
         }
 
-        // The mix column occupies its width in EVERY row, whether or not this row
-        // can offer the option, because the meter before it is what absorbs the
-        // leftover. Letting it collapse made one card show the same level at two
-        // different bar lengths -- and made a bar change length under the user,
-        // since System audio only offers the option while Application audio is
-        // visible. A meter whose length depends on its neighbour is not a meter.
-        Item {
-            Layout.preferredWidth: mixOption.implicitWidth
-            Layout.fillHeight: true
-
-            ExoCheckBox {
-                id: mixOption
-
-                text: qsTr("Mix into previous track")
-                checked: !root.separateTrack
-                enabled: !root.locked && root.sourceEnabled
-                visible: root.showMixOption
-                anchors.right: parent.right
-                anchors.verticalCenter: parent.verticalCenter
-                Accessible.name: qsTr("Mix %1 into the previous track").arg(root.label)
-                onToggledByUser: value => root.separateToggled(!value)
+        // Column two: the reading. Fixed width and tabular figures, so every row
+        // on the card shares one right edge whatever it is showing.
+        Label {
+            text: !root._live ? "—"
+                : root.meterDb === Number.NEGATIVE_INFINITY ? qsTr("-∞ dB")
+                : qsTr("%1 dB").arg(root.meterDb.toFixed(1))
+            textFormat: Text.PlainText
+            horizontalAlignment: Text.AlignRight
+            color: root._live ? ExoTheme.textSecondary : ExoTheme.textDim
+            Layout.preferredWidth: 68
+            Layout.alignment: Qt.AlignTop
+            Accessible.name: qsTr("%1 level").arg(root.label)
+            font {
+                family: ExoTheme.monoFamily
+                pixelSize: ExoTheme.fontSecondary
             }
+        }
+
+        // Column three: the track assignment. It keeps its width even for a row
+        // that cannot offer it -- `visible` would let the reading column slide
+        // sideways depending on which rows happen to be shown, and a placeholder
+        // dash in an empty slot is a value that means nothing.
+        ExoCheckBox {
+            text: qsTr("Mix into previous track")
+            checked: !root.separateTrack
+            // Not focusable while it is holding the column open: an invisible
+            // control in the tab order is a stop the eye cannot account for.
+            enabled: root.showMixOption && !root.locked && root.sourceEnabled
+            opacity: root.showMixOption ? 1 : 0
+            visible: !root.stacked || root.showMixOption
+            Layout.preferredWidth: 172
+            Layout.alignment: Qt.AlignTop
+            Accessible.ignored: !root.showMixOption
+            Accessible.name: qsTr("Mix %1 into the previous track").arg(root.label)
+            onToggledByUser: value => {
+                if (root.showMixOption)
+                    root.separateToggled(!value);
+            }
+        }
+    }
+
+    // No meter for a source that is off. A greyed bar the width of the card
+    // states nothing and takes exactly as much of the eye as the live one beside
+    // it; the row collapsing to its header is the honest shape of "not recording
+    // this".
+    ColumnLayout {
+        spacing: ExoTheme.spacingXs
+        visible: root._live
+        Layout.fillWidth: true
+
+        ExoLevelMeter {
+            level: root.meterLevel
+            active: root._live
+            // Twice the dock's count: this meter has a whole card to itself, and
+            // the extra width buys resolution rather than wider cells.
+            segmentCount: 32
+            implicitHeight: 12
+            Layout.fillWidth: true
+        }
+
+        ExoLevelMeterScale {
+            active: root._live
+            Layout.fillWidth: true
         }
     }
 }

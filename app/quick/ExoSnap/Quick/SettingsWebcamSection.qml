@@ -14,12 +14,55 @@ ExoCard {
     readonly property bool webcamEditable: !root.settings.controlsLocked && root.settings.webcamAvailable
 
     title: qsTr("Webcam")
-    subtitle: qsTr("Position and size are configured in the Record preview.")
+    subtitle: qsTr("Position and size are set in the Record preview.")
 
-    ExoNotice {
-        text: qsTr("No webcam was detected. Connect one and press Rescan on the Record page.")
+    // The empty state has the shape of the filled one. A notice where the picture
+    // will be means the card jumps into a different geometry the moment a camera
+    // is plugged in; a box that is already the right size just fills up.
+    //
+    // Not a caution tone either: no camera connected is a fact about the machine,
+    // not a problem this product measured, and the palette reserves amber for
+    // things that are actually wrong.
+    Rectangle {
+        color: ExoTheme.surfaceRaised
+        border.width: 1
+        border.color: ExoTheme.line
+        radius: ExoTheme.radiusMd
         visible: !root.settings.webcamAvailable
         Layout.fillWidth: true
+        Layout.preferredHeight: Math.round(width * 9 / 16)
+        Layout.maximumHeight: 220
+
+        ColumnLayout {
+            anchors.centerIn: parent
+            spacing: ExoTheme.spacingXs
+
+            Label {
+                text: qsTr("No camera found")
+                textFormat: Text.PlainText
+                horizontalAlignment: Text.AlignHCenter
+                color: ExoTheme.textSecondary
+                Layout.fillWidth: true
+                font {
+                    family: ExoTheme.sansFamily
+                    pixelSize: ExoTheme.fontSecondary
+                }
+            }
+
+            // No Rescan button. Capture devices are discovered as they arrive, so
+            // a button here would offer work the product has already done.
+            Label {
+                text: qsTr("Connect a camera and it appears here")
+                textFormat: Text.PlainText
+                horizontalAlignment: Text.AlignHCenter
+                color: ExoTheme.textMuted
+                Layout.fillWidth: true
+                font {
+                    family: ExoTheme.sansFamily
+                    pixelSize: ExoTheme.fontCaption
+                }
+            }
+        }
     }
 
     ExoSettingRow {

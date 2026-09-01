@@ -17,6 +17,7 @@
 #include "diagnostics/FixActionDispatcher.h"
 #include "diagnostics/PresentSnapshotOverlay.h"
 #include "diagnostics/StartupClock.h"
+#include "models/AudioMeterScale.h"
 #include "models/CompletedRecording.h"
 #include "models/EditContextFactory.h"
 #include "models/FrameRateLimits.h"
@@ -69,6 +70,7 @@
 #include <cmath>
 #include <exception>
 #include <iterator>
+#include <limits>
 #include <optional>
 #include <utility>
 #include <windows.h>
@@ -145,11 +147,37 @@ QString formatLabel(const RecordingPresetConfig& config) {
              ui::containerLabel(config.output.container));
 }
 
+// Harness-only, env-configured (never input synthesis): three readings in dBFS,
+// "system,app,mic", so a capture can show the meter at a stated loudness instead
+// of at whatever this machine happened to be playing. "-inf" is silence.
+std::optional<std::array<double, 3>> HarnessMeterDbfs() {
+    static const std::optional<std::array<double, 3>> seeded = []() -> std::optional<std::array<double, 3>> {
+        const QString raw = QString::fromLocal8Bit(qgetenv("EXOSNAP_VISUAL_METER_DBFS")).trimmed();
+        if (raw.isEmpty())
+            return std::nullopt;
+        const QStringList parts = raw.split(QLatin1Char(','), Qt::SkipEmptyParts);
+        if (parts.size() != 3)
+            return std::nullopt;
+        std::array<double, 3> values{};
+        for (qsizetype index = 0; index < 3; ++index) {
+            const QString field = parts.at(index).trimmed();
+            if (field.compare(QLatin1String("-inf"), Qt::CaseInsensitive) == 0) {
+                values[static_cast<std::size_t>(index)] = -std::numeric_limits<double>::infinity();
+                continue;
+            }
+            bool ok = false;
+            const double value = field.toDouble(&ok);
+            if (!ok)
+                return std::nullopt;
+            values[static_cast<std::size_t>(index)] = value;
+        }
+        return values;
+    }();
+    return seeded;
+}
+
 double dockLevel(float rms) {
-    if (rms <= 0.0f)
-        return 0.0;
-    const double db = std::max(-60.0, 20.0 * std::log10(static_cast<double>(rms)));
-    return std::clamp((db + 60.0) / 60.0, 0.0, 1.0);
+    return models::MeterLevelFromDbfs(models::MeterDbfsFromRms(rms));
 }
 
 bool isSystemRow(const exosnap::engine::AudioSourceRow& row) {
@@ -307,7 +335,8 @@ QuickApplication::QuickApplication()
     : settings_(settings_store_.Load()), recovery_service_(recovery_manifest_store_),
       about_view_model_(buildAboutInfo(settings_)), record_view_model_adapter_(&record_view_model_),
       overlay_adapter_(&record_view_model_), recording_coordinator_(std::make_unique<RecordingCoordinator>()),
-      webcam_frame_provider_(new RecordWebcamFrameProvider), edit_tile_provider_(new EditTimelineTileProvider) {
+      webcam_frame_provider_(new RecordWebcamFrameProvider), target_still_provider_(new CaptureTargetStillProvider),
+      edit_tile_provider_(new EditTimelineTileProvider) {
     // QCR-201. Latched here for the same reason preset_store_repaired_ is: the
     // load runs in the constructor, long before initializeNotifications() exists
     // to report it. The write block itself needs no latch — it follows from
@@ -417,6 +446,12 @@ QuickApplication::~QuickApplication() {
         window_geometry_->flush();
     if (!webcam_provider_registered_)
         delete webcam_frame_provider_;
+    // Stopped before the provider it feeds is destroyed: the worker emits into
+    // this object, and a queued emission from a joined thread is one that never
+    // arrives rather than one that arrives late.
+    target_still_service_.stop();
+    if (!target_still_provider_registered_)
+        delete target_still_provider_;
     if (!edit_tile_provider_registered_)
         delete edit_tile_provider_;
 }
@@ -847,6 +882,43 @@ void QuickApplication::initializeRecordWorkflow() {
             return CaptureTargetSnapshot{std::move(*seeded)};
         return CaptureTargetSnapshot{recording_coordinator_->EnumerateTargets()};
     });
+    // Target stills for the source picker. The service runs only while the
+    // picker reports visible cards, and the identities it is handed are resolved
+    // here rather than in QML because the capture target is engine state.
+    QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::visibleTargetIdentitiesChanged,
+                     &record_view_model_adapter_, [this](const QStringList& identities) {
+                         if (identities.isEmpty()) {
+                             target_still_service_.setVisibleTargets({});
+                             target_still_service_.stop();
+                             return;
+                         }
+                         // Built in the order QML listed them, which is the order the
+                         // cards are laid out in: the first pass after opening then
+                         // fills the grid top down instead of in target-list order.
+                         std::vector<CaptureTargetStillService::Request> requests;
+                         requests.reserve(static_cast<std::size_t>(identities.size()));
+                         for (const QString& identity : identities) {
+                             for (const exosnap::engine::CaptureTarget& target : record_view_model_.targets) {
+                                 if (RecordViewModelAdapter::TargetIdentity(target) != identity)
+                                     continue;
+                                 requests.push_back({identity, target});
+                                 break;
+                             }
+                         }
+                         target_still_service_.setVisibleTargets(std::move(requests));
+                         target_still_service_.start();
+                     });
+    QObject::connect(&target_still_service_, &CaptureTargetStillService::stillReady, &record_view_model_adapter_,
+                     [this](const QString& identity, const QImage& image) {
+                         if (target_still_provider_ == nullptr)
+                             return;
+                         record_view_model_adapter_.setTargetStill(
+                             identity, target_still_provider_->submitStill(identity, image));
+                     });
+    QObject::connect(
+        &target_still_service_, &CaptureTargetStillService::stillUnavailable, &record_view_model_adapter_,
+        [this](const QString& identity) { record_view_model_adapter_.setTargetStillUnavailable(identity); });
+
     capture_target_notifier_.start();
     record_view_model_.targets = capture_target_notifier_.currentSnapshot().targets;
     ++record_view_model_.targets_revision;
@@ -915,11 +987,6 @@ void QuickApplication::initializeRecordWorkflow() {
                      [this](const CaptureTargetSnapshot& snapshot, DiscoveryReason reason) {
                          refreshCaptureTargets(snapshot, reason);
                      });
-    QObject::connect(&shell_adapter_, &ShellAdapter::sourcePickerOpenChanged, &record_view_model_adapter_, [this]() {
-        if (shell_adapter_.sourcePickerOpen())
-            record_view_model_adapter_.requestTargetStillRefresh();
-    });
-
     // A monitor arriving, leaving or being re-arranged also re-orders the DXGI
     // outputs and can change what each one reports, so the display facts are
     // re-read on the same event rather than left at what startup measured.
@@ -1140,6 +1207,10 @@ void QuickApplication::reapplyVisualScenarios() {
         (void)applyRecordVisualScenario(pending_record_visual_state_);
     if (!pending_overlay_visual_state_.isEmpty())
         (void)applyOverlayVisualScenario(pending_overlay_visual_state_);
+    // Seeded meters are published from here as well: nothing else calls
+    // updateMeters() in a capture run, because no meter service is started.
+    if (HarnessMeterDbfs())
+        updateMeters();
     reapplying_visual_scenarios_ = false;
 }
 
@@ -1227,6 +1298,19 @@ void QuickApplication::synchronizeRecordState() {
     const bool mkv = live_config_.output.container == capability::Container::Matroska ||
                      live_config_.output.container == capability::Container::WebM;
     record_view_model_adapter_.setFormatText(formatLabel(live_config_));
+    // The Settings audio card scopes its sources to the capture target by name:
+    // "Everything except Chrome" is a different recording from "Everything the
+    // computer plays", and the two are the same row.
+    {
+        const int target_index = record_view_model_.selected_target_index;
+        // The label the Record page shows, not the raw device path: "Display 1",
+        // not "\\.\DISPLAY1".
+        settings_adapter_.setCaptureTargetName(
+            target_index >= 0 && target_index < static_cast<int>(record_view_model_.targets.size())
+                ? QString::fromStdString(RecordViewModel::TargetLabelFromCaptureTarget(
+                      record_view_model_.targets[static_cast<std::size_t>(target_index)]))
+                : QString());
+    }
     record_view_model_adapter_.setDeviceState(microphone_available_, webcam_available_, live_config_.webcam.enabled,
                                               webcam_error_);
     record_view_model_adapter_.setWebcamPresentation(
@@ -1362,6 +1446,13 @@ void QuickApplication::refreshCaptureTargets(const CaptureTargetSnapshot& snapsh
     }
     record_view_model_.targets = snapshot.targets;
     ++record_view_model_.targets_revision;
+    if (target_still_provider_ != nullptr) {
+        QSet<QString> live;
+        live.reserve(static_cast<qsizetype>(record_view_model_.targets.size()));
+        for (const exosnap::engine::CaptureTarget& target : record_view_model_.targets)
+            live.insert(RecordViewModelAdapter::TargetIdentity(target));
+        target_still_provider_->retainOnly(live);
+    }
     record_view_model_.target_display_names.clear();
     record_view_model_.target_display_names.reserve(record_view_model_.targets.size());
     for (const auto& target : record_view_model_.targets) {
@@ -1439,8 +1530,6 @@ void QuickApplication::refreshCaptureTargets(const CaptureTargetSnapshot& snapsh
                                   .arg(QLatin1StringView(DiscoveryReasonName(reason))));
     updateMeterServices();
     synchronizeRecordState();
-    if (shell_adapter_.sourcePickerOpen())
-        record_view_model_adapter_.requestTargetStillRefresh();
 }
 
 void QuickApplication::updateOutputTargetContext(const exosnap::engine::CaptureTarget& target) {
@@ -1636,6 +1725,13 @@ void QuickApplication::toggleSource(const QString& key) {
 }
 
 void QuickApplication::updateMeters() {
+    if (const auto seeded = HarnessMeterDbfs()) {
+        const auto& db = *seeded;
+        record_view_model_adapter_.setMeters(models::MeterLevelFromDbfs(db[0]), models::MeterLevelFromDbfs(db[1]),
+                                             models::MeterLevelFromDbfs(db[2]));
+        settings_adapter_.setMeters(db[0], db[1], db[2]);
+        return;
+    }
     const bool session = record_view_model_.state == UiRecordingState::Recording ||
                          record_view_model_.state == UiRecordingState::Paused ||
                          record_view_model_.state == UiRecordingState::Stopping;
@@ -1650,7 +1746,11 @@ void QuickApplication::updateMeters() {
                              : session ? record_view_model_.audio_rms_mic
                                        : 0.0f;
     record_view_model_adapter_.setMeters(dockLevel(system), dockLevel(app), dockLevel(microphone));
-    settings_adapter_.setMeters(dockLevel(system), dockLevel(app), dockLevel(microphone));
+    // Settings takes the decibels: its rows state the reading as a number beside
+    // the bar, and deriving that back out of a 0..1 position would be a second
+    // opinion on the same signal.
+    settings_adapter_.setMeters(models::MeterDbfsFromRms(system), models::MeterDbfsFromRms(app),
+                                models::MeterDbfsFromRms(microphone));
 }
 
 void QuickApplication::updateWebcamOverlay(const QRectF& normalized_rect) {
@@ -2301,8 +2401,6 @@ void QuickApplication::wireSettingsCommands() {
                      [this](const QString& path) { exportSelectedPreset(path); });
     QObject::connect(&settings_adapter_, &SettingsAdapter::importPresetsRequested, &settings_adapter_,
                      [this](const QString& path) { importPresetsFromFile(path); });
-    QObject::connect(&settings_adapter_, &SettingsAdapter::audioRescanRequested, &settings_adapter_,
-                     [this]() { audio_notifier_.rescan(); });
 }
 
 void QuickApplication::syncConfigMirrors() {
@@ -2468,6 +2566,21 @@ void QuickApplication::refreshPresetState() {
                                      !dirty_field.empty());
 }
 
+// A preset import or export is started from Settings and is over the moment it
+// fails, so it is a toast rather than a Record-page notice: the notice would
+// have appeared on a page the user was not looking at, and stayed there until
+// they went to dismiss it. The report action is offered because the failure is
+// the store's, not something the user can correct.
+void QuickApplication::publishPresetTransferFailure(const QString& title, const QString& error) {
+    notifications::NotificationEvent event;
+    event.type = notifications::NotificationType::PresetTransferFailed;
+    event.title = title;
+    event.body = error.isEmpty() ? QStringLiteral("The preset file could not be read or written.") : error;
+    event.action = notifications::NotificationAction::SendReport;
+    event.action_payload = QStringLiteral("%1 · %2").arg(title, event.body);
+    notifications_adapter_.manager().Enqueue(std::move(event));
+}
+
 void QuickApplication::exportSelectedPreset(const QString& path) {
     if (path.isEmpty())
         return;
@@ -2477,8 +2590,7 @@ void QuickApplication::exportSelectedPreset(const QString& path) {
     preset.config = StripEnvironmentFields(live_config_);
     QString error;
     if (!RecordingPresetStore::ExportPresetToFile(preset, path, &error))
-        record_view_model_adapter_.setNoticeText(QStringLiteral("Preset export failed · %1").arg(error),
-                                                 QStringLiteral("error"));
+        publishPresetTransferFailure(QStringLiteral("Preset export failed"), error);
 }
 
 void QuickApplication::importPresetsFromFile(const QString& path) {
@@ -2492,8 +2604,7 @@ void QuickApplication::importPresetsFromFile(const QString& path) {
     QString error;
     const QVector<RecordingPreset> imported = RecordingPresetStore::ImportPresetsFromFile(path, existing_ids, &error);
     if (imported.isEmpty()) {
-        record_view_model_adapter_.setNoticeText(QStringLiteral("Preset import failed · %1").arg(error),
-                                                 QStringLiteral("error"));
+        publishPresetTransferFailure(QStringLiteral("Preset import failed"), error);
         return;
     }
     for (const RecordingPreset& preset : imported)
@@ -2629,6 +2740,10 @@ void QuickApplication::persistLiveConfig() {
     event.type = notifications::NotificationType::SettingsSaveFailed;
     event.title = QStringLiteral("Settings could not be saved");
     event.body = error.isEmpty() ? QStringLiteral("The change may be lost when ExoSnap restarts.") : error;
+    // A failed write is the store's problem, not a setting the user can correct,
+    // so the only action worth offering is the one that tells us about it.
+    event.action = notifications::NotificationAction::SendReport;
+    event.action_payload = QStringLiteral("%1 · %2").arg(event.title, event.body);
     notifications_adapter_.manager().Enqueue(std::move(event));
 }
 
@@ -3442,20 +3557,28 @@ void QuickApplication::initializeRecovery() {
     surface_arbiter_.requestRecovery();
 }
 
+// Pressing a Send-report control IS the consent: granted here, then forwarded as
+// a scrubbed non-fatal report. Paths inside `detail` are stripped inside
+// crash_capture, never here.
+//
+// One function for every surface that offers it. A second consent path would be
+// a second place for the meaning of consent to drift from what crash_capture
+// enforces.
+void QuickApplication::sendNonFatalReport(const QString& phase, const QString& detail) {
+    crash_capture::GiveUserConsent();
+    crash_capture::ReportNonFatalError(phase.toStdString(), detail.toStdString());
+    diagnostics::AppLog::info(QStringLiteral("report"), QStringLiteral("user sent error report phase=%1").arg(phase));
+}
+
 void QuickApplication::initializeRecordingError() {
     QObject::connect(
         &recording_error_adapter_, &RecordingErrorAdapter::sendReportRequested, &recording_error_adapter_, [this]() {
             const models::RecordingFailureReport& report = recording_error_adapter_.report();
-            // Clicking Send IS the consent: granted here, attached
-            // with allow-listed codec context, then forwarded as a
-            // scrubbed non-fatal report. Paths inside `detail` are
-            // stripped inside crash_capture, never here.
-            crash_capture::GiveUserConsent();
+            // The codec context is this surface's own: only a recording failure
+            // knows which container and codecs were in play.
             crash_capture::SetEncoderContext("nvenc", report.container.toStdString(), report.video_codec.toStdString(),
                                              report.audio_codec.toStdString());
-            crash_capture::ReportNonFatalError(report.phase.toStdString(), report.detail.toStdString());
-            diagnostics::AppLog::info(QStringLiteral("record.failure"),
-                                      QStringLiteral("user sent error report phase=%1").arg(report.phase));
+            sendNonFatalReport(report.phase, report.detail);
         });
 
     QObject::connect(&recording_error_adapter_, &RecordingErrorAdapter::openLogsRequested, &recording_error_adapter_,
@@ -3905,6 +4028,12 @@ void QuickApplication::dispatchNotificationAction(notifications::NotificationAct
         // desktop toast is its own always-on-top window and takes clicks that
         // the modal scrim inside the shell never sees.
         surface_arbiter_.requestRecovery();
+        break;
+    case NotificationAction::SendReport:
+        // The phase names the failing subsystem, the payload is the detail line
+        // the notification already showed. Nothing is collected that the user
+        // was not looking at when they pressed the button.
+        sendNonFatalReport(QStringLiteral("notification"), payload);
         break;
     case NotificationAction::None:
     case NotificationAction::Discard:
@@ -4462,6 +4591,10 @@ bool QuickApplication::load(bool no_activate) {
     if (!webcam_provider_registered_) {
         engine_.addImageProvider(QStringLiteral("record-webcam"), webcam_frame_provider_);
         webcam_provider_registered_ = true;
+    }
+    if (!target_still_provider_registered_) {
+        engine_.addImageProvider(CaptureTargetStillProvider::providerId(), target_still_provider_);
+        target_still_provider_registered_ = true;
     }
     if (!edit_tile_provider_registered_) {
         engine_.addImageProvider(QLatin1String(kEditTileProviderId), edit_tile_provider_);

@@ -123,6 +123,8 @@ int NotificationManager::DismissIntervalMs(NotificationType type) noexcept {
         return kDismissMs_FrameCaptured;
     case NotificationType::CaptureActionFailed:
         return kDismissMs_CaptureActionFailed;
+    case NotificationType::PresetTransferFailed:
+        return kDismissMs_PresetTransferFailed;
     case NotificationType::RecoveryProtectionUnavailable:
         return kDismissMs_RecoveryProtectionUnavailable;
     case NotificationType::SettingsLoadFailed:

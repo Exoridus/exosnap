@@ -65,7 +65,7 @@ ExoCard {
     ExoSettingRow {
         label: qsTr("Video bit depth")
         stacked: root.stacked
-        visible: root.settings.expertMode
+        visible: root.settings.expertMode && root.settings.bitDepthRelevant
         Layout.fillWidth: true
 
         ExoSelect {
@@ -83,7 +83,7 @@ ExoCard {
         info: qsTr("How much colour detail is kept beside the brightness detail. 4:2:0 stores colour at quarter resolution and is what every player and editor expects. 4:4:4 keeps colour at full resolution, which is visible on coloured text and thin interface lines, and needs 8-bit H.264 or HEVC.")
         warning: root.settings.chromaHint
         stacked: root.stacked
-        visible: root.settings.expertMode
+        visible: root.settings.expertMode && root.settings.chromaRelevant
         Layout.fillWidth: true
 
         ExoSelect {
@@ -117,7 +117,7 @@ ExoCard {
         info: qsTr("What happens when the captured display is in HDR. Tone-mapping produces an SDR file that looks correct everywhere. Native HDR10 keeps the full range but needs HEVC or AV1 and a player that understands it.")
         warning: root.settings.hdrHint
         stacked: root.stacked
-        visible: root.settings.expertMode && root.settings.hdrRelevant
+        visible: root.settings.hdrRelevant
         Layout.fillWidth: true
 
         ExoSelect {

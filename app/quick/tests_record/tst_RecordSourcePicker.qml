@@ -52,7 +52,7 @@ TestCase {
 
     SignalSpy {
         id: stillSpy
-        signalName: "targetStillRefreshRequested"
+        signalName: "visibleTargetIdentitiesChanged"
     }
 
     function init() {
@@ -63,6 +63,10 @@ TestCase {
         selectSpy.clear();
         presetSpy.clear();
         stillSpy.clear();
+    }
+
+    function lastPublished() {
+        return stillSpy.count === 0 ? [] : stillSpy.signalArguments[stillSpy.count - 1][0];
     }
 
     function makePage() {
@@ -226,27 +230,39 @@ TestCase {
         compare(presetSpy.count, 0);
     }
 
-    function test_open_and_refresh_request_stills_for_unselected_targets() {
+    function test_open_publishes_the_visible_targets_in_layout_order() {
         let page = makePage();
-        // Opening refreshes every unselected target (the selected display:1 is
-        // never asked for a still), and the refresh control repeats that.
-        tryCompare(stillSpy, "count", 3);
-        mouseClick(pick(page, "refreshButton"));
-        tryCompare(stillSpy, "count", 6);
+        // The Displays tab is the one on screen, so only its two cards are
+        // published -- the windows behind the second tab cost nothing until the
+        // user goes there.
+        tryVerify(() => lastPublished().length === 2);
+        compare(lastPublished(), ["display:1", "display:2"]);
 
-        const ids = [];
-        for (let i = 0; i < stillSpy.signalArguments.length; ++i)
-            ids.push(stillSpy.signalArguments[i][0]);
-        verify(!ids.includes("display:1"), "the selected target is not refreshed");
-        verify(ids.includes("display:2"));
-        verify(ids.includes("window:100"));
-        verify(ids.includes("window:101"));
+        page.picker.currentTab = 1;
+        tryVerify(() => lastPublished()[0] === "window:100");
+        compare(lastPublished(), ["window:100", "window:101"]);
 
-        // The attached objects cannot be introspected from outside the button,
-        // so the accessibility contract is asserted on the label that backs the
-        // accessible name (the tooltip is declared alongside it in the source).
-        const refresh = pick(page, "refreshButton");
-        compare(refresh.text, "Refresh previews");
+        // A closed picker captures nothing at all.
+        page.picker.close();
+        tryVerify(() => lastPublished().length === 0);
+    }
+
+    function test_a_stale_still_keeps_its_image_and_its_geometry() {
+        let page = makePage();
+        recordDriver.deliverStill("display:2", "image://capture-target/display-2/1");
+        // Re-picked after every change: republishing the option rows rebuilds
+        // the delegates, so a card captured once is a stale object handle.
+        const state = () => pick(page, "targetCard-display:2").modelData.thumbnailState;
+        const box = pick(page, "displaysGrid").cellHeight;
+        tryVerify(() => state() === "ready");
+
+        recordDriver.failStill("display:2");
+        tryVerify(() => state() === "stale");
+        // The still survives the loss: nothing reverts to the placeholder glyph,
+        // and the card does not resize under it.
+        compare(pick(page, "targetCard-display:2").modelData.thumbnailSource,
+                "image://capture-target/display-2/1");
+        compare(pick(page, "displaysGrid").cellHeight, box);
     }
 
     function test_cards_reflow_from_two_columns_to_one() {
