@@ -1201,6 +1201,58 @@ TEST_F(StreamWriterTest, NonDefaultAudioFormat_OpensAndFinalizes) {
     EXPECT_TRUE(SegmentSizeIsFinite(d));
 }
 
+// --- A path the application layer already reserved. RecordingCoordinator
+//     creates the .partial artifact with CREATE_NEW before the engine starts,
+//     so for segment 0 the file the writer is asked to open already exists and
+//     is empty. `path_pre_reserved` is how the caller states that; it must not
+//     weaken the collision guard for every other path. ---
+
+TEST_F(StreamWriterTest, Open_PreReservedEmptyFile_Succeeds) {
+    {
+        std::ofstream reserve(tmp_, std::ios::binary);
+    }
+    ASSERT_TRUE(std::filesystem::exists(tmp_));
+
+    auto cfg = MakeConfig(tmp_, /*h264=*/true, /*opus=*/false);
+    cfg.path_pre_reserved = true;
+
+    MatroskaStreamWriter w;
+    ASSERT_TRUE(w.Open(cfg)) << w.error();
+    ASSERT_TRUE(w.Finalize());
+    EXPECT_FALSE(w.failed()) << w.error();
+
+    const auto d = ReadFile(tmp_);
+    EXPECT_FALSE(d.empty()) << "the reserved file must hold the rendered stream, not stay empty";
+}
+
+TEST_F(StreamWriterTest, Open_PreReservedPathThatIsMissing_Fails) {
+    ASSERT_FALSE(std::filesystem::exists(tmp_));
+
+    auto cfg = MakeConfig(tmp_, /*h264=*/true, /*opus=*/false);
+    cfg.path_pre_reserved = true;
+
+    MatroskaStreamWriter w;
+    EXPECT_FALSE(w.Open(cfg)) << "a reservation the caller claims to hold must actually be on disk";
+    EXPECT_TRUE(w.failed());
+}
+
+TEST_F(StreamWriterTest, Open_PreReservedFlagDoesNotTruncateForeignContent) {
+    const std::string sentinel_content = "not-mine";
+    {
+        std::ofstream victim(tmp_);
+        victim << sentinel_content;
+    }
+
+    MatroskaStreamWriter w;
+    EXPECT_FALSE(w.Open(MakeConfig(tmp_, /*h264=*/true, /*opus=*/false)))
+        << "without the flag the pre-existing file is still a collision";
+
+    std::ifstream check(tmp_);
+    std::string content;
+    std::getline(check, content);
+    EXPECT_EQ(content, sentinel_content);
+}
+
 // --- DurabilityFlushScheduler: pure cadence logic, no file I/O and no real
 //     timer dependency (synthetic steady_clock time points throughout). This
 //     is the unit-testable heart of the periodic durability flush added to
