@@ -1089,6 +1089,11 @@ exosnap_add_gtest(
 )
 target_include_directories(test_audio_thread_silence_fill PRIVATE src)
 target_compile_definitions(test_audio_thread_silence_fill PRIVATE NOMINMAX)
+# The fill is judged against wall time with an 80 ms tolerance, so a poll thread
+# that loses the CPU to fifteen sibling test processes reads as silence the
+# engine failed to fill. Serial rather than a wider tolerance: the tolerance is
+# what would otherwise stop noticing a real lag.
+set_tests_properties(engine.test_audio_thread_silence_fill PROPERTIES RUN_SERIAL TRUE)
 
 # Wall-clock silence-fill arithmetic (audio_silence_fill.h) — pure policy.
 exosnap_add_gtest(
