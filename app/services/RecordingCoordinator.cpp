@@ -1112,6 +1112,10 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
     }
 
     config.output_path = partial_path;
+    // partial_artifact created this path exclusively above and only releases
+    // ownership at Commit(), so the session opens the file rather than
+    // colliding with the reservation made on its behalf.
+    config.output_path_pre_reserved = true;
     config.split = ctx.split_settings;
 
     config.webcam.enabled = ctx.webcam_settings.enabled && !ctx.webcam_settings.device_id.empty();

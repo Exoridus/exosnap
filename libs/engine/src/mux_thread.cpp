@@ -251,6 +251,9 @@ void MuxThread::Run() {
 
         MatroskaStreamConfig cfg = sw_config_template;
         cfg.output_path = seg.path.string();
+        // Only segment 0 keeps the base path the caller reserved; DeriveSegmentPath
+        // mints every later one, so those are the writer's to create exclusively.
+        cfg.path_pre_reserved = index == 0 && m_state.config.output_path_pre_reserved;
         if (!seg.writer->Open(cfg)) {
             const std::string err = seg.writer->error();
             seg.writer.reset();

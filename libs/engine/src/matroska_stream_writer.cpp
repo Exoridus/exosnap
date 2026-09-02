@@ -76,21 +76,29 @@ void LogDurabilityFlushFailure(const char* message, const std::string& reason) {
 // change.
 //
 // The initial open is exclusive-create (_O_CREAT | _O_EXCL), NOT the
-// truncate-on-exists "wb+" fopen mode StdIOCallback would use. DeriveSegmentPath
-// only ever hands back a path it just confirmed does not exist; opening in
-// truncate mode here would silently overwrite a file some other writer (or a
-// leftover from a previous run) created in the gap between that probe and this
-// open (the TOCTOU window). Exclusive creation makes that race fail loudly
-// (EEXIST) through the normal Open()-failure path instead.
+// truncate-on-exists "wb+" fopen mode StdIOCallback would use. Opening in
+// truncate mode would silently overwrite a file some other writer (or a
+// leftover from a previous run) created in the gap between the caller's probe
+// and this open (the TOCTOU window). Exclusive creation makes that race fail
+// loudly (EEXIST) through the normal Open()-failure path instead.
+//
+// `pre_reserved` inverts only who performed that exclusive create. The
+// application layer reserves the .partial artifact with CREATE_NEW before the
+// engine starts, so segment 0 is handed a path whose exclusivity is already
+// established and whose file therefore exists. Demanding _O_EXCL again would
+// fail against the caller's own reservation. The open then requires the file
+// to be there (no _O_CREAT): a reservation that is claimed but absent means the
+// two sides disagree about the path, which must surface rather than be papered
+// over by creating a second file.
 class DurableFileIo final : public libebml::IOCallback {
   public:
-    explicit DurableFileIo(const std::string& path) {
+    DurableFileIo(const std::string& path, bool pre_reserved) {
+        const int flags = pre_reserved ? (_O_TRUNC | _O_RDWR | _O_BINARY) : (_O_CREAT | _O_EXCL | _O_RDWR | _O_BINARY);
         int fd = -1;
-        const errno_t open_err =
-            _sopen_s(&fd, path.c_str(), _O_CREAT | _O_EXCL | _O_RDWR | _O_BINARY, _SH_DENYNO, _S_IREAD | _S_IWRITE);
+        const errno_t open_err = _sopen_s(&fd, path.c_str(), flags, _SH_DENYNO, _S_IREAD | _S_IWRITE);
         if (open_err != 0 || fd < 0) {
-            throw std::runtime_error("Can't exclusively create file \"" + path +
-                                     "\" in mode \"wb+\": " + std::strerror(open_err));
+            const char* what = pre_reserved ? "Can't open the reserved file \"" : "Can't exclusively create file \"";
+            throw std::runtime_error(what + path + "\" in mode \"wb+\": " + std::strerror(open_err));
         }
         m_file = _fdopen(fd, "wb+");
         if (m_file == nullptr) {
@@ -231,7 +239,7 @@ bool MatroskaStreamWriter::Open(const MatroskaStreamConfig& config) {
 
     // --- Open output file ---
     try {
-        m_io = new DurableFileIo(m_config.output_path);
+        m_io = new DurableFileIo(m_config.output_path, m_config.path_pre_reserved);
     } catch (const std::exception& ex) {
         m_io = nullptr;
         Fail(std::string("DurableFileIo::open failed: ") + ex.what());

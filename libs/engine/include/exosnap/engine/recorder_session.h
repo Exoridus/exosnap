@@ -281,6 +281,12 @@ struct RecorderConfig {
     // Output file path
     std::filesystem::path output_path;
 
+    // True when output_path has already been created exclusively by the caller
+    // and that reservation is being handed to the session. It applies to
+    // segment 0 alone -- every later split segment derives a fresh path the
+    // session itself must claim.
+    bool output_path_pre_reserved = false;
+
     // Capture source
     CaptureTarget target;
 

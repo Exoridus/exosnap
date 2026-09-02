@@ -125,6 +125,12 @@ struct StreamAudioTrack {
 struct MatroskaStreamConfig {
     std::string output_path;
 
+    // True when the caller has already created output_path exclusively and is
+    // handing that reservation over. Open() then requires the file to exist and
+    // writes into it, instead of creating it itself. False keeps the
+    // exclusive-create collision guard for a path nobody has claimed yet.
+    bool path_pre_reserved = false;
+
     // Video
     std::string video_codec_id;               // "V_MPEG4/ISO/AVC" or "V_AV1"
     std::vector<uint8_t> video_codec_private; // AVCC record or AV1 config record
