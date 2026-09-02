@@ -80,6 +80,22 @@ class DxgiOdCaptureSrc {
     // Release the currently held frame. No-op if none held.
     void ReleaseFrame();
 
+    // True when the adapter/output topology has changed since Open() -- a mode
+    // switch, a hot-plug, a projection change (IDXGIFactory1::IsCurrent on the
+    // factory this source was opened with).
+    //
+    // Exists because a topology change does not always invalidate the
+    // duplication with DXGI_ERROR_ACCESS_LOST. It can also leave a duplication
+    // that still looks healthy and simply never presents again: every acquire
+    // returns DXGI_ERROR_WAIT_TIMEOUT, which is indistinguishable from a desktop
+    // that nobody is touching. Time without a frame therefore cannot be the
+    // trigger for recovery -- an idle desktop is legitimately silent for minutes
+    // -- but a timeout PLUS a changed topology is evidence, and it is what a
+    // caller should act on by reopening once. Reopen() resolves the output again
+    // and builds a new factory, so this reads false again afterwards: one
+    // recovery attempt per topology change, none at all on a static desktop.
+    [[nodiscard]] bool TopologyChangedSinceOpen() const noexcept;
+
     // Fetch the pointer (cursor) shape for the current frame.
     // Must be called while a frame is held and out_info.PointerShapeBufferSize > 0.
     bool GetFramePointerShape(DXGI_OUTDUPL_POINTER_SHAPE_INFO* out_shape_info, std::vector<uint8_t>& out_bitmap);
@@ -110,6 +126,8 @@ class DxgiOdCaptureSrc {
 
   private:
     winrt::com_ptr<IDXGIOutputDuplication> m_duplication;
+    // Factory created at Open(), kept only for its IsCurrent() topology check.
+    winrt::com_ptr<IDXGIFactory1> m_topology_factory;
     // Stable GDI device name (DXGI_OUTPUT_DESC.DeviceName, e.g. "\\.\DISPLAY2") of
     // the duplicated output, captured at Open(). Used by Reopen() to re-find the
     // output after its HMONITOR handle changes across a hot-plug. Never cleared by

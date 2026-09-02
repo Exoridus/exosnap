@@ -307,7 +307,7 @@ RecordingCoordinator::~RecordingCoordinator() {
         // this same (UI) thread before spawning the worker and the worker only
         // clears it after setting is_recording_, so at least one of the two flags
         // is observably true for the entire window in which a Stop() is needed.
-        session_.Stop();
+        session_.Stop(record_request_.load());
     }
 
     // 1) Preparation + recording worker. Terminates because the two blocking steps
@@ -765,6 +765,11 @@ bool RecordingCoordinator::StartRecording(const exosnap::engine::CaptureTarget& 
     if (is_recording_.load() || !prepare_in_flight_.compare_exchange_strong(expected, true)) {
         return false;
     }
+
+    // Mint the id before any blocking preparation step, so a stop pressed during
+    // Preparing names THIS recording and is applied to it, while a late stop from
+    // the previous one no longer matches anything.
+    record_request_.store(exosnap::engine::NextRecordRequestId());
 
     // Startable-state and capability gates (both cheap, UI-thread-local). On a
     // miss, release the in-flight flag we just claimed and reject.
@@ -1470,7 +1475,7 @@ void RecordingCoordinator::StopRecording() {
         return;
     is_paused_.store(false);
     PostStateChange(UiRecordingState::Stopping);
-    session_.Stop();
+    session_.Stop(record_request_.load());
 }
 
 void RecordingCoordinator::CancelPreparing() {
@@ -1495,7 +1500,7 @@ void RecordingCoordinator::PauseRecording() {
     if (!is_recording_ || is_paused_.load())
         return;
     is_paused_.store(true);
-    session_.Pause();
+    session_.Pause(record_request_.load());
     PostStateChange(UiRecordingState::Paused);
 }
 
@@ -1517,7 +1522,7 @@ void RecordingCoordinator::ResumeRecording() {
     if (!is_paused_.load())
         return;
     is_paused_.store(false);
-    session_.Resume();
+    session_.Resume(record_request_.load());
     PostStateChange(UiRecordingState::Recording);
 }
 
@@ -1577,7 +1582,7 @@ bool RecordingCoordinator::RequestSplit(exosnap::engine::SplitTriggerSource sour
     diagnostics::AppLog::info(QStringLiteral("split"), QStringLiteral("requested source=%1 paused=%2")
                                                            .arg(QLatin1String(SplitTriggerName(source)))
                                                            .arg(st == UiRecordingState::Paused));
-    session_.RequestSplit(source);
+    session_.RequestSplit(source, record_request_.load());
     return true;
 }
 
@@ -1873,7 +1878,7 @@ bool RecordingCoordinator::IsAppMeterRunning() const noexcept {
 
 void RecordingCoordinator::RecordingThreadProc(const exosnap::engine::RecorderConfig& config,
                                                const std::filesystem::path& output_path) {
-    auto result = session_.Record(config);
+    auto result = session_.Record(config, record_request_.load());
     is_recording_ = false;
     is_paused_.store(false);
 

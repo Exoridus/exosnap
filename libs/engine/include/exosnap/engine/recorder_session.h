@@ -635,6 +635,17 @@ struct RecorderResult {
 // RecorderSession
 // ---------------------------------------------------------------------------
 
+// Identifies one recording from the moment a caller decides to record until the
+// matching Record() call returns, so Stop() can name the recording it means.
+using RecordRequestId = uint64_t;
+
+// Matches every recording. For a caller that never overlaps a stop with the
+// preparation of a different recording.
+inline constexpr RecordRequestId kUnscopedRecordRequest = 0;
+
+// Mints an id that no other call returns. Process-wide and thread-safe.
+[[nodiscard]] RecordRequestId NextRecordRequestId() noexcept;
+
 class RecorderSession {
   public:
     RecorderSession();
@@ -652,25 +663,40 @@ class RecorderSession {
 
     // Start recording.  Blocks until Stop() is called or a fatal error occurs.
     // Returns a fully populated RecorderResult.
-    RecorderResult Record(const RecorderConfig& config);
+    //
+    // request_id scopes the call against Stop(): a caller that decides to record
+    // well before Record() actually begins (a UI that runs an async preparation
+    // phase first) passes the same id to both, so a stop meant for one recording
+    // can never reach another. kUnscopedRecordRequest opts out and matches any
+    // stop, which is what a caller with a single, strictly sequential recording
+    // wants.
+    RecorderResult Record(const RecorderConfig& config, RecordRequestId request_id = kUnscopedRecordRequest);
 
     // Thread-safe cooperative stop.  Safe to call from any thread while
     // Record() is running.  No-op if not recording.
-    void Stop();
+    //
+    // A stop that arrives before its Record() call has begun is remembered and
+    // applied to that call (the recording then ends immediately), which is why
+    // request_id matters: a remembered stop is only ever applied to the Record()
+    // carrying the same id. A stop naming a recording that has already finished
+    // is discarded instead of ending the next one.
+    void Stop(RecordRequestId request_id = kUnscopedRecordRequest);
 
     // Thread-safe pause/resume.  Safe to call from any thread while Record()
     // is running.  Workers drain their source during pause so buffers do not stall.
-    void Pause();
-    void Resume();
+    // request_id scopes the call exactly as it does for Stop().
+    void Pause(RecordRequestId request_id = kUnscopedRecordRequest);
+    void Resume(RecordRequestId request_id = kUnscopedRecordRequest);
 
     // Thread-safe request to split the recording at the next safe boundary.
     // Valid only while Record() is running (in Recording or Paused state). The
     // current segment is finalized and a new one begins with a forced keyframe;
     // capture/encode/audio continue uninterrupted. Coalesced: repeated requests
     // before the previous boundary is reached count as one. The trigger source
-    // is recorded for logging only. No-op if not recording or if the session was
-    // started without splitting wired (it is always wired; mode only gates auto).
-    void RequestSplit(SplitTriggerSource source);
+    // is recorded for logging only. No-op if not recording, if the session was
+    // started without splitting wired (it is always wired; mode only gates auto),
+    // or if request_id names a different recording (as for Stop()).
+    void RequestSplit(SplitTriggerSource source, RecordRequestId request_id = kUnscopedRecordRequest);
 
     // Register a callback invoked from the mux worker thread as each media
     // segment is finalized (including the final one). Must be set before

@@ -245,6 +245,19 @@ bool DxgiOdCaptureSrc::Open(ID3D11Device* device, HMONITOR hmonitor, std::string
         return false;
     m_device_name = matchedDesc.DeviceName;
 
+    // Topology watch (see TopologyChangedSinceOpen). A factory reports IsCurrent()
+    // false once the adapter/output set it enumerated has changed, which is the
+    // only honest signal that a silent duplication may be pointing at a topology
+    // that no longer exists. A factory that cannot be created leaves the watch
+    // unarmed -- the check then reports "unchanged" and costs nothing.
+    m_topology_factory = nullptr;
+    {
+        winrt::com_ptr<IDXGIFactory1> watch;
+        if (SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(watch.put())))) {
+            m_topology_factory = watch;
+        }
+    }
+
     // HDR facts of the active output (IDXGIOutput6::GetDesc1), read before
     // duplicating so the format request can depend on the display's HDR state.
     // hdr_active is only true in a PQ/BT.2020 colour space — an SDR-mode display
@@ -337,6 +350,7 @@ void DxgiOdCaptureSrc::Close() {
         m_frame_held = false;
     }
     m_duplication = nullptr;
+    m_topology_factory = nullptr;
     m_width = 0;
     m_height = 0;
     m_refresh_rate_hz = 0;
@@ -399,6 +413,10 @@ bool DxgiOdCaptureSrc::TryAcquireFrame(uint32_t timeout_ms, ID3D11Texture2D** ou
         *out_texture = tex.detach();
     m_frame_held = true;
     return true;
+}
+
+bool DxgiOdCaptureSrc::TopologyChangedSinceOpen() const noexcept {
+    return m_topology_factory && m_topology_factory->IsCurrent() == FALSE;
 }
 
 void DxgiOdCaptureSrc::ReleaseFrame() {

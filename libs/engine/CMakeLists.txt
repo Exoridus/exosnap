@@ -1381,6 +1381,26 @@ exosnap_add_gtest(
 )
 target_include_directories(test_mux_annexb_conversion_failure PRIVATE src)
 
+# A mux stopped before the encoders produced their headers must exit quietly:
+# it is the first worker to notice a missing cause, never the cause itself.
+exosnap_add_gtest(
+    NAME test_mux_start_without_headers
+    TEST_PREFIX engine.
+    SOURCES tests/test_mux_start_without_headers.cpp
+    LIBRARIES exosnap_engine
+)
+target_include_directories(test_mux_start_without_headers PRIVATE src)
+
+# A session that never captured a frame must name the capture (or the stop that
+# beat it), not the first consumer that missed what the capture never produced.
+exosnap_add_gtest(
+    NAME test_session_outcome
+    TEST_PREFIX engine.
+    SOURCES tests/test_session_outcome.cpp
+    LIBRARIES exosnap_engine
+)
+target_include_directories(test_session_outcome PRIVATE src)
+
 # Pure GPU-timestamp resolution math (tick->ms, disjoint / wrap / uncalibrated
 # handling) behind the real-GPU-time pipeline stages. No D3D11 dependency.
 exosnap_add_gtest(

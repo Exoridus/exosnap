@@ -24,4 +24,20 @@ enum class OdAcquireKind : uint8_t {
     return OdAcquireKind::Ignorable;
 }
 
+// Whether a poll that produced no desktop frame should enter the duplication
+// recovery hold (the one ACCESS_LOST uses) instead of being taken for an idle
+// desktop.
+//
+// A display mode or topology change does not reliably invalidate a duplication:
+// it can leave one that keeps returning DXGI_ERROR_WAIT_TIMEOUT forever, which
+// looks exactly like a desktop nobody is touching. Elapsed time cannot separate
+// the two -- an idle desktop is legitimately silent for minutes, and a recovery
+// driven by "no frame for N seconds" would rebuild the duplication of a
+// perfectly healthy static desktop over and over. Changed topology is the
+// evidence that does separate them, and reopening clears it, so recovery runs
+// once per change and never on a static desktop.
+[[nodiscard]] constexpr bool ShouldRecoverIdleOdAcquire(bool already_recovering, bool topology_changed) noexcept {
+    return !already_recovering && topology_changed;
+}
+
 } // namespace exosnap::engine
