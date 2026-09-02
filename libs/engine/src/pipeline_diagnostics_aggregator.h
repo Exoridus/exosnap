@@ -398,7 +398,8 @@ class PipelineDiagnosticsAggregator {
     // Audio (AudioThread)
     void SetAudioFormat(uint32_t sample_rate, uint32_t channels) noexcept;
     void OnAudioQueueDepth(uint32_t depth) noexcept;
-    void OnAudioDiscontinuity() noexcept;
+    // gap_frames is the measured length of the outage, in source frames.
+    void OnAudioDiscontinuity(uint32_t gap_frames) noexcept;
     // Device hot-swap health for one audio track (ADR 0046): how many of the
     // track's capture sources are currently degraded (endpoint lost, silent) out
     // of its total. Level-based (the current state, not an event), reported each
@@ -526,6 +527,8 @@ class PipelineDiagnosticsAggregator {
     uint32_t audio_queue_depth_ = 0;
     uint32_t audio_queue_peak_ = 0;
     uint64_t audio_discontinuities_ = 0;
+    uint64_t audio_discontinuity_frames_total_ = 0;
+    uint32_t audio_discontinuity_frames_longest_ = 0;
     // Per-track degraded/total capture-source counts (ADR 0046). Array size
     // mirrors CodecPrivateData::kMaxAudioTracks; summed in BuildSnapshot.
     std::array<uint32_t, 3> audio_degraded_sources_{};

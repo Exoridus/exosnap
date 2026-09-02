@@ -153,6 +153,15 @@ QByteArray BuildSessionReportJson(const SessionReportInputs& inputs) {
 
         counters[QStringLiteral("audio_discontinuities")] =
             MetricOrUnavailable(static_cast<double>(s.audio.discontinuities), s.audio.discontinuity_availability);
+        // Milliseconds, not frames: the acceptance criterion is how much audio a
+        // listener lost, which a frame count cannot state without the sample rate.
+        const double disc_rate = s.audio.sample_rate > 0 ? static_cast<double>(s.audio.sample_rate) : 0.0;
+        counters[QStringLiteral("audio_discontinuity_ms_total")] = MetricOrUnavailable(
+            disc_rate > 0.0 ? static_cast<double>(s.audio.discontinuity_frames_total) * 1000.0 / disc_rate : 0.0,
+            disc_rate > 0.0 ? s.audio.discontinuity_availability : MetricAvailability::Unavailable);
+        counters[QStringLiteral("audio_discontinuity_ms_longest")] = MetricOrUnavailable(
+            disc_rate > 0.0 ? static_cast<double>(s.audio.discontinuity_frames_longest) * 1000.0 / disc_rate : 0.0,
+            disc_rate > 0.0 ? s.audio.discontinuity_availability : MetricAvailability::Unavailable);
 
         counters[QStringLiteral("encoder_submitted")] = static_cast<double>(s.video_encoder.frames_submitted);
         counters[QStringLiteral("encoder_encoded")] = static_cast<double>(s.video_encoder.frames_encoded);

@@ -2070,7 +2070,33 @@ function Get-ReleaseSoakVerdict {
     }
 
     $counters = Get-ReleaseSnapshotValue -Object $Report -Path 'counters'
-    foreach ($path in @('audio_discontinuities', 'mux_failures', 'encoder_keyframe_prediction_mismatches',
+
+    # Audio outages are judged by the time a listener lost, not by how often the
+    # OS fell behind. A machine under real load -- which is the normal case for a
+    # game recording -- will miss buffers, and the engine answers each miss with
+    # exactly as much silence, keeping the track aligned with video. Demanding
+    # zero of those would fail the product for behaving correctly. What must stay
+    # small is the total gap and the worst single one: many sub-millisecond gaps
+    # are inaudible, one half-second dropout is not.
+    $discTotalMs = Get-ReleaseSnapshotValue -Object $counters -Path 'audio_discontinuity_ms_total'
+    $discLongestMs = Get-ReleaseSnapshotValue -Object $counters -Path 'audio_discontinuity_ms_longest'
+    $discCount = Get-ReleaseSnapshotValue -Object $counters -Path 'audio_discontinuities'
+    if ($null -eq $discTotalMs -or $null -eq $discLongestMs) {
+        $problems += 'the audio discontinuity duration counters are absent from the report'
+    }
+    else {
+        # 0.1% of the recording, and no single gap past a syllable.
+        $budgetMs = $ExpectedSeconds * 1000.0 * 0.001
+        if ([double]$discTotalMs -gt $budgetMs) {
+            $problems += ("audio lost ${discTotalMs} ms across $discCount outage(s), over the " +
+                "${budgetMs} ms budget for a ${ExpectedSeconds}s recording")
+        }
+        if ([double]$discLongestMs -gt 120.0) {
+            $problems += "the longest single audio outage was ${discLongestMs} ms (audible dropout)"
+        }
+    }
+
+    foreach ($path in @('mux_failures', 'encoder_keyframe_prediction_mismatches',
             'frames_dropped.processing_failure', 'frames_dropped.backpressure')) {
         $value = Get-ReleaseSnapshotValue -Object $counters -Path $path
         if ($null -eq $value) { $problems += "counters.$path is absent from the report"; continue }
@@ -2094,7 +2120,8 @@ function Get-ReleaseSoakVerdict {
 
     $drift = Get-ReleaseSnapshotValue -Object $counters -Path 'av_drift_ms'
     $peak = Get-ReleaseSnapshotValue -Object $counters -Path 'peak_av_drift_ms'
-    $reported = "av_drift_ms $drift, peak $peak (device clock residual, reported not asserted)"
+    $reported = ("av_drift_ms $drift, peak $peak (device clock residual, reported not asserted); " +
+        "audio outages $discCount totalling $discTotalMs ms, longest $discLongestMs ms")
 
     if ($problems.Count -gt 0) {
         return @{ Result = 'FAIL'; Message = ($problems -join '; ') + "; $reported" }

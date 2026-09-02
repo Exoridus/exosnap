@@ -19,6 +19,25 @@ namespace exosnap::engine {
 // beyond this is treated as a position glitch and clamped rather than honored.
 inline constexpr uint64_t kMaxDiscontinuityGapSeconds = 10;
 
+// Whether a DATA_DISCONTINUITY flag describes lost time.
+//
+// The flag means "the time since the last device position is not continuous",
+// and the device raises it for state transitions as readily as for a real
+// underrun. Two of those cases carry no lost time at all: the first packet of a
+// stream (and the first after a reconnect, which resets the tracking) has no
+// previous position to be discontinuous with, and a flag whose device position
+// did not move forward spans nothing. ComputeDiscontinuityGapFrames() answers 0
+// for both, so nothing is repaired -- and a counter that reports them anyway
+// contradicts the repair path it sits next to, opening ordinary recordings with
+// an outage that never happened.
+//
+// The measured gap is therefore the single source of truth: reportable exactly
+// when the timeline lost frames. Callers pass the gap that
+// ComputeDiscontinuityGapFrames() returned for this packet.
+inline bool IsReportableDiscontinuity(bool discontinuity, uint32_t gap_frames) noexcept {
+    return discontinuity && gap_frames > 0;
+}
+
 // Length (in frames) of the capture gap that precedes a packet.
 //   discontinuity            — the packet carried DATA_DISCONTINUITY
 //   have_expected_position   — a previous packet established the expected position

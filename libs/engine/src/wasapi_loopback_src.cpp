@@ -49,9 +49,10 @@ bool WasapiLoopbackSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_
     buffer_acquired_ = true;
     last_frames_ = numFrames;
 
-    const bool discontinuity = (captureFlags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY) != 0;
-    const uint32_t gap_frames = ComputeDiscontinuityGapFrames(discontinuity, device_position_tracked_,
+    const bool discontinuity_flag = (captureFlags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY) != 0;
+    const uint32_t gap_frames = ComputeDiscontinuityGapFrames(discontinuity_flag, device_position_tracked_,
                                                               expected_device_position_, devicePos, SampleRate());
+    const bool discontinuity = IsReportableDiscontinuity(discontinuity_flag, gap_frames);
     device_position_tracked_ = true;
     expected_device_position_ = devicePos + numFrames;
 

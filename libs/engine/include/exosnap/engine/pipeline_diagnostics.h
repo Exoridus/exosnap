@@ -249,7 +249,13 @@ struct AudioDiagnostics {
     uint64_t bytes_encoded = 0;
     uint32_t queue_depth = 0; // WASAPI pending-frame proxy
     uint32_t queue_peak = 0;
-    uint64_t discontinuities = 0; // coarse drop signal (data-discontinuity flags)
+    uint64_t discontinuities = 0; // outages the device reported and the timeline lost frames to
+    // Audio time lost to those outages, and the longest single one. The count
+    // alone cannot say whether a listener notices: many sub-millisecond gaps and
+    // one half-second dropout are the same number. Silence of exactly this
+    // length was written in their place, so the track stays aligned with video.
+    uint64_t discontinuity_frames_total = 0;
+    uint32_t discontinuity_frames_longest = 0;
     MetricAvailability discontinuity_availability = MetricAvailability::Available;
     uint32_t sample_rate = 0;
     uint32_t channels = 0;

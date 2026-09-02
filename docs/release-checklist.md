@@ -422,8 +422,16 @@ Tooling and detailed reference: `docs/dev/soak-and-recovery-drills.md` §§1–2
       start/middle/end plus a waveform scan for crackles/discontinuities. Confirm the session report
       written at stop — `%LOCALAPPDATA%\ExoSnap\logs\reports\session-<recording_session_id>.json`
       (newest of the last 10 kept) — shows sane `counters.av_drift_ms` / `counters.peak_av_drift_ms`
-      / `counters.duration_skew_ms`, `counters.audio_discontinuities` and `counters.mux_failures`
-      both at 0, and every entry in `segments` marked `finalized`. Additionally assert:
+      / `counters.duration_skew_ms` and `counters.mux_failures` at 0, and every entry in `segments`
+      marked `finalized`.
+
+      Audio outages are judged by lost time, not by their count. A machine under real load misses
+      capture buffers, and the engine answers each miss with exactly as much silence, so the track
+      stays aligned with video and only that much audio is missing. Requiring
+      `counters.audio_discontinuities == 0` would therefore fail the product for handling load
+      correctly. Assert instead that `counters.audio_discontinuity_ms_total` stays under 0.1 % of
+      the recording duration and that `counters.audio_discontinuity_ms_longest` stays at or below
+      120 ms; the count remains informative, never a criterion. Additionally assert:
   - `audio.resampler_drain[*].undrained_frames == 0` (every track that drained),
   - `audio.degraded_occurred == false`,
   - `counters.frames_dropped.processing_failure == 0`,

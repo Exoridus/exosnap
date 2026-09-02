@@ -789,6 +789,8 @@ function New-HealthySoakReport {
         }
         counters = [pscustomobject]@{
             audio_discontinuities = 0
+            audio_discontinuity_ms_total = 0
+            audio_discontinuity_ms_longest = 0
             mux_failures = 0
             encoder_keyframe_prediction_mismatches = 0
             av_drift_ms = 12.5
@@ -812,7 +814,10 @@ Test-Case 'the soak gate reads the post-checks the checklist names' {
     # duration alone. Every counter below was already in the evidence, unread.
     . (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
     $cases = @(
-        @{ Name = 'audio_discontinuities'; Apply = { param($r) $r.counters.audio_discontinuities = 2 } }
+        @{ Name = 'audio gap budget'; Apply = { param($r) $r.counters.audio_discontinuity_ms_total = 2500 } }
+        @{ Name = 'audible single dropout'; Apply = { param($r) $r.counters.audio_discontinuity_ms_longest = 240 } }
+        @{ Name = 'gap counters absent'; Apply = { param($r)
+                $r.counters.PSObject.Properties.Remove('audio_discontinuity_ms_total') } }
         @{ Name = 'mux_failures'; Apply = { param($r) $r.counters.mux_failures = 1 } }
         @{ Name = 'processing_failure'; Apply = { param($r) $r.counters.frames_dropped.processing_failure = 3 } }
         @{ Name = 'backpressure'; Apply = { param($r) $r.counters.frames_dropped.backpressure = 4 } }
@@ -828,6 +833,23 @@ Test-Case 'the soak gate reads the post-checks the checklist names' {
             -ExpectedSeconds 1800 -AudioSpanSeconds @(1802.254, 1802.030)
         Assert-Equal 'FAIL' $verdict.Result "$($case.Name) must fail the gate"
     }
+}
+
+Test-Case 'outages within the budget pass, however many there were' {
+    # The deliberate loosening: a machine under load misses capture buffers, and
+    # every miss is answered with exactly as much silence. Judging the count
+    # would fail the product for handling load correctly, so the criterion is the
+    # time lost. Measured on this desk: five minutes under heavy file I/O gave 23
+    # outages totalling 566 ms, longest 48 ms -- inaudible, and the track stayed
+    # aligned with video.
+    . (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
+    $report = New-HealthySoakReport
+    $report.counters.audio_discontinuities = 138
+    $report.counters.audio_discontinuity_ms_total = 1700
+    $report.counters.audio_discontinuity_ms_longest = 48
+    $verdict = Get-ReleaseSoakVerdict -Report $report -ContainerSeconds 1802.278 `
+        -ExpectedSeconds 1800 -AudioSpanSeconds @(1802.254, 1802.030)
+    Assert-Equal 'PASS' $verdict.Result "outages under the budget must pass: $($verdict.Message)"
 }
 
 Test-Case 'an audio track that stops early fails even with a full container' {

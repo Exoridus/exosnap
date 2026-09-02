@@ -702,7 +702,18 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
             }
 
             if (raw.data_discontinuity) {
-                m_state.diagnostics.OnAudioDiscontinuity();
+                m_state.diagnostics.OnAudioDiscontinuity(raw.gap_frames);
+                // The track and source this outage belongs to: a mixed-clock session
+                // runs several endpoints at once, and "how long" alone cannot say
+                // which of them dropped frames.
+                const char* source_name =
+                    source_kinds_.empty() ? "unknown" : AudioSourceKindLabel(source_kinds_.front());
+                logging::LogField disc_fields[] = {{"track", std::to_string(track_id_)},
+                                                   {"source", source_name},
+                                                   {"gap_frames", std::to_string(raw.gap_frames)},
+                                                   {"num_frames", std::to_string(raw.num_frames)}};
+                logging::log(logging::LogLevel::Info, "audio_thread", "audio discontinuity reported",
+                             std::span<const logging::LogField>(disc_fields, std::size(disc_fields)));
             }
 
             // How much of this packet's reported gap actually goes onto the
