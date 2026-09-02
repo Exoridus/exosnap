@@ -4,6 +4,7 @@
 
 #include <QGuiApplication>
 #include <QPalette>
+#include <QThreadPool>
 
 #include <capability/capability_builder.h>
 
@@ -15,6 +16,7 @@
 #include <cmath>
 #include <condition_variable>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <thread>
@@ -49,6 +51,16 @@ class SettingsAdapterTest : public ::testing::Test {
     void SetUp() override {
         adapter.setCapabilities(capability::CapabilityBuilder::BuildStaticValidatedBaseline());
         adapter.setConfig(MakeDefaultPreset().config);
+    }
+
+    // Output validation runs on the global thread pool, which every test in this
+    // binary shares. Without this wait a worker outlives the test that started
+    // it: it still holds a QPointer to this fixture's adapter and still touches
+    // whatever the validator captured, both of which die at the closing brace.
+    // The crash then lands in the NEXT test, where it reads as an unrelated
+    // failure -- observed exactly once in CI, on a slower machine.
+    void TearDown() override {
+        QThreadPool::globalInstance()->waitForDone();
     }
 
     SettingsAdapter adapter;
@@ -850,26 +862,33 @@ TEST_F(SettingsAdapterTest, OutputValidationRequestsCoverEveryLifecycleTrigger) 
 }
 
 TEST_F(SettingsAdapterTest, OutputValidationRunsOffTheRequestingThread) {
+    // The synchronisation state is shared with the worker rather than captured
+    // by reference off this stack: the worker is still inside notify_one() when
+    // wait_for() returns, so stack objects would be destroyed under it.
+    struct Handshake {
+        std::mutex mutex;
+        std::condition_variable completed;
+        std::thread::id validation_thread;
+        bool finished = false;
+    };
+    const auto handshake = std::make_shared<Handshake>();
     const std::thread::id requesting_thread = std::this_thread::get_id();
-    std::thread::id validation_thread;
-    std::mutex mutex;
-    std::condition_variable completed;
-    bool finished = false;
-    adapter.setOutputFolderValidator([&](const std::filesystem::path&) {
+
+    adapter.setOutputFolderValidator([handshake](const std::filesystem::path&) {
         {
-            std::lock_guard<std::mutex> lock(mutex);
-            validation_thread = std::this_thread::get_id();
-            finished = true;
+            std::lock_guard<std::mutex> lock(handshake->mutex);
+            handshake->validation_thread = std::this_thread::get_id();
+            handshake->finished = true;
         }
-        completed.notify_one();
+        handshake->completed.notify_one();
         return FolderValidationResult::Ok;
     });
 
     adapter.requestOutputValidation(SettingsAdapter::OutputValidationTrigger::Startup);
 
-    std::unique_lock<std::mutex> lock(mutex);
-    ASSERT_TRUE(completed.wait_for(lock, std::chrono::seconds(2), [&] { return finished; }));
-    EXPECT_NE(validation_thread, requesting_thread);
+    std::unique_lock<std::mutex> lock(handshake->mutex);
+    ASSERT_TRUE(handshake->completed.wait_for(lock, std::chrono::seconds(2), [&] { return handshake->finished; }));
+    EXPECT_NE(handshake->validation_thread, requesting_thread);
 }
 
 TEST_F(SettingsAdapterTest, OutputDestinationFocusRequestUsesTypedTarget) {
