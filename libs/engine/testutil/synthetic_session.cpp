@@ -218,9 +218,13 @@ SyntheticSessionResult SyntheticSession::Run() {
             MuxItem mi;
             mi.payload = std::move(pkt);
             std::unique_lock mlk(st.mux_mutex);
-            if (!st.WaitForMuxQueueSpace(mlk)) {
+            const MuxQueueWait room = st.WaitForMuxQueueSpace(mlk);
+            if (room != MuxQueueWait::Ready) {
                 mlk.unlock();
-                st.RecordFailure(E_OUTOFMEMORY, ErrorPhase::Mux, "mux queue overflow (synthetic)");
+                // Mirrors the real producers: only a genuine timeout is backpressure.
+                if (room == MuxQueueWait::TimedOut) {
+                    st.RecordFailure(E_OUTOFMEMORY, ErrorPhase::Mux, "mux queue overflow (synthetic)");
+                }
                 return false;
             }
             st.PushMuxItemLocked(std::move(mi));

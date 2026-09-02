@@ -118,6 +118,16 @@ struct SessionFailure {
     std::string error_detail;
 };
 
+// How a producer's wait for mux-queue room ended.
+enum class MuxQueueWait {
+    Ready,    // Room is available; push the packet.
+    Stopping, // The wait ran out while the session was stopping: no room appeared
+              // and this packet is not written. Not a backpressure diagnosis --
+              // a mux that stopped consuming is what the shutdown policy reports.
+    Failed,   // Someone already recorded a cause; do not add a second one.
+    TimedOut, // Real backpressure: the destination cannot keep up.
+};
+
 // ---------------------------------------------------------------------------
 // SessionState — central shared state passed to worker threads
 // ---------------------------------------------------------------------------
@@ -333,27 +343,38 @@ struct SessionState {
     }
 
     // Block (bounded) until the mux queue has room for one more payload packet.
-    // lk must own mux_mutex. Returns false when the queue stayed full for the
-    // whole timeout or the session has already failed — the caller records an
-    // ErrorPhase::Mux failure (first-error-wins makes a duplicate harmless) and
-    // aborts instead of dropping the packet or growing without bound.
-    [[nodiscard]] bool WaitForMuxQueueSpace(std::unique_lock<std::mutex>& lk) {
+    // lk must own mux_mutex.
+    //
+    // Stopping is reported separately from TimedOut because a stop is not a
+    // backpressure fault. A queue that is full when the user stops (slow NAS, AV
+    // scan) stays full: the consumer is draining, not accepting. Collapsing that
+    // into the timeout meant the producer sat here for the full ten seconds and
+    // then recorded "the output destination cannot keep up" for what was an
+    // ordinary stop -- and ten seconds is also the producers' join budget, so the
+    // same stop could instead be reported as a worker hang.
+    [[nodiscard]] MuxQueueWait WaitForMuxQueueSpace(std::unique_lock<std::mutex>& lk) {
         const auto full = [&] {
             return mux_queue.size() >= mux_queue_packet_limit || mux_queue_bytes >= mux_queue_byte_limit;
         };
         if (!full()) {
-            return true;
+            return MuxQueueWait::Ready;
         }
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(mux_queue_full_timeout_ms);
         while (full()) {
             if (HasFailure()) {
-                return false; // teardown in progress — never deadlock a producer on the bound
+                return MuxQueueWait::Failed; // teardown in progress — never deadlock a producer on the bound
             }
             if (mux_space_cv.wait_until(lk, deadline) == std::cv_status::timeout) {
-                return !full() && !HasFailure();
+                if (!full()) {
+                    return MuxQueueWait::Ready;
+                }
+                if (HasFailure()) {
+                    return MuxQueueWait::Failed;
+                }
+                return stop_requested.load() ? MuxQueueWait::Stopping : MuxQueueWait::TimedOut;
             }
         }
-        return true;
+        return MuxQueueWait::Ready;
     }
 
     // Live stats (written by worker threads, read by stats timer)
@@ -490,6 +511,103 @@ struct SessionState {
         return webcam_overlay;
     }
 
+    // Clear everything the PREVIOUS recording left behind, so a session object
+    // reused by the next Record() call starts indistinguishable from a fresh one.
+    //
+    // Reuse is the normal path: Record() only swaps in a new SessionState after a
+    // worker had to be abandoned. Every mutable member above must therefore
+    // satisfy exactly one of three rules, and a new member is not finished until
+    // it does:
+    //   1. it is immutable for the object's lifetime (stop_event, the encoder
+    //      factory seam, the queue bounds), or
+    //   2. this Record() call installs its value anyway (config, the callbacks,
+    //      audio_track_count, the session QPC baseline, the diagnostics
+    //      aggregator), or
+    //   3. it is cleared here.
+    // The stop token itself is the one deliberate exception: stop_requested and
+    // stop_event are set by ResetStopRequestedForNewSession right after this
+    // call, because a stop that raced ahead of the new Record() must survive the
+    // reset rather than be cleared by it.
+    // The list below used to live inline in Record(), and three members had
+    // quietly missed it -- each one a stale value the next recording inherited.
+    void ResetForNewRecording() {
+        // Rule 3 members, in declaration order.
+
+        // A capture end instant is recorded once and only once (NoteCaptureEnded
+        // is a compare-exchange against 0), so a value left from the last
+        // recording made the NEXT stop a no-op: the new session reported the old
+        // session's end, and its duration -- measured from this session's start
+        // to that earlier instant -- came out negative and was clamped to 0.
+        capture_end_ns.store(0, std::memory_order_relaxed);
+        pause_requested.store(false);
+        // Live mute is deliberately per-session: a new recording starts from the
+        // source rows, so a mute still standing when the last recording stopped
+        // must not silently start the next one's microphone muted.
+        audio_mute_mask.store(0, std::memory_order_relaxed);
+        // Time the LAST session spent paused would otherwise be subtracted from
+        // this one's elapsed time, reporting a recording shorter than the file.
+        paused_ns.store(0, std::memory_order_relaxed);
+        split_request_seq.store(0);
+        split_last_trigger.store(static_cast<uint32_t>(SplitTriggerSource::ManualButton));
+        // An "armed but unconsumed" size split from a session that ended before
+        // the mux's begin_new_segment reset it must not suppress the first
+        // size-based split of the next recording.
+        size_split_armed.store(false);
+        // The finalize-stall detector samples this for byte progress; a stale
+        // total from the previous file would read as progress this one has not
+        // made yet.
+        mux_bytes_written.store(0, std::memory_order_relaxed);
+        {
+            std::lock_guard lk(snapshot_callback_mutex);
+            snapshot_requested.store(false);
+            snapshot_callback = nullptr;
+        }
+        {
+            std::lock_guard lk(failure_mutex);
+            failure_recorded = false;
+            failure = {};
+        }
+        {
+            std::lock_guard lk(premux_mutex);
+            video_premux.clear();
+            audio_premux.clear();
+            codec_private = {};
+        }
+        {
+            std::lock_guard lk(mux_mutex);
+            mux_queue.clear();
+            mux_queue_bytes = 0;
+        }
+        {
+            std::lock_guard lk(stats_mutex);
+            stats = {};
+        }
+        encode_width = 0;
+        encode_height = 0;
+        video_epoch_qpc_100ns.store(0);
+        for (auto& epoch : audio_epoch_qpc_100ns) {
+            epoch.store(0); // a previous session's measured audio zero point must not leak in
+        }
+    }
+
+    // Raise the stop token with every invariant a stop carries. THE only way to
+    // stop a session: a bare stop_requested.store(true) reaches the flag but
+    // leaves the rest undone, and each omission is its own defect -- a capture
+    // end instant that stays 0 (so the duration is measured to the end of
+    // finalize instead of to the last frame), a WASAPI producer asleep in
+    // WaitForMultipleObjects until its timeout, and workers still blocked on a
+    // condition variable that nobody notified.
+    void RequestCleanStop() noexcept {
+        // Before the flag, so no worker can observe the stop and start draining
+        // while the instant that stop happened is still unrecorded.
+        NoteCaptureEnded();
+        stop_requested.store(true);
+        SignalStopEvent();
+        premux_cv.notify_all();
+        mux_cv.notify_all();
+        mux_space_cv.notify_all(); // wake producers blocked on the queue bound
+    }
+
     // Record first failure; triggers stop_requested.
     // hr: platform error code (HRESULT on Windows); 0 == success.
     void RecordFailure(int32_t hr, ErrorPhase phase, const std::string& detail) {
@@ -502,12 +620,7 @@ struct SessionState {
                 failure.error_detail = detail;
             }
         }
-        NoteCaptureEnded();
-        stop_requested.store(true);
-        SignalStopEvent();
-        premux_cv.notify_all();
-        mux_cv.notify_all();
-        mux_space_cv.notify_all(); // wake producers blocked on the queue bound
+        RequestCleanStop();
     }
 
     bool HasFailure() const {

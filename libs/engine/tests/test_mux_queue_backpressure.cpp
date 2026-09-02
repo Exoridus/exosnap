@@ -32,6 +32,7 @@ using exosnap::engine::EncodedAudioPacket;
 using exosnap::engine::ErrorPhase;
 using exosnap::engine::IAudioCaptureSource;
 using exosnap::engine::MuxItem;
+using exosnap::engine::MuxQueueWait;
 using exosnap::engine::RawAudioBuffer;
 using exosnap::engine::SessionState;
 
@@ -56,11 +57,11 @@ TEST(MuxQueueBackpressure, FullQueueTimesOutDeterministically) {
     {
         std::unique_lock lk(state.mux_mutex);
         for (int i = 0; i < 4; ++i) {
-            ASSERT_TRUE(state.WaitForMuxQueueSpace(lk));
+            ASSERT_EQ(state.WaitForMuxQueueSpace(lk), MuxQueueWait::Ready);
             state.PushMuxItemLocked(MakeAudioItem(16));
         }
         const auto t0 = std::chrono::steady_clock::now();
-        EXPECT_FALSE(state.WaitForMuxQueueSpace(lk));
+        EXPECT_EQ(state.WaitForMuxQueueSpace(lk), MuxQueueWait::TimedOut);
         const auto elapsed = std::chrono::steady_clock::now() - t0;
         EXPECT_GE(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count(), 40);
     }
@@ -75,9 +76,9 @@ TEST(MuxQueueBackpressure, ByteLimitBlocksBeforePacketLimit) {
     state.mux_queue_full_timeout_ms = 50;
 
     std::unique_lock lk(state.mux_mutex);
-    ASSERT_TRUE(state.WaitForMuxQueueSpace(lk));
+    ASSERT_EQ(state.WaitForMuxQueueSpace(lk), MuxQueueWait::Ready);
     state.PushMuxItemLocked(MakeAudioItem(64)); // reaches the byte bound
-    EXPECT_FALSE(state.WaitForMuxQueueSpace(lk));
+    EXPECT_EQ(state.WaitForMuxQueueSpace(lk), MuxQueueWait::TimedOut);
 }
 
 TEST(MuxQueueBackpressure, DrainingConsumerWakesBlockedProducer) {
@@ -95,7 +96,7 @@ TEST(MuxQueueBackpressure, DrainingConsumerWakesBlockedProducer) {
     std::atomic<bool> pushed{false};
     std::thread producer([&] {
         std::unique_lock lk(state.mux_mutex);
-        if (state.WaitForMuxQueueSpace(lk)) {
+        if (state.WaitForMuxQueueSpace(lk) == MuxQueueWait::Ready) {
             state.PushMuxItemLocked(MakeAudioItem(16));
             pushed.store(true);
         }
@@ -127,7 +128,7 @@ TEST(MuxQueueBackpressure, RecordedFailureWakesBlockedProducer) {
         state.PushMuxItemLocked(MakeAudioItem(16));
     }
 
-    std::atomic<bool> wait_result{true};
+    std::atomic<MuxQueueWait> wait_result{MuxQueueWait::Ready};
     std::atomic<bool> done{false};
     std::thread producer([&] {
         std::unique_lock lk(state.mux_mutex);
@@ -146,7 +147,67 @@ TEST(MuxQueueBackpressure, RecordedFailureWakesBlockedProducer) {
     }
     EXPECT_TRUE(done.load()) << "failure must wake a producer blocked on the queue bound";
     producer.join();
-    EXPECT_FALSE(wait_result.load());
+    EXPECT_EQ(wait_result.load(), MuxQueueWait::Failed);
+}
+
+// A stop must NOT abandon the bound: the producers' final drain runs with
+// stop_requested already raised and the mux still consuming, so giving up here
+// would discard the tail of the recording -- everything between the last flush
+// and end of stream.
+TEST(MuxQueueBackpressure, AStoppingSessionStillWaitsForRoomSoTheTailIsWritten) {
+    auto state_ptr = std::make_shared<SessionState>();
+    SessionState& state = *state_ptr;
+    state.mux_queue_packet_limit = 1;
+    state.mux_queue_full_timeout_ms = 5000;
+
+    {
+        std::unique_lock lk(state.mux_mutex);
+        state.PushMuxItemLocked(MakeAudioItem(16));
+    }
+    state.RequestCleanStop();
+
+    std::atomic<bool> pushed{false};
+    std::thread producer([&] {
+        std::unique_lock lk(state.mux_mutex);
+        if (state.WaitForMuxQueueSpace(lk) == MuxQueueWait::Ready) {
+            state.PushMuxItemLocked(MakeAudioItem(16));
+            pushed.store(true);
+        }
+    });
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    EXPECT_FALSE(pushed.load()) << "the drain gave up on a stopping session instead of waiting for room";
+
+    {
+        std::lock_guard lk(state.mux_mutex);
+        MuxItem item = std::move(state.mux_queue.front());
+        state.mux_queue.pop_front();
+        state.OnMuxItemPopped(item);
+    }
+    producer.join();
+    EXPECT_TRUE(pushed.load());
+}
+
+// REGRESSION: only when the wait actually runs out while stopping is the packet
+// lost -- and that is a mux that stopped consuming, which the shutdown policy
+// reports. Recording it as backpressure told the user "the output destination
+// cannot keep up" about an ordinary stop.
+TEST(MuxQueueBackpressure, AnExhaustedWaitWhileStoppingIsNotBackpressure) {
+    auto state_ptr = std::make_shared<SessionState>();
+    SessionState& state = *state_ptr;
+    state.mux_queue_packet_limit = 1;
+    state.mux_queue_full_timeout_ms = 50;
+
+    {
+        std::unique_lock lk(state.mux_mutex);
+        state.PushMuxItemLocked(MakeAudioItem(16));
+    }
+    state.RequestCleanStop();
+
+    std::unique_lock lk(state.mux_mutex);
+    EXPECT_EQ(state.WaitForMuxQueueSpace(lk), MuxQueueWait::Stopping);
+    lk.unlock();
+    EXPECT_FALSE(state.HasFailure()) << "an ordinary stop must not be recorded as mux backpressure";
 }
 
 // ---------------------------------------------------------------------------

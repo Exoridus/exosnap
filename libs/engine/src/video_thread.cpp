@@ -1604,7 +1604,20 @@ void VideoThread::Run() {
     const auto HandleOdAcquireFailure = [&](HRESULT hr) {
         switch (ClassifyOdAcquireFailure(hr)) {
         case OdAcquireFailAction::Idle:
-            break; // no frame available this poll — normal
+            // No frame this poll. Normal on a desktop nobody is touching -- but
+            // also what a duplication left behind by a topology change looks
+            // like, because a mode switch does not always kill it with
+            // ACCESS_LOST. Time alone cannot tell the two apart (an idle desktop
+            // is legitimately silent for minutes); a changed topology can, so
+            // that -- and only that -- enters the same recovery hold ACCESS_LOST
+            // uses. Reopen() rebuilds the topology watch, so this fires once per
+            // change and never on a static desktop.
+            if (ShouldRecoverIdleOdAcquire(odHolding, odSrc.TopologyChangedSinceOpen())) {
+                logging::log(logging::LogLevel::Info, "video_thread",
+                             "DXGI OD delivered no frame after a display topology change — reopening", {});
+                odHolding = true;
+            }
+            break;
         case OdAcquireFailAction::Recover:
             // Non-blocking: enter the holding state. The old inner poll loop blocked
             // here for the entire gap, so the encode loop never ran — the timeline
@@ -1831,8 +1844,8 @@ void VideoThread::Run() {
                     QueryPerformanceCounter(&tStart); // fresh first-frame deadline
                 } else if (dec.action == OdReopenAction::GiveUp) {
                     m_state.RecordFailure(DXGI_ERROR_ACCESS_LOST, ErrorPhase::VideoCapture,
-                                          "DXGI OD: display did not return within 15 s of an access loss at start "
-                                          "(a fullscreen or display-mode change was likely in progress).");
+                                          "DXGI OD: the display did not deliver a frame within 15 s of losing it at "
+                                          "start (a fullscreen switch or a display-mode change was in progress).");
                     return;
                 }
                 Sleep(10); // keep stop-request latency low while holding
@@ -1895,8 +1908,22 @@ void VideoThread::Run() {
                         logging::log(logging::LogLevel::Info, "video_thread",
                                      "DXGI OD access lost before first frame — entering bounded start-hold", {});
                     }
+                } else if (odHr == DXGI_ERROR_WAIT_TIMEOUT &&
+                           ShouldRecoverIdleOdAcquire(odStartHolding, odSrc.TopologyChangedSinceOpen())) {
+                    // Opened onto a topology that has since changed and never
+                    // presented (see HandleOdAcquireFailure): recover through the
+                    // same bounded start-hold instead of sitting out the 5 s
+                    // first-frame guard for a duplication that cannot deliver.
+                    odStartHolding = true;
+                    odStartLossBegan = std::chrono::steady_clock::now();
+                    odStartLastReopen = odStartLossBegan;
+                    logging::log(logging::LogLevel::Info, "video_thread",
+                                 "DXGI OD delivered no first frame after a display topology change — "
+                                 "entering bounded start-hold",
+                                 {});
                 }
-                // DXGI_ERROR_WAIT_TIMEOUT: no frame yet, loop again
+                // DXGI_ERROR_WAIT_TIMEOUT on an unchanged topology: no frame yet,
+                // loop again
             } else {
                 try {
                     auto frame = framePool.TryGetNextFrame();
@@ -2297,11 +2324,20 @@ void VideoThread::Run() {
                 // sentinel so the sentinel and its keyframe stay adjacent; block
                 // briefly, then fail cleanly — never drop frames or grow without
                 // limit.
-                if (!m_state.WaitForMuxQueueSpace(mlk)) {
+                const MuxQueueWait room = m_state.WaitForMuxQueueSpace(mlk);
+                if (room != MuxQueueWait::Ready) {
                     mlk.unlock();
-                    m_state.RecordFailure(E_OUTOFMEMORY, ErrorPhase::Mux,
-                                          "Mux queue limit exceeded: the output destination "
-                                          "cannot keep up with the recording");
+                    // Only a genuine timeout is backpressure; while stopping, a
+                    // mux that stopped consuming is the shutdown policy's report to
+                    // make, and an existing failure already names the cause.
+                    if (room == MuxQueueWait::TimedOut) {
+                        m_state.RecordFailure(E_OUTOFMEMORY, ErrorPhase::Mux,
+                                              "Mux queue limit exceeded: the output destination "
+                                              "cannot keep up with the recording");
+                    } else if (room == MuxQueueWait::Stopping) {
+                        logging::log(logging::LogLevel::Warn, "video_thread",
+                                     "mux queue still full at stop; the tail of the video stream was not written", {});
+                    }
                     return false;
                 }
                 if (ShouldEmitSplitSentinel(split_armed, split_forced_pts_ns, pkt.keyframe, pkt.pts_ns)) {
@@ -2779,9 +2815,17 @@ void VideoThread::Run() {
             }
 
             if (sourceLost) {
-                std::lock_guard lk(m_state.stats_mutex);
-                m_state.stats.source_loss = true;
-                m_state.stop_requested.store(true);
+                {
+                    std::lock_guard lk(m_state.stats_mutex);
+                    m_state.stats.source_loss = true;
+                }
+                // Through the session's own stop, not a bare flag store: a clean
+                // source loss ends the capture exactly like a user stop, and the
+                // capture end instant it records is what the reported duration is
+                // measured to. Storing the flag alone left that instant unset, so
+                // the duration ran on to the end of finalize -- the very error the
+                // instant exists to prevent.
+                m_state.RequestCleanStop();
                 break;
             }
 
@@ -3447,9 +3491,17 @@ void VideoThread::Run() {
             }
 
             if (sourceLost) {
-                std::lock_guard lk(m_state.stats_mutex);
-                m_state.stats.source_loss = true;
-                m_state.stop_requested.store(true);
+                {
+                    std::lock_guard lk(m_state.stats_mutex);
+                    m_state.stats.source_loss = true;
+                }
+                // Through the session's own stop, not a bare flag store: a clean
+                // source loss ends the capture exactly like a user stop, and the
+                // capture end instant it records is what the reported duration is
+                // measured to. Storing the flag alone left that instant unset, so
+                // the duration ran on to the end of finalize -- the very error the
+                // instant exists to prevent.
+                m_state.RequestCleanStop();
                 break;
             }
 
@@ -3981,10 +4033,17 @@ end_encode_loop:
                     std::unique_lock mlk(m_state.mux_mutex);
                     // Bounded steady-state queue (same policy as the live loop):
                     // wait for room, then fail cleanly rather than grow unbounded.
-                    if (!m_state.WaitForMuxQueueSpace(mlk)) {
+                    const MuxQueueWait room = m_state.WaitForMuxQueueSpace(mlk);
+                    if (room != MuxQueueWait::Ready) {
                         mlk.unlock();
-                        m_state.RecordFailure(E_OUTOFMEMORY, ErrorPhase::Mux,
-                                              "Mux queue limit exceeded while draining the video encoder");
+                        // Only a genuine timeout is backpressure (see the live loop).
+                        if (room == MuxQueueWait::TimedOut) {
+                            m_state.RecordFailure(E_OUTOFMEMORY, ErrorPhase::Mux,
+                                                  "Mux queue limit exceeded while draining the video encoder");
+                        } else if (room == MuxQueueWait::Stopping) {
+                            logging::log(logging::LogLevel::Warn, "video_thread",
+                                         "mux queue still full at stop; the video encoder drain was cut short", {});
+                        }
                         break;
                     }
                     m_state.PushMuxItemLocked(std::move(mi));

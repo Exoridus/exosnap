@@ -593,6 +593,13 @@ class RecordingCoordinator {
     // SyncWebcamService) so a queued Preparing state-callback cannot Stop() the
     // camera the worker is opening.
     std::atomic<bool> prepare_in_flight_{false};
+    // Identifies the recording this coordinator is currently starting or running,
+    // from the UI-thread gate in StartRecording until Record() returns. Every stop
+    // this coordinator issues names it, so a stop belonging to a recording that has
+    // already ended can never cut short the next one -- which it did while the
+    // engine only knew "some stop happened outside a recording window": the next
+    // session began already stopped and reported no frames.
+    std::atomic<exosnap::engine::RecordRequestId> record_request_{exosnap::engine::kUnscopedRecordRequest};
     // Cooperative cancel request for the Preparing phase; honored at the worker's
     // checkpoints (after disk/FS, after display facts, after webcam start, and
     // immediately before the recording commits).

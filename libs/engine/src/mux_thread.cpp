@@ -102,7 +102,14 @@ void MuxThread::Run() {
         if (!(m_state.codec_private.VideoReady(m_state.config.video_codec) &&
               m_state.codec_private.AudioAllReady(m_state.audio_track_count))) {
             lk.unlock();
-            m_state.RecordFailure(E_FAIL, ErrorPhase::Mux, "Codec private data not available at mux start");
+            // The only exit from the wait without headers is a stop, so the mux is
+            // never the reason they are missing: it is simply the first worker to
+            // notice. Recording a Mux failure here latched that misattribution as
+            // the session's outcome, and a capture that delivered nothing (or a
+            // stop that arrived before capture started) was reported as a mux
+            // problem. Leave the outcome to the session, which knows both.
+            logging::log(logging::LogLevel::Info, "mux_thread",
+                         "stopped before any codec private data arrived; no file written", {});
             return;
         }
 

@@ -319,11 +319,19 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
                     std::unique_lock mlk(m_state.mux_mutex);
                     // Bounded steady-state queue: block briefly for room, then
                     // fail cleanly — never drop packets or grow without limit.
-                    if (!m_state.WaitForMuxQueueSpace(mlk)) {
+                    const MuxQueueWait room = m_state.WaitForMuxQueueSpace(mlk);
+                    if (room != MuxQueueWait::Ready) {
                         mlk.unlock();
-                        m_state.RecordFailure(E_OUTOFMEMORY, ErrorPhase::Mux,
-                                              "Mux queue limit exceeded: the output destination "
-                                              "cannot keep up with the recording");
+                        // Only a genuine timeout is backpressure (see the video loop).
+                        if (room == MuxQueueWait::TimedOut) {
+                            m_state.RecordFailure(E_OUTOFMEMORY, ErrorPhase::Mux,
+                                                  "Mux queue limit exceeded: the output destination "
+                                                  "cannot keep up with the recording");
+                        } else if (room == MuxQueueWait::Stopping) {
+                            logging::log(logging::LogLevel::Warn, "audio_thread",
+                                         "mux queue still full at stop; the tail of this audio track was not written",
+                                         {});
+                        }
                         return false;
                     }
                     m_state.PushMuxItemLocked(std::move(mi));
