@@ -21,6 +21,22 @@ enum class AudioSourceKind {
     return 1u << static_cast<uint32_t>(kind);
 }
 
+// Stable identifier for diagnostics and log fields. Not a user-facing string:
+// the UI has its own localized labels for these rows.
+[[nodiscard]] inline constexpr const char* AudioSourceKindLabel(AudioSourceKind kind) noexcept {
+    switch (kind) {
+    case AudioSourceKind::App:
+        return "app";
+    case AudioSourceKind::Mic:
+        return "mic";
+    case AudioSourceKind::Sys:
+        return "sys";
+    case AudioSourceKind::SystemOutput:
+        return "systemOutput";
+    }
+    return "unknown";
+}
+
 // ---------------------------------------------------------------------------
 // Per-row gain + mute (Audio v2 — 0.6.0)
 // ---------------------------------------------------------------------------

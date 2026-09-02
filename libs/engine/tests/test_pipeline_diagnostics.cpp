@@ -593,7 +593,8 @@ TEST(PipelineDiagnostics, AudioFormatQueuePeakAndDiscontinuities) {
     agg.OnAudioQueueDepth(3);
     agg.OnAudioQueueDepth(7);
     agg.OnAudioQueueDepth(4);
-    agg.OnAudioDiscontinuity();
+    agg.OnAudioDiscontinuity(480);
+    agg.OnAudioDiscontinuity(1440);
     auto stats = MakeStats();
     stats.audio_packets = 50;
     stats.audio_bytes = 2048;
@@ -602,7 +603,10 @@ TEST(PipelineDiagnostics, AudioFormatQueuePeakAndDiscontinuities) {
     EXPECT_EQ(s.audio.channels, 2u);
     EXPECT_EQ(s.audio.queue_depth, 4u);
     EXPECT_EQ(s.audio.queue_peak, 7u);
-    EXPECT_EQ(s.audio.discontinuities, 1u);
+    EXPECT_EQ(s.audio.discontinuities, 2u);
+    // Lost time, not just how often: 480 + 1440 frames, longest of the two.
+    EXPECT_EQ(s.audio.discontinuity_frames_total, 1920u);
+    EXPECT_EQ(s.audio.discontinuity_frames_longest, 1440u);
     EXPECT_EQ(s.audio.packets_encoded, 50u);
     EXPECT_EQ(s.audio.bytes_encoded, 2048u);
 }

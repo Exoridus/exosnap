@@ -29,6 +29,7 @@ using exosnap::engine::AudioThread;
 using exosnap::engine::ComputeDiscontinuityGapFrames;
 using exosnap::engine::EncodedAudioPacket;
 using exosnap::engine::IAudioCaptureSource;
+using exosnap::engine::IsReportableDiscontinuity;
 using exosnap::engine::kMaxDiscontinuityGapSeconds;
 using exosnap::engine::RawAudioBuffer;
 using exosnap::engine::ScaleDiscontinuityGapFrames;
@@ -62,6 +63,40 @@ TEST(DiscontinuityGap, PathologicalJumpIsClamped) {
     const uint64_t huge_jump = 960ull + static_cast<uint64_t>(rate) * 3600ull; // one hour
     const uint32_t max_frames = static_cast<uint32_t>(kMaxDiscontinuityGapSeconds * rate);
     EXPECT_EQ(ComputeDiscontinuityGapFrames(true, true, 960, huge_jump, rate), max_frames);
+}
+
+// A DATA_DISCONTINUITY flag is reportable exactly when the timeline lost
+// frames. The device raises it for state transitions too, and the counter feeds
+// both the release gate and the live health verdict -- so a flag with no
+// measured gap behind it would open ordinary recordings with an outage that
+// never happened. The two gapless cases below are the ones observed in a
+// 30-minute soak: the first packet of a stream, and a flag whose device
+// position did not move forward.
+
+TEST(DiscontinuityGap, FlagWithAMeasuredGapIsReportable) {
+    EXPECT_TRUE(IsReportableDiscontinuity(/*discontinuity=*/true, /*gap_frames=*/864));
+}
+
+TEST(DiscontinuityGap, FirstPacketFlagIsNotReportable) {
+    // No expected position, so the gap is 0 and nothing is filled.
+    const uint32_t gap = ComputeDiscontinuityGapFrames(/*discontinuity=*/true, /*have_expected_position=*/false,
+                                                       /*expected_device_position=*/0, /*device_position=*/48000,
+                                                       /*sample_rate=*/48000);
+    EXPECT_EQ(gap, 0u);
+    EXPECT_FALSE(IsReportableDiscontinuity(/*discontinuity=*/true, gap));
+}
+
+TEST(DiscontinuityGap, FlagWithoutAForwardJumpIsNotReportable) {
+    const uint32_t gap = ComputeDiscontinuityGapFrames(/*discontinuity=*/true, /*have_expected_position=*/true,
+                                                       /*expected_device_position=*/48000, /*device_position=*/48000,
+                                                       /*sample_rate=*/48000);
+    EXPECT_EQ(gap, 0u);
+    EXPECT_FALSE(IsReportableDiscontinuity(/*discontinuity=*/true, gap));
+}
+
+TEST(DiscontinuityGap, NoFlagIsNeverReportable) {
+    EXPECT_FALSE(IsReportableDiscontinuity(/*discontinuity=*/false, /*gap_frames=*/864));
+    EXPECT_FALSE(IsReportableDiscontinuity(/*discontinuity=*/false, /*gap_frames=*/0));
 }
 
 TEST(DiscontinuityGap, ScaleAcrossSampleRates) {

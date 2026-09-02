@@ -133,6 +133,8 @@ void PipelineDiagnosticsAggregator::Reset(uint64_t generation, const Diagnostics
     audio_queue_depth_ = 0;
     audio_queue_peak_ = 0;
     audio_discontinuities_ = 0;
+    audio_discontinuity_frames_total_ = 0;
+    audio_discontinuity_frames_longest_ = 0;
     audio_degraded_sources_.fill(0);
     audio_degraded_source_kinds_.fill(0);
     audio_total_sources_.fill(0);
@@ -468,9 +470,13 @@ void PipelineDiagnosticsAggregator::OnAudioQueueDepth(uint32_t depth) noexcept {
     }
 }
 
-void PipelineDiagnosticsAggregator::OnAudioDiscontinuity() noexcept {
+void PipelineDiagnosticsAggregator::OnAudioDiscontinuity(uint32_t gap_frames) noexcept {
     std::lock_guard lk(mutex_);
     ++audio_discontinuities_;
+    audio_discontinuity_frames_total_ += gap_frames;
+    if (gap_frames > audio_discontinuity_frames_longest_) {
+        audio_discontinuity_frames_longest_ = gap_frames;
+    }
 }
 
 void PipelineDiagnosticsAggregator::OnAudioSourceHealth(uint32_t track_id, uint32_t degraded_sources,
@@ -737,6 +743,8 @@ RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_p
     au.queue_depth = audio_queue_depth_;
     au.queue_peak = audio_queue_peak_;
     au.discontinuities = audio_discontinuities_;
+    au.discontinuity_frames_total = audio_discontinuity_frames_total_;
+    au.discontinuity_frames_longest = audio_discontinuity_frames_longest_;
     au.discontinuity_availability = MetricAvailability::Available;
     au.sample_rate = audio_sample_rate_;
     au.channels = audio_channels_;

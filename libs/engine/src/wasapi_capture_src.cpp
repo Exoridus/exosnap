@@ -532,12 +532,13 @@ bool WasapiCaptureSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_e
     }
 
     const bool silent = (captureFlags & AUDCLNT_BUFFERFLAGS_SILENT) != 0;
-    const bool discontinuity = (captureFlags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY) != 0;
+    const bool discontinuity_flag = (captureFlags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY) != 0;
 
     // Measure the gap the discontinuity spans from the device-position jump,
     // then advance the expected position for the next packet.
-    const uint32_t gap_frames = ComputeDiscontinuityGapFrames(discontinuity, device_position_tracked_,
+    const uint32_t gap_frames = ComputeDiscontinuityGapFrames(discontinuity_flag, device_position_tracked_,
                                                               expected_device_position_, devicePos, sample_rate_);
+    const bool discontinuity = IsReportableDiscontinuity(discontinuity_flag, gap_frames);
     device_position_tracked_ = true;
     expected_device_position_ = devicePos + numFrames;
 
