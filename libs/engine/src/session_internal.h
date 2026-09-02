@@ -524,6 +524,10 @@ struct SessionState {
     //      audio_track_count, the session QPC baseline, the diagnostics
     //      aggregator), or
     //   3. it is cleared here.
+    // The stop token itself is the one deliberate exception: stop_requested and
+    // stop_event are set by ResetStopRequestedForNewSession right after this
+    // call, because a stop that raced ahead of the new Record() must survive the
+    // reset rather than be cleared by it.
     // The list below used to live inline in Record(), and three members had
     // quietly missed it -- each one a stale value the next recording inherited.
     void ResetForNewRecording() {

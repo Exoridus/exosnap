@@ -1844,8 +1844,8 @@ void VideoThread::Run() {
                     QueryPerformanceCounter(&tStart); // fresh first-frame deadline
                 } else if (dec.action == OdReopenAction::GiveUp) {
                     m_state.RecordFailure(DXGI_ERROR_ACCESS_LOST, ErrorPhase::VideoCapture,
-                                          "DXGI OD: display did not return within 15 s of an access loss at start "
-                                          "(a fullscreen or display-mode change was likely in progress).");
+                                          "DXGI OD: the display did not deliver a frame within 15 s of losing it at "
+                                          "start (a fullscreen switch or a display-mode change was in progress).");
                     return;
                 }
                 Sleep(10); // keep stop-request latency low while holding
@@ -1914,15 +1914,13 @@ void VideoThread::Run() {
                     // presented (see HandleOdAcquireFailure): recover through the
                     // same bounded start-hold instead of sitting out the 5 s
                     // first-frame guard for a duplication that cannot deliver.
-                    if (!odStartHolding) {
-                        odStartHolding = true;
-                        odStartLossBegan = std::chrono::steady_clock::now();
-                        odStartLastReopen = odStartLossBegan;
-                        logging::log(logging::LogLevel::Info, "video_thread",
-                                     "DXGI OD delivered no first frame after a display topology change — "
-                                     "entering bounded start-hold",
-                                     {});
-                    }
+                    odStartHolding = true;
+                    odStartLossBegan = std::chrono::steady_clock::now();
+                    odStartLastReopen = odStartLossBegan;
+                    logging::log(logging::LogLevel::Info, "video_thread",
+                                 "DXGI OD delivered no first frame after a display topology change — "
+                                 "entering bounded start-hold",
+                                 {});
                 }
                 // DXGI_ERROR_WAIT_TIMEOUT on an unchanged topology: no frame yet,
                 // loop again
