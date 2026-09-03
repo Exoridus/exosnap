@@ -1655,7 +1655,14 @@ void RecordingCoordinator::OnSegmentCompleted(const exosnap::engine::CompletedSe
     // True only when this finalize was triggered by a split request (a new segment
     // follows). The final session-end finalize has no pending request, so it must
     // not produce a spurious "Started segment N" toast.
-    const bool was_split_boundary = split_pending_.exchange(false);
+    // Only a boundary the engine produced counts. A request that never reached
+    // one (asked for while paused, or just before stop) would otherwise make the
+    // session-end finalize look like an intermediate segment: a manifest entry
+    // for a segment that never exists, and a second remux of the final file
+    // racing the one RecordingThreadProc schedules.
+    const bool was_split_boundary = !segment.session_end && split_pending_.exchange(false);
+    if (segment.session_end)
+        split_pending_.store(false);
 
     diagnostics::AppLog::info(QStringLiteral("split"),
                               QStringLiteral("segment finalized index=%1 duration_ms=%2 bytes=%3 ok=%4 path=%5")
@@ -1703,15 +1710,16 @@ void RecordingCoordinator::OnSegmentCompleted(const exosnap::engine::CompletedSe
         QString next_segment_manifest_id;
 
         {
-            // We use segment_remux_mutex_ to protect segment_remux_jobs_ and
-            // pending_segment_manifest_id_ which are shared with the recording thread.
-            std::lock_guard<std::mutex> lock(segment_remux_mutex_);
-
             // The manifest ID for THIS segment is the one current at this point.
             // For segment 0 this is current_manifest_id_ set at StartRecording.
             // For segment N (N>0) this was stored in pending_segment_manifest_id_
-            // when segment N-1 completed, and adopted below.
-            this_segment_manifest_id = current_manifest_id_;
+            // when segment N-1 completed, and adopted below. Read under the lock,
+            // then released: the manifest store writes below are disk I/O, and the
+            // disk monitor blocks on this same mutex in PendingRemuxReserveBytes.
+            {
+                std::lock_guard<std::mutex> lock(segment_remux_mutex_);
+                this_segment_manifest_id = current_manifest_id_;
+            }
 
             // Finalize the manifest entry: the MKV is clean (engine closed it).
             // A failed update leaves the entry at finalized=false, which recovery
@@ -1756,6 +1764,10 @@ void RecordingCoordinator::OnSegmentCompleted(const exosnap::engine::CompletedSe
                     }
                 }
             }
+
+            // segment_remux_jobs_ and pending_segment_manifest_id_ are shared with
+            // the recording thread; from here on nothing under the lock touches disk.
+            std::lock_guard<std::mutex> lock(segment_remux_mutex_);
 
             // Update current_manifest_id_ so the recording thread sees the next segment's ID.
             current_manifest_id_ = next_segment_manifest_id;

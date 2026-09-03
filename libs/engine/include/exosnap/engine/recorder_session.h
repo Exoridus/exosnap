@@ -203,6 +203,11 @@ struct CompletedSegment {
     std::uint64_t file_size_bytes = 0;
     std::uint32_t index = 0; // 0-based segment index
     bool succeeded = false;  // false => finalize failed / file quarantined
+    // True for the finalize at session end; false for one a split boundary
+    // produced (a further segment follows). The two are told apart here rather
+    // than inferred from an outstanding split request, which may never have
+    // reached a boundary (a split asked for while paused, or just before stop).
+    bool session_end = false;
 };
 
 // Invoked from the mux worker thread as each segment is finalized. Must be

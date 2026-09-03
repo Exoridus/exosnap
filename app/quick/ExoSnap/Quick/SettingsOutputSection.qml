@@ -240,7 +240,7 @@ ExoCard {
             from: 50
             to: 1048576
             stepSize: 50
-            suffix: qsTr("MB")
+            suffix: qsTr("MiB")
             value: root.settings.splitCustomSizeMb
             enabled: !root.settings.controlsLocked
             Layout.fillWidth: true

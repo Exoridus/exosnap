@@ -56,6 +56,9 @@ class SettingsAdapter : public QObject {
     // ---- Global tier / lock -------------------------------------------------
     Q_PROPERTY(bool expertMode READ expertMode WRITE setExpertMode NOTIFY appSettingsChanged FINAL)
     Q_PROPERTY(bool controlsLocked READ controlsLocked NOTIFY controlsLockedChanged FINAL)
+    // True while the Settings page is the current page. The level meters on
+    // the Audio sources card are fed only while a page that shows them is up.
+    Q_PROPERTY(bool active READ active WRITE setActive NOTIFY activeChanged FINAL)
     // The adapter the encode is running on, as a fact rather than as a choice.
     // Empty until the capability probe has named one; the row that shows it says
     // so rather than inventing a placeholder.
@@ -148,6 +151,10 @@ class SettingsAdapter : public QObject {
     Q_PROPERTY(QString microphoneSummary READ microphoneSummary NOTIFY configChanged FINAL)
     Q_PROPERTY(bool appAudioVisible READ appAudioVisible NOTIFY configChanged FINAL)
     Q_PROPERTY(bool appAudioEnabled READ appAudioEnabled WRITE setAppAudioEnabled NOTIFY configChanged FINAL)
+    // Per-source gain in whole dB (audio_track_model.h bounds). The microphone
+    // has its own gain on the Microphone card and none here.
+    Q_PROPERTY(int appGainDb READ appGainDb WRITE setAppGainDb NOTIFY configChanged FINAL)
+    Q_PROPERTY(int systemGainDb READ systemGainDb WRITE setSystemGainDb NOTIFY configChanged FINAL)
     Q_PROPERTY(bool appAudioSeparate READ appAudioSeparate WRITE setAppAudioSeparate NOTIFY configChanged FINAL)
     Q_PROPERTY(bool systemAudioEnabled READ systemAudioEnabled WRITE setSystemAudioEnabled NOTIFY configChanged FINAL)
     Q_PROPERTY(
@@ -161,6 +168,10 @@ class SettingsAdapter : public QObject {
     Q_PROPERTY(int micChannelMode READ micChannelMode WRITE setMicChannelMode NOTIFY configChanged FINAL)
     Q_PROPERTY(double micGainDb READ micGainDb WRITE setMicGainDb NOTIFY configChanged FINAL)
     Q_PROPERTY(int audioBitrateKbps READ audioBitrateKbps WRITE setAudioBitrateKbps NOTIFY configChanged FINAL)
+    // Bounds of the active lossy codec (codec_types.h): what the field accepts is
+    // what the encoder uses, never a value it would silently clamp.
+    Q_PROPERTY(int audioBitrateMinKbps READ audioBitrateMinKbps NOTIFY configChanged FINAL)
+    Q_PROPERTY(int audioBitrateMaxKbps READ audioBitrateMaxKbps NOTIFY configChanged FINAL)
     Q_PROPERTY(bool audioBitrateRelevant READ audioBitrateRelevant NOTIFY configChanged FINAL)
     Q_PROPERTY(QVariantList audioSampleRateOptions READ audioSampleRateOptions NOTIFY optionsChanged FINAL)
     Q_PROPERTY(int audioSampleRate READ audioSampleRate WRITE setAudioSampleRate NOTIFY configChanged FINAL)
@@ -175,6 +186,8 @@ class SettingsAdapter : public QObject {
     Q_PROPERTY(bool flacCompressionRelevant READ flacCompressionRelevant NOTIFY configChanged FINAL)
     Q_PROPERTY(bool limiterEnabled READ limiterEnabled WRITE setLimiterEnabled NOTIFY configChanged FINAL)
     Q_PROPERTY(double limiterCeilingDb READ limiterCeilingDb WRITE setLimiterCeilingDb NOTIFY configChanged FINAL)
+    Q_PROPERTY(bool audioPcmFloat READ audioPcmFloat WRITE setAudioPcmFloat NOTIFY configChanged FINAL)
+    Q_PROPERTY(bool audioPcmFloatRelevant READ audioPcmFloatRelevant NOTIFY configChanged FINAL)
     Q_PROPERTY(
         bool clockSlavingEnabled READ clockSlavingEnabled WRITE setClockSlavingEnabled NOTIFY configChanged FINAL)
     Q_PROPERTY(QVariantList opusFrameDurationOptions READ opusFrameDurationOptions NOTIFY optionsChanged FINAL)
@@ -414,6 +427,11 @@ class SettingsAdapter : public QObject {
 
     [[nodiscard]] bool appAudioVisible() const noexcept;
     [[nodiscard]] bool appAudioEnabled() const noexcept;
+    [[nodiscard]] int appGainDb() const noexcept;
+    [[nodiscard]] int systemGainDb() const noexcept;
+    [[nodiscard]] bool audioPcmFloat() const noexcept;
+    [[nodiscard]] bool audioPcmFloatRelevant() const noexcept;
+    [[nodiscard]] bool active() const noexcept;
     [[nodiscard]] bool appAudioSeparate() const noexcept;
     [[nodiscard]] bool systemAudioEnabled() const noexcept;
     [[nodiscard]] bool systemAudioSeparate() const noexcept;
@@ -425,6 +443,8 @@ class SettingsAdapter : public QObject {
     [[nodiscard]] int micChannelMode() const noexcept;
     [[nodiscard]] double micGainDb() const noexcept;
     [[nodiscard]] int audioBitrateKbps() const noexcept;
+    [[nodiscard]] int audioBitrateMinKbps() const noexcept;
+    [[nodiscard]] int audioBitrateMaxKbps() const noexcept;
     [[nodiscard]] bool audioBitrateRelevant() const noexcept;
     [[nodiscard]] const QVariantList& audioSampleRateOptions() const noexcept;
     [[nodiscard]] int audioSampleRate() const noexcept;
@@ -577,6 +597,10 @@ class SettingsAdapter : public QObject {
     void setSplitBySizeEnabled(bool value);
     void setSplitCustomSizeMb(int value);
     void setAppAudioEnabled(bool value);
+    void setAppGainDb(int value);
+    void setSystemGainDb(int value);
+    void setAudioPcmFloat(bool value);
+    void setActive(bool value);
     void setAppAudioSeparate(bool value);
     void setSystemAudioEnabled(bool value);
     void setSystemAudioSeparate(bool value);
@@ -663,6 +687,7 @@ class SettingsAdapter : public QObject {
     void optionsChanged();
     void appSettingsChanged();
     void controlsLockedChanged();
+    void activeChanged();
     void microphoneDevicesChanged();
     void captureTargetChanged();
     void webcamDevicesChanged();
@@ -713,9 +738,12 @@ class SettingsAdapter : public QObject {
     [[nodiscard]] exosnap::engine::AudioSourceRow* findRow(exosnap::engine::AudioSourceKind kind);
     [[nodiscard]] const exosnap::engine::AudioSourceRow* findRow(exosnap::engine::AudioSourceKind kind) const;
     void setRowEnabled(exosnap::engine::AudioSourceKind kind, bool enabled);
+    void setRowGainDb(exosnap::engine::AudioSourceKind kind, int db);
+    [[nodiscard]] int rowGainDb(exosnap::engine::AudioSourceKind kind) const noexcept;
     void setRowSeparate(exosnap::engine::AudioSourceKind kind, bool separate);
 
     RecordingPresetConfig config_;
+    bool active_ = false;
     PersistedAppSettings app_settings_;
     capability::CapabilitySet caps_;
     bool caps_set_ = false;

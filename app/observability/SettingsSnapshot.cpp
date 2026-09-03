@@ -204,6 +204,10 @@ QJsonObject WebcamConfigJson(const WebcamSettings& webcam) {
     json.insert(QStringLiteral("fps"), webcam.fps);
     json.insert(QStringLiteral("opacity"), static_cast<double>(webcam.opacity));
     json.insert(QStringLiteral("chromaKeyEnabled"), webcam.chroma_key.enabled);
+    json.insert(QStringLiteral("chromaKeyColorMode"), static_cast<int>(webcam.chroma_key.color_mode));
+    json.insert(QStringLiteral("chromaKeyTolerance"), static_cast<double>(webcam.chroma_key.tolerance));
+    json.insert(QStringLiteral("chromaKeySoftness"), static_cast<double>(webcam.chroma_key.softness));
+    json.insert(QStringLiteral("chromaKeySpillReduction"), static_cast<double>(webcam.chroma_key.spill_reduction));
     json.insert(QStringLiteral("devicePinned"), !webcam.device_id.empty());
     return json;
 }
@@ -233,6 +237,7 @@ QJsonObject AppSettingsJson(const PersistedAppSettings& app) {
     json.insert(QStringLiteral("updateChannel"), app.update_channel);
     json.insert(QStringLiteral("presentDiagnosticsOptIn"), app.present_diagnostics_optin);
     json.insert(QStringLiteral("developerLogLevel"), app.developer_log_level);
+    json.insert(QStringLiteral("crashReportPolicy"), static_cast<int>(app.crash_report_policy));
 
     QJsonObject overlays;
     overlays.insert(QStringLiteral("showRecordingOverlay"), app.show_recording_overlay);

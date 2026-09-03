@@ -355,10 +355,10 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
                               std::vector<EncodedAudioPacket>& out_pkts) {
         constexpr uint32_t kChunkFrames = 4800; // 100 ms at 48 kHz
         const uint32_t first_chunk = gap_frames < kChunkFrames ? gap_frames : kChunkFrames;
-        std::vector<float> zeros(static_cast<size_t>(first_chunk) * channels, 0.0f);
+        floatScratch.assign(static_cast<size_t>(first_chunk) * channels, 0.0f);
         for (uint32_t remaining = gap_frames; remaining > 0;) {
             const uint32_t n = remaining < kChunkFrames ? remaining : kChunkFrames;
-            enc.FeedFloat32(zeros.data(), static_cast<size_t>(n) * channels, 0, accumulated_frames, sample_rate,
+            enc.FeedFloat32(floatScratch.data(), static_cast<size_t>(n) * channels, 0, accumulated_frames, sample_rate,
                             channels, out_pkts);
             remaining -= n;
         }
@@ -818,9 +818,11 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
             }
             const size_t totalSamples = static_cast<size_t>(raw.num_frames) * static_cast<size_t>(channels);
             if (raw.silent || track_muted) {
-                std::vector<float> silence(totalSamples, 0.0f);
-                enc.FeedFloat32(silence.data(), silence.size(), 0, encoderAccumulatedFrames, sample_rate, channels,
-                                pkts);
+                // Every buffer while nothing plays, and every buffer of a muted
+                // track: the scratch is reused, not allocated per packet.
+                floatScratch.assign(totalSamples, 0.0f);
+                enc.FeedFloat32(floatScratch.data(), floatScratch.size(), 0, encoderAccumulatedFrames, sample_rate,
+                                channels, pkts);
             } else if (raw.bytes == nullptr) {
                 source_->ReleaseBuffer();
                 m_state.RecordFailure(E_FAIL, ErrorPhase::AudioCapture,

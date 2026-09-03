@@ -279,7 +279,7 @@ void MuxThread::Run() {
     };
 
     // Finalize the current segment and report it via the segment callback.
-    const auto finalize_segment = [&]() {
+    const auto finalize_segment = [&](bool session_end) {
         if (!seg.writer)
             return;
         const auto finalize_t0 = std::chrono::steady_clock::now();
@@ -308,6 +308,7 @@ void MuxThread::Run() {
         info.duration_ms = local_duration_ns / 1000000ULL;
         info.file_size_bytes = file_bytes;
         info.succeeded = ok;
+        info.session_end = session_end;
 
         if (!ok) {
             write_error = true;
@@ -501,7 +502,7 @@ void MuxThread::Run() {
             return;
         // Flush any buffered pre-epoch audio into the OLD segment first.
         drain_pending_audio();
-        finalize_segment();
+        finalize_segment(/*session_end=*/false);
         // finalize_segment() sets write_error on a finalize/I-O failure (failure
         // isolation: quarantine the incomplete current file, keep prior segments).
         // cppcheck cannot see the captured-by-ref mutation through the lambda call.
@@ -659,13 +660,18 @@ void MuxThread::Run() {
 
     // 2c. Final drain for race-window packets (arrived after both EOS sentinels).
     {
-        std::lock_guard lk(m_state.mux_mutex);
+        // Same shape as the main loop: a split sentinel here finalizes a file
+        // and runs the segment callback, and a producer that is still pushing
+        // its own EOS must not wait on the queue lock for that.
+        std::unique_lock lk(m_state.mux_mutex);
         while (!m_state.mux_queue.empty()) {
             MuxItem item = std::move(m_state.mux_queue.front());
             m_state.mux_queue.pop_front();
             m_state.OnMuxItemPopped(item);
+            lk.unlock();
             std::visit([&](auto&& payload) { handle_payload(std::move(payload), videoEos, audioEosReceived); },
                        item.payload);
+            lk.lock();
         }
     }
 
@@ -679,7 +685,7 @@ void MuxThread::Run() {
     }
 
     // --- Step 3: Finalize the final segment ---
-    finalize_segment();
+    finalize_segment(/*session_end=*/true);
 
     if (write_error || !any_segment_opened) {
         if (!m_state.HasFailure()) {

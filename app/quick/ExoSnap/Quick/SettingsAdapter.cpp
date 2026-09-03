@@ -759,14 +759,31 @@ void SettingsAdapter::rebuildOptions() {
 
     frame_rate_options_.clear();
     for (const uint32_t fps : kFrameRateLadder) {
-        if (max_frame_rate_ > 0 && fps > static_cast<uint32_t>(max_frame_rate_)) {
-            continue;
-        }
-        frame_rate_options_.append(makeOption(static_cast<int>(fps), tr("%1 fps").arg(fps)));
+        // Listed but disabled above the fastest attached display: a missing entry
+        // reads as "the product cannot do this", a disabled one as "this hardware
+        // cannot".
+        const bool feedable = max_frame_rate_ <= 0 || fps <= static_cast<uint32_t>(max_frame_rate_);
+        frame_rate_options_.append(makeOption(
+            static_cast<int>(fps), tr("%1 fps").arg(fps), feedable,
+            feedable ? QString() : tr("Faster than the fastest attached display (%1 Hz)").arg(max_frame_rate_)));
     }
-    if (frame_rate_options_.isEmpty()) {
-        frame_rate_options_.append(
-            makeOption(static_cast<int>(config_.video.frame_rate_num), tr("%1 fps").arg(config_.video.frame_rate_num)));
+    // A configured rate that is not on the ladder (set in Expert, or carried by
+    // a preset) gets its own entry, in numeric order, so the control never shows
+    // "(none selected)" for a rate the recorder is using.
+    {
+        const auto configured = static_cast<int>(config_.video.frame_rate_num);
+        bool listed = false;
+        int insert_at = 0;
+        for (int i = 0; i < frame_rate_options_.size(); ++i) {
+            const int listed_fps = frame_rate_options_.at(i).toMap().value(QStringLiteral("value")).toInt();
+            if (listed_fps == configured)
+                listed = true;
+            if (listed_fps < configured)
+                insert_at = i + 1;
+        }
+        if (!listed && configured > 0) {
+            frame_rate_options_.insert(insert_at, makeOption(configured, tr("%1 fps (Custom)").arg(configured)));
+        }
     }
 
     timing_options_.clear();
@@ -2010,6 +2027,57 @@ void SettingsAdapter::setSplitCustomSizeMb(int value) {
 void SettingsAdapter::setAppAudioEnabled(bool value) {
     setRowEnabled(exosnap::engine::AudioSourceKind::App, value);
 }
+int SettingsAdapter::appGainDb() const noexcept {
+    return rowGainDb(exosnap::engine::AudioSourceKind::App);
+}
+int SettingsAdapter::systemGainDb() const noexcept {
+    return rowGainDb(exosnap::engine::AudioSourceKind::Sys);
+}
+void SettingsAdapter::setAppGainDb(int value) {
+    setRowGainDb(exosnap::engine::AudioSourceKind::App, value);
+}
+void SettingsAdapter::setSystemGainDb(int value) {
+    setRowGainDb(exosnap::engine::AudioSourceKind::Sys, value);
+}
+int SettingsAdapter::rowGainDb(exosnap::engine::AudioSourceKind kind) const noexcept {
+    const auto* row = findRow(kind);
+    return row != nullptr ? qRound(row->gain_db) : 0;
+}
+void SettingsAdapter::setRowGainDb(exosnap::engine::AudioSourceKind kind, int db) {
+    exosnap::engine::AudioSourceRow* row = findRow(kind);
+    if (row == nullptr) {
+        return; // a source that is not in the plan has no gain to set
+    }
+    const float clamped = std::clamp(static_cast<float>(db), exosnap::engine::kMinGainDb, exosnap::engine::kMaxGainDb);
+    if (std::abs(row->gain_db - clamped) < 1e-4f) {
+        return;
+    }
+    row->gain_db = clamped;
+    applyConfigEdit();
+}
+bool SettingsAdapter::audioPcmFloat() const noexcept {
+    return config_.audio.audio_pcm_float;
+}
+bool SettingsAdapter::audioPcmFloatRelevant() const noexcept {
+    return config_.output.audio_codec == AudioCodec::Pcm && config_.audio.audio_bit_depth == 32;
+}
+void SettingsAdapter::setAudioPcmFloat(bool value) {
+    if (config_.audio.audio_pcm_float == value) {
+        return;
+    }
+    config_.audio.audio_pcm_float = value;
+    applyConfigEdit();
+}
+bool SettingsAdapter::active() const noexcept {
+    return active_;
+}
+void SettingsAdapter::setActive(bool value) {
+    if (active_ == value) {
+        return;
+    }
+    active_ = value;
+    emit activeChanged();
+}
 void SettingsAdapter::setAppAudioSeparate(bool value) {
     setRowSeparate(exosnap::engine::AudioSourceKind::App, value);
 }
@@ -2056,8 +2124,19 @@ void SettingsAdapter::setMicGainDb(double value) {
     applyConfigEdit();
 }
 
+int SettingsAdapter::audioBitrateMinKbps() const noexcept {
+    return config_.output.audio_codec == AudioCodec::Aac ? static_cast<int>(exosnap::engine::kAacBitrateKbpsMin)
+                                                         : static_cast<int>(exosnap::engine::kOpusBitrateKbpsMin);
+}
+int SettingsAdapter::audioBitrateMaxKbps() const noexcept {
+    return config_.output.audio_codec == AudioCodec::Aac ? static_cast<int>(exosnap::engine::kAacBitrateKbpsMax)
+                                                         : static_cast<int>(exosnap::engine::kOpusBitrateKbpsMax);
+}
 void SettingsAdapter::setAudioBitrateKbps(int value) {
-    const auto bitrate = static_cast<uint32_t>(std::max(0, value));
+    // 0 keeps the encoder default; anything else is held to the codec's range
+    // here, so the number the user sees is the number the encoder gets.
+    const auto bitrate =
+        value <= 0 ? 0u : static_cast<uint32_t>(std::clamp(value, audioBitrateMinKbps(), audioBitrateMaxKbps()));
     if (config_.audio.audio_bitrate_kbps == bitrate) {
         return;
     }
