@@ -552,11 +552,14 @@ class RecordingCoordinator {
     // Path of the transient MKV for the active MP4 session (used to size remux reserve).
     std::filesystem::path session_transient_mkv_;
 
+    // The monitor is bound to the recording it was started for: a verdict it
+    // reaches after that recording ended (its query can outlast the session) is
+    // dropped rather than applied to the recording running by then.
     void StartDiskMonitor(const std::filesystem::path& output_folder, bool is_mp4,
-                          const std::filesystem::path& transient_mkv);
+                          const std::filesystem::path& transient_mkv, exosnap::engine::RecordRequestId request);
     void StopDiskMonitor();
     // Called by the monitor thread when the threshold is crossed.
-    void OnDiskSpaceLow(uint64_t free_bytes, uint64_t threshold_bytes);
+    void OnDiskSpaceLow(exosnap::engine::RecordRequestId request, uint64_t free_bytes, uint64_t threshold_bytes);
 
     // Captured by OnDiskSpaceLow before calling StopRecording; read in
     // RecordingThreadProc to enrich the UiRecordingResult::error_detail.

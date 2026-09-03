@@ -5,6 +5,7 @@
 
 #include <dxgi1_6.h>
 
+#include <chrono>
 #include <cstdio>
 #include <iterator>
 #include <vector>
@@ -104,6 +105,49 @@ static float QuerySdrWhiteLevelNits(HMONITOR hmonitor) {
         return SdrWhiteLevelRawToNits(white.SDRWhiteLevel);
     }
     return 0.0f;
+}
+
+// The output's current mode, by its stable GDI device name (od_output_signature.h).
+// The DEVMODE is the authoritative mode; HDR comes from the output's colour space
+// (IDXGIOutput6::GetDesc1), found again through a fresh factory so the answer is
+// the display's state NOW, not what the duplication's factory enumerated at open.
+static OutputModeSignature ReadOutputModeSignature(const std::wstring& device_name) {
+    OutputModeSignature sig;
+    if (device_name.empty())
+        return sig;
+    DEVMODEW dm{};
+    dm.dmSize = sizeof(dm);
+    if (!EnumDisplaySettingsW(device_name.c_str(), ENUM_CURRENT_SETTINGS, &dm))
+        return sig;
+    sig.width = dm.dmPelsWidth;
+    sig.height = dm.dmPelsHeight;
+    sig.refresh_hz = dm.dmDisplayFrequency > 1 ? dm.dmDisplayFrequency : 0u;
+    sig.orientation = (dm.dmFields & DM_DISPLAYORIENTATION) ? dm.dmDisplayOrientation : 0u;
+    sig.known = true;
+
+    winrt::com_ptr<IDXGIFactory1> factory;
+    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(factory.put()))))
+        return sig;
+    for (UINT a = 0;; ++a) {
+        winrt::com_ptr<IDXGIAdapter1> adapter;
+        if (factory->EnumAdapters1(a, adapter.put()) == DXGI_ERROR_NOT_FOUND)
+            break;
+        for (UINT o = 0;; ++o) {
+            winrt::com_ptr<IDXGIOutput> output;
+            if (adapter->EnumOutputs(o, output.put()) == DXGI_ERROR_NOT_FOUND)
+                break;
+            DXGI_OUTPUT_DESC desc{};
+            if (FAILED(output->GetDesc(&desc)) || device_name != desc.DeviceName)
+                continue;
+            if (winrt::com_ptr<IDXGIOutput6> output6 = output.try_as<IDXGIOutput6>()) {
+                DXGI_OUTPUT_DESC1 desc1{};
+                if (SUCCEEDED(output6->GetDesc1(&desc1)))
+                    sig.hdr_active = IsHdrColorSpace(desc1.ColorSpace);
+            }
+            return sig;
+        }
+    }
+    return sig;
 }
 
 // Fill HDR facts from an already-matched DXGI output + its monitor. Mirrors the
@@ -244,6 +288,9 @@ bool DxgiOdCaptureSrc::Open(ID3D11Device* device, HMONITOR hmonitor, std::string
     if (!ResolveOutputForDevice(device, hmonitor, std::wstring{}, matchedOutput.put(), &matchedDesc, out_error))
         return false;
     m_device_name = matchedDesc.DeviceName;
+    m_open_signature = ReadOutputModeSignature(m_device_name);
+    m_signature_changed = false;
+    m_signature_checked_at = std::chrono::steady_clock::now();
 
     // Topology watch (see TopologyChangedSinceOpen). A factory reports IsCurrent()
     // false once the adapter/output set it enumerated has changed, which is the
@@ -416,7 +463,19 @@ bool DxgiOdCaptureSrc::TryAcquireFrame(uint32_t timeout_ms, ID3D11Texture2D** ou
 }
 
 bool DxgiOdCaptureSrc::TopologyChangedSinceOpen() const noexcept {
-    return m_topology_factory && m_topology_factory->IsCurrent() == FALSE;
+    if (m_topology_factory && m_topology_factory->IsCurrent() == FALSE)
+        return true;
+    if (m_signature_changed)
+        return true;
+    // Re-read at a bounded cadence: this is asked on every idle acquire timeout,
+    // and the read enumerates DXGI outputs.
+    constexpr auto kRecheckInterval = std::chrono::milliseconds(500);
+    const auto now = std::chrono::steady_clock::now();
+    if (now - m_signature_checked_at < kRecheckInterval)
+        return false;
+    m_signature_checked_at = now;
+    m_signature_changed = OutputModeChanged(m_open_signature, ReadOutputModeSignature(m_device_name));
+    return m_signature_changed;
 }
 
 void DxgiOdCaptureSrc::ReleaseFrame() {

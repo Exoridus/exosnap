@@ -148,6 +148,10 @@ struct SessionState {
 
     // Cooperative stop token set by Stop() or any fatal worker failure
     std::atomic<bool> stop_requested{false};
+    // Set only by RecorderSession::Stop(): tells a stop the caller asked for from
+    // one a worker raised on its own (source lost, failure). The outcome of a
+    // session that captured nothing depends on which it was (session_outcome.h).
+    std::atomic<bool> caller_stop_requested{false};
 
     // When the CAPTURE ended, as a steady_clock count in nanoseconds. 0 until a
     // stop is requested; the first request wins, so a failure that arrives while
@@ -539,6 +543,7 @@ struct SessionState {
         // session's end, and its duration -- measured from this session's start
         // to that earlier instant -- came out negative and was clamped to 0.
         capture_end_ns.store(0, std::memory_order_relaxed);
+        caller_stop_requested.store(false, std::memory_order_relaxed);
         pause_requested.store(false);
         // Live mute is deliberately per-session: a new recording starts from the
         // source rows, so a mute still standing when the last recording stopped
