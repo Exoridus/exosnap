@@ -434,7 +434,8 @@ const std::vector<capability::DisplayHdrFacts>& RecordingCoordinator::RefreshedD
 // ---------------------------------------------------------------------------
 
 void RecordingCoordinator::StartDiskMonitor(const std::filesystem::path& output_folder, bool is_mp4,
-                                            const std::filesystem::path& transient_mkv) {
+                                            const std::filesystem::path& transient_mkv,
+                                            exosnap::engine::RecordRequestId request) {
     session_is_mp4_ = is_mp4;
     session_transient_mkv_ = transient_mkv;
     disk_stop_triggered_.store(false);
@@ -449,8 +450,8 @@ void RecordingCoordinator::StartDiskMonitor(const std::filesystem::path& output_
 
     diagnostics::IDiskSpaceProvider* provider = disk_space_provider_;
 
-    disk_monitor_thread_ = std::jthread([this, output_folder, is_mp4, transient_mkv,
-                                         provider](std::stop_token stop_token) {
+    disk_monitor_thread_ = std::jthread([this, output_folder, is_mp4, transient_mkv, provider,
+                                         request](std::stop_token stop_token) {
         // Poll every 5 seconds.
         constexpr auto kPollInterval = std::chrono::seconds(5);
 
@@ -492,6 +493,10 @@ void RecordingCoordinator::StartDiskMonitor(const std::filesystem::path& output_
                 continue;
             }
             const uint64_t free_bytes = *queried;
+            // The query above can outlast the recording it was made for. Stopping
+            // is no longer this worker's to do once its own stop has been asked.
+            if (stop_token.stop_requested())
+                break;
 
             // For MP4 sessions compute the remux reserve as the sum of:
             //   (a) the current live transient MKV (segment being recorded now), and
@@ -514,7 +519,7 @@ void RecordingCoordinator::StartDiskMonitor(const std::filesystem::path& output_
 
             const uint64_t threshold = diagnostics::ComputeHardStopThreshold(remux_reserve);
             if (free_bytes <= threshold) {
-                OnDiskSpaceLow(free_bytes, threshold);
+                OnDiskSpaceLow(request, free_bytes, threshold);
                 break; // stop monitoring — we already triggered the stop
             }
         }
@@ -529,7 +534,15 @@ void RecordingCoordinator::StopDiskMonitor() {
     // destroyed.
 }
 
-void RecordingCoordinator::OnDiskSpaceLow(uint64_t free_bytes, uint64_t threshold_bytes) {
+void RecordingCoordinator::OnDiskSpaceLow(exosnap::engine::RecordRequestId request, uint64_t free_bytes,
+                                          uint64_t threshold_bytes) {
+    // The monitor that fires this is stopped, not joined, when its recording
+    // ends, and the query it was in can return after the next recording has
+    // started. The verdict belongs to the recording the monitor was started for;
+    // the flag below is already the next session's, and StopRecording() would
+    // stop whatever is running now.
+    if (record_request_.load() != request || !is_recording_.load())
+        return;
     // Only fire once per session.
     bool expected = false;
     if (!disk_stop_triggered_.compare_exchange_strong(expected, true))
@@ -551,9 +564,10 @@ void RecordingCoordinator::OnDiskSpaceLow(uint64_t free_bytes, uint64_t threshol
     if (QCoreApplication::instance() != nullptr) {
         QMetaObject::invokeMethod(
             QCoreApplication::instance(),
-            [this, free_bytes, threshold_bytes]() {
-                // Re-check is_recording_ on the main thread in case it already stopped.
-                if (!is_recording_.load())
+            [this, request, free_bytes, threshold_bytes]() {
+                // Re-check on the main thread: the recording may have stopped, or
+                // been replaced by the next one, while this was queued.
+                if (record_request_.load() != request || !is_recording_.load())
                     return;
 
                 // Surface the reason via a synthetic result that will be delivered
@@ -566,8 +580,8 @@ void RecordingCoordinator::OnDiskSpaceLow(uint64_t free_bytes, uint64_t threshol
             },
             Qt::QueuedConnection);
     } else {
-        // Test environment without Qt event loop — call directly.
-        if (is_recording_.load()) {
+        // Test environment without Qt event loop -- call directly.
+        if (record_request_.load() == request && is_recording_.load()) {
             disk_stop_reason_bytes_free_ = free_bytes;
             disk_stop_reason_threshold_ = threshold_bytes;
             StopRecording();
@@ -678,7 +692,7 @@ void RecordingCoordinator::SetAudioSourceMuted(exosnap::engine::AudioSourceKind 
     if (!is_recording_.load()) {
         return;
     }
-    session_.SetAudioSourceMuted(kind, muted);
+    session_.SetAudioSourceMuted(kind, muted, record_request_.load());
 }
 
 void RecordingCoordinator::SetWebcamSettings(const WebcamSettings& settings) {
@@ -690,7 +704,7 @@ void RecordingCoordinator::SetWebcamSettings(const WebcamSettings& settings) {
 
     const bool recording = is_recording_.load();
     if (recording) {
-        session_.UpdateWebcamOverlay(ToLiveWebcamOverlay(webcam_settings_));
+        session_.UpdateWebcamOverlay(ToLiveWebcamOverlay(webcam_settings_), record_request_.load());
     }
 
     // A device/resolution/fps change requires re-opening the capture, so do not
@@ -1341,6 +1355,17 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
         }
     }
 
+    // The idle preview's capture hub may hold the one allowed duplication of the
+    // target display; the engine opens its own below. The hook blocks until the
+    // hub's is closed, so the two never overlap. Runs on this worker thread (not
+    // the UI thread), and still inside Preparing: the wait can take most of a
+    // second, and the Recording state must not be public while the engine is not
+    // yet able to take a live command (pause, split, snapshot, mute). A cancel
+    // that lands during the wait costs at most a preview re-open on the way back
+    // to Ready.
+    if (preview_capture_release_hook_)
+        preview_capture_release_hook_();
+
     // Cancellation checkpoint 4 — immediately before the recording commits.
     if (prepare_cancel_requested_.load()) {
         cancel_unwind(); // removes the manifest entry just written
@@ -1386,16 +1411,8 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
         const bool is_mp4 = (config.container == exosnap::engine::Container::Mp4);
         const std::filesystem::path transient_mkv =
             is_mp4 ? exosnap::engine::DeriveTransientMkvPath(output_path) : std::filesystem::path{};
-        StartDiskMonitor(effective_folder, is_mp4, transient_mkv);
+        StartDiskMonitor(effective_folder, is_mp4, transient_mkv, record_request_.load());
     }
-
-    // The idle preview's capture hub may hold the one allowed duplication of the
-    // target display; the engine opens its own below. The hook blocks until the
-    // hub's is closed, so the two never overlap. Runs on this worker thread (not the
-    // UI thread), the last step before the engine opens — so a rejected or cancelled
-    // start never releases.
-    if (preview_capture_release_hook_)
-        preview_capture_release_hook_();
 
     // Prepare succeeded — flow straight into the recording (same thread, no second
     // hop). RecordingThreadProc blocks in session_.Record() for the whole recording.
@@ -1582,7 +1599,17 @@ bool RecordingCoordinator::RequestSplit(exosnap::engine::SplitTriggerSource sour
     diagnostics::AppLog::info(QStringLiteral("split"), QStringLiteral("requested source=%1 paused=%2")
                                                            .arg(QLatin1String(SplitTriggerName(source)))
                                                            .arg(st == UiRecordingState::Paused));
-    session_.RequestSplit(source, record_request_.load());
+    if (!session_.RequestSplit(source, record_request_.load())) {
+        // The engine has no running workers to split (the recording is still
+        // starting, or already ending). Leaving the flag armed would report every
+        // later request as "already splitting" until the session ends.
+        split_pending_.store(false);
+        diagnostics::AppLog::info(QStringLiteral("split"),
+                                  QStringLiteral("rejected: the engine is not recording yet (source=%1)")
+                                      .arg(QLatin1String(SplitTriggerName(source))));
+        PostSplitFeedback(false, QStringLiteral("The recording has not started yet."));
+        return false;
+    }
     return true;
 }
 
@@ -2862,12 +2889,13 @@ void RecordingCoordinator::CaptureFrame() {
         // any member is destroyed.
         QThreadPool* pool = &snapshot_pool_;
 
-        session_.RequestFrameSnapshot([cb_copy, folder, has_ctx, ctx, pool](bool ok, uint32_t w, uint32_t h,
-                                                                            std::vector<uint8_t> bgra,
-                                                                            const std::string& err) mutable {
-            WriteSnapshotAndNotify(*pool, cb_copy, folder, has_ctx, ctx, QString(), ok, w, h, std::move(bgra),
-                                   QString::fromStdString(err));
-        });
+        session_.RequestFrameSnapshot(
+            [cb_copy, folder, has_ctx, ctx, pool](bool ok, uint32_t w, uint32_t h, std::vector<uint8_t> bgra,
+                                                  const std::string& err) mutable {
+                WriteSnapshotAndNotify(*pool, cb_copy, folder, has_ctx, ctx, QString(), ok, w, h, std::move(bgra),
+                                       QString::fromStdString(err));
+            },
+            record_request_.load());
         return;
     }
 

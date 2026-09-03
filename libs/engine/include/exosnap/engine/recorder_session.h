@@ -693,10 +693,12 @@ class RecorderSession {
     // current segment is finalized and a new one begins with a forced keyframe;
     // capture/encode/audio continue uninterrupted. Coalesced: repeated requests
     // before the previous boundary is reached count as one. The trigger source
-    // is recorded for logging only. No-op if not recording, if the session was
-    // started without splitting wired (it is always wired; mode only gates auto),
-    // or if request_id names a different recording (as for Stop()).
-    void RequestSplit(SplitTriggerSource source, RecordRequestId request_id = kUnscopedRecordRequest);
+    // is recorded for logging only. Returns false, and requests nothing, when the
+    // workers are not yet (or no longer) running, or when request_id names a
+    // different recording (as for Stop()); a caller tracking a pending boundary
+    // must not arm it on false. Splitting is always wired; the mode only gates
+    // the automatic triggers.
+    [[nodiscard]] bool RequestSplit(SplitTriggerSource source, RecordRequestId request_id = kUnscopedRecordRequest);
 
     // Register a callback invoked from the mux worker thread as each media
     // segment is finalized (including the final one). Must be set before
@@ -705,15 +707,19 @@ class RecorderSession {
     // belongs to keeps running at full length and carries silence for as long as
     // the mute stands; nothing is re-opened, so unmuting resumes on the next
     // packet. Ignored between sessions -- the source rows are what a new session
-    // starts from.
-    void SetAudioSourceMuted(AudioSourceKind kind, bool muted) noexcept;
+    // starts from. Honoured from the moment Record(request_id) has taken over the
+    // session state, before its workers are up: they start with the mask as set.
+    // request_id scopes the call exactly as it does for Stop().
+    void SetAudioSourceMuted(AudioSourceKind kind, bool muted,
+                             RecordRequestId request_id = kUnscopedRecordRequest) noexcept;
 
     void SetSegmentCallback(SegmentCallback cb);
 
-    // Thread-safe live webcam overlay update. Safe to call from any thread while
-    // Record() is running. No-op if not recording or if the session was started
-    // without a webcam frame provider.
-    void UpdateWebcamOverlay(const WebcamOverlayLive& overlay);
+    // Thread-safe live webcam overlay update. Honoured from the moment
+    // Record(request_id) has taken over the session state. No-op if request_id is
+    // not that recording (as for Stop()) or if the session was started without a
+    // webcam frame provider.
+    void UpdateWebcamOverlay(const WebcamOverlayLive& overlay, RecordRequestId request_id = kUnscopedRecordRequest);
 
     // Register a stats callback invoked approximately every 264 ms from an
     // internal worker thread.  Must be set before calling Record().
@@ -745,10 +751,13 @@ class RecorderSession {
 
     // Request a one-shot BGRA frame snapshot from the next composed video frame.
     // The callback fires from VideoThread with (success, width, height, bgra_bytes, error).
-    // No-op if not recording or a snapshot is already pending.
-    // If the session stops while the request is pending the callback fires with success=false.
+    // No-op if request_id is not the recording Record() is running (as for
+    // Stop()) or a snapshot is already pending. Accepted from the moment Record()
+    // has taken over the session state, so a request made before the first frame
+    // is served by that frame. If the session ends while the request is pending
+    // the callback fires with success=false.
     using FrameSnapshotCallback = std::function<void(bool, uint32_t, uint32_t, std::vector<uint8_t>, std::string)>;
-    void RequestFrameSnapshot(FrameSnapshotCallback callback);
+    void RequestFrameSnapshot(FrameSnapshotCallback callback, RecordRequestId request_id = kUnscopedRecordRequest);
 
   private:
     struct Impl;

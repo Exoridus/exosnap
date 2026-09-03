@@ -575,6 +575,16 @@ exosnap_add_gtest(
 )
 target_include_directories(test_session_stop_reset PRIVATE src)
 
+# The per-Record() gate that keeps an abandoned worker's late callback out of
+# the caller. Plain threads, no hardware.
+exosnap_add_gtest(
+    NAME test_session_callback_gate
+    TEST_PREFIX engine.
+    SOURCES tests/test_session_callback_gate.cpp
+    LIBRARIES exosnap_engine
+)
+target_include_directories(test_session_callback_gate PRIVATE src)
+
 # Worker teardown ownership: an abandoned (stalled/hung) worker keeps its
 # SessionState and capture source alive through the thread's shared ownership,
 # wakes on the stop/failure flags, and runs out cleanly — never a detach into
@@ -1028,6 +1038,15 @@ exosnap_add_gtest(
 )
 target_include_directories(test_od_reopen_policy PRIVATE src)
 target_compile_definitions(test_od_reopen_policy PRIVATE NOMINMAX)
+
+# Display-mode signature comparison behind DxgiOdCaptureSrc::TopologyChangedSinceOpen
+# (the mode-change class IsCurrent() does not report). Pure logic.
+exosnap_add_gtest(
+    NAME test_od_output_signature
+    TEST_PREFIX engine.
+    SOURCES tests/test_od_output_signature.cpp
+    LIBRARIES exosnap_engine
+)
 
 # First-frame wait guard (S3): the 5 s first-frame timeout is suspended while an
 # OD start-hold recovers a fullscreen/mode transition, and the 15 s reopen budget

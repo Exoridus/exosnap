@@ -301,3 +301,16 @@ TEST(CaptureEndInstant, AFailureDuringTheDrainKeepsTheFirstInstant) {
 
     EXPECT_EQ(state.capture_end_ns.load(), at_stop);
 }
+
+// The caller-stop mark is what tells "the user stopped a recording that had no
+// frame yet" from "the capture delivered nothing" (session_outcome.h). It is
+// per recording: one left standing would make the next zero-frame session
+// look like a user abort.
+TEST(ResetForNewRecording, ClearsTheCallerStopMark) {
+    SessionState state;
+    state.caller_stop_requested.store(true);
+
+    state.ResetForNewRecording();
+
+    EXPECT_FALSE(state.caller_stop_requested.load());
+}

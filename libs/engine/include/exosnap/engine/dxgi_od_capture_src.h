@@ -18,6 +18,7 @@
 
 #include <exosnap/engine/codec_types.h>
 #include <exosnap/engine/hdr_native.h>
+#include <exosnap/engine/od_output_signature.h>
 
 namespace exosnap::engine {
 
@@ -80,9 +81,12 @@ class DxgiOdCaptureSrc {
     // Release the currently held frame. No-op if none held.
     void ReleaseFrame();
 
-    // True when the adapter/output topology has changed since Open() -- a mode
-    // switch, a hot-plug, a projection change (IDXGIFactory1::IsCurrent on the
-    // factory this source was opened with).
+    // True when the display this source was opened on has changed since Open():
+    // a hot-plug or projection change (IDXGIFactory1::IsCurrent on the factory
+    // this source was opened with -- an adapter-set signal, nothing more), or a
+    // mode change on the same adapter -- resolution, refresh rate, orientation,
+    // HDR toggled (od_output_signature.h; the output's current mode is re-read at
+    // a bounded cadence, so this may lag a switch by up to half a second).
     //
     // Exists because a topology change does not always invalidate the
     // duplication with DXGI_ERROR_ACCESS_LOST. It can also leave a duplication
@@ -128,6 +132,12 @@ class DxgiOdCaptureSrc {
     winrt::com_ptr<IDXGIOutputDuplication> m_duplication;
     // Factory created at Open(), kept only for its IsCurrent() topology check.
     winrt::com_ptr<IDXGIFactory1> m_topology_factory;
+    // The output's mode at Open(), and the throttled re-read that compares it
+    // (TopologyChangedSinceOpen). Latched once changed: a mode that moved and
+    // moved back still left the duplication behind.
+    OutputModeSignature m_open_signature;
+    mutable std::chrono::steady_clock::time_point m_signature_checked_at{};
+    mutable bool m_signature_changed = false;
     // Stable GDI device name (DXGI_OUTPUT_DESC.DeviceName, e.g. "\\.\DISPLAY2") of
     // the duplicated output, captured at Open(). Used by Reopen() to re-find the
     // output after its HMONITOR handle changes across a hot-plug. Never cleared by

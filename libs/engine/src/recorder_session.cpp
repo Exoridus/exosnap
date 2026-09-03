@@ -6,6 +6,7 @@
 #include "mic_dsp_audio_src.h"
 #include "mixed_audio_src.h"
 #include "mux_thread.h"
+#include "session_callback_gate.h"
 #include "session_internal.h"
 #include "session_outcome.h"
 #include "session_stats_collector.h"
@@ -132,6 +133,10 @@ struct RecorderSession::Impl {
     // can tell a stop meant for this recording from one left over by an earlier
     // one. Guarded by state_mutex.
     RecordRequestId active_request = kUnscopedRecordRequest;
+    // Outbound-callback gate of the running Record() call (session_callback_gate.h).
+    // Replaced, never reopened, per call; guarded by state_mutex. Null until the
+    // first Record().
+    std::shared_ptr<SessionCallbackGate> gate;
 
     StatsCallback stats_callback;
     MeterCallback meter_callback;
@@ -146,6 +151,15 @@ struct RecorderSession::Impl {
         std::lock_guard lk(state_mutex);
         return state;
     }
+
+    // The state a live command naming request_id may act on, or null when that
+    // request is not the one Record() is running (see RecordRequestMatches).
+    std::shared_ptr<SessionState> StateForRequest(RecordRequestId request_id) {
+        std::lock_guard lk(state_mutex);
+        if (!RecordRequestMatches(active_request, request_id))
+            return nullptr;
+        return state;
+    }
 };
 
 // ---------------------------------------------------------------------------
@@ -156,6 +170,8 @@ RecorderSession::RecorderSession() : m_impl(new Impl{}) {
 }
 
 RecorderSession::~RecorderSession() {
+    if (m_impl->gate)
+        m_impl->gate->Close();
     delete m_impl;
 }
 
@@ -454,6 +470,7 @@ void RecorderSession::Stop(RecordRequestId request_id) {
         m_impl->pending_stop.NoteStop(recording, request_id);
     }
     st->pause_requested.store(false);
+    st->caller_stop_requested.store(true);
     st->RequestCleanStop();
 }
 
@@ -479,28 +496,36 @@ void RecorderSession::Resume(RecordRequestId request_id) {
     st->pause_requested.store(false);
 }
 
-void RecorderSession::RequestSplit(SplitTriggerSource source, RecordRequestId request_id) {
+bool RecorderSession::RequestSplit(SplitTriggerSource source, RecordRequestId request_id) {
+    // Unlike the other live commands this one is not honoured before the workers
+    // are up: a split of a segment nothing has been written to yet has no
+    // meaning, and the mux samples the sequence counter when it starts, so an
+    // increment made before that would be absorbed without a boundary. The
+    // caller learns of the drop so its own pending flag does not outlive it.
     if (!m_impl->recording.load())
-        return;
+        return false;
     {
         // Same reason Stop() checks: a split queued for a recording that has
         // ended must not land in the one that followed it.
         std::lock_guard lk(m_impl->state_mutex);
         if (!RecordRequestMatches(m_impl->active_request, request_id))
-            return;
+            return false;
     }
     // Record the trigger (for logging) before bumping the sequence so the
     // observing thread sees a consistent (seq, trigger) pair.
     const auto st = m_impl->State();
     st->split_last_trigger.store(static_cast<uint32_t>(source));
     st->split_request_seq.fetch_add(1);
+    return true;
 }
 
-void RecorderSession::SetAudioSourceMuted(AudioSourceKind kind, bool muted) noexcept {
-    if (!m_impl->recording.load()) {
+void RecorderSession::SetAudioSourceMuted(AudioSourceKind kind, bool muted, RecordRequestId request_id) noexcept {
+    // Gated on the request, not on the workers being up: between Record()'s
+    // state reset and its worker start the mask already belongs to this
+    // recording, and a mute set then is what the workers start with.
+    const auto st = m_impl->StateForRequest(request_id);
+    if (!st)
         return;
-    }
-    const auto st = m_impl->State();
     const uint32_t bit = AudioSourceKindBit(kind);
     if (muted) {
         st->audio_mute_mask.fetch_or(bit, std::memory_order_relaxed);
@@ -515,22 +540,31 @@ void RecorderSession::SetSegmentCallback(SegmentCallback cb) {
     m_impl->segment_callback = std::move(cb);
 }
 
-void RecorderSession::RequestFrameSnapshot(FrameSnapshotCallback callback) {
-    if (!m_impl->recording.load())
-        return;
-    const auto st = m_impl->State();
+void RecorderSession::RequestFrameSnapshot(FrameSnapshotCallback callback, RecordRequestId request_id) {
+    std::shared_ptr<SessionState> st;
+    std::shared_ptr<SessionCallbackGate> gate;
+    {
+        std::lock_guard lk(m_impl->state_mutex);
+        if (!RecordRequestMatches(m_impl->active_request, request_id) || !m_impl->gate)
+            return;
+        st = m_impl->state;
+        gate = m_impl->gate;
+    }
     std::lock_guard lk(st->snapshot_callback_mutex);
     if (st->snapshot_requested.load())
-        return; // already pending — ignore
-    st->snapshot_callback = std::move(callback);
+        return; // already pending -- ignore
+    // The video thread fires this; it is one of the workers Record() may abandon.
+    st->snapshot_callback = [gate, cb = std::move(callback)](bool ok, uint32_t w, uint32_t h, std::vector<uint8_t> bgra,
+                                                             const std::string& err) {
+        gate->Invoke([&] { cb(ok, w, h, std::move(bgra), err); });
+    };
     st->snapshot_requested.store(true);
 }
 
-void RecorderSession::UpdateWebcamOverlay(const WebcamOverlayLive& overlay) {
-    if (!m_impl->recording.load()) {
+void RecorderSession::UpdateWebcamOverlay(const WebcamOverlayLive& overlay, RecordRequestId request_id) {
+    const auto st = m_impl->StateForRequest(request_id);
+    if (!st)
         return;
-    }
-    const auto st = m_impl->State();
     if (st->config.webcam.frame_provider == nullptr) {
         return;
     }
@@ -574,6 +608,7 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config, RecordReque
     // swap in a fresh one so the leaked worker drains against the old state
     // (kept alive by its own shared_ptr) while this session starts clean.
     std::shared_ptr<SessionState> state_ptr;
+    std::shared_ptr<SessionCallbackGate> gate;
     bool pre_stop = false;
     {
         std::lock_guard lk(m_impl->state_mutex);
@@ -588,10 +623,13 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config, RecordReque
         // swap just happened — see session_stop_reset.h. A stop naming a different
         // request is dropped by the same call.
         pre_stop = m_impl->pending_stop.Consume(request_id);
-    }
+        gate = m_impl->gate = std::make_shared<SessionCallbackGate>();
 
-    // Reset session state
-    {
+        // Reset session state -- still under the lock. A Stop(), Pause(), mute or
+        // snapshot that lands after the consume above then cannot be wiped by the
+        // reset: it either precedes the lock and is carried by pre_stop, or
+        // follows it and writes into the state the reset already left behind.
+        // (Nothing here blocks; the workers that could are not started yet.)
         auto& st = *state_ptr;
         // Everything the previous recording left behind (see
         // SessionState::ResetForNewRecording, which owns the field-by-field rule).
@@ -622,17 +660,32 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config, RecordReque
         st.stats_callback = m_impl->stats_callback;
         st.meter_callback = m_impl->meter_callback;
         st.diagnostics_callback = m_impl->diagnostics_callback;
-        st.segment_callback = m_impl->segment_callback;
+        // Everything a worker thread fires goes through this call's gate (see
+        // session_callback_gate.h); the stats collector's callbacks do not need it,
+        // it runs on this thread and is stopped before Record() returns.
+        if (m_impl->segment_callback) {
+            st.segment_callback = [gate, cb = m_impl->segment_callback](const CompletedSegment& seg) {
+                gate->Invoke([&] { cb(seg); });
+            };
+        } else {
+            st.segment_callback = nullptr;
+        }
         // Bridge the public uintptr_t handle callback to the internal HANDLE-typed one.
         if (m_impl->preview_shared_handle_callback) {
-            auto pub_cb = m_impl->preview_shared_handle_callback;
-            st.preview_shared_handle_cb = [pub_cb](HANDLE h, uint32_t w, uint32_t ht, PreviewTapDesc tap) {
-                pub_cb(reinterpret_cast<uintptr_t>(h), w, ht, tap);
+            st.preview_shared_handle_cb = [gate, pub_cb = m_impl->preview_shared_handle_callback](
+                                              HANDLE h, uint32_t w, uint32_t ht, PreviewTapDesc tap) {
+                gate->Invoke([&] { pub_cb(reinterpret_cast<uintptr_t>(h), w, ht, tap); });
             };
         } else {
             st.preview_shared_handle_cb = nullptr;
         }
-        st.preview_frame_published_cb = m_impl->preview_frame_published_callback;
+        if (m_impl->preview_frame_published_callback) {
+            st.preview_frame_published_cb = [gate, cb = m_impl->preview_frame_published_callback]() {
+                gate->Invoke([&] { cb(); });
+            };
+        } else {
+            st.preview_frame_published_cb = nullptr;
+        }
         st.diagnostics.Reset(++m_impl->diagnostics_generation, MakeDiagnosticsStaticConfig(engine_config));
     }
 
@@ -961,6 +1014,27 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config, RecordReque
         }
     }
 
+    // A snapshot nobody served (requested before the first frame of a recording
+    // that never got one) would otherwise leave its caller waiting forever.
+    {
+        FrameSnapshotCallback pending;
+        {
+            std::lock_guard lk(state_ptr->snapshot_callback_mutex);
+            pending = std::move(state_ptr->snapshot_callback);
+            state_ptr->snapshot_callback = nullptr;
+            state_ptr->snapshot_requested.store(false);
+        }
+        if (pending)
+            pending(false, 0, 0, {}, "the recording ended before a frame could be captured");
+    }
+
+    // From here no worker may reach the caller: a joined one is gone, an
+    // abandoned one finds the gate closed (session_callback_gate.h).
+    if (!gate->Close()) {
+        logging::log(logging::LogLevel::Warn, "recorder_session",
+                     "a worker callback was still running when the session closed; left to finish", {});
+    }
+
     // Build result
     RecorderResult result;
     {
@@ -1062,8 +1136,8 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config, RecordReque
     // there was never anything to write, so that rule would blame the mux for a
     // file the capture never gave it anything to fill.
     {
-        const MissingCaptureCause cause =
-            ClassifyMissingCapture(!result.succeeded, result.stats.video_frames_captured, pre_stop);
+        const MissingCaptureCause cause = ClassifyMissingCapture(!result.succeeded, result.stats.video_frames_captured,
+                                                                 pre_stop || state_ptr->caller_stop_requested.load());
         if (cause != MissingCaptureCause::None) {
             ApplyMissingCaptureOutcome(result, cause, config.target.kind);
             const logging::LogField fields[] = {{"cause", cause == MissingCaptureCause::StoppedBeforeCapture
