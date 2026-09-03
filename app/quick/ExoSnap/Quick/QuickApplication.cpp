@@ -64,6 +64,8 @@
 #include <update/update_handoff.h>
 
 #include <capability/capability_builder.h>
+#include <capability/codec_selection.h>
+#include <capability/support_level.h>
 
 #include <algorithm>
 #include <array>
@@ -348,6 +350,7 @@ QuickApplication::QuickApplication()
     preset_registry_.LoadState(persisted.user_presets,
                                persisted.selected_id.empty() ? std::string(kDefaultPresetId) : persisted.selected_id);
     live_config_ = persisted.live.has_value() ? SanitizePresetConfig(*persisted.live) : MakeDefaultPreset().config;
+    seed_video_codec_from_capabilities_ = !persisted.live.has_value();
     // Latched rather than raised here: the notification manager is not wired up
     // until initializeNotifications(). Silently repairing a user's saved
     // configuration and never saying so is exactly the behaviour the product
@@ -1100,6 +1103,7 @@ void QuickApplication::onCapabilitiesReady(const capability::CapabilitySet& capa
     // Settings codec lists and the Diagnostics recommendations were all built
     // against the empty set while the probe ran, so they are rebuilt here.
     device_adapter_.setCapabilitySet(capabilities_);
+    seedVideoCodecFromCapabilities();
     settings_adapter_.setCapabilities(capabilities_);
     publishDisplayDerivedState();
     refreshDiagnosticsData();
@@ -1289,6 +1293,8 @@ void QuickApplication::wireRecordCommands() {
                          synchronizeRecordState();
                      });
     QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::activeChanged, &record_view_model_adapter_,
+                     [this]() { updateMeterServices(); });
+    QObject::connect(&settings_adapter_, &SettingsAdapter::activeChanged, &settings_adapter_,
                      [this]() { updateMeterServices(); });
     QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::webcamOverlayRectRequested,
                      &record_view_model_adapter_, [this](const QRectF& rect) { updateWebcamOverlay(rect); });
@@ -1784,8 +1790,39 @@ void QuickApplication::scheduleMeterUpdate() {
 // at ~43 ms of GUI-thread time per return. Together with
 // MeterStartMode::Deferred (the endpoint open no longer blocks the caller) the
 // page-activation binding does no WASAPI work at all.
+void QuickApplication::seedVideoCodecFromCapabilities() {
+    if (!seed_video_codec_from_capabilities_)
+        return;
+    seed_video_codec_from_capabilities_ = false;
+    if (!capabilities_.probed)
+        return;
+    // The built-in default names AV1, which only Ada-class NVIDIA GPUs encode.
+    // A first start on anything older would otherwise land in Blocked with a
+    // codec complaint and nothing to repair it but the Diagnostics fix action.
+    // Same choice as that action: the best codec this GPU and container have.
+    auto& output = live_config_.output;
+    if (capability::IsSelectable(capabilities_.QueryVideoCodec(output.video_codec)))
+        return;
+    const auto best = capability::BestAvailableVideoCodec(capabilities_, output.container);
+    if (!best.has_value() || *best == output.video_codec)
+        return;
+    diagnostics::AppLog::info(QStringLiteral("startup"),
+                              QStringLiteral("first start: video codec %1 is not available on this GPU; using %2")
+                                  .arg(static_cast<int>(output.video_codec))
+                                  .arg(static_cast<int>(*best)));
+    output.video_codec = *best;
+    ReconcileContainerCodecs(output);
+    recording_coordinator_->SetOutputSettings(live_config_.output);
+    settings_adapter_.setConfig(live_config_);
+    persistLiveConfig();
+    refreshCrashSessionContext();
+}
+
 void QuickApplication::updateMeterServices() {
-    const bool visible = record_view_model_adapter_.active();
+    // Two pages show the meters: Record in its dock, Settings beside each audio
+    // source row. Feeding them only for Record left the Settings readings at
+    // silence while the user was looking at them.
+    const bool visible = record_view_model_adapter_.active() || settings_adapter_.active();
     const bool session = record_view_model_.state == UiRecordingState::Recording ||
                          record_view_model_.state == UiRecordingState::Paused ||
                          record_view_model_.state == UiRecordingState::Stopping;
@@ -1852,6 +1889,7 @@ void QuickApplication::initializeSettingsArea() {
                          recording_coordinator_->ApplyOutputFolderValidation(result);
                      });
     QObject::connect(&shell_adapter_, &ShellAdapter::currentPageChanged, &settings_adapter_, [this]() {
+        settings_adapter_.setActive(shell_adapter_.currentPage() == ShellAdapter::SettingsPage);
         if (shell_adapter_.currentPage() == ShellAdapter::SettingsPage) {
             settings_adapter_.requestOutputValidation(SettingsAdapter::OutputValidationTrigger::OutputCardReveal);
         }
@@ -2504,6 +2542,9 @@ void QuickApplication::applySettingsConfigEdit() {
     // Record-side mirror has to follow.
     record_view_model_.audio_ui_state = live_config_.audio;
     record_view_model_.RebuildAudioPlan();
+    // A microphone change on the Settings card re-opens the meter's endpoint
+    // the same way the Record page's own edit paths do.
+    updateMeterServices();
     refreshDiagnosticsData();
     recording_coordinator_->SetOutputSettings(live_config_.output);
     recording_coordinator_->SetVideoSettings(live_config_.video);

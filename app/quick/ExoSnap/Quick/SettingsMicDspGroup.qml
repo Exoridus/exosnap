@@ -71,7 +71,7 @@ ColumnLayout {
         Layout.leftMargin: ExoTheme.spacingLg
 
         ExoNumberField {
-            from: -90
+            from: -80
             to: 0
             suffix: qsTr("dB")
             value: Math.round(root.settings.micGateThresholdDb)

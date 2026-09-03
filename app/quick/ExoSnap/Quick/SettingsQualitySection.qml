@@ -81,7 +81,7 @@ Screen content with small text degrades earlier than video does, so the useful r
 
         ExoNumberField {
             from: 1000
-            to: 400000
+            to: 200000
             stepSize: 1000
             suffix: qsTr("kbps")
             value: root.settings.bitrateKbps

@@ -524,6 +524,7 @@ class QuickApplication {
     void updateMeters();
     void scheduleMeterUpdate();
     void updateMeterServices();
+    void seedVideoCodecFromCapabilities();
     // The deferred half of updateMeterServices(): opens the endpoints the current
     // state wants. Re-checks the stop condition, because it runs one debounce
     // interval after the decision that scheduled it.
@@ -598,6 +599,10 @@ class QuickApplication {
     PersistedAppSettings settings_;
     RecordingPresetStore preset_store_;
     RecordingPresetConfig live_config_;
+    // True until the first capability probe has had its say on a first start
+    // (no persisted live config): the built-in default names a codec this GPU
+    // may not have, and the probe is the first moment that can be known.
+    bool seed_video_codec_from_capabilities_ = false;
     capability::CapabilitySet capabilities_;
     RecordingPresetRegistry preset_registry_;
     RecoveryManifestStore recovery_manifest_store_;
