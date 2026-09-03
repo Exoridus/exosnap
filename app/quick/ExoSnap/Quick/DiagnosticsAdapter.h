@@ -128,6 +128,8 @@ class DiagnosticsAdapter : public QObject {
     void setDiagnosticConfig(diagnostics::DiagnosticsController::Config config);
     void setCapabilitySet(const capability::CapabilitySet& caps);
     void setSelectedCaptureTarget(std::optional<exosnap::engine::CaptureTarget> target);
+    void setCaptureTargetAdapter(diagnostics::RecommendationEngine::CaptureTargetAdapterFacts facts);
+    void setPresentAttributionPid(unsigned long pid);
     void setSavedDisplayUnresolved(bool unresolved, const std::string& label);
     void setCaptureWindowEvidence(std::optional<diagnostics::WindowTargetFacts> facts,
                                   const diagnostics::WindowHubEvidence& hub);

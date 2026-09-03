@@ -3554,6 +3554,9 @@ void VideoThread::Run() {
 
             winrt::com_ptr<ID3D11Texture2D> latestTex;
             int64_t latestFrameTicks100ns = 0;
+            // Last WGC frame time, for the source-cadence tap (WGC has no present
+            // timestamp; the frame's own SystemRelativeTime is the delivery time).
+            int64_t wgcLastFrameTicks100ns = 0;
 
             const CaptureDrainStep drainStep = NextCaptureDrainStep(useOdCapture, odHolding);
             if (drainStep == CaptureDrainStep::DrainOd) {
@@ -3700,6 +3703,15 @@ void VideoThread::Run() {
                                 } else {
                                     latestTex.copy_from(copied);
                                     latestFrameTicks100ns = frame.SystemRelativeTime().count();
+                                    if (!m_state.pause_requested.load() && wgcLastFrameTicks100ns != 0 &&
+                                        latestFrameTicks100ns > wgcLastFrameTicks100ns) {
+                                        m_state.diagnostics.OnSourcePresentInterval(
+                                            std::chrono::steady_clock::now(),
+                                            static_cast<double>(latestFrameTicks100ns - wgcLastFrameTicks100ns) /
+                                                10000.0,
+                                            1);
+                                    }
+                                    wgcLastFrameTicks100ns = latestFrameTicks100ns;
                                 }
                             }
                         }

@@ -1121,7 +1121,7 @@ TEST(RecommendationEngineTest, GetAllRecommendationCodes_ReturnsExpected) {
     // ADR 0046 audio device loss added rec.audio.degraded; the exclusive-window pre-flight
     // check added rec.capture.exclusive_window — expect 15 codes now.
     // v0.9 measured cards: rec.audio.endpoint_taken, rec.pacing.duplication, rec.audio.clock_saturated.
-    EXPECT_EQ(codes.size(), 18u);
+    EXPECT_EQ(codes.size(), 21u);
     EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.001"), codes.end());
     EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.005"), codes.end());
     EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.006"), codes.end());
@@ -2058,6 +2058,70 @@ TEST(ExclusiveWindowCard, PresentExclusiveStillFiresWithoutWindowEvidence) {
 }
 
 } // namespace
+TEST(RecommendationEngineTest, DisplayOnAnotherAdapterWithNvidiaPresentIsABlocker) {
+    using namespace exosnap::diagnostics;
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+    RecommendationEngine engine(caps, config);
+    RecommendationEngine::CaptureTargetAdapterFacts facts;
+    facts.known = true;
+    facts.vendor_id = 0x8086; // Intel
+    facts.adapter_name = "Intel(R) UHD Graphics";
+    facts.nvidia_adapter_present = true;
+    engine.SetCaptureTargetAdapter(facts);
+    const DiagnosticChecklist list = engine.Generate();
+    const auto it = std::find_if(list.results.begin(), list.results.end(),
+                                 [](const DiagnosticResult& r) { return r.id == "rec.capture.adapter_mismatch"; });
+    ASSERT_NE(it, list.results.end());
+    EXPECT_EQ(it->severity, DiagnosticSeverity::Blocker);
+    EXPECT_NE(it->summary.find("Intel"), std::string::npos);
+
+    // An NVIDIA-driven display, or a machine without an NVIDIA adapter, says nothing.
+    facts.vendor_id = 0x10DE;
+    engine.SetCaptureTargetAdapter(facts);
+    const DiagnosticChecklist nvidia = engine.Generate();
+    EXPECT_TRUE(std::none_of(nvidia.results.begin(), nvidia.results.end(),
+                             [](const DiagnosticResult& r) { return r.id == "rec.capture.adapter_mismatch"; }));
+    facts.vendor_id = 0x8086;
+    facts.nvidia_adapter_present = false;
+    engine.SetCaptureTargetAdapter(facts);
+    const DiagnosticChecklist no_nvidia = engine.Generate();
+    EXPECT_TRUE(std::none_of(no_nvidia.results.begin(), no_nvidia.results.end(),
+                             [](const DiagnosticResult& r) { return r.id == "rec.capture.adapter_mismatch"; }));
+}
+
+TEST(RecommendationEngineTest, NetworkOrRemovableOutputDriveRaisesNotice) {
+    using namespace exosnap::diagnostics;
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+    RecommendationEngine engine(caps, config);
+    engine.SetOutputDriveKind(DriveKind::Remote);
+    const DiagnosticChecklist remote = engine.Generate();
+    EXPECT_TRUE(std::any_of(remote.results.begin(), remote.results.end(),
+                            [](const DiagnosticResult& r) { return r.id == "rec.output.drive_kind"; }));
+    engine.SetOutputDriveKind(DriveKind::Fixed);
+    const DiagnosticChecklist fixed = engine.Generate();
+    EXPECT_TRUE(std::none_of(fixed.results.begin(), fixed.results.end(),
+                             [](const DiagnosticResult& r) { return r.id == "rec.output.drive_kind"; }));
+}
+
+TEST(RecommendationEngineTest, GpuBottleneckRaisesContentionCard) {
+    using namespace exosnap::diagnostics;
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+    exosnap::engine::RecordingDiagnosticsSnapshot live;
+    live.valid = true;
+    live.lifecycle = exosnap::engine::DiagnosticsLifecycle::Recording;
+    live.bottleneck = exosnap::engine::PipelineBottleneck::Gpu;
+    live.compositor.gpu_exec_p99_ms = 24.0;
+    live.capture.target_fps = 60.0;
+    const DiagnosticChecklist list = RecommendationEngine(caps, config, 0, true, "NTFS", &live, nullptr).Generate();
+    const auto it = std::find_if(list.results.begin(), list.results.end(),
+                                 [](const DiagnosticResult& r) { return r.id == "rec.gpu.contention"; });
+    ASSERT_NE(it, list.results.end());
+    EXPECT_NE(it->current_value.find("24.0"), std::string::npos) << it->current_value;
+}
+
 } // namespace exosnap::diagnostics
 
 namespace exosnap::diagnostics {

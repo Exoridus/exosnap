@@ -258,7 +258,7 @@ TEST(FilesystemChecksRecommendationTest, GetAllRecommendationCodes_IncludesRec00
     // rec.001–rec.008 + the 0.8.0 incident catalog rec.009/rec.010 + rec.color.range +
     // rec.hdr.h264 + display.saved.unresolved + rec.audio.degraded (ADR 0046 device loss)
     // + rec.capture.exclusive_window (exclusive-window pre-flight) → 15 codes.
-    EXPECT_EQ(codes.size(), 18u);
+    EXPECT_EQ(codes.size(), 21u);
     const bool has_rec008 = std::find(codes.begin(), codes.end(), "rec.008") != codes.end();
     EXPECT_TRUE(has_rec008);
 }

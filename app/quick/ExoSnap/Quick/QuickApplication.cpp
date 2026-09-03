@@ -63,9 +63,11 @@
 // and never arrive.
 #include <update/update_handoff.h>
 
+#include <capability/adapter_enum.h>
 #include <capability/capability_builder.h>
 #include <capability/codec_selection.h>
 #include <capability/support_level.h>
+#include <exosnap/engine/dxgi_od_capture_src.h>
 
 #include <algorithm>
 #include <array>
@@ -1052,6 +1054,7 @@ void QuickApplication::initializeRecordWorkflow() {
     QObject::connect(&audio_notifier_, &AudioDeviceNotifier::snapshotChanged, &record_view_model_adapter_,
                      [this](const AudioDeviceSnapshot& snapshot, DiscoveryReason) {
                          microphone_available_ = !snapshot.inputs.isEmpty();
+                         noteDefaultInputEndpoint(snapshot);
                          synchronizeRecordState();
                          updateMeterServices();
                      });
@@ -2126,6 +2129,7 @@ void QuickApplication::updateCaptureEvidenceTarget() {
     if (!same_target(pushed_selected_target_, target)) {
         pushed_selected_target_ = target;
         diagnostics_adapter_.setSelectedCaptureTarget(target);
+        diagnostics_adapter_.setCaptureTargetAdapter(captureTargetAdapterFacts(target));
         // Idle attribution boundary (ADR 0033): present statistics follow the
         // selection, so the Diagnostics page describes the source the user is
         // looking at rather than whatever presented last.
@@ -2219,6 +2223,8 @@ void QuickApplication::observeWindowCaptureStall(const exosnap::engine::Recordin
     sample.is_window_target = snapshot.capture.source_type == exosnap::engine::CaptureSourceType::Window;
     sample.is_display_target = snapshot.capture.source_type == exosnap::engine::CaptureSourceType::Display ||
                                snapshot.capture.source_type == exosnap::engine::CaptureSourceType::Region;
+    if (sample.is_display_target && sample.capture_expected)
+        updatePresentAttribution(presentTargetPidForSelection(), /*force=*/false);
     sample.capture_expected = diagnostics::CaptureProgressExpected(snapshot.lifecycle);
     sample.frames_captured = snapshot.capture.frames_captured;
     sample.elapsed_seconds = snapshot.elapsed_seconds;
@@ -2307,6 +2313,33 @@ void QuickApplication::observeWindowCaptureStall(const exosnap::engine::Recordin
     clearWindowCaptureStallWarning();
     capture_stall_toast_sequence_ = notifications_adapter_.manager().Enqueue(
         notifications::MakeWindowCaptureStalledEvent(starved_for, fullscreen_hint));
+}
+
+void QuickApplication::noteDefaultInputEndpoint(const AudioDeviceSnapshot& snapshot) {
+    const std::string previous = std::exchange(last_default_input_id_, snapshot.default_input_id);
+    if (previous.empty() || previous == snapshot.default_input_id)
+        return;
+    const bool session =
+        record_view_model_.state == UiRecordingState::Recording || record_view_model_.state == UiRecordingState::Paused;
+    // Only a session that followed the default is affected: a pinned device keeps
+    // capturing whichever way Windows points.
+    if (!session ||
+        (record_view_model_.audio_ui_state.selected_mic_device_id.has_value() &&
+         !record_view_model_.audio_ui_state.selected_mic_device_id->empty()) ||
+        !record_view_model_.audio_ui_state.IsMicEnabled())
+        return;
+    QString new_name;
+    QString kept_name;
+    for (const auto& input : snapshot.inputs) {
+        if (input.device_id == snapshot.default_input_id)
+            new_name = QString::fromStdString(input.display_name);
+        if (input.device_id == previous)
+            kept_name = QString::fromStdString(input.display_name);
+    }
+    diagnostics::AppLog::warning(QStringLiteral("audio"),
+                                 QStringLiteral("default microphone changed while recording; the session keeps the "
+                                                "device it started with"));
+    notifications_adapter_.manager().Enqueue(notifications::MakeAudioDefaultDeviceChangedEvent(new_name, kept_name));
 }
 
 void QuickApplication::clearWindowCaptureStallWarning() {
@@ -5026,6 +5059,30 @@ diagnostics::PresentMonProvider* QuickApplication::presentProvider() noexcept {
     return present_provider_.get();
 }
 
+diagnostics::RecommendationEngine::CaptureTargetAdapterFacts
+QuickApplication::captureTargetAdapterFacts(const std::optional<exosnap::engine::CaptureTarget>& target) {
+    diagnostics::RecommendationEngine::CaptureTargetAdapterFacts facts;
+    if (!target.has_value() || target->kind != exosnap::engine::CaptureTarget::Kind::Monitor)
+        return facts;
+    winrt::com_ptr<IDXGIAdapter1> adapter;
+    std::string err;
+    if (!exosnap::engine::FindAdapterForMonitor(reinterpret_cast<HMONITOR>(static_cast<uintptr_t>(target->native_id)),
+                                                adapter.put(), err) ||
+        !adapter)
+        return facts;
+    DXGI_ADAPTER_DESC1 desc{};
+    if (FAILED(adapter->GetDesc1(&desc)))
+        return facts;
+    facts.known = true;
+    facts.vendor_id = desc.VendorId;
+    facts.adapter_name = QString::fromWCharArray(desc.Description).toStdString();
+    for (const auto& info : capability::EnumerateAdapters()) {
+        if (info.vendor == capability::AdapterVendor::Nvidia)
+            facts.nvidia_adapter_present = true;
+    }
+    return facts;
+}
+
 unsigned long QuickApplication::presentTargetPidForSelection() const {
     // Window capture attributes presents to the captured window's process. Display
     // and Region capture have no owning process -- their presenter is whichever
@@ -5033,8 +5090,20 @@ unsigned long QuickApplication::presentTargetPidForSelection() const {
     // filter the idle desktop uses.
     if (!pushed_selected_target_.has_value())
         return 0;
-    if (pushed_selected_target_->kind != exosnap::engine::CaptureTarget::Kind::Window)
-        return 0;
+    if (pushed_selected_target_->kind != exosnap::engine::CaptureTarget::Kind::Window) {
+        // A display has no owning process; the one that dominates it is the
+        // foreground window while it sits on that display. Re-resolved at the
+        // diagnostics cadence while recording, so a game that comes to the front
+        // after the start is picked up.
+        const auto monitor = reinterpret_cast<HMONITOR>(static_cast<uintptr_t>(pushed_selected_target_->native_id));
+        const HWND foreground = ::GetForegroundWindow();
+        if (monitor == nullptr || foreground == nullptr ||
+            ::MonitorFromWindow(foreground, MONITOR_DEFAULTTONULL) != monitor)
+            return 0;
+        DWORD pid = 0;
+        ::GetWindowThreadProcessId(foreground, &pid);
+        return pid;
+    }
     const auto hwnd = reinterpret_cast<HWND>(static_cast<uintptr_t>(pushed_selected_target_->native_id));
     if (hwnd == nullptr || ::IsWindow(hwnd) == FALSE)
         return 0;
@@ -5050,6 +5119,7 @@ void QuickApplication::updatePresentAttribution(unsigned long pid, bool force) {
         return;
     present_target_pid_ = pid;
     present_provider_->SetTargetProcessId(pid);
+    diagnostics_adapter_.setPresentAttributionPid(pid);
     diagnostics::AppLog::info(QStringLiteral("present"),
                               QStringLiteral("attribution boundary: target pid=%1 force=%2 (accumulators reset)")
                                   .arg(pid)

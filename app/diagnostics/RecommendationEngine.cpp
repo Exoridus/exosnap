@@ -79,6 +79,12 @@ RecommendationEngine::RecommendationEngine(const capability::CapabilitySet& caps
         live_target_fps_ = live_snapshot->capture.target_fps;
     }
     if (live_snapshot != nullptr && live_snapshot->valid &&
+        live_snapshot->bottleneck == exosnap::engine::PipelineBottleneck::Gpu) {
+        live_gpu_contention_ = true;
+        live_gpu_exec_p99_ms_ = live_snapshot->compositor.gpu_exec_p99_ms;
+        live_target_fps_for_gpu_ = live_snapshot->capture.target_fps;
+    }
+    if (live_snapshot != nullptr && live_snapshot->valid &&
         live_snapshot->av_drift_availability == exosnap::engine::MetricAvailability::Available) {
         live_clock_saturated_ = live_snapshot->clock_slaving_saturated;
         live_clock_ppm_ = live_snapshot->clock_slaving_ppm;
@@ -119,6 +125,9 @@ DiagnosticChecklist RecommendationEngine::Generate() const {
     checkAudioSourceDegraded(checklist);
     checkFramePacingDuplication(checklist);
     checkAudioClockSaturated(checklist);
+    checkCaptureAdapterMismatch(checklist);
+    checkOutputDriveKind(checklist);
+    checkGpuContention(checklist);
     return checklist;
 }
 
@@ -1026,6 +1035,77 @@ void RecommendationEngine::checkAudioClockSaturated(DiagnosticChecklist& checkli
     checklist.results.push_back(std::move(r));
 }
 
+void RecommendationEngine::checkCaptureAdapterMismatch(DiagnosticChecklist& checklist) const {
+    constexpr uint32_t kNvidiaVendorId = 0x10DE;
+    const auto& a = capture_target_adapter_;
+    if (!a.known || a.vendor_id == kNvidiaVendorId || !a.nvidia_adapter_present) {
+        return;
+    }
+    const std::string driver = a.adapter_name.empty() ? std::string("another graphics adapter") : a.adapter_name;
+    DiagnosticResult r = MakeResult(
+        "rec.capture.adapter_mismatch", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker,
+        DiagnosticTier::MeasuredProblem, "The captured display is not driven by the NVIDIA GPU",
+        "This display is driven by " + driver + "; the NVIDIA encoder cannot record it.",
+        "Capture opens on the adapter that owns the display, and the hardware encoder opens on that same "
+        "device. With the display on " +
+            driver +
+            " the NVIDIA encoder is never reachable, and the failure that follows would read as a codec or "
+            "driver problem.",
+        "Display adapter: " + driver,
+        "In NVIDIA Control Panel, Manage 3D settings, set the preferred graphics processor to the NVIDIA GPU, "
+        "or connect the display to the NVIDIA outputs, or record a display the NVIDIA GPU drives.");
+    checklist.has_blocker = true;
+    checklist.results.push_back(std::move(r));
+}
+
+void RecommendationEngine::checkOutputDriveKind(DiagnosticChecklist& checklist) const {
+    const char* kind = nullptr;
+    switch (output_drive_kind_) {
+    case DriveKind::Remote:
+        kind = "a network drive";
+        break;
+    case DriveKind::Removable:
+        kind = "a removable drive";
+        break;
+    case DriveKind::CdRom:
+        kind = "an optical drive";
+        break;
+    default:
+        return;
+    }
+    DiagnosticResult r = MakeResult(
+        "rec.output.drive_kind", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
+        DiagnosticTier::Optimisation, "The output folder is on " + std::string(kind),
+        "Writes there can stall long enough to drop frames.",
+        "The recorder writes the file as it records; a volume whose write latency spikes (network shares, USB "
+        "sticks, SD cards) back-pressures the capture. This is a property of the drive, not of the settings.",
+        std::string("Output volume: ") + kind, "Record to a local SSD and copy the file afterwards.");
+    checklist.has_notice = true;
+    checklist.results.push_back(std::move(r));
+}
+
+void RecommendationEngine::checkGpuContention(DiagnosticChecklist& checklist) const {
+    if (!live_gpu_contention_) {
+        return;
+    }
+    const std::string gpu_ms = std::to_string(live_gpu_exec_p99_ms_).substr(0, 4);
+    const std::string budget =
+        live_target_fps_for_gpu_ > 0.0 ? std::to_string(1000.0 / live_target_fps_for_gpu_).substr(0, 4) : "the";
+    DiagnosticResult r =
+        MakeResult("rec.gpu.contention", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
+                   DiagnosticTier::MeasuredProblem, "The graphics card is saturated by the captured application",
+                   "The GPU finishes the recorder's frame work later than the frame budget while the recorder's own "
+                   "submissions stay cheap.",
+                   "Measured on the GPU with timestamp queries: the recorder's passes take " + gpu_ms +
+                       " ms (p99) against " + budget +
+                       " ms per frame, while submitting them costs almost nothing. The card is busy with the captured "
+                       "application's work; the recorder waits behind it.",
+                   "GPU frame work " + gpu_ms + " ms p99 vs " + budget + " ms budget",
+                   "Cap the game's frame rate, lower its graphics settings, or lower the recording resolution.");
+    checklist.has_notice = true;
+    checklist.results.push_back(std::move(r));
+}
+
 std::vector<std::string> RecommendationEngine::GetAllRecommendationCodes() {
     return {"rec.001",
             "rec.002",
@@ -1043,6 +1123,9 @@ std::vector<std::string> RecommendationEngine::GetAllRecommendationCodes() {
             "rec.audio.endpoint_taken",
             "rec.pacing.duplication",
             "rec.audio.clock_saturated",
+            "rec.capture.adapter_mismatch",
+            "rec.output.drive_kind",
+            "rec.gpu.contention",
             "rec.capture.exclusive_window",
             "display.saved.unresolved"};
 }

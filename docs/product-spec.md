@@ -1861,6 +1861,20 @@ consumer and a log consumer:
   real drop (`frames_dropped_ring_eviction`), on every surface that reports problem drops.
 - An encoder open that fails with `NV_ENC_ERR_OUT_OF_MEMORY` is reported as **"Encoder is in use by
   another application"** with the usual NVENC clients named, never as a driver problem.
+- `rec.capture.adapter_mismatch` (Blocker, at target selection) -- the captured display is driven by
+  an adapter that is not the NVIDIA GPU while an NVIDIA GPU is present: the encoder opens on the
+  display's adapter and cannot reach it. Names the adapter and the NVIDIA Control Panel setting.
+- `rec.output.drive_kind` -- the output folder is on a network, removable or optical volume
+  (`GetDriveType`), said before the first write stall rather than after.
+- `rec.gpu.contention` -- the pipeline's `GPU` bottleneck: the recorder's own passes finish late on the
+  GPU (D3D11 timestamp queries) while submitting them stays cheap; the card is saturated by the captured
+  application. Replaces the compositor label that used to take the blame.
+- Present cadence for **window and region** capture comes from the WGC frame's `SystemRelativeTime`
+  deltas, so `rec.001` (judder) is reachable there too; its provenance is a delivery time, so the jitter
+  floor is higher than DXGI's present time. For a **display** the present sample is attributed to the
+  foreground process on that display, re-resolved at the diagnostics cadence.
+- **Default microphone changed** -- a notification when Windows moves the default capture endpoint while
+  a session that followed the default is recording; the session keeps its device, and the notice says so.
 
 **Underlying severity:** each check resolves to **Pass / Notice / Blocker**. A **Notice** is advisory
 and never blocks recording; a **Blocker** prevents recording from starting.

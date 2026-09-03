@@ -14,26 +14,27 @@ namespace exosnap::notifications {
 // The four trigger sources for transient notification toasts (NOTIFY-TOASTS-R1).
 // Each maps to exactly one wiring point in MainWindow.
 enum class NotificationType : uint8_t {
-    LowStorage,          // disk monitor crossed hard-stop threshold during recording
-    Saved,               // recording finalized / saved successfully
-    UnexpectedStop,      // recording stopped due to engine error (non-disk failure)
-    RecoveryAvailable,   // startup scan found recoverable sessions
-    UpdateAvailable,     // a newer release exists on the active channel (ADR 0012)
-    FramesDropped,       // real frames lost during recording: encoder backpressure or a
-                         // frame-processing failure (DROP-NOTIFY) — never benign CFR pacing
-    SettingsRepaired,    // the preset store needed a field-wise repair on load
-    PresetSwitched,      // a preset switch applied immediately; offers an Undo
-    OverlayOmitted,      // this display's HDR10 format cannot carry the webcam/cursor overlays
-    HotkeyConflict,      // a persisted global hotkey could not be registered at startup (held elsewhere)
-    SettingsSaveFailed,  // a settings/preset write failed (disk full, file locked, ...) — the change may be lost
-    AudioSourceDegraded, // an audio capture source lost its device mid-recording and is contributing
-                         // honest silence while the engine retries (ADR 0046); standing while any
-                         // source stays degraded, replaced in place if the degraded set changes,
-                         // cleared the moment every source reactivates (or the recording ends).
-    CaptureActionFailed, // a Record-page quick action (frame capture, split request) was rejected
-    FrameCaptured,       // a single frame was written to disk from the Record page
-                         // or failed; success is silent (the resulting file/segment is its own
-                         // confirmation), only failures surface here.
+    LowStorage,                // disk monitor crossed hard-stop threshold during recording
+    Saved,                     // recording finalized / saved successfully
+    UnexpectedStop,            // recording stopped due to engine error (non-disk failure)
+    RecoveryAvailable,         // startup scan found recoverable sessions
+    UpdateAvailable,           // a newer release exists on the active channel (ADR 0012)
+    FramesDropped,             // real frames lost during recording: encoder backpressure or a
+                               // frame-processing failure (DROP-NOTIFY) — never benign CFR pacing
+    SettingsRepaired,          // the preset store needed a field-wise repair on load
+    PresetSwitched,            // a preset switch applied immediately; offers an Undo
+    OverlayOmitted,            // this display's HDR10 format cannot carry the webcam/cursor overlays
+    HotkeyConflict,            // a persisted global hotkey could not be registered at startup (held elsewhere)
+    SettingsSaveFailed,        // a settings/preset write failed (disk full, file locked, ...) — the change may be lost
+    AudioDefaultDeviceChanged, // Windows switched the default microphone mid-recording; the session keeps its device
+    AudioSourceDegraded,       // an audio capture source lost its device mid-recording and is contributing
+                               // honest silence while the engine retries (ADR 0046); standing while any
+                               // source stays degraded, replaced in place if the degraded set changes,
+                               // cleared the moment every source reactivates (or the recording ends).
+    CaptureActionFailed,       // a Record-page quick action (frame capture, split request) was rejected
+    FrameCaptured,             // a single frame was written to disk from the Record page
+                               // or failed; success is silent (the resulting file/segment is its own
+                               // confirmation), only failures surface here.
     RecoveryProtectionUnavailable, // a recovery-manifest write did not reach disk, so this recording has
                                    // no crash-recovery entry. The recording itself is unaffected — same
                                    // class as a failed settings write: reported, never silent.
@@ -138,6 +139,7 @@ struct NotificationEvent {
     case NotificationType::FramesDropped:
     case NotificationType::OverlayOmitted:
     case NotificationType::AudioSourceDegraded:
+    case NotificationType::AudioDefaultDeviceChanged:
     case NotificationType::RecoveryAvailable:
     case NotificationType::HotkeyConflict:   // a bound hotkey is dead
     case NotificationType::SettingsRepaired: // the store needed repairing on load
@@ -237,6 +239,26 @@ struct NotificationEvent {
         event.body += QStringLiteral(" If the application switched to exclusive fullscreen, set it back to windowed "
                                      "or borderless mode — or stop the recording.");
     }
+    event.action = NotificationAction::OpenDiagnostics;
+    return event;
+}
+
+// Windows moved the default microphone while a session that followed the
+// default was recording. The session does not follow: a mid-file device switch
+// would change format and clock under a running encoder. Said plainly, so the
+// user does not conclude the recorder ignored the switch.
+[[nodiscard]] inline NotificationEvent MakeAudioDefaultDeviceChangedEvent(const QString& new_device,
+                                                                          const QString& kept_device) {
+    NotificationEvent event;
+    event.type = NotificationType::AudioDefaultDeviceChanged;
+    event.title = QStringLiteral("Default microphone changed");
+    const QString to =
+        new_device.isEmpty() ? QStringLiteral("another device") : QStringLiteral("\"%1\"").arg(new_device);
+    const QString kept = kept_device.isEmpty() ? QStringLiteral("the device it started with")
+                                               : QStringLiteral("\"%1\"").arg(kept_device);
+    event.body = QStringLiteral("Windows switched the default microphone to %1 while recording. This recording keeps "
+                                "capturing %2; it will not switch mid-file.")
+                     .arg(to, kept);
     event.action = NotificationAction::OpenDiagnostics;
     return event;
 }

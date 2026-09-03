@@ -594,6 +594,8 @@ class PipelineDiagnosticsAggregator {
     // Classifier sustained-condition counters
     int sustain_capture_ = 0;
     int sustain_compositor_ = 0;
+    int sustain_gpu_ = 0;
+    double gpu_exec_p99_ms_ = 0.0; // refreshed by BuildSnapshot before Classify
     int sustain_encoder_ = 0;
     int sustain_audio_ = 0;
     int sustain_muxer_ = 0;

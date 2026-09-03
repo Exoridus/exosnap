@@ -980,6 +980,9 @@ RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_p
     // ---- Classification ----
     std::string reason;
     PipelineHealth health = PipelineHealth::Idle;
+    gpu_exec_p99_ms_ = composition_gpu_window_.Percentile(now, 0.99) + hdr_tonemap_gpu_window_.Percentile(now, 0.99) +
+                       rgb_to_yuv_gpu_window_.Percentile(now, 0.99);
+    s.compositor.gpu_exec_p99_ms = gpu_exec_p99_ms_;
     s.bottleneck = Classify(s, recording, reason, health);
     s.bottleneck_reason = reason;
     s.health = health;
@@ -1061,6 +1064,7 @@ PipelineBottleneck PipelineDiagnosticsAggregator::Classify(const RecordingDiagno
 
     if (!recording) {
         sustain_capture_ = sustain_compositor_ = sustain_encoder_ = 0;
+        sustain_gpu_ = 0;
         sustain_audio_ = sustain_muxer_ = sustain_disk_ = 0;
         last_dropped_total_ = problem_drops;
         last_audio_disc_ = s.audio.discontinuities;
@@ -1086,6 +1090,10 @@ PipelineBottleneck PipelineDiagnosticsAggregator::Classify(const RecordingDiagno
                           !downstream_saturated;
     const bool comp_cond =
         s.compositor.active && s.compositor.average_ms > budget_ms * thresholds_.compositor_budget_ratio;
+    // GPU execution past the budget while the recorder's own submission stays
+    // cheap: the card is busy with someone else's work (the captured game).
+    const bool gpu_cond = gpu_exec_p99_ms_ > budget_ms && s.compositor.average_ms < budget_ms * 0.3 &&
+                          s.video_encoder.average_ms < budget_ms * 0.3;
     const bool enc_cond = s.video_encoder.backlog >= thresholds_.encoder_backlog ||
                           s.video_encoder.average_ms > budget_ms * thresholds_.encoder_budget_ratio;
     const bool disk_cond = s.disk.average_write_ms > thresholds_.disk_write_ms_warn;
@@ -1097,6 +1105,7 @@ PipelineBottleneck PipelineDiagnosticsAggregator::Classify(const RecordingDiagno
     auto bump = [](int& c, bool cond) { c = cond ? c + 1 : 0; };
     bump(sustain_capture_, cap_cond);
     bump(sustain_compositor_, comp_cond);
+    bump(sustain_gpu_, gpu_cond);
     bump(sustain_encoder_, enc_cond);
     bump(sustain_disk_, disk_cond);
     bump(sustain_muxer_, mux_cond);
@@ -1124,6 +1133,9 @@ PipelineBottleneck PipelineDiagnosticsAggregator::Classify(const RecordingDiagno
     } else if (sustain_encoder_ >= n) {
         bottleneck = PipelineBottleneck::VideoEncoder;
         reason = "Encoder backlog rising";
+    } else if (sustain_gpu_ >= n) {
+        bottleneck = PipelineBottleneck::Gpu;
+        reason = "GPU finishing frame work late: saturated by the captured application";
     } else if (sustain_compositor_ >= n) {
         bottleneck = PipelineBottleneck::Compositor;
         reason = "Composition near frame budget";

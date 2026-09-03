@@ -1,6 +1,7 @@
 #pragma once
 
 #include "DiagnosticResult.h"
+#include "FilesystemProvider.h"
 #include "PresentProvider.h"
 #include "WindowTargetFacts.h"
 
@@ -65,6 +66,23 @@ class RecommendationEngine {
     // pre-flight blocker: on an SDR desktop the HDR10-native path never engages,
     // so the blocker stays silent. Default false (SDR) mirrors the SetOutputPathWritable
     // pattern — the engine stays pure and only emits when the caller supplies the fact.
+    // The adapter that drives the captured display, against the encoder the
+    // product needs. A display on the integrated GPU cannot be encoded by the
+    // NVIDIA one; the failure that follows otherwise reads as a codec problem.
+    struct CaptureTargetAdapterFacts {
+        bool known = false;
+        uint32_t vendor_id = 0; // PCI vendor of the adapter owning the display
+        std::string adapter_name;
+        bool nvidia_adapter_present = false;
+    };
+    void SetCaptureTargetAdapter(CaptureTargetAdapterFacts facts) {
+        capture_target_adapter_ = std::move(facts);
+    }
+
+    void SetOutputDriveKind(DriveKind kind) {
+        output_drive_kind_ = kind;
+    }
+
     void SetCaptureTargetHdrActive(bool active) {
         capture_target_hdr_active_ = active;
     }
@@ -120,14 +138,22 @@ class RecommendationEngine {
     void checkAudioSourceDegraded(DiagnosticChecklist& checklist) const;
     void checkFramePacingDuplication(DiagnosticChecklist& checklist) const;
     void checkAudioClockSaturated(DiagnosticChecklist& checklist) const;
+    void checkCaptureAdapterMismatch(DiagnosticChecklist& checklist) const;
+    void checkOutputDriveKind(DiagnosticChecklist& checklist) const;
+    void checkGpuContention(DiagnosticChecklist& checklist) const;
 
     const capability::CapabilitySet& caps_;
     const capability::UserRecorderConfig& config_;
     std::optional<uint64_t> output_drive_free_bytes_; // nullopt = volume not queryable
     bool is_profile_supported_;
-    std::string output_filesystem_name_;     // e.g. "FAT32", "NTFS"; empty = not queried
-    bool output_path_writable_ = true;       // false => emit the not-writable blocker (set by caller)
-    bool elevated_ = false;                  // true => process runs elevated (set by caller); Tier-4 fact
+    std::string output_filesystem_name_; // e.g. "FAT32", "NTFS"; empty = not queried
+    bool output_path_writable_ = true;   // false => emit the not-writable blocker (set by caller)
+    bool elevated_ = false;              // true => process runs elevated (set by caller); Tier-4 fact
+    CaptureTargetAdapterFacts capture_target_adapter_;
+    DriveKind output_drive_kind_ = DriveKind::Unknown;
+    bool live_gpu_contention_ = false;
+    double live_gpu_exec_p99_ms_ = 0.0;
+    double live_target_fps_for_gpu_ = 0.0;
     bool capture_target_hdr_active_ = false; // true => capture target's display has Windows HDR ON (set by caller)
     bool saved_display_unresolved_ = false;  // true => saved capture target could not be matched (set by caller)
     std::string saved_display_label_;        // friendly name / label of the saved (missing) display

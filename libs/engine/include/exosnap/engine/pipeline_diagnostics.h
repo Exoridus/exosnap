@@ -40,6 +40,8 @@ enum class PipelineBottleneck : uint8_t {
     Audio,        // audio drops / queue pressure
     Muxer,        // mux queue rising, writes healthy
     Disk,         // write latency/throughput insufficient
+    Gpu,          // the GPU finishes the recorder's frame work late while submission stays cheap:
+                  // the captured application saturates it
     Unknown,      // insufficient evidence
 };
 
@@ -122,9 +124,10 @@ struct CaptureDiagnostics {
     bool capture_starved = false;
 
     // Present cadence (VRR/CFR judder correlation, v0.8.0 / ADR 0033). DXGI Output
-    // Duplication only: derived from DXGI_OUTDUPL_FRAME_INFO.LastPresentTime (QPC) deltas
-    // and AccumulatedFrames. Unavailable for WGC (Window/Region) capture, which exposes no
-    // present timestamp, and during warm-up / before enough samples accumulate.
+    // Duplication: derived from DXGI_OUTDUPL_FRAME_INFO.LastPresentTime (QPC) deltas
+    // and AccumulatedFrames. WGC (Window/Region): from the frame's SystemRelativeTime
+    // deltas, a delivery time rather than a present time, so its jitter floor is
+    // higher. Unavailable during warm-up / before enough samples accumulate.
     double source_present_interval_ms = 0.0; // mean inter-present interval over the rolling window
     double source_present_jitter_ms = 0.0;   // peak-minus-average present interval (irregular-pacing proxy)
     double source_coalesce_ratio = 1.0;      // mean AccumulatedFrames per acquire (>1 == presents coalesced)
@@ -169,6 +172,11 @@ struct CompositorDiagnostics {
     double average_ms = 0.0;
     double peak_ms = 0.0;
     uint64_t frames_composed = 0;
+    // Sum of the p99 GPU execution times of the recorder's own passes
+    // (composition, HDR tone-map, RGB->YUV) over the rolling window, from D3D11
+    // timestamp queries. The CPU submission times above say nothing about
+    // when the GPU actually ran them.
+    double gpu_exec_p99_ms = 0.0;
     // CPU command-submission time, NOT GPU execution time. GPU execution timing is
     // Unavailable (no timestamp-query infrastructure; no synchronous readback allowed).
 

@@ -1486,3 +1486,24 @@ TEST(PipelineDiagnostics, EndpointInUseIsCarriedOnTheAudioSnapshot) {
     s = agg.BuildSnapshot(At(200), MakeStats(), DiagnosticsLifecycle::Recording, 0.2);
     EXPECT_FALSE(s.audio.degraded_endpoint_in_use);
 }
+
+// GPU execution past the budget while the recorder's own submissions stay cheap
+// is the captured application's load, not the compositor's: a bottleneck of its
+// own, so the card does not blame the recorder's composition.
+TEST(PipelineDiagnostics, LateGpuExecutionWithCheapSubmissionIsGpuContention) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    SessionStats stats = MakeStats();
+    stats.frame_rate_num = 60;
+    stats.frame_rate_den = 1;
+    stats.encoded_video_packets = 1; // past warm-up; no backlog, the encoder is idle
+    RecordingDiagnosticsSnapshot s;
+    for (int i = 0; i < 6; ++i) {
+        for (int k = 0; k < 20; ++k) {
+            agg.OnCompositionGpuTime(At(i * 1000 + k * 50), 30.0); // far past the 16.7 ms budget
+        }
+        s = agg.BuildSnapshot(At(i * 1000 + 999), stats, DiagnosticsLifecycle::Recording, 2.0 + i);
+    }
+    EXPECT_EQ(s.bottleneck, PipelineBottleneck::Gpu) << s.bottleneck_reason;
+    EXPECT_GT(s.compositor.gpu_exec_p99_ms, 16.7);
+}

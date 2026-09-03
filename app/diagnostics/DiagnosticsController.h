@@ -3,6 +3,7 @@
 #include "CapabilitySummary.h"
 #include "ConfigSummary.h"
 #include "DiagnosticResult.h"
+#include "FilesystemProvider.h"
 #include "PresentProvider.h"
 #include "RecommendationEngine.h"
 #include "WindowTargetFacts.h"
@@ -377,6 +378,7 @@ class DiagnosticsController {
         std::optional<uint64_t> free_bytes;
         uint64_t total_bytes = 0;
         std::string filesystem_name;
+        DriveKind drive_kind = DriveKind::Unknown;
         bool output_path_writable = true;
         std::string drive_label;
         DiagnosticChecklist self_test;
@@ -399,6 +401,9 @@ class DiagnosticsController {
     void SetElevated(bool elevated) noexcept;
     void SetHasLastRecording(bool has_last_recording) noexcept;
     void SetCaptureTargetHdrActive(bool active) noexcept;
+    void SetCaptureTargetAdapter(RecommendationEngine::CaptureTargetAdapterFacts facts);
+    // Process the present accumulator is filtered to; 0 means unfiltered.
+    void SetPresentAttributionPid(unsigned long pid);
     // nullopt == "not being measured", and it is the value the host pushes whenever the
     // kernel trace is not consuming: the recommendation must then come from no reading
     // at all rather than from a default-zero one. Same shape as SetPresentSample.
@@ -445,6 +450,8 @@ class DiagnosticsController {
     ProbeResult probe_;
     DisplayFacts display_{};
     std::optional<exosnap::engine::CaptureTarget> selected_target_;
+    RecommendationEngine::CaptureTargetAdapterFacts capture_target_adapter_;
+    unsigned long present_attribution_pid_ = 0;
     // What the product calls this target. Empty falls back to the engine's own
     // description, which for a monitor is a device path.
     std::string selected_target_label_;

@@ -368,6 +368,14 @@ void DiagnosticsAdapter::setSelectedCaptureTarget(std::optional<exosnap::engine:
     refreshSnapshot();
 }
 
+void DiagnosticsAdapter::setCaptureTargetAdapter(diagnostics::RecommendationEngine::CaptureTargetAdapterFacts facts) {
+    controller_.SetCaptureTargetAdapter(std::move(facts));
+}
+
+void DiagnosticsAdapter::setPresentAttributionPid(unsigned long pid) {
+    controller_.SetPresentAttributionPid(pid);
+}
+
 void DiagnosticsAdapter::setSavedDisplayUnresolved(bool unresolved, const std::string& label) {
     controller_.SetSavedDisplayUnresolved(unresolved, label);
     refreshSnapshot();

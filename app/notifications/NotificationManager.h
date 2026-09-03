@@ -89,6 +89,8 @@ class NotificationManager : public QObject {
     // NOLINTNEXTLINE(readability-identifier-naming)
     static constexpr int kDismissMs_FrameCaptured = kDwellBrief;
     // NOLINTNEXTLINE(readability-identifier-naming)
+    static constexpr int kDismissMs_AudioDefaultDeviceChanged = kDwellBrief; // a fact about the session, read once
+    // NOLINTNEXTLINE(readability-identifier-naming)
     static constexpr int kDismissMs_UnexpectedStop = kDwellAction;
     // NOLINTNEXTLINE(readability-identifier-naming)
     static constexpr int kDismissMs_RecoveryAvailable = kDwellAction;
