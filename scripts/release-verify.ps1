@@ -263,12 +263,25 @@ function Invoke-ReleaseHumanGate {
     if ($attested) {
         Write-Step 'attested by the caller (-Attest); verifying it anyway'
     } else {
-        $answer = Read-Host "Type 'done' when performed, 'skip' to defer, anything else to abort"
-        if ($null -eq $answer) { $answer = '' }
-        switch ($answer.Trim().ToLowerInvariant()) {
-            'done' { }
+        # Four answers, because there were only two and one of them was missing.
+        # An operator who looked and saw a DEFECT had no way to say so: 'done' sent
+        # a broken thing to a verification that cannot see it, and 'skip' recorded
+        # "nobody was asked", which is a different and untrue statement. 'fail' now
+        # records what they saw, with the reason in the report.
+        #
+        # Nothing unrecognised aborts any more either. A typo, a stray Enter or a
+        # pasted line used to end the gate as "aborted" -- a destructive default for
+        # a keystroke, in a prompt that appears after a screen of instructions.
+        $answer = Read-OperatorAnswer -Question 'Is that what you see?'
+        switch ($answer) {
+            'yes' { }
             'skip' { return @{ Result = 'DEFERRED'; Message = 'The operator deferred this gate' } }
-            default { return @{ Result = 'DEFERRED'; Message = 'The operator aborted this gate' } }
+            'abort' { return @{ Result = 'DEFERRED'; Message = 'The operator aborted this gate' } }
+            'no' {
+                $why = Read-Host '  What was wrong? (one line, recorded in the report; Enter to leave it blank)'
+                if ([string]::IsNullOrWhiteSpace($why)) { $why = 'no detail given' }
+                return @{ Result = 'FAIL'; Message = "The operator judged this WRONG: $why" }
+            }
         }
     }
 
@@ -419,6 +432,36 @@ function ConvertTo-Hashtable {
 # Execution
 # ---------------------------------------------------------------------------
 
+function Read-OperatorAnswer {
+    <#
+    .SYNOPSIS
+        One question, answered y or n.
+    .DESCRIPTION
+        The vocabulary is the whole point. It used to be 'done' / 'skip' / anything
+        else aborts, which failed three ways at once: a defect could not be reported
+        at all (a person who looked and saw something wrong had only 'done', which
+        claims the opposite, or 'skip', which claims nobody was asked), a typo or a
+        stray Enter ended the gate, and the words had to be remembered from a screen
+        of instructions further up.
+
+        Now: y or n, with s and a still accepted for skipping and stopping, and an
+        unrecognised answer simply asked again -- a keystroke never decides anything
+        destructive.
+    #>
+    param([Parameter(Mandatory)] [string] $Question)
+    while ($true) {
+        $typed = Read-Host "  $Question  [y] yes  [n] no  (s = skip, a = abort)"
+        if ($null -eq $typed) { $typed = '' }
+        switch -Regex ($typed.Trim().ToLowerInvariant()) {
+            '^(y|yes|j|ja|d|done|ok)$' { return 'yes' }
+            '^(n|no|nein|f|fail|bad)$' { return 'no' }
+            '^(s|skip|later)$' { return 'skip' }
+            '^(a|abort|q|quit)$' { return 'abort' }
+            default { Write-Host '  y or n, please. Nothing recorded yet.' -ForegroundColor DarkGray }
+        }
+    }
+}
+
 function New-ReleaseContext {
     <#
     .SYNOPSIS
@@ -444,6 +487,9 @@ function New-ReleaseContext {
         EnsureSession  = { Start-ReleaseSession -Run $script:CurrentRun }
         EndSession     = { Stop-ReleaseSession }
         HumanGate      = { param($gate) Invoke-ReleaseHumanGate -Gate $gate -Context $script:CurrentContext }
+        # One question at the moment it can be answered, for a scenario that has
+        # several observable states rather than one verdict at the end.
+        Ask            = { param($question) Read-OperatorAnswer -Question $question }
     }
 }
 

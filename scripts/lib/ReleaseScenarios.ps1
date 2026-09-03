@@ -66,6 +66,80 @@ function Resolve-StallWindowProbe {
     return $null
 }
 
+# Windows Light/Dark appearance, switched by the runner instead of asked for.
+#
+# Both values live under HKCU and Windows documents them as the personalization
+# surface the Settings app writes; no elevation, and the exact previous values go
+# back afterwards. Only the LOOKING stays with a person -- the capture-excluded
+# overlays defeat every screenshot path, so how they reach the desktop cannot be
+# read back by anything.
+function Set-WindowsAppearance {
+    param([Parameter(Mandatory)] [ValidateSet('Light', 'Dark')] [string] $Appearance)
+    $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize'
+    $value = if ($Appearance -eq 'Light') { 1 } else { 0 }
+    Set-ItemProperty -Path $key -Name 'AppsUseLightTheme' -Value $value -Type DWord
+    Set-ItemProperty -Path $key -Name 'SystemUsesLightTheme' -Value $value -Type DWord
+    # Applications repaint on the broadcast, not on the registry write.
+    if (-not ('ExoSnapAppearanceBroadcast' -as [type])) {
+        Add-Type -Namespace 'ExoSnap' -Name 'AppearanceBroadcast' -MemberDefinition @'
+[DllImport("user32.dll", CharSet = CharSet.Auto)]
+public static extern System.IntPtr SendMessageTimeout(System.IntPtr hWnd, uint Msg, System.IntPtr wParam,
+    string lParam, uint fuFlags, uint uTimeout, out System.UIntPtr lpdwResult);
+'@ -ErrorAction SilentlyContinue
+    }
+    try {
+        [System.UIntPtr] $result = [System.UIntPtr]::Zero
+        [void][ExoSnap.AppearanceBroadcast]::SendMessageTimeout(
+            [IntPtr]0xffff, 0x001A, [IntPtr]::Zero, 'ImmersiveColorSet', 0x0002, 3000, [ref]$result)
+    }
+    catch { }
+    Start-Sleep -Milliseconds 1200
+}
+
+function Get-WindowsAppearance {
+    $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize'
+    $apps = (Get-ItemProperty -Path $key -Name 'AppsUseLightTheme' -ErrorAction SilentlyContinue).AppsUseLightTheme
+    if ($null -eq $apps) { return 'Dark' }
+    return $(if ([int]$apps -eq 1) { 'Light' } else { 'Dark' })
+}
+
+function Resolve-FullscreenProbe {
+    <#
+    .SYNOPSIS
+        Locates probe_fullscreen_present.exe, or returns $null.
+    #>
+    if ($env:EXOSNAP_FSE_PROBE -and (Test-Path -LiteralPath $env:EXOSNAP_FSE_PROBE)) {
+        return (Get-Item -LiteralPath $env:EXOSNAP_FSE_PROBE).FullName
+    }
+    $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+    $candidates = @(
+        'build/windows-x64-release/tools/probes/probe_fullscreen_present/Release/probe_fullscreen_present.exe',
+        'build/windows-x64-debug/tools/probes/probe_fullscreen_present/Debug/probe_fullscreen_present.exe',
+        'build/windows-x64-ninja-release/tools/probes/probe_fullscreen_present/probe_fullscreen_present.exe',
+        'build/windows-x64-ninja-debug/tools/probes/probe_fullscreen_present/probe_fullscreen_present.exe'
+    )
+    foreach ($candidate in $candidates) {
+        $full = Join-Path $root $candidate
+        if (Test-Path -LiteralPath $full) { return (Get-Item -LiteralPath $full).FullName }
+    }
+    return $null
+}
+
+# Whether this runner is already elevated. An elevated runner can DO the things
+# the SECURE gates ask an operator for -- launching an elevated child raises no
+# prompt when the parent already holds the token -- so the question becomes
+# unnecessary rather than unanswerable. What stays with a person is the prompt
+# itself: REL-UPD-MSI-DECLINE-001 needs a real prompt to decline, which an
+# elevated run never produces.
+function Test-RunnerElevated {
+    try {
+        $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+        return ([Security.Principal.WindowsPrincipal]$identity).IsInRole(
+            [Security.Principal.WindowsBuiltInRole]::Administrator)
+    }
+    catch { return $false }
+}
+
 function Get-ReleaseScenarioCatalog {
     $catalog = @()
 
@@ -526,6 +600,33 @@ function Get-ReleaseScenarioCatalog {
                     finally { try { $conn.Close() } catch { } }
                 }
             }
+            # An elevated runner needs no operator here: launching an elevated child
+            # raises no prompt when the parent already holds the token, so the gate
+            # becomes a sequence rather than a question. The instance is CLOSED again
+            # afterwards -- the single-instance guard is machine-wide, and one left
+            # running makes every later scenario wait for a control channel that was
+            # never created.
+            if (Test-RunnerElevated) {
+                $elevated = Start-Process -FilePath $exe -PassThru -ArgumentList @('--live-verify-control', $runId)
+                try {
+                    $verdict = & $gate.Verify $ctx $gate
+                } finally {
+                    if ($null -ne $elevated -and -not $elevated.HasExited) {
+                        [void]$elevated.CloseMainWindow()
+                        if (-not $elevated.WaitForExit(10000)) { $elevated.Kill() }
+                    }
+                }
+                if ($null -eq $verdict) {
+                    return @{ Result = 'UNVERIFIED'; Message = 'the present verification returned nothing' }
+                }
+                if ($verdict.Ok) {
+                    return @{ Result = 'PASS'
+                        Message      = "[elevated runner] $($verdict.Detail)"
+                        Evidence     = $verdict.Evidence
+                    }
+                }
+                return @{ Result = 'FAIL'; Message = $verdict.Detail; Evidence = $verdict.Evidence }
+            }
             return & $ctx.HumanGate $gate
         }
     }
@@ -939,6 +1040,29 @@ function Get-ReleaseScenarioCatalog {
                 }
             }
             [void]$session
+            # The probe takes a display into REAL exclusive fullscreen
+            # (SetFullscreenState), which is the only condition this gate accepts --
+            # a borderless window would test the simulation. It releases the display
+            # itself and exits on its own deadline. The verdict still needs present
+            # diagnostics, so this only reaches a PASS when the session is elevated.
+            $fseProbe = Resolve-FullscreenProbe
+            if ($null -ne $fseProbe) {
+                $fse = Start-Process -FilePath $fseProbe -PassThru `
+                    -ArgumentList @('--display', '0', '--seconds', '45')
+                try {
+                    Start-Sleep -Seconds 8   # let the mode change settle and presents accumulate
+                    $verdict = & $gate.Verify $ctx $gate
+                } finally {
+                    if ($null -ne $fse -and -not $fse.HasExited) { $fse.Kill() }
+                }
+                if ($null -eq $verdict) {
+                    return @{ Result = 'UNVERIFIED'; Message = 'the fullscreen verification returned nothing' }
+                }
+                if ($verdict.Ok) {
+                    return @{ Result = 'PASS'; Message = "[probe] $($verdict.Detail)"; Evidence = $verdict.Evidence }
+                }
+                return @{ Result = 'FAIL'; Message = $verdict.Detail; Evidence = $verdict.Evidence }
+            }
             return & $ctx.HumanGate $gate
         }
     }
@@ -1578,8 +1702,9 @@ function Get-ReleaseScenarioCatalog {
                 'actually reach the desktop can only be seen by a person looking at it.'
                 Do                = @(
                     'A recording is running now, so the recording pill, metrics and quick controls are visible.',
-                    'Set Windows to LIGHT appearance and look at every ExoSnap overlay on the desktop.',
-                    'Set Windows to DARK appearance and look again.'
+                    'Windows has ALREADY been switched to LIGHT and back to DARK by this runner, holding each for a',
+                    'few seconds. Look at every ExoSnap overlay on the desktop while that happens.',
+                    'Answer for what you saw: the switching is automated, the judgement is not.'
                 )
                 Expected          = 'Every capture-excluded overlay stays dark in both appearances, with legible ' +
                 'text and no white or transparent boxes. The recording state colour stays coral, ready stays ' +
@@ -1601,7 +1726,58 @@ function Get-ReleaseScenarioCatalog {
                 }
             }
             [void]$overlays
-            return & $ctx.HumanGate $gate
+            # The appearance switch is a documented HKCU setting, so the runner does
+            # it -- twice, holding each long enough to be seen -- and puts the original
+            # back. What cannot be automated is the looking: these overlays set
+            # WDA_EXCLUDEFROMCAPTURE, so no screenshot, recording or PrintWindow can
+            # read them back, and the harness only ever sees their scene graph.
+            # One question per state, asked while that state is on screen. Switching
+            # both appearances and then asking once meant answering from memory about
+            # a screen that no longer looked that way; and a single verdict could not
+            # say WHICH appearance was wrong.
+            $originalAppearance = Get-WindowsAppearance
+            $answers = [ordered]@{}
+            try {
+                foreach ($appearance in @('Light', 'Dark')) {
+                    Set-WindowsAppearance -Appearance $appearance
+                    Write-Host ''
+                    Write-Host "Windows is now in $($appearance.ToUpperInvariant()) appearance." -ForegroundColor Yellow
+                    Write-Host '  Every capture-excluded overlay must still be DARK, with legible text.'
+                    $answers[$appearance] = & $ctx.Ask "Do the overlays look right in $appearance?"
+                    if ($answers[$appearance] -in @('skip', 'abort')) { break }
+                }
+            }
+            finally {
+                Set-WindowsAppearance -Appearance $originalAppearance
+            }
+
+            $wrong = @($answers.Keys | Where-Object { $answers[$_] -eq 'no' })
+            if ($wrong.Count -gt 0) {
+                $why = Read-Host "  What was wrong in $($wrong -join ' and ')? (one line, recorded in the report)"
+                if ([string]::IsNullOrWhiteSpace($why)) { $why = 'no detail given' }
+                try { [void](Invoke-LiveVerifyCommand -Connection $script:Session.Connection -Command 'record.stop') } catch { }
+                return @{ Result = 'FAIL'
+                    Message      = "The operator judged the overlays WRONG in $($wrong -join ' and '): $why"
+                }
+            }
+            if ($answers.Values -contains 'skip' -or $answers.Values -contains 'abort' -or $answers.Count -lt 2) {
+                try { [void](Invoke-LiveVerifyCommand -Connection $script:Session.Connection -Command 'record.stop') } catch { }
+                return @{ Result = 'DEFERRED'; Message = 'The operator did not judge both appearances' }
+            }
+
+            # Both answered yes: the state assertions still have to hold, so the gate
+            # runs its own Verify rather than trusting the answer.
+            $verdict = & $gate.Verify $ctx $gate
+            if ($null -eq $verdict) {
+                return @{ Result = 'UNVERIFIED'; Message = 'the overlay verification returned nothing' }
+            }
+            if ($verdict.Ok) {
+                return @{ Result = 'PASS'
+                    Message      = "judged in Light and in Dark: $($verdict.Detail)"
+                    Evidence     = $verdict.Evidence
+                }
+            }
+            return @{ Result = 'FAIL'; Message = $verdict.Detail; Evidence = $verdict.Evidence }
         }
     }
 
@@ -1771,17 +1947,86 @@ function Get-ReleaseScenarioCatalog {
         OptIn               = $true
         Run                 = {
             param($ctx)
-            $session = & $ctx.EnsureSession
-            $conn = $session.Connection
+            # The same starting-point rule the portable update gate needs, for the
+            # same reason: the bound artifact is the newest release the feed offers,
+            # so an update check against it can only ever say "up to date". For THIS
+            # gate the starting point must additionally be an INSTALLED build --
+            # the MSI path is what is under test -- so EXOSNAP_UPDATE_FROM points at
+            # the installed exosnap.exe of an older release.
+            $from = $env:EXOSNAP_UPDATE_FROM
+            if ([string]::IsNullOrWhiteSpace($from) -or -not (Test-Path -LiteralPath $from)) {
+                return @{ Result = 'UNAVAILABLE'
+                    Message      = 'set EXOSNAP_UPDATE_FROM to an older INSTALLED exosnap.exe; the bound artifact ' +
+                    'is the newest release and can only ever report up-to-date'
+                }
+            }
+            # Its own session, not the campaign's: the app under test here is the
+            # installed older build, and the campaign's is the bound artifact.
+            & $ctx.EndSession
+            # The single-instance guard is a machine-wide mutex: a second launch hands
+            # focus to whatever is already running and exits without ever creating a
+            # control endpoint, so the connect below would wait for a pipe nobody
+            # opened. Any leftover instance -- including one this gate's own previous
+            # attempt left behind -- has to be gone first.
+            $waitUntil = [DateTime]::UtcNow.AddSeconds(20)
+            while ([DateTime]::UtcNow -lt $waitUntil) {
+                $running = @(Get-Process -Name 'exosnap' -ErrorAction SilentlyContinue)
+                if ($running.Count -eq 0) { break }
+                foreach ($instance in $running) {
+                    try {
+                        [void]$instance.CloseMainWindow()
+                        if (-not $instance.WaitForExit(5000)) { $instance.Kill() }
+                    }
+                    catch { }
+                }
+                Start-Sleep -Milliseconds 500
+            }
+            $runId = New-LiveVerifyRunId
+            $fromProcess = Start-Process -FilePath $from -PassThru -ArgumentList @('--live-verify-control', $runId)
+            $conn = Connect-LiveVerify -RunId $runId -ConnectTimeoutMs 60000
             # app.identity answers the same object system.hello carries, and its version
             # field is `productVersion`. There is no `version`.
             $before = (Invoke-LiveVerifyCommand -Connection $conn -Command 'app.identity').result
             $beforeVersion = "$($before.productVersion)"
+            # A release candidate is a GitHub prerelease, and the Stable channel names
+            # only non-prerelease releases -- so a check on Stable is correct to
+            # report nothing and the gate would learn nothing from it. The channel is
+            # part of the scenario, not of the machine it happens to run on.
+            $channel = Invoke-LiveVerifyCommand -Connection $conn -Command 'settings.set' `
+                -Parameters @{ key = 'app.updateChannel'; value = 'Preview' }
+            if (-not $channel.ok) {
+                return @{ Result = 'FAIL'; Message = "could not select the Preview channel: $($channel.error.message)" }
+            }
+            # The channel is read when the update service starts, so it takes a
+            # restart to be the channel the next check actually uses. Setting it and
+            # checking in the same session reported "nothing offered" against the
+            # channel the app was launched with.
+            try { $conn.Close() } catch { }
+            if ($null -ne $fromProcess -and -not $fromProcess.HasExited) {
+                [void]$fromProcess.CloseMainWindow()
+                if (-not $fromProcess.WaitForExit(15000)) { $fromProcess.Kill() }
+            }
+            $runId = New-LiveVerifyRunId
+            $fromProcess = Start-Process -FilePath $from -PassThru -ArgumentList @('--live-verify-control', $runId)
+            $conn = Connect-LiveVerify -RunId $runId -ConnectTimeoutMs 60000
+
             $checked = Invoke-LiveVerifyCommand -Connection $conn -Command 'update.check'
             if (-not $checked.ok) { return @{ Result = 'FAIL'; Message = "update.check refused: $($checked.error.message)" } }
-            $state = (Invoke-LiveVerifyCommand -Connection $conn -Command 'update.getState').result
+            # The check is asynchronous: the answer lands on the state, not on the
+            # command, so reading the state once could only ever see what was there
+            # before the check finished.
+            $state = $null
+            $checkDeadline = [DateTime]::UtcNow.AddSeconds(60)
+            while ([DateTime]::UtcNow -lt $checkDeadline) {
+                $state = (Invoke-LiveVerifyCommand -Connection $conn -Command 'update.getState').result
+                if ($state.updateAvailable) { break }
+                Start-Sleep -Milliseconds 1000
+            }
             if (-not $state.updateAvailable) {
-                return @{ Result = 'UNAVAILABLE'; Message = "no update is offered to $beforeVersion on this channel" }
+                return @{ Result = 'UNAVAILABLE'
+                    Message      = "no update is offered to $beforeVersion on the Preview channel " +
+                    "(phase $($state.phase))"
+                }
             }
             $applied = Invoke-LiveVerifyCommand -Connection $conn -Command 'update.apply'
             if (-not $applied.ok) { return @{ Result = 'FAIL'; Message = "update.apply refused: $($applied.error.message)" } }
@@ -1789,7 +2034,7 @@ function Get-ReleaseScenarioCatalog {
             $gate = @{
                 Id                = 'REL-UPD-MSI-001'
                 Title             = 'Accept the elevation prompt for the MSI install'
-                State             = @{ previousVersion = $beforeVersion }
+                State             = @{ previousVersion = $beforeVersion; installedPath = $from }
                 Why               = 'msiexec needs an elevated token, and the prompt runs on the Secure Desktop. ' +
                 'Windows blocks synthetic input across that boundary by design; there is nothing to automate.'
                 Do                = @(
@@ -1810,7 +2055,12 @@ function Get-ReleaseScenarioCatalog {
                     while ([DateTime]::UtcNow -lt $deadline) {
                         try {
                             $runId2 = New-LiveVerifyRunId
-                            $process = Start-Process -FilePath $context.Artifact.exePath `
+                            # The INSTALLED build, not the bound artifact. Launching the
+                            # artifact here asked whether rc14 reports rc14, which is
+                            # true whether or not the install under test ever ran --
+                            # the assertion passed on the version difference between
+                            # two files that were always different.
+                            $process = Start-Process -FilePath $gate.State.installedPath `
                                 -ArgumentList @('--live-verify-control', $runId2) -PassThru
                             $conn3 = Connect-LiveVerify -RunId $runId2 -ConnectTimeoutMs 30000
                             try { $identity = (Invoke-LiveVerifyCommand -Connection $conn3 -Command 'app.identity').result }
@@ -1832,6 +2082,23 @@ function Get-ReleaseScenarioCatalog {
                     }
                     return @{ Ok = $true; Detail = "installed: $($gate.State.previousVersion) -> $afterVersion"; Evidence = $evidence }
                 }
+            }
+            # An elevated caller never sees the prompt this gate is named after:
+            # msiexec inherits the token and installs without asking. The install
+            # itself still has to happen and is verified the same way, so the result
+            # says which of the two it was.
+            if (Test-RunnerElevated) {
+                $verdict = & $gate.Verify $ctx $gate
+                if ($null -eq $verdict) {
+                    return @{ Result = 'UNVERIFIED'; Message = 'the install verification returned nothing' }
+                }
+                if ($verdict.Ok) {
+                    return @{ Result = 'PASS'
+                        Message      = "[elevated runner: no prompt was raised] $($verdict.Detail)"
+                        Evidence     = $verdict.Evidence
+                    }
+                }
+                return @{ Result = 'FAIL'; Message = $verdict.Detail; Evidence = $verdict.Evidence }
             }
             return & $ctx.HumanGate $gate
         }
