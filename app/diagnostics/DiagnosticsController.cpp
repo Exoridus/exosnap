@@ -1196,11 +1196,19 @@ DiagnosticsSnapshot DiagnosticsController::Evaluate() {
         return out;
     }
 
-    constexpr uint32_t kMonitorRefreshUnknown = 0;
     const exosnap::engine::RecordingDiagnosticsSnapshot* live = live_.valid ? &live_ : nullptr;
-    const PresentSample* present = (present_.has_value() && present_->available) ? &present_.value() : nullptr;
+    // Present samples are attributed to a process only for a window target; for a
+    // display or region the accumulator saw every process on the machine.
+    PresentSample present_sample;
+    const PresentSample* present = nullptr;
+    if (present_.has_value() && present_->available) {
+        present_sample = *present_;
+        present_sample.attributed =
+            selected_target_.has_value() && selected_target_->kind == exosnap::engine::CaptureTarget::Kind::Window;
+        present = &present_sample;
+    }
 
-    RecommendationEngine engine(config_.caps, config_.user_config, kMonitorRefreshUnknown, probe_.free_bytes,
+    RecommendationEngine engine(config_.caps, config_.user_config, probe_.free_bytes,
                                 config_.profile_validation.succeeded, probe_.filesystem_name, live, present);
     if (dpc_.has_value())
         engine.SetDpcLatency(*dpc_);

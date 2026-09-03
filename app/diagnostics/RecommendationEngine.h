@@ -27,7 +27,6 @@ class RecommendationEngine {
     // which case the disk checks stay silent rather than guessing. A queried 0
     // is a full disk and raises the blocker.
     RecommendationEngine(const capability::CapabilitySet& caps, const capability::UserRecorderConfig& config,
-                         uint32_t monitor_refresh_rate = 0,
                          std::optional<uint64_t> output_drive_free_bytes = std::nullopt,
                          bool is_profile_supported = true, std::string output_filesystem_name = {},
                          const exosnap::engine::RecordingDiagnosticsSnapshot* live_snapshot = nullptr,
@@ -119,10 +118,11 @@ class RecommendationEngine {
     void checkDiskWriteStall(DiagnosticChecklist& checklist) const;
     void checkUnresolvedSavedDisplay(DiagnosticChecklist& checklist) const;
     void checkAudioSourceDegraded(DiagnosticChecklist& checklist) const;
+    void checkFramePacingDuplication(DiagnosticChecklist& checklist) const;
+    void checkAudioClockSaturated(DiagnosticChecklist& checklist) const;
 
     const capability::CapabilitySet& caps_;
     const capability::UserRecorderConfig& config_;
-    uint32_t monitor_refresh_rate_;
     std::optional<uint64_t> output_drive_free_bytes_; // nullopt = volume not queryable
     bool is_profile_supported_;
     std::string output_filesystem_name_;     // e.g. "FAT32", "NTFS"; empty = not queried
@@ -143,6 +143,18 @@ class RecommendationEngine {
     bool live_present_available_ = false;
     bool live_cfr_ = true;
     double live_present_jitter_ms_ = 0.0;
+    // Live frame-delivery facts for the pacing check: repeats the CFR pacer had
+    // to emit because the source produced nothing new, against what it emitted.
+    bool live_capture_available_ = false;
+    bool live_capture_starved_ = false;
+    uint64_t live_frames_emitted_ = 0;
+    uint64_t live_frames_duplicated_ = 0;
+    double live_target_fps_ = 0.0;
+    // Live audio clock facts: slaving at its rate limit with the residual still growing.
+    bool live_clock_saturated_ = false;
+    double live_clock_ppm_ = 0.0;
+    // A degraded source whose endpoint refused reactivation as in use.
+    bool live_audio_endpoint_in_use_ = false;
 
     // Live disk-write latency (ADR 0033 extra-checks). Extracted from the live snapshot's
     // DiskDiagnostics; available only for the streaming Matroska writer (MP4 remux is post-stop).

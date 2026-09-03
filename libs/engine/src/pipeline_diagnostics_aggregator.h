@@ -252,6 +252,7 @@ struct PerfWindowSample {
     uint64_t dropped_cfr = 0;
     uint64_t dropped_backpressure = 0;
     uint64_t dropped_processing_failure = 0;
+    uint64_t dropped_ring_eviction = 0;
     uint64_t duplicated_frames = 0;       // CFR duplicate output frames
     uint64_t slot_stalls = 0;             // subset of backpressure
     uint64_t queue_saturation_events = 0; // rising-edge crossings of a queue's critical threshold
@@ -280,6 +281,7 @@ struct PerfSessionSummary {
     uint64_t dropped_cfr = 0;
     uint64_t dropped_backpressure = 0;
     uint64_t dropped_processing_failure = 0;
+    uint64_t dropped_ring_eviction = 0;
     uint64_t duplicated_frames = 0;
     uint64_t slot_stalls = 0;
     uint64_t queue_saturation_events = 0;
@@ -312,6 +314,7 @@ class PipelineDiagnosticsAggregator {
     // Capture (VideoThread)
     void OnFrameCaptured() noexcept;                                  // a frame the backend actually produced
     void OnFrameDroppedCoalesced() noexcept;                          // newer frame replaced an unconsumed one
+    void OnFrameDroppedRingEviction() noexcept;                       // captured, never emitted, overwritten
     void OnFrameDroppedCfr() noexcept;                                // scheduled tick had nothing to encode yet
     void OnFrameDroppedBackpressure() noexcept;                       // encoder input slots all in flight
     void OnFrameDroppedProcessingFailure() noexcept;                  // a frame was there and its conversion failed
@@ -406,7 +409,7 @@ class PipelineDiagnosticsAggregator {
     // drain iteration; the snapshot sums across tracks. track_id is bounded by
     // CodecPrivateData::kMaxAudioTracks.
     void OnAudioSourceHealth(uint32_t track_id, uint32_t degraded_sources, uint32_t total_sources,
-                             uint32_t degraded_source_kinds = 0) noexcept;
+                             uint32_t degraded_source_kinds = 0, bool endpoint_in_use = false) noexcept;
     // Queues
     void OnVideoQueueDepth(uint32_t depth) noexcept;  // post-encode mux queue
     void OnAudioPremuxDepth(uint32_t depth) noexcept; // bounded premux
@@ -427,6 +430,7 @@ class PipelineDiagnosticsAggregator {
     // attributable device clock (multi-source merges) never report.
     void OnAudioClockSlaving(uint32_t track_id, double raw_drift_ms, double residual_ms, double applied_ppm,
                              bool measurement_faulted = false) noexcept;
+    void OnAudioClockSlavingSaturated(uint32_t track_id) noexcept;
     // Free-space poll for disk-fill ETA (called from the stats collector at ~5 Hz)
     void UpdateFreeDiskBytes(uint64_t free_bytes) noexcept;
 
@@ -455,6 +459,11 @@ class PipelineDiagnosticsAggregator {
     uint64_t dropped_cfr_ = 0;
     uint64_t dropped_backpressure_ = 0;
     uint64_t dropped_processing_failure_ = 0;
+    uint64_t dropped_ring_eviction_ = 0;
+    // Capture progress watch (CaptureDiagnostics::capture_starved).
+    uint64_t last_progress_frames_ = 0;
+    std::chrono::steady_clock::time_point last_progress_time_{};
+    bool have_progress_time_ = false;
     bool interval_observed_ = false;
     RollingTimeWindow interval_window_{256, std::chrono::milliseconds(2000)};
 
@@ -533,6 +542,7 @@ class PipelineDiagnosticsAggregator {
     // mirrors CodecPrivateData::kMaxAudioTracks; summed in BuildSnapshot.
     std::array<uint32_t, 3> audio_degraded_sources_{};
     std::array<uint32_t, 3> audio_degraded_source_kinds_{};
+    std::array<bool, 3> audio_endpoint_in_use_{};
     std::array<uint32_t, 3> audio_total_sources_{};
 
     // Queues
@@ -601,6 +611,7 @@ class PipelineDiagnosticsAggregator {
     // Latched per track: this track's drift figures are known-invalid, so the
     // snapshot must say so instead of publishing them as measurements.
     std::array<bool, 3> audio_clock_faulted_{};
+    std::array<bool, 3> audio_clock_saturated_{};
 
     // Peak |av_drift_ms| (residual) this session (running maximum). Single source
     // of truth for both the live UI and the session report.

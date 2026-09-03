@@ -1435,3 +1435,54 @@ TEST(PipelineDiagnosticsAggregator, RetainedFrameCountersRoundTrip) {
 }
 
 } // namespace
+
+// A captured frame overwritten in the phase-correct ring before it was ever
+// emitted is real picture loss; it must land in the bucket every drop surface
+// reads, not in the benign coalescing one.
+TEST(PipelineDiagnostics, RingEvictionCountsAsAProblemDrop) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    agg.OnFrameDroppedRingEviction();
+    agg.OnFrameDroppedCoalesced();
+    const auto s = agg.BuildSnapshot(At(0), MakeStats(), DiagnosticsLifecycle::Recording, 0.0);
+    EXPECT_EQ(s.capture.frames_dropped_ring_eviction, 1u);
+    EXPECT_EQ(s.capture.frames_dropped_problem(), 1u);
+    EXPECT_EQ(s.capture.frames_dropped_total(), 2u);
+}
+
+// The emitted rate holds the target through a source stall (the CFR pacer
+// repeats the held frame), so the capture count is the only witness. Ten
+// seconds without it moving is a starved source and never a Good card.
+TEST(PipelineDiagnostics, StarvedSourceIsNeverReportedGood) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    agg.OnFrameCaptured();
+    auto s = agg.BuildSnapshot(At(0), MakeStats(), DiagnosticsLifecycle::Recording, 0.0);
+    EXPECT_FALSE(s.capture.capture_starved);
+
+    s = agg.BuildSnapshot(At(9000), MakeStats(), DiagnosticsLifecycle::Recording, 9.0);
+    EXPECT_FALSE(s.capture.capture_starved) << "under the starve threshold";
+
+    s = agg.BuildSnapshot(At(11000), MakeStats(), DiagnosticsLifecycle::Recording, 11.0);
+    EXPECT_TRUE(s.capture.capture_starved);
+    EXPECT_GE(s.capture.seconds_without_capture, 10.0);
+    EXPECT_EQ(s.health, PipelineHealth::Warning);
+    EXPECT_NE(s.bottleneck_reason.find("No new frame"), std::string::npos) << s.bottleneck_reason;
+
+    // A frame resets the clock.
+    agg.OnFrameCaptured();
+    s = agg.BuildSnapshot(At(11200), MakeStats(), DiagnosticsLifecycle::Recording, 11.2);
+    EXPECT_FALSE(s.capture.capture_starved);
+    EXPECT_LT(s.capture.seconds_without_capture, 1.0);
+}
+
+TEST(PipelineDiagnostics, EndpointInUseIsCarriedOnTheAudioSnapshot) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    agg.OnAudioSourceHealth(0, 1, 1, 0, /*endpoint_in_use=*/true);
+    auto s = agg.BuildSnapshot(At(0), MakeStats(), DiagnosticsLifecycle::Recording, 0.0);
+    EXPECT_TRUE(s.audio.degraded_endpoint_in_use);
+    agg.OnAudioSourceHealth(0, 0, 1, 0, false);
+    s = agg.BuildSnapshot(At(200), MakeStats(), DiagnosticsLifecycle::Recording, 0.2);
+    EXPECT_FALSE(s.audio.degraded_endpoint_in_use);
+}

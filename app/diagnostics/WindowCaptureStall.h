@@ -56,8 +56,12 @@ struct WindowStallSample {
     // RecordingDiagnosticsSnapshot::session_generation. A change means a new
     // recording: the monitor drops everything it knew about the old one.
     uint64_t session_generation = 0;
-    // A WGC window target. Display/Region capture never enters this path.
+    // A WGC window target: the verdict comes from window facts (minimized,
+    // fullscreen-shaped, ...).
     bool is_window_target = false;
+    // A display or region target: the verdict comes from the display's power
+    // state. Exactly one of the two is set while a recording runs.
+    bool is_display_target = false;
     // The capture is supposed to be producing frames right now (see
     // CaptureProgressExpected). False while paused, initializing, stopping or
     // finished — the starve clock does not run then.
@@ -117,6 +121,13 @@ enum class WindowStallCause : uint8_t {
 // clears the bar. `present_fse` is a PresentMon ExclusiveFullscreen observation
 // when one is available; it only ever refines the cause, never the verdict.
 [[nodiscard]] WindowStallVerdict ClassifyConfirmedStall(const WindowTargetFacts& facts, bool present_fse) noexcept;
+
+// Stage 2 for a display or region target. A desktop that nobody touches is
+// legitimately silent for minutes, so starvation alone stays Unknown; a console
+// display that is off (asleep, or switched off) is the one corroboration that
+// says the picture the user expects is not being produced, because duplication
+// opens on such a display and never presents.
+[[nodiscard]] WindowStallVerdict ClassifyConfirmedDisplayStall(bool console_display_off) noexcept;
 
 // PURE (no Win32, no wall clock, no Qt). Stage 1: watches capture-frame progress
 // across diagnostics snapshots and owns the whole latching contract.

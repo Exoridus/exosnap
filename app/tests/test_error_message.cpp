@@ -52,6 +52,15 @@ TEST(ErrorMessageTest, MapErrorToUserMessage_WindowTooSmall) {
     EXPECT_FALSE(msg.action_hint.empty());
 }
 
+TEST(ErrorMessageTest, MapErrorToUserMessage_NvencSessionBudgetSpent_NamesTheOtherApplication) {
+    const auto msg = diagnostics::MapErrorToUserMessage(
+        MakeFailure(L"Prepare", L"NVENC open: nvEncOpenEncodeSessionEx: NV_ENC_ERR_OUT_OF_MEMORY"));
+
+    EXPECT_EQ(msg.title, L"Encoder is in use by another application");
+    EXPECT_NE(msg.action_hint.find(L"OBS"), std::wstring::npos);
+    EXPECT_EQ(msg.action_hint.find(L"driver"), std::wstring::npos) << "a session limit is not a driver problem";
+}
+
 TEST(ErrorMessageTest, MapErrorToUserMessage_NvencOpen_EncoderUnavailable) {
     const auto msg = diagnostics::MapErrorToUserMessage(MakeFailure(L"Prepare", L"NVENC open failed"));
 

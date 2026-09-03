@@ -100,7 +100,7 @@ TEST(FilesystemChecksRecommendationTest, Fat32_ProducesNotice) {
     const capability::CapabilitySet caps = MakeBasicCaps();
     const capability::UserRecorderConfig config = MakeBasicConfig();
 
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "FAT32");
+    RecommendationEngine engine(caps, config, std::nullopt, true, "FAT32");
     const DiagnosticChecklist cl = engine.Generate();
 
     bool found_rec008 = false;
@@ -125,7 +125,7 @@ TEST(FilesystemChecksRecommendationTest, Ntfs_NoRec008) {
     const capability::CapabilitySet caps = MakeBasicCaps();
     const capability::UserRecorderConfig config = MakeBasicConfig();
 
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "NTFS");
+    RecommendationEngine engine(caps, config, std::nullopt, true, "NTFS");
     const DiagnosticChecklist cl = engine.Generate();
 
     for (const auto& r : cl.results) {
@@ -139,7 +139,7 @@ TEST(FilesystemChecksRecommendationTest, ExFat_NoRec008) {
     const capability::CapabilitySet caps = MakeBasicCaps();
     const capability::UserRecorderConfig config = MakeBasicConfig();
 
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "exFAT");
+    RecommendationEngine engine(caps, config, std::nullopt, true, "exFAT");
     const DiagnosticChecklist cl = engine.Generate();
 
     for (const auto& r : cl.results) {
@@ -154,7 +154,7 @@ TEST(FilesystemChecksRecommendationTest, UnknownFilesystem_NoRec008) {
     const capability::UserRecorderConfig config = MakeBasicConfig();
 
     // "ReFS" is a real Windows filesystem; we want it to pass without a warning.
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "ReFS");
+    RecommendationEngine engine(caps, config, std::nullopt, true, "ReFS");
     const DiagnosticChecklist cl = engine.Generate();
 
     for (const auto& r : cl.results) {
@@ -168,7 +168,7 @@ TEST(FilesystemChecksRecommendationTest, EmptyFilesystemName_NoRec008) {
     const capability::CapabilitySet caps = MakeBasicCaps();
     const capability::UserRecorderConfig config = MakeBasicConfig();
 
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "");
+    RecommendationEngine engine(caps, config, std::nullopt, true, "");
     const DiagnosticChecklist cl = engine.Generate();
 
     for (const auto& r : cl.results) {
@@ -183,7 +183,7 @@ TEST(FilesystemChecksRecommendationTest, DefaultFilesystemName_NoRec008) {
     const capability::UserRecorderConfig config = MakeBasicConfig();
 
     // Constructor with only 5 args — filesystem_name defaults to empty string.
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true);
+    RecommendationEngine engine(caps, config, std::nullopt, true);
     const DiagnosticChecklist cl = engine.Generate();
 
     for (const auto& r : cl.results) {
@@ -202,7 +202,7 @@ TEST(FilesystemChecksRecommendationTest, Fat32_Plus_LowDisk_BothFire) {
     ASSERT_GT(free, kHardStopFreeBytes);
     ASSERT_LT(free, kWarnFreeBytes);
 
-    RecommendationEngine engine(caps, config, 0, free, true, "FAT32");
+    RecommendationEngine engine(caps, config, free, true, "FAT32");
     const DiagnosticChecklist cl = engine.Generate();
 
     bool found_rec005 = false;
@@ -229,7 +229,7 @@ TEST(FilesystemChecksRecommendationTest, Fat32_Plus_HardDiskStop_Fat32RemainsNot
     const uint64_t free = 100ULL * 1024 * 1024;
     ASSERT_LT(free, kHardStopFreeBytes);
 
-    RecommendationEngine engine(caps, config, 0, free, true, "FAT32");
+    RecommendationEngine engine(caps, config, free, true, "FAT32");
     const DiagnosticChecklist cl = engine.Generate();
 
     bool found_rec007 = false;
@@ -258,7 +258,7 @@ TEST(FilesystemChecksRecommendationTest, GetAllRecommendationCodes_IncludesRec00
     // rec.001–rec.008 + the 0.8.0 incident catalog rec.009/rec.010 + rec.color.range +
     // rec.hdr.h264 + display.saved.unresolved + rec.audio.degraded (ADR 0046 device loss)
     // + rec.capture.exclusive_window (exclusive-window pre-flight) → 15 codes.
-    EXPECT_EQ(codes.size(), 15u);
+    EXPECT_EQ(codes.size(), 18u);
     const bool has_rec008 = std::find(codes.begin(), codes.end(), "rec.008") != codes.end();
     EXPECT_TRUE(has_rec008);
 }
@@ -269,7 +269,7 @@ TEST(FilesystemChecksRecommendationTest, SavedDisplayUnresolved_ProducesOneNotic
     const capability::CapabilitySet caps = MakeBasicCaps();
     const capability::UserRecorderConfig config = MakeBasicConfig();
 
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true);
+    RecommendationEngine engine(caps, config, std::nullopt, true);
     engine.SetSavedDisplayUnresolved(true, "LG HDR 4K");
     const DiagnosticChecklist cl = engine.Generate();
 
@@ -295,7 +295,7 @@ TEST(FilesystemChecksRecommendationTest, SavedDisplayResolved_NoNotice) {
     const capability::CapabilitySet caps = MakeBasicCaps();
     const capability::UserRecorderConfig config = MakeBasicConfig();
 
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true);
+    RecommendationEngine engine(caps, config, std::nullopt, true);
     // Default: resolved / empty target -> no notice.
     const DiagnosticChecklist cl = engine.Generate();
 
@@ -313,7 +313,7 @@ TEST(FilesystemChecksRecommendationTest, LowerCaseFat32_NoRec008) {
     const capability::UserRecorderConfig config = MakeBasicConfig();
 
     // "fat32" is not what GetVolumeInformationW returns; must not trigger rec.008.
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "fat32");
+    RecommendationEngine engine(caps, config, std::nullopt, true, "fat32");
     const DiagnosticChecklist cl = engine.Generate();
 
     for (const auto& r : cl.results) {

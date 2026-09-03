@@ -241,4 +241,23 @@ struct NotificationEvent {
     return event;
 }
 
+// The display-capture counterpart. Raised only with corroboration (the console
+// display is off), so the text can say what was measured: no frame, and a
+// display that is not producing one. Wording rules as above: the recording is
+// running, the file grows, the source may recover on its own.
+[[nodiscard]] inline NotificationEvent MakeDisplayCaptureStalledEvent(double seconds_without_frames, bool display_off) {
+    NotificationEvent event;
+    event.type = NotificationType::WindowCaptureStalled;
+    event.title = QStringLiteral("Display capture appears to have stalled");
+    const int seconds = static_cast<int>(seconds_without_frames + 0.5);
+    event.body = QStringLiteral("No new frame has arrived from the captured display for %1 seconds. The recording "
+                                "is still running and holds the last picture.")
+                     .arg(seconds);
+    if (display_off) {
+        event.body += QStringLiteral(" The display is off or asleep; wake it, or stop the recording.");
+    }
+    event.action = NotificationAction::OpenDiagnostics;
+    return event;
+}
+
 } // namespace exosnap::notifications

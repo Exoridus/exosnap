@@ -77,6 +77,8 @@
 #include <utility>
 #include <windows.h>
 
+#include <cstring>
+
 namespace exosnap::quick {
 namespace {
 
@@ -401,7 +403,44 @@ QuickApplication::QuickApplication()
     initializeWhatsNew();
 }
 
+namespace {
+
+// WM_POWERBROADCAST / PBT_POWERSETTINGCHANGE for GUID_CONSOLE_DISPLAY_STATE on the
+// main window: 0 = off, 1 = on, 2 = dimmed. Dimmed still presents.
+class QuickConsoleDisplayStateFilter final : public QAbstractNativeEventFilter {
+  public:
+    QuickConsoleDisplayStateFilter(HWND hwnd, std::function<void(bool)> on_state)
+        : hwnd_(hwnd), on_state_(std::move(on_state)) {
+    }
+
+    bool nativeEventFilter(const QByteArray& event_type, void* message, qintptr* /*result*/) override {
+        if (message == nullptr || event_type != QByteArrayLiteral("windows_generic_MSG"))
+            return false;
+        auto* msg = static_cast<MSG*>(message);
+        if (msg->hwnd != hwnd_ || msg->message != WM_POWERBROADCAST || msg->wParam != PBT_POWERSETTINGCHANGE)
+            return false;
+        const auto* setting = reinterpret_cast<const POWERBROADCAST_SETTING*>(msg->lParam);
+        if (setting == nullptr || !IsEqualGUID(setting->PowerSetting, GUID_CONSOLE_DISPLAY_STATE) ||
+            setting->DataLength < sizeof(DWORD))
+            return false;
+        DWORD state = 0;
+        std::memcpy(&state, setting->Data, sizeof(state));
+        on_state_(state != 0);
+        return false; // observed, not consumed
+    }
+
+  private:
+    HWND hwnd_;
+    std::function<void(bool)> on_state_;
+};
+
+} // namespace
+
 QuickApplication::~QuickApplication() {
+    if (console_display_notify_ != nullptr) {
+        UnregisterPowerSettingNotification(static_cast<HPOWERNOTIFY>(console_display_notify_));
+        console_display_notify_ = nullptr;
+    }
     // Same hazard, same shape as the hotkey filter below: QCoreApplication holds
     // a raw pointer to it. A run that never produced a frame (a load failure, a
     // --smoke-test that quits first) never reached the probe that normally stops
@@ -2178,6 +2217,8 @@ void QuickApplication::observeWindowCaptureStall(const exosnap::engine::Recordin
     diagnostics::WindowStallSample sample;
     sample.session_generation = snapshot.session_generation;
     sample.is_window_target = snapshot.capture.source_type == exosnap::engine::CaptureSourceType::Window;
+    sample.is_display_target = snapshot.capture.source_type == exosnap::engine::CaptureSourceType::Display ||
+                               snapshot.capture.source_type == exosnap::engine::CaptureSourceType::Region;
     sample.capture_expected = diagnostics::CaptureProgressExpected(snapshot.lifecycle);
     sample.frames_captured = snapshot.capture.frames_captured;
     sample.elapsed_seconds = snapshot.elapsed_seconds;
@@ -2199,6 +2240,34 @@ void QuickApplication::observeWindowCaptureStall(const exosnap::engine::Recordin
     // Confirmed starvation. This is the ONLY point at which any Win32 fact is
     // read — once per episode, never on a healthy recording.
     const double starved_for = capture_stall_monitor_.seconds_without_progress();
+    if (!sample.is_window_target) {
+        // Display or region: the desktop itself is the only witness. Without a
+        // display that is off, starvation is indistinguishable from a static
+        // desktop and stays a log line; the pipeline card still says the source
+        // has gone quiet (CaptureDiagnostics::capture_starved).
+        const bool display_off = !console_display_on_;
+        const diagnostics::WindowStallVerdict verdict = diagnostics::ClassifyConfirmedDisplayStall(display_off);
+        capture_stall_monitor_.ApplyVerdict(verdict);
+        if (verdict != diagnostics::WindowStallVerdict::Stalled) {
+            diagnostics::AppLog::info(
+                QStringLiteral("capture"),
+                QStringLiteral("display capture produced no frame for %1 s; not reported (display is on, a static "
+                               "desktop is indistinguishable from a stall)")
+                    .arg(starved_for, 0, 'f', 1));
+            return;
+        }
+        if (recording_coordinator_)
+            recording_coordinator_->NoteWindowCaptureStall();
+        diagnostics::AppLog::warning(
+            QStringLiteral("capture"),
+            QStringLiteral("display capture stalled: no frame for %1 s while the console display is off, recording "
+                           "continues")
+                .arg(starved_for, 0, 'f', 1));
+        clearWindowCaptureStallWarning();
+        capture_stall_toast_sequence_ = notifications_adapter_.manager().Enqueue(
+            notifications::MakeDisplayCaptureStalledEvent(starved_for, display_off));
+        return;
+    }
     const diagnostics::WindowTargetFacts facts =
         diagnostics::GatherWindowTargetFacts(reinterpret_cast<HWND>(evidence_target_hwnd_));
     // PresentMon's verdict when it happens to be available (elevation- and
@@ -4843,6 +4912,14 @@ bool QuickApplication::load(bool no_activate) {
         updater_handoff_filter_ =
             std::make_unique<QuickUpdaterHandoffFilter>(hwnd, [this] { closeForUpdaterHandoff(); });
         QCoreApplication::instance()->installNativeEventFilter(updater_handoff_filter_.get());
+        // Console display power state, for the display-capture stall verdict: a
+        // display that is off is the one corroboration that a silent duplication
+        // is a stall and not a static desktop.
+        console_display_filter_ =
+            std::make_unique<QuickConsoleDisplayStateFilter>(hwnd, [this](bool on) { console_display_on_ = on; });
+        QCoreApplication::instance()->installNativeEventFilter(console_display_filter_.get());
+        console_display_notify_ =
+            RegisterPowerSettingNotification(hwnd, &GUID_CONSOLE_DISPLAY_STATE, DEVICE_NOTIFY_WINDOW_HANDLE);
         // The return value is the set of bindings Windows refused, usually
         // because another application already owns the combo. Discarding it left
         // the user with a shortcut that silently did nothing and no way to find

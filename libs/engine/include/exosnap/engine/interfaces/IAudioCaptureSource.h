@@ -104,6 +104,14 @@ class IAudioCaptureSource {
         return 0;
     }
 
+    // Raw platform HRESULT of the last failed Init()/Reinit(), or 0 when none
+    // occurred or the source does not track one. Tells an in-use refusal
+    // (another client holds the endpoint exclusively) from a device that is
+    // gone. Decorators forward their inner source's value.
+    virtual int32_t LastInitHresult() const {
+        return 0;
+    }
+
     // Device-clock timing of the most recently acquired buffer (valid after a
     // successful AcquireBuffer until the next one). Returns false when the
     // source cannot attribute a single device clock — mixed/merged sources,

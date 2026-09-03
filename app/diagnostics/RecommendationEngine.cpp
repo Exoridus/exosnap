@@ -7,6 +7,7 @@
 #include <capability/support_level.h>
 
 #include <chrono>
+#include <cmath>
 #include <string>
 
 namespace exosnap::diagnostics {
@@ -41,14 +42,13 @@ DiagnosticResult MakeResult(const std::string& id, DiagnosticGroup group, Diagno
 } // namespace
 
 RecommendationEngine::RecommendationEngine(const capability::CapabilitySet& caps,
-                                           const capability::UserRecorderConfig& config, uint32_t monitor_refresh_rate,
+                                           const capability::UserRecorderConfig& config,
                                            std::optional<uint64_t> output_drive_free_bytes, bool is_profile_supported,
                                            std::string output_filesystem_name,
                                            const exosnap::engine::RecordingDiagnosticsSnapshot* live_snapshot,
                                            const PresentSample* present)
-    : caps_(caps), config_(config), monitor_refresh_rate_(monitor_refresh_rate),
-      output_drive_free_bytes_(output_drive_free_bytes), is_profile_supported_(is_profile_supported),
-      output_filesystem_name_(std::move(output_filesystem_name)) {
+    : caps_(caps), config_(config), output_drive_free_bytes_(output_drive_free_bytes),
+      is_profile_supported_(is_profile_supported), output_filesystem_name_(std::move(output_filesystem_name)) {
     // Consume the optional live snapshot only when it carries a real present-cadence
     // measurement (DXGI OD path, past warm-up). Everything else stays neutral.
     if (live_snapshot != nullptr && live_snapshot->valid &&
@@ -70,9 +70,23 @@ RecommendationEngine::RecommendationEngine(const capability::CapabilitySet& caps
     }
     // Consume live audio health + format (ADR 0046). Available only while an audio
     // track is actually capturing; idle/no-audio recordings leave it neutral.
+    if (live_snapshot != nullptr && live_snapshot->valid &&
+        live_snapshot->lifecycle == exosnap::engine::DiagnosticsLifecycle::Recording) {
+        live_capture_available_ = true;
+        live_capture_starved_ = live_snapshot->capture.capture_starved;
+        live_frames_emitted_ = live_snapshot->capture.frames_emitted;
+        live_frames_duplicated_ = live_snapshot->capture.frames_duplicated;
+        live_target_fps_ = live_snapshot->capture.target_fps;
+    }
+    if (live_snapshot != nullptr && live_snapshot->valid &&
+        live_snapshot->av_drift_availability == exosnap::engine::MetricAvailability::Available) {
+        live_clock_saturated_ = live_snapshot->clock_slaving_saturated;
+        live_clock_ppm_ = live_snapshot->clock_slaving_ppm;
+    }
     if (live_snapshot != nullptr && live_snapshot->valid && live_snapshot->audio.active) {
         live_audio_available_ = true;
         live_audio_degraded_sources_ = live_snapshot->audio.degraded_sources;
+        live_audio_endpoint_in_use_ = live_snapshot->audio.degraded_endpoint_in_use;
         live_audio_track_count_ = live_snapshot->audio.track_count;
         if (live_snapshot->audio.sample_rate > 0 && live_snapshot->audio.channels > 0) {
             live_audio_format_available_ = true;
@@ -103,6 +117,8 @@ DiagnosticChecklist RecommendationEngine::Generate() const {
     checkDiskWriteStall(checklist);
     checkUnresolvedSavedDisplay(checklist);
     checkAudioSourceDegraded(checklist);
+    checkFramePacingDuplication(checklist);
+    checkAudioClockSaturated(checklist);
     return checklist;
 }
 
@@ -744,7 +760,9 @@ void RecommendationEngine::checkDiscardedPresents(DiagnosticChecklist& checklist
     // Discarded presents never reach capture, so the recording looks choppier than the game.
     constexpr uint32_t kMinSamples = 200;           // ignore warm-up / tiny samples
     constexpr double kDiscardRatioThreshold = 0.05; // 5% discarded sustained
-    if (!present_.has_value() || present_->present_count < kMinSamples) {
+    // An unattributed sample spans every process on the desktop; what it says
+    // about discards is not a statement about the recorded content.
+    if (!present_.has_value() || !present_->attributed || present_->present_count < kMinSamples) {
         return;
     }
     const double ratio = static_cast<double>(present_->discarded_count) / static_cast<double>(present_->present_count);
@@ -778,7 +796,7 @@ void RecommendationEngine::checkPresentModeFlips(DiagnosticChecklist& checklist)
     // The source repeatedly switched presentation mode (composed / independent-flip / exclusive).
     // A one-off enter/exit is benign; repeated flipping causes momentary capture hitches.
     constexpr uint32_t kFlipThreshold = 5;
-    if (!present_.has_value() || present_->mode_flip_count < kFlipThreshold) {
+    if (!present_.has_value() || !present_->attributed || present_->mode_flip_count < kFlipThreshold) {
         return;
     }
     const std::string n = std::to_string(present_->mode_flip_count);
@@ -882,6 +900,30 @@ void RecommendationEngine::checkAudioSourceDegraded(DiagnosticChecklist& checkli
     const std::string n = std::to_string(live_audio_degraded_sources_);
     const bool plural = live_audio_degraded_sources_ != 1;
     const std::string source_word = plural ? "audio sources are" : "An audio source is";
+    if (live_audio_endpoint_in_use_) {
+        // The endpoint is still there; another application holds it exclusively.
+        // "Reconnect the device" would send the user to the wrong place.
+        DiagnosticResult taken = MakeResult(
+            "rec.audio.endpoint_taken", DiagnosticGroup::Audio, DiagnosticSeverity::Notice,
+            DiagnosticTier::MeasuredProblem, "Another application took the audio device",
+            source_word + " silent because another application holds the audio device in exclusive mode.",
+            "The device is still present but refused ExoSnap when it tried to reopen it, which is what happens "
+            "while another application has taken exclusive control of it. Video and every other audio source "
+            "are untouched; the source resumes on its own the moment the device is released.",
+            n + " audio source" + (plural ? "s" : "") + " refused as in use",
+            "Close the application that has taken the device, or in Windows Sound open the device's Properties, "
+            "Advanced tab, and clear \"Allow applications to take exclusive control of this device\".");
+        FixAction taken_fix;
+        taken_fix.id = "fix.audio.check_devices";
+        taken_fix.label = "Check audio devices";
+        taken_fix.safety = FixAction::Safety::Assisted;
+        taken_fix.reversible = true;
+        taken_fix.changes_summary = "Opens Audio settings so you can reselect the capture device.";
+        taken.fix_action = taken_fix;
+        checklist.has_notice = true;
+        checklist.results.push_back(std::move(taken));
+        return;
+    }
     DiagnosticResult r = MakeResult(
         "rec.audio.degraded", DiagnosticGroup::Audio, DiagnosticSeverity::Notice, DiagnosticTier::MeasuredProblem,
         "Audio device lost — recording continues",
@@ -931,6 +973,59 @@ std::vector<DiagnosticResult> RecommendationEngine::GenerateEnvironmentFacts() c
     return facts;
 }
 
+void RecommendationEngine::checkFramePacingDuplication(DiagnosticChecklist& checklist) const {
+    // Repeats are the CFR pacer's answer to a source that produced nothing new
+    // for a tick. A steady share of them means the source runs below the
+    // recording rate; the file plays with judder no encoder setting can fix. A
+    // full stall is the stall notice's story, not this card's.
+    constexpr double kDuplicateRatioThreshold = 0.25;
+    constexpr uint64_t kMinEmittedFrames = 300; // five seconds at 60 fps: past warm-up
+    if (!live_capture_available_ || !live_cfr_ || live_capture_starved_ || live_frames_emitted_ < kMinEmittedFrames) {
+        return;
+    }
+    const double ratio = static_cast<double>(live_frames_duplicated_) / static_cast<double>(live_frames_emitted_);
+    if (ratio < kDuplicateRatioThreshold) {
+        return;
+    }
+    const std::string pct = std::to_string(static_cast<long>(ratio * 100.0 + 0.5));
+    const std::string fps = std::to_string(static_cast<long>(live_target_fps_ + 0.5));
+    DiagnosticResult r = MakeResult(
+        "rec.pacing.duplication", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
+        DiagnosticTier::MeasuredProblem, "Source delivers fewer frames than the recording rate",
+        "About " + pct + "% of the recorded frames are repeats of the previous one.",
+        "The source produced no new frame for " + pct + "% of the " + fps +
+            " fps recording ticks, so the recorder repeated the last picture to keep the file at a constant rate. "
+            "The recording plays with judder that no encoder setting changes; the source itself is running below "
+            "the recording rate.",
+        pct + "% repeated frames at " + fps + " fps",
+        "Lower the recording frame rate to what the source can sustain (30 fps for a source below 60), or raise "
+        "the game's frame rate. If the source is a video player or a game capped below the recording rate, this "
+        "is expected.");
+    checklist.has_notice = true;
+    checklist.results.push_back(std::move(r));
+}
+
+void RecommendationEngine::checkAudioClockSaturated(DiagnosticChecklist& checklist) const {
+    if (!live_clock_saturated_) {
+        return;
+    }
+    // ppm is parts per million of playback rate: 1 ppm is 3.6 ms per hour.
+    const double ms_per_hour = std::abs(live_clock_ppm_) * 3.6;
+    const std::string rate = std::to_string(static_cast<long>(ms_per_hour + 0.5));
+    DiagnosticResult r =
+        MakeResult("rec.audio.clock_saturated", DiagnosticGroup::Audio, DiagnosticSeverity::Notice,
+                   DiagnosticTier::MeasuredProblem, "Audio clock drifts faster than correction can absorb",
+                   "The audio device's clock runs away from the system clock by more than the recorder can compensate.",
+                   "Clock correction is at its limit (about " + rate +
+                       " ms per hour) and the remaining offset keeps growing, so audio and video separate over a long "
+                       "recording. This is the device's clock, not the recording settings.",
+                   "Clock slaving saturated at " + rate + " ms/h",
+                   "Keep recordings shorter, or use a different audio device (USB and Bluetooth devices with their own "
+                   "clock are the usual cause).");
+    checklist.has_notice = true;
+    checklist.results.push_back(std::move(r));
+}
+
 std::vector<std::string> RecommendationEngine::GetAllRecommendationCodes() {
     return {"rec.001",
             "rec.002",
@@ -945,6 +1040,9 @@ std::vector<std::string> RecommendationEngine::GetAllRecommendationCodes() {
             "rec.color.range",
             "rec.hdr.h264",
             "rec.audio.degraded",
+            "rec.audio.endpoint_taken",
+            "rec.pacing.duplication",
+            "rec.audio.clock_saturated",
             "rec.capture.exclusive_window",
             "display.saved.unresolved"};
 }

@@ -70,6 +70,11 @@ void PipelineDiagnosticsAggregator::Reset(uint64_t generation, const Diagnostics
     dropped_coalesced_ = 0;
     dropped_cfr_ = 0;
     dropped_backpressure_ = 0;
+    dropped_ring_eviction_ = 0;
+    last_progress_frames_ = 0;
+    have_progress_time_ = false;
+    audio_clock_saturated_.fill(false);
+    audio_endpoint_in_use_.fill(false);
     dropped_processing_failure_ = 0;
     interval_observed_ = false;
     interval_window_.Clear();
@@ -219,6 +224,11 @@ void PipelineDiagnosticsAggregator::OnFrameCaptured() noexcept {
 void PipelineDiagnosticsAggregator::OnFrameDroppedCoalesced() noexcept {
     std::lock_guard lk(mutex_);
     ++dropped_coalesced_;
+}
+
+void PipelineDiagnosticsAggregator::OnFrameDroppedRingEviction() noexcept {
+    std::lock_guard lk(mutex_);
+    ++dropped_ring_eviction_;
 }
 
 void PipelineDiagnosticsAggregator::OnFrameDroppedCfr() noexcept {
@@ -480,13 +490,21 @@ void PipelineDiagnosticsAggregator::OnAudioDiscontinuity(uint32_t gap_frames) no
 }
 
 void PipelineDiagnosticsAggregator::OnAudioSourceHealth(uint32_t track_id, uint32_t degraded_sources,
-                                                        uint32_t total_sources,
-                                                        uint32_t degraded_source_kinds) noexcept {
+                                                        uint32_t total_sources, uint32_t degraded_source_kinds,
+                                                        bool endpoint_in_use) noexcept {
     std::lock_guard lk(mutex_);
     if (track_id < audio_degraded_sources_.size()) {
         audio_degraded_sources_[track_id] = degraded_sources;
         audio_degraded_source_kinds_[track_id] = degraded_source_kinds;
         audio_total_sources_[track_id] = total_sources;
+        audio_endpoint_in_use_[track_id] = degraded_sources > 0 && endpoint_in_use;
+    }
+}
+
+void PipelineDiagnosticsAggregator::OnAudioClockSlavingSaturated(uint32_t track_id) noexcept {
+    std::lock_guard lk(mutex_);
+    if (track_id < audio_clock_saturated_.size()) {
+        audio_clock_saturated_[track_id] = true;
     }
 }
 
@@ -644,9 +662,19 @@ RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_p
     cap.frames_dropped_cfr = dropped_cfr_;
     cap.frames_dropped_backpressure = dropped_backpressure_;
     cap.frames_dropped_processing_failure = dropped_processing_failure_;
+    cap.frames_dropped_ring_eviction = dropped_ring_eviction_;
     cap.frames_duplicated = stats.duplicated_video_frames;
     cap.source_type = cfg_.source_type;
     cap.source_loss = stats.source_loss;
+    // Progress watch: a frame count that has not moved since the last publish
+    // keeps its timestamp; the emitted rate says nothing about it.
+    if (!have_progress_time_ || frames_captured_ != last_progress_frames_) {
+        have_progress_time_ = true;
+        last_progress_frames_ = frames_captured_;
+        last_progress_time_ = now;
+    }
+    cap.seconds_without_capture = recording ? std::chrono::duration<double>(now - last_progress_time_).count() : 0.0;
+    cap.capture_starved = recording && cap.seconds_without_capture >= kCaptureStarveSeconds;
     if (can_rate && stats.video_frames_captured >= last_frames_emitted_) {
         cap.actual_fps = static_cast<double>(stats.video_frames_captured - last_frames_emitted_) / dt;
     }
@@ -759,6 +787,10 @@ RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_p
     au.degraded_sources = degraded_total;
     au.degraded_source_kinds = degraded_kinds;
     au.source_degraded = degraded_total > 0;
+    au.degraded_endpoint_in_use = false;
+    for (const bool in_use : audio_endpoint_in_use_) {
+        au.degraded_endpoint_in_use = au.degraded_endpoint_in_use || in_use;
+    }
     // Post-flight audio facts owned by the audio workers, passed through unchanged:
     // the latched "a source was lost at some point" bit and the per-track resampler
     // drain figures (written at end of stream, so only the terminal snapshot — built
@@ -858,6 +890,10 @@ RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_p
     s.av_drift_raw_ms = 0.0;
     s.clock_slaving_ppm = 0.0;
     s.clock_slaving_active = false;
+    s.clock_slaving_saturated = false;
+    for (const bool saturated : audio_clock_saturated_) {
+        s.clock_slaving_saturated = s.clock_slaving_saturated || saturated;
+    }
     s.av_drift_availability = MetricAvailability::Unavailable;
     // A track whose measurement is known-invalid is excluded from the choice
     // rather than competing for it: it carries the largest magnitude by
@@ -980,6 +1016,7 @@ PerfWindowSample PipelineDiagnosticsAggregator::SamplePerfWindow(time_point now)
     p.dropped_cfr = dropped_cfr_;
     p.dropped_backpressure = dropped_backpressure_;
     p.dropped_processing_failure = dropped_processing_failure_;
+    p.dropped_ring_eviction = dropped_ring_eviction_;
     p.duplicated_frames = frames_duplicated_;
     p.slot_stalls = slot_stalls_;
     p.queue_saturation_events = queue_saturation_events_;
@@ -1008,6 +1045,7 @@ PerfSessionSummary PipelineDiagnosticsAggregator::BuildPerfSummary() const {
     s.dropped_cfr = dropped_cfr_;
     s.dropped_backpressure = dropped_backpressure_;
     s.dropped_processing_failure = dropped_processing_failure_;
+    s.dropped_ring_eviction = dropped_ring_eviction_;
     s.duplicated_frames = frames_duplicated_;
     s.slot_stalls = slot_stalls_;
     s.queue_saturation_events = queue_saturation_events_;
@@ -1108,6 +1146,18 @@ PipelineBottleneck PipelineDiagnosticsAggregator::Classify(const RecordingDiagno
         reason.clear();
     }
 
+    // A starved source is not a bottleneck (nothing in the pipeline is slow), but
+    // a card that says Good over a frozen picture would contradict the stall
+    // notice the app raises from the same counter.
+    if (s.capture.capture_starved &&
+        (bottleneck == PipelineBottleneck::None || bottleneck == PipelineBottleneck::Unknown)) {
+        // Outranks "Gathering data": a source that has been silent for ten
+        // seconds is the evidence, not its absence.
+        bottleneck = PipelineBottleneck::None;
+        reason = "No new frame from the source for " +
+                 std::to_string(static_cast<int>(s.capture.seconds_without_capture + 0.5)) + " s";
+    }
+
     // Health from measurable conditions.
     const bool queue_critical =
         s.audio_queue.bounded && s.audio_queue.capacity > 0 &&
@@ -1115,7 +1165,7 @@ PipelineBottleneck PipelineDiagnosticsAggregator::Classify(const RecordingDiagno
     if (s.mux.failures > 0 || s.disk.write_failures > 0 || s.split.split_failures > 0 || queue_critical) {
         health = PipelineHealth::Critical;
     } else if ((bottleneck != PipelineBottleneck::None && bottleneck != PipelineBottleneck::Unknown) ||
-               (drops_rising && problem_drops > 0) || skew_significant) {
+               (drops_rising && problem_drops > 0) || skew_significant || s.capture.capture_starved) {
         health = PipelineHealth::Warning;
     } else {
         health = PipelineHealth::Good;

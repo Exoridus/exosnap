@@ -96,7 +96,7 @@ TEST(LowDiskGuardRecommendationTest, UnqueryableVolume_NoDiskEntries) {
     const capability::CapabilitySet caps = MakeBasicCaps();
     const capability::UserRecorderConfig config = MakeBasicConfig();
 
-    RecommendationEngine engine(caps, config, 0, /*output_drive_free_bytes=*/std::nullopt, true);
+    RecommendationEngine engine(caps, config, /*output_drive_free_bytes=*/std::nullopt, true);
     const DiagnosticChecklist cl = engine.Generate();
 
     for (const auto& r : cl.results) {
@@ -112,7 +112,7 @@ TEST(LowDiskGuardRecommendationTest, ZeroFreeBytes_IsAFullDisk_Blocks) {
     const capability::CapabilitySet caps = MakeBasicCaps();
     const capability::UserRecorderConfig config = MakeBasicConfig();
 
-    RecommendationEngine engine(caps, config, 0, /*output_drive_free_bytes=*/0ULL, true);
+    RecommendationEngine engine(caps, config, /*output_drive_free_bytes=*/0ULL, true);
     const DiagnosticChecklist cl = engine.Generate();
 
     bool found_rec007 = false;
@@ -135,7 +135,7 @@ TEST(LowDiskGuardRecommendationTest, WarnTier_BelowWarnAboveHardStop_Notice) {
     const capability::CapabilitySet caps = MakeBasicCaps();
     const capability::UserRecorderConfig config = MakeBasicConfig();
 
-    RecommendationEngine engine(caps, config, 0, free, true);
+    RecommendationEngine engine(caps, config, free, true);
     const DiagnosticChecklist cl = engine.Generate();
 
     bool found_rec005 = false;
@@ -156,7 +156,7 @@ TEST(LowDiskGuardRecommendationTest, WarnTier_ExactlyOneByteAboveHardStop_Notice
     const capability::CapabilitySet caps = MakeBasicCaps();
     const capability::UserRecorderConfig config = MakeBasicConfig();
 
-    RecommendationEngine engine(caps, config, 0, free, true);
+    RecommendationEngine engine(caps, config, free, true);
     const DiagnosticChecklist cl = engine.Generate();
 
     bool found_rec005 = false;
@@ -176,7 +176,7 @@ TEST(LowDiskGuardRecommendationTest, WarnTier_ExactlyAtWarnBoundary_NoNotice) {
     const capability::CapabilitySet caps = MakeBasicCaps();
     const capability::UserRecorderConfig config = MakeBasicConfig();
 
-    RecommendationEngine engine(caps, config, 0, free, true);
+    RecommendationEngine engine(caps, config, free, true);
     const DiagnosticChecklist cl = engine.Generate();
 
     for (const auto& r : cl.results) {
@@ -194,7 +194,7 @@ TEST(LowDiskGuardRecommendationTest, BlockerTier_AtHardStopThreshold_Blocker) {
     const capability::CapabilitySet caps = MakeBasicCaps();
     const capability::UserRecorderConfig config = MakeBasicConfig();
 
-    RecommendationEngine engine(caps, config, 0, free, true);
+    RecommendationEngine engine(caps, config, free, true);
     const DiagnosticChecklist cl = engine.Generate();
 
     bool found_rec007 = false;
@@ -218,7 +218,7 @@ TEST(LowDiskGuardRecommendationTest, BlockerTier_BelowHardStop_Blocker) {
     const capability::CapabilitySet caps = MakeBasicCaps();
     const capability::UserRecorderConfig config = MakeBasicConfig();
 
-    RecommendationEngine engine(caps, config, 0, free, true);
+    RecommendationEngine engine(caps, config, free, true);
     const DiagnosticChecklist cl = engine.Generate();
 
     bool found_rec007 = false;
@@ -238,7 +238,7 @@ TEST(LowDiskGuardRecommendationTest, BlockerTier_ZeroRemaining_Blocker) {
     const capability::CapabilitySet caps = MakeBasicCaps();
     const capability::UserRecorderConfig config = MakeBasicConfig();
 
-    RecommendationEngine engine(caps, config, 0, free, true);
+    RecommendationEngine engine(caps, config, free, true);
     const DiagnosticChecklist cl = engine.Generate();
 
     bool found_rec007 = false;
@@ -258,7 +258,7 @@ TEST(LowDiskGuardRecommendationTest, AboveWarnThreshold_NoDiskResults) {
     const capability::CapabilitySet caps = MakeBasicCaps();
     const capability::UserRecorderConfig config = MakeBasicConfig();
 
-    RecommendationEngine engine(caps, config, 0, free, true);
+    RecommendationEngine engine(caps, config, free, true);
     const DiagnosticChecklist cl = engine.Generate();
 
     for (const auto& r : cl.results) {
@@ -279,7 +279,7 @@ TEST(LowDiskGuardRecommendationTest, BlockerTier_DoesNotSuppressCodecBlocker) {
 
     const uint64_t free = 100ULL * 1024 * 1024; // below hard-stop
 
-    RecommendationEngine engine(caps, config, 0, free, true);
+    RecommendationEngine engine(caps, config, free, true);
     const DiagnosticChecklist cl = engine.Generate();
 
     bool found_rec003 = false, found_rec007 = false;

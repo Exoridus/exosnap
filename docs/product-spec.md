@@ -1062,6 +1062,16 @@ example `Task Manager`. Identical parts are never repeated.
   (a later independent stall raises a new one), and a session that had one records
   `window_capture_stall` in its session report.
 
+  **A display or region capture** is watched by the same clock. A desktop nobody touches is
+  legitimately silent for minutes, so starvation alone stays a log line; the one corroboration
+  that turns it into the standing notice is a **console display that is off or asleep** (Windows'
+  display power state): duplication opens on such a display and never presents. The notice then
+  reads *"Display capture appears to have stalled. … The recording is still running and holds the
+  last picture. The display is off or asleep; wake it, or stop the recording."* Either way the
+  pipeline card stops saying *Good* once the source has produced nothing for 10 seconds: the
+  emitted rate stays at target through any stall (the pacer repeats the held frame), so the card's
+  reason names the quiet source instead.
+
   Only the stall is claimed. Exclusive fullscreen is named only when a fullscreen signal (the Shell's
   QUNS state or a PresentMon `ExclusiveFullscreen` observation) actually corroborates it, and even then
   as a conditional suggestion — never as *"exclusive fullscreen detected"*.
@@ -1831,6 +1841,26 @@ The **Edit surface** is fully operable without a pointer. The trim timeline is a
 Diagnostics is a first-class engine, not a status readout. Its posture is **calm, not alarmist**: it
 defaults quiet, reports only real/measured problems, gives one primary fix per problem, hides depth
 behind an expert toggle, and always shows hard blockers.
+
+**Measured cards added for game recording (v0.9).** Each has a source, a meaning, a cadence, a UI
+consumer and a log consumer:
+
+- `rec.pacing.duplication` -- more than 25 % of the emitted frames over the last five seconds were
+  repeats of the held frame (source below the recording rate). Not raised while the source is starved,
+  which is the stall notice's story. Remedy names the frame rate, not the encoder.
+- `rec.audio.endpoint_taken` -- a degraded source whose endpoint is still present but refused
+  reactivation as **in use**: another application holds it in exclusive mode. Replaces the generic
+  *"Audio device lost -- reconnect"* card for that cause, whose remedy would send the user to the wrong
+  place.
+- `rec.audio.clock_saturated` -- the audio clock-slaving controller is at its rate limit and the residual
+  keeps growing; the card states the drift in ms per hour and names the device's clock, not the settings.
+- The present-cadence cards (`rec.present.discarded`, `rec.present.modeflip`) are raised only for a
+  **window** target. For a display or region the present sample spans every process on the desktop and
+  says nothing about the recorded content.
+- A frame captured into the phase-correct ring and overwritten before it was emitted is booked as a
+  real drop (`frames_dropped_ring_eviction`), on every surface that reports problem drops.
+- An encoder open that fails with `NV_ENC_ERR_OUT_OF_MEMORY` is reported as **"Encoder is in use by
+  another application"** with the usual NVENC clients named, never as a driver problem.
 
 **Underlying severity:** each check resolves to **Pass / Notice / Blocker**. A **Notice** is advisory
 and never blocks recording; a **Blocker** prevents recording from starting.

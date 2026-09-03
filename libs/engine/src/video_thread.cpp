@@ -2921,11 +2921,13 @@ void VideoThread::Run() {
                         if (usePhaseCorrect) {
                             // Round-robin write into the ring keyed by source present-QPC.
                             CaptureRingEntry& entry = captureRing[ringHead];
-                            // Evicting a fresh, never-emitted frame is a genuine drop.
+                            // Evicting a fresh, never-emitted frame is a genuine drop: it
+                            // is booked as one, not as the benign coalescing bucket every
+                            // drop surface excludes.
                             if (entry.presentQpc != 0 && entry.presentQpc > lastEmittedPresentQpc) {
                                 ++droppedFrames;
                                 if (diag_recording)
-                                    m_state.diagnostics.OnFrameDroppedCoalesced();
+                                    m_state.diagnostics.OnFrameDroppedRingEviction();
                             }
                             d3dContext->CopyResource(entry.tex.get(), rawTex);
                             entry.presentQpc = static_cast<uint64_t>(info.LastPresentTime.QuadPart);

@@ -334,3 +334,34 @@ TEST(WindowStallCauseTest, NormalWindowClaimsNoCause) {
 }
 
 } // namespace
+
+// Display and region targets share the starvation clock; their verdict comes
+// from the console display state instead of window facts.
+TEST(WindowCaptureStallMonitor, DisplayTargetStarvesLikeAWindow) {
+    WindowCaptureStallMonitor monitor;
+    WindowStallSample s = recordingSample(1, 100, 0);
+    s.is_window_target = false;
+    s.is_display_target = true;
+    EXPECT_EQ(monitor.Observe(s), WindowStallSignal::None);
+    for (int tick = 1; tick < kStarveTicks; ++tick) {
+        s.elapsed_seconds = tick * kTickSeconds;
+        EXPECT_EQ(monitor.Observe(s), WindowStallSignal::None) << tick;
+    }
+    s.elapsed_seconds = kStarveTicks * kTickSeconds;
+    EXPECT_EQ(monitor.Observe(s), WindowStallSignal::Starved);
+}
+
+TEST(WindowCaptureStallMonitor, NeitherWindowNorDisplayNeverStarves) {
+    WindowCaptureStallMonitor monitor;
+    WindowStallSample s = recordingSample(1, 100, 0);
+    s.is_window_target = false;
+    s.is_display_target = false;
+    EXPECT_EQ(monitor.Observe(s), WindowStallSignal::None);
+    s.elapsed_seconds = 2 * kStarveTicks * kTickSeconds;
+    EXPECT_EQ(monitor.Observe(s), WindowStallSignal::None);
+}
+
+TEST(ClassifyConfirmedDisplayStall, OnlyAnOffDisplayCorroborates) {
+    EXPECT_EQ(ClassifyConfirmedDisplayStall(/*console_display_off=*/true), WindowStallVerdict::Stalled);
+    EXPECT_EQ(ClassifyConfirmedDisplayStall(/*console_display_off=*/false), WindowStallVerdict::Unknown);
+}
