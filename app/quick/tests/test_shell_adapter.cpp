@@ -171,7 +171,7 @@ TEST(ShellAdapterCloseDecisionTest, ConfirmingAnyGuardReportsTheAllowDecisionTha
 
         QStringList decisions;
         QObject::connect(&adapter, &ShellAdapter::closeDecided, &adapter,
-                         [&decisions](const QString& kind, bool, bool, bool) { decisions << kind; });
+                         [&decisions](const QString& kind, bool, bool, bool, bool) { decisions << kind; });
         int approved = 0;
         QObject::connect(&adapter, &ShellAdapter::closeApproved, &adapter, [&approved]() { ++approved; });
 
@@ -255,7 +255,7 @@ TEST_F(ShellAdapterTest, FinalizeStartedWhileThePromptWasUpKeepsTheWindowOpen) {
 TEST_F(ShellAdapterTest, NothingInFlightClosesForReal) {
     QStringList kinds;
     QObject::connect(&adapter_, &ShellAdapter::closeDecided, &adapter_,
-                     [&kinds](const QString& kind, bool, bool, bool) { kinds.append(kind); });
+                     [&kinds](const QString& kind, bool, bool, bool, bool) { kinds.append(kind); });
 
     EXPECT_TRUE(adapter_.requestClose());
     EXPECT_FALSE(adapter_.closeGuardActive());
@@ -263,12 +263,33 @@ TEST_F(ShellAdapterTest, NothingInFlightClosesForReal) {
     EXPECT_EQ(kinds.at(0), QStringLiteral("allow"));
 }
 
+// REGRESSION: a finalize blocks the close silently -- no prompt, no visible
+// change, the window simply stays. The decision report named recording,
+// exporting and remuxing only, so the line printed three zeroes beside a refusal
+// and sent the reader looking in the wrong place. The flag that decided has to
+// be in the report.
+TEST_F(ShellAdapterTest, TheSilentBlockReportsTheFlagThatCausedIt) {
+    QString kind;
+    bool finalizing = false;
+    QObject::connect(&adapter_, &ShellAdapter::closeDecided, &adapter_,
+                     [&kind, &finalizing](const QString& k, bool, bool, bool, bool f) {
+                         kind = k;
+                         finalizing = f;
+                     });
+
+    state_.finalizing = true;
+    EXPECT_FALSE(adapter_.requestClose());
+
+    EXPECT_EQ(kind, QStringLiteral("blockSilently"));
+    EXPECT_TRUE(finalizing) << "the refusal was reported without the flag it was made from";
+}
+
 TEST_F(ShellAdapterTest, EveryCloseAttemptReportsExactlyOneDecision) {
     // The application quits on an "allow", so a close that reported nothing would
     // strand the process with no window.
     QStringList kinds;
     QObject::connect(&adapter_, &ShellAdapter::closeDecided, &adapter_,
-                     [&kinds](const QString& kind, bool, bool, bool) { kinds.append(kind); });
+                     [&kinds](const QString& kind, bool, bool, bool, bool) { kinds.append(kind); });
 
     EXPECT_TRUE(adapter_.requestClose());
     ASSERT_EQ(kinds.size(), 1);

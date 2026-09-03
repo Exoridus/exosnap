@@ -133,6 +133,31 @@ a checkbox with extra steps. A gate that declares no `Verify` block at all is
 The unanswerable case is checked **before** the instructions are printed, so nobody
 performs a two-minute physical action that cannot be confirmed afterwards.
 
+An automation can be the one that acts. `-Attest REL-XXX-000` says the caller has
+already performed that gate's action: the instructions are printed as usual, the
+question is skipped, and the `Verify` block runs exactly as it would have. It is
+not a way to pass a gate -- a gate that verifies false still fails, and one with no
+`Verify` block is still `UNVERIFIED`. What it changes is who is allowed to have
+acted, in a session with no terminal to answer from. Attested results say so in
+their message, so a reader can tell them from the ones a person stood in front of.
+
+Two more gates take a tool the runner deliberately does not contain.
+`REL-UPD-PORTABLE-001` needs something to update FROM -- the bound artifact is the
+newest release the feed offers, so it can only ever report up to date -- and reads
+`EXOSNAP_UPDATE_FROM`, an older official `exosnap.exe`; without it the scenario is
+`UNAVAILABLE` rather than a pass over a check that never ran.
+`REL-AUD-DEGRADE-001` accepts `EXOSNAP_ENDPOINT_VISIBILITY_TOOL`, called as
+`<tool> set-visibility <endpointId> 0|1`, and then runs the outage on a timer while
+its own assertions poll. Making an endpoint vanish without unplugging it needs an
+undocumented interface; naming a tool keeps that mechanism outside the release path
+while still letting the gate run itself. Without the variable it stays the operator
+gate it has always been, and the product assertions are identical either way.
+
+Two gates need a probe binary rather than a person, and say so when it is missing:
+`probe_stall_window` (`-DEXOSNAP_BUILD_PROBES=ON`) owns a window, shows it without
+taking focus and stops presenting on its own timer. Without it, `REL-CAP-STALL-001`
+falls back to the operator gate and `REL-CAP-QUIET-001` reports `UNAVAILABLE`.
+
 Human gates sit **inside** the environment transaction. An operator who answers FAIL,
 aborts, or walks away still leaves the machine restored.
 

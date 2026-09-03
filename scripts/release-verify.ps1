@@ -75,7 +75,16 @@ param(
     # Opts a scenario class in explicitly. Long-running and physically disruptive
     # classes (the 30-60 minute mixed-clock run, the unplug scenarios) are not part
     # of a default sweep.
-    [string[]] $IncludeClass
+    [string[]] $IncludeClass,
+    # Scenario ids whose operator action the CALLER has already performed. The gate
+    # prints its instructions as usual and then goes straight to verification
+    # instead of asking. This is not a way to pass a gate: the Verify block still
+    # decides, and a gate that declares none is still UNVERIFIED. What it changes
+    # is who is allowed to have acted -- an automation that really did unplug,
+    # minimise or reconfigure something, in a session with no terminal to answer
+    # from. Every attested result says so in the report, so a reader can tell an
+    # attested run from one a person stood in front of.
+    [string[]] $Attest
 )
 
 Set-StrictMode -Version Latest
@@ -228,7 +237,8 @@ function Invoke-ReleaseHumanGate {
     if ($NonInteractive) {
         return @{ Result = 'DEFERRED'; Message = "Human gate not offered (-NonInteractive): $($Gate.Title)" }
     }
-    if ([Console]::IsInputRedirected) {
+    $attested = @(Expand-ListArgument -Values $Attest) -contains $Gate.Id
+    if (-not $attested -and [Console]::IsInputRedirected) {
         return @{ Result = 'DEFERRED'
             Message      = 'stdin is redirected, so this gate cannot be answered. Run from a real terminal.'
         }
@@ -250,12 +260,16 @@ function Invoke-ReleaseHumanGate {
     Write-Host 'How this runner will verify it:' -ForegroundColor Yellow
     Write-Host "  $($Gate.VerifyDescription)"
     Write-Host ''
-    $answer = Read-Host "Type 'done' when performed, 'skip' to defer, anything else to abort"
-    if ($null -eq $answer) { $answer = '' }
-    switch ($answer.Trim().ToLowerInvariant()) {
-        'done' { }
-        'skip' { return @{ Result = 'DEFERRED'; Message = 'The operator deferred this gate' } }
-        default { return @{ Result = 'DEFERRED'; Message = 'The operator aborted this gate' } }
+    if ($attested) {
+        Write-Step 'attested by the caller (-Attest); verifying it anyway'
+    } else {
+        $answer = Read-Host "Type 'done' when performed, 'skip' to defer, anything else to abort"
+        if ($null -eq $answer) { $answer = '' }
+        switch ($answer.Trim().ToLowerInvariant()) {
+            'done' { }
+            'skip' { return @{ Result = 'DEFERRED'; Message = 'The operator deferred this gate' } }
+            default { return @{ Result = 'DEFERRED'; Message = 'The operator aborted this gate' } }
+        }
     }
 
     if ($null -eq $Gate.Verify) {
@@ -275,11 +289,16 @@ function Invoke-ReleaseHumanGate {
     if ($null -eq $verdict) {
         return @{ Result = 'UNVERIFIED'; Message = 'The gate verification returned nothing' }
     }
+    # Who acted belongs in the record: an attested PASS was verified the same way,
+    # but nobody stood at the machine to be asked, and a reader of the report is
+    # entitled to know which of the two they are looking at.
+    $actor = if ($attested) { '[attested] ' } else { '' }
     if ($verdict.Ok) {
-        return @{ Result = 'PASS'; Message = $verdict.Detail; Evidence = $verdict.Evidence }
+        return @{ Result = 'PASS'; Message = "$actor$($verdict.Detail)"; Evidence = $verdict.Evidence }
     }
+    $who = if ($attested) { 'The caller attested the action' } else { 'The operator reported the action as performed' }
     return @{ Result = 'FAIL'
-        Message      = "The operator reported the action as performed, but the runner could not observe it: $($verdict.Detail)"
+        Message      = "$who, but the runner could not observe it: $($verdict.Detail)"
         Evidence     = $verdict.Evidence
     }
 }
