@@ -759,7 +759,20 @@ function Get-ReleaseScenarioCatalog {
                 }
                 return @{ Result = 'FAIL'; Message = $verdict.Detail; Evidence = $verdict.Evidence }
             } finally {
+                # Stopping is not being stopped: the finalize runs on after the
+                # command returns, and the campaign keeps ONE app session for every
+                # scenario. Handing the next one a recording still in flight got it
+                # refused at setup ("Settings cannot be changed while a recording is
+                # in flight") -- a failure that belongs to this teardown, not to it.
                 try { [void](Invoke-LiveVerifyCommand -Connection $conn -Command 'record.stop') } catch { }
+                $settleBy = [DateTime]::UtcNow.AddSeconds(30)
+                while ([DateTime]::UtcNow -lt $settleBy) {
+                    $state = (Invoke-LiveVerifyCommand -Connection $conn -Command 'record.snapshot').result
+                    $busy = [bool](Get-ReleaseSnapshotValue -Object $state -Path 'recording') -or
+                            [bool](Get-ReleaseSnapshotValue -Object $state -Path 'finalizing')
+                    if (-not $busy) { break }
+                    Start-Sleep -Milliseconds 500
+                }
                 if ($null -ne $probeProcess -and -not $probeProcess.HasExited) {
                     $probeProcess.Kill()
                 }
@@ -858,7 +871,20 @@ function Get-ReleaseScenarioCatalog {
                     Evidence     = $evidence
                 }
             } finally {
+                # Stopping is not being stopped: the finalize runs on after the
+                # command returns, and the campaign keeps ONE app session for every
+                # scenario. Handing the next one a recording still in flight got it
+                # refused at setup ("Settings cannot be changed while a recording is
+                # in flight") -- a failure that belongs to this teardown, not to it.
                 try { [void](Invoke-LiveVerifyCommand -Connection $conn -Command 'record.stop') } catch { }
+                $settleBy = [DateTime]::UtcNow.AddSeconds(30)
+                while ([DateTime]::UtcNow -lt $settleBy) {
+                    $state = (Invoke-LiveVerifyCommand -Connection $conn -Command 'record.snapshot').result
+                    $busy = [bool](Get-ReleaseSnapshotValue -Object $state -Path 'recording') -or
+                            [bool](Get-ReleaseSnapshotValue -Object $state -Path 'finalizing')
+                    if (-not $busy) { break }
+                    Start-Sleep -Milliseconds 500
+                }
                 if ($null -ne $probeProcess -and -not $probeProcess.HasExited) {
                     $probeProcess.Kill()
                 }
@@ -999,6 +1025,54 @@ function Get-ReleaseScenarioCatalog {
                     return @{ Ok = $true; Detail = 'degraded during the outage, recovered afterwards, recording never stopped'; Evidence = $evidence }
                 }
             }
+            # A tool that can make the endpoint disappear turns this into a timed
+            # sequence rather than a question. The runner deliberately does not know
+            # HOW: making an endpoint vanish without unplugging it needs an
+            # undocumented interface, which must not become part of the release path
+            # (see the environment-truth boundary in docs/dev/release-verify.md). The
+            # caller names a tool, this calls it, and the product assertions are
+            # unchanged either way.
+            #
+            # Contract: <tool> set-visibility <endpointId> 0|1
+            $visibilityTool = $env:EXOSNAP_ENDPOINT_VISIBILITY_TOOL
+            $endpointId = $null
+            if (-not [string]::IsNullOrWhiteSpace($visibilityTool) -and (Test-Path -LiteralPath $visibilityTool) -and
+                $ctx.Orchestrator.Available) {
+                $envSnapshot = Get-EnvironmentSnapshot -Orchestrator $ctx.Orchestrator
+                $idProperty = @($envSnapshot.properties |
+                        Where-Object { $_.key -eq 'audio.render.normal:endpoint-id' }) | Select-Object -First 1
+                if ($null -ne $idProperty) { $endpointId = $idProperty.value }
+            }
+            if (-not [string]::IsNullOrWhiteSpace($endpointId)) {
+                # The outage has to happen WHILE the verification polls, and it has to
+                # end while it is still polling: the assertion is degraded-then-
+                # recovered, so a device that never comes back fails it just as a
+                # device that never left does.
+                $outage = Start-Job -ScriptBlock {
+                    param($tool, $id)
+                    Start-Sleep -Seconds 2
+                    & $tool set-visibility $id 0 | Out-Null
+                    Start-Sleep -Seconds 10
+                    & $tool set-visibility $id 1 | Out-Null
+                } -ArgumentList $visibilityTool, $endpointId
+                try {
+                    $verdict = & $gate.Verify $ctx $gate
+                } finally {
+                    Wait-Job $outage -Timeout 60 | Out-Null
+                    Remove-Job $outage -Force -ErrorAction SilentlyContinue
+                    # Belt and braces: an endpoint left hidden is a machine this
+                    # campaign broke, so it is put back even when the job died.
+                    & $visibilityTool set-visibility $endpointId 1 | Out-Null
+                }
+                if ($null -eq $verdict) {
+                    return @{ Result = 'UNVERIFIED'; Message = 'the degradation verification returned nothing' }
+                }
+                if ($verdict.Ok) {
+                    return @{ Result = 'PASS'; Message = "[tool] $($verdict.Detail)"; Evidence = $verdict.Evidence }
+                }
+                return @{ Result = 'FAIL'; Message = $verdict.Detail; Evidence = $verdict.Evidence }
+            }
+
             return & $ctx.HumanGate $gate
         }
     }
@@ -1642,6 +1716,26 @@ function Get-ReleaseScenarioCatalog {
             if (-not (Test-Path -LiteralPath $script)) {
                 return @{ Result = 'UNAVAILABLE'; Message = 'scripts/live-verify-update-handoff.ps1 is missing' }
             }
+            # An update needs something to update FROM, and it cannot be the artifact
+            # this campaign is bound to: that one is the newest release the feed
+            # offers, so it correctly reports "up to date" and the run ends before
+            # any of the assertions this scenario exists for. The starting point is
+            # therefore a PREVIOUS official build, named by EXOSNAP_UPDATE_FROM.
+            # Without one there is nothing to prove and the scenario says so, rather
+            # than passing on a check that never ran.
+            $from = $env:EXOSNAP_UPDATE_FROM
+            if ([string]::IsNullOrWhiteSpace($from) -or -not (Test-Path -LiteralPath $from)) {
+                return @{ Result = 'UNAVAILABLE'
+                    Message      = 'set EXOSNAP_UPDATE_FROM to an older official exosnap.exe; the bound artifact ' +
+                    'is the newest release and can only ever report up-to-date'
+                }
+            }
+            $fromVersion = (Get-Item -LiteralPath $from).VersionInfo.ProductVersion
+            if ($fromVersion -eq $ctx.Artifact.productVersion) {
+                return @{ Result = 'UNAVAILABLE'
+                    Message      = "EXOSNAP_UPDATE_FROM carries $fromVersion, the same version as the bound artifact"
+                }
+            }
             # The handoff launches its own isolated instance, so this campaign's shared
             # session has to be out of the way first: the single-instance guard is a
             # machine-wide mutex, and `EXOSNAP_CONFIG_DIR` isolation does not change
@@ -1649,13 +1743,17 @@ function Get-ReleaseScenarioCatalog {
             # WITHOUT ever constructing the Live Verify server, so the handoff then
             # waits for a pipe nobody opened and fails on a connect timeout.
             & $ctx.EndSession
-            $output = & pwsh -NoProfile -File $script -AppPath $ctx.Artifact.exePath 2>&1 | Out-String
+            $output = & pwsh -NoProfile -File $script -AppPath $from -RequireApply 2>&1 | Out-String
             $exit = $LASTEXITCODE
             $evidence = @(Save-LiveVerifyEvidence -Context $ctx -CheckId 'REL-UPD-PORTABLE-001' -Name 'handoff.log' -Raw $output)
             if ($exit -ne 0) {
                 return @{ Result = 'FAIL'; Message = "the update handoff script exited $exit"; Evidence = $evidence }
             }
-            return @{ Result = 'PASS'; Message = 'app, handoff and updater agree on one pinned version'; Evidence = $evidence }
+            return @{ Result = 'PASS'
+                Message      = "$fromVersion applied the published $($ctx.Artifact.productVersion): app, handoff and " +
+                'updater agreed on one pinned version'
+                Evidence     = $evidence
+            }
         }
     }
 
