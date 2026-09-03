@@ -249,6 +249,7 @@ WasapiCaptureSrc::~WasapiCaptureSrc() {
 }
 
 bool WasapiCaptureSrc::Init(std::string& out_error) {
+    last_init_hr_ = 0;
     Shutdown();
     out_error.clear();
 
@@ -268,6 +269,7 @@ bool WasapiCaptureSrc::Init(std::string& out_error) {
     };
 
     auto failHr = [&](const char* context, HRESULT hr) {
+        last_init_hr_ = static_cast<int32_t>(hr);
         char buf[160];
         snprintf(buf, sizeof(buf), "%s 0x%08lX", context, static_cast<unsigned long>(hr));
         out_error = buf;
@@ -358,7 +360,8 @@ bool WasapiCaptureSrc::Init(std::string& out_error) {
         if (closestMatch->nSamplesPerSec != kRequiredSampleRate) {
             char buf[196];
             snprintf(buf, sizeof(buf),
-                     "Mic format %uHz not directly supported in Phase 4; set Windows default input format to 48kHz.",
+                     "Mic format %u Hz is not supported; set the Windows default input format for this microphone to "
+                     "48 kHz.",
                      closestMatch->nSamplesPerSec);
             out_error = buf;
             cleanupFormats();
@@ -379,7 +382,8 @@ bool WasapiCaptureSrc::Init(std::string& out_error) {
             selectedInputChannels = 2;
             selectedMonoToStereo = false;
         } else {
-            out_error = "Mic format incompatible - Phase 4 requires 48kHz float32 or 48kHz PCM16 mono/stereo.";
+            out_error =
+                "Mic format incompatible: the microphone must deliver 48 kHz float32 or 48 kHz PCM16, mono or stereo.";
             cleanupFormats();
             Shutdown();
             return false;

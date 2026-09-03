@@ -26,6 +26,7 @@ DiagnosticsController::ProbeResult RunDiagnosticsProbe(const DiagnosticsProbeReq
     {
         Win32FilesystemProvider provider;
         result.filesystem_name = provider.FilesystemNameForPath(request.output_folder);
+        result.drive_kind = provider.DriveKindForPath(request.output_folder);
     }
 
     // Volume total drives the Disk tile's usage bar only. A volume Qt cannot read

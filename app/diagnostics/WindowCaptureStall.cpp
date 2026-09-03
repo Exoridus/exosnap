@@ -36,6 +36,10 @@ WindowStallVerdict ClassifyConfirmedStall(const WindowTargetFacts& facts, bool p
     return WindowStallVerdict::Stalled;
 }
 
+WindowStallVerdict ClassifyConfirmedDisplayStall(bool console_display_off) noexcept {
+    return console_display_off ? WindowStallVerdict::Stalled : WindowStallVerdict::Unknown;
+}
+
 WindowStallSignal WindowCaptureStallMonitor::Observe(const WindowStallSample& sample) noexcept {
     // A new recording invalidates everything: neither the starve clock nor a
     // standing stall from the previous session may reach this one. Same rule for
@@ -55,7 +59,7 @@ WindowStallSignal WindowCaptureStallMonitor::Observe(const WindowStallSample& sa
     // currently expected to produce frames — paused, preparing, stopping, done.
     // The baseline moves with them so a pause neither accumulates starve time nor
     // clears a stall that is still standing.
-    if (!sample.is_window_target || !sample.capture_expected) {
+    if ((!sample.is_window_target && !sample.is_display_target) || !sample.capture_expected) {
         baseline_frames_ = sample.frames_captured;
         baseline_elapsed_ = sample.elapsed_seconds;
         seconds_without_progress_ = 0.0;

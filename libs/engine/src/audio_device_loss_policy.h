@@ -42,6 +42,30 @@ enum class AudioLossReaction {
 // (AUDCLNT_E_DEVICE_INVALIDATED / _SERVICE_NOT_RUNNING), an unexpected HRESULT,
 // or a failure a source surfaced by message only (hr left at 0/E_FAIL) —
 // degrades the source rather than ending the recording.
+// Why a lost source could not be reactivated. Only the in-use case changes what
+// the user should do: reconnecting a device another application holds in
+// exclusive mode does nothing; the other application has to let go.
+enum class AudioLossCause : uint8_t {
+    Unknown,
+    DeviceGone,   // endpoint invalidated or no longer present
+    DeviceInUse,  // exclusive-mode client holds it
+    FormatChanged // endpoint format no longer matches the session
+};
+
+[[nodiscard]] inline AudioLossCause ClassifyAudioLossCause(int32_t hr) noexcept {
+    switch (hr) {
+    case AUDCLNT_E_DEVICE_INVALIDATED:
+    case AUDCLNT_E_ENDPOINT_CREATE_FAILED:
+        return AudioLossCause::DeviceGone;
+    case AUDCLNT_E_DEVICE_IN_USE: // a shared-mode open refused because an exclusive stream holds the endpoint
+        return AudioLossCause::DeviceInUse;
+    case AUDCLNT_E_UNSUPPORTED_FORMAT:
+        return AudioLossCause::FormatChanged;
+    default:
+        return AudioLossCause::Unknown;
+    }
+}
+
 [[nodiscard]] inline AudioLossReaction ClassifyAudioSourceLoss(int32_t hr) noexcept {
     switch (hr) {
     case AUDCLNT_S_BUFFER_EMPTY:

@@ -525,6 +525,9 @@ class QuickApplication {
     void scheduleMeterUpdate();
     void updateMeterServices();
     void seedVideoCodecFromCapabilities();
+    void noteDefaultInputEndpoint(const AudioDeviceSnapshot& snapshot);
+    static diagnostics::RecommendationEngine::CaptureTargetAdapterFacts
+    captureTargetAdapterFacts(const std::optional<exosnap::engine::CaptureTarget>& target);
     // The deferred half of updateMeterServices(): opens the endpoints the current
     // state wants. Re-checks the stop condition, because it runs one debounce
     // interval after the decision that scheduled it.
@@ -759,6 +762,13 @@ class QuickApplication {
     // Sequence of the standing capture-stall toast while it is up, 0 when none is.
     // The hub keeps its own permanent record either way.
     uint64_t capture_stall_toast_sequence_ = 0;
+    // GUID_CONSOLE_DISPLAY_STATE as Windows reports it: false while the console
+    // display is off or asleep. The corroboration a display-capture stall needs.
+    bool console_display_on_ = true;
+    // Default capture endpoint as last reported, to tell a change apart from a rescan.
+    std::string last_default_input_id_;
+    void* console_display_notify_ = nullptr; // HPOWERNOTIFY
+    std::unique_ptr<QAbstractNativeEventFilter> console_display_filter_;
     // ADR 0046. Same threading and same driver as capture_stall_monitor_.
     diagnostics::AudioSourceDegradationMonitor audio_degradation_monitor_;
     // Sequence of the standing audio-degradation toast while it is up, 0 when

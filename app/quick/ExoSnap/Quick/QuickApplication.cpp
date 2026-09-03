@@ -63,9 +63,11 @@
 // and never arrive.
 #include <update/update_handoff.h>
 
+#include <capability/adapter_enum.h>
 #include <capability/capability_builder.h>
 #include <capability/codec_selection.h>
 #include <capability/support_level.h>
+#include <exosnap/engine/dxgi_od_capture_src.h>
 
 #include <algorithm>
 #include <array>
@@ -76,6 +78,8 @@
 #include <optional>
 #include <utility>
 #include <windows.h>
+
+#include <cstring>
 
 namespace exosnap::quick {
 namespace {
@@ -401,7 +405,44 @@ QuickApplication::QuickApplication()
     initializeWhatsNew();
 }
 
+namespace {
+
+// WM_POWERBROADCAST / PBT_POWERSETTINGCHANGE for GUID_CONSOLE_DISPLAY_STATE on the
+// main window: 0 = off, 1 = on, 2 = dimmed. Dimmed still presents.
+class QuickConsoleDisplayStateFilter final : public QAbstractNativeEventFilter {
+  public:
+    QuickConsoleDisplayStateFilter(HWND hwnd, std::function<void(bool)> on_state)
+        : hwnd_(hwnd), on_state_(std::move(on_state)) {
+    }
+
+    bool nativeEventFilter(const QByteArray& event_type, void* message, qintptr* /*result*/) override {
+        if (message == nullptr || event_type != QByteArrayLiteral("windows_generic_MSG"))
+            return false;
+        auto* msg = static_cast<MSG*>(message);
+        if (msg->hwnd != hwnd_ || msg->message != WM_POWERBROADCAST || msg->wParam != PBT_POWERSETTINGCHANGE)
+            return false;
+        const auto* setting = reinterpret_cast<const POWERBROADCAST_SETTING*>(msg->lParam);
+        if (setting == nullptr || !IsEqualGUID(setting->PowerSetting, GUID_CONSOLE_DISPLAY_STATE) ||
+            setting->DataLength < sizeof(DWORD))
+            return false;
+        DWORD state = 0;
+        std::memcpy(&state, setting->Data, sizeof(state));
+        on_state_(state != 0);
+        return false; // observed, not consumed
+    }
+
+  private:
+    HWND hwnd_;
+    std::function<void(bool)> on_state_;
+};
+
+} // namespace
+
 QuickApplication::~QuickApplication() {
+    if (console_display_notify_ != nullptr) {
+        UnregisterPowerSettingNotification(static_cast<HPOWERNOTIFY>(console_display_notify_));
+        console_display_notify_ = nullptr;
+    }
     // Same hazard, same shape as the hotkey filter below: QCoreApplication holds
     // a raw pointer to it. A run that never produced a frame (a load failure, a
     // --smoke-test that quits first) never reached the probe that normally stops
@@ -1013,6 +1054,7 @@ void QuickApplication::initializeRecordWorkflow() {
     QObject::connect(&audio_notifier_, &AudioDeviceNotifier::snapshotChanged, &record_view_model_adapter_,
                      [this](const AudioDeviceSnapshot& snapshot, DiscoveryReason) {
                          microphone_available_ = !snapshot.inputs.isEmpty();
+                         noteDefaultInputEndpoint(snapshot);
                          synchronizeRecordState();
                          updateMeterServices();
                      });
@@ -2087,6 +2129,7 @@ void QuickApplication::updateCaptureEvidenceTarget() {
     if (!same_target(pushed_selected_target_, target)) {
         pushed_selected_target_ = target;
         diagnostics_adapter_.setSelectedCaptureTarget(target);
+        diagnostics_adapter_.setCaptureTargetAdapter(captureTargetAdapterFacts(target));
         // Idle attribution boundary (ADR 0033): present statistics follow the
         // selection, so the Diagnostics page describes the source the user is
         // looking at rather than whatever presented last.
@@ -2178,6 +2221,10 @@ void QuickApplication::observeWindowCaptureStall(const exosnap::engine::Recordin
     diagnostics::WindowStallSample sample;
     sample.session_generation = snapshot.session_generation;
     sample.is_window_target = snapshot.capture.source_type == exosnap::engine::CaptureSourceType::Window;
+    sample.is_display_target = snapshot.capture.source_type == exosnap::engine::CaptureSourceType::Display ||
+                               snapshot.capture.source_type == exosnap::engine::CaptureSourceType::Region;
+    if (sample.is_display_target && sample.capture_expected)
+        updatePresentAttribution(presentTargetPidForSelection(), /*force=*/false);
     sample.capture_expected = diagnostics::CaptureProgressExpected(snapshot.lifecycle);
     sample.frames_captured = snapshot.capture.frames_captured;
     sample.elapsed_seconds = snapshot.elapsed_seconds;
@@ -2199,6 +2246,34 @@ void QuickApplication::observeWindowCaptureStall(const exosnap::engine::Recordin
     // Confirmed starvation. This is the ONLY point at which any Win32 fact is
     // read — once per episode, never on a healthy recording.
     const double starved_for = capture_stall_monitor_.seconds_without_progress();
+    if (!sample.is_window_target) {
+        // Display or region: the desktop itself is the only witness. Without a
+        // display that is off, starvation is indistinguishable from a static
+        // desktop and stays a log line; the pipeline card still says the source
+        // has gone quiet (CaptureDiagnostics::capture_starved).
+        const bool display_off = !console_display_on_;
+        const diagnostics::WindowStallVerdict verdict = diagnostics::ClassifyConfirmedDisplayStall(display_off);
+        capture_stall_monitor_.ApplyVerdict(verdict);
+        if (verdict != diagnostics::WindowStallVerdict::Stalled) {
+            diagnostics::AppLog::info(
+                QStringLiteral("capture"),
+                QStringLiteral("display capture produced no frame for %1 s; not reported (display is on, a static "
+                               "desktop is indistinguishable from a stall)")
+                    .arg(starved_for, 0, 'f', 1));
+            return;
+        }
+        if (recording_coordinator_)
+            recording_coordinator_->NoteWindowCaptureStall();
+        diagnostics::AppLog::warning(
+            QStringLiteral("capture"),
+            QStringLiteral("display capture stalled: no frame for %1 s while the console display is off, recording "
+                           "continues")
+                .arg(starved_for, 0, 'f', 1));
+        clearWindowCaptureStallWarning();
+        capture_stall_toast_sequence_ = notifications_adapter_.manager().Enqueue(
+            notifications::MakeDisplayCaptureStalledEvent(starved_for, display_off));
+        return;
+    }
     const diagnostics::WindowTargetFacts facts =
         diagnostics::GatherWindowTargetFacts(reinterpret_cast<HWND>(evidence_target_hwnd_));
     // PresentMon's verdict when it happens to be available (elevation- and
@@ -2238,6 +2313,33 @@ void QuickApplication::observeWindowCaptureStall(const exosnap::engine::Recordin
     clearWindowCaptureStallWarning();
     capture_stall_toast_sequence_ = notifications_adapter_.manager().Enqueue(
         notifications::MakeWindowCaptureStalledEvent(starved_for, fullscreen_hint));
+}
+
+void QuickApplication::noteDefaultInputEndpoint(const AudioDeviceSnapshot& snapshot) {
+    const std::string previous = std::exchange(last_default_input_id_, snapshot.default_input_id);
+    if (previous.empty() || previous == snapshot.default_input_id)
+        return;
+    const bool session =
+        record_view_model_.state == UiRecordingState::Recording || record_view_model_.state == UiRecordingState::Paused;
+    // Only a session that followed the default is affected: a pinned device keeps
+    // capturing whichever way Windows points.
+    if (!session ||
+        (record_view_model_.audio_ui_state.selected_mic_device_id.has_value() &&
+         !record_view_model_.audio_ui_state.selected_mic_device_id->empty()) ||
+        !record_view_model_.audio_ui_state.IsMicEnabled())
+        return;
+    QString new_name;
+    QString kept_name;
+    for (const auto& input : snapshot.inputs) {
+        if (input.device_id == snapshot.default_input_id)
+            new_name = QString::fromStdString(input.display_name);
+        if (input.device_id == previous)
+            kept_name = QString::fromStdString(input.display_name);
+    }
+    diagnostics::AppLog::warning(QStringLiteral("audio"),
+                                 QStringLiteral("default microphone changed while recording; the session keeps the "
+                                                "device it started with"));
+    notifications_adapter_.manager().Enqueue(notifications::MakeAudioDefaultDeviceChangedEvent(new_name, kept_name));
 }
 
 void QuickApplication::clearWindowCaptureStallWarning() {
@@ -4843,6 +4945,14 @@ bool QuickApplication::load(bool no_activate) {
         updater_handoff_filter_ =
             std::make_unique<QuickUpdaterHandoffFilter>(hwnd, [this] { closeForUpdaterHandoff(); });
         QCoreApplication::instance()->installNativeEventFilter(updater_handoff_filter_.get());
+        // Console display power state, for the display-capture stall verdict: a
+        // display that is off is the one corroboration that a silent duplication
+        // is a stall and not a static desktop.
+        console_display_filter_ =
+            std::make_unique<QuickConsoleDisplayStateFilter>(hwnd, [this](bool on) { console_display_on_ = on; });
+        QCoreApplication::instance()->installNativeEventFilter(console_display_filter_.get());
+        console_display_notify_ =
+            RegisterPowerSettingNotification(hwnd, &GUID_CONSOLE_DISPLAY_STATE, DEVICE_NOTIFY_WINDOW_HANDLE);
         // The return value is the set of bindings Windows refused, usually
         // because another application already owns the combo. Discarding it left
         // the user with a shortcut that silently did nothing and no way to find
@@ -4949,6 +5059,30 @@ diagnostics::PresentMonProvider* QuickApplication::presentProvider() noexcept {
     return present_provider_.get();
 }
 
+diagnostics::RecommendationEngine::CaptureTargetAdapterFacts
+QuickApplication::captureTargetAdapterFacts(const std::optional<exosnap::engine::CaptureTarget>& target) {
+    diagnostics::RecommendationEngine::CaptureTargetAdapterFacts facts;
+    if (!target.has_value() || target->kind != exosnap::engine::CaptureTarget::Kind::Monitor)
+        return facts;
+    winrt::com_ptr<IDXGIAdapter1> adapter;
+    std::string err;
+    if (!exosnap::engine::FindAdapterForMonitor(reinterpret_cast<HMONITOR>(static_cast<uintptr_t>(target->native_id)),
+                                                adapter.put(), err) ||
+        !adapter)
+        return facts;
+    DXGI_ADAPTER_DESC1 desc{};
+    if (FAILED(adapter->GetDesc1(&desc)))
+        return facts;
+    facts.known = true;
+    facts.vendor_id = desc.VendorId;
+    facts.adapter_name = QString::fromWCharArray(desc.Description).toStdString();
+    for (const auto& info : capability::EnumerateAdapters()) {
+        if (info.vendor == capability::AdapterVendor::Nvidia)
+            facts.nvidia_adapter_present = true;
+    }
+    return facts;
+}
+
 unsigned long QuickApplication::presentTargetPidForSelection() const {
     // Window capture attributes presents to the captured window's process. Display
     // and Region capture have no owning process -- their presenter is whichever
@@ -4956,8 +5090,20 @@ unsigned long QuickApplication::presentTargetPidForSelection() const {
     // filter the idle desktop uses.
     if (!pushed_selected_target_.has_value())
         return 0;
-    if (pushed_selected_target_->kind != exosnap::engine::CaptureTarget::Kind::Window)
-        return 0;
+    if (pushed_selected_target_->kind != exosnap::engine::CaptureTarget::Kind::Window) {
+        // A display has no owning process; the one that dominates it is the
+        // foreground window while it sits on that display. Re-resolved at the
+        // diagnostics cadence while recording, so a game that comes to the front
+        // after the start is picked up.
+        const auto monitor = reinterpret_cast<HMONITOR>(static_cast<uintptr_t>(pushed_selected_target_->native_id));
+        const HWND foreground = ::GetForegroundWindow();
+        if (monitor == nullptr || foreground == nullptr ||
+            ::MonitorFromWindow(foreground, MONITOR_DEFAULTTONULL) != monitor)
+            return 0;
+        DWORD pid = 0;
+        ::GetWindowThreadProcessId(foreground, &pid);
+        return pid;
+    }
     const auto hwnd = reinterpret_cast<HWND>(static_cast<uintptr_t>(pushed_selected_target_->native_id));
     if (hwnd == nullptr || ::IsWindow(hwnd) == FALSE)
         return 0;
@@ -4973,6 +5119,7 @@ void QuickApplication::updatePresentAttribution(unsigned long pid, bool force) {
         return;
     present_target_pid_ = pid;
     present_provider_->SetTargetProcessId(pid);
+    diagnostics_adapter_.setPresentAttributionPid(pid);
     diagnostics::AppLog::info(QStringLiteral("present"),
                               QStringLiteral("attribution boundary: target pid=%1 force=%2 (accumulators reset)")
                                   .arg(pid)

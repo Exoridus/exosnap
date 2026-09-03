@@ -74,6 +74,9 @@ class WasapiCaptureSrc : public IAudioCaptureSource {
     AudioSampleFormat SampleFormat() const override;
     const std::string& EndpointName() const override;
     int32_t LastCaptureHresult() const override;
+    int32_t LastInitHresult() const override {
+        return last_init_hr_;
+    }
     bool LastBufferDeviceTiming(AudioDeviceTiming& out_timing) const override;
     void* BufferReadyEvent() const override;
 
@@ -119,6 +122,7 @@ class WasapiCaptureSrc : public IAudioCaptureSource {
     // the drain so it reaches the app log as the recording's error code, rather
     // than a generic E_FAIL. 0 (S_OK) when no fatal acquire failure has occurred.
     int32_t last_capture_hr_ = 0;
+    int32_t last_init_hr_ = 0;
 
     MicChannelMode requested_channel_mode_ = MicChannelMode::Auto;
     std::optional<std::string> device_id_;

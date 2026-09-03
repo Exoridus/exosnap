@@ -401,6 +401,7 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
     bool bare_degraded = false;
     uint64_t lastAccountedQpcNs = QpcNowNs();
     auto lastReinitAttempt = std::chrono::steady_clock::now();
+    bool bare_degraded_in_use = false;
     const auto degradedSourceKinds = [this]() {
         if (source_kinds_.size() == 1 && source_->DegradedSourceCount() > 0)
             return AudioSourceKindBit(source_kinds_.front());
@@ -546,7 +547,7 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
         // polled at all until it comes back — polling it would only re-fail.
         if (bare_degraded) {
             const uint32_t kind = source_kinds_.empty() ? 0 : AudioSourceKindBit(source_kinds_.front());
-            m_state.diagnostics.OnAudioSourceHealth(track_id_, 1, 1, kind);
+            m_state.diagnostics.OnAudioSourceHealth(track_id_, 1, 1, kind, bare_degraded_in_use);
             if (!emitSilenceForElapsed()) {
                 failed = true;
                 break;
@@ -555,6 +556,10 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
             if (nowtp - lastReinitAttempt >= kAudioReactivatePollDelay) {
                 std::string rerr;
                 const bool ok = source_->Reinit(rerr);
+                // What the endpoint said when asked back tells the user what to do:
+                // an in-use refusal means another application holds it exclusively.
+                bare_degraded_in_use =
+                    !ok && ClassifyAudioLossCause(source_->LastInitHresult()) == AudioLossCause::DeviceInUse;
                 const AudioReactivateDecision decision =
                     DecideAudioDeviceLoss(ok, kAudioReactivatePollDelay, kAudioReactivatePollDelay);
                 lastReinitAttempt = nowtp;
@@ -805,6 +810,7 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
                             logging::log(logging::LogLevel::Warn, "audio.clock_slaving",
                                          "clock slaving saturated; drift exceeds correction envelope",
                                          std::span<const logging::LogField>(f, std::size(f)));
+                            m_state.diagnostics.OnAudioClockSlavingSaturated(track_id_);
                         }
                     }
                     m_state.diagnostics.OnAudioClockSlaving(track_id_, raw_drift, residual, applied_ppm,

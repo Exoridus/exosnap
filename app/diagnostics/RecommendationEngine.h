@@ -1,6 +1,7 @@
 #pragma once
 
 #include "DiagnosticResult.h"
+#include "FilesystemProvider.h"
 #include "PresentProvider.h"
 #include "WindowTargetFacts.h"
 
@@ -27,7 +28,6 @@ class RecommendationEngine {
     // which case the disk checks stay silent rather than guessing. A queried 0
     // is a full disk and raises the blocker.
     RecommendationEngine(const capability::CapabilitySet& caps, const capability::UserRecorderConfig& config,
-                         uint32_t monitor_refresh_rate = 0,
                          std::optional<uint64_t> output_drive_free_bytes = std::nullopt,
                          bool is_profile_supported = true, std::string output_filesystem_name = {},
                          const exosnap::engine::RecordingDiagnosticsSnapshot* live_snapshot = nullptr,
@@ -66,6 +66,23 @@ class RecommendationEngine {
     // pre-flight blocker: on an SDR desktop the HDR10-native path never engages,
     // so the blocker stays silent. Default false (SDR) mirrors the SetOutputPathWritable
     // pattern — the engine stays pure and only emits when the caller supplies the fact.
+    // The adapter that drives the captured display, against the encoder the
+    // product needs. A display on the integrated GPU cannot be encoded by the
+    // NVIDIA one; the failure that follows otherwise reads as a codec problem.
+    struct CaptureTargetAdapterFacts {
+        bool known = false;
+        uint32_t vendor_id = 0; // PCI vendor of the adapter owning the display
+        std::string adapter_name;
+        bool nvidia_adapter_present = false;
+    };
+    void SetCaptureTargetAdapter(CaptureTargetAdapterFacts facts) {
+        capture_target_adapter_ = std::move(facts);
+    }
+
+    void SetOutputDriveKind(DriveKind kind) {
+        output_drive_kind_ = kind;
+    }
+
     void SetCaptureTargetHdrActive(bool active) {
         capture_target_hdr_active_ = active;
     }
@@ -119,15 +136,24 @@ class RecommendationEngine {
     void checkDiskWriteStall(DiagnosticChecklist& checklist) const;
     void checkUnresolvedSavedDisplay(DiagnosticChecklist& checklist) const;
     void checkAudioSourceDegraded(DiagnosticChecklist& checklist) const;
+    void checkFramePacingDuplication(DiagnosticChecklist& checklist) const;
+    void checkAudioClockSaturated(DiagnosticChecklist& checklist) const;
+    void checkCaptureAdapterMismatch(DiagnosticChecklist& checklist) const;
+    void checkOutputDriveKind(DiagnosticChecklist& checklist) const;
+    void checkGpuContention(DiagnosticChecklist& checklist) const;
 
     const capability::CapabilitySet& caps_;
     const capability::UserRecorderConfig& config_;
-    uint32_t monitor_refresh_rate_;
     std::optional<uint64_t> output_drive_free_bytes_; // nullopt = volume not queryable
     bool is_profile_supported_;
-    std::string output_filesystem_name_;     // e.g. "FAT32", "NTFS"; empty = not queried
-    bool output_path_writable_ = true;       // false => emit the not-writable blocker (set by caller)
-    bool elevated_ = false;                  // true => process runs elevated (set by caller); Tier-4 fact
+    std::string output_filesystem_name_; // e.g. "FAT32", "NTFS"; empty = not queried
+    bool output_path_writable_ = true;   // false => emit the not-writable blocker (set by caller)
+    bool elevated_ = false;              // true => process runs elevated (set by caller); Tier-4 fact
+    CaptureTargetAdapterFacts capture_target_adapter_;
+    DriveKind output_drive_kind_ = DriveKind::Unknown;
+    bool live_gpu_contention_ = false;
+    double live_gpu_exec_p99_ms_ = 0.0;
+    double live_target_fps_for_gpu_ = 0.0;
     bool capture_target_hdr_active_ = false; // true => capture target's display has Windows HDR ON (set by caller)
     bool saved_display_unresolved_ = false;  // true => saved capture target could not be matched (set by caller)
     std::string saved_display_label_;        // friendly name / label of the saved (missing) display
@@ -143,6 +169,18 @@ class RecommendationEngine {
     bool live_present_available_ = false;
     bool live_cfr_ = true;
     double live_present_jitter_ms_ = 0.0;
+    // Live frame-delivery facts for the pacing check: repeats the CFR pacer had
+    // to emit because the source produced nothing new, against what it emitted.
+    bool live_capture_available_ = false;
+    bool live_capture_starved_ = false;
+    uint64_t live_frames_emitted_ = 0;
+    uint64_t live_frames_duplicated_ = 0;
+    double live_target_fps_ = 0.0;
+    // Live audio clock facts: slaving at its rate limit with the residual still growing.
+    bool live_clock_saturated_ = false;
+    double live_clock_ppm_ = 0.0;
+    // A degraded source whose endpoint refused reactivation as in use.
+    bool live_audio_endpoint_in_use_ = false;
 
     // Live disk-write latency (ADR 0033 extra-checks). Extracted from the live snapshot's
     // DiskDiagnostics; available only for the streaming Matroska writer (MP4 remux is post-stop).

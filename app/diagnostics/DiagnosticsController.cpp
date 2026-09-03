@@ -237,6 +237,8 @@ std::string BottleneckLabel(exosnap::engine::PipelineBottleneck bottleneck) {
         return "Muxer";
     case exosnap::engine::PipelineBottleneck::Disk:
         return "Disk";
+    case exosnap::engine::PipelineBottleneck::Gpu:
+        return "GPU";
     case exosnap::engine::PipelineBottleneck::Unknown:
         return "Not enough evidence yet";
     }
@@ -1088,6 +1090,14 @@ void DiagnosticsController::SetDisplayFacts(DisplayFacts facts) noexcept {
     display_ = facts;
 }
 
+void DiagnosticsController::SetCaptureTargetAdapter(RecommendationEngine::CaptureTargetAdapterFacts facts) {
+    capture_target_adapter_ = std::move(facts);
+}
+
+void DiagnosticsController::SetPresentAttributionPid(unsigned long pid) {
+    present_attribution_pid_ = pid;
+}
+
 void DiagnosticsController::SetSelectedCaptureTarget(std::optional<exosnap::engine::CaptureTarget> target,
                                                      std::string presented_label) {
     selected_target_ = std::move(target);
@@ -1196,17 +1206,28 @@ DiagnosticsSnapshot DiagnosticsController::Evaluate() {
         return out;
     }
 
-    constexpr uint32_t kMonitorRefreshUnknown = 0;
     const exosnap::engine::RecordingDiagnosticsSnapshot* live = live_.valid ? &live_ : nullptr;
-    const PresentSample* present = (present_.has_value() && present_->available) ? &present_.value() : nullptr;
+    // Present samples are attributed to a process only for a window target; for a
+    // display or region the accumulator saw every process on the machine.
+    PresentSample present_sample;
+    const PresentSample* present = nullptr;
+    if (present_.has_value() && present_->available) {
+        present_sample = *present_;
+        // Attributed when the accumulator filtered to a process: the captured
+        // window's, or for a display the process presenting on that display.
+        present_sample.attributed = present_attribution_pid_ != 0;
+        present = &present_sample;
+    }
 
-    RecommendationEngine engine(config_.caps, config_.user_config, kMonitorRefreshUnknown, probe_.free_bytes,
+    RecommendationEngine engine(config_.caps, config_.user_config, probe_.free_bytes,
                                 config_.profile_validation.succeeded, probe_.filesystem_name, live, present);
     if (dpc_.has_value())
         engine.SetDpcLatency(*dpc_);
     engine.SetOutputPathWritable(probe_.output_path_writable);
     engine.SetElevated(elevated_);
     engine.SetCaptureTargetHdrActive(capture_target_hdr_active_);
+    engine.SetCaptureTargetAdapter(capture_target_adapter_);
+    engine.SetOutputDriveKind(probe_.drive_kind);
     engine.SetSavedDisplayUnresolved(saved_display_unresolved_, saved_display_label_);
     engine.SetCaptureWindowEvidence(capture_window_facts_, capture_window_hub_);
 

@@ -431,7 +431,7 @@ TEST(RecommendationEngineTest, Generate_EmptyNoFlag) {
     config.audio_codec = capability::AudioCodec::Opus;
     config.color_range = capability::ColorRange::Limited; // Full would fire rec.color.range
 
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true);
+    RecommendationEngine engine(caps, config, std::nullopt, true);
     auto checklist = engine.Generate();
     // MKV selected, no rate mismatch, no drive space warning, profile supported
     // Should have zero results
@@ -452,7 +452,7 @@ TEST(RecommendationEngineTest, Generate_OutputNotWritable_Blocks) {
     config.video_codec = capability::VideoCodec::Av1;
     config.audio_codec = capability::AudioCodec::Opus;
 
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true);
+    RecommendationEngine engine(caps, config, std::nullopt, true);
     engine.SetOutputPathWritable(false);
     auto checklist = engine.Generate();
 
@@ -478,7 +478,7 @@ TEST(RecommendationEngineTest, Generate_Mp4_Warns) {
     config.video_codec = capability::VideoCodec::H264;
     config.audio_codec = capability::AudioCodec::Aac;
 
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true);
+    RecommendationEngine engine(caps, config, std::nullopt, true);
     auto checklist = engine.Generate();
 
     bool found_mp4_warning = false;
@@ -504,7 +504,7 @@ TEST(RecommendationEngineTest, Generate_Mp4_HasFixAction_Assisted) {
     config.video_codec = capability::VideoCodec::H264;
     config.audio_codec = capability::AudioCodec::Aac;
 
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true);
+    RecommendationEngine engine(caps, config, std::nullopt, true);
     auto checklist = engine.Generate();
 
     bool found = false;
@@ -533,7 +533,7 @@ TEST(RecommendationEngineTest, Generate_StaticRefreshMismatch_NoLongerWarns) {
     // 144 Hz monitor + 60 fps, no live measurement. The Smooth phase-correct resampler (default)
     // handles this case, so the old static "mismatch" warning no longer fires — rec.001 is now a
     // measured-judder-only check.
-    RecommendationEngine engine(caps, config, 144, std::nullopt, true);
+    RecommendationEngine engine(caps, config, std::nullopt, true);
     auto checklist = engine.Generate();
 
     EXPECT_TRUE(std::none_of(checklist.results.begin(), checklist.results.end(),
@@ -550,7 +550,7 @@ TEST(RecommendationEngineTest, Generate_RefreshRateMatch_NoWarn) {
     config.frame_rate_den = 1;
 
     // 60 Hz monitor + 60 fps = no warn
-    RecommendationEngine engine(caps, config, 60, std::nullopt, true);
+    RecommendationEngine engine(caps, config, std::nullopt, true);
     auto checklist = engine.Generate();
 
     bool found_mismatch = false;
@@ -585,7 +585,7 @@ TEST(RecommendationEngineTest, Generate_LiveJitter_HighConfidenceJudder) {
 
     // monitor_refresh = 0 (unknown) → static arm suppressed; the live judder arm fires alone.
     const auto live = MakeJudderSnapshot(/*cfr=*/true, /*jitter_ms=*/9.0, /*coalesce_ratio=*/1.0);
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "", &live);
+    RecommendationEngine engine(caps, config, std::nullopt, true, "", &live);
     auto checklist = engine.Generate();
 
     bool found = false;
@@ -625,7 +625,7 @@ TEST(DiagnosticTierTest, EachCheckDeclaresItsTier) {
     config.video_codec = capability::VideoCodec::H264;
     config.audio_codec = capability::AudioCodec::Flac;
 
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true);
+    RecommendationEngine engine(caps, config, std::nullopt, true);
     auto checklist = engine.Generate();
 
     bool saw_blocker = false, saw_optimisation = false;
@@ -655,7 +655,7 @@ TEST(DiagnosticTierTest, MeasuredJudderIsTier2) {
     config.audio_codec = capability::AudioCodec::Opus;
     config.color_range = capability::ColorRange::Limited;
     const auto live = MakeJudderSnapshot(/*cfr=*/true, /*jitter_ms=*/11.4, /*coalesce_ratio=*/1.0);
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "", &live);
+    RecommendationEngine engine(caps, config, std::nullopt, true, "", &live);
     auto checklist = engine.Generate();
 
     bool found = false;
@@ -691,7 +691,7 @@ TEST(DiagnosticTierTest, AudioDeviceLoss_FiresCalmTier2NeverBlocker) {
     config.audio_codec = capability::AudioCodec::Opus;
     config.color_range = capability::ColorRange::Limited;
     const auto live = MakeDegradedAudioSnapshot(/*degraded=*/1, /*tracks=*/2);
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "", &live);
+    RecommendationEngine engine(caps, config, std::nullopt, true, "", &live);
     auto checklist = engine.Generate();
 
     bool found = false;
@@ -716,7 +716,7 @@ TEST(DiagnosticTierTest, AudioDeviceLoss_SilentWhenNoLoss) {
     config.audio_codec = capability::AudioCodec::Opus;
     config.color_range = capability::ColorRange::Limited;
     const auto live = MakeDegradedAudioSnapshot(/*degraded=*/0, /*tracks=*/2);
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "", &live);
+    RecommendationEngine engine(caps, config, std::nullopt, true, "", &live);
     auto checklist = engine.Generate();
 
     EXPECT_TRUE(std::none_of(checklist.results.begin(), checklist.results.end(),
@@ -732,7 +732,7 @@ TEST(DiagnosticTierTest, EnvironmentFacts_ElevationAlways_AudioFormatWhenLive) {
 
     // No live snapshot: only the elevation baseline fact, and it must NOT leak into
     // the recommendation checklist (keeps "clean == empty" for the verdict).
-    RecommendationEngine idle(caps, config, 0, std::nullopt, true);
+    RecommendationEngine idle(caps, config, std::nullopt, true);
     auto idle_checklist = idle.Generate();
     EXPECT_TRUE(std::none_of(idle_checklist.results.begin(), idle_checklist.results.end(),
                              [](const DiagnosticResult& r) { return r.tier == DiagnosticTier::Fact; }))
@@ -746,7 +746,7 @@ TEST(DiagnosticTierTest, EnvironmentFacts_ElevationAlways_AudioFormatWhenLive) {
 
     // With a live audio track, the audio-format fact appears.
     const auto live = MakeDegradedAudioSnapshot(/*degraded=*/0, /*tracks=*/1);
-    RecommendationEngine rec(caps, config, 0, std::nullopt, true, "", &live);
+    RecommendationEngine rec(caps, config, std::nullopt, true, "", &live);
     auto facts = rec.GenerateEnvironmentFacts();
     bool saw_audio = false;
     for (const auto& f : facts) {
@@ -762,7 +762,7 @@ TEST(DiagnosticTierTest, ElevationFactReflectsMeasuredState) {
     capability::UserRecorderConfig config;
 
     // Default (no SetElevated): the honest Standard baseline.
-    RecommendationEngine standard(caps, config, 0, std::nullopt, true);
+    RecommendationEngine standard(caps, config, std::nullopt, true);
     auto standard_facts = standard.GenerateEnvironmentFacts();
     ASSERT_FALSE(standard_facts.empty());
     EXPECT_EQ(standard_facts.front().id, "fact.elevation");
@@ -770,7 +770,7 @@ TEST(DiagnosticTierTest, ElevationFactReflectsMeasuredState) {
     EXPECT_EQ(standard_facts.front().summary.find("Elevated"), std::string::npos);
 
     // Measured elevated: the fact must report "Elevated", not a hard-coded baseline.
-    RecommendationEngine elevated(caps, config, 0, std::nullopt, true);
+    RecommendationEngine elevated(caps, config, std::nullopt, true);
     elevated.SetElevated(true);
     auto elevated_facts = elevated.GenerateEnvironmentFacts();
     ASSERT_FALSE(elevated_facts.empty());
@@ -790,7 +790,7 @@ TEST(RecommendationEngineTest, Generate_LiveCoalesceAlone_NoLongerFires) {
     // than the CFR tick) and is exactly what the Smooth resampler handles — no longer a judder
     // trigger. Only measured present-time jitter fires rec.001 now.
     const auto live = MakeJudderSnapshot(/*cfr=*/true, /*jitter_ms=*/1.0, /*coalesce_ratio=*/2.5);
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "", &live);
+    RecommendationEngine engine(caps, config, std::nullopt, true, "", &live);
     auto checklist = engine.Generate();
 
     EXPECT_TRUE(std::none_of(checklist.results.begin(), checklist.results.end(),
@@ -808,7 +808,7 @@ TEST(RecommendationEngineTest, Generate_LiveJudder_VfrDoesNotFire) {
     // VFR capture: present jitter is expected and not a CFR-judder signal. monitor=0 → no
     // static arm either, so rec.001 must not appear.
     const auto live = MakeJudderSnapshot(/*cfr=*/false, /*jitter_ms=*/9.0, /*coalesce_ratio=*/3.0);
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "", &live);
+    RecommendationEngine engine(caps, config, std::nullopt, true, "", &live);
     auto checklist = engine.Generate();
 
     for (const auto& r : checklist.results)
@@ -826,7 +826,7 @@ TEST(RecommendationEngineTest, Generate_LiveBelowThreshold_DoesNotFire) {
     // CFR with sub-threshold jitter (<= 8 ms) → no diagnosis: the Smooth resampler absorbs
     // moderate jitter, so 7 ms is below the raised bar. Coalescing is no longer a trigger.
     const auto live = MakeJudderSnapshot(/*cfr=*/true, /*jitter_ms=*/7.0, /*coalesce_ratio=*/2.5);
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "", &live);
+    RecommendationEngine engine(caps, config, std::nullopt, true, "", &live);
     auto checklist = engine.Generate();
 
     for (const auto& r : checklist.results)
@@ -843,7 +843,7 @@ TEST(RecommendationEngineTest, Generate_CodecUnavailable_Blocker) {
     config.video_codec = capability::VideoCodec::Av1;
     config.audio_codec = capability::AudioCodec::Opus;
 
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true);
+    RecommendationEngine engine(caps, config, std::nullopt, true);
     auto checklist = engine.Generate();
 
     bool found_blocker = false;
@@ -866,7 +866,7 @@ TEST(RecommendationEngineTest, Generate_Rec009_FlacMp4_Blocker) {
     config.video_codec = capability::VideoCodec::H264;
     config.audio_codec = capability::AudioCodec::Flac;
 
-    RecommendationEngine engine(caps, config, 0, 10ULL * 1024 * 1024 * 1024, true);
+    RecommendationEngine engine(caps, config, 10ULL * 1024 * 1024 * 1024, true);
     auto checklist = engine.Generate();
 
     bool found = false;
@@ -896,7 +896,7 @@ TEST(RecommendationEngineTest, Generate_Rec009_OpusMp4_Notice) {
     config.video_codec = capability::VideoCodec::H264;
     config.audio_codec = capability::AudioCodec::Opus;
 
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true);
+    RecommendationEngine engine(caps, config, std::nullopt, true);
     auto checklist = engine.Generate();
 
     bool found = false;
@@ -923,7 +923,7 @@ TEST(RecommendationEngineTest, Generate_Rec009_OpusMkv_NoFire) {
     config.video_codec = capability::VideoCodec::Av1;
     config.audio_codec = capability::AudioCodec::Opus;
 
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true);
+    RecommendationEngine engine(caps, config, std::nullopt, true);
     auto checklist = engine.Generate();
 
     for (const auto& r : checklist.results) {
@@ -941,7 +941,7 @@ TEST(RecommendationEngineTest, Generate_Rec010_HevcWebm_Blocker) {
     config.video_codec = capability::VideoCodec::Hevc;
     config.audio_codec = capability::AudioCodec::Opus;
 
-    RecommendationEngine engine(caps, config, 0, 10ULL * 1024 * 1024 * 1024, true);
+    RecommendationEngine engine(caps, config, 10ULL * 1024 * 1024 * 1024, true);
     auto checklist = engine.Generate();
 
     bool found = false;
@@ -970,7 +970,7 @@ TEST(RecommendationEngineTest, Generate_Rec010_H264Webm_Blocker) {
     config.video_codec = capability::VideoCodec::H264;
     config.audio_codec = capability::AudioCodec::Opus;
 
-    RecommendationEngine engine(caps, config, 0, 10ULL * 1024 * 1024 * 1024, true);
+    RecommendationEngine engine(caps, config, 10ULL * 1024 * 1024 * 1024, true);
     auto checklist = engine.Generate();
 
     bool found = false;
@@ -999,7 +999,7 @@ TEST(RecommendationEngineTest, Generate_Rec010_Av1Webm_NoFire) {
     config.video_codec = capability::VideoCodec::Av1;
     config.audio_codec = capability::AudioCodec::Opus;
 
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true);
+    RecommendationEngine engine(caps, config, std::nullopt, true);
     auto checklist = engine.Generate();
 
     for (const auto& r : checklist.results) {
@@ -1016,7 +1016,7 @@ TEST(RecommendationEngineTest, Generate_LowDiskSpace_Warns) {
 
     // 1 GB free: above the 500 MB hard-stop, below the 2 GB soft-warn → rec.005 Notice.
     // (LOW-DISK-GUARD-R1: 100 MB would now produce a rec.007 Blocker instead.)
-    RecommendationEngine engine(caps, config, 0, 1ULL * 1024 * 1024 * 1024, true);
+    RecommendationEngine engine(caps, config, 1ULL * 1024 * 1024 * 1024, true);
     auto checklist = engine.Generate();
 
     bool found_space = false;
@@ -1033,7 +1033,7 @@ TEST(RecommendationEngineTest, Generate_UnsupportedProfile_Blocker) {
     capability::CapabilitySet caps;
     capability::UserRecorderConfig config;
 
-    RecommendationEngine engine(caps, config, 0, std::nullopt, false);
+    RecommendationEngine engine(caps, config, std::nullopt, false);
     auto checklist = engine.Generate();
 
     bool found_blocker = false;
@@ -1060,7 +1060,7 @@ TEST(RecommendationEngineTest, RecProfileCodec_H264WithAv1Available_FiresNamingA
     config.video_codec = capability::VideoCodec::H264; // worse than the available AV1
     config.audio_codec = capability::AudioCodec::Opus;
 
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true);
+    RecommendationEngine engine(caps, config, std::nullopt, true);
     const auto checklist = engine.Generate();
 
     const auto it = std::find_if(checklist.results.begin(), checklist.results.end(),
@@ -1088,7 +1088,7 @@ TEST(RecommendationEngineTest, RecProfileCodec_AlreadyBestAv1_DoesNotFire) {
     config.video_codec = capability::VideoCodec::Av1; // already the best
     config.audio_codec = capability::AudioCodec::Opus;
 
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true);
+    RecommendationEngine engine(caps, config, std::nullopt, true);
     const auto checklist = engine.Generate();
 
     EXPECT_TRUE(std::none_of(checklist.results.begin(), checklist.results.end(), [](const DiagnosticResult& r) {
@@ -1106,7 +1106,7 @@ TEST(RecommendationEngineTest, RecProfileCodec_WebmAv1OnlyConfiguredAv1_DoesNotF
     config.video_codec = capability::VideoCodec::Av1; // best & only valid WebM codec
     config.audio_codec = capability::AudioCodec::Opus;
 
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true);
+    RecommendationEngine engine(caps, config, std::nullopt, true);
     const auto checklist = engine.Generate();
 
     EXPECT_TRUE(std::none_of(checklist.results.begin(), checklist.results.end(),
@@ -1120,7 +1120,8 @@ TEST(RecommendationEngineTest, GetAllRecommendationCodes_ReturnsExpected) {
     // blocker added rec.hdr.h264; stable display identity added display.saved.unresolved;
     // ADR 0046 audio device loss added rec.audio.degraded; the exclusive-window pre-flight
     // check added rec.capture.exclusive_window — expect 15 codes now.
-    EXPECT_EQ(codes.size(), 15u);
+    // v0.9 measured cards: rec.audio.endpoint_taken, rec.pacing.duplication, rec.audio.clock_saturated.
+    EXPECT_EQ(codes.size(), 21u);
     EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.001"), codes.end());
     EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.005"), codes.end());
     EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.006"), codes.end());
@@ -1147,7 +1148,7 @@ TEST(RecommendationEngineTest, RecColorRange_Full_FiresNoticeWithAutoFix) {
     config.audio_codec = capability::AudioCodec::Opus;
     config.color_range = capability::ColorRange::Full;
 
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true);
+    RecommendationEngine engine(caps, config, std::nullopt, true);
     const auto checklist = engine.Generate();
 
     const auto it = std::find_if(checklist.results.begin(), checklist.results.end(),
@@ -1199,7 +1200,7 @@ TEST(RecommendationEngineTest, MergeFormatSelection_FullRange_ReachesEngineAndFi
     const capability::UserRecorderConfig cfg = UserConfigFromSettings(live, video);
     EXPECT_EQ(cfg.color_range, capability::ColorRange::Full);
 
-    RecommendationEngine engine(caps, cfg, 0, 0, true);
+    RecommendationEngine engine(caps, cfg, true);
     const auto checklist = engine.Generate();
     EXPECT_TRUE(std::any_of(checklist.results.begin(), checklist.results.end(), [](const DiagnosticResult& r) {
         return r.id == "rec.color.range";
@@ -1217,7 +1218,7 @@ TEST(RecommendationEngineTest, RecColorRange_Limited_DoesNotFire) {
     config.audio_codec = capability::AudioCodec::Opus;
     config.color_range = capability::ColorRange::Limited;
 
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true);
+    RecommendationEngine engine(caps, config, std::nullopt, true);
     const auto checklist = engine.Generate();
 
     EXPECT_TRUE(std::none_of(checklist.results.begin(), checklist.results.end(), [](const DiagnosticResult& r) {
@@ -1537,7 +1538,7 @@ TEST(BlockedScenarioTest, RecommendationEngine_H264WhenNvencUnavailable_Produces
     config.frame_rate_num = 60;
     config.frame_rate_den = 1;
 
-    RecommendationEngine engine(caps, config, 0, std::nullopt, /*is_profile_supported=*/true);
+    RecommendationEngine engine(caps, config, std::nullopt, /*is_profile_supported=*/true);
     const DiagnosticChecklist checklist = engine.Generate();
 
     bool found_rec003 = false;
@@ -1556,10 +1557,10 @@ TEST(RecommendationEngineTest, ExclusiveFullscreenRaisesBorderlessFixAction) {
     capability::UserRecorderConfig config;
     PresentSample present;
     present.available = true;
+    present.attributed = true; // a window target
     present.mode = PresentMode::ExclusiveFullscreen;
 
-    RecommendationEngine engine(caps, config, /*monitor_refresh_rate=*/0,
-                                /*output_drive_free_bytes=*/0, /*is_profile_supported=*/true,
+    RecommendationEngine engine(caps, config, /*output_drive_free_bytes=*/0, /*is_profile_supported=*/true,
                                 /*output_filesystem_name=*/"NTFS",
                                 /*live_snapshot=*/nullptr, /*present=*/&present);
     const DiagnosticChecklist list = engine.Generate();
@@ -1577,8 +1578,9 @@ TEST(RecommendationEngineTest, ComposedPresentRaisesNoExclusiveCheck) {
     capability::UserRecorderConfig config;
     PresentSample present;
     present.available = true;
+    present.attributed = true; // a window target
     present.mode = PresentMode::Composed;
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "NTFS", nullptr, &present);
+    RecommendationEngine engine(caps, config, std::nullopt, true, "NTFS", nullptr, &present);
     const DiagnosticChecklist list = engine.Generate();
     EXPECT_TRUE(std::none_of(list.results.begin(), list.results.end(),
                              [](const DiagnosticResult& r) { return r.id == "rec.present.exclusive"; }));
@@ -1589,10 +1591,11 @@ TEST(RecommendationEngineTest, HighDiscardRatioRaisesDiscardedNotice) {
     capability::UserRecorderConfig config;
     PresentSample present;
     present.available = true;
+    present.attributed = true; // a window target
     present.mode = PresentMode::Composed;
     present.present_count = 1000;
     present.discarded_count = 100; // 10% > 5% threshold
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "NTFS", nullptr, &present);
+    RecommendationEngine engine(caps, config, std::nullopt, true, "NTFS", nullptr, &present);
     const DiagnosticChecklist list = engine.Generate();
     const auto it = std::find_if(list.results.begin(), list.results.end(),
                                  [](const DiagnosticResult& r) { return r.id == "rec.present.discarded"; });
@@ -1610,8 +1613,7 @@ TEST(RecommendationEngineTest, LowDiscardRatioAndTinySampleRaiseNoDiscardedNotic
     low.mode = PresentMode::Composed;
     low.present_count = 1000;
     low.discarded_count = 10; // 1% < 5%
-    const DiagnosticChecklist low_list =
-        RecommendationEngine(caps, config, 0, 0, true, "NTFS", nullptr, &low).Generate();
+    const DiagnosticChecklist low_list = RecommendationEngine(caps, config, 0, true, "NTFS", nullptr, &low).Generate();
     EXPECT_TRUE(std::none_of(low_list.results.begin(), low_list.results.end(),
                              [](const DiagnosticResult& r) { return r.id == "rec.present.discarded"; }));
     // High ratio but below the minimum-sample gate must also stay silent.
@@ -1620,7 +1622,7 @@ TEST(RecommendationEngineTest, LowDiscardRatioAndTinySampleRaiseNoDiscardedNotic
     tiny.mode = PresentMode::Composed;
     tiny.present_count = 50; // < kMinSamples (200)
     tiny.discarded_count = 40;
-    const DiagnosticChecklist list = RecommendationEngine(caps, config, 0, 0, true, "NTFS", nullptr, &tiny).Generate();
+    const DiagnosticChecklist list = RecommendationEngine(caps, config, 0, true, "NTFS", nullptr, &tiny).Generate();
     EXPECT_TRUE(std::none_of(list.results.begin(), list.results.end(),
                              [](const DiagnosticResult& r) { return r.id == "rec.present.discarded"; }));
 }
@@ -1630,9 +1632,10 @@ TEST(RecommendationEngineTest, RepeatedModeFlipsRaiseModeFlipNotice) {
     capability::UserRecorderConfig config;
     PresentSample present;
     present.available = true;
+    present.attributed = true; // a window target
     present.mode = PresentMode::Composed;
     present.mode_flip_count = 6; // >= threshold (5)
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "NTFS", nullptr, &present);
+    RecommendationEngine engine(caps, config, std::nullopt, true, "NTFS", nullptr, &present);
     const DiagnosticChecklist list = engine.Generate();
     EXPECT_TRUE(std::any_of(list.results.begin(), list.results.end(),
                             [](const DiagnosticResult& r) { return r.id == "rec.present.modeflip"; }));
@@ -1643,9 +1646,10 @@ TEST(RecommendationEngineTest, FewModeFlipsRaiseNoModeFlipNotice) {
     capability::UserRecorderConfig config;
     PresentSample present;
     present.available = true;
+    present.attributed = true; // a window target
     present.mode = PresentMode::Composed;
     present.mode_flip_count = 2; // < threshold
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "NTFS", nullptr, &present);
+    RecommendationEngine engine(caps, config, std::nullopt, true, "NTFS", nullptr, &present);
     const DiagnosticChecklist list = engine.Generate();
     EXPECT_TRUE(std::none_of(list.results.begin(), list.results.end(),
                              [](const DiagnosticResult& r) { return r.id == "rec.present.modeflip"; }));
@@ -1659,7 +1663,7 @@ TEST(RecommendationEngineTest, HighDiskWriteLatencyRaisesWriteStallNotice) {
     snap.disk.peak_write_ms = 150.0; // > 100 ms threshold
     capability::CapabilitySet caps;
     capability::UserRecorderConfig config;
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "NTFS", &snap, nullptr);
+    RecommendationEngine engine(caps, config, std::nullopt, true, "NTFS", &snap, nullptr);
     const DiagnosticChecklist list = engine.Generate();
     const auto it = std::find_if(list.results.begin(), list.results.end(),
                                  [](const DiagnosticResult& r) { return r.id == "rec.disk.writestall"; });
@@ -1677,8 +1681,7 @@ TEST(RecommendationEngineTest, LowOrUnavailableDiskWriteRaisesNoWriteStallNotice
     low.valid = true;
     low.disk.latency_availability = exosnap::engine::MetricAvailability::Available;
     low.disk.peak_write_ms = 20.0;
-    const DiagnosticChecklist low_list =
-        RecommendationEngine(caps, config, 0, 0, true, "NTFS", &low, nullptr).Generate();
+    const DiagnosticChecklist low_list = RecommendationEngine(caps, config, 0, true, "NTFS", &low, nullptr).Generate();
     EXPECT_TRUE(std::none_of(low_list.results.begin(), low_list.results.end(),
                              [](const DiagnosticResult& r) { return r.id == "rec.disk.writestall"; }));
     // High latency but Unavailable (e.g. MP4 remux) must stay silent.
@@ -1686,8 +1689,7 @@ TEST(RecommendationEngineTest, LowOrUnavailableDiskWriteRaisesNoWriteStallNotice
     unavail.valid = true;
     unavail.disk.latency_availability = exosnap::engine::MetricAvailability::Unavailable;
     unavail.disk.peak_write_ms = 500.0;
-    const DiagnosticChecklist list =
-        RecommendationEngine(caps, config, 0, 0, true, "NTFS", &unavail, nullptr).Generate();
+    const DiagnosticChecklist list = RecommendationEngine(caps, config, 0, true, "NTFS", &unavail, nullptr).Generate();
     EXPECT_TRUE(std::none_of(list.results.begin(), list.results.end(),
                              [](const DiagnosticResult& r) { return r.id == "rec.disk.writestall"; }));
 }
@@ -1706,9 +1708,10 @@ TEST(RecommendationEngineTest, JudderDetailNamesPresentModeAttribution) {
     config.frame_rate_den = 1;
     PresentSample present;
     present.available = true;
+    present.attributed = true; // a window target
     present.mode = PresentMode::IndependentFlip;
 
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "NTFS", &snap, &present);
+    RecommendationEngine engine(caps, config, std::nullopt, true, "NTFS", &snap, &present);
     const DiagnosticChecklist list = engine.Generate();
     const auto it = std::find_if(list.results.begin(), list.results.end(),
                                  [](const DiagnosticResult& r) { return r.id == "rec.001"; });
@@ -1720,7 +1723,7 @@ TEST(RecommendationEngineTest, HighDpcLatencyNamesDriverExternalFix) {
     using namespace exosnap::diagnostics;
     capability::CapabilitySet caps;
     capability::UserRecorderConfig config;
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "NTFS", nullptr, nullptr);
+    RecommendationEngine engine(caps, config, std::nullopt, true, "NTFS", nullptr, nullptr);
     DpcLatencyReading dpc{/*max*/ 2500.0, /*avg*/ 180.0, "nvlddmkm.sys", /*available*/ true};
     engine.SetDpcLatency(dpc);
     const DiagnosticChecklist list = engine.Generate();
@@ -1736,7 +1739,7 @@ TEST(RecommendationEngineTest, LowDpcLatencyRaisesNothing) {
     using namespace exosnap::diagnostics;
     capability::CapabilitySet caps;
     capability::UserRecorderConfig config;
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "NTFS", nullptr, nullptr);
+    RecommendationEngine engine(caps, config, std::nullopt, true, "NTFS", nullptr, nullptr);
     engine.SetDpcLatency({200.0, 60.0, "", true});
     const DiagnosticChecklist list = engine.Generate();
     EXPECT_TRUE(std::none_of(list.results.begin(), list.results.end(),
@@ -1758,7 +1761,7 @@ TEST(RecommendationEngineTest, JudderInNewestOffersSmoothPacingAutoFix) {
     config.frame_pacing = exosnap::engine::FramePacingMode::Newest; // triggers the pacing result
 
     const auto live = MakeJudderSnapshot(/*cfr=*/true, /*jitter_ms=*/9.0, /*coalesce_ratio=*/1.0);
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "", &live);
+    RecommendationEngine engine(caps, config, std::nullopt, true, "", &live);
     const auto checklist = engine.Generate();
 
     const auto it = std::find_if(checklist.results.begin(), checklist.results.end(),
@@ -1784,7 +1787,7 @@ TEST(RecommendationEngineTest, JudderInSmoothOffersNoPacingFix) {
     config.frame_pacing = exosnap::engine::FramePacingMode::Smooth; // already correct — no fix offered
 
     const auto live = MakeJudderSnapshot(/*cfr=*/true, /*jitter_ms=*/9.0, /*coalesce_ratio=*/1.0);
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "", &live);
+    RecommendationEngine engine(caps, config, std::nullopt, true, "", &live);
     const auto checklist = engine.Generate();
 
     EXPECT_TRUE(std::none_of(checklist.results.begin(), checklist.results.end(), [](const DiagnosticResult& r) {
@@ -1811,7 +1814,7 @@ TEST(RecommendationEngineTest, Hdr10PlusH264OnActiveHdrDisplayRaisesBlocker) {
     capability::UserRecorderConfig config = MakeH264Config();
     config.hdr_mode = exosnap::engine::HdrMode::Hdr10;
 
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "NTFS", nullptr, nullptr);
+    RecommendationEngine engine(caps, config, std::nullopt, true, "NTFS", nullptr, nullptr);
     engine.SetCaptureTargetHdrActive(true); // the capture-target display is HDR-active
     const DiagnosticChecklist list = engine.Generate();
 
@@ -1838,7 +1841,7 @@ TEST(RecommendationEngineTest, Hdr10PlusH264OnActiveHdrDisplay_Av1UnavailablePro
     capability::UserRecorderConfig config = MakeH264Config();
     config.hdr_mode = exosnap::engine::HdrMode::Hdr10;
 
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "NTFS", nullptr, nullptr);
+    RecommendationEngine engine(caps, config, std::nullopt, true, "NTFS", nullptr, nullptr);
     engine.SetCaptureTargetHdrActive(true);
     const DiagnosticChecklist list = engine.Generate();
 
@@ -1865,7 +1868,7 @@ TEST(RecommendationEngineTest, Hdr10PlusH264OnMp4ProposesHevcDespiteAv1CapableGp
     config.container = capability::Container::Mp4;
     config.hdr_mode = exosnap::engine::HdrMode::Hdr10;
 
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "NTFS", nullptr, nullptr);
+    RecommendationEngine engine(caps, config, std::nullopt, true, "NTFS", nullptr, nullptr);
     engine.SetCaptureTargetHdrActive(true);
     const DiagnosticChecklist list = engine.Generate();
 
@@ -1885,7 +1888,7 @@ TEST(RecommendationEngineTest, Hdr10PlusH264OnSdrDisplayRaisesNoBlocker) {
     capability::UserRecorderConfig config = MakeH264Config();
     config.hdr_mode = exosnap::engine::HdrMode::Hdr10;
 
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "NTFS", nullptr, nullptr);
+    RecommendationEngine engine(caps, config, std::nullopt, true, "NTFS", nullptr, nullptr);
     engine.SetCaptureTargetHdrActive(false); // SDR desktop
     const DiagnosticChecklist list = engine.Generate();
 
@@ -1900,7 +1903,7 @@ TEST(RecommendationEngineTest, TonemapSdrPlusH264OnActiveHdrDisplayRaisesNoBlock
     capability::UserRecorderConfig config = MakeH264Config();
     config.hdr_mode = exosnap::engine::HdrMode::TonemapSdr;
 
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "NTFS", nullptr, nullptr);
+    RecommendationEngine engine(caps, config, std::nullopt, true, "NTFS", nullptr, nullptr);
     engine.SetCaptureTargetHdrActive(true);
     const DiagnosticChecklist list = engine.Generate();
 
@@ -1918,7 +1921,7 @@ TEST(RecommendationEngineTest, Hdr10PlusAv1OrHevcOnActiveHdrDisplayRaisesNoBlock
         config.audio_codec = capability::AudioCodec::Opus;
         config.hdr_mode = exosnap::engine::HdrMode::Hdr10;
 
-        RecommendationEngine engine(caps, config, 0, std::nullopt, true, "NTFS", nullptr, nullptr);
+        RecommendationEngine engine(caps, config, std::nullopt, true, "NTFS", nullptr, nullptr);
         engine.SetCaptureTargetHdrActive(true);
         const DiagnosticChecklist list = engine.Generate();
 
@@ -1972,7 +1975,7 @@ TEST(ExclusiveWindowCard, NoWindowFactsIsSilent) {
     // The engine holds caps/config by reference — keep them alive as named locals.
     const capability::CapabilitySet caps = ExclusiveCaps();
     const capability::UserRecorderConfig config = ExclusiveConfig();
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true);
+    RecommendationEngine engine(caps, config, std::nullopt, true);
     // No SetCaptureWindowEvidence: monitor target / no selection.
     const DiagnosticChecklist list = engine.Generate();
     EXPECT_EQ(FindResult(list, "rec.capture.exclusive_window"), nullptr);
@@ -1981,7 +1984,7 @@ TEST(ExclusiveWindowCard, NoWindowFactsIsSilent) {
 TEST(ExclusiveWindowCard, ProvenBlackRaisesBlockerWithMonitorFix) {
     const capability::CapabilitySet caps = ExclusiveCaps();
     const capability::UserRecorderConfig config = ExclusiveConfig();
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true);
+    RecommendationEngine engine(caps, config, std::nullopt, true);
     // FullscreenShaped + hub produced nothing for >= 2 s == ProvenBlack.
     engine.SetCaptureWindowEvidence(FullscreenShapedFacts(),
                                     WindowHubEvidence{exosnap::engine::HubFrameKind::None, 3.0, 0.0, false});
@@ -2002,7 +2005,7 @@ TEST(ExclusiveWindowCard, ProvenBlackRaisesBlockerWithMonitorFix) {
 TEST(ExclusiveWindowCard, SuspectedWithQunsRaisesNotice) {
     const capability::CapabilitySet caps = ExclusiveCaps();
     const capability::UserRecorderConfig config = ExclusiveConfig();
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true);
+    RecommendationEngine engine(caps, config, std::nullopt, true);
     WindowTargetFacts facts = FullscreenShapedFacts();
     facts.quns_d3d_fullscreen = true; // fullscreen signal, but no measured black proof
     engine.SetCaptureWindowEvidence(facts, WindowHubEvidence{exosnap::engine::HubFrameKind::Live, 5.0, 0.0, true});
@@ -2016,7 +2019,7 @@ TEST(ExclusiveWindowCard, SuspectedWithQunsRaisesNotice) {
 TEST(ExclusiveWindowCard, BorderlessThatWorksIsSilent) {
     const capability::CapabilitySet caps = ExclusiveCaps();
     const capability::UserRecorderConfig config = ExclusiveConfig();
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true);
+    RecommendationEngine engine(caps, config, std::nullopt, true);
     // FullscreenShaped, producing frames, no signal: the normal borderless case.
     engine.SetCaptureWindowEvidence(FullscreenShapedFacts(),
                                     WindowHubEvidence{exosnap::engine::HubFrameKind::Live, 5.0, 0.1, true});
@@ -2031,8 +2034,9 @@ TEST(ExclusiveWindowCard, DedupesGenericPresentExclusiveCard) {
     const capability::UserRecorderConfig config = ExclusiveConfig();
     PresentSample present;
     present.available = true;
+    present.attributed = true; // a window target
     present.mode = PresentMode::ExclusiveFullscreen;
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "", nullptr, &present);
+    RecommendationEngine engine(caps, config, std::nullopt, true, "", nullptr, &present);
     engine.SetCaptureWindowEvidence(FullscreenShapedFacts(),
                                     WindowHubEvidence{exosnap::engine::HubFrameKind::None, 3.0, 0.0, false});
     const DiagnosticChecklist list = engine.Generate();
@@ -2046,11 +2050,165 @@ TEST(ExclusiveWindowCard, PresentExclusiveStillFiresWithoutWindowEvidence) {
     const capability::UserRecorderConfig config = ExclusiveConfig();
     PresentSample present;
     present.available = true;
+    present.attributed = true; // a window target
     present.mode = PresentMode::ExclusiveFullscreen;
-    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "", nullptr, &present);
+    RecommendationEngine engine(caps, config, std::nullopt, true, "", nullptr, &present);
     const DiagnosticChecklist list = engine.Generate();
     EXPECT_NE(FindResult(list, "rec.present.exclusive"), nullptr);
 }
 
 } // namespace
+TEST(RecommendationEngineTest, DisplayOnAnotherAdapterWithNvidiaPresentIsABlocker) {
+    using namespace exosnap::diagnostics;
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+    RecommendationEngine engine(caps, config);
+    RecommendationEngine::CaptureTargetAdapterFacts facts;
+    facts.known = true;
+    facts.vendor_id = 0x8086; // Intel
+    facts.adapter_name = "Intel(R) UHD Graphics";
+    facts.nvidia_adapter_present = true;
+    engine.SetCaptureTargetAdapter(facts);
+    const DiagnosticChecklist list = engine.Generate();
+    const auto it = std::find_if(list.results.begin(), list.results.end(),
+                                 [](const DiagnosticResult& r) { return r.id == "rec.capture.adapter_mismatch"; });
+    ASSERT_NE(it, list.results.end());
+    EXPECT_EQ(it->severity, DiagnosticSeverity::Blocker);
+    EXPECT_NE(it->summary.find("Intel"), std::string::npos);
+
+    // An NVIDIA-driven display, or a machine without an NVIDIA adapter, says nothing.
+    facts.vendor_id = 0x10DE;
+    engine.SetCaptureTargetAdapter(facts);
+    const DiagnosticChecklist nvidia = engine.Generate();
+    EXPECT_TRUE(std::none_of(nvidia.results.begin(), nvidia.results.end(),
+                             [](const DiagnosticResult& r) { return r.id == "rec.capture.adapter_mismatch"; }));
+    facts.vendor_id = 0x8086;
+    facts.nvidia_adapter_present = false;
+    engine.SetCaptureTargetAdapter(facts);
+    const DiagnosticChecklist no_nvidia = engine.Generate();
+    EXPECT_TRUE(std::none_of(no_nvidia.results.begin(), no_nvidia.results.end(),
+                             [](const DiagnosticResult& r) { return r.id == "rec.capture.adapter_mismatch"; }));
+}
+
+TEST(RecommendationEngineTest, NetworkOrRemovableOutputDriveRaisesNotice) {
+    using namespace exosnap::diagnostics;
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+    RecommendationEngine engine(caps, config);
+    engine.SetOutputDriveKind(DriveKind::Remote);
+    const DiagnosticChecklist remote = engine.Generate();
+    EXPECT_TRUE(std::any_of(remote.results.begin(), remote.results.end(),
+                            [](const DiagnosticResult& r) { return r.id == "rec.output.drive_kind"; }));
+    engine.SetOutputDriveKind(DriveKind::Fixed);
+    const DiagnosticChecklist fixed = engine.Generate();
+    EXPECT_TRUE(std::none_of(fixed.results.begin(), fixed.results.end(),
+                             [](const DiagnosticResult& r) { return r.id == "rec.output.drive_kind"; }));
+}
+
+TEST(RecommendationEngineTest, GpuBottleneckRaisesContentionCard) {
+    using namespace exosnap::diagnostics;
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+    exosnap::engine::RecordingDiagnosticsSnapshot live;
+    live.valid = true;
+    live.lifecycle = exosnap::engine::DiagnosticsLifecycle::Recording;
+    live.bottleneck = exosnap::engine::PipelineBottleneck::Gpu;
+    live.compositor.gpu_exec_p99_ms = 24.0;
+    live.capture.target_fps = 60.0;
+    const DiagnosticChecklist list = RecommendationEngine(caps, config, 0, true, "NTFS", &live, nullptr).Generate();
+    const auto it = std::find_if(list.results.begin(), list.results.end(),
+                                 [](const DiagnosticResult& r) { return r.id == "rec.gpu.contention"; });
+    ASSERT_NE(it, list.results.end());
+    EXPECT_NE(it->current_value.find("24.0"), std::string::npos) << it->current_value;
+}
+
+} // namespace exosnap::diagnostics
+
+namespace exosnap::diagnostics {
+
+TEST(RecommendationEngineTest, SteadyDuplicateShareRaisesPacingNotice) {
+    using namespace exosnap::diagnostics;
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+    exosnap::engine::RecordingDiagnosticsSnapshot live;
+    live.valid = true;
+    live.lifecycle = exosnap::engine::DiagnosticsLifecycle::Recording;
+    live.video_encoder.cfr = true;
+    live.capture.target_fps = 60.0;
+    live.capture.frames_emitted = 600;
+    live.capture.frames_duplicated = 240; // 40 %
+    const DiagnosticChecklist list = RecommendationEngine(caps, config, 0, true, "NTFS", &live, nullptr).Generate();
+    const auto it = std::find_if(list.results.begin(), list.results.end(),
+                                 [](const DiagnosticResult& r) { return r.id == "rec.pacing.duplication"; });
+    ASSERT_NE(it, list.results.end());
+    EXPECT_EQ(it->tier, DiagnosticTier::MeasuredProblem);
+
+    // A full stall is the stall notice's story, not a pacing card.
+    live.capture.capture_starved = true;
+    const DiagnosticChecklist starved = RecommendationEngine(caps, config, 0, true, "NTFS", &live, nullptr).Generate();
+    EXPECT_TRUE(std::none_of(starved.results.begin(), starved.results.end(),
+                             [](const DiagnosticResult& r) { return r.id == "rec.pacing.duplication"; }));
+
+    // Below the share, or before warm-up, nothing.
+    live.capture.capture_starved = false;
+    live.capture.frames_duplicated = 60;
+    const DiagnosticChecklist quiet = RecommendationEngine(caps, config, 0, true, "NTFS", &live, nullptr).Generate();
+    EXPECT_TRUE(std::none_of(quiet.results.begin(), quiet.results.end(),
+                             [](const DiagnosticResult& r) { return r.id == "rec.pacing.duplication"; }));
+}
+
+TEST(RecommendationEngineTest, SaturatedClockSlavingRaisesNotice) {
+    using namespace exosnap::diagnostics;
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+    exosnap::engine::RecordingDiagnosticsSnapshot live;
+    live.valid = true;
+    live.av_drift_availability = exosnap::engine::MetricAvailability::Available;
+    live.clock_slaving_saturated = true;
+    live.clock_slaving_ppm = 100.0;
+    const DiagnosticChecklist list = RecommendationEngine(caps, config, 0, true, "NTFS", &live, nullptr).Generate();
+    const auto it = std::find_if(list.results.begin(), list.results.end(),
+                                 [](const DiagnosticResult& r) { return r.id == "rec.audio.clock_saturated"; });
+    ASSERT_NE(it, list.results.end());
+    EXPECT_NE(it->current_value.find("360 ms/h"), std::string::npos) << it->current_value;
+}
+
+TEST(RecommendationEngineTest, EndpointInUseGetsItsOwnCardNotTheReconnectOne) {
+    using namespace exosnap::diagnostics;
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+    exosnap::engine::RecordingDiagnosticsSnapshot live;
+    live.valid = true;
+    live.audio.active = true;
+    live.audio.track_count = 1;
+    live.audio.degraded_sources = 1;
+    live.audio.degraded_endpoint_in_use = true;
+    const DiagnosticChecklist list = RecommendationEngine(caps, config, 0, true, "NTFS", &live, nullptr).Generate();
+    EXPECT_TRUE(std::any_of(list.results.begin(), list.results.end(),
+                            [](const DiagnosticResult& r) { return r.id == "rec.audio.endpoint_taken"; }));
+    EXPECT_TRUE(std::none_of(list.results.begin(), list.results.end(),
+                             [](const DiagnosticResult& r) { return r.id == "rec.audio.degraded"; }));
+}
+
+TEST(RecommendationEngineTest, UnattributedPresentSampleRaisesNoPerSourceCards) {
+    using namespace exosnap::diagnostics;
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+    PresentSample present;
+    present.available = true;
+    present.attributed = false; // display capture: every process on the desktop
+    present.present_count = 1000;
+    present.discarded_count = 500;
+    present.mode_flip_count = 50;
+    const DiagnosticChecklist list = RecommendationEngine(caps, config, 0, true, "NTFS", nullptr, &present).Generate();
+    EXPECT_TRUE(std::none_of(list.results.begin(), list.results.end(), [](const DiagnosticResult& r) {
+        return r.id == "rec.present.discarded" || r.id == "rec.present.modeflip";
+    }));
+    present.attributed = true;
+    const DiagnosticChecklist attributed =
+        RecommendationEngine(caps, config, 0, true, "NTFS", nullptr, &present).Generate();
+    EXPECT_TRUE(std::any_of(attributed.results.begin(), attributed.results.end(),
+                            [](const DiagnosticResult& r) { return r.id == "rec.present.discarded"; }));
+}
+
 } // namespace exosnap::diagnostics

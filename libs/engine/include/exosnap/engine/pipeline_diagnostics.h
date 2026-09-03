@@ -40,6 +40,8 @@ enum class PipelineBottleneck : uint8_t {
     Audio,        // audio drops / queue pressure
     Muxer,        // mux queue rising, writes healthy
     Disk,         // write latency/throughput insufficient
+    Gpu,          // the GPU finishes the recorder's frame work late while submission stays cheap:
+                  // the captured application saturates it
     Unknown,      // insufficient evidence
 };
 
@@ -91,6 +93,12 @@ enum class DiagnosticsSplitTrigger : uint8_t {
     Hotkey,
 };
 
+// A source must produce no frame at all for at least this long before the
+// pipeline calls it starved: long enough that a scheduling hiccup or a brief GPU
+// hang never trips it, short enough that the user hears while there is still a
+// recording to salvage.
+inline constexpr double kCaptureStarveSeconds = 10.0;
+
 struct CaptureDiagnostics {
     double target_fps = 0.0;
     double actual_fps = 0.0;                        // emitted frames Δ / elapsed Δ between publishes
@@ -100,16 +108,26 @@ struct CaptureDiagnostics {
     uint64_t frames_dropped_cfr = 0;                // a scheduled tick had nothing to encode yet (benign pacing)
     uint64_t frames_dropped_backpressure = 0;       // encoder input slots were all in flight
     uint64_t frames_dropped_processing_failure = 0; // a frame was available and its conversion failed
+    uint64_t frames_dropped_ring_eviction = 0;      // a captured, never-emitted frame was overwritten in the ring
     uint64_t frames_duplicated = 0;                 // CFR hold of the last real frame
     double frame_interval_ms = 0.0;
     MetricAvailability interval_observed = MetricAvailability::Unavailable; // true only on VFR
     CaptureSourceType source_type = CaptureSourceType::Unknown;
     bool source_loss = false;
+    // Time since the capture backend last produced a frame, while recording.
+    // The emitted rate stays at target through any source stall (the CFR pacer
+    // repeats the held frame), so this is the only counter that says whether the
+    // picture is still moving. capture_starved latches once it has been at least
+    // kCaptureStarveSeconds; whether that is a fault is the app's call (an idle
+    // desktop is legitimately silent), but the pipeline card must not say Good.
+    double seconds_without_capture = 0.0;
+    bool capture_starved = false;
 
     // Present cadence (VRR/CFR judder correlation, v0.8.0 / ADR 0033). DXGI Output
-    // Duplication only: derived from DXGI_OUTDUPL_FRAME_INFO.LastPresentTime (QPC) deltas
-    // and AccumulatedFrames. Unavailable for WGC (Window/Region) capture, which exposes no
-    // present timestamp, and during warm-up / before enough samples accumulate.
+    // Duplication: derived from DXGI_OUTDUPL_FRAME_INFO.LastPresentTime (QPC) deltas
+    // and AccumulatedFrames. WGC (Window/Region): from the frame's SystemRelativeTime
+    // deltas, a delivery time rather than a present time, so its jitter floor is
+    // higher. Unavailable during warm-up / before enough samples accumulate.
     double source_present_interval_ms = 0.0; // mean inter-present interval over the rolling window
     double source_present_jitter_ms = 0.0;   // peak-minus-average present interval (irregular-pacing proxy)
     double source_coalesce_ratio = 1.0;      // mean AccumulatedFrames per acquire (>1 == presents coalesced)
@@ -131,7 +149,7 @@ struct CaptureDiagnostics {
 
     [[nodiscard]] uint64_t frames_dropped_total() const noexcept {
         return frames_dropped_coalesced + frames_dropped_cfr + frames_dropped_backpressure +
-               frames_dropped_processing_failure;
+               frames_dropped_processing_failure + frames_dropped_ring_eviction;
     }
 
     // "Problematic" drops: the drops that cost real picture. Excludes the two benign
@@ -144,7 +162,7 @@ struct CaptureDiagnostics {
     // card, review panel, live tile, dropped-frames notification), so the two can
     // never disagree about whether a session dropped frames.
     [[nodiscard]] uint64_t frames_dropped_problem() const noexcept {
-        return frames_dropped_processing_failure + frames_dropped_backpressure;
+        return frames_dropped_processing_failure + frames_dropped_backpressure + frames_dropped_ring_eviction;
     }
 };
 
@@ -154,6 +172,11 @@ struct CompositorDiagnostics {
     double average_ms = 0.0;
     double peak_ms = 0.0;
     uint64_t frames_composed = 0;
+    // Sum of the p99 GPU execution times of the recorder's own passes
+    // (composition, HDR tone-map, RGB->YUV) over the rolling window, from D3D11
+    // timestamp queries. The CPU submission times above say nothing about
+    // when the GPU actually ran them.
+    double gpu_exec_p99_ms = 0.0;
     // CPU command-submission time, NOT GPU execution time. GPU execution timing is
     // Unavailable (no timestamp-query infrastructure; no synchronous readback allowed).
 
@@ -269,6 +292,10 @@ struct AudioDiagnostics {
     uint32_t degraded_sources = 0;
     uint32_t degraded_source_kinds = 0;
     bool source_degraded = false;
+    // A degraded source whose endpoint is still present but refused with an
+    // in-use error on reactivation: another application holds it in exclusive
+    // mode. Reconnecting the device does nothing for this one.
+    bool degraded_endpoint_in_use = false;
     // Latched post-flight fact: at least one audio capture source was lost
     // mid-recording and degraded to honest silence at some point this session,
     // even if every source is healthy again by the final snapshot. Passed through
@@ -452,6 +479,10 @@ struct RecordingDiagnosticsSnapshot {
     // Current clock-slaving compensation rate of that same track, in ppm. 0.0 =
     // not compensating (below the engage threshold, or between quantized steps).
     double clock_slaving_ppm = 0.0;
+    // The slaving controller is at its rate limit and the residual keeps
+    // growing: drift the correction cannot absorb, so audio and video separate
+    // over a long recording.
+    bool clock_slaving_saturated = false;
 
     // True while any audio track's clock slaving has engaged (is actively pulling
     // its output timeline onto the QPC axis). Informational, not an alarm.

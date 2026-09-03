@@ -24,6 +24,11 @@ struct PresentSample {
     bool tearing = false;
     double present_interval_ms = 0.0;
     bool available = false;
+    // True when the sample was filtered to the captured process. Display and
+    // Region capture have no process to attribute to, so their samples span the
+    // whole desktop and the per-source checks (discarded presents, mode flips)
+    // must not read them as a statement about the recorded content.
+    bool attributed = false;
 
     // Session-cumulative aggregates, accumulated by PresentMonEtwSession across the drain
     // (NOT per-event — the drain otherwise keeps only the latest present). `present_count`

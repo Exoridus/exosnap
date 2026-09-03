@@ -57,4 +57,32 @@ std::string Win32FilesystemProvider::FilesystemNameForPath(const std::filesystem
     return result;
 }
 
+DriveKind Win32FilesystemProvider::DriveKindForPath(const std::filesystem::path& path) const {
+    if (path.empty()) {
+        return DriveKind::Unknown;
+    }
+    std::wstring wide_path = path.wstring();
+    if (wide_path.back() != L'\\' && wide_path.back() != L'/') {
+        wide_path += L'\\';
+    }
+    wchar_t volume_path_buf[MAX_PATH + 1] = {};
+    if (!::GetVolumePathNameW(wide_path.c_str(), volume_path_buf, MAX_PATH + 1)) {
+        return DriveKind::Unknown;
+    }
+    switch (::GetDriveTypeW(volume_path_buf)) {
+    case DRIVE_FIXED:
+        return DriveKind::Fixed;
+    case DRIVE_REMOVABLE:
+        return DriveKind::Removable;
+    case DRIVE_REMOTE:
+        return DriveKind::Remote;
+    case DRIVE_CDROM:
+        return DriveKind::CdRom;
+    case DRIVE_RAMDISK:
+        return DriveKind::RamDisk;
+    default:
+        return DriveKind::Unknown;
+    }
+}
+
 } // namespace exosnap::diagnostics

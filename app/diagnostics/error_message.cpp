@@ -72,8 +72,18 @@ UiErrorMessage MapErrorToUserMessage(const UiRecordingResult& result) {
     }
 
     if (phase == L"Prepare" && Contains(detail, L"NVENC open")) {
+        // NV_ENC_ERR_OUT_OF_MEMORY on session open is how the driver reports that
+        // its session budget is spent: another NVENC client (OBS, NVIDIA Instant
+        // Replay, Discord streaming) holds it. A driver reinstall does nothing here.
+        if (Contains(detail, L"NV_ENC_ERR_OUT_OF_MEMORY")) {
+            return MakeMessage(L"Encoder is in use by another application",
+                               L"The NVIDIA hardware encoder has no free session for this recording.",
+                               L"Close other applications that use NVENC (OBS Studio, NVIDIA Instant Replay / "
+                               L"ShadowPlay, Discord streaming, Xbox Game Bar capture), then start again.");
+        }
         return MakeMessage(L"Encoder unavailable", L"The NVIDIA hardware encoder could not be opened.",
-                           L"Check GPU drivers. NVENC requires a supported NVIDIA GPU.");
+                           L"Make sure the display you record is driven by the NVIDIA GPU and the driver is "
+                           L"current. NVENC requires a supported NVIDIA GPU.");
     }
 
     if (phase == L"Prepare" && Contains(detail, L"NVENC AV1/NV12")) {

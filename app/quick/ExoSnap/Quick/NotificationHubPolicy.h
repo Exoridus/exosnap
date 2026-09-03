@@ -68,6 +68,8 @@ namespace exosnap::notifications {
         return QStringLiteral("preset-switched");
     case NotificationType::AudioSourceDegraded:
         return QStringLiteral("audio-source-degraded");
+    case NotificationType::AudioDefaultDeviceChanged:
+        return QStringLiteral("audio-default-device-changed");
     case NotificationType::UpdateAvailable:
         return QStringLiteral("update-available");
     // A standing condition like the four above: one entry per recording session,

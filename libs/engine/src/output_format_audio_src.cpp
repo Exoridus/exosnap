@@ -398,6 +398,10 @@ int32_t OutputFormatAudioSrc::LastCaptureHresult() const {
     return inner_ ? inner_->LastCaptureHresult() : 0;
 }
 
+int32_t OutputFormatAudioSrc::LastInitHresult() const {
+    return inner_ ? inner_->LastInitHresult() : 0;
+}
+
 bool OutputFormatAudioSrc::LastBufferDeviceTiming(AudioDeviceTiming& out_timing) const {
     // The inner device clock is what drifts; resampling shifts neither axis.
     return inner_ && inner_->LastBufferDeviceTiming(out_timing);
