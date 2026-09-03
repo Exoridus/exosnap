@@ -157,7 +157,7 @@ DXGI_FORMAT DemoteToneMapFormatIfUnsupportedVpInput(ID3D11VideoProcessorEnumerat
 //
 // `source_lost` is set for every class so the caller's existing loop exit runs
 // unchanged; RecordFailure additionally raises stop_requested.
-void HandleWgcAcquireException(SessionState& state, int32_t hr, const char* context, bool& source_lost) {
+void HandleWgcAcquireException(SessionState& state, int32_t hr, const char* context, std::atomic<bool>& source_lost) {
     source_lost = true;
     char buf[160];
     switch (ClassifyWgcAcquireFailure(hr)) {
@@ -178,7 +178,7 @@ void HandleWgcAcquireException(SessionState& state, int32_t hr, const char* cont
 
 // Non-WinRT exceptions carry no HRESULT to classify. They still must not be
 // swallowed: the catch is a boundary, not a retry.
-void HandleWgcUnknownException(SessionState& state, const char* context, bool& source_lost) {
+void HandleWgcUnknownException(SessionState& state, const char* context, std::atomic<bool>& source_lost) {
     source_lost = true;
     char buf[160];
     snprintf(buf, sizeof(buf), "WGC %s: non-WinRT exception during frame acquire", context);
@@ -1010,7 +1010,6 @@ void VideoThread::Run() {
     VisualGenerations visualGenerations{};
     VisualFrameKey lastCompositedKey{};
     bool haveLastCompositedKey = false;
-    bool lastCursorCaptureEnabled = m_state.config.capture_cursor;
     uint64_t lastWebcamFrameGeneration = 0;
     bool haveWebcamFrameGeneration = false;
 
@@ -1576,7 +1575,7 @@ void VideoThread::Run() {
     };
 
     // --- WGC frame pool and session (Window-only path) ---
-    bool sourceLost = false;
+    std::atomic<bool> sourceLost{false};
     // OD recovery hold state (Recover branch, i.e. DXGI_ERROR_ACCESS_LOST). While
     // holding, the encode loop keeps emitting at CFR cadence (the last frame is
     // held, not black) and retries Reopen() on a throttle instead of blocking —
@@ -1670,6 +1669,25 @@ void VideoThread::Run() {
     winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool framePool{nullptr};
     winrt::Windows::Graphics::Capture::GraphicsCaptureSession captureSession{nullptr};
     winrt::event_token closedToken{};
+    // Revoked on every exit of this frame, not only the normal one at the end
+    // of the encode loop: the delegate writes to a local of this frame, and the
+    // early returns between the registration and that point (first-frame
+    // timeout, converter and compositor init failures) would otherwise leave it
+    // registered against a destroyed frame.
+    struct ClosedRevoker {
+        winrt::Windows::Graphics::Capture::GraphicsCaptureItem& item;
+        winrt::event_token& token;
+        ~ClosedRevoker() {
+            if (item && token) {
+                try {
+                    item.Closed(token);
+                } catch (...) {
+                    // Teardown of a source that may already be gone; nothing left to report.
+                }
+                token = {};
+            }
+        }
+    } closedRevoker{item, closedToken};
 
     if (!useOdCapture) {
         try {
@@ -2248,6 +2266,50 @@ void VideoThread::Run() {
                                            ? m_state.config.frame_rate_num / m_state.config.frame_rate_den
                                            : 60u;
 
+    // Publishes the codec private data the mux waits for from the first keyframe
+    // that carries it. One place for the live route and the flush drain, so a
+    // keyframe that only arrives in the drain gets the same extraction and the
+    // same diagnosis when it fails.
+    auto captureCodecPrivateFromKeyframe = [&](const EncodedVideoPacket& pkt) {
+        if (!pkt.keyframe)
+            return;
+        if (m_state.config.video_codec == VideoCodec::H264 && !h264CodecPrivateReady) {
+            std::vector<uint8_t> spsPps;
+            if (annexb::ExtractH264SpsAndPps(pkt.bytes.data(), pkt.bytes.size(), spsPps)) {
+                std::lock_guard lk(m_state.premux_mutex);
+                m_state.codec_private.h264_sps_pps = std::move(spsPps);
+                m_state.codec_private.h264_ready = true;
+                h264CodecPrivateReady = true;
+                m_state.premux_cv.notify_all();
+            }
+        } else if (m_state.config.video_codec == VideoCodec::Hevc && !hevcCodecPrivateReady) {
+            std::vector<uint8_t> vpsSpsPps;
+            if (annexb::ExtractHevcVpsSpsPps(pkt.bytes.data(), pkt.bytes.size(), vpsSpsPps)) {
+                std::lock_guard lk(m_state.premux_mutex);
+                m_state.codec_private.hevc_vps_sps_pps = std::move(vpsSpsPps);
+                m_state.codec_private.hevc_ready = true;
+                hevcCodecPrivateReady = true;
+                m_state.premux_cv.notify_all();
+            } else {
+                logging::log(logging::LogLevel::Warn, "video_thread", "HEVC VPS/SPS/PPS extraction failed on keyframe");
+            }
+        } else if (m_state.config.video_codec == VideoCodec::Av1 && !av1CodecPrivateReady) {
+            char reason[256] = {};
+            uint8_t cp[4] = {};
+            if (codec_private::DeriveAv1CodecPrivate(pkt.bytes.data(), pkt.bytes.size(), cp, reason, sizeof(reason))) {
+                std::lock_guard lk(m_state.premux_mutex);
+                std::memcpy(m_state.codec_private.av1_codec_private, cp, 4);
+                m_state.codec_private.av1_ready = true;
+                av1CodecPrivateReady = true;
+                m_state.premux_cv.notify_all();
+            } else {
+                logging::LogField fields[] = {{"reason", reason}};
+                logging::log(logging::LogLevel::Warn, "video_thread", "AV1 codec private derivation failed on keyframe",
+                             std::span<const logging::LogField>(fields, std::size(fields)));
+            }
+        }
+    };
+
     // Helper lambda: push an encoded packet to premux or mux queue.
     // Uses h264CodecPrivateReady, hevcCodecPrivateReady, and av1CodecPrivateReady by reference.
     auto routePacket = [&](EncodedVideoPacket pkt) -> bool {
@@ -2255,46 +2317,7 @@ void VideoThread::Run() {
         if (pkt.bytes.empty())
             return true;
 
-        if (pkt.keyframe) {
-            if (m_state.config.video_codec == VideoCodec::H264 && !h264CodecPrivateReady) {
-                std::vector<uint8_t> spsPps;
-                if (annexb::ExtractH264SpsAndPps(pkt.bytes.data(), pkt.bytes.size(), spsPps)) {
-                    std::lock_guard lk(m_state.premux_mutex);
-                    m_state.codec_private.h264_sps_pps = std::move(spsPps);
-                    m_state.codec_private.h264_ready = true;
-                    h264CodecPrivateReady = true;
-                    m_state.premux_cv.notify_all();
-                }
-            } else if (m_state.config.video_codec == VideoCodec::Hevc && !hevcCodecPrivateReady) {
-                std::vector<uint8_t> vpsSpsPps;
-                if (annexb::ExtractHevcVpsSpsPps(pkt.bytes.data(), pkt.bytes.size(), vpsSpsPps)) {
-                    std::lock_guard lk(m_state.premux_mutex);
-                    m_state.codec_private.hevc_vps_sps_pps = std::move(vpsSpsPps);
-                    m_state.codec_private.hevc_ready = true;
-                    hevcCodecPrivateReady = true;
-                    m_state.premux_cv.notify_all();
-                } else {
-                    logging::log(logging::LogLevel::Warn, "video_thread",
-                                 "HEVC VPS/SPS/PPS extraction failed on keyframe");
-                }
-            } else if (m_state.config.video_codec == VideoCodec::Av1 && !av1CodecPrivateReady) {
-                char reason[256] = {};
-                uint8_t cp[4] = {};
-                if (codec_private::DeriveAv1CodecPrivate(pkt.bytes.data(), pkt.bytes.size(), cp, reason,
-                                                         sizeof(reason))) {
-                    std::lock_guard lk(m_state.premux_mutex);
-                    std::memcpy(m_state.codec_private.av1_codec_private, cp, 4);
-                    m_state.codec_private.av1_ready = true;
-                    av1CodecPrivateReady = true;
-                    m_state.premux_cv.notify_all();
-                } else {
-                    logging::LogField fields[] = {{"reason", reason}};
-                    logging::log(logging::LogLevel::Warn, "video_thread",
-                                 "AV1 codec private derivation failed on keyframe",
-                                 std::span<const logging::LogField>(fields, std::size(fields)));
-                }
-            }
-        }
+        captureCodecPrivateFromKeyframe(pkt);
 
         {
             std::unique_lock lk(m_state.premux_mutex);
@@ -2935,10 +2958,6 @@ void VideoThread::Run() {
                         if (visibilityChanged || positionChanged)
                             ++visualGenerations.cursor;
                     }
-                    if (m_state.config.capture_cursor != lastCursorCaptureEnabled) {
-                        lastCursorCaptureEnabled = m_state.config.capture_cursor;
-                        ++visualGenerations.cursor;
-                    }
                     odSrc.ReleaseFrame();
                     if (diag_recording && acquireKind == OdAcquireKind::DesktopPresent)
                         m_state.diagnostics.OnFrameCaptured();
@@ -3235,7 +3254,8 @@ void VideoThread::Run() {
                     !haveLastCompositedKey ||
                     currentVisualKey.cursor_generation != lastCompositedKey.cursor_generation ||
                     currentVisualKey.overlay_generation != lastCompositedKey.overlay_generation;
-                const bool webcamMoved = m_state.SnapshotWebcamOverlay().enabled && webcamProviderAvailable &&
+                const WebcamOverlayLive overlay = m_state.SnapshotWebcamOverlay();
+                const bool webcamMoved = overlay.enabled && webcamProviderAvailable &&
                                          (!haveLastCompositedKey ||
                                           currentVisualKey.webcam_generation != lastCompositedKey.webcam_generation);
                 const bool dynamicOverlayChanged = cursorOverlayMoved || webcamMoved;
@@ -3247,7 +3267,6 @@ void VideoThread::Run() {
                 if (rawSourceTex != nullptr && hdrNativeActive) {
                     // Native HDR10: composite webcam/cursor in linear scRGB FP16,
                     // then convert straight into the P010 slot (colour + geometry).
-                    const WebcamOverlayLive overlay = m_state.SnapshotWebcamOverlay();
                     const auto comp_t0 = std::chrono::steady_clock::now();
                     ID3D11Texture2D* nativeSrc = compositeFrameGpu(rawSourceTex, overlay);
                     const auto comp_t1 = std::chrono::steady_clock::now();
@@ -3297,7 +3316,6 @@ void VideoThread::Run() {
                     haveLastCompositedKey = true;
                     m_state.diagnostics.OnFullComposition();
                 } else if (rawSourceTex != nullptr) {
-                    const WebcamOverlayLive overlay = m_state.SnapshotWebcamOverlay();
                     const auto comp_t0 = std::chrono::steady_clock::now();
                     ID3D11Texture2D* sdrSourceTex = toneMapIfHdr(rawSourceTex);
                     if (sdrSourceTex == nullptr) {
@@ -3591,10 +3609,6 @@ void VideoThread::Run() {
                         odCursorPosY = info.PointerPosition.Position.y;
                         if (visibilityChanged || positionChanged)
                             ++visualGenerations.cursor;
-                    }
-                    if (m_state.config.capture_cursor != lastCursorCaptureEnabled) {
-                        lastCursorCaptureEnabled = m_state.config.capture_cursor;
-                        ++visualGenerations.cursor;
                     }
                     // Convert DXGI LastPresentTime (QPC ticks) to 100ns units — only
                     // meaningful for a real desktop present.
@@ -3922,10 +3936,19 @@ void VideoThread::Run() {
                             m_state.diagnostics.OnVideoTickTime(
                                 tick_t1, std::chrono::duration<double, std::milli>(tick_t1 - tick_t0).count());
                         } else {
-                            latestTex = nullptr;
+                            // Acquired, never submitted: hand the slot back, or eight
+                            // such ticks leave the encoder with no free slot for the
+                            // rest of the session (the CFR path does the same, see
+                            // ClassifyCfrTickDrop).
+                            encoder->ReleaseSlot(slot);
+                            ++droppedFrames;
+                            m_state.diagnostics.OnFrameDroppedProcessingFailure();
                         }
                     } else {
                         latestTex = nullptr;
+                        encoder->ReleaseSlot(slot);
+                        ++droppedFrames;
+                        m_state.diagnostics.OnFrameDroppedProcessingFailure();
                     }
                 } else {
                     // No free slot — drop the frame and skip
@@ -3959,6 +3982,7 @@ end_encode_loop:
             }
             try {
                 item.Closed(closedToken);
+                closedToken = {};
             } catch (...) {
                 // Teardown, and deliberately silent: the session has already
                 // ended, the file is finalized below, and a revoke/Close that
@@ -3985,38 +4009,7 @@ end_encode_loop:
 
             const size_t drain_bytes = pkt.bytes.size();
 
-            if (pkt.keyframe) {
-                if (m_state.config.video_codec == VideoCodec::H264 && !h264CodecPrivateReady) {
-                    std::vector<uint8_t> spsPps;
-                    if (annexb::ExtractH264SpsAndPps(pkt.bytes.data(), pkt.bytes.size(), spsPps)) {
-                        std::lock_guard lk(m_state.premux_mutex);
-                        m_state.codec_private.h264_sps_pps = std::move(spsPps);
-                        m_state.codec_private.h264_ready = true;
-                        h264CodecPrivateReady = true;
-                        m_state.premux_cv.notify_all();
-                    }
-                } else if (m_state.config.video_codec == VideoCodec::Hevc && !hevcCodecPrivateReady) {
-                    std::vector<uint8_t> vpsSpsPps;
-                    if (annexb::ExtractHevcVpsSpsPps(pkt.bytes.data(), pkt.bytes.size(), vpsSpsPps)) {
-                        std::lock_guard lk(m_state.premux_mutex);
-                        m_state.codec_private.hevc_vps_sps_pps = std::move(vpsSpsPps);
-                        m_state.codec_private.hevc_ready = true;
-                        hevcCodecPrivateReady = true;
-                        m_state.premux_cv.notify_all();
-                    }
-                } else if (m_state.config.video_codec == VideoCodec::Av1 && !av1CodecPrivateReady) {
-                    char reason[256] = {};
-                    uint8_t cp[4] = {};
-                    if (codec_private::DeriveAv1CodecPrivate(pkt.bytes.data(), pkt.bytes.size(), cp, reason,
-                                                             sizeof(reason))) {
-                        std::lock_guard lk(m_state.premux_mutex);
-                        std::memcpy(m_state.codec_private.av1_codec_private, cp, 4);
-                        m_state.codec_private.av1_ready = true;
-                        av1CodecPrivateReady = true;
-                        m_state.premux_cv.notify_all();
-                    }
-                }
-            }
+            captureCodecPrivateFromKeyframe(pkt);
 
             {
                 std::unique_lock lk(m_state.premux_mutex);

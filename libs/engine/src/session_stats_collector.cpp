@@ -125,6 +125,21 @@ void SessionStatsCollector::Stop() {
     m_stop.store(true);
     if (m_thread.joinable())
         m_thread.join();
+    // A pause still open when the session ends was never added to paused_ns
+    // (the loop above only books a window when it sees it close), so a failure
+    // raised while paused counted the whole paused stretch as recorded time.
+    // The window ends where the capture did, not where this join returned.
+    if (m_paused_since) {
+        const auto capture_end_ns = m_state.capture_end_ns.load();
+        const auto end = capture_end_ns > 0
+                             ? std::chrono::steady_clock::time_point(std::chrono::nanoseconds(capture_end_ns))
+                             : std::chrono::steady_clock::now();
+        if (end > *m_paused_since) {
+            m_state.paused_ns.fetch_add(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(end - *m_paused_since).count());
+        }
+        m_paused_since.reset();
+    }
 }
 
 void SessionStatsCollector::AccumulatePause(std::chrono::steady_clock::time_point now) {
