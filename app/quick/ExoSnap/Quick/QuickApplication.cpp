@@ -4108,13 +4108,20 @@ void QuickApplication::initializeShell() {
     // until now indistinguishable in a support bundle too.
     QObject::connect(
         &shell_adapter_, &ShellAdapter::closeDecided, &shell_adapter_,
-        [this](const QString& kind, bool recording, bool exporting, bool remuxing) {
-            diagnostics::AppLog::info(QStringLiteral("shell"),
-                                      QStringLiteral("close requested -> %1 (recording=%2 exporting=%3 remuxing=%4)")
-                                          .arg(kind)
-                                          .arg(recording ? 1 : 0)
-                                          .arg(exporting ? 1 : 0)
-                                          .arg(remuxing ? 1 : 0));
+        [this](const QString& kind, bool recording, bool exporting, bool remuxing, bool finalizing) {
+            // Every flag the decision could have been made from, including the one
+            // that decides silently: a finalize blocks the close with no prompt and
+            // no visible change, so a line that named only the other three reported
+            // three zeroes next to a refusal and pointed the reader away from the
+            // reason.
+            diagnostics::AppLog::info(
+                QStringLiteral("shell"),
+                QStringLiteral("close requested -> %1 (recording=%2 exporting=%3 remuxing=%4 finalizing=%5)")
+                    .arg(kind)
+                    .arg(recording ? 1 : 0)
+                    .arg(exporting ? 1 : 0)
+                    .arg(remuxing ? 1 : 0)
+                    .arg(finalizing ? 1 : 0));
             // An APPROVED close ends the process, and does so explicitly rather than
             // leaving it to quitOnLastWindowClosed. Qt quits when the last visible
             // "primary window (i.e. top level window with no transient parent)"

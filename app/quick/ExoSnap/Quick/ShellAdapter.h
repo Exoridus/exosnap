@@ -136,7 +136,7 @@ class ShellAdapter : public QObject {
     // otherwise leaves nothing behind that says whether the product refused, asked
     // something nobody saw, or failed to tear down. `kind` is one of the
     // CloseGuardKind keys.
-    void closeDecided(const QString& kind, bool recording, bool exporting, bool remuxing);
+    void closeDecided(const QString& kind, bool recording, bool exporting, bool remuxing, bool finalizing);
     // Effects the application must apply. Emitted rather than executed here so
     // the adapter keeps no service references.
     void cancelRemuxRequested();

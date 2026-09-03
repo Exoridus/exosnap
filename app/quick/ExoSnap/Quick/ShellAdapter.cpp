@@ -116,7 +116,8 @@ bool ShellAdapter::requestClose() {
     // dependency surface. The application logs it, which is also where the other
     // half of the story lives -- the tray Quit that asked for the close.
     const auto report = [this, &state](const char* kind) {
-        emit closeDecided(QString::fromLatin1(kind), state.recording, state.exporting, state.remuxing);
+        emit closeDecided(QString::fromLatin1(kind), state.recording, state.exporting, state.remuxing,
+                          state.finalizing);
     };
 
     switch (prompt.kind) {
@@ -190,7 +191,7 @@ void ShellAdapter::confirmCloseGuard() {
         // requestClose(), which is where every other outcome is reported.
         const CloseGuardState allowed = currentState();
         emit closeDecided(QString::fromLatin1(CloseGuardKindKey(CloseGuardKind::Allow)), allowed.recording,
-                          allowed.exporting, allowed.remuxing);
+                          allowed.exporting, allowed.remuxing, allowed.finalizing);
         emit closeApproved();
     }
     // BlockSilently: a finalize started while the dialog was up. Keeping the

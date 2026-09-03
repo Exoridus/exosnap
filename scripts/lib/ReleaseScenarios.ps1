@@ -34,6 +34,38 @@
     composition that no screenshot of ours can show.
 #>
 
+# ---------------------------------------------------------------------------
+# probe_stall_window -- the capture target that stalls on purpose
+# ---------------------------------------------------------------------------
+
+function Resolve-StallWindowProbe {
+    <#
+    .SYNOPSIS
+        Locates probe_stall_window.exe, or returns $null.
+    .DESCRIPTION
+        Returns $null rather than throwing, exactly like Resolve-EnvctlPath: the
+        probe is a developer build artifact (-DEXOSNAP_BUILD_PROBES=ON) and a
+        machine without it can still run the scenario -- as the operator gate it
+        has always been. Its absence is a statement about the build tree, never
+        about the product.
+    #>
+    if ($env:EXOSNAP_STALL_PROBE -and (Test-Path -LiteralPath $env:EXOSNAP_STALL_PROBE)) {
+        return (Get-Item -LiteralPath $env:EXOSNAP_STALL_PROBE).FullName
+    }
+    $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+    $candidates = @(
+        'build/windows-x64-release/tools/probes/probe_stall_window/Release/probe_stall_window.exe',
+        'build/windows-x64-debug/tools/probes/probe_stall_window/Debug/probe_stall_window.exe',
+        'build/windows-x64-ninja-release/tools/probes/probe_stall_window/probe_stall_window.exe',
+        'build/windows-x64-ninja-debug/tools/probes/probe_stall_window/probe_stall_window.exe'
+    )
+    foreach ($candidate in $candidates) {
+        $full = Join-Path $root $candidate
+        if (Test-Path -LiteralPath $full) { return (Get-Item -LiteralPath $full).FullName }
+    }
+    return $null
+}
+
 function Get-ReleaseScenarioCatalog {
     $catalog = @()
 
@@ -598,13 +630,21 @@ function Get-ReleaseScenarioCatalog {
                 Why               = 'A genuine WGC stall means the compositor stops producing frames for a window. ' +
                 'There is no product seam that fakes one, and injecting a fake would test the injection rather ' +
                 'than the detector.'
+                # The shape matters, and the earlier wording asked for the one case
+                # the product deliberately stays silent about. Per the capture-stall
+                # section of docs/product-spec.md the notice requires a window that is
+                # fullscreen-shaped, alive, visible and NOT minimized: a minimized or
+                # captioned window that stops producing frames is supposed to be
+                # silent, so an operator following the old steps could only ever
+                # produce a FAIL that looked like a product regression.
                 Do                = @(
-                    'Pick an application window and select it as the capture target in ExoSnap.',
-                    'Start recording it.',
-                    'Minimise that window and leave it minimised for at least 15 seconds.'
+                    'Start an application in BORDERLESS fullscreen (no caption, covering the whole monitor).',
+                    'Select that window as the capture target in ExoSnap and start recording it.',
+                    'Make its content stop changing for at least 15 seconds (pause the video, leave it at rest).',
+                    'Do NOT minimise it: a minimized window is documented to stay silent.'
                 )
-                Expected          = 'A standing warning appears saying the capture produced no frames. The ' +
-                'recording keeps running and the transport controls keep working.'
+                Expected          = 'After about ten seconds a standing caution appears saying the window capture ' +
+                'appears to have stalled. The recording keeps running and the transport controls keep working.'
                 VerifyDescription = 'This runner reads notifications.snapshot and pipeline.snapshot. It requires ' +
                 'a standing capture-stall notification, a recording still in Recording or Paused, and it checks ' +
                 'that the stall is NOT explained as exclusive fullscreen unless pipeline.snapshot actually ' +
@@ -662,7 +702,167 @@ function Get-ReleaseScenarioCatalog {
                 }
             }
             [void]$windows
-            return & $ctx.HumanGate $gate
+
+            # Automated path: the probe owns a window, shows it without taking
+            # focus, and minimises ITSELF on a timer. Every step the gate used to
+            # ask an operator for is then a documented API call on a window this
+            # campaign created -- no synthesised input, no foreign window, and the
+            # same Verify block decides either way.
+            $probe = Resolve-StallWindowProbe
+            if ($null -eq $probe) {
+                return & $ctx.HumanGate $gate
+            }
+
+            # freeze, not minimise: the probe becomes a borderless window covering the
+            # monitor and then stops repainting, which is the one shape the product
+            # reports (docs/product-spec.md). REL-CAP-QUIET-001 covers the silent case.
+            $stallAfter = 8
+            $probeProcess = Start-Process -FilePath $probe -PassThru -WindowStyle Normal `
+                -ArgumentList @('--mode', 'freeze', '--stall-after', "$stallAfter", '--seconds', '90')
+            try {
+                # The window has to exist before it can be selected, and the app
+                # enumerates windows when asked to select rather than watching for
+                # new ones. record.snapshot carries no target list, so the selection
+                # confirms itself: sourceName is what the app resolved the filter to.
+                $selected = $false
+                $sourceName = ''
+                $deadline = [DateTime]::UtcNow.AddSeconds(20)
+                while ([DateTime]::UtcNow -lt $deadline) {
+                    [void](Invoke-LiveVerifyCommand -Connection $conn -Command 'record.selectTarget' `
+                            -Parameters @{ kind = 'window'; titleFilter = 'ExoSnap stall probe' })
+                    $snapshot = (Invoke-LiveVerifyCommand -Connection $conn -Command 'record.snapshot').result
+                    $sourceName = "$(Get-ReleaseSnapshotValue -Object $snapshot -Path 'sourceName')"
+                    if ($sourceName -match 'stall probe') { $selected = $true; break }
+                    Start-Sleep -Milliseconds 500
+                }
+                if (-not $selected) {
+                    return @{ Result = 'UNVERIFIED'
+                        Message      = "the stall probe window was never selectable (source stayed '$sourceName')"
+                    }
+                }
+                $started = Invoke-LiveVerifyCommand -Connection $conn -Command 'record.start'
+                if (-not $started) {
+                    return @{ Result = 'FAIL'; Message = 'record.start returned nothing for the probe window' }
+                }
+                # Frames first, then the stall: a capture that never produced a
+                # frame would satisfy "no frames" for the wrong reason.
+                # The detector needs ten seconds without frame progress before it says
+                # anything (product spec), so the wait has to outlast that.
+                Start-Sleep -Seconds ($stallAfter + 13)
+
+                $verdict = & $gate.Verify $ctx $gate
+                if ($null -eq $verdict) {
+                    return @{ Result = 'UNVERIFIED'; Message = 'the stall verification returned nothing' }
+                }
+                if ($verdict.Ok) {
+                    return @{ Result = 'PASS'; Message = "[probe] $($verdict.Detail)"; Evidence = $verdict.Evidence }
+                }
+                return @{ Result = 'FAIL'; Message = $verdict.Detail; Evidence = $verdict.Evidence }
+            } finally {
+                try { [void](Invoke-LiveVerifyCommand -Connection $conn -Command 'record.stop') } catch { }
+                if ($null -ne $probeProcess -and -not $probeProcess.HasExited) {
+                    $probeProcess.Kill()
+                }
+            }
+        }
+    }
+
+    # The other half of the capture-stall contract, and the reason the scenario
+    # above had to be corrected: a minimized window is SUPPOSED to stop producing
+    # frames, so warning about it would be a false alarm about a state the user
+    # created. Silence is the documented behaviour (docs/product-spec.md), and a
+    # contract that is only ever satisfied by doing nothing is exactly the kind
+    # that rots unnoticed.
+    $catalog += [pscustomobject]@{
+        Id                  = 'REL-CAP-QUIET-001'
+        Title               = 'A minimized window stalls silently and the recording carries on'
+        Class               = 'capture'
+        Layer               = 'FULL_AUTO'
+        Source              = 'docs/product-spec.md (capture stall); QCR-804'
+        ArtifactBound       = $true
+        RequiresInstallTree = $false
+        EnvironmentKeys     = @()
+        Requires            = @{}
+        Desired             = @{}
+        OptIn               = $true
+        Run                 = {
+            param($ctx)
+            $probe = Resolve-StallWindowProbe
+            if ($null -eq $probe) {
+                return @{ Result = 'UNAVAILABLE'
+                    Message      = 'probe_stall_window is not built (-DEXOSNAP_BUILD_PROBES=ON)'
+                }
+            }
+            $session = & $ctx.EnsureSession
+            $conn = $session.Connection
+            $stallAfter = 8
+            $probeProcess = Start-Process -FilePath $probe -PassThru -WindowStyle Normal `
+                -ArgumentList @('--mode', 'minimise', '--stall-after', "$stallAfter", '--seconds', '90')
+            try {
+                $selected = $false
+                $sourceName = ''
+                $deadline = [DateTime]::UtcNow.AddSeconds(20)
+                while ([DateTime]::UtcNow -lt $deadline) {
+                    [void](Invoke-LiveVerifyCommand -Connection $conn -Command 'record.selectTarget' `
+                            -Parameters @{ kind = 'window'; titleFilter = 'ExoSnap stall probe' })
+                    $snapshot = (Invoke-LiveVerifyCommand -Connection $conn -Command 'record.snapshot').result
+                    $sourceName = "$(Get-ReleaseSnapshotValue -Object $snapshot -Path 'sourceName')"
+                    if ($sourceName -match 'stall probe') { $selected = $true; break }
+                    Start-Sleep -Milliseconds 500
+                }
+                if (-not $selected) {
+                    return @{ Result = 'UNVERIFIED'
+                        Message      = "the probe window was never selectable (source stayed '$sourceName')"
+                    }
+                }
+                [void](Invoke-LiveVerifyCommand -Connection $conn -Command 'record.start')
+                Start-Sleep -Seconds ($stallAfter + 13)
+
+                # Silence only means something once the capture has actually stopped
+                # producing frames. Two samples four seconds apart establish that,
+                # so this can never pass by measuring a healthy recording.
+                $first = (Invoke-LiveVerifyCommand -Connection $conn -Command 'pipeline.snapshot').result
+                $framesFirst = [int](Get-ReleaseSnapshotValue -Object $first -Path 'capture.framesCaptured')
+                Start-Sleep -Seconds 4
+                $second = (Invoke-LiveVerifyCommand -Connection $conn -Command 'pipeline.snapshot').result
+                $framesSecond = [int](Get-ReleaseSnapshotValue -Object $second -Path 'capture.framesCaptured')
+                $notifications = (Invoke-LiveVerifyCommand -Connection $conn -Command 'notifications.snapshot').result
+                $evidence = @(
+                    Save-LiveVerifyEvidence -Context $ctx -CheckId 'REL-CAP-QUIET-001' -Name 'pipeline.json' -Value $second
+                    Save-LiveVerifyEvidence -Context $ctx -CheckId 'REL-CAP-QUIET-001' -Name 'notifications.json' -Value $notifications
+                )
+                if ($framesSecond -ne $framesFirst) {
+                    return @{ Result = 'UNVERIFIED'
+                        Message      = "the minimized window kept producing frames ($framesFirst -> $framesSecond); " +
+                        'nothing was silent about'
+                        Evidence     = $evidence
+                    }
+                }
+                $stall = @(Get-ReleaseNotificationEntry -Snapshot $notifications |
+                    Where-Object { "$($_.title) $($_.body)" -match 'stall|no frame' }) | Select-Object -First 1
+                if ($null -ne $stall) {
+                    return @{ Result = 'FAIL'
+                        Message      = "a minimized window raised '$($stall.title)'; it is documented to stay silent"
+                        Evidence     = $evidence
+                    }
+                }
+                $lifecycle = "$(Get-ReleaseSnapshotValue -Object $second -Path 'lifecycle')"
+                if ($lifecycle -notin @('recording', 'paused')) {
+                    return @{ Result = 'FAIL'
+                        Message      = "the recording left the running lifecycle ($lifecycle) while the window was minimized"
+                        Evidence     = $evidence
+                    }
+                }
+                return @{ Result = 'PASS'
+                    Message      = "frames held at $framesSecond for 4 s with no notification, lifecycle $lifecycle"
+                    Evidence     = $evidence
+                }
+            } finally {
+                try { [void](Invoke-LiveVerifyCommand -Connection $conn -Command 'record.stop') } catch { }
+                if ($null -ne $probeProcess -and -not $probeProcess.HasExited) {
+                    $probeProcess.Kill()
+                }
+            }
         }
     }
 
