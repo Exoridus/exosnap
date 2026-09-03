@@ -2,6 +2,7 @@
 
 #include <d3dcompiler.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 
@@ -36,6 +37,8 @@ SamplerState srcSamp : register(s0);
 cbuffer PqConstants : register(b0) {
     float4 cropOriginSize; // xy = crop origin, zw = crop size (normalised source)
     float4 flags;          // x = inputIsPq (0 = scRGB FP16, 1 = already PQ R'G'B')
+                           // y = half a luma pixel in crop-normalised texcoord x, so the
+                           //     chroma pass samples left-sited like every other path
 };
 
 static const float kM1 = 2610.0f / 16384.0f;
@@ -103,7 +106,11 @@ float main(float4 position : SV_POSITION, float2 texcoord : TEXCOORD0) : SV_TARG
 
 const char* kChromaShaderSrc = R"(
 float2 main(float4 position : SV_POSITION, float2 texcoord : TEXCOORD0) : SV_TARGET {
-    float3 rp = SampleEncoded(texcoord);
+    // A half-resolution pass over the full texcoord range lands each chroma
+    // sample on the boundary between two luma columns (centre-sited). Shifting
+    // by half a luma pixel puts it on the left column, matching the SDR path
+    // and the siting the container declares.
+    float3 rp = SampleEncoded(texcoord - float2(flags.y, 0.0f));
     float y = kKr * rp.r + kKg * rp.g + kKb * rp.b;
     float cb = (rp.b - y) / (2.0f * (1.0f - kKb));
     float cr = (rp.r - y) / (2.0f * (1.0f - kKr));
@@ -202,6 +209,7 @@ bool HdrPqConverter::Init(ID3D11Device* device, ID3D11DeviceContext* context, co
     pc.crop_origin_size[2] = static_cast<float>(geom.src_crop_w) / static_cast<float>(geom.src_width);
     pc.crop_origin_size[3] = static_cast<float>(geom.src_crop_h) / static_cast<float>(geom.src_height);
     pc.flags[0] = input_is_pq ? 1.0f : 0.0f;
+    pc.flags[1] = 0.5f / static_cast<float>(std::max<uint32_t>(1u, geom.src_crop_w));
 
     D3D11_BUFFER_DESC const_desc{};
     const_desc.ByteWidth = sizeof(PqConstants);

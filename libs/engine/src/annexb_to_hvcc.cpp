@@ -465,6 +465,9 @@ bool ConvertAnnexBToHevcSample(const uint8_t* data, size_t size, std::vector<uin
     for (const auto& nal : nals) {
         if (nal.nal_type == kHevcNalAud) // AUD — excluded from sample payload
             continue;
+        // VPS/SPS/PPS live in hvcC; the hvc1 sample form carries none in band.
+        if (nal.nal_type == 32u || nal.nal_type == 33u || nal.nal_type == 34u)
+            continue;
         if (nal.payload_size == 0)
             continue;
         const uint32_t len = static_cast<uint32_t>(nal.payload_size);

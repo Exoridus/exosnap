@@ -487,6 +487,16 @@ exosnap_add_gtest(
 )
 target_include_directories(test_codec_private_readiness PRIVATE src)
 
+# The AV1CodecConfigurationRecord written as V_AV1 CodecPrivate: fixed bytes
+# plus the Sequence Header OBU as configOBUs. Pure parsing, no hardware.
+exosnap_add_gtest(
+    NAME test_av1_codec_private
+    TEST_PREFIX engine.
+    SOURCES tests/test_av1_codec_private.cpp
+    LIBRARIES exosnap_engine
+)
+target_include_directories(test_av1_codec_private PRIVATE src)
+
 # Two-phase worker shutdown wait (worker_join.h): guards against the
 # max-recording-duration defect where the join budget started at recording
 # START instead of STOP. Header-only logic exercised with real std::threads.

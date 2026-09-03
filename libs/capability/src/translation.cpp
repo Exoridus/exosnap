@@ -108,6 +108,8 @@ exosnap::engine::RecorderConfig ToRecorderCoreConfig(const UserRecorderConfig& c
     // Primaries/transfer/matrix stay BT.709 SDR (the ColorMetadata defaults).
     core_config.color.range = (final_config.color_range == ColorRange::Limited) ? exosnap::engine::ColorRange::Limited
                                                                                 : exosnap::engine::ColorRange::Full;
+    // A 10-bit SDR stream is still 10-bit; only the HDR10 path set this before.
+    core_config.color.bits_per_channel = (final_config.bit_depth == BitDepth::Bit10) ? 10u : 8u;
     // HDR mode passes straight through — the same exosnap::engine::HdrMode enum
     // is shared by UserRecorderConfig and RecorderConfig, so there is no
     // per-value mapping to do. No BT.2020/PQ ColorMetadata is derived here

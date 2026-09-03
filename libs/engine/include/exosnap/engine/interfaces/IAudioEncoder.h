@@ -32,6 +32,15 @@ class IAudioEncoder {
     // Valid after the first FeedFloat32() call that produces output.
     virtual std::vector<uint8_t> CodecPrivateBytes() const = 0;
 
+    // Samples of encoder priming at the start of the stream, in the output
+    // sample rate: what a decoder discards before the first real sample. The
+    // container declares it (Matroska CodecDelay) and stores block timestamps
+    // shifted by it, so the first audible sample lands on the timeline origin.
+    // 0 for codecs without priming (PCM, FLAC).
+    [[nodiscard]] virtual uint32_t CodecDelaySamples() const noexcept {
+        return 0;
+    }
+
     virtual void Shutdown() = 0;
 };
 

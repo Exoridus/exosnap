@@ -271,6 +271,7 @@ void AudioThread::Run() {
         }
         std::lock_guard lk(m_state.premux_mutex);
         m_state.codec_private.audio_codec_private[track_id_].bytes = std::move(cp);
+        m_state.codec_private.audio_codec_private[track_id_].codec_delay_samples = encoder.CodecDelaySamples();
         m_state.codec_private.audio_track_ready[track_id_] = true;
         m_state.premux_cv.notify_all();
     }

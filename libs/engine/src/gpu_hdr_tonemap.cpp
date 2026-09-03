@@ -38,7 +38,31 @@ cbuffer ToneMapConstants : register(b0) {
     float4 params; // x = peakScale (reference-white multiples that map to 1.0)
                    // y = 1.0 when the source is an SDR scRGB (Advanced Color)
                    //     desktop: clamp + sRGB OETF, no roll-off
+                   // z = SDR paper-white scale
+                   // w = 1.0 when the source is PQ-encoded BT.2020 (R10G10B10A2)
+                   //     rather than linear scRGB: decoded to scRGB first
 };
+
+static const float kPqM1 = 2610.0f / 16384.0f;
+static const float kPqM2 = 2523.0f / 4096.0f * 128.0f;
+static const float kPqC1 = 3424.0f / 4096.0f;
+static const float kPqC2 = 2413.0f / 4096.0f * 32.0f;
+static const float kPqC3 = 2392.0f / 4096.0f * 32.0f;
+
+// ST 2084 EOTF: PQ code (0..1) -> linear light in scRGB units (1.0 == 80 nits).
+float PqToScRgb(float n) {
+    n = saturate(n);
+    float p = pow(n, 1.0f / kPqM2);
+    float l = pow(max(p - kPqC1, 0.0f) / (kPqC2 - kPqC3 * p), 1.0f / kPqM1);
+    return l * 10000.0f / 80.0f;
+}
+
+// BT.2020 -> BT.709 primaries, linear light.
+float3 Bt2020ToBt709(float3 c) {
+    return float3(1.6605f * c.r - 0.5876f * c.g - 0.0728f * c.b,
+                  -0.1246f * c.r + 1.1329f * c.g - 0.0083f * c.b,
+                  -0.0182f * c.r - 0.1006f * c.g + 1.1187f * c.b);
+}
 
 static const float kKnee = 0.80f;
 
@@ -61,6 +85,9 @@ float SrgbOetf(float l) {
 
 float4 main(float4 position : SV_POSITION, float2 texcoord : TEXCOORD0) : SV_TARGET {
     float4 c = srcTex.Sample(srcSamp, texcoord);
+    if (params.w > 0.5f) {
+        c.rgb = Bt2020ToBt709(float3(PqToScRgb(c.r), PqToScRgb(c.g), PqToScRgb(c.b)));
+    }
     if (params.y > 0.5f) {
         // SDR scRGB desktop: content already ends at reference white (1.0), so
         // only the transfer is applied and the roll-off is skipped.
@@ -94,7 +121,7 @@ void SetHResultError(std::string& err, const char* what, HRESULT hr) {
 } // namespace
 
 bool HdrToneMapper::Init(ID3D11Device* device, ID3D11DeviceContext* context, UINT width, UINT height, float peak_scale,
-                         bool sdr_scrgb_source, std::string& err, float paper_white_scale) {
+                         bool sdr_scrgb_source, std::string& err, float paper_white_scale, bool pq_source) {
     if (device == nullptr || context == nullptr || width == 0 || height == 0) {
         err = "HdrToneMapper::Init invalid arguments";
         return false;
@@ -160,6 +187,7 @@ bool HdrToneMapper::Init(ID3D11Device* device, ID3D11DeviceContext* context, UIN
     // reproduce" -- so there is nothing to undo there, and dividing would darken
     // a picture that measures correct today.
     pc.params[2] = sdr_scrgb_source ? 1.0f : (paper_white_scale > 1.0f ? paper_white_scale : 1.0f);
+    pc.params[3] = pq_source ? 1.0f : 0.0f;
 
     D3D11_BUFFER_DESC const_desc{};
     const_desc.ByteWidth = sizeof(ToneMapConstants);
@@ -181,8 +209,13 @@ ID3D11ShaderResourceView* HdrToneMapper::SrvFor(ID3D11Texture2D* tex, std::strin
     if (it != srv_cache_.end()) {
         return it->second.get();
     }
+    // The source is FP16 scRGB or, when duplication offered no FP16 surface on
+    // an HDR desktop, PQ-encoded R10G10B10A2; the view takes the texture's own
+    // format either way.
+    D3D11_TEXTURE2D_DESC tex_desc{};
+    tex->GetDesc(&tex_desc);
     D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc{};
-    srv_desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    srv_desc.Format = tex_desc.Format;
     srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
     srv_desc.Texture2D.MipLevels = 1;
     winrt::com_ptr<ID3D11ShaderResourceView> srv;

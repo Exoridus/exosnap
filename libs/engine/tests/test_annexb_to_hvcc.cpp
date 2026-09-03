@@ -655,7 +655,9 @@ TEST(AnnexBHvccTest, ConvertSample_MultipleNalsAllLengthPrefixed) {
         ++nal_count;
     }
     EXPECT_EQ(pos, out.size()) << "output is not a valid length-prefixed sequence";
-    EXPECT_EQ(nal_count, 3); // VPS + SPS + IDR
+    // VPS and SPS belong to hvcC and are dropped from the sample: only the IDR
+    // slice remains.
+    EXPECT_EQ(nal_count, 1);
 }
 
 TEST(AnnexBHvccTest, ConvertSample_ReturnsFalseWhenOnlyAudPresent) {

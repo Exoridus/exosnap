@@ -101,6 +101,7 @@ bool OpusAudioEncoder::Init(uint32_t sample_rate, uint32_t channels, std::string
     uint8_t opus_head[19] = {};
     codec_private::BuildOpusCodecPrivate(sample_rate, channels, static_cast<uint16_t>(lookahead), opus_head);
     m_codec_private.assign(opus_head, opus_head + 19);
+    m_codec_delay_samples = static_cast<uint32_t>(lookahead);
 
     m_sample_rate = sample_rate;
     m_channels = channels;

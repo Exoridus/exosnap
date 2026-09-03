@@ -63,11 +63,13 @@ struct MuxItem {
 
 struct AudioCodecPrivateSlot {
     std::vector<uint8_t> bytes;
+    uint32_t codec_delay_samples = 0; // IAudioEncoder::CodecDelaySamples
 };
 
 struct CodecPrivateData {
-    // AV1: 4-byte AV1CodecConfigurationRecord (for WebM/MKV)
-    uint8_t av1_codec_private[4] = {};
+    // AV1: AV1CodecConfigurationRecord (4 fixed bytes + the Sequence Header OBU
+    // as configOBUs), as Matroska's V_AV1 mapping defines CodecPrivate.
+    std::vector<uint8_t> av1_codec_private;
     bool av1_ready = false;
 
     // H264: SPS+PPS in Annex-B (for MF_MT_MPEG_SEQUENCE_HEADER in IMFSinkWriter)

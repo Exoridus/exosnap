@@ -336,8 +336,8 @@ bool ParseSequenceHeaderObu(const uint8_t* obu_payload, size_t obu_size, uint32_
 // DeriveAv1CodecPrivate — public
 // ---------------------------------------------------------------------------
 
-bool DeriveAv1CodecPrivate(const uint8_t* bitstream_data, size_t bitstream_size, uint8_t out_av1_codec_private[4],
-                           char* reason_buf, size_t reason_buf_size) {
+bool DeriveAv1CodecPrivate(const uint8_t* bitstream_data, size_t bitstream_size,
+                           std::vector<uint8_t>& out_av1_codec_private, char* reason_buf, size_t reason_buf_size) {
     if (bitstream_data == nullptr || bitstream_size == 0) {
         snprintf(reason_buf, reason_buf_size, "empty bitstream");
         return false;
@@ -349,9 +349,11 @@ bool DeriveAv1CodecPrivate(const uint8_t* bitstream_data, size_t bitstream_size,
     // Scan OBUs for Sequence Header (type 1)
     const uint8_t* obu_payload = nullptr;
     size_t obu_payload_size = 0;
+    size_t obu_start = 0;
     size_t i = 0;
 
     while (i < bsLen) {
+        obu_start = i;
         uint8_t header_byte = bs[i++];
         uint32_t obu_type = (header_byte >> 3) & 0x0F;
         uint32_t extension_flag = (header_byte >> 2) & 0x1;
@@ -413,45 +415,18 @@ bool DeriveAv1CodecPrivate(const uint8_t* bitstream_data, size_t bitstream_size,
         return false;
 
     // Build AV1CodecConfigurationRecord (4 bytes)
-    out_av1_codec_private[0] = 0x81; // marker=1, version=1
-    out_av1_codec_private[1] = static_cast<uint8_t>((seq_profile << 5) | (seq_level_idx_0 & 0x1F));
-    out_av1_codec_private[2] =
-        static_cast<uint8_t>((seq_tier_0 << 7) | (high_bitdepth << 6) | (twelve_bit << 5) | (mono_chrome << 4) |
-                             (subsampling_x << 3) | (subsampling_y << 2) | (chroma_sample_position & 0x03));
-    out_av1_codec_private[3] = 0x00;
-    return true;
-}
-
-// ---------------------------------------------------------------------------
-// DeriveAacCodecPrivate — public
-// ---------------------------------------------------------------------------
-
-bool DeriveAacCodecPrivate(IMFMediaType* output_media_type, uint8_t out_aac_codec_private[2], char* reason_buf,
-                           size_t reason_buf_size) {
-    if (output_media_type == nullptr) {
-        snprintf(reason_buf, reason_buf_size, "output_media_type is null");
-        return false;
-    }
-
-    UINT32 blobSize = 0;
-    HRESULT hr = output_media_type->GetBlobSize(MF_MT_USER_DATA, &blobSize);
-    if (FAILED(hr) || blobSize < 14) {
-        snprintf(reason_buf, reason_buf_size, "MF_MT_USER_DATA missing or too small (blobSize=%u, hr=0x%08lX)",
-                 blobSize, static_cast<unsigned long>(hr));
-        return false;
-    }
-
-    std::vector<BYTE> blob(blobSize);
-    hr = output_media_type->GetBlob(MF_MT_USER_DATA, blob.data(), blobSize, nullptr);
-    if (FAILED(hr)) {
-        snprintf(reason_buf, reason_buf_size, "GetBlob(MF_MT_USER_DATA) failed 0x%08lX",
-                 static_cast<unsigned long>(hr));
-        return false;
-    }
-
-    // AudioSpecificConfig starts at offset 12 (after 12-byte HEAACWAVEINFO tail)
-    out_aac_codec_private[0] = blob[12];
-    out_aac_codec_private[1] = blob[13];
+    out_av1_codec_private.clear();
+    out_av1_codec_private.reserve(4 + (obu_payload + obu_payload_size - (bs + obu_start)));
+    out_av1_codec_private.push_back(0x81); // marker=1, version=1
+    out_av1_codec_private.push_back(static_cast<uint8_t>((seq_profile << 5) | (seq_level_idx_0 & 0x1F)));
+    out_av1_codec_private.push_back(static_cast<uint8_t>((seq_tier_0 << 7) | (high_bitdepth << 6) | (twelve_bit << 5) |
+                                                         (mono_chrome << 4) | (subsampling_x << 3) |
+                                                         (subsampling_y << 2) | (chroma_sample_position & 0x03)));
+    out_av1_codec_private.push_back(0x00); // initial_presentation_delay_present = 0
+    // configOBUs: the Sequence Header OBU itself (header, size field, payload),
+    // so a demuxer can set up the decoder from CodecPrivate alone -- the
+    // in-band copy only travels with keyframes.
+    out_av1_codec_private.insert(out_av1_codec_private.end(), bs + obu_start, obu_payload + obu_payload_size);
     return true;
 }
 

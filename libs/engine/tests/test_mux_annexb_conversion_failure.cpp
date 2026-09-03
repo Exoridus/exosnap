@@ -46,6 +46,7 @@ std::vector<uint8_t> MakeAnnexBAccessUnit() {
 std::shared_ptr<SessionState> MakeH264State(const std::filesystem::path& out_path) {
     auto state = std::make_shared<SessionState>();
     state->config.output_path = out_path;
+    state->config.container = exosnap::engine::Container::Matroska; // H.264 is not a WebM codec
     state->config.video_codec = VideoCodec::H264;
     state->config.frame_rate_num = 60;
     state->config.frame_rate_den = 1;

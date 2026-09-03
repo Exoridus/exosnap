@@ -97,6 +97,7 @@ bool FfmpegAacEncoder::Init(uint32_t sample_rate, uint32_t channels, std::string
     }
 
     m_frame_size = (m_ctx->frame_size > 0) ? m_ctx->frame_size : kFrameSizeSamples;
+    m_codec_delay_samples = m_ctx->initial_padding > 0 ? static_cast<uint32_t>(m_ctx->initial_padding) : 0u;
 
     if (m_ctx->extradata != nullptr && m_ctx->extradata_size > 0) {
         m_codec_private.assign(m_ctx->extradata, m_ctx->extradata + m_ctx->extradata_size);

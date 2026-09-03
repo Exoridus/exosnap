@@ -510,6 +510,15 @@ bool ResolveOdCaptureMode(DXGI_FORMAT format, HdrMode hdr_mode, bool hdr_active,
             out_mode = OdCaptureMode::HdrNative;
             return true;
         }
+        // An HDR desktop that arrived as PQ R10G10B10A2 (no FP16 surface on
+        // offer) is still PQ/BT.2020: treating it as SDR would encode PQ codes
+        // as gamma-2.2 BT.709 -- washed out and mis-tagged. Same policy as the
+        // FP16 branch below: TonemapSdr, or Hdr10 on a codec without HDR10
+        // output, tone-maps down; Off keeps the pre-HDR behaviour.
+        if (hdr_active && hdr_mode != HdrMode::Off) {
+            out_mode = OdCaptureMode::HdrToneMap;
+            return true;
+        }
         out_mode = OdCaptureMode::Sdr;
         return true;
     case DXGI_FORMAT_R16G16B16A16_FLOAT:

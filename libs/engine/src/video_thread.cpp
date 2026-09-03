@@ -950,6 +950,9 @@ void VideoThread::Run() {
     // The tone-map pass runs the SDR curve instead: the source is an SDR desktop
     // delivered as linear scRGB (Advanced Color Management), not an HDR one.
     bool hdrToneMapSdrSource = false;
+    // The tone-map source is PQ-encoded R10G10B10A2 (an HDR desktop whose
+    // duplication did not offer FP16), not linear scRGB.
+    bool hdrToneMapPqSource = false;
     HdrToneMapper hdrToneMapper;
     winrt::com_ptr<ID3D11Texture2D> hdrSdrTex;
 
@@ -1215,6 +1218,7 @@ void VideoThread::Run() {
         odFrameFormat = rawDesc.Format;
         hdrToneMapActive = toneMap;
         hdrToneMapSdrSource = sdrScrgb;
+        hdrToneMapPqSource = toneMap && !sdrScrgb && odSrc.Format() == DXGI_FORMAT_R10G10B10A2_UNORM;
         hdrNativeActive = nativeHdr;
         hdrPqInputIsPq = (rawDesc.Format == DXGI_FORMAT_R10G10B10A2_UNORM);
         hdrPqSrcFormat = rawDesc.Format;
@@ -2045,7 +2049,7 @@ void VideoThread::Run() {
             return;
         }
         if (!hdrToneMapper.Init(d3dDevice.get(), d3dContext.get(), sourceWidth, sourceHeight, hdrPeakScale,
-                                hdrToneMapSdrSource, tmErr, hdrPaperWhiteScale)) {
+                                hdrToneMapSdrSource, tmErr, hdrPaperWhiteScale, hdrToneMapPqSource)) {
             m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, "HDR tone-map init: " + tmErr);
             if (!useOdCapture) {
                 if (captureSession != nullptr)
@@ -2295,10 +2299,10 @@ void VideoThread::Run() {
             }
         } else if (m_state.config.video_codec == VideoCodec::Av1 && !av1CodecPrivateReady) {
             char reason[256] = {};
-            uint8_t cp[4] = {};
+            std::vector<uint8_t> cp;
             if (codec_private::DeriveAv1CodecPrivate(pkt.bytes.data(), pkt.bytes.size(), cp, reason, sizeof(reason))) {
                 std::lock_guard lk(m_state.premux_mutex);
-                std::memcpy(m_state.codec_private.av1_codec_private, cp, 4);
+                m_state.codec_private.av1_codec_private = std::move(cp);
                 m_state.codec_private.av1_ready = true;
                 av1CodecPrivateReady = true;
                 m_state.premux_cv.notify_all();
