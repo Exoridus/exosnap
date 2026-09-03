@@ -180,8 +180,7 @@ SyntheticSessionResult SyntheticSession::Run() {
                 st.codec_private.h264_sps_pps = FakeH264AnnexbSpsPps();
                 st.codec_private.h264_ready = true;
             } else {
-                const auto cp = FakeAv1CodecPrivate();
-                std::copy(cp.begin(), cp.end(), st.codec_private.av1_codec_private);
+                st.codec_private.av1_codec_private = FakeAv1CodecPrivate();
                 st.codec_private.av1_ready = true;
             }
             st.premux_cv.notify_all();

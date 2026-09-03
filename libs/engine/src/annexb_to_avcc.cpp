@@ -244,6 +244,9 @@ bool ConvertAnnexBToAvcc(const uint8_t* data, size_t size, std::vector<uint8_t>&
     for (const auto& nal : nals) {
         if (nal.nal_type == 9u) // AUD — excluded from sample payload
             continue;
+        // SPS/PPS live in avcC; the avc1 sample form carries none in band.
+        if (nal.nal_type == 7u || nal.nal_type == 8u)
+            continue;
         if (nal.payload_size == 0)
             continue;
         const uint32_t len = static_cast<uint32_t>(nal.payload_size);

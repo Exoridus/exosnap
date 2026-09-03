@@ -182,6 +182,11 @@ void ApplyColorMetadataToNvenc(NV_ENC_CONFIG& cfg, VideoCodec codec, const Color
     vui.colourPrimaries = primaries;
     vui.transferCharacteristics = transfer;
     vui.colourMatrix = matrix;
+    // Annex E chroma_sample_loc_type 0: left-sited horizontally, centred
+    // vertically -- what the RGB->YUV conversion here produces.
+    vui.chromaSampleLocationFlag = 1;
+    vui.chromaSampleLocationTop = 0;
+    vui.chromaSampleLocationBot = 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -1469,7 +1474,11 @@ bool NvencEncoder::EncodeFrame(int32_t slot_idx, uint64_t pts_ns, uint32_t width
     pic.inputBuffer = mapRes.mappedResource;
     pic.bufferFmt = mapRes.mappedBufferFmt;
     pic.pictureStruct = NV_ENC_PIC_STRUCT_FRAME;
-    pic.encodePicFlags = NV_ENC_PIC_FLAG_OUTPUT_SPSPPS;
+    // Parameter sets travel with keyframes only. The Matroska/MP4 sample-entry
+    // form used here (avcC/hvcC/av1C) carries them out of band; repeating them
+    // in every picture is both forbidden for that form and wasted bytes. The
+    // codec-private extraction reads them from the first keyframe.
+    pic.encodePicFlags = 0;
 
     // One-shot segment-boundary request (RequestKeyframe()), consumed now
     // regardless of the cadence outcome below — it always feeds into this
@@ -1497,7 +1506,7 @@ bool NvencEncoder::EncodeFrame(int32_t slot_idx, uint64_t pts_ns, uint32_t width
     m_haveGopStart = m_haveGopStart || isKeyframe;
 
     if (isKeyframe) {
-        pic.encodePicFlags |= NV_ENC_PIC_FLAG_FORCEIDR;
+        pic.encodePicFlags |= NV_ENC_PIC_FLAG_FORCEIDR | NV_ENC_PIC_FLAG_OUTPUT_SPSPPS;
     }
 
     // Attach the precomputed in-band HDR10 metadata on every keyframe, so each

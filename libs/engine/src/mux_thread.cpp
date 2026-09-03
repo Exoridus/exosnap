@@ -9,6 +9,7 @@
 #include <exosnap/engine/logging/logging.h>
 #include <exosnap/engine/packet_types.h>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdio>
@@ -138,8 +139,7 @@ void MuxThread::Run() {
                 return;
             }
         } else {
-            video_codec_private.assign(m_state.codec_private.av1_codec_private,
-                                       m_state.codec_private.av1_codec_private + 4);
+            video_codec_private = m_state.codec_private.av1_codec_private;
         }
         for (uint32_t i = 0; i < track_count; ++i) {
             audioCp[i] = m_state.codec_private.audio_codec_private[i];
@@ -185,9 +185,14 @@ void MuxThread::Run() {
         sw_config_template.audio_codec = StreamAudioCodec::Aac;
         break;
     }
+    sw_config_template.webm = (m_state.config.container == Container::WebM);
+    sw_config_template.chroma_420 = (m_state.config.chroma == ChromaSubsampling::Cs420);
+    sw_config_template.opus_frame_samples =
+        static_cast<uint32_t>(OpusFrameSizeSamples(m_state.config.opus_frame_duration));
     sw_config_template.audio_track_count = track_count;
     for (uint32_t i = 0; i < track_count; ++i) {
         sw_config_template.audio_tracks[i].codec_private = audioCp[i].bytes;
+        sw_config_template.audio_tracks[i].codec_delay_samples = audioCp[i].codec_delay_samples;
         // Track name, muxed into the container as KaxTrackName. Only the
         // resolved-plan path carries source semantics -- the legacy empty-plan
         // single-loopback-track path (see recorder_session.cpp) has no
@@ -408,6 +413,11 @@ void MuxThread::Run() {
         return (session_pts_ns > seg.epoch_session_pts_ns) ? (session_pts_ns - seg.epoch_session_pts_ns) : 0ULL;
     };
 
+    std::array<uint64_t, CodecPrivateData::kMaxAudioTracks> audio_codec_delay_ns{};
+    for (uint32_t i = 0; i < track_count; ++i) {
+        audio_codec_delay_ns[i] = static_cast<uint64_t>(audioCp[i].codec_delay_samples) * 1000000000ULL /
+                                  std::max<uint32_t>(1u, m_state.config.audio_sample_rate);
+    }
     auto push_audio = [&](EncodedAudioPacket&& payload) {
         if (write_error || !seg.writer)
             return;
@@ -421,7 +431,10 @@ void MuxThread::Run() {
             return; // this audio predates the first video frame — trimmed, not written at 0
         }
         payload.pts_ns = shifted_pts_ns;
-        const uint64_t local = to_segment_local(payload.pts_ns);
+        // Matroska stores audio block timestamps offset by the track's CodecDelay
+        // (the reader subtracts it), so the first audible sample -- not the
+        // encoder's priming -- lands where the timeline says it does.
+        const uint64_t local = to_segment_local(payload.pts_ns) + audio_codec_delay_ns[payload.track_id];
         MuxPacket mp;
         mp.pts_ns = local;
         mp.track_num = 2 + payload.track_id;

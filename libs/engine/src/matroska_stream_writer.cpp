@@ -250,9 +250,24 @@ bool MatroskaStreamWriter::Open(const MatroskaStreamConfig& config) {
         // --- EBML header ---
         {
             libebml::EbmlHead ebml_head;
-            libebml::GetChild<libebml::EDocType>(ebml_head).SetValue("matroska");
-            libebml::GetChild<libebml::EDocTypeVersion>(ebml_head).SetValue(4);
-            libebml::GetChild<libebml::EDocTypeReadVersion>(ebml_head).SetValue(2);
+            if (m_config.webm) {
+                // WebM: DocType "webm", versions 2/2, AV1 or VP8/VP9 video with
+                // Opus or Vorbis audio only. Anything else would be a Matroska
+                // file wearing the wrong name.
+                if (m_config.video_codec_id != "V_AV1" || m_config.audio_codec == StreamAudioCodec::Aac ||
+                    m_config.audio_codec == StreamAudioCodec::Pcm || m_config.audio_codec == StreamAudioCodec::Flac) {
+                    Fail("WebM permits only AV1 video with Opus audio in this recorder");
+                    CloseIo();
+                    return false;
+                }
+                libebml::GetChild<libebml::EDocType>(ebml_head).SetValue("webm");
+                libebml::GetChild<libebml::EDocTypeVersion>(ebml_head).SetValue(2);
+                libebml::GetChild<libebml::EDocTypeReadVersion>(ebml_head).SetValue(2);
+            } else {
+                libebml::GetChild<libebml::EDocType>(ebml_head).SetValue("matroska");
+                libebml::GetChild<libebml::EDocTypeVersion>(ebml_head).SetValue(4);
+                libebml::GetChild<libebml::EDocTypeReadVersion>(ebml_head).SetValue(2);
+            }
             ebml_head.Render(*m_io, true);
         }
 
@@ -327,6 +342,12 @@ bool MatroskaStreamWriter::Open(const MatroskaStreamConfig& config) {
                     static_cast<uint64_t>(m_config.color.range));
                 libebml::GetChild<libmatroska::KaxVideoBitsPerChannel>(colour).SetValue(
                     static_cast<uint64_t>(m_config.color.bits_per_channel));
+                if (m_config.chroma_420) {
+                    // 1 = left collocated, 2 = half (centred): the siting every
+                    // 4:2:0 conversion path here produces.
+                    libebml::GetChild<libmatroska::KaxVideoChromaSitHorz>(colour).SetValue(1);
+                    libebml::GetChild<libmatroska::KaxVideoChromaSitVert>(colour).SetValue(2);
+                }
                 if (m_config.color.hdr) {
                     if (m_config.color.max_content_light_level > 0) {
                         libebml::GetChild<libmatroska::KaxVideoColourMaxCLL>(colour).SetValue(
@@ -378,6 +399,9 @@ bool MatroskaStreamWriter::Open(const MatroskaStreamConfig& config) {
             libebml::GetChild<libmatroska::KaxTrackUID>(aud).SetValue(track_number);
             libebml::GetChild<libmatroska::KaxTrackType>(aud).SetValue(2);
             libebml::GetChild<libmatroska::KaxTrackFlagLacing>(aud).SetValue(0);
+            // Only the first audio track is the default one; the element's own
+            // default is 1, so the others must say 0 explicitly.
+            libebml::GetChild<libmatroska::KaxTrackFlagDefault>(aud).SetValue(i == 0 ? 1 : 0);
 
             // Track name (see StreamAudioTrack::name): omitted entirely when the
             // caller did not resolve one, rather than writing an empty element --
@@ -401,7 +425,9 @@ bool MatroskaStreamWriter::Open(const MatroskaStreamConfig& config) {
                 const uint64_t codec_delay_ns = static_cast<uint64_t>(pre_skip) * 1000000000ULL / 48000u;
                 libebml::GetChild<libmatroska::KaxCodecDelay>(aud).SetValue(codec_delay_ns);
                 libebml::GetChild<libmatroska::KaxSeekPreRoll>(aud).SetValue(80000000ULL);
-                libebml::GetChild<libmatroska::KaxTrackDefaultDuration>(aud).SetValue(20000000ULL);
+                libebml::GetChild<libmatroska::KaxTrackDefaultDuration>(aud).SetValue(
+                    static_cast<uint64_t>(std::max<uint32_t>(1u, m_config.opus_frame_samples)) * 1000000000ULL /
+                    48000u);
             } else if (m_config.audio_codec == StreamAudioCodec::Pcm) {
                 // Uncompressed PCM. No CodecPrivate; the bit depth is carried
                 // in the track audio header below. audio_float selects the
@@ -426,7 +452,14 @@ bool MatroskaStreamWriter::Open(const MatroskaStreamConfig& config) {
                     libebml::GetChild<libmatroska::KaxCodecPrivate>(aud).CopyBuffer(slot.data(),
                                                                                     static_cast<uint32_t>(slot.size()));
                 }
-                libebml::GetChild<libmatroska::KaxTrackDefaultDuration>(aud).SetValue(21333333ULL);
+                // 1024-sample AAC frames at the configured rate, not a 48 kHz constant.
+                libebml::GetChild<libmatroska::KaxTrackDefaultDuration>(aud).SetValue(
+                    1024ULL * 1000000000ULL / std::max<uint32_t>(1u, m_config.audio_sample_rate));
+                if (m_config.audio_tracks[i].codec_delay_samples > 0) {
+                    libebml::GetChild<libmatroska::KaxCodecDelay>(aud).SetValue(
+                        static_cast<uint64_t>(m_config.audio_tracks[i].codec_delay_samples) * 1000000000ULL /
+                        std::max<uint32_t>(1u, m_config.audio_sample_rate));
+                }
             }
 
             auto& as = libebml::GetChild<libmatroska::KaxTrackAudio>(aud);

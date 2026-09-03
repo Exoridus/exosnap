@@ -38,7 +38,7 @@ class HdrToneMapper {
     // already means the display's own reference white. Defaults to the
     // scene-referred identity.
     bool Init(ID3D11Device* device, ID3D11DeviceContext* context, UINT width, UINT height, float peak_scale,
-              bool sdr_scrgb_source, std::string& err, float paper_white_scale = 1.0f);
+              bool sdr_scrgb_source, std::string& err, float paper_white_scale = 1.0f, bool pq_source = false);
 
     // Tone-map src (FP16, must have D3D11_BIND_SHADER_RESOURCE) into dst (BGRA8,
     // must have D3D11_BIND_RENDER_TARGET). Both must be width x height. SRVs and

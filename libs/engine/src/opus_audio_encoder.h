@@ -35,6 +35,9 @@ class OpusAudioEncoder : public IAudioEncoder {
     uint64_t ResetState();
 
     std::vector<uint8_t> CodecPrivateBytes() const override;
+    uint32_t CodecDelaySamples() const noexcept override {
+        return m_codec_delay_samples;
+    }
 
     uint64_t EmittedFrames() const {
         return m_emitted_frames;
@@ -65,6 +68,7 @@ class OpusAudioEncoder : public IAudioEncoder {
     uint32_t m_sample_rate = 0;
     uint32_t m_channels = 0;
     std::vector<uint8_t> m_codec_private;
+    uint32_t m_codec_delay_samples = 0; // OPUS_GET_LOOKAHEAD, also the OpusHead pre-skip
     std::vector<float> m_frame_buffer;
     uint64_t m_emitted_frames = 0;
 };

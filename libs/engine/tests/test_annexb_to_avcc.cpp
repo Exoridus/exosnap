@@ -388,18 +388,19 @@ TEST(AnnexBTest, ConvertAnnexBToAvcc_MultipleNals_AllLengthPrefixed) {
     std::vector<uint8_t> out;
     ASSERT_TRUE(ConvertAnnexBToAvcc(bs.data(), bs.size(), out));
 
-    // All 3 NALs (SPS=4 bytes, PPS=2 bytes, IDR=4 bytes) should appear with 4-byte length prefix each
-    // Total = 3*(4) + 4 + 2 + 4 = 12 + 10 = 22 bytes
-    // SPS payload: [67 AA BB 28] = 4 bytes
-    // PPS payload: [68 CC] = 2 bytes
+    // SPS and PPS belong to avcC and are dropped from the sample; only the IDR
+    // slice remains, with its 4-byte length prefix: 4 + 4 = 8 bytes.
     // IDR payload: [65 11 22 33] = 4 bytes
-    ASSERT_GE(out.size(), 22u);
+    ASSERT_EQ(out.size(), 8u);
 
-    // First NAL must have length prefix for 4-byte SPS payload
-    const uint32_t sps_len = (static_cast<uint32_t>(out[0]) << 24u) | (static_cast<uint32_t>(out[1]) << 16u) |
+    const uint32_t idr_len = (static_cast<uint32_t>(out[0]) << 24u) | (static_cast<uint32_t>(out[1]) << 16u) |
                              (static_cast<uint32_t>(out[2]) << 8u) | static_cast<uint32_t>(out[3]);
-    EXPECT_EQ(sps_len, 4u);
-    EXPECT_EQ(out[4], 0x67u); // SPS NAL type
+    EXPECT_EQ(idr_len, 4u);
+    EXPECT_EQ(out[4], 0x65u); // IDR NAL type; no 0x67/0x68 anywhere in the sample
+    for (const uint8_t b : out) {
+        EXPECT_NE(b, 0x67u);
+        EXPECT_NE(b, 0x68u);
+    }
 }
 
 TEST(AnnexBTest, ConvertAnnexBToAvcc_NoStartCodesInOutput) {

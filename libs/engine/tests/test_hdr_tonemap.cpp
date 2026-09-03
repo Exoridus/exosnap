@@ -164,11 +164,19 @@ TEST(OdCaptureMode, Rgb10SdrDesktopUnchanged) {
         EXPECT_TRUE(Resolve(DXGI_FORMAT_R10G10B10A2_UNORM, hdr, /*hdr_active=*/false, /*hdr10_ok=*/true, mode));
         EXPECT_EQ(mode, OdCaptureMode::Sdr);
     }
-    // An HDR-active 10 bpc desktop that is NOT requested as native Hdr10 (or on a
-    // non-HDR10 codec) also keeps SDR handling (unchanged legacy behaviour).
+}
+
+TEST(OdCaptureMode, Rgb10HdrDesktopWithoutNativePathIsToneMapped) {
+    // An HDR-active desktop delivered as R10G10B10A2 is PQ/BT.2020 just like
+    // the FP16 one; recording it as SDR would encode PQ codes as gamma BT.709.
+    // TonemapSdr, and Hdr10 on a codec without HDR10 output, tone-map down.
+    OdCaptureMode mode{};
     EXPECT_TRUE(Resolve(DXGI_FORMAT_R10G10B10A2_UNORM, HdrMode::TonemapSdr, /*hdr_active=*/true, true, mode));
-    EXPECT_EQ(mode, OdCaptureMode::Sdr);
+    EXPECT_EQ(mode, OdCaptureMode::HdrToneMap);
     EXPECT_TRUE(Resolve(DXGI_FORMAT_R10G10B10A2_UNORM, HdrMode::Hdr10, /*hdr_active=*/true, /*hdr10_ok=*/false, mode));
+    EXPECT_EQ(mode, OdCaptureMode::HdrToneMap);
+    // Off keeps the pre-HDR behaviour.
+    EXPECT_TRUE(Resolve(DXGI_FORMAT_R10G10B10A2_UNORM, HdrMode::Off, /*hdr_active=*/true, true, mode));
     EXPECT_EQ(mode, OdCaptureMode::Sdr);
 }
 

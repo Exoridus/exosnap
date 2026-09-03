@@ -111,6 +111,9 @@ enum class StreamAudioCodec {
 // Per-audio-track codec private payload.
 struct StreamAudioTrack {
     std::vector<uint8_t> codec_private;
+    // Encoder priming in samples (IAudioEncoder::CodecDelaySamples); written
+    // as CodecDelay, and the caller shifts this track's block timestamps by it.
+    uint32_t codec_delay_samples = 0;
 
     // Track name (KaxTrackName), e.g. "System" or "System + Microphone" for a
     // merged track. The writer has no notion of AudioSourceKind or how a track
@@ -142,6 +145,14 @@ struct MatroskaStreamConfig {
     // Color description written into the video track's Colour element (ADR 0032).
     // Defaults to SDR BT.709 limited-range 8-bit.
     ColorMetadata color;
+    // 4:2:0 chroma is produced left-sited (horizontal) / centred (vertical) by
+    // every conversion path; the file says so rather than leaving it implied.
+    bool chroma_420 = true;
+    // WebM is Matroska with a different DocType and a codec allow-list; the
+    // EBML header must say which, or a WebM-only reader rejects the file.
+    bool webm = false;
+    // Opus frame size in samples at 48 kHz, for DefaultDuration.
+    uint32_t opus_frame_samples = 960;
 
     // Audio
     StreamAudioCodec audio_codec = StreamAudioCodec::Aac;

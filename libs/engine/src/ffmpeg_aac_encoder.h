@@ -61,6 +61,9 @@ class FfmpegAacEncoder : public IAudioEncoder {
     void Flush(std::vector<EncodedAudioPacket>& out_packets) override;
 
     std::vector<uint8_t> CodecPrivateBytes() const override;
+    uint32_t CodecDelaySamples() const noexcept override {
+        return m_codec_delay_samples;
+    }
 
     void Shutdown() override;
 
@@ -90,6 +93,7 @@ class FfmpegAacEncoder : public IAudioEncoder {
     uint32_t m_sample_rate = 0;
     uint32_t m_channels = 0;
     int m_frame_size = kFrameSizeSamples; // AVCodecContext::frame_size after open
+    uint32_t m_codec_delay_samples = 0;   // AVCodecContext::initial_padding after open
 
     uint64_t m_input_samples = 0;  // per-channel samples fed to the encoder (frame pts)
     uint64_t m_output_samples = 0; // per-channel samples represented by packets already emitted (drives pts_ns)
