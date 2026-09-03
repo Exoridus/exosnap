@@ -36,8 +36,11 @@ ExoCard {
         meterDb: root.settings.appMeterDb
         stacked: root.stacked
         showMixOption: false
+        showGain: root.settings.expertMode
+        gainDb: root.settings.appGainDb
         Layout.fillWidth: true
         onSourceToggled: value => root.settings.appAudioEnabled = value
+        onGainCommitted: value => root.settings.appGainDb = value
         onSeparateToggled: value => root.settings.appAudioSeparate = value
     }
 
@@ -58,6 +61,9 @@ ExoCard {
         locked: root.settings.controlsLocked
         meterLevel: root.settings.systemMeter
         meterDb: root.settings.systemMeterDb
+        showGain: root.settings.expertMode
+        gainDb: root.settings.systemGainDb
+        onGainCommitted: value => root.settings.systemGainDb = value
         stacked: root.stacked
         showMixOption: root.settings.appAudioVisible
         Layout.fillWidth: true

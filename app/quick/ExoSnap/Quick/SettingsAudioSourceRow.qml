@@ -30,9 +30,14 @@ ColumnLayout {
     // "mix into previous track" is meaningless when there is no visible row above
     // it. The column keeps its width regardless -- see below.
     property bool showMixOption: true
+    // Whole-dB gain applied to this source in the mix; hidden when the source
+    // carries its own gain elsewhere (the microphone).
+    property bool showGain: false
+    property int gainDb: 0
 
     signal sourceToggled(bool value)
     signal separateToggled(bool value)
+    signal gainCommitted(int value)
 
     readonly property bool _live: root.sourceEnabled && !root.locked
 
@@ -82,6 +87,19 @@ ColumnLayout {
                     pixelSize: ExoTheme.fontCaption
                 }
             }
+        }
+
+        ExoNumberField {
+            visible: root.showGain
+            from: -60
+            to: 24
+            suffix: qsTr("dB")
+            value: root.gainDb
+            enabled: root._live
+            Layout.preferredWidth: 96
+            Layout.alignment: Qt.AlignTop
+            Accessible.name: qsTr("%1 gain").arg(root.label)
+            onValueCommitted: value => root.gainCommitted(value)
         }
 
         // Column two: the reading. Fixed width and tabular figures, so every row

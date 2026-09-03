@@ -22,8 +22,8 @@ ExoCard {
         Layout.fillWidth: true
 
         ExoNumberField {
-            from: 32
-            to: 510
+            from: root.settings.audioBitrateMinKbps
+            to: root.settings.audioBitrateMaxKbps
             stepSize: 8
             suffix: qsTr("kbps")
             value: root.settings.audioBitrateKbps
@@ -112,6 +112,42 @@ ExoCard {
             Accessible.name: qsTr("Brickwall limiter")
             Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
             onToggledByUser: value => root.settings.limiterEnabled = value
+        }
+    }
+
+    ExoSettingRow {
+        label: qsTr("Limiter ceiling")
+        hint: qsTr("Peak level the limiter holds the mix under")
+        stacked: root.stacked
+        visible: root.settings.expertMode && root.settings.limiterEnabled
+        Layout.fillWidth: true
+
+        ExoNumberField {
+            from: -12
+            to: 0
+            suffix: qsTr("dBFS")
+            value: Math.round(root.settings.limiterCeilingDb)
+            enabled: !root.settings.controlsLocked
+            Layout.fillWidth: true
+            Accessible.name: qsTr("Limiter ceiling")
+            onValueCommitted: value => root.settings.limiterCeilingDb = value
+        }
+    }
+
+    ExoSettingRow {
+        label: qsTr("32-bit float PCM")
+        hint: qsTr("Store 32-bit samples as IEEE float instead of integer")
+        stacked: root.stacked
+        visible: root.settings.expertMode && root.settings.audioPcmFloatRelevant
+        controlWidth: ExoTheme.controlSlotSwitch
+        Layout.fillWidth: true
+
+        ExoSwitch {
+            checked: root.settings.audioPcmFloat
+            enabled: !root.settings.controlsLocked
+            Accessible.name: qsTr("32-bit float PCM")
+            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
+            onToggledByUser: value => root.settings.audioPcmFloat = value
         }
     }
 

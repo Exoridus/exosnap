@@ -318,9 +318,9 @@ The built-in default profile is **MKV + AV1 + Opus + CFR 60 fps**.
 | Appearance | Dark |
 | Accent | Aqua |
 | Container | MKV |
-| Video codec | AV1 (NVENC) |
+| Video codec | AV1 (NVENC); on a first start the codec is reconciled once the hardware probe completes, to the best one the GPU encodes (AV1, else HEVC, else H.264) |
 | Audio codec | Opus |
-| Frame rate | CFR 60 fps (Default list: 15/30/60/120 fps, 120 enabled only when a display can feed it; Expert mode swaps the list for a free-entry field capped at the fastest monitor's refresh rate; an off-list rate gets its own "`<n>` fps (Custom)" entry — see §6) |
+| Frame rate | CFR 60 fps (Default list: 24/30/48/50/60/90/120/144/165/240 fps, entries above the fastest attached display's refresh rate listed but disabled; Expert mode swaps the list for a free-entry field capped at the fastest monitor's refresh rate; an off-list rate gets its own "`<n>` fps (Custom)" entry — see §6) |
 | Rate control | Constant quality (CQ), quality "High" |
 | NVENC encoder preset | P4 (all codecs) |
 | Frame pacing | Phase-correct |
@@ -551,9 +551,11 @@ Checking it folds a source into the track above it instead of producing a separa
 can combine sources (for example, system and app audio in one track) without engine-side UI logic.
 The set of relevant sources is context-aware — it adapts to the capture target.
 
-**Mix bus and limiter.** Per-source gain and mute are applied in the mixer. A **brickwall limiter**
-sits on the mixed bus and is **on by default** at a 0 dBFS ceiling, so summed sources can exceed full
-scale without hard clipping.
+**Mix bus and limiter.** Per-source gain and mute are applied in the mixer; the `APP` and `SYS` rows
+carry a whole-dB gain field (-60 to +24 dB, Expert) beside the reading, while the microphone's gain
+lives on its own card. A **brickwall limiter** sits on the mixed bus and is **on by default** at a
+0 dBFS ceiling, so summed sources can exceed full scale without hard clipping; the ceiling is an
+Expert row (-12 to 0 dBFS) shown while the limiter is on.
 
 **Microphone DSP chain.** The mic path has a four-stage chain applied in order:
 **high-pass filter → noise gate → AGC → RNNoise** neural noise suppression. **Every stage is off by
@@ -570,7 +572,10 @@ slaving engages** (see A/V drift below), after which even the default path is re
 sub-audible ppm amount; the *Audio clock slaving* expert toggle restores bit-exact capture. **Opus
 is locked to 48 kHz.** Bit depth does not apply to lossy codecs (Opus/AAC). Stereo→mono uses an averaging
 (no-clip) downmix. **32-bit float PCM** is a raw passthrough of the mix bus's native format (no
-conversion, no clipping headroom needed) and is PCM-only — FLAC has no float mode.
+conversion, no clipping headroom needed) and is PCM-only — FLAC has no float mode. It is an Expert
+switch shown while PCM at 32-bit is selected. The lossy **audio bitrate** field takes the active
+codec's range (Opus 32–510 kbps, AAC 64–320 kbps), so a value the field accepts is the value the
+encoder uses.
 
 **Opus recording defaults.** Audio application profile, 20 ms frames, complexity 10 when CPU budget
 allows, VBR/constrained VBR, per-track/channel bitrate. Restricted-lowdelay and 2.5/5 ms frames are
@@ -661,8 +666,8 @@ capability-gated (only the recording lock disables it). The **default is P4 for 
 takes effect from the next recording.
 
 **Frame rate and pacing.** The default is **CFR 60 fps**. The Default frame-rate control is a fixed
-list — **15 / 30 / 60 / 120 fps** (the older 24 fps cinema and 25 fps PAL entries are dropped).
-**120 fps is selectable only when an attached display can actually feed it**: capture never produces
+list — **24 / 30 / 48 / 50 / 60 / 90 / 120 / 144 / 165 / 240 fps**.
+**A rate is selectable only when an attached display can actually feed it**: capture never produces
 more frames than the screen refreshes, so on a slower panel the entry stays visible but disabled,
 with a hint naming the fastest attached display's actual rate. Disabled rather than hidden, because
 a missing entry reads as "the product cannot do this at all" instead of "this hardware cannot". The
@@ -688,7 +693,7 @@ silently displaying the ceiling). It is brought into range at the next display c
 manual edit, whichever comes first.
 
 When
-the configured rate is not one of **15 / 30 / 60 fps** — after leaving Expert mode, or after loading a
+the configured rate is not on that list — after leaving Expert mode, or after loading a
 preset that carries such a rate — the Default combo grows an extra entry labelled
 **"`<n>` fps (Custom)"** carrying the real value, placed in numeric order among the fixed entries and
 selected. The combo therefore never claims a frame rate the recorder is not using. The custom entry
@@ -1320,7 +1325,7 @@ continues; "Saved" is reported only once all segment remuxes finish. Manual spli
 automatic split. The split controls are Default tier — always visible, laid out inline within the
 Output card (time and size sub-sections), not tucked behind a popover or an Expert-mode gate. Each
 sub-section leads with an on/off **toggle**; the interval selector (**Split by time**) and the
-segment-size field (**Split by size**) appear only while their toggle is on. Toggling off is exactly
+segment-size field (**Split by size**, in MiB) appear only while their toggle is on. Toggling off is exactly
 the "off" state — it changes no persisted value beyond the split mode itself, so presets and exported
 TOML round-trip identically.
 
@@ -1997,13 +2002,13 @@ adds its rows. The split is a section boundary, not an Expert gate: both cards a
 Default, and Expert still only reveals rows inside them.
 
 **No section is Expert-gated.** Every embedded Settings section, including **Support & diagnostics**
-(logging level, an honest disabled `planned` profiling-markers row, crash-report consent and support
+(logging level, crash-report consent and support
 tools), is visible in both Default and Expert. Expert only reveals additional rows in place inside a
 section; it never hides or reveals a whole section. Locked rows retain readable labels and current
 values while their interaction chrome and secondary hints recede (§2.2).
 
 Settings offers inline info hints (hover
-popovers on info-i icons and the countdown chevron) and search. Info-i placement is **selective**:
+popovers on info-i icons and the countdown chevron). Info-i placement is **selective**:
 only rows with a genuine A/B tradeoff carry the icon (plain boolean rows do not), and per-option
 helper text lives inside the popover rather than as a separate line under the control. The
 multi-option compare popovers are **explanatory only**: they list each option with its qualitative

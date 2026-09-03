@@ -294,9 +294,36 @@ TEST_F(SettingsAdapterTest, MaxFrameRateClampsConfiguredRateAndOptions) {
     adapter.setMaxFrameRate(60);
 
     EXPECT_EQ(adapter.frameRate(), 60);
+    // Rates the display cannot feed stay listed, but disabled with the reason:
+    // a missing entry would read as a product limit, not a hardware one.
+    bool saw_disabled_above_ceiling = false;
     for (const QVariant& entry : adapter.frameRateOptions()) {
-        EXPECT_LE(entry.toMap().value(QStringLiteral("value")).toInt(), 60);
+        const QVariantMap option = entry.toMap();
+        const int fps = option.value(QStringLiteral("value")).toInt();
+        const bool selectable = option.value(QStringLiteral("selectable")).toBool();
+        EXPECT_EQ(selectable, fps <= 60) << fps;
+        if (fps > 60) {
+            saw_disabled_above_ceiling = true;
+            EXPECT_FALSE(option.value(QStringLiteral("reason")).toString().isEmpty()) << fps;
+        }
     }
+    EXPECT_TRUE(saw_disabled_above_ceiling);
+}
+
+TEST_F(SettingsAdapterTest, OffListFrameRateGetsItsOwnEntry) {
+    adapter.setFrameRate(75);
+    bool found = false;
+    int previous = 0;
+    for (const QVariant& entry : adapter.frameRateOptions()) {
+        const int fps = entry.toMap().value(QStringLiteral("value")).toInt();
+        EXPECT_GT(fps, previous) << "ladder must stay in numeric order";
+        previous = fps;
+        if (fps == 75) {
+            found = true;
+            EXPECT_TRUE(entry.toMap().value(QStringLiteral("label")).toString().contains(QStringLiteral("Custom")));
+        }
+    }
+    EXPECT_TRUE(found);
 }
 
 TEST_F(SettingsAdapterTest, BitrateIsOnlyRelevantForBitrateModes) {
