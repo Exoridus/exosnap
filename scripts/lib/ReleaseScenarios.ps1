@@ -609,7 +609,7 @@ function Get-ReleaseScenarioCatalog {
             if (Test-RunnerElevated) {
                 $elevated = Start-Process -FilePath $exe -PassThru -ArgumentList @('--live-verify-control', $runId)
                 try {
-                    $verdict = & $gate.Verify $ctx $gate
+                    $verdict = Resolve-ReleaseVerdict (& $gate.Verify $ctx $gate)
                 } finally {
                     if ($null -ne $elevated -and -not $elevated.HasExited) {
                         [void]$elevated.CloseMainWindow()
@@ -861,7 +861,7 @@ function Get-ReleaseScenarioCatalog {
                 # anything (product spec), so the wait has to outlast that.
                 Start-Sleep -Seconds ($stallAfter + 13)
 
-                $verdict = & $gate.Verify $ctx $gate
+                $verdict = Resolve-ReleaseVerdict (& $gate.Verify $ctx $gate)
                 if ($null -eq $verdict) {
                     return @{ Result = 'UNVERIFIED'; Message = 'the stall verification returned nothing' }
                 }
@@ -1107,7 +1107,7 @@ function Get-ReleaseScenarioCatalog {
                         }
                     }
                     Start-Sleep -Seconds 5   # let the mode change settle and presents accumulate
-                    $verdict = & $gate.Verify $ctx $gate
+                    $verdict = Resolve-ReleaseVerdict (& $gate.Verify $ctx $gate)
                 } finally {
                     if ($null -ne $fse -and -not $fse.HasExited) { $fse.Kill() }
                 }
@@ -1236,7 +1236,7 @@ function Get-ReleaseScenarioCatalog {
                     & $tool set-visibility $id 1 | Out-Null
                 } -ArgumentList $visibilityTool, $endpointId
                 try {
-                    $verdict = & $gate.Verify $ctx $gate
+                    $verdict = Resolve-ReleaseVerdict (& $gate.Verify $ctx $gate)
                 } finally {
                     Wait-Job $outage -Timeout 60 | Out-Null
                     Remove-Job $outage -Force -ErrorAction SilentlyContinue
@@ -1849,7 +1849,7 @@ function Get-ReleaseScenarioCatalog {
 
             # Both answered yes: the state assertions still have to hold, so the gate
             # runs its own Verify rather than trusting the answer.
-            $verdict = & $gate.Verify $ctx $gate
+            $verdict = Resolve-ReleaseVerdict (& $gate.Verify $ctx $gate)
             if ($null -eq $verdict) {
                 return @{ Result = 'UNVERIFIED'; Message = 'the overlay verification returned nothing' }
             }
@@ -2119,9 +2119,30 @@ function Get-ReleaseScenarioCatalog {
             if (-not $channel.ok) {
                 return @{ Result = 'FAIL'; Message = "could not select the Preview channel: $($channel.error.message)" }
             }
+            # Same restart REL-UPD-MSI-001 does, and for the same reason: the channel
+            # is read when the update service starts, so setting it and checking in
+            # one session asks the channel the app was LAUNCHED with. Observed as
+            # "no update is offered to 0.9.0-rc15 on the Preview channel" while rc16
+            # was published as a prerelease.
+            try { $conn.Close() } catch { }
+            if ($null -ne $fromProcess -and -not $fromProcess.HasExited) {
+                [void]$fromProcess.CloseMainWindow()
+                if (-not $fromProcess.WaitForExit(15000)) { $fromProcess.Kill() }
+            }
+            $runId = New-LiveVerifyRunId
+            $fromProcess = Start-Process -FilePath $from -PassThru -ArgumentList @('--live-verify-control', $runId)
+            $conn = Connect-LiveVerify -RunId $runId -ConnectTimeoutMs 60000
+
             $checked = Invoke-LiveVerifyCommand -Connection $conn -Command 'update.check'
             if (-not $checked.ok) { return @{ Result = 'FAIL'; Message = "update.check refused: $($checked.error.message)" } }
-            $state = (Invoke-LiveVerifyCommand -Connection $conn -Command 'update.getState').result
+            # Asynchronous: the answer lands on the state, not on the command.
+            $waitUntilOffered = [DateTime]::UtcNow.AddSeconds(45)
+            $state = $null
+            while ([DateTime]::UtcNow -lt $waitUntilOffered) {
+                $state = (Invoke-LiveVerifyCommand -Connection $conn -Command 'update.getState').result
+                if ($state.updateAvailable) { break }
+                Start-Sleep -Milliseconds 500
+            }
             if (-not $state.updateAvailable) {
                 return @{ Result = 'UNAVAILABLE'
                     Message = "no update is offered to $($state.currentVersion) on the Preview channel"
@@ -2157,7 +2178,20 @@ function Get-ReleaseScenarioCatalog {
                         return @{ Ok = $false; Detail = "the updater endpoint could not be reached: $($_.Exception.Message)" }
                     }
                     try {
-                        $after = (Invoke-LiveVerifyCommand -Connection $updater -Command 'update.getState').result
+                        # Checked before reading, because the runner runs under
+                        # Set-StrictMode: a response that carries an error instead of
+                        # a result throws "the property 'result' cannot be found" and
+                        # the scenario reports a PowerShell message where a verdict
+                        # belongs. This is the first release where the gate reached
+                        # this code at all -- it used to stop at "no update is
+                        # offered" before the prompt was ever raised.
+                        $state_response = Invoke-LiveVerifyCommand -Connection $updater -Command 'updater.getState'
+                        if (-not $state_response.ok) {
+                            return @{ Ok = $false
+                                Detail = "the updater refused updater.getState: $($state_response.error.message)"
+                            }
+                        }
+                        $after = $state_response.result
                         $evidence = @(Save-LiveVerifyEvidence -Context $context -CheckId 'REL-UPD-MSI-DECLINE-001' -Name 'updater-state.json' -Value $after)
                         $installState = "$(Get-ReleaseSnapshotValue -Object $after -Path 'installState')"
                         $phase = "$(Get-ReleaseSnapshotValue -Object $after -Path 'phase')"
@@ -2340,7 +2374,7 @@ function Get-ReleaseScenarioCatalog {
             # itself still has to happen and is verified the same way, so the result
             # says which of the two it was.
             if (Test-RunnerElevated) {
-                $verdict = & $gate.Verify $ctx $gate
+                $verdict = Resolve-ReleaseVerdict (& $gate.Verify $ctx $gate)
                 if ($null -eq $verdict) {
                     return @{ Result = 'UNVERIFIED'; Message = 'the install verification returned nothing' }
                 }
@@ -2657,6 +2691,37 @@ function Enable-ReleaseSystemAudio {
         return @{ Ok = $false; Detail = 'the system-audio source did not become enabled after settings.set' }
     }
     return @{ Ok = $true; Detail = 'system audio enabled' }
+}
+
+function Resolve-ReleaseVerdict {
+    <#
+    .SYNOPSIS
+        Gives a Verify block's return value a fixed shape.
+    .DESCRIPTION
+        A Verify block returns @{ Ok; Detail; Evidence } but is allowed to omit the
+        fields it has nothing to say about -- and about half of them do, because a
+        refusal has no evidence to attach. Under Set-StrictMode reading an absent
+        key does not evaluate to null, it THROWS "the property 'Evidence' cannot be
+        found on this object", and the scenario then reports a PowerShell message
+        where a verdict belongs.
+
+        This is the same defect class as the response shape in LiveVerifyClient: an
+        optional field read at ~25 sites. It cost an operator three UAC prompts in
+        one campaign, each answered correctly and each thrown away by a different
+        missing key. Normalising here means a Verify block can keep omitting what it
+        does not have, and no reader has to remember which.
+
+        A $null verdict stays $null: "the block returned nothing" is a real and
+        different finding from "it returned a verdict with no detail", and callers
+        report it as UNVERIFIED.
+    #>
+    param($Verdict)
+    if ($null -eq $Verdict) { return $null }
+    if ($Verdict -isnot [System.Collections.IDictionary]) { return $Verdict }
+    if (-not $Verdict.ContainsKey('Ok')) { $Verdict['Ok'] = $false }
+    if (-not $Verdict.ContainsKey('Detail') -or $null -eq $Verdict['Detail']) { $Verdict['Detail'] = '' }
+    if (-not $Verdict.ContainsKey('Evidence') -or $null -eq $Verdict['Evidence']) { $Verdict['Evidence'] = @() }
+    return $Verdict
 }
 
 function Wait-ReleaseProbeGone {

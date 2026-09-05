@@ -308,6 +308,34 @@ function Invoke-LiveVerifyCommand {
     if ($null -eq $response) {
         throw "No response to '$Command' within ${TimeoutMs} ms"
     }
+
+    # Normalised before it is handed out: `ok`, `result` and `error` always exist.
+    #
+    # The protocol omits `result` on a refusal and `error` on a success, which is
+    # correct on the wire and a trap for every caller. The scripts run under
+    # Set-StrictMode, so `$response.result` on a refusal does not evaluate to null
+    # -- it THROWS "the property 'result' cannot be found on this object", and the
+    # scenario then reports a PowerShell message where a verdict belongs. There are
+    # ~86 places that read `.result`, so guarding them one at a time is a defect
+    # waiting at each of them; the shape is fixed here instead, once.
+    #
+    # Deliberately not throwing on a refusal: a refusal is frequently the thing
+    # under test ("record.start is refused while a surface is open"). Callers that
+    # care read `.ok`, and callers that forget now get an empty result rather than
+    # an exception about PowerShell.
+    # A PSCustomObject from ConvertFrom-Json, so the fields are added rather than
+    # assigned by key.
+    $names = @($response.PSObject.Properties.Name)
+    if ($names -notcontains 'ok') {
+        Add-Member -InputObject $response -NotePropertyName 'ok' -NotePropertyValue $true -Force
+    }
+    if ($names -notcontains 'result' -or $null -eq $response.result) {
+        Add-Member -InputObject $response -NotePropertyName 'result' -NotePropertyValue ([pscustomobject]@{}) -Force
+    }
+    if ($names -notcontains 'error' -or $null -eq $response.error) {
+        Add-Member -InputObject $response -NotePropertyName 'error' `
+            -NotePropertyValue ([pscustomobject]@{ message = ''; code = '' }) -Force
+    }
     return $response
 }
 
