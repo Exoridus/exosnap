@@ -1750,7 +1750,13 @@ function Get-ReleaseScenarioCatalog {
             $restoreOverlaySettings = @{}
             foreach ($key in 'app.showQuickControls', 'app.showDiagnosticsOverlay', 'app.showRecordingOverlay') {
                 $current = Invoke-LiveVerifyCommand -Connection $conn -Command 'settings.get' -Parameters @{ key = $key }
-                if ($current.ok) { $restoreOverlaySettings[$key] = $current.result.value }
+                # settings.get answers a KEY-TO-VALUE map (settings_automation::ReadKeys
+                # inserts under the key's own name), not a `value` field. Reading
+                # `.result.value` threw under Set-StrictMode and the scenario reported
+                # a PowerShell message instead of a verdict.
+                if ($current.ok) {
+                    $restoreOverlaySettings[$key] = Get-ReleaseSnapshotValue -Object $current.result -Path $key
+                }
                 [void](Invoke-LiveVerifyCommand -Connection $conn -Command 'settings.set' `
                         -Parameters @{ key = $key; value = $true })
             }
