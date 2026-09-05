@@ -1,11 +1,14 @@
 #pragma once
 
 #include "../viewmodels/RecordViewModel.h"
+#include "SessionLedger.h"
 
 #include <exosnap/engine/pipeline_diagnostics.h>
 
 #include <QByteArray>
 #include <QString>
+
+#include <vector>
 
 namespace exosnap::diagnostics {
 
@@ -49,6 +52,12 @@ struct SessionReportInputs {
     // session even though the recording ran to completion — the one fact a
     // finished file cannot tell its owner by itself.
     uint32_t window_capture_stall_episodes = 0;
+
+    // The session ledger, frozen at Stop: every Tier-2 measured problem that fired
+    // during this recording, with its occurrences. Empty means nothing measured
+    // went wrong, and the report then carries no ledger key at all -- an empty
+    // array and "the build has no ledger" would read the same.
+    std::vector<LedgerEntry> ledger;
 };
 
 // Pure: serialize the inputs to the canonical session-report JSON (Qt JSON, not

@@ -5,14 +5,16 @@ import QtQuick.Controls
 import QtQuick.Dialogs
 import QtQuick.Layouts
 
-// Diagnostics nav area. A calm Simple default — verdict band, responsive readiness
-// tiles, worst-first cards, one bundled tip chip — with an Expert toggle that
-// reveals the flat taxonomy beneath the SAME band and tiles.
+// Diagnostics nav area. One layout, ordered by what the recorder is doing:
+// idle it answers "may I start", recording it answers "how is it going", and
+// after Stop it answers "how did it go". Expert mode is a Settings-only control
+// and this page does not read it.
 //
-// The page renders; it decides nothing. Verdict wording, tier→card/tip split, tile
-// text and pipeline health all arrive already resolved from DiagnosticsAdapter.
-// The first probe (volume query, output-path write test, self-test) starts here,
-// the first time the page becomes visible, and runs on a worker thread.
+// The page renders; it decides nothing. Verdict wording, tier→card/tip split,
+// tile text, value tint, the session ledger and the last-session facts all
+// arrive already resolved from DiagnosticsAdapter. The first probe (volume
+// query, output-path write test, self-test) starts here, the first time the page
+// becomes visible, and runs on a worker thread.
 Item {
     id: root
 
@@ -22,10 +24,9 @@ Item {
     // their own — see DeviceCapabilityPanel.
     required property DeviceAdapter device
 
-    // The tile grid reflows on the tiles' own minimum width rather than on window
-    // thresholds, so it stays right inside a narrow column too. Free in QML; there
-    // is no C++ column policy to keep in sync any more.
-    readonly property int tileColumns: ExoTheme.gridColumns(root.contentWidth, 210, ExoTheme.spacingMd, 4)
+    // Tile rows are always full: four columns or two, never a ragged three. A
+    // row with a gap in it reads as something failing to load.
+    readonly property int tileColumns: ExoTheme.tileColumns(root.contentWidth, 210, ExoTheme.spacingMd)
 
     // The capped, centred reading column. Shared by the header above the scroll
     // view and the content inside it, so the page identity is not pinned to the
@@ -47,10 +48,10 @@ Item {
     // ── Automation targets (protocol 2 ui.reveal) ────────────────────────────
     //
     // Two, because two are addressable product landmarks: the verdict band the
-    // page opens on, and the collapsed hardware-capability section that carries
-    // the per-GPU adapter cards and the capability matrix. Everything else on
-    // this page is either always visible or Expert-only taxonomy that the Expert
-    // toggle already governs.
+    // page opens on, and the collapsed hardware-capability reference row that
+    // carries the per-GPU adapter cards and the capability matrix. Everything
+    // else on this page is either always visible or reached by expanding one of
+    // these.
     readonly property var automationTargets: ({
         "verdict": verdictBand,
         "hardwareCapabilities": hardwareCapabilitiesSection
@@ -62,10 +63,10 @@ Item {
         const section = root.automationTargets[name];
         if (section === undefined || section === null)
             return -1;
-        // Hardware capabilities is collapsed by default outside Expert, and a
-        // scroll that stops at a closed header has not revealed the section any
-        // more than not scrolling would have. Assigning `expanded` is exactly
-        // what pressing the header does.
+        // Hardware capabilities is collapsed by default, and a scroll that stops
+        // at a closed header has not revealed the section any more than not
+        // scrolling would have. Assigning `expanded` is exactly what pressing
+        // the header does.
         if (section === hardwareCapabilitiesSection)
             hardwareCapabilitiesSection.expanded = true;
         return scroll.revealItem(section) ? 1 : 0;
@@ -138,13 +139,13 @@ Item {
             margins: ExoTheme.pagePadding
         }
 
-        // ── Page header: identity, the support-bundle export, the Expert toggle ──
+        // ── Page header: identity and the in-depth switch ─────────────────────
         //
         // A page title on the same rung, the same axis and the same inset as
-        // Settings and Device. It was a 12 px mono kicker under a full-window
-        // hairline, on an axis 24 px further in than its own cards — three
-        // different page-header treatments across six pages, and one of them
-        // misaligned with its own content.
+        // Settings and Device. The one header action is the switch that decides
+        // how deep the live measurements go; creating a support bundle is a
+        // reference row at the bottom, where the rest of the export-shaped
+        // affordances live.
         RowLayout {
             spacing: ExoTheme.spacingMd
             Layout.fillWidth: true
@@ -163,58 +164,60 @@ Item {
                 }
             }
 
-            Label {
-                text: root.diagnostics.expertMode ? qsTr("Expert — full taxonomy") : qsTr("Simple")
-                textFormat: Text.PlainText
-                elide: Text.ElideRight
-                color: ExoTheme.textMuted
+            Item {
                 Layout.fillWidth: true
-                Layout.alignment: Qt.AlignBaseline
-                font {
-                    family: ExoTheme.sansFamily
-                    pixelSize: ExoTheme.fontSecondary
-                }
-            }
-
-            // Chromed, not quiet: this one writes a file to disk and it must not
-            // read like the muted mode label two items to its right.
-            ExoButton {
-                text: root.diagnostics.bundleBusy ? qsTr("Creating…") : qsTr("Create support bundle")
-                leadingGlyph: ExoGlyph.Folder
-                visible: root.diagnostics.expertMode
-                enabled: !root.diagnostics.bundleBusy
-                Accessible.description: qsTr("Create a diagnostic package to share with support")
-                onClicked: bundleDialog.open()
             }
 
             // Its own fixed gap rather than the header row's general item
             // spacing: a label and the one switch it names read as a single
-            // control, and that pairing must not drift with how many other
-            // things happen to share the row on a given page (this header
-            // also carries the status label and the bundle button). Same
-            // value in SettingsPresetBar.qml, which carries the twin of this
-            // switch.
-            Row {
+            // control. Same value in SettingsPresetBar.qml, which carries the
+            // twin of this switch.
+            RowLayout {
                 spacing: ExoTheme.spacingSm
                 Layout.alignment: Qt.AlignVCenter
+                // Dimmed rather than hidden while recording: the gate is a fact
+                // about this session, and a control that vanishes reads as one
+                // the product forgot about.
+                opacity: root.diagnostics.inDepthAvailable ? 1.0 : 0.45
 
-                Label {
-                    text: qsTr("Expert mode")
-                    textFormat: Text.PlainText
-                    color: root.diagnostics.expertMode ? ExoTheme.accent : ExoTheme.textSecondary
-                    anchors.verticalCenter: parent.verticalCenter
-                    font {
-                        family: ExoTheme.sansFamily
-                        pixelSize: ExoTheme.fontBody
+                ColumnLayout {
+                    spacing: 2
+                    Layout.alignment: Qt.AlignVCenter
+
+                    Label {
+                        text: qsTr("In-depth diagnostics")
+                        textFormat: Text.PlainText
+                        horizontalAlignment: Text.AlignRight
+                        color: ExoTheme.text
+                        Layout.alignment: Qt.AlignRight
+                        font {
+                            family: ExoTheme.sansFamily
+                            pixelSize: ExoTheme.fontBody
+                        }
+                    }
+
+                    Label {
+                        objectName: "diagnosticsInDepthState"
+                        text: root.diagnostics.inDepthStateText
+                        textFormat: Text.PlainText
+                        horizontalAlignment: Text.AlignRight
+                        color: ExoTheme.textMuted
+                        Layout.alignment: Qt.AlignRight
+                        font {
+                            family: ExoTheme.sansFamily
+                            pixelSize: ExoTheme.fontCaption
+                        }
                     }
                 }
 
                 ExoSwitch {
-                    checked: root.diagnostics.expertMode
-                    Accessible.name: qsTr("Expert mode")
-                    anchors.verticalCenter: parent.verticalCenter
+                    objectName: "diagnosticsInDepthSwitch"
+                    checked: root.diagnostics.inDepthEnabled
+                    enabled: root.diagnostics.inDepthAvailable
+                    Accessible.name: qsTr("In-depth diagnostics")
+                    Layout.alignment: Qt.AlignVCenter
                     onToggledByUser: function (value) {
-                        root.diagnostics.expertMode = value;
+                        root.diagnostics.inDepthEnabled = value;
                     }
                 }
             }
@@ -226,7 +229,7 @@ Item {
             contentWidth: availableWidth
             clip: true
             // The vertical scroll bar overlays content, so its gutter is reserved
-            // unconditionally — this page always scrolls in Expert.
+            // unconditionally — this page always scrolls.
             rightPadding: ExoTheme.spacingLg
             Layout.fillWidth: true
             Layout.fillHeight: true
@@ -239,6 +242,11 @@ Item {
                 x: root.sideInset
 
                 // ── Verdict band ────────────────────────────────────────────────
+                //
+                // No action of its own. The page probes on first visit, every
+                // 10 s and on every settings change, and the stamp says so, so a
+                // Run check button would only offer to do again what is already
+                // being done.
                 Rectangle {
                     id: verdictBand
 
@@ -325,66 +333,64 @@ Item {
                             }
                         }
 
-                        ColumnLayout {
-                            spacing: ExoTheme.spacingSm
+                        // The row gathers implicitHeight before it constrains the
+                        // width, so a wrapping label laid out by the row itself is
+                        // measured for one line and clips the rest -- and the
+                        // recheck policy the band exists to state is what gets
+                        // clipped. The label is given its width by this item
+                        // instead, which is a constant the row does not have to
+                        // solve for, so implicitHeight is the height of the text
+                        // actually shown: three lines when the idle stamp wraps to
+                        // three, one when the recording stamp fits on one.
+                        Item {
+                            Layout.preferredWidth: 220
+                            Layout.maximumWidth: 220
+                            Layout.preferredHeight: lastCheckText.implicitHeight
                             Layout.alignment: Qt.AlignVCenter
 
                             Label {
+                                id: lastCheckText
+
+                                width: parent.width
                                 text: root.diagnostics.lastCheckText
                                 textFormat: Text.PlainText
+                                wrapMode: Text.WordWrap
                                 horizontalAlignment: Text.AlignRight
                                 color: ExoTheme.textDim
-                                Layout.alignment: Qt.AlignRight
                                 font {
                                     family: ExoTheme.sansFamily
                                     pixelSize: ExoTheme.fontCaption
                                 }
                             }
-
-                            // The one action the verdict band offers -- and a
-                            // NEUTRAL one, not the accent.
-                            //
-                            // The band is already carrying a colour, and that
-                            // colour is the verdict. An accent-filled slab inside
-                            // it put a second, unrelated hue in the same container
-                            // and read as the loudest thing on a page whose point
-                            // is the state it is reporting. It still needs chrome
-                            // (left quiet it rendered as a text run beside the
-                            // timestamp above it), so it keeps the bordered
-                            // neutral treatment and gives up the fill.
-                            ExoButton {
-                                text: root.diagnostics.checking ? qsTr("Checking…") : qsTr("Run Check")
-                                leadingGlyph: ExoGlyph.Run
-                                enabled: !root.diagnostics.checking
-                                Layout.alignment: Qt.AlignRight
-                                onClicked: root.diagnostics.runCheck()
-                            }
                         }
                     }
                 }
 
-                // ── Live pipeline summary ───────────────────────────────────────
+                // ── Live pipeline ───────────────────────────────────────────────
                 //
-                // Present only while something is recording, and ABOVE the
-                // readiness tiles while it is: readiness answers "may I start",
-                // which stops being the question the moment a recording is
-                // running. Five tiles, one per question the page could not
-                // answer in Simple mode — is the pipeline healthy, where is the
-                // bottleneck, is frame pacing healthy, is the encoder healthy,
-                // is audio synchronous, is storage healthy.
+                // Present only while something is recording. Readiness answers
+                // "may I start", which stops being the question the moment a
+                // recording is running, so the readiness tiles below are hidden
+                // for as long as this section is up.
                 //
                 // Every value comes from diagnostics::BuildLiveTiles over the
                 // engine's own snapshot. The page classifies nothing: a tile's
-                // tone IS PipelineHealth plus the engine's bottleneck
-                // attribution, so this surface can never call a pipeline the
-                // engine reported as Good a warning.
+                // tone IS the engine's health plus its bottleneck attribution,
+                // and the tint of a single number is the verdict of the check
+                // that owns it.
                 ColumnLayout {
                     spacing: ExoTheme.spacingSm
-                    visible: root.diagnostics.liveTilesVisible
+                    visible: root.diagnostics.recording
                     Layout.fillWidth: true
 
                     DiagnosticsSectionHeader {
-                        title: qsTr("LIVE RECORDING")
+                        title: qsTr("LIVE PIPELINE")
+                        meta: qsTr("measured from the running recording")
+                        Layout.fillWidth: true
+                    }
+
+                    ExoPipelineFlow {
+                        stages: root.diagnostics.pipelineStages
                         Layout.fillWidth: true
                     }
 
@@ -405,10 +411,114 @@ Item {
                                 title: liveTile.modelData.title
                                 value: liveTile.modelData.value
                                 sub: liveTile.modelData.sub
+                                subTinted: liveTile.modelData.subTinted
+                                subTone: liveTile.modelData.subTone
                                 detail: liveTile.modelData.detail
                                 tone: liveTile.modelData.tone
+                                valueTone: liveTile.modelData.valueTone
+                                series: liveTile.modelData.series
+                                budget: liveTile.modelData.budget
                                 Layout.fillWidth: true
                                 Layout.fillHeight: true
+                            }
+                        }
+                    }
+                }
+
+                // ── Observed in this session ────────────────────────────────────
+                //
+                // The session ledger: what was measured, when, and how often. An
+                // entry never leaves before Stop, because "it happened" is the
+                // answer the owner of the finished file needs.
+                ColumnLayout {
+                    spacing: ExoTheme.spacingSm
+                    visible: root.diagnostics.recording && root.diagnostics.ledgerCount > 0
+                    Layout.fillWidth: true
+
+                    DiagnosticsSectionHeader {
+                        title: qsTr("OBSERVED IN THIS SESSION")
+                        meta: qsTr("stays until Stop · order = first seen")
+                        Layout.fillWidth: true
+                    }
+
+                    Repeater {
+                        model: root.diagnostics.ledger
+
+                        ExoLedgerCard {
+                            id: ledgerCard
+
+                            // Roles arrive through the injected `model` object
+                            // rather than as required properties: several role
+                            // names collide with this component's own.
+                            required property var model
+
+                            entryId: ledgerCard.model.entryId
+                            title: ledgerCard.model.title
+                            summary: ledgerCard.model.summary
+                            active: ledgerCard.model.active
+                            count: ledgerCard.model.count
+                            firstSeenText: ledgerCard.model.firstSeenText
+                            lastSeenText: ledgerCard.model.lastSeenText
+                            worstText: ledgerCard.model.worstText
+                            budgetText: ledgerCard.model.budgetText
+                            totalActiveText: ledgerCard.model.totalActiveText
+                            logExcerpt: ledgerCard.model.logExcerpt
+                            occurrences: ledgerCard.model.occurrences
+                            // Firing right now is the card; gone quiet is the row.
+                            expanded: ledgerCard.model.active
+                            Layout.fillWidth: true
+
+                            onShowInLogRequested: function (entryId) {
+                                root.diagnostics.showInLog(entryId);
+                            }
+                            onOpenAtRequested: function (startMs) {
+                                root.diagnostics.openEditAt(startMs);
+                            }
+                        }
+                    }
+                }
+
+                // ── Last session ────────────────────────────────────────────────
+                //
+                // Until the next recording starts. A recording is judged by what
+                // happened to it, which is the frozen ledger and the timeline
+                // under these four facts.
+                ColumnLayout {
+                    spacing: ExoTheme.spacingSm
+                    visible: root.diagnostics.hasLastSession && !root.diagnostics.recording
+                    Layout.fillWidth: true
+
+                    DiagnosticsSectionHeader {
+                        title: qsTr("LAST SESSION")
+                        meta: root.diagnostics.lastSession.startedAtText === ""
+                            ? root.diagnostics.lastSession.durationText
+                            : qsTr("%1 – %2 · %3").arg(root.diagnostics.lastSession.startedAtText)
+                                                  .arg(root.diagnostics.lastSession.endedAtText)
+                                                  .arg(root.diagnostics.lastSession.durationText)
+                        Layout.fillWidth: true
+                    }
+
+                    // Created only once there is a session to describe. The
+                    // enclosing column is merely invisible before that, and a
+                    // card built against an empty map binds every one of its
+                    // lookups to undefined -- including the timeline's required
+                    // durationMs.
+                    Loader {
+                        active: root.diagnostics.hasLastSession
+                        Layout.fillWidth: true
+
+                        sourceComponent: ExoLastSessionCard {
+                            session: root.diagnostics.lastSession
+                            columns: root.tileColumns
+
+                            onShowInFolderRequested: root.diagnostics.openLastSessionFolder()
+                            onOpenEditRequested: root.diagnostics.openEditAt(0)
+                            onOpenEditAtRequested: function (positionMs) {
+                                root.diagnostics.openEditAt(positionMs);
+                            }
+                            onViewLogRequested: root.diagnostics.openLogs()
+                            onShowInLogRequested: function (entryId) {
+                                root.diagnostics.showInLog(entryId);
                             }
                         }
                     }
@@ -419,6 +529,7 @@ Item {
                     columns: root.tileColumns
                     columnSpacing: ExoTheme.spacingMd
                     rowSpacing: ExoTheme.spacingMd
+                    visible: !root.diagnostics.recording
                     Layout.fillWidth: true
 
                     Repeater {
@@ -436,13 +547,19 @@ Item {
                             showOkGlyph: tile.modelData.showOkGlyph
                             hasUsageBar: tile.modelData.hasUsageBar
                             usagePercent: tile.modelData.usagePercent
+                            headBadge: tile.modelData.headBadge
+                            chips: tile.modelData.chips
                             Layout.fillWidth: true
                             Layout.fillHeight: true
                         }
                     }
                 }
 
-                // ── Worst-first cards (shared: Simple + Expert) ─────────────────
+                // ── Worst-first cards ───────────────────────────────────────────
+                //
+                // Tier-1 blockers, and Tier-2 measured problems while nothing is
+                // recording. The adapter drops Tier-2 cards for the duration of a
+                // session, where the ledger above tells the same finding better.
                 ColumnLayout {
                     spacing: ExoTheme.spacingSm
                     visible: root.diagnostics.hasIssues
@@ -485,7 +602,6 @@ Item {
 
                 ExoTipChip {
                     tips: root.diagnostics.tips
-                    defaultOpen: root.diagnostics.expertMode
                     Layout.fillWidth: true
                     onApplyFixRequested: function (id) {
                         root.diagnostics.applyFix(id);
@@ -495,94 +611,48 @@ Item {
                     }
                 }
 
-                // ── Hardware capabilities ───────────────────────────────────────
+                // ── Reference ───────────────────────────────────────────────────
                 //
-                // Available in Simple as well as Expert: this used to be a whole
-                // navigation destination, and burying it behind the Expert toggle
-                // would have removed reachable functionality rather than moved it.
-                // Collapsed by default so a healthy page stays short, and so the
-                // DXGI enumeration + NVENC probe behind it only runs when asked
-                // for — expanded straight away in Expert, where the rest of the
-                // technical taxonomy is already open.
-                ExoDisclosure {
-                    id: hardwareCapabilitiesSection
-
-                    // No subtitle: the panel opens on DeviceAdapter's own summary
-                    // line, which says the same thing with the real adapter name
-                    // in it. Two explanatory paragraphs stacked on top of each
-                    // other read as one of them being unread.
-                    title: qsTr("Hardware capabilities")
-                    expanded: root.diagnostics.expertMode
-                    Layout.fillWidth: true
-
-                    body: Component {
-                        DeviceCapabilityPanel {
-                            device: root.device
-                        }
-                    }
-                }
-
-                // ── Expert-only taxonomy ────────────────────────────────────────
+                // The same four collapsed rows in every state, each stating its
+                // answer in the header so the section only has to be opened for
+                // the detail behind it.
                 ColumnLayout {
-                    spacing: ExoTheme.spacingLg
-                    visible: root.diagnostics.expertMode
+                    spacing: ExoTheme.spacingSm
                     Layout.fillWidth: true
 
                     DiagnosticsSectionHeader {
-                        title: qsTr("ENVIRONMENT")
+                        title: qsTr("REFERENCE")
+                        meta: qsTr("the same in every state")
                         Layout.fillWidth: true
                     }
 
-                    ExoKeyValueTable {
-                        rows: root.diagnostics.environmentRows
+                    ExoReferenceRow {
+                        title: qsTr("Self-test")
+                        // "Self-test: Capture" repeated five times is the section
+                        // title five times over; the row titles are stripped back
+                        // to what each one actually checked.
+                        summary: root.diagnostics.selfTestRows.length === 0
+                            ? qsTr("Not run yet")
+                            : root.diagnostics.selfTestStatus.replace(/^[^:]*:\s*/, "").toUpperCase() + " · "
+                              + root.diagnostics.selfTestRows.map(function (row) {
+                                    return row.title.replace(/^[^:]*:\s*/, "").toLowerCase();
+                                }).join(", ")
                         Layout.fillWidth: true
-                    }
 
-                    ExoDisclosure {
-                        title: qsTr("2 · Pre-flight & Readiness")
-                        subtitle: qsTr("Tier-1 gates the start · Tier-3 informs. Self-test validates core pipeline components.")
-                        expanded: true
-                        Layout.fillWidth: true
+                        trailing: Component {
+                            ExoButton {
+                                text: qsTr("Run again")
+                                leadingGlyph: ExoGlyph.Run
+                                quiet: true
+                                compact: true
+                                enabled: !root.diagnostics.checking
+                                onClicked: root.diagnostics.runCheck()
+                            }
+                        }
 
                         body: Component {
                             ColumnLayout {
                                 spacing: ExoTheme.spacingSm
-
-                                RowLayout {
-                                    spacing: ExoTheme.spacingMd
-                                    Layout.fillWidth: true
-
-                                    Label {
-                                        text: root.diagnostics.selfTestStatus
-                                        textFormat: Text.PlainText
-                                        color: ExoTheme.textSecondary
-                                        Layout.fillWidth: true
-                                        font {
-                                            family: ExoTheme.sansFamily
-                                            pixelSize: ExoTheme.fontSecondary
-                                        }
-                                    }
-
-                                    ExoButton {
-                                        text: qsTr("Run Self-Test")
-                                        leadingGlyph: ExoGlyph.Run
-                                        enabled: !root.diagnostics.checking
-                                        onClicked: root.diagnostics.runCheck()
-                                    }
-                                }
-
-                                Label {
-                                    text: qsTr("Run a system check or click Run Self-Test.")
-                                    textFormat: Text.PlainText
-                                    wrapMode: Text.WordWrap
-                                    visible: root.diagnostics.selfTestRows.length === 0
-                                    color: ExoTheme.textMuted
-                                    Layout.fillWidth: true
-                                    font {
-                                        family: ExoTheme.sansFamily
-                                        pixelSize: ExoTheme.fontCaption
-                                    }
-                                }
 
                                 Repeater {
                                     model: root.diagnostics.selfTestRows
@@ -604,150 +674,89 @@ Item {
                         }
                     }
 
-                    ExoDisclosure {
-                        title: qsTr("3 · Live pipeline")
-                        subtitle: qsTr("Low-overhead runtime metrics for the active recording (~5×/s). Unmeasured values are shown as Unavailable, never zero.")
-                        expanded: true
+                    // This used to be a whole navigation destination. Collapsed by
+                    // default so a healthy page stays short, and so the DXGI
+                    // enumeration + NVENC probe behind it only runs when asked for.
+                    ExoReferenceRow {
+                        id: hardwareCapabilitiesSection
+
+                        title: qsTr("Hardware capabilities")
+                        summary: root.device.selectedTitle === ""
+                            ? qsTr("Not scanned yet")
+                            : root.device.selectedTitle + " · " + root.device.selectedSubtitle
+                        Layout.fillWidth: true
+
+                        trailing: Component {
+                            ExoButton {
+                                text: root.device.scanning ? qsTr("Scanning…") : qsTr("Rescan")
+                                quiet: true
+                                compact: true
+                                enabled: !root.device.scanning
+                                onClicked: root.device.rescan()
+                            }
+                        }
+
+                        body: Component {
+                            DeviceCapabilityPanel {
+                                device: root.device
+                            }
+                        }
+                    }
+
+                    ExoReferenceRow {
+                        title: qsTr("Environment & configuration")
+                        summary: root.diagnostics.environmentRows.length === 0
+                            ? qsTr("Measured on the first check")
+                            : root.diagnostics.environmentRows.slice(0, 3).map(function (row) {
+                                  return row.value;
+                              }).join(" · ")
                         Layout.fillWidth: true
 
                         body: Component {
                             ColumnLayout {
-                                spacing: ExoTheme.spacingSm
+                                spacing: ExoTheme.spacingMd
 
-                                Label {
-                                    text: root.diagnostics.pipelineLive
-                                        ? qsTr("Live — measured from the running recording.")
-                                        : qsTr("Idle — stage timings appear once a recording starts.")
-                                    textFormat: Text.PlainText
-                                    color: ExoTheme.textMuted
+                                ExoKeyValueTable {
+                                    rows: root.diagnostics.environmentRows
                                     Layout.fillWidth: true
-                                    font {
-                                        family: ExoTheme.sansFamily
-                                        pixelSize: ExoTheme.fontCaption
-                                    }
                                 }
 
-                                ExoPipelineFlow {
-                                    stages: root.diagnostics.pipelineStages
+                                ExoKeyValueTable {
+                                    rows: root.diagnostics.configRows
                                     Layout.fillWidth: true
                                 }
                             }
                         }
                     }
 
-                    ExoDisclosure {
-                        title: qsTr("4 · Post-flight & Review")
-                        subtitle: qsTr("After Stop: drop-%, max drift, achieved vs target and file validity, then a bridge to the Edit overlay.")
+                    ExoReferenceRow {
+                        title: qsTr("Support bundle")
+                        summary: qsTr("Logs, configuration, self-test and the last session report, as one file to share")
                         Layout.fillWidth: true
+
+                        trailing: Component {
+                            ExoButton {
+                                text: root.diagnostics.bundleBusy ? qsTr("Creating…") : qsTr("Create")
+                                leadingGlyph: ExoGlyph.Folder
+                                quiet: true
+                                compact: true
+                                enabled: !root.diagnostics.bundleBusy
+                                Accessible.description: qsTr("Create a diagnostic package to share with support")
+                                onClicked: bundleDialog.open()
+                            }
+                        }
 
                         body: Component {
-                            ColumnLayout {
-                                spacing: ExoTheme.spacingSm
-
-                                Label {
-                                    text: qsTr("The report card appears in the Edit view's Review step after a recording finishes.")
-                                    textFormat: Text.PlainText
-                                    wrapMode: Text.WordWrap
-                                    color: ExoTheme.textMuted
-                                    Layout.fillWidth: true
-                                    font {
-                                        family: ExoTheme.sansFamily
-                                        pixelSize: ExoTheme.fontCaption
-                                    }
-                                }
-
-                                ExoButton {
-                                    text: qsTr("Open last report")
-                                    leadingGlyph: ExoGlyph.ExternalLink
-                                    enabled: root.diagnostics.hasLastRecording
-                                    Layout.alignment: Qt.AlignLeft
-                                    onClicked: root.diagnostics.openLastReport()
-                                }
-                            }
-                        }
-                    }
-
-                    ExoDisclosure {
-                        title: qsTr("Active configuration")
-                        subtitle: qsTr("Recording settings as currently configured in the app.")
-                        Layout.fillWidth: true
-
-                        body: Component {
-                            ExoKeyValueTable {
-                                rows: root.diagnostics.configRows
-                            }
-                        }
-                    }
-
-                    DiagnosticsSectionHeader {
-                        title: qsTr("ELEVATED DIAGNOSTICS")
-                        meta: qsTr("Opt-in · relaunch as admin")
-                        Layout.fillWidth: true
-                    }
-
-                    DiagnosticsRowCard {
-                        Layout.fillWidth: true
-
-                        Label {
-                            text: root.diagnostics.elevated
-                                ? qsTr("Running elevated — PresentMon ETW present diagnostics are available.")
-                                : qsTr("Running standard — present-path and DPC/ISR measurements need an elevated relaunch.")
-                            textFormat: Text.PlainText
-                            wrapMode: Text.WordWrap
-                            color: ExoTheme.textMuted
-                            Layout.fillWidth: true
-                            Layout.minimumHeight: 17
-                            font {
-                                family: ExoTheme.sansFamily
-                                pixelSize: ExoTheme.fontSecondary
-                            }
-                        }
-
-                        ExoBadge {
-                            text: root.diagnostics.elevated ? qsTr("Elevated") : qsTr("Standard")
-                            tone: root.diagnostics.elevated ? "pass" : "neutral"
-                            Layout.alignment: Qt.AlignVCenter
-                        }
-                    }
-
-                    // ── Logs redirect (Expert; the Simple view stays calm) ──────
-                    DiagnosticsRowCard {
-                        Layout.fillWidth: true
-
-                        ColumnLayout {
-                            spacing: 2
-                            Layout.fillWidth: true
-
                             Label {
-                                text: qsTr("Application Logs")
-                                textFormat: Text.PlainText
-                                color: ExoTheme.text
-                                Layout.fillWidth: true
-                                font {
-                                    family: ExoTheme.sansFamily
-                                    pixelSize: ExoTheme.fontBody
-                                    weight: Font.DemiBold
-                                }
-                            }
-
-                            Label {
-                                text: qsTr("Need the raw event stream behind these checks? Open the Logs page.")
+                                text: qsTr("The bundle is written where you choose and never leaves this machine on its own.")
                                 textFormat: Text.PlainText
                                 wrapMode: Text.WordWrap
                                 color: ExoTheme.textMuted
-                                Layout.fillWidth: true
-                                Layout.minimumHeight: 16
                                 font {
                                     family: ExoTheme.sansFamily
                                     pixelSize: ExoTheme.fontCaption
                                 }
                             }
-                        }
-
-                        ExoButton {
-                            text: qsTr("Open Logs Page")
-                            Layout.alignment: Qt.AlignVCenter
-                            onClicked: root.diagnostics.openLogs()
                         }
                     }
                 }

@@ -6,6 +6,7 @@
 #include "FilesystemProvider.h"
 #include "PresentProvider.h"
 #include "RecommendationEngine.h"
+#include "SessionLedger.h"
 #include "WindowTargetFacts.h"
 
 #include <capability/audio_ui_state.h>
@@ -22,6 +23,12 @@
 #include <string>
 #include <string_view>
 #include <vector>
+
+namespace exosnap {
+// Declared rather than included: RecordViewModel.h reaches Qt Core, and this
+// header is the one place the diagnostics policy stays free of it.
+struct UiRecordingResult;
+} // namespace exosnap
 
 // Diagnostics presentation policy, extracted out of the Qt Widgets DiagnosticsPage.
 //
@@ -54,6 +61,9 @@ struct Verdict {
     // chip and must never turn the verdict amber (the honesty rail).
     int notices = 0;
     int cap_passes = 0;
+    // True when this verdict reports on a running recording rather than on
+    // readiness. The two answer different questions and the band says so.
+    bool recording = false;
 };
 
 // ── Issue cards + tips ──────────────────────────────────────────────────────────
@@ -129,16 +139,43 @@ enum class TileTone {
 
 [[nodiscard]] std::string_view TileToneKey(TileTone tone) noexcept;
 
+// The tint of ONE number, decided by the check that owns it and by nothing else.
+// Neutral means no check owns this number at all, which is a different statement
+// from "measured and inside budget" (Ok) and must not be rendered as a verdict.
+enum class ValueTone {
+    Neutral,
+    Ok,
+    Warn,
+    Critical,
+};
+
+[[nodiscard]] std::string_view ValueToneKey(ValueTone tone) noexcept;
+
+// One codec in the encoder tile's codec row. `available` is the same capability
+// answer the capability matrix reads, so a codec can never read as encodable here
+// and unavailable there.
+struct CodecChip {
+    std::string label;
+    bool selected = false;
+    bool available = true;
+
+    friend bool operator==(const CodecChip&, const CodecChip&) = default;
+};
+
 struct ReadinessTile {
-    std::string key; // "readiness" | "encoder" | "disk" | "display" | "audio" | "target" | "session"
+    std::string key; // "encoder" | "disk" | "display" | "audio"
     std::string title;
     std::string value;
     std::string sub;
     TileTone tone = TileTone::Neutral;
     bool has_usage_bar = false;
     int usage_percent = 0;
-    // The Readiness tile earns a trailing check glyph only when everything passed.
+    // A trailing check glyph, for a tile that has something to be clear about.
     bool show_ok_glyph = false;
+    // A short fact that belongs in the tile head next to the title rather than in
+    // the value line: the encoder backend ("NVENC"), today the only one.
+    std::string head_badge;
+    std::vector<CodecChip> chips;
 };
 
 // Everything the tile builder needs, already resolved by the caller. Screen facts
@@ -146,9 +183,6 @@ struct ReadinessTile {
 // not reach for itself.
 struct ReadinessTileInputs {
     bool data_ready = false;
-    int blockers = 0;
-    int notices = 0;
-    int cap_passes = 0;
 
     std::string gpu_adapter_name;
     capability::VideoCodec video_codec = capability::VideoCodec::H264;
@@ -163,52 +197,153 @@ struct ReadinessTileInputs {
     int display_height = 0;
     int display_refresh_hz = 0;
 
-    int audio_sources = 0;
-    uint32_t audio_sample_rate = 0;
-    uint32_t audio_channels = 0;
-
+    // What is actually being captured, which is what the Display tile names once
+    // a target has been picked. Without a selection the tile falls back to the
+    // configured kind, so it never claims a target nobody chose.
     bool target_selected = false;
     bool target_is_window = false;
     std::string target_description;
 
-    bool has_last_recording = false;
+    int audio_sources = 0;
+    uint32_t audio_sample_rate = 0;
+    uint32_t audio_channels = 0;
+
+    // The capability answers behind the encoder tile's codec row. nullptr leaves
+    // the row empty rather than claiming every codec is encodable.
+    const capability::CapabilitySet* caps = nullptr;
+    // WDDM user-mode driver version of the encoding adapter ("A.B.C.D"), as the
+    // caller read it. Empty is a real answer -- some drivers do not report one --
+    // and the tile then says nothing about it.
+    std::string driver_version;
 };
 
 [[nodiscard]] std::vector<ReadinessTile> BuildReadinessTiles(const ReadinessTileInputs& inputs);
 
+// Adapter names ship with the vendor in front ("NVIDIA GeForce RTX 5070 Ti"). The
+// vendor is already stated by the backend badge, so the tile names the part the
+// user recognises.
+[[nodiscard]] std::string TrimVendorPrefix(std::string adapter_name);
+
 // ── Live tiles ──────────────────────────────────────────────────────────────────
 //
-// The five questions the Diagnostics page has to answer while a recording is
-// running, and could not: is the pipeline healthy, where is the bottleneck, is
-// frame pacing healthy, is the encoder healthy, is audio synchronous, is storage
-// healthy. Everything below is a RENDERING of the engine's own verdict --
-// PipelineHealth, PipelineBottleneck and the measurements behind them. There is
-// no second classification here: a tile never decides that something is wrong,
-// it only says which of the engine's findings it is showing.
+// The four questions the Diagnostics page has to answer while a recording is
+// running: is frame pacing healthy, is the encoder healthy, is audio synchronous,
+// is storage healthy. Everything here is a RENDERING of measurements the engine
+// and the recommendation checks already made. There is no second classification:
+// a tile never decides that something is wrong, it only says which finding it is
+// showing.
+//
+// The engine's health/bottleneck verdict drives the TILE tone. The tint of a
+// NUMBER comes from the ledger entry of the check that owns that number, so a
+// value reads green only while the check measuring it has never fired this
+// session, and neutral when no check owns it at all.
 //
 // The live pipeline stage cards (PipelineCardBuilder) stay where they are and
 // keep their Expert home. These tiles are the calm summary above them.
 struct LiveTile {
-    std::string key; // "pipelineHealth" | "framePacing" | "encoder" | "audioSync" | "storage"
+    // "framePacing" | "encoder" | "audioSync" | "storage", plus the in-depth
+    // "presentMode" | "presentHealth" | "dpcLatency" | "gpuTime".
+    std::string key;
     std::string title;
     std::string value;  // the one measurement that answers the tile's question
     std::string sub;    // its context (target, format, budget)
     std::string detail; // a second fact, or why the first one is unavailable
     TileTone tone = TileTone::Neutral;
+    ValueTone value_tone = ValueTone::Neutral;
+    ValueTone sub_tone = ValueTone::Neutral;
+    // The exact substring of `sub` that carries sub_tone. Empty when no fragment
+    // of the sub-line is owned by a check. The view tints that fragment and
+    // decides nothing else about it.
+    std::string sub_tinted;
+    // The threshold the owning check measures against, in the unit of the value
+    // this tile plots. Empty when no check has a threshold for it.
+    std::optional<double> budget;
+    // The whole-session figure behind the headline's "now". Empty when the engine
+    // exposes no session-wide measurement for this tile.
+    std::string session_detail;
 
     friend bool operator==(const LiveTile&, const LiveTile&) = default;
+};
+
+// Everything the live tiles read, gathered by the caller. `ledger` supplies the
+// value tint; `present` and `dpc` are the elevated-only readings and are consulted
+// only when `in_depth` is on.
+struct LiveTileInputs {
+    const exosnap::engine::RecordingDiagnosticsSnapshot& snapshot;
+    const SessionLedger& ledger;
+    bool in_depth = false;
+    std::optional<PresentSample> present;
+    std::optional<DpcLatencyReading> dpc;
+    double gpu_exec_p99_ms = 0.0;
 };
 
 // Pure. Returns an empty list unless the snapshot describes a pipeline that is
 // actually running (Recording or Paused).
 //
 // Two exclusions, for two different reasons. An invalid snapshot has nothing
-// measured at all, and five tiles of em dashes are worse than no tiles. A
-// COMPLETED or FAILED session has real numbers but they answer a different
-// question -- "how did it go", which the Edit review step owns -- and leaving
-// them on a page headed "live" would report a recording that has stopped as one
-// that is still running.
+// measured at all, and tiles of em dashes are worse than no tiles. A COMPLETED or
+// FAILED session has real numbers but they answer a different question -- "how did
+// it go", which the Last session card owns -- and leaving them on a page headed
+// "live" would report a recording that has stopped as one that is still running.
+[[nodiscard]] std::vector<LiveTile> BuildLiveTiles(const LiveTileInputs& inputs);
+
+// The tiles without a ledger and without the in-depth row: every owned number
+// reads Ok, because no owning check has been observed to fire.
 [[nodiscard]] std::vector<LiveTile> BuildLiveTiles(const exosnap::engine::RecordingDiagnosticsSnapshot& snapshot);
+
+// ── Last session ────────────────────────────────────────────────────────────────
+
+// One headline number of the finished recording. `tone` follows the same rule the
+// live values do: a colour only where a check owns the number.
+struct LastSessionFact {
+    std::string key; // "dropped" | "achieved" | "drift" | "file"
+    std::string label;
+    std::string value;
+    std::string sub;
+    ValueTone tone = ValueTone::Neutral;
+
+    friend bool operator==(const LastSessionFact&, const LastSessionFact&) = default;
+};
+
+// One stretch of the finished recording that is worth pointing at, in session
+// seconds. `tone` is a stable string key ("warn" for a measured problem, "critical"
+// for real frame drops) so the view maps it to a theme colour and nothing else.
+struct TimelineMark {
+    double start_s = 0.0;
+    double end_s = 0.0;
+    std::string id;
+    std::string title;
+    double worst = 0.0;
+    std::string tone;
+
+    friend bool operator==(const TimelineMark&, const TimelineMark&) = default;
+};
+
+// The finished recording, as the Diagnostics page reports it. Replaces the
+// "Last session" readiness tile: a recording is judged by what happened to it,
+// which is the frozen ledger, not by what the machine can do next.
+struct LastSession {
+    bool valid = false;
+    std::string file_name; // name only, never a path
+    // The session clock the marks are placed on: how long the recording ran.
+    double duration_s = 0.0;
+    // The finished file's own length, which is shorter by the tail between the
+    // last encoded frame and Stop. A position handed to the Edit surface is
+    // clamped to it, so a mark in that tail opens at the end of the file.
+    double media_duration_s = 0.0;
+    std::string started_at_text;
+    std::string ended_at_text;
+    std::vector<LastSessionFact> facts; // exactly: dropped, achieved, drift, file
+    std::vector<LedgerEntry> ledger;    // frozen
+    std::vector<TimelineMark> marks;
+    int problems = 0;
+};
+
+// Pure. `final_snapshot` is the terminal diagnostics snapshot of that recording;
+// an invalid one yields the facts it can still state from the result alone.
+[[nodiscard]] LastSession BuildLastSession(const UiRecordingResult& result,
+                                           const exosnap::engine::RecordingDiagnosticsSnapshot& final_snapshot,
+                                           const std::vector<LedgerEntry>& frozen_ledger);
 
 // ── Fact / configuration tables ─────────────────────────────────────────────────
 
@@ -333,6 +468,16 @@ class RefreshThrottle {
 
 [[nodiscard]] Verdict ComputeVerdict(const DiagnosticChecklist& recommendations, int cap_passes, bool data_ready);
 
+// The verdict while a recording runs. It reports the SESSION, not the instant: a
+// problem that fired once and went quiet still counts, because a recording is
+// judged by what happened to it and not by what is happening in this half second.
+// Only a Tier-1 blocker in the live checklist overrides the ledger.
+//
+// `now_s` is the session-relative time of the evaluation, used only to say how
+// long ago the last quiet problem was seen.
+[[nodiscard]] Verdict ComputeRecordingVerdict(const DiagnosticChecklist& live_results, const SessionLedger& ledger,
+                                              double now_s = 0.0);
+
 [[nodiscard]] TopIssues BuildTopIssues(const capability::ResolveResult& profile_validation,
                                        const DiagnosticChecklist& recommendations, bool hotkeys_ok,
                                        const std::string& hotkeys_summary);
@@ -352,6 +497,10 @@ struct DiagnosticsSnapshot {
     std::vector<IssueCard> cards;
     std::vector<TipEntry> tips;
     std::vector<KeyValueRow> environment_rows;
+    // The session ledger as of this pass. Empty while idle; frozen (nothing
+    // active) once the recording has stopped, and kept until the next session.
+    std::vector<LedgerEntry> ledger;
+    int ledger_active = 0;
 };
 
 // Owns the diagnostics inputs and produces the view snapshot. Deliberately free of
@@ -445,7 +594,33 @@ class DiagnosticsController {
     // True while the last live snapshot is in the recording or paused lifecycle.
     [[nodiscard]] bool liveRecording() const noexcept;
 
+    // What this recording session has measured so far. Reset when a new session
+    // generation arrives and frozen when the lifecycle leaves recording.
+    [[nodiscard]] const SessionLedger& ledger() const noexcept;
+
+    // Closes the ledger's open occurrences. Called automatically when the live
+    // lifecycle leaves recording; exposed so a caller that ends a session without
+    // a further snapshot can still close it.
+    void FreezeLedger();
+
+    // The frozen ledger, for whoever writes the session report. Same entries the
+    // Last session card shows; a copy so the report cannot observe a later reset.
+    [[nodiscard]] const std::vector<LedgerEntry>& frozenLedger() const noexcept;
+
+    // The finished recording. Set once the result arrives; kept until the next one.
+    void SetLastSession(LastSession session);
+    [[nodiscard]] const LastSession& lastSession() const noexcept;
+
   private:
+    // What identifies one live snapshot, so the ledger is never handed the same
+    // measurement twice.
+    struct SnapshotStamp {
+        uint64_t generation = 0;
+        double elapsed_s = 0.0;
+
+        friend bool operator==(const SnapshotStamp&, const SnapshotStamp&) = default;
+    };
+
     Config config_;
     ProbeResult probe_;
     DisplayFacts display_{};
@@ -472,6 +647,13 @@ class DiagnosticsController {
     // rendered surface answer from one pass.
     DiagnosticChecklist last_checklist_;
     std::vector<DiagnosticResult> last_facts_;
+    SessionLedger ledger_;
+    // The snapshot the ledger has already observed. Empty before the first one.
+    std::optional<SnapshotStamp> last_observed_;
+    LastSession last_session_;
+    // The lifecycle edge the freeze hangs off. Without it, an idle snapshot that
+    // arrives twice would close occurrences a second time at a later timestamp.
+    bool was_recording_ = false;
     PipelineCardBuilder pipeline_;
 };
 

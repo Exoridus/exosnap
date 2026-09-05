@@ -597,6 +597,9 @@ TEST(VisualScenarioTest, LiveDiagnosticsScenariosCarryDeterministicState) {
         {"diagnostics-recording-disk-pressure", "disk"},
         {"diagnostics-paused", "paused"},
         {"diagnostics-split-pending", "split"},
+        {"diagnostics-recording-ledger", "ledger"},
+        {"diagnostics-after-stop", "after-stop"},
+        {"diagnostics-in-depth", "in-depth"},
     };
     for (const auto& c : cases) {
         const VisualScenario* s = FindVisualScenario(QString::fromLatin1(c.id));

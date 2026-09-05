@@ -12,6 +12,11 @@ ColumnLayout {
     property string subtitle: ""
     property bool expanded: false
     property alias body: bodyLoader.sourceComponent
+    // An optional slot at the header row's right edge (a "Run again" button,
+    // a one-line mono summary next to a button -- ExoReferenceRow builds
+    // exactly that). Empty for every disclosure that predates this, so it
+    // draws nothing and costs nothing there.
+    property alias trailing: trailingLoader.sourceComponent
 
     spacing: ExoTheme.spacingXs
 
@@ -84,11 +89,22 @@ ColumnLayout {
                 elide: Text.ElideRight
                 color: ExoTheme.textSecondary
                 Layout.fillWidth: true
+                // Capped so a trailing slot (a summary, a button) gets the rest
+                // of the row instead of splitting it evenly with a short title.
+                // Every title in this frontend is well under this on its own.
+                Layout.maximumWidth: 240
                 font {
                     family: ExoTheme.sansFamily
                     pixelSize: ExoTheme.fontSecondary
                     weight: Font.DemiBold
                 }
+            }
+
+            Loader {
+                id: trailingLoader
+
+                Layout.fillWidth: true
+                Layout.alignment: Qt.AlignVCenter
             }
         }
     }

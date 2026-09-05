@@ -422,6 +422,12 @@ QtObject {
         return Math.max(1, Math.min(maxColumns, fits));
     }
 
+    // Tile rows are always full: four when four fit, otherwise two. Three would
+    // leave a four-tile row ragged (3 + 1), which reads as a broken row.
+    function tileColumns(availableWidth: real, minItemWidth: real, gap: real): int {
+        return gridColumns(availableWidth, minItemWidth, gap, 4) >= 4 ? 4 : 2;
+    }
+
     readonly property string sansFamily: sansFont.status === FontLoader.Ready ? sansFont.name : "Segoe UI"
     readonly property string monoFamily: monoFont.status === FontLoader.Ready ? monoFont.name : "Consolas"
 

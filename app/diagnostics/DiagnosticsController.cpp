@@ -2,6 +2,10 @@
 
 #include "DiagnosticsPresentation.h"
 
+// Qt Core arrives with this header (it carries UiRecordingResult); nothing below
+// may use `signals` as an identifier while its moc keyword macro is defined.
+#include "../viewmodels/RecordViewModel.h"
+
 #include <capability/support_level.h>
 #include <exosnap/engine/pipeline_health.h>
 
@@ -9,6 +13,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
 
 namespace exosnap::diagnostics {
 namespace {
@@ -17,6 +22,7 @@ constexpr const char* kDash = "\xe2\x80\x94";   // em dash
 constexpr const char* kMiddot = "\xc2\xb7";     // middle dot
 constexpr const char* kNarrowNbsp = "\xc2\xa0"; // non-breaking space
 constexpr const char* kRightArrow = "\xe2\x86\x92";
+constexpr const char* kMicro = "\xc2\xb5"; // micro sign
 
 // The SelfTestRunner sentinel for a check that was compiled out. Deliberately the
 // ONLY place this string appears on the presentation side: everything downstream
@@ -133,6 +139,20 @@ std::string_view TileToneKey(TileTone tone) noexcept {
     return "neutral";
 }
 
+std::string_view ValueToneKey(ValueTone tone) noexcept {
+    switch (tone) {
+    case ValueTone::Neutral:
+        return "neutral";
+    case ValueTone::Ok:
+        return "ok";
+    case ValueTone::Warn:
+        return "warn";
+    case ValueTone::Critical:
+        return "critical";
+    }
+    return "neutral";
+}
+
 std::string_view SelfTestStateLabel(SelfTestState state) noexcept {
     switch (state) {
     case SelfTestState::NotRun:
@@ -221,46 +241,6 @@ TileTone ToneOfStage(const exosnap::engine::RecordingDiagnosticsSnapshot& s,
     return TileTone::Neutral;
 }
 
-std::string BottleneckLabel(exosnap::engine::PipelineBottleneck bottleneck) {
-    switch (bottleneck) {
-    case exosnap::engine::PipelineBottleneck::None:
-        return "No sustained bottleneck";
-    case exosnap::engine::PipelineBottleneck::Capture:
-        return "Capture";
-    case exosnap::engine::PipelineBottleneck::Compositor:
-        return "Compositor";
-    case exosnap::engine::PipelineBottleneck::VideoEncoder:
-        return "Video encoder";
-    case exosnap::engine::PipelineBottleneck::Audio:
-        return "Audio";
-    case exosnap::engine::PipelineBottleneck::Muxer:
-        return "Muxer";
-    case exosnap::engine::PipelineBottleneck::Disk:
-        return "Disk";
-    case exosnap::engine::PipelineBottleneck::Gpu:
-        return "GPU";
-    case exosnap::engine::PipelineBottleneck::Unknown:
-        return "Not enough evidence yet";
-    }
-    return "Not enough evidence yet";
-}
-
-std::string HealthLabel(exosnap::engine::PipelineHealth health) {
-    switch (health) {
-    case exosnap::engine::PipelineHealth::Good:
-        return "Good";
-    case exosnap::engine::PipelineHealth::Warning:
-        return "Warning";
-    case exosnap::engine::PipelineHealth::Critical:
-        return "Critical";
-    case exosnap::engine::PipelineHealth::Idle:
-        return "Idle";
-    case exosnap::engine::PipelineHealth::Unavailable:
-        return "Unavailable";
-    }
-    return "Unavailable";
-}
-
 std::string CodecName(exosnap::engine::VideoCodec codec) {
     switch (codec) {
     case exosnap::engine::VideoCodec::Av1:
@@ -320,6 +300,18 @@ std::string CoarseDuration(double seconds) {
     return Number(seconds, 0) + kNarrowNbsp + "s";
 }
 
+// How long ago a quiet problem was last measured, quantised. The band's headline
+// is deliberately restricted to counts so it does not rewrite itself twice a
+// second; a subline counting up in whole seconds under it would do exactly that
+// for the whole quiet stretch.
+std::string LastSeenAgo(double seconds) {
+    if (seconds < 10.0)
+        return "just now";
+    if (seconds < 60.0)
+        return Number(std::floor(seconds / 10.0) * 10.0, 0) + " s ago";
+    return Number(std::floor(seconds / 60.0), 0) + " min ago";
+}
+
 std::string Join(const std::string& left, const std::string& right) {
     if (left.empty())
         return right;
@@ -328,28 +320,69 @@ std::string Join(const std::string& left, const std::string& right) {
     return left + " " + kMiddot + " " + right;
 }
 
-LiveTile PipelineHealthTile(const exosnap::engine::RecordingDiagnosticsSnapshot& s) {
-    LiveTile tile;
-    tile.key = "pipelineHealth";
-    tile.title = "Pipeline health";
-    tile.value = HealthLabel(s.health);
-    tile.sub = BottleneckLabel(s.bottleneck);
-    // The engine's own sentence when it has one; the drop count otherwise. Never
-    // a sentence written here about a problem the engine did not report.
-    tile.detail = s.bottleneck_reason.empty() ? "Problem drops " + Number(s.capture.frames_dropped_problem())
-                                              : s.bottleneck_reason;
-    tile.tone = ToneOfHealth(s.health);
-    return tile;
+// The tint of one number, from the ledger entry of the check that owns it and
+// from nothing else. No entry means the check has never fired this session, which
+// is the only thing that earns green. `sticky` is for a small sub-value (jitter,
+// p99): once the check that owns it has fired, the sub-value stays amber for the
+// rest of the session even while the check is quiet, because the sub-line is where
+// the session's history is read.
+ValueTone OwnedTone(const SessionLedger& ledger, std::initializer_list<std::string_view> owner_ids, bool sticky) {
+    bool entered = false;
+    for (const LedgerEntry& entry : ledger.entries()) {
+        for (const std::string_view id : owner_ids) {
+            if (entry.id != id)
+                continue;
+            if (entry.active)
+                return ValueTone::Warn;
+            entered = true;
+        }
+    }
+    if (!entered)
+        return ValueTone::Ok;
+    return sticky ? ValueTone::Warn : ValueTone::Ok;
 }
 
-LiveTile FramePacingTile(const exosnap::engine::RecordingDiagnosticsSnapshot& s) {
+// A Tier-1 blocker on this stage outranks any ledger entry: the engine calling the
+// pipeline Critical is a statement about the recording, not about one measurement.
+void EscalateOnBlocker(LiveTile& tile) {
+    if (tile.tone != TileTone::Blocker)
+        return;
+    if (tile.value_tone != ValueTone::Neutral)
+        tile.value_tone = ValueTone::Critical;
+    if (!tile.sub_tinted.empty())
+        tile.sub_tone = ValueTone::Critical;
+}
+
+std::string PresentSampleModeLabel(PresentMode mode) {
+    switch (mode) {
+    case PresentMode::Composed:
+        return "Composed";
+    case PresentMode::IndependentFlip:
+        return "Independent flip";
+    case PresentMode::ExclusiveFullscreen:
+        return "Exclusive fullscreen";
+    case PresentMode::Unknown:
+        return "Unknown";
+    }
+    return "Unknown";
+}
+
+double FrameBudgetMs(const exosnap::engine::RecordingDiagnosticsSnapshot& s) noexcept {
+    return s.capture.target_fps > 0.0 ? 1000.0 / s.capture.target_fps : 0.0;
+}
+
+LiveTile FramePacingTile(const LiveTileInputs& in) {
+    const exosnap::engine::RecordingDiagnosticsSnapshot& s = in.snapshot;
     LiveTile tile;
     tile.key = "framePacing";
     tile.title = "Frame pacing";
     tile.value = Number(s.capture.actual_fps, 2) + " fps";
     tile.sub = "Target " + Number(s.capture.target_fps, 0) + " fps";
-    if (s.capture.present_cadence_availability == exosnap::engine::MetricAvailability::Available)
-        tile.sub = Join(tile.sub, "jitter " + Number(s.capture.source_present_jitter_ms, 1) + " ms");
+    if (s.capture.present_cadence_availability == exosnap::engine::MetricAvailability::Available) {
+        tile.sub_tinted = "jitter " + Number(s.capture.source_present_jitter_ms, 1) + " ms";
+        tile.sub = Join(tile.sub, tile.sub_tinted);
+        tile.sub_tone = OwnedTone(in.ledger, {"rec.001"}, /*sticky=*/true);
+    }
 
     if (s.capture.present_mode_availability == exosnap::engine::MetricAvailability::Available) {
         tile.detail = Join(PresentModeLabel(s.capture.source_present_mode),
@@ -361,10 +394,19 @@ LiveTile FramePacingTile(const exosnap::engine::RecordingDiagnosticsSnapshot& s)
     }
     tile.tone =
         ToneOfStage(s, {exosnap::engine::PipelineBottleneck::Capture, exosnap::engine::PipelineBottleneck::Compositor});
+    tile.value_tone = OwnedTone(in.ledger, {"rec.001", "rec.pacing.duplication"}, /*sticky=*/false);
+    if (s.capture.target_fps > 0.0)
+        tile.budget = s.capture.target_fps;
+    if (s.elapsed_seconds > 0.0) {
+        tile.session_detail =
+            "session avg " + Number(static_cast<double>(s.capture.frames_emitted) / s.elapsed_seconds, 2) + " fps";
+    }
+    EscalateOnBlocker(tile);
     return tile;
 }
 
-LiveTile EncoderTile(const exosnap::engine::RecordingDiagnosticsSnapshot& s) {
+LiveTile EncoderTile(const LiveTileInputs& in) {
+    const exosnap::engine::RecordingDiagnosticsSnapshot& s = in.snapshot;
     LiveTile tile;
     tile.key = "encoder";
     tile.title = "Encoder";
@@ -380,18 +422,34 @@ LiveTile EncoderTile(const exosnap::engine::RecordingDiagnosticsSnapshot& s) {
     }
 
     if (s.video_encoder.frames_encoded > 0) {
-        tile.sub = "p99 " + Number(s.video_encoder.p99_ms, 1) + " ms";
+        tile.sub_tinted = "p99 " + Number(s.video_encoder.p99_ms, 1) + " ms";
+        tile.sub = tile.sub_tinted;
         if (s.video_timing.budget_ms > 0.0)
             tile.sub = Join(tile.sub, "budget " + Number(s.video_timing.budget_ms, 2) + " ms");
+        tile.sub_tone = OwnedTone(in.ledger, {"rec.gpu.contention"}, /*sticky=*/true);
     } else {
         tile.sub = "No frame encoded yet";
     }
     tile.detail = "Backlog " + Number(s.video_encoder.backlog);
     tile.tone = ToneOfStage(s, {exosnap::engine::PipelineBottleneck::VideoEncoder});
+    // The headline is a codec name, and no check measures a codec name.
+    tile.value_tone = ValueTone::Neutral;
+    if (const double budget = FrameBudgetMs(s); budget > 0.0)
+        tile.budget = budget;
+    // The engine's encoder percentiles are rolling-window (about 2 s), so there is
+    // no session-wide p99 to quote. What IS session-wide is how many frames the
+    // encoder got through against the session clock.
+    if (s.elapsed_seconds > 0.0) {
+        tile.session_detail = "session avg " +
+                              Number(static_cast<double>(s.video_encoder.frames_encoded) / s.elapsed_seconds, 2) +
+                              " fps encoded";
+    }
+    EscalateOnBlocker(tile);
     return tile;
 }
 
-LiveTile AudioSyncTile(const exosnap::engine::RecordingDiagnosticsSnapshot& s) {
+LiveTile AudioSyncTile(const LiveTileInputs& in) {
+    const exosnap::engine::RecordingDiagnosticsSnapshot& s = in.snapshot;
     LiveTile tile;
     tile.key = "audioSync";
     tile.title = "Audio sync";
@@ -406,6 +464,7 @@ LiveTile AudioSyncTile(const exosnap::engine::RecordingDiagnosticsSnapshot& s) {
     if (s.av_drift_availability == exosnap::engine::MetricAvailability::Available) {
         const std::string sign = s.av_drift_ms >= 0.0 ? "+" : "";
         tile.value = sign + Number(s.av_drift_ms, 1) + " ms";
+        tile.value_tone = OwnedTone(in.ledger, {"rec.audio.clock_saturated"}, /*sticky=*/false);
     } else if (drift_faulted) {
         // Sampled and known-wrong. "Unavailable" would send the reader off to
         // wait for a value that already arrived, and a number would be a sync
@@ -435,6 +494,10 @@ LiveTile AudioSyncTile(const exosnap::engine::RecordingDiagnosticsSnapshot& s) {
         detail = Join(detail, "audio device stopped reporting its clock");
     }
     tile.detail = detail;
+    // The engine latches the peak drift for the whole session and resets it per
+    // recording, so this one IS the session figure.
+    if (s.peak_av_drift_availability == exosnap::engine::MetricAvailability::Available)
+        tile.session_detail = "session peak " + Number(s.peak_av_drift_ms, 1) + " ms";
 
     tile.tone = ToneOfStage(s, {exosnap::engine::PipelineBottleneck::Audio});
     // A degraded source is a MEASURED problem in its own right (ADR 0046) and is
@@ -442,38 +505,166 @@ LiveTile AudioSyncTile(const exosnap::engine::RecordingDiagnosticsSnapshot& s) {
     // the recording keeps running, which is why it never escalates past Notice.
     if (s.audio.source_degraded && tile.tone == TileTone::Neutral)
         tile.tone = TileTone::Notice;
+    EscalateOnBlocker(tile);
     return tile;
 }
 
-LiveTile StorageTile(const exosnap::engine::RecordingDiagnosticsSnapshot& s) {
+LiveTile StorageTile(const LiveTileInputs& in) {
+    const exosnap::engine::RecordingDiagnosticsSnapshot& s = in.snapshot;
     LiveTile tile;
     tile.key = "storage";
     tile.title = "Storage";
     tile.value = Number(s.disk.throughput_mib_s, 0) + " MiB/s";
+    // Throughput has no owning check: it is a property of what is being written,
+    // not a budget anything is spending. Neutral ink, never a verdict colour.
+    tile.value_tone = ValueTone::Neutral;
     tile.sub = "Write failures " + Number(s.disk.write_failures);
+    if (s.disk.latency_availability == exosnap::engine::MetricAvailability::Available) {
+        tile.sub_tinted = "peak write " + Number(s.disk.peak_write_ms, 0) + " ms";
+        tile.sub = Join(tile.sub, tile.sub_tinted);
+        tile.sub_tone = OwnedTone(in.ledger, {"rec.disk.writestall"}, /*sticky=*/true);
+    }
     // Negative means the estimate could not be made (unknown throughput or no
     // free-space reading), which is a different answer from "no time left".
     tile.detail = s.disk_fill_eta_seconds >= 0.0 ? "Est. remaining " + CoarseDuration(s.disk_fill_eta_seconds)
                                                  : "Remaining time unavailable";
+    // disk.throughput_mib_s is an interval rate between publishes; the session
+    // average is the bytes actually on disk over the session clock.
+    if (s.elapsed_seconds > 0.0) {
+        const double mib = static_cast<double>(s.disk.bytes_written) / (1024.0 * 1024.0);
+        tile.session_detail = "session avg " + Number(mib / s.elapsed_seconds, 0) + " MiB/s";
+    }
     tile.tone = ToneOfStage(s, {exosnap::engine::PipelineBottleneck::Disk, exosnap::engine::PipelineBottleneck::Muxer});
     if (s.disk.write_failures > 0 && tile.tone == TileTone::Neutral)
         tile.tone = TileTone::Notice;
+    EscalateOnBlocker(tile);
+    return tile;
+}
+
+// ---- In-depth row (elevation + the present/DPC opt-in) ------------------------
+
+// Why an in-depth tile has no number, said in the tile itself. The row is full
+// whenever the switch is on, so a tile with no reading has to account for itself
+// rather than leave a gap where the reader expects a measurement.
+constexpr const char* kNoPresentTrace = "PresentMon trace is not reporting";
+constexpr const char* kNoDpcTrace = "DPC/ISR trace is not reporting";
+
+LiveTile PresentModeTile(const LiveTileInputs& in) {
+    LiveTile tile;
+    tile.key = "presentMode";
+    tile.title = "Present mode";
+    if (!in.present.has_value() || !in.present->available) {
+        tile.value = kDash;
+        tile.detail = kNoPresentTrace;
+        return tile;
+    }
+    const PresentSample& p = *in.present;
+    tile.value = PresentSampleModeLabel(p.mode);
+    tile.sub = p.tearing ? "tearing active" : "no tearing";
+    tile.detail = p.present_interval_ms > 0.0 ? "interval " + Number(p.present_interval_ms, 1) + " ms"
+                                              : std::string("interval not measured yet");
+    return tile;
+}
+
+LiveTile PresentHealthTile(const LiveTileInputs& in) {
+    LiveTile tile;
+    tile.key = "presentHealth";
+    tile.title = "Present health";
+    if (!in.present.has_value() || !in.present->available) {
+        tile.value = kDash;
+        tile.detail = kNoPresentTrace;
+        return tile;
+    }
+    const PresentSample& p = *in.present;
+    const double discarded_pct =
+        p.present_count > 0 ? static_cast<double>(p.discarded_count) * 100.0 / static_cast<double>(p.present_count)
+                            : 0.0;
+    tile.value = Number(discarded_pct, 1) + "% discarded";
+    tile.value_tone = OwnedTone(in.ledger, {"rec.present.discarded"}, /*sticky=*/false);
+    tile.budget = 5.0;
+    tile.sub_tinted = Number(static_cast<uint64_t>(p.mode_flip_count)) + " mode flips";
+    tile.sub = Join(tile.sub_tinted, Number(static_cast<uint64_t>(p.present_count)) + " presents");
+    tile.sub_tone = OwnedTone(in.ledger, {"rec.present.modeflip"}, /*sticky=*/true);
+    tile.detail = "coalesce " + Number(in.snapshot.capture.source_coalesce_ratio, 2) + "x";
+    return tile;
+}
+
+LiveTile DpcLatencyTile(const LiveTileInputs& in) {
+    LiveTile tile;
+    tile.key = "dpcLatency";
+    tile.title = "DPC / ISR latency";
+    if (!in.dpc.has_value() || !in.dpc->available) {
+        tile.value = kDash;
+        tile.detail = kNoDpcTrace;
+        return tile;
+    }
+    const DpcLatencyReading& d = *in.dpc;
+    tile.value = Number(d.max_latency_us, 0) + " " + kMicro + "s";
+    tile.value_tone = OwnedTone(in.ledger, {"rec.dpc.latency"}, /*sticky=*/false);
+    tile.budget = 1000.0;
+    tile.sub =
+        Join("avg " + Number(d.avg_latency_us, 0) + " " + kMicro + "s", "budget 1000 " + std::string(kMicro) + "s");
+    tile.detail = d.worst_driver.empty() ? std::string("no driver attributed") : "worst " + d.worst_driver;
+    return tile;
+}
+
+LiveTile GpuTimeTile(const LiveTileInputs& in) {
+    LiveTile tile;
+    tile.key = "gpuTime";
+    tile.title = "GPU time";
+    tile.value = Number(in.gpu_exec_p99_ms, 2) + " ms";
+    tile.value_tone = OwnedTone(in.ledger, {"rec.gpu.contention"}, /*sticky=*/false);
+    const double budget = FrameBudgetMs(in.snapshot);
+    if (budget > 0.0) {
+        tile.budget = budget;
+        tile.sub = "budget " + Number(budget, 2) + " ms";
+    }
+    tile.detail = "p99 of the recorder's own GPU passes";
     return tile;
 }
 
 } // namespace
 
-std::vector<LiveTile> BuildLiveTiles(const exosnap::engine::RecordingDiagnosticsSnapshot& snapshot) {
+std::vector<LiveTile> BuildLiveTiles(const LiveTileInputs& in) {
+    const exosnap::engine::RecordingDiagnosticsSnapshot& snapshot = in.snapshot;
     const bool live = snapshot.lifecycle == exosnap::engine::DiagnosticsLifecycle::Recording ||
                       snapshot.lifecycle == exosnap::engine::DiagnosticsLifecycle::Paused;
     if (!snapshot.valid || !live)
         return {};
-    return {PipelineHealthTile(snapshot), FramePacingTile(snapshot), EncoderTile(snapshot), AudioSyncTile(snapshot),
-            StorageTile(snapshot)};
+
+    std::vector<LiveTile> tiles{FramePacingTile(in), EncoderTile(in), AudioSyncTile(in), StorageTile(in)};
+    if (!in.in_depth)
+        return tiles;
+
+    // All four, always. The tile row is four or two columns wide, so a group that
+    // appears only when its trace is reporting leaves a ragged row; a tile with no
+    // reading shows an em dash and names why in its detail line, which is what the
+    // rest of the product does with an unmeasured value.
+    tiles.push_back(PresentModeTile(in));
+    tiles.push_back(PresentHealthTile(in));
+    tiles.push_back(DpcLatencyTile(in));
+    tiles.push_back(GpuTimeTile(in));
+    return tiles;
+}
+
+std::vector<LiveTile> BuildLiveTiles(const exosnap::engine::RecordingDiagnosticsSnapshot& snapshot) {
+    static const SessionLedger kNoLedger;
+    return BuildLiveTiles(LiveTileInputs{snapshot, kNoLedger});
 }
 
 bool NeedsElevation(std::string_view id) noexcept {
     return id.rfind("rec.present.", 0) == 0 || id.rfind("rec.dpc.", 0) == 0;
+}
+
+std::string TrimVendorPrefix(std::string adapter_name) {
+    // Longest first: "Intel(R) " must win over "Intel ".
+    for (const std::string_view prefix : {"NVIDIA ", "Intel(R) ", "Intel ", "AMD ", "Advanced Micro Devices, Inc. "}) {
+        if (adapter_name.rfind(prefix, 0) == 0) {
+            adapter_name.erase(0, prefix.size());
+            break;
+        }
+    }
+    return adapter_name;
 }
 
 std::string StripBackendSuffix(std::string codec) {
@@ -547,6 +738,57 @@ Verdict ComputeVerdict(const DiagnosticChecklist& recommendations, int cap_passe
     return verdict;
 }
 
+Verdict ComputeRecordingVerdict(const DiagnosticChecklist& live_results, const SessionLedger& ledger, double now_s) {
+    Verdict verdict;
+    verdict.recording = true;
+
+    for (const auto& result : live_results.results) {
+        if (result.tier == DiagnosticTier::Blocker)
+            ++verdict.blockers;
+    }
+    if (verdict.blockers > 0) {
+        verdict.state = VerdictState::Blocked;
+        verdict.headline = verdict.blockers == 1 ? std::string("Recording ") + kDash + " 1 blocking problem"
+                                                 : std::string("Recording ") + kDash + " " +
+                                                       std::to_string(verdict.blockers) + " blocking problems";
+        verdict.subline = "See the cards below.";
+        return verdict;
+    }
+
+    const std::vector<LedgerEntry>& entries = ledger.entries();
+    verdict.notices = static_cast<int>(entries.size());
+    if (entries.empty()) {
+        verdict.state = VerdictState::Ready;
+        verdict.headline = std::string("Recording ") + kDash + " no problems measured";
+        verdict.subline = "Every measured check has stayed inside its budget this session.";
+        return verdict;
+    }
+
+    const int active = ledger.activeCount();
+    verdict.state = VerdictState::Warn;
+    // Counts only. A headline that moved with the measurement would rewrite
+    // itself twice a second on a band the reader is trying to read.
+    verdict.headline = std::string("Recording ") + kDash + " " + std::to_string(verdict.notices) +
+                       (verdict.notices == 1 ? " problem observed" : " problems observed") +
+                       (active > 0 ? ", " + std::to_string(active) + " active" : std::string(", quiet now"));
+
+    std::string subline;
+    for (const LedgerEntry& entry : entries) {
+        if (entry.active)
+            subline = Join(subline, entry.title);
+    }
+    if (subline.empty()) {
+        const auto last =
+            std::max_element(entries.begin(), entries.end(),
+                             [](const LedgerEntry& a, const LedgerEntry& b) { return a.last_seen_s < b.last_seen_s; });
+        subline = last->title;
+        if (now_s > last->last_seen_s)
+            subline += ", last seen " + LastSeenAgo(now_s - last->last_seen_s);
+    }
+    verdict.subline = std::move(subline);
+    return verdict;
+}
+
 TopIssues BuildTopIssues(const capability::ResolveResult& profile_validation,
                          const DiagnosticChecklist& recommendations, bool hotkeys_ok,
                          const std::string& hotkeys_summary) {
@@ -615,6 +857,97 @@ TopIssues BuildTopIssues(const capability::ResolveResult& profile_validation,
     return issues;
 }
 
+// ── Last session ────────────────────────────────────────────────────────────────
+
+LastSession BuildLastSession(const UiRecordingResult& result, const exosnap::engine::RecordingDiagnosticsSnapshot& s,
+                             const std::vector<LedgerEntry>& frozen_ledger) {
+    LastSession session;
+    session.valid = true;
+    session.file_name = std::filesystem::path(result.output_path).filename().string();
+    // The timeline is drawn on the SESSION clock, which is the clock the marks
+    // carry; the media is shorter by the tail between the last encoded frame and
+    // Stop, and is what a click has to be clamped to.
+    session.media_duration_s = ResultDurationSeconds(result);
+    session.duration_s = result.elapsed_seconds > 0.0 ? result.elapsed_seconds : session.media_duration_s;
+    session.ledger = frozen_ledger;
+    session.problems = static_cast<int>(frozen_ledger.size());
+
+    const bool measured = s.valid;
+    const uint64_t drops = measured ? s.capture.frames_dropped_problem() : 0;
+
+    // The four facts, in a fixed order. A card whose rows move between recordings
+    // cannot be read at a glance, and these are read at a glance or not at all.
+    {
+        LastSessionFact fact;
+        fact.key = "dropped";
+        fact.label = "Frames dropped";
+        fact.value = measured ? Number(drops) : std::string(kDash);
+        if (measured)
+            fact.sub = "of " + Number(s.capture.frames_captured) + " captured";
+        // The one fact of the four that a check owns outright: a dropped frame is
+        // missing from the file, which is not a matter of degree.
+        if (measured)
+            fact.tone = drops > 0 ? ValueTone::Critical : ValueTone::Ok;
+        session.facts.push_back(std::move(fact));
+    }
+    {
+        LastSessionFact fact;
+        fact.key = "achieved";
+        fact.label = "Achieved fps";
+        const double target = static_cast<double>(result.frame_rate_num) /
+                              (result.frame_rate_den > 0 ? static_cast<double>(result.frame_rate_den) : 1.0);
+        if (measured && s.elapsed_seconds > 0.0) {
+            fact.value = Number(static_cast<double>(s.capture.frames_emitted) / s.elapsed_seconds, 2) + " fps";
+        } else {
+            fact.value = kDash;
+        }
+        fact.sub = "target " + Number(target, 0) + " fps";
+        session.facts.push_back(std::move(fact));
+    }
+    {
+        LastSessionFact fact;
+        fact.key = "drift";
+        fact.label = "A/V drift";
+        // The device-clock residual after correction, not the file's alignment.
+        // Nothing here claims the recording is out of sync, so nothing tints it.
+        if (measured && s.peak_av_drift_availability == exosnap::engine::MetricAvailability::Available) {
+            fact.value = "peak " + Number(s.peak_av_drift_ms, 1) + " ms";
+            fact.sub = "device clock residual";
+        } else {
+            fact.value = "Unavailable";
+            fact.sub = "no single audio clock to measure against";
+        }
+        session.facts.push_back(std::move(fact));
+    }
+    {
+        LastSessionFact fact;
+        fact.key = "file";
+        fact.label = "File";
+        fact.value = result.succeeded ? "Valid" : "Failed";
+        fact.sub = Join(HumanBytes(result.output_file_bytes), CodecName(result.video_codec));
+        fact.tone = result.succeeded ? ValueTone::Ok : ValueTone::Critical;
+        session.facts.push_back(std::move(fact));
+    }
+
+    for (const LedgerEntry& entry : frozen_ledger) {
+        for (const LedgerOccurrence& occurrence : entry.occurrences) {
+            TimelineMark mark;
+            mark.start_s = occurrence.start_s;
+            mark.end_s = occurrence.end_s;
+            mark.id = entry.id;
+            mark.title = entry.title;
+            mark.worst = occurrence.worst;
+            mark.tone = "warn";
+            session.marks.push_back(std::move(mark));
+        }
+    }
+    // Ledger occurrences only. Frame drops are counted in the Frames dropped fact
+    // and nowhere else: the engine keeps no timestamped drop history, so a mark
+    // could only span the whole recording, which would read as "the entire run was
+    // bad" for a defect that lasted a frame.
+    return session;
+}
+
 std::vector<KeyValueRow> BuildEnvironmentRows(const std::vector<DiagnosticResult>& facts, bool elevated) {
     std::vector<KeyValueRow> rows;
     rows.reserve(facts.size());
@@ -679,39 +1012,16 @@ SelfTestReport BuildSelfTestReport(const DiagnosticChecklist& self_test) {
 // ── Readiness tiles ─────────────────────────────────────────────────────────────
 
 std::vector<ReadinessTile> BuildReadinessTiles(const ReadinessTileInputs& in) {
+    // Four, always, so the row is never ragged: what will encode this, where it
+    // is going, what is being captured at, and what will be heard. The readiness
+    // rollup is the verdict band's job and the finished recording is the Last
+    // session card's, so neither takes a tile here.
     std::vector<ReadinessTile> tiles;
-    tiles.reserve(7);
+    tiles.reserve(4);
 
-    // Tile 1 — Readiness.
-    {
-        ReadinessTile tile;
-        tile.key = "readiness";
-        tile.title = "Readiness";
-        const int total = in.cap_passes + in.blockers + in.notices;
-        if (in.blockers > 0) {
-            tile.value = "Action needed";
-            tile.sub = in.blockers == 1
-                           ? std::string("1 blocker ") + kMiddot + " recording is blocked"
-                           : std::to_string(in.blockers) + " blockers " + kMiddot + " recording is blocked";
-            tile.tone = TileTone::Blocker;
-        } else if (in.notices > 0) {
-            tile.value = std::to_string(in.cap_passes) + " / " + std::to_string(total);
-            tile.sub = in.notices == 1
-                           ? std::string("checks pass ") + kMiddot + " 1 issue"
-                           : std::string("checks pass ") + kMiddot + " " + std::to_string(in.notices) + " issues";
-            tile.tone = TileTone::Notice;
-        } else if (in.data_ready) {
-            tile.value = std::to_string(in.cap_passes) + " / " + std::to_string(total);
-            tile.sub = "checks passed";
-            tile.show_ok_glyph = true;
-        } else {
-            tile.value = kDash;
-            tile.sub = "run a check";
-        }
-        tiles.push_back(std::move(tile));
-    }
-
-    // Tile 2 — Encoder: the GPU carrying the encode, codec as the detail line.
+    // Tile 1 — Encoder: the GPU carrying the encode, the backend as a head badge,
+    // and the codec row underneath. The vendor prefix goes because the badge
+    // already says whose encoder this is.
     {
         ReadinessTile tile;
         tile.key = "encoder";
@@ -720,9 +1030,36 @@ std::vector<ReadinessTile> BuildReadinessTiles(const ReadinessTileInputs& in) {
             std::string gpu = in.gpu_adapter_name;
             while (!gpu.empty() && std::isspace(static_cast<unsigned char>(gpu.back())) != 0)
                 gpu.pop_back();
+            gpu = TrimVendorPrefix(std::move(gpu));
             const std::string codec = StripBackendSuffix(VideoCodecDisplayName(in.video_codec));
             tile.value = gpu.empty() ? codec : gpu;
-            tile.sub = gpu.empty() ? ContainerDisplayName(in.container) : codec + " " + kMiddot + " NVENC";
+            tile.head_badge = "NVENC";
+            tile.sub = ContainerDisplayName(in.container);
+            if (!in.driver_version.empty())
+                tile.sub = Join(tile.sub, "driver " + in.driver_version);
+            if (in.caps != nullptr) {
+                // Canon order, not capability order: the row is a fixed reference
+                // the user learns the position of, so a codec never moves because
+                // this GPU cannot encode it.
+                bool any_encodable = false;
+                for (const capability::VideoCodec codec_id :
+                     {capability::VideoCodec::H264, capability::VideoCodec::Hevc, capability::VideoCodec::Av1}) {
+                    CodecChip chip;
+                    chip.label = StripBackendSuffix(VideoCodecDisplayName(codec_id));
+                    chip.selected = codec_id == in.video_codec;
+                    chip.available = capability::IsSelectable(in.caps->QueryVideoCodec(codec_id).level);
+                    any_encodable = any_encodable || chip.available;
+                    tile.chips.push_back(std::move(chip));
+                }
+                // A cross on one chip is a 9 px cue for the one thing on this page
+                // that stops a recording from happening at all. The tile carries
+                // the severity: the selected codec cannot be encoded here, or
+                // nothing can be.
+                const bool selected_encodable =
+                    capability::IsSelectable(in.caps->QueryVideoCodec(in.video_codec).level);
+                if (!selected_encodable || !any_encodable)
+                    tile.tone = TileTone::Blocker;
+            }
         } else {
             tile.value = kDash;
             tile.sub = "active encoder";
@@ -730,7 +1067,7 @@ std::vector<ReadinessTile> BuildReadinessTiles(const ReadinessTileInputs& in) {
         tiles.push_back(std::move(tile));
     }
 
-    // Tile 3 — Disk. A queried zero is a FULL drive and must read "0.0 GB", not
+    // Tile 2 — Disk. A queried zero is a FULL drive and must read "0.0 GB", not
     // blank; only an unqueryable volume shows the dash.
     {
         ReadinessTile tile;
@@ -752,22 +1089,27 @@ std::vector<ReadinessTile> BuildReadinessTiles(const ReadinessTileInputs& in) {
         tiles.push_back(std::move(tile));
     }
 
-    // Tile 4 — Display (an honest static fact about the primary screen).
+    // Tile 3 — Display: the primary screen's mode, and what is being captured
+    // from it. The two used to be separate tiles; a mode and the target it will
+    // be recorded from are one answer to one question.
     {
         ReadinessTile tile;
         tile.key = "display";
         tile.title = "Display";
+        std::string target = in.target_is_window ? "application window" : "full display";
+        if (in.target_selected && !BlankOrWhitespace(in.target_description))
+            target = in.target_description;
         if (in.display_width > 0 && in.display_height > 0) {
             tile.value = std::to_string(in.display_width) + " \xc3\x97 " + std::to_string(in.display_height);
-            tile.sub = std::to_string(in.display_refresh_hz) + " Hz " + kMiddot + " primary display";
+            tile.sub = Join(std::to_string(in.display_refresh_hz) + " Hz", target);
         } else {
             tile.value = kDash;
-            tile.sub = "display";
+            tile.sub = target;
         }
         tiles.push_back(std::move(tile));
     }
 
-    // Tile 5 — Audio. A plain capability readout, never coloured as a problem.
+    // Tile 4 — Audio. A plain capability readout, never coloured as a problem.
     {
         ReadinessTile tile;
         tile.key = "audio";
@@ -792,38 +1134,6 @@ std::vector<ReadinessTile> BuildReadinessTiles(const ReadinessTileInputs& in) {
             tile.value = kDash;
             tile.sub = "audio sources";
         }
-        tiles.push_back(std::move(tile));
-    }
-
-    // Tile 6 — Capture target. Prefers the concrete selection, then the configured
-    // kind, so the tile still reads honestly before a target is picked.
-    {
-        ReadinessTile tile;
-        tile.key = "target";
-        tile.title = "Capture target";
-        if (in.target_selected) {
-            tile.value = in.target_is_window ? "Window" : "Screen";
-            tile.sub = in.target_description;
-            if (BlankOrWhitespace(tile.sub))
-                tile.sub = in.target_is_window ? "application window" : "full display";
-        } else if (in.data_ready) {
-            tile.value = in.target_is_window ? "Window" : "Screen";
-            tile.sub = in.target_is_window ? "application window" : "full display";
-        } else {
-            tile.value = kDash;
-            tile.sub = "capture target";
-        }
-        tiles.push_back(std::move(tile));
-    }
-
-    // Tile 7 — Last session. Only earns a slot once a completed recording exists;
-    // it is a calm signpost to the Edit overlay's Review step, never a metric.
-    if (in.has_last_recording) {
-        ReadinessTile tile;
-        tile.key = "session";
-        tile.title = "Last session";
-        tile.value = "Recorded";
-        tile.sub = std::string("report in Edit ") + kMiddot + " Review";
         tiles.push_back(std::move(tile));
     }
 
@@ -960,8 +1270,9 @@ std::vector<PipelineStage> PipelineCardBuilder::BuildLive(const exosnap::engine:
     disk.avg_ms = s.disk.average_write_ms;
     disk.budget_ms = kDiskBudgetMs;
 
-    const StageSignals signals[] = {capture, queue, comp, enc, mux, disk};
-    const exosnap::engine::PipelineHealthVerdict verdict = exosnap::engine::ResolvePipelineHealth(signals, budget_ms);
+    const StageSignals stage_signals[] = {capture, queue, comp, enc, mux, disk};
+    const exosnap::engine::PipelineHealthVerdict verdict =
+        exosnap::engine::ResolvePipelineHealth(stage_signals, budget_ms);
 
     const auto health_of = [&](StageId id) {
         for (const auto& sv : verdict.per_stage) {
@@ -1137,8 +1448,35 @@ void DiagnosticsController::SetPresentSample(std::optional<PresentSample> sample
 
 void DiagnosticsController::SetLiveSnapshot(const exosnap::engine::RecordingDiagnosticsSnapshot& snapshot) {
     live_ = snapshot;
-    if (!liveRecording())
+    const bool recording = liveRecording();
+    if (!recording)
         pipeline_.Reset();
+    // Freeze on the lifecycle edge rather than on the next Evaluate(): the final
+    // snapshot carries the elapsed time the last occurrence must be closed at, and
+    // a consumer reading the frozen ledger after Stop may never call Evaluate().
+    if (was_recording_ && !recording)
+        ledger_.Freeze(live_.elapsed_seconds);
+    was_recording_ = recording;
+}
+
+const SessionLedger& DiagnosticsController::ledger() const noexcept {
+    return ledger_;
+}
+
+void DiagnosticsController::FreezeLedger() {
+    ledger_.Freeze(live_.elapsed_seconds);
+}
+
+const std::vector<LedgerEntry>& DiagnosticsController::frozenLedger() const noexcept {
+    return ledger_.entries();
+}
+
+void DiagnosticsController::SetLastSession(LastSession session) {
+    last_session_ = std::move(session);
+}
+
+const LastSession& DiagnosticsController::lastSession() const noexcept {
+    return last_session_;
 }
 
 bool DiagnosticsController::dataReady() const noexcept {
@@ -1201,7 +1539,6 @@ DiagnosticsSnapshot DiagnosticsController::Evaluate() {
         tile_inputs.display_width = display_.width;
         tile_inputs.display_height = display_.height;
         tile_inputs.display_refresh_hz = display_.refresh_hz;
-        tile_inputs.has_last_recording = has_last_recording_;
         out.tiles = BuildReadinessTiles(tile_inputs);
         return out;
     }
@@ -1240,14 +1577,33 @@ DiagnosticsSnapshot DiagnosticsController::Evaluate() {
     last_facts_ = facts;
     const int cap_passes = CountAvailableCapabilities(config_.cap_summary);
 
-    out.verdict = ComputeVerdict(recommendations, cap_passes, true);
+    if (liveRecording()) {
+        if (live_.session_generation != ledger_.generation())
+            ledger_.Reset(live_.session_generation);
+        // The entry rule counts consecutive MEASUREMENTS, and Evaluate() is reached
+        // from far more than the live rail -- a settings change, a display change or
+        // a probe result re-evaluates the same snapshot. Observing it again would
+        // let a single spike satisfy the two-evaluation rule on its own, so the pair
+        // that identifies a snapshot gates the call.
+        const SnapshotStamp stamp{live_.session_generation, live_.elapsed_seconds};
+        if (!last_observed_.has_value() || *last_observed_ != stamp) {
+            last_observed_ = stamp;
+            ledger_.Observe(recommendations.results, live_.elapsed_seconds);
+        }
+        out.verdict = ComputeRecordingVerdict(recommendations, ledger_, live_.elapsed_seconds);
+        out.verdict.cap_passes = cap_passes;
+    } else {
+        // After Stop the band returns to readiness and says nothing about the
+        // session; the frozen ledger below is where the session's story lives.
+        out.verdict = ComputeVerdict(recommendations, cap_passes, true);
+    }
+    out.ledger = ledger_.entries();
+    out.ledger_active = ledger_.activeCount();
 
     ReadinessTileInputs tile_inputs;
     tile_inputs.data_ready = true;
-    tile_inputs.blockers = out.verdict.blockers;
-    tile_inputs.notices = out.verdict.notices;
-    tile_inputs.cap_passes = cap_passes;
     tile_inputs.gpu_adapter_name = config_.caps.gpu_adapter_name;
+    tile_inputs.caps = &config_.caps;
     tile_inputs.video_codec = config_.user_config.video_codec;
     tile_inputs.audio_codec = config_.user_config.audio_codec;
     tile_inputs.container = config_.user_config.container;
@@ -1265,15 +1621,13 @@ DiagnosticsSnapshot DiagnosticsController::Evaluate() {
     if (selected_target_.has_value()) {
         tile_inputs.target_selected = true;
         tile_inputs.target_is_window = selected_target_->kind == exosnap::engine::CaptureTarget::Kind::Window;
-        // The presented label when the caller has one -- the raw description
-        // is a device path, which is not what the rest of the product calls
-        // this target.
+        // The presented label when the caller has one -- the raw description is a
+        // device path, which is not what the rest of the product calls this target.
         tile_inputs.target_description =
             selected_target_label_.empty() ? selected_target_->description : selected_target_label_;
     } else {
         tile_inputs.target_is_window = config_.audio.target_kind == capability::CaptureTargetKind::Window;
     }
-    tile_inputs.has_last_recording = has_last_recording_;
     out.tiles = BuildReadinessTiles(tile_inputs);
 
     TopIssues issues =

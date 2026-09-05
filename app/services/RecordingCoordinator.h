@@ -27,6 +27,8 @@
 #include <exosnap/engine/recorder_session.h>
 
 #include "../diagnostics/DiskSpaceProvider.h"
+#include "../diagnostics/SessionLedger.h"
+#include "../diagnostics/SessionReport.h"
 #include "../diagnostics/WindowTargetFacts.h"
 #include "../models/FilenameBuilder.h"
 #include "../models/OutputPathValidator.h"
@@ -45,6 +47,24 @@ class LoopbackMeterService;
 } // namespace exosnap::engine
 
 namespace exosnap {
+
+// One recording's frozen session ledger, on its way from the Qt main thread that
+// closes it to the session report that carries it.
+//
+// Shared rather than owned by either end. The freeze arrives through a Qt
+// connection whose context object outlives the coordinator, and the report is
+// written from a queued call that may run after the coordinator is gone; a sink
+// both sides hold by shared_ptr means neither holds a pointer to the other.
+class SessionLedgerSink {
+  public:
+    void Set(std::vector<diagnostics::LedgerEntry> ledger);
+    void Clear();
+    [[nodiscard]] std::vector<diagnostics::LedgerEntry> Get() const;
+
+  private:
+    mutable std::mutex mutex_;
+    std::vector<diagnostics::LedgerEntry> ledger_;
+};
 
 class RecordingCoordinator {
   public:
@@ -114,6 +134,17 @@ class RecordingCoordinator {
     // state, and nothing the coordinator can dereference back into the UI.
     void NoteWindowCaptureStall() noexcept;
     [[nodiscard]] uint32_t WindowCaptureStallEpisodes() const noexcept;
+
+    // Where the diagnostics side puts the frozen session ledger of the recording
+    // that just ended, and where the session report reads it from.
+    //
+    // Pushed rather than pulled, for the same reason NoteWindowCaptureStall
+    // exists: the ledger is owned by the Qt main thread, and a provider callback
+    // would have the recording thread copy a std::vector that thread may be
+    // appending to. Cleared at the start of every recording, so a session that
+    // ends before its own freeze arrives reports no ledger rather than the
+    // previous one's.
+    [[nodiscard]] std::shared_ptr<SessionLedgerSink> FrozenLedgerSink() const;
 
     // ADR-0015: armed-from-recovery state.
     // Enter the armed-from-recovery (paused) state for the given candidate.
@@ -392,6 +423,18 @@ class RecordingCoordinator {
     void ReapFinishedSegmentRemuxJobsForTest();
     bool DrainSegmentRemuxJobsForTest(bool cancel);
 
+    // ── Session-report handoff test seams ─────────────────────────────────────
+    // The report carries what the diagnostics side froze, and the two arrive on
+    // different threads. These drive the exact production posting path with no
+    // engine behind it, so the ordering can be pinned without a real recording.
+    // No production code calls them.
+    //
+    // Mints the session id the report is named after and clears the ledger sink,
+    // the two things StartRecording does for the report.
+    void BeginReportSessionForTest(QString recording_session_id);
+    void PostDiagnosticsForTest(exosnap::engine::RecordingDiagnosticsSnapshot snapshot);
+    void PostResultForTest(UiRecordingResult result);
+
   private:
     // Shared tail of CaptureFrame()'s Recording/Paused and Ready paths: converts
     // a raw BGRA readback (or a failure) into a saved PNG + FrameCapturedCallback
@@ -449,10 +492,22 @@ class RecordingCoordinator {
     // Record footer and the output filename.
     void FillResultFormat(UiRecordingResult& result, const PrepareContext& ctx) const;
     void PostResult(UiRecordingResult result);
-    // Write the on-disk session-<id>.json report for a finished (or failed)
-    // recording, from the result plus the stashed final snapshot. Best-effort:
-    // a write failure is logged and never blocks posting the result.
-    void WriteSessionReportForResult(const UiRecordingResult& result);
+    // Everything the on-disk session-<id>.json report needs, copied out of the
+    // coordinator so the write can happen on another thread later without
+    // reaching back into it.
+    struct SessionReportJob {
+        QString reports_dir;
+        diagnostics::SessionReportInputs inputs;
+        std::shared_ptr<SessionLedgerSink> ledger_sink;
+    };
+    // Gather the report for a finished (or failed) recording from the result plus
+    // the stashed final snapshot. Empty when there is no recording session id to
+    // name the report after, or no log directory to put it beside.
+    [[nodiscard]] std::optional<SessionReportJob> BuildSessionReportJob(const UiRecordingResult& result);
+    // Write a gathered report. Best-effort: a write failure is logged and never
+    // blocks posting the result. Static, and takes everything by value, because it
+    // runs from a queued call that may outlive the coordinator.
+    static void RunSessionReportJob(SessionReportJob job);
     void PostStats(exosnap::engine::SessionStats stats);
     void PostDiagnostics(exosnap::engine::RecordingDiagnosticsSnapshot snapshot);
     // Emit a single Initializing diagnostics snapshot so the Diagnostics page shows an
@@ -511,6 +566,9 @@ class RecordingCoordinator {
     // QCR-804: reported window-capture stalls for the session in flight. Written
     // from the UI thread, read from the recording thread — see NoteWindowCaptureStall.
     std::atomic<uint32_t> window_capture_stall_episodes_{0};
+    // Written from the Qt main thread when the ledger freezes, read from the Qt
+    // main thread when the report is written -- see FrozenLedgerSink.
+    const std::shared_ptr<SessionLedgerSink> frozen_ledger_sink_ = std::make_shared<SessionLedgerSink>();
     // Posts the recovery-protection-lost notice onto the Qt main thread and logs
     // it. Safe from any thread.
     void PostRecoveryProtectionLost(QString detail);

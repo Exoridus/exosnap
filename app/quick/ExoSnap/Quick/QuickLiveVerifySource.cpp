@@ -424,8 +424,11 @@ QJsonObject QuickLiveVerifySource::AppSnapshot() const {
     // out of ui.getState instead.
     if (const auto* shell = application_.shellAdapter())
         json.insert(QStringLiteral("currentPage"), shell->currentPage());
-    if (auto* diagnostics = application_.diagnosticsAdapter())
-        json.insert(QStringLiteral("expertMode"), diagnostics->expertMode());
+    // Expert mode is a Settings-only control; the Diagnostics page no longer
+    // reads it. The protocol-1 field keeps its name and shape and is answered by
+    // the one surface that owns the setting.
+    if (auto* settings = application_.settingsAdapter())
+        json.insert(QStringLiteral("expertMode"), settings->expertMode());
     json.insert(QStringLiteral("windowVisible"), root_window_ != nullptr && root_window_->isVisible());
     return json;
 }

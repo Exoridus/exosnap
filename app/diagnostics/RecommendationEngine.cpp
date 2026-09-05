@@ -163,6 +163,9 @@ void RecommendationEngine::checkRefreshRateMismatch(DiagnosticChecklist& checkli
                    "Measured present jitter " + jitter_str + " ms during CFR capture",
                    "Cap your game's frame rate (e.g. 60 or 120 fps) or disable VRR while recording for "
                    "smoother pacing.");
+    r.measured_value = live_present_jitter_ms_;
+    r.budget_value = kJitterMs;
+    r.value_unit = "ms";
 
     // Present-mode attribution (PresentMon, ADR 0033): when available, name *how* the source
     // presents so the diagnosis reads as a root cause, not just a number.
@@ -753,6 +756,9 @@ void RecommendationEngine::checkDpcLatency(DiagnosticChecklist& checklist) const
             ". High DPC latency causes recording stutter/audio crackle even when the game itself "
             "feels smooth.",
         "Max DPC: " + max_str + " us", "Update or roll back " + driver + " (GPU/audio/network/chipset driver).");
+    r.measured_value = dpc_->max_latency_us;
+    r.budget_value = kDpcThresholdUs;
+    r.value_unit = "us";
     FixAction fa;
     fa.id = "fix.dpc.driver";
     fa.label = "Driver latency guidance";
@@ -789,6 +795,9 @@ void RecommendationEngine::checkDiscardedPresents(DiagnosticChecklist& checklist
             "usually means the source presents faster than the display refresh, or an overlay forces recomposition.",
         "Discarded presents: " + pct + "%",
         "Cap the source frame rate to the display refresh, or enable V-Sync in the captured app.");
+    r.measured_value = ratio * 100.0;
+    r.budget_value = kDiscardRatioThreshold * 100.0;
+    r.value_unit = "%";
     FixAction fa;
     fa.id = "fix.present.discarded";
     fa.label = "Reduce discarded presents";
@@ -819,6 +828,9 @@ void RecommendationEngine::checkPresentModeFlips(DiagnosticChecklist& checklist)
             "or drop capture. A toggling overlay, alt-tabbing, or a borderless/fullscreen toggle is the usual cause.",
         "Present-mode changes: " + n,
         "Keep the captured app in one stable presentation mode (e.g. consistent borderless fullscreen).");
+    // A count of mode changes, with no budget: kFlipThreshold is the entry
+    // threshold for the card, not headroom the recording is spending.
+    r.measured_value = static_cast<double>(present_->mode_flip_count);
     FixAction fa;
     fa.id = "fix.present.modeflip";
     fa.label = "Stabilize present mode";
@@ -848,6 +860,9 @@ void RecommendationEngine::checkDiskWriteStall(DiagnosticChecklist& checklist) c
             "antivirus scanning the output, or a network/USB target is the usual cause.",
         "Peak disk write: " + ms + " ms",
         "Record to a fast local drive (SSD), or exclude the output folder from real-time antivirus scanning.");
+    r.measured_value = live_disk_peak_write_ms_;
+    r.budget_value = kWriteStallMs;
+    r.value_unit = "ms";
     FixAction fa;
     fa.id = "fix.disk.writestall";
     fa.label = "Reduce disk write stalls";
@@ -1010,6 +1025,9 @@ void RecommendationEngine::checkFramePacingDuplication(DiagnosticChecklist& chec
         "Lower the recording frame rate to what the source can sustain (30 fps for a source below 60), or raise "
         "the game's frame rate. If the source is a video player or a game capped below the recording rate, this "
         "is expected.");
+    r.measured_value = ratio * 100.0;
+    r.budget_value = kDuplicateRatioThreshold * 100.0;
+    r.value_unit = "%";
     checklist.has_notice = true;
     checklist.results.push_back(std::move(r));
 }
@@ -1102,6 +1120,10 @@ void RecommendationEngine::checkGpuContention(DiagnosticChecklist& checklist) co
                        "application's work; the recorder waits behind it.",
                    "GPU frame work " + gpu_ms + " ms p99 vs " + budget + " ms budget",
                    "Cap the game's frame rate, lower its graphics settings, or lower the recording resolution.");
+    r.measured_value = live_gpu_exec_p99_ms_;
+    if (live_target_fps_for_gpu_ > 0.0)
+        r.budget_value = 1000.0 / live_target_fps_for_gpu_;
+    r.value_unit = "ms";
     checklist.has_notice = true;
     checklist.results.push_back(std::move(r));
 }
@@ -1128,6 +1150,45 @@ std::vector<std::string> RecommendationEngine::GetAllRecommendationCodes() {
             "rec.gpu.contention",
             "rec.capture.exclusive_window",
             "display.saved.unresolved"};
+}
+
+bool RecommendationEngine::IsLiveMeasuredCheck(std::string_view id) noexcept {
+    // An allow-list rather than a deny-list: a check that is forgotten here stays
+    // out of the session ledger, which understates one recording. Forgetting it in
+    // a deny-list would put a static readiness condition on the record as a problem
+    // the recording caused, which is a claim about something that did not happen.
+    //
+    // The test for admission is whether the check can only fire because something
+    // was measured during this recording. The Tier-2 ids deliberately absent all
+    // fail it -- rec.005 (free space), rec.pacing.smooth (a pacing-mode
+    // recommendation), display.saved.unresolved and rec.capture.adapter_mismatch
+    // are answered by a readiness pass, before Record was ever pressed.
+    //
+    // The two exclusive-fullscreen ids are admitted despite describing the
+    // target's present mode: both are raised from the live present sample and the
+    // window hub evidence accumulated while recording. A source that flips into
+    // exclusive fullscreen mid-run is the black-or-frozen-picture case, and the
+    // readiness surface could not have shown it -- the window was borderless when
+    // the recording started.
+    static constexpr std::string_view kLiveMeasuredIds[] = {
+        "rec.001",                      // present-cadence judder
+        "rec.gpu.contention",           // captured application saturating the GPU
+        "rec.disk.writestall",          // write stalls during the run
+        "rec.dpc.latency",              // kernel DPC/ISR latency during the run
+        "rec.present.discarded",        // compositor discarding presents
+        "rec.present.modeflip",         // source changing present mode
+        "rec.present.exclusive",        // source presenting in exclusive fullscreen
+        "rec.capture.exclusive_window", // captured window taken over by exclusive fullscreen
+        "rec.audio.degraded",           // audio device lost mid-recording
+        "rec.audio.endpoint_taken",     // audio device taken mid-recording
+        "rec.audio.clock_saturated",    // audio clock drifting faster than correction
+        "rec.pacing.duplication",       // source delivering fewer frames than the rate
+    };
+    for (const std::string_view live : kLiveMeasuredIds) {
+        if (live == id)
+            return true;
+    }
+    return false;
 }
 
 } // namespace exosnap::diagnostics

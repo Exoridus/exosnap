@@ -90,6 +90,14 @@ struct DiagnosticResult {
     std::string summary;
     std::string detail;
     std::string current_value;
+    // Numeric twin of current_value for checks that compare a measurement with a
+    // budget; the session ledger and the value tint read these, the card reads the
+    // string. Empty for checks that measure nothing (a capability or config fact),
+    // and budget_value is empty for a measurement that is a count rather than a
+    // spend against headroom.
+    std::optional<double> measured_value;
+    std::optional<double> budget_value;
+    std::string value_unit; // "ms" | "us" | "%" | "x", or empty
     std::string recommendation;
     std::optional<FixAction> fix_action;
     std::vector<std::string> affected_features;

@@ -709,6 +709,30 @@ target_include_directories(recording_admission_tests PRIVATE ${CMAKE_CURRENT_SOU
 target_link_libraries(recording_admission_tests PRIVATE mfplat.lib mf.lib mfuuid.lib ole32.lib user32.lib)
 set_target_properties(recording_admission_tests PROPERTIES AUTOMOC ON)
 
+# The session-ledger to session-report handoff: the report is gathered on the
+# recording thread and written from the main thread's queue, so it lands after the
+# terminal diagnostics snapshot that freezes the ledger.
+exosnap_add_gtest(
+    NAME session_report_handoff_tests
+    TEST_PREFIX record.report.
+    SOURCES
+        tests/test_session_report_handoff.cpp
+        services/RecordingCoordinator.cpp
+        services/RecordingAdmission.cpp
+        services/AtomicFileOps.cpp
+        models/CaptureTargetPresentation.cpp
+        services/DisplayNumbering.cpp
+        settings/RecoveryManifestStore.cpp
+    LIBRARIES
+        exosnap_output_model_test_support
+        exosnap_device_service_test_support
+        exosnap_diagnostics_test_support
+        Qt6::Core Qt6::Gui exosnap_capability exosnap_engine
+)
+target_include_directories(session_report_handoff_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(session_report_handoff_tests PRIVATE mfplat.lib mf.lib mfuuid.lib ole32.lib user32.lib)
+set_target_properties(session_report_handoff_tests PROPERTIES AUTOMOC ON)
+
 # MP4-SPLIT-REMUX-R1: per-segment manifest lifecycle, disk reserve, split settings.
 exosnap_add_gtest(
     NAME mp4_split_remux_tests

@@ -623,6 +623,10 @@ class QuickApplication {
     // only while the same gate the present provider uses (opt-in AND elevation) is
     // open, and nothing at all otherwise.
     diagnostics::DpcLatencyProvider dpc_provider_;
+    // Harness-only stand-in for the kernel trace, installed by a --visual-test
+    // scenario that photographs the in-depth tiles. Declared here for the same
+    // reason as dpc_provider_: the adapter borrows whichever one is installed.
+    std::unique_ptr<diagnostics::IDpcLatencyProvider> visual_dpc_provider_;
     DiagnosticsAdapter diagnostics_adapter_;
     // ADR 0033 present diagnostics. Declared BEFORE the provider that borrows it:
     // PresentMonProvider holds a reference to the elevation provider for its whole

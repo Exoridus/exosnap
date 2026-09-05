@@ -2,6 +2,7 @@
 
 #include <QSignalSpy>
 
+#include "NotificationHubPolicy.h"
 #include "NotificationToastModel.h"
 #include "NotificationsAdapter.h"
 #include "models/RecordingFailurePolicy.h"
@@ -47,6 +48,20 @@ class ToastStackTest : public ::testing::Test {
   protected:
     NotificationsAdapter adapter_;
 };
+
+// The saved toast is the first and only place a finished session's problem count
+// is stated: nothing is raised while the recording is still running.
+TEST(SavedRecordingBodyTest, ACleanRecordingIsJustItsName) {
+    EXPECT_EQ(notifications::SavedRecordingBody(QStringLiteral("clip.mkv"), 0), QStringLiteral("clip.mkv"));
+    EXPECT_EQ(notifications::SavedRecordingBody(QStringLiteral("clip.mkv"), -1), QStringLiteral("clip.mkv"));
+}
+
+TEST(SavedRecordingBodyTest, ObservedProblemsAreCountedAndPluralized) {
+    EXPECT_EQ(notifications::SavedRecordingBody(QStringLiteral("clip.mkv"), 1),
+              QString::fromUtf8("clip.mkv \xc2\xb7 1 problem observed"));
+    EXPECT_EQ(notifications::SavedRecordingBody(QStringLiteral("clip.mkv"), 2),
+              QString::fromUtf8("clip.mkv \xc2\xb7 2 problems observed"));
+}
 
 TEST_F(ToastStackTest, StartsEmpty) {
     EXPECT_EQ(adapter_.toastModel()->rowCount(), 0);
