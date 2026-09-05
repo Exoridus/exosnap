@@ -1,5 +1,7 @@
 #include "services/CaptureTargetNotifier.h"
 
+#include <QDateTime>
+
 #include "diagnostics/AppLog.h"
 
 #include <QCoreApplication>
@@ -68,6 +70,14 @@ void CaptureTargetNotifier::flushPendingForTest() {
     }
 }
 
+void CaptureTargetNotifier::requestRefreshForTest(DiscoveryReason reason) {
+    scheduleRefresh(reason);
+}
+
+void CaptureTargetNotifier::setMaxDeferralMsForTest(qint64 milliseconds) {
+    max_deferral_ms_ = milliseconds;
+}
+
 void CaptureTargetNotifier::start() {
     if (started_)
         return;
@@ -125,7 +135,27 @@ void CaptureTargetNotifier::scheduleRefresh(DiscoveryReason reason) {
         return;
     if (!debounce_timer_.isActive() || reason == DiscoveryReason::DeviceRemoved)
         pending_reason_ = reason;
-    debounce_timer_.start();
+
+    if (!debounce_timer_.isActive()) {
+        first_pending_at_ms_ = QDateTime::currentMSecsSinceEpoch();
+        debounce_timer_.start();
+        return;
+    }
+
+    // The deferral is CAPPED. Restarting the timer on every event is what
+    // debouncing means, but the desktop produces window lifecycle events
+    // continuously -- every menu, tooltip, splash and background process -- so an
+    // uncapped restart could postpone the refresh indefinitely and the target list
+    // would silently keep describing a desktop that no longer exists. MEASURED: a
+    // window created while the app was running stayed unselectable through the
+    // control channel, while the same window created BEFORE the app started was
+    // selectable on the first attempt.
+    //
+    // Past the cap the timer is left alone rather than restarted, so it fires with
+    // what it has and the next event opens a fresh window.
+    const qint64 waited = QDateTime::currentMSecsSinceEpoch() - first_pending_at_ms_;
+    if (waited < max_deferral_ms_)
+        debounce_timer_.start();
 }
 
 void CaptureTargetNotifier::refreshNow(DiscoveryReason reason) {

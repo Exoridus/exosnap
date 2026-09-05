@@ -234,10 +234,15 @@ function Invoke-ReleaseHumanGate {
         [Parameter(Mandatory)] $Context
     )
 
-    if ($NonInteractive) {
+    # Attest is checked BEFORE NonInteractive, not after. An attested gate does not
+    # need a human at all -- the caller states that the action was performed and the
+    # Verify block still decides -- so returning DEFERRED for it made the two
+    # switches contradict each other: -NonInteractive -Attest <id> deferred the very
+    # gate the attest was there to run. Observed on REL-AUD-SILENCE-001.
+    $attested = @(Expand-ListArgument -Values $Attest) -contains $Gate.Id
+    if ($NonInteractive -and -not $attested) {
         return @{ Result = 'DEFERRED'; Message = "Human gate not offered (-NonInteractive): $($Gate.Title)" }
     }
-    $attested = @(Expand-ListArgument -Values $Attest) -contains $Gate.Id
     if (-not $attested -and [Console]::IsInputRedirected) {
         return @{ Result = 'DEFERRED'
             Message      = 'stdin is redirected, so this gate cannot be answered. Run from a real terminal.'

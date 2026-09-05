@@ -818,14 +818,18 @@ function Get-ReleaseScenarioCatalog {
             # monitor and then stops repainting, which is the one shape the product
             # reports (docs/product-spec.md). REL-CAP-QUIET-001 covers the silent case.
             $stallAfter = 8
-            # The previous scenario's probe carries the same window title; see
-            # Wait-ReleaseProbeGone.
+            # A probe left over from an earlier attempt would hold a window and a
+            # capture lease for nothing. The TITLE is no longer ambiguous (see
+            # below), so this is housekeeping rather than disambiguation.
             Wait-ReleaseProbeGone -ProcessName 'probe_stall_window'
-            # ...and the app's window LIST has to lose it too; see
-            # Wait-ReleaseWindowTargetGone for why killing the process is not enough.
-            Wait-ReleaseWindowTargetGone -Connection $conn -TitleFilter 'ExoSnap stall probe'
+            # The probe puts its own pid in the window title, so this filter can only
+            # ever match THIS probe. Two scenarios run it back to back and both bind
+            # by title; a shared title let the second select the first one's window
+            # while the app's target list still held it, and the recording then died
+            # in validation with "audio_target_process_id must be a non-zero PID".
             $probeProcess = Start-Process -FilePath $probe -PassThru -WindowStyle Normal `
                 -ArgumentList @('--mode', 'freeze', '--stall-after', "$stallAfter", '--seconds', '90')
+            $probeTitle = "ExoSnap stall probe $($probeProcess.Id)"
             try {
                 # The window has to exist before it can be selected, and the app
                 # enumerates windows when asked to select rather than watching for
@@ -836,10 +840,10 @@ function Get-ReleaseScenarioCatalog {
                 $deadline = [DateTime]::UtcNow.AddSeconds(20)
                 while ([DateTime]::UtcNow -lt $deadline) {
                     [void](Invoke-LiveVerifyCommand -Connection $conn -Command 'record.selectTarget' `
-                            -Parameters @{ kind = 'window'; titleFilter = 'ExoSnap stall probe' })
+                            -Parameters @{ kind = 'window'; titleFilter = $probeTitle })
                     $snapshot = (Invoke-LiveVerifyCommand -Connection $conn -Command 'record.snapshot').result
                     $sourceName = "$(Get-ReleaseSnapshotValue -Object $snapshot -Path 'sourceName')"
-                    if ($sourceName -match 'stall probe') { $selected = $true; break }
+                    if ($sourceName -match [regex]::Escape($probeTitle)) { $selected = $true; break }
                     Start-Sleep -Milliseconds 500
                 }
                 if (-not $selected) {
@@ -915,25 +919,35 @@ function Get-ReleaseScenarioCatalog {
             }
             $session = & $ctx.EnsureSession
             $conn = $session.Connection
-            $stallAfter = 8
-            # The previous scenario's probe carries the same window title; see
-            # Wait-ReleaseProbeGone.
+            # Longer than the 20 s the selection loop below is allowed to take. A
+            # MINIMISED window drops out of the app's window list, so a probe that
+            # minimises while the gate is still resolving its title can never be
+            # selected -- observed as "the probe window was never selectable" after
+            # the previous scenario's teardown ate into the window. The freeze gate
+            # has no such constraint: a frozen window stays listed.
+            $stallAfter = 25
+            # A probe left over from an earlier attempt would hold a window and a
+            # capture lease for nothing. The TITLE is no longer ambiguous (see
+            # below), so this is housekeeping rather than disambiguation.
             Wait-ReleaseProbeGone -ProcessName 'probe_stall_window'
-            # ...and the app's window LIST has to lose it too; see
-            # Wait-ReleaseWindowTargetGone for why killing the process is not enough.
-            Wait-ReleaseWindowTargetGone -Connection $conn -TitleFilter 'ExoSnap stall probe'
+            # The probe puts its own pid in the window title, so this filter can only
+            # ever match THIS probe. Two scenarios run it back to back and both bind
+            # by title; a shared title let the second select the first one's window
+            # while the app's target list still held it, and the recording then died
+            # in validation with "audio_target_process_id must be a non-zero PID".
             $probeProcess = Start-Process -FilePath $probe -PassThru -WindowStyle Normal `
                 -ArgumentList @('--mode', 'minimise', '--stall-after', "$stallAfter", '--seconds', '90')
+            $probeTitle = "ExoSnap stall probe $($probeProcess.Id)"
             try {
                 $selected = $false
                 $sourceName = ''
                 $deadline = [DateTime]::UtcNow.AddSeconds(20)
                 while ([DateTime]::UtcNow -lt $deadline) {
                     [void](Invoke-LiveVerifyCommand -Connection $conn -Command 'record.selectTarget' `
-                            -Parameters @{ kind = 'window'; titleFilter = 'ExoSnap stall probe' })
+                            -Parameters @{ kind = 'window'; titleFilter = $probeTitle })
                     $snapshot = (Invoke-LiveVerifyCommand -Connection $conn -Command 'record.snapshot').result
                     $sourceName = "$(Get-ReleaseSnapshotValue -Object $snapshot -Path 'sourceName')"
-                    if ($sourceName -match 'stall probe') { $selected = $true; break }
+                    if ($sourceName -match [regex]::Escape($probeTitle)) { $selected = $true; break }
                     Start-Sleep -Milliseconds 500
                 }
                 if (-not $selected) {
@@ -2671,39 +2685,6 @@ function Wait-ReleaseProbeGone {
         }
         Start-Sleep -Milliseconds 250
     }
-}
-
-function Wait-ReleaseWindowTargetGone {
-    <#
-    .SYNOPSIS
-        Waits until no window target matches $TitleFilter any more.
-    .DESCRIPTION
-        Killing the previous probe is not enough and neither is choosing another
-        target: the app's window list is refreshed on its own schedule, so for a
-        second or two after the process is gone `record.selectTarget` still RESOLVES
-        that title -- to a window that no longer exists. The next scenario then
-        starts a recording against it and the engine answers "Could not capture the
-        given window", which the gate reads as the recording having left the running
-        lifecycle.
-
-        So the condition to wait for is the selection FAILING. Once it does, the
-        title is free and the probe started afterwards is the only thing that can
-        match it. The selection is left on the monitor either way, so nothing
-        downstream inherits a window choice.
-    #>
-    param(
-        [Parameter(Mandatory)] $Connection,
-        [Parameter(Mandatory)] [string] $TitleFilter,
-        [int] $TimeoutMs = 15000
-    )
-    $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMs)
-    while ([DateTime]::UtcNow -lt $deadline) {
-        $attempt = Invoke-LiveVerifyCommand -Connection $Connection -Command 'record.selectTarget' `
-            -Parameters @{ kind = 'window'; titleFilter = $TitleFilter }
-        if (-not $attempt.ok) { break }
-        Start-Sleep -Milliseconds 500
-    }
-    [void](Invoke-LiveVerifyCommand -Connection $Connection -Command 'record.selectTarget' -Parameters @{ kind = 'monitor' })
 }
 
 function Wait-ReleaseRecordingState {

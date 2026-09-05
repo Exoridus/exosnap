@@ -1,6 +1,7 @@
 #include "services/CaptureTargetNotifier.h"
 
 #include <QCoreApplication>
+#include <QDateTime>
 
 #include <gtest/gtest.h>
 
@@ -83,6 +84,43 @@ TEST(CaptureTargetNotifierTest, BurstUsesRemovalAsHighestPriorityReason) {
 
     EXPECT_EQ(changes, 1);
     EXPECT_EQ(last_reason, DiscoveryReason::DeviceRemoved);
+}
+
+// A steady stream of window events must not postpone the refresh forever.
+//
+// Debouncing means restarting the timer on every event, and the desktop produces
+// window lifecycle events continuously -- menus, tooltips, splash windows,
+// background processes -- so an uncapped restart starves the enumeration and the
+// target list keeps describing a desktop that no longer exists. MEASURED before
+// the cap: a window created while the app was running stayed unselectable through
+// the control channel, while the same window created BEFORE the app started was
+// selectable on the first attempt.
+TEST(CaptureTargetNotifierTest, AContinuousEventStreamCannotStarveTheRefresh) {
+    ASSERT_NE(ensureApplication(), nullptr);
+    CaptureTargetSnapshot current{{monitor(1, "Display 1")}};
+    CaptureTargetNotifier notifier;
+    notifier.setEnumeratorForTest([&current]() { return current; });
+    notifier.setDebounceIntervalMsForTest(30);
+    notifier.setMaxDeferralMsForTest(150);
+
+    int refreshes = 0;
+    QObject::connect(&notifier, &CaptureTargetNotifier::snapshotChanged,
+                     [&refreshes](const CaptureTargetSnapshot&, DiscoveryReason) { ++refreshes; });
+    notifier.start();
+    refreshes = 0;
+
+    // A window appears, and then the desktop keeps producing events faster than the
+    // debounce interval for well over the cap.
+    current = CaptureTargetSnapshot{{monitor(1, "Display 1"), window(2, "A window that just opened")}};
+    const qint64 until = QDateTime::currentMSecsSinceEpoch() + 400;
+    while (QDateTime::currentMSecsSinceEpoch() < until) {
+        notifier.requestRefreshForTest(DiscoveryReason::DeviceAdded);
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    }
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 60);
+
+    EXPECT_GT(refreshes, 0) << "the refresh never ran while events kept arriving";
+    EXPECT_EQ(notifier.currentSnapshot().targets.size(), 2u) << "the new window never reached the target list";
 }
 
 } // namespace
