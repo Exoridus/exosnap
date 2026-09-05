@@ -501,6 +501,32 @@ Test-Case 'prepare refuses to run without an explicit artifact' {
     Assert-True ($output -match 'ExePath') 'a release campaign must not resolve a default binary'
 }
 
+Test-Case 'a verdict with omitted fields survives a strict-mode read' {
+    . (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
+
+    # What a Verify block is allowed to return: Ok and a reason, nothing else.
+    # Reading .Evidence off that used to THROW under Set-StrictMode, and the
+    # scenario then reported a PowerShell message instead of a verdict -- three UAC
+    # prompts in one campaign were answered correctly and thrown away that way.
+    $sparse = Resolve-ReleaseVerdict @{ Ok = $false; Detail = 'the updater refused' }
+    Assert-Equal $false $sparse.Ok 'Ok survives'
+    Assert-Equal 'the updater refused' $sparse.Detail 'Detail survives'
+    Assert-Equal 0 @($sparse.Evidence).Count 'Evidence is an empty list rather than absent'
+
+    # And the sparsest one a block can produce.
+    $bare = Resolve-ReleaseVerdict @{ Ok = $true }
+    Assert-Equal '' $bare.Detail 'Detail defaults to empty'
+    Assert-Equal 0 @($bare.Evidence).Count 'Evidence defaults to empty'
+
+    # A verdict that carries everything is handed back untouched.
+    $full = Resolve-ReleaseVerdict @{ Ok = $true; Detail = 'measured'; Evidence = @('a', 'b') }
+    Assert-Equal 2 @($full.Evidence).Count 'existing evidence is kept'
+
+    # $null stays $null: "the block returned nothing" is a different finding from
+    # "it returned a verdict with no detail", and callers report it as UNVERIFIED.
+    Assert-True ($null -eq (Resolve-ReleaseVerdict $null)) 'a null verdict is not invented into one'
+}
+
 Test-Case 'the catalog loads and every scenario declares what it needs' {
     . (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
     $catalog = Get-ReleaseScenarioCatalog

@@ -303,7 +303,10 @@ function Invoke-ReleaseHumanGate {
     # The gate is passed back to its own Verify block so a scenario can hand values
     # forward in $Gate.State instead of capturing them in a closure -- see
     # New-ReleaseContext for why closures cannot resolve this script's functions.
-    $verdict = & $Gate.Verify $Context $Gate
+    # Normalised, because a Verify block may omit Detail or Evidence -- and under
+    # Set-StrictMode reading an absent key throws rather than yielding null. See
+    # Resolve-ReleaseVerdict for what that cost.
+    $verdict = Resolve-ReleaseVerdict (& $Gate.Verify $Context $Gate)
     if ($null -eq $verdict) {
         return @{ Result = 'UNVERIFIED'; Message = 'The gate verification returned nothing' }
     }
