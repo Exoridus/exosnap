@@ -300,6 +300,18 @@ std::string CoarseDuration(double seconds) {
     return Number(seconds, 0) + kNarrowNbsp + "s";
 }
 
+// How long ago a quiet problem was last measured, quantised. The band's headline
+// is deliberately restricted to counts so it does not rewrite itself twice a
+// second; a subline counting up in whole seconds under it would do exactly that
+// for the whole quiet stretch.
+std::string LastSeenAgo(double seconds) {
+    if (seconds < 10.0)
+        return "just now";
+    if (seconds < 60.0)
+        return Number(std::floor(seconds / 10.0) * 10.0, 0) + " s ago";
+    return Number(std::floor(seconds / 60.0), 0) + " min ago";
+}
+
 std::string Join(const std::string& left, const std::string& right) {
     if (left.empty())
         return right;
@@ -531,11 +543,22 @@ LiveTile StorageTile(const LiveTileInputs& in) {
 
 // ---- In-depth row (elevation + the present/DPC opt-in) ------------------------
 
+// Why an in-depth tile has no number, said in the tile itself. The row is full
+// whenever the switch is on, so a tile with no reading has to account for itself
+// rather than leave a gap where the reader expects a measurement.
+constexpr const char* kNoPresentTrace = "PresentMon trace is not reporting";
+constexpr const char* kNoDpcTrace = "DPC/ISR trace is not reporting";
+
 LiveTile PresentModeTile(const LiveTileInputs& in) {
-    const PresentSample& p = *in.present;
     LiveTile tile;
     tile.key = "presentMode";
     tile.title = "Present mode";
+    if (!in.present.has_value() || !in.present->available) {
+        tile.value = kDash;
+        tile.detail = kNoPresentTrace;
+        return tile;
+    }
+    const PresentSample& p = *in.present;
     tile.value = PresentSampleModeLabel(p.mode);
     tile.sub = p.tearing ? "tearing active" : "no tearing";
     tile.detail = p.present_interval_ms > 0.0 ? "interval " + Number(p.present_interval_ms, 1) + " ms"
@@ -544,10 +567,15 @@ LiveTile PresentModeTile(const LiveTileInputs& in) {
 }
 
 LiveTile PresentHealthTile(const LiveTileInputs& in) {
-    const PresentSample& p = *in.present;
     LiveTile tile;
     tile.key = "presentHealth";
     tile.title = "Present health";
+    if (!in.present.has_value() || !in.present->available) {
+        tile.value = kDash;
+        tile.detail = kNoPresentTrace;
+        return tile;
+    }
+    const PresentSample& p = *in.present;
     const double discarded_pct =
         p.present_count > 0 ? static_cast<double>(p.discarded_count) * 100.0 / static_cast<double>(p.present_count)
                             : 0.0;
@@ -562,10 +590,15 @@ LiveTile PresentHealthTile(const LiveTileInputs& in) {
 }
 
 LiveTile DpcLatencyTile(const LiveTileInputs& in) {
-    const DpcLatencyReading& d = *in.dpc;
     LiveTile tile;
     tile.key = "dpcLatency";
     tile.title = "DPC / ISR latency";
+    if (!in.dpc.has_value() || !in.dpc->available) {
+        tile.value = kDash;
+        tile.detail = kNoDpcTrace;
+        return tile;
+    }
+    const DpcLatencyReading& d = *in.dpc;
     tile.value = Number(d.max_latency_us, 0) + " " + kMicro + "s";
     tile.value_tone = OwnedTone(in.ledger, {"rec.dpc.latency"}, /*sticky=*/false);
     tile.budget = 1000.0;
@@ -603,14 +636,13 @@ std::vector<LiveTile> BuildLiveTiles(const LiveTileInputs& in) {
     if (!in.in_depth)
         return tiles;
 
-    // An in-depth tile with no reading behind it is absent, not "Unavailable":
-    // the switch's own sub-text already states why the traces are not running.
-    if (in.present.has_value() && in.present->available) {
-        tiles.push_back(PresentModeTile(in));
-        tiles.push_back(PresentHealthTile(in));
-    }
-    if (in.dpc.has_value() && in.dpc->available)
-        tiles.push_back(DpcLatencyTile(in));
+    // All four, always. The tile row is four or two columns wide, so a group that
+    // appears only when its trace is reporting leaves a ragged row; a tile with no
+    // reading shows an em dash and names why in its detail line, which is what the
+    // rest of the product does with an unmeasured value.
+    tiles.push_back(PresentModeTile(in));
+    tiles.push_back(PresentHealthTile(in));
+    tiles.push_back(DpcLatencyTile(in));
     tiles.push_back(GpuTimeTile(in));
     return tiles;
 }
@@ -751,7 +783,7 @@ Verdict ComputeRecordingVerdict(const DiagnosticChecklist& live_results, const S
                              [](const LedgerEntry& a, const LedgerEntry& b) { return a.last_seen_s < b.last_seen_s; });
         subline = last->title;
         if (now_s > last->last_seen_s)
-            subline += ", last seen " + Number(now_s - last->last_seen_s, 0) + " s ago";
+            subline += ", last seen " + LastSeenAgo(now_s - last->last_seen_s);
     }
     verdict.subline = std::move(subline);
     return verdict;
@@ -832,7 +864,11 @@ LastSession BuildLastSession(const UiRecordingResult& result, const exosnap::eng
     LastSession session;
     session.valid = true;
     session.file_name = std::filesystem::path(result.output_path).filename().string();
-    session.duration_s = ResultDurationSeconds(result);
+    // The timeline is drawn on the SESSION clock, which is the clock the marks
+    // carry; the media is shorter by the tail between the last encoded frame and
+    // Stop, and is what a click has to be clamped to.
+    session.media_duration_s = ResultDurationSeconds(result);
+    session.duration_s = result.elapsed_seconds > 0.0 ? result.elapsed_seconds : session.media_duration_s;
     session.ledger = frozen_ledger;
     session.problems = static_cast<int>(frozen_ledger.size());
 
@@ -905,19 +941,10 @@ LastSession BuildLastSession(const UiRecordingResult& result, const exosnap::eng
             session.marks.push_back(std::move(mark));
         }
     }
-    // Real frame drops earn their own coral mark. The engine keeps no timestamped
-    // drop history, so the mark spans the recording rather than claiming a moment
-    // the measurement never recorded.
-    if (drops > 0) {
-        TimelineMark mark;
-        mark.start_s = 0.0;
-        mark.end_s = session.duration_s;
-        mark.id = "capture.drops";
-        mark.title = "Frames dropped";
-        mark.worst = static_cast<double>(drops);
-        mark.tone = "critical";
-        session.marks.push_back(std::move(mark));
-    }
+    // Ledger occurrences only. Frame drops are counted in the Frames dropped fact
+    // and nowhere else: the engine keeps no timestamped drop history, so a mark
+    // could only span the whole recording, which would read as "the entire run was
+    // bad" for a defect that lasted a frame.
     return session;
 }
 
@@ -1014,14 +1041,24 @@ std::vector<ReadinessTile> BuildReadinessTiles(const ReadinessTileInputs& in) {
                 // Canon order, not capability order: the row is a fixed reference
                 // the user learns the position of, so a codec never moves because
                 // this GPU cannot encode it.
+                bool any_encodable = false;
                 for (const capability::VideoCodec codec_id :
                      {capability::VideoCodec::H264, capability::VideoCodec::Hevc, capability::VideoCodec::Av1}) {
                     CodecChip chip;
                     chip.label = StripBackendSuffix(VideoCodecDisplayName(codec_id));
                     chip.selected = codec_id == in.video_codec;
                     chip.available = capability::IsSelectable(in.caps->QueryVideoCodec(codec_id).level);
+                    any_encodable = any_encodable || chip.available;
                     tile.chips.push_back(std::move(chip));
                 }
+                // A cross on one chip is a 9 px cue for the one thing on this page
+                // that stops a recording from happening at all. The tile carries
+                // the severity: the selected codec cannot be encoded here, or
+                // nothing can be.
+                const bool selected_encodable =
+                    capability::IsSelectable(in.caps->QueryVideoCodec(in.video_codec).level);
+                if (!selected_encodable || !any_encodable)
+                    tile.tone = TileTone::Blocker;
             }
         } else {
             tile.value = kDash;
@@ -1543,7 +1580,16 @@ DiagnosticsSnapshot DiagnosticsController::Evaluate() {
     if (liveRecording()) {
         if (live_.session_generation != ledger_.generation())
             ledger_.Reset(live_.session_generation);
-        ledger_.Observe(recommendations.results, live_.elapsed_seconds);
+        // The entry rule counts consecutive MEASUREMENTS, and Evaluate() is reached
+        // from far more than the live rail -- a settings change, a display change or
+        // a probe result re-evaluates the same snapshot. Observing it again would
+        // let a single spike satisfy the two-evaluation rule on its own, so the pair
+        // that identifies a snapshot gates the call.
+        const SnapshotStamp stamp{live_.session_generation, live_.elapsed_seconds};
+        if (!last_observed_.has_value() || *last_observed_ != stamp) {
+            last_observed_ = stamp;
+            ledger_.Observe(recommendations.results, live_.elapsed_seconds);
+        }
         out.verdict = ComputeRecordingVerdict(recommendations, ledger_, live_.elapsed_seconds);
         out.verdict.cap_passes = cap_passes;
     } else {
@@ -1556,9 +1602,6 @@ DiagnosticsSnapshot DiagnosticsController::Evaluate() {
 
     ReadinessTileInputs tile_inputs;
     tile_inputs.data_ready = true;
-    tile_inputs.blockers = out.verdict.blockers;
-    tile_inputs.notices = out.verdict.notices;
-    tile_inputs.cap_passes = cap_passes;
     tile_inputs.gpu_adapter_name = config_.caps.gpu_adapter_name;
     tile_inputs.caps = &config_.caps;
     tile_inputs.video_codec = config_.user_config.video_codec;

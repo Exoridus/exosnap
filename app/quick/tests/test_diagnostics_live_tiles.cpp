@@ -37,6 +37,12 @@ LiveTile Find(const std::vector<LiveTile>& tiles, const std::string& key) {
     return it == tiles.end() ? LiveTile{} : *it;
 }
 
+ReadinessTile EncoderTileOf(const std::vector<ReadinessTile>& tiles) {
+    const auto it =
+        std::find_if(tiles.begin(), tiles.end(), [](const ReadinessTile& tile) { return tile.key == "encoder"; });
+    return it == tiles.end() ? ReadinessTile{} : *it;
+}
+
 std::vector<LiveTile> TilesFor(const char* kind) {
     return BuildLiveTiles(visual::MakeDiagnosticsLiveSnapshot(QString::fromLatin1(kind)));
 }
@@ -391,17 +397,48 @@ TEST(DiagnosticsLiveTiles, FourTilesWithoutDepthEightWithIt) {
     EXPECT_DOUBLE_EQ(*Find(deep, "gpuTime").budget, 1000.0 / 60.0);
 }
 
-TEST(DiagnosticsLiveTiles, AnInDepthTileWithNoReadingIsAbsentAndNotUnavailable) {
+// The in-depth row is four tiles wide or it is a ragged row. A tile whose trace
+// is not reporting shows an em dash and names why, which is what the rest of the
+// product does with a value nobody measured.
+TEST(DiagnosticsLiveTiles, AnInDepthTileWithNoReadingKeepsItsPlaceAndNamesWhy) {
     const exosnap::engine::RecordingDiagnosticsSnapshot healthy =
         visual::MakeDiagnosticsLiveSnapshot(QStringLiteral("healthy"));
     const SessionLedger clean;
-    // The switch's own sub-text states why the traces are not running; a tile of
-    // em dashes would say it a second time and read as a defect.
     const std::vector<LiveTile> tiles = BuildLiveTiles(LiveTileInputs{healthy, clean, /*in_depth=*/true});
-    EXPECT_EQ(tiles.size(), 5u);
-    EXPECT_EQ(Find(tiles, "presentMode").key, std::string());
-    EXPECT_EQ(Find(tiles, "dpcLatency").key, std::string());
+    ASSERT_EQ(tiles.size(), 8u);
+    EXPECT_EQ(Find(tiles, "presentMode").value, "\xe2\x80\x94");
+    EXPECT_EQ(Find(tiles, "presentMode").detail, "PresentMon trace is not reporting");
+    EXPECT_EQ(Find(tiles, "presentHealth").value, "\xe2\x80\x94");
+    EXPECT_EQ(Find(tiles, "dpcLatency").value, "\xe2\x80\x94");
+    EXPECT_EQ(Find(tiles, "dpcLatency").detail, "DPC/ISR trace is not reporting");
+    // The GPU tile reads the snapshot, so it always has a number.
     EXPECT_EQ(Find(tiles, "gpuTime").key, "gpuTime");
+}
+
+// Spec section 8: coral only when the selected codec cannot be encoded here, or
+// when nothing can. A 9 px cross inside one chip is not the severity of the one
+// condition on this page that stops a recording from happening at all.
+TEST(DiagnosticsReadinessTiles, TheEncoderTileIsCoralWhenTheSelectedCodecCannotBeEncoded) {
+    capability::CapabilitySet caps;
+    caps.gpu_adapter_name = "NVIDIA GeForce RTX 5070 Ti";
+    caps.video_codecs[capability::VideoCodec::H264] = {capability::SupportLevel::Available, ""};
+    caps.video_codecs[capability::VideoCodec::Hevc] = {capability::SupportLevel::NotImplemented, ""};
+
+    ReadinessTileInputs inputs;
+    inputs.data_ready = true;
+    inputs.gpu_adapter_name = caps.gpu_adapter_name;
+    inputs.caps = &caps;
+    inputs.video_codec = capability::VideoCodec::H264;
+    EXPECT_EQ(EncoderTileOf(BuildReadinessTiles(inputs)).tone, TileTone::Neutral);
+
+    inputs.video_codec = capability::VideoCodec::Hevc;
+    EXPECT_EQ(EncoderTileOf(BuildReadinessTiles(inputs)).tone, TileTone::Blocker);
+
+    // No encoder at all: nothing on this machine can be recorded.
+    capability::CapabilitySet none;
+    inputs.caps = &none;
+    inputs.video_codec = capability::VideoCodec::H264;
+    EXPECT_EQ(EncoderTileOf(BuildReadinessTiles(inputs)).tone, TileTone::Blocker);
 }
 
 // ── Readiness encoder tile ──────────────────────────────────────────────────────

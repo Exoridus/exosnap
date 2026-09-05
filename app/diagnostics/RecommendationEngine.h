@@ -11,6 +11,7 @@
 
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace exosnap::diagnostics {
@@ -111,6 +112,16 @@ class RecommendationEngine {
     }
 
     static std::vector<std::string> GetAllRecommendationCodes();
+
+    // True for the Tier-2 checks that measure something WHILE a recording runs,
+    // as opposed to the ones that report a property of the configuration or of
+    // the machine and would fire identically before Record was pressed.
+    //
+    // The session ledger admits these and nothing else, so a condition the
+    // readiness surface already showed cannot be re-reported as a problem the
+    // recording ran into. A new live check registers itself in the list next to
+    // this declaration's definition; anything not listed stays out of the ledger.
+    [[nodiscard]] static bool IsLiveMeasuredCheck(std::string_view id) noexcept;
 
   private:
     void checkRefreshRateMismatch(DiagnosticChecklist& checklist) const;

@@ -1152,4 +1152,35 @@ std::vector<std::string> RecommendationEngine::GetAllRecommendationCodes() {
             "display.saved.unresolved"};
 }
 
+bool RecommendationEngine::IsLiveMeasuredCheck(std::string_view id) noexcept {
+    // An allow-list rather than a deny-list: a check that is forgotten here stays
+    // out of the session ledger, which understates one recording. Forgetting it in
+    // a deny-list would put a static readiness condition on the record as a problem
+    // the recording caused, which is a claim about something that did not happen.
+    //
+    // Every id below is emitted only from a live measurement: the frame-pacing,
+    // GPU, disk, present-path, DPC and audio-device checks above. The Tier-2 ids
+    // deliberately absent are the ones a readiness pass answers just as well --
+    // rec.005 (free space), rec.pacing.smooth (a pacing-mode recommendation),
+    // display.saved.unresolved, rec.capture.adapter_mismatch, and the two
+    // exclusive-fullscreen checks, which describe the selected target's mode.
+    static constexpr std::string_view kLiveMeasuredIds[] = {
+        "rec.001",                   // present-cadence judder
+        "rec.gpu.contention",        // captured application saturating the GPU
+        "rec.disk.writestall",       // write stalls during the run
+        "rec.dpc.latency",           // kernel DPC/ISR latency during the run
+        "rec.present.discarded",     // compositor discarding presents
+        "rec.present.modeflip",      // source changing present mode
+        "rec.audio.degraded",        // audio device lost mid-recording
+        "rec.audio.endpoint_taken",  // audio device taken mid-recording
+        "rec.audio.clock_saturated", // audio clock drifting faster than correction
+        "rec.pacing.duplication",    // source delivering fewer frames than the rate
+    };
+    for (const std::string_view live : kLiveMeasuredIds) {
+        if (live == id)
+            return true;
+    }
+    return false;
+}
+
 } // namespace exosnap::diagnostics

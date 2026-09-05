@@ -1,6 +1,7 @@
 #include "diagnostics/SessionLedger.h"
 
 #include "diagnostics/DiagnosticsController.h"
+#include "diagnostics/RecommendationEngine.h"
 
 #include <algorithm>
 #include <unordered_set>
@@ -49,6 +50,11 @@ void SessionLedger::Observe(const std::vector<DiagnosticResult>& results, double
     for (const DiagnosticResult& result : results) {
         if (result.tier != DiagnosticTier::MeasuredProblem)
             continue;
+        // Tier alone is not the gate: several Tier-2 checks report a property of
+        // the configuration, which was already true before Record was pressed and
+        // did not happen during this recording.
+        if (!RecommendationEngine::IsLiveMeasuredCheck(result.id))
+            continue;
         firing.insert(result.id);
 
         if (LedgerEntry* entry = Find(result.id)) {
@@ -78,7 +84,6 @@ void SessionLedger::Observe(const std::vector<DiagnosticResult>& results, double
         entry.id = result.id;
         entry.title = result.title;
         entry.summary = result.summary;
-        entry.why = result.recommendation;
         entry.log_excerpt = result.detail;
         entry.worst = pending.worst;
         entry.worst_text = pending.worst_text;

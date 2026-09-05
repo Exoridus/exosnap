@@ -183,9 +183,6 @@ struct ReadinessTile {
 // not reach for itself.
 struct ReadinessTileInputs {
     bool data_ready = false;
-    int blockers = 0;
-    int notices = 0;
-    int cap_passes = 0;
 
     std::string gpu_adapter_name;
     capability::VideoCodec video_codec = capability::VideoCodec::H264;
@@ -328,7 +325,12 @@ struct TimelineMark {
 struct LastSession {
     bool valid = false;
     std::string file_name; // name only, never a path
+    // The session clock the marks are placed on: how long the recording ran.
     double duration_s = 0.0;
+    // The finished file's own length, which is shorter by the tail between the
+    // last encoded frame and Stop. A position handed to the Edit surface is
+    // clamped to it, so a mark in that tail opens at the end of the file.
+    double media_duration_s = 0.0;
     std::string started_at_text;
     std::string ended_at_text;
     std::vector<LastSessionFact> facts; // exactly: dropped, achieved, drift, file
@@ -610,6 +612,15 @@ class DiagnosticsController {
     [[nodiscard]] const LastSession& lastSession() const noexcept;
 
   private:
+    // What identifies one live snapshot, so the ledger is never handed the same
+    // measurement twice.
+    struct SnapshotStamp {
+        uint64_t generation = 0;
+        double elapsed_s = 0.0;
+
+        friend bool operator==(const SnapshotStamp&, const SnapshotStamp&) = default;
+    };
+
     Config config_;
     ProbeResult probe_;
     DisplayFacts display_{};
@@ -637,6 +648,8 @@ class DiagnosticsController {
     DiagnosticChecklist last_checklist_;
     std::vector<DiagnosticResult> last_facts_;
     SessionLedger ledger_;
+    // The snapshot the ledger has already observed. Empty before the first one.
+    std::optional<SnapshotStamp> last_observed_;
     LastSession last_session_;
     // The lifecycle edge the freeze hangs off. Without it, an idle snapshot that
     // arrives twice would close occurrences a second time at a later timestamp.

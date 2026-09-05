@@ -62,7 +62,6 @@ TEST(SessionLedger, TwoConsecutiveEvaluationsEnterAndStayUntilReset) {
     EXPECT_DOUBLE_EQ(*e.budget, 8.0);
     EXPECT_EQ(e.unit, "ms");
     EXPECT_EQ(e.title, "rec.001 title");
-    EXPECT_EQ(e.why, "rec.001 why");
     EXPECT_EQ(e.log_excerpt, "rec.001 detail");
     // The first firing, not the second: the entry says when the problem started.
     EXPECT_DOUBLE_EQ(e.first_seen_s, 1.0);
@@ -149,12 +148,33 @@ TEST(SessionLedger, ResetWithNewGenerationClearsEverything) {
 TEST(SessionLedger, BlockersAndOptimisationsAreIgnored) {
     SessionLedger ledger;
     ledger.Reset(1);
+    // Ids the ledger would otherwise admit, so the tier is what is under test.
     for (double t : {1.0, 1.5, 2.0}) {
-        ledger.Observe({Tiered("rec.blocker", DiagnosticTier::Blocker), Tiered("rec.tip", DiagnosticTier::Optimisation),
-                        Tiered("fact.x", DiagnosticTier::Fact)},
+        ledger.Observe({Tiered("rec.001", DiagnosticTier::Blocker),
+                        Tiered("rec.disk.writestall", DiagnosticTier::Optimisation),
+                        Tiered("rec.gpu.contention", DiagnosticTier::Fact)},
                        t);
     }
     EXPECT_TRUE(ledger.empty());
+}
+
+// Tier alone is not the gate. Several Tier-2 checks report a property of the
+// configuration -- free space, the pacing mode -- which was already true before
+// Record was pressed. A recording that did not cause a condition must not be
+// reported as having run into it.
+TEST(SessionLedger, StaticReadinessChecksNeverEnter) {
+    SessionLedger ledger;
+    ledger.Reset(1);
+    const std::vector<DiagnosticResult> results = {
+        MeasuredProblem("rec.005", 4.0, 10.0),          // free space below the warn threshold
+        MeasuredProblem("rec.pacing.smooth", 1.0, 0.5), // a pacing-mode recommendation
+        MeasuredProblem("rec.001", 9.0, 8.0),           // measured during the run
+    };
+    for (const double t : {1.0, 1.5, 2.0})
+        ledger.Observe(results, t);
+
+    ASSERT_EQ(ledger.entries().size(), 1u);
+    EXPECT_EQ(ledger.entries().front().id, "rec.001");
 }
 
 TEST(SessionLedger, ActiveCountCountsOnlyActiveEntries) {

@@ -29,7 +29,6 @@ struct LedgerEntry {
     std::string id;
     std::string title;
     std::string summary;
-    std::string why;
     std::string log_excerpt;
     std::optional<double> worst; // max measured_value seen this session
     std::optional<double> budget;
@@ -65,8 +64,15 @@ class SessionLedger {
     // per recording session generation and must never survive into the next one.
     void Reset(uint64_t generation);
 
-    // One evaluation of the live checklist. Every Tier-2 measured problem in
-    // `results` is firing at `now_s`; every entered id absent from it goes quiet.
+    // One evaluation of the live checklist. Every admitted check in `results` is
+    // firing at `now_s`; every entered id absent from it goes quiet. Admission is
+    // Tier-2 AND RecommendationEngine::IsLiveMeasuredCheck: a Tier-2 check that
+    // reports a property of the configuration was already true before the
+    // recording started and is not something the recording ran into.
+    //
+    // Must be called once per distinct evaluation. Calling it twice for the same
+    // measurement satisfies the two-evaluation entry rule with a single sample,
+    // so the caller is responsible for not re-observing an unchanged snapshot.
     void Observe(const std::vector<DiagnosticResult>& results, double now_s);
 
     // Ends the session's observation window: closes the occurrences that are still

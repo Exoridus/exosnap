@@ -524,6 +524,19 @@ TEST(DiagnosticsRecordingVerdict, AQuietLedgerSaysSoAndNamesTheLastProblem) {
     EXPECT_NE(verdict.subline.find("last seen"), std::string::npos);
 }
 
+// The headline is restricted to counts so the band does not rewrite itself twice
+// a second. A subline counting up in whole seconds under it would do exactly that
+// for the whole quiet stretch, so the figure is quantised.
+TEST(DiagnosticsRecordingVerdict, TheLastSeenFigureIsQuantisedSoTheSublineHoldsStill) {
+    const SessionLedger ledger = LedgerWith({"rec.001"}, /*active_count=*/0);
+    // The entry goes quiet at 2.0 s.
+    EXPECT_NE(ComputeRecordingVerdict({}, ledger, 6.0).subline.find("just now"), std::string::npos);
+    EXPECT_EQ(ComputeRecordingVerdict({}, ledger, 6.0).subline, ComputeRecordingVerdict({}, ledger, 9.4).subline);
+    EXPECT_NE(ComputeRecordingVerdict({}, ledger, 27.0).subline.find("20 s ago"), std::string::npos);
+    EXPECT_EQ(ComputeRecordingVerdict({}, ledger, 27.0).subline, ComputeRecordingVerdict({}, ledger, 29.9).subline);
+    EXPECT_NE(ComputeRecordingVerdict({}, ledger, 200.0).subline.find("3 min ago"), std::string::npos);
+}
+
 TEST(DiagnosticsRecordingVerdict, ABlockerInTheLiveChecklistWins) {
     const SessionLedger ledger = LedgerWith({"rec.001", "rec.disk.writestall"}, /*active_count=*/2);
     const DiagnosticChecklist live = MakeChecklist({
@@ -599,6 +612,24 @@ TEST(DiagnosticsController, EvaluateFeedsTheLedgerOnlyWhileRecording) {
     EXPECT_EQ(after.ledger_active, 0);
 }
 
+// The entry rule counts consecutive MEASUREMENTS. Evaluate() is reached from
+// every settings change, display change and probe result as well as from the live
+// rail, so re-evaluating one snapshot must not let a single spike enter.
+TEST(DiagnosticsController, ReEvaluatingOneSnapshotDoesNotSatisfyTheEntryRule) {
+    DiagnosticsController controller;
+    controller.SetConfig(MinimalConfig());
+
+    controller.SetLiveSnapshot(JudderSnapshot(10.0));
+    for (int pass = 0; pass < 5; ++pass) {
+        const DiagnosticsSnapshot out = controller.Evaluate();
+        EXPECT_EQ(FindEntry(out.ledger, "rec.001"), nullptr) << "pass " << pass;
+    }
+
+    // A second, genuinely different measurement is what earns the entry.
+    controller.SetLiveSnapshot(JudderSnapshot(10.5));
+    EXPECT_NE(FindEntry(controller.Evaluate().ledger, "rec.001"), nullptr);
+}
+
 TEST(DiagnosticsController, ANewSessionGenerationResetsTheLedger) {
     DiagnosticsController controller;
     controller.SetConfig(MinimalConfig());
@@ -653,7 +684,10 @@ TEST(DiagnosticsLastSession, FourFactsInAFixedOrderWithTheFileNameOnly) {
     EXPECT_TRUE(session.valid);
     // The name, never the path: the card is a support artefact as much as a UI.
     EXPECT_EQ(session.file_name, "ExoSnap_2026-09-05.mkv");
-    EXPECT_DOUBLE_EQ(session.duration_s, 183.5);
+    // The timeline spans the session clock the marks are placed on; the media is
+    // shorter by the tail between the last encoded frame and Stop.
+    EXPECT_DOUBLE_EQ(session.duration_s, 184.0);
+    EXPECT_DOUBLE_EQ(session.media_duration_s, 183.5);
     ASSERT_EQ(session.facts.size(), 4u);
     EXPECT_EQ(session.facts[0].key, "dropped");
     EXPECT_EQ(session.facts[1].key, "achieved");
@@ -692,14 +726,17 @@ TEST(DiagnosticsLastSession, TheFrozenLedgerBecomesTheProblemCountAndTheTimeline
     EXPECT_DOUBLE_EQ(session.marks.front().end_s, 2.0);
 }
 
-TEST(DiagnosticsLastSession, RealFrameDropsEarnACoralMarkOfTheirOwn) {
+// The engine keeps no timestamped drop history, so a drop can only be counted in
+// the Frames dropped fact. A mark spanning the whole recording would read as "the
+// entire run was bad" for a defect that lasted a frame.
+TEST(DiagnosticsLastSession, FrameDropsAreCountedAndNeverMarkedOnTheTimeline) {
     exosnap::engine::RecordingDiagnosticsSnapshot lossy = visual::MakeDiagnosticsLiveSnapshot(QStringLiteral("post"));
     lossy.capture.frames_dropped_backpressure = 41;
     const LastSession session = BuildLastSession(MakeResultFor(60), lossy, FrozenLedger());
-    ASSERT_EQ(session.marks.size(), 2u);
-    EXPECT_EQ(session.marks.back().tone, "critical");
-    EXPECT_EQ(session.marks.back().id, "capture.drops");
-    EXPECT_DOUBLE_EQ(session.marks.back().worst, 41.0);
+    EXPECT_EQ(session.facts[0].value, "41");
+    ASSERT_EQ(session.marks.size(), 1u);
+    EXPECT_EQ(session.marks.front().id, "rec.001");
+    EXPECT_EQ(session.marks.front().tone, "warn");
 }
 
 TEST(DiagnosticsLastSession, AnUnmeasuredSessionStatesWhatItCannotSayInsteadOfZero) {
