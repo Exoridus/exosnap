@@ -44,6 +44,8 @@ namespace exosnap::visual {
 //                          is contending for the GPU right now
 //   "after-stop"           the same recording, stopped and saved
 //   "in-depth"             a healthy recording with the elevated traces running
+//   "opt-in-unelevated"    no recording, the in-depth opt-in on in a standard
+//                          process: the switch is on and nothing is measuring
 //
 // An unrecognised kind returns an invalid snapshot, which renders as no live
 // tiles at all -- the honest result for "no scenario".

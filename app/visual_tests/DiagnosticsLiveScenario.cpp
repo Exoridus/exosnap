@@ -109,7 +109,10 @@ void WithPresentObserved(RecordingDiagnosticsSnapshot& s, exosnap::engine::Prese
 } // namespace
 
 RecordingDiagnosticsSnapshot MakeDiagnosticsLiveSnapshot(const QString& kind) {
-    if (kind == QLatin1String("idle"))
+    // Both have no live pipeline: the first is an idle recorder, the second is
+    // an idle recorder whose in-depth opt-in is on in a standard process, which
+    // is a statement about the switch and not about a recording.
+    if (kind == QLatin1String("idle") || kind == QLatin1String("opt-in-unelevated"))
         return {};
 
     RecordingDiagnosticsSnapshot s = Baseline();
@@ -233,7 +236,8 @@ RecordingDiagnosticsSnapshot MakeDiagnosticsLiveSnapshot(const QString& kind) {
 }
 
 int DiagnosticsLiveSampleCount(const QString& kind) {
-    if (kind == QLatin1String("idle"))
+    // A kind with no live pipeline has nothing to wind forward.
+    if (!MakeDiagnosticsLiveSnapshot(kind).valid)
         return 1;
     // A full sparkline window, and enough evaluations for the ledger's
     // two-consecutive-firings rule to open and close separate occurrences.
@@ -307,6 +311,13 @@ exosnap::engine::RecordingDiagnosticsSnapshot MakeDiagnosticsLiveSample(const QS
 
 DiagnosticsLiveExtras MakeDiagnosticsLiveExtras(const QString& kind) {
     DiagnosticsLiveExtras extras;
+    // The opt-in persists across launches and elevation does not, so "on but not
+    // measuring" is a state a user reaches by restarting. It has no readings at
+    // all, which is exactly what the switch's sub-text has to state.
+    if (kind == QLatin1String("opt-in-unelevated")) {
+        extras.in_depth = true;
+        return extras;
+    }
     if (kind != QLatin1String("in-depth"))
         return extras;
 

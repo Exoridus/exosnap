@@ -584,11 +584,13 @@ const QVector<VisualScenario> kScenarios = {
      .page = VisualPage::Diagnostics,
      .record_state = VisualRecordState::Completed,
      .diag_live = QStringLiteral("post")},
-    // Elevation: the in-depth switch on a standard process, where its sub-text is
-    // the whole statement of the gate.
+    // Elevation: the in-depth opt-in on in a standard process, where the switch's
+    // sub-text is the whole statement of the gate. The switch is on, no ETW
+    // session exists, and no in-depth tile has a reading.
     {.id = QStringLiteral("diagnostics-elevation"),
      .title = QStringLiteral("Diagnostics — elevation gate"),
-     .page = VisualPage::Diagnostics},
+     .page = VisualPage::Diagnostics,
+     .diag_live = QStringLiteral("opt-in-unelevated")},
     // Hotkeys now live as an embedded card inside Settings (PS-PHASE-C). These
     // scenarios drive the embedded HotkeysSettingsPanel and scroll it into view,
     // replacing the former standalone-page hotkeys-* scenarios with equal coverage

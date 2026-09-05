@@ -1976,17 +1976,25 @@ Tile rows are always full — four columns or two, never a ragged three — refl
 capture-pipeline rail does.
 
 **Readiness tiles.** Four, always in this order: **Encoder**, **Disk**, **Display**, **Audio**. The
-Display tile's sub-line carries the capture target ("144 Hz · Desktop – Display 1"); there is no
-separate Capture-target tile. The verdict band already states the overall rollup, first and larger, so
+Encoder tile's codec row is H.264 · HEVC · AV1 in that fixed order, the selected one outlined in
+accent and a codec this GPU cannot encode dimmed with a cross; the tile itself is coral only when the
+selected codec cannot be encoded here or no encoder exists at all. The Display tile's sub-line carries
+the capture target ("144 Hz · Desktop – Display 1"); there is no separate Capture-target tile. The verdict band already states the overall rollup, first and larger, so
 there is no separate Readiness tile either, and the old Last-session tile is replaced outright by the
 Last session card below.
 
 **Live tiles.** Four while recording — Frame pacing, Encoder, Storage, Audio sync — eight with the
 in-depth switch on, which adds Present mode, Present health, DPC / ISR latency and GPU time as a
-second full row.
+second full row. The second row is always all four: a tile whose trace is not reporting shows an em
+dash and names why in its detail line, the same way every other unmeasured value is shown. The row is
+absent only when the switch is off.
 
 **Session ledger.** While recording, a Tier-2 measured problem that fires on two consecutive
-evaluations (never a single spike) enters the ledger, under an OBSERVED IN THIS SESSION eyebrow. An
+measurements (never a single spike, and never the same measurement counted twice) enters the ledger,
+under an OBSERVED IN THIS SESSION eyebrow. Only a check that measures something DURING the run enters:
+a condition that is a property of the configuration — free space, the pacing mode, the capture
+target's own mode — was already true before Record was pressed and belongs to the readiness surface,
+not to the record of what this recording ran into. An
 **active** entry is an expanded card: filled amber ground, a "now" badge, live duration, its measured
 value against budget inline, its summary as the why, and a collapsed **Log excerpt** disclosure with
 a **Show in log** link. A **quiet** entry (fired before, not firing now) collapses to a single 44 px
@@ -2002,8 +2010,10 @@ keeps the severity word.
 **Last session card.** Shown After Stop, replacing the old Last-session tile: header ("Recording
 saved · N problems observed"), the file name, then four fixed facts — **Frames dropped** (tinted
 critical above zero, ok at zero), **Achieved fps**, **A/V drift**, and **File** (valid, container,
-codec, size) — a timeline strip below them (one amber mark per ledger occurrence, width = its
-duration; hover names the problem, time, duration and worst value; click opens Edit at that time),
+codec, size) — a timeline strip below them (spanning the recording's own elapsed time, one amber mark
+per ledger occurrence, width = its duration; hover names the problem, time, duration and worst value;
+click opens Edit at that time, clamped to the end of the file so a mark in the tail after the last
+encoded frame does not open past it),
 the frozen ledger worst-first with the first card expanded, and the Show in folder / Open in Edit /
 View log actions. The timeline marks ledger occurrences only: the engine keeps no timestamped record
 of individual frame drops, so a drop is not marked on the timeline — it is only counted in the
@@ -2011,8 +2021,11 @@ of individual frame drops, so a drop is not marked on the timeline — it is onl
 
 **In-depth diagnostics switch.** A header control, not a reference row: bound to the same
 `presentDiagnosticsOptIn` setting Settings → Developer already exposes (one setting, two controls),
-disabled while recording. Its sub-text states the gate — "Off · needs an admin relaunch" or "On ·
-elevated · PresentMon + DPC/ISR trace". Turning it on is what adds the second row of live tiles above.
+disabled while recording. Its sub-text states the gate, and the opt-in and elevation are two separate
+conditions — "Off · needs an admin relaunch", "On · not measuring · needs an admin relaunch" for the
+opt-in carried over from an elevated run into a standard process, and "On · elevated · PresentMon +
+DPC/ISR trace" when the traces are actually running. Turning it on is what adds the second row of live
+tiles above.
 
 **Sparkline tiles.** Frame pacing, Encoder, Storage and Audio sync each carry a 24 px sparkline of the
 last 60 snapshots (12 s at 5 Hz), coloured by the tile's own value tone, with a dashed budget line
