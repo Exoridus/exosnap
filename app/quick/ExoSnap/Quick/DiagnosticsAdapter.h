@@ -115,7 +115,7 @@ class DiagnosticsAdapter : public QObject {
     [[nodiscard]] QString verdictSubline() const;
     [[nodiscard]] int blockerCount() const noexcept;
     [[nodiscard]] int noticeCount() const noexcept;
-    [[nodiscard]] const QString& lastCheckText() const noexcept;
+    [[nodiscard]] QString lastCheckText() const;
     [[nodiscard]] bool checking() const noexcept;
     [[nodiscard]] bool dataReady() const noexcept;
     [[nodiscard]] bool hasLastRecording() const noexcept;
@@ -285,7 +285,7 @@ class DiagnosticsAdapter : public QObject {
     SessionLedgerModel ledger_model_;
     std::unique_ptr<SupportBundleService> bundle_service_;
 
-    QString last_check_text_;
+    QDateTime last_check_at_;
     QString self_test_status_;
     QVariantList tiles_;
     QVariantList live_tiles_;

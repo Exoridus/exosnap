@@ -198,7 +198,6 @@ DiagnosticsAdapter::DiagnosticsAdapter(QObject* parent)
     : QObject(parent), bundle_service_(std::make_unique<SupportBundleService>()) {
     controller_.SetDisplayFacts(PrimaryDisplayFacts());
 
-    last_check_text_ = QStringLiteral("Last check: \xe2\x80\x94");
     self_test_status_ = QStringLiteral("Status: Not run");
 
     live_probe_timer_.setInterval(kLiveProbeIntervalMs);
@@ -255,8 +254,22 @@ int DiagnosticsAdapter::noticeCount() const noexcept {
     return notice_count_;
 }
 
-const QString& DiagnosticsAdapter::lastCheckText() const noexcept {
-    return last_check_text_;
+QString DiagnosticsAdapter::lastCheckText() const {
+    // While recording the band reports the session, so its stamp says since when
+    // and at what rate rather than when the readiness probe last ran.
+    if (recording_) {
+        return session_start_.isValid() ? QStringLiteral("Recording since %1 \xc2\xb7 live 5x/s")
+                                              .arg(session_start_.toString(QStringLiteral("hh:mm")))
+                                        : QStringLiteral("Recording \xc2\xb7 live 5x/s");
+    }
+    if (probe_in_flight_)
+        return QStringLiteral("Checking\xe2\x80\xa6");
+    if (!last_check_at_.isValid())
+        return QStringLiteral("Not checked yet");
+    // The page has no Run check button any more, so the stamp is where the
+    // recheck policy is stated: nobody has to ask whether this is stale.
+    return QStringLiteral("Checked %1 \xc2\xb7 rechecks every 10 s and on every settings change")
+        .arg(last_check_at_.toString(QStringLiteral("hh:mm")));
 }
 
 bool DiagnosticsAdapter::checking() const noexcept {
@@ -730,6 +743,9 @@ void DiagnosticsAdapter::applyLiveDiagnostics(const exosnap::engine::RecordingDi
         recording_ = live;
         emit recordingChanged();
         emit inDepthChanged();
+        // The band's stamp reports the session while one runs and the readiness
+        // recheck policy otherwise, so it changes meaning on this edge.
+        emit lastCheckChanged();
     }
 
     if (!live) {
@@ -787,7 +803,6 @@ void DiagnosticsAdapter::startProbe(bool run_self_test) {
         return;
     probe_in_flight_ = true;
     setChecking(true);
-    last_check_text_ = QStringLiteral("Last check: running\xe2\x80\xa6");
     emit lastCheckChanged();
 
     diagnostics::DiagnosticsProbeRequest request;
@@ -817,8 +832,7 @@ void DiagnosticsAdapter::applyProbe(diagnostics::DiagnosticsController::ProbeRes
     controller_.SetProbeResult(std::move(probe));
     setChecking(false);
 
-    last_check_text_ = QStringLiteral("Last check: %1")
-                           .arg(QDateTime::currentDateTime().toString(QStringLiteral("dd MMM yyyy, hh:mm")));
+    last_check_at_ = QDateTime::currentDateTime();
     emit lastCheckChanged();
 
     if (from_manual_check)

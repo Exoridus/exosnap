@@ -163,14 +163,14 @@ struct CodecChip {
 };
 
 struct ReadinessTile {
-    std::string key; // "readiness" | "encoder" | "disk" | "display" | "audio" | "target" | "session"
+    std::string key; // "encoder" | "disk" | "display" | "audio"
     std::string title;
     std::string value;
     std::string sub;
     TileTone tone = TileTone::Neutral;
     bool has_usage_bar = false;
     int usage_percent = 0;
-    // The Readiness tile earns a trailing check glyph only when everything passed.
+    // A trailing check glyph, for a tile that has something to be clear about.
     bool show_ok_glyph = false;
     // A short fact that belongs in the tile head next to the title rather than in
     // the value line: the encoder backend ("NVENC"), today the only one.
@@ -200,15 +200,16 @@ struct ReadinessTileInputs {
     int display_height = 0;
     int display_refresh_hz = 0;
 
-    int audio_sources = 0;
-    uint32_t audio_sample_rate = 0;
-    uint32_t audio_channels = 0;
-
+    // What is actually being captured, which is what the Display tile names once
+    // a target has been picked. Without a selection the tile falls back to the
+    // configured kind, so it never claims a target nobody chose.
     bool target_selected = false;
     bool target_is_window = false;
     std::string target_description;
 
-    bool has_last_recording = false;
+    int audio_sources = 0;
+    uint32_t audio_sample_rate = 0;
+    uint32_t audio_channels = 0;
 
     // The capability answers behind the encoder tile's codec row. nullptr leaves
     // the row empty rather than claiming every codec is encodable.

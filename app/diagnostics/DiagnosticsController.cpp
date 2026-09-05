@@ -983,39 +983,14 @@ SelfTestReport BuildSelfTestReport(const DiagnosticChecklist& self_test) {
 // ── Readiness tiles ─────────────────────────────────────────────────────────────
 
 std::vector<ReadinessTile> BuildReadinessTiles(const ReadinessTileInputs& in) {
+    // Four, always, so the row is never ragged: what will encode this, where it
+    // is going, what is being captured at, and what will be heard. The readiness
+    // rollup is the verdict band's job and the finished recording is the Last
+    // session card's, so neither takes a tile here.
     std::vector<ReadinessTile> tiles;
-    tiles.reserve(7);
+    tiles.reserve(4);
 
-    // Tile 1 — Readiness.
-    {
-        ReadinessTile tile;
-        tile.key = "readiness";
-        tile.title = "Readiness";
-        const int total = in.cap_passes + in.blockers + in.notices;
-        if (in.blockers > 0) {
-            tile.value = "Action needed";
-            tile.sub = in.blockers == 1
-                           ? std::string("1 blocker ") + kMiddot + " recording is blocked"
-                           : std::to_string(in.blockers) + " blockers " + kMiddot + " recording is blocked";
-            tile.tone = TileTone::Blocker;
-        } else if (in.notices > 0) {
-            tile.value = std::to_string(in.cap_passes) + " / " + std::to_string(total);
-            tile.sub = in.notices == 1
-                           ? std::string("checks pass ") + kMiddot + " 1 issue"
-                           : std::string("checks pass ") + kMiddot + " " + std::to_string(in.notices) + " issues";
-            tile.tone = TileTone::Notice;
-        } else if (in.data_ready) {
-            tile.value = std::to_string(in.cap_passes) + " / " + std::to_string(total);
-            tile.sub = "checks passed";
-            tile.show_ok_glyph = true;
-        } else {
-            tile.value = kDash;
-            tile.sub = "run a check";
-        }
-        tiles.push_back(std::move(tile));
-    }
-
-    // Tile 2 — Encoder: the GPU carrying the encode, the backend as a head badge,
+    // Tile 1 — Encoder: the GPU carrying the encode, the backend as a head badge,
     // and the codec row underneath. The vendor prefix goes because the badge
     // already says whose encoder this is.
     {
@@ -1053,7 +1028,7 @@ std::vector<ReadinessTile> BuildReadinessTiles(const ReadinessTileInputs& in) {
         tiles.push_back(std::move(tile));
     }
 
-    // Tile 3 — Disk. A queried zero is a FULL drive and must read "0.0 GB", not
+    // Tile 2 — Disk. A queried zero is a FULL drive and must read "0.0 GB", not
     // blank; only an unqueryable volume shows the dash.
     {
         ReadinessTile tile;
@@ -1075,22 +1050,27 @@ std::vector<ReadinessTile> BuildReadinessTiles(const ReadinessTileInputs& in) {
         tiles.push_back(std::move(tile));
     }
 
-    // Tile 4 — Display (an honest static fact about the primary screen).
+    // Tile 3 — Display: the primary screen's mode, and what is being captured
+    // from it. The two used to be separate tiles; a mode and the target it will
+    // be recorded from are one answer to one question.
     {
         ReadinessTile tile;
         tile.key = "display";
         tile.title = "Display";
+        std::string target = in.target_is_window ? "application window" : "full display";
+        if (in.target_selected && !BlankOrWhitespace(in.target_description))
+            target = in.target_description;
         if (in.display_width > 0 && in.display_height > 0) {
             tile.value = std::to_string(in.display_width) + " \xc3\x97 " + std::to_string(in.display_height);
-            tile.sub = std::to_string(in.display_refresh_hz) + " Hz " + kMiddot + " primary display";
+            tile.sub = Join(std::to_string(in.display_refresh_hz) + " Hz", target);
         } else {
             tile.value = kDash;
-            tile.sub = "display";
+            tile.sub = target;
         }
         tiles.push_back(std::move(tile));
     }
 
-    // Tile 5 — Audio. A plain capability readout, never coloured as a problem.
+    // Tile 4 — Audio. A plain capability readout, never coloured as a problem.
     {
         ReadinessTile tile;
         tile.key = "audio";
@@ -1115,38 +1095,6 @@ std::vector<ReadinessTile> BuildReadinessTiles(const ReadinessTileInputs& in) {
             tile.value = kDash;
             tile.sub = "audio sources";
         }
-        tiles.push_back(std::move(tile));
-    }
-
-    // Tile 6 — Capture target. Prefers the concrete selection, then the configured
-    // kind, so the tile still reads honestly before a target is picked.
-    {
-        ReadinessTile tile;
-        tile.key = "target";
-        tile.title = "Capture target";
-        if (in.target_selected) {
-            tile.value = in.target_is_window ? "Window" : "Screen";
-            tile.sub = in.target_description;
-            if (BlankOrWhitespace(tile.sub))
-                tile.sub = in.target_is_window ? "application window" : "full display";
-        } else if (in.data_ready) {
-            tile.value = in.target_is_window ? "Window" : "Screen";
-            tile.sub = in.target_is_window ? "application window" : "full display";
-        } else {
-            tile.value = kDash;
-            tile.sub = "capture target";
-        }
-        tiles.push_back(std::move(tile));
-    }
-
-    // Tile 7 — Last session. Only earns a slot once a completed recording exists;
-    // it is a calm signpost to the Edit overlay's Review step, never a metric.
-    if (in.has_last_recording) {
-        ReadinessTile tile;
-        tile.key = "session";
-        tile.title = "Last session";
-        tile.value = "Recorded";
-        tile.sub = std::string("report in Edit ") + kMiddot + " Review";
         tiles.push_back(std::move(tile));
     }
 
@@ -1552,7 +1500,6 @@ DiagnosticsSnapshot DiagnosticsController::Evaluate() {
         tile_inputs.display_width = display_.width;
         tile_inputs.display_height = display_.height;
         tile_inputs.display_refresh_hz = display_.refresh_hz;
-        tile_inputs.has_last_recording = has_last_recording_;
         out.tiles = BuildReadinessTiles(tile_inputs);
         return out;
     }
@@ -1629,15 +1576,13 @@ DiagnosticsSnapshot DiagnosticsController::Evaluate() {
     if (selected_target_.has_value()) {
         tile_inputs.target_selected = true;
         tile_inputs.target_is_window = selected_target_->kind == exosnap::engine::CaptureTarget::Kind::Window;
-        // The presented label when the caller has one -- the raw description
-        // is a device path, which is not what the rest of the product calls
-        // this target.
+        // The presented label when the caller has one -- the raw description is a
+        // device path, which is not what the rest of the product calls this target.
         tile_inputs.target_description =
             selected_target_label_.empty() ? selected_target_->description : selected_target_label_;
     } else {
         tile_inputs.target_is_window = config_.audio.target_kind == capability::CaptureTargetKind::Window;
     }
-    tile_inputs.has_last_recording = has_last_recording_;
     out.tiles = BuildReadinessTiles(tile_inputs);
 
     TopIssues issues =

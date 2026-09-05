@@ -183,9 +183,10 @@ TEST(DiagnosticsAdapterTest, StartsNeutralWithoutTouchingTheFilesystem) {
     EXPECT_EQ(adapter.verdictHeadline(), QStringLiteral("Not checked yet"));
     EXPECT_FALSE(adapter.dataReady());
     EXPECT_FALSE(adapter.checking());
-    EXPECT_EQ(adapter.lastCheckText(), QString::fromUtf8("Last check: \xe2\x80\x94"));
-    // Six core tiles even before any data lands; the Last-session tile is gated.
-    EXPECT_EQ(adapter.tiles().size(), 6);
+    EXPECT_EQ(adapter.lastCheckText(), QStringLiteral("Not checked yet"));
+    // The four readiness tiles exist even before any data lands, so the row
+    // is never half-built while the first probe runs.
+    EXPECT_EQ(adapter.tiles().size(), 4);
 }
 
 TEST(DiagnosticsAdapterTest, ProbeResultDrivesTheDiskTile) {
@@ -208,21 +209,35 @@ TEST(DiagnosticsAdapterTest, LastCheckTextIsStampedOnlyAfterAProbe) {
     SignalCounter spy(&adapter, &DiagnosticsAdapter::lastCheckChanged);
     adapter.applyProbeResultForTest(MakeProbe());
     EXPECT_GE(spy.count(), 1);
-    EXPECT_TRUE(adapter.lastCheckText().startsWith(QStringLiteral("Last check: ")));
-    EXPECT_FALSE(adapter.lastCheckText().endsWith(QString::fromUtf8("\xe2\x80\x94")));
+    // The band has no Run check button, so its stamp states the recheck policy
+    // rather than leaving the reader to wonder whether the page is stale.
+    EXPECT_TRUE(adapter.lastCheckText().startsWith(QStringLiteral("Checked ")));
+    EXPECT_TRUE(adapter.lastCheckText().contains(QStringLiteral("rechecks every 10 s")));
 }
 
-TEST(DiagnosticsAdapterTest, LastSessionTileAppearsOnlyAfterARecording) {
+TEST(DiagnosticsAdapterTest, TheStampReportsTheSessionWhileOneIsRunning) {
     EnsureApplication();
     DiagnosticsAdapter adapter;
     adapter.setDiagnosticConfig(MakeConfig());
-    EXPECT_TRUE(TileWithKey(adapter.tiles(), QStringLiteral("session")).isEmpty());
+
+    adapter.applyLiveDiagnostics(visual::MakeDiagnosticsLiveSnapshot(QStringLiteral("healthy")));
+    EXPECT_TRUE(adapter.lastCheckText().startsWith(QStringLiteral("Recording since ")));
+    EXPECT_TRUE(adapter.lastCheckText().contains(QStringLiteral("live 5x/s")));
+}
+
+// A finished recording is reported by the Last session card, not by a fifth
+// readiness tile: readiness answers what the machine can do next.
+TEST(DiagnosticsAdapterTest, AFinishedRecordingDoesNotAddAReadinessTile) {
+    EnsureApplication();
+    DiagnosticsAdapter adapter;
+    adapter.setDiagnosticConfig(MakeConfig());
+    EXPECT_EQ(adapter.tiles().size(), 4);
 
     SignalCounter spy(&adapter, &DiagnosticsAdapter::hasLastRecordingChanged);
     adapter.setHasLastRecording(true);
     EXPECT_EQ(spy.count(), 1);
     EXPECT_TRUE(adapter.hasLastRecording());
-    EXPECT_FALSE(TileWithKey(adapter.tiles(), QStringLiteral("session")).isEmpty());
+    EXPECT_EQ(adapter.tiles().size(), 4);
 
     // Idempotent: a repeated push must not churn the tiles.
     adapter.setHasLastRecording(true);
@@ -388,7 +403,7 @@ TEST(DiagnosticsAdapterTest, DpcLatencyThatStoppedBeingMeasuredStopsBeingReporte
         << "an unavailable reading must not leave the last measured peak on the page";
 }
 
-TEST(DiagnosticsAdapterTest, SelectedCaptureTargetDrivesTheSourceTile) {
+TEST(DiagnosticsAdapterTest, SelectedCaptureTargetNamesTheDisplayTilesSubject) {
     EnsureApplication();
     DiagnosticsAdapter adapter;
     adapter.setDiagnosticConfig(MakeCaptureConfig());
@@ -399,13 +414,12 @@ TEST(DiagnosticsAdapterTest, SelectedCaptureTargetDrivesTheSourceTile) {
     window.description = "Some Game";
     adapter.setSelectedCaptureTarget(window);
 
-    const QVariantMap tile = TileWithKey(adapter.tiles(), QStringLiteral("target"));
+    const QVariantMap tile = TileWithKey(adapter.tiles(), QStringLiteral("display"));
     ASSERT_FALSE(tile.isEmpty());
-    EXPECT_EQ(tile.value(QStringLiteral("value")).toString(), QStringLiteral("Window"));
-    EXPECT_EQ(tile.value(QStringLiteral("sub")).toString(), QStringLiteral("Some Game"));
+    EXPECT_TRUE(tile.value(QStringLiteral("sub")).toString().contains(QStringLiteral("Some Game")));
 }
 
-TEST(DiagnosticsAdapterTest, MonitorTargetTileNamesTheDisplayNotTheDevicePath) {
+TEST(DiagnosticsAdapterTest, AMonitorTargetIsNamedNotSpelledAsADevicePath) {
     EnsureApplication();
     DiagnosticsAdapter adapter;
     adapter.setDiagnosticConfig(MakeCaptureConfig());
@@ -416,10 +430,10 @@ TEST(DiagnosticsAdapterTest, MonitorTargetTileNamesTheDisplayNotTheDevicePath) {
     monitor.description = R"(\\.\DISPLAY1)";
     adapter.setSelectedCaptureTarget(monitor);
 
-    const QVariantMap tile = TileWithKey(adapter.tiles(), QStringLiteral("target"));
+    const QVariantMap tile = TileWithKey(adapter.tiles(), QStringLiteral("display"));
     ASSERT_FALSE(tile.isEmpty());
-    EXPECT_EQ(tile.value(QStringLiteral("value")).toString(), QStringLiteral("Screen"));
-    EXPECT_EQ(tile.value(QStringLiteral("sub")).toString(), QStringLiteral("Desktop - Display 1"));
+    EXPECT_TRUE(tile.value(QStringLiteral("sub")).toString().contains(QStringLiteral("Desktop - Display 1")));
+    EXPECT_FALSE(tile.value(QStringLiteral("sub")).toString().contains(QStringLiteral("DISPLAY1")));
 }
 
 TEST(DiagnosticsAdapterTest, InvalidProfileProducesBlockerCards) {

@@ -25,8 +25,7 @@ Rectangle {
     // The colour of the VALUE, independent of `tone`: `tone` is the tile's own
     // severity (its border, its background, its head glyph), `valueTone` is the
     // verdict of the single check that owns this number. "ok | warn | critical |
-    // neutral" per rec.004 -- resolved in C++, mapped to a colour here and
-    // nothing else.
+    // neutral" -- resolved in C++, mapped to a colour here and nothing else.
     property string valueTone: "neutral"
     // A single fragment of `sub` to tint, e.g. "jitter 9.2 ms" inside
     // "Target 60 fps · jitter 9.2 ms". Empty draws `sub` in one colour, as before.
@@ -223,7 +222,8 @@ Rectangle {
 
         ExoSparkline {
             objectName: "statusTileSparkline"
-            visible: root.series.length > 0
+            // Two points make a trend. One draws a bare budget line over nothing.
+            visible: root.series.length > 1
             values: root.series
             budget: root.budget
             lineColor: root.valueToneColor

@@ -195,16 +195,17 @@ TEST(DiagnosticsTopIssues, EvidencePresenceIgnoresWhitespaceOnlyFields) {
 
 // ── Readiness tiles ─────────────────────────────────────────────────────────────
 
-TEST(DiagnosticsTiles, LastSessionTileOnlyExistsAfterARecording) {
+// Four, always, and in one order: a tile row that reflows between recordings
+// cannot be read at a glance, and a fifth tile leaves a ragged half-row.
+TEST(DiagnosticsTiles, TheReadinessRowIsAlwaysFourTilesInOneOrder) {
     ReadinessTileInputs inputs;
     inputs.data_ready = true;
-    EXPECT_EQ(BuildReadinessTiles(inputs).size(), 6U);
-
-    inputs.has_last_recording = true;
     const auto tiles = BuildReadinessTiles(inputs);
-    ASSERT_EQ(tiles.size(), 7U);
-    EXPECT_EQ(tiles[6].key, "session");
-    EXPECT_EQ(tiles[6].value, "Recorded");
+    ASSERT_EQ(tiles.size(), 4U);
+    EXPECT_EQ(tiles[0].key, "encoder");
+    EXPECT_EQ(tiles[1].key, "disk");
+    EXPECT_EQ(tiles[2].key, "display");
+    EXPECT_EQ(tiles[3].key, "audio");
 }
 
 // A queried zero is a FULL drive, not an unknown one: it must read "0.0 GB".
@@ -215,45 +216,28 @@ TEST(DiagnosticsTiles, ZeroFreeBytesIsAMeasurementNotAnUnknown) {
     inputs.total_bytes = 100ULL * 1024 * 1024 * 1024;
     inputs.output_drive_label = "C:";
     const auto tiles = BuildReadinessTiles(inputs);
-    EXPECT_EQ(tiles[2].value, "0.0 GB");
-    EXPECT_TRUE(tiles[2].has_usage_bar);
-    EXPECT_EQ(tiles[2].usage_percent, 100);
+    EXPECT_EQ(tiles[1].value, "0.0 GB");
+    EXPECT_TRUE(tiles[1].has_usage_bar);
+    EXPECT_EQ(tiles[1].usage_percent, 100);
 }
 
 TEST(DiagnosticsTiles, UnqueryableVolumeShowsDashAndNoBar) {
     ReadinessTileInputs inputs;
     inputs.data_ready = true;
     const auto tiles = BuildReadinessTiles(inputs);
-    EXPECT_EQ(tiles[2].value, "\xe2\x80\x94");
-    EXPECT_FALSE(tiles[2].has_usage_bar);
-}
-
-TEST(DiagnosticsTiles, ReadinessToneFollowsTheWorstFinding) {
-    ReadinessTileInputs inputs;
-    inputs.data_ready = true;
-    inputs.cap_passes = 9;
-    EXPECT_EQ(BuildReadinessTiles(inputs)[0].tone, TileTone::Neutral);
-    EXPECT_TRUE(BuildReadinessTiles(inputs)[0].show_ok_glyph);
-
-    inputs.notices = 2;
-    EXPECT_EQ(BuildReadinessTiles(inputs)[0].tone, TileTone::Notice);
-
-    inputs.blockers = 1;
-    const auto tiles = BuildReadinessTiles(inputs);
-    EXPECT_EQ(tiles[0].tone, TileTone::Blocker);
-    EXPECT_EQ(tiles[0].value, "Action needed");
+    EXPECT_EQ(tiles[1].value, "\xe2\x80\x94");
+    EXPECT_FALSE(tiles[1].has_usage_bar);
 }
 
 TEST(DiagnosticsTiles, CaptureTargetFallsBackToTheConfiguredKind) {
     ReadinessTileInputs inputs;
     inputs.data_ready = true;
     inputs.target_is_window = true;
-    EXPECT_EQ(BuildReadinessTiles(inputs)[5].value, "Window");
-    EXPECT_EQ(BuildReadinessTiles(inputs)[5].sub, "application window");
+    EXPECT_NE(BuildReadinessTiles(inputs)[2].sub.find("application window"), std::string::npos);
 
     inputs.target_selected = true;
     inputs.target_description = "Firefox";
-    EXPECT_EQ(BuildReadinessTiles(inputs)[5].sub, "Firefox");
+    EXPECT_NE(BuildReadinessTiles(inputs)[2].sub.find("Firefox"), std::string::npos);
 }
 
 TEST(DiagnosticsTiles, AudioSublineKeepsTheRateAndUnitTogether) {
@@ -262,7 +246,7 @@ TEST(DiagnosticsTiles, AudioSublineKeepsTheRateAndUnitTogether) {
     inputs.audio_sources = 2;
     inputs.audio_sample_rate = 48000;
     inputs.audio_channels = 2;
-    const std::string sub = BuildReadinessTiles(inputs)[4].sub;
+    const std::string sub = BuildReadinessTiles(inputs)[3].sub;
     EXPECT_NE(sub.find("2 sources"), std::string::npos);
     // Non-breaking space between number and unit, so word-wrap cannot split "48 kHz".
     EXPECT_NE(sub.find("48\xc2\xa0kHz"), std::string::npos);
