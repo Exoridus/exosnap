@@ -1787,10 +1787,33 @@ gone.
 
 ## 10. Hotkeys
 
-Global hotkeys are rebindable, with conflict detection and rollback on an invalid bind. They cover
-recording start/stop, pause/resume, single-frame capture, and related actions. Every action ships
-unset; the user picks a combo that does not collide on their own machine. Hotkeys live as an
-embedded card inside Settings.
+Global hotkeys are rebindable, with conflict detection and rollback on an invalid bind. They live as
+an embedded card inside Settings. Five actions ship bound, all on **Alt+Shift**:
+
+| Action | Default | Mnemonic |
+|---|---|---|
+| Start / stop recording | `Alt+Shift+R` | Record |
+| Pause / resume | `Alt+Shift+P` | Pause |
+| Capture a single frame | `Alt+Shift+S` | Snapshot |
+| Add a marker | `Alt+Shift+M` | Marker |
+| Split the recording | `Alt+Shift+C` | Cut |
+
+The modifier pair is chosen by exclusion as much as by preference. The Alt+F-key row belongs to
+NVIDIA (F1, F2, F3, F8, F9, F10, F12) and is shared with media keys behind an Fn toggle on many
+keyboards, with Alt+F4 sitting in the middle of it. **Ctrl+Alt is AltGr**: on a German layout
+Ctrl+Alt+Q types @ and Ctrl+Alt+E types the euro sign, which rules it out for a product that ships a
+German localization. Ctrl+Shift is where AMD keeps E, S, I, O and M. Win+anything loses every future
+dispute with Windows. Alt+Shift is untouched by NVIDIA, AMD, the Xbox Game Bar, Steam, OBS and
+Discord; its input-language switch fires only when the pair is released with no other key in between,
+which a letter suppresses, and the crowded space in games is a modifier plus a DIGIT rather than plus
+a letter.
+
+Letters are mnemonic first and one-handed second. A shortcut that is remembered beats one that is
+merely comfortable, and the two that sit further from the modifiers (Pause, Marker) are also the two
+nobody presses under time pressure.
+
+A default is still only a starting point: it is global, so it takes the combination from every other
+application while ExoSnap runs, and any of the five can be rebound or cleared.
 
 If a hotkey starts recording while the app window is visible, the Record view is activated; if the
 window is minimized, it is not restored.
@@ -1800,9 +1823,12 @@ it), ExoSnap **drops the unregisterable binding** (it stays cleared across launc
 silently swallowing the key or re-warning every start). Windows exposes no way to name the holding
 process or to reclaim the combo.
 
-Because no action ships with a default binding, a non-empty binding can only exist because the user
-set it themselves — it worked when they chose it, so losing it is always worth telling them about.
-Losing any registered binding at startup raises a notification naming the affected action, with a
+A binding that cannot be registered is treated by where it came from. One the user chose themselves
+worked when they chose it, so losing it is worth telling them about. One still at its shipped default
+is removed **silently**, with a log line and no notification: the user never asked for that
+combination, and a machine where NVIDIA or another tool already holds it would otherwise greet every
+launch with a warning about a shortcut its owner never picked.
+Losing a user-chosen binding at startup raises a notification naming the affected action, with a
 **Rebind** action that deep-links to Settings → Hotkeys, where the user can bind a working shortcut;
 attempting a combo already held elsewhere is reported inline there as a conflict.
 

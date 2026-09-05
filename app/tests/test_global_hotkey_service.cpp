@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <QSet>
+
 #include <QCoreApplication>
 #include <QKeySequence>
 #include <QString>
@@ -60,13 +62,35 @@ class HotkeyServiceTest : public ::testing::Test {
 
 // ── Tests ───────────────────────────────────────────────────────────────────
 
-// 1. Every action ships with no default binding.
+// 1. Every action ships with an Alt+Shift default. The exact sequences are
+// asserted rather than merely "non-empty": they were chosen against what NVIDIA,
+// AMD, the Xbox Game Bar and the AltGr layout already hold (see DefaultBinding),
+// so a silent change to one of them is a change to that reasoning.
 TEST_F(HotkeyServiceTest, DefaultBindingsAreCorrect) {
-    EXPECT_TRUE(GlobalHotkeyService::DefaultBinding(HotkeyAction::ToggleRecording).isEmpty());
-    EXPECT_TRUE(GlobalHotkeyService::DefaultBinding(HotkeyAction::TogglePause).isEmpty());
-    EXPECT_TRUE(GlobalHotkeyService::DefaultBinding(HotkeyAction::CaptureFrame).isEmpty());
-    EXPECT_TRUE(GlobalHotkeyService::DefaultBinding(HotkeyAction::AddMarker).isEmpty());
-    EXPECT_TRUE(GlobalHotkeyService::DefaultBinding(HotkeyAction::SplitRecording).isEmpty());
+    EXPECT_EQ(GlobalHotkeyService::DefaultBinding(HotkeyAction::ToggleRecording),
+              QKeySequence(QStringLiteral("Alt+Shift+R")));
+    EXPECT_EQ(GlobalHotkeyService::DefaultBinding(HotkeyAction::TogglePause),
+              QKeySequence(QStringLiteral("Alt+Shift+P")));
+    EXPECT_EQ(GlobalHotkeyService::DefaultBinding(HotkeyAction::CaptureFrame),
+              QKeySequence(QStringLiteral("Alt+Shift+S")));
+    EXPECT_EQ(GlobalHotkeyService::DefaultBinding(HotkeyAction::AddMarker),
+              QKeySequence(QStringLiteral("Alt+Shift+M")));
+    EXPECT_EQ(GlobalHotkeyService::DefaultBinding(HotkeyAction::SplitRecording),
+              QKeySequence(QStringLiteral("Alt+Shift+C")));
+}
+
+// The set must not collide with itself: five actions, five distinct sequences,
+// all of them valid bindings by the service's own rules.
+TEST_F(HotkeyServiceTest, DefaultBindingsAreDistinctAndValid) {
+    QSet<QString> seen;
+    for (int i = 0; i < kHotkeyActionCount; ++i) {
+        const QKeySequence seq = GlobalHotkeyService::DefaultBinding(static_cast<HotkeyAction>(i));
+        ASSERT_FALSE(seq.isEmpty()) << "action " << i << " ships without a default";
+        EXPECT_EQ(GlobalHotkeyService::ValidateSequence(seq), RebindError::None) << "action " << i;
+        const QString text = seq.toString(QKeySequence::PortableText);
+        EXPECT_FALSE(seen.contains(text)) << "two actions share " << text.toStdString();
+        seen.insert(text);
+    }
 }
 
 // 2. Modifier-only sequence (Ctrl alone) is rejected.
@@ -349,9 +373,10 @@ TEST_F(HotkeyServiceTest, SignalNotEmittedOnFailure) {
     EXPECT_EQ(signal_count, 0);
 }
 
-// 19. Resetting TogglePause to its default yields an empty (unset) binding.
-//     Canonical Pause default is Unset per hotkeys-view.md: "all others unset".
-TEST_F(HotkeyServiceTest, ResetPauseToDefaultIsEmpty) {
+// 19. Resetting TogglePause to its default restores the shipped binding, which
+//     rebinding had replaced. Reset means "back to what shipped", not "cleared" --
+//     clearing is UnsetBinding, and the two must not be the same operation.
+TEST_F(HotkeyServiceTest, ResetPauseToDefaultRestoresTheShippedBinding) {
     GlobalHotkeyService svc;
     FakeRegistrar reg;
     (void)svc.SetRegistrar(&reg);
@@ -362,19 +387,22 @@ TEST_F(HotkeyServiceTest, ResetPauseToDefaultIsEmpty) {
     ASSERT_TRUE(r.success);
     ASSERT_EQ(svc.GetBinding(HotkeyAction::TogglePause), alt_f10);
 
-    // Reset must restore the canonical default, which is empty.
     RebindResult reset_r = svc.ResetToDefault(HotkeyAction::TogglePause);
     EXPECT_TRUE(reset_r.success);
-    EXPECT_TRUE(svc.GetBinding(HotkeyAction::TogglePause).isEmpty());
+    EXPECT_EQ(svc.GetBinding(HotkeyAction::TogglePause),
+              GlobalHotkeyService::DefaultBinding(HotkeyAction::TogglePause));
+    EXPECT_FALSE(svc.GetBinding(HotkeyAction::TogglePause).isEmpty());
 }
 
-// 20. An invalid persisted Pause string falls back to the default (empty / unset),
-//     not to any specific key such as Alt+F10.
-TEST_F(HotkeyServiceTest, InvalidPersistedPauseStringFallsToEmpty) {
+// 20. An unparseable persisted string falls back to the action's DEFAULT, not to
+//     an arbitrary key and not to unset. A settings file corrupted by hand should
+//     leave the user with the shortcut the product ships, not without one.
+TEST_F(HotkeyServiceTest, InvalidPersistedPauseStringFallsBackToTheDefault) {
     GlobalHotkeyService svc;
     HotkeyBindings stored = {QString(), QStringLiteral("NOT_VALID_SEQUENCE"), QString(), QString(), QString()};
     svc.LoadFromStrings(stored);
-    EXPECT_TRUE(svc.GetBinding(HotkeyAction::TogglePause).isEmpty());
+    EXPECT_EQ(svc.GetBinding(HotkeyAction::TogglePause),
+              GlobalHotkeyService::DefaultBinding(HotkeyAction::TogglePause));
 }
 
 // 20b. An explicitly unset binding round-trips as unset — it must NOT fall back to
@@ -415,11 +443,14 @@ TEST_F(HotkeyServiceTest, EmptyPersistedStringStillYieldsDefault) {
               GlobalHotkeyService::DefaultBinding(HotkeyAction::ToggleRecording));
 }
 
-// 21. SplitRecording is unset by default (no default binding per SPLIT-RECORDING-R1).
-TEST_F(HotkeyServiceTest, SplitRecordingUnsetByDefault) {
-    EXPECT_TRUE(GlobalHotkeyService::DefaultBinding(HotkeyAction::SplitRecording).isEmpty());
+// 21. SplitRecording ships bound like the rest of the set, and a fresh service
+//     starts from that binding rather than from nothing.
+TEST_F(HotkeyServiceTest, SplitRecordingShipsBound) {
+    EXPECT_EQ(GlobalHotkeyService::DefaultBinding(HotkeyAction::SplitRecording),
+              QKeySequence(QStringLiteral("Alt+Shift+C")));
     GlobalHotkeyService svc;
-    EXPECT_TRUE(svc.GetBinding(HotkeyAction::SplitRecording).isEmpty());
+    EXPECT_EQ(svc.GetBinding(HotkeyAction::SplitRecording),
+              GlobalHotkeyService::DefaultBinding(HotkeyAction::SplitRecording));
 }
 
 // 22. SplitRecording participates in conflict detection and rebinds on its own path.
