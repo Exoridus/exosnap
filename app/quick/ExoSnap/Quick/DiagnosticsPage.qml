@@ -333,23 +333,34 @@ Item {
                             }
                         }
 
-                        Label {
-                            text: root.diagnostics.lastCheckText
-                            textFormat: Text.PlainText
-                            wrapMode: Text.WordWrap
-                            horizontalAlignment: Text.AlignRight
-                            color: ExoTheme.textDim
+                        // The row gathers implicitHeight before it constrains the
+                        // width, so a wrapping label laid out by the row itself is
+                        // measured for one line and clips the rest -- and the
+                        // recheck policy the band exists to state is what gets
+                        // clipped. The label is given its width by this item
+                        // instead, which is a constant the row does not have to
+                        // solve for, so implicitHeight is the height of the text
+                        // actually shown: three lines when the idle stamp wraps to
+                        // three, one when the recording stamp fits on one.
+                        Item {
+                            Layout.preferredWidth: 220
                             Layout.maximumWidth: 220
-                            // The row gathers implicitHeight before it constrains
-                            // the width, so an unconstrained wrapping label is
-                            // sized for one line and clips the rest -- and the
-                            // recheck policy the band exists to state is what
-                            // gets clipped. Three caption lines at 220 px.
-                            Layout.minimumHeight: 3 * 16
+                            Layout.preferredHeight: lastCheckText.implicitHeight
                             Layout.alignment: Qt.AlignVCenter
-                            font {
-                                family: ExoTheme.sansFamily
-                                pixelSize: ExoTheme.fontCaption
+
+                            Label {
+                                id: lastCheckText
+
+                                width: parent.width
+                                text: root.diagnostics.lastCheckText
+                                textFormat: Text.PlainText
+                                wrapMode: Text.WordWrap
+                                horizontalAlignment: Text.AlignRight
+                                color: ExoTheme.textDim
+                                font {
+                                    family: ExoTheme.sansFamily
+                                    pixelSize: ExoTheme.fontCaption
+                                }
                             }
                         }
                     }

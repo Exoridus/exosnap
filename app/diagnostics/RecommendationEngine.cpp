@@ -1158,23 +1158,31 @@ bool RecommendationEngine::IsLiveMeasuredCheck(std::string_view id) noexcept {
     // a deny-list would put a static readiness condition on the record as a problem
     // the recording caused, which is a claim about something that did not happen.
     //
-    // Every id below is emitted only from a live measurement: the frame-pacing,
-    // GPU, disk, present-path, DPC and audio-device checks above. The Tier-2 ids
-    // deliberately absent are the ones a readiness pass answers just as well --
-    // rec.005 (free space), rec.pacing.smooth (a pacing-mode recommendation),
-    // display.saved.unresolved, rec.capture.adapter_mismatch, and the two
-    // exclusive-fullscreen checks, which describe the selected target's mode.
+    // The test for admission is whether the check can only fire because something
+    // was measured during this recording. The Tier-2 ids deliberately absent all
+    // fail it -- rec.005 (free space), rec.pacing.smooth (a pacing-mode
+    // recommendation), display.saved.unresolved and rec.capture.adapter_mismatch
+    // are answered by a readiness pass, before Record was ever pressed.
+    //
+    // The two exclusive-fullscreen ids are admitted despite describing the
+    // target's present mode: both are raised from the live present sample and the
+    // window hub evidence accumulated while recording. A source that flips into
+    // exclusive fullscreen mid-run is the black-or-frozen-picture case, and the
+    // readiness surface could not have shown it -- the window was borderless when
+    // the recording started.
     static constexpr std::string_view kLiveMeasuredIds[] = {
-        "rec.001",                   // present-cadence judder
-        "rec.gpu.contention",        // captured application saturating the GPU
-        "rec.disk.writestall",       // write stalls during the run
-        "rec.dpc.latency",           // kernel DPC/ISR latency during the run
-        "rec.present.discarded",     // compositor discarding presents
-        "rec.present.modeflip",      // source changing present mode
-        "rec.audio.degraded",        // audio device lost mid-recording
-        "rec.audio.endpoint_taken",  // audio device taken mid-recording
-        "rec.audio.clock_saturated", // audio clock drifting faster than correction
-        "rec.pacing.duplication",    // source delivering fewer frames than the rate
+        "rec.001",                      // present-cadence judder
+        "rec.gpu.contention",           // captured application saturating the GPU
+        "rec.disk.writestall",          // write stalls during the run
+        "rec.dpc.latency",              // kernel DPC/ISR latency during the run
+        "rec.present.discarded",        // compositor discarding presents
+        "rec.present.modeflip",         // source changing present mode
+        "rec.present.exclusive",        // source presenting in exclusive fullscreen
+        "rec.capture.exclusive_window", // captured window taken over by exclusive fullscreen
+        "rec.audio.degraded",           // audio device lost mid-recording
+        "rec.audio.endpoint_taken",     // audio device taken mid-recording
+        "rec.audio.clock_saturated",    // audio clock drifting faster than correction
+        "rec.pacing.duplication",       // source delivering fewer frames than the rate
     };
     for (const std::string_view live : kLiveMeasuredIds) {
         if (live == id)

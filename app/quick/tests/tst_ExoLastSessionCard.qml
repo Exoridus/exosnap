@@ -107,9 +107,12 @@ TestCase {
         verify(actions);
         let frame = card.children[0];
         verify(frame);
-        verify(actions.y + actions.height <= frame.height - ExoTheme.cardPadding + 1,
-               "the action row (" + (actions.y + actions.height) + ") is clipped by the frame ("
-               + frame.height + ")");
+        // actions.y is relative to the inner layout, which sits at cardPadding
+        // inside the frame: both sides of the comparison have to be in the
+        // frame's own coordinates, or the top margin is unearned slack.
+        let bottom = ExoTheme.cardPadding + actions.y + actions.height;
+        verify(bottom <= frame.height - ExoTheme.cardPadding,
+               "the action row (" + bottom + ") is clipped by the frame (" + frame.height + ")");
     }
 
     function findRepeater(item) {

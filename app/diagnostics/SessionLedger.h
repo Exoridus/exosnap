@@ -41,7 +41,6 @@ struct LedgerEntry {
     double last_seen_s = 0.0;
     double total_active_s = 0.0; // sum over CLOSED occurrences only
     bool active = false;
-    bool needs_elevation = false;
     std::vector<LedgerOccurrence> occurrences;
 
     friend bool operator==(const LedgerEntry&, const LedgerEntry&) = default;

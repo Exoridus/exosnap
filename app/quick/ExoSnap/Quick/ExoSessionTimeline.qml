@@ -4,10 +4,10 @@ import QtQuick
 import QtQuick.Controls
 
 // Where in the recording the ledger's occurrences are (spec sections 5 and 7):
-// a 6 px track for the whole file, mono ticks every 3 minutes plus the end
-// time, and one mark per occurrence -- amber for a measured problem, coral for
-// a real frame drop. Clicking anywhere on the track opens Edit at that time;
-// hovering a mark names the problem, its clock, duration and worst value.
+// a 6 px track spanning the session clock, mono ticks every 3 minutes plus the
+// end time, and one amber mark per occurrence. Clicking anywhere on the track
+// opens Edit at that time; hovering a mark names the problem, its clock,
+// duration and worst value.
 Item {
     id: root
 

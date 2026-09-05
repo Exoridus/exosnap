@@ -9,7 +9,9 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace exosnap::diagnostics {
@@ -191,13 +193,26 @@ TEST(SessionLedger, ActiveCountCountsOnlyActiveEntries) {
     EXPECT_EQ(ledger.entries().size(), 2u);
 }
 
-TEST(SessionLedger, ElevationOnlyChecksAreMarkedAsSuch) {
+// The mirror image of StaticReadinessChecksNeverEnter. A source that flips into
+// exclusive fullscreen mid-recording is measured from the live present sample and
+// the window hub's evidence, and it is the cause of a black or frozen picture --
+// the readiness pass could not have shown it, because the window was borderless
+// when Record was pressed.
+TEST(SessionLedger, ExclusiveFullscreenDuringTheRunEnters) {
     SessionLedger ledger;
     ledger.Reset(1);
-    ledger.Observe({MeasuredProblem("rec.dpc.latency", 2500.0, 1000.0)}, 1.0);
-    ledger.Observe({MeasuredProblem("rec.dpc.latency", 2500.0, 1000.0)}, 1.5);
-    ASSERT_EQ(ledger.entries().size(), 1u);
-    EXPECT_TRUE(ledger.entries().front().needs_elevation);
+    const std::vector<DiagnosticResult> results = {MeasuredProblem("rec.capture.exclusive_window", 1.0, 0.0),
+                                                   MeasuredProblem("rec.present.exclusive", 1.0, 0.0)};
+    for (const double t : {1.0, 1.5})
+        ledger.Observe(results, t);
+
+    ASSERT_EQ(ledger.entries().size(), 2u);
+    const auto has = [&ledger](std::string_view id) {
+        return std::any_of(ledger.entries().begin(), ledger.entries().end(),
+                           [id](const LedgerEntry& e) { return e.id == id; });
+    };
+    EXPECT_TRUE(has("rec.capture.exclusive_window"));
+    EXPECT_TRUE(has("rec.present.exclusive"));
 }
 
 } // namespace

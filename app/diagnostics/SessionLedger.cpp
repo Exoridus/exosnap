@@ -1,6 +1,5 @@
 #include "diagnostics/SessionLedger.h"
 
-#include "diagnostics/DiagnosticsController.h"
 #include "diagnostics/RecommendationEngine.h"
 
 #include <algorithm>
@@ -95,7 +94,6 @@ void SessionLedger::Observe(const std::vector<DiagnosticResult>& results, double
         entry.first_seen_s = pending.first_seen_s;
         entry.last_seen_s = now_s;
         entry.active = true;
-        entry.needs_elevation = NeedsElevation(result.id);
         entry.occurrences.push_back({pending.first_seen_s, pending.first_seen_s, entry.worst.value_or(0.0)});
         entries_.push_back(std::move(entry));
         pending_.erase(result.id);
