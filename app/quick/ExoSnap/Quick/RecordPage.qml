@@ -625,7 +625,13 @@ Item {
                         horizontalAlignment: Text.AlignHCenter
                         // Centred on the black stage, so the fixed-dark rung.
                         color: ExoTheme.overlayWarning
+                        // Never alongside the placeholder. Both are centred on the
+                        // same stage, so two visible at once overlap -- which is what
+                        // the empty state used to do until the adapter stopped
+                        // reporting it as an error. Belt and braces: a future
+                        // producer of errorText cannot bring the overlap back.
                         visible: text.length > 0 && !root.recordViewModel.regionSelectionNeeded
+                                 && root.recordViewModel.selectedTargetAvailable
                         width: Math.max(0, Math.min(440, parent.width - 48))
                         anchors.centerIn: parent
                         font.family: ExoTheme.sansFamily
