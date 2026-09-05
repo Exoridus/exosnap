@@ -52,6 +52,8 @@ QVariant NotificationEntryModel::data(const QModelIndex& index, int role) const 
         return static_cast<int>(entry.event.action);
     case PrimaryActionLabelRole:
         return notifications::NotificationActionLabel(entry.event.action);
+    case SyntheticRole:
+        return entry.event.synthetic;
     default:
         break;
     }
@@ -71,6 +73,7 @@ QHash<int, QByteArray> NotificationEntryModel::roleNames() const {
         {ActionsRole, "actions"},
         {PrimaryActionRole, "primaryAction"},
         {PrimaryActionLabelRole, "primaryActionLabel"},
+        {SyntheticRole, "synthetic"},
     };
 }
 

@@ -164,9 +164,20 @@ PresentSample PresentMonEtwSession::Latest() const {
         // first batch computes real intervals.
         qpc_freq_ = backend->TimestampFrequency();
         const unsigned long want_pid = target_pid_.load(std::memory_order_relaxed);
+        // Counted, not just skipped. A target that presents but is never counted and
+        // a target that does not present at all look identical from the outside --
+        // both report zero -- and telling them apart is the difference between a
+        // broken attribution and a quiet application. Observed once already: a
+        // process holding the display in TRUE exclusive fullscreen produced no
+        // counted presents at all, and nothing in the diagnostics could say whether
+        // its events reached the trace under a different id or never arrived.
+        size_t drained = 0;
+        size_t attributed = 0;
         for (const TracePresentEvent& present : backend->Drain()) {
+            ++drained;
             if (want_pid != 0 && present.process_id != want_pid)
                 continue;
+            ++attributed;
             RawPresentEvent raw;
             raw.valid = true;
             raw.present_mode_code = present.present_mode_code;
@@ -189,6 +200,17 @@ PresentSample PresentMonEtwSession::Latest() const {
             mapped.mode_flip_count = static_cast<uint32_t>(accumulator_.mode_flip_count);
             std::lock_guard lk(sample_mutex_);
             latest_ = mapped;
+        }
+        // Logged only when the trace carried presents and NONE of them were the
+        // attributed process: the state that is otherwise indistinguishable from a
+        // silent target. Once per attribution window, so a long recording cannot
+        // fill the log with it.
+        if (drained > 0 && attributed == 0 && want_pid != 0 && !unattributed_logged_) {
+            unattributed_logged_ = true;
+            qInfo("[presentmon] %llu present(s) in this batch, none from the attributed process (pid %lu)",
+                  static_cast<unsigned long long>(drained), want_pid);
+        } else if (attributed > 0) {
+            unattributed_logged_ = false;
         }
     }
     std::lock_guard lk(sample_mutex_);

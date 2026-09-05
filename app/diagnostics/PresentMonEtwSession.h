@@ -113,6 +113,10 @@ class PresentMonEtwSession {
     void* target_handle_ = nullptr;
     // One log line per dead target, not one per sample.
     mutable bool target_death_logged_ = false;
+    // Latched so the "nothing was attributed" note is said once per attribution
+    // window rather than on every drain. Mutable for the same reason
+    // target_death_logged_ is: the sampling path is const.
+    mutable bool unattributed_logged_ = false;
     std::shared_ptr<FinishSignal> finish_; // guarded by sample_mutex_ for publication
     std::thread worker_;
     mutable std::mutex sample_mutex_;

@@ -26,6 +26,10 @@
 #include <span>
 #include <string>
 
+// After the standard headers: avrt.h needs windows.h, which session_internal.h
+// already pulls in, and both bring macros the headers above must not see.
+#include <avrt.h>
+
 namespace exosnap::engine {
 
 namespace {
@@ -176,7 +180,21 @@ void AudioThread::Run() {
         m_state.RecordFailure(hr, ErrorPhase::Prepare, buf);
         return;
     }
+    // Multimedia-class scheduling, for the same reason the render thread asks for
+    // it: this thread has to drain the WASAPI capture buffer before the device
+    // wraps it, and a normal-priority thread that misses that window under load
+    // makes the DEVICE drop frames. Those losses arrive as DATA_DISCONTINUITY
+    // with a jumped device position, are refilled with silence to hold the
+    // timeline, and are reported as audio outages -- a 30 min recording made on a
+    // busy machine produced 785 of them, and none at all on an idle one.
+    // Best-effort by design: without the MMCSS service the thread simply keeps
+    // its normal priority, which is what it had before.
+    DWORD mmcss_task_index = 0;
+    HANDLE mmcss_handle = AvSetMmThreadCharacteristicsW(L"Pro Audio", &mmcss_task_index);
+
     auto uninitCom = [&]() {
+        if (mmcss_handle != nullptr)
+            AvRevertMmThreadCharacteristics(mmcss_handle);
         if (com_inited && hr != RPC_E_CHANGED_MODE)
             CoUninitialize();
     };

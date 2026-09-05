@@ -49,6 +49,12 @@ exosnap_add_gtest(
 )
 
 exosnap_add_gtest(
+    NAME    test_install_mode_classify
+    SOURCES test_install_mode_classify.cpp
+    LIBRARIES exosnap::update
+)
+
+exosnap_add_gtest(
     NAME    test_release_locator
     SOURCES test_release_locator.cpp
     LIBRARIES exosnap::update

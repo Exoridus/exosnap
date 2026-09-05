@@ -391,9 +391,9 @@ right; there is no generic `OK`. The existing uniqueness rule controls whether t
 available. Folder and file selection remain native Windows dialogs, including output folders,
 preset import/export and one-time export recovery destinations.
 
-A failed preset import or export reports itself as a toast, not as a Record-page notice: the transfer
-is started from Settings and is over the moment it fails, so a notice would appear on a page the user
-is not looking at and stay there until they went to dismiss it. Nothing in the live configuration
+A failed preset import or export reports itself as a toast: the transfer is started from Settings and
+is over the moment it fails, so a message pinned to a page would appear where the user is not looking
+and stay there until they went to dismiss it. Nothing in the live configuration
 changes, and the toast offers **Send report** for the same reason a failed settings write does.
 
 Presets are stored in a human-readable TOML store and can be exported and imported for sharing.
@@ -1134,7 +1134,7 @@ appeared beside it.
 
 **State is said locally, and once.** Each state names itself through the status pill over the frame
 and in the title band, through the transport's one recommended action, and — only where something is
-unresolved — through the page notice. The **LOCKED** badge is a neutral statement of fact, not a
+unresolved — through a modal overlay or a toast (see **No page notice**). The **LOCKED** badge is a neutral statement of fact, not a
 caution: the capture setup is locked for the duration of a recording by design, so there is nothing
 for the user to attend to.
 
@@ -1197,35 +1197,39 @@ thing meant to be pressed the darkest thing on the page.
   separate control floating between the Preview Surface and the dock — the page is one Preview
   Surface, 16 px, one dock.
 
-**Page notice.** A single compact inline banner sits above the context strip for conditions the page itself
-cannot fix. Its colour states what the message **means** — a refused export is an error, an
-unavailable display is a caution — and never the same tone for all of them. It names a produced file
-by **file name**, never by full path: a path is unbounded, so a banner carrying one grows as wide as
-the deepest folder the user records into and stops reading as a sentence.
+**No page notice.** The Record page carries no inline banner. Everything such a banner used to say
+is already said by a surface that does not move the page: a **modal overlay** for a condition the
+user has to answer, and a **toast** for an event that is over. Both compose above the page instead of
+taking space out of it.
 
-The banner is for **unresolved conditions**, not for confirmations. **Neither a successful recording
-nor a saved frame raises a page notice.** A captured frame reports itself as a brief toast carrying
-the file name and an **Open folder** action; a capture that failed reports itself the same way,
-because a write that did not happen is a finished event and not a state the page can offer to
-resolve.
+That is the whole reason. The preview is the page's fill-height element, so anything appearing above
+it comes straight out of its height and, through the aspect-ratio fit, out of its width as well.
+Measured at 1 600 x 1 000, a single banner line moved the Preview Surface down 60 px and narrowed it
+by 106 px. A user who has watched that frame for a whole recording should not have the composition
+jump to announce something another surface is announcing at the same moment.
 
-`Blocked` always names the concrete blocker and presents its next useful action, such as **Open
-Diagnostics**, **Change source**, or the relevant Settings action. During recording, loss of an audio
-source raises an amber notice that names the source and says that recording continues without it;
-Stop remains the dominant recording action. The notice updates in place as sources recover or
-degrade and disappears when all recover. Neither condition relies on the notification hub as its
-only visible explanation.
+The banner survived longest for failures, on the grounds that a failure is unresolved and stated
+nowhere else on the page. That reason no longer holds: a failed recording raises the modal failure
+surface with the same sentence plus the detail and the report action, so the banner repeated it and
+shrank the preview WHILE the modal was on screen. Every other producer had a second surface too --
+a source that is gone is what the preview placeholder already asks about, with the picker attached;
+a settings write that failed, a degraded audio source and a refused quick action each raise their own
+toast.
 
-It used to: a full-width "Recording saved · name.mkv" banner appeared above the
-Preview Surface, and because the preview is the page's fill-height element that banner came straight
-out of its height — and, through the aspect-ratio fit, out of its width as well. Measured at
-1 600 × 1 000, stopping a recording moved the Preview Surface down 60 px and narrowed it by 106 px:
-the user had watched that frame for the whole recording, and the reward for finishing was the entire
-composition jumping to announce something four other things already said — the shell's status pill
-reads *Completed*, the transport's recommended action becomes *Edit*, a "Recording saved" toast
-carries the path and the show-in-folder action, and the file is on disk. **Stopping a recording
-successfully must not change the Preview Surface's bounds.** A failure is different: it is
-unresolved, it is stated nowhere else on the page, and it keeps its banner.
+Where each condition is stated now:
+
+| Condition | Surface |
+|---|---|
+| Recording failed | Modal failure surface, with detail and the report action |
+| Capture source gone | Preview placeholder, with **Choose source** |
+| `Blocked` (including an unwritable output folder) | Toast naming the blocker, with **Open Diagnostics** or **Change folder** |
+| Audio source degraded mid-recording | Standing toast, replaced in place as sources degrade or recover, taken back when all recover |
+| Region too small, display gone, refused split | Toast, because the action simply did not happen |
+| Settings write failed | Toast |
+| Recording saved, frame saved | Toast, with the file name and **Open folder** |
+
+**Stopping a recording must not change the Preview Surface's bounds**, and neither must failing to
+start one.
 
 **Round-control states.** Every round dock control reads the same way in every state, and the four
 states are told apart by more than one cue:

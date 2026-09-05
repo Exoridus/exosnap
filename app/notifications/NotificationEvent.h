@@ -98,6 +98,15 @@ struct NotificationEvent {
     // Stable ordering key assigned by the manager on enqueue — not set by callers.
     uint64_t sequence = 0;
 
+    // Raised through the automation channel rather than by a product condition.
+    //
+    // It exists so a reader can never mistake one for the other. A synthetic
+    // notification proves that the toast RENDERS; it proves nothing about whether
+    // the product would have raised it, and a verification that treats it as
+    // evidence of behaviour is green by construction. Every surface that reports
+    // notifications carries this flag outward for that reason.
+    bool synthetic = false;
+
     // Returns true if this event carries at least one actionable button.
     // Used by the tray unread badge to decide whether to increment the count.
     [[nodiscard]] bool hasAction() const noexcept {

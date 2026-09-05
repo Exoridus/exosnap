@@ -277,10 +277,6 @@ class QuickUpdaterHandoffFilter : public QAbstractNativeEventFilter {
 };
 #endif
 
-QString captureSourceUnavailableNotice() {
-    return QStringLiteral("The selected capture source is no longer available. Choose another source.");
-}
-
 // First-launch window size, centred on the primary screen by
 // ResolveWindowGeometry. Only used when nothing has been persisted yet; the
 // number itself is a product decision and lives with the window minimum in
@@ -699,12 +695,24 @@ void QuickApplication::initializeRecordWorkflow() {
             record_view_model_.SetState(state);
         record_view_model_.capability_status_text = recording_coordinator_->CapabilityStatusText();
         if (state == UiRecordingState::Blocked) {
-            blocked_page_notice_ = QString::fromStdWString(record_view_model_.capability_status_text);
-            if (blocked_page_notice_.isEmpty())
-                blocked_page_notice_ = QStringLiteral("Recording is blocked by the current system configuration.");
-            record_view_model_adapter_.setNoticeText(blocked_page_notice_, QStringLiteral("error"));
-        } else if (!blocked_page_notice_.isEmpty() && record_view_model_adapter_.noticeText() == blocked_page_notice_) {
-            record_view_model_adapter_.setNoticeText({}, QStringLiteral("warning"));
+            QString reason = QString::fromStdWString(record_view_model_.capability_status_text);
+            if (reason.isEmpty())
+                reason = QStringLiteral("Recording is blocked by the current system configuration.");
+            // Raised once per blocked transition, not re-raised while the state
+            // holds: the blocker is a standing condition and a toast per state
+            // synchronisation would be a stream of the same sentence.
+            if (blocked_page_notice_ != reason) {
+                blocked_page_notice_ = reason;
+                notifications::NotificationEvent event;
+                event.type = notifications::NotificationType::CaptureActionFailed;
+                event.title = QStringLiteral("Recording is blocked");
+                event.body = reason;
+                // The blocker's own detail lives on the Diagnostics page, which is
+                // where the removed page notice used to send the user.
+                event.action = notifications::NotificationAction::OpenDiagnostics;
+                notifications_adapter_.manager().Enqueue(std::move(event));
+            }
+        } else if (!blocked_page_notice_.isEmpty()) {
             blocked_page_notice_.clear();
         }
         // A fresh start (not a resume) invalidates the previous session's
@@ -829,9 +837,11 @@ void QuickApplication::initializeRecordWorkflow() {
         // disk. A failure is different — it is unresolved, it is not stated
         // anywhere else on the page, and it is exactly what a persistent notice
         // is for.
-        record_view_model_adapter_.setNoticeText(
-            result.succeeded ? QString{} : QString::fromStdWString(record_view_model_.result_user_message),
-            result.succeeded ? QStringLiteral("info") : QStringLiteral("error"));
+        // Cleared, never set. A failed recording raises the modal failure surface
+        // (RecordingFailurePolicy) with the same sentence plus the detail and the
+        // report action; the banner repeated it AND shortened the preview while the
+        // modal was on screen. Clearing still matters: a notice from before the
+        // recording must not outlive it.
         synchronizeRecordState();
         publishRecordingResultNotification(result);
         // One authoritative failure state: the result itself. The policy decides
@@ -876,8 +886,15 @@ void QuickApplication::initializeRecordWorkflow() {
         notifications_adapter_.manager().Enqueue(std::move(event));
     });
     recording_coordinator_->SetSplitFeedbackCallback([this](bool accepted, const QString& message) {
-        if (!accepted)
-            record_view_model_adapter_.setNoticeText(message);
+        if (!accepted) {
+            // A rejected quick action is what CaptureActionFailed exists for, and a
+            // toast does not move the preview it is talking about.
+            notifications::NotificationEvent event;
+            event.type = notifications::NotificationType::CaptureActionFailed;
+            event.title = QStringLiteral("Split was not started");
+            event.body = message.isEmpty() ? QStringLiteral("The recording could not be split.") : message;
+            notifications_adapter_.manager().Enqueue(std::move(event));
+        }
         synchronizeRecordState();
     });
     // A recovery-manifest write that did not reach disk. The recording keeps
@@ -1017,8 +1034,9 @@ void QuickApplication::initializeRecordWorkflow() {
         }
     }
     if (saved_display_missing) {
-        record_view_model_adapter_.setNoticeText(
-            QStringLiteral("The saved display is not connected. Choose another capture source."));
+        // The preview placeholder already asks for a source, with the picker
+        // attached. Adding a banner above it repeats the request and shrinks the
+        // surface that shows the result.
     }
     const bool restore_region = initial_mode == CaptureMode::Region && live_config_.capture.has_region;
     const QRectF restored_region(live_config_.capture.region_x_norm, live_config_.capture.region_y_norm,
@@ -1301,10 +1319,6 @@ void QuickApplication::wireRecordCommands() {
     QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::dismissResultRequested,
                      &record_view_model_adapter_, [this]() {
                          recording_coordinator_->DismissResult();
-                         // The notice belongs to the run being left behind; a
-                         // failure banner that outlives its result would describe
-                         // a recording the transport no longer shows.
-                         record_view_model_adapter_.clearNotice();
                          synchronizeRecordState();
                      });
     QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::splitRequested, &record_view_model_adapter_,
@@ -1551,7 +1565,10 @@ void QuickApplication::refreshCaptureTargets(const CaptureTargetSnapshot& snapsh
             record_view_model_.has_region = false;
             record_view_model_adapter_.setRegionState(QRectF(0.0, 0.0, 1.0, 1.0), false);
         }
-        record_view_model_adapter_.setNoticeText(captureSourceUnavailableNotice());
+        // No notice here. The preview placeholder already says "Choose what to
+        // record" with a Choose source button the moment selectedTargetAvailable
+        // goes false, and a second sentence in a banner ABOVE the preview only
+        // repeats it while shortening the surface it is talking about.
     } else {
         const auto& target = record_view_model_.targets[static_cast<size_t>(resolved_index)];
         record_preview_adapter_.setPreviewTarget(target);
@@ -1568,8 +1585,6 @@ void QuickApplication::refreshCaptureTargets(const CaptureTargetSnapshot& snapsh
                                   live_config_.capture.region_w_norm, live_config_.capture.region_h_norm);
             selectRegion(restored);
         }
-        if (record_view_model_adapter_.noticeText() == captureSourceUnavailableNotice())
-            record_view_model_adapter_.setNoticeText({});
     }
     diagnostics::AppLog::info(QStringLiteral("CaptureTargetDiscovery"),
                               QStringLiteral("Quick target model refreshed — targets:%1 selected:%2 reason:%3")
@@ -1595,7 +1610,8 @@ void QuickApplication::selectRegion(const QRectF& normalized_rect) {
     monitor.cbSize = sizeof(monitor);
     if (target.kind != exosnap::engine::CaptureTarget::Kind::Monitor ||
         GetMonitorInfoW(reinterpret_cast<HMONITOR>(target.native_id), &monitor) == FALSE) {
-        record_view_model_adapter_.setNoticeText(QStringLiteral("The selected display is no longer available."));
+        RaiseCaptureActionFailed(QStringLiteral("Region could not be applied"),
+                                 QStringLiteral("The selected display is no longer available."));
         return;
     }
     const QRectF bounded = normalized_rect.normalized().intersected(QRectF(0.0, 0.0, 1.0, 1.0));
@@ -1607,7 +1623,8 @@ void QuickApplication::selectRegion(const QRectF& normalized_rect) {
     region.width = static_cast<int32_t>(std::lround(bounded.width() * monitor_width));
     region.height = static_cast<int32_t>(std::lround(bounded.height() * monitor_height));
     if (!region.IsValid()) {
-        record_view_model_adapter_.setNoticeText(QStringLiteral("Select a region at least 64 × 64 pixels."));
+        RaiseCaptureActionFailed(QStringLiteral("Region is too small"),
+                                 QStringLiteral("Select a region at least 64 x 64 pixels."));
         return;
     }
     record_view_model_.region = region;
@@ -2399,21 +2416,33 @@ void QuickApplication::observeAudioSourceDegradation(const exosnap::engine::Reco
     // dismissing the tracked sequence and enqueueing the new body.
     clearAudioSourceDegradedWarning();
     auto event = notifications::MakeAudioSourceDegradedEvent(degraded, degraded_kinds);
+    // The standing toast enqueued below is this outage's surface. The banner said
+    // the same sentence and shrank the preview for the whole outage.
     audio_degraded_page_notice_ = event.body;
-    record_view_model_adapter_.setNoticeText(audio_degraded_page_notice_, QStringLiteral("warning"));
     audio_degraded_toast_sequence_ = notifications_adapter_.manager().Enqueue(std::move(event));
 }
 
+void QuickApplication::RaiseCaptureActionFailed(const QString& title, const QString& body) {
+    // The one shape for "a Record-page action was refused". A toast rather than the
+    // page notice, because the notice lives in the page's fill-height column: it
+    // pushes the preview down for as long as it is up, which is the wrong trade for
+    // a message about an action that simply did not happen.
+    notifications::NotificationEvent event;
+    event.type = notifications::NotificationType::CaptureActionFailed;
+    event.title = title;
+    event.body = body;
+    notifications_adapter_.manager().Enqueue(std::move(event));
+}
+
 void QuickApplication::clearAudioSourceDegradedWarning() {
-    if (!audio_degraded_page_notice_.isEmpty() &&
-        record_view_model_adapter_.noticeText() == audio_degraded_page_notice_) {
-        record_view_model_adapter_.setNoticeText({}, QStringLiteral("warning"));
+    // Only the standing toast is left to take back; the page notice this used to
+    // clear alongside it is gone (see the toast raised in
+    // updateAudioSourceDegradedNotification).
+    if (audio_degraded_toast_sequence_ != 0) {
+        notifications_adapter_.manager().Dismiss(audio_degraded_toast_sequence_);
+        audio_degraded_toast_sequence_ = 0;
     }
     audio_degraded_page_notice_.clear();
-    if (audio_degraded_toast_sequence_ == 0)
-        return;
-    notifications_adapter_.manager().Dismiss(audio_degraded_toast_sequence_);
-    audio_degraded_toast_sequence_ = 0;
 }
 
 // rec.capture.exclusive_window's "record the monitor instead" fix: resolve the
@@ -2877,8 +2906,8 @@ void QuickApplication::persistLiveConfig() {
     // A failed write means the change the user just made may be lost on restart.
     // The Record-page notice only reaches whoever is looking at Record, so this
     // also goes to the hub, where it stays until acknowledged.
-    record_view_model_adapter_.setNoticeText(QStringLiteral("Settings could not be saved · %1").arg(error),
-                                             QStringLiteral("error"));
+    // The toast below is the report. A banner saying the same thing costs preview
+    // height for a message that is already on screen.
     notifications::NotificationEvent event;
     event.type = notifications::NotificationType::SettingsSaveFailed;
     event.title = QStringLiteral("Settings could not be saved");
@@ -3380,8 +3409,8 @@ void QuickApplication::runUpdatePrimaryAction() {
     }
     if (state == QLatin1String("scoop")) {
         // Notify-only: a Scoop tree is never touched by the staged swap.
-        record_view_model_adapter_.setNoticeText(
-            QStringLiteral("This install is managed by Scoop — run `scoop update exosnap`."));
+        RaiseCaptureActionFailed(QStringLiteral("Update is managed by Scoop"),
+                                 QStringLiteral("Run `scoop update exosnap` to update this install."));
         return;
     }
     // Every other state's action is "check again".
@@ -3854,7 +3883,8 @@ bool QuickApplication::applyOverlayVisualScenario(const QString& scenario) {
             // why it is its own variant rather than a flag on the recording one.
             record_view_model_.SetState(UiRecordingState::Countdown);
         } else if (variant == QLatin1String("recording") || variant == QLatin1String("diagnostics") ||
-                   variant == QLatin1String("diagnostics-technical") || variant == QLatin1String("controls")) {
+                   variant == QLatin1String("diagnostics-technical") || variant == QLatin1String("controls") ||
+                   variant == QLatin1String("all")) {
             record_view_model_.SetState(UiRecordingState::Recording);
         } else {
             return false;
@@ -3864,10 +3894,11 @@ bool QuickApplication::applyOverlayVisualScenario(const QString& scenario) {
         // that photographs it has to turn it on. It is the one capture-excluded
         // overlay that takes mouse input (ADR 0016), which is exactly why its
         // appearance has to be checkable like the others'.
-        settings_.show_quick_controls = variant == QLatin1String("controls");
+        const bool all_overlays = variant == QLatin1String("all");
+        settings_.show_quick_controls = variant == QLatin1String("controls") || all_overlays;
         settings_.show_recording_overlay = true;
-        settings_.show_diagnostics_overlay =
-            variant == QLatin1String("diagnostics") || variant == QLatin1String("diagnostics-technical");
+        settings_.show_diagnostics_overlay = variant == QLatin1String("diagnostics") ||
+                                             variant == QLatin1String("diagnostics-technical") || all_overlays;
         if (variant == QLatin1String("diagnostics-technical")) {
             settings_.diagnostics_overlay_preset = models::TokenFor(models::DiagnosticsOverlayPreset::Technical);
         }
@@ -3897,6 +3928,25 @@ bool QuickApplication::applyOverlayVisualScenario(const QString& scenario) {
             countdown_progress_ = 0.35;
             record_view_model_adapter_.setCountdownState(live_config_.countdown_seconds, countdown_remaining_,
                                                          countdown_progress_);
+        }
+        if (all_overlays) {
+            // The whole set at once, which is what a person asked to judge "do the
+            // overlays look right" actually needs: the badge, the pill and the
+            // diagnostics HUD are already up, and the toast is the fourth surface.
+            // Marked synthetic like every notification this process did not decide
+            // to raise -- it is here to be looked at, not to prove a condition.
+            //
+            // The countdown is deliberately NOT included: it owns the screen BEFORE
+            // capture is live, so a frame showing it next to a running recording
+            // would be a combination the product cannot produce. `hud-countdown`
+            // stays the variant for it.
+            notifications::NotificationEvent toast;
+            toast.type = notifications::NotificationType::WindowCaptureStalled;
+            toast.title = QStringLiteral("Window capture appears to have stalled");
+            toast.body = QStringLiteral("No new frame has arrived for 10 seconds. The recording is still running.");
+            toast.action = notifications::NotificationAction::OpenDiagnostics;
+            toast.synthetic = true;
+            notifications_adapter_.manager().Enqueue(std::move(toast));
         }
         overlay_adapter_.synchronize();
         return true;
@@ -4150,11 +4200,17 @@ void QuickApplication::dispatchNotificationAction(notifications::NotificationAct
         QDesktopServices::openUrl(QUrl::fromLocalFile(info.exists() ? path : info.absolutePath()));
         break;
     }
+    // All three land on Settings: updates, output folder and hotkeys are embedded
+    // sections there, not pages of their own. Each names the card it came for --
+    // Settings is long enough that landing at its top is the same as landing
+    // nowhere, and SettingsPage.landOnSection() scrolls to the card and marks it.
     case NotificationAction::OpenUpdate:
-    case NotificationAction::OpenHotkeys:
-        // All three land on Settings: updates, output folder and hotkeys are
-        // embedded sections there, not pages of their own.
         emit shell_adapter_.navigateToPageRequested(ShellAdapter::SettingsPage);
+        settings_adapter_.requestSettingsFocus(SettingsAdapter::FocusTarget::Updates);
+        break;
+    case NotificationAction::OpenHotkeys:
+        emit shell_adapter_.navigateToPageRequested(ShellAdapter::SettingsPage);
+        settings_adapter_.requestSettingsFocus(SettingsAdapter::FocusTarget::Hotkeys);
         break;
     case NotificationAction::ChangeFolder:
         emit shell_adapter_.navigateToPageRequested(ShellAdapter::SettingsPage);
@@ -4224,11 +4280,27 @@ void QuickApplication::publishRecordingResultNotification(const UiRecordingResul
         // Primary action lands on Settings → Output. Dismiss is the hub's own
         // affordance, so no secondary action is set.
         event.action = notifications::NotificationAction::ChangeFolder;
-    } else {
+    } else if (root_window_ != nullptr && root_window_->isVisible() &&
+               root_window_->windowState() != Qt::WindowMinimized) {
         // Every other failure is carried by the modal recording-error surface,
         // which has the full detail and the opt-in report. A toast alongside it
         // would say less about the same event.
         return;
+    } else {
+        // ...but only while that surface can actually be seen. Minimised or in the
+        // tray, the modal is the one thing the user cannot look at, and a recording
+        // that died would otherwise stay silent until they next open the window.
+        // The toast carries no detail the modal has; it exists to say "go look".
+        event.type = notifications::NotificationType::UnexpectedStop;
+        event.title = QStringLiteral("Recording stopped unexpectedly");
+        event.body = result.error_detail.empty() ? QStringLiteral("The recording ended before it was finished.")
+                                                 : QString::fromStdWString(result.error_detail);
+        // Reveals the partial file when one survived; the modal keeps the full
+        // detail and the report action for when the window comes back.
+        if (!result.output_path.empty()) {
+            event.action = notifications::NotificationAction::ShowFile;
+            event.action_payload = QString::fromStdWString(result.output_path);
+        }
     }
     notifications_adapter_.manager().Enqueue(std::move(event));
 }
@@ -5207,7 +5279,6 @@ bool QuickApplication::applyRecordVisualScenario(const QString& scenario) {
     record_view_model_.ResetStats();
     // Re-seeding is idempotent: a scenario that raises no notice must not
     // inherit one from the scenario applied before it.
-    record_view_model_adapter_.setNoticeText({});
     clearAudioSourceDegradedWarning();
 
     if (normalized == QLatin1String(visual::record_state::kReady)) {
@@ -5304,8 +5375,8 @@ bool QuickApplication::applyRecordVisualScenario(const QString& scenario) {
         // The same notice the real result callback raises. Without it the
         // scenario photographed a failure the page never states in words, which
         // is precisely the evidence a failure state needs to be judged on.
-        record_view_model_adapter_.setNoticeText(QStringLiteral("The capture source is no longer available."),
-                                                 QStringLiteral("error"));
+        // Same reason as the notice removed in resolveCaptureTargetSelection: the
+        // preview placeholder carries this state, with the action attached.
     } else if (normalized == QLatin1String(visual::record_state::kUnavailable)) {
         record_view_model_.SetState(UiRecordingState::Ready);
         record_view_model_.selected_target_index = -1;
@@ -5315,9 +5386,16 @@ bool QuickApplication::applyRecordVisualScenario(const QString& scenario) {
     } else if (normalized == QLatin1String(visual::record_state::kOutputUnwritable)) {
         record_view_model_.SetState(UiRecordingState::Blocked);
         record_view_model_.capability_status_text = FolderValidationMessage(FolderValidationResult::NotWritable);
-        record_view_model_adapter_.setNoticeText(
-            QStringLiteral("The output folder is not writable. Choose another folder in Settings."),
-            QStringLiteral("error"));
+        {
+            notifications::NotificationEvent event;
+            event.type = notifications::NotificationType::CaptureActionFailed;
+            event.title = QStringLiteral("Output folder is not writable");
+            event.body = QStringLiteral("Choose another folder before recording.");
+            // Lands on Settings with the Output card revealed, which is the action
+            // the sentence asks for.
+            event.action = notifications::NotificationAction::ChangeFolder;
+            notifications_adapter_.manager().Enqueue(std::move(event));
+        }
         settings_adapter_.applyOutputFolderValidation(FolderValidationResult::NotWritable);
         settings_adapter_.requestSettingsFocus(SettingsAdapter::FocusTarget::OutputDestination);
     } else {

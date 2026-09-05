@@ -212,6 +212,15 @@ class FakeSource final : public LiveVerifySource {
     [[nodiscard]] QJsonObject NotificationsSnapshot() const override {
         return Marker(QStringLiteral("notifications"));
     }
+    bool NotificationRaise(const QString& type_name, const QString& title, const QString& body,
+                           const QString& action_name, const QString& action_payload, qint64* out_sequence,
+                           QString* error) override {
+        calls.append(QStringLiteral("notification.raise:%1/%2/%3/%4/%5")
+                         .arg(type_name, title, body, action_name, action_payload));
+        if (out_sequence != nullptr)
+            *out_sequence = 4242;
+        return Outcome(error);
+    }
     bool NotificationDismiss(qint64 sequence, QString* error) override {
         calls.append(QStringLiteral("notification.dismiss:%1").arg(sequence));
         return Outcome(error);
@@ -1734,9 +1743,10 @@ TEST(LiveVerifyDescribe, IdempotencyIsDeclaredAndPlayPauseIsTheExceptionThatIsNo
     EXPECT_TRUE(saw_play_pause);
     // The seven transport intents (six plus record.addMarker -- a second marker
     // is a second marker), edit.playPause, profiles.create (two creates with the
-    // same name are two profiles), and notification.invokeAction (an action
-    // navigates, opens a folder or relaunches).
-    EXPECT_EQ(non_idempotent, 10);
+    // same name are two profiles), notification.invokeAction (an action
+    // navigates, opens a folder or relaunches), and notification.raise (two
+    // calls are two notifications).
+    EXPECT_EQ(non_idempotent, 11);
 }
 
 // ---------------------------------------------------------------------------

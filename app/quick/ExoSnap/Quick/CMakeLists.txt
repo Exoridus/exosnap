@@ -296,6 +296,8 @@ target_sources(exosnap
         ${PROJECT_SOURCE_DIR}/app/notifications/NotificationEvent.h
         ${PROJECT_SOURCE_DIR}/app/notifications/NotificationManager.cpp
         ${PROJECT_SOURCE_DIR}/app/notifications/NotificationManager.h
+        ${PROJECT_SOURCE_DIR}/app/notifications/NotificationNames.cpp
+        ${PROJECT_SOURCE_DIR}/app/notifications/NotificationNames.h
         ${PROJECT_SOURCE_DIR}/app/services/TimelineThumbnailSource.cpp
         ${PROJECT_SOURCE_DIR}/app/services/TimelineThumbnailSource.h
         ${PROJECT_SOURCE_DIR}/app/models/OutputPathPolicy.cpp
@@ -1978,6 +1980,7 @@ exosnap_add_gtest(
         NotificationEntryModel.cpp
         NotificationEntryModel.h
         ${PROJECT_SOURCE_DIR}/app/notifications/NotificationManager.cpp
+        ${PROJECT_SOURCE_DIR}/app/notifications/NotificationNames.cpp
         ${PROJECT_SOURCE_DIR}/app/models/RecordingFailurePolicy.cpp
     LIBRARIES
         Qt6::Core

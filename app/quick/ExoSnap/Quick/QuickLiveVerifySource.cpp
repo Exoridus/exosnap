@@ -18,6 +18,7 @@
 #include "SettingsAdapter.h"
 #include "SettingsAutomationKeys.h"
 #include "ShellAdapter.h"
+#include "notifications/NotificationNames.h"
 
 #include "ExoSnapBuildInfo.h"
 
@@ -1164,12 +1165,72 @@ QJsonObject QuickLiveVerifySource::NotificationsSnapshot() const {
             for (const QVariant& action : actions)
                 action_names.append(action.toMap().value(QStringLiteral("label")).toString());
             entry.insert(QStringLiteral("actions"), action_names);
+            // Raised through this channel rather than by a product condition. A
+            // reader that treats a synthetic entry as evidence of BEHAVIOUR is
+            // green by construction; it is evidence of rendering and nothing else.
+            entry.insert(QStringLiteral("synthetic"),
+                         model->data(index, NotificationEntryModel::SyntheticRole).toBool());
             entries.append(entry);
         }
     }
     json.insert(QStringLiteral("entries"), entries);
     json.insert(QStringLiteral("count"), entries.size());
+
+    // The toasts actually on screen right now, which the hub list cannot answer:
+    // the hub keeps a permanent record, a toast is transient and self-dismissing.
+    QJsonArray toasts;
+    for (const notifications::NotificationEvent& event : notifications->manager().VisibleEvents()) {
+        QJsonObject toast;
+        toast.insert(QStringLiteral("sequence"), static_cast<double>(event.sequence));
+        toast.insert(QStringLiteral("type"), notifications::NotificationTypeName(event.type));
+        toast.insert(QStringLiteral("title"), event.title);
+        toast.insert(QStringLiteral("body"), event.body);
+        toast.insert(QStringLiteral("severity"), notifications::AdvisoryStatusForType(event.type));
+        toast.insert(QStringLiteral("action"), notifications::NotificationActionName(event.action));
+        toast.insert(QStringLiteral("secondaryAction"), notifications::NotificationActionName(event.secondary_action));
+        toast.insert(QStringLiteral("synthetic"), event.synthetic);
+        toasts.append(toast);
+    }
+    json.insert(QStringLiteral("activeToasts"), toasts);
     return json;
+}
+
+bool QuickLiveVerifySource::NotificationRaise(const QString& type_name, const QString& title, const QString& body,
+                                              const QString& action_name, const QString& action_payload,
+                                              qint64* out_sequence, QString* error) {
+    auto* notifications = application_.notificationsAdapter();
+    if (notifications == nullptr) {
+        *error = QStringLiteral("The notification hub is not available");
+        return false;
+    }
+
+    notifications::NotificationEvent event;
+    if (!notifications::ParseNotificationType(type_name, &event.type)) {
+        // Named rather than defaulted: raising the wrong kind of notification
+        // because a spelling was not recognised would be a silent lie about what
+        // the caller asked for.
+        *error = QStringLiteral("Unknown notification type '%1'").arg(type_name);
+        return false;
+    }
+    if (!action_name.isEmpty() && !notifications::ParseNotificationAction(action_name, &event.action)) {
+        *error = QStringLiteral("Unknown notification action '%1'").arg(action_name);
+        return false;
+    }
+    if (title.isEmpty()) {
+        *error = QStringLiteral("A notification needs a title");
+        return false;
+    }
+
+    event.title = title;
+    event.body = body;
+    event.action_payload = action_payload;
+    // The whole point of this path: it travels the ordinary pipeline but says so.
+    event.synthetic = true;
+
+    const uint64_t sequence = notifications->manager().Enqueue(std::move(event));
+    if (out_sequence != nullptr)
+        *out_sequence = static_cast<qint64>(sequence);
+    return true;
 }
 
 bool QuickLiveVerifySource::NotificationDismiss(qint64 sequence, QString* error) {
