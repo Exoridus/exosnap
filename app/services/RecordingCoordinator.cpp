@@ -375,14 +375,23 @@ uint32_t RecordingCoordinator::WindowCaptureStallEpisodes() const noexcept {
     return window_capture_stall_episodes_.load(std::memory_order_relaxed);
 }
 
-void RecordingCoordinator::SetFrozenSessionLedger(std::vector<diagnostics::LedgerEntry> ledger) {
-    std::lock_guard<std::mutex> lock(session_ledger_mutex_);
-    frozen_session_ledger_ = std::move(ledger);
+void SessionLedgerSink::Set(std::vector<diagnostics::LedgerEntry> ledger) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    ledger_ = std::move(ledger);
 }
 
-std::vector<diagnostics::LedgerEntry> RecordingCoordinator::FrozenSessionLedger() const {
-    std::lock_guard<std::mutex> lock(session_ledger_mutex_);
-    return frozen_session_ledger_;
+void SessionLedgerSink::Clear() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    ledger_.clear();
+}
+
+std::vector<diagnostics::LedgerEntry> SessionLedgerSink::Get() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return ledger_;
+}
+
+std::shared_ptr<SessionLedgerSink> RecordingCoordinator::FrozenLedgerSink() const {
+    return frozen_ledger_sink_;
 }
 
 void RecordingCoordinator::PostRecoveryProtectionLost(QString detail) {
@@ -1034,10 +1043,7 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
     window_capture_stall_episodes_.store(0, std::memory_order_relaxed);
     // Same reasoning again: the next report must not inherit the previous
     // recording's frozen ledger if this one ends before its own freeze arrives.
-    {
-        std::lock_guard<std::mutex> lock(session_ledger_mutex_);
-        frozen_session_ledger_.clear();
-    }
+    frozen_ledger_sink_->Clear();
 
     auto config = exosnap::capability::ToRecorderCoreConfig(ctx.resolved_user_config, ctx.caps);
     config.cq = ctx.video_settings.cq;
@@ -2602,6 +2608,24 @@ bool RecordingCoordinator::DrainSegmentRemuxJobsForTest(bool cancel) {
     return DrainSegmentRemuxJobs(cancel);
 }
 
+void RecordingCoordinator::BeginReportSessionForTest(QString recording_session_id) {
+    recording_session_id_ = std::move(recording_session_id);
+    frozen_ledger_sink_->Clear();
+    {
+        std::lock_guard<std::mutex> lock(diagnostics_guard_mutex_);
+        has_last_snapshot_ = false;
+        last_snapshot_ = exosnap::engine::RecordingDiagnosticsSnapshot{};
+    }
+}
+
+void RecordingCoordinator::PostDiagnosticsForTest(exosnap::engine::RecordingDiagnosticsSnapshot snapshot) {
+    PostDiagnostics(std::move(snapshot));
+}
+
+void RecordingCoordinator::PostResultForTest(UiRecordingResult result) {
+    PostResult(std::move(result));
+}
+
 void RecordingCoordinator::CancelRemux() {
     remux_cancel_requested_.store(true);
 }
@@ -2993,18 +3017,25 @@ void RecordingCoordinator::FillResultFormat(UiRecordingResult& result, const Pre
     result.audio_codec = core.audio_codec;
 }
 
-void RecordingCoordinator::WriteSessionReportForResult(const UiRecordingResult& result) {
+std::optional<RecordingCoordinator::SessionReportJob>
+RecordingCoordinator::BuildSessionReportJob(const UiRecordingResult& result) {
     if (recording_session_id_.isEmpty()) {
-        return; // no active recording session id (e.g. a start rejected before Preparing)
+        return std::nullopt; // no active recording session id (e.g. a start rejected before Preparing)
     }
 
     const QFileInfo log_info(diagnostics::AppLog::logFilePath());
     if (log_info.absolutePath().isEmpty()) {
-        return;
+        return std::nullopt;
     }
-    const QString reports_dir = log_info.absolutePath() + QStringLiteral("/reports");
+    SessionReportJob job;
+    job.reports_dir = log_info.absolutePath() + QStringLiteral("/reports");
+    // The ledger is NOT read here. It is frozen on the Qt main thread when that
+    // thread processes the terminal diagnostics snapshot, which is still queued
+    // when this runs on the recording thread; the sink travels with the job and is
+    // read where and when the freeze has already happened.
+    job.ledger_sink = frozen_ledger_sink_;
 
-    diagnostics::SessionReportInputs inputs;
+    diagnostics::SessionReportInputs& inputs = job.inputs;
     inputs.recording_session_id = recording_session_id_;
     inputs.launch_session_id = diagnostics::AppLog::sessionId();
     inputs.result = result;
@@ -3015,11 +3046,6 @@ void RecordingCoordinator::WriteSessionReportForResult(const UiRecordingResult& 
     }
 
     inputs.window_capture_stall_episodes = WindowCaptureStallEpisodes();
-    // Empty when the ledger has not been handed over yet -- the terminal snapshot
-    // that freezes it is still queued to the main thread. The report then says
-    // nothing about the session ledger rather than writing a record whose last
-    // occurrence is still open.
-    inputs.ledger = FrozenSessionLedger();
 
     const QDateTime ended = QDateTime::currentDateTime();
     inputs.ended_at = ended.toString(Qt::ISODate);
@@ -3080,8 +3106,18 @@ void RecordingCoordinator::WriteSessionReportForResult(const UiRecordingResult& 
         inputs.output_filename = QString::fromStdString(crash_capture::ScrubString(base.toStdString()));
     }
 
+    return job;
+}
+
+void RecordingCoordinator::RunSessionReportJob(SessionReportJob job) {
+    // Read where the freeze has already happened. Empty when the recording ended
+    // without one -- an early failure, or diagnostics that never ran -- and the
+    // report then says nothing about the session ledger rather than writing a
+    // record whose last occurrence is still open.
+    job.inputs.ledger = job.ledger_sink->Get();
+
     QString error;
-    if (!diagnostics::WriteSessionReport(reports_dir, inputs, /*keep_n=*/10, /*out_path=*/nullptr, &error)) {
+    if (!diagnostics::WriteSessionReport(job.reports_dir, job.inputs, /*keep_n=*/10, /*out_path=*/nullptr, &error)) {
         diagnostics::AppLog::warning(QStringLiteral("record.report"),
                                      QStringLiteral("session report not written: %1").arg(error));
     }
@@ -3089,15 +3125,35 @@ void RecordingCoordinator::WriteSessionReportForResult(const UiRecordingResult& 
     // whether the report exists -- a client that cannot find one then knows
     // whether it was never written or simply has not been looked for yet.
     diagnostics::logEvent(diagnostics::LogSeverity::Info, "record", "record.sessionEnded",
-                          {{"recordingSessionId", recording_session_id_.toStdString()},
-                           {"succeeded", result.succeeded ? "true" : "false"},
+                          {{"recordingSessionId", job.inputs.recording_session_id.toStdString()},
+                           {"succeeded", job.inputs.result.succeeded ? "true" : "false"},
                            {"reportWritten", error.isEmpty() ? "true" : "false"}});
 }
 
 void RecordingCoordinator::PostResult(UiRecordingResult result) {
-    // Write the on-disk session report before posting: best-effort, and never blocks
-    // the result reaching the UI.
-    WriteSessionReportForResult(result);
+    // Gather the report here, on the recording thread, but write it from the main
+    // thread's queue.
+    //
+    // The report carries the session ledger, and the ledger is frozen by the main
+    // thread when it processes the terminal diagnostics snapshot -- which
+    // PostDiagnostics queued to that same thread immediately before this call.
+    // Writing the report inline here races that freeze and loses on essentially
+    // every recording: control returns to the recording thread long before the
+    // main thread drains its queue. Posting the write onto the same queue orders
+    // the two by FIFO delivery instead of by luck, without waiting for anything
+    // and without reading main-thread state from here.
+    //
+    // The job owns everything it needs and the write is static, so a queued call
+    // that outlives the coordinator is still safe.
+    if (std::optional<SessionReportJob> job = BuildSessionReportJob(result)) {
+        if (QCoreApplication::instance() == nullptr) {
+            RunSessionReportJob(std::move(*job));
+        } else {
+            QMetaObject::invokeMethod(
+                QCoreApplication::instance(), [j = std::move(*job)]() mutable { RunSessionReportJob(std::move(j)); },
+                Qt::QueuedConnection);
+        }
+    }
 
     if (!on_result_ready_)
         return;

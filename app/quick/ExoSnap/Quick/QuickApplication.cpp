@@ -824,11 +824,17 @@ void QuickApplication::initializeRecordWorkflow() {
             synchronizeRecordState();
         });
     // The session report carries what the recording measured. Handed over here,
-    // on the thread that owns the ledger, the moment the adapter closes it -- the
-    // report itself is written on the recording thread and must never read this
-    // one's state.
+    // on the thread that owns the ledger, the moment the adapter closes it.
+    //
+    // The sink is captured by value rather than reached for through the
+    // coordinator: this connection lives as long as the adapter, and the adapter
+    // outlives the coordinator (members are destroyed in reverse declaration
+    // order), so a terminal snapshot delivered during teardown would otherwise
+    // dereference a destroyed unique_ptr.
     QObject::connect(&diagnostics_adapter_, &DiagnosticsAdapter::sessionLedgerFrozen, &diagnostics_adapter_,
-                     [this]() { recording_coordinator_->SetFrozenSessionLedger(diagnostics_adapter_.frozenLedger()); });
+                     [this, sink = recording_coordinator_->FrozenLedgerSink()]() {
+                         sink->Set(diagnostics_adapter_.frozenLedger());
+                     });
     recording_coordinator_->SetResultReadyCallback([this](const UiRecordingResult& result) {
         record_view_model_.SetResult(result);
         diagnostics_adapter_.setLastSession(result);

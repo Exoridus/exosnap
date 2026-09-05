@@ -220,7 +220,7 @@ class DiagnosticsAdapter : public QObject {
     void ledgerChanged();
     // The recording ended and the ledger is closed. Whoever writes the session
     // report reads frozenLedger() from THIS signal and keeps its own copy: the
-    // report is written on the recording thread, and the ledger lives on this one.
+    // ledger lives on this thread and is gathered for the report elsewhere.
     void sessionLedgerFrozen();
     void lastSessionChanged();
     void inDepthChanged();
