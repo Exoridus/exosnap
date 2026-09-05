@@ -168,6 +168,8 @@ qt_add_qml_module(exosnap
         DiagnosticIssueModel.h
         PipelineStageModel.cpp
         PipelineStageModel.h
+        SessionLedgerModel.cpp
+        SessionLedgerModel.h
         DiagnosticsAdapter.cpp
         DiagnosticsAdapter.h
         EditExportAdapter.cpp
@@ -1618,10 +1620,15 @@ exosnap_add_gtest(
     SOURCES
         ${EXOSNAP_QUICK_TESTS_DIR}/test_diagnostics_adapter.cpp
         ${EXOSNAP_QUICK_TESTS_DIR}/test_pipeline_stage_model.cpp
+        # The same live fixtures the visual harness seeds, so the adapter cases
+        # and a capture describe one recording rather than two.
+        ${PROJECT_SOURCE_DIR}/app/visual_tests/DiagnosticsLiveScenario.cpp
         DiagnosticIssueModel.cpp
         DiagnosticIssueModel.h
         PipelineStageModel.cpp
         PipelineStageModel.h
+        SessionLedgerModel.cpp
+        SessionLedgerModel.h
         DiagnosticsAdapter.cpp
         DiagnosticsAdapter.h
         LogEntryModel.cpp
