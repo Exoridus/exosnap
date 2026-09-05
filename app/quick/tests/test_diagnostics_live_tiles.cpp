@@ -385,7 +385,7 @@ TEST(DiagnosticsLiveTiles, FourTilesWithoutDepthEightWithIt) {
     ASSERT_EQ(deep.size(), 8u);
     EXPECT_EQ(Find(deep, "presentMode").value, "Independent flip");
     EXPECT_EQ(Find(deep, "presentHealth").value, "2.0% discarded");
-    EXPECT_EQ(Find(deep, "dpcLatency").value, "420 us");
+    EXPECT_EQ(Find(deep, "dpcLatency").value, "420 \xc2\xb5s");
     EXPECT_EQ(Find(deep, "gpuTime").value, "4.20 ms");
     ASSERT_TRUE(Find(deep, "gpuTime").budget.has_value());
     EXPECT_DOUBLE_EQ(*Find(deep, "gpuTime").budget, 1000.0 / 60.0);

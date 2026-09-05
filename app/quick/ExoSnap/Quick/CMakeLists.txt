@@ -56,7 +56,6 @@ qt_add_qml_module(exosnap
         DeviceCapabilityRow.qml
         DeviceCodecChip.qml
         DiagnosticsPage.qml
-        DiagnosticsRowCard.qml
         DiagnosticsSectionHeader.qml
         DiagnosticsSelfTestRow.qml
         EditDetailsRail.qml

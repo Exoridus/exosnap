@@ -22,6 +22,7 @@ constexpr const char* kDash = "\xe2\x80\x94";   // em dash
 constexpr const char* kMiddot = "\xc2\xb7";     // middle dot
 constexpr const char* kNarrowNbsp = "\xc2\xa0"; // non-breaking space
 constexpr const char* kRightArrow = "\xe2\x86\x92";
+constexpr const char* kMicro = "\xc2\xb5"; // micro sign
 
 // The SelfTestRunner sentinel for a check that was compiled out. Deliberately the
 // ONLY place this string appears on the presentation side: everything downstream
@@ -565,10 +566,11 @@ LiveTile DpcLatencyTile(const LiveTileInputs& in) {
     LiveTile tile;
     tile.key = "dpcLatency";
     tile.title = "DPC / ISR latency";
-    tile.value = Number(d.max_latency_us, 0) + " us";
+    tile.value = Number(d.max_latency_us, 0) + " " + kMicro + "s";
     tile.value_tone = OwnedTone(in.ledger, {"rec.dpc.latency"}, /*sticky=*/false);
     tile.budget = 1000.0;
-    tile.sub = Join("avg " + Number(d.avg_latency_us, 0) + " us", "budget 1000 us");
+    tile.sub =
+        Join("avg " + Number(d.avg_latency_us, 0) + " " + kMicro + "s", "budget 1000 " + std::string(kMicro) + "s");
     tile.detail = d.worst_driver.empty() ? std::string("no driver attributed") : "worst " + d.worst_driver;
     return tile;
 }
