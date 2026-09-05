@@ -256,7 +256,22 @@ jobs:
       # leak into this VS configure, and CMake aborts with "generator: Visual
       # Studio 17 2022 does not match the generator used previously: Ninja".
       # The `-vs2022-` namespace keeps the two generators' caches from crossing.
+      # A tag scope is never read again — a tag is never rebuilt — so a `save`
+      # from a tag run only spends 715 MB of the repository's shared cache
+      # budget on an entry nothing will ever restore. restore-only on tag refs
+      # still gets whatever main last populated; the entry PRs and future tags
+      # actually read from is the one a workflow_dispatch run from main saves.
       - name: Cache FetchContent deps (sentry-native + Crashpad)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/cache/restore@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
+        with:
+          path: C:/es
+          key: es-fetchcontent-${{ runner.os }}-vs2022-${{ hashFiles('cmake/VendorSentry.cmake') }}
+          restore-keys: |
+            es-fetchcontent-${{ runner.os }}-vs2022-
+
+      - name: Cache FetchContent deps (sentry-native + Crashpad)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
         with:
           path: C:/es

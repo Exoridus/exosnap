@@ -80,11 +80,21 @@ class GoesQuietSource : public IAudioCaptureSource {
     // Wall-clock quiet window, valid after the worker joined.
     std::chrono::steady_clock::time_point quiet_started{};
     std::chrono::steady_clock::time_point quiet_ended{};
+    // The longest gap between two consecutive polls of this source, valid after
+    // the worker joined. The worker anchors its silence at the last poll and
+    // loses at most one poll at the resume, so a poll the scheduler stretched
+    // (a loaded CI runner turns a 1 ms sleep into 90 ms) is slack the
+    // assertions have to grant, not audio the engine lost.
+    std::chrono::steady_clock::duration longest_poll_gap{};
 
     bool Init(std::string&) override {
         return true;
     }
     uint32_t PendingFrameCount() override {
+        const auto now = std::chrono::steady_clock::now();
+        if (last_poll_.time_since_epoch().count() != 0)
+            longest_poll_gap = std::max(longest_poll_gap, now - last_poll_);
+        last_poll_ = now;
         if (acquired_)
             return 0;
         if (pre_left_ > 0)
@@ -171,6 +181,7 @@ class GoesQuietSource : public IAudioCaptureSource {
     uint64_t delivered_frames_ = 0;
     uint64_t last_device_ns_ = 0;
     uint64_t last_qpc_ns_ = 0;
+    std::chrono::steady_clock::time_point last_poll_{};
     std::vector<float> data_;
     std::string name_ = "goes-quiet";
 };
@@ -279,6 +290,10 @@ struct QuietRun {
     std::vector<EncodedAudioPacket> packets;
     uint64_t real_frames = 0;
     uint64_t quiet_frames = 0;
+    // Frames covered by the longest poll gap the worker actually experienced.
+    // Added to the fixed tolerance: the design loses at most one poll, and how
+    // long that poll took is the scheduler's doing, not the engine's.
+    uint64_t poll_slack_frames = 0;
     bool failed = false;
     bool has_eos = false;
     // Measured zero point the worker published for track 0 (100 ns QPC units;
@@ -361,11 +376,15 @@ QuietRun RunQuiet(QuietSourceOptions opts) {
             .count();
     EXPECT_GT(quiet_ms, 0);
     run.quiet_frames = static_cast<uint64_t>(quiet_ms) * 48ull;
+    const auto slack_ms = std::chrono::duration_cast<std::chrono::milliseconds>(raw_source->longest_poll_gap).count();
+    run.poll_slack_frames = static_cast<uint64_t>(slack_ms) * 48ull;
     return run;
 }
 
 // The stall is only noticed after the detection threshold, and the resume is
-// noticed one poll late; both are bounded by a couple of poll iterations.
+// noticed one poll late; both are bounded by a couple of poll iterations at
+// the worker's own cadence. A poll the scheduler stretched on top of that is
+// measured by the source and granted per run (QuietRun::poll_slack_frames).
 constexpr uint64_t kToleranceFrames = 48ull * 80; // 80 ms
 
 TEST(AudioThreadSilenceFill, SoloSourceThatGoesQuietKeepsItsTimeline) {
@@ -382,10 +401,12 @@ TEST(AudioThreadSilenceFill, SoloSourceThatGoesQuietKeepsItsTimeline) {
 
     const uint64_t total_frames = TotalPcmFrames(run.packets);
     const uint64_t expected = run.real_frames + run.quiet_frames;
-    EXPECT_GE(total_frames + kToleranceFrames, expected)
+    const uint64_t tolerance = kToleranceFrames + run.poll_slack_frames;
+    EXPECT_GE(total_frames + tolerance, expected)
         << "the quiet stretch was lost: " << total_frames << " frames for " << run.real_frames << " real + "
-        << run.quiet_frames << " quiet frames -- everything after the silence is stamped too early";
-    EXPECT_LE(total_frames, expected + kToleranceFrames) << "more audio was produced than wall time: " << total_frames;
+        << run.quiet_frames << " quiet frames (longest poll gap " << run.poll_slack_frames / 48
+        << " ms) -- everything after the silence is stamped too early";
+    EXPECT_LE(total_frames, expected + tolerance) << "more audio was produced than wall time: " << total_frames;
 }
 
 TEST(AudioThreadSilenceFill, QuietStretchIsNotFilledTwiceWhenTheDeviceAlsoReportsIt) {
@@ -400,9 +421,10 @@ TEST(AudioThreadSilenceFill, QuietStretchIsNotFilledTwiceWhenTheDeviceAlsoReport
     EXPECT_FALSE(run.failed);
     const uint64_t total_frames = TotalPcmFrames(run.packets);
     const uint64_t expected = run.real_frames + run.quiet_frames;
-    EXPECT_LE(total_frames, expected + kToleranceFrames)
+    const uint64_t tolerance = kToleranceFrames + run.poll_slack_frames;
+    EXPECT_LE(total_frames, expected + tolerance)
         << "the same outage was filled twice: " << total_frames << " frames for " << expected << " expected";
-    EXPECT_GE(total_frames + kToleranceFrames, expected);
+    EXPECT_GE(total_frames + tolerance, expected);
 }
 
 // 100 ns units per millisecond.

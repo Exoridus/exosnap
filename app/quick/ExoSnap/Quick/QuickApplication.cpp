@@ -2,6 +2,7 @@
 
 #include "services/SystemAppearance.h"
 
+#include "NativeMenuAppearance.h"
 #include "NotificationHubPolicy.h"
 #include "QuickWindowChrome.h"
 
@@ -2903,6 +2904,10 @@ void QuickApplication::applyThemeFromSettings() {
                                                                     QStringLiteral("QuickThemeTokens"))) {
         tokens->setAppearance(settings_.appearance_id, settings_.accent_id);
     }
+    // The tray MENU is a native popup menu user32 paints from the system menu
+    // theme; no Qt palette or style reaches it. It follows the application's
+    // appearance, as the spec says every product surface does.
+    ApplyNativeMenuAppearance(settings_.appearance_id == QLatin1String("dark"));
     // The tray mark carries the accent too, and it is not part of the scene, so
     // it does not follow the token singleton.
     //
@@ -4482,10 +4487,13 @@ void QuickApplication::initializeTray() {
 
     QObject::connect(&tray_adapter_, &TrayAdapter::activateWindowRequested, &shell_adapter_,
                      [this]() { restoreWindowFromTray(); });
-    // The same menu entry under its other label. It reported "Hide window" and
-    // then raised the window, because both labels emitted the one signal.
-    QObject::connect(&tray_adapter_, &TrayAdapter::hideWindowRequested, &shell_adapter_,
-                     [this]() { hideWindowToTray(); });
+    // The window first, then the editor: the same order the Saved toast uses, and
+    // the reason it is not just the editor call -- opening a document behind a
+    // hidden window is indistinguishable from the entry doing nothing.
+    QObject::connect(&tray_adapter_, &TrayAdapter::openLastRecordingRequested, &shell_adapter_, [this]() {
+        restoreWindowFromTray();
+        openEditorForCurrentRecording();
+    });
     // Same entry point the global hotkey uses, so the tray cannot develop its own
     // idea of what "toggle recording" means. This is the double-click gesture,
     // which has no state to read -- the menu's transport entries carry a resolved
@@ -4538,7 +4546,6 @@ void QuickApplication::initializeTray() {
                      });
 
     if (root_window_) {
-        tray_adapter_.setWindowVisible(root_window_->isVisible());
         QObject::connect(root_window_, &QWindow::activeChanged, &tray_adapter_, [this]() {
             if (root_window_ && root_window_->isActive())
                 tray_adapter_.clearUnreadCount();
@@ -4567,6 +4574,13 @@ void QuickApplication::refreshTrayState() {
                                       record_view_model_adapter_.canStop(), record_view_model_adapter_.canPause(),
                                       record_view_model_adapter_.canResume(),
                                       record_view_model_.HasCompletedRecording());
+    // The tray menu's own two inputs, from the same sample. The blocked reason is
+    // handed over only where it describes the current refusal: a stale sentence
+    // left behind by a state that has moved on is worse than no row at all.
+    tray_adapter_.setLastRecordingAvailable(record_view_model_.HasCompletedRecording());
+    tray_adapter_.setBlockedReason(record_view_model_.state == UiRecordingState::Blocked
+                                       ? QString::fromStdWString(record_view_model_.capability_status_text)
+                                       : QString());
     // Also called directly, not only from the projection's own change signal: the
     // elapsed text moves on the metrics cadence without the state changing at all,
     // and the tray tooltip is the surface that shows it.
@@ -4804,7 +4818,6 @@ void QuickApplication::hideWindowToTray() {
     if (auto* chrome = root_window_->findChild<QuickWindowChrome*>())
         hidden_while_maximized_ = chrome->willOccupyScreenMaximized();
     root_window_->hide();
-    tray_adapter_.setWindowVisible(false);
 
     // No one-time "still running" notice. The window is only ever hidden by a
     // gesture that already MEANS "put this away" -- a minimize with the preference
@@ -4842,7 +4855,6 @@ void QuickApplication::restoreWindowFromTray() {
     }
     root_window_->raise();
     root_window_->requestActivate();
-    tray_adapter_.setWindowVisible(true);
     tray_adapter_.clearUnreadCount();
 }
 

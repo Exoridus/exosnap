@@ -44,6 +44,12 @@ on:
 # workflow_dispatch; no pull_request trigger — an in-progress 45 min advisory
 # job delayed auto-merge on every PR) — see that file's header for why it is a
 # separate workflow rather than a `schedule:` trigger on this one.
+#
+# Because push -> main no longer builds, main's sccache scope (the only scope
+# every PR can read from) would otherwise only get refreshed once a night by
+# advisory-checks.yml's debug-only build. .github/workflows/cache-warm.yml
+# builds both Ninja presets on every push to main instead, so the next PR's
+# first run starts from a warm cache rather than the nightly leftovers.
 # ---------------------------------------------------------------------------
 
 # NOTE: concurrency is intentionally set per-JOB below, not at the workflow
@@ -74,6 +80,13 @@ on:
 # contention. Ninja + MSVC needs the dev-cmd environment for cl.exe.
 env:
   SCCACHE_GHA_ENABLED: "true"
+  # A tag ref writes to its own scope, which nothing ever reads again (a tag is
+  # never rebuilt) — every object sccache would write there is pure write cost
+  # against the repository's shared 10 GB cache budget, evicting entries a PR
+  # could actually have hit. Read-only on tags gets whatever main last warmed
+  # without adding to the pile; PRs and main keep read-write so they still
+  # populate the scope the next run reads from.
+  SCCACHE_GHA_RW_MODE: ${{ startsWith(github.ref, 'refs/tags/') && 'READ_ONLY' || 'READ_WRITE' }}
   # The sccache server exits after its idle timeout (600 s by default), and a
   # `--show-stats` that outlives it silently starts a fresh server and reports
   # zeros rather than failing. Any job whose stats step sits behind a long

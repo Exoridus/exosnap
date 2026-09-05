@@ -238,6 +238,8 @@ qt_add_qml_module(exosnap
         TaskbarPresence.h
         TrayAdapter.cpp
         TrayAdapter.h
+        NativeMenuAppearance.cpp
+        NativeMenuAppearance.h
         # How QML addresses the rendered mark and the canonical beat.
         Brand.h
 )

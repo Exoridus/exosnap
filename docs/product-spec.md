@@ -1628,21 +1628,34 @@ release (0.11 per ADR 0022).
   and failed is a coral cross. What Explorer, the desktop and Start show is a different thing and does
   not change — that is the icon of the *file*, in the shipped accent, whatever the application is
   doing.
-- **Tray menu** — **Show window** while the window is hidden, the transport, **Open output folder**,
-  Notifications while any are unread, and Quit. Every entry carries a glyph, and the menu is drawn in
-  the application's own appearance rather than the system's: the palette alone does not reach it,
-  because Qt's native Windows menu style paints its ground from system colours, so the one Widgets
-  surface in the product is styled explicitly.
-  There is **no Hide entry**. Show earns its row by being the one visible way back from a hidden
-  window; hiding is already carried by the window's own controls, and a menu row for it was a second
-  name for a gesture the user has in front of them. The transport offers exactly what the state allows: **Start recording** while
-  idle, **Pause** and **Stop** while recording, **Resume** and **Stop** while paused. An action that
-  is not possible is hidden rather than shown-and-failing, except Start, which stays visible and
-  greyed while a recording is being prepared or saved — a control that vanishes reads as a bug, a
-  greyed one reads as a reason. **Open output folder** opens the configured recording destination in
-  Explorer and is offered in every state; if that folder does not exist, nothing is opened and
-  nothing is created — a missing destination is a settings problem, and Settings is where it is
-  reported.
+- **Tray menu** — in order: a **status row**, a **blocked-reason row**, the transport (**Start
+  recording**, **Pause**/**Resume recording**, **Stop recording**), **Show window**, **Open last
+  recording**, **Open output folder**, **Notifications**, and **Quit ExoSnap**, with separators after
+  the captions, after the transport and before Quit. Every entry that acts carries a glyph. The menu
+  is a **native Windows popup menu** and follows the application's own appearance: dark or light
+  ground with the chosen appearance, not a surface the product paints itself.
+  **The menu's shape does not change.** Every row is always there; a row the state does not allow is
+  **greyed under its own name** rather than removed. A menu is read as the list of what the
+  application can do, and an entry that is present in one state and absent in the next teaches
+  nothing about why — a control that vanishes reads as a bug, a greyed one reads as a reason. It also
+  means the pointer lands on the same row twice in a row.
+  The **status row** is a caption, not an action, and names the session in the same words the icon's
+  tooltip uses: *Ready*, *Recording 04:17* (with the elapsed clock while one is running), *Paused*,
+  *Finishing recording*, *Saved*, *Recording failed*. The **blocked-reason row** is the one row that
+  comes and goes: it appears only while a start is actually refused and only when the reason is
+  known, and shows that reason.
+  The transport is enabled by exactly what the state allows: Start while idle, Pause and Stop while
+  recording, Resume and Stop while paused; Start stays greyed rather than gone while a recording is
+  being prepared or saved. **Show window** sits below the transport, is always offered and always
+  brings the window to the front — from the tray, from behind another window, or from a minimized
+  taskbar button. There is still **no Hide entry**: hiding is already carried by the window's own
+  controls, and a menu row for it was a second name for a gesture the user has in front of them.
+  **Open last recording** opens the most recent finished recording on the Edit surface and is enabled
+  only once one exists. **Open output folder** opens the configured recording destination in Explorer
+  and is offered in every state; if that folder does not exist, nothing is opened and nothing is
+  created — a missing destination is a settings problem, and Settings is where it is reported.
+  **Notifications** is always offered — it opens the window and clears the unread count, which is
+  never the wrong thing to do — and carries the count in its label only while there is one.
 - **Clicking the tray icon** brings the window back; **double-clicking it** starts or stops a
   recording, the same gesture the global hotkey carries; **right-clicking it** opens the menu.
 - **Taskbar button** — the same transport as a thumbnail toolbar under the taskbar preview

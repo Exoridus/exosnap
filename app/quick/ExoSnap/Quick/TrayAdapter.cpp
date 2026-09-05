@@ -91,6 +91,20 @@ void TrayAdapter::setElapsedText(const QString& elapsed_text) {
     emit appearanceChanged();
 }
 
+void TrayAdapter::setBlockedReason(const QString& reason) {
+    if (blocked_reason_ == reason)
+        return;
+    blocked_reason_ = reason;
+    emit appearanceChanged();
+}
+
+void TrayAdapter::setLastRecordingAvailable(bool available) {
+    if (last_recording_available_ == available)
+        return;
+    last_recording_available_ = available;
+    emit appearanceChanged();
+}
+
 void TrayAdapter::setAppearance(const QString& appearance_id, const QString& accent_id) {
     if (appearance_id_ == appearance_id && accent_id_ == accent_id)
         return;
@@ -103,13 +117,6 @@ void TrayAdapter::setIconPixelSize(int px) {
     if (px <= 0 || icon_px_ == px)
         return;
     icon_px_ = px;
-    emit appearanceChanged();
-}
-
-void TrayAdapter::setWindowVisible(bool visible) {
-    if (window_visible_ == visible)
-        return;
-    window_visible_ = visible;
     emit appearanceChanged();
 }
 
@@ -139,43 +146,40 @@ QString TrayAdapter::iconSource() const {
     return ui::brand::ShellIconImageUrl(ui::brand::MarkImageId(request));
 }
 
-QString TrayAdapter::tooltip() const {
-    // "ExoSnap - Ready" / "ExoSnap - Recording 04:17" / "ExoSnap - Paused".
-    QString tip = QStringLiteral("ExoSnap \xE2\x80\x94 ");
-
+QString TrayAdapter::statusText() const {
     switch (state_.icon_state) {
-    case ShellIconState::Recording:
-        tip += tr("Recording");
+    case ShellIconState::Recording: {
+        QString text = tr("Recording");
         if (!elapsed_text_.isEmpty())
-            tip += QLatin1Char(' ') + elapsed_text_;
-        break;
+            text += QLatin1Char(' ') + elapsed_text_;
+        return text;
+    }
     case ShellIconState::Paused:
-        tip += tr("Paused");
-        break;
+        return tr("Paused");
     case ShellIconState::Saved:
-        tip += tr("Saved");
-        break;
+        return tr("Saved");
     case ShellIconState::Processing:
-        tip += tr("Finishing recording");
-        break;
+        return tr("Finishing recording");
     case ShellIconState::Error:
-        tip += tr("Recording failed");
-        break;
+        return tr("Recording failed");
     case ShellIconState::Idle:
-        tip += tr("Ready");
         break;
     }
-    return tip;
+    return tr("Ready");
 }
 
-bool TrayAdapter::showWindowVisible() const noexcept {
-    return !window_visible_;
+QString TrayAdapter::tooltip() const {
+    // "ExoSnap - Ready" / "ExoSnap - Recording 04:17" / "ExoSnap - Paused". The
+    // same phrase the menu's first row shows, so the two cannot drift apart.
+    return QStringLiteral("ExoSnap \xE2\x80\x94 ") + statusText();
 }
 
-QString TrayAdapter::showHideText() const {
-    // Still asked of the flag rather than fixed, so a row that is somehow shown
-    // while the window is visible cannot say the wrong thing.
-    return window_visible_ ? tr("Hide window") : tr("Show window");
+bool TrayAdapter::blockedReasonVisible() const {
+    return state_.phase == ShellPhase::Blocked && !blocked_reason_.isEmpty();
+}
+
+const QString& TrayAdapter::blockedReason() const noexcept {
+    return blocked_reason_;
 }
 
 QString TrayAdapter::glyphUrl(ui::brand::ShellGlyph glyph) const {
@@ -187,8 +191,12 @@ QString TrayAdapter::glyphUrl(ui::brand::ShellGlyph glyph) const {
     return ui::brand::ShellIconImageUrl(ui::brand::GlyphImageId(request));
 }
 
-QString TrayAdapter::showHideIcon() const {
+QString TrayAdapter::showWindowIcon() const {
     return glyphUrl(ui::brand::ShellGlyph::Window);
+}
+
+QString TrayAdapter::lastRecordingIcon() const {
+    return glyphUrl(ui::brand::ShellGlyph::Record);
 }
 
 QString TrayAdapter::outputFolderIcon() const {
@@ -203,16 +211,27 @@ QString TrayAdapter::quitIcon() const {
     return glyphUrl(ui::brand::ShellGlyph::Quit);
 }
 
-QVariantMap TrayAdapter::rowFor(ShellButton button, bool keep_visible_when_disabled) const {
+bool TrayAdapter::lastRecordingAvailable() const noexcept {
+    return last_recording_available_;
+}
+
+QVariantMap TrayAdapter::rowFor(ShellButton button, ShellAction fallback_action) const {
     const ShellButtonAppearance appearance = ShellButtonFor(button, state_);
+    // The menu keeps a fixed shape where the thumbnail strip does not. A strip
+    // is read as a row of controls and closes up around a missing one; a menu is
+    // read as a list of everything the application can do, and an entry that is
+    // absent in one state and present in the next teaches nothing about why.
+    // So a row the table hides is drawn under its default name, greyed.
+    const bool offered = appearance.visible && appearance.action != ShellAction::None;
+    const ShellAction action = offered ? appearance.action : fallback_action;
 
     QVariantMap row;
-    row.insert(QStringLiteral("visible"), appearance.visible && (appearance.enabled || keep_visible_when_disabled));
-    row.insert(QStringLiteral("enabled"), appearance.enabled);
-    row.insert(QStringLiteral("text"), ActionLabel(appearance.action));
+    row.insert(QStringLiteral("visible"), true);
+    row.insert(QStringLiteral("enabled"), offered && appearance.enabled);
+    row.insert(QStringLiteral("text"), ActionLabel(action));
 
     ShellGlyph glyph{};
-    if (GlyphForAction(appearance.action, glyph)) {
+    if (GlyphForAction(action, glyph)) {
         row.insert(QStringLiteral("icon"), glyphUrl(glyph));
     } else {
         row.insert(QStringLiteral("icon"), QString());
@@ -221,25 +240,19 @@ QVariantMap TrayAdapter::rowFor(ShellButton button, bool keep_visible_when_disab
 }
 
 QVariantMap TrayAdapter::recordItem() const {
-    // Record stays visible while it is refused: a start that is momentarily
-    // impossible has a reason, and a vanished entry does not.
-    return rowFor(ShellButton::Record, /*keep_visible_when_disabled=*/true);
+    return rowFor(ShellButton::Record, ShellAction::Start);
 }
 
 QVariantMap TrayAdapter::pauseResumeItem() const {
-    return rowFor(ShellButton::PauseResume, false);
+    return rowFor(ShellButton::PauseResume, ShellAction::Pause);
 }
 
 QVariantMap TrayAdapter::stopItem() const {
-    return rowFor(ShellButton::Stop, false);
+    return rowFor(ShellButton::Stop, ShellAction::Stop);
 }
 
 int TrayAdapter::unreadCount() const noexcept {
     return unread_count_;
-}
-
-bool TrayAdapter::notificationsVisible() const noexcept {
-    return unread_count_ > 0;
 }
 
 QString TrayAdapter::notificationsText() const {
@@ -255,13 +268,14 @@ void TrayAdapter::triggerTransport(TransportRow row) {
     emit shellActionRequested(appearance.action);
 }
 
-void TrayAdapter::triggerShowHide() {
-    // The label decides, from the same flag that wrote it.
-    if (window_visible_) {
-        emit hideWindowRequested();
-        return;
-    }
+void TrayAdapter::triggerShowWindow() {
     emit activateWindowRequested();
+}
+
+void TrayAdapter::triggerOpenLastRecording() {
+    if (!last_recording_available_)
+        return;
+    emit openLastRecordingRequested();
 }
 
 void TrayAdapter::triggerNotifications() {
