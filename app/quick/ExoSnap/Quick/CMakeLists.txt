@@ -325,6 +325,8 @@ target_sources(exosnap
         SettingsAutomationKeys.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsController.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsController.h
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/SessionLedger.cpp
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/SessionLedger.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsProbe.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsProbe.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/FixActionDispatcher.cpp
@@ -1467,8 +1469,12 @@ exosnap_add_gtest(
         # The live summary tiles, driven by the SAME fixtures the visual harness
         # seeds, so a capture and these assertions describe one thing.
         ${EXOSNAP_QUICK_TESTS_DIR}/test_diagnostics_live_tiles.cpp
+        # The per-session record of what was measured: the entry debounce and the
+        # permanence rule the ledger cards and the frozen session report rest on.
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_session_ledger.cpp
         ${PROJECT_SOURCE_DIR}/app/visual_tests/DiagnosticsLiveScenario.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsController.cpp
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/SessionLedger.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsProbe.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/FixActionDispatcher.cpp
     LIBRARIES
@@ -1608,6 +1614,7 @@ exosnap_add_gtest(
         LogsAdapter.cpp
         LogsAdapter.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsController.cpp
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/SessionLedger.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsProbe.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/FixActionDispatcher.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/LogViewPolicy.cpp
