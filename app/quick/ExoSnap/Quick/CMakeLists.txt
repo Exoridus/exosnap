@@ -76,6 +76,7 @@ qt_add_qml_module(exosnap
         ExoGlyph.qml
         ExoIssueCard.qml
         ExoKeyValueTable.qml
+        ExoLedgerCard.qml
         ExoLogView.qml
         ExoMenu.qml
         ExoMenuItem.qml
@@ -94,6 +95,7 @@ qt_add_qml_module(exosnap
         ExoSelect.qml
         ExoLevelMeter.qml
         ExoLevelMeterScale.qml
+        ExoSessionTimeline.qml
         ExoSettingRow.qml
         ExoSlider.qml
         ExoSparkline.qml
@@ -909,6 +911,10 @@ qt_add_qml_module(record_controls_qml_tests
         # The tile's head badge and codec chips draw a small tone-tinted pill,
         # same as the diagnostics id/Elev chips elsewhere.
         ExoBadge.qml
+        # The collapsed row's own disclosure re-uses the shared chevron rather
+        # than ExoDisclosure, so it needs the chevron type resolved too.
+        ExoLedgerCard.qml
+        ExoSessionTimeline.qml
         ExoSparkline.qml
         ExoStatusTile.qml
         # The shared overlay card and the two components it draws itself from.
