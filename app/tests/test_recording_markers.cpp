@@ -204,11 +204,11 @@ TEST_F(RecordingMarkerTest, AddMarkerHotkeyActionTyped) {
     EXPECT_GE(kHotkeyActionCount, 4);
 }
 
-// ── Test 12: AddMarker has no default binding ───────────────────────────────
+// ── Test 12: AddMarker's default binding ────────────────────────────────────
 
-TEST_F(RecordingMarkerTest, AddMarkerNoDefaultBinding) {
+TEST_F(RecordingMarkerTest, AddMarkerShipsWithItsAltShiftDefault) {
     const QKeySequence def = GlobalHotkeyService::DefaultBinding(HotkeyAction::AddMarker);
-    EXPECT_TRUE(def.isEmpty()) << "AddMarker must have no default binding per spec";
+    EXPECT_EQ(def, QKeySequence(QStringLiteral("Alt+Shift+M"))) << "M for Marker, in the Alt+Shift set";
 }
 
 // ── Test 13: AddMarker display name is correct ──────────────────────────────

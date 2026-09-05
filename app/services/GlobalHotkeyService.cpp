@@ -288,18 +288,43 @@ void GlobalHotkeyService::SaveToStrings(HotkeyBindings& out) const {
     }
 }
 
+// Alt+Shift+<letter>, one modifier pair for the whole set.
+//
+// The choice is a set of exclusions as much as a preference:
+//
+//  - The Alt+F-key row is out. NVIDIA holds F1, F2, F3, F8, F9, F10 and F12 of it,
+//    and on many keyboards the F row is shared with media keys behind an Fn toggle,
+//    so a binding there is neither free nor reliably reachable. Alt+F4 sitting in
+//    the middle of it is its own argument.
+//  - Ctrl+Alt is out because it IS AltGr. On a German layout Ctrl+Alt+Q types @ and
+//    Ctrl+Alt+E types the euro sign, and this product ships a German localization.
+//  - Ctrl+Shift is where AMD keeps E, S, I, O and M -- most of the letters that
+//    would be intuitive here.
+//  - Win+<anything> is out because Windows keeps taking combinations there, and it
+//    wins every dispute.
+//
+// Alt+Shift is left, and nothing in NVIDIA, AMD, the Xbox Game Bar, Steam, OBS or
+// Discord uses it. Its one known interaction is the input-language switch, which
+// fires when Alt+Shift is released with NO other key in between -- a letter in the
+// middle suppresses it. In games the crowded space is Alt/Shift/Ctrl plus a DIGIT,
+// not plus a letter.
+//
+// The letters are mnemonic first and one-handed second, which is the right order:
+// a shortcut that is remembered beats one that is merely comfortable, and the two
+// that sit further from the modifiers (Pause, Marker) are also the two nobody
+// presses under time pressure.
 QKeySequence GlobalHotkeyService::DefaultBinding(HotkeyAction action) {
     switch (action) {
     case HotkeyAction::ToggleRecording:
-        return QKeySequence(); // no default binding, per product decision
+        return QKeySequence(QStringLiteral("Alt+Shift+R"));
     case HotkeyAction::TogglePause:
-        return QKeySequence();
+        return QKeySequence(QStringLiteral("Alt+Shift+P"));
     case HotkeyAction::CaptureFrame:
-        return QKeySequence(); // no default binding per spec
+        return QKeySequence(QStringLiteral("Alt+Shift+S"));
     case HotkeyAction::AddMarker:
-        return QKeySequence(); // no default binding per spec
+        return QKeySequence(QStringLiteral("Alt+Shift+M"));
     case HotkeyAction::SplitRecording:
-        return QKeySequence(); // unset by default per SPLIT-RECORDING-R1
+        return QKeySequence(QStringLiteral("Alt+Shift+C"));
     }
     return {};
 }

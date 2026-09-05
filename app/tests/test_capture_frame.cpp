@@ -52,11 +52,11 @@ TEST_F(CaptureFrameTest, CaptureFrameActionIsTyped) {
     EXPECT_EQ(kHotkeyActionCount, 5);
 }
 
-// ── Test 2: No default binding for CaptureFrame ─────────────────────────────
+// ── Test 2: CaptureFrame's default binding ──────────────────────────────────
 
-TEST_F(CaptureFrameTest, CaptureFrameHasNoDefaultBinding) {
+TEST_F(CaptureFrameTest, CaptureFrameShipsWithItsAltShiftDefault) {
     const QKeySequence def = GlobalHotkeyService::DefaultBinding(HotkeyAction::CaptureFrame);
-    EXPECT_TRUE(def.isEmpty()) << "CaptureFrame must have no default binding per spec (hotkeys-view.md)";
+    EXPECT_EQ(def, QKeySequence(QStringLiteral("Alt+Shift+S"))) << "S for Snapshot, in the Alt+Shift set";
 }
 
 // ── Test 3: ActionDisplayName returns non-empty string ──────────────────────
@@ -89,11 +89,12 @@ struct FakeRegistrar : public IHotkeyRegistrar {
     }
 };
 
-TEST_F(CaptureFrameTest, ServiceInitializesCaptureFrameAsUnset) {
+TEST_F(CaptureFrameTest, ServiceInitializesCaptureFrameFromItsDefault) {
     GlobalHotkeyService svc;
     FakeRegistrar reg;
     (void)svc.SetRegistrar(&reg);
-    EXPECT_TRUE(svc.GetBinding(HotkeyAction::CaptureFrame).isEmpty());
+    EXPECT_EQ(svc.GetBinding(HotkeyAction::CaptureFrame),
+              GlobalHotkeyService::DefaultBinding(HotkeyAction::CaptureFrame));
 }
 
 // ── Test 6: CaptureFrame can be bound and unbound ───────────────────────────

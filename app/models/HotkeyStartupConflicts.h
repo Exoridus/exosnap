@@ -11,15 +11,17 @@
 //    take it. A binding that failed to register is dead weight -- it would
 //    swallow nothing, do nothing, and re-warn on every launch -- so it is
 //    dropped rather than kept.
-//  - No action ships with a non-empty default binding, so a binding that failed
-//    to register can only be one the user chose themselves. It worked when they
-//    set it, so losing it is always worth telling them about, with a Rebind
-//    notification that deep-links to Settings -> Hotkeys.
+//  - A binding the user chose themselves worked when they chose it, so losing it
+//    is worth telling them about, with a Rebind notification that deep-links to
+//    Settings -> Hotkeys.
+//  - A binding still at its shipped default is dropped SILENTLY. The user never
+//    asked for that combination, and a machine where NVIDIA or another tool
+//    already holds it would otherwise greet every launch with a warning about a
+//    shortcut its owner never picked. The log line remains, for a report.
 //
-// The default/custom split below has to be computed BEFORE anything is unset --
+// The default/custom split below has to be computed BEFORE anything is unset:
 // unsetting clears the binding, after which every action reads as "at default"
-// and the distinction is gone -- even though, with no shipped default to collide
-// with, the default branch has no case left where it applies.
+// and the distinction is gone.
 
 #include "services/GlobalHotkeyService.h"
 
