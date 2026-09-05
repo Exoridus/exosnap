@@ -1752,6 +1752,7 @@ exosnap_add_gtest(
     TEST_PREFIX quick_shell_surface.
     SOURCES
         ${EXOSNAP_QUICK_TESTS_DIR}/test_shell_surfaces.cpp
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_thumb_icon_appearance.cpp
         ShellPresenceAdapter.cpp
         ShellPresenceAdapter.h
         TaskbarPresence.cpp

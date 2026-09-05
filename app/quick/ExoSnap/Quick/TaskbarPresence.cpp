@@ -1,5 +1,8 @@
 #include "TaskbarPresence.h"
 
+#include <QGuiApplication>
+#include <QStyleHints>
+
 #include "diagnostics/AppLog.h"
 
 #include <QCoreApplication>
@@ -41,22 +44,12 @@ constexpr qint32 kSucceeded = 0;
         LoadImageW(instance, MAKEINTRESOURCEW(resource_id), IMAGE_ICON, size, size, LR_DEFAULTCOLOR | LR_SHARED));
 }
 
-[[nodiscard]] int ThumbIconResource(ShellAction action) noexcept {
-    switch (action) {
-    case ShellAction::Start:
-        return IDI_EXOSNAP_THUMB_RECORD;
-    case ShellAction::Pause:
-        return IDI_EXOSNAP_THUMB_PAUSE;
-    case ShellAction::Resume:
-        return IDI_EXOSNAP_THUMB_RESUME;
-    case ShellAction::Stop:
-        return IDI_EXOSNAP_THUMB_STOP;
-    case ShellAction::OpenOutputFolder:
-        return IDI_EXOSNAP_THUMB_FOLDER;
-    case ShellAction::None:
-        break;
-    }
-    return IDI_EXOSNAP_THUMB_RECORD;
+// True when Windows is drawing its chrome light. The SYSTEM appearance, not the
+// application's: the thumbnail strip belongs to the taskbar, so the ground these
+// glyphs sit on follows Windows even when the product is set to dark.
+[[nodiscard]] bool SystemChromeIsLight() {
+    return QGuiApplication::styleHints() != nullptr &&
+           QGuiApplication::styleHints()->colorScheme() == Qt::ColorScheme::Light;
 }
 
 [[nodiscard]] QString ThumbTooltip(ShellAction action) {
@@ -94,7 +87,7 @@ constexpr qint32 kSucceeded = 0;
 void FillThumbButton(THUMBBUTTON& out, const ThumbButtonSpec& spec, int icon_size) {
     out.dwMask = static_cast<THUMBBUTTONMASK>(THB_ICON | THB_TOOLTIP | THB_FLAGS);
     out.iId = static_cast<UINT>(spec.command_id);
-    out.hIcon = SharedIcon(ThumbIconResource(spec.action), icon_size);
+    out.hIcon = SharedIcon(ThumbIconResourceFor(spec.action, SystemChromeIsLight()), icon_size);
 
     const QString tip = ThumbTooltip(spec.action);
     // szTip is a fixed 260-wchar buffer, and lstrcpynW is the documented way to
@@ -207,6 +200,41 @@ std::unique_ptr<TaskbarShell> MakePlatformTaskbarShell() {
 }
 
 TaskbarPresence::TaskbarPresence(QObject* parent) : QObject(parent), shell_(MakePlatformTaskbarShell()) {
+    // The glyph set is chosen per system appearance (see ThumbIconResource), and a
+    // choice made once at registration would be wrong for the rest of the session
+    // the moment Windows switches. The buttons cannot be re-ADDED -- that is once
+    // per taskbar button -- so the existing set is updated in place with icons
+    // resolved anew.
+    if (QGuiApplication::styleHints() != nullptr) {
+        QObject::connect(QGuiApplication::styleHints(), &QStyleHints::colorSchemeChanged, this,
+                         [this]() { refreshThumbIcons(); });
+    }
+}
+
+int ThumbIconResourceFor(ShellAction action, bool light_chrome) noexcept {
+    switch (action) {
+    case ShellAction::Start:
+        return light_chrome ? IDI_EXOSNAP_THUMB_RECORD_LIGHT : IDI_EXOSNAP_THUMB_RECORD;
+    case ShellAction::Pause:
+        return light_chrome ? IDI_EXOSNAP_THUMB_PAUSE_LIGHT : IDI_EXOSNAP_THUMB_PAUSE;
+    case ShellAction::Resume:
+        return light_chrome ? IDI_EXOSNAP_THUMB_RESUME_LIGHT : IDI_EXOSNAP_THUMB_RESUME;
+    case ShellAction::Stop:
+        return light_chrome ? IDI_EXOSNAP_THUMB_STOP_LIGHT : IDI_EXOSNAP_THUMB_STOP;
+    case ShellAction::OpenOutputFolder:
+        return light_chrome ? IDI_EXOSNAP_THUMB_FOLDER_LIGHT : IDI_EXOSNAP_THUMB_FOLDER;
+    case ShellAction::None:
+        break;
+    }
+    return light_chrome ? IDI_EXOSNAP_THUMB_RECORD_LIGHT : IDI_EXOSNAP_THUMB_RECORD;
+}
+
+void TaskbarPresence::refreshThumbIcons() {
+    if (!ready_ || !shell_available_ || shell_ == nullptr || hwnd_ == nullptr || !buttons_registered_)
+        return;
+    // Nothing about the transport changed, so applyPresence() would do nothing:
+    // its guard compares desired_ against applied_. The icons are what changed.
+    reportResult("ThumbBarUpdateButtons (appearance)", shell_->updateButtons(hwnd_, ButtonsFor(desired_)));
 }
 
 TaskbarPresence::~TaskbarPresence() = default;

@@ -52,6 +52,15 @@ inline constexpr int kThumbButtonClickedNotification = 0x1800;
 
 // One registered thumbnail button. `action` is the button's meaning and survives
 // being greyed -- it is what the icon and the tooltip are drawn from.
+// Resource id of the thumbnail glyph for an action, per system appearance.
+//
+// Pure and declared here so a test can hold it to both halves: every action needs
+// an entry in BOTH sets, and the two must differ -- a light-chrome entry that
+// falls back to the dark glyph is the defect this pairing exists to prevent (the
+// amber pause mark on light grey). `light_chrome` refers to the SYSTEM appearance,
+// because the strip is drawn by the taskbar and not by this application.
+[[nodiscard]] int ThumbIconResourceFor(ShellAction action, bool light_chrome) noexcept;
+
 struct ThumbButtonSpec {
     int command_id = 0;
     ShellAction action = ShellAction::None;
@@ -88,6 +97,11 @@ class TaskbarPresence : public QObject {
     // Replaces the platform calls. An instance seam rather than a global so two
     // tests can run concurrently.
     void setShellForTest(std::unique_ptr<TaskbarShell> shell);
+
+    // Re-pushes the thumbnail buttons with icons resolved for the CURRENT system
+    // appearance. Connected to the system colour-scheme change; a no-op before the
+    // buttons are registered.
+    void refreshThumbIcons();
 
     // The shell window's native handle, as the chrome reports it. A handle whose
     // identity changed drops readiness and the applied state with it; the same

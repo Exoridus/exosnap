@@ -42,6 +42,11 @@ class TrayAdapter : public QObject {
 
     // "Show window" / "Hide window" -- one entry, and the label decides which of
     // the two signals it raises. It used to raise the window under both.
+    // Only offered while the window is HIDDEN, where it is the one visible way
+    // back. Hiding is not something this menu does: the window's own close button
+    // and the shell already do it, and a menu row for it was a second name for a
+    // gesture the user has in front of them.
+    Q_PROPERTY(bool showWindowVisible READ showWindowVisible NOTIFY appearanceChanged FINAL)
     Q_PROPERTY(QString showHideText READ showHideText NOTIFY appearanceChanged FINAL)
 
     // The non-transport entries' glyphs. Constant shapes, but not constant URLs:
@@ -114,6 +119,7 @@ class TrayAdapter : public QObject {
     [[nodiscard]] bool active() const noexcept;
     [[nodiscard]] QString iconSource() const;
     [[nodiscard]] QString tooltip() const;
+    [[nodiscard]] bool showWindowVisible() const noexcept;
     [[nodiscard]] QString showHideText() const;
     [[nodiscard]] QString showHideIcon() const;
     [[nodiscard]] QString outputFolderIcon() const;

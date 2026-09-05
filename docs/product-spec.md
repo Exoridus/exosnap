@@ -1621,9 +1621,14 @@ release (0.11 per ADR 0022).
   and failed is a coral cross. What Explorer, the desktop and Start show is a different thing and does
   not change — that is the icon of the *file*, in the shipped accent, whatever the application is
   doing.
-- **Tray menu** — Show/Hide window, the transport, **Open output folder**, Notifications while any are
-  unread, and Quit. Every entry carries a glyph, and the menu is drawn in the application's own
-  appearance rather than the system's. The transport offers exactly what the state allows: **Start recording** while
+- **Tray menu** — **Show window** while the window is hidden, the transport, **Open output folder**,
+  Notifications while any are unread, and Quit. Every entry carries a glyph, and the menu is drawn in
+  the application's own appearance rather than the system's: the palette alone does not reach it,
+  because Qt's native Windows menu style paints its ground from system colours, so the one Widgets
+  surface in the product is styled explicitly.
+  There is **no Hide entry**. Show earns its row by being the one visible way back from a hidden
+  window; hiding is already carried by the window's own controls, and a menu row for it was a second
+  name for a gesture the user has in front of them. The transport offers exactly what the state allows: **Start recording** while
   idle, **Pause** and **Stop** while recording, **Resume** and **Stop** while paused. An action that
   is not possible is hidden rather than shown-and-failing, except Start, which stays visible and
   greyed while a recording is being prepared or saved — a control that vanishes reads as a bug, a
@@ -1643,6 +1648,14 @@ release (0.11 per ADR 0022).
   surface rather than sharing the bar, and a failed operation leaves the bar red until the next one
   starts. Taskbar integration is a convenience and never a dependency: if Windows refuses any part of
   it, the buttons and badge are simply absent and recording is unaffected.
+  The strip's ground is drawn by Windows and follows the **system** appearance, so its glyphs are
+  drawn in the state colours of that appearance rather than the application's: the dark palette
+  lightens its state colours for a dark ground, and using them on a light strip left the amber pause
+  mark short of the contrast the palette is measured for. A system appearance change mid-session
+  re-pushes the buttons with glyphs resolved anew, because the strip cannot be registered twice.
+  This is the one place where a product surface follows Windows instead of the chosen appearance, and
+  it does so because the surface underneath it is Windows'.
+
 - **Notification hub** — the canonical notification center is a **bell icon with a notification hub
   panel in the app header**. **The hub is the record: every notification lands there**, persists until
   dismissed, and keeps its action (recover, undo, show in folder, …). The **system-tray icon

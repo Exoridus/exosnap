@@ -22,3 +22,12 @@
 #define IDI_EXOSNAP_THUMB_RESUME 122
 #define IDI_EXOSNAP_THUMB_STOP 123
 #define IDI_EXOSNAP_THUMB_FOLDER 124
+// The same five glyphs in the LIGHT appearance's state colours. The strip is
+// Windows chrome and its ground follows the system appearance, so a glyph coloured
+// for a dark ground loses contrast on a light one -- the amber pause mark worst of
+// all. Which set is registered is decided at runtime; see TaskbarPresence.
+#define IDI_EXOSNAP_THUMB_RECORD_LIGHT 130
+#define IDI_EXOSNAP_THUMB_PAUSE_LIGHT 131
+#define IDI_EXOSNAP_THUMB_RESUME_LIGHT 132
+#define IDI_EXOSNAP_THUMB_STOP_LIGHT 133
+#define IDI_EXOSNAP_THUMB_FOLDER_LIGHT 134
