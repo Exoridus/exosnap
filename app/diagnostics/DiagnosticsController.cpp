@@ -547,6 +547,57 @@ Verdict ComputeVerdict(const DiagnosticChecklist& recommendations, int cap_passe
     return verdict;
 }
 
+Verdict ComputeRecordingVerdict(const DiagnosticChecklist& live_results, const SessionLedger& ledger, double now_s) {
+    Verdict verdict;
+    verdict.recording = true;
+
+    for (const auto& result : live_results.results) {
+        if (result.tier == DiagnosticTier::Blocker)
+            ++verdict.blockers;
+    }
+    if (verdict.blockers > 0) {
+        verdict.state = VerdictState::Blocked;
+        verdict.headline = verdict.blockers == 1 ? std::string("Recording ") + kDash + " 1 blocking problem"
+                                                 : std::string("Recording ") + kDash + " " +
+                                                       std::to_string(verdict.blockers) + " blocking problems";
+        verdict.subline = "See the cards below.";
+        return verdict;
+    }
+
+    const std::vector<LedgerEntry>& entries = ledger.entries();
+    verdict.notices = static_cast<int>(entries.size());
+    if (entries.empty()) {
+        verdict.state = VerdictState::Ready;
+        verdict.headline = std::string("Recording ") + kDash + " no problems measured";
+        verdict.subline = "Every measured check has stayed inside its budget this session.";
+        return verdict;
+    }
+
+    const int active = ledger.activeCount();
+    verdict.state = VerdictState::Warn;
+    // Counts only. A headline that moved with the measurement would rewrite
+    // itself twice a second on a band the reader is trying to read.
+    verdict.headline = std::string("Recording ") + kDash + " " + std::to_string(verdict.notices) +
+                       (verdict.notices == 1 ? " problem observed" : " problems observed") +
+                       (active > 0 ? ", " + std::to_string(active) + " active" : std::string(", quiet now"));
+
+    std::string subline;
+    for (const LedgerEntry& entry : entries) {
+        if (entry.active)
+            subline = Join(subline, entry.title);
+    }
+    if (subline.empty()) {
+        const auto last =
+            std::max_element(entries.begin(), entries.end(),
+                             [](const LedgerEntry& a, const LedgerEntry& b) { return a.last_seen_s < b.last_seen_s; });
+        subline = last->title;
+        if (now_s > last->last_seen_s)
+            subline += ", last seen " + Number(now_s - last->last_seen_s, 0) + " s ago";
+    }
+    verdict.subline = std::move(subline);
+    return verdict;
+}
+
 TopIssues BuildTopIssues(const capability::ResolveResult& profile_validation,
                          const DiagnosticChecklist& recommendations, bool hotkeys_ok,
                          const std::string& hotkeys_summary) {
@@ -1137,8 +1188,23 @@ void DiagnosticsController::SetPresentSample(std::optional<PresentSample> sample
 
 void DiagnosticsController::SetLiveSnapshot(const exosnap::engine::RecordingDiagnosticsSnapshot& snapshot) {
     live_ = snapshot;
-    if (!liveRecording())
+    const bool recording = liveRecording();
+    if (!recording)
         pipeline_.Reset();
+    // Freeze on the lifecycle edge rather than on the next Evaluate(): the final
+    // snapshot carries the elapsed time the last occurrence must be closed at, and
+    // a consumer reading the frozen ledger after Stop may never call Evaluate().
+    if (was_recording_ && !recording)
+        ledger_.Freeze(live_.elapsed_seconds);
+    was_recording_ = recording;
+}
+
+const SessionLedger& DiagnosticsController::ledger() const noexcept {
+    return ledger_;
+}
+
+void DiagnosticsController::FreezeLedger() {
+    ledger_.Freeze(live_.elapsed_seconds);
 }
 
 bool DiagnosticsController::dataReady() const noexcept {
@@ -1240,7 +1306,19 @@ DiagnosticsSnapshot DiagnosticsController::Evaluate() {
     last_facts_ = facts;
     const int cap_passes = CountAvailableCapabilities(config_.cap_summary);
 
-    out.verdict = ComputeVerdict(recommendations, cap_passes, true);
+    if (liveRecording()) {
+        if (live_.session_generation != ledger_.generation())
+            ledger_.Reset(live_.session_generation);
+        ledger_.Observe(recommendations.results, live_.elapsed_seconds);
+        out.verdict = ComputeRecordingVerdict(recommendations, ledger_, live_.elapsed_seconds);
+        out.verdict.cap_passes = cap_passes;
+    } else {
+        // After Stop the band returns to readiness and says nothing about the
+        // session; the frozen ledger below is where the session's story lives.
+        out.verdict = ComputeVerdict(recommendations, cap_passes, true);
+    }
+    out.ledger = ledger_.entries();
+    out.ledger_active = ledger_.activeCount();
 
     ReadinessTileInputs tile_inputs;
     tile_inputs.data_ready = true;

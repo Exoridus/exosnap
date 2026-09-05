@@ -7,8 +7,15 @@
 #include "diagnostics/DiagnosticsController.h"
 #include "diagnostics/DiagnosticsProbe.h"
 #include "diagnostics/FixActionDispatcher.h"
+#include "diagnostics/SessionLedger.h"
+#include "visual_tests/DiagnosticsLiveScenario.h"
 
 #include <gtest/gtest.h>
+
+#include <algorithm>
+#include <cstddef>
+#include <string>
+#include <vector>
 
 using namespace exosnap;
 using namespace exosnap::diagnostics;
@@ -29,6 +36,35 @@ DiagnosticChecklist MakeChecklist(std::vector<DiagnosticResult> results) {
     DiagnosticChecklist checklist;
     checklist.results = std::move(results);
     return checklist;
+}
+
+DiagnosticResult LedgerProblem(const std::string& id, double value, double budget) {
+    DiagnosticResult result =
+        MakeResult(id, DiagnosticTier::MeasuredProblem, DiagnosticSeverity::Notice, id + " title");
+    result.measured_value = value;
+    result.budget_value = budget;
+    result.value_unit = "ms";
+    return result;
+}
+
+// A ledger holding `ids` as entered entries, with everything past `active_count`
+// gone quiet again. Two observations per id: the entry debounce is the ledger's
+// own contract and is pinned in its own test file.
+SessionLedger LedgerWith(const std::vector<std::string>& ids, size_t active_count) {
+    SessionLedger ledger;
+    ledger.Reset(1);
+    std::vector<DiagnosticResult> all;
+    for (const std::string& id : ids)
+        all.push_back(LedgerProblem(id, 9.0, 8.0));
+    ledger.Observe(all, 1.0);
+    ledger.Observe(all, 1.5);
+    ledger.Observe({all.begin(), all.begin() + static_cast<ptrdiff_t>(active_count)}, 2.0);
+    return ledger;
+}
+
+const LedgerEntry* FindEntry(const std::vector<LedgerEntry>& entries, const std::string& id) {
+    const auto it = std::find_if(entries.begin(), entries.end(), [&](const LedgerEntry& e) { return e.id == id; });
+    return it == entries.end() ? nullptr : &*it;
 }
 
 } // namespace
@@ -470,4 +506,129 @@ TEST(FixActionDispatch, AssistedFixesResolveToASettingsSection) {
     EXPECT_EQ(SettingsSectionFor(ResolveAssistedFix("fix.output.fat32_folder").outcome), "settings/output");
     EXPECT_EQ(SettingsSectionFor(ResolveAssistedFix("fix.container.mkv").outcome), "settings/format");
     EXPECT_FALSE(ResolveAssistedFix("").handled());
+}
+
+// ── Recording verdict: the ledger, not the current checklist ────────────────────
+
+TEST(DiagnosticsRecordingVerdict, EmptyLedgerIsReadyWhileRecording) {
+    SessionLedger ledger;
+    ledger.Reset(1);
+    const Verdict verdict = ComputeRecordingVerdict({}, ledger);
+    EXPECT_EQ(verdict.state, VerdictState::Ready);
+    EXPECT_TRUE(verdict.recording);
+    EXPECT_EQ(verdict.headline, "Recording \xe2\x80\x94 no problems measured");
+}
+
+TEST(DiagnosticsRecordingVerdict, LedgerEntriesWarnAndCountActive) {
+    const SessionLedger ledger = LedgerWith({"rec.001", "rec.disk.writestall"}, /*active_count=*/1);
+    const Verdict verdict = ComputeRecordingVerdict({}, ledger, /*now_s=*/2.0);
+    EXPECT_EQ(verdict.state, VerdictState::Warn);
+    EXPECT_EQ(verdict.notices, 2);
+    EXPECT_EQ(verdict.headline, "Recording \xe2\x80\x94 2 problems observed, 1 active");
+    // The subline names what is happening NOW, which is the one thing the count
+    // in the headline cannot say.
+    EXPECT_NE(verdict.subline.find("rec.001 title"), std::string::npos);
+}
+
+TEST(DiagnosticsRecordingVerdict, AQuietLedgerSaysSoAndNamesTheLastProblem) {
+    const SessionLedger ledger = LedgerWith({"rec.001"}, /*active_count=*/0);
+    const Verdict verdict = ComputeRecordingVerdict({}, ledger, /*now_s=*/12.0);
+    EXPECT_EQ(verdict.state, VerdictState::Warn);
+    EXPECT_EQ(verdict.headline, "Recording \xe2\x80\x94 1 problem observed, quiet now");
+    EXPECT_NE(verdict.subline.find("rec.001 title"), std::string::npos);
+    EXPECT_NE(verdict.subline.find("last seen"), std::string::npos);
+}
+
+TEST(DiagnosticsRecordingVerdict, ABlockerInTheLiveChecklistWins) {
+    const SessionLedger ledger = LedgerWith({"rec.001", "rec.disk.writestall"}, /*active_count=*/2);
+    const DiagnosticChecklist live = MakeChecklist({
+        MakeResult("rec.capture.adapter_mismatch", DiagnosticTier::Blocker, DiagnosticSeverity::Blocker, "blocked"),
+    });
+    const Verdict verdict = ComputeRecordingVerdict(live, ledger, /*now_s=*/2.0);
+    EXPECT_EQ(verdict.state, VerdictState::Blocked);
+    EXPECT_EQ(verdict.blockers, 1);
+}
+
+TEST(DiagnosticsRecordingVerdict, HeadlineOnlyChangesWithTheCounts) {
+    SessionLedger mild;
+    mild.Reset(1);
+    mild.Observe({LedgerProblem("rec.001", 9.0, 8.0)}, 1.0);
+    mild.Observe({LedgerProblem("rec.001", 9.0, 8.0)}, 1.5);
+
+    SessionLedger severe;
+    severe.Reset(1);
+    severe.Observe({LedgerProblem("rec.001", 44.0, 8.0)}, 1.0);
+    severe.Observe({LedgerProblem("rec.001", 91.0, 8.0)}, 1.5);
+
+    // The band must not flicker on every measurement. Only the counts move it.
+    EXPECT_EQ(ComputeRecordingVerdict({}, mild, 1.5).headline, ComputeRecordingVerdict({}, severe, 1.5).headline);
+}
+
+namespace {
+
+DiagnosticsController::Config MinimalConfig() {
+    DiagnosticsController::Config config;
+    config.caps.video_codecs[capability::VideoCodec::Av1] = {capability::SupportLevel::Available, ""};
+    config.caps.audio_codecs[capability::AudioCodec::Opus] = {capability::SupportLevel::Available, ""};
+    config.hotkeys_ok = true;
+    return config;
+}
+
+exosnap::engine::RecordingDiagnosticsSnapshot JudderSnapshot(double elapsed_s) {
+    exosnap::engine::RecordingDiagnosticsSnapshot snapshot =
+        visual::MakeDiagnosticsLiveSnapshot(QStringLiteral("judder"));
+    // The fixture sits at 7.9 ms, just under the 8 ms threshold: the judder check
+    // has to actually fire for the ledger to have anything to record.
+    snapshot.capture.source_present_jitter_ms = 9.0;
+    snapshot.elapsed_seconds = elapsed_s;
+    return snapshot;
+}
+
+} // namespace
+
+TEST(DiagnosticsController, EvaluateFeedsTheLedgerOnlyWhileRecording) {
+    DiagnosticsController controller;
+    controller.SetConfig(MinimalConfig());
+
+    controller.SetLiveSnapshot(JudderSnapshot(10.0));
+    DiagnosticsSnapshot first = controller.Evaluate();
+    // One evaluation is a spike, and a spike is not a problem.
+    EXPECT_EQ(FindEntry(first.ledger, "rec.001"), nullptr);
+
+    controller.SetLiveSnapshot(JudderSnapshot(10.5));
+    DiagnosticsSnapshot second = controller.Evaluate();
+    const LedgerEntry* entry = FindEntry(second.ledger, "rec.001");
+    ASSERT_NE(entry, nullptr);
+    EXPECT_TRUE(entry->active);
+    EXPECT_GE(second.ledger_active, 1);
+    EXPECT_DOUBLE_EQ(entry->first_seen_s, 10.0);
+
+    exosnap::engine::RecordingDiagnosticsSnapshot done = JudderSnapshot(11.0);
+    done.lifecycle = exosnap::engine::DiagnosticsLifecycle::Completed;
+    controller.SetLiveSnapshot(done);
+    DiagnosticsSnapshot after = controller.Evaluate();
+    const LedgerEntry* frozen = FindEntry(after.ledger, "rec.001");
+    ASSERT_NE(frozen, nullptr) << "the ledger is frozen at Stop, not emptied";
+    EXPECT_FALSE(frozen->active);
+    EXPECT_DOUBLE_EQ(frozen->occurrences.back().end_s, 11.0);
+    EXPECT_EQ(after.ledger_active, 0);
+}
+
+TEST(DiagnosticsController, ANewSessionGenerationResetsTheLedger) {
+    DiagnosticsController controller;
+    controller.SetConfig(MinimalConfig());
+    controller.SetLiveSnapshot(JudderSnapshot(10.0));
+    const DiagnosticsSnapshot spike = controller.Evaluate();
+    EXPECT_EQ(FindEntry(spike.ledger, "rec.001"), nullptr);
+    controller.SetLiveSnapshot(JudderSnapshot(10.5));
+    const DiagnosticsSnapshot entered = controller.Evaluate();
+    ASSERT_NE(FindEntry(entered.ledger, "rec.001"), nullptr);
+
+    exosnap::engine::RecordingDiagnosticsSnapshot next = JudderSnapshot(0.5);
+    next.session_generation = 2;
+    controller.SetLiveSnapshot(next);
+    const DiagnosticsSnapshot fresh = controller.Evaluate();
+    EXPECT_EQ(controller.ledger().generation(), 2u);
+    // The new session starts from nothing, debounce included.
+    EXPECT_EQ(FindEntry(fresh.ledger, "rec.001"), nullptr);
 }

@@ -6,6 +6,7 @@
 #include "FilesystemProvider.h"
 #include "PresentProvider.h"
 #include "RecommendationEngine.h"
+#include "SessionLedger.h"
 #include "WindowTargetFacts.h"
 
 #include <capability/audio_ui_state.h>
@@ -54,6 +55,9 @@ struct Verdict {
     // chip and must never turn the verdict amber (the honesty rail).
     int notices = 0;
     int cap_passes = 0;
+    // True when this verdict reports on a running recording rather than on
+    // readiness. The two answer different questions and the band says so.
+    bool recording = false;
 };
 
 // ── Issue cards + tips ──────────────────────────────────────────────────────────
@@ -333,6 +337,16 @@ class RefreshThrottle {
 
 [[nodiscard]] Verdict ComputeVerdict(const DiagnosticChecklist& recommendations, int cap_passes, bool data_ready);
 
+// The verdict while a recording runs. It reports the SESSION, not the instant: a
+// problem that fired once and went quiet still counts, because a recording is
+// judged by what happened to it and not by what is happening in this half second.
+// Only a Tier-1 blocker in the live checklist overrides the ledger.
+//
+// `now_s` is the session-relative time of the evaluation, used only to say how
+// long ago the last quiet problem was seen.
+[[nodiscard]] Verdict ComputeRecordingVerdict(const DiagnosticChecklist& live_results, const SessionLedger& ledger,
+                                              double now_s = 0.0);
+
 [[nodiscard]] TopIssues BuildTopIssues(const capability::ResolveResult& profile_validation,
                                        const DiagnosticChecklist& recommendations, bool hotkeys_ok,
                                        const std::string& hotkeys_summary);
@@ -352,6 +366,10 @@ struct DiagnosticsSnapshot {
     std::vector<IssueCard> cards;
     std::vector<TipEntry> tips;
     std::vector<KeyValueRow> environment_rows;
+    // The session ledger as of this pass. Empty while idle; frozen (nothing
+    // active) once the recording has stopped, and kept until the next session.
+    std::vector<LedgerEntry> ledger;
+    int ledger_active = 0;
 };
 
 // Owns the diagnostics inputs and produces the view snapshot. Deliberately free of
@@ -445,6 +463,15 @@ class DiagnosticsController {
     // True while the last live snapshot is in the recording or paused lifecycle.
     [[nodiscard]] bool liveRecording() const noexcept;
 
+    // What this recording session has measured so far. Reset when a new session
+    // generation arrives and frozen when the lifecycle leaves recording.
+    [[nodiscard]] const SessionLedger& ledger() const noexcept;
+
+    // Closes the ledger's open occurrences. Called automatically when the live
+    // lifecycle leaves recording; exposed so a caller that ends a session without
+    // a further snapshot can still close it.
+    void FreezeLedger();
+
   private:
     Config config_;
     ProbeResult probe_;
@@ -472,6 +499,10 @@ class DiagnosticsController {
     // rendered surface answer from one pass.
     DiagnosticChecklist last_checklist_;
     std::vector<DiagnosticResult> last_facts_;
+    SessionLedger ledger_;
+    // The lifecycle edge the freeze hangs off. Without it, an idle snapshot that
+    // arrives twice would close occurrences a second time at a later timestamp.
+    bool was_recording_ = false;
     PipelineCardBuilder pipeline_;
 };
 
