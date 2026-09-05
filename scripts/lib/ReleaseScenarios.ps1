@@ -818,6 +818,12 @@ function Get-ReleaseScenarioCatalog {
             # monitor and then stops repainting, which is the one shape the product
             # reports (docs/product-spec.md). REL-CAP-QUIET-001 covers the silent case.
             $stallAfter = 8
+            # The previous scenario's probe carries the same window title; see
+            # Wait-ReleaseProbeGone.
+            Wait-ReleaseProbeGone -ProcessName 'probe_stall_window'
+            # ...and the app's window LIST has to lose it too; see
+            # Wait-ReleaseWindowTargetGone for why killing the process is not enough.
+            Wait-ReleaseWindowTargetGone -Connection $conn -TitleFilter 'ExoSnap stall probe'
             $probeProcess = Start-Process -FilePath $probe -PassThru -WindowStyle Normal `
                 -ArgumentList @('--mode', 'freeze', '--stall-after', "$stallAfter", '--seconds', '90')
             try {
@@ -910,6 +916,12 @@ function Get-ReleaseScenarioCatalog {
             $session = & $ctx.EnsureSession
             $conn = $session.Connection
             $stallAfter = 8
+            # The previous scenario's probe carries the same window title; see
+            # Wait-ReleaseProbeGone.
+            Wait-ReleaseProbeGone -ProcessName 'probe_stall_window'
+            # ...and the app's window LIST has to lose it too; see
+            # Wait-ReleaseWindowTargetGone for why killing the process is not enough.
+            Wait-ReleaseWindowTargetGone -Connection $conn -TitleFilter 'ExoSnap stall probe'
             $probeProcess = Start-Process -FilePath $probe -PassThru -WindowStyle Normal `
                 -ArgumentList @('--mode', 'minimise', '--stall-after', "$stallAfter", '--seconds', '90')
             try {
@@ -929,6 +941,12 @@ function Get-ReleaseScenarioCatalog {
                         Message      = "the probe window was never selectable (source stayed '$sourceName')"
                     }
                 }
+                # Everything the hub already holds. The hub is a permanent record,
+                # so "is there a stall notice" can only be asked about entries that
+                # did not exist before this recording.
+                $notificationBaseline = @(Get-ReleaseNotificationEntry `
+                        -Snapshot (Invoke-LiveVerifyCommand -Connection $conn -Command 'notifications.snapshot').result |
+                    ForEach-Object { $_.sequence })
                 [void](Invoke-LiveVerifyCommand -Connection $conn -Command 'record.start')
                 Start-Sleep -Seconds ($stallAfter + 13)
 
@@ -952,8 +970,16 @@ function Get-ReleaseScenarioCatalog {
                         Evidence     = $evidence
                     }
                 }
+                # TITLE only, and only entries raised since this scenario started.
+                # Matching title AND body caught the SAVED notification of the
+                # previous scenario, whose body is the output filename -- and that
+                # filename contains the probe's window title, "ExoSnap stall probe".
+                # The gate then reported "a minimized window raised 'Recording
+                # saved'", which was true about the string and false about the
+                # product.
                 $stall = @(Get-ReleaseNotificationEntry -Snapshot $notifications |
-                    Where-Object { "$($_.title) $($_.body)" -match 'stall|no frame' }) | Select-Object -First 1
+                    Where-Object { $_.sequence -notin $notificationBaseline } |
+                    Where-Object { "$($_.title)" -match 'stall|no frame' }) | Select-Object -First 1
                 if ($null -ne $stall) {
                     return @{ Result = 'FAIL'
                         Message      = "a minimized window raised '$($stall.title)'; it is documented to stay silent"
@@ -1050,7 +1076,23 @@ function Get-ReleaseScenarioCatalog {
                 $fse = Start-Process -FilePath $fseProbe -PassThru `
                     -ArgumentList @('--display', '0', '--seconds', '45')
                 try {
-                    Start-Sleep -Seconds 8   # let the mode change settle and presents accumulate
+                    Start-Sleep -Seconds 3   # let the window exist before selecting it
+                    # Present statistics follow the SELECTED capture target (ADR 0033:
+                    # `updatePresentAttribution` is keyed on the selection). Without
+                    # this the attribution stays at pid 0, which counts every process
+                    # on the desktop -- and the verdict then reports whatever
+                    # presented last, not the probe. That is how this gate reported
+                    # 'composed' while the probe demonstrably owned the display.
+                    $selected = Invoke-LiveVerifyCommand -Connection $session.Connection `
+                        -Command 'record.selectTarget' `
+                        -Parameters @{ kind = 'window'; titleFilter = 'ExoSnap FSE probe' }
+                    if (-not $selected.ok) {
+                        return @{ Result = 'UNVERIFIED'
+                            Message = "the probe window could not be selected, so present statistics would " +
+                            "describe the desktop rather than it: $($selected.error.message)"
+                        }
+                    }
+                    Start-Sleep -Seconds 5   # let the mode change settle and presents accumulate
                     $verdict = & $gate.Verify $ctx $gate
                 } finally {
                     if ($null -ne $fse -and -not $fse.HasExited) { $fse.Kill() }
@@ -1685,12 +1727,30 @@ function Get-ReleaseScenarioCatalog {
             param($ctx)
             $session = & $ctx.EnsureSession
             $conn = $session.Connection
-            # Prepare the product state the human is asked to look at: a running
-            # recording, so the pill, the metrics and the quick controls are all on
-            # screen at once.
+            # Prepare the product state the human is asked to look at. A running
+            # recording alone is NOT enough: the badge appears on its own, but the
+            # quick-control pill and the diagnostics HUD are opt-in settings and the
+            # toast needs a notification. Without this an operator is asked about
+            # five overlays while exactly one is on screen -- which is what happened,
+            # and the answer then described the taskbar and the tray instead.
+            $restoreOverlaySettings = @{}
+            foreach ($key in 'app.showQuickControls', 'app.showDiagnosticsOverlay', 'app.showRecordingOverlay') {
+                $current = Invoke-LiveVerifyCommand -Connection $conn -Command 'settings.get' -Parameters @{ key = $key }
+                if ($current.ok) { $restoreOverlaySettings[$key] = $current.result.value }
+                [void](Invoke-LiveVerifyCommand -Connection $conn -Command 'settings.set' `
+                        -Parameters @{ key = $key; value = $true })
+            }
             [void](Invoke-LiveVerifyCommand -Connection $conn -Command 'record.selectTarget' -Parameters @{ kind = 'monitor' })
             [void](Invoke-LiveVerifyCommand -Connection $conn -Command 'record.start')
             [void](Wait-ReleaseRecordingState -Connection $conn -States @('Recording') -TimeoutMs 30000)
+            # The fourth surface. Synthetic and reported as such: it is here to be
+            # LOOKED at, and proves nothing about when the product raises one.
+            [void](Invoke-LiveVerifyCommand -Connection $conn -Command 'notification.raise' -Parameters @{
+                    type   = 'windowCaptureStalled'
+                    title  = 'Window capture appears to have stalled'
+                    body   = 'Synthetic notification, raised so its toast can be judged.'
+                    action = 'openDiagnostics'
+                })
             $overlays = (Invoke-LiveVerifyCommand -Connection $conn -Command 'overlay.snapshot').result
 
             $gate = @{
@@ -1701,7 +1761,10 @@ function Get-ReleaseScenarioCatalog {
                 'graph -- which shows correct alpha even when the window composes wrongly on screen. How they ' +
                 'actually reach the desktop can only be seen by a person looking at it.'
                 Do                = @(
-                    'A recording is running now, so the recording pill, metrics and quick controls are visible.',
+                    'A recording is running and every optional overlay has been switched on, so the recording',
+                    'badge, the quick-control pill, the diagnostics HUD and a notification toast are all on the',
+                    'recorded display. (The countdown is not: it only exists BEFORE capture starts.)',
+                    'Judge THOSE surfaces. The taskbar preview and the tray menu are Windows chrome, not these.',
                     'Windows has ALREADY been switched to LIGHT and back to DARK by this runner, holding each for a',
                     'few seconds. Look at every ExoSnap overlay on the desktop while that happens.',
                     'Answer for what you saw: the switching is automated, the judgement is not.'
@@ -1743,12 +1806,17 @@ function Get-ReleaseScenarioCatalog {
                     Write-Host ''
                     Write-Host "Windows is now in $($appearance.ToUpperInvariant()) appearance." -ForegroundColor Yellow
                     Write-Host '  Every capture-excluded overlay must still be DARK, with legible text.'
-                    $answers[$appearance] = & $ctx.Ask "Do the overlays look right in $appearance?"
+                    $answers[$appearance] = & $ctx.Ask "Do the overlays look right in ${appearance}?"
                     if ($answers[$appearance] -in @('skip', 'abort')) { break }
                 }
             }
             finally {
                 Set-WindowsAppearance -Appearance $originalAppearance
+                # The overlay settings are the operator's, not the campaign's.
+                foreach ($entry in $restoreOverlaySettings.GetEnumerator()) {
+                    [void](Invoke-LiveVerifyCommand -Connection $conn -Command 'settings.set' `
+                            -Parameters @{ key = $entry.Key; value = $entry.Value })
+                }
             }
 
             $wrong = @($answers.Keys | Where-Object { $answers[$_] -eq 'no' })
@@ -1821,13 +1889,53 @@ function Get-ReleaseScenarioCatalog {
                 if ($fresh.Count -gt 0) { break }
                 Start-Sleep -Milliseconds 250
             }
+            # Nothing to report is the NORMAL case on a healthy machine, and it used
+            # to end the gate as UNAVAILABLE -- which meant the notification surface
+            # was never looked at on exactly the machines a release is cut from.
+            #
+            # What this gate asks is whether a notification RENDERS correctly, and a
+            # raised one renders through the same manager, the same hub and the same
+            # toast window as any other. So the surface is exercised with a synthetic
+            # notification when the product has nothing of its own to say. It is
+            # marked synthetic end to end (see NotificationEvent), the verdict says
+            # so, and it is never treated as evidence that the product WOULD have
+            # raised anything -- that claim belongs to the scenarios that cause a
+            # real condition.
+            $synthetic = $false
             if ($fresh.Count -eq 0) {
-                return @{ Result = 'UNAVAILABLE'
-                    Message      = 'the product published no notification: it notifies about problems, and this ' +
-                    'machine currently has none. Re-run this gate on a machine with a real condition to report ' +
-                    '(a pending update, an unfinalized recording, a failing settings write).'
+                $raised = Invoke-LiveVerifyCommand -Connection $conn -Command 'notification.raise' -Parameters @{
+                    type   = 'windowCaptureStalled'
+                    title  = 'Window capture appears to have stalled'
+                    body   = 'Synthetic notification, raised so the toast and hub entry can be judged.'
+                    action = 'openDiagnostics'
+                }
+                if (-not $raised.ok) {
+                    return @{ Result = 'UNAVAILABLE'
+                        Message      = 'the product published no notification and none could be raised to judge ' +
+                        "the surface with: $($raised.error.message)"
+                    }
+                }
+                $synthetic = $true
+                $deadline = [DateTime]::UtcNow.AddSeconds(10)
+                while ([DateTime]::UtcNow -lt $deadline) {
+                    $now = (Invoke-LiveVerifyCommand -Connection $conn -Command 'notifications.snapshot').result
+                    $fresh = @(Get-ReleaseNotificationEntry -Snapshot $now | Where-Object { $_.sequence -notin $baseline })
+                    if ($fresh.Count -gt 0) { break }
+                    Start-Sleep -Milliseconds 250
+                }
+                if ($fresh.Count -eq 0) {
+                    return @{ Result = 'UNVERIFIED'
+                        Message = 'a notification was raised but never reached the hub'
+                    }
                 }
             }
+
+            # Said in the instructions, not only in the report: an operator judging a
+            # raised notification has to know it was raised, or "it appeared" reads
+            # as product behaviour.
+            $originLine = $synthetic ?
+                'This machine had nothing of its own to report, so the notification was RAISED by this runner: judge how it LOOKS, not that it appeared.' :
+                'The notification you see was published by the product itself.'
 
             $gate = @{
                 Id                = 'REL-VIS-NOTIFY-001'
@@ -1835,18 +1943,20 @@ function Get-ReleaseScenarioCatalog {
                 # Values the Verify block needs travel HERE, not in a closure: a
                 # `.GetNewClosure()` block is bound to a synthetic module that does not
                 # inherit the runner's functions.
-                State             = @{ baselineSequences = $baseline }
+                State             = @{ baselineSequences = $baseline; synthetic = $synthetic }
                 Why               = 'What reaches the desktop is composed by the OS notification surface, not by ' +
                 'us. Our own snapshot proves what we asked for; it cannot prove what appeared.'
                 Do                = @(
                     'Watch the desktop notification area.',
-                    'Open the ExoSnap notification hub and look at the entries there too.'
+                    'Open the ExoSnap notification hub and look at the entries there too.',
+                    $originLine
                 )
                 Expected          = 'Notifications appear with the correct severity glyph and tint, and the text ' +
                 'is legible and not truncated.'
-                VerifyDescription = 'This runner asserts that the product actually published NEW notifications ' +
-                'while the gate was open, by diffing notifications.snapshot entry sequences against the ones it ' +
-                'recorded beforehand. Whether they LOOKED right is your verdict.'
+                VerifyDescription = 'This runner asserts that NEW notifications reached the hub while the gate ' +
+                'was open, by diffing notifications.snapshot entry sequences against the ones it recorded ' +
+                'beforehand, and records whether they came from the product or were raised synthetically. ' +
+                'Whether they LOOKED right is your verdict.'
                 Verify            = {
                     param($context, $gate)
                     $conn2 = $script:Session.Connection
@@ -1861,7 +1971,13 @@ function Get-ReleaseScenarioCatalog {
                     if ($fresh.Count -eq 0) {
                         return @{ Ok = $false; Detail = 'the product published no notification while the gate was open'; Evidence = $evidence }
                     }
-                    return @{ Ok = $true; Detail = "$($fresh.Count) new notification(s) were published and judged"; Evidence = $evidence }
+                    # Who raised it belongs in the record: a synthetic one proves the
+                    # surface renders and never that the product would have spoken.
+                    $origin = if ($gate.State.synthetic) { '[synthetic] ' } else { '' }
+                    return @{ Ok = $true
+                        Detail   = "$origin$($fresh.Count) new notification(s) reached the hub and were judged"
+                        Evidence = $evidence
+                    }
                 }
             }
             return & $ctx.HumanGate $gate
@@ -1930,6 +2046,119 @@ function Get-ReleaseScenarioCatalog {
                 'updater agreed on one pinned version'
                 Evidence     = $evidence
             }
+        }
+    }
+
+    $catalog += [pscustomobject]@{
+        Id                  = 'REL-UPD-MSI-DECLINE-001'
+        Title               = 'Declining the elevation prompt yields a truthful cancel state'
+        Class               = 'update'
+        Layer               = 'SECURE'
+        Source              = 'ADR 0067 (cancel is not failure)'
+        ArtifactBound       = $true
+        RequiresInstallTree = $true
+        EnvironmentKeys     = @()
+        Requires            = @{}
+        Desired             = @{}
+        OptIn               = $true
+        Run                 = {
+            param($ctx)
+            # Same starting point as REL-UPD-MSI-001, and for the same reason: the
+            # BOUND artifact is the newest release, so an update check on it can only
+            # ever report up-to-date and the prompt this gate exists for is never
+            # raised. It has to start from the older INSTALLED build.
+            #
+            # Order matters between the two MSI gates. This one must run BEFORE the
+            # accept gate, which leaves the new version installed and removes the
+            # older starting point both of them need.
+            $from = $env:EXOSNAP_UPDATE_FROM
+            if ([string]::IsNullOrWhiteSpace($from) -or -not (Test-Path -LiteralPath $from)) {
+                return @{ Result = 'UNAVAILABLE'
+                    Message      = 'set EXOSNAP_UPDATE_FROM to an older INSTALLED exosnap.exe; the bound artifact ' +
+                    'is the newest release and can only ever report up-to-date'
+                }
+            }
+            # Its own session, not the campaign's -- see REL-UPD-MSI-001 for why the
+            # machine-wide single-instance mutex has to be clear first.
+            & $ctx.EndSession
+            $waitUntil = [DateTime]::UtcNow.AddSeconds(20)
+            while ([DateTime]::UtcNow -lt $waitUntil) {
+                $running = @(Get-Process -Name 'exosnap' -ErrorAction SilentlyContinue)
+                if ($running.Count -eq 0) { break }
+                foreach ($instance in $running) {
+                    try {
+                        [void]$instance.CloseMainWindow()
+                        if (-not $instance.WaitForExit(5000)) { $instance.Kill() }
+                    }
+                    catch { }
+                }
+                Start-Sleep -Milliseconds 500
+            }
+            $runId = New-LiveVerifyRunId
+            $fromProcess = Start-Process -FilePath $from -PassThru -ArgumentList @('--live-verify-control', $runId)
+            $conn = Connect-LiveVerify -RunId $runId -ConnectTimeoutMs 60000
+            [void]$fromProcess
+            # A release candidate is a GitHub prerelease and only the Preview channel
+            # names one; the channel is part of the scenario, not of the machine.
+            $channel = Invoke-LiveVerifyCommand -Connection $conn -Command 'settings.set' `
+                -Parameters @{ key = 'app.updateChannel'; value = 'Preview' }
+            if (-not $channel.ok) {
+                return @{ Result = 'FAIL'; Message = "could not select the Preview channel: $($channel.error.message)" }
+            }
+            $checked = Invoke-LiveVerifyCommand -Connection $conn -Command 'update.check'
+            if (-not $checked.ok) { return @{ Result = 'FAIL'; Message = "update.check refused: $($checked.error.message)" } }
+            $state = (Invoke-LiveVerifyCommand -Connection $conn -Command 'update.getState').result
+            if (-not $state.updateAvailable) {
+                return @{ Result = 'UNAVAILABLE'
+                    Message = "no update is offered to $($state.currentVersion) on the Preview channel"
+                }
+            }
+            $applied = Invoke-LiveVerifyCommand -Connection $conn -Command 'update.apply'
+            if (-not $applied.ok) { return @{ Result = 'FAIL'; Message = "update.apply refused: $($applied.error.message)" } }
+            # The child the apply launched, named by the launch itself. `installState` and
+            # `phase` are the UPDATER's vocabulary -- asking the application for them was
+            # asking the wrong process, which is why the two fields never existed.
+            $launch = (Invoke-LiveVerifyCommand -Connection $conn -Command 'update.getState').result.updaterLaunch
+
+            $gate = @{
+                Id                = 'REL-UPD-MSI-DECLINE-001'
+                Title             = 'DECLINE the elevation prompt'
+                State             = @{ updaterRunId = "$($launch.controlRunId)"; updaterPipe = "$($launch.controlPipe)" }
+                Why               = 'Same Secure Desktop boundary as accepting it. What is under test is what the ' +
+                'product says afterwards.'
+                Do                = @('A UAC prompt is appearing now.', 'DECLINE it.')
+                Expected          = 'The updater reports a cancelled update, not a failed one, and nothing is ' +
+                'left half-installed.'
+                VerifyDescription = "This runner attaches to the updater's own control endpoint (run id " +
+                "$($launch.controlRunId)) and requires a cancelled-or-idle phase with installState intact -- never " +
+                'a failure state, and never strandedInBackup. Those fields belong to the updater; the application ' +
+                'only reports which child it launched.'
+                Verify            = {
+                    param($context, $gate)
+                    if ([string]::IsNullOrWhiteSpace($gate.State.updaterRunId)) {
+                        return @{ Ok = $false; Detail = 'update.apply reported no updater launch, so there is no child to ask' }
+                    }
+                    try { $updater = Connect-LiveVerify -RunId $gate.State.updaterRunId -Role 'Updater' -ConnectTimeoutMs 30000 }
+                    catch {
+                        return @{ Ok = $false; Detail = "the updater endpoint could not be reached: $($_.Exception.Message)" }
+                    }
+                    try {
+                        $after = (Invoke-LiveVerifyCommand -Connection $updater -Command 'update.getState').result
+                        $evidence = @(Save-LiveVerifyEvidence -Context $context -CheckId 'REL-UPD-MSI-DECLINE-001' -Name 'updater-state.json' -Value $after)
+                        $installState = "$(Get-ReleaseSnapshotValue -Object $after -Path 'installState')"
+                        $phase = "$(Get-ReleaseSnapshotValue -Object $after -Path 'phase')"
+                        if ($installState -eq 'strandedInBackup') {
+                            return @{ Ok = $false; Detail = 'the install is stranded in backup after a declined prompt'; Evidence = $evidence }
+                        }
+                        if ($phase -match 'fail|error') {
+                            return @{ Ok = $false; Detail = "a declined prompt was reported as a failure: $phase"; Evidence = $evidence }
+                        }
+                        return @{ Ok = $true; Detail = "phase=$phase installState=$installState"; Evidence = $evidence }
+                    }
+                    finally { try { $updater.Close() } catch { } }
+                }
+            }
+            return & $ctx.HumanGate $gate
         }
     }
 
@@ -2055,6 +2284,15 @@ function Get-ReleaseScenarioCatalog {
                     while ([DateTime]::UtcNow -lt $deadline) {
                         try {
                             $runId2 = New-LiveVerifyRunId
+                            # An accepted install RELAUNCHES the application, and the
+                            # single-instance mutex is machine-wide: the launch below
+                            # would then hand focus to that instance and exit without
+                            # ever opening a control endpoint, leaving this loop to
+                            # spend its whole 5 min budget connecting to a pipe nobody
+                            # created. Observed exactly that -- the gate sat in
+                            # "verifying the consequence independently..." until the
+                            # relaunched instance was ended by hand.
+                            Wait-ReleaseProbeGone -ProcessName 'exosnap' -TimeoutMs 15000
                             # The INSTALLED build, not the bound artifact. Launching the
                             # artifact here asked whether rc14 reports rc14, which is
                             # true whether or not the install under test ever ran --
@@ -2099,75 +2337,6 @@ function Get-ReleaseScenarioCatalog {
                     }
                 }
                 return @{ Result = 'FAIL'; Message = $verdict.Detail; Evidence = $verdict.Evidence }
-            }
-            return & $ctx.HumanGate $gate
-        }
-    }
-
-    $catalog += [pscustomobject]@{
-        Id                  = 'REL-UPD-MSI-DECLINE-001'
-        Title               = 'Declining the elevation prompt yields a truthful cancel state'
-        Class               = 'update'
-        Layer               = 'SECURE'
-        Source              = 'ADR 0067 (cancel is not failure)'
-        ArtifactBound       = $true
-        RequiresInstallTree = $true
-        EnvironmentKeys     = @()
-        Requires            = @{}
-        Desired             = @{}
-        OptIn               = $true
-        Run                 = {
-            param($ctx)
-            $session = & $ctx.EnsureSession
-            $conn = $session.Connection
-            $checked = Invoke-LiveVerifyCommand -Connection $conn -Command 'update.check'
-            if (-not $checked.ok) { return @{ Result = 'FAIL'; Message = "update.check refused: $($checked.error.message)" } }
-            $state = (Invoke-LiveVerifyCommand -Connection $conn -Command 'update.getState').result
-            if (-not $state.updateAvailable) { return @{ Result = 'UNAVAILABLE'; Message = 'no update is offered on this channel' } }
-            $applied = Invoke-LiveVerifyCommand -Connection $conn -Command 'update.apply'
-            if (-not $applied.ok) { return @{ Result = 'FAIL'; Message = "update.apply refused: $($applied.error.message)" } }
-            # The child the apply launched, named by the launch itself. `installState` and
-            # `phase` are the UPDATER's vocabulary -- asking the application for them was
-            # asking the wrong process, which is why the two fields never existed.
-            $launch = (Invoke-LiveVerifyCommand -Connection $conn -Command 'update.getState').result.updaterLaunch
-
-            $gate = @{
-                Id                = 'REL-UPD-MSI-DECLINE-001'
-                Title             = 'DECLINE the elevation prompt'
-                State             = @{ updaterRunId = "$($launch.controlRunId)"; updaterPipe = "$($launch.controlPipe)" }
-                Why               = 'Same Secure Desktop boundary as accepting it. What is under test is what the ' +
-                'product says afterwards.'
-                Do                = @('A UAC prompt is appearing now.', 'DECLINE it.')
-                Expected          = 'The updater reports a cancelled update, not a failed one, and nothing is ' +
-                'left half-installed.'
-                VerifyDescription = "This runner attaches to the updater's own control endpoint (run id " +
-                "$($launch.controlRunId)) and requires a cancelled-or-idle phase with installState intact -- never " +
-                'a failure state, and never strandedInBackup. Those fields belong to the updater; the application ' +
-                'only reports which child it launched.'
-                Verify            = {
-                    param($context, $gate)
-                    if ([string]::IsNullOrWhiteSpace($gate.State.updaterRunId)) {
-                        return @{ Ok = $false; Detail = 'update.apply reported no updater launch, so there is no child to ask' }
-                    }
-                    try { $updater = Connect-LiveVerify -RunId $gate.State.updaterRunId -Role 'Updater' -ConnectTimeoutMs 30000 }
-                    catch {
-                        return @{ Ok = $false; Detail = "the updater endpoint could not be reached: $($_.Exception.Message)" }
-                    }
-                    try {
-                        $after = (Invoke-LiveVerifyCommand -Connection $updater -Command 'update.getState').result
-                        $evidence = @(Save-LiveVerifyEvidence -Context $context -CheckId 'REL-UPD-MSI-DECLINE-001' -Name 'updater-state.json' -Value $after)
-                        $installState = "$(Get-ReleaseSnapshotValue -Object $after -Path 'installState')"
-                        $phase = "$(Get-ReleaseSnapshotValue -Object $after -Path 'phase')"
-                        if ($installState -eq 'strandedInBackup') {
-                            return @{ Ok = $false; Detail = 'the install is stranded in backup after a declined prompt'; Evidence = $evidence }
-                        }
-                        if ($phase -match 'fail|error') {
-                            return @{ Ok = $false; Detail = "a declined prompt was reported as a failure: $phase"; Evidence = $evidence }
-                        }
-                        return @{ Ok = $true; Detail = "phase=$phase installState=$installState"; Evidence = $evidence }
-                    }
-                    finally { try { $updater.Close() } catch { } }
-                }
             }
             return & $ctx.HumanGate $gate
         }
@@ -2476,6 +2645,67 @@ function Enable-ReleaseSystemAudio {
     return @{ Ok = $true; Detail = 'system audio enabled' }
 }
 
+function Wait-ReleaseProbeGone {
+    <#
+    .SYNOPSIS
+        Waits for a probe process to be gone, ending it if it overstays.
+    .DESCRIPTION
+        Both stall scenarios select their window with
+        `record.selectTarget -titleFilter 'ExoSnap stall probe'`, and both probes
+        carry that same title. Run back to back, the second scenario can therefore
+        select the FIRST one's window while it is still being torn down -- and then
+        read the previous scenario's notifications as its own. REL-CAP-QUIET-001
+        reported "a minimized window raised 'Recording saved'" that way, which was
+        REL-CAP-STALL-001's toast.
+
+        Called before starting a probe, so the title is unambiguous by the time
+        anything selects on it.
+    #>
+    param([Parameter(Mandatory)] [string] $ProcessName, [int] $TimeoutMs = 10000)
+    $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMs)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        $running = @(Get-Process -Name $ProcessName -ErrorAction SilentlyContinue)
+        if ($running.Count -eq 0) { return }
+        foreach ($instance in $running) {
+            try { $instance.Kill() } catch { }
+        }
+        Start-Sleep -Milliseconds 250
+    }
+}
+
+function Wait-ReleaseWindowTargetGone {
+    <#
+    .SYNOPSIS
+        Waits until no window target matches $TitleFilter any more.
+    .DESCRIPTION
+        Killing the previous probe is not enough and neither is choosing another
+        target: the app's window list is refreshed on its own schedule, so for a
+        second or two after the process is gone `record.selectTarget` still RESOLVES
+        that title -- to a window that no longer exists. The next scenario then
+        starts a recording against it and the engine answers "Could not capture the
+        given window", which the gate reads as the recording having left the running
+        lifecycle.
+
+        So the condition to wait for is the selection FAILING. Once it does, the
+        title is free and the probe started afterwards is the only thing that can
+        match it. The selection is left on the monitor either way, so nothing
+        downstream inherits a window choice.
+    #>
+    param(
+        [Parameter(Mandatory)] $Connection,
+        [Parameter(Mandatory)] [string] $TitleFilter,
+        [int] $TimeoutMs = 15000
+    )
+    $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMs)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        $attempt = Invoke-LiveVerifyCommand -Connection $Connection -Command 'record.selectTarget' `
+            -Parameters @{ kind = 'window'; titleFilter = $TitleFilter }
+        if (-not $attempt.ok) { break }
+        Start-Sleep -Milliseconds 500
+    }
+    [void](Invoke-LiveVerifyCommand -Connection $Connection -Command 'record.selectTarget' -Parameters @{ kind = 'monitor' })
+}
+
 function Wait-ReleaseRecordingState {
     <#
     .SYNOPSIS
@@ -2643,6 +2873,14 @@ function Get-ReleaseSoakVerdict {
     # zero of those would fail the product for behaving correctly. What must stay
     # small is the total gap and the worst single one: many sub-millisecond gaps
     # are inaudible, one half-second dropout is not.
+    #
+    # What this cannot know is whether anything was PLAYING across the gap. A gap
+    # in silence -- a muted microphone, a quiet desktop -- costs a listener
+    # nothing, and the report carries no level at the moment of the outage to tell
+    # the two apart. So the finding says what was measured (frames the device
+    # dropped) and stops short of claiming it was heard. Adding that certainty
+    # means measuring level alongside the discontinuity in the engine, not
+    # guessing here.
     $discTotalMs = Get-ReleaseSnapshotValue -Object $counters -Path 'audio_discontinuity_ms_total'
     $discLongestMs = Get-ReleaseSnapshotValue -Object $counters -Path 'audio_discontinuity_ms_longest'
     $discCount = Get-ReleaseSnapshotValue -Object $counters -Path 'audio_discontinuities'
@@ -2657,7 +2895,8 @@ function Get-ReleaseSoakVerdict {
                 "${budgetMs} ms budget for a ${ExpectedSeconds}s recording")
         }
         if ([double]$discLongestMs -gt 120.0) {
-            $problems += "the longest single audio outage was ${discLongestMs} ms (audible dropout)"
+            $problems += ("the longest single audio outage was ${discLongestMs} ms; long enough to be heard if " +
+                'anything was playing at the time, which this report cannot say')
         }
     }
 

@@ -168,7 +168,13 @@ QString TrayAdapter::tooltip() const {
     return tip;
 }
 
+bool TrayAdapter::showWindowVisible() const noexcept {
+    return !window_visible_;
+}
+
 QString TrayAdapter::showHideText() const {
+    // Still asked of the flag rather than fixed, so a row that is somehow shown
+    // while the window is visible cannot say the wrong thing.
     return window_visible_ ? tr("Hide window") : tr("Show window");
 }
 

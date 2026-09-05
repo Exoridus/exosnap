@@ -244,7 +244,15 @@ void RecordViewModel::UpdateStats(const exosnap::engine::SessionStats& stats) {
     // not a drop. The real-drops-only count arrives with the diagnostics
     // snapshot (see RecordPage's diagnostics callback), same as av_drift_ms
     // below.
-    output_size_text = FormatBytes(stats.output_file_bytes);
+    // The muxer only learns the file size when it finalizes a segment, so
+    // output_file_bytes stays 0 for the whole recording and the live stat read
+    // "0 B" from start to stop. The encoded byte counters ARE live, and their sum
+    // is what has been handed to the muxer so far -- close enough to be useful and
+    // never larger than the file that results. The real size replaces it in
+    // SetResult() once the session ends.
+    const uint64_t live_bytes =
+        stats.output_file_bytes > 0 ? stats.output_file_bytes : stats.video_bytes + stats.audio_bytes;
+    output_size_text = FormatBytes(live_bytes);
     live_stats_available = (stats.elapsed_seconds > 0.0) || (stats.output_file_bytes > 0) || (stats.video_bytes > 0) ||
                            (stats.audio_bytes > 0) || (stats.video_frames_captured > 0);
 

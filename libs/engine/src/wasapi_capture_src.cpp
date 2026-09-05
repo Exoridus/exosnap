@@ -19,7 +19,15 @@ namespace {
 constexpr uint32_t kRequiredSampleRate = 48000;
 constexpr uint32_t kRequiredOutputChannels = 2;
 constexpr REFERENCE_TIME kFallbackDevicePeriodHns = 100000; // 10 ms
-constexpr uint64_t kAutoDetectMinFrames = 4800;             // 100 ms
+
+// How many device periods of slack the capture buffer carries. One period (the
+// previous value) leaves none: a loaded 30 min recording lost frames to the
+// device repeatedly, an idle one never did. Four periods is roughly 40 ms of
+// room to miss a wake-up in. Still far tighter than the two loopback sources,
+// which have always asked for 200 ms -- and that difference is exactly why a
+// loaded session lost frames on the microphone track and not on the system one.
+constexpr REFERENCE_TIME kCaptureBufferPeriods = 4;
+constexpr uint64_t kAutoDetectMinFrames = 4800; // 100 ms
 
 enum class AcceptedSampleKind { Float32, Pcm16, Unsupported };
 
@@ -403,8 +411,17 @@ bool WasapiCaptureSrc::Init(std::string& out_error) {
 
     // Event-driven capture: the engine signals buffer_event_ whenever a packet
     // is ready, so the drain waits on the event instead of polling every 1 ms.
-    hr = audio_client_->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, hnsDefaultDevicePeriod,
-                                   0, initFormat, nullptr);
+    //
+    // The buffer is deliberately several device periods deep. Asking for exactly
+    // one period leaves no slack at all: a single missed wake-up under load means
+    // the device overwrites frames the drain has not fetched, which surfaces as
+    // DATA_DISCONTINUITY with a jumped device position -- a real, permanent hole
+    // in the track. Capture latency does not matter here (nothing is monitored
+    // through this path), so the extra depth costs only memory. Shared mode still
+    // signals once per device period; only the wrap deadline moves.
+    const REFERENCE_TIME hnsBufferDuration = hnsDefaultDevicePeriod * kCaptureBufferPeriods;
+    hr = audio_client_->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, hnsBufferDuration, 0,
+                                   initFormat, nullptr);
     if (FAILED(hr)) {
         return failHr("IAudioClient::Initialize(capture)", hr);
     }

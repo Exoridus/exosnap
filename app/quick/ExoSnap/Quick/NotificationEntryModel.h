@@ -42,6 +42,7 @@ class NotificationEntryModel : public QAbstractListModel {
         ActionsRole,            // QVariantList of {action:int, label:string}, 0-2 entries
         PrimaryActionRole,      // int(NotificationAction); 0 (None) when the entry has no action
         PrimaryActionLabelRole, // "" when PrimaryActionRole is None
+        SyntheticRole,          // raised through the automation channel, not by a product condition
     };
 
     explicit NotificationEntryModel(QObject* parent = nullptr);

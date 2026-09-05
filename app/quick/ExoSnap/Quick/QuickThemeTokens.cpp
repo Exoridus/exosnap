@@ -2,6 +2,7 @@
 
 #include "ui/theme/ExoSnapThemes.h"
 
+#include <QCoreApplication>
 #include <QGuiApplication>
 #include <QPalette>
 #include <QRegularExpression>
@@ -129,6 +130,14 @@ void QuickThemeTokens::setAppearance(const QString& appearance_id, const QString
     // object to hang it on.
     if (QGuiApplication::instance() != nullptr)
         QGuiApplication::setPalette(widgetsPalette());
+
+    // The palette alone does not reach the tray menu. Qt's native Windows menu
+    // style paints its ground, its border and its separators from system colours
+    // and ignores QPalette::Window there, so a dark application kept showing a
+    // light system menu. A style sheet is the one lever that outranks the style,
+    // and it is applied narrowly: the application has exactly one Widgets surface
+    // (see widgetsPalette), so nothing else can be caught by these selectors.
+    applyWidgetsStyleSheet();
 
     // Ink for content on a success- or caution-FILLED surface, completing the
     // set the table already curates for the two fills whose hue moves: the
@@ -366,6 +375,33 @@ QPalette QuickThemeTokens::widgetsPalette() const {
 
     palette.setColor(QPalette::Link, accent_);
     return palette;
+}
+
+void QuickThemeTokens::applyWidgetsStyleSheet() const {
+    QObject* app = QCoreApplication::instance();
+    // Reached through the property rather than through QApplication directly: the
+    // QML test targets link Qt Gui but not Qt Widgets, and an #include there is a
+    // build error. `styleSheet` is a QApplication property, so a run without
+    // Widgets simply has nothing to set -- which is also the correct outcome,
+    // since there is no Widgets surface in that process to paint.
+    if (app == nullptr || app->metaObject()->indexOfProperty("styleSheet") < 0) {
+        return;
+    }
+
+    // Colours are named, not derived, so this reads as the same table the rest of
+    // the product uses. `surfaceRaised` is the popover rung the palette already
+    // picked; hover and disabled repeat the palette's choices so the two cannot
+    // drift apart if one is edited alone.
+    const QString sheet =
+        QStringLiteral("QMenu { background-color: %1; color: %2; border: 1px solid %3; }"
+                       "QMenu::item { background-color: transparent; }"
+                       "QMenu::item:selected { background-color: %4; color: %5; }"
+                       "QMenu::item:disabled { color: %6; }"
+                       "QMenu::separator { background-color: %3; height: 1px; }")
+            .arg(surface_raised_.name(QColor::HexRgb), text_.name(QColor::HexRgb), line_.name(QColor::HexRgb),
+                 accent_.name(QColor::HexRgb), accent_ink_.name(QColor::HexRgb), text_dim_.name(QColor::HexRgb));
+    if (app->property("styleSheet").toString() != sheet)
+        app->setProperty("styleSheet", sheet);
 }
 
 } // namespace exosnap::quick

@@ -28,10 +28,15 @@ Platform.SystemTrayIcon {
         Platform.MenuItem {
             text: root.tray.showHideText
             icon.source: root.tray.showHideIcon
+            visible: root.tray.showWindowVisible
             onTriggered: root.tray.triggerShowHide()
         }
 
-        Platform.MenuSeparator {}
+        // Hidden with the row above it: a separator with nothing before it draws a
+        // line across the top of the menu.
+        Platform.MenuSeparator {
+            visible: root.tray.showWindowVisible
+        }
 
         Platform.MenuItem {
             text: root.tray.recordItem.text

@@ -96,6 +96,9 @@ class QuickLiveVerifySource final : public QObject, public live_verify::LiveVeri
     bool ProfileDelete(QString* error) override;
 
     [[nodiscard]] QJsonObject NotificationsSnapshot() const override;
+    bool NotificationRaise(const QString& type_name, const QString& title, const QString& body,
+                           const QString& action_name, const QString& action_payload, qint64* out_sequence,
+                           QString* error) override;
     bool NotificationDismiss(qint64 sequence, QString* error) override;
     bool NotificationInvokeAction(qint64 sequence, const QString& which, QString* error) override;
 

@@ -493,6 +493,60 @@ function New-ReleaseContext {
     }
 }
 
+function Close-ReleaseBlockingSurface {
+    <#
+    .SYNOPSIS
+        Dismisses a modal surface a scenario left open, and says that it did.
+    .DESCRIPTION
+        The product refuses to be driven while a blocking surface is up -- a
+        recording error, a recovery offer, a crash-report prompt -- and that refusal
+        is correct: those surfaces exist to be answered. What is not correct is
+        carrying one into the NEXT scenario, which then meets
+        "A recordingError surface is open; answer it before driving the shell" at
+        its own setup and reports a failure describing the previous scenario. Four
+        gates failed that way in one sweep, and a 30 min soak died 13 s in on a
+        recovery offer an earlier scenario had left behind.
+
+        The sibling of Stop-ReleaseLeakedRecording, and reported for the same
+        reason: a scenario that leaves a surface open is a fact about the catalog
+        worth seeing, even though it is repaired here.
+
+        Dismissed, never answered: `recovery.dismiss` puts the offer away without
+        deciding it and `recordingError.dismiss` closes without sending a report.
+        Deciding FOR the operator would be a different kind of wrong.
+    #>
+    param($Session)
+    if ($null -eq $Session) { return }
+    $commandFor = @{
+        recordingError = 'recordingError.dismiss'
+        recovery       = 'recovery.dismiss'
+        crashReport    = 'crashReport.decline'
+    }
+    try {
+        # Bounded: one surface can reveal another (a recovery offer behind a crash
+        # prompt), but a surface that keeps coming back is a product fact to report
+        # rather than something to loop on.
+        for ($attempt = 0; $attempt -lt 4; $attempt++) {
+            $state = Get-LiveVerifyState -Connection $Session.Connection
+            $surface = "$($state.blockingSurface)"
+            if ([string]::IsNullOrWhiteSpace($surface) -or $surface -eq 'none') { return }
+            if (-not $commandFor.ContainsKey($surface)) {
+                Write-Step "a '$surface' surface was left open and this runner has no command to close it"
+                return
+            }
+            Write-Step "a $surface surface was still open after the scenario; dismissing it"
+            $answer = Invoke-LiveVerifyCommand -Connection $Session.Connection -Command $commandFor[$surface]
+            if (-not $answer.ok) {
+                Write-Step "  it refused to close: $($answer.error.message)"
+                return
+            }
+        }
+    }
+    catch {
+        # The session may already be gone -- a scenario is allowed to end it.
+    }
+}
+
 function Stop-ReleaseLeakedRecording {
     <#
     .SYNOPSIS
@@ -560,6 +614,9 @@ function Invoke-Scenarios {
             # Before the verdict is written, so the next scenario cannot inherit a
             # recording this one started. See Stop-ReleaseLeakedRecording.
             Stop-ReleaseLeakedRecording -Session $script:Session
+            # ...nor a modal surface, which refuses every command the next scenario
+            # sends. See Close-ReleaseBlockingSurface.
+            Close-ReleaseBlockingSurface -Session $script:Session
 
             $evidence = @()
             if ($outcome.ContainsKey('Evidence') -and $null -ne $outcome.Evidence) { $evidence = @($outcome.Evidence) }

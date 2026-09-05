@@ -178,6 +178,12 @@ class QuickThemeTokens : public QObject {
     void changed();
 
   private:
+    // Paints the tray menu, the product's only Widgets surface, from the resolved
+    // tokens. Needed alongside widgetsPalette() because the native Windows menu
+    // style takes its ground and border from system colours rather than the
+    // palette. No-op without a QApplication (a QGuiApplication-only test run).
+    void applyWidgetsStyleSheet() const;
+
     QString appearance_id_;
     QString accent_id_;
     bool dark_ = true;

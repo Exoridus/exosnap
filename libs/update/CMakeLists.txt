@@ -75,6 +75,7 @@ add_library(exosnap_update STATIC
     src/release_locator.cpp
     src/package_verifier.cpp
     src/install_mode_detector.cpp
+    src/install_mode_classify.cpp
     src/url_utils.cpp
     src/zip_extract.cpp
     src/http_download.cpp

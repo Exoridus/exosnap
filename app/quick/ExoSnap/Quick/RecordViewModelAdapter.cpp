@@ -10,6 +10,7 @@
 #include <QVariantMap>
 
 #include <algorithm>
+#include <cmath>
 #include <utility>
 
 namespace exosnap::quick {
@@ -190,9 +191,13 @@ QString RecordViewModelAdapter::droppedFramesText() const {
 }
 
 QString RecordViewModelAdapter::driftText() const {
-    return source_ != nullptr && source_->live_stats_available && source_->av_drift_available
-               ? QStringLiteral("%1 ms").arg(source_->av_drift_ms, 0, 'f', 0)
-               : QStringLiteral("—");
+    if (source_ == nullptr || !source_->live_stats_available || !source_->av_drift_available)
+        return QStringLiteral("—");
+    // Rounded to whole milliseconds, so anything in (-0.5, 0) formats as "-0".
+    // A residual below half a millisecond is zero drift, and a minus sign in front
+    // of it reads as a direction that was never measured.
+    const double drift = std::abs(source_->av_drift_ms) < 0.5 ? 0.0 : source_->av_drift_ms;
+    return QStringLiteral("%1 ms").arg(drift, 0, 'f', 0);
 }
 
 bool RecordViewModelAdapter::liveStatsAvailable() const noexcept {
@@ -508,14 +513,6 @@ bool RecordViewModelAdapter::splitEnabled() const noexcept {
     return split_enabled_ && (recording() || paused());
 }
 
-const QString& RecordViewModelAdapter::noticeText() const noexcept {
-    return notice_text_;
-}
-
-const QString& RecordViewModelAdapter::noticeTone() const noexcept {
-    return notice_tone_;
-}
-
 QString RecordViewModelAdapter::resultText() const {
     if (source_ == nullptr || !source_->HasResult())
         return {};
@@ -631,14 +628,6 @@ void RecordViewModelAdapter::setMeters(double system, double app, double microph
     app_meter_ = app;
     microphone_meter_ = microphone;
     emit metersChanged();
-}
-
-void RecordViewModelAdapter::setNoticeText(QString text, QString tone) {
-    if (notice_text_ == text && notice_tone_ == tone)
-        return;
-    notice_text_ = std::move(text);
-    notice_tone_ = std::move(tone);
-    emit changed();
 }
 
 void RecordViewModelAdapter::synchronize() {
@@ -941,8 +930,4 @@ void RecordViewModelAdapter::requestRevealRecent(const QString& file_path) {
         return;
     emit revealRecentRequested(file_path);
 }
-void RecordViewModelAdapter::clearNotice() {
-    setNoticeText({});
-}
-
 } // namespace exosnap::quick

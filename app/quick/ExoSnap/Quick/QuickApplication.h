@@ -596,6 +596,9 @@ class QuickApplication {
     // Dismisses the standing audio-degradation toast if one is up. Called when
     // every source recovers and again when the session leaves Recording/Paused —
     // the toast says the recording continues, which stops being true then.
+    // Reports a refused Record-page action as a toast. See the definition for why
+    // this is not the page notice.
+    void RaiseCaptureActionFailed(const QString& title, const QString& body);
     void clearAudioSourceDegradedWarning();
 
     AppSettingsStore settings_store_;

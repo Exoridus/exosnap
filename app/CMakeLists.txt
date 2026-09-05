@@ -1241,10 +1241,21 @@ exosnap_add_gtest(
     SOURCES
         tests/test_notification_manager.cpp
         notifications/NotificationManager.cpp
+        notifications/NotificationNames.cpp
     LIBRARIES Qt6::Core exosnap_capability exosnap_engine
 )
 target_include_directories(notification_manager_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(notification_manager_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
+    NAME notification_names_tests
+    TEST_PREFIX notify.
+    SOURCES
+        tests/test_notification_names.cpp
+        notifications/NotificationNames.cpp
+    LIBRARIES Qt6::Core exosnap_capability exosnap_engine
+)
+target_include_directories(notification_names_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 # RECORDING-MARKERS-R1 tests
 if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")

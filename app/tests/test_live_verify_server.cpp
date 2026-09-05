@@ -154,6 +154,12 @@ class StubSource final : public LiveVerifySource {
     [[nodiscard]] QJsonObject NotificationsSnapshot() const override {
         return {};
     }
+    bool NotificationRaise(const QString&, const QString&, const QString&, const QString&, const QString&,
+                           qint64* out_sequence, QString*) override {
+        if (out_sequence != nullptr)
+            *out_sequence = 1;
+        return true;
+    }
     bool NotificationDismiss(qint64, QString*) override {
         return true;
     }

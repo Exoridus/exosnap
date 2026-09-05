@@ -129,6 +129,14 @@ class LiveVerifySource {
     virtual bool NotificationDismiss(qint64 sequence, QString* error) = 0;
     // `which` is "primary" | "secondary" -- the two buttons the entry offers.
     virtual bool NotificationInvokeAction(qint64 sequence, const QString& which, QString* error) = 0;
+    // Raises a notification the product did not decide to raise. It travels the
+    // ordinary pipeline -- same manager, same hub, same toast surface -- and is
+    // marked synthetic everywhere it appears, because it is evidence about
+    // RENDERING and never about behaviour. `type_name` is a NotificationType
+    // spelling; on success `out_sequence` receives the manager-assigned identity.
+    virtual bool NotificationRaise(const QString& type_name, const QString& title, const QString& body,
+                                   const QString& action_name, const QString& action_payload, qint64* out_sequence,
+                                   QString* error) = 0;
 
     // --- Diagnostics and logs (protocol 2) -----------------------------------
     virtual bool DiagnosticsRun(QString* error) = 0;

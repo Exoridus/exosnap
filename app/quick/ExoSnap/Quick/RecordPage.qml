@@ -69,32 +69,6 @@ Item {
             margins: ExoTheme.spacingLg
         }
 
-        // UNRESOLVED conditions only: a source that is gone, a region too small
-        // to record, a settings write that failed. Confirmations belong in a
-        // toast -- this is the page's fill-height column, so anything that
-        // appears here pushes the Preview Surface down, and a message the user
-        // cannot act on has no business doing that. Both the recording-saved and
-        // the frame-saved confirmations used to be here.
-        ExoNotice {
-            text: root.recordViewModel.noticeText
-            // Still bound rather than fixed to a warning tone: an error and a
-            // caution do not read alike, and the tone comes from the same place
-            // the sentence does.
-            tone: root.recordViewModel.noticeTone
-            dismissible: true
-            actionText: root.recordViewModel.blocked ? qsTr("Open Diagnostics")
-                                                     : qsTr("Change source")
-            visible: text.length > 0
-            Layout.fillWidth: true
-            onDismissed: root.recordViewModel.clearNotice()
-            onActionTriggered: {
-                if (root.recordViewModel.blocked)
-                    root.shell.navigateToPageRequested(ShellAdapter.DiagnosticsPage);
-                else
-                    root.openSourcePicker();
-            }
-        }
-
         RowLayout {
             spacing: ExoTheme.spacingSm
             Layout.fillWidth: true

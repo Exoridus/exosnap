@@ -557,6 +557,19 @@ const QVector<CommandDescriptor>& AllCommands() {
           Param("action", "enum", false, {QStringLiteral("primary"), QStringLiteral("secondary")})},
          &CanActOnNotification},
 
+        // Raises a notification the product did not decide to raise. It is marked
+        // synthetic in every surface that reports it (see NotificationEvent), so a
+        // check can prove the toast RENDERS without ever proving that the product
+        // would have raised it. Not idempotent: two calls are two notifications.
+        {QStringLiteral("notification.raise"),
+         2,
+         true,
+         false,
+         Settle::Synchronous,
+         {Param("type", "string", true), Param("title", "string", true), Param("body", "string", false),
+          Param("action", "string", false), Param("actionPayload", "string", false)},
+         &NoPrecondition},
+
         // --- Settings and profiles ---------------------------------------------
         // describe/get are unconditional observations; every write is refused
         // while a recording is in flight, exactly as the Settings controls are.

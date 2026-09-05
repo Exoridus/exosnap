@@ -492,6 +492,21 @@ Outcome ExecuteMutating(const CommandDescriptor& command, const ParsedRequest& r
         return Succeeded(source.NotificationsSnapshot(), /*settled=*/false);
     }
 
+    if (command.name == QLatin1String("notification.raise")) {
+        qint64 sequence = 0;
+        if (!source.NotificationRaise(ParamString(params, "type"), ParamString(params, "title"),
+                                      ParamString(params, "body"), ParamString(params, "action"),
+                                      ParamString(params, "actionPayload"), &sequence, &error)) {
+            return IntentRefused(command, source, error);
+        }
+        QJsonObject result = source.NotificationsSnapshot();
+        // The identity the caller needs to dismiss it again, and the reminder that
+        // what it just created is not product behaviour.
+        result.insert(QStringLiteral("sequence"), static_cast<double>(sequence));
+        result.insert(QStringLiteral("synthetic"), true);
+        return Succeeded(result);
+    }
+
     if (command.name == QLatin1String("notification.clearAll")) {
         if (!source.ClearNotifications(&error))
             return IntentRefused(command, source, error);

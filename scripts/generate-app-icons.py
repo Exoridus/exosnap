@@ -338,9 +338,26 @@ def main() -> int:
     if accent_hex.upper() not in brand_svg.upper():
         raise SystemExit(f"{BRAND_SVG}: authored accent is not the shipped default {accent_hex}")
 
-    coral = _rgb(parse_theme_colour(themes, "dark", _ERROR))
-    amber = _rgb(parse_theme_colour(themes, "dark", _CAUTION))
-    accent = _rgb(accent_hex)
+    # Two sets, one per appearance, because the taskbar's thumbnail strip is
+    # WINDOWS chrome: its ground follows the system appearance and we only supply
+    # the glyph. The dark appearance's state colours are lightened for a dark
+    # ground, so on a LIGHT strip the amber pause glyph sat on light grey at a
+    # contrast the palette never intended. Each set therefore uses the state
+    # colours of the appearance it will be drawn against.
+    accent_light_hex = re.search(r'"aqua",.*?"#[0-9A-Fa-f]{6}",.*?"#[0-9A-Fa-f]{6}",\s*"(#[0-9A-Fa-f]{6})"',
+                                 themes, re.DOTALL).group(1)
+    palette = {
+        "": {
+            "coral": _rgb(parse_theme_colour(themes, "dark", _ERROR)),
+            "amber": _rgb(parse_theme_colour(themes, "dark", _CAUTION)),
+            "accent": _rgb(accent_hex),
+        },
+        "-light": {
+            "coral": _rgb(parse_theme_colour(themes, "light", _ERROR)),
+            "amber": _rgb(parse_theme_colour(themes, "light", _CAUTION)),
+            "accent": _rgb(accent_light_hex),
+        },
+    }
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     renderer = Renderer(mark, parse_mark_circles(brand_svg))
@@ -349,16 +366,17 @@ def main() -> int:
     write_svg(brand_svg)
 
     thumbs = {
-        "exosnap-thumb-record": ("disc", coral),
-        "exosnap-thumb-pause": ("bars", amber),
-        "exosnap-thumb-resume": ("triangle", accent),
-        "exosnap-thumb-stop": ("square", coral),
+        "exosnap-thumb-record": ("disc", "coral"),
+        "exosnap-thumb-pause": ("bars", "amber"),
+        "exosnap-thumb-resume": ("triangle", "accent"),
+        "exosnap-thumb-stop": ("square", "coral"),
         # Not transport: the thumbnail strip's fourth button opens the recording
         # destination, which is safe in every state and therefore never greyed.
-        "exosnap-thumb-folder": ("folder", accent),
+        "exosnap-thumb-folder": ("folder", "accent"),
     }
-    for stem, (shape, rgb) in thumbs.items():
-        write_ico([renderer.thumb_frame(px, shape, rgb) for px in SHELL_ICO_SIZES], stem)
+    for suffix, colours in palette.items():
+        for stem, (shape, role) in thumbs.items():
+            write_ico([renderer.thumb_frame(px, shape, colours[role]) for px in SHELL_ICO_SIZES], stem + suffix)
 
     return 0
 
