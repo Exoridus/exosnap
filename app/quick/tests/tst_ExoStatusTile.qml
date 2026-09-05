@@ -82,4 +82,73 @@ TestCase {
         verify(caution);
         compare(caution.toneGlyphColor, ExoTheme.warningText);
     }
+
+    // rec.004: the colour of a number comes only from the check that owns it.
+    // QML maps the tone C++ already computed to a theme colour and nothing else.
+    function test_value_tone_picks_the_theme_colour_data() {
+        return [
+            { tag: "ok", tone: "ok", color: ExoTheme.success },
+            { tag: "warn", tone: "warn", color: ExoTheme.warning },
+            { tag: "critical", tone: "critical", color: ExoTheme.error },
+            { tag: "neutral", tone: "neutral", color: ExoTheme.text }
+        ];
+    }
+
+    function test_value_tone_picks_the_theme_colour(data) {
+        let tile = createTemporaryObject(tileComponent, testCase, { valueTone: data.tone });
+        verify(tile);
+        compare(tile.valueToneColor, data.color);
+    }
+
+    function test_an_empty_series_hides_the_sparkline() {
+        let tile = createTemporaryObject(tileComponent, testCase);
+        verify(tile);
+        let spark = findChild(tile, "statusTileSparkline");
+        verify(spark);
+        compare(spark.visible, false);
+
+        tile.series = [1, 2, 3];
+        compare(spark.visible, true);
+    }
+
+    function test_head_badge_is_visible_only_when_set() {
+        let tile = createTemporaryObject(tileComponent, testCase);
+        verify(tile);
+        let badge = findChild(tile, "statusTileHeadBadge");
+        verify(badge);
+        compare(badge.visible, false);
+
+        tile.headBadge = "NVENC";
+        compare(badge.visible, true);
+        compare(badge.text, "NVENC");
+    }
+
+    function test_codec_chips_mark_the_selected_one_in_accent() {
+        let tile = createTemporaryObject(tileComponent, testCase, {
+            chips: [
+                { text: "H.264", state: "available" },
+                { text: "HEVC", state: "unavailable" },
+                { text: "AV1", state: "selected" }
+            ]
+        });
+        verify(tile);
+        let repeater = findChild(tile, "statusTileChipsRepeater");
+        verify(repeater);
+        compare(repeater.count, 3);
+        compare(repeater.itemAt(0).border.color, ExoTheme.line);
+        compare(repeater.itemAt(1).unavailable, true);
+        compare(repeater.itemAt(2).selected, true);
+        compare(repeater.itemAt(2).border.color, ExoTheme.accent);
+    }
+
+    function test_a_tinted_fragment_of_sub_carries_its_own_tone() {
+        let tile = createTemporaryObject(tileComponent, testCase, {
+            sub: "Target 60 fps · jitter 9.2 ms",
+            subTinted: "jitter 9.2 ms",
+            subTone: "warn"
+        });
+        verify(tile);
+        verify(tile.subDisplay.indexOf("<font") >= 0, "the tinted fragment is wrapped in a colour span");
+        verify(tile.subDisplay.indexOf("jitter 9.2 ms") >= 0);
+    }
 }

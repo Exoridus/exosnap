@@ -96,6 +96,7 @@ qt_add_qml_module(exosnap
         ExoLevelMeterScale.qml
         ExoSettingRow.qml
         ExoSlider.qml
+        ExoSparkline.qml
         ExoStatusPill.qml
         ExoStatusTile.qml
         ExoSwitch.qml
@@ -905,6 +906,10 @@ qt_add_qml_module(record_controls_qml_tests
         # only matter together -- a test module built without the paired parser
         # would exercise a SpinBox that never showed the bug.
         ExoNumberField.qml
+        # The tile's head badge and codec chips draw a small tone-tinted pill,
+        # same as the diagnostics id/Elev chips elsewhere.
+        ExoBadge.qml
+        ExoSparkline.qml
         ExoStatusTile.qml
         # The shared overlay card and the two components it draws itself from.
         # Its layout invariants — the card staying out of the shell's title
