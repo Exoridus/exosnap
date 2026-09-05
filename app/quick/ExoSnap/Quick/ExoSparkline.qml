@@ -17,13 +17,29 @@ Item {
     implicitHeight: 24
 
     readonly property bool hasBudget: !isNaN(root.budget)
+    // The bottom of the box. Zero for a series that never goes negative, which
+    // is what every rate plots; a signed series (A/V drift) needs its own floor,
+    // or every negative sample maps far below the tile and the line vanishes.
+    readonly property real _floor: {
+        let low = 0;
+        for (let i = 0; i < root.values.length; ++i)
+            low = Math.min(low, root.values[i]);
+        return low;
+    }
     readonly property real _peak: {
         let peak = root.hasBudget ? root.budget : 0;
         for (let i = 0; i < root.values.length; ++i)
             peak = Math.max(peak, root.values[i]);
-        // 10% headroom so the highest point never touches the top edge, and a
-        // floor so an all-zero series does not divide by zero.
-        return Math.max(1e-6, peak * 1.1);
+        return peak;
+    }
+    // 10% headroom so the highest point never touches the top edge, and a floor
+    // so an all-zero series does not divide by zero.
+    readonly property real _span: Math.max(1e-6, (root._peak - root._floor) * 1.1)
+
+    // Where a value sits in the box, top-down. Read by tst_ExoSparkline, which
+    // pins the mapping rather than the point count.
+    function valueY(value: real): real {
+        return root.height - ((value - root._floor) / root._span) * root.height;
     }
 
     readonly property var _points: {
@@ -31,17 +47,12 @@ Item {
         const count = root.values.length;
         for (let i = 0; i < count; ++i) {
             const x = count > 1 ? (root.width * i) / (count - 1) : root.width;
-            const y = root.height - (root.values[i] / root._peak) * root.height;
-            points.push(Qt.point(x, y));
+            points.push(Qt.point(x, root.valueY(root.values[i])));
         }
         return points;
     }
 
-    readonly property real _budgetY: root.height - (root.budget / root._peak) * root.height
-
-    // Read by tst_ExoSparkline to prove one polyline segment is emitted per
-    // value without depending on Shape internals.
-    readonly property int pointCount: root._points.length
+    readonly property real _budgetY: root.valueY(root.budget)
 
     Shape {
         anchors.fill: parent

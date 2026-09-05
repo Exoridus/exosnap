@@ -83,6 +83,38 @@ TestCase {
         compare(caution.toneGlyphColor, ExoTheme.warningText);
     }
 
+    // Spec section 4: never colour alone. `tone` is the tile's own verdict and
+    // `valueTone` the verdict of the check that owns the number, and the two are
+    // independent by design -- a value goes amber the moment its check enters the
+    // session ledger, while the engine still calls the stage healthy. Deriving
+    // the glyph from `tone` alone left that number saying its severity in colour
+    // and nothing else, to nobody who cannot see the colour.
+    function test_an_amber_value_on_a_neutral_tile_still_earns_a_glyph_and_a_word() {
+        let tile = createTemporaryObject(tileComponent, testCase, { valueTone: "warn" });
+        verify(tile);
+        compare(tile.tone, "neutral");
+        compare(tile.toneGlyph, ExoGlyph.Warning);
+        compare(tile.severityText, "Caution");
+        verify(tile.Accessible.name.indexOf("Caution") === 0,
+               "accessible name '" + tile.Accessible.name + "' must lead with the severity");
+    }
+
+    function test_a_tinted_sub_fragment_also_raises_the_severity() {
+        let tile = createTemporaryObject(tileComponent, testCase, { subTone: "critical" });
+        verify(tile);
+        compare(tile.toneGlyph, ExoGlyph.Close);
+        compare(tile.severityText, "Blocked");
+        compare(tile.toneGlyphColor, ExoTheme.errorText);
+    }
+
+    function test_the_worst_of_the_three_tones_wins() {
+        let tile = createTemporaryObject(tileComponent, testCase,
+                                         { tone: "notice", valueTone: "critical", subTone: "ok" });
+        verify(tile);
+        compare(tile.toneGlyph, ExoGlyph.Close);
+        compare(tile.severityText, "Blocked");
+    }
+
     // rec.004: the colour of a number comes only from the check that owns it.
     // QML maps the tone C++ already computed to a theme colour and nothing else.
     function test_value_tone_picks_the_theme_colour_data() {

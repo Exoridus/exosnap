@@ -18,10 +18,23 @@ TestCase {
         ExoSessionTimeline {
             width: 754
             durationMs: 754000
+            // The file is a little shorter than the recording: the tail between
+            // the last encoded frame and Stop has no media behind it.
+            mediaDurationMs: 750000
             marks: [
                 { startMs: 151000, durationMs: 2100, tone: "warn", title: "Judder", worstText: "9.6 ms" },
-                { startMs: 702000, durationMs: 200, tone: "critical", title: "3 frames dropped", worstText: "n/a" }
+                { startMs: 702000, durationMs: 200, tone: "warn", title: "Encoder late", worstText: "18.4 ms" }
             ]
+        }
+    }
+
+    Component {
+        id: emptyTimelineComponent
+
+        ExoSessionTimeline {
+            width: 754
+            durationMs: 0
+            marks: [{ startMs: 0, durationMs: 0, tone: "warn", title: "Judder", worstText: "9.6 ms" }]
         }
     }
 
@@ -70,6 +83,36 @@ TestCase {
         mouseClick(track, Math.round(track.width / 2), 3);
         tryVerify(function () { return openedAt >= 0; });
         fuzzyCompare(openedAt, timeline.durationMs / 2, 5000);
+    }
+
+    // A mark that opened after the last encoded frame is still on the track --
+    // the track spans the recording -- but the position handed to Edit has to be
+    // inside the file.
+    function test_a_position_in_the_tail_opens_at_the_end_of_the_file() {
+        let timeline = createTemporaryObject(timelineComponent, testCase);
+        verify(timeline);
+        let track = findChild(timeline, "sessionTimelineTrack");
+
+        let openedAt = -1;
+        timeline.openAtRequested.connect(function (positionMs) { openedAt = positionMs; });
+        mouseClick(track, track.width - 1, 3);
+        tryVerify(function () { return openedAt >= 0; });
+        compare(openedAt, timeline.mediaDurationMs);
+    }
+
+    // A result with neither a media duration nor an elapsed time. Without the
+    // guard the mark scan and the ratio both work on NaN or Infinity, which is
+    // the state the mark and tick bindings already refuse to enter.
+    function test_a_zero_duration_track_does_not_divide_by_it() {
+        let timeline = createTemporaryObject(emptyTimelineComponent, testCase);
+        verify(timeline);
+        let track = findChild(timeline, "sessionTimelineTrack");
+
+        let openedAt = -1;
+        timeline.openAtRequested.connect(function (positionMs) { openedAt = positionMs; });
+        mouseClick(track, Math.round(track.width / 2), 3);
+        tryVerify(function () { return openedAt >= 0; });
+        compare(openedAt, 0);
     }
 
     function test_clicking_a_mark_opens_at_its_own_start() {

@@ -21,6 +21,7 @@ TestCase {
                 "headerText": "Recording saved · 2 problems observed",
                 "fileName": "exosnap-2026-09-05-154112.mkv",
                 "durationMs": 754000,
+                "mediaDurationMs": 750000,
                 "facts": [
                     { "label": "Frames dropped", "value": "0", "valueTone": "ok", "sub": "45 240 captured" },
                     { "label": "Achieved", "value": "59.98 fps", "valueTone": "neutral", "sub": "target 60 fps" },
@@ -93,6 +94,22 @@ TestCase {
         compare(cards.length, 2);
         compare(cards[0].expanded, true);
         compare(cards[1].expanded, false);
+    }
+
+    // The outer frame is given the layout's height, and the layout sits inside it
+    // at cardPadding on every side. Sizing the frame to the bare content height
+    // compressed the column below its implicit height and clipped the action row
+    // off the bottom.
+    function test_the_frame_is_tall_enough_for_its_own_padding() {
+        let card = createTemporaryObject(cardComponent, testCase);
+        verify(card);
+        let actions = findChild(card, "lastSessionActions");
+        verify(actions);
+        let frame = card.children[0];
+        verify(frame);
+        verify(actions.y + actions.height <= frame.height - ExoTheme.cardPadding + 1,
+               "the action row (" + (actions.y + actions.height) + ") is clipped by the frame ("
+               + frame.height + ")");
     }
 
     function findRepeater(item) {

@@ -340,6 +340,12 @@ Item {
                             horizontalAlignment: Text.AlignRight
                             color: ExoTheme.textDim
                             Layout.maximumWidth: 220
+                            // The row gathers implicitHeight before it constrains
+                            // the width, so an unconstrained wrapping label is
+                            // sized for one line and clips the rest -- and the
+                            // recheck policy the band exists to state is what
+                            // gets clipped. Three caption lines at 220 px.
+                            Layout.minimumHeight: 3 * 16
                             Layout.alignment: Qt.AlignVCenter
                             font {
                                 family: ExoTheme.sansFamily
@@ -481,19 +487,28 @@ Item {
                         Layout.fillWidth: true
                     }
 
-                    ExoLastSessionCard {
-                        session: root.diagnostics.lastSession
-                        columns: root.tileColumns
+                    // Created only once there is a session to describe. The
+                    // enclosing column is merely invisible before that, and a
+                    // card built against an empty map binds every one of its
+                    // lookups to undefined -- including the timeline's required
+                    // durationMs.
+                    Loader {
+                        active: root.diagnostics.hasLastSession
                         Layout.fillWidth: true
 
-                        onShowInFolderRequested: root.diagnostics.openLastSessionFolder()
-                        onOpenEditRequested: root.diagnostics.openEditAt(0)
-                        onOpenEditAtRequested: function (positionMs) {
-                            root.diagnostics.openEditAt(positionMs);
-                        }
-                        onViewLogRequested: root.diagnostics.openLogs()
-                        onShowInLogRequested: function (entryId) {
-                            root.diagnostics.showInLog(entryId);
+                        sourceComponent: ExoLastSessionCard {
+                            session: root.diagnostics.lastSession
+                            columns: root.tileColumns
+
+                            onShowInFolderRequested: root.diagnostics.openLastSessionFolder()
+                            onOpenEditRequested: root.diagnostics.openEditAt(0)
+                            onOpenEditAtRequested: function (positionMs) {
+                                root.diagnostics.openEditAt(positionMs);
+                            }
+                            onViewLogRequested: root.diagnostics.openLogs()
+                            onShowInLogRequested: function (entryId) {
+                                root.diagnostics.showInLog(entryId);
+                            }
                         }
                     }
                 }

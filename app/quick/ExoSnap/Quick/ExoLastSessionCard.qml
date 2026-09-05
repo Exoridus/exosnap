@@ -15,7 +15,9 @@ ColumnLayout {
     //   headerText: string, e.g. "Recording saved · 2 problems observed" --
     //     already pluralized, so QML never counts problems itself.
     //   fileName: string
-    //   durationMs: int
+    //   durationMs: int -- the session clock the marks are placed on.
+    //   mediaDurationMs: int -- the finished file's own length, which a position
+    //     handed to Edit is clamped to.
     //   facts: [{ label, value, valueTone: "ok"|"warn"|"critical"|"neutral", sub }],
     //          exactly 4 -- Frames dropped, Achieved fps, A/V drift, File.
     //   marks: ExoSessionTimeline.marks
@@ -42,7 +44,7 @@ ColumnLayout {
 
     Rectangle {
         Layout.fillWidth: true
-        Layout.preferredHeight: card.implicitHeight
+        Layout.preferredHeight: card.implicitHeight + 2 * ExoTheme.cardPadding
         color: ExoTheme.surface
         border.width: 1
         border.color: ExoTheme.line
@@ -159,6 +161,7 @@ ColumnLayout {
 
             ExoSessionTimeline {
                 durationMs: root.session.durationMs
+                mediaDurationMs: root.session.mediaDurationMs ?? 0
                 marks: root.session.marks
                 Layout.fillWidth: true
 

@@ -11,7 +11,14 @@ import QtQuick.Controls
 Item {
     id: root
 
+    // The recording's own elapsed time: the clock the marks carry, and the span
+    // the track is drawn over.
     required property int durationMs
+    // The finished file's length. Shorter than `durationMs` by the tail between
+    // the last encoded frame and Stop, so a mark that opened in that tail would
+    // otherwise hand Edit a position past the end of the file. 0 means unknown
+    // and clamps nothing.
+    property int mediaDurationMs: 0
     // [{ startMs: int, durationMs: int, tone: string, title: string, worstText: string }]
     property var marks: []
 
@@ -44,6 +51,14 @@ Item {
         return result;
     }
 
+    // Where in the FILE a session position is. The recording outlives its last
+    // encoded frame, so the tail of the track has no media behind it and opens
+    // Edit at the end instead of past it.
+    function _mediaPosition(positionMs: int): int {
+        const clamped = Math.max(0, positionMs);
+        return root.mediaDurationMs > 0 ? Math.min(clamped, root.mediaDurationMs) : clamped;
+    }
+
     function _toneColor(tone: string): color {
         return tone === "critical" ? ExoTheme.error : ExoTheme.warning;
     }
@@ -69,18 +84,25 @@ Item {
         // the tapped position.
         TapHandler {
             onTapped: (eventPoint) => {
+                // Same guard the mark and tick bindings carry: with no duration
+                // every position is NaN, the mark loop matches nothing, and each
+                // tap would silently open at 0 rather than at what was clicked.
+                if (root.durationMs <= 0) {
+                    root.openAtRequested(0);
+                    return;
+                }
                 const x = eventPoint.position.x;
                 for (let i = 0; i < root.marks.length; ++i) {
                     const m = root.marks[i];
                     const markX = track.width * m.startMs / root.durationMs;
                     const markWidth = Math.max(2, track.width * m.durationMs / root.durationMs);
                     if (x >= markX && x <= markX + markWidth) {
-                        root.openAtRequested(m.startMs);
+                        root.openAtRequested(root._mediaPosition(m.startMs));
                         return;
                     }
                 }
                 const ratio = Math.max(0, Math.min(1, x / track.width));
-                root.openAtRequested(Math.round(ratio * root.durationMs));
+                root.openAtRequested(root._mediaPosition(Math.round(ratio * root.durationMs)));
             }
         }
 

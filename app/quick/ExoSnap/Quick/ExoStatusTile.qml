@@ -90,16 +90,31 @@ Rectangle {
     // the issue cards and the Diagnostics verdict band already use — ✕ for a
     // blocker, ⚠ for a notice, ✓ for a tile that is clear — so this is one
     // severity language across the product, not a second one.
-    readonly property int toneGlyph: root.tone === "blocker" ? ExoGlyph.Close
-                                   : root.tone === "notice" ? ExoGlyph.Warning
+    // The severity actually on screen, over all three tones the tile carries.
+    // `tone` is the tile's own verdict, but a VALUE can be amber while the engine
+    // still calls the stage healthy -- the normal case for a check that has
+    // entered the session ledger. Deriving the glyph and the word from `tone`
+    // alone left that number saying its severity in colour and nothing else.
+    function _severityRank(key: string): int {
+        return key === "blocker" || key === "critical" ? 2
+             : key === "notice" || key === "warn" ? 1
+             : 0;
+    }
+
+    readonly property int severity: Math.max(root._severityRank(root.tone),
+                                             root._severityRank(root.valueTone),
+                                             root._severityRank(root.subTone))
+
+    readonly property int toneGlyph: root.severity === 2 ? ExoGlyph.Close
+                                   : root.severity === 1 ? ExoGlyph.Warning
                                    : root.showOkGlyph ? ExoGlyph.Check
                                    : ExoGlyph.Invalid
-    readonly property color toneGlyphColor: root.tone === "blocker" ? ExoTheme.errorText
-                                          : root.tone === "notice" ? ExoTheme.warningText
+    readonly property color toneGlyphColor: root.severity === 2 ? ExoTheme.errorText
+                                          : root.severity === 1 ? ExoTheme.warningText
                                           : ExoTheme.successText
     // Said in words for a screen reader, which cannot see either cue.
-    readonly property string severityText: root.tone === "blocker" ? qsTr("Blocked")
-                                         : root.tone === "notice" ? qsTr("Caution")
+    readonly property string severityText: root.severity === 2 ? qsTr("Blocked")
+                                         : root.severity === 1 ? qsTr("Caution")
                                          : root.showOkGlyph ? qsTr("Ready") : ""
 
     implicitHeight: column.implicitHeight + 2 * ExoTheme.spacingLg
