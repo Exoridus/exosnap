@@ -76,6 +76,7 @@ qt_add_qml_module(exosnap
         ExoGlyph.qml
         ExoIssueCard.qml
         ExoKeyValueTable.qml
+        ExoLastSessionCard.qml
         ExoLedgerCard.qml
         ExoLogView.qml
         ExoMenu.qml
@@ -88,6 +89,7 @@ qt_add_qml_module(exosnap
         ExoPipelineFlow.qml
         ExoPipelineStepCard.qml
         ExoProgressBar.qml
+        ExoReferenceRow.qml
         ExoScrollBar.qml
         ExoScrollView.qml
         ExoSearchField.qml
@@ -914,6 +916,8 @@ qt_add_qml_module(record_controls_qml_tests
         # The collapsed row's own disclosure re-uses the shared chevron rather
         # than ExoDisclosure, so it needs the chevron type resolved too.
         ExoLedgerCard.qml
+        ExoLastSessionCard.qml
+        ExoReferenceRow.qml
         ExoSessionTimeline.qml
         ExoSparkline.qml
         ExoStatusTile.qml
