@@ -14,12 +14,70 @@ Rectangle {
     // A second qualifier line, below `sub`. Empty for the readiness tiles, which
     // have one fact to add; the live tiles use it for the thing that is missing
     // when the measurement above it is unavailable (why present diagnostics are
-    // off, why a remaining time cannot be estimated).
+    // off, why a remaining time cannot be estimated), or -- once a sparkline is
+    // showing -- for the whole-session figure that goes with it.
     property string detail: ""
     property string tone: "neutral"
     property bool showOkGlyph: false
     property bool hasUsageBar: false
     property int usagePercent: 0
+
+    // The colour of the VALUE, independent of `tone`: `tone` is the tile's own
+    // severity (its border, its background, its head glyph), `valueTone` is the
+    // verdict of the single check that owns this number. "ok | warn | critical |
+    // neutral" -- resolved in C++, mapped to a colour here and nothing else.
+    property string valueTone: "neutral"
+    // A single fragment of `sub` to tint, e.g. "jitter 9.2 ms" inside
+    // "Target 60 fps · jitter 9.2 ms". Empty draws `sub` in one colour, as before.
+    property string subTinted: ""
+    property string subTone: "neutral"
+
+    // Last-60-snapshots trend, tile head badge (the encoder backend: "NVENC"),
+    // and the codec-availability chips. All optional and all empty by default,
+    // so a tile that carries none of them looks exactly as it did before.
+    property var series: []
+    property real budget: NaN
+    property var chips: []
+    property string headBadge: ""
+
+    function _toneColor(tone: string): color {
+        return tone === "ok" ? ExoTheme.success
+             : tone === "warn" ? ExoTheme.warning
+             : tone === "critical" ? ExoTheme.error
+             : ExoTheme.text;
+    }
+
+    readonly property color valueToneColor: root._toneColor(root.valueTone)
+    readonly property color subToneColor: root._toneColor(root.subTone)
+
+    function _escapeHtml(text: string): string {
+        return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+
+    // Rich-text colour attributes take "#RRGGBB"; going through the component's
+    // own r/g/b rather than the colour's toString() sidesteps whatever alpha
+    // digits that conversion adds.
+    function _colorToHex(value: color): string {
+        function channel(component) {
+            return Math.round(component * 255).toString(16).padStart(2, "0");
+        }
+        return "#" + channel(value.r) + channel(value.g) + channel(value.b);
+    }
+
+    // `sub` rendered as StyledText with `subTinted` wrapped in a colour span, so
+    // a single fragment of an otherwise plain line can carry the tone of the
+    // check it reports without the whole line changing colour.
+    readonly property string subDisplay: {
+        if (root.subTinted === "")
+            return root._escapeHtml(root.sub);
+        const at = root.sub.indexOf(root.subTinted);
+        if (at < 0)
+            return root._escapeHtml(root.sub);
+        const before = root._escapeHtml(root.sub.substring(0, at));
+        const tinted = root._escapeHtml(root.subTinted);
+        const after = root._escapeHtml(root.sub.substring(at + root.subTinted.length));
+        return before + "<font color=\"" + root._colorToHex(root.subToneColor) + "\">" + tinted + "</font>" + after;
+    }
 
     readonly property color toneColor: root.tone === "blocker" ? ExoTheme.error
                                      : root.tone === "notice" ? ExoTheme.warning
@@ -32,16 +90,31 @@ Rectangle {
     // the issue cards and the Diagnostics verdict band already use — ✕ for a
     // blocker, ⚠ for a notice, ✓ for a tile that is clear — so this is one
     // severity language across the product, not a second one.
-    readonly property int toneGlyph: root.tone === "blocker" ? ExoGlyph.Close
-                                   : root.tone === "notice" ? ExoGlyph.Warning
+    // The severity actually on screen, over all three tones the tile carries.
+    // `tone` is the tile's own verdict, but a VALUE can be amber while the engine
+    // still calls the stage healthy -- the normal case for a check that has
+    // entered the session ledger. Deriving the glyph and the word from `tone`
+    // alone left that number saying its severity in colour and nothing else.
+    function _severityRank(key: string): int {
+        return key === "blocker" || key === "critical" ? 2
+             : key === "notice" || key === "warn" ? 1
+             : 0;
+    }
+
+    readonly property int severity: Math.max(root._severityRank(root.tone),
+                                             root._severityRank(root.valueTone),
+                                             root._severityRank(root.subTone))
+
+    readonly property int toneGlyph: root.severity === 2 ? ExoGlyph.Close
+                                   : root.severity === 1 ? ExoGlyph.Warning
                                    : root.showOkGlyph ? ExoGlyph.Check
                                    : ExoGlyph.Invalid
-    readonly property color toneGlyphColor: root.tone === "blocker" ? ExoTheme.errorText
-                                          : root.tone === "notice" ? ExoTheme.warningText
+    readonly property color toneGlyphColor: root.severity === 2 ? ExoTheme.errorText
+                                          : root.severity === 1 ? ExoTheme.warningText
                                           : ExoTheme.successText
     // Said in words for a screen reader, which cannot see either cue.
-    readonly property string severityText: root.tone === "blocker" ? qsTr("Blocked")
-                                         : root.tone === "notice" ? qsTr("Caution")
+    readonly property string severityText: root.severity === 2 ? qsTr("Blocked")
+                                         : root.severity === 1 ? qsTr("Caution")
                                          : root.showOkGlyph ? qsTr("Ready") : ""
 
     implicitHeight: column.implicitHeight + 2 * ExoTheme.spacingLg
@@ -89,6 +162,13 @@ Rectangle {
                 }
             }
 
+            ExoBadge {
+                objectName: "statusTileHeadBadge"
+                text: root.headBadge
+                visible: root.headBadge !== ""
+                Layout.alignment: Qt.AlignVCenter
+            }
+
             ExoGlyph {
                 kind: root.toneGlyph
                 visible: root.toneGlyph !== ExoGlyph.Invalid
@@ -106,7 +186,7 @@ Rectangle {
             text: root.value
             textFormat: Text.PlainText
             elide: Text.ElideRight
-            color: ExoTheme.text
+            color: root.valueToneColor
             Layout.fillWidth: true
             Layout.topMargin: ExoTheme.spacingXs
             // A long value shrinks rather than truncating. "NVIDIA GeForce RTX
@@ -124,8 +204,8 @@ Rectangle {
         }
 
         Label {
-            text: root.sub
-            textFormat: Text.PlainText
+            text: root.subDisplay
+            textFormat: Text.StyledText
             wrapMode: Text.WordWrap
             visible: root.sub !== ""
             color: ExoTheme.textMuted
@@ -152,6 +232,81 @@ Rectangle {
             font {
                 family: ExoTheme.sansFamily
                 pixelSize: ExoTheme.fontCaption
+            }
+        }
+
+        ExoSparkline {
+            objectName: "statusTileSparkline"
+            // Two points make a trend. One draws a bare budget line over nothing.
+            visible: root.series.length > 1
+            values: root.series
+            budget: root.budget
+            lineColor: root.valueToneColor
+            Layout.fillWidth: true
+            Layout.preferredHeight: 24
+            Layout.topMargin: ExoTheme.spacingXs
+        }
+
+        RowLayout {
+            objectName: "statusTileChips"
+            spacing: ExoTheme.spacingXs
+            visible: root.chips.length > 0
+            Layout.fillWidth: true
+            Layout.topMargin: ExoTheme.spacingXs
+
+            Repeater {
+                id: chipsRepeater
+
+                objectName: "statusTileChipsRepeater"
+                model: root.chips
+
+                Rectangle {
+                    id: chip
+
+                    required property var modelData
+
+                    readonly property bool selected: chip.modelData.state === "selected"
+                    readonly property bool unavailable: chip.modelData.state === "unavailable"
+
+                    implicitWidth: chipLabel.implicitWidth + 2 * ExoTheme.spacingSm
+                    implicitHeight: 20
+                    color: "transparent"
+                    border.width: 1
+                    border.color: chip.selected ? ExoTheme.accent : ExoTheme.line
+                    radius: ExoTheme.radiusXs
+
+                    Accessible.role: Accessible.StaticText
+                    Accessible.name: chip.modelData.text + (chip.unavailable ? qsTr(", not available") : "")
+
+                    RowLayout {
+                        anchors.centerIn: parent
+                        spacing: 2
+
+                        Label {
+                            id: chipLabel
+
+                            text: chip.modelData.text
+                            textFormat: Text.PlainText
+                            color: chip.selected ? ExoTheme.accent
+                                 : chip.unavailable ? ExoTheme.textDim
+                                 : ExoTheme.textSecondary
+                            font {
+                                family: ExoTheme.monoFamily
+                                pixelSize: ExoTheme.fontEyebrow
+                                weight: Font.DemiBold
+                            }
+                        }
+
+                        ExoGlyph {
+                            kind: ExoGlyph.Close
+                            visible: chip.unavailable
+                            color: ExoTheme.textDim
+                            strokeWidth: 1.2
+                            Layout.preferredWidth: 9
+                            Layout.preferredHeight: 9
+                        }
+                    }
+                }
             }
         }
 

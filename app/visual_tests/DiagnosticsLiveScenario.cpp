@@ -1,5 +1,7 @@
 #include "visual_tests/DiagnosticsLiveScenario.h"
 
+#include <cmath>
+
 namespace exosnap::visual {
 namespace {
 
@@ -107,7 +109,10 @@ void WithPresentObserved(RecordingDiagnosticsSnapshot& s, exosnap::engine::Prese
 } // namespace
 
 RecordingDiagnosticsSnapshot MakeDiagnosticsLiveSnapshot(const QString& kind) {
-    if (kind == QLatin1String("idle"))
+    // Both have no live pipeline: the first is an idle recorder, the second is
+    // an idle recorder whose in-depth opt-in is on in a standard process, which
+    // is a statement about the switch and not about a recording.
+    if (kind == QLatin1String("idle") || kind == QLatin1String("opt-in-unelevated"))
         return {};
 
     RecordingDiagnosticsSnapshot s = Baseline();
@@ -182,6 +187,45 @@ RecordingDiagnosticsSnapshot MakeDiagnosticsLiveSnapshot(const QString& kind) {
         s.mux.finalizations = 2;
         return s;
     }
+    if (kind == QLatin1String("ledger") || kind == QLatin1String("after-stop")) {
+        // A twelve-and-a-half minute recording that measured present judder in
+        // three separate stretches and is contending for the GPU right now. The
+        // sequence in MakeDiagnosticsLiveSample is what actually produces those
+        // occurrences; this is the state it ends in.
+        s.elapsed_seconds = 754.0;
+        // Counters that belong to a 754 s session rather than to the 184 s
+        // baseline: every session figure the page shows is a counter over the
+        // session clock, so a fixture that mixes the two reports 14 fps on a
+        // 60 fps recording.
+        s.capture.frames_captured = 45240;
+        s.capture.frames_emitted = 45230;
+        s.capture.frames_dropped_coalesced = 2480;
+        s.video_encoder.frames_submitted = 45230;
+        s.video_encoder.frames_encoded = 45228;
+        s.disk.bytes_written = 2'040'109'465;
+        s.mux.bytes_written = s.disk.bytes_written;
+        s.disk.throughput_mib_s = 2.7;
+        s.mux.throughput_mib_s = 2.7;
+        s.health = exosnap::engine::PipelineHealth::Warning;
+        s.bottleneck = exosnap::engine::PipelineBottleneck::Gpu;
+        s.bottleneck_reason = "The captured application is saturating the GPU.";
+        WithPresentObserved(s, exosnap::engine::PresentMode::Composed, /*tearing=*/false);
+        s.capture.source_present_jitter_ms = 1.4;
+        s.compositor.gpu_exec_p99_ms = 18.4;
+        s.video_encoder.p99_ms = 13.1;
+        s.video_encoder.latest_ms = 13.4;
+        if (kind == QLatin1String("after-stop")) {
+            s.lifecycle = exosnap::engine::DiagnosticsLifecycle::Completed;
+            s.duration_skew_availability = MetricAvailability::Available;
+            s.duration_skew_ms = 9.0;
+        }
+        return s;
+    }
+    if (kind == QLatin1String("in-depth")) {
+        WithPresentObserved(s, exosnap::engine::PresentMode::IndependentFlip, /*tearing=*/false);
+        s.compositor.gpu_exec_p99_ms = 9.8;
+        return s;
+    }
     if (kind == QLatin1String("post")) {
         s.lifecycle = exosnap::engine::DiagnosticsLifecycle::Completed;
         s.duration_skew_availability = MetricAvailability::Available;
@@ -189,6 +233,115 @@ RecordingDiagnosticsSnapshot MakeDiagnosticsLiveSnapshot(const QString& kind) {
         return s;
     }
     return {};
+}
+
+int DiagnosticsLiveSampleCount(const QString& kind) {
+    // A kind with no live pipeline has nothing to wind forward.
+    if (!MakeDiagnosticsLiveSnapshot(kind).valid)
+        return 1;
+    // A full sparkline window, and enough evaluations for the ledger's
+    // two-consecutive-firings rule to open and close separate occurrences.
+    return 60;
+}
+
+exosnap::engine::RecordingDiagnosticsSnapshot MakeDiagnosticsLiveSample(const QString& kind, int step, int steps) {
+    RecordingDiagnosticsSnapshot s = MakeDiagnosticsLiveSnapshot(kind);
+    if (!s.valid || steps <= 1 || step < 0 || step >= steps)
+        return s;
+
+    const double phase = static_cast<double>(step);
+    const double progress = static_cast<double>(step + 1) / static_cast<double>(steps);
+    const double end_s = s.elapsed_seconds;
+    s.elapsed_seconds = end_s * progress;
+
+    // Deterministic, so two capture runs of the same scenario are the same image.
+    s.capture.actual_fps -= 0.55 * std::abs(std::sin(phase * 0.7));
+    s.video_encoder.p99_ms *= 1.0 + 0.22 * std::sin(phase * 0.55);
+    s.video_encoder.latest_ms = s.video_encoder.p99_ms;
+    s.disk.throughput_mib_s *= 1.0 + 0.10 * std::sin(phase * 0.41);
+    s.mux.throughput_mib_s = s.disk.throughput_mib_s;
+    s.av_drift_ms *= 1.0 + 0.6 * std::sin(phase * 0.33);
+    // Counters follow the session clock, so the tiles' session figures stay the
+    // rates the fixture describes at every step of the sequence.
+    s.disk.bytes_written = static_cast<uint64_t>(static_cast<double>(s.disk.bytes_written) * progress);
+    s.mux.bytes_written = s.disk.bytes_written;
+    s.capture.frames_captured = static_cast<uint64_t>(static_cast<double>(s.capture.frames_captured) * progress);
+    s.capture.frames_emitted = static_cast<uint64_t>(static_cast<double>(s.capture.frames_emitted) * progress);
+    s.video_encoder.frames_submitted =
+        static_cast<uint64_t>(static_cast<double>(s.video_encoder.frames_submitted) * progress);
+    s.video_encoder.frames_encoded =
+        static_cast<uint64_t>(static_cast<double>(s.video_encoder.frames_encoded) * progress);
+
+    if (kind == QLatin1String("ledger") || kind == QLatin1String("after-stop")) {
+        // Three stretches of judder, then quiet -- the ledger's "3x observed,
+        // last seen N ago" needs separate occurrences, not one long one.
+        const bool judder = (step % 19) < 3 && step < steps - 10;
+        // The GPU only starts contending near the end, so one entry is still open
+        // when the capture is taken.
+        const bool contending = step >= steps - 6;
+        s.capture.source_present_jitter_ms = judder ? 9.2 + 0.8 * std::abs(std::sin(phase)) : 1.4;
+        s.compositor.gpu_exec_p99_ms = contending ? 18.4 : 6.1;
+        // The bottleneck attribution IS the gate on the GPU-contention check, so
+        // a step that is meant to be quiet has to report no bottleneck at all --
+        // leaving the fixture's terminal attribution in place would make the
+        // check fire for the whole session instead of for its last stretch.
+        if (contending) {
+            s.health = exosnap::engine::PipelineHealth::Warning;
+            s.bottleneck = exosnap::engine::PipelineBottleneck::Gpu;
+            s.bottleneck_reason = "The captured application is saturating the GPU.";
+        } else if (judder) {
+            s.health = exosnap::engine::PipelineHealth::Warning;
+            s.bottleneck = exosnap::engine::PipelineBottleneck::Capture;
+            s.bottleneck_reason = "The source is presenting irregularly.";
+        } else {
+            s.health = exosnap::engine::PipelineHealth::Good;
+            s.bottleneck = exosnap::engine::PipelineBottleneck::None;
+            s.bottleneck_reason.clear();
+        }
+    }
+    if (kind == QLatin1String("after-stop")) {
+        // The session has to actually run before it can have stopped: the ledger
+        // only observes while the lifecycle is Recording, and only the terminal
+        // snapshot freezes it.
+        s.lifecycle = step + 1 == steps ? exosnap::engine::DiagnosticsLifecycle::Completed
+                                        : exosnap::engine::DiagnosticsLifecycle::Recording;
+    }
+    return s;
+}
+
+DiagnosticsLiveExtras MakeDiagnosticsLiveExtras(const QString& kind) {
+    DiagnosticsLiveExtras extras;
+    // The opt-in persists across launches and elevation does not, so "on but not
+    // measuring" is a state a user reaches by restarting. It has no readings at
+    // all, which is exactly what the switch's sub-text has to state.
+    if (kind == QLatin1String("opt-in-unelevated")) {
+        extras.in_depth = true;
+        return extras;
+    }
+    if (kind != QLatin1String("in-depth"))
+        return extras;
+
+    extras.elevated = true;
+    extras.in_depth = true;
+
+    diagnostics::PresentSample present;
+    present.available = true;
+    present.attributed = true;
+    present.mode = diagnostics::PresentMode::IndependentFlip;
+    present.tearing = false;
+    present.present_interval_ms = 6.9;
+    present.present_count = 45240;
+    present.discarded_count = 181;
+    present.mode_flip_count = 1;
+    extras.present = present;
+
+    diagnostics::DpcLatencyReading dpc;
+    dpc.available = true;
+    dpc.max_latency_us = 180.0;
+    dpc.avg_latency_us = 24.0;
+    dpc.worst_driver = "nvlddmkm.sys";
+    extras.dpc = dpc;
+    return extras;
 }
 
 } // namespace exosnap::visual

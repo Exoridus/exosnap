@@ -513,10 +513,6 @@ const QVector<VisualScenario> kScenarios = {
      .webcam_chroma_color_mode = QStringLiteral("custom")},
 
     {QStringLiteral("diagnostics"), QStringLiteral("Diagnostics"), VisualPage::Diagnostics},
-    {.id = QStringLiteral("diagnostics-expert"),
-     .title = QStringLiteral("Diagnostics — expert (full taxonomy)"),
-     .page = VisualPage::Diagnostics,
-     .settings_expert_mode = true},
     {.id = QStringLiteral("diagnostics-idle"),
      .title = QStringLiteral("Diagnostics — idle"),
      .page = VisualPage::Diagnostics,
@@ -533,6 +529,26 @@ const QVector<VisualScenario> kScenarios = {
      .title = QStringLiteral("Diagnostics — disk pressure"),
      .page = VisualPage::Diagnostics,
      .diag_live = QStringLiteral("disk")},
+    // The session ledger with one entry still firing and one gone quiet, which
+    // needs a sequence of snapshots rather than a single one: an entry exists
+    // only after two consecutive evaluations have measured the same problem.
+    {.id = QStringLiteral("diagnostics-recording-ledger"),
+     .title = QStringLiteral("Diagnostics — session ledger"),
+     .page = VisualPage::Diagnostics,
+     .diag_live = QStringLiteral("ledger")},
+    // The same recording, stopped: the frozen ledger and the timeline under the
+    // four facts of the finished file.
+    {.id = QStringLiteral("diagnostics-after-stop"),
+     .title = QStringLiteral("Diagnostics — after stop"),
+     .page = VisualPage::Diagnostics,
+     .record_state = VisualRecordState::Completed,
+     .diag_live = QStringLiteral("after-stop")},
+    // The in-depth switch on, with both elevated traces reporting: eight live
+    // tiles instead of four.
+    {.id = QStringLiteral("diagnostics-in-depth"),
+     .title = QStringLiteral("Diagnostics — in-depth diagnostics on"),
+     .page = VisualPage::Diagnostics,
+     .diag_live = QStringLiteral("in-depth")},
     {.id = QStringLiteral("diagnostics-paused"),
      .title = QStringLiteral("Diagnostics — paused"),
      .page = VisualPage::Diagnostics,
@@ -548,12 +564,6 @@ const QVector<VisualScenario> kScenarios = {
      .page = VisualPage::Diagnostics,
      .container = capability::Container::Mp4,
      .audio_codec = capability::AudioCodec::Flac},
-    {.id = QStringLiteral("diagnostics-blocked-expert"),
-     .title = QStringLiteral("Diagnostics — blocked (Tier-1, expert)"),
-     .page = VisualPage::Diagnostics,
-     .container = capability::Container::Mp4,
-     .audio_codec = capability::AudioCodec::Flac,
-     .settings_expert_mode = true},
     // Tier-2 measured problem: present-time judder while recording (rec.001).
     {.id = QStringLiteral("diagnostics-issues"),
      .title = QStringLiteral("Diagnostics — measured problem (Tier-2)"),
@@ -574,11 +584,13 @@ const QVector<VisualScenario> kScenarios = {
      .page = VisualPage::Diagnostics,
      .record_state = VisualRecordState::Completed,
      .diag_live = QStringLiteral("post")},
-    // Elevation: Expert view showing the locked elevated-diagnostics affordance.
+    // Elevation: the in-depth opt-in on in a standard process, where the switch's
+    // sub-text is the whole statement of the gate. The switch is on, no ETW
+    // session exists, and no in-depth tile has a reading.
     {.id = QStringLiteral("diagnostics-elevation"),
-     .title = QStringLiteral("Diagnostics — elevation (Tier-4 unlock)"),
+     .title = QStringLiteral("Diagnostics — elevation gate"),
      .page = VisualPage::Diagnostics,
-     .settings_expert_mode = true},
+     .diag_live = QStringLiteral("opt-in-unelevated")},
     // Hotkeys now live as an embedded card inside Settings (PS-PHASE-C). These
     // scenarios drive the embedded HotkeysSettingsPanel and scroll it into view,
     // replacing the former standalone-page hotkeys-* scenarios with equal coverage

@@ -125,4 +125,20 @@ namespace exosnap::notifications {
     return QString();
 }
 
+// The body of the "Recording saved" toast: the file name, and what the session
+// measured while it was being written.
+//
+// No toast fires for a measured problem DURING a recording -- interrupting the
+// thing being recorded to report on it is the one place a notification cannot
+// go -- so this is where the count is first said out loud. Zero says nothing at
+// all rather than "0 problems observed", which reads as an accusation of a
+// recording that went fine.
+[[nodiscard]] inline QString SavedRecordingBody(const QString& file_name, int problems) {
+    if (problems <= 0)
+        return file_name;
+    return file_name + QStringLiteral(" \xc2\xb7 %1 problem%2 observed")
+                           .arg(problems)
+                           .arg(problems == 1 ? QString() : QStringLiteral("s"));
+}
+
 } // namespace exosnap::notifications

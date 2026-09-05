@@ -2212,3 +2212,143 @@ TEST(RecommendationEngineTest, UnattributedPresentSampleRaisesNoPerSourceCards) 
 }
 
 } // namespace exosnap::diagnostics
+
+namespace exosnap::diagnostics {
+
+// --- Numeric measurement + budget on the live measured problems ---
+//
+// Every Tier-2 check that compares a measurement against a budget carries both as
+// numbers, not only inside the rendered current_value string. A consumer that has
+// to rank, tint or accumulate the measurement must never parse the sentence back.
+
+TEST(RecommendationEngineLive, JudderCarriesNumericMeasurementAndBudget) {
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+    config.frame_rate_num = 60;
+    config.frame_rate_den = 1;
+    const auto live = MakeJudderSnapshot(/*cfr=*/true, /*jitter_ms=*/9.0, /*coalesce_ratio=*/1.0);
+    const DiagnosticChecklist list = RecommendationEngine(caps, config, std::nullopt, true, "", &live).Generate();
+    const auto it = std::find_if(list.results.begin(), list.results.end(),
+                                 [](const DiagnosticResult& r) { return r.id == "rec.001"; });
+    ASSERT_NE(it, list.results.end());
+    ASSERT_TRUE(it->measured_value.has_value());
+    EXPECT_DOUBLE_EQ(*it->measured_value, 9.0);
+    ASSERT_TRUE(it->budget_value.has_value());
+    EXPECT_DOUBLE_EQ(*it->budget_value, 8.0);
+    EXPECT_EQ(it->value_unit, "ms");
+}
+
+TEST(RecommendationEngineLive, GpuContentionCarriesP99AgainstTheFrameBudget) {
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+    exosnap::engine::RecordingDiagnosticsSnapshot live;
+    live.valid = true;
+    live.lifecycle = exosnap::engine::DiagnosticsLifecycle::Recording;
+    live.bottleneck = exosnap::engine::PipelineBottleneck::Gpu;
+    live.compositor.gpu_exec_p99_ms = 24.0;
+    live.capture.target_fps = 60.0;
+    const DiagnosticChecklist list = RecommendationEngine(caps, config, 0, true, "NTFS", &live, nullptr).Generate();
+    const auto it = std::find_if(list.results.begin(), list.results.end(),
+                                 [](const DiagnosticResult& r) { return r.id == "rec.gpu.contention"; });
+    ASSERT_NE(it, list.results.end());
+    ASSERT_TRUE(it->measured_value.has_value());
+    EXPECT_DOUBLE_EQ(*it->measured_value, 24.0);
+    ASSERT_TRUE(it->budget_value.has_value());
+    EXPECT_DOUBLE_EQ(*it->budget_value, 1000.0 / 60.0);
+    EXPECT_EQ(it->value_unit, "ms");
+}
+
+TEST(RecommendationEngineLive, DiskWriteStallCarriesPeakWriteAgainstItsThreshold) {
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+    exosnap::engine::RecordingDiagnosticsSnapshot snap;
+    snap.valid = true;
+    snap.disk.latency_availability = exosnap::engine::MetricAvailability::Available;
+    snap.disk.peak_write_ms = 150.0;
+    const DiagnosticChecklist list = RecommendationEngine(caps, config, std::nullopt, true, "NTFS", &snap).Generate();
+    const auto it = std::find_if(list.results.begin(), list.results.end(),
+                                 [](const DiagnosticResult& r) { return r.id == "rec.disk.writestall"; });
+    ASSERT_NE(it, list.results.end());
+    ASSERT_TRUE(it->measured_value.has_value());
+    EXPECT_DOUBLE_EQ(*it->measured_value, 150.0);
+    ASSERT_TRUE(it->budget_value.has_value());
+    EXPECT_DOUBLE_EQ(*it->budget_value, 100.0);
+    EXPECT_EQ(it->value_unit, "ms");
+}
+
+TEST(RecommendationEngineLive, DpcLatencyCarriesMicrosecondsAgainstOneMillisecond) {
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+    RecommendationEngine engine(caps, config, std::nullopt, true, "NTFS", nullptr, nullptr);
+    engine.SetDpcLatency({/*max*/ 2500.0, /*avg*/ 180.0, "nvlddmkm.sys", /*available*/ true});
+    const DiagnosticChecklist list = engine.Generate();
+    const auto it = std::find_if(list.results.begin(), list.results.end(),
+                                 [](const DiagnosticResult& r) { return r.id == "rec.dpc.latency"; });
+    ASSERT_NE(it, list.results.end());
+    ASSERT_TRUE(it->measured_value.has_value());
+    EXPECT_DOUBLE_EQ(*it->measured_value, 2500.0);
+    ASSERT_TRUE(it->budget_value.has_value());
+    EXPECT_DOUBLE_EQ(*it->budget_value, 1000.0);
+    EXPECT_EQ(it->value_unit, "us");
+}
+
+TEST(RecommendationEngineLive, DiscardedPresentsCarryAPercentageAgainstItsThreshold) {
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+    PresentSample present;
+    present.available = true;
+    present.attributed = true;
+    present.present_count = 1000;
+    present.discarded_count = 500;
+    const DiagnosticChecklist list = RecommendationEngine(caps, config, 0, true, "NTFS", nullptr, &present).Generate();
+    const auto it = std::find_if(list.results.begin(), list.results.end(),
+                                 [](const DiagnosticResult& r) { return r.id == "rec.present.discarded"; });
+    ASSERT_NE(it, list.results.end());
+    ASSERT_TRUE(it->measured_value.has_value());
+    EXPECT_DOUBLE_EQ(*it->measured_value, 50.0);
+    ASSERT_TRUE(it->budget_value.has_value());
+    EXPECT_DOUBLE_EQ(*it->budget_value, 5.0);
+    EXPECT_EQ(it->value_unit, "%");
+}
+
+TEST(RecommendationEngineLive, PresentModeFlipsCarryACountAndNoBudget) {
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+    PresentSample present;
+    present.available = true;
+    present.attributed = true;
+    present.mode_flip_count = 12;
+    const DiagnosticChecklist list = RecommendationEngine(caps, config, 0, true, "NTFS", nullptr, &present).Generate();
+    const auto it = std::find_if(list.results.begin(), list.results.end(),
+                                 [](const DiagnosticResult& r) { return r.id == "rec.present.modeflip"; });
+    ASSERT_NE(it, list.results.end());
+    ASSERT_TRUE(it->measured_value.has_value());
+    EXPECT_DOUBLE_EQ(*it->measured_value, 12.0);
+    // A count of mode changes is not measured against a budget: five is the entry
+    // threshold for the card, not a headroom the recording is spending.
+    EXPECT_FALSE(it->budget_value.has_value());
+    EXPECT_TRUE(it->value_unit.empty());
+}
+
+TEST(RecommendationEngineLive, PacingDuplicationCarriesTheRepeatShareAgainstItsThreshold) {
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+    exosnap::engine::RecordingDiagnosticsSnapshot live;
+    live.valid = true;
+    live.lifecycle = exosnap::engine::DiagnosticsLifecycle::Recording;
+    live.video_encoder.cfr = true;
+    live.capture.target_fps = 60.0;
+    live.capture.frames_emitted = 600;
+    live.capture.frames_duplicated = 240;
+    const DiagnosticChecklist list = RecommendationEngine(caps, config, 0, true, "NTFS", &live, nullptr).Generate();
+    const auto it = std::find_if(list.results.begin(), list.results.end(),
+                                 [](const DiagnosticResult& r) { return r.id == "rec.pacing.duplication"; });
+    ASSERT_NE(it, list.results.end());
+    ASSERT_TRUE(it->measured_value.has_value());
+    EXPECT_DOUBLE_EQ(*it->measured_value, 40.0);
+    ASSERT_TRUE(it->budget_value.has_value());
+    EXPECT_DOUBLE_EQ(*it->budget_value, 25.0);
+    EXPECT_EQ(it->value_unit, "%");
+}
+
+} // namespace exosnap::diagnostics

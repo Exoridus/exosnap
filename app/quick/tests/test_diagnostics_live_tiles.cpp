@@ -1,15 +1,19 @@
-// The Diagnostics live summary: five tiles that answer, while a recording is
-// running, the questions the page could not answer in Simple mode at all.
+// The Diagnostics live summary: four tiles that answer, while a recording is
+// running, the questions the page could not answer in Simple mode at all, plus
+// the four in-depth tiles the elevated present/DPC traces add.
 //
-// The property under test throughout is that the tiles are a RENDERING of the
-// engine's verdict and never a second opinion about it. A tile is amber because
-// PipelineHealth says Warning and PipelineBottleneck names that tile's stage --
-// not because a threshold was re-implemented here.
+// Two properties are under test. The TILE tone is a rendering of the engine's
+// verdict and never a second opinion about it: a tile is amber because
+// PipelineHealth says Warning and PipelineBottleneck names that tile's stage.
+// The VALUE tint is a rendering of the session ledger: a number is green only
+// while the check that owns it has never fired, amber once it has, and neutral
+// when no check owns it at all.
 //
 // The scenarios are the same fixtures the visual harness seeds through
 // applyLiveDiagnostics(), so a capture and these assertions describe one thing.
 
 #include "diagnostics/DiagnosticsController.h"
+#include "diagnostics/SessionLedger.h"
 #include "observability/PipelineSnapshotJson.h"
 #include "visual_tests/DiagnosticsLiveScenario.h"
 
@@ -18,7 +22,9 @@
 #include <QJsonObject>
 
 #include <algorithm>
+#include <map>
 #include <string>
+#include <vector>
 
 namespace exosnap::diagnostics {
 namespace {
@@ -31,8 +37,37 @@ LiveTile Find(const std::vector<LiveTile>& tiles, const std::string& key) {
     return it == tiles.end() ? LiveTile{} : *it;
 }
 
+ReadinessTile EncoderTileOf(const std::vector<ReadinessTile>& tiles) {
+    const auto it =
+        std::find_if(tiles.begin(), tiles.end(), [](const ReadinessTile& tile) { return tile.key == "encoder"; });
+    return it == tiles.end() ? ReadinessTile{} : *it;
+}
+
 std::vector<LiveTile> TilesFor(const char* kind) {
     return BuildLiveTiles(visual::MakeDiagnosticsLiveSnapshot(QString::fromLatin1(kind)));
+}
+
+DiagnosticResult MeasuredProblem(const std::string& id) {
+    DiagnosticResult result;
+    result.id = id;
+    result.tier = DiagnosticTier::MeasuredProblem;
+    result.severity = DiagnosticSeverity::Notice;
+    result.title = id;
+    result.measured_value = 9.0;
+    result.budget_value = 8.0;
+    result.value_unit = "ms";
+    return result;
+}
+
+// A ledger in which `id` has entered and is either still firing or has gone quiet.
+SessionLedger LedgerWith(const std::string& id, bool active) {
+    SessionLedger ledger;
+    ledger.Reset(1);
+    ledger.Observe({MeasuredProblem(id)}, 1.0);
+    ledger.Observe({MeasuredProblem(id)}, 1.5);
+    if (!active)
+        ledger.Observe({}, 2.0);
+    return ledger;
 }
 
 TEST(DiagnosticsLiveTiles, AnIdlePipelineProducesNoTilesAtAll) {
@@ -42,18 +77,25 @@ TEST(DiagnosticsLiveTiles, AnIdlePipelineProducesNoTilesAtAll) {
     EXPECT_TRUE(BuildLiveTiles({}).empty());
 }
 
-TEST(DiagnosticsLiveTiles, AHealthyRecordingAnswersAllFiveQuestionsCalmly) {
+TEST(DiagnosticsLiveTiles, AHealthyRecordingAnswersItsFourQuestionsCalmly) {
     const std::vector<LiveTile> tiles = TilesFor("healthy");
-    ASSERT_EQ(tiles.size(), 5u);
-
-    const LiveTile health = Find(tiles, "pipelineHealth");
-    EXPECT_EQ(health.value, "Good");
-    EXPECT_EQ(health.sub, "No sustained bottleneck");
-    EXPECT_EQ(health.detail, "Problem drops 0");
+    ASSERT_EQ(tiles.size(), 4u);
+    EXPECT_EQ(tiles[0].key, "framePacing");
+    EXPECT_EQ(tiles[1].key, "encoder");
+    EXPECT_EQ(tiles[2].key, "audioSync");
+    EXPECT_EQ(tiles[3].key, "storage");
     // Nothing is wrong, so nothing is coloured. The 622 coalesced drops in the
     // fixture are benign and must not reach the tile.
     for (const LiveTile& tile : tiles)
         EXPECT_EQ(tile.tone, TileTone::Neutral) << tile.key;
+}
+
+TEST(DiagnosticsLiveTiles, PipelineHealthTileIsGone) {
+    // The health word and the bottleneck name are the engine's own vocabulary and
+    // belong to the pipeline stage cards. A tile repeating them told the reader
+    // there was a problem without ever saying which measurement said so.
+    for (const char* kind : {"healthy", "encoder", "disk", "judder", "degraded", "paused", "split"})
+        EXPECT_EQ(Find(TilesFor(kind), "pipelineHealth").key, std::string()) << kind;
 }
 
 TEST(DiagnosticsLiveTiles, TheEncoderTileReportsWhatIsRunningAndNotWhatWasRequested) {
@@ -84,15 +126,10 @@ TEST(DiagnosticsLiveTiles, AnUnconfiguredEncoderFallsBackToTheStreamCodecAndNotT
 
 TEST(DiagnosticsLiveTiles, EncoderPressureColoursOnlyTheEncoderTile) {
     const std::vector<LiveTile> tiles = TilesFor("encoder");
-    ASSERT_EQ(tiles.size(), 5u);
+    ASSERT_EQ(tiles.size(), 4u);
 
-    // The health tile carries the verdict; the encoder tile carries the
-    // attribution. Nothing else moves, because the engine did not blame it.
-    EXPECT_EQ(Find(tiles, "pipelineHealth").tone, TileTone::Notice);
-    EXPECT_EQ(Find(tiles, "pipelineHealth").value, "Warning");
-    EXPECT_EQ(Find(tiles, "pipelineHealth").sub, "Video encoder");
-    // The engine's own sentence, not one written by the presentation layer.
-    EXPECT_EQ(Find(tiles, "pipelineHealth").detail, "Encoder latency is approaching the frame budget.");
+    // The encoder tile carries the engine's attribution. Nothing else moves,
+    // because the engine did not blame it.
     EXPECT_EQ(Find(tiles, "encoder").tone, TileTone::Notice);
     EXPECT_EQ(Find(tiles, "framePacing").tone, TileTone::Neutral);
     EXPECT_EQ(Find(tiles, "audioSync").tone, TileTone::Neutral);
@@ -116,7 +153,8 @@ TEST(DiagnosticsLiveTiles, DiskPressureColoursStorageAndReportsTheShrinkingEstim
     const LiveTile storage = Find(tiles, "storage");
     EXPECT_EQ(storage.tone, TileTone::Notice);
     EXPECT_EQ(storage.value, "21 MiB/s");
-    EXPECT_EQ(storage.sub, "Write failures 1");
+    EXPECT_NE(storage.sub.find("Write failures 1"), std::string::npos);
+    EXPECT_EQ(storage.sub_tinted, "peak write 190 ms");
     EXPECT_NE(storage.detail.find("Est. remaining"), std::string::npos);
     EXPECT_NE(storage.detail.find("15"), std::string::npos) << "900 s is 15 minutes";
 }
@@ -160,8 +198,9 @@ TEST(DiagnosticsLiveTiles, ALostAudioSourceIsANoticeEvenWhileThePipelineIsHealth
     // and never escalates past one -- but it is not silent either.
     EXPECT_EQ(audio.tone, TileTone::Notice);
     EXPECT_NE(audio.detail.find("1 source(s) silent"), std::string::npos);
-    EXPECT_EQ(Find(tiles, "pipelineHealth").tone, TileTone::Neutral);
-    EXPECT_EQ(Find(tiles, "pipelineHealth").value, "Good");
+    // Nothing else is coloured: the engine still calls the pipeline healthy.
+    EXPECT_EQ(Find(tiles, "framePacing").tone, TileTone::Neutral);
+    EXPECT_EQ(Find(tiles, "storage").tone, TileTone::Neutral);
 }
 
 TEST(DiagnosticsLiveTiles, AudioSyncSeparatesAFaultedMeasurementFromAnAbsentOne) {
@@ -201,8 +240,8 @@ TEST(DiagnosticsLiveTiles, ARecordingWithoutAudioSaysSoInsteadOfShowingZeroDrift
 
 TEST(DiagnosticsLiveTiles, APausedRecordingStillHasALivePipelineToReportOn) {
     const std::vector<LiveTile> tiles = TilesFor("paused");
-    ASSERT_EQ(tiles.size(), 5u);
-    EXPECT_EQ(Find(tiles, "pipelineHealth").value, "Good");
+    ASSERT_EQ(tiles.size(), 4u);
+    EXPECT_EQ(Find(tiles, "framePacing").value, "59.98 fps");
 }
 
 TEST(DiagnosticsLiveTiles, ACompletedSessionHasNoLiveSummaryEvenThoughItsNumbersAreReal) {
@@ -217,25 +256,36 @@ TEST(DiagnosticsLiveTiles, ACompletedSessionHasNoLiveSummaryEvenThoughItsNumbers
     EXPECT_TRUE(BuildLiveTiles(failed).empty());
 }
 
-TEST(DiagnosticsLiveTiles, TheTileAndTheStructuredSnapshotNeverDisagree) {
+TEST(DiagnosticsLiveTiles, TheTilesAndTheStructuredSnapshotNeverDisagree) {
     // The consistency requirement, pinned rather than hoped for: an agent reading
     // pipeline.snapshot and a user reading the Diagnostics page must not be able
     // to reach opposite conclusions about the same recording. Both read the SAME
     // RecordingDiagnosticsSnapshot, so the only way they could differ is if one
     // of them classified for itself -- which is exactly what this asserts they
     // do not do.
-    for (const char* kind : {"healthy", "encoder", "disk", "judder", "degraded", "paused", "split"}) {
+    const std::map<QString, std::string> stage_of = {
+        {QStringLiteral("Capture"), "framePacing"},  {QStringLiteral("Compositor"), "framePacing"},
+        {QStringLiteral("VideoEncoder"), "encoder"}, {QStringLiteral("Audio"), "audioSync"},
+        {QStringLiteral("Muxer"), "storage"},        {QStringLiteral("Disk"), "storage"},
+    };
+    for (const char* kind : {"healthy", "encoder", "disk", "judder", "paused", "split"}) {
         const exosnap::engine::RecordingDiagnosticsSnapshot snapshot =
             visual::MakeDiagnosticsLiveSnapshot(QString::fromLatin1(kind));
         const QJsonObject json = observability::PipelineSnapshotToJson(snapshot);
-        const LiveTile health = Find(BuildLiveTiles(snapshot), "pipelineHealth");
+        const std::vector<LiveTile> tiles = BuildLiveTiles(snapshot);
+        const QString health = json.value(QStringLiteral("health")).toString();
+        const bool unwell = health == QLatin1String("Warning") || health == QLatin1String("Critical");
+        const auto stage = stage_of.find(json.value(QStringLiteral("bottleneck")).toString());
 
-        EXPECT_EQ(QString::fromStdString(health.value), json.value(QStringLiteral("health")).toString()) << kind;
-        // Tone follows the health word, so a Good pipeline can never be painted
-        // as a warning and a Warning one can never be painted as calm.
-        const bool unwell = json.value(QStringLiteral("health")).toString() == QLatin1String("Warning") ||
-                            json.value(QStringLiteral("health")).toString() == QLatin1String("Critical");
-        EXPECT_EQ(health.tone != TileTone::Neutral, unwell) << kind;
+        if (unwell && stage != stage_of.end()) {
+            EXPECT_NE(Find(tiles, stage->second).tone, TileTone::Neutral) << kind;
+        } else {
+            // A Good pipeline can never be painted as a warning. The two
+            // self-standing measured notices (a lost audio source, a write
+            // failure) have their own fixtures and are asserted separately.
+            for (const LiveTile& tile : tiles)
+                EXPECT_EQ(tile.tone, TileTone::Neutral) << kind << "/" << tile.key;
+        }
     }
 }
 
@@ -247,5 +297,197 @@ TEST(DiagnosticsLiveTiles, TheTileSetIsStableAcrossIdenticalSnapshots) {
     EXPECT_NE(TilesFor("healthy"), TilesFor("encoder"));
 }
 
+// ── Value tint, budgets, session figures ────────────────────────────────────────
+
+TEST(DiagnosticsLiveTiles, FramePacingValueIsGreenOnlyWhileNoCheckThatOwnsItHasFired) {
+    const exosnap::engine::RecordingDiagnosticsSnapshot healthy =
+        visual::MakeDiagnosticsLiveSnapshot(QStringLiteral("healthy"));
+
+    const SessionLedger clean;
+    const LiveTile calm = Find(BuildLiveTiles(LiveTileInputs{healthy, clean}), "framePacing");
+    EXPECT_EQ(calm.value_tone, ValueTone::Ok);
+    EXPECT_EQ(calm.sub_tone, ValueTone::Ok);
+
+    const SessionLedger firing = LedgerWith("rec.001", /*active=*/true);
+    const LiveTile now = Find(BuildLiveTiles(LiveTileInputs{healthy, firing}), "framePacing");
+    EXPECT_EQ(now.value_tone, ValueTone::Warn);
+    EXPECT_EQ(now.sub_tone, ValueTone::Warn);
+    EXPECT_EQ(now.sub_tinted, "jitter 1.2 ms");
+
+    // Quiet again: the big value is about now and goes back to green, the small
+    // sub-value is about the session and stays amber.
+    const SessionLedger quiet = LedgerWith("rec.001", /*active=*/false);
+    const LiveTile after = Find(BuildLiveTiles(LiveTileInputs{healthy, quiet}), "framePacing");
+    EXPECT_EQ(after.value_tone, ValueTone::Ok);
+    EXPECT_EQ(after.sub_tone, ValueTone::Warn);
+}
+
+TEST(DiagnosticsLiveTiles, StorageThroughputHasNoOwnerAndStaysNeutral) {
+    const exosnap::engine::RecordingDiagnosticsSnapshot disk =
+        visual::MakeDiagnosticsLiveSnapshot(QStringLiteral("disk"));
+
+    const SessionLedger clean;
+    const LiveTile calm = Find(BuildLiveTiles(LiveTileInputs{disk, clean}), "storage");
+    // 92 MiB/s is not fast or slow, it is what is being written. No check owns it.
+    EXPECT_EQ(calm.value_tone, ValueTone::Neutral);
+
+    const SessionLedger stalling = LedgerWith("rec.disk.writestall", /*active=*/true);
+    const LiveTile stalled = Find(BuildLiveTiles(LiveTileInputs{disk, stalling}), "storage");
+    EXPECT_EQ(stalled.value_tone, ValueTone::Neutral);
+    EXPECT_EQ(stalled.sub_tone, ValueTone::Warn);
+}
+
+TEST(DiagnosticsLiveTiles, EncoderP99CarriesTheBudgetAndTheContentionCheckOwnsIt) {
+    const exosnap::engine::RecordingDiagnosticsSnapshot healthy =
+        visual::MakeDiagnosticsLiveSnapshot(QStringLiteral("healthy"));
+    const SessionLedger clean;
+    const LiveTile encoder = Find(BuildLiveTiles(LiveTileInputs{healthy, clean}), "encoder");
+    ASSERT_TRUE(encoder.budget.has_value());
+    EXPECT_DOUBLE_EQ(*encoder.budget, 1000.0 / 60.0);
+    EXPECT_EQ(encoder.sub_tinted, "p99 3.1 ms");
+    // A codec name is not a measurement, so nothing tints it.
+    EXPECT_EQ(encoder.value_tone, ValueTone::Neutral);
+
+    const SessionLedger contended = LedgerWith("rec.gpu.contention", /*active=*/false);
+    EXPECT_EQ(Find(BuildLiveTiles(LiveTileInputs{healthy, contended}), "encoder").sub_tone, ValueTone::Warn);
+}
+
+TEST(DiagnosticsLiveTiles, SessionDetailCarriesTheWholeRunAndNotTheLastPublish) {
+    const std::vector<LiveTile> tiles = TilesFor("healthy");
+    // 11038 emitted frames over 184 s.
+    EXPECT_EQ(Find(tiles, "framePacing").session_detail, "session avg 59.99 fps");
+    // The engine's encoder percentiles are rolling-window, so the session figure
+    // for the encoder is the rate it actually got through.
+    EXPECT_EQ(Find(tiles, "encoder").session_detail, "session avg 59.98 fps encoded");
+    // 1.5 GiB over 184 s, not the throughput of the last publish window.
+    EXPECT_EQ(Find(tiles, "storage").session_detail, "session avg 8 MiB/s");
+    EXPECT_EQ(Find(tiles, "audioSync").session_detail, "session peak 1.7 ms");
+}
+
+TEST(DiagnosticsLiveTiles, FourTilesWithoutDepthEightWithIt) {
+    const exosnap::engine::RecordingDiagnosticsSnapshot healthy =
+        visual::MakeDiagnosticsLiveSnapshot(QStringLiteral("healthy"));
+    const SessionLedger clean;
+
+    PresentSample present;
+    present.available = true;
+    present.attributed = true;
+    present.mode = PresentMode::IndependentFlip;
+    present.present_count = 1000;
+    present.discarded_count = 20;
+    present.mode_flip_count = 2;
+    present.present_interval_ms = 8.3;
+
+    DpcLatencyReading dpc;
+    dpc.available = true;
+    dpc.max_latency_us = 420.0;
+    dpc.avg_latency_us = 90.0;
+    dpc.worst_driver = "nvlddmkm.sys";
+
+    EXPECT_EQ(BuildLiveTiles(LiveTileInputs{healthy, clean}).size(), 4u);
+
+    const std::vector<LiveTile> deep =
+        BuildLiveTiles(LiveTileInputs{healthy, clean, /*in_depth=*/true, present, dpc, /*gpu_exec_p99_ms=*/4.2});
+    ASSERT_EQ(deep.size(), 8u);
+    EXPECT_EQ(Find(deep, "presentMode").value, "Independent flip");
+    EXPECT_EQ(Find(deep, "presentHealth").value, "2.0% discarded");
+    EXPECT_EQ(Find(deep, "dpcLatency").value, "420 \xc2\xb5s");
+    EXPECT_EQ(Find(deep, "gpuTime").value, "4.20 ms");
+    ASSERT_TRUE(Find(deep, "gpuTime").budget.has_value());
+    EXPECT_DOUBLE_EQ(*Find(deep, "gpuTime").budget, 1000.0 / 60.0);
+}
+
+// The in-depth row is four tiles wide or it is a ragged row. A tile whose trace
+// is not reporting shows an em dash and names why, which is what the rest of the
+// product does with a value nobody measured.
+TEST(DiagnosticsLiveTiles, AnInDepthTileWithNoReadingKeepsItsPlaceAndNamesWhy) {
+    const exosnap::engine::RecordingDiagnosticsSnapshot healthy =
+        visual::MakeDiagnosticsLiveSnapshot(QStringLiteral("healthy"));
+    const SessionLedger clean;
+    const std::vector<LiveTile> tiles = BuildLiveTiles(LiveTileInputs{healthy, clean, /*in_depth=*/true});
+    ASSERT_EQ(tiles.size(), 8u);
+    EXPECT_EQ(Find(tiles, "presentMode").value, "\xe2\x80\x94");
+    EXPECT_EQ(Find(tiles, "presentMode").detail, "PresentMon trace is not reporting");
+    EXPECT_EQ(Find(tiles, "presentHealth").value, "\xe2\x80\x94");
+    EXPECT_EQ(Find(tiles, "dpcLatency").value, "\xe2\x80\x94");
+    EXPECT_EQ(Find(tiles, "dpcLatency").detail, "DPC/ISR trace is not reporting");
+    // The GPU tile reads the snapshot, so it always has a number.
+    EXPECT_EQ(Find(tiles, "gpuTime").key, "gpuTime");
+}
+
+// Spec section 8: coral only when the selected codec cannot be encoded here, or
+// when nothing can. A 9 px cross inside one chip is not the severity of the one
+// condition on this page that stops a recording from happening at all.
+TEST(DiagnosticsReadinessTiles, TheEncoderTileIsCoralWhenTheSelectedCodecCannotBeEncoded) {
+    capability::CapabilitySet caps;
+    caps.gpu_adapter_name = "NVIDIA GeForce RTX 5070 Ti";
+    caps.video_codecs[capability::VideoCodec::H264] = {capability::SupportLevel::Available, ""};
+    caps.video_codecs[capability::VideoCodec::Hevc] = {capability::SupportLevel::NotImplemented, ""};
+
+    ReadinessTileInputs inputs;
+    inputs.data_ready = true;
+    inputs.gpu_adapter_name = caps.gpu_adapter_name;
+    inputs.caps = &caps;
+    inputs.video_codec = capability::VideoCodec::H264;
+    EXPECT_EQ(EncoderTileOf(BuildReadinessTiles(inputs)).tone, TileTone::Neutral);
+
+    inputs.video_codec = capability::VideoCodec::Hevc;
+    EXPECT_EQ(EncoderTileOf(BuildReadinessTiles(inputs)).tone, TileTone::Blocker);
+
+    // No encoder at all: nothing on this machine can be recorded.
+    capability::CapabilitySet none;
+    inputs.caps = &none;
+    inputs.video_codec = capability::VideoCodec::H264;
+    EXPECT_EQ(EncoderTileOf(BuildReadinessTiles(inputs)).tone, TileTone::Blocker);
+}
+
+// ── Readiness encoder tile ──────────────────────────────────────────────────────
+
+TEST(DiagnosticsReadinessTiles, EncoderTileNamesTheGpuTrimmedWithBackendBadgeAndCodecChips) {
+    capability::CapabilitySet caps;
+    caps.gpu_adapter_name = "NVIDIA GeForce RTX 5070 Ti";
+    caps.video_codecs[capability::VideoCodec::H264] = {capability::SupportLevel::Available, ""};
+    caps.video_codecs[capability::VideoCodec::Av1] = {capability::SupportLevel::Available, ""};
+    caps.video_codecs[capability::VideoCodec::Hevc] = {capability::SupportLevel::NotImplemented, ""};
+
+    ReadinessTileInputs inputs;
+    inputs.data_ready = true;
+    inputs.gpu_adapter_name = caps.gpu_adapter_name;
+    inputs.caps = &caps;
+    inputs.video_codec = capability::VideoCodec::Av1;
+    inputs.container = capability::Container::Matroska;
+
+    const std::vector<ReadinessTile> tiles = BuildReadinessTiles(inputs);
+    const auto it =
+        std::find_if(tiles.begin(), tiles.end(), [](const ReadinessTile& tile) { return tile.key == "encoder"; });
+    ASSERT_NE(it, tiles.end());
+    // The vendor is already stated by the badge; the tile names what the user
+    // recognises on the box.
+    EXPECT_EQ(it->value, "GeForce RTX 5070 Ti");
+    EXPECT_EQ(it->head_badge, "NVENC");
+    ASSERT_EQ(it->chips.size(), 3u);
+    EXPECT_EQ(it->chips[0].label, "H.264");
+    EXPECT_EQ(it->chips[1].label, "HEVC");
+    EXPECT_EQ(it->chips[2].label, "AV1");
+    EXPECT_TRUE(it->chips[2].selected);
+    EXPECT_FALSE(it->chips[0].selected);
+    // Availability is the capability matrix's answer, not a guess from the name.
+    EXPECT_TRUE(it->chips[0].available);
+    EXPECT_FALSE(it->chips[1].available);
+    EXPECT_TRUE(it->chips[2].available);
+}
+
+TEST(DiagnosticsReadinessTiles, WithoutACapabilitySetTheCodecRowStaysEmpty) {
+    ReadinessTileInputs inputs;
+    inputs.data_ready = true;
+    inputs.gpu_adapter_name = "Intel(R) Arc A770";
+    const std::vector<ReadinessTile> tiles = BuildReadinessTiles(inputs);
+    const auto it =
+        std::find_if(tiles.begin(), tiles.end(), [](const ReadinessTile& tile) { return tile.key == "encoder"; });
+    ASSERT_NE(it, tiles.end());
+    EXPECT_EQ(it->value, "Arc A770");
+    // No capability answers means no claim about what this GPU can encode.
+    EXPECT_TRUE(it->chips.empty());
+}
 } // namespace
 } // namespace exosnap::diagnostics

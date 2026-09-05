@@ -6,9 +6,11 @@
 #include "DiagnosticsAdapter.h"
 #include "LogsAdapter.h"
 #include "PipelineStageModel.h"
+#include "SessionLedgerModel.h"
 
 #include "diagnostics/WindowTargetFacts.h"
 #include "services/SupportBundleService.h"
+#include "visual_tests/DiagnosticsLiveScenario.h"
 
 #include <QCoreApplication>
 #include <QUrl>
@@ -103,6 +105,78 @@ QVariantMap TileWithKey(const QVariantList& tiles, const QString& key) {
     return {};
 }
 
+// Captures the first bool payload alongside the count.
+class BoolSignalCounter {
+  public:
+    template <typename Sender, typename Signal> BoolSignalCounter(Sender* sender, Signal signal) {
+        QObject::connect(sender, signal, sender, [this](bool value) {
+            ++count_;
+            last_ = value;
+        });
+    }
+
+    [[nodiscard]] int count() const noexcept {
+        return count_;
+    }
+    [[nodiscard]] bool last() const noexcept {
+        return last_;
+    }
+
+  private:
+    int count_ = 0;
+    bool last_ = false;
+};
+
+QVariantList SeriesOf(const DiagnosticsAdapter& adapter, const QString& key) {
+    for (const QVariant& tile : adapter.liveTiles()) {
+        const QVariantMap map = tile.toMap();
+        if (map.value(QStringLiteral("key")).toString() == key)
+            return map.value(QStringLiteral("series")).toList();
+    }
+    return {};
+}
+
+bool HasLedgerEntry(const SessionLedgerModel& model, const QString& id) {
+    for (int row = 0; row < model.rowCount(); ++row) {
+        if (model.data(model.index(row, 0), SessionLedgerModel::EntryIdRole).toString() == id)
+            return true;
+    }
+    return false;
+}
+
+// The judder fixture sits at 7.9 ms, just under the check's 8 ms threshold; the
+// ledger only has something to record once rec.001 actually fires. `elapsed_s`
+// is what makes one snapshot distinct from the next: the ledger's entry rule
+// counts measurements, so re-evaluating one snapshot must not advance it.
+exosnap::engine::RecordingDiagnosticsSnapshot JudderSnapshot(double elapsed_s = 184.0) {
+    exosnap::engine::RecordingDiagnosticsSnapshot snapshot =
+        visual::MakeDiagnosticsLiveSnapshot(QStringLiteral("judder"));
+    snapshot.capture.source_present_jitter_ms = 9.0;
+    snapshot.elapsed_seconds = elapsed_s;
+    return snapshot;
+}
+
+// A recording that has measured judder often enough for the ledger to hold it.
+// The live rail is throttled to 2 Hz, so the snapshots are pushed a full second
+// apart and each one is a genuinely new measurement.
+void RecordJudder(DiagnosticsAdapter& adapter, int samples = 4) {
+    for (int i = 0; i < samples; ++i) {
+        adapter.applyLiveDiagnostics(JudderSnapshot(184.0 + i));
+        adapter.refreshForTest();
+    }
+}
+
+bool HasIssueWithId(DiagnosticsAdapter& adapter, const QString& id) {
+    auto* model = qobject_cast<DiagnosticIssueModel*>(adapter.issues());
+    if (model == nullptr)
+        return false;
+    for (int row = 0; row < model->rowCount(); ++row) {
+        if (model->data(model->index(row, 0), DiagnosticIssueModel::IssueIdRole).toString() == id)
+            return true;
+    }
+    return false;
+}
+
 diagnostics::LogEntry MakeLogEntry(quint64 sequence, diagnostics::LogSeverity severity, const char* message) {
     diagnostics::LogEntry entry;
     entry.sequence = sequence;
@@ -122,9 +196,10 @@ TEST(DiagnosticsAdapterTest, StartsNeutralWithoutTouchingTheFilesystem) {
     EXPECT_EQ(adapter.verdictHeadline(), QStringLiteral("Not checked yet"));
     EXPECT_FALSE(adapter.dataReady());
     EXPECT_FALSE(adapter.checking());
-    EXPECT_EQ(adapter.lastCheckText(), QString::fromUtf8("Last check: \xe2\x80\x94"));
-    // Six core tiles even before any data lands; the Last-session tile is gated.
-    EXPECT_EQ(adapter.tiles().size(), 6);
+    EXPECT_EQ(adapter.lastCheckText(), QStringLiteral("Not checked yet"));
+    // The four readiness tiles exist even before any data lands, so the row
+    // is never half-built while the first probe runs.
+    EXPECT_EQ(adapter.tiles().size(), 4);
 }
 
 TEST(DiagnosticsAdapterTest, ProbeResultDrivesTheDiskTile) {
@@ -147,21 +222,35 @@ TEST(DiagnosticsAdapterTest, LastCheckTextIsStampedOnlyAfterAProbe) {
     SignalCounter spy(&adapter, &DiagnosticsAdapter::lastCheckChanged);
     adapter.applyProbeResultForTest(MakeProbe());
     EXPECT_GE(spy.count(), 1);
-    EXPECT_TRUE(adapter.lastCheckText().startsWith(QStringLiteral("Last check: ")));
-    EXPECT_FALSE(adapter.lastCheckText().endsWith(QString::fromUtf8("\xe2\x80\x94")));
+    // The band has no Run check button, so its stamp states the recheck policy
+    // rather than leaving the reader to wonder whether the page is stale.
+    EXPECT_TRUE(adapter.lastCheckText().startsWith(QStringLiteral("Checked ")));
+    EXPECT_TRUE(adapter.lastCheckText().contains(QStringLiteral("rechecks every 10 s")));
 }
 
-TEST(DiagnosticsAdapterTest, LastSessionTileAppearsOnlyAfterARecording) {
+TEST(DiagnosticsAdapterTest, TheStampReportsTheSessionWhileOneIsRunning) {
     EnsureApplication();
     DiagnosticsAdapter adapter;
     adapter.setDiagnosticConfig(MakeConfig());
-    EXPECT_TRUE(TileWithKey(adapter.tiles(), QStringLiteral("session")).isEmpty());
+
+    adapter.applyLiveDiagnostics(visual::MakeDiagnosticsLiveSnapshot(QStringLiteral("healthy")));
+    EXPECT_TRUE(adapter.lastCheckText().startsWith(QStringLiteral("Recording since ")));
+    EXPECT_TRUE(adapter.lastCheckText().contains(QStringLiteral("live 5x/s")));
+}
+
+// A finished recording is reported by the Last session card, not by a fifth
+// readiness tile: readiness answers what the machine can do next.
+TEST(DiagnosticsAdapterTest, AFinishedRecordingDoesNotAddAReadinessTile) {
+    EnsureApplication();
+    DiagnosticsAdapter adapter;
+    adapter.setDiagnosticConfig(MakeConfig());
+    EXPECT_EQ(adapter.tiles().size(), 4);
 
     SignalCounter spy(&adapter, &DiagnosticsAdapter::hasLastRecordingChanged);
     adapter.setHasLastRecording(true);
     EXPECT_EQ(spy.count(), 1);
     EXPECT_TRUE(adapter.hasLastRecording());
-    EXPECT_FALSE(TileWithKey(adapter.tiles(), QStringLiteral("session")).isEmpty());
+    EXPECT_EQ(adapter.tiles().size(), 4);
 
     // Idempotent: a repeated push must not churn the tiles.
     adapter.setHasLastRecording(true);
@@ -327,7 +416,7 @@ TEST(DiagnosticsAdapterTest, DpcLatencyThatStoppedBeingMeasuredStopsBeingReporte
         << "an unavailable reading must not leave the last measured peak on the page";
 }
 
-TEST(DiagnosticsAdapterTest, SelectedCaptureTargetDrivesTheSourceTile) {
+TEST(DiagnosticsAdapterTest, SelectedCaptureTargetNamesTheDisplayTilesSubject) {
     EnsureApplication();
     DiagnosticsAdapter adapter;
     adapter.setDiagnosticConfig(MakeCaptureConfig());
@@ -338,13 +427,12 @@ TEST(DiagnosticsAdapterTest, SelectedCaptureTargetDrivesTheSourceTile) {
     window.description = "Some Game";
     adapter.setSelectedCaptureTarget(window);
 
-    const QVariantMap tile = TileWithKey(adapter.tiles(), QStringLiteral("target"));
+    const QVariantMap tile = TileWithKey(adapter.tiles(), QStringLiteral("display"));
     ASSERT_FALSE(tile.isEmpty());
-    EXPECT_EQ(tile.value(QStringLiteral("value")).toString(), QStringLiteral("Window"));
-    EXPECT_EQ(tile.value(QStringLiteral("sub")).toString(), QStringLiteral("Some Game"));
+    EXPECT_TRUE(tile.value(QStringLiteral("sub")).toString().contains(QStringLiteral("Some Game")));
 }
 
-TEST(DiagnosticsAdapterTest, MonitorTargetTileNamesTheDisplayNotTheDevicePath) {
+TEST(DiagnosticsAdapterTest, AMonitorTargetIsNamedNotSpelledAsADevicePath) {
     EnsureApplication();
     DiagnosticsAdapter adapter;
     adapter.setDiagnosticConfig(MakeCaptureConfig());
@@ -355,10 +443,10 @@ TEST(DiagnosticsAdapterTest, MonitorTargetTileNamesTheDisplayNotTheDevicePath) {
     monitor.description = R"(\\.\DISPLAY1)";
     adapter.setSelectedCaptureTarget(monitor);
 
-    const QVariantMap tile = TileWithKey(adapter.tiles(), QStringLiteral("target"));
+    const QVariantMap tile = TileWithKey(adapter.tiles(), QStringLiteral("display"));
     ASSERT_FALSE(tile.isEmpty());
-    EXPECT_EQ(tile.value(QStringLiteral("value")).toString(), QStringLiteral("Screen"));
-    EXPECT_EQ(tile.value(QStringLiteral("sub")).toString(), QStringLiteral("Desktop - Display 1"));
+    EXPECT_TRUE(tile.value(QStringLiteral("sub")).toString().contains(QStringLiteral("Desktop - Display 1")));
+    EXPECT_FALSE(tile.value(QStringLiteral("sub")).toString().contains(QStringLiteral("DISPLAY1")));
 }
 
 TEST(DiagnosticsAdapterTest, InvalidProfileProducesBlockerCards) {
@@ -411,27 +499,218 @@ TEST(DiagnosticsAdapterTest, NavigationIsAnIntentNotAPageSwitch) {
     EnsureApplication();
     DiagnosticsAdapter adapter;
     SignalCounter logs(&adapter, &DiagnosticsAdapter::navigateToLogsRequested);
-    SignalCounter report(&adapter, &DiagnosticsAdapter::openLastReportRequested);
 
     adapter.openLogs();
-    adapter.openLastReport(); // gated: no completed recording yet
     EXPECT_EQ(logs.count(), 1);
-    EXPECT_EQ(report.count(), 0);
-
-    adapter.setHasLastRecording(true);
-    adapter.openLastReport();
-    EXPECT_EQ(report.count(), 1);
 }
 
-TEST(DiagnosticsAdapterTest, ExpertModeIsAToggleThatOnlyNotifiesOnChange) {
+// The in-depth switch reports intent; the setting itself is owned by the
+// composition root, which pushes the answer back through setInDepthEnabled().
+TEST(DiagnosticsAdapterTest, TheInDepthSwitchAsksAndDoesNotDecide) {
     EnsureApplication();
     DiagnosticsAdapter adapter;
-    SignalCounter spy(&adapter, &DiagnosticsAdapter::expertModeChanged);
-    EXPECT_FALSE(adapter.expertMode());
-    adapter.setExpertMode(true);
-    adapter.setExpertMode(true);
+    BoolSignalCounter toggled(&adapter, &DiagnosticsAdapter::inDepthToggled);
+
+    EXPECT_FALSE(adapter.inDepthEnabled());
+    EXPECT_TRUE(adapter.inDepthAvailable());
+    adapter.setInDepthEnabledFromUi(true);
+    EXPECT_EQ(toggled.count(), 1);
+    EXPECT_TRUE(toggled.last());
+    // Nothing moved here: the switch stays where it is until the setting comes back.
+    EXPECT_FALSE(adapter.inDepthEnabled());
+
+    adapter.setInDepthEnabled(true);
+    EXPECT_TRUE(adapter.inDepthEnabled());
+    // The opt-in persists across launches; elevation does not. On in a standard
+    // process there is no ETW session, and the sub-text is the one place the spec
+    // says the gate is stated.
+    EXPECT_EQ(adapter.inDepthStateText(), QStringLiteral("On \xc2\xb7 not measuring \xc2\xb7 needs an admin relaunch"));
+
+    adapter.setElevated(true);
+    EXPECT_EQ(adapter.inDepthStateText(), QStringLiteral("On \xc2\xb7 elevated \xc2\xb7 PresentMon + DPC/ISR trace"));
+}
+
+TEST(DiagnosticsAdapterTest, InDepthCannotBeChangedWhileRecording) {
+    EnsureApplication();
+    DiagnosticsAdapter adapter;
+    adapter.setDiagnosticConfig(MakeConfig());
+    BoolSignalCounter toggled(&adapter, &DiagnosticsAdapter::inDepthToggled);
+
+    adapter.applyLiveDiagnostics(visual::MakeDiagnosticsLiveSnapshot(QStringLiteral("healthy")));
+    EXPECT_TRUE(adapter.recording());
+    EXPECT_FALSE(adapter.inDepthAvailable());
+    EXPECT_EQ(adapter.inDepthStateText(), QStringLiteral("Off \xc2\xb7 cannot change while recording"));
+
+    adapter.setInDepthEnabledFromUi(true);
+    EXPECT_EQ(toggled.count(), 0);
+}
+
+TEST(DiagnosticsAdapterTest, ShowInLogNamesTheDiagnosticThatRaisedIt) {
+    EnsureApplication();
+    DiagnosticsAdapter adapter;
+    StringSignalCounter spy(&adapter, &DiagnosticsAdapter::showInLogRequested);
+
+    adapter.showInLog(QString());
+    EXPECT_EQ(spy.count(), 0);
+    adapter.showInLog(QStringLiteral("rec.001"));
     EXPECT_EQ(spy.count(), 1);
-    EXPECT_TRUE(adapter.expertMode());
+    EXPECT_EQ(spy.last(), QStringLiteral("rec.001"));
+}
+
+// The sparkline is the last 60 snapshots and nothing older, and a new recording
+// starts from an empty trend rather than inheriting the previous one.
+TEST(DiagnosticsAdapterTest, SparklineSeriesAreCappedAndResetPerSession) {
+    EnsureApplication();
+    DiagnosticsAdapter adapter;
+    adapter.setDiagnosticConfig(MakeConfig());
+
+    exosnap::engine::RecordingDiagnosticsSnapshot snapshot =
+        visual::MakeDiagnosticsLiveSnapshot(QStringLiteral("healthy"));
+    for (int i = 0; i < 65; ++i) {
+        snapshot.capture.actual_fps = 59.0 + (i % 10) * 0.1;
+        adapter.applyLiveDiagnostics(snapshot);
+    }
+    adapter.refreshForTest();
+    EXPECT_EQ(SeriesOf(adapter, QStringLiteral("framePacing")).size(), 60);
+
+    snapshot.session_generation = 2;
+    adapter.applyLiveDiagnostics(snapshot);
+    adapter.refreshForTest();
+    EXPECT_EQ(SeriesOf(adapter, QStringLiteral("framePacing")).size(), 1);
+}
+
+TEST(DiagnosticsAdapterTest, LiveTilesCarryTheTintOfTheCheckThatOwnsTheValue) {
+    EnsureApplication();
+    DiagnosticsAdapter adapter;
+    adapter.setDiagnosticConfig(MakeConfig());
+    adapter.applyLiveDiagnostics(visual::MakeDiagnosticsLiveSnapshot(QStringLiteral("healthy")));
+
+    ASSERT_FALSE(adapter.liveTiles().isEmpty());
+    for (const QVariant& tile : adapter.liveTiles()) {
+        const QVariantMap map = tile.toMap();
+        EXPECT_TRUE(map.contains(QStringLiteral("valueTone")))
+            << map.value(QStringLiteral("key")).toString().toStdString();
+        EXPECT_TRUE(map.contains(QStringLiteral("subTone")));
+        EXPECT_TRUE(map.contains(QStringLiteral("series")));
+        EXPECT_TRUE(map.contains(QStringLiteral("sessionDetail")));
+    }
+    // No check has fired, so every owned number reads as measured and inside budget.
+    EXPECT_EQ(
+        TileWithKey(adapter.liveTiles(), QStringLiteral("framePacing")).value(QStringLiteral("valueTone")).toString(),
+        QStringLiteral("ok"));
+    // A codec name is owned by nothing and must never carry a verdict colour.
+    EXPECT_EQ(TileWithKey(adapter.liveTiles(), QStringLiteral("encoder")).value(QStringLiteral("valueTone")).toString(),
+              QStringLiteral("neutral"));
+}
+
+// The ledger is republished on the live cadence with the same entries. A whole-
+// list assignment would destroy every expanded card underneath the reader.
+TEST(DiagnosticsAdapterTest, TheLedgerKeepsItsRowsAcrossEvaluations) {
+    EnsureApplication();
+    DiagnosticsAdapter adapter;
+    adapter.setDiagnosticConfig(MakeCaptureConfig());
+    adapter.applyProbeResultForTest(MakeProbe());
+
+    // Four distinct snapshots: the entry rule counts measurements, not passes.
+    RecordJudder(adapter);
+
+    auto* ledger = qobject_cast<SessionLedgerModel*>(adapter.ledger());
+    ASSERT_NE(ledger, nullptr);
+    ASSERT_GT(ledger->rowCount(), 0);
+    EXPECT_TRUE(HasLedgerEntry(*ledger, QStringLiteral("rec.001")));
+
+    SignalCounter inserted(ledger, &QAbstractItemModel::rowsInserted);
+    SignalCounter resets(ledger, &QAbstractItemModel::modelReset);
+    adapter.refreshForTest();
+    adapter.refreshForTest();
+    EXPECT_EQ(inserted.count(), 0);
+    EXPECT_EQ(resets.count(), 0);
+}
+
+// A measured problem is told once. While recording the ledger owns that story,
+// so the card list must not repeat the entry above it.
+TEST(DiagnosticsAdapterTest, MeasuredProblemsAreTheLedgersWhileRecording) {
+    EnsureApplication();
+    DiagnosticsAdapter adapter;
+    adapter.setDiagnosticConfig(MakeCaptureConfig());
+    adapter.applyProbeResultForTest(MakeProbe());
+    RecordJudder(adapter);
+
+    auto* ledger = qobject_cast<SessionLedgerModel*>(adapter.ledger());
+    ASSERT_NE(ledger, nullptr);
+    ASSERT_TRUE(HasLedgerEntry(*ledger, QStringLiteral("rec.001")));
+    EXPECT_FALSE(HasIssueWithId(adapter, QStringLiteral("rec.001")));
+}
+
+// The entry rule counts measurements. refreshSnapshot() is reached from eight
+// places -- a settings change, a display change, a probe result -- and every one
+// of them re-evaluates the SAME snapshot, so a single spike must not enter.
+TEST(DiagnosticsAdapterTest, ReEvaluatingOneSnapshotNeverRaisesALedgerEntry) {
+    EnsureApplication();
+    DiagnosticsAdapter adapter;
+    adapter.setDiagnosticConfig(MakeCaptureConfig());
+    adapter.applyProbeResultForTest(MakeProbe());
+
+    adapter.applyLiveDiagnostics(JudderSnapshot(184.0));
+    for (int i = 0; i < 6; ++i)
+        adapter.refreshForTest();
+
+    auto* ledger = qobject_cast<SessionLedgerModel*>(adapter.ledger());
+    ASSERT_NE(ledger, nullptr);
+    EXPECT_FALSE(HasLedgerEntry(*ledger, QStringLiteral("rec.001")))
+        << "one measurement cannot satisfy the two-evaluation entry rule";
+
+    adapter.applyLiveDiagnostics(JudderSnapshot(185.0));
+    adapter.refreshForTest();
+    EXPECT_TRUE(HasLedgerEntry(*ledger, QStringLiteral("rec.001")));
+}
+
+// Spec section 2: after Stop the band returns to the readiness verdict and says
+// nothing about the session. Nothing else on that edge recomputes it.
+TEST(DiagnosticsAdapterTest, StoppingReturnsTheBandToTheReadinessVerdict) {
+    EnsureApplication();
+    DiagnosticsAdapter adapter;
+    adapter.setDiagnosticConfig(MakeCaptureConfig());
+    adapter.applyProbeResultForTest(MakeProbe());
+
+    RecordJudder(adapter);
+    ASSERT_TRUE(adapter.verdictHeadline().startsWith(QStringLiteral("Recording")))
+        << adapter.verdictHeadline().toStdString();
+
+    exosnap::engine::RecordingDiagnosticsSnapshot done = JudderSnapshot(188.0);
+    done.lifecycle = exosnap::engine::DiagnosticsLifecycle::Completed;
+    adapter.applyLiveDiagnostics(done);
+
+    EXPECT_FALSE(adapter.recording());
+    EXPECT_FALSE(adapter.verdictHeadline().startsWith(QStringLiteral("Recording")))
+        << adapter.verdictHeadline().toStdString();
+}
+
+// The session report is written on the recording thread and must never read the
+// ledger from here. The freeze hands it over instead.
+TEST(DiagnosticsAdapterTest, TheFrozenLedgerIsHandedOverOnceWhenTheRecordingEnds) {
+    EnsureApplication();
+    DiagnosticsAdapter adapter;
+    adapter.setDiagnosticConfig(MakeCaptureConfig());
+    adapter.applyProbeResultForTest(MakeProbe());
+
+    SignalCounter frozen(&adapter, &DiagnosticsAdapter::sessionLedgerFrozen);
+    RecordJudder(adapter);
+    EXPECT_EQ(frozen.count(), 0) << "nothing is frozen while the recording runs";
+
+    exosnap::engine::RecordingDiagnosticsSnapshot done = JudderSnapshot(188.0);
+    done.lifecycle = exosnap::engine::DiagnosticsLifecycle::Completed;
+    adapter.applyLiveDiagnostics(done);
+    EXPECT_EQ(frozen.count(), 1);
+
+    const std::vector<diagnostics::LedgerEntry> ledger = adapter.frozenLedger();
+    ASSERT_EQ(ledger.size(), 1u);
+    EXPECT_EQ(ledger.front().id, "rec.001");
+    EXPECT_FALSE(ledger.front().active) << "a handed-over occurrence is closed";
+
+    // A further terminal snapshot is not a second recording ending.
+    adapter.applyLiveDiagnostics(done);
+    EXPECT_EQ(frozen.count(), 1);
 }
 
 TEST(DiagnosticsAdapterTest, IdlePipelineShowsTheStaticReadinessStages) {
@@ -490,7 +769,6 @@ TEST(DiagnosticsAdapterTest, LiveTilesAppearWithARecordingAndVanishWhenItEnds) {
     adapter.setDiagnosticConfig(MakeConfig());
 
     // Idle: the readiness tiles are still meaningful, the live summary is not.
-    EXPECT_FALSE(adapter.liveTilesVisible());
     EXPECT_TRUE(adapter.liveTiles().isEmpty());
 
     exosnap::engine::RecordingDiagnosticsSnapshot snapshot;
@@ -502,18 +780,15 @@ TEST(DiagnosticsAdapterTest, LiveTilesAppearWithARecordingAndVanishWhenItEnds) {
     snapshot.capture.actual_fps = 59.98;
     adapter.applyLiveDiagnostics(snapshot);
 
-    ASSERT_TRUE(adapter.liveTilesVisible());
-    ASSERT_EQ(adapter.liveTiles().size(), 5);
-    EXPECT_EQ(adapter.liveTiles().at(0).toMap().value(QStringLiteral("key")).toString(),
-              QStringLiteral("pipelineHealth"));
-    EXPECT_EQ(adapter.liveTiles().at(0).toMap().value(QStringLiteral("value")).toString(), QStringLiteral("Good"));
+    ASSERT_EQ(adapter.liveTiles().size(), 4);
+    EXPECT_EQ(adapter.liveTiles().at(0).toMap().value(QStringLiteral("key")).toString(), QStringLiteral("framePacing"));
+    EXPECT_EQ(adapter.liveTiles().at(0).toMap().value(QStringLiteral("value")).toString(), QStringLiteral("59.98 fps"));
 
     // Leaving the recording lifecycle clears them on that very edge, not at the
     // next throttled tick: a live summary of a recording that has stopped is a
     // stale claim about something that is no longer happening.
     snapshot.lifecycle = exosnap::engine::DiagnosticsLifecycle::Completed;
     adapter.applyLiveDiagnostics(snapshot);
-    EXPECT_FALSE(adapter.liveTilesVisible());
     EXPECT_TRUE(adapter.liveTiles().isEmpty());
 }
 

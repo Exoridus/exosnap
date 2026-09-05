@@ -2,6 +2,7 @@
 
 #include "services/SystemAppearance.h"
 
+#include "NotificationHubPolicy.h"
 #include "QuickWindowChrome.h"
 
 #include "services/DisplayIdentityEnumerator.h"
@@ -822,8 +823,21 @@ void QuickApplication::initializeRecordWorkflow() {
             observeAudioSourceDegradation(snapshot);
             synchronizeRecordState();
         });
+    // The session report carries what the recording measured. Handed over here,
+    // on the thread that owns the ledger, the moment the adapter closes it.
+    //
+    // The sink is captured by value rather than reached for through the
+    // coordinator: this connection lives as long as the adapter, and the adapter
+    // outlives the coordinator (members are destroyed in reverse declaration
+    // order), so a terminal snapshot delivered during teardown would otherwise
+    // dereference a destroyed unique_ptr.
+    QObject::connect(&diagnostics_adapter_, &DiagnosticsAdapter::sessionLedgerFrozen, &diagnostics_adapter_,
+                     [this, sink = recording_coordinator_->FrozenLedgerSink()]() {
+                         sink->Set(diagnostics_adapter_.frozenLedger());
+                     });
     recording_coordinator_->SetResultReadyCallback([this](const UiRecordingResult& result) {
         record_view_model_.SetResult(result);
+        diagnostics_adapter_.setLastSession(result);
         // Only a failure earns a page banner. A SUCCESSFUL stop used to add a
         // full-width "Recording saved · name.mkv" notice above the Preview
         // Surface, and because the preview is the page's fill-height element
@@ -2003,7 +2017,7 @@ void QuickApplication::initializeSettingsArea() {
 
 void QuickApplication::initializeDiagnosticsArea() {
     diagnostics_adapter_.setCapabilitySet(capabilities_);
-    diagnostics_adapter_.setExpertMode(settings_.expert_mode_enabled);
+    diagnostics_adapter_.setInDepthEnabled(settings_.present_diagnostics_optin);
     // The elevation fact is a one-shot process property, not a per-refresh probe.
     const bool elevated = elevation_provider_.IsElevated();
     diagnostics_adapter_.setElevated(elevated);
@@ -2031,14 +2045,34 @@ void QuickApplication::initializeDiagnosticsArea() {
     diagnostics_adapter_.setDpcLatencyProvider(&dpc_provider_);
     applyDpcLatencyGate();
 
-    // Single global Expert state, shared with Settings (AppSettingsStore).
-    QObject::connect(&diagnostics_adapter_, &DiagnosticsAdapter::expertModeChanged, &diagnostics_adapter_,
-                     [this](bool enabled) {
-                         if (settings_.expert_mode_enabled == enabled)
+    // The in-depth switch and the Settings developer row are two controls over
+    // one setting. Writing it through SettingsAdapter takes the same path the
+    // Settings row does, including the ETW gate that path already re-applies.
+    QObject::connect(&diagnostics_adapter_, &DiagnosticsAdapter::inDepthToggled, &diagnostics_adapter_,
+                     [this](bool enabled) { settings_adapter_.setPresentDiagnosticsOptIn(enabled); });
+
+    // "Show in log" is the Logs page with the diagnostic id already in the
+    // search box; the navigation itself is the one openLogs() performs.
+    QObject::connect(&diagnostics_adapter_, &DiagnosticsAdapter::showInLogRequested, &diagnostics_adapter_,
+                     [this](const QString& entry_id) {
+                         logs_adapter_.setSearchQuery(entry_id);
+                         diagnostics_adapter_.openLogs();
+                     });
+    // An occurrence link opens the finished recording at the moment it names.
+    // openEditorForCurrentRecording() re-checks every gate, so a seek that has
+    // no editor to land in is a no-op rather than a stray request.
+    QObject::connect(&diagnostics_adapter_, &DiagnosticsAdapter::openEditAtRequested, &diagnostics_adapter_,
+                     [this](qint64 position_ms) {
+                         openEditorForCurrentRecording();
+                         edit_session_adapter_.requestSeek(position_ms);
+                     });
+    QObject::connect(&diagnostics_adapter_, &DiagnosticsAdapter::openLastSessionFolderRequested, &diagnostics_adapter_,
+                     [this]() {
+                         const QString path = record_view_model_.current_completed_recording.file_path;
+                         if (path.isEmpty())
                              return;
-                         settings_.expert_mode_enabled = enabled;
-                         settings_adapter_.setAppSettings(settings_);
-                         persistAppSettings(SettingsWriteIntent::UserEdit);
+                         QProcess::startDetached(QStringLiteral("explorer"),
+                                                 {QStringLiteral("/select,"), QDir::toNativeSeparators(path)});
                      });
 
     QObject::connect(&diagnostics_adapter_, &DiagnosticsAdapter::applyFixAccepted, &diagnostics_adapter_,
@@ -2505,13 +2539,11 @@ void QuickApplication::wireSettingsCommands() {
         const bool previous_present_optin = settings_.present_diagnostics_optin;
         settings_ = settings_adapter_.appSettings();
         persistAppSettings(SettingsWriteIntent::UserEdit);
-        // Expert mode is one product setting behind two surfaces. The Diagnostics
-        // adapter keeps its own copy, seeded once at startup, so without this the
-        // Settings toggle moved Settings alone and Diagnostics stayed in the
-        // arrangement it was built with until the next launch. The write is
-        // idempotent and the reverse connection drops out on an unchanged value,
-        // so the two directions do not loop.
-        diagnostics_adapter_.setExpertMode(settings_.expert_mode_enabled);
+        // The present/DPC opt-in is one product setting behind two switches. The
+        // Diagnostics adapter keeps its own copy, seeded once at startup, so
+        // without this push the Settings row moved Settings alone and the
+        // Diagnostics header switch stayed where it was until the next launch.
+        diagnostics_adapter_.setInDepthEnabled(settings_.present_diagnostics_optin);
         if (settings_.update_channel != previous_update_channel)
             applyUpdateChannel();
         applyThemeFromSettings();
@@ -2964,6 +2996,43 @@ void QuickApplication::applyShellVisualScenarios() {
             QStringLiteral("An unfinished recording from 09 Aug 2026 was found."), NotificationAction::OpenRecovery);
 }
 
+namespace {
+
+// Harness-only: the elevated DPC/ISR reading a --visual-test scenario states,
+// standing in for a kernel trace a capture run must never open.
+class FixedDpcLatencyProvider final : public diagnostics::IDpcLatencyProvider {
+  public:
+    explicit FixedDpcLatencyProvider(diagnostics::DpcLatencyReading reading) : reading_(std::move(reading)) {
+    }
+
+    [[nodiscard]] diagnostics::DpcLatencyReading Read() const override {
+        return reading_;
+    }
+
+  private:
+    diagnostics::DpcLatencyReading reading_;
+};
+
+// The finished recording the after-stop scenario reports on. Deliberately not a
+// real file: the Last session card states facts about a result, and the harness
+// supplies the result rather than requiring a recording on this machine.
+UiRecordingResult MakeVisualRecordingResult() {
+    UiRecordingResult result;
+    result.succeeded = true;
+    result.output_path = L"exosnap-2026-09-05-154112.mkv";
+    result.output_file_bytes = 2'040'109'465;
+    result.elapsed_seconds = 758.0;
+    result.media_duration_seconds = 754.0;
+    result.container = exosnap::engine::Container::Matroska;
+    result.audio_codec = exosnap::engine::AudioCodec::Opus;
+    result.frame_rate_num = 60;
+    result.frame_rate_den = 1;
+    result.video_codec = exosnap::engine::VideoCodec::Av1;
+    return result;
+}
+
+} // namespace
+
 void QuickApplication::applyDiagnosticsVisualScenarios() {
     const QByteArray log_scenario = qgetenv("EXOSNAP_VISUAL_LOG_SCENARIO");
     if (!log_scenario.isEmpty()) {
@@ -3028,7 +3097,31 @@ void QuickApplication::applyDiagnosticsVisualScenarios() {
     // product's own classification of it.
     const QByteArray diag_live = qgetenv("EXOSNAP_VISUAL_DIAG_LIVE");
     if (!diag_live.isEmpty()) {
-        diagnostics_adapter_.applyLiveDiagnostics(visual::MakeDiagnosticsLiveSnapshot(QString::fromUtf8(diag_live)));
+        const QString kind = QString::fromUtf8(diag_live);
+        const visual::DiagnosticsLiveExtras extras = visual::MakeDiagnosticsLiveExtras(kind);
+        if (extras.elevated)
+            diagnostics_adapter_.setElevated(true);
+        diagnostics_adapter_.setInDepthEnabled(extras.in_depth);
+        if (extras.present.has_value())
+            diagnostics_adapter_.setPresentSample(extras.present);
+        if (extras.dpc.has_value()) {
+            visual_dpc_provider_ = std::make_unique<FixedDpcLatencyProvider>(*extras.dpc);
+            diagnostics_adapter_.setDpcLatencyProvider(visual_dpc_provider_.get());
+        }
+
+        // A sequence, not one snapshot. A sparkline of a single sample is a flat
+        // line and a session ledger needs two consecutive evaluations before it
+        // records anything, so a capture seeded with one snapshot would
+        // photograph neither feature. Each sample is pushed through the same
+        // applyLiveDiagnostics() the engine uses; the explicit refresh after it
+        // stands in for the 500 ms the live rail would otherwise wait.
+        const int steps = visual::DiagnosticsLiveSampleCount(kind);
+        for (int step = 0; step < steps; ++step) {
+            diagnostics_adapter_.applyLiveDiagnostics(visual::MakeDiagnosticsLiveSample(kind, step, steps));
+            diagnostics_adapter_.refreshForTest();
+        }
+        if (kind == QLatin1String("after-stop"))
+            diagnostics_adapter_.setLastSession(MakeVisualRecordingResult());
         diagnostics_visual_scenario_active_ = true;
     }
 }
@@ -4263,10 +4356,13 @@ void QuickApplication::publishRecordingResultNotification(const UiRecordingResul
         // recordings go) at the cost of the one thing they want to read. The
         // path itself is not lost: Show in folder acts on it, and Edit carries
         // it as its payload.
-        event.body = QFileInfo(QString::fromStdWString(result.output_path)).fileName();
+        const int problems = static_cast<int>(diagnostics_adapter_.frozenLedger().size());
+        event.body = notifications::SavedRecordingBody(
+            QFileInfo(QString::fromStdWString(result.output_path)).fileName(), problems);
         event.action = notifications::NotificationAction::Edit;
         event.action_payload = QString::fromStdWString(result.output_path);
-        event.secondary_action = notifications::NotificationAction::OpenFolder;
+        event.secondary_action = problems > 0 ? notifications::NotificationAction::OpenDiagnostics
+                                              : notifications::NotificationAction::OpenFolder;
     } else if (models::IsDiskSpaceAutoStop(result)) {
         // The one low-storage producer there is. The threshold, the monitoring
         // and the decision to stop all belong to the coordinator's disk guard

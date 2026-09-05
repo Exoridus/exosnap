@@ -56,7 +56,6 @@ qt_add_qml_module(exosnap
         DeviceCapabilityRow.qml
         DeviceCodecChip.qml
         DiagnosticsPage.qml
-        DiagnosticsRowCard.qml
         DiagnosticsSectionHeader.qml
         DiagnosticsSelfTestRow.qml
         EditDetailsRail.qml
@@ -76,6 +75,8 @@ qt_add_qml_module(exosnap
         ExoGlyph.qml
         ExoIssueCard.qml
         ExoKeyValueTable.qml
+        ExoLastSessionCard.qml
+        ExoLedgerCard.qml
         ExoLogView.qml
         ExoMenu.qml
         ExoMenuItem.qml
@@ -87,6 +88,7 @@ qt_add_qml_module(exosnap
         ExoPipelineFlow.qml
         ExoPipelineStepCard.qml
         ExoProgressBar.qml
+        ExoReferenceRow.qml
         ExoScrollBar.qml
         ExoScrollView.qml
         ExoSearchField.qml
@@ -94,8 +96,10 @@ qt_add_qml_module(exosnap
         ExoSelect.qml
         ExoLevelMeter.qml
         ExoLevelMeterScale.qml
+        ExoSessionTimeline.qml
         ExoSettingRow.qml
         ExoSlider.qml
+        ExoSparkline.qml
         ExoStatusPill.qml
         ExoStatusTile.qml
         ExoSwitch.qml
@@ -163,6 +167,8 @@ qt_add_qml_module(exosnap
         DiagnosticIssueModel.h
         PipelineStageModel.cpp
         PipelineStageModel.h
+        SessionLedgerModel.cpp
+        SessionLedgerModel.h
         DiagnosticsAdapter.cpp
         DiagnosticsAdapter.h
         EditExportAdapter.cpp
@@ -325,6 +331,8 @@ target_sources(exosnap
         SettingsAutomationKeys.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsController.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsController.h
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/SessionLedger.cpp
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/SessionLedger.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsProbe.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsProbe.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/FixActionDispatcher.cpp
@@ -903,6 +911,16 @@ qt_add_qml_module(record_controls_qml_tests
         # only matter together -- a test module built without the paired parser
         # would exercise a SpinBox that never showed the bug.
         ExoNumberField.qml
+        # The tile's head badge and codec chips draw a small tone-tinted pill,
+        # same as the diagnostics id/Elev chips elsewhere.
+        ExoBadge.qml
+        # The collapsed row's own disclosure re-uses the shared chevron rather
+        # than ExoDisclosure, so it needs the chevron type resolved too.
+        ExoLedgerCard.qml
+        ExoLastSessionCard.qml
+        ExoReferenceRow.qml
+        ExoSessionTimeline.qml
+        ExoSparkline.qml
         ExoStatusTile.qml
         # The shared overlay card and the two components it draws itself from.
         # Its layout invariants — the card staying out of the shell's title
@@ -1467,8 +1485,12 @@ exosnap_add_gtest(
         # The live summary tiles, driven by the SAME fixtures the visual harness
         # seeds, so a capture and these assertions describe one thing.
         ${EXOSNAP_QUICK_TESTS_DIR}/test_diagnostics_live_tiles.cpp
+        # The per-session record of what was measured: the entry debounce and the
+        # permanence rule the ledger cards and the frozen session report rest on.
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_session_ledger.cpp
         ${PROJECT_SOURCE_DIR}/app/visual_tests/DiagnosticsLiveScenario.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsController.cpp
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/SessionLedger.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsProbe.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/FixActionDispatcher.cpp
     LIBRARIES
@@ -1597,10 +1619,15 @@ exosnap_add_gtest(
     SOURCES
         ${EXOSNAP_QUICK_TESTS_DIR}/test_diagnostics_adapter.cpp
         ${EXOSNAP_QUICK_TESTS_DIR}/test_pipeline_stage_model.cpp
+        # The same live fixtures the visual harness seeds, so the adapter cases
+        # and a capture describe one recording rather than two.
+        ${PROJECT_SOURCE_DIR}/app/visual_tests/DiagnosticsLiveScenario.cpp
         DiagnosticIssueModel.cpp
         DiagnosticIssueModel.h
         PipelineStageModel.cpp
         PipelineStageModel.h
+        SessionLedgerModel.cpp
+        SessionLedgerModel.h
         DiagnosticsAdapter.cpp
         DiagnosticsAdapter.h
         LogEntryModel.cpp
@@ -1608,6 +1635,7 @@ exosnap_add_gtest(
         LogsAdapter.cpp
         LogsAdapter.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsController.cpp
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/SessionLedger.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsProbe.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/FixActionDispatcher.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/LogViewPolicy.cpp

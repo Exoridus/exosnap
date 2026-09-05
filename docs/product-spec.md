@@ -27,8 +27,8 @@ principles that shape every visible decision:
   encoder mode as something it is not (for example, never calling NVENC "CRF"), and states file-size
   and capability limits plainly ("approximately N GB", not a byte-exact promise).
 - **Calm, not alarmist.** Diagnostics defaults to a quiet, factual tone. Only real, measured problems
-  are surfaced; each problem carries one primary fix; deeper detail sits behind an expert toggle;
-  hard blockers are always visible.
+  are surfaced; each problem carries one primary fix; deeper detail sits behind collapsed reference
+  rows; hard blockers are always visible.
 - **Privacy by default.** No analytics, no telemetry, no account. The app makes no network
   connection unless the user opts in to a specific feature.
 - **Engine stays UI-agnostic.** Track resolution, capability, and reconciliation live in the engine;
@@ -62,19 +62,19 @@ setting does not live in Diagnostics.
 - **Settings** - unified recording configuration in two balanced card columns. The left column is
   **Recording format · Audio sources · Output · App behaviour · Hotkeys · Appearance**; the right is
   **Video quality & timing · Audio encoding · Webcam · Overlays · Updates · Support & diagnostics**.
-  There is no separate Advanced section - a global **Expert** toggle (shared with Diagnostics)
+  There is no separate Advanced section - a global **Expert** toggle, a Settings-only control,
   reveals additional rows in place within a section rather than hiding or revealing a whole card
   (§12). Hotkeys is an embedded card, not a separate nav item.
-- **Diagnostics** — the live, changeable environment as readiness cards (disk, display, audio,
-  elevation, blockers), plus a **Hardware capabilities** section: one card per detected DXGI
-  adapter (iGPU/dGPU), with the per-adapter capability matrix for whichever card is being
-  inspected — codec support and its provenance, per-codec 8-bit 4:4:4 (YUV444) encode support
-  probed on that specific GPU (H.264 / HEVC — AV1 is 4:2:0 only), and per-codec NVENC
-  advanced-encode facts: B-frames (max count), Lookahead and Temporal AQ. All of it is
-  informational; no Expert control reads these facts. Selecting a card is **inspection only** —
-  the encode device is not a user choice (see §2.1). The section is collapsed by default and
-  expanded in Expert mode; expanding it is what starts the adapter scan, so a cold DXGI
-  enumeration and NVENC probe are never paid for unasked.
+- **Diagnostics** — a state-ordered page (§11): the live, changeable environment as readiness tiles
+  (disk, display, audio, encoder) and live tiles while recording, plus a **Hardware capabilities**
+  reference row: one card per detected DXGI adapter (iGPU/dGPU), with the per-adapter capability
+  matrix for whichever card is being inspected — codec support and its provenance, per-codec 8-bit
+  4:4:4 (YUV444) encode support probed on that specific GPU (H.264 / HEVC — AV1 is 4:2:0 only), and
+  per-codec NVENC advanced-encode facts: B-frames (max count), Lookahead and Temporal AQ. All of it
+  is informational; no toggle reads these facts. Selecting a card is **inspection only** — the
+  encode device is not a user choice (see §2.1). Hardware capabilities is one of the page's collapsed
+  reference rows, each with a one-line summary in its header; expanding this one is what starts the
+  adapter scan, so a cold DXGI enumeration and NVENC probe are never paid for unasked.
 - **Logs** — runtime events and per-session recording diagnostics, a **Startup** latency table,
   and a **Create support bundle** action.
 - **About** — application identity, build metadata, and links. The metadata table permanently
@@ -276,11 +276,11 @@ shows**. It does not appear at one rect and move to another, and a window that w
 was last closed comes back maximized without showing its normal size first.
 
 Every nav destination that has a page title states it the same way: the destination's name on the
-page-title rung, on the same axis as its own content, with that page's controls (Expert toggle,
-Rescan, filters) on the right of the same row. Three destinations opt out. **Record** has no page
-title - its flat context strip names the capture target instead, because the preview is that page's
-subject. **About** has no header at all, being a single centred identity card. **Settings** has no
-page title either: its first band is already a toolbar (the preset selector, its dirty badge and the
+page-title rung, on the same axis as its own content, with that page's controls (the in-depth
+diagnostics switch, filters) on the right of the same row. Three destinations opt out. **Record** has
+no page title - its flat context strip names the capture target instead, because the preview is that
+page's subject. **About** has no header at all, being a single centred identity card. **Settings**
+has no page title either: its first band is already a toolbar (the preset selector, its dirty badge and the
 preset actions), so a heading above it repeated the selected navigation tab word for word and pushed
 the page's real controls a rung further down. The Expert toggle Settings would have carried in that
 heading rides the right end of the preset toolbar instead.
@@ -1226,7 +1226,13 @@ Where each condition is stated now:
 | Audio source degraded mid-recording | Standing toast, replaced in place as sources degrade or recover, taken back when all recover |
 | Region too small, display gone, refused split | Toast, because the action simply did not happen |
 | Settings write failed | Toast |
-| Recording saved, frame saved | Toast, with the file name and **Open folder** |
+| Recording saved | Toast with the file name and, when the session ledger observed one or more problems, "N problem(s) observed" and **View diagnostics**; otherwise just the file name, with **Open folder** |
+| Frame saved | Toast, with the file name and **Open folder** |
+
+No toast is raised for a measured problem while a recording is in progress — interrupting the thing
+being recorded to report on it is the one place a notification cannot go. The notification hub
+records the problem silently instead, and the count first reaches the user in the "Recording saved"
+toast above.
 
 **Stopping a recording must not change the Preview Surface's bounds**, and neither must failing to
 start one.
@@ -1304,12 +1310,12 @@ slaving* expert toggle turns it off for byte-exact archival capture. A multi-sou
 not slaved (it mixes several device clocks).
 
 **Post-flight report card.** After each recording, a report card surfaces frame-drop %, peak A/V
-drift, and overall pipeline health. When a recording had **real** frame drops, a caution toast
-("Frames dropped") appears alongside "Recording saved", with a "View diagnostics" action. (The
-same three values ride along into the Edit/Output/Save surface, as an icon at the right end of
-its header whose tooltip carries them. The icon is a quiet info glyph while the pipeline was
-healthy, and an amber or coral warning triangle with a short label beside it when it was not —
-so a real finding is not hidden behind a hover.)
+drift, and overall pipeline health. **Real** frame drops raise no toast of their own; they appear as
+their own coral mark on the Last session card's timeline (§11), and the same three values ride along
+into the Edit/Output/Save surface as an icon at the right end of its header whose tooltip carries
+them. The icon is a quiet info glyph while the pipeline was healthy, and an amber or coral warning
+triangle with a short label beside it when it was not — so a real finding is not hidden behind a
+hover.
 
 A drop counts as **real** when the recording lost picture it should have had: the encoder could not
 keep up (backpressure), or a captured frame failed to be processed into an encodable frame. Two
@@ -1462,7 +1468,8 @@ container's border.
 A successful recording normally remains in the Completed state with **Edit** as the recommended
 action. The **Open editor when finished** toggle (Settings > Output, off by default) may open this
 workspace over Record, preloaded with the new clip; it never navigates to a sixth top-level page. With
-the toggle off, a `Recording saved` toast offers Edit and Show in folder.
+the toggle off, a `Recording saved` toast offers **Edit** and, depending on whether the session
+ledger observed a problem, either **Show in folder** or **View diagnostics** (§11).
 
 The surface scales with the window. The right rail narrows as the window gets tighter and scrolls
 when its two cards need more height than the window offers, but it is never hidden — it carries
@@ -1883,7 +1890,7 @@ The **Edit surface** is fully operable without a pointer. The trim timeline is a
 
 Diagnostics is a first-class engine, not a status readout. Its posture is **calm, not alarmist**: it
 defaults quiet, reports only real/measured problems, gives one primary fix per problem, hides depth
-behind an expert toggle, and always shows hard blockers.
+behind collapsed reference rows, and always shows hard blockers.
 
 **Measured cards added for game recording (v0.9).** Each has a source, a meaning, a cadence, a UI
 consumer and a log consumer:
@@ -1925,7 +1932,7 @@ and never blocks recording; a **Blocker** prevents recording from starting.
 **The four-tier honesty model.** Every diagnostic **declares its own tier** as part of the diagnosis
 — the tier is not re-derived downstream from an id list. The tier sets both the color and the
 default visibility, and the honesty rail is a hard rule: **hiding is only ever for noise (Tier 3 +
-4); a real problem (Tier 1 + 2) is always visible in both Simple and Expert.** No check may show a
+4); a real problem (Tier 1 + 2) is always visible, in every state of the page.** No check may show a
 Tier-3 optimization in a warn color.
 
 - **Tier 1 — Blocker** (coral). Always shown; gates recording start.
@@ -1935,25 +1942,105 @@ Tier-3 optimization in a warn color.
 - **Tier 3 — optimization tip** (mint, "better, but it runs" — codec, container, color range, FAT32,
   Opus-in-MP4). Bundled into one quiet tip chip; never turns the verdict amber.
 - **Tier 4 — fact** (neutral). Capability/environment facts (elevation baseline, live audio format).
-  Run through the same model, shown only in the Expert Environment panel, never counted in the
-  verdict.
+  Run through the same model, shown only in the **Environment & configuration** reference row, never
+  counted in the verdict.
 
 **Entry cards.** Each Tier-1/Tier-2 card carries a mono **ID chip**, an optional **Elev** lock badge
-(for checks measured from the elevated present-path baseline), its typed FixAction, and a collapsed
-**Evidence** disclosure (measured value → "why" recommendation → a log excerpt).
+(for checks measured from the elevated present-path baseline), its typed FixAction, the measured
+value and its budget inline, and a summary stating the why. Only a log excerpt stays behind a
+collapsed **Evidence** disclosure, alongside a **Show in log** link that opens the Logs page filtered
+to that diagnostic id.
 
-The Diagnostics page has a **Simple (default) view** and an **Expert toggle** (a single global state
-shared with Settings that reveals depth, not a second mode). It is a top-anchored readiness dashboard
-that fills the page height rather than a centered, compact statement: a header band (verdict icon +
-headline + subline, the Run-check control, and the last-check timestamp), then a responsive tile grid
-— **Readiness · Encoder · Disk · Display · Audio · Capture target**, plus a **Last session** tile once
-a completed recording exists — that reflows from four columns down to two as the window narrows. Any
-Tier-1/Tier-2 card follows, then one bundled Tier-3 tip chip integrated into the same layout. The
-per-adapter capability matrix follows below, inside the collapsed **Hardware capabilities** section
-(§2) - health first, technical capability second. Its rows are capabilities and its columns are
-**H.264**, **HEVC**, and **AV1**, so codec differences can be read vertically. Values such as maximum
-B-frames live in the cells; raw probe details remain below the matrix. The self-test table remains a
-separate component-by-component result list because repeated Pass results are meaningful there.
+The Diagnostics page is state-ordered rather than split into a Simple and an Expert view: the
+recording state decides what is shown, and there is no Expert control on the page at all — the global
+Expert toggle stays a Settings-only concern (§12). It is a top-anchored dashboard that fills the page
+height rather than a centered, compact statement, one layout across three states:
+
+- **Idle** — verdict band, four readiness tiles, Tier-1/Tier-2 cards, one bundled Tier-3 tip chip,
+  reference rows.
+- **Recording / Paused** — verdict band, a six-stage pipeline rail, live tiles, the session ledger,
+  Tier-1 cards, the tip chip, reference rows. Readiness tiles are hidden while recording.
+- **After Stop** (until the next recording starts) — verdict band back to the readiness verdict, the
+  Last session card, readiness tiles, cards, the tip chip, reference rows.
+
+**Reference rows** are the same four collapsed disclosures in every state, each with a one-line
+summary in its header: **Self-test** (with "Run again"), **Hardware capabilities** (with "Rescan"),
+**Environment & configuration**, and **Support bundle** (with "Create"). There are no numbered
+section titles and no "full taxonomy" subtitle.
+
+The band carries no Run-check control: the page probes on first visit (with the self-test), every
+10 s and on every settings change, and the band's own stamp says so ("Checked 15:54 · rechecks every
+10 s and on every settings change"; "Recording since 15:54 · live 5x/s" while a session runs).
+
+Tile rows are always full — four columns or two, never a ragged three — reflowing the same way the
+capture-pipeline rail does.
+
+**Readiness tiles.** Four, always in this order: **Encoder**, **Disk**, **Display**, **Audio**. The
+Encoder tile's codec row is H.264 · HEVC · AV1 in that fixed order, the selected one outlined in
+accent and a codec this GPU cannot encode dimmed with a cross; the tile itself is coral only when the
+selected codec cannot be encoded here or no encoder exists at all. The Display tile's sub-line carries
+the capture target ("144 Hz · Desktop – Display 1"); there is no separate Capture-target tile. The verdict band already states the overall rollup, first and larger, so
+there is no separate Readiness tile either, and the old Last-session tile is replaced outright by the
+Last session card below.
+
+**Live tiles.** Four while recording — Frame pacing, Encoder, Storage, Audio sync — eight with the
+in-depth switch on, which adds Present mode, Present health, DPC / ISR latency and GPU time as a
+second full row. The second row is always all four: a tile whose trace is not reporting shows an em
+dash and names why in its detail line, the same way every other unmeasured value is shown. The row is
+absent only when the switch is off.
+
+**Session ledger.** While recording, a Tier-2 measured problem that fires on two consecutive
+measurements (never a single spike, and never the same measurement counted twice) enters the ledger,
+under an OBSERVED IN THIS SESSION eyebrow. Only a check that measures something DURING the run enters:
+a condition that is a property of the configuration — free space, the pacing mode, the capture
+target's own mode — was already true before Record was pressed and belongs to the readiness surface,
+not to the record of what this recording ran into. An
+**active** entry is an expanded card: filled amber ground, a "now" badge, live duration, its measured
+value against budget inline, its summary as the why, and a collapsed **Log excerpt** disclosure with
+a **Show in log** link. A **quiet** entry (fired before, not firing now) collapses to a single 44 px
+amber-outline row — glyph, title, count, last seen, worst/budget, a "quiet" badge, the id badge — that
+expands to the full card on click. An entry never leaves before Stop, and entries stay in first-seen
+order.
+
+**Value tint.** The colour of a number comes only from the check that owns it: green inside budget,
+amber while the owning check is in the ledger, coral for a blocker, and neutral ink when no check owns
+the number at all. Colour is never the only cue — the tile keeps its glyph and the accessible name
+keeps the severity word.
+
+**Last session card.** Shown After Stop, replacing the old Last-session tile: header ("Recording
+saved · N problems observed"), the file name, then four fixed facts — **Frames dropped** (tinted
+critical above zero, ok at zero), **Achieved fps**, **A/V drift**, and **File** (valid, container,
+codec, size) — a timeline strip below them (spanning the recording's own elapsed time, one amber mark
+per ledger occurrence, width = its duration; hover names the problem, time, duration and worst value;
+click opens Edit at that time, clamped to the end of the file so a mark in the tail after the last
+encoded frame does not open past it),
+the frozen ledger worst-first with the first card expanded, and the Show in folder / Open in Edit /
+View log actions. The timeline marks ledger occurrences only: the engine keeps no timestamped record
+of individual frame drops, so a drop is not marked on the timeline — it is only counted in the
+**Frames dropped** fact above.
+
+**In-depth diagnostics switch.** A header control, not a reference row: bound to the same
+`presentDiagnosticsOptIn` setting Settings → Developer already exposes (one setting, two controls),
+disabled while recording. Its sub-text states the gate, and the opt-in and elevation are two separate
+conditions — "Off · needs an admin relaunch", "On · not measuring · needs an admin relaunch" for the
+opt-in carried over from an elevated run into a standard process, and "On · elevated · PresentMon +
+DPC/ISR trace" when the traces are actually running. Turning it on is what adds the second row of live
+tiles above.
+
+**Sparkline tiles.** Frame pacing, Encoder, Storage and Audio sync each carry a 24 px sparkline of the
+last 60 snapshots (12 s at 5 Hz), coloured by the tile's own value tone, with a dashed budget line
+where the owning check has a threshold. The detail line carries the whole-session figure — average for
+a rate, p99 for a latency; after Stop the same figures become the Last session facts.
+
+**Encoder tile.** Headline is the GPU name with its vendor prefix trimmed ("GeForce RTX 5070 Ti"); a
+backend badge (NVENC today) sits in the tile head; a codec row shows H.264 · HEVC · AV1 with the
+selected codec in an accent outline, an available-but-unselected codec in ink, and a codec this GPU
+cannot encode dimmed with a cross. The per-adapter capability matrix follows below, inside the
+collapsed **Hardware capabilities** reference row (§2) — health first, technical capability second.
+Its rows are capabilities and its columns are **H.264**, **HEVC**, and **AV1**, so codec differences
+can be read vertically. Values such as maximum B-frames live in the cells; raw probe details remain
+below the matrix. The self-test table remains a separate component-by-component result list because
+repeated Pass results are meaningful there.
 
 **FixAction model.** Each detected issue can carry a typed, executable fix action with a safety
 class, never applied silently:
@@ -1995,7 +2082,9 @@ user shares *is* the support channel. Three connected pieces make that shareable
 - **Per-recording session report.** After each recording a `session-<id>.json` is written beside
   the logs (10 most recent kept), capturing the resolved format, config, encoder init parameters,
   drop/dup/discontinuity counters, duration skew, A/V drift and peak drift, the segment list, and
-  the failure phase. Metrics with no measurement read `"unavailable"`, never a fabricated zero.
+  the failure phase. Metrics with no measurement read `"unavailable"`, never a fabricated zero. The
+  session's frozen ledger (§11) — every entry that fired, with its occurrences — is a field of this
+  report, so it rides along in the support bundle without a separate export.
 - **One-click support bundle.** A **Create support bundle** action (on Logs; also from the
   Diagnostics page) packages the rotated logs, the recent session reports, and GPU/adapter/display
   facts into a single scrubbed `.zip`. It is a neutral tool, not an error trigger — wording is
@@ -2020,11 +2109,13 @@ second in-process kernel trace on the same opt-in and the same elevation gate po
 DPC/ISR-latency check that names the offending kernel driver behind "smooth game, stuttery/crackling
 recording". It reports a peak only while it is measuring one: a trace that is stopped, refused or
 that ended by itself withdraws the reading and with it the recommendation, for the same reason the
-present figures do below. The app does not run elevated by default; when
-not elevated the toggle ("Present, tearing & latency diagnostics") is disabled with the hint "Restart
-as Administrator to enable present/tearing diagnostics", and enabling it triggers a self-relaunch
-offer (never during an active recording). The provider is never required, and the portable build
-degrades gracefully.
+present figures do below. The app does not run elevated by default. The setting behind it
+(`presentDiagnosticsOptIn`) can be turned on from either of its two controls — the Diagnostics
+header's in-depth switch (§11) or Settings → Developer's own row — whenever a recording is not
+running; turning it on does not itself relaunch the app, so the switch's sub-text states whether the
+gate has actually been cleared: "Off · needs an admin relaunch" before the next elevated launch, "On
+· elevated · PresentMon + DPC/ISR trace" once it has. The provider is never required, and the
+portable build degrades gracefully.
 
 The reported present figures always describe the **current** attribution window and nothing else.
 Starting a recording opens a window; ending it closes one, and the per-recording present, discarded
@@ -2052,7 +2143,8 @@ format expertise (**NVENC encoder preset, keyframe interval, Opus frame duration
 protects pipeline integrity and disabling it can ruin a long recording (**audio clock slaving**).
 Everything else is Default-visible even when it looks technical - mic gain, mic channel mode, audio
 bitrate, channel count, audio bit depth and FLAC compression, the brickwall limiter, microphone
-post-processing, and automatic split. The Expert toggle is one global state shared with Diagnostics.
+post-processing, and automatic split. The Expert toggle is a Settings-only control; Diagnostics does
+not read it and has no Expert view of its own (§11).
 
 Cards use this fixed two-column order. Left: **Recording format**, **Audio sources**, **Output**,
 **App behaviour**, **Hotkeys**, **Appearance**. Right: **Video quality & timing**, **Audio encoding**,

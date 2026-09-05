@@ -4,6 +4,7 @@
 #include "diagnostics/DiagnosticsProbe.h"
 #include "diagnostics/FixActionDispatcher.h"
 #include "models/CaptureTargetPresentation.h"
+#include "viewmodels/RecordViewModel.h"
 
 #include <QCoreApplication>
 #include <QDateTime>
@@ -16,7 +17,10 @@
 #include <QThread>
 #include <QVariantMap>
 
+#include <algorithm>
 #include <cmath>
+#include <limits>
+#include <unordered_set>
 #include <utility>
 
 namespace exosnap::quick {
@@ -30,6 +34,58 @@ QString Key(std::string_view value) {
     return QString::fromUtf8(value.data(), static_cast<qsizetype>(value.size()));
 }
 
+// The separator the diagnostics surface composes its one-line facts with, in
+// the same spelling the policy layer already uses.
+constexpr const char* kMiddot = "\xc2\xb7";
+
+// Up to two decimals, without the trailing zeros a fixed precision leaves
+// behind: budgets read "16.67 ms" and "8 ms", never "8.00 ms".
+QString Trimmed(double value) {
+    QString text = QString::number(value, 'f', 2);
+    if (text.contains(QLatin1Char('.'))) {
+        while (text.endsWith(QLatin1Char('0')))
+            text.chop(1);
+        if (text.endsWith(QLatin1Char('.')))
+            text.chop(1);
+    }
+    return text;
+}
+
+QString Measured(double value, const std::string& unit) {
+    if (unit.empty())
+        return Trimmed(value);
+    return Trimmed(value) + QLatin1Char(' ') + QString::fromStdString(unit);
+}
+
+QString DurationText(double seconds) {
+    if (seconds < 0.0)
+        seconds = 0.0;
+    if (seconds < 60.0)
+        return Trimmed(seconds) + QStringLiteral(" s");
+    const int total = static_cast<int>(seconds + 0.5);
+    return QStringLiteral("%1 min %2 s").arg(total / 60).arg(total % 60);
+}
+
+// Position inside the recording, as the transport and the Edit surface show it.
+QString ClipTime(double seconds) {
+    const int total = static_cast<int>(seconds);
+    return QStringLiteral("%1:%2").arg(total / 60, 2, 10, QLatin1Char('0')).arg(total % 60, 2, 10, QLatin1Char('0'));
+}
+
+QVariantList ChipsToList(const std::vector<diagnostics::CodecChip>& chips) {
+    QVariantList list;
+    list.reserve(static_cast<qsizetype>(chips.size()));
+    for (const diagnostics::CodecChip& chip : chips) {
+        QVariantMap map;
+        map.insert(QStringLiteral("text"), QString::fromStdString(chip.label));
+        map.insert(QStringLiteral("state"), chip.selected    ? QStringLiteral("selected")
+                                            : chip.available ? QStringLiteral("available")
+                                                             : QStringLiteral("unavailable"));
+        list.append(map);
+    }
+    return list;
+}
+
 QVariantMap TileToMap(const diagnostics::ReadinessTile& tile) {
     QVariantMap map;
     map.insert(QStringLiteral("key"), Text(tile.key));
@@ -40,6 +96,8 @@ QVariantMap TileToMap(const diagnostics::ReadinessTile& tile) {
     map.insert(QStringLiteral("hasUsageBar"), tile.has_usage_bar);
     map.insert(QStringLiteral("usagePercent"), tile.usage_percent);
     map.insert(QStringLiteral("showOkGlyph"), tile.show_ok_glyph);
+    map.insert(QStringLiteral("headBadge"), Text(tile.head_badge));
+    map.insert(QStringLiteral("chips"), ChipsToList(tile.chips));
     return map;
 }
 
@@ -72,6 +130,49 @@ QVariantMap SelfTestRowToMap(const diagnostics::SelfTestRow& row) {
     return map;
 }
 
+// One ledger entry, reduced to the bare fragments the card composes its line
+// from. `now_s` is the session clock of the evaluation this row is drawn for.
+SessionLedgerRow LedgerRow(const diagnostics::LedgerEntry& entry, double now_s, bool live,
+                           const QDateTime& session_start) {
+    const auto clock = [&session_start](double offset_s) {
+        return session_start.isValid()
+                   ? session_start.addMSecs(static_cast<qint64>(offset_s * 1000.0)).toString(QStringLiteral("hh:mm:ss"))
+                   : QString();
+    };
+
+    SessionLedgerRow row;
+    row.entryId = Text(entry.id);
+    row.title = Text(entry.title);
+    row.summary = Text(entry.summary);
+    row.logExcerpt = Text(entry.log_excerpt);
+    row.active = entry.active;
+    row.count = static_cast<int>(entry.count);
+    row.firstSeenText = clock(entry.first_seen_s);
+    // While the recording runs, "40 s ago" is the fact the reader can act on;
+    // afterwards the session is a closed interval and a time of day places the
+    // problem inside it.
+    row.lastSeenText =
+        live ? DurationText(now_s - entry.last_seen_s) + QStringLiteral(" ago") : clock(entry.last_seen_s);
+    row.worstText = entry.worst.has_value() ? Measured(*entry.worst, entry.unit) : Text(entry.worst_text);
+    row.budgetText = entry.budget.has_value() ? Measured(*entry.budget, entry.unit) : QStringLiteral("no budget");
+    // An open occurrence has no length yet, so a live entry is timed from the
+    // start of the stretch it is still in rather than from a total that excludes it.
+    double active_s = entry.total_active_s;
+    if (entry.active && !entry.occurrences.empty())
+        active_s = now_s - entry.occurrences.back().start_s;
+    row.totalActiveText = DurationText(active_s);
+
+    for (const diagnostics::LedgerOccurrence& occurrence : entry.occurrences) {
+        QVariantMap map;
+        map.insert(QStringLiteral("startMs"), static_cast<int>(occurrence.start_s * 1000.0));
+        map.insert(QStringLiteral("endMs"), static_cast<int>(occurrence.end_s * 1000.0));
+        map.insert(QStringLiteral("worstText"), Measured(occurrence.worst, entry.unit));
+        map.insert(QStringLiteral("text"), ClipTime(occurrence.start_s));
+        row.occurrences.append(map);
+    }
+    return row;
+}
+
 diagnostics::DiagnosticsController::DisplayFacts PrimaryDisplayFacts() {
     diagnostics::DiagnosticsController::DisplayFacts facts;
     if (QScreen* screen = QGuiApplication::primaryScreen()) {
@@ -85,13 +186,16 @@ diagnostics::DiagnosticsController::DisplayFacts PrimaryDisplayFacts() {
 // While recording, the writability + free-space facts are refreshed on this cadence.
 constexpr int kLiveProbeIntervalMs = 10000;
 
+// Sparkline depth: the last 60 snapshots, which is 12 s at the 5 Hz diagnostics
+// cadence. Long enough to show a trend, short enough that it is still "now".
+constexpr std::size_t kSeriesLength = 60;
+
 } // namespace
 
 DiagnosticsAdapter::DiagnosticsAdapter(QObject* parent)
     : QObject(parent), bundle_service_(std::make_unique<SupportBundleService>()) {
     controller_.SetDisplayFacts(PrimaryDisplayFacts());
 
-    last_check_text_ = QStringLiteral("Last check: \xe2\x80\x94");
     self_test_status_ = QStringLiteral("Status: Not run");
 
     live_probe_timer_.setInterval(kLiveProbeIntervalMs);
@@ -148,8 +252,22 @@ int DiagnosticsAdapter::noticeCount() const noexcept {
     return notice_count_;
 }
 
-const QString& DiagnosticsAdapter::lastCheckText() const noexcept {
-    return last_check_text_;
+QString DiagnosticsAdapter::lastCheckText() const {
+    // While recording the band reports the session, so its stamp says since when
+    // and at what rate rather than when the readiness probe last ran.
+    if (recording_) {
+        return session_start_.isValid() ? QStringLiteral("Recording since %1 \xc2\xb7 live 5x/s")
+                                              .arg(session_start_.toString(QStringLiteral("hh:mm")))
+                                        : QStringLiteral("Recording \xc2\xb7 live 5x/s");
+    }
+    if (probe_in_flight_)
+        return QStringLiteral("Checking\xe2\x80\xa6");
+    if (!last_check_at_.isValid())
+        return QStringLiteral("Not checked yet");
+    // The page has no Run check button any more, so the stamp is where the
+    // recheck policy is stated: nobody has to ask whether this is stale.
+    return QStringLiteral("Checked %1 \xc2\xb7 rechecks every 10 s and on every settings change")
+        .arg(last_check_at_.toString(QStringLiteral("hh:mm")));
 }
 
 bool DiagnosticsAdapter::checking() const noexcept {
@@ -160,17 +278,6 @@ bool DiagnosticsAdapter::dataReady() const noexcept {
     return controller_.dataReady();
 }
 
-bool DiagnosticsAdapter::expertMode() const noexcept {
-    return expert_mode_;
-}
-
-void DiagnosticsAdapter::setExpertMode(bool enabled) {
-    if (expert_mode_ == enabled)
-        return;
-    expert_mode_ = enabled;
-    emit expertModeChanged(enabled);
-}
-
 bool DiagnosticsAdapter::hasLastRecording() const noexcept {
     return controller_.hasLastRecording();
 }
@@ -179,8 +286,56 @@ bool DiagnosticsAdapter::elevated() const noexcept {
     return controller_.elevated();
 }
 
+bool DiagnosticsAdapter::recording() const noexcept {
+    return recording_;
+}
+
 QAbstractListModel* DiagnosticsAdapter::issues() noexcept {
     return &issue_model_;
+}
+
+QAbstractListModel* DiagnosticsAdapter::ledger() noexcept {
+    return &ledger_model_;
+}
+
+int DiagnosticsAdapter::ledgerCount() const noexcept {
+    return ledger_model_.rowCount();
+}
+
+const QVariantMap& DiagnosticsAdapter::lastSession() const noexcept {
+    return last_session_;
+}
+
+bool DiagnosticsAdapter::hasLastSession() const noexcept {
+    return controller_.lastSession().valid;
+}
+
+bool DiagnosticsAdapter::inDepthEnabled() const noexcept {
+    return in_depth_enabled_;
+}
+
+void DiagnosticsAdapter::setInDepthEnabledFromUi(bool enabled) {
+    if (in_depth_enabled_ == enabled || !inDepthAvailable())
+        return;
+    emit inDepthToggled(enabled);
+}
+
+QString DiagnosticsAdapter::inDepthStateText() const {
+    // The opt-in persists across launches; elevation does not. With the setting on
+    // in a standard process no ETW session exists and no in-depth tile has a
+    // reading, so the sub-text names the gate rather than claiming the two traces
+    // that are not running.
+    if (in_depth_enabled_) {
+        return controller_.elevated() ? QStringLiteral("On \xc2\xb7 elevated \xc2\xb7 PresentMon + DPC/ISR trace")
+                                      : QStringLiteral("On \xc2\xb7 not measuring \xc2\xb7 needs an admin relaunch");
+    }
+    if (recording_)
+        return QStringLiteral("Off \xc2\xb7 cannot change while recording");
+    return QStringLiteral("Off \xc2\xb7 needs an admin relaunch");
+}
+
+bool DiagnosticsAdapter::inDepthAvailable() const noexcept {
+    return !recording_;
 }
 
 const QVariantList& DiagnosticsAdapter::tiles() const noexcept {
@@ -191,31 +346,121 @@ const QVariantList& DiagnosticsAdapter::liveTiles() const noexcept {
     return live_tiles_;
 }
 
-bool DiagnosticsAdapter::liveTilesVisible() const noexcept {
-    return !live_tiles_.isEmpty();
-}
-
 void DiagnosticsAdapter::refreshLiveTiles() {
-    std::vector<diagnostics::LiveTile> next = diagnostics::BuildLiveTiles(controller_.liveSnapshot());
-    if (next == live_tile_values_)
+    const exosnap::engine::RecordingDiagnosticsSnapshot& snapshot = controller_.liveSnapshot();
+    diagnostics::LiveTileInputs inputs{snapshot, controller_.ledger()};
+    // Elevation is half the gate: with the opt-in on but the process standard,
+    // no trace is running and there is nothing for the extra tiles to report.
+    inputs.in_depth = in_depth_enabled_ && controller_.elevated();
+    inputs.present = present_sample_;
+    inputs.dpc = dpc_reading_;
+    inputs.gpu_exec_p99_ms = snapshot.compositor.gpu_exec_p99_ms;
+
+    std::vector<diagnostics::LiveTile> next = diagnostics::BuildLiveTiles(inputs);
+    // The tiles can be identical while the sparklines have moved on, so the
+    // series revision is part of "did anything change" -- otherwise the trend
+    // freezes on a run where the rounded headline happens to hold still.
+    if (next == live_tile_values_ && series_revision_ == published_series_revision_)
         return;
 
     live_tile_values_ = std::move(next);
+    published_series_revision_ = series_revision_;
     live_tiles_.clear();
     live_tiles_.reserve(static_cast<qsizetype>(live_tile_values_.size()));
     for (const diagnostics::LiveTile& tile : live_tile_values_) {
+        const QVariantList series = seriesFor(tile.key);
+        QString session_detail = QString::fromStdString(tile.session_detail);
+        if (tile.key == "encoder" && encoder_session_worst_p99_ms_ > 0.0) {
+            session_detail =
+                QStringLiteral("session worst p99 ") + Trimmed(encoder_session_worst_p99_ms_) + QStringLiteral(" ms");
+        }
+        // With a trend on screen the headline is "now" and the sparkline is the
+        // last twelve seconds, so the third line is the whole run. Without one
+        // there is nothing for a session figure to sit under, and the detail
+        // keeps saying why a measurement is missing.
+        QString detail = QString::fromStdString(tile.detail);
+        if (!series.isEmpty() && !session_detail.isEmpty())
+            detail = session_detail;
+
         QVariantMap entry;
         entry.insert(QStringLiteral("key"), QString::fromStdString(tile.key));
         entry.insert(QStringLiteral("title"), QString::fromStdString(tile.title));
         entry.insert(QStringLiteral("value"), QString::fromStdString(tile.value));
         entry.insert(QStringLiteral("sub"), QString::fromStdString(tile.sub));
-        entry.insert(QStringLiteral("detail"), QString::fromStdString(tile.detail));
+        entry.insert(QStringLiteral("subTinted"), QString::fromStdString(tile.sub_tinted));
+        entry.insert(QStringLiteral("detail"), detail);
+        entry.insert(QStringLiteral("sessionDetail"), session_detail);
         entry.insert(QStringLiteral("tone"),
                      QString::fromUtf8(diagnostics::TileToneKey(tile.tone).data(),
                                        static_cast<qsizetype>(diagnostics::TileToneKey(tile.tone).size())));
+        entry.insert(QStringLiteral("valueTone"), Key(diagnostics::ValueToneKey(tile.value_tone)));
+        entry.insert(QStringLiteral("subTone"), Key(diagnostics::ValueToneKey(tile.sub_tone)));
+        entry.insert(QStringLiteral("series"), series);
+        // NaN is the sparkline's own "no budget line", so an absent budget is
+        // passed through as one rather than as a zero it would try to draw.
+        entry.insert(QStringLiteral("budget"), tile.budget.value_or(std::numeric_limits<double>::quiet_NaN()));
         live_tiles_.append(entry);
     }
     emit liveTilesChanged();
+}
+
+void DiagnosticsAdapter::appendSeriesSamples(const exosnap::engine::RecordingDiagnosticsSnapshot& snapshot) {
+    const auto push = [this](const char* key, double value) {
+        std::deque<double>& samples = series_[key];
+        samples.push_back(value);
+        while (samples.size() > kSeriesLength)
+            samples.pop_front();
+    };
+
+    push("framePacing", snapshot.capture.actual_fps);
+    if (snapshot.video_encoder.frames_encoded > 0) {
+        push("encoder", snapshot.video_encoder.p99_ms);
+        encoder_session_worst_p99_ms_ = std::max(encoder_session_worst_p99_ms_, snapshot.video_encoder.p99_ms);
+    }
+    // Only a measured drift is plotted: a zero here would draw perfect sync on a
+    // recording whose drift nobody measured.
+    if (snapshot.av_drift_availability == exosnap::engine::MetricAvailability::Available)
+        push("audioSync", snapshot.av_drift_ms);
+    push("storage", snapshot.disk.throughput_mib_s);
+    ++series_revision_;
+}
+
+void DiagnosticsAdapter::resetSeries() {
+    series_.clear();
+    ++series_revision_;
+}
+
+QVariantList DiagnosticsAdapter::seriesFor(const std::string& key) const {
+    const auto it = series_.find(key);
+    if (it == series_.end())
+        return {};
+    QVariantList values;
+    values.reserve(static_cast<qsizetype>(it->second.size()));
+    for (const double sample : it->second)
+        values.append(sample);
+    return values;
+}
+
+std::optional<diagnostics::DpcLatencyReading> DiagnosticsAdapter::readDpcLatency() const {
+    if (dpc_provider_ == nullptr)
+        return std::nullopt;
+    const diagnostics::DpcLatencyReading reading = dpc_provider_->Read();
+    return reading.available ? std::optional<diagnostics::DpcLatencyReading>(reading) : std::nullopt;
+}
+
+void DiagnosticsAdapter::refreshLedger() {
+    const double now_s = controller_.liveSnapshot().elapsed_seconds;
+    const bool live = controller_.liveRecording();
+
+    std::vector<SessionLedgerRow> rows;
+    rows.reserve(controller_.ledger().entries().size());
+    for (const diagnostics::LedgerEntry& entry : controller_.ledger().entries())
+        rows.push_back(LedgerRow(entry, now_s, live, session_start_));
+
+    const int previous_rows = ledger_model_.rowCount();
+    ledger_model_.setRows(std::move(rows));
+    if (previous_rows != ledger_model_.rowCount() || live)
+        emit ledgerChanged();
 }
 
 const QVariantList& DiagnosticsAdapter::tips() const noexcept {
@@ -331,10 +576,20 @@ void DiagnosticsAdapter::openLogs() {
     emit navigateToLogsRequested();
 }
 
-void DiagnosticsAdapter::openLastReport() {
-    if (!controller_.hasLastRecording())
+void DiagnosticsAdapter::showInLog(const QString& entry_id) {
+    if (entry_id.isEmpty())
         return;
-    emit openLastReportRequested();
+    emit showInLogRequested(entry_id);
+}
+
+void DiagnosticsAdapter::openEditAt(qint64 position_ms) {
+    emit openEditAtRequested(position_ms < 0 ? 0 : position_ms);
+}
+
+void DiagnosticsAdapter::openLastSessionFolder() {
+    if (!controller_.lastSession().valid)
+        return;
+    emit openLastSessionFolderRequested();
 }
 
 // ── Host-side input ─────────────────────────────────────────────────────────────
@@ -400,6 +655,15 @@ void DiagnosticsAdapter::refreshDisplayFacts() {
 void DiagnosticsAdapter::setElevated(bool elevated) {
     controller_.SetElevated(elevated);
     emit environmentChanged();
+    emit inDepthChanged();
+}
+
+void DiagnosticsAdapter::setInDepthEnabled(bool enabled) {
+    if (in_depth_enabled_ == enabled)
+        return;
+    in_depth_enabled_ = enabled;
+    emit inDepthChanged();
+    refreshLiveTiles();
 }
 
 void DiagnosticsAdapter::setHasLastRecording(bool has_last_recording) {
@@ -418,21 +682,77 @@ void DiagnosticsAdapter::setDpcLatencyProvider(diagnostics::IDpcLatencyProvider*
 }
 
 void DiagnosticsAdapter::setPresentSample(std::optional<diagnostics::PresentSample> sample) {
+    present_sample_ = sample;
     controller_.SetPresentSample(std::move(sample));
+}
+
+std::vector<diagnostics::LedgerEntry> DiagnosticsAdapter::frozenLedger() const {
+    return controller_.frozenLedger();
+}
+
+void DiagnosticsAdapter::setLastSession(const exosnap::UiRecordingResult& result) {
+    diagnostics::LastSession session =
+        diagnostics::BuildLastSession(result, controller_.liveSnapshot(), controller_.frozenLedger());
+    // The controller has no clock; the wall times come from the session start
+    // this adapter pinned when the recording's first snapshot arrived.
+    if (session_start_.isValid()) {
+        session.started_at_text = session_start_.toString(QStringLiteral("hh:mm")).toStdString();
+        session.ended_at_text = session_start_.addMSecs(static_cast<qint64>(session.duration_s * 1000.0))
+                                    .toString(QStringLiteral("hh:mm"))
+                                    .toStdString();
+    }
+    controller_.SetLastSession(std::move(session));
+    refreshLastSessionMap();
+    emit lastSessionChanged();
 }
 
 void DiagnosticsAdapter::applyLiveDiagnostics(const exosnap::engine::RecordingDiagnosticsSnapshot& snapshot) {
     controller_.SetLiveSnapshot(snapshot);
+    const bool live = controller_.liveRecording();
 
-    if (!controller_.liveRecording()) {
+    if (live) {
+        if (snapshot.session_generation != series_generation_) {
+            series_generation_ = snapshot.session_generation;
+            resetSeries();
+            encoder_session_worst_p99_ms_ = 0.0;
+            // Second zero of this session, so a ledger entry can be stamped with
+            // a time of day rather than an offset only this page understands.
+            session_start_ =
+                QDateTime::currentDateTime().addMSecs(-static_cast<qint64>(snapshot.elapsed_seconds * 1000.0));
+        }
+        appendSeriesSamples(snapshot);
+    }
+
+    const bool left_recording = recording_ && !live;
+    if (recording_ != live) {
+        recording_ = live;
+        emit recordingChanged();
+        emit inDepthChanged();
+        // The band's stamp reports the session while one runs and the readiness
+        // recheck policy otherwise, so it changes meaning on this edge.
+        emit lastCheckChanged();
+    }
+
+    if (!live) {
         live_throttle_.Reset();
         refreshPipeline();
-        // Not throttled on this edge: leaving the recording lifecycle is the one
-        // transition where the tiles must go away immediately rather than at the
-        // next allowed tick, or the page keeps showing a live summary of a
-        // recording that has stopped.
+        // Not throttled on this edge, and a full snapshot rather than only the
+        // ledger: the verdict band reports the SESSION while one runs, and
+        // nothing else recomputes it from ComputeVerdict() afterwards. Without
+        // this the band keeps saying "Recording" above the Last session card
+        // until the user changes a setting.
+        refreshSnapshot();
+        // The tiles must go away on this very edge rather than at the next
+        // allowed tick, or the page keeps showing a live summary of a recording
+        // that has stopped.
         refreshLiveTiles();
         updateLiveProbeTimer();
+        // The controller froze the ledger on this same edge, so the closed copy
+        // can go to whoever writes the session report. Pushed rather than pulled:
+        // the report is written on the recording thread, which must not reach
+        // into state this thread owns.
+        if (left_recording)
+            emit sessionLedgerFrozen();
         return;
     }
 
@@ -468,6 +788,7 @@ diagnostics::DiagnosticsController& DiagnosticsAdapter::controllerForTest() noex
 void DiagnosticsAdapter::refreshForTest() {
     refreshSnapshot();
     refreshPipeline();
+    refreshLiveTiles();
 }
 
 // ── Internals ───────────────────────────────────────────────────────────────────
@@ -477,7 +798,6 @@ void DiagnosticsAdapter::startProbe(bool run_self_test) {
         return;
     probe_in_flight_ = true;
     setChecking(true);
-    last_check_text_ = QStringLiteral("Last check: running\xe2\x80\xa6");
     emit lastCheckChanged();
 
     diagnostics::DiagnosticsProbeRequest request;
@@ -507,8 +827,7 @@ void DiagnosticsAdapter::applyProbe(diagnostics::DiagnosticsController::ProbeRes
     controller_.SetProbeResult(std::move(probe));
     setChecking(false);
 
-    last_check_text_ = QStringLiteral("Last check: %1")
-                           .arg(QDateTime::currentDateTime().toString(QStringLiteral("dd MMM yyyy, hh:mm")));
+    last_check_at_ = QDateTime::currentDateTime();
     emit lastCheckChanged();
 
     if (from_manual_check)
@@ -525,13 +844,8 @@ void DiagnosticsAdapter::refreshSnapshot() {
     // no recommendation to make, and the Diagnostics page says nothing about DPC rather
     // than reporting a peak nobody is updating any more. Read() takes a short lock and
     // never blocks on the kernel, so this stays a GUI-thread call.
-    if (dpc_provider_ != nullptr) {
-        const diagnostics::DpcLatencyReading reading = dpc_provider_->Read();
-        controller_.SetDpcLatency(reading.available ? std::optional<diagnostics::DpcLatencyReading>(reading)
-                                                    : std::nullopt);
-    } else {
-        controller_.SetDpcLatency(std::nullopt);
-    }
+    dpc_reading_ = readDpcLatency();
+    controller_.SetDpcLatency(dpc_reading_);
 
     const diagnostics::DiagnosticsSnapshot snapshot = controller_.Evaluate();
 
@@ -548,7 +862,21 @@ void DiagnosticsAdapter::refreshSnapshot() {
         tiles_.append(TileToMap(tile));
     emit tilesChanged();
 
-    issue_model_.setCards(snapshot.cards);
+    // While recording, a Tier-2 measured problem is reported by the session
+    // ledger, which says when it fired and how often. Repeating it as a card
+    // above would show the same finding twice with less of the story.
+    std::vector<diagnostics::IssueCard> cards = snapshot.cards;
+    if (controller_.liveRecording()) {
+        std::unordered_set<std::string> measured;
+        for (const diagnostics::DiagnosticResult& result : controller_.lastChecklist().results) {
+            if (result.tier == diagnostics::DiagnosticTier::MeasuredProblem)
+                measured.insert(result.id);
+        }
+        std::erase_if(cards, [&measured](const diagnostics::IssueCard& card) {
+            return !card.id.empty() && measured.count(card.id) > 0;
+        });
+    }
+    issue_model_.setCards(std::move(cards));
     tips_.clear();
     tips_.reserve(static_cast<qsizetype>(snapshot.tips.size()));
     for (const auto& tip : snapshot.tips)
@@ -562,6 +890,10 @@ void DiagnosticsAdapter::refreshSnapshot() {
     for (const auto& row : controller_.configRows())
         config_rows_.append(RowToMap(row));
     emit environmentChanged();
+
+    // The ledger is observed inside Evaluate(), so the model follows the pass
+    // that produced it rather than a second, differently timed read.
+    refreshLedger();
 }
 
 void DiagnosticsAdapter::refreshPipeline() {
@@ -573,6 +905,108 @@ void DiagnosticsAdapter::refreshPipeline() {
     pipeline_stage_model_.setStages(controller_.BuildPipelineStages());
     if (live_changed)
         emit pipelineChanged();
+}
+
+void DiagnosticsAdapter::refreshLastSessionMap() {
+    const diagnostics::LastSession& session = controller_.lastSession();
+    last_session_.clear();
+    if (!session.valid)
+        return;
+
+    const QString saved = QStringLiteral("Recording saved");
+    last_session_.insert(QStringLiteral("headerText"),
+                         session.problems > 0 ? QStringLiteral("%1 %2 %3 problem%4 observed")
+                                                    .arg(saved, QString::fromUtf8(kMiddot))
+                                                    .arg(session.problems)
+                                                    .arg(session.problems == 1 ? QString() : QStringLiteral("s"))
+                                              : saved);
+    last_session_.insert(QStringLiteral("fileName"), Text(session.file_name));
+    last_session_.insert(QStringLiteral("durationMs"), static_cast<int>(session.duration_s * 1000.0));
+    last_session_.insert(QStringLiteral("mediaDurationMs"), static_cast<int>(session.media_duration_s * 1000.0));
+    last_session_.insert(QStringLiteral("startedAtText"), Text(session.started_at_text));
+    last_session_.insert(QStringLiteral("endedAtText"), Text(session.ended_at_text));
+    last_session_.insert(QStringLiteral("durationText"), DurationText(session.duration_s));
+    last_session_.insert(QStringLiteral("problems"), session.problems);
+
+    QVariantList facts;
+    for (const diagnostics::LastSessionFact& fact : session.facts) {
+        QVariantMap map;
+        map.insert(QStringLiteral("key"), Text(fact.key));
+        map.insert(QStringLiteral("label"), Text(fact.label));
+        map.insert(QStringLiteral("value"), Text(fact.value));
+        map.insert(QStringLiteral("sub"), Text(fact.sub));
+        map.insert(QStringLiteral("valueTone"), Key(diagnostics::ValueToneKey(fact.tone)));
+        facts.append(map);
+    }
+    last_session_.insert(QStringLiteral("facts"), facts);
+
+    // Units live on the ledger entry, not on the mark, so the mark's worst value
+    // is spelled with the unit of the check that produced it.
+    const auto unit_of = [&session](const std::string& id) {
+        for (const diagnostics::LedgerEntry& entry : session.ledger) {
+            if (entry.id == id)
+                return entry.unit;
+        }
+        return std::string{};
+    };
+
+    QVariantList marks;
+    for (const diagnostics::TimelineMark& mark : session.marks) {
+        QVariantMap map;
+        map.insert(QStringLiteral("startMs"), static_cast<int>(mark.start_s * 1000.0));
+        map.insert(QStringLiteral("endMs"), static_cast<int>(mark.end_s * 1000.0));
+        map.insert(QStringLiteral("durationMs"), static_cast<int>((mark.end_s - mark.start_s) * 1000.0));
+        map.insert(QStringLiteral("id"), Text(mark.id));
+        map.insert(QStringLiteral("title"), Text(mark.title));
+        map.insert(QStringLiteral("worstText"), Measured(mark.worst, unit_of(mark.id)));
+        map.insert(QStringLiteral("tone"), Text(mark.tone));
+        marks.append(map);
+    }
+    last_session_.insert(QStringLiteral("marks"), marks);
+
+    // Worst first (rule 3): the card opens the entry with the largest overshoot
+    // and leaves the rest as rows. An entry without a measured value sorts last.
+    std::vector<const diagnostics::LedgerEntry*> ordered;
+    ordered.reserve(session.ledger.size());
+    for (const diagnostics::LedgerEntry& entry : session.ledger)
+        ordered.push_back(&entry);
+    // The key is the OVERSHOOT, which only an entry with a budget has. A count in
+    // its own unit ("12 mode flips") is not comparable to a ratio, so entries
+    // without a budget rank after every entry with one instead of winning on the
+    // magnitude of a number nothing was measured against.
+    const auto overshoot = [](const diagnostics::LedgerEntry* entry) {
+        return entry->budget.value_or(0.0) > 0.0 && entry->worst.has_value()
+                   ? std::optional<double>(*entry->worst / *entry->budget)
+                   : std::nullopt;
+    };
+    std::stable_sort(ordered.begin(), ordered.end(),
+                     [&overshoot](const diagnostics::LedgerEntry* a, const diagnostics::LedgerEntry* b) {
+                         const std::optional<double> left = overshoot(a);
+                         const std::optional<double> right = overshoot(b);
+                         if (left.has_value() != right.has_value())
+                             return left.has_value();
+                         return left.has_value() && *left > *right;
+                     });
+
+    QVariantList entries;
+    for (const diagnostics::LedgerEntry* entry : ordered) {
+        const SessionLedgerRow row = LedgerRow(*entry, session.duration_s, /*live=*/false, session_start_);
+        QVariantMap map;
+        map.insert(QStringLiteral("entryId"), row.entryId);
+        map.insert(QStringLiteral("title"), row.title);
+        map.insert(QStringLiteral("summary"), row.summary);
+        map.insert(QStringLiteral("active"), row.active);
+        map.insert(QStringLiteral("count"), row.count);
+        map.insert(QStringLiteral("firstSeenText"), row.firstSeenText);
+        map.insert(QStringLiteral("lastSeenText"), row.lastSeenText);
+        map.insert(QStringLiteral("worstText"), row.worstText);
+        map.insert(QStringLiteral("budgetText"), row.budgetText);
+        map.insert(QStringLiteral("totalActiveText"), row.totalActiveText);
+        map.insert(QStringLiteral("logExcerpt"), row.logExcerpt);
+        map.insert(QStringLiteral("occurrences"), row.occurrences);
+        entries.append(map);
+    }
+    last_session_.insert(QStringLiteral("ledgerEntries"), entries);
 }
 
 void DiagnosticsAdapter::refreshSelfTest() {
