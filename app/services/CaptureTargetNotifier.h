@@ -43,6 +43,10 @@ class CaptureTargetNotifier final : public QObject {
     void setDebounceIntervalMsForTest(int milliseconds);
     void simulateNativeEvent(DiscoveryReason reason);
     void flushPendingForTest();
+    // Requests a refresh the way a window lifecycle event does, WITHOUT flushing:
+    // the deferral cap can only be observed by letting the debounce actually run.
+    void requestRefreshForTest(DiscoveryReason reason);
+    void setMaxDeferralMsForTest(qint64 milliseconds);
 
     void start();
     void stop();
@@ -72,7 +76,16 @@ class CaptureTargetNotifier final : public QObject {
     Enumerator enumerator_;
     CaptureTargetSnapshot last_snapshot_;
     DisplayDeviceNotifier display_notifier_;
+    // Longest the debounce may postpone a refresh. Five debounce intervals: long
+    // enough that a burst still collapses into one enumeration, short enough that
+    // a window the user just opened appears in the source list while they are
+    // still looking for it.
+    static constexpr qint64 kMaxRefreshDeferralMs = 1000;
+    qint64 max_deferral_ms_ = kMaxRefreshDeferralMs;
+
     QTimer debounce_timer_;
+    // When the currently pending refresh was first requested, for the cap above.
+    qint64 first_pending_at_ms_ = 0;
     DiscoveryReason pending_reason_ = DiscoveryReason::Rescan;
     HWINEVENTHOOK window_hook_ = nullptr;
     bool started_ = false;

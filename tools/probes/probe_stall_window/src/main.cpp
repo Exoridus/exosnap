@@ -30,11 +30,28 @@
 #include <windows.h>
 
 #include <cstdio>
+#include <string>
 #include <cstdlib>
 
 namespace {
 
-constexpr wchar_t kWindowTitle[] = L"ExoSnap stall probe";
+constexpr wchar_t kWindowTitlePrefix[] = L"ExoSnap stall probe";
+
+// The title carries this process id.
+//
+// Two scenarios use this probe back to back and both bind their capture target by
+// TITLE, so a shared title let the second one select the first one's window while
+// it was still in the app's target list -- a window that no longer existed. The
+// recording then failed in validation ("audio_target_process_id must be a non-zero
+// PID"), which described the consequence and not the cause. A caller that started
+// the probe knows its pid, so putting the pid in the title makes the binding
+// unambiguous with no handshake.
+std::wstring BuildWindowTitle() {
+    std::wstring title(kWindowTitlePrefix);
+    title += L" ";
+    title += std::to_wstring(GetCurrentProcessId());
+    return title;
+}
 
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     switch (msg) {
@@ -104,10 +121,11 @@ int wmain(int argc, wchar_t** argv) {
     mi.cbSize = sizeof(mi);
     GetMonitorInfoW(monitor, &mi);
     const RECT screen = mi.rcMonitor;
+    const std::wstring window_title = BuildWindowTitle();
     HWND hwnd = minimiseMode
-                    ? CreateWindowExW(0, wc.lpszClassName, kWindowTitle, WS_OVERLAPPEDWINDOW, CW_USEDEFAULT,
+                    ? CreateWindowExW(0, wc.lpszClassName, window_title.c_str(), WS_OVERLAPPEDWINDOW, CW_USEDEFAULT,
                                       CW_USEDEFAULT, 900, 600, nullptr, nullptr, wc.hInstance, nullptr)
-                    : CreateWindowExW(0, wc.lpszClassName, kWindowTitle, WS_POPUP, screen.left, screen.top,
+                    : CreateWindowExW(0, wc.lpszClassName, window_title.c_str(), WS_POPUP, screen.left, screen.top,
                                       screen.right - screen.left, screen.bottom - screen.top, nullptr, nullptr,
                                       wc.hInstance, nullptr);
     if (hwnd == nullptr) {
@@ -122,7 +140,7 @@ int wmain(int argc, wchar_t** argv) {
     UpdateWindow(hwnd);
 
     std::printf("hwnd=%llu\ntitle=%ls\n", static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(hwnd)),
-                kWindowTitle);
+                window_title.c_str());
     std::fflush(stdout);
 
     const ULONGLONG start = GetTickCount64();

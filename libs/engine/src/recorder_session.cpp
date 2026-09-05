@@ -31,6 +31,19 @@
 #include <vector>
 
 namespace exosnap::engine {
+namespace {
+
+// Application and system audio are captured from a PROCESS, so they need a target
+// process id. It is resolved from the capture target, which means the usual way to
+// arrive here with none is a window that has gone away between being selected and
+// being recorded -- and the previous wording ("audio_target_process_id must be a
+// non-zero PID for App/Sys audio sources") named the field rather than the cause,
+// in a sentence the failure surface shows to the user verbatim.
+constexpr const char* kMissingAudioTargetProcess =
+    "Application audio needs a window that is still running. The selected window is gone, "
+    "or no window was resolved. Choose the capture source again.";
+
+} // namespace
 
 // ---------------------------------------------------------------------------
 // DeriveValuablePartialPath
@@ -411,8 +424,7 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
             for (const auto src_kind : track.sources) {
                 if ((src_kind == AudioSourceKind::App || src_kind == AudioSourceKind::Sys) &&
                     (!config.audio_target_process_id.has_value() || config.audio_target_process_id.value() == 0)) {
-                    return fail(E_INVALIDARG, ErrorPhase::Prepare,
-                                "audio_target_process_id must be a non-zero PID for App/Sys audio sources");
+                    return fail(E_INVALIDARG, ErrorPhase::Prepare, kMissingAudioTargetProcess);
                 }
             }
         }
@@ -752,8 +764,7 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config, RecordReque
                 const AudioSourceKind kind = track.sources[0];
                 if ((kind == AudioSourceKind::App || kind == AudioSourceKind::Sys) &&
                     (!config.audio_target_process_id.has_value() || config.audio_target_process_id.value() == 0)) {
-                    return failPrepare(E_INVALIDARG,
-                                       "audio_target_process_id must be a non-zero PID for App/Sys audio sources");
+                    return failPrepare(E_INVALIDARG, kMissingAudioTargetProcess);
                 }
                 auto single_src = createAudioSource(kind);
                 if (!single_src) {
@@ -789,8 +800,7 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config, RecordReque
                     const AudioSourceKind kind = track.sources[si];
                     if ((kind == AudioSourceKind::App || kind == AudioSourceKind::Sys) &&
                         (!config.audio_target_process_id.has_value() || config.audio_target_process_id.value() == 0)) {
-                        return failPrepare(E_INVALIDARG,
-                                           "audio_target_process_id must be a non-zero PID for App/Sys audio sources");
+                        return failPrepare(E_INVALIDARG, kMissingAudioTargetProcess);
                     }
                     auto inner_src = createAudioSource(kind);
                     if (!inner_src) {

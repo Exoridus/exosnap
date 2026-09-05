@@ -603,7 +603,13 @@ void RecordPreviewAdapter::startPreview() {
         source_name_.clear();
         emit sourceNameChanged();
         setStatus(QStringLiteral("No capture source is selected"));
-        setError(QStringLiteral("Choose a screen, application window, or region to preview."));
+        // Status, not error. Having chosen nothing yet is the expected empty state,
+        // and the Record page already fills the stage with its placeholder --
+        // "Choose what to record" plus a Choose source button. A second sentence
+        // saying the same thing was drawn centred on the same stage, so the two
+        // overlapped, and the caution colour made an ordinary starting point look
+        // like something had gone wrong.
+        setError({});
         return;
     }
 
