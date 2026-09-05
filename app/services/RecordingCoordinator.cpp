@@ -375,6 +375,10 @@ uint32_t RecordingCoordinator::WindowCaptureStallEpisodes() const noexcept {
     return window_capture_stall_episodes_.load(std::memory_order_relaxed);
 }
 
+void RecordingCoordinator::SetSessionLedgerProvider(std::function<std::vector<diagnostics::LedgerEntry>()> provider) {
+    session_ledger_provider_ = std::move(provider);
+}
+
 void RecordingCoordinator::PostRecoveryProtectionLost(QString detail) {
     // The recording itself is intact; only the crash-recovery artefact is missing.
     // Log at error level so a support bundle carries it, then tell the user.
@@ -2999,6 +3003,8 @@ void RecordingCoordinator::WriteSessionReportForResult(const UiRecordingResult& 
     }
 
     inputs.window_capture_stall_episodes = WindowCaptureStallEpisodes();
+    if (session_ledger_provider_)
+        inputs.ledger = session_ledger_provider_();
 
     const QDateTime ended = QDateTime::currentDateTime();
     inputs.ended_at = ended.toString(Qt::ISODate);

@@ -2,6 +2,10 @@
 
 #include "DiagnosticsPresentation.h"
 
+// Qt Core arrives with this header (it carries UiRecordingResult); nothing below
+// may use `signals` as an identifier while its moc keyword macro is defined.
+#include "../viewmodels/RecordViewModel.h"
+
 #include <capability/support_level.h>
 #include <exosnap/engine/pipeline_health.h>
 
@@ -9,6 +13,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
 
 namespace exosnap::diagnostics {
 namespace {
@@ -818,6 +823,102 @@ TopIssues BuildTopIssues(const capability::ResolveResult& profile_validation,
     return issues;
 }
 
+// ── Last session ────────────────────────────────────────────────────────────────
+
+LastSession BuildLastSession(const UiRecordingResult& result, const exosnap::engine::RecordingDiagnosticsSnapshot& s,
+                             const std::vector<LedgerEntry>& frozen_ledger) {
+    LastSession session;
+    session.valid = true;
+    session.file_name = std::filesystem::path(result.output_path).filename().string();
+    session.duration_s = ResultDurationSeconds(result);
+    session.ledger = frozen_ledger;
+    session.problems = static_cast<int>(frozen_ledger.size());
+
+    const bool measured = s.valid;
+    const uint64_t drops = measured ? s.capture.frames_dropped_problem() : 0;
+
+    // The four facts, in a fixed order. A card whose rows move between recordings
+    // cannot be read at a glance, and these are read at a glance or not at all.
+    {
+        LastSessionFact fact;
+        fact.key = "dropped";
+        fact.label = "Frames dropped";
+        fact.value = measured ? Number(drops) : std::string(kDash);
+        if (measured)
+            fact.sub = "of " + Number(s.capture.frames_captured) + " captured";
+        // The one fact of the four that a check owns outright: a dropped frame is
+        // missing from the file, which is not a matter of degree.
+        if (measured)
+            fact.tone = drops > 0 ? ValueTone::Critical : ValueTone::Ok;
+        session.facts.push_back(std::move(fact));
+    }
+    {
+        LastSessionFact fact;
+        fact.key = "achieved";
+        fact.label = "Achieved fps";
+        const double target = static_cast<double>(result.frame_rate_num) /
+                              (result.frame_rate_den > 0 ? static_cast<double>(result.frame_rate_den) : 1.0);
+        if (measured && s.elapsed_seconds > 0.0) {
+            fact.value = Number(static_cast<double>(s.capture.frames_emitted) / s.elapsed_seconds, 2) + " fps";
+        } else {
+            fact.value = kDash;
+        }
+        fact.sub = "target " + Number(target, 0) + " fps";
+        session.facts.push_back(std::move(fact));
+    }
+    {
+        LastSessionFact fact;
+        fact.key = "drift";
+        fact.label = "A/V drift";
+        // The device-clock residual after correction, not the file's alignment.
+        // Nothing here claims the recording is out of sync, so nothing tints it.
+        if (measured && s.peak_av_drift_availability == exosnap::engine::MetricAvailability::Available) {
+            fact.value = "peak " + Number(s.peak_av_drift_ms, 1) + " ms";
+            fact.sub = "device clock residual";
+        } else {
+            fact.value = "Unavailable";
+            fact.sub = "no single audio clock to measure against";
+        }
+        session.facts.push_back(std::move(fact));
+    }
+    {
+        LastSessionFact fact;
+        fact.key = "file";
+        fact.label = "File";
+        fact.value = result.succeeded ? "Valid" : "Failed";
+        fact.sub = Join(HumanBytes(result.output_file_bytes), CodecName(result.video_codec));
+        fact.tone = result.succeeded ? ValueTone::Ok : ValueTone::Critical;
+        session.facts.push_back(std::move(fact));
+    }
+
+    for (const LedgerEntry& entry : frozen_ledger) {
+        for (const LedgerOccurrence& occurrence : entry.occurrences) {
+            TimelineMark mark;
+            mark.start_s = occurrence.start_s;
+            mark.end_s = occurrence.end_s;
+            mark.id = entry.id;
+            mark.title = entry.title;
+            mark.worst = occurrence.worst;
+            mark.tone = "warn";
+            session.marks.push_back(std::move(mark));
+        }
+    }
+    // Real frame drops earn their own coral mark. The engine keeps no timestamped
+    // drop history, so the mark spans the recording rather than claiming a moment
+    // the measurement never recorded.
+    if (drops > 0) {
+        TimelineMark mark;
+        mark.start_s = 0.0;
+        mark.end_s = session.duration_s;
+        mark.id = "capture.drops";
+        mark.title = "Frames dropped";
+        mark.worst = static_cast<double>(drops);
+        mark.tone = "critical";
+        session.marks.push_back(std::move(mark));
+    }
+    return session;
+}
+
 std::vector<KeyValueRow> BuildEnvironmentRows(const std::vector<DiagnosticResult>& facts, bool elevated) {
     std::vector<KeyValueRow> rows;
     rows.reserve(facts.size());
@@ -1182,8 +1283,9 @@ std::vector<PipelineStage> PipelineCardBuilder::BuildLive(const exosnap::engine:
     disk.avg_ms = s.disk.average_write_ms;
     disk.budget_ms = kDiskBudgetMs;
 
-    const StageSignals signals[] = {capture, queue, comp, enc, mux, disk};
-    const exosnap::engine::PipelineHealthVerdict verdict = exosnap::engine::ResolvePipelineHealth(signals, budget_ms);
+    const StageSignals stage_signals[] = {capture, queue, comp, enc, mux, disk};
+    const exosnap::engine::PipelineHealthVerdict verdict =
+        exosnap::engine::ResolvePipelineHealth(stage_signals, budget_ms);
 
     const auto health_of = [&](StageId id) {
         for (const auto& sv : verdict.per_stage) {
@@ -1376,6 +1478,18 @@ const SessionLedger& DiagnosticsController::ledger() const noexcept {
 
 void DiagnosticsController::FreezeLedger() {
     ledger_.Freeze(live_.elapsed_seconds);
+}
+
+const std::vector<LedgerEntry>& DiagnosticsController::frozenLedger() const noexcept {
+    return ledger_.entries();
+}
+
+void DiagnosticsController::SetLastSession(LastSession session) {
+    last_session_ = std::move(session);
+}
+
+const LastSession& DiagnosticsController::lastSession() const noexcept {
+    return last_session_;
 }
 
 bool DiagnosticsController::dataReady() const noexcept {

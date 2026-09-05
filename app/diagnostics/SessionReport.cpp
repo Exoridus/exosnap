@@ -118,6 +118,41 @@ QByteArray BuildSessionReportJson(const SessionReportInputs& inputs) {
         root[QStringLiteral("window_capture_stall")] = stall;
     }
 
+    // ---- Session ledger (independent of the snapshot) ----
+    if (!inputs.ledger.empty()) {
+        QJsonArray entries;
+        for (const LedgerEntry& entry : inputs.ledger) {
+            QJsonObject e;
+            e[QStringLiteral("id")] = QString::fromStdString(entry.id);
+            e[QStringLiteral("title")] = QString::fromStdString(entry.title);
+            e[QStringLiteral("count")] = static_cast<double>(entry.count);
+            e[QStringLiteral("first_seen_s")] = entry.first_seen_s;
+            e[QStringLiteral("last_seen_s")] = entry.last_seen_s;
+            e[QStringLiteral("total_active_s")] = entry.total_active_s;
+            // A check that measures no number reports the word, not a zero.
+            e[QStringLiteral("worst")] =
+                entry.worst.has_value()
+                    ? QJsonValue(*entry.worst)
+                    : QJsonValue(exosnap::observability::AvailabilityKey(MetricAvailability::Unavailable));
+            e[QStringLiteral("budget")] =
+                entry.budget.has_value()
+                    ? QJsonValue(*entry.budget)
+                    : QJsonValue(exosnap::observability::AvailabilityKey(MetricAvailability::Unavailable));
+            e[QStringLiteral("unit")] = QString::fromStdString(entry.unit);
+            QJsonArray occurrences;
+            for (const LedgerOccurrence& occurrence : entry.occurrences) {
+                QJsonObject o;
+                o[QStringLiteral("start_s")] = occurrence.start_s;
+                o[QStringLiteral("end_s")] = occurrence.end_s;
+                o[QStringLiteral("worst")] = occurrence.worst;
+                occurrences.append(o);
+            }
+            e[QStringLiteral("occurrences")] = occurrences;
+            entries.append(e);
+        }
+        root[QStringLiteral("ledger")] = entries;
+    }
+
     // ---- Requested config (independent of the snapshot) ----
     {
         QJsonObject cfg;

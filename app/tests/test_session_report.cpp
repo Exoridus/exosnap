@@ -378,5 +378,70 @@ TEST(SessionReport, WriterUsesTheSessionIdAndPrunesToKeepN) {
     EXPECT_EQ(remaining, 10);
 }
 
+// ── The frozen session ledger ───────────────────────────────────────────────────
+
+namespace {
+
+LedgerEntry MakeLedgerEntry() {
+    LedgerEntry entry;
+    entry.id = "rec.001";
+    entry.title = "VRR / refresh-induced judder detected";
+    entry.worst = 11.4;
+    entry.budget = 8.0;
+    entry.unit = "ms";
+    entry.worst_text = "Measured present jitter 11.4 ms during CFR capture";
+    entry.count = 2;
+    entry.first_seen_s = 12.0;
+    entry.last_seen_s = 38.5;
+    entry.total_active_s = 9.5;
+    entry.occurrences = {{12.0, 18.0, 11.4}, {35.0, 38.5, 9.2}};
+    return entry;
+}
+
+} // namespace
+
+TEST(SessionReport, CarriesTheFrozenLedgerWithItsOccurrences) {
+    SessionReportInputs in = MakeInputs();
+    in.ledger = {MakeLedgerEntry()};
+    const QJsonObject o = Parse(BuildSessionReportJson(in));
+
+    const QJsonArray ledger = o[QStringLiteral("ledger")].toArray();
+    ASSERT_EQ(ledger.size(), 1);
+    const QJsonObject e = ledger.at(0).toObject();
+    EXPECT_EQ(e[QStringLiteral("id")].toString(), QStringLiteral("rec.001"));
+    EXPECT_EQ(e[QStringLiteral("title")].toString(), QStringLiteral("VRR / refresh-induced judder detected"));
+    EXPECT_EQ(e[QStringLiteral("count")].toInt(), 2);
+    EXPECT_DOUBLE_EQ(e[QStringLiteral("first_seen_s")].toDouble(), 12.0);
+    EXPECT_DOUBLE_EQ(e[QStringLiteral("last_seen_s")].toDouble(), 38.5);
+    EXPECT_DOUBLE_EQ(e[QStringLiteral("total_active_s")].toDouble(), 9.5);
+    EXPECT_DOUBLE_EQ(e[QStringLiteral("worst")].toDouble(), 11.4);
+    EXPECT_DOUBLE_EQ(e[QStringLiteral("budget")].toDouble(), 8.0);
+    EXPECT_EQ(e[QStringLiteral("unit")].toString(), QStringLiteral("ms"));
+
+    const QJsonArray occurrences = e[QStringLiteral("occurrences")].toArray();
+    ASSERT_EQ(occurrences.size(), 2);
+    EXPECT_DOUBLE_EQ(occurrences.at(0).toObject()[QStringLiteral("start_s")].toDouble(), 12.0);
+    EXPECT_DOUBLE_EQ(occurrences.at(0).toObject()[QStringLiteral("end_s")].toDouble(), 18.0);
+    EXPECT_DOUBLE_EQ(occurrences.at(1).toObject()[QStringLiteral("worst")].toDouble(), 9.2);
+}
+
+TEST(SessionReport, ACleanSessionCarriesNoLedgerKeyAtAll) {
+    // An empty array and "this build has no ledger" would read the same to a
+    // support reader; the absent key is the honest one.
+    const QJsonObject o = Parse(BuildSessionReportJson(MakeInputs()));
+    EXPECT_FALSE(o.contains(QStringLiteral("ledger")));
+}
+
+TEST(SessionReport, ALedgerEntryWithoutANumberReportsTheWordAndNotAZero) {
+    SessionReportInputs in = MakeInputs();
+    LedgerEntry entry = MakeLedgerEntry();
+    entry.worst.reset();
+    entry.budget.reset();
+    in.ledger = {entry};
+    const QJsonObject e = Parse(BuildSessionReportJson(in))[QStringLiteral("ledger")].toArray().at(0).toObject();
+    EXPECT_EQ(e[QStringLiteral("worst")].toString(), QStringLiteral("unavailable"));
+    EXPECT_EQ(e[QStringLiteral("budget")].toString(), QStringLiteral("unavailable"));
+}
+
 } // namespace
 } // namespace exosnap::diagnostics

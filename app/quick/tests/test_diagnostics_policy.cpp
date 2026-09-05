@@ -8,6 +8,7 @@
 #include "diagnostics/DiagnosticsProbe.h"
 #include "diagnostics/FixActionDispatcher.h"
 #include "diagnostics/SessionLedger.h"
+#include "viewmodels/RecordViewModel.h"
 #include "visual_tests/DiagnosticsLiveScenario.h"
 
 #include <gtest/gtest.h>
@@ -631,4 +632,107 @@ TEST(DiagnosticsController, ANewSessionGenerationResetsTheLedger) {
     EXPECT_EQ(controller.ledger().generation(), 2u);
     // The new session starts from nothing, debounce included.
     EXPECT_EQ(FindEntry(fresh.ledger, "rec.001"), nullptr);
+}
+
+// ── Last session ────────────────────────────────────────────────────────────────
+
+namespace {
+
+UiRecordingResult MakeResultFor(uint32_t frame_rate_num) {
+    UiRecordingResult result;
+    result.succeeded = true;
+    result.output_path = L"D:/Videos/ExoSnap_2026-09-05.mkv";
+    result.output_file_bytes = 1610612736;
+    result.elapsed_seconds = 184.0;
+    result.media_duration_seconds = 183.5;
+    result.frame_rate_num = frame_rate_num;
+    result.frame_rate_den = 1;
+    result.container = exosnap::engine::Container::Matroska;
+    result.video_codec = exosnap::engine::VideoCodec::Av1;
+    result.audio_codec = exosnap::engine::AudioCodec::Opus;
+    return result;
+}
+
+std::vector<LedgerEntry> FrozenLedger() {
+    SessionLedger ledger = LedgerWith({"rec.001"}, /*active_count=*/0);
+    ledger.Freeze(10.0);
+    return ledger.entries();
+}
+
+} // namespace
+
+TEST(DiagnosticsLastSession, FourFactsInAFixedOrderWithTheFileNameOnly) {
+    const exosnap::engine::RecordingDiagnosticsSnapshot snapshot =
+        visual::MakeDiagnosticsLiveSnapshot(QStringLiteral("post"));
+    const LastSession session = BuildLastSession(MakeResultFor(60), snapshot, {});
+
+    EXPECT_TRUE(session.valid);
+    // The name, never the path: the card is a support artefact as much as a UI.
+    EXPECT_EQ(session.file_name, "ExoSnap_2026-09-05.mkv");
+    EXPECT_DOUBLE_EQ(session.duration_s, 183.5);
+    ASSERT_EQ(session.facts.size(), 4u);
+    EXPECT_EQ(session.facts[0].key, "dropped");
+    EXPECT_EQ(session.facts[1].key, "achieved");
+    EXPECT_EQ(session.facts[2].key, "drift");
+    EXPECT_EQ(session.facts[3].key, "file");
+    EXPECT_EQ(session.problems, 0);
+    EXPECT_TRUE(session.marks.empty());
+}
+
+TEST(DiagnosticsLastSession, FramesDroppedIsTheOneFactAChecksOwnsOutright) {
+    exosnap::engine::RecordingDiagnosticsSnapshot clean = visual::MakeDiagnosticsLiveSnapshot(QStringLiteral("post"));
+    EXPECT_EQ(BuildLastSession(MakeResultFor(60), clean, {}).facts[0].tone, ValueTone::Ok);
+
+    exosnap::engine::RecordingDiagnosticsSnapshot lossy = clean;
+    lossy.capture.frames_dropped_processing_failure = 12;
+    const LastSession session = BuildLastSession(MakeResultFor(60), lossy, {});
+    // A dropped frame is missing from the file. That is not a matter of degree.
+    EXPECT_EQ(session.facts[0].tone, ValueTone::Critical);
+    EXPECT_EQ(session.facts[0].value, "12");
+}
+
+TEST(DiagnosticsLastSession, TheFrozenLedgerBecomesTheProblemCountAndTheTimelineMarks) {
+    const exosnap::engine::RecordingDiagnosticsSnapshot snapshot =
+        visual::MakeDiagnosticsLiveSnapshot(QStringLiteral("post"));
+    const std::vector<LedgerEntry> frozen = FrozenLedger();
+    ASSERT_EQ(frozen.size(), 1u);
+    ASSERT_EQ(frozen.front().occurrences.size(), 1u);
+
+    const LastSession session = BuildLastSession(MakeResultFor(60), snapshot, frozen);
+    EXPECT_EQ(session.problems, 1);
+    EXPECT_EQ(session.ledger, frozen);
+    ASSERT_EQ(session.marks.size(), 1u);
+    EXPECT_EQ(session.marks.front().id, "rec.001");
+    EXPECT_EQ(session.marks.front().tone, "warn");
+    EXPECT_DOUBLE_EQ(session.marks.front().start_s, 1.0);
+    EXPECT_DOUBLE_EQ(session.marks.front().end_s, 2.0);
+}
+
+TEST(DiagnosticsLastSession, RealFrameDropsEarnACoralMarkOfTheirOwn) {
+    exosnap::engine::RecordingDiagnosticsSnapshot lossy = visual::MakeDiagnosticsLiveSnapshot(QStringLiteral("post"));
+    lossy.capture.frames_dropped_backpressure = 41;
+    const LastSession session = BuildLastSession(MakeResultFor(60), lossy, FrozenLedger());
+    ASSERT_EQ(session.marks.size(), 2u);
+    EXPECT_EQ(session.marks.back().tone, "critical");
+    EXPECT_EQ(session.marks.back().id, "capture.drops");
+    EXPECT_DOUBLE_EQ(session.marks.back().worst, 41.0);
+}
+
+TEST(DiagnosticsLastSession, AnUnmeasuredSessionStatesWhatItCannotSayInsteadOfZero) {
+    const LastSession session = BuildLastSession(MakeResultFor(60), {}, {});
+    EXPECT_EQ(session.facts[0].value, "\xe2\x80\x94");
+    EXPECT_EQ(session.facts[0].tone, ValueTone::Neutral);
+    EXPECT_EQ(session.facts[1].value, "\xe2\x80\x94");
+    EXPECT_EQ(session.facts[2].value, "Unavailable");
+    // The file itself is a fact of the result, not of the snapshot.
+    EXPECT_EQ(session.facts[3].value, "Valid");
+    EXPECT_EQ(session.facts[3].tone, ValueTone::Ok);
+}
+
+TEST(DiagnosticsController, TheLastSessionIsHeldUntilTheNextRecording) {
+    DiagnosticsController controller;
+    EXPECT_FALSE(controller.lastSession().valid);
+    controller.SetLastSession(BuildLastSession(MakeResultFor(60), {}, FrozenLedger()));
+    EXPECT_TRUE(controller.lastSession().valid);
+    EXPECT_EQ(controller.lastSession().problems, 1);
 }

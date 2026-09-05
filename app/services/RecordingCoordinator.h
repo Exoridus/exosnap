@@ -27,6 +27,7 @@
 #include <exosnap/engine/recorder_session.h>
 
 #include "../diagnostics/DiskSpaceProvider.h"
+#include "../diagnostics/SessionLedger.h"
 #include "../diagnostics/WindowTargetFacts.h"
 #include "../models/FilenameBuilder.h"
 #include "../models/OutputPathValidator.h"
@@ -114,6 +115,13 @@ class RecordingCoordinator {
     // state, and nothing the coordinator can dereference back into the UI.
     void NoteWindowCaptureStall() noexcept;
     [[nodiscard]] uint32_t WindowCaptureStallEpisodes() const noexcept;
+
+    // The frozen session ledger for the recording that just ended, pulled when the
+    // session report is written. A provider rather than a pushed value because the
+    // ledger is owned by the diagnostics side, which the coordinator must not know
+    // about beyond this plain-data callback. Unset means the report carries no
+    // ledger, which is what a build without a diagnostics surface should say.
+    void SetSessionLedgerProvider(std::function<std::vector<diagnostics::LedgerEntry>()> provider);
 
     // ADR-0015: armed-from-recovery state.
     // Enter the armed-from-recovery (paused) state for the given candidate.
@@ -511,6 +519,7 @@ class RecordingCoordinator {
     // QCR-804: reported window-capture stalls for the session in flight. Written
     // from the UI thread, read from the recording thread — see NoteWindowCaptureStall.
     std::atomic<uint32_t> window_capture_stall_episodes_{0};
+    std::function<std::vector<diagnostics::LedgerEntry>()> session_ledger_provider_;
     // Posts the recovery-protection-lost notice onto the Qt main thread and logs
     // it. Safe from any thread.
     void PostRecoveryProtectionLost(QString detail);
