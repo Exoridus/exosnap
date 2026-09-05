@@ -18,9 +18,14 @@
 //
 // Pure and harness-only. Nothing in a shipping code path calls it.
 
+#include "diagnostics/PresentProvider.h"
+#include "diagnostics/RecommendationEngine.h"
+
 #include <exosnap/engine/pipeline_diagnostics.h>
 
 #include <QString>
+
+#include <optional>
 
 namespace exosnap::visual {
 
@@ -35,9 +40,35 @@ namespace exosnap::visual {
 //   "paused"               a paused recording
 //   "split"                a split pending mid-recording
 //   "post"                 a completed recording's final snapshot
+//   "ledger"               a long recording that measured judder three times and
+//                          is contending for the GPU right now
+//   "after-stop"           the same recording, stopped and saved
+//   "in-depth"             a healthy recording with the elevated traces running
 //
 // An unrecognised kind returns an invalid snapshot, which renders as no live
 // tiles at all -- the honest result for "no scenario".
 [[nodiscard]] exosnap::engine::RecordingDiagnosticsSnapshot MakeDiagnosticsLiveSnapshot(const QString& kind);
+
+// One sample of a seeded 5 Hz sequence, `step` of `steps`. The last step equals
+// the scenario's own snapshot; the ones before it wind the session clock back and
+// wobble the measurements, so a sparkline has a shape and the session ledger has
+// separate occurrences to record instead of one long instant.
+[[nodiscard]] exosnap::engine::RecordingDiagnosticsSnapshot MakeDiagnosticsLiveSample(const QString& kind, int step,
+                                                                                      int steps);
+
+// How many samples a kind needs before its capture is honest. One is enough for a
+// tile; a trend and a ledger need a sequence.
+[[nodiscard]] int DiagnosticsLiveSampleCount(const QString& kind);
+
+// The elevation-gated readings a kind runs with. Both empty unless the scenario is
+// one of the in-depth ones, which is what "the switch is off" looks like.
+struct DiagnosticsLiveExtras {
+    bool elevated = false;
+    bool in_depth = false;
+    std::optional<diagnostics::PresentSample> present;
+    std::optional<diagnostics::DpcLatencyReading> dpc;
+};
+
+[[nodiscard]] DiagnosticsLiveExtras MakeDiagnosticsLiveExtras(const QString& kind);
 
 } // namespace exosnap::visual

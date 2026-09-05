@@ -2,6 +2,7 @@
 
 #include "services/SystemAppearance.h"
 
+#include "NotificationHubPolicy.h"
 #include "QuickWindowChrome.h"
 
 #include "services/DisplayIdentityEnumerator.h"
@@ -2987,6 +2988,43 @@ void QuickApplication::applyShellVisualScenarios() {
             QStringLiteral("An unfinished recording from 09 Aug 2026 was found."), NotificationAction::OpenRecovery);
 }
 
+namespace {
+
+// Harness-only: the elevated DPC/ISR reading a --visual-test scenario states,
+// standing in for a kernel trace a capture run must never open.
+class FixedDpcLatencyProvider final : public diagnostics::IDpcLatencyProvider {
+  public:
+    explicit FixedDpcLatencyProvider(diagnostics::DpcLatencyReading reading) : reading_(std::move(reading)) {
+    }
+
+    [[nodiscard]] diagnostics::DpcLatencyReading Read() const override {
+        return reading_;
+    }
+
+  private:
+    diagnostics::DpcLatencyReading reading_;
+};
+
+// The finished recording the after-stop scenario reports on. Deliberately not a
+// real file: the Last session card states facts about a result, and the harness
+// supplies the result rather than requiring a recording on this machine.
+UiRecordingResult MakeVisualRecordingResult() {
+    UiRecordingResult result;
+    result.succeeded = true;
+    result.output_path = L"exosnap-2026-09-05-154112.mkv";
+    result.output_file_bytes = 2'040'109'465;
+    result.elapsed_seconds = 758.0;
+    result.media_duration_seconds = 754.0;
+    result.container = exosnap::engine::Container::Matroska;
+    result.audio_codec = exosnap::engine::AudioCodec::Opus;
+    result.frame_rate_num = 60;
+    result.frame_rate_den = 1;
+    result.video_codec = exosnap::engine::VideoCodec::Av1;
+    return result;
+}
+
+} // namespace
+
 void QuickApplication::applyDiagnosticsVisualScenarios() {
     const QByteArray log_scenario = qgetenv("EXOSNAP_VISUAL_LOG_SCENARIO");
     if (!log_scenario.isEmpty()) {
@@ -3051,7 +3089,31 @@ void QuickApplication::applyDiagnosticsVisualScenarios() {
     // product's own classification of it.
     const QByteArray diag_live = qgetenv("EXOSNAP_VISUAL_DIAG_LIVE");
     if (!diag_live.isEmpty()) {
-        diagnostics_adapter_.applyLiveDiagnostics(visual::MakeDiagnosticsLiveSnapshot(QString::fromUtf8(diag_live)));
+        const QString kind = QString::fromUtf8(diag_live);
+        const visual::DiagnosticsLiveExtras extras = visual::MakeDiagnosticsLiveExtras(kind);
+        if (extras.elevated)
+            diagnostics_adapter_.setElevated(true);
+        diagnostics_adapter_.setInDepthEnabled(extras.in_depth);
+        if (extras.present.has_value())
+            diagnostics_adapter_.setPresentSample(extras.present);
+        if (extras.dpc.has_value()) {
+            visual_dpc_provider_ = std::make_unique<FixedDpcLatencyProvider>(*extras.dpc);
+            diagnostics_adapter_.setDpcLatencyProvider(visual_dpc_provider_.get());
+        }
+
+        // A sequence, not one snapshot. A sparkline of a single sample is a flat
+        // line and a session ledger needs two consecutive evaluations before it
+        // records anything, so a capture seeded with one snapshot would
+        // photograph neither feature. Each sample is pushed through the same
+        // applyLiveDiagnostics() the engine uses; the explicit refresh after it
+        // stands in for the 500 ms the live rail would otherwise wait.
+        const int steps = visual::DiagnosticsLiveSampleCount(kind);
+        for (int step = 0; step < steps; ++step) {
+            diagnostics_adapter_.applyLiveDiagnostics(visual::MakeDiagnosticsLiveSample(kind, step, steps));
+            diagnostics_adapter_.refreshForTest();
+        }
+        if (kind == QLatin1String("after-stop"))
+            diagnostics_adapter_.setLastSession(MakeVisualRecordingResult());
         diagnostics_visual_scenario_active_ = true;
     }
 }
@@ -4286,10 +4348,13 @@ void QuickApplication::publishRecordingResultNotification(const UiRecordingResul
         // recordings go) at the cost of the one thing they want to read. The
         // path itself is not lost: Show in folder acts on it, and Edit carries
         // it as its payload.
-        event.body = QFileInfo(QString::fromStdWString(result.output_path)).fileName();
+        const int problems = static_cast<int>(diagnostics_adapter_.frozenLedger().size());
+        event.body = notifications::SavedRecordingBody(
+            QFileInfo(QString::fromStdWString(result.output_path)).fileName(), problems);
         event.action = notifications::NotificationAction::Edit;
         event.action_payload = QString::fromStdWString(result.output_path);
-        event.secondary_action = notifications::NotificationAction::OpenFolder;
+        event.secondary_action = problems > 0 ? notifications::NotificationAction::OpenDiagnostics
+                                              : notifications::NotificationAction::OpenFolder;
     } else if (models::IsDiskSpaceAutoStop(result)) {
         // The one low-storage producer there is. The threshold, the monitoring
         // and the decision to stop all belong to the coordinator's disk guard
