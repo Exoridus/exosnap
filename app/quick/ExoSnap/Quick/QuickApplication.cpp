@@ -823,10 +823,12 @@ void QuickApplication::initializeRecordWorkflow() {
             observeAudioSourceDegradation(snapshot);
             synchronizeRecordState();
         });
-    // The session report carries what the recording measured. The controller has
-    // already frozen the ledger on the terminal live snapshot, which arrives
-    // before this result, so the provider reads a closed record.
-    recording_coordinator_->SetSessionLedgerProvider([this] { return diagnostics_adapter_.frozenLedger(); });
+    // The session report carries what the recording measured. Handed over here,
+    // on the thread that owns the ledger, the moment the adapter closes it -- the
+    // report itself is written on the recording thread and must never read this
+    // one's state.
+    QObject::connect(&diagnostics_adapter_, &DiagnosticsAdapter::sessionLedgerFrozen, &diagnostics_adapter_,
+                     [this]() { recording_coordinator_->SetFrozenSessionLedger(diagnostics_adapter_.frozenLedger()); });
     recording_coordinator_->SetResultReadyCallback([this](const UiRecordingResult& result) {
         record_view_model_.SetResult(result);
         diagnostics_adapter_.setLastSession(result);

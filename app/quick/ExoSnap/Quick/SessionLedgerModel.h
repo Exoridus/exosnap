@@ -19,7 +19,6 @@ struct SessionLedgerRow {
     QString entryId;
     QString title;
     QString summary;
-    QString why;
     QString logExcerpt;
     bool active = false;
     int count = 0;
@@ -31,7 +30,6 @@ struct SessionLedgerRow {
     // [{ startMs, endMs, worstText, text }] -- `text` is the clock label the
     // occurrence link shows, the rest is what a consumer needs to seek there.
     QVariantList occurrences;
-    bool needsElevation = false;
 
     friend bool operator==(const SessionLedgerRow&, const SessionLedgerRow&) = default;
 };
@@ -54,7 +52,6 @@ class SessionLedgerModel : public QAbstractListModel {
         EntryIdRole = Qt::UserRole + 1,
         TitleRole,
         SummaryRole,
-        WhyRole,
         LogExcerptRole,
         ActiveRole,
         CountRole,
@@ -64,7 +61,6 @@ class SessionLedgerModel : public QAbstractListModel {
         BudgetTextRole,
         TotalActiveTextRole,
         OccurrencesRole,
-        NeedsElevationRole,
     };
 
     explicit SessionLedgerModel(QObject* parent = nullptr);

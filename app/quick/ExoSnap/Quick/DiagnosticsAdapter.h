@@ -72,7 +72,6 @@ class DiagnosticsAdapter : public QObject {
     // The problems measured during this recording session, in first-seen order.
     // Same base-type spelling, same reason.
     Q_PROPERTY(QAbstractListModel* ledger READ ledger CONSTANT FINAL)
-    Q_PROPERTY(int ledgerActiveCount READ ledgerActiveCount NOTIFY ledgerChanged FINAL)
     Q_PROPERTY(int ledgerCount READ ledgerCount NOTIFY ledgerChanged FINAL)
 
     Q_PROPERTY(QVariantList tiles READ tiles NOTIFY tilesChanged FINAL)
@@ -80,7 +79,6 @@ class DiagnosticsAdapter : public QObject {
     // for. Separate from `tiles`: those are pre-flight readiness facts and stay
     // meaningful while idle, these exist only while something is recording.
     Q_PROPERTY(QVariantList liveTiles READ liveTiles NOTIFY liveTilesChanged FINAL)
-    Q_PROPERTY(bool liveTilesVisible READ liveTilesVisible NOTIFY liveTilesChanged FINAL)
     Q_PROPERTY(QVariantList tips READ tips NOTIFY issuesChanged FINAL)
     Q_PROPERTY(bool hasIssues READ hasIssues NOTIFY issuesChanged FINAL)
     Q_PROPERTY(QVariantList environmentRows READ environmentRows NOTIFY environmentChanged FINAL)
@@ -123,11 +121,9 @@ class DiagnosticsAdapter : public QObject {
     [[nodiscard]] bool recording() const noexcept;
     [[nodiscard]] QAbstractListModel* issues() noexcept;
     [[nodiscard]] QAbstractListModel* ledger() noexcept;
-    [[nodiscard]] int ledgerActiveCount() const noexcept;
     [[nodiscard]] int ledgerCount() const noexcept;
     [[nodiscard]] const QVariantList& tiles() const noexcept;
     [[nodiscard]] const QVariantList& liveTiles() const noexcept;
-    [[nodiscard]] bool liveTilesVisible() const noexcept;
     [[nodiscard]] const QVariantList& tips() const noexcept;
     [[nodiscard]] bool hasIssues() const noexcept;
     [[nodiscard]] const QVariantList& environmentRows() const noexcept;
@@ -158,7 +154,6 @@ class DiagnosticsAdapter : public QObject {
     Q_INVOKABLE void openAssistedFix(const QString& fix_id);
     Q_INVOKABLE void createSupportBundle(const QUrl& destination);
     Q_INVOKABLE void openLogs();
-    Q_INVOKABLE void openLastReport();
     // The Logs page, filtered to one diagnostic id.
     Q_INVOKABLE void showInLog(const QString& entry_id);
     // The Edit surface on the last recording, positioned at `position_ms`.
@@ -223,6 +218,10 @@ class DiagnosticsAdapter : public QObject {
     void hasLastRecordingChanged();
     void recordingChanged();
     void ledgerChanged();
+    // The recording ended and the ledger is closed. Whoever writes the session
+    // report reads frozenLedger() from THIS signal and keeps its own copy: the
+    // report is written on the recording thread, and the ledger lives on this one.
+    void sessionLedgerFrozen();
     void lastSessionChanged();
     void inDepthChanged();
     // The user moved the in-depth switch. The composition root owns the setting
@@ -243,7 +242,6 @@ class DiagnosticsAdapter : public QObject {
     void assistedFixRequested(const QString& fixId);
     void navigateToLogsRequested();
     void navigateToSettingsRequested();
-    void openLastReportRequested();
     void showInLogRequested(const QString& entryId);
     void openEditAtRequested(qint64 positionMs);
     void openLastSessionFolderRequested();
@@ -271,9 +269,6 @@ class DiagnosticsAdapter : public QObject {
     void resetSeries();
     [[nodiscard]] QVariantList seriesFor(const std::string& key) const;
     [[nodiscard]] std::optional<diagnostics::DpcLatencyReading> readDpcLatency() const;
-    // Wall-clock time of a session-relative offset, from the session start the
-    // first snapshot of this generation pinned.
-    [[nodiscard]] QDateTime sessionClock(double offset_s) const;
 
     diagnostics::DiagnosticsController controller_;
     capability::CapabilitySet caps_;

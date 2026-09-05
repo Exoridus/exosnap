@@ -375,8 +375,14 @@ uint32_t RecordingCoordinator::WindowCaptureStallEpisodes() const noexcept {
     return window_capture_stall_episodes_.load(std::memory_order_relaxed);
 }
 
-void RecordingCoordinator::SetSessionLedgerProvider(std::function<std::vector<diagnostics::LedgerEntry>()> provider) {
-    session_ledger_provider_ = std::move(provider);
+void RecordingCoordinator::SetFrozenSessionLedger(std::vector<diagnostics::LedgerEntry> ledger) {
+    std::lock_guard<std::mutex> lock(session_ledger_mutex_);
+    frozen_session_ledger_ = std::move(ledger);
+}
+
+std::vector<diagnostics::LedgerEntry> RecordingCoordinator::FrozenSessionLedger() const {
+    std::lock_guard<std::mutex> lock(session_ledger_mutex_);
+    return frozen_session_ledger_;
 }
 
 void RecordingCoordinator::PostRecoveryProtectionLost(QString detail) {
@@ -1026,6 +1032,12 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
     // Same reasoning for the capture-stall count (QCR-804): the report for this
     // recording must not inherit the previous one's episodes.
     window_capture_stall_episodes_.store(0, std::memory_order_relaxed);
+    // Same reasoning again: the next report must not inherit the previous
+    // recording's frozen ledger if this one ends before its own freeze arrives.
+    {
+        std::lock_guard<std::mutex> lock(session_ledger_mutex_);
+        frozen_session_ledger_.clear();
+    }
 
     auto config = exosnap::capability::ToRecorderCoreConfig(ctx.resolved_user_config, ctx.caps);
     config.cq = ctx.video_settings.cq;
@@ -3003,8 +3015,11 @@ void RecordingCoordinator::WriteSessionReportForResult(const UiRecordingResult& 
     }
 
     inputs.window_capture_stall_episodes = WindowCaptureStallEpisodes();
-    if (session_ledger_provider_)
-        inputs.ledger = session_ledger_provider_();
+    // Empty when the ledger has not been handed over yet -- the terminal snapshot
+    // that freezes it is still queued to the main thread. The report then says
+    // nothing about the session ledger rather than writing a record whose last
+    // occurrence is still open.
+    inputs.ledger = FrozenSessionLedger();
 
     const QDateTime ended = QDateTime::currentDateTime();
     inputs.ended_at = ended.toString(Qt::ISODate);

@@ -22,8 +22,6 @@ QVariant SessionLedgerModel::data(const QModelIndex& index, int role) const {
         return row.title;
     case SummaryRole:
         return row.summary;
-    case WhyRole:
-        return row.why;
     case LogExcerptRole:
         return row.logExcerpt;
     case ActiveRole:
@@ -42,8 +40,6 @@ QVariant SessionLedgerModel::data(const QModelIndex& index, int role) const {
         return row.totalActiveText;
     case OccurrencesRole:
         return row.occurrences;
-    case NeedsElevationRole:
-        return row.needsElevation;
     default:
         break;
     }
@@ -55,7 +51,6 @@ QHash<int, QByteArray> SessionLedgerModel::roleNames() const {
         {EntryIdRole, "entryId"},
         {TitleRole, "title"},
         {SummaryRole, "summary"},
-        {WhyRole, "why"},
         {LogExcerptRole, "logExcerpt"},
         {ActiveRole, "active"},
         {CountRole, "count"},
@@ -65,7 +60,6 @@ QHash<int, QByteArray> SessionLedgerModel::roleNames() const {
         {BudgetTextRole, "budgetText"},
         {TotalActiveTextRole, "totalActiveText"},
         {OccurrencesRole, "occurrences"},
-        {NeedsElevationRole, "needsElevation"},
     };
 }
 

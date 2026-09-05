@@ -116,12 +116,18 @@ class RecordingCoordinator {
     void NoteWindowCaptureStall() noexcept;
     [[nodiscard]] uint32_t WindowCaptureStallEpisodes() const noexcept;
 
-    // The frozen session ledger for the recording that just ended, pulled when the
-    // session report is written. A provider rather than a pushed value because the
-    // ledger is owned by the diagnostics side, which the coordinator must not know
-    // about beyond this plain-data callback. Unset means the report carries no
-    // ledger, which is what a build without a diagnostics surface should say.
-    void SetSessionLedgerProvider(std::function<std::vector<diagnostics::LedgerEntry>()> provider);
+    // The frozen session ledger of the recording that just ended, handed over by
+    // the diagnostics side the moment it closes the record.
+    //
+    // Pushed rather than pulled, and guarded, for the same reason
+    // NoteWindowCaptureStall exists: the session report is written on the
+    // recording thread, and the ledger is owned by the Qt main thread. A provider
+    // callback would have the recording thread copy a std::vector the GUI thread
+    // may be appending to, and would read it before the freeze whenever the
+    // terminal snapshot is still queued. Nothing pushed means the report carries
+    // no ledger key at all, which is what a half-open record must never look like.
+    void SetFrozenSessionLedger(std::vector<diagnostics::LedgerEntry> ledger);
+    [[nodiscard]] std::vector<diagnostics::LedgerEntry> FrozenSessionLedger() const;
 
     // ADR-0015: armed-from-recovery state.
     // Enter the armed-from-recovery (paused) state for the given candidate.
@@ -519,7 +525,10 @@ class RecordingCoordinator {
     // QCR-804: reported window-capture stalls for the session in flight. Written
     // from the UI thread, read from the recording thread — see NoteWindowCaptureStall.
     std::atomic<uint32_t> window_capture_stall_episodes_{0};
-    std::function<std::vector<diagnostics::LedgerEntry>()> session_ledger_provider_;
+    // Written from the Qt main thread when the ledger freezes, read from the
+    // recording thread when the report is written -- see SetFrozenSessionLedger.
+    mutable std::mutex session_ledger_mutex_;
+    std::vector<diagnostics::LedgerEntry> frozen_session_ledger_;
     // Posts the recovery-protection-lost notice onto the Qt main thread and logs
     // it. Safe from any thread.
     void PostRecoveryProtectionLost(QString detail);

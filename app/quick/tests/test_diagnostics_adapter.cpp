@@ -145,12 +145,25 @@ bool HasLedgerEntry(const SessionLedgerModel& model, const QString& id) {
 }
 
 // The judder fixture sits at 7.9 ms, just under the check's 8 ms threshold; the
-// ledger only has something to record once rec.001 actually fires.
-exosnap::engine::RecordingDiagnosticsSnapshot JudderSnapshot() {
+// ledger only has something to record once rec.001 actually fires. `elapsed_s`
+// is what makes one snapshot distinct from the next: the ledger's entry rule
+// counts measurements, so re-evaluating one snapshot must not advance it.
+exosnap::engine::RecordingDiagnosticsSnapshot JudderSnapshot(double elapsed_s = 184.0) {
     exosnap::engine::RecordingDiagnosticsSnapshot snapshot =
         visual::MakeDiagnosticsLiveSnapshot(QStringLiteral("judder"));
     snapshot.capture.source_present_jitter_ms = 9.0;
+    snapshot.elapsed_seconds = elapsed_s;
     return snapshot;
+}
+
+// A recording that has measured judder often enough for the ledger to hold it.
+// The live rail is throttled to 2 Hz, so the snapshots are pushed a full second
+// apart and each one is a genuinely new measurement.
+void RecordJudder(DiagnosticsAdapter& adapter, int samples = 4) {
+    for (int i = 0; i < samples; ++i) {
+        adapter.applyLiveDiagnostics(JudderSnapshot(184.0 + i));
+        adapter.refreshForTest();
+    }
 }
 
 bool HasIssueWithId(DiagnosticsAdapter& adapter, const QString& id) {
@@ -486,16 +499,9 @@ TEST(DiagnosticsAdapterTest, NavigationIsAnIntentNotAPageSwitch) {
     EnsureApplication();
     DiagnosticsAdapter adapter;
     SignalCounter logs(&adapter, &DiagnosticsAdapter::navigateToLogsRequested);
-    SignalCounter report(&adapter, &DiagnosticsAdapter::openLastReportRequested);
 
     adapter.openLogs();
-    adapter.openLastReport(); // gated: no completed recording yet
     EXPECT_EQ(logs.count(), 1);
-    EXPECT_EQ(report.count(), 0);
-
-    adapter.setHasLastRecording(true);
-    adapter.openLastReport();
-    EXPECT_EQ(report.count(), 1);
 }
 
 // The in-depth switch reports intent; the setting itself is owned by the
@@ -515,6 +521,12 @@ TEST(DiagnosticsAdapterTest, TheInDepthSwitchAsksAndDoesNotDecide) {
 
     adapter.setInDepthEnabled(true);
     EXPECT_TRUE(adapter.inDepthEnabled());
+    // The opt-in persists across launches; elevation does not. On in a standard
+    // process there is no ETW session, and the sub-text is the one place the spec
+    // says the gate is stated.
+    EXPECT_EQ(adapter.inDepthStateText(), QStringLiteral("On \xc2\xb7 not measuring \xc2\xb7 needs an admin relaunch"));
+
+    adapter.setElevated(true);
     EXPECT_EQ(adapter.inDepthStateText(), QStringLiteral("On \xc2\xb7 elevated \xc2\xb7 PresentMon + DPC/ISR trace"));
 }
 
@@ -599,11 +611,8 @@ TEST(DiagnosticsAdapterTest, TheLedgerKeepsItsRowsAcrossEvaluations) {
     adapter.setDiagnosticConfig(MakeCaptureConfig());
     adapter.applyProbeResultForTest(MakeProbe());
 
-    adapter.applyLiveDiagnostics(JudderSnapshot());
-    // Four passes: the entry rule needs two consecutive firings, and anything
-    // that starts firing late must have entered before the spies go on.
-    for (int i = 0; i < 4; ++i)
-        adapter.refreshForTest();
+    // Four distinct snapshots: the entry rule counts measurements, not passes.
+    RecordJudder(adapter);
 
     auto* ledger = qobject_cast<SessionLedgerModel*>(adapter.ledger());
     ASSERT_NE(ledger, nullptr);
@@ -625,14 +634,83 @@ TEST(DiagnosticsAdapterTest, MeasuredProblemsAreTheLedgersWhileRecording) {
     DiagnosticsAdapter adapter;
     adapter.setDiagnosticConfig(MakeCaptureConfig());
     adapter.applyProbeResultForTest(MakeProbe());
-    adapter.applyLiveDiagnostics(JudderSnapshot());
-    for (int i = 0; i < 4; ++i)
-        adapter.refreshForTest();
+    RecordJudder(adapter);
 
     auto* ledger = qobject_cast<SessionLedgerModel*>(adapter.ledger());
     ASSERT_NE(ledger, nullptr);
     ASSERT_TRUE(HasLedgerEntry(*ledger, QStringLiteral("rec.001")));
     EXPECT_FALSE(HasIssueWithId(adapter, QStringLiteral("rec.001")));
+}
+
+// The entry rule counts measurements. refreshSnapshot() is reached from eight
+// places -- a settings change, a display change, a probe result -- and every one
+// of them re-evaluates the SAME snapshot, so a single spike must not enter.
+TEST(DiagnosticsAdapterTest, ReEvaluatingOneSnapshotNeverRaisesALedgerEntry) {
+    EnsureApplication();
+    DiagnosticsAdapter adapter;
+    adapter.setDiagnosticConfig(MakeCaptureConfig());
+    adapter.applyProbeResultForTest(MakeProbe());
+
+    adapter.applyLiveDiagnostics(JudderSnapshot(184.0));
+    for (int i = 0; i < 6; ++i)
+        adapter.refreshForTest();
+
+    auto* ledger = qobject_cast<SessionLedgerModel*>(adapter.ledger());
+    ASSERT_NE(ledger, nullptr);
+    EXPECT_FALSE(HasLedgerEntry(*ledger, QStringLiteral("rec.001")))
+        << "one measurement cannot satisfy the two-evaluation entry rule";
+
+    adapter.applyLiveDiagnostics(JudderSnapshot(185.0));
+    adapter.refreshForTest();
+    EXPECT_TRUE(HasLedgerEntry(*ledger, QStringLiteral("rec.001")));
+}
+
+// Spec section 2: after Stop the band returns to the readiness verdict and says
+// nothing about the session. Nothing else on that edge recomputes it.
+TEST(DiagnosticsAdapterTest, StoppingReturnsTheBandToTheReadinessVerdict) {
+    EnsureApplication();
+    DiagnosticsAdapter adapter;
+    adapter.setDiagnosticConfig(MakeCaptureConfig());
+    adapter.applyProbeResultForTest(MakeProbe());
+
+    RecordJudder(adapter);
+    ASSERT_TRUE(adapter.verdictHeadline().startsWith(QStringLiteral("Recording")))
+        << adapter.verdictHeadline().toStdString();
+
+    exosnap::engine::RecordingDiagnosticsSnapshot done = JudderSnapshot(188.0);
+    done.lifecycle = exosnap::engine::DiagnosticsLifecycle::Completed;
+    adapter.applyLiveDiagnostics(done);
+
+    EXPECT_FALSE(adapter.recording());
+    EXPECT_FALSE(adapter.verdictHeadline().startsWith(QStringLiteral("Recording")))
+        << adapter.verdictHeadline().toStdString();
+}
+
+// The session report is written on the recording thread and must never read the
+// ledger from here. The freeze hands it over instead.
+TEST(DiagnosticsAdapterTest, TheFrozenLedgerIsHandedOverOnceWhenTheRecordingEnds) {
+    EnsureApplication();
+    DiagnosticsAdapter adapter;
+    adapter.setDiagnosticConfig(MakeCaptureConfig());
+    adapter.applyProbeResultForTest(MakeProbe());
+
+    SignalCounter frozen(&adapter, &DiagnosticsAdapter::sessionLedgerFrozen);
+    RecordJudder(adapter);
+    EXPECT_EQ(frozen.count(), 0) << "nothing is frozen while the recording runs";
+
+    exosnap::engine::RecordingDiagnosticsSnapshot done = JudderSnapshot(188.0);
+    done.lifecycle = exosnap::engine::DiagnosticsLifecycle::Completed;
+    adapter.applyLiveDiagnostics(done);
+    EXPECT_EQ(frozen.count(), 1);
+
+    const std::vector<diagnostics::LedgerEntry> ledger = adapter.frozenLedger();
+    ASSERT_EQ(ledger.size(), 1u);
+    EXPECT_EQ(ledger.front().id, "rec.001");
+    EXPECT_FALSE(ledger.front().active) << "a handed-over occurrence is closed";
+
+    // A further terminal snapshot is not a second recording ending.
+    adapter.applyLiveDiagnostics(done);
+    EXPECT_EQ(frozen.count(), 1);
 }
 
 TEST(DiagnosticsAdapterTest, IdlePipelineShowsTheStaticReadinessStages) {
@@ -691,7 +769,6 @@ TEST(DiagnosticsAdapterTest, LiveTilesAppearWithARecordingAndVanishWhenItEnds) {
     adapter.setDiagnosticConfig(MakeConfig());
 
     // Idle: the readiness tiles are still meaningful, the live summary is not.
-    EXPECT_FALSE(adapter.liveTilesVisible());
     EXPECT_TRUE(adapter.liveTiles().isEmpty());
 
     exosnap::engine::RecordingDiagnosticsSnapshot snapshot;
@@ -703,7 +780,6 @@ TEST(DiagnosticsAdapterTest, LiveTilesAppearWithARecordingAndVanishWhenItEnds) {
     snapshot.capture.actual_fps = 59.98;
     adapter.applyLiveDiagnostics(snapshot);
 
-    ASSERT_TRUE(adapter.liveTilesVisible());
     ASSERT_EQ(adapter.liveTiles().size(), 4);
     EXPECT_EQ(adapter.liveTiles().at(0).toMap().value(QStringLiteral("key")).toString(), QStringLiteral("framePacing"));
     EXPECT_EQ(adapter.liveTiles().at(0).toMap().value(QStringLiteral("value")).toString(), QStringLiteral("59.98 fps"));
@@ -713,7 +789,6 @@ TEST(DiagnosticsAdapterTest, LiveTilesAppearWithARecordingAndVanishWhenItEnds) {
     // stale claim about something that is no longer happening.
     snapshot.lifecycle = exosnap::engine::DiagnosticsLifecycle::Completed;
     adapter.applyLiveDiagnostics(snapshot);
-    EXPECT_FALSE(adapter.liveTilesVisible());
     EXPECT_TRUE(adapter.liveTiles().isEmpty());
 }
 

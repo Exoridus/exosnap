@@ -144,11 +144,9 @@ SessionLedgerRow LedgerRow(const diagnostics::LedgerEntry& entry, double now_s, 
     row.entryId = Text(entry.id);
     row.title = Text(entry.title);
     row.summary = Text(entry.summary);
-    row.why = Text(entry.why);
     row.logExcerpt = Text(entry.log_excerpt);
     row.active = entry.active;
     row.count = static_cast<int>(entry.count);
-    row.needsElevation = entry.needs_elevation;
     row.firstSeenText = clock(entry.first_seen_s);
     // While the recording runs, "40 s ago" is the fact the reader can act on;
     // afterwards the session is a closed interval and a time of day places the
@@ -300,10 +298,6 @@ QAbstractListModel* DiagnosticsAdapter::ledger() noexcept {
     return &ledger_model_;
 }
 
-int DiagnosticsAdapter::ledgerActiveCount() const noexcept {
-    return controller_.ledger().activeCount();
-}
-
 int DiagnosticsAdapter::ledgerCount() const noexcept {
     return ledger_model_.rowCount();
 }
@@ -327,8 +321,14 @@ void DiagnosticsAdapter::setInDepthEnabledFromUi(bool enabled) {
 }
 
 QString DiagnosticsAdapter::inDepthStateText() const {
-    if (in_depth_enabled_)
-        return QStringLiteral("On \xc2\xb7 elevated \xc2\xb7 PresentMon + DPC/ISR trace");
+    // The opt-in persists across launches; elevation does not. With the setting on
+    // in a standard process no ETW session exists and no in-depth tile has a
+    // reading, so the sub-text names the gate rather than claiming the two traces
+    // that are not running.
+    if (in_depth_enabled_) {
+        return controller_.elevated() ? QStringLiteral("On \xc2\xb7 elevated \xc2\xb7 PresentMon + DPC/ISR trace")
+                                      : QStringLiteral("On \xc2\xb7 not measuring \xc2\xb7 needs an admin relaunch");
+    }
     if (recording_)
         return QStringLiteral("Off \xc2\xb7 cannot change while recording");
     return QStringLiteral("Off \xc2\xb7 needs an admin relaunch");
@@ -344,10 +344,6 @@ const QVariantList& DiagnosticsAdapter::tiles() const noexcept {
 
 const QVariantList& DiagnosticsAdapter::liveTiles() const noexcept {
     return live_tiles_;
-}
-
-bool DiagnosticsAdapter::liveTilesVisible() const noexcept {
-    return !live_tiles_.isEmpty();
 }
 
 void DiagnosticsAdapter::refreshLiveTiles() {
@@ -450,12 +446,6 @@ std::optional<diagnostics::DpcLatencyReading> DiagnosticsAdapter::readDpcLatency
         return std::nullopt;
     const diagnostics::DpcLatencyReading reading = dpc_provider_->Read();
     return reading.available ? std::optional<diagnostics::DpcLatencyReading>(reading) : std::nullopt;
-}
-
-QDateTime DiagnosticsAdapter::sessionClock(double offset_s) const {
-    if (!session_start_.isValid())
-        return {};
-    return session_start_.addMSecs(static_cast<qint64>(offset_s * 1000.0));
 }
 
 void DiagnosticsAdapter::refreshLedger() {
@@ -584,12 +574,6 @@ void DiagnosticsAdapter::createSupportBundle(const QUrl& destination) {
 
 void DiagnosticsAdapter::openLogs() {
     emit navigateToLogsRequested();
-}
-
-void DiagnosticsAdapter::openLastReport() {
-    if (!controller_.hasLastRecording())
-        return;
-    emit openLastReportRequested();
 }
 
 void DiagnosticsAdapter::showInLog(const QString& entry_id) {
@@ -739,6 +723,7 @@ void DiagnosticsAdapter::applyLiveDiagnostics(const exosnap::engine::RecordingDi
         appendSeriesSamples(snapshot);
     }
 
+    const bool left_recording = recording_ && !live;
     if (recording_ != live) {
         recording_ = live;
         emit recordingChanged();
@@ -751,13 +736,23 @@ void DiagnosticsAdapter::applyLiveDiagnostics(const exosnap::engine::RecordingDi
     if (!live) {
         live_throttle_.Reset();
         refreshPipeline();
-        refreshLedger();
-        // Not throttled on this edge: leaving the recording lifecycle is the one
-        // transition where the tiles must go away immediately rather than at the
-        // next allowed tick, or the page keeps showing a live summary of a
-        // recording that has stopped.
+        // Not throttled on this edge, and a full snapshot rather than only the
+        // ledger: the verdict band reports the SESSION while one runs, and
+        // nothing else recomputes it from ComputeVerdict() afterwards. Without
+        // this the band keeps saying "Recording" above the Last session card
+        // until the user changes a setting.
+        refreshSnapshot();
+        // The tiles must go away on this very edge rather than at the next
+        // allowed tick, or the page keeps showing a live summary of a recording
+        // that has stopped.
         refreshLiveTiles();
         updateLiveProbeTimer();
+        // The controller froze the ledger on this same edge, so the closed copy
+        // can go to whoever writes the session report. Pushed rather than pulled:
+        // the report is written on the recording thread, which must not reach
+        // into state this thread owns.
+        if (left_recording)
+            emit sessionLedgerFrozen();
         return;
     }
 
@@ -927,6 +922,7 @@ void DiagnosticsAdapter::refreshLastSessionMap() {
                                               : saved);
     last_session_.insert(QStringLiteral("fileName"), Text(session.file_name));
     last_session_.insert(QStringLiteral("durationMs"), static_cast<int>(session.duration_s * 1000.0));
+    last_session_.insert(QStringLiteral("mediaDurationMs"), static_cast<int>(session.media_duration_s * 1000.0));
     last_session_.insert(QStringLiteral("startedAtText"), Text(session.started_at_text));
     last_session_.insert(QStringLiteral("endedAtText"), Text(session.ended_at_text));
     last_session_.insert(QStringLiteral("durationText"), DurationText(session.duration_s));
@@ -956,11 +952,6 @@ void DiagnosticsAdapter::refreshLastSessionMap() {
 
     QVariantList marks;
     for (const diagnostics::TimelineMark& mark : session.marks) {
-        // Ledger occurrences only. The engine keeps no timestamped drop history,
-        // so a drop mark could only span the whole recording, which would read as
-        // "the entire run was bad" for a defect that lasted a frame.
-        if (mark.tone != "warn")
-            continue;
         QVariantMap map;
         map.insert(QStringLiteral("startMs"), static_cast<int>(mark.start_s * 1000.0));
         map.insert(QStringLiteral("endMs"), static_cast<int>(mark.end_s * 1000.0));
@@ -979,12 +970,23 @@ void DiagnosticsAdapter::refreshLastSessionMap() {
     ordered.reserve(session.ledger.size());
     for (const diagnostics::LedgerEntry& entry : session.ledger)
         ordered.push_back(&entry);
-    std::stable_sort(
-        ordered.begin(), ordered.end(), [](const diagnostics::LedgerEntry* a, const diagnostics::LedgerEntry* b) {
-            const double left = a->worst.value_or(-1.0) / (a->budget.value_or(0.0) > 0.0 ? *a->budget : 1.0);
-            const double right = b->worst.value_or(-1.0) / (b->budget.value_or(0.0) > 0.0 ? *b->budget : 1.0);
-            return left > right;
-        });
+    // The key is the OVERSHOOT, which only an entry with a budget has. A count in
+    // its own unit ("12 mode flips") is not comparable to a ratio, so entries
+    // without a budget rank after every entry with one instead of winning on the
+    // magnitude of a number nothing was measured against.
+    const auto overshoot = [](const diagnostics::LedgerEntry* entry) {
+        return entry->budget.value_or(0.0) > 0.0 && entry->worst.has_value()
+                   ? std::optional<double>(*entry->worst / *entry->budget)
+                   : std::nullopt;
+    };
+    std::stable_sort(ordered.begin(), ordered.end(),
+                     [&overshoot](const diagnostics::LedgerEntry* a, const diagnostics::LedgerEntry* b) {
+                         const std::optional<double> left = overshoot(a);
+                         const std::optional<double> right = overshoot(b);
+                         if (left.has_value() != right.has_value())
+                             return left.has_value();
+                         return left.has_value() && *left > *right;
+                     });
 
     QVariantList entries;
     for (const diagnostics::LedgerEntry* entry : ordered) {
