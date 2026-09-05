@@ -133,6 +133,29 @@ enum class TileTone {
 
 [[nodiscard]] std::string_view TileToneKey(TileTone tone) noexcept;
 
+// The tint of ONE number, decided by the check that owns it and by nothing else.
+// Neutral means no check owns this number at all, which is a different statement
+// from "measured and inside budget" (Ok) and must not be rendered as a verdict.
+enum class ValueTone {
+    Neutral,
+    Ok,
+    Warn,
+    Critical,
+};
+
+[[nodiscard]] std::string_view ValueToneKey(ValueTone tone) noexcept;
+
+// One codec in the encoder tile's codec row. `available` is the same capability
+// answer the capability matrix reads, so a codec can never read as encodable here
+// and unavailable there.
+struct CodecChip {
+    std::string label;
+    bool selected = false;
+    bool available = true;
+
+    friend bool operator==(const CodecChip&, const CodecChip&) = default;
+};
+
 struct ReadinessTile {
     std::string key; // "readiness" | "encoder" | "disk" | "display" | "audio" | "target" | "session"
     std::string title;
@@ -143,6 +166,10 @@ struct ReadinessTile {
     int usage_percent = 0;
     // The Readiness tile earns a trailing check glyph only when everything passed.
     bool show_ok_glyph = false;
+    // A short fact that belongs in the tile head next to the title rather than in
+    // the value line: the encoder backend ("NVENC"), today the only one.
+    std::string head_badge;
+    std::vector<CodecChip> chips;
 };
 
 // Everything the tile builder needs, already resolved by the caller. Screen facts
@@ -176,42 +203,88 @@ struct ReadinessTileInputs {
     std::string target_description;
 
     bool has_last_recording = false;
+
+    // The capability answers behind the encoder tile's codec row. nullptr leaves
+    // the row empty rather than claiming every codec is encodable.
+    const capability::CapabilitySet* caps = nullptr;
+    // WDDM user-mode driver version of the encoding adapter ("A.B.C.D"), as the
+    // caller read it. Empty is a real answer -- some drivers do not report one --
+    // and the tile then says nothing about it.
+    std::string driver_version;
 };
 
 [[nodiscard]] std::vector<ReadinessTile> BuildReadinessTiles(const ReadinessTileInputs& inputs);
 
+// Adapter names ship with the vendor in front ("NVIDIA GeForce RTX 5070 Ti"). The
+// vendor is already stated by the backend badge, so the tile names the part the
+// user recognises.
+[[nodiscard]] std::string TrimVendorPrefix(std::string adapter_name);
+
 // ── Live tiles ──────────────────────────────────────────────────────────────────
 //
-// The five questions the Diagnostics page has to answer while a recording is
-// running, and could not: is the pipeline healthy, where is the bottleneck, is
-// frame pacing healthy, is the encoder healthy, is audio synchronous, is storage
-// healthy. Everything below is a RENDERING of the engine's own verdict --
-// PipelineHealth, PipelineBottleneck and the measurements behind them. There is
-// no second classification here: a tile never decides that something is wrong,
-// it only says which of the engine's findings it is showing.
+// The four questions the Diagnostics page has to answer while a recording is
+// running: is frame pacing healthy, is the encoder healthy, is audio synchronous,
+// is storage healthy. Everything here is a RENDERING of measurements the engine
+// and the recommendation checks already made. There is no second classification:
+// a tile never decides that something is wrong, it only says which finding it is
+// showing.
+//
+// The engine's health/bottleneck verdict drives the TILE tone. The tint of a
+// NUMBER comes from the ledger entry of the check that owns that number, so a
+// value reads green only while the check measuring it has never fired this
+// session, and neutral when no check owns it at all.
 //
 // The live pipeline stage cards (PipelineCardBuilder) stay where they are and
 // keep their Expert home. These tiles are the calm summary above them.
 struct LiveTile {
-    std::string key; // "pipelineHealth" | "framePacing" | "encoder" | "audioSync" | "storage"
+    // "framePacing" | "encoder" | "audioSync" | "storage", plus the in-depth
+    // "presentMode" | "presentHealth" | "dpcLatency" | "gpuTime".
+    std::string key;
     std::string title;
     std::string value;  // the one measurement that answers the tile's question
     std::string sub;    // its context (target, format, budget)
     std::string detail; // a second fact, or why the first one is unavailable
     TileTone tone = TileTone::Neutral;
+    ValueTone value_tone = ValueTone::Neutral;
+    ValueTone sub_tone = ValueTone::Neutral;
+    // The exact substring of `sub` that carries sub_tone. Empty when no fragment
+    // of the sub-line is owned by a check. The view tints that fragment and
+    // decides nothing else about it.
+    std::string sub_tinted;
+    // The threshold the owning check measures against, in the unit of the value
+    // this tile plots. Empty when no check has a threshold for it.
+    std::optional<double> budget;
+    // The whole-session figure behind the headline's "now". Empty when the engine
+    // exposes no session-wide measurement for this tile.
+    std::string session_detail;
 
     friend bool operator==(const LiveTile&, const LiveTile&) = default;
+};
+
+// Everything the live tiles read, gathered by the caller. `ledger` supplies the
+// value tint; `present` and `dpc` are the elevated-only readings and are consulted
+// only when `in_depth` is on.
+struct LiveTileInputs {
+    const exosnap::engine::RecordingDiagnosticsSnapshot& snapshot;
+    const SessionLedger& ledger;
+    bool in_depth = false;
+    std::optional<PresentSample> present;
+    std::optional<DpcLatencyReading> dpc;
+    double gpu_exec_p99_ms = 0.0;
 };
 
 // Pure. Returns an empty list unless the snapshot describes a pipeline that is
 // actually running (Recording or Paused).
 //
 // Two exclusions, for two different reasons. An invalid snapshot has nothing
-// measured at all, and five tiles of em dashes are worse than no tiles. A
-// COMPLETED or FAILED session has real numbers but they answer a different
-// question -- "how did it go", which the Edit review step owns -- and leaving
-// them on a page headed "live" would report a recording that has stopped as one
-// that is still running.
+// measured at all, and tiles of em dashes are worse than no tiles. A COMPLETED or
+// FAILED session has real numbers but they answer a different question -- "how did
+// it go", which the Last session card owns -- and leaving them on a page headed
+// "live" would report a recording that has stopped as one that is still running.
+[[nodiscard]] std::vector<LiveTile> BuildLiveTiles(const LiveTileInputs& inputs);
+
+// The tiles without a ledger and without the in-depth row: every owned number
+// reads Ok, because no owning check has been observed to fire.
 [[nodiscard]] std::vector<LiveTile> BuildLiveTiles(const exosnap::engine::RecordingDiagnosticsSnapshot& snapshot);
 
 // ── Fact / configuration tables ─────────────────────────────────────────────────

@@ -503,10 +503,9 @@ TEST(DiagnosticsAdapterTest, LiveTilesAppearWithARecordingAndVanishWhenItEnds) {
     adapter.applyLiveDiagnostics(snapshot);
 
     ASSERT_TRUE(adapter.liveTilesVisible());
-    ASSERT_EQ(adapter.liveTiles().size(), 5);
-    EXPECT_EQ(adapter.liveTiles().at(0).toMap().value(QStringLiteral("key")).toString(),
-              QStringLiteral("pipelineHealth"));
-    EXPECT_EQ(adapter.liveTiles().at(0).toMap().value(QStringLiteral("value")).toString(), QStringLiteral("Good"));
+    ASSERT_EQ(adapter.liveTiles().size(), 4);
+    EXPECT_EQ(adapter.liveTiles().at(0).toMap().value(QStringLiteral("key")).toString(), QStringLiteral("framePacing"));
+    EXPECT_EQ(adapter.liveTiles().at(0).toMap().value(QStringLiteral("value")).toString(), QStringLiteral("59.98 fps"));
 
     // Leaving the recording lifecycle clears them on that very edge, not at the
     // next throttled tick: a live summary of a recording that has stopped is a
