@@ -163,6 +163,9 @@ void RecommendationEngine::checkRefreshRateMismatch(DiagnosticChecklist& checkli
                    "Measured present jitter " + jitter_str + " ms during CFR capture",
                    "Cap your game's frame rate (e.g. 60 or 120 fps) or disable VRR while recording for "
                    "smoother pacing.");
+    r.measured_value = live_present_jitter_ms_;
+    r.budget_value = kJitterMs;
+    r.value_unit = "ms";
 
     // Present-mode attribution (PresentMon, ADR 0033): when available, name *how* the source
     // presents so the diagnosis reads as a root cause, not just a number.
@@ -753,6 +756,9 @@ void RecommendationEngine::checkDpcLatency(DiagnosticChecklist& checklist) const
             ". High DPC latency causes recording stutter/audio crackle even when the game itself "
             "feels smooth.",
         "Max DPC: " + max_str + " us", "Update or roll back " + driver + " (GPU/audio/network/chipset driver).");
+    r.measured_value = dpc_->max_latency_us;
+    r.budget_value = kDpcThresholdUs;
+    r.value_unit = "us";
     FixAction fa;
     fa.id = "fix.dpc.driver";
     fa.label = "Driver latency guidance";
@@ -789,6 +795,9 @@ void RecommendationEngine::checkDiscardedPresents(DiagnosticChecklist& checklist
             "usually means the source presents faster than the display refresh, or an overlay forces recomposition.",
         "Discarded presents: " + pct + "%",
         "Cap the source frame rate to the display refresh, or enable V-Sync in the captured app.");
+    r.measured_value = ratio * 100.0;
+    r.budget_value = kDiscardRatioThreshold * 100.0;
+    r.value_unit = "%";
     FixAction fa;
     fa.id = "fix.present.discarded";
     fa.label = "Reduce discarded presents";
@@ -819,6 +828,9 @@ void RecommendationEngine::checkPresentModeFlips(DiagnosticChecklist& checklist)
             "or drop capture. A toggling overlay, alt-tabbing, or a borderless/fullscreen toggle is the usual cause.",
         "Present-mode changes: " + n,
         "Keep the captured app in one stable presentation mode (e.g. consistent borderless fullscreen).");
+    // A count of mode changes, with no budget: kFlipThreshold is the entry
+    // threshold for the card, not headroom the recording is spending.
+    r.measured_value = static_cast<double>(present_->mode_flip_count);
     FixAction fa;
     fa.id = "fix.present.modeflip";
     fa.label = "Stabilize present mode";
@@ -848,6 +860,9 @@ void RecommendationEngine::checkDiskWriteStall(DiagnosticChecklist& checklist) c
             "antivirus scanning the output, or a network/USB target is the usual cause.",
         "Peak disk write: " + ms + " ms",
         "Record to a fast local drive (SSD), or exclude the output folder from real-time antivirus scanning.");
+    r.measured_value = live_disk_peak_write_ms_;
+    r.budget_value = kWriteStallMs;
+    r.value_unit = "ms";
     FixAction fa;
     fa.id = "fix.disk.writestall";
     fa.label = "Reduce disk write stalls";
@@ -1010,6 +1025,9 @@ void RecommendationEngine::checkFramePacingDuplication(DiagnosticChecklist& chec
         "Lower the recording frame rate to what the source can sustain (30 fps for a source below 60), or raise "
         "the game's frame rate. If the source is a video player or a game capped below the recording rate, this "
         "is expected.");
+    r.measured_value = ratio * 100.0;
+    r.budget_value = kDuplicateRatioThreshold * 100.0;
+    r.value_unit = "%";
     checklist.has_notice = true;
     checklist.results.push_back(std::move(r));
 }
@@ -1102,6 +1120,10 @@ void RecommendationEngine::checkGpuContention(DiagnosticChecklist& checklist) co
                        "application's work; the recorder waits behind it.",
                    "GPU frame work " + gpu_ms + " ms p99 vs " + budget + " ms budget",
                    "Cap the game's frame rate, lower its graphics settings, or lower the recording resolution.");
+    r.measured_value = live_gpu_exec_p99_ms_;
+    if (live_target_fps_for_gpu_ > 0.0)
+        r.budget_value = 1000.0 / live_target_fps_for_gpu_;
+    r.value_unit = "ms";
     checklist.has_notice = true;
     checklist.results.push_back(std::move(r));
 }
