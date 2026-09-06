@@ -122,7 +122,15 @@ QJsonObject SnapshotToJson(const RuntimeCapabilitySnapshot& s) {
     for (const auto& d : s.displays)
         displays.append(DisplayToJson(d));
 
+    QJsonObject adapter;
+    // A string, like the key's copy of it: a LUID uses the full 64 bits and JSON
+    // numbers are doubles.
+    adapter[QStringLiteral("adapter_luid")] = QString::number(s.adapter.adapter_luid);
+    adapter[QStringLiteral("vendor_id")] = static_cast<qint64>(s.adapter.vendor_id);
+    adapter[QStringLiteral("driver_version")] = QString::fromStdString(s.adapter.driver_version);
+
     QJsonObject snapshot;
+    snapshot[QStringLiteral("adapter")] = adapter;
     snapshot[QStringLiteral("nvidia")] = nvidia;
     snapshot[QStringLiteral("mf_webcam")] = mf_webcam;
     snapshot[QStringLiteral("os")] = os;
@@ -172,6 +180,13 @@ bool SnapshotFromJson(const QJsonObject& obj, RuntimeCapabilitySnapshot& out) {
     out.os.build_number = static_cast<uint32_t>(os.value(QStringLiteral("build_number")).toDouble(0));
     out.os.version_string = os.value(QStringLiteral("version_string")).toString().toStdString();
     out.os.failure_detail = os.value(QStringLiteral("failure_detail")).toString().toStdString();
+
+    // Optional, unlike the three above: a cache file written before the adapter
+    // identity rode along stays usable, it simply names no driver.
+    const QJsonObject adapter = obj.value(QStringLiteral("adapter")).toObject();
+    out.adapter.adapter_luid = adapter.value(QStringLiteral("adapter_luid")).toString().toLongLong();
+    out.adapter.vendor_id = static_cast<uint32_t>(adapter.value(QStringLiteral("vendor_id")).toDouble(0));
+    out.adapter.driver_version = adapter.value(QStringLiteral("driver_version")).toString().toStdString();
 
     out.displays.clear();
     const QJsonArray displays = obj.value(QStringLiteral("displays")).toArray();

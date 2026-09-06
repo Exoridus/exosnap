@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -265,6 +266,36 @@ TEST(DiagnosticsHelpers, HumanBytesPicksPrecisionByMagnitude) {
 TEST(DiagnosticsHelpers, StripBackendSuffixLeavesBareCodecNames) {
     EXPECT_EQ(StripBackendSuffix("AV1 (NVENC)"), "AV1");
     EXPECT_EQ(StripBackendSuffix("Opus"), "Opus");
+}
+
+// The number a user can look up. NVIDIA's release notes, its control panel and
+// every driver download page say "581.29"; Windows says "32.0.15.8129" for the
+// same driver, and reporting the Windows form is the reason a support thread
+// cannot tell whether the reporter is on the driver they were asked to install.
+TEST(DiagnosticsHelpers, VendorDriverVersionRewritesNvidiaWddmNumbers) {
+    constexpr uint32_t kNvidia = 0x10DEu;
+    EXPECT_EQ(VendorDriverVersion(kNvidia, "32.0.15.8129"), "581.29");
+    EXPECT_EQ(VendorDriverVersion(kNvidia, "31.0.15.3623"), "536.23");
+    // The branch digit comes from the third field, so a different one moves the
+    // hundreds place and nothing else.
+    EXPECT_EQ(VendorDriverVersion(kNvidia, "31.0.14.7168"), "471.68");
+}
+
+TEST(DiagnosticsHelpers, VendorDriverVersionPassesThroughEverythingItCannotDecode) {
+    // AMD and Intel publish the WDDM string itself, so it is what a user would
+    // be searching for.
+    EXPECT_EQ(VendorDriverVersion(0x1002u, "31.0.24027.1012"), "31.0.24027.1012");
+    EXPECT_EQ(VendorDriverVersion(0x8086u, "31.0.101.5333"), "31.0.101.5333");
+    // Unknown vendor, and no vendor at all.
+    EXPECT_EQ(VendorDriverVersion(0u, "32.0.15.8129"), "32.0.15.8129");
+    // Nothing to say rather than an invented number.
+    EXPECT_EQ(VendorDriverVersion(0x10DEu, ""), "");
+    // Malformed for this decoding: too few fields, a short minor field, and a
+    // field that is not a number at all.
+    EXPECT_EQ(VendorDriverVersion(0x10DEu, "32.0.15"), "32.0.15");
+    EXPECT_EQ(VendorDriverVersion(0x10DEu, "32.0.15.812"), "32.0.15.812");
+    EXPECT_EQ(VendorDriverVersion(0x10DEu, "32.0.15.8129.1"), "32.0.15.8129.1");
+    EXPECT_EQ(VendorDriverVersion(0x10DEu, "32.0.1x.8129"), "32.0.1x.8129");
 }
 
 TEST(DiagnosticsHelpers, DriveLabelPrefersTheVolumeRoot) {

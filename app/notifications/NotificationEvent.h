@@ -51,6 +51,10 @@ enum class NotificationType : uint8_t {
                                    // the CFR pacer holds the last frame — so this is a standing caution,
                                    // never a failure. Cleared the moment frames resume, and when the
                                    // recording ends.
+    ElevationRequired,             // a setting the user just turned on needs an elevated process to take
+                                   // effect (ADR 0033: the in-depth diagnostics opt-in). The setting is
+                                   // written and stays written; only the measurement is missing, so this
+                                   // offers the restart rather than reporting a failure.
 };
 
 // ---------------------------------------------------------------------------
@@ -161,6 +165,10 @@ struct NotificationEvent {
     // The recording is still running and still being written. Coral would claim
     // it failed, which it did not — and the stall may resolve by itself.
     case NotificationType::WindowCaptureStalled:
+    // The opt-in is on and persisted; what is missing is the elevated process
+    // that would measure anything with it. "Error" would claim the setting did
+    // not take, which is the one thing that did happen.
+    case NotificationType::ElevationRequired:
         return QStringLiteral("caution");
 
     case NotificationType::UpdateAvailable:
@@ -288,6 +296,37 @@ struct NotificationEvent {
         event.body += QStringLiteral(" The display is off or asleep; wake it, or stop the recording.");
     }
     event.action = NotificationAction::OpenDiagnostics;
+    return event;
+}
+
+// ---------------------------------------------------------------------------
+// ShouldOfferElevatedRelaunch / MakeElevatedRelaunchOfferEvent
+// ---------------------------------------------------------------------------
+// ADR 0033. The in-depth diagnostics opt-in is one setting behind two controls
+// (the Diagnostics header switch and the Settings → Developer row), and neither
+// of them can measure anything in a standard process. The offer therefore hangs
+// off the SETTING's transition, not off either control, so both raise exactly
+// one toast and a refresh raises none.
+//
+// Only the off -> on edge, and only when the process is not already elevated: an
+// elevated process starts the traces on the spot and has nothing to offer, and a
+// toast on every evaluation of an opt-in that is simply on would be a standing
+// nag for a state the switch's own sub-text already names.
+[[nodiscard]] inline bool ShouldOfferElevatedRelaunch(bool opt_in_now, bool opt_in_before, bool elevated) noexcept {
+    return opt_in_now && !opt_in_before && !elevated;
+}
+
+// The offer itself. The setting is already written when this is raised, so the
+// text promises the traces rather than the setting -- declining the UAC prompt
+// leaves the opt-in on and this process running, which is what the switch's
+// "On · not measuring · needs an admin relaunch" sub-text then reports.
+[[nodiscard]] inline NotificationEvent MakeElevatedRelaunchOfferEvent() {
+    NotificationEvent event;
+    event.type = NotificationType::ElevationRequired;
+    event.title = QStringLiteral("Restart as administrator");
+    event.body = QStringLiteral(
+        "In-depth diagnostics need an elevated process. Restart ExoSnap as administrator to start the traces.");
+    event.action = NotificationAction::RelaunchElevated;
     return event;
 }
 

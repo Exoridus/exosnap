@@ -134,13 +134,6 @@ struct MfWebcamRuntimeFacts {
     std::string failure_detail; // populated only when unavailable
 };
 
-struct RuntimeCapabilitySnapshot {
-    NvidiaRuntimeFacts nvidia;
-    MfWebcamRuntimeFacts mf_webcam; // S4: webcam MF probe
-    OsRuntimeFacts os;
-    std::vector<DisplayHdrFacts> displays;
-};
-
 // Cheap adapter-identity read: just enough to know whether the GPU/driver
 // underlying a persisted capability cache entry still matches the current
 // system. DXGI-only (adapter LUID + WDDM user-mode driver version); no NVENC
@@ -148,11 +141,27 @@ struct RuntimeCapabilitySnapshot {
 // to call synchronously on the UI thread. See CapabilityBuilder::QueryAdapterIdentity.
 struct AdapterIdentity {
     int64_t adapter_luid = 0; // 0 when no real (non-software) adapter was found
+    // PCI vendor of that adapter (DXGI_ADAPTER_DESC1::VendorId), 0 when unknown.
+    // Not part of the cache key -- the LUID already identifies the adapter -- but
+    // the driver version below is only interpretable against it: every vendor
+    // spells the same WDDM number differently in its own release notes.
+    uint32_t vendor_id = 0;
     // WDDM user-mode driver version, formatted "A.B.C.D" (from
     // IDXGIAdapter::CheckInterfaceSupport). Empty when unavailable — a driver
     // that does not answer this (deprecated-but-still-functional) query
     // degrades the cache to matching on LUID + app version + schema alone.
     std::string driver_version;
+};
+
+struct RuntimeCapabilitySnapshot {
+    // The encoding adapter's LUID, PCI vendor and WDDM driver version. Cheap
+    // enough to ride along with the full probe, and the only place the driver
+    // version is available to anything but the cache key.
+    AdapterIdentity adapter;
+    NvidiaRuntimeFacts nvidia;
+    MfWebcamRuntimeFacts mf_webcam; // S4: webcam MF probe
+    OsRuntimeFacts os;
+    std::vector<DisplayHdrFacts> displays;
 };
 
 } // namespace exosnap::capability

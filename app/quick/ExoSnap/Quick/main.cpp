@@ -781,6 +781,15 @@ int main(int argc, char* argv[]) {
     // verification-reinstall arming is argv-only and never persisted.
     const exosnap::services::RelaunchHandoff startup_handoff = exosnap::services::ParseRelaunchArgs(arguments);
     quick_application.applyStartupRelaunchHandoff(startup_handoff.page_name, startup_handoff.reenable_present_diag);
+    // ADR 0033, the outbound half. The frontend decides WHETHER to restart (it
+    // owns the close guards) and WHAT to carry across; the bootstrap owns WHEN,
+    // which is after exec() returns -- the successor cannot take the
+    // single-instance mutex or the log file while this process still holds them.
+    // Only the handoff arguments travel: this process's own argv may carry
+    // harness and automation options that must not survive into a user-facing
+    // elevated launch.
+    quick_application.setElevatedRelaunchHandler(
+        [&bootstrap](const QStringList& relaunch_args) { bootstrap.requestElevatedRelaunch(relaunch_args); });
     quick_application.applyVerifyUpdateReinstallMode(exosnap::services::HasVerifyUpdateReinstallRequest(arguments));
     quick_application.applyUpdateFeedOverride(update_feed_override.base_url);
     // The child updater gets an automation endpoint ONLY when this process has

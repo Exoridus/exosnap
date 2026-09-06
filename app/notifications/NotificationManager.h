@@ -111,6 +111,10 @@ class NotificationManager : public QObject {
     static constexpr int kDismissMs_RecoveryProtectionUnavailable = kDwellAction;
     // NOLINTNEXTLINE(readability-identifier-naming)
     static constexpr int kDismissMs_SettingsLoadFailed = kDwellAction;
+    // The whole point of the toast is its button, and pressing it restarts the
+    // application -- a decision nobody makes in five seconds.
+    // NOLINTNEXTLINE(readability-identifier-naming)
+    static constexpr int kDismissMs_ElevationRequired = kDwellAction;
 
     // --- Brief: happened, nothing to do --------------------------------------
     // NOLINTNEXTLINE(readability-identifier-naming)
