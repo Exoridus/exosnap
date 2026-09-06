@@ -98,13 +98,6 @@ void TrayAdapter::setBlockedReason(const QString& reason) {
     emit appearanceChanged();
 }
 
-void TrayAdapter::setLastRecordingAvailable(bool available) {
-    if (last_recording_available_ == available)
-        return;
-    last_recording_available_ = available;
-    emit appearanceChanged();
-}
-
 void TrayAdapter::setAppearance(const QString& appearance_id, const QString& accent_id) {
     if (appearance_id_ == appearance_id && accent_id_ == accent_id)
         return;
@@ -195,10 +188,6 @@ QString TrayAdapter::showWindowIcon() const {
     return glyphUrl(ui::brand::ShellGlyph::Window);
 }
 
-QString TrayAdapter::lastRecordingIcon() const {
-    return glyphUrl(ui::brand::ShellGlyph::Record);
-}
-
 QString TrayAdapter::outputFolderIcon() const {
     return glyphUrl(ui::brand::ShellGlyph::Folder);
 }
@@ -209,10 +198,6 @@ QString TrayAdapter::notificationsIcon() const {
 
 QString TrayAdapter::quitIcon() const {
     return glyphUrl(ui::brand::ShellGlyph::Quit);
-}
-
-bool TrayAdapter::lastRecordingAvailable() const noexcept {
-    return last_recording_available_;
 }
 
 QVariantMap TrayAdapter::rowFor(ShellButton button, ShellAction fallback_action) const {
@@ -272,12 +257,6 @@ void TrayAdapter::triggerShowWindow() {
     emit activateWindowRequested();
 }
 
-void TrayAdapter::triggerOpenLastRecording() {
-    if (!last_recording_available_)
-        return;
-    emit openLastRecordingRequested();
-}
-
 void TrayAdapter::triggerNotifications() {
     clearUnreadCount();
     emit activateWindowRequested();
@@ -292,14 +271,14 @@ void TrayAdapter::triggerQuit() {
 }
 
 void TrayAdapter::handleActivation(int reason) {
-    // Left click shows or focuses the window; a double click toggles recording;
-    // a right click is the context menu, which the platform opens itself.
-    if (reason == TriggerActivation) {
+    // A left click and a double click both show or focus the window -- Windows
+    // delivers the single click first regardless, so a double click shows the
+    // window either way. A right click is the context menu, which the platform
+    // opens itself. Toggling a recording stays with the hotkey and the menu: a
+    // double click is too easy to produce while reaching for the window to be
+    // allowed to start or stop one.
+    if (reason == TriggerActivation || reason == DoubleClickActivation)
         emit activateWindowRequested();
-        return;
-    }
-    if (reason == DoubleClickActivation)
-        emit recordToggleRequested();
 }
 
 ShellIconState TrayAdapter::currentIconState() const noexcept {

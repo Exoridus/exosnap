@@ -12,6 +12,10 @@
 // `ShellButtonFor()` -- the same appearance table the taskbar's thumbnail strip
 // reads -- so a tray entry and the thumbnail button beside it cannot offer two
 // different answers.
+//
+// There is deliberately no "Open last recording" row: the Saved toast and the
+// Record page already offer Edit for the finished recording, and a menu row fed
+// from session state would be empty after every restart.
 
 #include <QObject>
 #include <QString>
@@ -57,14 +61,9 @@ class TrayAdapter : public QObject {
     // else. A menu where three rows have an icon and four do not reads as three
     // unfinished rows.
     Q_PROPERTY(QString showWindowIcon READ showWindowIcon NOTIFY appearanceChanged FINAL)
-    Q_PROPERTY(QString lastRecordingIcon READ lastRecordingIcon NOTIFY appearanceChanged FINAL)
     Q_PROPERTY(QString outputFolderIcon READ outputFolderIcon NOTIFY appearanceChanged FINAL)
     Q_PROPERTY(QString notificationsIcon READ notificationsIcon NOTIFY appearanceChanged FINAL)
     Q_PROPERTY(QString quitIcon READ quitIcon NOTIFY appearanceChanged FINAL)
-
-    // Whether a finished recording exists to open. Gates the entry rather than
-    // removing it, for the same reason the transport rows stay put.
-    Q_PROPERTY(bool lastRecordingAvailable READ lastRecordingAvailable NOTIFY appearanceChanged FINAL)
 
     // One transport row each: `{ visible, enabled, text, icon }`. Assembled from
     // the appearance table, not from the recording state. `visible` is always
@@ -115,7 +114,6 @@ class TrayAdapter : public QObject {
     // Empty when nothing is known, which is not the same as not being blocked:
     // the phase decides whether the row exists at all.
     void setBlockedReason(const QString& reason);
-    void setLastRecordingAvailable(bool available);
     // Ids from ui/theme/ExoSnapThemes.h. The mark follows the application's
     // palette, so changing the accent repaints the tray with no restart.
     void setAppearance(const QString& appearance_id, const QString& accent_id);
@@ -135,11 +133,9 @@ class TrayAdapter : public QObject {
     [[nodiscard]] bool blockedReasonVisible() const;
     [[nodiscard]] const QString& blockedReason() const noexcept;
     [[nodiscard]] QString showWindowIcon() const;
-    [[nodiscard]] QString lastRecordingIcon() const;
     [[nodiscard]] QString outputFolderIcon() const;
     [[nodiscard]] QString notificationsIcon() const;
     [[nodiscard]] QString quitIcon() const;
-    [[nodiscard]] bool lastRecordingAvailable() const noexcept;
     [[nodiscard]] QVariantMap recordItem() const;
     [[nodiscard]] QVariantMap pauseResumeItem() const;
     [[nodiscard]] QVariantMap stopItem() const;
@@ -153,7 +149,6 @@ class TrayAdapter : public QObject {
     // true now.
     Q_INVOKABLE void triggerTransport(TransportRow row);
     Q_INVOKABLE void triggerShowWindow();
-    Q_INVOKABLE void triggerOpenLastRecording();
     Q_INVOKABLE void triggerNotifications();
     Q_INVOKABLE void triggerOpenOutputFolder();
     Q_INVOKABLE void triggerQuit();
@@ -168,18 +163,16 @@ class TrayAdapter : public QObject {
     void appearanceChanged();
     void unreadCountChanged();
 
-    // The window is wanted on screen -- the "Show window" entry, a left click on
-    // the icon, or the notifications entry. The handler raises and activates an
-    // already visible window, so the entry means the same thing in every state.
+    // The window is wanted on screen -- the "Show window" entry, a click or
+    // double click on the icon, or the notifications entry. The handler raises
+    // and activates an already visible window, so the entry means the same thing
+    // in every state. Toggling a recording stays with the hotkey and the menu: a
+    // double click is too easy to produce while reaching for the window to be
+    // allowed to start or stop one.
     void activateWindowRequested();
     // A transport entry was chosen, carrying the intent the appearance table
     // resolved. The same signal the thumbnail buttons raise.
     void shellActionRequested(ShellAction action);
-    // A double click, which is "toggle recording" rather than a specific
-    // transport action -- the gesture has no state to read.
-    void recordToggleRequested();
-    // The finished recording is wanted on screen, in the editor.
-    void openLastRecordingRequested();
     void openOutputFolderRequested();
     void quitRequested();
 
@@ -197,7 +190,6 @@ class TrayAdapter : public QObject {
     int icon_px_ = 16;
     int mark_frame_ = 0;
     bool active_ = false;
-    bool last_recording_available_ = false;
     int unread_count_ = 0;
 };
 
