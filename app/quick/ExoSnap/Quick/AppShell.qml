@@ -57,7 +57,28 @@ Item {
     // the StackLayout's child order below is the enum's order, so no separate
     // mapping exists to drift. QCR-716 replaced the bare 0..4 literals that used
     // to spell it out here with the enumerators themselves.
-    readonly property int stackIndex: root.currentPage
+    //
+    // Deliberately NOT root.currentPage. The four loaders below are
+    // asynchronous, so a page just requested may still be incubating; showing
+    // its empty Loader immediately would blank the window for however long
+    // that takes. `displayedPage` lags currentPage until the requested
+    // destination is actually ready, so the stack keeps showing whatever it
+    // last showed through the gap instead of nothing. Everything else that
+    // means "the selected page" -- the nav tab, the shortcuts' guard, the
+    // shell state Binding below -- reads root.currentPage directly and
+    // updates the instant the request is made; only the visible stack content
+    // is deferred.
+    property int displayedPage: ShellAdapter.RecordPage
+    readonly property int stackIndex: root.displayedPage
+
+    // Advances `displayedPage` to `currentPage` once its content exists.
+    // Called after every navigation and again whenever a loader's status
+    // changes, because the destination that was requested is not necessarily
+    // the one whose Loader just became ready.
+    function refreshDisplayedPage(): void {
+        if (root.destinationReady(root.currentPage))
+            root.displayedPage = root.currentPage;
+    }
 
     // Loads the destination being navigated to. Written as a switch over the same
     // index space rather than as a generated list: the five destinations are a
@@ -116,7 +137,40 @@ Item {
         }
     }
 
-    onCurrentPageChanged: root.loadDestination(root.currentPage)
+    onCurrentPageChanged: {
+        root.loadDestination(root.currentPage);
+        root.refreshDisplayedPage();
+    }
+
+    // Whether `page`'s content exists and has finished loading. Record is
+    // never loader-built, so it is always ready; the other four ask their own
+    // Loader, which loadDestination() above may not have reached yet, or may
+    // still be incubating asynchronously.
+    //
+    // Two independent callers read this through the SAME predicate rather than
+    // each re-deriving it: the --visual-test capture (main.cpp) waits for
+    // root.currentPage's own readiness before grabbing, and the idle-time
+    // pre-warm below polls it for a page that is not even the current one.
+    function destinationReady(page: int): bool {
+        switch (page) {
+        case ShellAdapter.SettingsPage:
+            return settingsLoader.status === Loader.Ready;
+        case ShellAdapter.DiagnosticsPage:
+            return diagnosticsLoader.status === Loader.Ready;
+        case ShellAdapter.LogsPage:
+            return logsLoader.status === Loader.Ready;
+        case ShellAdapter.AboutPage:
+            return aboutLoader.status === Loader.Ready;
+        default:
+            return true;
+        }
+    }
+
+    // The CURRENT destination's readiness, bound rather than computed once: a
+    // switch's dependencies are only the branch actually taken, so this
+    // re-resolves correctly both when currentPage changes and when the loader
+    // it now reads reaches Ready.
+    readonly property bool activeDestinationReady: root.destinationReady(root.currentPage)
 
     // Where the shell arrived, published back to C++. Two consumers need it and
     // neither can ask QML: the control channel answers `ui.getState.page` from
@@ -596,32 +650,47 @@ Item {
             // They stay active so that the assignment loads immediately — an
             // inactive Loader would defer the load to whenever it is activated,
             // which is one more state for the same moment to be in.
+            //
+            // asynchronous: true incubates the instantiation across frames
+            // instead of blocking the one it starts on -- measured at ~3.2 s of
+            // GUI-thread work for Settings alone. `stackIndex` is what keeps
+            // this from photographing as an empty page mid-incubation: it lags
+            // `currentPage` until refreshDisplayedPage() sees Loader.Ready, so
+            // the stack keeps showing the previous destination through the gap.
             Loader {
                 id: settingsLoader
 
+                asynchronous: true
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+                onStatusChanged: root.refreshDisplayedPage()
             }
 
             Loader {
                 id: diagnosticsLoader
 
+                asynchronous: true
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+                onStatusChanged: root.refreshDisplayedPage()
             }
 
             Loader {
                 id: logsLoader
 
+                asynchronous: true
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+                onStatusChanged: root.refreshDisplayedPage()
             }
 
             Loader {
                 id: aboutLoader
 
+                asynchronous: true
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+                onStatusChanged: root.refreshDisplayedPage()
             }
         }
     }
@@ -687,6 +756,7 @@ Item {
     Component.onCompleted: {
         root.editOverlayOpen = root.editSession.durationMs > 0;
         root.loadDestination(root.currentPage);
+        root.refreshDisplayedPage();
     }
 
     Connections {

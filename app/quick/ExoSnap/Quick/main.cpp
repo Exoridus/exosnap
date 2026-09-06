@@ -16,6 +16,7 @@
 #endif
 #include "bootstrap/ProductionBootstrap.h"
 #include "cli/CommandLineFlags.h"
+#include "diagnostics/AppLog.h"
 #include "diagnostics/NativeWindowFacts.h"
 #include "diagnostics/StartupClock.h"
 #include "live_verify/LiveVerifyCommandPolicy.h"
@@ -127,6 +128,45 @@ int visualCaptureDelayMs(const QStringList& arguments) {
     bool delay_ok = false;
     const int delay_ms = arguments.at(option_index + 1).toInt(&delay_ok);
     return delay_ok && delay_ms >= 0 ? delay_ms : default_delay_ms;
+}
+
+// A --visual-test capture grabs the moment its own timer fires, which races
+// AppShell's asynchronous page loaders: the active destination can still be
+// incubating, and the capture would silently photograph an empty page. Polled
+// rather than signal-driven, because AppShell::activeDestinationReady is a
+// plain QML expression with no notify signal reachable from outside the
+// engine -- this reads its current value on each tick instead.
+//
+// Bounded, and NOT silent on expiry: a capture that times out still fires
+// (the alternative is a harness run that hangs forever on a genuinely stuck
+// page), but says so, so the screenshot it produces is not mistaken for one
+// that waited successfully.
+void waitForActiveDestinationReady(QCoreApplication& app, QQuickWindow* root_window, int timeout_ms,
+                                   std::function<void()> then) {
+    QObject* shell =
+        root_window != nullptr ? root_window->findChild<QObject*>(QStringLiteral("quickAppShell")) : nullptr;
+    if (shell == nullptr) {
+        then();
+        return;
+    }
+    auto deadline = std::make_shared<QElapsedTimer>();
+    deadline->start();
+    auto continuation = std::make_shared<std::function<void()>>(std::move(then));
+    auto poll = std::make_shared<std::function<void()>>();
+    *poll = [&app, shell, deadline, timeout_ms, continuation, poll]() {
+        if (shell->property("activeDestinationReady").toBool()) {
+            (*continuation)();
+            return;
+        }
+        if (deadline->hasExpired(timeout_ms)) {
+            qWarning("--visual-test: the active page did not reach Loader.Ready within %d ms; capturing anyway",
+                     timeout_ms);
+            (*continuation)();
+            return;
+        }
+        QTimer::singleShot(20, &app, *poll);
+    };
+    (*poll)();
 }
 
 // Scratch config directory a harness run is isolated into. Distinct per harness
@@ -304,8 +344,10 @@ void saveOverlayWindowGrabs(const QString& screenshot_path) {
 //     and Diagnostics' two navigation signals have to still reach the shell even
 //     though the shell no longer knows the page's type.
 //
-// Structural, never timed: no wall-clock assertion belongs in CI. The loaders are
-// synchronous, so a navigation and its result are observable in the same call.
+// Structural, never timed against a wall-clock deadline chosen for its own
+// sake: the loaders are asynchronous, so a navigation's result is no longer
+// observable in the same call, and waitForDestinationReady below pumps events
+// until the shell itself reports the page ready rather than sleeping a guess.
 struct NavigationDestination {
     int page = 0;
     const char* object_name = nullptr;
@@ -326,6 +368,25 @@ int failNavigationLifecycle(const char* what) {
 
 QObject* findShellPage(QQuickWindow* window, const char* object_name) {
     return window != nullptr ? window->findChild<QObject*>(QString::fromLatin1(object_name)) : nullptr;
+}
+
+// Polls AppShell::destinationReady() rather than sleeping a guessed duration.
+// This target links neither QTest nor QSignalSpy, so the wait is a plain
+// event-processing loop -- the incubation controller for an asynchronous
+// Loader advances as part of ordinary event handling on a real, shown window,
+// exactly as it would for a user waiting on the same navigation.
+bool waitForDestinationReady(QObject* shell, int page, int timeout_ms) {
+    QElapsedTimer timer;
+    timer.start();
+    for (;;) {
+        bool ready = false;
+        QMetaObject::invokeMethod(shell, "destinationReady", Q_RETURN_ARG(bool, ready), Q_ARG(int, page));
+        if (ready)
+            return true;
+        if (timer.hasExpired(timeout_ms))
+            return false;
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    }
 }
 
 // Calls the shell's one navigation edge the way a tab, a shortcut or a
@@ -394,6 +455,23 @@ int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplic
     for (std::size_t index = 0; index < destinations.size(); ++index) {
         const NavigationDestination& destination = destinations.at(index);
         shell->setProperty("currentPage", destination.page);
+        // The asynchronous Loader contract: incubation never completes within
+        // the same call that starts it, so the very first destination (still
+        // unvisited, still Loader.Null a moment ago) must report not-ready
+        // here -- before this test ever waits for it to become so.
+        if (index == 0) {
+            bool ready_immediately = false;
+            QMetaObject::invokeMethod(shell, "destinationReady", Q_RETURN_ARG(bool, ready_immediately),
+                                      Q_ARG(int, destination.page));
+            if (ready_immediately)
+                return failNavigationLifecycle("an asynchronous loader was Ready before it had a chance to incubate");
+        }
+        // Generous on purpose: this test shares the machine with the rest of a
+        // parallel CTest run (-j), and an asynchronous Loader's incubation is
+        // scheduled as idle-time work -- it genuinely takes longer, not just
+        // longer to observe, when every core is already busy with other tests.
+        if (!waitForDestinationReady(shell, destination.page, 20000))
+            return failNavigationLifecycle("page did not finish loading");
         QObject* page = findShellPage(window, destination.object_name);
         if (page == nullptr)
             return failNavigationLifecycle(destination.object_name);
@@ -834,6 +912,89 @@ int main(int argc, char* argv[]) {
             bootstrap.RecordStartupMilestone(QStringLiteral("first-paint"),
                                              exosnap::diagnostics::StartupClock().elapsed());
         });
+
+        // Idle-time pre-warm: incubates the four lazily-loaded destinations in
+        // the background, Settings first (by far the most expensive), so a
+        // user's first real click on any of them pays nothing. Off in every
+        // harness/diagnostic run -- diagnostic_mode covers --visual-test and
+        // --auto-record along with the rest -- because a deterministic run
+        // must not have this extra, unaccounted-for work in flight.
+        //
+        // --cursor-audit is not part of diagnostic_mode (it deliberately keeps
+        // the tray and the rest of a normal launch, unlike the others), but it
+        // measures cursor shapes over live hover state and has no use for
+        // unrelated background rendering competing with it either.
+        const bool prewarm_suppressed = diagnostic_mode || arguments.contains(QStringLiteral("--cursor-audit"));
+        if (!prewarm_suppressed) {
+            QObject* shell = root_window->findChild<QObject*>(QStringLiteral("quickAppShell"));
+            if (shell != nullptr) {
+                QObject::connect(root_window, &QQuickWindow::frameSwapped, &app, [&app, &quick_application, shell]() {
+                    static bool armed = false;
+                    if (armed)
+                        return;
+                    armed = true;
+
+                    auto queue = std::make_shared<QList<int>>(QList<int>{
+                        exosnap::quick::ShellAdapter::SettingsPage, exosnap::quick::ShellAdapter::DiagnosticsPage,
+                        exosnap::quick::ShellAdapter::LogsPage, exosnap::quick::ShellAdapter::AboutPage});
+
+                    auto start_next = std::make_shared<std::function<void()>>();
+                    auto poll_current = std::make_shared<std::function<void()>>();
+
+                    // loadDestination() is idempotent by loader status, so this
+                    // is harmless if the user already navigated there directly
+                    // -- that navigation's own call already started the load,
+                    // and this one finds it already under way or done.
+                    *start_next = [shell, queue, poll_current]() {
+                        if (queue->isEmpty())
+                            return;
+                        exosnap::diagnostics::AppLog::info(QStringLiteral("perf"),
+                                                           QStringLiteral("prewarm-start page=%1 %2 ms")
+                                                               .arg(queue->constFirst())
+                                                               .arg(exosnap::diagnostics::StartupClock().elapsed()));
+                        QMetaObject::invokeMethod(shell, "loadDestination", Q_ARG(int, queue->constFirst()));
+                        (*poll_current)();
+                    };
+                    // Sequential on purpose: starting the next destination only
+                    // once this one reports Loader.Ready keeps the pre-warm from
+                    // competing with itself for the engine's incubation budget.
+                    // A page the user navigates to directly is unaffected --
+                    // that load runs immediately, on its own loader, whichever
+                    // queue position this sequencer happens to be at.
+                    *poll_current = [&app, shell, queue, poll_current, start_next]() {
+                        if (queue->isEmpty())
+                            return;
+                        bool ready = false;
+                        QMetaObject::invokeMethod(shell, "destinationReady", Q_RETURN_ARG(bool, ready),
+                                                  Q_ARG(int, queue->constFirst()));
+                        if (!ready) {
+                            QTimer::singleShot(50, &app, *poll_current);
+                            return;
+                        }
+                        exosnap::diagnostics::AppLog::info(QStringLiteral("perf"),
+                                                           QStringLiteral("prewarm-ready page=%1 %2 ms")
+                                                               .arg(queue->constFirst())
+                                                               .arg(exosnap::diagnostics::StartupClock().elapsed()));
+                        queue->removeFirst();
+                        QTimer::singleShot(0, &app, *start_next);
+                    };
+
+                    // QuickApplication predates this sequencer and is not a
+                    // QObject, so there is no signal to connect to for "the
+                    // capability probe just finished" -- a short poll after the
+                    // shell's first frame is the cheap equivalent.
+                    auto wait_for_probe = std::make_shared<std::function<void()>>();
+                    *wait_for_probe = [&app, &quick_application, start_next, wait_for_probe]() {
+                        if (!quick_application.capabilityProbeFinished()) {
+                            QTimer::singleShot(50, &app, *wait_for_probe);
+                            return;
+                        }
+                        (*start_next)();
+                    };
+                    (*wait_for_probe)();
+                });
+            }
+        }
     }
 
     // ---- Live Verify control channel ----------------------------------------
@@ -2103,7 +2264,10 @@ int main(int argc, char* argv[]) {
         // photograph it. A menu is otherwise only reachable by hovering or
         // clicking the chevron, and this harness synthesises no input.
         const bool open_countdown_menu = arguments.contains(QStringLiteral("--record-visual-menu"));
-        const auto capture = [&app, root_window, screenshot_path]() {
+        // The active page's asynchronous Loader has to have reached Ready before
+        // any of this grabs -- see waitForActiveDestinationReady above.
+        constexpr int kActiveDestinationReadyTimeoutMs = 8000;
+        const auto grab = [&app, root_window, screenshot_path]() {
             const bool saved = root_window != nullptr && root_window->grabWindow().save(screenshot_path);
             // The capture-excluded overlays are separate top-level windows, so
             // the root grab above cannot contain them -- and a desktop capture
@@ -2112,6 +2276,9 @@ int main(int argc, char* argv[]) {
             // suppresses, so it is the one way to photograph these at all.
             saveOverlayWindowGrabs(screenshot_path);
             app.exit(saved ? 0 : 2);
+        };
+        const auto capture = [&app, root_window, grab]() {
+            waitForActiveDestinationReady(app, root_window, kActiveDestinationReadyTimeoutMs, grab);
         };
         QTimer::singleShot(visualCaptureDelayMs(arguments), &app, [&app, root_window, open_countdown_menu, capture]() {
             if (!open_countdown_menu) {

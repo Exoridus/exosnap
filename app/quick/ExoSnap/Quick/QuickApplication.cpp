@@ -1174,6 +1174,7 @@ void QuickApplication::startCapabilityProbe() {
 void QuickApplication::onCapabilitiesReady(const capability::CapabilitySet& capabilities) {
     diagnostics::AppLog::info(QStringLiteral("perf"),
                               QStringLiteral("caps-probe-end %1 ms").arg(diagnostics::StartupClock().elapsed()));
+    capability_probe_finished_ = true;
     // A harness run owns its machine for the life of the process: the real probe
     // lands a second or two into a capture, and letting it through would replace
     // the fixture with whatever GPU this developer happens to have.
@@ -1261,6 +1262,7 @@ void QuickApplication::refreshDisplayFacts() {
 
 void QuickApplication::onCapabilityProbeFailed(const QString& reason) {
     diagnostics::AppLog::warning(QStringLiteral("caps"), QStringLiteral("capability probe failed: %1").arg(reason));
+    capability_probe_finished_ = true;
     recording_coordinator_->OnCapabilityFailure(reason.toStdWString());
     if (!visualScenarioLatched())
         record_view_model_.SetState(recording_coordinator_->State());
