@@ -15,6 +15,7 @@ namespace {
 
 using exosnap::diagnostics::IElevationProvider;
 using exosnap::services::BuildRelaunchArgs;
+using exosnap::services::kReenablePresentDiagFlag;
 using exosnap::services::ParseRelaunchArgs;
 using exosnap::services::RelaunchHandoff;
 using exosnap::services::RelaunchResult;
@@ -88,6 +89,29 @@ TEST(RelaunchArgsTest, FlagOnlyRoundtrip) {
 
     EXPECT_TRUE(parsed.page_name.isEmpty());
     EXPECT_TRUE(parsed.reenable_present_diag);
+}
+
+// The in-depth switch is session state, so nothing on disk carries it across the
+// relaunch: this flag IS the handoff. A session with the switch on arms the
+// successor; a session with it off hands over nothing, which is what makes a
+// declined UAC prompt come back to a process with the switch simply off.
+TEST(RelaunchArgsTest, TheFlagIsTheOnlyThingThatArmsTheSuccessor) {
+    RelaunchHandoff armed;
+    armed.page_name = QStringLiteral("Diagnostics");
+    armed.reenable_present_diag = true;
+    const QStringList armed_args = BuildRelaunchArgs(armed);
+    EXPECT_TRUE(armed_args.contains(QString::fromUtf8(kReenablePresentDiagFlag)));
+    EXPECT_TRUE(ParseRelaunchArgs(armed_args).reenable_present_diag);
+
+    RelaunchHandoff idle;
+    idle.page_name = QStringLiteral("Diagnostics");
+    const QStringList idle_args = BuildRelaunchArgs(idle);
+    EXPECT_FALSE(idle_args.contains(QString::fromUtf8(kReenablePresentDiagFlag)));
+    EXPECT_FALSE(ParseRelaunchArgs(idle_args).reenable_present_diag);
+
+    // A fresh launch -- no handoff at all -- is the ordinary start, and it arms
+    // nothing.
+    EXPECT_FALSE(ParseRelaunchArgs(QStringList{QStringLiteral("C:/path/exosnap.exe")}).reenable_present_diag);
 }
 
 TEST(RelaunchArgsTest, ParserIgnoresUnknownArgsAndArgv0) {

@@ -39,22 +39,6 @@ ExoCard {
         }
     }
 
-    ExoSettingRow {
-        label: qsTr("Present, tearing & latency diagnostics")
-        hint: qsTr("Elevation-gated PresentMon observation · opt-in")
-        stacked: root.stacked
-        controlWidth: ExoTheme.controlSlotSwitch
-        visible: root.settings.expertMode
-        Layout.fillWidth: true
-
-        ExoSwitch {
-            checked: root.settings.presentDiagnosticsOptIn
-            Accessible.name: qsTr("Present and tearing diagnostics")
-            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
-            onToggledByUser: value => root.settings.presentDiagnosticsOptIn = value
-        }
-    }
-
     // A row, not a loose button: every other control in this card sits on the
     // right-hand control axis, and an action parked at the left margin reads as
     // a stray link under the form rather than as part of it.

@@ -391,6 +391,37 @@ TEST(LiveVerifyPolicy, MarkerAndCountdownCancelFollowTheTransportsOwnPredicates)
     EXPECT_FALSE(Evaluate(*FindCommand(QStringLiteral("record.cancelCountdown")), recording).allowed());
 }
 
+// The in-depth switch is session state and has no settings key, so this command
+// is the only way a check can reach it. It has to refuse in exactly the states
+// the switch itself is disabled in, or a check is told an action is available
+// that the product would not perform.
+TEST(LiveVerifyPolicy, SetInDepthIsRefusedWhereverTheSwitchItselfIsDisabled) {
+    const CommandDescriptor* command = FindCommand(QStringLiteral("diagnostics.setInDepth"));
+    ASSERT_NE(command, nullptr);
+    EXPECT_TRUE(command->mutating);
+    EXPECT_EQ(command->minimum_protocol, 2);
+    ASSERT_EQ(command->parameters.size(), 1);
+    EXPECT_EQ(command->parameters.at(0).name, QStringLiteral("enabled"));
+    EXPECT_EQ(command->parameters.at(0).type, QStringLiteral("bool"));
+    EXPECT_TRUE(command->parameters.at(0).required);
+
+    AutomationState state = Ready();
+    EXPECT_TRUE(Evaluate(*command, state).allowed());
+    EXPECT_TRUE(AvailableActions(state).contains(QStringLiteral("diagnostics.setInDepth")));
+
+    for (const char* live : {"Recording", "Paused", "Preparing", "Countdown", "Stopping", "Saving"}) {
+        AutomationState recording = Ready();
+        recording.recording_state = QString::fromLatin1(live);
+        const PreconditionVerdict verdict = Evaluate(*command, recording);
+        EXPECT_FALSE(verdict.allowed()) << live;
+        EXPECT_EQ(verdict.code, QLatin1String(error_code::kBlocked)) << live;
+    }
+
+    AutomationState blocked = Ready();
+    blocked.blocking_surface = QString::fromLatin1(blocking_surface_name::kRecovery);
+    EXPECT_FALSE(Evaluate(*command, blocked).allowed());
+}
+
 TEST(LiveVerifyPolicy, NoCommandIsListedTwiceAndEveryOneIsFindable) {
     QStringList names;
     for (const CommandDescriptor& command : AllCommands()) {

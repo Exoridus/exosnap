@@ -302,11 +302,8 @@ struct NotificationEvent {
 // ---------------------------------------------------------------------------
 // ShouldOfferElevatedRelaunch / MakeElevatedRelaunchOfferEvent
 // ---------------------------------------------------------------------------
-// ADR 0033. The in-depth diagnostics opt-in is one setting behind two controls
-// (the Diagnostics header switch and the Settings → Developer row), and neither
-// of them can measure anything in a standard process. The offer therefore hangs
-// off the SETTING's transition, not off either control, so both raise exactly
-// one toast and a refresh raises none.
+// ADR 0033. The in-depth diagnostics opt-in cannot measure anything in a standard
+// process, so turning it on there offers the restart that would let it.
 //
 // Only the off -> on edge, and only when the process is not already elevated: an
 // elevated process starts the traces on the spot and has nothing to offer, and a
@@ -316,9 +313,9 @@ struct NotificationEvent {
     return opt_in_now && !opt_in_before && !elevated;
 }
 
-// The offer itself. The setting is already written when this is raised, so the
-// text promises the traces rather than the setting -- declining the UAC prompt
-// leaves the opt-in on and this process running, which is what the switch's
+// The offer itself. The switch is already on when this is raised, so the text
+// promises the traces rather than the switch -- declining the UAC prompt leaves
+// the switch on and this process running, which is what its
 // "On · not measuring · needs an admin relaunch" sub-text then reports.
 [[nodiscard]] inline NotificationEvent MakeElevatedRelaunchOfferEvent() {
     NotificationEvent event;

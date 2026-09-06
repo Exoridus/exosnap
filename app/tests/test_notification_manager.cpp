@@ -640,10 +640,10 @@ TEST(AdvisoryStatusForTypeTest, EveryTypeResolvesToAKnownStatus) {
 
 // ── Elevated-relaunch offer ──────────────────────────────────────────────────
 //
-// The in-depth diagnostics opt-in is one setting behind two controls, so the
-// offer hangs off the setting's transition. These pin the three properties that
-// keep it from becoming a nag: it fires on the off -> on edge, once, and never
-// in a process that is already elevated.
+// The in-depth diagnostics opt-in is a session switch, so the offer hangs off its
+// transition. These pin the three properties that keep it from becoming a nag: it
+// fires on the off -> on edge, once, and never in a process that is already
+// elevated.
 
 TEST(ElevatedRelaunchOffer, RaisedOnlyWhenAStandardProcessTurnsTheOptInOn) {
     EXPECT_TRUE(ShouldOfferElevatedRelaunch(/*opt_in_now=*/true, /*opt_in_before=*/false, /*elevated=*/false));

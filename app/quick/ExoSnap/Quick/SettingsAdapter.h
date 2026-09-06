@@ -248,8 +248,6 @@ class SettingsAdapter : public QObject {
                    appSettingsChanged FINAL)
     Q_PROPERTY(bool openEditorWhenFinished READ openEditorWhenFinished WRITE setOpenEditorWhenFinished NOTIFY
                    appSettingsChanged FINAL)
-    Q_PROPERTY(bool presentDiagnosticsOptIn READ presentDiagnosticsOptIn WRITE setPresentDiagnosticsOptIn NOTIFY
-                   appSettingsChanged FINAL)
 
     // ---- Appearance ---------------------------------------------------------
     Q_PROPERTY(QVariantList appearanceOptions READ appearanceOptions CONSTANT FINAL)
@@ -494,7 +492,6 @@ class SettingsAdapter : public QObject {
     [[nodiscard]] bool minimizeToTray() const noexcept;
     [[nodiscard]] bool hideWindowFromCapture() const noexcept;
     [[nodiscard]] bool openEditorWhenFinished() const noexcept;
-    [[nodiscard]] bool presentDiagnosticsOptIn() const noexcept;
 
     [[nodiscard]] QVariantList recordingOverlayPresetOptions() const;
     [[nodiscard]] QString recordingOverlayPreset() const;
@@ -646,7 +643,6 @@ class SettingsAdapter : public QObject {
     void setMinimizeToTray(bool value);
     void setHideWindowFromCapture(bool value);
     void setOpenEditorWhenFinished(bool value);
-    void setPresentDiagnosticsOptIn(bool value);
     void setAppearanceId(const QString& value);
     void setAccentId(const QString& value);
     void setDeveloperLogLevel(const QString& value);

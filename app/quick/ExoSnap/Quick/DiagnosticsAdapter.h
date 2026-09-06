@@ -94,9 +94,10 @@ class DiagnosticsAdapter : public QObject {
     Q_PROPERTY(QVariantMap lastSession READ lastSession NOTIFY lastSessionChanged FINAL)
     Q_PROPERTY(bool hasLastSession READ hasLastSession NOTIFY lastSessionChanged FINAL)
 
-    // The in-depth diagnostics switch. One product setting (the present/DPC
-    // opt-in) behind two controls; the adapter never writes it, it reports the
-    // user's intent as inDepthToggled and the composition root owns the setting.
+    // The in-depth diagnostics switch: the one control over the present/DPC
+    // opt-in, which lives for this session only. The adapter never decides it --
+    // it reports the user's intent as inDepthToggled and the composition root
+    // answers.
     Q_PROPERTY(bool inDepthEnabled READ inDepthEnabled WRITE setInDepthEnabledFromUi NOTIFY inDepthChanged FINAL)
     Q_PROPERTY(QString inDepthStateText READ inDepthStateText NOTIFY inDepthChanged FINAL)
     Q_PROPERTY(bool inDepthAvailable READ inDepthAvailable NOTIFY inDepthChanged FINAL)
@@ -184,7 +185,7 @@ class DiagnosticsAdapter : public QObject {
     // which reports exactly as an unavailable one does -- nothing.
     void setDpcLatencyProvider(diagnostics::IDpcLatencyProvider* provider);
     void setPresentSample(std::optional<diagnostics::PresentSample> sample);
-    // The present/DPC opt-in as the settings store holds it. Does not emit
+    // The present/DPC opt-in as this session holds it. Does not emit
     // inDepthToggled -- that signal is the UI asking for a change, this is the
     // answer arriving.
     void setInDepthEnabled(bool enabled);

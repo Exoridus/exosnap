@@ -140,6 +140,10 @@ class LiveVerifySource {
 
     // --- Diagnostics and logs (protocol 2) -----------------------------------
     virtual bool DiagnosticsRun(QString* error) = 0;
+    // The session-scoped in-depth diagnostics switch (ADR 0033). Turning it on in
+    // a standard process raises the same restart offer the switch raises; it does
+    // not elevate anything by itself.
+    virtual bool DiagnosticsSetInDepth(bool enabled, QString* error) = 0;
     virtual bool LogsOpen(QString* error) = 0;
 
     // --- Blocking surfaces (protocol 2) --------------------------------------

@@ -1522,9 +1522,6 @@ bool SettingsAdapter::hideWindowFromCapture() const noexcept {
 bool SettingsAdapter::openEditorWhenFinished() const noexcept {
     return app_settings_.open_editor_when_finished;
 }
-bool SettingsAdapter::presentDiagnosticsOptIn() const noexcept {
-    return app_settings_.present_diagnostics_optin;
-}
 
 // ---- Overlay content ------------------------------------------------------
 //
@@ -2355,14 +2352,6 @@ void SettingsAdapter::setOpenEditorWhenFinished(bool value) {
         return;
     }
     app_settings_.open_editor_when_finished = value;
-    commitAppSettingsEdit();
-}
-
-void SettingsAdapter::setPresentDiagnosticsOptIn(bool value) {
-    if (app_settings_.present_diagnostics_optin == value) {
-        return;
-    }
-    app_settings_.present_diagnostics_optin = value;
     commitAppSettingsEdit();
 }
 

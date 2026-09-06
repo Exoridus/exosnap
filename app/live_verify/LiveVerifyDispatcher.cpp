@@ -44,6 +44,10 @@ qint64 ParamInt(const QJsonObject& params, const char* name) {
     return static_cast<qint64>(params.value(Text(name)).toDouble());
 }
 
+bool ParamBool(const QJsonObject& params, const char* name) {
+    return params.value(Text(name)).toBool();
+}
+
 // --- Command execution ------------------------------------------------------
 
 // The update area's own snapshot, plus what the last apply actually launched.
@@ -433,6 +437,12 @@ Outcome ExecuteMutating(const CommandDescriptor& command, const ParsedRequest& r
         // The probe runs on a worker thread; `checking` going false again is the
         // completion, and that is a stateRevision advance.
         return Succeeded(source.DiagnosticsSnapshot(), /*settled=*/false);
+    }
+    if (command.name == QLatin1String("diagnostics.setInDepth")) {
+        const bool enabled = ParamBool(params, "enabled");
+        if (!source.DiagnosticsSetInDepth(enabled, &error))
+            return IntentRefused(command, source, error);
+        return Succeeded(source.DiagnosticsSnapshot());
     }
     if (command.name == QLatin1String("logs.open")) {
         if (!source.LogsOpen(&error))

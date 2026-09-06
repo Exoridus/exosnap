@@ -1648,6 +1648,10 @@ exosnap_add_gtest(
         ${PROJECT_SOURCE_DIR}/app/services/SupportBundleService.h
         ${PROJECT_SOURCE_DIR}/app/models/CaptureTargetPresentation.cpp
         ${PROJECT_SOURCE_DIR}/app/services/DisplayNumbering.cpp
+        # The in-depth switch's own edge raises the elevated-relaunch offer, so the
+        # adapter case drives the real manager rather than counting a predicate.
+        ${PROJECT_SOURCE_DIR}/app/notifications/NotificationManager.cpp
+        ${PROJECT_SOURCE_DIR}/app/notifications/NotificationManager.h
     LIBRARIES
         Qt6::Core
         Qt6::Gui

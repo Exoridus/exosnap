@@ -9,6 +9,8 @@
 #include "SessionLedgerModel.h"
 
 #include "diagnostics/WindowTargetFacts.h"
+#include "notifications/NotificationEvent.h"
+#include "notifications/NotificationManager.h"
 #include "services/SupportBundleService.h"
 #include "visual_tests/DiagnosticsLiveScenario.h"
 
@@ -525,8 +527,8 @@ TEST(DiagnosticsAdapterTest, NavigationIsAnIntentNotAPageSwitch) {
     EXPECT_EQ(logs.count(), 1);
 }
 
-// The in-depth switch reports intent; the setting itself is owned by the
-// composition root, which pushes the answer back through setInDepthEnabled().
+// The in-depth switch reports intent; the answer is owned by the composition
+// root, which pushes it back through setInDepthEnabled().
 TEST(DiagnosticsAdapterTest, TheInDepthSwitchAsksAndDoesNotDecide) {
     EnsureApplication();
     DiagnosticsAdapter adapter;
@@ -542,13 +544,58 @@ TEST(DiagnosticsAdapterTest, TheInDepthSwitchAsksAndDoesNotDecide) {
 
     adapter.setInDepthEnabled(true);
     EXPECT_TRUE(adapter.inDepthEnabled());
-    // The opt-in persists across launches; elevation does not. On in a standard
-    // process there is no ETW session, and the sub-text is the one place the spec
-    // says the gate is stated.
+    // On in a standard process there is no ETW session, and the sub-text is the
+    // one place the spec says the gate is stated.
     EXPECT_EQ(adapter.inDepthStateText(), QStringLiteral("On \xc2\xb7 not measuring \xc2\xb7 needs an admin relaunch"));
 
     adapter.setElevated(true);
     EXPECT_EQ(adapter.inDepthStateText(), QStringLiteral("On \xc2\xb7 elevated \xc2\xb7 PresentMon + DPC/ISR trace"));
+}
+
+// The switch is session state: off at every start, and the offer to restart
+// elevated hangs off its off -> on edge. This drives the adapter through the
+// same edge the composition root wires up, so the three facts the product
+// promises are pinned end to end rather than one predicate at a time.
+TEST(DiagnosticsAdapterTest, TurningInDepthOnOffersTheRestartOnlyInAStandardProcess) {
+    EnsureApplication();
+    DiagnosticsAdapter adapter;
+    notifications::NotificationManager manager;
+    int offers = 0;
+    QObject::connect(&manager, &notifications::NotificationManager::eventRecorded, &manager,
+                     [&offers](const notifications::NotificationEvent& event) {
+                         if (event.type == notifications::NotificationType::ElevationRequired)
+                             ++offers;
+                     });
+    // The composition root's own edge: the switch asks, the answer comes back,
+    // and the offer is raised from the transition.
+    QObject::connect(&adapter, &DiagnosticsAdapter::inDepthToggled, &adapter, [&](bool enabled) {
+        const bool before = adapter.inDepthEnabled();
+        adapter.setInDepthEnabled(enabled);
+        if (notifications::ShouldOfferElevatedRelaunch(enabled, before, adapter.elevated()))
+            manager.Enqueue(notifications::MakeElevatedRelaunchOfferEvent());
+    });
+
+    // Off at every start. Nothing seeds this from disk any more.
+    EXPECT_FALSE(adapter.inDepthEnabled());
+    EXPECT_EQ(offers, 0);
+
+    adapter.setInDepthEnabledFromUi(true);
+    // The switch stays ON -- the offer is not a precondition, it is an offer.
+    EXPECT_TRUE(adapter.inDepthEnabled());
+    EXPECT_EQ(offers, 1);
+    // A second look at a switch that is already on is not an edge.
+    adapter.setInDepthEnabledFromUi(true);
+    EXPECT_EQ(offers, 1);
+
+    adapter.setInDepthEnabledFromUi(false);
+    EXPECT_FALSE(adapter.inDepthEnabled());
+    EXPECT_EQ(offers, 1);
+
+    // Elevated: the traces start on the spot and there is nothing to offer.
+    adapter.setElevated(true);
+    adapter.setInDepthEnabledFromUi(true);
+    EXPECT_TRUE(adapter.inDepthEnabled());
+    EXPECT_EQ(offers, 1);
 }
 
 TEST(DiagnosticsAdapterTest, InDepthCannotBeChangedWhileRecording) {

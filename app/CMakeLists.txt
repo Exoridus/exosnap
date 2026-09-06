@@ -810,15 +810,12 @@ target_include_directories(codec_labels_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR
 
 # ELEVATION-FOUNDATION-R1 (ADR 0033): elevation provider stub + relaunch handoff
 # arg builder/parser + RelaunchResult contract. Pure logic; no Win32 invocation.
-# AppSettingsStore.cpp + the log sink are pulled in for
-# WithdrawPresentDiagnosticsOptIn(), which ElevatedRelaunch.cpp also defines.
 exosnap_add_gtest(
     NAME elevation_tests
     TEST_PREFIX elevation.
     SOURCES
         tests/test_elevation.cpp
         services/ElevatedRelaunch.cpp
-        settings/AppSettingsStore.cpp
     LIBRARIES exosnap_capability exosnap_engine exosnap_app_log_test_support Qt6::Core Shell32.lib
 )
 target_include_directories(elevation_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

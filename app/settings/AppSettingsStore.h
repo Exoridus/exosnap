@@ -182,13 +182,6 @@ struct PersistedAppSettings {
     // SETTINGS-TIERS-R1: per-card expander expanded state (default collapsed).
     bool audio_separate_expander_expanded = false;
 
-    // ELEVATION-FOUNDATION-R1 (ADR 0033): opt-in for elevation-gated present /
-    // tearing diagnostics (PresentMon ETW). Default OFF. The later PresentMon
-    // slice gates its provider on this flag AND the runtime elevation state;
-    // turning it on while non-elevated offers the "relaunch as administrator"
-    // path. Persisted so the choice survives the self-relaunch.
-    bool present_diagnostics_optin = false;
-
     // SETTINGS-HONESTY-R1: developer log-level filter (Settings > Advanced >
     // Developer card, expert-only). One of "Off" | "Error" | "Warning" | "Info" |
     // "Debug" -- see AppLog::setMinSeverity. Ship default is "Debug" (record

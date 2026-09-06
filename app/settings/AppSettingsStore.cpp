@@ -167,12 +167,6 @@ PersistedAppSettings AppSettingsStore::Load() const {
         settings.value(QStringLiteral("audio_separate_expander_expanded"), false).toBool();
     settings.endGroup();
 
-    settings.beginGroup(QStringLiteral("diagnostics"));
-    // ELEVATION-FOUNDATION-R1 (ADR 0033): present-diagnostics opt-in (default OFF).
-    // Pre-1.0: no migration; missing key defaults to false.
-    persisted.present_diagnostics_optin = settings.value(QStringLiteral("present_diagnostics_optin"), false).toBool();
-    settings.endGroup();
-
     settings.beginGroup(QStringLiteral("developer"));
     // SETTINGS-HONESTY-R1: developer log-level filter (default "Debug" = record
     // everything, review F1). Pre-1.0: no migration; missing key defaults to "Debug".
@@ -309,11 +303,6 @@ bool AppSettingsStore::Save(const PersistedAppSettings& settings_snapshot) const
     // SETTINGS-TIERS-R1: per-card expander expanded state.
     settings.setValue(QStringLiteral("audio_separate_expander_expanded"),
                       settings_snapshot.audio_separate_expander_expanded);
-    settings.endGroup();
-
-    settings.beginGroup(QStringLiteral("diagnostics"));
-    // ELEVATION-FOUNDATION-R1 (ADR 0033): present-diagnostics opt-in.
-    settings.setValue(QStringLiteral("present_diagnostics_optin"), settings_snapshot.present_diagnostics_optin);
     settings.endGroup();
 
     settings.beginGroup(QStringLiteral("developer"));

@@ -341,8 +341,6 @@ QVector<KeyDescriptor> BuildKeys() {
                         &SettingsAdapter::showDiagnosticsOverlay, &SettingsAdapter::setShowDiagnosticsOverlay));
     keys.append(BoolKey("app.showQuickControls", "Quick-control pill overlay", &SettingsAdapter::showQuickControls,
                         &SettingsAdapter::setShowQuickControls));
-    keys.append(BoolKey("app.presentDiagnosticsOptIn", "Opt in to elevation-gated present diagnostics",
-                        &SettingsAdapter::presentDiagnosticsOptIn, &SettingsAdapter::setPresentDiagnosticsOptIn));
     return keys;
 }
 
