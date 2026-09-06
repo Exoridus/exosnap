@@ -107,6 +107,8 @@ using theme::ThemeKind;
         return QStringLiteral("notifications");
     case ShellGlyph::Quit:
         return QStringLiteral("quit");
+    case ShellGlyph::Warning:
+        return QStringLiteral("warning");
     case ShellGlyph::Record:
         break;
     }
@@ -115,8 +117,8 @@ using theme::ThemeKind;
 
 [[nodiscard]] bool GlyphFromToken(const QString& token, ShellGlyph& out) {
     static constexpr ShellGlyph kGlyphs[] = {
-        ShellGlyph::Record, ShellGlyph::Pause,         ShellGlyph::Resume, ShellGlyph::Stop,
-        ShellGlyph::Window, ShellGlyph::Notifications, ShellGlyph::Folder, ShellGlyph::Quit,
+        ShellGlyph::Record, ShellGlyph::Pause,         ShellGlyph::Resume, ShellGlyph::Stop,    ShellGlyph::Window,
+        ShellGlyph::Folder, ShellGlyph::Notifications, ShellGlyph::Quit,   ShellGlyph::Warning,
     };
     for (const ShellGlyph glyph : kGlyphs) {
         if (token == GlyphToken(glyph)) {
@@ -324,6 +326,7 @@ QImage RenderGlyph(const ShellGlyphRequest& request) {
         colour = ResolvePalette(request.appearance_id, request.accent_id).recording;
         break;
     case ShellGlyph::Pause:
+    case ShellGlyph::Warning:
         colour = ResolvePalette(request.appearance_id, request.accent_id).caution;
         break;
     case ShellGlyph::Resume:
@@ -440,6 +443,29 @@ QImage RenderGlyph(const ShellGlyphRequest& request) {
         painter.drawArc(ring, start, span);
         painter.drawLine(QPointF(kCenter * scale, kGlyphPowerStemTopY * scale),
                          QPointF(kCenter * scale, kGlyphPowerStemBottomY * scale));
+        break;
+    }
+
+    case ShellGlyph::Warning: {
+        painter.setPen(outline);
+        painter.setBrush(Qt::NoBrush);
+        // The pen's round join is what rounds the corners -- the same technique
+        // Folder's sharp-cornered path relies on -- so the triangle needs no
+        // rounded-rect primitive of its own.
+        QPainterPath path;
+        path.moveTo(kCenter * scale, kGlyphWarningTopY * scale);
+        path.lineTo((kCenter + kGlyphWarningHalfWidth) * scale, kGlyphWarningBottomY * scale);
+        path.lineTo((kCenter - kGlyphWarningHalfWidth) * scale, kGlyphWarningBottomY * scale);
+        path.closeSubpath();
+        painter.drawPath(path);
+
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(colour);
+        painter.drawRoundedRect(QRectF((kCenter - kGlyphWarningStemWidth / 2.0) * scale, kGlyphWarningStemTopY * scale,
+                                       kGlyphWarningStemWidth * scale,
+                                       (kGlyphWarningStemBottomY - kGlyphWarningStemTopY) * scale),
+                                kGlyphWarningStemCorner * scale, kGlyphWarningStemCorner * scale);
+        FillDisc(painter, scale, kCenter, kGlyphWarningDotY, kGlyphWarningDotRadius, colour);
         break;
     }
     }

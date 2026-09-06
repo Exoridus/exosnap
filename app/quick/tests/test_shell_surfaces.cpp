@@ -1160,7 +1160,7 @@ TEST(TrayAdapterShowWindow, TheEntryAlwaysAsksForTheWindow) {
     EXPECT_EQ(show.count(), 2);
 }
 
-TEST(TrayAdapterActivation, AClickAndADoubleClickBothAskForTheWindowAndNeverToggle) {
+TEST(TrayAdapterActivation, AClickAsksForTheWindowOnceAndNeverToggles) {
     TrayAdapter tray;
     QSignalSpy activate(&tray, &TrayAdapter::activateWindowRequested);
     QSignalSpy action(&tray, &TrayAdapter::shellActionRequested);
@@ -1168,13 +1168,16 @@ TEST(TrayAdapterActivation, AClickAndADoubleClickBothAskForTheWindowAndNeverTogg
     tray.handleActivation(TrayAdapter::TriggerActivation);
     EXPECT_EQ(activate.count(), 1);
 
+    // Windows delivers the single click before the double click, so the window
+    // is already back by the time this arrives -- handling it too would ask a
+    // second time for one gesture.
     tray.handleActivation(TrayAdapter::DoubleClickActivation);
-    EXPECT_EQ(activate.count(), 2);
+    EXPECT_EQ(activate.count(), 1);
     EXPECT_EQ(action.count(), 0);
 
     // A right click opens the menu, which the platform does itself.
     tray.handleActivation(TrayAdapter::ContextActivation);
-    EXPECT_EQ(activate.count(), 2);
+    EXPECT_EQ(activate.count(), 1);
     EXPECT_EQ(action.count(), 0);
 }
 
@@ -1224,6 +1227,24 @@ TEST(TrayAdapterIcon, AStaticStateIgnoresTheHeartbeatFrame) {
     EXPECT_EQ(tray.iconSource(), paused);
 }
 
+TEST(TrayAdapterIcon, MenuGlyphsRenderLargerThanTheMarkFollowingTheSameMetric) {
+    // A native menu has no padding property, so a taller glyph bitmap is the
+    // only lever that gives a row more air. The notification-area mark itself
+    // must stay at the exact metric the shell asked for, or the shell rescales
+    // it -- so the two sizes differ, and both move together with a single
+    // setIconPixelSize() call.
+    TrayAdapter tray;
+    for (const int px : {16, 24, 32}) {
+        tray.setIconPixelSize(px);
+        const QStringList mark_parts = tray.iconSource().split(QLatin1Char('/'));
+        const QStringList glyph_parts = tray.quitIcon().split(QLatin1Char('/'));
+        ASSERT_EQ(mark_parts.size(), 10);
+        ASSERT_EQ(glyph_parts.size(), 8);
+        EXPECT_EQ(mark_parts.at(5).toInt(), px);
+        EXPECT_EQ(glyph_parts.at(5).toInt(), px + 4);
+    }
+}
+
 TEST(TrayAdapterIcon, AnAccentChangeRepaintsWithoutARestart) {
     TrayAdapter tray;
     tray.setAppearance(QStringLiteral("dark"), QStringLiteral("aqua"));
@@ -1247,37 +1268,6 @@ TEST(TrayAdapterTooltip, ItNamesTheStateAndCarriesTheClockOnlyWhileRecording) {
     EXPECT_EQ(tray.tooltip(), QString::fromUtf8("ExoSnap \xE2\x80\x94 Paused"));
 }
 
-TEST(TrayAdapterStatusRow, ItNamesEveryStateTheIconCanShow) {
-    TrayAdapter tray;
-
-    tray.setPresence(PresenceFor(UiRecordingState::Ready, true, false, false, false), QStringLiteral("04:17"), 0);
-    EXPECT_EQ(tray.statusText(), QStringLiteral("Ready"));
-
-    tray.setPresence(PresenceFor(UiRecordingState::Recording, false, true, true, false), QStringLiteral("04:17"), 0);
-    EXPECT_EQ(tray.statusText(), QStringLiteral("Recording 04:17"));
-
-    tray.setPresence(PresenceFor(UiRecordingState::Paused, false, true, false, true), QStringLiteral("04:17"), 0);
-    EXPECT_EQ(tray.statusText(), QStringLiteral("Paused"));
-
-    tray.setPresence(PresenceFor(UiRecordingState::Saving, false, false, false, false), {}, 0);
-    EXPECT_EQ(tray.statusText(), QStringLiteral("Finishing recording"));
-
-    tray.setPresence(PresenceFor(UiRecordingState::Failed, false, false, false, false), {}, 0);
-    EXPECT_EQ(tray.statusText(), QStringLiteral("Recording failed"));
-
-    ShellPresenceInput saved;
-    saved.state = UiRecordingState::Completed;
-    saved.saved_dwell_active = true;
-    tray.setPresence(ProjectShellPresence(saved), {}, 0);
-    EXPECT_EQ(tray.statusText(), QStringLiteral("Saved"));
-}
-
-TEST(TrayAdapterStatusRow, TheClockIsDroppedWhenThereIsNone) {
-    TrayAdapter tray;
-    tray.setPresence(PresenceFor(UiRecordingState::Recording, false, true, true, false), {}, 0);
-    EXPECT_EQ(tray.statusText(), QStringLiteral("Recording"));
-}
-
 TEST(TrayAdapterBlockedReason, TheRowNeedsBothThePhaseAndAReason) {
     TrayAdapter tray;
     // A reason with no blocked phase is a sentence left behind by a state that
@@ -1288,10 +1278,22 @@ TEST(TrayAdapterBlockedReason, TheRowNeedsBothThePhaseAndAReason) {
 
     tray.setBlockedReason(QStringLiteral("No capture source is available."));
     EXPECT_TRUE(tray.blockedReasonVisible());
-    EXPECT_EQ(tray.blockedReason(), QStringLiteral("No capture source is available."));
+    EXPECT_EQ(tray.blockedReason(), QStringLiteral("Cannot record: no capture source is available"));
+    EXPECT_TRUE(tray.blockedReasonIcon().startsWith(QStringLiteral("image://exosnap-shell/glyph/warning/")));
 
     tray.setPresence(PresenceFor(UiRecordingState::Ready, true, false, false, false), {}, 0);
     EXPECT_FALSE(tray.blockedReasonVisible());
+}
+
+TEST(TrayAdapterBlockedReasonSentence, AnOrdinaryFragmentIsLowercasedAfterTheColon) {
+    EXPECT_EQ(TrayAdapter::ComposeBlockedReasonSentence(QStringLiteral("No capture source is available.")),
+              QStringLiteral("Cannot record: no capture source is available"));
+}
+
+TEST(TrayAdapterBlockedReasonSentence, AFullSentenceAboutRecordingItselfKeepsItsCapitalAndLosesThePeriod) {
+    EXPECT_EQ(TrayAdapter::ComposeBlockedReasonSentence(
+                  QStringLiteral("Recording is blocked by the current system configuration.")),
+              QStringLiteral("Cannot record: Recording is blocked by the current system configuration"));
 }
 
 TEST(TrayAdapterAvailability, ItIsInactiveUntilTheApplicationSaysThereIsATray) {

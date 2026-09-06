@@ -211,5 +211,16 @@ inline constexpr double kGlyphPowerRadius = 7.2;
 inline constexpr double kGlyphPowerGapDegrees = 100.0;
 inline constexpr double kGlyphPowerStemTopY = 6.6;
 inline constexpr double kGlyphPowerStemBottomY = 15.0;
+// Warning: an outlined triangle -- the pen's round join rounds its corners the
+// same way Folder's does -- with a filled exclamation mark inside it.
+inline constexpr double kGlyphWarningHalfWidth = 8.6;
+inline constexpr double kGlyphWarningTopY = 7.6;
+inline constexpr double kGlyphWarningBottomY = 21.6;
+inline constexpr double kGlyphWarningStemWidth = 2.6;
+inline constexpr double kGlyphWarningStemTopY = 12.2;
+inline constexpr double kGlyphWarningStemBottomY = 17.4;
+inline constexpr double kGlyphWarningStemCorner = 1.2;
+inline constexpr double kGlyphWarningDotY = 19.6;
+inline constexpr double kGlyphWarningDotRadius = 1.5;
 
 } // namespace exosnap::ui::brand

@@ -1630,22 +1630,29 @@ release (0.11 per ADR 0022).
   and failed is a coral cross. What Explorer, the desktop and Start show is a different thing and does
   not change — that is the icon of the *file*, in the shipped accent, whatever the application is
   doing.
-- **Tray menu** — in order: a **status row**, a **blocked-reason row**, the transport (**Start
+- **Tray menu** — in order: a **blocked-reason row** when it applies, the transport (**Start
   recording**, **Pause**/**Resume recording**, **Stop recording**), **Show window**, **Open output
-  folder**, **Notifications**, and **Quit ExoSnap**, with separators after the captions, after the
-  transport and before Quit. Every entry that acts carries a glyph. The menu
-  is a **native Windows popup menu** and follows the application's own appearance: dark or light
-  ground with the chosen appearance, not a surface the product paints itself.
-  **The menu's shape does not change.** Every row is always there; a row the state does not allow is
-  **greyed under its own name** rather than removed. A menu is read as the list of what the
-  application can do, and an entry that is present in one state and absent in the next teaches
-  nothing about why — a control that vanishes reads as a bug, a greyed one reads as a reason. It also
-  means the pointer lands on the same row twice in a row.
-  The **status row** is a caption, not an action, and names the session in the same words the icon's
-  tooltip uses: *Ready*, *Recording 04:17* (with the elapsed clock while one is running), *Paused*,
-  *Finishing recording*, *Saved*, *Recording failed*. The **blocked-reason row** is the one row that
-  comes and goes: it appears only while a start is actually refused and only when the reason is
-  known, and shows that reason.
+  folder**, **Notifications**, and **Quit ExoSnap**, with a separator after the blocked-reason row
+  when it is shown, after the transport and before Quit. Every entry that acts carries a glyph. The
+  menu is a **native Windows popup menu**, not a surface the product paints itself, and it follows
+  the **Windows apps-colour setting** rather than the application's own appearance — the same dark
+  or light ground every other context menu on the desktop uses. The tray **icon** follows the
+  taskbar's own setting too, for the same reason (both are composited onto a ground the product does
+  not own), so the icon and the menu popping out of it can legitimately differ from the application's
+  chosen appearance, and from each other if Windows and the taskbar disagree.
+  There is deliberately **no status caption** naming the session at the top of the menu: a native
+  popup menu has no header item, so a disabled first row would read as a broken command rather than
+  as a caption, and the state is already carried by the icon itself (idle, recording, paused, saved,
+  processing, error, with the recording beat) and by its tooltip, which names the session in words.
+  **The menu's shape otherwise does not change.** Every transport row is always there; a row the
+  state does not allow is **greyed under its own name** rather than removed. A menu is read as the
+  list of what the application can do, and an entry that is present in one state and absent in the
+  next teaches nothing about why — a control that vanishes reads as a bug, a greyed one reads as a
+  reason. It also means the pointer lands on the same row twice in a row.
+  The **blocked-reason row** is the one row that comes and goes: it appears only while a start is
+  actually refused and only when the reason is known. It reads as a sentence, *Cannot record: \<reason\>*,
+  and carries the caution glyph rather than an empty icon gutter, so a disabled row reads as
+  information rather than as a dead command.
   The transport is enabled by exactly what the state allows: Start while idle, Pause and Stop while
   recording, Resume and Stop while paused; Start stays greyed rather than gone while a recording is
   being prepared or saved. **Show window** sits below the transport, is always offered and always

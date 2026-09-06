@@ -162,8 +162,7 @@ QString TrayAdapter::statusText() const {
 }
 
 QString TrayAdapter::tooltip() const {
-    // "ExoSnap - Ready" / "ExoSnap - Recording 04:17" / "ExoSnap - Paused". The
-    // same phrase the menu's first row shows, so the two cannot drift apart.
+    // "ExoSnap - Ready" / "ExoSnap - Recording 04:17" / "ExoSnap - Paused".
     return QStringLiteral("ExoSnap \xE2\x80\x94 ") + statusText();
 }
 
@@ -171,17 +170,41 @@ bool TrayAdapter::blockedReasonVisible() const {
     return state_.phase == ShellPhase::Blocked && !blocked_reason_.isEmpty();
 }
 
-const QString& TrayAdapter::blockedReason() const noexcept {
-    return blocked_reason_;
+QString TrayAdapter::blockedReason() const {
+    return ComposeBlockedReasonSentence(blocked_reason_);
+}
+
+QString TrayAdapter::ComposeBlockedReasonSentence(const QString& reason) {
+    QString sentence = reason.trimmed();
+    if (sentence.isEmpty())
+        return sentence;
+    if (sentence.endsWith(QLatin1Char('.')))
+        sentence.chop(1);
+    // A reason phrased as its own sentence about recording itself would stutter
+    // if folded into a lowercase fragment ("Cannot record: recording is
+    // blocked..."); such a reason keeps its capital. Everything else is the
+    // object of the colon and reads as one sentence with it.
+    const bool reads_as_its_own_sentence = sentence.startsWith(QStringLiteral("Recording"), Qt::CaseInsensitive);
+    if (!reads_as_its_own_sentence)
+        sentence[0] = sentence[0].toLower();
+    return TrayAdapter::tr("Cannot record: %1").arg(sentence);
+}
+
+QString TrayAdapter::blockedReasonIcon() const {
+    return glyphUrl(ui::brand::ShellGlyph::Warning);
 }
 
 QString TrayAdapter::glyphUrl(ui::brand::ShellGlyph glyph) const {
     ShellGlyphRequest request;
     request.glyph = glyph;
-    request.px = icon_px_;
+    request.px = menuGlyphPixelSize();
     request.appearance_id = appearance_id_;
     request.accent_id = accent_id_;
     return ui::brand::ShellIconImageUrl(ui::brand::GlyphImageId(request));
+}
+
+int TrayAdapter::menuGlyphPixelSize() const noexcept {
+    return icon_px_ + 4;
 }
 
 QString TrayAdapter::showWindowIcon() const {
@@ -271,13 +294,15 @@ void TrayAdapter::triggerQuit() {
 }
 
 void TrayAdapter::handleActivation(int reason) {
-    // A left click and a double click both show or focus the window -- Windows
-    // delivers the single click first regardless, so a double click shows the
-    // window either way. A right click is the context menu, which the platform
-    // opens itself. Toggling a recording stays with the hotkey and the menu: a
-    // double click is too easy to produce while reaching for the window to be
-    // allowed to start or stop one.
-    if (reason == TriggerActivation || reason == DoubleClickActivation)
+    // A left click shows or focuses the window. A right click is the context
+    // menu, which the platform opens itself. Windows delivers the single click
+    // (TriggerActivation) before a double click (DoubleClickActivation), so the
+    // window is already back by the time the double click arrives -- handling
+    // it too would raise the request a second time for one gesture. Toggling a
+    // recording stays with the hotkey and the menu: a double click is too easy
+    // to produce while reaching for the window to be allowed to start or stop
+    // one.
+    if (reason == TriggerActivation)
         emit activateWindowRequested();
 }
 
