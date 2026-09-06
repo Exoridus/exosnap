@@ -59,11 +59,13 @@
 #include <QElapsedTimer>
 #include <QPointer>
 #include <QQmlApplicationEngine>
+#include <QStringList>
 #include <QThreadPool>
 #include <QTimer>
 
 class QQuickWindow;
 
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -190,6 +192,13 @@ class QuickApplication {
     // window loads, exactly as the Widgets frontend does — the page choice has to
     // be in place before the shell picks its landing page.
     void applyStartupRelaunchHandoff(const QString& page_name, bool reenable_present_diag);
+    // ADR 0033, the other half: the seam through which the "Restart as
+    // administrator" toast action reaches the bootstrap. The frontend builds the
+    // handoff (it is the only side that knows which page the user is on) and the
+    // entry point arms it, because the relaunch itself may only run once the
+    // event loop has ended and this object is gone. Without a handler installed
+    // the action is refused rather than silently ignored.
+    void setElevatedRelaunchHandler(std::function<void(const QStringList&)> handler);
     // ADR 0055: armed from --verify-update-reinstall for this run only. Nothing is
     // persisted, so a plain restart drops back to normal update behaviour.
     void applyVerifyUpdateReinstallMode(bool enabled);
@@ -456,6 +465,12 @@ class QuickApplication {
     // handoff, and the updater reports the honest appWontClose instead.
     void closeForUpdaterHandoff();
     void dispatchNotificationAction(notifications::NotificationAction action, const QString& payload);
+    // ADR 0033. Restarts ExoSnap elevated by asking the shell to close, so the
+    // relaunch inherits every close guard: a running, preparing or finalizing
+    // recording refuses it, and nothing is armed in the bootstrap until the
+    // close has actually been allowed. The relaunch itself runs after the event
+    // loop ends -- see ProductionBootstrap::RunPendingElevatedRelaunch.
+    void requestElevatedRelaunch();
     // The one consent-and-send path. Every surface that offers a Send-report
     // control routes through it.
     void sendNonFatalReport(const QString& phase, const QString& detail);
@@ -708,6 +723,10 @@ class QuickApplication {
     // sentinel in an int, which is exactly the bare-integer navigation QCR-716
     // removed.
     std::optional<ShellAdapter::Page> pending_landing_page_;
+    // ADR 0033. Empty in every build that has no bootstrap to arm -- the tests
+    // and the harnesses -- which is why the toast action checks it instead of
+    // assuming a relaunch is reachable.
+    std::function<void(const QStringList&)> elevated_relaunch_handler_;
 #if defined(Q_OS_WIN)
     std::unique_ptr<Win32HotkeyRegistrar> hotkey_registrar_;
     std::unique_ptr<QAbstractNativeEventFilter> hotkey_event_filter_;

@@ -8,7 +8,7 @@ namespace {
 
 // One table per enum, walked in both directions. A pair of switch statements
 // would let the two directions disagree; a table cannot.
-constexpr std::array<std::pair<NotificationType, const char*>, 19> kTypeNames{{
+constexpr std::array<std::pair<NotificationType, const char*>, 20> kTypeNames{{
     {NotificationType::LowStorage, "lowStorage"},
     {NotificationType::Saved, "saved"},
     {NotificationType::UnexpectedStop, "unexpectedStop"},
@@ -28,6 +28,7 @@ constexpr std::array<std::pair<NotificationType, const char*>, 19> kTypeNames{{
     {NotificationType::SettingsLoadFailed, "settingsLoadFailed"},
     {NotificationType::PresetTransferFailed, "presetTransferFailed"},
     {NotificationType::WindowCaptureStalled, "windowCaptureStalled"},
+    {NotificationType::ElevationRequired, "elevationRequired"},
 }};
 
 constexpr std::array<std::pair<NotificationAction, const char*>, 13> kActionNames{{

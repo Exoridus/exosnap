@@ -443,7 +443,7 @@ TEST(DiagnosticsReadinessTiles, TheEncoderTileIsCoralWhenTheSelectedCodecCannotB
 
 // ── Readiness encoder tile ──────────────────────────────────────────────────────
 
-TEST(DiagnosticsReadinessTiles, EncoderTileNamesTheGpuTrimmedWithBackendBadgeAndCodecChips) {
+TEST(DiagnosticsReadinessTiles, EncoderTileNamesTheBackendAndDriverInsteadOfTheContainer) {
     capability::CapabilitySet caps;
     caps.gpu_adapter_name = "NVIDIA GeForce RTX 5070 Ti";
     caps.video_codecs[capability::VideoCodec::H264] = {capability::SupportLevel::Available, ""};
@@ -456,15 +456,21 @@ TEST(DiagnosticsReadinessTiles, EncoderTileNamesTheGpuTrimmedWithBackendBadgeAnd
     inputs.caps = &caps;
     inputs.video_codec = capability::VideoCodec::Av1;
     inputs.container = capability::Container::Matroska;
+    // Already in the vendor's spelling: translating the WDDM number is the
+    // controller's job, so the tile is a pure rendering of what it was given.
+    inputs.driver_version = "581.29";
 
     const std::vector<ReadinessTile> tiles = BuildReadinessTiles(inputs);
     const auto it =
         std::find_if(tiles.begin(), tiles.end(), [](const ReadinessTile& tile) { return tile.key == "encoder"; });
     ASSERT_NE(it, tiles.end());
-    // The vendor is already stated by the badge; the tile names what the user
-    // recognises on the box.
+    // The vendor is already stated by the backend line; the tile names what the
+    // user recognises on the box.
     EXPECT_EQ(it->value, "GeForce RTX 5070 Ti");
-    EXPECT_EQ(it->head_badge, "NVENC");
+    // No badge in the head, and the container is gone from this tile: a muxer
+    // fact never belonged to the tile that answers what encodes the recording.
+    EXPECT_TRUE(it->head_badge.empty());
+    EXPECT_EQ(it->sub, "NVENC \xc2\xb7 driver 581.29");
     ASSERT_EQ(it->chips.size(), 3u);
     EXPECT_EQ(it->chips[0].label, "H.264");
     EXPECT_EQ(it->chips[1].label, "HEVC");
@@ -488,6 +494,8 @@ TEST(DiagnosticsReadinessTiles, WithoutACapabilitySetTheCodecRowStaysEmpty) {
     EXPECT_EQ(it->value, "Arc A770");
     // No capability answers means no claim about what this GPU can encode.
     EXPECT_TRUE(it->chips.empty());
+    // A driver nobody reported says nothing rather than "driver ".
+    EXPECT_EQ(it->sub, "NVENC");
 }
 } // namespace
 } // namespace exosnap::diagnostics

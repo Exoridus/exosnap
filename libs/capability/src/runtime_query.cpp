@@ -470,6 +470,7 @@ void ProbeAdapterIdentity(AdapterIdentity& identity) {
         return; // no real adapter — identity stays default (luid=0, driver_version empty)
 
     identity.adapter_luid = adapters.front().luid;
+    identity.vendor_id = adapters.front().vendor_id;
 
     Microsoft::WRL::ComPtr<IDXGIFactory4> factory4;
     if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory4))))
@@ -591,6 +592,10 @@ RuntimeCapabilitySnapshot CapabilityBuilder::QueryRuntimeFacts() {
     // No AAC probe: FFmpeg's bundled native AAC-LC encoder is always available (ADR 0052).
     ProbeOs(snapshot.os);
     ProbeDisplays(snapshot.displays);
+    // DXGI-only and no heavier than the display probe next to it. Carried in the
+    // snapshot because the Diagnostics encoder tile names the driver, and the
+    // cache-key read is a separate call the shipping app never makes.
+    ProbeAdapterIdentity(snapshot.adapter);
 
     return snapshot;
 }

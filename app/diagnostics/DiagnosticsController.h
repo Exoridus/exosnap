@@ -211,9 +211,12 @@ struct ReadinessTileInputs {
     // The capability answers behind the encoder tile's codec row. nullptr leaves
     // the row empty rather than claiming every codec is encodable.
     const capability::CapabilitySet* caps = nullptr;
-    // WDDM user-mode driver version of the encoding adapter ("A.B.C.D"), as the
-    // caller read it. Empty is a real answer -- some drivers do not report one --
-    // and the tile then says nothing about it.
+    // The encoding adapter's driver version, ALREADY in the spelling the vendor
+    // uses (VendorDriverVersion below). The tile renders it as given; the
+    // translation from the WDDM number is the caller's, so the tile stays a pure
+    // rendering and one place decides what a driver version looks like. Empty is
+    // a real answer -- some drivers do not report one -- and the tile then says
+    // nothing about it.
     std::string driver_version;
 };
 
@@ -223,6 +226,17 @@ struct ReadinessTileInputs {
 // vendor is already stated by the backend badge, so the tile names the part the
 // user recognises.
 [[nodiscard]] std::string TrimVendorPrefix(std::string adapter_name);
+
+// Pure: the driver version as its own vendor writes it, given the PCI vendor id
+// and the WDDM user-mode version DXGI reports ("A.B.C.D").
+//
+// Windows and the vendor disagree about the same driver: NVIDIA's "581.29" is
+// reported by DXGI as "32.0.15.8129". The last digit of the third field and all
+// four of the fourth are the vendor's number, with a decimal point before its
+// last two digits. Every other vendor already publishes the WDDM string itself,
+// so it is passed through -- as is an empty or malformed input, because a
+// version nobody can look up is worse than one that merely looks unfamiliar.
+[[nodiscard]] std::string VendorDriverVersion(uint32_t vendor_id, const std::string& wddm_version);
 
 // ── Live tiles ──────────────────────────────────────────────────────────────────
 //

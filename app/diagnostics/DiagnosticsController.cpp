@@ -10,6 +10,7 @@
 #include <exosnap/engine/pipeline_health.h>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
@@ -667,6 +668,37 @@ std::string TrimVendorPrefix(std::string adapter_name) {
     return adapter_name;
 }
 
+std::string VendorDriverVersion(uint32_t vendor_id, const std::string& wddm_version) {
+    constexpr uint32_t kNvidiaVendorId = 0x10DEu;
+    if (vendor_id != kNvidiaVendorId || wddm_version.empty())
+        return wddm_version;
+
+    // "A.B.C.D" exactly: four dot-separated decimal fields. Anything else is a
+    // shape this translation was not derived from, and guessing at it would
+    // invent a version number.
+    std::array<std::string, 4> fields;
+    size_t field = 0;
+    for (const char c : wddm_version) {
+        if (c == '.') {
+            if (++field >= fields.size())
+                return wddm_version;
+            continue;
+        }
+        if (std::isdigit(static_cast<unsigned char>(c)) == 0)
+            return wddm_version;
+        fields[field].push_back(c);
+    }
+    if (field != 3)
+        return wddm_version;
+    // The minor field is written with four digits and the branch contributes its
+    // last one; a driver that reports fewer is not the numbering this decodes.
+    if (fields[2].empty() || fields[3].size() != 4)
+        return wddm_version;
+
+    const std::string digits = fields[2].substr(fields[2].size() - 1) + fields[3];
+    return digits.substr(0, digits.size() - 2) + "." + digits.substr(digits.size() - 2);
+}
+
 std::string StripBackendSuffix(std::string codec) {
     if (const size_t paren = codec.find(" ("); paren != std::string::npos && paren > 0)
         codec.resize(paren);
@@ -1019,9 +1051,9 @@ std::vector<ReadinessTile> BuildReadinessTiles(const ReadinessTileInputs& in) {
     std::vector<ReadinessTile> tiles;
     tiles.reserve(4);
 
-    // Tile 1 — Encoder: the GPU carrying the encode, the backend as a head badge,
-    // and the codec row underneath. The vendor prefix goes because the badge
-    // already says whose encoder this is.
+    // Tile 1 -- Encoder: the GPU carrying the encode, the backend and its driver
+    // underneath, and the codec row below that. The vendor prefix goes from the
+    // GPU name because the backend line already says whose encoder this is.
     {
         ReadinessTile tile;
         tile.key = "encoder";
@@ -1033,8 +1065,16 @@ std::vector<ReadinessTile> BuildReadinessTiles(const ReadinessTileInputs& in) {
             gpu = TrimVendorPrefix(std::move(gpu));
             const std::string codec = StripBackendSuffix(VideoCodecDisplayName(in.video_codec));
             tile.value = gpu.empty() ? codec : gpu;
-            tile.head_badge = "NVENC";
-            tile.sub = ContainerDisplayName(in.container);
+            // No head badge: the backend belongs in the sub-line next to the
+            // driver it comes with, and a badge repeating what the line below
+            // already says is chrome, not information.
+            //
+            // Literal while NVENC is the only encode backend that ships. AMF and
+            // QSV replace it here when those backends exist -- the name then
+            // comes from the encoder that was selected, not from this file.
+            tile.sub = "NVENC";
+            // The container is a muxer fact and belongs to the pipeline card,
+            // not to the tile that answers "what encodes this".
             if (!in.driver_version.empty())
                 tile.sub = Join(tile.sub, "driver " + in.driver_version);
             if (in.caps != nullptr) {
@@ -1604,6 +1644,8 @@ DiagnosticsSnapshot DiagnosticsController::Evaluate() {
     tile_inputs.data_ready = true;
     tile_inputs.gpu_adapter_name = config_.caps.gpu_adapter_name;
     tile_inputs.caps = &config_.caps;
+    tile_inputs.driver_version =
+        VendorDriverVersion(config_.caps.runtime.adapter.vendor_id, config_.caps.runtime.adapter.driver_version);
     tile_inputs.video_codec = config_.user_config.video_codec;
     tile_inputs.audio_codec = config_.user_config.audio_codec;
     tile_inputs.container = config_.user_config.container;

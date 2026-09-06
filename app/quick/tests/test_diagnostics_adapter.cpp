@@ -215,6 +215,27 @@ TEST(DiagnosticsAdapterTest, ProbeResultDrivesTheDiskTile) {
     EXPECT_EQ(disk.value(QStringLiteral("sub")).toString(), QString::fromUtf8("free \xc2\xb7 C:"));
 }
 
+// The seam that used to be empty: nothing populated the tile's driver field, so
+// the encoder tile never named a driver on any machine. The translation from the
+// WDDM number happens on the way into the tile, so the page reads what the
+// vendor's own release notes say.
+TEST(DiagnosticsAdapterTest, EncoderTileNamesTheBackendAndTheDriverInVendorForm) {
+    EnsureApplication();
+    DiagnosticsAdapter adapter;
+    diagnostics::DiagnosticsController::Config config = MakeConfig();
+    config.caps.gpu_adapter_name = "NVIDIA GeForce RTX 5070 Ti";
+    config.caps.runtime.adapter.vendor_id = 0x10DEu;
+    config.caps.runtime.adapter.driver_version = "32.0.15.8129";
+    adapter.setDiagnosticConfig(std::move(config));
+    adapter.applyProbeResultForTest(MakeProbe());
+
+    const QVariantMap encoder = TileWithKey(adapter.tiles(), QStringLiteral("encoder"));
+    EXPECT_EQ(encoder.value(QStringLiteral("value")).toString(), QStringLiteral("GeForce RTX 5070 Ti"));
+    EXPECT_EQ(encoder.value(QStringLiteral("sub")).toString(), QString::fromUtf8("NVENC \xc2\xb7 driver 581.29"));
+    // The head badge slot survives in QML; this tile just stops filling it.
+    EXPECT_TRUE(encoder.value(QStringLiteral("headBadge")).toString().isEmpty());
+}
+
 TEST(DiagnosticsAdapterTest, LastCheckTextIsStampedOnlyAfterAProbe) {
     EnsureApplication();
     DiagnosticsAdapter adapter;

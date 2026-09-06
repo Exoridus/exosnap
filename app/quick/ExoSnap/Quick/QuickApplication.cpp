@@ -8,6 +8,7 @@
 
 #include "services/DisplayIdentityEnumerator.h"
 #include "services/DisplayIdentityResolver.h"
+#include "services/ElevatedRelaunch.h"
 #include "services/RecordingCoordinator.h"
 #include "services/TargetDisplayFacts.h"
 #include "services/UpdateService.h"
@@ -2567,6 +2568,16 @@ void QuickApplication::wireSettingsCommands() {
             // a peak measured a moment ago is not a measurement of this machine now.
             applyDpcLatencyGate();
         }
+        // Raised from the SETTING's transition rather than from either control,
+        // so the Diagnostics header switch and the Settings developer row offer
+        // the restart exactly once between them. Still not a prompt: the toast
+        // has to be pressed, and declining the UAC prompt behind it leaves the
+        // opt-in on and this process running.
+        if (notifications::ShouldOfferElevatedRelaunch(settings_.present_diagnostics_optin, previous_present_optin,
+                                                       elevation_provider_.IsElevated())) {
+            notifications::NotificationEvent event = notifications::MakeElevatedRelaunchOfferEvent();
+            notifications_adapter_.manager().Enqueue(std::move(event));
+        }
     });
 
     QObject::connect(&settings_adapter_, &SettingsAdapter::presetSelected, &settings_adapter_,
@@ -3598,25 +3609,48 @@ void QuickApplication::presentPostUpdateWhatsNew(const QVector<WhatsNewNote>& no
     whats_new_adapter_.present(notes, /*post_update_mode=*/true, last_releases_page_url_);
 }
 
+namespace {
+
+// ADR 0033. The nav labels the elevated relaunch hands across, in both
+// directions. One table, so the page a relaunch is asked for and the page it
+// lands on cannot drift apart.
+constexpr std::array<std::pair<const char*, ShellAdapter::Page>, 5> kRelaunchNavLabels{{
+    {"Record", ShellAdapter::RecordPage},
+    {"Settings", ShellAdapter::SettingsPage},
+    {"Diagnostics", ShellAdapter::DiagnosticsPage},
+    {"Logs", ShellAdapter::LogsPage},
+    {"About", ShellAdapter::AboutPage},
+}};
+
+QString RelaunchNavLabel(ShellAdapter::Page page) {
+    for (const auto& [label, value] : kRelaunchNavLabels) {
+        if (value == page)
+            return QString::fromLatin1(label);
+    }
+    return {};
+}
+
+} // namespace
+
+void QuickApplication::setElevatedRelaunchHandler(std::function<void(const QStringList&)> handler) {
+    elevated_relaunch_handler_ = std::move(handler);
+}
+
 void QuickApplication::applyStartupRelaunchHandoff(const QString& page_name, bool reenable_present_diag) {
     // ADR 0033. Land on the page the pre-elevation instance was showing.
-    static const std::array<std::pair<const char*, ShellAdapter::Page>, 5> kNavLabels{{
-        {"Record", ShellAdapter::RecordPage},
-        {"Settings", ShellAdapter::SettingsPage},
-        {"Diagnostics", ShellAdapter::DiagnosticsPage},
-        {"Logs", ShellAdapter::LogsPage},
-        {"About", ShellAdapter::AboutPage},
-    }};
-    for (const auto& [label, page] : kNavLabels) {
+    for (const auto& [label, page] : kRelaunchNavLabels) {
         if (page_name.compare(QLatin1StringView(label), Qt::CaseInsensitive) == 0) {
             pending_landing_page_ = page;
             break;
         }
     }
 
-    // The relaunch succeeded (we are running), so it is now safe to persist the
-    // opt-in the user toggled before the restart. A UAC decline never gets here,
-    // which is the whole point of deferring the write.
+    // The opt-in is written by the switch itself, before the restart is ever
+    // offered, so the successor normally reads it back off disk and this does
+    // nothing. It stays because the write can fail: a settings store that could
+    // not be saved would otherwise turn an accepted UAC prompt into an elevated
+    // process with the feature off, which reads as the relaunch having done
+    // nothing at all.
     if (reenable_present_diag && !settings_.present_diagnostics_optin) {
         settings_.present_diagnostics_optin = true;
         saveAndPublishAppSettings(SettingsWriteIntent::UserEdit);
@@ -4332,17 +4366,54 @@ void QuickApplication::dispatchNotificationAction(notifications::NotificationAct
         // was not looking at when they pressed the button.
         sendNonFatalReport(QStringLiteral("notification"), payload);
         break;
+    case NotificationAction::RelaunchElevated:
+        requestElevatedRelaunch();
+        break;
     case NotificationAction::None:
     case NotificationAction::Discard:
-    case NotificationAction::RelaunchElevated:
     case NotificationAction::UndoPresetSwitch:
         // Discard needs no work beyond the dismissal the manager already did.
-        // Elevation and preset-undo depend on subsystems the Quick frontend does
-        // not own yet. Left unhandled deliberately rather than half-wired: a
-        // button that silently does the wrong thing is worse than one whose
-        // backing subsystem is still missing.
+        // Preset-undo depends on a subsystem the Quick frontend does not own
+        // yet. Left unhandled deliberately rather than half-wired: a button that
+        // silently does the wrong thing is worse than one whose backing
+        // subsystem is still missing.
         break;
     }
+}
+
+void QuickApplication::requestElevatedRelaunch() {
+    if (!elevated_relaunch_handler_) {
+        diagnostics::AppLog::warning(QStringLiteral("shell"),
+                                     QStringLiteral("Elevated relaunch requested but no handler is installed."));
+        return;
+    }
+
+    // The guard first, and the arming only afterwards. Asking the shell to close
+    // is what makes a recording refuse the restart -- the same chain the window
+    // close and the tray Quit pass through -- and doing it before anything is
+    // armed means a refused close leaves no pending relaunch behind to fire on
+    // some later, unrelated exit.
+    if (!shell_adapter_.requestClose()) {
+        diagnostics::AppLog::info(
+            QStringLiteral("shell"),
+            QStringLiteral("Elevated relaunch refused by a close guard; staying in this process."));
+        return;
+    }
+
+    services::RelaunchHandoff handoff;
+    // The page the user is on, so the elevated instance comes back where they
+    // left it rather than on Record.
+    handoff.page_name = RelaunchNavLabel(static_cast<ShellAdapter::Page>(shell_adapter_.currentPage()));
+    handoff.reenable_present_diag = settings_.present_diagnostics_optin;
+    elevated_relaunch_handler_(services::BuildRelaunchArgs(handoff));
+
+    // requestClose() answering "allow" quits through closeDecided rather than
+    // closeApproved, so the debounced writes have to be flushed here -- the same
+    // reason the tray Quit does it.
+    flushPendingPersists();
+    diagnostics::AppLog::info(QStringLiteral("shell"),
+                              QStringLiteral("Elevated relaunch armed (page=%1); restarting after shutdown.")
+                                  .arg(handoff.page_name.isEmpty() ? QStringLiteral("none") : handoff.page_name));
 }
 
 void QuickApplication::publishRecordingResultNotification(const UiRecordingResult& result) {

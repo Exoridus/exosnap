@@ -18,7 +18,7 @@ namespace {
 // this file cannot see, so both enums are also probed one past the end below:
 // a new enumerator that nobody named makes CompleteAndUnique fail, and a new
 // enumerator that WAS named makes the past-the-end probe fail and points here.
-constexpr auto kLastType = NotificationType::WindowCaptureStalled;
+constexpr auto kLastType = NotificationType::ElevationRequired;
 constexpr auto kLastAction = NotificationAction::SendReport;
 
 } // namespace

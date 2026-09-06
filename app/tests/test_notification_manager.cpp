@@ -604,20 +604,31 @@ TEST(AdvisoryStatusForTypeTest, EveryTypeResolvesToAKnownStatus) {
     // considered severity. The switch has no default, so a missing case is a
     // compiler warning first — this is the runtime backstop.
     constexpr NotificationType kAll[] = {
-        NotificationType::LowStorage,          NotificationType::Saved,
-        NotificationType::UnexpectedStop,      NotificationType::RecoveryAvailable,
-        NotificationType::UpdateAvailable,     NotificationType::FramesDropped,
-        NotificationType::SettingsRepaired,    NotificationType::PresetSwitched,
-        NotificationType::OverlayOmitted,      NotificationType::HotkeyConflict,
-        NotificationType::SettingsSaveFailed,  NotificationType::AudioSourceDegraded,
-        NotificationType::CaptureActionFailed, NotificationType::RecoveryProtectionUnavailable,
-        NotificationType::SettingsLoadFailed,  NotificationType::WindowCaptureStalled,
-        NotificationType::FrameCaptured,       NotificationType::PresetTransferFailed,
+        NotificationType::LowStorage,
+        NotificationType::Saved,
+        NotificationType::UnexpectedStop,
+        NotificationType::RecoveryAvailable,
+        NotificationType::UpdateAvailable,
+        NotificationType::FramesDropped,
+        NotificationType::SettingsRepaired,
+        NotificationType::PresetSwitched,
+        NotificationType::OverlayOmitted,
+        NotificationType::HotkeyConflict,
+        NotificationType::SettingsSaveFailed,
+        NotificationType::AudioSourceDegraded,
+        NotificationType::CaptureActionFailed,
+        NotificationType::RecoveryProtectionUnavailable,
+        NotificationType::SettingsLoadFailed,
+        NotificationType::WindowCaptureStalled,
+        NotificationType::FrameCaptured,
+        NotificationType::PresetTransferFailed,
+        NotificationType::AudioDefaultDeviceChanged,
+        NotificationType::ElevationRequired,
     };
     // The count is a reminder, not a proof: it compares this list against itself,
     // so a type added here and nowhere else still passes. FrameCaptured was
     // missing from it for exactly that reason.
-    ASSERT_EQ(std::size(kAll), 18u) << "a NotificationType was added without a severity decision";
+    ASSERT_EQ(std::size(kAll), 20u) << "a NotificationType was added without a severity decision";
 
     for (const NotificationType type : kAll) {
         const QString status = AdvisoryStatusForType(type);
@@ -625,6 +636,57 @@ TEST(AdvisoryStatusForTypeTest, EveryTypeResolvesToAKnownStatus) {
                     status == QStringLiteral("caution") || status == QStringLiteral("error"))
             << "unexpected status '" << status.toStdString() << "' for type " << static_cast<int>(type);
     }
+}
+
+// ── Elevated-relaunch offer ──────────────────────────────────────────────────
+//
+// The in-depth diagnostics opt-in is one setting behind two controls, so the
+// offer hangs off the setting's transition. These pin the three properties that
+// keep it from becoming a nag: it fires on the off -> on edge, once, and never
+// in a process that is already elevated.
+
+TEST(ElevatedRelaunchOffer, RaisedOnlyWhenAStandardProcessTurnsTheOptInOn) {
+    EXPECT_TRUE(ShouldOfferElevatedRelaunch(/*opt_in_now=*/true, /*opt_in_before=*/false, /*elevated=*/false));
+    // Already elevated: the traces start on the spot, there is nothing to offer.
+    EXPECT_FALSE(ShouldOfferElevatedRelaunch(true, false, true));
+    // Not an edge -- a refresh, a re-publish, any second look at a setting that
+    // was already on.
+    EXPECT_FALSE(ShouldOfferElevatedRelaunch(true, true, false));
+    // Turning it off asks for nothing.
+    EXPECT_FALSE(ShouldOfferElevatedRelaunch(false, true, false));
+    EXPECT_FALSE(ShouldOfferElevatedRelaunch(false, false, false));
+}
+
+TEST_F(NotificationManagerTest, ElevatedRelaunchOfferIsRaisedExactlyOncePerToggleOn) {
+    int recorded = 0;
+    QObject::connect(&mgr, &NotificationManager::eventRecorded, &mgr,
+                     [&recorded](const NotificationEvent&) { ++recorded; });
+
+    // One toggle-on in a standard process, then four states that must stay
+    // silent: the setting merely staying on, and the same edge while elevated.
+    const auto offer = [this](bool now, bool before, bool elevated) {
+        if (ShouldOfferElevatedRelaunch(now, before, elevated))
+            mgr.Enqueue(MakeElevatedRelaunchOfferEvent());
+    };
+    offer(/*now=*/true, /*before=*/false, /*elevated=*/false);
+    offer(true, true, false);
+    offer(true, true, false);
+    EXPECT_EQ(recorded, 1);
+
+    offer(false, true, false);
+    offer(true, false, true);
+    EXPECT_EQ(recorded, 1);
+
+    ASSERT_EQ(mgr.VisibleEvents().size(), 1);
+    const NotificationEvent& event = mgr.VisibleEvents()[0];
+    EXPECT_EQ(event.type, NotificationType::ElevationRequired);
+    EXPECT_EQ(event.title, QStringLiteral("Restart as administrator"));
+    EXPECT_EQ(event.action, NotificationAction::RelaunchElevated);
+    // Nothing is claimed to have failed: the setting is on and stays on.
+    EXPECT_EQ(AdvisoryStatusForType(event.type), QStringLiteral("caution"));
+    // Timed, not standing -- the condition it reports does not clear itself
+    // while the process runs, so a toast that never leaves would be permanent.
+    EXPECT_FALSE(NotificationManager::IsStanding(NotificationType::ElevationRequired));
 }
 
 } // namespace

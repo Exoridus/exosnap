@@ -133,6 +133,8 @@ int NotificationManager::DismissIntervalMs(NotificationType type) noexcept {
         return kDismissMs_SettingsLoadFailed;
     case NotificationType::WindowCaptureStalled:
         return kDismissMs_WindowCaptureStalled;
+    case NotificationType::ElevationRequired:
+        return kDismissMs_ElevationRequired;
     }
     return kDismissMs_Saved;
 }

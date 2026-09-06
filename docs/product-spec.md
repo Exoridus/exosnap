@@ -968,7 +968,8 @@ elevation-gated, never a hard dependency; the app degrades gracefully when not e
 are reported and are distinguishable from each other, because "no measurement" has three different
 causes the user can act on differently: `requiresOptIn`, `requiresElevation`, and available. Turning
 the opt-in on never prompts for elevation — a settings toggle is not consent to restart the
-application.
+application. It offers instead: a toast whose action performs the restart, refused by a running
+recording and safely declined at the UAC prompt (§11).
 
 **Known target-identity boundaries.** A saved Display or Region target is remembered by a
 hardware-stable identity (the monitor's device path plus its EDID vendor/product, and its serial
@@ -1228,6 +1229,7 @@ Where each condition is stated now:
 | Settings write failed | Toast |
 | Recording saved | Toast with the file name and, when the session ledger observed one or more problems, "N problem(s) observed" and **View diagnostics**; otherwise just the file name, with **Open folder** |
 | Frame saved | Toast, with the file name and **Open folder** |
+| In-depth diagnostics turned on in a standard process | Toast, with **Restart as administrator** (§11) |
 
 No toast is raised for a measured problem while a recording is in progress — interrupting the thing
 being recorded to report on it is the one place a notification cannot go. The notification hub
@@ -2040,13 +2042,30 @@ opt-in carried over from an elevated run into a standard process, and "On · ele
 DPC/ISR trace" when the traces are actually running. Turning it on is what adds the second row of live
 tiles above.
 
+Turning the opt-in on in a standard process — from this switch or from the Settings → Developer row,
+the offer belongs to the setting and not to either control, so it appears once per toggle-on and not
+once per control — raises a **"Restart as administrator"** toast: *"In-depth diagnostics need an
+elevated process. Restart ExoSnap as administrator to start the traces."* Its action restarts ExoSnap
+elevated through the ordinary close guards, so a running, preparing or finalizing recording refuses
+it and the app stays where it is. Nothing about the offer is a prompt: the setting is already written
+and stays written, the toast has to be pressed, and declining the UAC prompt behind it leaves the
+opt-in on and this process running — which is exactly the "On · not measuring · needs an admin
+relaunch" state the sub-text then reports. An already-elevated process raises no toast at all; it
+starts the traces on the spot.
+
 **Sparkline tiles.** Frame pacing, Encoder, Storage and Audio sync each carry a 24 px sparkline of the
 last 60 snapshots (12 s at 5 Hz), coloured by the tile's own value tone, with a dashed budget line
 where the owning check has a threshold. The detail line carries the whole-session figure — average for
 a rate, p99 for a latency; after Stop the same figures become the Last session facts.
 
-**Encoder tile.** Headline is the GPU name with its vendor prefix trimmed ("GeForce RTX 5070 Ti"); a
-backend badge (NVENC today) sits in the tile head; a codec row shows H.264 · HEVC · AV1 with the
+**Encoder tile.** Headline is the GPU name with its vendor prefix trimmed ("GeForce RTX 5070 Ti");
+below it the encode backend and, when the driver reports one, its version — "NVENC · driver 581.29",
+with no badge in the tile head. The driver is written the way its own vendor writes it, not the way
+Windows does: NVIDIA's WDDM number "32.0.15.8129" is shown as **581.29**, which is what its release
+notes, its control panel and its download pages say; every other vendor publishes the WDDM string
+itself and it is shown unchanged, and a driver that reports no version at all is simply not named.
+The container is not on this tile — it is a muxer fact, and it is stated by the pipeline card and the
+configuration summary. A codec row shows H.264 · HEVC · AV1 with the
 selected codec in an accent outline, an available-but-unselected codec in ink, and a codec this GPU
 cannot encode dimmed with a cross. The per-adapter capability matrix follows below, inside the
 collapsed **Hardware capabilities** reference row (§2) — health first, technical capability second.
@@ -2125,9 +2144,9 @@ that ended by itself withdraws the reading and with it the recommendation, for t
 present figures do below. The app does not run elevated by default. The setting behind it
 (`presentDiagnosticsOptIn`) can be turned on from either of its two controls — the Diagnostics
 header's in-depth switch (§11) or Settings → Developer's own row — whenever a recording is not
-running; turning it on does not itself relaunch the app, so the switch's sub-text states whether the
-gate has actually been cleared: "Off · needs an admin relaunch" before the next elevated launch, "On
-· elevated · PresentMon + DPC/ISR trace" once it has. The provider is never required, and the
+running; turning it on never relaunches the app by itself, it offers to (§11), so the switch's
+sub-text states whether the gate has actually been cleared: "Off · needs an admin relaunch" before
+the next elevated launch, "On · elevated · PresentMon + DPC/ISR trace" once it has. The provider is never required, and the
 portable build degrades gracefully.
 
 The reported present figures always describe the **current** attribution window and nothing else.
