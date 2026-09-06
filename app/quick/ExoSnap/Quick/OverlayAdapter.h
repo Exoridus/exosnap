@@ -50,6 +50,13 @@ class OverlayAdapter : public QObject {
     // target). The overlays fall back to their own screen in that case, matching
     // the Widgets behaviour.
     Q_PROPERTY(QRect recordedMonitorGeometry READ recordedMonitorGeometry NOTIFY changed FINAL)
+    // The same monitor's work area (excludes the taskbar and any docked appbar).
+    // Empty under the same condition as recordedMonitorGeometry above. Only the
+    // quick-controls pill uses this: it is the one overlay that accepts clicks,
+    // so it is the one overlay the taskbar must not cover. The other overlays
+    // are informational, click-through, and positioned over the recorded
+    // picture -- which includes the taskbar -- so they keep the full rectangle.
+    Q_PROPERTY(QRect recordedMonitorWorkArea READ recordedMonitorWorkArea NOTIFY changed FINAL)
     Q_PROPERTY(int recordingState READ recordingState NOTIFY changed FINAL)
 
     Q_PROPERTY(bool recordingOverlayActive READ recordingOverlayActive NOTIFY changed FINAL)
@@ -84,6 +91,7 @@ class OverlayAdapter : public QObject {
     void invalidateMonitorGeometry();
 
     [[nodiscard]] QRect recordedMonitorGeometry() const noexcept;
+    [[nodiscard]] QRect recordedMonitorWorkArea() const noexcept;
     [[nodiscard]] int recordingState() const noexcept;
     [[nodiscard]] bool recordingOverlayActive() const noexcept;
     [[nodiscard]] bool countdownOverlayActive() const noexcept;
@@ -100,7 +108,7 @@ class OverlayAdapter : public QObject {
     void changed();
 
   private:
-    // Returns true when the cached rectangle changed. Reporting rather than
+    // Returns true when either cached rectangle changed. Reporting rather than
     // emitting keeps every notify for one synchronize() in a single signal, sent
     // after all state is written.
     [[nodiscard]] bool refreshMonitorGeometry();
@@ -109,6 +117,9 @@ class OverlayAdapter : public QObject {
     PersistedAppSettings settings_;
 
     QRect recorded_monitor_geometry_;
+    // The same monitor's work area, refreshed in lockstep with the rectangle
+    // above -- one Win32 query answers both, and they share the same cache key.
+    QRect recorded_monitor_work_area_;
     // The native id the cached geometry was resolved from, so a 4 Hz
     // synchronize() does not call into the monitor API on every tick. Zero means
     // "no monitor target", which is a distinct state from "not yet resolved" —

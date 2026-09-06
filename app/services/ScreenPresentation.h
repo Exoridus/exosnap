@@ -19,6 +19,16 @@ struct ScreenPresentation {
     int height = 0;
     int origin_x = 0; // rcMonitor.left (virtual-screen coords)
     int origin_y = 0; // rcMonitor.top
+
+    // The monitor's work area (rcWork): the full rectangle minus the taskbar and
+    // any other appbar docked to this monitor. Same coordinate space as the
+    // fields above -- Win32 monitor coordinates, not Qt's QScreen::availableGeometry,
+    // which is a different query against a different screen object and must not
+    // be mixed with these.
+    int work_width = 0;
+    int work_height = 0;
+    int work_origin_x = 0;
+    int work_origin_y = 0;
 };
 
 // Returns an `available == false` result for a null or stale monitor handle

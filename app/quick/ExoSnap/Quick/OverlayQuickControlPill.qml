@@ -21,20 +21,24 @@ Window {
     property bool paused: false
     property bool expanded: true
 
-    // The RECORDED monitor, like the other four overlays — resolved in C++ from
-    // the live capture target (OverlayAdapter::recordedMonitorGeometry), never
-    // from QML screen enumeration.
+    // The RECORDED monitor's WORK area, resolved in C++ from the live capture
+    // target (OverlayAdapter::recordedMonitorWorkArea), never from QML screen
+    // enumeration.
     //
     // The Widgets class put this pill on the primary display because it had no
     // setMonitorGeometry() at all; the port carried that forward as an open
     // product question. It is settled now: controls belong on the screen the user
     // is looking at, which during a capture is the one being captured. The pill
     // is capture-excluded, so putting it there costs the recording nothing.
-    property rect monitorGeometry: Qt.rect(0, 0, 0, 0)
+    //
+    // The work area rather than the full monitor rectangle, unlike the other
+    // three overlays: this is the one overlay that is not click-through, so it
+    // is the one overlay the taskbar must not be allowed to cover.
+    property rect workAreaGeometry: Qt.rect(0, 0, 0, 0)
 
-    readonly property rect effectiveGeometry: root.monitorGeometry.width > 0
-                                              && root.monitorGeometry.height > 0
-                                              ? root.monitorGeometry
+    readonly property rect effectiveWorkArea: root.workAreaGeometry.width > 0
+                                              && root.workAreaGeometry.height > 0
+                                              ? root.workAreaGeometry
                                               : Qt.rect(Screen.virtualX, Screen.virtualY, Screen.width, Screen.height)
 
     // ── Overlay tokens (Widgets class, verbatim) ─────────────────────────────
@@ -80,11 +84,11 @@ Window {
            + (root.expanded ? root.buttonGap + 3 * root.buttonSize + 2 * root.buttonGap : 0)
     height: root.pad + root.buttonSize + root.pad
 
-    // Bottom-centre by default. Dragging the grip assigns x/y directly, which
+    // Bottom-centre of the work area by default. Dragging the grip assigns x/y directly, which
     // replaces these bindings — intentional: once the user has placed the pill,
     // it stays where they put it.
-    x: root.effectiveGeometry.x + (root.effectiveGeometry.width - width) / 2
-    y: root.effectiveGeometry.y + root.effectiveGeometry.height - height - 32
+    x: root.effectiveWorkArea.x + (root.effectiveWorkArea.width - width) / 2
+    y: root.effectiveWorkArea.y + root.effectiveWorkArea.height - height - 32
 
     CaptureExclusion {
         id: exclusion
@@ -241,8 +245,13 @@ Window {
                     const dx = mouse.x + root.x + grip.x - gripArea.pressGlobal.x
                     const dy = mouse.y + root.y + grip.y - gripArea.pressGlobal.y
                     gripArea.travelled += Math.abs(dx) + Math.abs(dy)
-                    root.x += dx
-                    root.y += dy
+                    // Clamped to the work area, not the full monitor rectangle:
+                    // the taskbar must stay off-limits to a drag exactly as it is
+                    // to the default position above, or the user could park the
+                    // pill right back under it.
+                    const area = root.effectiveWorkArea
+                    root.x = Math.max(area.x, Math.min(area.x + area.width - root.width, root.x + dx))
+                    root.y = Math.max(area.y, Math.min(area.y + area.height - root.height, root.y + dy))
                 }
                 onReleased: {
                     gripArea.dragging = false

@@ -262,6 +262,7 @@ TEST_F(OverlayAdapterTest, WindowTargetsYieldNoMonitorGeometry) {
     model_.SetState(UiRecordingState::Recording);
     publish();
     EXPECT_TRUE(adapter_.recordedMonitorGeometry().isEmpty());
+    EXPECT_TRUE(adapter_.recordedMonitorWorkArea().isEmpty());
 }
 
 // ---------------------------------------------------------------------------
@@ -292,13 +293,21 @@ class OverlayMonitorGeometryTest : public OverlayAdapterTest {
         presentation_ = MakePresentation(0, 0, 2560, 1440);
     }
 
-    static ScreenPresentation MakePresentation(int x, int y, int width, int height) {
+    // The work area defaults to the full monitor rectangle, matching a display
+    // with no taskbar docked to it -- the common case the geometry-only tests
+    // below don't care to distinguish.
+    static ScreenPresentation MakePresentation(int x, int y, int width, int height, QRect work_area = QRect()) {
         ScreenPresentation meta;
         meta.available = true;
         meta.width = width;
         meta.height = height;
         meta.origin_x = x;
         meta.origin_y = y;
+        const QRect work = work_area.isValid() ? work_area : QRect(x, y, width, height);
+        meta.work_width = work.width();
+        meta.work_height = work.height();
+        meta.work_origin_x = work.x();
+        meta.work_origin_y = work.y();
         return meta;
     }
 
@@ -308,6 +317,44 @@ class OverlayMonitorGeometryTest : public OverlayAdapterTest {
 
 TEST_F(OverlayMonitorGeometryTest, ResolvesTheRecordedMonitorRectangle) {
     publish();
+    EXPECT_EQ(adapter_.recordedMonitorGeometry(), QRect(0, 0, 2560, 1440));
+}
+
+// A monitor with no taskbar docked to it reports a work area identical to its
+// full rectangle -- the two properties must not silently diverge when there is
+// nothing to exclude.
+TEST_F(OverlayMonitorGeometryTest, WorkAreaMatchesGeometryWhenNothingIsDocked) {
+    publish();
+    EXPECT_EQ(adapter_.recordedMonitorWorkArea(), adapter_.recordedMonitorGeometry());
+}
+
+// The regression under test: a taskbar reduces the work area but not the full
+// rectangle, and the quick-controls pill reads only the former.
+TEST_F(OverlayMonitorGeometryTest, ATaskbarShrinksTheWorkAreaButNotTheGeometry) {
+    presentation_ = MakePresentation(0, 0, 2560, 1440, QRect(0, 0, 2560, 1392));
+    adapter_.invalidateMonitorGeometry();
+    publish();
+
+    EXPECT_EQ(adapter_.recordedMonitorGeometry(), QRect(0, 0, 2560, 1440));
+    EXPECT_EQ(adapter_.recordedMonitorWorkArea(), QRect(0, 0, 2560, 1392));
+    EXPECT_NE(adapter_.recordedMonitorWorkArea(), adapter_.recordedMonitorGeometry());
+}
+
+// Both rectangles share one cache: a change that only moves the work area (a
+// taskbar being resized without the monitor changing) must still take the same
+// dirty-flag path as a geometry change.
+TEST_F(OverlayMonitorGeometryTest, InvalidationRefreshesBothRectanglesTogether) {
+    publish();
+    ASSERT_EQ(adapter_.recordedMonitorWorkArea(), QRect(0, 0, 2560, 1440));
+
+    presentation_ = MakePresentation(0, 0, 2560, 1440, QRect(0, 0, 2560, 1392));
+    publish();
+    EXPECT_EQ(adapter_.recordedMonitorWorkArea(), QRect(0, 0, 2560, 1440))
+        << "nothing has invalidated the cache yet, so the stale work area is still what it reports";
+
+    adapter_.invalidateMonitorGeometry();
+    publish();
+    EXPECT_EQ(adapter_.recordedMonitorWorkArea(), QRect(0, 0, 2560, 1392));
     EXPECT_EQ(adapter_.recordedMonitorGeometry(), QRect(0, 0, 2560, 1440));
 }
 
@@ -353,6 +400,7 @@ TEST_F(OverlayMonitorGeometryTest, InvalidationCatchesAMovedOrigin) {
 TEST_F(OverlayMonitorGeometryTest, AnInvalidatedMonitorThatVanishedReportsNoRectangle) {
     publish();
     ASSERT_FALSE(adapter_.recordedMonitorGeometry().isEmpty());
+    ASSERT_FALSE(adapter_.recordedMonitorWorkArea().isEmpty());
 
     // The display was unplugged: the handle is still what the target names, and
     // the query no longer answers for it.
@@ -362,6 +410,7 @@ TEST_F(OverlayMonitorGeometryTest, AnInvalidatedMonitorThatVanishedReportsNoRect
 
     EXPECT_TRUE(adapter_.recordedMonitorGeometry().isEmpty())
         << "an empty rect is what makes the overlays fall back to their own screen";
+    EXPECT_TRUE(adapter_.recordedMonitorWorkArea().isEmpty());
 }
 
 } // namespace

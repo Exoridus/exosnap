@@ -973,6 +973,10 @@ qt_add_qml_module(record_controls_qml_tests
         # QCR-606: the HUD's token list is keyed on the content policy, not on
         # the measured values.
         OverlayDiagnostics.qml
+        # The one capture-excluded overlay that is not click-through, so its
+        # placement against the monitor's work area (not the full rectangle) is
+        # a correctness property rather than a layout preference.
+        OverlayQuickControlPill.qml
         PreviewMetricsOverlay.qml
         RecordActionButton.qml
         RecordSourceToggle.qml

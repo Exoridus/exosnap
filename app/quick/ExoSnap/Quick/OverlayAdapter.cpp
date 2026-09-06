@@ -29,6 +29,7 @@ void OverlayAdapter::setSource(const RecordViewModel* source) {
     // carrying the same native id value it happened to be cached against.
     geometry_native_id_ = 0;
     recorded_monitor_geometry_ = QRect();
+    recorded_monitor_work_area_ = QRect();
     synchronize();
 }
 
@@ -143,17 +144,21 @@ bool OverlayAdapter::refreshMonitorGeometry() {
     geometry_dirty_ = false;
 
     QRect resolved;
+    QRect resolved_work_area;
     if (native_id != 0) {
         const ScreenPresentation meta =
             presentation_provider_ ? presentation_provider_(native_id) : QueryScreenPresentation(native_id);
         if (meta.available && meta.width > 0 && meta.height > 0)
             resolved = QRect(meta.origin_x, meta.origin_y, meta.width, meta.height);
+        if (meta.available && meta.work_width > 0 && meta.work_height > 0)
+            resolved_work_area = QRect(meta.work_origin_x, meta.work_origin_y, meta.work_width, meta.work_height);
     }
 
-    if (resolved == recorded_monitor_geometry_)
+    if (resolved == recorded_monitor_geometry_ && resolved_work_area == recorded_monitor_work_area_)
         return false;
 
     recorded_monitor_geometry_ = resolved;
+    recorded_monitor_work_area_ = resolved_work_area;
     return true;
 }
 
@@ -168,6 +173,10 @@ void OverlayAdapter::setPresentationProviderForTesting(std::function<ScreenPrese
 
 QRect OverlayAdapter::recordedMonitorGeometry() const noexcept {
     return recorded_monitor_geometry_;
+}
+
+QRect OverlayAdapter::recordedMonitorWorkArea() const noexcept {
+    return recorded_monitor_work_area_;
 }
 
 int OverlayAdapter::recordingState() const noexcept {
