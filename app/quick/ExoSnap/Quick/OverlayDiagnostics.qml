@@ -28,6 +28,10 @@ import QtQuick
 Window {
     id: root
 
+    // See OverlayRecording.qml: set on the window itself so its identity holds
+    // regardless of what instantiates it.
+    objectName: "quickOverlayDiagnostics"
+
     // ── Business inputs ──────────────────────────────────────────────────────
     property rect monitorGeometry: Qt.rect(0, 0, 0, 0)
     property bool overlayActive: false

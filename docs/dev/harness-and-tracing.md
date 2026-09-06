@@ -226,6 +226,16 @@ Settings, Diagnostics, Logs and About are built by an asynchronous `Loader`
 `Loader.Ready` before grabbing — up to 8 s, logged if it expires — rather than
 racing the incubation and photographing an empty page.
 
+The recording, diagnostics, countdown and quick-controls overlays are the same
+kind of `Loader` (Main.qml), armed once a `--record-visual-state` puts the
+session anywhere past Ready and instantiated asynchronously from there -- no
+explicit wait before the overlay grab, so a scenario photographing one of them
+relies on the default capture delay being enough for that Loader to finish. The
+notification toast stays eagerly created, since a startup recovery notice can be
+enqueued before the QML engine has even loaded. A window none of this run's
+scenario ever armed is reported in the log as skipped "not instantiated" rather
+than silently absent from the grab.
+
 | Option | Selects |
 |---|---|
 | `--visual-test-size WxH` | Window size. The review baseline is `1440x1000` |

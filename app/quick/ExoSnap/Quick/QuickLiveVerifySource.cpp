@@ -46,6 +46,7 @@
 #include <QQuickWindow>
 #include <QRect>
 #include <QScreen>
+#include <QSet>
 #include <QVariant>
 
 #include <optional>
@@ -563,11 +564,14 @@ QJsonObject QuickLiveVerifySource::OverlaySnapshot() const {
     // composition -- which is exactly what this reports. The desktop appearance
     // stays a human gate; this makes the human gate the only remaining one.
     QJsonArray overlays;
+    QSet<QString> seen;
     for (QWindow* window : QGuiApplication::topLevelWindows()) {
         if (window == nullptr || !window->objectName().startsWith(QLatin1String("quickOverlay")))
             continue;
+        seen.insert(window->objectName());
         QJsonObject json;
         json.insert(QStringLiteral("objectName"), window->objectName());
+        json.insert(QStringLiteral("instantiated"), true);
         json.insert(QStringLiteral("visible"), window->isVisible());
         json.insert(QStringLiteral("exposed"), window->isExposed());
         if (window->screen() != nullptr)
@@ -580,6 +584,24 @@ QJsonObject QuickLiveVerifySource::OverlaySnapshot() const {
             json.insert(QStringLiteral("native"),
                         NativeFactsJson(diagnostics::QueryNativeWindowFacts(reinterpret_cast<void*>(window->winId()))));
         }
+        overlays.append(json);
+    }
+
+    // Four of the five overlays are Loader-deferred (Main.qml) and may not have
+    // been instantiated yet. Reported here as `instantiated: false` rather than
+    // left out: a snapshot that only lists what topLevelWindows() currently
+    // holds cannot be told apart from one that dropped a window it should have
+    // found, which is the exact ambiguity that once let this check cover four
+    // windows while its caller believed it covered five.
+    for (const QString& object_name : observability::AllOverlayObjectNames()) {
+        if (seen.contains(object_name))
+            continue;
+        QJsonObject json;
+        json.insert(QStringLiteral("objectName"), object_name);
+        json.insert(QStringLiteral("instantiated"), false);
+        json.insert(QStringLiteral("visible"), false);
+        json.insert(QStringLiteral("exposed"), false);
+        json.insert(QStringLiteral("nativeWindowCreated"), false);
         overlays.append(json);
     }
 
@@ -782,11 +804,14 @@ QJsonObject QuickLiveVerifySource::EnvironmentSnapshot() const {
 
 QJsonObject QuickLiveVerifySource::WindowsSnapshot() const {
     std::vector<observability::WindowFacts> windows;
+    QSet<QString> seen_overlays;
     for (QWindow* window : QGuiApplication::topLevelWindows()) {
         if (window == nullptr)
             continue;
         const bool is_root = root_window_ != nullptr && window == static_cast<QWindow*>(root_window_.data());
         const QString object_name = window->objectName();
+        if (object_name.startsWith(QLatin1String("quickOverlay")))
+            seen_overlays.insert(object_name);
         // Every top-level window this process owns is reported, including one
         // that matches no known role. A snapshot that filtered by objectName
         // prefix -- which overlay.snapshot does -- cannot show the defect Wave B
@@ -807,6 +832,19 @@ QJsonObject QuickLiveVerifySource::WindowsSnapshot() const {
             facts.native =
                 NativeFactsJson(diagnostics::QueryNativeWindowFacts(reinterpret_cast<void*>(window->winId())));
         }
+        windows.push_back(std::move(facts));
+    }
+
+    // Four of the five overlays are Loader-deferred (Main.qml) and may not exist
+    // yet. Reported as `instantiated: false` rather than left out -- see
+    // OverlaySnapshot() above, which makes the same distinction.
+    for (const QString& object_name : observability::AllOverlayObjectNames()) {
+        if (seen_overlays.contains(object_name))
+            continue;
+        observability::WindowFacts facts;
+        facts.role = observability::WindowRoleForObjectName(object_name, /*is_root=*/false);
+        facts.object_name = object_name;
+        facts.instantiated = false;
         windows.push_back(std::move(facts));
     }
     return observability::WindowSnapshotToJson(windows, QCoreApplication::applicationPid());
