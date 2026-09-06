@@ -9,6 +9,7 @@
 #include "diagnostics/FixActionDispatcher.h"
 #include "diagnostics/SessionLedger.h"
 #include "viewmodels/RecordViewModel.h"
+#include "visual_tests/CanonicalMachine.h"
 #include "visual_tests/DiagnosticsLiveScenario.h"
 
 #include <gtest/gtest.h>
@@ -787,4 +788,67 @@ TEST(DiagnosticsController, TheLastSessionIsHeldUntilTheNextRecording) {
     controller.SetLastSession(BuildLastSession(MakeResultFor(60), {}, FrozenLedger()));
     EXPECT_TRUE(controller.lastSession().valid);
     EXPECT_EQ(controller.lastSession().problems, 1);
+}
+
+// ── The canonical machine every Diagnostics capture starts from ─────────────────
+//
+// A harness run has no capability probe and no enumerated adapter, so the page
+// reported a machine that cannot encode anything: a missing annotation and two
+// unavailable codecs, in every capture, whatever the scenario was about. These
+// assert the fixture is healthy in the product's own vocabulary rather than in a
+// second, hand-written one -- each of them fails against an empty capability set,
+// which is exactly what the captures used to be taken against.
+
+TEST(CanonicalMachineFixture, EveryCodecTheProductOffersIsEncodableOnIt) {
+    const capability::CapabilitySet caps = visual::CanonicalMachineCapabilities();
+
+    // Probed, or every consumer treats the answers below as assumptions and the
+    // page says so instead of showing them.
+    EXPECT_TRUE(caps.probed);
+    EXPECT_TRUE(caps.nvenc_dll_present);
+
+    for (const capability::VideoCodec codec :
+         {capability::VideoCodec::H264, capability::VideoCodec::Hevc, capability::VideoCodec::Av1}) {
+        const auto it = caps.video_codecs.find(codec);
+        ASSERT_NE(it, caps.video_codecs.end()) << "no annotation for video codec " << static_cast<int>(codec);
+        EXPECT_TRUE(capability::IsSelectable(it->second))
+            << "video codec " << static_cast<int>(codec) << " is not encodable on the fixture";
+    }
+
+    // The audio side of the same blocker: an unannotated audio codec raised
+    // rec.004 in every capture.
+    const auto opus = caps.audio_codecs.find(capability::AudioCodec::Opus);
+    ASSERT_NE(opus, caps.audio_codecs.end());
+    EXPECT_TRUE(capability::IsSelectable(opus->second));
+}
+
+TEST(CanonicalMachineFixture, TheEncoderTileNamesThePartAndTheDriver) {
+    const capability::CapabilitySet caps = visual::CanonicalMachineCapabilities();
+    const capability::RuntimeCapabilitySnapshot snapshot = visual::CanonicalMachineRuntimeSnapshot();
+
+    ReadinessTileInputs inputs;
+    inputs.data_ready = true;
+    inputs.gpu_adapter_name = snapshot.nvidia.adapter_name;
+    inputs.caps = &caps;
+    inputs.driver_version = VendorDriverVersion(snapshot.adapter.vendor_id, snapshot.adapter.driver_version);
+
+    const auto tiles = BuildReadinessTiles(inputs);
+    ASSERT_FALSE(tiles.empty());
+    EXPECT_EQ(tiles[0].key, "encoder");
+    EXPECT_EQ(tiles[0].value, "GeForce RTX 5070 Ti");
+    EXPECT_NE(tiles[0].sub.find("581.29"), std::string::npos) << "sub-line was: " << tiles[0].sub;
+
+    // The codec row is the fixture's answer, not the tile's: an unprobed machine
+    // renders the same three chips crossed out, which is what every capture
+    // showed. All three encodable, and none of them marked unavailable.
+    ASSERT_EQ(tiles[0].chips.size(), 3U);
+    for (const auto& chip : tiles[0].chips)
+        EXPECT_TRUE(chip.available) << chip.label << " is not encodable on the fixture";
+}
+
+TEST(CanonicalMachineFixture, OneAdapterIsEnumeratedSoTheHardwareRowHasSomethingToSummarise) {
+    const auto adapters = visual::CanonicalMachineAdapters();
+    ASSERT_EQ(adapters.size(), 1U);
+    EXPECT_FALSE(adapters.front().name.empty());
+    EXPECT_FALSE(visual::CanonicalMachineAdapterCapabilities().empty());
 }

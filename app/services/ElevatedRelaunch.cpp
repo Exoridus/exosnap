@@ -75,5 +75,4 @@ RelaunchResult RelaunchAsAdmin(const QString& exe_path, const QStringList& args)
 #endif
 }
 
-
 } // namespace exosnap::services

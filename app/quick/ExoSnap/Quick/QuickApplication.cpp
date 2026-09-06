@@ -30,6 +30,7 @@
 #include "models/WindowPresencePolicy.h"
 #include "ui/CodecLabels.h"
 #include "ui/theme/ExoSnapMetrics.h"
+#include "visual_tests/CanonicalMachine.h"
 #include "visual_tests/DiagnosticsLiveScenario.h"
 #include "visual_tests/RecordVisualStateNames.h"
 
@@ -1173,7 +1174,10 @@ void QuickApplication::startCapabilityProbe() {
 void QuickApplication::onCapabilitiesReady(const capability::CapabilitySet& capabilities) {
     diagnostics::AppLog::info(QStringLiteral("perf"),
                               QStringLiteral("caps-probe-end %1 ms").arg(diagnostics::StartupClock().elapsed()));
-    capabilities_ = capabilities;
+    // A harness run owns its machine for the life of the process: the real probe
+    // lands a second or two into a capture, and letting it through would replace
+    // the fixture with whatever GPU this developer happens to have.
+    capabilities_ = canonical_machine_.has_value() ? *canonical_machine_ : capabilities;
     recording_coordinator_->OnCapabilitiesReady(capabilities_);
     // Everything downstream reads the capability set: the Device matrix, the
     // Settings codec lists and the Diagnostics recommendations were all built
@@ -3019,7 +3023,48 @@ UiRecordingResult MakeVisualRecordingResult() {
 
 } // namespace
 
+// The Diagnostics page describes the machine it runs on, and a harness run has
+// none: the capability probe has not landed, no adapter has been enumerated, and
+// the selected codecs therefore carry no annotation. Every capture opened with
+// "3 things to fix before recording" for that reason alone. This puts one healthy
+// machine underneath every diagnostics scenario, so each one only has to state
+// the single deviation it is about.
+void QuickApplication::applyCanonicalMachineFixture() {
+    const QStringList args = QCoreApplication::arguments();
+    if (!args.contains(QStringLiteral("--visual-test")))
+        return;
+    // Every diagnostics-* scenario lands on the Diagnostics page, including the
+    // ones that seed no live pipeline at all (the container/codec blocker, the
+    // bare page). The page index is the harness's own vocabulary for it.
+    const int page_argument = args.indexOf(QStringLiteral("--visual-page"));
+    const bool on_diagnostics =
+        page_argument >= 0 && page_argument + 1 < args.size() &&
+        args.at(page_argument + 1).trimmed() == QString::number(static_cast<int>(ShellAdapter::DiagnosticsPage));
+    if (!on_diagnostics && qgetenv("EXOSNAP_VISUAL_DIAG_LIVE").isEmpty() &&
+        qgetenv("EXOSNAP_VISUAL_DIAG_SCENARIO").isEmpty()) {
+        return;
+    }
+
+    canonical_machine_ = visual::CanonicalMachineCapabilities();
+    capabilities_ = *canonical_machine_;
+    recording_coordinator_->OnCapabilitiesReady(capabilities_);
+    device_adapter_.setCapabilitySet(capabilities_);
+    // Through the same apply path a real scan uses, and marked scanned, so the
+    // Hardware capabilities row summarises the adapter instead of reporting
+    // "Not scanned yet" and a later ensureScanned() does not enumerate this
+    // developer's real GPU into the capture.
+    device_adapter_.setAdaptersForTest(visual::CanonicalMachineAdapters(),
+                                       visual::CanonicalMachineAdapterCapabilities());
+    seedVideoCodecFromCapabilities();
+    settings_adapter_.setCapabilities(capabilities_);
+    refreshDiagnosticsData();
+}
+
 void QuickApplication::applyDiagnosticsVisualScenarios() {
+    // First, so a scenario's own deviation is added ON TOP of a healthy machine
+    // rather than on top of nothing.
+    applyCanonicalMachineFixture();
+
     const QByteArray log_scenario = qgetenv("EXOSNAP_VISUAL_LOG_SCENARIO");
     if (!log_scenario.isEmpty()) {
         const QDateTime base(QDate(2026, 6, 8), QTime(14, 22, 31, 123));

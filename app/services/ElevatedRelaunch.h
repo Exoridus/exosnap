@@ -52,5 +52,4 @@ inline constexpr const char* kReenablePresentDiagFlag = "--reenable-present-diag
 // call this during an active recording (the caller enforces that guard).
 RelaunchResult RelaunchAsAdmin(const QString& exe_path, const QStringList& args);
 
-
 } // namespace exosnap::services

@@ -365,6 +365,11 @@ class QuickApplication {
     // content so a --visual-test capture never photographs whatever this
     // machine happened to be doing. Never creates or drives a window.
     void applyDiagnosticsVisualScenarios();
+    // Harness-only. Replaces the empty startup capability set with one healthy
+    // machine before a Diagnostics scenario adds its own deviation, so a capture
+    // shows the product's answer rather than the fixture's poverty. No-op outside
+    // a --visual-test run on the Diagnostics page.
+    void applyCanonicalMachineFixture();
     void applyShellVisualScenarios();
     void initializeEditArea();
     // Close guards: samples what is in flight and applies the effects the user
@@ -729,6 +734,10 @@ class QuickApplication {
     // healthy environment — which is exactly what every `diagnostics__issues`
     // capture in the earlier baselines silently photographed.
     bool diagnostics_visual_scenario_active_ = false;
+    // Harness-only. Set once the canonical machine has replaced the capability
+    // set; the async probe's completion path re-applies it rather than handing
+    // the surfaces this developer's real GPU a second or two into the capture.
+    std::optional<capability::CapabilitySet> canonical_machine_;
     bool reapplying_visual_scenarios_ = false;
     // The relaunch handoff is applied before load(), so the page is parked here
     // and handed to the shell as its STARTING destination (`landingPage`) when
