@@ -1,0 +1,105 @@
+name: Cache Cleanup
+
+on:
+  pull_request:
+    types: [closed]
+  schedule:
+    - cron: '0 3 * * 0' # Sunday 03:00 UTC
+  workflow_dispatch:
+
+# ---------------------------------------------------------------------------
+# GitHub Actions caches are scoped to the ref that wrote them. A pull_request
+# run writes to refs/pull/<N>/merge, and only that PR's own runs can ever read
+# that scope back -- no other PR, and not main. Once the PR closes, those
+# entries can never be read again by anything, but GitHub does not delete them:
+# they just sit there until LRU eviction reclaims space at the repository's
+# 10 GB cache cap. With enough closed PRs accumulating dead scopes, that
+# eviction started reaching past them into main's own scope
+# (refs/heads/main) and evicting its live sccache entries instead -- the one
+# scope every PR's build actually restores from, so evicting it cost every
+# subsequent PR a cold sccache run.
+#
+# So this workflow deletes what it can prove is unreachable, immediately, on
+# two paths:
+#   - a merged or closed PR's own scope, right away, since nothing can read it
+#     again the moment the PR closes;
+#   - everything that is not main's scope, weekly, as a backstop for anything
+#     the per-PR cleanup missed (a PR closed before this workflow existed, a
+#     run that failed, workflow_dispatch for an ad hoc sweep).
+# main's scope is the one thing this workflow must never delete: it is the
+# only scope every PR's build reads sccache from, and it is exactly what the
+# LRU eviction was destroying before this existed.
+#
+# No actions/checkout: every step here only calls the GitHub API through gh,
+# never reads or writes anything in the repository tree.
+# ---------------------------------------------------------------------------
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  cleanup:
+    name: cleanup
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: cache-cleanup
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      # A PR that never triggered a cached build (docs-only, closed unmerged
+      # before CI ran) has no cache entries at all, and `gh cache delete --all`
+      # exits 1 on an empty scope by default -- --succeed-on-no-caches makes
+      # that ordinary case a no-op instead of a failed job.
+      - name: Delete this pull request's cache scope
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          gh cache delete --all --succeed-on-no-caches \
+            --ref "refs/pull/${{ github.event.pull_request.number }}/merge"
+
+      # The weekly backstop: delete every cache entry outside main's scope,
+      # regardless of which PR wrote it or whether that PR's own cleanup step
+      # already ran. `gh cache list --limit` pages the underlying 100/page API
+      # on its own, but a single listing can still race entries created while
+      # this sweep runs -- so the list-then-delete round repeats until a
+      # listing comes back with nothing left to delete, capped so a runaway
+      # rate of new non-main entries cannot make this loop forever.
+      - name: Sweep every non-main cache scope
+        if: github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          total_deleted=0
+          total_bytes=0
+          max_rounds=30
+          round=1
+          while [ "$round" -le "$max_rounds" ]; do
+            entries=$(gh cache list --limit 1000 --json id,ref,key,sizeInBytes \
+              --jq '[.[] | select(.ref != "refs/heads/main")]')
+            remaining=$(echo "$entries" | jq 'length')
+            if [ "$remaining" -eq 0 ]; then
+              break
+            fi
+
+            round_bytes=$(echo "$entries" | jq '[.[].sizeInBytes] | add')
+            echo "Round $round: deleting $remaining non-main cache entries ($round_bytes bytes)."
+
+            echo "$entries" | jq -r '.[].id' | while read -r id; do
+              gh cache delete "$id"
+            done
+
+            total_deleted=$((total_deleted + remaining))
+            total_bytes=$((total_bytes + round_bytes))
+            round=$((round + 1))
+          done
+
+          if [ "$round" -gt "$max_rounds" ]; then
+            echo "::warning::Cache sweep stopped after $max_rounds rounds; non-main entries may remain."
+          fi
+
+          remaining_main=$(gh cache list --limit 1000 --json id --jq 'length')
+          echo "Deleted $total_deleted cache entries, freed approximately $total_bytes bytes."
+          echo "Remaining entries (main scope only, by construction): $remaining_main."
