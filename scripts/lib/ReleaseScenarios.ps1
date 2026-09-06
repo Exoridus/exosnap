@@ -1048,6 +1048,18 @@ function Get-ReleaseScenarioCatalog {
         Run                 = {
             param($ctx)
             $session = & $ctx.EnsureSession
+            # Present diagnostics are this gate's own precondition, not something it
+            # measures: with the opt-in off (the default) or the session unelevated,
+            # environment.snapshot can never report exclusiveFullscreen no matter what
+            # the probe does. Checked before the probe or the human gate runs at all --
+            # an unmet requirement is UNAVAILABLE (rule 3), never a FAIL earned by a
+            # scenario nobody could have passed.
+            $precondition = (Invoke-LiveVerifyCommand -Connection $session.Connection -Command 'environment.snapshot').result.present
+            if (-not $precondition.available) {
+                return @{ Result = 'UNAVAILABLE'
+                    Message      = "present diagnostics are unavailable ($($precondition.availability)); run REL-PRESENT-002 first"
+                }
+            }
             $gate = @{
                 Id                = 'REL-CAP-FSE-001'
                 Title             = 'Put a real application into true exclusive fullscreen'

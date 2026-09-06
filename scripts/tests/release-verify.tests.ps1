@@ -21,6 +21,7 @@ $ErrorActionPreference = 'Stop'
 $scriptRoot = Split-Path -Parent $PSScriptRoot
 Import-Module (Join-Path $scriptRoot 'lib/LiveVerifyState.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $scriptRoot 'lib/EnvironmentOrchestrator.psm1') -Force -DisableNameChecking
+Import-Module (Join-Path $scriptRoot 'lib/LiveVerifyClient.psm1') -Force -DisableNameChecking
 
 $script:Passed = 0
 $script:Failed = 0
@@ -836,6 +837,44 @@ Test-Case 'no scenario reads a field the contract does not cover' {
     }
     Assert-True ($code -notmatch "moveToScreen'\s+-Parameters\s+@\{\s*index") `
         'window.moveToScreen takes a screen NAME, never an index'
+}
+
+# A connection whose Request() answers whatever the test puts in $script:FakeReply,
+# so a scenario's Run block can be exercised through the real Invoke-LiveVerifyCommand
+# without a pipe or an application. Matches the fixture in
+# live-verify-response-shape.tests.ps1.
+function New-FakeLiveVerifyConnection {
+    $connection = [pscustomobject]@{}
+    Add-Member -InputObject $connection -MemberType ScriptMethod -Name Request -Value {
+        param($command, $parameters, $timeoutMs)
+        return $script:FakeReply
+    }
+    return $connection
+}
+
+Test-Case 'REL-CAP-FSE-001 reports UNAVAILABLE, not FAIL, when its own precondition is unmet' {
+    # Observed in a dry run: with present diagnostics not opted in, this gate ran
+    # its human-gate machinery anyway and reported FAIL with "present diagnostics
+    # are unavailable (requiresOptIn); run REL-PRESENT-002 first" -- rule 3 names
+    # this exactly: an unmet requirement is not a failure.
+    . (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
+    $entry = (Get-ReleaseScenarioCatalog) | Where-Object { $_.Id -eq 'REL-CAP-FSE-001' }
+    Assert-True ($null -ne $entry) 'REL-CAP-FSE-001 must exist in the catalog'
+
+    $script:FakeReply = [pscustomobject]@{
+        id     = 1
+        ok     = $true
+        result = [pscustomobject]@{
+            present = [pscustomobject]@{ available = $false; availability = 'requiresOptIn' }
+        }
+    }
+    $fakeSession = [pscustomobject]@{ Connection = (New-FakeLiveVerifyConnection) }
+    $ctx = [pscustomobject]@{ EnsureSession = { $fakeSession } }
+
+    $outcome = & $entry.Run $ctx
+    Assert-Equal 'UNAVAILABLE' $outcome.Result 'an unmet precondition must never reach FAIL'
+    Assert-True ($outcome.Message -match 'REL-PRESENT-002') `
+        'the message must point at the gate that establishes the precondition'
 }
 
 Test-Case 'a momentarily unrendered publish is not a frozen preview' {
