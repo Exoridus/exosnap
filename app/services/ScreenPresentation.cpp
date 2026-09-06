@@ -29,6 +29,10 @@ ScreenPresentation QueryScreenPresentation(std::uintptr_t native_id) {
     meta.height = info.rcMonitor.bottom - info.rcMonitor.top;
     meta.origin_x = info.rcMonitor.left;
     meta.origin_y = info.rcMonitor.top;
+    meta.work_width = info.rcWork.right - info.rcWork.left;
+    meta.work_height = info.rcWork.bottom - info.rcWork.top;
+    meta.work_origin_x = info.rcWork.left;
+    meta.work_origin_y = info.rcWork.top;
 #else
     (void)native_id;
 #endif

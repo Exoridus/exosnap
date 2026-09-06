@@ -287,7 +287,7 @@ ApplicationWindow {
     // while still being kept out of the recording.
     OverlayQuickControlPill {
         objectName: "quickOverlayQuickControls"
-        monitorGeometry: root.overlays.recordedMonitorGeometry
+        workAreaGeometry: root.overlays.recordedMonitorWorkArea
         overlayActive: root.overlays.quickControlsActive
         paused: root.recordViewModel.paused
         onPauseResumeRequested: {

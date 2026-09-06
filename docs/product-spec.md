@@ -1741,7 +1741,11 @@ release (0.11 per ADR 0022).
   the recorded monitor, and an **opt-in** interactive quick-control pill (off by default). All four
   are capture-excluded, as is the toast window above them — five capture-excluded windows in total.
   The first three are click-through; the quick-control pill (ADR 0016) and the toast stack are
-  interactive by design and take mouse input.
+  interactive by design and take mouse input. The other three sit over the recorded picture, which
+  includes the taskbar, so they use the monitor's full rectangle; the quick-control pill instead
+  stays inside the monitor's **work area**, above the taskbar, by default and while being dragged,
+  because it is the one overlay that accepts clicks, so it is the one overlay the taskbar must never
+  cover.
   - The **recording pill** carries a state glyph plus the configured text. There is no REC or PAUSED
     word — the pill only appears while a capture is live, so the glyph carries the state: a coral dot
     while recording, an amber pause symbol while held, an amber warning symbol once **measured**
