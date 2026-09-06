@@ -535,8 +535,9 @@ function Get-ReleaseScenarioCatalog {
                 'blocked by design -- not merely discouraged.'
                 Do                = @(
                     'Close any running ExoSnap.',
-                    "Start an ELEVATED PowerShell and run:  & '$exe' --live-verify-control $runId",
-                    'Accept the UAC prompt.',
+                    'Open PowerShell as administrator -- the UAC prompt appears HERE, when the shell ' +
+                    'is elevated. The command below inherits that elevation and raises no prompt of its own.',
+                    "In that elevated shell, run:  & '$exe' --live-verify-control $runId",
                     'Leave a window presenting on the primary display (a video, a game, any animation).'
                 )
                 Expected          = 'ExoSnap starts elevated with its control channel armed, and something on ' +
