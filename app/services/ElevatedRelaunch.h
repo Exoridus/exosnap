@@ -51,4 +51,17 @@ inline constexpr const char* kReenablePresentDiagFlag = "--reenable-present-diag
 // call this during an active recording (the caller enforces that guard).
 RelaunchResult RelaunchAsAdmin(const QString& exe_path, const QStringList& args);
 
+// ADR 0033: withdraw the present-diagnostics opt-in after a relaunch that never
+// became elevated (UAC declined, or ShellExecuteEx failed outright). The
+// opt-in was written before the relaunch was attempted, on the assumption that
+// the elevated successor would be the one measuring it; when no successor
+// exists, leaving it on would read as an active feature that nothing is
+// running. A no-op (returns true) when the opt-in is already off.
+//
+// `settings_file_path` empty resolves the default settings location the same
+// way AppSettingsStore's own default constructor does (honouring
+// EXOSNAP_CONFIG_DIR), which is the store the relaunching process itself read
+// from. Returns false only when the settings store could not be saved.
+bool WithdrawPresentDiagnosticsOptIn(const QString& settings_file_path = QString());
+
 } // namespace exosnap::services

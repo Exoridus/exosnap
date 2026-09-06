@@ -8,6 +8,7 @@
 
 #include <string>
 
+#include "services/ElevatedRelaunch.h"
 #include "settings/AppSettingsStore.h"
 
 namespace exosnap {
@@ -969,6 +970,48 @@ TEST(AppSettingsStoreTest, AppSettingsStore_SaveRemovesTheLegacyThemeIdKey) {
     s.beginGroup(QStringLiteral("appearance"));
     EXPECT_FALSE(s.contains(QStringLiteral("theme_id")));
     s.endGroup();
+}
+
+// ---------------------------------------------------------------------------
+// services::WithdrawPresentDiagnosticsOptIn (ADR 0033: a declined or failed
+// elevated relaunch clears the opt-in that triggered it).
+// ---------------------------------------------------------------------------
+
+TEST(WithdrawPresentDiagnosticsOptInTest, ClearsAnEnabledOptIn) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+    const QString settings_path = TempSettingsPath(temp_dir);
+
+    AppSettingsStore store(settings_path);
+    PersistedAppSettings settings;
+    settings.present_diagnostics_optin = true;
+    ASSERT_TRUE(store.Save(settings));
+
+    EXPECT_TRUE(services::WithdrawPresentDiagnosticsOptIn(settings_path));
+    EXPECT_FALSE(store.Load().present_diagnostics_optin);
+}
+
+TEST(WithdrawPresentDiagnosticsOptInTest, NoOpWhenAlreadyOff) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+    const QString settings_path = TempSettingsPath(temp_dir);
+
+    AppSettingsStore store(settings_path);
+    ASSERT_TRUE(store.Save(PersistedAppSettings{}));
+
+    EXPECT_TRUE(services::WithdrawPresentDiagnosticsOptIn(settings_path));
+    EXPECT_FALSE(store.Load().present_diagnostics_optin);
+}
+
+TEST(WithdrawPresentDiagnosticsOptInTest, MissingFileIsHarmless) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+    const QString settings_path = TempSettingsPath(temp_dir);
+
+    // No file has been written yet: Load() reports the built-in default (off),
+    // so there is nothing to withdraw and nothing gets written.
+    EXPECT_TRUE(services::WithdrawPresentDiagnosticsOptIn(settings_path));
+    EXPECT_FALSE(QFileInfo::exists(settings_path));
 }
 
 } // namespace exosnap

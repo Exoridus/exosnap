@@ -211,8 +211,12 @@ class ProductionBootstrap {
     }
 
     // Releases the single-instance mutex and relaunches via ShellExecuteEx
-    // ("runas", UAC). A UAC decline is a normal, graceful outcome -- stay
-    // non-elevated, no retry loop. No-op when nothing was requested.
+    // ("runas", UAC). A UAC decline is a normal, graceful outcome -- no retry
+    // loop, and the process withdraws the present-diagnostics opt-in that
+    // triggered the relaunch (ADR 0033) before coming back non-elevated with the
+    // same handoff, so the user is never left with no ExoSnap running and the
+    // switch reads Off again. A ShellExecuteEx failure is handled the same way.
+    // No-op when nothing was requested.
     void RunPendingElevatedRelaunch();
 
     // The normal-shutdown sequence. Idempotent; the destructor calls it.

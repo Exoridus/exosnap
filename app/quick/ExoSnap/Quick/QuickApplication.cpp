@@ -2571,8 +2571,9 @@ void QuickApplication::wireSettingsCommands() {
         // Raised from the SETTING's transition rather than from either control,
         // so the Diagnostics header switch and the Settings developer row offer
         // the restart exactly once between them. Still not a prompt: the toast
-        // has to be pressed, and declining the UAC prompt behind it leaves the
-        // opt-in on and this process running.
+        // has to be pressed, and declining the UAC prompt behind it withdraws
+        // the opt-in and brings this process back non-elevated (ADR 0033) -- the
+        // switch reads Off again, and a later click raises the offer once more.
         if (notifications::ShouldOfferElevatedRelaunch(settings_.present_diagnostics_optin, previous_present_optin,
                                                        elevation_provider_.IsElevated())) {
             notifications::NotificationEvent event = notifications::MakeElevatedRelaunchOfferEvent();

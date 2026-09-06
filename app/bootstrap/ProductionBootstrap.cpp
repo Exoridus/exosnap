@@ -5,6 +5,7 @@
 #include <QDir>
 #include <QFile>
 #include <QGuiApplication>
+#include <QProcess>
 
 #include <utility>
 
@@ -311,10 +312,31 @@ void ProductionBootstrap::RunPendingElevatedRelaunch() {
 
     const services::RelaunchResult relaunch_result =
         services::RelaunchAsAdmin(QCoreApplication::applicationFilePath(), elevated_relaunch_args_);
+    if (relaunch_result == services::RelaunchResult::Launched)
+        return;
+
     if (relaunch_result == services::RelaunchResult::UserDeclined) {
         qInfo().noquote() << "Elevated relaunch cancelled by user (UAC declined).";
-    } else if (relaunch_result == services::RelaunchResult::Failed) {
+    } else {
         qWarning().noquote() << "Elevated relaunch failed (ShellExecuteEx).";
+    }
+
+    // ADR 0033: a decline or a ShellExecuteEx failure must not strand the user
+    // with no ExoSnap running, and must not leave the opt-in that triggered the
+    // relaunch on with nothing elevated to measure it. Withdraw it first, so the
+    // recovery relaunch's own startup handoff parsing reads it as already off.
+    services::WithdrawPresentDiagnosticsOptIn();
+
+    // Carry the page across, same as a successful elevation would, but drop the
+    // reenable-present-diagnostics flag: it was written for the elevated
+    // successor that never came up, and the opt-in was just cleared above --
+    // applyStartupRelaunchHandoff() would otherwise read the stale flag and
+    // turn the withdrawn opt-in straight back on.
+    services::RelaunchHandoff recovery_handoff = services::ParseRelaunchArgs(elevated_relaunch_args_);
+    recovery_handoff.reenable_present_diag = false;
+    if (!QProcess::startDetached(QCoreApplication::applicationFilePath(),
+                                 services::BuildRelaunchArgs(recovery_handoff))) {
+        qWarning().noquote() << "Non-elevated recovery relaunch failed to start after a declined/failed elevation.";
     }
 #endif
 }
