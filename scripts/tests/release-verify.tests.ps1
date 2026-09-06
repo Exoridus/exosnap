@@ -501,6 +501,94 @@ Test-Case 'prepare refuses to run without an explicit artifact' {
     Assert-True ($output -match 'ExePath') 'a release campaign must not resolve a default binary'
 }
 
+function Get-ReleaseVerifyFunctionText {
+    <#
+    .SYNOPSIS
+        Extracts ONE named function's source out of release-verify.ps1.
+    .DESCRIPTION
+        release-verify.ps1 is a full script, with a mandatory-artifact param block
+        and a command switch that runs on every invocation -- dot-sourcing the
+        whole file would launch whatever `run`/`status`/`report` defaults to.
+        Every top-level function in it closes on its own unindented `}`, so a
+        single function is lifted out by that line alone.
+
+        Returned as TEXT rather than dot-sourced here: dot-sourcing inside this
+        function would define it in this function's own scope, which disappears
+        the moment it returns. The caller must dot-source the result itself, in
+        the Test-Case body that needs it, exactly as the other tests in this file
+        dot-source ReleaseScenarios.ps1 directly rather than through a helper.
+    #>
+    param([Parameter(Mandatory)] [string] $Name)
+    $source = Get-Content -LiteralPath (Join-Path $scriptRoot 'release-verify.ps1') -Raw
+    $match = [regex]::Match($source, "(?ms)^function $Name \{.*?^\}")
+    Assert-True $match.Success "function $Name was not found in release-verify.ps1"
+    return $match.Value
+}
+
+Test-Case 'a leftover recovery manifest is moved into the campaign, not deleted' {
+    # The exact defect: a manifest from a previous campaign (or a real crash) sits
+    # under %LOCALAPPDATA%\ExoSnap and opens the recovery surface at the very next
+    # launch, before any scenario or cleanup pass gets a chance to run.
+    function Write-Step { param($Text) }
+    . ([scriptblock]::Create((Get-ReleaseVerifyFunctionText -Name 'Backup-ReleaseRecoveryManifest')))
+
+    $fakeLocalAppData = New-TestDirectory
+    $campaignDirectory = New-TestDirectory
+    $previousLocalAppData = $env:LOCALAPPDATA
+    try {
+        $env:LOCALAPPDATA = $fakeLocalAppData
+        $manifestDir = Join-Path $fakeLocalAppData 'ExoSnap'
+        New-Item -ItemType Directory -Path $manifestDir -Force | Out-Null
+        $manifestPath = Join-Path $manifestDir 'recovery-manifest.json'
+        Set-Content -LiteralPath $manifestPath -Value '{"entries":["leftover"]}' -Encoding utf8NoBOM
+
+        Backup-ReleaseRecoveryManifest -CampaignDirectory $campaignDirectory
+
+        Assert-True (-not (Test-Path -LiteralPath $manifestPath)) `
+            'the manifest must not be left where it can open the recovery surface again'
+        $backupPath = Join-Path $campaignDirectory 'leftover-recovery-manifest.json'
+        Assert-True (Test-Path -LiteralPath $backupPath) 'the manifest must survive inside the campaign directory'
+        Assert-True ((Get-Content -LiteralPath $backupPath -Raw) -match 'leftover') 'the manifest content must be preserved, not rewritten'
+    }
+    finally {
+        $env:LOCALAPPDATA = $previousLocalAppData
+        Remove-Item -LiteralPath $fakeLocalAppData -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $campaignDirectory -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-Case 'no manifest is a silent no-op, not an error' {
+    function Write-Step { param($Text) }
+    . ([scriptblock]::Create((Get-ReleaseVerifyFunctionText -Name 'Backup-ReleaseRecoveryManifest')))
+
+    $fakeLocalAppData = New-TestDirectory
+    $campaignDirectory = New-TestDirectory
+    $previousLocalAppData = $env:LOCALAPPDATA
+    try {
+        $env:LOCALAPPDATA = $fakeLocalAppData
+        Backup-ReleaseRecoveryManifest -CampaignDirectory $campaignDirectory
+        Assert-True $true 'reaching here means no manifest did not throw'
+    }
+    finally {
+        $env:LOCALAPPDATA = $previousLocalAppData
+        Remove-Item -LiteralPath $fakeLocalAppData -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $campaignDirectory -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-Case 'prepare moves a leftover manifest aside before anything else runs, and every session start dismisses a fresh one' {
+    # Structural: `prepare` runs once per campaign and a fresh recovery surface can
+    # only be answered once a control-channel connection exists, so the two halves
+    # of this fix live in different places and each is checked where it lives.
+    $source = Get-Content -LiteralPath (Join-Path $scriptRoot 'release-verify.ps1') -Raw
+    $prepareBlock = [regex]::Match($source, "(?ms)'prepare' \{.*?\n    \}\r?\n").Value
+    Assert-True ($prepareBlock -match 'Backup-ReleaseRecoveryManifest') `
+        'prepare must move a leftover recovery manifest aside before the campaign launches anything'
+    $startSessionBlock = [regex]::Match($source, '(?ms)^function Start-ReleaseSession \{.*?^\}').Value
+    Assert-True ($startSessionBlock -match 'Clear-ReleaseBlockingSurface') `
+        'every scenario session start must dismiss a blocking surface before the scenario sends its first command'
+}
+
 Test-Case 'a verdict with omitted fields survives a strict-mode read' {
     . (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
 
