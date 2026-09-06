@@ -43,6 +43,15 @@ inline constexpr const char* kUnknown = "unknown";
 // application's own root window, which carries no overlay objectName.
 [[nodiscard]] QString WindowRoleForObjectName(const QString& object_name, bool is_root);
 
+// The closed set of overlay objectNames Main.qml can produce. Four of the five
+// are Loader-deferred (see Main.qml) and may not have been instantiated yet;
+// the notification toast is created eagerly. A snapshot consumer walks this
+// list rather than only QGuiApplication::topLevelWindows(), so a window that
+// has not been created yet is reported as exactly that -- see `instantiated`
+// on WindowFacts -- instead of silently missing from the result the way a
+// prefix-filtered scan over live windows alone would report it.
+[[nodiscard]] const std::vector<QString>& AllOverlayObjectNames();
+
 struct WindowFacts {
     QString role;
     QString object_name;
@@ -55,6 +64,11 @@ struct WindowFacts {
     QString screen;
     // Present only when a native window exists.
     QJsonObject native;
+    // False only for a synthetic entry standing in for a Loader-deferred
+    // overlay that has not been instantiated yet -- distinct from
+    // `native_window_created`, which is false for a real, live QQuickWindow
+    // that simply has never been shown. A real window is always `true` here.
+    bool instantiated = true;
 };
 
 // The `windows.snapshot` payload: every native top-level window this process

@@ -7,6 +7,18 @@
 
 namespace exosnap::observability {
 
+const std::vector<QString>& AllOverlayObjectNames() {
+    // Declaration order matches Main.qml's own (recording, diagnostics,
+    // countdown, quick controls, toast) purely for readability -- nothing
+    // downstream depends on the order.
+    static const std::vector<QString> names = {
+        QStringLiteral("quickOverlayRecording"),         QStringLiteral("quickOverlayDiagnostics"),
+        QStringLiteral("quickOverlayCountdown"),         QStringLiteral("quickOverlayQuickControls"),
+        QStringLiteral("quickOverlayNotificationToast"),
+    };
+    return names;
+}
+
 QString WindowRoleForObjectName(const QString& object_name, bool is_root) {
     if (is_root)
         return QString::fromLatin1(window_role::kMain);
@@ -40,6 +52,7 @@ QJsonObject WindowSnapshotToJson(const std::vector<WindowFacts>& windows, qint64
         json.insert(QStringLiteral("visible"), window.visible);
         json.insert(QStringLiteral("exposed"), window.exposed);
         json.insert(QStringLiteral("nativeWindowCreated"), window.native_window_created);
+        json.insert(QStringLiteral("instantiated"), window.instantiated);
         json.insert(QStringLiteral("screen"), TextOrNull(window.screen));
         json.insert(QStringLiteral("processId"), static_cast<double>(process_id));
         if (window.native_window_created)

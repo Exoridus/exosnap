@@ -22,6 +22,7 @@
 #include "live_verify/LiveVerifyCommandPolicy.h"
 #include "live_verify/LiveVerifyControlServer.h"
 #include "live_verify/LiveVerifyOptions.h"
+#include "observability/WindowIdentity.h"
 #include "services/ElevatedRelaunch.h"
 #include "services/RecordingCoordinator.h"
 #include "services/UpdateFeedOverride.h"
@@ -47,6 +48,7 @@
 #include <QQuickWindow>
 #include <QSGRendererInterface>
 #include <QScreen>
+#include <QSet>
 #include <QSize>
 #include <QStringList>
 #include <QTextStream>
@@ -309,9 +311,11 @@ void saveOverlayWindowGrabs(const QString& screenshot_path) {
     // how a scenario comes to cover four windows while its caller believes it
     // covered five -- the same failure the notification toast already caused
     // once by having no objectName at all.
+    QSet<QString> seen;
     for (QWindow* window : QGuiApplication::topLevelWindows()) {
         if (window == nullptr || !window->objectName().startsWith(QLatin1String("quickOverlay")))
             continue;
+        seen.insert(window->objectName());
         auto* quick_window = qobject_cast<QQuickWindow*>(window);
         if (quick_window == nullptr) {
             qInfo("overlay-grab: %s skipped (not a QQuickWindow)", qPrintable(window->objectName()));
@@ -326,6 +330,16 @@ void saveOverlayWindowGrabs(const QString& screenshot_path) {
         const bool saved = quick_window->grabWindow().save(path);
         qInfo("overlay-grab: %s %s %dx%d", qPrintable(window->objectName()), saved ? "saved" : "SAVE FAILED",
               window->width(), window->height());
+    }
+
+    // Four of the five overlays are Loader-deferred (Main.qml) and may not have
+    // been instantiated at all when this scenario ran. Reported by name rather
+    // than left out of the log entirely -- the gap this whole function exists to
+    // close was exactly a window silently missing from the evidence.
+    for (const QString& object_name : exosnap::observability::AllOverlayObjectNames()) {
+        if (seen.contains(object_name))
+            continue;
+        qInfo("overlay-grab: %s skipped (not instantiated)", qPrintable(object_name));
     }
 }
 

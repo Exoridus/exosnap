@@ -26,6 +26,14 @@ import QtQuick
 Window {
     id: root
 
+    // Matched by role in observability/WindowIdentity and by the --visual-test
+    // overlay grab (main.cpp), which both key off this name rather than the
+    // window's title. Set here rather than by whoever instantiates the window,
+    // so it holds regardless of whether that is Main.qml's own declaration or a
+    // Loader created later -- the identity is the window's own, not the site
+    // that happens to create it.
+    objectName: "quickOverlayRecording"
+
     // ── Business inputs ──────────────────────────────────────────────────────
     // Geometry of the monitor being recorded, in virtual-desktop coordinates.
     // An empty rect falls back to this window's own screen, the way the Widgets

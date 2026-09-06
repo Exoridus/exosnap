@@ -784,6 +784,51 @@ TEST(WindowIdentity, TwoTopLevelWindowsSharingATitleIsReportedRatherThanHidden) 
     EXPECT_FALSE(json.value(QStringLiteral("titlesUnique")).toBool());
 }
 
+// Main.qml defers four of these five behind a Loader; the notification toast is
+// eager. Every consumer that walks "what overlays exist" has to know the
+// complete, closed set to say which ones have not been created yet rather than
+// silently dropping them.
+TEST(WindowIdentity, AllOverlayObjectNamesIsTheCompleteClosedSet) {
+    const std::vector<QString>& names = AllOverlayObjectNames();
+    const std::vector<QString> expected = {
+        QStringLiteral("quickOverlayRecording"),         QStringLiteral("quickOverlayDiagnostics"),
+        QStringLiteral("quickOverlayCountdown"),         QStringLiteral("quickOverlayQuickControls"),
+        QStringLiteral("quickOverlayNotificationToast"),
+    };
+    EXPECT_EQ(names, expected);
+    // Every name in the set has to actually resolve to a real role -- a name
+    // added here without a matching branch in WindowRoleForObjectName would
+    // report a Loader-deferred overlay as "unknown" forever, never having been
+    // seen live to correct the mapping.
+    for (const QString& object_name : names) {
+        EXPECT_NE(WindowRoleForObjectName(object_name, /*is_root=*/false), QStringLiteral("unknown"))
+            << qPrintable(object_name);
+    }
+}
+
+// The distinction a Loader-deferred overlay needs: a real window that has
+// simply never been shown reports nativeWindowCreated=false too, so
+// `instantiated` is the only field that tells the two apart.
+TEST(WindowIdentity, InstantiatedDefaultsTrueAndCarriesThroughToJson) {
+    WindowFacts real_but_never_shown;
+    real_but_never_shown.role = QStringLiteral("countdown");
+    real_but_never_shown.object_name = QStringLiteral("quickOverlayCountdown");
+    EXPECT_TRUE(real_but_never_shown.instantiated);
+
+    WindowFacts not_yet_created;
+    not_yet_created.role = QStringLiteral("recordingOverlay");
+    not_yet_created.object_name = QStringLiteral("quickOverlayRecording");
+    not_yet_created.instantiated = false;
+
+    const QJsonObject json = WindowSnapshotToJson({real_but_never_shown, not_yet_created}, 7);
+    const QJsonArray windows = json.value(QStringLiteral("windows")).toArray();
+    ASSERT_EQ(windows.size(), 2);
+    EXPECT_TRUE(windows.at(0).toObject().value(QStringLiteral("instantiated")).toBool());
+    EXPECT_FALSE(windows.at(0).toObject().value(QStringLiteral("nativeWindowCreated")).toBool());
+    EXPECT_FALSE(windows.at(1).toObject().value(QStringLiteral("instantiated")).toBool());
+    EXPECT_FALSE(windows.at(1).toObject().value(QStringLiteral("nativeWindowCreated")).toBool());
+}
+
 // ---------------------------------------------------------------------------
 // events.recent
 // ---------------------------------------------------------------------------

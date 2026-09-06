@@ -29,6 +29,16 @@ ApplicationWindow {
     property bool closeApproved: false
     property bool benchmarkInteractionActive: false
     property bool noActivate: false
+    // Sticky arm for the four Loader-deferred HUD overlays below (recording,
+    // diagnostics, countdown, quick controls): true from the moment a capture
+    // could first need any of them, and never reset to false afterward. A plain
+    // expression bound to the CURRENT recording state would tear the Loaders
+    // down again the instant a session ends, and a fresh CaptureExclusion on
+    // the next recording has no memory of an earlier refusal -- exactly the
+    // "once refused, stays refused for the session" guarantee CaptureExclusion
+    // itself documents. The Binding below only ever writes `true`; once written
+    // it holds regardless of what `when` does afterward.
+    property bool recordingOverlaysArmed: false
     // ADR 0033. The destination the pre-elevation instance was showing, handed
     // back by the relaunch. Applied as the shell's STARTING page, not as a
     // navigation: the window is still hidden at this point and nothing has
@@ -203,6 +213,15 @@ ApplicationWindow {
     // not a child of the shell. A toast about a finished recording is most
     // useful exactly when ExoSnap is not the window in front — behind a
     // fullscreen game, or with the app hidden in the tray.
+    //
+    // Instantiated eagerly, unlike the four HUD overlays below: a startup
+    // recovery scan can enqueue a standing "Recover last session?" toast from
+    // QuickApplication's constructor, before the QML engine has even loaded this
+    // document (see initializeRecovery()). A Loader gated on "the model has an
+    // entry" would need to run that same check at the moment this document's
+    // bindings first evaluate, which is no earlier than creating the window
+    // outright -- so deferring this one buys nothing and risks the startup
+    // notice arriving at a Loader that has not finished instantiating yet.
     OverlayNotificationToast {
         // Named like the four below, because it is one of them for every
         // purpose that matters here: capture-excluded, top-level, invisible to
@@ -241,68 +260,164 @@ ApplicationWindow {
     // WHETHER each is on screen is decided in C++ (OverlayAdapter, over
     // models::OverlayContentPolicy); WHAT it says is bound from the adapters
     // that already own those values. Nothing here decides either.
+    //
+    // Loaded lazily, from a URL rather than an inline sourceComponent -- the same
+    // trade AppShell.qml makes for EditOverlay and the three page-navigation
+    // surfaces, and for the same reason: an inline Component is part of THIS
+    // document, so the engine compiles its whole type before the first frame
+    // even though instantiation waits. `recordingOverlaysArmed` is what each
+    // Loader activates on, so all four exist with time to spare before a
+    // capture actually starts (armed on Countdown/Preparing, ahead of Recording)
+    // rather than being asked to appear the same instant they are needed.
+    //
+    // setSource() carries no per-property VALUES, only the URL: unlike
+    // AppShell's overlays, which hand a loaded card its one adapter object and
+    // let the card's own bindings stay live off that reference, these four take
+    // several independent scalars sourced from three different adapters. A
+    // Binding per property below is what keeps each one live once its Loader's
+    // `item` exists -- the same mechanism `previewAdapter.surfaceVisible` already
+    // uses above for a fixed target, aimed at a target that arrives later.
+    // `objectName` is set inside each overlay's own file instead, since it never
+    // depends on anything reactive.
 
-    OverlayRecording {
-        objectName: "quickOverlayRecording"
-        monitorGeometry: root.overlays.recordedMonitorGeometry
-        overlayState: root.overlays.recordingState
-        overlayActive: root.overlays.recordingOverlayActive
-        elapsedText: root.recordViewModel.elapsedText
-        outputSizeText: root.recordViewModel.outputSizeText
-        sourceNameText: root.recordViewModel.sourceName
-        showElapsed: root.settingsAdapter.recordingOverlayElapsed
-        showOutputSize: root.settingsAdapter.recordingOverlayOutputSize
-        showSourceName: root.settingsAdapter.recordingOverlaySourceName
+    Binding {
+        target: root
+        property: "recordingOverlaysArmed"
+        value: true
+        when: root.recordViewModel.countdownActive || root.recordViewModel.preparing
+              || root.recordViewModel.recording || root.recordViewModel.paused
+        // Qt's default restoreMode puts the property back to what it held
+        // before this Binding took over -- its plain `false` initializer --
+        // the instant `when` goes false again. That is the one behaviour this
+        // Binding must not have: RestoreNone is what makes `true` stick once
+        // written, which is the whole point of arming rather than gating.
+        restoreMode: Binding.RestoreNone
     }
 
-    OverlayDiagnostics {
-        objectName: "quickOverlayDiagnostics"
-        monitorGeometry: root.overlays.recordedMonitorGeometry
-        overlayActive: root.overlays.diagnosticsOverlayActive
-        fpsText: root.recordViewModel.capturedFpsText
-        dropText: root.recordViewModel.droppedFramesText
-        driftText: root.recordViewModel.driftText
-        sizeText: root.recordViewModel.outputSizeText
-        // "Muted" means the source is NOT part of this recording, which is what
-        // the Widgets overlay reported too (its meter callback passed the
-        // `*_show` flags, derived from audio_active_*, not the RMS level).
-        // Deliberately not derived from the meter: a level of zero is a silent
-        // moment, and a glyph that appears every time the user stops talking
-        // would report a problem that is not there.
-        micMuted: !root.recordViewModel.microphoneEnabled
-        sysMuted: !root.recordViewModel.systemAudioEnabled
-        showFps: root.settingsAdapter.diagnosticsOverlayFps
-        showDrop: root.settingsAdapter.diagnosticsOverlayDrop
-        showDrift: root.settingsAdapter.diagnosticsOverlayDrift
-        showSize: root.settingsAdapter.diagnosticsOverlaySize
-        showMutedSources: root.settingsAdapter.diagnosticsOverlayMutedSources
+    Loader {
+        id: overlayRecordingLoader
+
+        property bool sourceLoaded: false
+
+        active: root.recordingOverlaysArmed
+        asynchronous: true
+
+        onActiveChanged: {
+            if (!overlayRecordingLoader.active || overlayRecordingLoader.sourceLoaded)
+                return;
+            overlayRecordingLoader.sourceLoaded = true;
+            overlayRecordingLoader.setSource(Qt.resolvedUrl("OverlayRecording.qml"));
+        }
     }
 
-    OverlayCountdown {
-        objectName: "quickOverlayCountdown"
-        monitorGeometry: root.overlays.recordedMonitorGeometry
-        countdownActive: root.overlays.countdownOverlayActive
-        remainingSeconds: root.recordViewModel.countdownRemaining
-        durationSeconds: root.recordViewModel.countdownSeconds
-        countdownProgress: root.recordViewModel.countdownProgress
+    Binding { target: overlayRecordingLoader.item; property: "monitorGeometry"; value: root.overlays.recordedMonitorGeometry }
+    Binding { target: overlayRecordingLoader.item; property: "overlayState"; value: root.overlays.recordingState }
+    Binding { target: overlayRecordingLoader.item; property: "overlayActive"; value: root.overlays.recordingOverlayActive }
+    Binding { target: overlayRecordingLoader.item; property: "elapsedText"; value: root.recordViewModel.elapsedText }
+    Binding { target: overlayRecordingLoader.item; property: "outputSizeText"; value: root.recordViewModel.outputSizeText }
+    Binding { target: overlayRecordingLoader.item; property: "sourceNameText"; value: root.recordViewModel.sourceName }
+    Binding { target: overlayRecordingLoader.item; property: "showElapsed"; value: root.settingsAdapter.recordingOverlayElapsed }
+    Binding { target: overlayRecordingLoader.item; property: "showOutputSize"; value: root.settingsAdapter.recordingOverlayOutputSize }
+    Binding { target: overlayRecordingLoader.item; property: "showSourceName"; value: root.settingsAdapter.recordingOverlaySourceName }
+
+    Loader {
+        id: overlayDiagnosticsLoader
+
+        property bool sourceLoaded: false
+
+        active: root.recordingOverlaysArmed
+        asynchronous: true
+
+        onActiveChanged: {
+            if (!overlayDiagnosticsLoader.active || overlayDiagnosticsLoader.sourceLoaded)
+                return;
+            overlayDiagnosticsLoader.sourceLoaded = true;
+            overlayDiagnosticsLoader.setSource(Qt.resolvedUrl("OverlayDiagnostics.qml"));
+        }
     }
+
+    Binding { target: overlayDiagnosticsLoader.item; property: "monitorGeometry"; value: root.overlays.recordedMonitorGeometry }
+    Binding { target: overlayDiagnosticsLoader.item; property: "overlayActive"; value: root.overlays.diagnosticsOverlayActive }
+    Binding { target: overlayDiagnosticsLoader.item; property: "fpsText"; value: root.recordViewModel.capturedFpsText }
+    Binding { target: overlayDiagnosticsLoader.item; property: "dropText"; value: root.recordViewModel.droppedFramesText }
+    Binding { target: overlayDiagnosticsLoader.item; property: "driftText"; value: root.recordViewModel.driftText }
+    Binding { target: overlayDiagnosticsLoader.item; property: "sizeText"; value: root.recordViewModel.outputSizeText }
+    // "Muted" means the source is NOT part of this recording, which is what the
+    // Widgets overlay reported too (its meter callback passed the `*_show`
+    // flags, derived from audio_active_*, not the RMS level). Deliberately not
+    // derived from the meter: a level of zero is a silent moment, and a glyph
+    // that appears every time the user stops talking would report a problem
+    // that is not there.
+    Binding { target: overlayDiagnosticsLoader.item; property: "micMuted"; value: !root.recordViewModel.microphoneEnabled }
+    Binding { target: overlayDiagnosticsLoader.item; property: "sysMuted"; value: !root.recordViewModel.systemAudioEnabled }
+    Binding { target: overlayDiagnosticsLoader.item; property: "showFps"; value: root.settingsAdapter.diagnosticsOverlayFps }
+    Binding { target: overlayDiagnosticsLoader.item; property: "showDrop"; value: root.settingsAdapter.diagnosticsOverlayDrop }
+    Binding { target: overlayDiagnosticsLoader.item; property: "showDrift"; value: root.settingsAdapter.diagnosticsOverlayDrift }
+    Binding { target: overlayDiagnosticsLoader.item; property: "showSize"; value: root.settingsAdapter.diagnosticsOverlaySize }
+    Binding { target: overlayDiagnosticsLoader.item; property: "showMutedSources"; value: root.settingsAdapter.diagnosticsOverlayMutedSources }
+
+    Loader {
+        id: overlayCountdownLoader
+
+        property bool sourceLoaded: false
+
+        active: root.recordingOverlaysArmed
+        asynchronous: true
+
+        onActiveChanged: {
+            if (!overlayCountdownLoader.active || overlayCountdownLoader.sourceLoaded)
+                return;
+            overlayCountdownLoader.sourceLoaded = true;
+            overlayCountdownLoader.setSource(Qt.resolvedUrl("OverlayCountdown.qml"));
+        }
+    }
+
+    Binding { target: overlayCountdownLoader.item; property: "monitorGeometry"; value: root.overlays.recordedMonitorGeometry }
+    Binding { target: overlayCountdownLoader.item; property: "countdownActive"; value: root.overlays.countdownOverlayActive }
+    Binding { target: overlayCountdownLoader.item; property: "remainingSeconds"; value: root.recordViewModel.countdownRemaining }
+    Binding { target: overlayCountdownLoader.item; property: "durationSeconds"; value: root.recordViewModel.countdownSeconds }
+    Binding { target: overlayCountdownLoader.item; property: "countdownProgress"; value: root.recordViewModel.countdownProgress }
 
     // The one capture-excluded overlay that is deliberately NOT click-through:
     // it is an interactive control surface (ADR 0016), so it takes mouse input
     // while still being kept out of the recording.
-    OverlayQuickControlPill {
-        objectName: "quickOverlayQuickControls"
-        workAreaGeometry: root.overlays.recordedMonitorWorkArea
-        overlayActive: root.overlays.quickControlsActive
-        paused: root.recordViewModel.paused
-        onPauseResumeRequested: {
+    Loader {
+        id: overlayQuickControlsLoader
+
+        property bool sourceLoaded: false
+
+        active: root.recordingOverlaysArmed
+        asynchronous: true
+
+        onActiveChanged: {
+            if (!overlayQuickControlsLoader.active || overlayQuickControlsLoader.sourceLoaded)
+                return;
+            overlayQuickControlsLoader.sourceLoaded = true;
+            overlayQuickControlsLoader.setSource(Qt.resolvedUrl("OverlayQuickControlPill.qml"));
+        }
+    }
+
+    Binding { target: overlayQuickControlsLoader.item; property: "workAreaGeometry"; value: root.overlays.recordedMonitorWorkArea }
+    Binding { target: overlayQuickControlsLoader.item; property: "overlayActive"; value: root.overlays.quickControlsActive }
+    Binding { target: overlayQuickControlsLoader.item; property: "paused"; value: root.recordViewModel.paused }
+
+    Connections {
+        target: overlayQuickControlsLoader.item
+
+        function onPauseResumeRequested(): void {
             if (root.recordViewModel.paused)
                 root.recordViewModel.requestResume();
             else
                 root.recordViewModel.requestPause();
         }
-        onStopRequested: root.recordViewModel.requestStop()
-        onCaptureFrameRequested: root.recordViewModel.requestCaptureFrame()
+
+        function onStopRequested(): void {
+            root.recordViewModel.requestStop();
+        }
+
+        function onCaptureFrameRequested(): void {
+            root.recordViewModel.requestCaptureFrame();
+        }
     }
 
     // QCR-608. `RecordPreviewAdapter.active` follows the navigation index alone,

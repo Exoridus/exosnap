@@ -8,6 +8,10 @@ import QtQuick.Shapes
 Window {
     id: root
 
+    // See OverlayRecording.qml: set on the window itself so its identity holds
+    // regardless of what instantiates it.
+    objectName: "quickOverlayCountdown"
+
     // ── Business inputs (the lead wires these to the countdown controller) ────
     property rect monitorGeometry: Qt.rect(0, 0, 0, 0)
     property int remainingSeconds: 0

@@ -12,6 +12,10 @@ import QtQuick
 Window {
     id: root
 
+    // See OverlayRecording.qml: set on the window itself so its identity holds
+    // regardless of what instantiates it.
+    objectName: "quickOverlayQuickControls"
+
     // ── Business inputs ──────────────────────────────────────────────────────
     // Single gate, resolved in C++ (OverlayAdapter::quickControlsActive) from
     // the "Show quick controls" setting AND the live capture state. The port
