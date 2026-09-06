@@ -2889,10 +2889,6 @@ void QuickApplication::applyThemeFromSettings() {
                                                                     QStringLiteral("QuickThemeTokens"))) {
         tokens->setAppearance(settings_.appearance_id, settings_.accent_id);
     }
-    // The tray MENU is a native popup menu user32 paints from the system menu
-    // theme; no Qt palette or style reaches it. It follows the application's
-    // appearance, as the spec says every product surface does.
-    ApplyNativeMenuAppearance(settings_.appearance_id == QLatin1String("dark"));
     // The tray mark carries the accent too, and it is not part of the scene, so
     // it does not follow the token singleton.
     //
@@ -4586,6 +4582,13 @@ void QuickApplication::initializeShell() {
 }
 
 void QuickApplication::initializeTray() {
+    // One-time process setup, ahead of the availability check below rather than
+    // gated by it: the opt-in is a process-wide setting, not a property of the
+    // tray icon itself. Windows re-themes an opted-in process's menus on its
+    // own when the user later changes Settings > Colors, which is why this is
+    // not repeated from applyThemeFromSettings().
+    ApplyNativeMenuAppearance();
+
     // No tray on this platform/session means no way back to a hidden window, so
     // there is deliberately no icon AND no minimize-to-tray: EvaluateMinimize
     // reads tray availability as its second input for exactly this reason.

@@ -30,21 +30,24 @@ Platform.SystemTrayIcon {
     onActivated: (reason) => root.tray.handleActivation(reason)
 
     menu: Platform.Menu {
-        // Captions, not actions: disabled is what makes the platform draw them
-        // as text rather than as something to click. No glyph either -- an icon
-        // column beside a caption reads as an entry that failed to load one.
-        Platform.MenuItem {
-            text: root.tray.statusText
-            enabled: false
-        }
-
+        // A native popup menu has no header item, so there is deliberately no
+        // status caption here -- the icon and its tooltip already carry the
+        // session's state. The blocked-reason row is the menu's only caption: a
+        // sentence, not an action, so it is disabled and carries the caution
+        // glyph rather than reading as a broken command.
         Platform.MenuItem {
             text: root.tray.blockedReason
+            icon.source: root.tray.blockedReasonIcon
             visible: root.tray.blockedReasonVisible
             enabled: false
         }
 
-        Platform.MenuSeparator {}
+        // Tied to the same row: with no status caption above it any more, an
+        // unconditional separator here would be the menu's own first line
+        // whenever nothing is blocked.
+        Platform.MenuSeparator {
+            visible: root.tray.blockedReasonVisible
+        }
 
         Platform.MenuItem {
             text: root.tray.recordItem.text

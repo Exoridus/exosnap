@@ -44,17 +44,18 @@ class TrayAdapter : public QObject {
     Q_PROPERTY(QString iconSource READ iconSource NOTIFY appearanceChanged FINAL)
     Q_PROPERTY(QString tooltip READ tooltip NOTIFY appearanceChanged FINAL)
 
-    // The menu's first row, and the tooltip's second half: one phrase naming the
-    // session's state. Drawn disabled, because it is a caption and not an action,
-    // and deliberately the same words in both places -- a hover text and an open
-    // menu that describe two different sessions is the defect this prevents.
-    Q_PROPERTY(QString statusText READ statusText NOTIFY appearanceChanged FINAL)
-
     // Why a start is refused, when something knows. Offered only in the blocked
     // phase and only with a reason to give: a caption row that appears empty
-    // reads as a broken menu.
+    // reads as a broken menu. A native popup menu has no header item, so there
+    // is deliberately no status caption above it -- the icon and its tooltip
+    // already carry the session's state.
     Q_PROPERTY(bool blockedReasonVisible READ blockedReasonVisible NOTIFY appearanceChanged FINAL)
+    // "Cannot record: <reason>", composed once here rather than in QML so the
+    // capitalisation rule has one place to live. Drawn disabled, with the
+    // caution glyph below, because it is information rather than something to
+    // click.
     Q_PROPERTY(QString blockedReason READ blockedReason NOTIFY appearanceChanged FINAL)
+    Q_PROPERTY(QString blockedReasonIcon READ blockedReasonIcon NOTIFY appearanceChanged FINAL)
 
     // The non-transport entries' glyphs. Constant shapes, but not constant URLs:
     // they carry the palette, so a theme change repaints them with everything
@@ -109,7 +110,7 @@ class TrayAdapter : public QObject {
     // ignored by a static one.
     void setPresence(const ShellPresenceState& state, const QString& elapsed_text, int mark_frame);
     // The elapsed clock moves on the metrics cadence without the state changing,
-    // and the status row and the tooltip are the surfaces that show it.
+    // and the tooltip is the surface that shows it.
     void setElapsedText(const QString& elapsed_text);
     // Empty when nothing is known, which is not the same as not being blocked:
     // the phase decides whether the row exists at all.
@@ -129,9 +130,9 @@ class TrayAdapter : public QObject {
     [[nodiscard]] bool active() const noexcept;
     [[nodiscard]] QString iconSource() const;
     [[nodiscard]] QString tooltip() const;
-    [[nodiscard]] QString statusText() const;
     [[nodiscard]] bool blockedReasonVisible() const;
-    [[nodiscard]] const QString& blockedReason() const noexcept;
+    [[nodiscard]] QString blockedReason() const;
+    [[nodiscard]] QString blockedReasonIcon() const;
     [[nodiscard]] QString showWindowIcon() const;
     [[nodiscard]] QString outputFolderIcon() const;
     [[nodiscard]] QString notificationsIcon() const;
@@ -158,6 +159,14 @@ class TrayAdapter : public QObject {
     [[nodiscard]] ShellIconState currentIconState() const noexcept;
     [[nodiscard]] int currentMarkFrame() const noexcept;
 
+    // "Cannot record: <reason>", with the reason's first letter lowercased into
+    // the sentence unless the reason already reads as its own sentence about
+    // recording -- lowercasing that one would stutter ("record: recording is
+    // blocked..."). A trailing period is stripped either way, since the result
+    // always ends the row's own sentence. Static and pure so QML never has to
+    // reimplement the rule, and so it is testable with no TrayAdapter instance.
+    [[nodiscard]] static QString ComposeBlockedReasonSentence(const QString& reason);
+
   signals:
     void activeChanged();
     void appearanceChanged();
@@ -177,10 +186,22 @@ class TrayAdapter : public QObject {
     void quitRequested();
 
   private:
+    // The tooltip's second half: one phrase naming the session's state. No
+    // longer a property -- the menu no longer has a caption row to share it
+    // with -- but the tooltip still composes itself from exactly this, so the
+    // two cannot drift apart.
+    [[nodiscard]] QString statusText() const;
+
     // `fallback_action` names the row when the appearance table has none to give
     // -- a row the table hides still has to say what it is.
     [[nodiscard]] QVariantMap rowFor(ShellButton button, ShellAction fallback_action) const;
     [[nodiscard]] QString glyphUrl(ui::brand::ShellGlyph glyph) const;
+    // A native menu has no padding property: Windows sizes a row to fit the
+    // larger of its text and its item bitmap plus margins, so a taller glyph is
+    // the only lever that gives a row more air. Menu glyphs render a few pixels
+    // taller than the notification-area mark for exactly that reason -- the mark
+    // itself stays at icon_px_, the shell's own metric, or the shell rescales it.
+    [[nodiscard]] int menuGlyphPixelSize() const noexcept;
 
     ShellPresenceState state_;
     QString elapsed_text_;

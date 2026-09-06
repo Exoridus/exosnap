@@ -55,14 +55,14 @@ const MenuThemeEntryPoints& EntryPoints() {
 
 } // namespace
 
-bool ApplyNativeMenuAppearance(bool dark) {
+bool ApplyNativeMenuAppearance() {
     const MenuThemeEntryPoints& points = EntryPoints();
     if (points.set_preferred_app_mode == nullptr)
         return false;
-    // Forced rather than AllowDark: the menu follows the application's
-    // appearance, which the user chose, not the Windows apps setting, which
-    // they may have chosen differently.
-    points.set_preferred_app_mode(dark ? PreferredAppMode::ForceDark : PreferredAppMode::ForceLight);
+    // AllowDark, not a forced mode: it tells Windows this process supports its
+    // dark menus and lets Settings > Colors decide, the same opt-in every other
+    // application's popup menu makes.
+    points.set_preferred_app_mode(PreferredAppMode::AllowDark);
     points.flush_menu_themes();
     return true;
 }

@@ -51,6 +51,11 @@ enum class ShellGlyph {
     Folder,
     Notifications,
     Quit,
+    // The caution glyph: a triangle around an exclamation mark. Not one of the
+    // designer suite's marks -- ShellIconRenderer draws it itself, in the same
+    // outline style as the other four -- because it names why a row is disabled
+    // rather than what the row is about, and carries the caution colour for it.
+    Warning,
 };
 
 // Everything a mark's appearance depends on. Note what is absent: the physical

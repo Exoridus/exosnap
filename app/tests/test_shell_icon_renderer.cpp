@@ -64,8 +64,8 @@ constexpr BrandMarkKind kAllKinds[] = {
 };
 
 constexpr ShellGlyph kAllGlyphs[] = {
-    ShellGlyph::Record, ShellGlyph::Pause,         ShellGlyph::Resume, ShellGlyph::Stop,
-    ShellGlyph::Window, ShellGlyph::Notifications, ShellGlyph::Folder, ShellGlyph::Quit,
+    ShellGlyph::Record, ShellGlyph::Pause,         ShellGlyph::Resume, ShellGlyph::Stop,    ShellGlyph::Window,
+    ShellGlyph::Folder, ShellGlyph::Notifications, ShellGlyph::Quit,   ShellGlyph::Warning,
 };
 
 QString KindName(BrandMarkKind kind) {
