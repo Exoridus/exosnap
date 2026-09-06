@@ -321,10 +321,10 @@ void DiagnosticsAdapter::setInDepthEnabledFromUi(bool enabled) {
 }
 
 QString DiagnosticsAdapter::inDepthStateText() const {
-    // The opt-in persists across launches; elevation does not. With the setting on
-    // in a standard process no ETW session exists and no in-depth tile has a
-    // reading, so the sub-text names the gate rather than claiming the two traces
-    // that are not running.
+    // The switch is session state and elevation is a process property, so both
+    // halves of the gate are answered here. With the switch on in a standard
+    // process no ETW session exists and no in-depth tile has a reading, so the
+    // sub-text names the gate rather than claiming traces that are not running.
     if (in_depth_enabled_) {
         return controller_.elevated() ? QStringLiteral("On \xc2\xb7 elevated \xc2\xb7 PresentMon + DPC/ISR trace")
                                       : QStringLiteral("On \xc2\xb7 not measuring \xc2\xb7 needs an admin relaunch");

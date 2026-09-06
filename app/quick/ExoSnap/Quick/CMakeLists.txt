@@ -494,6 +494,8 @@ target_sources(exosnap
 # rather than remove anything.
 target_sources(exosnap
     PRIVATE
+        ${PROJECT_SOURCE_DIR}/app/visual_tests/CanonicalMachine.cpp
+        ${PROJECT_SOURCE_DIR}/app/visual_tests/CanonicalMachine.h
         ${PROJECT_SOURCE_DIR}/app/visual_tests/DiagnosticsLiveScenario.cpp
         ${PROJECT_SOURCE_DIR}/app/visual_tests/DiagnosticsLiveScenario.h
 )
@@ -1491,6 +1493,10 @@ exosnap_add_gtest(
         # permanence rule the ledger cards and the frozen session report rest on.
         ${EXOSNAP_QUICK_TESTS_DIR}/test_session_ledger.cpp
         ${PROJECT_SOURCE_DIR}/app/visual_tests/DiagnosticsLiveScenario.cpp
+        # The healthy machine every diagnostics capture starts from, asserted
+        # here so a capture cannot silently go back to photographing a fixture
+        # that can encode nothing.
+        ${PROJECT_SOURCE_DIR}/app/visual_tests/CanonicalMachine.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsController.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/SessionLedger.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsProbe.cpp
@@ -1648,6 +1654,10 @@ exosnap_add_gtest(
         ${PROJECT_SOURCE_DIR}/app/services/SupportBundleService.h
         ${PROJECT_SOURCE_DIR}/app/models/CaptureTargetPresentation.cpp
         ${PROJECT_SOURCE_DIR}/app/services/DisplayNumbering.cpp
+        # The in-depth switch's own edge raises the elevated-relaunch offer, so the
+        # adapter case drives the real manager rather than counting a predicate.
+        ${PROJECT_SOURCE_DIR}/app/notifications/NotificationManager.cpp
+        ${PROJECT_SOURCE_DIR}/app/notifications/NotificationManager.h
     LIBRARIES
         Qt6::Core
         Qt6::Gui

@@ -630,6 +630,10 @@ QJsonObject QuickLiveVerifySource::DiagnosticsSnapshot() const {
     json.insert(QStringLiteral("blockerCount"), diagnostics->blockerCount());
     json.insert(QStringLiteral("noticeCount"), diagnostics->noticeCount());
     json.insert(QStringLiteral("elevated"), diagnostics->elevated());
+    // The session-scoped in-depth switch. Reported next to `elevated` because the
+    // two together are the whole gate, and a runner that turned the switch on in a
+    // standard process needs to see both halves to explain an absent trace.
+    json.insert(QStringLiteral("inDepth"), diagnostics->inDepthEnabled());
     return json;
 }
 
@@ -763,7 +767,7 @@ QJsonObject QuickLiveVerifySource::EnvironmentSnapshot() const {
     // Sampling drains the ETW queue and advances the reader-side accumulators, so it
     // is GUI-thread-only. That holds here: the control server marshals every dispatch
     // onto the application object with a queued connection before this runs.
-    inputs.present.opt_in = application_.appSettings().present_diagnostics_optin;
+    inputs.present.opt_in = application_.inDepthDiagnosticsEnabled();
     inputs.present.elevated = inputs.elevated;
     if (diagnostics::PresentMonProvider* provider = application_.presentProvider(); provider != nullptr) {
         inputs.present.available = provider->IsAvailable();
@@ -1288,6 +1292,23 @@ bool QuickLiveVerifySource::DiagnosticsRun(QString* error) {
     // The page's own "Run Check" button. Its worker-thread probe and its
     // `checking` flag are what a client waits on.
     diagnostics->runCheck();
+    return true;
+}
+
+bool QuickLiveVerifySource::DiagnosticsSetInDepth(bool enabled, QString* error) {
+    auto* diagnostics = application_.diagnosticsAdapter();
+    if (diagnostics == nullptr) {
+        *error = QStringLiteral("The diagnostics surface is not available");
+        return false;
+    }
+    // The page's own switch, not the application setter: the switch is what
+    // refuses the change while a recording is in flight, and going around it
+    // would let the channel reach a state no user can.
+    diagnostics->setInDepthEnabledFromUi(enabled);
+    if (diagnostics->inDepthEnabled() != enabled) {
+        *error = QStringLiteral("The in-depth diagnostics switch refused the change");
+        return false;
+    }
     return true;
 }
 

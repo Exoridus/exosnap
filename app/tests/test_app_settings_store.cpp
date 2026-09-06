@@ -83,20 +83,29 @@ TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_WindowGeometry) {
     EXPECT_TRUE(loaded.window_geometry.maximized);
 }
 
-TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_PresentDiagnosticsOptIn) {
+// The in-depth diagnostics opt-in used to be persisted here. It is session state
+// now, so a settings file written by an older build carries a key this build has
+// no field for -- and that has to load like any other file rather than fail.
+TEST(AppSettingsStoreTest, AppSettingsStore_Load_IgnoresTheRetiredPresentDiagnosticsKey) {
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
 
-    AppSettingsStore store(TempSettingsPath(temp_dir));
+    const QString settings_path = TempSettingsPath(temp_dir);
+    {
+        QSettings settings(settings_path, QSettings::IniFormat);
+        settings.beginGroup(QStringLiteral("diagnostics"));
+        settings.setValue(QStringLiteral("present_diagnostics_optin"), true);
+        settings.endGroup();
+        settings.beginGroup(QStringLiteral("window"));
+        settings.setValue(QStringLiteral("minimize_to_tray"), true);
+        settings.endGroup();
+        settings.sync();
+    }
 
-    // Default is OFF.
-    EXPECT_FALSE(store.Load().present_diagnostics_optin);
-
-    PersistedAppSettings settings;
-    settings.present_diagnostics_optin = true;
-    ASSERT_TRUE(store.Save(settings));
-
-    EXPECT_TRUE(store.Load().present_diagnostics_optin);
+    AppSettingsStore store(settings_path);
+    const PersistedAppSettings loaded = store.Load();
+    EXPECT_EQ(loaded.load_outcome, SettingsLoadOutcome::Loaded);
+    EXPECT_TRUE(loaded.minimize_to_tray);
 }
 
 TEST(AppSettingsStoreTest, AppSettingsStore_Save_WritesSettingsVersion) {
@@ -970,48 +979,6 @@ TEST(AppSettingsStoreTest, AppSettingsStore_SaveRemovesTheLegacyThemeIdKey) {
     s.beginGroup(QStringLiteral("appearance"));
     EXPECT_FALSE(s.contains(QStringLiteral("theme_id")));
     s.endGroup();
-}
-
-// ---------------------------------------------------------------------------
-// services::WithdrawPresentDiagnosticsOptIn (ADR 0033: a declined or failed
-// elevated relaunch clears the opt-in that triggered it).
-// ---------------------------------------------------------------------------
-
-TEST(WithdrawPresentDiagnosticsOptInTest, ClearsAnEnabledOptIn) {
-    QTemporaryDir temp_dir;
-    ASSERT_TRUE(temp_dir.isValid());
-    const QString settings_path = TempSettingsPath(temp_dir);
-
-    AppSettingsStore store(settings_path);
-    PersistedAppSettings settings;
-    settings.present_diagnostics_optin = true;
-    ASSERT_TRUE(store.Save(settings));
-
-    EXPECT_TRUE(services::WithdrawPresentDiagnosticsOptIn(settings_path));
-    EXPECT_FALSE(store.Load().present_diagnostics_optin);
-}
-
-TEST(WithdrawPresentDiagnosticsOptInTest, NoOpWhenAlreadyOff) {
-    QTemporaryDir temp_dir;
-    ASSERT_TRUE(temp_dir.isValid());
-    const QString settings_path = TempSettingsPath(temp_dir);
-
-    AppSettingsStore store(settings_path);
-    ASSERT_TRUE(store.Save(PersistedAppSettings{}));
-
-    EXPECT_TRUE(services::WithdrawPresentDiagnosticsOptIn(settings_path));
-    EXPECT_FALSE(store.Load().present_diagnostics_optin);
-}
-
-TEST(WithdrawPresentDiagnosticsOptInTest, MissingFileIsHarmless) {
-    QTemporaryDir temp_dir;
-    ASSERT_TRUE(temp_dir.isValid());
-    const QString settings_path = TempSettingsPath(temp_dir);
-
-    // No file has been written yet: Load() reports the built-in default (off),
-    // so there is nothing to withdraw and nothing gets written.
-    EXPECT_TRUE(services::WithdrawPresentDiagnosticsOptIn(settings_path));
-    EXPECT_FALSE(QFileInfo::exists(settings_path));
 }
 
 } // namespace exosnap

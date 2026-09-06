@@ -234,6 +234,10 @@ class FakeSource final : public LiveVerifySource {
         calls.append(QStringLiteral("diagnostics.run"));
         return Outcome(error);
     }
+    bool DiagnosticsSetInDepth(bool enabled, QString* error) override {
+        calls.append(QStringLiteral("diagnostics.setInDepth:%1").arg(enabled ? 1 : 0));
+        return Outcome(error);
+    }
     bool LogsOpen(QString* error) override {
         calls.append(QStringLiteral("logs.open"));
         return Outcome(error);
@@ -793,10 +797,11 @@ TEST(LiveVerifyDispatcher, EveryListedCommandIsActuallyImplemented) {
             // current page.
             source.state.page = QString::fromLatin1(page_name::kSettings);
         }
-        // Settings and profiles are locked while a recording is in flight, the
-        // way the Settings controls are.
+        // Settings, profiles and the in-depth switch are locked while a recording
+        // is in flight, the way the Settings controls are.
         if (command.name.startsWith(QStringLiteral("settings.")) ||
-            command.name.startsWith(QStringLiteral("profiles."))) {
+            command.name.startsWith(QStringLiteral("profiles.")) ||
+            command.name == QStringLiteral("diagnostics.setInDepth")) {
             source.state.recording_state = QStringLiteral("Ready");
             source.state.profile_built_in = false;
         }
@@ -1190,6 +1195,35 @@ TEST(LiveVerifyDispatcher, ExportAndDiagnosticsRunAreAcceptedWithoutClaimingComp
     source.state.diagnostics_checking = true;
     EXPECT_EQ(ErrorCode(dispatcher.Dispatch(RequestV2(QStringLiteral("diagnostics.run")))),
               QString::fromLatin1(error_code::kInvalidState));
+}
+
+// The in-depth diagnostics switch has no settings key any more, so this command
+// is the whole surface a check has for it. Synchronous: the switch either moved
+// or the intent was refused, and there is nothing to wait for either way.
+TEST(LiveVerifyDispatcher, SetInDepthCarriesTheFlagAndSettlesImmediately) {
+    FakeSource source;
+    source.state.recording_state = QStringLiteral("Ready");
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    QJsonObject params;
+    params.insert(QStringLiteral("enabled"), true);
+    const QJsonObject enabled = dispatcher.Dispatch(RequestV2(QStringLiteral("diagnostics.setInDepth"), params));
+    ASSERT_TRUE(Ok(enabled));
+    EXPECT_TRUE(enabled.value(QStringLiteral("settled")).toBool());
+    EXPECT_TRUE(source.calls.contains(QStringLiteral("diagnostics.setInDepth:1")));
+
+    params.insert(QStringLiteral("enabled"), false);
+    ASSERT_TRUE(Ok(dispatcher.Dispatch(RequestV2(QStringLiteral("diagnostics.setInDepth"), params))));
+    EXPECT_TRUE(source.calls.contains(QStringLiteral("diagnostics.setInDepth:0")));
+
+    // The switch is disabled while a recording is in flight, and the command is
+    // refused there rather than reaching the source at all.
+    source.state.recording_state = QStringLiteral("Recording");
+    const int calls_before = source.calls.size();
+    EXPECT_EQ(ErrorCode(dispatcher.Dispatch(RequestV2(QStringLiteral("diagnostics.setInDepth"), params))),
+              QString::fromLatin1(error_code::kBlocked));
+    EXPECT_EQ(source.calls.size(), calls_before);
 }
 
 TEST(LiveVerifyDispatcher, ReadOnlyCommandsCarryNoSettledFlag) {

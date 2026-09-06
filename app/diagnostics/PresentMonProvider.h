@@ -17,8 +17,8 @@ namespace exosnap::diagnostics {
 // SetOptIn() starts or stops the session to match the gate.
 class PresentMonProvider final : public IPresentProvider {
   public:
-    // The elevation provider is borrowed (must outlive this object). `opt_in`
-    // reflects PersistedAppSettings::present_diagnostics_optin.
+    // The elevation provider is borrowed (must outlive this object). `opt_in` is
+    // the session-scoped in-depth diagnostics switch, never a persisted setting.
     PresentMonProvider(const IElevationProvider& elevation, bool opt_in);
 
     // Test seam. Passed straight to the session, so a test can drive the whole

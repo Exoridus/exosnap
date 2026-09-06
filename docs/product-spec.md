@@ -966,10 +966,10 @@ disable overlays if required by the game." The optional PresentMon-based present
 is an **in-process** ETW consumer (a real-time trace session on a worker thread, ADR 0033), opt-in and
 elevation-gated, never a hard dependency; the app degrades gracefully when not elevated. Three states
 are reported and are distinguishable from each other, because "no measurement" has three different
-causes the user can act on differently: `requiresOptIn`, `requiresElevation`, and available. Turning
-the opt-in on never prompts for elevation — a settings toggle is not consent to restart the
-application. It offers instead: a toast whose action performs the restart, refused by a running
-recording and safely declined at the UAC prompt (§11).
+causes the user can act on differently: `requiresOptIn`, `requiresElevation`, and available. The
+opt-in is **session-scoped** — off at every start, on for this session only, never persisted (§11).
+Turning it on never prompts for elevation. It offers instead: a toast whose action performs the
+restart, refused by a running recording and safely declined at the UAC prompt (§11).
 
 **Known target-identity boundaries.** A saved Display or Region target is remembered by a
 hardware-stable identity (the monitor's device path plus its EDID vendor/product, and its serial
@@ -2034,25 +2034,26 @@ View log actions. The timeline marks ledger occurrences only: the engine keeps n
 of individual frame drops, so a drop is not marked on the timeline — it is only counted in the
 **Frames dropped** fact above.
 
-**In-depth diagnostics switch.** A header control, not a reference row: bound to the same
-`presentDiagnosticsOptIn` setting Settings → Developer already exposes (one setting, two controls),
-disabled while recording. Its sub-text states the gate, and the opt-in and elevation are two separate
-conditions — "Off · needs an admin relaunch", "On · not measuring · needs an admin relaunch" for the
-opt-in carried over from an elevated run into a standard process, and "On · elevated · PresentMon +
-DPC/ISR trace" when the traces are actually running. Turning it on is what adds the second row of live
-tiles above.
+**In-depth diagnostics switch.** A header control, not a reference row, and the **only** control over
+the present/DPC opt-in. It is **session state**: off at every start, on for this session, never
+persisted and never offered anywhere in Settings. The traces behind it need an elevated process and an
+elevated process lasts exactly one session, so a remembered answer would be one the next start could
+not act on. Disabled while recording. Its sub-text states the gate, and the switch and elevation are
+two separate conditions — "Off · needs an admin relaunch", "On · not measuring · needs an admin
+relaunch" while the process is still standard, and "On · elevated · PresentMon + DPC/ISR trace" when
+the traces are actually running. Turning it on is what adds the second row of live tiles above.
 
-Turning the opt-in on in a standard process — from this switch or from the Settings → Developer row,
-the offer belongs to the setting and not to either control, so it appears once per toggle-on and not
-once per control — raises a **"Restart as administrator"** toast: *"In-depth diagnostics need an
-elevated process. Restart ExoSnap as administrator to start the traces."* Its action restarts ExoSnap
-elevated through the ordinary close guards, so a running, preparing or finalizing recording refuses
-it and the app stays where it is. Nothing about the offer is a prompt: the setting is already written
-and stays written pending that answer, the toast has to be pressed, and declining the UAC prompt
-behind it withdraws the opt-in and brings ExoSnap back without elevation — the switch reads Off again,
-exactly the "Off · needs an admin relaunch" state the sub-text reports, and a later click raises the
-offer again. A misclick on the UAC prompt is therefore recoverable from the switch alone. An
-already-elevated process raises no toast at all; it starts the traces on the spot.
+Turning it on in a standard process raises a **"Restart as administrator"** toast: *"In-depth
+diagnostics need an elevated process. Restart ExoSnap as administrator to start the traces."* Once per
+turn-on, never on a switch that is simply already on. Its action restarts ExoSnap elevated through the
+ordinary close guards, so a running, preparing or finalizing recording refuses it and the app stays
+where it is; the elevated successor comes back on the Diagnostics page with the switch on and the
+traces running. Nothing about the offer is a prompt: the switch is already on, the toast has to be
+pressed, and declining the UAC prompt behind it brings ExoSnap back without elevation, where the
+switch reads Off again because it is a switch for this session and nothing else. A misclick on the
+UAC prompt is therefore recoverable from the switch alone. An already-elevated process raises no toast
+at all; it starts the traces on the spot. The next start is off again, with no toast and no UAC
+prompt.
 
 **Sparkline tiles.** Frame pacing, Encoder, Storage and Audio sync each carry a 24 px sparkline of the
 last 60 snapshots (12 s at 5 Hz), coloured by the tile's own value tone, with a dashed budget line
@@ -2142,13 +2143,13 @@ second in-process kernel trace on the same opt-in and the same elevation gate po
 DPC/ISR-latency check that names the offending kernel driver behind "smooth game, stuttery/crackling
 recording". It reports a peak only while it is measuring one: a trace that is stopped, refused or
 that ended by itself withdraws the reading and with it the recommendation, for the same reason the
-present figures do below. The app does not run elevated by default. The setting behind it
-(`presentDiagnosticsOptIn`) can be turned on from either of its two controls — the Diagnostics
-header's in-depth switch (§11) or Settings → Developer's own row — whenever a recording is not
-running; turning it on never relaunches the app by itself, it offers to (§11), so the switch's
-sub-text states whether the gate has actually been cleared: "Off · needs an admin relaunch" before
-the next elevated launch, "On · elevated · PresentMon + DPC/ISR trace" once it has. The provider is never required, and the
-portable build degrades gracefully.
+present figures do below. The app does not run elevated by default. The opt-in behind it is the
+Diagnostics header's in-depth switch (§11) and nothing else — session-scoped, off at every start, and
+changeable whenever a recording is not running; turning it on never relaunches the app by itself, it
+offers to (§11), so the switch's sub-text states whether the gate has actually been cleared:
+"On · not measuring · needs an admin relaunch" before the elevated relaunch, "On · elevated ·
+PresentMon + DPC/ISR trace" once it has happened. The provider is never required, and the portable
+build degrades gracefully.
 
 The reported present figures always describe the **current** attribution window and nothing else.
 Starting a recording opens a window; ending it closes one, and the per-recording present, discarded

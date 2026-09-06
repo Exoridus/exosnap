@@ -1,4 +1,4 @@
-#Requires -Version 7.0
+﻿#Requires -Version 7.0
 <#
 .SYNOPSIS
     The v0.9 release scenario catalog.
@@ -471,11 +471,11 @@ function Get-ReleaseScenarioCatalog {
             $session = & $ctx.EnsureSession
             $conn = $session.Connection
 
-            # Opt in through the product's own settings surface, not by editing a file.
-            $set = Invoke-LiveVerifyCommand -Connection $conn -Command 'settings.set' `
-                -Parameters @{ key = 'app.presentDiagnosticsOptIn'; value = $true }
+            # Opt in through the product's own switch, not by editing a file.
+            $set = Invoke-LiveVerifyCommand -Connection $conn -Command 'diagnostics.setInDepth' `
+                -Parameters @{ enabled = $true }
             if (-not $set.ok) {
-                return @{ Result = 'FAIL'; Message = "settings.set refused: $($set.error.message)" }
+                return @{ Result = 'FAIL'; Message = "diagnostics.setInDepth refused: $($set.error.message)" }
             }
             $environment = Invoke-LiveVerifyCommand -Connection $conn -Command 'environment.snapshot'
             $present = $environment.result.present
@@ -543,7 +543,7 @@ function Get-ReleaseScenarioCatalog {
                 'screen is presenting frames.'
                 VerifyDescription = "This runner connects to \\.\pipe\ExoSnap.LiveVerify.$runId, checks the " +
                 'reported identity against the artifact SHA-256 under test, asserts os.elevated is true, turns ' +
-                'the opt-in on through settings.set, and then requires present.available == true with a ' +
+                'the in-depth switch on for that session, and then requires present.available == true with a ' +
                 'presentCount greater than zero. Tearing false and discarded zero are accepted results.'
                 Verify            = {
                     param($context, $gate)
@@ -557,9 +557,9 @@ function Get-ReleaseScenarioCatalog {
                                 "$($identity.executableSha256) vs $($context.Artifact.exeSha256)"
                             }
                         }
-                        $set = Invoke-LiveVerifyCommand -Connection $conn -Command 'settings.set' `
-                            -Parameters @{ key = 'app.presentDiagnosticsOptIn'; value = $true }
-                        if (-not $set.ok) { return @{ Ok = $false; Detail = "settings.set refused: $($set.error.message)" } }
+                        $set = Invoke-LiveVerifyCommand -Connection $conn -Command 'diagnostics.setInDepth' `
+                            -Parameters @{ enabled = $true }
+                        if (-not $set.ok) { return @{ Ok = $false; Detail = "diagnostics.setInDepth refused: $($set.error.message)" } }
 
                         # Bounded, state-based wait: the ETW session needs a present to
                         # decode, and presents arrive when the desktop draws. Polling the

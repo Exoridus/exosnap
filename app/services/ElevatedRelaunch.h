@@ -22,15 +22,16 @@ enum class RelaunchResult { Launched, UserDeclined, Failed };
 // Transient state carried across the elevated relaunch. Persisted settings are
 // NOT handed off here (they are read from disk by the new instance); only the
 // volatile bits that would otherwise be lost: the page the user is currently on
-// and a flag to re-enable the feature whose opt-in triggered the relaunch.
+// and a flag re-arming the session-scoped switch that triggered the relaunch.
 struct RelaunchHandoff {
     // Nav page label to land on after relaunch (kPageDescriptors nav_label, e.g.
     // "Diagnostics" / "Settings"). Empty means "no explicit page".
     QString page_name;
 
-    // When true, the relaunched (now elevated) instance should turn the
-    // present-diagnostics opt-in on. The toggle is only persisted AFTER the
-    // relaunch succeeds, so a UAC decline never leaves the opt-in stuck on.
+    // When true, the relaunched (now elevated) instance should turn the in-depth
+    // diagnostics switch on. Nothing on disk carries that switch, so this
+    // argument is the whole handoff -- and a UAC decline leaves no trace of it,
+    // because the next process starts with the switch off like any other.
     bool reenable_present_diag = false;
 };
 
@@ -50,18 +51,5 @@ inline constexpr const char* kReenablePresentDiagFlag = "--reenable-present-diag
 // raising the UAC consent prompt. Maps ERROR_CANCELLED to UserDeclined. Never
 // call this during an active recording (the caller enforces that guard).
 RelaunchResult RelaunchAsAdmin(const QString& exe_path, const QStringList& args);
-
-// ADR 0033: withdraw the present-diagnostics opt-in after a relaunch that never
-// became elevated (UAC declined, or ShellExecuteEx failed outright). The
-// opt-in was written before the relaunch was attempted, on the assumption that
-// the elevated successor would be the one measuring it; when no successor
-// exists, leaving it on would read as an active feature that nothing is
-// running. A no-op (returns true) when the opt-in is already off.
-//
-// `settings_file_path` empty resolves the default settings location the same
-// way AppSettingsStore's own default constructor does (honouring
-// EXOSNAP_CONFIG_DIR), which is the store the relaunching process itself read
-// from. Returns false only when the settings store could not be saved.
-bool WithdrawPresentDiagnosticsOptIn(const QString& settings_file_path = QString());
 
 } // namespace exosnap::services

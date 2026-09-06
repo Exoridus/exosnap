@@ -103,6 +103,7 @@ class QuickLiveVerifySource final : public QObject, public live_verify::LiveVeri
     bool NotificationInvokeAction(qint64 sequence, const QString& which, QString* error) override;
 
     bool DiagnosticsRun(QString* error) override;
+    bool DiagnosticsSetInDepth(bool enabled, QString* error) override;
     bool LogsOpen(QString* error) override;
 
     bool RecoveryContinue(int index, QString* error) override;

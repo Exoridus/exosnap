@@ -30,6 +30,7 @@
 #include "models/WindowPresencePolicy.h"
 #include "ui/CodecLabels.h"
 #include "ui/theme/ExoSnapMetrics.h"
+#include "visual_tests/CanonicalMachine.h"
 #include "visual_tests/DiagnosticsLiveScenario.h"
 #include "visual_tests/RecordVisualStateNames.h"
 
@@ -512,7 +513,7 @@ void QuickApplication::applyDpcLatencyGate() {
     // elevation check, so the gate (opt-in AND elevation) is applied here -- mirroring
     // PresentMonProvider::GateOpen().
     const bool elevated = elevation_provider_.IsElevated();
-    const bool gate_open = settings_.present_diagnostics_optin && elevated;
+    const bool gate_open = in_depth_diagnostics_ && elevated;
     // Start() is itself idempotent (it returns true for an already-open session), and
     // this runs on the startup path plus on an actual opt-in change, never per refresh.
     // Stop() likewise releases the session and, with it, the reading.
@@ -526,7 +527,7 @@ void QuickApplication::applyDpcLatencyGate() {
     // from the outside: gate closed (nothing opened), gate open but the session refused
     // (ETW said no), gate open and measuring.
     diagnostics::AppLog::info(QStringLiteral("dpc"), QStringLiteral("kernel trace optIn=%1 elevated=%2 started=%3")
-                                                         .arg(settings_.present_diagnostics_optin ? 1 : 0)
+                                                         .arg(in_depth_diagnostics_ ? 1 : 0)
                                                          .arg(elevated ? 1 : 0)
                                                          .arg(started ? 1 : 0));
 }
@@ -1173,7 +1174,10 @@ void QuickApplication::startCapabilityProbe() {
 void QuickApplication::onCapabilitiesReady(const capability::CapabilitySet& capabilities) {
     diagnostics::AppLog::info(QStringLiteral("perf"),
                               QStringLiteral("caps-probe-end %1 ms").arg(diagnostics::StartupClock().elapsed()));
-    capabilities_ = capabilities;
+    // A harness run owns its machine for the life of the process: the real probe
+    // lands a second or two into a capture, and letting it through would replace
+    // the fixture with whatever GPU this developer happens to have.
+    capabilities_ = canonical_machine_.has_value() ? *canonical_machine_ : capabilities;
     recording_coordinator_->OnCapabilitiesReady(capabilities_);
     // Everything downstream reads the capability set: the Device matrix, the
     // Settings codec lists and the Diagnostics recommendations were all built
@@ -2019,7 +2023,7 @@ void QuickApplication::initializeSettingsArea() {
 
 void QuickApplication::initializeDiagnosticsArea() {
     diagnostics_adapter_.setCapabilitySet(capabilities_);
-    diagnostics_adapter_.setInDepthEnabled(settings_.present_diagnostics_optin);
+    diagnostics_adapter_.setInDepthEnabled(in_depth_diagnostics_);
     // The elevation fact is a one-shot process property, not a per-refresh probe.
     const bool elevated = elevation_provider_.IsElevated();
     diagnostics_adapter_.setElevated(elevated);
@@ -2030,12 +2034,11 @@ void QuickApplication::initializeDiagnosticsArea() {
     // one with the opt-in off holds a provider that reports `available: false` and
     // owns no session, which is exactly what `environment.snapshot` must be able to
     // explain the difference between.
-    present_provider_ =
-        std::make_unique<diagnostics::PresentMonProvider>(elevation_provider_, settings_.present_diagnostics_optin);
-    present_provider_->SetOptIn(settings_.present_diagnostics_optin);
+    present_provider_ = std::make_unique<diagnostics::PresentMonProvider>(elevation_provider_, in_depth_diagnostics_);
+    present_provider_->SetOptIn(in_depth_diagnostics_);
     diagnostics::AppLog::info(QStringLiteral("present"),
                               QStringLiteral("provider constructed optIn=%1 elevated=%2 available=%3")
-                                  .arg(settings_.present_diagnostics_optin ? 1 : 0)
+                                  .arg(in_depth_diagnostics_ ? 1 : 0)
                                   .arg(elevated ? 1 : 0)
                                   .arg(present_provider_->IsAvailable() ? 1 : 0));
 
@@ -2047,11 +2050,10 @@ void QuickApplication::initializeDiagnosticsArea() {
     diagnostics_adapter_.setDpcLatencyProvider(&dpc_provider_);
     applyDpcLatencyGate();
 
-    // The in-depth switch and the Settings developer row are two controls over
-    // one setting. Writing it through SettingsAdapter takes the same path the
-    // Settings row does, including the ETW gate that path already re-applies.
+    // The switch asks, this decides. The answer is session state and never
+    // reaches the settings store.
     QObject::connect(&diagnostics_adapter_, &DiagnosticsAdapter::inDepthToggled, &diagnostics_adapter_,
-                     [this](bool enabled) { settings_adapter_.setPresentDiagnosticsOptIn(enabled); });
+                     [this](bool enabled) { setInDepthDiagnostics(enabled); });
 
     // "Show in log" is the Logs page with the diagnostic id already in the
     // search box; the navigation itself is the one openLogs() performs.
@@ -2538,14 +2540,8 @@ void QuickApplication::wireSettingsCommands() {
                      [this]() { applySettingsConfigEdit(); });
     QObject::connect(&settings_adapter_, &SettingsAdapter::appSettingsEdited, &settings_adapter_, [this]() {
         const QString previous_update_channel = settings_.update_channel;
-        const bool previous_present_optin = settings_.present_diagnostics_optin;
         settings_ = settings_adapter_.appSettings();
         persistAppSettings(SettingsWriteIntent::UserEdit);
-        // The present/DPC opt-in is one product setting behind two switches. The
-        // Diagnostics adapter keeps its own copy, seeded once at startup, so
-        // without this push the Settings row moved Settings alone and the
-        // Diagnostics header switch stayed where it was until the next launch.
-        diagnostics_adapter_.setInDepthEnabled(settings_.present_diagnostics_optin);
         if (settings_.update_channel != previous_update_channel)
             applyUpdateChannel();
         applyThemeFromSettings();
@@ -2556,29 +2552,6 @@ void QuickApplication::wireSettingsCommands() {
         applyCrashReportPolicy();
         applyShowNotifications();
         applyWindowCaptureExclusion();
-        // ADR 0033. Turning the opt-in on opens the ETW session immediately when the
-        // process is already elevated, and does nothing at all when it is not --
-        // there is no relaunch prompt here, because a settings toggle is not consent
-        // to restart the application.
-        if (settings_.present_diagnostics_optin != previous_present_optin) {
-            if (present_provider_)
-                present_provider_->SetOptIn(settings_.present_diagnostics_optin);
-            // The kernel DPC/ISR session follows the same opt-in. Turning it off stops
-            // the trace, and the reading goes back to unavailable in the same step --
-            // a peak measured a moment ago is not a measurement of this machine now.
-            applyDpcLatencyGate();
-        }
-        // Raised from the SETTING's transition rather than from either control,
-        // so the Diagnostics header switch and the Settings developer row offer
-        // the restart exactly once between them. Still not a prompt: the toast
-        // has to be pressed, and declining the UAC prompt behind it withdraws
-        // the opt-in and brings this process back non-elevated (ADR 0033) -- the
-        // switch reads Off again, and a later click raises the offer once more.
-        if (notifications::ShouldOfferElevatedRelaunch(settings_.present_diagnostics_optin, previous_present_optin,
-                                                       elevation_provider_.IsElevated())) {
-            notifications::NotificationEvent event = notifications::MakeElevatedRelaunchOfferEvent();
-            notifications_adapter_.manager().Enqueue(std::move(event));
-        }
     });
 
     QObject::connect(&settings_adapter_, &SettingsAdapter::presetSelected, &settings_adapter_,
@@ -3050,7 +3023,48 @@ UiRecordingResult MakeVisualRecordingResult() {
 
 } // namespace
 
+// The Diagnostics page describes the machine it runs on, and a harness run has
+// none: the capability probe has not landed, no adapter has been enumerated, and
+// the selected codecs therefore carry no annotation. Every capture opened with
+// "3 things to fix before recording" for that reason alone. This puts one healthy
+// machine underneath every diagnostics scenario, so each one only has to state
+// the single deviation it is about.
+void QuickApplication::applyCanonicalMachineFixture() {
+    const QStringList args = QCoreApplication::arguments();
+    if (!args.contains(QStringLiteral("--visual-test")))
+        return;
+    // Every diagnostics-* scenario lands on the Diagnostics page, including the
+    // ones that seed no live pipeline at all (the container/codec blocker, the
+    // bare page). The page index is the harness's own vocabulary for it.
+    const int page_argument = args.indexOf(QStringLiteral("--visual-page"));
+    const bool on_diagnostics =
+        page_argument >= 0 && page_argument + 1 < args.size() &&
+        args.at(page_argument + 1).trimmed() == QString::number(static_cast<int>(ShellAdapter::DiagnosticsPage));
+    if (!on_diagnostics && qgetenv("EXOSNAP_VISUAL_DIAG_LIVE").isEmpty() &&
+        qgetenv("EXOSNAP_VISUAL_DIAG_SCENARIO").isEmpty()) {
+        return;
+    }
+
+    canonical_machine_ = visual::CanonicalMachineCapabilities();
+    capabilities_ = *canonical_machine_;
+    recording_coordinator_->OnCapabilitiesReady(capabilities_);
+    device_adapter_.setCapabilitySet(capabilities_);
+    // Through the same apply path a real scan uses, and marked scanned, so the
+    // Hardware capabilities row summarises the adapter instead of reporting
+    // "Not scanned yet" and a later ensureScanned() does not enumerate this
+    // developer's real GPU into the capture.
+    device_adapter_.setAdaptersForTest(visual::CanonicalMachineAdapters(),
+                                       visual::CanonicalMachineAdapterCapabilities());
+    seedVideoCodecFromCapabilities();
+    settings_adapter_.setCapabilities(capabilities_);
+    refreshDiagnosticsData();
+}
+
 void QuickApplication::applyDiagnosticsVisualScenarios() {
+    // First, so a scenario's own deviation is added ON TOP of a healthy machine
+    // rather than on top of nothing.
+    applyCanonicalMachineFixture();
+
     const QByteArray log_scenario = qgetenv("EXOSNAP_VISUAL_LOG_SCENARIO");
     if (!log_scenario.isEmpty()) {
         const QDateTime base(QDate(2026, 6, 8), QTime(14, 22, 31, 123));
@@ -3637,7 +3651,7 @@ void QuickApplication::setElevatedRelaunchHandler(std::function<void(const QStri
     elevated_relaunch_handler_ = std::move(handler);
 }
 
-void QuickApplication::applyStartupRelaunchHandoff(const QString& page_name, bool reenable_present_diag) {
+void QuickApplication::applyStartupRelaunchHandoff(const QString& page_name, bool arm_in_depth_diagnostics) {
     // ADR 0033. Land on the page the pre-elevation instance was showing.
     for (const auto& [label, page] : kRelaunchNavLabels) {
         if (page_name.compare(QLatin1StringView(label), Qt::CaseInsensitive) == 0) {
@@ -3646,17 +3660,45 @@ void QuickApplication::applyStartupRelaunchHandoff(const QString& page_name, boo
         }
     }
 
-    // The opt-in is written by the switch itself, before the restart is ever
-    // offered, so the successor normally reads it back off disk and this does
-    // nothing. It stays because the write can fail: a settings store that could
-    // not be saved would otherwise turn an accepted UAC prompt into an elevated
-    // process with the feature off, which reads as the relaunch having done
-    // nothing at all.
-    if (reenable_present_diag && !settings_.present_diagnostics_optin) {
-        settings_.present_diagnostics_optin = true;
-        saveAndPublishAppSettings(SettingsWriteIntent::UserEdit);
+    // The opt-in is session state and nothing on disk carries it across the
+    // relaunch, so this argument IS the handoff: without it an accepted UAC
+    // prompt would produce an elevated process with the feature off, which reads
+    // as the restart having done nothing at all. Applied through the ordinary
+    // setter, which is what opens the two traces -- the diagnostics area was
+    // constructed with the flag off, before this argument was parsed.
+    if (arm_in_depth_diagnostics && !in_depth_diagnostics_) {
+        setInDepthDiagnostics(true);
         diagnostics::AppLog::info(QStringLiteral("diagnostics"),
-                                  QStringLiteral("Present-diagnostics opt-in re-enabled after elevated relaunch."));
+                                  QStringLiteral("In-depth diagnostics armed for this session by the "
+                                                 "elevated relaunch handoff."));
+    }
+}
+
+void QuickApplication::setInDepthDiagnostics(bool enabled) {
+    if (in_depth_diagnostics_ == enabled) {
+        // Still pushed back: the switch's own binding is the adapter's copy, and
+        // a refused change has to leave the two agreeing.
+        diagnostics_adapter_.setInDepthEnabled(in_depth_diagnostics_);
+        return;
+    }
+    const bool was_enabled = in_depth_diagnostics_;
+    in_depth_diagnostics_ = enabled;
+    diagnostics_adapter_.setInDepthEnabled(in_depth_diagnostics_);
+
+    // Both traces follow the one flag. Turning it off stops them and the readings
+    // go back to unavailable in the same step -- a peak measured a moment ago is
+    // not a measurement of this machine now.
+    if (present_provider_)
+        present_provider_->SetOptIn(in_depth_diagnostics_);
+    applyDpcLatencyGate();
+
+    // Not a prompt: the toast has to be pressed, and declining the UAC prompt
+    // behind it leaves the switch on and this process running, which is the
+    // "not measuring, needs an admin relaunch" state the sub-text then reports.
+    if (notifications::ShouldOfferElevatedRelaunch(in_depth_diagnostics_, was_enabled,
+                                                   elevation_provider_.IsElevated())) {
+        notifications::NotificationEvent event = notifications::MakeElevatedRelaunchOfferEvent();
+        notifications_adapter_.manager().Enqueue(std::move(event));
     }
 }
 
@@ -4405,7 +4447,7 @@ void QuickApplication::requestElevatedRelaunch() {
     // The page the user is on, so the elevated instance comes back where they
     // left it rather than on Record.
     handoff.page_name = RelaunchNavLabel(static_cast<ShellAdapter::Page>(shell_adapter_.currentPage()));
-    handoff.reenable_present_diag = settings_.present_diagnostics_optin;
+    handoff.reenable_present_diag = in_depth_diagnostics_;
     elevated_relaunch_handler_(services::BuildRelaunchArgs(handoff));
 
     // requestClose() answering "allow" quits through closeDecided rather than

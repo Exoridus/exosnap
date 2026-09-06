@@ -621,6 +621,17 @@ const QVector<CommandDescriptor>& AllCommands() {
 
         // --- Diagnostics and logs ------------------------------------------------
         {QStringLiteral("diagnostics.run"), 2, true, true, Settle::Asynchronous, {}, &CanRunDiagnostics},
+        // The in-depth switch is session state, not a setting, so there is no
+        // settings.set key for it and this is the only way to reach it. It shares
+        // CanWriteSettings because the switch itself is disabled for exactly the
+        // states that predicate refuses.
+        {QStringLiteral("diagnostics.setInDepth"),
+         2,
+         true,
+         true,
+         Settle::Synchronous,
+         {Param("enabled", "bool", true)},
+         &CanWriteSettings},
         {QStringLiteral("logs.open"), 2, true, true, Settle::Synchronous, {}, &NoPrecondition},
 
         // --- Blocking surfaces ---------------------------------------------------

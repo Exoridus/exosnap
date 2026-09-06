@@ -381,6 +381,7 @@ where it landed is evidence of nothing.
 | `edit.playPause` / `seek` / `setTrimIn` / `setTrimOut` / `timelineHome` / `timelineEnd` / `close` | The edit surface, through `EditSessionAdapter` / `EditPlayerAdapter`. Clamping, trim ordering and keyframe snapping stay in the adapter. All refuse with `invalid_state` when no session is open; none opens one implicitly. |
 | `sourcePicker.open` / `close` | The real picker surface. `record.selectTarget` bypasses it, which is why the picker had never been live-verified at all. Idempotent. |
 | `notificationHub.open` / `close`, `notification.clearAll` | The hub, through `NotificationsAdapter`. Idempotent. |
+| `diagnostics.setInDepth` | The in-depth diagnostics switch (ADR 0033), which is session state and therefore has no `settings.set` key. Drives `DiagnosticsAdapter` exactly as the switch does, so it is refused wherever the switch is disabled: while a recording is in flight and under a blocking surface. Turning it on in a standard process raises the same "Restart as administrator" toast the switch raises and elevates nothing by itself. Idempotent. |
 
 Deliberately **not** exposed: `notification.triggerAction` (it reaches
 navigation, file opening and `QDesktopServices::openUrl` — effects outside the

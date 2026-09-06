@@ -75,26 +75,4 @@ RelaunchResult RelaunchAsAdmin(const QString& exe_path, const QStringList& args)
 #endif
 }
 
-bool WithdrawPresentDiagnosticsOptIn(const QString& settings_file_path) {
-    const AppSettingsStore store =
-        settings_file_path.isEmpty() ? AppSettingsStore() : AppSettingsStore(settings_file_path);
-    PersistedAppSettings settings = store.Load();
-    if (!settings.present_diagnostics_optin)
-        return true;
-
-    settings.present_diagnostics_optin = false;
-    const bool saved = store.Save(settings);
-    if (saved) {
-        diagnostics::AppLog::info(QStringLiteral("diagnostics"),
-                                  QStringLiteral("Present-diagnostics opt-in withdrawn after a declined or "
-                                                 "failed elevated relaunch."));
-    } else {
-        diagnostics::AppLog::warning(
-            QStringLiteral("diagnostics"),
-            QStringLiteral("Failed to withdraw present-diagnostics opt-in after a declined or failed "
-                           "elevated relaunch."));
-    }
-    return saved;
-}
-
 } // namespace exosnap::services

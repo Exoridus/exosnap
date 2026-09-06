@@ -421,3 +421,24 @@ requires an elevated process and a presenting workload, and is a human-gated ste
 release campaign (UAC cannot be scripted). What Wave D can and does prove headlessly is
 that the define, the link and the provider construction are present in the shipping binary —
 the three things whose absence made the feature unreachable rather than merely unavailable.
+
+## Amendment (2026-09-06) — the opt-in is session-scoped
+
+The present/DPC opt-in is no longer a persisted setting. It is a switch on the
+Diagnostics page that lives for one process: off at every start, on for this
+session, with the "Restart as administrator" offer when the process is not
+elevated. The persisted key `present_diagnostics_optin` and the Settings ->
+Developer row that also wrote it are gone.
+
+Two reasons. The traces need an elevated process, and an elevated process lasts
+exactly one session -- so a persisted answer was a setting with no effect at the
+next start: it came back on, measured nothing, and the switch's own sub-text had
+to explain why. And the ETW consumer behind it is a measurable cost (a real-time
+trace session plus a decode thread), which should be paid when someone asks for
+it, not carried into every later launch by a choice made once.
+
+The elevated relaunch handoff is unchanged in shape and is now the only carrier:
+`--reenable-present-diag` arms the successor's session flag, and a declined UAC
+prompt needs no withdrawal step because the next process starts with the switch
+off like any other. The release-verify channel reaches the switch through the
+`diagnostics.setInDepth` control command instead of a settings key.

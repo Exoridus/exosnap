@@ -244,6 +244,15 @@ Content is seeded through the environment, in the same spirit:
 | `EXOSNAP_VISUAL_NOTIFICATION_SCENARIO=many` | Six advisories in the notification hub, mixed severities. The empty state is the only one a healthy machine produces |
 | `EXOSNAP_VISUAL_SOURCE_SCENARIO=many-windows` | Two displays and fifteen windows in the source picker, in place of whatever is open |
 
+Every Diagnostics capture starts from a **canonical machine**
+(`app/visual_tests/CanonicalMachine.h`): a discrete NVIDIA adapter with NVENC and
+H.264, HEVC and AV1 all encodable, derived by the product's own
+`CapabilityBuilder` from a synthetic runtime snapshot and applied before the
+scenario's own extras. Without it a harness run has no capability probe and no
+enumerated adapter, so every capture opened with three blockers that described the
+fixture rather than the product; a scenario now states only the one deviation it
+is about, and `diagnostics-blocked` still carries its MP4 + FLAC blocker on top.
+
 The Edit fixture deliberately opens nothing: it never starts a decode or an
 export, so the player area reads `Preview unavailable` and the timeline tiles are
 placeholders. Everything around them is the real surface.

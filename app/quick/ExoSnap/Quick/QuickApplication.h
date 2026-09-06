@@ -108,6 +108,17 @@ class QuickApplication {
     // GUI-thread-only -- which every caller is, because the control channel
     // marshals its dispatch onto the GUI thread before touching this.
     [[nodiscard]] diagnostics::PresentMonProvider* presentProvider() noexcept;
+    // ADR 0033. The in-depth diagnostics opt-in, which lives for this process only:
+    // the traces behind it need an elevated process, and an elevated process lasts
+    // one session, so there is nothing for a persisted answer to be true about at
+    // the next start.
+    [[nodiscard]] bool inDepthDiagnosticsEnabled() const noexcept {
+        return in_depth_diagnostics_;
+    }
+    // Applies the opt-in for this session: starts or stops both traces, pushes the
+    // answer back to the Diagnostics switch, and -- when the process is not elevated
+    // and this is a fresh turn-on -- offers the restart that would let them run.
+    void setInDepthDiagnostics(bool enabled);
     // Read-only view of the shared record state. The adapter above exposes what
     // QML binds to; the Live Verify result snapshot needs the typed result
     // fields (paths, container/codecs, marker count) that never became QML
@@ -191,7 +202,7 @@ class QuickApplication {
     // argv. Called by the entry point straight after construction, before the
     // window loads, exactly as the Widgets frontend does — the page choice has to
     // be in place before the shell picks its landing page.
-    void applyStartupRelaunchHandoff(const QString& page_name, bool reenable_present_diag);
+    void applyStartupRelaunchHandoff(const QString& page_name, bool arm_in_depth_diagnostics);
     // ADR 0033, the other half: the seam through which the "Restart as
     // administrator" toast action reaches the bootstrap. The frontend builds the
     // handoff (it is the only side that knows which page the user is on) and the
@@ -354,6 +365,11 @@ class QuickApplication {
     // content so a --visual-test capture never photographs whatever this
     // machine happened to be doing. Never creates or drives a window.
     void applyDiagnosticsVisualScenarios();
+    // Harness-only. Replaces the empty startup capability set with one healthy
+    // machine before a Diagnostics scenario adds its own deviation, so a capture
+    // shows the product's answer rather than the fixture's poverty. No-op outside
+    // a --visual-test run on the Diagnostics page.
+    void applyCanonicalMachineFixture();
     void applyShellVisualScenarios();
     void initializeEditArea();
     // Close guards: samples what is in flight and applies the effects the user
@@ -651,6 +667,8 @@ class QuickApplication {
     // gate (opt-in AND elevation) is open and nothing at all otherwise -- an
     // unelevated launch never opens a session and never prompts for one.
     std::unique_ptr<diagnostics::PresentMonProvider> present_provider_;
+    // Session-scoped, never persisted, off at every start (ADR 0033).
+    bool in_depth_diagnostics_ = false;
     // The process id present statistics are currently attributed to (0 == dominant
     // presenter / no window target). Kept so the attribution boundary is only
     // announced to the session when it actually moves; every announcement resets the
@@ -716,6 +734,10 @@ class QuickApplication {
     // healthy environment — which is exactly what every `diagnostics__issues`
     // capture in the earlier baselines silently photographed.
     bool diagnostics_visual_scenario_active_ = false;
+    // Harness-only. Set once the canonical machine has replaced the capability
+    // set; the async probe's completion path re-applies it rather than handing
+    // the surfaces this developer's real GPU a second or two into the capture.
+    std::optional<capability::CapabilitySet> canonical_machine_;
     bool reapplying_visual_scenarios_ = false;
     // The relaunch handoff is applied before load(), so the page is parked here
     // and handed to the shell as its STARTING destination (`landingPage`) when

@@ -322,16 +322,12 @@ void ProductionBootstrap::RunPendingElevatedRelaunch() {
     }
 
     // ADR 0033: a decline or a ShellExecuteEx failure must not strand the user
-    // with no ExoSnap running, and must not leave the opt-in that triggered the
-    // relaunch on with nothing elevated to measure it. Withdraw it first, so the
-    // recovery relaunch's own startup handoff parsing reads it as already off.
-    services::WithdrawPresentDiagnosticsOptIn();
-
-    // Carry the page across, same as a successful elevation would, but drop the
-    // reenable-present-diagnostics flag: it was written for the elevated
-    // successor that never came up, and the opt-in was just cleared above --
-    // applyStartupRelaunchHandoff() would otherwise read the stale flag and
-    // turn the withdrawn opt-in straight back on.
+    // with no ExoSnap running. Carry the page across, same as a successful
+    // elevation would, but drop the reenable-present-diagnostics flag: it was
+    // written for the elevated successor that never came up, and a process that
+    // is not elevated has nothing to measure with it. The in-depth switch is
+    // session state, so the recovered process comes back with it off and the
+    // user can ask again.
     services::RelaunchHandoff recovery_handoff = services::ParseRelaunchArgs(elevated_relaunch_args_);
     recovery_handoff.reenable_present_diag = false;
     if (!QProcess::startDetached(QCoreApplication::applicationFilePath(),
