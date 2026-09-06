@@ -1,0 +1,85 @@
+name: Cache Warm
+
+# push -> main no longer builds anything (see ci.yml's "WHAT RUNS WHERE" header),
+# so without this workflow main's sccache scope -- the only scope every PR can
+# read from -- would go stale between nightly advisory-checks.yml runs, and the
+# next PR's first build would start cold. This workflow exists solely to keep
+# that scope warm for both Ninja presets: it builds, nothing else. It reports no
+# tests and no status the README badge or branch protection depends on.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  SCCACHE_GHA_ENABLED: "true"
+  # The sccache server exits after its idle timeout (600 s by default), and a
+  # `--show-stats` that outlives it silently starts a fresh server and reports
+  # zeros rather than failing. Any job whose stats step sits behind a long
+  # non-compiling step -- the scoped clang-tidy set, the full test suite --
+  # would report an unobservable cache. Keeping the server alive for the life
+  # of the runner costs nothing: the VM is torn down either way.
+  SCCACHE_IDLE_TIMEOUT: "0"
+
+jobs:
+  cache-warm-debug:
+    name: cache-warm (windows-x64-ninja-debug)
+    runs-on: windows-2022
+    timeout-minutes: 60
+    concurrency:
+      group: cache-warm-debug-main
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+
+      - name: Install Qt 6
+        uses: ./.github/actions/setup-qt
+        with:
+          profile: quick
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+
+      - name: Configure (windows-x64-ninja-debug)
+        run: cmake --preset windows-x64-ninja-debug -DEXOSNAP_USE_SCCACHE=ON
+
+      - name: Build (windows-x64-ninja-debug)
+        run: cmake --build --preset windows-x64-ninja-debug
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats
+
+  cache-warm-release:
+    name: cache-warm (windows-x64-ninja-release)
+    runs-on: windows-2022
+    timeout-minutes: 60
+    concurrency:
+      group: cache-warm-release-main
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+
+      - name: Install Qt 6
+        uses: ./.github/actions/setup-qt
+        with:
+          profile: quick
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+
+      - name: Configure (windows-x64-ninja-release)
+        run: cmake --preset windows-x64-ninja-release -DEXOSNAP_USE_SCCACHE=ON
+
+      - name: Build (windows-x64-ninja-release)
+        run: cmake --build --preset windows-x64-ninja-release
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats

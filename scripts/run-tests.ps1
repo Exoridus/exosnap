@@ -166,6 +166,33 @@ if ($ctestExit -ne 0) {
         Write-Host ''
         Write-Host 'Failing gtest cases:' -ForegroundColor Red
         $failedCases | Select-Object -Unique | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
+
+        # The assertion itself, not only the case name. On CI the log file is an
+        # artifact that has to be downloaded first, so a summary that stops at
+        # the name sends the reader on a detour for the one line that matters.
+        # Each block is what gtest printed between "[ RUN ]" and "[ FAILED ]"
+        # for that case, capped so a case that logs a lot cannot bury the rest.
+        $maxBlockLines = 40
+        foreach ($case in ($failedCases | Select-Object -Unique)) {
+            $escaped = [regex]::Escape($case)
+            $start = ($log | Select-String -Pattern "\[\s*RUN\s*\]\s+$escaped\s*$" | Select-Object -First 1)
+            if (-not $start) { continue }
+            $block = New-Object System.Collections.Generic.List[string]
+            for ($i = $start.LineNumber; $i -lt $log.Count; $i++) {
+                $line = $log[$i]
+                if ($line -match "\[\s*FAILED\s*\]\s+$escaped") { break }
+                # ctest prefixes every line of a test's output with "<n>: "; strip
+                # it so the assertion reads the way gtest wrote it.
+                $block.Add(($line -replace '^\s*\d+:\s?', ''))
+            }
+            Write-Host ''
+            Write-Host "--- $case" -ForegroundColor Red
+            $shown = $block | Where-Object { $_.Trim() -ne '' } | Select-Object -First $maxBlockLines
+            $shown | ForEach-Object { Write-Host "  $_" }
+            if ($block.Count -gt $maxBlockLines) {
+                Write-Host "  ... ($($block.Count - $maxBlockLines) more lines in the log)" -ForegroundColor DarkGray
+            }
+        }
     }
     Write-Host ''
     Write-Host "See $logFile for full output." -ForegroundColor Yellow

@@ -343,8 +343,13 @@ Item {
                         // actually shown: three lines when the idle stamp wraps to
                         // three, one when the recording stamp fits on one.
                         Item {
-                            Layout.preferredWidth: 220
-                            Layout.maximumWidth: 220
+                            // Wide enough for the idle stamp ("Checked 15:54 ·
+                            // rechecks every 10 s and on every settings change")
+                            // to sit on one line at the review baseline width;
+                            // it still wraps below that, which is what the
+                            // height binding is for.
+                            Layout.preferredWidth: 420
+                            Layout.maximumWidth: 420
                             Layout.preferredHeight: lastCheckText.implicitHeight
                             Layout.alignment: Qt.AlignVCenter
 

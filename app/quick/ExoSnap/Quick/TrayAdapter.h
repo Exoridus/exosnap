@@ -40,33 +40,42 @@ class TrayAdapter : public QObject {
     Q_PROPERTY(QString iconSource READ iconSource NOTIFY appearanceChanged FINAL)
     Q_PROPERTY(QString tooltip READ tooltip NOTIFY appearanceChanged FINAL)
 
-    // "Show window" / "Hide window" -- one entry, and the label decides which of
-    // the two signals it raises. It used to raise the window under both.
-    // Only offered while the window is HIDDEN, where it is the one visible way
-    // back. Hiding is not something this menu does: the window's own close button
-    // and the shell already do it, and a menu row for it was a second name for a
-    // gesture the user has in front of them.
-    Q_PROPERTY(bool showWindowVisible READ showWindowVisible NOTIFY appearanceChanged FINAL)
-    Q_PROPERTY(QString showHideText READ showHideText NOTIFY appearanceChanged FINAL)
+    // The menu's first row, and the tooltip's second half: one phrase naming the
+    // session's state. Drawn disabled, because it is a caption and not an action,
+    // and deliberately the same words in both places -- a hover text and an open
+    // menu that describe two different sessions is the defect this prevents.
+    Q_PROPERTY(QString statusText READ statusText NOTIFY appearanceChanged FINAL)
+
+    // Why a start is refused, when something knows. Offered only in the blocked
+    // phase and only with a reason to give: a caption row that appears empty
+    // reads as a broken menu.
+    Q_PROPERTY(bool blockedReasonVisible READ blockedReasonVisible NOTIFY appearanceChanged FINAL)
+    Q_PROPERTY(QString blockedReason READ blockedReason NOTIFY appearanceChanged FINAL)
 
     // The non-transport entries' glyphs. Constant shapes, but not constant URLs:
     // they carry the palette, so a theme change repaints them with everything
     // else. A menu where three rows have an icon and four do not reads as three
     // unfinished rows.
-    Q_PROPERTY(QString showHideIcon READ showHideIcon NOTIFY appearanceChanged FINAL)
+    Q_PROPERTY(QString showWindowIcon READ showWindowIcon NOTIFY appearanceChanged FINAL)
+    Q_PROPERTY(QString lastRecordingIcon READ lastRecordingIcon NOTIFY appearanceChanged FINAL)
     Q_PROPERTY(QString outputFolderIcon READ outputFolderIcon NOTIFY appearanceChanged FINAL)
     Q_PROPERTY(QString notificationsIcon READ notificationsIcon NOTIFY appearanceChanged FINAL)
     Q_PROPERTY(QString quitIcon READ quitIcon NOTIFY appearanceChanged FINAL)
 
+    // Whether a finished recording exists to open. Gates the entry rather than
+    // removing it, for the same reason the transport rows stay put.
+    Q_PROPERTY(bool lastRecordingAvailable READ lastRecordingAvailable NOTIFY appearanceChanged FINAL)
+
     // One transport row each: `{ visible, enabled, text, icon }`. Assembled from
-    // the appearance table, not from the recording state.
+    // the appearance table, not from the recording state. `visible` is always
+    // true -- see rowFor() for why the menu keeps a fixed shape where the
+    // thumbnail strip does not.
     Q_PROPERTY(QVariantMap recordItem READ recordItem NOTIFY appearanceChanged FINAL)
     Q_PROPERTY(QVariantMap pauseResumeItem READ pauseResumeItem NOTIFY appearanceChanged FINAL)
     Q_PROPERTY(QVariantMap stopItem READ stopItem NOTIFY appearanceChanged FINAL)
 
     // The unread mirror for toasts raised while the window was not on screen.
     Q_PROPERTY(int unreadCount READ unreadCount NOTIFY unreadCountChanged FINAL)
-    Q_PROPERTY(bool notificationsVisible READ notificationsVisible NOTIFY unreadCountChanged FINAL)
     Q_PROPERTY(QString notificationsText READ notificationsText NOTIFY unreadCountChanged FINAL)
 
   public:
@@ -101,8 +110,12 @@ class TrayAdapter : public QObject {
     // ignored by a static one.
     void setPresence(const ShellPresenceState& state, const QString& elapsed_text, int mark_frame);
     // The elapsed clock moves on the metrics cadence without the state changing,
-    // and the tooltip is the surface that shows it.
+    // and the status row and the tooltip are the surfaces that show it.
     void setElapsedText(const QString& elapsed_text);
+    // Empty when nothing is known, which is not the same as not being blocked:
+    // the phase decides whether the row exists at all.
+    void setBlockedReason(const QString& reason);
+    void setLastRecordingAvailable(bool available);
     // Ids from ui/theme/ExoSnapThemes.h. The mark follows the application's
     // palette, so changing the accent repaints the tray with no restart.
     void setAppearance(const QString& appearance_id, const QString& accent_id);
@@ -110,7 +123,6 @@ class TrayAdapter : public QObject {
     // Rendering at any other size means the shell rescales, which is what the
     // optical profiles exist to avoid.
     void setIconPixelSize(int px);
-    void setWindowVisible(bool visible);
 
     void incrementUnreadCount();
     void clearUnreadCount();
@@ -119,17 +131,19 @@ class TrayAdapter : public QObject {
     [[nodiscard]] bool active() const noexcept;
     [[nodiscard]] QString iconSource() const;
     [[nodiscard]] QString tooltip() const;
-    [[nodiscard]] bool showWindowVisible() const noexcept;
-    [[nodiscard]] QString showHideText() const;
-    [[nodiscard]] QString showHideIcon() const;
+    [[nodiscard]] QString statusText() const;
+    [[nodiscard]] bool blockedReasonVisible() const;
+    [[nodiscard]] const QString& blockedReason() const noexcept;
+    [[nodiscard]] QString showWindowIcon() const;
+    [[nodiscard]] QString lastRecordingIcon() const;
     [[nodiscard]] QString outputFolderIcon() const;
     [[nodiscard]] QString notificationsIcon() const;
     [[nodiscard]] QString quitIcon() const;
+    [[nodiscard]] bool lastRecordingAvailable() const noexcept;
     [[nodiscard]] QVariantMap recordItem() const;
     [[nodiscard]] QVariantMap pauseResumeItem() const;
     [[nodiscard]] QVariantMap stopItem() const;
     [[nodiscard]] int unreadCount() const noexcept;
-    [[nodiscard]] bool notificationsVisible() const noexcept;
     [[nodiscard]] QString notificationsText() const;
 
     // ---- what QML calls back ---------------------------------------------
@@ -138,7 +152,8 @@ class TrayAdapter : public QObject {
     // repaint, and the row that drew itself is not necessarily the row that is
     // true now.
     Q_INVOKABLE void triggerTransport(TransportRow row);
-    Q_INVOKABLE void triggerShowHide();
+    Q_INVOKABLE void triggerShowWindow();
+    Q_INVOKABLE void triggerOpenLastRecording();
     Q_INVOKABLE void triggerNotifications();
     Q_INVOKABLE void triggerOpenOutputFolder();
     Q_INVOKABLE void triggerQuit();
@@ -153,33 +168,36 @@ class TrayAdapter : public QObject {
     void appearanceChanged();
     void unreadCountChanged();
 
-    // The window is wanted on screen -- the menu entry while it reads "Show
-    // window", a left click on the icon, or the notifications entry.
+    // The window is wanted on screen -- the "Show window" entry, a left click on
+    // the icon, or the notifications entry. The handler raises and activates an
+    // already visible window, so the entry means the same thing in every state.
     void activateWindowRequested();
-    // The same menu entry under its other label. Its own signal because that
-    // entry used to offer to hide a window and then show it.
-    void hideWindowRequested();
     // A transport entry was chosen, carrying the intent the appearance table
     // resolved. The same signal the thumbnail buttons raise.
     void shellActionRequested(ShellAction action);
     // A double click, which is "toggle recording" rather than a specific
     // transport action -- the gesture has no state to read.
     void recordToggleRequested();
+    // The finished recording is wanted on screen, in the editor.
+    void openLastRecordingRequested();
     void openOutputFolderRequested();
     void quitRequested();
 
   private:
-    [[nodiscard]] QVariantMap rowFor(ShellButton button, bool keep_visible_when_disabled) const;
+    // `fallback_action` names the row when the appearance table has none to give
+    // -- a row the table hides still has to say what it is.
+    [[nodiscard]] QVariantMap rowFor(ShellButton button, ShellAction fallback_action) const;
     [[nodiscard]] QString glyphUrl(ui::brand::ShellGlyph glyph) const;
 
     ShellPresenceState state_;
     QString elapsed_text_;
+    QString blocked_reason_;
     QString appearance_id_;
     QString accent_id_;
     int icon_px_ = 16;
     int mark_frame_ = 0;
     bool active_ = false;
-    bool window_visible_ = true;
+    bool last_recording_available_ = false;
     int unread_count_ = 0;
 };
 

@@ -998,24 +998,51 @@ ShellPresenceState PresenceFor(UiRecordingState state, bool can_start, bool can_
 
 } // namespace
 
-TEST(TrayAdapterMenu, IdleOffersOnlyStart) {
+TEST(TrayAdapterMenu, IdleEnablesStartAndGreysTheRestUnderTheirOwnNames) {
     TrayAdapter tray;
     tray.setPresence(PresenceFor(UiRecordingState::Ready, true, false, false, false), {}, 0);
 
+    // The menu keeps a fixed shape: nothing is ever absent, so the rows a state
+    // refuses still say what they are.
     EXPECT_TRUE(tray.recordItem().value(QStringLiteral("visible")).toBool());
     EXPECT_TRUE(tray.recordItem().value(QStringLiteral("enabled")).toBool());
-    EXPECT_FALSE(tray.pauseResumeItem().value(QStringLiteral("visible")).toBool());
-    EXPECT_FALSE(tray.stopItem().value(QStringLiteral("visible")).toBool());
+
+    EXPECT_TRUE(tray.pauseResumeItem().value(QStringLiteral("visible")).toBool());
+    EXPECT_FALSE(tray.pauseResumeItem().value(QStringLiteral("enabled")).toBool());
+    EXPECT_EQ(tray.pauseResumeItem().value(QStringLiteral("text")).toString(), QStringLiteral("Pause recording"));
+
+    EXPECT_TRUE(tray.stopItem().value(QStringLiteral("visible")).toBool());
+    EXPECT_FALSE(tray.stopItem().value(QStringLiteral("enabled")).toBool());
+    EXPECT_EQ(tray.stopItem().value(QStringLiteral("text")).toString(), QStringLiteral("Stop recording"));
 }
 
-TEST(TrayAdapterMenu, RecordingOffersPauseAndStop) {
+TEST(TrayAdapterMenu, ARowTheTableHidesKeepsItsDefaultGlyph) {
+    // A greyed row with no icon reads as an entry that failed to load one, so a
+    // row the table refuses falls back to the glyph of the action it names.
+    TrayAdapter tray;
+    tray.setPresence(PresenceFor(UiRecordingState::Ready, true, false, false, false), {}, 0);
+
+    EXPECT_TRUE(tray.pauseResumeItem()
+                    .value(QStringLiteral("icon"))
+                    .toString()
+                    .startsWith(QStringLiteral("image://exosnap-shell/glyph/pause/")));
+    EXPECT_TRUE(tray.stopItem()
+                    .value(QStringLiteral("icon"))
+                    .toString()
+                    .startsWith(QStringLiteral("image://exosnap-shell/glyph/stop/")));
+}
+
+TEST(TrayAdapterMenu, RecordingEnablesPauseAndStopAndGreysStart) {
     TrayAdapter tray;
     tray.setPresence(PresenceFor(UiRecordingState::Recording, false, true, true, false), {}, 0);
 
-    EXPECT_FALSE(tray.recordItem().value(QStringLiteral("visible")).toBool());
-    EXPECT_TRUE(tray.pauseResumeItem().value(QStringLiteral("visible")).toBool());
+    EXPECT_TRUE(tray.recordItem().value(QStringLiteral("visible")).toBool());
+    EXPECT_FALSE(tray.recordItem().value(QStringLiteral("enabled")).toBool());
+    EXPECT_EQ(tray.recordItem().value(QStringLiteral("text")).toString(), QStringLiteral("Start recording"));
+
+    EXPECT_TRUE(tray.pauseResumeItem().value(QStringLiteral("enabled")).toBool());
     EXPECT_EQ(tray.pauseResumeItem().value(QStringLiteral("text")).toString(), QStringLiteral("Pause recording"));
-    EXPECT_TRUE(tray.stopItem().value(QStringLiteral("visible")).toBool());
+    EXPECT_TRUE(tray.stopItem().value(QStringLiteral("enabled")).toBool());
 }
 
 TEST(TrayAdapterMenu, PausedSwapsTheOneEntryToResume) {
@@ -1023,7 +1050,7 @@ TEST(TrayAdapterMenu, PausedSwapsTheOneEntryToResume) {
     tray.setPresence(PresenceFor(UiRecordingState::Paused, false, true, false, true), {}, 0);
 
     EXPECT_EQ(tray.pauseResumeItem().value(QStringLiteral("text")).toString(), QStringLiteral("Resume recording"));
-    EXPECT_TRUE(tray.stopItem().value(QStringLiteral("visible")).toBool());
+    EXPECT_TRUE(tray.stopItem().value(QStringLiteral("enabled")).toBool());
 }
 
 TEST(TrayAdapterMenu, ARefusedStartIsGreyedRatherThanGone) {
@@ -1052,18 +1079,22 @@ TEST(TrayAdapterMenu, EveryTransportRowCarriesAGlyph) {
 }
 
 TEST(TrayAdapterMenu, EveryOtherRowCarriesAGlyphToo) {
-    // The four rows that are not transport. A menu where three rows have an icon
-    // and four do not reads as three unfinished rows.
+    // The rows that are not transport. A menu where some rows have an icon and
+    // the rest do not reads as unfinished rows.
     TrayAdapter tray;
     tray.setAppearance(QStringLiteral("dark"), QStringLiteral("aqua"));
     tray.setIconPixelSize(16);
 
-    const QStringList icons{tray.showHideIcon(), tray.outputFolderIcon(), tray.notificationsIcon(), tray.quitIcon()};
+    const QStringList icons{tray.showWindowIcon(), tray.outputFolderIcon(), tray.notificationsIcon(), tray.quitIcon()};
     for (const QString& icon : icons) {
         EXPECT_TRUE(icon.startsWith(QStringLiteral("image://exosnap-shell/glyph/"))) << icon.toStdString();
     }
     // And they are four different glyphs, not one drawn four times.
     EXPECT_EQ(QSet<QString>(icons.begin(), icons.end()).size(), icons.size());
+
+    // "Open last recording" deliberately shares the transport's Record glyph --
+    // it depicts a recording -- so it is asserted apart from the uniqueness set.
+    EXPECT_TRUE(tray.lastRecordingIcon().startsWith(QStringLiteral("image://exosnap-shell/glyph/record/")));
 }
 
 TEST(TrayAdapterMenu, TheMenuGlyphsFollowTheAccent) {
@@ -1118,22 +1149,33 @@ TEST(TrayAdapterAction, TheStopRowStops) {
     EXPECT_EQ(spy.at(0).at(0).value<ShellAction>(), ShellAction::Stop);
 }
 
-TEST(TrayAdapterShowHide, TheLabelDecidesWhichSignalTheEntryRaises) {
+TEST(TrayAdapterShowWindow, TheEntryAlwaysAsksForTheWindow) {
+    // One meaning in every state. The entry used to change label with the
+    // window's visibility and raise a different signal under each, which made
+    // "Hide window" show the window whenever the flag was stale. There is no
+    // flag now: the handler raises and activates a window that is already up.
     TrayAdapter tray;
     QSignalSpy show(&tray, &TrayAdapter::activateWindowRequested);
-    QSignalSpy hide(&tray, &TrayAdapter::hideWindowRequested);
 
-    tray.setWindowVisible(true);
-    ASSERT_EQ(tray.showHideText(), QStringLiteral("Hide window"));
-    tray.triggerShowHide();
-    EXPECT_EQ(hide.count(), 1);
-    EXPECT_EQ(show.count(), 0);
-
-    tray.setWindowVisible(false);
-    ASSERT_EQ(tray.showHideText(), QStringLiteral("Show window"));
-    tray.triggerShowHide();
+    tray.triggerShowWindow();
     EXPECT_EQ(show.count(), 1);
-    EXPECT_EQ(hide.count(), 1);
+    tray.setPresence(PresenceFor(UiRecordingState::Recording, false, true, true, false), {}, 0);
+    tray.triggerShowWindow();
+    EXPECT_EQ(show.count(), 2);
+}
+
+TEST(TrayAdapterLastRecording, TheEntryRaisesNothingUntilThereIsOneToOpen) {
+    TrayAdapter tray;
+    QSignalSpy open(&tray, &TrayAdapter::openLastRecordingRequested);
+
+    EXPECT_FALSE(tray.lastRecordingAvailable());
+    tray.triggerOpenLastRecording();
+    EXPECT_EQ(open.count(), 0);
+
+    tray.setLastRecordingAvailable(true);
+    EXPECT_TRUE(tray.lastRecordingAvailable());
+    tray.triggerOpenLastRecording();
+    EXPECT_EQ(open.count(), 1);
 }
 
 TEST(TrayAdapterActivation, ALeftClickAsksForTheWindowAndADoubleClickTogglesRecording) {
@@ -1154,20 +1196,23 @@ TEST(TrayAdapterActivation, ALeftClickAsksForTheWindowAndADoubleClickTogglesReco
     EXPECT_EQ(toggle.count(), 1);
 }
 
-TEST(TrayAdapterNotifications, TheEntryAppearsWithACountAndClearsOnUse) {
+TEST(TrayAdapterNotifications, TheEntryStaysWithoutACountAndClearsOnUse) {
+    // Present at zero, under the plain label: the entry opens the window, which
+    // is never the wrong thing to offer, and a row that comes and goes with the
+    // count moves every other row under the pointer.
     TrayAdapter tray;
-    EXPECT_FALSE(tray.notificationsVisible());
+    EXPECT_EQ(tray.unreadCount(), 0);
+    EXPECT_EQ(tray.notificationsText(), QStringLiteral("Notifications"));
 
     tray.incrementUnreadCount();
     tray.incrementUnreadCount();
-    EXPECT_TRUE(tray.notificationsVisible());
     EXPECT_EQ(tray.notificationsText(), QStringLiteral("Notifications (2)"));
 
     QSignalSpy activate(&tray, &TrayAdapter::activateWindowRequested);
     tray.triggerNotifications();
     EXPECT_EQ(activate.count(), 1);
     EXPECT_EQ(tray.unreadCount(), 0);
-    EXPECT_FALSE(tray.notificationsVisible());
+    EXPECT_EQ(tray.notificationsText(), QStringLiteral("Notifications"));
 }
 
 TEST(TrayAdapterIcon, TheUrlCarriesTheStateTheSizeAndThePalette) {
@@ -1218,6 +1263,53 @@ TEST(TrayAdapterTooltip, ItNamesTheStateAndCarriesTheClockOnlyWhileRecording) {
 
     tray.setPresence(PresenceFor(UiRecordingState::Paused, false, true, false, true), QStringLiteral("04:17"), 0);
     EXPECT_EQ(tray.tooltip(), QString::fromUtf8("ExoSnap \xE2\x80\x94 Paused"));
+}
+
+TEST(TrayAdapterStatusRow, ItNamesEveryStateTheIconCanShow) {
+    TrayAdapter tray;
+
+    tray.setPresence(PresenceFor(UiRecordingState::Ready, true, false, false, false), QStringLiteral("04:17"), 0);
+    EXPECT_EQ(tray.statusText(), QStringLiteral("Ready"));
+
+    tray.setPresence(PresenceFor(UiRecordingState::Recording, false, true, true, false), QStringLiteral("04:17"), 0);
+    EXPECT_EQ(tray.statusText(), QStringLiteral("Recording 04:17"));
+
+    tray.setPresence(PresenceFor(UiRecordingState::Paused, false, true, false, true), QStringLiteral("04:17"), 0);
+    EXPECT_EQ(tray.statusText(), QStringLiteral("Paused"));
+
+    tray.setPresence(PresenceFor(UiRecordingState::Saving, false, false, false, false), {}, 0);
+    EXPECT_EQ(tray.statusText(), QStringLiteral("Finishing recording"));
+
+    tray.setPresence(PresenceFor(UiRecordingState::Failed, false, false, false, false), {}, 0);
+    EXPECT_EQ(tray.statusText(), QStringLiteral("Recording failed"));
+
+    ShellPresenceInput saved;
+    saved.state = UiRecordingState::Completed;
+    saved.saved_dwell_active = true;
+    tray.setPresence(ProjectShellPresence(saved), {}, 0);
+    EXPECT_EQ(tray.statusText(), QStringLiteral("Saved"));
+}
+
+TEST(TrayAdapterStatusRow, TheClockIsDroppedWhenThereIsNone) {
+    TrayAdapter tray;
+    tray.setPresence(PresenceFor(UiRecordingState::Recording, false, true, true, false), {}, 0);
+    EXPECT_EQ(tray.statusText(), QStringLiteral("Recording"));
+}
+
+TEST(TrayAdapterBlockedReason, TheRowNeedsBothThePhaseAndAReason) {
+    TrayAdapter tray;
+    // A reason with no blocked phase is a sentence left behind by a state that
+    // has moved on, and a blocked phase with no reason is an empty caption.
+    // Neither is drawn.
+    tray.setPresence(PresenceFor(UiRecordingState::Blocked, false, false, false, false), {}, 0);
+    EXPECT_FALSE(tray.blockedReasonVisible());
+
+    tray.setBlockedReason(QStringLiteral("No capture source is available."));
+    EXPECT_TRUE(tray.blockedReasonVisible());
+    EXPECT_EQ(tray.blockedReason(), QStringLiteral("No capture source is available."));
+
+    tray.setPresence(PresenceFor(UiRecordingState::Ready, true, false, false, false), {}, 0);
+    EXPECT_FALSE(tray.blockedReasonVisible());
 }
 
 TEST(TrayAdapterAvailability, ItIsInactiveUntilTheApplicationSaysThereIsATray) {

@@ -314,17 +314,11 @@ int main(int argc, char** argv) {
         window.show();
         CenterOnScreen(window);
         if (previewSmoke) {
-            // QCoreApplication::quit() was found NOT to reliably return control from
-            // app.exec() in this exact launch shape (confirmed with instrumentation:
-            // the timer fires and quit() runs, but exec() never returns) on both this
-            // dev machine and the GitHub Actions windows-2022 release-pipeline runner
-            // -- root cause not pinned down (no child event loop or extra thread exists
-            // on this short-circuit path to explain a stuck quit propagation). This
-            // smoke's only job is proving the packaged exe loads its Qt runtime and
-            // renders; std::exit() sidesteps whatever is holding exec() open instead of
-            // depending on normal Qt shutdown, which is fine for this dev/CI-only path
-            // that never runs for a real update.
-            QTimer::singleShot(kPreviewSmokeCloseMs, &app, [] { std::exit(0); });
+            // exit(), not quit(): quit() is a REQUEST that Qt refuses while a
+            // window is still open, and the preview window is open by design.
+            // exit() ends the loop unconditionally; see the same choice on the
+            // close paths below.
+            QTimer::singleShot(kPreviewSmokeCloseMs, &app, [] { QCoreApplication::exit(0); });
         }
         (void)app.exec();
         // A preview render has no update outcome to report. It is a rendering
@@ -582,10 +576,19 @@ int main(int argc, char** argv) {
         return true;
     };
     QObject::connect(&window, &UpdaterWindow::retryRequested, &window, [&] { (void)doRetry(); });
-    QObject::connect(&window, &UpdaterWindow::closeRequested, &app, &QCoreApplication::quit);
+    // Every way out of this process ends the event loop with exit(), never
+    // quit(). quit() asks the application whether it may quit, and Qt says no
+    // while a window is open or refuses a close (the window ignores WM_CLOSE
+    // during a swap and while a cancel confirmation is pending). A refused quit
+    // is silent: the window hides or stays, exec() keeps running, and the
+    // process survives as a headless updater nothing can reach except Task
+    // Manager. The window's own guards have already been consulted by the
+    // time these fire, so the decision to leave has been made.
+    const auto exitNow = [] { QCoreApplication::exit(0); };
+    QObject::connect(&window, &UpdaterWindow::closeRequested, &app, exitNow);
     const auto openAndQuit = [&] {
         (void)LaunchExoSnapFrom(ResolveOpenDir(args));
-        QCoreApplication::quit();
+        exitNow();
     };
     QObject::connect(&window, &UpdaterWindow::openExoSnapRequested, &window, openAndQuit);
 
@@ -635,8 +638,12 @@ int main(int argc, char** argv) {
             // no state left to observe once the endpoint is gone. The small
             // delay exists so the response reaches the pipe before the process
             // does exit; it is not a synchronisation guarantee, which is why the
-            // documented contract is "ok, then the connection drops".
-            QTimer::singleShot(250, &app, &QCoreApplication::quit);
+            // documented contract is "ok, then the connection drops". exit()
+            // rather than quit() for the reason exitNow states: the window is
+            // still showing (a failure state a runner has just read), and a
+            // quit() Qt refused on its account left the process alive with no
+            // window and no endpoint to ask again.
+            QTimer::singleShot(250, &app, exitNow);
             return true;
         };
 

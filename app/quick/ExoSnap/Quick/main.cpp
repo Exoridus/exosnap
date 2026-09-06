@@ -48,7 +48,6 @@
 #include <QScreen>
 #include <QSize>
 #include <QStringList>
-#include <QStyleFactory>
 #include <QTextStream>
 #include <QTimer>
 #include <QVariantMap>
@@ -618,17 +617,10 @@ int main(int argc, char* argv[]) {
     // take the application somewhere else.
     QQuickStyle::setStyle(QStringLiteral("Basic"));
 
-    // The WIDGETS style, which is a different question and matters for exactly
-    // one surface: the tray menu. Qt.labs.platform documents its Menu as native
-    // on macOS, iOS, Android and GTK+ Linux, and as a Qt Widgets fallback
-    // everywhere else -- so on Windows that menu is a QMenu.
-    //
-    // The Windows styles paint a menu from the platform's own theme parts and
-    // largely ignore the application palette, which left the tray menu in the
-    // system's chrome underneath a themed application. Fusion honours the
-    // palette QuickThemeTokens sets, so the one Widgets surface this product has
-    // looks like the product.
-    QApplication::setStyle(QStyleFactory::create(QStringLiteral("Fusion")));
+    // No Widgets style is chosen: the process draws no Widgets surface. The
+    // tray menu, the one candidate, is a native Windows popup menu on this
+    // platform (see NativeMenuAppearance.h), so a Widgets style could not have
+    // reached it either way.
 
     const exosnap::bootstrap::PostAppResult post_app = exosnap::bootstrap::MarkApplicationConstructed();
     exosnap::bootstrap::ApplyApplicationMetadata();

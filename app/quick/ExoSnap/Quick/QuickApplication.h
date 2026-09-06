@@ -390,8 +390,8 @@ class QuickApplication {
     // Brings the window back from the tray (tray icon click, "Show window", or
     // the unread-notifications mirror).
     // Banks the geometry, hides the window and raises the one-time notice.
-    // Reached from the close-to-tray preference and from the tray menu's own
-    // "Hide window" entry, which must not grow a second copy of it.
+    // Reached from the minimize-to-tray preference; the tray menu offers no
+    // Hide entry, so this is the one path that puts the window away.
     void hideWindowToTray();
     // Whether the window was maximized when it went to the tray. Banked at hide
     // time because nothing readable at restore time still says so: the hide
