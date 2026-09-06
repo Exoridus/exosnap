@@ -2048,10 +2048,11 @@ once per control — raises a **"Restart as administrator"** toast: *"In-depth d
 elevated process. Restart ExoSnap as administrator to start the traces."* Its action restarts ExoSnap
 elevated through the ordinary close guards, so a running, preparing or finalizing recording refuses
 it and the app stays where it is. Nothing about the offer is a prompt: the setting is already written
-and stays written, the toast has to be pressed, and declining the UAC prompt behind it leaves the
-opt-in on and this process running — which is exactly the "On · not measuring · needs an admin
-relaunch" state the sub-text then reports. An already-elevated process raises no toast at all; it
-starts the traces on the spot.
+and stays written pending that answer, the toast has to be pressed, and declining the UAC prompt
+behind it withdraws the opt-in and brings ExoSnap back without elevation — the switch reads Off again,
+exactly the "Off · needs an admin relaunch" state the sub-text reports, and a later click raises the
+offer again. A misclick on the UAC prompt is therefore recoverable from the switch alone. An
+already-elevated process raises no toast at all; it starts the traces on the spot.
 
 **Sparkline tiles.** Frame pacing, Encoder, Storage and Audio sync each carry a 24 px sparkline of the
 last 60 snapshots (12 s at 5 Hz), coloured by the tile's own value tone, with a dashed budget line
