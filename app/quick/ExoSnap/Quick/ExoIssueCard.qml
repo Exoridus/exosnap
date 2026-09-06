@@ -135,7 +135,10 @@ Rectangle {
         // from recording. Quiet, it read as a third line of explanation in a
         // card that already had two.
         ExoButton {
-            text: root.fixSafety === 1 ? root.fixLabel + " →" : root.fixLabel
+            text: root.fixLabel
+            // Safety class 1 ("Assisted") navigates elsewhere instead of
+            // applying in place; the trailing arrow is what tells them apart.
+            trailingGlyph: root.fixSafety === 1 ? ExoGlyph.ArrowRight : ExoGlyph.Invalid
             visible: root.hasFix && root.fixSafety !== 2
             Layout.alignment: Qt.AlignLeft
             Layout.topMargin: ExoTheme.spacingSm

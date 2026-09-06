@@ -26,6 +26,10 @@ Button {
     // one more in-app destination. Ignored while `glyph` makes the button
     // icon-only: a button cannot be both its icon and a labelled one.
     property int leadingGlyph: ExoGlyph.Invalid
+    // An ExoGlyph.Kind drawn AFTER the label, for an action that leaves this
+    // control for somewhere else -- an assisted fix that navigates away rather
+    // than applying in place. Ignored while `glyph` makes the button icon-only.
+    property int trailingGlyph: ExoGlyph.Invalid
     // One control rung down, for a button that lives inside chrome rather than
     // on a page: the Record page's preview toolbar is 38 px tall, and a
     // full-height button there leaves a 1 px margin and reads as the toolbar's
@@ -44,6 +48,8 @@ Button {
     // Reserved on the label's left. One rung below the icon-only glyph's 18 px:
     // it sits beside a body-sized label rather than standing in for one.
     readonly property real _leadingGlyphSpace: root._hasLeadingGlyph ? 14 + ExoTheme.spacingXs : 0
+    readonly property bool _hasTrailingGlyph: !root._iconOnly && root.trailingGlyph !== ExoGlyph.Invalid
+    readonly property real _trailingGlyphSpace: root._hasTrailingGlyph ? 14 + ExoTheme.spacingXs : 0
 
     readonly property bool _primary: root.tone === "primary" && root.enabled
     readonly property bool _destructive: root.tone === "destructive" && root.enabled
@@ -79,7 +85,8 @@ Button {
                                   : root.selected ? ExoTheme.text : ExoTheme.textSecondary
 
     contentItem: Item {
-        implicitWidth: root._iconOnly ? icon.width : buttonLabel.implicitWidth + root._leadingGlyphSpace
+        implicitWidth: root._iconOnly ? icon.width
+                                      : buttonLabel.implicitWidth + root._leadingGlyphSpace + root._trailingGlyphSpace
         implicitHeight: root._iconOnly ? icon.height : buttonLabel.implicitHeight
 
         ExoGlyph {
@@ -101,6 +108,7 @@ Button {
 
             anchors.fill: parent
             anchors.leftMargin: root._leadingGlyphSpace
+            anchors.rightMargin: root._trailingGlyphSpace
             horizontalAlignment: root.quiet && root.width > root.implicitWidth ? Text.AlignLeft : Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
             text: root.text
@@ -112,6 +120,20 @@ Button {
                 family: ExoTheme.sansFamily
                 pixelSize: ExoTheme.fontBody
                 weight: root.selected || root._primary ? Font.DemiBold : Font.Medium
+            }
+        }
+
+        ExoGlyph {
+            id: trailingIcon
+
+            kind: root.trailingGlyph
+            color: root._ink
+            visible: root._hasTrailingGlyph
+            width: 14
+            height: 14
+            anchors {
+                right: parent.right
+                verticalCenter: parent.verticalCenter
             }
         }
 

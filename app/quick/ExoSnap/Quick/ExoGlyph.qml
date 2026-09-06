@@ -69,7 +69,8 @@ Item {
         Copy,
         Refresh,
         Run,
-        Send
+        Send,
+        ArrowRight
     }
 
     // An ExoGlyph.Kind value. Declared `int` because a QML-declared enum is not
@@ -204,7 +205,12 @@ Item {
         // Send -- out of the machine and away, drawn as an arrow leaving a tray.
         // Not a paper plane: at 18 px a plane is four strokes that resolve into a
         // smudge, and it says "message" where this says "upload".
-        "M9 2.5V12 M5.6 5.9L9 2.5L12.4 5.9 M2.5 12.5V15.5H15.5V12.5"
+        "M9 2.5V12 M5.6 5.9L9 2.5L12.4 5.9 M2.5 12.5V15.5H15.5V12.5",
+        // ArrowRight -- a shaft plus a two-stroke head, marking that its label
+        // leads somewhere else. Back (above) is this same head shape, pointing
+        // left, on a bent shaft; this one mirrors that head onto a straight
+        // shaft, so the two read as one family.
+        "M4 9H14 M10 5L14 9L10 13"
     ]
 
     // Kinds drawn as a filled silhouette instead of a stroked outline.

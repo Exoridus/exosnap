@@ -120,8 +120,10 @@ Rectangle {
                 }
 
                 ExoButton {
-                    text: (tipRow.modelData.fixSafety === 1 ? (tipRow.modelData.fixLabel ?? "") + " →"
-                                                            : (tipRow.modelData.fixLabel ?? ""))
+                    text: tipRow.modelData.fixLabel ?? ""
+                    // Safety class 1 ("Assisted") navigates elsewhere instead of
+                    // applying in place; the trailing arrow is what tells them apart.
+                    trailingGlyph: tipRow.modelData.fixSafety === 1 ? ExoGlyph.ArrowRight : ExoGlyph.Invalid
                     visible: (tipRow.modelData.hasFix ?? false) && tipRow.modelData.fixSafety !== 2
                     quiet: true
                     Layout.alignment: Qt.AlignVCenter
