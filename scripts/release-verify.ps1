@@ -370,6 +370,13 @@ function Start-ReleaseSession {
         RunId         = $sessionRunId
         RecordingsDir = $recordings
     }
+    # A leftover recovery manifest (see Backup-ReleaseRecoveryManifest) is moved
+    # aside once at `prepare`, but a scenario that genuinely leaves a recording
+    # unfinalized -- or a crash mid-campaign -- can write a fresh one at any later
+    # launch. Dismissed here, at connect, before the scenario sends its first
+    # command: a recovery surface refuses everything else on the control channel,
+    # so any later point would be too late for the scenario about to run.
+    Clear-ReleaseBlockingSurface -Session $script:Session -When 'at launch'
     return $script:Session
 }
 
@@ -501,29 +508,35 @@ function New-ReleaseContext {
     }
 }
 
-function Close-ReleaseBlockingSurface {
+function Clear-ReleaseBlockingSurface {
     <#
     .SYNOPSIS
-        Dismisses a modal surface a scenario left open, and says that it did.
+        Dismisses a modal surface wherever it showed up, and says that it did.
     .DESCRIPTION
         The product refuses to be driven while a blocking surface is up -- a
         recording error, a recovery offer, a crash-report prompt -- and that refusal
         is correct: those surfaces exist to be answered. What is not correct is
-        carrying one into the NEXT scenario, which then meets
-        "A recordingError surface is open; answer it before driving the shell" at
-        its own setup and reports a failure describing the previous scenario. Four
-        gates failed that way in one sweep, and a 30 min soak died 13 s in on a
-        recovery offer an earlier scenario had left behind.
+        carrying one into the NEXT scenario, or into a fresh launch, which then
+        meets "A recordingError surface is open; answer it before driving the
+        shell" at its own setup and reports a failure describing something else
+        entirely. Four gates failed that way in one sweep, a 30 min soak died 13 s
+        in on a recovery offer an earlier scenario had left behind, and a leftover
+        recovery-manifest.json from a PREVIOUS campaign failed two gates before
+        this one's first scenario ever ran -- the app opened the recovery surface
+        at launch, before any scenario or cleanup pass had a chance to run at all.
 
-        The sibling of Stop-ReleaseLeakedRecording, and reported for the same
-        reason: a scenario that leaves a surface open is a fact about the catalog
-        worth seeing, even though it is repaired here.
+        Called from two places for that reason: Close-ReleaseBlockingSurface
+        (after every scenario, the sibling of Stop-ReleaseLeakedRecording) and
+        Start-ReleaseSession (at every launch, before the first command of the
+        scenario about to run). A scenario that leaves a surface open, or a
+        campaign that inherits one, is a fact about the catalog worth seeing even
+        though it is repaired here.
 
         Dismissed, never answered: `recovery.dismiss` puts the offer away without
         deciding it and `recordingError.dismiss` closes without sending a report.
         Deciding FOR the operator would be a different kind of wrong.
     #>
-    param($Session)
+    param($Session, [string] $When = 'after the scenario')
     if ($null -eq $Session) { return }
     $commandFor = @{
         recordingError = 'recordingError.dismiss'
@@ -539,10 +552,10 @@ function Close-ReleaseBlockingSurface {
             $surface = "$($state.blockingSurface)"
             if ([string]::IsNullOrWhiteSpace($surface) -or $surface -eq 'none') { return }
             if (-not $commandFor.ContainsKey($surface)) {
-                Write-Step "a '$surface' surface was left open and this runner has no command to close it"
+                Write-Step "a '$surface' surface was open $When and this runner has no command to close it"
                 return
             }
-            Write-Step "a $surface surface was still open after the scenario; dismissing it"
+            Write-Step "a $surface surface was open $When; dismissing it"
             $answer = Invoke-LiveVerifyCommand -Connection $Session.Connection -Command $commandFor[$surface]
             if (-not $answer.ok) {
                 Write-Step "  it refused to close: $($answer.error.message)"
@@ -553,6 +566,42 @@ function Close-ReleaseBlockingSurface {
     catch {
         # The session may already be gone -- a scenario is allowed to end it.
     }
+}
+
+function Close-ReleaseBlockingSurface {
+    param($Session)
+    Clear-ReleaseBlockingSurface -Session $Session -When 'after the scenario'
+}
+
+function Backup-ReleaseRecoveryManifest {
+    <#
+    .SYNOPSIS
+        Moves a leftover recovery manifest out of the way before the campaign
+        launches anything, and says that it did.
+    .DESCRIPTION
+        The runner launches the real, unconfigured ExoSnap -- no EXOSNAP_CONFIG_DIR
+        override, deliberately, because a release gate has to bind its verdict to
+        the same persistence path a shipped install actually uses. That means a
+        recovery-manifest.json a PREVIOUS campaign (or a real crash) left behind is
+        still sitting under %LOCALAPPDATA%\ExoSnap when this one starts, and the
+        app opens the recovery surface at the very first launch -- before any
+        scenario has run, and before the control channel has offered a single
+        command to answer it with. Clear-ReleaseBlockingSurface, called from every
+        session start, closes a surface that reappears mid-campaign; it cannot
+        reach this one, because it needs a connection that a blocked launch never
+        finishes making.
+
+        Moved into the campaign directory, never deleted: the manifest may
+        describe a real, recoverable recording, and this runner has no basis for
+        deciding that it does not.
+    #>
+    param([Parameter(Mandatory)] [string] $CampaignDirectory)
+    if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) { return }
+    $manifestPath = Join-Path $env:LOCALAPPDATA 'ExoSnap/recovery-manifest.json'
+    if (-not (Test-Path -LiteralPath $manifestPath)) { return }
+    $backupPath = Join-Path $CampaignDirectory 'leftover-recovery-manifest.json'
+    Move-Item -LiteralPath $manifestPath -Destination $backupPath -Force
+    Write-Step "a leftover recovery manifest from a previous run was moved to $backupPath so it cannot open the recovery surface at launch"
 }
 
 function Stop-ReleaseLeakedRecording {
@@ -863,6 +912,7 @@ switch ($Command) {
 
         New-LiveVerifyRun -RunId $campaignId -RunDirectory $directory -Catalog $catalog `
             -Artifact $artifact -Environment $environment | Out-Null
+        Backup-ReleaseRecoveryManifest -CampaignDirectory $directory
 
         Write-Heading "Release campaign $campaignId"
         Write-Host "  artifact : $($artifact.exePath)"
