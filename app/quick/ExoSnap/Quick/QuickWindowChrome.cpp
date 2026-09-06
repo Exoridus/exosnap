@@ -200,8 +200,11 @@ void QuickWindowChrome::setTarget(QQuickWindow* window) {
 
     ensureNativeFrameStyle();
     refreshWindowMaximized();
-    applyBorderColor("attach");
+    // Corner preference first: it is what makes DWM draw a frame on this
+    // WS_POPUP window at all, and the border colour has nothing to paint
+    // until that frame exists (see applyCornerPreference's own note).
     applyCornerPreference();
+    applyBorderColor("attach");
     TraceWindowGeometry("chrome-style-applied", window);
     emit targetChanged();
 }
@@ -247,8 +250,12 @@ void QuickWindowChrome::refreshHandle() {
     target_->create();
     void* fresh = reinterpret_cast<void*>(target_->winId());
     if (fresh == hwnd_) {
-        applyBorderColor("refresh");
+        // Same order as attach(): the corner preference call is a cheap no-op
+        // once already applied to this handle, but it must still run first so
+        // that IF it is not yet applied (nothing else on this path guarantees
+        // that) the border colour that follows lands on an existing frame.
         applyCornerPreference();
+        applyBorderColor("refresh");
         return;
     }
     hwnd_ = fresh;
@@ -261,8 +268,8 @@ void QuickWindowChrome::refreshHandle() {
     // A recreated window's taskbar button is a new button with none of the
     // previous one's registrations, and Explorer announces it separately.
     emit nativeHandleChanged();
-    applyBorderColor("handle-recreated");
     applyCornerPreference();
+    applyBorderColor("handle-recreated");
 }
 
 void QuickWindowChrome::applyNativeWindowStyle() {
@@ -496,8 +503,10 @@ void QuickWindowChrome::setDwmAttributeFunctionForTest(DwmAttributeFunction fn) 
 
 void QuickWindowChrome::setNativeHandleForTest(void* hwnd) {
     hwnd_ = hwnd;
-    applyBorderColor("test");
+    // Same order as attach()/refreshHandle(): the corner preference has to
+    // reach Windows first, or the border colour has no frame yet to paint.
     applyCornerPreference();
+    applyBorderColor("test");
 }
 
 void QuickWindowChrome::restoreWindow() {
@@ -653,9 +662,8 @@ void QuickWindowChrome::applyCornerPreference() const {
     if (hwnd == nullptr)
         return;
 
-    // The requested value never changes, and DWM does not reset it the way it
-    // apparently wants the border colour reasserted -- so the only thing worth
-    // tracking is whether this handle has already been told.
+    // The requested value never changes, so the only thing worth tracking is
+    // whether this handle has already been told.
     if (applied_corner_preference_valid_ && applied_corner_preference_hwnd_ == hwnd_)
         return;
     const HRESULT hr = InvokeDwmAttribute(dwm_attribute_function_, hwnd_, kDwmwaWindowCornerPreference, kDwmwcpRound);
@@ -674,6 +682,19 @@ void QuickWindowChrome::applyCornerPreference() const {
     }
     applied_corner_preference_valid_ = true;
     applied_corner_preference_hwnd_ = hwnd_;
+
+    // MEASURED: a WS_POPUP window with no WS_CAPTION gets no DWM-drawn frame at
+    // all until something asks for one -- which corner rounding, just above,
+    // is the first thing to do. DWMWA_BORDER_COLOR set before that point is
+    // accepted (the call succeeds) but never painted once the frame appears,
+    // so a border colour this class believes it already applied is stale the
+    // instant rounding lands for the first time on a handle. Every caller of
+    // this method already calls applyBorderColor() right after it, but that
+    // call alone would see its own cache report success and skip the real
+    // Win32 call -- invalidating it here is what forces that follow-up call to
+    // actually reach Windows instead of trusting a colour DWM silently
+    // dropped.
+    applied_border_valid_ = false;
 #endif
 }
 

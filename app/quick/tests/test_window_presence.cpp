@@ -365,7 +365,15 @@ class ChromeDwmAttributeTest : public ::testing::Test {
 
 } // namespace
 
-TEST_F(ChromeDwmAttributeTest, AttachingAppliesBothTheBorderColourAndTheCornerPreference) {
+// ORDER REGRESSION GUARD: a WS_POPUP window with no WS_CAPTION gets no
+// DWM-drawn frame until something asks for one, and DWMWA_BORDER_COLOR set
+// before that point is accepted but never painted once the frame appears.
+// Applying the border colour before the corner preference therefore shipped a
+// visible defect -- the window's border came up in the system default colour
+// (white/light-grey under a light appearance) instead of the theme's line
+// colour. The corner preference must always be the FIRST call, and the border
+// colour must always be the LAST, on every path that applies both.
+TEST_F(ChromeDwmAttributeTest, AttachingAppliesTheCornerPreferenceBeforeTheBorderColour) {
     chrome_.setBorderColor(QColor(0x11, 0x22, 0x33));
     calls_.clear();
 
@@ -373,11 +381,13 @@ TEST_F(ChromeDwmAttributeTest, AttachingAppliesBothTheBorderColourAndTheCornerPr
 
     ASSERT_EQ(calls_.size(), 2u);
     EXPECT_EQ(calls_[0].hwnd, kHandleA);
-    EXPECT_EQ(calls_[0].attribute, kDwmwaBorderColor);
-    EXPECT_EQ(calls_[0].value, EncodeColorref(0x11, 0x22, 0x33));
+    EXPECT_EQ(calls_[0].attribute, kDwmwaWindowCornerPreference);
+    EXPECT_EQ(calls_[0].value, kDwmwcpRound);
+    // The border colour is the LAST call recorded, not the corner preference:
+    // that is the order a real DWM frame needs to end up painted correctly.
     EXPECT_EQ(calls_[1].hwnd, kHandleA);
-    EXPECT_EQ(calls_[1].attribute, kDwmwaWindowCornerPreference);
-    EXPECT_EQ(calls_[1].value, kDwmwcpRound);
+    EXPECT_EQ(calls_[1].attribute, kDwmwaBorderColor);
+    EXPECT_EQ(calls_[1].value, EncodeColorref(0x11, 0x22, 0x33));
 }
 
 TEST_F(ChromeDwmAttributeTest, TheSameHandleAgainDoesNotReapplyEither) {
@@ -393,7 +403,7 @@ TEST_F(ChromeDwmAttributeTest, TheSameHandleAgainDoesNotReapplyEither) {
 // Display affinity is per-HWND; so is the DWM attribute state. A recreated
 // native window comes back without either, so both have to be pushed at the
 // new handle.
-TEST_F(ChromeDwmAttributeTest, AHandleIdentityChangeReappliesBothAtTheNewHandle) {
+TEST_F(ChromeDwmAttributeTest, AHandleIdentityChangeReappliesBothAtTheNewHandleInOrder) {
     chrome_.setBorderColor(QColor(0x11, 0x22, 0x33));
     chrome_.setNativeHandleForTest(kHandleA);
     calls_.clear();
@@ -402,9 +412,30 @@ TEST_F(ChromeDwmAttributeTest, AHandleIdentityChangeReappliesBothAtTheNewHandle)
 
     ASSERT_EQ(calls_.size(), 2u);
     EXPECT_EQ(calls_[0].hwnd, kHandleB);
-    EXPECT_EQ(calls_[0].attribute, kDwmwaBorderColor);
+    EXPECT_EQ(calls_[0].attribute, kDwmwaWindowCornerPreference);
     EXPECT_EQ(calls_[1].hwnd, kHandleB);
-    EXPECT_EQ(calls_[1].attribute, kDwmwaWindowCornerPreference);
+    EXPECT_EQ(calls_[1].attribute, kDwmwaBorderColor);
+}
+
+// The specific staleness the corner-preference success path guards against: a
+// border colour this class believes it already applied (its own cache says
+// so) is invalidated the instant corner rounding first lands on a handle, so
+// the very next applyBorderColor() call -- always issued right after, at
+// every call site -- reaches Windows for real instead of trusting a colour
+// DWM accepted but never painted.
+TEST_F(ChromeDwmAttributeTest, TheBorderColourCacheDoesNotSurviveTheFramesFirstAppearance) {
+    // No handle yet, so this "succeeds" against nothing -- exactly the state a
+    // QML `borderColor:` binding can be in before `target:` is even set.
+    chrome_.setBorderColor(QColor(0x11, 0x22, 0x33));
+    ASSERT_TRUE(calls_.empty());
+
+    chrome_.setNativeHandleForTest(kHandleA);
+
+    ASSERT_EQ(calls_.size(), 2u);
+    EXPECT_EQ(calls_[0].attribute, kDwmwaWindowCornerPreference);
+    EXPECT_EQ(calls_[1].attribute, kDwmwaBorderColor)
+        << "the border colour must reach Windows once a frame exists to paint it, not be skipped as "
+           "\"already applied\"";
 }
 
 // Fail-open, like the affinity seam: a refused call must not latch, or a

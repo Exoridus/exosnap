@@ -199,11 +199,12 @@ class QuickWindowChrome : public QObject, public QAbstractNativeEventFilter {
     void setDwmAttributeFunctionForTest(DwmAttributeFunction fn);
 
     // Test-only: installs an opaque handle directly, without creating a real
-    // platform window, and immediately applies the border colour and corner
-    // preference to it -- what attach() does once winId() is known. This is
-    // what makes the seam above reachable at all: under the offscreen QPA
-    // plugin winId() does not hand back a real HWND, so nothing that needs one
-    // could otherwise be exercised outside a live, on-screen window.
+    // platform window, and immediately applies the corner preference and then
+    // the border colour to it, in that order -- what attach() does once
+    // winId() is known. This is what makes the seam above reachable at all:
+    // under the offscreen QPA plugin winId() does not hand back a real HWND,
+    // so nothing that needs one could otherwise be exercised outside a live,
+    // on-screen window.
     void setNativeHandleForTest(void* hwnd);
 
     // Un-minimizes without deciding what to un-minimize INTO. SW_RESTORE is the
@@ -362,9 +363,12 @@ class QuickWindowChrome : public QObject, public QAbstractNativeEventFilter {
     void applyBorderColor(const char* reason) const;
     // Requests DWMWCP_ROUND so the frameless window is rounded like every other
     // Windows 11 top-level window. Applied at the same lifecycle points as
-    // applyBorderColor: once the platform window exists, and again if the HWND
-    // is recreated. Unlike the border colour, DWM does not reset this on its
-    // own, so it is not re-asserted on every activation or resize.
+    // applyBorderColor -- once the platform window exists, and again if the
+    // HWND is recreated -- but MUST run first at every one of them: this is
+    // what makes DWM draw a frame on this WS_POPUP window at all, and
+    // DWMWA_BORDER_COLOR set before that point is accepted but never painted
+    // once the frame appears. Unlike the border colour, the requested value
+    // does not change, so it is not re-asserted on every activation or resize.
     void applyCornerPreference() const;
     void ensureNativeFrameStyle() const;
 
