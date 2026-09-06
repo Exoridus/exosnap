@@ -57,7 +57,8 @@ Item {
         "Copy": ExoGlyph.Copy,
         "Refresh": ExoGlyph.Refresh,
         "Run": ExoGlyph.Run,
-        "Send": ExoGlyph.Send
+        "Send": ExoGlyph.Send,
+        "ArrowRight": ExoGlyph.ArrowRight
     })
 
     Component {
@@ -115,6 +116,27 @@ Item {
                 const glyph = createTemporaryObject(glyphComponent, root, { kind: kind });
                 verify(!glyph.filled, "kind " + kind + " must be stroked");
             }
+        }
+
+        // The M-prefix check above passes for a single degenerate point, so
+        // ArrowRight gets a real geometric check: a shaft plus an angled head
+        // are two separate subpaths, the head is drawn with diagonal (not just
+        // axis-aligned) strokes, and the whole glyph covers a plausible span of
+        // the 18x18 grid rather than collapsing to a corner or a dot.
+        function test_arrowRightIsAShaftWithAHead() {
+            const glyph = createTemporaryObject(glyphComponent, root, { kind: ExoGlyph.ArrowRight });
+            verify(!!glyph, "Component exists");
+
+            const path = glyph.pathData;
+            const subpaths = path.split("M").filter(function (segment) { return segment.trim().length > 0; });
+            compare(subpaths.length, 2, "ArrowRight must draw the shaft and the head as separate subpaths");
+            verify(path.indexOf("L") >= 0, "ArrowRight's head must use angled strokes, not only H/V lines");
+
+            const coords = path.match(/-?\d+(?:\.\d+)?/g).map(Number);
+            const min = Math.min(...coords);
+            const max = Math.max(...coords);
+            verify(max - min >= 8,
+                   "ArrowRight geometry must span a plausible fraction of the 18x18 grid, spanned " + (max - min));
         }
     }
 }

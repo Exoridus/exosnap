@@ -88,6 +88,46 @@ TestCase {
         compare(openedAt, 468000);
     }
 
+    function test_show_in_log_is_a_drawn_glyph_not_a_typeset_arrow() {
+        let card = createTemporaryObject(cardComponent, testCase, {
+            expanded: true,
+            logExcerpt: "2026-09-06 15:43:12 [judder] present cadence irregular"
+        });
+        verify(card);
+
+        let label = findByText(card, "Show in log");
+        verify(label, "the 'Show in log' label must exist");
+        compare(label.text.indexOf("→"), -1, "the arrow must not be typeset inside the label");
+
+        let glyph = findGlyphOfKind(card, ExoGlyph.ArrowRight);
+        verify(glyph, "an ExoGlyph.ArrowRight must sit next to the label");
+        verify(glyph.visible);
+    }
+
+    function findByText(item, text) {
+        for (let i = 0; i < item.children.length; ++i) {
+            let child = item.children[i];
+            if (child.text === text)
+                return child;
+            let found = findByText(child, text);
+            if (found)
+                return found;
+        }
+        return null;
+    }
+
+    function findGlyphOfKind(item, kind) {
+        for (let i = 0; i < item.children.length; ++i) {
+            let child = item.children[i];
+            if (child.kind === kind)
+                return child;
+            let found = findGlyphOfKind(child, kind);
+            if (found)
+                return found;
+        }
+        return null;
+    }
+
     // findChild only ever returns the first match, so occurrence links (one
     // per occurrence, same objectName) are collected by hand.
     function findLinks(card) {

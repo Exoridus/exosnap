@@ -240,14 +240,27 @@ Rectangle {
 
             Item { Layout.fillWidth: true }
 
-            Text {
-                text: qsTr("Show in log →")
-                textFormat: Text.PlainText
-                color: ExoTheme.accent
-                font {
-                    family: ExoTheme.sansFamily
-                    pixelSize: ExoTheme.fontSecondary
-                    weight: Font.DemiBold
+            Row {
+                spacing: ExoTheme.spacingXs
+
+                Text {
+                    text: qsTr("Show in log")
+                    textFormat: Text.PlainText
+                    color: ExoTheme.accent
+                    anchors.verticalCenter: parent.verticalCenter
+                    font {
+                        family: ExoTheme.sansFamily
+                        pixelSize: ExoTheme.fontSecondary
+                        weight: Font.DemiBold
+                    }
+                }
+
+                ExoGlyph {
+                    kind: ExoGlyph.ArrowRight
+                    color: ExoTheme.accent
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: ExoTheme.fontSecondary
+                    height: ExoTheme.fontSecondary
                 }
 
                 HoverHandler {
