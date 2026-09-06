@@ -102,6 +102,50 @@ ScrollView {
         return relative >= 0 && relative < view.height;
     }
 
+    // ── Wheel scrolling ───────────────────────────────────────────────────────
+    //
+    // Flickable's own wheel handling moves a small, fixed pixel amount per
+    // notch, well under what Windows itself scrolls (ExoTheme.wheelScrollLines
+    // lines of body text per notch, SPI_GETWHEELSCROLLLINES). This handler
+    // replaces that default outright rather than tuning it, because Flickable
+    // exposes no per-notch amount to configure.
+    //
+    // Declared against `flickable`, not against `control`: pointer events are
+    // offered to the front-most item under the cursor first, and the Flickable
+    // IS that item -- a handler declared on the outer control would sit behind
+    // it in delivery order and never see the event before Flickable's own
+    // default handling did. `parent` is a real binding, so this re-targets
+    // itself once the style has actually created the Flickable.
+    WheelHandler {
+        id: wheelHandler
+
+        parent: control.flickable ?? control
+        target: null
+        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+
+        onWheel: (event) => {
+            const view = control.flickable;
+            if (view === null)
+                return;
+            const step = ExoTheme.wheelScrollLines * ExoTheme.bodyLineHeight;
+            const notches = (angle) => angle / 120;
+            // Shift is the standard convention for turning a vertical wheel
+            // into horizontal scrolling on a mouse with no tilt wheel; a
+            // touchpad or a tilt wheel already reports angleDelta.x directly.
+            const horizontal = (event.modifiers & Qt.ShiftModifier) !== 0 ||
+                               (event.angleDelta.y === 0 && event.angleDelta.x !== 0);
+            if (horizontal) {
+                const angle = event.angleDelta.y !== 0 ? event.angleDelta.y : event.angleDelta.x;
+                const maximum = Math.max(0, view.contentWidth - view.width);
+                view.contentX = Math.max(0, Math.min(maximum, view.contentX - notches(angle) * step));
+            } else {
+                const maximum = Math.max(0, view.contentHeight - view.height);
+                view.contentY = Math.max(0, Math.min(maximum, view.contentY - notches(event.angleDelta.y) * step));
+            }
+            event.accepted = true;
+        }
+    }
+
     ScrollBar.vertical: ExoScrollBar {
         parent: control
         x: control.mirrored ? 0 : control.width - width

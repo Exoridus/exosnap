@@ -220,6 +220,9 @@ qt_add_qml_module(exosnap
         RecoveryAdapter.h
         QuickThemeTokens.cpp
         QuickThemeTokens.h
+        # ExoScrollView.qml's wheel step and ExoTheme.qml's wheelScrollLines
+        # token both resolve through this singleton.
+        QuickWheelMetrics.h
         SettingsAdapter.cpp
         SettingsAdapter.h
         ShellAdapter.cpp
@@ -879,6 +882,9 @@ qt_add_qml_module(record_controls_qml_tests
     SOURCES
         QuickThemeTokens.cpp
         QuickThemeTokens.h
+        # ExoScrollView.qml (below) and ExoTheme.qml both resolve through this
+        # singleton, same reason QuickThemeTokens is here.
+        QuickWheelMetrics.h
         # OverlayDiagnostics gates its own visibility on CaptureExclusion.granted,
         # so the type has to exist for the overlay to load at all. Nothing in the
         # token tests shows the window — `granted` stays false and the delegates
@@ -1084,6 +1090,8 @@ qt_add_qml_module(edit_timeline_qml_tests
         QuickPreviewRgbaConverter.h
         QuickThemeTokens.cpp
         QuickThemeTokens.h
+        # ExoTheme.qml resolves wheelScrollLines through this singleton.
+        QuickWheelMetrics.h
         ${PROJECT_SOURCE_DIR}/app/services/TimelineThumbnailSource.cpp
         ${PROJECT_SOURCE_DIR}/app/services/TimelineThumbnailSource.h
     QML_FILES
@@ -1160,6 +1168,8 @@ qt_add_qml_module(record_source_picker_qml_tests
         RecordViewModelAdapter.h
         QuickThemeTokens.cpp
         QuickThemeTokens.h
+        # ExoTheme.qml resolves wheelScrollLines through this singleton.
+        QuickWheelMetrics.h
     QML_FILES
         ExoButton.qml
         ExoGlyph.qml
