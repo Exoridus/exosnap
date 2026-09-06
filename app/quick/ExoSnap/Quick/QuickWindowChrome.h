@@ -189,6 +189,24 @@ class QuickWindowChrome : public QObject, public QAbstractNativeEventFilter {
     [[nodiscard]] bool captureExclusionApplied() const noexcept;
     void setAffinityFunctionForTest(MainWindowAffinity::AffinityFunction fn);
 
+    // Issues one DWM window attribute call. `attribute` is a DWMWINDOWATTRIBUTE
+    // value and `value` its DWORD payload -- a COLORREF for the border colour,
+    // a DWMWCP_* constant for the corner preference. Returns whether the
+    // platform call succeeded. An instance seam like MainWindowAffinity's
+    // AffinityFunction: it lets a test read back what this class asked Windows
+    // for without a real platform window to call DwmSetWindowAttribute on.
+    using DwmAttributeFunction = std::function<bool(void* hwnd, quint32 attribute, quint32 value)>;
+    void setDwmAttributeFunctionForTest(DwmAttributeFunction fn);
+
+    // Test-only: installs an opaque handle directly, without creating a real
+    // platform window, and immediately applies the corner preference and then
+    // the border colour to it, in that order -- what attach() does once
+    // winId() is known. This is what makes the seam above reachable at all:
+    // under the offscreen QPA plugin winId() does not hand back a real HWND,
+    // so nothing that needs one could otherwise be exercised outside a live,
+    // on-screen window.
+    void setNativeHandleForTest(void* hwnd);
+
     // Un-minimizes without deciding what to un-minimize INTO. SW_RESTORE is the
     // gesture the taskbar button performs, so a window that was maximized comes
     // back maximized; Qt's showNormal() forces WindowNoState and does not.
@@ -311,6 +329,7 @@ class QuickWindowChrome : public QObject, public QAbstractNativeEventFilter {
     std::function<bool()> minimize_to_tray_provider_;
     std::function<bool(quint64)> native_command_handler_;
     MainWindowAffinity affinity_;
+    DwmAttributeFunction dwm_attribute_function_;
 
     // What the DWM border attribute was last set to, and on which handle. Mutable
     // because applyBorderColor is const: it changes the window, never this object's
@@ -319,6 +338,13 @@ class QuickWindowChrome : public QObject, public QAbstractNativeEventFilter {
     mutable quint32 applied_border_color_ = 0;
     mutable bool applied_border_valid_ = false;
     mutable void* applied_border_hwnd_ = nullptr;
+
+    // Whether DWMWA_WINDOW_CORNER_PREFERENCE has been applied to the current
+    // handle. The desired value never changes -- DWMWCP_ROUND for the window's
+    // whole lifetime -- so only the handle needs tracking, unlike the border
+    // colour which QML can change at runtime.
+    mutable bool applied_corner_preference_valid_ = false;
+    mutable void* applied_corner_preference_hwnd_ = nullptr;
 
     // Re-reads IsZoomed and emits on a real change. Called from the message
     // stream rather than from a state setter: the state has writers this process
@@ -335,6 +361,15 @@ class QuickWindowChrome : public QObject, public QAbstractNativeEventFilter {
     [[nodiscard]] qintptr resolveHitTest(qintptr lparam) const;
 
     void applyBorderColor(const char* reason) const;
+    // Requests DWMWCP_ROUND so the frameless window is rounded like every other
+    // Windows 11 top-level window. Applied at the same lifecycle points as
+    // applyBorderColor -- once the platform window exists, and again if the
+    // HWND is recreated -- but MUST run first at every one of them: this is
+    // what makes DWM draw a frame on this WS_POPUP window at all, and
+    // DWMWA_BORDER_COLOR set before that point is accepted but never painted
+    // once the frame appears. Unlike the border colour, the requested value
+    // does not change, so it is not re-asserted on every activation or resize.
+    void applyCornerPreference() const;
     void ensureNativeFrameStyle() const;
 
     // Consults the provider and, when it says so, emits minimizeToTrayRequested.

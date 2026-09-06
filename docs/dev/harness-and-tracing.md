@@ -221,6 +221,11 @@ options are for: without them the picture shows whatever this machine happened t
 be doing, and two captures a week apart are not comparable. Each one seeds a
 stated state instead. None of them synthesizes input.
 
+Settings, Diagnostics, Logs and About are built by an asynchronous `Loader`
+(AppShell.qml), so a capture waits for `--visual-page`'s destination to reach
+`Loader.Ready` before grabbing — up to 8 s, logged if it expires — rather than
+racing the incubation and photographing an empty page.
+
 | Option | Selects |
 |---|---|
 | `--visual-test-size WxH` | Window size. The review baseline is `1440x1000` |

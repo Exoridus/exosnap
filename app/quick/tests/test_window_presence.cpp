@@ -317,3 +317,142 @@ TEST(ChromeCaptureExclusionTest, TheSettingReachesThePlatformCall) {
     EXPECT_FALSE(chrome.captureExclusionApplied());
     EXPECT_TRUE(calls.empty());
 }
+
+// ── The frameless window's DWM attribute seam ───────────────────────────────
+//
+// applyBorderColor and applyCornerPreference route every call to Windows
+// through the same DwmAttributeFunction, so recording what reaches it proves
+// both without a real (and, under the offscreen QPA plugin, non-functional)
+// HWND.
+
+namespace {
+
+// One recorded platform call: which window, which DWMWINDOWATTRIBUTE, which
+// DWORD payload.
+struct DwmAttributeCall {
+    void* hwnd = nullptr;
+    quint32 attribute = 0;
+    quint32 value = 0;
+};
+
+// The DWMWINDOWATTRIBUTE / DWM_WINDOW_CORNER_PREFERENCE values
+// QuickWindowChrome.cpp pins independently of the SDK (see its own comment on
+// why) -- repeated here so a mismatch between the two copies fails a test
+// rather than passing unnoticed.
+constexpr quint32 kDwmwaBorderColor = 34;
+constexpr quint32 kDwmwaWindowCornerPreference = 33;
+constexpr quint32 kDwmwcpRound = 2;
+
+// The Win32 RGB() macro's encoding, reproduced so this test needs no platform
+// header.
+constexpr quint32 EncodeColorref(int r, int g, int b) {
+    return static_cast<quint32>(r) | (static_cast<quint32>(g) << 8) | (static_cast<quint32>(b) << 16);
+}
+
+class ChromeDwmAttributeTest : public ::testing::Test {
+  protected:
+    void SetUp() override {
+        chrome_.setDwmAttributeFunctionForTest([this](void* hwnd, quint32 attribute, quint32 value) {
+            calls_.push_back(DwmAttributeCall{hwnd, attribute, value});
+            return succeed_;
+        });
+    }
+
+    QuickWindowChrome chrome_;
+    std::vector<DwmAttributeCall> calls_;
+    bool succeed_ = true;
+};
+
+} // namespace
+
+// ORDER REGRESSION GUARD: a WS_POPUP window with no WS_CAPTION gets no
+// DWM-drawn frame until something asks for one, and DWMWA_BORDER_COLOR set
+// before that point is accepted but never painted once the frame appears.
+// Applying the border colour before the corner preference therefore shipped a
+// visible defect -- the window's border came up in the system default colour
+// (white/light-grey under a light appearance) instead of the theme's line
+// colour. The corner preference must always be the FIRST call, and the border
+// colour must always be the LAST, on every path that applies both.
+TEST_F(ChromeDwmAttributeTest, AttachingAppliesTheCornerPreferenceBeforeTheBorderColour) {
+    chrome_.setBorderColor(QColor(0x11, 0x22, 0x33));
+    calls_.clear();
+
+    chrome_.setNativeHandleForTest(kHandleA);
+
+    ASSERT_EQ(calls_.size(), 2u);
+    EXPECT_EQ(calls_[0].hwnd, kHandleA);
+    EXPECT_EQ(calls_[0].attribute, kDwmwaWindowCornerPreference);
+    EXPECT_EQ(calls_[0].value, kDwmwcpRound);
+    // The border colour is the LAST call recorded, not the corner preference:
+    // that is the order a real DWM frame needs to end up painted correctly.
+    EXPECT_EQ(calls_[1].hwnd, kHandleA);
+    EXPECT_EQ(calls_[1].attribute, kDwmwaBorderColor);
+    EXPECT_EQ(calls_[1].value, EncodeColorref(0x11, 0x22, 0x33));
+}
+
+TEST_F(ChromeDwmAttributeTest, TheSameHandleAgainDoesNotReapplyEither) {
+    chrome_.setBorderColor(QColor(0x11, 0x22, 0x33));
+    chrome_.setNativeHandleForTest(kHandleA);
+    calls_.clear();
+
+    chrome_.setNativeHandleForTest(kHandleA);
+
+    EXPECT_TRUE(calls_.empty());
+}
+
+// Display affinity is per-HWND; so is the DWM attribute state. A recreated
+// native window comes back without either, so both have to be pushed at the
+// new handle.
+TEST_F(ChromeDwmAttributeTest, AHandleIdentityChangeReappliesBothAtTheNewHandleInOrder) {
+    chrome_.setBorderColor(QColor(0x11, 0x22, 0x33));
+    chrome_.setNativeHandleForTest(kHandleA);
+    calls_.clear();
+
+    chrome_.setNativeHandleForTest(kHandleB);
+
+    ASSERT_EQ(calls_.size(), 2u);
+    EXPECT_EQ(calls_[0].hwnd, kHandleB);
+    EXPECT_EQ(calls_[0].attribute, kDwmwaWindowCornerPreference);
+    EXPECT_EQ(calls_[1].hwnd, kHandleB);
+    EXPECT_EQ(calls_[1].attribute, kDwmwaBorderColor);
+}
+
+// The specific staleness the corner-preference success path guards against: a
+// border colour this class believes it already applied (its own cache says
+// so) is invalidated the instant corner rounding first lands on a handle, so
+// the very next applyBorderColor() call -- always issued right after, at
+// every call site -- reaches Windows for real instead of trusting a colour
+// DWM accepted but never painted.
+TEST_F(ChromeDwmAttributeTest, TheBorderColourCacheDoesNotSurviveTheFramesFirstAppearance) {
+    // No handle yet, so this "succeeds" against nothing -- exactly the state a
+    // QML `borderColor:` binding can be in before `target:` is even set.
+    chrome_.setBorderColor(QColor(0x11, 0x22, 0x33));
+    ASSERT_TRUE(calls_.empty());
+
+    chrome_.setNativeHandleForTest(kHandleA);
+
+    ASSERT_EQ(calls_.size(), 2u);
+    EXPECT_EQ(calls_[0].attribute, kDwmwaWindowCornerPreference);
+    EXPECT_EQ(calls_[1].attribute, kDwmwaBorderColor)
+        << "the border colour must reach Windows once a frame exists to paint it, not be skipped as "
+           "\"already applied\"";
+}
+
+// Fail-open, like the affinity seam: a refused call must not latch, or a
+// system where it happened to fail once (or, before Windows 11, always) would
+// never get another chance at the same handle.
+TEST_F(ChromeDwmAttributeTest, ARefusedCornerPreferenceCallDoesNotLatch) {
+    succeed_ = false;
+    chrome_.setNativeHandleForTest(kHandleA);
+    // Border colour is never set (invalid QColor), so only the corner
+    // preference call fires here.
+    ASSERT_EQ(calls_.size(), 1u);
+    calls_.clear();
+
+    succeed_ = true;
+    chrome_.setNativeHandleForTest(kHandleA);
+
+    ASSERT_EQ(calls_.size(), 1u);
+    EXPECT_EQ(calls_.front().hwnd, kHandleA);
+    EXPECT_EQ(calls_.front().attribute, kDwmwaWindowCornerPreference);
+}

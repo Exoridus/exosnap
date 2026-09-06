@@ -138,7 +138,12 @@ ApplicationWindow {
         titleBarHeight: appShell.titleBarHeight
         // The DWM frame line, kept on the theme rather than left at the system
         // accent so a light theme does not get a dark border and vice versa.
-        borderColor: ExoTheme.line
+        //
+        // Composited against the window's own ground before it is handed over:
+        // DWMWA_BORDER_COLOR is a COLORREF and carries no alpha, so the theme's
+        // line -- white at 7 % in Dark -- arrived as solid white and painted the
+        // frame the moment corner rounding gave DWM a frame to paint at all.
+        borderColor: Qt.tint(ExoTheme.background, ExoTheme.line)
 
         // Win32 owns the maximized state and QML reads it back from
         // windowMaximized. MEASURED: `visibility = Window.Maximized` on this

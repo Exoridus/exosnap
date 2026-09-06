@@ -260,6 +260,14 @@ class QuickApplication {
         return capabilities_;
     }
 
+    // Whether the startup capability probe has had its say, successfully or not.
+    // The idle-time page pre-warm polls this after the shell's first frame
+    // rather than the probe posting a Qt signal, because this class predates the
+    // pre-warm and is not itself a QObject.
+    [[nodiscard]] bool capabilityProbeFinished() const noexcept {
+        return capability_probe_finished_;
+    }
+
     // Re-reads the per-display DXGI facts and re-publishes what the product derives
     // from them. The capability probe writes `runtime.displays` exactly once at
     // startup, and HDR is a Windows-global toggle the user can flip at any moment
@@ -641,6 +649,7 @@ class QuickApplication {
     // may not have, and the probe is the first moment that can be known.
     bool seed_video_codec_from_capabilities_ = false;
     capability::CapabilitySet capabilities_;
+    bool capability_probe_finished_ = false;
     RecordingPresetRegistry preset_registry_;
     RecoveryManifestStore recovery_manifest_store_;
     // Declared after the store it borrows: RecoveryService holds a reference.

@@ -169,6 +169,21 @@ QtObject {
     readonly property int fontValue: 22
     readonly property int fontValueLarge: 28
 
+    // ── Wheel scrolling ──────────────────────────────────────────────────────
+    //
+    // ExoScrollView moves a wheel notch by this many LINES of body text rather
+    // than Qt Quick's own, much smaller per-notch default, matching what
+    // Windows itself scrolls (Mouse Properties, SPI_GETWHEELSCROLLLINES,
+    // default 3). `wheelScrollLines` is the platform's own count; the line
+    // itself has to be measured rather than assumed, because a hardcoded
+    // pixel guess would drift the moment fontBody or the type family changes.
+    readonly property FontMetrics bodyFontMetrics: FontMetrics {
+        font.family: root.sansFamily
+        font.pixelSize: root.fontBody
+    }
+    readonly property real bodyLineHeight: root.bodyFontMetrics.lineSpacing
+    readonly property int wheelScrollLines: QuickWheelMetrics.scrollLines
+
     // ── State treatment ──────────────────────────────────────────────────────
     readonly property real disabledOpacity: 0.45
     readonly property int focusRingWidth: 1
