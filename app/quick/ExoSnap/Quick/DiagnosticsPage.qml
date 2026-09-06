@@ -348,8 +348,8 @@ Item {
                             // to sit on one line at the review baseline width;
                             // it still wraps below that, which is what the
                             // height binding is for.
-                            Layout.preferredWidth: 340
-                            Layout.maximumWidth: 340
+                            Layout.preferredWidth: 420
+                            Layout.maximumWidth: 420
                             Layout.preferredHeight: lastCheckText.implicitHeight
                             Layout.alignment: Qt.AlignVCenter
 
