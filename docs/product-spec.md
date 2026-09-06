@@ -1629,9 +1629,9 @@ release (0.11 per ADR 0022).
   not change — that is the icon of the *file*, in the shipped accent, whatever the application is
   doing.
 - **Tray menu** — in order: a **status row**, a **blocked-reason row**, the transport (**Start
-  recording**, **Pause**/**Resume recording**, **Stop recording**), **Show window**, **Open last
-  recording**, **Open output folder**, **Notifications**, and **Quit ExoSnap**, with separators after
-  the captions, after the transport and before Quit. Every entry that acts carries a glyph. The menu
+  recording**, **Pause**/**Resume recording**, **Stop recording**), **Show window**, **Open output
+  folder**, **Notifications**, and **Quit ExoSnap**, with separators after the captions, after the
+  transport and before Quit. Every entry that acts carries a glyph. The menu
   is a **native Windows popup menu** and follows the application's own appearance: dark or light
   ground with the chosen appearance, not a surface the product paints itself.
   **The menu's shape does not change.** Every row is always there; a row the state does not allow is
@@ -1650,14 +1650,14 @@ release (0.11 per ADR 0022).
   brings the window to the front — from the tray, from behind another window, or from a minimized
   taskbar button. There is still **no Hide entry**: hiding is already carried by the window's own
   controls, and a menu row for it was a second name for a gesture the user has in front of them.
-  **Open last recording** opens the most recent finished recording on the Edit surface and is enabled
-  only once one exists. **Open output folder** opens the configured recording destination in Explorer
-  and is offered in every state; if that folder does not exist, nothing is opened and nothing is
-  created — a missing destination is a settings problem, and Settings is where it is reported.
+  **Open output folder** opens the configured recording destination in Explorer and is offered in
+  every state; if that folder does not exist, nothing is opened and nothing is created — a missing
+  destination is a settings problem, and Settings is where it is reported.
   **Notifications** is always offered — it opens the window and clears the unread count, which is
   never the wrong thing to do — and carries the count in its label only while there is one.
-- **Clicking the tray icon** brings the window back; **double-clicking it** starts or stops a
-  recording, the same gesture the global hotkey carries; **right-clicking it** opens the menu.
+- **Clicking or double-clicking the tray icon** brings the window back; **right-clicking it** opens
+  the menu. Recording is toggled by the global hotkey and by the menu's transport rows, never by a
+  click on the icon — a double click is too easy to produce while reaching for the window.
 - **Taskbar button** — the same transport as a thumbnail toolbar under the taskbar preview
   (Record, Pause/Resume, Stop, following the same table as the tray menu), a fourth button that
   **opens the output folder** and is offered in every state — the strip is registered once and cannot

@@ -76,13 +76,6 @@ Platform.SystemTrayIcon {
         }
 
         Platform.MenuItem {
-            text: qsTr("Open last recording")
-            icon.source: root.tray.lastRecordingIcon
-            enabled: root.tray.lastRecordingAvailable
-            onTriggered: root.tray.triggerOpenLastRecording()
-        }
-
-        Platform.MenuItem {
             text: qsTr("Open output folder")
             icon.source: root.tray.outputFolderIcon
             onTriggered: root.tray.triggerOpenOutputFolder()

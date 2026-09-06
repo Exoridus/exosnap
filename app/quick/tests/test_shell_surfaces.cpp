@@ -1091,10 +1091,6 @@ TEST(TrayAdapterMenu, EveryOtherRowCarriesAGlyphToo) {
     }
     // And they are four different glyphs, not one drawn four times.
     EXPECT_EQ(QSet<QString>(icons.begin(), icons.end()).size(), icons.size());
-
-    // "Open last recording" deliberately shares the transport's Record glyph --
-    // it depicts a recording -- so it is asserted apart from the uniqueness set.
-    EXPECT_TRUE(tray.lastRecordingIcon().startsWith(QStringLiteral("image://exosnap-shell/glyph/record/")));
 }
 
 TEST(TrayAdapterMenu, TheMenuGlyphsFollowTheAccent) {
@@ -1164,36 +1160,22 @@ TEST(TrayAdapterShowWindow, TheEntryAlwaysAsksForTheWindow) {
     EXPECT_EQ(show.count(), 2);
 }
 
-TEST(TrayAdapterLastRecording, TheEntryRaisesNothingUntilThereIsOneToOpen) {
-    TrayAdapter tray;
-    QSignalSpy open(&tray, &TrayAdapter::openLastRecordingRequested);
-
-    EXPECT_FALSE(tray.lastRecordingAvailable());
-    tray.triggerOpenLastRecording();
-    EXPECT_EQ(open.count(), 0);
-
-    tray.setLastRecordingAvailable(true);
-    EXPECT_TRUE(tray.lastRecordingAvailable());
-    tray.triggerOpenLastRecording();
-    EXPECT_EQ(open.count(), 1);
-}
-
-TEST(TrayAdapterActivation, ALeftClickAsksForTheWindowAndADoubleClickTogglesRecording) {
+TEST(TrayAdapterActivation, AClickAndADoubleClickBothAskForTheWindowAndNeverToggle) {
     TrayAdapter tray;
     QSignalSpy activate(&tray, &TrayAdapter::activateWindowRequested);
-    QSignalSpy toggle(&tray, &TrayAdapter::recordToggleRequested);
+    QSignalSpy action(&tray, &TrayAdapter::shellActionRequested);
 
     tray.handleActivation(TrayAdapter::TriggerActivation);
     EXPECT_EQ(activate.count(), 1);
-    EXPECT_EQ(toggle.count(), 0);
 
     tray.handleActivation(TrayAdapter::DoubleClickActivation);
-    EXPECT_EQ(toggle.count(), 1);
+    EXPECT_EQ(activate.count(), 2);
+    EXPECT_EQ(action.count(), 0);
 
     // A right click opens the menu, which the platform does itself.
     tray.handleActivation(TrayAdapter::ContextActivation);
-    EXPECT_EQ(activate.count(), 1);
-    EXPECT_EQ(toggle.count(), 1);
+    EXPECT_EQ(activate.count(), 2);
+    EXPECT_EQ(action.count(), 0);
 }
 
 TEST(TrayAdapterNotifications, TheEntryStaysWithoutACountAndClearsOnUse) {

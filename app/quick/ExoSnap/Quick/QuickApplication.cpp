@@ -4485,21 +4485,10 @@ void QuickApplication::initializeTray() {
     tray_adapter_.setAppearance(settings_.appearance_id, settings_.accent_id);
     tray_adapter_.setActive(true);
 
+    // Fires for a click or a double click alike -- toggling a recording stays
+    // with the hotkey and the menu, never a click on the icon.
     QObject::connect(&tray_adapter_, &TrayAdapter::activateWindowRequested, &shell_adapter_,
                      [this]() { restoreWindowFromTray(); });
-    // The window first, then the editor: the same order the Saved toast uses, and
-    // the reason it is not just the editor call -- opening a document behind a
-    // hidden window is indistinguishable from the entry doing nothing.
-    QObject::connect(&tray_adapter_, &TrayAdapter::openLastRecordingRequested, &shell_adapter_, [this]() {
-        restoreWindowFromTray();
-        openEditorForCurrentRecording();
-    });
-    // Same entry point the global hotkey uses, so the tray cannot develop its own
-    // idea of what "toggle recording" means. This is the double-click gesture,
-    // which has no state to read -- the menu's transport entries carry a resolved
-    // action instead, below.
-    QObject::connect(&tray_adapter_, &TrayAdapter::recordToggleRequested, &shell_adapter_,
-                     [this]() { triggerHotkeyAction(HotkeyAction::ToggleRecording); });
     // The menu's transport entries and the taskbar's thumbnail buttons raise the
     // same signal with the same projection-resolved intent, and land in the same
     // handler.
@@ -4574,10 +4563,9 @@ void QuickApplication::refreshTrayState() {
                                       record_view_model_adapter_.canStop(), record_view_model_adapter_.canPause(),
                                       record_view_model_adapter_.canResume(),
                                       record_view_model_.HasCompletedRecording());
-    // The tray menu's own two inputs, from the same sample. The blocked reason is
-    // handed over only where it describes the current refusal: a stale sentence
-    // left behind by a state that has moved on is worse than no row at all.
-    tray_adapter_.setLastRecordingAvailable(record_view_model_.HasCompletedRecording());
+    // The tray menu's own input, from the same sample. Handed over only where it
+    // describes the current refusal: a stale sentence left behind by a state
+    // that has moved on is worse than no row at all.
     tray_adapter_.setBlockedReason(record_view_model_.state == UiRecordingState::Blocked
                                        ? QString::fromStdWString(record_view_model_.capability_status_text)
                                        : QString());
