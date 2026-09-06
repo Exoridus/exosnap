@@ -1140,6 +1140,13 @@ void QuickApplication::startCapabilityProbe() {
         // coordinator then resolves to a failure state rather than hanging armed.
         try {
             capability::CapabilitySet caps = capability::CapabilityBuilder::BuildFromHardwareQuery();
+            // On the WORKER thread: when the hardware query itself finished.
+            // caps-probe-end below is written on the GUI thread and therefore
+            // reports when the result was consumed, which is a different thing
+            // whenever the GUI thread is busy loading QML at the same time.
+            diagnostics::AppLog::info(
+                QStringLiteral("perf"),
+                QStringLiteral("caps-query-done %1 ms").arg(diagnostics::StartupClock().elapsed()));
             QMetaObject::invokeMethod(
                 QCoreApplication::instance(),
                 [this, alive, caps]() {
