@@ -238,9 +238,12 @@ name.
 
 ---
 
-The frameless main window carries a **subtle native 1px border** in the active appearance's line
-color (it follows Windows 11's rounded window corners and updates on an appearance switch). On
-Windows versions without per-window border colors the default system frame is kept — never an error.
+The frameless main window asks Windows 11 for **rounded corners**, like every other top-level
+window, rather than relying on a default it would not otherwise get as a fully custom-chrome
+window. It also carries a **subtle native 1px border** in the active appearance's line color (it
+follows those rounded corners and updates on an appearance switch). On Windows versions without
+per-window corner rounding or border colors the default square-cornered system frame is kept —
+never an error.
 
 The window has exactly **one** title bar: ExoSnap's own 40 px band. Windows reserves no non-client
 area for it, so no native caption is drawn above the product's. The band carries, left to right: the

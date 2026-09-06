@@ -317,3 +317,111 @@ TEST(ChromeCaptureExclusionTest, TheSettingReachesThePlatformCall) {
     EXPECT_FALSE(chrome.captureExclusionApplied());
     EXPECT_TRUE(calls.empty());
 }
+
+// ── The frameless window's DWM attribute seam ───────────────────────────────
+//
+// applyBorderColor and applyCornerPreference route every call to Windows
+// through the same DwmAttributeFunction, so recording what reaches it proves
+// both without a real (and, under the offscreen QPA plugin, non-functional)
+// HWND.
+
+namespace {
+
+// One recorded platform call: which window, which DWMWINDOWATTRIBUTE, which
+// DWORD payload.
+struct DwmAttributeCall {
+    void* hwnd = nullptr;
+    quint32 attribute = 0;
+    quint32 value = 0;
+};
+
+// The DWMWINDOWATTRIBUTE / DWM_WINDOW_CORNER_PREFERENCE values
+// QuickWindowChrome.cpp pins independently of the SDK (see its own comment on
+// why) -- repeated here so a mismatch between the two copies fails a test
+// rather than passing unnoticed.
+constexpr quint32 kDwmwaBorderColor = 34;
+constexpr quint32 kDwmwaWindowCornerPreference = 33;
+constexpr quint32 kDwmwcpRound = 2;
+
+// The Win32 RGB() macro's encoding, reproduced so this test needs no platform
+// header.
+constexpr quint32 EncodeColorref(int r, int g, int b) {
+    return static_cast<quint32>(r) | (static_cast<quint32>(g) << 8) | (static_cast<quint32>(b) << 16);
+}
+
+class ChromeDwmAttributeTest : public ::testing::Test {
+  protected:
+    void SetUp() override {
+        chrome_.setDwmAttributeFunctionForTest([this](void* hwnd, quint32 attribute, quint32 value) {
+            calls_.push_back(DwmAttributeCall{hwnd, attribute, value});
+            return succeed_;
+        });
+    }
+
+    QuickWindowChrome chrome_;
+    std::vector<DwmAttributeCall> calls_;
+    bool succeed_ = true;
+};
+
+} // namespace
+
+TEST_F(ChromeDwmAttributeTest, AttachingAppliesBothTheBorderColourAndTheCornerPreference) {
+    chrome_.setBorderColor(QColor(0x11, 0x22, 0x33));
+    calls_.clear();
+
+    chrome_.setNativeHandleForTest(kHandleA);
+
+    ASSERT_EQ(calls_.size(), 2u);
+    EXPECT_EQ(calls_[0].hwnd, kHandleA);
+    EXPECT_EQ(calls_[0].attribute, kDwmwaBorderColor);
+    EXPECT_EQ(calls_[0].value, EncodeColorref(0x11, 0x22, 0x33));
+    EXPECT_EQ(calls_[1].hwnd, kHandleA);
+    EXPECT_EQ(calls_[1].attribute, kDwmwaWindowCornerPreference);
+    EXPECT_EQ(calls_[1].value, kDwmwcpRound);
+}
+
+TEST_F(ChromeDwmAttributeTest, TheSameHandleAgainDoesNotReapplyEither) {
+    chrome_.setBorderColor(QColor(0x11, 0x22, 0x33));
+    chrome_.setNativeHandleForTest(kHandleA);
+    calls_.clear();
+
+    chrome_.setNativeHandleForTest(kHandleA);
+
+    EXPECT_TRUE(calls_.empty());
+}
+
+// Display affinity is per-HWND; so is the DWM attribute state. A recreated
+// native window comes back without either, so both have to be pushed at the
+// new handle.
+TEST_F(ChromeDwmAttributeTest, AHandleIdentityChangeReappliesBothAtTheNewHandle) {
+    chrome_.setBorderColor(QColor(0x11, 0x22, 0x33));
+    chrome_.setNativeHandleForTest(kHandleA);
+    calls_.clear();
+
+    chrome_.setNativeHandleForTest(kHandleB);
+
+    ASSERT_EQ(calls_.size(), 2u);
+    EXPECT_EQ(calls_[0].hwnd, kHandleB);
+    EXPECT_EQ(calls_[0].attribute, kDwmwaBorderColor);
+    EXPECT_EQ(calls_[1].hwnd, kHandleB);
+    EXPECT_EQ(calls_[1].attribute, kDwmwaWindowCornerPreference);
+}
+
+// Fail-open, like the affinity seam: a refused call must not latch, or a
+// system where it happened to fail once (or, before Windows 11, always) would
+// never get another chance at the same handle.
+TEST_F(ChromeDwmAttributeTest, ARefusedCornerPreferenceCallDoesNotLatch) {
+    succeed_ = false;
+    chrome_.setNativeHandleForTest(kHandleA);
+    // Border colour is never set (invalid QColor), so only the corner
+    // preference call fires here.
+    ASSERT_EQ(calls_.size(), 1u);
+    calls_.clear();
+
+    succeed_ = true;
+    chrome_.setNativeHandleForTest(kHandleA);
+
+    ASSERT_EQ(calls_.size(), 1u);
+    EXPECT_EQ(calls_.front().hwnd, kHandleA);
+    EXPECT_EQ(calls_.front().attribute, kDwmwaWindowCornerPreference);
+}

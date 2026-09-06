@@ -39,6 +39,29 @@ namespace {
 // its default frame.
 constexpr DWORD kDwmwaBorderColor = 34;
 
+// Same story for DWMWA_WINDOW_CORNER_PREFERENCE / DWMWCP_ROUND: both are
+// DWMWINDOWATTRIBUTE / DWM_WINDOW_CORNER_PREFERENCE enumerators declared only
+// from the Windows 11 SDK, and DwmSetWindowAttribute takes the attribute as a
+// plain DWORD. Windows releases before build 22000 do not have the attribute at
+// all, and the call just returns a failure HRESULT there -- the window keeps
+// the square corners it would otherwise get, because a WS_POPUP-style window
+// with no WS_CAPTION is not one of the ones DWM rounds by default.
+constexpr DWORD kDwmwaWindowCornerPreference = 33;
+constexpr DWORD kDwmwcpRound = 2;
+
+// Routes one DWM attribute call through the test seam when a test has
+// installed one, otherwise issues the real platform call. Returning the
+// HRESULT (rather than a bool) lets both call sites log the same failure
+// detail they always have; a test double reports success as S_OK and refusal
+// as E_FAIL, neither of which collides with a real HRESULT a caller would act
+// on beyond FAILED()/SUCCEEDED().
+HRESULT InvokeDwmAttribute(const QuickWindowChrome::DwmAttributeFunction& fn, void* hwnd, DWORD attribute,
+                           quint32 value) {
+    if (fn)
+        return fn(hwnd, static_cast<quint32>(attribute), value) ? S_OK : E_FAIL;
+    return DwmSetWindowAttribute(static_cast<HWND>(hwnd), attribute, &value, static_cast<DWORD>(sizeof(value)));
+}
+
 // Explorer's announcement that a window's taskbar button exists. Registered once
 // per process -- RegisterWindowMessage returns the same value for the same string
 // for the lifetime of the session, and 0 when the atom table refuses, which is
@@ -178,6 +201,7 @@ void QuickWindowChrome::setTarget(QQuickWindow* window) {
     ensureNativeFrameStyle();
     refreshWindowMaximized();
     applyBorderColor("attach");
+    applyCornerPreference();
     TraceWindowGeometry("chrome-style-applied", window);
     emit targetChanged();
 }
@@ -206,6 +230,8 @@ void QuickWindowChrome::detach() {
     non_client_leave_tracked_ = false;
     applied_border_valid_ = false;
     applied_border_hwnd_ = nullptr;
+    applied_corner_preference_valid_ = false;
+    applied_corner_preference_hwnd_ = nullptr;
     // With no handle left there is nothing to be maximized, and the property has
     // no other writer once the message stream is gone.
     refreshWindowMaximized();
@@ -222,6 +248,7 @@ void QuickWindowChrome::refreshHandle() {
     void* fresh = reinterpret_cast<void*>(target_->winId());
     if (fresh == hwnd_) {
         applyBorderColor("refresh");
+        applyCornerPreference();
         return;
     }
     hwnd_ = fresh;
@@ -235,6 +262,7 @@ void QuickWindowChrome::refreshHandle() {
     // previous one's registrations, and Explorer announces it separately.
     emit nativeHandleChanged();
     applyBorderColor("handle-recreated");
+    applyCornerPreference();
 }
 
 void QuickWindowChrome::applyNativeWindowStyle() {
@@ -462,6 +490,16 @@ void QuickWindowChrome::setAffinityFunctionForTest(MainWindowAffinity::AffinityF
     affinity_.setAffinityFunctionForTest(std::move(fn));
 }
 
+void QuickWindowChrome::setDwmAttributeFunctionForTest(DwmAttributeFunction fn) {
+    dwm_attribute_function_ = std::move(fn);
+}
+
+void QuickWindowChrome::setNativeHandleForTest(void* hwnd) {
+    hwnd_ = hwnd;
+    applyBorderColor("test");
+    applyCornerPreference();
+}
+
 void QuickWindowChrome::restoreWindow() {
 #if defined(Q_OS_WIN)
     HWND hwnd = static_cast<HWND>(hwnd_);
@@ -587,7 +625,8 @@ void QuickWindowChrome::applyBorderColor(const char* reason) const {
     if (applied_border_valid_ && applied_border_color_ == static_cast<quint32>(colorref) &&
         applied_border_hwnd_ == hwnd_)
         return;
-    const HRESULT hr = DwmSetWindowAttribute(hwnd, kDwmwaBorderColor, &colorref, static_cast<DWORD>(sizeof(colorref)));
+    const HRESULT hr =
+        InvokeDwmAttribute(dwm_attribute_function_, hwnd_, kDwmwaBorderColor, static_cast<quint32>(colorref));
     if (FAILED(hr)) {
         // One line, once: pre-Windows-11 systems fail this every single activation
         // and a per-message warning would drown the log.
@@ -605,6 +644,36 @@ void QuickWindowChrome::applyBorderColor(const char* reason) const {
     applied_border_hwnd_ = hwnd_;
 #else
     Q_UNUSED(reason);
+#endif
+}
+
+void QuickWindowChrome::applyCornerPreference() const {
+#if defined(Q_OS_WIN)
+    HWND hwnd = static_cast<HWND>(hwnd_);
+    if (hwnd == nullptr)
+        return;
+
+    // The requested value never changes, and DWM does not reset it the way it
+    // apparently wants the border colour reasserted -- so the only thing worth
+    // tracking is whether this handle has already been told.
+    if (applied_corner_preference_valid_ && applied_corner_preference_hwnd_ == hwnd_)
+        return;
+    const HRESULT hr = InvokeDwmAttribute(dwm_attribute_function_, hwnd_, kDwmwaWindowCornerPreference, kDwmwcpRound);
+    if (FAILED(hr)) {
+        // One line, once: every Windows 10 system fails this on the first call
+        // (the attribute does not exist there) and a per-message warning would
+        // drown the log for a system that is never going to succeed.
+        static bool warned_once = false;
+        if (!warned_once) {
+            warned_once = true;
+            qWarning().nospace() << "QuickWindowChrome: DwmSetWindowAttribute(WINDOW_CORNER_PREFERENCE) failed, hr=0x"
+                                 << QString::number(static_cast<quint32>(hr), 16)
+                                 << " -- the window keeps its default corners";
+        }
+        return;
+    }
+    applied_corner_preference_valid_ = true;
+    applied_corner_preference_hwnd_ = hwnd_;
 #endif
 }
 
