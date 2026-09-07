@@ -19,14 +19,25 @@
     tracked checksum describes a file that does not exist until the release is
     published.
 
-    The machine is left as it was found: the release MSI is reinstalled at the end,
-    which every later gate in the campaign depends on.
+    WHAT IS PUT BACK AND WHAT IS NOT. The release MSI is reinstalled in a `finally`
+    block, whatever happened before it, because every later gate in the campaign
+    expects ExoSnap installed and a half-finished rehearsal is exactly when that
+    matters most. The Visual C++ redistributable is NOT put back: `vcredist140` is
+    a declared Chocolatey dependency of this package, so the install can install or
+    upgrade it, and downgrading a machine's C++ runtime to undo that would be worse
+    than the change. Its version is recorded before and after so the verdict can
+    say what happened.
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)] [string] $PackageSource,
     [Parameter(Mandatory)] [string] $MsiPath,
     [Parameter(Mandatory)] [string] $MsiSha256,
+    # The CALLER's %LOCALAPPDATA%\ExoSnap. Never read from this process's own
+    # environment: an elevated child started from a different account resolves
+    # LOCALAPPDATA to that account, and the uninstall would then be judged against
+    # a directory ExoSnap has never written to.
+    [Parameter(Mandatory)] [string] $UserConfigDirectory,
     [Parameter(Mandatory)] [string] $EvidenceDirectory,
     [Parameter(Mandatory)] [string] $ResultPath
 )
@@ -42,10 +53,19 @@ $installedExe = Join-Path $installDirectory 'exosnap.exe'
 $productKey = 'HKLM:\SOFTWARE\Codexo\ExoSnap'
 $vendorKey = 'HKLM:\SOFTWARE\Codexo'
 $shortcut = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\ExoSnap.lnk'
-$chocoLibrary = 'C:\ProgramData\chocolatey\lib\exosnap'
-$userConfig = Join-Path $env:LOCALAPPDATA 'ExoSnap'
+# Chocolatey's own root, not a hardcoded ProgramData path: a machine can install
+# it elsewhere, and a "the lib directory is gone" assertion against a path
+# Chocolatey never used passes for the wrong reason.
+$chocoRoot = if ([string]::IsNullOrWhiteSpace($env:ChocolateyInstall)) { 'C:\ProgramData\chocolatey' }
+else { $env:ChocolateyInstall }
+$chocoLibrary = Join-Path $chocoRoot 'lib/exosnap'
+# The community feed is required, not optional: the package declares a
+# vcredist140 dependency that a directory source alone cannot resolve, and the
+# install then fails with a dependency error rather than a packaging finding.
+$chocoSourceSuffix = ';https://community.chocolatey.org/api/v2/'
 
 $script:Steps = @()
+$script:Observations = @()
 
 function New-Step {
     param([Parameter(Mandatory)] [string] $Name)
@@ -73,6 +93,21 @@ function Add-Assertion {
     }
 }
 
+function Add-Observation {
+    <#
+    .SYNOPSIS
+        Records something the rehearsal saw but does not require.
+    .DESCRIPTION
+        The empty manufacturer folder and its registry key are in this class. WiX
+        generates no RemoveFolder row for the manufacturer folder -- it owns no
+        component -- so an uninstall that leaves the empty parent behind is
+        within what the package promises, even though this machine was measured
+        clean. Asserting on it would fail a correct package on the next machine.
+    #>
+    param([Parameter(Mandatory)] [string] $Text)
+    $script:Observations += $Text
+}
+
 function Complete-Step {
     param([Parameter(Mandatory)] $Step)
     $script:Steps += [pscustomobject]$Step
@@ -90,16 +125,23 @@ function Invoke-Recorded {
         process is created, and $LASTEXITCODE then describes nothing. Every
         assertion after an install would run against a machine the installer had
         not finished changing.
+
+        Every argument is quoted here rather than at the call sites. Start-Process
+        joins ArgumentList with spaces and quotes nothing, so one unquoted path
+        containing a space silently becomes two arguments.
     #>
     param(
         [Parameter(Mandatory)] [string] $LogName,
         [Parameter(Mandatory)] [string] $FilePath,
         [Parameter(Mandatory)] [string[]] $Arguments
     )
+    $quoted = @($Arguments | ForEach-Object {
+            if ("$_".StartsWith('-') -or "$_".StartsWith('/')) { "$_" } else { '"{0}"' -f ("$_" -replace '"', '\"') }
+        })
     $log = Join-Path $EvidenceDirectory $LogName
     $errorLog = "$log.err"
-    Set-Content -LiteralPath $log -Value "$FilePath $($Arguments -join ' ')" -Encoding utf8NoBOM
-    $process = Start-Process -FilePath $FilePath -ArgumentList $Arguments -Wait -PassThru -NoNewWindow `
+    Set-Content -LiteralPath $log -Value "$FilePath $($quoted -join ' ')" -Encoding utf8NoBOM
+    $process = Start-Process -FilePath $FilePath -ArgumentList $quoted -Wait -PassThru -NoNewWindow `
         -RedirectStandardOutput "$log.out" -RedirectStandardError $errorLog
     foreach ($part in @("$log.out", $errorLog)) {
         if (Test-Path -LiteralPath $part) {
@@ -113,49 +155,106 @@ function Invoke-Recorded {
 function Get-ExoSnapArpEntry {
     <#
     .SYNOPSIS
-        The Add/Remove Programs entry for ExoSnap, or $null.
+        The Add/Remove Programs entry for ExoSnap, or $null. Throws on ambiguity.
     .DESCRIPTION
-        Both registry views are searched. WiX writes the 64-bit one for this
-        package today, and a lookup that only knows the view it expects would
-        report a clean uninstall for an entry it never looked at.
+        Both registry views are searched, because a lookup that only knows the view
+        it expects reports a clean uninstall for an entry it never looked at.
+
+        `DisplayName -like 'ExoSnap*'` alone is not an identification -- it matches
+        "ExoSnap Helper" by anyone -- so Publisher and a GUID-shaped key (the MSI
+        ProductCode) are required too. Two matches abort the whole rehearsal before
+        any msiexec runs: picking one and uninstalling it is how an unrelated
+        product disappears from a developer's machine.
     #>
     $roots = @(
         'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
         'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
     )
+    # Not $matches: that name is PowerShell's automatic regex-capture variable.
+    $found = @()
     foreach ($root in $roots) {
         if (-not (Test-Path -LiteralPath $root)) { continue }
         foreach ($key in @(Get-ChildItem -LiteralPath $root -ErrorAction SilentlyContinue)) {
+            if ($key.PSChildName -notmatch '^\{[0-9A-Fa-f-]{36}\}$') { continue }
             $properties = Get-ItemProperty -LiteralPath $key.PSPath -ErrorAction SilentlyContinue
             if ($null -eq $properties) { continue }
-            $name = $properties.PSObject.Properties.Name -contains 'DisplayName' ? "$($properties.DisplayName)" : ''
-            if ($name -notlike 'ExoSnap*') { continue }
-            return [pscustomobject]@{
+            $names = $properties.PSObject.Properties.Name
+            $displayName = if ($names -contains 'DisplayName') { "$($properties.DisplayName)" } else { '' }
+            $publisher = if ($names -contains 'Publisher') { "$($properties.Publisher)" } else { '' }
+            if ($displayName -notlike 'ExoSnap*' -or $publisher -ne 'Codexo') { continue }
+            $found += [pscustomobject]@{
                 ProductCode    = $key.PSChildName
-                DisplayName    = $name
-                DisplayVersion = $properties.PSObject.Properties.Name -contains 'DisplayVersion' ?
-                "$($properties.DisplayVersion)" : ''
+                DisplayName    = $displayName
+                Publisher      = $publisher
+                DisplayVersion = if ($names -contains 'DisplayVersion') { "$($properties.DisplayVersion)" } else { '' }
             }
         }
     }
-    return $null
+    if ($found.Count -gt 1) {
+        throw ("$($found.Count) ExoSnap products are registered " +
+            "($(($found | ForEach-Object { "$($_.DisplayName) $($_.DisplayVersion) $($_.ProductCode)" }) -join ', ')); " +
+            'refusing to guess which one to remove')
+    }
+    if ($found.Count -eq 0) { return $null }
+    return $found[0]
 }
 
-function Measure-DirectoryContent {
+function Get-DirectoryManifest {
     <#
     .SYNOPSIS
-        File count and total bytes of a directory tree, or $null when it is absent.
+        Relative path -> size for every file under a directory, or $null.
     .DESCRIPTION
-        The user's configuration must survive an uninstall untouched, and "the
-        directory still exists" does not say that -- an uninstall that emptied it
-        would satisfy it. Count and bytes together do.
+        A count and a byte total say THAT something changed; a manifest says WHICH
+        file did, which is the difference between a finding somebody can act on and
+        one somebody has to reproduce.
     #>
     param([Parameter(Mandatory)] [string] $Path)
     if (-not (Test-Path -LiteralPath $Path)) { return $null }
-    $files = @(Get-ChildItem -LiteralPath $Path -Recurse -File -Force -ErrorAction SilentlyContinue)
-    $bytes = 0
-    foreach ($file in $files) { $bytes += $file.Length }
-    return [pscustomobject]@{ files = $files.Count; bytes = $bytes }
+    $manifest = @{}
+    $root = (Get-Item -LiteralPath $Path).FullName
+    foreach ($file in @(Get-ChildItem -LiteralPath $Path -Recurse -File -Force -ErrorAction SilentlyContinue)) {
+        $manifest[$file.FullName.Substring($root.Length).TrimStart('\')] = $file.Length
+    }
+    return $manifest
+}
+
+function Compare-DirectoryManifest {
+    <#
+    .SYNOPSIS
+        The differences between two manifests, as readable lines.
+    #>
+    param($Before, $After)
+    if ($null -eq $Before -and $null -eq $After) { return @() }
+    if ($null -eq $Before) { return @('the directory did not exist before and does now') }
+    if ($null -eq $After) { return @('the directory was removed') }
+    $differences = @()
+    foreach ($name in @($Before.Keys | Sort-Object)) {
+        if (-not $After.ContainsKey($name)) { $differences += "removed: $name" }
+        elseif ($After[$name] -ne $Before[$name]) {
+            $differences += "changed: $name ($($Before[$name]) -> $($After[$name]) bytes)"
+        }
+    }
+    foreach ($name in @($After.Keys | Sort-Object)) {
+        if (-not $Before.ContainsKey($name)) { $differences += "added: $name" }
+    }
+    return $differences
+}
+
+function Get-ChocolateyPackageVersion {
+    <#
+    .SYNOPSIS
+        The installed version of one Chocolatey package, or '' when it has none.
+    #>
+    param([Parameter(Mandatory)] [string] $Id)
+    try {
+        $listed = & choco list --exact $Id --limit-output 2>$null
+        foreach ($line in @($listed)) {
+            $parts = "$line" -split '\|'
+            if ($parts.Count -ge 2 -and $parts[0] -eq $Id) { return "$($parts[1])" }
+        }
+    }
+    catch { }
+    return ''
 }
 
 function Get-ProductValue {
@@ -168,13 +267,28 @@ function Get-ProductValue {
 
 $workDirectory = Join-Path ([IO.Path]::GetTempPath()) "exosnap-choco-rehearsal-$([guid]::NewGuid().ToString('n'))"
 $aborted = $false
+$restoreRan = $false
+$restoreExitCode = $null
+$vcredistBefore = ''
+$vcredistAfter = ''
+$configBefore = $null
+$copy = $null
+# Whether anything on this machine has been changed yet. The restore below is
+# unconditional in the sense that it always REPORTS, but reinstalling a product
+# that was never removed fails with 1638 and would turn "nothing happened" into a
+# failed step.
+$machineTouched = $false
 
 try {
     New-Item -ItemType Directory -Path $EvidenceDirectory -Force | Out-Null
     New-Item -ItemType Directory -Path $workDirectory -Force | Out-Null
+    $vcredistBefore = Get-ChocolateyPackageVersion -Id 'vcredist140'
 
     # ---- prepare: the package copy, pointed at the local MSI ----
     $step = New-Step -Name 'prepare'
+    $configBefore = Get-DirectoryManifest -Path $UserConfigDirectory
+    Add-Assertion -Step $step -Text "$UserConfigDirectory exists and is not empty" `
+        -Condition ($null -ne $configBefore -and $configBefore.Count -gt 0)
     $trackedInstall = Join-Path $PackageSource 'tools/chocolateyinstall.ps1'
     $trackedBefore = (Get-FileHash -LiteralPath $trackedInstall -Algorithm SHA256).Hash
     $copy = New-ReleaseChocolateyPackageCopy -SourceDirectory $PackageSource -DestinationDirectory $workDirectory `
@@ -213,16 +327,15 @@ try {
     # so the rehearsal cannot begin against the release it is rehearsing without
     # taking that install off first. What it removed is recorded, because the
     # restore step has to put the same thing back.
-    $configBefore = $null
     if (-not $aborted) {
         $step = New-Step -Name 'removeExisting'
-        $configBefore = Measure-DirectoryContent -Path $userConfig
         $existing = Get-ExoSnapArpEntry
         if ($null -eq $existing) {
             $step.detail = 'no ExoSnap was installed'
         }
         else {
             $step.detail = "$($existing.DisplayName) $($existing.DisplayVersion) ($($existing.ProductCode))"
+            $machineTouched = $true
             $code = Invoke-Recorded -LogName 'msiexec-remove.log' -FilePath 'msiexec.exe' `
                 -Arguments @('/x', $existing.ProductCode, '/qn', '/norestart', '/l*v',
                 (Join-Path $EvidenceDirectory 'msiexec-remove-verbose.log'))
@@ -236,8 +349,9 @@ try {
     # ---- install through Chocolatey ----
     if (-not $aborted) {
         $step = New-Step -Name 'install'
+        $machineTouched = $true
         $code = Invoke-Recorded -LogName 'choco-install.log' -FilePath 'choco' `
-            -Arguments @('install', 'exosnap', '--source', $workDirectory, '-y', '--no-progress')
+            -Arguments @('install', 'exosnap', '--source', "$workDirectory$chocoSourceSuffix", '-y', '--no-progress')
         Add-Assertion -Step $step -Text "choco install exits 0 (was $code)" -Condition ($code -eq 0)
         Add-Assertion -Step $step -Text "$installedExe exists" -Condition (Test-Path -LiteralPath $installedExe)
         $installed = Get-ExoSnapArpEntry
@@ -261,47 +375,26 @@ try {
         Add-Assertion -Step $step -Text "choco uninstall exits 0 (was $code)" -Condition ($code -eq 0)
         Add-Assertion -Step $step -Text "$installedExe is gone" -Condition (-not (Test-Path -LiteralPath $installedExe))
         Add-Assertion -Step $step -Text "$installDirectory is gone" -Condition (-not (Test-Path -LiteralPath $installDirectory))
-        # The vendor directory and the vendor key are asserted too: a measured
-        # uninstall of this MSI removes both, so leaving either behind is a
-        # regression rather than acceptable residue.
-        Add-Assertion -Step $step -Text "$vendorDirectory is gone" -Condition (-not (Test-Path -LiteralPath $vendorDirectory))
         Add-Assertion -Step $step -Text 'the ARP entry is gone' -Condition ($null -eq (Get-ExoSnapArpEntry))
         Add-Assertion -Step $step -Text 'the start-menu shortcut is gone' -Condition (-not (Test-Path -LiteralPath $shortcut))
         Add-Assertion -Step $step -Text "$productKey is gone" -Condition (-not (Test-Path -LiteralPath $productKey))
-        Add-Assertion -Step $step -Text "$vendorKey is gone" -Condition (-not (Test-Path -LiteralPath $vendorKey))
         Add-Assertion -Step $step -Text 'the Chocolatey lib directory is gone' `
             -Condition (-not (Test-Path -LiteralPath $chocoLibrary))
-        # The user's own configuration is not the installer's to remove. Compared by
-        # file count and total bytes rather than by existence: an uninstall that
-        # emptied the directory would pass an existence check.
-        $configAfter = Measure-DirectoryContent -Path $userConfig
-        $configUnchanged = ($null -eq $configBefore -and $null -eq $configAfter) -or
-            ($null -ne $configBefore -and $null -ne $configAfter -and
-            $configBefore.files -eq $configAfter.files -and $configBefore.bytes -eq $configAfter.bytes)
-        $before = if ($null -eq $configBefore) { 'absent' } else { "$($configBefore.files) files / $($configBefore.bytes) bytes" }
-        $after = if ($null -eq $configAfter) { 'absent' } else { "$($configAfter.files) files / $($configAfter.bytes) bytes" }
-        Add-Assertion -Step $step -Text "$userConfig is untouched ($before -> $after)" -Condition $configUnchanged
+        # The empty manufacturer folder and key: recorded, never required. See
+        # Add-Observation for why the package does not promise their removal.
+        Add-Observation -Text ("$vendorDirectory after uninstall: " +
+            $(if (Test-Path -LiteralPath $vendorDirectory) { 'still present (empty parent, not owned by the package)' } else { 'gone' }))
+        Add-Observation -Text ("$vendorKey after uninstall: " +
+            $(if (Test-Path -LiteralPath $vendorKey) { 'still present (empty parent key)' } else { 'gone' }))
+        # The user's own configuration is not the installer's to remove. Compared
+        # file by file rather than by totals, so a changed file is named.
+        $configAfter = Get-DirectoryManifest -Path $UserConfigDirectory
+        $differences = @(Compare-DirectoryManifest -Before $configBefore -After $configAfter)
+        $summary = if ($differences.Count -eq 0) { 'unchanged' } else { $differences -join '; ' }
+        Add-Assertion -Step $step -Text "$UserConfigDirectory is untouched ($summary)" `
+            -Condition ($differences.Count -eq 0)
         [void](Complete-Step -Step $step)
     }
-
-    # ---- restore: the campaign's later gates expect the release installed ----
-    # Run whatever happened above, including a failed install: a rehearsal that
-    # aborted halfway is exactly the case where the machine most needs putting
-    # back, and leaving it uninstalled would fail every gate after this one for a
-    # reason that belongs here.
-    $step = New-Step -Name 'restore'
-    $code = Invoke-Recorded -LogName 'msiexec-restore.log' -FilePath 'msiexec.exe' `
-        -Arguments @('/i', $MsiPath, '/qn', '/norestart', '/l*v',
-        (Join-Path $EvidenceDirectory 'msiexec-restore-verbose.log'))
-    Add-Assertion -Step $step -Text "msiexec /i exits 0 (was $code)" -Condition ($code -eq 0)
-    $restored = Get-ExoSnapArpEntry
-    # DisplayVersion is deliberately not compared against the release tag: an MSI
-    # ProductVersion cannot carry a prerelease suffix, so an rc build legitimately
-    # reports the plain three-part version here.
-    Add-Assertion -Step $step -Text 'the ExoSnap ARP entry is back' -Condition ($null -ne $restored)
-    Add-Assertion -Step $step -Text "$installedExe is back" -Condition (Test-Path -LiteralPath $installedExe)
-    if ($null -ne $restored) { $step.detail = "$($restored.DisplayName) $($restored.DisplayVersion)" }
-    [void](Complete-Step -Step $step)
 }
 catch {
     $step = New-Step -Name 'worker'
@@ -309,14 +402,61 @@ catch {
     [void](Complete-Step -Step $step)
 }
 finally {
+    # ---- restore: the campaign's later gates expect the release installed ----
+    # In `finally`, and exactly once. A rehearsal that threw halfway -- an ambiguous
+    # ARP entry, a copy that could not be written, a killed choco -- is precisely
+    # the case where the machine is most likely to be left without ExoSnap, and a
+    # restore that only runs on the happy path is a restore that never runs when it
+    # is needed.
+    try {
+        $step = New-Step -Name 'restore'
+        if ($machineTouched) {
+            $restoreExitCode = Invoke-Recorded -LogName 'msiexec-restore.log' -FilePath 'msiexec.exe' `
+                -Arguments @('/i', $MsiPath, '/qn', '/norestart', '/l*v',
+                (Join-Path $EvidenceDirectory 'msiexec-restore-verbose.log'))
+            $restoreRan = $true
+            Add-Assertion -Step $step -Text "msiexec /i exits 0 (was $restoreExitCode)" `
+                -Condition ($restoreExitCode -eq 0)
+            $restored = Get-ExoSnapArpEntry
+            # DisplayVersion is deliberately not compared against the release tag: an
+            # MSI ProductVersion cannot carry a prerelease suffix, so an rc build
+            # legitimately reports the plain three-part version here. InstallLocation
+            # is empty for this package and is not asserted either.
+            Add-Assertion -Step $step -Text 'the ExoSnap ARP entry is back' -Condition ($null -ne $restored)
+            Add-Assertion -Step $step -Text "$installedExe is back" -Condition (Test-Path -LiteralPath $installedExe)
+            if ($null -ne $restored) { $step.detail = "$($restored.DisplayName) $($restored.DisplayVersion)" }
+        }
+        else {
+            # Reported rather than skipped: an absent `restore` step reads as "the
+            # worker stopped early", which is a different and untrue statement. And
+            # reinstalling a product that was never removed fails with 1638.
+            $step.detail = 'nothing was installed or removed, so there was nothing to put back'
+            $restoreRan = $true
+            $restoreExitCode = 0
+        }
+        [void](Complete-Step -Step $step)
+    }
+    catch {
+        $step = New-Step -Name 'restore'
+        Add-Assertion -Step $step -Text "the release MSI could not be reinstalled: $($_.Exception.Message)" `
+            -Condition $false
+        [void](Complete-Step -Step $step)
+    }
+
+    $vcredistAfter = Get-ChocolateyPackageVersion -Id 'vcredist140'
     Remove-Item -LiteralPath $workDirectory -Recurse -Force -ErrorAction SilentlyContinue
     $failedSteps = @($script:Steps | Where-Object { -not $_.ok })
     $result = [ordered]@{
-        ok           = ($failedSteps.Count -eq 0)
-        msiPath      = $MsiPath
-        msiSha256    = $MsiSha256
-        completedUtc = [DateTime]::UtcNow.ToString('o')
-        steps        = @($script:Steps)
+        ok              = ($failedSteps.Count -eq 0)
+        msiPath         = $MsiPath
+        msiSha256       = $MsiSha256
+        restoreRan      = $restoreRan
+        restoreExitCode = $restoreExitCode
+        vcredistBefore  = $vcredistBefore
+        vcredistAfter   = $vcredistAfter
+        observations    = @($script:Observations)
+        completedUtc    = [DateTime]::UtcNow.ToString('o')
+        steps           = @($script:Steps)
     }
     New-Item -ItemType Directory -Path (Split-Path -Parent $ResultPath) -Force | Out-Null
     Set-Content -LiteralPath $ResultPath -Value ($result | ConvertTo-Json -Depth 10) -Encoding utf8NoBOM

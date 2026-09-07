@@ -269,18 +269,6 @@ QByteArray BuildSessionReportJson(const SessionReportInputs& inputs) {
                     MetricOrUnavailable(static_cast<double>(s.audio.resampler_drained_frames[idx]), drained);
                 t[QStringLiteral("undrained_frames")] =
                     MetricOrUnavailable(static_cast<double>(s.audio.resampler_undrained_frames[idx]), drained);
-                // The rate the capture SOURCE delivered. Reported alongside the drain
-                // because it is what says whether a resampler was needed at all, and it
-                // is the only field that can distinguish a recording taken from a
-                // 44.1 kHz endpoint from one taken at 48 kHz: `sample_rate` elsewhere is
-                // the encoder's rate, which Opus pins to 48000 either way. Gated on its
-                // own value rather than on the drain: a session that failed before the
-                // drain still knows what format it was capturing.
-                const MetricAvailability sourceRate = (s.audio.source_sample_rate[idx] > 0)
-                                                          ? MetricAvailability::Available
-                                                          : MetricAvailability::Unavailable;
-                t[QStringLiteral("source_sample_rate")] =
-                    MetricOrUnavailable(static_cast<double>(s.audio.source_sample_rate[idx]), sourceRate);
                 drain.append(t);
             }
             audio[QStringLiteral("resampler_drain")] = drain;
