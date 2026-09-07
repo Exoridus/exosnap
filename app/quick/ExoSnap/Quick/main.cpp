@@ -624,8 +624,22 @@ int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplic
     recording_error->present(report, /*can_send_report=*/false);
     if (shell->property("navigationAllowed").toBool())
         return failNavigationLifecycle("a blocking surface left navigation allowed");
-    if (QObject* delegate = navTabAt(nav_tabs, 1); delegate == nullptr || delegate->property("enabled").toBool())
-        return failNavigationLifecycle("a blocking surface left the navigation tabs enabled");
+    const int blocked_page = shell->property("currentPage").toInt();
+    for (int tab = 0; tab <= 4; ++tab) {
+        QObject* delegate = navTabAt(nav_tabs, tab);
+        if (delegate == nullptr)
+            return failNavigationLifecycle("a navigation tab is missing");
+        // The destination the user is already on is the one exception. A
+        // blocking surface refuses every navigation, so greying the whole band
+        // is right for the four the user would be leaving for -- but the fifth
+        // is the page underneath the surface, and disabling it leaves the band
+        // with no current destination at all. A recovery surface raised at
+        // launch is the case that made it visible.
+        const bool expected = tab == blocked_page;
+        if (delegate->property("enabled").toBool() != expected)
+            return failNavigationLifecycle(expected ? "a blocking surface disabled the destination the user is on"
+                                                    : "a blocking surface left an unselected navigation tab enabled");
+    }
     (void)invokeNavigateTo(shell, 4);
     if (shell->property("currentPage").toInt() != 3)
         return failNavigationLifecycle("navigation went through behind a blocking surface");

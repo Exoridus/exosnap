@@ -107,7 +107,9 @@ already committed a snapshot of the current recipe, so that operation keeps runn
 after navigation and reports its result through the notification system. Navigation does not cancel
 or roll it back. Blocking surfaces (recovery, crash report, recording error) still block navigation
 because they are modal about a question the user has not answered; Edit is not. The window controls
-remain unaffected.
+remain unaffected. **The destination the user is already on is never disabled** — it is not a place
+they could be sent, it is where they are, and greying it out leaves the band showing no current
+destination at all. The other four are greyed while the surface is up.
 
 Every navigation intent answers to this one contract — a tab, a keyboard shortcut, a notification
 action, a jump from the Diagnostics page. There is no second path with different rules.
