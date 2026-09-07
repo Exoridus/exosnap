@@ -1,13 +1,20 @@
 $ErrorActionPreference = 'Stop'
 
+# Only an x64 MSI is published, and Chocolatey reports ARM64 as a 32-bit width by
+# convention. Without a 32-bit url, Install-ChocolateyPackage would fail on such a
+# host with an unrelated "url is empty" error instead of saying why.
+if (-not (Get-OSArchitectureWidth -Compare 64) -or $env:ChocolateyForceX86 -eq 'true') {
+  throw 'ExoSnap only ships an x64 build. No 32-bit or ARM64 package is published.'
+}
+
 $packageArgs = @{
   packageName    = $env:ChocolateyPackageName
   fileType       = 'msi'
-  url64bit       = 'https://github.com/Exoridus/exosnap/releases/download/v0.8.1/ExoSnap-0.8.1-windows-x64.msi'
-  checksum64     = '92783f9b1a603f9b60cd99562a736d7278e35cd5828340eed5aad861c4ad1ac7'
+  url64bit       = 'https://github.com/Exoridus/exosnap/releases/download/v0.9.0/ExoSnap-0.9.0-windows-x64.msi'
+  checksum64     = '0000000000000000000000000000000000000000000000000000000000000000'
   checksumType64 = 'sha256'
   softwareName   = 'ExoSnap*'
-  silentArgs     = '/quiet /norestart'
+  silentArgs     = '/qn /norestart'
   validExitCodes = @(0, 3010, 1641)
 }
 
