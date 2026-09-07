@@ -107,7 +107,9 @@ already committed a snapshot of the current recipe, so that operation keeps runn
 after navigation and reports its result through the notification system. Navigation does not cancel
 or roll it back. Blocking surfaces (recovery, crash report, recording error) still block navigation
 because they are modal about a question the user has not answered; Edit is not. The window controls
-remain unaffected.
+remain unaffected. **The destination the user is already on is never disabled** — it is not a place
+they could be sent, it is where they are, and greying it out leaves the band showing no current
+destination at all. The other four are greyed while the surface is up.
 
 Every navigation intent answers to this one contract — a tab, a keyboard shortcut, a notification
 action, a jump from the Diagnostics page. There is no second path with different rules.
@@ -1762,7 +1764,10 @@ release (0.11 per ADR 0022).
   includes the taskbar, so they use the monitor's full rectangle; the quick-control pill instead
   stays inside the monitor's **work area**, above the taskbar, by default and while being dragged,
   because it is the one overlay that accepts clicks, so it is the one overlay the taskbar must never
-  cover.
+  cover. It also keeps a **margin off every work-area edge** rather than sitting flush against one,
+  by default and at the end of a drag alike: it is a control surface the user parks among real
+  windows, and one pressed against the edge reads as clipped rather than as placed. **Dragging the
+  grip moves the pill with the pointer, one pixel for one pixel**, until an edge stops it.
   - The **recording pill** carries a state glyph plus the configured text. There is no REC or PAUSED
     word — the pill only appears while a capture is live, so the glyph carries the state: a coral dot
     while recording, an amber pause symbol while held, an amber warning symbol once **measured**

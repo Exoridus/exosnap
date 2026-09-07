@@ -63,6 +63,15 @@ Window {
     readonly property int buttonSize: 44
     readonly property int buttonGap: 8
 
+    // How far the pill stands off the work area on every side, for the default
+    // placement and for the drag clamp alike. The other three overlays are
+    // click-through decoration and sit close to the screen edge; this one is a
+    // control surface the user parks by hand next to real windows, and a control
+    // flush against the edge reads as clipped rather than as placed. The
+    // outermost rung of the shell's spacing scale rather than a number of its
+    // own, so it moves with the rest of the product.
+    readonly property int screenMargin: ExoTheme.spacing2Xl
+
     signal pauseResumeRequested()
     signal stopRequested()
     signal captureFrameRequested()
@@ -92,7 +101,7 @@ Window {
     // replaces these bindings — intentional: once the user has placed the pill,
     // it stays where they put it.
     x: root.effectiveWorkArea.x + (root.effectiveWorkArea.width - width) / 2
-    y: root.effectiveWorkArea.y + root.effectiveWorkArea.height - height - 32
+    y: root.effectiveWorkArea.y + root.effectiveWorkArea.height - height - root.screenMargin
 
     CaptureExclusion {
         id: exclusion
@@ -225,13 +234,22 @@ Window {
             MouseArea {
                 id: gripArea
 
-                // The grab point in virtual-desktop coordinates. Tracking it
-                // globally keeps the delta correct while the window itself moves
-                // underneath the cursor.
+                // Where inside the window the pointer grabbed, in window
+                // coordinates. Constant for the whole drag, and the reason the
+                // drag is expressed as an absolute placement rather than as a
+                // stream of relative nudges: assigning root.x moves the window
+                // out from under a pointer that has not itself moved, and
+                // Windows answers that with another move event reporting the
+                // same desktop position. A relative step would re-apply its own
+                // displacement on every one of those, so a single small gesture
+                // accelerated until the clamp below caught it -- which is how a
+                // few pixels of drag ended with the pill in a corner.
+                property point grabOffset: Qt.point(0, 0)
+                // Where the pointer was when the press landed, in
+                // virtual-desktop coordinates, so a click can be told from a
+                // drag without depending on how many events the gesture arrived
+                // as.
                 property point pressGlobal: Qt.point(0, 0)
-                // Accumulated travel — the released-position delta converges back
-                // to zero once the window has caught up with the cursor, so it
-                // cannot tell a drag from a click on its own.
                 property real travelled: 0
                 property bool dragging: false
 
@@ -239,23 +257,35 @@ Window {
                 cursorShape: gripArea.dragging ? Qt.ClosedHandCursor : Qt.OpenHandCursor
                 acceptedButtons: Qt.LeftButton
                 onPressed: mouse => {
-                    gripArea.pressGlobal = Qt.point(mouse.x + root.x + grip.x, mouse.y + root.y + grip.y)
+                    gripArea.grabOffset = Qt.point(mouse.x + grip.x, mouse.y + grip.y)
+                    gripArea.pressGlobal = Qt.point(root.x + gripArea.grabOffset.x,
+                                                    root.y + gripArea.grabOffset.y)
                     gripArea.travelled = 0
                     gripArea.dragging = true
                 }
                 onPositionChanged: mouse => {
                     if (!gripArea.dragging)
                         return
-                    const dx = mouse.x + root.x + grip.x - gripArea.pressGlobal.x
-                    const dy = mouse.y + root.y + grip.y - gripArea.pressGlobal.y
-                    gripArea.travelled += Math.abs(dx) + Math.abs(dy)
+                    // Both read before either is written: assigning root.x
+                    // would otherwise shift the frame the y reading is taken in.
+                    const pointerX = root.x + grip.x + mouse.x
+                    const pointerY = root.y + grip.y + mouse.y
+                    gripArea.travelled = Math.max(gripArea.travelled,
+                                                  Math.abs(pointerX - gripArea.pressGlobal.x)
+                                                  + Math.abs(pointerY - gripArea.pressGlobal.y))
                     // Clamped to the work area, not the full monitor rectangle:
                     // the taskbar must stay off-limits to a drag exactly as it is
                     // to the default position above, or the user could park the
-                    // pill right back under it.
+                    // pill right back under it. Inset by the same margin, so a
+                    // dragged pill stands off the edge the way a placed one does.
                     const area = root.effectiveWorkArea
-                    root.x = Math.max(area.x, Math.min(area.x + area.width - root.width, root.x + dx))
-                    root.y = Math.max(area.y, Math.min(area.y + area.height - root.height, root.y + dy))
+                    const margin = root.screenMargin
+                    root.x = Math.max(area.x + margin,
+                                      Math.min(area.x + area.width - root.width - margin,
+                                               pointerX - gripArea.grabOffset.x))
+                    root.y = Math.max(area.y + margin,
+                                      Math.min(area.y + area.height - root.height - margin,
+                                               pointerY - gripArea.grabOffset.y))
                 }
                 onReleased: {
                     gripArea.dragging = false

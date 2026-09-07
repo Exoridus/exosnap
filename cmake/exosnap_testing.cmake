@@ -47,8 +47,35 @@ function(exosnap_add_gtest)
   # the DLLs with a SINGLE custom target per output directory and have every test
   # target in that directory depend on it: the copies then run exactly once,
   # serially, so two writers never touch the same file.
-  string(MAKE_C_IDENTIFIER "${CMAKE_CURRENT_BINARY_DIR}" _exosnap_dir_key)
+  #
+  # The key is the binary directory RELATIVE to the build root, never its
+  # absolute path. It ends up inside a generated batch file name under
+  # CMakeFiles/, and an absolute path pushes that file past MAX_PATH in a deep
+  # build tree (a git worktree under .claude/worktrees/ reaches 269 characters):
+  # ninja then cannot launch it at all -- "CreateProcess: The filename or
+  # extension is too long" -- and NO target in the tree builds. Relative is just
+  # as unique, because a directory appears exactly once in one build tree.
+  file(RELATIVE_PATH _exosnap_dir_relative "${CMAKE_BINARY_DIR}" "${CMAKE_CURRENT_BINARY_DIR}")
+  if(_exosnap_dir_relative STREQUAL "")
+    set(_exosnap_dir_relative "root")
+  endif()
+  string(MAKE_C_IDENTIFIER "${_exosnap_dir_relative}" _exosnap_dir_key)
   set(_exosnap_stage_target "exosnap_stage_runtime_dlls_${_exosnap_dir_key}")
+  # MAKE_C_IDENTIFIER maps `/` and `_` to the same underscore, so two DIFFERENT
+  # directories can produce one key (libs/update/tests and libs/update_handoff...
+  # are one rename apart). Silently, that makes the second directory reuse the
+  # first one's stage target and stage its DLLs into the wrong output folder --
+  # every test binary there then fails to START with 0xC0000135, which reads as a
+  # broken build rather than a name collision. Claimed keys are tracked so the
+  # collision is a configure error instead.
+  get_property(_exosnap_stage_owner GLOBAL PROPERTY "exosnap_stage_key_${_exosnap_dir_key}")
+  if(_exosnap_stage_owner AND NOT _exosnap_stage_owner STREQUAL "${CMAKE_CURRENT_BINARY_DIR}")
+    message(FATAL_ERROR
+      "Runtime-DLL stage key '${_exosnap_dir_key}' is claimed by '${_exosnap_stage_owner}' and requested again "
+      "by '${CMAKE_CURRENT_BINARY_DIR}'. MAKE_C_IDENTIFIER collapses '/' and '_' to the same character; rename "
+      "one of the two directories so their keys differ.")
+  endif()
+  set_property(GLOBAL PROPERTY "exosnap_stage_key_${_exosnap_dir_key}" "${CMAKE_CURRENT_BINARY_DIR}")
   if(NOT TARGET ${_exosnap_stage_target})
     # The stage target can run before MSBuild creates the per-config output
     # directory; `cmake -E copy_if_different` into a missing directory then

@@ -314,6 +314,20 @@ function Invoke-ReleaseHumanGate {
     # but nobody stood at the machine to be asked, and a reader of the report is
     # entitled to know which of the two they are looking at.
     $actor = if ($attested) { '[attested] ' } else { '' }
+    # A Verify block may name its own terminal state when neither PASS nor FAIL is
+    # the truth. `Ok = $false` alone collapses "the evidence was never produced"
+    # into "the product is broken", which is exactly the distinction rules 1 and 3
+    # exist to keep: a gate whose worker stopped before it could measure anything
+    # has found no defect, and a page of red for it reads like a product collapse.
+    # PASS and FAIL keep travelling through Ok, so a block that names nothing is
+    # unaffected.
+    $named = if ($verdict -is [System.Collections.IDictionary] -and $verdict.ContainsKey('Result')) {
+        "$($verdict['Result'])"
+    }
+    else { '' }
+    if ($named -in @('UNVERIFIED', 'UNAVAILABLE', 'DEFERRED')) {
+        return @{ Result = $named; Message = "$actor$($verdict.Detail)"; Evidence = $verdict.Evidence }
+    }
     if ($verdict.Ok) {
         return @{ Result = 'PASS'; Message = "$actor$($verdict.Detail)"; Evidence = $verdict.Evidence }
     }

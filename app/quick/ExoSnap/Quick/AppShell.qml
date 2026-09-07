@@ -478,7 +478,18 @@ Item {
                         // session again. It never swaps a page UNDER a covering
                         // workspace, because the workspace is only ever visible
                         // on Record — see `editOverlayVisible`.
-                        enabled: root.navigationAllowed
+                        //
+                        // The selected tab is exempt because it is not somewhere
+                        // the user could be sent: it is where they already are,
+                        // and the band marks it. Without the exemption a
+                        // blocking surface raised before the user has navigated
+                        // anywhere -- recovery at launch is the ordinary case --
+                        // greys out every destination including the one on
+                        // screen, leaving a band that names no current page. The
+                        // guard it would drop is redundant anyway: navigateTo()
+                        // refuses while a surface is up, and navigating to the
+                        // current page is a no-op either way.
+                        enabled: root.navigationAllowed || selected
                         Layout.alignment: Qt.AlignVCenter
                         // Shrinkable to nothing on purpose. Everything to the
                         // right of the drag handle is fixed-size, so when the
