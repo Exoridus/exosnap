@@ -70,7 +70,11 @@ image moves.
 
 ## Status
 
-- **0.9.0** - first submission attempt to the community repository.
-- **0.8.1 / 0.8.0 / 0.7.0** - never submitted. The 0.7.0 and 0.8.0 MSIs shipped
-  without the FFmpeg runtime DLLs and crashed on launch; 0.8.1 fixed that but
-  was never pushed.
+No version of this package has reached the community feed yet.
+
+- **0.9.0** - the first version intended to be pushed there.
+- **0.8.1** - prepared and version-bumped in this repository, never pushed.
+- **0.6.0 / 0.7.0** - manifests existed, but their MSIs shipped without the
+  FFmpeg runtime DLLs and crashed on launch, so neither was submitted.
+- Earlier versions carried manifests here from 0.1.0 onward; none was
+  submitted.

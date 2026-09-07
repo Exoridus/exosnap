@@ -1,10 +1,10 @@
 $ErrorActionPreference = 'Stop'
 
-# Only an x64 MSI is published, and Chocolatey reports ARM64 as a 32-bit width by
-# convention. Without a 32-bit url, Install-ChocolateyPackage would fail on such a
-# host with an unrelated "url is empty" error instead of saying why.
+# Only an x64 MSI is published. Without a 32-bit url, Install-ChocolateyPackage
+# would fail on a 32-bit host with an unrelated "url is empty" error instead of
+# saying why the software cannot be installed there.
 if (-not (Get-OSArchitectureWidth -Compare 64) -or $env:ChocolateyForceX86 -eq 'true') {
-  throw 'ExoSnap only ships an x64 build. No 32-bit or ARM64 package is published.'
+  throw 'ExoSnap only ships an x64 build. No 32-bit package is published.'
 }
 
 $packageArgs = @{
