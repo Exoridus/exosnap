@@ -562,6 +562,8 @@ class DiagnosticsSessionGuard {
         return "Muxer";
     case PipelineBottleneck::Disk:
         return "Disk";
+    case PipelineBottleneck::Gpu:
+        return "Gpu";
     case PipelineBottleneck::Unknown:
         return "Unknown";
     }
