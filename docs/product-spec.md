@@ -1734,10 +1734,12 @@ release (0.11 per ADR 0022).
   hub always keeps the full untruncated text); with a single action the card itself is clickable;
   two actions get named buttons. A preset switch raises no toast — only the hub entry
   with **Undo** (the combo box that switched is the way back).
-  - A toast is **operable**: its dismiss ✕ (present on hover or keyboard focus) and every action it
-    offers respond to the mouse or keyboard; **Escape** dismisses whichever toast currently holds the
-    keyboard focus, the same way it already dismisses a modal. Only the
-    transparent gaps between stacked cards fall through to whatever is behind them.
+  - A toast is **operable**: its dismiss ✕ (present on hover) and every action it offers respond to
+    the mouse or keyboard. The toast window never takes keyboard focus — taking it would pull focus
+    out of the game or editor being recorded — so no card is ever the focused one. **Escape**
+    therefore acts only while an ExoSnap window is the focused window, and it dismisses the toast
+    nearest the anchor: the timed toast when one is showing, otherwise the newest standing one. Only
+    the transparent gaps between stacked cards fall through to whatever is behind them.
   - A body that has no place to wrap — a file path is one unbreakable token — breaks mid-token
     rather than growing past the card. No body may overrun the card at any length.
   - The "Recording saved" toast names the **file**, not its full path. The path is what the actions
@@ -1886,7 +1888,7 @@ the focused application. The other three are in-window and are **not** rebindabl
 |---|---|---|
 | Global hotkeys | the whole desktop | start/stop, pause/resume, capture frame, marker |
 | Window shortcuts | the ExoSnap window | `Ctrl+1`…`Ctrl+5` select Record / Settings / Diagnostics / Logs / About |
-| Surface-local keys | one page or overlay while it holds the keyboard focus | the Edit timeline's transport keys, the webcam overlay's arrows, `Escape` on a modal or the focused desktop notification toast |
+| Surface-local keys | one page or overlay while it holds the keyboard focus | the Edit timeline's transport keys, the webcam overlay's arrows, `Escape` on a modal, or on the frontmost desktop notification toast while an ExoSnap window is focused |
 | Text editing | a focused text field | everything else |
 
 Every shortcut ExoSnap adds inside its own window is modifier-qualified, so no shortcut can consume

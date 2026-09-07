@@ -22,8 +22,8 @@ import QtQuick.Shapes
 //    capture-excluded overlays use and not the application's own appearance --
 //    it sits on the desktop beside Windows' own notifications, not over
 //    recorded content;
-//  - a dismiss ✕ appears only on hover (or keyboard focus, where reachable --
-//    see the Escape Shortcut below for why that is a real constraint here);
+//  - a dismiss ✕ appears only on hover: this window never takes keyboard focus,
+//    so no card can be focused (see the Escape Shortcut below);
 //  - with exactly one action the whole card is clickable, with no marker glyph
 //    -- the affordance is the pointer cursor and the ground stepping to its
 //    hover rung;
@@ -146,7 +146,7 @@ Window {
     // the ordinary window-focus route. Qt.ApplicationShortcut instead fires
     // whenever any window of THIS application -- in practice, the main window --
     // is the focused one, which does not require this window to be.
-    function dismissFocusedToast() {
+    function dismissFrontToast() {
         if (stack.count <= 0)
             return
         const last = stack.itemAtIndex(stack.count - 1)
@@ -158,7 +158,7 @@ Window {
         sequence: "Escape"
         context: Qt.ApplicationShortcut
         enabled: root.visible
-        onActivated: root.dismissFocusedToast()
+        onActivated: root.dismissFrontToast()
     }
 
     component ActionLabel: Item {
