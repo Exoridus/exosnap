@@ -457,19 +457,35 @@ by hand, every release:
   - `Codexo.ExoSnap.locale.en-US.yaml` — `PackageVersion`, `ReleaseNotesUrl`, and the version
     number/release-specific text inside `Description` if it names one.
   - Run `scripts/validate-winget-manifest.ps1` before submitting per `packaging/winget/README.md`.
-- [ ] **Chocolatey.** `packaging/chocolatey/tools/chocolateyinstall.ps1` — `url64bit` (version in
-      the path) and `checksum64` (lowercase SHA-256, from the same `.msi.sha256`). Also
-      `packaging/chocolatey/exosnap.nuspec` — `<version>`, the `@vX.Y.Z` tag in `<iconUrl>`,
-      `<releaseNotes>`, and any version-specific line in `<description>`.
-  - Run `scripts/validate-chocolatey-package.ps1 -Version <x.y.z> -ManifestPath
-    .workspace/release/<x.y.z>/artifact-manifest.json -RequireManifest` before publishing —
-    it proves the CMake version, nuspec `<version>`/`<iconUrl>`/`<releaseNotes>`, and
-    `chocolateyinstall.ps1` `url64bit` all agree, flags any other stale version reference left
-    in `packaging/chocolatey/`, and checks `checksum64` against the manifest's `msiSha256`.
-    **`-RequireManifest` is mandatory for a real submission** — without it, a missing manifest
-    silently skips the checksum check instead of failing, which would let an unverified
-    `checksum64` through. Static checks only — it does not run `choco pack` or install/
-    uninstall the package.
+- [ ] **Chocolatey.** The MSI is downloaded at install time, not embedded, so the only
+      release-specific values are the URL and its hash — and the hash does not exist until the
+      release is published. `checksum64` therefore carries a placeholder of 64 zeros in the tree
+      between a version bump and a release, and
+      `scripts/validate-chocolatey-package.ps1` fails on that placeholder unconditionally, with or
+      without `-RequireManifest`. Work the steps in this order; see `packaging/chocolatey/README.md`
+      for the submission details.
+  - **Bump.** `packaging/chocolatey/exosnap.nuspec` — `<version>`, the `@vX.Y.Z` tag in
+    `<iconUrl>`, `<releaseNotes>`, and any version-specific line in `<description>`. Also the
+    version segment of `url64bit` in `packaging/chocolatey/tools/chocolateyinstall.ps1`. Leave
+    `checksum64` on the placeholder.
+  - **Tag and publish** (§3, §4). The release workflow builds
+    `ExoSnap-<x.y.z>-windows-x64.msi` and its `.msi.sha256` sidecar.
+  - **Fill `checksum64`** with the lowercase SHA-256 from that sidecar, the same value WinGet's
+    `InstallerSha256` gets in uppercase.
+  - **Validate.** `scripts/validate-chocolatey-package.ps1 -Version <x.y.z> -ManifestPath
+    .workspace/release/<x.y.z>/artifact-manifest.json -RequireManifest` — it proves the CMake
+    version, nuspec `<version>`/`<iconUrl>`/`<releaseNotes>`, and `chocolateyinstall.ps1`
+    `url64bit` all agree, flags any other stale version reference left in
+    `packaging/chocolatey/`, checks `checksum64` against the manifest's `msiSha256`, and enforces
+    the mechanical subset of the Chocolatey moderation rules. **`-RequireManifest` is mandatory
+    for a real submission** — without it, a missing manifest silently skips the checksum check
+    instead of failing, which would let an unverified `checksum64` through. Static checks only —
+    it does not run `choco pack` or install/uninstall the package.
+  - **Pack.** `choco pack packaging/chocolatey/exosnap.nuspec --output-directory <scratch dir>`.
+  - **Push.** `choco push <scratch dir>/exosnap.<x.y.z>.nupkg --source https://push.chocolatey.org/`,
+    then watch the moderation review: the package sits in Pending until the validator and the
+    verifier have run, and a moderator can ask for changes on the *same* version, which must then
+    be re-pushed rather than bumped.
 - [ ] **Scoop.** `packaging/scoop/exosnap.json` carries an `autoupdate`/`checkver` block, so the
       *published* bucket entry (`Exoridus/scoop-exosnap`) refreshes its own version/URL/hash once
       `scoop update` runs against the new GitHub Release — no manual bucket edit needed. Still keep
