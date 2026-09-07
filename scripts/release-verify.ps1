@@ -44,6 +44,8 @@
     retry     re-attempt named scenarios (a FAIL is otherwise left alone as a finding)
     status    print the current state
     report    write release-verification.json + .md + junit.xml
+    qualify   evaluate the campaign for promotion, and (with -Publish) attach the
+              qualification record to the RC release
     recover   restore a dirty environment left by a killed runner, and nothing else
     list      print the scenario catalog with its layers and requirements
 
@@ -53,18 +55,32 @@
     resolution here. `live-verify.ps1` may guess at a local build; this may not.
 
 .EXAMPLE
-    pwsh scripts/release-verify.ps1 prepare -ExePath ./rc/exosnap.exe -Tag v0.9.0-rc10
+    pwsh scripts/release-verify.ps1 prepare -ExePath ./rc/portable/exosnap.exe -Tag v0.9.1-rc1 `
+        -SourceCommit <the commit v0.9.1-rc1 points at> `
+        -PortableZip ./rc/ExoSnap-0.9.1-rc1-windows-x64-portable.zip `
+        -Msi ./rc/ExoSnap-0.9.1-rc1-windows-x64.msi
     pwsh scripts/release-verify.ps1 run
     pwsh scripts/release-verify.ps1 report
+    pwsh scripts/release-verify.ps1 qualify
 #>
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('prepare', 'run', 'resume', 'retry', 'status', 'report', 'recover', 'list')]
+    [ValidateSet('prepare', 'run', 'resume', 'retry', 'status', 'report', 'qualify', 'recover', 'list')]
     [string] $Command = 'status',
 
     [string] $ExePath,
     [string] $Tag,
+    # The commit the RC was built from. A published portable ZIP carries no build
+    # manifest, so a campaign against downloaded release assets cannot read its own
+    # provenance -- and a qualification record without a source commit promotes
+    # nothing.
+    [string] $SourceCommit,
+    # The RC's published downloadables. Hashing them is what binds the campaign's
+    # verdict to the bytes the release page actually serves; the publish gate compares
+    # these against the release's own .sha256 sidecars.
+    [string] $PortableZip,
+    [string] $Msi,
     [string] $RunId,
     [string[]] $Only,
     [string] $AliasProfile,
@@ -84,7 +100,15 @@ param(
     # minimise or reconfigure something, in a session with no terminal to answer
     # from. Every attested result says so in the report, so a reader can tell an
     # attested run from one a person stood in front of.
-    [string[]] $Attest
+    [string[]] $Attest,
+    # Opt-in scenario ids this release must also have answered. Opt-in classes stay
+    # out of a default sweep, so treating them as silently required would block every
+    # promotion and treating them as permanently optional would mean a soak or an
+    # unplug gate never has to be answered. Naming them per release is the honest form.
+    [string[]] $Required,
+    # `qualify` only: uploads the qualification record to the RC's GitHub release.
+    # Promotion is the developer's explicit act and nobody else's.
+    [switch] $Publish
 )
 
 Set-StrictMode -Version Latest
@@ -102,6 +126,7 @@ Import-Module (Join-Path $PSScriptRoot 'lib/EnvironmentOrchestrator.psm1') -Forc
 . (Join-Path $PSScriptRoot 'lib/ReleaseExternalTools.ps1')
 . (Join-Path $PSScriptRoot 'lib/ReleaseSandbox.ps1')
 . (Join-Path $PSScriptRoot 'lib/ReleaseScenarios.ps1')
+. (Join-Path $PSScriptRoot 'lib/ReleaseQualification.ps1')
 
 # ---------------------------------------------------------------------------
 # Output
@@ -540,6 +565,57 @@ function Resolve-RunDirectory {
     return $latest
 }
 
+function Write-ReleaseQualificationRecord {
+    <#
+    .SYNOPSIS
+        Regenerates `release-verification.json` from the current campaign state and
+        returns it.
+    .DESCRIPTION
+        Always regenerated, never patched: the record is the release verdict, and one
+        that could drift from the state it claims to describe would be worse than
+        none at all.
+    #>
+    param(
+        [Parameter(Mandatory)] $Run,
+        [Parameter(Mandatory)] [object[]] $Catalog,
+        [string[]] $RequiredOptIn = @()
+    )
+
+    $packages = @()
+    $packagesPath = Join-Path $Run.Directory 'packages.json'
+    if (Test-Path -LiteralPath $packagesPath) {
+        $stored = Read-JsonFile -Path $packagesPath
+        if ($null -ne $stored) { $packages = @($stored) }
+    }
+    $record = New-ReleaseQualificationRecord -Run $Run -Catalog $Catalog `
+        -CatalogVersion (Get-ReleaseScenarioCatalogVersion) -RequiredOptIn $RequiredOptIn `
+        -RepositoryRoot $repositoryRoot -Packages $packages
+    Write-JsonAtomic -Path (Join-Path $Run.Directory 'release-verification.json') -Value $record
+    return $record
+}
+
+function Show-ReleaseQualification {
+    <#
+    .SYNOPSIS
+        Prints the promotion verdict a developer acts on.
+    #>
+    param([Parameter(Mandatory)] $Record)
+
+    if ($Record.qualification.overall -eq 'QUALIFIED') {
+        Write-Heading 'QUALIFIED FOR PROMOTION'
+        Write-Host "  commit : $($Record.sourceCommit)" -ForegroundColor Green
+        Write-Host "  rc tag : $($Record.rcTag)" -ForegroundColor Green
+        foreach ($package in @($Record.packages)) {
+            Write-Host "  package: $($package.fileName)  $($package.sha256)"
+        }
+        return
+    }
+    Write-Heading 'NOT QUALIFIED FOR PROMOTION'
+    foreach ($reason in @($Record.qualification.reasons)) {
+        Write-Host "  - $reason" -ForegroundColor Red
+    }
+}
+
 function ConvertTo-Hashtable {
     param($Object)
     $table = @{}
@@ -823,6 +899,7 @@ function Invoke-Scenarios {
             $colour = switch ($outcome.Result) {
                 'PASS' { 'Green' }
                 'FAIL' { 'Red' }
+                'INFRA_ERROR' { 'Red' }
                 default { 'Yellow' }
             }
             Write-Host "  -> $($outcome.Result)  $($outcome.Message)" -ForegroundColor $colour
@@ -934,7 +1011,10 @@ function Invoke-OneScenario {
             -Desired $desired -Body { param($begun) & $Entry.Run $Context $begun }.GetNewClosure()
     }
     catch {
-        $result.Result = 'FAIL'
+        # The transaction never opened, so the product was never exercised. That is an
+        # infrastructure failure, and calling it FAIL would put a defect ExoSnap does
+        # not have into a release report.
+        $result.Result = 'INFRA_ERROR'
         $result.Message = "Scenario setup failed: $($_.Exception.Message)"
         return $result
     }
@@ -942,34 +1022,12 @@ function Invoke-OneScenario {
     $result.RestoreResult = $transaction.RestoreResult
     $result.EnvironmentEvidence = $transaction.Evidence
 
-    if ($null -ne $transaction.SetupErrorCode) {
-        # The environment could not be brought to the state the scenario needs, so the
-        # product was never exercised. Which of the two answers that is depends
-        # entirely on WHY, and the codes say so:
-        #   apply_rejected / device_not_present -- this machine does not offer it.
-        #     UNAVAILABLE: a fact about the desk, not about ExoSnap.
-        #   verify_mismatch and everything else -- the mechanism misbehaved.
-        #     FAIL: something claimed success and was not telling the truth.
-        $benign = @('apply_rejected', 'device_not_present', 'unknown_property', 'not_mutable')
-        $result.Result = if ($transaction.SetupErrorCode -in $benign) { 'UNAVAILABLE' } else { 'FAIL' }
-        $result.Message = "$($transaction.SetupErrorCode): $($transaction.SetupError)"
-        return $result
-    }
-
-    if ($null -ne $transaction.Error) {
-        $result.Result = 'FAIL'
-        $result.Message = "Scenario threw: $($transaction.Error)"
-        return $result
-    }
-    $product = $transaction.Product
-    if ($null -eq $product) {
-        $result.Result = 'UNVERIFIED'
-        $result.Message = 'The scenario returned nothing'
-        return $result
-    }
-    $result.Result = $product.Result
-    if ($product.ContainsKey('Message')) { $result.Message = $product.Message }
-    if ($product.ContainsKey('Evidence') -and $null -ne $product.Evidence) { $result.Evidence = @($product.Evidence) }
+    # Resolve-ReleaseScenarioOutcome owns the FAIL / INFRA_ERROR / UNAVAILABLE split
+    # and lives in a library, so the rule is testable without running a campaign.
+    $outcome = Resolve-ReleaseScenarioOutcome -Transaction $transaction
+    $result.Result = $outcome.Result
+    $result.Message = $outcome.Message
+    if ($outcome.Evidence.Count -gt 0) { $result.Evidence = @($outcome.Evidence) }
     return $result
 }
 
@@ -1038,7 +1096,14 @@ switch ($Command) {
         if ([string]::IsNullOrWhiteSpace($ExePath)) {
             throw 'prepare needs -ExePath. A release gate binds to explicit bytes; there is no default artifact.'
         }
-        $artifact = Get-ReleaseArtifactFingerprint -Path $ExePath -ReleaseTag $Tag
+        $artifact = Get-ReleaseArtifactFingerprint -Path $ExePath -ReleaseTag $Tag -SourceCommit $SourceCommit
+        $packages = @()
+        if (-not [string]::IsNullOrWhiteSpace($PortableZip)) {
+            $packages += Get-ReleasePackageIdentity -Path $PortableZip -Kind 'portable'
+        }
+        if (-not [string]::IsNullOrWhiteSpace($Msi)) {
+            $packages += Get-ReleasePackageIdentity -Path $Msi -Kind 'installer'
+        }
         $campaignId = if ([string]::IsNullOrWhiteSpace($RunId)) {
             "rel-$([DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss'))"
         }
@@ -1052,12 +1117,19 @@ switch ($Command) {
 
         New-LiveVerifyRun -RunId $campaignId -RunDirectory $directory -Catalog $catalog `
             -Artifact $artifact -Environment $environment | Out-Null
+        # Kept out of artifact-fingerprint.json deliberately: a package deleted from
+        # disk after the campaign started must not turn every verified result STALE.
+        if ($packages.Count -gt 0) {
+            Write-JsonAtomic -Path (Join-Path $directory 'packages.json') -Value $packages
+        }
         Backup-ReleaseRecoveryManifest -CampaignDirectory $directory
 
         Write-Heading "Release campaign $campaignId"
         Write-Host "  artifact : $($artifact.exePath)"
         Write-Host "  version  : $($artifact.productVersion)  tag $($artifact.tag)"
         Write-Host "  sha256   : $($artifact.exeSha256)"
+        Write-Host "  commit   : $(if ($artifact.sourceCommit) { $artifact.sourceCommit } else { 'UNKNOWN - pass -SourceCommit, or this campaign can never qualify a release' })"
+        Write-Host "  packages : $(if ($packages.Count -gt 0) { ($packages | ForEach-Object { $_.fileName }) -join ', ' } else { 'NONE - pass -PortableZip/-Msi, or this campaign can never qualify a release' })"
         Write-Host "  install  : $($artifact.installTree)"
         Write-Host "  envctl   : $(if ($orchestrator.Available) { $orchestrator.EnvctlPath } else { 'NOT BUILT - mutating scenarios will report UNAVAILABLE' })"
         if ($orchestrator.Dirty) {
@@ -1126,7 +1198,11 @@ switch ($Command) {
         $run = Get-LiveVerifyRun -RunDirectory $directory
         $orchestrator = New-EnvironmentOrchestrator -RunId $run.Run.runId `
             -JournalDirectory (Join-Path $directory 'environment') -EnvctlPath $EnvctlPath -AliasProfile $AliasProfile
-        $artifact = Get-ReleaseArtifactFingerprint -Path $run.Artifact.exePath -ReleaseTag $run.Artifact.tag
+        # The source commit is re-supplied rather than re-derived: it is part of the
+        # artifact fingerprint, and a resume that silently lost it would mark every
+        # verified result STALE against a binary that did not change.
+        $artifact = Get-ReleaseArtifactFingerprint -Path $run.Artifact.exePath -ReleaseTag $run.Artifact.tag `
+            -SourceCommit $run.Artifact.sourceCommit
         $environment = Get-ReleaseEnvironmentFacts -Orchestrator $orchestrator
         Write-JsonAtomic -Path (Join-Path $directory 'artifact-fingerprint.json') -Value $artifact
         Write-JsonAtomic -Path (Join-Path $directory 'environment.json') -Value $environment
@@ -1160,6 +1236,7 @@ switch ($Command) {
             $colour = switch ($check.state) {
                 'PASS' { 'Green' }
                 'FAIL' { 'Red' }
+                'INFRA_ERROR' { 'Red' }
                 'PENDING' { 'DarkGray' }
                 default { 'Yellow' }
             }
@@ -1179,14 +1256,54 @@ switch ($Command) {
         $directory = Resolve-RunDirectory
         $run = Get-LiveVerifyRun -RunDirectory $directory
         Write-LiveVerifyReport -Run $run | Out-Null
-        # The release-facing name. Same content as report.json -- one writer, so the
-        # machine-readable release verdict and the Live Verify report cannot disagree.
-        Copy-Item -LiteralPath (Join-Path $directory 'report.json') `
-            -Destination (Join-Path $directory 'release-verification.json') -Force
+        $record = Write-ReleaseQualificationRecord -Run $run -Catalog $catalog `
+            -RequiredOptIn (Expand-ListArgument -Values $Required)
         Write-Heading 'Report written'
         Write-Host "  $(Join-Path $directory 'release-verification.json')"
         Write-Host "  $(Join-Path $directory 'report.md')"
         Write-Host "  $(Join-Path $directory 'junit.xml')"
+        Show-ReleaseQualification -Record $record
+        return
+    }
+
+    'qualify' {
+        # The promotion step. It decides nothing a report did not already decide --
+        # it states the decision in the one sentence a release is cut on, and offers
+        # the single act that makes the record reachable by the publish gate.
+        $directory = Resolve-RunDirectory
+        $run = Get-LiveVerifyRun -RunDirectory $directory
+        Write-LiveVerifyReport -Run $run | Out-Null
+        $record = Write-ReleaseQualificationRecord -Run $run -Catalog $catalog `
+            -RequiredOptIn (Expand-ListArgument -Values $Required)
+        $recordPath = Join-Path $directory 'release-verification.json'
+        Show-ReleaseQualification -Record $record
+        Write-Host ''
+        Write-Host "  record : $recordPath"
+
+        if ($record.qualification.overall -ne 'QUALIFIED') {
+            Write-Host ''
+            Write-Host '  Nothing is uploaded and no tag may be pushed until every reason above is gone.'
+            exit 1
+        }
+
+        if (-not $Publish) {
+            Write-Host ''
+            Write-Host '  The publish gate reads this record from the RC release, so it has to be attached to it:'
+            Write-Host "    pwsh scripts/release-verify.ps1 qualify -RunId $($run.Run.runId) -Publish"
+            Write-Host "  Then push the final tag from $($record.sourceCommit)."
+            return
+        }
+
+        if ($null -eq (Get-Command gh -ErrorAction SilentlyContinue)) {
+            throw 'gh is not on PATH; the qualification record cannot be attached to the RC release.'
+        }
+        Write-Heading "Attaching the record to $($record.rcTag)"
+        & gh release upload $record.rcTag $recordPath --clobber
+        if ($LASTEXITCODE -ne 0) {
+            throw "gh release upload failed with exit code $LASTEXITCODE; the record is NOT attached."
+        }
+        Write-Host "  uploaded release-verification.json to $($record.rcTag)" -ForegroundColor Green
+        Write-Host "  the final tag may now be pushed from $($record.sourceCommit)."
         return
     }
 }

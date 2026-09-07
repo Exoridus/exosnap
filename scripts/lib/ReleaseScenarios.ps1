@@ -140,6 +140,19 @@ function Test-RunnerElevated {
     catch { return $false }
 }
 
+function Get-ReleaseScenarioCatalogVersion {
+    <#
+    .SYNOPSIS
+        The catalog's own version, cited by every qualification record.
+    .DESCRIPTION
+        "Every gate passed" only means something against a known set of gates. Bump
+        the patch part when a scenario's implementation changes, the minor part when
+        one is added or removed, and the major part when a gate's meaning changes --
+        an older record then reads as what it is, a verdict about a different bar.
+    #>
+    return '1.0.0'
+}
+
 function Get-ReleaseScenarioCatalog {
     $catalog = @()
 
