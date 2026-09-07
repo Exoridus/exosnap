@@ -95,12 +95,42 @@ class QuickThemeTokens : public QObject {
     // is selected.
     Q_PROPERTY(QColor overlayAccent READ overlayAccent NOTIFY changed FINAL)
 
+    // ── Shell-following surfaces ────────────────────────────────────────────
+    //
+    // The desktop notification toast is capture-excluded like the surfaces
+    // above, but it sits on the desktop next to Windows' own notifications, not
+    // over recorded content -- so it must not be fixed-dark, and it must not
+    // follow the application's own appearance either. It follows the WINDOWS
+    // SHELL'S appearance (`services::ShellAppearanceId`), the same signal the
+    // tray icon and taskbar mark already use, resolved independently of
+    // `appearance_id_`. The accent stays the user's own selection
+    // (`accent_id_`); only which of its two resolved values (dark/light) is
+    // used follows the shell's kind, mirroring how `overlayAccent` always takes
+    // the accent's dark value.
+    Q_PROPERTY(QColor shellSurfaceRaised READ shellSurfaceRaised NOTIFY changed FINAL)
+    Q_PROPERTY(QColor shellSurfaceHover READ shellSurfaceHover NOTIFY changed FINAL)
+    Q_PROPERTY(QColor shellLine READ shellLine NOTIFY changed FINAL)
+    Q_PROPERTY(QColor shellInk READ shellInk NOTIFY changed FINAL)
+    Q_PROPERTY(QColor shellInkSecondary READ shellInkSecondary NOTIFY changed FINAL)
+    Q_PROPERTY(QColor shellInkDim READ shellInkDim NOTIFY changed FINAL)
+    Q_PROPERTY(QColor shellSuccess READ shellSuccess NOTIFY changed FINAL)
+    Q_PROPERTY(QColor shellWarning READ shellWarning NOTIFY changed FINAL)
+    Q_PROPERTY(QColor shellError READ shellError NOTIFY changed FINAL)
+    Q_PROPERTY(QColor shellAccent READ shellAccent NOTIFY changed FINAL)
+    Q_PROPERTY(QColor shellAccentInk READ shellAccentInk NOTIFY changed FINAL)
+    Q_PROPERTY(bool shellDark READ shellDark NOTIFY changed FINAL)
+
   public:
     explicit QuickThemeTokens(QObject* parent = nullptr);
 
     // An unknown id falls back to the shipped default rather than leaving the
     // UI on a half-applied palette.
     void setAppearance(const QString& appearance_id, const QString& accent_id);
+
+    // Resolves the shell-following family above against `shell_appearance_id`
+    // and the accent already selected by `setAppearance()`. An unknown id falls
+    // back the same way `setAppearance()` does.
+    void setShellAppearance(const QString& shell_appearance_id);
 
     // The two shipped appearances / the curated accents, as
     // `{ value, label, selectable, reason }` entries read from the canonical
@@ -174,6 +204,19 @@ class QuickThemeTokens : public QObject {
     [[nodiscard]] static QColor overlayError() noexcept;
     [[nodiscard]] QColor overlayAccent() const noexcept;
 
+    [[nodiscard]] QColor shellSurfaceRaised() const noexcept;
+    [[nodiscard]] QColor shellSurfaceHover() const noexcept;
+    [[nodiscard]] QColor shellLine() const noexcept;
+    [[nodiscard]] QColor shellInk() const noexcept;
+    [[nodiscard]] QColor shellInkSecondary() const noexcept;
+    [[nodiscard]] QColor shellInkDim() const noexcept;
+    [[nodiscard]] QColor shellSuccess() const noexcept;
+    [[nodiscard]] QColor shellWarning() const noexcept;
+    [[nodiscard]] QColor shellError() const noexcept;
+    [[nodiscard]] QColor shellAccent() const noexcept;
+    [[nodiscard]] QColor shellAccentInk() const noexcept;
+    [[nodiscard]] bool shellDark() const noexcept;
+
   signals:
     void changed();
 
@@ -181,6 +224,19 @@ class QuickThemeTokens : public QObject {
     QString appearance_id_;
     QString accent_id_;
     bool dark_ = true;
+    QString shell_appearance_id_;
+    bool shell_dark_ = true;
+    QColor shell_surface_raised_;
+    QColor shell_surface_hover_;
+    QColor shell_line_;
+    QColor shell_ink_;
+    QColor shell_ink_secondary_;
+    QColor shell_ink_dim_;
+    QColor shell_success_;
+    QColor shell_warning_;
+    QColor shell_error_;
+    QColor shell_accent_;
+    QColor shell_accent_ink_;
     QColor background_;
     QColor surface_;
     QColor surface_raised_;

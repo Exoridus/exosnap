@@ -2897,6 +2897,10 @@ void QuickApplication::applyThemeFromSettings() {
     if (auto* tokens = engine_.singletonInstance<QuickThemeTokens*>(QStringLiteral("ExoSnap.Quick"),
                                                                     QStringLiteral("QuickThemeTokens"))) {
         tokens->setAppearance(settings_.appearance_id, settings_.accent_id);
+        // The desktop notification toast sits beside the tray, not over
+        // recorded content, so it resolves its own colours from the shell
+        // appearance too -- same call, same reasoning as the tray mark below.
+        tokens->setShellAppearance(shellAppearanceId());
     }
     // The tray mark carries the accent too, and it is not part of the scene, so
     // it does not follow the token singleton.
@@ -2916,6 +2920,10 @@ QString QuickApplication::shellAppearanceId() const {
 
 void QuickApplication::refreshShellChromeAppearance() {
     tray_adapter_.setAppearance(shellAppearanceId(), settings_.accent_id);
+    if (auto* tokens = engine_.singletonInstance<QuickThemeTokens*>(QStringLiteral("ExoSnap.Quick"),
+                                                                    QStringLiteral("QuickThemeTokens"))) {
+        tokens->setShellAppearance(shellAppearanceId());
+    }
     // The window icon is only re-rendered when the presence CHANGES, so a shell
     // theme switch has to invalidate that guard: a session sitting still would
     // otherwise keep the icon it was given under the old taskbar theme until the
@@ -2953,8 +2961,27 @@ void QuickApplication::persistLiveConfig() {
 // healthy machine and therefore only ever photographed in its "all caught up"
 // state. What needs reviewing is the opposite -- several advisories at once,
 // mixed severities, and a body long enough to test the entry's wrapping.
+//
+// The hub and the toast stack follow different rules (NotificationManager::
+// Enqueue): every event lands in the hub, but the toast stack shows STANDING
+// events stacked without limit and at most one TIMED event, which a later
+// timed event evicts outright rather than joining. A scenario built entirely
+// from timed enqueues therefore seeds a rich hub but leaves only the last
+// event as a visible toast -- that used to be this function's whole event
+// list, which is why a capture of the toast stack showed one incidental card
+// (RecoveryAvailable) instead of the intended mix. The standing enqueues below
+// are what make more than one card visible at once.
+//
+// Success and info are carried only by TIMED types (Saved/FrameCaptured and
+// UpdateAvailable/PresetSwitched), so with at most one timed toast ever
+// visible, the real product can never show all four severities on screen
+// together -- that is a business rule, not a harness gap. "many" ends on the
+// success case (and its two named actions); "many-info" swaps the final
+// enqueue for the single-action info case, so the two captures together still
+// cover every severity truthfully.
 void QuickApplication::applyShellVisualScenarios() {
-    if (qgetenv("EXOSNAP_VISUAL_NOTIFICATION_SCENARIO") != "many")
+    const QByteArray scenario = qgetenv("EXOSNAP_VISUAL_NOTIFICATION_SCENARIO");
+    if (scenario != "many" && scenario != "many-info")
         return;
 
     using notifications::NotificationAction;
@@ -2962,20 +2989,17 @@ void QuickApplication::applyShellVisualScenarios() {
     using notifications::NotificationType;
 
     const auto enqueue = [this](NotificationType type, QString title, QString body,
-                                NotificationAction action = NotificationAction::None) {
+                                NotificationAction action = NotificationAction::None,
+                                NotificationAction secondary = NotificationAction::None) {
         NotificationEvent event;
         event.type = type;
         event.title = std::move(title);
         event.body = std::move(body);
         event.action = action;
+        event.secondary_action = secondary;
         notifications_adapter_.manager().Enqueue(std::move(event));
     };
 
-    enqueue(NotificationType::Saved, QStringLiteral("Recording saved"),
-            QStringLiteral("2026-08-10 21-14-08.mkv - 2:34, 412 MB"), NotificationAction::Edit);
-    enqueue(NotificationType::UpdateAvailable, QStringLiteral("ExoSnap 0.9.1 is available"),
-            QStringLiteral("You are on 0.9.0. The update installs on the next restart."),
-            NotificationAction::OpenUpdate);
     enqueue(NotificationType::FramesDropped, QStringLiteral("Frames were dropped"),
             QStringLiteral("122 frames did not reach the encoder during the last recording."),
             NotificationAction::OpenDiagnostics);
@@ -2988,7 +3012,28 @@ void QuickApplication::applyShellVisualScenarios() {
                            "you just made will be lost when ExoSnap restarts, and every further change will "
                            "fail the same way until the file is released."));
     enqueue(NotificationType::RecoveryAvailable, QStringLiteral("A recording can be recovered"),
-            QStringLiteral("An unfinished recording from 09 Aug 2026 was found."), NotificationAction::OpenRecovery);
+            QStringLiteral("An unfinished recording from 09 Aug 2026 was found."), NotificationAction::OpenRecovery,
+            NotificationAction::Discard);
+
+    // Standing: stack above the timed slot instead of replacing anything.
+    enqueue(NotificationType::LowStorage, QStringLiteral("Storage running low"),
+            QStringLiteral("Recording stopped - output drive is critically low on disk space."),
+            NotificationAction::ChangeFolder);
+    enqueue(NotificationType::WindowCaptureStalled, QStringLiteral("Window capture appears to have stalled"),
+            QStringLiteral("No new frame has arrived from the captured window for 12 seconds. The recording is "
+                           "still running, but the captured window may be frozen."),
+            NotificationAction::OpenDiagnostics);
+
+    // Timed: whichever of these runs last is the only one left visible.
+    if (scenario == "many-info") {
+        enqueue(NotificationType::UpdateAvailable, QStringLiteral("ExoSnap 0.9.1 is available"),
+                QStringLiteral("You are on 0.9.0. The update installs on the next restart."),
+                NotificationAction::OpenUpdate);
+    } else {
+        enqueue(NotificationType::Saved, QStringLiteral("Recording saved"),
+                QStringLiteral("2026-08-10 21-14-08.mkv - 2:34, 412 MB"), NotificationAction::Edit,
+                NotificationAction::OpenFolder);
+    }
 }
 
 namespace {

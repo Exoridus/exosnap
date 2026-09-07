@@ -88,6 +88,7 @@ const ExoAccent& resolveAccent(const QString& accent_id) {
 
 QuickThemeTokens::QuickThemeTokens(QObject* parent) : QObject(parent) {
     setAppearance(QString::fromUtf8(kDefaultAppearanceId), QString::fromUtf8(kDefaultAccentId));
+    setShellAppearance(QString::fromUtf8(kDefaultAppearanceId));
 }
 
 void QuickThemeTokens::setAppearance(const QString& appearance_id, const QString& accent_id) {
@@ -176,6 +177,34 @@ void QuickThemeTokens::setAppearance(const QString& appearance_id, const QString
     // clearly in front, far short of the black curtain a heavier value makes of
     // a light page.
     overlay_scrim_ = dark_ ? withAlpha(background_, 0.78) : withAlpha(QColor(0x0F, 0x0F, 0x11), 0.38);
+
+    emit changed();
+}
+
+void QuickThemeTokens::setShellAppearance(const QString& shell_appearance_id) {
+    const ExoAppearance& appearance = resolveAppearance(shell_appearance_id);
+    const ExoAccent& accent = resolveAccent(accent_id_);
+
+    shell_appearance_id_ = QString::fromUtf8(appearance.id);
+    shell_dark_ = appearance.kind == ThemeKind::Dark;
+
+    shell_surface_raised_ = parseToken(appearance.surf2);
+    shell_surface_hover_ = parseToken(appearance.raise);
+    shell_line_ = parseToken(appearance.line);
+    shell_ink_ = parseToken(appearance.ink);
+    shell_ink_secondary_ = parseToken(appearance.text1);
+    shell_ink_dim_ = parseToken(appearance.dim);
+    shell_success_ = parseToken(appearance.success);
+    shell_warning_ = parseToken(appearance.caution);
+    shell_error_ = parseToken(appearance.error);
+
+    // Recomputed on every call rather than short-circuited on the shell id
+    // alone: the accent is `accent_id_`, which `setAppearance()` can change
+    // without the shell appearance changing, and this must pick that up the
+    // next time the caller re-resolves it (as `applyThemeFromSettings()` does,
+    // right after `setAppearance()`).
+    shell_accent_ = parseToken(shell_dark_ ? accent.dark : accent.light);
+    shell_accent_ink_ = parseToken(shell_dark_ ? accent.dark_ink : accent.light_ink);
 
     emit changed();
 }
@@ -338,6 +367,42 @@ QColor QuickThemeTokens::overlayError() noexcept {
 }
 QColor QuickThemeTokens::overlayAccent() const noexcept {
     return overlay_accent_;
+}
+QColor QuickThemeTokens::shellSurfaceRaised() const noexcept {
+    return shell_surface_raised_;
+}
+QColor QuickThemeTokens::shellSurfaceHover() const noexcept {
+    return shell_surface_hover_;
+}
+QColor QuickThemeTokens::shellLine() const noexcept {
+    return shell_line_;
+}
+QColor QuickThemeTokens::shellInk() const noexcept {
+    return shell_ink_;
+}
+QColor QuickThemeTokens::shellInkSecondary() const noexcept {
+    return shell_ink_secondary_;
+}
+QColor QuickThemeTokens::shellInkDim() const noexcept {
+    return shell_ink_dim_;
+}
+QColor QuickThemeTokens::shellSuccess() const noexcept {
+    return shell_success_;
+}
+QColor QuickThemeTokens::shellWarning() const noexcept {
+    return shell_warning_;
+}
+QColor QuickThemeTokens::shellError() const noexcept {
+    return shell_error_;
+}
+QColor QuickThemeTokens::shellAccent() const noexcept {
+    return shell_accent_;
+}
+QColor QuickThemeTokens::shellAccentInk() const noexcept {
+    return shell_accent_ink_;
+}
+bool QuickThemeTokens::shellDark() const noexcept {
+    return shell_dark_;
 }
 
 QPalette QuickThemeTokens::widgetsPalette() const {
