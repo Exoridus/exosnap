@@ -477,6 +477,47 @@ function Read-OperatorAnswer {
     }
 }
 
+function Read-ReleaseOperatorAnswer {
+    <#
+    .SYNOPSIS
+        A mid-scenario question, subject to the same rules as a human gate.
+    .DESCRIPTION
+        Asking through Read-Host directly bypassed everything Invoke-ReleaseHumanGate
+        owes the caller, and the two switches then meant the opposite of what they say:
+
+          -NonInteractive   documented as "the gate becomes DEFERRED, nobody was
+                            asked". Read-Host asked anyway.
+          redirected stdin  documented the same way. Read-Host got an empty string
+                            forever and the unrecognised-answer branch asked again --
+                            an infinite loop, with the scenario's environment change
+                            (the Windows appearance) still applied.
+
+        `skip` rather than `yes` for an attested scenario, and that is the point:
+        -Attest says the CALLER performed an action, and a Verify block still decides.
+        Here the question IS the verdict -- whether something LOOKS right -- and no
+        caller can perform someone else's looking. Attesting it would manufacture a
+        pass for a surface nobody saw. What -Attest legitimately buys is the run up to
+        this point: the setup executes, and the verdict is DEFERRED.
+    #>
+    param(
+        [Parameter(Mandatory)] [string] $ScenarioId,
+        [Parameter(Mandatory)] [string] $Question
+    )
+    if ($NonInteractive) {
+        Write-Step "not asked (-NonInteractive): $Question"
+        return 'skip'
+    }
+    if (@(Expand-ListArgument -Values $Attest) -contains $ScenarioId) {
+        Write-Step "not asked (-Attest names this scenario; a visual judgement cannot be attested): $Question"
+        return 'skip'
+    }
+    if ([Console]::IsInputRedirected) {
+        Write-Step "not asked (no interactive terminal): $Question"
+        return 'skip'
+    }
+    return Read-OperatorAnswer -Question $Question
+}
+
 function New-ReleaseContext {
     <#
     .SYNOPSIS
@@ -504,7 +545,7 @@ function New-ReleaseContext {
         HumanGate      = { param($gate) Invoke-ReleaseHumanGate -Gate $gate -Context $script:CurrentContext }
         # One question at the moment it can be answered, for a scenario that has
         # several observable states rather than one verdict at the end.
-        Ask            = { param($question) Read-OperatorAnswer -Question $question }
+        Ask            = { param($scenarioId, $question) Read-ReleaseOperatorAnswer -ScenarioId $scenarioId -Question $question }
     }
 }
 

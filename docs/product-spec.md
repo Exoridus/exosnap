@@ -793,10 +793,13 @@ Behavior:
   tone-map is explicitly not a conflict.
 - For native HDR10, the pipeline pins **limited range** and **10-bit**, writes HDR10 metadata **both
   at the container level** (MKV Colour / MasterMetadata, MP4 colr/mdcv on remux) **and in-band in the
-  bitstream** — HEVC Mastering Display Colour Volume (SEI 137) and Content Light Level Info (SEI 144)
-  messages, AV1 HDR MDCV / HDR CLL metadata OBUs, emitted on every keyframe so players that ignore
-  container-level HDR metadata (notably some Apple players) still receive it. The on-screen monitoring
-  preview is an SDR approximation of the HDR signal.
+  bitstream** — HEVC Mastering Display Colour Volume (SEI 137) messages, AV1 HDR MDCV metadata OBUs,
+  emitted on every keyframe so players that ignore container-level HDR metadata (notably some Apple
+  players) still receive it. **Content light level (MaxCLL/MaxFALL) is deliberately not written**, in
+  either place: those values describe the brightest content in a finished piece, and a live recorder
+  does not know them while it is still recording. A wrong MaxCLL makes a player tone-map against a
+  peak the file never reaches, which is worse than the absent-and-ignored value. The on-screen
+  monitoring preview is an SDR approximation of the HDR signal.
 - SDR overlay sprites (webcam PiP, cursor) are placed at the captured display's Windows SDR-content
   brightness level (`DISPLAYCONFIG_SDR_WHITE_LEVEL`) so the PiP matches SDR windows on the same
   screen; 203 cd/m² is the fallback when the level cannot be read. The level is sampled once when

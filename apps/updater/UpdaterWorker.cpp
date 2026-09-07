@@ -42,6 +42,7 @@ using exosnap::update::FetchReleasesJson;
 using exosnap::update::FindTopLevelWindowForProcess;
 using exosnap::update::InstallMode;
 using exosnap::update::IsDowngrade;
+using exosnap::update::IsInstanceMutexPresent;
 using exosnap::update::LocateRelease;
 using exosnap::update::MakeSwapPlan;
 using exosnap::update::ParseManifest;
@@ -762,6 +763,16 @@ bool UpdaterWorker::runCloseApp() {
             emit failed(FailureCase::AppWontClose, QString()); // B1 -- download kept, Retry re-enters here
             return false;
         }
+    } else if (IsInstanceMutexPresent(kInstanceMutexName)) {
+        // A hand-started updater was handed no pid, so there is no window to ask
+        // to close and no process to wait on -- this step used to do nothing at
+        // all, and the swap then failed as "the current installation is in use"
+        // after the download had already run. The single-instance mutex answers
+        // the same question the pid would have, so the refusal happens here,
+        // before anything outside the staging directory is touched. Same B1 as
+        // the handoff path: Retry re-enters at CloseApp once the app is closed.
+        emit failed(FailureCase::AppWontClose, QString());
+        return false;
     }
 
     emit stepDone(UpStep::CloseApp);

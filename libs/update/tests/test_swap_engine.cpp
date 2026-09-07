@@ -194,6 +194,25 @@ TEST(SwapEngine, WaitForInstanceMutexDetectsPresentAndAbsent) {
     EXPECT_FALSE(WaitForInstanceMutex(absent.c_str(), std::chrono::milliseconds(300)));
 }
 
+// The point-in-time half of the same question, for a caller that must not wait:
+// a hand-started updater has no --app-pid to close, so it asks whether an
+// instance is up at all before it touches the installation.
+TEST(SwapEngine, IsInstanceMutexPresentAnswersWithoutWaiting) {
+    const std::wstring name = L"ExoSnapTestMutexNow_" + std::to_wstring(::GetCurrentProcessId());
+    EXPECT_FALSE(IsInstanceMutexPresent(name.c_str()));
+
+    HANDLE m = ::CreateMutexW(nullptr, FALSE, name.c_str());
+    ASSERT_NE(m, nullptr);
+    const auto t0 = std::chrono::steady_clock::now();
+    EXPECT_TRUE(IsInstanceMutexPresent(name.c_str()));
+    EXPECT_LT(std::chrono::steady_clock::now() - t0, std::chrono::milliseconds(250));
+    ::CloseHandle(m);
+
+    // Released again: the handle is what keeps the name alive, so the answer
+    // must go back to false rather than latching.
+    EXPECT_FALSE(IsInstanceMutexPresent(name.c_str()));
+}
+
 // The updater's close/handoff message must reach exactly the app's real main
 // window: never merely a same-titled window from a different process (a
 // second already-running instance can carry the same title, leaving the real

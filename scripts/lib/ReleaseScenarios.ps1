@@ -535,8 +535,7 @@ function Get-ReleaseScenarioCatalog {
                 'blocked by design -- not merely discouraged.'
                 Do                = @(
                     'Close any running ExoSnap.',
-                    'Open PowerShell as administrator -- the UAC prompt appears HERE, when the shell ' +
-                    'is elevated. The command below inherits that elevation and raises no prompt of its own.',
+                    'Open PowerShell as administrator. The UAC prompt appears HERE, at the shell; the command below inherits that elevation and raises none of its own.',
                     "In that elevated shell, run:  & '$exe' --live-verify-control $runId",
                     'Leave a window presenting on the primary display (a video, a game, any animation).'
                 )
@@ -1354,7 +1353,7 @@ function Get-ReleaseScenarioCatalog {
         Source              = 'docs/release-checklist.md §7 (44.1 kHz output device)'
         ArtifactBound       = $true
         RequiresInstallTree = $false
-        EnvironmentKeys     = @('env.audio.render.44100-test:device-format')
+        EnvironmentKeys     = @('env.audio.render.44100-test:device-format', 'env.audio.render.44100-test:default-roles')
         Requires            = @{ audioRender = 'audio.render.44100-test' }
         # No Desired: Windows exposes no documented, supported API for setting an
         # endpoint's shared-mode format. The only mechanism is an undocumented
@@ -1373,13 +1372,15 @@ function Get-ReleaseScenarioCatalog {
                 Do                = @(
                     'Open Sound settings for the device bound to audio.render.44100-test.',
                     'Set its default format to 44100 Hz.',
-                    'Leave the device enabled.'
+                    'Make it the DEFAULT playback device, and leave it enabled.'
                 )
-                Expected          = 'Windows reports the endpoint at 44100 Hz.'
+                Expected          = 'Windows reports the endpoint at 44100 Hz AND names it the default playback device.'
                 VerifyDescription = 'This runner re-reads the endpoint format through exosnap-envctl (the ' +
                 'user-selected shared-mode format, not the engine mix format) and refuses to continue until it ' +
-                'actually reads 44100. It then records with system audio and validates the sample rate of the ' +
-                'audio track in the output file with ffprobe.'
+                'actually reads 44100. It also requires the endpoint to hold the default render role: system ' +
+                'audio is captured from the DEFAULT endpoint, so a 44.1 kHz device that is not the default is ' +
+                'never in the recorded path and the gate would pass without testing anything. It then records ' +
+                'with system audio and requires an audio track in the output file.'
                 Verify            = {
                     param($context, $gate)
                     if (-not $context.Orchestrator.Available) {
@@ -1394,7 +1395,26 @@ function Get-ReleaseScenarioCatalog {
                     if ("$($property.value)" -notmatch '44100') {
                         return @{ Ok = $false; Detail = "the endpoint still reports '$($property.value)', not 44100"; Evidence = $evidence }
                     }
-                    return @{ Ok = $true; Detail = "endpoint shared-mode format is $($property.value)"; Evidence = $evidence }
+                    # WITHOUT THIS THE GATE CANNOT FAIL. System audio is captured from
+                    # the default render endpoint, so a 44.1 kHz device that holds no
+                    # default role is never in the recorded path -- the recording comes
+                    # from whatever IS default (48 kHz here) and the gate reports a pass
+                    # for a format it never exercised. It read green in every campaign
+                    # up to rc17 that way.
+                    $roles = @($snapshot.properties | Where-Object { $_.key -eq 'audio.render.44100-test:default-roles' }) | Select-Object -First 1
+                    $evidence += Save-LiveVerifyEvidence -Context $context -CheckId 'REL-AUD-FORMAT-001' -Name 'endpoint-roles.json' -Value $roles
+                    $roleValue = if ($null -ne $roles) { "$($roles.value)" } else { '' }
+                    if ($roleValue -notmatch 'console|multimedia') {
+                        return @{ Ok = $false
+                            Detail   = "the endpoint is at 44100 but holds no default render role (roles: " +
+                            "'$roleValue'), so system audio would be captured from a different device"
+                            Evidence = $evidence
+                        }
+                    }
+                    return @{ Ok = $true
+                        Detail   = "endpoint shared-mode format is $($property.value) and it holds the default role(s) $roleValue"
+                        Evidence = $evidence
+                    }
                 }
             }
             $gateResult = & $ctx.HumanGate $gate
@@ -1425,8 +1445,12 @@ function Get-ReleaseScenarioCatalog {
             if ($audio.Count -eq 0) {
                 return @{ Result = 'FAIL'; Message = 'the output file has no audio track'; Evidence = $evidence }
             }
+            # The output rate is NOT evidence about the endpoint: Opus is 48 kHz by
+            # specification, so this number is the same whatever the device ran at.
+            # What makes the verdict mean something is the gate's precondition --
+            # a 44.1 kHz endpoint that actually held the default render role.
             return @{ Result = 'PASS'
-                Message      = "audio present: $($audio[0].codec_name) @ $($audio[0].sample_rate) Hz from a 44.1 kHz endpoint"
+                Message      = "recorded from the 44.1 kHz default endpoint: $($audio[0].codec_name) @ $($audio[0].sample_rate) Hz out"
                 Evidence     = $evidence
             }
         }
@@ -1839,7 +1863,7 @@ function Get-ReleaseScenarioCatalog {
                     Write-Host ''
                     Write-Host "Windows is now in $($appearance.ToUpperInvariant()) appearance." -ForegroundColor Yellow
                     Write-Host '  Every capture-excluded overlay must still be DARK, with legible text.'
-                    $answers[$appearance] = & $ctx.Ask "Do the overlays look right in ${appearance}?"
+                    $answers[$appearance] = & $ctx.Ask 'REL-VIS-OVERLAY-001' "Do the overlays look right in ${appearance}?"
                     if ($answers[$appearance] -in @('skip', 'abort')) { break }
                 }
             }
@@ -2127,105 +2151,128 @@ function Get-ReleaseScenarioCatalog {
                 }
                 Start-Sleep -Milliseconds 500
             }
-            $runId = New-LiveVerifyRunId
-            $fromProcess = Start-Process -FilePath $from -PassThru -ArgumentList @('--live-verify-control', $runId)
-            $conn = Connect-LiveVerify -RunId $runId -ConnectTimeoutMs 60000
-            [void]$fromProcess
-            # A release candidate is a GitHub prerelease and only the Preview channel
-            # names one; the channel is part of the scenario, not of the machine.
-            $channel = Invoke-LiveVerifyCommand -Connection $conn -Command 'settings.set' `
-                -Parameters @{ key = 'app.updateChannel'; value = 'Preview' }
-            if (-not $channel.ok) {
-                return @{ Result = 'FAIL'; Message = "could not select the Preview channel: $($channel.error.message)" }
-            }
-            # Same restart REL-UPD-MSI-001 does, and for the same reason: the channel
-            # is read when the update service starts, so setting it and checking in
-            # one session asks the channel the app was LAUNCHED with. Observed as
-            # "no update is offered to 0.9.0-rc15 on the Preview channel" while rc16
-            # was published as a prerelease.
-            try { $conn.Close() } catch { }
-            if ($null -ne $fromProcess -and -not $fromProcess.HasExited) {
-                [void]$fromProcess.CloseMainWindow()
-                if (-not $fromProcess.WaitForExit(15000)) { $fromProcess.Kill() }
-            }
-            $runId = New-LiveVerifyRunId
-            $fromProcess = Start-Process -FilePath $from -PassThru -ArgumentList @('--live-verify-control', $runId)
-            $conn = Connect-LiveVerify -RunId $runId -ConnectTimeoutMs 60000
-
-            $checked = Invoke-LiveVerifyCommand -Connection $conn -Command 'update.check'
-            if (-not $checked.ok) { return @{ Result = 'FAIL'; Message = "update.check refused: $($checked.error.message)" } }
-            # Asynchronous: the answer lands on the state, not on the command.
-            $waitUntilOffered = [DateTime]::UtcNow.AddSeconds(45)
-            $state = $null
-            while ([DateTime]::UtcNow -lt $waitUntilOffered) {
-                $state = (Invoke-LiveVerifyCommand -Connection $conn -Command 'update.getState').result
-                if ($state.updateAvailable) { break }
-                Start-Sleep -Milliseconds 500
-            }
-            if (-not $state.updateAvailable) {
-                return @{ Result = 'UNAVAILABLE'
-                    Message = "no update is offered to $($state.currentVersion) on the Preview channel"
+            # Owned from here on: every exit below is a `return`, and without this
+            # the app instance this scenario started outlives it -- holding the
+            # machine-wide single-instance mutex, so the NEXT scenario connects to
+            # no control endpoint at all. That is how a soak once failed as an
+            # audio defect.
+            $fromProcess = $null
+            $conn = $null
+            try {
+                $runId = New-LiveVerifyRunId
+                $fromProcess = Start-Process -FilePath $from -PassThru -ArgumentList @('--live-verify-control', $runId)
+                $conn = Connect-LiveVerify -RunId $runId -ConnectTimeoutMs 60000
+                [void]$fromProcess
+                # A release candidate is a GitHub prerelease and only the Preview channel
+                # names one; the channel is part of the scenario, not of the machine.
+                $channel = Invoke-LiveVerifyCommand -Connection $conn -Command 'settings.set' `
+                    -Parameters @{ key = 'app.updateChannel'; value = 'Preview' }
+                if (-not $channel.ok) {
+                    return @{ Result = 'FAIL'; Message = "could not select the Preview channel: $($channel.error.message)" }
                 }
-            }
-            $applied = Invoke-LiveVerifyCommand -Connection $conn -Command 'update.apply'
-            if (-not $applied.ok) { return @{ Result = 'FAIL'; Message = "update.apply refused: $($applied.error.message)" } }
-            # The child the apply launched, named by the launch itself. `installState` and
-            # `phase` are the UPDATER's vocabulary -- asking the application for them was
-            # asking the wrong process, which is why the two fields never existed.
-            $launch = (Invoke-LiveVerifyCommand -Connection $conn -Command 'update.getState').result.updaterLaunch
+                # Same restart REL-UPD-MSI-001 does, and for the same reason: the channel
+                # is read when the update service starts, so setting it and checking in
+                # one session asks the channel the app was LAUNCHED with. Observed as
+                # "no update is offered to 0.9.0-rc15 on the Preview channel" while rc16
+                # was published as a prerelease.
+                try { $conn.Close() } catch { }
+                if ($null -ne $fromProcess -and -not $fromProcess.HasExited) {
+                    [void]$fromProcess.CloseMainWindow()
+                    if (-not $fromProcess.WaitForExit(15000)) { $fromProcess.Kill() }
+                }
+                $runId = New-LiveVerifyRunId
+                $fromProcess = Start-Process -FilePath $from -PassThru -ArgumentList @('--live-verify-control', $runId)
+                $conn = Connect-LiveVerify -RunId $runId -ConnectTimeoutMs 60000
 
-            $gate = @{
-                Id                = 'REL-UPD-MSI-DECLINE-001'
-                Title             = 'DECLINE the elevation prompt'
-                State             = @{ updaterRunId = "$($launch.controlRunId)"; updaterPipe = "$($launch.controlPipe)" }
-                Why               = 'Same Secure Desktop boundary as accepting it. What is under test is what the ' +
-                'product says afterwards.'
-                Do                = @('A UAC prompt is appearing now.', 'DECLINE it.')
-                Expected          = 'The updater reports a cancelled update, not a failed one, and nothing is ' +
-                'left half-installed.'
-                VerifyDescription = "This runner attaches to the updater's own control endpoint (run id " +
-                "$($launch.controlRunId)) and requires a cancelled-or-idle phase with installState intact -- never " +
-                'a failure state, and never strandedInBackup. Those fields belong to the updater; the application ' +
-                'only reports which child it launched.'
-                Verify            = {
-                    param($context, $gate)
-                    if ([string]::IsNullOrWhiteSpace($gate.State.updaterRunId)) {
-                        return @{ Ok = $false; Detail = 'update.apply reported no updater launch, so there is no child to ask' }
+                $checked = Invoke-LiveVerifyCommand -Connection $conn -Command 'update.check'
+                if (-not $checked.ok) { return @{ Result = 'FAIL'; Message = "update.check refused: $($checked.error.message)" } }
+                # Asynchronous: the answer lands on the state, not on the command.
+                $waitUntilOffered = [DateTime]::UtcNow.AddSeconds(45)
+                $state = $null
+                while ([DateTime]::UtcNow -lt $waitUntilOffered) {
+                    $state = (Invoke-LiveVerifyCommand -Connection $conn -Command 'update.getState').result
+                    if (Get-ReleaseSnapshotValue -Object $state -Path 'updateAvailable') { break }
+                    Start-Sleep -Milliseconds 500
+                }
+                if (-not (Get-ReleaseSnapshotValue -Object $state -Path 'updateAvailable')) {
+                    # Through the accessor for the reason its sibling in REL-UPD-MSI-001
+                    # spells out: under StrictMode an absent property throws, and the
+                    # throw is reported as a product FAIL instead of UNAVAILABLE.
+                    $version = Get-ReleaseSnapshotValue -Object $state -Path 'currentVersion'
+                    return @{ Result = 'UNAVAILABLE'
+                        Message = "no update is offered to $version on the Preview channel"
                     }
-                    try { $updater = Connect-LiveVerify -RunId $gate.State.updaterRunId -Role 'Updater' -ConnectTimeoutMs 30000 }
-                    catch {
-                        return @{ Ok = $false; Detail = "the updater endpoint could not be reached: $($_.Exception.Message)" }
-                    }
-                    try {
-                        # Checked before reading, because the runner runs under
-                        # Set-StrictMode: a response that carries an error instead of
-                        # a result throws "the property 'result' cannot be found" and
-                        # the scenario reports a PowerShell message where a verdict
-                        # belongs. This is the first release where the gate reached
-                        # this code at all -- it used to stop at "no update is
-                        # offered" before the prompt was ever raised.
-                        $state_response = Invoke-LiveVerifyCommand -Connection $updater -Command 'updater.getState'
-                        if (-not $state_response.ok) {
-                            return @{ Ok = $false
-                                Detail = "the updater refused updater.getState: $($state_response.error.message)"
+                }
+                $applied = Invoke-LiveVerifyCommand -Connection $conn -Command 'update.apply'
+                if (-not $applied.ok) { return @{ Result = 'FAIL'; Message = "update.apply refused: $($applied.error.message)" } }
+                # The child the apply launched, named by the launch itself. `installState` and
+                # `phase` are the UPDATER's vocabulary -- asking the application for them was
+                # asking the wrong process, which is why the two fields never existed.
+                $launch = (Invoke-LiveVerifyCommand -Connection $conn -Command 'update.getState').result.updaterLaunch
+
+                $gate = @{
+                    Id                = 'REL-UPD-MSI-DECLINE-001'
+                    Title             = 'DECLINE the elevation prompt'
+                    State             = @{ updaterRunId = "$($launch.controlRunId)"; updaterPipe = "$($launch.controlPipe)" }
+                    Why               = 'Same Secure Desktop boundary as accepting it. What is under test is what the ' +
+                    'product says afterwards.'
+                    Do                = @('A UAC prompt is appearing now.', 'DECLINE it.')
+                    Expected          = 'The updater reports a cancelled update, not a failed one, and nothing is ' +
+                    'left half-installed.'
+                    VerifyDescription = "This runner attaches to the updater's own control endpoint (run id " +
+                    "$($launch.controlRunId)) and requires a cancelled-or-idle phase with installState intact -- never " +
+                    'a failure state, and never strandedInBackup. Those fields belong to the updater; the application ' +
+                    'only reports which child it launched.'
+                    Verify            = {
+                        param($context, $gate)
+                        if ([string]::IsNullOrWhiteSpace($gate.State.updaterRunId)) {
+                            return @{ Ok = $false; Detail = 'update.apply reported no updater launch, so there is no child to ask' }
+                        }
+                        try { $updater = Connect-LiveVerify -RunId $gate.State.updaterRunId -Role 'Updater' -ConnectTimeoutMs 30000 }
+                        catch {
+                            return @{ Ok = $false; Detail = "the updater endpoint could not be reached: $($_.Exception.Message)" }
+                        }
+                        try {
+                            # Checked before reading, because the runner runs under
+                            # Set-StrictMode: a response that carries an error instead of
+                            # a result throws "the property 'result' cannot be found" and
+                            # the scenario reports a PowerShell message where a verdict
+                            # belongs. This is the first release where the gate reached
+                            # this code at all -- it used to stop at "no update is
+                            # offered" before the prompt was ever raised.
+                            $state_response = Invoke-LiveVerifyCommand -Connection $updater -Command 'updater.getState'
+                            if (-not $state_response.ok) {
+                                return @{ Ok = $false
+                                    Detail = "the updater refused updater.getState: $($state_response.error.message)"
+                                }
                             }
+                            $after = $state_response.result
+                            $evidence = @(Save-LiveVerifyEvidence -Context $context -CheckId 'REL-UPD-MSI-DECLINE-001' -Name 'updater-state.json' -Value $after)
+                            $installState = "$(Get-ReleaseSnapshotValue -Object $after -Path 'installState')"
+                            $phase = "$(Get-ReleaseSnapshotValue -Object $after -Path 'phase')"
+                            if ($installState -eq 'strandedInBackup') {
+                                return @{ Ok = $false; Detail = 'the install is stranded in backup after a declined prompt'; Evidence = $evidence }
+                            }
+                            if ($phase -match 'fail|error') {
+                                return @{ Ok = $false; Detail = "a declined prompt was reported as a failure: $phase"; Evidence = $evidence }
+                            }
+                            return @{ Ok = $true; Detail = "phase=$phase installState=$installState"; Evidence = $evidence }
                         }
-                        $after = $state_response.result
-                        $evidence = @(Save-LiveVerifyEvidence -Context $context -CheckId 'REL-UPD-MSI-DECLINE-001' -Name 'updater-state.json' -Value $after)
-                        $installState = "$(Get-ReleaseSnapshotValue -Object $after -Path 'installState')"
-                        $phase = "$(Get-ReleaseSnapshotValue -Object $after -Path 'phase')"
-                        if ($installState -eq 'strandedInBackup') {
-                            return @{ Ok = $false; Detail = 'the install is stranded in backup after a declined prompt'; Evidence = $evidence }
-                        }
-                        if ($phase -match 'fail|error') {
-                            return @{ Ok = $false; Detail = "a declined prompt was reported as a failure: $phase"; Evidence = $evidence }
-                        }
-                        return @{ Ok = $true; Detail = "phase=$phase installState=$installState"; Evidence = $evidence }
+                        finally { try { $updater.Close() } catch { } }
                     }
-                    finally { try { $updater.Close() } catch { } }
+                }
+                return & $ctx.HumanGate $gate
+            }
+            finally {
+                if ($null -ne $conn) { try { $conn.Close() } catch { } }
+                if ($null -ne $fromProcess -and -not $fromProcess.HasExited) {
+                    try {
+                        [void]$fromProcess.CloseMainWindow()
+                        if (-not $fromProcess.WaitForExit(10000)) { $fromProcess.Kill() }
+                    }
+                    catch { }
                 }
             }
-            return & $ctx.HumanGate $gate
         }
     }
 
@@ -2277,135 +2324,158 @@ function Get-ReleaseScenarioCatalog {
                 }
                 Start-Sleep -Milliseconds 500
             }
-            $runId = New-LiveVerifyRunId
-            $fromProcess = Start-Process -FilePath $from -PassThru -ArgumentList @('--live-verify-control', $runId)
-            $conn = Connect-LiveVerify -RunId $runId -ConnectTimeoutMs 60000
-            # app.identity answers the same object system.hello carries, and its version
-            # field is `productVersion`. There is no `version`.
-            $before = (Invoke-LiveVerifyCommand -Connection $conn -Command 'app.identity').result
-            $beforeVersion = "$($before.productVersion)"
-            # A release candidate is a GitHub prerelease, and the Stable channel names
-            # only non-prerelease releases -- so a check on Stable is correct to
-            # report nothing and the gate would learn nothing from it. The channel is
-            # part of the scenario, not of the machine it happens to run on.
-            $channel = Invoke-LiveVerifyCommand -Connection $conn -Command 'settings.set' `
-                -Parameters @{ key = 'app.updateChannel'; value = 'Preview' }
-            if (-not $channel.ok) {
-                return @{ Result = 'FAIL'; Message = "could not select the Preview channel: $($channel.error.message)" }
-            }
-            # The channel is read when the update service starts, so it takes a
-            # restart to be the channel the next check actually uses. Setting it and
-            # checking in the same session reported "nothing offered" against the
-            # channel the app was launched with.
-            try { $conn.Close() } catch { }
-            if ($null -ne $fromProcess -and -not $fromProcess.HasExited) {
-                [void]$fromProcess.CloseMainWindow()
-                if (-not $fromProcess.WaitForExit(15000)) { $fromProcess.Kill() }
-            }
-            $runId = New-LiveVerifyRunId
-            $fromProcess = Start-Process -FilePath $from -PassThru -ArgumentList @('--live-verify-control', $runId)
-            $conn = Connect-LiveVerify -RunId $runId -ConnectTimeoutMs 60000
-
-            $checked = Invoke-LiveVerifyCommand -Connection $conn -Command 'update.check'
-            if (-not $checked.ok) { return @{ Result = 'FAIL'; Message = "update.check refused: $($checked.error.message)" } }
-            # The check is asynchronous: the answer lands on the state, not on the
-            # command, so reading the state once could only ever see what was there
-            # before the check finished.
-            $state = $null
-            $checkDeadline = [DateTime]::UtcNow.AddSeconds(60)
-            while ([DateTime]::UtcNow -lt $checkDeadline) {
-                $state = (Invoke-LiveVerifyCommand -Connection $conn -Command 'update.getState').result
-                if ($state.updateAvailable) { break }
-                Start-Sleep -Milliseconds 1000
-            }
-            if (-not $state.updateAvailable) {
-                return @{ Result = 'UNAVAILABLE'
-                    Message      = "no update is offered to $beforeVersion on the Preview channel " +
-                    "(phase $($state.phase))"
+            # Owned from here on, for the reason its sibling gate states: a `return`
+            # past a running instance leaves the single-instance mutex held and the
+            # next scenario without a control endpoint.
+            $fromProcess = $null
+            $conn = $null
+            try {
+                $runId = New-LiveVerifyRunId
+                $fromProcess = Start-Process -FilePath $from -PassThru -ArgumentList @('--live-verify-control', $runId)
+                $conn = Connect-LiveVerify -RunId $runId -ConnectTimeoutMs 60000
+                # app.identity answers the same object system.hello carries, and its version
+                # field is `productVersion`. There is no `version`.
+                $before = (Invoke-LiveVerifyCommand -Connection $conn -Command 'app.identity').result
+                $beforeVersion = "$($before.productVersion)"
+                # A release candidate is a GitHub prerelease, and the Stable channel names
+                # only non-prerelease releases -- so a check on Stable is correct to
+                # report nothing and the gate would learn nothing from it. The channel is
+                # part of the scenario, not of the machine it happens to run on.
+                $channel = Invoke-LiveVerifyCommand -Connection $conn -Command 'settings.set' `
+                    -Parameters @{ key = 'app.updateChannel'; value = 'Preview' }
+                if (-not $channel.ok) {
+                    return @{ Result = 'FAIL'; Message = "could not select the Preview channel: $($channel.error.message)" }
                 }
-            }
-            $applied = Invoke-LiveVerifyCommand -Connection $conn -Command 'update.apply'
-            if (-not $applied.ok) { return @{ Result = 'FAIL'; Message = "update.apply refused: $($applied.error.message)" } }
+                # The channel is read when the update service starts, so it takes a
+                # restart to be the channel the next check actually uses. Setting it and
+                # checking in the same session reported "nothing offered" against the
+                # channel the app was launched with.
+                try { $conn.Close() } catch { }
+                if ($null -ne $fromProcess -and -not $fromProcess.HasExited) {
+                    [void]$fromProcess.CloseMainWindow()
+                    if (-not $fromProcess.WaitForExit(15000)) { $fromProcess.Kill() }
+                }
+                $runId = New-LiveVerifyRunId
+                $fromProcess = Start-Process -FilePath $from -PassThru -ArgumentList @('--live-verify-control', $runId)
+                $conn = Connect-LiveVerify -RunId $runId -ConnectTimeoutMs 60000
 
-            $gate = @{
-                Id                = 'REL-UPD-MSI-001'
-                Title             = 'Accept the elevation prompt for the MSI install'
-                State             = @{ previousVersion = $beforeVersion; installedPath = $from }
-                Why               = 'msiexec needs an elevated token, and the prompt runs on the Secure Desktop. ' +
-                'Windows blocks synthetic input across that boundary by design; there is nothing to automate.'
-                Do                = @(
-                    'A UAC prompt is appearing now, raised by the ExoSnap updater for msiexec.',
-                    'Read what it says, then ACCEPT it.',
-                    'Wait for the installer to finish and for ExoSnap to relaunch.'
-                )
-                Expected          = 'The install completes and ExoSnap comes back at the new version.'
-                VerifyDescription = "This runner captured the version before the update ($beforeVersion) and " +
-                'will reconnect afterwards, read app.identity again, and require a DIFFERENT version. Install ' +
-                'integrity is not asked of the application here: after an accepted install the updater has ' +
-                'already exited, so the only honest evidence available is that the new version came back and ' +
-                'runs. It never touches the prompt.'
-                Verify            = {
-                    param($context, $gate)
-                    $deadline = [DateTime]::UtcNow.AddMinutes(5)
-                    $identity = $null
-                    while ([DateTime]::UtcNow -lt $deadline) {
-                        try {
-                            $runId2 = New-LiveVerifyRunId
-                            # An accepted install RELAUNCHES the application, and the
-                            # single-instance mutex is machine-wide: the launch below
-                            # would then hand focus to that instance and exit without
-                            # ever opening a control endpoint, leaving this loop to
-                            # spend its whole 5 min budget connecting to a pipe nobody
-                            # created. Observed exactly that -- the gate sat in
-                            # "verifying the consequence independently..." until the
-                            # relaunched instance was ended by hand.
-                            Wait-ReleaseProbeGone -ProcessName 'exosnap' -TimeoutMs 15000
-                            # The INSTALLED build, not the bound artifact. Launching the
-                            # artifact here asked whether rc14 reports rc14, which is
-                            # true whether or not the install under test ever ran --
-                            # the assertion passed on the version difference between
-                            # two files that were always different.
-                            $process = Start-Process -FilePath $gate.State.installedPath `
-                                -ArgumentList @('--live-verify-control', $runId2) -PassThru
-                            $conn3 = Connect-LiveVerify -RunId $runId2 -ConnectTimeoutMs 30000
-                            try { $identity = (Invoke-LiveVerifyCommand -Connection $conn3 -Command 'app.identity').result }
-                            finally {
-                                try { $conn3.Close() } catch { }
-                                if (-not $process.HasExited) { $process | Stop-Process -Force -ErrorAction SilentlyContinue }
+                $checked = Invoke-LiveVerifyCommand -Connection $conn -Command 'update.check'
+                if (-not $checked.ok) { return @{ Result = 'FAIL'; Message = "update.check refused: $($checked.error.message)" } }
+                # The check is asynchronous: the answer lands on the state, not on the
+                # command, so reading the state once could only ever see what was there
+                # before the check finished.
+                $state = $null
+                $checkDeadline = [DateTime]::UtcNow.AddSeconds(60)
+                while ([DateTime]::UtcNow -lt $checkDeadline) {
+                    $state = (Invoke-LiveVerifyCommand -Connection $conn -Command 'update.getState').result
+                    if (Get-ReleaseSnapshotValue -Object $state -Path 'updateAvailable') { break }
+                    Start-Sleep -Milliseconds 1000
+                }
+                if (-not (Get-ReleaseSnapshotValue -Object $state -Path 'updateAvailable')) {
+                    # Read through the accessor, not as $state.phase: StrictMode turns an
+                    # absent property into a throw, and a throw here is reported as a
+                    # product FAIL where UNAVAILABLE belongs -- and skips the cleanup
+                    # below, leaving this scenario's own app instance holding the
+                    # machine-wide single-instance mutex for the next scenario.
+                    $phase = Get-ReleaseSnapshotValue -Object $state -Path 'phase'
+                    return @{ Result = 'UNAVAILABLE'
+                        Message      = "no update is offered to $beforeVersion on the Preview channel " +
+                        "(phase $(if ($null -ne $phase) { $phase } else { 'not reported' }))"
+                    }
+                }
+                $applied = Invoke-LiveVerifyCommand -Connection $conn -Command 'update.apply'
+                if (-not $applied.ok) { return @{ Result = 'FAIL'; Message = "update.apply refused: $($applied.error.message)" } }
+
+                $gate = @{
+                    Id                = 'REL-UPD-MSI-001'
+                    Title             = 'Accept the elevation prompt for the MSI install'
+                    State             = @{ previousVersion = $beforeVersion; installedPath = $from }
+                    Why               = 'msiexec needs an elevated token, and the prompt runs on the Secure Desktop. ' +
+                    'Windows blocks synthetic input across that boundary by design; there is nothing to automate.'
+                    Do                = @(
+                        'A UAC prompt is appearing now, raised by the ExoSnap updater for msiexec.',
+                        'Read what it says, then ACCEPT it.',
+                        'Wait for the installer to finish and for ExoSnap to relaunch.'
+                    )
+                    Expected          = 'The install completes and ExoSnap comes back at the new version.'
+                    VerifyDescription = "This runner captured the version before the update ($beforeVersion) and " +
+                    'will reconnect afterwards, read app.identity again, and require a DIFFERENT version. Install ' +
+                    'integrity is not asked of the application here: after an accepted install the updater has ' +
+                    'already exited, so the only honest evidence available is that the new version came back and ' +
+                    'runs. It never touches the prompt.'
+                    Verify            = {
+                        param($context, $gate)
+                        $deadline = [DateTime]::UtcNow.AddMinutes(5)
+                        $identity = $null
+                        while ([DateTime]::UtcNow -lt $deadline) {
+                            try {
+                                $runId2 = New-LiveVerifyRunId
+                                # An accepted install RELAUNCHES the application, and the
+                                # single-instance mutex is machine-wide: the launch below
+                                # would then hand focus to that instance and exit without
+                                # ever opening a control endpoint, leaving this loop to
+                                # spend its whole 5 min budget connecting to a pipe nobody
+                                # created. Observed exactly that -- the gate sat in
+                                # "verifying the consequence independently..." until the
+                                # relaunched instance was ended by hand.
+                                Wait-ReleaseProbeGone -ProcessName 'exosnap' -TimeoutMs 15000
+                                # The INSTALLED build, not the bound artifact. Launching the
+                                # artifact here asked whether rc14 reports rc14, which is
+                                # true whether or not the install under test ever ran --
+                                # the assertion passed on the version difference between
+                                # two files that were always different.
+                                $process = Start-Process -FilePath $gate.State.installedPath `
+                                    -ArgumentList @('--live-verify-control', $runId2) -PassThru
+                                $conn3 = Connect-LiveVerify -RunId $runId2 -ConnectTimeoutMs 30000
+                                try { $identity = (Invoke-LiveVerifyCommand -Connection $conn3 -Command 'app.identity').result }
+                                finally {
+                                    try { $conn3.Close() } catch { }
+                                    if (-not $process.HasExited) { $process | Stop-Process -Force -ErrorAction SilentlyContinue }
+                                }
+                                break
                             }
-                            break
+                            catch { Start-Sleep -Seconds 5 }
                         }
-                        catch { Start-Sleep -Seconds 5 }
+                        $evidence = @(Save-LiveVerifyEvidence -Context $context -CheckId 'REL-UPD-MSI-001' -Name 'identity-after.json' -Value $identity)
+                        if ($null -eq $identity) {
+                            return @{ Ok = $false; Detail = 'the application could not be reached again after the install'; Evidence = $evidence }
+                        }
+                        $afterVersion = "$($identity.productVersion)"
+                        if ($afterVersion -eq $gate.State.previousVersion) {
+                            return @{ Ok = $false; Detail = "the version is unchanged at $afterVersion; nothing was installed"; Evidence = $evidence }
+                        }
+                        return @{ Ok = $true; Detail = "installed: $($gate.State.previousVersion) -> $afterVersion"; Evidence = $evidence }
                     }
-                    $evidence = @(Save-LiveVerifyEvidence -Context $context -CheckId 'REL-UPD-MSI-001' -Name 'identity-after.json' -Value $identity)
-                    if ($null -eq $identity) {
-                        return @{ Ok = $false; Detail = 'the application could not be reached again after the install'; Evidence = $evidence }
+                }
+                # An elevated caller never sees the prompt this gate is named after:
+                # msiexec inherits the token and installs without asking. The install
+                # itself still has to happen and is verified the same way, so the result
+                # says which of the two it was.
+                if (Test-RunnerElevated) {
+                    $verdict = Resolve-ReleaseVerdict (& $gate.Verify $ctx $gate)
+                    if ($null -eq $verdict) {
+                        return @{ Result = 'UNVERIFIED'; Message = 'the install verification returned nothing' }
                     }
-                    $afterVersion = "$($identity.productVersion)"
-                    if ($afterVersion -eq $gate.State.previousVersion) {
-                        return @{ Ok = $false; Detail = "the version is unchanged at $afterVersion; nothing was installed"; Evidence = $evidence }
+                    if ($verdict.Ok) {
+                        return @{ Result = 'PASS'
+                            Message      = "[elevated runner: no prompt was raised] $($verdict.Detail)"
+                            Evidence     = $verdict.Evidence
+                        }
                     }
-                    return @{ Ok = $true; Detail = "installed: $($gate.State.previousVersion) -> $afterVersion"; Evidence = $evidence }
+                    return @{ Result = 'FAIL'; Message = $verdict.Detail; Evidence = $verdict.Evidence }
+                }
+                return & $ctx.HumanGate $gate
+            }
+            finally {
+                if ($null -ne $conn) { try { $conn.Close() } catch { } }
+                if ($null -ne $fromProcess -and -not $fromProcess.HasExited) {
+                    try {
+                        [void]$fromProcess.CloseMainWindow()
+                        if (-not $fromProcess.WaitForExit(10000)) { $fromProcess.Kill() }
+                    }
+                    catch { }
                 }
             }
-            # An elevated caller never sees the prompt this gate is named after:
-            # msiexec inherits the token and installs without asking. The install
-            # itself still has to happen and is verified the same way, so the result
-            # says which of the two it was.
-            if (Test-RunnerElevated) {
-                $verdict = Resolve-ReleaseVerdict (& $gate.Verify $ctx $gate)
-                if ($null -eq $verdict) {
-                    return @{ Result = 'UNVERIFIED'; Message = 'the install verification returned nothing' }
-                }
-                if ($verdict.Ok) {
-                    return @{ Result = 'PASS'
-                        Message      = "[elevated runner: no prompt was raised] $($verdict.Detail)"
-                        Evidence     = $verdict.Evidence
-                    }
-                }
-                return @{ Result = 'FAIL'; Message = $verdict.Detail; Evidence = $verdict.Evidence }
-            }
-            return & $ctx.HumanGate $gate
         }
     }
 

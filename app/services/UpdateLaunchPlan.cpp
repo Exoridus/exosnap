@@ -7,6 +7,7 @@
 
 #include <control/options.h>
 
+#include <QProcessEnvironment>
 #include <QString>
 #include <QStringList>
 
@@ -38,6 +39,16 @@ QStringList BuildUpdaterArgs(const QString& handoff_path, const QString& automat
     if (!automation_run_id.isEmpty())
         args << QString::fromLatin1(exosnap::control::option::kUpdaterControl) << automation_run_id;
     return args;
+}
+
+QProcessEnvironment UpdaterChildEnvironment(const QProcessEnvironment& parent) {
+    QProcessEnvironment child = parent;
+    // Removing an absent key is a no-op, so this is safe on an environment that
+    // never had it. Spelled out rather than taken from a Qt header: Qt exposes no
+    // constant for it, and a typo here would be invisible -- the child would just
+    // keep inheriting the variable.
+    child.remove(QStringLiteral("QT_QPA_DISABLE_REDIRECTION_SURFACE"));
+    return child;
 }
 
 exosnap::update_handoff::UpdateHandoff BuildUpdateHandoff(const exosnap::update::UpdateState& st,

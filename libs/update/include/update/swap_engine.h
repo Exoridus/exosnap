@@ -66,6 +66,11 @@ enum class SwapError : uint8_t {
 // is still alive when the timeout elapses.
 [[nodiscard]] bool WaitForProcessExit(uint32_t pid, std::chrono::milliseconds timeout);
 
+// Whether the named single-instance mutex exists right now, without waiting. A
+// mutex openable only in another security context (ERROR_ACCESS_DENIED) counts
+// as present: existence is the question, access is not.
+[[nodiscard]] bool IsInstanceMutexPresent(const wchar_t* mutex_name);
+
 // True once the named single-instance mutex exists (the new app has come up),
 // polled every 250 ms. A mutex openable only in another security context
 // (ERROR_ACCESS_DENIED) still counts as present. False if it never appears

@@ -382,24 +382,26 @@ bool WaitForProcessExit(uint32_t pid, std::chrono::milliseconds timeout) {
     return PollUntilPidGone(dwpid, deadline);
 }
 
+bool IsInstanceMutexPresent(const wchar_t* mutex_name) {
+    HANDLE m = ::OpenMutexW(SYNCHRONIZE, FALSE, mutex_name);
+    if (m != nullptr) {
+        ::CloseHandle(m);
+        return true; // an instance holds it
+    }
+    // The mutex EXISTS but in another security context (e.g. the app runs
+    // elevated, this updater does not). Existence is what is being tested for,
+    // so ERROR_ACCESS_DENIED counts as present. Only ERROR_FILE_NOT_FOUND (or
+    // another transient failure) means no instance is up.
+    return ::GetLastError() == ERROR_ACCESS_DENIED;
+}
+
 bool WaitForInstanceMutex(const wchar_t* mutex_name, std::chrono::milliseconds timeout) {
     const auto deadline = std::chrono::steady_clock::now() + timeout;
     for (;;) {
-        HANDLE m = ::OpenMutexW(SYNCHRONIZE, FALSE, mutex_name);
-        if (m != nullptr) {
-            ::CloseHandle(m);
-            return true; // an instance holds it -> the new app is up
+        if (IsInstanceMutexPresent(mutex_name)) {
+            return true; // the new app is up
         }
-        const DWORD err = ::GetLastError();
-        if (err == ERROR_ACCESS_DENIED) {
-            // The mutex EXISTS but in another security context (e.g. the new
-            // app runs elevated, this updater does not). Existence is what we
-            // are testing for, so treat it as present -> the new app is up.
-            return true;
-        }
-        // Only ERROR_FILE_NOT_FOUND (or any other transient failure) means the
-        // mutex is not there yet -- the new instance has not come up. Keep
-        // polling until it appears or the deadline passes.
+        // Keep polling until it appears or the deadline passes.
         if (std::chrono::steady_clock::now() >= deadline) {
             return false;
         }
