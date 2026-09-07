@@ -153,6 +153,22 @@ undocumented interface; naming a tool keeps that mechanism outside the release p
 while still letting the gate run itself. Without the variable it stays the operator
 gate it has always been, and the product assertions are identical either way.
 
+A `Verify` block may name its own terminal state by returning `Result` alongside
+`Ok`. `UNVERIFIED`, `UNAVAILABLE` and `DEFERRED` then travel through the gate as
+themselves instead of collapsing into `FAIL`, which is the same distinction rules 1
+and 3 rest on: a gate whose evidence was never produced has found no defect. `PASS`
+and `FAIL` keep travelling through `Ok`, so a block that names nothing is unaffected.
+
+A `Verify` block never reaches for the runner's session state directly either. It
+asks the context (`Get-ReleaseGateConnection -Context $context`), which
+re-establishes a session that went away — and reports one that cannot be
+re-established as a verdict rather than an unhandled exception. Re-establishing is
+not always enough: `EnsureSession` *launches* a fresh application when the old
+process is gone, and a fresh one has an empty notification hub, no overlays on
+screen and no recording running. Gates whose subject was the previous process
+therefore record the session id they prepared in `$Gate.State` and report
+`UNVERIFIED` when the connection comes back from a different one.
+
 `REL-PKG-CHOCO-001` is the one gate that installs software, so it is opt-in and it
 raises exactly one prompt. `choco` and `msiexec /qn` need an elevated token — an
 unelevated silent `msiexec` does not even ask, it fails with 1603 and "no credential
@@ -164,11 +180,28 @@ the copy's `url64bit`/`checksum64` are pointed at the local MSI, because the tra
 checksum describes a file that does not exist until the release is published. The
 worker writes a JSON result plus per-step logs into the campaign's evidence
 directory, and the unelevated runner turns that into the verdict — a step the worker
-never reached is `UNVERIFIED`, never a pass, and the restore step is in that list
-because every later gate expects the release still installed. The MSI is not bound by
-`prepare` (the campaign binds the portable `exosnap.exe` only): the gate looks for a
-single sibling `*.msi` beside the artifact, compares it against a `.msi.sha256`
-sidecar when one is there, and reports `UNAVAILABLE` when it finds none or several.
+never reached is `UNVERIFIED`, never a pass.
+
+Three properties of that gate are worth knowing before running it:
+
+- **The reinstall runs from a `finally` block**, whatever happened before it, so a
+  rehearsal that threw halfway does not leave the machine without ExoSnap — every
+  later gate expects the release still installed, and the verdict says whether the
+  reinstall ran.
+- **`vcredist140` is not restored.** It is a declared Chocolatey dependency of the
+  package, so the install can install or upgrade the Visual C++ redistributable;
+  the version is recorded before and after and the verdict names the change.
+  Downgrading a machine's C++ runtime to undo it would be worse than the change.
+- **The empty parent directory and registry key are recorded, not asserted.** The
+  MSI declares no owner for `C:\Program Files\Codexo` or `HKLM:\SOFTWARE\Codexo`,
+  so their removal is not something the package promises; `\ExoSnap`, the ARP
+  entry, the shortcut and the Chocolatey lib directory are strict.
+
+The MSI is not bound by `prepare` (the campaign binds the portable `exosnap.exe`
+only): the gate looks for a sibling `ExoSnap-<version>-windows-x64.msi` beside the
+artifact, requires its Property table to declare ProductName `ExoSnap` by
+Manufacturer `Codexo`, compares it against a `.msi.sha256` sidecar when one is
+there, and reports `UNAVAILABLE` when it finds none or several.
 `EXOSNAP_RELEASE_MSI` names one explicitly.
 
 Two gates need a probe binary rather than a person, and say so when it is missing:

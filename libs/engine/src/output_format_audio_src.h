@@ -72,14 +72,6 @@ class OutputFormatAudioSrc final : public IAudioCaptureSource {
     uint32_t DegradedSourceIndexMask() const override;
     void Shutdown() override;
 
-    // The rate the CAPTURE SOURCE delivers, before this decorator converts it to
-    // the encoder's rate. SampleRate() answers the target and therefore says
-    // nothing about the device: on Opus it is 48000 whatever the endpoint runs at.
-    // 0 until Init() has resolved the inner source.
-    uint32_t InnerSampleRate() const {
-        return inner_rate_;
-    }
-
     // --- A/V clock slaving (H-3) --------------------------------------------
     // Set the resampler's rate compensation in ppm. p > 0 stretches the output
     // timeline (more output frames per input), pushing audio events later —

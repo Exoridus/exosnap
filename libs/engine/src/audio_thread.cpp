@@ -253,17 +253,6 @@ void AudioThread::Run() {
 
     m_state.diagnostics.SetAudioFormat(kSampleRate, kChannels);
 
-    // The source's own rate, recorded before anything downstream can hide it:
-    // kSampleRate above is the decorator's TARGET, so on Opus it reads 48000 for a
-    // 44.1 kHz endpoint just as it does for a 48 kHz one. A release gate that has
-    // to prove a recording came from a 44.1 kHz device has nothing else to read.
-    if (output_format_src_ != nullptr) {
-        std::lock_guard slk(m_state.stats_mutex);
-        if (track_id_ < m_state.stats.per_track_source_sample_rate.size()) {
-            m_state.stats.per_track_source_sample_rate[track_id_] = output_format_src_->InnerSampleRate();
-        }
-    }
-
     // --- Encoder init (the only codec-specific part of this worker) ---
     EncoderSetup setup = MakeEncoderSetup(m_state.config);
     if (!setup.encoder) {

@@ -61,6 +61,21 @@ function(exosnap_add_gtest)
   endif()
   string(MAKE_C_IDENTIFIER "${_exosnap_dir_relative}" _exosnap_dir_key)
   set(_exosnap_stage_target "exosnap_stage_runtime_dlls_${_exosnap_dir_key}")
+  # MAKE_C_IDENTIFIER maps `/` and `_` to the same underscore, so two DIFFERENT
+  # directories can produce one key (libs/update/tests and libs/update_handoff...
+  # are one rename apart). Silently, that makes the second directory reuse the
+  # first one's stage target and stage its DLLs into the wrong output folder --
+  # every test binary there then fails to START with 0xC0000135, which reads as a
+  # broken build rather than a name collision. Claimed keys are tracked so the
+  # collision is a configure error instead.
+  get_property(_exosnap_stage_owner GLOBAL PROPERTY "exosnap_stage_key_${_exosnap_dir_key}")
+  if(_exosnap_stage_owner AND NOT _exosnap_stage_owner STREQUAL "${CMAKE_CURRENT_BINARY_DIR}")
+    message(FATAL_ERROR
+      "Runtime-DLL stage key '${_exosnap_dir_key}' is claimed by '${_exosnap_stage_owner}' and requested again "
+      "by '${CMAKE_CURRENT_BINARY_DIR}'. MAKE_C_IDENTIFIER collapses '/' and '_' to the same character; rename "
+      "one of the two directories so their keys differ.")
+  endif()
+  set_property(GLOBAL PROPERTY "exosnap_stage_key_${_exosnap_dir_key}" "${CMAKE_CURRENT_BINARY_DIR}")
   if(NOT TARGET ${_exosnap_stage_target})
     # The stage target can run before MSBuild creates the per-config output
     # directory; `cmake -E copy_if_different` into a missing directory then

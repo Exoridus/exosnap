@@ -311,11 +311,6 @@ struct AudioDiagnostics {
     std::array<bool, 3> resampler_drain_recorded{};
     std::array<uint64_t, 3> resampler_drained_frames{};
     std::array<uint64_t, 3> resampler_undrained_frames{};
-    // The rate each track's capture source delivered, before conversion to the
-    // encoder's rate. `sample_rate` above is the ENCODER's rate and is 48000 for
-    // Opus whatever the endpoint ran at, so it cannot answer "which device format
-    // was actually recorded from". 0 means the source never reported a format.
-    std::array<uint32_t, 3> source_sample_rate{};
 };
 
 struct QueueDiagnostics {
