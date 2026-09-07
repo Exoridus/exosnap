@@ -49,6 +49,35 @@ the project's exact flags: silent at `/W4 /WX`, diagnosed once the warnings are
 switched on. clang's own `-Wswitch` does run here as `clang-diagnostic-switch`,
 which is why the two unhandled enumerators above are visible at all.
 
+## The advisory volume, measured
+
+The whole-tree advisory pass had only ever been reported as a count of
+diagnostic LINES. That number is not a count of code: a finding in a widely
+included header is repeated once per translation unit that includes it, and a
+macro expansion adds context lines of its own.
+
+Measured properly -- one pass over every tracked `.cpp`/`.h` under `app/`,
+`apps/`, `libs/`, `tests/` and `tools/` (1012 files, 29 min wall clock, clang-tidy
+22.1.0, `--checks=-clang-analyzer-*`, the invocation `scripts/check-quality.ps1`
+uses for its whole-tree form), counting each distinct (file, line, column, check)
+tuple in a repository-owned file once:
+
+| | sites |
+|---|---|
+| diagnostic lines | 20987 |
+| **distinct sites** | **21486** |
+
+Distinct sites exceed diagnostic lines because one diagnostic can name several
+checks (`modernize-avoid-c-arrays` and `cppcoreguidelines-avoid-c-arrays` are the
+same finding under two names), and each is a rule that would have to be answered
+separately.
+
+Four rules accounted for four fifths of it: `misc-include-cleaner` (9444),
+`readability-braces-around-statements` (3958),
+`cppcoreguidelines-pro-bounds-avoid-unchecked-container-access` (2862) and the
+`avoid-c-arrays` pair (1120). The rest of this file records what happened to
+each.
+
 ## Advisory checks
 
 `misc-include-cleaner`, `misc-unused-using-decls`, `misc-unused-parameters`,
