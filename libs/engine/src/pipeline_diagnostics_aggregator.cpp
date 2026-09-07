@@ -799,6 +799,9 @@ RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_p
     au.resampler_drain_recorded = stats.per_track_resampler_drain_recorded;
     au.resampler_drained_frames = stats.per_track_resampler_drained_frames;
     au.resampler_undrained_frames = stats.per_track_resampler_undrained_frames;
+    // Written when the source reports its format, so this one is populated from the
+    // first snapshot after the audio worker started rather than only at the end.
+    au.source_sample_rate = stats.per_track_source_sample_rate;
 
     // ---- Queues ----
     s.video_queue.current_depth = video_queue_depth_;

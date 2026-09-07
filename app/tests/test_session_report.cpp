@@ -67,6 +67,7 @@ SessionReportInputs MakeInputs() {
     s.audio.resampler_drain_recorded = {true, true, false};
     s.audio.resampler_drained_frames = {441, 0, 0};
     s.audio.resampler_undrained_frames = {0, 0, 0};
+    s.audio.source_sample_rate = {44100, 48000, 0};
     s.encoder_init.valid = true;
     s.encoder_init.codec = exosnap::engine::VideoCodec::Av1;
     s.encoder_init.preset = exosnap::engine::NvencPreset::P5;
@@ -248,6 +249,47 @@ TEST(SessionReport, ResamplerDrainReportsUndrainedTail) {
                                  .toArray();
     ASSERT_GE(drain.size(), 1);
     EXPECT_EQ(drain[0].toObject()[QStringLiteral("undrained_frames")].toInt(), 17);
+}
+
+TEST(SessionReport, CarriesTheCaptureSourceRatePerTrack) {
+    // The only field in the report that can distinguish a recording taken from a
+    // 44.1 kHz endpoint from one taken at 48 kHz. The encoder's rate cannot: Opus
+    // pins it to 48000 either way, so a release gate reading it would pass on a
+    // format it never exercised.
+    const QJsonArray drain = Parse(BuildSessionReportJson(MakeInputs()))[QStringLiteral("audio")]
+                                 .toObject()[QStringLiteral("resampler_drain")]
+                                 .toArray();
+    ASSERT_EQ(drain.size(), 2);
+    EXPECT_EQ(drain[0].toObject()[QStringLiteral("source_sample_rate")].toInt(), 44100);
+    EXPECT_EQ(drain[1].toObject()[QStringLiteral("source_sample_rate")].toInt(), 48000);
+}
+
+TEST(SessionReport, SourceRateIsUnavailableRatherThanZeroWhenTheSourceNeverReportedOne) {
+    // 0 Hz is not a device format. A track whose source never reported one says so,
+    // instead of handing a reader a number it would compare against 44100.
+    SessionReportInputs in = MakeInputs();
+    in.snapshot.audio.source_sample_rate = {0, 0, 0};
+    const QJsonArray drain = Parse(BuildSessionReportJson(in))[QStringLiteral("audio")]
+                                 .toObject()[QStringLiteral("resampler_drain")]
+                                 .toArray();
+    ASSERT_EQ(drain.size(), 2);
+    for (const auto& entry : drain) {
+        EXPECT_EQ(entry.toObject()[QStringLiteral("source_sample_rate")].toString(), QStringLiteral("unavailable"));
+    }
+}
+
+TEST(SessionReport, SourceRateSurvivesASessionThatNeverDrained) {
+    // Gated on its own value, not on the drain: a session that failed before end of
+    // stream still knows which format it was capturing, and suppressing that with
+    // the drain counters would hide the one fact a format gate needs.
+    SessionReportInputs in = MakeInputs();
+    in.result.succeeded = false;
+    in.snapshot.audio.resampler_drain_recorded = {false, false, false};
+    const QJsonArray drain = Parse(BuildSessionReportJson(in))[QStringLiteral("audio")]
+                                 .toObject()[QStringLiteral("resampler_drain")]
+                                 .toArray();
+    ASSERT_EQ(drain.size(), 2);
+    EXPECT_EQ(drain[0].toObject()[QStringLiteral("source_sample_rate")].toInt(), 44100);
 }
 
 TEST(SessionReport, AudioSectionSurvivesAnUnconfiguredTrackCount) {

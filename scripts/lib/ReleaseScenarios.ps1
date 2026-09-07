@@ -752,7 +752,9 @@ function Get-ReleaseScenarioCatalog {
                 'reports presentMode exclusiveFullscreen. It then stops the recording through the product.'
                 Verify            = {
                     param($context, $gate)
-                    $conn2 = $script:Session.Connection
+                    $link = Get-ReleaseGateConnection -Context $context
+                    if (-not $link.Ok) { return @{ Ok = $false; Detail = $link.Detail } }
+                    $conn2 = $link.Connection
                     $deadline = [DateTime]::UtcNow.AddSeconds(30)
                     $notifications = $null
                     $stall = $null
@@ -1076,7 +1078,9 @@ function Get-ReleaseScenarioCatalog {
                 'real present measurement this scenario reports UNAVAILABLE rather than guessing from window shape.'
                 Verify            = {
                     param($context, $gate)
-                    $conn = $script:Session.Connection
+                    $link = Get-ReleaseGateConnection -Context $context
+                    if (-not $link.Ok) { return @{ Ok = $false; Detail = $link.Detail } }
+                    $conn = $link.Connection
                     $present = (Invoke-LiveVerifyCommand -Connection $conn -Command 'environment.snapshot').result.present
                     $evidence = @(Save-LiveVerifyEvidence -Context $context -CheckId 'REL-CAP-FSE-001' -Name 'present.json' -Value $present)
                     if (-not $present.available) {
@@ -1186,7 +1190,9 @@ function Get-ReleaseScenarioCatalog {
                 'file with ffprobe -- the file must still contain its audio track.'
                 Verify            = {
                     param($context, $gate)
-                    $conn2 = $script:Session.Connection
+                    $link = Get-ReleaseGateConnection -Context $context
+                    if (-not $link.Ok) { return @{ Ok = $false; Detail = $link.Detail } }
+                    $conn2 = $link.Connection
                     $observedDegraded = $false
                     $recoveredAgain = $false
                     $leftRecording = $false
@@ -1311,7 +1317,9 @@ function Get-ReleaseScenarioCatalog {
                 'while the recording keeps running.'
                 Verify            = {
                     param($context, $gate)
-                    $conn2 = $script:Session.Connection
+                    $link = Get-ReleaseGateConnection -Context $context
+                    if (-not $link.Ok) { return @{ Ok = $false; Detail = $link.Detail } }
+                    $conn2 = $link.Connection
                     $samples = @()
                     $degradedSeen = $false
                     # An assertion about a source that was never active is not evidence
@@ -1380,7 +1388,8 @@ function Get-ReleaseScenarioCatalog {
                 'actually reads 44100. It also requires the endpoint to hold the default render role: system ' +
                 'audio is captured from the DEFAULT endpoint, so a 44.1 kHz device that is not the default is ' +
                 'never in the recorded path and the gate would pass without testing anything. It then records ' +
-                'with system audio and requires an audio track in the output file.'
+                'with system audio and requires the session report to say that a track captured at 44100 Hz -- ' +
+                'the output rate cannot say it, because Opus is 48 kHz by specification.'
                 Verify            = {
                     param($context, $gate)
                     if (-not $context.Orchestrator.Available) {
@@ -1438,8 +1447,13 @@ function Get-ReleaseScenarioCatalog {
             $result = (Invoke-LiveVerifyCommand -Connection $conn -Command 'record.result').result
             if (-not $result.succeeded) { return @{ Result = 'FAIL'; Message = 'the recording did not succeed' } }
 
+            $report = (Invoke-LiveVerifyCommand -Connection $conn -Command 'session.latest').result
+
             $probeRaw = & $ffprobe -v error -print_format json -show_streams -- "$($result.outputPath)" 2>&1 | Out-String
-            $evidence = @(Save-LiveVerifyEvidence -Context $ctx -CheckId 'REL-AUD-FORMAT-001' -Name 'ffprobe.json' -Raw $probeRaw)
+            $evidence = @(
+                Save-LiveVerifyEvidence -Context $ctx -CheckId 'REL-AUD-FORMAT-001' -Name 'ffprobe.json' -Raw $probeRaw
+                Save-LiveVerifyEvidence -Context $ctx -CheckId 'REL-AUD-FORMAT-001' -Name 'session.json' -Value $report
+            )
             $probe = $probeRaw | ConvertFrom-Json
             $audio = @($probe.streams | Where-Object { $_.codec_type -eq 'audio' })
             if ($audio.Count -eq 0) {
@@ -1447,10 +1461,13 @@ function Get-ReleaseScenarioCatalog {
             }
             # The output rate is NOT evidence about the endpoint: Opus is 48 kHz by
             # specification, so this number is the same whatever the device ran at.
-            # What makes the verdict mean something is the gate's precondition --
-            # a 44.1 kHz endpoint that actually held the default render role.
-            return @{ Result = 'PASS'
-                Message      = "recorded from the 44.1 kHz default endpoint: $($audio[0].codec_name) @ $($audio[0].sample_rate) Hz out"
+            # "An audio track exists" therefore could not fail on this gate's own
+            # subject, and it read green in every campaign for that reason. What CAN
+            # fail on it is the rate the capture source delivered, which the session
+            # report carries per track.
+            $rateVerdict = Get-ReleaseCaptureSourceRateVerdict -Report $report -ExpectedHz 44100
+            return @{ Result = $rateVerdict.Result
+                Message      = "$($audio[0].codec_name) @ $($audio[0].sample_rate) Hz out; $($rateVerdict.Message)"
                 Evidence     = $evidence
             }
         }
@@ -1834,7 +1851,9 @@ function Get-ReleaseScenarioCatalog {
                 'overlays were actually on screen while you looked, via overlay.snapshot.'
                 Verify            = {
                     param($context, $gate)
-                    $conn2 = $script:Session.Connection
+                    $link = Get-ReleaseGateConnection -Context $context
+                    if (-not $link.Ok) { return @{ Ok = $false; Detail = $link.Detail } }
+                    $conn2 = $link.Connection
                     $after = (Invoke-LiveVerifyCommand -Connection $conn2 -Command 'overlay.snapshot').result
                     $evidence = @(Save-LiveVerifyEvidence -Context $context -CheckId 'REL-VIS-OVERLAY-001' -Name 'overlays-after.json' -Value $after)
                     try { [void](Invoke-LiveVerifyCommand -Connection $conn2 -Command 'record.stop') } catch { }
@@ -1880,13 +1899,13 @@ function Get-ReleaseScenarioCatalog {
             if ($wrong.Count -gt 0) {
                 $why = Read-Host "  What was wrong in $($wrong -join ' and ')? (one line, recorded in the report)"
                 if ([string]::IsNullOrWhiteSpace($why)) { $why = 'no detail given' }
-                try { [void](Invoke-LiveVerifyCommand -Connection $script:Session.Connection -Command 'record.stop') } catch { }
+                try { [void](Invoke-LiveVerifyCommand -Connection $conn -Command 'record.stop') } catch { }
                 return @{ Result = 'FAIL'
                     Message      = "The operator judged the overlays WRONG in $($wrong -join ' and '): $why"
                 }
             }
             if ($answers.Values -contains 'skip' -or $answers.Values -contains 'abort' -or $answers.Count -lt 2) {
-                try { [void](Invoke-LiveVerifyCommand -Connection $script:Session.Connection -Command 'record.stop') } catch { }
+                try { [void](Invoke-LiveVerifyCommand -Connection $conn -Command 'record.stop') } catch { }
                 return @{ Result = 'DEFERRED'; Message = 'The operator did not judge both appearances' }
             }
 
@@ -2016,7 +2035,9 @@ function Get-ReleaseScenarioCatalog {
                 'Whether they LOOKED right is your verdict.'
                 Verify            = {
                     param($context, $gate)
-                    $conn2 = $script:Session.Connection
+                    $link = Get-ReleaseGateConnection -Context $context
+                    if (-not $link.Ok) { return @{ Ok = $false; Detail = $link.Detail } }
+                    $conn2 = $link.Connection
                     $after = (Invoke-LiveVerifyCommand -Connection $conn2 -Command 'notifications.snapshot').result
                     $evidence = @(Save-LiveVerifyEvidence -Context $context -CheckId 'REL-VIS-NOTIFY-001' -Name 'notifications-after.json' -Value $after)
                     # `entries`, not `notifications`. The hub keeps a permanent record, so
@@ -2217,12 +2238,14 @@ function Get-ReleaseScenarioCatalog {
                     Why               = 'Same Secure Desktop boundary as accepting it. What is under test is what the ' +
                     'product says afterwards.'
                     Do                = @('A UAC prompt is appearing now.', 'DECLINE it.')
-                    Expected          = 'The updater reports a cancelled update, not a failed one, and nothing is ' +
-                    'left half-installed.'
+                    Expected          = 'The updater reports the update as declined at the elevation prompt, and ' +
+                    'nothing is left half-installed.'
                     VerifyDescription = "This runner attaches to the updater's own control endpoint (run id " +
-                    "$($launch.controlRunId)) and requires a cancelled-or-idle phase with installState intact -- never " +
-                    'a failure state, and never strandedInBackup. Those fields belong to the updater; the application ' +
-                    'only reports which child it launched.'
+                    "$($launch.controlRunId)) and requires failureCase uacDeclined with installState intact -- any " +
+                    'other failureCase, a missing one, or strandedInBackup is a FAIL. `phase` is recorded but never ' +
+                    'asserted on: a declined prompt legitimately reports phase failed alongside failureCase ' +
+                    'uacDeclined. Those fields belong to the updater; the application only reports which child it ' +
+                    'launched.'
                     Verify            = {
                         param($context, $gate)
                         if ([string]::IsNullOrWhiteSpace($gate.State.updaterRunId)) {
@@ -2248,15 +2271,12 @@ function Get-ReleaseScenarioCatalog {
                             }
                             $after = $state_response.result
                             $evidence = @(Save-LiveVerifyEvidence -Context $context -CheckId 'REL-UPD-MSI-DECLINE-001' -Name 'updater-state.json' -Value $after)
-                            $installState = "$(Get-ReleaseSnapshotValue -Object $after -Path 'installState')"
-                            $phase = "$(Get-ReleaseSnapshotValue -Object $after -Path 'phase')"
-                            if ($installState -eq 'strandedInBackup') {
-                                return @{ Ok = $false; Detail = 'the install is stranded in backup after a declined prompt'; Evidence = $evidence }
-                            }
-                            if ($phase -match 'fail|error') {
-                                return @{ Ok = $false; Detail = "a declined prompt was reported as a failure: $phase"; Evidence = $evidence }
-                            }
-                            return @{ Ok = $true; Detail = "phase=$phase installState=$installState"; Evidence = $evidence }
+                            # `phase` is deliberately not asserted on; see
+                            # Get-ReleaseDeclinedUpdateVerdict for why it cannot carry
+                            # this answer.
+                            $verdict = Get-ReleaseDeclinedUpdateVerdict -State $after
+                            $verdict['Evidence'] = $evidence
+                            return $verdict
                         }
                         finally { try { $updater.Close() } catch { } }
                     }
@@ -2480,6 +2500,131 @@ function Get-ReleaseScenarioCatalog {
     }
 
     # =======================================================================
+    # Downstream packaging
+    # =======================================================================
+
+    $catalog += [pscustomobject]@{
+        Id                  = 'REL-PKG-CHOCO-001'
+        Title               = 'The Chocolatey package installs, uninstalls and leaves the machine as it was'
+        Class               = 'packaging'
+        Layer               = 'SECURE'
+        Source              = 'docs/release-checklist.md §8 (Chocolatey)'
+        ArtifactBound       = $true
+        RequiresInstallTree = $false
+        EnvironmentKeys     = @('elevated')
+        Requires            = @{}
+        Desired             = @{}
+        OptIn               = $true
+        Run                 = {
+            param($ctx)
+            # scripts/validate-chocolatey-package.ps1 proves the tracked files agree
+            # with each other and with the release manifest. It deliberately does not
+            # run `choco pack` or install anything, so nothing on the release path
+            # exercises the package's actual effect on a machine -- and the effect is
+            # what a user gets. This gate is that half, and it is the only gate that
+            # installs software, which is why it is opt-in.
+            if ($null -eq (Get-Command choco -ErrorAction SilentlyContinue)) {
+                return @{ Result = 'UNAVAILABLE'; Message = 'choco is not on PATH; the package cannot be packed or installed' }
+            }
+            $packageSource = Join-Path $ctx.RepositoryRoot 'packaging/chocolatey'
+            if (-not (Test-Path -LiteralPath (Join-Path $packageSource 'exosnap.nuspec')) -or
+                -not (Test-Path -LiteralPath (Join-Path $packageSource 'tools/chocolateyinstall.ps1'))) {
+                return @{ Result = 'UNAVAILABLE'
+                    Message      = 'packaging/chocolatey does not carry a nuspec and tools/chocolateyinstall.ps1'
+                }
+            }
+            $msi = Resolve-ReleaseMsiArtifact -Artifact $ctx.Artifact
+            if (-not $msi.Ok) { return @{ Result = 'UNAVAILABLE'; Message = $msi.Detail } }
+
+            $worker = Join-Path $ctx.RepositoryRoot 'scripts/lib/choco-rehearsal-worker.ps1'
+            if (-not (Test-Path -LiteralPath $worker)) {
+                return @{ Result = 'UNAVAILABLE'; Message = 'scripts/lib/choco-rehearsal-worker.ps1 is missing' }
+            }
+            $evidenceDirectory = Join-Path $ctx.RunDirectory 'checks/REL-PKG-CHOCO-001'
+            New-Item -ItemType Directory -Path $evidenceDirectory -Force | Out-Null
+            $resultPath = Join-Path $evidenceDirectory 'rehearsal.json'
+            Remove-Item -LiteralPath $resultPath -Force -ErrorAction SilentlyContinue
+
+            $gate = @{
+                Id                = 'REL-PKG-CHOCO-001'
+                Title             = 'Accept ONE elevation prompt for the Chocolatey rehearsal'
+                # Values travel in State, never in a closure -- see New-ReleaseContext.
+                State             = @{
+                    worker            = $worker
+                    packageSource     = $packageSource
+                    msiPath           = $msi.Path
+                    msiSha256         = $msi.Sha256
+                    evidenceDirectory = $evidenceDirectory
+                    resultPath        = $resultPath
+                }
+                Why               = 'Chocolatey installs machine-wide and msiexec needs an elevated token. A silent ' +
+                'msiexec run from an unelevated process does not raise a prompt at all -- it fails with 1603 and ' +
+                '"no credential elevation is possible" -- so the whole rehearsal has to happen inside one elevated ' +
+                'child, and its prompt runs on the Secure Desktop where synthetic input is blocked by design.'
+                Do                = @(
+                    'Nothing is installed yet. When you answer yes below, ONE UAC prompt appears, raised by this runner for a PowerShell worker.',
+                    'ACCEPT it. There is only the one prompt; the worker does every step inside it.',
+                    'The worker packs the package, removes the currently installed ExoSnap, installs the package, uninstalls it, and reinstalls the release MSI. Leave the machine alone until it finishes.'
+                )
+                Expected          = 'One elevation prompt, then an unattended run that ends with the release MSI ' +
+                'installed again, exactly as it was before.'
+                VerifyDescription = 'The elevated worker writes a JSON result and per-step logs into this ' +
+                'campaign evidence directory. This runner reads that JSON and requires every step to have ' +
+                'passed: choco pack, the removal of the existing install, the install (executable, ARP entry, ' +
+                'HKLM:\SOFTWARE\Codexo\ExoSnap installed=1 + InstallPath, start-menu shortcut, Chocolatey lib ' +
+                'directory), the uninstall (all of those gone, including the parent Codexo key and ' +
+                'C:\Program Files\Codexo, with %LOCALAPPDATA%\ExoSnap unchanged by file count and total bytes), ' +
+                'and the restore of the release MSI. A missing step is UNVERIFIED, never a pass.'
+                Verify            = {
+                    param($context, $gate)
+                    # The worker is launched HERE rather than before the gate: launching
+                    # it earlier would raise a prompt in a session that -NonInteractive
+                    # is about to defer, leaving an elevated child and a Secure Desktop
+                    # prompt behind for nobody.
+                    $launch = Invoke-ReleaseElevatedWorker -WorkerScript $gate.State.worker -TimeoutMinutes 30 `
+                        -Arguments @(
+                        '-PackageSource', $gate.State.packageSource,
+                        '-MsiPath', $gate.State.msiPath,
+                        '-MsiSha256', $gate.State.msiSha256,
+                        '-EvidenceDirectory', $gate.State.evidenceDirectory,
+                        '-ResultPath', $gate.State.resultPath)
+                    $result = Read-ReleaseChocolateyResult -Path $gate.State.resultPath
+                    $evidence = @('checks/REL-PKG-CHOCO-001/rehearsal.json')
+                    if (-not $launch.Ok -and $null -eq $result) {
+                        return @{ Ok = $false; Detail = $launch.Detail; Evidence = $evidence }
+                    }
+                    $verdict = Get-ReleaseChocolateyVerdict -Result $result
+                    $detail = if ($verdict.Result -eq 'PASS') { $verdict.Message }
+                    else { "$($verdict.Result): $($verdict.Message)" }
+                    return @{ Ok = ($verdict.Result -eq 'PASS'); Detail = $detail; Evidence = $evidence }
+                }
+            }
+            # An elevated runner raises no prompt at all: the worker inherits the
+            # token. The rehearsal still has to happen and is verified identically,
+            # so the result says which of the two it was.
+            if (Test-RunnerElevated) {
+                $launch = Invoke-ReleaseElevatedWorker -WorkerScript $worker -TimeoutMinutes 30 -AlreadyElevated `
+                    -Arguments @(
+                    '-PackageSource', $packageSource,
+                    '-MsiPath', $msi.Path,
+                    '-MsiSha256', $msi.Sha256,
+                    '-EvidenceDirectory', $evidenceDirectory,
+                    '-ResultPath', $resultPath)
+                $result = Read-ReleaseChocolateyResult -Path $resultPath
+                if (-not $launch.Ok -and $null -eq $result) {
+                    return @{ Result = 'UNVERIFIED'; Message = $launch.Detail }
+                }
+                $verdict = Get-ReleaseChocolateyVerdict -Result $result
+                return @{ Result = $verdict.Result
+                    Message      = "[elevated runner: no prompt was raised] $($verdict.Message)"
+                    Evidence     = @('checks/REL-PKG-CHOCO-001/rehearsal.json')
+                }
+            }
+            return & $ctx.HumanGate $gate
+        }
+    }
+
+    # =======================================================================
     # End-to-end journey and shutdown invariant
     # =======================================================================
 
@@ -2664,6 +2809,14 @@ function Get-ReleaseFieldContract {
             UsedBy = 'REL-CAP-001, REL-AUD-FORMAT-001, REL-AUD-CLOCK-001, REL-DISP-HDR-001'
             Paths  = @('succeeded', 'outputPath')
         }
+        @{ Command = 'session.latest'; Stage = 'result'; UsedBy = 'REL-AUD-FORMAT-001, REL-AUD-CLOCK-001'
+            # The envelope is { available, report }; the report itself only exists
+            # after a recording has completed, which is what stage `result` means
+            # here. `source_sample_rate` is the rate the capture SOURCE delivered --
+            # the only field in the report that can tell a 44.1 kHz endpoint from a
+            # 48 kHz one, because the encoder's rate is 48000 on Opus either way.
+            Paths = @('available', 'report.counters', 'report.audio.resampler_drain[].source_sample_rate')
+        }
     )
 
     $contract = @()
@@ -2811,6 +2964,409 @@ function Resolve-ReleaseVerdict {
     if (-not $Verdict.ContainsKey('Detail') -or $null -eq $Verdict['Detail']) { $Verdict['Detail'] = '' }
     if (-not $Verdict.ContainsKey('Evidence') -or $null -eq $Verdict['Evidence']) { $Verdict['Evidence'] = @() }
     return $Verdict
+}
+
+function Get-ReleaseGateConnection {
+    <#
+    .SYNOPSIS
+        The campaign session's control-channel connection, obtained through the
+        context a gate was handed.
+    .DESCRIPTION
+        A Verify block runs after the operator has answered, which can be minutes
+        after the scenario body prepared the state. The session it prepared is not
+        the gate's to own: another scenario may have ended it (`$ctx.EndSession`),
+        the process may have exited, and the runner may have replaced it. Reaching
+        into the runner's own script-scoped session variable therefore read a
+        property off $null under Set-StrictMode, and the gate reported a PowerShell
+        exception where a verdict belongs -- after a person had already unplugged
+        something or answered a UAC prompt.
+
+        Going through the context instead re-establishes the session when it is
+        gone, and turns the case where it cannot be re-established into a verdict
+        the gate can return.
+
+    .OUTPUTS
+        @{ Ok = $true; Connection = <connection> } or @{ Ok = $false; Detail = '...' }
+    #>
+    param([Parameter(Mandatory)] $Context)
+
+    # Indexed rather than `.Properties.Name -contains`: an object with no members
+    # at all answers nothing for `.Name`, and reading it throws under StrictMode --
+    # which is the very failure mode this function exists to remove.
+    if ($null -eq $Context -or $null -eq $Context.PSObject.Properties['EnsureSession']) {
+        return @{ Ok = $false
+            Detail = 'the gate context carries no EnsureSession, so no application session can be obtained'
+        }
+    }
+    try { $session = & $Context.EnsureSession }
+    catch {
+        return @{ Ok = $false
+            Detail = "the application session could not be re-established: $($_.Exception.Message)"
+        }
+    }
+    if ($null -eq $session -or $null -eq $session.PSObject.Properties['Connection'] -or
+        $null -eq $session.Connection) {
+        return @{ Ok = $false; Detail = 'the application session carries no control-channel connection' }
+    }
+    return @{ Ok = $true; Connection = $session.Connection }
+}
+
+function Get-ReleaseDeclinedUpdateVerdict {
+    <#
+    .SYNOPSIS
+        Decides whether an updater state describes a DECLINED elevation prompt.
+    .DESCRIPTION
+        `phase` cannot carry this answer and asserting on it was wrong. A declined
+        prompt legitimately reports `phase: failed` -- measured against the real
+        updater endpoint -- together with `failureCase: uacDeclined`,
+        `installState: intact` and a `retryEntryStep` the user can resume from. The
+        model reserves `phase: cancelled` for a cancellation that carries no
+        failureCase and no retry entry, which is a different event.
+
+        So the discriminators are the two fields that classify WHAT happened and
+        WHERE the install ended up: `failureCase` must name the declined prompt,
+        and `installState` must say the existing install was left alone. `phase` is
+        reported in the detail and never asserted on.
+
+    .OUTPUTS
+        @{ Ok; Detail }
+    #>
+    param($State)
+
+    $failureCase = "$(Get-ReleaseSnapshotValue -Object $State -Path 'failureCase')"
+    $installState = "$(Get-ReleaseSnapshotValue -Object $State -Path 'installState')"
+    $phase = "$(Get-ReleaseSnapshotValue -Object $State -Path 'phase')"
+    $retryEntryStep = "$(Get-ReleaseSnapshotValue -Object $State -Path 'retryEntryStep')"
+    $seen = "failureCase='$failureCase' installState='$installState' phase='$phase' retryEntryStep='$retryEntryStep'"
+
+    # Named first because it is the worst outcome this gate can find: the old
+    # install was moved aside and the new one never arrived, so the machine has no
+    # working ExoSnap at all.
+    if ($installState -eq 'strandedInBackup') {
+        return @{ Ok = $false; Detail = "the install is stranded in backup after a declined prompt ($seen)" }
+    }
+    if ([string]::IsNullOrWhiteSpace($failureCase)) {
+        return @{ Ok = $false
+            Detail = 'the updater classified the declined prompt as nothing at all; a decline must be reported ' +
+            "as failureCase uacDeclined ($seen)"
+        }
+    }
+    if ($failureCase -ne 'uacDeclined') {
+        return @{ Ok = $false; Detail = "a declined prompt was classified as '$failureCase' ($seen)" }
+    }
+    if ($installState -ne 'intact') {
+        return @{ Ok = $false
+            Detail = "a declined prompt left installState '$installState'; the existing install must be intact ($seen)"
+        }
+    }
+    return @{ Ok = $true
+        Detail = "failureCase=uacDeclined installState=intact retryEntryStep='$retryEntryStep' " +
+        "(phase='$phase', reported not asserted)"
+    }
+}
+
+function Get-ReleaseCaptureSourceRateVerdict {
+    <#
+    .SYNOPSIS
+        Decides whether a session report shows a track captured at a given rate.
+    .DESCRIPTION
+        Nothing else in the recorded output can say which endpoint format was in
+        the path. The container's audio rate is the ENCODER's -- Opus is 48 kHz by
+        specification -- and the resampler drain counters are not a discriminator
+        either, because clock slaving builds a resample context on a 48 kHz endpoint
+        too and the drain is then recorded exactly the same way. `source_sample_rate`
+        is the rate the capture source delivered, per track.
+
+        A track whose source never reported a format carries "unavailable" rather
+        than 0, and that is treated as no measurement: UNVERIFIED, never a pass and
+        never a failure the product earned.
+
+    .OUTPUTS
+        @{ Result = 'PASS' | 'FAIL' | 'UNVERIFIED'; Message }
+    #>
+    param($Report, [Parameter(Mandatory)] [int] $ExpectedHz)
+
+    # session.latest answers an envelope, { available, report }; a caller holding the
+    # report itself is equally valid. Same rule as Get-ReleaseSoakVerdict.
+    if ($null -ne $Report -and $null -ne (Get-ReleaseSnapshotValue -Object $Report -Path 'report')) {
+        $Report = Get-ReleaseSnapshotValue -Object $Report -Path 'report'
+    }
+    $entries = @(Get-ReleaseSnapshotValue -Object $Report -Path 'audio.resampler_drain')
+    if ($entries.Count -eq 0) {
+        return @{ Result = 'UNVERIFIED'
+            Message = 'the session report names no audio track, so no capture source rate was reported'
+        }
+    }
+    $measured = @()
+    $seen = @()
+    foreach ($entry in $entries) {
+        $track = Get-ReleaseSnapshotValue -Object $entry -Path 'track'
+        $rate = Get-ReleaseSnapshotValue -Object $entry -Path 'source_sample_rate'
+        $seen += "track ${track}=$(if ($null -eq $rate) { 'not emitted' } else { $rate })"
+        # An unavailable metric is the string 'unavailable', not a number. Compared
+        # as a number only when it is one, so "unavailable" can never match a rate.
+        if ($rate -is [string] -or $null -eq $rate) { continue }
+        $measured += [double]$rate
+    }
+    if ($measured.Count -eq 0) {
+        return @{ Result = 'UNVERIFIED'
+            Message = "no track reported a capture source rate ($($seen -join ', '))"
+        }
+    }
+    if (@($measured | Where-Object { $_ -eq $ExpectedHz }).Count -eq 0) {
+        return @{ Result = 'FAIL'
+            Message = "no track captured at $ExpectedHz Hz ($($seen -join ', ')); the recording did not come " +
+            'from the endpoint this gate configured'
+        }
+    }
+    return @{ Result = 'PASS'; Message = "a track captured at $ExpectedHz Hz ($($seen -join ', '))" }
+}
+
+function Resolve-ReleaseMsiArtifact {
+    <#
+    .SYNOPSIS
+        The release MSI belonging to the bound artifact, or a reason there is none.
+    .DESCRIPTION
+        The campaign binds ONE file: the portable `exosnap.exe`. Nothing else in the
+        catalog needs an MSI -- the two update gates start from an already installed
+        older build named by EXOSNAP_UPDATE_FROM -- so there is no bound MSI to
+        inherit and this looks for the sibling the release publishes next to the
+        portable download: `*.msi` in the artifact's own directory, then in its
+        parent.
+
+        The checksum is COMPUTED from the local file, because that is what
+        Chocolatey will verify the download against. A published `.msi.sha256`
+        sidecar beside it is compared rather than trusted: a disagreement means the
+        file on disk is not the one the release published, and a rehearsal of the
+        wrong bytes proves nothing about the package.
+
+    .OUTPUTS
+        @{ Ok = $true; Path; Sha256 } or @{ Ok = $false; Detail }
+    #>
+    param([Parameter(Mandatory)] $Artifact)
+
+    $candidates = @()
+    if (-not [string]::IsNullOrWhiteSpace($env:EXOSNAP_RELEASE_MSI)) {
+        if (-not (Test-Path -LiteralPath $env:EXOSNAP_RELEASE_MSI)) {
+            return @{ Ok = $false; Detail = "EXOSNAP_RELEASE_MSI names '$($env:EXOSNAP_RELEASE_MSI)', which does not exist" }
+        }
+        $candidates += (Get-Item -LiteralPath $env:EXOSNAP_RELEASE_MSI)
+    }
+    else {
+        $exePath = "$(Get-ReleaseSnapshotValue -Object $Artifact -Path 'exePath')"
+        if ([string]::IsNullOrWhiteSpace($exePath) -or -not (Test-Path -LiteralPath $exePath)) {
+            return @{ Ok = $false; Detail = 'the campaign artifact names no readable executable to look beside' }
+        }
+        $directory = Split-Path -Parent $exePath
+        foreach ($root in @($directory, (Split-Path -Parent $directory))) {
+            if ([string]::IsNullOrWhiteSpace($root)) { continue }
+            $candidates += @(Get-ChildItem -LiteralPath $root -Filter '*.msi' -File -ErrorAction SilentlyContinue)
+            if ($candidates.Count -gt 0) { break }
+        }
+    }
+    if ($candidates.Count -eq 0) {
+        return @{ Ok = $false
+            Detail = 'no release MSI was found beside the bound artifact; the campaign binds the portable ' +
+            'exosnap.exe only. Put the published .msi next to it, or name it with EXOSNAP_RELEASE_MSI'
+        }
+    }
+    if ($candidates.Count -gt 1) {
+        # Same rule as an ambiguous device alias: picking one of several silently is
+        # how a report ends up describing bytes nobody chose.
+        return @{ Ok = $false
+            Detail = "$($candidates.Count) .msi files sit beside the bound artifact " +
+            "($(($candidates | ForEach-Object { $_.Name }) -join ', ')); name one with EXOSNAP_RELEASE_MSI"
+        }
+    }
+    $msi = $candidates[0]
+    $sha = (Get-FileHash -LiteralPath $msi.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+    $sidecar = "$($msi.FullName).sha256"
+    if (Test-Path -LiteralPath $sidecar) {
+        $published = ((Get-Content -LiteralPath $sidecar -Raw) -split '\s+' |
+                Where-Object { $_ -match '^[0-9a-fA-F]{64}$' } | Select-Object -First 1)
+        if ($null -ne $published -and $published.ToLowerInvariant() -ne $sha) {
+            return @{ Ok = $false
+                Detail = "$($msi.Name) hashes to $sha but its .sha256 sidecar publishes " +
+                "$($published.ToLowerInvariant()); this is not the released file"
+            }
+        }
+    }
+    return @{ Ok = $true; Path = $msi.FullName; Sha256 = $sha }
+}
+
+function New-ReleaseChocolateyPackageCopy {
+    <#
+    .SYNOPSIS
+        Copies packaging/chocolatey and points the copy at a local MSI.
+    .DESCRIPTION
+        `Install-ChocolateyPackage` accepts a local path in `url64bit`, so a
+        rehearsal can install the package WITHOUT the release being published --
+        which is the point: the checksum in the tracked file describes an MSI that
+        does not exist on GitHub until the release is built.
+
+        The tracked files are never touched. The rewrite happens in a copy, and both
+        substitutions must match exactly once: a `chocolateyinstall.ps1` whose shape
+        changed would otherwise be packed unrewritten and the rehearsal would quietly
+        download the PREVIOUS release instead.
+
+    .OUTPUTS
+        @{ Ok = $true; InstallScript } or @{ Ok = $false; Detail }
+    #>
+    param(
+        [Parameter(Mandatory)] [string] $SourceDirectory,
+        [Parameter(Mandatory)] [string] $DestinationDirectory,
+        [Parameter(Mandatory)] [string] $MsiPath,
+        [Parameter(Mandatory)] [string] $Sha256
+    )
+
+    New-Item -ItemType Directory -Path $DestinationDirectory -Force | Out-Null
+    Copy-Item -LiteralPath $SourceDirectory -Destination $DestinationDirectory -Recurse -Force
+    $copyRoot = Join-Path $DestinationDirectory (Split-Path -Leaf $SourceDirectory)
+    $installScript = Join-Path $copyRoot 'tools/chocolateyinstall.ps1'
+    if (-not (Test-Path -LiteralPath $installScript)) {
+        return @{ Ok = $false; Detail = "the package copy carries no tools/chocolateyinstall.ps1" }
+    }
+
+    $text = Get-Content -LiteralPath $installScript -Raw
+    $urlPattern = "(?m)^(\s*url64bit\s*=\s*)'[^']*'"
+    $checksumPattern = "(?m)^(\s*checksum64\s*=\s*)'[^']*'"
+    $urlMatches = [regex]::Matches($text, $urlPattern)
+    $checksumMatches = [regex]::Matches($text, $checksumPattern)
+    if ($urlMatches.Count -ne 1 -or $checksumMatches.Count -ne 1) {
+        return @{ Ok = $false
+            Detail = "chocolateyinstall.ps1 carries $($urlMatches.Count) url64bit and " +
+            "$($checksumMatches.Count) checksum64 assignment(s); exactly one of each is required"
+        }
+    }
+    # $1 rather than a rebuilt line: the file's own indentation and alignment are
+    # not this function's to decide.
+    $text = [regex]::Replace($text, $urlPattern, "`${1}'$($MsiPath -replace "'", "''")'")
+    $text = [regex]::Replace($text, $checksumPattern, "`${1}'$Sha256'")
+    Set-Content -LiteralPath $installScript -Value $text -Encoding utf8NoBOM
+    return @{ Ok = $true; Detail = ''; PackageDirectory = $copyRoot; InstallScript = $installScript }
+}
+
+function Invoke-ReleaseElevatedWorker {
+    <#
+    .SYNOPSIS
+        Runs one worker script elevated and waits for it, without ever touching the
+        prompt.
+    .DESCRIPTION
+        `-Verb RunAs` raises the UAC prompt and Windows composes it on the Secure
+        Desktop; nothing here clicks it, and nothing could. The caller's own gate
+        text is what tells the operator it is coming.
+
+        An already elevated runner needs no `RunAs` at all -- the child inherits the
+        token and no prompt is raised -- so `-AlreadyElevated` runs it in the same
+        console instead, which also keeps the worker's output visible.
+
+    .OUTPUTS
+        @{ Ok; ExitCode; Detail }
+    #>
+    param(
+        [Parameter(Mandatory)] [string] $WorkerScript,
+        [string[]] $Arguments = @(),
+        [int] $TimeoutMinutes = 30,
+        [switch] $AlreadyElevated
+    )
+
+    $argumentList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $WorkerScript) + $Arguments
+    try {
+        if ($AlreadyElevated) {
+            $process = Start-Process -FilePath 'pwsh' -ArgumentList $argumentList -PassThru -NoNewWindow
+        }
+        else {
+            $process = Start-Process -FilePath 'pwsh' -ArgumentList $argumentList -PassThru -Verb 'RunAs'
+        }
+    }
+    catch {
+        # A declined prompt surfaces here as "The operation was canceled by the
+        # user". Reported as a verdict rather than thrown: this gate asks for an
+        # ACCEPT, and a decline is an answer about the gate, not a runner defect.
+        return @{ Ok = $false; ExitCode = $null; Detail = "the elevated worker could not be started: $($_.Exception.Message)" }
+    }
+    if (-not $process.WaitForExit($TimeoutMinutes * 60 * 1000)) {
+        try { $process.Kill() } catch { }
+        return @{ Ok = $false; ExitCode = $null; Detail = "the elevated worker did not finish within $TimeoutMinutes min" }
+    }
+    # An elevated child started from an unelevated parent can refuse the exit code
+    # to the handle the parent holds. That is a fact about the token, not about the
+    # rehearsal -- whose verdict is the JSON either way -- so it is reported as an
+    # unknown code rather than allowed to throw out of a gate.
+    try { $code = $process.ExitCode }
+    catch { return @{ Ok = $true; ExitCode = $null; Detail = 'the elevated worker finished; its exit code was not readable' } }
+    if ($code -ne 0) {
+        return @{ Ok = $false; ExitCode = $code; Detail = "the elevated worker exited $code" }
+    }
+    return @{ Ok = $true; ExitCode = 0; Detail = 'the elevated worker finished' }
+}
+
+function Read-ReleaseChocolateyResult {
+    <#
+    .SYNOPSIS
+        The worker's JSON result, or $null when it wrote none.
+    #>
+    param([Parameter(Mandatory)] [string] $Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return $null }
+    try { return (Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json) }
+    catch { return $null }
+}
+
+function Get-ReleaseChocolateyVerdict {
+    <#
+    .SYNOPSIS
+        Turns the elevated worker's JSON result into a verdict.
+    .DESCRIPTION
+        The worker owns the doing and this owns the judging, so a step the worker
+        never reached cannot be read as a pass. The expected step names are listed
+        here rather than derived from the result: deriving them would make a worker
+        that stopped after `pack` report a clean run over one step.
+
+        The restore step is in that list for the campaign's sake -- every later gate
+        expects the release still installed -- so a rehearsal that installed and
+        uninstalled but never put the machine back is not a pass.
+
+    .OUTPUTS
+        @{ Result = 'PASS' | 'FAIL' | 'UNVERIFIED'; Message }
+    #>
+    param($Result)
+
+    $expected = @('prepare', 'pack', 'removeExisting', 'install', 'uninstall', 'restore')
+    if ($null -eq $Result) {
+        return @{ Result = 'UNVERIFIED'; Message = 'the elevated worker wrote no result' }
+    }
+    $steps = @(Get-ReleaseSnapshotValue -Object $Result -Path 'steps')
+    if ($steps.Count -eq 0) {
+        return @{ Result = 'UNVERIFIED'; Message = 'the worker result carries no steps' }
+    }
+    $names = @($steps | ForEach-Object { "$(Get-ReleaseSnapshotValue -Object $_ -Path 'name')" })
+    $failed = @($steps | Where-Object { (Get-ReleaseSnapshotValue -Object $_ -Path 'ok') -ne $true })
+    if ($failed.Count -gt 0) {
+        $first = $failed[0]
+        $assertions = @(Get-ReleaseSnapshotValue -Object $first -Path 'failedAssertions')
+        $named = if ($assertions.Count -gt 0) { ': ' + ($assertions -join '; ') }
+        else { ": $(Get-ReleaseSnapshotValue -Object $first -Path 'detail')" }
+        return @{ Result = 'FAIL'
+            Message = "step '$(Get-ReleaseSnapshotValue -Object $first -Path 'name')' failed$named"
+        }
+    }
+    $missing = @($expected | Where-Object { $_ -notin $names })
+    if ($missing.Count -gt 0) {
+        # Reached only when every recorded step passed, so this is "the worker
+        # stopped early", not "a step failed" -- a different finding and a
+        # different verdict.
+        return @{ Result = 'UNVERIFIED'
+            Message = "the worker never reached: $($missing -join ', ')"
+        }
+    }
+    $assertionCount = 0
+    foreach ($step in $steps) {
+        $assertionCount += @(Get-ReleaseSnapshotValue -Object $step -Path 'assertions').Count
+    }
+    return @{ Result = 'PASS'
+        Message = "$($steps.Count) step(s), $assertionCount assertion(s): packed, installed, uninstalled with no " +
+        'residue, and the release MSI reinstalled'
+    }
 }
 
 function Wait-ReleaseProbeGone {

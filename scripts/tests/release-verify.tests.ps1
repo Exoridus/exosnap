@@ -1128,6 +1128,292 @@ Test-Case 'the operator-answer seam is reached with the scenario id' {
 }
 
 
+# ---------------------------------------------------------------------------
+# A declined elevation prompt (REL-UPD-MSI-DECLINE-001)
+# ---------------------------------------------------------------------------
+
+Test-Case 'a declined elevation prompt is judged on failureCase and installState, never on phase' {
+    # The gate asserted `phase -notmatch 'fail|error'`, which cannot carry the
+    # answer: measured against the real updater endpoint, a declined prompt reports
+    # phase `failed` TOGETHER WITH failureCase uacDeclined, installState intact and
+    # a retry entry step. The gate therefore failed the product for behaving
+    # exactly as its model says it should.
+    . (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
+
+    $declined = '{"failureCase":"uacDeclined","installState":"intact","phase":"failed","retryEntryStep":"install"}' |
+        ConvertFrom-Json
+    $verdict = Get-ReleaseDeclinedUpdateVerdict -State $declined
+    Assert-True $verdict.Ok "a real decline must pass: $($verdict.Detail)"
+    Assert-True ($verdict.Detail -match 'uacDeclined') 'the detail must name the classification it accepted'
+    Assert-True ($verdict.Detail -match "phase='failed'") 'phase belongs in the record, reported not asserted'
+}
+
+Test-Case 'an install stranded in backup fails a declined-prompt gate' {
+    . (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
+    $stranded = '{"installState":"strandedInBackup"}' | ConvertFrom-Json
+    $verdict = Get-ReleaseDeclinedUpdateVerdict -State $stranded
+    Assert-True (-not $verdict.Ok) 'a stranded install is never a pass'
+    Assert-True ($verdict.Detail -match 'stranded') 'the detail must name what was found'
+}
+
+Test-Case 'a different failure case is not a declined prompt' {
+    . (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
+    $other = '{"failureCase":"msiFailed","installState":"intact"}' | ConvertFrom-Json
+    $verdict = Get-ReleaseDeclinedUpdateVerdict -State $other
+    Assert-True (-not $verdict.Ok) 'an msiFailed run is a different event and must not pass this gate'
+    Assert-True ($verdict.Detail -match 'msiFailed') 'the detail must name the classification it saw'
+}
+
+Test-Case 'a decline the updater classified as nothing at all is a failure that says what it saw' {
+    . (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
+    $unclassified = '{"failureCase":null,"phase":"idle"}' | ConvertFrom-Json
+    $verdict = Get-ReleaseDeclinedUpdateVerdict -State $unclassified
+    Assert-True (-not $verdict.Ok) 'a missing failureCase proves nothing about the decline'
+    Assert-True ($verdict.Detail -match "phase='idle'") "the message must name what was seen: $($verdict.Detail)"
+}
+
+Test-Case 'no gate decides a declined prompt from the updater phase' {
+    # The rule that shipped was `$phase -match 'fail|error'`. `phase` describes how
+    # far the updater got, not why it stopped, and the two are independent: the
+    # declined case is phase `failed` with failureCase uacDeclined. Pinned as a
+    # source rule as well as a verdict, because the tempting fix is to add
+    # `-and $phase -ne 'failed'` somewhere rather than to stop reading it.
+    $code = @(Get-Content -LiteralPath (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1') |
+            Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
+    Assert-True ($code -notmatch '\$phase -match') `
+        'the update gates must not branch on phase; failureCase and installState carry the answer'
+}
+
+# ---------------------------------------------------------------------------
+# A gate's connection comes from its context (REL-VIS-NOTIFY-001 and five more)
+# ---------------------------------------------------------------------------
+
+Test-Case 'no Verify block reaches into the runner script scope for its session' {
+    # A Verify block runs after the operator answers, which can be minutes after
+    # the scenario body prepared the state -- and the session is not the gate's to
+    # own. `$script:Session` starts as $null and every scenario that calls
+    # $ctx.EndSession puts it back there, so `$script:Session.Connection` throws
+    # "The property 'Connection' cannot be found on this object" under StrictMode
+    # and the gate reports a PowerShell message instead of a verdict.
+    #
+    # Comment lines are stripped: the file explains the trap in prose.
+    $code = @(Get-Content -LiteralPath (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1') |
+            Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
+    Assert-True ($code -notmatch '\$script:Session') `
+        'a scenario obtains its connection through $ctx/$context, never from the runner''s own $script:Session'
+}
+
+Test-Case 'a Verify block returns a verdict when the session is gone, instead of throwing' {
+    . (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
+
+    # The shape that used to be written, against the exact state the runner is in
+    # after any scenario ended the shared session.
+    $script:Session = $null
+    $oldShape = { param($context, $gate) return @{ Ok = $true; Detail = "$($script:Session.Connection)" } }
+    Assert-Throws { & $oldShape $null $null } `
+        'the old shape must throw, or this test proves nothing about the new one'
+
+    # The new shape: a session that cannot be re-established is a verdict.
+    $dead = [pscustomobject]@{ EnsureSession = { throw 'the application could not be launched' } }
+    $link = Get-ReleaseGateConnection -Context $dead
+    Assert-True (-not $link.Ok) 'an unreachable session must be reported, not thrown'
+    Assert-True ($link.Detail -match 'could not be re-established') `
+        "the detail must say what happened: $($link.Detail)"
+
+    # A live session is handed straight through.
+    $session = [pscustomobject]@{ Connection = 'the-connection' }
+    $live = Get-ReleaseGateConnection -Context ([pscustomobject]@{ EnsureSession = { $session } })
+    Assert-True $live.Ok 'a live session must be usable'
+    Assert-Equal 'the-connection' $live.Connection 'the connection must be the session''s own'
+
+    # A context that carries no seam at all is a verdict too, not a property throw.
+    $none = Get-ReleaseGateConnection -Context ([pscustomobject]@{ Artifact = 'x' })
+    Assert-True (-not $none.Ok) 'a context with no EnsureSession must be reported'
+
+    # And a session object that exists but carries no connection.
+    $empty = Get-ReleaseGateConnection -Context ([pscustomobject]@{ EnsureSession = { [pscustomobject]@{ } } })
+    Assert-True (-not $empty.Ok) 'a session with no connection is not a usable one'
+}
+
+# ---------------------------------------------------------------------------
+# The 44.1 kHz endpoint gate (REL-AUD-FORMAT-001)
+# ---------------------------------------------------------------------------
+
+function New-FakeSessionReport {
+    # The envelope session.latest actually answers, around one resampler_drain
+    # entry per track.
+    param([Parameter(Mandatory)] [object[]] $Rates)
+    $tracks = @()
+    for ($i = 0; $i -lt $Rates.Count; $i++) {
+        $tracks += [pscustomobject]@{ track = $i; drained_frames = 0; undrained_frames = 0
+            source_sample_rate                                   = $Rates[$i]
+        }
+    }
+    return [pscustomobject]@{ available = $true
+        report                          = [pscustomobject]@{ audio = [pscustomobject]@{ resampler_drain = $tracks } }
+    }
+}
+
+Test-Case 'the 44.1 kHz gate fails against a recording taken at 48 kHz' {
+    # The assertion this replaces was "the output file has an audio track", which
+    # cannot fail on this gate's subject: Opus is 48 kHz by specification, so the
+    # container says 48000 whatever the endpoint ran at. It read green in every
+    # campaign for that reason.
+    . (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
+    $verdict = Get-ReleaseCaptureSourceRateVerdict -Report (New-FakeSessionReport -Rates @(48000)) -ExpectedHz 44100
+    Assert-Equal 'FAIL' $verdict.Result 'a 48 kHz capture must fail the 44.1 kHz gate'
+    Assert-True ($verdict.Message -match '48000') "the message must name what was measured: $($verdict.Message)"
+}
+
+Test-Case 'the 44.1 kHz gate passes against a recording taken at 44.1 kHz' {
+    . (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
+    $verdict = Get-ReleaseCaptureSourceRateVerdict -Report (New-FakeSessionReport -Rates @(44100)) -ExpectedHz 44100
+    Assert-Equal 'PASS' $verdict.Result "a 44.1 kHz capture must pass: $($verdict.Message)"
+
+    # A second track at another rate does not hide the one that matters.
+    $mixed = Get-ReleaseCaptureSourceRateVerdict -Report (New-FakeSessionReport -Rates @(48000, 44100)) -ExpectedHz 44100
+    Assert-Equal 'PASS' $mixed.Result 'one track on the configured endpoint is what the gate is about'
+}
+
+Test-Case 'the field contract covers the capture source rate the 44.1 kHz gate reads' {
+    # REL-SCHEMA-001 is the early failure mode for a field an emitter dropped. A
+    # gate whose only discriminator is not in the contract can still throw inside a
+    # human gate, after the operator has reconfigured an audio endpoint by hand.
+    . (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
+    $entry = @(Get-ReleaseFieldContract |
+            Where-Object { $_.Path -eq 'report.audio.resampler_drain[].source_sample_rate' }) | Select-Object -First 1
+    Assert-True ($null -ne $entry) 'the capture source rate must be in the field contract'
+    Assert-Equal 'session.latest' $entry.Command 'it is read off the session report'
+    Assert-Equal 'result' $entry.Stage 'the report only exists after a recording completed'
+}
+
+Test-Case 'a report that carries no capture source rate is unverified, never a pass' {
+    . (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
+    # 'unavailable' is what the emitter writes for a track whose source never
+    # reported a format. Treating that as a number would compare a string to 44100
+    # and fail the product for a measurement nobody made.
+    $unmeasured = Get-ReleaseCaptureSourceRateVerdict -Report (New-FakeSessionReport -Rates @('unavailable')) `
+        -ExpectedHz 44100
+    Assert-Equal 'UNVERIFIED' $unmeasured.Result 'an unavailable metric is not a rate'
+
+    $noTracks = Get-ReleaseCaptureSourceRateVerdict -Report ([pscustomobject]@{ available = $false }) -ExpectedHz 44100
+    Assert-Equal 'UNVERIFIED' $noTracks.Result 'a report with no audio section proves nothing'
+}
+
+# ---------------------------------------------------------------------------
+# The Chocolatey package rehearsal (REL-PKG-CHOCO-001)
+# ---------------------------------------------------------------------------
+
+Test-Case 'the Chocolatey rehearsal is catalogued as an opt-in prompt gate' {
+    . (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
+    $entry = (Get-ReleaseScenarioCatalog) | Where-Object { $_.Id -eq 'REL-PKG-CHOCO-001' }
+    Assert-True ($null -ne $entry) 'REL-PKG-CHOCO-001 must exist in the catalog'
+    Assert-Equal 'SECURE' $entry.Layer 'a gate that needs a UAC prompt is SECURE, like the other two'
+    Assert-True $entry.OptIn 'a gate that installs and uninstalls software must never run on a default sweep'
+}
+
+Test-Case 'a clean Chocolatey rehearsal passes' {
+    . (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
+    $steps = @('prepare', 'pack', 'removeExisting', 'install', 'uninstall', 'restore') | ForEach-Object {
+        [pscustomobject]@{ name = $_; ok = $true; detail = ''; assertions = @('a', 'b'); failedAssertions = @() }
+    }
+    $verdict = Get-ReleaseChocolateyVerdict -Result ([pscustomobject]@{ ok = $true; steps = $steps })
+    Assert-Equal 'PASS' $verdict.Result "a clean run must pass: $($verdict.Message)"
+    Assert-True ($verdict.Message -match '12 assertion') 'the message must say how much was actually checked'
+}
+
+Test-Case 'the Chocolatey verdict names the assertion that failed' {
+    . (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
+    $steps = @(
+        [pscustomobject]@{ name = 'prepare'; ok = $true; detail = ''; assertions = @('a'); failedAssertions = @() }
+        [pscustomobject]@{ name = 'pack'; ok = $true; detail = ''; assertions = @('a'); failedAssertions = @() }
+        [pscustomobject]@{ name = 'removeExisting'; ok = $true; detail = ''; assertions = @(); failedAssertions = @() }
+        [pscustomobject]@{ name = 'install'; ok = $true; detail = ''; assertions = @('a'); failedAssertions = @() }
+        [pscustomobject]@{ name = 'uninstall'; ok = $false; detail = 'residue'
+            assertions                                 = @('the ARP entry is gone', 'HKLM:\SOFTWARE\Codexo is gone')
+            failedAssertions                           = @('HKLM:\SOFTWARE\Codexo is gone')
+        }
+        [pscustomobject]@{ name = 'restore'; ok = $true; detail = ''; assertions = @('a'); failedAssertions = @() }
+    )
+    $verdict = Get-ReleaseChocolateyVerdict -Result ([pscustomobject]@{ ok = $false; steps = $steps })
+    Assert-Equal 'FAIL' $verdict.Result 'a failed assertion is a failed rehearsal'
+    Assert-True ($verdict.Message -match 'uninstall') 'the message must name the step'
+    Assert-True ($verdict.Message -match 'Codexo is gone') `
+        "the message must name the assertion, not just the step: $($verdict.Message)"
+}
+
+Test-Case 'a rehearsal that never restored the machine is unverified, never a pass' {
+    # Every later gate in the campaign expects the release still installed. A worker
+    # that packed, installed and uninstalled cleanly and then stopped has passed
+    # every step it ran -- which is exactly why the expected steps are listed rather
+    # than derived from the result.
+    . (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
+    $steps = @('prepare', 'pack', 'removeExisting', 'install', 'uninstall') | ForEach-Object {
+        [pscustomobject]@{ name = $_; ok = $true; detail = ''; assertions = @('a'); failedAssertions = @() }
+    }
+    $verdict = Get-ReleaseChocolateyVerdict -Result ([pscustomobject]@{ ok = $true; steps = $steps })
+    Assert-Equal 'UNVERIFIED' $verdict.Result 'a run that stopped early is not a pass'
+    Assert-True ($verdict.Message -match 'restore') "the message must name what was never reached: $($verdict.Message)"
+
+    Assert-Equal 'UNVERIFIED' (Get-ReleaseChocolateyVerdict -Result $null).Result `
+        'a worker that wrote nothing has proven nothing'
+}
+
+Test-Case 'the package copy is pointed at the local MSI and the tracked files are untouched' {
+    # The tracked checksum describes an MSI that does not exist on GitHub until the
+    # release is built, so the rehearsal has to install from a local path. Doing
+    # that by editing the tracked file would leave the repository dirty with a
+    # machine-specific path in it.
+    . (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
+    $root = New-TestDirectory
+    $source = Join-Path $root 'chocolatey'
+    New-Item -ItemType Directory -Path (Join-Path $source 'tools') -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $source 'exosnap.nuspec') -Value '<package />' -Encoding utf8NoBOM
+    $installScript = Join-Path $source 'tools/chocolateyinstall.ps1'
+    Set-Content -LiteralPath $installScript -Encoding utf8NoBOM -Value @'
+$packageArgs = @{
+  url64bit       = 'https://github.com/Exoridus/exosnap/releases/download/v0.9.0/ExoSnap-0.9.0-windows-x64.msi'
+  checksum64     = '0000000000000000000000000000000000000000000000000000000000000000'
+}
+'@
+    $before = (Get-FileHash -LiteralPath $installScript -Algorithm SHA256).Hash
+
+    $msi = Join-Path $root 'ExoSnap-0.9.0-windows-x64.msi'
+    Set-Content -LiteralPath $msi -Value 'not really an msi' -Encoding utf8NoBOM
+    $sha = 'abc123' * 10 + 'abcd'
+    $copy = New-ReleaseChocolateyPackageCopy -SourceDirectory $source `
+        -DestinationDirectory (Join-Path $root 'work') -MsiPath $msi -Sha256 $sha
+    Assert-True $copy.Ok "the copy must succeed: $($copy.Detail)"
+
+    $rewritten = Get-Content -LiteralPath $copy.InstallScript -Raw
+    Assert-True ($rewritten -match [regex]::Escape($msi)) 'url64bit must point at the local MSI'
+    Assert-True ($rewritten -match [regex]::Escape($sha)) 'checksum64 must be the local MSI hash'
+    Assert-True ($rewritten -notmatch 'github\.com') 'the published URL must be gone from the copy'
+    Assert-Equal $before (Get-FileHash -LiteralPath $installScript -Algorithm SHA256).Hash `
+        'the tracked chocolateyinstall.ps1 must not be modified'
+
+    # A file whose shape changed must be refused rather than packed unrewritten:
+    # the rehearsal would otherwise silently download the PREVIOUS release.
+    $odd = Join-Path $root 'odd'
+    New-Item -ItemType Directory -Path (Join-Path $odd 'tools') -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $odd 'tools/chocolateyinstall.ps1') -Encoding utf8NoBOM `
+        -Value '$packageArgs = @{ url64bit = "double quoted"; checksum64 = "double quoted" }'
+    $refused = New-ReleaseChocolateyPackageCopy -SourceDirectory $odd `
+        -DestinationDirectory (Join-Path $root 'work2') -MsiPath $msi -Sha256 $sha
+    Assert-True (-not $refused.Ok) 'a chocolateyinstall.ps1 the rewrite cannot match must be refused'
+}
+
+Test-Case 'the tracked Chocolatey package still has the shape the rehearsal rewrites' {
+    # The contract between packaging/chocolatey and REL-PKG-CHOCO-001: exactly one
+    # single-quoted url64bit and one checksum64. Checked here rather than only at
+    # rehearsal time, because the rehearsal runs elevated on a release machine.
+    $installScript = Join-Path (Split-Path -Parent $scriptRoot) 'packaging/chocolatey/tools/chocolateyinstall.ps1'
+    Assert-True (Test-Path -LiteralPath $installScript) 'packaging/chocolatey/tools/chocolateyinstall.ps1 must exist'
+    $text = Get-Content -LiteralPath $installScript -Raw
+    Assert-Equal 1 ([regex]::Matches($text, "(?m)^(\s*url64bit\s*=\s*)'[^']*'")).Count 'exactly one url64bit'
+    Assert-Equal 1 ([regex]::Matches($text, "(?m)^(\s*checksum64\s*=\s*)'[^']*'")).Count 'exactly one checksum64'
+}
+
 Write-Host ''
 Write-Host "$script:Passed/$($script:Passed + $script:Failed) passed"
 if ($script:Failed -gt 0) { exit 1 }
