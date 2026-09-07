@@ -39,6 +39,16 @@ exosnap_add_gtest(
     LIBRARIES exosnap_updater_logic
 )
 
+# The verification-only failure seam: unarmed by default, one named fault, and
+# an unrecognised name arms nothing. Pure environment reading; no process, no
+# elevation, no installer.
+exosnap_add_gtest(
+    NAME    test_updater_fault_injection
+    TEST_PREFIX updater.
+    SOURCES test_updater_fault_injection.cpp
+    LIBRARIES exosnap_updater_logic
+)
+
 # Pure planning pieces behind the worker (staged-root resolution, retry entry
 # routing, msiexec command line) plus a no-network structural smoke of the
 # worker's signal contract. Qt Core only; no QApplication.

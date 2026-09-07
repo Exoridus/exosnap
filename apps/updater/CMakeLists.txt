@@ -51,6 +51,8 @@ add_library(exosnap_updater_logic STATIC
     UpdaterControlSource.h
     UpdaterExitCode.cpp
     UpdaterExitCode.h
+    UpdaterFaultInjection.cpp
+    UpdaterFaultInjection.h
     UpdaterWorker.cpp
     UpdaterWorker.h
     WindowPlacement.cpp
