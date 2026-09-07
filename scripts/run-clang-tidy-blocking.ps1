@@ -91,6 +91,7 @@ $ErrorActionPreference = 'Stop'
 $BlockingChecks = @(
     'bugprone-use-after-move'
     'bugprone-dangling-handle'
+    'readability-misleading-indentation'
     'clang-analyzer-core.CallAndMessage'
     'clang-analyzer-core.uninitialized.*'
     'clang-analyzer-cplusplus.NewDelete*'
