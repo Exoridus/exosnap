@@ -1195,6 +1195,22 @@ int main(int argc, char* argv[]) {
                        QStringLiteral("ExoSnap.Quick"), QStringLiteral("QuickThemeTokens"))) {
             tokens->setAppearance(appearance, accent);
         }
+
+        // Harness-only: the desktop toast resolves its own colours from
+        // services::ShellAppearanceId, which reads the machine's real registry
+        // key rather than anything --visual-appearance touches -- so without
+        // this, a capture asking for the Light shell silently got whatever
+        // this machine's own taskbar theme happens to be. Applied AFTER the
+        // settings write above, which re-derives the shell appearance from the
+        // real registry as a side effect of applyThemeFromSettings() and would
+        // otherwise overwrite this override immediately.
+        const QString visual_shell_appearance = optionValue(arguments, QStringLiteral("--visual-shell-appearance"));
+        if (!visual_shell_appearance.isEmpty()) {
+            if (auto* tokens = quick_application.engine().singletonInstance<exosnap::quick::QuickThemeTokens*>(
+                    QStringLiteral("ExoSnap.Quick"), QStringLiteral("QuickThemeTokens"))) {
+                tokens->setShellAppearance(visual_shell_appearance);
+            }
+        }
     }
 
     // Harness-only: scrolls the Settings page to its end so a capture can reach

@@ -63,6 +63,28 @@ QtObject {
     readonly property color overlayPaused: QuickThemeTokens.overlayPaused
     readonly property color overlayError: QuickThemeTokens.overlayError
 
+    // ── Shell-following surfaces ─────────────────────────────────────────────
+    //
+    // For the one capture-excluded surface that is NOT fixed-dark: the desktop
+    // notification toast, which sits on the desktop next to Windows' own
+    // notifications rather than over recorded content. Resolved from the
+    // WINDOWS SHELL's own appearance (the tray icon's signal), independently of
+    // both the application's chosen appearance and the fixed-Dark overlay
+    // family above. The accent stays the user's own selection; only its
+    // dark/light value follows the shell's kind. See QuickThemeTokens.h.
+    readonly property color shellSurfaceRaised: QuickThemeTokens.shellSurfaceRaised
+    readonly property color shellSurfaceHover: QuickThemeTokens.shellSurfaceHover
+    readonly property color shellLine: QuickThemeTokens.shellLine
+    readonly property color shellInk: QuickThemeTokens.shellInk
+    readonly property color shellInkSecondary: QuickThemeTokens.shellInkSecondary
+    readonly property color shellInkDim: QuickThemeTokens.shellInkDim
+    readonly property color shellSuccess: QuickThemeTokens.shellSuccess
+    readonly property color shellWarning: QuickThemeTokens.shellWarning
+    readonly property color shellError: QuickThemeTokens.shellError
+    readonly property color shellAccent: QuickThemeTokens.shellAccent
+    readonly property color shellAccentInk: QuickThemeTokens.shellAccentInk
+    readonly property bool shellDark: QuickThemeTokens.shellDark
+
     // The ground a modal/interruption surface lays over the application. Its
     // meaning is "de-emphasise what is behind this", which is why it is a token
     // and not `Qt.alpha(background, x)` at each call site: a translucent copy of
@@ -318,18 +340,22 @@ QtObject {
              : root.overlayAccent;
     }
 
-    function overlayAdvisoryToneInk(tone: string): color {
-        return tone === "success" ? root.successInk
-             : tone === "caution" ? root.warningInk
-             : tone === "error" ? root.errorInk
-             : root.accentInk;
-    }
-
     function overlayAdvisoryToneText(tone: string): color {
         return tone === "success" ? root.overlaySuccess
              : tone === "caution" ? root.overlayWarning
              : tone === "error" ? root.overlayError
              : root.overlayAccent;
+    }
+
+    // The same tone lookup for the SHELL-following family, used by the desktop
+    // notification toast for both its severity glyph and its countdown fill --
+    // see `shell*` above for why this surface does not use `overlayAdvisoryTone`
+    // or the appearance-following `advisoryTone`.
+    function shellAdvisoryTone(tone: string): color {
+        return tone === "success" ? root.shellSuccess
+             : tone === "caution" ? root.shellWarning
+             : tone === "error" ? root.shellError
+             : root.shellAccent;
     }
 
     // QCR-513. The same tone, said without colour: a severity carried only by a

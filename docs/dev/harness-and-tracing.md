@@ -241,6 +241,7 @@ than silently absent from the grab.
 | `--visual-test-size WxH` | Window size. The review baseline is `1440x1000` |
 | `--visual-delay-ms N` | Delay before the shutter. Raised automatically for the options that need a built page |
 | `--visual-appearance dark\|light`, `--visual-accent <id>` | Theme. Pinned in both directions — omitting them means the product default, never the previous run's |
+| `--visual-shell-appearance dark\|light` | The desktop notification toast's own colours, which follow `services::ShellAppearanceId` (the real Windows taskbar-theme registry key) rather than `--visual-appearance` — without this, a capture asking for the Light shell silently showed whatever this machine's own taskbar theme happens to be |
 | `--visual-page N` | Nav destination, in product order: Record, Settings, Diagnostics, Logs, About |
 | `--visual-expert` | Expert mode, one switch for both surfaces that have two arrangements |
 | `--visual-scroll F` | Scroll position as a fraction of the page's own scrollable height |
@@ -256,7 +257,7 @@ Content is seeded through the environment, in the same spirit:
 |---|---|
 | `EXOSNAP_VISUAL_EDIT_SCENARIO` | The Edit surface: `edit-default`, `edit-trimmed`, `edit-timeline-multitrack`, `edit-timeline-loading`, `edit-timeline-unavailable`, `edit-export-running`, `edit-export-done`, `edit-export-failed`, `edit-report-warning`, `edit-long-filename` |
 | `EXOSNAP_VISUAL_LOG_SCENARIO`, `EXOSNAP_VISUAL_DIAG_SCENARIO`, `EXOSNAP_VISUAL_DIAG_LIVE` | Logs and Diagnostics content |
-| `EXOSNAP_VISUAL_NOTIFICATION_SCENARIO=many` | Six advisories in the notification hub, mixed severities. The empty state is the only one a healthy machine produces |
+| `EXOSNAP_VISUAL_NOTIFICATION_SCENARIO=many` / `many-info` | Seven advisories in the notification hub, mixed severities (the empty state is the only one a healthy machine produces), and a toast stack of three cards: two standing (error, caution) plus the one timed toast the product ever shows at once -- the success case for `many`, the info case for `many-info`, since a timed toast is what carries those two severities and only one is ever visible |
 | `EXOSNAP_VISUAL_SOURCE_SCENARIO=many-windows` | Two displays and fifteen windows in the source picker, in place of whatever is open |
 
 Every Diagnostics capture starts from a **canonical machine**

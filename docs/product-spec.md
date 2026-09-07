@@ -1642,7 +1642,9 @@ release (0.11 per ADR 0022).
   or light ground every other context menu on the desktop uses. The tray **icon** follows the
   taskbar's own setting too, for the same reason (both are composited onto a ground the product does
   not own), so the icon and the menu popping out of it can legitimately differ from the application's
-  chosen appearance, and from each other if Windows and the taskbar disagree.
+  chosen appearance, and from each other if Windows and the taskbar disagree. The desktop notification
+  toast follows the same shell setting as the tray, for the same reason: both are composited next to
+  Windows' own chrome, not over anything the application itself owns or is recording.
   There is deliberately **no status caption** naming the session at the top of the menu: a native
   popup menu has no header item, so a disabled first row would read as a broken command rather than
   as a caption, and the state is already carried by the icon itself (idle, recording, paused, saved,
@@ -1728,17 +1730,24 @@ release (0.11 per ADR 0022).
   one timed toast is visible — a newer one replaces it; standing toasts stack above it, never
   auto-dismiss, and always carry an explicit action out. A countdown bar appears exactly on the
   toasts that leave on their own. The card grows to fit its content: no reserved space for an absent
-  body; the body word-wraps and the card grows with it up to six lines, ellipsizing beyond that (the
-  hub always keeps the full untruncated text); with a single action the card itself is clickable
-  (marked `›`); two actions get named buttons. A preset switch raises no toast — only the hub entry
+  body; the body word-wraps and the card grows with it up to three lines, ellipsizing beyond that (the
+  hub always keeps the full untruncated text); with a single action the card itself is clickable;
+  two actions get named buttons. A preset switch raises no toast — only the hub entry
   with **Undo** (the combo box that switched is the way back).
-  - A toast is **operable**: its dismiss ✕ and every action it offers respond to the mouse. Only the
+  - A toast is **operable**: its dismiss ✕ (present on hover or keyboard focus) and every action it
+    offers respond to the mouse or keyboard; **Escape** dismisses whichever toast currently holds the
+    keyboard focus, the same way it already dismisses a modal. Only the
     transparent gaps between stacked cards fall through to whatever is behind them.
   - A body that has no place to wrap — a file path is one unbreakable token — breaks mid-token
     rather than growing past the card. No body may overrun the card at any length.
   - The "Recording saved" toast names the **file**, not its full path. The path is what the actions
     act on (**Show in folder** opens it, **Edit** receives it), not what the card spends its width
     on: the user chose the output folder and already knows it.
+  - The toast resolves its colours from the **Windows apps-colour setting**, independently of the
+    application's own chosen appearance — the accent stays the product's own selection. It is the
+    fifth capture-excluded window and the only one of the five that follows the shell rather than
+    staying fixed-dark, because it sits on the desktop beside Windows' own notifications rather than
+    over the recorded picture.
 - **On-screen overlays**: a recording-status pill (anchored top-right of the recorded monitor), a
   diagnostics readout pill directly beneath it (**off by default**), a countdown overlay centred on
   the recorded monitor, and an **opt-in** interactive quick-control pill (off by default). All four
@@ -1877,7 +1886,7 @@ the focused application. The other three are in-window and are **not** rebindabl
 |---|---|---|
 | Global hotkeys | the whole desktop | start/stop, pause/resume, capture frame, marker |
 | Window shortcuts | the ExoSnap window | `Ctrl+1`…`Ctrl+5` select Record / Settings / Diagnostics / Logs / About |
-| Surface-local keys | one page or overlay while it holds the keyboard focus | the Edit timeline's transport keys, the webcam overlay's arrows, `Escape` on a modal |
+| Surface-local keys | one page or overlay while it holds the keyboard focus | the Edit timeline's transport keys, the webcam overlay's arrows, `Escape` on a modal or the focused desktop notification toast |
 | Text editing | a focused text field | everything else |
 
 Every shortcut ExoSnap adds inside its own window is modifier-qualified, so no shortcut can consume

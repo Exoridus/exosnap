@@ -1,6 +1,7 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import QtQuick.Effects
 import QtQuick.Shapes
 
 // Transient notification toasts, stacked bottom-right of the screen that hosts
@@ -16,12 +17,18 @@ import QtQuick.Shapes
 // used to live in a second, never-instantiated reference component
 // (NotificationToastCard.qml, removed in QCR-701); this file is now the only
 // place a toast is described, so the rules belong here:
-//  - a dismiss ✕ is always present (NotificationToastWindow::ToastHit's
-//    is_dismiss target exists independently of action count);
-//  - with exactly one action the whole card is clickable, marked with a
-//    trailing "›";
-//  - with two actions each gets its own named (quiet) button;
-//  - the body wraps up to six lines and ellipsizes beyond that — the hub,
+//  - the card resolves its colours from the WINDOWS SHELL's own appearance
+//    (`ExoTheme.shell*`), not the fixed-dark `overlay*` family the other four
+//    capture-excluded overlays use and not the application's own appearance --
+//    it sits on the desktop beside Windows' own notifications, not over
+//    recorded content;
+//  - a dismiss ✕ appears only on hover (or keyboard focus, where reachable --
+//    see the Escape Shortcut below for why that is a real constraint here);
+//  - with exactly one action the whole card is clickable, with no marker glyph
+//    -- the affordance is the pointer cursor and the ground stepping to its
+//    hover rung;
+//  - with two actions each gets its own plain-text button;
+//  - the body wraps up to three lines and ellipsizes beyond that -- the hub,
 //    not the toast, is where the untruncated text lives;
 //  - a countdown bar renders only for a TIMED toast (`standing: false`),
 //    matching NotificationManager::IsStanding()/DismissIntervalMs().
@@ -43,11 +50,36 @@ Window {
                                               : Qt.rect(Screen.virtualX, Screen.virtualY, Screen.width, Screen.height)
 
     // ── Geometry (design source: ToastAnatomy) ───────────────────────────────
-    readonly property int cardWidth: 372
+    readonly property int cardWidth: 340
     // The window is wider than the card on every side so the soft shadow's
     // penumbra has room; the cards sit inset by this margin.
     readonly property int shadowMargin: 20
     readonly property int stackGap: 12
+    readonly property int cardPadding: 12
+
+    // ── The card's vertical rhythm, derived rather than eyeballed ────────────
+    readonly property int titleSize: 14
+    readonly property int titleLineHeight: 19
+    readonly property int titleCapHeight: 10
+    readonly property int glyphSize: 14
+    // Half-leading ((titleLineHeight - titleSize) / 2) plus an ascent of about
+    // 0.75em puts the baseline below the content box's top edge; the cap top
+    // sits titleCapHeight above that baseline. Adding the card's own padding
+    // and its 1px border gives the glyph's y from the card's outer edge, so a
+    // future change to the title's size or line box carries the glyph with it
+    // instead of leaving it to be re-eyeballed by hand.
+    readonly property int glyphCapTop: 1 + root.cardPadding
+                                        + Math.round((root.titleLineHeight - root.titleSize) / 2
+                                                      + 0.75 * root.titleSize - root.titleCapHeight)
+
+    // Two-layer elevation (see the card delegate below): a wide soft penumbra
+    // that lifts the card, and a tight contact shadow that gives it an edge.
+    // MultiEffect has no literal box-shadow equivalent, so blurMax/shadowBlur
+    // approximate the design's blur radius rather than reproduce it exactly.
+    readonly property color shadowWideColor: ExoTheme.shellDark ? Qt.rgba(0, 0, 0, 0.35)
+                                                                 : Qt.rgba(20 / 255, 26 / 255, 38 / 255, 0.14)
+    readonly property color shadowTightColor: ExoTheme.shellDark ? Qt.rgba(0, 0, 0, 0.25)
+                                                                  : Qt.rgba(20 / 255, 26 / 255, 38 / 255, 0.08)
 
     signal actionTriggered(int sequence, int action)
     signal dismissRequested(int sequence)
@@ -73,10 +105,10 @@ Window {
     title: qsTr("ExoSnap Overlay — Notification")
     color: "transparent"
 
-    visible: exclusion.granted && repeater.count > 0
+    visible: exclusion.granted && stack.count > 0
 
     width: root.cardWidth + 2 * root.shadowMargin
-    height: stack.height + 2 * root.shadowMargin
+    height: stack.contentHeight + 2 * root.shadowMargin
     x: root.effectiveGeometry.x + root.effectiveGeometry.width - width - 20
     y: root.effectiveGeometry.y + root.effectiveGeometry.height - height - 20
 
@@ -91,8 +123,8 @@ Window {
     // to the window behind.
     function rebuildMask() {
         const rects = []
-        for (let i = 0; i < repeater.count; ++i) {
-            const card = repeater.itemAt(i)
+        for (let i = 0; i < stack.count; ++i) {
+            const card = stack.itemAtIndex(i)
             if (!card)
                 continue
             rects.push(Qt.rect(stack.x + card.x - root.shadowMargin,
@@ -103,215 +135,263 @@ Window {
         exclusion.setClickThroughRegion(rects)
     }
 
-    onVisibleChanged: if (visible) root.rebuildMask()
-
-    // Status glyph inside the 30 px chip. Vector-drawn so it stays identical
-    // across the mono/sans faces the rest of the card uses.
-    component StatusGlyph: Canvas {
-        id: statusGlyph
-
-        property string tone: "info"
-        property color stroke: ExoTheme.overlayAccent
-
-        width: 16
-        height: 16
-        onToneChanged: requestPaint()
-        onStrokeChanged: requestPaint()
-        onPaint: {
-            const ctx = getContext("2d")
-            ctx.reset()
-            ctx.strokeStyle = statusGlyph.stroke
-            ctx.lineCap = "round"
-            ctx.lineJoin = "round"
-            ctx.lineWidth = 1.5
-
-            const cx = width / 2
-            const cy = height / 2
-            const r = width / 2 - 1
-
-            if (statusGlyph.tone === "caution") {
-                // Alert triangle.
-                ctx.beginPath()
-                ctx.moveTo(cx, cy - r)
-                ctx.lineTo(cx + r, cy + r * 0.8)
-                ctx.lineTo(cx - r, cy + r * 0.8)
-                ctx.closePath()
-                ctx.stroke()
-                ctx.beginPath()
-                ctx.moveTo(cx, cy - r * 0.25)
-                ctx.lineTo(cx, cy + r * 0.25)
-                ctx.stroke()
-                return
-            }
-
-            ctx.beginPath()
-            ctx.arc(cx, cy, r, 0, 2 * Math.PI, false)
-            ctx.stroke()
-
-            if (statusGlyph.tone === "success") {
-                ctx.beginPath()
-                ctx.moveTo(cx - r * 0.4, cy + r * 0.05)
-                ctx.lineTo(cx - r * 0.1, cy + r * 0.38)
-                ctx.lineTo(cx + r * 0.42, cy - r * 0.28)
-                ctx.stroke()
-            } else if (statusGlyph.tone === "error") {
-                ctx.beginPath()
-                ctx.moveTo(cx - r * 0.35, cy - r * 0.35)
-                ctx.lineTo(cx + r * 0.35, cy + r * 0.35)
-                ctx.moveTo(cx + r * 0.35, cy - r * 0.35)
-                ctx.lineTo(cx - r * 0.35, cy + r * 0.35)
-                ctx.stroke()
-            } else {
-                // Info: the "i" stem and dot.
-                ctx.beginPath()
-                ctx.moveTo(cx, cy - r * 0.1)
-                ctx.lineTo(cx, cy + r * 0.45)
-                ctx.moveTo(cx, cy - r * 0.45)
-                ctx.lineTo(cx, cy - r * 0.4)
-                ctx.stroke()
-            }
-        }
+    // Escape dismisses the toast nearest the anchor -- the LAST entry, which
+    // NotificationManager::Enqueue already keeps as the timed toast when one is
+    // showing, else the newest standing one, so "last" and "most prominent" are
+    // the same card by construction.
+    //
+    // An ApplicationShortcut rather than a per-card Keys handler: this window
+    // carries Qt.WindowDoesNotAcceptFocus (above) and can never hold real OS
+    // keyboard focus, so nothing inside it would ever see a key event through
+    // the ordinary window-focus route. Qt.ApplicationShortcut instead fires
+    // whenever any window of THIS application -- in practice, the main window --
+    // is the focused one, which does not require this window to be.
+    function dismissFocusedToast() {
+        if (stack.count <= 0)
+            return
+        const last = stack.itemAtIndex(stack.count - 1)
+        if (last)
+            root.dismissRequested(last.model.sequence)
     }
 
-    component ActionPill: Rectangle {
-        id: pill
+    Shortcut {
+        sequence: "Escape"
+        context: Qt.ApplicationShortcut
+        enabled: root.visible
+        onActivated: root.dismissFocusedToast()
+    }
+
+    component ActionLabel: Item {
+        id: actionLabel
 
         property string label: ""
-        property bool primary: false
-        property color tone: ExoTheme.overlayAccent
-        property color ink: ExoTheme.accentInk
+        property color ink: ExoTheme.shellAccent
+        property int weight: Font.DemiBold
 
         signal activated()
 
-        implicitWidth: pillLabel.implicitWidth + 24
-        implicitHeight: 28
-        radius: 10
-        color: pill.primary ? pill.tone : "transparent"
-        border.width: pill.primary ? 0 : 1
-        border.color: Qt.alpha(pill.tone, 0.45)
+        implicitWidth: labelText.implicitWidth
+        // 5px of padding above and below a 14px line box: an invisible 24px
+        // hit target under a label that draws no background of its own.
+        implicitHeight: 24
 
         Accessible.role: Accessible.Button
-        Accessible.name: pill.label
-        Accessible.onPressAction: pill.activated()
+        Accessible.name: actionLabel.label
+        Accessible.onPressAction: actionLabel.activated()
 
         Text {
-            id: pillLabel
+            id: labelText
 
             anchors.centerIn: parent
-            text: pill.label
+            text: actionLabel.label
             textFormat: Text.PlainText
-            color: pill.primary ? pill.ink : ExoTheme.overlayInk
+            color: actionLabel.ink
             font {
                 family: ExoTheme.sansFamily
                 pixelSize: 13
-                weight: Font.DemiBold
+                weight: actionLabel.weight
             }
         }
 
         MouseArea {
             anchors.fill: parent
             cursorShape: Qt.PointingHandCursor
-            onClicked: pill.activated()
+            onClicked: actionLabel.activated()
         }
     }
 
-    Column {
+    ListView {
         id: stack
 
         x: root.shadowMargin
         y: root.shadowMargin
         width: root.cardWidth
+        height: contentHeight
         spacing: root.stackGap
+        interactive: false
+        boundsBehavior: Flickable.StopAtBounds
+        model: root.toasts
 
-        onHeightChanged: root.rebuildMask()
+        onContentHeightChanged: root.rebuildMask()
+        onCountChanged: root.rebuildMask()
 
-        Repeater {
-            id: repeater
+        // The other cards sliding into the gap a dismissed one leaves behind --
+        // the stack-reflow half of the motion contract. `displaced` needs no
+        // explicit from/to: the view already knows each item's before and
+        // after position and animates between them.
+        removeDisplaced: Transition {
+            NumberAnimation {
+                properties: "y"
+                duration: 160
+                easing.type: Easing.OutCubic
+            }
+        }
 
-            model: root.toasts
+        delegate: Item {
+            id: cardRoot
 
-            onCountChanged: root.rebuildMask()
+            required property var model
 
-            delegate: Rectangle {
+            width: card.width
+            height: card.height
+
+            // The wide, soft penumbra. Applied to this OUTER item so it
+            // shadows the inner card's already-composited (card + tight
+            // shadow) texture, giving the two layers their own visible depth
+            // rather than one blur pass standing in for both.
+            layer.enabled: true
+            layer.effect: MultiEffect {
+                shadowEnabled: true
+                shadowColor: root.shadowWideColor
+                shadowVerticalOffset: 8
+                shadowBlur: 1.0
+                blurMax: 24
+            }
+
+            // Resting state is fully opaque with no offset -- a delegate that
+            // is never added dynamically (the initial population of an
+            // already-populated model) must still render normally rather than
+            // depend on ListView.onAdd firing to reach opacity 1. Enter (below)
+            // explicitly forces the "before" state and animates out of it,
+            // rather than making that the resting default.
+            opacity: 1
+            // A Translate rather than animating `y` directly for the enter
+            // slide, because `y` is what the ListView itself sets to lay the
+            // stack out -- animating it here would fight that positioning
+            // instead of offsetting it.
+            transform: [
+                Translate { id: enterShift },
+                Translate { id: leaveShift }
+            ]
+
+            // Named rather than assigned inline to ListView.onAdd/onRemove:
+            // assigning an animation object directly as a signal handler's
+            // value is deprecated (Qt warns on it at runtime), so these are
+            // declared once here and started from the handler instead.
+            SequentialAnimation {
+                id: enterAnimation
+
+                PropertyAction { target: cardRoot; property: "opacity"; value: 0 }
+                PropertyAction { target: enterShift; property: "y"; value: 8 }
+                ParallelAnimation {
+                    NumberAnimation { target: cardRoot; property: "opacity"; to: 1; duration: 160; easing.type: Easing.OutCubic }
+                    NumberAnimation { target: enterShift; property: "y"; to: 0; duration: 160; easing.type: Easing.OutCubic }
+                }
+            }
+
+            SequentialAnimation {
+                id: leaveAnimation
+
+                PropertyAction { target: cardRoot; property: "ListView.delayRemove"; value: true }
+                ParallelAnimation {
+                    NumberAnimation { target: cardRoot; property: "opacity"; to: 0; duration: 120; easing.type: Easing.InCubic }
+                    NumberAnimation { target: leaveShift; property: "x"; to: 12; duration: 120; easing.type: Easing.InCubic }
+                }
+                PropertyAction { target: cardRoot; property: "ListView.delayRemove"; value: false }
+            }
+
+            ListView.onAdd: enterAnimation.start()
+            ListView.onRemove: leaveAnimation.start()
+
+            Rectangle {
                 id: card
 
-                required property var model
+                // Aliases `cardRoot.model` rather than declaring its own
+                // `required property`: under ComponentBehavior: Bound, that
+                // property belongs on the delegate ROOT (`cardRoot`), and every
+                // reference below keeps reading `card.model` unchanged.
+                property var model: cardRoot.model
 
-                readonly property color tone: ExoTheme.overlayAdvisoryTone(card.model.tone)
+                readonly property color tone: ExoTheme.shellAdvisoryTone(card.model.tone)
                 readonly property int actionCount: card.model.actionCount !== undefined ? card.model.actionCount : 0
-                // One action means the card itself is the action, marked with a
-                // chevron; two get named buttons in their own row.
+                // One action means the card itself is the action; two get
+                // their own plain-text buttons. There is no marker glyph for
+                // the single-action case -- the pointer cursor and the hover
+                // ground (below) are the whole affordance.
                 readonly property bool cardIsAction: card.actionCount === 1
                 // The countdown bar appears exactly when the toast leaves on its
                 // own — a standing toast reports a condition that still holds.
                 readonly property bool standing: card.model.standing === true
+                readonly property bool hovered: cardHover.hovered
 
                 width: root.cardWidth
-                height: 14 + Math.max(30, textBlock.height + (actionRow.visible ? 11 + actionRow.height : 0))
-                        + 14 + (card.standing ? 0 : 3)
-                radius: 14
-                color: ExoTheme.overlaySurfaceRaised
+                height: 2 * card.border.width + 2 * root.cardPadding + textBlock.height
+                        + (actionRow.visible ? 5 + actionRow.height : 0)
+                radius: ExoTheme.radiusMd
+                color: card.cardIsAction && card.hovered ? ExoTheme.shellSurfaceHover : ExoTheme.shellSurfaceRaised
                 border.width: 1
-                border.color: ExoTheme.overlayLineStrong
+                border.color: ExoTheme.shellLine
+
+                // The tight contact shadow, the layer nearer the card. See
+                // `cardRoot`'s own layer above for the wide one.
+                layer.enabled: true
+                layer.effect: MultiEffect {
+                    shadowEnabled: true
+                    shadowColor: root.shadowTightColor
+                    shadowVerticalOffset: 1
+                    shadowBlur: 0.6
+                    blurMax: 4
+                }
+
+                HoverHandler {
+                    id: cardHover
+                }
 
                 Accessible.role: Accessible.AlertMessage
                 Accessible.name: card.model.title
                 Accessible.description: card.model.body
 
-                Rectangle {
-                    id: chip
+                // The severity glyph, bare rather than inside a tinted,
+                // outlined box: the tone is carried by the glyph's own colour,
+                // which is what the notification hub does with the same four
+                // shapes. 14x14 (down from an earlier 16x16), its top aligned
+                // to the title's CAP height rather than its line box -- a box
+                // aligned glyph reads as sitting slightly too low next to a
+                // capital letter's actual top.
+                ExoGlyph {
+                    id: severityGlyph
 
-                    x: 16
-                    y: 14
-                    width: 30
-                    height: 30
-                    radius: 9
-                    // The tone tints, never floods: the card keeps its own
-                    // surface so a caution toast does not read as an alarm.
-                    color: Qt.alpha(card.tone, 0.13)
-                    border.width: 1
-                    border.color: Qt.alpha(card.tone, 0.45)
-
-                    StatusGlyph {
-                        anchors.centerIn: parent
-                        tone: card.model.tone
-                        stroke: ExoTheme.overlayAdvisoryToneText(card.model.tone)
-                    }
+                    x: 19
+                    y: root.glyphCapTop
+                    width: root.glyphSize
+                    height: root.glyphSize
+                    kind: card.model.tone === "success" ? ExoGlyph.Check
+                        : card.model.tone === "caution" ? ExoGlyph.Warning
+                        : card.model.tone === "error" ? ExoGlyph.Close
+                        : ExoGlyph.Info
+                    color: card.tone
                 }
 
                 Column {
                     id: textBlock
 
-                    x: 58
-                    // Centre the title+body block on the chip while it is
-                    // shorter than the chip; a wrapped body just starts at the
-                    // top padding.
-                    y: 14 + Math.max(0, (30 - height) / 2)
-                    // Clear the ✕ column, and the chevron column too when the
-                    // card carries one — otherwise the text wraps straight
-                    // through it.
-                    width: root.cardWidth - 58 - 15 - 18 - 6 - (card.cardIsAction ? 24 : 0)
+                    x: 44
+                    y: root.cardPadding
+                    // Clear the ✕ column on the right; the chevron column it
+                    // used to also clear is gone along with the chevron.
+                    width: root.cardWidth - 2 * card.border.width - 44 - (15 + 18 + 6)
                     spacing: 3
 
                     Text {
                         width: parent.width
                         text: card.model.title
                         textFormat: Text.PlainText
-                        color: ExoTheme.overlayInk
+                        color: ExoTheme.shellInk
                         elide: Text.ElideRight
                         font {
                             family: ExoTheme.sansFamily
-                            pixelSize: 14
+                            pixelSize: root.titleSize
                             weight: Font.DemiBold
                         }
                     }
 
                     Text {
+                        objectName: "toastBody"
                         width: parent.width
                         visible: text.length > 0
                         text: card.model.body !== undefined ? card.model.body : ""
                         textFormat: Text.PlainText
-                        color: ExoTheme.overlayInkSecondary
+                        color: ExoTheme.shellInkSecondary
                         // WrapAnywhere as the fallback, not WordWrap alone: a
                         // file path is one unbreakable token, and WordWrap has
                         // no legal break in it -- so the line simply grew past
@@ -320,10 +400,12 @@ Window {
                         // several lines. Any body that cannot wrap now breaks
                         // mid-token instead of overrunning.
                         wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                        // Grow-to-fit up to six lines; beyond that the last line
-                        // elides. The notification hub always keeps the full text.
-                        maximumLineCount: 6
+                        // Grow-to-fit up to three lines; beyond that the last
+                        // line elides. The notification hub always keeps the
+                        // full text.
+                        maximumLineCount: 3
                         elide: Text.ElideRight
+                        lineHeight: 1.4
                         font {
                             family: ExoTheme.sansFamily
                             pixelSize: 13
@@ -334,38 +416,29 @@ Window {
                 Row {
                     id: actionRow
 
-                    x: 58
-                    y: textBlock.y + textBlock.height + 11
-                    spacing: 8
+                    x: 44
+                    y: textBlock.y + textBlock.height + 5
+                    spacing: 16
                     visible: card.actionCount >= 2
 
-                    ActionPill {
+                    ActionLabel {
                         label: card.model.primaryLabel !== undefined ? card.model.primaryLabel : ""
-                        primary: true
-                        tone: card.tone
-                        ink: ExoTheme.overlayAdvisoryToneInk(card.model.tone)
+                        ink: ExoTheme.shellAccent
+                        weight: Font.DemiBold
                         onActivated: root.actionTriggered(card.model.sequence, card.model.primaryAction)
                     }
 
-                    ActionPill {
+                    ActionLabel {
                         label: card.model.secondaryLabel !== undefined ? card.model.secondaryLabel : ""
-                        tone: card.tone
+                        ink: ExoTheme.shellInkSecondary
+                        weight: Font.Medium
                         onActivated: root.actionTriggered(card.model.sequence, card.model.secondaryAction)
                     }
                 }
 
-                // Single-action affordance: the whole card is the target, the
-                // chevron only marks it.
-                ExoChevron {
-                    x: root.cardWidth - 15 - 18 - 6 - 18
-                    y: (card.height - (card.standing ? 0 : 3) - height) / 2
-                    width: 14
-                    height: 14
-                    visible: card.cardIsAction
-                    direction: 270
-                    tone: ExoTheme.overlayInkSecondary
-                }
-
+                // Single-action affordance: the whole card is the target. No
+                // marker glyph -- the pointer cursor and `card.color`'s own
+                // hover step (above) are the whole affordance.
                 MouseArea {
                     anchors.fill: parent
                     enabled: card.cardIsAction
@@ -373,32 +446,48 @@ Window {
                     onClicked: root.actionTriggered(card.model.sequence, card.model.primaryAction)
                 }
 
-                // The dismiss affordance. It was a bare `Text` with no `text` at
-                // all: the hit target, the hover colour and the accessible name
-                // were all there and correct, and the glyph itself was simply
-                // never drawn — an 18 px hole in the corner of every desktop
-                // toast that only a user who guessed could click. Drawn with the
-                // shared ExoGlyph, the same treatment the hub's own dismiss
-                // uses, so the two surfaces cannot drift; the 18 px target is
-                // unchanged.
+                // The dismiss affordance. Empty at rest -- dismissal is chrome,
+                // not an action, and a quiet card should stay quiet -- and
+                // drawn only while the card is hovered. The 18px target keeps
+                // its fixed position either way, so it never has to be found
+                // in a new place the moment it appears.
+                //
+                // "...or keyboard focus" per the design is not reachable here:
+                // this window can never hold real OS focus (see the Escape
+                // Shortcut above), so hover is the only signal this surface
+                // can actually observe.
                 Item {
                     id: dismiss
 
+                    objectName: "toastDismiss"
                     x: root.cardWidth - 15 - 18
-                    y: 14
+                    y: root.cardPadding
                     width: 18
                     height: 18
+                    visible: card.hovered
 
                     Accessible.role: Accessible.Button
                     Accessible.name: qsTr("Dismiss notification")
                     Accessible.onPressAction: root.dismissRequested(card.model.sequence)
+
+                    // A round ground one rung up, only while the pointer is on
+                    // the glyph itself -- what makes an 18px target feel like
+                    // a 24px one without spending 24px of layout on it.
+                    Rectangle {
+                        anchors.centerIn: parent
+                        width: 24
+                        height: 24
+                        radius: 12
+                        color: ExoTheme.shellSurfaceHover
+                        visible: dismissArea.containsMouse
+                    }
 
                     ExoGlyph {
                         anchors.centerIn: parent
                         width: 12
                         height: 12
                         kind: ExoGlyph.Close
-                        color: dismissArea.containsMouse ? ExoTheme.overlayInk : ExoTheme.overlayInkDim
+                        color: dismissArea.containsMouse ? ExoTheme.shellInk : ExoTheme.shellInkDim
                     }
 
                     MouseArea {
@@ -417,8 +506,8 @@ Window {
                 // not a 3 px Rectangle laid over the bottom edge. A Rectangle
                 // clamps its corner radius to half its shortest side, so at 3 px
                 // tall it can round its own corners by 1.5 px against the card's
-                // 14 — while the card's bottom arc cuts about 5 px inwards over
-                // exactly those three rows. The bar's square ends therefore hung
+                // radius -- while the card's bottom arc cuts inwards over
+                // exactly those rows. The bar's square ends therefore hung
                 // outside the card's rounded corners, which is the broken edge
                 // this replaces.
                 //
@@ -433,7 +522,11 @@ Window {
 
                     x: 0
                     y: card.height - countdown.height
-                    height: 3
+                    // A hairline, and dimmed: at 3 px in the tone at 0.6 it
+                    // was the brightest thing on the card and read as a
+                    // progress bar for work in flight rather than as the dwell
+                    // quietly running out.
+                    height: 2
                     width: card.width * Math.max(0, Math.min(1, card.model.remainingFraction !== undefined
                                                                 ? card.model.remainingFraction : 0))
                     visible: !card.standing
@@ -448,7 +541,7 @@ Window {
                         height: card.height
 
                         ShapePath {
-                            fillColor: Qt.alpha(card.tone, 0.6)
+                            fillColor: Qt.alpha(card.tone, 0.35)
                             strokeWidth: -1
 
                             PathRectangle {
@@ -460,7 +553,7 @@ Window {
                     }
 
                     // The model recomputes this ten times a second, which on a
-                    // 372 px card is a visible step per update rather than a
+                    // 340 px card is a visible step per update rather than a
                     // moving bar. Interpolating over exactly one tick makes it
                     // continuous: each new value arrives as the previous
                     // animation lands, and a late tick is absorbed instead of

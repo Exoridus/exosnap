@@ -643,6 +643,50 @@ TEST_F(SettingsAdapterTest, UnknownAppearanceOrAccentFallsBackToTheShippedDefaul
     EXPECT_TRUE(tokens.accent().isValid());
 }
 
+// The desktop notification toast reads this family, and only this family, so
+// Windows and ExoSnap are free to disagree about which is dark and which is
+// light -- see QuickThemeTokens.h's "Shell-following surfaces" section.
+TEST_F(SettingsAdapterTest, ShellAppearanceResolvesIndependentlyOfTheApplicationAppearance) {
+    QuickThemeTokens tokens;
+    tokens.setAppearance(QStringLiteral("dark"), QStringLiteral("aqua"));
+    tokens.setShellAppearance(QStringLiteral("light"));
+
+    // The application's own family is still Dark...
+    EXPECT_TRUE(tokens.dark());
+    EXPECT_EQ(tokens.background(), QColor(QStringLiteral("#0E0E10")));
+    // ...while the shell family is Light, resolved from a completely separate
+    // call, not derived from `dark()`.
+    EXPECT_FALSE(tokens.shellDark());
+    EXPECT_NE(tokens.shellSurfaceRaised(), tokens.surfaceRaised())
+        << "the shell family must not fall back to reading the application's own tokens";
+    EXPECT_TRUE(tokens.shellSurfaceRaised().isValid());
+    EXPECT_TRUE(tokens.shellLine().isValid());
+    EXPECT_TRUE(tokens.shellInk().isValid());
+}
+
+// `accent_id_` is the one thing Windows has no opinion about: it stays the
+// application's own selection, and only which of its two resolved values
+// (dark/light) is used follows the shell's kind.
+TEST_F(SettingsAdapterTest, ShellAccentFollowsTheShellsKindButKeepsTheApplicationsAccentChoice) {
+    QuickThemeTokens tokens;
+    tokens.setAppearance(QStringLiteral("dark"), QStringLiteral("aqua"));
+    tokens.setShellAppearance(QStringLiteral("dark"));
+    const QColor dark_shell_accent = tokens.shellAccent();
+
+    // Same accent selection, but the SHELL switches to Light: the resolved
+    // value follows, because it is the shell's kind that picks dark vs. light.
+    tokens.setShellAppearance(QStringLiteral("light"));
+    const QColor light_shell_accent = tokens.shellAccent();
+    EXPECT_NE(light_shell_accent, dark_shell_accent);
+
+    // Re-resolving the shell after the APPLICATION's accent changes (not its
+    // appearance) picks up the new accent -- `setShellAppearance()` must not
+    // cache a stale one from the call that set it up.
+    tokens.setAppearance(QStringLiteral("dark"), QStringLiteral("sky"));
+    tokens.setShellAppearance(QStringLiteral("light"));
+    EXPECT_NE(tokens.shellAccent(), light_shell_accent) << "aqua and sky must not resolve to the same Light value";
+}
+
 TEST_F(SettingsAdapterTest, EveryAppearanceAccentPairResolvesEveryToken) {
     for (const QVariant& appearance_entry : SettingsAdapter{}.appearanceOptions()) {
         const QString appearance = appearance_entry.toMap().value(QStringLiteral("value")).toString();
