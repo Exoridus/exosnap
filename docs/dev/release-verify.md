@@ -102,115 +102,272 @@ A `FAIL` is a finding, so `run` and `resume` leave it alone — re-running the s
 never quietly erase one. `retry` is the explicit way back, and it drops the old
 evidence link so the report never pairs a new verdict with an old artefact.
 
-## Human gates
+## The human layer
 
-A gate prints five things, in this order, and none may be omitted:
+Eleven scenarios can reach a person. Most of them no longer do.
+
+The rc19 campaign found zero product defects and four runner defects, all in this
+layer, and three of the four were consequences of one thing: gates that install,
+update or reconfigure ran on the developer's real machine, against their real
+configuration directory, their real installed product and the machine-wide
+single-instance mutex. The accept gate removed the older build the decline gate
+needed; a killed soak left a recovery manifest that both MSI gates refused to start
+against; a declined update left the updater holding `exosnap-updater.exe`, so the next
+launch could not stage its own. The fourth was the prompt itself, and it is described
+under *The operator protocol* below.
+
+So the layer is now built from four mechanisms, in this order of preference:
+
+1. **A clean machine.** The install, update and Chocolatey gates run inside **Windows
+   Sandbox**. Every run starts from nothing, the logon command already holds an
+   administrative token so `msiexec` raises no prompt, and the accept gate cannot
+   remove a starting point because the machine is discarded afterwards.
+2. **A named third-party tool**, called through one seam, for machine state Windows
+   exposes no documented setter for. The tool is never on the release path and the
+   runner never learns *how*: it says what it wants and reads the result back through
+   `envctl`, which is the actual evidence either way.
+3. **Fault injection at the exact call site**, for one state that only a Secure
+   Desktop click could otherwise produce.
+4. **A person**, for the two things nothing else can read.
+
+### What still asks a person, and why
+
+| Scenario | Asked when |
+|---|---|
+| `REL-PRESENT-002` | the runner is not elevated; an elevated one launches the child itself |
+| `REL-CAP-FSE-001` | `probe_fullscreen` is not built (`-DEXOSNAP_BUILD_PROBES=ON`) |
+| `REL-CAP-STALL-001` | `probe_stall_window` is not built |
+| `REL-AUD-SILENCE-001` | no virtual cable endpoint, or no SoundVolumeView to route to it |
+| `REL-AUD-FORMAT-001` | no SoundVolumeView |
+| `REL-AUD-DEGRADE-001` | not elevated, or no device instance id resolves |
+| `REL-UPD-MSI-DECLINE-001` | no sandbox and an updater without the fault seam |
+| `REL-UPD-MSI-001` | no sandbox and an unelevated runner |
+| `REL-PKG-CHOCO-001` | no sandbox |
+| `REL-VIS-OVERLAY-001` | **always** -- colour on a capture-excluded overlay |
+| `REL-VIS-NOTIFY-001` | **always** -- the severity tint of a toast |
+
+The last two are the sight checks and they are the point of the whole arrangement.
+`WDA_EXCLUDEFROMCAPTURE` defeats screenshots, screen recording and `PrintWindow` by
+design, and the visual harness only grabs the scene graph, which shows correct alpha
+even when the window composes wrongly on screen. What UI Automation *can* say is that
+the window is really there with really that text -- asserted separately, so
+"`overlay.snapshot` says five overlays are up" and "five overlays are up" stopped being
+the same sentence. What it cannot say is what colour anything is.
+
+### The operator protocol
+
+One line per step. Two action forms, and each says who acts next:
 
 ```
-REL-AUD-DEGRADE-001  Remove the recorded audio endpoint, then put it back
+REL-AUD-FORMAT-001  In Sound settings, set the device bound to audio.render.44100-test
+                    to 44100 Hz and make it the default playback device.
+  [Enter] wenn erledigt   (? = details, s = skip, x = abort)
+```
 
-Why this is manual:
-  A real endpoint loss is a physical or driver-level event. ...
+`[Enter] startet jetzt` means the runner acts on Enter and nothing has happened yet.
+`[Enter] wenn erledigt` means the operator has already acted and the runner is about to
+verify. The line they replaced was `[y] yes [n] no`, which meant the first for the MSI
+and Chocolatey gates and the second for the present, audio and visual gates -- one
+keystroke, two opposite meanings, decided by which screen of instructions had scrolled
+past. There is no third action form, and a test refuses one.
 
-Exact action:
-  1. A recording is running RIGHT NOW with system audio enabled.
-  2. Unplug the playback device bound to audio.render.normal.
+Everything the gate used to print before the prompt -- why a person is needed, what to
+expect, how this will be verified -- is behind `?`. It is the same text; what changed is
+that it no longer separates the question from its meaning by a screenful. An
+unrecognised answer is asked again and decides nothing: a typo used to end the gate as
+"aborted".
+
+A sight check is spelled `[j] richtig  [n] falsch`, deliberately not with Enter, so the
+reflex that answers an action prompt cannot pass a surface nobody looked at. `n` asks
+for a one-line reason *there*, while the screen still looks the way it did, and that
+reason reaches the report.
+
+The whole sequence is printed once before the first gate, in the order it will happen,
+with the dependencies named:
+
+```
+== Sequence
+   1. automated   REL-PRESENT-001  Unelevated present diagnostics ...
+   2. you         REL-PRESENT-002  Elevated present diagnostics ...
+   3. you         REL-CAP-FSE-001  True exclusive fullscreen ...  (after REL-PRESENT-002)
   ...
-
-Expected observable consequence:
-  The recording does NOT stop. ...
-
-How this runner will verify it:
-  Polls pipeline.snapshot throughout and requires ...
+  2 of 26 step(s) may ask you something.
 ```
 
-Then it waits, **and then it checks for itself**. A gate whose `Verify` block returns
-false is a `FAIL` even when the operator typed `done` — an operator can be mistaken
-about what they just did, and a gate that trusts the answer instead of the machine is
-a checkbox with extra steps. A gate that declares no `Verify` block at all is
-`UNVERIFIED`, not `PASS`.
+The dependencies are `DependsOn` in the catalog and are resolved by a stable
+topological sort, so `list` and a run read the same way and a cycle is reported rather
+than silently broken. Three of them each cost a campaign a FAIL:
 
-The unanswerable case is checked **before** the instructions are printed, so nobody
-performs a two-minute physical action that cannot be confirmed afterwards.
+- `REL-CAP-FSE-001` after `REL-PRESENT-002`, and sharing its **elevated session**.
+  Present diagnostics need elevation and the single-instance guard is machine-wide, so
+  the second instance FSE used to launch was swallowed and the gate reported "could not
+  connect to the Live Verify endpoint" for a healthy product. The shared instance is
+  released the moment the next scenario does not want it.
+- `REL-UPD-MSI-001` after `REL-UPD-MSI-DECLINE-001`, and both closing the updater
+  afterwards.
+- `REL-PKG-CHOCO-001` after both, because its rehearsal reinstalls the release MSI.
+
+### The gate contract
+
+A gate prints its line, waits, **and then checks for itself**. A gate whose `Verify`
+block returns false is a `FAIL` even when the operator pressed Enter -- an operator can
+be mistaken about what they just did, and a gate that trusts the keystroke instead of
+the machine is a checkbox with extra steps. A gate that declares no `Verify` block at
+all is `UNVERIFIED`, not `PASS`.
+
+The unanswerable case is checked **before** anything is printed, so nobody performs a
+two-minute physical action that cannot be confirmed afterwards.
 
 An automation can be the one that acts. `-Attest REL-XXX-000` says the caller has
-already performed that gate's action: the instructions are printed as usual, the
-question is skipped, and the `Verify` block runs exactly as it would have. It is
-not a way to pass a gate -- a gate that verifies false still fails, and one with no
-`Verify` block is still `UNVERIFIED`. What it changes is who is allowed to have
-acted, in a session with no terminal to answer from. Attested results say so in
-their message, so a reader can tell them from the ones a person stood in front of.
+already performed that gate's action: the question is skipped and the `Verify` block
+runs exactly as it would have. It is not a way to pass a gate. What it cannot buy is a
+sight check -- the question there *is* the verdict, and no caller can perform someone
+else's looking, so an attested sight check is `DEFERRED`.
 
-Two more gates take a tool the runner deliberately does not contain.
-`REL-UPD-PORTABLE-001` needs something to update FROM -- the bound artifact is the
-newest release the feed offers, so it can only ever report up to date -- and reads
-`EXOSNAP_UPDATE_FROM`, an older official `exosnap.exe`; without it the scenario is
-`UNAVAILABLE` rather than a pass over a check that never ran.
+A `Verify` block may name its own terminal state by returning `Result` alongside `Ok`.
+`UNVERIFIED`, `UNAVAILABLE` and `DEFERRED` then travel through the gate as themselves
+instead of collapsing into `FAIL`, which is the same distinction rules 1 and 3 rest on.
+`PASS` and `FAIL` keep travelling through `Ok`.
+
+A `Verify` block never reaches for the runner's session state directly either. It asks
+the context (`Get-ReleaseGateConnection -Context $context`), which re-establishes a
+session that went away and reports one that cannot be re-established as a verdict
+rather than an unhandled exception. Gates whose subject was the *previous* process
+record the session id they prepared in `$Gate.State` and report `UNVERIFIED` when the
+connection comes back from a different one. A gate handed an already-open connection
+(the shared elevated session) reuses it: the endpoint serves one client at a time, so
+reconnecting would be the runner waiting on itself.
+
+Human gates sit **inside** the environment transaction. An operator who reports a
+defect, stops, or walks away still leaves the machine restored.
+
+## External tools
+
+Every gate that stopped asking a person asks a tool instead, and the tools are
+deliberately not ours: an oracle we wrote would answer with the same ETW session, the
+same WASAPI call and the same window handle the product used, and agreeing with itself
+is not evidence.
+
+| Tool | Used for | Named by | Where to get it |
+|---|---|---|---|
+| Windows Sandbox | the install, update and Chocolatey gates | `EXOSNAP_SANDBOX_EXE` | `Enable-WindowsOptionalFeature -Online -FeatureName Containers-DisposableClientVM` (elevated, reboot) |
+| Intel PresentMon | the independent present-mode oracle | `EXOSNAP_PRESENTMON` | <https://github.com/GameTechDev/PresentMon/releases> |
+| NirSoft SoundVolumeView | the default endpoint and its shared-mode format | `EXOSNAP_SOUNDVOLUMEVIEW` | <https://www.nirsoft.net/utils/sound_volume_view.html> |
+| VB-CABLE | a render endpoint nothing is routed to | `EXOSNAP_SILENT_AUDIO_ENDPOINT` (name pattern) | <https://vb-audio.com/Cable/> |
+| `pnputil` | disabling the audio device for the degradation gate | `EXOSNAP_PNPUTIL` | ships with Windows |
+| UI Automation | reading the capture-excluded overlays and toasts | -- | `UIAutomationClient`, part of the Windows desktop runtime |
+
+Three rules hold for all of them:
+
+1. **A missing tool is never green.** It produces `precondition missing: ...` with the
+   exact way to install it, and the scenario reports `UNAVAILABLE` -- an unmet
+   requirement is not a failure, and it is not a pass either. A report can be searched
+   for `precondition missing` to get the exact list of what somebody has to install
+   before the next campaign.
+2. **Nothing is discovered by guessing.** Each tool has one environment variable that
+   names it and one documented default location. A tool found by neither is absent,
+   however many similarly named binaries are on `PATH`.
+3. **Every invocation goes through one seam** (`Invoke-ReleaseTool`), which is what
+   lets the whole human layer be exercised without a machine action.
+
+Two gates keep the older, caller-named tool arrangement, and it works the same way:
+`REL-UPD-PORTABLE-001` and the MSI gates read `EXOSNAP_UPDATE_FROM` (an older official
+`exosnap.exe`) or `EXOSNAP_UPDATE_FROM_MSI` (its installer, for the sandbox);
 `REL-AUD-DEGRADE-001` accepts `EXOSNAP_ENDPOINT_VISIBILITY_TOOL`, called as
-`<tool> set-visibility <endpointId> 0|1`, and then runs the outage on a timer while
-its own assertions poll. Making an endpoint vanish without unplugging it needs an
-undocumented interface; naming a tool keeps that mechanism outside the release path
-while still letting the gate run itself. Without the variable it stays the operator
-gate it has always been, and the product assertions are identical either way.
+`<tool> set-visibility <endpointId> 0|1`. `REL-AUD-DEGRADE-001` also takes
+`EXOSNAP_AUDIO_DEVICE_INSTANCE_ID`, which short-circuits the friendly-name match:
+a machine with two identically named headsets cannot be resolved by name, and this
+refuses to guess rather than disabling the wrong device.
 
-A `Verify` block may name its own terminal state by returning `Result` alongside
-`Ok`. `UNVERIFIED`, `UNAVAILABLE` and `DEFERRED` then travel through the gate as
-themselves instead of collapsing into `FAIL`, which is the same distinction rules 1
-and 3 rest on: a gate whose evidence was never produced has found no defect. `PASS`
-and `FAIL` keep travelling through `Ok`, so a block that names nothing is unaffected.
+### Why the audio properties are not envctl transactions
 
-A `Verify` block never reaches for the runner's session state directly either. It
-asks the context (`Get-ReleaseGateConnection -Context $context`), which
-re-establishes a session that went away — and reports one that cannot be
-re-established as a verdict rather than an unhandled exception. Re-establishing is
-not always enough: `EnsureSession` *launches* a fresh application when the old
-process is gone, and a fresh one has an empty notification hub, no overlays on
-screen and no recording running. Gates whose subject was the previous process
-therefore record the session id they prepared in `$Gate.State` and report
-`UNVERIFIED` when the connection comes back from a different one.
+`device-format` and `default-roles` are `ENV_HUMAN` in the envctl catalogue, and that
+is a decision rather than an omission: the only mechanisms Windows offers are the
+Settings drop-down and the undocumented `IPolicyConfig`, and envctl refuses to write
+either by policy. Using a private COM interface to make a test more convenient would
+put an unsupported mechanism on the release path.
 
-`REL-PKG-CHOCO-001` is the one gate that installs software, so it is opt-in and it
-raises exactly one prompt. `choco` and `msiexec /qn` need an elevated token — an
-unelevated silent `msiexec` does not even ask, it fails with 1603 and "no credential
-elevation is possible" — so the whole rehearsal runs inside a single elevated worker
-(`scripts/lib/choco-rehearsal-worker.ps1`) that packs a rewritten copy of
-`packaging/chocolatey`, removes the installed ExoSnap, installs the package,
-uninstalls it and reinstalls the release MSI. The tracked package is never modified:
-the copy's `url64bit`/`checksum64` are pointed at the local MSI, because the tracked
-checksum describes a file that does not exist until the release is published. The
-worker writes a JSON result plus per-step logs into the campaign's evidence
-directory, and the unelevated runner turns that into the verdict — a step the worker
-never reached is `UNVERIFIED`, never a pass.
+So the *mechanism* lives outside the release path in a named third-party tool, and the
+*evidence* is unchanged: envctl reads the endpoint's shared-mode format and its default
+render role back, and the gate refuses to continue until both actually read what the
+scenario needs. Whatever the gate changed it puts back, from a `finally` block.
 
-Three properties of that gate are worth knowing before running it:
+`REL-AUD-FORMAT-001` is the gate this fixed. It used to hand the operator a four-part
+text block whose third part was "make it the DEFAULT playback device" -- a machine-state
+precondition, asked of a person, and then recorded as a product `FAIL` when they set
+the format and not the role.
 
-- **The reinstall runs from a `finally` block**, whatever happened before it, so a
-  rehearsal that threw halfway does not leave the machine without ExoSnap — every
-  later gate expects the release still installed, and the verdict says whether the
-  reinstall ran.
+## Windows Sandbox
+
+`scripts/lib/ReleaseSandbox.ps1` stages a worker plus the files it needs into a
+per-campaign directory, writes a `.wsb` that maps that directory read-write and
+PowerShell 7 read-only, and waits for the worker's own marker file. The staging
+directory is copied rather than mapped from the repository: a gate that could write
+into the working tree is a gate that can change the thing it is verifying. PowerShell 7
+is mapped rather than installed because Sandbox ships Windows PowerShell 5.1 only, and
+the alternatives were a second 5.1 spelling of the control-channel client or
+downloading an installer inside a machine whose whole value is a known starting state.
+
+`WindowsSandbox.exe` returns as soon as the virtual machine is asked for, not when the
+work inside finishes, so completion is read from the worker's marker. That is the only
+honest signal available: a sandbox that crashed, was closed by hand or never started
+leaves no marker, and the gate reports `UNVERIFIED` for it rather than reading a
+partial result as a verdict. A step the worker never reached is `UNVERIFIED`; a step
+that failed is a `FAIL`; only a complete set of passing steps is a `PASS`.
+
+Two workers run in there:
+
+- `sandbox-update-worker.ps1` installs an older release from `EXOSNAP_UPDATE_FROM_MSI`,
+  selects the Preview channel, declines an update (through the fault seam), asserts
+  `failureCase uacDeclined` with the installation intact, **closes the updater**, and
+  then accepts an update and asserts the version changed. Both MSI gates read that one
+  result document, because both describe one sequence.
+- `sandbox-choco-worker.ps1` installs the release MSI, runs the product once so the
+  user configuration directory exists to be judged against, bootstraps Chocolatey and
+  then calls the existing `choco-rehearsal-worker.ps1` unchanged.
+
+`REL-PKG-CHOCO-001` on a real machine is unchanged and still available: it is the one
+gate that installs software, it raises exactly one prompt, and the reinstall runs from
+a `finally` block so a rehearsal that threw halfway does not leave the machine without
+ExoSnap. Three properties of it are worth knowing before running it that way:
+
 - **`vcredist140` is not restored.** It is a declared Chocolatey dependency of the
-  package, so the install can install or upgrade the Visual C++ redistributable;
-  the version is recorded before and after and the verdict names the change.
-  Downgrading a machine's C++ runtime to undo it would be worse than the change.
-- **The empty parent directory and registry key are recorded, not asserted.** The
-  MSI declares no owner for `C:\Program Files\Codexo` or `HKLM:\SOFTWARE\Codexo`,
-  so their removal is not something the package promises; `\ExoSnap`, the ARP
-  entry, the shortcut and the Chocolatey lib directory are strict.
+  package, so the install can install or upgrade the Visual C++ redistributable; the
+  version is recorded before and after and the verdict names the change. Downgrading a
+  machine's C++ runtime to undo it would be worse than the change.
+- **The empty parent directory and registry key are recorded, not asserted.** The MSI
+  declares no owner for the `Codexo` parent directory or its parent registry key; the
+  `ExoSnap` directory, the ARP entry, the shortcut and the Chocolatey lib directory are
+  strict.
+- **The tracked package is never modified.** The rehearsal packs a copy whose
+  `url64bit`/`checksum64` point at the local MSI, because the tracked checksum
+  describes a file that does not exist until the release is published.
 
-The MSI is not bound by `prepare` (the campaign binds the portable `exosnap.exe`
-only): the gate looks for a sibling `ExoSnap-<version>-windows-x64.msi` beside the
-artifact, requires its Property table to declare ProductName `ExoSnap` by
-Manufacturer `Codexo`, compares it against a `.msi.sha256` sidecar when one is
-there, and reports `UNAVAILABLE` when it finds none or several.
-`EXOSNAP_RELEASE_MSI` names one explicitly.
+The MSI is not bound by `prepare` (the campaign binds the portable `exosnap.exe` only):
+the gate looks for a sibling `ExoSnap-<version>-windows-x64.msi` beside the artifact,
+requires its Property table to declare ProductName `ExoSnap` by Manufacturer `Codexo`,
+compares it against a `.msi.sha256` sidecar when one is there, and reports `UNAVAILABLE`
+when it finds none or several. `EXOSNAP_RELEASE_MSI` names one explicitly.
 
-Two gates need a probe binary rather than a person, and say so when it is missing:
-`probe_stall_window` (`-DEXOSNAP_BUILD_PROBES=ON`) owns a window, shows it without
-taking focus and stops presenting on its own timer. Without it, `REL-CAP-STALL-001`
-falls back to the operator gate and `REL-CAP-QUIET-001` reports `UNAVAILABLE`.
+## The declined elevation prompt
 
-Human gates sit **inside** the environment transaction. An operator who answers FAIL,
-aborts, or walks away still leaves the machine restored.
+`EXOSNAP_UPDATER_FAULT=uacDeclined` makes the updater's elevation call behave as if the
+prompt had been declined: the same `ERROR_CANCELLED`, at the same call site, producing
+the same `FailureCase::UacDeclined` and the same C1 re-handoff. The product assertion
+is unchanged -- `failureCase uacDeclined` with the installation intact, and
+`strandedInBackup` is a `FAIL`.
+
+The seam can only turn a step into a failure the product already models. It cannot skip
+a verification, relax a signature check, or make an install succeed; a fault that could
+make something succeed would be a security defect regardless of how it is gated. It is
+armed for exactly one child process and read at the call site rather than cached, so the
+accept gate that follows cannot inherit a decline it never asked for.
+
+Either way the updater is **closed** afterwards. A declined or failed update leaves it
+running with its result on screen, which is correct product behaviour and wrong for the
+next gate: the running process holds `exosnap-updater.exe`, so the next update cannot
+stage its own over it. That is the whole of the rc19 "Failed to stage updater file"
+finding, which was reported as an MSI failure.
 
 ## The environment transaction
 
@@ -370,6 +527,10 @@ window-capture stall threshold is 10 s, so waiting up to 30 s for the stall
 consequence is measuring the product, not guessing at a schedule. Likewise a recording
 runs for its configured duration because that is what makes a file with content in it.
 
+Every bounded poll takes its deadline from `Get-ReleaseGateDeadline`, in one place, so
+the dry run can shorten it. That changes only how long a loop is willing to wait for a
+machine that is not there; the loop, and what it polls for, are the shipped ones.
+
 ## Driving the artifact: the control channel, never `--auto-record`
 
 Anything that has to record against the release under test goes through the Live
@@ -412,3 +573,28 @@ setter that claims it worked while the read-back disagrees, an original device t
 vanished mid-restore, a journal left dirty by a killed runner — cannot be produced on
 demand by a real display or a real audio endpoint. Nothing in the suite touches the
 machine's configuration.
+
+### The dry run
+
+A gate that has never run does not get shown to a person. So every gate that can ask
+one is exercised in the suite **RED once and GREEN once**, against a simulated operator
+and simulated tools: the shipped scenario bodies out of `Get-ReleaseScenarioCatalog`,
+the shipped human-gate contract out of `release-verify.ps1`, and a scripted control
+channel in place of the product. A harness that tested its own transcription of a gate
+would prove nothing about the gate.
+
+Nothing in it launches a process, opens a pipe, starts a virtual machine, reads a real
+audio endpoint or writes a registry value. Four seams make that possible, and they
+exist in the runner for this reason:
+
+| Seam | Replaces |
+|---|---|
+| `Set-ReleaseOperatorReader` | the console |
+| `Set-ReleaseToolInvoker` | PresentMon, SoundVolumeView, pnputil, `WindowsSandbox.exe`, UI Automation |
+| `Set-ReleaseToolAvailability` | which of those exist on this machine |
+| `Get-ReleaseGateDeadline` | how long a bounded poll waits for a machine that is not there |
+
+The sandbox path is exercised for real up to the virtual machine itself: the staging
+copy, the `.wsb`, the mapped-folder paths and the marker-plus-result transport all run,
+and only the launcher is simulated, by one that writes what the worker would have
+written.

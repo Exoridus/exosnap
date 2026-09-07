@@ -7,6 +7,8 @@
 
 #include "UpdaterWorker.h"
 
+#include "UpdaterFaultInjection.h"
+
 // clang-format off
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -860,6 +862,16 @@ bool UpdaterWorker::runInstallMsi() {
             emit failed(FailureCase::MsiFailed, relock_error); // C2 -- refuse to elevate an unverified package
             return false;
         }
+    }
+
+    // The verification seam, at the exact call site it stands in for. It can only
+    // produce the failure a declined prompt produces -- same FailureCase, same C1
+    // recovery -- and is read here rather than earlier so it applies to this
+    // elevation attempt and not to a retry that was never armed. See
+    // UpdaterFaultInjection.h for why the seam is limited to failures.
+    if (CurrentInjectedFault() == InjectedFault::UacDeclined) {
+        emit failed(FailureCase::UacDeclined, QString()); // C1 -- Retry re-handoffs
+        return false;
     }
 
     const std::wstring params = BuildMsiexecParams(package_path_, args_.verify_reinstall);

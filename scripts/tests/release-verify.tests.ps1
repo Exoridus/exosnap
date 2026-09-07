@@ -1054,39 +1054,45 @@ Test-Case 'a scenario reads snapshot fields through the safe accessor, never wit
         'read updater/state fields with Get-ReleaseSnapshotValue: $($state.installState) throws under StrictMode'
 }
 
-Test-Case 'a mid-scenario question defers instead of asking when nobody can answer' {
+Test-Case 'a sight-check judgement defers instead of asking when nobody can answer' {
     # Read-Host asked anyway under -NonInteractive, and under a redirected stdin it
     # got an empty string forever and re-asked -- an infinite loop, with the
-    # scenario's Windows-appearance change still applied. Read-OperatorAnswer is
-    # replaced here so a real Read-Host can never be reached: if the rules let the
-    # call through, the test fails loudly instead of hanging the suite.
+    # scenario's Windows-appearance change still applied. The operator reader is
+    # replaced here so a real console read can never be reached: if the rules let
+    # the call through, the test fails loudly instead of hanging the suite.
     function Write-Step { param($Text) $script:LastStep = $Text }
     function Expand-ListArgument { param($Values) return @($Values) }
-    function Read-OperatorAnswer { param($Question) throw 'the terminal must not be asked here' }
-    . ([scriptblock]::Create((Get-ReleaseVerifyFunctionText -Name 'Read-ReleaseOperatorAnswer')))
+    # No simulated reader is installed on purpose: an installed one IS somebody to
+    # ask (see Test-ReleaseOperatorPresent), and what this pins is the case where
+    # there is nobody. A real console read is therefore unreachable only if the
+    # rules hold, which is the assertion.
+    . (Join-Path $scriptRoot 'lib/ReleaseOperator.ps1')
+    . ([scriptblock]::Create((Get-ReleaseVerifyFunctionText -Name 'Read-ReleaseOperatorJudgement')))
+    try {
+        $NonInteractive = $true
+        $Attest = @()
+        Assert-Equal 'skip' (Read-ReleaseOperatorJudgement -ScenarioId 'REL-VIS-OVERLAY-001' -Line 'looks right?').Answer `
+            '-NonInteractive must defer the judgement, not ask it'
 
-    $NonInteractive = $true
-    $Attest = @()
-    Assert-Equal 'skip' (Read-ReleaseOperatorAnswer -ScenarioId 'REL-VIS-OVERLAY-001' -Question 'looks right?') `
-        '-NonInteractive must defer the question, not ask it'
+        $NonInteractive = $false
+        $Attest = @('REL-VIS-OVERLAY-001')
+        # `skip`, never an answer: -Attest says the CALLER performed an action and
+        # leaves the verdict to a Verify block. Here the question IS the verdict --
+        # whether something LOOKS right -- and attesting it would manufacture a
+        # pass for a surface nobody saw.
+        Assert-Equal 'skip' (Read-ReleaseOperatorJudgement -ScenarioId 'REL-VIS-OVERLAY-001' -Line 'looks right?').Answer `
+            'an attested visual judgement is DEFERRED, never a pass'
 
-    $NonInteractive = $false
-    $Attest = @('REL-VIS-OVERLAY-001')
-    # `skip`, never `yes`: -Attest says the CALLER performed an action and leaves the
-    # verdict to a Verify block. Here the question IS the verdict -- whether
-    # something LOOKS right -- and attesting it would manufacture a pass for a
-    # surface nobody saw.
-    Assert-Equal 'skip' (Read-ReleaseOperatorAnswer -ScenarioId 'REL-VIS-OVERLAY-001' -Question 'looks right?') `
-        'an attested visual judgement is DEFERRED, never a pass'
-
-    # This suite runs with a redirected stdin, so EVERY path defers here and the
-    # return value alone cannot say which rule fired. The reason it reports can:
-    # attesting some OTHER scenario must not consume this one's attest branch.
-    $Attest = @('REL-SOMETHING-ELSE-001')
-    Assert-Equal 'skip' (Read-ReleaseOperatorAnswer -ScenarioId 'REL-VIS-OVERLAY-001' -Question 'looks right?') `
-        'a redirected stdin defers rather than asking'
-    Assert-True ($script:LastStep -match 'no interactive terminal') `
-        "attesting a DIFFERENT scenario must not claim this one was attested: $script:LastStep"
+        # This suite runs with a redirected stdin, so EVERY path defers here and the
+        # return value alone cannot say which rule fired. The reason it reports can:
+        # attesting some OTHER scenario must not consume this one's attest branch.
+        $Attest = @('REL-SOMETHING-ELSE-001')
+        Assert-Equal 'skip' (Read-ReleaseOperatorJudgement -ScenarioId 'REL-VIS-OVERLAY-001' -Line 'looks right?').Answer `
+            'a redirected stdin defers rather than asking'
+        Assert-True ($script:LastStep -match 'no interactive terminal') `
+            "attesting a DIFFERENT scenario must not claim this one was attested: $script:LastStep"
+    }
+    finally { Set-ReleaseOperatorReader $null }
 }
 
 
@@ -1114,16 +1120,16 @@ Test-Case 'an instruction step is one array element, not a continued string' {
 }
 
 
-Test-Case 'the operator-answer seam is reached with the scenario id' {
-    # Read-ReleaseOperatorAnswer needs the id to tell whether -Attest names THIS
+Test-Case 'the judgement seam is reached with the scenario id' {
+    # Read-ReleaseOperatorJudgement needs the id to tell whether -Attest names THIS
     # scenario; a call that passes only the question silently loses that check.
     $code = @(Get-Content -LiteralPath (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1') |
             Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
-    $asks = [regex]::Matches($code, '\$ctx\.Ask\s+(\S+)')
-    Assert-True ($asks.Count -gt 0) 'the catalog is expected to ask at least one mid-scenario question'
+    $asks = [regex]::Matches($code, '\$ctx\.Judge\s+(\S+)')
+    Assert-True ($asks.Count -gt 0) 'the catalog is expected to ask at least one sight-check judgement'
     foreach ($ask in $asks) {
         Assert-True ($ask.Groups[1].Value -match "^'REL-") `
-            "`$ctx.Ask must be called with the scenario id first, got $($ask.Groups[1].Value)"
+            "`$ctx.Judge must be called with the scenario id first, got $($ask.Groups[1].Value)"
     }
 }
 
@@ -1285,8 +1291,11 @@ Test-Case 'a Verify block can name UNVERIFIED and the human gate reports it as U
     # whose elevated worker never started has found no defect.
     function Write-Step { param($Text) $script:LastStep = $Text }
     function Expand-ListArgument { param($Values) return @($Values) }
-    function Read-OperatorAnswer { param($Question) throw 'the terminal must not be asked here' }
+    . (Join-Path $scriptRoot 'lib/ReleaseOperator.ps1')
+    Set-ReleaseOperatorReader { param($Prompt) throw 'the terminal must not be asked here' }
     . (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
+    . ([scriptblock]::Create((Get-ReleaseVerifyFunctionText -Name 'Get-ReleaseGateLine')))
+    . ([scriptblock]::Create((Get-ReleaseVerifyFunctionText -Name 'New-ReleaseOperatorStep')))
     . ([scriptblock]::Create((Get-ReleaseVerifyFunctionText -Name 'Invoke-ReleaseHumanGate')))
 
     $NonInteractive = $false
@@ -1727,6 +1736,875 @@ Test-Case 'the tracked Chocolatey package still has the shape the rehearsal rewr
     $text = Get-Content -LiteralPath $installScript -Raw
     Assert-Equal 1 ([regex]::Matches($text, "(?m)^(\s*url64bit\s*=\s*)'[^']*'")).Count 'exactly one url64bit'
     Assert-Equal 1 ([regex]::Matches($text, "(?m)^(\s*checksum64\s*=\s*)'[^']*'")).Count 'exactly one checksum64'
+}
+
+
+# ---------------------------------------------------------------------------
+# The dry run: a simulated operator and simulated tools
+# ---------------------------------------------------------------------------
+#
+# ACCEPTANCE, BEFORE ANY DEVELOPER CLICK. A gate that has never run does not get
+# shown to a person, so every human gate and both sight checks are exercised here
+# RED once and GREEN once: the runner's whole human layer -- the operator
+# protocol, the external-tool adapters, the sandbox transport and each gate's own
+# Verify block -- with no machine action of any kind.
+#
+# Nothing below launches a process, opens a pipe, starts a virtual machine, reads
+# a real audio endpoint or writes a registry value. The three seams the human
+# layer was built around are what make that possible:
+#
+#   Set-ReleaseOperatorReader     answers the prompts
+#   Set-ReleaseToolInvoker        answers PresentMon, SoundVolumeView, pnputil,
+#                                 WindowsSandbox.exe and UI Automation
+#   Set-ReleaseToolAvailability   decides which of those exist on this machine
+#
+# and a scripted control channel stands in for the product.
+
+function Get-DryRunIdentity {
+    <#
+    .SYNOPSIS
+        The handshake identity a simulated connection carries.
+    .DESCRIPTION
+        Matches the artifact under test by default, because a gate that refuses a
+        DIFFERENT binary has to be given the same one before any of its other
+        assertions can be reached.
+    #>
+    param([Parameter(Mandatory)] $Responder)
+    if ($Responder.Responses.ContainsKey('identity')) { return $Responder.Responses['identity'] }
+    return [pscustomobject]@{ executableSha256 = 'sha-under-test'; productVersion = '0.9.0'; pid = 4242 }
+}
+
+function New-DryRunResponder {
+    <#
+    .SYNOPSIS
+        A scripted control channel: command name -> answer.
+    .DESCRIPTION
+        A value may be a plain object (every call answers it), an ARRAY (successive
+        calls consume successive elements and the last repeats, which is how
+        "degraded, then recovered" is expressed), or a script block taking the
+        parameters. A refusal is @{ ok = $false; error = @{ message = '...' } }.
+
+        An unscripted command answers ok with an empty result rather than throwing:
+        a gate under test must fail on the assertion it is about, not on the first
+        incidental command a fixture forgot.
+    #>
+    param([hashtable] $Responses = @{})
+    return @{ Responses = $Responses; Calls = @{}; Log = [System.Collections.Generic.List[string]]::new() }
+}
+
+function Invoke-DryRunResponse {
+    param([Parameter(Mandatory)] $Responder, [Parameter(Mandatory)] [string] $Command, $Parameters)
+    $Responder.Log.Add($Command)
+    if (-not $Responder.Responses.ContainsKey($Command)) { return @{ ok = $true; result = [pscustomobject]@{ } } }
+    $value = $Responder.Responses[$Command]
+    if ($value -is [scriptblock]) { $value = & $value $Parameters }
+    if ($value -is [object[]]) {
+        $index = if ($Responder.Calls.ContainsKey($Command)) { $Responder.Calls[$Command] } else { 0 }
+        $Responder.Calls[$Command] = [Math]::Min($index + 1, $value.Count - 1)
+        $value = $value[[Math]::Min($index, $value.Count - 1)]
+    }
+    if ($value -is [System.Collections.IDictionary] -and $value.Contains('ok')) { return $value }
+    return @{ ok = $true; result = $value }
+}
+
+function Invoke-DryRunHumanGate {
+    <#
+    .SYNOPSIS
+        The shipped human-gate contract, over the simulated operator.
+    .DESCRIPTION
+        Lifted out of release-verify.ps1 rather than reimplemented, for the same
+        reason the scenarios are the shipped ones: a harness that carried its own
+        idea of what a gate does could not catch the gate drifting away from it.
+    #>
+    param([Parameter(Mandatory)] $Gate, [Parameter(Mandatory)] $Context)
+    $NonInteractive = $false
+    $Attest = @()
+    function Expand-ListArgument { param($Values) return @($Values) }
+    function Write-Step { param([string] $Text) }
+    . ([scriptblock]::Create((Get-ReleaseVerifyFunctionText -Name 'Get-ReleaseGateLine')))
+    . ([scriptblock]::Create((Get-ReleaseVerifyFunctionText -Name 'New-ReleaseOperatorStep')))
+    . ([scriptblock]::Create((Get-ReleaseVerifyFunctionText -Name 'Invoke-ReleaseHumanGate')))
+    return Invoke-ReleaseHumanGate -Gate $Gate -Context $Context
+}
+
+function Invoke-ReleaseDryRun {
+    <#
+    .SYNOPSIS
+        Runs one real scenario body against a simulated machine and operator.
+    .DESCRIPTION
+        The scenario is the SHIPPED one out of Get-ReleaseScenarioCatalog, not a
+        copy: a harness that tested its own transcription of a gate would prove
+        nothing about the gate. Everything the body reaches outside itself is
+        replaced here, in this function's own scope, so the substitutions cannot
+        leak into another test.
+
+        Returns the scenario's own result, plus the prompts the simulated operator
+        was shown and the tool invocations it caused -- both of which are
+        assertions in their own right: a gate that reached a verdict without ever
+        asking, or that asked with the wrong prompt, is a defect the result alone
+        cannot show.
+    #>
+    param(
+        [Parameter(Mandatory)] [string] $ScenarioId,
+        [hashtable] $Responses = @{},
+        [hashtable] $Tools = @{},
+        [scriptblock] $ToolInvoker,
+        [scriptblock] $Operator,
+        [object[]] $EnvctlProperties = @(),
+        [hashtable] $Variables = @{},
+        [switch] $Elevated,
+        [switch] $FullscreenProbe
+    )
+
+    $root = New-TestDirectory
+    $prompts = [System.Collections.Generic.List[string]]::new()
+    $invocations = [System.Collections.Generic.List[object]]::new()
+    $responder = New-DryRunResponder -Responses $Responses
+    $envctlProperties = $EnvctlProperties
+
+    . (Join-Path $scriptRoot 'lib/ReleaseOperator.ps1')
+    . (Join-Path $scriptRoot 'lib/ReleaseExternalTools.ps1')
+    . (Join-Path $scriptRoot 'lib/ReleaseSandbox.ps1')
+
+    # --- the product, scripted -------------------------------------------------
+    function Invoke-LiveVerifyCommand {
+        param($Connection, [string] $Command, $Parameters)
+        return Invoke-DryRunResponse -Responder $responder -Command $Command -Parameters $Parameters
+    }
+    function Connect-LiveVerify {
+        param([string] $RunId, [int] $ConnectTimeoutMs, [string] $Role, [int] $Protocol)
+        if ($responder.Responses.ContainsKey('connect.refuse')) { throw 'the endpoint refused the connection' }
+        return [pscustomobject]@{ RunId = $RunId; Identity = (Get-DryRunIdentity -Responder $responder) }
+    }
+    function Get-LiveVerifyState { param($Connection) return [pscustomobject]@{ blockingSurface = 'none' } }
+    function New-LiveVerifyRunId { return 'dry-run-id' }
+    function Get-LiveVerifyFfprobe { return $responder.Responses['ffprobe'] }
+
+    # --- the runner's own environment -----------------------------------------
+    function Write-Step { param([string] $Text) }
+    function Write-Heading { param([string] $Text) }
+    function Start-Sleep { param([int] $Seconds, [int] $Milliseconds) }
+    function Get-EnvironmentSnapshot { param($Orchestrator) return [pscustomobject]@{ properties = $envctlProperties } }
+    function Get-Process { param([string] $Name, $ErrorAction) return @() }
+    function Get-PnpDevice { param($Class, $Status, $ErrorAction) return @() }
+    function Start-Process {
+        param([string] $FilePath, $ArgumentList, [switch] $PassThru, [switch] $Wait)
+        $invocations.Add(@{ Tool = 'Start-Process'; Path = $FilePath; Arguments = @($ArgumentList) })
+        return [pscustomobject]@{ Id = 4242; HasExited = $true }
+    }
+
+    . (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
+
+    # Defined AFTER the dot-source so they replace the catalogue's own: a real
+    # sleep-and-poll loop would make the dry run take as long as a campaign, and a
+    # real appearance switch would change the developer's Windows.
+    function Wait-ReleaseRecordingState { param($Connection, $States, $TimeoutMs) return $true }
+    # Every bounded poll finishes in a few milliseconds here. The loops are the
+    # shipped ones; only how long they are willing to wait for a machine that is
+    # not there is shortened.
+    function Get-ReleaseGateDeadline { param([double] $Seconds) return [DateTime]::UtcNow.AddMilliseconds(40) }
+    function Test-RunnerElevated { return [bool]$Elevated }
+    # The outage seam, stubbed rather than run: the real one starts a background job
+    # that DISABLES an audio device on this machine. What the gate is judged on is
+    # what the product reported while the device was gone, and the scripted
+    # pipeline snapshots say that without anybody's sound card being touched.
+    function Start-ReleaseEndpointOutage {
+        param([string] $Executable, [string[]] $DisableArguments, [string[]] $EnableArguments,
+            [int] $DelaySeconds, [int] $OutageSeconds)
+        $invocations.Add(@{ Tool = 'outage'; Path = $Executable; Arguments = @($DisableArguments) })
+        return $null
+    }
+    function Stop-ReleaseEndpointOutage {
+        param($Job, [string] $Executable, [string[]] $EnableArguments)
+        $invocations.Add(@{ Tool = 'outage-restore'; Path = $Executable; Arguments = @($EnableArguments) })
+    }
+    function Wait-ReleaseProbeGone { param($ProcessName, $TimeoutMs) return $true }
+    function Get-WindowsAppearance { return 'Dark' }
+    function Set-WindowsAppearance { param([string] $Appearance) $invocations.Add(@{ Tool = 'appearance'; Value = $Appearance }) }
+    function Resolve-FullscreenProbe { if ($FullscreenProbe) { return 'C:\probe\probe_fullscreen.exe' } return $null }
+    function Resolve-StallWindowProbe { return $null }
+    function Get-ReleaseAudioPacketSpan { param($FfprobePath, $Path, $StreamIndexes) return @(8.0) }
+    function Save-LiveVerifyEvidence {
+        param($Context, [string] $CheckId, [string] $Name, $Value, [string] $Raw)
+        return "checks/$CheckId/$Name"
+    }
+    function Get-ReleaseAutomationElements {
+        param([int] $ProcessId, [int] $TimeoutSeconds)
+        if ($responder.Responses.ContainsKey('uia')) { return $responder.Responses['uia'] }
+        return @{ Ok = $true; Elements = @(); Detail = 'no simulated automation tree' }
+    }
+    function Close-ReleaseUpdaterProcess { param([int] $TimeoutMs) $invocations.Add(@{ Tool = 'updater-close' }) }
+    function Resolve-ReleaseMsiArtifact {
+        param($Artifact)
+        if ($responder.Responses.ContainsKey('msi')) { return $responder.Responses['msi'] }
+        return @{ Ok = $false; Detail = 'no MSI beside the artifact in this dry run' }
+    }
+
+    # --- the operator and the external tools ----------------------------------
+    Clear-ReleaseToolAvailability
+    foreach ($name in $Tools.Keys) { Set-ReleaseToolAvailability -Name $name -Path $Tools[$name] }
+    Set-ReleaseToolInvoker {
+        param($Tool, $Arguments)
+        $invocations.Add(@{ Tool = $Tool.Name; Arguments = @($Arguments) })
+        if ($null -ne $ToolInvoker) { return & $ToolInvoker $Tool $Arguments }
+        return @{ ExitCode = 0; Output = '' }
+    }.GetNewClosure()
+    Set-ReleaseOperatorReader {
+        param([string] $Prompt)
+        $prompts.Add($Prompt)
+        if ($null -ne $Operator) { return & $Operator $Prompt }
+        return ''
+    }.GetNewClosure()
+
+    $previousVariables = @{}
+    foreach ($name in $Variables.Keys) {
+        $previousVariables[$name] = [Environment]::GetEnvironmentVariable($name)
+        [Environment]::SetEnvironmentVariable($name, $Variables[$name])
+    }
+
+    try {
+        $catalog = Get-ReleaseScenarioCatalog
+        $entry = @($catalog | Where-Object { $_.Id -eq $ScenarioId }) | Select-Object -First 1
+        if ($null -eq $entry) { throw "No such scenario in the catalog: $ScenarioId" }
+
+        $session = [pscustomobject]@{ RunId = 'dry-run-session'
+            # `Identity` is what a real connection carries after the handshake, and
+            # REL-PRESENT-002 compares it against the artifact SHA-256 before it
+            # believes anything the session says.
+            Connection                      = [pscustomobject]@{ Name = 'fake'
+                Identity                    = (Get-DryRunIdentity -Responder $responder)
+            }
+            Process                         = [pscustomobject]@{ HasExited = $false }
+        }
+        $context = $null
+        $context = [pscustomobject]@{
+            RunDirectory    = $root
+            RepositoryRoot  = (Split-Path -Parent $scriptRoot)
+            Artifact        = [pscustomobject]@{ exePath = 'C:\rc\exosnap.exe'; exeSha256 = 'sha-under-test'
+                installTree                             = $true; productVersion = '0.9.0'
+            }
+            Environment     = @{}
+            Orchestrator    = [pscustomobject]@{ Available = ($envctlProperties.Count -gt 0); Dirty = $false }
+            State           = @{}
+            EnsureSession   = { $session }.GetNewClosure()
+            EndSession      = { }
+            ElevatedSession = { if ($Elevated) { $session } else { $null } }.GetNewClosure()
+            HumanGate       = { param($gate) Invoke-DryRunHumanGate -Gate $gate -Context $context }
+            Judge           = { param($id, $line, $detail)
+                $step = if ($null -eq $detail) { @{} } else { $detail.Clone() }
+                $step['Id'] = $id
+                $step['Line'] = $line
+                return Invoke-ReleaseOperatorJudgement -Step $step
+            }
+        }
+        $result = & $entry.Run $context
+        return @{ Result = $result; Prompts = @($prompts); Invocations = @($invocations)
+            Commands            = @($responder.Log); Entry = $entry
+        }
+    }
+    finally {
+        Set-ReleaseOperatorReader $null
+        Set-ReleaseToolInvoker $null
+        Clear-ReleaseToolAvailability
+        foreach ($name in $previousVariables.Keys) {
+            [Environment]::SetEnvironmentVariable($name, $previousVariables[$name])
+        }
+    }
+}
+
+function New-DryRunPresentSnapshot {
+    param([string] $Mode = 'independentFlip', [int] $Count = 1200, [bool] $Available = $true, [bool] $Elevated = $true)
+    return [pscustomobject]@{
+        present = [pscustomobject]@{ optIn = $true; elevated = $Elevated; available = $Available
+            availability                   = $(if ($Available) { 'available' } else { 'requiresElevation' })
+            reason                         = $null; mode = $Mode; tearing = $false; presentCount = $Count
+            discardedCount                 = 0; modeFlipCount = 0
+        }
+        audio   = [pscustomobject]@{ outputs = @(
+                [pscustomobject]@{ name = 'Speakers'; default = $true },
+                [pscustomobject]@{ name = 'CABLE Input (VB-Audio Virtual Cable)'; default = $false }
+            )
+        }
+    }
+}
+
+function New-DryRunPipelineSnapshot {
+    param([bool] $Degraded = $false, [string] $Lifecycle = 'recording', [bool] $Active = $true)
+    return [pscustomobject]@{ lifecycle = $Lifecycle
+        audio                           = [pscustomobject]@{ active = $Active; sourceDegraded = $Degraded; degradedSources = $(if ($Degraded) { 1 } else { 0 }) }
+    }
+}
+
+function New-DryRunSandboxResult {
+    param([hashtable] $Steps)
+    $list = @()
+    foreach ($name in $Steps.Keys) { $list += [pscustomobject]@{ name = $name; ok = $Steps[$name]; detail = 'dry run' } }
+    return [pscustomobject]@{ finishedUtc = '2026-09-07T00:00:00Z'; fatal = ''; steps = $list }
+}
+
+function Write-DryRunSandboxDocument {
+    <#
+    .SYNOPSIS
+        Places a sandbox result where the gate expects one, so no sandbox is started.
+    .DESCRIPTION
+        Both MSI gates reuse the document a previous run produced. Writing one is
+        therefore the whole of "the sandbox ran" as far as the gate is concerned,
+        which is exactly the seam a dry run needs -- and it is the same reuse path
+        a real second gate takes, not a special case invented for the test.
+    #>
+    param([Parameter(Mandatory)] [string] $RunDirectory, [Parameter(Mandatory)] $Result)
+    $directory = Join-Path $RunDirectory 'checks/update-sandbox'
+    New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $directory 'result.json') -Encoding utf8NoBOM `
+        -Value ($Result | ConvertTo-Json -Depth 12)
+}
+
+# ---------------------------------------------------------------------------
+# The operator protocol
+# ---------------------------------------------------------------------------
+
+Test-Case 'there are exactly two action prompts and they say who acts next' {
+    . (Join-Path $scriptRoot 'lib/ReleaseOperator.ps1')
+    # The rc19 defect, pinned: one line meant "start it now" for the MSI and
+    # Chocolatey gates and "I already did it" for the present, audio and visual
+    # gates. Two forms now, and each names the actor.
+    Assert-Equal '[Enter] startet jetzt' (Get-ReleaseOperatorPromptText -Kind 'Start') 'the runner acts on Enter'
+    Assert-Equal '[Enter] wenn erledigt' (Get-ReleaseOperatorPromptText -Kind 'Done') 'the operator has acted'
+    Assert-True ((Get-ReleaseOperatorPromptText -Kind 'Judgement') -notmatch 'Enter') `
+        'a judgement must not be answerable by the reflex that answers an action prompt'
+}
+
+Test-Case 'Enter proceeds, ? shows the detail without deciding, s and x do not' {
+    . (Join-Path $scriptRoot 'lib/ReleaseOperator.ps1')
+    $step = @{ Id = 'T-1'; Line = 'do the thing'; Kind = 'Done'; Why = 'because'; Expected = 'a thing'
+        VerifyDescription                                                                  = 'by looking'
+    }
+    $answers = [System.Collections.Generic.Queue[string]]::new()
+    @('?', '') | ForEach-Object { $answers.Enqueue($_) }
+    Set-ReleaseOperatorReader { param($p) return $answers.Dequeue() }.GetNewClosure()
+    try {
+        Assert-Equal 'go' (Invoke-ReleaseOperatorStep -Step $step -Quiet) 'Enter after ? must still proceed'
+        Assert-Equal 0 $answers.Count 'both answers must have been consumed'
+
+        Set-ReleaseOperatorReader { param($p) return 's' }
+        Assert-Equal 'skip' (Invoke-ReleaseOperatorStep -Step $step -Quiet) 's skips'
+        Set-ReleaseOperatorReader { param($p) return 'x' }
+        Assert-Equal 'abort' (Invoke-ReleaseOperatorStep -Step $step -Quiet) 'x stops'
+    }
+    finally { Set-ReleaseOperatorReader $null }
+}
+
+Test-Case 'an unrecognised answer decides nothing and is asked again' {
+    . (Join-Path $scriptRoot 'lib/ReleaseOperator.ps1')
+    # A typo, a stray paste or a leftover keystroke must never end a gate: the old
+    # prompt treated anything unrecognised as an abort, which is a destructive
+    # default for a single character.
+    $answers = [System.Collections.Generic.Queue[string]]::new()
+    @('yes please', 'zzz', '') | ForEach-Object { $answers.Enqueue($_) }
+    Set-ReleaseOperatorReader { param($p) return $answers.Dequeue() }.GetNewClosure()
+    try {
+        Assert-Equal 'go' (Invoke-ReleaseOperatorStep -Step @{ Id = 'T'; Line = 'l'; Kind = 'Done' } -Quiet) `
+            'only Enter proceeds; the two typos before it must have been re-asked'
+        Assert-Equal 0 $answers.Count 'every answer must have been consumed'
+    }
+    finally { Set-ReleaseOperatorReader $null }
+}
+
+Test-Case 'a sight check records the reason with the judgement, not afterwards' {
+    . (Join-Path $scriptRoot 'lib/ReleaseOperator.ps1')
+    $answers = [System.Collections.Generic.Queue[string]]::new()
+    @('n', 'the toast tint is grey') | ForEach-Object { $answers.Enqueue($_) }
+    Set-ReleaseOperatorReader { param($p) return $answers.Dequeue() }.GetNewClosure()
+    try {
+        $judgement = Invoke-ReleaseOperatorJudgement -Step @{ Id = 'T'; Line = 'does it look right?' }
+        Assert-Equal 'wrong' $judgement.Answer 'n is a defect report'
+        Assert-Equal 'the toast tint is grey' $judgement.Reason 'and the reason travels with it'
+    }
+    finally { Set-ReleaseOperatorReader $null }
+}
+
+Test-Case 'the ordered sequence puts every dependency before the gate that needs it' {
+    . (Join-Path $scriptRoot 'lib/ReleaseOperator.ps1')
+    . (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
+    $catalog = Get-ReleaseScenarioCatalog
+    $ordered = @(Get-ReleaseHumanPlanOrder -Entries ([object[]]$catalog))
+    $position = @{}
+    for ($i = 0; $i -lt $ordered.Count; $i++) { $position[$ordered[$i].Id] = $i }
+    Assert-Equal $catalog.Count $ordered.Count 'ordering must not lose or duplicate a scenario'
+    foreach ($entry in $ordered) {
+        foreach ($dependency in @(Get-ReleaseScenarioDependency -Entry $entry)) {
+            Assert-True ($position[$dependency] -lt $position[$entry.Id]) `
+                "$dependency must run before $($entry.Id)"
+        }
+    }
+    # The three that cost a campaign a FAIL, named rather than merely implied.
+    Assert-True ($position['REL-PRESENT-002'] -lt $position['REL-CAP-FSE-001']) 'present before fullscreen'
+    Assert-True ($position['REL-UPD-MSI-DECLINE-001'] -lt $position['REL-UPD-MSI-001']) 'decline before accept'
+    Assert-True ($position['REL-UPD-MSI-001'] -lt $position['REL-PKG-CHOCO-001']) 'the MSI gates before Chocolatey'
+}
+
+Test-Case 'a dependency cycle is reported rather than silently broken' {
+    . (Join-Path $scriptRoot 'lib/ReleaseOperator.ps1')
+    $a = [pscustomobject]@{ Id = 'A'; Title = 'a'; DependsOn = @('B') }
+    $b = [pscustomobject]@{ Id = 'B'; Title = 'b'; DependsOn = @('A') }
+    Assert-Throws { Get-ReleaseHumanPlanOrder -Entries @($a, $b) } 'an unrunnable order is a catalog defect'
+}
+
+Test-Case 'every gate that can ask a person declares one line and which form it is' {
+    # The sequence view promises the operator how many steps may ask them
+    # something. A gate that reaches a prompt without declaring AsksAPerson makes
+    # that promise false, and one without a Line falls back to the first entry of
+    # the old numbered block -- which is how the meaning got separated from the
+    # question in the first place.
+    . (Join-Path $scriptRoot 'lib/ReleaseOperator.ps1')
+    . (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
+    $expected = @('REL-PRESENT-002', 'REL-CAP-STALL-001', 'REL-CAP-FSE-001', 'REL-AUD-DEGRADE-001',
+        'REL-AUD-SILENCE-001', 'REL-AUD-FORMAT-001', 'REL-VIS-OVERLAY-001', 'REL-VIS-NOTIFY-001',
+        'REL-UPD-MSI-DECLINE-001', 'REL-UPD-MSI-001', 'REL-PKG-CHOCO-001')
+    $catalog = Get-ReleaseScenarioCatalog
+    $declared = @($catalog | Where-Object { Test-ReleaseScenarioAsksAPerson -Entry $_ } | ForEach-Object { $_.Id })
+    foreach ($id in $expected) {
+        Assert-True ($declared -contains $id) "$id can reach an operator prompt and must declare AsksAPerson"
+    }
+    $source = Get-Content -LiteralPath (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1') -Raw
+    $lines = ([regex]::Matches($source, "(?m)^\s*Line\s*=")).Count
+    Assert-True ($lines -ge 10) "every operator gate needs its own Line (found $lines)"
+    # There are TWO action forms and no third. A gate that invented one would put
+    # the campaign back where rc19 found it: a prompt whose meaning depends on
+    # which screen of instructions scrolled past.
+    $allKinds = ([regex]::Matches($source, "(?m)^\s*Kind\s*=")).Count
+    $knownKinds = ([regex]::Matches($source, "(?m)^\s*Kind\s*=\s*'(Start|Done)'")).Count
+    Assert-Equal $allKinds $knownKinds 'a gate may only declare Start or Done'
+    # And exactly two scenarios end in a person's eyes. Every other gate is decided
+    # by a measurement, which is what makes the sight checks the last human gates
+    # rather than the usual ones.
+    $judged = ([regex]::Matches($source, '\$ctx\.Judge')).Count
+    Assert-Equal 2 $judged "only the two sight checks may ask for a judgement (found $judged)"
+}
+
+function New-DryRunSandboxLauncher {
+    <#
+    .SYNOPSIS
+        A WindowsSandbox.exe that writes what the worker inside it would have.
+    .DESCRIPTION
+        Everything up to the virtual machine is exercised for real: the staging
+        copy, the .wsb, the mapped-folder paths and the marker-plus-result
+        transport. Only the machine is simulated -- which is the whole of what a
+        dry run may not start.
+    #>
+    param([Parameter(Mandatory)] $Document, [switch] $WriteNothing)
+    return {
+        param($Tool, $Arguments)
+        if ($Tool.Name -ne 'sandbox') { return @{ ExitCode = 0; Output = '' } }
+        if ($WriteNothing) { return @{ ExitCode = 0; Output = '' } }
+        $staging = Split-Path -Parent $Arguments[0]
+        Set-Content -LiteralPath (Join-Path $staging 'result.json') -Encoding utf8NoBOM `
+            -Value ($Document | ConvertTo-Json -Depth 12)
+        Set-Content -LiteralPath (Join-Path $staging 'done.marker') -Value 'done' -Encoding utf8NoBOM
+        return @{ ExitCode = 0; Output = '' }
+    }.GetNewClosure()
+}
+
+function Invoke-DryRunSandboxUpdateGate {
+    <#
+    .SYNOPSIS
+        One MSI gate, over a simulated sandbox run of the update rehearsal.
+    #>
+    param([Parameter(Mandatory)] [string] $ScenarioId, [Parameter(Mandatory)] [hashtable] $Steps)
+    $root = New-TestDirectory
+    $baseMsi = Join-Path $root 'ExoSnap-0.8.0-windows-x64.msi'
+    Set-Content -LiteralPath $baseMsi -Value 'not really an msi' -Encoding utf8NoBOM
+    return Invoke-ReleaseDryRun -ScenarioId $ScenarioId `
+        -Tools @{ sandbox = 'C:\Windows\System32\WindowsSandbox.exe' } `
+        -Variables @{ EXOSNAP_UPDATE_FROM_MSI = $baseMsi } `
+        -ToolInvoker (New-DryRunSandboxLauncher -Document (New-DryRunSandboxResult -Steps $Steps))
+}
+
+function Invoke-DryRunChocolateyGate {
+    <#
+    .SYNOPSIS
+        The Chocolatey gate, over a simulated sandbox run of the real rehearsal worker.
+    #>
+    param([Parameter(Mandatory)] [object[]] $Steps, [bool] $RestoreRan = $true)
+    $root = New-TestDirectory
+    $msi = Join-Path $root 'ExoSnap-0.9.0-windows-x64.msi'
+    Set-Content -LiteralPath $msi -Value 'not really an msi' -Encoding utf8NoBOM
+    $document = [pscustomobject]@{
+        steps          = @($Steps | ForEach-Object { [pscustomobject]$_ })
+        restoreRan     = $RestoreRan
+        vcredistBefore = '14.40.0'
+        vcredistAfter  = '14.40.0'
+    }
+    return Invoke-ReleaseDryRun -ScenarioId 'REL-PKG-CHOCO-001' `
+        -Tools @{ sandbox = 'C:\Windows\System32\WindowsSandbox.exe' } `
+        -Responses @{ msi = @{ Ok = $true; Path = $msi; Sha256 = ('ab' * 32); Detail = 'dry run' } } `
+        -ToolInvoker (New-DryRunSandboxLauncher -Document $document)
+}
+
+
+# ---------------------------------------------------------------------------
+# Every human gate, RED once and GREEN once
+# ---------------------------------------------------------------------------
+
+function New-DryRunPresentMonInvoker {
+    <#
+    .SYNOPSIS
+        A PresentMon that writes the CSV it is asked for.
+    .DESCRIPTION
+        The rows are what the gate compares against our own classification, so the
+        modes are the fixture's whole point. Writing a real file rather than
+        returning rows keeps Get-ReleasePresentMonObservation's own CSV handling in
+        the path -- an oracle that cannot be read is not an oracle.
+    #>
+    param([string[]] $Modes = @('Hardware: Legacy Flip'), [int] $Rows = 3, [int] $ExitCode = 0)
+    return {
+        param($Tool, $Arguments)
+        if ($Tool.Name -ne 'presentmon') { return @{ ExitCode = 0; Output = '' } }
+        if ($ExitCode -ne 0) { return @{ ExitCode = $ExitCode; Output = 'PresentMon refused' } }
+        $index = [array]::IndexOf($Arguments, '--output_file')
+        $csv = $Arguments[$index + 1]
+        New-Item -ItemType Directory -Path (Split-Path -Parent $csv) -Force | Out-Null
+        $lines = @('Application,ProcessID,PresentMode')
+        for ($i = 0; $i -lt $Rows; $i++) { $lines += "probe.exe,4242,$($Modes[$i % $Modes.Count])" }
+        Set-Content -LiteralPath $csv -Value $lines -Encoding utf8NoBOM
+        return @{ ExitCode = 0; Output = '' }
+    }.GetNewClosure()
+}
+
+function New-DryRunFfprobe {
+    <#
+    .SYNOPSIS
+        A stand-in ffprobe that prints one canned probe document.
+    #>
+    param([Parameter(Mandatory)] [string] $Directory, [bool] $WithAudio = $true, [double] $Duration = 8.0)
+    $streams = if ($WithAudio) {
+        '{"index":0,"codec_type":"video","codec_name":"h264"},{"index":1,"codec_type":"audio","codec_name":"opus","sample_rate":"48000"}'
+    }
+    else { '{"index":0,"codec_type":"video","codec_name":"h264"}' }
+    $json = '{"format":{"duration":"' + $Duration + '"},"streams":[' + $streams + ']}'
+    $path = Join-Path $Directory 'fake-ffprobe.ps1'
+    Set-Content -LiteralPath $path -Encoding utf8NoBOM -Value @"
+param([Parameter(ValueFromRemainingArguments = `$true)] [string[]] `$Rest)
+Write-Output '$json'
+"@
+    return $path
+}
+
+Test-Case 'REL-PRESENT-002 is red when the ETW session decodes nothing and green when it does' {
+    # RED: elevated, opted in, and still no presents -- the case an operator used to
+    # be asked about after launching an elevated instance by hand.
+    $red = Invoke-ReleaseDryRun -ScenarioId 'REL-PRESENT-002' -Elevated -Responses @{
+        'environment.snapshot' = (New-DryRunPresentSnapshot -Available $false)
+    }
+    Assert-Equal 'FAIL' $red.Result.Result "an unavailable present session must fail: $($red.Result.Message)"
+    Assert-Equal 0 $red.Prompts.Count 'an elevated runner must not ask anybody about this gate'
+
+    # GREEN, with the independent oracle agreeing.
+    $green = Invoke-ReleaseDryRun -ScenarioId 'REL-PRESENT-002' -Elevated `
+        -Tools @{ presentmon = 'C:\tools\PresentMon.exe' } `
+        -ToolInvoker (New-DryRunPresentMonInvoker -Modes @('Hardware: Independent Flip')) `
+        -Responses @{ 'environment.snapshot' = (New-DryRunPresentSnapshot) }
+    Assert-Equal 'PASS' $green.Result.Result "a decoded present session must pass: $($green.Result.Message)"
+    Assert-True ($green.Result.Message -match 'PresentMon corroborates') `
+        "the verdict must name the independent oracle: $($green.Result.Message)"
+}
+
+Test-Case 'REL-PRESENT-002 fails when PresentMon decodes nothing we claim to have decoded' {
+    # The reason the oracle is here at all: our numbers come from an ETW session we
+    # opened, so a gate that only reads them back asks one decoder whether it agrees
+    # with itself.
+    $result = Invoke-ReleaseDryRun -ScenarioId 'REL-PRESENT-002' -Elevated `
+        -Tools @{ presentmon = 'C:\tools\PresentMon.exe' } `
+        -ToolInvoker (New-DryRunPresentMonInvoker -Rows 0) `
+        -Responses @{ 'environment.snapshot' = (New-DryRunPresentSnapshot) }
+    Assert-Equal 'FAIL' $result.Result.Result 'an uncorroborated present count is not evidence'
+    Assert-True ($result.Result.Message -match 'not corroborated') $result.Result.Message
+}
+
+Test-Case 'REL-CAP-FSE-001 is red on a composed window and green on a real exclusive one' {
+    $responses = @{ 'environment.snapshot' = (New-DryRunPresentSnapshot -Mode 'composed') }
+    $red = Invoke-ReleaseDryRun -ScenarioId 'REL-CAP-FSE-001' -Elevated -FullscreenProbe -Responses $responses
+    Assert-Equal 'FAIL' $red.Result.Result "a composed window is not exclusive fullscreen: $($red.Result.Message)"
+
+    $green = Invoke-ReleaseDryRun -ScenarioId 'REL-CAP-FSE-001' -Elevated -FullscreenProbe `
+        -Tools @{ presentmon = 'C:\tools\PresentMon.exe' } `
+        -ToolInvoker (New-DryRunPresentMonInvoker -Modes @('Hardware: Legacy Flip')) `
+        -Responses @{ 'environment.snapshot' = (New-DryRunPresentSnapshot -Mode 'exclusiveFullscreen') }
+    Assert-Equal 'PASS' $green.Result.Result "a real exclusive flip must pass: $($green.Result.Message)"
+    Assert-Equal 0 $green.Prompts.Count 'the probe answers this gate; nobody is asked'
+    Assert-True ($green.Result.Message -match 'PresentMon agrees') $green.Result.Message
+}
+
+Test-Case 'REL-CAP-FSE-001 fails when the two present decoders disagree' {
+    $result = Invoke-ReleaseDryRun -ScenarioId 'REL-CAP-FSE-001' -Elevated -FullscreenProbe `
+        -Tools @{ presentmon = 'C:\tools\PresentMon.exe' } `
+        -ToolInvoker (New-DryRunPresentMonInvoker -Modes @('Composed: Flip')) `
+        -Responses @{ 'environment.snapshot' = (New-DryRunPresentSnapshot -Mode 'exclusiveFullscreen') }
+    Assert-Equal 'FAIL' $result.Result.Result 'a disagreement about the most consequential capture path is a finding'
+    Assert-True ($result.Result.Message -match 'Composed: Flip') $result.Result.Message
+}
+
+Test-Case 'REL-CAP-FSE-001 reuses the elevated session instead of launching a second instance' {
+    # The rc19 defect: it launched its own unelevated instance while the elevated one
+    # was up, the machine-wide single-instance guard swallowed it, and the gate
+    # reported "could not connect to the Live Verify endpoint" for a healthy product.
+    $result = Invoke-ReleaseDryRun -ScenarioId 'REL-CAP-FSE-001' -Elevated -FullscreenProbe `
+        -Responses @{ 'environment.snapshot' = (New-DryRunPresentSnapshot -Mode 'exclusiveFullscreen') }
+    $launches = @($result.Invocations | Where-Object { $_.Tool -eq 'Start-Process' -and $_.Path -match 'exosnap' })
+    Assert-Equal 0 $launches.Count 'the gate must launch no ExoSnap of its own'
+    $entry = $result.Entry
+    Assert-True (@($entry.DependsOn) -contains 'REL-PRESENT-002') 'and it must declare where the session comes from'
+    Assert-True ([bool]$entry.UsesElevatedSession) 'and that it wants the shared elevated instance'
+}
+
+Test-Case 'REL-AUD-SILENCE-001 is red when quiet is reported as degraded and green when it is not' {
+    $endpoints = New-DryRunPresentSnapshot
+    $red = Invoke-ReleaseDryRun -ScenarioId 'REL-AUD-SILENCE-001' `
+        -Tools @{ soundvolumeview = 'C:\tools\SoundVolumeView.exe' } `
+        -Responses @{
+        'environment.snapshot' = $endpoints
+        'record.snapshot'      = [pscustomobject]@{ systemAudioEnabled = $true }
+        'pipeline.snapshot'    = (New-DryRunPipelineSnapshot -Degraded $true)
+    }
+    Assert-Equal 'FAIL' $red.Result.Result "silence must not be reported as device loss: $($red.Result.Message)"
+    Assert-True ($red.Result.Message -match 'silent source was reported as degraded') $red.Result.Message
+
+    $green = Invoke-ReleaseDryRun -ScenarioId 'REL-AUD-SILENCE-001' `
+        -Tools @{ soundvolumeview = 'C:\tools\SoundVolumeView.exe' } `
+        -Responses @{
+        'environment.snapshot' = $endpoints
+        'record.snapshot'      = [pscustomobject]@{ systemAudioEnabled = $true }
+        'pipeline.snapshot'    = (New-DryRunPipelineSnapshot)
+    }
+    Assert-Equal 'PASS' $green.Result.Result "an active, quiet source must pass: $($green.Result.Message)"
+    Assert-Equal 0 $green.Prompts.Count 'a virtual cable makes silence a fact, so nobody is asked'
+    Assert-True ($green.Result.Message -match 'CABLE Input') "and the verdict says what it routed to: $($green.Result.Message)"
+}
+
+Test-Case 'REL-AUD-SILENCE-001 puts the default endpoint back, and asks when it cannot route' {
+    $endpoints = New-DryRunPresentSnapshot
+    $routed = Invoke-ReleaseDryRun -ScenarioId 'REL-AUD-SILENCE-001' `
+        -Tools @{ soundvolumeview = 'C:\tools\SoundVolumeView.exe' } `
+        -Responses @{
+        'environment.snapshot' = $endpoints
+        'record.snapshot'      = [pscustomobject]@{ systemAudioEnabled = $true }
+        'pipeline.snapshot'    = (New-DryRunPipelineSnapshot)
+    }
+    $switches = @($routed.Invocations | Where-Object { $_.Tool -eq 'soundvolumeview' })
+    Assert-Equal 2 $switches.Count 'the default endpoint is switched and switched back'
+    Assert-True ($switches[-1].Arguments -contains 'Speakers') `
+        'the operator default must be the LAST thing this gate sets'
+
+    # No tool -> one line, and it says why it is being asked.
+    $asked = Invoke-ReleaseDryRun -ScenarioId 'REL-AUD-SILENCE-001' -Tools @{ soundvolumeview = $null } `
+        -Operator { param($p) return '' } -Responses @{
+        'environment.snapshot' = $endpoints
+        'record.snapshot'      = [pscustomobject]@{ systemAudioEnabled = $true }
+        'pipeline.snapshot'    = (New-DryRunPipelineSnapshot)
+    }
+    Assert-Equal 'PASS' $asked.Result.Result $asked.Result.Message
+    Assert-Equal 1 $asked.Prompts.Count 'exactly one line is shown, not a block of four'
+    Assert-True ($asked.Prompts[0] -match 'wenn erledigt') "and it is the you-have-acted form: $($asked.Prompts[0])"
+}
+
+Test-Case 'REL-AUD-FORMAT-001 stops asking a person for a machine-state precondition' {
+    # THE rc19 DEFECT. Step 3 of a four-part block was "make it the DEFAULT playback
+    # device" -- a machine state, asked of a person, and then reported as a product
+    # FAIL when they set the format and not the role.
+    $root = New-TestDirectory
+    $properties = @(
+        [pscustomobject]@{ key = 'audio.render.44100-test:friendly-name'; value = 'Test Endpoint' }
+        [pscustomobject]@{ key = 'audio.render.44100-test:device-format'; value = '44100/24/2' }
+        [pscustomobject]@{ key = 'audio.render.44100-test:default-roles'; value = 'console,multimedia' }
+        [pscustomobject]@{ key = 'audio.render.normal:friendly-name'; value = 'Speakers' }
+    )
+    $result = Invoke-ReleaseDryRun -ScenarioId 'REL-AUD-FORMAT-001' -EnvctlProperties $properties `
+        -Tools @{ soundvolumeview = 'C:\tools\SoundVolumeView.exe' } -Responses @{
+        ffprobe            = (New-DryRunFfprobe -Directory $root)
+        'record.snapshot'  = [pscustomobject]@{ systemAudioEnabled = $true }
+        'record.result'    = [pscustomobject]@{ succeeded = $true; outputPath = (Join-Path $root 'out.mkv') }
+        'session.latest'   = (New-FakeSessionReport)
+    }
+    Assert-Equal 'PASS' $result.Result.Result "the tool path must reach a pass: $($result.Result.Message)"
+    Assert-Equal 0 $result.Prompts.Count 'nobody is asked to set a default playback device any more'
+    $calls = @($result.Invocations | Where-Object { $_.Tool -eq 'soundvolumeview' })
+    Assert-True (@($calls | Where-Object { $_.Arguments -contains '/SetDefaultFormat' }).Count -ge 1) `
+        'the shared-mode format is set by the tool'
+    Assert-True (@($calls | Where-Object { $_.Arguments -contains '/SetDefault' }).Count -ge 1) `
+        'and so is the default render role'
+}
+
+Test-Case 'REL-AUD-FORMAT-001 is red when the endpoint holds no default role' {
+    # Without this assertion the gate cannot fail at all: system audio is captured
+    # from the DEFAULT endpoint, so a 44.1 kHz device that is not default is never in
+    # the recorded path. It read green in every campaign up to rc17 that way.
+    $properties = @(
+        [pscustomobject]@{ key = 'audio.render.44100-test:friendly-name'; value = 'Test Endpoint' }
+        [pscustomobject]@{ key = 'audio.render.44100-test:device-format'; value = '44100/24/2' }
+        [pscustomobject]@{ key = 'audio.render.44100-test:default-roles'; value = '' }
+    )
+    $result = Invoke-ReleaseDryRun -ScenarioId 'REL-AUD-FORMAT-001' -EnvctlProperties $properties `
+        -Tools @{ soundvolumeview = 'C:\tools\SoundVolumeView.exe' }
+    Assert-Equal 'FAIL' $result.Result.Result 'a format nothing records through is not a pass'
+    Assert-True ($result.Result.Message -match 'no default render role') $result.Result.Message
+}
+
+Test-Case 'REL-AUD-DEGRADE-001 is red without a recovery and green with one' {
+    $variables = @{ EXOSNAP_AUDIO_DEVICE_INSTANCE_ID = 'SWD\MMDEVAPI\{0.0.0}'; EXOSNAP_ENDPOINT_VISIBILITY_TOOL = '' }
+    $properties = @([pscustomobject]@{ key = 'audio.render.normal:friendly-name'; value = 'Speakers' })
+    # RED: the device goes and never comes back, which fails the same assertion as a
+    # device that never went.
+    $red = Invoke-ReleaseDryRun -ScenarioId 'REL-AUD-DEGRADE-001' -Elevated -Variables $variables `
+        -EnvctlProperties $properties -Tools @{ pnputil = 'C:\Windows\System32\pnputil.exe' } -Responses @{
+        'record.snapshot'   = [pscustomobject]@{ systemAudioEnabled = $true }
+        'pipeline.snapshot' = @((New-DryRunPipelineSnapshot -Degraded $true))
+    }
+    Assert-Equal 'FAIL' $red.Result.Result "a degradation that never cleared is a defect: $($red.Result.Message)"
+    Assert-True ($red.Result.Message -match 'never cleared') $red.Result.Message
+
+    # GREEN: degraded, then recovered, still recording.
+    $green = Invoke-ReleaseDryRun -ScenarioId 'REL-AUD-DEGRADE-001' -Elevated -Variables $variables `
+        -EnvctlProperties $properties -Tools @{ pnputil = 'C:\Windows\System32\pnputil.exe' } -Responses @{
+        'record.snapshot'   = [pscustomobject]@{ systemAudioEnabled = $true }
+        'pipeline.snapshot' = @(
+            (New-DryRunPipelineSnapshot -Degraded $true),
+            (New-DryRunPipelineSnapshot -Degraded $false)
+        )
+    }
+    Assert-Equal 'PASS' $green.Result.Result "degraded then recovered is the contract: $($green.Result.Message)"
+    Assert-Equal 0 $green.Prompts.Count 'pnputil removes the device, so nobody unplugs anything'
+    Assert-True ($green.Result.Message -match '\[pnputil\]') $green.Result.Message
+}
+
+Test-Case 'REL-UPD-MSI-DECLINE-001 runs in a sandbox and is red on a stranded install' {
+    $steps = @{ 'install-base' = $true; 'select-channel' = $true; 'decline-offer' = $true
+        'decline-apply'        = $true; 'decline-state' = $false; 'decline-updater-closed' = $true
+    }
+    $red = Invoke-DryRunSandboxUpdateGate -ScenarioId 'REL-UPD-MSI-DECLINE-001' -Steps $steps
+    Assert-Equal 'FAIL' $red.Result.Result "a wrong failureCase is a product defect: $($red.Result.Message)"
+    Assert-True ($red.Result.Message -match 'decline-state') $red.Result.Message
+
+    $steps['decline-state'] = $true
+    $green = Invoke-DryRunSandboxUpdateGate -ScenarioId 'REL-UPD-MSI-DECLINE-001' -Steps $steps
+    Assert-Equal 'PASS' $green.Result.Result $green.Result.Message
+    Assert-Equal 0 $green.Prompts.Count 'nobody clicks a Secure Desktop prompt in the automated campaign'
+}
+
+Test-Case 'REL-UPD-MSI-DECLINE-001 is unverified when the worker never reached a step' {
+    # A step the worker never got to must not read as a pass over a shorter list.
+    $result = Invoke-DryRunSandboxUpdateGate -ScenarioId 'REL-UPD-MSI-DECLINE-001' `
+        -Steps @{ 'install-base' = $true; 'select-channel' = $true }
+    Assert-Equal 'UNVERIFIED' $result.Result.Result $result.Result.Message
+    Assert-True ($result.Result.Message -match 'never reached') $result.Result.Message
+}
+
+Test-Case 'REL-UPD-MSI-001 reads the same rehearsal and requires the updater to have been gone' {
+    # The second rc19 defect: the declined update left the updater holding
+    # exosnap-updater.exe, so the accept could not stage its own and failed with
+    # "Failed to stage updater file" -- reported as an MSI failure.
+    $steps = @{ 'install-base' = $true; 'updater-gone-before-accept' = $false; 'accept-offer' = $true
+        'accept-apply'         = $true; 'accept-installed' = $true
+    }
+    $red = Invoke-DryRunSandboxUpdateGate -ScenarioId 'REL-UPD-MSI-001' -Steps $steps
+    Assert-Equal 'FAIL' $red.Result.Result "a held updater file must fail here, not later: $($red.Result.Message)"
+    Assert-True ($red.Result.Message -match 'updater-gone-before-accept') $red.Result.Message
+
+    $steps['updater-gone-before-accept'] = $true
+    $green = Invoke-DryRunSandboxUpdateGate -ScenarioId 'REL-UPD-MSI-001' -Steps $steps
+    Assert-Equal 'PASS' $green.Result.Result $green.Result.Message
+    Assert-Equal 0 $green.Prompts.Count 'an elevated sandbox raises no prompt'
+}
+
+Test-Case 'the update gates say what to install when no sandbox and no base MSI are there' {
+    # Never green without evidence: a missing precondition is UNAVAILABLE with the
+    # exact thing somebody has to install, not a pass and not a failure.
+    $result = Invoke-ReleaseDryRun -ScenarioId 'REL-UPD-MSI-DECLINE-001' `
+        -Tools @{ sandbox = $null } -Variables @{ EXOSNAP_UPDATE_FROM = ''; EXOSNAP_UPDATE_FROM_MSI = '' }
+    Assert-Equal 'UNAVAILABLE' $result.Result.Result $result.Result.Message
+    Assert-Equal 0 $result.Prompts.Count 'nobody is asked to perform a gate that cannot be verified'
+}
+
+Test-Case 'REL-PKG-CHOCO-001 stages a real sandbox run and judges its result document' {
+    # The staging, the .wsb and the result transport are exercised for real; only
+    # the virtual machine itself is simulated, by a launcher that writes what the
+    # worker would have written.
+    $red = Invoke-DryRunChocolateyGate -Steps @(
+        @{ name = 'prepare'; ok = $true }, @{ name = 'pack'; ok = $true },
+        @{ name = 'removeExisting'; ok = $true },
+        @{ name = 'install'; ok = $false; detail = 'no start-menu shortcut' },
+        @{ name = 'uninstall'; ok = $true }, @{ name = 'restore'; ok = $true }) -RestoreRan $true
+    Assert-Equal 'FAIL' $red.Result.Result $red.Result.Message
+    Assert-True ($red.Result.Message -match 'start-menu shortcut') $red.Result.Message
+
+    $green = Invoke-DryRunChocolateyGate -Steps @(
+        @{ name = 'prepare'; ok = $true }, @{ name = 'pack'; ok = $true },
+        @{ name = 'removeExisting'; ok = $true }, @{ name = 'install'; ok = $true },
+        @{ name = 'uninstall'; ok = $true }, @{ name = 'restore'; ok = $true }) -RestoreRan $true
+    Assert-Equal 'PASS' $green.Result.Result $green.Result.Message
+    Assert-Equal 0 $green.Prompts.Count 'the sandbox worker is already elevated; there is no prompt to accept'
+    Assert-True ($green.Result.Message -match 'no prompt was raised') $green.Result.Message
+}
+
+Test-Case 'REL-VIS-OVERLAY-001 is red on a wrong appearance and green when both are judged right' {
+    $overlays = [pscustomobject]@{ overlays = @([pscustomobject]@{ name = 'badge'; visible = $true }) }
+    $responses = @{
+        'overlay.snapshot' = $overlays
+        'settings.get'     = [pscustomobject]@{ 'app.showQuickControls' = $false }
+        'app.identity'     = [pscustomobject]@{ pid = 4242; productVersion = '0.9.0' }
+        uia                = @{ Ok = $true; Detail = 'simulated'; Elements = @([pscustomobject]@{ Name = 'Recording'; ClassName = 'Qt'; ControlType = 'Window' }) }
+    }
+    # RED: the operator sees something wrong in Light, and the reason travels with
+    # the judgement rather than being asked for again afterwards.
+    # Both appearances are still judged after a wrong one: which of the two is
+    # broken is part of the finding, and a gate that stopped at the first would
+    # report half of it.
+    $answers = [System.Collections.Generic.Queue[string]]::new()
+    @('n', 'the badge went white in Light', 'j') | ForEach-Object { $answers.Enqueue($_) }
+    $red = Invoke-ReleaseDryRun -ScenarioId 'REL-VIS-OVERLAY-001' -Responses $responses `
+        -Operator { param($p) return $answers.Dequeue() }.GetNewClosure()
+    Assert-Equal 'FAIL' $red.Result.Result $red.Result.Message
+    Assert-True ($red.Result.Message -match 'went white in Light') "the reason must reach the report: $($red.Result.Message)"
+
+    $green = Invoke-ReleaseDryRun -ScenarioId 'REL-VIS-OVERLAY-001' -Responses $responses `
+        -Operator { param($p) return 'j' }
+    Assert-Equal 'PASS' $green.Result.Result $green.Result.Message
+    Assert-Equal 2 $green.Prompts.Count 'one judgement per appearance, asked while that appearance is on screen'
+    foreach ($prompt in $green.Prompts) {
+        Assert-True ($prompt -match '\[j\] richtig') "a sight check is never answered with Enter: $prompt"
+    }
+}
+
+Test-Case 'REL-VIS-OVERLAY-001 fails when the overlays never reached the desktop' {
+    # overlay.snapshot is OUR account of what we asked for. UI Automation is the one
+    # reader that survives WDA_EXCLUDEFROMCAPTURE, so the two stop being the same
+    # sentence.
+    $result = Invoke-ReleaseDryRun -ScenarioId 'REL-VIS-OVERLAY-001' -Operator { param($p) return 'j' } -Responses @{
+        'overlay.snapshot' = [pscustomobject]@{ overlays = @([pscustomobject]@{ name = 'badge'; visible = $true }) }
+        'settings.get'     = [pscustomobject]@{ 'app.showQuickControls' = $false }
+        'app.identity'     = [pscustomobject]@{ pid = 4242 }
+        uia                = @{ Ok = $true; Detail = 'simulated'; Elements = @() }
+    }
+    Assert-Equal 'FAIL' $result.Result.Result $result.Result.Message
+    Assert-True ($result.Result.Message -match 'did not reach the desktop') $result.Result.Message
+}
+
+Test-Case 'REL-VIS-NOTIFY-001 is red when the toast never reached the desktop and green when it did' {
+    $entries = [pscustomobject]@{ entries = @([pscustomobject]@{ sequence = 7; title = 'Window capture appears to have stalled' }) }
+    $base = @{
+        'notifications.snapshot' = @([pscustomobject]@{ entries = @() }, $entries)
+        'app.identity'           = [pscustomobject]@{ pid = 4242 }
+    }
+    $red = Invoke-ReleaseDryRun -ScenarioId 'REL-VIS-NOTIFY-001' -Operator { param($p) return 'j' } `
+        -Responses ($base + @{ uia = @{ Ok = $true; Detail = 'simulated'; Elements = @([pscustomobject]@{ Name = 'ExoSnap'; ClassName = 'Qt'; ControlType = 'Window' }) } })
+    Assert-Equal 'FAIL' $red.Result.Result $red.Result.Message
+    Assert-True ($red.Result.Message -match 'never reached the desktop') $red.Result.Message
+
+    $green = Invoke-ReleaseDryRun -ScenarioId 'REL-VIS-NOTIFY-001' -Operator { param($p) return 'j' } `
+        -Responses ($base + @{ uia = @{ Ok = $true; Detail = 'simulated'; Elements = @(
+                    [pscustomobject]@{ Name = 'Window capture appears to have stalled'; ClassName = 'Qt'; ControlType = 'Text' }) } })
+    Assert-Equal 'PASS' $green.Result.Result $green.Result.Message
+    Assert-Equal 1 $green.Prompts.Count 'one judgement, and only the tint is being judged'
+    Assert-True ($green.Prompts[0] -match '\[j\] richtig') $green.Prompts[0]
 }
 
 Write-Host ''
