@@ -385,3 +385,23 @@ TEST_F(UpdaterTextLayoutTest, StepListExposesEveryPhaseAndItsStatus) {
 }
 
 } // namespace
+
+// A hand-started updater refuses the swap while ExoSnap is up, and reaches the
+// same B1 card the handoff path uses. "Try the handoff again" is the handoff's
+// own word for it: nobody handed anything over here, so the card has to name the
+// action the reader actually has.
+TEST(UpdaterText, AppWontCloseNamesTheActionTheModeOffers) {
+    UpdaterController handoff(QStringLiteral("0.9.0-rc17"), QStringLiteral("0.9.0-rc18"));
+    handoff.setMode(exosnap::update::UpdaterMode::AppHandoff);
+    handoff.onFailure(FailureCase::AppWontClose, QString());
+    EXPECT_EQ(handoff.state().detail_text, QStringLiteral("Close the running app, then try the handoff again."));
+
+    UpdaterController manual(QStringLiteral("0.9.0-rc17"), QStringLiteral("0.9.0-rc18"));
+    manual.setMode(exosnap::update::UpdaterMode::Manual);
+    manual.onFailure(FailureCase::AppWontClose, QString());
+    EXPECT_EQ(manual.state().detail_text, QStringLiteral("Close ExoSnap, then try again."));
+
+    // Both stay the amber "nothing was touched" shape, with Retry as the action.
+    EXPECT_EQ(manual.state().headline, QStringLiteral("Couldn't close ExoSnap"));
+    EXPECT_EQ(manual.state().primary_action, QStringLiteral("Retry"));
+}

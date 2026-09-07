@@ -17,24 +17,32 @@ namespace exosnap::update {
 // value may or may not carry a trailing backslash.
 [[nodiscard]] std::wstring NormalizeDirForCompare(std::wstring path);
 
-// The install-mode rule.
+// What one registry hive says about an installation.
 //
-//   marker_present          HKLM/HKCU "installed" == 1
-//   registry_install_dir    HKLM/HKCU "InstallPath", if set
-//   running_exe_dir         directory of the running executable
+// Read as a unit, and that is the whole point of the type: the marker and the
+// path always come from the SAME key, so a marker found in HKLM can never be
+// compared against a path found in HKCU. Reading the two facts independently
+// made that pairing possible, and nothing in the comparison could notice.
 //
-// Installed requires BOTH the marker AND that this executable actually lives in
-// the stamped install directory. A portable copy on a machine that also has an
-// MSI install would otherwise inherit the marker and claim to be the installed
-// copy -- which the updater then rejects as a registry mismatch, leaving the
-// portable copy permanently unable to update itself.
+//   (no stamp)          neither hive carries the "installed" marker
+//   install_dir empty   the marker is set but "InstallPath" is not
+//   install_dir set     the directory the installer stamped
+struct InstallStamp {
+    std::wstring install_dir;
+};
+
+// The install-mode rule: this copy is Installed only when a hive stamped an
+// install directory AND this executable is running from it.
 //
-// With the marker present but no InstallPath to compare against, the answer
-// stays Installed: an install stamped by an older MSI that wrote no path is
-// still an install, and guessing Portable there would offer a ZIP swap over a
-// real installation.
-[[nodiscard]] InstallMode ClassifyInstallMode(bool marker_present,
-                                              const std::optional<std::wstring>& registry_install_dir,
+// A stamp is a fact about the MACHINE, not about this copy. A portable build on
+// a machine that also has an MSI install sees the same marker, so the directory
+// comparison is what separates "an install exists here" from "I am it".
+//
+// Everything that is not provably the install is Portable, because that is the
+// direction that fails safely: a portable answer costs a directory rename that
+// an installation refuses honestly, while a wrong Installed answer runs msiexec
+// on behalf of a copy that could not show it is the installed one.
+[[nodiscard]] InstallMode ClassifyInstallMode(const std::optional<InstallStamp>& stamp,
                                               const std::wstring& running_exe_dir) noexcept;
 
 } // namespace exosnap::update

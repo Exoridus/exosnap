@@ -15,20 +15,15 @@ std::wstring NormalizeDirForCompare(std::wstring path) {
     return path;
 }
 
-InstallMode ClassifyInstallMode(bool marker_present, const std::optional<std::wstring>& registry_install_dir,
+InstallMode ClassifyInstallMode(const std::optional<InstallStamp>& stamp,
                                 const std::wstring& running_exe_dir) noexcept {
-    if (!marker_present) {
+    if (!stamp.has_value() || stamp->install_dir.empty()) {
         return InstallMode::Portable;
     }
-    if (!registry_install_dir.has_value() || registry_install_dir->empty()) {
-        return InstallMode::Installed;
-    }
     if (running_exe_dir.empty()) {
-        // The caller could not resolve its own location. The marker is the only
-        // fact left, and it says installed.
-        return InstallMode::Installed;
+        return InstallMode::Portable;
     }
-    return NormalizeDirForCompare(*registry_install_dir) == NormalizeDirForCompare(running_exe_dir)
+    return NormalizeDirForCompare(stamp->install_dir) == NormalizeDirForCompare(running_exe_dir)
                ? InstallMode::Installed
                : InstallMode::Portable;
 }

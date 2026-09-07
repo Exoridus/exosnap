@@ -1039,6 +1039,95 @@ Test-Case 'a missing session report is unverified, not a pass' {
     Assert-Equal 'UNVERIFIED' $verdict.Result 'no report means the post-checks were not performed'
 }
 
+Test-Case 'a scenario reads snapshot fields through the safe accessor, never with $obj.field' {
+    # Set-StrictMode is on for the runner, so `$state.phase` on an object without a
+    # `phase` property THROWS. Inside a scenario that throw becomes "Scenario setup
+    # failed: The property 'phase' cannot be found on this object" -- a PowerShell
+    # message reported as a product FAIL. It cost a real campaign an UNAVAILABLE that
+    # was reported as a failure, and left the scenario's own child process running.
+    # Get-ReleaseSnapshotValue answers $null for an absent path instead.
+    $code = @(Get-Content -LiteralPath (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1') |
+            Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
+    Assert-True ($code -notmatch '\$\(\$state\.phase\)') `
+        'read updater/state fields with Get-ReleaseSnapshotValue: $($state.phase) throws under StrictMode'
+    Assert-True ($code -notmatch '\$\(\$state\.installState\)') `
+        'read updater/state fields with Get-ReleaseSnapshotValue: $($state.installState) throws under StrictMode'
+}
+
+Test-Case 'a mid-scenario question defers instead of asking when nobody can answer' {
+    # Read-Host asked anyway under -NonInteractive, and under a redirected stdin it
+    # got an empty string forever and re-asked -- an infinite loop, with the
+    # scenario's Windows-appearance change still applied. Read-OperatorAnswer is
+    # replaced here so a real Read-Host can never be reached: if the rules let the
+    # call through, the test fails loudly instead of hanging the suite.
+    function Write-Step { param($Text) $script:LastStep = $Text }
+    function Expand-ListArgument { param($Values) return @($Values) }
+    function Read-OperatorAnswer { param($Question) throw 'the terminal must not be asked here' }
+    . ([scriptblock]::Create((Get-ReleaseVerifyFunctionText -Name 'Read-ReleaseOperatorAnswer')))
+
+    $NonInteractive = $true
+    $Attest = @()
+    Assert-Equal 'skip' (Read-ReleaseOperatorAnswer -ScenarioId 'REL-VIS-OVERLAY-001' -Question 'looks right?') `
+        '-NonInteractive must defer the question, not ask it'
+
+    $NonInteractive = $false
+    $Attest = @('REL-VIS-OVERLAY-001')
+    # `skip`, never `yes`: -Attest says the CALLER performed an action and leaves the
+    # verdict to a Verify block. Here the question IS the verdict -- whether
+    # something LOOKS right -- and attesting it would manufacture a pass for a
+    # surface nobody saw.
+    Assert-Equal 'skip' (Read-ReleaseOperatorAnswer -ScenarioId 'REL-VIS-OVERLAY-001' -Question 'looks right?') `
+        'an attested visual judgement is DEFERRED, never a pass'
+
+    # This suite runs with a redirected stdin, so EVERY path defers here and the
+    # return value alone cannot say which rule fired. The reason it reports can:
+    # attesting some OTHER scenario must not consume this one's attest branch.
+    $Attest = @('REL-SOMETHING-ELSE-001')
+    Assert-Equal 'skip' (Read-ReleaseOperatorAnswer -ScenarioId 'REL-VIS-OVERLAY-001' -Question 'looks right?') `
+        'a redirected stdin defers rather than asking'
+    Assert-True ($script:LastStep -match 'no interactive terminal') `
+        "attesting a DIFFERENT scenario must not claim this one was attested: $script:LastStep"
+}
+
+
+Test-Case 'an instruction step is one array element, not a continued string' {
+    # Inside a multi-line @( ) literal, an element ending in `+` does NOT concatenate
+    # with the next line: PowerShell ends the element at the newline and the
+    # continuation becomes an element of its own. One instruction then prints as two
+    # numbered steps, the first of them half a sentence. REL-PRESENT-002 shipped that
+    # way -- its four instructions printed as five, with step 2 ending at "when the
+    # shell " and step 3 starting at "is elevated".
+    $lines = Get-Content -LiteralPath (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
+    $inDo = $false
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $line = $lines[$i]
+        if (-not $inDo) {
+            # Only a Do array that spans lines can carry the trap; a single-line
+            # one closes on the same line it opens.
+            if ($line -match 'Do\s+=\s+@\($' ) { $inDo = $true }
+            continue
+        }
+        if ($line.Trim() -eq ')') { $inDo = $false; continue }
+        Assert-True (-not $line.TrimEnd().EndsWith('+')) `
+            "line $($i + 1) continues a Do step with '+'; that splits it into two numbered instructions"
+    }
+}
+
+
+Test-Case 'the operator-answer seam is reached with the scenario id' {
+    # Read-ReleaseOperatorAnswer needs the id to tell whether -Attest names THIS
+    # scenario; a call that passes only the question silently loses that check.
+    $code = @(Get-Content -LiteralPath (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1') |
+            Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
+    $asks = [regex]::Matches($code, '\$ctx\.Ask\s+(\S+)')
+    Assert-True ($asks.Count -gt 0) 'the catalog is expected to ask at least one mid-scenario question'
+    foreach ($ask in $asks) {
+        Assert-True ($ask.Groups[1].Value -match "^'REL-") `
+            "`$ctx.Ask must be called with the scenario id first, got $($ask.Groups[1].Value)"
+    }
+}
+
+
 Write-Host ''
 Write-Host "$script:Passed/$($script:Passed + $script:Failed) passed"
 if ($script:Failed -gt 0) { exit 1 }

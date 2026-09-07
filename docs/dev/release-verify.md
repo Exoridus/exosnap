@@ -319,6 +319,27 @@ window-capture stall threshold is 10 s, so waiting up to 30 s for the stall
 consequence is measuring the product, not guessing at a schedule. Likewise a recording
 runs for its configured duration because that is what makes a file with content in it.
 
+## Driving the artifact: the control channel, never `--auto-record`
+
+Anything that has to record against the release under test goes through the Live
+Verify control channel (`--live-verify-control <run id>`, then `settings.set`,
+`record.selectTarget`, `record.start`, `record.stop`, `record.result`). This includes
+the checks a person runs by hand, such as the HDR media matrix.
+
+`--auto-record` is not an option here, and the failure is silent. The auto-record
+harness sits behind `EXOSNAP_HARNESS_GATE` (`app/quick/ExoSnap/Quick/CMakeLists.txt`):
+non-Release builds get it implicitly, a Release build only with
+`-DEXOSNAP_BUILD_BENCHMARK_HARNESS=ON`, which the release workflow does not pass. A
+shipping binary therefore parses the flag, finds no harness behind it, and starts as
+the ordinary interactive application — a window, CPU, no recording and no exit. It
+also writes to the user's real configuration directory, because the scratch-config
+isolation lives inside the same `#if`.
+
+The flag string alone is no evidence either way: `cli/CommandLineFlags.cpp` lists it
+in every build so an unknown-option message stays accurate. To tell the two apart,
+look for a string that only exists INSIDE the guard, such as the auto-record result
+JSON's `session_report_path`.
+
 ## Evidence
 
 Per scenario: the artifact identity, the environment before, what was requested and

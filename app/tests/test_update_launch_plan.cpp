@@ -9,7 +9,9 @@
 
 #include <gtest/gtest.h>
 
+#include <QProcessEnvironment>
 #include <QStringList>
+#include <QtGlobal>
 
 #include "../apps/updater/UpdaterArgs.h"
 #include "services/UpdateFeedOverride.h"
@@ -506,3 +508,69 @@ TEST(ResolveUpdateCardState, VerifyModeWithoutAnOfferedVersionFallsBack) {
 }
 
 } // namespace
+
+// -- UpdaterChildEnvironment: the app's own rendering opt-out is not the
+//    updater's ----------------------------------------------------------------
+//
+// The app sets QT_QPA_DISABLE_REDIRECTION_SURFACE=1 on itself so its Quick window
+// does not flash a white redirection bitmap at startup. The updater is Qt Widgets,
+// and Widgets paint into exactly the surface that flag removes: inherited, it
+// produces a correctly sized, "visible" window that renders nothing. Measured on
+// the published 0.9.0-rc17 updater -- same binary, same card, exstyle 0x0 without
+// the variable and 0x200000 (WS_EX_NOREDIRECTIONBITMAP) with it.
+
+TEST(UpdaterChildEnvironment, DropsTheRedirectionSurfaceOptOut) {
+    QProcessEnvironment parent;
+    parent.insert(QStringLiteral("QT_QPA_DISABLE_REDIRECTION_SURFACE"), QStringLiteral("1"));
+
+    const QProcessEnvironment child = exosnap::UpdaterChildEnvironment(parent);
+
+    EXPECT_FALSE(child.contains(QStringLiteral("QT_QPA_DISABLE_REDIRECTION_SURFACE")));
+}
+
+TEST(UpdaterChildEnvironment, KeepsEverythingElse) {
+    QProcessEnvironment parent;
+    parent.insert(QStringLiteral("QT_QPA_DISABLE_REDIRECTION_SURFACE"), QStringLiteral("1"));
+    parent.insert(QStringLiteral("PATH"), QStringLiteral("C:/Qt/bin"));
+    parent.insert(QStringLiteral("EXOSNAP_CONFIG_DIR"), QStringLiteral("C:/scratch/cfg"));
+
+    const QProcessEnvironment child = exosnap::UpdaterChildEnvironment(parent);
+
+    EXPECT_EQ(child.value(QStringLiteral("PATH")), QStringLiteral("C:/Qt/bin"));
+    EXPECT_EQ(child.value(QStringLiteral("EXOSNAP_CONFIG_DIR")), QStringLiteral("C:/scratch/cfg"));
+}
+
+// An environment that never had the variable must come back unchanged rather than
+// gaining an empty entry: QProcessEnvironment::remove on an absent key is a no-op,
+// and this asserts the function does not work around it.
+TEST(UpdaterChildEnvironment, LeavesAnEnvironmentWithoutTheKeyAlone) {
+    QProcessEnvironment parent;
+    parent.insert(QStringLiteral("PATH"), QStringLiteral("C:/Qt/bin"));
+
+    const QProcessEnvironment child = exosnap::UpdaterChildEnvironment(parent);
+
+    EXPECT_FALSE(child.contains(QStringLiteral("QT_QPA_DISABLE_REDIRECTION_SURFACE")));
+    EXPECT_EQ(child.keys().size(), parent.keys().size());
+}
+
+// The composition the product actually performs. UpdaterChildEnvironment is pure,
+// but the fix only works if the environment handed to it REFLECTS the qputenv
+// main.cpp did -- otherwise the key would be dropped by luck rather than by
+// design, and a later change to how the app sets it would go unnoticed.
+TEST(UpdaterChildEnvironment, DropsTheKeyThisProcessSetWithQputenv) {
+    const bool had = qEnvironmentVariableIsSet("QT_QPA_DISABLE_REDIRECTION_SURFACE");
+    const QByteArray previous = qgetenv("QT_QPA_DISABLE_REDIRECTION_SURFACE");
+    qputenv("QT_QPA_DISABLE_REDIRECTION_SURFACE", "1");
+    // The premise: without this the test below would pass for the wrong reason.
+    ASSERT_TRUE(
+        QProcessEnvironment::systemEnvironment().contains(QStringLiteral("QT_QPA_DISABLE_REDIRECTION_SURFACE")));
+
+    const QProcessEnvironment child = exosnap::UpdaterChildEnvironment(QProcessEnvironment::systemEnvironment());
+    EXPECT_FALSE(child.contains(QStringLiteral("QT_QPA_DISABLE_REDIRECTION_SURFACE")));
+
+    if (had) {
+        qputenv("QT_QPA_DISABLE_REDIRECTION_SURFACE", previous);
+    } else {
+        qunsetenv("QT_QPA_DISABLE_REDIRECTION_SURFACE");
+    }
+}

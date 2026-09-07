@@ -404,7 +404,11 @@ void UpdaterController::onFailure(FailureCase c, const QString& detail) {
     case FailureCase::AppWontClose: // B1
         state_.variant = TerminalVariant::Amber;
         state_.headline = QStringLiteral("Couldn't close ExoSnap");
-        state_.detail_text = QStringLiteral("Close the running app, then try the handoff again.");
+        // A hand-started run reaches this card too, and nothing was handed over
+        // to it -- naming the handoff there would describe a step the reader
+        // never took.
+        state_.detail_text = state_.manual ? QStringLiteral("Close ExoSnap, then try again.")
+                                           : QStringLiteral("Close the running app, then try the handoff again.");
         state_.safety_text =
             QStringLiteral("Your current version %1 is unchanged and still works.").arg(state_.from_version);
         state_.primary_action = QStringLiteral("Retry");

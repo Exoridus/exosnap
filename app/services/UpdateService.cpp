@@ -688,9 +688,17 @@ void UpdateService::LaunchUpdater() {
     // Launch detached: the app does not wait — the updater sends WM_CLOSE when it is
     // ready to swap. QProcess applies the correct Windows argument-quoting rules so
     // paths/args with spaces or quotes are passed through safely.
+    //
+    // The non-static overload, because only it can set the child's environment: the
+    // static one hands over this process's own, and that carries the Quick rendering
+    // opt-out the updater's Widgets UI cannot survive (UpdaterChildEnvironment).
     qint64 updater_pid = 0;
-    const bool ok = QProcess::startDetached(QDir::toNativeSeparators(staged_exe), flags,
-                                            QDir::toNativeSeparators(staging_dir), &updater_pid);
+    QProcess updater;
+    updater.setProgram(QDir::toNativeSeparators(staged_exe));
+    updater.setArguments(flags);
+    updater.setWorkingDirectory(QDir::toNativeSeparators(staging_dir));
+    updater.setProcessEnvironment(UpdaterChildEnvironment(QProcessEnvironment::systemEnvironment()));
+    const bool ok = updater.startDetached(&updater_pid);
     if (!ok) {
         emit updateError(upd::VerifyResult::PackageNotFound, QStringLiteral("Failed to launch the updater."));
         return;

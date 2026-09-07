@@ -13,6 +13,7 @@
 //   - Recording guard is wired to RecordingCoordinator::State().
 
 #include <QObject>
+#include <QProcessEnvironment>
 #include <QString>
 #include <QStringList>
 #include <optional>
@@ -232,6 +233,19 @@ class UpdateService final : public QObject {
 // anything. It is a control-session identity and deliberately NOT part of the
 // handoff document: one names a pipe, the other names a product operation.
 [[nodiscard]] QStringList BuildUpdaterArgs(const QString& handoff_path, const QString& automation_run_id = QString());
+
+// The environment the staged updater is launched with: this process's own, minus
+// the Qt rendering opt-out it sets for ITSELF.
+//
+// main.cpp sets QT_QPA_DISABLE_REDIRECTION_SURFACE=1 with qputenv so this
+// application's Quick window does not flash a white redirection bitmap at
+// startup. qputenv writes the process environment, and a child inherits it. The
+// updater is Qt WIDGETS, and Widgets paint into exactly the redirection surface
+// that flag removes -- inherited, it yields a correctly sized window that Windows
+// reports as visible and that renders nothing at all. That window is the only
+// user interface left on the machine once the updater has closed the app, so a
+// declined or failed update becomes unreadable rather than merely ugly.
+[[nodiscard]] QProcessEnvironment UpdaterChildEnvironment(const QProcessEnvironment& parent);
 
 // The document itself, assembled from what this process knows. Pure so the
 // contract can be asserted without a filesystem, a feed or a child process.
