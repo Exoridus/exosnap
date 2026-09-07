@@ -47,7 +47,19 @@ function(exosnap_add_gtest)
   # the DLLs with a SINGLE custom target per output directory and have every test
   # target in that directory depend on it: the copies then run exactly once,
   # serially, so two writers never touch the same file.
-  string(MAKE_C_IDENTIFIER "${CMAKE_CURRENT_BINARY_DIR}" _exosnap_dir_key)
+  #
+  # The key is the binary directory RELATIVE to the build root, never its
+  # absolute path. It ends up inside a generated batch file name under
+  # CMakeFiles/, and an absolute path pushes that file past MAX_PATH in a deep
+  # build tree (a git worktree under .claude/worktrees/ reaches 269 characters):
+  # ninja then cannot launch it at all -- "CreateProcess: The filename or
+  # extension is too long" -- and NO target in the tree builds. Relative is just
+  # as unique, because a directory appears exactly once in one build tree.
+  file(RELATIVE_PATH _exosnap_dir_relative "${CMAKE_BINARY_DIR}" "${CMAKE_CURRENT_BINARY_DIR}")
+  if(_exosnap_dir_relative STREQUAL "")
+    set(_exosnap_dir_relative "root")
+  endif()
+  string(MAKE_C_IDENTIFIER "${_exosnap_dir_relative}" _exosnap_dir_key)
   set(_exosnap_stage_target "exosnap_stage_runtime_dlls_${_exosnap_dir_key}")
   if(NOT TARGET ${_exosnap_stage_target})
     # The stage target can run before MSBuild creates the per-config output

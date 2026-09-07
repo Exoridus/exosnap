@@ -360,6 +360,38 @@ TEST(AudioThreadSourceAgnosticTest, AudioThread_ResampledTrack_DrainsResamplerTa
     }
 }
 
+TEST(AudioThreadSourceAgnosticTest, AudioThread_RecordsTheCaptureSourceRate_NotTheEncoderRate) {
+    // The encoder's rate cannot say which device format was recorded from: Opus
+    // pins it to 48 kHz whatever the endpoint runs at, so a report that carries
+    // only that number describes every endpoint identically. Neither can the
+    // resampler drain counters, which are also written on a 48 kHz endpoint once
+    // clock slaving builds its identity context.
+    //
+    // The two rates differ here in the opposite direction -- a 48 kHz mock source
+    // encoded at 44.1 kHz -- so a stat that recorded the target instead of the
+    // source shows up as 44100.
+    auto state_ptr = std::make_shared<SessionState>();
+    SessionState& state = *state_ptr;
+    state.config.audio_codec = AudioCodec::Pcm;
+    state.config.audio_sample_rate = 44100;
+    state.config.audio_channels = 2;
+    state.config.audio_bit_depth = 16;
+    state.audio_track_count = 1;
+
+    auto source = std::make_unique<MockAudioCaptureSource>(&state.stop_requested, 3);
+    auto thread = std::make_shared<AudioThread>(state_ptr, std::move(source), 0);
+
+    thread->Start();
+    ASSERT_TRUE(thread->Join(5000));
+    EXPECT_FALSE(state.HasFailure());
+
+    std::lock_guard lk(state.stats_mutex);
+    EXPECT_EQ(state.stats.per_track_source_sample_rate[0], 48000u);
+    // A track that never ran reports 0 rather than a plausible default, so an
+    // absent measurement can never be read as a device format.
+    EXPECT_EQ(state.stats.per_track_source_sample_rate[1], 0u);
+}
+
 // Mock source that delivers kFramesPerPacket-sample chunks and signals stop after all packets.
 // Used to verify PTS step size with sub-Opus-frame delivery (like a 10 ms WASAPI period).
 class SmallChunkMockSource : public IAudioCaptureSource {

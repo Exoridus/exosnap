@@ -153,6 +153,24 @@ undocumented interface; naming a tool keeps that mechanism outside the release p
 while still letting the gate run itself. Without the variable it stays the operator
 gate it has always been, and the product assertions are identical either way.
 
+`REL-PKG-CHOCO-001` is the one gate that installs software, so it is opt-in and it
+raises exactly one prompt. `choco` and `msiexec /qn` need an elevated token — an
+unelevated silent `msiexec` does not even ask, it fails with 1603 and "no credential
+elevation is possible" — so the whole rehearsal runs inside a single elevated worker
+(`scripts/lib/choco-rehearsal-worker.ps1`) that packs a rewritten copy of
+`packaging/chocolatey`, removes the installed ExoSnap, installs the package,
+uninstalls it and reinstalls the release MSI. The tracked package is never modified:
+the copy's `url64bit`/`checksum64` are pointed at the local MSI, because the tracked
+checksum describes a file that does not exist until the release is published. The
+worker writes a JSON result plus per-step logs into the campaign's evidence
+directory, and the unelevated runner turns that into the verdict — a step the worker
+never reached is `UNVERIFIED`, never a pass, and the restore step is in that list
+because every later gate expects the release still installed. The MSI is not bound by
+`prepare` (the campaign binds the portable `exosnap.exe` only): the gate looks for a
+single sibling `*.msi` beside the artifact, compares it against a `.msi.sha256`
+sidecar when one is there, and reports `UNAVAILABLE` when it finds none or several.
+`EXOSNAP_RELEASE_MSI` names one explicitly.
+
 Two gates need a probe binary rather than a person, and say so when it is missing:
 `probe_stall_window` (`-DEXOSNAP_BUILD_PROBES=ON`) owns a window, shows it without
 taking focus and stops presenting on its own timer. Without it, `REL-CAP-STALL-001`

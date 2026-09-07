@@ -48,6 +48,13 @@ struct SessionStats {
     std::array<bool, 3> per_track_resampler_drain_recorded{};
     std::array<uint64_t, 3> per_track_resampler_drained_frames{};
     std::array<uint64_t, 3> per_track_resampler_undrained_frames{};
+    // The rate each track's CAPTURE SOURCE delivered, before conversion to the
+    // encoder's rate (same indexing again). Not derivable from anything else in
+    // this struct: audio_codec Opus pins the output to 48 kHz whatever the
+    // endpoint ran at, and the resampler counters above cannot stand in for it
+    // either, because clock slaving builds a resample context on a 48 kHz
+    // endpoint too. 0 means the source never reported a format.
+    std::array<uint32_t, 3> per_track_source_sample_rate{};
     bool source_loss = false;
     // True once any audio capture source was lost mid-recording and degraded to
     // honest silence (ADR 0046). A post-flight fact so the "Saved" report can
