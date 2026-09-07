@@ -873,6 +873,8 @@ qt_add_qml_module(record_controls_qml_tests
         # `ExoGlyph.Mic` in the tested components being reported as an unknown
         # member while the same lines linted clean in the shipping module.
         QtQuick.Shapes
+        # OverlayNotificationToast's two-layer shadow is a nested MultiEffect.
+        QtQuick.Effects
     # ExoTheme.qml resolves every colour through the QuickThemeTokens C++
     # singleton. Compiling that class into this module too registers it under
     # this URI, so the tested components see the same tokens the shipping module
@@ -979,6 +981,10 @@ qt_add_qml_module(record_controls_qml_tests
         # QCR-606: the HUD's token list is keyed on the content policy, not on
         # the measured values.
         OverlayDiagnostics.qml
+        # The three-line body clamp and the dismiss glyph's rest-state
+        # visibility are state, not pixels, so they are asserted here;
+        # --visual-test judges the card's geometry and colour.
+        OverlayNotificationToast.qml
         # The one capture-excluded overlay that is not click-through, so its
         # placement against the monitor's work area (not the full rectangle) is
         # a correctness property rather than a layout preference.

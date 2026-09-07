@@ -364,11 +364,16 @@ TEST(ThemeContrastTest, AnOutlinedDestructiveActionStatesItselfInReadableInk) {
 
 // ── QCR-501: fixed-dark surfaces ────────────────────────────────────────────
 //
-// Six surfaces in the product are near-black in BOTH appearances because what
-// is behind them is not the application: the five capture-excluded overlays
-// (recording pill, diagnostics pill, countdown, quick-control pill, and the
-// desktop toast's tone fills) and the readouts drawn over the live preview.
-// They resolve their colours against the Dark appearance, so `overlayInk` and
+// Five surfaces in the product are near-black in BOTH appearances because what
+// is behind them is not the application: the four capture-excluded overlays
+// that float over the RECORDED PICTURE (recording pill, diagnostics pill,
+// countdown, quick-control pill) and the readouts drawn over the live preview.
+// The desktop notification toast is the fifth capture-excluded window, and it
+// is deliberately NOT one of these -- it sits on the desktop beside Windows'
+// own notifications, not over recorded content, and resolves its own colours
+// from the Windows shell appearance instead (`ExoTheme.shell*`, see
+// QuickThemeTokens.h).
+// The rest resolve their colours against the Dark appearance, so `overlayInk` and
 // friends must clear the bars on every one of those grounds in BOTH
 // appearances — which is the same assertion twice by construction, and that is
 // the point: the test fails the moment one of them goes back to an appearance
@@ -500,10 +505,10 @@ TEST(ThemeContrastTest, TheIndicatorRungIsWhyTheSemanticTextRungsExist) {
 }
 
 TEST(ThemeContrastTest, EveryToneFilledActionCarriesReadableInk) {
-    // The desktop toast's primary action is filled with the toast's own tone,
-    // and it used to draw one literal near-black label on all four fills. The
-    // theme curates an ink per fill instead; `successInk`/`warningInk` complete
-    // the set `accentInk`/`errorInk` already covered.
+    // A tone-filled control (a semantic badge, a filled pill) used to draw one
+    // literal near-black label on all four fills. The theme curates an ink per
+    // fill instead; `successInk`/`warningInk` complete the set
+    // `accentInk`/`errorInk` already covered.
     for (const Combination& combination : shippedCombinations()) {
         QuickThemeTokens tokens;
         tokens.setAppearance(combination.appearance, combination.accent);
