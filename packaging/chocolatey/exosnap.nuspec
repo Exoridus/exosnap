@@ -69,6 +69,9 @@ project's GitHub Release. No binaries are redistributed inside the package.
   formats are not frozen and may change incompatibly before 1.0.
 * The published MSI is not code-signed yet, so Windows SmartScreen may warn on
   first launch.
+* Window capture cannot record a game in legacy exclusive fullscreen, which
+  bypasses the desktop compositor. Record the monitor instead; ExoSnap detects
+  the case before a recording starts and offers the switch.
 * The HEVC, hvc1 and 10-bit encoder paths work end to end but have not been
   validated across every NVIDIA GPU generation. Use H.264 or AV1 if you hit a
   problem.
@@ -77,13 +80,14 @@ project's GitHub Release. No binaries are redistributed inside the package.
          the MSI does not bundle vcruntime140/msvcp140. Without this dependency a
          clean machine fails to launch with STATUS_DLL_NOT_FOUND (0xC0000135). -->
     <dependencies>
-      <!-- The redistributable must be at least as new as the MSVC toolset that
-           built the release binaries: a newer toolset may emit calls to runtime
-           exports an older redistributable does not have. Release MSIs are built
-           on the GitHub Actions windows-2022 image (VS 2022 17.14, MSVC toolset
-           14.44), so 14.44 is the floor rather than the VS 2022 baseline.
-           Re-check whenever the release runner image moves to a newer toolset. -->
-      <dependency id="vcredist140" version="14.44.35211" />
+      <!-- The redistributable must come from the same or a newer 14.x line as the
+           MSVC toolset that built the release binaries, because a newer toolset
+           may emit calls to runtime exports an earlier line does not have.
+           Release MSIs are built on the GitHub Actions windows-2022 image, whose
+           toolset is 14.44, so the floor is the first 14.44 release on the feed
+           rather than the VS 2022 baseline; a clean machine resolves to the
+           newest available anyway. Re-check whenever the runner image moves. -->
+      <dependency id="vcredist140" version="14.44.35112.1" />
     </dependencies>
   </metadata>
   <files>
