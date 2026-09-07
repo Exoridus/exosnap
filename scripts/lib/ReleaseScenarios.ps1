@@ -359,7 +359,7 @@ function Get-ReleaseScenarioCatalog {
             # this machine depends on what it finds, and an empty hub is reported as
             # unchecked rather than passed.
             [void](Invoke-LiveVerifyCommand -Connection $conn -Command 'diagnostics.run')
-            $notificationDeadline = [DateTime]::UtcNow.AddSeconds(10)
+            $notificationDeadline = Get-ReleaseGateDeadline -Seconds (10)
             while ([DateTime]::UtcNow -lt $notificationDeadline) {
                 $hub = (Invoke-LiveVerifyCommand -Connection $conn -Command 'notifications.snapshot').result
                 # @(...) around the CALL, not only inside it: a function returning an
@@ -515,6 +515,10 @@ function Get-ReleaseScenarioCatalog {
         EnvironmentKeys     = @('elevated', 'gpus')
         Requires            = @{}
         Desired             = @{}
+        # Only an UNELEVATED runner has anything to ask: an elevated one launches the
+        # elevated child itself and raises no prompt at all.
+        AsksAPerson         = $true
+        UsesElevatedSession = $true
         Run                 = {
             param($ctx)
             # UAC is a Windows secure surface. Automation may prepare the transition,
@@ -525,6 +529,9 @@ function Get-ReleaseScenarioCatalog {
             $gate = @{
                 Id                = 'REL-PRESENT-002'
                 Title             = 'Elevated relaunch for present diagnostics'
+                Kind              = 'Done'
+                Line              = "In an ELEVATED PowerShell run:  & '$exe' --live-verify-control $runId   " +
+                '-- then leave something animating on the primary display.'
                 # Values the Verify block needs travel HERE, not in a closure. A
                 # `.GetNewClosure()` block is bound to a synthetic module that does not
                 # inherit the runner's functions, so it cannot call Connect-LiveVerify
@@ -547,8 +554,22 @@ function Get-ReleaseScenarioCatalog {
                 'presentCount greater than zero. Tearing false and discarded zero are accepted results.'
                 Verify            = {
                     param($context, $gate)
-                    try { $conn = Connect-LiveVerify -RunId $gate.State.runId -ConnectTimeoutMs 20000 }
-                    catch { return @{ Ok = $false; Detail = "no control channel at run id $($gate.State.runId): $($_.Exception.Message)" } }
+                    # An already-open connection is REUSED rather than reopened. The
+                    # control endpoint serves one client at a time, so an elevated
+                    # runner that holds the shared session and then connects again
+                    # here would be waiting on itself.
+                    $ownsConnection = $false
+                    $conn = $null
+                    if ($gate.State.ContainsKey('connection') -and $null -ne $gate.State.connection) {
+                        $conn = $gate.State.connection
+                    }
+                    else {
+                        try {
+                            $conn = Connect-LiveVerify -RunId $gate.State.runId -ConnectTimeoutMs 20000
+                            $ownsConnection = $true
+                        }
+                        catch { return @{ Ok = $false; Detail = "no control channel at run id $($gate.State.runId): $($_.Exception.Message)" } }
+                    }
                     try {
                         $identity = $conn.Identity
                         if ($identity.executableSha256 -ne $context.Artifact.exeSha256) {
@@ -565,15 +586,15 @@ function Get-ReleaseScenarioCatalog {
                         # decode, and presents arrive when the desktop draws. Polling the
                         # actual snapshot is the measurement, not a guess that enough time
                         # has passed.
-                        $deadline = [DateTime]::UtcNow.AddSeconds(30)
+                        $deadline = Get-ReleaseGateDeadline -Seconds (30)
                         $present = $null
                         while ([DateTime]::UtcNow -lt $deadline) {
                             $present = (Invoke-LiveVerifyCommand -Connection $conn -Command 'environment.snapshot').result.present
                             if ($present.available -and $present.presentCount -gt 0) { break }
                             Start-Sleep -Milliseconds 500
                         }
-                        $evidence = Save-LiveVerifyEvidence -Context $context -CheckId 'REL-PRESENT-002' `
-                            -Name 'present-elevated.json' -Value $present
+                        $evidence = @(Save-LiveVerifyEvidence -Context $context -CheckId 'REL-PRESENT-002' `
+                                -Name 'present-elevated.json' -Value $present)
                         if (-not $present.elevated) {
                             return @{ Ok = $false; Detail = 'the process reports os.elevated false'; Evidence = @($evidence) }
                         }
@@ -592,30 +613,59 @@ function Get-ReleaseScenarioCatalog {
                         if ($present.mode -eq 'unavailable' -or [string]::IsNullOrWhiteSpace($present.mode)) {
                             return @{ Ok = $false; Detail = 'presents were counted but no mode was classified'; Evidence = @($evidence) }
                         }
+                        # The independent oracle. Our present numbers are decoded from
+                        # an ETW session we opened, so a gate that only reads them back
+                        # is asking one decoder whether it agrees with itself. Intel's
+                        # PresentMon decodes the same events with its own
+                        # implementation; if it counts nothing while we count
+                        # thousands, one of the two is wrong and this gate is exactly
+                        # where that has to surface.
+                        #
+                        # No process filter: this gate claims a real-time ETW session
+                        # works on this machine, not that one process presented.
+                        $oracle = Resolve-ReleaseTool -Name 'presentmon'
+                        $oracleDetail = $oracle.Detail
+                        if ($oracle.Available) {
+                            $csv = Join-Path $context.RunDirectory 'checks/REL-PRESENT-002/presentmon.csv'
+                            New-Item -ItemType Directory -Path (Split-Path -Parent $csv) -Force | Out-Null
+                            $observation = Get-ReleasePresentMonObservation -Tool $oracle -CsvPath $csv -Seconds 5
+                            $evidence += 'checks/REL-PRESENT-002/presentmon.csv'
+                            if (-not $observation.Ok) { $oracleDetail = "PresentMon could not measure: $($observation.Detail)" }
+                            elseif ($observation.Frames -le 0) {
+                                return @{ Ok = $false
+                                    Detail   = 'we decoded presents but PresentMon decoded none from the same ' +
+                                    'events; our present count is not corroborated'
+                                    Evidence = @($evidence)
+                                }
+                            }
+                            else { $oracleDetail = "PresentMon corroborates: $($observation.Detail)" }
+                        }
                         return @{ Ok = $true
-                            Detail   = "mode=$($present.mode) presents=$($present.presentCount) tearing=$($present.tearing) discarded=$($present.discardedCount)"
+                            Detail   = "mode=$($present.mode) presents=$($present.presentCount) " +
+                            "tearing=$($present.tearing) discarded=$($present.discardedCount); $oracleDetail"
                             Evidence = @($evidence)
                         }
                     }
-                    finally { try { $conn.Close() } catch { } }
+                    finally { if ($ownsConnection) { try { $conn.Close() } catch { } } }
                 }
             }
             # An elevated runner needs no operator here: launching an elevated child
             # raises no prompt when the parent already holds the token, so the gate
-            # becomes a sequence rather than a question. The instance is CLOSED again
-            # afterwards -- the single-instance guard is machine-wide, and one left
-            # running makes every later scenario wait for a control channel that was
-            # never created.
-            if (Test-RunnerElevated) {
-                $elevated = Start-Process -FilePath $exe -PassThru -ArgumentList @('--live-verify-control', $runId)
-                try {
-                    $verdict = Resolve-ReleaseVerdict (& $gate.Verify $ctx $gate)
-                } finally {
-                    if ($null -ne $elevated -and -not $elevated.HasExited) {
-                        [void]$elevated.CloseMainWindow()
-                        if (-not $elevated.WaitForExit(10000)) { $elevated.Kill() }
-                    }
-                }
+            # becomes a sequence rather than a question.
+            #
+            # The instance is SHARED rather than closed at the end of this gate.
+            # REL-CAP-FSE-001 needs the very same elevated session -- present
+            # diagnostics are its precondition -- and when it launched its own it was
+            # swallowed by the machine-wide single-instance guard and reported "could
+            # not connect to the Live Verify endpoint" for a product that was fine.
+            # The runner releases the shared instance as soon as the next scenario in
+            # the ordered sequence does not want it; see Invoke-Scenarios.
+            $shared = $null
+            if ($null -ne $ctx.PSObject.Properties['ElevatedSession']) { $shared = & $ctx.ElevatedSession }
+            if ($null -ne $shared) {
+                $gate.State.runId = $shared.RunId
+                $gate.State.connection = $shared.Connection
+                $verdict = Resolve-ReleaseVerdict (& $gate.Verify $ctx $gate)
                 if ($null -eq $verdict) {
                     return @{ Result = 'UNVERIFIED'; Message = 'the present verification returned nothing' }
                 }
@@ -627,6 +677,7 @@ function Get-ReleaseScenarioCatalog {
                 }
                 return @{ Result = 'FAIL'; Message = $verdict.Detail; Evidence = $verdict.Evidence }
             }
+            [void]$exe
             return & $ctx.HumanGate $gate
         }
     }
@@ -720,6 +771,8 @@ function Get-ReleaseScenarioCatalog {
         Requires            = @{}
         Desired             = @{}
         OptIn               = $true
+        # Only when probe_stall_window is not built; with it the gate runs itself.
+        AsksAPerson         = $true
         Run                 = {
             param($ctx)
             $session = & $ctx.EnsureSession
@@ -728,6 +781,9 @@ function Get-ReleaseScenarioCatalog {
             $gate = @{
                 Id                = 'REL-CAP-STALL-001'
                 Title             = 'Stall a window capture'
+                Kind              = 'Done'
+                Line              = 'Record a BORDERLESS fullscreen window and make its content stop changing for ' +
+                'at least 15 seconds -- do not minimise it.'
                 # The session this scenario prepared its state in. A Verify block that
                 # finds a DIFFERENT one has nothing left to look at.
                 State             = @{ sessionId = "$(Get-ReleaseSnapshotValue -Object $session -Path 'RunId')" }
@@ -760,7 +816,7 @@ function Get-ReleaseScenarioCatalog {
                     if (-not $link.Ok) { return @{ Ok = $false; Detail = $link.Detail } }
                     if ($link.Relaunched) { return Get-ReleaseLostSessionVerdict -Subject 'the stalled recording' }
                     $conn2 = $link.Connection
-                    $deadline = [DateTime]::UtcNow.AddSeconds(30)
+                    $deadline = Get-ReleaseGateDeadline -Seconds (30)
                     $notifications = $null
                     $stall = $null
                     while ([DateTime]::UtcNow -lt $deadline) {
@@ -844,7 +900,7 @@ function Get-ReleaseScenarioCatalog {
                 # confirms itself: sourceName is what the app resolved the filter to.
                 $selected = $false
                 $sourceName = ''
-                $deadline = [DateTime]::UtcNow.AddSeconds(20)
+                $deadline = Get-ReleaseGateDeadline -Seconds (20)
                 while ([DateTime]::UtcNow -lt $deadline) {
                     [void](Invoke-LiveVerifyCommand -Connection $conn -Command 'record.selectTarget' `
                             -Parameters @{ kind = 'window'; titleFilter = $probeTitle })
@@ -883,7 +939,7 @@ function Get-ReleaseScenarioCatalog {
                 # refused at setup ("Settings cannot be changed while a recording is
                 # in flight") -- a failure that belongs to this teardown, not to it.
                 try { [void](Invoke-LiveVerifyCommand -Connection $conn -Command 'record.stop') } catch { }
-                $settleBy = [DateTime]::UtcNow.AddSeconds(30)
+                $settleBy = Get-ReleaseGateDeadline -Seconds (30)
                 while ([DateTime]::UtcNow -lt $settleBy) {
                     $state = (Invoke-LiveVerifyCommand -Connection $conn -Command 'record.snapshot').result
                     $busy = [bool](Get-ReleaseSnapshotValue -Object $state -Path 'recording') -or
@@ -948,7 +1004,7 @@ function Get-ReleaseScenarioCatalog {
             try {
                 $selected = $false
                 $sourceName = ''
-                $deadline = [DateTime]::UtcNow.AddSeconds(20)
+                $deadline = Get-ReleaseGateDeadline -Seconds (20)
                 while ([DateTime]::UtcNow -lt $deadline) {
                     [void](Invoke-LiveVerifyCommand -Connection $conn -Command 'record.selectTarget' `
                             -Parameters @{ kind = 'window'; titleFilter = $probeTitle })
@@ -1025,7 +1081,7 @@ function Get-ReleaseScenarioCatalog {
                 # refused at setup ("Settings cannot be changed while a recording is
                 # in flight") -- a failure that belongs to this teardown, not to it.
                 try { [void](Invoke-LiveVerifyCommand -Connection $conn -Command 'record.stop') } catch { }
-                $settleBy = [DateTime]::UtcNow.AddSeconds(30)
+                $settleBy = Get-ReleaseGateDeadline -Seconds (30)
                 while ([DateTime]::UtcNow -lt $settleBy) {
                     $state = (Invoke-LiveVerifyCommand -Connection $conn -Command 'record.snapshot').result
                     $busy = [bool](Get-ReleaseSnapshotValue -Object $state -Path 'recording') -or
@@ -1052,9 +1108,27 @@ function Get-ReleaseScenarioCatalog {
         Requires            = @{}
         Desired             = @{}
         OptIn               = $true
+        # Present diagnostics need an elevated session, and the ONE that exists is
+        # REL-PRESENT-002's. Launching a second instance here is what rc19 did: the
+        # machine-wide single-instance guard swallowed it, no pipe was ever opened,
+        # and the gate reported a connection failure as a product defect.
+        DependsOn           = @('REL-PRESENT-002')
+        UsesElevatedSession = $true
+        AsksAPerson         = $true
         Run                 = {
             param($ctx)
-            $session = & $ctx.EnsureSession
+            # `PSObject.Properties[...]` rather than a direct call: the context is a
+            # contract, and a caller that hands over a partial one (a focused test,
+            # a future single-scenario entry point) must reach the unelevated path
+            # rather than an unhandled property lookup.
+            $session = $null
+            if ($null -ne $ctx.PSObject.Properties['ElevatedSession']) { $session = & $ctx.ElevatedSession }
+            if ($null -eq $session) {
+                # Unelevated: the operator's own elevated instance from
+                # REL-PRESENT-002 is the only one that can answer this, and this
+                # runner may not raise a prompt to make one.
+                $session = & $ctx.EnsureSession
+            }
             # Present diagnostics are this gate's own precondition, not something it
             # measures: with the opt-in off (the default) or the session unelevated,
             # environment.snapshot can never report exclusiveFullscreen no matter what
@@ -1070,7 +1144,12 @@ function Get-ReleaseScenarioCatalog {
             $gate = @{
                 Id                = 'REL-CAP-FSE-001'
                 Title             = 'Put a real application into true exclusive fullscreen'
-                State             = @{ sessionId = "$(Get-ReleaseSnapshotValue -Object $session -Path 'RunId')" }
+                Kind              = 'Done'
+                Line              = 'Put a game or application into TRUE exclusive fullscreen (not borderless) on ' +
+                'the primary display and leave it presenting.'
+                State             = @{ sessionId = "$(Get-ReleaseSnapshotValue -Object $session -Path 'RunId')"
+                    connection                   = $session.Connection
+                }
                 Why               = 'No API makes another process take exclusive fullscreen. It is a decision that ' +
                 'application makes, and only a real one can make it.'
                 Do                = @(
@@ -1080,17 +1159,30 @@ function Get-ReleaseScenarioCatalog {
                 )
                 Expected          = 'The application owns the display exclusively.'
                 VerifyDescription = 'This runner requires present diagnostics to be available (elevated + opt-in) ' +
-                'and then asserts that environment.snapshot reports present mode exclusiveFullscreen. Without a ' +
-                'real present measurement this scenario reports UNAVAILABLE rather than guessing from window shape.'
+                'and then asserts that environment.snapshot reports present mode exclusiveFullscreen. When Intel ' +
+                'PresentMon is installed it captures the same window at the same time and must classify it as a ' +
+                'hardware legacy flip; a disagreement between the two decoders fails the gate. Without a real ' +
+                'present measurement this scenario reports UNAVAILABLE rather than guessing from window shape.'
                 Verify            = {
                     param($context, $gate)
-                    $link = Get-ReleaseGateConnection -Context $context `
-                        -ExpectedSessionId "$(Get-ReleaseGateStateValue -Gate $gate -Name 'sessionId')"
-                    if (-not $link.Ok) { return @{ Ok = $false; Detail = $link.Detail } }
-                    if ($link.Relaunched) {
-                        return Get-ReleaseLostSessionVerdict -Subject 'the in-depth present session'
+                    # The elevated session, when there is one, is handed in: it serves
+                    # one client at a time, so reconnecting to it would be the runner
+                    # waiting on itself, and Get-ReleaseGateConnection would launch a
+                    # SECOND, unelevated instance that the single-instance guard
+                    # swallows.
+                    $conn = $null
+                    if ($gate.State.ContainsKey('connection') -and $null -ne $gate.State.connection) {
+                        $conn = $gate.State.connection
                     }
-                    $conn = $link.Connection
+                    else {
+                        $link = Get-ReleaseGateConnection -Context $context `
+                            -ExpectedSessionId "$(Get-ReleaseGateStateValue -Gate $gate -Name 'sessionId')"
+                        if (-not $link.Ok) { return @{ Ok = $false; Detail = $link.Detail } }
+                        if ($link.Relaunched) {
+                            return Get-ReleaseLostSessionVerdict -Subject 'the in-depth present session'
+                        }
+                        $conn = $link.Connection
+                    }
                     $present = (Invoke-LiveVerifyCommand -Connection $conn -Command 'environment.snapshot').result.present
                     $evidence = @(Save-LiveVerifyEvidence -Context $context -CheckId 'REL-CAP-FSE-001' -Name 'present.json' -Value $present)
                     if (-not $present.available) {
@@ -1102,7 +1194,32 @@ function Get-ReleaseScenarioCatalog {
                     if ($present.mode -ne 'exclusiveFullscreen') {
                         return @{ Ok = $false; Detail = "present mode is '$($present.mode)', not exclusiveFullscreen"; Evidence = $evidence }
                     }
-                    return @{ Ok = $true; Detail = "present mode exclusiveFullscreen over $($present.presentCount) presents"; Evidence = $evidence }
+                    # The oracle, on the process this gate started. `exclusiveFullscreen`
+                    # is our name for what Intel calls a hardware legacy flip, and the
+                    # two decoders read the same ETW events -- so a disagreement means
+                    # one of them is wrong about the most consequential capture path
+                    # the product has.
+                    $oracle = Resolve-ReleaseTool -Name 'presentmon'
+                    $oracleDetail = $oracle.Detail
+                    $probePid = [int](Get-ReleaseGateStateValue -Gate $gate -Name 'probePid')
+                    if ($oracle.Available -and $probePid -gt 0) {
+                        $csv = Join-Path $context.RunDirectory 'checks/REL-CAP-FSE-001/presentmon.csv'
+                        New-Item -ItemType Directory -Path (Split-Path -Parent $csv) -Force | Out-Null
+                        $observation = Get-ReleasePresentMonObservation -Tool $oracle -ProcessId $probePid -CsvPath $csv -Seconds 5
+                        $evidence += 'checks/REL-CAP-FSE-001/presentmon.csv'
+                        if (-not $observation.Ok) { $oracleDetail = "PresentMon could not measure: $($observation.Detail)" }
+                        else {
+                            $agreement = Test-ReleasePresentModeAgreement -OurMode $present.mode -PresentMonModes $observation.PresentModes
+                            if ($agreement.Decidable -and -not $agreement.Agrees) {
+                                return @{ Ok = $false; Detail = $agreement.Detail; Evidence = $evidence }
+                            }
+                            $oracleDetail = $agreement.Detail
+                        }
+                    }
+                    return @{ Ok = $true
+                        Detail   = "present mode exclusiveFullscreen over $($present.presentCount) presents; $oracleDetail"
+                        Evidence = $evidence
+                    }
                 }
             }
             [void]$session
@@ -1115,6 +1232,10 @@ function Get-ReleaseScenarioCatalog {
             if ($null -ne $fseProbe) {
                 $fse = Start-Process -FilePath $fseProbe -PassThru `
                     -ArgumentList @('--display', '0', '--seconds', '45')
+                # The oracle needs a process to filter on, and this is the only place
+                # that knows which one it is: the present snapshot reports our
+                # classification, not the pid it attributed it to.
+                $gate.State.probePid = $fse.Id
                 try {
                     Start-Sleep -Seconds 3   # let the window exist before selecting it
                     # Present statistics follow the SELECTED capture target (ADR 0033:
@@ -1165,6 +1286,7 @@ function Get-ReleaseScenarioCatalog {
         Requires            = @{ audioRender = 'audio.render.normal' }
         Desired             = @{}
         OptIn               = $true
+        AsksAPerson         = $true
         Run                 = {
             param($ctx)
             $session = & $ctx.EnsureSession
@@ -1183,6 +1305,9 @@ function Get-ReleaseScenarioCatalog {
             $gate = @{
                 Id                = 'REL-AUD-DEGRADE-001'
                 Title             = 'Remove the recorded audio endpoint, then put it back'
+                Kind              = 'Done'
+                Line              = 'A recording is running: unplug or disable the playback device bound to ' +
+                'audio.render.normal, wait about five seconds, then put it back.'
                 State             = @{ sessionId = "$(Get-ReleaseSnapshotValue -Object $session -Path 'RunId')" }
                 Why               = 'A real endpoint loss is a physical or driver-level event. The unit tests cover ' +
                 'the logic with fake sources; the real device path has no harness seam, which is exactly why this ' +
@@ -1210,7 +1335,7 @@ function Get-ReleaseScenarioCatalog {
                     $recoveredAgain = $false
                     $leftRecording = $false
                     $samples = @()
-                    $deadline = [DateTime]::UtcNow.AddSeconds(60)
+                    $deadline = Get-ReleaseGateDeadline -Seconds (60)
                     while ([DateTime]::UtcNow -lt $deadline) {
                         $pipeline = (Invoke-LiveVerifyCommand -Connection $conn2 -Command 'pipeline.snapshot').result
                         $samples += $pipeline
@@ -1247,33 +1372,64 @@ function Get-ReleaseScenarioCatalog {
             # Contract: <tool> set-visibility <endpointId> 0|1
             $visibilityTool = $env:EXOSNAP_ENDPOINT_VISIBILITY_TOOL
             $endpointId = $null
-            if (-not [string]::IsNullOrWhiteSpace($visibilityTool) -and (Test-Path -LiteralPath $visibilityTool) -and
-                $ctx.Orchestrator.Available) {
+            $friendlyName = $null
+            if ($ctx.Orchestrator.Available) {
                 $envSnapshot = Get-EnvironmentSnapshot -Orchestrator $ctx.Orchestrator
                 $idProperty = @($envSnapshot.properties |
                         Where-Object { $_.key -eq 'audio.render.normal:endpoint-id' }) | Select-Object -First 1
                 if ($null -ne $idProperty) { $endpointId = $idProperty.value }
+                $nameProperty = @($envSnapshot.properties |
+                        Where-Object { $_.key -eq 'audio.render.normal:friendly-name' }) | Select-Object -First 1
+                if ($null -ne $nameProperty) { $friendlyName = "$($nameProperty.value)" }
+            }
+            if ([string]::IsNullOrWhiteSpace($visibilityTool) -or -not (Test-Path -LiteralPath $visibilityTool)) {
+                $endpointId = $null
+            }
+            # pnputil is the in-box, documented, reversible way to make a device
+            # disappear, so it is tried before anybody is asked to unplug anything.
+            # It needs an elevated token; an unelevated runner is refused by pnputil
+            # itself and falls through to the operator gate rather than retrying.
+            $pnputil = $null
+            $instanceId = $null
+            if ([string]::IsNullOrWhiteSpace($endpointId)) {
+                $pnputil = Resolve-ReleaseTool -Name 'pnputil'
+                if ($pnputil.Available -and (Test-RunnerElevated)) {
+                    $instanceId = Get-ReleaseAudioDeviceInstanceId -FriendlyName $friendlyName
+                }
+            }
+            if (-not [string]::IsNullOrWhiteSpace($instanceId)) {
+                # Same shape as the visibility-tool path below: the outage has to
+                # happen WHILE the verification polls and end while it is still
+                # polling, because the assertion is degraded-then-recovered.
+                $outage = Start-ReleaseEndpointOutage -Executable $pnputil.Path `
+                    -DisableArguments @('/disable-device', $instanceId) `
+                    -EnableArguments @('/enable-device', $instanceId)
+                try { $verdict = Resolve-ReleaseVerdict (& $gate.Verify $ctx $gate) }
+                finally {
+                    Stop-ReleaseEndpointOutage -Job $outage -Executable $pnputil.Path `
+                        -EnableArguments @('/enable-device', $instanceId)
+                }
+                if ($null -eq $verdict) {
+                    return @{ Result = 'UNVERIFIED'; Message = 'the degradation verification returned nothing' }
+                }
+                if ($verdict.Ok) {
+                    return @{ Result = 'PASS'; Message = "[pnputil] $($verdict.Detail)"; Evidence = $verdict.Evidence }
+                }
+                return @{ Result = 'FAIL'; Message = $verdict.Detail; Evidence = $verdict.Evidence }
             }
             if (-not [string]::IsNullOrWhiteSpace($endpointId)) {
                 # The outage has to happen WHILE the verification polls, and it has to
                 # end while it is still polling: the assertion is degraded-then-
                 # recovered, so a device that never comes back fails it just as a
                 # device that never left does.
-                $outage = Start-Job -ScriptBlock {
-                    param($tool, $id)
-                    Start-Sleep -Seconds 2
-                    & $tool set-visibility $id 0 | Out-Null
-                    Start-Sleep -Seconds 10
-                    & $tool set-visibility $id 1 | Out-Null
-                } -ArgumentList $visibilityTool, $endpointId
+                $outage = Start-ReleaseEndpointOutage -Executable $visibilityTool `
+                    -DisableArguments @('set-visibility', $endpointId, '0') `
+                    -EnableArguments @('set-visibility', $endpointId, '1')
                 try {
                     $verdict = Resolve-ReleaseVerdict (& $gate.Verify $ctx $gate)
                 } finally {
-                    Wait-Job $outage -Timeout 60 | Out-Null
-                    Remove-Job $outage -Force -ErrorAction SilentlyContinue
-                    # Belt and braces: an endpoint left hidden is a machine this
-                    # campaign broke, so it is put back even when the job died.
-                    & $visibilityTool set-visibility $endpointId 1 | Out-Null
+                    Stop-ReleaseEndpointOutage -Job $outage -Executable $visibilityTool `
+                        -EnableArguments @('set-visibility', $endpointId, '1')
                 }
                 if ($null -eq $verdict) {
                     return @{ Result = 'UNVERIFIED'; Message = 'the degradation verification returned nothing' }
@@ -1300,6 +1456,7 @@ function Get-ReleaseScenarioCatalog {
         Requires            = @{}
         Desired             = @{}
         OptIn               = $true
+        AsksAPerson         = $true
         Run                 = {
             param($ctx)
             $session = & $ctx.EnsureSession
@@ -1309,14 +1466,42 @@ function Get-ReleaseScenarioCatalog {
             # for the same reason an empty list satisfies any assertion over it.
             $audio = Enable-ReleaseSystemAudio -Connection $conn
             if (-not $audio.Ok) { return @{ Result = 'FAIL'; Message = $audio.Detail } }
+
+            # A VIRTUAL endpoint, not the machine's speakers. "Nothing is playing" is
+            # a property of a device nobody is routed to, and a virtual cable is such
+            # a device by construction -- so the gate stops asking a person to
+            # guarantee silence on the output they are actually listening to, and
+            # stops being wrong the moment a notification chimes.
+            #
+            # Restored in a finally block: the default endpoint is the operator's,
+            # and a campaign that left their sound on a virtual cable would have
+            # broken the machine it was verifying.
+            $cablePattern = if ([string]::IsNullOrWhiteSpace($env:EXOSNAP_SILENT_AUDIO_ENDPOINT)) { 'CABLE Input*' }
+            else { $env:EXOSNAP_SILENT_AUDIO_ENDPOINT }
+            $switcher = Resolve-ReleaseTool -Name 'soundvolumeview'
+            $endpoints = @(Get-ReleaseAudioOutputEndpoints -Connection $conn)
+            $cable = Find-ReleaseAudioEndpoint -Endpoints $endpoints -Pattern $cablePattern
+            $previousDefault = Get-ReleaseDefaultAudioEndpointName -Endpoints $endpoints
+            $routed = $false
+            if ($switcher.Available -and $null -ne $cable -and $null -ne $previousDefault -and $cable -ne $previousDefault) {
+                $switched = Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $cable
+                if ($switched.Ok) { $routed = $true }
+            }
+
             [void](Invoke-LiveVerifyCommand -Connection $conn -Command 'record.selectTarget' -Parameters @{ kind = 'monitor' })
             $started = Invoke-LiveVerifyCommand -Connection $conn -Command 'record.start'
-            if (-not $started.ok) { return @{ Result = 'FAIL'; Message = "record.start refused: $($started.error.message)" } }
+            if (-not $started.ok) {
+                if ($routed) { [void](Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $previousDefault) }
+                return @{ Result = 'FAIL'; Message = "record.start refused: $($started.error.message)" }
+            }
             [void](Wait-ReleaseRecordingState -Connection $conn -States @('Recording') -TimeoutMs 30000)
 
             $gate = @{
                 Id                = 'REL-AUD-SILENCE-001'
                 Title             = 'Leave the audio endpoint connected but silent'
+                Kind              = 'Done'
+                Line              = 'Make sure nothing is playing on the recorded output device, and leave it ' +
+                'connected and enabled.'
                 State             = @{ sessionId = "$(Get-ReleaseSnapshotValue -Object $session -Path 'RunId')" }
                 Why               = 'The distinction being tested is between "the device is gone" and "the device ' +
                 'is playing nothing". Only a real endpoint can be the second while remaining the first.'
@@ -1342,7 +1527,7 @@ function Get-ReleaseScenarioCatalog {
                     # that quiet is tolerated -- it is evidence that nothing was listened
                     # to. So the presence of audio is asserted alongside its health.
                     $audioActiveSeen = $false
-                    $deadline = [DateTime]::UtcNow.AddSeconds(15)
+                    $deadline = Get-ReleaseGateDeadline -Seconds (15)
                     while ([DateTime]::UtcNow -lt $deadline) {
                         $pipeline = (Invoke-LiveVerifyCommand -Connection $conn2 -Command 'pipeline.snapshot').result
                         $samples += $pipeline
@@ -1365,7 +1550,37 @@ function Get-ReleaseScenarioCatalog {
                     return @{ Ok = $true; Detail = 'an active source, silent for 15 s, produced no degradation'; Evidence = $evidence }
                 }
             }
-            return & $ctx.HumanGate $gate
+            try {
+                if ($routed) {
+                    # Nobody is routed to a virtual cable, so silence is a fact about
+                    # the machine rather than a promise from a person, and the gate
+                    # runs itself.
+                    $verdict = Resolve-ReleaseVerdict (& $gate.Verify $ctx $gate)
+                    if ($null -eq $verdict) {
+                        return @{ Result = 'UNVERIFIED'; Message = 'the silence verification returned nothing' }
+                    }
+                    if ($verdict.Ok) {
+                        return @{ Result = 'PASS'
+                            Message      = "[routed to '$cable'] $($verdict.Detail)"
+                            Evidence     = $verdict.Evidence
+                        }
+                    }
+                    return @{ Result = 'FAIL'; Message = $verdict.Detail; Evidence = $verdict.Evidence }
+                }
+                # Say WHY a person is being asked, so an operator can make the gate
+                # stop asking rather than answering it every release.
+                $missing = if (-not $switcher.Available) { $switcher.Detail }
+                elseif ($null -eq $cable) {
+                    "precondition missing: no render endpoint matches '$cablePattern' (install VB-CABLE from " +
+                    'https://vb-audio.com/Cable/ or set EXOSNAP_SILENT_AUDIO_ENDPOINT to a device nothing plays to)'
+                }
+                else { 'the virtual endpoint is already the default; nothing to switch' }
+                Write-Step $missing
+                return & $ctx.HumanGate $gate
+            }
+            finally {
+                if ($routed) { [void](Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $previousDefault) }
+            }
         }
     }
 
@@ -1385,14 +1600,55 @@ function Get-ReleaseScenarioCatalog {
         # So the format change is the operator's, and the verification is the runner's.
         Desired             = @{}
         OptIn               = $true
+        AsksAPerson         = $true
         Run                 = {
             param($ctx)
+            # THE rc19 DEFECT. The operator was handed a four-part text block whose
+            # third part was "make it the DEFAULT playback device" -- a machine-state
+            # precondition, asked of a person, and then failed as a product verdict
+            # when they set the format but not the role.
+            #
+            # Neither half is envctl's to set: `device-format` and `default-roles`
+            # are both ENV_HUMAN in the catalogue because the only mechanisms are the
+            # Settings drop-down and the undocumented IPolicyConfig, and envctl
+            # refuses to write those by policy rather than by omission. So the
+            # mechanism stays outside the release path in a named third-party tool,
+            # exactly as REL-AUD-DEGRADE-001 already does for endpoint visibility --
+            # and the read-back, which is the actual evidence, is unchanged.
+            $prepared = $null
+            $restore = $null
+            $switcher = Resolve-ReleaseTool -Name 'soundvolumeview'
+            if ($switcher.Available -and $ctx.Orchestrator.Available) {
+                $snapshot = Get-EnvironmentSnapshot -Orchestrator $ctx.Orchestrator
+                $nameProperty = @($snapshot.properties |
+                        Where-Object { $_.key -eq 'audio.render.44100-test:friendly-name' }) | Select-Object -First 1
+                $formatProperty = @($snapshot.properties |
+                        Where-Object { $_.key -eq 'audio.render.44100-test:device-format' }) | Select-Object -First 1
+                $defaultBefore = @($snapshot.properties |
+                        Where-Object { $_.key -eq 'audio.render.normal:friendly-name' }) | Select-Object -First 1
+                if ($null -ne $nameProperty -and -not [string]::IsNullOrWhiteSpace("$($nameProperty.value)")) {
+                    $endpointName = "$($nameProperty.value)"
+                    $format = Set-ReleaseAudioEndpointFormat -Tool $switcher -EndpointName $endpointName -SampleRate 44100
+                    $role = Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $endpointName
+                    if ($format.Ok -and $role.Ok) {
+                        $prepared = "$($format.Detail); $($role.Detail)"
+                        $restore = @{ Name = $endpointName
+                            PreviousFormat  = if ($null -ne $formatProperty) { "$($formatProperty.value)" } else { '' }
+                            PreviousDefault = if ($null -ne $defaultBefore) { "$($defaultBefore.value)" } else { '' }
+                        }
+                    }
+                }
+            }
             $gate = @{
                 Id                = 'REL-AUD-FORMAT-001'
                 Title             = 'Set the test endpoint to 44.1 kHz'
+                Kind              = 'Done'
+                Line              = 'In Sound settings, set the device bound to audio.render.44100-test to ' +
+                '44100 Hz and make it the default playback device.'
                 Why               = 'Windows has no documented, supported API for setting an endpoint shared-mode ' +
-                'format. The only route is an undocumented IPolicyConfig variant. Using it to make a test more ' +
-                'convenient would put an unsupported mechanism on the release path, so the change stays yours.'
+                'format or the default render role. The only routes are the Settings drop-down and an ' +
+                'undocumented IPolicyConfig variant, so envctl refuses both by policy and this gate uses a named ' +
+                'third-party tool when one is installed and asks you when it is not.'
                 Do                = @(
                     'Open Sound settings for the device bound to audio.render.44100-test.',
                     'Set its default format to 44100 Hz.',
@@ -1446,61 +1702,87 @@ function Get-ReleaseScenarioCatalog {
                     }
                 }
             }
-            $gateResult = & $ctx.HumanGate $gate
-            if ($gateResult.Result -ne 'PASS') { return $gateResult }
-
-            $ffprobe = Get-LiveVerifyFfprobe
-            if ($null -eq $ffprobe) { return @{ Result = 'UNAVAILABLE'; Message = 'ffprobe is not on PATH' } }
-            $session = & $ctx.EnsureSession
-            $conn = $session.Connection
-            # The assertion below is about the audio track in the output file, so the
-            # source has to be on. Otherwise a missing track would be reported as a
-            # 44.1 kHz defect when it is a settings state.
-            $audioOn = Enable-ReleaseSystemAudio -Connection $conn
-            if (-not $audioOn.Ok) { return @{ Result = 'FAIL'; Message = $audioOn.Detail } }
-            [void](Invoke-LiveVerifyCommand -Connection $conn -Command 'record.selectTarget' -Parameters @{ kind = 'monitor' })
-            [void](Invoke-LiveVerifyCommand -Connection $conn -Command 'record.start')
-            [void](Wait-ReleaseRecordingState -Connection $conn -States @('Recording') -TimeoutMs 30000)
-            Start-Sleep -Seconds 8
-            [void](Invoke-LiveVerifyCommand -Connection $conn -Command 'record.stop')
-            [void](Wait-ReleaseRecordingState -Connection $conn -States @('Completed', 'Failed') -TimeoutMs 60000)
-            $result = (Invoke-LiveVerifyCommand -Connection $conn -Command 'record.result').result
-            if (-not $result.succeeded) { return @{ Result = 'FAIL'; Message = 'the recording did not succeed' } }
-
-            $report = (Invoke-LiveVerifyCommand -Connection $conn -Command 'session.latest').result
-
-            $probeRaw = & $ffprobe -v error -print_format json -show_format -show_streams -- "$($result.outputPath)" 2>&1 | Out-String
-            $evidence = @(
-                Save-LiveVerifyEvidence -Context $ctx -CheckId 'REL-AUD-FORMAT-001' -Name 'ffprobe.json' -Raw $probeRaw
-                Save-LiveVerifyEvidence -Context $ctx -CheckId 'REL-AUD-FORMAT-001' -Name 'session.json' -Value $report
-            )
-            $probe = $probeRaw | ConvertFrom-Json
-            $audio = @($probe.streams | Where-Object { $_.codec_type -eq 'audio' })
-            if ($audio.Count -eq 0) {
-                return @{ Result = 'FAIL'; Message = 'the output file has no audio track'; Evidence = $evidence }
+            # Prepared by a tool -> nobody is asked and the read-back still decides.
+            # Prepared by nobody -> ONE line, not the four-part block that produced a
+            # product FAIL for a machine-state precondition in rc19.
+            if ($null -ne $prepared) {
+                Write-Step $prepared
+                $verdict = Resolve-ReleaseVerdict (& $gate.Verify $ctx $gate)
+                $gateResult = if ($null -eq $verdict) {
+                    @{ Result = 'UNVERIFIED'; Message = 'the endpoint verification returned nothing' }
+                }
+                elseif ($verdict.Ok) { @{ Result = 'PASS'; Message = "[tool] $($verdict.Detail)"; Evidence = $verdict.Evidence } }
+                else { @{ Result = 'FAIL'; Message = $verdict.Detail; Evidence = $verdict.Evidence } }
             }
-            # NOTHING downstream can read the endpoint's rate back. Every capture path
-            # opens the endpoint with AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM and asks for
-            # 48 kHz, so Windows has already resampled before the engine sees a frame;
-            # Opus then pins the output to 48 kHz as well. A gate that looked for
-            # 44100 anywhere in the product's own numbers would fail a correct
-            # product on every machine.
-            #
-            # The evidence chain is therefore: envctl measured the endpoint at
-            # 44100 (endpoint-format.json), envctl measured it holding the default
-            # render role (endpoint-roles.json), and recording THROUGH that
-            # conversion produced a whole, gapless file. The last is what is asserted
-            # here, with the same criteria the soak gate applies.
-            $duration = [double](Get-ReleaseSnapshotValue -Object $probe -Path 'format.duration')
-            $audioIndexes = @($audio | ForEach-Object { [int]$_.index })
-            $spans = @(Get-ReleaseAudioPacketSpan -FfprobePath $ffprobe -Path $result.outputPath `
-                    -StreamIndexes $audioIndexes)
-            $integrity = Get-ReleaseRecordingIntegrityVerdict -Report $report -ContainerSeconds $duration `
-                -AudioSpanSeconds $spans
-            return @{ Result = $integrity.Result
-                Message      = "recorded through the 44.1 kHz default endpoint (Windows converts to 48 kHz): " +
-                "$($audio[0].codec_name) @ $($audio[0].sample_rate) Hz out; $($integrity.Message)"
-                Evidence     = $evidence
+            else {
+                if (-not $switcher.Available) { Write-Step $switcher.Detail }
+                $gateResult = & $ctx.HumanGate $gate
+            }
+            if ($gateResult.Result -ne 'PASS') {
+                Restore-ReleaseAudioEndpointState -Tool $switcher -Restore $restore
+                return $gateResult
+            }
+
+            try {
+                $ffprobe = Get-LiveVerifyFfprobe
+                if ($null -eq $ffprobe) { return @{ Result = 'UNAVAILABLE'; Message = 'ffprobe is not on PATH' } }
+                $session = & $ctx.EnsureSession
+                $conn = $session.Connection
+                # The assertion below is about the audio track in the output file, so the
+                # source has to be on. Otherwise a missing track would be reported as a
+                # 44.1 kHz defect when it is a settings state.
+                $audioOn = Enable-ReleaseSystemAudio -Connection $conn
+                if (-not $audioOn.Ok) { return @{ Result = 'FAIL'; Message = $audioOn.Detail } }
+                [void](Invoke-LiveVerifyCommand -Connection $conn -Command 'record.selectTarget' -Parameters @{ kind = 'monitor' })
+                [void](Invoke-LiveVerifyCommand -Connection $conn -Command 'record.start')
+                [void](Wait-ReleaseRecordingState -Connection $conn -States @('Recording') -TimeoutMs 30000)
+                Start-Sleep -Seconds 8
+                [void](Invoke-LiveVerifyCommand -Connection $conn -Command 'record.stop')
+                [void](Wait-ReleaseRecordingState -Connection $conn -States @('Completed', 'Failed') -TimeoutMs 60000)
+                $result = (Invoke-LiveVerifyCommand -Connection $conn -Command 'record.result').result
+                if (-not $result.succeeded) { return @{ Result = 'FAIL'; Message = 'the recording did not succeed' } }
+
+                $report = (Invoke-LiveVerifyCommand -Connection $conn -Command 'session.latest').result
+
+                $probeRaw = & $ffprobe -v error -print_format json -show_format -show_streams -- "$($result.outputPath)" 2>&1 | Out-String
+                $evidence = @(
+                    Save-LiveVerifyEvidence -Context $ctx -CheckId 'REL-AUD-FORMAT-001' -Name 'ffprobe.json' -Raw $probeRaw
+                    Save-LiveVerifyEvidence -Context $ctx -CheckId 'REL-AUD-FORMAT-001' -Name 'session.json' -Value $report
+                )
+                $probe = $probeRaw | ConvertFrom-Json
+                $audio = @($probe.streams | Where-Object { $_.codec_type -eq 'audio' })
+                if ($audio.Count -eq 0) {
+                    return @{ Result = 'FAIL'; Message = 'the output file has no audio track'; Evidence = $evidence }
+                }
+                # NOTHING downstream can read the endpoint's rate back. Every capture path
+                # opens the endpoint with AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM and asks for
+                # 48 kHz, so Windows has already resampled before the engine sees a frame;
+                # Opus then pins the output to 48 kHz as well. A gate that looked for
+                # 44100 anywhere in the product's own numbers would fail a correct
+                # product on every machine.
+                #
+                # The evidence chain is therefore: envctl measured the endpoint at
+                # 44100 (endpoint-format.json), envctl measured it holding the default
+                # render role (endpoint-roles.json), and recording THROUGH that
+                # conversion produced a whole, gapless file. The last is what is asserted
+                # here, with the same criteria the soak gate applies.
+                $duration = [double](Get-ReleaseSnapshotValue -Object $probe -Path 'format.duration')
+                $audioIndexes = @($audio | ForEach-Object { [int]$_.index })
+                $spans = @(Get-ReleaseAudioPacketSpan -FfprobePath $ffprobe -Path $result.outputPath `
+                        -StreamIndexes $audioIndexes)
+                $integrity = Get-ReleaseRecordingIntegrityVerdict -Report $report -ContainerSeconds $duration `
+                    -AudioSpanSeconds $spans
+                return @{ Result = $integrity.Result
+                    Message      = "recorded through the 44.1 kHz default endpoint (Windows converts to 48 kHz): " +
+                    "$($audio[0].codec_name) @ $($audio[0].sample_rate) Hz out; $($integrity.Message)"
+                    Evidence     = $evidence
+                }
+            }
+            finally {
+                # The endpoint format and the default role are the operator's
+                # settings, not the campaign's. Whatever this gate changed it puts
+                # back -- including when the recording below threw.
+                Restore-ReleaseAudioEndpointState -Tool $switcher -Restore $restore
             }
         }
     }
@@ -1823,6 +2105,9 @@ function Get-ReleaseScenarioCatalog {
         Requires            = @{}
         Desired             = @{}
         OptIn               = $true
+        # One of the two remaining sight checks. Presence and text are asserted
+        # through UI Automation; colour is the part no reader but a person has.
+        AsksAPerson         = $true
         Run                 = {
             param($ctx)
             $session = & $ctx.EnsureSession
@@ -1898,7 +2183,29 @@ function Get-ReleaseScenarioCatalog {
                     if ($visible.Count -eq 0) {
                         return @{ Ok = $false; Detail = 'no overlay was visible while the gate was open; nothing was judged'; Evidence = $evidence }
                     }
-                    return @{ Ok = $true; Detail = "$($visible.Count) overlay(s) were on screen and judged by the operator"; Evidence = $evidence }
+                    # overlay.snapshot is OUR account of what we asked for. UI
+                    # Automation is the one reader that survives
+                    # WDA_EXCLUDEFROMCAPTURE and can say the windows really reached
+                    # the desktop -- so "we believe five overlays are up" and "five
+                    # overlays are up" stop being the same sentence. It still cannot
+                    # see colour, which is why a person is asked at all.
+                    $identity = (Invoke-LiveVerifyCommand -Connection $conn2 -Command 'app.identity').result
+                    $tree = Get-ReleaseAutomationElements -ProcessId ([int]$identity.pid) -TimeoutSeconds 10
+                    $evidence += Save-LiveVerifyEvidence -Context $context -CheckId 'REL-VIS-OVERLAY-001' `
+                        -Name 'automation-tree.json' -Value $tree
+                    $seen = if ($tree.Ok) { "UI Automation saw $($tree.Elements.Count) element(s) in the process" }
+                    else { $tree.Detail }
+                    if ($tree.Ok -and $tree.Elements.Count -eq 0) {
+                        return @{ Ok = $false
+                            Detail   = 'overlay.snapshot reports overlays on screen but UI Automation finds no ' +
+                            'window at all in the process; they did not reach the desktop'
+                            Evidence = $evidence
+                        }
+                    }
+                    return @{ Ok = $true
+                        Detail   = "$($visible.Count) overlay(s) were on screen and judged by the operator; $seen"
+                        Evidence = $evidence
+                    }
                 }
             }
             [void]$overlays
@@ -1913,14 +2220,19 @@ function Get-ReleaseScenarioCatalog {
             # say WHICH appearance was wrong.
             $originalAppearance = Get-WindowsAppearance
             $answers = [ordered]@{}
+            $reasons = @{}
             try {
                 foreach ($appearance in @('Light', 'Dark')) {
                     Set-WindowsAppearance -Appearance $appearance
                     Write-Host ''
                     Write-Host "Windows is now in $($appearance.ToUpperInvariant()) appearance." -ForegroundColor Yellow
                     Write-Host '  Every capture-excluded overlay must still be DARK, with legible text.'
-                    $answers[$appearance] = & $ctx.Ask 'REL-VIS-OVERLAY-001' "Do the overlays look right in ${appearance}?"
-                    if ($answers[$appearance] -in @('skip', 'abort')) { break }
+                    $judgement = & $ctx.Judge 'REL-VIS-OVERLAY-001' `
+                        "Do the capture-excluded overlays still look right in ${appearance}?" `
+                    @{ Why = $gate.Why; Expected = $gate.Expected; VerifyDescription = $gate.VerifyDescription }
+                    $answers[$appearance] = $judgement.Answer
+                    if ($judgement.Answer -eq 'wrong') { $reasons[$appearance] = $judgement.Reason }
+                    if ($judgement.Answer -in @('skip', 'abort')) { break }
                 }
             }
             finally {
@@ -1932,13 +2244,14 @@ function Get-ReleaseScenarioCatalog {
                 }
             }
 
-            $wrong = @($answers.Keys | Where-Object { $answers[$_] -eq 'no' })
+            # The reason travelled with the judgement rather than being asked for
+            # again afterwards, when the screen no longer looks the way it did.
+            $wrong = @($answers.Keys | Where-Object { $answers[$_] -eq 'wrong' })
             if ($wrong.Count -gt 0) {
-                $why = Read-Host "  What was wrong in $($wrong -join ' and ')? (one line, recorded in the report)"
-                if ([string]::IsNullOrWhiteSpace($why)) { $why = 'no detail given' }
+                $why = @($wrong | ForEach-Object { "${_}: $($reasons[$_])" }) -join '; '
                 try { [void](Invoke-LiveVerifyCommand -Connection $conn -Command 'record.stop') } catch { }
                 return @{ Result = 'FAIL'
-                    Message      = "The operator judged the overlays WRONG in $($wrong -join ' and '): $why"
+                    Message      = "The operator judged the overlays WRONG in $($wrong -join ' and ') -- $why"
                 }
             }
             if ($answers.Values -contains 'skip' -or $answers.Values -contains 'abort' -or $answers.Count -lt 2) {
@@ -1974,6 +2287,10 @@ function Get-ReleaseScenarioCatalog {
         Requires            = @{}
         Desired             = @{}
         OptIn               = $true
+        # The second and last sight check. The toast's presence and its text are
+        # asserted through UI Automation; the severity tint is not something any API
+        # reports, so it stays a judgement.
+        AsksAPerson         = $true
         Run                 = {
             param($ctx)
             $session = & $ctx.EnsureSession
@@ -1995,7 +2312,7 @@ function Get-ReleaseScenarioCatalog {
             # UNAVAILABLE -- a fact about this machine having nothing to report -- and
             # not a failure of the notification surface, which was never exercised.
             $fresh = @()
-            $deadline = [DateTime]::UtcNow.AddSeconds(10)
+            $deadline = Get-ReleaseGateDeadline -Seconds (10)
             while ([DateTime]::UtcNow -lt $deadline) {
                 $now = (Invoke-LiveVerifyCommand -Connection $conn -Command 'notifications.snapshot').result
                 $fresh = @(Get-ReleaseNotificationEntry -Snapshot $now | Where-Object { $_.sequence -notin $baseline })
@@ -2029,7 +2346,7 @@ function Get-ReleaseScenarioCatalog {
                     }
                 }
                 $synthetic = $true
-                $deadline = [DateTime]::UtcNow.AddSeconds(10)
+                $deadline = Get-ReleaseGateDeadline -Seconds (10)
                 while ([DateTime]::UtcNow -lt $deadline) {
                     $now = (Invoke-LiveVerifyCommand -Connection $conn -Command 'notifications.snapshot').result
                     $fresh = @(Get-ReleaseNotificationEntry -Snapshot $now | Where-Object { $_.sequence -notin $baseline })
@@ -2053,6 +2370,8 @@ function Get-ReleaseScenarioCatalog {
             $gate = @{
                 Id                = 'REL-VIS-NOTIFY-001'
                 Title             = 'Judge the real desktop notification surface'
+                Line              = 'Look at the desktop notification and at the ExoSnap notification hub, then ' +
+                'judge the severity glyph, the tint and the text.'
                 # Values the Verify block needs travel HERE, not in a closure: a
                 # `.GetNewClosure()` block is bound to a synthetic module that does not
                 # inherit the runner's functions.
@@ -2092,16 +2411,64 @@ function Get-ReleaseScenarioCatalog {
                     if ($fresh.Count -eq 0) {
                         return @{ Ok = $false; Detail = 'the product published no notification while the gate was open'; Evidence = $evidence }
                     }
+                    # The hub is OUR record of what we published. UI Automation is
+                    # what can say the toast reached the desktop with that text on it
+                    # -- the toast window is capture-excluded, so no screenshot and no
+                    # PrintWindow will ever show it, and "the hub has an entry" was
+                    # the whole of the evidence before.
+                    $identity = (Invoke-LiveVerifyCommand -Connection $conn2 -Command 'app.identity').result
+                    $tree = Get-ReleaseAutomationElements -ProcessId ([int]$identity.pid) -TimeoutSeconds 10
+                    $evidence += Save-LiveVerifyEvidence -Context $context -CheckId 'REL-VIS-NOTIFY-001' `
+                        -Name 'automation-tree.json' -Value $tree
+                    $onDesktop = 'UI Automation could not be asked'
+                    if ($tree.Ok) {
+                        $required = @($fresh | ForEach-Object { "$($_.title)" } |
+                                Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+                        if ($required.Count -gt 0) {
+                            $text = Test-ReleaseAutomationText -Elements $tree.Elements -Required $required
+                            if (-not $text.Ok) {
+                                return @{ Ok = $false
+                                    Detail   = "the hub recorded the notification but it never reached the " +
+                                    "desktop: $($text.Detail)"
+                                    Evidence = $evidence
+                                }
+                            }
+                            $onDesktop = $text.Detail
+                        }
+                    }
                     # Who raised it belongs in the record: a synthetic one proves the
                     # surface renders and never that the product would have spoken.
                     $origin = if ($gate.State.synthetic) { '[synthetic] ' } else { '' }
                     return @{ Ok = $true
-                        Detail   = "$origin$($fresh.Count) new notification(s) reached the hub and were judged"
+                        Detail   = "$origin$($fresh.Count) new notification(s) reached the hub and were judged; $onDesktop"
                         Evidence = $evidence
                     }
                 }
             }
-            return & $ctx.HumanGate $gate
+            # A SIGHT CHECK, not an action gate: nothing is being asked of the
+            # operator except what they see, so the prompt is the judgement itself
+            # and never the Enter that means "I did it". UI Automation has already
+            # asserted the toast reached the desktop with that text; what is left is
+            # the severity glyph and the tint, which no API reports.
+            $judgement = & $ctx.Judge 'REL-VIS-NOTIFY-001' $gate.Line `
+            @{ Why = $gate.Why; Expected = $gate.Expected; VerifyDescription = $gate.VerifyDescription }
+            switch ($judgement.Answer) {
+                'wrong' {
+                    return @{ Result = 'FAIL'
+                        Message      = "The operator judged the notification surface WRONG: $($judgement.Reason)"
+                    }
+                }
+                'skip' { return @{ Result = 'DEFERRED'; Message = 'The operator did not judge the notification surface' } }
+                'abort' { return @{ Result = 'DEFERRED'; Message = 'The operator stopped at the notification surface' } }
+            }
+            $verdict = Resolve-ReleaseVerdict (& $gate.Verify $ctx $gate)
+            if ($null -eq $verdict) {
+                return @{ Result = 'UNVERIFIED'; Message = 'the notification verification returned nothing' }
+            }
+            if ($verdict.Ok) {
+                return @{ Result = 'PASS'; Message = $verdict.Detail; Evidence = $verdict.Evidence }
+            }
+            return @{ Result = 'FAIL'; Message = $verdict.Detail; Evidence = $verdict.Evidence }
         }
     }
 
@@ -2182,8 +2549,26 @@ function Get-ReleaseScenarioCatalog {
         Requires            = @{}
         Desired             = @{}
         OptIn               = $true
+        AsksAPerson         = $true
         Run                 = {
             param($ctx)
+            # FIRST CHOICE: a clean machine. The rehearsal installs an older release,
+            # declines an update and then accepts one, all inside a Windows Sandbox
+            # whose logon command already holds an administrative token -- so there is
+            # no prompt, and the accept cannot remove a starting point the next
+            # campaign needs, because the machine is thrown away.
+            $sandboxed = Invoke-ReleaseSandboxUpdateRehearsal -Context $ctx
+            if ($null -ne $sandboxed.Result) {
+                $verdict = Get-ReleaseSandboxStepVerdict -Result $sandboxed.Result -RequiredSteps @(
+                    'install-base', 'select-channel', 'decline-offer', 'decline-apply',
+                    'decline-state', 'decline-updater-closed')
+                return @{ Result = $verdict.Result
+                    Message      = "[sandbox] $($verdict.Message)"
+                    Evidence     = $sandboxed.Evidence
+                }
+            }
+            Write-Step $sandboxed.Detail
+
             # Same starting point as REL-UPD-MSI-001, and for the same reason: the
             # BOUND artifact is the newest release, so an update check on it can only
             # ever report up-to-date and the prompt this gate exists for is never
@@ -2202,7 +2587,7 @@ function Get-ReleaseScenarioCatalog {
             # Its own session, not the campaign's -- see REL-UPD-MSI-001 for why the
             # machine-wide single-instance mutex has to be clear first.
             & $ctx.EndSession
-            $waitUntil = [DateTime]::UtcNow.AddSeconds(20)
+            $waitUntil = Get-ReleaseGateDeadline -Seconds (20)
             while ([DateTime]::UtcNow -lt $waitUntil) {
                 $running = @(Get-Process -Name 'exosnap' -ErrorAction SilentlyContinue)
                 if ($running.Count -eq 0) { break }
@@ -2245,13 +2630,23 @@ function Get-ReleaseScenarioCatalog {
                     if (-not $fromProcess.WaitForExit(15000)) { $fromProcess.Kill() }
                 }
                 $runId = New-LiveVerifyRunId
-                $fromProcess = Start-Process -FilePath $from -PassThru -ArgumentList @('--live-verify-control', $runId)
+                # The decline, without a Secure Desktop. EXOSNAP_UPDATER_FAULT makes
+                # the updater's elevation call return ERROR_CANCELLED, which is
+                # exactly what a person clicking No produces -- same code path, same
+                # FailureCase::UacDeclined, same recovery. It is armed for the child
+                # this launch creates and cleared immediately afterwards, so the
+                # ACCEPT gate cannot inherit a decline it never asked for.
+                $env:EXOSNAP_UPDATER_FAULT = 'uacDeclined'
+                try {
+                    $fromProcess = Start-Process -FilePath $from -PassThru -ArgumentList @('--live-verify-control', $runId)
+                }
+                finally { Remove-Item Env:EXOSNAP_UPDATER_FAULT -ErrorAction SilentlyContinue }
                 $conn = Connect-LiveVerify -RunId $runId -ConnectTimeoutMs 60000
 
                 $checked = Invoke-LiveVerifyCommand -Connection $conn -Command 'update.check'
                 if (-not $checked.ok) { return @{ Result = 'FAIL'; Message = "update.check refused: $($checked.error.message)" } }
                 # Asynchronous: the answer lands on the state, not on the command.
-                $waitUntilOffered = [DateTime]::UtcNow.AddSeconds(45)
+                $waitUntilOffered = Get-ReleaseGateDeadline -Seconds (45)
                 $state = $null
                 while ([DateTime]::UtcNow -lt $waitUntilOffered) {
                     $state = (Invoke-LiveVerifyCommand -Connection $conn -Command 'update.getState').result
@@ -2277,9 +2672,12 @@ function Get-ReleaseScenarioCatalog {
                 $gate = @{
                     Id                = 'REL-UPD-MSI-DECLINE-001'
                     Title             = 'DECLINE the elevation prompt'
+                    Kind              = 'Done'
+                    Line              = 'A UAC prompt is on screen: DECLINE it.'
                     State             = @{ updaterRunId = "$($launch.controlRunId)"; updaterPipe = "$($launch.controlPipe)" }
                     Why               = 'Same Secure Desktop boundary as accepting it. What is under test is what the ' +
-                    'product says afterwards.'
+                    'product says afterwards. This is only asked when the updater under test predates the ' +
+                    'EXOSNAP_UPDATER_FAULT seam, which produces the identical ERROR_CANCELLED without a prompt.'
                     Do                = @('A UAC prompt is appearing now.', 'DECLINE it.')
                     Expected          = 'The updater reports the update as declined at the elevation prompt, and ' +
                     'nothing is left half-installed.'
@@ -2324,10 +2722,31 @@ function Get-ReleaseScenarioCatalog {
                         finally { try { $updater.Close() } catch { } }
                     }
                 }
-                return & $ctx.HumanGate $gate
+                # The fault seam already produced the decline, so there is no prompt
+                # to ask anybody about: the gate verifies directly. Nothing is
+                # attested here -- the verdict comes from the updater's own state,
+                # exactly as it does when a person clicks No.
+                $verdict = Resolve-ReleaseVerdict (& $gate.Verify $ctx $gate)
+                if ($null -eq $verdict) {
+                    return @{ Result = 'UNVERIFIED'; Message = 'the decline verification returned nothing' }
+                }
+                if ($verdict.Ok) {
+                    return @{ Result = 'PASS'
+                        Message      = "[fault-injected decline] $($verdict.Detail)"
+                        Evidence     = $verdict.Evidence
+                    }
+                }
+                return @{ Result = 'FAIL'; Message = $verdict.Detail; Evidence = $verdict.Evidence }
             }
             finally {
                 if ($null -ne $conn) { try { $conn.Close() } catch { } }
+                # THE rc19 DEFECT, closed here. A declined update left the updater
+                # running with its failure card open; it holds exosnap-updater.exe, so
+                # the accept gate's next launch could not stage its own updater over
+                # the file and reported "Failed to stage updater file" as an MSI
+                # failure. Asked to close first and only then ended, because the
+                # updater deciding to stay open is itself a finding worth having.
+                Close-ReleaseUpdaterProcess
                 if ($null -ne $fromProcess -and -not $fromProcess.HasExited) {
                     try {
                         [void]$fromProcess.CloseMainWindow()
@@ -2351,8 +2770,24 @@ function Get-ReleaseScenarioCatalog {
         Requires            = @{}
         Desired             = @{}
         OptIn               = $true
+        AsksAPerson         = $true
+        # The accept installs the new version over the older starting point both MSI
+        # gates need. On a real machine that makes the order mandatory; in a sandbox
+        # it is one rehearsal, and both gates read its result document.
+        DependsOn           = @('REL-UPD-MSI-DECLINE-001')
         Run                 = {
             param($ctx)
+            $sandboxed = Invoke-ReleaseSandboxUpdateRehearsal -Context $ctx
+            if ($null -ne $sandboxed.Result) {
+                $verdict = Get-ReleaseSandboxStepVerdict -Result $sandboxed.Result -RequiredSteps @(
+                    'install-base', 'updater-gone-before-accept', 'accept-offer', 'accept-apply', 'accept-installed')
+                return @{ Result = $verdict.Result
+                    Message      = "[sandbox] $($verdict.Message)"
+                    Evidence     = $sandboxed.Evidence
+                }
+            }
+            Write-Step $sandboxed.Detail
+
             # The same starting-point rule the portable update gate needs, for the
             # same reason: the bound artifact is the newest release the feed offers,
             # so an update check against it can only ever say "up to date". For THIS
@@ -2374,7 +2809,7 @@ function Get-ReleaseScenarioCatalog {
             # control endpoint, so the connect below would wait for a pipe nobody
             # opened. Any leftover instance -- including one this gate's own previous
             # attempt left behind -- has to be gone first.
-            $waitUntil = [DateTime]::UtcNow.AddSeconds(20)
+            $waitUntil = Get-ReleaseGateDeadline -Seconds (20)
             while ([DateTime]::UtcNow -lt $waitUntil) {
                 $running = @(Get-Process -Name 'exosnap' -ErrorAction SilentlyContinue)
                 if ($running.Count -eq 0) { break }
@@ -2428,7 +2863,7 @@ function Get-ReleaseScenarioCatalog {
                 # command, so reading the state once could only ever see what was there
                 # before the check finished.
                 $state = $null
-                $checkDeadline = [DateTime]::UtcNow.AddSeconds(60)
+                $checkDeadline = Get-ReleaseGateDeadline -Seconds (60)
                 while ([DateTime]::UtcNow -lt $checkDeadline) {
                     $state = (Invoke-LiveVerifyCommand -Connection $conn -Command 'update.getState').result
                     if (Get-ReleaseSnapshotValue -Object $state -Path 'updateAvailable') { break }
@@ -2452,6 +2887,9 @@ function Get-ReleaseScenarioCatalog {
                 $gate = @{
                     Id                = 'REL-UPD-MSI-001'
                     Title             = 'Accept the elevation prompt for the MSI install'
+                    Kind              = 'Done'
+                    Line              = 'A UAC prompt for the ExoSnap updater is on screen: ACCEPT it, and wait ' +
+                    'for the install to finish and ExoSnap to relaunch.'
                     State             = @{ previousVersion = $beforeVersion; installedPath = $from }
                     Why               = 'msiexec needs an elevated token, and the prompt runs on the Secure Desktop. ' +
                     'Windows blocks synthetic input across that boundary by design; there is nothing to automate.'
@@ -2531,6 +2969,7 @@ function Get-ReleaseScenarioCatalog {
             }
             finally {
                 if ($null -ne $conn) { try { $conn.Close() } catch { } }
+                Close-ReleaseUpdaterProcess
                 if ($null -ne $fromProcess -and -not $fromProcess.HasExited) {
                     try {
                         [void]$fromProcess.CloseMainWindow()
@@ -2558,8 +2997,22 @@ function Get-ReleaseScenarioCatalog {
         Requires            = @{}
         Desired             = @{}
         OptIn               = $true
+        AsksAPerson         = $true
+        # The rehearsal reinstalls the release MSI at the end, so on a real machine it
+        # belongs after the update gates rather than under them.
+        DependsOn           = @('REL-UPD-MSI-001')
         Run                 = {
             param($ctx)
+            # FIRST CHOICE: a sandbox. On a real machine this is the one gate that
+            # installs software -- it removes the operator's ExoSnap, may upgrade
+            # their Visual C++ redistributable, and puts the release MSI back from a
+            # finally block. In a sandbox none of that is a concession: the machine
+            # is discarded, the logon command is already elevated so no prompt is
+            # raised, and the package's real effect on a clean install is what gets
+            # measured instead of its effect on a machine that already had everything.
+            $sandboxVerdict = Invoke-ReleaseSandboxChocolateyRehearsal -Context $ctx
+            if ($null -ne $sandboxVerdict) { return $sandboxVerdict }
+
             # scripts/validate-chocolatey-package.ps1 proves the tracked files agree
             # with each other and with the release manifest. It deliberately does not
             # run `choco pack` or install anything, so nothing on the release path
@@ -2603,6 +3056,10 @@ function Get-ReleaseScenarioCatalog {
             $gate = @{
                 Id                = 'REL-PKG-CHOCO-001'
                 Title             = 'Accept ONE elevation prompt for the Chocolatey rehearsal'
+                Kind              = 'Start'
+                Line              = 'Nothing is installed yet. On Enter this runner closes its ExoSnap session and ' +
+                'ONE UAC prompt appears for an elevated worker: accept it and leave the machine alone until it ' +
+                'finishes.'
                 # Values travel in State, never in a closure -- see New-ReleaseContext.
                 State             = @{
                     worker            = $worker
@@ -2974,6 +3431,335 @@ function Get-ReleaseNotificationEntry {
     $entries = Get-ReleaseSnapshotValue -Object $Snapshot -Path 'entries'
     if ($null -eq $entries) { return @() }
     return @($entries)
+}
+
+function Invoke-ReleaseSandboxChocolateyRehearsal {
+    <#
+    .SYNOPSIS
+        The Chocolatey rehearsal in a sandbox, or $null when one is not available.
+    .DESCRIPTION
+        Returns a finished scenario result when the rehearsal ran, and $null when the
+        caller should fall back to the elevated on-machine worker. $null rather than
+        an UNAVAILABLE result on purpose: a machine without Windows Sandbox can still
+        run this gate the way it always did, and reporting the sandbox as a missing
+        precondition would turn a working gate into a red one.
+    #>
+    param([Parameter(Mandatory)] $Context)
+
+    $sandbox = Resolve-ReleaseTool -Name 'sandbox'
+    if (-not $sandbox.Available) { Write-Step $sandbox.Detail; return $null }
+
+    $packageSource = Join-Path $Context.RepositoryRoot 'packaging/chocolatey'
+    if (-not (Test-Path -LiteralPath (Join-Path $packageSource 'exosnap.nuspec'))) { return $null }
+    $msi = Resolve-ReleaseMsiArtifact -Artifact $Context.Artifact
+    if (-not $msi.Ok) { return @{ Result = 'UNAVAILABLE'; Message = $msi.Detail } }
+
+    $evidenceDirectory = Join-Path $Context.RunDirectory 'checks/REL-PKG-CHOCO-001'
+    New-Item -ItemType Directory -Path $evidenceDirectory -Force | Out-Null
+    $staging = Join-Path $Context.RunDirectory 'sandbox/chocolatey'
+    $libraryRoot = Join-Path $Context.RepositoryRoot 'scripts/lib'
+    $staged = New-ReleaseSandboxStaging -Directory $staging -SourceFiles @(
+        (Join-Path $libraryRoot 'sandbox-choco-worker.ps1'),
+        (Join-Path $libraryRoot 'choco-rehearsal-worker.ps1'),
+        (Join-Path $libraryRoot 'ReleaseScenarios.ps1'),
+        $packageSource,
+        $msi.Path
+    )
+    if (-not $staged.Ok) { return @{ Result = 'UNAVAILABLE'; Message = $staged.Detail } }
+
+    $guest = Get-ReleaseSandboxGuestPath -HostDirectory $staging
+    $configuration = New-ReleaseSandboxConfiguration -StagingDirectory $staging `
+        -WorkerFileName 'sandbox-choco-worker.ps1' -WorkerArguments @(
+        '-StagingDirectory', $guest,
+        '-PackageSource', (Join-Path $guest 'chocolatey'),
+        '-MsiPath', (Join-Path $guest (Split-Path -Leaf $msi.Path)),
+        '-MsiSha256', $msi.Sha256,
+        '-EvidenceDirectory', (Join-Path $guest 'evidence'),
+        '-ResultPath', (Join-Path $guest 'result.json'),
+        '-MarkerPath', (Join-Path $guest 'done.marker'))
+    if (-not $configuration.Ok) { return @{ Result = 'UNAVAILABLE'; Message = $configuration.Detail } }
+
+    $run = Start-ReleaseSandboxRun -Tool $sandbox -Configuration $configuration -TimeoutMinutes 45
+    if ($null -eq $run.Result) { return @{ Result = 'UNVERIFIED'; Message = "[sandbox] $($run.Detail)" } }
+    Copy-Item -LiteralPath $configuration.ResultPath -Destination (Join-Path $evidenceDirectory 'rehearsal.json') -Force
+    $guestEvidence = Join-Path $staging 'evidence'
+    if (Test-Path -LiteralPath $guestEvidence) {
+        Copy-Item -LiteralPath (Join-Path $guestEvidence '*') -Destination $evidenceDirectory -Recurse -Force
+    }
+    $verdict = Get-ReleaseChocolateyVerdict -Result (Read-ReleaseChocolateyResult -Path (Join-Path $evidenceDirectory 'rehearsal.json'))
+    return @{ Result = $verdict.Result
+        Message      = "[sandbox: no prompt was raised] $($verdict.Message)"
+        Evidence     = @('checks/REL-PKG-CHOCO-001/rehearsal.json')
+    }
+}
+
+function Close-ReleaseUpdaterProcess {
+    <#
+    .SYNOPSIS
+        Ends any updater this campaign left showing a card.
+    .DESCRIPTION
+        A declined or failed update leaves exosnap-updater.exe running with its
+        result on screen, which is correct product behaviour -- somebody has to be
+        able to read it -- and wrong for the next gate, because the running process
+        holds the file the next update has to stage its own updater over. That is
+        the whole of the rc19 "Failed to stage updater file" finding.
+
+        Closed politely first: an updater asked to go away and refusing is a fact
+        worth surfacing, and killing it immediately would hide it.
+    #>
+    param([int] $TimeoutMs = 15000)
+    $running = @(Get-Process -Name 'exosnap-updater' -ErrorAction SilentlyContinue)
+    if ($running.Count -eq 0) { return }
+    Write-Step "$($running.Count) updater process(es) were still open after the gate; closing them"
+    foreach ($process in $running) {
+        try {
+            [void]$process.CloseMainWindow()
+            if (-not $process.WaitForExit($TimeoutMs)) { $process.Kill() }
+        }
+        catch { }
+    }
+}
+
+function Invoke-ReleaseSandboxUpdateRehearsal {
+    <#
+    .SYNOPSIS
+        Runs the decline-then-accept update rehearsal once per campaign, in a sandbox.
+    .DESCRIPTION
+        Both MSI gates read the SAME result document, because both describe one
+        sequence: an update that was declined and then accepted, from one older
+        installed build. On a real machine that sequence is only runnable once -- the
+        accept removes the starting point -- which is why the two gates had a hidden
+        ordering constraint and why one of them was left with a broken updater by the
+        other. In a sandbox it is one run of one worker on a machine that did not
+        exist a minute ago.
+
+        Idempotent within a campaign: the second gate reuses the document the first
+        produced rather than starting a second virtual machine. A campaign that runs
+        only the accept gate produces the document itself.
+
+        Returns @{ Ok; Result; Detail; Evidence }.
+    #>
+    param([Parameter(Mandatory)] $Context)
+
+    $evidenceDirectory = Join-Path $Context.RunDirectory 'checks/update-sandbox'
+    $resultPath = Join-Path $evidenceDirectory 'result.json'
+    if (Test-Path -LiteralPath $resultPath) {
+        return @{ Ok = $true
+            Result   = (Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json)
+            Detail   = 'reusing the rehearsal this campaign already ran'
+            Evidence = @('checks/update-sandbox/result.json')
+        }
+    }
+
+    $sandbox = Resolve-ReleaseTool -Name 'sandbox'
+    if (-not $sandbox.Available) { return @{ Ok = $false; Result = $null; Detail = $sandbox.Detail; Evidence = @() } }
+
+    $baseMsi = $env:EXOSNAP_UPDATE_FROM_MSI
+    if ([string]::IsNullOrWhiteSpace($baseMsi) -or -not (Test-Path -LiteralPath $baseMsi)) {
+        return @{ Ok = $false; Result = $null; Evidence = @()
+            Detail   = 'precondition missing: set EXOSNAP_UPDATE_FROM_MSI to the MSI of an OLDER published ' +
+            'release. The sandbox starts from nothing, so the build to update FROM has to be installed inside ' +
+            'it, and the bound artifact is the newest release and can only ever report up to date'
+        }
+    }
+
+    New-Item -ItemType Directory -Path $evidenceDirectory -Force | Out-Null
+    $staging = Join-Path $Context.RunDirectory 'sandbox/update'
+    $libraryRoot = Join-Path $Context.RepositoryRoot 'scripts/lib'
+    $staged = New-ReleaseSandboxStaging -Directory $staging -SourceFiles @(
+        (Join-Path $libraryRoot 'sandbox-update-worker.ps1'),
+        (Join-Path $libraryRoot 'LiveVerifyClient.psm1'),
+        $baseMsi
+    )
+    if (-not $staged.Ok) { return @{ Ok = $false; Result = $null; Detail = $staged.Detail; Evidence = @() } }
+
+    $guest = Get-ReleaseSandboxGuestPath -HostDirectory $staging
+    $configuration = New-ReleaseSandboxConfiguration -StagingDirectory $staging `
+        -WorkerFileName 'sandbox-update-worker.ps1' -WorkerArguments @(
+        '-StagingDirectory', $guest,
+        '-BaseMsiPath', (Join-Path $guest (Split-Path -Leaf $baseMsi)),
+        '-ResultPath', (Join-Path $guest 'result.json'),
+        '-MarkerPath', (Join-Path $guest 'done.marker'))
+    if (-not $configuration.Ok) { return @{ Ok = $false; Result = $null; Detail = $configuration.Detail; Evidence = @() } }
+
+    $run = Start-ReleaseSandboxRun -Tool $sandbox -Configuration $configuration -TimeoutMinutes 40
+    if ($null -ne $run.Result) {
+        Copy-Item -LiteralPath $configuration.ResultPath -Destination $resultPath -Force
+        $logs = Join-Path $staging 'logs'
+        if (Test-Path -LiteralPath $logs) {
+            Copy-Item -LiteralPath $logs -Destination (Join-Path $evidenceDirectory 'logs') -Recurse -Force
+        }
+    }
+    return @{ Ok = $run.Ok; Result = $run.Result; Detail = $run.Detail
+        Evidence                   = @(if ($null -ne $run.Result) { 'checks/update-sandbox/result.json' })
+    }
+}
+
+function Get-ReleaseGateDeadline {
+    <#
+    .SYNOPSIS
+        The wall-clock deadline of one bounded polling loop.
+    .DESCRIPTION
+        Every wait in this catalogue is state-based and bounded -- polled until the
+        product reports the state, or until this deadline passes -- and never a
+        fixed sleep (see the synchronisation rule in docs/dev/release-verify.md).
+        The deadline goes through one function so a dry run can shorten it: a
+        harness that observed the same loops in real time would spend a minute per
+        gate waiting for a machine that is not there, and a suite nobody runs is
+        not a gate.
+    #>
+    param([Parameter(Mandatory)] [double] $Seconds)
+    return [DateTime]::UtcNow.AddSeconds($Seconds)
+}
+
+function Start-ReleaseEndpointOutage {
+    <#
+    .SYNOPSIS
+        Takes an audio device away for a fixed window, in the background.
+    .DESCRIPTION
+        The assertion this serves is degraded-THEN-recovered, so the outage has to
+        begin while the verification is already polling and end while it is still
+        polling: a device that never comes back fails the gate exactly as one that
+        never left does. That timing is why this is a job rather than two calls
+        around the verification.
+
+        One function for both mechanisms (pnputil and a caller-named visibility
+        tool), because the two differ only in the argument list -- and a second
+        copy of a background job that disables somebody's sound card is the kind of
+        duplication that gets one of the copies forgotten in a finally block.
+    #>
+    param(
+        [Parameter(Mandatory)] [string] $Executable,
+        [Parameter(Mandatory)] [string[]] $DisableArguments,
+        [Parameter(Mandatory)] [string[]] $EnableArguments,
+        [int] $DelaySeconds = 2,
+        [int] $OutageSeconds = 10
+    )
+    return Start-Job -ScriptBlock {
+        param($tool, $disable, $enable, $delay, $outage)
+        Start-Sleep -Seconds $delay
+        & $tool @disable | Out-Null
+        Start-Sleep -Seconds $outage
+        & $tool @enable | Out-Null
+    } -ArgumentList $Executable, $DisableArguments, $EnableArguments, $DelaySeconds, $OutageSeconds
+}
+
+function Stop-ReleaseEndpointOutage {
+    <#
+    .SYNOPSIS
+        Waits for the outage job and puts the device back whatever happened to it.
+    .DESCRIPTION
+        Belt and braces on purpose: a device left disabled is a machine this
+        campaign broke, and the job that was supposed to re-enable it is exactly
+        the thing that may have died.
+    #>
+    param($Job, [Parameter(Mandatory)] [string] $Executable, [Parameter(Mandatory)] [string[]] $EnableArguments)
+    if ($null -ne $Job) {
+        Wait-Job $Job -Timeout 60 | Out-Null
+        Remove-Job $Job -Force -ErrorAction SilentlyContinue
+    }
+    & $Executable @EnableArguments | Out-Null
+}
+
+function Get-ReleaseAudioDeviceInstanceId {
+    <#
+    .SYNOPSIS
+        The PnP instance id of the device behind one render endpoint, or $null.
+    .DESCRIPTION
+        pnputil disables DEVICES; WASAPI enumerates ENDPOINTS, and the two have
+        different identifiers. The bridge is the friendly name, which is what
+        Get-PnpDevice reports for an AudioEndpoint class device -- so the endpoint
+        the campaign cares about is matched by the name envctl already reads for it.
+
+        EXOSNAP_AUDIO_DEVICE_INSTANCE_ID short-circuits the whole search, because a
+        machine with two identically named headsets cannot be resolved by name and
+        this refuses to guess between them rather than disabling the wrong one.
+    #>
+    param([string] $FriendlyName)
+    if (-not [string]::IsNullOrWhiteSpace($env:EXOSNAP_AUDIO_DEVICE_INSTANCE_ID)) {
+        return $env:EXOSNAP_AUDIO_DEVICE_INSTANCE_ID
+    }
+    if ([string]::IsNullOrWhiteSpace($FriendlyName)) { return $null }
+    try {
+        $devices = @(Get-PnpDevice -Class 'AudioEndpoint' -Status 'OK' -ErrorAction Stop |
+                Where-Object { "$($_.FriendlyName)" -eq $FriendlyName })
+    }
+    catch { return $null }
+    if ($devices.Count -ne 1) { return $null }
+    return "$($devices[0].InstanceId)"
+}
+
+function Restore-ReleaseAudioEndpointState {
+    <#
+    .SYNOPSIS
+        Puts back the endpoint format and default role a gate changed.
+    .DESCRIPTION
+        Not an envctl transaction, because neither property is envctl's to write --
+        both are ENV_HUMAN, and the tool that changed them is the tool that has to
+        change them back. Everything is best-effort and reported rather than thrown:
+        a restore that fails must not turn a finished gate into an exception, and a
+        campaign that left the machine's sound on a test device has to say so.
+
+        A $null Restore means nothing was changed, which is the common case on a
+        machine without the tool.
+    #>
+    param($Tool, $Restore)
+    if ($null -eq $Restore -or $null -eq $Tool -or -not $Tool.Available) { return }
+    if (-not [string]::IsNullOrWhiteSpace($Restore.PreviousFormat)) {
+        # envctl renders the shared-mode format as <rate>/<bits>/<channels>.
+        $parts = "$($Restore.PreviousFormat)" -split '/'
+        if ($parts.Count -ge 3) {
+            [void](Set-ReleaseAudioEndpointFormat -Tool $Tool -EndpointName $Restore.Name `
+                    -SampleRate ([int]$parts[0]) -BitDepth ([int]$parts[1]) -Channels ([int]$parts[2]))
+        }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($Restore.PreviousDefault)) {
+        [void](Set-ReleaseDefaultAudioEndpoint -Tool $Tool -EndpointName $Restore.PreviousDefault)
+    }
+}
+
+function Get-ReleaseAudioOutputEndpoints {
+    <#
+    .SYNOPSIS
+        The render endpoints the product itself can see, with which one is default.
+    .DESCRIPTION
+        Read through the product rather than through WASAPI directly on purpose: a
+        gate about what the product captures has to be told which endpoints the
+        product enumerates, and an endpoint Windows offers that ExoSnap does not see
+        is itself the finding.
+    #>
+    param([Parameter(Mandatory)] $Connection)
+    $snapshot = (Invoke-LiveVerifyCommand -Connection $Connection -Command 'environment.snapshot').result
+    $outputs = Get-ReleaseSnapshotValue -Object $snapshot -Path 'audio.outputs'
+    if ($null -eq $outputs) { return @() }
+    return @($outputs)
+}
+
+function Find-ReleaseAudioEndpoint {
+    <#
+    .SYNOPSIS
+        One render endpoint by name pattern, or $null.
+    .DESCRIPTION
+        The pattern comes from the caller and, where a gate needs a specific device,
+        from an environment variable the operator sets once for their machine. There
+        is deliberately no fallback to "the first output": a gate that silently
+        reconfigured somebody's speakers because the device it wanted was absent
+        would be worse than one that reports the precondition missing.
+    #>
+    param(
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [object[]] $Endpoints,
+        [Parameter(Mandatory)] [string] $Pattern
+    )
+    $match = @($Endpoints | Where-Object { "$($_.name)" -like $Pattern }) | Select-Object -First 1
+    if ($null -eq $match) { return $null }
+    return "$($match.name)"
+}
+
+function Get-ReleaseDefaultAudioEndpointName {
+    param([Parameter(Mandatory)] [AllowEmptyCollection()] [object[]] $Endpoints)
+    $default = @($Endpoints | Where-Object { $_.default }) | Select-Object -First 1
+    if ($null -eq $default) { return $null }
+    return "$($default.name)"
 }
 
 function Enable-ReleaseSystemAudio {

@@ -98,6 +98,9 @@ Import-Module (Join-Path $PSScriptRoot 'lib/LiveVerifyClient.psm1') -Force -Disa
 Import-Module (Join-Path $PSScriptRoot 'lib/EnvironmentOrchestrator.psm1') -Force -DisableNameChecking
 . (Join-Path $PSScriptRoot 'lib/LiveVerifyChecks.ps1')
 . (Join-Path $PSScriptRoot 'lib/ReleaseArtifactIdentity.ps1')
+. (Join-Path $PSScriptRoot 'lib/ReleaseOperator.ps1')
+. (Join-Path $PSScriptRoot 'lib/ReleaseExternalTools.ps1')
+. (Join-Path $PSScriptRoot 'lib/ReleaseSandbox.ps1')
 . (Join-Path $PSScriptRoot 'lib/ReleaseScenarios.ps1')
 
 # ---------------------------------------------------------------------------
@@ -205,28 +208,70 @@ function Get-ReleaseEnvironmentFacts {
 # Human gates
 # ---------------------------------------------------------------------------
 
+function Get-ReleaseGateLine {
+    <#
+    .SYNOPSIS
+        The one line an operator is shown for a gate.
+    .DESCRIPTION
+        `Line` when the gate declares one. A gate that still carries only the old
+        numbered `Do` block falls back to its first step, and the whole block stays
+        available behind `?` -- so a catalog entry that has not been through the
+        rewrite is shown in the new protocol rather than in neither.
+    #>
+    param([Parameter(Mandatory)] $Gate)
+    if ($Gate.ContainsKey('Line') -and -not [string]::IsNullOrWhiteSpace("$($Gate.Line)")) { return "$($Gate.Line)" }
+    $steps = @($Gate.Do)
+    if ($steps.Count -gt 0) { return "$($steps[0])" }
+    return "$($Gate.Title)"
+}
+
+function New-ReleaseOperatorStep {
+    <#
+    .SYNOPSIS
+        The gate, as the operator protocol wants it.
+    #>
+    param([Parameter(Mandatory)] $Gate)
+    $detail = @{}
+    foreach ($name in 'Why', 'Expected', 'VerifyDescription') {
+        if ($Gate.ContainsKey($name)) { $detail[$name] = $Gate[$name] }
+    }
+    if ($Gate.ContainsKey('Do')) {
+        $steps = @($Gate.Do)
+        if ($steps.Count -gt 1) {
+            $detail['Expected'] = "$($detail['Expected'])  [in full: $(($steps | Select-Object -Skip 1) -join ' ')]"
+        }
+    }
+    $detail['Id'] = $Gate.Id
+    $detail['Line'] = Get-ReleaseGateLine -Gate $Gate
+    $detail['Kind'] = if ($Gate.ContainsKey('Kind')) { "$($Gate.Kind)" } else { 'Done' }
+    return $detail
+}
+
 function Invoke-ReleaseHumanGate {
     <#
     .SYNOPSIS
-        Asks the operator for one action, then verifies the consequence itself.
+        Shows the operator ONE line, waits for Enter, then verifies the consequence.
     .DESCRIPTION
-        The contract, in order, and no step may be skipped:
+        The prompt says who acts next and nothing else. `[Enter] startet jetzt` means
+        the runner acts on Enter and nothing has happened yet; `[Enter] wenn erledigt`
+        means the operator has already acted and the runner is about to look. The
+        line those two replaced -- `[y] yes [n] no` -- meant the first for the MSI and
+        Chocolatey gates and the second for the present, audio and visual gates, and
+        an rc19 campaign lost three gates to that.
 
-            state the check id and WHY this cannot be automated
-            state the exact action
-            state the expected observable consequence
-            state HOW THE RUNNER WILL VERIFY IT
-            wait
-            verify independently
-            only then decide
+        Everything the gate used to print before the prompt (why a person is needed,
+        what to expect, how this will be verified) is behind `?`. It is the same
+        text; what changed is that it no longer separates the question from its
+        meaning by a screenful.
 
-        A gate whose Verify block returns false is a FAIL even when the operator said
-        "done" -- an operator can be mistaken about what they just did, and a gate
-        that trusts the answer instead of the machine is a checkbox with extra steps.
+        A gate whose Verify block returns false is a FAIL even when the operator
+        pressed Enter -- an operator can be mistaken about what they just did, and a
+        gate that trusts the keystroke instead of the machine is a checkbox with
+        extra steps.
 
-        A gate nobody could answer (redirected stdin, -NonInteractive, an operator who
-        declined) is DEFERRED. It is never a FAIL: a question nobody was asked has no
-        wrong answer. This is checked BEFORE the instructions are printed, so nobody
+        A gate nobody could answer (redirected stdin, -NonInteractive, an operator
+        who skipped) is DEFERRED. It is never a FAIL: a question nobody was asked has
+        no wrong answer. This is checked BEFORE anything is printed, so nobody
         performs a two-minute physical action that cannot be confirmed afterwards.
     #>
     param(
@@ -243,50 +288,21 @@ function Invoke-ReleaseHumanGate {
     if ($NonInteractive -and -not $attested) {
         return @{ Result = 'DEFERRED'; Message = "Human gate not offered (-NonInteractive): $($Gate.Title)" }
     }
-    if (-not $attested -and [Console]::IsInputRedirected) {
+    if (-not $attested -and -not (Test-ReleaseOperatorPresent)) {
         return @{ Result = 'DEFERRED'
             Message      = 'stdin is redirected, so this gate cannot be answered. Run from a real terminal.'
         }
     }
 
-    Write-Host ''
-    Write-Host "MANUAL ACTION REQUIRED - $($Gate.Id)  $($Gate.Title)" -ForegroundColor Yellow
-    Write-Host ''
-    Write-Host 'Why this is manual:' -ForegroundColor Yellow
-    Write-Host "  $($Gate.Why)"
-    Write-Host ''
-    Write-Host 'Exact action:' -ForegroundColor Yellow
-    $index = 1
-    foreach ($step in @($Gate.Do)) { Write-Host "  $index. $step"; $index++ }
-    Write-Host ''
-    Write-Host 'Expected observable consequence:' -ForegroundColor Yellow
-    Write-Host "  $($Gate.Expected)"
-    Write-Host ''
-    Write-Host 'How this runner will verify it:' -ForegroundColor Yellow
-    Write-Host "  $($Gate.VerifyDescription)"
-    Write-Host ''
     if ($attested) {
-        Write-Step 'attested by the caller (-Attest); verifying it anyway'
-    } else {
-        # Four answers, because there were only two and one of them was missing.
-        # An operator who looked and saw a DEFECT had no way to say so: 'done' sent
-        # a broken thing to a verification that cannot see it, and 'skip' recorded
-        # "nobody was asked", which is a different and untrue statement. 'fail' now
-        # records what they saw, with the reason in the report.
-        #
-        # Nothing unrecognised aborts any more either. A typo, a stray Enter or a
-        # pasted line used to end the gate as "aborted" -- a destructive default for
-        # a keystroke, in a prompt that appears after a screen of instructions.
-        $answer = Read-OperatorAnswer -Question 'Is that what you see?'
-        switch ($answer) {
-            'yes' { }
-            'skip' { return @{ Result = 'DEFERRED'; Message = 'The operator deferred this gate' } }
-            'abort' { return @{ Result = 'DEFERRED'; Message = 'The operator aborted this gate' } }
-            'no' {
-                $why = Read-Host '  What was wrong? (one line, recorded in the report; Enter to leave it blank)'
-                if ([string]::IsNullOrWhiteSpace($why)) { $why = 'no detail given' }
-                return @{ Result = 'FAIL'; Message = "The operator judged this WRONG: $why" }
-            }
+        Write-Step "attested by the caller (-Attest): $(Get-ReleaseGateLine -Gate $Gate); verifying it anyway"
+    }
+    else {
+        $step = New-ReleaseOperatorStep -Gate $Gate
+        switch (Invoke-ReleaseOperatorStep -Step $step) {
+            'go' { }
+            'skip' { return @{ Result = 'DEFERRED'; Message = 'The operator skipped this step' } }
+            'abort' { return @{ Result = 'DEFERRED'; Message = 'The operator stopped at this step' } }
         }
     }
 
@@ -348,6 +364,76 @@ $script:Session = $null
 $script:CurrentRun = $null
 $script:CurrentContext = $null
 
+$script:ElevatedSession = $null
+
+function Start-ReleaseElevatedSession {
+    <#
+    .SYNOPSIS
+        The ONE elevated instance the present-diagnostics gates share.
+    .DESCRIPTION
+        Present statistics need a real-time ETW session, which Windows grants only
+        to an elevated process, and the single-instance guard is a machine-wide
+        mutex. Those two facts together are why REL-CAP-FSE-001 failed in the rc19
+        campaign: it launched its own unelevated instance while REL-PRESENT-002's
+        elevated one was still up, the launch handed focus to that instance and
+        exited without opening a pipe, and the gate reported "could not connect to
+        the Live Verify endpoint" for a product that was working.
+
+        So there is one instance, established by whichever gate needs it first and
+        reused by the next, and the ordered sequence keeps those gates adjacent.
+        Stop-ReleaseElevatedSession ends it as soon as the following scenario does
+        not want it, because an instance left running is the same mutex problem
+        pointed the other way.
+
+        Returns $null when this runner is not elevated. An unelevated parent cannot
+        launch an elevated child without a Secure Desktop prompt, and raising one
+        here would be the runner clicking UAC by proxy.
+    #>
+    param([Parameter(Mandatory)] $Run)
+    if ($null -ne $script:ElevatedSession) {
+        $script:ElevatedSession.Process.Refresh()
+        if (-not $script:ElevatedSession.Process.HasExited) { return $script:ElevatedSession }
+        try { $script:ElevatedSession.Connection.Close() } catch { }
+        $script:ElevatedSession = $null
+    }
+    if (-not (Test-RunnerElevated)) { return $null }
+
+    # The campaign's own unelevated instance holds the same machine-wide mutex.
+    Stop-ReleaseSession
+
+    $exe = $Run.Artifact.exePath
+    $sessionRunId = New-LiveVerifyRunId
+    Write-Step 'launching the shared ELEVATED instance for the present-diagnostics gates'
+    $process = Start-Process -FilePath $exe -PassThru -ArgumentList @('--live-verify-control', $sessionRunId)
+    try { $connection = Connect-LiveVerify -RunId $sessionRunId -ConnectTimeoutMs 30000 }
+    catch {
+        if (-not $process.HasExited) { $process | Stop-Process -Force -ErrorAction SilentlyContinue }
+        throw
+    }
+    $script:ElevatedSession = [pscustomobject]@{
+        Process    = $process
+        Connection = $connection
+        RunId      = $sessionRunId
+    }
+    return $script:ElevatedSession
+}
+
+function Stop-ReleaseElevatedSession {
+    if ($null -eq $script:ElevatedSession) { return }
+    $session = $script:ElevatedSession
+    $script:ElevatedSession = $null
+    try { $session.Connection.Close() } catch { }
+    try {
+        $session.Process.Refresh()
+        if (-not $session.Process.HasExited) {
+            [void]$session.Process.CloseMainWindow()
+            if (-not $session.Process.WaitForExit(10000)) { $session.Process.Kill() }
+        }
+    }
+    catch { }
+    Write-Step 'the shared elevated instance was closed'
+}
+
 function Start-ReleaseSession {
     param([Parameter(Mandatory)] $Run)
 
@@ -357,6 +443,11 @@ function Start-ReleaseSession {
         try { $script:Session.Connection.Close() } catch { }
         $script:Session = $null
     }
+
+    # The shared elevated instance holds the same machine-wide single-instance
+    # mutex: launching over it would hand focus to it and exit without ever opening
+    # a pipe, which is the exact failure REL-CAP-FSE-001 reported in rc19.
+    Stop-ReleaseElevatedSession
 
     $exe = $Run.Artifact.exePath
     $sessionRunId = New-LiveVerifyRunId
@@ -461,75 +552,48 @@ function ConvertTo-Hashtable {
 # Execution
 # ---------------------------------------------------------------------------
 
-function Read-OperatorAnswer {
+function Read-ReleaseOperatorJudgement {
     <#
     .SYNOPSIS
-        One question, answered y or n.
+        The sight check: one judgement, subject to the same rules as a human gate.
     .DESCRIPTION
-        The vocabulary is the whole point. It used to be 'done' / 'skip' / anything
-        else aborts, which failed three ways at once: a defect could not be reported
-        at all (a person who looked and saw something wrong had only 'done', which
-        claims the opposite, or 'skip', which claims nobody was asked), a typo or a
-        stray Enter ended the gate, and the words had to be remembered from a screen
-        of instructions further up.
+        Two of the sixteen scenarios end in a person's eyes rather than a
+        measurement. Colour on a capture-excluded overlay has no other reader:
+        WDA_EXCLUDEFROMCAPTURE defeats screenshots, screen recording and
+        PrintWindow by design, and the visual harness only ever grabs the scene
+        graph, which shows correct alpha even when the window composes wrongly on
+        screen. UI Automation can say the surface is really there with really that
+        text -- and that is asserted separately -- but not what colour it is.
 
-        Now: y or n, with s and a still accepted for skipping and stopping, and an
-        unrecognised answer simply asked again -- a keystroke never decides anything
-        destructive.
-    #>
-    param([Parameter(Mandatory)] [string] $Question)
-    while ($true) {
-        $typed = Read-Host "  $Question  [y] yes  [n] no  (s = skip, a = abort)"
-        if ($null -eq $typed) { $typed = '' }
-        switch -Regex ($typed.Trim().ToLowerInvariant()) {
-            '^(y|yes|j|ja|d|done|ok)$' { return 'yes' }
-            '^(n|no|nein|f|fail|bad)$' { return 'no' }
-            '^(s|skip|later)$' { return 'skip' }
-            '^(a|abort|q|quit)$' { return 'abort' }
-            default { Write-Host '  y or n, please. Nothing recorded yet.' -ForegroundColor DarkGray }
-        }
-    }
-}
-
-function Read-ReleaseOperatorAnswer {
-    <#
-    .SYNOPSIS
-        A mid-scenario question, subject to the same rules as a human gate.
-    .DESCRIPTION
-        Asking through Read-Host directly bypassed everything Invoke-ReleaseHumanGate
-        owes the caller, and the two switches then meant the opposite of what they say:
-
-          -NonInteractive   documented as "the gate becomes DEFERRED, nobody was
-                            asked". Read-Host asked anyway.
-          redirected stdin  documented the same way. Read-Host got an empty string
-                            forever and the unrecognised-answer branch asked again --
-                            an infinite loop, with the scenario's environment change
-                            (the Windows appearance) still applied.
-
-        `skip` rather than `yes` for an attested scenario, and that is the point:
-        -Attest says the CALLER performed an action, and a Verify block still decides.
-        Here the question IS the verdict -- whether something LOOKS right -- and no
-        caller can perform someone else's looking. Attesting it would manufacture a
-        pass for a surface nobody saw. What -Attest legitimately buys is the run up to
-        this point: the setup executes, and the verdict is DEFERRED.
+        Returned as a hashtable so the reason for a `wrong` answer travels with it
+        into the report. `skip` rather than an answer for an attested scenario, and
+        that is the point: -Attest says the CALLER performed an action, and a Verify
+        block still decides. Here the question IS the verdict, and no caller can
+        perform someone else's looking. Attesting it would manufacture a pass for a
+        surface nobody saw; what -Attest legitimately buys is the run up to this
+        point.
     #>
     param(
         [Parameter(Mandatory)] [string] $ScenarioId,
-        [Parameter(Mandatory)] [string] $Question
+        [Parameter(Mandatory)] [string] $Line,
+        [hashtable] $Detail = @{}
     )
     if ($NonInteractive) {
-        Write-Step "not asked (-NonInteractive): $Question"
-        return 'skip'
+        Write-Step "not asked (-NonInteractive): $Line"
+        return @{ Answer = 'skip' }
     }
     if (@(Expand-ListArgument -Values $Attest) -contains $ScenarioId) {
-        Write-Step "not asked (-Attest names this scenario; a visual judgement cannot be attested): $Question"
-        return 'skip'
+        Write-Step "not asked (-Attest names this scenario; a visual judgement cannot be attested): $Line"
+        return @{ Answer = 'skip' }
     }
-    if ([Console]::IsInputRedirected) {
-        Write-Step "not asked (no interactive terminal): $Question"
-        return 'skip'
+    if (-not (Test-ReleaseOperatorPresent)) {
+        Write-Step "not asked (no interactive terminal): $Line"
+        return @{ Answer = 'skip' }
     }
-    return Read-OperatorAnswer -Question $Question
+    $step = $Detail.Clone()
+    $step['Id'] = $ScenarioId
+    $step['Line'] = $Line
+    return Invoke-ReleaseOperatorJudgement -Step $step
 }
 
 function New-ReleaseContext {
@@ -556,10 +620,14 @@ function New-ReleaseContext {
         State          = @{}
         EnsureSession  = { Start-ReleaseSession -Run $script:CurrentRun }
         EndSession     = { Stop-ReleaseSession }
+        # The shared elevated instance the present gates reuse. $null when this
+        # runner is not elevated, which is the caller's cue to fall back to the
+        # operator gate rather than to raise a prompt of its own.
+        ElevatedSession = { Start-ReleaseElevatedSession -Run $script:CurrentRun }
         HumanGate      = { param($gate) Invoke-ReleaseHumanGate -Gate $gate -Context $script:CurrentContext }
         # One question at the moment it can be answered, for a scenario that has
         # several observable states rather than one verdict at the end.
-        Ask            = { param($scenarioId, $question) Read-ReleaseOperatorAnswer -ScenarioId $scenarioId -Question $question }
+        Judge          = { param($scenarioId, $line, $detail) Read-ReleaseOperatorJudgement -ScenarioId $scenarioId -Line $line -Detail $detail }
     }
 }
 
@@ -712,8 +780,16 @@ function Invoke-Scenarios {
         try { $aliases = Resolve-EnvironmentAliases -Orchestrator $Orchestrator } catch { $aliases = $null }
     }
 
+    # One window, one ordered sequence: the dependencies between the gates are
+    # declared in the catalog and resolved here, so an operator sees the whole run
+    # before the first prompt instead of discovering halfway through that the gate
+    # they just passed removed the starting point of the next one.
+    $Entries = @(Get-ReleaseHumanPlanOrder -Entries $Entries)
+    Show-ReleaseHumanPlan -Entries $Entries
+
     try {
-        foreach ($entry in $Entries) {
+        for ($position = 0; $position -lt $Entries.Count; $position++) {
+            $entry = $Entries[$position]
             Write-Heading "$($entry.Id)  $($entry.Title)"
             Write-Step "layer $($entry.Layer)  class $($entry.Class)"
 
@@ -723,6 +799,14 @@ function Invoke-Scenarios {
                 -EnvironmentFingerprint $environmentFingerprint | Out-Null
 
             $outcome = Invoke-OneScenario -Entry $entry -Context $context -Orchestrator $Orchestrator -Aliases $aliases
+            # The shared elevated instance is released the moment the NEXT scenario
+            # does not want it. It holds the machine-wide single-instance mutex, so
+            # one left running makes every following scenario wait for a control
+            # channel that was never created.
+            $next = if ($position + 1 -lt $Entries.Count) { $Entries[$position + 1] } else { $null }
+            $nextWantsElevated = $null -ne $next -and
+                $next.PSObject.Properties.Name -contains 'UsesElevatedSession' -and $next.UsesElevatedSession
+            if (-not $nextWantsElevated) { Stop-ReleaseElevatedSession }
             # Before the verdict is written, so the next scenario cannot inherit a
             # recording this one started. See Stop-ReleaseLeakedRecording.
             Stop-ReleaseLeakedRecording -Session $script:Session
@@ -748,6 +832,7 @@ function Invoke-Scenarios {
         }
     }
     finally {
+        Stop-ReleaseElevatedSession
         Stop-ReleaseSession
     }
 }
