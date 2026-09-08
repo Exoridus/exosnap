@@ -145,6 +145,44 @@ jobs:
         run: pwsh -NonInteractive -File scripts/validate-network-egress.ps1
 
   # ---------------------------------------------------------------------------
+  # Release-verify harness: the typed C# harness under tools/release-verify. It
+  # has its own SDK pin (tools/release-verify/global.json), its own package lock
+  # files, and its own test runner, so it builds and tests on its own rather than
+  # inside build-test. Restore is locked: a package that moved underneath the
+  # harness must fail here, not upgrade quietly on the machine that decides
+  # whether a release ships.
+  #
+  # No gate has been migrated into it yet, so this job proves the harness itself
+  # compiles warning-free and its unit, contract and hostile-input tests pass. It
+  # never starts ExoSnap, an installer, a sandbox or any GUI.
+  # ---------------------------------------------------------------------------
+  verify-harness:
+    name: verify-harness
+    runs-on: windows-2022
+    timeout-minutes: 15
+    concurrency:
+      group: ci-${{ github.workflow }}-verify-harness-${{ github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: true
+    defaults:
+      run:
+        working-directory: tools/release-verify
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.0.0
+        with:
+          global-json-file: tools/release-verify/global.json
+
+      - name: Restore (locked)
+        run: dotnet restore ExoSnap.Verify.slnx --locked-mode
+
+      - name: Build
+        run: dotnet build ExoSnap.Verify.slnx --no-restore -warnaserror
+
+      - name: Test
+        run: dotnet test ExoSnap.Verify.slnx --no-restore
+
+  # ---------------------------------------------------------------------------
   # Dev scripts: regression-guard the A/V-sync analyzer against a committed
   # golden clapper clip. This is a Python + SYSTEM-ffmpeg check (the app ships a
   # mux-only FFmpeg without the signalstats/astats filters the analyzer needs),
