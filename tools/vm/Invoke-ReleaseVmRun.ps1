@@ -82,9 +82,9 @@ if (-not $RunId) { $RunId = 'vm-' + (Get-Date).ToString('yyyyMMdd-HHmmss') }
 if (-not $ResultRoot) { $ResultRoot = Join-Path $repositoryRoot '.workspace/release-verify' }
 
 $runPath = Get-ReleaseVmRunPath -RunId $RunId -Root $Root
-$resultDirectory = Join-Path $ResultRoot $RunId
+$resultDirectory = [IO.Path]::Combine($ResultRoot, $RunId)
 if (-not $GuestCommand) {
-    $GuestCommand = "$(Join-Path $runPath.GuestHarness 'ExoSnap.Verify.exe') qualify --run-id $RunId --output $($runPath.GuestResults)"
+    $GuestCommand = "$([IO.Path]::Combine($runPath.GuestHarness, 'ExoSnap.Verify.exe')) qualify --run-id $RunId --output $($runPath.GuestResults)"
 }
 
 $planning = $DryRun -or $WhatIfPreference

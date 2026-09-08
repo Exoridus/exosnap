@@ -355,11 +355,14 @@ function Get-ReleaseVmPath {
     param([string] $Root)
     $defaults = Get-ReleaseVmDefault
     if (-not $Root) { $Root = $defaults.Root }
+    # Composed rather than joined. Join-Path asks the provider, and the provider
+    # refuses a drive that is not mounted on THIS machine -- so a plan for an image
+    # root on a drive the developer has and a reviewer does not could not be printed.
     return @{
         Root          = $Root
-        GoldenDisk    = Join-Path $Root $defaults.GoldenDiskName
-        AnswerIso     = Join-Path $Root $defaults.AnswerIsoName
-        RunRoot       = Join-Path $Root 'runs'
+        GoldenDisk    = [IO.Path]::Combine($Root, $defaults.GoldenDiskName)
+        AnswerIso     = [IO.Path]::Combine($Root, $defaults.AnswerIsoName)
+        RunRoot       = [IO.Path]::Combine($Root, 'runs')
     }
 }
 
@@ -384,18 +387,18 @@ function Get-ReleaseVmRunPath {
     }
     $paths = Get-ReleaseVmPath -Root $Root
     $defaults = Get-ReleaseVmDefault
-    $runDirectory = Join-Path $paths.RunRoot $RunId
+    $runDirectory = [IO.Path]::Combine($paths.RunRoot, $RunId)
     return @{
         RunId             = $RunId
         Root              = $paths.Root
         GoldenDisk        = $paths.GoldenDisk
         RunDirectory      = $runDirectory
-        DifferencingDisk  = Join-Path $runDirectory 'disk.vhdx'
+        DifferencingDisk  = [IO.Path]::Combine($runDirectory, 'disk.vhdx')
         VMName            = "$($defaults.RunVMPrefix)$RunId"
         GuestRoot         = $defaults.GuestRoot
-        GuestArtifacts    = Join-Path $defaults.GuestRoot 'artifacts'
-        GuestHarness      = Join-Path $defaults.GuestRoot 'harness'
-        GuestResults      = Join-Path $defaults.GuestRoot 'out'
+        GuestArtifacts    = [IO.Path]::Combine($defaults.GuestRoot, 'artifacts')
+        GuestHarness      = [IO.Path]::Combine($defaults.GuestRoot, 'harness')
+        GuestResults      = [IO.Path]::Combine($defaults.GuestRoot, 'out')
     }
 }
 

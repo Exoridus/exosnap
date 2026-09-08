@@ -1413,6 +1413,19 @@ if(EXOSNAP_PWSH)
             "${PROJECT_SOURCE_DIR}/scripts/tests/release-qualification.tests.ps1")
     set_tests_properties(live_verify.release_qualification PROPERTIES TIMEOUT 300 LABELS "live_verify")
 
+    # The Hyper-V verification guest recipe. Registered here for the reason the
+    # release-runner cases are: what it is worth testing about a virtual machine is
+    # what happens before one exists -- the three refusals a first attempt hits (not
+    # elevated, not in Hyper-V Administrators, no installation ISO), the plan each
+    # host script would execute, and the pins provisioning refuses to install without.
+    # Every case reads a plan or a refusal; none of them touches Hyper-V, a disk
+    # image, the network or the machine's configuration, so the suite is the same on
+    # a machine that has never had the feature enabled.
+    add_test(NAME live_verify.vm_recipe
+        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
+            "${PROJECT_SOURCE_DIR}/scripts/tests/vm-recipe.tests.ps1")
+    set_tests_properties(live_verify.vm_recipe PROPERTIES TIMEOUT 300 LABELS "live_verify")
+
     # The local verification pipeline's own contracts. These belong in CTest and
     # not only in verify.ps1, because verify.ps1 is the thing under test: a
     # pipeline that reports PASS is worth nothing until it has been shown to
