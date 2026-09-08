@@ -25,6 +25,8 @@ namespace ExoSnap.Verify.Json;
 [JsonSerializable(typeof(MachineCapabilityDocument))]
 [JsonSerializable(typeof(ScenarioDescriptorDocument))]
 [JsonSerializable(typeof(RunState))]
+[JsonSerializable(typeof(CampaignDocument))]
+[JsonSerializable(typeof(EnvironmentRestoreDocument))]
 [JsonSerializable(typeof(ScenarioResult))]
 [JsonSerializable(typeof(IReadOnlyList<ScenarioDescriptor>))]
 public sealed partial class VerifyJsonContext : JsonSerializerContext;

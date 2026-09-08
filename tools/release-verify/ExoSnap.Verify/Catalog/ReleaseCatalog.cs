@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using ExoSnap.Verify.Capabilities;
 using ExoSnap.Verify.Engine;
+using ExoSnap.Verify.Gates;
 using ExoSnap.Verify.Models;
 
 namespace ExoSnap.Verify.Catalog;
@@ -22,15 +23,47 @@ namespace ExoSnap.Verify.Catalog;
 /// judging real desktop composition that no screenshot of ours can capture,
 /// because the overlays in question defeat every capture path by design.
 ///
-/// Every body is <see cref="NotMigratedBody"/> in this revision. The declarations
-/// are real and the gates are not, which is why an unmigrated scenario reports
-/// Skipped rather than Pass.
+/// A scenario whose body has not been written yet carries <see cref="NotMigratedBody"/>
+/// and reports Skipped rather than Pass: a gate that has not been written must never
+/// look like a gate that ran.
 /// </remarks>
 public static class ReleaseCatalog
 {
-    /// <summary>Builds the catalog with unmigrated bodies.</summary>
+    /// <summary>Builds the catalog, pairing each declaration with the body it has.</summary>
     public static ScenarioCatalog Create() =>
-        new(Descriptors().Select(descriptor => new Scenario(descriptor, new NotMigratedBody())));
+        new(Descriptors().Select(descriptor => new Scenario(descriptor, BodyFor(descriptor.Id))));
+
+    /// <summary>
+    /// The scenario ids whose bodies exist. Everything else in the catalog is a
+    /// declaration waiting for one.
+    /// </summary>
+    public static ReadOnlyCollection<string> MigratedIds() => new(
+    [
+        .. Descriptors()
+            .Select(descriptor => descriptor.Id)
+            .Where(id => BodyFor(id) is not NotMigratedBody),
+    ]);
+
+    private static IScenarioBody BodyFor(string id) => id switch
+    {
+        "REL-ENV-001" => new EnvironmentClassificationGate(),
+        "REL-ENV-002" => new DeviceAliasGate(),
+        "REL-ENV-003" => new EnvironmentMutationGate(),
+        "REL-SCHEMA-001" => new FieldContractGate(),
+        "REL-PRESENT-001" => new UnelevatedPresentGate(),
+        "REL-PRESENT-XCHECK-001" => new PresentCrossCheckGate(),
+        "REL-CAP-001" => new RecordingProducedGate(),
+        "REL-CAP-QUIET-001" => new QuietStallGate(),
+        "REL-AUD-CLOCK-001" => new AudioClockSoakGate(),
+        "REL-DISP-REFRESH-001" => new DisplayRefreshGate(),
+        "REL-DISP-HDR-001" => new DisplayHdrGate(),
+        "REL-DISP-MIXED-001" => new MixedDisplayGate(),
+        "REL-DISP-DPI-001" => new DisplayScalingGate(),
+        "REL-UPD-PORTABLE-001" => new PortableUpdateGate(),
+        "REL-JOURNEY-001" => new ProductJourneyGate(),
+        "REL-SHUTDOWN-001" => new ShutdownGate(),
+        _ => new NotMigratedBody(),
+    };
 
     /// <summary>
     /// The scenarios a release campaign must have passing before promotion. Opt-in
@@ -109,6 +142,18 @@ public static class ReleaseCatalog
             requires: [CapabilityRequirement.Is(CapabilityKeys.GpuD3D11, "true")],
             oracle: ["exosnap", "presentmon"],
             source: "ADR 0033; docs/release-checklist.md section 7 (present-mode diagnostics)"),
+
+        Describe(
+            id: "REL-PRESENT-XCHECK-001",
+            title: "An independent observer confirms the presentation path ExoSnap reports",
+            scenarioClass: "present",
+            layer: ScenarioLayer.FullAuto,
+            isolation: ScenarioIsolation.DisposableOs,
+            interaction: ScenarioInteraction.Automated,
+            requires: [CapabilityRequirement.Is(CapabilityKeys.PresentMonAvailable, "true")],
+            oracle: ["exosnap", "presentmon"],
+            source: "ADR 0070 (PresentMon as an independent oracle; required only when the " +
+                    "present-diagnostics code or the Windows major version has moved)"),
 
         Describe(
             id: "REL-CAP-001",

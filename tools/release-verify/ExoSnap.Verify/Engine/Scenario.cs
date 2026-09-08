@@ -1,4 +1,5 @@
 using ExoSnap.Verify.Capabilities;
+using ExoSnap.Verify.Gates;
 using ExoSnap.Verify.Models;
 using ExoSnap.Verify.Processes;
 
@@ -9,11 +10,25 @@ namespace ExoSnap.Verify.Engine;
 /// <param name="Capabilities">What this machine reported at the start of the run.</param>
 /// <param name="Processes">The runner every child process must go through.</param>
 /// <param name="EvidenceDirectory">Directory the scenario writes its evidence files into.</param>
+/// <param name="Services">
+/// The adapters a migrated gate drives. Null for a run that measures nothing - a plan,
+/// a catalog listing, or a scenario-logic test whose body needs none - so a gate that
+/// reaches for one it was not given fails loudly rather than against a stub.
+/// </param>
 public sealed record ScenarioContext(
     ScenarioDescriptor Descriptor,
     CapabilitySet Capabilities,
     ProcessRunner Processes,
-    string EvidenceDirectory);
+    string EvidenceDirectory,
+    GateServices? Services = null)
+{
+    /// <summary>The adapters, or a refusal naming what the gate cannot reach.</summary>
+    /// <exception cref="InvalidOperationException">This run supplied no adapters.</exception>
+    public GateServices RequireServices() =>
+        this.Services ??
+        throw new InvalidOperationException(
+            $"Scenario '{this.Descriptor.Id}' needs the verify adapters, and this run was created without them.");
+}
 
 /// <summary>The work a scenario does once its requirements are satisfied.</summary>
 public interface IScenarioBody

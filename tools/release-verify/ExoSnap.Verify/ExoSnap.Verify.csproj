@@ -13,4 +13,10 @@
     <ProjectReference Include="..\ExoSnap.Verify.Windows\ExoSnap.Verify.Windows.csproj" />
   </ItemGroup>
 
+  <!-- The packet-span parser is internal; the adapter contract tests exercise it
+       directly against a committed CSV fixture rather than spawning ffprobe. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="ExoSnap.Verify.Tests" />
+  </ItemGroup>
+
 </Project>
