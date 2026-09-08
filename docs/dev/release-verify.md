@@ -51,7 +51,19 @@ pwsh scripts/release-verify.ps1 resume         # re-fingerprint, mark stale, con
 pwsh scripts/release-verify.ps1 retry -Only REL-ENV-003   # re-attempt a FAIL, explicitly
 pwsh scripts/release-verify.ps1 status
 pwsh scripts/release-verify.ps1 report         # release-verification.json + report.md + junit.xml
+pwsh scripts/release-verify.ps1 qualify        # the promotion verdict, and only with -Publish the upload
 pwsh scripts/release-verify.ps1 recover        # restore a dirty environment, and nothing else
+```
+
+A campaign that is going to qualify a release needs three things `prepare` cannot work out for
+itself, because a published portable ZIP carries no build manifest:
+
+```powershell
+pwsh scripts/release-verify.ps1 prepare `
+    -ExePath C:\rc\portable\exosnap.exe -Tag v0.9.1-rc1 `
+    -SourceCommit <the commit v0.9.1-rc1 points at> `
+    -PortableZip C:\rc\ExoSnap-0.9.1-rc1-windows-x64-portable.zip `
+    -Msi C:\rc\ExoSnap-0.9.1-rc1-windows-x64.msi
 ```
 
 Run directory: `.workspace/release-verify/<campaign-id>/` (untracked).
@@ -69,12 +81,21 @@ Two verdicts per scenario, never merged.
 
 | State | Meaning |
 |---|---|
-| `PASS` / `FAIL` | measured |
+| `PASS` / `FAIL` | measured; `FAIL` means the **product** is wrong, and nothing else may claim it |
+| `INFRA_ERROR` | nothing measured the product: the scenario threw, an external tool was missing or unparseable when it was needed, a bounded wait expired, an environment mechanism reported success and then read back something else |
 | `UNVERIFIED` | attempted, outcome unknown (interrupted, evidence unusable) |
 | `STALE` | passed once, against an artifact or environment that has since changed |
 | `SKIPPED` | deliberately not run, with a recorded reason |
 | `DEFERRED` | a human gate nobody could answer — no interactive stdin, `-NonInteractive`, or the operator postponed it |
 | `UNAVAILABLE` | this machine cannot offer what the scenario declared it needs |
+
+`INFRA_ERROR` exists so that `FAIL` can mean one thing. A campaign with a single
+`INFRA_ERROR` is not releasable either -- the publish gate refuses both equally -- but
+it has not claimed a product defect nobody measured. The split is made once, in
+`Resolve-ReleaseScenarioOutcome` (`scripts/lib/ReleaseQualification.ps1`), from the
+environment transaction's own error codes: `apply_rejected`, `device_not_present`,
+`unknown_property` and `not_mutable` are facts about the desk and stay `UNAVAILABLE`;
+every other code is a mechanism that misbehaved.
 
 `DEFERRED` and `UNAVAILABLE` exist because neither is a failure and neither is a pass.
 A question nobody was asked has no wrong answer, and "this desk has no 240 Hz mode" is
@@ -559,13 +580,56 @@ applied, the product state, the assertions, any human actions, the environment a
 restore, timestamps, both verdicts. Nothing that identifies the person at the machine —
 a run directory is evidence other people read.
 
-`report` writes `release-verification.json` (machine-readable release verdict),
-`report.md` and `junit.xml` from one state, so the three cannot disagree.
+`report` writes `report.md`, `report.json` and `junit.xml` from one state, so the three
+cannot disagree, and `release-verification.json` -- the qualification record -- from
+the same state again.
+
+## The qualification record
+
+`release-verification.json` is what a release is promoted on. It is the only thing the
+publish gate reads, so it has to carry everything a publisher would otherwise have to
+take on trust from the person who ran the campaign.
+
+| Field | What it answers |
+|---|---|
+| `schema` | which shape this is (`exosnap.release-verification/1`); an unknown one is refused, not guessed at |
+| `generatedUtc` | when the verdict was taken |
+| `runId` | which campaign directory produced it |
+| `rcTag`, `sourceCommit` | which candidate, and which commit, this verdict is about |
+| `artifact` | the exe identity the campaign was bound to: SHA-256, size, product/file version, Qt runtime, install tree |
+| `packages` | the RC's published downloadables by file name and SHA-256 -- what ties the verdict to the bytes on the release page |
+| `machineFingerprint`, `environment`, `capabilities` | which machine, in which state, and what it could offer |
+| `harness` | version, the commit the harness was checked out at, and whether that tree was modified |
+| `catalog` | the scenario catalog's version, a digest over every id and its opt-in flag, and the count |
+| `required` | the policy, the required ids, and the opt-in ids named for this release |
+| `checks` | every verdict: state, `required`, `optIn`, attempts, timestamps, message, restore verdict, per-property environment evidence, and a SHA-256 for every evidence file cited |
+| `summary`, `restoreSummary` | the product and environment-restore verdicts, counted |
+| `qualification` | `QUALIFIED` or `NOT_QUALIFIED`, with every blocking reason |
+
+`QUALIFIED` requires all of: no `FAIL`, no `INFRA_ERROR`, no required gate in any state
+other than a measured one, no environment-restore verdict outside
+`NOT_APPLICABLE`/`RESTORED`, no cited evidence file missing, at least one package hash,
+and a complete identity (commit, RC tag, machine, harness commit, catalog version and
+digest). **Required** is every scenario that is not opt-in, plus the opt-in scenarios
+named with `-Required` for that release; naming an id the catalog does not have is an
+error rather than an empty set.
+
+`scripts/check-release-qualification.ps1` applies exactly these rules on a clean
+checkout, plus the three questions only the publisher can ask -- is this record about
+the commit being tagged, about the RC whose assets were verified, and do its package
+hashes match the `.sha256` sidecars that RC actually published. The record's own
+`QUALIFIED` claim is re-derived rather than believed, so a hand-edited verdict does not
+survive the gate. `.github/workflows/release-candidate.yml`'s `require-qualification`
+job runs it on every final tag, before anything is created or uploaded.
 
 ## Tests
 
 `scripts/tests/release-verify.tests.ps1`, registered as CTest
-`live_verify.release_runner`.
+`live_verify.release_runner`, and `scripts/tests/release-qualification.tests.ps1`
+(`live_verify.release_qualification`) for the record and the publish lock -- where the
+cases that matter are the refusals: a missing record, a record about a different commit,
+a record about different bytes, a `FAIL`, an `INFRA_ERROR`, a required gate nobody
+answered, a forged `QUALIFIED`.
 
 Everything runs against a **fake** `envctl` that reports whatever the test needs,
 including lying about success. That is the point: the failures worth pinning — a
