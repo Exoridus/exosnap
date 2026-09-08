@@ -39,6 +39,10 @@ CMakeLists.txt.user
 *.qbs.user
 *.qbs.user.*
 
+#.NET build output (release-verify harness)
+/tools/release-verify/**/bin/
+/tools/release-verify/**/obj/
+
 #Qt / MSBuild artifacts
 app/Generated Files/
 app/obj/

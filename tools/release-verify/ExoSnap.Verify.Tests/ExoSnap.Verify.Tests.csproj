@@ -1,0 +1,45 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>ExoSnap.Verify.Tests</RootNamespace>
+    <IsTestProject>true</IsTestProject>
+    <!--
+      The .NET 10 SDK no longer runs `dotnet test` through VSTest, so the suite
+      runs on Microsoft.Testing.Platform, which xunit.v3 hosts itself. That is
+      also why there is no Microsoft.NET.Test.Sdk reference here.
+    -->
+    <TestingPlatformDotnetTestSupport>true</TestingPlatformDotnetTestSupport>
+    <UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ExoSnap.Verify\ExoSnap.Verify.csproj" />
+    <ProjectReference Include="..\ExoSnap.Verify.Windows\ExoSnap.Verify.Windows.csproj" />
+    <!--
+      Built before the tests, but never loaded by them: the fixture is a child
+      process the process-runner tests start by path, not a library.
+    -->
+    <ProjectReference Include="..\ExoSnap.Verify.Fixtures\ExoSnap.Verify.Fixtures.csproj"
+                      ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <!--
+    The fixture lands in its own subdirectory rather than next to the test
+    assemblies: several tests copy the whole directory to a hostile path, and a
+    directory that also held the test runner would make those copies enormous.
+  -->
+  <Target Name="CopyVerifyFixtureTool" AfterTargets="Build">
+    <ItemGroup>
+      <VerifyFixtureFile Include="$(MSBuildThisFileDirectory)..\ExoSnap.Verify.Fixtures\bin\$(Configuration)\$(TargetFramework)\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(VerifyFixtureFile)"
+          DestinationFolder="$(OutDir)fixture-tool\%(RecursiveDir)"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+</Project>

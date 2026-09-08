@@ -119,6 +119,20 @@ $scope = if ($mode -eq 'Full') { Get-VerifyScope -ChangedFiles @() } else { Get-
 
 $plan = New-VerifyPlan -Mode $mode -Scope $scope -BuildDir $buildDir -Preset $Preset -Config $Config
 
+# The release-verify harness is a separate .NET solution with its own SDK pin and
+# its own test runner, so it is appended here rather than folded into the C++
+# plan: nothing about it shares the CMake preset, the build directory, or CTest.
+# It is scoped like every other -Fast check and unconditional in -Full.
+$verifyHarnessSolution = Join-Path $repoRoot 'tools/release-verify/ExoSnap.Verify.slnx'
+if (Test-Path -LiteralPath $verifyHarnessSolution -PathType Leaf) {
+    $harnessTouched = @($changed | Where-Object { $_ -like 'tools/release-verify/*' }).Count -gt 0
+    $plan.Checks = @($plan.Checks) + @(
+        New-VerifyCheck -Name 'verify-harness' -Kind 'verify-harness' -DependsOn @('sanity') `
+            -Applicable:(($mode -eq 'Full') -or $harnessTouched) `
+            -SkipReason 'nothing under tools/release-verify changed' `
+            -Evidence @{ solution = 'tools/release-verify/ExoSnap.Verify.slnx' })
+}
+
 # ---------------------------------------------------------------------------
 # Running a step
 # ---------------------------------------------------------------------------
@@ -307,6 +321,49 @@ $realExecutor = {
                 $outcome.Detail = "$($outcome.Detail); failed: $($script:LastFailedTests -join ', ')"
             }
             return $outcome
+        }
+
+        'verify-harness' {
+            # Restore is locked so a package that moved underneath the harness is
+            # a failure here rather than a silent upgrade on the machine that
+            # decides whether a release ships.
+            if (-not (Get-Command 'dotnet' -ErrorAction SilentlyContinue)) {
+                return @{ Status = $status.Fail
+                    Detail       = 'dotnet is not on PATH; tools/release-verify/global.json pins the SDK it needs'
+                }
+            }
+
+            $harnessRoot = Join-Path $repoRoot 'tools/release-verify'
+            $harnessSteps = @(
+                @{ Name = 'verify-harness.restore'
+                    Args = @('restore', 'ExoSnap.Verify.slnx', '--locked-mode') }
+                @{ Name = 'verify-harness.build'
+                    Args = @('build', 'ExoSnap.Verify.slnx', '--no-restore', '-warnaserror') }
+                @{ Name = 'verify-harness.test'
+                    Args = @('test', 'ExoSnap.Verify.slnx', '--no-restore') }
+            )
+
+            # The MSVC developer environment exports Platform=x64, and MSBuild
+            # promotes any such variable to a global property. The harness
+            # solution is AnyCPU only, so every dotnet command would be asked for
+            # a "Debug|x64" configuration that does not exist -- and this pipeline
+            # has always been through vcvars by the time it gets here.
+            $inheritedPlatform = $env:Platform
+            $inheritedConfiguration = $env:Configuration
+            try {
+                $env:Platform = $null
+                $env:Configuration = $null
+                foreach ($harnessStep in $harnessSteps) {
+                    $outcome = Invoke-Step -Name $harnessStep.Name -FilePath 'dotnet' `
+                        -Arguments $harnessStep.Args -WorkingDirectory $harnessRoot
+                    if ($outcome.Status -ne $status.Pass) { return $outcome }
+                }
+            }
+            finally {
+                $env:Platform = $inheritedPlatform
+                $env:Configuration = $inheritedConfiguration
+            }
+            return @{ Status = $status.Pass; Detail = 'restore (locked), build, test' }
         }
 
         'cppcheck' {

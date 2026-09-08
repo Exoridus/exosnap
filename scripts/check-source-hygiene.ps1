@@ -88,7 +88,7 @@ $script:ExcludedPattern = '(?i)^scripts/tests/'
 # ---------------------------------------------------------------------------
 
 $script:CommentSyntax = @(
-    @{ Extensions = @('.cpp', '.cc', '.cxx', '.h', '.hpp', '.hxx', '.inl', '.qml', '.js', '.mjs', '.ts')
+    @{ Extensions = @('.cpp', '.cc', '.cxx', '.h', '.hpp', '.hxx', '.inl', '.cs', '.qml', '.js', '.mjs', '.ts')
         Line      = '//'; BlockOpen = '/*'; BlockClose = '*/' }
     @{ Extensions = @('.ps1', '.psm1', '.psd1')
         Line      = '#'; BlockOpen = '<#'; BlockClose = '#>' }
