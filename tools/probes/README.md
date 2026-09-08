@@ -24,6 +24,19 @@ Individual probe targets are placed under `build/<preset>/tools/probes/`.
 | probe_wgc_nvenc | WGC capture + NVENC encode pipeline (system memory path) | NVIDIA GPU | `probe_wgc_nvenc.exe` |
 | probe_wgc_nvenc_gpu | WGC + NVENC GPU texture sharing path (D3D11 interop) | NVIDIA GPU | `probe_wgc_nvenc_gpu.exe` |
 | probe_mf_aac_encode | Media Foundation AAC encoding (legacy/transitional) | None | `probe_mf_aac_encode.exe` |
+| probe_gpup_nvenc | NVENC session, codec caps and 60 encoded frames on adapter 0, as JSON | NVIDIA GPU, or a Hyper-V GPU partition of one | `probe_gpup_nvenc.exe` |
+| probe_idd_duplication | Output Duplication on every output: mode, colour space, 30 frames, timeouts, as JSON | A desktop session | `probe_idd_duplication.exe` |
+
+## The two verification-guest probes
+
+`probe_gpup_nvenc` and `probe_idd_duplication` exist to answer the two questions the
+Hyper-V verification guest is built on, before any gate depends on the answers: does
+NVENC work through a GPU partition, and can the virtual monitor be duplicated. Both
+are built on the host and run in the guest; the host result is the reference the guest
+result is compared against, which is why both print JSON rather than prose.
+
+Either one failing in the guest moves the gates that need it back to the host. See
+`docs/dev/release-verify-vm.md`.
 
 ## probe_mf_aac_encode — Legacy/Transitional Note
 
