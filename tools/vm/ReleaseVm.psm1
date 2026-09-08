@@ -90,6 +90,10 @@ function New-ReleaseVmStep {
         The step takes -Credential, and the credential is supplied at execution time.
         Kept out of the parameter table so a plan can be printed, logged and compared
         without carrying a password around in it.
+    .PARAMETER AlwaysRun
+        Run during cleanup even when an earlier ordinary step failed.
+    .PARAMETER RunIfCompleted
+        For an AlwaysRun step, the name of the creation step that must have completed.
     #>
     [OutputType([hashtable])]
     param(
@@ -97,7 +101,9 @@ function New-ReleaseVmStep {
         [Parameter(Mandatory)] [string] $Command,
         [System.Collections.IDictionary] $Parameters = @{},
         [string] $Detail = '',
-        [switch] $NeedsCredential
+        [switch] $NeedsCredential,
+        [switch] $AlwaysRun,
+        [string] $RunIfCompleted = ''
     )
     return @{
         Name            = $Name
@@ -105,6 +111,8 @@ function New-ReleaseVmStep {
         Parameters      = $Parameters
         Detail          = $Detail
         NeedsCredential = [bool]$NeedsCredential
+        AlwaysRun       = [bool]$AlwaysRun
+        RunIfCompleted  = $RunIfCompleted
     }
 }
 
@@ -187,12 +195,13 @@ function Write-ReleaseVmPlan {
 function Invoke-ReleaseVmPlan {
     <#
     .SYNOPSIS
-        Runs a plan, step by step, stopping at the first failure.
+        Runs ordinary plan steps to the first failure, then runs cleanup steps.
     .DESCRIPTION
         The only function in this module that changes anything. A step that throws
-        stops the plan: these steps are ordered by dependency, and continuing past a
-        failed New-VM produces a second page of errors about a machine that does not
-        exist.
+        stops ordinary execution: those steps are ordered by dependency, and
+        continuing past a failed New-VM produces a second page of errors about a
+        machine that does not exist. AlwaysRun steps still execute when the resource
+        creation step named by RunIfCompleted succeeded.
 
         Returns what each step returned, keyed by step name. The campaign step's exit
         code is read from there rather than thrown on -- a run that found defects is a
@@ -204,7 +213,9 @@ function Invoke-ReleaseVmPlan {
         [System.Management.Automation.PSCredential] $Credential
     )
     $outputs = @{}
-    foreach ($step in $Plan) {
+    $failure = $null
+    $runStep = {
+        param($step)
         Write-Host "  $($step.Name)"
         Write-Host "      $(Format-ReleaseVmStep -Step $step)"
         $parameters = [ordered]@{}
@@ -216,6 +227,37 @@ function Invoke-ReleaseVmPlan {
             $parameters['Credential'] = $Credential
         }
         $outputs[$step.Name] = & $step.Command @parameters
+    }
+
+    try {
+        foreach ($step in @($Plan | Where-Object { -not $_.AlwaysRun })) {
+            & $runStep $step
+        }
+    }
+    catch {
+        $failure = $_
+    }
+    finally {
+        foreach ($step in @($Plan | Where-Object { $_.AlwaysRun })) {
+            if ($step.RunIfCompleted -and -not $outputs.ContainsKey($step.RunIfCompleted)) {
+                Write-Host "  $($step.Name) (skipped; '$($step.RunIfCompleted)' did not complete)"
+                continue
+            }
+            try {
+                & $runStep $step
+            }
+            catch {
+                if ($null -eq $failure) {
+                    $failure = $_
+                }
+                else {
+                    Write-Warning "cleanup step '$($step.Name)' failed: $($_.Exception.Message)"
+                }
+            }
+        }
+    }
+    if ($null -ne $failure) {
+        throw $failure
     }
     return $outputs
 }
@@ -273,8 +315,9 @@ function Test-ReleaseVmPrerequisite {
     )
 
     $arguments = @('-NoProfile', '-File', $ScriptPath) + $ScriptArgument
-    $elevated = 'Start-Process -FilePath pwsh -Verb RunAs -ArgumentList ' +
-        ((@($arguments | ForEach-Object { "'" + ($_ -replace "'", "''") + "'" })) -join ',')
+    $processCommandLine = (@($arguments | ForEach-Object { '"' + ($_ -replace '"', '\"') + '"' }) -join ' ')
+    $elevated = "Start-Process -FilePath pwsh -Verb RunAs -ArgumentList '" +
+        ($processCommandLine -replace "'", "''") + "'"
 
     $problems = @()
 
@@ -476,6 +519,7 @@ function New-ReleaseVmCreatePlan {
         [Parameter(Mandatory)] [string] $ProvisionScript,
         [Parameter(Mandatory)] [string] $ProvisionManifest,
         [string] $HostDriverPackage,
+        [string] $ProvisionSwitchName = 'Default Switch',
         [long] $MemoryBytes = 8GB,
         [int] $ProcessorCount = 4,
         [long] $DiskSizeBytes = 60GB,
@@ -589,6 +633,10 @@ function New-ReleaseVmCreatePlan {
     }
 
     if ($Phase -contains 'provision') {
+        $plan += New-ReleaseVmStep -Name 'provision-network' -Command 'Connect-VMNetworkAdapter' `
+            -Parameters ([ordered]@{ VMName = $VMName; SwitchName = $ProvisionSwitchName }) `
+            -Detail "temporary access through '$ProvisionSwitchName' for hash-pinned provisioning downloads"
+
         $plan += New-ReleaseVmStep -Name 'copy-provisioning' -Command 'Copy-ReleaseVmFileSet' -Parameters ([ordered]@{
                 VMName = $VMName
                 Path = @($ProvisionScript, $ProvisionManifest)
@@ -599,6 +647,11 @@ function New-ReleaseVmCreatePlan {
                 VMName = $VMName
                 ProvisionRoot = $defaults.GuestProvisionRoot
             }) -NeedsCredential -Detail 'runs provision.ps1 in the guest; exit code 2 means it needs a restart and another pass'
+
+        $plan += New-ReleaseVmStep -Name 'disconnect-provision-network' `
+            -Command 'Disconnect-VMNetworkAdapter' -Parameters ([ordered]@{ VMName = $VMName }) `
+            -AlwaysRun -RunIfCompleted 'provision-network' `
+            -Detail 'the frozen image and ordinary campaigns start disconnected'
     }
 
     return $plan
@@ -718,16 +771,18 @@ function New-ReleaseVmRunPlan {
 
     $plan += New-ReleaseVmStep -Name 'stop' -Command 'Stop-VM' -Parameters ([ordered]@{
             Name = $vm; TurnOff = $true; Force = $true
-        }) -Detail 'turned off, not shut down: the evidence is already on the host'
+        }) -AlwaysRun -RunIfCompleted 'virtual-machine' `
+        -Detail 'turned off, not shut down: the evidence is already on the host'
 
     $plan += New-ReleaseVmStep -Name 'remove-vm' -Command 'Remove-VM' -Parameters ([ordered]@{
             Name = $vm; Force = $true
-        })
+        }) -AlwaysRun -RunIfCompleted 'virtual-machine'
 
     if (-not $KeepDisk) {
         $plan += New-ReleaseVmStep -Name 'remove-disk' -Command 'Remove-Item' -Parameters ([ordered]@{
                 LiteralPath = $RunPath.DifferencingDisk; Force = $true
-            }) -Detail 'the run leaves nothing behind but the evidence it copied out'
+            }) -AlwaysRun -RunIfCompleted 'differencing-disk' `
+            -Detail 'the run leaves nothing behind but the evidence it copied out'
     }
 
     return $plan
@@ -981,7 +1036,7 @@ function Invoke-ReleaseVmProvisioning {
     for ($pass = 1; $pass -le 2; $pass++) {
         $code = Invoke-Command -VMName $VMName -Credential $Credential -ScriptBlock {
             param($ScriptPath, $Arguments)
-            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $ScriptPath @Arguments
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $ScriptPath @Arguments | Out-Host
             return $LASTEXITCODE
         } -ArgumentList $script, $Argument
 
@@ -1015,7 +1070,7 @@ function Invoke-ReleaseVmCommand {
     $job = Invoke-Command -VMName $VMName -Credential $Credential -AsJob -ScriptBlock {
         param($CommandLine, $Directory)
         Set-Location -LiteralPath $Directory
-        & cmd.exe /c $CommandLine
+        & cmd.exe /c $CommandLine | Out-Host
         return $LASTEXITCODE
     } -ArgumentList $Command, $WorkingDirectory
 

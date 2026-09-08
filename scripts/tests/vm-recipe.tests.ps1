@@ -147,6 +147,14 @@ Test-Case 'an elevated shell in the group with a real ISO passes' {
     Assert-Equal 0 $verdict.Problems.Count 'a passing verdict has no problems'
 }
 
+Test-Case 'the elevated remedy preserves script and argument paths with spaces' {
+    $verdict = Test-ReleaseVmPrerequisite -ScriptPath 'C:\source tree\New-ReleaseVm.ps1' `
+        -ScriptArgument @('-IsoPath', 'D:\Windows 11.iso') -IsElevated $false `
+        -InHyperVAdministrators $true -HyperVModuleAvailable $true
+    Assert-Match '-ArgumentList.+"C:\\source tree\\New-ReleaseVm\.ps1".+"D:\\Windows 11\.iso"' `
+        $verdict.ElevatedCommand 'Start-Process joins an argument array, so paths must be quoted in one command line'
+}
+
 # ---------------------------------------------------------------------------
 # Path derivation
 # ---------------------------------------------------------------------------
@@ -246,6 +254,23 @@ Test-Case 'the GPU partition carries all four resource triples' {
         'the minimum cannot exceed the maximum'
 }
 
+Test-Case 'golden-image provisioning connects only for pinned downloads' {
+    $plan = New-ReleaseVmCreatePlan -VMName 'vm' -Root 'T:\images' -GoldenDisk 'T:\images\golden.vhdx' `
+        -AnswerIso 'T:\images\unattend.iso' -AnswerFile $script:AnswerFile -IsoPath 'W:\win11.iso' `
+        -ProvisionScript $script:ProvisionScript -ProvisionManifest $script:ManifestPath `
+        -ProvisionSwitchName 'Test-NAT'
+    $names = @($plan | ForEach-Object Name)
+    $connect = @($plan | Where-Object Name -eq 'provision-network')[0]
+    $disconnect = @($plan | Where-Object Name -eq 'disconnect-provision-network')[0]
+
+    Assert-Equal 'Connect-VMNetworkAdapter' $connect.Command 'provisioning needs a network path to pinned URLs'
+    Assert-Equal 'Test-NAT' $connect.Parameters.SwitchName 'the build names its provisioning switch explicitly'
+    Assert-True ([array]::IndexOf($names, 'provision-network') -lt [array]::IndexOf($names, 'provision')) `
+        'the guest must connect before provisioning'
+    Assert-True $disconnect.AlwaysRun 'the golden image is disconnected even when provisioning fails'
+    Assert-Equal 'provision-network' $disconnect.RunIfCompleted 'only this build may disconnect the adapter'
+}
+
 Test-Case 'a boolean parameter is printed in the form that actually binds' {
     $step = New-ReleaseVmStep -Name 'x' -Command 'Stop-VM' -Parameters ([ordered]@{ Name = 'vm'; Force = $true })
     $line = Format-ReleaseVmStep -Step $step
@@ -260,6 +285,54 @@ Test-Case 'a step that needs the guest credential says so without carrying one' 
     Assert-True (-not $run.Parameters.Contains('Credential')) 'a printable plan must not carry a password'
     Assert-Match '-Credential \$guestCredential' (Format-ReleaseVmStep -Step $run) `
         'the printed plan still shows where the credential goes'
+}
+
+Test-Case 'cleanup steps run after a campaign infrastructure failure' {
+    $global:releaseVmCleanupObserved = $false
+    function global:Invoke-FixtureFailure { throw 'fixture failure' }
+    function global:Invoke-FixtureCleanup { $global:releaseVmCleanupObserved = $true }
+
+    $plan = @(
+        New-ReleaseVmStep -Name 'fail' -Command 'Invoke-FixtureFailure'
+        New-ReleaseVmStep -Name 'cleanup' -Command 'Invoke-FixtureCleanup' -AlwaysRun
+    )
+    try { Invoke-ReleaseVmPlan -Plan $plan | Out-Null } catch { }
+    Remove-Item function:\Invoke-FixtureFailure, function:\Invoke-FixtureCleanup -ErrorAction SilentlyContinue
+
+    Assert-True $global:releaseVmCleanupObserved 'the throwaway VM and disk must be cleaned up when a run step throws'
+    Remove-Variable releaseVmCleanupObserved -Scope Global -ErrorAction SilentlyContinue
+}
+
+Test-Case 'cleanup never removes a VM whose creation step failed' {
+    $global:releaseVmRemoved = $false
+    function global:Invoke-FixtureVmCollision { throw 'the VM already exists' }
+    function global:Remove-FixtureVm { $global:releaseVmRemoved = $true }
+
+    $plan = @(
+        New-ReleaseVmStep -Name 'virtual-machine' -Command 'Invoke-FixtureVmCollision'
+        New-ReleaseVmStep -Name 'remove-vm' -Command 'Remove-FixtureVm' -AlwaysRun `
+            -RunIfCompleted 'virtual-machine'
+    )
+    try { Invoke-ReleaseVmPlan -Plan $plan | Out-Null } catch { }
+    Remove-Item function:\Invoke-FixtureVmCollision, function:\Remove-FixtureVm -ErrorAction SilentlyContinue
+
+    Assert-True (-not $global:releaseVmRemoved) 'a name collision must not delete the VM that already owned the name'
+    Remove-Variable releaseVmRemoved -Scope Global -ErrorAction SilentlyContinue
+}
+
+Test-Case 'a cleanup failure is reported when the campaign itself succeeded' {
+    function global:Invoke-FixtureSuccess { }
+    function global:Invoke-FixtureCleanupFailure { throw 'cleanup could not remove the VM' }
+
+    $plan = @(
+        New-ReleaseVmStep -Name 'run' -Command 'Invoke-FixtureSuccess'
+        New-ReleaseVmStep -Name 'remove-vm' -Command 'Invoke-FixtureCleanupFailure' -AlwaysRun
+    )
+    $message = ''
+    try { Invoke-ReleaseVmPlan -Plan $plan | Out-Null } catch { $message = $_.Exception.Message }
+    Remove-Item function:\Invoke-FixtureSuccess, function:\Invoke-FixtureCleanupFailure -ErrorAction SilentlyContinue
+
+    Assert-Match 'cleanup could not remove the VM' $message 'failed cleanup cannot be silently reported as a clean run'
 }
 
 # ---------------------------------------------------------------------------
@@ -299,15 +372,77 @@ Test-Case 'Invoke-ReleaseVmRun -DryRun prints a whole run and touches no image' 
     Assert-NoMatch 'Checkpoint-VM' $result.Output 'a GPU-partitioned machine cannot be checkpointed'
 }
 
+Test-Case 'run cleanup is ownership-gated and does not suppress cmdlet failures' {
+    $paths = Get-ReleaseVmRunPath -RunId 'cleanup' -Root 'T:\images'
+    $plan = New-ReleaseVmRunPlan -RunPath $paths -GuestCommand 'verify.exe' -ResultDirectory 'T:\out'
+    $stop = @($plan | Where-Object Name -eq 'stop')[0]
+    $removeVm = @($plan | Where-Object Name -eq 'remove-vm')[0]
+    $removeDisk = @($plan | Where-Object Name -eq 'remove-disk')[0]
+
+    Assert-Equal 'virtual-machine' $stop.RunIfCompleted 'only a VM created by this run may be stopped'
+    Assert-Equal 'virtual-machine' $removeVm.RunIfCompleted 'only a VM created by this run may be removed'
+    Assert-Equal 'differencing-disk' $removeDisk.RunIfCompleted 'only a disk created by this run may be removed'
+    foreach ($step in @($stop, $removeVm, $removeDisk)) {
+        Assert-True (-not $step.Parameters.Contains('ErrorAction')) "$($step.Name) must surface cleanup failures"
+    }
+}
+
 Test-Case 'Invoke-ReleaseVmRun -DryRun accepts a network mode per call' {
     $result = Invoke-Script -Path $script:RunScript -Arguments @('-DryRun', '-RunId', 'dry-002',
         '-Root', 'T:\images', '-Network', 'Connected')
     Assert-Match 'Connect-VMNetworkAdapter' $result.Output 'a connected run connects the adapter'
 }
 
+Test-Case 'the run script refuses its removed harness command-line contract' {
+    $result = Invoke-Script -Path $script:RunScript -Arguments @('-DryRun', '-RunId', 'needs-command',
+        '-Root', 'T:\images')
+    Assert-Match 'guest-command-missing' $result.Output 'the dry run must name the required integration input'
+    Assert-NoMatch '--output' $result.Output 'the current harness has no --output option'
+
+    $command = 'C:\ExoSnapRun\harness\ExoSnap.Verify.exe run --run-dir C:\ExoSnapRun\out'
+    $explicit = Invoke-Script -Path $script:RunScript -Arguments @('-DryRun', '-RunId', 'has-command',
+        '-Root', 'T:\images', '-GuestCommand', $command)
+    Assert-Match ([regex]::Escape($command)) $explicit.Output 'an explicit current harness command is preserved'
+    Assert-NoMatch 'guest-command-missing' $explicit.Output 'an explicit command satisfies the precondition'
+}
+
 # ---------------------------------------------------------------------------
 # The provisioning manifest
 # ---------------------------------------------------------------------------
+
+Test-Case 'guest native output never becomes part of its exit status' {
+    $tokens = $null
+    $errors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+        (Join-Path $script:VmRoot 'ReleaseVm.psm1'), [ref]$tokens, [ref]$errors)
+    $blocks = @($ast.FindAll({ param($node)
+        $node -is [System.Management.Automation.Language.ScriptBlockExpressionAst] -and
+        $node.ScriptBlock.ToString().Contains('& cmd.exe /c $CommandLine')
+    }, $true))
+    Assert-Equal 1 $blocks.Count 'the guest command has one remote execution block'
+    $block = $blocks[0].ScriptBlock.GetScriptBlock()
+    $result = & $block 'echo guest output & exit /b 7' ([IO.Path]::GetTempPath())
+    Assert-Equal 7 $result 'stdout must be displayed separately from the integer exit code'
+}
+
+Test-Case 'provisioning native output never becomes part of its exit status' {
+    $tokens = $null
+    $errors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+        (Join-Path $script:VmRoot 'ReleaseVm.psm1'), [ref]$tokens, [ref]$errors)
+    $blocks = @($ast.FindAll({ param($node)
+        $node -is [System.Management.Automation.Language.ScriptBlockExpressionAst] -and
+        $node.ScriptBlock.ToString().Contains('& powershell.exe -NoProfile -ExecutionPolicy Bypass')
+    }, $true))
+    Assert-Equal 1 $blocks.Count 'provisioning has one remote execution block'
+    function global:powershell.exe { $global:LASTEXITCODE = 2; 'installer output' }
+    try {
+        $block = $blocks[0].ScriptBlock.GetScriptBlock()
+        $result = & $block 'unused-fixture.ps1' @()
+        Assert-Equal 2 $result 'installer stdout must not corrupt the reboot status'
+    }
+    finally { Remove-Item function:\powershell.exe }
+}
 
 Test-Case 'every package in the manifest is pinned in a form provisioning can verify' {
     $manifest = Import-PowerShellDataFile -LiteralPath $script:ManifestPath
@@ -322,7 +457,7 @@ Test-Case 'every package in the manifest is pinned in a form provisioning can ve
         Assert-True ($package.Contains('title')) "$id has no title"
         Assert-True ($package.Contains('reason')) "$id does not say why it is installed"
         Assert-True ($package.Contains('version')) "$id has no version pin"
-        Assert-Match '^(PIN-REQUIRED|[0-9][0-9A-Za-z.+-]*)$' ([string]$package.version) "$id has an unusable version pin"
+        Assert-Match '^[0-9][0-9A-Za-z.+-]*$' ([string]$package.version) "$id has an unusable version pin"
 
         switch ([string]$package.kind) {
             'winget' {
@@ -334,13 +469,41 @@ Test-Case 'every package in the manifest is pinned in a form provisioning can ve
                 $url = [string]$package.urlTemplate
                 Assert-Match '^https://' $url "$id must be downloaded over https"
                 Assert-True ($package.Contains('sha256')) "$id is a download with no hash pin"
-                Assert-Match '^(PIN-REQUIRED|[0-9a-f]{64})$' ([string]$package.sha256) "$id has an unusable hash pin"
+                Assert-Match '^[0-9a-f]{64}$' ([string]$package.sha256) "$id has an unusable hash pin"
                 $resolved = $url.Replace('{version}', [string]$package.version)
                 Assert-NoMatch '\{' $resolved "$id has a URL template with a placeholder nothing fills in"
             }
             default { throw "$id has kind '$($package.kind)', which provisioning does not implement" }
         }
     }
+}
+
+Test-Case 'the IDD pin includes its root-device installer and matches the signed driver INF' {
+    $manifest = Import-PowerShellDataFile -LiteralPath $script:ManifestPath
+    $idd = @($manifest.packages | Where-Object id -eq 'idd')[0]
+    $nefcon = @($manifest.packages | Where-Object id -eq 'nefcon')[0]
+
+    Assert-Equal 'Root\MttVDD' $idd.hardwareId 'the hardware id must match the pinned INF'
+    Assert-True ($null -ne $nefcon) 'the driver-only archive needs a pinned root-device installer'
+    Assert-Equal 'nefconw.exe' $nefcon.fileName 'provisioning uses the windowless installer'
+}
+
+Test-Case 'the generated IDD settings use the pinned release schema' {
+    $provisioning = Get-Content -LiteralPath $script:ProvisionScript -Raw
+    Assert-Match '<options>' $provisioning 'the pinned driver reads HDRPlus from its options element'
+    Assert-Match '<HDRPlus>\$hdrValue</HDRPlus>' $provisioning 'HDR must use the pinned case-sensitive element name'
+    Assert-True (-not $provisioning.Contains('<hdrplus>')) 'the obsolete top-level setting is ignored by the pinned driver'
+}
+
+Test-Case 'VB-CABLE installer failure cannot be recorded as successful provisioning' {
+    $provisioning = Get-Content -LiteralPath $script:ProvisionScript -Raw
+    Assert-Match 'VB-CABLE installer exited' $provisioning 'the silent installer exit code must be checked'
+}
+
+Test-Case 'fresh Windows registers the inbox App Installer before winget is required' {
+    $provisioning = Get-Content -LiteralPath $script:ProvisionScript -Raw
+    Assert-Match 'Add-AppxPackage.+RegisterByFamilyName.+Microsoft\.DesktopAppInstaller_8wekyb3d8bbwe' `
+        $provisioning 'first logon may not have registered the inbox winget alias yet'
 }
 
 Test-Case 'the manifest fixes the virtual monitor rather than inheriting the host' {
@@ -376,7 +539,7 @@ Test-Case 'provisioning refuses to install a package whose pin was never recorde
 }
 "@ | Set-Content -LiteralPath $fixture -Encoding utf8NoBOM
 
-    $output = & pwsh -NoProfile -NonInteractive -File $script:ProvisionScript `
+    $output = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script:ProvisionScript `
         -ManifestPath $fixture -StatePath (Join-Path $directory 'state.json') -Only presentmon 2>&1 | Out-String
     $code = $LASTEXITCODE
 
@@ -388,7 +551,8 @@ Test-Case 'provisioning refuses to install a package whose pin was never recorde
 }
 
 Test-Case 'provisioning describes its steps without running any of them' {
-    $output = & pwsh -NoProfile -NonInteractive -File $script:ProvisionScript -ListSteps 2>&1 | Out-String
+    $output = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass `
+        -File $script:ProvisionScript -ListSteps 2>&1 | Out-String
     Assert-Equal 0 $LASTEXITCODE 'listing steps always succeeds'
     foreach ($step in @('power', 'hostdriver', 'vcredist', 'pwsh', 'ffmpeg', 'presentmon', 'soundvolumeview',
             'vbcable', 'idd', 'uac')) {
@@ -433,6 +597,14 @@ Test-Case 'autounattend.xml is well-formed and installs Windows without asking a
     $bypass = $xml.SelectNodes('//u:RunSynchronousCommand/u:Path', $namespace) | ForEach-Object { $_.InnerText }
     Assert-Match 'BypassNRO' ($bypass -join ' ') `
         'Windows 11 stops on a network screen that no unattend section can answer'
+}
+
+Test-Case 'the GPU-P NVENC probe selects an NVIDIA adapter instead of DXGI index zero' {
+    $source = Get-Content -LiteralPath (Join-Path $repositoryRoot `
+        'tools/probes/probe_gpup_nvenc/src/main.cpp') -Raw
+    Assert-Match 'for \(UINT adapterIndex = 0;' $source 'the IDD can precede the GPU partition in DXGI order'
+    Assert-Match 'VendorId != 0x10DE' $source 'the recipe stages an NVIDIA driver and NVENC library'
+    Assert-NoMatch 'EnumAdapters1\(0,' $source 'adapter zero is not guaranteed to be the GPU partition'
 }
 
 Write-Host ''

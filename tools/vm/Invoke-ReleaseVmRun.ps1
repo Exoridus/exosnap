@@ -33,8 +33,9 @@
     The published verification harness, copied into the guest.
 
 .PARAMETER GuestCommand
-    The command line the guest runs. A string on purpose: it names a program built
-    elsewhere in the tree, and this script must be usable before that program exists.
+    The complete command line the guest runs. Required because campaign setup and
+    the executable under test have no safe implicit path. The command must write
+    evidence beneath the guest results directory and return its campaign exit code.
 
 .PARAMETER Network
     Connected, Disconnected (default) or HostOnly.
@@ -47,7 +48,7 @@
     pwsh -NoProfile -File tools/vm/Invoke-ReleaseVmRun.ps1 -RunId smoke-001 -DryRun
 
 .EXAMPLE
-    Start-Process -FilePath pwsh -Verb RunAs -ArgumentList '-NoProfile','-File','tools/vm/Invoke-ReleaseVmRun.ps1','-ArtifactDirectory','<rc artifacts>'
+    ./tools/vm/Invoke-ReleaseVmRun.ps1 -ArtifactDirectory $artifacts -HarnessDirectory $harness -GuestCommand $campaign
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
@@ -83,11 +84,11 @@ if (-not $ResultRoot) { $ResultRoot = Join-Path $repositoryRoot '.workspace/rele
 
 $runPath = Get-ReleaseVmRunPath -RunId $RunId -Root $Root
 $resultDirectory = [IO.Path]::Combine($ResultRoot, $RunId)
-if (-not $GuestCommand) {
-    $GuestCommand = "$([IO.Path]::Combine($runPath.GuestHarness, 'ExoSnap.Verify.exe')) qualify --run-id $RunId --output $($runPath.GuestResults)"
-}
-
 $planning = $DryRun -or $WhatIfPreference
+$guestCommandMissing = [string]::IsNullOrWhiteSpace($GuestCommand)
+if ($guestCommandMissing) {
+    $GuestCommand = '<required: pass -GuestCommand that writes evidence to C:\ExoSnapRun\out>'
+}
 
 $hostState = Get-ReleaseVmHostState
 $verdict = Test-ReleaseVmPrerequisite `
@@ -97,6 +98,14 @@ $verdict = Test-ReleaseVmPrerequisite `
     -InHyperVAdministrators $hostState.InHyperVAdministrators `
     -HyperVModuleAvailable $hostState.HyperVModuleAvailable `
     -UserName $hostState.UserName
+if ($guestCommandMissing) {
+    $verdict.Ok = $false
+    $verdict.Problems += @{
+        Id = 'guest-command-missing'
+        Message = 'no guest command was supplied; campaign setup and the executable under test must be explicit'
+        Remedy = "pass -GuestCommand 'C:\ExoSnapRun\harness\campaign.cmd' with your campaign wrapper in HarnessDirectory; write evidence to C:\ExoSnapRun\out"
+    }
+}
 
 Write-Host ''
 Write-Host "  run          : $RunId"

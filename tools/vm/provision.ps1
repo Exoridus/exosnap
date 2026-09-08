@@ -216,13 +216,29 @@ function Get-WingetPath {
     #>
     $command = Get-Command winget.exe -ErrorAction SilentlyContinue
     if ($command) { return $command.Source }
+
+    $package = Get-AppxPackage -AllUsers -Name Microsoft.DesktopAppInstaller -ErrorAction SilentlyContinue |
+        Sort-Object Version -Descending | Select-Object -First 1
+    if ($package) {
+        # Windows 11 provisions App Installer in the image, but registration for a
+        # newly created local account may lag its first logon. Force the documented
+        # registration path so provisioning never requires opening the Store or a
+        # console once just to make the winget alias appear.
+        Add-AppxPackage -RegisterByFamilyName -MainPackage Microsoft.DesktopAppInstaller_8wekyb3d8bbwe `
+            -ErrorAction Stop
+        $command = Get-Command winget.exe -ErrorAction SilentlyContinue
+        if ($command) { return $command.Source }
+        $packagedExecutable = Join-Path $package.InstallLocation 'winget.exe'
+        if (Test-Path -LiteralPath $packagedExecutable -PathType Leaf) { return $packagedExecutable }
+    }
+
     $candidates = Get-ChildItem -Path "$env:LOCALAPPDATA\Microsoft\WindowsApps" -Filter 'winget.exe' -ErrorAction SilentlyContinue
     if ($candidates) { return $candidates[0].FullName }
     $installed = Get-ChildItem -Path "$env:ProgramFiles\WindowsApps" -Filter 'winget.exe' -Recurse -ErrorAction SilentlyContinue |
         Sort-Object FullName -Descending | Select-Object -First 1
     if ($installed) { return $installed.FullName }
-    throw ('winget.exe was not found. Open the guest console once and run "winget --version" so App Installer ' +
-           'registers for this user, or install the Microsoft.DesktopAppInstaller package by hand.')
+    throw ('winget.exe was not found and the inbox Microsoft.DesktopAppInstaller package could not be registered. ' +
+           'Use Windows 11 installation media that includes App Installer; do not bootstrap an unpinned Store package.')
 }
 
 function Install-WingetPackage {
@@ -358,6 +374,10 @@ function Invoke-VbcableStep {
     # the endpoint only appears after the guest restarts, which is why this step
     # sets the reboot flag rather than verifying the device now.
     & $installer.FullName -i -h
+    $code = $LASTEXITCODE
+    if ($code -ne 0 -and $code -ne 3010) {
+        throw "VB-CABLE installer exited $code"
+    }
     $script:RebootPending = $true
     return "VB-CABLE $($package.version) installed; the endpoint appears after the next restart"
 }
@@ -381,7 +401,6 @@ function New-VirtualDisplayConfiguration {
   <monitors>
     <count>1</count>
   </monitors>
-  <hdrplus>$hdrValue</hdrplus>
   <resolutions>
     <resolution>
       <width>$($Display.width)</width>
@@ -389,6 +408,9 @@ function New-VirtualDisplayConfiguration {
 $rates
     </resolution>
   </resolutions>
+  <options>
+    <HDRPlus>$hdrValue</HDRPlus>
+  </options>
 </vdd_settings>
 "@
 }
@@ -396,8 +418,11 @@ $rates
 function Invoke-IddStep {
     param($Manifest)
     $package = Get-Package -Manifest $Manifest -Id 'idd'
+    $nefconPackage = Get-Package -Manifest $Manifest -Id 'nefcon'
     $downloaded = Get-VerifiedDownload -Package $package -Directory (Join-Path $Manifest.paths.staging 'downloads')
     $extracted = Expand-VerifiedArchive -ArchivePath $downloaded -Destination (Join-Path $Manifest.paths.staging 'idd')
+    $nefconDownload = Get-VerifiedDownload -Package $nefconPackage -Directory (Join-Path $Manifest.paths.staging 'downloads')
+    $nefconRoot = Expand-VerifiedArchive -ArchivePath $nefconDownload -Destination (Join-Path $Manifest.paths.staging 'nefcon')
 
     $configDirectory = $Manifest.display.configDirectory
     if (-not (Test-Path -LiteralPath $configDirectory)) {
@@ -407,29 +432,24 @@ function Invoke-IddStep {
     New-VirtualDisplayConfiguration -Display $Manifest.display -Hdr $hdr |
         Set-Content -LiteralPath (Join-Path $configDirectory 'vdd_settings.xml') -Encoding UTF8
 
-    # The driver is signed, but by a certificate Windows does not trust yet. Trusting
-    # the publisher is what makes pnputil install without a dialog nobody can click.
-    foreach ($certificate in Get-ChildItem -LiteralPath $extracted -Filter '*.cer' -Recurse) {
-        & certutil.exe -addstore -f 'TrustedPublisher' $certificate.FullName | Out-Null
-        & certutil.exe -addstore -f 'Root' $certificate.FullName | Out-Null
-    }
-
     $inf = Get-ChildItem -LiteralPath $extracted -Filter '*.inf' -Recurse | Select-Object -First 1
     if (-not $inf) { throw 'the virtual display driver archive contains no .inf' }
 
-    # An indirect display driver has no hardware to be discovered on, so the device
-    # node is created first and the driver bound to it afterwards.
-    $nefcon = Get-ChildItem -LiteralPath $extracted -Filter 'nefconw.exe' -Recurse | Select-Object -First 1
-    if ($nefcon) {
-        & $nefcon.FullName --create-device-node --hardware-id $package.hardwareId `
-            --class-name Display --class-guid 4d36e968-e325-11ce-bfc1-08002be10318
-    }
-    else {
-        Write-Line 'the archive ships no nefconw.exe; the driver must create its own device node' 'warn'
-    }
+    $nefcon = Get-ChildItem -LiteralPath (Join-Path $nefconRoot 'x64') -Filter $nefconPackage.fileName |
+        Select-Object -First 1
+    if (-not $nefcon) { throw "the NefCon archive contains no x64\$($nefconPackage.fileName)" }
 
-    & pnputil.exe /add-driver $inf.FullName /install
-    if ($LASTEXITCODE -ne 0) { throw "pnputil exited $LASTEXITCODE installing $($inf.Name)" }
+    # The driver-only archive contains no installer and pnputil cannot create a
+    # root-enumerated device. NefCon's devcon-compatible command creates the node,
+    # stages the signed INF and binds it in one operation.
+    & $nefcon.FullName install $inf.FullName $package.hardwareId --no-duplicates --remove-duplicates
+    $code = $LASTEXITCODE
+    if ($code -eq 3010) {
+        $script:RebootPending = $true
+    }
+    elseif ($code -ne 0) {
+        throw "NefCon exited $code installing $($inf.Name) for $($package.hardwareId)"
+    }
 
     $modes = ($Manifest.display.refreshRates | ForEach-Object { "$_ Hz" }) -join ', '
     return ("virtual display $($Manifest.display.width)x$($Manifest.display.height) ($modes), " +

@@ -39,14 +39,17 @@ run disks is tracked; the recipe is, and the image is reproducible from it.
 
 ## Building it, once
 
-Every step here is elevated and every one of them is the developer's own action: an
-agent may print these commands and may not run them. Run them in order.
+The feature/group setup, VM build, freeze and campaign commands require elevation.
+The ISO download, dry runs and manifest review do not. Starting an elevated PowerShell
+shows UAC on the secure desktop; **Yes** runs the named command as administrator and
+**No** cancels it without starting the script. An agent cannot answer that prompt, but
+the work after it is ordinary scripted setup rather than a manual procedure.
 
 **1. The Hyper-V feature and the group.** `Get-VM` existing is not enough; an account
 outside `Hyper-V Administrators` gets Access denied from every management cmdlet.
 
 ```powershell
-Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V -All
+Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V -All -NoRestart
 Add-LocalGroupMember -Group 'Hyper-V Administrators' -Member "$env:USERDOMAIN\$env:USERNAME"
 ```
 
@@ -55,7 +58,11 @@ the logon token, so the shell that added it still does not have it.
 
 **2. The Windows 11 ISO.** Download the x64 ISO from Microsoft. Nothing in the recipe
 fetches it, and nothing checks its hash: it is Microsoft's file, named on the command
-line, and the guest it produces is verified by what runs in it.
+line, and the guest it produces is verified by what runs in it. Use standard retail
+media that includes the inbox Microsoft App Installer package. Provisioning registers
+that package explicitly for the new local account before it invokes pinned winget
+packages; it refuses rather than downloading an unpinned Store bootstrap if the
+package is absent.
 
 **3. Look at the plan before running it.** Unelevated, harmless, and the fastest way
 to see what the next command is about to do:
@@ -68,7 +75,10 @@ pwsh -NoProfile -File tools/vm/New-ReleaseVm.ps1 -IsoPath <Win11 x64 ISO> -DryRu
 Windows installation.
 
 ```powershell
-Start-Process -FilePath pwsh -Verb RunAs -ArgumentList '-NoProfile','-File','tools/vm/New-ReleaseVm.ps1','-IsoPath','<Win11 x64 ISO>'
+$vmScript = (Resolve-Path 'tools/vm/New-ReleaseVm.ps1').Path
+$windowsIso = (Resolve-Path 'D:\images\Win11.iso').Path
+Start-Process -FilePath pwsh -Verb RunAs -ArgumentList `
+    ('"-NoProfile" "-File" "{0}" "-IsoPath" "{1}"' -f $vmScript, $windowsIso) -Wait
 ```
 
 The phases run in this order and can be run one at a time with `-Phase`:
@@ -81,8 +91,9 @@ The phases run in this order and can be run one at a time with `-Phase`:
 | driver | the host adapter's driver files, one `Copy-VMFile` per file | needs the machine running again |
 | provision | `provision.ps1` over PowerShell Direct | needs a logged-on session |
 
-**5. Pin the manifest.** See the next section. Provisioning stops on the first package
-whose version or hash still reads `PIN-REQUIRED`, which is deliberate.
+**5. Review the manifest.** The tracked manifest already contains the exact versions
+and hashes used by the recipe. See the next section before intentionally updating a
+tool.
 
 **6. Let the VB-CABLE restart happen.** `provision.ps1` exits 2 when it has staged a
 driver that only appears after a reboot. `New-ReleaseVm.ps1` restarts the guest and
@@ -108,7 +119,7 @@ host** -- that is a supported outcome, not a broken image.
 then on. Every run takes a differencing disk from it; a run that wrote into the parent
 would end the property the whole design exists for.
 
-## Pinning the manifest
+## Pinned provisioning
 
 `tools/vm/provision-manifest.psd1` describes every third-party package the guest runs.
 Two kinds of pin, and both end in a SHA-256 comparison:
@@ -119,9 +130,14 @@ Two kinds of pin, and both end in a SHA-256 comparison:
   that URL. `provision.ps1` compares before it runs anything, and a mismatch deletes
   the download rather than leaving it on disk.
 
-A pin that reads `PIN-REQUIRED` has not been recorded yet, and provisioning refuses to
-proceed past it. Recording one is a one-time job done inside the guest, with the
-network connected, while the image is being built:
+The tracked recipe currently pins Visual C++ runtime 14.51.36247.0, PowerShell
+7.6.5.0, FFmpeg 9.0.1, PresentMon 2.5.1, SoundVolumeView 2.53, VB-CABLE pack 45,
+Virtual Display Driver 25.7.23, and NefCon 1.14.0. NefCon is required because the
+signed VDD archive contains the driver but no utility that can create its
+root-enumerated `Root\MttVDD` device.
+
+`PIN-REQUIRED` remains a fail-closed sentinel for a newly added or deliberately
+upgraded package. Resolve it on the host without running the downloaded file:
 
 ```powershell
 # a download
@@ -132,9 +148,11 @@ Get-FileHash -Algorithm SHA256 <file>
 winget show --id <package id> --versions
 ```
 
-Put the version and the hash in the manifest on the host, commit them, copy the
-manifest back into the guest, and continue. The image is not frozen until every pin is
-a real value.
+Put the version and hash in the manifest, run `scripts/tests/vm-recipe.tests.ps1`, and
+copy the manifest into the guest through the normal build phase. Do not freeze an image
+while any sentinel remains. SoundVolumeView's vendor URL is not versioned; its hash
+still fails closed if the vendor replaces the bytes, but rebuilding that exact old
+image then requires an independently retained copy of the pinned archive.
 
 The pins are the recipe. A guest whose tool set drifts turns every disagreement
 between two campaigns into an investigation of the image rather than of the product.
@@ -145,17 +163,37 @@ between two campaigns into an investigation of the image rather than of the prod
 pwsh -NoProfile -File tools/vm/Invoke-ReleaseVmRun.ps1 -RunId <id> -DryRun   # the plan
 ```
 
-Elevated, for real:
+In an elevated PowerShell, for real (replace the artifact paths and run id):
 
 ```powershell
-Start-Process -FilePath pwsh -Verb RunAs -ArgumentList '-NoProfile','-File','tools/vm/Invoke-ReleaseVmRun.ps1','-RunId','<id>','-ArtifactDirectory','<rc artifacts>','-HarnessDirectory','<published harness>'
+$artifacts = (Resolve-Path 'D:\rc-artifacts').Path
+$harness = (Resolve-Path 'build/release-verify/publish').Path
+$guestCommand = 'C:\ExoSnapRun\harness\campaign.cmd'
+& tools/vm/Invoke-ReleaseVmRun.ps1 -RunId '<id>' -ArtifactDirectory $artifacts `
+    -HarnessDirectory $harness -GuestCommand $guestCommand
 ```
+
+`-GuestCommand` is required for execution. Supply `campaign.cmd` in the harness
+directory yourself, or pass the complete command for the campaign being tested.
+The wrapper must use the copied artifacts under `C:\ExoSnapRun\artifacts`, write
+evidence beneath `C:\ExoSnapRun\out`, and return its campaign exit code. This recipe
+does not invent an executable path or a campaign CLI contract. A dry run without
+`-GuestCommand` prints the missing-input precondition and the remaining infrastructure
+plan.
+
+The campaign runner remains a separate integration dependency. Use the full harness
+CLI only after that implementation is available; this recipe's dry runs and probes
+do not establish that a Tier 2 campaign has run successfully.
 
 The sequence: differencing disk from the golden image, a machine built around it with
 the same GPU partition, the network mode this run asked for, start, wait for
 PowerShell Direct, copy in the artifacts and the harness, run the campaign, copy the
 evidence back into the repository's private working directory under
-`release-verify/<runId>`, turn the machine off, delete it, delete the disk.
+`release-verify/<runId>`, turn the machine off, delete it, delete the disk. VM and disk
+cleanup also runs when boot, transport, campaign or evidence collection throws. Use
+`-KeepDisk` only when preserving a failed guest for diagnosis is intentional. Cleanup
+is ownership-gated: a VM or disk is removed only if that run completed the step that
+created it, so a name or path collision cannot delete a pre-existing resource.
 
 Network is `Disconnected` by default:
 

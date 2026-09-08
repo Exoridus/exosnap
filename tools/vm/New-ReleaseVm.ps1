@@ -37,6 +37,10 @@
     The host display driver package to stage into the guest. Discovered from the
     host's DriverStore when not given.
 
+.PARAMETER ProvisionSwitchName
+    The Hyper-V switch used only while the guest downloads pinned provisioning
+    packages. Defaults to the Windows client Default Switch.
+
 .PARAMETER DryRun
     Print the plan and exit.
 
@@ -54,6 +58,7 @@ param(
     [ValidateSet('create', 'install', 'gpu', 'driver', 'provision')]
     [string[]] $Phase = @('create', 'install', 'gpu', 'driver', 'provision'),
     [string] $HostDriverPackage,
+    [string] $ProvisionSwitchName = 'Default Switch',
     [long] $MemoryBytes = 0,
     [int] $ProcessorCount = 0,
     [long] $DiskSizeBytes = 0,
@@ -118,6 +123,7 @@ $plan = New-ReleaseVmCreatePlan `
     -ProvisionScript (Join-Path $PSScriptRoot 'provision.ps1') `
     -ProvisionManifest (Join-Path $PSScriptRoot 'provision-manifest.psd1') `
     -HostDriverPackage $HostDriverPackage `
+    -ProvisionSwitchName $ProvisionSwitchName `
     -MemoryBytes $MemoryBytes `
     -ProcessorCount $ProcessorCount `
     -DiskSizeBytes $DiskSizeBytes `

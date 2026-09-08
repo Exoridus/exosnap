@@ -199,37 +199,53 @@ bool Probe::OpenAdapter(std::string& error) {
         return false;
     }
 
-    // The FIRST adapter, deliberately, and not the first NVIDIA one: inside the guest
-    // there is exactly one adapter and it is the partition. A probe that searched for
-    // vendor 0x10DE would silently answer about a different device on a host with a
-    // second GPU, and the answer is meant to be about the device the encoder gates use.
     IDXGIAdapter1* adapter = nullptr;
-    hr = factory->EnumAdapters1(0, &adapter);
-    factory->Release();
-    if (FAILED(hr) || adapter == nullptr) {
-        error = "no DXGI adapter at index 0";
-        return false;
-    }
-
     DXGI_ADAPTER_DESC1 desc{};
-    adapter->GetDesc1(&desc);
+    UINT selectedIndex = 0;
+    for (UINT adapterIndex = 0;; ++adapterIndex) {
+        IDXGIAdapter1* candidate = nullptr;
+        hr = factory->EnumAdapters1(adapterIndex, &candidate);
+        if (FAILED(hr) || candidate == nullptr) {
+            break;
+        }
+        DXGI_ADAPTER_DESC1 candidateDesc{};
+        hr = candidate->GetDesc1(&candidateDesc);
+        if (FAILED(hr) || (candidateDesc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0 || candidateDesc.VendorId != 0x10DE) {
+            candidate->Release();
+            continue;
+        }
 
-    D3D_FEATURE_LEVEL level = D3D_FEATURE_LEVEL_11_0;
-    hr = D3D11CreateDevice(adapter, D3D_DRIVER_TYPE_UNKNOWN, nullptr, 0, &level, 1, D3D11_SDK_VERSION, &device_,
-                           nullptr, &context_);
-    adapter->Release();
-    if (FAILED(hr) || device_ == nullptr) {
-        char buf[96];
-        snprintf(buf, sizeof(buf), "D3D11CreateDevice failed 0x%08lX", static_cast<unsigned long>(hr));
-        error = buf;
+        D3D_FEATURE_LEVEL level = D3D_FEATURE_LEVEL_11_0;
+        hr = D3D11CreateDevice(candidate, D3D_DRIVER_TYPE_UNKNOWN, nullptr, 0, &level, 1, D3D11_SDK_VERSION, &device_,
+                               nullptr, &context_);
+        if (SUCCEEDED(hr) && device_ != nullptr) {
+            adapter = candidate;
+            desc = candidateDesc;
+            selectedIndex = adapterIndex;
+            break;
+        }
+        if (context_ != nullptr) {
+            context_->Release();
+            context_ = nullptr;
+        }
+        if (device_ != nullptr) {
+            device_->Release();
+            device_ = nullptr;
+        }
+        candidate->Release();
+    }
+    factory->Release();
+    if (adapter == nullptr) {
+        error = "no hardware NVIDIA DXGI adapter could create a D3D11 device";
         return false;
     }
+    adapter->Release();
 
     char buffer[512];
     snprintf(buffer, sizeof(buffer),
-             "{\"index\":0,\"description\":\"%s\",\"vendorId\":\"0x%04X\",\"deviceId\":\"0x%04X\","
+             "{\"index\":%u,\"description\":\"%s\",\"vendorId\":\"0x%04X\",\"deviceId\":\"0x%04X\","
              "\"dedicatedVideoMemoryMB\":%llu,\"software\":%s}",
-             JsonEscape(ToUtf8(desc.Description)).c_str(), static_cast<unsigned>(desc.VendorId),
+             selectedIndex, JsonEscape(ToUtf8(desc.Description)).c_str(), static_cast<unsigned>(desc.VendorId),
              static_cast<unsigned>(desc.DeviceId),
              static_cast<unsigned long long>(desc.DedicatedVideoMemory / (1024ull * 1024ull)),
              ((desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0) ? "true" : "false");
@@ -507,9 +523,9 @@ int Probe::Run() {
         return Fail("encode", error);
     }
 
-    printf("{\"ok\":true,\"adapter\":%s,\"apiVersion\":\"%u.%u\",\"codecs\":%s,\"encode\":%s}\n",
-           adapterJson_.c_str(), static_cast<unsigned>(NVENCAPI_MAJOR_VERSION),
-           static_cast<unsigned>(NVENCAPI_MINOR_VERSION), codecs.c_str(), encode.c_str());
+    printf("{\"ok\":true,\"adapter\":%s,\"apiVersion\":\"%u.%u\",\"codecs\":%s,\"encode\":%s}\n", adapterJson_.c_str(),
+           static_cast<unsigned>(NVENCAPI_MAJOR_VERSION), static_cast<unsigned>(NVENCAPI_MINOR_VERSION), codecs.c_str(),
+           encode.c_str());
     fflush(stdout);
     return 0;
 }
