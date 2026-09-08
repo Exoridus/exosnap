@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>ExoSnap.Verify</RootNamespace>
+    <AssemblyName>ExoSnap.Verify</AssemblyName>
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <!-- The release PC is not required to carry a matching .NET runtime. -->
+    <SelfContained>false</SelfContained>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ExoSnap.Verify.Windows\ExoSnap.Verify.Windows.csproj" />
+  </ItemGroup>
+
+</Project>

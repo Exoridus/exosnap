@@ -1,0 +1,37 @@
+<Project>
+
+  <!--
+    Settings shared by every project in the release-verify harness. A gate that
+    decides whether a release may ship must not compile with warnings: an
+    unreachable branch or an unawaited task in this tree is a verdict nobody
+    measured, so warnings are errors here even though the C++ tree grades them
+    differently.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
+    <Platforms>AnyCPU</Platforms>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <NeutralLanguage>en</NeutralLanguage>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <IsPackable>false</IsPackable>
+    <AccelerateBuildsInVisualStudio>true</AccelerateBuildsInVisualStudio>
+  </PropertyGroup>
+
+  <!--
+    InvariantGlobalization stays OFF on purpose. The harness formats every value
+    it emits with CultureInfo.InvariantCulture explicitly, and the process-runner
+    tests need a real de-DE culture to prove that a child process reporting a
+    decimal comma is still parsed correctly. Switching the whole harness to the
+    invariant culture would make CultureInfo("de-DE") resolve to the invariant
+    culture, and those tests would then pass without testing anything.
+  -->
+
+</Project>

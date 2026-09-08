@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="ExoSnap.Verify/ExoSnap.Verify.csproj" />
+  <Project Path="ExoSnap.Verify.Windows/ExoSnap.Verify.Windows.csproj" />
+  <Project Path="ExoSnap.Verify.Fixtures/ExoSnap.Verify.Fixtures.csproj" />
+  <Project Path="ExoSnap.Verify.Tests/ExoSnap.Verify.Tests.csproj" />
+</Solution>

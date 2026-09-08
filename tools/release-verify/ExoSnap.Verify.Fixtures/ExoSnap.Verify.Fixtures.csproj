@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    A deliberately dumb child process for the process-runner tests. It exists so
+    the hostile-input cases (a path with spaces, an ampersand or non-ASCII
+    characters, a tool that hangs, a tool that spawns a child) run against a real
+    executable that can be copied to a hostile path, rather than against a shell
+    whose own quoting rules would be what the test measured.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>ExoSnap.Verify.Fixtures</RootNamespace>
+    <AssemblyName>ExoSnap.Verify.Fixtures</AssemblyName>
+  </PropertyGroup>
+
+</Project>

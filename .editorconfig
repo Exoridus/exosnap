@@ -30,3 +30,31 @@ end_of_line = crlf
 
 [*.vcxproj*]
 end_of_line = crlf
+
+[*.cs]
+indent_size = 4
+csharp_new_line_before_open_brace = all
+csharp_prefer_braces = true:warning
+csharp_style_namespace_declarations = file_scoped:warning
+csharp_using_directive_placement = outside_namespace:warning
+dotnet_sort_system_directives_first = true
+dotnet_style_qualification_for_field = true:warning
+dotnet_style_qualification_for_property = true:warning
+dotnet_style_qualification_for_method = true:warning
+
+# The design fixes ScenarioResult's evidence as an array, and the record is the
+# contract the whole harness is written against. CA1819 is about defensive
+# copying of mutable state; these arrays are never handed out to be written to.
+dotnet_diagnostic.CA1819.severity = none
+
+[*.csproj]
+indent_size = 2
+
+[*.props]
+indent_size = 2
+
+[*.slnx]
+indent_size = 2
+
+[*.pubxml]
+indent_size = 2
