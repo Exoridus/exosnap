@@ -213,6 +213,65 @@ public static class Campaign
             Path.Combine(run.Root, CampaignDocument.FileName), VerifyJsonContext.Default.CampaignDocument);
     }
 
+    /// <summary>Reasons a prepared campaign no longer describes the bytes and catalog it will run.</summary>
+    public static ReadOnlyCollection<string> ReconciliationBlockers(
+        RunDirectory run,
+        CampaignDocument campaign,
+        ScenarioCatalog catalog)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+        ArgumentNullException.ThrowIfNull(campaign);
+        ArgumentNullException.ThrowIfNull(catalog);
+
+        var reasons = new List<string>();
+        CampaignBinding current;
+        try
+        {
+            current = Bind(
+                campaign.Binding.RunId,
+                campaign.Binding.RcTag,
+                campaign.Binding.SourceCommit,
+                campaign.Binding.ExecutablePath);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            reasons.Add($"the bound executable cannot be read: {exception.Message}");
+            return new ReadOnlyCollection<string>(reasons);
+        }
+
+        if (!string.Equals(current.ExecutableSha256, campaign.Binding.ExecutableSha256, StringComparison.OrdinalIgnoreCase))
+        {
+            reasons.Add("the bound executable bytes changed after prepare");
+        }
+
+        var storedCatalog = VerifyJson.ReadFile(
+            Path.Combine(run.Root, CatalogFileName), VerifyJsonContext.Default.ScenarioDescriptorDocument);
+        if (storedCatalog is null ||
+            !string.Equals(storedCatalog.CatalogVersion, catalog.Version, StringComparison.Ordinal) ||
+            !string.Equals(
+                ReleaseVerificationRecord.CatalogDigest(storedCatalog.Scenarios),
+                ReleaseVerificationRecord.CatalogDigest(catalog.Descriptors),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            reasons.Add("the prepared scenario catalog does not match this harness");
+        }
+
+        var state = run.ReadState();
+        var artifactFingerprint = Qualification.ArtifactFingerprint(
+            [new ArtifactDigest(Path.GetFileName(current.ExecutablePath), current.ExecutableSha256)]);
+        if (state is null ||
+            !string.Equals(state.RunId, campaign.Binding.RunId, StringComparison.Ordinal) ||
+            !string.Equals(state.RcTag, campaign.Binding.RcTag, StringComparison.Ordinal) ||
+            !string.Equals(state.SourceCommitSha, campaign.Binding.SourceCommit, StringComparison.Ordinal) ||
+            !string.Equals(state.ArtifactFingerprint, artifactFingerprint, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(state.CatalogVersion, catalog.Version, StringComparison.Ordinal))
+        {
+            reasons.Add("the run state does not match the prepared campaign, artifact, and catalog");
+        }
+
+        return new ReadOnlyCollection<string>(reasons);
+    }
+
     /// <summary>A fresh campaign identifier, ordered so directories sort by start time.</summary>
     public static string NewRunId() =>
         "rel-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
@@ -305,6 +364,16 @@ public static class Campaign
         ArgumentNullException.ThrowIfNull(namedOptIn);
 
         var known = descriptors.Select(descriptor => descriptor.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var duplicates = namedOptIn
+            .GroupBy(id => id, StringComparer.OrdinalIgnoreCase)
+            .Where(group => group.Count() > 1)
+            .Select(group => group.Key)
+            .ToList();
+        if (duplicates.Count > 0)
+        {
+            throw new CatalogException($"Duplicate scenario id(s) named as required: {string.Join(", ", duplicates)}");
+        }
+
         var unknown = namedOptIn.Where(id => !known.Contains(id)).ToList();
         if (unknown.Count > 0)
         {

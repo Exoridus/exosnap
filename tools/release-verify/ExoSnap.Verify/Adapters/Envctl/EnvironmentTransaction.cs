@@ -277,6 +277,22 @@ public sealed class EnvironmentOrchestrator
                 .BeginAsync(scenario, this.runId, this.journalPath, desiredFile, cancellationToken)
                 .ConfigureAwait(false);
         }
+#pragma warning disable CA1031 // A failed begin may have partially mutated the machine, so recovery must still run.
+        catch (Exception exception)
+#pragma warning restore CA1031
+        {
+            var (beginRestore, beginEvidence) = await this.RestoreAsync(scenario, this.journalPath).ConfigureAwait(false);
+            this.restores[scenario] = beginRestore;
+            return new EnvironmentTransactionOutcome(
+                null,
+                beginRestore,
+                string.Empty,
+                string.Empty,
+                beginEvidence,
+                "begin_exception",
+                $"envctl begin threw {exception.GetType().Name}: {exception.Message}",
+                string.Empty);
+        }
         finally
         {
             Delete(desiredFile);

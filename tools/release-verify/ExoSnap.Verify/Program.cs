@@ -186,6 +186,12 @@ public static class Program
         }
 
         var catalog = ReleaseCatalog.Create();
+        var reconciliation = Campaign.ReconciliationBlockers(run, campaign, catalog);
+        if (reconciliation.Count > 0)
+        {
+            return Usage(ExitInfrastructure, string.Join("; ", reconciliation));
+        }
+
         var capabilities = new MachineCapabilityProbe().ProbeSet();
         var selection = new ScenarioSelection(
             IncludeOptIn: command.HasFlag("include-opt-in"),
@@ -278,11 +284,30 @@ public static class Program
         }
 
         var run = OpenRun(command);
+        if (run is not null)
+        {
+            // A failed requalification must not leave a previous success at the
+            // path the promotion workflow consumes.
+            File.Delete(Path.Combine(run.Root, ReleaseVerificationRecord.FileName));
+        }
+
         var state = run?.ReadState();
         var campaign = run is null ? null : Campaign.ReadDocument(run);
         if (run is null || state is null || campaign is null)
         {
             return Usage(ExitUsage, "qualify needs a completed campaign; use --run-dir, or --dry-run to plan one.");
+        }
+
+        var reconciliation = Campaign.ReconciliationBlockers(run, campaign, catalog);
+        if (reconciliation.Count > 0)
+        {
+            Console.WriteLine("NOT QUALIFIED");
+            foreach (var blocker in reconciliation)
+            {
+                Console.WriteLine($"  - {blocker}");
+            }
+
+            return ExitNotQualified;
         }
 
         var capabilityDocument = VerifyJson.ReadFile(

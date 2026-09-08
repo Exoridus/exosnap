@@ -92,6 +92,10 @@ ExoSnap.Verify run [--id <id>] [--class <c>] [--include-opt-in]
 Runs the selected scenarios against the prepared campaign and records one verdict per
 scenario. Exits non-zero when anything failed or could not be carried out.
 
+Both `run` and `qualify` revalidate the executable hash, campaign/state identity and
+prepared catalog before using recorded results. Changed bytes or a changed catalog
+require a new campaign; results cannot be attributed to the old binding.
+
 ```
 ExoSnap.Verify report
 ```
@@ -108,6 +112,10 @@ ExoSnap.Verify qualify --dry-run [--rc <tag>] [--include-opt-in] [--class <c>] [
 followed by every reason. `--required` names an opt-in gate this release must also have
 answered; an unknown id is an error rather than an empty set, because a typo that
 quietly required nothing is the exact failure the lock exists to prevent.
+
+Every required ID must have exactly one passing verdict, and evidence files must
+still match their recorded SHA-256 digests. A requalification removes the previous
+export first, so a failed attempt cannot leave an old successful record to promote.
 
 `--dry-run` evaluates the catalog against this machine and prints what each scenario
 would do, without running anything and without touching the machine beyond the
@@ -141,6 +149,9 @@ Nothing reads them, and a timestamp nobody measured would be worse than a missin
 An exception escaping a scenario body becomes `InfrastructureError` in the engine,
 never `Fail`. A scenario body therefore does not need to catch its own infrastructure
 failures, and there is one place fewer for it to get that wrong.
+
+Missing or malformed recording counters and coarse delegated-script failures are
+infrastructure errors, not evidence of a product defect.
 
 Every required gate must report `Pass`. An optional gate that was not selected is
 harmless, but any recorded `Fail` or `InfrastructureError` disqualifies regardless of
@@ -282,6 +293,9 @@ Also not built yet, and deliberately so:
   to run, because an entry point that returned success without doing anything would be
   indistinguishable from one that had.
 - UI Automation. FlaUI arrives with the first scenario that needs it.
+- Candidate-bound portable updates. `REL-UPD-PORTABLE-001` reports `Unavailable`
+  until the handoff can prove that the installed bytes match the prepared candidate;
+  a successful update to an arbitrary version offered by the live feed is insufficient.
 - Starting PresentMon. That needs an elevated ETW session on a machine presenting
   something worth measuring, so the capture is produced in the disposable guest and
   this side only reads it. `REL-PRESENT-XCHECK-001` reports `Unavailable` with that

@@ -188,8 +188,6 @@ public sealed partial class QuietStallGate : IScenarioBody
 
         // A probe left over from an earlier attempt would hold a window and a capture
         // lease for nothing.
-        EndLeftoverProbes();
-
         // The probe puts its own process id in the window title, so the filter can only
         // ever match this probe. Two gates run it back to back and both bind by title;
         // a shared title let the second select the first one's window while the
@@ -300,8 +298,7 @@ public sealed partial class QuietStallGate : IScenarioBody
             // returns, and the campaign keeps one application session for every gate.
             // Handing the next one a recording still in flight gets it refused at
             // setup, and that failure belongs to this teardown rather than to it.
-            await SettleAsync(session).ConfigureAwait(false);
-            EndProbe(probe);
+            await FinishAsync(session, probe).ConfigureAwait(false);
         }
     }
 
@@ -349,16 +346,7 @@ public sealed partial class QuietStallGate : IScenarioBody
 
     private static async Task SettleAsync(ILiveVerifySession session)
     {
-        try
-        {
-            await session.StopRecordingAsync(CancellationToken.None).ConfigureAwait(false);
-        }
-#pragma warning disable CA1031 // A teardown that cannot stop a recording must not replace the gate's own verdict.
-        catch (Exception)
-#pragma warning restore CA1031
-        {
-            return;
-        }
+        await session.StopRecordingAsync(CancellationToken.None).ConfigureAwait(false);
 
         var deadline = DateTime.UtcNow + SettleWindow;
         while (DateTime.UtcNow < deadline)
@@ -371,13 +359,19 @@ public sealed partial class QuietStallGate : IScenarioBody
 
             await Task.Delay(PollInterval, CancellationToken.None).ConfigureAwait(false);
         }
+
+        throw new TimeoutException("the recording did not settle before probe teardown");
     }
 
-    private static void EndLeftoverProbes()
+    internal static async Task FinishAsync(ILiveVerifySession session, Process probe)
     {
-        foreach (var running in Process.GetProcessesByName(ProbeProcessName))
+        try
         {
-            EndProbe(running);
+            await SettleAsync(session).ConfigureAwait(false);
+        }
+        finally
+        {
+            EndProbe(probe);
         }
     }
 

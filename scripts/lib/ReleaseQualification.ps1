@@ -337,6 +337,26 @@ function Get-ReleaseQualificationBlockers {
         return $reasons
     }
 
+    $required = Get-ReleaseQualificationField -Object $Record -Name 'required'
+    $requiredIds = @(Get-ReleaseQualificationField -Object $required -Name 'ids')
+    if ($requiredIds.Count -eq 0) { $reasons += 'the record carries no required scenario IDs' }
+    $checkIds = @($checks | ForEach-Object { "$(Get-ReleaseQualificationField -Object $_ -Name 'id')" })
+    foreach ($duplicate in @($checkIds | Group-Object | Where-Object Count -gt 1)) {
+        $reasons += "scenario verdict id is duplicated: $($duplicate.Name)"
+    }
+    foreach ($duplicate in @($requiredIds | Group-Object | Where-Object Count -gt 1)) {
+        $reasons += "required gate id is duplicated: $($duplicate.Name)"
+    }
+    foreach ($id in $requiredIds) {
+        $matches = @($checks | Where-Object { "$(Get-ReleaseQualificationField -Object $_ -Name 'id')" -eq "$id" })
+        if ($matches.Count -ne 1) {
+            $reasons += "required gate $id has $($matches.Count) verdict rows, expected exactly one"
+        }
+        elseif ("$(Get-ReleaseQualificationField -Object $matches[0] -Name 'state')" -ne 'PASS') {
+            $reasons += "required gate $id is not PASS"
+        }
+    }
+
     $failed = @($checks | Where-Object { "$(Get-ReleaseQualificationField -Object $_ -Name 'state')" -eq 'FAIL' })
     if ($failed.Count -gt 0) {
         $reasons += "product defect (FAIL): $(($failed | ForEach-Object { $_.id }) -join ', ')"

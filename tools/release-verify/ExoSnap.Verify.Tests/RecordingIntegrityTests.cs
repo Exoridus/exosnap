@@ -170,7 +170,7 @@ public sealed class RecordingIntegrityTests
     [InlineData("encoder_keyframe_prediction_mismatches")]
     [InlineData("frames_dropped.processing_failure")]
     [InlineData("frames_dropped.backpressure")]
-    public void SoakVerdictFailsWhenAZeroToleranceCounterIsAbsent(string path)
+    public void SoakVerdictIsInfrastructureErrorWhenARequiredCounterIsAbsent(string path)
     {
         using var document = JsonDocument.Parse(CleanCounters);
         var report = Strip(document.RootElement, "counters." + path);
@@ -178,8 +178,8 @@ public sealed class RecordingIntegrityTests
         var verdict = RecordingIntegrity.SoakVerdict(
             report, containerSeconds: 100.0, expectedSeconds: 100.0, audioSpanSeconds: [100.0]);
 
-        Assert.Equal(ScenarioOutcome.Fail, verdict.Outcome);
-        Assert.Contains($"counters.{path} is absent", verdict.Message, StringComparison.Ordinal);
+        Assert.Equal(ScenarioOutcome.InfrastructureError, verdict.Outcome);
+        Assert.Contains($"counters.{path}", verdict.Message, StringComparison.Ordinal);
     }
 
     [Fact]

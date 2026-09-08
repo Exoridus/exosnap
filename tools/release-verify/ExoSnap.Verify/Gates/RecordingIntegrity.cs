@@ -125,6 +125,15 @@ public static class RecordingIntegrity
                 "no session report, so the soak post-checks were not performed");
         }
 
+        var requiredCounters = ZeroToleranceCounters.Concat(
+            ["audio_discontinuity_ms_total", "audio_discontinuity_ms_longest", "audio_discontinuities"]);
+        var missing = requiredCounters.Where(path => Snapshots.Number(counters, path) is null).ToList();
+        if (missing.Count > 0)
+        {
+            return ScenarioResult.InfrastructureError(
+                "missing or malformed report counters: " + string.Join(", ", missing.Select(path => $"counters.{path}")));
+        }
+
         var problems = new List<string>(Problems(report, containerSeconds, audioSpanSeconds));
 
         var skew = Math.Abs(containerSeconds - expectedSeconds);

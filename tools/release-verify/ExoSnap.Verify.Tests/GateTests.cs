@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.Globalization;
 using ExoSnap.Verify.Adapters.Ffprobe;
 using ExoSnap.Verify.Adapters.LiveVerify;
@@ -610,6 +611,33 @@ public sealed class RecordingProducedGateTests
 public sealed class QuietStallGateTests
 {
     [Fact]
+    public async Task ProbeExitsEvenWhenRecordingCleanupCannotReadItsState()
+    {
+        var session = new FakeLiveVerifySession();
+        session.SetResult("record.snapshot", "{");
+        using var probe = Process.Start(new ProcessStartInfo(FixtureTool.Path)
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            ArgumentList = { "--sleep", "30000" },
+        })!;
+        try
+        {
+            await Assert.ThrowsAnyAsync<System.Text.Json.JsonException>(() => QuietStallGate.FinishAsync(session, probe));
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+            await probe.WaitForExitAsync(deadline.Token);
+        }
+        finally
+        {
+            if (!probe.HasExited)
+            {
+                probe.Kill(entireProcessTree: true);
+                await probe.WaitForExitAsync(TestContext.Current.CancellationToken);
+            }
+        }
+    }
+
+    [Fact]
     public async Task IsUnavailableWhenNoStallProbeIsBuilt()
     {
         using var harness = await GateHarness.CreateAsync(
@@ -845,6 +873,24 @@ public sealed class DisplayScalingGateTests
 public sealed class PortableUpdateGateTests
 {
     [Fact]
+    public async Task AnUnboundFeedCannotQualifyTheCandidate()
+    {
+        using var harness = await GateHarness.CreateAsync(
+            "REL-UPD-PORTABLE-001", configure: null, TestContext.Current.CancellationToken);
+        var script = Path.Combine(harness.Fakes.RepositoryRoot, PortableUpdateGate.ScriptPath);
+        Directory.CreateDirectory(Path.GetDirectoryName(script)!);
+        File.WriteAllText(script, "exit 0");
+        var from = Path.Combine(harness.Fakes.RepositoryRoot, "older.exe");
+        File.WriteAllText(from, "older artifact");
+
+        var result = await new PortableUpdateGate(() => from).RunAsync(
+            harness.Context, TestContext.Current.CancellationToken);
+
+        Assert.Equal(ScenarioOutcome.Unavailable, result.Outcome);
+        Assert.Equal(0, harness.Fakes.SessionHost.EndCallCount);
+    }
+
+    [Fact]
     public async Task IsUnavailableWhenTheHandoffScriptIsMissing()
     {
         using var harness = await GateHarness.CreateAsync(
@@ -861,6 +907,20 @@ public sealed class PortableUpdateGateTests
 /// <summary>REL-JOURNEY-001: ProductJourneyGate.</summary>
 public sealed class ProductJourneyGateTests
 {
+    [Fact]
+    public async Task AnUntypedScriptFailureIsAnInfrastructureError()
+    {
+        using var harness = await GateHarness.CreateAsync(
+            "REL-JOURNEY-001", configure: null, TestContext.Current.CancellationToken);
+        var script = Path.Combine(harness.Fakes.RepositoryRoot, ProductJourneyGate.ScriptPath);
+        Directory.CreateDirectory(Path.GetDirectoryName(script)!);
+        File.WriteAllText(script, "exit 1");
+
+        var result = await new ProductJourneyGate().RunAsync(harness.Context, TestContext.Current.CancellationToken);
+
+        Assert.Equal(ScenarioOutcome.InfrastructureError, result.Outcome);
+    }
+
     [Fact]
     public async Task IsUnavailableWhenTheJourneyScriptIsMissing()
     {

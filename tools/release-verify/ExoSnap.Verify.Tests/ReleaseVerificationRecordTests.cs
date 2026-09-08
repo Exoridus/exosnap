@@ -11,6 +11,30 @@ namespace ExoSnap.Verify.Tests;
 /// </summary>
 public sealed class ReleaseVerificationRecordTests
 {
+    [Fact]
+    public void RequiredIdsNeedExactlyOnePassingRow()
+    {
+        Assert.NotEmpty(ReleaseVerificationRecord.Blockers(
+            Binding(), "machine", "commit", "catalog", Packages(), [Check("other")], ["required"]));
+        Assert.NotEmpty(ReleaseVerificationRecord.Blockers(
+            Binding(), "machine", "commit", "catalog", Packages(), [Check("required"), Check("required")], ["required"]));
+        Assert.NotEmpty(ReleaseVerificationRecord.Blockers(
+            Binding(), "machine", "commit", "catalog", Packages(), [Check("required", "SKIPPED", required: false)], ["required"]));
+    }
+
+    [Fact]
+    public void ChangedEvidenceCannotReuseItsMeasuredDigest()
+    {
+        using var directory = FixtureTool.NewTemporaryDirectory("-evidence-binding");
+        var path = Path.Combine(directory.Path, "evidence.json");
+        File.WriteAllText(path, "measured");
+        var check = Check("required", evidence: [Evidence.ForFile("evidence", path)]);
+        Assert.Empty(ReleaseVerificationRecord.Blockers(Binding(), "machine", "commit", "catalog", Packages(), [check]));
+        File.WriteAllText(path, "modified");
+        Assert.Contains(ReleaseVerificationRecord.Blockers(Binding(), "machine", "commit", "catalog", Packages(), [check]),
+            reason => reason.Contains("SHA-256", StringComparison.Ordinal));
+    }
+
     private static CampaignBinding Binding() =>
         new("run-1", "v0.9.1-rc1", "abc123", @"C:\exosnap.exe", "0.9.1", "deadbeef", InstallTree: true);
 

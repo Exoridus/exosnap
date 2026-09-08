@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
 using ExoSnap.Verify.Adapters.LiveVerify;
@@ -78,8 +77,8 @@ public sealed class ProductJourneyGate : IScenarioBody
 
         if (run.ExitCode != 0)
         {
-            return ScenarioResult.Fail(
-                $"the product journey exited {run.ExitCode.ToString(CultureInfo.InvariantCulture)}", [.. evidence]);
+            return ScenarioResult.InfrastructureError(
+                $"the product journey exited {run.ExitCode.ToString(CultureInfo.InvariantCulture)} without a typed product-defect result", [.. evidence]);
         }
 
         return ScenarioResult.Pass(
@@ -164,15 +163,9 @@ public sealed class ShutdownGate : IScenarioBody
 /// REL-UPD-PORTABLE-001: the portable update handoff installs the version it pinned.
 /// </summary>
 /// <remarks>
-/// The handoff script is invoked rather than restated, so there is one implementation
-/// of the handoff assertions and two callers.
-///
-/// An update needs something to update from, and it cannot be the artifact this
-/// campaign is bound to: that one is the newest release the feed offers, so it
-/// correctly reports "up to date" and the run ends before any of the assertions this
-/// gate exists for. The starting point is a previous official build, named by an
-/// environment variable. Without one there is nothing to prove, and the gate says so
-/// rather than passing on a check that never ran.
+/// The current handoff script follows a live feed and cannot bind its target to the
+/// campaign artifact. Until that boundary carries verified candidate evidence, the
+/// gate reports unavailable and does not launch an update.
 /// </remarks>
 public sealed class PortableUpdateGate : IScenarioBody
 {
@@ -181,8 +174,6 @@ public sealed class PortableUpdateGate : IScenarioBody
 
     /// <summary>The variable naming the older build the update starts from.</summary>
     public const string UpdateFromVariable = "EXOSNAP_UPDATE_FROM";
-
-    private static readonly TimeSpan HandoffTimeout = TimeSpan.FromMinutes(15);
 
     private readonly Func<string?> readUpdateFrom;
 
@@ -200,7 +191,13 @@ public sealed class PortableUpdateGate : IScenarioBody
     }
 
     /// <inheritdoc/>
-    public async Task<ScenarioResult> RunAsync(ScenarioContext context, CancellationToken cancellationToken)
+    public Task<ScenarioResult> RunAsync(ScenarioContext context, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(this.CheckAvailability(context));
+    }
+
+    private ScenarioResult CheckAvailability(ScenarioContext context)
     {
         ArgumentNullException.ThrowIfNull(context);
         var services = context.RequireServices();
@@ -219,43 +216,7 @@ public sealed class PortableUpdateGate : IScenarioBody
                 "is the newest release and can only ever report up-to-date");
         }
 
-        var fromVersion = FileVersionInfo.GetVersionInfo(from).ProductVersion ?? string.Empty;
-        if (string.Equals(fromVersion, services.Artifact.ProductVersion, StringComparison.Ordinal))
-        {
-            return ScenarioResult.Unavailable(
-                $"{UpdateFromVariable} carries {fromVersion}, the same version as the bound artifact");
-        }
-
-        // The handoff launches its own isolated instance, so the campaign's shared
-        // session has to be out of the way first: the single-instance guard is a
-        // machine-wide mutex, and a throwaway configuration directory does not lift it.
-        await services.Sessions.EndAsync().ConfigureAwait(false);
-
-        var run = await services.Processes.RunAsync(
-            new ProcessRunRequest("pwsh", "-NoProfile", "-File", script, "-AppPath", from, "-RequireApply")
-            {
-                WorkingDirectory = services.Artifact.RepositoryRoot,
-                Timeout = HandoffTimeout,
-            },
-            cancellationToken).ConfigureAwait(false);
-
-        var evidence = GateEvidence.SaveText(context, "handoff.log", run.StandardOutput + run.StandardError);
-
-        if (run.TimedOut)
-        {
-            return ScenarioResult.InfrastructureError(
-                "the update handoff did not finish within its deadline", evidence);
-        }
-
-        if (run.ExitCode != 0)
-        {
-            return ScenarioResult.Fail(
-                $"the update handoff script exited {run.ExitCode.ToString(CultureInfo.InvariantCulture)}", evidence);
-        }
-
-        return ScenarioResult.Pass(
-            $"{fromVersion} applied the published {services.Artifact.ProductVersion}: app, handoff and " +
-            "updater agreed on one pinned version",
-            evidence);
+        return ScenarioResult.Unavailable(
+            "the handoff script follows a live feed and cannot verify that its installed bytes match the bound candidate");
     }
 }

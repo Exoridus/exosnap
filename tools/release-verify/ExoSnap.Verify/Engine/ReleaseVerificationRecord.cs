@@ -124,13 +124,29 @@ public static class ReleaseVerificationRecord
         string harnessCommit,
         string catalogDigest,
         IReadOnlyList<ReleasePackage> packages,
-        IReadOnlyList<RecordedCheck> checks)
+        IReadOnlyList<RecordedCheck> checks,
+        IReadOnlyList<string>? requiredIds = null)
     {
         ArgumentNullException.ThrowIfNull(binding);
         ArgumentNullException.ThrowIfNull(packages);
         ArgumentNullException.ThrowIfNull(checks);
 
         var reasons = new List<string>();
+        requiredIds ??= checks.Where(check => check.Required).Select(check => check.Id).ToList();
+        if (requiredIds.Count == 0)
+        {
+            reasons.Add("the record carries no required scenario IDs");
+        }
+
+        foreach (var duplicate in requiredIds.GroupBy(id => id, StringComparer.OrdinalIgnoreCase).Where(group => group.Count() > 1))
+        {
+            reasons.Add($"required gate id is duplicated: {duplicate.Key}");
+        }
+
+        foreach (var duplicate in checks.GroupBy(check => check.Id, StringComparer.OrdinalIgnoreCase).Where(group => group.Count() > 1))
+        {
+            reasons.Add($"scenario verdict id is duplicated: {duplicate.Key}");
+        }
 
         foreach (var (field, value) in new[]
                  {
@@ -188,6 +204,19 @@ public static class ReleaseVerificationRecord
             reasons.Add($"required gate {check.Id} is {check.State}, so it was never answered");
         }
 
+        foreach (var requiredId in requiredIds.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            var matches = checks.Where(check => string.Equals(check.Id, requiredId, StringComparison.OrdinalIgnoreCase)).ToList();
+            if (matches.Count != 1)
+            {
+                reasons.Add($"required gate {requiredId} has {matches.Count} verdict row(s), expected exactly one");
+            }
+            else if (!string.Equals(matches[0].State, "PASS", StringComparison.Ordinal))
+            {
+                reasons.Add($"required gate {requiredId} is {matches[0].State}, not PASS");
+            }
+        }
+
         foreach (var check in checks.Where(check =>
                      !string.IsNullOrWhiteSpace(check.RestoreResult) &&
                      !SettledRestores.Contains(check.RestoreResult, StringComparer.Ordinal)))
@@ -203,6 +232,22 @@ public static class ReleaseVerificationRecord
                 reasons.Add(
                     $"{check.Id} cites evidence that is not there: " +
                     string.Join(", ", missing.Select(evidence => evidence.Name)));
+            }
+            foreach (var evidence in check.Evidence.Where(evidence => File.Exists(evidence.Path)))
+            {
+                try
+                {
+                    using var stream = File.OpenRead(evidence.Path);
+                    var actual = Convert.ToHexString(SHA256.HashData(stream)).ToLower(CultureInfo.InvariantCulture);
+                    if (!string.Equals(actual, evidence.Sha256, StringComparison.OrdinalIgnoreCase))
+                    {
+                        reasons.Add($"{check.Id} cites evidence whose SHA-256 changed: {evidence.Name}");
+                    }
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                {
+                    reasons.Add($"{check.Id} cites unreadable evidence {evidence.Name}: {exception.Message}");
+                }
             }
         }
 
@@ -275,7 +320,7 @@ public static class ReleaseVerificationRecord
         ArgumentNullException.ThrowIfNull(namedOptIn);
         ArgumentNullException.ThrowIfNull(checks);
 
-        var blockers = Blockers(binding, machineFingerprint, harnessCommit, catalogDigest, packages, checks);
+        var blockers = Blockers(binding, machineFingerprint, harnessCommit, catalogDigest, packages, checks, requiredIds);
         var now = DateTimeOffset.UtcNow.ToString("o", CultureInfo.InvariantCulture);
 
         var directory = Path.GetDirectoryName(Path.GetFullPath(path));

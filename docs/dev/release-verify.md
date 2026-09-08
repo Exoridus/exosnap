@@ -86,7 +86,7 @@ unnoticed.
 | `REL-DISP-DPI-001` | migrated | scaling facts and the window minimum |
 | `REL-VIS-OVERLAY-001` | declared | operator-judged |
 | `REL-VIS-NOTIFY-001` | declared | operator-judged |
-| `REL-UPD-PORTABLE-001` | migrated | delegates to the handoff script |
+| `REL-UPD-PORTABLE-001` | unavailable | candidate-bound installed-byte evidence is not wired yet |
 | `REL-UPD-MSI-DECLINE-001` | declared | Secure Desktop |
 | `REL-UPD-MSI-001` | declared | Secure Desktop |
 | `REL-PKG-CHOCO-001` | declared | Tier 2 (slice 3) |

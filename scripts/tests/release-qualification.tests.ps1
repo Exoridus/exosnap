@@ -121,7 +121,7 @@ function New-TestRecord {
         harness            = [ordered]@{ version = '1.0.0'; commit = 'c' * 40; dirty = $false }
         catalog            = [ordered]@{ version = '1.0.0'; digest = 'd' * 64; scenarioCount = 2 }
         capabilities       = [ordered]@{ 'display.count' = '2' }
-        required           = [ordered]@{ ids = @($Checks | ForEach-Object { $_.id }) }
+        required           = [ordered]@{ ids = @($Checks | Where-Object required | ForEach-Object { $_.id }) }
         checks             = @($Checks)
     }
     $blockers = @(Get-ReleaseQualificationBlockers -Record $record)
@@ -177,6 +177,19 @@ Test-Case 'a good record qualifies' {
     Assert-Equal 0 $result.ExitCode "a clean record must qualify: $($result.Output)"
     Assert-Match 'QUALIFIED' $result.Summary 'the job summary must state the verdict'
     Assert-NoMatch 'BLOCKED' $result.Summary 'a qualified record must not be reported as blocked'
+}
+
+Test-Case 'missing and duplicate required verdicts block qualification' {
+    $record = New-TestRecord
+    $record.required.ids += 'REL-MISSING-001'
+    Assert-True (@(Get-ReleaseQualificationBlockers -Record $record).Count -gt 0) 'a missing required row must block'
+    $record = New-TestRecord
+    $record.checks += $record.checks[0]
+    Assert-True (@(Get-ReleaseQualificationBlockers -Record $record).Count -gt 0) 'duplicate verdict rows must block'
+    $record = New-TestRecord
+    $record.checks[0].required = $false
+    $record.checks[0].state = 'SKIPPED'
+    Assert-True (@(Get-ReleaseQualificationBlockers -Record $record).Count -gt 0) 'a row cannot override the required ID set'
 }
 
 Test-Case 'a missing record blocks the release' {

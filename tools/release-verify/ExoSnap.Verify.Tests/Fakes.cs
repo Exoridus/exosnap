@@ -82,6 +82,9 @@ internal sealed class FakeFfprobe : IFfprobe
 /// </summary>
 internal sealed class FakeEnvctl : IEnvctl
 {
+    public Exception? BeginException { get; set; }
+
+    public CancellationToken RestoreToken { get; private set; }
     /// <summary>A recovery answer that leaves mutation allowed and nothing to restore.</summary>
     public const string CleanRecoverJson =
         """{"ok":true,"command":"recover","state":"Clean","mutationAllowed":true,"evidence":{"properties":[]}}""";
@@ -161,6 +164,11 @@ internal sealed class FakeEnvctl : IEnvctl
         CancellationToken cancellationToken)
     {
         this.Calls.Add($"begin:{scenario}");
+        if (this.BeginException is not null)
+        {
+            return Task.FromException<EnvctlResponse>(this.BeginException);
+        }
+
         return Task.FromResult(Envctl.ParseDocument(this.BeginJson));
     }
 
@@ -168,6 +176,7 @@ internal sealed class FakeEnvctl : IEnvctl
     public Task<EnvctlResponse> RestoreAsync(string journalPath, CancellationToken cancellationToken)
     {
         this.Calls.Add("restore");
+        this.RestoreToken = cancellationToken;
         return Task.FromResult(Envctl.ParseDocument(this.RestoreJson));
     }
 }

@@ -9,6 +9,32 @@ namespace ExoSnap.Verify.Tests;
 /// </summary>
 public sealed class EnvironmentTransactionTests
 {
+    [Fact]
+    public async Task BeginExceptionRunsUncancelledRestoreAndRecordsTheDebt()
+    {
+        var fake = new FakeEnvctl
+        {
+            BeginException = new OperationCanceledException("begin interrupted"),
+            RestoreJson = """{"ok":false,"state":"RestorePending","error":"still owed"}""",
+        };
+        using var directory = FixtureTool.NewTemporaryDirectory("-begin-exception");
+        var orchestrator = await OpenAsync(fake, directory, TestContext.Current.CancellationToken);
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+
+        var outcome = await orchestrator.RunAsync(
+            "REL-ENV-BEGIN-001",
+            new Dictionary<string, string> { ["display:hdr"] = "on" },
+            (_, _) => Task.FromResult(ScenarioResult.Pass("not reached")),
+            cancelled.Token);
+
+        Assert.Equal(RestoreResult.RestorePending, outcome.Restore);
+        Assert.Equal("begin_exception", outcome.SetupErrorCode);
+        Assert.True(orchestrator.Dirty);
+        Assert.Contains("restore", fake.Calls);
+        Assert.False(fake.RestoreToken.CanBeCanceled);
+    }
+
     private static async Task<EnvironmentOrchestrator> OpenAsync(
         FakeEnvctl envctl,
         TemporaryDirectory directory,
