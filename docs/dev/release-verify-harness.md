@@ -21,7 +21,9 @@ tools/release-verify/
         Json/                    source-generated contracts for every document written
         Capabilities/            machine probes, capability set, tool resolution
         Processes/               the process runner and the tool-output contract
-        Engine/                  catalog, plan, run directory, run state, qualification
+        Adapters/                ffprobe, envctl, the Live Verify session, PresentMon
+        Gates/                   the migrated scenario bodies and the logic they share
+        Engine/                  catalog, plan, run directory, run state, campaign, qualification
         LiveVerify/              the control-channel client
         Catalog/                 the release scenario catalog
         Cli/                     argument parsing
@@ -74,16 +76,54 @@ requirements and its title. `--json` emits the same catalog as the document a ru
 records beside its verdicts.
 
 ```
+ExoSnap.Verify prepare --exe <path> [--rc <tag>] [--commit <sha>] [--package <path>]...
+```
+
+Binds a campaign to explicit bytes. There is deliberately no default artifact: a
+release verdict says "these bytes behaved correctly", so the executable is named and
+hashed, each published package is hashed, and the machine is measured once before
+anything runs. The run directory then holds `campaign.json`,
+`machine-capabilities.json`, `scenario-catalog.json` and `state.json`.
+
+```
+ExoSnap.Verify run [--id <id>] [--class <c>] [--include-opt-in]
+```
+
+Runs the selected scenarios against the prepared campaign and records one verdict per
+scenario. Exits non-zero when anything failed or could not be carried out.
+
+```
+ExoSnap.Verify report
+```
+
+Prints the verdicts recorded so far, with a count per state.
+
+```
+ExoSnap.Verify qualify [--required <id>]...
 ExoSnap.Verify qualify --dry-run [--rc <tag>] [--include-opt-in] [--class <c>] [--id <id>]
 ```
 
-Evaluates the catalog against this machine and prints what each scenario would do,
-without running anything and without touching the machine beyond the capability
-probes. It exits non-zero and prints `NOT QUALIFIED`: a dry run produces no
+`qualify` writes `release-verification.json` and prints either
+`QUALIFIED FOR PROMOTION` with the commit and RC it qualifies, or `NOT QUALIFIED`
+followed by every reason. `--required` names an opt-in gate this release must also have
+answered; an unknown id is an error rather than an empty set, because a typo that
+quietly required nothing is the exact failure the lock exists to prevent.
+
+`--dry-run` evaluates the catalog against this machine and prints what each scenario
+would do, without running anything and without touching the machine beyond the
+capability probes. It exits non-zero and prints `NOT QUALIFIED`: a dry run produces no
 qualification record, and nothing should be able to mistake its output for one.
 
-A `qualify` without `--dry-run` is refused in this revision, because no gate has been
-migrated and a record backed by nothing is worse than no record.
+Nothing here tags, publishes or promotes. The most a run produces is a record saying
+promotion is permitted; who acts on that is a decision outside this program.
+
+The record is written in the shape `scripts/check-release-qualification.ps1` reads, so
+either producer can be checked by the one lock, and
+`scripts/tests/verify-harness-record.tests.ps1` feeds a record this harness actually
+wrote through that lock. Two fields the PowerShell producer carries are deliberately
+absent here rather than invented: `startedUtc` and `finishedUtc`, because the engine
+measures how long a body ran (`durationMs`) and never recorded wall-clock boundaries.
+Nothing reads them, and a timestamp nobody measured would be worse than a missing one.
 
 ## The outcome taxonomy
 
@@ -102,9 +142,10 @@ An exception escaping a scenario body becomes `InfrastructureError` in the engin
 never `Fail`. A scenario body therefore does not need to catch its own infrastructure
 failures, and there is one place fewer for it to get that wrong.
 
-Only `Pass` permits qualification. An infrastructure error anywhere disqualifies,
-required or not: it means the run itself did not work, so the scenarios around it
-were measured on a machine in an unknown condition.
+Every required gate must report `Pass`. An optional gate that was not selected is
+harmless, but any recorded `Fail` or `InfrastructureError` disqualifies regardless of
+whether the gate was required. A product defect cannot become releasable by making its
+gate opt-in, and an infrastructure error means the run did not measure what it claims.
 
 ## The capability model
 
@@ -145,11 +186,49 @@ An unsatisfied requirement is reported verbatim as
 Tier 3 is selected from the capability document, never from the accident of an
 RTX or an HDR panel being present.
 
+## The adapters
+
+Each external mechanism is an interface the engine consumes, so a gate's logic can be
+exercised without the mechanism behind it.
+
+| Interface | Drives | Notes |
+|---|---|---|
+| `IFfprobe` | `ffprobe` | typed streams and container facts, plus the first-to-last packet span per stream |
+| `IEnvctl` | `exosnap-envctl` | one JSON document per subcommand, with the exit code kept because several subcommands answer a verdict with it |
+| `ILiveVerifySession` | `exosnap.exe` | launched with its own run id under a throwaway config directory inside a job object |
+| `IPresentMon` | a PresentMon capture | a header-driven CSV reader; nothing here starts PresentMon |
+
+Three properties are worth stating out loud.
+
+**The packet span is measured from packets, not from a duration tag.** A live-muxed
+MKV carries no per-stream `DURATION`, so a reader that took the tag would see every
+track as full length whatever it actually contains.
+
+**Every envctl mutation is a transaction, and the restore is in a `finally`.** It has
+to survive an assertion failure, a product failure, a harness bug, a timeout and
+cancellation, because a human gate sits inside a transaction and an operator who walks
+away must not leave the machine reconfigured. The product verdict and the restore
+verdict stay separate: a scenario can prove the product correct and still leave a
+display in the wrong mode, and one field cannot say both.
+
+**A session never reaches the visible desktop by default.** The launcher sets the
+offscreen Qt platform unless the caller overrides it, so a campaign cannot take focus
+from whoever is using the machine.
+
+PresentMon columns are matched by header rather than by position: PresentMon 2.x
+changes which optional metrics it emits with its command line, so a positional reader
+is correct for exactly one invocation and silently wrong for every other. Only
+`ProcessID` and `PresentMode` are required; everything else is read when present and
+reported as null when it is not.
+
 ## Testing the harness
 
 The harness decides whether a release ships, so it is itself tested at three levels:
 scenario logic against a fake, adapter contracts against captured real fixtures, and
-platform smoke against the real mechanism.
+platform smoke against the real mechanism. The ffprobe and envctl fixtures were
+captured from those tools with machine-specific paths sanitized; the PresentMon CSV is
+synthetic and identified as such in its contract test because starting its ETW session
+requires the disposable VM.
 
 The hostile inputs are explicit cases in `ProcessRunnerTests`, because each is a way a
 gate has been made to report the wrong thing by a tool, a path or a locale rather than
@@ -164,19 +243,37 @@ do: its own quoting rules would be what the tests measured. The tests copy the w
 fixture directory to a hostile path, because a framework-dependent executable needs
 its assembly beside it.
 
-Nothing in the suite starts ExoSnap, an installer, a sandbox, PresentMon against a
-real target, or any GUI.
+Exactly one test starts ExoSnap: the Live Verify smoke, which launches the Debug build
+with the offscreen Qt platform under a throwaway configuration directory inside a job
+object, completes the handshake, reads `app.identity`, and asserts the session tears
+down without leaving the process or that directory behind. It skips when the Debug
+build or the pinned Qt is not installed -- a missing build is a statement about the
+tree, not about the product, and a suite that went red for it would be red on every
+fresh clone.
+
+Offscreen is also why `ShutdownAsync` has three answers rather than two. A windowless
+process owns no window a close request can reach, so it reports `NotRequestable`
+instead of waiting out a deadline nobody was asked to meet. `REL-SHUTDOWN-001` declares
+`Desktop` isolation for exactly that reason, and treats `NotRequestable` as an
+infrastructure error: a gate that ran against a windowless instance measured the
+harness, not the product.
+
+Nothing else in the suite starts an installer, a sandbox, PresentMon against a real
+target, or any GUI, and nothing mutates machine state -- the envctl smoke is
+`snapshot`, which only reads.
 
 ## What is not migrated yet
 
-Every scenario in the catalog carries `NotMigratedBody` and reports
-`Skipped ("not migrated")`. The declarations are real; the gates are not. A gate that
-has not been written must never look like a gate that ran, so nothing here can report
-`Pass` until its body exists.
+The gate-by-gate table lives in `docs/dev/release-verify.md`, next to the campaign it
+describes, and `ExoSnap.Verify list` prints the same column. A scenario whose body has
+not been written carries `NotMigratedBody` and reports `Skipped ("not migrated")`. A
+gate that has not been written must never look like a gate that ran, so nothing here
+can report `Pass` until its body exists.
 
-`docs/dev/release-verify.md` and `scripts/lib/ReleaseScenarios.ps1` remain the running
-system meanwhile. The migration order is process and ffprobe first, then UI
-Automation, then Sandbox and MSI, then audio and device state.
+`scripts/lib/ReleaseScenarios.ps1` remains the running system meanwhile, and
+`scripts/release-verify.ps1 -Engine DotNet` is how a campaign opts into this one. The
+remaining migration order is UI Automation and the elevated worker, then Windows
+Sandbox and MSI, then audio and device state.
 
 Also not built yet, and deliberately so:
 
@@ -184,9 +281,9 @@ Also not built yet, and deliberately so:
   elevated process, a result document, no cross-integrity UI inspection - and refuses
   to run, because an entry point that returned success without doing anything would be
   indistinguishable from one that had.
-- Environment mutation. `exosnap-envctl` (ADR 0069) stays the only thing that changes
-  machine state; the harness declares what a scenario mutates and will record whether
-  it came back.
 - UI Automation. FlaUI arrives with the first scenario that needs it.
-- Writing a real qualification record. The model exists and is tested; `qualify`
-  produces one only once there are gates behind it.
+- Starting PresentMon. That needs an elevated ETW session on a machine presenting
+  something worth measuring, so the capture is produced in the disposable guest and
+  this side only reads it. `REL-PRESENT-XCHECK-001` reports `Unavailable` with that
+  reason rather than pretending otherwise, and its CSV fixture is synthetic, written
+  against the documented PresentMon 2.5.1 column contract.

@@ -10,11 +10,10 @@ namespace ExoSnap.Verify.Engine;
 /// Decides whether a set of verdicts permits promoting a release candidate.
 /// </summary>
 /// <remarks>
-/// The rule is deliberately one-sided: promotion needs every required scenario to
-/// have passed, and anything else at all refuses. A verdict that was never
-/// measured and a verdict that failed are equally disqualifying, because a
-/// release process whose default is "publish unless something objected" is the
-/// process this harness exists to replace.
+/// Promotion needs every required scenario to have passed. An optional scenario
+/// that was not selected is harmless, but any recorded product failure or
+/// infrastructure error refuses promotion regardless of whether the scenario was
+/// required.
 /// </remarks>
 public static class Qualification
 {
@@ -97,6 +96,14 @@ public static class Qualification
                     id,
                     verdict.Outcome,
                     verdict.Message));
+            }
+        }
+
+        foreach (var verdict in verdicts.Where(v => v.Outcome == ScenarioOutcome.Fail))
+        {
+            if (!required.Contains(verdict.Id, StringComparer.OrdinalIgnoreCase))
+            {
+                objections.Add($"{verdict.Id}: product failure ({verdict.Message})");
             }
         }
 

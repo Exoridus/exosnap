@@ -1,0 +1,457 @@
+{
+  "ok": true,
+  "command": "describe",
+  "catalogue": [
+    {
+      "deviceKind": "display",
+      "property": "hdr",
+      "capability": "ENV_MUTATE_SAFE",
+      "valueKind": "onoff",
+      "readMechanism": "QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS) + DisplayConfigGetDeviceInfo(DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO_2), falling back to DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO on older SDK/OS",
+      "mutateMechanism": "DisplayConfigSetDeviceInfo(DISPLAYCONFIG_DEVICE_INFO_SET_HDR_STATE), falling back to DISPLAYCONFIG_DEVICE_INFO_SET_ADVANCED_COLOR_STATE",
+      "note": "Public SDK enumerants in wingdi.h with a documented structure; reversible and verified by re-reading the same path. Value is the user-enabled HDR toggle, not whether HDR is currently ACTIVE."
+    },
+    {
+      "deviceKind": "display",
+      "property": "advanced-color-mode",
+      "capability": "ENV_READ",
+      "valueKind": "color-mode",
+      "readMechanism": "DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO_2::activeColorMode (SDR / WCG / HDR)",
+      "mutateMechanism": "derived state; no setter",
+      "note": "Reported separately from `hdr` and NEVER inferred from it: WCG is an advanced colour mode that is not HDR, and a panel can be HDR-enabled but not HDR-active."
+    },
+    {
+      "deviceKind": "display",
+      "property": "acm",
+      "capability": "ENV_HUMAN",
+      "valueKind": "onoff",
+      "readMechanism": "DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO_2::wideColorUserEnabled (UNAVAILABLE when the SDK/OS predates GET_ADVANCED_COLOR_INFO_2)",
+      "mutateMechanism": "none documented; the Settings toggle has no public API",
+      "note": "Automatic colour management. Read-only by policy. Never inferred from the HDR state -- they are independent user toggles that happen to share one Settings page."
+    },
+    {
+      "deviceKind": "display",
+      "property": "refresh-hz",
+      "capability": "ENV_MUTATE_SAFE",
+      "valueKind": "hz",
+      "readMechanism": "EnumDisplaySettingsExW(ENUM_CURRENT_SETTINGS) -- the WHOLE DEVMODE is snapshotted, not just dmDisplayFrequency",
+      "mutateMechanism": "ChangeDisplaySettingsExW(CDS_UPDATEREGISTRY) with every coupled mode field held at its original value",
+      "note": "Resolution, colour depth and orientation must not move as a side effect: the apply carries the original width/height/bpp/orientation and the read-back confirms all of them, not only the frequency. VALUE SPACE: whatever EnumDisplaySettingsEx REPORTS -- Windows' own truncated integers. ChangeDisplaySettingsEx will accept a nominal rate it never reports back (ask a 59.94 Hz mode for 60 and it succeeds, then reads back as 59; likewise around 24/30/120/240 on many panels), so the read-back mismatch is refused and rolled back. There is no tolerance and there will not be one. Pick the desired value from `list-modes`, never from a datasheet."
+    },
+    {
+      "deviceKind": "display",
+      "property": "mode",
+      "capability": "ENV_READ",
+      "valueKind": "mode",
+      "readMechanism": "EnumDisplaySettingsExW(ENUM_CURRENT_SETTINGS) rendered as <w>x<h>@<hz>x<bpp>/<orientation>",
+      "mutateMechanism": "not mutated directly; see `refresh-hz`",
+      "note": "The full-mode fingerprint that makes a refresh-rate change auditable."
+    },
+    {
+      "deviceKind": "display",
+      "property": "dpi-scale",
+      "capability": "ENV_HUMAN",
+      "valueKind": "percent",
+      "readMechanism": "GetDpiForMonitor(MDT_EFFECTIVE_DPI) / GetScaleFactorForMonitor",
+      "mutateMechanism": "none documented; the per-monitor DPI setter is an undocumented DISPLAYCONFIG_DEVICE_INFO_TYPE",
+      "note": "Read-only by policy. An undocumented device-info type is exactly the class of mechanism this tool refuses to depend on."
+    },
+    {
+      "deviceKind": "display",
+      "property": "topology",
+      "capability": "ENV_HUMAN",
+      "valueKind": "text",
+      "readMechanism": "QueryDisplayConfig path/mode array rendered as a stable topology string",
+      "mutateMechanism": "SetDisplayConfig exists, but rearranging the desktop is the operator's decision",
+      "note": "Read-only by policy: moving somebody's monitors around is not a side effect a verification run may have."
+    },
+    {
+      "deviceKind": "audio-render",
+      "property": "endpoint-id",
+      "capability": "ENV_READ",
+      "valueKind": "text",
+      "readMechanism": "IMMDeviceEnumerator::EnumAudioEndpoints + IMMDevice::GetId",
+      "mutateMechanism": "enumeration only",
+      "note": "The stable matching key for an audio alias. Friendly names are display-only."
+    },
+    {
+      "deviceKind": "audio-render",
+      "property": "friendly-name",
+      "capability": "ENV_READ",
+      "valueKind": "text",
+      "readMechanism": "IPropertyStore PKEY_Device_FriendlyName",
+      "mutateMechanism": "enumeration only",
+      "note": "Display only. Two identical headsets produce two identical names."
+    },
+    {
+      "deviceKind": "audio-render",
+      "property": "endpoint-state",
+      "capability": "PHYSICAL",
+      "valueKind": "endpoint-state",
+      "readMechanism": "IMMDevice::GetState (active / disabled / notpresent / unplugged)",
+      "mutateMechanism": "no API: unplug/replug and enable/disable are physical or Control Panel actions",
+      "note": "PHYSICAL. The orchestrator observes the transition; it never causes it."
+    },
+    {
+      "deviceKind": "audio-render",
+      "property": "device-format",
+      "capability": "ENV_HUMAN",
+      "valueKind": "wave-format",
+      "readMechanism": "IPropertyStore PKEY_AudioEngine_DeviceFormat rendered as <rate>/<bits>/<channels>",
+      "mutateMechanism": "no documented general setter; the Settings 'Default Format' drop-down has no public API",
+      "note": "The SHARED-MODE endpoint format. Reported separately from `mix-format` and never conflated with it."
+    },
+    {
+      "deviceKind": "audio-render",
+      "property": "mix-format",
+      "capability": "ENV_READ",
+      "valueKind": "wave-format",
+      "readMechanism": "IAudioClient::GetMixFormat rendered as <rate>/<bits>/<channels>",
+      "mutateMechanism": "derived from the engine; no setter",
+      "note": "The AUDIO ENGINE mix format. A different thing from PKEY_AudioEngine_DeviceFormat -- it can differ in bit depth and in channel mask, and treating one as the other has produced wrong capture-format diagnoses before."
+    },
+    {
+      "deviceKind": "audio-render",
+      "property": "default-roles",
+      "capability": "ENV_HUMAN",
+      "valueKind": "roles",
+      "readMechanism": "IMMDeviceEnumerator::GetDefaultAudioEndpoint for eConsole/eMultimedia/eCommunications, compared against this endpoint's id",
+      "mutateMechanism": "only the undocumented IPolicyConfig COM interface",
+      "note": "Read-only by policy. IPolicyConfig is undocumented and is explicitly out of scope; the operator selects the default endpoint."
+    },
+    {
+      "deviceKind": "audio-capture",
+      "property": "endpoint-id",
+      "capability": "ENV_READ",
+      "valueKind": "text",
+      "readMechanism": "IMMDeviceEnumerator::EnumAudioEndpoints + IMMDevice::GetId",
+      "mutateMechanism": "enumeration only",
+      "note": "The stable matching key for an audio alias."
+    },
+    {
+      "deviceKind": "audio-capture",
+      "property": "friendly-name",
+      "capability": "ENV_READ",
+      "valueKind": "text",
+      "readMechanism": "IPropertyStore PKEY_Device_FriendlyName",
+      "mutateMechanism": "enumeration only",
+      "note": "Display only."
+    },
+    {
+      "deviceKind": "audio-capture",
+      "property": "endpoint-state",
+      "capability": "PHYSICAL",
+      "valueKind": "endpoint-state",
+      "readMechanism": "IMMDevice::GetState (active / disabled / notpresent / unplugged)",
+      "mutateMechanism": "no API: unplug/replug and enable/disable are physical or Control Panel actions",
+      "note": "PHYSICAL."
+    },
+    {
+      "deviceKind": "audio-capture",
+      "property": "device-format",
+      "capability": "ENV_HUMAN",
+      "valueKind": "wave-format",
+      "readMechanism": "IPropertyStore PKEY_AudioEngine_DeviceFormat rendered as <rate>/<bits>/<channels>",
+      "mutateMechanism": "no documented general setter",
+      "note": "The SHARED-MODE endpoint format; reported separately from `mix-format`."
+    },
+    {
+      "deviceKind": "audio-capture",
+      "property": "mix-format",
+      "capability": "ENV_READ",
+      "valueKind": "wave-format",
+      "readMechanism": "IAudioClient::GetMixFormat rendered as <rate>/<bits>/<channels>",
+      "mutateMechanism": "derived from the engine; no setter",
+      "note": "The AUDIO ENGINE mix format -- a different thing from the endpoint device format."
+    },
+    {
+      "deviceKind": "audio-capture",
+      "property": "default-roles",
+      "capability": "ENV_HUMAN",
+      "valueKind": "roles",
+      "readMechanism": "IMMDeviceEnumerator::GetDefaultAudioEndpoint for eConsole/eMultimedia/eCommunications",
+      "mutateMechanism": "only the undocumented IPolicyConfig COM interface",
+      "note": "Read-only by policy."
+    },
+    {
+      "deviceKind": "system",
+      "property": "apps-theme",
+      "capability": "ENV_HUMAN",
+      "valueKind": "light-dark",
+      "readMechanism": "Windows::UI::ViewManagement::UISettings when reachable, otherwise the documented Personalize location AppsUseLightTheme",
+      "mutateMechanism": "registry write only; no public setter",
+      "note": "Read-only by policy. A registry write is explicitly excluded as an implemented mutation."
+    },
+    {
+      "deviceKind": "system",
+      "property": "system-theme",
+      "capability": "ENV_HUMAN",
+      "valueKind": "light-dark",
+      "readMechanism": "the documented Personalize location SystemUsesLightTheme",
+      "mutateMechanism": "registry write only; no public setter",
+      "note": "Read-only by policy."
+    }
+  ],
+  "properties": [
+    {
+      "alias": "audio.render.44100-test",
+      "property": "endpoint-id",
+      "key": "audio.render.44100-test:endpoint-id",
+      "capability": "ENV_READ",
+      "valueKind": "text",
+      "readMechanism": "IMMDeviceEnumerator::EnumAudioEndpoints + IMMDevice::GetId",
+      "mutateMechanism": "enumeration only",
+      "note": "The stable matching key for an audio alias. Friendly names are display-only."
+    },
+    {
+      "alias": "audio.render.44100-test",
+      "property": "friendly-name",
+      "key": "audio.render.44100-test:friendly-name",
+      "capability": "ENV_READ",
+      "valueKind": "text",
+      "readMechanism": "IPropertyStore PKEY_Device_FriendlyName",
+      "mutateMechanism": "enumeration only",
+      "note": "Display only. Two identical headsets produce two identical names."
+    },
+    {
+      "alias": "audio.render.44100-test",
+      "property": "endpoint-state",
+      "key": "audio.render.44100-test:endpoint-state",
+      "capability": "PHYSICAL",
+      "valueKind": "endpoint-state",
+      "readMechanism": "IMMDevice::GetState (active / disabled / notpresent / unplugged)",
+      "mutateMechanism": "no API: unplug/replug and enable/disable are physical or Control Panel actions",
+      "note": "PHYSICAL. The orchestrator observes the transition; it never causes it."
+    },
+    {
+      "alias": "audio.render.44100-test",
+      "property": "device-format",
+      "key": "audio.render.44100-test:device-format",
+      "capability": "ENV_HUMAN",
+      "valueKind": "wave-format",
+      "readMechanism": "IPropertyStore PKEY_AudioEngine_DeviceFormat rendered as <rate>/<bits>/<channels>",
+      "mutateMechanism": "no documented general setter; the Settings 'Default Format' drop-down has no public API",
+      "note": "The SHARED-MODE endpoint format. Reported separately from `mix-format` and never conflated with it."
+    },
+    {
+      "alias": "audio.render.44100-test",
+      "property": "mix-format",
+      "key": "audio.render.44100-test:mix-format",
+      "capability": "ENV_READ",
+      "valueKind": "wave-format",
+      "readMechanism": "IAudioClient::GetMixFormat rendered as <rate>/<bits>/<channels>",
+      "mutateMechanism": "derived from the engine; no setter",
+      "note": "The AUDIO ENGINE mix format. A different thing from PKEY_AudioEngine_DeviceFormat -- it can differ in bit depth and in channel mask, and treating one as the other has produced wrong capture-format diagnoses before."
+    },
+    {
+      "alias": "audio.render.44100-test",
+      "property": "default-roles",
+      "key": "audio.render.44100-test:default-roles",
+      "capability": "ENV_HUMAN",
+      "valueKind": "roles",
+      "readMechanism": "IMMDeviceEnumerator::GetDefaultAudioEndpoint for eConsole/eMultimedia/eCommunications, compared against this endpoint's id",
+      "mutateMechanism": "only the undocumented IPolicyConfig COM interface",
+      "note": "Read-only by policy. IPolicyConfig is undocumented and is explicitly out of scope; the operator selects the default endpoint."
+    },
+    {
+      "alias": "audio.render.normal",
+      "property": "endpoint-id",
+      "key": "audio.render.normal:endpoint-id",
+      "capability": "ENV_READ",
+      "valueKind": "text",
+      "readMechanism": "IMMDeviceEnumerator::EnumAudioEndpoints + IMMDevice::GetId",
+      "mutateMechanism": "enumeration only",
+      "note": "The stable matching key for an audio alias. Friendly names are display-only."
+    },
+    {
+      "alias": "audio.render.normal",
+      "property": "friendly-name",
+      "key": "audio.render.normal:friendly-name",
+      "capability": "ENV_READ",
+      "valueKind": "text",
+      "readMechanism": "IPropertyStore PKEY_Device_FriendlyName",
+      "mutateMechanism": "enumeration only",
+      "note": "Display only. Two identical headsets produce two identical names."
+    },
+    {
+      "alias": "audio.render.normal",
+      "property": "endpoint-state",
+      "key": "audio.render.normal:endpoint-state",
+      "capability": "PHYSICAL",
+      "valueKind": "endpoint-state",
+      "readMechanism": "IMMDevice::GetState (active / disabled / notpresent / unplugged)",
+      "mutateMechanism": "no API: unplug/replug and enable/disable are physical or Control Panel actions",
+      "note": "PHYSICAL. The orchestrator observes the transition; it never causes it."
+    },
+    {
+      "alias": "audio.render.normal",
+      "property": "device-format",
+      "key": "audio.render.normal:device-format",
+      "capability": "ENV_HUMAN",
+      "valueKind": "wave-format",
+      "readMechanism": "IPropertyStore PKEY_AudioEngine_DeviceFormat rendered as <rate>/<bits>/<channels>",
+      "mutateMechanism": "no documented general setter; the Settings 'Default Format' drop-down has no public API",
+      "note": "The SHARED-MODE endpoint format. Reported separately from `mix-format` and never conflated with it."
+    },
+    {
+      "alias": "audio.render.normal",
+      "property": "mix-format",
+      "key": "audio.render.normal:mix-format",
+      "capability": "ENV_READ",
+      "valueKind": "wave-format",
+      "readMechanism": "IAudioClient::GetMixFormat rendered as <rate>/<bits>/<channels>",
+      "mutateMechanism": "derived from the engine; no setter",
+      "note": "The AUDIO ENGINE mix format. A different thing from PKEY_AudioEngine_DeviceFormat -- it can differ in bit depth and in channel mask, and treating one as the other has produced wrong capture-format diagnoses before."
+    },
+    {
+      "alias": "audio.render.normal",
+      "property": "default-roles",
+      "key": "audio.render.normal:default-roles",
+      "capability": "ENV_HUMAN",
+      "valueKind": "roles",
+      "readMechanism": "IMMDeviceEnumerator::GetDefaultAudioEndpoint for eConsole/eMultimedia/eCommunications, compared against this endpoint's id",
+      "mutateMechanism": "only the undocumented IPolicyConfig COM interface",
+      "note": "Read-only by policy. IPolicyConfig is undocumented and is explicitly out of scope; the operator selects the default endpoint."
+    },
+    {
+      "alias": "display.main-hdr",
+      "property": "hdr",
+      "key": "display.main-hdr:hdr",
+      "capability": "ENV_MUTATE_SAFE",
+      "valueKind": "onoff",
+      "readMechanism": "QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS) + DisplayConfigGetDeviceInfo(DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO_2), falling back to DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO on older SDK/OS",
+      "mutateMechanism": "DisplayConfigSetDeviceInfo(DISPLAYCONFIG_DEVICE_INFO_SET_HDR_STATE), falling back to DISPLAYCONFIG_DEVICE_INFO_SET_ADVANCED_COLOR_STATE",
+      "note": "Public SDK enumerants in wingdi.h with a documented structure; reversible and verified by re-reading the same path. Value is the user-enabled HDR toggle, not whether HDR is currently ACTIVE."
+    },
+    {
+      "alias": "display.main-hdr",
+      "property": "advanced-color-mode",
+      "key": "display.main-hdr:advanced-color-mode",
+      "capability": "ENV_READ",
+      "valueKind": "color-mode",
+      "readMechanism": "DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO_2::activeColorMode (SDR / WCG / HDR)",
+      "mutateMechanism": "derived state; no setter",
+      "note": "Reported separately from `hdr` and NEVER inferred from it: WCG is an advanced colour mode that is not HDR, and a panel can be HDR-enabled but not HDR-active."
+    },
+    {
+      "alias": "display.main-hdr",
+      "property": "acm",
+      "key": "display.main-hdr:acm",
+      "capability": "ENV_HUMAN",
+      "valueKind": "onoff",
+      "readMechanism": "DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO_2::wideColorUserEnabled (UNAVAILABLE when the SDK/OS predates GET_ADVANCED_COLOR_INFO_2)",
+      "mutateMechanism": "none documented; the Settings toggle has no public API",
+      "note": "Automatic colour management. Read-only by policy. Never inferred from the HDR state -- they are independent user toggles that happen to share one Settings page."
+    },
+    {
+      "alias": "display.main-hdr",
+      "property": "refresh-hz",
+      "key": "display.main-hdr:refresh-hz",
+      "capability": "ENV_MUTATE_SAFE",
+      "valueKind": "hz",
+      "readMechanism": "EnumDisplaySettingsExW(ENUM_CURRENT_SETTINGS) -- the WHOLE DEVMODE is snapshotted, not just dmDisplayFrequency",
+      "mutateMechanism": "ChangeDisplaySettingsExW(CDS_UPDATEREGISTRY) with every coupled mode field held at its original value",
+      "note": "Resolution, colour depth and orientation must not move as a side effect: the apply carries the original width/height/bpp/orientation and the read-back confirms all of them, not only the frequency. VALUE SPACE: whatever EnumDisplaySettingsEx REPORTS -- Windows' own truncated integers. ChangeDisplaySettingsEx will accept a nominal rate it never reports back (ask a 59.94 Hz mode for 60 and it succeeds, then reads back as 59; likewise around 24/30/120/240 on many panels), so the read-back mismatch is refused and rolled back. There is no tolerance and there will not be one. Pick the desired value from `list-modes`, never from a datasheet."
+    },
+    {
+      "alias": "display.main-hdr",
+      "property": "mode",
+      "key": "display.main-hdr:mode",
+      "capability": "ENV_READ",
+      "valueKind": "mode",
+      "readMechanism": "EnumDisplaySettingsExW(ENUM_CURRENT_SETTINGS) rendered as <w>x<h>@<hz>x<bpp>/<orientation>",
+      "mutateMechanism": "not mutated directly; see `refresh-hz`",
+      "note": "The full-mode fingerprint that makes a refresh-rate change auditable."
+    },
+    {
+      "alias": "display.main-hdr",
+      "property": "dpi-scale",
+      "key": "display.main-hdr:dpi-scale",
+      "capability": "ENV_HUMAN",
+      "valueKind": "percent",
+      "readMechanism": "GetDpiForMonitor(MDT_EFFECTIVE_DPI) / GetScaleFactorForMonitor",
+      "mutateMechanism": "none documented; the per-monitor DPI setter is an undocumented DISPLAYCONFIG_DEVICE_INFO_TYPE",
+      "note": "Read-only by policy. An undocumented device-info type is exactly the class of mechanism this tool refuses to depend on."
+    },
+    {
+      "alias": "display.main-hdr",
+      "property": "topology",
+      "key": "display.main-hdr:topology",
+      "capability": "ENV_HUMAN",
+      "valueKind": "text",
+      "readMechanism": "QueryDisplayConfig path/mode array rendered as a stable topology string",
+      "mutateMechanism": "SetDisplayConfig exists, but rearranging the desktop is the operator's decision",
+      "note": "Read-only by policy: moving somebody's monitors around is not a side effect a verification run may have."
+    },
+    {
+      "alias": "display.secondary-sdr",
+      "property": "hdr",
+      "key": "display.secondary-sdr:hdr",
+      "capability": "ENV_MUTATE_SAFE",
+      "valueKind": "onoff",
+      "readMechanism": "QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS) + DisplayConfigGetDeviceInfo(DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO_2), falling back to DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO on older SDK/OS",
+      "mutateMechanism": "DisplayConfigSetDeviceInfo(DISPLAYCONFIG_DEVICE_INFO_SET_HDR_STATE), falling back to DISPLAYCONFIG_DEVICE_INFO_SET_ADVANCED_COLOR_STATE",
+      "note": "Public SDK enumerants in wingdi.h with a documented structure; reversible and verified by re-reading the same path. Value is the user-enabled HDR toggle, not whether HDR is currently ACTIVE."
+    },
+    {
+      "alias": "display.secondary-sdr",
+      "property": "advanced-color-mode",
+      "key": "display.secondary-sdr:advanced-color-mode",
+      "capability": "ENV_READ",
+      "valueKind": "color-mode",
+      "readMechanism": "DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO_2::activeColorMode (SDR / WCG / HDR)",
+      "mutateMechanism": "derived state; no setter",
+      "note": "Reported separately from `hdr` and NEVER inferred from it: WCG is an advanced colour mode that is not HDR, and a panel can be HDR-enabled but not HDR-active."
+    },
+    {
+      "alias": "display.secondary-sdr",
+      "property": "acm",
+      "key": "display.secondary-sdr:acm",
+      "capability": "ENV_HUMAN",
+      "valueKind": "onoff",
+      "readMechanism": "DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO_2::wideColorUserEnabled (UNAVAILABLE when the SDK/OS predates GET_ADVANCED_COLOR_INFO_2)",
+      "mutateMechanism": "none documented; the Settings toggle has no public API",
+      "note": "Automatic colour management. Read-only by policy. Never inferred from the HDR state -- they are independent user toggles that happen to share one Settings page."
+    },
+    {
+      "alias": "display.secondary-sdr",
+      "property": "refresh-hz",
+      "key": "display.secondary-sdr:refresh-hz",
+      "capability": "ENV_MUTATE_SAFE",
+      "valueKind": "hz",
+      "readMechanism": "EnumDisplaySettingsExW(ENUM_CURRENT_SETTINGS) -- the WHOLE DEVMODE is snapshotted, not just dmDisplayFrequency",
+      "mutateMechanism": "ChangeDisplaySettingsExW(CDS_UPDATEREGISTRY) with every coupled mode field held at its original value",
+      "note": "Resolution, colour depth and orientation must not move as a side effect: the apply carries the original width/height/bpp/orientation and the read-back confirms all of them, not only the frequency. VALUE SPACE: whatever EnumDisplaySettingsEx REPORTS -- Windows' own truncated integers. ChangeDisplaySettingsEx will accept a nominal rate it never reports back (ask a 59.94 Hz mode for 60 and it succeeds, then reads back as 59; likewise around 24/30/120/240 on many panels), so the read-back mismatch is refused and rolled back. There is no tolerance and there will not be one. Pick the desired value from `list-modes`, never from a datasheet."
+    },
+    {
+      "alias": "display.secondary-sdr",
+      "property": "mode",
+      "key": "display.secondary-sdr:mode",
+      "capability": "ENV_READ",
+      "valueKind": "mode",
+      "readMechanism": "EnumDisplaySettingsExW(ENUM_CURRENT_SETTINGS) rendered as <w>x<h>@<hz>x<bpp>/<orientation>",
+      "mutateMechanism": "not mutated directly; see `refresh-hz`",
+      "note": "The full-mode fingerprint that makes a refresh-rate change auditable."
+    },
+    {
+      "alias": "display.secondary-sdr",
+      "property": "dpi-scale",
+      "key": "display.secondary-sdr:dpi-scale",
+      "capability": "ENV_HUMAN",
+      "valueKind": "percent",
+      "readMechanism": "GetDpiForMonitor(MDT_EFFECTIVE_DPI) / GetScaleFactorForMonitor",
+      "mutateMechanism": "none documented; the per-monitor DPI setter is an undocumented DISPLAYCONFIG_DEVICE_INFO_TYPE",
+      "note": "Read-only by policy. An undocumented device-info type is exactly the class of mechanism this tool refuses to depend on."
+    },
+    {
+      "alias": "display.secondary-sdr",
+      "property": "topology",
+      "key": "display.secondary-sdr:topology",
+      "capability": "ENV_HUMAN",
+      "valueKind": "text",
+      "readMechanism": "QueryDisplayConfig path/mode array rendered as a stable topology string",
+      "mutateMechanism": "SetDisplayConfig exists, but rearranging the desktop is the operator's decision",
+      "note": "Read-only by policy: moving somebody's monitors around is not a side effect a verification run may have."
+    }
+  ]
+}

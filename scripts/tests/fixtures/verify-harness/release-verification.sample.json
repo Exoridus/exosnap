@@ -1,0 +1,82 @@
+{
+  "schema": "exosnap.release-verification/1",
+  "generatedUtc": "2026-09-08T02:36:13.1410936\u002B00:00",
+  "runId": "rel-20260908-000000",
+  "rcTag": "v0.9.1-rc1",
+  "sourceCommit": "0000000000000000000000000000000000000000",
+  "artifact": {
+    "exePath": "C:\\fixture\\exosnap.exe",
+    "productVersion": "0.9.1",
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "tag": "v0.9.1-rc1",
+    "sourceCommit": "0000000000000000000000000000000000000000",
+    "installTree": true
+  },
+  "packages": [
+    {
+      "fileName": "ExoSnap-0.9.1-rc1-windows-x64-portable.zip",
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "bytes": 12345
+    }
+  ],
+  "machineFingerprint": "fingerprint-aaaaaaaaaaaaaaaa",
+  "harness": {
+    "version": "1.0.0",
+    "runner": "tools/release-verify/ExoSnap.Verify",
+    "commit": "0000000000000000000000000000000000000000",
+    "dirty": false
+  },
+  "catalog": {
+    "version": "catalog-1",
+    "digest": "catalog-digest-aaaaaaaaaaaaaaaa",
+    "scenarioCount": 1
+  },
+  "capabilities": {
+    "elevated": "false"
+  },
+  "environment": {
+    "osVersion": "10.0.26200"
+  },
+  "required": {
+    "policy": "every scenario that is not opt-in, plus the opt-in scenarios named for this release",
+    "ids": [
+      "REL-CAP-001"
+    ],
+    "namedOptIn": []
+  },
+  "summary": {
+    "PASS": 1
+  },
+  "restoreSummary": {
+    "NOT_APPLICABLE": 1
+  },
+  "checks": [
+    {
+      "id": "REL-CAP-001",
+      "title": "A recording is produced and validated by an independent tool",
+      "layer": "FullAuto",
+      "state": "PASS",
+      "required": true,
+      "optIn": false,
+      "message": "6.02s recorded, av1 codec, ffprobe agrees",
+      "durationMs": 6200,
+      "attempts": 1,
+      "skipReason": "",
+      "interrupted": false,
+      "restoreResult": "NOT_APPLICABLE",
+      "evidence": [
+        {
+          "path": "ffprobe.json",
+          "bytes": 26,
+          "sha256": "815b1ae5918df5a992ada148b109c7e36af9bdb48496e755d54fdeca9b996cfc",
+          "missing": false
+        }
+      ]
+    }
+  ],
+  "qualification": {
+    "overall": "QUALIFIED",
+    "reasons": [],
+    "evaluatedUtc": "2026-09-08T02:36:13.1410936\u002B00:00"
+  }
+}

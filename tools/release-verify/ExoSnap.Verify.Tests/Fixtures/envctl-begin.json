@@ -1,0 +1,39 @@
+{
+  "ok": true,
+  "command": "begin",
+  "transactionId": "tx-20260907T164232-2d34dc45",
+  "journalPath": "C:\\fixture\\env-journal.json",
+  "state": "Active",
+  "runId": "rel-20260907-164215",
+  "scenario": "REL-ENV-003",
+  "ownerPid": 31168,
+  "applied": [
+    {
+      "property": "display.main-hdr:refresh-hz",
+      "from": "144",
+      "to": "120",
+      "atUtc": "2026-09-07T16:42:32Z"
+    }
+  ],
+  "evidence": {
+    "transactionId": "tx-20260907T164232-2d34dc45",
+    "runId": "rel-20260907-164215",
+    "scenario": "REL-ENV-003",
+    "machine": "1d67d8d03fea912a",
+    "finalState": "Active",
+    "accepted": false,
+    "properties": [
+      {
+        "property": "display.main-hdr:refresh-hz",
+        "before": "144",
+        "requested": "120",
+        "applied": "120",
+        "afterRestore": "",
+        "skipped": false,
+        "restored": false
+      }
+    ],
+    "pending": []
+  },
+  "pending": []
+}

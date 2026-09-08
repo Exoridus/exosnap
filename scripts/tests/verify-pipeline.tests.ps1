@@ -151,6 +151,43 @@ Test-Case 'a script change runs the script tests and nothing heavier' {
     Assert-True (-not $scope.RequiresBuild) 'a script change must not trigger a product build'
 }
 
+Test-Case 'a release-verify CSV fixture runs the harness without building the product' {
+    $scope = Get-VerifyScope -ChangedFiles @('tools/release-verify/ExoSnap.Verify.Tests/Fixtures/ffprobe-packets.csv')
+    Assert-True $scope.RequiresVerifyHarness 'a changed adapter fixture must run its contract tests'
+    Assert-True (-not $scope.RequiresBuild) 'a harness fixture must not rebuild the C++ product'
+}
+
+Test-Case 'a release-verify harness change runs the harness stage and nothing heavier' {
+    # The harness is a .NET solution with its own SDK pin and its own test runner.
+    # Its file types reach the `default` branch unless they are recognised, and a
+    # harness-only commit then escalated to a whole C++ build and test suite that
+    # verified nothing about what changed.
+    $scope = Get-VerifyScope -ChangedFiles @(
+        'tools/release-verify/ExoSnap.Verify/Adapters/Ffprobe/Ffprobe.cs',
+        'tools/release-verify/ExoSnap.Verify/ExoSnap.Verify.csproj',
+        'tools/release-verify/Directory.Build.props',
+        'tools/release-verify/ExoSnap.Verify/packages.lock.json',
+        'tools/release-verify/ExoSnap.Verify.slnx')
+    Assert-True $scope.RequiresVerifyHarness 'a harness change must arm the verify-harness stage'
+    Assert-True (-not $scope.RequiresBuild) 'a harness change must not trigger a C++ build'
+    Assert-True (-not $scope.RequiresConfigure) 'a harness change must not trigger a CMake configure'
+    Assert-True (-not $scope.RequiresFullTests) 'a harness change must not trigger the C++ test suite'
+    Assert-True ($scope.Categories -contains 'verify-harness') 'the change must be categorised as harness work'
+}
+
+Test-Case 'an undetermined change set still arms the harness stage' {
+    $scope = Get-VerifyScope -ChangedFiles @()
+    Assert-True $scope.RequiresVerifyHarness 'an undetermined change set must not skip the harness'
+}
+
+Test-Case 'an unrecognised file under the harness still escalates' {
+    # The recognition is by extension, deliberately. Something new under
+    # tools/release-verify that nobody taught this rule about is still unknown, and
+    # unknown widens.
+    $scope = Get-VerifyScope -ChangedFiles @('tools/release-verify/ExoSnap.Verify/mystery.zzz')
+    Assert-True $scope.RequiresFullTests 'an unknown type under the harness must widen, never narrow'
+}
+
 Test-Case 'an unrecognised file type escalates rather than being ignored' {
     $scope = Get-VerifyScope -ChangedFiles @('libs/engine/src/mystery.zzz')
     Assert-True $scope.RequiresFullTests 'an unknown type must widen, never narrow'

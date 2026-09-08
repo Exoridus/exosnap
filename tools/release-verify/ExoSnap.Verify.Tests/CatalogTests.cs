@@ -15,7 +15,7 @@ public sealed class CatalogTests
     {
         var catalog = ReleaseCatalog.Create();
 
-        Assert.Equal(26, catalog.Scenarios.Count);
+        Assert.Equal(27, catalog.Scenarios.Count);
         Assert.Equal(
             catalog.Scenarios.Count,
             catalog.Scenarios.Select(scenario => scenario.Id).Distinct(StringComparer.OrdinalIgnoreCase).Count());
@@ -37,7 +37,7 @@ public sealed class CatalogTests
         foreach (var id in new[]
                  {
                      "REL-ENV-001", "REL-ENV-002", "REL-ENV-003", "REL-SCHEMA-001",
-                     "REL-PRESENT-001", "REL-PRESENT-002",
+                     "REL-PRESENT-001", "REL-PRESENT-002", "REL-PRESENT-XCHECK-001",
                      "REL-CAP-001", "REL-CAP-STALL-001", "REL-CAP-QUIET-001", "REL-CAP-FSE-001",
                      "REL-AUD-DEGRADE-001", "REL-AUD-SILENCE-001", "REL-AUD-FORMAT-001", "REL-AUD-CLOCK-001",
                      "REL-DISP-REFRESH-001", "REL-DISP-HDR-001", "REL-DISP-MIXED-001", "REL-DISP-DPI-001",
@@ -50,12 +50,46 @@ public sealed class CatalogTests
         }
     }
 
+    /// <summary>
+    /// A scenario is either migrated or declared, and the catalog agrees with itself
+    /// about which. The point is the second half: an unmigrated body must report
+    /// Skipped, never Pass, so a gate nobody has written can never look like a gate
+    /// that ran.
+    /// </summary>
     [Fact]
-    public void NoScenarioIsMigratedYetAndNoneOfThemClaimsToBe()
+    public async Task AnUnmigratedScenarioReportsSkippedAndNeverPass()
     {
+        var migrated = ReleaseCatalog.MigratedIds().ToHashSet(StringComparer.OrdinalIgnoreCase);
+        Assert.NotEmpty(migrated);
+
         foreach (var scenario in ReleaseCatalog.Create().Scenarios)
         {
-            Assert.IsType<NotMigratedBody>(scenario.Body);
+            if (migrated.Contains(scenario.Id))
+            {
+                Assert.IsNotType<NotMigratedBody>(scenario.Body);
+                continue;
+            }
+
+            var body = Assert.IsType<NotMigratedBody>(scenario.Body);
+            var result = await body.RunAsync(null!, TestContext.Current.CancellationToken);
+            Assert.Equal(ScenarioOutcome.Skipped, result.Outcome);
+            Assert.Equal(NotMigratedBody.Reason, result.Message);
+        }
+    }
+
+    /// <summary>
+    /// Every id the migration table names has a body, and every body has a
+    /// declaration. A name in one list and not the other is a gate that either cannot
+    /// run or cannot be selected.
+    /// </summary>
+    [Fact]
+    public void EveryMigratedIdIsDeclaredInTheCatalog()
+    {
+        var declared = ReleaseCatalog.Descriptors().Select(descriptor => descriptor.Id).ToHashSet(StringComparer.Ordinal);
+
+        foreach (var id in ReleaseCatalog.MigratedIds())
+        {
+            Assert.Contains(id, declared);
         }
     }
 

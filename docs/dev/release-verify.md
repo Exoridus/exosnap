@@ -36,6 +36,67 @@ wanting to toggle HDR is not a reason to ship one. The mutation lives in
 `tools/envctl`, which is test-only: never installed, never linked into `exosnap.exe`,
 never a service, never on autostart.
 
+## Which harness runs a gate
+
+The campaign is being migrated to the typed C# harness under `tools/release-verify`
+(ADR 0070). The two exist side by side while that happens, and the runner says which
+one it is using rather than leaving a reader to guess.
+
+```powershell
+pwsh scripts/release-verify.ps1 run                    # the PowerShell campaign (default)
+pwsh scripts/release-verify.ps1 run -Engine DotNet     # the typed harness
+```
+
+`-Engine DotNet` builds and publishes `ExoSnap.Verify` if it is missing or older than
+its sources, then forwards `prepare`, `run`, `list`, `qualify` and `report` to it. It
+refuses `recover`, `resume`, `retry` and `status`, which have no counterpart there yet
+-- answering them with something that merely looks similar would be worse than saying
+so. PowerShell stays the default until every gate has moved: a default that silently
+ran a harness with fewer gates than the checklist names would produce a record about a
+smaller bar than the one a reader assumes.
+
+Both engines write `release-verification.json` in the same shape, and
+`scripts/check-release-qualification.ps1` is the one reader that decides whether either
+may promote a release. `scripts/tests/verify-harness-record.tests.ps1` feeds a record
+the C# producer actually wrote through that reader, so the two cannot drift apart
+unnoticed.
+
+### Migration status
+
+| Gate | C# body | Notes |
+|---|---|---|
+| `REL-ENV-001` | migrated | envctl `describe`, asserted over the catalogue |
+| `REL-ENV-002` | migrated | envctl `resolve-aliases` |
+| `REL-ENV-003` | migrated | full transaction, restore in a `finally` |
+| `REL-SCHEMA-001` | migrated | the field contract, across all three stages |
+| `REL-PRESENT-001` | migrated | control channel only |
+| `REL-PRESENT-002` | declared | needs the elevated worker (slice 2) |
+| `REL-PRESENT-XCHECK-001` | migrated | new gate; PresentMon as an independent oracle |
+| `REL-CAP-001` | migrated | control channel plus ffprobe |
+| `REL-CAP-STALL-001` | declared | operator-assisted |
+| `REL-CAP-QUIET-001` | migrated | needs `probe_stall_window` |
+| `REL-CAP-FSE-001` | declared | operator-assisted |
+| `REL-AUD-DEGRADE-001` | declared | physical (slice 4) |
+| `REL-AUD-SILENCE-001` | declared | operator-assisted |
+| `REL-AUD-FORMAT-001` | declared | audio device state (slice 4) |
+| `REL-AUD-CLOCK-001` | migrated | soak post-checks ported exactly |
+| `REL-DISP-REFRESH-001` | migrated | refresh transaction plus a recording |
+| `REL-DISP-HDR-001` | migrated | HDR transaction plus a recording |
+| `REL-DISP-MIXED-001` | migrated | preview-freeze verdict |
+| `REL-DISP-DPI-001` | migrated | scaling facts and the window minimum |
+| `REL-VIS-OVERLAY-001` | declared | operator-judged |
+| `REL-VIS-NOTIFY-001` | declared | operator-judged |
+| `REL-UPD-PORTABLE-001` | migrated | delegates to the handoff script |
+| `REL-UPD-MSI-DECLINE-001` | declared | Secure Desktop |
+| `REL-UPD-MSI-001` | declared | Secure Desktop |
+| `REL-PKG-CHOCO-001` | declared | Tier 2 (slice 3) |
+| `REL-JOURNEY-001` | migrated | delegates to the journey script |
+| `REL-SHUTDOWN-001` | migrated | own instance, own run id |
+
+`ExoSnap.Verify list` prints the same column. A gate whose body has not been written
+reports `SKIPPED ("not migrated")` and never `PASS`, so an unmigrated gate can never
+look like a gate that ran.
+
 ## Running it
 
 ```powershell

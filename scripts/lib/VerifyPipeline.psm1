@@ -153,6 +153,7 @@ function Get-VerifyScope {
         TestFilter             = ''
         RequiresScriptTests    = $false
         RequiresStaticAnalysis = $false
+        RequiresVerifyHarness  = $false
         EscalationReasons      = @()
     }
 
@@ -167,6 +168,7 @@ function Get-VerifyScope {
         $scope.RequiresFullTests      = $true
         $scope.RequiresScriptTests    = $true
         $scope.RequiresStaticAnalysis = $true
+        $scope.RequiresVerifyHarness  = $true
         $scope.EscalationReasons      = @('no change set could be determined; verifying everything')
         return $scope
     }
@@ -190,6 +192,17 @@ function Get-VerifyScope {
         $path = $file -replace '\\', '/'
 
         switch -Regex ($path) {
+            # Before every extension rule, because the release-verify harness is a
+            # .NET solution with its own SDK pin, its own test runner and no share of
+            # the CMake preset. Its file types (.cs, .csproj, .props, .slnx, its lock
+            # and settings JSON) reach the `default` branch otherwise and escalate a
+            # harness-only commit to a whole C++ build and test suite, which verifies
+            # nothing about what changed.
+            '(?i)^tools/release-verify/.+\.(cs|csproj|slnx|props|targets|json|pubxml|txt|csv)$' {
+                [void]$categories.Add('verify-harness')
+                $scope.RequiresVerifyHarness = $true
+                continue
+            }
             '(?i)(^|/)CMakeLists\.txt$|(?i)^CMakePresets\.json$|(?i)\.cmake$|(?i)^cmake/|(?i)\.in$' {
                 [void]$categories.Add('cmake')
                 $scope.RequiresConfigure      = $true
