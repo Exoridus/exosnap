@@ -116,6 +116,32 @@ and moving the OS cursor while the developer is moving it causes mis-clicks.
   directory (`EXOSNAP_OUTPUT_DIR`, else the system temp directory) and is never
   committed.
 
+## Release authority
+
+```
+Version tags and releases are destructive/release-authority operations.
+
+Never:
+- create or push v* tags
+- create/publish GitHub releases
+- submit package-manager releases
+- promote an RC to final
+
+unless the user explicitly requests that exact release operation in the
+current interaction.
+
+Preparing a release, fixing release blockers, or completing verification
+does not constitute permission to publish it.
+```
+
+The furthest an agent workflow goes is `release-verify.ps1 qualify`, which prints
+`QUALIFIED FOR PROMOTION` with the commit and the RC tag. Attaching that record to
+the RC release (`qualify -Publish`) and pushing the final tag are the developer's
+acts. The pipeline enforces the same boundary from the other side: a final tag whose
+commit has no qualified record stops before the publish step
+(`scripts/check-release-qualification.ps1`), so even a tag pushed by mistake ships
+nothing.
+
 ## Source hygiene
 
 Prefer self-explanatory code. Add comments only for non-obvious correctness,

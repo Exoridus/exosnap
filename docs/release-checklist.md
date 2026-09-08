@@ -70,8 +70,9 @@ a binary whose `ProductVersion` does not match the tag).
 - [ ] **If anything fails:** fix it, and cut the next candidate (`rc_N+1`) from the new commit.
       A published RC is never re-used or overwritten; the pipeline refuses to re-upload into an
       already-published Release.
-- [ ] **Once every check passes, push the final `vX.Y.Z` tag from the *same commit* the passing RC
-      was built from** and continue with §4. Re-cut an RC if that commit moved.
+- [ ] **Qualify the RC, then promote it.** A final tag is not an approval — the qualification record
+      is, and the pipeline reads it rather than trusting the tag (§3a below). Work these three steps
+      in order and continue with §4.
 
 > The RC prerelease stays on the releases page as a normal, visible prerelease. As of the
 > SemVer prerelease-ordering fix (first shipped in `v0.9.0-rc2`), a running RC correctly detects a
@@ -101,6 +102,62 @@ a binary whose `ProductVersion` does not match the tag).
 > (portable ZIP) — if not, cut two RCs from the current cycle instead (rc_N as the swap-capable
 > baseline, rc_N+1 as the target) to get a real swap test.
 
+## 3a. Qualify the candidate and promote it
+
+A final tag used to be the approval: a human pushed `vX.Y.Z`, the build and packaging gates were
+green, and the release published. Nothing in the pipeline could tell whether §5–§7 had ever been
+run. `v0.9.0` shipped that way. The approval is now a machine-readable **qualification record**, and
+the workflow refuses to publish without one.
+
+- [ ] **Bind the campaign to the published RC.** The campaign must run against the artifacts the
+      release page serves, and it must know which commit they came from — a published portable ZIP
+      ships no build manifest, so the commit has to be named:
+
+      ```powershell
+      pwsh scripts/release-verify.ps1 prepare `
+          -ExePath <unzipped RC>\exosnap.exe -Tag v0.9.1-rc1 `
+          -SourceCommit <the commit v0.9.1-rc1 points at> `
+          -PortableZip <downloaded>\ExoSnap-0.9.1-rc1-windows-x64-portable.zip `
+          -Msi <downloaded>\ExoSnap-0.9.1-rc1-windows-x64.msi
+      ```
+
+      Without `-SourceCommit` and the package paths the campaign still runs, but it can never
+      qualify a release: `prepare` says so on the spot.
+- [ ] **Run §5, §6 and §7 through the runner**, then `pwsh scripts/release-verify.ps1 report`.
+- [ ] **Ask for the verdict**: `pwsh scripts/release-verify.ps1 qualify`. It prints either
+      `QUALIFIED FOR PROMOTION` with the commit and the RC tag, or every blocking reason. A release
+      qualifies only when there is no `FAIL`, no `INFRA_ERROR`, no required gate left unanswered
+      (`UNAVAILABLE`, `DEFERRED`, `PENDING`, `STALE`, …), no environment left unrestored, and no
+      cited evidence file missing. **Required** is every scenario that is not opt-in, plus the
+      opt-in scenarios named for this release with `-Required <ids>` (the soak, the unplug gates —
+      name the ones this release must have answered).
+- [ ] **Attach the record to the RC release**: `pwsh scripts/release-verify.ps1 qualify -RunId <id>
+      -Publish`. This uploads `release-verification.json` to the RC's GitHub Release, which is where
+      the publish gate reads it from. **A developer's act, never an agent's** (AGENTS.md, "Release
+      authority").
+- [ ] **Push the final `vX.Y.Z` tag from the *exact* commit the record names** and continue with §4.
+      Re-cut an RC if that commit moved: a record is bound to one commit and one set of bytes.
+
+> **The lock.** On a final tag, `release-candidate.yml`'s `require-qualification` job runs before
+> anything is created or uploaded. It finds the newest published RC of this base version whose tag
+> points at the tagged commit, downloads its `release-verification.json` and its `.sha256` sidecars,
+> and hands both to `scripts/check-release-qualification.ps1`. Publishing stops when: there is no
+> such RC; the RC carries no record; the record cannot be parsed; its schema is unknown; its
+> `sourceCommit` is not the tagged commit; its RC tag is not the one it was downloaded from; its
+> package SHA-256s do not match the sidecars the RC published; the harness or catalog identity is
+> missing; or the verdicts contain a `FAIL`, an `INFRA_ERROR`, an unanswered required gate, an
+> unrestored environment or absent evidence. The record's own `QUALIFIED` claim is re-derived, never
+> believed. Building still proceeds — only publishing is blocked, with the reason in the job
+> summary. RC tags keep the path they always had: an RC is the artifact a campaign runs *against*
+> and cannot require its own record.
+
+> **`v0.9.0`.** It stays exactly as published — no delete, no retag, no different bytes under the
+> same version. It was tagged before this process existed and before its own checklist had been
+> worked through, so it is not a qualified release and must not be treated as one. Package-manager
+> submissions for it are **stopped**: §8 is not to be worked for `v0.9.0`. The next release is
+> `0.9.1`, cut and qualified through this section from `v0.9.1-rc1` onwards, and WinGet, Chocolatey
+> and Scoop are updated from that one.
+
 ## 4. Publish the GitHub release
 
 For an **official** version tag (`vX.Y.Z` with the `EXOSNAP_UPDATE_PUBLIC_KEY_HEX` repository
@@ -108,9 +165,10 @@ variable and the `EXOSNAP_UPDATE_SIGNING_KEY` secret provisioned), `release-cand
 this deterministically — there is no manual asset upload and no `sign-manifest.yml` re-run dance:
 
 - [ ] **Push the `vX.Y.Z` tag** (this is the *only* manual step, and it triggers everything below),
-      from the same commit as the RC that passed §3. Do **not** hand-create the GitHub Release first
-      — the workflow creates it. The build job hard-fails if the update key is missing on a `v*`
-      tag, so a version tag can never produce an unofficial artifact.
+      from the exact commit named by the qualification record attached in §3a. Do **not** hand-create
+      the GitHub Release first — the workflow creates it. The build job hard-fails if the update key
+      is missing on a `v*` tag, so a version tag can never produce an unofficial artifact, and
+      `require-qualification` refuses to publish a commit no qualified RC record covers.
 - [ ] **Let the pipeline run and confirm it went green.** On the tag push the workflow, in order:
   1. builds + validates the portable ZIP, MSI, and their `.sha256` sidecars (packaging gate);
   2. generates `update-manifest.json`, signs it (detached ed25519 `.sig`), and **verifies in CI**
@@ -442,7 +500,10 @@ Tooling and detailed reference: `docs/dev/soak-and-recovery-drills.md` §§1–2
 
 WinGet and Chocolatey each pin an exact version, download URL, and SHA-256 for the release inside
 tracked files; both are easy to forget because nothing fails locally if they go stale. Update them
-by hand, every release:
+by hand, every release — but only for a release that was **qualified and promoted** through §3a. A
+submission is the one step that cannot be withdrawn from users' machines, so it never runs ahead of
+the qualification record. Submissions for `v0.9.0` are stopped for that reason; `0.9.1` is the
+version the package managers move to.
 
 - [ ] **WinGet.** `packaging/winget/manifests/c/Codexo/ExoSnap/` must contain exactly one version
       directory (`scripts/validate-winget-manifest.ps1` enforces this) — `git mv` the existing

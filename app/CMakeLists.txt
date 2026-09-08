@@ -1402,6 +1402,17 @@ if(EXOSNAP_PWSH)
             "${PROJECT_SOURCE_DIR}/scripts/tests/release-verify.tests.ps1")
     set_tests_properties(live_verify.release_runner PROPERTIES TIMEOUT 300 LABELS "live_verify")
 
+    # The publish lock: the qualification record a release is promoted on, and the
+    # script the release workflow runs before it may publish anything. Registered
+    # here because its whole value is a refusal -- a missing record, a record about
+    # a different commit, a record about different bytes, a FAIL, an INFRA_ERROR, a
+    # required gate nobody answered -- and every one of those is only reachable from
+    # a fixture. Queries no hardware and reads no real release.
+    add_test(NAME live_verify.release_qualification
+        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
+            "${PROJECT_SOURCE_DIR}/scripts/tests/release-qualification.tests.ps1")
+    set_tests_properties(live_verify.release_qualification PROPERTIES TIMEOUT 300 LABELS "live_verify")
+
     # The local verification pipeline's own contracts. These belong in CTest and
     # not only in verify.ps1, because verify.ps1 is the thing under test: a
     # pipeline that reports PASS is worth nothing until it has been shown to

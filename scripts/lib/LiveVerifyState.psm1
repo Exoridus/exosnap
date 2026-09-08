@@ -28,7 +28,12 @@ $script:CheckStates = @(
     'PENDING',          # never attempted in this run
     'RUNNING',          # persisted before execution; a leftover means interruption
     'PASS',
-    'FAIL',
+    'FAIL',             # the PRODUCT is wrong. Reserved for that, and nothing else.
+    'INFRA_ERROR',      # nothing measured the product: the scenario threw, an external
+                        #   tool was missing or unparseable when it was needed, a bounded
+                        #   wait expired, or an environment mechanism reported success and
+                        #   then read back something else. Blocks a release just as hard
+                        #   as a FAIL, without accusing the product of a defect nobody saw.
     'BLOCKED',          # environment cannot satisfy the check (no second monitor, no HDR display)
     'MANUAL_REQUIRED',  # waiting for a human gate
     'SKIPPED',          # deliberately not run, with a recorded reason
@@ -255,7 +260,8 @@ function Complete-LiveVerifyCheck {
         [Parameter(Mandatory)] $Run,
         [Parameter(Mandatory)] [string] $Id,
         [Parameter(Mandatory)]
-        [ValidateSet('PASS', 'FAIL', 'BLOCKED', 'MANUAL_REQUIRED', 'UNVERIFIED', 'DEFERRED', 'UNAVAILABLE')]
+        [ValidateSet('PASS', 'FAIL', 'INFRA_ERROR', 'BLOCKED', 'MANUAL_REQUIRED', 'UNVERIFIED',
+            'DEFERRED', 'UNAVAILABLE')]
         [string] $Result,
         [string] $Message,
         [string[]] $Evidence = @(),
@@ -431,7 +437,7 @@ function Update-LiveVerifyStaleness {
     # which is a statement about the environment. Once the environment moves, that
     # statement stops being current -- plugging in the HDR display must make the HDR
     # scenario runnable again, not leave it permanently written off.
-    $invalidatable = @('PASS', 'FAIL', 'BLOCKED', 'UNVERIFIED', 'UNAVAILABLE')
+    $invalidatable = @('PASS', 'FAIL', 'INFRA_ERROR', 'BLOCKED', 'UNVERIFIED', 'UNAVAILABLE')
     $stale = @()
     foreach ($entry in $Catalog) {
         if ($Run.State.checks.PSObject.Properties.Name -notcontains $entry.Id) { continue }
@@ -658,7 +664,7 @@ function Write-LiveVerifyReport {
     # A restore problem counts as a failure here even when the product verdict was
     # PASS: CI gating on this file must not report a green run that left the machine
     # in a state the next run would silently inherit.
-    $failures = [int]$summary['FAIL'] + $restoreProblems
+    $failures = [int]$summary['FAIL'] + [int]$summary['INFRA_ERROR'] + $restoreProblems
     $skipped = [int]$summary['SKIPPED'] + [int]$summary['BLOCKED'] + [int]$summary['MANUAL_REQUIRED'] +
         [int]$summary['UNVERIFIED'] + [int]$summary['STALE'] + [int]$summary['PENDING'] +
         [int]$summary['DEFERRED'] + [int]$summary['UNAVAILABLE']
@@ -679,6 +685,9 @@ function Write-LiveVerifyReport {
                 }
             }
             'FAIL' { $xml.Add("      <failure message=`"$message`" />") }
+            # Not a skip: nothing was measured, and a release gate reading this file
+            # must see a red test rather than a quietly absent one.
+            'INFRA_ERROR' { $xml.Add("      <failure message=`"INFRA_ERROR: $message`" />") }
             default {
                 if ($restoreBroken) {
                     $xml.Add("      <failure message=`"$($check.state) and environment restore $restore`" />")

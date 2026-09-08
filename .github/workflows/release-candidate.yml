@@ -728,13 +728,128 @@ jobs:
             sleep "$poll_seconds"
           done
 
+  # A final tag may only publish what an RC campaign already qualified.
+  #
+  # Without this job the pipeline treats the tag itself as the approval: a human pushes
+  # vX.Y.Z, the build and packaging gates are green, and the release goes out with no
+  # machine-readable proof that anything was verified on real hardware. That is exactly
+  # how v0.9.0 shipped before its checklist had been worked through. Building may
+  # proceed; publishing may not.
+  #
+  # The record is produced by scripts/release-verify.ps1 (`qualify -Publish` attaches it
+  # to the RC release) and read here by scripts/check-release-qualification.ps1, which
+  # is fail-closed on every axis: no record, unparseable record, a record about a
+  # different commit, a record about different bytes, a FAIL, an INFRA_ERROR, a required
+  # gate nobody answered, a machine left misconfigured, or missing evidence — all of
+  # them stop the job before anything is created or uploaded.
+  #
+  # This job runs for BOTH tag shapes, and does its work only for the final one. A
+  # SKIPPED job skips everything that `needs` it regardless of that job's own `if`, so
+  # gating the whole job on `prerelease == 'false'` would silently skip publish-release
+  # on the RC path — the opposite of what a lock is for. An RC is the thing being
+  # qualified and cannot require its own record.
+  require-qualification:
+    name: Require RC qualification for this commit
+    needs: resolve-identity
+    if: ${{ needs.resolve-identity.outputs.is_official == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      IS_PRERELEASE: ${{ needs.resolve-identity.outputs.prerelease }}
+      BASE_VERSION: ${{ needs.resolve-identity.outputs.base_version }}
+      COMMIT_SHA: ${{ github.sha }}
+    steps:
+      - name: Release candidates carry no qualification requirement
+        if: ${{ needs.resolve-identity.outputs.prerelease == 'true' }}
+        run: |
+          set -euo pipefail
+          echo "Release candidate ${GITHUB_REF_NAME}: publishing it is what makes the campaign possible."
+          {
+            echo "## Release qualification: not required for a release candidate"
+            echo
+            echo "\`${GITHUB_REF_NAME}\` is the artifact a campaign runs against. The qualification"
+            echo "record it produces is what the final tag will be checked against."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        if: ${{ needs.resolve-identity.outputs.prerelease == 'false' }}
+
+      # The newest RC at this exact commit, not merely some RC that was once qualified
+      # at it: cutting a later candidate from the same source and never verifying it
+      # must not be publishable on the strength of an older record.
+      - name: Find the release candidate built from this commit
+        id: rc
+        if: ${{ needs.resolve-identity.outputs.prerelease == 'false' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          block() {
+            {
+              echo "## Release qualification: BLOCKED -- nothing is published"
+              echo
+              echo "- $1"
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::$1"
+            exit 1
+          }
+
+          mapfile -t tags < <(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate \
+            --jq '.[] | select(.draft == false) | .tag_name' \
+            | grep -E "^v${BASE_VERSION}-rc[0-9]+$" || true)
+
+          best=""
+          best_n=-1
+          for tag in ${tags[@]+"${tags[@]}"}; do
+            [ -n "$tag" ] || continue
+            sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq '.sha' 2>/dev/null || echo "")
+            [ "$sha" = "$COMMIT_SHA" ] || continue
+            n="${tag##*-rc}"
+            echo "Release candidate $tag points at $COMMIT_SHA."
+            if [ "$n" -gt "$best_n" ]; then best_n="$n"; best="$tag"; fi
+          done
+
+          if [ -z "$best" ]; then
+            block "No published release candidate points at $COMMIT_SHA. A final release is promoted from a qualified RC of the same commit (docs/release-checklist.md section 3), never tagged directly."
+          fi
+          echo "Qualification must come from $best."
+
+          mkdir -p rc-qualification
+          if ! gh release download "$best" --repo "$GITHUB_REPOSITORY" --dir rc-qualification --clobber \
+                --pattern 'release-verification.json'; then
+            block "Release candidate $best carries no release-verification.json. Run the campaign against it and attach the record with 'release-verify.ps1 qualify -Publish' before promoting."
+          fi
+          if ! gh release download "$best" --repo "$GITHUB_REPOSITORY" --dir rc-qualification --clobber \
+                --pattern '*.sha256'; then
+            block "Release candidate $best publishes no .sha256 sidecars, so the qualified bytes cannot be compared against the published ones."
+          fi
+          echo "rc_tag=$best" >> "$GITHUB_OUTPUT"
+
+      - name: Verify the qualification record
+        if: ${{ needs.resolve-identity.outputs.prerelease == 'false' }}
+        shell: pwsh
+        env:
+          RC_TAG: ${{ steps.rc.outputs.rc_tag }}
+        run: |
+          & ./scripts/check-release-qualification.ps1 `
+            -RecordPath rc-qualification/release-verification.json `
+            -ExpectedCommit $env:COMMIT_SHA `
+            -ExpectedRcTag $env:RC_TAG `
+            -Sha256Directory rc-qualification `
+            -SummaryPath $env:GITHUB_STEP_SUMMARY
+          exit $LASTEXITCODE
+
   # Deterministic release publication (official release builds only — a final or RC
   # version-tag push; identical steps for both, the RC just lands on its own tag and
   # is marked as a GitHub prerelease). Fixes the
   # release/signing race: nothing used to create the GitHub Release, yet sign-manifest
   # assumed it existed and tried to `gh release upload` into it. Order here is:
   #   0. (done by `require-ci`) the ci.yml release gate for this exact commit
-  #      and tag concluded successfully
+  #      and tag concluded successfully, and (done by `require-qualification`, final
+  #      tags only) a qualified release-verification record exists for this exact
+  #      commit and for the bytes the RC published
   #   1. (done by `build`) build + validate artifacts
   #   2. create a DRAFT Release for this exact tag (idempotent; reuses one if present)
   #   3. (done by `sign-manifest`) generate manifest from the artifact SHA-256s, sign,
@@ -748,7 +863,7 @@ jobs:
   # assets were never re-verified would make the live updater test prove nothing.
   publish-release:
     name: Publish GitHub Release
-    needs: [resolve-identity, require-ci, build, sign-manifest]
+    needs: [resolve-identity, require-ci, require-qualification, build, sign-manifest]
     if: ${{ needs.resolve-identity.outputs.is_official == 'true' && vars.EXOSNAP_UPDATE_PUBLIC_KEY_HEX != '' }}
     runs-on: ubuntu-latest
     permissions:

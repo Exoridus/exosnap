@@ -75,6 +75,39 @@ function Get-ReleaseArtifactQtRuntimeVersion {
     return (Get-Item -LiteralPath $qtCore).VersionInfo.FileVersion
 }
 
+function Get-ReleasePackageIdentity {
+    <#
+    .SYNOPSIS
+        One published release package, by the name and the hash the release page
+        carries for it.
+    .DESCRIPTION
+        The bridge between "these bytes behaved correctly" and "these bytes are what
+        the RC published". The exe fingerprint identifies what was driven; this
+        identifies the downloadable the user gets, which is what the publish gate can
+        compare against the release's own `.sha256` sidecars.
+
+        Kept out of the artifact fingerprint on purpose: a package that has been
+        deleted from disk after the campaign started must not turn every verified
+        result STALE.
+    #>
+    param(
+        [Parameter(Mandatory)] [string] $Path,
+        [Parameter(Mandatory)] [ValidateSet('portable', 'installer')] [string] $Kind
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "No release package at '$Path'. Point this at the file downloaded from the RC release."
+    }
+    $item = Get-Item -LiteralPath $Path
+    return [ordered]@{
+        kind     = $Kind
+        fileName = $item.Name
+        path     = $item.FullName
+        bytes    = $item.Length
+        sha256   = (Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
+}
+
 function Get-ReleaseArtifactFingerprint {
     <#
     .SYNOPSIS
@@ -87,8 +120,18 @@ function Get-ReleaseArtifactFingerprint {
         The Qt runtime version is part of the fingerprint, not a note beside it: a
         framework uplift changes what was tested, so a result recorded against one Qt
         runtime has to go STALE against another rather than silently carry over.
+    .PARAMETER SourceCommit
+        The commit the RC was built from, when the artifact cannot say so itself. A
+        published portable ZIP ships no `artifact-manifest.json`, so a campaign against
+        downloaded release assets has no provenance to read; a qualification record
+        without a source commit cannot promote anything, which makes naming it here
+        the difference between a verifiable release and an unverifiable one.
     #>
-    param([Parameter(Mandatory)] [string] $Path, [string] $ReleaseTag)
+    param(
+        [Parameter(Mandatory)] [string] $Path,
+        [string] $ReleaseTag,
+        [string] $SourceCommit
+    )
 
     if (-not (Test-Path -LiteralPath $Path)) {
         throw "No artifact at '$Path'. Release gates bind to an explicit binary; there is no default."
@@ -103,7 +146,8 @@ function Get-ReleaseArtifactFingerprint {
         productVersion   = $item.VersionInfo.ProductVersion
         fileVersion      = $item.VersionInfo.FileVersion
         qtRuntimeVersion = (Get-ReleaseArtifactQtRuntimeVersion -ExeItem $item)
-        sourceCommit     = (Get-ReleaseArtifactSourceCommit -ExeItem $item)
+        sourceCommit     = if (-not [string]::IsNullOrWhiteSpace($SourceCommit)) { $SourceCommit.Trim() }
+        else { (Get-ReleaseArtifactSourceCommit -ExeItem $item) }
         builtUtc         = $item.LastWriteTimeUtc.ToString('o')
         # Whether this artifact sits in an installed tree decides which scenarios can
         # run at all: the updater and handoff paths resolve applicationDirPath()-
