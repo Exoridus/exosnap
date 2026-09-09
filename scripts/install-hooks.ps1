@@ -19,6 +19,6 @@ git -C $repoRoot config pull.ff only
 if ($LASTEXITCODE -ne 0) { throw "git config failed." }
 
 Write-Host "Git hooks path set to .githooks/"
-Write-Host "  pre-commit -> branch guard + scripts/check-format.ps1 -Staged -Fix  (quiet staged C++ autoformat)"
-Write-Host "  pre-push   -> scripts/check-quality.ps1                             (quiet branch-update quality gate)"
+Write-Host "  pre-commit -> branch guard + scripts/verify.ps1 -Fast -Staged  (scoped to the staged change)"
+Write-Host "  pre-push   -> scripts/verify.ps1 -Full                         (every local blocking gate)"
 Write-Host "pull.ff set to 'only' (a pull needing a merge fails instead of merging)"

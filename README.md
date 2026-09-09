@@ -149,24 +149,27 @@ scripts\run-tests.ps1 -Filter <binary_name>.
 scripts\check-format.ps1
 ```
 
-Full gate before merge:
+Before committing, and again before pushing:
 
 ```powershell
-scripts\check-format.ps1
-git diff --check
-cmake --build --preset windows-x64-debug
-scripts\run-tests.ps1
-scripts\check-quality.ps1 -StaticOnly
-cmake --build --preset windows-x64-release-exosnap
+scripts\verify.ps1 -Fast    # scoped to what changed; what the pre-commit hook runs
+scripts\verify.ps1 -Full    # every local blocking gate; what the pre-push hook runs
+cmake --build --preset windows-x64-release-exosnap   # once, before merge
 ```
+
+`scripts\verify.ps1` is the only entry point for the local gate. It owns the order and the
+dependencies -- tests never run against a build that failed, and a check whose tool is missing
+reports `TOOL_MISSING` rather than a pass -- and every step delegates to the script that already
+owned it, so there is one definition of each gate. `scripts\install-hooks.ps1` wires it into git.
 
 `scripts\run-tests.ps1` sets up the environment every test binary needs (throwaway
 `EXOSNAP_CONFIG_DIR`, offscreen Qt platform, Qt on `PATH`) and prints a compact summary plus any
 failing gtest cases; each CTest entry is one test **binary**, and `-Filter`/`-R` match binary
 names (e.g. `recorder_core.`), not individual gtest cases. Optional faster/cached builds are
 available via Ninja and sccache (`winget install Ninja-build.Ninja` / `Mozilla.sccache`). C++ code
-is formatted with `clang-format` and checked with `clang-tidy`; run `scripts\pre-commit.ps1` before
-committing. [`AGENTS.md`](AGENTS.md) carries the working rules;
+is formatted with `clang-format` and checked with `clang-tidy` and `cppcheck`
+(`winget install Cppcheck.Cppcheck`), all of them through `verify.ps1`.
+[`AGENTS.md`](AGENTS.md) carries the working rules;
 [`docs/dev/harness-and-tracing.md`](docs/dev/harness-and-tracing.md) documents the diagnostic
 harness modes and the AddressSanitizer build.
 

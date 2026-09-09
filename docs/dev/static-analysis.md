@@ -55,3 +55,53 @@ which is why the two unhandled enumerators above are visible at all.
 `misc-unused-alias-decls` and `readability-redundant-declaration` are enabled but
 excluded from `WarningsAsErrors`. All five produce Qt meta-object and moc
 false-positives. Promote one only after a human triage pass over its findings.
+
+`cppcheck --enable=unusedFunction` is advisory for the same reason: its findings
+are dominated by Qt slots reached through `QMetaObject` and by callbacks Windows
+registers. It also needs a whole-program pass that cannot share the per-check
+analysis the blocking gate does.
+
+Both advisory passes run nightly in `.github/workflows/advisory-checks.yml` and
+nowhere else. Neither can fail anything, and a finding list that moves on the
+scale of weeks does not earn a place in a pre-commit hook.
+
+## What runs where, and what it costs
+
+| Pass | Blocking | Where |
+|---|---|---|
+| `run-clang-tidy-blocking.ps1` (the five checks above) | yes | `verify.ps1`, CI `build-test-debug` |
+| `cppcheck --enable=warning,performance,portability` | yes | `verify.ps1` |
+| broad clang-tidy (`.clang-tidy` minus the analyser) | no | `advisory-checks.yml`, nightly |
+| `cppcheck --enable=unusedFunction` | no | `advisory-checks.yml`, nightly |
+
+Two properties of the blocking passes are worth knowing before changing them.
+
+**A missing tool is not a pass.** `check-quality.ps1` exits `3` when a tool it
+was asked to run is not installed, `verify.ps1` reports that as `TOOL_MISSING`,
+and `-Full` -- the contract that claims every local gate ran -- fails on it.
+`-Fast` reports the gap and continues, so a machine that is still being set up
+stays usable. Install what is missing: `winget install Cppcheck.Cppcheck`.
+
+**Both passes replay results.** clang-tidy caches per translation unit, keyed on
+that unit's whole recorded input set; cppcheck uses `--cppcheck-build-dir`, keyed
+on its own version. Both caches live under `%LOCALAPPDATA%\ExoSnap\tool-cache`,
+outside the repository and outside every build tree, because a fresh configure or
+a `git clean` is exactly the moment a replay would have paid the most. Every
+worktree of the repository shares them. Delete the directory to force a cold run.
+
+`-Full` runs clang-tidy over the whole tree, `-Fast` over the translation units
+the change reaches. The scoped pass is a subset, so `-Full` does not run both.
+
+## Local machine settings this repository does not set
+
+**Raise the sccache cache size.** sccache defaults to a 10 GB cap. Several
+worktrees of this repository building Qt-heavy translation units evict each other
+continuously at that size, so the cache stops paying for itself. This is a
+machine setting, not a repository one -- nothing here changes it for you:
+
+```powershell
+[Environment]::SetEnvironmentVariable('SCCACHE_CACHE_SIZE', '50G', 'User')
+sccache --stop-server    # the running server keeps the old cap until restarted
+```
+
+`sccache --show-stats` reports the cap in effect and the hit rate to judge it by.

@@ -109,38 +109,42 @@ jobs:
 
       # clang-tidy advisory pass: misc-include-cleaner, misc-unused-*, readability-redundant-declaration.
       # These checks are in .clang-tidy Checks but excluded from WarningsAsErrors, so they
-      # produce warnings (exit 0) not errors. The step is informational.
+      # produce warnings (exit 0) not errors, and the finding count below is the whole point
+      # of the step.
+      #
+      # scripts/check-quality.ps1, not a clang-tidy invocation written out here. This step
+      # used to pass every tracked source on one command line: ~900 paths is roughly 36 KB
+      # against the 32767-character CreateProcess limit, so the process never started, and
+      # with continue-on-error the run went green without the notice line ever appearing.
+      # The script batches the file list to fit and runs the batches in parallel, and it is
+      # the same invocation local verification uses, so the two cannot drift apart.
+      #
+      # NO continue-on-error. It is the reason the launch failure went unnoticed for as long
+      # as it did. The script separates the two outcomes for us: findings are reported and
+      # exit 0, while "clang-tidy is not installed" and "this tree has no compile database"
+      # are non-zero -- which is exactly the half that must go red.
       - name: clang-tidy advisory checks
-        continue-on-error: true
         shell: pwsh
         run: |
-          $clangTidy = Get-ChildItem -LiteralPath "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2022" `
-            -Recurse -Filter 'clang-tidy.exe' -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -match '\\Llvm\\x64\\bin\\' } |
-            Select-Object -ExpandProperty FullName -First 1
-          if (-not $clangTidy) {
-            Write-Host "clang-tidy not found in VS LLVM; falling back to PATH"
-            $clangTidy = (Get-Command clang-tidy -ErrorAction SilentlyContinue)?.Source
+          $report = Join-Path $env:RUNNER_TEMP 'clang-tidy-advisory.txt'
+          pwsh -NoProfile -NonInteractive -File scripts/check-quality.ps1 `
+            -Only clang-tidy -BuildDir build/windows-x64-ninja-debug -ReportPath $report
+          if ($LASTEXITCODE -ne 0) {
+            throw "check-quality.ps1 could not run clang-tidy (exit $LASTEXITCODE); the advisory pass produced no finding count."
           }
-          if (-not $clangTidy) {
-            Write-Host "::warning::clang-tidy not available — advisory unused-code check skipped"
-            exit 0
-          }
-          $srcFiles = @(git ls-files -- 'libs/' 'app/' 'tests/' | Where-Object { $_ -match '\.(cpp|h)$' })
-          if (-not $srcFiles) { Write-Host "No tracked C++ source files found."; exit 0 }
-          Write-Host "Running advisory clang-tidy on $($srcFiles.Count) source files..."
-          # Run with -p pointing at the Ninja debug compile_commands.json.
-          # WarningsAsErrors in .clang-tidy excludes misc-* and readability-redundant-declaration
-          # so only the advisory checks produce warnings (not errors) — exit code stays 0.
-          # -clang-analyzer-*: .clang-tidy enables a few path-sensitive analyser checks for the
-          # blocking gate in build-test. They are irrelevant to this unused-code pass and would
-          # multiply the cost of an already long serial run, so they are switched back off here.
-          & $clangTidy -p build/windows-x64-ninja-debug --checks=-clang-analyzer-* @srcFiles 2>&1 |
-            Tee-Object -Variable tidyOutput | Out-String | Write-Host
-          $advisoryCounts = @($tidyOutput -join "`n" | Select-String -Pattern '(misc-include-cleaner|misc-unused-using-decls|misc-unused-parameters|misc-unused-alias-decls|readability-redundant-declaration)' -AllMatches).Matches.Count
-          Write-Host "::notice::clang-tidy advisory findings: $advisoryCounts (misc-include-cleaner / misc-unused-* / readability-redundant-declaration)"
+          # Counted from the report file rather than the console: the script prints only a
+          # tail, and a count taken from a truncated log is not the count it claims to be.
+          $advisory = 'misc-include-cleaner|misc-unused-using-decls|misc-unused-parameters|misc-unused-alias-decls|readability-redundant-declaration'
+          $findings = @(Get-Content -LiteralPath $report -ErrorAction SilentlyContinue |
+            Where-Object { $_ -match ": (warning|error): " -and $_ -match $advisory })
+          Write-Host "::notice::clang-tidy advisory findings: $($findings.Count) (misc-include-cleaner / misc-unused-* / readability-redundant-declaration)"
+          $findings | Select-Object -First 40 | ForEach-Object { Write-Host "  $_" }
+          if ($findings.Count -gt 40) { Write-Host "  ... ($($findings.Count - 40) more; the full pass is in $report)" }
 
-      # cppcheck --enable=unusedFunction: whole-program, no --error-exitcode.
+      # cppcheck --enable=unusedFunction: whole-program, no --error-exitcode. The only
+      # place this pass runs. It needs a whole-program analysis that cannot share the
+      # per-check one the blocking gate does, and it cannot fail anything, so paying for
+      # it on every local commit and push bought nothing a nightly does not.
       - name: cppcheck unusedFunction (advisory)
         continue-on-error: true
         shell: pwsh

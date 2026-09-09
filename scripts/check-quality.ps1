@@ -20,7 +20,11 @@ param(
     # in CI), and a whole-tree run measured over ten minutes here even at one job
     # per core, which is not a price a pre-commit or pre-push hook can pay. The
     # BLOCKING check set is a different script and stays whole-tree.
-    [string]$Base = ''
+    [string]$Base = '',
+    # Where to write the complete clang-tidy output. The console only carries the
+    # tail, so a caller that counts findings over the whole pass -- the nightly
+    # advisory job does -- needs the untruncated text as a file.
+    [string]$ReportPath = ''
 )
 
 if ($Only -ne 'all') { $StaticOnly = $true }
@@ -28,6 +32,14 @@ if ($Only -ne 'all') { $StaticOnly = $true }
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+Import-Module (Join-Path $PSScriptRoot 'lib/VerifyPipeline.psm1') -Force -DisableNameChecking
+
+# Exit code for "a tool this run needed is not installed". Distinct from 0 and
+# from 1 so a caller can tell an unrun gate from a passed one and from a failed
+# one: reporting success for a check that never started is the exact bug this
+# script's clang-tidy path already shipped once.
+$ToolMissingExitCode = 3
+$script:MissingTools = [System.Collections.Generic.List[string]]::new()
 
 function Write-CommandFailure {
     param(
@@ -223,11 +235,11 @@ if ($Only -eq 'cppcheck') {
 elseif ($BuildDir -and -not (Test-Path -Path $compDb -PathType Leaf)) {
     throw "clang-tidy: '$BuildDir' has no compile_commands.json. Configure it with a Ninja preset before asking for this check."
 }
+elseif (-not $clangTidy) {
+    Write-Host "clang-tidy: NOT_RUN (clang-tidy.exe not found on PATH, VS LLVM, or LLVM install)"
+    $script:MissingTools.Add('clang-tidy')
+}
 elseif ($compDb -and (Test-Path -Path $compDb -PathType Leaf)) {
-    if (-not $clangTidy) {
-        throw "clang-tidy.exe not found on PATH, VS LLVM, or LLVM install."
-    }
-
     if ($srcFiles) {
         # -clang-analyzer-*: .clang-tidy enables a few path-sensitive analyser
         # checks for the blocking gate, and the analyser turns this pass into a
@@ -240,11 +252,9 @@ elseif ($compDb -and (Test-Path -Path $compDb -PathType Leaf)) {
         # over this repository runs for the better part of an hour, nearly all of
         # it re-parsing Qt headers. Batches are independent, so they run
         # concurrently the way run-clang-tidy-blocking.ps1 runs its units.
-        $batchSize = 25
-        $batches = [System.Collections.Generic.List[object]]::new()
-        for ($i = 0; $i -lt $srcFiles.Count; $i += $batchSize) {
-            $batches.Add(@($srcFiles[$i..([Math]::Min($i + $batchSize - 1, $srcFiles.Count - 1))]))
-        }
+        $compDbAbsolute = (Resolve-Path -LiteralPath (Join-Path $repoRoot $compDbTree)).Path
+        $fixedArguments = @('-p', $compDbAbsolute, '--checks=-clang-analyzer-*')
+        $batches = Split-VerifyCommandLineBatch -Item $srcFiles -FixedArgument $fixedArguments
 
         $jobs = [Math]::Max(1, [Environment]::ProcessorCount)
         Write-Host ("clang-tidy... {0} file(s) ({1}) in {2} batch(es), {3} parallel job(s)" -f `
@@ -254,15 +264,24 @@ elseif ($compDb -and (Test-Path -Path $compDb -PathType Leaf)) {
         # An absolute -p and an absolute working directory: the parallel runspaces
         # do not inherit this script's location, and a relative build directory
         # resolves against whatever the caller's happened to be.
-        $compDbAbsolute = (Resolve-Path -LiteralPath (Join-Path $repoRoot $compDbTree)).Path
         $failures = $batches | ForEach-Object -ThrottleLimit $jobs -Parallel {
-            $arguments = @('-p', $using:compDbAbsolute, '--checks=-clang-analyzer-*') + $_
+            $arguments = @($using:fixedArguments) + $_
             Set-Location $using:repoRoot
             $output = & $using:clangTidy @arguments 2>&1
             if ($LASTEXITCODE -ne 0) { ($output | Out-String) }
         }
 
         Write-Host (" [{0}s]" -f [int]((Get-Date) - $started).TotalSeconds)
+        if ($ReportPath) {
+            $reportDirectory = Split-Path -Parent $ReportPath
+            if ($reportDirectory -and -not (Test-Path -LiteralPath $reportDirectory -PathType Container)) {
+                New-Item -ItemType Directory -Path $reportDirectory -Force | Out-Null
+            }
+            # Written even when empty: a caller counting findings has to be able
+            # to tell "zero findings" from "the file the count came from is not
+            # there", which is the same distinction this whole script is about.
+            Set-Content -LiteralPath $ReportPath -Value ($failures -join "`n") -Encoding utf8
+        }
         if ($failures) {
             # Reported, never thrown. The broad set in .clang-tidy is advisory by
             # design -- advisory-checks.yml owns its CI form -- and it currently
@@ -296,7 +315,7 @@ if ($Only -eq 'clang-tidy') {
     if ($VerboseOutput) { Write-Host "cppcheck: SKIP (-Only clang-tidy)" }
 }
 elseif ($cppcheck) {
-    Invoke-QuietNative -Name 'cppcheck' -FilePath $cppcheck -Arguments @(
+    $cppcheckArguments = @(
         '--enable=warning,performance,portability',
         '--std=c++20',
         '--error-exitcode=1',
@@ -315,66 +334,38 @@ elseif ($cppcheck) {
         'app'
     )
 
-    # -----------------------------------------------------------------------
-    # Advisory: cppcheck --enable=unusedFunction (whole-program, non-blocking)
-    #
-    # unusedFunction requires a whole-program pass and is NOT combined with the
-    # per-check run above. It surfaces functions never called from anywhere in
-    # the analyzed translation units. High false-positive risk:
-    #   - Qt slots invoked via QMetaObject::invokeMethod / connect() string form
-    #   - Public API functions only called from tests
-    #   - Callbacks registered via Windows APIs
-    # Review candidates manually before removing. --error-exitcode is NOT set so
-    # this pass never fails the script.
-    # -----------------------------------------------------------------------
-    Write-Host ""
-    Write-Host "cppcheck unusedFunction (ADVISORY — non-blocking)..." -NoNewline
-    $unusedArgs = @(
-        '--enable=unusedFunction',
-        '--std=c++20',
-        '--inline-suppr',
-        '--suppressions-list=.cppcheck-suppress',
-        '--library=windows',
-        '--library=qt',
-        '-q',
-        '-I', 'libs/engine/include',
-        '-I', 'libs/capability/include',
-        '-i', 'libs/update/third_party',
-        'libs',
-        'app'
-    )
-    $unusedLogPath = Join-Path ([System.IO.Path]::GetTempPath()) "exosnap-cppcheck-unused-$PID.log"
-    $unusedErrPath = "$unusedLogPath.err"
-    try {
-        $unusedProc = Start-Process -FilePath $cppcheck -ArgumentList $unusedArgs -WorkingDirectory $repoRoot `
-            -NoNewWindow -PassThru -RedirectStandardOutput $unusedLogPath -RedirectStandardError $unusedErrPath
-        $unusedProc.WaitForExit()
+    # --cppcheck-build-dir lets cppcheck reuse the per-file analysis of every
+    # translation unit whose input has not changed, which turns this from a fixed
+    # several-minute cost on every commit into a cost proportional to the change.
+    # cppcheck keys its stored results on the file, not on the settings that
+    # produced them, so the directory is keyed on both the version and the
+    # argument list here: an upgrade or a changed check set analyses afresh
+    # instead of replaying verdicts that were reached under different rules.
+    $cppcheckVersion = (& $cppcheck --version 2>&1 | Out-String).Trim()
+    $cppcheckCacheDir = Get-VerifyToolCacheDirectory -Tool 'cppcheck' `
+        -Fingerprint @($cppcheckVersion, ($cppcheckArguments -join ' '))
+    New-Item -ItemType Directory -Force -Path $cppcheckCacheDir | Out-Null
 
-        # cppcheck emits findings to stderr; collect and count them.
-        $unusedFindings = @()
-        if (Test-Path -LiteralPath $unusedErrPath -PathType Leaf) {
-            $unusedFindings = @(Get-Content -LiteralPath $unusedErrPath -ErrorAction SilentlyContinue |
-                Where-Object { $_ -match '\(unusedFunction\)' })
-        }
-        $unusedCount = $unusedFindings.Count
-        Write-Host " $unusedCount candidate(s)"
-        if ($unusedCount -gt 0) {
-            Write-Host "  [ADVISORY] Review before removing — Qt slots/callbacks are expected false-positives."
-            # Cap console output; full details available by re-running with --enable=unusedFunction manually.
-            $unusedFindings | Select-Object -First 20 | ForEach-Object { Write-Host "    $_" }
-            if ($unusedCount -gt 20) { Write-Host "    ... ($($unusedCount - 20) more; run cppcheck --enable=unusedFunction manually for the full list)" }
-        }
-    }
-    catch {
-        Write-Host ""
-        Write-Host "  cppcheck unusedFunction: advisory pass could not run — $_"
-    }
-    finally {
-        Remove-Item -LiteralPath $unusedLogPath, $unusedErrPath -Force -ErrorAction SilentlyContinue
-    }
+    Invoke-QuietNative -Name 'cppcheck' -FilePath $cppcheck `
+        -Arguments (@("--cppcheck-build-dir=$cppcheckCacheDir") + $cppcheckArguments)
+
+    # cppcheck --enable=unusedFunction is deliberately NOT run here. It needs a
+    # whole-program pass that cannot share the per-check analysis above, it cannot
+    # fail anything (its findings are dominated by Qt slots reached through
+    # QMetaObject and by callbacks Windows registers), and it cost more than half
+    # of this gate's runtime on every commit and every push.
+    # .github/workflows/advisory-checks.yml runs it nightly, which is the cadence
+    # a finding list that moves on the scale of weeks actually warrants.
 }
 else {
-    Write-Host "cppcheck: SKIP (not installed; install with: winget install Cppcheck.Cppcheck)"
+    Write-Host "cppcheck: NOT_RUN (not installed; install with: winget install Cppcheck.Cppcheck)"
+    $script:MissingTools.Add('cppcheck')
+}
+
+if ($script:MissingTools.Count -gt 0) {
+    Write-Host ""
+    Write-Host ("Static quality check INCOMPLETE: {0} not installed." -f ($script:MissingTools -join ', '))
+    exit $ToolMissingExitCode
 }
 
 if ($StaticOnly) {

@@ -22,6 +22,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $scriptRoot = Split-Path -Parent $PSScriptRoot
+$repoRoot = Split-Path -Parent $scriptRoot
 Import-Module (Join-Path $scriptRoot 'lib/VerifyPipeline.psm1') -Force -DisableNameChecking
 
 $script:Passed = 0
@@ -219,8 +220,22 @@ Test-Case 'Full contains every check Fast can contain' {
     foreach ($name in $fastNames) {
         Assert-True ($fullNames -contains $name) "-Full is missing the check '$name' that -Fast can run"
     }
-    Assert-True ($fullNames -contains 'clang-tidy-blocking') '-Full must carry the blocking clang-tidy set'
-    Assert-True (-not ($fastNames -contains 'clang-tidy-blocking')) '-Fast must not claim the blocking clang-tidy set'
+}
+
+Test-Case 'the blocking clang-tidy set is planned once, whole-tree in Full' {
+    # The change-scoped pass analyses a subset of what the whole-tree pass does,
+    # so planning both in -Full re-derives a verdict the wider one already covers.
+    foreach ($mode in @('Fast', 'Full')) {
+        $plan = New-VerifyPlan -Mode $mode -Scope (Get-VerifyScope -ChangedFiles @('libs/engine/src/muxer.cpp'))
+        $tidy = @($plan.Checks | Where-Object { $_.Kind -like 'clang-tidy*' })
+        Assert-Equal 1 $tidy.Count "$mode must plan exactly one clang-tidy pass"
+    }
+    $fast = New-VerifyPlan -Mode 'Fast' -Scope (Get-VerifyScope -ChangedFiles @('libs/engine/src/muxer.cpp'))
+    $full = New-VerifyPlan -Mode 'Full' -Scope (Get-VerifyScope -ChangedFiles @('libs/engine/src/muxer.cpp'))
+    Assert-Equal 'changed' (($fast.Checks | Where-Object { $_.Name -eq 'clang-tidy' }).Evidence.scope) `
+        '-Fast analyses what the change reaches'
+    Assert-Equal 'whole-tree' (($full.Checks | Where-Object { $_.Name -eq 'clang-tidy' }).Evidence.scope) `
+        '-Full must analyse every translation unit, not the change-scoped subset'
 }
 
 Test-Case 'Full ignores the change set entirely' {
@@ -344,7 +359,6 @@ Test-Case 'clang-tidy depends on the build too' {
     $plan = New-VerifyPlan -Mode 'Full' -Scope (Get-VerifyScope -ChangedFiles @())
     $run = Invoke-VerifyPlan -Plan $plan -Executor (New-FakeExecutor -FailingChecks @('build'))
     Assert-Equal $S.SkipDependency (Get-CheckStatus $run 'clang-tidy').status 'clang-tidy must not run behind a failed build'
-    Assert-Equal $S.SkipDependency (Get-CheckStatus $run 'clang-tidy-blocking').status 'the blocking set must not run behind a failed build'
 }
 
 Test-Case 'no plan ever lets tests run without a build in scope' {
@@ -500,6 +514,145 @@ Test-Case 'the JSON summary records the run truthfully' {
     finally {
         Remove-Item -LiteralPath (Split-Path -Parent $path) -Recurse -Force -ErrorAction SilentlyContinue
     }
+}
+
+Write-Host ''
+Write-Host 'A tool that is not installed is not a pass'
+
+function New-ToolMissingExecutor {
+    # Not named $Check: PowerShell variable names are case-insensitive, so it
+    # would be the scriptblock's own $check parameter inside the closure.
+    param([string] $UninstalledFor)
+    return {
+        param($check, $context)
+        if ($check.Name -eq $UninstalledFor) { return @{ Status = $S.ToolMissing; Detail = 'not installed' } }
+        return @{ Status = $S.Pass }
+    }.GetNewClosure()
+}
+
+Test-Case 'TOOL_MISSING is its own status, distinct from SKIP and from PASS' {
+    Assert-True ($S.ToolMissing -ne $S.Skip) 'an absent tool is not the same as out of scope'
+    Assert-True ($S.ToolMissing -ne $S.Pass) 'an absent tool is not a pass'
+    Assert-True ($S.ToolMissing -ne $S.Fail) 'an absent tool is not a finding'
+}
+
+Test-Case 'a missing tool never leaves the check reported as PASS' {
+    $plan = New-VerifyPlan -Mode 'Fast' -Scope (Get-VerifyScope -ChangedFiles @('libs/engine/src/muxer.cpp'))
+    $run = Invoke-VerifyPlan -Plan $plan -Executor (New-ToolMissingExecutor -UninstalledFor 'cppcheck')
+    Assert-Equal $S.ToolMissing (Get-CheckStatus $run 'cppcheck').status 'cppcheck must not claim PASS when it is absent'
+    Assert-True ($run.toolMissing -contains 'cppcheck') 'the run must name the tool it could not run'
+}
+
+Test-Case 'a missing tool fails -Full, which claims completeness' {
+    $plan = New-VerifyPlan -Mode 'Full' -Scope (Get-VerifyScope -ChangedFiles @())
+    $run = Invoke-VerifyPlan -Plan $plan -Executor (New-ToolMissingExecutor -UninstalledFor 'cppcheck')
+    Assert-Equal 'failed' $run.result '-Full may not report success over a gate that never started'
+}
+
+Test-Case 'a missing tool does not stop the checks after it' {
+    # An absent tool says nothing about the checks behind it, so unlike a failure
+    # it must not trigger the fail-fast stop.
+    $log = [System.Collections.Generic.List[string]]::new()
+    $plan = New-VerifyPlan -Mode 'Full' -Scope (Get-VerifyScope -ChangedFiles @())
+    $executor = {
+        param($check, $context)
+        $log.Add($check.Name)
+        if ($check.Name -eq 'cppcheck') { return @{ Status = $S.ToolMissing; Detail = 'not installed' } }
+        return @{ Status = $S.Pass }
+    }.GetNewClosure()
+    $run = Invoke-VerifyPlan -Plan $plan -Executor $executor
+    Assert-True ($log -contains 'clang-tidy') 'clang-tidy must still run when cppcheck is not installed'
+    Assert-Equal $S.Pass (Get-CheckStatus $run 'clang-tidy').status 'a later check keeps its own verdict'
+}
+
+Test-Case 'the saved summary records which tool was missing' {
+    $path = Join-Path ([IO.Path]::GetTempPath()) "verify-tests/$([guid]::NewGuid().ToString('n'))/latest.json"
+    try {
+        $plan = New-VerifyPlan -Mode 'Full' -Scope (Get-VerifyScope -ChangedFiles @())
+        $run = Invoke-VerifyPlan -Plan $plan -Executor (New-ToolMissingExecutor -UninstalledFor 'cppcheck')
+        Save-VerifyResult -Run $run -Path $path -Head 'abc' | Out-Null
+        $document = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+        Assert-Equal 'failed' $document.result 'the document must agree with the run'
+        Assert-True (@($document.toolMissing) -contains 'cppcheck') 'the document must name the tool'
+    }
+    finally {
+        Remove-Item -LiteralPath (Split-Path -Parent $path) -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Write-Host ''
+Write-Host 'Command lines that fit, caches that are derived'
+
+Test-Case 'no batch can exceed the Windows command-line limit' {
+    # 900 paths on one command line is roughly 36 KB against a 32767-character
+    # ceiling: the process never starts, and a step that tolerates failure then
+    # reports a clean pass over an analysis that did not happen.
+    $files = 1..900 | ForEach-Object { "libs/engine/src/some_reasonably_long_translation_unit_name_$_.cpp" }
+    $fixed = @('-p', 'C:/Users/someone/Development/exosnap/build/windows-x64-ninja-debug', '--checks=-clang-analyzer-*')
+    $batches = Split-VerifyCommandLineBatch -Item $files -FixedArgument $fixed
+    Assert-True ($batches.Count -gt 1) '900 files must not end up on one command line'
+    foreach ($batch in $batches) {
+        $length = (@($fixed) + @($batch) | ForEach-Object { $_.Length + 3 } | Measure-Object -Sum).Sum
+        Assert-True ($length -lt 32767) "a batch of $($batch.Count) file(s) is $length characters, past the limit"
+    }
+    $total = @($batches | ForEach-Object { $_ }).Count
+    Assert-Equal $files.Count $total 'batching must not drop a file'
+}
+
+Test-Case 'a single argument longer than the budget still yields one batch' {
+    $batches = Split-VerifyCommandLineBatch -Item @('x' * 200) -CommandLineBudget 50
+    Assert-Equal 1 $batches.Count 'an over-budget item is still analysed, never silently dropped'
+}
+
+Test-Case 'an empty list produces no invocation at all' {
+    Assert-Equal 0 (Split-VerifyCommandLineBatch -Item @()).Count 'nothing to analyse means no command line'
+}
+
+Test-Case 'the tool cache is derived, and lives outside the repository and the build trees' {
+    $directory = Get-VerifyToolCacheDirectory -Tool 'clang-tidy' -Fingerprint @('14.44', 'x64')
+    $normalised = $directory.Replace('\', '/')
+    Assert-True ($normalised -notlike "$($repoRoot.Replace('\', '/'))*") 'the cache must not live inside the repository'
+    Assert-True ($normalised -notmatch '(^|/)build(/|$)') 'the cache must not live inside a build tree'
+    Assert-True ($normalised -like '*/clang-tidy/*') 'the cache must be namespaced by tool'
+}
+
+Test-Case 'a different toolchain gets a different cache directory' {
+    $root = Join-Path ([IO.Path]::GetTempPath()) 'verify-tests-cache'
+    $one = Get-VerifyToolCacheDirectory -Tool 'clang-tidy' -Fingerprint @('14.44') -Root $root
+    $same = Get-VerifyToolCacheDirectory -Tool 'clang-tidy' -Fingerprint @('14.44') -Root $root
+    $other = Get-VerifyToolCacheDirectory -Tool 'clang-tidy' -Fingerprint @('14.45') -Root $root
+    Assert-Equal $one $same 'the same toolchain must address the same cache'
+    Assert-True ($one -ne $other) 'a compiler change must not be served results from the previous one'
+}
+
+Test-Case 'an empty fingerprint is recorded as unqualified rather than shared' {
+    $root = Join-Path ([IO.Path]::GetTempPath()) 'verify-tests-cache'
+    $blank = Get-VerifyToolCacheDirectory -Tool 'clang-tidy' -Fingerprint @() -Root $root
+    $named = Get-VerifyToolCacheDirectory -Tool 'clang-tidy' -Fingerprint @('14.44') -Root $root
+    Assert-True ($blank -ne $named) 'an unknown toolchain must not read a known one'
+}
+
+Write-Host ''
+Write-Host 'Each script suite runs in exactly one place'
+
+Test-Case 'the CTest-registered suites are read from the file that registers them' {
+    $registered = @(Get-VerifyCTestScriptSuite -RepoRoot $repoRoot)
+    Assert-True ($registered.Count -gt 0) 'app/CMakeLists.txt registers script suites; none were found'
+    foreach ($name in $registered) {
+        Assert-True (Test-Path -LiteralPath (Join-Path $scriptRoot "tests/$name") -PathType Leaf) `
+            "app/CMakeLists.txt registers '$name', which does not exist"
+    }
+    Assert-True ($registered -contains 'verify-pipeline.tests.ps1') 'this suite is registered and must be found'
+}
+
+Test-Case 'an unreadable registration site runs every suite rather than fewer' {
+    $empty = Join-Path ([IO.Path]::GetTempPath()) "verify-tests/$([guid]::NewGuid().ToString('n'))"
+    New-Item -ItemType Directory -Path $empty -Force | Out-Null
+    try {
+        Assert-Equal 0 (@(Get-VerifyCTestScriptSuite -RepoRoot $empty)).Count `
+            'no registration site must mean "CTest covers nothing", never "CTest covers everything"'
+    }
+    finally { Remove-Item -LiteralPath $empty -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
 Write-Host ''
