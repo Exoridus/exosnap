@@ -180,6 +180,21 @@ function Initialize-CompilerEnvironment {
     Enter-MsvcEnvironment | Out-Null
 }
 
+function Get-ClangTidyCacheDirectory {
+    <#
+    .SYNOPSIS
+        The per-toolchain clang-tidy result cache for this preset.
+    .DESCRIPTION
+        Call only after Initialize-CompilerEnvironment: the fingerprint reads the
+        toolset variables the developer environment exports, and an unqualified
+        fingerprint would put two toolchains in one directory. The cached entries
+        are keyed on their own hashed inputs as well, so the worst a coarse
+        fingerprint can cost is a miss.
+    #>
+    return Get-VerifyToolCacheDirectory -Tool 'clang-tidy' -Fingerprint @(
+        $Preset, $env:VCToolsVersion, $env:VSCMD_ARG_HOST_ARCH, $env:VSCMD_ARG_TGT_ARCH)
+}
+
 function Invoke-Step {
     <#
     .SYNOPSIS
@@ -189,7 +204,11 @@ function Invoke-Step {
         [Parameter(Mandatory)] [string] $Name,
         [Parameter(Mandatory)] [string] $FilePath,
         [string[]] $Arguments = @(),
-        [string] $WorkingDirectory = $repoRoot
+        [string] $WorkingDirectory = $repoRoot,
+        # Exit code the step uses to say "the tool I delegate to is not
+        # installed". Reported as TOOL_MISSING rather than FAIL, and without the
+        # failure tail: there is no diagnostic output to show, only a fact.
+        [int] $ToolMissingExitCode = 0
     )
 
     if (-not (Test-Path -LiteralPath $logRoot -PathType Container)) {
@@ -212,6 +231,16 @@ function Invoke-Step {
     if ($null -eq $code) { $code = 0 }
     if ($code -eq 0) {
         return @{ Status = $status.Pass; Evidence = @{ log = $logPath } }
+    }
+
+    if ($ToolMissingExitCode -ne 0 -and $code -eq $ToolMissingExitCode) {
+        $reason = @(Get-Content -LiteralPath $logPath -ErrorAction SilentlyContinue |
+                Where-Object { $_ -match 'NOT_RUN' }) | Select-Object -First 1
+        if (-not $reason) { $reason = 'the tool it delegates to is not installed' }
+        Write-Host ""
+        Write-Host "---- $Name ----"
+        Write-Host $reason
+        return @{ Status = $status.ToolMissing; Detail = $reason.Trim(); Evidence = @{ log = $logPath } }
     }
 
     Write-Host ""
@@ -281,6 +310,21 @@ $realExecutor = {
         'script-tests' {
             $tests = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'tests') -Filter '*.tests.ps1' -File |
                     Sort-Object Name)
+
+            # Seven of these suites are also CTest entries. CTest is the single
+            # place they run from whenever this plan runs the suite unfiltered:
+            # it is the only one that still reaches them when the pipeline itself
+            # is broken, and running the orchestrator's own contracts from inside
+            # the orchestrator would let a broken one pass itself. When the suite
+            # is out of scope or narrowed by a filter, CTest will not reach them
+            # and this stage runs every suite instead.
+            $ctestCovered = @()
+            $testsCheck = @($plan.Checks | Where-Object { $_.Kind -eq 'tests' }) | Select-Object -First 1
+            if ($testsCheck -and $testsCheck.Applicable -and -not $testsCheck.Evidence.filter) {
+                $ctestCovered = @(Get-VerifyCTestScriptSuite -RepoRoot $repoRoot)
+                $tests = @($tests | Where-Object { $ctestCovered -notcontains $_.Name })
+            }
+
             foreach ($test in $tests) {
                 $outcome = Invoke-Step -Name "script-tests.$($test.BaseName)" -FilePath 'pwsh' `
                     -Arguments @('-NoProfile', '-NonInteractive', '-File', $test.FullName)
@@ -288,7 +332,9 @@ $realExecutor = {
                     return @{ Status = $status.Fail; Detail = "$($test.Name) failed"; Evidence = $outcome.Evidence }
                 }
             }
-            return @{ Status = $status.Pass; Detail = "$($tests.Count) script test file(s)" }
+            $detail = "$($tests.Count) script test file(s)"
+            if ($ctestCovered.Count -gt 0) { $detail += "; $($ctestCovered.Count) left to CTest" }
+            return @{ Status = $status.Pass; Detail = $detail }
         }
 
         'configure' {
@@ -368,27 +414,29 @@ $realExecutor = {
         }
 
         'cppcheck' {
-            return Invoke-Step -Name 'cppcheck' -FilePath 'pwsh' -Arguments @(
+            # 3 is check-quality.ps1's "a tool this run needed is not installed".
+            return Invoke-Step -Name 'cppcheck' -FilePath 'pwsh' -ToolMissingExitCode 3 -Arguments @(
                 '-NoProfile', '-NonInteractive', '-File', (Join-Path $PSScriptRoot 'check-quality.ps1'),
                 '-Only', 'cppcheck')
         }
 
         'clang-tidy' {
-            # The BLOCKING check set, scoped to the change. Not check-quality.ps1's
-            # broad pass: that one is advisory by design (advisory-checks.yml owns
-            # it in CI), it reports hundreds of findings on this tree today, and
-            # the MSVC STL shipped with the current toolchain refuses to compile
-            # against an older clang, so it cannot be a local gate at all. -Full
-            # replaces this step with the whole-tree form of the same check set.
-            return Invoke-Step -Name 'clang-tidy' -FilePath 'pwsh' -Arguments @(
+            # The BLOCKING check set. Not check-quality.ps1's broad pass: that one
+            # is advisory by design (advisory-checks.yml owns it in CI), it reports
+            # hundreds of findings on this tree today, and the MSVC STL shipped
+            # with the current toolchain refuses to compile against an older clang,
+            # so it cannot be a local gate at all.
+            #
+            # -Fast analyses what the change reaches; -Full analyses everything.
+            # Both replay results through the cache below, which is what makes the
+            # whole-tree form affordable as a pre-push gate at all.
+            Initialize-CompilerEnvironment
+            $arguments = @(
                 '-NoProfile', '-NonInteractive', '-File', (Join-Path $PSScriptRoot 'run-clang-tidy-blocking.ps1'),
-                '-BuildDir', $buildDir, '-Base', $Base)
-        }
-
-        'clang-tidy-blocking' {
-            return Invoke-Step -Name 'clang-tidy-blocking' -FilePath 'pwsh' -Arguments @(
-                '-NoProfile', '-NonInteractive', '-File', (Join-Path $PSScriptRoot 'run-clang-tidy-blocking.ps1'),
-                '-BuildDir', $buildDir)
+                '-BuildDir', $buildDir,
+                '-CacheDir', (Get-ClangTidyCacheDirectory))
+            if ($check.Evidence.scope -ne 'whole-tree') { $arguments += @('-Base', $Base) }
+            return Invoke-Step -Name 'clang-tidy' -FilePath 'pwsh' -Arguments $arguments
         }
 
         default { throw "verify.ps1 has no executor for check kind '$($check.Kind)'." }
@@ -452,6 +500,12 @@ $run = Invoke-VerifyPlan -Plan $plan -Executor $(if ($DryRun) { $dryRunExecutor 
 
 Write-Host ""
 foreach ($line in (New-VerifySummary -Run $run)) { Write-Host $line }
+
+if ($run.toolMissing.Count -gt 0) {
+    Write-Host ""
+    Write-Host ("verify ($mode) could not run: $($run.toolMissing -join ', '). " +
+        'Install the missing tool(s): a gate that never started is not a gate that passed.') -ForegroundColor Yellow
+}
 
 $saved = Save-VerifyResult -Run $run -Path $ResultPath -Head $head -Base $Base -Dirty $dirty -Scope $scope
 Write-Host ""

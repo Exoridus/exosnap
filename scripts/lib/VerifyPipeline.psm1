@@ -35,6 +35,11 @@ $script:StatusFail           = 'FAIL'
 $script:StatusSkip           = 'SKIP'                 # out of scope for this run
 $script:StatusSkipDependency = 'SKIPPED_DEPENDENCY'   # a prerequisite did not pass
 $script:StatusNotRun         = 'NOT_RUN'              # an earlier failure stopped the run
+# The tool the check delegates to is not installed. Distinct from SKIP, which
+# means "out of scope": nobody decided not to run this, it could not be run. A
+# gate that cannot run its tool has established nothing, so this is never a
+# green and -Full -- the contract that claims completeness -- fails on it.
+$script:StatusToolMissing    = 'TOOL_MISSING'
 
 function Get-VerifyStatusName {
     <#
@@ -49,6 +54,7 @@ function Get-VerifyStatusName {
         Skip           = $script:StatusSkip
         SkipDependency = $script:StatusSkipDependency
         NotRun         = $script:StatusNotRun
+        ToolMissing    = $script:StatusToolMissing
     }
 }
 
@@ -398,19 +404,15 @@ function New-VerifyPlan {
                 -Applicable:$wantStatic -SkipReason 'no C++ changed'))
 
     # clang-tidy reads compile_commands.json, which the configure produces and the
-    # build keeps in step with the source it describes. This is the change-scoped
-    # form of the blocking check set; -Full adds the whole-tree form below. The
-    # overlap is deliberate: -Full is defined as a superset of -Fast, and the
-    # curated set is cheap enough that dropping a step to save the overlap would
-    # cost more in explanation than it saves in time.
+    # build keeps in step with the source it describes.
+    #
+    # One check, two scopes. -Fast analyses the translation units the change
+    # reaches; -Full analyses every one of them, which is a strict superset, so
+    # running the change-scoped form as well would only re-derive a verdict the
+    # whole-tree form already covers.
     $checks.Add((New-VerifyCheck -Name 'clang-tidy' -Kind 'clang-tidy' -DependsOn @('build') `
                 -Applicable:$wantStatic -SkipReason 'no C++ changed' `
-                -Evidence @{ buildDir = $BuildDir }))
-
-    if ($full) {
-        $checks.Add((New-VerifyCheck -Name 'clang-tidy-blocking' -Kind 'clang-tidy-blocking' -DependsOn @('build') `
-                    -Applicable -Evidence @{ buildDir = $BuildDir }))
-    }
+                -Evidence @{ buildDir = $BuildDir; scope = $(if ($full) { 'whole-tree' } else { 'changed' }) }))
 
     return [ordered]@{
         Mode     = $Mode
@@ -443,10 +445,11 @@ function Invoke-VerifyPlan {
         [hashtable] $Context = @{}
     )
 
-    $results  = [System.Collections.Generic.List[hashtable]]::new()
-    $status   = @{}
-    $failed   = $false
-    $failedBy = $null
+    $results     = [System.Collections.Generic.List[hashtable]]::new()
+    $status      = @{}
+    $failed      = $false
+    $failedBy    = $null
+    $toolMissing = [System.Collections.Generic.List[string]]::new()
 
     foreach ($check in $Plan.Checks) {
         $entry = [ordered]@{
@@ -496,16 +499,29 @@ function Invoke-VerifyPlan {
                 $failed = $true
                 $failedBy = $check.Name
             }
+            elseif ($entry.status -eq $script:StatusToolMissing) {
+                # Deliberately not fail-fast. An absent tool says nothing about
+                # the checks after it, so the run continues and reports every
+                # other verdict it can still establish; what it may not do is
+                # call itself complete afterwards.
+                $toolMissing.Add($check.Name)
+            }
         }
 
         $status[$check.Name] = $entry.status
         $results.Add($entry)
     }
 
+    # -Full is the contract that claims every local gate ran. A missing tool
+    # breaks that claim outright. -Fast claims only what it was scoped to, so it
+    # reports the gap and stays usable on a machine that is still being set up.
+    $incomplete = ($toolMissing.Count -gt 0) -and ($Plan.Mode -eq 'Full')
+
     return [ordered]@{
-        mode   = $Plan.Mode
-        result = $(if ($failed) { 'failed' } else { 'passed' })
-        checks = @($results)
+        mode        = $Plan.Mode
+        result      = $(if ($failed -or $incomplete) { 'failed' } else { 'passed' })
+        toolMissing = @($toolMissing)
+        checks      = @($results)
     }
 }
 
@@ -641,6 +657,158 @@ function Resolve-QmlDiagnosticCommand {
     return , @($commands)
 }
 
+function Split-VerifyCommandLineBatch {
+    <#
+    .SYNOPSIS
+        Splits a file list into invocations that fit on a Windows command line.
+    .DESCRIPTION
+        CreateProcess accepts at most 32767 characters, and the failure mode when
+        a caller exceeds it is not a diagnosable error: the process never starts,
+        so a step wrapped in continue-on-error reports a clean pass over an
+        analysis that did not happen. Every list-of-files invocation in this
+        repository therefore goes through here rather than trusting a file count
+        to stay small.
+
+        Two independent limits. The budget is the hard one. The item cap is a
+        throughput choice: batches run in parallel, so smaller ones spread more
+        evenly across cores.
+    .PARAMETER Item
+        The per-invocation arguments to distribute, one file path each.
+    .PARAMETER FixedArgument
+        Arguments repeated on every invocation; they consume the same budget.
+    .PARAMETER MaximumItem
+        Upper bound on items per batch.
+    .PARAMETER CommandLineBudget
+        Characters available for the whole command line. The default leaves room
+        under the 32767 limit for the executable path and for quoting the shell
+        adds around arguments containing spaces.
+    #>
+    [OutputType([object[]])]
+    param(
+        [string[]] $Item = @(),
+        [string[]] $FixedArgument = @(),
+        [int] $MaximumItem = 25,
+        [int] $CommandLineBudget = 30000
+    )
+
+    # +3 per argument: a separating space plus the pair of quotes a path with a
+    # space in it acquires. Charged to every argument, so the estimate can only
+    # be too large.
+    $cost = { param([string] $Argument) $Argument.Length + 3 }
+
+    $fixedCost = 0
+    foreach ($argument in $FixedArgument) { $fixedCost += (& $cost $argument) }
+
+    $batches = [System.Collections.Generic.List[object]]::new()
+    $current = [System.Collections.Generic.List[string]]::new()
+    $currentCost = $fixedCost
+
+    foreach ($entry in $Item) {
+        $entryCost = & $cost $entry
+        if ($current.Count -gt 0 -and
+            (($current.Count -ge $MaximumItem) -or ($currentCost + $entryCost -gt $CommandLineBudget))) {
+            $batches.Add(@($current.ToArray()))
+            $current.Clear()
+            $currentCost = $fixedCost
+        }
+        $current.Add($entry)
+        $currentCost += $entryCost
+    }
+    if ($current.Count -gt 0) { $batches.Add(@($current.ToArray())) }
+
+    return , @($batches)
+}
+
+function Get-VerifyToolCacheDirectory {
+    <#
+    .SYNOPSIS
+        Where one analysis tool keeps its reusable results on this machine.
+    .DESCRIPTION
+        Outside the repository and outside every build tree, on purpose: both are
+        wiped by the operations that precede a slow run -- a fresh configure, a
+        `git clean`, a new worktree -- which is exactly when replaying earlier
+        results would have paid the most. One location instead means several
+        worktrees of the same repository share the cache.
+
+        The leaf is derived from the fingerprint, never spelled out by a caller,
+        so a toolchain the fingerprint names cannot serve results produced by a
+        different one: a changed compiler or tool version simply addresses a
+        different directory rather than aging stale entries out of a shared one.
+    .PARAMETER Tool
+        The tool the cache belongs to; becomes a path segment.
+    .PARAMETER Fingerprint
+        Everything that identifies the toolchain the results are valid for.
+        Empty entries are dropped, and an entirely empty fingerprint is recorded
+        as such rather than silently sharing the unqualified directory.
+    .PARAMETER Root
+        Overrides the per-user cache root. For tests.
+    #>
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)] [string] $Tool,
+        [string[]] $Fingerprint = @(),
+        [string] $Root
+    )
+
+    if (-not $Root) {
+        $Root = if ($env:LOCALAPPDATA) {
+            Join-Path $env:LOCALAPPDATA 'ExoSnap/tool-cache'
+        }
+        else {
+            Join-Path ([System.IO.Path]::GetTempPath()) 'exosnap-tool-cache'
+        }
+    }
+
+    $parts = @($Fingerprint | Where-Object { $_ })
+    if ($parts.Count -eq 0) { $parts = @('unqualified-toolchain') }
+
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $digest = $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes(($parts -join "`n")))
+    }
+    finally {
+        $sha.Dispose()
+    }
+    $key = [System.BitConverter]::ToString($digest).Replace('-', '').Substring(0, 16).ToLowerInvariant()
+
+    return (Join-Path (Join-Path $Root $Tool) $key)
+}
+
+function Get-VerifyCTestScriptSuite {
+    <#
+    .SYNOPSIS
+        The script suites CTest already owns, read from the file that registers them.
+    .DESCRIPTION
+        Seven of the suites under scripts/tests are also add_test entries, so a run
+        that builds and tests unfiltered executes them twice. CTest is the single
+        place they run from: it is the only one that reaches them on a machine
+        where the pipeline itself is broken, and running the orchestrator's own
+        contracts from inside the orchestrator would let a broken one pass itself.
+
+        Derived from the registration site rather than listed here, so registering
+        a suite is the only edit needed and an unregistered one keeps running in
+        the pipeline stage. An unreadable registration site yields nothing, which
+        runs every suite -- the wider answer, never the narrower one.
+    #>
+    [OutputType([string[]])]
+    param([Parameter(Mandatory)] [string] $RepoRoot)
+
+    $registrationSite = Join-Path $RepoRoot 'app/CMakeLists.txt'
+    if (-not (Test-Path -LiteralPath $registrationSite -PathType Leaf)) { return @() }
+
+    $text = Get-Content -LiteralPath $registrationSite -Raw -ErrorAction SilentlyContinue
+    if (-not $text) { return @() }
+
+    $names = [System.Collections.Generic.List[string]]::new()
+    foreach ($match in [regex]::Matches($text, 'scripts/tests/([A-Za-z0-9._-]+\.tests\.ps1)')) {
+        $names.Add($match.Groups[1].Value)
+    }
+    # No comma operator here, unlike the other list-returning commands in this
+    # module: every caller wraps the result in @(), and @(, @(...)) is an array
+    # holding an array rather than the list itself.
+    return @($names | Sort-Object -Unique)
+}
+
 function New-VerifySummary {
     <#
     .SYNOPSIS
@@ -693,18 +861,22 @@ function Save-VerifyResult {
     if ($Scope.Contains('ChangedFiles')) { $changed = @($Scope.ChangedFiles) }
     if ($Scope.Contains('EscalationReasons')) { $reasons = @($Scope.EscalationReasons) }
 
+    $toolMissing = @()
+    if ($Run.Contains('toolMissing')) { $toolMissing = @($Run.toolMissing) }
+
     $document = [ordered]@{
-        mode   = $Run.mode
-        head   = $Head
-        base   = $Base
-        dirty  = $Dirty
-        result = $Run.result
-        scope  = [ordered]@{
+        mode        = $Run.mode
+        head        = $Head
+        base        = $Base
+        dirty       = $Dirty
+        result      = $Run.result
+        toolMissing = $toolMissing
+        scope       = [ordered]@{
             categories        = $categories
             changedFileCount  = $changed.Count
             escalationReasons = $reasons
         }
-        checks = @($Run.checks)
+        checks      = @($Run.checks)
     }
 
     $directory = Split-Path -Parent $Path
@@ -726,6 +898,9 @@ Export-ModuleMember -Function @(
     'Resolve-QmlDiagnosticCommand',
     'Get-CTestCommandPath',
     'Get-FailedCTestName',
+    'Get-VerifyToolCacheDirectory',
+    'Get-VerifyCTestScriptSuite',
+    'Split-VerifyCommandLineBatch',
     'New-VerifySummary',
     'Save-VerifyResult'
 )
