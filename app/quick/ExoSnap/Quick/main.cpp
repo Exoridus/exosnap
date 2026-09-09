@@ -1624,7 +1624,16 @@ int main(int argc, char* argv[]) {
             for (int page = 0; page < page_names.size(); ++page) {
                 if (shell != nullptr)
                     shell->setProperty("currentPage", page);
-                settle(page == 0 ? 300 : 900);
+                // A destination is loaded asynchronously, so a fixed settle audits
+                // whatever happens to be on screen when it expires: the previous
+                // page's controls, already hidden, read as controls that lost their
+                // pointing hand. Wait for the page the shell was asked for.
+                if (shell == nullptr || !waitForDestinationReady(shell, page, 20000)) {
+                    qWarning("cursor-audit: FAIL page=%s never finished loading", qPrintable(page_names.at(page)));
+                    app.exit(2);
+                    return;
+                }
+                settle(300);
 
                 QList<Probe> probes;
                 // The VISUAL tree, not findChildren(): an item created by a Loader,
