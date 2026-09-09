@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Turns a freshly installed Windows 11 guest into the ExoSnap release-verification
     machine. Runs INSIDE the guest.
@@ -131,13 +131,15 @@ function Resolve-PackageUrl {
 function Get-State {
     param([Parameter(Mandatory)] [string] $Path)
     if (-not (Test-Path -LiteralPath $Path)) { return @{} }
+    $raw = Get-Content -LiteralPath $Path -Raw -ErrorAction SilentlyContinue
+    # An empty file is what a restart in the middle of a write leaves behind, and
+    # the restart this script asks for is a normal part of provisioning. It says
+    # nothing went wrong, so it is not worth a warning.
+    if ([string]::IsNullOrWhiteSpace($raw)) { return @{} }
     try {
-        $raw = Get-Content -LiteralPath $Path -Raw
         $parsed = $raw | ConvertFrom-Json
     }
     catch {
-        # A truncated state file means the previous run died mid-write. Starting
-        # over is correct: every step here is safe to repeat.
         Write-Line "the resume state at $Path is unreadable; every step will run again" 'warn'
         return @{}
     }
@@ -152,7 +154,11 @@ function Save-State {
     if ($directory -and -not (Test-Path -LiteralPath $directory)) {
         New-Item -ItemType Directory -Path $directory -Force | Out-Null
     }
-    ($State | ConvertTo-Json -Depth 5) | Set-Content -LiteralPath $Path -Encoding UTF8
+    # Written beside the target and renamed, because the step that follows this one
+    # can restart the guest: a half-written file would lose every completed step.
+    $temporary = "$Path.tmp"
+    ($State | ConvertTo-Json -Depth 5) | Set-Content -LiteralPath $temporary -Encoding UTF8
+    Move-Item -LiteralPath $temporary -Destination $Path -Force
 }
 
 # ---------------------------------------------------------------------------
@@ -250,11 +256,16 @@ function Install-WingetPackage {
         '--disable-interactivity'
     )
     Write-Line "winget install $($Package.wingetId) $($Package.version)"
-    & $winget @arguments
+    # winget draws progress bars with block characters. There is no console on the
+    # other side of PowerShell Direct, so they arrive as pages of mojibake that bury
+    # the one line that matters. Keep the output and show it only when it explains
+    # a failure.
+    $output = & $winget @arguments 2>&1 | Out-String
     $code = $LASTEXITCODE
     # 0x8A15002B: already installed at that version. A second provisioning run must
     # not turn that into a failure.
     if ($code -ne 0 -and $code -ne -1978335189) {
+        Write-Host $output
         throw "winget exited $code installing $($Package.wingetId) $($Package.version)"
     }
 }
@@ -274,6 +285,51 @@ function Invoke-PowerStep {
     & powercfg.exe /hibernate off
     & powercfg.exe /setactive SCHEME_MIN
     return 'sleep, hibernate and display-off disabled; high performance scheme active'
+}
+
+function Copy-ReleaseDriverFile {
+    <#
+    .SYNOPSIS
+        Copies one driver file unless the destination already holds those bytes.
+    .DESCRIPTION
+        Returns whether anything was written. Once the GPU partition is attached the
+        guest loads these files, and a loaded DLL cannot be overwritten -- but a
+        second provisioning pass has nothing to write anyway. Comparing first turns
+        "the file is in use" from a failure into a no-op, and leaves a genuine
+        mismatch as the error it is.
+    #>
+    param([Parameter(Mandatory)] [string] $Source, [Parameter(Mandatory)] [string] $Destination)
+    if (Test-Path -LiteralPath $Destination -PathType Leaf) {
+        $sourceHash = (Get-FileHash -LiteralPath $Source -Algorithm SHA256).Hash
+        $destinationHash = (Get-FileHash -LiteralPath $Destination -Algorithm SHA256).Hash
+        if ($sourceHash -eq $destinationHash) { return $false }
+    }
+    Copy-Item -LiteralPath $Source -Destination $Destination -Force
+    return $true
+}
+
+function Copy-ReleaseDriverTree {
+    <#
+    .SYNOPSIS
+        Mirrors a staged driver package into the guest, file by file.
+    .DESCRIPTION
+        Not a recursive Copy-Item over a removed directory: removing the package
+        fails outright once one file in it is loaded, and re-copying identical bytes
+        is what a resumed run does.
+    #>
+    param([Parameter(Mandatory)] [string] $Source, [Parameter(Mandatory)] [string] $Destination)
+    if (-not (Test-Path -LiteralPath $Destination)) {
+        New-Item -ItemType Directory -Path $Destination -Force | Out-Null
+    }
+    foreach ($item in Get-ChildItem -LiteralPath $Source -Recurse -File) {
+        $relative = $item.FullName.Substring($Source.Length).TrimStart('')
+        $target = Join-Path $Destination $relative
+        $directory = Split-Path -Parent $target
+        if ($directory -and -not (Test-Path -LiteralPath $directory)) {
+            New-Item -ItemType Directory -Path $directory -Force | Out-Null
+        }
+        [void](Copy-ReleaseDriverFile -Source $item.FullName -Destination $target)
+    }
 }
 
 function Invoke-HostDriverStep {
@@ -300,8 +356,7 @@ function Invoke-HostDriverStep {
         }
         foreach ($package in Get-ChildItem -LiteralPath $repository -Directory) {
             $destination = Join-Path $targetRepository $package.Name
-            if (Test-Path -LiteralPath $destination) { Remove-Item -LiteralPath $destination -Recurse -Force }
-            Copy-Item -LiteralPath $package.FullName -Destination $destination -Recurse -Force
+            Copy-ReleaseDriverTree -Source $package.FullName -Destination $destination
         }
     }
 
@@ -310,8 +365,7 @@ function Invoke-HostDriverStep {
     if (Test-Path -LiteralPath $system32Source) {
         $target = Join-Path $env:SystemRoot 'System32'
         foreach ($file in Get-ChildItem -LiteralPath $system32Source -File) {
-            Copy-Item -LiteralPath $file.FullName -Destination (Join-Path $target $file.Name) -Force
-            $copied++
+            if (Copy-ReleaseDriverFile -Source $file.FullName -Destination (Join-Path $target $file.Name)) { $copied++ }
         }
     }
 
