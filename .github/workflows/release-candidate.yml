@@ -63,6 +63,21 @@ on:
 # branches, forks, a plain manual dispatch) keep building working UNOFFICIAL
 # artifacts and publish nothing.
 
+# Workflow-level, and deliberately unlike ci.yml, which sets concurrency per JOB.
+# The hazard ci.yml's note is about is CANCELLATION blast radius: a workflow-level
+# group tears down every job in a run the moment a newer event lands on the same ref,
+# and those jobs report "cancelled" on an otherwise-green commit. Here
+# cancel-in-progress is false, so nothing is ever torn down and that hazard does not
+# exist -- what the group buys instead is the one thing per-job groups cannot: two
+# runs on the same ref (a re-pushed tag, or a dispatch racing a tag) never reach
+# publish-release at the same time. Today only the in-job "already published, not a
+# draft" guard stands between that and a half-overwritten asset set.
+#
+# The group is the ref, so two different tags still publish in parallel.
+concurrency:
+  group: release-candidate-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   # Single source of truth for "what is this run releasing, and is it official?".
   # Every downstream job reads these outputs instead of re-deriving the answer from
@@ -91,6 +106,9 @@ jobs:
   resolve-identity:
     name: Resolve Release Identity
     runs-on: ubuntu-latest
+    # Every job here carries a timeout. Without one GitHub's default is six hours,
+    # which a hung publish or a stalled Qt install would spend in full.
+    timeout-minutes: 10
     outputs:
       release_tag: ${{ steps.id.outputs.release_tag }}
       is_official: ${{ steps.id.outputs.is_official }}
@@ -184,6 +202,9 @@ jobs:
     name: Build Release Artifacts
     needs: resolve-identity
     runs-on: windows-2022
+    # A cold full Release compile plus Qt, WiX, the MSI build and four smoke tests.
+    # ci.yml's Release leg is budgeted at 60; this one has no compiler cache.
+    timeout-minutes: 90
     # The version is NOT a build-job output: resolve-identity owns it, and every step
     # here (and every downstream job) reads it from there. Re-exporting it would just
     # recreate the duplicate-source problem ADR 0054 removed.
@@ -785,62 +806,21 @@ jobs:
       - name: Find the release candidate built from this commit
         id: rc
         if: ${{ needs.resolve-identity.outputs.prerelease == 'false' }}
-        shell: bash
+        shell: pwsh
         run: |
-          set -euo pipefail
-          block() {
-            {
-              echo "## Release qualification: BLOCKED -- nothing is published"
-              echo
-              echo "- $1"
-            } >> "$GITHUB_STEP_SUMMARY"
-            echo "::error::$1"
-            exit 1
+          try {
+              $tag = & ./scripts/find-qualified-rc.ps1 -Repository $env:GITHUB_REPOSITORY `
+                  -BaseVersion $env:BASE_VERSION -Commit $env:COMMIT_SHA -OutputDirectory rc-qualification
           }
-
-          mapfile -t tags < <(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate \
-            --jq '.[] | select(.draft == false) | .tag_name' \
-            | grep -E "^v${BASE_VERSION}-rc[0-9]+$" || true)
-
-          best=""
-          best_n=-1
-          for tag in ${tags[@]+"${tags[@]}"}; do
-            [ -n "$tag" ] || continue
-            sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq '.sha' 2>/dev/null || echo "")
-            [ "$sha" = "$COMMIT_SHA" ] || continue
-            n="${tag##*-rc}"
-            echo "Release candidate $tag points at $COMMIT_SHA."
-            if [ "$n" -gt "$best_n" ]; then best_n="$n"; best="$tag"; fi
-          done
-
-          if [ -z "$best" ]; then
-            block "No published release candidate points at $COMMIT_SHA. A final release is promoted from a qualified RC of the same commit (docs/release-checklist.md section 3), never tagged directly."
-          fi
-          echo "Qualification must come from $best."
-
-          mkdir -p rc-qualification
-          if ! gh release download "$best" --repo "$GITHUB_REPOSITORY" --dir rc-qualification --clobber \
-                --pattern 'release-verification.json'; then
-            block "Release candidate $best carries no release-verification.json. Run the campaign against it and attach the record with 'release-verify.ps1 qualify -Publish' before promoting."
-          fi
-          # Deliberately not blocking on a missing signature: "the record is unsigned"
-          # is one of the four answers check-release-qualification.ps1 exists to give,
-          # in the words the operator needs. A download error would replace it.
-          gh release download "$best" --repo "$GITHUB_REPOSITORY" --dir rc-qualification --clobber \
-                --pattern 'release-verification.json.sig' || true
-          if ! gh release download "$best" --repo "$GITHUB_REPOSITORY" --dir rc-qualification --clobber \
-                --pattern '*.sha256'; then
-            block "Release candidate $best publishes no .sha256 sidecars, so the qualified bytes cannot be compared against the published ones."
-          fi
-          # The candidate's per-file build inventory and its toolchain record. These
-          # are what publish-release compares its own build against; a candidate that
-          # published neither is refused there, in the words that say what to do about
-          # it, rather than here as a download failure.
-          gh release download "$best" --repo "$GITHUB_REPOSITORY" --dir rc-qualification --clobber \
-                --pattern 'artifact-manifest.json' || true
-          gh release download "$best" --repo "$GITHUB_REPOSITORY" --dir rc-qualification --clobber \
-                --pattern 'toolchain-manifest.json' || true
-          echo "rc_tag=$best" >> "$GITHUB_OUTPUT"
+          catch {
+              $reason = $_.Exception.Message
+              @('## Release qualification: BLOCKED -- nothing is published', '', "- $reason") |
+                  Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
+              Write-Host "::error::$reason"
+              exit 1
+          }
+          Write-Host "Qualification must come from $tag."
+          "rc_tag=$tag" | Add-Content -LiteralPath $env:GITHUB_OUTPUT
 
       # The public key is the one the shipped binaries embed and the update manifest is
       # verified against. Passing it is what makes the record's signature mean "the
@@ -898,6 +878,7 @@ jobs:
     needs: [resolve-identity, require-ci, require-qualification, build, sign-manifest]
     if: ${{ needs.resolve-identity.outputs.is_official == 'true' && vars.EXOSNAP_UPDATE_PUBLIC_KEY_HEX != '' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: write
     env:

@@ -63,10 +63,14 @@ on:
         required: true
         type: string
       attach_to_release:
-        description: 'Upload the signed manifest to the GitHub Release from this job. Set false when the caller (release-candidate.yml publish-release) creates + publishes the Release itself and owns the upload.'
+        description: >-
+          Upload the signed manifest to the GitHub Release from this job. Defaults to
+          false: the normal path is release-candidate.yml's publish-release, which
+          creates the Release, uploads every asset, re-hashes and only then un-drafts.
+          A caller that wants this job to attach must ask for it.
         required: false
         type: boolean
-        default: true
+        default: false
       release_tag:
         description: >-
           Tag of the GitHub Release the manifest belongs to. Only used when attach_to_release is
@@ -106,10 +110,16 @@ on:
         required: true
         type: string
       attach_to_release:
-        description: 'Attach the signed manifest to the (already-existing) GitHub Release. Leave true for the manual escape hatch.'
+        description: >-
+          Attach the signed manifest to the (already-existing) GitHub Release. Defaults
+          to FALSE. The update manifest is what installed clients follow, so attaching
+          one to a live release changes what shipping users download next; with this
+          off the job still signs the manifest and publishes it as a build artifact,
+          which is enough to inspect it or to attach it deliberately. Turning it on is
+          gated -- see the guard step in the job below.
         required: false
         type: boolean
-        default: true
+        default: false
       release_tag:
         description: 'Tag of the GitHub Release to attach to. Leave empty to use the current tag ref, else v<version>. Set it for a prerelease/RC tag such as v0.9.0-rc1.'
         required: false
@@ -119,8 +129,13 @@ on:
 jobs:
   sign-manifest:
     runs-on: ubuntu-latest
+    # Signing, a pip install and at most two asset downloads. Without a timeout the
+    # default is six hours.
+    timeout-minutes: 20
     permissions:
       contents: write
+    env:
+      VERSION_INPUT: ${{ inputs.version }}
     steps:
       # Pinned so the signing job can't silently pick up a new PyNaCl release
       # mid-cycle; verified working (1.6.2) as of this pin. Bump deliberately.
@@ -264,6 +279,92 @@ jobs:
       # uploads every asset, re-verifies, and un-drafts, so the Release is guaranteed
       # to exist before anything is uploaded. Runs on the standalone workflow_dispatch
       # path (the manual escape hatch), where the Release is expected to already exist.
+      # THE guard on the one bypass path that can change what shipping users download
+      # next. Attaching a manifest to a DRAFT is harmless: a draft is invisible to the
+      # updater, and publish-release re-verifies everything before it un-drafts.
+      # Attaching to a release that is already public is a different act, and it used
+      # to run with no CI gate, no qualification gate, and no check that the hashes in
+      # the manifest describe the bytes that release actually serves.
+      #
+      # Two conditions now, both fail-closed:
+      #   (a) the manifest's declared SHA-256s must match the assets the target release
+      #       currently serves, re-hashed here rather than trusted from the inputs; and
+      #   (b) the release's commit must be covered by a signed, qualified
+      #       release-verification record -- the same bar publish-release holds a final
+      #       tag to.
+      # A release candidate carries no record of its own by definition, so re-signing a
+      # published RC by hand is refused: cut the next candidate instead.
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        if: ${{ inputs.attach_to_release }}
+        with:
+          path: repo
+
+      - name: Refuse to attach to a release that was never qualified
+        if: ${{ inputs.attach_to_release }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLIC_KEY_HEX: ${{ vars.EXOSNAP_UPDATE_PUBLIC_KEY_HEX }}
+          RELEASE_TAG: ${{ inputs.release_tag != '' && inputs.release_tag || (startsWith(github.ref, 'refs/tags/') && github.ref_name || format('v{0}', inputs.version)) }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Block([string] $Reason) {
+              @('## Update manifest: NOT attached', '', "- $Reason") |
+                  Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
+              Write-Host "::error::$Reason"
+              exit 1
+          }
+
+          $release = & gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/$env:RELEASE_TAG" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $null -eq $release) {
+              Block "There is no release tagged $env:RELEASE_TAG to attach a manifest to."
+          }
+          if ($release.draft) {
+              Write-Host "Release $env:RELEASE_TAG is still a draft, so attaching changes nothing a user can see."
+              exit 0
+          }
+
+          $version = $env:VERSION_INPUT
+          $base = ($version -split '-')[0]
+          New-Item -ItemType Directory -Path published -Force | Out-Null
+          & gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --dir published --clobber `
+              --pattern "ExoSnap-$version-windows-x64.msi" `
+              --pattern "ExoSnap-$version-windows-x64-portable.zip"
+          if ($LASTEXITCODE -ne 0) {
+              Block "Release $env:RELEASE_TAG serves no ExoSnap-$version assets, so a manifest naming that version would point at bytes that are not there."
+          }
+
+          $manifest = Get-Content -LiteralPath update-manifest.json -Raw | ConvertFrom-Json
+          $assets = @{
+              installer = "published/ExoSnap-$version-windows-x64.msi"
+              portable  = "published/ExoSnap-$version-windows-x64-portable.zip"
+          }
+          foreach ($package in $manifest.packages) {
+              $path = $assets[$package.kind]
+              if (-not $path -or -not (Test-Path -LiteralPath $path)) {
+                  Block "The manifest lists a '$($package.kind)' package but the release serves no such asset."
+              }
+              $actual = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+              if ($actual -ne "$($package.sha256)".ToLowerInvariant()) {
+                  Block "The manifest says $($package.kind) is $($package.sha256), but $env:RELEASE_TAG actually serves $actual. Signing that would announce an update no client can verify."
+              }
+          }
+
+          try {
+              $rcTag = & ./repo/scripts/find-qualified-rc.ps1 -Repository $env:GITHUB_REPOSITORY `
+                  -BaseVersion $base -Commit $release.target_commitish -OutputDirectory rc-qualification
+          }
+          catch { Block $_.Exception.Message }
+
+          & ./repo/scripts/check-release-qualification.ps1 `
+              -RecordPath rc-qualification/release-verification.json `
+              -PublicKeyHex $env:PUBLIC_KEY_HEX `
+              -ExpectedCommit $release.target_commitish -ExpectedRcTag $rcTag `
+              -Sha256Directory rc-qualification -SummaryPath $env:GITHUB_STEP_SUMMARY
+          if ($LASTEXITCODE -ne 0) {
+              Block "Release $env:RELEASE_TAG is published and its commit carries no qualified record, so a re-signed update manifest must not be attached to it."
+          }
+
       - name: Attach manifest to the release
         if: ${{ inputs.attach_to_release }}
         env:
