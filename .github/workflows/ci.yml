@@ -123,8 +123,15 @@ jobs:
       - name: Check clang-format
         run: pwsh -NonInteractive -File scripts/check-format.ps1
 
-      - name: Validate WinGet manifest
-        run: pwsh -NonInteractive -File scripts/validate-winget-manifest.ps1
+      - name: Validate packaging versions
+        # The product version is declared once, in project(exosnap VERSION x.y.z),
+        # and repeated by hand across roughly sixteen literals in the Chocolatey,
+        # WinGet and Scoop packaging. A bump that missed one of them used to publish
+        # a package pointing at a release that does not exist, and nothing failed
+        # until a submission was rejected. This runs the three validators on their
+        # version axis only (no installer hash, no moderation bar -- neither can be
+        # true between a bump and the release that produces the bytes).
+        run: pwsh -NonInteractive -File scripts/check-packaging-version.ps1
 
       - name: Validate MSI harvest config
         # Cheap regex check (no build, no WiX required). Asserts Package.wxs

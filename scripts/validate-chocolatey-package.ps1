@@ -98,7 +98,13 @@
 param(
     [string]$Version,
     [string]$ManifestPath,
-    [switch]$RequireManifest
+    [switch]$RequireManifest,
+    # Checks only what a version bump has to get right, and stops before everything
+    # that cannot be true until the release is published: the real MSI checksum and
+    # the moderation subset that reads it. This is the form CI runs on every pull
+    # request, so a partial bump fails within seconds of being pushed rather than at
+    # submission time.
+    [switch]$VersionOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -198,7 +204,13 @@ else {
 # ---------------------------------------------------------------------------
 $checksum64Match = [Regex]::Match($installText, "(?m)^\s*checksum64\s*=\s*'([^']+)'")
 $checksum64 = $null
-if (-not $checksum64Match.Success) {
+if ($VersionOnly) {
+    # Between a version bump and the published release there is no MSI to hash, so
+    # the tree legitimately carries the placeholder. Saying nothing about it here is
+    # what lets the version axis be checked on every commit.
+    Write-Skip 'checksum64 not examined (-VersionOnly).'
+}
+elseif (-not $checksum64Match.Success) {
     Add-Error "chocolateyinstall.ps1: could not find 'checksum64 = ...'"
 }
 else {
@@ -221,7 +233,10 @@ else {
 }
 
 $checksumType64Match = [Regex]::Match($installText, "(?m)^\s*checksumType64\s*=\s*'([^']+)'")
-if (-not $checksumType64Match.Success) {
+if ($VersionOnly) {
+    # Nothing to say: the type matters only alongside a real checksum.
+}
+elseif (-not $checksumType64Match.Success) {
     Add-Error "chocolateyinstall.ps1: could not find 'checksumType64 = ...'"
 }
 elseif ($checksumType64Match.Groups[1].Value -ne 'sha256') {
@@ -232,11 +247,17 @@ elseif ($checksumType64Match.Groups[1].Value -ne 'sha256') {
 # checksum64 vs. the release artifact manifest's MSI SHA-256 (if available)
 # ---------------------------------------------------------------------------
 $manifestExplicit = [bool]$ManifestPath
-if (-not $ManifestPath) {
+if ($VersionOnly) {
+    $ManifestPath = $null
+}
+elseif (-not $ManifestPath) {
     $ManifestPath = Join-Path $repoRoot ".workspace/release/$Version/artifact-manifest.json"
 }
 
-if (-not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) {
+if ($VersionOnly) {
+    Write-Skip 'checksum64-vs-manifest check skipped (-VersionOnly).'
+}
+elseif (-not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) {
     if ($manifestExplicit) {
         Add-Error "Manifest path specified but not found: $ManifestPath"
     }
@@ -314,6 +335,19 @@ Find-StaleVersionReferences -Text $installText -Label 'tools/chocolateyinstall.p
     -ExcludeLineSubstrings @('url64bit')
 Find-StaleVersionReferences -Text $uninstallText -Label 'tools/chocolateyuninstall.ps1' -TargetVersion $Version `
     -ExcludeLineSubstrings @()
+
+# The moderation subset below describes a submission, and a submission cannot happen
+# before the release exists. -VersionOnly stops here so the version axis can be a
+# pull-request check without dragging the rest of the submission bar into it.
+if ($VersionOnly) {
+    if ($script:Errors.Count -gt 0) {
+        foreach ($e in $script:Errors) { Write-Host "  [FAIL] $e" }
+        Write-Host "Chocolatey version validation FAILED ($($script:Errors.Count) error(s)) for version $Version." -ForegroundColor Red
+        exit 1
+    }
+    Write-Host "Chocolatey version validation PASSED for ExoSnap $Version (nuspec + chocolateyinstall.ps1 name one version)." -ForegroundColor Green
+    exit 0
+}
 
 # ---------------------------------------------------------------------------
 # Chocolatey community moderation rules, mechanical subset

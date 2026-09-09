@@ -198,6 +198,17 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "release_tag='$release_tag' is_official=$is_official prerelease=$prerelease full_version=$full_version base_version=$base_version"
 
+      # Checked here as well as in ci.yml's lint job, and for the same reason the
+      # tag-shape guard above is: a tag that ships packaging naming a different
+      # version must fail in seconds, not after a ~30-minute Release build. The tag
+      # base has already been proven equal to the CMake version, so comparing the
+      # packaging to the CMake version compares it to the tag.
+      - name: Validate packaging versions
+        shell: pwsh
+        run: |
+          & ./scripts/check-packaging-version.ps1
+          exit $LASTEXITCODE
+
   build:
     name: Build Release Artifacts
     needs: resolve-identity
