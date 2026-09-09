@@ -147,8 +147,15 @@ function Get-ReleaseQualificationSchema {
     .SYNOPSIS
         The identifier every qualification record carries, so a reader can refuse a
         shape it does not understand instead of misreading it.
+    .DESCRIPTION
+        Still /1 although the shape gained a required promotion declaration and a
+        detached signature. Both additions are refused by their own rules, each with a
+        message that names the fix, and both refusals reach a reader before a schema
+        mismatch would. Bumping the identifier belongs with the C# harness gaining the
+        ability to produce a promotable record; doing it here first would replace those
+        messages with an unhelpful one.
     #>
-    return 'exosnap.release-verification/2'
+    return 'exosnap.release-verification/1'
 }
 
 function Get-ReleaseHarnessVersion {
