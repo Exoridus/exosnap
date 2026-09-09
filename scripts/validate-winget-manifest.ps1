@@ -15,10 +15,19 @@
       - installer: Microsoft.VCRedist.2015+.x64 is declared under
         Dependencies/PackageDependencies (regression guard — see below)
       - installer: InstallerUrl matches the expected GitHub Release MSI asset URL
+      - installer: AppsAndFeaturesEntries DisplayVersion is that same version
+      - locale: ReleaseNotesUrl points at that version's GitHub Release tag
+
+    The version everything is compared against is the canonical
+    project(exosnap VERSION x.y.z) from the root CMakeLists.txt, so a bump that
+    edited some of these literals and not others fails here rather than at
+    submission time. The manifest directory must be named for it too: WinGet keys
+    a submission on the directory, and a directory that disagrees with the source
+    tree is a release nobody built.
 
 .PARAMETER Version
     Manifest version directory to validate (e.g. "0.1.0"). Defaults to the
-    single version directory present under packaging/winget/manifests/c/Codexo/ExoSnap/.
+    canonical CMake project version.
 #>
 param(
     [string]$Version
@@ -33,13 +42,22 @@ if (-not (Test-Path -LiteralPath $manifestRoot -PathType Container)) {
     throw "WinGet manifest root not found: $manifestRoot"
 }
 
+$versionDirs = @(Get-ChildItem -LiteralPath $manifestRoot -Directory)
+if ($versionDirs.Count -ne 1) {
+    $names = ($versionDirs | ForEach-Object { $_.Name }) -join ', '
+    throw "Expected exactly one version directory under $manifestRoot, found: $names. A bump moves the existing directory (git mv), it does not add a second one."
+}
 if (-not $Version) {
-    $versionDirs = @(Get-ChildItem -LiteralPath $manifestRoot -Directory)
-    if ($versionDirs.Count -ne 1) {
-        $names = ($versionDirs | ForEach-Object { $_.Name }) -join ', '
-        throw "Expected exactly one version directory under $manifestRoot, found: $names. Pass -Version explicitly."
+    $cmakeText = Get-Content -LiteralPath (Join-Path $repoRoot 'CMakeLists.txt') -Raw
+    if ($cmakeText -notmatch 'project\(\s*exosnap\s+VERSION\s+([0-9]+\.[0-9]+\.[0-9]+)') {
+        throw 'Could not parse project(exosnap VERSION x.y.z) from root CMakeLists.txt.'
     }
-    $Version = $versionDirs[0].Name
+    $Version = $Matches[1]
+}
+if ($versionDirs[0].Name -ne $Version) {
+    Write-Host "  [FAIL] manifest directory is '$($versionDirs[0].Name)' but the target version is '$Version'"
+    Write-Host "WinGet manifest validation FAILED for version $Version." -ForegroundColor Red
+    exit 1
 }
 
 $versionDir = Join-Path $manifestRoot $Version
@@ -190,6 +208,23 @@ $installerUrl = Get-YamlValue -Text $installerText -Key 'InstallerUrl' -FileLabe
 $expectedUrl = "https://github.com/Exoridus/exosnap/releases/download/v$Version/ExoSnap-$Version-windows-x64.msi"
 if ($installerUrl -and $installerUrl -ne $expectedUrl) {
     Add-Error "installer manifest: InstallerUrl '$installerUrl' != expected '$expectedUrl'"
+}
+
+# ---------------------------------------------------------------------------
+# The remaining version-bearing literals
+#
+# DisplayVersion is what Apps and Features shows and what WinGet compares an
+# installed package against; ReleaseNotesUrl is what a user follows from the
+# store listing. Both are hand-edited on every bump and neither was checked.
+# ---------------------------------------------------------------------------
+$displayVersion = Get-YamlValue -Text $installerText -Key 'DisplayVersion' -FileLabel 'installer manifest'
+if ($displayVersion -and $displayVersion -ne $Version) {
+    Add-Error "installer manifest: DisplayVersion '$displayVersion' != '$Version'"
+}
+$releaseNotesUrl = Get-YamlValue -Text $localeText -Key 'ReleaseNotesUrl' -FileLabel 'locale manifest'
+$expectedNotesUrl = "https://github.com/Exoridus/exosnap/releases/tag/v$Version"
+if ($releaseNotesUrl -and $releaseNotesUrl -ne $expectedNotesUrl) {
+    Add-Error "locale manifest: ReleaseNotesUrl '$releaseNotesUrl' != expected '$expectedNotesUrl'"
 }
 
 # ---------------------------------------------------------------------------

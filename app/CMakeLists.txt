@@ -1413,6 +1413,31 @@ if(EXOSNAP_PWSH)
             "${PROJECT_SOURCE_DIR}/scripts/tests/release-qualification.tests.ps1")
     set_tests_properties(live_verify.release_qualification PROPERTIES TIMEOUT 300 LABELS "live_verify")
 
+    # The signature the publish lock reads before anything else. Pinned to RFC 8032's
+    # own test vectors, because a verifier that says yes to everything reports a proof
+    # it never had, and nothing downstream could tell.
+    add_test(NAME pipeline.ed25519
+        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
+            "${PROJECT_SOURCE_DIR}/scripts/tests/ed25519.tests.ps1")
+    set_tests_properties(pipeline.ed25519 PROPERTIES TIMEOUT 180 LABELS "pipeline")
+
+    # Which release candidate a commit may be promoted from. Two gates read that
+    # answer, so a wrong one publishes a release against evidence describing
+    # something else. `gh` is a stub here; nothing reaches the network.
+    add_test(NAME live_verify.find_qualified_rc
+        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
+            "${PROJECT_SOURCE_DIR}/scripts/tests/find-qualified-rc.tests.ps1")
+    set_tests_properties(live_verify.find_qualified_rc PROPERTIES TIMEOUT 180 LABELS "live_verify")
+
+    # The packaging version-drift gate. Every case is the real packaging tree with
+    # exactly one literal edited: a partial bump is the mistake the gate exists for,
+    # and a check that only noticed when everything moved together would notice
+    # nothing.
+    add_test(NAME pipeline.packaging_version
+        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
+            "${PROJECT_SOURCE_DIR}/scripts/tests/packaging-version.tests.ps1")
+    set_tests_properties(pipeline.packaging_version PROPERTIES TIMEOUT 300 LABELS "pipeline")
+
     # The Hyper-V verification guest recipe. Registered here for the reason the
     # release-runner cases are: what it is worth testing about a virtual machine is
     # what happens before one exists -- the three refusals a first attempt hits (not

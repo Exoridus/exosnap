@@ -67,6 +67,13 @@ function New-TestDirectory {
 # Fixtures
 # ---------------------------------------------------------------------------
 
+# RFC 8032's own key material. A published test vector cannot be mistaken for a real
+# release key, and it makes the fixtures reproducible byte for byte.
+$script:TestSigningKey = 'nWGxne/9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A='
+$script:TestPublicKey = 'd75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a'
+$script:OtherSigningKey = 'TM0Imyj/ltqdtsNG7BFOD1uKMZ81q6Yk2oz27U+4pvs='
+$script:OtherPublicKey = '3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c'
+
 $script:GoodCommit = '1111111111111111111111111111111111111111'
 $script:GoodRcTag = 'v0.9.1-rc1'
 $script:PortableName = 'ExoSnap-0.9.1-rc1-windows-x64-portable.zip'
@@ -120,6 +127,7 @@ function New-TestRecord {
         machineFingerprint = 'f' * 64
         harness            = [ordered]@{ version = '1.0.0'; commit = 'c' * 40; dirty = $false }
         catalog            = [ordered]@{ version = '1.0.0'; digest = 'd' * 64; scenarioCount = 2 }
+        promotion          = Get-ReleasePromotionDeclaration -RcTag $script:GoodRcTag
         capabilities       = [ordered]@{ 'display.count' = '2' }
         required           = [ordered]@{ ids = @($Checks | Where-Object required | ForEach-Object { $_.id }) }
         checks             = @($Checks)
@@ -147,12 +155,29 @@ function Invoke-CheckScript {
         [string] $ExpectedCommit = $script:GoodCommit,
         [string] $ExpectedRcTag = $script:GoodRcTag,
         [hashtable] $Sidecars,
-        [switch] $OmitRecord
+        [switch] $OmitRecord,
+        # The three ways a signature stops being evidence, each its own message.
+        [switch] $OmitSignature,
+        [switch] $CorruptSignature,
+        [switch] $OmitPublicKey,
+        [string] $PublicKeyHex = $script:TestPublicKey
     )
 
     $recordPath = Join-Path $Directory 'release-verification.json'
     if (-not $OmitRecord) {
         Set-Content -LiteralPath $recordPath -Value ($Record | ConvertTo-Json -Depth 30) -Encoding utf8NoBOM
+        if (-not $OmitSignature) {
+            New-ReleaseQualificationSignatureFile -RecordPath $recordPath `
+                -SigningKeyBase64 $script:TestSigningKey | Out-Null
+            if ($CorruptSignature) {
+                # One flipped nibble: still 128 hex characters, so this is refused by
+                # the arithmetic and not by a shape check.
+                $signaturePath = "$recordPath.sig"
+                $signature = (Get-Content -LiteralPath $signaturePath -Raw).Trim()
+                $flipped = if ($signature[0] -eq '0') { '1' } else { '0' }
+                Set-Content -LiteralPath $signaturePath -Value ($flipped + $signature.Substring(1)) -NoNewline
+            }
+        }
     }
     if ($null -eq $Sidecars) { $Sidecars = @{ $script:PortableName = $script:PortableSha } }
     foreach ($name in $Sidecars.Keys) {
@@ -160,8 +185,10 @@ function Invoke-CheckScript {
             -Value "$($Sidecars[$name])  $name" -Encoding utf8NoBOM
     }
     $summary = Join-Path $Directory 'summary.md'
+    $key = if ($OmitPublicKey) { '' } else { $PublicKeyHex }
     $output = & pwsh -NoProfile -NonInteractive -File $script:CheckScript `
-        -RecordPath $recordPath -ExpectedCommit $ExpectedCommit -ExpectedRcTag $ExpectedRcTag `
+        -RecordPath $recordPath -PublicKeyHex $key `
+        -ExpectedCommit $ExpectedCommit -ExpectedRcTag $ExpectedRcTag `
         -Sha256Directory $Directory -SummaryPath $summary 2>&1 | Out-String
     $code = $LASTEXITCODE
     $summaryText = if (Test-Path -LiteralPath $summary) { Get-Content -LiteralPath $summary -Raw } else { '' }
@@ -192,6 +219,85 @@ Test-Case 'missing and duplicate required verdicts block qualification' {
     Assert-True (@(Get-ReleaseQualificationBlockers -Record $record).Count -gt 0) 'a row cannot override the required ID set'
 }
 
+Test-Case 'the four ways a record can fail the lock are four different messages' {
+    # The point of the case: an operator reading the job summary has to be able to
+    # tell "nobody ran the campaign" from "the record was not signed" from "this
+    # record is not the one the key signed" from "the campaign found something".
+    $missing = Invoke-CheckScript -Directory (New-TestDirectory) -Record (New-TestRecord) -OmitRecord
+    $unsigned = Invoke-CheckScript -Directory (New-TestDirectory) -Record (New-TestRecord) -OmitSignature
+    $bad = Invoke-CheckScript -Directory (New-TestDirectory) -Record (New-TestRecord) -CorruptSignature
+    $notQualified = Invoke-CheckScript -Directory (New-TestDirectory) -Record (New-TestRecord -Checks @(
+            (New-TestCheck -Id 'REL-CAP-001'),
+            (New-TestCheck -Id 'REL-UPD-PORTABLE-001' -State 'FAIL')))
+
+    foreach ($result in @($missing, $unsigned, $bad, $notQualified)) {
+        Assert-Equal 1 $result.ExitCode 'every one of the four must block'
+    }
+    Assert-Match 'No qualification record' $missing.Summary 'a missing record says so'
+    Assert-Match 'UNSIGNED' $unsigned.Summary 'an unsigned record says so'
+    Assert-NoMatch 'UNSIGNED' $bad.Summary 'a bad signature is not an unsigned record'
+    Assert-Match 'DOES NOT VERIFY' $bad.Summary 'a bad signature says so'
+    Assert-Match 'product defect' $notQualified.Summary 'a record that does not qualify names the finding'
+    Assert-NoMatch 'signature' $notQualified.Summary 'a signed record must not be reported as a signature problem'
+}
+
+Test-Case 'a record signed by a key that is not the release key blocks the release' {
+    $directory = New-TestDirectory
+    $recordPath = Join-Path $directory 'release-verification.json'
+    Set-Content -LiteralPath $recordPath -Value ((New-TestRecord) | ConvertTo-Json -Depth 30) -Encoding utf8NoBOM
+    New-ReleaseQualificationSignatureFile -RecordPath $recordPath `
+        -SigningKeyBase64 $script:OtherSigningKey | Out-Null
+    Set-Content -LiteralPath (Join-Path $directory "$($script:PortableName).sha256") `
+        -Value "$($script:PortableSha)  $($script:PortableName)" -Encoding utf8NoBOM
+    $summary = Join-Path $directory 'summary.md'
+    & pwsh -NoProfile -NonInteractive -File $script:CheckScript -RecordPath $recordPath `
+        -PublicKeyHex $script:TestPublicKey -ExpectedCommit $script:GoodCommit `
+        -ExpectedRcTag $script:GoodRcTag -Sha256Directory $directory -SummaryPath $summary 2>&1 | Out-Null
+    Assert-Equal 1 $LASTEXITCODE 'a foreign signature must block'
+    Assert-Match 'DOES NOT VERIFY' (Get-Content -LiteralPath $summary -Raw) 'the reason must say the signature failed'
+}
+
+Test-Case 'no release public key means nothing can be verified, so nothing is published' {
+    $result = Invoke-CheckScript -Directory (New-TestDirectory) -Record (New-TestRecord) -OmitPublicKey
+    Assert-Equal 1 $result.ExitCode 'a missing public key must block'
+    Assert-Match 'EXOSNAP_UPDATE_PUBLIC_KEY_HEX' $result.Summary 'the reason must name the variable to set'
+}
+
+Test-Case 'a record edited after signing blocks the release' {
+    # The attack the signature exists for: the record is the one the campaign
+    # produced, its signature is the real one, and a single field was retyped.
+    $directory = New-TestDirectory
+    $recordPath = Join-Path $directory 'release-verification.json'
+    $record = New-TestRecord
+    Set-Content -LiteralPath $recordPath -Value ($record | ConvertTo-Json -Depth 30) -Encoding utf8NoBOM
+    New-ReleaseQualificationSignatureFile -RecordPath $recordPath `
+        -SigningKeyBase64 $script:TestSigningKey | Out-Null
+    $record.checks[0].state = 'FAIL'
+    $record.qualification.overall = 'QUALIFIED'
+    Set-Content -LiteralPath $recordPath -Value ($record | ConvertTo-Json -Depth 30) -Encoding utf8NoBOM
+    Set-Content -LiteralPath (Join-Path $directory "$($script:PortableName).sha256") `
+        -Value "$($script:PortableSha)  $($script:PortableName)" -Encoding utf8NoBOM
+    $summary = Join-Path $directory 'summary.md'
+    & pwsh -NoProfile -NonInteractive -File $script:CheckScript -RecordPath $recordPath `
+        -PublicKeyHex $script:TestPublicKey -ExpectedCommit $script:GoodCommit `
+        -ExpectedRcTag $script:GoodRcTag -Sha256Directory $directory -SummaryPath $summary 2>&1 | Out-Null
+    Assert-Equal 1 $LASTEXITCODE 'an edited record must block'
+    Assert-Match 'DOES NOT VERIFY' (Get-Content -LiteralPath $summary -Raw) 'the reason must be the signature, not the contents'
+}
+
+Test-Case 'signing refuses a key that is not the private half of the release key' {
+    $directory = New-TestDirectory
+    $recordPath = Join-Path $directory 'release-verification.json'
+    Set-Content -LiteralPath $recordPath -Value '{}' -Encoding utf8NoBOM
+    $threw = $false
+    try {
+        New-ReleaseQualificationSignatureFile -RecordPath $recordPath `
+            -SigningKeyBase64 $script:OtherSigningKey -ExpectedPublicKeyHex $script:TestPublicKey | Out-Null
+    }
+    catch { $threw = $true }
+    Assert-True $threw 'signing with the wrong key must fail while it is still cheap'
+}
+
 Test-Case 'a missing record blocks the release' {
     $directory = New-TestDirectory
     $result = Invoke-CheckScript -Directory $directory -Record (New-TestRecord) -OmitRecord
@@ -203,10 +309,15 @@ Test-Case 'an unparseable record blocks the release' {
     $directory = New-TestDirectory
     $recordPath = Join-Path $directory 'release-verification.json'
     Set-Content -LiteralPath $recordPath -Value '{ this is not json' -Encoding utf8NoBOM
+    # Correctly signed garbage, so the refusal is provably about the JSON and not
+    # about the signature that is checked before it.
+    New-ReleaseQualificationSignatureFile -RecordPath $recordPath `
+        -SigningKeyBase64 $script:TestSigningKey | Out-Null
     Set-Content -LiteralPath (Join-Path $directory "$($script:PortableName).sha256") `
         -Value "$($script:PortableSha)  $($script:PortableName)" -Encoding utf8NoBOM
     $summary = Join-Path $directory 'summary.md'
     & pwsh -NoProfile -NonInteractive -File $script:CheckScript -RecordPath $recordPath `
+        -PublicKeyHex $script:TestPublicKey `
         -ExpectedCommit $script:GoodCommit -ExpectedRcTag $script:GoodRcTag `
         -Sha256Directory $directory -SummaryPath $summary 2>&1 | Out-Null
     Assert-Equal 1 $LASTEXITCODE 'an unparseable record must block'
@@ -585,6 +696,207 @@ Test-Case 'a clean campaign qualifies, and the lock accepts its record' {
     $verdict = Test-ReleaseQualification -Record $record -ExpectedCommit $script:GoodCommit `
         -ExpectedRcTag $script:GoodRcTag -ExpectedPackageSha256 @{ $script:PortableName = $script:PortableSha }
     Assert-True $verdict.Qualified "the lock must accept the record it produced: $($verdict.Reasons -join '; ')"
+}
+
+Write-Host ''
+Write-Host '== The promotion lock: what ships is what was qualified' -ForegroundColor Cyan
+
+$script:PromotionScript = Join-Path $scriptRoot 'check-release-promotion.ps1'
+
+function New-TestBuildManifest {
+    <#
+    .SYNOPSIS
+        An artifact-manifest.json for one build of the portable tree, in the shape
+        build-release-artifacts.ps1 writes it.
+    #>
+    param(
+        [Parameter(Mandatory)] [string] $Version,
+        [string] $SourceCommit = $script:GoodCommit,
+        [System.Collections.IDictionary] $Files
+    )
+
+    if ($null -eq $Files) {
+        $Files = [ordered]@{
+            'exosnap.exe'          = 'a' * 64
+            'exosnap-updater.exe'  = 'b' * 64
+            'Qt6Core.dll'          = 'c' * 64
+            'qml/ExoSnap/Main.qml' = 'd' * 64
+        }
+    }
+    $entries = @()
+    foreach ($name in $Files.Keys) {
+        $entries += [ordered]@{
+            path   = "ExoSnap-$Version-windows-x64-portable/$name"
+            size   = 1024
+            sha256 = $Files[$name]
+        }
+    }
+    return [ordered]@{
+        product         = 'ExoSnap'
+        version         = $Version
+        baseVersion     = ($Version -split '-')[0]
+        platform        = 'windows-x64'
+        sourceCommit    = $SourceCommit
+        portableArchive = "ExoSnap-$Version-windows-x64-portable.zip"
+        fileCount       = $entries.Count
+        files           = $entries
+    }
+}
+
+function New-TestToolchainManifest {
+    param([string] $Version = '0.9.1-rc1', [string] $ClVersion = 'Version 19.44.35207 for x64')
+    return [ordered]@{
+        product      = 'ExoSnap'
+        version      = $Version
+        sourceCommit = $script:GoodCommit
+        runner       = [ordered]@{ imageLabel = 'windows-2022'; imageOs = 'Windows'; imageVersion = '20260901.1' }
+        msvc         = [ordered]@{ clVersion = $ClVersion }
+        cmake        = [ordered]@{ version = 'cmake version 3.31.6' }
+        qt           = [ordered]@{ version = '6.9.3'; rootDir = 'C:/Qt/6.9.3/msvc2022_64' }
+        wix          = [ordered]@{ version = '4.0.5' }
+        ffmpeg       = [ordered]@{ url = 'https://example.invalid/ffmpeg.zip'; sha256 = 'e' * 64 }
+    }
+}
+
+function Invoke-PromotionScript {
+    <#
+    .SYNOPSIS
+        Runs the promotion lock in a child pwsh; the exit code is its whole contract.
+    #>
+    param(
+        [Parameter(Mandatory)] [string] $Directory,
+        $Record,
+        $QualifiedManifest,
+        $CandidateManifest,
+        $QualifiedToolchain,
+        $CandidateToolchain,
+        [string] $CandidateVersion = '0.9.1',
+        [switch] $OmitSignature
+    )
+
+    if ($null -eq $Record) { $Record = New-TestRecord }
+    if ($null -eq $QualifiedManifest) { $QualifiedManifest = New-TestBuildManifest -Version '0.9.1-rc1' }
+    if ($null -eq $CandidateManifest) { $CandidateManifest = New-TestBuildManifest -Version $CandidateVersion }
+    if ($null -eq $QualifiedToolchain) { $QualifiedToolchain = New-TestToolchainManifest -Version '0.9.1-rc1' }
+    if ($null -eq $CandidateToolchain) { $CandidateToolchain = New-TestToolchainManifest -Version $CandidateVersion }
+
+    $recordPath = Join-Path $Directory 'release-verification.json'
+    Set-Content -LiteralPath $recordPath -Value ($Record | ConvertTo-Json -Depth 30) -Encoding utf8NoBOM
+    if (-not $OmitSignature) {
+        New-ReleaseQualificationSignatureFile -RecordPath $recordPath `
+            -SigningKeyBase64 $script:TestSigningKey | Out-Null
+    }
+    $paths = @{}
+    foreach ($pair in @(
+            @{ Key = 'QualifiedManifest'; Name = 'rc-artifact-manifest.json'; Value = $QualifiedManifest },
+            @{ Key = 'CandidateManifest'; Name = 'artifact-manifest.json'; Value = $CandidateManifest },
+            @{ Key = 'QualifiedToolchain'; Name = 'rc-toolchain-manifest.json'; Value = $QualifiedToolchain },
+            @{ Key = 'CandidateToolchain'; Name = 'toolchain-manifest.json'; Value = $CandidateToolchain })) {
+        $path = Join-Path $Directory $pair.Name
+        Set-Content -LiteralPath $path -Value ($pair.Value | ConvertTo-Json -Depth 30) -Encoding utf8NoBOM
+        $paths[$pair.Key] = $path
+    }
+
+    $summary = Join-Path $Directory 'promotion.md'
+    $output = & pwsh -NoProfile -NonInteractive -File $script:PromotionScript `
+        -RecordPath $recordPath -PublicKeyHex $script:TestPublicKey `
+        -QualifiedManifestPath $paths['QualifiedManifest'] -CandidateManifestPath $paths['CandidateManifest'] `
+        -QualifiedToolchainPath $paths['QualifiedToolchain'] -CandidateToolchainPath $paths['CandidateToolchain'] `
+        -CandidateVersion $CandidateVersion -SummaryPath $summary 2>&1 | Out-String
+    $code = $LASTEXITCODE
+    $summaryText = if (Test-Path -LiteralPath $summary) { Get-Content -LiteralPath $summary -Raw } else { '' }
+    return @{ ExitCode = $code; Output = $output; Summary = $summaryText }
+}
+
+Test-Case 'a rebuild that differs only where the contract permits is promotable' {
+    # The realistic case: the executables the release version is compiled into
+    # changed, nothing else did.
+    $candidate = New-TestBuildManifest -Version '0.9.1' -Files ([ordered]@{
+            'exosnap.exe'          = '1' * 64
+            'exosnap-updater.exe'  = '2' * 64
+            'Qt6Core.dll'          = 'c' * 64
+            'qml/ExoSnap/Main.qml' = 'd' * 64
+        })
+    $result = Invoke-PromotionScript -Directory (New-TestDirectory) -CandidateManifest $candidate
+    Assert-Equal 0 $result.ExitCode "a permitted rebuild must promote: $($result.Output)"
+    Assert-Match 'as the promotion contract permits' $result.Summary 'the permitted differences must be listed'
+}
+
+Test-Case 'a changed shipped file that is not in the contract blocks the release' {
+    $candidate = New-TestBuildManifest -Version '0.9.1' -Files ([ordered]@{
+            'exosnap.exe'          = '1' * 64
+            'exosnap-updater.exe'  = '2' * 64
+            'Qt6Core.dll'          = '9' * 64
+            'qml/ExoSnap/Main.qml' = 'd' * 64
+        })
+    $result = Invoke-PromotionScript -Directory (New-TestDirectory) -CandidateManifest $candidate
+    Assert-Equal 1 $result.ExitCode 'a changed third-party file must block'
+    Assert-Match 'Qt6Core\.dll changed' $result.Summary 'the reason must name the file'
+}
+
+Test-Case 'a file that appears or disappears blocks the release' {
+    $added = New-TestBuildManifest -Version '0.9.1' -Files ([ordered]@{
+            'exosnap.exe'          = '1' * 64
+            'exosnap-updater.exe'  = '2' * 64
+            'Qt6Core.dll'          = 'c' * 64
+            'qml/ExoSnap/Main.qml' = 'd' * 64
+            'Qt6Sql.dll'           = '8' * 64
+        })
+    $result = Invoke-PromotionScript -Directory (New-TestDirectory) -CandidateManifest $added
+    Assert-Equal 1 $result.ExitCode 'an added file must block'
+    Assert-Match 'Qt6Sql\.dll is in this release' $result.Summary 'the reason must name the added file'
+
+    $removed = New-TestBuildManifest -Version '0.9.1' -Files ([ordered]@{
+            'exosnap.exe'         = '1' * 64
+            'exosnap-updater.exe' = '2' * 64
+            'Qt6Core.dll'         = 'c' * 64
+        })
+    $result = Invoke-PromotionScript -Directory (New-TestDirectory) -CandidateManifest $removed
+    Assert-Equal 1 $result.ExitCode 'a dropped file must block'
+    Assert-Match 'was in the qualified candidate and is not' $result.Summary 'the reason must name the dropped file'
+}
+
+Test-Case 'a release built from another commit blocks the release' {
+    $candidate = New-TestBuildManifest -Version '0.9.1' -SourceCommit ('7' * 40)
+    $result = Invoke-PromotionScript -Directory (New-TestDirectory) -CandidateManifest $candidate
+    Assert-Equal 1 $result.ExitCode 'a moved commit must block'
+    Assert-Match 'source commit moved' $result.Summary 'the reason must say the commit moved'
+}
+
+Test-Case 'a release built by another toolchain blocks the release' {
+    $result = Invoke-PromotionScript -Directory (New-TestDirectory) `
+        -CandidateToolchain (New-TestToolchainManifest -Version '0.9.1' -ClVersion 'Version 19.50.00000 for x64')
+    Assert-Equal 1 $result.ExitCode 'a moved compiler must block'
+    Assert-Match 'msvc\.clVersion changed' $result.Summary 'the reason must name the toolchain field'
+}
+
+Test-Case 'a candidate that published no build inventory cannot be promoted from' {
+    $result = Invoke-PromotionScript -Directory (New-TestDirectory) `
+        -QualifiedManifest ([ordered]@{ version = '0.9.1-rc1'; files = @() })
+    Assert-Equal 1 $result.ExitCode 'an inventory-less candidate must block'
+    Assert-Match 'lists no files' $result.Summary 'the reason must name the unusable inventory'
+}
+
+Test-Case 'the promotion lock refuses an unsigned record too' {
+    $result = Invoke-PromotionScript -Directory (New-TestDirectory) -OmitSignature
+    Assert-Equal 1 $result.ExitCode 'an unsigned record must block promotion'
+    Assert-Match 'UNSIGNED' $result.Summary 'the reason must say the record is unsigned'
+}
+
+Test-Case 'a record may not widen its own difference budget' {
+    $record = New-TestRecord
+    $record.promotion.mutableEntries = @('exosnap.exe', 'Qt6Core.dll')
+    $record.promotion.contract = 'exosnap.release-promotion/99'
+    $result = Invoke-PromotionScript -Directory (New-TestDirectory) -Record $record
+    Assert-Equal 1 $result.ExitCode 'an unimplemented contract must block'
+    Assert-Match 'may not widen its own difference budget' $result.Summary 'the reason must say so'
+}
+
+Test-Case 'a record with no promotion contract does not qualify at all' {
+    $record = New-TestRecord
+    $record.Remove('promotion')
+    Assert-True (@(@(Get-ReleaseQualificationBlockers -Record $record) -match 'promotion contract').Count -gt 0) `
+        'a record that declares no contract permits everything and must not qualify'
 }
 
 Write-Host ''

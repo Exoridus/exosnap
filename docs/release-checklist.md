@@ -132,24 +132,67 @@ the workflow refuses to publish without one.
       opt-in scenarios named for this release with `-Required <ids>` (the soak, the unplug gates —
       name the ones this release must have answered).
 - [ ] **Attach the record to the RC release**: `pwsh scripts/release-verify.ps1 qualify -RunId <id>
-      -Publish`. This uploads `release-verification.json` to the RC's GitHub Release, which is where
-      the publish gate reads it from. **A developer's act, never an agent's** (AGENTS.md, "Release
-      authority").
+      -Publish`. This signs `release-verification.json` with the release ed25519 key and uploads
+      both it and its detached `.sig` to the RC's GitHub Release, which is where the publish gate
+      reads them from. **A developer's act, never an agent's** (AGENTS.md, "Release authority").
+  - The key is the same one that signs the update manifest. Put the base64 seed in
+    `EXOSNAP_UPDATE_SIGNING_KEY` (the value of the repository secret of that name) before running
+    `qualify`; with `EXOSNAP_UPDATE_PUBLIC_KEY_HEX` set as well, signing refuses a key that is not
+    the private half of it, which is cheaper than finding out at the tag. Without a key `qualify`
+    prints the verdict and says the record is unsigned, and `-Publish` refuses outright: every
+    field in a record is publicly readable from the RC release and can therefore be retyped by
+    hand, so an unsigned record proves nothing about who produced it.
 - [ ] **Push the final `vX.Y.Z` tag from the *exact* commit the record names** and continue with §4.
       Re-cut an RC if that commit moved: a record is bound to one commit and one set of bytes.
 
 > **The lock.** On a final tag, `release-candidate.yml`'s `require-qualification` job runs before
-> anything is created or uploaded. It finds the newest published RC of this base version whose tag
-> points at the tagged commit, downloads its `release-verification.json` and its `.sha256` sidecars,
-> and hands both to `scripts/check-release-qualification.ps1`. Publishing stops when: there is no
-> such RC; the RC carries no record; the record cannot be parsed; its schema is unknown; its
+> anything is created or uploaded. `scripts/find-qualified-rc.ps1` finds the newest published RC of
+> this base version whose tag points at the tagged commit and downloads its
+> `release-verification.json`, that record's `.sig`, its `.sha256` sidecars, and its
+> `artifact-manifest.json` and `toolchain-manifest.json`.
+> `scripts/check-release-qualification.ps1` then verifies **the signature first, before it parses a
+> single field**. Four outcomes, four messages, because the fix differs for each: no record at all;
+> a record that is not signed; a signature that does not verify (the record, the key or the
+> signature does not belong to the others -- including a record edited after it was signed); and a
+> signed record that does not qualify. A missing `EXOSNAP_UPDATE_PUBLIC_KEY_HEX` is its own refusal:
+> nothing can be verified, so nothing is published.
+>
+> Past the signature, publishing stops when: the record cannot be parsed; its schema is unknown; its
 > `sourceCommit` is not the tagged commit; its RC tag is not the one it was downloaded from; its
-> package SHA-256s do not match the sidecars the RC published; the harness or catalog identity is
-> missing; or the verdicts contain a `FAIL`, an `INFRA_ERROR`, an unanswered required gate, an
-> unrestored environment or absent evidence. The record's own `QUALIFIED` claim is re-derived, never
-> believed. Building still proceeds — only publishing is blocked, with the reason in the job
-> summary. RC tags keep the path they always had: an RC is the artifact a campaign runs *against*
-> and cannot require its own record.
+> package SHA-256s do not match the sidecars the RC published; the harness, catalog or promotion
+> identity is missing; or the verdicts contain a `FAIL`, an `INFRA_ERROR`, an unanswered required
+> gate, an unrestored environment or absent evidence. The record's own `QUALIFIED` claim is
+> re-derived, never believed. Building still proceeds -- only publishing is blocked, with the reason
+> in the job summary. RC tags keep the path they always had: an RC is the artifact a campaign runs
+> *against* and cannot require its own record.
+
+> **The promotion comparison, and what it does not cover.** A final tag does not ship the bytes the
+> campaign measured. It rebuilds them, because the release identity is compiled in:
+> `EXOSNAP_RELEASE_VERSION` becomes `kVersion` and the ProductVersion string in the shipped
+> executables, and the packages are named for it, so `0.9.1-rc1` and `0.9.1` are different artifacts
+> by construction and their hashes can never match. Re-publishing the RC's bytes under the final tag
+> would ship binaries that still call themselves a release candidate.
+>
+> So the rebuild is permitted and its **difference budget is declared in the record** (`promotion`,
+> contract `exosnap.release-promotion/1`) and enforced by
+> `scripts/check-release-promotion.ps1`, which `publish-release` runs before it creates the draft.
+> Both builds write a per-file inventory of the portable install tree (`artifact-manifest.json`, now
+> a published release asset) and a record of the toolchain that produced it
+> (`toolchain-manifest.json`). Publishing is allowed only when the two install trees hold the same
+> files, every file is byte-identical except `exosnap.exe`, `exosnap-updater.exe` and
+> `crashpad_handler.exe`, both builds came from the same commit, and both used the same compiler,
+> CMake, Qt, WiX and vendored FFmpeg. A candidate cut before the workflow attached that inventory
+> cannot be promoted from at all: cut a new one.
+>
+> **Not covered.** Those three binaries are compared to nothing, because they cannot be. Their
+> correctness rests on the identical commit and the identical toolchain, both checked. A regression
+> the release build introduces into one of them while changing nothing else stays out of reach, and
+> so does the MSI's internal structure -- only the portable install tree is inventoried, and the MSI
+> is covered transitively by the build job's own assertion that its contents equal the staging tree.
+> Closing both needs a true promotion: the RC carrying the final version string from the start, with
+> its candidate-ness living only in the release metadata, so the final tag can ship the qualified
+> bytes unchanged. That is a change to the update client's version ordering as much as to the
+> pipeline, and it is the follow-up this section is written against.
 
 > **`v0.9.0`.** It stays exactly as published — no delete, no retag, no different bytes under the
 > same version. It was tagged before this process existed and before its own checklist had been
@@ -170,15 +213,20 @@ this deterministically — there is no manual asset upload and no `sign-manifest
       is missing on a `v*` tag, so a version tag can never produce an unofficial artifact, and
       `require-qualification` refuses to publish a commit no qualified RC record covers.
 - [ ] **Let the pipeline run and confirm it went green.** On the tag push the workflow, in order:
+  0. refuses in seconds if the Chocolatey, WinGet or Scoop packaging names a version other than the
+     one the tag and `CMakeLists.txt` declare (`scripts/check-packaging-version.ps1`);
   1. builds + validates the portable ZIP, MSI, and their `.sha256` sidecars (packaging gate);
   2. generates `update-manifest.json`, signs it (detached ed25519 `.sig`), and **verifies in CI**
      that the signing key is the private half of the embedded public key and that the signature
      verifies;
-  3. creates a **draft** GitHub Release for the tag;
+  3. compares this build's install tree and toolchain against the qualified candidate's
+     (`scripts/check-release-promotion.ps1`), then creates a **draft** GitHub Release for the tag;
   4. uploads the ZIP, MSI, `.sha256` sidecars, `update-manifest.json`, `update-manifest.json.sig`,
-     and `toolchain-manifest.json` (an informational record of the exact runner image, MSVC, CMake,
-     Qt, WiX, and pinned FFmpeg prebuilt that produced the build — not signed, not part of the
-     integrity gate);
+     `toolchain-manifest.json` (the exact runner image, MSVC, CMake, Qt, WiX and pinned FFmpeg
+     prebuilt that produced the build) and `artifact-manifest.json` (the per-file inventory of the
+     portable install tree). Neither of the last two is signed, and they are not part of the
+     manifest-signature gate -- but they are no longer merely informational: the next release's
+     promotion comparison reads both off this release;
   5. re-downloads the ZIP, MSI and manifest and re-hashes them, cross-checks the manifest's embedded
      SHA-256s against the shipped bytes, and re-verifies the signature against the embedded public key
      (`toolchain-manifest.json` is uploaded alongside but is informational only and is not part of this
@@ -194,10 +242,20 @@ this deterministically — there is no manual asset upload and no `sign-manifest
       in-app updates forever**. **MANDATORY for every release from 0.9.0 on.**
 - [ ] (Optional) Edit the release notes on GitHub after publication.
 
-> **Manual escape hatch.** `sign-manifest.yml` still exposes a standalone `workflow_dispatch` that
-> attaches a freshly signed manifest to an **already-existing** Release (supply the final URLs +
-> SHAs). It is only needed if the automated `publish-release` job is unavailable (e.g. re-signing an
-> old release); the normal path above requires no re-run.
+> **Manual escape hatch, and its guard.** `sign-manifest.yml` still exposes a standalone
+> `workflow_dispatch` that signs a manifest from supplied URLs and SHAs. `attach_to_release` now
+> defaults to **false**: the manifest is signed and published as a build artifact, and attaching it
+> to a Release is a separate decision. The update manifest is what installed clients follow, so
+> attaching one to a live release changes what shipping users download next -- and it used to run
+> with no CI gate, no qualification gate and no check that its hashes described the bytes that
+> release serves.
+>
+> With `attach_to_release` on, the job now refuses unless either the target Release is still a
+> **draft** (invisible to the updater, and `publish-release` re-verifies everything before
+> un-drafting), or the target Release's commit is covered by a signed, qualified record -- the same
+> bar a final tag is held to. In both cases the manifest's declared SHA-256s are re-hashed against
+> the assets that Release actually serves. A published **RC** has no record of its own by
+> definition, so re-signing one by hand is refused: cut the next candidate instead.
 
 ## 5. Updater RC live-check (manual, on real hardware)
 
@@ -505,6 +563,15 @@ submission is the one step that cannot be withdrawn from users' machines, so it 
 the qualification record. Submissions for `v0.9.0` are stopped for that reason; `0.9.1` is the
 version the package managers move to.
 
+> **The version axis is now a CI gate.** `scripts/check-packaging-version.ps1` runs in `ci.yml`'s
+> `lint` job on every pull request and again before the release build, and it fails when any of the
+> roughly sixteen version literals across the three packaging surfaces disagrees with
+> `project(exosnap VERSION x.y.z)`. Run it locally after each bump below --
+> `pwsh scripts/check-packaging-version.ps1` -- rather than discovering a half-finished bump at
+> submission time. It deliberately says nothing about installer hashes: those cannot exist between a
+> bump and the release that produces the bytes, so the Chocolatey checksum placeholder and an
+> unpublished WinGet `InstallerSha256` pass it. The full validators below still check them.
+
 - [ ] **WinGet.** `packaging/winget/manifests/c/Codexo/ExoSnap/` must contain exactly one version
       directory (`scripts/validate-winget-manifest.ps1` enforces this) — `git mv` the existing
       `<old-version>/` directory to `<new-version>/` rather than adding a second one, then update:
@@ -552,3 +619,56 @@ version the package managers move to.
       `scoop update` runs against the new GitHub Release — no manual bucket edit needed. Still keep
       this in-repo template's `version`, `architecture.64bit.url`, and `hash` current so a
       first-time copy into the bucket (`packaging/scoop/README.md`) starts from the right values.
+
+## 9. Repository settings that are not files
+
+Everything else in this document is enforced by something in the repository. These are GitHub
+settings, so they cannot be. Apply them by hand in **Settings -> Rules -> Rulesets**; nothing in
+CI can add them and nothing in CI will notice if they are removed.
+
+The state below was read from the API and is what is configured today. Two rulesets exist and both
+are `active`; classic branch protection on `main` is off entirely (`404 Branch not protected`), so
+the rulesets are the whole of it.
+
+**"Block push on main"** (branch, `~DEFAULT_BRANCH`) -- rules `deletion`, `non_fast_forward`, and
+`required_status_checks` with contexts `lint`, `build-test (windows-x64-debug)` and
+`build-test (windows-x64-release)`. Two `RepositoryRole` bypass actors (ids 2 and 5), both
+`bypass_mode: always`.
+
+- [ ] **Set `strict_required_status_checks_policy` to true** ("Require branches to be up to date
+      before merging"). It is `false` today, so two independently green pull requests can merge a
+      combination that was never built together -- and because `ci.yml` builds nothing on a plain
+      push to `main`, nothing rebuilds the result. The next pull request or the nightly advisory run
+      finds it, hours later.
+- [ ] **Add `verify-harness` to the required contexts.** It is the typed C# release-verify harness
+      that is becoming the release gate, and it is not required today, so a change that breaks it
+      can land on `main` and then be tagged.
+- [ ] **Add a `pull_request` rule.** Neither ruleset has one, so nothing requires a pull request
+      before a change reaches `main`; the only thing standing there is `.githooks/pre-commit`, a
+      local hook with a documented `ALLOW_MAIN_COMMIT=1` escape that `git commit --no-verify` skips
+      entirely. Requiring an approving review is not workable for a solo maintainer, but requiring
+      a pull request still forces the required checks to run against the merge result rather than
+      the branch tip.
+- [ ] **Narrow the bypass actors.** Both are `bypass_mode: always`, so those roles skip the required
+      status checks as well as the push rule. Admin-only, and preferably
+      `bypass_mode: pull_request`.
+- [ ] **Confirm in the ruleset UI what a skipped required job counts as.**
+      `build-test (windows-x64-release)` runs on a pull request only when the paths filter matches.
+      Whether GitHub treats the resulting skipped job as satisfying its required context could not
+      be determined from the API; if it does, a pull request that misses the filter merges without
+      its required Release build ever having run.
+
+**"Block veresion tags"** (tag, `refs/tags/v*`) -- rules `creation`, `update`, `deletion`,
+`non_fast_forward`, with the same two bypass actors. This is what makes a version tag a human act:
+the Actions token has no bypass, so no workflow can create one. Leave it in place. (The name is
+misspelled in the repository; renaming it is cosmetic and would invalidate nothing.)
+
+- [ ] **Confirm which repository roles ids 2 and 5 are.** The API returns ids, not names. They are
+      assumed to be maintain and admin; if either is write, the tag rule is not the gate it is
+      described as anywhere in this document.
+
+One guardrail that belongs here and is **not** implemented: nothing asserts that a tagged commit was
+ever an ancestor of `origin/main`. `resolve-identity` validates the tag's shape and its version, and
+`publish-release` validates the tag's commit against the built commit, but a `v*` tag cut from a
+side branch publishes normally as long as `ci.yml` ran on that ref. Combined with the missing
+`pull_request` rule, that is the path by which an unreviewed commit becomes a release.

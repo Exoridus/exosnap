@@ -1,6 +1,6 @@
 {
   "schema": "exosnap.release-verification/1",
-  "generatedUtc": "2026-09-08T02:36:13.1410936\u002B00:00",
+  "generatedUtc": "2026-09-09T08:24:45.8884730\u002B00:00",
   "runId": "rel-20260908-000000",
   "rcTag": "v0.9.1-rc1",
   "sourceCommit": "0000000000000000000000000000000000000000",
@@ -30,6 +30,17 @@
     "version": "catalog-1",
     "digest": "catalog-digest-aaaaaaaaaaaaaaaa",
     "scenarioCount": 1
+  },
+  "promotion": {
+    "contract": "exosnap.release-promotion/1",
+    "qualifiedVersion": "0.9.1",
+    "policy": "the final tag rebuilds the qualified commit; only the declared entries may differ",
+    "mutableEntries": [
+      "exosnap.exe",
+      "exosnap-updater.exe",
+      "crashpad_handler.exe"
+    ],
+    "mutableReason": "compiled from this commit, so each carries the release version string and the build id of the run that produced it"
   },
   "capabilities": {
     "elevated": "false"
@@ -77,6 +88,6 @@
   "qualification": {
     "overall": "QUALIFIED",
     "reasons": [],
-    "evaluatedUtc": "2026-09-08T02:36:13.1410936\u002B00:00"
+    "evaluatedUtc": "2026-09-09T08:24:45.8884730\u002B00:00"
   }
 }

@@ -7,18 +7,35 @@
 .DESCRIPTION
     Run by `.github/workflows/release-candidate.yml` on a final (`vX.Y.Z`) tag, before
     anything is published. It answers one question, and it answers it fail-closed: is
-    there a qualification record that measured exactly this commit, on exactly the
-    bytes the RC published, with no product defect, no harness failure, no required
-    gate left unanswered, and no machine left misconfigured?
+    there a qualification record, signed by the release key, that measured exactly this
+    commit, on exactly the bytes the RC published, with no product defect, no harness
+    failure, no required gate left unanswered, and no machine left misconfigured?
 
-    Any doubt is a refusal. A missing record, an unreadable record, a record about a
-    different commit and a record about different bytes are all the same answer: the
-    job stops before the publish step, and the reason goes into the job summary.
+    The signature is checked first, before a single field is read. Everything else in a
+    record -- commit, RC tag, package hashes -- is publicly readable from the RC
+    release, so all of it can be retyped by hand into a record that no campaign ever
+    produced. Only the signature separates the two.
+
+    Any doubt is a refusal. A missing record, an unsigned record, a record whose
+    signature does not verify, an unreadable record, a record about a different commit
+    and a record about different bytes are all the same outcome and four different
+    messages: the job stops before the publish step, and the reason goes into the job
+    summary.
 
     Nothing here publishes, uploads, tags or mutates anything.
 
 .PARAMETER RecordPath
     The `release-verification.json` downloaded from the RC release.
+
+.PARAMETER SignaturePath
+    The detached ed25519 signature over the record's bytes. Defaults to the record
+    path plus `.sig`, which is how `release-verify.ps1 qualify -Publish` names and
+    attaches it.
+
+.PARAMETER PublicKeyHex
+    The release public key, 64 hex characters -- the same
+    EXOSNAP_UPDATE_PUBLIC_KEY_HEX the shipped binaries embed and the update manifest
+    is verified against. Without it nothing can be verified and the answer is no.
 
 .PARAMETER ExpectedCommit
     The commit the final tag points at. The record must qualify exactly this one.
@@ -36,11 +53,14 @@
 
 .EXAMPLE
     pwsh scripts/check-release-qualification.ps1 -RecordPath rc/release-verification.json `
+        -PublicKeyHex $env:EXOSNAP_UPDATE_PUBLIC_KEY_HEX `
         -ExpectedCommit $env:GITHUB_SHA -ExpectedRcTag v0.9.1-rc1 -Sha256Directory rc
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)] [string] $RecordPath,
+    [string] $SignaturePath,
+    [string] $PublicKeyHex,
     [string] $ExpectedCommit,
     [string] $ExpectedRcTag,
     [string] $Sha256Directory,
@@ -122,6 +142,14 @@ if (-not (Test-Path -LiteralPath $RecordPath -PathType Leaf)) {
         "No qualification record at '$RecordPath'. A final release requires a release-verification.json " +
         'produced by a completed release-verify campaign against the RC built from this commit, and ' +
         'uploaded to that RC release.')
+}
+
+# Before anything is parsed: an unsigned or wrongly signed record is not evidence,
+# and reading its fields would only lend them credibility they do not have.
+$signature = Test-ReleaseQualificationSignature -RecordPath $RecordPath `
+    -SignaturePath $SignaturePath -PublicKeyHex $PublicKeyHex
+if (-not $signature.Verified) {
+    Write-Verdict -Qualified $false -Reasons @($signature.Reason)
 }
 
 try {

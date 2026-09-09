@@ -90,6 +90,19 @@ public static class ReleaseVerificationRecord
     /// <summary>The verdict that refuses it.</summary>
     public const string NotQualified = "NOT_QUALIFIED";
 
+    /// <summary>The promotion contract shared with the PowerShell publish lock.</summary>
+    private const string PromotionContract = "exosnap.release-promotion/1";
+
+    private const string PromotionPolicy =
+        "the final tag rebuilds the qualified commit; only the declared entries may differ";
+
+    private const string PromotionMutableReason =
+        "compiled from this commit, so each carries the release version string and the build id " +
+        "of the run that produced it";
+
+    private static readonly string[] PromotionMutableEntries =
+        ["exosnap.exe", "exosnap-updater.exe", "crashpad_handler.exe"];
+
     /// <summary>The states that mean a required gate was actually answered.</summary>
     private static readonly string[] AnsweredStates = ["PASS", "FAIL", "INFRA_ERROR"];
 
@@ -373,6 +386,20 @@ public static class ReleaseVerificationRecord
         writer.WriteString("version", catalogVersion);
         writer.WriteString("digest", catalogDigest);
         writer.WriteNumber("scenarioCount", catalogSize);
+        writer.WriteEndObject();
+
+        writer.WriteStartObject("promotion");
+        writer.WriteString("contract", PromotionContract);
+        writer.WriteString("qualifiedVersion", binding.ProductVersion);
+        writer.WriteString("policy", PromotionPolicy);
+        writer.WriteStartArray("mutableEntries");
+        foreach (var entry in PromotionMutableEntries)
+        {
+            writer.WriteStringValue(entry);
+        }
+
+        writer.WriteEndArray();
+        writer.WriteString("mutableReason", PromotionMutableReason);
         writer.WriteEndObject();
 
         WriteMap(writer, "capabilities", capabilities);

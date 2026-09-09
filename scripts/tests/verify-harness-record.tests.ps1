@@ -28,6 +28,12 @@ $scriptRoot = Split-Path -Parent $PSScriptRoot
 $checker = Join-Path $scriptRoot 'check-release-qualification.ps1'
 $fixture = Join-Path $PSScriptRoot 'fixtures/verify-harness/release-verification.sample.json'
 
+. (Join-Path $scriptRoot 'lib/ReleaseQualification.ps1')
+
+# RFC 8032 test vector. This is deliberately public test material, never a release key.
+$script:TestSigningKey = 'nWGxne/9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A='
+$script:TestPublicKey = 'd75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a'
+
 $script:Passed = 0
 $script:Failed = 0
 $script:Skipped = 0
@@ -60,6 +66,10 @@ function Invoke-Checker {
         A separate pwsh, not a dot-source: the checker calls `exit`, and the whole
         point of the lock is what that exit code says. Running it in-process would
         end this test file at the first verdict.
+
+        The committed fixture is C# producer output and must not be rewritten by this
+        test. Copy its exact bytes to a temporary location, sign that copy with the
+        published RFC 8032 test key, and feed the signed copy to the real publish lock.
     #>
     param(
         [Parameter(Mandatory)] [string] $RecordPath,
@@ -68,13 +78,35 @@ function Invoke-Checker {
         [string] $Sha256Directory
     )
 
-    $arguments = @('-NoProfile', '-NonInteractive', '-File', $checker, '-RecordPath', $RecordPath)
-    if ($ExpectedCommit) { $arguments += @('-ExpectedCommit', $ExpectedCommit) }
-    if ($ExpectedRcTag) { $arguments += @('-ExpectedRcTag', $ExpectedRcTag) }
-    if ($Sha256Directory) { $arguments += @('-Sha256Directory', $Sha256Directory) }
+    $directory = Join-Path ([IO.Path]::GetTempPath()) (
+        "exosnap-signed-record-" + [guid]::NewGuid().ToString('n'))
+    New-Item -ItemType Directory -Path $directory -Force | Out-Null
 
-    $output = & pwsh @arguments 2>&1 | Out-String
-    return @{ ExitCode = $LASTEXITCODE; Output = $output }
+    try {
+        $signedRecord = Join-Path $directory 'release-verification.json'
+        Copy-Item -LiteralPath $RecordPath -Destination $signedRecord
+
+        New-ReleaseQualificationSignatureFile `
+            -RecordPath $signedRecord `
+            -SigningKeyBase64 $script:TestSigningKey | Out-Null
+
+        $arguments = @(
+            '-NoProfile',
+            '-NonInteractive',
+            '-File', $checker,
+            '-RecordPath', $signedRecord,
+            '-PublicKeyHex', $script:TestPublicKey
+        )
+        if ($ExpectedCommit) { $arguments += @('-ExpectedCommit', $ExpectedCommit) }
+        if ($ExpectedRcTag) { $arguments += @('-ExpectedRcTag', $ExpectedRcTag) }
+        if ($Sha256Directory) { $arguments += @('-Sha256Directory', $Sha256Directory) }
+
+        $output = & pwsh @arguments 2>&1 | Out-String
+        return @{ ExitCode = $LASTEXITCODE; Output = $output }
+    }
+    finally {
+        Remove-Item -LiteralPath $directory -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function New-SidecarDirectory {
