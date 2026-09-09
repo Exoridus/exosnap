@@ -1,0 +1,244 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Unattended installation for the ExoSnap release-verification guest.
+
+    Three properties of this file are load-bearing for the gates that run in the
+    guest, and none of them is a convenience:
+
+      * The console session logs on automatically and stays logged on. DXGI
+        Output Duplication, the fullscreen-present gates and the capture-excluded
+        overlays all require a real, unlocked console session; an RDP session is a
+        different desktop and duplication fails on it.
+      * OOBE asks nothing. A first-boot screen waiting for a click makes the guest
+        unusable from PowerShell Direct, which is the only channel the host has.
+      * The account is a local administrator with a fixed password. The guest is
+        disposable, is never domain-joined, has Remote Desktop off, and its disk
+        is thrown away after every run, so the password is a constant of the
+        recipe rather than a secret. Never reuse it anywhere else.
+
+    Display language and formats are en-US so that tool output the harness parses
+    stays invariant; the keyboard is de-DE because the developer types on one.
+-->
+<unattend xmlns="urn:schemas-microsoft-com:unattend">
+
+  <settings pass="windowsPE">
+    <component name="Microsoft-Windows-International-Core-WinPE"
+               processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral"
+               versionScope="nonSxS">
+      <SetupUILanguage>
+        <UILanguage>de-DE</UILanguage>
+      </SetupUILanguage>
+      <InputLocale>0407:00000407</InputLocale>
+      <SystemLocale>de-DE</SystemLocale>
+      <UILanguage>de-DE</UILanguage>
+      <UserLocale>de-DE</UserLocale>
+    </component>
+
+    <component name="Microsoft-Windows-Setup"
+               processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral"
+               versionScope="nonSxS">
+      <DiskConfiguration>
+        <WillShowUI>OnError</WillShowUI>
+        <Disk wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+          <DiskID>0</DiskID>
+          <WillWipeDisk>true</WillWipeDisk>
+          <CreatePartitions>
+            <CreatePartition wcm:action="add">
+              <Order>1</Order>
+              <Type>EFI</Type>
+              <Size>260</Size>
+            </CreatePartition>
+            <CreatePartition wcm:action="add">
+              <Order>2</Order>
+              <Type>MSR</Type>
+              <Size>128</Size>
+            </CreatePartition>
+            <CreatePartition wcm:action="add">
+              <Order>3</Order>
+              <Type>Primary</Type>
+              <Extend>true</Extend>
+            </CreatePartition>
+          </CreatePartitions>
+          <ModifyPartitions>
+            <ModifyPartition wcm:action="add">
+              <Order>1</Order>
+              <PartitionID>1</PartitionID>
+              <Format>FAT32</Format>
+              <Label>System</Label>
+            </ModifyPartition>
+            <ModifyPartition wcm:action="add">
+              <Order>2</Order>
+              <PartitionID>2</PartitionID>
+            </ModifyPartition>
+            <ModifyPartition wcm:action="add">
+              <Order>3</Order>
+              <PartitionID>3</PartitionID>
+              <Format>NTFS</Format>
+              <Label>Windows</Label>
+              <Letter>C</Letter>
+            </ModifyPartition>
+          </ModifyPartitions>
+        </Disk>
+      </DiskConfiguration>
+
+      <ImageInstall>
+        <OSImage>
+          <InstallFrom>
+            <MetaData wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+              <Key>/IMAGE/NAME</Key>
+              <Value>Windows 11 Pro</Value>
+            </MetaData>
+          </InstallFrom>
+          <InstallTo>
+            <DiskID>0</DiskID>
+            <PartitionID>3</PartitionID>
+          </InstallTo>
+          <WillShowUI>OnError</WillShowUI>
+        </OSImage>
+      </ImageInstall>
+
+      <UserData>
+        <AcceptEula>true</AcceptEula>
+        <FullName>ExoSnap Release Verification</FullName>
+        <Organization>Codexo</Organization>
+        <!--
+            The public Windows 11 Pro generic key. It selects the edition during
+            setup and activates nothing; the guest runs unactivated, which is
+            sufficient for every gate that runs in it.
+        -->
+        <ProductKey>
+          <Key>VK7JG-NPHTM-C97JM-9MPGT-3V66T</Key>
+          <WillShowUI>OnError</WillShowUI>
+        </ProductKey>
+      </UserData>
+    </component>
+  </settings>
+
+  <settings pass="specialize">
+    <component name="Microsoft-Windows-Shell-Setup"
+               processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral"
+               versionScope="nonSxS">
+      <ComputerName>EXOSNAP-VERIFY</ComputerName>
+      <TimeZone>W. Europe Standard Time</TimeZone>
+    </component>
+
+    <component name="Microsoft-Windows-Deployment"
+               processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral"
+               versionScope="nonSxS">
+      <RunSynchronous>
+        <!--
+            Windows 11 22H2 and later demand a network connection and a Microsoft
+            account during OOBE unless BypassNRO is set before OOBE starts. Without
+            it the guest stops on a screen no unattend section can answer.
+        -->
+        <RunSynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+          <Order>1</Order>
+          <Description>Allow OOBE to finish without a network</Description>
+          <Path>reg.exe add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE" /v BypassNRO /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+          <Order>2</Order>
+          <Description>Diagnostic data off by policy</Description>
+          <Path>reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows\DataCollection" /v AllowTelemetry /t REG_DWORD /d 0 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+          <Order>3</Order>
+          <Description>No consumer content, no suggested apps</Description>
+          <Path>reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows\CloudContent" /v DisableWindowsConsumerFeatures /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+          <Order>4</Order>
+          <Description>No first-run experience in Microsoft Edge</Description>
+          <Path>reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Edge" /v HideFirstRunExperience /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+      </RunSynchronous>
+    </component>
+  </settings>
+
+  <settings pass="oobeSystem">
+    <component name="Microsoft-Windows-International-Core"
+               processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral"
+               versionScope="nonSxS">
+      <InputLocale>0407:00000407</InputLocale>
+      <SystemLocale>de-DE</SystemLocale>
+      <UILanguage>de-DE</UILanguage>
+      <UserLocale>de-DE</UserLocale>
+    </component>
+
+    <component name="Microsoft-Windows-Shell-Setup"
+               processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral"
+               versionScope="nonSxS">
+      <OOBE>
+        <HideEULAPage>true</HideEULAPage>
+        <HideLocalAccountScreen>true</HideLocalAccountScreen>
+        <HideOEMRegistrationScreen>true</HideOEMRegistrationScreen>
+        <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
+        <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
+        <!-- 3: no express settings, no diagnostic-data prompt. -->
+        <ProtectYourPC>3</ProtectYourPC>
+        <SkipMachineOOBE>true</SkipMachineOOBE>
+        <SkipUserOOBE>true</SkipUserOOBE>
+      </OOBE>
+
+      <UserAccounts>
+        <LocalAccounts>
+          <LocalAccount wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+            <Name>exosnap</Name>
+            <DisplayName>ExoSnap Verification</DisplayName>
+            <Group>Administrators</Group>
+            <Password>
+              <Value>ExoSnapVerify!1</Value>
+              <PlainText>true</PlainText>
+            </Password>
+          </LocalAccount>
+        </LocalAccounts>
+      </UserAccounts>
+
+      <!--
+          LogonCount is high rather than 1: the console session has to come back
+          logged on after every reboot the provisioning does and after every start
+          of a per-run differencing clone, not only after setup.
+      -->
+      <AutoLogon>
+        <Username>exosnap</Username>
+        <Enabled>true</Enabled>
+        <LogonCount>999</LogonCount>
+        <Password>
+          <Value>ExoSnapVerify!1</Value>
+          <PlainText>true</PlainText>
+        </Password>
+      </AutoLogon>
+
+      <FirstLogonCommands>
+        <SynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+          <Order>1</Order>
+          <Description>Keep the console session awake and the display on</Description>
+          <CommandLine>powercfg.exe /change standby-timeout-ac 0</CommandLine>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+          <Order>2</Order>
+          <Description>Never blank the virtual display</Description>
+          <CommandLine>powercfg.exe /change monitor-timeout-ac 0</CommandLine>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+          <Order>3</Order>
+          <Description>Allow the host to run provisioning without an execution-policy prompt</Description>
+          <CommandLine>powershell.exe -NoProfile -Command "Set-ExecutionPolicy -Scope LocalMachine -ExecutionPolicy RemoteSigned -Force"</CommandLine>
+        </SynchronousCommand>
+      </FirstLogonCommands>
+    </component>
+  </settings>
+
+</unattend>
