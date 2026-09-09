@@ -14,7 +14,7 @@ name: AddressSanitizer
 #
 # WHY MANUAL-ONLY, FOR NOW
 #
-# This is deliberately `workflow_dispatch` only. The whole tree plus ~176 test
+# This is deliberately `workflow_dispatch` only. The whole tree plus its test
 # binaries is a heavy Windows-runner job, and it re-derives a finding list that
 # changes on the scale of weeks, not commits — the same economics that moved
 # advisory-checks.yml to a nightly. To make it recurring, add:
@@ -44,32 +44,32 @@ jobs:
   asan:
     name: build-test (windows-x64-ninja-asan)
     runs-on: windows-2022
-    timeout-minutes: 120
+    # Raised with the scope: the run now builds and sanitises the Qt Quick
+    # frontend as well, which is roughly two thirds again as many CTest entries.
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Set up MSVC environment
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
 
-      # The 'base' profile (qtbase + qtsvg, no Quick) is deliberate and has to be
-      # said out loud: this job sanitises the engine and its tests and configures
-      # with EXOSNAP_BUILD_APP=OFF, so it never links the Qt Quick frontend. It
-      # used to get that by letting the Qt probe fail, which is indistinguishable
-      # from a broken Qt install.
+      # 'quick', not 'base'. The layer this job exists for is the Qt UI one, and a
+      # Qt install without Quick cannot configure it at all.
       - name: Install Qt 6
         uses: ./.github/actions/setup-qt
         with:
-          profile: base
+          profile: quick
 
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
 
-      # EXOSNAP_BUILD_APP=OFF is deliberate and now has to be said out loud: this
-      # job installs qtbase + qtsvg only, sanitises the engine and its tests, and
-      # never built the Qt Quick application. It used to get that by letting the Qt
-      # probe fail, which is indistinguishable from a broken Qt install.
+      # No EXOSNAP_BUILD_APP=OFF. app/CMakeLists.txt return()s on that flag, which
+      # dropped every app binary and every Quick entry -- about 125 of 313 CTest
+      # entries, and precisely the layer the incident in the header happened in.
+      # The flag was never a statement about ASan; it followed from installing a Qt
+      # without Quick, and outlived that reason.
       - name: Configure (windows-x64-ninja-asan)
-        run: cmake --preset windows-x64-ninja-asan -DEXOSNAP_USE_SCCACHE=ON -DEXOSNAP_BUILD_APP=OFF
+        run: cmake --preset windows-x64-ninja-asan -DEXOSNAP_USE_SCCACHE=ON
 
       - name: Build (windows-x64-ninja-asan)
         run: cmake --build --preset windows-x64-ninja-asan
