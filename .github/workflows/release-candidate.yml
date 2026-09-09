@@ -209,6 +209,18 @@ jobs:
           & ./scripts/check-packaging-version.ps1
           exit $LASTEXITCODE
 
+  # No sccache here, and that is deliberate rather than an oversight. sccache needs
+  # CMAKE_CXX_COMPILER_LAUNCHER, which the Visual Studio / MSBuild generator ignores,
+  # so adding it means moving this job to windows-x64-ninja-release -- a different
+  # generator producing the artifacts that actually ship, with a different output
+  # layout that build-release-artifacts.ps1, validate-msi-harvest.ps1 and the PDB
+  # collection step all encode assumptions about. Nothing available short of building
+  # both and comparing establishes that the shipped bytes would be unchanged, so the
+  # cold compile stays.
+  #
+  # It has also become a change that must be made for an RC and its final tag
+  # together: publish-release now refuses a final build whose toolchain differs from
+  # the qualified candidate's, and the generator is part of what produced those bytes.
   build:
     name: Build Release Artifacts
     needs: resolve-identity
