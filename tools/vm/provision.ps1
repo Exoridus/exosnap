@@ -184,22 +184,38 @@ function Get-VerifiedDownload {
     $url = Resolve-PackageUrl -Package $Package
     $target = Join-Path $Directory (Split-Path -Leaf ([Uri]$url).AbsolutePath)
 
-    if (-not (Test-Path -LiteralPath $target)) {
-        Write-Line "downloading $url"
-        # BITS and Invoke-WebRequest both work; Invoke-WebRequest is the one that is
-        # present on a machine with no network policy configured yet.
-        Invoke-WebRequest -Uri $url -OutFile $target -UseBasicParsing
-    }
-
-    $actual = (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash.ToLowerInvariant()
     $expected = ([string]$Package.sha256).ToLowerInvariant()
-    if ($actual -ne $expected) {
+
+    # Fetched under a partial name and renamed on completion, because provisioning
+    # restarts the guest: a download the restart interrupted would otherwise be
+    # reused on the next pass, and a truncated file fails its pin exactly like a
+    # substituted one. The second attempt tells those apart -- bytes that are wrong
+    # twice, freshly fetched, are not an interrupted download.
+    foreach ($attempt in 1..2) {
+        if (-not (Test-Path -LiteralPath $target)) {
+            Write-Line "downloading $url"
+            $partial = "$target.partial"
+            Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue
+            # BITS and Invoke-WebRequest both work; Invoke-WebRequest is the one that is
+            # present on a machine with no network policy configured yet.
+            Invoke-WebRequest -Uri $url -OutFile $partial -UseBasicParsing
+            Move-Item -LiteralPath $partial -Destination $target -Force
+        }
+
+        $actual = (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($actual -eq $expected) {
+            Write-Line "verified $($Package.id) $($Package.version) against its SHA-256 pin" 'ok'
+            return $target
+        }
+
         Remove-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue
+        if ($attempt -eq 1) {
+            Write-Line "$($Package.id): the file on disk does not match its pin; downloading it again" 'warn'
+            continue
+        }
         throw ("$($Package.id): the file at $url hashes $actual, the manifest pins $expected. " +
                'Either the release was replaced or the download is not what it claims to be; provisioning stops here.')
     }
-    Write-Line "verified $($Package.id) $($Package.version) against its SHA-256 pin" 'ok'
-    return $target
 }
 
 function Expand-VerifiedArchive {
@@ -247,6 +263,37 @@ function Get-WingetPath {
            'Use Windows 11 installation media that includes App Installer; do not bootstrap an unpinned Store package.')
 }
 
+function Get-NativeExitCode {
+    <#
+    .SYNOPSIS
+        The exit code of the native command that just ran, or a failure if none did.
+    .DESCRIPTION
+        Under Set-StrictMode -Version Latest, reading $LASTEXITCODE before any native
+        command has run in the session is an error rather than a null. A resumed run
+        skips every completed step, so the first native command of the session can be
+        one that used to be preceded by others -- which is how a step that had always
+        worked started failing on a variable it never sets itself.
+    #>
+    $variable = Get-Variable -Name 'LASTEXITCODE' -Scope Global -ErrorAction SilentlyContinue
+    if ($null -eq $variable -or $null -eq $variable.Value) {
+        throw 'no native command reported an exit code; the tool did not run'
+    }
+    return [int]$variable.Value
+}
+
+function Invoke-NativeTool {
+    <#
+    .SYNOPSIS
+        Runs one native tool and returns its exit code, with its output in view.
+    #>
+    param(
+        [Parameter(Mandatory)] [string] $FilePath,
+        [string[]] $Arguments = @()
+    )
+    & $FilePath @Arguments
+    return Get-NativeExitCode
+}
+
 function Install-WingetPackage {
     param([Parameter(Mandatory)] $Package)
     $winget = Get-WingetPath
@@ -261,7 +308,7 @@ function Install-WingetPackage {
     # the one line that matters. Keep the output and show it only when it explains
     # a failure.
     $output = & $winget @arguments 2>&1 | Out-String
-    $code = $LASTEXITCODE
+    $code = Get-NativeExitCode
     # 0x8A15002B: already installed at that version. A second provisioning run must
     # not turn that into a failure.
     if ($code -ne 0 -and $code -ne -1978335189) {
@@ -427,8 +474,7 @@ function Invoke-VbcableStep {
     # -i -h is VB-Audio's documented silent install. It stages a driver package;
     # the endpoint only appears after the guest restarts, which is why this step
     # sets the reboot flag rather than verifying the device now.
-    & $installer.FullName -i -h
-    $code = $LASTEXITCODE
+    $code = Invoke-NativeTool -FilePath $installer.FullName -Arguments @('-i', '-h')
     if ($code -ne 0 -and $code -ne 3010) {
         throw "VB-CABLE installer exited $code"
     }
@@ -469,6 +515,41 @@ $rates
 "@
 }
 
+function Grant-DriverPublisherTrust {
+    <#
+    .SYNOPSIS
+        Puts one pinned driver-signing certificate into Trusted Publishers.
+    .DESCRIPTION
+        Windows refuses a third-party driver package whose catalog signer it does not
+        already trust, and a clean guest trusts nobody. The certificate is read out of
+        the catalog that is about to be installed and compared against the thumbprint
+        the manifest pins, so this grants trust to exactly one publisher and fails
+        rather than importing whatever a replaced download happens to carry.
+    #>
+    param(
+        [Parameter(Mandatory)] [string] $CatalogPath,
+        [Parameter(Mandatory)] $Package
+    )
+    if (-not (Test-Path -LiteralPath $CatalogPath)) { throw "the driver catalog '$CatalogPath' does not exist" }
+    $signature = Get-AuthenticodeSignature -LiteralPath $CatalogPath
+    if ($signature.Status -ne 'Valid') {
+        throw "the driver catalog '$CatalogPath' is not validly signed: $($signature.Status)"
+    }
+    $certificate = $signature.SignerCertificate
+    $expected = ([string]$Package.signerThumbprint).Replace(' ', '')
+    if ($certificate.Thumbprint -ne $expected) {
+        throw ("the driver catalog is signed by $($certificate.Subject) with thumbprint " +
+               "$($certificate.Thumbprint), the manifest pins $expected; refusing to trust it")
+    }
+    $already = @(Get-ChildItem 'Cert:\LocalMachine\TrustedPublisher' -ErrorAction SilentlyContinue |
+            Where-Object { $_.Thumbprint -eq $expected })
+    if ($already.Count -gt 0) { return }
+    $store = New-Object Security.Cryptography.X509Certificates.X509Store('TrustedPublisher', 'LocalMachine')
+    $store.Open('ReadWrite')
+    try { $store.Add($certificate) } finally { $store.Close() }
+    Write-Line "trusted the driver publisher $($Package.signerSubject)" 'ok'
+}
+
 function Invoke-IddStep {
     param($Manifest)
     $package = Get-Package -Manifest $Manifest -Id 'idd'
@@ -493,11 +574,25 @@ function Invoke-IddStep {
         Select-Object -First 1
     if (-not $nefcon) { throw "the NefCon archive contains no x64\$($nefconPackage.fileName)" }
 
+    Grant-DriverPublisherTrust -CatalogPath (Join-Path $inf.DirectoryName 'mttvdd.cat') -Package $package
+
+    # An existing node is what a resumed run finds, and NefCon answers a second
+    # install by creating a second device rather than reusing the first. Four of
+    # them accumulated across one interrupted build.
+    $existing = @(Get-PnpDevice -Class Display -ErrorAction SilentlyContinue |
+            Where-Object { $_.InstanceId -like 'ROOT\DISPLAY\*' })
+    if ($existing.Count -gt 0) {
+        Write-Line "the virtual display is already installed as $($existing[0].InstanceId)"
+        $modes = ($Manifest.display.refreshRates | ForEach-Object { "$_ Hz" }) -join ', '
+        return ("virtual display $($Manifest.display.width)x$($Manifest.display.height) ($modes), " +
+                "HDR $(if ($hdr) { 'on' } else { 'off' })")
+    }
+
     # The driver-only archive contains no installer and pnputil cannot create a
     # root-enumerated device. NefCon's devcon-compatible command creates the node,
     # stages the signed INF and binds it in one operation.
-    & $nefcon.FullName install $inf.FullName $package.hardwareId --no-duplicates --remove-duplicates
-    $code = $LASTEXITCODE
+    $code = Invoke-NativeTool -FilePath $nefcon.FullName -Arguments @(
+        'install', $inf.FullName, $package.hardwareId, '--no-duplicates', '--remove-duplicates')
     if ($code -eq 3010) {
         $script:RebootPending = $true
     }
