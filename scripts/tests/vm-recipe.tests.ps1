@@ -13,10 +13,10 @@
     below reads a plan or a refusal and none of them touches Hyper-V, the network, a
     disk image, or the machine's configuration.
 
-    The refusals matter as much as the plans. "Not elevated", "not in Hyper-V
-    Administrators" and "no installation ISO" are the three ways the first attempt
-    fails on a machine that has never built the image, and each of them has to name
-    the exact command that fixes it rather than the fact that something is wrong.
+    The refusals matter as much as the plans. "No Hyper-V access", "no installation
+    ISO" and "no Hyper-V module" are the ways the first attempt fails on a machine
+    that has never built the image, and each of them has to name the exact command
+    that fixes it rather than the fact that something is wrong.
 #>
 
 Set-StrictMode -Version Latest
@@ -101,27 +101,34 @@ function New-Prerequisite {
 function Get-ProblemId { param($Verdict) return @($Verdict.Problems | ForEach-Object { $_.Id }) }
 
 # ---------------------------------------------------------------------------
-# Preconditions: the three documented refusals
+# Preconditions: the documented refusals
 # ---------------------------------------------------------------------------
 
-Test-Case 'a shell that is not elevated is refused, with the elevated command to run' {
-    $verdict = New-Prerequisite -IsElevated $false
-    Assert-True (-not $verdict.Ok) 'an unelevated shell must not be allowed to run a plan'
-    Assert-True ((Get-ProblemId -Verdict $verdict) -contains 'not-elevated') 'the refusal must be identified'
-    $remedy = @($verdict.Problems | Where-Object { $_.Id -eq 'not-elevated' })[0].Remedy
+Test-Case 'a shell with neither the group nor elevation is refused, with the elevated command to run' {
+    $verdict = New-Prerequisite -IsElevated $false -InHyperVAdministrators $false
+    Assert-True (-not $verdict.Ok) 'a shell whose cmdlets will be denied must not run a plan'
+    Assert-True ((Get-ProblemId -Verdict $verdict) -contains 'no-hyperv-access') 'the refusal must be identified'
+    $remedy = @($verdict.Problems | Where-Object { $_.Id -eq 'no-hyperv-access' })[0].Remedy
     Assert-Match 'Start-Process' $remedy 'the remedy must be a command, not a description'
     Assert-Match '-Verb RunAs' $remedy 'the remedy must be the elevated form'
     Assert-Match 'New-ReleaseVm\.ps1' $remedy 'the remedy must name the script being run'
     Assert-Match 'W:\\win11\.iso' $remedy 'the remedy must carry the arguments the caller used'
 }
 
-Test-Case 'an account outside Hyper-V Administrators is refused, by name' {
-    $verdict = New-Prerequisite -InHyperVAdministrators $false
-    Assert-True (-not $verdict.Ok) 'a plan must not run for an account whose cmdlets will be denied'
-    $problem = @($verdict.Problems | Where-Object { $_.Id -eq 'not-in-hyperv-administrators' })[0]
+Test-Case 'the refusal names the account and both ways out of it' {
+    $verdict = New-Prerequisite -IsElevated $false -InHyperVAdministrators $false
+    $problem = @($verdict.Problems | Where-Object { $_.Id -eq 'no-hyperv-access' })[0]
     Assert-Match 'TESTHOST\\tester' $problem.Message 'the message must name the account'
-    Assert-Match 'Add-LocalGroupMember' $problem.Remedy 'the remedy must be the command that adds it'
+    Assert-Match 'Add-LocalGroupMember' $problem.Remedy 'the remedy must be the command that adds the group'
     Assert-Match 'sign out' $problem.Remedy 'group membership only takes effect on a new token'
+    Assert-Match '-Verb RunAs' $problem.Remedy 'the remedy must also offer the elevated form'
+}
+
+Test-Case 'either the group or elevation is enough on its own' {
+    $group = New-Prerequisite -IsElevated $false -InHyperVAdministrators $true
+    Assert-True ((Get-ProblemId -Verdict $group) -notcontains 'no-hyperv-access') 'the group is what lets an unelevated shell manage machines'
+    $elevated = New-Prerequisite -IsElevated $true -InHyperVAdministrators $false
+    Assert-True ((Get-ProblemId -Verdict $elevated) -notcontains 'no-hyperv-access') 'an elevated token carries Administrators, which has the same access'
 }
 
 Test-Case 'a missing installation ISO is refused, and an absent one is the same refusal' {
@@ -217,6 +224,32 @@ Test-Case 'the run plan takes a differencing disk and deletes it again' {
     Assert-True ($names -contains 'remove-disk') 'a run leaves nothing behind'
     Assert-True ([array]::IndexOf($names, 'collect') -lt [array]::IndexOf($names, 'stop')) `
         'the evidence is copied out before the machine is turned off'
+}
+
+Test-Case 'each new run enables guest file transfer before copying payloads' {
+    $paths = Get-ReleaseVmRunPath -RunId 'guest-transfer' -Root 'T:\images'
+    $plan = New-ReleaseVmRunPlan -RunPath $paths -GuestCommand 'verify.exe' -ResultDirectory 'T:\out' `
+        -ArtifactDirectory 'T:\artifacts' -HarnessDirectory 'T:\harness'
+    $names = @($plan | ForEach-Object { $_.Name })
+    Assert-True ($names -contains 'guest-services') 'a new VM does not inherit its parent VM integration settings'
+    Assert-True ([array]::IndexOf($names, 'guest-services') -lt [array]::IndexOf($names, 'copy-artifacts')) `
+        'file transfer must be enabled before Copy-VMFile is used'
+}
+
+Test-Case 'guest file transfer resolves the localized service by component identity' {
+    $enabled = & (Get-Module ReleaseVm) {
+        function Get-VMIntegrationService {
+            [CmdletBinding()] param([string] $VMName)
+            [pscustomobject]@{ Id = 'Microsoft:fixture\6C09BB55-D683-4DA0-8931-C9BF705F6480'; Name = 'Gastdienstschnittstelle' }
+            [pscustomobject]@{ Id = 'Microsoft:fixture\other'; Name = 'Heartbeat' }
+        }
+        function Enable-VMIntegrationService {
+            [CmdletBinding()] param([string] $VMName, [string] $Name)
+            return "$VMName/$Name"
+        }
+        Enable-ReleaseVmGuestServices -VMName 'test-vm'
+    }
+    Assert-Equal 'test-vm/Gastdienstschnittstelle' $enabled 'the selected component must be enabled using its actual localized name'
 }
 
 Test-Case 'a kept disk is a deliberate exception, not the default' {

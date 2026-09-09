@@ -1,4 +1,4 @@
-#Requires -Version 7.0
+﻿#Requires -Version 7.0
 <#
 .SYNOPSIS
     The plan behind the two host scripts that build and drive the release-verification
@@ -295,7 +295,7 @@ function Test-ReleaseVmPrerequisite {
         Whether this shell may run a plan, and what to do when it may not.
     .DESCRIPTION
         Every input is a parameter rather than a machine query, so the three
-        documented refusals -- not elevated, not in Hyper-V Administrators, ISO
+        documented refusals -- no Hyper-V access, ISO
         missing -- are reachable from a test on a machine in none of those states.
 
         Returns @{ Ok; Problems; ElevatedCommand }, where each problem carries the
@@ -328,18 +328,16 @@ function Test-ReleaseVmPrerequisite {
             Remedy  = "Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V -All   # elevated, then restart"
         }
     }
-    if (-not $InHyperVAdministrators) {
+    # Either one grants the access every VM cmdlet checks, so neither alone is a
+    # refusal: the group exists precisely so an unelevated shell can manage virtual
+    # machines, and an elevated token carries Administrators, which has that access
+    # anyway. Nothing else in the plan needs elevation -- the answer ISO is built
+    # through IMAPI2FS, and the host driver store is read, never written.
+    if (-not $InHyperVAdministrators -and -not $IsElevated) {
         $problems += @{
-            Id      = 'not-in-hyperv-administrators'
-            Message = "'$UserName' is not in the Hyper-V Administrators group, so every VM cmdlet will fail with Access denied"
-            Remedy  = "Add-LocalGroupMember -Group 'Hyper-V Administrators' -Member '$UserName'   # elevated, then sign out and back in"
-        }
-    }
-    if (-not $IsElevated) {
-        $problems += @{
-            Id      = 'not-elevated'
-            Message = 'this shell is not elevated; Hyper-V management cmdlets require it'
-            Remedy  = $elevated
+            Id      = 'no-hyperv-access'
+            Message = "'$UserName' is neither in the Hyper-V Administrators group nor elevated, so every VM cmdlet will fail with Access denied"
+            Remedy  = "Add-LocalGroupMember -Group 'Hyper-V Administrators' -Member '$UserName'   # elevated, then sign out and back in; or run the script elevated: $elevated"
         }
     }
     if ($PSBoundParameters.ContainsKey('IsoPath')) {
@@ -373,7 +371,7 @@ function Write-ReleaseVmPrerequisite {
     #>
     param([Parameter(Mandatory)] [hashtable] $Verdict)
     if ($Verdict.Ok) {
-        Write-Host '  preconditions: elevated, in Hyper-V Administrators, ISO present.'
+        Write-Host '  preconditions: Hyper-V access (group or elevation), ISO present.'
         return
     }
     Write-Host ''
@@ -582,12 +580,16 @@ function New-ReleaseVmCreatePlan {
                 Name = $VMName; AutomaticCheckpointsEnabled = $false; CheckpointType = 'Disabled'
             }) -Detail 'a GPU-partitioned machine cannot be checkpointed; disable it before there is one'
 
-        $plan += New-ReleaseVmStep -Name 'guest-services' -Command 'Enable-VMIntegrationService' -Parameters ([ordered]@{
-                VMName = $VMName; Name = 'Guest Service Interface'
+        $plan += New-ReleaseVmStep -Name 'guest-services' -Command 'Enable-ReleaseVmGuestServices' -Parameters ([ordered]@{
+                VMName = $VMName
             }) -Detail 'Copy-VMFile is this service; without it nothing reaches the guest'
     }
 
     if ($Phase -contains 'install') {
+        $plan += New-ReleaseVmStep -Name 'confirm-install-console' -Command 'Read-Host' -Parameters ([ordered]@{
+                Prompt = "Open the console for VM '$VMName' in Hyper-V Manager now. Press Enter here to start it, then immediately press a key in that VM console at the DVD boot prompt"
+            }) -Detail 'one-time operator boot confirmation; the answer file takes over after Windows Setup starts'
+
         $plan += New-ReleaseVmStep -Name 'start-install' -Command 'Start-VM' -Parameters ([ordered]@{ Name = $VMName })
 
         $plan += New-ReleaseVmStep -Name 'wait-install' -Command 'Wait-ReleaseVmPowerShellDirect' -Parameters ([ordered]@{
@@ -740,6 +742,10 @@ function New-ReleaseVmRunPlan {
     $plan += New-ReleaseVmStep -Name 'gpu-partition' -Command 'Set-VMGpuPartitionAdapter' -Parameters $partitionParameters
 
     $plan += Get-ReleaseVmNetworkStep -Mode $Network -VMName $vm
+
+    $plan += New-ReleaseVmStep -Name 'guest-services' -Command 'Enable-ReleaseVmGuestServices' -Parameters ([ordered]@{
+            VMName = $vm
+        }) -Detail 'integration settings belong to this new VM, not to its parent disk'
 
     $plan += New-ReleaseVmStep -Name 'start' -Command 'Start-VM' -Parameters ([ordered]@{ Name = $vm })
 
@@ -1138,7 +1144,19 @@ function New-ReleaseVmCredential {
         $UserName, (ConvertTo-SecureString $Password -AsPlainText -Force))
 }
 
+function Enable-ReleaseVmGuestServices {
+    param([Parameter(Mandatory)] [string] $VMName)
+
+    # Integration-service names are localized; the component ID is stable.
+    $services = @(Get-VMIntegrationService -VMName $VMName -ErrorAction Stop | Where-Object {
+            $_.Id -match '\\6C09BB55-D683-4DA0-8931-C9BF705F6480$'
+        })
+    if ($services.Count -ne 1) { throw "VM '$VMName' has no unique guest file-transfer integration service" }
+    Enable-VMIntegrationService -VMName $VMName -Name $services[0].Name -ErrorAction Stop
+}
+
 Export-ModuleMember -Function @(
+    'Enable-ReleaseVmGuestServices'
     'Get-ReleaseVmDefault'
     'Get-ReleaseVmPath'
     'Get-ReleaseVmRunPath'

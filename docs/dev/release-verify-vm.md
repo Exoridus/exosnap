@@ -39,11 +39,15 @@ run disks is tracked; the recipe is, and the image is reproducible from it.
 
 ## Building it, once
 
-The feature/group setup, VM build, freeze and campaign commands require elevation.
-The ISO download, dry runs and manifest review do not. Starting an elevated PowerShell
-shows UAC on the secure desktop; **Yes** runs the named command as administrator and
-**No** cancels it without starting the script. An agent cannot answer that prompt, but
-the work after it is ordinary scripted setup rather than a manual procedure.
+Enabling the Hyper-V feature and adding the group need elevation once. After that,
+membership in `Hyper-V Administrators` is what the VM build, the freeze and the
+campaign commands rely on, and an ordinary shell carrying that membership is enough:
+the group exists precisely so virtual machines can be managed without elevation. An
+elevated shell works too, because its token carries Administrators, which has the same
+access. Starting an elevated PowerShell shows UAC on the secure desktop; **Yes** runs
+the named command as administrator and **No** cancels it without starting the script.
+An agent cannot answer that prompt, which is the reason to do the one-time setup and
+then work unelevated.
 
 **1. The Hyper-V feature and the group.** `Get-VM` existing is not enough; an account
 outside `Hyper-V Administrators` gets Access denied from every management cmdlet.
@@ -71,22 +75,29 @@ to see what the next command is about to do:
 pwsh -NoProfile -File tools/vm/New-ReleaseVm.ps1 -IsoPath <Win11 x64 ISO> -DryRun
 ```
 
-**4. Build the machine.** Elevated. About 30 to 60 minutes, most of it the unattended
-Windows installation.
+**4. Build the machine.** About 30 to 60 minutes, most of it the unattended Windows
+installation. Once the group membership is in the logon token this runs unelevated:
 
 ```powershell
-$vmScript = (Resolve-Path 'tools/vm/New-ReleaseVm.ps1').Path
-$windowsIso = (Resolve-Path 'D:\images\Win11.iso').Path
-Start-Process -FilePath pwsh -Verb RunAs -ArgumentList `
-    ('"-NoProfile" "-File" "{0}" "-IsoPath" "{1}"' -f $vmScript, $windowsIso) -Wait
+pwsh -NoProfile -File tools/vm/New-ReleaseVm.ps1 -IsoPath <Win11 x64 ISO>
 ```
 
+Without that membership, the same script run from an elevated shell does the same
+work; the dry run prints that command when it applies.
+
 The phases run in this order and can be run one at a time with `-Phase`:
+
+The install phase pauses before starting the VM. Open its console in Hyper-V Manager,
+then press Enter in the recipe's terminal and immediately press a key in the VM
+console when the DVD boot prompt appears. This one-time confirmation is required by
+the standard Windows installation ISO; `autounattend.xml` applies only after Setup
+starts. The recipe never opens a console or synthesizes input. Subsequent campaign
+VMs boot from the installed disk and need no DVD confirmation.
 
 | Phase | What it does | Why it is separate |
 |---|---|---|
 | create | disk, machine, vTPM, Secure Boot, both DVD drives, checkpoints off | -- |
-| install | boots once; `autounattend.xml` installs Windows and logs the console session on | ends with the machine stopped |
+| install | waits for console coordination, boots once; `autounattend.xml` installs Windows and logs the console session on | ends with the machine stopped |
 | gpu | MMIO window, `Add-VMGpuPartitionAdapter`, the partition triples | Hyper-V only attaches a partition to a stopped machine |
 | driver | the host adapter's driver files, one `Copy-VMFile` per file | needs the machine running again |
 | provision | `provision.ps1` over PowerShell Direct | needs a logged-on session |
@@ -163,7 +174,7 @@ between two campaigns into an investigation of the image rather than of the prod
 pwsh -NoProfile -File tools/vm/Invoke-ReleaseVmRun.ps1 -RunId <id> -DryRun   # the plan
 ```
 
-In an elevated PowerShell, for real (replace the artifact paths and run id):
+For real, in a shell with Hyper-V access (replace the artifact paths and run id):
 
 ```powershell
 $artifacts = (Resolve-Path 'D:\rc-artifacts').Path
@@ -250,8 +261,8 @@ cross-check gate says the recorded confirmation no longer applies.
 | `tools/vm/provision-manifest.psd1` | -- | every package, pinned by version and SHA-256 |
 | `tools/vm/provision.ps1` | the guest | idempotent, resumable provisioning; written for Windows PowerShell 5.1 because it installs PowerShell 7 |
 | `tools/vm/ReleaseVm.psm1` | the host | the plans, as data, plus the commands they name |
-| `tools/vm/New-ReleaseVm.ps1` | the host, elevated | builds the golden image |
-| `tools/vm/Invoke-ReleaseVmRun.ps1` | the host, elevated | one campaign on a differencing clone |
+| `tools/vm/New-ReleaseVm.ps1` | the host, with Hyper-V access | builds the golden image |
+| `tools/vm/Invoke-ReleaseVmRun.ps1` | the host, with Hyper-V access | one campaign on a differencing clone |
 | `tools/probes/probe_gpup_nvenc` | either | NVENC through the partition, as JSON |
 | `tools/probes/probe_idd_duplication` | either | Output Duplication per output, as JSON |
 | `scripts/tests/vm-recipe.tests.ps1` | anywhere | the refusals, the plans and the pins, without a hypervisor |
