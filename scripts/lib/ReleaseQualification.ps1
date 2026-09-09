@@ -28,6 +28,120 @@
     All three block a promotion. Only the first one accuses the product.
 #>
 
+. (Join-Path $PSScriptRoot 'Ed25519.ps1')
+
+function Get-ReleaseQualificationSignatureExtension {
+    <#
+    .SYNOPSIS
+        The suffix of a record's detached signature sidecar.
+    .DESCRIPTION
+        Detached, and the same convention as the update manifest's `.sig`: signer and
+        verifier never have to agree on a canonical JSON serialisation, because the
+        signature covers the file's bytes exactly as they were written and exactly as
+        they are read back.
+    #>
+    return '.sig'
+}
+
+function Test-ReleaseQualificationSignature {
+    <#
+    .SYNOPSIS
+        Whether a qualification record carries a signature by the release key.
+    .DESCRIPTION
+        The lock's first question, and the one every other check depends on. Schema,
+        commit identity, RC identity and package hashes are all readable from the RC
+        release, so any of them can be reproduced by hand in a record that never had a
+        campaign behind it. Only the signature distinguishes a record the tool produced
+        from one a person typed.
+
+        The four outcomes are kept apart on purpose. "There is no record" and "the
+        record is not signed" are different operator mistakes with different fixes, and
+        "the signature does not verify" is not a mistake at all.
+    .OUTPUTS
+        @{ Verified = [bool]; Reason = [string] } -- Reason is $null when verified.
+    #>
+    param(
+        [Parameter(Mandatory)] [string] $RecordPath,
+        [string] $SignaturePath,
+        [string] $PublicKeyHex
+    )
+
+    if ([string]::IsNullOrWhiteSpace($SignaturePath)) {
+        $SignaturePath = $RecordPath + (Get-ReleaseQualificationSignatureExtension)
+    }
+
+    if ([string]::IsNullOrWhiteSpace($PublicKeyHex)) {
+        return @{ Verified = $false; Reason =
+            'no release public key was supplied, so the record signature cannot be verified. ' +
+            'The publish gate passes the EXOSNAP_UPDATE_PUBLIC_KEY_HEX repository variable; ' +
+            'set it, or pass -PublicKeyHex.'
+        }
+    }
+    if (-not (Test-Path -LiteralPath $SignaturePath -PathType Leaf)) {
+        return @{ Verified = $false; Reason =
+            "the qualification record is UNSIGNED: no detached signature at '$SignaturePath'. " +
+            'A record is signed by `release-verify.ps1 qualify -Publish`, which attaches both files ' +
+            'to the RC release. An unsigned record proves nothing about who produced it.'
+        }
+    }
+
+    $message = [System.IO.File]::ReadAllBytes($RecordPath)
+    $signature = (Get-Content -LiteralPath $SignaturePath -Raw).Trim()
+    if (-not (Test-Ed25519Signature -Message $message -SignatureHex $signature -PublicKeyHex $PublicKeyHex)) {
+        return @{ Verified = $false; Reason =
+            'the qualification record signature DOES NOT VERIFY against the release public key. ' +
+            'The record, the signature or the key does not belong to the others; nothing about this ' +
+            'record may be trusted and nothing is published.'
+        }
+    }
+    return @{ Verified = $true; Reason = $null }
+}
+
+function New-ReleaseQualificationSignatureFile {
+    <#
+    .SYNOPSIS
+        Signs a record file in place, writing the detached signature beside it.
+    .DESCRIPTION
+        Signs the bytes on disk rather than the in-memory record, so the signature
+        covers exactly what a verifier will read, serialisation included.
+    .PARAMETER SigningKeyBase64
+        The base64-encoded 32-byte ed25519 seed, the same form the
+        EXOSNAP_UPDATE_SIGNING_KEY secret carries.
+    .PARAMETER ExpectedPublicKeyHex
+        When set, the signing key must be the private half of it. A record signed with
+        the wrong key would be refused by the publish gate at the worst possible
+        moment; failing here says so while it is still cheap.
+    .OUTPUTS
+        The path of the signature file.
+    #>
+    param(
+        [Parameter(Mandatory)] [string] $RecordPath,
+        [Parameter(Mandatory)] [string] $SigningKeyBase64,
+        [string] $ExpectedPublicKeyHex
+    )
+
+    try { $seed = [System.Convert]::FromBase64String($SigningKeyBase64.Trim()) }
+    catch { throw 'The release signing key is not valid base64. It is the base64-encoded 32-byte ed25519 seed, exactly as the EXOSNAP_UPDATE_SIGNING_KEY secret holds it.' }
+    if ($seed.Length -ne 32) {
+        throw "The release signing key decodes to $($seed.Length) bytes; an ed25519 seed is 32."
+    }
+
+    $publicKey = ConvertTo-Ed25519Hex -Bytes (Get-Ed25519PublicKey -Seed $seed)
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedPublicKeyHex)) {
+        $expected = $ExpectedPublicKeyHex.Trim().ToLowerInvariant()
+        if ($publicKey -ne $expected) {
+            throw "The signing key is not the private half of the expected release public key " +
+            "(derives $($publicKey.Substring(0, 16))..., expected $($expected.Substring(0, [Math]::Min(16, $expected.Length)))...). " +
+            'The publish gate would refuse every record signed with it.'
+        }
+    }
+
+    $signaturePath = $RecordPath + (Get-ReleaseQualificationSignatureExtension)
+    $signature = New-Ed25519Signature -Seed ([byte[]]$seed) -Message ([System.IO.File]::ReadAllBytes($RecordPath))
+    [System.IO.File]::WriteAllText($signaturePath, $signature)
+    return $signaturePath
+}
+
 function Get-ReleaseQualificationSchema {
     <#
     .SYNOPSIS

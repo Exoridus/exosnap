@@ -821,20 +821,30 @@ jobs:
                 --pattern 'release-verification.json'; then
             block "Release candidate $best carries no release-verification.json. Run the campaign against it and attach the record with 'release-verify.ps1 qualify -Publish' before promoting."
           fi
+          # Deliberately not blocking on a missing signature: "the record is unsigned"
+          # is one of the four answers check-release-qualification.ps1 exists to give,
+          # in the words the operator needs. A download error would replace it.
+          gh release download "$best" --repo "$GITHUB_REPOSITORY" --dir rc-qualification --clobber \
+                --pattern 'release-verification.json.sig' || true
           if ! gh release download "$best" --repo "$GITHUB_REPOSITORY" --dir rc-qualification --clobber \
                 --pattern '*.sha256'; then
             block "Release candidate $best publishes no .sha256 sidecars, so the qualified bytes cannot be compared against the published ones."
           fi
           echo "rc_tag=$best" >> "$GITHUB_OUTPUT"
 
+      # The public key is the one the shipped binaries embed and the update manifest is
+      # verified against. Passing it is what makes the record's signature mean "the
+      # release key produced this" rather than "some key did".
       - name: Verify the qualification record
         if: ${{ needs.resolve-identity.outputs.prerelease == 'false' }}
         shell: pwsh
         env:
           RC_TAG: ${{ steps.rc.outputs.rc_tag }}
+          PUBLIC_KEY_HEX: ${{ vars.EXOSNAP_UPDATE_PUBLIC_KEY_HEX }}
         run: |
           & ./scripts/check-release-qualification.ps1 `
             -RecordPath rc-qualification/release-verification.json `
+            -PublicKeyHex $env:PUBLIC_KEY_HEX `
             -ExpectedCommit $env:COMMIT_SHA `
             -ExpectedRcTag $env:RC_TAG `
             -Sha256Directory rc-qualification `

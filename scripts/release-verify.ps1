@@ -109,6 +109,12 @@ param(
     # `qualify` only: uploads the qualification record to the RC's GitHub release.
     # Promotion is the developer's explicit act and nobody else's.
     [switch] $Publish,
+    # `qualify` only: the base64-encoded 32-byte ed25519 seed the release is signed
+    # with, the same key the update manifest is signed with. The record is signed
+    # because every other field in it is publicly readable from the RC release and can
+    # therefore be retyped by hand; the publish gate refuses an unsigned one. Defaults
+    # to EXOSNAP_UPDATE_SIGNING_KEY so the key never has to appear in a command line.
+    [string] $SigningKeyBase64 = $env:EXOSNAP_UPDATE_SIGNING_KEY,
 
     # Which harness carries out the command. PowerShell is the default until every
     # gate has been migrated: a default that silently ran a harness with fewer gates
@@ -1400,6 +1406,21 @@ switch ($Command) {
             exit 1
         }
 
+        if ([string]::IsNullOrWhiteSpace($SigningKeyBase64)) {
+            Write-Host ''
+            Write-Host '  This record is UNSIGNED and the publish gate refuses an unsigned record.' -ForegroundColor Yellow
+            Write-Host '  Set EXOSNAP_UPDATE_SIGNING_KEY (the base64 ed25519 seed, the same key the update'
+            Write-Host '  manifest is signed with) or pass -SigningKeyBase64, then run qualify again.'
+            if ($Publish) {
+                throw 'Refusing to attach an unsigned qualification record to the RC release.'
+            }
+            return
+        }
+
+        $signaturePath = New-ReleaseQualificationSignatureFile -RecordPath $recordPath `
+            -SigningKeyBase64 $SigningKeyBase64 -ExpectedPublicKeyHex $env:EXOSNAP_UPDATE_PUBLIC_KEY_HEX
+        Write-Host "  signed : $signaturePath"
+
         if (-not $Publish) {
             Write-Host ''
             Write-Host '  The publish gate reads this record from the RC release, so it has to be attached to it:'
@@ -1412,11 +1433,14 @@ switch ($Command) {
             throw 'gh is not on PATH; the qualification record cannot be attached to the RC release.'
         }
         Write-Heading "Attaching the record to $($record.rcTag)"
-        & gh release upload $record.rcTag $recordPath --clobber
+        # Both files or neither: a record whose signature did not make it to the
+        # release reads as unsigned at the gate, which is the one failure that would
+        # look like tampering rather than like an interrupted upload.
+        & gh release upload $record.rcTag $recordPath $signaturePath --clobber
         if ($LASTEXITCODE -ne 0) {
             throw "gh release upload failed with exit code $LASTEXITCODE; the record is NOT attached."
         }
-        Write-Host "  uploaded release-verification.json to $($record.rcTag)" -ForegroundColor Green
+        Write-Host "  uploaded release-verification.json and its detached signature to $($record.rcTag)" -ForegroundColor Green
         Write-Host "  the final tag may now be pushed from $($record.sourceCommit)."
         return
     }

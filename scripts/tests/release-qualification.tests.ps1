@@ -67,6 +67,13 @@ function New-TestDirectory {
 # Fixtures
 # ---------------------------------------------------------------------------
 
+# RFC 8032's own key material. A published test vector cannot be mistaken for a real
+# release key, and it makes the fixtures reproducible byte for byte.
+$script:TestSigningKey = 'nWGxne/9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A='
+$script:TestPublicKey = 'd75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a'
+$script:OtherSigningKey = 'TM0Imyj/ltqdtsNG7BFOD1uKMZ81q6Yk2oz27U+4pvs='
+$script:OtherPublicKey = '3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c'
+
 $script:GoodCommit = '1111111111111111111111111111111111111111'
 $script:GoodRcTag = 'v0.9.1-rc1'
 $script:PortableName = 'ExoSnap-0.9.1-rc1-windows-x64-portable.zip'
@@ -147,12 +154,29 @@ function Invoke-CheckScript {
         [string] $ExpectedCommit = $script:GoodCommit,
         [string] $ExpectedRcTag = $script:GoodRcTag,
         [hashtable] $Sidecars,
-        [switch] $OmitRecord
+        [switch] $OmitRecord,
+        # The three ways a signature stops being evidence, each its own message.
+        [switch] $OmitSignature,
+        [switch] $CorruptSignature,
+        [switch] $OmitPublicKey,
+        [string] $PublicKeyHex = $script:TestPublicKey
     )
 
     $recordPath = Join-Path $Directory 'release-verification.json'
     if (-not $OmitRecord) {
         Set-Content -LiteralPath $recordPath -Value ($Record | ConvertTo-Json -Depth 30) -Encoding utf8NoBOM
+        if (-not $OmitSignature) {
+            New-ReleaseQualificationSignatureFile -RecordPath $recordPath `
+                -SigningKeyBase64 $script:TestSigningKey | Out-Null
+            if ($CorruptSignature) {
+                # One flipped nibble: still 128 hex characters, so this is refused by
+                # the arithmetic and not by a shape check.
+                $signaturePath = "$recordPath.sig"
+                $signature = (Get-Content -LiteralPath $signaturePath -Raw).Trim()
+                $flipped = if ($signature[0] -eq '0') { '1' } else { '0' }
+                Set-Content -LiteralPath $signaturePath -Value ($flipped + $signature.Substring(1)) -NoNewline
+            }
+        }
     }
     if ($null -eq $Sidecars) { $Sidecars = @{ $script:PortableName = $script:PortableSha } }
     foreach ($name in $Sidecars.Keys) {
@@ -160,8 +184,10 @@ function Invoke-CheckScript {
             -Value "$($Sidecars[$name])  $name" -Encoding utf8NoBOM
     }
     $summary = Join-Path $Directory 'summary.md'
+    $key = if ($OmitPublicKey) { '' } else { $PublicKeyHex }
     $output = & pwsh -NoProfile -NonInteractive -File $script:CheckScript `
-        -RecordPath $recordPath -ExpectedCommit $ExpectedCommit -ExpectedRcTag $ExpectedRcTag `
+        -RecordPath $recordPath -PublicKeyHex $key `
+        -ExpectedCommit $ExpectedCommit -ExpectedRcTag $ExpectedRcTag `
         -Sha256Directory $Directory -SummaryPath $summary 2>&1 | Out-String
     $code = $LASTEXITCODE
     $summaryText = if (Test-Path -LiteralPath $summary) { Get-Content -LiteralPath $summary -Raw } else { '' }
@@ -192,6 +218,85 @@ Test-Case 'missing and duplicate required verdicts block qualification' {
     Assert-True (@(Get-ReleaseQualificationBlockers -Record $record).Count -gt 0) 'a row cannot override the required ID set'
 }
 
+Test-Case 'the four ways a record can fail the lock are four different messages' {
+    # The point of the case: an operator reading the job summary has to be able to
+    # tell "nobody ran the campaign" from "the record was not signed" from "this
+    # record is not the one the key signed" from "the campaign found something".
+    $missing = Invoke-CheckScript -Directory (New-TestDirectory) -Record (New-TestRecord) -OmitRecord
+    $unsigned = Invoke-CheckScript -Directory (New-TestDirectory) -Record (New-TestRecord) -OmitSignature
+    $bad = Invoke-CheckScript -Directory (New-TestDirectory) -Record (New-TestRecord) -CorruptSignature
+    $notQualified = Invoke-CheckScript -Directory (New-TestDirectory) -Record (New-TestRecord -Checks @(
+            (New-TestCheck -Id 'REL-CAP-001'),
+            (New-TestCheck -Id 'REL-UPD-PORTABLE-001' -State 'FAIL')))
+
+    foreach ($result in @($missing, $unsigned, $bad, $notQualified)) {
+        Assert-Equal 1 $result.ExitCode 'every one of the four must block'
+    }
+    Assert-Match 'No qualification record' $missing.Summary 'a missing record says so'
+    Assert-Match 'UNSIGNED' $unsigned.Summary 'an unsigned record says so'
+    Assert-NoMatch 'UNSIGNED' $bad.Summary 'a bad signature is not an unsigned record'
+    Assert-Match 'DOES NOT VERIFY' $bad.Summary 'a bad signature says so'
+    Assert-Match 'product defect' $notQualified.Summary 'a record that does not qualify names the finding'
+    Assert-NoMatch 'signature' $notQualified.Summary 'a signed record must not be reported as a signature problem'
+}
+
+Test-Case 'a record signed by a key that is not the release key blocks the release' {
+    $directory = New-TestDirectory
+    $recordPath = Join-Path $directory 'release-verification.json'
+    Set-Content -LiteralPath $recordPath -Value ((New-TestRecord) | ConvertTo-Json -Depth 30) -Encoding utf8NoBOM
+    New-ReleaseQualificationSignatureFile -RecordPath $recordPath `
+        -SigningKeyBase64 $script:OtherSigningKey | Out-Null
+    Set-Content -LiteralPath (Join-Path $directory "$($script:PortableName).sha256") `
+        -Value "$($script:PortableSha)  $($script:PortableName)" -Encoding utf8NoBOM
+    $summary = Join-Path $directory 'summary.md'
+    & pwsh -NoProfile -NonInteractive -File $script:CheckScript -RecordPath $recordPath `
+        -PublicKeyHex $script:TestPublicKey -ExpectedCommit $script:GoodCommit `
+        -ExpectedRcTag $script:GoodRcTag -Sha256Directory $directory -SummaryPath $summary 2>&1 | Out-Null
+    Assert-Equal 1 $LASTEXITCODE 'a foreign signature must block'
+    Assert-Match 'DOES NOT VERIFY' (Get-Content -LiteralPath $summary -Raw) 'the reason must say the signature failed'
+}
+
+Test-Case 'no release public key means nothing can be verified, so nothing is published' {
+    $result = Invoke-CheckScript -Directory (New-TestDirectory) -Record (New-TestRecord) -OmitPublicKey
+    Assert-Equal 1 $result.ExitCode 'a missing public key must block'
+    Assert-Match 'EXOSNAP_UPDATE_PUBLIC_KEY_HEX' $result.Summary 'the reason must name the variable to set'
+}
+
+Test-Case 'a record edited after signing blocks the release' {
+    # The attack the signature exists for: the record is the one the campaign
+    # produced, its signature is the real one, and a single field was retyped.
+    $directory = New-TestDirectory
+    $recordPath = Join-Path $directory 'release-verification.json'
+    $record = New-TestRecord
+    Set-Content -LiteralPath $recordPath -Value ($record | ConvertTo-Json -Depth 30) -Encoding utf8NoBOM
+    New-ReleaseQualificationSignatureFile -RecordPath $recordPath `
+        -SigningKeyBase64 $script:TestSigningKey | Out-Null
+    $record.checks[0].state = 'FAIL'
+    $record.qualification.overall = 'QUALIFIED'
+    Set-Content -LiteralPath $recordPath -Value ($record | ConvertTo-Json -Depth 30) -Encoding utf8NoBOM
+    Set-Content -LiteralPath (Join-Path $directory "$($script:PortableName).sha256") `
+        -Value "$($script:PortableSha)  $($script:PortableName)" -Encoding utf8NoBOM
+    $summary = Join-Path $directory 'summary.md'
+    & pwsh -NoProfile -NonInteractive -File $script:CheckScript -RecordPath $recordPath `
+        -PublicKeyHex $script:TestPublicKey -ExpectedCommit $script:GoodCommit `
+        -ExpectedRcTag $script:GoodRcTag -Sha256Directory $directory -SummaryPath $summary 2>&1 | Out-Null
+    Assert-Equal 1 $LASTEXITCODE 'an edited record must block'
+    Assert-Match 'DOES NOT VERIFY' (Get-Content -LiteralPath $summary -Raw) 'the reason must be the signature, not the contents'
+}
+
+Test-Case 'signing refuses a key that is not the private half of the release key' {
+    $directory = New-TestDirectory
+    $recordPath = Join-Path $directory 'release-verification.json'
+    Set-Content -LiteralPath $recordPath -Value '{}' -Encoding utf8NoBOM
+    $threw = $false
+    try {
+        New-ReleaseQualificationSignatureFile -RecordPath $recordPath `
+            -SigningKeyBase64 $script:OtherSigningKey -ExpectedPublicKeyHex $script:TestPublicKey | Out-Null
+    }
+    catch { $threw = $true }
+    Assert-True $threw 'signing with the wrong key must fail while it is still cheap'
+}
+
 Test-Case 'a missing record blocks the release' {
     $directory = New-TestDirectory
     $result = Invoke-CheckScript -Directory $directory -Record (New-TestRecord) -OmitRecord
@@ -203,10 +308,15 @@ Test-Case 'an unparseable record blocks the release' {
     $directory = New-TestDirectory
     $recordPath = Join-Path $directory 'release-verification.json'
     Set-Content -LiteralPath $recordPath -Value '{ this is not json' -Encoding utf8NoBOM
+    # Correctly signed garbage, so the refusal is provably about the JSON and not
+    # about the signature that is checked before it.
+    New-ReleaseQualificationSignatureFile -RecordPath $recordPath `
+        -SigningKeyBase64 $script:TestSigningKey | Out-Null
     Set-Content -LiteralPath (Join-Path $directory "$($script:PortableName).sha256") `
         -Value "$($script:PortableSha)  $($script:PortableName)" -Encoding utf8NoBOM
     $summary = Join-Path $directory 'summary.md'
     & pwsh -NoProfile -NonInteractive -File $script:CheckScript -RecordPath $recordPath `
+        -PublicKeyHex $script:TestPublicKey `
         -ExpectedCommit $script:GoodCommit -ExpectedRcTag $script:GoodRcTag `
         -Sha256Directory $directory -SummaryPath $summary 2>&1 | Out-Null
     Assert-Equal 1 $LASTEXITCODE 'an unparseable record must block'
