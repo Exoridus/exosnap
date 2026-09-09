@@ -756,6 +756,8 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
+    outputs:
+      rc_tag: ${{ steps.rc.outputs.rc_tag }}
     env:
       GH_TOKEN: ${{ github.token }}
       IS_PRERELEASE: ${{ needs.resolve-identity.outputs.prerelease }}
@@ -830,6 +832,14 @@ jobs:
                 --pattern '*.sha256'; then
             block "Release candidate $best publishes no .sha256 sidecars, so the qualified bytes cannot be compared against the published ones."
           fi
+          # The candidate's per-file build inventory and its toolchain record. These
+          # are what publish-release compares its own build against; a candidate that
+          # published neither is refused there, in the words that say what to do about
+          # it, rather than here as a download failure.
+          gh release download "$best" --repo "$GITHUB_REPOSITORY" --dir rc-qualification --clobber \
+                --pattern 'artifact-manifest.json' || true
+          gh release download "$best" --repo "$GITHUB_REPOSITORY" --dir rc-qualification --clobber \
+                --pattern 'toolchain-manifest.json' || true
           echo "rc_tag=$best" >> "$GITHUB_OUTPUT"
 
       # The public key is the one the shipped binaries embed and the update manifest is
@@ -850,6 +860,18 @@ jobs:
             -Sha256Directory rc-qualification `
             -SummaryPath $env:GITHUB_STEP_SUMMARY
           exit $LASTEXITCODE
+
+      # publish-release runs on a different runner and needs the same evidence to
+      # compare its own build against. Passing the directory forward rather than
+      # re-downloading it there keeps one job in charge of deciding WHICH candidate
+      # the release is promoted from.
+      - name: Carry the qualified evidence to the publish job
+        if: ${{ needs.resolve-identity.outputs.prerelease == 'false' }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: rc-qualification
+          path: rc-qualification
+          if-no-files-found: error
 
   # Deterministic release publication (official release builds only — a final or RC
   # version-tag push; identical steps for both, the RC just lands on its own tag and
@@ -897,6 +919,56 @@ jobs:
         with:
           name: update-manifest
           path: release-assets
+
+      # THE promotion comparison, and the reason it runs before the draft exists: a
+      # final tag does not ship the bytes the campaign measured, it rebuilds them,
+      # because the release identity is compiled in and `0.9.1-rc1` and `0.9.1` are
+      # therefore different artifacts by construction. Until now nothing compared the
+      # rebuild to anything, so a packaging regression introduced by the release build
+      # itself -- a wrong DLL set, a dropped QML file, a moved Qt -- was invisible to
+      # every gate.
+      #
+      # Both builds write a per-file inventory of the portable install tree
+      # (artifact-manifest.json) and a record of the toolchain that produced it. The
+      # check below requires the two trees to hold the same files, every file to be
+      # byte-identical except the ones the signed qualification record's promotion
+      # contract names, the same source commit, and the same compiler, CMake, Qt, WiX
+      # and vendored FFmpeg. Only the RC path skips it: an RC is the thing being
+      # qualified and has nothing earlier to be compared against.
+      #
+      # What it does not establish is that the three compiled binaries are right --
+      # their bytes are compared to nothing, because they cannot be. That is what the
+      # identical commit and the identical toolchain narrow, and what a true promotion
+      # (a final tag shipping the qualified bytes unchanged) would close; see
+      # docs/release-checklist.md section 3a.
+      - name: Download the qualified evidence
+        if: ${{ needs.resolve-identity.outputs.prerelease == 'false' }}
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: rc-qualification
+          path: rc-qualification
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        if: ${{ needs.resolve-identity.outputs.prerelease == 'false' }}
+        with:
+          path: repo
+
+      - name: Verify this release is the release that was qualified
+        if: ${{ needs.resolve-identity.outputs.prerelease == 'false' }}
+        shell: pwsh
+        env:
+          PUBLIC_KEY_HEX: ${{ vars.EXOSNAP_UPDATE_PUBLIC_KEY_HEX }}
+        run: |
+          & ./repo/scripts/check-release-promotion.ps1 `
+            -RecordPath rc-qualification/release-verification.json `
+            -PublicKeyHex $env:PUBLIC_KEY_HEX `
+            -QualifiedManifestPath rc-qualification/artifact-manifest.json `
+            -CandidateManifestPath release-assets/artifact-manifest.json `
+            -QualifiedToolchainPath rc-qualification/toolchain-manifest.json `
+            -CandidateToolchainPath release-assets/toolchain-manifest.json `
+            -CandidateVersion $env:VERSION `
+            -SummaryPath $env:GITHUB_STEP_SUMMARY
+          exit $LASTEXITCODE
 
       # Create the Release as a DRAFT so it (and its asset URLs) are invisible to
       # the in-app updater until every check below passes. Idempotent: if a human
@@ -969,6 +1041,7 @@ jobs:
             "ExoSnap-$VERSION-windows-x64.msi.sha256" \
             update-manifest.json update-manifest.json.sig \
             toolchain-manifest.json \
+            artifact-manifest.json \
             --repo "$GITHUB_REPOSITORY" --clobber
 
       # Re-download the assets straight from the Release and re-hash them, so what a
