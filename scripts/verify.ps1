@@ -125,7 +125,8 @@ $plan = New-VerifyPlan -Mode $mode -Scope $scope -BuildDir $buildDir -Preset $Pr
 # It is scoped like every other -Fast check and unconditional in -Full.
 $verifyHarnessSolution = Join-Path $repoRoot 'tools/release-verify/ExoSnap.Verify.slnx'
 if (Test-Path -LiteralPath $verifyHarnessSolution -PathType Leaf) {
-    $harnessTouched = @($changed | Where-Object { $_ -like 'tools/release-verify/*' }).Count -gt 0
+    $harnessTouched = [bool]$scope.RequiresVerifyHarness -or
+        @($changed | Where-Object { $_ -like 'tools/release-verify/*' }).Count -gt 0
     $plan.Checks = @($plan.Checks) + @(
         New-VerifyCheck -Name 'verify-harness' -Kind 'verify-harness' -DependsOn @('sanity') `
             -Applicable:(($mode -eq 'Full') -or $harnessTouched) `

@@ -582,8 +582,9 @@ Test-Case 'prepare moves a leftover manifest aside before anything else runs, an
     # only be answered once a control-channel connection exists, so the two halves
     # of this fix live in different places and each is checked where it lives.
     $source = Get-Content -LiteralPath (Join-Path $scriptRoot 'release-verify.ps1') -Raw
-    $prepareBlock = [regex]::Match($source, "(?ms)'prepare' \{.*?\n    \}\r?\n").Value
-    Assert-True ($prepareBlock -match 'Backup-ReleaseRecoveryManifest') `
+    $prepareBlocks = [regex]::Matches($source, "(?ms)'prepare' \{.*?\n    \}\r?\n")
+    $campaignPrepare = @($prepareBlocks | Where-Object { $_.Value -match 'Backup-ReleaseRecoveryManifest' })
+    Assert-True ($campaignPrepare.Count -eq 1) `
         'prepare must move a leftover recovery manifest aside before the campaign launches anything'
     $startSessionBlock = [regex]::Match($source, '(?ms)^function Start-ReleaseSession \{.*?^\}').Value
     Assert-True ($startSessionBlock -match 'Clear-ReleaseBlockingSurface') `

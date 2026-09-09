@@ -108,7 +108,15 @@ param(
     [string[]] $Required,
     # `qualify` only: uploads the qualification record to the RC's GitHub release.
     # Promotion is the developer's explicit act and nobody else's.
-    [switch] $Publish
+    [switch] $Publish,
+
+    # Which harness carries out the command. PowerShell is the default until every
+    # gate has been migrated: a default that silently ran a harness with fewer gates
+    # than the checklist names would produce a record about a smaller bar than the one
+    # a reader assumes. `DotNet` builds and publishes ExoSnap.Verify if it has to and
+    # forwards prepare / run / list / qualify / report to it.
+    [ValidateSet('PowerShell', 'DotNet')]
+    [string] $Engine = 'PowerShell'
 )
 
 Set-StrictMode -Version Latest
@@ -1072,6 +1080,112 @@ function Select-Entries {
             (-not $optIn) -or ($included -contains $_.Class) -or ($selected -contains $_.Id)
         })
     return [object[]]$entries
+}
+
+# ---------------------------------------------------------------------------
+# The typed harness (ADR 0070)
+# ---------------------------------------------------------------------------
+
+function Invoke-DotNetVerifyHarness {
+    <#
+    .SYNOPSIS
+        Forwards one command to ExoSnap.Verify, building it first when needed.
+    .DESCRIPTION
+        The bootstrap's whole job. It resolves the SDK, builds the solution if the
+        executable is missing or older than its sources, translates this script's
+        parameters into the harness's own vocabulary, and returns the harness's exit
+        code unchanged -- a wrapper that swallowed a non-zero exit would turn a
+        refusal to qualify into a success.
+
+        `recover`, `resume`, `retry` and `status` are not forwarded: they have no
+        counterpart in the typed harness yet, and answering them with something that
+        merely looks similar would be worse than saying so.
+    #>
+    param(
+        [Parameter(Mandatory)] [string] $Verb
+    )
+
+    $solution = Join-Path $repositoryRoot 'tools/release-verify/ExoSnap.Verify.slnx'
+    if (-not (Test-Path -LiteralPath $solution -PathType Leaf)) {
+        throw "The typed harness is not in this checkout: $solution is missing."
+    }
+    if ($null -eq (Get-Command dotnet -ErrorAction SilentlyContinue)) {
+        throw 'dotnet is not on PATH; -Engine DotNet needs the .NET SDK pinned by tools/release-verify/global.json.'
+    }
+
+    $forwardable = @('prepare', 'run', 'list', 'qualify', 'report')
+    if ($Verb -notin $forwardable) {
+        throw "-Engine DotNet does not carry '$Verb' yet. It forwards $($forwardable -join ', '); " +
+        "run this one with -Engine PowerShell."
+    }
+
+    $project = Join-Path $repositoryRoot 'tools/release-verify/ExoSnap.Verify/ExoSnap.Verify.csproj'
+    $exe = Join-Path $repositoryRoot 'tools/release-verify/ExoSnap.Verify/bin/Release/net10.0-windows/ExoSnap.Verify.exe'
+
+    # Rebuilt when anything under the harness is newer than the executable, so a
+    # campaign never runs gates that have been edited since they were compiled.
+    $newestSource = (Get-ChildItem -LiteralPath (Join-Path $repositoryRoot 'tools/release-verify') -Recurse -File |
+            Where-Object { $_.FullName -notmatch '\\(bin|obj)\\' } |
+            Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1)
+    $stale = -not (Test-Path -LiteralPath $exe -PathType Leaf)
+    if (-not $stale -and $null -ne $newestSource) {
+        $stale = $newestSource.LastWriteTimeUtc -gt (Get-Item -LiteralPath $exe).LastWriteTimeUtc
+    }
+
+    if ($stale) {
+        Write-Step 'building tools/release-verify (Release)'
+        $priorDotNetPlatform = $env:Platform
+        Push-Location (Split-Path -Parent $solution)
+        try {
+            # MSVC exports Platform=x64, but this solution uses Any CPU. The working
+            # directory also selects the harness's pinned SDK through global.json.
+            $env:Platform = $null
+            & dotnet build $solution -c Release --nologo | Out-Host
+            if ($LASTEXITCODE -ne 0) {
+                throw "The typed harness did not build (exit $LASTEXITCODE); nothing was run."
+            }
+        }
+        finally {
+            $env:Platform = $priorDotNetPlatform
+            Pop-Location
+        }
+    }
+
+    $arguments = @($Verb, '--repo', $repositoryRoot)
+    if ($RunId) { $arguments += @('--run-dir', (Join-Path $runsRoot $RunId)) }
+    switch ($Verb) {
+        'prepare' {
+            if ($ExePath) { $arguments += @('--exe', $ExePath) }
+            if ($Tag) { $arguments += @('--rc', $Tag) }
+            if ($SourceCommit) { $arguments += @('--commit', $SourceCommit) }
+            if ($RunId) { $arguments += @('--run-id', $RunId) }
+            foreach ($package in @($PortableZip, $Msi)) {
+                if ($package) { $arguments += @('--package', $package) }
+            }
+        }
+        'run' {
+            foreach ($id in @(Expand-ListArgument -Values $Only)) { $arguments += @('--id', $id) }
+            $classes = @(Expand-ListArgument -Values $IncludeClass)
+            foreach ($class in $classes) { $arguments += @('--class', $class) }
+            if ($classes.Count -gt 0) { $arguments += '--include-opt-in' }
+            if ($AliasProfile) { $arguments += @('--alias-profile', $AliasProfile) }
+        }
+        'qualify' {
+            foreach ($id in @(Expand-ListArgument -Values $Required)) { $arguments += @('--required', $id) }
+        }
+    }
+
+    Write-Step "ExoSnap.Verify $($arguments -join ' ')"
+    # Build and command output must stay out of the success stream: the caller passes
+    # this function's result to exit, which needs exactly one integer.
+    $output = & $exe @arguments
+    $exitCode = $LASTEXITCODE
+    $output | Out-Host
+    return $exitCode
+}
+
+if ($Engine -eq 'DotNet') {
+    exit (Invoke-DotNetVerifyHarness -Verb $Command)
 }
 
 $catalog = Get-ReleaseScenarioCatalog

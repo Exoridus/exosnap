@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using ExoSnap.Verify.Capabilities;
+using ExoSnap.Verify.Gates;
 using ExoSnap.Verify.Models;
 using ExoSnap.Verify.Processes;
 
@@ -125,7 +126,8 @@ public sealed class VerifyEngine
         CapabilitySet capabilities,
         RunDirectory runDirectory,
         ProcessRunner processes,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        GateServices? services = null)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(capabilities);
@@ -153,7 +155,8 @@ public sealed class VerifyEngine
             }
             else
             {
-                result = await this.RunOneAsync(descriptor, capabilities, runDirectory, processes, cancellationToken)
+                result = await this
+                    .RunOneAsync(descriptor, capabilities, runDirectory, processes, services, cancellationToken)
                     .ConfigureAwait(false);
             }
 
@@ -175,6 +178,7 @@ public sealed class VerifyEngine
         CapabilitySet capabilities,
         RunDirectory runDirectory,
         ProcessRunner processes,
+        GateServices? services,
         CancellationToken cancellationToken)
     {
         var scenario = this.catalog.Find(descriptor.Id);
@@ -190,7 +194,8 @@ public sealed class VerifyEngine
                 descriptor,
                 capabilities,
                 processes,
-                runDirectory.EvidenceDirectoryFor(descriptor.Id));
+                runDirectory.EvidenceDirectoryFor(descriptor.Id),
+                services);
             return await scenario.Body.RunAsync(context, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

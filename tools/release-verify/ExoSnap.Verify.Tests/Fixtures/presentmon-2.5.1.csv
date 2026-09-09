@@ -1,0 +1,6 @@
+Application,ProcessID,SwapChainAddress,PresentRuntime,SyncInterval,PresentFlags,AllowsTearing,PresentMode,CPUStartTime,FrameTime,CPUBusy,CPUWait,GPULatency,GPUTime,GPUBusy,GPUWait,VideoBusy,DisplayLatency,DisplayedTime
+exosnap.exe,4242,0x000001,DXGI,1,0,0,Hardware: Independent Flip,10.000000,16.667,2.000,1.000,0.500,3.000,2.500,0.200,0.100,5.000,16.500
+exosnap.exe,5555,0x000002,DXGI,1,0,0,Hardware: Independent Flip,10.100000,16.667,2.000,1.000,0.500,3.000,2.500,0.200,0.100,5.000,16.500
+exosnap.exe,5555,0x000002,DXGI,1,0,0,Composed: Flip,10.200000,16.667,2.000,1.000,0.500,3.000,2.500,0.200,0.100,5.000,16.500
+"Test, App.exe",6666,0x000003,DXGI,1,0,1,Composed: Flip,10.300000,16.667,2.000,1.000,0.500,3.000,2.500,0.200,0.100,5.000,16.500
+exosnap.exe,7777,0x000004,DXGI,1

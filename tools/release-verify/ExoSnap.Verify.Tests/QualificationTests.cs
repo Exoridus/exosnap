@@ -75,6 +75,16 @@ public sealed class QualificationTests
     }
 
     [Fact]
+    public void AProductFailureAnywhereRefusesEvenWhenNotRequired()
+    {
+        var record = Build(
+            [Verdict("A", ScenarioOutcome.Pass), Verdict("B", ScenarioOutcome.Fail)],
+            ["A"]);
+
+        Assert.Equal(QualificationOutcome.NotQualified, record.Overall);
+    }
+
+    [Fact]
     public void AnOptInScenarioThatWasNotRunDoesNotRefuse()
     {
         var record = Build(

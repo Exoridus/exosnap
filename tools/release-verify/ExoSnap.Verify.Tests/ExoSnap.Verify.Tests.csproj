@@ -17,6 +17,12 @@
     <PackageReference Include="xunit.v3" />
   </ItemGroup>
 
+  <!-- Committed adapter-contract fixtures, copied beside the test binaries so the
+       adapter contract tests can read them without touching the source tree. -->
+  <ItemGroup>
+    <Content Include="Fixtures\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\ExoSnap.Verify\ExoSnap.Verify.csproj" />
     <ProjectReference Include="..\ExoSnap.Verify.Windows\ExoSnap.Verify.Windows.csproj" />

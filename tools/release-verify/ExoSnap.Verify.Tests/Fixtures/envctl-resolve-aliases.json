@@ -1,0 +1,610 @@
+{
+  "command": "resolve-aliases",
+  "profilePath": ".workspace/env-profile.json",
+  "bindings": [
+    {
+      "alias": "audio.render.44100-test",
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{f5493408-c803-42bf-bcd7-5a66d6eaf8a5}",
+      "friendlyName": "27GL850 (NVIDIA High Definition Audio)",
+      "currentFriendlyName": "27GL850 (NVIDIA High Definition Audio)",
+      "boundAtUtc": "2026-09-05T01:39:27Z",
+      "status": "ok"
+    },
+    {
+      "alias": "audio.render.normal",
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{fee30c17-e346-4024-bd34-ef8f3a483813}",
+      "friendlyName": "OUT 1-2 (BEHRINGER UMC 204HD 192k)",
+      "currentFriendlyName": "OUT 1-2 (BEHRINGER UMC 204HD 192k)",
+      "boundAtUtc": "2026-09-05T02:41:52Z",
+      "status": "ok"
+    },
+    {
+      "alias": "display.main-hdr",
+      "kind": "display",
+      "stableId": "\\\\?\\DISPLAY#GSM5B7F#5&1fc22240&1&UID41219#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}",
+      "friendlyName": "27GL850",
+      "currentFriendlyName": "27GL850",
+      "boundAtUtc": "2026-08-17T11:35:00Z",
+      "status": "ok"
+    },
+    {
+      "alias": "display.secondary-sdr",
+      "kind": "display",
+      "stableId": "\\\\?\\DISPLAY#GSM5B71#5&1fc22240&1&UID41221#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}",
+      "friendlyName": "27GL650F",
+      "currentFriendlyName": "27GL650F",
+      "boundAtUtc": "2026-08-17T11:35:00Z",
+      "status": "ok"
+    }
+  ],
+  "candidates": [
+    {
+      "kind": "display",
+      "stableId": "\\\\?\\DISPLAY#GSM5B7F#5&1fc22240&1&UID41219#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}",
+      "friendlyName": "27GL850",
+      "detail": "\\\\.\\DISPLAY1 LUID:00000000:000130fd/TARGET:41219"
+    },
+    {
+      "kind": "display",
+      "stableId": "\\\\?\\DISPLAY#GSM5B71#5&1fc22240&1&UID41221#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}",
+      "friendlyName": "27GL650F",
+      "detail": "\\\\.\\DISPLAY2 LUID:00000000:000130fd/TARGET:41221"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{01b2b966-151b-44a5-bcba-0882fb7c82a5}",
+      "friendlyName": "OUT 3-4 (2- BEHRINGER UMC 204HD 192k)",
+      "detail": "state=notpresent deviceFormat=48000/24/2 mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{04a2f0f4-acd7-4f9a-8a5d-65fb45b9a7a3}",
+      "friendlyName": "NVIDIA Output (NVIDIA High Definition Audio)",
+      "detail": "state=notpresent deviceFormat= mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{056b6cbb-a171-4da0-843c-4cac7a3e9ba9}",
+      "friendlyName": "",
+      "detail": "state=notpresent deviceFormat=48000/16/2 mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{075bfddb-79b4-4efd-9174-1d5795c8bd57}",
+      "friendlyName": "OUT 1-2 (2- BEHRINGER UMC 204HD 192k)",
+      "detail": "state=notpresent deviceFormat=48000/24/2 mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{0c2c6d9a-fcba-4d1c-84b9-f87010cd33f7}",
+      "friendlyName": "",
+      "detail": "state=notpresent deviceFormat=44100/16/2 mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{0f60f7f9-2289-4837-ae8e-b93768f4b41a}",
+      "friendlyName": "",
+      "detail": "state=notpresent deviceFormat=44100/16/2 mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{1576ae91-575a-414d-8501-2a2effc88087}",
+      "friendlyName": "Digitalaudio (HDMI) (High Definition Audio Device)",
+      "detail": "state=notpresent deviceFormat= mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{15a21512-86e0-4c1b-8bd6-14c2ceac99f7}",
+      "friendlyName": "",
+      "detail": "state=notpresent deviceFormat= mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{16137686-42a9-4f9b-9066-7d47aab296ba}",
+      "friendlyName": "27GL650F (NVIDIA High Definition Audio)",
+      "detail": "state=active deviceFormat=48000/16/2 mixFormat=48000/32/2 defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{1b6d8514-699e-44c1-862e-3d62df9c2ea6}",
+      "friendlyName": "",
+      "detail": "state=notpresent deviceFormat=48000/16/2 mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{1b96ff94-5855-420b-80bb-68d1e5dc1c8a}",
+      "friendlyName": "NVIDIA Output (NVIDIA High Definition Audio)",
+      "detail": "state=notpresent deviceFormat= mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{1e58a584-2a17-4fdd-898f-db0147176b0a}",
+      "friendlyName": "Kopfhörer (LE_WH-1000XM3 Hands-Free)",
+      "detail": "state=unplugged deviceFormat= mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{1f59f7ef-6645-44f6-8a09-586e7538f6c9}",
+      "friendlyName": "",
+      "detail": "state=notpresent deviceFormat= mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{22cce4d7-6362-4bef-bfee-79b149c5422f}",
+      "friendlyName": "",
+      "detail": "state=notpresent deviceFormat= mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{27626a25-913d-4d49-8b49-748da3505916}",
+      "friendlyName": "Headphones (High Definition Audio Device)",
+      "detail": "state=notpresent deviceFormat=48000/32/2 mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{292b80b4-b31d-45bd-ade7-b5a230d57225}",
+      "friendlyName": "Realtek Digital Output (Realtek(R) Audio)",
+      "detail": "state=active deviceFormat=48000/16/2 mixFormat=48000/32/2 defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{2c2db867-8974-43d3-91b8-dc33f007d640}",
+      "friendlyName": "27GL650F (High Definition Audio Device)",
+      "detail": "state=notpresent deviceFormat=44100/16/2 mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{2c95761f-26cd-4657-8b7a-7846329b8ea9}",
+      "friendlyName": "",
+      "detail": "state=notpresent deviceFormat=48000/16/2 mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{2cf88fd3-a0d2-45ca-b816-7debe1f1ba0c}",
+      "friendlyName": "",
+      "detail": "state=notpresent deviceFormat= mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{2e537df6-ed12-43b8-8edd-52828e12e691}",
+      "friendlyName": "27GL650F (High Definition Audio Device)",
+      "detail": "state=notpresent deviceFormat=44100/16/2 mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{3052fe38-4a3b-4fb7-b943-4d8b7b57b172}",
+      "friendlyName": "Digital Audio (S/PDIF) (High Definition Audio Device)",
+      "detail": "state=notpresent deviceFormat=48000/16/2 mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{362dbf09-40f9-405a-9a70-554509c796b3}",
+      "friendlyName": "Lautsprecher (Steam Streaming Speakers)",
+      "detail": "state=disabled deviceFormat=48000/16/2 mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{3c13f988-514c-409d-be10-00f096d00051}",
+      "friendlyName": "Interne AUX-Buchse (High Definition Audio Device)",
+      "detail": "state=notpresent deviceFormat= mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{4adf02d1-cfbb-4d26-a8cb-96165a9735ec}",
+      "friendlyName": "Kopfhörer (LE_WH-1000XM3)",
+      "detail": "state=unplugged deviceFormat=44100/16/2 mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{57b18d6f-503c-43f4-96ad-4a4c8dff97cf}",
+      "friendlyName": "Digital Audio (HDMI) (High Definition Audio Device)",
+      "detail": "state=notpresent deviceFormat= mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{59733e87-29de-4e6a-81dd-3a205664f55a}",
+      "friendlyName": "",
+      "detail": "state=notpresent deviceFormat=48000/16/2 mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{5b6607e4-6ec7-4068-872a-1031494fde24}",
+      "friendlyName": "Digitalaudio (HDMI) (High Definition Audio Device)",
+      "detail": "state=notpresent deviceFormat= mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{5ccfa7e2-ce2d-4650-92fc-b12ad1de483d}",
+      "friendlyName": "27GL650F (NVIDIA High Definition Audio)",
+      "detail": "state=notpresent deviceFormat=48000/16/2 mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{64a52197-7975-4830-97bd-21befb25c84a}",
+      "friendlyName": "OUT 1-4 (BEHRINGER UMC 204HD 192k)",
+      "detail": "state=active deviceFormat=48000/24/4 mixFormat=48000/32/4 defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{6775c1d1-bd00-414a-98b7-b6bd01e61c75}",
+      "friendlyName": "Digitalaudio (HDMI) (High Definition Audio Device)",
+      "detail": "state=notpresent deviceFormat=44100/16/2 mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{77653d6a-6b9d-45a5-8d41-d609e40d593d}",
+      "friendlyName": "Lautsprecher (2- BEHRINGER UMC 204HD 192k)",
+      "detail": "state=notpresent deviceFormat= mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{7de92082-87ea-476f-ad07-11cfe87224d6}",
+      "friendlyName": "Realtek HD Audio 2nd output (Realtek(R) Audio)",
+      "detail": "state=unplugged deviceFormat= mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{7fb7168f-b961-4a16-8bdf-4f3e98d37dda}",
+      "friendlyName": "Digital Audio (HDMI) (High Definition Audio Device)",
+      "detail": "state=notpresent deviceFormat= mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{7fd081bf-c303-47a0-9cae-f19d5c4a6e67}",
+      "friendlyName": "Lautsprecher (BEHRINGER UMC 204HD 192k)",
+      "detail": "state=notpresent deviceFormat= mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{889824a2-109e-4f64-85fd-5a985f2611c7}",
+      "friendlyName": "",
+      "detail": "state=notpresent deviceFormat= mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{8d7a6278-4fa4-4c18-9276-dcaf2124ceea}",
+      "friendlyName": "",
+      "detail": "state=notpresent deviceFormat= mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{90f2893a-e2a4-4b57-9f0e-5a0e57e5d209}",
+      "friendlyName": "Lautsprecher (Realtek(R) Audio)",
+      "detail": "state=unplugged deviceFormat= mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{926ed881-b21e-4292-95bc-e99b7ec424e7}",
+      "friendlyName": "NVIDIA Output (NVIDIA High Definition Audio)",
+      "detail": "state=notpresent deviceFormat= mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{97275555-0315-4225-a3fe-965e2c88a5f7}",
+      "friendlyName": "OUT 3-4 (BEHRINGER UMC 204HD 192k)",
+      "detail": "state=active deviceFormat=48000/24/2 mixFormat=48000/32/2 defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{99d158a2-cebc-401b-bd93-925414ba63c5}",
+      "friendlyName": "",
+      "detail": "state=notpresent deviceFormat=48000/16/2 mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{9bfe366e-803c-409a-b775-33f4ddc21f05}",
+      "friendlyName": "",
+      "detail": "state=notpresent deviceFormat= mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{9d09f5fe-3a7d-4e97-9c68-fbbe7c1fc47c}",
+      "friendlyName": "Interne AUX-Buchse (High Definition Audio Device)",
+      "detail": "state=notpresent deviceFormat= mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{9f3ad9ec-0adc-4c66-be4b-55f91a5c0053}",
+      "friendlyName": "Interne AUX-Buchse (Steam Streaming Speakers)",
+      "detail": "state=notpresent deviceFormat= mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{a38fe3bf-5ea7-4a53-93a5-0187714006b8}",
+      "friendlyName": "",
+      "detail": "state=notpresent deviceFormat=48000/24/2 mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{a7b9548c-a421-496b-926c-a327e8488cd7}",
+      "friendlyName": "",
+      "detail": "state=notpresent deviceFormat=48000/24/2 mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{ab35aa7c-e21a-4803-b0bc-a295444409af}",
+      "friendlyName": "",
+      "detail": "state=notpresent deviceFormat=48000/16/2 mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{ac2c2ef4-7cc9-4574-856b-8084efa922fa}",
+      "friendlyName": "27GL650F (NVIDIA High Definition Audio)",
+      "detail": "state=notpresent deviceFormat=48000/16/2 mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{ad3a9f39-e96b-4922-a64c-a782941184d1}",
+      "friendlyName": "27GL850 (High Definition Audio Device)",
+      "detail": "state=notpresent deviceFormat=44100/16/2 mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{b3f5749a-75bd-4df8-8305-7de20739232f}",
+      "friendlyName": "",
+      "detail": "state=notpresent deviceFormat= mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{b80d1616-a8ab-4950-bd93-feb852d7fc04}",
+      "friendlyName": "",
+      "detail": "state=notpresent deviceFormat=48000/16/2 mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{ba771c8d-98ea-456b-b1fa-735153438476}",
+      "friendlyName": "27GL850 (High Definition Audio Device)",
+      "detail": "state=notpresent deviceFormat=44100/16/2 mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{c9bc5ef8-51d4-44d2-ba52-33206dcd7df1}",
+      "friendlyName": "",
+      "detail": "state=notpresent deviceFormat=48000/16/2 mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{ca3b7205-b888-4b71-9618-2d5dadc051b2}",
+      "friendlyName": "NVIDIA Output (NVIDIA High Definition Audio)",
+      "detail": "state=notpresent deviceFormat= mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{d091bb67-7b7b-4013-b298-5d16c0977a42}",
+      "friendlyName": "",
+      "detail": "state=notpresent deviceFormat=48000/24/2 mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{d3c49d25-9da9-45f4-b440-4182f55d57c9}",
+      "friendlyName": "Digitalaudio (HDMI) (High Definition Audio Device)",
+      "detail": "state=notpresent deviceFormat=44100/16/2 mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{de5cfda1-1faf-4090-91b9-8706990c80db}",
+      "friendlyName": "Lautsprecher (High Definition Audio Device)",
+      "detail": "state=notpresent deviceFormat=48000/32/2 mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{ed3a1132-90e3-4ac8-818d-f8b4f10ea56a}",
+      "friendlyName": "",
+      "detail": "state=notpresent deviceFormat=48000/16/2 mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{f06ec80d-8640-4938-9bcb-b55bf9e879f8}",
+      "friendlyName": "",
+      "detail": "state=notpresent deviceFormat= mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{f50d8778-d866-49bb-abe8-ab35606abcdc}",
+      "friendlyName": "OUT 1-4 (2- BEHRINGER UMC 204HD 192k)",
+      "detail": "state=notpresent deviceFormat=48000/24/4 mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{f5493408-c803-42bf-bcd7-5a66d6eaf8a5}",
+      "friendlyName": "27GL850 (NVIDIA High Definition Audio)",
+      "detail": "state=active deviceFormat=44100/24/2 mixFormat=44100/32/2 defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{fdde06f4-d864-4212-9a93-9e5af45b28fe}",
+      "friendlyName": "27GL850 (NVIDIA High Definition Audio)",
+      "detail": "state=notpresent deviceFormat=48000/16/2 mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-render",
+      "stableId": "{0.0.0.00000000}.{fee30c17-e346-4024-bd34-ef8f3a483813}",
+      "friendlyName": "OUT 1-2 (BEHRINGER UMC 204HD 192k)",
+      "detail": "state=active deviceFormat=48000/24/2 mixFormat=48000/32/2 defaultRoles=console,multimedia,communications"
+    },
+    {
+      "kind": "audio-capture",
+      "stableId": "{0.0.1.00000000}.{0a64ced8-f58d-44ac-a6f9-75580a9988cd}",
+      "friendlyName": "Front Pink In (Realtek(R) Audio)",
+      "detail": "state=notpresent deviceFormat= mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-capture",
+      "stableId": "{0.0.1.00000000}.{19628709-3980-429b-ae90-1fc9ba2063b4}",
+      "friendlyName": "Interne AUX-Buchse (High Definition Audio Device)",
+      "detail": "state=notpresent deviceFormat= mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-capture",
+      "stableId": "{0.0.1.00000000}.{2e7db782-1248-4e32-95a3-6ef850ff7f3b}",
+      "friendlyName": "Interne AUX-Buchse (High Definition Audio Device)",
+      "detail": "state=notpresent deviceFormat= mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-capture",
+      "stableId": "{0.0.1.00000000}.{302132a8-d777-425d-987f-6f5505ba11c8}",
+      "friendlyName": "Microphone (High Definition Audio Device)",
+      "detail": "state=notpresent deviceFormat=44100/32/2 mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-capture",
+      "stableId": "{0.0.1.00000000}.{4610701c-f750-4ce6-8357-d51eb3dc294d}",
+      "friendlyName": "Line In (High Definition Audio Device)",
+      "detail": "state=notpresent deviceFormat= mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-capture",
+      "stableId": "{0.0.1.00000000}.{4fcf4a2e-e8ba-49f1-8f68-0f73f22c0efb}",
+      "friendlyName": "Mikrofon (Realtek(R) Audio)",
+      "detail": "state=unplugged deviceFormat= mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-capture",
+      "stableId": "{0.0.1.00000000}.{51b93657-1309-4fd4-9a2e-5c147e957b3b}",
+      "friendlyName": "Microphone (High Definition Audio Device)",
+      "detail": "state=notpresent deviceFormat=44100/16/2 mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-capture",
+      "stableId": "{0.0.1.00000000}.{59a1dd48-5ff5-4a5d-9ff0-54c27c69eece}",
+      "friendlyName": "Side (Realtek(R) Audio)",
+      "detail": "state=notpresent deviceFormat= mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-capture",
+      "stableId": "{0.0.1.00000000}.{62119f43-ef07-4006-a1e3-2923f076c1fb}",
+      "friendlyName": "Rear Pink In (Realtek(R) Audio)",
+      "detail": "state=notpresent deviceFormat= mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-capture",
+      "stableId": "{0.0.1.00000000}.{63a2a815-3a0b-48b8-89ba-e0ab47713d70}",
+      "friendlyName": "Eingang (Realtek(R) Audio)",
+      "detail": "state=unplugged deviceFormat= mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-capture",
+      "stableId": "{0.0.1.00000000}.{738d7cda-0c99-4542-8815-2491ed6ad356}",
+      "friendlyName": "Interne AUX-Buchse (High Definition Audio Device)",
+      "detail": "state=notpresent deviceFormat= mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-capture",
+      "stableId": "{0.0.1.00000000}.{7aa6d167-5880-4c28-8fe9-60a1492450a6}",
+      "friendlyName": "Subwoofer (Realtek(R) Audio)",
+      "detail": "state=notpresent deviceFormat= mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-capture",
+      "stableId": "{0.0.1.00000000}.{80f885bc-8e13-4e90-9b8e-484c214586ea}",
+      "friendlyName": "Front Green In (Realtek(R) Audio)",
+      "detail": "state=notpresent deviceFormat= mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-capture",
+      "stableId": "{0.0.1.00000000}.{8246dccc-4e60-4af9-9120-74adfa7d2e57}",
+      "friendlyName": "Mikrofon (Anker PowerConf C200)",
+      "detail": "state=disabled deviceFormat=48000/16/2 mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-capture",
+      "stableId": "{0.0.1.00000000}.{85c98256-a735-45d9-924f-25ad34078abd}",
+      "friendlyName": "Front (Realtek(R) Audio)",
+      "detail": "state=notpresent deviceFormat= mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-capture",
+      "stableId": "{0.0.1.00000000}.{8814975c-ac1e-4ac2-9550-a7cea81ec8c0}",
+      "friendlyName": "Stereomix (Realtek(R) Audio)",
+      "detail": "state=disabled deviceFormat=48000/16/2 mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-capture",
+      "stableId": "{0.0.1.00000000}.{9113ac93-8cb7-4934-9fcf-7617e5f37472}",
+      "friendlyName": "Rear Blue In (Realtek(R) Audio)",
+      "detail": "state=notpresent deviceFormat= mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-capture",
+      "stableId": "{0.0.1.00000000}.{98f9360f-ea96-4ef2-87a0-2ef3ceebd438}",
+      "friendlyName": "Rear (Realtek(R) Audio)",
+      "detail": "state=notpresent deviceFormat= mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-capture",
+      "stableId": "{0.0.1.00000000}.{a1a68e2c-5c32-404c-a912-36ccf126557e}",
+      "friendlyName": "Rear Orange In (Realtek(R) Audio)",
+      "detail": "state=notpresent deviceFormat= mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-capture",
+      "stableId": "{0.0.1.00000000}.{a90f6e1f-3ea5-4154-9b5c-9704debe5154}",
+      "friendlyName": "Center (Realtek(R) Audio)",
+      "detail": "state=notpresent deviceFormat= mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-capture",
+      "stableId": "{0.0.1.00000000}.{af07c1ee-9f5b-455a-9f7f-35e21572ce01}",
+      "friendlyName": "Interne AUX-Buchse (High Definition Audio Device)",
+      "detail": "state=notpresent deviceFormat= mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-capture",
+      "stableId": "{0.0.1.00000000}.{afe56e1c-ddf6-43e5-9c1a-55aaa3f62246}",
+      "friendlyName": "Line (2- BEHRINGER UMC 204HD 192k)",
+      "detail": "state=notpresent deviceFormat= mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-capture",
+      "stableId": "{0.0.1.00000000}.{c20ea450-5d5a-42a9-8213-5f7287f8e6ce}",
+      "friendlyName": "IN 1-2 (BEHRINGER UMC 204HD 192k)",
+      "detail": "state=active deviceFormat=48000/24/2 mixFormat=48000/32/2 defaultRoles=console,multimedia,communications"
+    },
+    {
+      "kind": "audio-capture",
+      "stableId": "{0.0.1.00000000}.{c7eb2e1f-0fb9-423c-a150-55dee949a8af}",
+      "friendlyName": "Interne AUX-Buchse (Steam Streaming Speakers)",
+      "detail": "state=disabled deviceFormat=44100/32/1 mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-capture",
+      "stableId": "{0.0.1.00000000}.{e08ad2f9-fab2-4444-9def-fd88f0ca4f48}",
+      "friendlyName": "Rear Black In (Realtek(R) Audio)",
+      "detail": "state=notpresent deviceFormat= mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-capture",
+      "stableId": "{0.0.1.00000000}.{e117c761-5a11-4a01-a061-4c456c5b4e55}",
+      "friendlyName": "IN 1-2 (2- BEHRINGER UMC 204HD 192k)",
+      "detail": "state=notpresent deviceFormat=48000/24/2 mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-capture",
+      "stableId": "{0.0.1.00000000}.{e5ed8b35-0491-443e-84c6-c130d74891d7}",
+      "friendlyName": "Mikrofon (Steam Streaming Speakers)",
+      "detail": "state=notpresent deviceFormat= mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-capture",
+      "stableId": "{0.0.1.00000000}.{f883368a-91b1-4d69-92c6-e899a8126a90}",
+      "friendlyName": "Line (BEHRINGER UMC 204HD 192k)",
+      "detail": "state=notpresent deviceFormat= mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "audio-capture",
+      "stableId": "{0.0.1.00000000}.{fbd3f60b-9649-4024-8378-76ac461478c1}",
+      "friendlyName": "Kopfhörer (LE_WH-1000XM3 Hands-Free)",
+      "detail": "state=unplugged deviceFormat= mixFormat= defaultRoles=-"
+    },
+    {
+      "kind": "system",
+      "stableId": "system.appearance",
+      "friendlyName": "Windows appearance",
+      "detail": "light/dark"
+    }
+  ],
+  "errors": [],
+  "ok": true
+}
