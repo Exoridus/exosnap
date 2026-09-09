@@ -1,4 +1,4 @@
-@{
+﻿@{
     # Every piece of third-party software the release-verification guest runs, with
     # the pin that decides which bytes it is. Nothing is installed "latest": a golden
     # image whose tool set drifts turns every disagreement between two campaigns into
@@ -90,6 +90,11 @@
             # The root-enumerated device the driver binds to. It changed between
             # driver generations, so it travels with the version pin.
             hardwareId  = 'Root\MttVDD'
+            # The catalog's signer. Windows refuses a third-party driver package
+            # whose publisher is not in Trusted Publishers, and a clean guest trusts
+            # nobody. Pinned so the step imports this certificate and no other.
+            signerThumbprint = '3CF8CF26D8BA266C3A483AB7D26D4A818E317D76'
+            signerSubject    = 'CN=SignPath Foundation, O=SignPath Foundation, L=Lewes, S=Delaware, C=US'
             reason      = 'a monitor with a fixed mode list. A GPU-partitioned guest has no display output of its own, and Output Duplication needs one'
         }
         @{

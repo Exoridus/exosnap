@@ -1,4 +1,4 @@
-#Requires -Version 7.0
+﻿#Requires -Version 7.0
 <#
 .SYNOPSIS
     Tests for the Hyper-V release-verification guest recipe under tools/vm.
@@ -523,7 +523,11 @@ Test-Case 'the IDD pin includes its root-device installer and matches the signed
 
 Test-Case 'the generated IDD settings use the pinned release schema' {
     $provisioning = Get-Content -LiteralPath $script:ProvisionScript -Raw
-    Assert-Match '<options>' $provisioning 'the pinned driver reads HDRPlus from its options element'
+    # Checked against the settings file the pinned release ships, not against master:
+    # HDRPlus sits in <colour> beside SDR10bit and ColourFormat. Written anywhere else
+    # it is read by nothing, and the monitor comes up SDR with no complaint.
+    Assert-Match '<colour>' $provisioning 'the pinned driver reads HDRPlus from its colour element'
+    Assert-NoMatch '<options>' $provisioning 'the driver has no options element to read'
     Assert-Match '<HDRPlus>\$hdrValue</HDRPlus>' $provisioning 'HDR must use the pinned case-sensitive element name'
     Assert-True (-not $provisioning.Contains('<hdrplus>')) 'the obsolete top-level setting is ignored by the pinned driver'
 }
@@ -640,6 +644,17 @@ Test-Case 'the GPU-P NVENC probe selects an NVIDIA adapter instead of DXGI index
     Assert-NoMatch 'EnumAdapters1\(0,' $source 'adapter zero is not guaranteed to be the GPU partition'
 }
 
+Test-Case 'a resumed gpu phase stops the machine itself' {
+    $plan = New-ReleaseVmCreatePlan -VMName 'ExoSnap-Verify' -Root 'D:\images' `
+        -GoldenDisk 'D:\images\golden.vhdx' -AnswerIso 'D:\images\unattend.iso' `
+        -AnswerFile 'C:\repo\tools\vm\autounattend.xml' -IsoPath 'W:\win11.iso' `
+        -ProvisionScript 'C:\repo\tools\vm\provision.ps1' `
+        -ProvisionManifest 'C:\repo\tools\vm\provision-manifest.psd1' `
+        -Phase @('gpu')
+    $names = @($plan | ForEach-Object { $_.Name })
+    Assert-Equal 'stop-for-gpu' $names[0] 'the phase cannot attach a partition to a running machine'
+    Assert-Match 'Stop-ReleaseVmIfRunning' $plan[0].Command 'stopping must tolerate a machine that is already off'
+}
 Write-Host ''
 Write-Host "  $($script:Passed) passed, $($script:Failed) failed."
 if ($script:Failed -gt 0) { exit 1 }

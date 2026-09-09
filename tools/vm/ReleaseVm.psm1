@@ -596,12 +596,16 @@ function New-ReleaseVmCreatePlan {
                 VMName = $VMName; TimeoutMinutes = $InstallTimeoutMinutes
             }) -NeedsCredential -Detail 'the answer file installs Windows and logs the console session on; this waits for it'
 
-        $plan += New-ReleaseVmStep -Name 'stop-for-gpu' -Command 'Stop-VM' -Parameters ([ordered]@{
-                Name = $VMName; Force = $true
-            }) -Detail 'Hyper-V only attaches a GPU partition to a stopped machine'
     }
 
     if ($Phase -contains 'gpu') {
+        # In the gpu phase, not the install phase: -Phase gpu on a machine somebody
+        # left running is the normal way to resume an interrupted build, and it used
+        # to fail on the first cmdlet because the stop belonged to the phase before.
+        $plan += New-ReleaseVmStep -Name 'stop-for-gpu' -Command 'Stop-ReleaseVmIfRunning' -Parameters ([ordered]@{
+                VMName = $VMName
+            }) -Detail 'Hyper-V only attaches a GPU partition to a stopped machine'
+
         $plan += New-ReleaseVmStep -Name 'mmio-space' -Command 'Set-VM' -Parameters ([ordered]@{
                 Name = $VMName
                 GuestControlledCacheTypes = $true
@@ -894,6 +898,20 @@ namespace ExoSnap.ReleaseVm {
     return $Destination
 }
 
+function Stop-ReleaseVmIfRunning {
+    <#
+    .SYNOPSIS
+        Stops a machine that is running, and says nothing about one that is not.
+    .DESCRIPTION
+        Idempotent so a phase can be re-run: `Stop-VM` on a machine that is already
+        off is an error, which would end a resumed build on its first step.
+    #>
+    param([Parameter(Mandatory)] [string] $VMName)
+    $vm = Get-VM -Name $VMName -ErrorAction Stop
+    if ($vm.State -eq 'Off') { return }
+    Stop-VM -Name $VMName -Force
+}
+
 function Set-ReleaseVmBootFromDvd {
     <#
     .SYNOPSIS
@@ -1175,6 +1193,7 @@ Export-ModuleMember -Function @(
     'Write-ReleaseVmPlan'
     'Invoke-ReleaseVmPlan'
     'Set-ReleaseVmBootFromDvd'
+    'Stop-ReleaseVmIfRunning'
     'Wait-ReleaseVmPowerShellDirect'
     'Copy-ReleaseVmFileSet'
     'Copy-ReleaseVmDirectory'
