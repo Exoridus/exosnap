@@ -523,7 +523,11 @@ Test-Case 'the IDD pin includes its root-device installer and matches the signed
 
 Test-Case 'the generated IDD settings use the pinned release schema' {
     $provisioning = Get-Content -LiteralPath $script:ProvisionScript -Raw
-    Assert-Match '<options>' $provisioning 'the pinned driver reads HDRPlus from its options element'
+    # Checked against the settings file the pinned release ships, not against master:
+    # HDRPlus sits in <colour> beside SDR10bit and ColourFormat. Written anywhere else
+    # it is read by nothing, and the monitor comes up SDR with no complaint.
+    Assert-Match '<colour>' $provisioning 'the pinned driver reads HDRPlus from its colour element'
+    Assert-NoMatch '<options>' $provisioning 'the driver has no options element to read'
     Assert-Match '<HDRPlus>\$hdrValue</HDRPlus>' $provisioning 'HDR must use the pinned case-sensitive element name'
     Assert-True (-not $provisioning.Contains('<hdrplus>')) 'the obsolete top-level setting is ignored by the pinned driver'
 }

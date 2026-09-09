@@ -508,9 +508,9 @@ function New-VirtualDisplayConfiguration {
 $rates
     </resolution>
   </resolutions>
-  <options>
+  <colour>
     <HDRPlus>$hdrValue</HDRPlus>
-  </options>
+  </colour>
 </vdd_settings>
 "@
 }
@@ -605,6 +605,86 @@ function Invoke-IddStep {
             "HDR $(if ($hdr) { 'on' } else { 'off' })")
 }
 
+function Test-ConsoleSession {
+    <#
+    .SYNOPSIS
+        Whether the given session is the one attached to the console.
+    .DESCRIPTION
+        Asked of Windows rather than parsed out of `query session`: that table is
+        column-aligned, localized in its state column, and a session id can appear in
+        more than one column. Reattaching a session that is already on the console
+        fails with error 7045, which is a success in disguise, so this has to be
+        exact.
+    #>
+    param([Parameter(Mandatory)] [int] $SessionId)
+    if (-not ('ExoSnap.Provision.Console' -as [type])) {
+        Add-Type -Namespace 'ExoSnap.Provision' -Name 'Console' -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("kernel32.dll")]
+public static extern uint WTSGetActiveConsoleSessionId();
+'@
+    }
+    return [int][ExoSnap.Provision.Console]::WTSGetActiveConsoleSessionId() -eq $SessionId
+}
+
+function Invoke-ConsoleSessionStep {
+    param($Manifest)
+    <#
+        A guest whose session is disconnected has no display at all: no monitor
+        enumerates, Graphics Capture offers only windows, Output Duplication finds no
+        outputs, and OpenInputDesktop fails. Closing the VMConnect window is what
+        disconnects it, so an unattended guest is disconnected by definition.
+
+        tscon reattaches the session to the console, and everything above works again
+        with no console attached and no window open. It has to run after every logon,
+        because the disconnect happens whenever the last viewer leaves.
+    #>
+    $script = Join-Path $Manifest.paths.staging 'attach-console.ps1'
+    $body = @'
+# Reattach this logon session to the console so the guest has a display without a
+# viewer. Silent when the session is already on the console.
+$ErrorActionPreference = 'SilentlyContinue'
+$id = (Get-Process -Id $PID).SessionId
+& tscon.exe $id /dest:console
+'@
+    Set-Content -LiteralPath $script -Value $body -Encoding UTF8
+
+    $taskName = 'ExoSnapAttachConsole'
+    $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
+        -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$script`""
+    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+    $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+        -ExecutionTimeLimit ([TimeSpan]::FromMinutes(5))
+    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger `
+        -Principal $principal -Settings $settings -Force | Out-Null
+
+    # Now, as well as at every logon, because the steps after this one may want a
+    # display. Provisioning arrives over PowerShell Direct in session 0, which owns no
+    # desktop, so the session to reattach is the interactive one -- the shell the
+    # answer file logged on. Without it the task alone would leave this run blind.
+    $interactive = @(Get-Process -Name 'explorer' -ErrorAction SilentlyContinue |
+            Where-Object { $_.SessionId -ne 0 } | Select-Object -First 1)
+    if ($interactive.Count -eq 0) {
+        return "the session reattaches to the console at logon (task $taskName); none is logged on now"
+    }
+    $sessionId = $interactive[0].SessionId
+    if (Test-ConsoleSession -SessionId $sessionId) {
+        return "session $sessionId is already on the console, and reattaches at logon (task $taskName)"
+    }
+    # Redirecting a native tool's stderr into the pipeline turns it into an error
+    # record, and $ErrorActionPreference = 'Stop' turns that into a terminating error.
+    # tscon writes to stderr whenever the session is already where it is being sent,
+    # which is the ordinary case on a re-run.
+    try { & tscon.exe $sessionId /dest:console *> $null } catch { }
+    if (Test-ConsoleSession -SessionId $sessionId) {
+        return "session $sessionId is on the console, and reattaches at logon (task $taskName)"
+    }
+    # Not fatal: the guest simply has no display until the next logon runs the task,
+    # and every step after this one either does not need one or reports UNAVAILABLE.
+    Write-Line "session $sessionId could not be attached to the console now; the logon task will" 'warn'
+    return "the session reattaches to the console at logon (task $taskName)"
+}
+
 function Invoke-UacStep {
     param($Manifest)
     <#
@@ -625,6 +705,7 @@ function Invoke-UacStep {
 
 $script:Steps = @(
     @{ Name = 'power';           Action = ${function:Invoke-PowerStep} }
+    @{ Name = 'console';         Action = ${function:Invoke-ConsoleSessionStep} }
     @{ Name = 'hostdriver';      Action = ${function:Invoke-HostDriverStep} }
     @{ Name = 'vcredist';        Action = ${function:Invoke-VcredistStep} }
     @{ Name = 'pwsh';            Action = ${function:Invoke-PwshStep} }
