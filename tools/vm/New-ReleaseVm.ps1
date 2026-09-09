@@ -1,4 +1,4 @@
-#Requires -Version 7.0
+﻿#Requires -Version 7.0
 <#
 .SYNOPSIS
     Builds the golden ExoSnap release-verification guest. Runs on the HOST, elevated.
@@ -55,7 +55,9 @@ param(
     [string] $IsoPath,
     [string] $Root,
     [string] $VMName,
-    [ValidateSet('create', 'install', 'gpu', 'driver', 'provision')]
+    # No ValidateSet: `pwsh -File script.ps1 -Phase gpu,driver` does not parse
+    # PowerShell array syntax, so the whole thing arrives as one string and a set
+    # attribute refuses it before anything can split it. Validated below instead.
     [string[]] $Phase = @('create', 'install', 'gpu', 'driver', 'provision'),
     [string] $HostDriverPackage,
     [string] $ProvisionSwitchName = 'Default Switch',
@@ -68,6 +70,15 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+$knownPhases = @('create', 'install', 'gpu', 'driver', 'provision')
+$Phase = @($Phase | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+$unknownPhase = @($Phase | Where-Object { $_ -notin $knownPhases })
+if ($unknownPhase.Count -gt 0) {
+    throw "unknown phase(s) '$($unknownPhase -join ', ')'; the phases are $($knownPhases -join ', ')"
+}
+if ($Phase.Count -eq 0) { throw "no phase was named; the phases are $($knownPhases -join ', ')" }
 
 Import-Module (Join-Path $PSScriptRoot 'ReleaseVm.psm1') -Force -DisableNameChecking
 

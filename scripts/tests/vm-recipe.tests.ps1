@@ -1,4 +1,4 @@
-#Requires -Version 7.0
+﻿#Requires -Version 7.0
 <#
 .SYNOPSIS
     Tests for the Hyper-V release-verification guest recipe under tools/vm.
@@ -640,6 +640,17 @@ Test-Case 'the GPU-P NVENC probe selects an NVIDIA adapter instead of DXGI index
     Assert-NoMatch 'EnumAdapters1\(0,' $source 'adapter zero is not guaranteed to be the GPU partition'
 }
 
+Test-Case 'a resumed gpu phase stops the machine itself' {
+    $plan = New-ReleaseVmCreatePlan -VMName 'ExoSnap-Verify' -Root 'D:\images' `
+        -GoldenDisk 'D:\images\golden.vhdx' -AnswerIso 'D:\images\unattend.iso' `
+        -AnswerFile 'C:\repo\tools\vm\autounattend.xml' -IsoPath 'W:\win11.iso' `
+        -ProvisionScript 'C:\repo\tools\vm\provision.ps1' `
+        -ProvisionManifest 'C:\repo\tools\vm\provision-manifest.psd1' `
+        -Phase @('gpu')
+    $names = @($plan | ForEach-Object { $_.Name })
+    Assert-Equal 'stop-for-gpu' $names[0] 'the phase cannot attach a partition to a running machine'
+    Assert-Match 'Stop-ReleaseVmIfRunning' $plan[0].Command 'stopping must tolerate a machine that is already off'
+}
 Write-Host ''
 Write-Host "  $($script:Passed) passed, $($script:Failed) failed."
 if ($script:Failed -gt 0) { exit 1 }
