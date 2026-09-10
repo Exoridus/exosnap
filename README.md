@@ -110,7 +110,7 @@ compressed audio; MKV also supports lossless PCM and FLAC.
 
 MP4 delivery uses stream-copy remuxing from the recording, avoiding a second video encode. Low-disk
 checks account for the temporary space needed while both files exist. Splitting can be triggered by
-time or size, with background MP4 remuxing per completed segment.
+time or size, with per-segment background MP4 remux as each segment completes.
 
 The editor supports **keyframe-accurate lossless trim**, not arbitrary frame-accurate cuts or a
 multi-track editing timeline. Marker export is a JSON sidecar, not embedded chapters. There is no
