@@ -245,6 +245,9 @@ internal sealed class FakeLiveVerifySession : ILiveVerifySession
     /// <summary>Every command <see cref="InvokeAsync"/> received, in call order.</summary>
     public List<string> InvokedCommands { get; } = [];
 
+    /// <summary>Every <c>settings.set</c> (key, value) pair, in call order.</summary>
+    public List<(string Key, object? Value)> SettingsSet { get; } = [];
+
     /// <summary>Whether <see cref="DisposeAsync"/> was called.</summary>
     public bool Disposed { get; private set; }
 
@@ -297,6 +300,13 @@ internal sealed class FakeLiveVerifySession : ILiveVerifySession
         CancellationToken cancellationToken)
     {
         this.InvokedCommands.Add(command);
+
+        if (string.Equals(command, "settings.set", StringComparison.Ordinal) && parameters is not null)
+        {
+            parameters.TryGetValue("key", out var key);
+            parameters.TryGetValue("value", out var value);
+            this.SettingsSet.Add((key as string ?? string.Empty, value));
+        }
 
         if (this.refusals.TryGetValue(command, out var refusal))
         {

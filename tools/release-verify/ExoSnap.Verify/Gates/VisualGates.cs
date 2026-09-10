@@ -169,13 +169,17 @@ public sealed class OverlayAppearanceGate : IScenarioBody
         var originals = new Dictionary<string, object?>(StringComparer.Ordinal);
         foreach (var key in keys)
         {
-            // settings.get answers a key-to-value map, not a `value` field.
+            // settings.get answers a key-to-value map: the value is under the literal
+            // key, dot and all, not nested. A dotted-path read would find nothing and
+            // silently treat every overlay as already off.
             var read = await session.InvokeAsync(
                     "settings.get",
                     new Dictionary<string, object?>(StringComparer.Ordinal) { ["key"] = key },
                     cancellationToken)
                 .ConfigureAwait(false);
-            originals[key] = Snapshots.IsTrue(read.Result, key);
+            originals[key] = read.Result.ValueKind == JsonValueKind.Object &&
+                             read.Result.TryGetProperty(key, out var value) &&
+                             value.ValueKind == JsonValueKind.True;
             await session.SetSettingAsync(key, true, cancellationToken).ConfigureAwait(false);
         }
 

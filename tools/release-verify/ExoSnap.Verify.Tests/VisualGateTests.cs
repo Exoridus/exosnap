@@ -65,6 +65,32 @@ public sealed class OverlayAppearanceGateTests
     }
 
     [Fact]
+    public async Task RestoresEachOverlaySettingToTheValueItReadNotToOff()
+    {
+        using var harness = await GateHarness.CreateAsync(
+            "REL-VIS-OVERLAY-001",
+            fakes =>
+            {
+                WireOverlaysUp(fakes);
+                // The developer already had the recording overlay on; the gate must
+                // put it back on, not reset it to the default.
+                fakes.Session.SetResult("settings.get", """{"app.showRecordingOverlay":true}""");
+            },
+            TestContext.Current.CancellationToken);
+
+        await new OverlayAppearanceGate(NoPause).RunAsync(harness.Context, TestContext.Current.CancellationToken);
+
+        var writes = harness.Fakes.Session.SettingsSet;
+        Assert.Equal((true, false, false), (
+            LastValueFor(writes, "app.showRecordingOverlay"),
+            LastValueFor(writes, "app.showDiagnosticsOverlay"),
+            LastValueFor(writes, "app.showQuickControls")));
+    }
+
+    private static object? LastValueFor(IEnumerable<(string Key, object? Value)> writes, string key) =>
+        writes.Where(write => write.Key == key).Select(write => write.Value).LastOrDefault();
+
+    [Fact]
     public async Task IsInfrastructureErrorWhenNoOverlayIsOnScreen()
     {
         using var harness = await GateHarness.CreateAsync(
