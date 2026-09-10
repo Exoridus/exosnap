@@ -689,7 +689,7 @@ git commit -m "fix(quick): clearing a hotkey drops its stale conflict warning"
 
 ### Task 10: Output card — destination folder text field is squeezed to an unreadable width
 
-**Evidence:** `settings-full.png` — the `Destination folder` field renders `/ideos\ExoSnap` (the tail end of `C:\Users\User\Videos\ExoSnap`, with the leading characters cut off, no ellipsis). This `ExoSettingRow` has no `controlWidth` override, so it defaults to 220px shared between the `ExoTextField` and the `Browse…` button in the same `RowLayout` — far too narrow for an absolute path.
+**Evidence:** `settings-full.png` — the `Destination folder` field renders `/ideos\ExoSnap` (the tail end of `C:\Users\<name>\Videos\ExoSnap`, with the leading characters cut off, no ellipsis). This `ExoSettingRow` has no `controlWidth` override, so it defaults to 220px shared between the `ExoTextField` and the `Browse…` button in the same `RowLayout` — far too narrow for an absolute path.
 
 **Files:**
 - Modify: `app/quick/ExoSnap/Quick/SettingsOutputSection.qml`

@@ -63,7 +63,7 @@ with no scrim, no gap, no outer frame and no outer border.
 
 Two behavioural notes, so this file does not stay wrong about the shipped build:
 
-- **Nav tabs stay available while the workspace is open** (corrected 2026-08-16, QCR-001), with
+- **Nav tabs stay available while the workspace is open** (corrected 2026-08-16), with
   Record still marked as the current destination. Three shapes have existed and only the third is
   shipped: the Widgets shape closed the overlay through the discard guard on nav-away; the Quick
   port locked the tabs instead; the shipped shape does neither. An open edit session is state of

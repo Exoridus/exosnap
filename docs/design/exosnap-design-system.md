@@ -3,18 +3,9 @@
 Last refreshed: 2026-06-01
 
 ## Scope and source of truth
-This design-system contract is refreshed from:
-
-- `.workspace/design/exosnap-v2-prototype/ExoSnap Design System.html`
-- `.workspace/design/exosnap-v2-prototype/ExoSnap Handoff.html`
-- `.workspace/design/exosnap-v2-prototype/styles.css`
-- `.workspace/design/exosnap-v2-prototype/v2.css`
-- `.workspace/design/exosnap-v2-prototype/ds-system.css`
-- `.workspace/design/exosnap-v2-prototype/ui.jsx`
-- `.workspace/design/exosnap-v2-prototype/modal.jsx`
-- `.workspace/design/exosnap-v2-prototype/record.jsx`
-- `.workspace/design/exosnap-v2-prototype/settings.jsx`
-- `.workspace/design/exosnap-v2-prototype/pages.jsx`
+This design-system contract is refreshed from the v2 visual prototype (HTML,
+CSS and JSX mockups of the design system, handoff sheet, and per-surface
+screens).
 
 This document is implementation-facing for Qt Widgets and QSS.
 
