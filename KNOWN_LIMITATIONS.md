@@ -55,8 +55,7 @@ Supported encoders actually selectable in this build:
   expose it), and HEVC (NVENC). HEVC is available in MKV and MP4 (`hvc1` sample
   entry). **HEVC, hvc1, and 10-bit encoder paths are functional end-to-end but
   have not yet been validated across the full range of NVIDIA GPU generations
-  under live recording conditions (ValidUnvalidated).** Use H.264 or AV1 if you
-  encounter issues.
+  under live recording conditions.** Use H.264 or AV1 if you encounter issues.
 - **Audio:** AAC-LC (`AAC` in the UI), Opus, PCM (MKV only), and FLAC (MKV only).
   PCM and FLAC are **MKV-only** — see Container/codec rules above for why MP4 PCM
   is deferred.
@@ -80,7 +79,7 @@ Exact codec availability depends on your **NVIDIA GPU generation, driver
 version, the selected container, and the selected video/audio combination**.
 Invalid combinations are not offered.
 
-## Video color pipeline (0.7.0)
+## Video color pipeline
 
 - **BT.709 color metadata** is written to all MKV and MP4 outputs.
 - **Y'CbCr color range** is selectable per preset: Full or Limited, behind Expert mode
@@ -129,7 +128,7 @@ Invalid combinations are not offered.
   roll-off an SDR player would approximate. The exception is the rare
   already-PQ 10-bit desktop (below), which has no shareable frame.
 
-## Audio processing (Audio v2, 0.6.0)
+## Audio processing
 
 - **Audio format model** (ADR 0030): the output **sample rate** (44.1 / 48 / 96 kHz),
   **channel count** (mono / stereo), and **bit depth** for the lossless codecs
@@ -162,8 +161,8 @@ Invalid combinations are not offered.
     device clocks); the per-source FIFO drift relief bounds their inter-source
     skew instead. A single gain-adjusted source is slaved normally.
   - **Live validation is narrow, not absent**: a 2–3 h live soak on the release
-    system (net drift ≤ budget, audibly artifact-free) is a mandatory v0.9
-    release gate (`docs/release-checklist.md` §7). Broad validation across many
+    system (net drift ≤ budget, audibly artifact-free) is a mandatory release
+    gate (`docs/release-checklist.md` §7). Broad validation across many
     audio devices, drivers, and hardware configurations remains limited — one
     passing soak on one machine does not generalize to every device clock.
 - **FLAC compression level** (0–8, default 5) is configurable; lossless at every
@@ -174,7 +173,7 @@ Invalid combinations are not offered.
 
 ## Recording split
 
-- Recording **split is supported for MKV, WebM, and MP4** (0.2.0).
+- Recording **split is supported for MKV, WebM, and MP4**.
 - For MP4 sessions, each completed segment is remuxed to MP4 in the background
   while recording continues into the next segment. "Saved" is reported only when
   all segment remuxes have completed.
@@ -188,7 +187,7 @@ Invalid combinations are not offered.
 
 ## Crash safety and recovery
 
-- **Crash recovery is available** (0.2.0). ExoSnap writes a recovery manifest
+- **Crash recovery is available.** ExoSnap writes a recovery manifest
   before each recording starts. If a session is interrupted, the next launch
   shows a recovery overlay with three actions per candidate (ADR-0015):
   - **Finish** — saves the recording as originally configured (MKV rename/repair
@@ -208,8 +207,8 @@ Invalid combinations are not offered.
   second candidate finalizes the first (its background remux completes; the new
   candidate takes its place).
 - Continued sessions produce independent recording slices — no single-file concat.
-  Use Quick Trim (planned for 0.11.0) for post-hoc joining.
-- Notification toasts (recovery available, saved, unexpected stop, low storage) are shown via the tray notification system (0.3.0).
+  Post-hoc joining is planned but not in this build.
+- Notification toasts (recovery available, saved, unexpected stop, low storage) are shown via the tray notification system.
 - For MKV/WebM split recordings, segments that were already finalized before an
   interruption remain usable; an interrupted **active** segment may not be
   recoverable.
@@ -235,7 +234,7 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
   exFAT volume for unlimited file sizes. Recording is **not blocked** — short clips
   on FAT32 work correctly.
 - NTFS, exFAT, and other filesystem types pass silently.
-- No automatic split-at-4-GiB-limit; that is a separate future slice.
+- No automatic split at the 4 GiB limit; that is a separate future change.
 
 ## Other current limitations
 
@@ -325,7 +324,7 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
   - Verified by unit/integration tests with fake sources; real endpoint-unplug
     behavior is a manual live check.
 
-## Overlay and notification limitations (0.3.0)
+## Overlay and notification limitations
 
 - The on-screen recording overlay, diagnostics overlay, countdown overlay, and quick-control pill
   all use `WDA_EXCLUDEFROMCAPTURE` to stay outside the captured frame. If the capture exclusion
@@ -340,7 +339,7 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
   holds, e.g. low storage, unexpected stop, recovery available) stack above it and never
   auto-dismiss.
 - Countdown overlay is anchored to the recorded monitor's bottom-center. On multi-monitor setups,
-  it follows the selected monitor. It is not configurable in 0.3.0.
+  it follows the selected monitor. It is not configurable.
 - **Exclusive-fullscreen (legacy FSE) window capture is a named limitation, not a
   supported path.** A game in legacy exclusive fullscreen bypasses the desktop
   compositor, so **window** capture (WGC) records a black or frozen picture — ExoSnap
@@ -366,7 +365,7 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
   than pronouncing a verdict; it clears itself when the content moves again.
   Most modern "fullscreen" settings run as
   borderless/flip-model (FSO) and record fine on either path; the remaining hardening
-  of this matrix is tracked for `0.10.0`.
+  of this matrix is tracked for a later release.
 - Tray notifications may be suppressed by Windows Focus Assist / Do Not Disturb mode.
 
 ## Capture previews
@@ -394,7 +393,7 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
   degrading a game running on the previewed monitor. Closing the preview (or
   leaving the Record page) closes the duplication.
 
-## Crash reporting and updates (0.6.0)
+## Crash reporting and updates
 
 - **Crash reporting is opt-in and consent-gated.** Capture is local-first (out-of-process Crashpad).
   `Ask every time` is the default; `Send automatically` and `Never send` are explicit, revisitable
@@ -463,16 +462,17 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
   before/after comparison. Whether encode latency ever earns a visible diagnostics value, and
   whether a deeper pipeline is worth exposing, is deferred until this measurement shows it matters.
 
-## Planned beyond 0.7.0 (not in this build)
+## Not in this build
 
-The following are intentionally deferred and are documented here only so the
-current boundary is unambiguous. They are **not** part of 0.7.0:
-in-place auto-update with restart (has since shipped as a dual-swap in-app updater — see the
-Crash reporting and updates section above), immediate in-session crash reporter, automated symbol
-upload, AMD and Intel hardware encoding, software encoding fallback, HLG and wide-color-gamut
-management beyond BT.2020 signaling (native HDR10/PQ has since shipped for both monitor and
-window/game capture, with in-band HEVC SEI / AV1 metadata OBUs in addition to container-level
-metadata), 4:2:2 chroma subsampling (4:4:4 has since shipped for 8-bit H.264/HEVC), more-than-stereo
-audio (32-bit float PCM has since shipped), PCM/FLAC in MP4, and the remaining hardening of the
-fullscreen/exclusive capture matrix (0.10.0; exclusive-fullscreen detection + the "record the
-monitor instead" path have since shipped — see the capture-matrix limitation above).
+Intentionally deferred, listed so the current boundary is unambiguous:
+
+- AMD and Intel hardware encoding; software (CPU) encoding fallback
+- HLG, and wide-color-gamut management beyond BT.2020 signalling
+- 4:2:2 chroma subsampling
+- More than two audio channels (5.1 / 7.1)
+- PCM and FLAC audio in MP4
+- Replay buffer
+- Multi-track editing timeline and frame-accurate (non-keyframe) cuts
+- Chapter / container-metadata marker export (a JSON sidecar is written instead)
+- Immediate in-session crash reporter; automated crash-symbol upload
+- Remaining hardening of the fullscreen / exclusive-capture matrix
