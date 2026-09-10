@@ -13,6 +13,8 @@ namespace {
 constexpr std::array kFlags = {
     // --- app/auto_record/AutoRecordOptions.cpp ---
     KnownFlag{"--auto-record", FlagArity::None},
+    KnownFlag{"--auto-record-bare", FlagArity::None},
+    KnownFlag{"--capture-backend", FlagArity::Value},
     KnownFlag{"--target", FlagArity::Value},
     KnownFlag{"--target-window-title", FlagArity::Value},
     KnownFlag{"--audio-rows", FlagArity::Value},

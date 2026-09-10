@@ -25,7 +25,7 @@ Individual probe targets are placed under `build/<preset>/tools/probes/`.
 | probe_wgc_nvenc_gpu | WGC + NVENC GPU texture sharing path (D3D11 interop) | NVIDIA GPU | `probe_wgc_nvenc_gpu.exe` |
 | probe_mf_aac_encode | Media Foundation AAC encoding (legacy/transitional) | None | `probe_mf_aac_encode.exe` |
 | probe_gpup_nvenc | NVENC session, codec caps and 60 encoded frames on adapter 0, as JSON | NVIDIA GPU, or a Hyper-V GPU partition of one | `probe_gpup_nvenc.exe` |
-| probe_idd_duplication | Output Duplication on every output: mode, colour space, 30 frames, timeouts, as JSON | A desktop session | `probe_idd_duplication.exe` |
+| probe_idd_duplication | Output Duplication on every output: mode, colour space, frame timing and diagnostics as JSON | A desktop session | `probe_idd_duplication.exe` |
 
 ## The two verification-guest probes
 
@@ -81,3 +81,16 @@ A probe should be removed when:
 
 Each probe has its own `README.md` with detailed build and run instructions.
 Probes are excluded from normal Release builds, install rules, and CI.
+
+### probe_idd_duplication diagnostics
+
+For the DXGI deep-research path, the duplication probe supports the following
+options:
+
+- `--frames=<n>`: number of frame samples required before exit.
+- `--duration-ms=<ms>`: per-output runtime budget.
+- `--acquire-timeout-ms=<ms>`: timeout in milliseconds for `AcquireNextFrame`.
+- `--nonblocking-acquire`: force `AcquireNextFrame(0)`.
+- `--resource-reset-before-release`: release the `IDXGIResource` before
+  `ReleaseFrame`.
+- `--hold-ms=<ms>`: wait for N ms after successful acquire before release.

@@ -17,9 +17,12 @@ namespace exosnap::auto_record {
 
 enum class TargetKind { Monitor, Window, Region };
 enum class HdrMode { Off, Tonemap, Native };
+enum class CaptureBackend { Default, Wgc };
 
 struct AutoRecordOptions {
     TargetKind target = TargetKind::Monitor;
+    CaptureBackend capture_backend = CaptureBackend::Default;
+    bool bare = false;
     QString target_window_title;                  // required when target == Window
     QStringList audio_rows;                       // subset of {"app","sys","mic"}, order = row order
     QString merge_above;                          // row name that merges into the row above, or empty

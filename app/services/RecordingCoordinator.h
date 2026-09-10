@@ -218,7 +218,8 @@ class RecordingCoordinator {
 
     std::vector<exosnap::engine::CaptureTarget> EnumerateTargets();
     bool StartRecording(const exosnap::engine::CaptureTarget& target, const capability::AudioUiState& audio_ui_state,
-                        std::optional<exosnap::engine::CaptureRegion> crop_region = std::nullopt);
+                        std::optional<exosnap::engine::CaptureRegion> crop_region = std::nullopt,
+                        exosnap::engine::CaptureBackend capture_backend = exosnap::engine::CaptureBackend::Default);
 
     // Webcam overlay
     // Mute or unmute one audio source kind while a recording runs. No-op when
@@ -463,6 +464,7 @@ class RecordingCoordinator {
         exosnap::engine::CaptureTarget target;
         capability::AudioUiState audio_ui_state;
         std::optional<exosnap::engine::CaptureRegion> crop_region;
+        exosnap::engine::CaptureBackend capture_backend = exosnap::engine::CaptureBackend::Default;
         OutputSettingsModel output_settings;
         exosnap::engine::RecordingSplitSettings split_settings;
         VideoSettingsModel video_settings;

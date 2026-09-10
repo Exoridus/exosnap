@@ -105,6 +105,12 @@ TEST(CommandLineFlags, ReadyFrameCaptureOptionsAreAccepted) {
         << error.toStdString();
 }
 
+TEST(CommandLineFlags, CaptureBackendOptionIsAccepted) {
+    QString error;
+    EXPECT_TRUE(ValidateCommandLine(Cmd({"--auto-record", "--auto-record-bare", "--capture-backend", "wgc"}), &error))
+        << error.toStdString();
+}
+
 // --enable-preview stays registered on purpose although nothing implements it:
 // the auto-record parser owns the message that explains why, and claiming it here
 // first would replace that guidance with a bare "unknown option".

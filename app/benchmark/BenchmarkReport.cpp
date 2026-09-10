@@ -100,6 +100,8 @@ void CollectDisplayIdentities(Environment* env) {
 void CollectDisplay(Environment* env) {
     // The primary screen is the one every scenario in this campaign records; a
     // scenario that targets a different screen states so in its manifest.
+    if (qobject_cast<QGuiApplication*>(QCoreApplication::instance()) == nullptr)
+        return;
     QScreen* screen = QGuiApplication::primaryScreen();
     if (screen == nullptr)
         return;
