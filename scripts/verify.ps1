@@ -56,6 +56,14 @@
 .PARAMETER SimulateFail
     In -DryRun, the check names that should report FAIL.
 
+.PARAMETER Jobs
+    Cap the parallelism of the heavy steps: cmake --build --parallel, ctest -j,
+    and the blocking clang-tidy run. 0 (the default) leaves each step at its own
+    default, which saturates the machine. The environment variable
+    EXOSNAP_VERIFY_JOBS is the default when this is not passed, so a developer can
+    keep their machine usable during a pre-push run without editing the shared
+    hooks. CI never sets it.
+
 .EXAMPLE
     .\scripts\verify.ps1 -Fast
 
@@ -74,11 +82,22 @@ param(
     [switch] $DryRun,
     [string[]] $SimulateFail = @(),
     [string] $ResultPath,
-    [int] $FailureTailLines = 120
+    [int] $FailureTailLines = 120,
+    [int] $Jobs = 0
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+# EXOSNAP_VERIFY_JOBS is the default so a pre-push run can be throttled from the
+# environment rather than by editing the shared hook. A value that does not parse,
+# or a non-positive one, means "no cap" just like the default.
+if ($Jobs -le 0 -and -not [string]::IsNullOrWhiteSpace($env:EXOSNAP_VERIFY_JOBS)) {
+    $parsed = 0
+    if ([int]::TryParse($env:EXOSNAP_VERIFY_JOBS, [ref]$parsed) -and $parsed -gt 0) { $Jobs = $parsed }
+}
+if ($Jobs -lt 0) { $Jobs = 0 }
+$jobsArg = if ($Jobs -gt 0) { @('--parallel', "$Jobs") } else { @() }
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 Import-Module (Join-Path $PSScriptRoot 'lib/VerifyPipeline.psm1') -Force -DisableNameChecking
@@ -347,7 +366,7 @@ $realExecutor = {
             # on this repository reports resolution failures the target does not.
             Initialize-CompilerEnvironment
             return Invoke-Step -Name 'qmllint' -FilePath 'cmake' `
-                -Arguments @('--build', $buildDir, '--target', 'all_qmllint')
+                -Arguments (@('--build', $buildDir, '--target', 'all_qmllint') + $jobsArg)
         }
 
         'build' {
@@ -355,12 +374,14 @@ $realExecutor = {
             # build directory does not reconfigure, and the compiler is needed
             # either way.
             Initialize-CompilerEnvironment
-            return Invoke-Step -Name 'build' -FilePath 'cmake' -Arguments @('--build', '--preset', $Preset)
+            return Invoke-Step -Name 'build' -FilePath 'cmake' `
+                -Arguments (@('--build', '--preset', $Preset) + $jobsArg)
         }
 
         'tests' {
             $testArgs = @('-NoProfile', '-NonInteractive', '-File', (Join-Path $PSScriptRoot 'run-tests.ps1'),
                 '-BuildDir', $buildDir, '-Config', $Config)
+            if ($Jobs -gt 0) { $testArgs += @('-Jobs', "$Jobs") }
             if ($check.Evidence.filter) { $testArgs += @('-Filter', $check.Evidence.filter) }
             $outcome = Invoke-Step -Name 'tests' -FilePath 'pwsh' -Arguments $testArgs
             if ($outcome.Status -ne $status.Pass) {
@@ -435,6 +456,7 @@ $realExecutor = {
                 '-NoProfile', '-NonInteractive', '-File', (Join-Path $PSScriptRoot 'run-clang-tidy-blocking.ps1'),
                 '-BuildDir', $buildDir,
                 '-CacheDir', (Get-ClangTidyCacheDirectory))
+            if ($Jobs -gt 0) { $arguments += @('-Jobs', "$Jobs") }
             if ($check.Evidence.scope -ne 'whole-tree') { $arguments += @('-Base', $Base) }
             return Invoke-Step -Name 'clang-tidy' -FilePath 'pwsh' -Arguments $arguments
         }
@@ -492,6 +514,9 @@ if ($mode -eq 'Fast') {
 }
 else {
     Write-Host '  scope: everything (this mode is the full local blocking contract)'
+}
+if ($Jobs -gt 0) {
+    Write-Host "  jobs: $Jobs (cmake --build --parallel, ctest -j, clang-tidy -j)"
 }
 Write-Host ""
 

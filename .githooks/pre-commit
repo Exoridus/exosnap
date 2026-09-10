@@ -16,4 +16,7 @@ fi
 # One entry point, no verification logic of its own. What -Fast means, in what
 # order, and which steps a failure has to stop is scripts/verify.ps1's business;
 # this file only says when it runs. CI remains the authority either way.
+#
+# EXOSNAP_VERIFY_JOBS=<n> in your environment caps the parallelism when -Fast
+# escalates to a build; see scripts/verify.ps1 -? for the details.
 pwsh -NonInteractive -File "$(git rev-parse --show-toplevel)/scripts/verify.ps1" -Fast -Staged

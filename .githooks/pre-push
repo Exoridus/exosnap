@@ -27,4 +27,9 @@ fi
 # No speed claim is made here yet. Making -Full quick is the compiler-side work
 # (sccache, a working Ninja developer preset) that is deliberately not part of
 # this change.
+#
+# To keep the machine usable during a push, export EXOSNAP_VERIFY_JOBS=<n> in your
+# environment: verify.ps1 caps cmake --build, ctest and clang-tidy to that. It is
+# read from the environment on purpose, so this shared hook stays uncapped and CI
+# (which never sets it) is unaffected.
 pwsh -NonInteractive -File "$(git rev-parse --show-toplevel)/scripts/verify.ps1" -Full
