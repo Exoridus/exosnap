@@ -40,6 +40,7 @@
 # Blocking check set (enforced in CI by scripts/run-clang-tidy-blocking.ps1):
 #   bugprone-use-after-move
 #   bugprone-dangling-handle
+#   readability-misleading-indentation
 #   clang-analyzer-core.CallAndMessage
 #   clang-analyzer-core.uninitialized.*
 #   clang-analyzer-cplusplus.NewDelete*
@@ -90,6 +91,7 @@ Checks: >
   readability-redundant-declaration,
   bugprone-use-after-move,
   bugprone-dangling-handle,
+  readability-misleading-indentation,
   clang-analyzer-core.CallAndMessage,
   clang-analyzer-core.uninitialized.*,
   clang-analyzer-cplusplus.NewDelete*
@@ -121,13 +123,14 @@ WarningsAsErrors: >
   -readability-redundant-declaration,
   bugprone-use-after-move,
   bugprone-dangling-handle,
+  readability-misleading-indentation,
   clang-analyzer-core.CallAndMessage,
   clang-analyzer-core.uninitialized.*,
   clang-analyzer-cplusplus.NewDelete*
 
-# Enum-switch exhaustiveness is NOT covered by the compiler here: MSVC keeps
-# C4062 and C4061 off at every warning level, so /W4 /WX does not diagnose an
-# unhandled enumerator. clang's own -Wswitch does run, as clang-diagnostic-switch
-# -- see docs/dev/static-analysis.md for why it is not blocking yet.
+# Enum-switch exhaustiveness is the compiler's job here, not clang-tidy's. MSVC
+# keeps C4062 and C4061 off at every warning level, so cmake/exosnap_warnings.cmake
+# raises C4062 to level 4 explicitly and /WX makes it an error.
+# clang-diagnostic-switch still reports the same thing wherever clang-tidy runs.
 HeaderFilterRegex: '^(?!.*third_party/).*'
 FormatStyle: file

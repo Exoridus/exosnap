@@ -77,6 +77,8 @@ UpdaterUiState FailureState(FailureCase failure, bool verify = false) {
     case FailureCase::DownloadFailed:
     case FailureCase::VerifyDownloadFailed:
     case FailureCase::VerifyReinstallMismatch:
+    // A4 -- the pinned target gate refuses before anything is installed.
+    case FailureCase::TargetVersionMismatch:
     // A0 -- refused before the pipeline was entered, so no step is marked done.
     case FailureCase::HandoffRejected:
         break;
