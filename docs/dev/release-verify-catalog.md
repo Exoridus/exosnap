@@ -5,7 +5,7 @@
 
 Every release gate the typed harness knows, in catalog order. `docs/dev/release-verify-harness.md` is how to work on the harness and `docs/dev/release-verify.md` owns what each gate requires; this page only lays the declarations side by side.
 
-Catalog version `39fad64537304b6a`. 27 scenarios, 16 with a migrated body, 11 required for promotion.
+Catalog version `39fad64537304b6a`. 27 scenarios, 19 with a migrated body, 11 required for promotion.
 
 | ID | Class | Tier | Layer | Isolation | Privilege | Interaction | Requires | Oracle | Migrated | Required | Source |
 |----|-------|------|-------|-----------|-----------|-------------|----------|--------|----------|----------|--------|
@@ -14,7 +14,7 @@ Catalog version `39fad64537304b6a`. 27 scenarios, 16 with a migrated body, 11 re
 | REL-ENV-003 | environment | 3 | FullAuto | HardwareLab | Standard | Automated | device.display.main-hdr = bound | envctl | yes | yes | ADR 0069 (write, read back, compare; exact restore) |
 | REL-SCHEMA-001 | schema | 0 | FullAuto | Hermetic | Standard | Automated | - | exosnap | yes | yes | Wave D review: scenarios that read fields no emitter emits |
 | REL-PRESENT-001 | present | 1 | ControlChannel | Desktop | Standard | Automated | elevated = false | exosnap | yes | yes | ADR 0033 |
-| REL-PRESENT-002 | present | 3 | Secure | HardwareLab | Elevated | OperatorAssisted | gpu.d3d11 = true | exosnap, presentmon | no | yes | ADR 0033; docs/release-checklist.md section 7 (present-mode diagnostics) |
+| REL-PRESENT-002 | present | 3 | Secure | HardwareLab | Elevated | OperatorAssisted | gpu.d3d11 = true | exosnap, presentmon | yes | yes | ADR 0033; docs/release-checklist.md section 7 (present-mode diagnostics) |
 | REL-PRESENT-XCHECK-001 | present | 2 | FullAuto | DisposableOs | Standard | Automated | presentmon.available = true | exosnap, presentmon | yes | yes | ADR 0070 (PresentMon as an independent oracle; required only when the present-diagnostics code or the Windows major version has moved) |
 | REL-CAP-001 | capture | 1 | FullAuto | Desktop | Standard | Automated | ffprobe.available = true | exosnap, ffprobe | yes | yes | docs/release-checklist.md section 7 |
 | REL-CAP-STALL-001 | capture | 1 | SemiAuto | Desktop | Standard | OperatorAssisted | - | exosnap, ffprobe | no | no | docs/release-checklist.md section 7 |
@@ -28,8 +28,8 @@ Catalog version `39fad64537304b6a`. 27 scenarios, 16 with a migrated body, 11 re
 | REL-DISP-HDR-001 | display | 3 | FullAuto | HardwareLab | Standard | Automated | device.display.main-hdr = bound; gpu.d3d11 = true | envctl, dxgi, exosnap, ffprobe | yes | no | docs/release-checklist.md section 7 |
 | REL-DISP-MIXED-001 | display | 3 | ControlChannel | HardwareLab | Standard | Automated | display.hdr = true | dxgi, exosnap | yes | no | docs/release-checklist.md section 7 |
 | REL-DISP-DPI-001 | display | 1 | ControlChannel | Desktop | Standard | Automated | - | exosnap | yes | yes | docs/product-spec.md (minimum window size) |
-| REL-VIS-OVERLAY-001 | visual | 1 | ManualVisual | Desktop | Standard | OperatorJudged | interactiveDesktop = true | operator | no | no | docs/product-spec.md (fixed-dark capture overlays) |
-| REL-VIS-NOTIFY-001 | visual | 1 | ManualVisual | Desktop | Standard | OperatorJudged | interactiveDesktop = true | operator | no | no | docs/product-spec.md (notification severity) |
+| REL-VIS-OVERLAY-001 | visual | 1 | ManualVisual | Desktop | Standard | OperatorJudged | interactiveDesktop = true | operator | yes | no | docs/product-spec.md (fixed-dark capture overlays) |
+| REL-VIS-NOTIFY-001 | visual | 1 | ManualVisual | Desktop | Standard | OperatorJudged | interactiveDesktop = true | operator | yes | no | docs/product-spec.md (notification severity) |
 | REL-UPD-PORTABLE-001 | update | 2 | FullAuto | DisposableOs | Standard | Automated | - | exosnap, filesystem | yes | no | ADR 0068; docs/release-checklist.md section 5 |
 | REL-UPD-MSI-DECLINE-001 | update | 2 | Secure | DisposableOs | SecureDesktop | OperatorAssisted | - | exosnap, filesystem | no | no | ADR 0067 (cancel is not failure) |
 | REL-UPD-MSI-001 | update | 2 | Secure | DisposableOs | SecureDesktop | OperatorAssisted | - | exosnap, msi, filesystem | no | no | docs/release-checklist.md sections 5 and 7a |
