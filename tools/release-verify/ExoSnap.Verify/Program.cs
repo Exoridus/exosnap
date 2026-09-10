@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using ExoSnap.Verify.Capabilities;
 using ExoSnap.Verify.Catalog;
 using ExoSnap.Verify.Cli;
@@ -39,6 +40,7 @@ public static class Program
             {
                 "capabilities" => Capabilities(command),
                 "list" => List(command),
+                "catalog" => Catalog(command),
                 "prepare" => PrepareAsync(command).GetAwaiter().GetResult(),
                 "run" => RunAsync(command).GetAwaiter().GetResult(),
                 "report" => Report(command),
@@ -113,6 +115,48 @@ public static class Program
             Console.WriteLine($"{string.Empty,-26} {descriptor.Title}");
         }
 
+        return ExitOk;
+    }
+
+    private static int Catalog(CommandLine command)
+    {
+        var catalog = ReleaseCatalog.Create();
+        var page = CatalogStatusPage.Render(
+            catalog, ReleaseCatalog.MigratedIds(), ReleaseCatalog.RequiredIds());
+
+        var output = command.Value("out", string.Empty);
+        if (output.Length == 0)
+        {
+            Console.Out.Write(page);
+            return ExitOk;
+        }
+
+        var full = Path.GetFullPath(output);
+        if (command.HasFlag("check"))
+        {
+            var current = File.Exists(full)
+                ? File.ReadAllText(full).Replace("\r\n", "\n", StringComparison.Ordinal)
+                : null;
+            if (current == page)
+            {
+                Console.WriteLine($"up to date {full}");
+                return ExitOk;
+            }
+
+            Console.Error.WriteLine(
+                $"stale {full}: the committed catalog page does not match the catalog. " +
+                "Regenerate it with 'ExoSnap.Verify catalog --out <path>'.");
+            return ExitNotQualified;
+        }
+
+        var directory = Path.GetDirectoryName(full);
+        if (!string.IsNullOrEmpty(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        File.WriteAllText(full, page, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        Console.WriteLine($"written {full}");
         return ExitOk;
     }
 
@@ -433,6 +477,9 @@ public static class Program
         writer.WriteLine();
         writer.WriteLine("  list [--json]");
         writer.WriteLine("      Print the scenario catalog.");
+        writer.WriteLine();
+        writer.WriteLine("  catalog [--out <path>] [--check]");
+        writer.WriteLine("      Render the catalog status page. --check verifies a committed copy instead.");
         writer.WriteLine();
         writer.WriteLine("  prepare --exe <path> [--rc <tag>] [--commit <sha>] [--package <path>]...");
         writer.WriteLine("      Bind a campaign to explicit bytes and measure the machine.");
