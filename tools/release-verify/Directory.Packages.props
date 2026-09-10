@@ -7,6 +7,11 @@
 
   <ItemGroup>
     <PackageVersion Include="Microsoft.Windows.CsWin32" Version="0.3.333" />
+    <PackageVersion Include="FlaUI.UIA3" Version="4.0.0" />
+    <!-- FlaUI.Core 4.0.0 pulls System.Drawing.Common 5.0.2 transitively, which
+         carries a known critical advisory. Transitive pinning lifts it to the
+         patched line; the harness never touches the drawing types itself. -->
+    <PackageVersion Include="System.Drawing.Common" Version="8.0.10" />
   </ItemGroup>
 
   <ItemGroup>

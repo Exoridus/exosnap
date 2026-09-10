@@ -81,6 +81,12 @@
           "System.Drawing.Common": "5.0.0"
         }
       },
+      "exosnap.verify": {
+        "type": "Project",
+        "dependencies": {
+          "ExoSnap.Verify.Windows": "[1.0.0, )"
+        }
+      },
       "exosnap.verify.windows": {
         "type": "Project",
         "dependencies": {

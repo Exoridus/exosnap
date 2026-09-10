@@ -10,6 +10,10 @@
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
+    <!-- The only reader that survives WDA_EXCLUDEFROMCAPTURE: UI Automation through
+         a typed client, so a visual gate asserts on elements rather than on a
+         screenshot it cannot take. -->
+    <PackageReference Include="FlaUI.UIA3" />
   </ItemGroup>
 
 </Project>

@@ -32,6 +32,13 @@
     -->
     <ProjectReference Include="..\ExoSnap.Verify.Fixtures\ExoSnap.Verify.Fixtures.csproj"
                       ReferenceOutputAssembly="false" />
+    <!--
+      Built before the tests so the elevated-worker platform smoke has a real
+      ExoSnap.Verify.Worker.exe to run; never loaded as a library. The smoke
+      points EXOSNAP_VERIFY_WORKER at the worker's own build output.
+    -->
+    <ProjectReference Include="..\ExoSnap.Verify.Worker\ExoSnap.Verify.Worker.csproj"
+                      ReferenceOutputAssembly="false" />
   </ItemGroup>
 
   <!--

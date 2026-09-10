@@ -2,6 +2,16 @@
   "version": 2,
   "dependencies": {
     "net10.0-windows7.0": {
+      "FlaUI.UIA3": {
+        "type": "Direct",
+        "requested": "[4.0.0, )",
+        "resolved": "4.0.0",
+        "contentHash": "IOx2D6bj0PGor7ic9JKDF626NZ1HclHsnfpOR4jdXOeWU5GfkBi0U+5jPjI45KKNAwjOuKjLX3ykW/PtsPwbfg==",
+        "dependencies": {
+          "FlaUI.Core": "4.0.0",
+          "Interop.UIAutomationClient": "10.19041.0"
+        }
+      },
       "Microsoft.Windows.CsWin32": {
         "type": "Direct",
         "requested": "[0.3.333, )",
@@ -12,6 +22,32 @@
           "Microsoft.Windows.SDK.Win32Metadata": "71.0.14-preview",
           "Microsoft.Windows.WDK.Win32Metadata": "0.13.25-experimental"
         }
+      },
+      "FlaUI.Core": {
+        "type": "Transitive",
+        "resolved": "4.0.0",
+        "contentHash": "8GPCvcmRezKwgnYSULs1rU2iC+XvwiRE01ydU0/Uk+QAGzmvCwbMaCXDWJBLtRx0JXek5m21G7jGHTq3WkbTXA==",
+        "dependencies": {
+          "System.Diagnostics.PerformanceCounter": "5.0.1",
+          "System.Drawing.Common": "5.0.2",
+          "System.Management": "5.0.0",
+          "System.Security.Permissions": "5.0.0"
+        }
+      },
+      "Interop.UIAutomationClient": {
+        "type": "Transitive",
+        "resolved": "10.19041.0",
+        "contentHash": "Me5vKNZ1JSg6txTsPQXaWx7fVNh+fmcUPPwtDKJtqvbMM0N8aoa/l/QPolkJIRnasCabCNt4v2zG4p1Q9HU98A=="
+      },
+      "Microsoft.NETCore.Platforms": {
+        "type": "Transitive",
+        "resolved": "5.0.1",
+        "contentHash": "z3YFkbnl1RMj6lb+Bm/2tsZ0cJCULlB4uPOFqlj6dNSm/8feJl4UrXmG6TcZh8ipJQwkAS5I6UCs1FnGog4QZg=="
+      },
+      "Microsoft.Win32.SystemEvents": {
+        "type": "Transitive",
+        "resolved": "8.0.0",
+        "contentHash": "9opKRyOKMCi2xJ7Bj7kxtZ1r9vbzosMvRrdEhVhDz8j8MoBGgB+WmC94yH839NPH+BclAjtQ/pyagvi/8gDLkw=="
       },
       "Microsoft.Windows.SDK.Win32Docs": {
         "type": "Transitive",
@@ -29,6 +65,68 @@
         "contentHash": "IM50tb/+UIwBr9FMr6ZKcZjCMW+Axo6NjGqKxgjUfyCY8dRnYUfrJEXxAaXoWtYP4X8EmASmC1Jtwh4XucseZg==",
         "dependencies": {
           "Microsoft.Windows.SDK.Win32Metadata": "63.0.31-preview"
+        }
+      },
+      "System.CodeDom": {
+        "type": "Transitive",
+        "resolved": "5.0.0",
+        "contentHash": "JPJArwA1kdj8qDAkY2XGjSWoYnqiM7q/3yRNkt6n28Mnn95MuEGkZXUbPBf7qc3IjwrGY5ttQon7yqHZyQJmOQ=="
+      },
+      "System.Configuration.ConfigurationManager": {
+        "type": "Transitive",
+        "resolved": "5.0.0",
+        "contentHash": "aM7cbfEfVNlEEOj3DsZP+2g9NRwbkyiAv2isQEzw7pnkDg9ekCU2m1cdJLM02Uq691OaCS91tooaxcEn8d0q5w==",
+        "dependencies": {
+          "System.Security.Cryptography.ProtectedData": "5.0.0",
+          "System.Security.Permissions": "5.0.0"
+        }
+      },
+      "System.Diagnostics.PerformanceCounter": {
+        "type": "Transitive",
+        "resolved": "5.0.1",
+        "contentHash": "omeUtUiY6Mqhfspdujqh0JJ2fLyb+kz+hhAxqgaUUpxlvHFtXVw7i/JjbA426hiZstzUL0GuXFGjTjmcx0ts/w==",
+        "dependencies": {
+          "Microsoft.NETCore.Platforms": "5.0.1",
+          "System.Configuration.ConfigurationManager": "5.0.0"
+        }
+      },
+      "System.Management": {
+        "type": "Transitive",
+        "resolved": "5.0.0",
+        "contentHash": "MF1CHaRcC+MLFdnDthv4/bKWBZnlnSpkGqa87pKukQefgEdwtb9zFW6zs0GjPp73qtpYYg4q6PEKbzJbxCpKfw==",
+        "dependencies": {
+          "Microsoft.NETCore.Platforms": "5.0.0",
+          "System.CodeDom": "5.0.0"
+        }
+      },
+      "System.Security.Cryptography.ProtectedData": {
+        "type": "Transitive",
+        "resolved": "5.0.0",
+        "contentHash": "HGxMSAFAPLNoxBvSfW08vHde0F9uh7BjASwu6JF9JnXuEPhCY3YUqURn0+bQV/4UWeaqymmrHWV+Aw9riQCtCA=="
+      },
+      "System.Security.Permissions": {
+        "type": "Transitive",
+        "resolved": "5.0.0",
+        "contentHash": "uE8juAhEkp7KDBCdjDIE3H9R1HJuEHqeqX8nLX9gmYKWwsqk3T5qZlPx8qle5DPKimC/Fy3AFTdV7HamgCh9qQ==",
+        "dependencies": {
+          "System.Windows.Extensions": "5.0.0"
+        }
+      },
+      "System.Windows.Extensions": {
+        "type": "Transitive",
+        "resolved": "5.0.0",
+        "contentHash": "c1ho9WU9ZxMZawML+ssPKZfdnrg/OjR3pe0m9v8230z3acqphwvPJqzAkH54xRYm5ntZHGG1EPP3sux9H3qSPg==",
+        "dependencies": {
+          "System.Drawing.Common": "5.0.0"
+        }
+      },
+      "System.Drawing.Common": {
+        "type": "CentralTransitive",
+        "requested": "[8.0.10, )",
+        "resolved": "8.0.10",
+        "contentHash": "MdajRp3P+FOlThgY6FBjAqnmLiVl5t2yWEC/2AsDMqx1zYbJG3G5TnscFBQ4obqcaGqvN5UnhQHSFaJFG2HftQ==",
+        "dependencies": {
+          "Microsoft.Win32.SystemEvents": "8.0.0"
         }
       }
     }

@@ -1,8 +1,11 @@
+using ExoSnap.Verify.Adapters.Elevation;
 using ExoSnap.Verify.Adapters.Envctl;
 using ExoSnap.Verify.Adapters.Ffprobe;
 using ExoSnap.Verify.Capabilities;
 using ExoSnap.Verify.Engine;
 using ExoSnap.Verify.Processes;
+using ExoSnap.Verify.Windows;
+using ExoSnap.Verify.Windows.Uia;
 
 namespace ExoSnap.Verify.Tests;
 
@@ -103,6 +106,96 @@ public sealed class PlatformSmokeTests
         Assert.Skip(
             "starting PresentMon needs an elevated ETW session; the real-platform smoke for it is deferred " +
             "to the disposable VM slice rather than run against the developer's own desktop");
+
+    [Fact]
+    public void FlaUiReadsARealElementTreeForAnOffscreenProbeWindow()
+    {
+        if (InteractiveDesktop.IsReachable() != true)
+        {
+            Assert.Skip(
+                "no interactive desktop (locked workstation or Secure Desktop); UI Automation has no tree to read");
+            return;
+        }
+
+        var uia = new FlaUiAutomation();
+        var probe = new Thread(() => ProbeWindow.ShowOffscreen(TimeSpan.FromSeconds(5))) { IsBackground = true };
+        probe.Start();
+        try
+        {
+            var tree = UiTreeSnapshot.Unreadable("the probe was never read");
+            var deadline = DateTime.UtcNow.AddSeconds(8);
+            while (DateTime.UtcNow < deadline)
+            {
+                tree = uia.SnapshotProcess(Environment.ProcessId, TimeSpan.FromSeconds(2));
+                if (tree.Ok && tree.Elements.Count > 0)
+                {
+                    break;
+                }
+
+                Thread.Sleep(200);
+            }
+
+            Assert.True(tree.Ok, tree.Detail);
+            Assert.Empty(tree.MissingText([ProbeWindow.Title]));
+        }
+        finally
+        {
+            probe.Join(TimeSpan.FromSeconds(10));
+        }
+    }
+
+    [Fact]
+    public void FlaUiReportsANonRunningProcessAsUnreadableRatherThanEmpty()
+    {
+        var tree = new FlaUiAutomation().SnapshotProcess(int.MaxValue, TimeSpan.FromMilliseconds(200));
+
+        // An unreadable tree and an empty one are opposite verdicts: a gate turns the
+        // first into an infrastructure error and the second into a product finding.
+        Assert.False(tree.Ok);
+        Assert.Contains("not running", tree.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task TheElevatedWorkerSelfTestRoundTripsThroughTheResultFile()
+    {
+        var worker = ElevatedWorkerHost.Resolve(FindRepositoryRoot());
+        if (worker is null)
+        {
+            Assert.Skip("ExoSnap.Verify.Worker.exe has not been built into its bin directory");
+            return;
+        }
+
+        using var directory = FixtureTool.NewTemporaryDirectory("-worker-selftest");
+        var resultPath = Path.Combine(directory.Path, ElevatedWorkerResult.FileName);
+
+        // selfTest: the worker skips its elevation assertion and writes a canned
+        // result, so this exercises the real process launch and the file boundary
+        // with no UAC prompt. The elevated relaunch itself is a Phase F check.
+        var run = await new ElevatedWorkerHost(worker).RunAsync(
+            "REL-PRESENT-002",
+            resultPath,
+            targetExe: string.Empty,
+            TimeSpan.FromSeconds(30),
+            selfTest: true,
+            TestContext.Current.CancellationToken);
+
+        Assert.True(run.Kind == ElevatedWorkerRunKind.Completed, $"{run.Kind}: {run.Detail} (worker: {worker})");
+        Assert.NotNull(run.Result);
+        Assert.Equal(ElevatedWorkerOutcome.Pass, run.Result!.Outcome);
+        Assert.Equal("selfTest", run.Result.PresentMode);
+        Assert.Equal("REL-PRESENT-002", run.Result.TaskId);
+    }
+
+    [Fact]
+    public void TheAppsColourAppearanceReadsAsLightOrDarkOnThisMachine()
+    {
+        // Read-only: the write path is exercised only by the overlay gate's own run,
+        // which pairs every set with a restore. A real Windows desktop always has this
+        // value, so Unknown here means the read itself is broken.
+        var appearance = new WindowsSystemAppearance().Current;
+
+        Assert.Contains(appearance, new[] { AppsAppearance.Light, AppsAppearance.Dark });
+    }
 
     private static string? FindRepositoryRoot()
     {

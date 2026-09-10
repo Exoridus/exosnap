@@ -70,7 +70,7 @@ unnoticed.
 | `REL-ENV-003` | migrated | full transaction, restore in a `finally` |
 | `REL-SCHEMA-001` | migrated | the field contract, across all three stages |
 | `REL-PRESENT-001` | migrated | control channel only |
-| `REL-PRESENT-002` | declared | needs the elevated worker (slice 2) |
+| `REL-PRESENT-002` | migrated | self-elevating `ExoSnap.Verify.Worker.exe`; result-file boundary, never elevated UI |
 | `REL-PRESENT-XCHECK-001` | migrated | new gate; PresentMon as an independent oracle |
 | `REL-CAP-001` | migrated | control channel plus ffprobe |
 | `REL-CAP-STALL-001` | declared | operator-assisted |
@@ -84,8 +84,8 @@ unnoticed.
 | `REL-DISP-HDR-001` | migrated | HDR transaction plus a recording |
 | `REL-DISP-MIXED-001` | migrated | preview-freeze verdict |
 | `REL-DISP-DPI-001` | migrated | scaling facts and the window minimum |
-| `REL-VIS-OVERLAY-001` | declared | operator-judged |
-| `REL-VIS-NOTIFY-001` | declared | operator-judged |
+| `REL-VIS-OVERLAY-001` | migrated | drives Light/Dark and reads the tree through FlaUI; `DEFERRED` for the colour judgement |
+| `REL-VIS-NOTIFY-001` | migrated | asserts the severity word reached the hub and the desktop; `DEFERRED` for the glyph and tint |
 | `REL-UPD-PORTABLE-001` | unavailable | candidate-bound installed-byte evidence is not wired yet |
 | `REL-UPD-MSI-DECLINE-001` | declared | Secure Desktop |
 | `REL-UPD-MSI-001` | declared | Secure Desktop |
@@ -96,6 +96,18 @@ unnoticed.
 `ExoSnap.Verify list` prints the same column. A gate whose body has not been written
 reports `SKIPPED ("not migrated")` and never `PASS`, so an unmigrated gate can never
 look like a gate that ran.
+
+The C# bodies for `REL-VIS-OVERLAY-001`, `REL-VIS-NOTIFY-001` and `REL-PRESENT-002` do
+not run the PowerShell engine's interactive operator prompt. They drive the product
+into the state a person would judge, assert everything a typed surface can (the
+overlays and the toast text really reached the desktop, through UI Automation; the
+elevated present count and mode, through the worker's result file), and then report
+`DEFERRED` for the part only a person can settle: the fixed-dark colour of a
+capture-excluded overlay, the severity glyph and tint of a toast, and the one real
+Secure-Desktop elevation. `REL-PRESENT-002` runs `ExoSnap.Verify.Worker.exe`, which
+elevates itself through a UAC prompt a person answers and writes its result to a file
+the unelevated harness reads; the harness never inspects the elevated process, per
+UIPI. A declined prompt is a `DEFERRED` result in that file, not a failure.
 
 ## Running it
 
@@ -337,7 +349,7 @@ is not evidence.
 | NirSoft SoundVolumeView | the default endpoint and its shared-mode format | `EXOSNAP_SOUNDVOLUMEVIEW` | <https://www.nirsoft.net/utils/sound_volume_view.html> |
 | VB-CABLE | a render endpoint nothing is routed to | `EXOSNAP_SILENT_AUDIO_ENDPOINT` (name pattern) | <https://vb-audio.com/Cable/> |
 | `pnputil` | disabling the audio device for the degradation gate | `EXOSNAP_PNPUTIL` | ships with Windows |
-| UI Automation | reading the capture-excluded overlays and toasts | -- | `UIAutomationClient`, part of the Windows desktop runtime |
+| UI Automation | reading the capture-excluded overlays and toasts | -- | PowerShell engine: `UIAutomationClient`. C# engine: `FlaUI.UIA3` (pinned in `Directory.Packages.props`) |
 
 Three rules hold for all of them:
 

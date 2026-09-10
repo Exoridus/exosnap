@@ -2,11 +2,13 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using ExoSnap.Verify.Adapters.Elevation;
 using ExoSnap.Verify.Adapters.LiveVerify;
 using ExoSnap.Verify.Adapters.PresentMon;
 using ExoSnap.Verify.Capabilities;
 using ExoSnap.Verify.Engine;
 using ExoSnap.Verify.Models;
+using ExoSnap.Verify.Windows;
 
 namespace ExoSnap.Verify.Gates;
 
@@ -258,4 +260,78 @@ public sealed record PresentConfirmation(string RunId, string PresentCodeHash, s
     // the full version would make the cross-check required forever.
     private static string MajorOf(string version) =>
         string.IsNullOrWhiteSpace(version) ? string.Empty : version.Split('.')[0];
+}
+
+/// <summary>
+/// REL-PRESENT-002: elevated present diagnostics report real presents.
+/// </summary>
+/// <remarks>
+/// PresentMon needs a real-time ETW session, which Windows grants only to an
+/// elevated process, and User Interface Privilege Isolation forbids this
+/// standard-integrity harness from inspecting one. So the elevated half runs as
+/// <c>ExoSnap.Verify.Worker.exe</c>, which elevates itself through a UAC prompt a
+/// person answers, and this body reads nothing back but the result file the worker
+/// writes. A declined prompt arrives as that file too, carrying a Deferred verdict.
+/// </remarks>
+public sealed class ElevatedPresentGate : IScenarioBody
+{
+    private static readonly TimeSpan WorkerTimeout = TimeSpan.FromMinutes(4);
+
+    /// <inheritdoc/>
+    public async Task<ScenarioResult> RunAsync(ScenarioContext context, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        var services = context.RequireServices();
+
+        if (!services.ElevatedWorker.Available)
+        {
+            return ScenarioResult.Unavailable(services.ElevatedWorker.UnavailableReason);
+        }
+
+        if (!string.Equals(context.Capabilities[CapabilityKeys.InteractiveDesktop], "true", StringComparison.Ordinal))
+        {
+            return ScenarioResult.Unavailable(
+                "there is no interactive desktop, so the elevation prompt this scenario needs cannot be answered");
+        }
+
+        // The worker launches its own elevated ExoSnap, and the single-instance guard
+        // is machine-wide: the shared session has to be out of the way first.
+        await services.Sessions.EndAsync().ConfigureAwait(false);
+
+        var resultPath = Path.Combine(context.EvidenceDirectory, ElevatedWorkerResult.FileName);
+        var run = await services.ElevatedWorker
+            .RunAsync(
+                context.Descriptor.Id,
+                resultPath,
+                services.Artifact.ExecutablePath,
+                WorkerTimeout,
+                selfTest: false,
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        var evidence = File.Exists(resultPath)
+            ? new[] { Evidence.ForFile("elevated-worker-result", resultPath) }
+            : [];
+
+        return run.Kind switch
+        {
+            ElevatedWorkerRunKind.Unavailable => ScenarioResult.Unavailable(run.Detail),
+            ElevatedWorkerRunKind.Faulted => ScenarioResult.InfrastructureError(run.Detail, evidence),
+            _ => Map(run.Result!, evidence),
+        };
+    }
+
+    private static ScenarioResult Map(ElevatedWorkerResult result, Evidence[] evidence)
+    {
+        var note = string.IsNullOrWhiteSpace(result.OracleNote) ? string.Empty : $"; {result.OracleNote}";
+        return result.Outcome switch
+        {
+            ElevatedWorkerOutcome.Pass => ScenarioResult.Pass(result.Message + note, evidence),
+            ElevatedWorkerOutcome.Fail => ScenarioResult.Fail(result.Message, evidence),
+            ElevatedWorkerOutcome.Deferred => new ScenarioResult(ScenarioOutcome.Deferred, result.Message, evidence),
+            ElevatedWorkerOutcome.InfrastructureError => ScenarioResult.InfrastructureError(result.Message, evidence),
+            _ => ScenarioResult.InfrastructureError(
+                $"the elevated worker returned an unclassified result: {result.Message}", evidence),
+        };
+    }
 }

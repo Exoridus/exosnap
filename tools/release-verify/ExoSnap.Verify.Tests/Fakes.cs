@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Text.Json;
+using ExoSnap.Verify.Adapters.Elevation;
 using ExoSnap.Verify.Adapters.Envctl;
 using ExoSnap.Verify.Adapters.Ffprobe;
 using ExoSnap.Verify.Adapters.LiveVerify;
@@ -9,6 +10,8 @@ using ExoSnap.Verify.Catalog;
 using ExoSnap.Verify.Engine;
 using ExoSnap.Verify.Gates;
 using ExoSnap.Verify.Processes;
+using ExoSnap.Verify.Windows;
+using ExoSnap.Verify.Windows.Uia;
 
 namespace ExoSnap.Verify.Tests;
 
@@ -399,6 +402,98 @@ internal sealed class FakeSessionFactory(FakeLiveVerifySession session, List<str
     }
 }
 
+/// <summary>A configurable <see cref="IUiAutomation"/> that reads no real tree.</summary>
+internal sealed class FakeUiAutomation : IUiAutomation
+{
+    /// <summary>The snapshot the next <see cref="SnapshotProcess"/> call returns.</summary>
+    public UiTreeSnapshot Result { get; set; } = UiTreeSnapshot.Of([]);
+
+    /// <summary>Every process id it was asked about, in call order.</summary>
+    public List<int> SnapshotCalls { get; } = [];
+
+    /// <summary>Configures the snapshot from a set of element names.</summary>
+    public void SeeElements(params string[] names) =>
+        this.Result = UiTreeSnapshot.Of(
+            names.Select(name => new UiElement(name, "FakeWindow", "ControlType.Window", string.Empty)));
+
+    /// <inheritdoc/>
+    public UiTreeSnapshot SnapshotProcess(int processId, TimeSpan timeout)
+    {
+        this.SnapshotCalls.Add(processId);
+        return this.Result;
+    }
+}
+
+/// <summary>A configurable <see cref="ISystemAppearance"/> that touches no registry.</summary>
+internal sealed class FakeSystemAppearance : ISystemAppearance
+{
+    /// <inheritdoc/>
+    public AppsAppearance Current { get; set; } = AppsAppearance.Dark;
+
+    /// <summary>Set to make <see cref="Apply"/> throw instead of recording.</summary>
+    public Exception? ApplyThrows { get; set; }
+
+    /// <summary>
+    /// When set, every <see cref="Apply"/> leaves <see cref="Current"/> at this value
+    /// instead of the requested one, so a gate's restore check can be exercised
+    /// against an appearance that will not go back.
+    /// </summary>
+    public AppsAppearance? DriftAfterApply { get; set; }
+
+    /// <summary>Every appearance <see cref="Apply"/> was asked for, in call order.</summary>
+    public List<AppsAppearance> Applied { get; } = [];
+
+    /// <inheritdoc/>
+    public void Apply(AppsAppearance appearance)
+    {
+        if (this.ApplyThrows is not null)
+        {
+            throw this.ApplyThrows;
+        }
+
+        this.Applied.Add(appearance);
+        this.Current = this.DriftAfterApply ?? appearance;
+    }
+}
+
+/// <summary>A configurable <see cref="IElevatedWorkerHost"/> that starts no process.</summary>
+internal sealed class FakeElevatedWorkerHost : IElevatedWorkerHost
+{
+    private ElevatedWorkerRun? run;
+
+    /// <inheritdoc/>
+    public bool Available { get; set; } = true;
+
+    /// <inheritdoc/>
+    public string UnavailableReason { get; set; } = "the fake worker host was marked unavailable";
+
+    /// <summary>The run the next <see cref="RunAsync"/> call returns.</summary>
+    public ElevatedWorkerRun Run
+    {
+        set => this.run = value;
+    }
+
+    /// <summary>Every (taskId, targetExe, selfTest) the host was asked to run, in call order.</summary>
+    public List<(string TaskId, string TargetExe, bool SelfTest)> RunCalls { get; } = [];
+
+    /// <summary>Configures a completed run carrying this worker result.</summary>
+    public void Completes(ElevatedWorkerResult result) => this.run = ElevatedWorkerRun.Completed(result);
+
+    /// <inheritdoc/>
+    public Task<ElevatedWorkerRun> RunAsync(
+        string taskId,
+        string resultPath,
+        string targetExe,
+        TimeSpan timeout,
+        bool selfTest,
+        CancellationToken cancellationToken)
+    {
+        this.RunCalls.Add((taskId, targetExe, selfTest));
+        return Task.FromResult(
+            this.run ?? throw new InvalidOperationException("FakeElevatedWorkerHost.Run was not configured."));
+    }
+}
+
 /// <summary>Every fake a gate's <see cref="GateServices"/> can be wired to.</summary>
 internal sealed class GateFakes
 {
@@ -412,6 +507,15 @@ internal sealed class GateFakes
 
     /// <summary>The independent PresentMon oracle.</summary>
     public FakePresentMon PresentMon { get; } = new();
+
+    /// <summary>The UI Automation reader the visual gates use.</summary>
+    public FakeUiAutomation Uia { get; } = new();
+
+    /// <summary>The Windows apps-colour appearance the overlay gate drives.</summary>
+    public FakeSystemAppearance SystemAppearance { get; } = new();
+
+    /// <summary>The elevated-worker boundary the elevated present gate crosses.</summary>
+    public FakeElevatedWorkerHost ElevatedWorker { get; } = new();
 
     /// <summary>The one session a gate under test is handed, whichever way it reaches it.</summary>
     public FakeLiveVerifySession Session { get; } = new();
@@ -510,6 +614,9 @@ internal sealed class GateHarness : IDisposable
             fakes.PresentMon,
             processes,
             fakes.SessionFactory,
+            fakes.Uia,
+            fakes.SystemAppearance,
+            fakes.ElevatedWorker,
             fakes.LastPresentConfirmation,
             fakes.PresentCapturePath);
 
