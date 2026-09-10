@@ -3,21 +3,8 @@
 Last refreshed: 2026-06-01
 
 ## Scope and source of truth
-This UX contract is refreshed from the current local prototype and style sources:
-
-- `.workspace/design/exosnap-v2-prototype/ExoSnap.html`
-- `.workspace/design/exosnap-v2-prototype/ExoSnap Handoff.html`
-- `.workspace/design/exosnap-v2-prototype/ExoSnap Design System.html`
-- `.workspace/design/exosnap-v2-prototype/styles.css`
-- `.workspace/design/exosnap-v2-prototype/v2.css`
-- `.workspace/design/exosnap-v2-prototype/ds-system.css`
-- `.workspace/design/exosnap-v2-prototype/app.jsx`
-- `.workspace/design/exosnap-v2-prototype/record.jsx`
-- `.workspace/design/exosnap-v2-prototype/modal.jsx`
-- `.workspace/design/exosnap-v2-prototype/settings.jsx`
-- `.workspace/design/exosnap-v2-prototype/pages.jsx`
-- `.workspace/design/exosnap-v2-prototype/ui.jsx`
-- `.workspace/design/exosnap-v2-prototype/icons.jsx`
+This UX contract is refreshed from the v2 visual prototype (HTML, CSS and JSX
+mockups of the app shell, design system, handoff sheet, and per-surface screens).
 
 This is a product and UX contract for Qt implementation slices. It does not change backend capabilities.
 

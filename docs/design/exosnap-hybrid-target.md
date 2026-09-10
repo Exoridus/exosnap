@@ -1,6 +1,6 @@
 # ExoSnap Hybrid v3 — Canonical Design Target
 
-Source: `.workspace/design/exosnap-hybrid-v3/` (spec.jsx, hybrid-shared.jsx, hybrid-record.jsx, hybrid-pages.jsx, ExoSnap - Design Spec.html)
+Source: the Hybrid v3 visual prototype (per-surface JSX mockups and the design-spec HTML)
 
 Last refreshed: 2026-06-03
 
@@ -582,7 +582,7 @@ See D3/D4 — RescanSVG icon entry above.
 
 ## Design package files
 
-Located at `.workspace/design/exosnap-hybrid-v3/`:
+The Hybrid v3 prototype package:
 
 | File | Role |
 |---|---|

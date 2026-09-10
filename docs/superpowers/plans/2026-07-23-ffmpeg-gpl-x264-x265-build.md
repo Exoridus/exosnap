@@ -5,8 +5,8 @@
 **Goal:** Extend the vendored FFmpeg build (`Exoridus/exosnap-ffmpeg-build`) with the `libx264` and `libx265` software encoders in one build pass, so ExoSnap never has to touch the FFmpeg build/CI pipeline again for either of them. This is an **infrastructure-only** change: it makes `avcodec_find_encoder_by_name("libx264"/"libx265")` return a real, usable encoder in the vendored artifact. It does **not** implement `X264VideoEncoder`/a HEVC equivalent, `VideoEncoderFactory` wiring, the ADR 0007 license/patent audit gate, or any UI — that remains separate, future, already-tracked work (ADR 0007 covers x264; there is no ADR yet for a shipped software-HEVC feature, and this plan does not create one — it only makes the capability available in the binary artifact for whenever that future work happens).
 
 **Two repositories are involved:**
-- `C:\Users\User\Development\exosnap-ffmpeg-build` — the build/CI repo (remote: `https://github.com/Exoridus/exosnap-ffmpeg-build`). Tasks 1-4 and 6 work here.
-- This ExoSnap worktree (`C:\Users\User\Development\exosnap\.claude\worktrees\dxgi-magnifier-cursor` at plan-writing time, but treat it as "the ExoSnap repo" — an executor may run this from a different worktree/checkout of the same repo). Tasks 5 and 7 work here.
+- A local checkout of the build/CI repo `Exoridus/exosnap-ffmpeg-build`. Tasks 1-4 and 6 work here.
+- A checkout of the ExoSnap repo (any worktree of it). Tasks 5 and 7 work here.
 
 Every task states explicitly which repo it operates in. Do not assume the working directory carries over between tasks.
 
@@ -28,7 +28,7 @@ Every task states explicitly which repo it operates in. Do not assume the workin
 
 ### Task 1: Cross-compile libx264 and wire it into the FFmpeg configure
 
-**Repo:** `C:\Users\User\Development\exosnap-ffmpeg-build`
+**Repo:** the `exosnap-ffmpeg-build` checkout
 
 **Files:**
 - Modify: `.github/workflows/build.yml`
@@ -100,7 +100,7 @@ Every task states explicitly which repo it operates in. Do not assume the workin
 - [ ] **Step 3: Push to a feature branch and confirm the build is green**
 
   ```bash
-  cd "C:\Users\User\Development\exosnap-ffmpeg-build"
+  cd /path/to/exosnap-ffmpeg-build
   git checkout -b feature/gpl-x264-x265
   git add .github/workflows/build.yml
   git commit -m "Cross-compile libx264 and wire --enable-gpl --enable-libx264 into FFmpeg configure"
@@ -118,7 +118,7 @@ Every task states explicitly which repo it operates in. Do not assume the workin
 
 ### Task 2: Cross-compile libx265 and wire it into the FFmpeg configure
 
-**Repo:** `C:\Users\User\Development\exosnap-ffmpeg-build`, same branch (`feature/gpl-x264-x265`) as Task 1.
+**Repo:** the `exosnap-ffmpeg-build` checkout, same branch (`feature/gpl-x264-x265`) as Task 1.
 
 **Files:**
 - Modify: `.github/workflows/build.yml`
@@ -221,7 +221,7 @@ Every task states explicitly which repo it operates in. Do not assume the workin
 - [ ] **Step 4: Push and confirm the build is green**
 
   ```bash
-  cd "C:\Users\User\Development\exosnap-ffmpeg-build"
+  cd /path/to/exosnap-ffmpeg-build
   git add .github/workflows/build.yml
   git commit -m "Cross-compile libx265 and wire --enable-libx265 into FFmpeg configure"
   git push origin feature/gpl-x264-x265
@@ -235,7 +235,7 @@ Every task states explicitly which repo it operates in. Do not assume the workin
 
 ### Task 3: GPL license bookkeeping and README refresh
 
-**Repo:** `C:\Users\User\Development\exosnap-ffmpeg-build`, same branch.
+**Repo:** the `exosnap-ffmpeg-build` checkout, same branch.
 
 **Files:**
 - Modify: `.github/workflows/build.yml` (archive stem, license file copied, BUILD-INFO text, release notes body)
@@ -381,7 +381,7 @@ Every task states explicitly which repo it operates in. Do not assume the workin
 - [ ] **Step 6: Push**
 
   ```bash
-  cd "C:\Users\User\Development\exosnap-ffmpeg-build"
+  cd /path/to/exosnap-ffmpeg-build
   git add .github/workflows/build.yml README.md
   git commit -m "GPL license bookkeeping for libx264/libx265; refresh README for r4-r6"
   git push origin feature/gpl-x264-x265
@@ -446,7 +446,7 @@ Every task states explicitly which repo it operates in. Do not assume the workin
   ```cmake
   FetchContent_Declare(
       ffmpeg_prebuilt
-      URL      "file:///C:/Users/User/AppData/Local/Temp/exosnap-ffmpeg-r6-candidate/ffmpeg-win64-gpl-shared.zip"
+      URL      "file:///<temp-dir>/exosnap-ffmpeg-r6-candidate/ffmpeg-win64-gpl-shared.zip"
       DOWNLOAD_EXTRACT_TIMESTAMP TRUE
   )
   ```
@@ -522,14 +522,14 @@ Every task states explicitly which repo it operates in. Do not assume the workin
 
 ### Task 6: Cut the real r6 release
 
-**Repo:** `C:\Users\User\Development\exosnap-ffmpeg-build`
+**Repo:** the `exosnap-ffmpeg-build` checkout
 
 **⚠️ Pause here and get explicit user confirmation before Step 1.** Pushing an `r*` tag is protected by this repo's `protect-release-tags` ruleset — tags matching `r*` cannot be deleted or force-updated once pushed. Everything in Tasks 1-5 was freely reversible (branch commits, workflow_dispatch runs, a local-only cmake edit that was already reverted); this step is not.
 
 - [ ] **Step 1 (after user confirmation): merge the feature branch and tag**
 
   ```bash
-  cd "C:\Users\User\Development\exosnap-ffmpeg-build"
+  cd /path/to/exosnap-ffmpeg-build
   git checkout main
   git merge --ff-only feature/gpl-x264-x265
   git push origin main

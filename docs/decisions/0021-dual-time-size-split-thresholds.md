@@ -12,8 +12,8 @@ struct that mapped a UI enum (Off / Every15Min / Every30Min / Every60Min / Custo
 media-time interval. The engine's video thread compared encoded-frame PTS against
 `next_auto_threshold_ns` and armed a forced keyframe when the threshold was crossed.
 
-The product design spec (`.workspace/design/mappe-bundle/project/mappe-ia.jsx`, "Hard cases")
-requires a **parallel size threshold**: "Output → Advanced: two paired inputs (every N min ·
+The product design spec ("Hard cases") requires a **parallel size threshold**:
+"Output → Advanced: two paired inputs (every N min ·
 every N GB) with an explicit **whichever comes first**." Time and size are independent: both
 can be active simultaneously, and the first one hit in a given segment triggers the rollover.
 

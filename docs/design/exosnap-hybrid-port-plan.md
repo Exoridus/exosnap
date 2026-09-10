@@ -1,6 +1,6 @@
 # ExoSnap Hybrid v3 — Qt Widgets / QSS Port Plan
 
-Source: `.workspace/design/exosnap-hybrid-v3/spec.jsx` (Section 07 — Qt Widgets / QSS port plan)
+Source: the Hybrid v3 visual prototype, Section 07 (Qt Widgets / QSS port plan)
 Reference: `docs/design/exosnap-hybrid-target.md`
 
 Last refreshed: 2026-06-03
@@ -17,7 +17,7 @@ Last refreshed: 2026-06-03
 
 This plan sequences the native Qt Widgets + QSS build of the Hybrid v3 design. Each phase is shippable on its own. Phases R1A–R3 land the MVP and resolve current "debug-heavy / oversized / kiosk" feedback. Phases R4–R6 layer on modals, telemetry, and utility-surface polish.
 
-The prototype at `.workspace/design/exosnap-hybrid-v3/ExoSnap.html` is the pixel reference.
+The Hybrid v3 HTML prototype is the pixel reference.
 
 ---
 
@@ -152,7 +152,7 @@ Accent scope note:
 - **Navigation:** top nav is **Record · Settings · Hotkeys · Diagnostics · Logs · About**. The five page tabs are checkable buttons in an exclusive `QButtonGroup` that drive the existing `QStackedWidget` (routing model unchanged); the active tab gets a 2px accent underline. About stays a `QDialog` launched from its tab (no stack page added). Advanced/Webcam remain reachable sub-pages and keep the Settings tab lit.
 - **Status pill:** consumes the existing recorder state only (`Ready` / `Recording` / `Paused`, plus the real transient `Checking`/`Starting`/`Stopping` and `Blocked`/`Error` states), now in hybrid title-case. The brand mark turns coral while recording via `BrandMarkWidget::setRecording`. No fabricated recording-health metrics are shown at the shell layer (real per-frame metrics are not surfaced here).
 - **GlobalRecordingBar:** was already not instantiated in the shell; left inert/untracked-by-shell (file + unit test retained) since the title-bar pill now covers the same states. No transport buttons, debug telemetry, page numbers, or global CPU/GPU/RAM/Disk stats were reintroduced.
-- **Tests:** new `chrome.OperationalTitleBarTest` covers nav tabs/order, no page numbers, About-as-action, `setActivePage`, status-pill states, and absence of transport buttons. Debug build green; focused + full CTest pass (550/550). Screenshot smoke under `.workspace/screenshots/hybrid-port-r1b-shell-titlebar/`.
+- **Tests:** new `chrome.OperationalTitleBarTest` covers nav tabs/order, no page numbers, About-as-action, `setActivePage`, status-pill states, and absence of transport buttons. Debug build green; focused + full CTest pass (550/550).
 - **Not touched:** Record/Settings/Source/Webcam/Diagnostics/Logs/Hotkeys page interiors, capture/encoder/muxer/audio, recording state machine, settings schema, build metadata, PreviewSurface/DXGI.
 
 ---
@@ -240,7 +240,7 @@ Delivered as **R2A — Record Preview + Dock Skeleton** (the full four-state doc
 - **State behaviour:** Ready `[toggles] · 00:00:00 · countdown + Record]`; Recording `[toggles · timer · Pause + Stop]`; Paused `[toggles · timer(amber) · Resume + Stop]`; Completed `[filename link + Open folder + size · timer(green) · Record again]`. Driven from `updateTransportDock()` off the existing `RecordViewModel`/`RecordingCoordinator` state — no new engine wiring.
 - **Honesty:** audio toggles edit pre-record `AudioUiState` (System/Mic/App) via the existing `audioSettingsChanged` path and become read-only status pills while the source is locked; the webcam toggle is an honest read-only status pill (configured in Settings); countdown runs as a UI-level delay before backend start and never fabricates a recording session; the dock shows **no** audio meters and **no** fabricated recording-health numbers. Completed uses real result filename/size/duration; the filename opens the file and Open folder reveals it.
 - **Legacy preservation:** the old below-preview sections (audio settings, destination, readiness, target pickers, result panel, right rail) are constructed exactly as before but parked off-screen in a hidden `recordLegacyHost` so every `refresh()`/`updateStats()`/`updateResult()` pointer stays valid and no engine path changed. They are removed for real when Settings absorbs them in **R3**.
-- **Tests:** new `record.TransportDockTest` (11 cases) covers the dock seams/objectNames, per-state visibility (Ready→Record, Recording→Pause+Stop, Paused→Resume+Stop, Completed→Record again + result info), primary-enable gating, interactive vs read-only toggles, the record signal, the timer text/role, and the absence of a kiosk "Start Recording" label. Debug build green; focused (264) + full (561) CTest pass; screenshot smoke under `.workspace/screenshots/hybrid-port-r2-record-dock/`.
+- **Tests:** new `record.TransportDockTest` (11 cases) covers the dock seams/objectNames, per-state visibility (Ready→Record, Recording→Pause+Stop, Paused→Resume+Stop, Completed→Record again + result info), primary-enable gating, interactive vs read-only toggles, the record signal, the timer text/role, and the absence of a kiosk "Start Recording" label. Debug build green; focused (264) + full (561) CTest pass.
 - **Deferred to R2B:** live L/R stereo dB meters in the dock (real per-channel data not yet plumbed; no fakes added), title-bar Completed→"Saved" pill + recording-health metrics, and final pixel polish.
 - **Not touched:** Settings/Source/Webcam/Diagnostics/Logs/Hotkeys/About interiors, R1B shell/top-nav (status pill semantics unchanged), capture/encoder/muxer/audio internals, recording state machine, settings schema, build metadata, `PreviewSurface`/DXGI.
 
@@ -253,7 +253,7 @@ Delivered as **R2B — Record Dock Polish / Completed Status / Source Pill**, fi
 - **Dock pixel polish:** countdown select height aligned to the 40px action buttons (Ready-zone alignment), completed-zone Open folder button aligned to 40px. Stable 3-zone geometry preserved.
 - **Meter honesty:** no stereo meters added — no real L/R dBFS feed exists; deferred until the audio pipeline provides per-channel data. No mono RMS duplicated into fake stereo.
 - **Recording-health title metrics:** none added — encoder load is not available at the shell layer, so the simple Recording pill is kept (no generic CPU/GPU/RAM/Disk, no fabricated Drop/Frame/Enc).
-- **Tests:** new `chrome.OperationalTitleBarTest.StatusPill_ShowsSavedAfterCompletedRecording`; existing `record.TransportDockTest` unchanged and green. Debug build green; focused CTest 265/265; full CTest 562/562. Screenshot smoke under `.workspace/screenshots/hybrid-port-r2b-record-polish/`.
+- **Tests:** new `chrome.OperationalTitleBarTest.StatusPill_ShowsSavedAfterCompletedRecording`; existing `record.TransportDockTest` unchanged and green. Debug build green; focused CTest 265/265; full CTest 562/562.
 - **Not touched:** Settings IA / Source Picker behaviour / Webcam / Diagnostics / Logs / Hotkeys / About, capture/encoder/muxer/audio internals, recording state machine, settings schema, build metadata, `PreviewSurface`/DXGI, right-rail/global-transport (remain absent).
 
 ---
@@ -336,7 +336,7 @@ Delivered as **R2B — Record Dock Polish / Completed Status / Source Pill**, fi
 - **Output:** folder + Browse + filename pattern + token reference preserved; output-resolution segmented is functional for Native/4K/1440p/1080p/720p with GPU scaling and contain-fit letterboxing; compact filename token chips include only tokens `FilenameBuilder` resolves: `{datetime}/{date}/{time}/{app}/{title}/{target}/{profile}/{container}`.
 - **Preset:** dropdown + quiet Save/Reset + Manage-presets overflow (identical menu/actions) + status badge; honest hint that webcam & source selection are saved separately (`RecordingProfile` stores output/video/audio only).
 - **QSS:** added `outputResSegmented` to the segmented-container rule and a `tokenChip` label role; reused existing panel/cardTitle/fieldLabel/qualitySegment/profileStatusBadge roles.
-- **Tests:** `test_config_page.cpp` covers the hybrid cards, functional output-resolution segmented control, real frame-rate selector, container segmented control, filename token chips, and existing object-name/behavior assertions. Historical R3 validation was green with screenshot smoke under `.workspace/screenshots/hybrid-port-r3-settings-compact-ia/`.
+- **Tests:** `test_config_page.cpp` covers the hybrid cards, functional output-resolution segmented control, real frame-rate selector, container segmented control, filename token chips, and existing object-name/behavior assertions. Historical R3 validation was green.
 - **Not touched:** Record/TransportDock/PreviewSurface/DXGI, Source picker, Diagnostics/Logs/Hotkeys/About content, capture/encoder/muxer/audio internals, recording state machine, settings schema, profile registry, build metadata, shell/top-nav.
 
 ### OUTPUT-SCALING-R1 / FORMAT-CONTROLS-R1 update
@@ -471,7 +471,7 @@ Delivered as **R2B — Record Dock Polish / Completed Status / Source Pill**, fi
 - **Real vs planned mapping (honest, no fakes):** steps backed by a real probe are static availability checks — **Encoder** = `QueryVideoCodec(active).level` selectable, **Muxer** = `QueryContainer(active).level` selectable, **Disk** = `SelfTestRunner::CheckOutputPathWritable()` temp-dir probe → `Ok`/`Unavailable`. Probe-less internal stages (**Source Capture / Frame Queue / Compositor**) stay `Planned` ("… is not instrumented yet"). **No** card renders numeric latency / queue depth / drops / throughput; the section meta reads `Static checks` and a caption states the status is static, not live timing. No sparklines were drawn (skipped, not faked). No generic CPU/GPU/RAM/Disk dashboard.
 - **Capability matrix:** the existing real `CapabilitySummary` table (OS/GPU/NVENC/codecs/containers) was promoted out of the collapsed "Technical Details" into a visible-but-secondary `CAPABILITY MATRIX` panel; the section meta shows the live probe count. Active configuration remains a collapsed reference. All existing diagnostics checks, recommendations, and self-test rows still render.
 - **Honesty fixes:** the **Export Report** button no longer enables to a no-op — it stays disabled with a "planned for a future build" tooltip. The stale "listed in Technical Details below" copy now points to the capability matrix.
-- **Tests:** new `pipeline_flow_tests` (step order/canonical names, default Planned, status→pill/property wiring, no-fake-metric guard) and `diagnostics_page_tests` (page contains the `pipelineFlow` with the six steps in order, real Encoder/Muxer/Disk resolve to `Ok` on the validated baseline while probe-less stages stay `Planned`, capability rows render, Run Check yields READY, Export stays disabled) — both `TEST_PREFIX diagnostic.`. Backend `diagnostics_tests` unchanged. Debug build green; focused CTest 317/317; full CTest 587/587. Screenshot smoke `.workspace/screenshots/hybrid-port-r5-diagnostics-pipeline/`; note `.workspace/smokes/hybrid-port-r5-diagnostics-pipeline.md`.
+- **Tests:** new `pipeline_flow_tests` (step order/canonical names, default Planned, status→pill/property wiring, no-fake-metric guard) and `diagnostics_page_tests` (page contains the `pipelineFlow` with the six steps in order, real Encoder/Muxer/Disk resolve to `Ok` on the validated baseline while probe-less stages stay `Planned`, capability rows render, Run Check yields READY, Export stays disabled) — both `TEST_PREFIX diagnostic.`. Backend `diagnostics_tests` unchanged. Debug build green; focused CTest 317/317; full CTest 587/587.
 - **Not touched:** diagnostics backend probes (`CapabilitySummary` / `SelfTestRunner` / `ConfigSummary` / `RecommendationEngine` logic), `AppLog`, capture/encoder/muxer/audio internals, recording state machine, settings schema, build metadata, shell/top-nav, Record/PreviewSurface/DXGI, Source picker, Settings IA, Logs, Hotkeys, About.
 
 ---
@@ -554,8 +554,7 @@ Delivered as **R2B — Record Dock Polish / Completed Status / Source Pill**, fi
   (contained read-only no-wrap viewer + Refresh/Copy/Open-folder, no fake level filters, Copy
   disabled when empty) and `test_about_dialog` (real Version/Build/Commit/Author, GitHub uses the
   configured repo URL, no fake Release-notes action). Debug build green; focused CTest 329/329;
-  full CTest 596/596. Screenshot smoke `.workspace/screenshots/hybrid-port-r6-utility-polish/`;
-  note `.workspace/smokes/hybrid-port-r6-utility-polish.md`.
+  full CTest 596/596.
 - **Not touched:** Record dock / PreviewSurface / DXGI, Source picker / Region model, Settings IA,
   Diagnostics backend/pipeline, capture/encoder/muxer/audio internals, recording state machine,
   settings schema, build-metadata generation, shell/top navigation (About routing unchanged),
@@ -591,9 +590,7 @@ R6 note that "About `QDialog` keeps its native title bar / About routing is unch
 - **Tests:** `about_overlay_tests` (renders in-window not as a `QDialog`, real metadata,
   configured GitHub URL, no fake Release notes, open/close + `closed()` signal) replaces
   `about_dialog_tests`; `operational_title_bar_tests` gains the Saved-scope cases. Debug build
-  green; focused CTest 330/330; full CTest 602/602. Screenshots
-  `.workspace/screenshots/hybrid-about-inline-r1/`; smoke note
-  `.workspace/smokes/hybrid-about-inline-r1.md`.
+  green; focused CTest 330/330; full CTest 602/602.
 - **Not touched:** Record transport dock layout, `PreviewSurface`/DXGI, Source picker / Region
   model, Settings IA, Diagnostics pipeline/backend, Logs/Hotkeys content, capture/encoder/muxer/
   audio internals, recorder state machine, settings schema, build-metadata generation.
