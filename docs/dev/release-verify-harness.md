@@ -76,6 +76,30 @@ requirements and its title. `--json` emits the same catalog as the document a ru
 records beside its verdicts.
 
 ```
+ExoSnap.Verify catalog [--out <path>] [--check]
+```
+
+Renders the catalog as one Markdown table: id, class, tier, layer, isolation,
+privilege, interaction, requirements, oracle, migrated, required and source. With
+no `--out` it writes to standard output; with `--out` it writes that file; with
+`--check` it compares the file against the current catalog and exits non-zero when
+they differ.
+
+`docs/dev/release-verify-catalog.md` is that table checked in. It is generated, so
+it carries a "do not edit" banner and the exact regenerate command. After any
+catalog change, regenerate it with
+
+```
+cd tools/release-verify
+dotnet run --project ExoSnap.Verify -- catalog --out ../../docs/dev/release-verify-catalog.md
+```
+
+`CatalogStatusPageTests.TheCommittedCatalogPageMatchesTheCatalog` fails the
+`verify-harness` stage when the committed copy has drifted;
+`EXOSNAP_WRITE_VERIFY_FIXTURES=1` makes that test rewrite it, the same knob that
+regenerates the sample qualification record.
+
+```
 ExoSnap.Verify prepare --exe <path> [--rc <tag>] [--commit <sha>] [--package <path>]...
 ```
 
