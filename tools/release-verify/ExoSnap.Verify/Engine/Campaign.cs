@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.Security.Cryptography;
+using ExoSnap.Verify.Adapters.Elevation;
 using ExoSnap.Verify.Adapters.Envctl;
 using ExoSnap.Verify.Adapters.Ffprobe;
 using ExoSnap.Verify.Adapters.LiveVerify;
@@ -12,6 +13,7 @@ using ExoSnap.Verify.Gates;
 using ExoSnap.Verify.Json;
 using ExoSnap.Verify.Models;
 using ExoSnap.Verify.Processes;
+using ExoSnap.Verify.Windows.Uia;
 
 namespace ExoSnap.Verify.Engine;
 
@@ -111,7 +113,10 @@ public sealed class CampaignServices : IAsyncDisposable
             envctl,
             presentMon,
             processes,
-            factory);
+            factory,
+            new FlaUiAutomation(),
+            new Windows.WindowsSystemAppearance(),
+            new ElevatedWorkerHost(ElevatedWorkerHost.Resolve(campaign.RepositoryRoot)));
 
         return new CampaignServices(processes, sessions, gates);
     }

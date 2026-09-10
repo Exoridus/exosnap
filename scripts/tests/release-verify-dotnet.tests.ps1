@@ -51,7 +51,9 @@ Test-Case 'list is forwarded to the typed catalog' {
     $result = Invoke-Runner -Arguments @('list', '-Engine', 'DotNet')
     Assert-Equal 0 $result.ExitCode "typed list failed: $($result.Output)"
     Assert-True ($result.Output -match '27 scenarios') 'the typed catalog was not printed'
-    Assert-True ($result.Output -match '16 with a migrated body') 'the migration count was not printed'
+    # The exact migrated count moves with every slice; assert the line is printed,
+    # not the number, so this wrapper test does not need editing on each migration.
+    Assert-True ($result.Output -match '\d+ with a migrated body') 'the migration count was not printed'
 }
 
 Test-Case 'an explicit opt-in class remains selected after translation' {

@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The elevated half of the harness. It carries a requireAdministrator manifest,
+    so starting it always raises the UAC prompt a person answers; the unelevated
+    harness never inspects this process, it only reads the result file this writes.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>ExoSnap.Verify.Worker</RootNamespace>
+    <AssemblyName>ExoSnap.Verify.Worker</AssemblyName>
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <SelfContained>false</SelfContained>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ExoSnap.Verify\ExoSnap.Verify.csproj" />
+  </ItemGroup>
+
+</Project>

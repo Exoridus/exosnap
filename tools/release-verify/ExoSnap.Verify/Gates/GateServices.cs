@@ -1,8 +1,11 @@
+using ExoSnap.Verify.Adapters.Elevation;
 using ExoSnap.Verify.Adapters.Envctl;
 using ExoSnap.Verify.Adapters.Ffprobe;
 using ExoSnap.Verify.Adapters.LiveVerify;
 using ExoSnap.Verify.Adapters.PresentMon;
 using ExoSnap.Verify.Processes;
+using ExoSnap.Verify.Windows;
+using ExoSnap.Verify.Windows.Uia;
 
 namespace ExoSnap.Verify.Gates;
 
@@ -43,6 +46,12 @@ public interface IGateSessionHost : IAsyncDisposable
 /// The launcher, for the gates that need an instance of their own rather than the
 /// shared one.
 /// </param>
+/// <param name="Uia">The UI Automation reader the visual gates use past WDA_EXCLUDEFROMCAPTURE.</param>
+/// <param name="SystemAppearance">The Windows apps-colour appearance, driven by the overlay gate.</param>
+/// <param name="ElevatedWorker">
+/// The boundary to elevated work: the parent never inspects elevated UI, only the
+/// worker's result file.
+/// </param>
 /// <param name="LastPresentConfirmation">
 /// What the previous present cross-check confirmed, or null when there has never been
 /// one. Null makes that gate required, which is the correct default: nothing has been
@@ -58,6 +67,9 @@ public sealed record GateServices(
     IPresentMon PresentMon,
     ProcessRunner Processes,
     ILiveVerifySessionFactory SessionFactory,
+    IUiAutomation Uia,
+    ISystemAppearance SystemAppearance,
+    IElevatedWorkerHost ElevatedWorker,
     PresentConfirmation? LastPresentConfirmation = null,
     string? PresentCapturePath = null);
 
