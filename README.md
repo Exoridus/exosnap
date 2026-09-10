@@ -2,233 +2,165 @@
 
 # ExoSnap
 
+### Record your screen. Keep your audio separate. Know what happened.
+
 [![Latest](https://img.shields.io/github/v/release/Exoridus/exosnap?style=for-the-badge&label=Latest&logo=github&color=44cc11)](https://github.com/Exoridus/exosnap/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/Exoridus/exosnap/total?style=for-the-badge&label=Downloads&logo=github)](https://github.com/Exoridus/exosnap/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/Exoridus/exosnap/total?style=for-the-badge&label=Downloads&logo=github)](https://github.com/Exoridus/exosnap/releases)
 [![CI](https://img.shields.io/github/actions/workflow/status/Exoridus/exosnap/ci.yml?branch=main&style=for-the-badge&logo=githubactions&logoColor=fff&label=CI)](https://github.com/Exoridus/exosnap/actions/workflows/ci.yml)
-[![License](https://img.shields.io/github/license/Exoridus/exosnap?style=for-the-badge&color=44cc11)](https://github.com/Exoridus/exosnap/blob/main/LICENSE)
+[![License](https://img.shields.io/github/license/Exoridus/exosnap?style=for-the-badge&color=44cc11)](LICENSE)
 
-A diagnostics-first, Windows-native screen/application/region recorder. MKV-first capture with
-on-stop MP4 remux, a native NVENC pipeline, multi-track audio routing, HDR10 monitor capture,
-and a pre-flight readiness gate that blocks recording before a misconfiguration ruins it —
-no account, no analytics telemetry, and recordings are never uploaded or processed in the cloud
-(update checks against public GitHub Releases and consent-gated crash reports are the only
-opt-in network features; see [`PRIVACY.md`](PRIVACY.md)).
+A Windows screen recorder for gameplay, software demos and everyday capture.
+NVIDIA hardware encoding, multi-track audio, HDR10, lossless trimming and recording diagnostics.
+Your recordings stay on your machine. No account required.
 
-**[Releases](https://github.com/Exoridus/exosnap/releases)** · **[Roadmap](docs/roadmap.md)** · **[Known limitations](KNOWN_LIMITATIONS.md)** · **[Privacy](PRIVACY.md)**
+**[Download](https://github.com/Exoridus/exosnap/releases)** · **[Quick start](#your-first-recording)** · **[Formats](#formats-and-hardware)** · **[Known limitations](KNOWN_LIMITATIONS.md)** · **[Roadmap](docs/roadmap.md)**
 
 </div>
 
-![ExoSnap Record page](docs/assets/readme-hero.png)
+![ExoSnap recording interface](docs/assets/readme-hero.png)
 
-> **Pre-1.0.** ExoSnap is a Windows preview, not a finished 1.0. Settings, preset, and
-> recording-history file formats may change incompatibly between releases.
->
-> **NVIDIA NVENC is required.** ExoSnap only supports NVIDIA hardware encoding today
-> (RTX 20-series or newer recommended). AMD, Intel, and software encoding are not available yet —
-> see the [roadmap](docs/roadmap.md) for the vendor-expansion plan.
->
-> **Windows 10/11 x64 only.** Windows 11 is the primary target; Windows 10 is best-effort.
-> Distributed as a portable ZIP and an MSI installer, neither is code-signed yet, so Windows
-> SmartScreen may warn on first launch (see [Code signing](#code-signing)).
+> **Windows preview, before 1.0.** Requires Windows 10/11 x64 and an NVIDIA GPU with NVENC.
+> Windows 11 is the primary target; Windows 10 is best-effort. AMD, Intel and CPU encoding
+> are not supported yet. Settings and preset formats may change between preview releases.
 
-## Features
+## What you can do
 
-### Reliability & recovery
+| Workflow | What ExoSnap provides |
+| --- | --- |
+| Record a demo or a game | Capture a display, application window or region; include the cursor and a webcam overlay. |
+| Keep control of the audio | Record application, system and microphone audio to separate tracks, or merge selected sources. |
+| Choose the output | H.264, HEVC or AV1 with compatible MKV, MP4 or WebM output; resolution and frame-rate controls. |
+| See problems early | Readiness checks before recording, live drop/drift/storage monitoring, and a report after stopping. |
+| Keep a long session manageable | Split recordings by time or size; recover interrupted sessions on the next launch. |
+| Prepare a short clip | Play back, scrub, trim at keyframes and export without re-encoding; keep markers in a JSON sidecar. |
 
-- **Crash recovery** — a recovery manifest is written before each session; a startup overlay offers
-  Finish / Continue / Delete for each interrupted recording on the next launch. For MKV/WebM split
-  recordings, segments that were already finalized before an interruption remain usable; an
-  interrupted active segment may not be — see [`KNOWN_LIMITATIONS.md`](KNOWN_LIMITATIONS.md).
-- **MKV-first recording** with on-stop MP4 remux (progressive, faststart) via libavformat
-  stream-copy; MKV and WebM are also available as direct output formats.
-- **Low-disk guard** — warns at a configurable soft threshold and hard-stops at a lower one,
-  accounting for the transient MKV + output MP4 coexisting during remux.
-- **FAT32 awareness** — flags the 4 GiB per-file limit as a Diagnostics notice without blocking
-  short recordings.
-- **Container/codec compatibility registry** — invalid combinations are rejected before recording
-  starts, never mid-session.
-- Recording split (by time and/or size, first limit reached wins) with
-  per-segment background MP4 remux.
+## Your first recording
 
-### Diagnostics as a feature
+1. Download the **MSI installer** or **portable ZIP** from [Releases](https://github.com/Exoridus/exosnap/releases).
+   For the portable build, extract the whole folder and run `exosnap.exe`; keep its bundled files together.
+2. Choose a screen, window or region. Select the application/system audio and microphone sources you want.
+3. Review the readiness status. ExoSnap explains blockers before you start and offers a fix where possible.
+4. Press **Record**, or use the default **Alt+F9** start/stop hotkey. Hotkeys are configurable.
+5. Stop the recording and review the result. Open it in the built-in editor for a lossless trim if needed.
 
-- **Pre-flight readiness gate** — blockers and notices surface before you hit record, so a
-  misconfigured capture is caught up front instead of failing mid-recording.
-- **Typed `FixAction` model** (Auto / Assisted / External) — every detected issue carries its
-  safest concrete remedy, not just a warning string.
-- **Live pipeline monitoring** — frame drops, A/V drift, disk-fill ETA, and an on-screen size/drift
-  overlay, with encoder-vs-capture-vs-disk-bound classification and root-cause correlation (e.g.
-  VRR-vs-CFR judder).
-- **Post-flight report card** — frame-drop percentage, peak A/V drift, and pipeline health after
-  every recording.
-- **Opt-in `PresentMon` provider** — elevation-gated tearing/game-present observation feeding the
-  judder correlation, never a hard dependency.
-- **Recording-error dialog** — if a recording fails, a modal report explains why and, in official
-  builds, offers the same consent-gated privacy-scrubbed crash-report channel.
+The built-in profile starts with **MKV, AV1, Opus and 60 fps CFR**. On first start, the video codec
+is reconciled to the best available encoder on your GPU: AV1, then HEVC, then H.264.
+Recordings default to `%USERPROFILE%\Videos\ExoSnap`; the destination is configurable.
 
-### Video & HDR
+The **Microsoft Visual C++ 2022 x64 Redistributable** is required. If startup reports a missing runtime
+DLL, install it from [Microsoft](https://aka.ms/vs/17/release/vc_redist.x64.exe).
+Current portable and MSI builds are unsigned, so Windows SmartScreen may warn on first launch.
+See the [portable guide](README-PORTABLE.md) for setup and storage details.
 
-- Native NVENC pipeline: **H.264, HEVC, and AV1**, with 10-bit (P010) output for HEVC Main10 and
-  AV1.
-- **Canonical rate-control model** — Constant quality, Variable bitrate, Constant bitrate, mapped
-  per encoder underneath; never mislabeled as x264/x265-style "CRF".
-- BT.709 color metadata on every output, plus a selectable Y'CbCr color range (Full/Limited) with
-  a Diagnostics compatibility notice for players that ignore the range flag.
-- **HDR displays are detected automatically.** By default an HDR desktop records as tone-mapped
-  SDR (BT.709) for universal playability. An expert "HDR handling" setting switches to **native
-  HDR10 recording** — PQ/BT.2020, P010 10-bit, limited range, with mastering-display metadata
-  carried into remuxed MP4. Native HDR10 requires HEVC or AV1 and covers **both monitor and
-  window/game capture** (the latter via a scRGB FP16 frame pool); see
-  [`KNOWN_LIMITATIONS.md`](KNOWN_LIMITATIONS.md) for the exact boundary.
-- Webcam PiP overlay with live mirrored preview, DXGI-composited.
+## Formats and hardware
 
-### Audio
+### Container compatibility
 
-- Multi-track routing with the default source order **`APP`, `SYS`, `MIC`**, each recorded to its
-  own default track; any source can merge onto the track above it.
-- Per-track gain, mute, and a brickwall limiter (on by default) on the mixed bus.
-- Microphone DSP chain — high-pass filter, noise gate, AGC, and RNNoise neural noise suppression —
-  each stage off by default and individually toggled.
-- Lossless **PCM** and **FLAC** (MKV-only) alongside Opus and AAC; configurable sample rate,
-  channel count, and bit depth.
+These are the offered combinations, not a list of everything the underlying codecs could theoretically mux.
 
-### Presence & workflow
+| Container | Video | Audio | When to use it |
+| --- | --- | --- | --- |
+| **MKV** | H.264, HEVC, AV1 | AAC, Opus, PCM, FLAC | Flexible recording, separate audio tracks and lossless audio. |
+| **MP4** | H.264, HEVC (`hvc1`) | AAC | Output for compatible players and editors; delivered by remuxing after capture. |
+| **WebM** | AV1 | Opus | AV1/Opus output in a WebM container. |
 
-- Capture-excluded on-screen overlays (recording status, diagnostics, countdown) via
-  `WDA_EXCLUDEFROMCAPTURE` — visible to you, invisible to the recording.
-- Tray icon with idle/recording/paused states, an unread notification badge, and a notification
-  hub alongside toast notifications.
-- Global hotkeys, single-frame capture, and an opt-in interactive quick-control pill overlay.
-- **TOML recording presets** with human-readable export/import and a manage dialog (rename,
-  duplicate, delete, set default).
-- Two base appearances (**Dark**, **Light**) with an independently selectable curated accent
-  (Aqua, Sky, Violet, Magenta); Dark + Aqua is the default. The accent never redefines a semantic
-  state — recording, caution and ready keep their own colours.
-- Local-first crash capture (out-of-process Crashpad) with a consent-gated, privacy-scrubbed
-  next-launch crash dialog.
-- In-app updates (Stable/Preview channels): a signature- and hash-verified download and in-place
-  install via a dedicated updater process, with rollback on failure. Always off by default for
-  self-built binaries, and every install step is visible to the user — never a silent auto-install.
+**NVENC availability depends on your NVIDIA GPU and driver.** RTX 20-series or newer is recommended,
+but not every GPU supports every codec. HEVC, `hvc1` and 10-bit paths work end-to-end but have not
+been validated across every NVIDIA generation. AV1-in-MP4 is not offered; use MKV or WebM for AV1.
+PCM and FLAC are MKV-only. Unsupported combinations are reconciled or blocked before recording.
 
-See [`KNOWN_LIMITATIONS.md`](KNOWN_LIMITATIONS.md) for the precise current support boundary and
-[`docs/roadmap.md`](docs/roadmap.md) for where this is headed.
+### Picture and pacing
 
-## Product defaults
+| Setting | Available options |
+| --- | --- |
+| Output size | Native source size, 720p, 1080p, 1440p or 2160p, with aspect-preserving scaling. |
+| Frame-rate presets | 24, 30, 48, 50, 60, 90, 120, 144, 165 and 240 fps; Expert mode accepts custom values within its display-derived range. |
+| SDR | BT.709 with Full/Limited color range; Limited is the default. |
+| HDR10 | Native PQ/BT.2020 recording from compatible monitor or window/game sources, using HEVC or AV1 and a 10-bit path. |
+| Bit depth | 8-bit; 10-bit P010 for HEVC Main10 and AV1. |
+| Chroma | 4:2:0 by default; Expert 8-bit 4:4:4 for H.264/HEVC on compatible GPUs. No AV1 4:4:4, 10-bit 4:4:4 or 4:2:2. |
 
-| Setting | Default |
-|---------|---------|
-| Appearance | Dark + Aqua accent |
-| Container | MKV |
-| Video codec | AV1 (NVENC) |
-| Audio codec | Opus |
-| Frame rate | CFR 60 fps |
-| Audio source order | `APP`, `SYS`, `MIC` — context-aware defaults (`APP` only exists for a captured application window, enabled there; screen capture defaults `SYS` on, `MIC` off), each enabled source its own track |
-| Navigation pages | `Record`, `Settings`, `Diagnostics`, `Logs`, `About` — all five directly in the title band |
+**60 fps is the default, not the maximum.** Presets above the fastest attached display's refresh rate
+remain visible but disabled. A selected rate is not a throughput guarantee: capture, encoder, storage
+and source refresh still determine what can be sustained. CFR may duplicate or drop frames to keep time.
 
-## Install / run
+HDR desktops record as tone-mapped SDR by default. Native HDR10 is an explicit option and needs
+compatible hardware and playback software. See [Known limitations](KNOWN_LIMITATIONS.md) for the
+precise support boundary rather than assuming every combination works on every system.
 
-See [`README-PORTABLE.md`](README-PORTABLE.md) for the portable-release quick start.
+## Audio that stays editable
 
-**Runtime prerequisite:** the **Microsoft Visual C++ 2022 x64 Redistributable** is required. It is
-normally already present on up-to-date Windows systems. If the app fails to start with a
-missing-DLL error, install it from <https://aka.ms/vs/17/release/vc_redist.x64.exe>.
+Application sound, system audio and microphone input have independent routing. Keep them on separate
+tracks to adjust narration and game audio later, or merge a source into the track above it.
+Each track has gain and mute controls; the mixed bus has a brickwall limiter enabled by default.
 
-The portable build is not code-signed. Windows SmartScreen may warn on first launch — this is
-expected (see [Code signing](#code-signing)).
+Optional microphone processing includes a high-pass filter, noise gate, automatic gain control and
+RNNoise suppression. Each stage is individually switchable and off by default. Opus and AAC cover
+compressed audio; MKV also supports lossless PCM and FLAC.
 
-## Building from source
+## Recording health and recovery
 
-**Prerequisites:** Visual Studio 2022 (Desktop development with C++ workload), CMake 3.27+, Git.
+- **Before recording:** check encoder capability, disk space and configuration compatibility.
+  Diagnostics distinguishes blockers from notices and provides a concrete remedy where available.
+- **During recording:** monitor frame drops, audio/video drift, remaining storage and pipeline load.
+  Recording overlays are visible to you and excluded from supported capture paths.
+- **After recording:** inspect the session report, play the clip and trim it without another encoding pass.
+- **After an interruption:** the next launch offers recovery for interrupted sessions. Already finalized
+  MKV/WebM split segments remain usable; an interrupted active segment may not be recoverable.
 
-Fast local development loop:
+MP4 delivery uses stream-copy remuxing from the recording, avoiding a second video encode. Low-disk
+checks account for the temporary space needed while both files exist. Splitting can be triggered by
+time or size, with per-segment background MP4 remux as each segment completes.
+
+The editor supports **keyframe-accurate lossless trim**, not arbitrary frame-accurate cuts or a
+multi-track editing timeline. Marker export is a JSON sidecar, not embedded chapters. There is no
+replay buffer in the current preview.
+
+## Local by default
+
+Recordings are never uploaded or processed in the cloud. There is no account and no analytics telemetry.
+Update checks use public GitHub Releases; crash reports require consent and are scrubbed before upload.
+Self-built binaries disable the updater by default. Update installation is visible and user-controlled,
+with verified downloads and rollback on failure.
+
+Read [Privacy](PRIVACY.md) for the network and storage details, and [Security](SECURITY.md) for reporting
+security issues. For recording bugs, include the app version, GPU/driver, capture source and selected
+format in an [issue](https://github.com/Exoridus/exosnap/issues). Review logs before sharing them.
+
+## Build and contribute
+
+ExoSnap uses a **C++ recording engine and Qt 6 / Qt Quick UI**, with D3D11 capture/composition,
+NVIDIA NVENC and FFmpeg. Recording policy and capability checks live in C++; QML handles presentation.
+
+Requires Windows, Visual Studio 2022 with Desktop development with C++, CMake 3.27+ and Git.
 
 ```powershell
+git clone https://github.com/Exoridus/exosnap.git
+cd exosnap
+git switch -c my-change origin/main
 cmake --preset windows-x64-debug
 cmake --build --preset windows-x64-debug-exosnap
-scripts\run-tests.ps1 -Filter <binary_name>.
-scripts\check-format.ps1
+pwsh scripts/run-tests.ps1 -Filter recorder_core.
 ```
 
-Before committing, and again before pushing:
+Use `scripts/verify.ps1 -Fast` for scoped iteration and `scripts/verify.ps1 -Full` for the complete
+local gate before pushing. Hooks use the same entry point. Work on a branch and submit a pull request;
+`main` is updated through merges. Follow [AGENTS.md](AGENTS.md) for repository rules.
 
-```powershell
-scripts\verify.ps1 -Fast    # scoped to what changed; what the pre-commit hook runs
-scripts\verify.ps1 -Full    # every local blocking gate; what the pre-push hook runs
-cmake --build --preset windows-x64-release-exosnap   # once, before merge
-```
+| Reference | Contents |
+| --- | --- |
+| [Product specification](docs/product-spec.md) | Behavior, defaults and product decisions. |
+| [Roadmap](docs/roadmap.md) | Planned work; not a promise of current support. |
+| [Known limitations](KNOWN_LIMITATIONS.md) | Current platform, codec and workflow boundaries. |
+| [Development tooling](docs/dev/harness-and-tracing.md) | Diagnostics harnesses and debugging. |
 
-`scripts\verify.ps1` is the only entry point for the local gate. It owns the order and the
-dependencies -- tests never run against a build that failed, and a check whose tool is missing
-reports `TOOL_MISSING` rather than a pass -- and every step delegates to the script that already
-owned it, so there is one definition of each gate. `scripts\install-hooks.ps1` wires it into git.
+## License and acknowledgements
 
-`scripts\run-tests.ps1` sets up the environment every test binary needs (throwaway
-`EXOSNAP_CONFIG_DIR`, offscreen Qt platform, Qt on `PATH`) and prints a compact summary plus any
-failing gtest cases; each CTest entry is one test **binary**, and `-Filter`/`-R` match binary
-names (e.g. `recorder_core.`), not individual gtest cases. Optional faster/cached builds are
-available via Ninja and sccache (`winget install Ninja-build.Ninja` / `Mozilla.sccache`). C++ code
-is formatted with `clang-format` and checked with `clang-tidy` and `cppcheck`
-(`winget install Cppcheck.Cppcheck`), all of them through `verify.ps1`.
-[`AGENTS.md`](AGENTS.md) carries the working rules;
-[`docs/dev/harness-and-tracing.md`](docs/dev/harness-and-tracing.md) documents the diagnostic
-harness modes and the AddressSanitizer build.
+ExoSnap is **GPL-3.0-or-later**. See [LICENSE](LICENSE).
+FFmpeg is distributed as LGPL-2.1-or-later shared libraries; component licenses are listed in
+[Third-party notices](THIRD_PARTY_NOTICES.md). The binaries come from
+[exosnap-ffmpeg-build](https://github.com/Exoridus/exosnap-ffmpeg-build).
 
-## Repo layout
-
-```text
-app/          application source (UI, models, recording pipeline)
-libs/         internal libraries (engine, capability, etc.)
-docs/
-  roadmap.md  version roadmap and architecture guardrails
-  decisions/  architecture decision records (ADRs)
-packaging/    WinGet, Chocolatey, and Scoop packaging manifests
-scripts/      build, quality, and release scripts
-tests/        test targets
-cmake/        CMake helper modules (VendorFFmpeg, etc.)
-third_party/  vendored third-party sources (libmatroska, libebml, etc.)
-tools/        developer tooling
-```
-
-## Third-party / licensing
-
-- ExoSnap is licensed under **GPL-3.0-or-later**; see [`LICENSE`](LICENSE).
-- ExoSnap bundles FFmpeg as **LGPL-2.1-or-later** shared DLLs (dynamic linking). Third-party
-  component licenses are listed in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
-- The FFmpeg binaries are produced by the companion repository
-  [Exoridus/exosnap-ffmpeg-build](https://github.com/Exoridus/exosnap-ffmpeg-build).
-
-## Code signing
-
-ExoSnap participates in the [SignPath Foundation](https://signpath.org) free code-signing program
-for open-source projects, with code-signing infrastructure provided by
-[SignPath.io](https://signpath.io). Once the certificate is issued, Windows release binaries
-(portable ZIP and MSI) will be signed; pre-certificate builds are unsigned, so Windows SmartScreen
-may warn on first launch.
-
-## Contributing / CI
-
-GitHub Actions runs configure, build, and test on Windows for both `windows-x64-debug` and
-`windows-x64-release`, plus a lint pass. PRs are the review gate.
-
-Work happens on branches cut from `origin/main`; `main` itself only ever moves by merging a
-PR. Two guards keep that true, both applied automatically by a CMake configure (or by running
-`scripts/install-hooks.ps1` after a bare clone):
-
-- The `pre-commit` hook refuses a commit made while `main` is checked out. Committing on a
-  local `main` is what makes it diverge — once those commits are squash-merged upstream the
-  squash carries a new commit id, so the originals linger locally and every branch cut from
-  that point drags them into its PR. Prefix a command with `ALLOW_MAIN_COMMIT=1` for the rare
-  legitimate case, such as a release bump.
-- `pull.ff` is set to `only`, so a `git pull` that would need a merge fails instead of quietly
-  recording one. This is per-clone local config and cannot be committed, which is why the
-  configure step sets it.
-
-Branch from the remote ref rather than the local branch — `git switch -c <name> origin/main`
-after a `git fetch` — so a stale local `main` cannot become the base of new work.
-
-## Links
-
-- Repository: <https://github.com/Exoridus/exosnap>
-- Issues: <https://github.com/Exoridus/exosnap/issues>
-- Privacy: [`PRIVACY.md`](PRIVACY.md)
-- Security: [`SECURITY.md`](SECURITY.md)
+Code-signing infrastructure is provided by [SignPath.io](https://signpath.io), with the open-source
+program supported by the [SignPath Foundation](https://signpath.org). Current preview packages remain
+unsigned until the certificate is issued.
