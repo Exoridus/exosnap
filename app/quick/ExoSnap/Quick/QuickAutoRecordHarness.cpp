@@ -148,6 +148,10 @@ benchmark::PreviewMetrics SampleQuickPreviewMetrics(const RecordPreviewAdapter& 
         static_cast<double>(metrics.conversion_failures), kSame,
         "ExoPreviewItem: frames taken off the slot that then failed tone-map/RGBA conversion and can never be "
         "taken again");
+    preview.consumer_release_failures = benchmark::MakeMetric(
+        static_cast<double>(metrics.release_failures), kSame,
+        "ExoPreviewItem: consumed frames whose keyed-mutex release failed -- the producer can never take the "
+        "mutex again, so every mutex_miss after this is a dead transport, not contention");
     return preview;
 }
 

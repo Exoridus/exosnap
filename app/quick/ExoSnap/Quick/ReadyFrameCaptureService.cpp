@@ -4,6 +4,7 @@
 
 #include <exosnap/engine/cursor_sprite.h>
 #include <exosnap/engine/gpu_hdr_tonemap.h>
+#include <exosnap/engine/preview_shared_texture.h>
 #include <exosnap/engine/webcam_placement.h>
 
 #include <QMetaObject>
@@ -322,7 +323,7 @@ void captureOnWorker(ReadyFrameSource source, ReadyFrameComposition composition,
 
     ComPtr<IDXGIKeyedMutex> keyed_mutex;
     result = shared.As(&keyed_mutex);
-    if (FAILED(result) || keyed_mutex->AcquireSync(1, 500) != S_OK) {
+    if (FAILED(result) || keyed_mutex->AcquireSync(exosnap::engine::kPreviewSharedConsumerKey, 500) != S_OK) {
         fail("Ready preview frame was busy");
         return;
     }
@@ -337,7 +338,7 @@ void captureOnWorker(ReadyFrameSource source, ReadyFrameComposition composition,
     result = device->CreateTexture2D(&local_desc, nullptr, local.GetAddressOf());
     if (SUCCEEDED(result))
         context->CopyResource(local.Get(), shared.Get());
-    keyed_mutex->ReleaseSync(0);
+    keyed_mutex->ReleaseSync(exosnap::engine::kPreviewSharedProducerKey);
     if (FAILED(result)) {
         setError(error, "CreateTexture2D(Ready frame local)", result);
         fail(std::move(error));

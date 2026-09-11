@@ -145,6 +145,7 @@ struct PreviewMetrics {
     Metric consumer_acquires;
     Metric consumer_acquire_abandoned;
     Metric consumer_conversion_failures;
+    Metric consumer_release_failures;
 
     // The producer's own cadence and the age of the debt it created, on the same
     // clock and the same window as everything above. Without the first, a long
