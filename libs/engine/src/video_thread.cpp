@@ -510,21 +510,38 @@ void VideoThread::Run() {
     uint32_t sourceWidth = static_cast<uint32_t>(sourceWidthSigned);
     uint32_t sourceHeight = static_cast<uint32_t>(sourceHeightSigned);
 
+    // The screen-to-source mapping for the manually drawn cursor. A captured
+    // window can be dragged while recording, and WGC follows it, so this has to
+    // be re-read per cursor sample rather than frozen at session start: bounds
+    // from t=0 offset the sprite by the whole move for the rest of the session.
     RECT wgcCursorBounds{};
-    if (!useOdCapture && targetIsMonitor) {
-        MONITORINFO monitorInfo{};
-        monitorInfo.cbSize = sizeof(monitorInfo);
-        if (GetMonitorInfoW(reinterpret_cast<HMONITOR>(target.native_id), &monitorInfo) != FALSE)
-            wgcCursorBounds = monitorInfo.rcMonitor;
-    } else if (!useOdCapture) {
-        wgcCursorBounds = windowRect;
+    auto refreshWgcCursorBounds = [&]() {
+        if (useOdCapture) {
+            return;
+        }
+        if (targetIsMonitor) {
+            MONITORINFO monitorInfo{};
+            monitorInfo.cbSize = sizeof(monitorInfo);
+            if (GetMonitorInfoW(reinterpret_cast<HMONITOR>(target.native_id), &monitorInfo) != FALSE)
+                wgcCursorBounds = monitorInfo.rcMonitor;
+            return;
+        }
         RECT extendedFrameBounds{};
         if (SUCCEEDED(DwmGetWindowAttribute(targetHwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &extendedFrameBounds,
                                             sizeof(extendedFrameBounds))) &&
             RectWidth(extendedFrameBounds) > 0 && RectHeight(extendedFrameBounds) > 0) {
             wgcCursorBounds = extendedFrameBounds;
+            return;
         }
+        RECT current{};
+        if (GetWindowRect(targetHwnd, &current) != FALSE && RectWidth(current) > 0 && RectHeight(current) > 0) {
+            wgcCursorBounds = current;
+        }
+    };
+    if (!useOdCapture && !targetIsMonitor) {
+        wgcCursorBounds = windowRect;
     }
+    refreshWgcCursorBounds();
 
     // Determine crop region in monitor-local pixel coordinates.
     // CaptureRegion uses virtual-screen coordinates; subtract the monitor origin.
@@ -1496,6 +1513,7 @@ void VideoThread::Run() {
             ++visualGenerations.cursor;
         }
 
+        refreshWgcCursorBounds();
         const int boundsW = RectWidth(wgcCursorBounds);
         const int boundsH = RectHeight(wgcCursorBounds);
         if (boundsW <= 0 || boundsH <= 0) {
