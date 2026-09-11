@@ -222,6 +222,22 @@ These underpin multiple versions and must not be scattered into UI `if`-chains:
   lookahead/forced-keyframe support. The UI is generated or validated from this.
 - **Color-management architecture** — input/working/output color space, full/limited range, matrix,
   transfer, primaries, tonemapping policy. Precedes HDR and extended chroma.
+- **Colour-pipeline rollover on a mid-recording HDR switch** *(potential feature, not scheduled)* —
+  today a Windows HDR toggle during a recording stops it cleanly on both capture backends: the file
+  is finalized, what was captured is kept, and the user is told to start a new recording. The nicer
+  behaviour is to roll over instead — close the current segment and continue into a new one whose
+  colour description matches the new desktop state. The existing automatic-split machinery covers
+  only half of that: a split is a mux-level roll that finalizes one container and opens the next
+  while the encoded stream continues untouched, so on its own it would produce a second file
+  carrying the same, now wrong, colour description. The colour signalling lives in the encoder's
+  bitstream (for AV1, players read it from there and ignore container tags) and HDR10 changes the
+  bit depth, so a correct rollover needs the capture pool re-created, the tone-map/native-HDR
+  resources and the NV12/P010 conversion rebuilt, a fresh encoder configured for the new colour and
+  depth, per-segment colour metadata carried on the split sentinel, and a hard barrier guaranteeing
+  no packet from the old colour space crosses into the new file. Worth doing for both backends at
+  once, with an ADR, and only then replacing the clean stop. Weighed against: it adds an
+  encoder-restart state transition to the most delicate part of the pipeline, for a situation that
+  is rare and usually accidental.
 - **Media compatibility registry** — single source answering: allowed? recommended? experimental?
   fallback? warning? Apple/browser/NLE compatibility?
 - **Update security** — signed manifest, package hash, downgrade/rollback protection, no update during

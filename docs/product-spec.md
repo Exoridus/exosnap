@@ -813,6 +813,14 @@ Behavior:
   transfer function — it is **not** tone-mapped, and it records in every HDR-handling mode, including
   `Off`. Only a display that actively reports an HDR color space is treated as HDR. Recorded output
   therefore matches the live preview and the desktop.
+- **Toggling Windows HDR while recording stops the recording, cleanly.** The colour description is
+  committed when the recording starts — into the container *and* into the encoder's own bitstream —
+  so a desktop that switches colour space mid-recording would make every remaining frame mislabelled.
+  Both capture backends poll the captured display's HDR state and stop when it changes: the file is
+  finalized normally, everything captured up to that point is kept, and the message says what
+  happened, that the recording was saved, and to start a new one. This is a stop, not a failure that
+  discards work, and it reads that way. Detection is polled rather than instant, so a second or two
+  of post-switch material can still land in the file.
 - **HDR scope for 1.0:** HDR handling (both tone-map-to-SDR and native HDR10) applies to **monitor
   (duplication) capture** and to **window/game capture** (Windows Graphics Capture). When the window's
   hosting display is HDR-active and HDR handling is on, WGC negotiates a scRGB FP16 frame pool and

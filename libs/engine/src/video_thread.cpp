@@ -1746,9 +1746,21 @@ void VideoThread::Run() {
             return; // transient query failure — don't false-positive a stop
         }
         if (freshFacts.hdr_active != initialHdrActive) {
-            m_state.RecordFailure(E_ABORT, ErrorPhase::VideoCapture,
-                                  initialHdrActive ? "Windows HDR was turned off during recording"
-                                                   : "Windows HDR was turned on during recording");
+            // Says what happened, what it cost and what to do. The colour
+            // description is committed once into the encoder's bitstream, not
+            // just the container, so continuing would mislabel every remaining
+            // frame -- see the roadmap entry on a colour-pipeline rollover for
+            // the alternative that keeps recording across the switch.
+            m_state.RecordFailure(
+                E_ABORT, ErrorPhase::VideoCapture,
+                initialHdrActive ? "Windows HDR was turned off on this display during the recording. The colour "
+                                   "description was committed when the recording started and no longer matches the "
+                                   "desktop, so recording stopped here. Everything captured up to this point has been "
+                                   "saved; start a new recording to continue in SDR."
+                                 : "Windows HDR was turned on on this display during the recording. The colour "
+                                   "description was committed when the recording started and no longer matches the "
+                                   "desktop, so recording stopped here. Everything captured up to this point has been "
+                                   "saved; start a new recording to capture in HDR.");
         }
     };
 
