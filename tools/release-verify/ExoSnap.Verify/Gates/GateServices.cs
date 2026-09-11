@@ -1,3 +1,4 @@
+using ExoSnap.Verify.Adapters.DisposableOs;
 using ExoSnap.Verify.Adapters.Elevation;
 using ExoSnap.Verify.Adapters.Envctl;
 using ExoSnap.Verify.Adapters.Ffprobe;
@@ -52,6 +53,10 @@ public interface IGateSessionHost : IAsyncDisposable
 /// The boundary to elevated work: the parent never inspects elevated UI, only the
 /// worker's result file.
 /// </param>
+/// <param name="DisposableOs">
+/// Runs a worker script on a disposable machine. Which machine is a transport
+/// decision, not a gate's: a gate states what it needs run and reads back a verdict.
+/// </param>
 /// <param name="LastPresentConfirmation">
 /// What the previous present cross-check confirmed, or null when there has never been
 /// one. Null makes that gate required, which is the correct default: nothing has been
@@ -70,6 +75,7 @@ public sealed record GateServices(
     IUiAutomation Uia,
     ISystemAppearance SystemAppearance,
     IElevatedWorkerHost ElevatedWorker,
+    IDisposableOsRunner DisposableOs,
     PresentConfirmation? LastPresentConfirmation = null,
     string? PresentCapturePath = null);
 

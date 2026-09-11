@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.Security.Cryptography;
+using ExoSnap.Verify.Adapters.DisposableOs;
 using ExoSnap.Verify.Adapters.Elevation;
 using ExoSnap.Verify.Adapters.Envctl;
 using ExoSnap.Verify.Adapters.Ffprobe;
@@ -85,6 +86,13 @@ public sealed class CampaignServices : IAsyncDisposable
         var envctl = new Envctl(processes, ResolveEnvctl(tools, campaign.RepositoryRoot), aliasProfile);
         var presentMon = new PresentMonReader(tools.Resolve("PresentMon", "EXOSNAP_PRESENTMON").Path);
 
+        // Transport order is the fallback order: the first one that reports itself
+        // available carries the run.
+        var disposableOs = new DisposableOsRunner(
+        [
+            new SandboxTransport(processes, tools, Path.Combine(Path.GetTempPath(), "exosnap-verify-sandbox")),
+        ]);
+
         var environment = await EnvironmentOrchestrator
             .OpenAsync(envctl, runId, journalDirectory, journalPath, cancellationToken)
             .ConfigureAwait(false);
@@ -116,7 +124,8 @@ public sealed class CampaignServices : IAsyncDisposable
             factory,
             new FlaUiAutomation(),
             new Windows.WindowsSystemAppearance(),
-            new ElevatedWorkerHost(ElevatedWorkerHost.Resolve(campaign.RepositoryRoot)));
+            new ElevatedWorkerHost(ElevatedWorkerHost.Resolve(campaign.RepositoryRoot)),
+            disposableOs);
 
         return new CampaignServices(processes, sessions, gates);
     }
