@@ -52,7 +52,7 @@
       <Component Id="StartMenuShortcut" Guid="{C1D2E3F4-A5B6-7890-CDEF-1234567890AB}" KeyPath="yes">
         <Shortcut Id="StartMenuExoSnap"
                   Name="ExoSnap"
-                  Description="Windows-native recording application"
+                  Description="Windows-native screen, window and region recorder"
                   Target="[INSTALLFOLDER]exosnap.exe"
                   WorkingDirectory="INSTALLFOLDER" />
         <RegistryValue Root="HKLM"
@@ -68,13 +68,27 @@
       </Component>
     </StandardDirectory>
 
-    <!-- ARP (Add/Remove Programs) metadata -->
-    <Property Id="ARPCOMMENTS" Value="Windows-native diagnostics-first recording application" />
+    <!-- ARP (Add/Remove Programs) metadata.
+         The description matches docs/product-spec.md and the other package
+         manifests word for word: an installed-apps entry that describes the
+         product differently from the package manager it came from reads as a
+         different product. -->
+    <Property Id="ARPCOMMENTS" Value="Windows-native screen, window and region recorder with an NVIDIA NVENC pipeline, multi-track audio, and diagnostics." />
     <Property Id="ARPCONTACT" Value="https://github.com/Exoridus/exosnap" />
     <Property Id="ARPURLINFOABOUT" Value="https://github.com/Exoridus/exosnap" />
     <Property Id="ARPHELPLINK" Value="https://github.com/Exoridus/exosnap/issues" />
+    <Property Id="ARPREADME" Value="https://github.com/Exoridus/exosnap#readme" />
+    <Property Id="ARPURLUPDATEINFO" Value="https://github.com/Exoridus/exosnap/releases" />
     <Property Id="ARPNOMODIFY" Value="1" />
     <Property Id="ARPNOREPAIR" Value="0" />
+
+    <!-- InstallLocation is not derived from INSTALLFOLDER by Windows Installer; it
+         is written only from this property, and only a value resolved after
+         CostFinalize is the directory the user actually chose. Package managers and
+         inventory tools read it as the standard answer to "where did this install",
+         which is why it matters even though the product finds itself through
+         HKLM\Software\Codexo\ExoSnap\InstallPath. -->
+    <SetProperty Id="ARPINSTALLLOCATION" Value="[INSTALLFOLDER]" After="CostFinalize" Sequence="execute" />
 
     <!-- Feature tree.
          StagingFiles is the master ComponentGroup defined in _harvest.wxs;
