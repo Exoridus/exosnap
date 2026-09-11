@@ -187,6 +187,7 @@ function Get-ExoSnapArpEntry {
                 DisplayName    = $displayName
                 Publisher      = $publisher
                 DisplayVersion = if ($names -contains 'DisplayVersion') { "$($properties.DisplayVersion)" } else { '' }
+                InstallLocation = if ($names -contains 'InstallLocation') { "$($properties.InstallLocation)" } else { '' }
             }
         }
     }
@@ -420,10 +421,14 @@ finally {
             $restored = Get-ExoSnapArpEntry
             # DisplayVersion is deliberately not compared against the release tag: an
             # MSI ProductVersion cannot carry a prerelease suffix, so an rc build
-            # legitimately reports the plain three-part version here. InstallLocation
-            # is empty for this package and is not asserted either.
+            # legitimately reports the plain three-part version here.
             Add-Assertion -Step $step -Text 'the ExoSnap ARP entry is back' -Condition ($null -ne $restored)
             Add-Assertion -Step $step -Text "$installedExe is back" -Condition (Test-Path -LiteralPath $installedExe)
+            # The package manager's standard answer to "where is this installed".
+            # Asserted because it is written from a property the package sets, so a
+            # silent loss of it would otherwise only surface in someone else's tool.
+            Add-Assertion -Step $step -Text 'the ARP entry names its install location' `
+                -Condition ($null -ne $restored -and -not [string]::IsNullOrWhiteSpace($restored.InstallLocation))
             if ($null -ne $restored) { $step.detail = "$($restored.DisplayName) $($restored.DisplayVersion)" }
         }
         else {
