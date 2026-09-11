@@ -101,3 +101,76 @@ public sealed class DisposableOsVerdictTests
         Assert.Contains("applied anyway", verdict.Message, StringComparison.Ordinal);
     }
 }
+
+public sealed class DisposableOsRunnerTests
+{
+    private sealed class FixedTransport : IDisposableOsTransport
+    {
+        private readonly DisposableOsRun run;
+
+        public FixedTransport(string name, bool available, DisposableOsRun run)
+        {
+            this.Name = name;
+            this.Available = available;
+            this.run = run;
+        }
+
+        public string Name { get; }
+
+        public bool Available { get; }
+
+        public string UnavailableReason => this.Available ? string.Empty : $"{this.Name} is not available";
+
+        public List<DisposableOsWorkerRequest> Requests { get; } = [];
+
+        public Task<DisposableOsRun> RunWorkerAsync(DisposableOsWorkerRequest request, CancellationToken cancellationToken)
+        {
+            this.Requests.Add(request);
+            return Task.FromResult(this.run);
+        }
+    }
+
+    [Fact]
+    public async Task SkipsAnUnavailableTransportAndUsesTheNextOne()
+    {
+        var unavailable = new FixedTransport("primary", available: false, DisposableOsRun.Faulted("unreachable"));
+        var completed = DisposableOsRun.Completed(new DisposableOsRunResult([]));
+        var fallback = new FixedTransport("fallback", available: true, completed);
+        var runner = new DisposableOsRunner([unavailable, fallback]);
+        var request = new DisposableOsWorkerRequest("worker.ps1", [], []);
+
+        var run = await runner.RunAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.Same(completed, run);
+        Assert.Empty(unavailable.Requests);
+        Assert.Single(fallback.Requests);
+    }
+
+    [Fact]
+    public async Task NoAvailableTransportIsUnavailableNotFaulted()
+    {
+        var runner = new DisposableOsRunner(
+        [
+            new FixedTransport("primary", available: false, DisposableOsRun.Faulted("n/a")),
+        ]);
+        var request = new DisposableOsWorkerRequest("worker.ps1", [], []);
+
+        var run = await runner.RunAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.Equal(DisposableOsRunKind.Unavailable, run.Kind);
+        Assert.Contains("no disposable-OS transport", run.Detail, StringComparison.Ordinal);
+        Assert.Contains("primary is not available", run.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TransportNamesReportsEveryTransportInOrder()
+    {
+        var runner = new DisposableOsRunner(
+        [
+            new FixedTransport("sandbox", available: false, DisposableOsRun.Faulted("n/a")),
+            new FixedTransport("vm", available: true, DisposableOsRun.Faulted("n/a")),
+        ]);
+
+        Assert.Equal(["sandbox", "vm"], runner.TransportNames);
+    }
+}
