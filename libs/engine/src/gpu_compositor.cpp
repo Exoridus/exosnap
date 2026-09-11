@@ -285,6 +285,12 @@ bool GpuCompositor::DrawTexture(ID3D11ShaderResourceView* srv, const WebcamPixel
     ID3D11RenderTargetView* null_rtv = nullptr;
     context_->PSSetShaderResources(0, 1, &null_srv);
     context_->OMSetRenderTargets(1, &null_rtv, nullptr);
+    // The blend state too. This is the only pass in the engine that enables
+    // alpha blending, and the context keeps it for every later draw on the
+    // shared immediate context. A later pass whose shader does not write alpha
+    // -- the P010 luma/chroma planes return float/float2 -- then blends against
+    // an undefined alpha, and the result is driver-dependent.
+    context_->OMSetBlendState(nullptr, nullptr, 0xffffffff);
     return true;
 }
 

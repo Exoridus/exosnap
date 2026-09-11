@@ -58,9 +58,13 @@ float PqOetf(float l) {
     return pow((kC1 + kC2 * lm1) / (1.0f + kC3 * lm1), kM2);
 }
 
+// No clamp here. scRGB carries wide-gamut colour as NEGATIVE BT.709 components
+// (BT.2020 pure red is roughly (1.66, -0.12, -0.02) in scRGB), and those
+// negatives are what the 709->2020 matrix needs to land the colour inside the
+// 2020 gamut. Clamping per channel before the matrix desaturates every
+// wide-gamut colour; EncodedRgb saturates once, after the matrix.
 float ScrgbToPqNorm(float v) {
-    float nits = max(v, 0.0f) * kRefWhiteNits;
-    return min(nits / kPqPeakNits, 1.0f);
+    return v * kRefWhiteNits / kPqPeakNits;
 }
 
 float3 Bt709ToBt2020(float3 c) {
@@ -294,6 +298,13 @@ bool HdrPqConverter::Convert(ID3D11Texture2D* src, ID3D11Texture2D* dst, std::st
     context_->VSSetShader(vertex_shader_.get(), nullptr, 0);
     context_->PSSetSamplers(0, 1, &sampler);
     context_->PSSetConstantBuffers(0, 1, &constants);
+    // Own the output-merger and rasterizer state rather than inheriting whatever
+    // the previous pass left. The plane shaders return float / float2 and write
+    // no alpha, so any blend state still enabled from the compositor would blend
+    // each plane against an undefined value and the result would depend on the
+    // driver. Opaque and default-rasterized is the only correct setting here.
+    context_->OMSetBlendState(nullptr, nullptr, 0xffffffff);
+    context_->RSSetState(nullptr);
 
     // --- Luma plane (full encode resolution) ---
     const float luma_clear[4] = {kLumaBlack, kLumaBlack, kLumaBlack, kLumaBlack};

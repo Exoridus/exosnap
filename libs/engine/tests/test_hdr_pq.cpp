@@ -117,14 +117,41 @@ TEST(HdrPq, PqOetfMonotonicAndClamped) {
     EXPECT_FLOAT_EQ(PqOetf(2.0f), 1.0f);          // clamps
 }
 
-// ---- scRGB nit-scaling (1.0 = 80 nits), PQ ceiling clamp -------------------
+// ---- scRGB nit-scaling (1.0 = 80 nits) --------------------------------------
 
 TEST(HdrPq, ScrgbNitScaling) {
     EXPECT_FLOAT_EQ(ScrgbToPqNormalized(1.0f), 80.0f / 10000.0f);    // reference white
     EXPECT_FLOAT_EQ(ScrgbToPqNormalized(12.5f), 1000.0f / 10000.0f); // 1000 nits
-    EXPECT_FLOAT_EQ(ScrgbToPqNormalized(125.0f), 1.0f);              // 10 000 nits ceiling
-    EXPECT_FLOAT_EQ(ScrgbToPqNormalized(500.0f), 1.0f);              // > ceiling clamps, no roll-off
-    EXPECT_FLOAT_EQ(ScrgbToPqNormalized(-0.5f), 0.0f);               // wide-gamut negative clamps
+    EXPECT_FLOAT_EQ(ScrgbToPqNormalized(125.0f), 1.0f);              // 10 000 nits
+    // Pure scaling, no clamp at either end: the ceiling is applied by PqOetf and
+    // a negative must survive to the gamut matrix (see the next test).
+    EXPECT_FLOAT_EQ(ScrgbToPqNormalized(500.0f), 4.0f);
+    EXPECT_FLOAT_EQ(ScrgbToPqNormalized(-0.5f), -40.0f / 10000.0f);
+}
+
+// A BT.2020 pure red in scRGB has negative green and blue. Clamping those away
+// before the 709->2020 matrix desaturates it; carried through, the matrix lands
+// it as a saturated red, which is what the encoded file has to carry.
+TEST(HdrPq, WideGamutNegativesSurviveToTheMatrix) {
+    const LinearRgb scrgb_red_2020{1.6604910023f, -0.1245504746f, -0.0181507634f};
+    const LinearRgb lin = Bt709ToBt2020(LinearRgb{
+        ScrgbToPqNormalized(scrgb_red_2020.r),
+        ScrgbToPqNormalized(scrgb_red_2020.g),
+        ScrgbToPqNormalized(scrgb_red_2020.b),
+    });
+    // Red carries all the energy; green and blue collapse to ~0 instead of
+    // the ~7 % / ~2 % crosstalk a pre-clamped input produces.
+    EXPECT_NEAR(lin.g / lin.r, 0.0f, 0.005f);
+    EXPECT_NEAR(lin.b / lin.r, 0.0f, 0.005f);
+}
+
+// The ceiling still holds at the end of the chain, where it belongs.
+TEST(HdrPq, CeilingIsAppliedByTheTransferFunction) {
+    const P010Codes at_ceiling = ScrgbToP010(LinearRgb{125.0f, 125.0f, 125.0f});
+    const P010Codes above_ceiling = ScrgbToP010(LinearRgb{500.0f, 500.0f, 500.0f});
+    EXPECT_EQ(at_ceiling.y, above_ceiling.y);
+    EXPECT_EQ(at_ceiling.cb, above_ceiling.cb);
+    EXPECT_EQ(at_ceiling.cr, above_ceiling.cr);
 }
 
 // ---- BT.709 -> BT.2020 gamut matrix golden values --------------------------

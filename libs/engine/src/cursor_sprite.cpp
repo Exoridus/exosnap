@@ -1,6 +1,7 @@
 #include <exosnap/engine/cursor_sprite.h>
 
 #include <cstring>
+#include <vector>
 
 namespace exosnap::engine {
 
@@ -77,6 +78,45 @@ bool CaptureWin32CursorBitmap(HCURSOR cursor, Win32CursorBitmap& out) {
         out.hotspot_y = static_cast<int>(icon.yHotspot);
         out.bgra.assign(static_cast<const uint8_t*>(bits),
                         static_cast<const uint8_t*>(bits) + static_cast<size_t>(width) * height * 4u);
+
+        // DrawIconEx writes alpha only for cursors that carry an alpha channel.
+        // A mask-based cursor -- monochrome ones such as the default I-beam, or a
+        // 24-bit colour cursor with an AND mask -- leaves every alpha byte at the
+        // zero the memset put there, and the compositor's cursor pass honours
+        // sprite alpha, so such a pointer is composited fully transparent and
+        // vanishes from the recording. Rebuild alpha from the AND mask instead:
+        // a clear mask bit is an opaque sprite pixel.
+        bool any_alpha = false;
+        for (size_t i = 3; i < out.bgra.size(); i += 4) {
+            if (out.bgra[i] != 0) {
+                any_alpha = true;
+                break;
+            }
+        }
+        if (!any_alpha && icon.hbmMask != nullptr) {
+            BITMAPINFO mask_info{};
+            mask_info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+            mask_info.bmiHeader.biWidth = width;
+            mask_info.bmiHeader.biHeight = -height; // top-down; the AND plane is the first `height` rows
+            mask_info.bmiHeader.biPlanes = 1;
+            mask_info.bmiHeader.biBitCount = 1;
+            mask_info.bmiHeader.biCompression = BI_RGB;
+            const size_t mask_stride = (static_cast<size_t>(width) + 31u) / 32u * 4u;
+            std::vector<uint8_t> mask_bits(mask_stride * static_cast<size_t>(height) + 8u);
+            // Two-colour table follows the header; reserve room for it.
+            std::vector<uint8_t> info_storage(sizeof(BITMAPINFOHEADER) + 2u * sizeof(RGBQUAD));
+            std::memcpy(info_storage.data(), &mask_info, sizeof(BITMAPINFOHEADER));
+            if (GetDIBits(dc, icon.hbmMask, 0, static_cast<UINT>(height), mask_bits.data(),
+                          reinterpret_cast<BITMAPINFO*>(info_storage.data()), DIB_RGB_COLORS) == height) {
+                for (int y = 0; y < height; ++y) {
+                    const uint8_t* row = mask_bits.data() + static_cast<size_t>(y) * mask_stride;
+                    for (int x = 0; x < width; ++x) {
+                        const bool masked_out = (row[x / 8] >> (7 - (x % 8))) & 1u;
+                        out.bgra[(static_cast<size_t>(y) * width + x) * 4u + 3u] = masked_out ? 0u : 255u;
+                    }
+                }
+            }
+        }
     }
 
     DeleteObject(dib);
