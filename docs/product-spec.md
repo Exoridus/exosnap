@@ -900,7 +900,10 @@ of frame screenshots.
 DXGI Output Duplication backend the recording uses, owned by a shared capture hub: the preview is
 VRR- and HDR-true, shows no OS capture indicator, draws the live cursor, and **holds its last frame
 through a monitor unplug/replug** instead of blanking — production resumes when the display returns.
-The capture exists only while the preview is visible and is closed with it. Window and Region
+The capture exists only while the preview is visible and is closed with it -- and "visible" means
+the Record page is the one on screen, not the one most recently requested: while a navigation away
+is still bringing its destination up, the preview keeps running, so the page the user is still
+looking at never shows a black preview waiting for a page they cannot see yet. Window and Region
 previews run their own Windows Graphics Capture of the selected target (see KNOWN_LIMITATIONS for
 the exact boundary).
 

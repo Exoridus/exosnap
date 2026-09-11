@@ -164,9 +164,28 @@ produces one remuxed progressive MP4 per segment.
 
 ## Shell and interaction polish (0.10.0)
 
-Three items the Qt Quick cutover left behind or never had. None of them is a
+Four items the Qt Quick cutover left behind or never had. None of them is a
 redesign; each is a property the Widgets shell had, or a convention the platform
 expects, that the port did not carry over.
+
+### Pages that build in view, card by card
+
+Navigation no longer freezes: the four lazily loaded destinations incubate
+asynchronously and are pre-warmed in idle time after the first paint, so a real
+click normally lands on a page that already exists. What remains is the cold
+case -- a click faster than the pre-warm -- where the shell keeps the previous
+page on screen until the new one is ready, because a `Loader` has nothing to
+show until its incubation completes: switching at once would show a blank area
+for as long as the load takes, which reads as a hang even though nothing hangs.
+
+The intended shape is the opposite: switch immediately and let the page build
+in view, one card at a time, never one control at a time. That needs each page
+to be a light shell that exists instantly plus one asynchronous `Loader` per
+section, released in reading order, with each card's reserved height known up
+front so the layout does not jump as they arrive. Once that is in place,
+`displayedPage` and its lag go away and the stack simply follows `currentPage`.
+Product-visible, so the behaviour belongs in `docs/product-spec.md` once it
+ships.
 
 ### Keyboard-only operation, properly
 
