@@ -1,8 +1,10 @@
+using ExoSnap.Verify.Adapters.DisposableOs;
 using ExoSnap.Verify.Adapters.Elevation;
 using ExoSnap.Verify.Adapters.Envctl;
 using ExoSnap.Verify.Adapters.Ffprobe;
 using ExoSnap.Verify.Capabilities;
 using ExoSnap.Verify.Engine;
+using ExoSnap.Verify.Gates;
 using ExoSnap.Verify.Processes;
 using ExoSnap.Verify.Windows;
 using ExoSnap.Verify.Windows.Uia;
@@ -19,6 +21,11 @@ namespace ExoSnap.Verify.Tests;
 public sealed class PlatformSmokeTests
 {
     private static readonly TimeSpan FfmpegTimeout = TimeSpan.FromSeconds(60);
+
+    // A real virtual machine boots for this one; the worker itself does nothing.
+    private const string SandboxSmokeVariable = "EXOSNAP_SANDBOX_SMOKE";
+
+    private static readonly TimeSpan SandboxSmokeTimeout = TimeSpan.FromMinutes(5);
 
     [Fact]
     public async Task FfprobeReadsARealEncodeItJustMade()
@@ -184,6 +191,69 @@ public sealed class PlatformSmokeTests
         Assert.Equal(ElevatedWorkerOutcome.Pass, run.Result!.Outcome);
         Assert.Equal("selfTest", run.Result.PresentMode);
         Assert.Equal("REL-PRESENT-002", run.Result.TaskId);
+    }
+
+    [Fact]
+    public async Task SandboxTransportRunsARealWorkerAndReadsItsMarker()
+    {
+        // Opt-in, unlike every other smoke in this file: a sandbox is a real virtual
+        // machine whose window opens on, and takes focus from, whoever is at the
+        // desktop, and only one may run at a time on a machine. It is therefore
+        // started deliberately, never as a side effect of running the suite.
+        if (Environment.GetEnvironmentVariable(SandboxSmokeVariable) is not "1")
+        {
+            Assert.Skip($"the sandbox smoke opens a real virtual machine window; set {SandboxSmokeVariable}=1 to run it");
+            return;
+        }
+
+        using var processes = new ProcessRunner();
+        using var directory = FixtureTool.NewTemporaryDirectory("-sandbox-smoke");
+        var transport = new SandboxTransport(processes, new ToolResolver(), Path.Combine(directory.Path, "staging"));
+        if (!transport.Available)
+        {
+            Assert.Skip(transport.UnavailableReason);
+            return;
+        }
+
+        // No product under test: this proves the staging, launch, marker-poll and
+        // result-read path works end to end against a real virtual machine.
+        var worker = Path.Combine(directory.Path, "smoke-worker.ps1");
+        await File.WriteAllTextAsync(
+            worker,
+            """
+            param([string] $StagingDirectory, [string] $ResultPath, [string] $MarkerPath)
+            Set-Content -LiteralPath $ResultPath -Value '{"steps":[{"name":"ran","ok":true,"detail":"smoke"}]}'
+            New-Item -ItemType File -Path $MarkerPath -Force | Out-Null
+            """,
+            TestContext.Current.CancellationToken);
+
+        var run = await transport.RunWorkerAsync(
+            new DisposableOsWorkerRequest("smoke-worker.ps1", [worker], []) { Timeout = SandboxSmokeTimeout },
+            TestContext.Current.CancellationToken);
+
+        Assert.True(run.Kind == DisposableOsRunKind.Completed, $"{run.Kind}: {run.Detail}");
+        var step = Assert.Single(run.Result!.Steps);
+        Assert.Equal("ran", step.Name);
+        Assert.True(step.Ok);
+    }
+
+    [Fact]
+    public void ARealInstallerDeclaresTheProductUnderTest()
+    {
+        var pinned = Environment.GetEnvironmentVariable(ReleaseMsiArtifact.PathVariable);
+        if (string.IsNullOrWhiteSpace(pinned) || !File.Exists(pinned))
+        {
+            Assert.Skip(
+                $"no installer to read: set {ReleaseMsiArtifact.PathVariable} to a published ExoSnap MSI");
+            return;
+        }
+
+        var properties = MsiPackage.ReadProperties(pinned);
+
+        Assert.NotNull(properties);
+        Assert.Equal("ExoSnap", properties!["ProductName"]);
+        Assert.Equal("Codexo", properties["Manufacturer"]);
+        Assert.Matches(@"^\d+\.\d+\.\d+", properties["ProductVersion"]);
     }
 
     [Fact]

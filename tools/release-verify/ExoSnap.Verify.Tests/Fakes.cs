@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Text.Json;
+using ExoSnap.Verify.Adapters.DisposableOs;
 using ExoSnap.Verify.Adapters.Elevation;
 using ExoSnap.Verify.Adapters.Envctl;
 using ExoSnap.Verify.Adapters.Ffprobe;
@@ -504,6 +505,32 @@ internal sealed class FakeElevatedWorkerHost : IElevatedWorkerHost
     }
 }
 
+/// <summary>A configurable <see cref="IDisposableOsRunner"/> that starts no machine.</summary>
+internal sealed class FakeDisposableOsRunner : IDisposableOsRunner
+{
+    private DisposableOsRun? run;
+
+    /// <inheritdoc/>
+    public IReadOnlyList<string> TransportNames { get; set; } = ["fake"];
+
+    /// <summary>The run the next <see cref="RunAsync"/> call returns.</summary>
+    public DisposableOsRun Run
+    {
+        set => this.run = value;
+    }
+
+    /// <summary>Every request the runner was asked to carry out, in call order.</summary>
+    public List<DisposableOsWorkerRequest> Requests { get; } = [];
+
+    /// <inheritdoc/>
+    public Task<DisposableOsRun> RunAsync(DisposableOsWorkerRequest request, CancellationToken cancellationToken)
+    {
+        this.Requests.Add(request);
+        return Task.FromResult(
+            this.run ?? throw new InvalidOperationException("FakeDisposableOsRunner.Run was not configured."));
+    }
+}
+
 /// <summary>Every fake a gate's <see cref="GateServices"/> can be wired to.</summary>
 internal sealed class GateFakes
 {
@@ -526,6 +553,9 @@ internal sealed class GateFakes
 
     /// <summary>The elevated-worker boundary the elevated present gate crosses.</summary>
     public FakeElevatedWorkerHost ElevatedWorker { get; } = new();
+
+    /// <summary>The disposable machine the install, update and packaging gates run on.</summary>
+    public FakeDisposableOsRunner DisposableOs { get; } = new();
 
     /// <summary>The one session a gate under test is handed, whichever way it reaches it.</summary>
     public FakeLiveVerifySession Session { get; } = new();
@@ -627,6 +657,7 @@ internal sealed class GateHarness : IDisposable
             fakes.Uia,
             fakes.SystemAppearance,
             fakes.ElevatedWorker,
+            fakes.DisposableOs,
             fakes.LastPresentConfirmation,
             fakes.PresentCapturePath);
 
