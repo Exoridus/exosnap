@@ -1026,12 +1026,32 @@ void VideoThread::Run() {
     HCURSOR wgcCursorHandle = nullptr;
     Win32CursorBitmap wgcCursorBitmap;
     std::vector<uint8_t> wgcCursorUploadBgra;
+    int32_t wgcCursorPosX = 0;
+    int32_t wgcCursorPosY = 0;
+    bool wgcCursorVisible = false;
 
     VisualGenerations visualGenerations{};
     VisualFrameKey lastCompositedKey{};
     bool haveLastCompositedKey = false;
     uint64_t lastWebcamFrameGeneration = 0;
     bool haveWebcamFrameGeneration = false;
+    WebcamOverlayLive lastOverlaySnapshot{};
+    bool haveOverlaySnapshot = false;
+
+    // The PiP geometry, opacity and chroma key are settable while Record() runs
+    // and are part of the frame key, so a change has to advance the overlay
+    // generation BEFORE the key is taken. Read through this rather than calling
+    // SnapshotWebcamOverlay directly: a snapshot that skips the bump lets a still
+    // source keep re-emitting the composite made with the previous overlay.
+    auto sampleOverlay = [&]() -> WebcamOverlayLive {
+        WebcamOverlayLive current = m_state.SnapshotWebcamOverlay();
+        if (!haveOverlaySnapshot || !(current == lastOverlaySnapshot)) {
+            haveOverlaySnapshot = true;
+            lastOverlaySnapshot = current;
+            ++visualGenerations.overlay;
+        }
+        return current;
+    };
 
     // Validate an acquired OD frame; on the FIRST frame, negotiate the session
     // capture format and create odCapturedTex to match it. Cheap on the
@@ -1444,31 +1464,42 @@ void VideoThread::Run() {
         return true;
     };
 
-    auto drawWin32CursorGpu = [&]() -> bool {
+    // WGC delivers no pointer events of its own; the session's built-in cursor
+    // is off so the compositor owns z-order, so nothing else on this backend
+    // advances the cursor generation. Sampling has to happen before the frame
+    // key is taken, separately from drawing: a generation that stands still
+    // leaves ShouldRecompositeHeldScreen false, and the pointer then freezes in
+    // the recording while it keeps moving on screen.
+    auto sampleWgcCursor = [&]() {
         if (useOdCapture || !m_state.config.capture_cursor) {
-            return true;
+            return;
         }
 
         CURSORINFO cursorInfo{};
         cursorInfo.cbSize = sizeof(cursorInfo);
         if (GetCursorInfo(&cursorInfo) == FALSE || (cursorInfo.flags & CURSOR_SHOWING) == 0 ||
             cursorInfo.hCursor == nullptr) {
-            return true;
+            if (wgcCursorVisible) {
+                wgcCursorVisible = false;
+                ++visualGenerations.cursor;
+            }
+            return;
         }
 
         if (cursorInfo.hCursor != wgcCursorHandle || wgcCursorBitmap.bgra.empty()) {
             Win32CursorBitmap next;
             if (!CaptureWin32CursorBitmap(cursorInfo.hCursor, next)) {
-                return true;
+                return;
             }
             wgcCursorHandle = cursorInfo.hCursor;
             wgcCursorBitmap = std::move(next);
+            ++visualGenerations.cursor;
         }
 
         const int boundsW = RectWidth(wgcCursorBounds);
         const int boundsH = RectHeight(wgcCursorBounds);
         if (boundsW <= 0 || boundsH <= 0) {
-            return true;
+            return;
         }
 
         const int32_t cx = ScaleCoordinateToSource(cursorInfo.ptScreenPos.x - wgcCursorBounds.left,
@@ -1477,9 +1508,22 @@ void VideoThread::Run() {
         const int32_t cy = ScaleCoordinateToSource(cursorInfo.ptScreenPos.y - wgcCursorBounds.top,
                                                    static_cast<int32_t>(sourceHeight), boundsH) -
                            wgcCursorBitmap.hotspot_y;
+        if (!wgcCursorVisible || cx != wgcCursorPosX || cy != wgcCursorPosY) {
+            wgcCursorVisible = true;
+            wgcCursorPosX = cx;
+            wgcCursorPosY = cy;
+            ++visualGenerations.cursor;
+        }
+    };
+
+    auto drawWin32CursorGpu = [&]() -> bool {
+        if (useOdCapture || !m_state.config.capture_cursor || !wgcCursorVisible || wgcCursorBitmap.bgra.empty()) {
+            return true;
+        }
+
         const CursorSpriteClip clip =
-            ClipCursorSprite(cx, cy, wgcCursorBitmap.width, wgcCursorBitmap.height, static_cast<int32_t>(sourceWidth),
-                             static_cast<int32_t>(sourceHeight));
+            ClipCursorSprite(wgcCursorPosX, wgcCursorPosY, wgcCursorBitmap.width, wgcCursorBitmap.height,
+                             static_cast<int32_t>(sourceWidth), static_cast<int32_t>(sourceHeight));
         if (!clip.visible) {
             return true;
         }
@@ -1787,8 +1831,13 @@ void VideoThread::Run() {
     // size and its surfaces never change size — a resize is reported by
     // ContentSize instead) and created lazily from the first frame's format;
     // returns nullptr after recording the failure.
-    winrt::com_ptr<ID3D11Texture2D> wgcCapturedTex;
-    auto copyWgcFrame = [&](ID3D11Texture2D* rawTex) -> ID3D11Texture2D* {
+    // Two buffers, not one. The CFR loop keeps the previous frame in heldWgcTex
+    // while the next arrival lands in pendingWgcTex; with a single texture those
+    // two handles alias, so moving pending into held transfers no content and a
+    // recomposite of the "held" frame reads the newest capture instead of the
+    // one it is holding. The caller names the buffer it is still reading.
+    std::array<winrt::com_ptr<ID3D11Texture2D>, 2> wgcCapturedTex;
+    auto copyWgcFrame = [&](ID3D11Texture2D* rawTex, ID3D11Texture2D* inUse) -> ID3D11Texture2D* {
         D3D11_TEXTURE2D_DESC rawDesc{};
         rawTex->GetDesc(&rawDesc);
         // The pool surface must be the session's source size, or CopyResource
@@ -1803,7 +1852,8 @@ void VideoThread::Run() {
             m_state.RecordFailure(E_INVALIDARG, ErrorPhase::VideoCapture, err.str());
             return nullptr;
         }
-        if (wgcCapturedTex == nullptr) {
+        const size_t target = (inUse != nullptr && wgcCapturedTex[0].get() == inUse) ? 1 : 0;
+        if (wgcCapturedTex[target] == nullptr) {
             D3D11_TEXTURE2D_DESC desc{};
             desc.Width = sourceWidth;
             desc.Height = sourceHeight;
@@ -1817,7 +1867,7 @@ void VideoThread::Run() {
             // the VideoProcessor from a render-target texture.
             desc.BindFlags =
                 (hdrToneMapActive || hdrNativeActive) ? D3D11_BIND_SHADER_RESOURCE : D3D11_BIND_RENDER_TARGET;
-            const HRESULT copyHr = d3dDevice->CreateTexture2D(&desc, nullptr, wgcCapturedTex.put());
+            const HRESULT copyHr = d3dDevice->CreateTexture2D(&desc, nullptr, wgcCapturedTex[target].put());
             if (FAILED(copyHr)) {
                 char buf[80];
                 snprintf(buf, sizeof(buf), "CreateTexture2D(wgcCapturedTex) failed 0x%08lX",
@@ -1826,8 +1876,8 @@ void VideoThread::Run() {
                 return nullptr;
             }
         }
-        d3dContext->CopyResource(wgcCapturedTex.get(), rawTex);
-        return wgcCapturedTex.get();
+        d3dContext->CopyResource(wgcCapturedTex[target].get(), rawTex);
+        return wgcCapturedTex[target].get();
     };
 
     // First WGC frame captured by the wait loop below. WGC (like OD) only
@@ -2029,7 +2079,7 @@ void VideoThread::Run() {
                                 surface.as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
                             winrt::com_ptr<ID3D11Texture2D> tex;
                             if (SUCCEEDED(access->GetInterface(IID_PPV_ARGS(tex.put())))) {
-                                ID3D11Texture2D* const copied = copyWgcFrame(tex.get());
+                                ID3D11Texture2D* const copied = copyWgcFrame(tex.get(), nullptr);
                                 if (copied == nullptr) {
                                     // copyWgcFrame already recorded the failure.
                                     if (captureSession != nullptr)
@@ -2039,6 +2089,7 @@ void VideoThread::Run() {
                                     return;
                                 }
                                 seedWgcTex.copy_from(copied);
+                                ++visualGenerations.screen;
                             }
                         }
                         gotFirst = true;
@@ -3111,12 +3162,21 @@ void VideoThread::Run() {
                                 // Copy out of the pool while the frame object is
                                 // still alive — the pool recycles this surface as
                                 // soon as the frame is released (see wgcCapturedTex).
-                                ID3D11Texture2D* const copied = copyWgcFrame(tex.get());
+                                ID3D11Texture2D* const copied = copyWgcFrame(tex.get(), heldWgcTex.get());
                                 if (copied == nullptr) {
                                     // copyWgcFrame already recorded the failure.
                                     sourceLost = true;
                                 } else {
                                     pendingWgcTex.copy_from(copied);
+                                    // Every accepted screen sample advances the
+                                    // generation, exactly as the OD path does. The
+                                    // encoder-slot reuse test below compares frame
+                                    // keys, so a generation that stands still lets
+                                    // two different frames compare equal and an old
+                                    // slot be re-submitted instead of overwritten.
+                                    ++visualGenerations.screen;
+                                    if (!m_state.pause_requested.load())
+                                        m_state.diagnostics.OnScreenGenerationChanged();
                                 }
                             }
                         }
@@ -3317,12 +3377,15 @@ void VideoThread::Run() {
                 // Reopen() succeeds. Re-compositing is forbidden there — it touches
                 // display-tied GPU resources while the captured output is gone.
                 ID3D11Texture2D* const heldScreenTex = useOdCapture ? odCapturedTex.get() : heldWgcTex.get();
+                // Sampled before the key is taken, so a pointer move or overlay
+                // edit lands in this tick's key instead of the next one's.
+                sampleWgcCursor();
+                const WebcamOverlayLive overlay = sampleOverlay();
                 const VisualFrameKey currentVisualKey = MakeVisualFrameKey(visualGenerations);
                 const bool cursorOverlayMoved =
                     !haveLastCompositedKey ||
                     currentVisualKey.cursor_generation != lastCompositedKey.cursor_generation ||
                     currentVisualKey.overlay_generation != lastCompositedKey.overlay_generation;
-                const WebcamOverlayLive overlay = m_state.SnapshotWebcamOverlay();
                 const bool webcamMoved = overlay.enabled && webcamProviderAvailable &&
                                          (!haveLastCompositedKey ||
                                           currentVisualKey.webcam_generation != lastCompositedKey.webcam_generation);
@@ -3758,12 +3821,15 @@ void VideoThread::Run() {
                                 surface.as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
                             winrt::com_ptr<ID3D11Texture2D> tex;
                             if (SUCCEEDED(access->GetInterface(IID_PPV_ARGS(tex.put())))) {
-                                ID3D11Texture2D* const copied = copyWgcFrame(tex.get());
+                                ID3D11Texture2D* const copied = copyWgcFrame(tex.get(), nullptr);
                                 if (copied == nullptr) {
                                     // copyWgcFrame already recorded the failure.
                                     sourceLost = true;
                                 } else {
                                     latestTex.copy_from(copied);
+                                    ++visualGenerations.screen;
+                                    if (!m_state.pause_requested.load())
+                                        m_state.diagnostics.OnScreenGenerationChanged();
                                     latestFrameTicks100ns = frame.SystemRelativeTime().count();
                                     if (!m_state.pause_requested.load() && wgcLastFrameTicks100ns != 0 &&
                                         latestFrameTicks100ns > wgcLastFrameTicks100ns) {
@@ -3871,7 +3937,8 @@ void VideoThread::Run() {
                 if (slot >= 0 && hdrNativeActive) {
                     // Native HDR10 (VFR): composite webcam/cursor in linear scRGB
                     // FP16, then convert straight into the P010 slot.
-                    const WebcamOverlayLive overlay = m_state.SnapshotWebcamOverlay();
+                    sampleWgcCursor();
+                    const WebcamOverlayLive overlay = sampleOverlay();
                     const auto comp_t0 = std::chrono::steady_clock::now();
                     ID3D11Texture2D* nativeSrc = compositeFrameGpu(latestTex.get(), overlay);
                     const auto comp_t1 = std::chrono::steady_clock::now();
@@ -3927,7 +3994,8 @@ void VideoThread::Run() {
                     m_state.diagnostics.OnVideoTickTime(
                         tick_t1, std::chrono::duration<double, std::milli>(tick_t1 - tick_t0).count());
                 } else if (slot >= 0) {
-                    const WebcamOverlayLive overlay = m_state.SnapshotWebcamOverlay();
+                    sampleWgcCursor();
+                    const WebcamOverlayLive overlay = sampleOverlay();
                     const auto comp_t0 = std::chrono::steady_clock::now();
                     ID3D11Texture2D* sdrSourceTex = toneMapIfHdr(latestTex.get());
                     if (sdrSourceTex == nullptr) {

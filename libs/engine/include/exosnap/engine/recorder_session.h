@@ -104,6 +104,8 @@ struct WebcamOverlayLive {
     float chroma_tolerance = 0.40f;
     float chroma_softness = 0.15f;
     float chroma_spill_reduction = 0.30f;
+
+    bool operator==(const WebcamOverlayLive&) const = default;
 };
 
 } // namespace exosnap::engine
