@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Security;
 using ExoSnap.Verify.Capabilities;
 using ExoSnap.Verify.Processes;
@@ -74,6 +75,12 @@ public sealed class SandboxTransport : IDisposableOsTransport
 
     private static readonly TimeSpan LaunchTimeout = TimeSpan.FromSeconds(120);
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan MachineFreeTimeout = TimeSpan.FromMinutes(3);
+
+    // Every process Windows keeps alive for a running sandbox. Asked about rather
+    // than killed: one of these may belong to a sandbox a person opened themselves.
+    private static readonly string[] SandboxProcessNames =
+        ["WindowsSandbox", "WindowsSandboxClient", "WindowsSandboxServer", "WindowsSandboxRemoteSession"];
 
     private readonly ProcessRunner processes;
     private readonly ResolvedTool sandbox;
@@ -138,6 +145,15 @@ public sealed class SandboxTransport : IDisposableOsTransport
             return DisposableOsRun.Unavailable(this.UnavailableReason);
         }
 
+        // Asked before the launcher is started, never after: WindowsSandbox.exe
+        // reports a machine that is already running as a modal dialog rather than an
+        // exit code, which would stand on someone's desktop until they clicked it.
+        if (!await WaitForFreeMachineAsync(cancellationToken).ConfigureAwait(false))
+        {
+            return DisposableOsRun.Unavailable(
+                "a Windows Sandbox is already running on this machine and only one may run at a time");
+        }
+
         var staging = Path.Combine(this.stagingRoot, "sandbox-" + Guid.NewGuid().ToString("N"));
         try
         {
@@ -156,7 +172,13 @@ public sealed class SandboxTransport : IDisposableOsTransport
                     $"WindowsSandbox.exe exited {launch.ExitCode} without starting the worker: {launch.StandardError}");
             }
 
-            return await AwaitResultAsync(preparation, request.Timeout, cancellationToken).ConfigureAwait(false);
+            var outcome = await AwaitResultAsync(preparation, request.Timeout, cancellationToken).ConfigureAwait(false);
+
+            // The marker means the worker finished, not that the machine is gone.
+            // Returning while it still shuts down would hand the next gate a
+            // machine it cannot have.
+            await WaitForFreeMachineAsync(cancellationToken).ConfigureAwait(false);
+            return outcome;
         }
         finally
         {
@@ -266,6 +288,47 @@ public sealed class SandboxTransport : IDisposableOsTransport
         return result is null
             ? DisposableOsRun.Faulted("the sandbox result document is not valid JSON")
             : DisposableOsRun.Completed(result);
+    }
+
+    /// <summary>True once no sandbox is running, false when the wait ran out.</summary>
+    private static async Task<bool> WaitForFreeMachineAsync(CancellationToken cancellationToken)
+    {
+        var deadline = DateTime.UtcNow.Add(MachineFreeTimeout);
+        while (MachineIsBusy())
+        {
+            if (DateTime.UtcNow >= deadline)
+            {
+                return false;
+            }
+
+            await Task.Delay(PollInterval, cancellationToken).ConfigureAwait(false);
+        }
+
+        return true;
+    }
+
+    private static bool MachineIsBusy()
+    {
+        foreach (var name in SandboxProcessNames)
+        {
+            var processes = Process.GetProcessesByName(name);
+            try
+            {
+                if (processes.Length > 0)
+                {
+                    return true;
+                }
+            }
+            finally
+            {
+                foreach (var process in processes)
+                {
+                    process.Dispose();
+                }
+            }
+        }
+
+        return false;
     }
 
     private static void CollectEvidence(string staging, string? destination)
