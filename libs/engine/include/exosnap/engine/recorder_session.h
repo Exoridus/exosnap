@@ -141,8 +141,15 @@ enum class EffectiveCaptureBackend {
     return EffectiveCaptureBackend::WindowsGraphicsCapture;
 }
 
+// Structured-log spelling of the backend.
 [[nodiscard]] inline constexpr const char* CaptureBackendName(EffectiveCaptureBackend backend) noexcept {
     return backend == EffectiveCaptureBackend::DxgiOutputDuplication ? "dxgi_od" : "wgc";
+}
+
+// Session-report spelling. It differs from the log spelling by the separator
+// alone, and stays hyphenated because published reports are already read that way.
+[[nodiscard]] inline constexpr const char* CaptureBackendReportName(EffectiveCaptureBackend backend) noexcept {
+    return backend == EffectiveCaptureBackend::DxgiOutputDuplication ? "dxgi-od" : "wgc";
 }
 
 // ---------------------------------------------------------------------------

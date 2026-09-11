@@ -377,14 +377,15 @@ void VideoThread::Run() {
     DxgiOdCaptureSrc odSrc;
     winrt::Windows::Graphics::Capture::GraphicsCaptureItem item{nullptr};
 
-    // WGC (window) path: HDR facts of the window's hosting monitor, resolved once
-    // at session start via MonitorFromWindow. A mid-session move to another monitor
-    // keeps this initial decision (documented limitation). Unused on the OD path,
-    // which reads its facts from odSrc.DisplayFacts() instead.
+    // WGC path: HDR facts of the captured monitor, resolved once at session start.
+    // That is the target monitor itself, or the window's host via MonitorFromWindow.
+    // A mid-session window move to another monitor keeps this initial decision
+    // (documented limitation). Unused on the OD path, which reads its facts from
+    // odSrc.DisplayFacts() instead.
     HdrDisplayFacts wgcHdrFacts;
     HMONITOR wgcMonitor = nullptr;
     // WGC frame-pool format + capture mode. Defaults keep the historic BGRA8 / SDR
-    // window path; recomputed from wgcHdrFacts below when the target is a window.
+    // path; recomputed from wgcHdrFacts below on every WGC target.
     WgcCapturePlan wgcPlan;
 
     // scRGB->SDR tone-map knee, in reference-white multiples. Only an actively-
@@ -981,7 +982,7 @@ void VideoThread::Run() {
     DXGI_FORMAT hdrPqSrcFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
     HdrPqConverter hdrPqConverter;
 
-    // WGC (window) path decides its HDR handling up front from wgcPlan (the frame
+    // The WGC path decides its HDR handling up front from wgcPlan (the frame
     // pool format is *requested*, not negotiated from frames). A WGC FP16 pool is
     // always scRGB linear — never an already-PQ desktop — so hdrPqInputIsPq stays
     // false and hdrPqSrcFormat stays FP16 (the defaults above). The OD path leaves
@@ -1273,8 +1274,11 @@ void VideoThread::Run() {
         placement.h = overlay.overlay_h_norm;
         placement.mirror = overlay.mirror;
 
-        const int contentX = (useOdCapture && hasCrop) ? cropX : 0;
-        const int contentY = (useOdCapture && hasCrop) ? cropY : 0;
+        // Crop is a property of the monitor target, not of the backend that reads
+        // it: the blit and the encode geometry both key on hasCrop alone, and the
+        // overlay has to land in the same content rectangle they produce.
+        const int contentX = hasCrop ? cropX : 0;
+        const int contentY = hasCrop ? cropY : 0;
         return MapWebcamPlacementToContent(placement, contentX, contentY, static_cast<int>(sourceContentWidth),
                                            static_cast<int>(sourceContentHeight));
     };
@@ -1594,7 +1598,7 @@ void VideoThread::Run() {
         return gpuCompositor.Result();
     };
 
-    // --- WGC frame pool and session (Window-only path) ---
+    // --- WGC frame pool and session ---
     std::atomic<bool> sourceLost{false};
     // OD recovery hold state (Recover branch, i.e. DXGI_ERROR_ACCESS_LOST). While
     // holding, the encode loop keeps emitting at CFR cadence (the last frame is
@@ -1866,21 +1870,35 @@ void VideoThread::Run() {
             const FirstFrameWaitAction waitAction = FirstFrameWaitStep(odStartHolding, elapsed, kTimeoutSec);
             if (waitAction == FirstFrameWaitAction::TimeoutFail) {
                 if (!useOdCapture) {
-                    // Honest cause: name the window state and the exclusive-fullscreen
-                    // possibility instead of a bare "timeout" (a window in FSE cannot
-                    // be captured by WGC at all — record the monitor instead).
+                    // Honest cause instead of a bare "timeout". The window-state facts
+                    // are probed for window targets only, so a monitor WGC session must
+                    // not quote them: on that path they are always false and would name
+                    // a window that was never involved.
                     char buf[256];
-                    snprintf(buf, sizeof(buf),
-                             "WGC: no frame within 5 s (window minimized=%d cloaked=%d). A window in exclusive "
-                             "fullscreen cannot be captured — switch the game to borderless, or record the "
-                             "monitor instead.",
-                             windowMinimized ? 1 : 0, windowCloaked ? 1 : 0);
-                    logging::LogField fields[] = {{"backend", "wgc"},
-                                                  {"reason", "first_frame_timeout"},
-                                                  {"window_minimized", windowMinimized ? "true" : "false"},
-                                                  {"window_cloaked", windowCloaked ? "true" : "false"}};
-                    logging::log(logging::LogLevel::Warn, "video_thread", "WGC first-frame timeout",
-                                 std::span<const logging::LogField>(fields, std::size(fields)));
+                    if (targetIsMonitor) {
+                        snprintf(buf, sizeof(buf),
+                                 "WGC: no frame within 5 s for monitor target %s. The display may be asleep or "
+                                 "delivering no updates.",
+                                 target.description.c_str());
+                    } else {
+                        snprintf(buf, sizeof(buf),
+                                 "WGC: no frame within 5 s (window minimized=%d cloaked=%d). A window in exclusive "
+                                 "fullscreen cannot be captured — switch the game to borderless, or record the "
+                                 "monitor instead.",
+                                 windowMinimized ? 1 : 0, windowCloaked ? 1 : 0);
+                    }
+                    logging::LogField windowFields[] = {{"backend", "wgc"},
+                                                        {"reason", "first_frame_timeout"},
+                                                        {"target_kind", TargetKindName(target.kind)},
+                                                        {"window_minimized", BoolText(windowMinimized)},
+                                                        {"window_cloaked", BoolText(windowCloaked)}};
+                    logging::LogField monitorFields[] = {{"backend", "wgc"},
+                                                         {"reason", "first_frame_timeout"},
+                                                         {"target_kind", TargetKindName(target.kind)}};
+                    const std::span<const logging::LogField> fields =
+                        targetIsMonitor ? std::span<const logging::LogField>(monitorFields, std::size(monitorFields))
+                                        : std::span<const logging::LogField>(windowFields, std::size(windowFields));
+                    logging::log(logging::LogLevel::Warn, "video_thread", "WGC first-frame timeout", fields);
                     m_state.RecordFailure(HRESULT_FROM_WIN32(ERROR_TIMEOUT), ErrorPhase::VideoCapture, buf);
                     if (captureSession != nullptr)
                         captureSession.Close();
@@ -2813,7 +2831,7 @@ void VideoThread::Run() {
         constexpr int kSustainedLagResyncTicks = 3;
         int sustainedLagTicks = 0;
 
-        // Seed the first WGC frame from the wait loop so a static window still
+        // Seed the first WGC frame from the wait loop so a static source still
         // encodes from t=0 (WGC only delivers frames on repaint).
         winrt::com_ptr<ID3D11Texture2D> pendingWgcTex = std::move(seedWgcTex);
         // The seed is consumed. The drain path below tests seedWgcTex against
@@ -3766,7 +3784,7 @@ void VideoThread::Run() {
                     HandleWgcUnknownException(m_state, "VFR drain", sourceLost);
                 }
                 // Seed the first WGC frame from the wait loop so a static
-                // window still encodes at least one real frame (WGC only
+                // source still encodes at least one real frame (WGC only
                 // delivers frames on repaint).
                 if (latestTex == nullptr && seedWgcTex != nullptr) {
                     latestTex = std::move(seedWgcTex);

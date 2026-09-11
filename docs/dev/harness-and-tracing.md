@@ -272,3 +272,46 @@ is about, and `diagnostics-blocked` still carries its MP4 + FLAC blocker on top.
 The Edit fixture deliberately opens nothing: it never starts a decode or an
 export, so the player area reads `Preview unavailable` and the timeline tiles are
 placeholders. Everything around them is the real surface.
+
+## Headless recording — `--auto-record-bare` and `--capture-backend`
+
+`--auto-record` starts the recording harness inside the normal Quick frontend: a
+window appears, the Record preview runs its own capture of the same target, and
+the run competes with the GUI for the GPU. That is the right shape for verifying
+the product, and the wrong shape for measuring the recorder.
+
+`--auto-record-bare` runs the same harness on a `QCoreApplication` instead. No
+QML engine, no window, no preview capture, no focus taken from whatever the
+developer is doing — only the recording coordinator, on the real engine path. It
+requires `--auto-record`; on its own it is rejected rather than silently ignored.
+Everything else about the run is unchanged, so a measurement taken this way and a
+`--auto-record` run differ in the GUI load alone.
+
+`--capture-backend default|wgc` selects the capture backend for a monitor target.
+`default` is the product behaviour — monitor records through DXGI Output
+Duplication, window through Windows Graphics Capture. `wgc` records a **monitor**
+through Windows Graphics Capture, which the product never does on its own, and is
+rejected for any other target kind. Nothing about it is persisted: there is no
+setting, no preset field and no UI, and the next ordinary recording is back on
+duplication. It exists so the duplication path and the WGC path can be measured
+against the same monitor, the same encoder and the same source.
+
+Both flags are compiled in behind the same gate as the rest of the harness
+(`EXOSNAP_HARNESS_GATE`): every non-`Release` configuration has them, and an exact
+`Release` build only with `EXOSNAP_BUILD_BENCHMARK_HARNESS=ON`. A shipping build
+that is handed either flag reports that it needs a harness-enabled build and exits
+with code 2 — it never falls through into starting the GUI.
+
+For an optimized measurement without touching a shipping `Release` tree, build
+`RelWithDebInfo` in the existing multi-config tree: it is optimized, it carries
+symbols, and the harness gate leaves the harness enabled.
+
+```
+cmake --build build/windows-x64-debug --config RelWithDebInfo --target exosnap
+```
+
+Every capture session logs the WGC minimum update interval it asked for and the
+one Windows accepted (`supported`, `requested_ms`, `effective_ms`, `target_fps`),
+so a rate measurement can be attributed to the capture API or ruled out as its
+cause. The preview's capture hub reports `target_fps=unspecified`: it pumps on its
+own cadence and is not the recording.

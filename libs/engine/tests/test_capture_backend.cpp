@@ -32,5 +32,19 @@ TEST(CaptureBackend, DiagnosticNameDescribesResolvedBackend) {
     EXPECT_STREQ(CaptureBackendName(EffectiveCaptureBackend::WindowsGraphicsCapture), "wgc");
 }
 
+TEST(CaptureBackend, SessionReportNameKeepsThePublishedHyphenatedSpelling) {
+    EXPECT_STREQ(CaptureBackendReportName(EffectiveCaptureBackend::DxgiOutputDuplication), "dxgi-od");
+    EXPECT_STREQ(CaptureBackendReportName(EffectiveCaptureBackend::WindowsGraphicsCapture), "wgc");
+}
+
+TEST(CaptureBackend, SessionReportNameFollowsTheMonitorWgcOverride) {
+    RecorderConfig config;
+    config.target.kind = CaptureTarget::Kind::Monitor;
+    EXPECT_STREQ(CaptureBackendReportName(ResolveCaptureBackend(config)), "dxgi-od");
+
+    config.capture_backend = CaptureBackend::WindowsGraphicsCapture;
+    EXPECT_STREQ(CaptureBackendReportName(ResolveCaptureBackend(config)), "wgc");
+}
+
 } // namespace
 } // namespace exosnap::engine

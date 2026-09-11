@@ -3098,8 +3098,7 @@ RecordingCoordinator::BuildSessionReportJob(const UiRecordingResult& result) {
     exosnap::engine::RecorderConfig committed_config;
     if (LastCommittedRecorderConfig(&committed_config)) {
         inputs.capture_backend = QString::fromLatin1(
-            exosnap::engine::CaptureBackendName(exosnap::engine::ResolveCaptureBackend(committed_config)));
-        inputs.capture_backend.replace(QLatin1Char('_'), QLatin1Char('-'));
+            exosnap::engine::CaptureBackendReportName(exosnap::engine::ResolveCaptureBackend(committed_config)));
     }
 
     // Scrubbed output file name only (never a path) — support-correlation without PII.
