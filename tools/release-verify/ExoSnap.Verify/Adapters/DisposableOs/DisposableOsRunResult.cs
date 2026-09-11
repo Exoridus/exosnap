@@ -16,19 +16,50 @@ public sealed record DisposableOsStepResult(string Name, bool Ok, string Detail)
 /// <param name="Steps">Every step the worker reached, in run order.</param>
 public sealed record DisposableOsRunResult(IReadOnlyList<DisposableOsStepResult> Steps)
 {
-    /// <summary>Parses a worker's result document, or null when it is not valid JSON.</summary>
+    /// <summary>
+    /// Parses a worker's result document, or null when it is not valid JSON. A document
+    /// that is valid JSON but omits parts of a step is repaired rather than rejected:
+    /// a step without a name matches no required step and so reads as never reached.
+    /// </summary>
     public static DisposableOsRunResult? Parse(string json)
     {
         ArgumentNullException.ThrowIfNull(json);
         try
         {
             var document = JsonSerializer.Deserialize(json, DisposableOsJson.Default.DisposableOsRunResult);
-            return document is null ? null : document with { Steps = document.Steps ?? [] };
+            return document is null ? null : document with { Steps = Repair(document.Steps) };
         }
         catch (JsonException)
         {
             return null;
         }
+    }
+
+    // The document is written by a script running inside a disposable OS that may be
+    // torn down mid-write, so JSON that parses is no guarantee that every step object
+    // carries every member. Deserialization fills those with null despite the
+    // non-nullable record signature; the verdict rule must see data, not a crash.
+    private static List<DisposableOsStepResult> Repair(IReadOnlyList<DisposableOsStepResult>? steps)
+    {
+        if (steps is null)
+        {
+            return [];
+        }
+
+        var repaired = new List<DisposableOsStepResult>(steps.Count);
+        foreach (var step in steps)
+        {
+            if (step is null)
+            {
+                continue;
+            }
+
+            repaired.Add(step.Name is null || step.Detail is null
+                ? step with { Name = step.Name ?? string.Empty, Detail = step.Detail ?? string.Empty }
+                : step);
+        }
+
+        return repaired;
     }
 }
 
@@ -65,7 +96,19 @@ public sealed record DisposableOsVerdict(DisposableOsVerdictKind Kind, string Me
             return new DisposableOsVerdict(DisposableOsVerdictKind.Unverified, "no result document was produced");
         }
 
-        var byName = result.Steps.ToDictionary(step => step.Name, StringComparer.Ordinal);
+        // A worker that recorded the same step twice is malformed, so the not-ok
+        // observation is kept: a later retry must never overwrite a recorded failure.
+        var byName = new Dictionary<string, DisposableOsStepResult>(StringComparer.Ordinal);
+        foreach (var step in result.Steps)
+        {
+            if (byName.TryGetValue(step.Name, out var seen) && !seen.Ok)
+            {
+                continue;
+            }
+
+            byName[step.Name] = step;
+        }
+
         var failed = new List<string>();
         var missing = new List<string>();
         foreach (var name in requiredSteps)

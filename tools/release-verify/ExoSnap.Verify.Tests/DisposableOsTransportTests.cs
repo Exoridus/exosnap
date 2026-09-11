@@ -54,4 +54,50 @@ public sealed class DisposableOsVerdictTests
     {
         Assert.Null(DisposableOsRunResult.Parse("{ not json"));
     }
+
+    [Fact]
+    public void AStepWithoutANameIsUnverifiedRatherThanACrash()
+    {
+        var result = DisposableOsRunResult.Parse("""{"steps":[{"ok":true,"detail":"ran"}]}""");
+
+        var verdict = DisposableOsVerdict.From(result, DeclineSteps);
+
+        Assert.Equal(DisposableOsVerdictKind.Unverified, verdict.Kind);
+        Assert.Contains("install-base", verdict.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AStepWithoutADetailStillReportsItsFailure()
+    {
+        var result = DisposableOsRunResult.Parse(
+            """{"steps":[{"name":"install-base","ok":true,"detail":"ran"},{"name":"decline-offer","ok":false}]}""");
+
+        var verdict = DisposableOsVerdict.From(result, DeclineSteps);
+
+        Assert.Equal(DisposableOsVerdictKind.Fail, verdict.Kind);
+        Assert.Contains("decline-offer", verdict.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ANullStepEntryIsIgnored()
+    {
+        var result = DisposableOsRunResult.Parse("""{"steps":[null,{"name":"install-base","ok":true,"detail":"ran"}]}""");
+
+        var verdict = DisposableOsVerdict.From(result, DeclineSteps);
+
+        Assert.Equal(DisposableOsVerdictKind.Unverified, verdict.Kind);
+        Assert.Contains("decline-offer", verdict.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ADuplicateStepCannotMaskAFailure()
+    {
+        var result = DisposableOsRunResult.Parse(
+            """{"steps":[{"name":"decline-apply","ok":false,"detail":"applied anyway"},{"name":"decline-apply","ok":true,"detail":"retried"}]}""");
+
+        var verdict = DisposableOsVerdict.From(result, DeclineSteps);
+
+        Assert.Equal(DisposableOsVerdictKind.Fail, verdict.Kind);
+        Assert.Contains("applied anyway", verdict.Message, StringComparison.Ordinal);
+    }
 }
