@@ -294,12 +294,17 @@ bool HdrPqConverter::Convert(ID3D11Texture2D* src, ID3D11Texture2D* dst, std::st
     context_->VSSetShader(vertex_shader_.get(), nullptr, 0);
     context_->PSSetSamplers(0, 1, &sampler);
     context_->PSSetConstantBuffers(0, 1, &constants);
-    context_->PSSetShaderResources(0, 1, &srv);
 
     // --- Luma plane (full encode resolution) ---
     const float luma_clear[4] = {kLumaBlack, kLumaBlack, kLumaBlack, kLumaBlack};
     context_->ClearRenderTargetView(luma_rtv, luma_clear); // letterbox bars
     context_->OMSetRenderTargets(1, &luma_rtv, nullptr);
+    // Output first, input second. Binding src as a shader resource while it is
+    // still bound as a render target elsewhere makes D3D11 resolve the hazard by
+    // nulling this slot, and the OMSetRenderTargets above would not restore it --
+    // both draws would then sample nothing and encode flat black. Same order as
+    // HdrToneMapper::Convert.
+    context_->PSSetShaderResources(0, 1, &srv);
     D3D11_VIEWPORT luma_vp{};
     luma_vp.TopLeftX = static_cast<float>(geom_.content_x);
     luma_vp.TopLeftY = static_cast<float>(geom_.content_y);

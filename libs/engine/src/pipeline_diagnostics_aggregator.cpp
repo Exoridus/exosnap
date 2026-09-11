@@ -188,6 +188,7 @@ void PipelineDiagnosticsAggregator::Reset(uint64_t generation, const Diagnostics
     sustain_audio_ = 0;
     sustain_muxer_ = 0;
     sustain_disk_ = 0;
+    sustain_gpu_ = 0;
     last_dropped_total_ = 0;
     last_audio_disc_ = 0;
 

@@ -3440,7 +3440,13 @@ void VideoThread::Run() {
                     }
                     if (useOdCapture) {
                         odCapturedTexValid = false;
-                    } else {
+                    } else if (pendingWgcTex != nullptr) {
+                        // Only when there IS a fresh frame to rotate in. This tick
+                        // may have recomposited the HELD frame instead (no fresh
+                        // source), and rotating a null pending over it would throw
+                        // the held frame away -- leaving the next tick with nothing
+                        // to recomposite, so a still source freezes the cursor and
+                        // the webcam overlay until it next repaints.
                         heldWgcTex = std::move(pendingWgcTex);
                         // Consumed. The next iteration tests pendingWgcTex against
                         // nullptr to detect a fresh frame, so clear it explicitly
@@ -3494,7 +3500,13 @@ void VideoThread::Run() {
                     }
                     if (useOdCapture) {
                         odCapturedTexValid = false;
-                    } else {
+                    } else if (pendingWgcTex != nullptr) {
+                        // Only when there IS a fresh frame to rotate in. This tick
+                        // may have recomposited the HELD frame instead (no fresh
+                        // source), and rotating a null pending over it would throw
+                        // the held frame away -- leaving the next tick with nothing
+                        // to recomposite, so a still source freezes the cursor and
+                        // the webcam overlay until it next repaints.
                         heldWgcTex = std::move(pendingWgcTex);
                         // Consumed. The next iteration tests pendingWgcTex against
                         // nullptr to detect a fresh frame, so clear it explicitly
