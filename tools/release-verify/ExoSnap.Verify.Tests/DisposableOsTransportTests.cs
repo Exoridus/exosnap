@@ -339,6 +339,27 @@ public sealed class SandboxTransportTests : IDisposable
     }
 
     [Fact]
+    public void TheGuestEndsItselfSoTheNextRunCanHaveTheMachine()
+    {
+        var worker = this.WriteWorker("worker.ps1");
+        var staging = Path.Combine(this.StagingRoot, "run");
+
+        var preparation = this.Transport().Prepare(
+            staging,
+            new DisposableOsWorkerRequest("worker.ps1", [worker], ["-UpdateChannel", "preview"]));
+
+        var launcher = Path.Combine(staging, "sandbox-run.ps1");
+        Assert.True(File.Exists(launcher));
+        Assert.Contains("shutdown.exe /s /f /t 0", File.ReadAllText(launcher), StringComparison.Ordinal);
+
+        // The worker is launched through the wrapper and arrives as its first
+        // argument, so the shutdown runs whatever the worker did.
+        var configuration = File.ReadAllText(preparation.ConfigurationPath);
+        Assert.Contains(@"-File &quot;C:\Users\WDAGUtilityAccount\Desktop\run\sandbox-run.ps1&quot;", configuration, StringComparison.Ordinal);
+        Assert.Contains(@"&quot;C:\Users\WDAGUtilityAccount\Desktop\run\worker.ps1&quot; &quot;-UpdateChannel&quot;", configuration, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void AWorkerThatIsNotStagedIsAFailureRatherThanAnUnrunnableConfiguration()
     {
         var staging = Path.Combine(this.StagingRoot, "run");

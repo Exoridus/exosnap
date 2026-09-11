@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.RegularExpressions;
+using ExoSnap.Verify.Windows;
 
 namespace ExoSnap.Verify.Gates;
 
@@ -29,6 +30,10 @@ public static partial class ReleaseMsiArtifact
 {
     /// <summary>The variable naming the installer explicitly.</summary>
     public const string PathVariable = "EXOSNAP_RELEASE_MSI";
+
+    private const string ExpectedProductName = "ExoSnap";
+
+    private const string ExpectedManufacturer = "Codexo";
 
     /// <summary>Locates the installer for an artifact, or explains why it could not.</summary>
     /// <param name="executablePath">The bound portable executable to look beside.</param>
@@ -92,6 +97,23 @@ public static partial class ReleaseMsiArtifact
             return NotFound(
                 $"'{name}' is not named like a published release (ExoSnap-<version>-windows-x64.msi), " +
                 "so it is not identified as the artifact under test");
+        }
+
+        // The package's own claim about itself, not the file name's. A renamed
+        // third-party installer passes the pattern above and fails here.
+        var properties = MsiPackage.ReadProperties(path);
+        if (properties is null)
+        {
+            return NotFound($"the Property table of '{name}' could not be read; it is not identified");
+        }
+
+        properties.TryGetValue("ProductName", out var productName);
+        properties.TryGetValue("Manufacturer", out var manufacturer);
+        if (productName != ExpectedProductName || manufacturer != ExpectedManufacturer)
+        {
+            return NotFound(
+                $"'{name}' declares ProductName '{productName}' by '{manufacturer}'; this gate installs and " +
+                $"uninstalls what it is given, so it refuses anything but {ExpectedProductName} by {ExpectedManufacturer}");
         }
 
         using var stream = File.OpenRead(path);

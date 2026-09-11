@@ -113,19 +113,19 @@ public sealed class ChocolateyRehearsalGate : IScenarioBody
     private static readonly string[] RequiredSteps =
         ["prepare", "pack", "removeExisting", "install", "uninstall", "restore"];
 
-    private readonly Func<string, string?> readEnvironment;
+    private readonly Func<string, ReleaseMsiLookup> locateMsi;
 
-    /// <summary>Creates the gate reading the real process environment.</summary>
+    /// <summary>Creates the gate identifying the installer on the real machine.</summary>
     public ChocolateyRehearsalGate()
-        : this(Environment.GetEnvironmentVariable)
+        : this(executablePath => ReleaseMsiArtifact.Locate(executablePath, Environment.GetEnvironmentVariable))
     {
     }
 
-    /// <summary>Creates the gate with an injected environment reader.</summary>
-    public ChocolateyRehearsalGate(Func<string, string?> readEnvironment)
+    /// <summary>Creates the gate with an injected installer lookup.</summary>
+    public ChocolateyRehearsalGate(Func<string, ReleaseMsiLookup> locateMsi)
     {
-        ArgumentNullException.ThrowIfNull(readEnvironment);
-        this.readEnvironment = readEnvironment;
+        ArgumentNullException.ThrowIfNull(locateMsi);
+        this.locateMsi = locateMsi;
     }
 
     /// <inheritdoc/>
@@ -146,7 +146,7 @@ public sealed class ChocolateyRehearsalGate : IScenarioBody
             return ScenarioResult.Unavailable($"{WorkerScriptPath} is missing");
         }
 
-        var msi = ReleaseMsiArtifact.Locate(services.Artifact.ExecutablePath, this.readEnvironment);
+        var msi = this.locateMsi(services.Artifact.ExecutablePath);
         if (msi.Path is null)
         {
             return ScenarioResult.Unavailable(msi.Detail);

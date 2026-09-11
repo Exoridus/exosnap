@@ -53,6 +53,25 @@ public sealed class SandboxTransport : IDisposableOsTransport
 
     private const string EvidenceLeaf = "evidence";
 
+    private const string LauncherFileName = "sandbox-run.ps1";
+
+    // Windows runs at most one sandbox per machine, so a machine left running after
+    // its worker finished blocks every later gate with "only one instance of Windows
+    // Sandbox is allowed". Nothing on the host can end a specific sandbox without
+    // guessing at processes that may belong to a person's own session, so the guest
+    // ends itself. $args rather than a param block: the worker's own named
+    // parameters must not bind to this wrapper.
+    private const string LauncherScript = """
+        $worker = $args[0]
+        $rest = if ($args.Count -gt 1) { @($args[1..($args.Count - 1)]) } else { @() }
+        try {
+            & $worker @rest
+        }
+        finally {
+            shutdown.exe /s /f /t 0
+        }
+        """;
+
     private static readonly TimeSpan LaunchTimeout = TimeSpan.FromSeconds(120);
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(2);
 
@@ -196,6 +215,7 @@ public sealed class SandboxTransport : IDisposableOsTransport
                 markerPath);
         }
 
+        File.WriteAllText(Path.Combine(staging, LauncherFileName), LauncherScript);
         File.WriteAllText(
             configurationPath,
             this.BuildConfiguration(staging, request, staged));
@@ -338,9 +358,10 @@ public sealed class SandboxTransport : IDisposableOsTransport
         // Double quotes, not the shell-style single quotes: the logon command is a
         // Windows command line, and the guest's argument parser passes a single
         // quote through as part of the value rather than as quoting.
-        var quoted = string.Join(' ', arguments.Select(Quote));
+        var quoted = string.Join(' ', arguments.Prepend(guestWorker).Select(Quote));
+        var guestLauncher = Path.Combine(guestStaging, LauncherFileName);
         var command = SecurityElement.Escape(
-            $"{Quote(guestShell)} -ExecutionPolicy Bypass -NoProfile -File {Quote(guestWorker)} {quoted}");
+            $"{Quote(guestShell)} -ExecutionPolicy Bypass -NoProfile -File {Quote(guestLauncher)} {quoted}");
 
         return $"""
             <Configuration>

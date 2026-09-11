@@ -204,6 +204,11 @@ public sealed class UpdateAcceptGateTests : IDisposable
 /// <summary>REL-PKG-CHOCO-001: ChocolateyRehearsalGate.</summary>
 public sealed class ChocolateyRehearsalGateTests
 {
+    private const string FakeDigest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    private static readonly ReleaseMsiLookup NoInstaller =
+        new(null, string.Empty, "no ExoSnap-<version>-windows-x64.msi was found beside the bound artifact");
+
     private static readonly DisposableOsRunResult RehearsalPassed = new(
     [
         new("prepare", true, "nuspec rewritten"),
@@ -220,7 +225,7 @@ public sealed class ChocolateyRehearsalGateTests
         using var harness = await GateHarness.CreateAsync(
             "REL-PKG-CHOCO-001", DisposableOsGateFixture.StageChocoWorker, TestContext.Current.CancellationToken);
 
-        var result = await new ChocolateyRehearsalGate(_ => null).RunAsync(
+        var result = await new ChocolateyRehearsalGate(_ => NoInstaller).RunAsync(
             harness.Context, TestContext.Current.CancellationToken);
 
         Assert.Equal(ScenarioOutcome.Unavailable, result.Outcome);
@@ -232,7 +237,7 @@ public sealed class ChocolateyRehearsalGateTests
     {
         using var harness = await HarnessAsync(DisposableOsRun.Completed(RehearsalPassed));
 
-        var result = await new ChocolateyRehearsalGate(_ => null).RunAsync(
+        var result = await new ChocolateyRehearsalGate(_ => NoInstaller).RunAsync(
             harness.Context, TestContext.Current.CancellationToken);
 
         Assert.Equal(ScenarioOutcome.Unavailable, result.Outcome);
@@ -245,7 +250,7 @@ public sealed class ChocolateyRehearsalGateTests
         using var harness = await HarnessAsync(DisposableOsRun.Completed(RehearsalPassed));
         var msi = DisposableOsGateFixture.StageReleaseMsi(harness);
 
-        var result = await new ChocolateyRehearsalGate(_ => msi).RunAsync(
+        var result = await new ChocolateyRehearsalGate(_ => new ReleaseMsiLookup(msi, FakeDigest, string.Empty)).RunAsync(
             harness.Context, TestContext.Current.CancellationToken);
 
         Assert.Equal(ScenarioOutcome.Pass, result.Outcome);
@@ -276,7 +281,7 @@ public sealed class ChocolateyRehearsalGateTests
         ])));
         var msi = DisposableOsGateFixture.StageReleaseMsi(harness);
 
-        var result = await new ChocolateyRehearsalGate(_ => msi).RunAsync(
+        var result = await new ChocolateyRehearsalGate(_ => new ReleaseMsiLookup(msi, FakeDigest, string.Empty)).RunAsync(
             harness.Context, TestContext.Current.CancellationToken);
 
         Assert.Equal(ScenarioOutcome.Fail, result.Outcome);
@@ -339,29 +344,17 @@ public sealed class ReleaseMsiArtifactTests : IDisposable
     }
 
     [Fact]
-    public void ASidecarThatDisagreesWithTheFileMeansTheseAreNotTheReleasedBytes()
+    public void APublishedNameOverAnythingButAnInstallerIsNotIdentified()
     {
+        // The name pattern is the cheap half of identification; the package's own
+        // Property table is the half a renamed file cannot pass.
         var msi = Path.Combine(this.directory, "ExoSnap-0.9.0-windows-x64.msi");
-        File.WriteAllText(msi, "a");
-        File.WriteAllText(msi + ".sha256", new string('0', 64));
+        File.WriteAllText(msi, "not an installer");
 
         var lookup = ReleaseMsiArtifact.Locate(this.ExePath(), _ => null);
 
         Assert.Null(lookup.Path);
-        Assert.Contains("sidecar", lookup.Detail, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void APublishedNameBesideTheArtifactIsFoundAndHashed()
-    {
-        var msi = Path.Combine(this.directory, "ExoSnap-0.9.0-windows-x64.msi");
-        File.WriteAllText(msi, "a");
-
-        var lookup = ReleaseMsiArtifact.Locate(this.ExePath(), _ => null);
-
-        Assert.Equal(msi, lookup.Path);
-        Assert.Equal(64, lookup.Sha256.Length);
-        Assert.Equal(lookup.Sha256, lookup.Sha256.ToLowerInvariant());
+        Assert.Contains("Property table", lookup.Detail, StringComparison.Ordinal);
     }
 
     private string ExePath() => Path.Combine(this.directory, "exosnap.exe");

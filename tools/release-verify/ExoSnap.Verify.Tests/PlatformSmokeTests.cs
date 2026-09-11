@@ -4,6 +4,7 @@ using ExoSnap.Verify.Adapters.Envctl;
 using ExoSnap.Verify.Adapters.Ffprobe;
 using ExoSnap.Verify.Capabilities;
 using ExoSnap.Verify.Engine;
+using ExoSnap.Verify.Gates;
 using ExoSnap.Verify.Processes;
 using ExoSnap.Verify.Windows;
 using ExoSnap.Verify.Windows.Uia;
@@ -234,6 +235,25 @@ public sealed class PlatformSmokeTests
         var step = Assert.Single(run.Result!.Steps);
         Assert.Equal("ran", step.Name);
         Assert.True(step.Ok);
+    }
+
+    [Fact]
+    public void ARealInstallerDeclaresTheProductUnderTest()
+    {
+        var pinned = Environment.GetEnvironmentVariable(ReleaseMsiArtifact.PathVariable);
+        if (string.IsNullOrWhiteSpace(pinned) || !File.Exists(pinned))
+        {
+            Assert.Skip(
+                $"no installer to read: set {ReleaseMsiArtifact.PathVariable} to a published ExoSnap MSI");
+            return;
+        }
+
+        var properties = MsiPackage.ReadProperties(pinned);
+
+        Assert.NotNull(properties);
+        Assert.Equal("ExoSnap", properties!["ProductName"]);
+        Assert.Equal("Codexo", properties["Manufacturer"]);
+        Assert.Matches(@"^\d+\.\d+\.\d+", properties["ProductVersion"]);
     }
 
     [Fact]
