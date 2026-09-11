@@ -51,6 +51,8 @@ public sealed class SandboxTransport : IDisposableOsTransport
     // inside the virtual machine.
     private const string GuestDesktop = @"C:\Users\WDAGUtilityAccount\Desktop";
 
+    private const string EvidenceLeaf = "evidence";
+
     private static readonly TimeSpan LaunchTimeout = TimeSpan.FromSeconds(120);
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(2);
 
@@ -139,6 +141,9 @@ public sealed class SandboxTransport : IDisposableOsTransport
         }
         finally
         {
+            // Before the staging goes, and whatever the verdict was: a run that
+            // faulted is the one whose evidence is worth the most.
+            CollectEvidence(staging, request.EvidenceDirectory);
             TryDelete(staging);
         }
     }
@@ -175,6 +180,11 @@ public sealed class SandboxTransport : IDisposableOsTransport
             }
 
             staged.Add(leaf);
+        }
+
+        if (request.EvidenceDirectory is not null)
+        {
+            Directory.CreateDirectory(Path.Combine(staging, EvidenceLeaf));
         }
 
         if (!File.Exists(Path.Combine(staging, request.WorkerFileName)))
@@ -238,6 +248,31 @@ public sealed class SandboxTransport : IDisposableOsTransport
             : DisposableOsRun.Completed(result);
     }
 
+    private static void CollectEvidence(string staging, string? destination)
+    {
+        if (destination is null)
+        {
+            return;
+        }
+
+        var produced = Path.Combine(staging, EvidenceLeaf);
+        if (!Directory.Exists(produced))
+        {
+            return;
+        }
+
+        try
+        {
+            CopyDirectory(produced, destination);
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+
     private static void CopyDirectory(string source, string destination)
     {
         Directory.CreateDirectory(destination);
@@ -291,6 +326,12 @@ public sealed class SandboxTransport : IDisposableOsTransport
             .Append("-StagingDirectory").Append(guestStaging)
             .Append("-ResultPath").Append(Path.Combine(guestStaging, "result.json"))
             .Append("-MarkerPath").Append(Path.Combine(guestStaging, "done.marker"));
+
+        if (request.EvidenceDirectory is not null)
+        {
+            arguments = arguments
+                .Append("-EvidenceDirectory").Append(Path.Combine(guestStaging, EvidenceLeaf));
+        }
 
         // Quoted argument by argument rather than joined once: a staged path carries
         // the campaign id and, on a machine whose user name has a space, a space.

@@ -63,6 +63,7 @@ public static class ReleaseCatalog
         "REL-UPD-PORTABLE-001" => new PortableUpdateGate(),
         "REL-UPD-MSI-DECLINE-001" => new UpdateDeclineGate(),
         "REL-UPD-MSI-001" => new UpdateAcceptGate(),
+        "REL-PKG-CHOCO-001" => new ChocolateyRehearsalGate(),
         "REL-VIS-OVERLAY-001" => new OverlayAppearanceGate(),
         "REL-VIS-NOTIFY-001" => new NotificationSeverityGate(),
         "REL-JOURNEY-001" => new ProductJourneyGate(),
@@ -382,7 +383,8 @@ public static class ReleaseCatalog
             requires: [CapabilityRequirement.Is(CapabilityKeys.SandboxAvailable, "true")],
             oracle: ["chocolatey", "filesystem", "registry"],
             optIn: true,
-            source: "docs/release-checklist.md section 8 (Chocolatey)"),
+            source: "docs/release-checklist.md section 8 (Chocolatey)",
+            dependsOn: ["REL-UPD-MSI-001"]),
 
         Describe(
             id: "REL-JOURNEY-001",

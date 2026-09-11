@@ -26,6 +26,15 @@ public sealed record DisposableOsWorkerRequest(
 {
     /// <summary>How long a run may take before it is reported faulted.</summary>
     public TimeSpan Timeout { get; init; } = TimeSpan.FromMinutes(30);
+
+    /// <summary>
+    /// Where the worker's evidence is copied back to on the host, or null when the
+    /// worker produces none. Set it only for a worker that declares an
+    /// <c>-EvidenceDirectory</c> parameter: the transport creates that directory
+    /// inside the guest, passes it, and copies what the worker wrote back here
+    /// before the disposable machine and its staging are discarded.
+    /// </summary>
+    public string? EvidenceDirectory { get; init; }
 }
 
 /// <summary>How one disposable-OS worker run ended.</summary>

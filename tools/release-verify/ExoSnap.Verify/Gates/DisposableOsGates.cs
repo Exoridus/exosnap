@@ -85,6 +85,100 @@ public sealed class UpdateAcceptGate : IScenarioBody
         DisposableOsUpdateRun.ExecuteAsync(context, this.readBaseMsi(), RequiredSteps, cancellationToken);
 }
 
+/// <summary>
+/// REL-PKG-CHOCO-001: the Chocolatey package installs, uninstalls and leaves the
+/// machine as it was.
+/// </summary>
+/// <remarks>
+/// The only gate that installs software from a package manager, so it runs on a
+/// disposable machine rather than the real one. The release MSI is installed first
+/// and reinstalled by the worker's own finally block whatever happens, because the
+/// rehearsal asserts that the package's uninstall leaves the user's configuration
+/// directory alone and that directory has to have content before "unchanged" means
+/// anything. The Visual C++ redistributable a Chocolatey dependency may upgrade is
+/// deliberately not rolled back - downgrading a runtime is worse than the change -
+/// and its version before and after is recorded in the worker's evidence.
+/// </remarks>
+public sealed class ChocolateyRehearsalGate : IScenarioBody
+{
+    /// <summary>The guest worker script, staged from the repository root.</summary>
+    public const string WorkerFileName = "sandbox-choco-worker.ps1";
+
+    /// <summary>Where the worker lives, relative to the repository root.</summary>
+    public const string WorkerScriptPath = "scripts/lib/" + WorkerFileName;
+
+    /// <summary>Where the tracked package sources live, relative to the repository root.</summary>
+    public const string PackageSourcePath = "packaging/chocolatey";
+
+    private static readonly string[] RequiredSteps =
+        ["prepare", "pack", "removeExisting", "install", "uninstall", "restore"];
+
+    private readonly Func<string, string?> readEnvironment;
+
+    /// <summary>Creates the gate reading the real process environment.</summary>
+    public ChocolateyRehearsalGate()
+        : this(Environment.GetEnvironmentVariable)
+    {
+    }
+
+    /// <summary>Creates the gate with an injected environment reader.</summary>
+    public ChocolateyRehearsalGate(Func<string, string?> readEnvironment)
+    {
+        ArgumentNullException.ThrowIfNull(readEnvironment);
+        this.readEnvironment = readEnvironment;
+    }
+
+    /// <inheritdoc/>
+    public async Task<ScenarioResult> RunAsync(ScenarioContext context, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        var services = context.RequireServices();
+
+        var packageSource = Path.Combine(services.Artifact.RepositoryRoot, "packaging", "chocolatey");
+        if (!Directory.Exists(packageSource))
+        {
+            return ScenarioResult.Unavailable($"{PackageSourcePath} is missing");
+        }
+
+        var worker = Path.Combine(services.Artifact.RepositoryRoot, WorkerScriptPath);
+        if (!File.Exists(worker))
+        {
+            return ScenarioResult.Unavailable($"{WorkerScriptPath} is missing");
+        }
+
+        var msi = ReleaseMsiArtifact.Locate(services.Artifact.ExecutablePath, this.readEnvironment);
+        if (msi.Path is null)
+        {
+            return ScenarioResult.Unavailable(msi.Detail);
+        }
+
+        // The package source stays a directory: the worker reads
+        // tools/chocolateyinstall.ps1 underneath it, so flattening it into the
+        // staging directory would lose the only structure it depends on.
+        var request = new DisposableOsWorkerRequest(
+            WorkerFileName,
+            [worker, msi.Path, packageSource],
+            [
+                "-PackageSource", Path.GetFileName(packageSource),
+                "-MsiPath", Path.GetFileName(msi.Path),
+                "-MsiSha256", msi.Sha256,
+            ])
+        {
+            EvidenceDirectory = context.EvidenceDirectory,
+        };
+        var run = await services.DisposableOs.RunAsync(request, cancellationToken).ConfigureAwait(false);
+
+        return run.Kind switch
+        {
+            DisposableOsRunKind.Unavailable => ScenarioResult.Unavailable(run.Detail),
+            DisposableOsRunKind.Faulted => ScenarioResult.InfrastructureError(run.Detail),
+            DisposableOsRunKind.Completed => DisposableOsUpdateRun.ToScenarioResult(
+                DisposableOsVerdict.From(run.Result, RequiredSteps)),
+            _ => ScenarioResult.InfrastructureError($"unrecognized disposable-OS run kind {run.Kind}"),
+        };
+    }
+}
+
 /// <summary>What the two update gates do identically apart from which steps they require.</summary>
 internal static class DisposableOsUpdateRun
 {

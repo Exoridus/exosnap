@@ -301,6 +301,44 @@ public sealed class SandboxTransportTests : IDisposable
     }
 
     [Fact]
+    public void AnEvidenceDirectoryIsCreatedInTheGuestAndPassedToTheWorker()
+    {
+        var worker = this.WriteWorker("choco-worker.ps1");
+        var staging = Path.Combine(this.StagingRoot, "run");
+
+        var preparation = this.Transport().Prepare(
+            staging,
+            new DisposableOsWorkerRequest("choco-worker.ps1", [worker], [])
+            {
+                EvidenceDirectory = Path.Combine(this.root, "collected"),
+            });
+
+        Assert.Null(preparation.Failure);
+        Assert.True(Directory.Exists(Path.Combine(staging, "evidence")));
+        Assert.Contains(
+            @"-EvidenceDirectory&quot; &quot;C:\Users\WDAGUtilityAccount\Desktop\run\evidence&quot;",
+            File.ReadAllText(preparation.ConfigurationPath),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AWorkerWithNoEvidenceDirectoryIsNotPassedOne()
+    {
+        var worker = this.WriteWorker("update-worker.ps1");
+        var staging = Path.Combine(this.StagingRoot, "run");
+
+        var preparation = this.Transport().Prepare(
+            staging,
+            new DisposableOsWorkerRequest("update-worker.ps1", [worker], []));
+
+        Assert.False(Directory.Exists(Path.Combine(staging, "evidence")));
+        Assert.DoesNotContain(
+            "-EvidenceDirectory",
+            File.ReadAllText(preparation.ConfigurationPath),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void AWorkerThatIsNotStagedIsAFailureRatherThanAnUnrunnableConfiguration()
     {
         var staging = Path.Combine(this.StagingRoot, "run");

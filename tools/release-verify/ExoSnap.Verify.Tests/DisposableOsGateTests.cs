@@ -201,12 +201,211 @@ public sealed class UpdateAcceptGateTests : IDisposable
         TestContext.Current.CancellationToken);
 }
 
+/// <summary>REL-PKG-CHOCO-001: ChocolateyRehearsalGate.</summary>
+public sealed class ChocolateyRehearsalGateTests
+{
+    private static readonly DisposableOsRunResult RehearsalPassed = new(
+    [
+        new("prepare", true, "nuspec rewritten"),
+        new("pack", true, "packed"),
+        new("removeExisting", true, "no prior install"),
+        new("install", true, "installed"),
+        new("uninstall", true, "uninstalled"),
+        new("restore", true, "release MSI reinstalled"),
+    ]);
+
+    [Fact]
+    public async Task IsUnavailableWhenThePackageSourceIsMissing()
+    {
+        using var harness = await GateHarness.CreateAsync(
+            "REL-PKG-CHOCO-001", DisposableOsGateFixture.StageChocoWorker, TestContext.Current.CancellationToken);
+
+        var result = await new ChocolateyRehearsalGate(_ => null).RunAsync(
+            harness.Context, TestContext.Current.CancellationToken);
+
+        Assert.Equal(ScenarioOutcome.Unavailable, result.Outcome);
+        Assert.Contains("packaging/chocolatey", result.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task IsUnavailableWhenNoReleaseMsiCanBeIdentified()
+    {
+        using var harness = await HarnessAsync(DisposableOsRun.Completed(RehearsalPassed));
+
+        var result = await new ChocolateyRehearsalGate(_ => null).RunAsync(
+            harness.Context, TestContext.Current.CancellationToken);
+
+        Assert.Equal(ScenarioOutcome.Unavailable, result.Outcome);
+        Assert.Contains("ExoSnap-", result.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AllRequiredStepsPassingIsPass()
+    {
+        using var harness = await HarnessAsync(DisposableOsRun.Completed(RehearsalPassed));
+        var msi = DisposableOsGateFixture.StageReleaseMsi(harness);
+
+        var result = await new ChocolateyRehearsalGate(_ => msi).RunAsync(
+            harness.Context, TestContext.Current.CancellationToken);
+
+        Assert.Equal(ScenarioOutcome.Pass, result.Outcome);
+        var request = Assert.Single(harness.Fakes.DisposableOs.Requests);
+        Assert.Equal("sandbox-choco-worker.ps1", request.WorkerFileName);
+
+        // The package source goes in as the directory itself: the worker reads
+        // tools/chocolateyinstall.ps1 underneath it.
+        Assert.Contains(
+            request.SourceFiles,
+            source => source.EndsWith(Path.Combine("packaging", "chocolatey"), StringComparison.Ordinal));
+        Assert.Contains("chocolatey", request.WorkerArguments);
+        Assert.Contains("-MsiSha256", request.WorkerArguments);
+        Assert.NotNull(request.EvidenceDirectory);
+    }
+
+    [Fact]
+    public async Task AFailedRehearsalStepIsFail()
+    {
+        using var harness = await HarnessAsync(DisposableOsRun.Completed(new DisposableOsRunResult(
+        [
+            new("prepare", true, "nuspec rewritten"),
+            new("pack", true, "packed"),
+            new("removeExisting", true, "no prior install"),
+            new("install", false, "choco install exited 1"),
+            new("uninstall", true, "uninstalled"),
+            new("restore", true, "release MSI reinstalled"),
+        ])));
+        var msi = DisposableOsGateFixture.StageReleaseMsi(harness);
+
+        var result = await new ChocolateyRehearsalGate(_ => msi).RunAsync(
+            harness.Context, TestContext.Current.CancellationToken);
+
+        Assert.Equal(ScenarioOutcome.Fail, result.Outcome);
+    }
+
+    private static Task<GateHarness> HarnessAsync(DisposableOsRun run) => GateHarness.CreateAsync(
+        "REL-PKG-CHOCO-001",
+        fakes =>
+        {
+            DisposableOsGateFixture.StageChocoWorker(fakes);
+            DisposableOsGateFixture.StagePackageSource(fakes);
+            fakes.DisposableOs.Run = run;
+        },
+        TestContext.Current.CancellationToken);
+}
+
+public sealed class ReleaseMsiArtifactTests : IDisposable
+{
+    private readonly string directory = Path.Combine(
+        Path.GetTempPath(),
+        "exosnap-release-msi-" + Guid.NewGuid().ToString("N"));
+
+    public ReleaseMsiArtifactTests()
+    {
+        Directory.CreateDirectory(this.directory);
+        File.WriteAllText(this.ExePath(), "exe");
+    }
+
+    public void Dispose() => Directory.Delete(this.directory, recursive: true);
+
+    [Fact]
+    public void AnOverrideThatNamesNothingIsReportedAsSuch()
+    {
+        var lookup = ReleaseMsiArtifact.Locate(this.ExePath(), _ => Path.Combine(this.directory, "absent.msi"));
+
+        Assert.Null(lookup.Path);
+        Assert.Contains("EXOSNAP_RELEASE_MSI", lookup.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AFileNotNamedLikeAPublishedReleaseIsNotIdentified()
+    {
+        File.WriteAllText(Path.Combine(this.directory, "installer.msi"), "msi");
+
+        var lookup = ReleaseMsiArtifact.Locate(this.ExePath(), _ => null);
+
+        Assert.Null(lookup.Path);
+    }
+
+    [Fact]
+    public void TwoCandidatesAreAmbiguousRatherThanAGuess()
+    {
+        File.WriteAllText(Path.Combine(this.directory, "ExoSnap-0.9.0-windows-x64.msi"), "a");
+        File.WriteAllText(Path.Combine(this.directory, "ExoSnap-0.9.1-windows-x64.msi"), "b");
+
+        var lookup = ReleaseMsiArtifact.Locate(this.ExePath(), _ => null);
+
+        Assert.Null(lookup.Path);
+        Assert.Contains("EXOSNAP_RELEASE_MSI", lookup.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ASidecarThatDisagreesWithTheFileMeansTheseAreNotTheReleasedBytes()
+    {
+        var msi = Path.Combine(this.directory, "ExoSnap-0.9.0-windows-x64.msi");
+        File.WriteAllText(msi, "a");
+        File.WriteAllText(msi + ".sha256", new string('0', 64));
+
+        var lookup = ReleaseMsiArtifact.Locate(this.ExePath(), _ => null);
+
+        Assert.Null(lookup.Path);
+        Assert.Contains("sidecar", lookup.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void APublishedNameBesideTheArtifactIsFoundAndHashed()
+    {
+        var msi = Path.Combine(this.directory, "ExoSnap-0.9.0-windows-x64.msi");
+        File.WriteAllText(msi, "a");
+
+        var lookup = ReleaseMsiArtifact.Locate(this.ExePath(), _ => null);
+
+        Assert.Equal(msi, lookup.Path);
+        Assert.Equal(64, lookup.Sha256.Length);
+        Assert.Equal(lookup.Sha256, lookup.Sha256.ToLowerInvariant());
+    }
+
+    private string ExePath() => Path.Combine(this.directory, "exosnap.exe");
+}
+
 internal static class DisposableOsGateFixture
 {
-    /// <summary>Puts the guest worker script where a gate looks for it in the repository.</summary>
-    internal static void StageWorker(GateFakes fakes)
+    /// <summary>Puts the update worker script where a gate looks for it in the repository.</summary>
+    internal static void StageWorker(GateFakes fakes) => StageScript(fakes, UpdateDeclineGate.WorkerFileName);
+
+    /// <summary>Puts the Chocolatey worker script and a plausible executable in place.</summary>
+    internal static void StageChocoWorker(GateFakes fakes)
     {
-        var path = Path.Combine(fakes.RepositoryRoot, "scripts", "lib", UpdateDeclineGate.WorkerFileName);
+        StageScript(fakes, ChocolateyRehearsalGate.WorkerFileName);
+
+        // The default fake path is a bare file name; the MSI lookup needs a real
+        // directory to look beside.
+        fakes.ExecutablePath = Path.Combine(fakes.RepositoryRoot, "dist", "exosnap.exe");
+        Directory.CreateDirectory(Path.GetDirectoryName(fakes.ExecutablePath)!);
+        File.WriteAllText(fakes.ExecutablePath, "exe");
+    }
+
+    /// <summary>Creates the tracked package directory the rehearsal stages.</summary>
+    internal static void StagePackageSource(GateFakes fakes)
+    {
+        var tools = Path.Combine(fakes.RepositoryRoot, "packaging", "chocolatey", "tools");
+        Directory.CreateDirectory(tools);
+        File.WriteAllText(Path.Combine(tools, "chocolateyinstall.ps1"), "# install");
+        File.WriteAllText(
+            Path.Combine(fakes.RepositoryRoot, "packaging", "chocolatey", "exosnap.nuspec"), "<package />");
+    }
+
+    /// <summary>Publishes an MSI beside the bound artifact, the way a release does.</summary>
+    internal static string StageReleaseMsi(GateHarness harness)
+    {
+        var path = Path.Combine(
+            Path.GetDirectoryName(harness.Fakes.ExecutablePath)!, "ExoSnap-0.9.0-windows-x64.msi");
+        File.WriteAllText(path, "msi");
+        return path;
+    }
+
+    private static void StageScript(GateFakes fakes, string fileName)
+    {
+        var path = Path.Combine(fakes.RepositoryRoot, "scripts", "lib", fileName);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllText(path, "# worker");
     }
