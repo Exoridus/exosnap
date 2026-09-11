@@ -61,6 +61,8 @@ public static class ReleaseCatalog
         "REL-DISP-MIXED-001" => new MixedDisplayGate(),
         "REL-DISP-DPI-001" => new DisplayScalingGate(),
         "REL-UPD-PORTABLE-001" => new PortableUpdateGate(),
+        "REL-UPD-MSI-DECLINE-001" => new UpdateDeclineGate(),
+        "REL-UPD-MSI-001" => new UpdateAcceptGate(),
         "REL-VIS-OVERLAY-001" => new OverlayAppearanceGate(),
         "REL-VIS-NOTIFY-001" => new NotificationSeverityGate(),
         "REL-JOURNEY-001" => new ProductJourneyGate(),
@@ -366,7 +368,8 @@ public static class ReleaseCatalog
             interaction: ScenarioInteraction.OperatorAssisted,
             oracle: ["exosnap", "msi", "filesystem"],
             optIn: true,
-            source: "docs/release-checklist.md sections 5 and 7a"),
+            source: "docs/release-checklist.md sections 5 and 7a",
+            dependsOn: ["REL-UPD-MSI-DECLINE-001"]),
 
         Describe(
             id: "REL-PKG-CHOCO-001",
