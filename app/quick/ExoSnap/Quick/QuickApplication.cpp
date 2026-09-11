@@ -1926,7 +1926,10 @@ void QuickApplication::updateMeterServices() {
 }
 
 void QuickApplication::startMeterServices() {
-    const bool visible = record_view_model_adapter_.active();
+    // Same two pages as updateMeterServices(). Reading only the Record page here
+    // let the Settings page arm the debounce and then bail out of its own timer,
+    // so the per-source rows the user was looking at stayed at silence.
+    const bool visible = record_view_model_adapter_.active() || settings_adapter_.active();
     const bool session = record_view_model_.state == UiRecordingState::Recording ||
                          record_view_model_.state == UiRecordingState::Paused ||
                          record_view_model_.state == UiRecordingState::Stopping;

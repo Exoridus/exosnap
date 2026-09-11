@@ -270,6 +270,10 @@ RecordingCoordinator::RecordingCoordinator()
 }
 
 RecordingCoordinator::~RecordingCoordinator() {
+    // Before anything else: a disk-space auto-stop already queued on the UI thread
+    // must find this expired rather than run against a half-destroyed coordinator.
+    disk_stop_life_token_.reset();
+
     StopMicMeter();
     StopSysMeter();
     StopAppMeter();
@@ -583,7 +587,12 @@ void RecordingCoordinator::OnDiskSpaceLow(exosnap::engine::RecordRequestId reque
     if (QCoreApplication::instance() != nullptr) {
         QMetaObject::invokeMethod(
             QCoreApplication::instance(),
-            [this, request, free_bytes, threshold_bytes]() {
+            [this, alive = std::weak_ptr<bool>(disk_stop_life_token_), request, free_bytes, threshold_bytes]() {
+                // The coordinator itself may be gone: the context object is the
+                // application, which outlives it, and joining the poller does not
+                // retract a call already sitting in this queue.
+                if (alive.expired())
+                    return;
                 // Re-check on the main thread: the recording may have stopped, or
                 // been replaced by the next one, while this was queued.
                 if (record_request_.load() != request || !is_recording_.load())

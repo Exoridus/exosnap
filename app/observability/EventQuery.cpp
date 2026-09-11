@@ -112,7 +112,11 @@ QJsonObject EventToJson(const LogRecord& record) {
 
 EventQueryFilter ParseEventQueryFilter(const QJsonObject& params, QString* error) {
     EventQueryFilter filter;
-    filter.max = static_cast<int>(params.value(QStringLiteral("max")).toDouble());
+    // Clamped before the cast, not after: the value arrives from the control
+    // channel, and converting an out-of-range double to int is undefined rather
+    // than merely wrong. A non-positive result keeps meaning "use the default".
+    const double requested_max = params.value(QStringLiteral("max")).toDouble();
+    filter.max = static_cast<int>(std::clamp(requested_max, 0.0, static_cast<double>(kMaxEvents)));
     filter.subsystem = params.value(QStringLiteral("subsystem")).toString();
     filter.event_code = params.value(QStringLiteral("eventCode")).toString();
     filter.min_severity = params.value(QStringLiteral("severity")).toString();
