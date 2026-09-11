@@ -12,6 +12,7 @@
 #include <winrt/Windows.Foundation.h>
 
 #include <exosnap/engine/wgc_acquire_classify.h>
+#include <exosnap/engine/wgc_session_config.h>
 
 #include "../diagnostics/AppLog.h"
 
@@ -70,6 +71,30 @@ bool WgcSourceProducer::Open(std::string& err) {
         frame_pool_ = wgc::Direct3D11CaptureFramePool::Create(winrt_device_, kPoolFormat, kPoolBuffers, pool_size_);
         session_ = frame_pool_.CreateCaptureSession(item_);
         session_.IsBorderRequired(false);
+
+        exosnap::engine::WgcMinUpdateIntervalResult interval_result;
+        const HRESULT interval_hr = exosnap::engine::ConfigureWgcMinUpdateInterval(
+            session_.as<winrt::Windows::Foundation::IInspectable>(), &interval_result);
+        if (FAILED(interval_hr)) {
+            err = "WGC MinUpdateInterval configuration failed 0x" +
+                  QStringLiteral("%1").arg(static_cast<uint32_t>(interval_hr), 8, 16, QLatin1Char('0')).toStdString();
+            Close();
+            return false;
+        }
+
+        const QString effective_ms =
+            interval_result.supported
+                ? QString::number(static_cast<double>(interval_result.effective_ticks) / 10'000.0, 'f', 3)
+                : QStringLiteral("default");
+        const QString interval_message =
+            QStringLiteral("supported=%1 requested_ms=1.000 effective_ms=%2 target_fps=unspecified")
+                .arg(interval_result.supported ? QStringLiteral("true") : QStringLiteral("false"), effective_ms);
+        if (interval_result.supported) {
+            diagnostics::AppLog::info(QStringLiteral("wgc-producer"), interval_message);
+        } else {
+            diagnostics::AppLog::warning(QStringLiteral("wgc-producer"),
+                                         interval_message + QStringLiteral(" fallback=OS-default"));
+        }
 
         // Cleared before the handler exists, never after: a Closed that fires on
         // the very first pump must not be erased by this producer's own reset.

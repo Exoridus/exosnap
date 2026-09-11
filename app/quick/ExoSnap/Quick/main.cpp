@@ -675,6 +675,47 @@ int main(int argc, char* argv[]) {
     // directory. See bootstrap/ProductionBootstrap.h.
     const exosnap::bootstrap::PreAppResult pre_app = exosnap::bootstrap::RunPreApplicationPhase();
 
+    QStringList pre_application_arguments;
+    pre_application_arguments.reserve(argc);
+    for (int i = 0; i < argc; ++i)
+        pre_application_arguments.push_back(QString::fromLocal8Bit(argv[i]));
+
+#if defined(EXOSNAP_ENABLE_AUTO_RECORD_HARNESS)
+    if (pre_application_arguments.contains(QStringLiteral("--auto-record-bare"))) {
+        QCoreApplication app(argc, argv);
+        const exosnap::bootstrap::PostAppResult post_app = exosnap::bootstrap::MarkApplicationConstructed();
+        exosnap::bootstrap::ApplyApplicationMetadata();
+        const QStringList arguments = QCoreApplication::arguments();
+
+        QString flag_error;
+        if (!exosnap::cli::ValidateCommandLine(arguments, &flag_error)) {
+            reportStartupError(flag_error);
+            return 2;
+        }
+
+        exosnap::auto_record::AutoRecordOptions options;
+        QString parse_error;
+        if (!exosnap::auto_record::ParseAutoRecordOptions(arguments, &options, &parse_error)) {
+            reportStartupError(parse_error);
+            return 2;
+        }
+
+        (void)exosnap::bootstrap::IsolateHarnessConfigDir(harnessConfigId(arguments));
+        exosnap::bootstrap::BootstrapOptions bootstrap_options;
+        bootstrap_options.suppress_single_instance = true;
+        exosnap::bootstrap::ProductionBootstrap bootstrap(bootstrap_options);
+        bootstrap.InitializeLogging(pre_app, post_app);
+        bootstrap.InitializeCrashCapture();
+        return exosnap::auto_record::RunAutoRecord(app, options);
+    }
+#else
+    if (pre_application_arguments.contains(QStringLiteral("--auto-record-bare")) ||
+        pre_application_arguments.contains(QStringLiteral("--capture-backend"))) {
+        reportStartupError(QStringLiteral("--auto-record-bare and --capture-backend require a harness-enabled build"));
+        return 2;
+    }
+#endif
+
     QQuickWindow::setGraphicsApi(QSGRendererInterface::Direct3D11);
 
     // No DWM redirection bitmap for this process's windows.

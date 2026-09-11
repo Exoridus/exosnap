@@ -274,6 +274,8 @@ add_library(exosnap_engine STATIC
     include/exosnap/engine/audio_meter.h
     src/audio_meter.cpp
     src/wgc_capture.cpp
+    src/wgc_session_config.cpp
+    include/exosnap/engine/wgc_session_config.h
     src/dxgi_od_capture_src.cpp
     include/exosnap/engine/dxgi_od_capture_src.h
     src/frame_pacing.cpp
@@ -1563,6 +1565,25 @@ exosnap_add_gtest(
     SOURCES tests/test_wgc_acquire_classify.cpp
 )
 target_include_directories(test_wgc_acquire_classify PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+# Capture backend resolution: normal monitor/window selection plus the harness-only
+# monitor WGC override. Pure configuration logic, no D3D/WinRT.
+exosnap_add_gtest(
+    NAME test_capture_backend
+    TEST_PREFIX engine.
+    SOURCES tests/test_capture_backend.cpp
+)
+target_include_directories(test_capture_backend PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+# Shared WGC session pacing configuration against real WinRT interface objects.
+# The fakes implement or omit IGraphicsCaptureSession5; no D3D device is needed.
+exosnap_add_gtest(
+    NAME test_wgc_session_config
+    TEST_PREFIX engine.
+    SOURCES tests/test_wgc_session_config.cpp
+    LIBRARIES exosnap_engine
+)
+target_include_directories(test_wgc_session_config PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 # Capture-card live wiring (0.8.0): pure stage-health resolver (no D3D/NVENC/Qt).
 exosnap_add_gtest(

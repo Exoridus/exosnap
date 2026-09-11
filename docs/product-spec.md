@@ -832,6 +832,16 @@ Three capture targets:
 - **Screen region** — a rectangular region, with a refined region-selection overlay and a live
   cropped preview.
 
+**Window-capture update rate.** Windows Graphics Capture delivers frames on repaint and applies its
+own minimum interval between them, which defaults to one display refresh and caps a window recording
+below the selected frame rate on a high-rate target. Every ExoSnap capture session therefore requests
+a minimum update interval of **1 ms**, so the delivered rate is bounded by the source and the encoder
+rather than by the capture API. The value Windows actually accepts is read back and logged alongside
+the requested value and the session's target frame rate. On a Windows build without the setting the
+session continues at the OS default and logs that fallback as a warning — the recording still runs,
+but its window-capture rate may stay at display refresh. Any other failure to apply or read the
+interval fails the recording rather than silently recording at an unknown rate.
+
 Cursor capture is a toggle (on by default). Single-frame capture (a "capture frame" action) is
 available during recording via an on-screen dock control and a hotkey.
 

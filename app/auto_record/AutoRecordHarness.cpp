@@ -364,7 +364,10 @@ int RunAutoRecordOnCoordinator(QCoreApplication& app, exosnap::RecordingCoordina
         // exists to keep out of the measurement.
         exosnap::engine::RecordingDiagnosticsSnapshot baseline_snapshot;
 
-        if (!coordinator.StartRecording(selected_target, audio_state)) {
+        const exosnap::engine::CaptureBackend capture_backend =
+            options.capture_backend == CaptureBackend::Wgc ? exosnap::engine::CaptureBackend::WindowsGraphicsCapture
+                                                           : exosnap::engine::CaptureBackend::Default;
+        if (!coordinator.StartRecording(selected_target, audio_state, std::nullopt, capture_backend)) {
             return FailWith(
                 QStringLiteral("StartRecording refused (coordinator not ready or busy, cycle %1)").arg(cycle + 1));
         }

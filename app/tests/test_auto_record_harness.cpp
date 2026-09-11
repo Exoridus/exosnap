@@ -3,6 +3,7 @@
 #include "../auto_record/AutoRecordHarness.h"
 
 using exosnap::auto_record::AutoRecordOptions;
+using exosnap::auto_record::CaptureBackend;
 using exosnap::auto_record::HasAutoRecordRequest;
 using exosnap::auto_record::HdrMode;
 using exosnap::auto_record::ParseAutoRecordOptions;
@@ -264,4 +265,56 @@ TEST(AutoRecordHarness, RejectsUnknownValue) {
     const QStringList args = {QStringLiteral("exosnap.exe"), QStringLiteral("--auto-record"),
                               QStringLiteral("--container"), QStringLiteral("avi")};
     EXPECT_FALSE(ParseAutoRecordOptions(args, &opts, &error));
+}
+
+TEST(AutoRecordHarness, RejectsUnknownCaptureBackend) {
+    AutoRecordOptions opts;
+    QString error;
+    const QStringList args = {QStringLiteral("exosnap.exe"), QStringLiteral("--auto-record"),
+                              QStringLiteral("--capture-backend"), QStringLiteral("dxgi")};
+    EXPECT_FALSE(ParseAutoRecordOptions(args, &opts, &error));
+    EXPECT_TRUE(error.contains(QStringLiteral("default|wgc"))) << error.toStdString();
+}
+
+TEST(AutoRecordHarness, WgcCaptureBackendIsMonitorOnly) {
+    AutoRecordOptions opts;
+    QString error;
+    const QStringList args = {QStringLiteral("exosnap.exe"),
+                              QStringLiteral("--auto-record"),
+                              QStringLiteral("--target"),
+                              QStringLiteral("window"),
+                              QStringLiteral("--target-window-title"),
+                              QStringLiteral("Notepad"),
+                              QStringLiteral("--capture-backend"),
+                              QStringLiteral("wgc")};
+    EXPECT_FALSE(ParseAutoRecordOptions(args, &opts, &error));
+    EXPECT_TRUE(error.contains(QStringLiteral("monitor"))) << error.toStdString();
+}
+
+TEST(AutoRecordHarness, ParsesBareWgcMonitorMode) {
+    AutoRecordOptions opts;
+    QString error;
+    const QStringList args = {QStringLiteral("exosnap.exe"), QStringLiteral("--auto-record"),
+                              QStringLiteral("--auto-record-bare"), QStringLiteral("--capture-backend"),
+                              QStringLiteral("wgc")};
+    ASSERT_TRUE(ParseAutoRecordOptions(args, &opts, &error)) << error.toStdString();
+    EXPECT_TRUE(opts.bare);
+    EXPECT_EQ(opts.capture_backend, CaptureBackend::Wgc);
+}
+
+TEST(AutoRecordHarness, CaptureBackendDefaultsToNormalSelection) {
+    AutoRecordOptions opts;
+    QString error;
+    ASSERT_TRUE(ParseAutoRecordOptions({QStringLiteral("exosnap.exe"), QStringLiteral("--auto-record")}, &opts, &error))
+        << error.toStdString();
+    EXPECT_FALSE(opts.bare);
+    EXPECT_EQ(opts.capture_backend, CaptureBackend::Default);
+}
+
+TEST(AutoRecordHarness, BareModeRequiresAutoRecord) {
+    AutoRecordOptions opts;
+    QString error;
+    const QStringList args = {QStringLiteral("exosnap.exe"), QStringLiteral("--auto-record-bare")};
+    EXPECT_FALSE(ParseAutoRecordOptions(args, &opts, &error));
+    EXPECT_TRUE(error.contains(QStringLiteral("--auto-record"))) << error.toStdString();
 }

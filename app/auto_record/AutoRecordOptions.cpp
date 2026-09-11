@@ -41,6 +41,18 @@ bool ParseHdrMode(const QString& text, HdrMode* out) {
     return false;
 }
 
+bool ParseCaptureBackend(const QString& text, CaptureBackend* out) {
+    if (text == QStringLiteral("default")) {
+        *out = CaptureBackend::Default;
+        return true;
+    }
+    if (text == QStringLiteral("wgc")) {
+        *out = CaptureBackend::Wgc;
+        return true;
+    }
+    return false;
+}
+
 } // namespace
 
 bool HasAutoRecordRequest(const QStringList& args) {
@@ -66,6 +78,15 @@ bool ParseAutoRecordOptions(const QStringList& args, AutoRecordOptions* out, QSt
 
         if (arg == QStringLiteral("--auto-record")) {
             continue;
+        } else if (arg == QStringLiteral("--auto-record-bare")) {
+            parsed.bare = true;
+        } else if (arg == QStringLiteral("--capture-backend")) {
+            QString value;
+            if (!require_value(&value) || !ParseCaptureBackend(value, &parsed.capture_backend)) {
+                if (error)
+                    *error = QStringLiteral("--capture-backend requires default|wgc");
+                return false;
+            }
         } else if (arg == QStringLiteral("--enable-preview")) {
             // Was the switch into the Widgets-era off-screen preview mode, which
             // no longer exists: the Quick frontend's Record preview is live for
@@ -263,9 +284,21 @@ bool ParseAutoRecordOptions(const QStringList& args, AutoRecordOptions* out, QSt
         }
     }
 
+    if (parsed.bare && !HasAutoRecordRequest(args)) {
+        if (error)
+            *error = QStringLiteral("--auto-record-bare requires --auto-record");
+        return false;
+    }
+
     if (parsed.target == TargetKind::Window && parsed.target_window_title.trimmed().isEmpty()) {
         if (error)
             *error = QStringLiteral("--target=window requires --target-window-title");
+        return false;
+    }
+
+    if (parsed.capture_backend == CaptureBackend::Wgc && parsed.target != TargetKind::Monitor) {
+        if (error)
+            *error = QStringLiteral("--capture-backend wgc requires --target monitor");
         return false;
     }
 

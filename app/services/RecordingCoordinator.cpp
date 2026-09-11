@@ -784,7 +784,8 @@ void RecordingCoordinator::SetWebcamStatusCallback(QObject* receiver, WebcamServ
 
 bool RecordingCoordinator::StartRecording(const exosnap::engine::CaptureTarget& target,
                                           const capability::AudioUiState& audio_ui_state,
-                                          std::optional<exosnap::engine::CaptureRegion> crop_region) {
+                                          std::optional<exosnap::engine::CaptureRegion> crop_region,
+                                          exosnap::engine::CaptureBackend capture_backend) {
     StopMicMeter();
 
     // ── Thin gate (UI thread) ────────────────────────────────────────────────
@@ -826,6 +827,7 @@ bool RecordingCoordinator::StartRecording(const exosnap::engine::CaptureTarget& 
     ctx.target = target;
     ctx.audio_ui_state = audio_ui_state;
     ctx.crop_region = crop_region;
+    ctx.capture_backend = capture_backend;
     ctx.output_settings = output_settings_;
     ctx.split_settings = split_settings_;
     ctx.video_settings = video_settings_;
@@ -1026,6 +1028,11 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
     // the snapshot stash so the report for this recording cannot inherit the last
     // one's counters.
     recording_session_id_ = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    {
+        std::lock_guard<std::mutex> lock(committed_config_mutex_);
+        has_last_committed_config_ = false;
+        last_committed_config_ = exosnap::engine::RecorderConfig{};
+    }
     // Publish the id as a structured event so the recording is addressable in the
     // event stream, not only in the session report written at the end. Without
     // this, `events.recent?recordingSessionId=...` could never match anything and
@@ -1080,6 +1087,7 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
     config.capture_cursor = ctx.video_settings.capture_cursor;
     ApplyOutputSettingsToRecorderConfig(config, ctx.output_settings);
     config.target = target;
+    config.capture_backend = ctx.capture_backend;
     config.crop_region = ctx.crop_region;
 
     // Native HDR10 output: when HDR10 handling is selected, the captured display
@@ -1417,7 +1425,8 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
 
     {
         const bool is_monitor = (target.kind == exosnap::engine::CaptureTarget::Kind::Monitor);
-        const QString backend = is_monitor ? QStringLiteral("dxgi_od") : QStringLiteral("wgc");
+        const QString backend =
+            QString::fromLatin1(exosnap::engine::CaptureBackendName(exosnap::engine::ResolveCaptureBackend(config)));
         // Privacy (ADR 0045): a window's title must not reach the on-disk log at
         // the source. Monitor descriptions are technical device identifiers
         // (never personal) and are logged verbatim; window targets log a stable
@@ -3086,18 +3095,10 @@ RecordingCoordinator::BuildSessionReportJob(const UiRecordingResult& result) {
     }
 
     inputs.capture_backend = QStringLiteral("unknown");
-    if (inputs.has_snapshot) {
-        switch (inputs.snapshot.capture.source_type) {
-        case exosnap::engine::CaptureSourceType::Display:
-            inputs.capture_backend = QStringLiteral("dxgi-od");
-            break;
-        case exosnap::engine::CaptureSourceType::Window:
-        case exosnap::engine::CaptureSourceType::Region:
-            inputs.capture_backend = QStringLiteral("wgc");
-            break;
-        default:
-            break;
-        }
+    exosnap::engine::RecorderConfig committed_config;
+    if (LastCommittedRecorderConfig(&committed_config)) {
+        inputs.capture_backend = QString::fromLatin1(
+            exosnap::engine::CaptureBackendReportName(exosnap::engine::ResolveCaptureBackend(committed_config)));
     }
 
     // Scrubbed output file name only (never a path) — support-correlation without PII.

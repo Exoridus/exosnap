@@ -124,6 +124,34 @@ struct CaptureTarget {
     std::string description;
 };
 
+enum class CaptureBackend {
+    Default,
+    WindowsGraphicsCapture,
+};
+
+enum class EffectiveCaptureBackend {
+    DxgiOutputDuplication,
+    WindowsGraphicsCapture,
+};
+
+[[nodiscard]] inline constexpr EffectiveCaptureBackend ResolveCaptureBackend(CaptureTarget::Kind target_kind,
+                                                                             CaptureBackend requested) noexcept {
+    if (target_kind == CaptureTarget::Kind::Monitor && requested == CaptureBackend::Default)
+        return EffectiveCaptureBackend::DxgiOutputDuplication;
+    return EffectiveCaptureBackend::WindowsGraphicsCapture;
+}
+
+// Structured-log spelling of the backend.
+[[nodiscard]] inline constexpr const char* CaptureBackendName(EffectiveCaptureBackend backend) noexcept {
+    return backend == EffectiveCaptureBackend::DxgiOutputDuplication ? "dxgi_od" : "wgc";
+}
+
+// Session-report spelling. It differs from the log spelling by the separator
+// alone, and stays hyphenated because published reports are already read that way.
+[[nodiscard]] inline constexpr const char* CaptureBackendReportName(EffectiveCaptureBackend backend) noexcept {
+    return backend == EffectiveCaptureBackend::DxgiOutputDuplication ? "dxgi-od" : "wgc";
+}
+
 // ---------------------------------------------------------------------------
 // CaptureRegion
 // ---------------------------------------------------------------------------
@@ -294,6 +322,9 @@ struct RecorderConfig {
 
     // Capture source
     CaptureTarget target;
+    // Normal product selection is monitor DXGI duplication and window WGC. The
+    // explicit WGC value is used only by the compile-gated recording harness.
+    CaptureBackend capture_backend = CaptureBackend::Default;
 
     // Format — WebM (AV1+Opus) and Matroska (AV1+AAC or AV1+Opus) are supported.
     // Validate() rejects unsupported combinations.
@@ -528,6 +559,10 @@ struct RecorderConfig {
     // Automatic/manual segment splitting. Default Off == single-file recording.
     RecordingSplitSettings split;
 };
+
+[[nodiscard]] inline constexpr EffectiveCaptureBackend ResolveCaptureBackend(const RecorderConfig& config) noexcept {
+    return ResolveCaptureBackend(config.target.kind, config.capture_backend);
+}
 
 // Apply the native HDR10 (PQ/BT.2020) encode overrides to a base config once the
 // caller has established that the native path is effective (see
