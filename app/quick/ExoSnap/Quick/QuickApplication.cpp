@@ -5418,9 +5418,20 @@ QuickApplication::captureTargetAdapterFacts(const std::optional<exosnap::engine:
     facts.known = true;
     facts.vendor_id = desc.VendorId;
     facts.adapter_name = QString::fromWCharArray(desc.Description).toStdString();
+    // The display's adapter identity. Reachability evidence is bound to this plus
+    // the encoder's, so a display change or a GPU swap stops an old verdict from
+    // being applied to a setup it was never about.
+    // PackAdapterLuid is the repository's one LUID packing, so the display's
+    // identity and the enumerated adapters' are comparable without a second
+    // convention to keep in step.
+    facts.capture_adapter_luid =
+        static_cast<uint64_t>(capability::PackAdapterLuid(desc.AdapterLuid.HighPart, desc.AdapterLuid.LowPart));
     for (const auto& info : capability::EnumerateAdapters()) {
-        if (info.vendor == capability::AdapterVendor::Nvidia)
+        if (info.vendor == capability::AdapterVendor::Nvidia) {
             facts.nvidia_adapter_present = true;
+            if (facts.encoder_adapter_luid == 0)
+                facts.encoder_adapter_luid = static_cast<uint64_t>(info.luid);
+        }
     }
     return facts;
 }

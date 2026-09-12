@@ -63,6 +63,32 @@ enum class EventDrainStep {
 EventDrainStep NextEventDrainStep(DWORD wait_result, double elapsed_ms, double budget_ms) noexcept;
 
 // ---------------------------------------------------------------------------
+// Is this failure evidence that the encoder cannot be reached from the adapter
+// the capture runs on?
+//
+// It matters because the answer is latched and shown to the user as a blocker.
+// A status that merely says "this did not work right now" must never become
+// "this machine cannot record this display": a TDR, a transient device loss and a
+// driver reset all fail an encode, all recover, and a blocker latched from one of
+// them would outlive the condition and be wrong for the rest of the session.
+//
+// Only the statuses that are a statement about the DEVICE qualify -- no encode
+// device on it, an unsupported one, an invalid one. Everything else, including a
+// plain UNSUPPORTED_PARAM or an out-of-memory, is a failure without a verdict
+// about reachability attached.
+// ---------------------------------------------------------------------------
+[[nodiscard]] constexpr bool IsEncoderUnreachableStatus(NVENCSTATUS status) noexcept {
+    switch (status) {
+    case NV_ENC_ERR_NO_ENCODE_DEVICE:
+    case NV_ENC_ERR_UNSUPPORTED_DEVICE:
+    case NV_ENC_ERR_INVALID_DEVICE:
+        return true;
+    default:
+        return false;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // DiscardRejectedSubmission -- pure, testable removal of the one pending entry a
 // failed submission must take back.
 //
@@ -517,6 +543,14 @@ class NvencEncoder {
         return static_cast<uint64_t>(m_pending.size());
     }
 
+    // True when an Open or Configure failed with a status that is a statement
+    // about the DEVICE (IsEncoderUnreachableStatus), rather than a failure that
+    // happens to have occurred on one. The diagnostics layer latches a blocker
+    // from this, so a transient loss must never set it.
+    [[nodiscard]] bool EncoderUnreachable() const noexcept {
+        return m_encoder_unreachable;
+    }
+
     // Unregister all slot resources.  Safe to call multiple times.
     void UnregisterAllSlots();
 
@@ -616,6 +650,10 @@ class NvencEncoder {
     // the oldest frame still in flight, whose slot and output buffer the driver
     // still owns. See DiscardRejectedSubmission.
     std::deque<PendingFrame> m_pending;
+
+    // Latched by Open/Configure when the driver's status says the device cannot
+    // encode, never on a transient failure. See IsEncoderUnreachableStatus.
+    bool m_encoder_unreachable = false;
 
     int m_needMoreInputCount = 0;
 

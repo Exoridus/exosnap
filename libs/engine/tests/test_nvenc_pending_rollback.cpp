@@ -83,4 +83,42 @@ TEST(DiscardRejectedSubmission, DoesNotTouchAnEmptyQueue) {
     EXPECT_TRUE(pending.empty());
 }
 
+// ---------------------------------------------------------------------------
+// Which failures are evidence that the encoder cannot be reached
+// ---------------------------------------------------------------------------
+//
+// The answer is latched and shown as a blocker, so a status that only says "this
+// did not work right now" must never become "this machine cannot record this
+// display". A TDR, a transient device loss and a driver reset all fail an encode
+// and all recover; a blocker latched from one of those would outlive the
+// condition, be wrong for the rest of the session, and the user could not clear
+// it.
+
+TEST(EncoderReachability, ADeviceStatusIsEvidence) {
+    // These three are statements about the DEVICE: there is no encode device on
+    // it, it is not supported, it is not valid.
+    EXPECT_TRUE(IsEncoderUnreachableStatus(NV_ENC_ERR_NO_ENCODE_DEVICE));
+    EXPECT_TRUE(IsEncoderUnreachableStatus(NV_ENC_ERR_UNSUPPORTED_DEVICE));
+    EXPECT_TRUE(IsEncoderUnreachableStatus(NV_ENC_ERR_INVALID_DEVICE));
+}
+
+TEST(EncoderReachability, ATransientFailureIsNotEvidence) {
+    // The cases this rule exists for. Every one of them fails an encode and every
+    // one of them can recover.
+    EXPECT_FALSE(IsEncoderUnreachableStatus(NV_ENC_ERR_DEVICE_NOT_EXIST))
+        << "a device that went away can come back; a latched blocker could not";
+    EXPECT_FALSE(IsEncoderUnreachableStatus(NV_ENC_ERR_OUT_OF_MEMORY));
+    EXPECT_FALSE(IsEncoderUnreachableStatus(NV_ENC_ERR_ENCODER_BUSY));
+    EXPECT_FALSE(IsEncoderUnreachableStatus(NV_ENC_ERR_GENERIC));
+    EXPECT_FALSE(IsEncoderUnreachableStatus(NV_ENC_ERR_UNSUPPORTED_PARAM))
+        << "a parameter this build asked for is not a verdict about the hardware";
+    EXPECT_FALSE(IsEncoderUnreachableStatus(NV_ENC_ERR_INVALID_PARAM));
+    EXPECT_FALSE(IsEncoderUnreachableStatus(NV_ENC_ERR_LOCK_BUSY));
+    EXPECT_FALSE(IsEncoderUnreachableStatus(NV_ENC_ERR_NEED_MORE_INPUT));
+}
+
+TEST(EncoderReachability, SuccessIsNotEvidenceOfFailure) {
+    EXPECT_FALSE(IsEncoderUnreachableStatus(NV_ENC_SUCCESS));
+}
+
 } // namespace

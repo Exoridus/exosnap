@@ -2060,13 +2060,30 @@ TEST(ExclusiveWindowCard, PresentExclusiveStillFiresWithoutWindowEvidence) {
 } // namespace
 namespace {
 
+constexpr uint64_t kIntelLuid = 0x1111;
+constexpr uint64_t kNvidiaLuid = 0x2222;
+constexpr uint64_t kOtherDisplayLuid = 0x3333;
+constexpr uint64_t kSwappedGpuLuid = 0x4444;
+
 RecommendationEngine::CaptureTargetAdapterFacts IntelDisplayWithNvidiaPresent() {
     RecommendationEngine::CaptureTargetAdapterFacts facts;
     facts.known = true;
     facts.vendor_id = 0x8086; // Intel
     facts.adapter_name = "Intel(R) UHD Graphics";
     facts.nvidia_adapter_present = true;
+    facts.capture_adapter_luid = kIntelLuid;
+    facts.encoder_adapter_luid = kNvidiaLuid;
     return facts;
+}
+
+RecommendationEngine::EncoderReachabilityEvidence UnreachableOn(uint64_t capture_luid, uint64_t encoder_luid) {
+    RecommendationEngine::EncoderReachabilityEvidence evidence;
+    evidence.known = true;
+    evidence.capture_adapter_luid = capture_luid;
+    evidence.encoder_adapter_luid = encoder_luid;
+    evidence.reachable = false;
+    evidence.failure_detail = "nvEncOpenEncodeSessionEx: NV_ENC_ERR_NO_ENCODE_DEVICE";
+    return evidence;
 }
 
 const DiagnosticResult* FindAdapterMismatch(const DiagnosticChecklist& list) {
@@ -2146,10 +2163,8 @@ TEST(RecommendationEngineTest, AMeasuredEncoderFailureIsABlockerAndNamesWhatFail
     capability::CapabilitySet caps;
     capability::UserRecorderConfig config;
     RecommendationEngine engine(caps, config);
-    RecommendationEngine::CaptureTargetAdapterFacts facts = IntelDisplayWithNvidiaPresent();
-    facts.encoder_reachability = RecommendationEngine::CaptureTargetAdapterFacts::EncoderReachability::Failed;
-    facts.encoder_failure_detail = "NVENC open failed: no capable device";
-    engine.SetCaptureTargetAdapter(facts);
+    engine.SetCaptureTargetAdapter(IntelDisplayWithNvidiaPresent());
+    engine.SetEncoderReachabilityEvidence(UnreachableOn(kIntelLuid, kNvidiaLuid));
 
     const DiagnosticChecklist list = engine.Generate();
     const DiagnosticResult* card = FindAdapterMismatch(list);
@@ -2157,22 +2172,50 @@ TEST(RecommendationEngineTest, AMeasuredEncoderFailureIsABlockerAndNamesWhatFail
     EXPECT_EQ(card->severity, DiagnosticSeverity::Blocker);
     EXPECT_EQ(card->tier, DiagnosticTier::Blocker);
     EXPECT_TRUE(list.has_blocker);
-    EXPECT_NE(card->current_value.find("NVENC open failed"), std::string::npos)
+    EXPECT_NE(card->current_value.find("NV_ENC_ERR_NO_ENCODE_DEVICE"), std::string::npos)
         << "a blocker has to say what was tried: " << card->current_value;
 }
 
 TEST(RecommendationEngineTest, AMeasuredReachableEncoderSaysNothingAtAll) {
     // Measured working. A warning here would be a nag about a machine that has
     // already been shown to record.
+    //
+    // Set through the evidence, not by writing the facts field: the engine derives
+    // that field from the latched evidence on every update, so a value written
+    // directly would be overwritten -- which is the point. Reachability is only
+    // ever what a measurement bound to these adapters says.
     using namespace exosnap::diagnostics;
     capability::CapabilitySet caps;
     capability::UserRecorderConfig config;
     RecommendationEngine engine(caps, config);
-    RecommendationEngine::CaptureTargetAdapterFacts facts = IntelDisplayWithNvidiaPresent();
-    facts.encoder_reachability = RecommendationEngine::CaptureTargetAdapterFacts::EncoderReachability::Reachable;
-    engine.SetCaptureTargetAdapter(facts);
+    engine.SetCaptureTargetAdapter(IntelDisplayWithNvidiaPresent());
+
+    RecommendationEngine::EncoderReachabilityEvidence reachable;
+    reachable.known = true;
+    reachable.capture_adapter_luid = kIntelLuid;
+    reachable.encoder_adapter_luid = kNvidiaLuid;
+    reachable.reachable = true;
+    engine.SetEncoderReachabilityEvidence(reachable);
 
     EXPECT_EQ(FindAdapterMismatch(engine.Generate()), nullptr);
+}
+
+TEST(RecommendationEngineTest, AReachabilityWrittenIntoTheFactsDirectlyIsIgnored) {
+    // The facts field is derived, not an input. Letting a caller set it would be a
+    // second way to produce a blocker -- one with no measurement behind it, which
+    // is exactly what this package removed.
+    using namespace exosnap::diagnostics;
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+    RecommendationEngine engine(caps, config);
+    RecommendationEngine::CaptureTargetAdapterFacts forged = IntelDisplayWithNvidiaPresent();
+    forged.encoder_reachability = RecommendationEngine::CaptureTargetAdapterFacts::EncoderReachability::Failed;
+    forged.encoder_failure_detail = "invented";
+    engine.SetCaptureTargetAdapter(forged);
+
+    const DiagnosticResult* card = FindAdapterMismatch(engine.Generate());
+    ASSERT_NE(card, nullptr);
+    EXPECT_NE(card->tier, DiagnosticTier::Blocker) << "a blocker must come from evidence, not from a written field";
 }
 
 TEST(RecommendationEngineTest, AnNvidiaDisplayOrNoNvidiaAdapterSaysNothing) {

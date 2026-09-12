@@ -397,6 +397,10 @@ bool NvencEncoder::Open(ID3D11Device* device, std::string& out_error) {
 
     st = m_funcs.nvEncOpenEncodeSessionEx(&params, &m_encoder);
     if (st != NV_ENC_SUCCESS || !m_encoder) {
+        // Classified here, where the driver's own status is still available. A
+        // blocker is latched from this upstream, so only a status about the device
+        // counts -- a transient loss must not become a permanent verdict.
+        m_encoder_unreachable = IsEncoderUnreachableStatus(st);
         out_error = std::string("nvEncOpenEncodeSessionEx: ") + NvencStatusName(st);
         return false;
     }
