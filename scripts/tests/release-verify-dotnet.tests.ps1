@@ -50,7 +50,7 @@ Write-Host 'The release-verify wrapper selects the typed harness'
 Test-Case 'list is forwarded to the typed catalog' {
     $result = Invoke-Runner -Arguments @('list', '-Engine', 'DotNet')
     Assert-Equal 0 $result.ExitCode "typed list failed: $($result.Output)"
-    Assert-True ($result.Output -match '27 scenarios') 'the typed catalog was not printed'
+    Assert-True ($result.Output -match '28 scenarios') 'the typed catalog was not printed'
     # The exact migrated count moves with every slice; assert the line is printed,
     # not the number, so this wrapper test does not need editing on each migration.
     Assert-True ($result.Output -match '\d+ with a migrated body') 'the migration count was not printed'
@@ -81,7 +81,7 @@ Test-Case 'the typed bootstrap tolerates an inherited MSVC platform' {
         $env:Platform = 'x64'
         $result = Invoke-Runner -Arguments @('list', '-Engine', 'DotNet')
         Assert-Equal 0 $result.ExitCode "the MSVC environment broke the typed bootstrap: $($result.Output)"
-        Assert-True ($result.Output -match '27 scenarios') 'the typed catalog was not printed'
+        Assert-True ($result.Output -match '28 scenarios') 'the typed catalog was not printed'
     }
     finally {
         $env:Platform = $priorPlatform

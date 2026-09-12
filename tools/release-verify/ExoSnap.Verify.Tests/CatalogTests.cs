@@ -15,7 +15,7 @@ public sealed class CatalogTests
     {
         var catalog = ReleaseCatalog.Create();
 
-        Assert.Equal(27, catalog.Scenarios.Count);
+        Assert.Equal(28, catalog.Scenarios.Count);
         Assert.Equal(
             catalog.Scenarios.Count,
             catalog.Scenarios.Select(scenario => scenario.Id).Distinct(StringComparer.OrdinalIgnoreCase).Count());

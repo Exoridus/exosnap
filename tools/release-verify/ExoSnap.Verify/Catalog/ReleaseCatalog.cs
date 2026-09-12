@@ -64,6 +64,7 @@ public static class ReleaseCatalog
         "REL-UPD-MSI-DECLINE-001" => new UpdateDeclineGate(),
         "REL-UPD-MSI-001" => new UpdateAcceptGate(),
         "REL-PKG-CHOCO-001" => new ChocolateyRehearsalGate(),
+        "REL-INSTALL-CLEAN-001" => new CleanFirstStartGate(),
         "REL-VIS-OVERLAY-001" => new OverlayAppearanceGate(),
         "REL-VIS-NOTIFY-001" => new NotificationSeverityGate(),
         "REL-JOURNEY-001" => new ProductJourneyGate(),
@@ -371,6 +372,18 @@ public static class ReleaseCatalog
             optIn: true,
             source: "docs/release-checklist.md sections 5 and 7a",
             dependsOn: ["REL-UPD-MSI-DECLINE-001"]),
+
+        Describe(
+            id: "REL-INSTALL-CLEAN-001",
+            title: "A first start on a machine with nothing of ExoSnap on it",
+            scenarioClass: "install",
+            layer: ScenarioLayer.Secure,
+            isolation: ScenarioIsolation.DisposableOs,
+            privilege: ScenarioPrivilege.SecureDesktop,
+            interaction: ScenarioInteraction.OperatorAssisted,
+            oracle: ["exosnap", "msi", "filesystem", "registry"],
+            optIn: true,
+            source: "docs/release-checklist.md section 5 (clean install)"),
 
         Describe(
             id: "REL-PKG-CHOCO-001",

@@ -5,7 +5,7 @@
 
 Every release gate the typed harness knows, in catalog order. `docs/dev/release-verify-harness.md` is how to work on the harness and `docs/dev/release-verify.md` owns what each gate requires; this page only lays the declarations side by side.
 
-Catalog version `aecb498650aee064`. 27 scenarios, 22 with a migrated body, 11 required for promotion.
+Catalog version `eeb38b20bd730888`. 28 scenarios, 23 with a migrated body, 11 required for promotion.
 
 | ID | Class | Tier | Layer | Isolation | Privilege | Interaction | Requires | Oracle | Migrated | Required | Source |
 |----|-------|------|-------|-----------|-----------|-------------|----------|--------|----------|----------|--------|
@@ -33,6 +33,7 @@ Catalog version `aecb498650aee064`. 27 scenarios, 22 with a migrated body, 11 re
 | REL-UPD-PORTABLE-001 | update | 2 | FullAuto | DisposableOs | Standard | Automated | - | exosnap, filesystem | yes | no | ADR 0068; docs/release-checklist.md section 5 |
 | REL-UPD-MSI-DECLINE-001 | update | 2 | Secure | DisposableOs | SecureDesktop | OperatorAssisted | - | exosnap, filesystem | yes | no | ADR 0067 (cancel is not failure) |
 | REL-UPD-MSI-001 | update | 2 | Secure | DisposableOs | SecureDesktop | OperatorAssisted | - | exosnap, msi, filesystem | yes | no | docs/release-checklist.md sections 5 and 7a |
+| REL-INSTALL-CLEAN-001 | install | 2 | Secure | DisposableOs | SecureDesktop | OperatorAssisted | - | exosnap, msi, filesystem, registry | yes | no | docs/release-checklist.md section 5 (clean install) |
 | REL-PKG-CHOCO-001 | packaging | 2 | Secure | DisposableOs | SecureDesktop | OperatorAssisted | sandbox.available = true | chocolatey, filesystem, registry | yes | no | docs/release-checklist.md section 8 (Chocolatey) |
 | REL-JOURNEY-001 | journey | 1 | FullAuto | Desktop | Standard | Automated | ffprobe.available = true | exosnap, ffprobe | yes | yes | Wave C product journey |
 | REL-SHUTDOWN-001 | journey | 1 | FullAuto | Desktop | Standard | Automated | - | exosnap | yes | yes | ADR 0067 (no flush-on-stop dependency) |

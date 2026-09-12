@@ -193,6 +193,109 @@ public sealed class ChocolateyRehearsalGate : IScenarioBody
     }
 }
 
+/// <summary>REL-INSTALL-CLEAN-001: a first start on a machine with nothing of ExoSnap on it.</summary>
+/// <remarks>
+/// Clean is a state, not a screen. A machine carrying an earlier install, an earlier
+/// configuration, a recovery manifest, update state or a per-user registry key does
+/// something different on a first start -- so the worker establishes the state before
+/// it measures anything, and a machine that was not clean is reported as the harness
+/// failing to set the test up.
+///
+/// The upgrade direction is not repeated here: REL-UPD-MSI-001 already installs an
+/// older release and updates it to the bound candidate. And the visual first-run
+/// surfaces belong to the visual scenarios; pressing them in would make a state test
+/// fail for a pixel.
+/// </remarks>
+public sealed class CleanFirstStartGate : IScenarioBody
+{
+    /// <summary>The guest worker script, staged from the repository root.</summary>
+    public const string WorkerFileName = "clean-first-start-worker.ps1";
+
+    /// <summary>Where the worker lives, relative to the repository root.</summary>
+    public const string WorkerScriptPath = "scripts/lib/" + WorkerFileName;
+
+    /// <summary>The steps that assert something about the started application.</summary>
+    public static readonly string[] ProductSteps =
+    [
+        "first-start-identity",
+        "first-start-no-recovery",
+        "first-start-defaults",
+        "first-start-shutdown",
+        "second-start-healthy",
+    ];
+
+    private readonly Func<string, ReleaseMsiLookup> locateMsi;
+
+    /// <summary>Creates the gate resolving the candidate MSI beside the bound executable.</summary>
+    public CleanFirstStartGate()
+        : this(executablePath => ReleaseMsiArtifact.Locate(executablePath, Environment.GetEnvironmentVariable))
+    {
+    }
+
+    /// <summary>Creates the gate with an injected MSI lookup.</summary>
+    public CleanFirstStartGate(Func<string, ReleaseMsiLookup> locateMsi)
+    {
+        ArgumentNullException.ThrowIfNull(locateMsi);
+        this.locateMsi = locateMsi;
+    }
+
+    /// <inheritdoc/>
+    public async Task<ScenarioResult> RunAsync(ScenarioContext context, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        var services = context.RequireServices();
+
+        var worker = Path.Combine(services.Artifact.RepositoryRoot, WorkerScriptPath);
+        if (!File.Exists(worker))
+        {
+            return ScenarioResult.Unavailable($"{WorkerScriptPath} is missing");
+        }
+
+        // Before the guest is started: without a candidate identity there is nothing
+        // to compare the started application against.
+        if (services.Artifact.DescribeIncompleteCandidateIdentity() is { Length: > 0 } incomplete)
+        {
+            return ScenarioResult.InfrastructureError(incomplete);
+        }
+
+        var msi = this.locateMsi(services.Artifact.ExecutablePath);
+        if (msi.Path is null)
+        {
+            return ScenarioResult.Unavailable(msi.Detail);
+        }
+
+        var staged = new List<string>(WorkerPayload.StagingPathsFor(worker, WorkerPayload.ReadFileOrNull))
+        {
+            msi.Path,
+        };
+        var request = new DisposableOsWorkerRequest(
+            WorkerFileName,
+            staged,
+            [
+                "-MsiPath", Path.GetFileName(msi.Path),
+                "-ExpectedVersion", services.Artifact.ProductVersion,
+            ])
+        {
+            EvidenceDirectory = context.EvidenceDirectory,
+            // Nothing here downloads anything. An offline machine is also the honest
+            // starting point: a first start that quietly reached an update feed is a
+            // different measurement.
+            RequiresNetwork = false,
+        };
+
+        var run = await services.DisposableOs.RunAsync(request, cancellationToken).ConfigureAwait(false);
+
+        return run.Kind switch
+        {
+            DisposableOsRunKind.Unavailable => ScenarioResult.Unavailable(run.Detail),
+            DisposableOsRunKind.Faulted => ScenarioResult.InfrastructureError(run.Detail),
+            DisposableOsRunKind.Completed => DisposableOsUpdateRun.ToScenarioResult(
+                DisposableOsVerdict.From(run.Result, ProductSteps)),
+            _ => ScenarioResult.InfrastructureError($"unrecognized disposable-OS run kind {run.Kind}"),
+        };
+    }
+}
+
 /// <summary>What the two update gates do identically apart from which steps they require.</summary>
 internal static class DisposableOsUpdateRun
 {
