@@ -1356,6 +1356,13 @@ if(Python3_EXECUTABLE)
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/scripts/generate-brand-marks.py" --check
     )
     set_tests_properties(brand.geometry.marks_match_the_generator PROPERTIES TIMEOUT 60)
+elseif(EXOSNAP_REQUIRE_TEST_TOOLS)
+    message(FATAL_ERROR
+        "Python 3 was not found, so brand.geometry.marks_match_the_generator would not be registered "
+        "and the suite would pass without it. Install Python 3 or configure with "
+        "-DEXOSNAP_REQUIRE_TEST_TOOLS=OFF to accept a reduced suite.")
+else()
+    message(STATUS "Python 3 not found: the brand geometry generator check will not be registered.")
 endif()
 
 # Pure unit tests for HumanizeEngineDetail (RecordingErrorPanel's raw-enum → canon
@@ -1458,9 +1465,9 @@ if(EXOSNAP_PWSH)
     # prerequisite never ran. Running them from inside the pipeline they guard
     # would let a broken orchestrator pass itself.
     #
-    # Label "pipeline", deliberately not "live_verify": ctest -LE takes a regex,
-    # so the documented "-ExcludeLabel live" shortcut also drops live_verify.
-    # These cases query no hardware and must survive that exclusion.
+    # Label "pipeline", deliberately not "live_verify": these cases guard the
+    # local pipeline rather than the Live Verify runner, and nothing here queries
+    # hardware.
     add_test(NAME pipeline.drift_guards
         COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
             "${PROJECT_SOURCE_DIR}/scripts/tests/check-drift.tests.ps1")
@@ -1475,6 +1482,21 @@ if(EXOSNAP_PWSH)
         COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
             "${PROJECT_SOURCE_DIR}/scripts/tests/check-source-hygiene.tests.ps1")
     set_tests_properties(pipeline.source_hygiene PROPERTIES TIMEOUT 180 LABELS "pipeline")
+
+    # The entry point every other gate runs the suite through. What it promises
+    # is negative -- that a label exclusion cannot take a category with it, that
+    # an empty selection is an error rather than a pass, and that a failing
+    # test's own logs survive the cleanup -- and none of that is observable from
+    # a green run of the real suite.
+    add_test(NAME pipeline.run_tests_contract
+        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
+            "${PROJECT_SOURCE_DIR}/scripts/tests/run-tests-contract.tests.ps1")
+    set_tests_properties(pipeline.run_tests_contract PROPERTIES TIMEOUT 300 LABELS "pipeline")
+elseif(EXOSNAP_REQUIRE_TEST_TOOLS)
+    message(FATAL_ERROR
+        "pwsh was not found, so none of the Live Verify and pipeline script tests would be registered "
+        "-- including the publish lock and the signature verifier. Install PowerShell 7 or configure "
+        "with -DEXOSNAP_REQUIRE_TEST_TOOLS=OFF to accept a reduced suite.")
 else()
     message(STATUS "pwsh not found: the Live Verify and pipeline script tests will not be registered.")
 endif()

@@ -392,7 +392,7 @@ jobs:
         run: >-
           pwsh -NonInteractive -File scripts/run-tests.ps1
           -BuildDir build/windows-x64-ninja-debug -Config Debug
-          -ExcludeLabel live
+          -ExcludeLabel live -RequireFresh
 
       # Blocking static analysis. Deliberately a step inside build-test-debug
       # rather than a job of its own: build-test-debug is already a required
@@ -523,7 +523,7 @@ jobs:
         run: >-
           pwsh -NonInteractive -File scripts/run-tests.ps1
           -BuildDir build/windows-x64-ninja-release -Config Release
-          -ExcludeLabel live
+          -ExcludeLabel live -RequireFresh
 
       - name: sccache stats
         if: always()
