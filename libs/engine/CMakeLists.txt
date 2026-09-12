@@ -1154,6 +1154,19 @@ exosnap_add_gtest(
 target_include_directories(test_capture_drain_step PRIVATE src)
 target_compile_definitions(test_capture_drain_step PRIVATE NOMINMAX)
 
+# How long a drain may run. Both drains terminated only because a real source
+# runs out; a source that stays ready starved the encode step, the pacing tick
+# and the stop check below them. The clock is a parameter, so an endlessly ready
+# source is a loop here rather than a machine fast enough to produce one.
+exosnap_add_gtest(
+    NAME test_capture_drain_budget
+    TEST_PREFIX engine.
+    SOURCES tests/test_capture_drain_budget.cpp
+    LIBRARIES exosnap_engine d3d11.lib dxgi.lib
+)
+target_include_directories(test_capture_drain_budget PRIVATE src)
+target_compile_definitions(test_capture_drain_budget PRIVATE NOMINMAX)
+
 # HDR tone-map render pass on the GPU: WARP-backed proof that the shader renders
 # the curve correctly into both the 8-bit (BGRA8) and 10-bit (R10G10B10A2)
 # intermediates, and that the 10-bit target preserves precision the 8-bit loses.

@@ -2413,6 +2413,31 @@ void VideoThread::Run() {
                                            ? m_state.config.frame_rate_num / m_state.config.frame_rate_den
                                            : 60u;
 
+    // What one tick's drain is allowed to spend. Both drains below used to run
+    // until the source reported empty, which terminates only while the source
+    // does run out: a permanently ready one starved the encode step, the pacing
+    // tick and the stop check that follow them.
+    const DrainBudget drainBudget =
+        DrainBudgetForFrameInterval(std::chrono::microseconds{frame_interval_100ns / 10ULL});
+    // Logged once per session, not per tick: a source that keeps the drain at its
+    // budget would otherwise write a line every frame.
+    bool drainBudgetReported = false;
+    const auto reportDrainBudget = [&](const char* where, DrainContinuation why, uint32_t frames) {
+        if (drainBudgetReported || why == DrainContinuation::Continue || why == DrainContinuation::Stopped)
+            return;
+        drainBudgetReported = true;
+        const logging::LogField fields[] = {
+            {"where", where},
+            {"reason", why == DrainContinuation::FrameBudget ? "frame_budget" : "time_budget"},
+            {"frames", std::to_string(frames)},
+            {"frame_budget", std::to_string(drainBudget.frames)},
+            {"time_budget_us", std::to_string(drainBudget.time.count())},
+        };
+        logging::log(logging::LogLevel::Info, "video_thread",
+                     "capture drain hit its per-tick budget; the source is producing faster than this session encodes",
+                     std::span<const logging::LogField>(fields, std::size(fields)));
+    };
+
     // Publishes the codec private data the mux waits for from the first keyframe
     // that carries it. One place for the live route and the flush drain, so a
     // keyframe that only arrives in the drain gets the same extraction and the
@@ -3023,7 +3048,20 @@ void VideoThread::Run() {
                 // DXGI OD: drain all available frames. Newest-at-tick copies into
                 // odCapturedTex; phase-correct copies into the present-QPC ring.
                 const auto acq_t0 = std::chrono::steady_clock::now();
+                uint32_t odDrained = 0;
                 while (true) {
+                    // Between acquisitions, never inside one: nothing here can
+                    // cancel a driver call that is already blocked in
+                    // TryAcquireFrame. This bounds how many more the loop starts.
+                    const DrainContinuation odCont =
+                        NextDrainContinuation(m_state.stop_requested.load(), odDrained, drainBudget.frames,
+                                              std::chrono::duration_cast<std::chrono::microseconds>(
+                                                  std::chrono::steady_clock::now() - acq_t0),
+                                              drainBudget.time);
+                    if (odCont != DrainContinuation::Continue) {
+                        reportDrainBudget("dxgi_od", odCont, odDrained);
+                        break;
+                    }
                     ID3D11Texture2D* rawTex = nullptr;
                     DXGI_OUTDUPL_FRAME_INFO info{};
                     HRESULT odHr = S_OK;
@@ -3035,6 +3073,7 @@ void VideoThread::Run() {
                         HandleOdAcquireFailure(odHr);
                         break;
                     }
+                    ++odDrained;
                     // Format guard: skip foreign-format frames; fatal on size
                     // change (explicit failure, not a silent CopyResource no-op).
                     {
@@ -3150,10 +3189,24 @@ void VideoThread::Run() {
                     // Every frame walked past still counts as captured and, if
                     // it displaced an unencoded one, as a coalesce drop.
                     winrt::Windows::Graphics::Capture::Direct3D11CaptureFrame frame{nullptr};
+                    uint32_t wgcDrained = 0;
                     for (;;) {
+                        // Same bound as the OD drain, for the same reason: a pool
+                        // that is never empty would keep this walk going past the
+                        // encode step, the pacing tick and the stop check.
+                        const DrainContinuation wgcCont =
+                            NextDrainContinuation(m_state.stop_requested.load(), wgcDrained, drainBudget.frames,
+                                                  std::chrono::duration_cast<std::chrono::microseconds>(
+                                                      std::chrono::steady_clock::now() - acq_t0),
+                                                  drainBudget.time);
+                        if (wgcCont != DrainContinuation::Continue) {
+                            reportDrainBudget("wgc", wgcCont, wgcDrained);
+                            break;
+                        }
                         auto next = framePool.TryGetNextFrame();
                         if (next == nullptr)
                             break;
+                        ++wgcDrained;
                         const bool diag_recording = !m_state.pause_requested.load();
                         if (diag_recording)
                             m_state.diagnostics.OnFrameCaptured();
@@ -3728,7 +3781,21 @@ void VideoThread::Run() {
             const CaptureDrainStep drainStep = NextCaptureDrainStep(useOdCapture, odHolding);
             if (drainStep == CaptureDrainStep::DrainOd) {
                 // DXGI OD: drain available frames, copy to odCapturedTex, keep newest
+                const auto acq_t0 = std::chrono::steady_clock::now();
+                uint32_t odDrained = 0;
                 while (true) {
+                    // Between acquisitions, never inside one: nothing here can
+                    // cancel a driver call that is already blocked in
+                    // TryAcquireFrame. This bounds how many more the loop starts.
+                    const DrainContinuation odCont =
+                        NextDrainContinuation(m_state.stop_requested.load(), odDrained, drainBudget.frames,
+                                              std::chrono::duration_cast<std::chrono::microseconds>(
+                                                  std::chrono::steady_clock::now() - acq_t0),
+                                              drainBudget.time);
+                    if (odCont != DrainContinuation::Continue) {
+                        reportDrainBudget("dxgi_od", odCont, odDrained);
+                        break;
+                    }
                     ID3D11Texture2D* rawTex = nullptr;
                     DXGI_OUTDUPL_FRAME_INFO info{};
                     HRESULT odHr = S_OK;
@@ -3739,6 +3806,7 @@ void VideoThread::Run() {
                         HandleOdAcquireFailure(odHr);
                         break;
                     }
+                    ++odDrained;
                     // Format guard: skip foreign-format frames; fatal on size
                     // change (explicit failure, not a silent CopyResource no-op).
                     {
@@ -3823,16 +3891,31 @@ void VideoThread::Run() {
                 }
             } else if (drainStep == CaptureDrainStep::DrainWgc) {
                 // WGC: drain frame pool — keep latest (always drain, even when paused)
+                const auto acq_t0 = std::chrono::steady_clock::now();
                 try {
                     // Drain to the newest queued frame before copying — see the
                     // CFR drain above (and WgcSourceProducer::PollFrame): only
                     // the newest is encoded, so only the newest is worth a
                     // full-surface GPU copy.
                     winrt::Windows::Graphics::Capture::Direct3D11CaptureFrame frame{nullptr};
+                    uint32_t wgcDrained = 0;
                     for (;;) {
+                        // Same bound as the OD drain, for the same reason: a pool
+                        // that is never empty would keep this walk going past the
+                        // encode step, the pacing tick and the stop check.
+                        const DrainContinuation wgcCont =
+                            NextDrainContinuation(m_state.stop_requested.load(), wgcDrained, drainBudget.frames,
+                                                  std::chrono::duration_cast<std::chrono::microseconds>(
+                                                      std::chrono::steady_clock::now() - acq_t0),
+                                                  drainBudget.time);
+                        if (wgcCont != DrainContinuation::Continue) {
+                            reportDrainBudget("wgc", wgcCont, wgcDrained);
+                            break;
+                        }
                         auto next = framePool.TryGetNextFrame();
                         if (next == nullptr)
                             break;
+                        ++wgcDrained;
                         const bool diag_recording = !m_state.pause_requested.load();
                         if (diag_recording)
                             m_state.diagnostics.OnFrameCaptured();

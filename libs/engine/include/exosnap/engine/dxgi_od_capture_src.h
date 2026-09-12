@@ -316,6 +316,77 @@ enum class CaptureDrainStep : uint8_t {
 }
 
 // ---------------------------------------------------------------------------
+// How long the frame loop may keep draining before it has to do its other work.
+//
+// Both drains used to be "keep going while the source has more". That is a
+// termination condition only as long as the source runs out. A source that
+// stays ready -- a 1000 Hz present rate, a virtual display driver that never
+// reports empty, a backend replaying a backlog -- never lets the loop reach the
+// encode step, the pacing tick or the stop check below it. The recording then
+// produces nothing and does not stop, and neither symptom points at the drain.
+//
+// So the drain gets a budget, and the budget is checked BETWEEN acquisitions.
+// What this does not do, and must not be described as doing: interrupt a
+// driver call that is already blocked inside TryAcquireFrame or
+// TryGetNextFrame. Nothing here can cancel that; the budget bounds how many
+// more the loop starts, not the one it is inside.
+// ---------------------------------------------------------------------------
+enum class DrainContinuation : uint8_t {
+    Continue,    // Keep draining.
+    Stopped,     // A stop was requested: leave the drain to the loop's stop handling.
+    FrameBudget, // This tick has taken all the frames it is allowed to.
+    TimeBudget,  // This tick has spent all the time it is allowed to.
+};
+
+// Pure, and the clock is a parameter: a test drives an endlessly ready source
+// without waiting for one.
+//
+// A zero budget means unbounded for that axis, so a caller that has a reason to
+// drain without one says so explicitly rather than by passing a number large
+// enough to look like a bound.
+[[nodiscard]] constexpr DrainContinuation NextDrainContinuation(bool stop_requested, uint32_t frames_drained,
+                                                                uint32_t frame_budget,
+                                                                std::chrono::microseconds elapsed,
+                                                                std::chrono::microseconds time_budget) noexcept {
+    // Stop first: a stop that arrives while the drain still has budget left must
+    // not wait for the budget to run out.
+    if (stop_requested)
+        return DrainContinuation::Stopped;
+    if (frame_budget != 0 && frames_drained >= frame_budget)
+        return DrainContinuation::FrameBudget;
+    if (time_budget.count() != 0 && elapsed >= time_budget)
+        return DrainContinuation::TimeBudget;
+    return DrainContinuation::Continue;
+}
+
+struct DrainBudget {
+    uint32_t frames = 0;
+    std::chrono::microseconds time{0};
+};
+
+// The budget for one tick, derived from the configured frame interval.
+//
+// Half the interval: the drain is one of several things a tick has to do, and
+// the other half is what the encode, composite and pacing steps get. The floor
+// keeps a very high configured rate from producing a budget so small that a
+// single acquisition exceeds it and the drain never reads a second frame; the
+// ceiling keeps a very low one (a 1 fps timelapse) from handing the drain most
+// of a second during which a stop cannot be observed.
+[[nodiscard]] constexpr DrainBudget DrainBudgetForFrameInterval(std::chrono::microseconds frame_interval) noexcept {
+    constexpr std::chrono::microseconds kFloor{1000};    // 1 ms
+    constexpr std::chrono::microseconds kCeiling{10000}; // 10 ms, above half of a 60 fps interval
+    std::chrono::microseconds half = frame_interval / 2;
+    if (half < kFloor)
+        half = kFloor;
+    if (half > kCeiling)
+        half = kCeiling;
+    // 64 frames is far more than a healthy source queues in one tick and far
+    // less than an unbounded loop: it bounds the pathological case without
+    // truncating a real backlog.
+    return DrainBudget{64u, half};
+}
+
+// ---------------------------------------------------------------------------
 // Wait-for-first-frame guard policy (start-time OD access loss)
 // ---------------------------------------------------------------------------
 // A game entering exclusive fullscreen exactly as recording starts throws
