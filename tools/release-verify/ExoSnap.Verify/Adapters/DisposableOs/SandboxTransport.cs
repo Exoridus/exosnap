@@ -155,12 +155,18 @@ public sealed class SandboxTransport : IDisposableOsTransport
         }
 
         var staging = Path.Combine(this.stagingRoot, "sandbox-" + Guid.NewGuid().ToString("N"));
+        // Collected in the finally and attached to whatever is returned, so the
+        // caller learns about a failed collection on every path -- including the
+        // paths that faulted, which are the ones whose evidence matters most.
+        var evidence = EvidenceOutcome.NotRequested;
+        DisposableOsRun outcome;
         try
         {
             var preparation = this.Prepare(staging, request);
             if (preparation.Failure is not null)
             {
-                return DisposableOsRun.Faulted(preparation.Failure);
+                outcome = DisposableOsRun.Faulted(preparation.Failure);
+                return outcome with { Evidence = evidence };
             }
 
             var launch = await this.processes.RunAsync(
@@ -168,24 +174,33 @@ public sealed class SandboxTransport : IDisposableOsTransport
                 cancellationToken).ConfigureAwait(false);
             if (!launch.Succeeded)
             {
-                return DisposableOsRun.Faulted(
+                outcome = DisposableOsRun.Faulted(
                     $"WindowsSandbox.exe exited {launch.ExitCode} without starting the worker: {launch.StandardError}");
+                return outcome with { Evidence = evidence };
             }
 
-            var outcome = await AwaitResultAsync(preparation, request.Timeout, cancellationToken).ConfigureAwait(false);
+            outcome = await AwaitResultAsync(preparation, request.Timeout, cancellationToken).ConfigureAwait(false);
 
             // The marker means the worker finished, not that the machine is gone.
             // Returning while it still shuts down would hand the next gate a
             // machine it cannot have.
             await WaitForFreeMachineAsync(cancellationToken).ConfigureAwait(false);
-            return outcome;
+            return outcome with { Evidence = evidence };
         }
         finally
         {
             // Before the staging goes, and whatever the verdict was: a run that
             // faulted is the one whose evidence is worth the most.
-            CollectEvidence(staging, request.EvidenceDirectory);
-            TryDelete(staging);
+            evidence = CollectEvidence(staging, request.EvidenceDirectory);
+            if (evidence.IsComplete || evidence.State == EvidenceOutcomeState.Missing)
+            {
+                TryDelete(staging);
+            }
+
+            // Otherwise the staging directory stays. It is the only other copy of
+            // what could not be collected, and deleting it is the one irreversible
+            // step here: a directory left behind is recoverable, evidence is not.
+            // The path is named in the Evidence detail the caller receives.
         }
     }
 
@@ -331,29 +346,107 @@ public sealed class SandboxTransport : IDisposableOsTransport
         return false;
     }
 
-    private static void CollectEvidence(string staging, string? destination)
+    /// <summary>
+    /// Copies what the worker wrote back to the host, and says how completely.
+    /// </summary>
+    /// <remarks>
+    /// It swallowed IOException and UnauthorizedAccessException and returned, and
+    /// the caller then deleted the staging directory -- so a failed copy destroyed
+    /// the only source of the evidence and nothing anywhere said so. It also copied
+    /// through a CopyDirectory that threw on the first unreadable file, abandoning
+    /// every file after it.
+    ///
+    /// Now every file is attempted, the failures are counted and named, and the
+    /// caller keeps the staging directory when anything was lost: a run whose
+    /// evidence could not be collected is one whose evidence still exists
+    /// somewhere, and deleting it is the one irreversible thing here.
+    /// </remarks>
+    internal static EvidenceOutcome CollectEvidence(string staging, string? destination)
     {
         if (destination is null)
         {
-            return;
+            return EvidenceOutcome.NotRequested;
         }
 
         var produced = Path.Combine(staging, EvidenceLeaf);
         if (!Directory.Exists(produced))
         {
-            return;
+            // The worker declares an evidence directory and did not write one. That
+            // is not a copy failure, and it is not nothing either: a gate that
+            // expected evidence has none.
+            return new EvidenceOutcome(EvidenceOutcomeState.Missing, 0, 0,
+                $"the worker wrote no {EvidenceLeaf} directory");
         }
 
+        var failures = new List<string>();
+        var copied = CopyDirectoryBestEffort(produced, destination, failures);
+
+        if (failures.Count == 0)
+        {
+            return new EvidenceOutcome(EvidenceOutcomeState.Complete, copied, 0,
+                $"{copied} evidence file(s) collected");
+        }
+
+        var state = copied > 0 ? EvidenceOutcomeState.Partial : EvidenceOutcomeState.Failed;
+        // Capped: a directory whose whole content is unreadable would otherwise
+        // produce a message nobody can read either.
+        var named = string.Join(" | ", failures.Take(5));
+        var more = failures.Count > 5 ? $" (+{failures.Count - 5} more)" : string.Empty;
+        return new EvidenceOutcome(state, copied, failures.Count,
+            $"{copied} evidence file(s) collected, {failures.Count} could not be: {named}{more}; "
+            + $"the staging directory was kept so nothing is lost: {staging}");
+    }
+
+    /// <summary>
+    /// Copies as much as it can and records what it could not, rather than stopping
+    /// at the first failure. Returns the number of files copied.
+    /// </summary>
+    private static int CopyDirectoryBestEffort(string source, string destination, List<string> failures)
+    {
         try
         {
-            CopyDirectory(produced, destination);
+            Directory.CreateDirectory(destination);
         }
-        catch (IOException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
+            failures.Add($"{destination}: {ex.Message}");
+            return 0;
         }
-        catch (UnauthorizedAccessException)
+
+        var copied = 0;
+        IEnumerable<string> files;
+        IEnumerable<string> directories;
+        try
         {
+            files = Directory.EnumerateFiles(source).ToList();
+            directories = Directory.EnumerateDirectories(source).ToList();
         }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            failures.Add($"{source}: {ex.Message}");
+            return 0;
+        }
+
+        foreach (var file in files)
+        {
+            try
+            {
+                File.Copy(file, Path.Combine(destination, Path.GetFileName(file)), overwrite: true);
+                copied++;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                failures.Add($"{Path.GetFileName(file)}: {ex.Message}");
+            }
+        }
+
+        foreach (var directory in directories)
+        {
+            copied += CopyDirectoryBestEffort(
+                directory, Path.Combine(destination, Path.GetFileName(directory)), failures);
+        }
+
+        return copied;
     }
 
     private static void CopyDirectory(string source, string destination)

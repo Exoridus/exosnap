@@ -32,6 +32,11 @@ param(
     [Parameter(Mandatory)] [string] $BaseMsiPath,
     [Parameter(Mandatory)] [string] $ResultPath,
     [Parameter(Mandatory)] [string] $MarkerPath,
+    # Where everything worth reading afterwards goes. The host copies THIS back
+    # before the machine and its staging are discarded, so anything written outside
+    # it is gone -- which is what happened to the MSI logs and the updater state
+    # while they lived under the staging directory.
+    [Parameter(Mandatory)] [string] $EvidenceDirectory,
     [string] $UpdateChannel = 'Preview',
     [int] $OfferTimeoutSeconds = 90
 )
@@ -40,13 +45,43 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $script:Steps = [System.Collections.Generic.List[object]]::new()
-$script:LogDirectory = Join-Path $StagingDirectory 'logs'
+New-Item -ItemType Directory -Path $EvidenceDirectory -Force | Out-Null
+# Under the evidence directory, not the staging directory: the staging directory
+# goes away with the machine, and the logs of a run that failed are the only
+# reason to have looked.
+$script:LogDirectory = Join-Path $EvidenceDirectory 'logs'
 New-Item -ItemType Directory -Path $script:LogDirectory -Force | Out-Null
 
 function Add-Step {
-    param([Parameter(Mandatory)] [string] $Name, [Parameter(Mandatory)] [bool] $Ok, [string] $Detail = '')
-    $script:Steps.Add([pscustomobject]@{ name = $Name; ok = $Ok; detail = $Detail })
-    Write-Host "  $(if ($Ok) { 'ok  ' } else { 'FAIL' })  $Name  $Detail"
+    <#
+    .SYNOPSIS
+        Record one step, saying whether it is a product assertion or the test
+        environment being built.
+    .DESCRIPTION
+        `Kind` is what keeps a bootstrap failure from reading as a product defect.
+        A step with ok=false used to mean "ExoSnap is wrong" whatever the reason,
+        so "msiexec could not start because a staged dependency was missing" was
+        reported as a failing product gate -- the harness accusing the product of
+        its own setup problem.
+
+        bootstrap: building the environment the assertions need. Installing the
+        older release, selecting the channel, launching a helper. A failure here
+        measured nothing about ExoSnap.
+
+        product: what the gate is actually asserting. Only these may fail the gate.
+
+        The default is deliberately 'product': a new step that forgets to say
+        which it is gets the conservative reading, which can make a gate fail but
+        can never hide a product defect behind an infrastructure label.
+    #>
+    param(
+        [Parameter(Mandatory)] [string] $Name,
+        [Parameter(Mandatory)] [bool] $Ok,
+        [string] $Detail = '',
+        [ValidateSet('product', 'bootstrap')] [string] $Kind = 'product'
+    )
+    $script:Steps.Add([pscustomobject]@{ name = $Name; ok = $Ok; detail = $Detail; kind = $Kind })
+    Write-Host "  $(if ($Ok) { 'ok  ' } else { 'FAIL' })  $Name  [$Kind]  $Detail"
 }
 
 function Write-Result {
@@ -56,7 +91,13 @@ function Write-Result {
         fatal       = $Fatal
         steps       = @($script:Steps)
     }
-    Set-Content -LiteralPath $ResultPath -Value ($document | ConvertTo-Json -Depth 12) -Encoding utf8NoBOM
+    $json = $document | ConvertTo-Json -Depth 12
+    Set-Content -LiteralPath $ResultPath -Value $json -Encoding utf8NoBOM
+    # A second copy inside the evidence directory. The host reads the result from
+    # $ResultPath, but a run whose result read-back failed still leaves the document
+    # where the evidence went -- otherwise the one artefact that says what happened
+    # is the one that does not survive.
+    Set-Content -LiteralPath (Join-Path $EvidenceDirectory 'result.json') -Value $json -Encoding utf8NoBOM
 }
 
 function Invoke-Msi {
@@ -128,17 +169,19 @@ try {
     # ---------------------------------------------------------------- base install
     $install = Invoke-Msi -Arguments "/i `"$BaseMsiPath`"" -LogName 'install-base.log'
     if ($install.ExitCode -ne 0) {
-        Add-Step -Name 'install-base' -Ok $false -Detail "msiexec exited $($install.ExitCode); see logs/install-base.log"
+        Add-Step -Name 'install-base' -Ok $false -Kind 'bootstrap' `
+            -Detail "msiexec exited $($install.ExitCode); see logs/install-base.log"
         Write-Result -Fatal 'the older release could not be installed, so there was nothing to update from'
         return
     }
     $installedExe = Get-InstalledExoSnap
     if ($null -eq $installedExe) {
-        Add-Step -Name 'install-base' -Ok $false -Detail 'the MSI reported success but HKLM:\SOFTWARE\Codexo\ExoSnap names no installed exosnap.exe'
+        Add-Step -Name 'install-base' -Ok $false -Kind 'bootstrap' `
+            -Detail 'the MSI reported success but HKLM:\SOFTWARE\Codexo\ExoSnap names no installed exosnap.exe'
         Write-Result -Fatal 'no installed build to update from'
         return
     }
-    Add-Step -Name 'install-base' -Ok $true -Detail $installedExe
+    Add-Step -Name 'install-base' -Ok $true -Kind 'bootstrap' -Detail $installedExe
 
     # ------------------------------------------------------------- channel + offer
     # The channel is read when the update service starts, so it takes a restart to
@@ -149,13 +192,15 @@ try {
         $set = Invoke-LiveVerifyCommand -Connection $app.Connection -Command 'settings.set' `
             -Parameters @{ key = 'app.updateChannel'; value = $UpdateChannel }
         if (-not $set.ok) {
-            Add-Step -Name 'select-channel' -Ok $false -Detail "settings.set refused: $($set.error.message)"
+            Add-Step -Name 'select-channel' -Ok $false -Kind 'bootstrap' `
+                -Detail "settings.set refused: $($set.error.message)"
             Write-Result -Fatal 'the update channel could not be selected'
             return
         }
         $before = (Invoke-LiveVerifyCommand -Connection $app.Connection -Command 'app.identity').result
         $beforeVersion = "$($before.productVersion)"
-        Add-Step -Name 'select-channel' -Ok $true -Detail "$UpdateChannel, installed version $beforeVersion"
+        Add-Step -Name 'select-channel' -Ok $true -Kind 'bootstrap' `
+            -Detail "$UpdateChannel, installed version $beforeVersion"
     }
     finally { try { $app.Connection.Close() } catch { } }
 

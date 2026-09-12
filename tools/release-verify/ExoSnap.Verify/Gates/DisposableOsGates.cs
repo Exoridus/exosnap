@@ -155,9 +155,20 @@ public sealed class ChocolateyRehearsalGate : IScenarioBody
         // The package source stays a directory: the worker reads
         // tools/chocolateyinstall.ps1 underneath it, so flattening it into the
         // staging directory would lose the only structure it depends on.
+        //
+        // The scripts are derived, not listed: this worker invokes
+        // choco-rehearsal-worker.ps1, which dot-sources ReleaseScenarios.ps1, and a
+        // hand-written list is how both went missing. WorkerPayload reads them out
+        // of the scripts, so the next relative import someone adds is staged
+        // without anyone remembering to.
+        var staged = new List<string>(WorkerPayload.StagingPathsFor(worker, WorkerPayload.ReadFileOrNull))
+        {
+            msi.Path,
+            packageSource,
+        };
         var request = new DisposableOsWorkerRequest(
             WorkerFileName,
-            [worker, msi.Path, packageSource],
+            staged,
             [
                 "-PackageSource", Path.GetFileName(packageSource),
                 "-MsiPath", Path.GetFileName(msi.Path),
@@ -205,10 +216,26 @@ internal static class DisposableOsUpdateRun
 
         // The MSI goes in by its staged leaf name: the transport owns the translation
         // into whatever path its guest sees.
+        //
+        // The scripts are derived (WorkerPayload): this worker imports
+        // LiveVerifyClient.psm1, which was not staged -- the run reached the import
+        // and failed with PowerShell's module error, which reads nothing like an
+        // incomplete payload.
+        var staged = new List<string>(WorkerPayload.StagingPathsFor(worker, WorkerPayload.ReadFileOrNull))
+        {
+            baseMsi,
+        };
+
+        // Evidence was only requested by the Chocolatey gate, so an update run that
+        // failed left its MSI logs and updater state inside a machine that was then
+        // discarded -- the one run whose logs were worth having.
         var request = new DisposableOsWorkerRequest(
             UpdateDeclineGate.WorkerFileName,
-            [worker, baseMsi],
-            ["-BaseMsiPath", Path.GetFileName(baseMsi)]);
+            staged,
+            ["-BaseMsiPath", Path.GetFileName(baseMsi)])
+        {
+            EvidenceDirectory = context.EvidenceDirectory,
+        };
         var run = await services.DisposableOs.RunAsync(request, cancellationToken).ConfigureAwait(false);
 
         return run.Kind switch

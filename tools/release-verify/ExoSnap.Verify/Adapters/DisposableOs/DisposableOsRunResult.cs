@@ -3,11 +3,42 @@ using System.Text.Json.Serialization;
 
 namespace ExoSnap.Verify.Adapters.DisposableOs;
 
+/// <summary>What a step was doing, which decides what its failure means.</summary>
+public static class DisposableOsStepKind
+{
+    /// <summary>
+    /// The step asserted something about ExoSnap. Only these may fail a gate.
+    /// </summary>
+    public const string Product = "product";
+
+    /// <summary>
+    /// The step was building the environment the assertions need -- installing the
+    /// older release, selecting a channel, launching a helper. A failure here
+    /// measured nothing about the product.
+    /// </summary>
+    public const string Bootstrap = "bootstrap";
+}
+
 /// <summary>One step a disposable-OS worker script recorded, in the order it ran them.</summary>
 /// <param name="Name">The step's stable name, matched against a gate's required-step list.</param>
 /// <param name="Ok">Whether the step succeeded.</param>
 /// <param name="Detail">One sentence about what the step observed.</param>
-public sealed record DisposableOsStepResult(string Name, bool Ok, string Detail);
+/// <param name="Kind">
+/// <see cref="DisposableOsStepKind.Product"/> or <see cref="DisposableOsStepKind.Bootstrap"/>.
+/// Defaults to product, deliberately: a worker that forgets to say gets the
+/// conservative reading, which can fail a gate but can never hide a product defect
+/// behind an infrastructure label.
+/// </param>
+public sealed record DisposableOsStepResult(
+    string Name,
+    bool Ok,
+    string Detail,
+    string Kind = DisposableOsStepKind.Product)
+{
+    /// <summary>Whether a failure of this step would be a statement about ExoSnap.</summary>
+    public bool IsProductAssertion =>
+        !string.Equals(this.Kind, DisposableOsStepKind.Bootstrap, StringComparison.Ordinal);
+}
 
 /// <summary>
 /// The result document a disposable-OS worker script writes: every step it
@@ -54,8 +85,16 @@ public sealed record DisposableOsRunResult(IReadOnlyList<DisposableOsStepResult>
                 continue;
             }
 
-            repaired.Add(step.Name is null || step.Detail is null
-                ? step with { Name = step.Name ?? string.Empty, Detail = step.Detail ?? string.Empty }
+            // Kind is filled the same way: a document written by an older worker
+            // carries none, and every step in one of those was a product assertion
+            // by the contract that existed then.
+            repaired.Add(step.Name is null || step.Detail is null || step.Kind is null
+                ? step with
+                {
+                    Name = step.Name ?? string.Empty,
+                    Detail = step.Detail ?? string.Empty,
+                    Kind = step.Kind ?? DisposableOsStepKind.Product,
+                }
                 : step);
         }
 
@@ -110,6 +149,7 @@ public sealed record DisposableOsVerdict(DisposableOsVerdictKind Kind, string Me
         }
 
         var failed = new List<string>();
+        var bootstrapFailed = new List<string>();
         var missing = new List<string>();
         foreach (var name in requiredSteps)
         {
@@ -119,10 +159,42 @@ public sealed record DisposableOsVerdict(DisposableOsVerdictKind Kind, string Me
                 continue;
             }
 
-            if (!step.Ok)
+            if (step.Ok)
+            {
+                continue;
+            }
+
+            if (step.IsProductAssertion)
             {
                 failed.Add($"{name}: {step.Detail}");
             }
+            else
+            {
+                bootstrapFailed.Add($"{name}: {step.Detail}");
+            }
+        }
+
+        // A bootstrap step the gate does not require can still have stopped the run:
+        // every later step depends on the environment it was building.
+        foreach (var step in byName.Values)
+        {
+            if (!step.Ok && !step.IsProductAssertion && !bootstrapFailed.Exists(
+                    entry => entry.StartsWith(step.Name + ":", StringComparison.Ordinal)))
+            {
+                bootstrapFailed.Add($"{step.Name}: {step.Detail}");
+            }
+        }
+
+        // A bootstrap step that failed built no environment, so nothing downstream
+        // of it measured the product -- reporting that as a product failure is the
+        // harness accusing ExoSnap of the harness's own setup problem. Checked
+        // before the product failures so a run that never got off the ground cannot
+        // be read as a defect.
+        if (bootstrapFailed.Count > 0)
+        {
+            return new DisposableOsVerdict(
+                DisposableOsVerdictKind.Unverified,
+                $"the test environment could not be built, so nothing was measured: {string.Join(" | ", bootstrapFailed)}");
         }
 
         if (failed.Count > 0)

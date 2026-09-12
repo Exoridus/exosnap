@@ -56,6 +56,19 @@ public enum DisposableOsRunKind
 /// <param name="Result">The worker's result document, present only when <see cref="Kind"/> is Completed.</param>
 public sealed record DisposableOsRun(DisposableOsRunKind Kind, string Detail, DisposableOsRunResult? Result)
 {
+    /// <summary>
+    /// How completely the worker's evidence reached the host, so a record can tell
+    /// a product verdict apart from the question of whether it can be looked into.
+    /// </summary>
+    /// <remarks>
+    /// A gate that is required for promotion and whose evidence could not be
+    /// collected has not produced the evidence the promotion contract asks for, even
+    /// when the product assertions passed. Carried separately for that reason rather
+    /// than folded into the verdict: the two are different facts and only the caller
+    /// knows whether its evidence is contractually required.
+    /// </remarks>
+    public EvidenceOutcome Evidence { get; init; } = EvidenceOutcome.NotRequested;
+
     /// <summary>The worker wrote this result.</summary>
     public static DisposableOsRun Completed(DisposableOsRunResult result) =>
         new(DisposableOsRunKind.Completed, "the worker finished and wrote a result document", result);
@@ -132,4 +145,46 @@ public sealed class DisposableOsRunner : IDisposableOsRunner
             : string.Join("; ", this.transports.Select(transport => $"{transport.Name}: {transport.UnavailableReason}"));
         return DisposableOsRun.Unavailable($"no disposable-OS transport is available on this machine ({reasons})");
     }
+}
+
+/// <summary>How completely a worker's evidence reached the host.</summary>
+public enum EvidenceOutcomeState
+{
+    /// <summary>The request asked for none.</summary>
+    NotRequested,
+
+    /// <summary>Everything the worker wrote was copied back.</summary>
+    Complete,
+
+    /// <summary>Some of it was copied; the rest could not be.</summary>
+    Partial,
+
+    /// <summary>None of it could be copied, though the worker had written it.</summary>
+    Failed,
+
+    /// <summary>The worker declared an evidence directory and wrote none.</summary>
+    Missing,
+}
+
+/// <summary>What collecting a worker's evidence produced.</summary>
+/// <param name="State">How completely it reached the host.</param>
+/// <param name="FilesCollected">How many files were copied back.</param>
+/// <param name="FilesFailed">How many could not be.</param>
+/// <param name="Detail">One sentence naming what was lost, when anything was.</param>
+public sealed record EvidenceOutcome(
+    EvidenceOutcomeState State,
+    int FilesCollected,
+    int FilesFailed,
+    string Detail)
+{
+    /// <summary>The request asked for no evidence.</summary>
+    public static EvidenceOutcome NotRequested { get; } =
+        new(EvidenceOutcomeState.NotRequested, 0, 0, "no evidence was requested");
+
+    /// <summary>
+    /// True when the evidence is as complete as it was going to be. False means a
+    /// caller that needs its evidence cannot treat this run as fully answered.
+    /// </summary>
+    public bool IsComplete =>
+        this.State is EvidenceOutcomeState.NotRequested or EvidenceOutcomeState.Complete;
 }
