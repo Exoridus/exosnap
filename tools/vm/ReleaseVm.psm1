@@ -847,11 +847,18 @@ function New-ReleaseVmRunPlan {
             VMName = $vm; TimeoutMinutes = $BootTimeoutMinutes
         }) -NeedsCredential
 
+    $agentRoot = [IO.Path]::Combine($RunPath.GuestRoot, 'agent')
     if ($RequireInteractiveGuest -or $Readiness) {
         if (-not $Readiness) { $Readiness = New-ReleaseVmReadinessRequirement -InteractiveAgent }
-        $plan += New-ReleaseVmStep -Name 'guest-readiness' -Command 'Assert-ReleaseVmReadiness' `
-            -Parameters ([ordered]@{ VMName = $vm; Requirement = $Readiness }) -NeedsCredential `
-            -Detail 'measured in the guest, because PowerShell Direct answering proves only that the OS is up'
+
+        $plan += New-ReleaseVmStep -Name 'start-agent' -Command 'Start-ReleaseVmGuestAgent' `
+            -Parameters ([ordered]@{ VMName = $vm; AgentRoot = $agentRoot }) -NeedsCredential `
+            -Detail 'started over PowerShell Direct into the interactive session, which PowerShell Direct is not'
+
+        $plan += New-ReleaseVmStep -Name 'guest-readiness' -Command 'Assert-ReleaseVmAgentHandshake' `
+            -Parameters ([ordered]@{ VMName = $vm; AgentRoot = $agentRoot; Requirement = $Readiness }) `
+            -NeedsCredential `
+            -Detail 'the agent proves its own context; a receipt from PowerShell Direct describes the wrong session'
     }
 
     if ($ArtifactDirectory) {
@@ -865,12 +872,23 @@ function New-ReleaseVmRunPlan {
             })
     }
 
-    $plan += New-ReleaseVmStep -Name 'run' -Command 'Invoke-ReleaseVmCommand' -Parameters ([ordered]@{
-            VMName = $vm
-            Command = $GuestCommand
-            WorkingDirectory = $RunPath.GuestRoot
-            TimeoutMinutes = $RunTimeoutMinutes
-        }) -NeedsCredential -Detail 'the campaign itself, inside the guest'
+    if ($RequireInteractiveGuest -or $Readiness) {
+        $plan += New-ReleaseVmStep -Name 'run' -Command 'Invoke-ReleaseVmInteractiveCommand' -Parameters ([ordered]@{
+                VMName = $vm
+                Command = $GuestCommand
+                AgentRoot = $agentRoot
+                WorkingDirectory = $RunPath.GuestRoot
+                TimeoutMinutes = $RunTimeoutMinutes
+            }) -NeedsCredential -Detail 'through the agent that proved its context, because the app needs a desktop'
+    }
+    else {
+        $plan += New-ReleaseVmStep -Name 'run' -Command 'Invoke-ReleaseVmCommand' -Parameters ([ordered]@{
+                VMName = $vm
+                Command = $GuestCommand
+                WorkingDirectory = $RunPath.GuestRoot
+                TimeoutMinutes = $RunTimeoutMinutes
+            }) -NeedsCredential -Detail 'the campaign itself, inside the guest'
+    }
 
     $plan += New-ReleaseVmStep -Name 'collect' -Command 'Copy-ReleaseVmDirectoryBack' -Parameters ([ordered]@{
             VMName = $vm; Source = $RunPath.GuestResults; Destination = $ResultDirectory
@@ -1047,6 +1065,242 @@ function Test-ReleaseVmReadiness {
     }
 
     return @{ Ready = ($unmet.Count -eq 0); Unmet = $unmet }
+}
+
+function New-ReleaseVmGuestAgentScript {
+    <#
+    .SYNOPSIS
+        The script the interactive agent runs inside the guest.
+    .DESCRIPTION
+        Started over PowerShell Direct, which is session 0 and owns no desktop -- so
+        the first thing the agent does is write down the context it actually got, and
+        only then run what it was asked to run. A receipt written afterwards would
+        describe a context nobody checked before trusting it.
+
+        The application under test needs a desktop; the channel that starts the agent
+        cannot give it one. Everything else PowerShell Direct is good for --
+        bootstrapping, file copy, starting this agent, rescue, evidence collection --
+        it keeps doing.
+    #>
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)] [string] $ReceiptPath,
+        [Parameter(Mandatory)] [string] $ResultPath
+    )
+    return @"
+`$ErrorActionPreference = 'Stop'
+
+# The context this agent got, written before anything runs in it.
+`$receipt = @{ osReachable = `$true }
+`$receipt['agentSessionId'] = (Get-Process -Id `$PID).SessionId
+`$receipt['agentUser'] = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+if (-not ('ExoSnap.Agent.Native' -as [type])) {
+    Add-Type -Namespace 'ExoSnap.Agent' -Name 'Native' -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("kernel32.dll")]
+public static extern uint WTSGetActiveConsoleSessionId();
+[System.Runtime.InteropServices.DllImport("user32.dll")]
+public static extern System.IntPtr GetProcessWindowStation();
+[System.Runtime.InteropServices.DllImport("user32.dll")]
+public static extern System.IntPtr GetThreadDesktop(uint dwThreadId);
+[System.Runtime.InteropServices.DllImport("kernel32.dll")]
+public static extern uint GetCurrentThreadId();
+[System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+public static extern bool GetUserObjectInformationW(
+    System.IntPtr hObj, int nIndex, System.Text.StringBuilder pvInfo, uint nLength, out uint lpnLengthNeeded);
+'@
+}
+function Get-UserObjectName([System.IntPtr] `$handle) {
+    `$buffer = New-Object System.Text.StringBuilder 256
+    `$needed = 0
+    if ([ExoSnap.Agent.Native]::GetUserObjectInformationW(`$handle, 2, `$buffer, 256, [ref]`$needed)) {
+        return `$buffer.ToString()
+    }
+    return `$null
+}
+`$receipt['consoleSessionId'] = [int][ExoSnap.Agent.Native]::WTSGetActiveConsoleSessionId()
+`$receipt['agentWindowStation'] = Get-UserObjectName ([ExoSnap.Agent.Native]::GetProcessWindowStation())
+`$receipt['agentDesktop'] = Get-UserObjectName (
+    [ExoSnap.Agent.Native]::GetThreadDesktop([ExoSnap.Agent.Native]::GetCurrentThreadId()))
+`$receipt['displays'] = @(
+    Get-CimInstance -ClassName Win32_VideoController -ErrorAction SilentlyContinue |
+        Where-Object { `$_.CurrentHorizontalResolution } |
+        ForEach-Object {
+            @{ Name = `$_.Name; Width = [int]`$_.CurrentHorizontalResolution
+               Height = [int]`$_.CurrentVerticalResolution; RefreshHz = [int]`$_.CurrentRefreshRate }
+        })
+`$adapter = @(Get-CimInstance -ClassName Win32_VideoController -ErrorAction SilentlyContinue |
+        Where-Object { `$_.PNPDeviceID -like 'PCI\*' } | Select-Object -First 1)
+if (`$adapter.Count -gt 0) {
+    `$ids = [regex]::Match(`$adapter[0].PNPDeviceID, 'VEN_(?<vendor>[0-9A-F]{4})&DEV_(?<device>[0-9A-F]{4})')
+    `$gpu = @{ Name = `$adapter[0].Name; DriverVersion = `$adapter[0].DriverVersion }
+    if (`$ids.Success) {
+        `$gpu['VendorId'] = `$ids.Groups['vendor'].Value
+        `$gpu['DeviceId'] = `$ids.Groups['device'].Value
+    }
+    `$receipt['gpu'] = `$gpu
+}
+`$receipt | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath '$ReceiptPath' -Encoding UTF8
+
+# Only now, and only what the host asked for. The host reads the receipt first and
+# stops the run if this session is not where the campaign belongs.
+`$Command = `$env:EXOSNAP_AGENT_COMMAND
+if (-not `$Command) { exit 0 }
+`$directory = `$env:EXOSNAP_AGENT_WORKINGDIRECTORY
+if (`$directory) { Set-Location -LiteralPath `$directory }
+& cmd.exe /c `$Command
+@{ exitCode = `$LASTEXITCODE } | ConvertTo-Json | Set-Content -LiteralPath '$ResultPath' -Encoding UTF8
+"@
+}
+
+function Test-ReleaseVmAgentHandshake {
+    <#
+    .SYNOPSIS
+        Whether the agent proved it is where the campaign belongs.
+    .DESCRIPTION
+        Pure. The receipt has to come from the agent: one measured over PowerShell
+        Direct describes the PowerShell Direct session, which is never the session the
+        campaign will run in.
+
+        No receipt at all is an infrastructure failure, never a verdict. A guest whose
+        files all copied and whose channel answers is still not a guest that can show
+        a picture, and reporting that as a product result is the accusation this
+        refuses to make.
+    .OUTPUTS
+        A hashtable with Ok and Detail.
+    #>
+    [OutputType([hashtable])]
+    param(
+        [AllowNull()] [System.Collections.IDictionary] $Receipt,
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Requirement
+    )
+    if ($null -eq $Receipt) {
+        return @{ Ok = $false
+            Detail = 'the guest agent wrote no receipt, so nothing is known about the session a campaign would run in' }
+    }
+    $verdict = Test-ReleaseVmReadiness -Receipt $Receipt -Requirement $Requirement
+    if ($verdict.Ready) { return @{ Ok = $true; Detail = 'the agent is in the session the campaign needs' } }
+    return @{ Ok = $false; Detail = ($verdict.Unmet -join '; ') }
+}
+
+function Start-ReleaseVmGuestAgent {
+    <#
+    .SYNOPSIS
+        Starts the agent in the guest's interactive session and waits for its receipt.
+    .DESCRIPTION
+        Registered as a scheduled task with an interactive principal and started on
+        demand: that is the documented way to put a process in the logged-on session
+        from a channel that is not in it. The task is the launch mechanism and proves
+        nothing by itself -- the agent's own receipt is the proof, and
+        Assert-ReleaseVmAgentHandshake is what reads it.
+    #>
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)] [string] $VMName,
+        [Parameter(Mandatory)] [System.Management.Automation.PSCredential] $Credential,
+        [Parameter(Mandatory)] [string] $AgentRoot,
+        [int] $TimeoutSeconds = 300
+    )
+    $receiptPath = Join-Path $AgentRoot 'agent-receipt.json'
+    $resultPath = Join-Path $AgentRoot 'agent-result.json'
+    $script = New-ReleaseVmGuestAgentScript -ReceiptPath $receiptPath -ResultPath $resultPath
+
+    return Invoke-Command -VMName $VMName -Credential $Credential -ScriptBlock {
+        param($Root, $Body, $ScriptPath, $ReceiptPath, $Timeout, $UserName)
+        New-Item -ItemType Directory -Path $Root -Force | Out-Null
+        Set-Content -LiteralPath $ScriptPath -Value $Body -Encoding UTF8
+        Remove-Item -LiteralPath $ReceiptPath -Force -ErrorAction SilentlyContinue
+
+        $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
+            -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$ScriptPath`""
+        $principal = New-ScheduledTaskPrincipal -UserId $UserName -LogonType Interactive -RunLevel Highest
+        Register-ScheduledTask -TaskName 'ExoSnapGuestAgent' -Action $action -Principal $principal -Force | Out-Null
+        Start-ScheduledTask -TaskName 'ExoSnapGuestAgent'
+
+        $deadline = [DateTime]::UtcNow.AddSeconds($Timeout)
+        while ([DateTime]::UtcNow -lt $deadline) {
+            if (Test-Path -LiteralPath $ReceiptPath) {
+                $receipt = @{}
+                (Get-Content -LiteralPath $ReceiptPath -Raw | ConvertFrom-Json).PSObject.Properties |
+                    ForEach-Object { $receipt[$_.Name] = $_.Value }
+                return $receipt
+            }
+            Start-Sleep -Seconds 2
+        }
+        return $null
+    } -ArgumentList $AgentRoot, $script, (Join-Path $AgentRoot 'agent.ps1'), $receiptPath, $TimeoutSeconds,
+        $Credential.UserName
+}
+
+function Assert-ReleaseVmAgentHandshake {
+    <#
+    .SYNOPSIS
+        Starts the agent and throws unless it proved the context the run needs.
+    .DESCRIPTION
+        The plan step form, and the rule the whole interactive path exists for: a
+        reachable guest whose agent is not interactive does not pass, however many
+        files copied into it successfully.
+    #>
+    param(
+        [Parameter(Mandatory)] [string] $VMName,
+        [Parameter(Mandatory)] [System.Management.Automation.PSCredential] $Credential,
+        [Parameter(Mandatory)] [string] $AgentRoot,
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Requirement,
+        [int] $TimeoutSeconds = 300
+    )
+    $receipt = Start-ReleaseVmGuestAgent -VMName $VMName -Credential $Credential -AgentRoot $AgentRoot `
+        -TimeoutSeconds $TimeoutSeconds
+    $outcome = Test-ReleaseVmAgentHandshake -Receipt $receipt -Requirement $Requirement
+    if (-not $outcome.Ok) { throw "'$VMName' cannot run this campaign: $($outcome.Detail)" }
+    return $receipt
+}
+
+function Invoke-ReleaseVmInteractiveCommand {
+    <#
+    .SYNOPSIS
+        Runs one command line in the guest's interactive session and returns its exit code.
+    .DESCRIPTION
+        The campaign goes through the agent that already proved its context, not over
+        PowerShell Direct: that channel is session 0, and the application under test
+        needs a desktop.
+
+        The exit code is returned rather than thrown on. A campaign that found defects
+        exits non-zero, and that is a result.
+    #>
+    param(
+        [Parameter(Mandatory)] [string] $VMName,
+        [Parameter(Mandatory)] [System.Management.Automation.PSCredential] $Credential,
+        [Parameter(Mandatory)] [string] $Command,
+        [Parameter(Mandatory)] [string] $AgentRoot,
+        [string] $WorkingDirectory = 'C:\ExoSnapRun',
+        [int] $TimeoutMinutes = 120
+    )
+    $resultPath = Join-Path $AgentRoot 'agent-result.json'
+    $result = Invoke-Command -VMName $VMName -Credential $Credential -ScriptBlock {
+        param($CommandLine, $Directory, $ResultPath, $TimeoutSeconds)
+        Remove-Item -LiteralPath $ResultPath -Force -ErrorAction SilentlyContinue
+        [Environment]::SetEnvironmentVariable('EXOSNAP_AGENT_COMMAND', $CommandLine, 'Machine')
+        [Environment]::SetEnvironmentVariable('EXOSNAP_AGENT_WORKINGDIRECTORY', $Directory, 'Machine')
+        try {
+            Start-ScheduledTask -TaskName 'ExoSnapGuestAgent'
+            $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+            while ([DateTime]::UtcNow -lt $deadline) {
+                if (Test-Path -LiteralPath $ResultPath) {
+                    return (Get-Content -LiteralPath $ResultPath -Raw | ConvertFrom-Json).exitCode
+                }
+                Start-Sleep -Seconds 5
+            }
+            return $null
+        }
+        finally {
+            [Environment]::SetEnvironmentVariable('EXOSNAP_AGENT_COMMAND', $null, 'Machine')
+            [Environment]::SetEnvironmentVariable('EXOSNAP_AGENT_WORKINGDIRECTORY', $null, 'Machine')
+        }
+    } -ArgumentList $Command, $WorkingDirectory, $resultPath, ($TimeoutMinutes * 60)
+
+    if ($null -eq $result) {
+        throw "the guest agent did not finish within $TimeoutMinutes minute(s): $Command"
+    }
+    return $result
 }
 
 function Get-ReleaseVmReadiness {
@@ -1925,6 +2179,11 @@ Export-ModuleMember -Function @(
     'Test-ReleaseVmGpuBinding'
     'Get-ReleaseVmHostGpu'
     'Assert-ReleaseVmGpuPartition'
+    'New-ReleaseVmGuestAgentScript'
+    'Test-ReleaseVmAgentHandshake'
+    'Start-ReleaseVmGuestAgent'
+    'Assert-ReleaseVmAgentHandshake'
+    'Invoke-ReleaseVmInteractiveCommand'
     'New-ReleaseVmReadinessRequirement'
     'Test-ReleaseVmReadiness'
     'Get-ReleaseVmReadiness'

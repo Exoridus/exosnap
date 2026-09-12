@@ -504,6 +504,166 @@ Test-Case 'a rescue step of a resource this run never created is skipped' {
 }
 
 # ---------------------------------------------------------------------------
+# The interactive guest agent, and what it has to prove before a campaign runs
+# ---------------------------------------------------------------------------
+#
+# PowerShell Direct is session 0. It is the right channel for bootstrapping, file
+# copy, starting the agent, rescue and evidence collection -- and the wrong process
+# context for the application under test, which needs a desktop. So a capture
+# campaign is launched through an agent in the interactive session, and the agent
+# proves the context it got before anything is run in it.
+#
+# The proof has to come from the agent. A receipt measured over PowerShell Direct
+# describes the PowerShell Direct session, which is never the session the campaign
+# will run in, and reading it as the campaign's context is the defect this replaces.
+
+Test-Case 'the agent script refuses to run anything from session 0' {
+    # The agent is started by a channel that has no desktop, so the first thing it
+    # does is establish that it did not inherit that context.
+    $script = New-ReleaseVmGuestAgentScript -ReceiptPath 'C:\a\receipt.json' -ResultPath 'C:\a\result.json'
+
+    Assert-Match 'SessionId' $script 'the agent has to read the session it is in'
+    Assert-Match 'receipt' $script 'and write down what it found before it runs a campaign'
+}
+
+Test-Case 'the agent writes its receipt before it runs the campaign' {
+    # Order matters: a receipt written afterwards describes a context nobody checked
+    # before trusting it.
+    $script = New-ReleaseVmGuestAgentScript -ReceiptPath 'C:\a\receipt.json' -ResultPath 'C:\a\result.json'
+    $receiptAt = $script.IndexOf('receipt.json')
+    $commandAt = $script.IndexOf('$Command')
+
+    Assert-True ($receiptAt -ge 0) 'the receipt path has to be in the script'
+    Assert-True ($commandAt -ge 0) 'so does the campaign command'
+    Assert-True ($receiptAt -lt $commandAt) 'the context is recorded before it is used'
+}
+
+Test-Case 'the generated agent script is valid PowerShell' {
+    # It is assembled from a here-string with escaped interpolation and a nested
+    # here-string of C# for the user-object calls. A syntax error in it would first
+    # show up as a guest that never handshakes, minutes into a campaign.
+    $script = New-ReleaseVmGuestAgentScript -ReceiptPath 'C:eceipt.json' -ResultPath 'C:esult.json'
+    $errors = $null
+    [System.Management.Automation.Language.Parser]::ParseInput($script, [ref]$null, [ref]$errors) | Out-Null
+
+    Assert-Equal 0 $errors.Count ($errors | ForEach-Object { $_.Message }) -join '; '
+}
+
+Test-Case 'the agent script actually measures a session when it runs' {
+    # Run here, against this machine. What it measures is the host and not a guest,
+    # which is the point: the script has to produce a receipt with the fields the
+    # handshake reads, or the contract above is checked against a document nothing
+    # writes.
+    $root = Join-Path ([IO.Path]::GetTempPath()) ('exosnap-agent-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $root -Force | Out-Null
+    try {
+        $receiptPath = Join-Path $root 'receipt.json'
+        $scriptPath = Join-Path $root 'agent.ps1'
+        Set-Content -LiteralPath $scriptPath -Encoding UTF8 -Value (
+            New-ReleaseVmGuestAgentScript -ReceiptPath $receiptPath -ResultPath (Join-Path $root 'result.json'))
+
+        # No EXOSNAP_AGENT_COMMAND is set, so the agent writes its receipt and stops.
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath *> $null
+
+        Assert-True (Test-Path -LiteralPath $receiptPath) 'the agent has to write its receipt before anything else'
+        $receipt = Get-Content -LiteralPath $receiptPath -Raw | ConvertFrom-Json
+        Assert-True $receipt.osReachable 'a running agent is a reachable one'
+        foreach ($field in @('agentSessionId', 'consoleSessionId', 'agentWindowStation', 'agentDesktop', 'agentUser')) {
+            Assert-True ($null -ne $receipt.$field) "the handshake reads $field, so the agent has to write it"
+        }
+    }
+    finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-Case 'an agent that never handshook is an infrastructure failure, not a verdict' {
+    $outcome = Test-ReleaseVmAgentHandshake -Receipt $null -Requirement (
+        New-ReleaseVmReadinessRequirement -InteractiveAgent)
+
+    Assert-True (-not $outcome.Ok) 'no receipt is no proof'
+    Assert-Match 'no receipt' $outcome.Detail 'the reason has to say the agent never answered'
+}
+
+Test-Case 'a reachable guest whose agent is not interactive does not pass' {
+    # The rule this whole package exists for: PowerShell Direct works, every file
+    # copied, and the campaign still must not run.
+    $receipt = @{
+        osReachable        = $true
+        agentSessionId     = 0
+        consoleSessionId   = 1
+        agentWindowStation = 'Service-0x0-3e7$'
+        agentDesktop       = ''
+    }
+    $outcome = Test-ReleaseVmAgentHandshake -Receipt $receipt -Requirement (
+        New-ReleaseVmReadinessRequirement -InteractiveAgent)
+
+    Assert-True (-not $outcome.Ok) 'a reachable guest is not a ready guest'
+    Assert-Match 'owns no desktop' $outcome.Detail 'the reason has to be the session'
+}
+
+Test-Case 'an agent that proved its context may run the campaign' {
+    $receipt = @{
+        osReachable        = $true
+        agentSessionId     = 1
+        consoleSessionId   = 1
+        agentWindowStation = 'WinSta0'
+        agentDesktop       = 'Default'
+        agentUser          = 'exosnap'
+    }
+    $outcome = Test-ReleaseVmAgentHandshake -Receipt $receipt -Requirement (
+        New-ReleaseVmReadinessRequirement -InteractiveAgent -ExpectedUser 'exosnap')
+
+    Assert-True $outcome.Ok 'the agent is where the campaign needs to be'
+}
+
+Test-Case 'an interactive run launches its campaign through the agent, not over PowerShell Direct' {
+    $paths = Get-ReleaseVmRunPath -RunId 'agent' -Root 'T:\images'
+    $plan = New-ReleaseVmRunPlan -RunPath $paths -GuestCommand 'verify.exe' -ResultDirectory 'T:\out' `
+        -RequireInteractiveGuest
+    $run = @($plan | Where-Object Name -eq 'run')[0]
+
+    Assert-Equal 'Invoke-ReleaseVmInteractiveCommand' $run.Command `
+        'PowerShell Direct is session 0 and the application under test needs a desktop'
+}
+
+Test-Case 'a run with no interactive requirement keeps the direct channel' {
+    # Scope in the other direction: an install-and-uninstall scenario has no desktop
+    # to prove and no reason to pay for an agent.
+    $paths = Get-ReleaseVmRunPath -RunId 'direct' -Root 'T:\images'
+    $plan = New-ReleaseVmRunPlan -RunPath $paths -GuestCommand 'verify.exe' -ResultDirectory 'T:\out'
+    $run = @($plan | Where-Object Name -eq 'run')[0]
+
+    Assert-Equal 'Invoke-ReleaseVmCommand' $run.Command 'nothing here needs a desktop'
+    Assert-True (-not (@($plan | ForEach-Object { $_.Name }) -contains 'start-agent')) 'nor an agent'
+}
+
+Test-Case 'the agent is started and has proved itself before the campaign' {
+    $paths = Get-ReleaseVmRunPath -RunId 'order' -Root 'T:\images'
+    $plan = New-ReleaseVmRunPlan -RunPath $paths -GuestCommand 'verify.exe' -ResultDirectory 'T:\out' `
+        -RequireInteractiveGuest
+    $names = @($plan | ForEach-Object { $_.Name })
+
+    foreach ($step in @('start-agent', 'guest-readiness', 'run')) {
+        Assert-True ($names -contains $step) "an interactive run needs $step"
+    }
+    Assert-True ([array]::IndexOf($names, 'wait-for-guest') -lt [array]::IndexOf($names, 'start-agent')) `
+        'the agent is started over PowerShell Direct, which needs the OS up first'
+    Assert-True ([array]::IndexOf($names, 'start-agent') -lt [array]::IndexOf($names, 'guest-readiness')) `
+        'the receipt has to come from the agent, not from the channel that started it'
+    Assert-True ([array]::IndexOf($names, 'guest-readiness') -lt [array]::IndexOf($names, 'run')) `
+        'proving the context after using it explains a failure instead of preventing it'
+}
+
+Test-Case 'the readiness step reads the receipt the agent wrote' {
+    $paths = Get-ReleaseVmRunPath -RunId 'receipt' -Root 'T:\images'
+    $plan = New-ReleaseVmRunPlan -RunPath $paths -GuestCommand 'verify.exe' -ResultDirectory 'T:\out' `
+        -RequireInteractiveGuest
+    $readiness = @($plan | Where-Object Name -eq 'guest-readiness')[0]
+
+    Assert-Equal 'Assert-ReleaseVmAgentHandshake' $readiness.Command `
+        'a receipt measured over PowerShell Direct describes the PowerShell Direct session'
+}
+
+# ---------------------------------------------------------------------------
 # Which image a campaign actually ran on
 # ---------------------------------------------------------------------------
 #
