@@ -738,6 +738,17 @@ exosnap_add_gtest(
 target_include_directories(test_nvenc_output_ring PRIVATE src
     "${CMAKE_SOURCE_DIR}/third_party/nvidia")
 
+# Which pending entry a rejected submission takes back: its own, at the back,
+# not the oldest frame the driver still owns at the front (no GPU needed).
+exosnap_add_gtest(
+    NAME test_nvenc_pending_rollback
+    TEST_PREFIX engine.
+    SOURCES tests/test_nvenc_pending_rollback.cpp
+    LIBRARIES exosnap_engine
+)
+target_include_directories(test_nvenc_pending_rollback PRIVATE src
+    "${CMAKE_SOURCE_DIR}/third_party/nvidia")
+
 # test_hdr_bitstream_metadata: byte-exact unit tests for the in-band HDR10
 # metadata payload builders (HEVC SEI 137/144, AV1 MDCV/CLL OBU payloads). Pure
 # functions — no GPU/NVENC.

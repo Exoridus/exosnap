@@ -7,7 +7,7 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
-#include <queue>
+#include <deque>
 #include <string>
 #include <vector>
 
@@ -61,6 +61,40 @@ enum class EventDrainStep {
     AbortError,   // Any other result (WAIT_FAILED, WAIT_ABANDONED, ...) — stop.
 };
 EventDrainStep NextEventDrainStep(DWORD wait_result, double elapsed_ms, double budget_ms) noexcept;
+
+// ---------------------------------------------------------------------------
+// DiscardRejectedSubmission -- pure, testable removal of the one pending entry a
+// failed submission must take back.
+//
+// The pending FIFO is written BEFORE nvEncEncodePicture so a consume that races
+// the submission finds its entry. When the driver then rejects the picture, the
+// entry has to come out again -- and it is the newest one, at the back. The
+// encoder used to pop the FRONT on that path: with frames A and B buffered
+// (NEED_MORE_INPUT, or async in flight) and C rejected, A's entry vanished while
+// A's input slot and output buffer were still the driver's. C's entry stayed,
+// describing a frame that would never complete; the next consume then locked
+// B's bitstream against C's entry and aborted the session on the timestamp
+// mismatch -- or worse, matched by accident.
+//
+// The entry is found by its inputTimeStamp, which is unique per submission, so
+// this is correct whether or not a consume ran between push and rejection --
+// which the sync path cannot otherwise know. Returns how many entries were
+// removed: 1 normally, 0 when the entry was already consumed (nothing to undo),
+// never more.
+// ---------------------------------------------------------------------------
+template <typename PendingQueue>
+std::size_t DiscardRejectedSubmission(PendingQueue& pending, uint64_t rejected_input_ts) noexcept {
+    std::size_t removed = 0;
+    for (auto it = pending.begin(); it != pending.end();) {
+        if (it->input_ts == rejected_input_ts) {
+            it = pending.erase(it);
+            ++removed;
+        } else {
+            ++it;
+        }
+    }
+    return removed;
+}
 
 // ---------------------------------------------------------------------------
 // FindFreeOutputSlot — pure, testable round-robin scan for a free async
@@ -571,7 +605,11 @@ class NvencEncoder {
         // m_bitstreamBuffer and no completion event).
         int32_t out_idx = -1;
     };
-    std::queue<PendingFrame> m_pending;
+    // A deque rather than a queue: a rejected submission has to remove ITS OWN
+    // entry, which is at the back, and a queue can only pop the front -- which is
+    // the oldest frame still in flight, whose slot and output buffer the driver
+    // still owns. See DiscardRejectedSubmission.
+    std::deque<PendingFrame> m_pending;
 
     int m_needMoreInputCount = 0;
 
