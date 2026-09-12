@@ -290,6 +290,7 @@ add_library(exosnap_engine STATIC
     src/gpu_compositor.cpp
     src/gpu_compositor.h
     src/cursor_sprite.cpp
+    src/device_generation.cpp
     include/exosnap/engine/cursor_sprite.h
     src/gpu_hdr_tonemap.cpp
     include/exosnap/engine/gpu_hdr_tonemap.h

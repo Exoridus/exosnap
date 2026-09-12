@@ -83,49 +83,134 @@ TEST(RawCaptureTapDesc, UnknownPeakFallsBackGracefully) {
 
 // ---- Capture-hub republish decision (DxgiCaptureHubService::WorkerProc) ----
 
+namespace {
+
+// One device, so every case below changes exactly the property it is about.
+const DeviceGeneration kDevA{1};
+const DeviceGeneration kDevB{2};
+
+// The state a 1440p FP16 SDR desktop publishes, as the baseline each case edits.
+CaptureTapPublishState Published() {
+    return CaptureTapPublishState{kDevA,
+                                  /*shared_valid=*/true,
+                                  2560,
+                                  1440,
+                                  DXGI_FORMAT_R16G16B16A16_FLOAT,
+                                  /*hdr_active=*/false,
+                                  /*max_luminance_nits=*/0.0f};
+}
+
+CaptureTapFrameState Frame() {
+    return CaptureTapFrameState{kDevA, 2560, 1440, DXGI_FORMAT_R16G16B16A16_FLOAT, false, 0.0f};
+}
+
+} // namespace
+
 TEST(ShouldRepublishCaptureTap, NoSharedTextureYetAlwaysRepublishes) {
-    EXPECT_TRUE(ShouldRepublishCaptureTap(/*shared_valid=*/false, 0, 0, DXGI_FORMAT_UNKNOWN, 2560, 1440,
-                                          DXGI_FORMAT_R16G16B16A16_FLOAT,
-                                          /*last_hdr_active=*/false, /*last_max_luminance_nits=*/0.0f,
-                                          /*current_hdr_active=*/false, /*current_max_luminance_nits=*/0.0f));
+    CaptureTapPublishState published = Published();
+    published.shared_valid = false;
+    EXPECT_TRUE(ShouldRepublishCaptureTap(published, Frame()));
 }
 
 TEST(ShouldRepublishCaptureTap, DimensionOrFormatChangeRepublishes) {
-    EXPECT_TRUE(ShouldRepublishCaptureTap(/*shared_valid=*/true, 1920, 1080, DXGI_FORMAT_R16G16B16A16_FLOAT, 2560, 1440,
-                                          DXGI_FORMAT_R16G16B16A16_FLOAT, false, 0.0f, false, 0.0f));
-    EXPECT_TRUE(ShouldRepublishCaptureTap(/*shared_valid=*/true, 2560, 1440, DXGI_FORMAT_B8G8R8A8_UNORM, 2560, 1440,
-                                          DXGI_FORMAT_R16G16B16A16_FLOAT, false, 0.0f, false, 0.0f));
+    CaptureTapPublishState smaller = Published();
+    smaller.width = 1920;
+    smaller.height = 1080;
+    EXPECT_TRUE(ShouldRepublishCaptureTap(smaller, Frame()));
+
+    CaptureTapPublishState otherFormat = Published();
+    otherFormat.format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    EXPECT_TRUE(ShouldRepublishCaptureTap(otherFormat, Frame()));
 }
 
 TEST(ShouldRepublishCaptureTap, UnchangedFrameWithUnchangedFactsDoesNotRepublish) {
-    EXPECT_FALSE(ShouldRepublishCaptureTap(/*shared_valid=*/true, 2560, 1440, DXGI_FORMAT_R16G16B16A16_FLOAT, 2560,
-                                           1440, DXGI_FORMAT_R16G16B16A16_FLOAT,
-                                           /*last_hdr_active=*/true, /*last_max_luminance_nits=*/1000.0f,
-                                           /*current_hdr_active=*/true, /*current_max_luminance_nits=*/1000.0f));
+    CaptureTapPublishState published = Published();
+    published.hdr_active = true;
+    published.max_luminance_nits = 1000.0f;
+    CaptureTapFrameState frame = Frame();
+    frame.hdr_active = true;
+    frame.max_luminance_nits = 1000.0f;
+    EXPECT_FALSE(ShouldRepublishCaptureTap(published, frame));
 }
 
 TEST(ShouldRepublishCaptureTap, HdrActiveToggleWithUnchangedFormatStillRepublishes) {
-    // The regression this guards: an Advanced-Color desktop keeps delivering
-    // FP16 across a live Windows-HDR (or Auto-HDR) toggle, so dimensions/format
-    // alone never notice the display's HDR state flipped underneath the
-    // already-shared texture. Before the fix this returned false, leaving the
-    // preview tone-mapped with a stale peak/transform until an unrelated
-    // resolution change forced a refresh.
-    EXPECT_TRUE(ShouldRepublishCaptureTap(/*shared_valid=*/true, 2560, 1440, DXGI_FORMAT_R16G16B16A16_FLOAT, 2560, 1440,
-                                          DXGI_FORMAT_R16G16B16A16_FLOAT,
-                                          /*last_hdr_active=*/false, /*last_max_luminance_nits=*/0.0f,
-                                          /*current_hdr_active=*/true, /*current_max_luminance_nits=*/1000.0f));
+    // An Advanced-Color desktop keeps delivering FP16 across a live Windows-HDR
+    // (or Auto-HDR) toggle, so dimensions and format alone never notice the
+    // display's HDR state flipped underneath the already-shared texture. Before
+    // that fix the preview stayed tone-mapped with a stale peak and transform
+    // until an unrelated resolution change forced a refresh.
+    CaptureTapFrameState frame = Frame();
+    frame.hdr_active = true;
+    frame.max_luminance_nits = 1000.0f;
+    EXPECT_TRUE(ShouldRepublishCaptureTap(Published(), frame));
 }
 
 TEST(ShouldRepublishCaptureTap, MaxLuminanceChangeAloneRepublishes) {
     // The display's reported peak can change (e.g. a driver renegotiation) while
     // hdr_active stays true; the stale peak_scale must still be refreshed.
-    EXPECT_TRUE(ShouldRepublishCaptureTap(/*shared_valid=*/true, 2560, 1440, DXGI_FORMAT_R16G16B16A16_FLOAT, 2560, 1440,
-                                          DXGI_FORMAT_R16G16B16A16_FLOAT,
-                                          /*last_hdr_active=*/true, /*last_max_luminance_nits=*/400.0f,
-                                          /*current_hdr_active=*/true, /*current_max_luminance_nits=*/1000.0f));
+    CaptureTapPublishState published = Published();
+    published.hdr_active = true;
+    published.max_luminance_nits = 400.0f;
+    CaptureTapFrameState frame = Frame();
+    frame.hdr_active = true;
+    frame.max_luminance_nits = 1000.0f;
+    EXPECT_TRUE(ShouldRepublishCaptureTap(published, frame));
 }
 
+TEST(ShouldRepublishCaptureTap, AReplacedDeviceRepublishesThoughNothingElseChanged) {
+    // The defect. After a DEVICE_REMOVED or an adapter-matched reopen the desktop
+    // is the same size, the same format, in the same HDR state -- and the shared
+    // texture belongs to a device that no longer exists. Every other comparison
+    // in this function says "carry on", so the generation is the only thing that
+    // can say otherwise, and the consumer was handed a handle into a dead device.
+    CaptureTapFrameState frame = Frame();
+    frame.device_generation = kDevB;
+    EXPECT_TRUE(ShouldRepublishCaptureTap(Published(), frame));
+}
+
+TEST(ShouldRepublishCaptureTap, NoDeviceIsNeverCurrent) {
+    // Between Close() and the next Open() the producer has no generation. A
+    // dependent must not treat "no device on either side" as "unchanged".
+    CaptureTapPublishState published = Published();
+    published.device_generation = DeviceGeneration{};
+    CaptureTapFrameState frame = Frame();
+    frame.device_generation = DeviceGeneration{};
+    EXPECT_TRUE(ShouldRepublishCaptureTap(published, frame));
+
+    // And a texture published before any device existed is never current either.
+    EXPECT_TRUE(ShouldRepublishCaptureTap(published, Frame()));
+}
+
+// ---- DeviceResourceIsCurrent, the rule all three hubs share ----
+
+TEST(DeviceGenerationRule, TheSameGenerationIsCurrent) {
+    EXPECT_TRUE(DeviceResourceIsCurrent(kDevA, kDevA));
+}
+
+TEST(DeviceGenerationRule, ADifferentGenerationIsNot) {
+    EXPECT_FALSE(DeviceResourceIsCurrent(kDevA, kDevB));
+    EXPECT_FALSE(DeviceResourceIsCurrent(kDevB, kDevA));
+}
+
+TEST(DeviceGenerationRule, NothingBuiltIsNotTheSameAsStillGood) {
+    const DeviceGeneration none{};
+    EXPECT_FALSE(DeviceResourceIsCurrent(none, kDevA)) << "a dependent built without a device must be rebuilt";
+    EXPECT_FALSE(DeviceResourceIsCurrent(kDevA, none)) << "a resource cannot be current against no device";
+    EXPECT_FALSE(DeviceResourceIsCurrent(none, none)) << "two absences are not a match";
+}
+
+TEST(DeviceGenerationRule, GenerationsAreUniqueAndMonotonic) {
+    // Process-wide: two producers must never mint the same number for different
+    // devices, or a dependent following a source change between them sees no
+    // difference where there is one.
+    const DeviceGeneration first = NextDeviceGeneration();
+    const DeviceGeneration second = NextDeviceGeneration();
+    EXPECT_TRUE(first.Valid());
+    EXPECT_TRUE(second.Valid());
+    EXPECT_NE(first, second);
+    EXPECT_GT(second.value(), first.value());
+    EXPECT_NE(first.value(), DeviceGeneration::kNoDevice);
+}
 // The SDR reference white travels with the tap so the consumer applies the same
 // normalisation the engine does. It is meaningful for the HDR transform only:
 // an SDR Advanced-Color desktop is display-referred, where 1.0 already IS the

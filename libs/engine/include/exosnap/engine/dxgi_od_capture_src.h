@@ -128,6 +128,19 @@ class DxgiOdCaptureSrc {
     // changed size or format is caught by the drain's per-frame guard).
     bool Reopen(ID3D11Device* device, std::string& out_error);
 
+    // The monitor the LIVE duplication is on, which is not necessarily the
+    // HMONITOR passed to Open: a hot-plug or an EDID renegotiation brings the
+    // display back with a new handle, and Reopen re-resolves by device name.
+    //
+    // Anything that keeps asking the OS about "the display being recorded" has to
+    // ask about this one. Holding the handle from Open means querying a monitor
+    // that no longer exists, which fails -- and a caller that treats a failed
+    // query as "nothing changed" then stops checking for the rest of the session.
+    // Null while the source is closed.
+    [[nodiscard]] HMONITOR Monitor() const noexcept {
+        return m_monitor;
+    }
+
   private:
     winrt::com_ptr<IDXGIOutputDuplication> m_duplication;
     // Factory created at Open(), kept only for its IsCurrent() topology check.
@@ -143,6 +156,9 @@ class DxgiOdCaptureSrc {
     // output after its HMONITOR handle changes across a hot-plug. Never cleared by
     // Close() so recovery can re-resolve.
     std::wstring m_device_name;
+    // The HMONITOR the live duplication actually resolved to. Re-read on every
+    // Open, so it follows a Reopen onto a hot-plugged monitor whose handle changed.
+    HMONITOR m_monitor = nullptr;
     uint32_t m_width = 0;
     uint32_t m_height = 0;
     uint32_t m_refresh_rate_hz = 0;
@@ -434,6 +450,30 @@ FirstFrameWaitStep(bool od_start_holding, double elapsed_since_deadline_sec, dou
     if (overall_elapsed_sec > overall_budget_sec)
         return FirstFrameWaitAction::TimeoutFail;
     return FirstFrameWaitStep(od_start_holding, elapsed_since_deadline_sec, timeout_sec);
+}
+
+// ---------------------------------------------------------------------------
+// Which monitor the mid-session HDR guard must ask about.
+//
+// The guard compares the display's current HDR state against the one the colour
+// description was committed from at session start. It held the HMONITOR from
+// that start -- and a reopen after a hot-plug or an EDID renegotiation resolves
+// the output by device name and comes back on a NEW handle. Queries against the
+// old one then fail, every failure reads as "nothing changed", and the guard
+// stops guarding for the rest of the recording without saying so.
+//
+// A WGC session keeps its target monitor for its whole life (documented
+// behaviour: moving a captured window does not move the HDR target), so it is
+// the session handle there. An OD session follows the live duplication, and
+// falls back to the session handle only while the source is closed -- mid-hold,
+// where there is no current monitor to ask about and a stop must not be
+// concluded from a failed query anyway.
+// ---------------------------------------------------------------------------
+[[nodiscard]] constexpr HMONITOR ResolveHdrGuardMonitor(bool use_od_capture, HMONITOR od_current,
+                                                        HMONITOR session_monitor) noexcept {
+    if (use_od_capture && od_current != nullptr)
+        return od_current;
+    return session_monitor;
 }
 
 // Bounded recovery budget for a start-time OD access loss (see FirstFrameWaitStep).

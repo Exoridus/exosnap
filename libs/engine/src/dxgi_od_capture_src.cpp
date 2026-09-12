@@ -288,6 +288,10 @@ bool DxgiOdCaptureSrc::Open(ID3D11Device* device, HMONITOR hmonitor, std::string
     if (!ResolveOutputForDevice(device, hmonitor, std::wstring{}, matchedOutput.put(), &matchedDesc, out_error))
         return false;
     m_device_name = matchedDesc.DeviceName;
+    // The handle the output actually resolved to, not the one the caller passed:
+    // after a Reopen by device name those differ, and everything that keeps
+    // querying the OS about this display has to use this one.
+    m_monitor = matchedDesc.Monitor;
     m_open_signature = ReadOutputModeSignature(m_device_name);
     m_signature_changed = false;
     m_signature_checked_at = std::chrono::steady_clock::now();
@@ -398,6 +402,10 @@ void DxgiOdCaptureSrc::Close() {
     }
     m_duplication = nullptr;
     m_topology_factory = nullptr;
+    // No live duplication, so no monitor to ask about. Deliberately cleared: a
+    // stale handle here would have a caller querying a display this source is not
+    // on, and believing the answer.
+    m_monitor = nullptr;
     m_width = 0;
     m_height = 0;
     m_refresh_rate_hz = 0;

@@ -146,3 +146,41 @@ TEST(FirstFrameOverallBudget, TheOverallBudgetExceedsTwoHoldsAndAGuard) {
 }
 
 } // namespace
+
+// ---- which monitor the mid-session HDR guard asks about ----
+//
+// The guard held the HMONITOR from session start. A reopen after a hot-plug or an
+// EDID renegotiation resolves the output by device name and returns a NEW handle,
+// so every query against the old one failed, each failure read as "HDR is
+// unchanged", and the guard stopped guarding for the rest of the recording.
+
+namespace {
+
+// Handles, not dereferenced -- only compared.
+HMONITOR AtOpen() {
+    return reinterpret_cast<HMONITOR>(static_cast<uintptr_t>(0x1000));
+}
+HMONITOR AfterReopen() {
+    return reinterpret_cast<HMONITOR>(static_cast<uintptr_t>(0x2000));
+}
+
+TEST(HdrGuardMonitor, AnOdSessionFollowsTheLiveDuplication) {
+    EXPECT_EQ(ResolveHdrGuardMonitor(/*use_od_capture=*/true, AfterReopen(), AtOpen()), AfterReopen());
+}
+
+TEST(HdrGuardMonitor, AnOdSessionOnItsOriginalMonitorIsUnaffected) {
+    EXPECT_EQ(ResolveHdrGuardMonitor(true, AtOpen(), AtOpen()), AtOpen());
+}
+
+TEST(HdrGuardMonitor, AClosedOdSourceFallsBackToTheSessionMonitor) {
+    // Mid-hold there is no live duplication. The session handle is the only one
+    // there is; a failed query on it does not conclude a stop either way.
+    EXPECT_EQ(ResolveHdrGuardMonitor(true, nullptr, AtOpen()), AtOpen());
+}
+
+TEST(HdrGuardMonitor, AWgcSessionKeepsItsFixedTarget) {
+    // Documented behaviour: moving a captured window does not move the HDR target.
+    EXPECT_EQ(ResolveHdrGuardMonitor(/*use_od_capture=*/false, AfterReopen(), AtOpen()), AtOpen());
+}
+
+} // namespace

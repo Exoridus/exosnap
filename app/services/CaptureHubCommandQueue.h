@@ -54,8 +54,13 @@ template <class Payload> class CaptureHubCommandQueue {
         uint64_t serial = 0;
         {
             std::lock_guard lock(mutex_);
+            // After Shutdown nothing drains this queue, so a command posted here
+            // would sit in it for the rest of the process. The serial is still
+            // advanced and returned so a caller's WaitForLeaseRelease cannot
+            // accidentally match an older command's acknowledgement.
             serial = next_serial_++;
-            queue_.push_back(Entry{op, serial, std::move(payload)});
+            if (!stopping_)
+                queue_.push_back(Entry{op, serial, std::move(payload)});
         }
         cv_.notify_all();
         return serial;

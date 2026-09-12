@@ -1735,16 +1735,46 @@ void VideoThread::Run() {
     // would be wasted GPU-adjacent work in the hot loop.
     auto lastHdrCheckAt = std::chrono::steady_clock::now();
     constexpr auto kHdrCheckPollDelay = std::chrono::seconds{2};
+    // Consecutive failed HDR queries. A streak means the guard has not been able
+    // to answer for a while, which is not the same as "unchanged".
+    uint32_t hdrCheckFailures = 0;
+    constexpr uint32_t kHdrCheckFailureStreak = 5;
+
     const auto CheckHdrStateChanged = [&]() {
         const auto now = std::chrono::steady_clock::now();
         if (now - lastHdrCheckAt < kHdrCheckPollDelay) {
             return;
         }
         lastHdrCheckAt = now;
+        // The monitor the capture is on RIGHT NOW. A reopen after a hot-plug or an
+        // EDID renegotiation re-resolves the output by device name and comes back
+        // on a new HMONITOR, so the handle from session start names a monitor that
+        // no longer exists: every query against it fails, each failure is treated
+        // as "nothing changed", and the guard silently stops guarding for the rest
+        // of the recording. WGC sessions keep their documented fixed target.
+        const HMONITOR currentMonitor = ResolveHdrGuardMonitor(useOdCapture, odSrc.Monitor(), hdrCheckMonitor);
         HdrDisplayFacts freshFacts;
-        if (!QueryDisplayHdrFacts(hdrCheckMonitor, freshFacts)) {
-            return; // transient query failure — don't false-positive a stop
+        if (!QueryDisplayHdrFacts(currentMonitor, freshFacts)) {
+            // One failure is transient and must not stop a recording. A run of them
+            // is not: it means this guard has not been able to answer its question
+            // for a while, and saying nothing would pass that off as "HDR is
+            // unchanged". The recording continues -- the colour description may
+            // still be correct -- and the diagnostics carry that it went unchecked.
+            ++hdrCheckFailures;
+            if (hdrCheckFailures == kHdrCheckFailureStreak) {
+                const logging::LogField fields[] = {
+                    {"consecutive_failures", std::to_string(hdrCheckFailures)},
+                    {"poll_interval_ms",
+                     std::to_string(
+                         std::chrono::duration_cast<std::chrono::milliseconds>(kHdrCheckPollDelay).count())}};
+                logging::log(logging::LogLevel::Warn, "video_thread",
+                             "cannot read this display's HDR state; the recording continues but a mid-session HDR "
+                             "change would not be noticed",
+                             std::span<const logging::LogField>(fields, std::size(fields)));
+            }
+            return;
         }
+        hdrCheckFailures = 0;
         if (freshFacts.hdr_active != initialHdrActive) {
             // Says what happened, what it cost and what to do. The colour
             // description is committed once into the encoder's bitstream, not

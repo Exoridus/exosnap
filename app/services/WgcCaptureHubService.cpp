@@ -4,7 +4,9 @@
 #include "services/CaptureHubRegistry.h"
 #include "services/WgcSourceProducer.h"
 
+#include <exosnap/engine/device_generation.h>
 #include <exosnap/engine/preview_shared_texture.h>
+#include <exosnap/engine/preview_tap.h>
 
 #include <d3d11.h>
 #include <winrt/base.h>
@@ -61,6 +63,11 @@ bool WgcCaptureHubService::Subscribe(CaptureSourceKey key, HandleSink sink, Fram
         (key.kind != CaptureSourceKey::Kind::Monitor && key.kind != CaptureSourceKey::Kind::Window)) {
         return false;
     }
+    // No pump: either the worker never got a device, or it is shutting down.
+    // Refusing here is the honest answer -- a queued command against a thread
+    // that will never drain it looks like a subscription that is about to work.
+    if (commands_.Stopping())
+        return false;
     SubscribePayload payload;
     payload.key = std::move(key);
     payload.sink = std::move(sink);
@@ -74,6 +81,11 @@ void WgcCaptureHubService::Unsubscribe() {
 }
 
 void WgcCaptureHubService::RequestEngineLease() {
+    // Nothing holds a capture when there is no pump, so there is nothing to wait
+    // for. Waiting anyway cost a recording start the full 750 ms per attempt
+    // against a service that had already failed to start.
+    if (commands_.Stopping())
+        return;
     const uint64_t serial = commands_.Post(CaptureHubOp::LeaseRequest);
     // Only this command's own release publishes an acknowledgement for this
     // serial, and the service opens nothing further until the lease returns.
@@ -89,14 +101,27 @@ void WgcCaptureHubService::WorkerProc(std::stop_token stop_token) {
     winrt::init_apartment(winrt::apartment_type::single_threaded);
     winrt::com_ptr<ID3D11Device> device = createDevice();
     if (!device) {
-        diagnostics::AppLog::warning(QStringLiteral("wgc-hub"), QStringLiteral("could not create D3D11 device"));
+        diagnostics::AppLog::warning(QStringLiteral("wgc-hub"),
+                                     QStringLiteral("could not create D3D11 device; the capture hub is unavailable"));
+        // There is no pump from here on, so the service must stop looking like it
+        // has one. Without this, Subscribe() kept queueing commands nobody would
+        // ever apply and every RequestEngineLease() sat out its full 750 ms
+        // waiting for an acknowledgement that could not come -- a recording start
+        // paying that cost per attempt, against a service that had already failed.
+        // Shutdown() releases existing waiters immediately and makes Stopping()
+        // true, which the public entry points check.
+        commands_.Shutdown();
         // The apartment was entered above; leaving it to thread exit strands the
         // STA's proxies and RPC channel instead of tearing them down.
         winrt::uninit_apartment();
         return;
     }
+    exosnap::engine::DeviceGeneration device_generation = exosnap::engine::NextDeviceGeneration();
 
     WgcSourceProducer* producer = nullptr;
+    // `device` by reference, not by value: a producer built after a rebuild must
+    // get the NEW device. Capturing it by value is how every producer created
+    // after a DEVICE_REMOVED was handed the dead one.
     CaptureHubRegistry registry([&](const CaptureSourceKey& key) {
         auto value = std::make_unique<WgcSourceProducer>(key, device);
         producer = value.get();
@@ -113,43 +138,54 @@ void WgcCaptureHubService::WorkerProc(std::stop_token stop_token) {
     SubscribePayload desired;
 
     exosnap::engine::PreviewSharedTexture shared;
-    uint32_t shared_width = 0;
-    uint32_t shared_height = 0;
-    DXGI_FORMAT shared_format = DXGI_FORMAT_UNKNOWN;
+    exosnap::engine::CaptureTapPublishState published;
 
     const auto resetPublisher = [&]() {
         shared.Reset();
-        shared_width = 0;
-        shared_height = 0;
-        shared_format = DXGI_FORMAT_UNKNOWN;
+        published = {};
     };
     const auto publish = [&](const HubFrame& frame) {
         if (!frame.texture || producer == nullptr || producer->Device() == nullptr || !sink)
             return;
         D3D11_TEXTURE2D_DESC description{};
         frame.texture->GetDesc(&description);
-        if (!shared.Valid() || shared_width != description.Width || shared_height != description.Height ||
-            shared_format != description.Format) {
+        // Same rule as the DXGI hub: a shared texture is only reusable while the
+        // device it lives on is the device still in use. The dimensions and format
+        // are identical across a rebuild, so they cannot answer this.
+        const exosnap::engine::CaptureTapFrameState incoming{device_generation,    description.Width,
+                                                             description.Height,   description.Format,
+                                                             published.hdr_active, published.max_luminance_nits};
+        if (exosnap::engine::ShouldRepublishCaptureTap(published, incoming)) {
+            shared.Reset();
             HANDLE handle = nullptr;
             std::string error;
             if (!shared.Create(producer->Device(), description.Width, description.Height, description.Format, &handle,
                                error)) {
+                published = {};
                 diagnostics::AppLog::warning(
                     QStringLiteral("wgc-hub"),
                     QStringLiteral("shared texture create failed: %1").arg(QString::fromStdString(error)));
                 return;
             }
-            shared_width = description.Width;
-            shared_height = description.Height;
-            shared_format = description.Format;
+            published.device_generation = device_generation;
+            published.shared_valid = true;
+            published.width = description.Width;
+            published.height = description.Height;
+            published.format = description.Format;
             exosnap::engine::PreviewTapDesc tap{};
-            sink(handle, shared_width, shared_height, tap);
+            sink(handle, published.width, published.height, tap);
         }
         // A contention drop deliberately does NOT signal: it means the consumer
         // has not taken the previous frame yet, so its redraw is already pending.
         if (shared.TryPublish(producer->Context(), frame.texture.get()).published() && frame_sink)
             frame_sink();
     };
+
+    // Device-rebuild state, reset whenever the source is live again.
+    constexpr exosnap::engine::DeviceRebuildPolicy kRebuildPolicy{};
+    uint32_t rebuild_attempts = 0;
+    bool rebuild_exhausted = false;
+    auto last_rebuild_attempt = std::chrono::steady_clock::now();
 
     std::vector<CaptureHubCommandQueue<SubscribePayload>::Entry> batch;
 
@@ -194,6 +230,8 @@ void WgcCaptureHubService::WorkerProc(std::stop_token stop_token) {
             if (action.return_lease)
                 registry.ReturnLease(current_key);
             if (action.apply_subscription) {
+                rebuild_attempts = 0;
+                rebuild_exhausted = false;
                 current_key = desired.key;
                 sink = std::move(desired.sink);
                 frame_sink = std::move(desired.frame_sink);
@@ -208,6 +246,74 @@ void WgcCaptureHubService::WorkerProc(std::stop_token stop_token) {
             }
         }
         registry.PumpAll();
+
+        // (a) The device died under a live subscription. The hub gave up on the
+        // source (its producer reported Fatal) and will not retry, because the
+        // producer it holds is built on a device that is gone -- only the owner of
+        // that device can replace it. Without this the preview held its last frame
+        // for the rest of the session with nothing saying why.
+        if (subscription && subscription.SourceLost()) {
+            const auto now = std::chrono::steady_clock::now();
+            const uint64_t since_last =
+                rebuild_attempts == 0
+                    ? 0
+                    : static_cast<uint64_t>(
+                          std::chrono::duration_cast<std::chrono::milliseconds>(now - last_rebuild_attempt).count());
+            const exosnap::engine::DeviceRebuildStep step =
+                exosnap::engine::NextDeviceRebuildStep(rebuild_attempts, since_last, kRebuildPolicy);
+
+            if (step == exosnap::engine::DeviceRebuildStep::Rebuild) {
+                ++rebuild_attempts;
+                last_rebuild_attempt = now;
+
+                // Order matters. The subscription is dropped first so the hub (and
+                // its producer built on the dead device) is disposed before a new
+                // device exists; the publisher is reset because its shared texture
+                // belongs to that device; only then is a device created, and only
+                // then may anything be built on it.
+                subscription.Reset();
+                producer = nullptr;
+                resetPublisher();
+                device = nullptr;
+                device_generation = exosnap::engine::DeviceGeneration{};
+
+                winrt::com_ptr<ID3D11Device> replacement = createDevice();
+                if (replacement) {
+                    device = std::move(replacement);
+                    device_generation = exosnap::engine::NextDeviceGeneration();
+                    subscription =
+                        registry.Subscribe(current_key, [&publish](const HubFrame& frame,
+                                                                   exosnap::engine::HubFrameKind) { publish(frame); });
+                    diagnostics::AppLog::info(
+                        QStringLiteral("wgc-hub"),
+                        QStringLiteral("capture device was replaced; rebuilt the producer (attempt %1)")
+                            .arg(rebuild_attempts));
+                } else {
+                    diagnostics::AppLog::warning(
+                        QStringLiteral("wgc-hub"),
+                        QStringLiteral("capture device is gone and a replacement could not be created (attempt %1)")
+                            .arg(rebuild_attempts));
+                }
+            } else if (step == exosnap::engine::DeviceRebuildStep::GiveUp && !rebuild_exhausted) {
+                // Reported once, and honestly: there is no capture and there will
+                // not be one. A consumer that is told nothing keeps waiting for a
+                // frame instead of showing that the source is unavailable.
+                rebuild_exhausted = true;
+                subscription.Reset();
+                producer = nullptr;
+                resetPublisher();
+                diagnostics::AppLog::warning(
+                    QStringLiteral("wgc-hub"),
+                    QStringLiteral("giving up on the capture device after %1 attempts; the hub is unavailable until a "
+                                   "new subscription")
+                        .arg(rebuild_attempts));
+            }
+        } else if (subscription && rebuild_attempts != 0) {
+            // A live source again: the next loss gets its own full budget rather
+            // than inheriting what this one spent.
+            rebuild_attempts = 0;
+            rebuild_exhausted = false;
+        }
     }
     subscription.Reset();
     winrt::uninit_apartment();

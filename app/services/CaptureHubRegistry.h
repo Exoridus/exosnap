@@ -52,6 +52,11 @@ class CaptureSubscription {
     // Frame() is None.
     [[nodiscard]] HubFrame HeldFrame() const;
 
+    // The hub gave up on this source and will not retry (CaptureSourceHub::
+    // SourceLost). An empty subscription reports false: nothing was lost because
+    // nothing was held.
+    [[nodiscard]] bool SourceLost() const;
+
   private:
     friend class CaptureHubRegistry;
     CaptureSubscription(CaptureHubRegistry* registry, CaptureSourceKey key, uint64_t token)
