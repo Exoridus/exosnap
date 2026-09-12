@@ -1156,11 +1156,13 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config, RecordReque
         const MissingCaptureCause cause = ClassifyMissingCapture(!result.succeeded, result.stats.video_frames_captured,
                                                                  pre_stop || state_ptr->caller_stop_requested.load());
         if (cause != MissingCaptureCause::None) {
-            ApplyMissingCaptureOutcome(result, cause, config.target.kind);
+            ApplyMissingCaptureOutcome(result, cause, ResolveCaptureBackend(config));
             const logging::LogField fields[] = {{"cause", cause == MissingCaptureCause::StoppedBeforeCapture
                                                               ? "stopped_before_capture"
                                                               : "no_frames_delivered"},
-                                                {"backend", CaptureBackendName(config.target.kind)}};
+                                                // The resolved backend, not the target kind: a monitor recorded
+                                                // with WGC used to be logged as dxgi_od here.
+                                                {"backend", CaptureBackendName(ResolveCaptureBackend(config))}};
             logging::log(logging::LogLevel::Warn, "recorder_session", "session ended without a captured frame",
                          std::span<const logging::LogField>(fields, std::size(fields)));
         }

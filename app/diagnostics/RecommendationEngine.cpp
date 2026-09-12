@@ -1054,25 +1054,60 @@ void RecommendationEngine::checkAudioClockSaturated(DiagnosticChecklist& checkli
 }
 
 void RecommendationEngine::checkCaptureAdapterMismatch(DiagnosticChecklist& checklist) const {
+    // Two things were wrong here, and they pointed in opposite directions.
+    //
+    // The card declared severity Blocker with tier MeasuredProblem and set
+    // has_blocker. ComputeVerdict counts by TIER, so the verdict read "Recording
+    // works -- 1 thing could hurt the result" directly above a card saying the
+    // encoder cannot record this display. One of the two was lying either way.
+    //
+    // And the claim itself was not measured. The facts come from a DXGI
+    // enumeration: this display is on another adapter, and an NVIDIA adapter
+    // exists somewhere. That is the ordinary hybrid-GPU machine, and many of them
+    // record perfectly well -- the display can be on the iGPU while the encode
+    // runs on the NVIDIA device. So the unmeasured case is a warning that says
+    // what to look at, and only a measured failure blocks.
     constexpr uint32_t kNvidiaVendorId = 0x10DE;
     const auto& a = capture_target_adapter_;
     if (!a.known || a.vendor_id == kNvidiaVendorId || !a.nvidia_adapter_present) {
         return;
     }
+    if (a.encoder_reachability == CaptureTargetAdapterFacts::EncoderReachability::Reachable) {
+        return; // measured: it works on this machine. Nothing to report.
+    }
     const std::string driver = a.adapter_name.empty() ? std::string("another graphics adapter") : a.adapter_name;
+    const bool proven_unable = a.encoder_reachability == CaptureTargetAdapterFacts::EncoderReachability::Failed;
+
+    if (proven_unable) {
+        DiagnosticResult r = MakeResult(
+            "rec.capture.adapter_mismatch", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker,
+            DiagnosticTier::Blocker, "The NVIDIA encoder cannot record this display",
+            "This display is driven by " + driver + ", and opening the encoder for it failed.",
+            "Capture opens on the adapter that owns the display, and the hardware encoder has to be reachable "
+            "from that device. On this machine it was tried and it failed, so a recording started now would "
+            "fail with an error that reads like a codec or driver problem.",
+            a.encoder_failure_detail.empty() ? "Display adapter: " + driver
+                                             : "Display adapter: " + driver + " -- " + a.encoder_failure_detail,
+            "In NVIDIA Control Panel, Manage 3D settings, set the preferred graphics processor to the NVIDIA "
+            "GPU, or connect the display to the NVIDIA outputs, or record a display the NVIDIA GPU drives.");
+        checklist.has_blocker = true;
+        checklist.results.push_back(std::move(r));
+        return;
+    }
+
     DiagnosticResult r = MakeResult(
-        "rec.capture.adapter_mismatch", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker,
+        "rec.capture.adapter_mismatch", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
         DiagnosticTier::MeasuredProblem, "The captured display is not driven by the NVIDIA GPU",
-        "This display is driven by " + driver + "; the NVIDIA encoder cannot record it.",
-        "Capture opens on the adapter that owns the display, and the hardware encoder opens on that same "
-        "device. With the display on " +
-            driver +
-            " the NVIDIA encoder is never reachable, and the failure that follows would read as a codec or "
-            "driver problem.",
-        "Display adapter: " + driver,
-        "In NVIDIA Control Panel, Manage 3D settings, set the preferred graphics processor to the NVIDIA GPU, "
-        "or connect the display to the NVIDIA outputs, or record a display the NVIDIA GPU drives.");
-    checklist.has_blocker = true;
+        "This display is driven by " + driver + "; the NVIDIA encoder may not be reachable from it.",
+        "Capture opens on the adapter that owns the display, and the hardware encoder has to be reachable from "
+        "that device. Many hybrid-GPU machines manage that and record fine, so this is not a verdict on yours "
+        "-- but if a recording of this display fails with what looks like a codec or driver error, this is the "
+        "first thing to check.",
+        "Display adapter: " + driver + " (encoder reachability not measured)",
+        "If a recording of this display fails: in NVIDIA Control Panel, Manage 3D settings, set the preferred "
+        "graphics processor to the NVIDIA GPU, or connect the display to the NVIDIA outputs, or record a "
+        "display the NVIDIA GPU drives.");
+    checklist.has_notice = true;
     checklist.results.push_back(std::move(r));
 }
 

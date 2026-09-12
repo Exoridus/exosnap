@@ -11,11 +11,15 @@
 #include "session_outcome.h"
 
 using exosnap::engine::ApplyMissingCaptureOutcome;
+using exosnap::engine::CaptureBackend;
 using exosnap::engine::CaptureTarget;
 using exosnap::engine::ClassifyMissingCapture;
+using exosnap::engine::EffectiveCaptureBackend;
 using exosnap::engine::ErrorPhase;
 using exosnap::engine::MissingCaptureCause;
+using exosnap::engine::RecorderConfig;
 using exosnap::engine::RecorderResult;
+using exosnap::engine::ResolveCaptureBackend;
 
 namespace {
 
@@ -74,7 +78,7 @@ TEST(ClassifyMissingCapture, AStopThatBeatTheCaptureIsNotACaptureFault) {
 TEST(ApplyMissingCaptureOutcome, NoneChangesNothing) {
     RecorderResult result = SucceedingResult();
 
-    ApplyMissingCaptureOutcome(result, MissingCaptureCause::None, CaptureTarget::Kind::Monitor);
+    ApplyMissingCaptureOutcome(result, MissingCaptureCause::None, EffectiveCaptureBackend::DxgiOutputDuplication);
 
     EXPECT_TRUE(result.succeeded);
     EXPECT_EQ(result.error_phase, ErrorPhase::None);
@@ -84,7 +88,8 @@ TEST(ApplyMissingCaptureOutcome, NoneChangesNothing) {
 TEST(ApplyMissingCaptureOutcome, ACaptureFaultNamesTheCaptureAndItsBackend) {
     RecorderResult result = SucceedingResult();
 
-    ApplyMissingCaptureOutcome(result, MissingCaptureCause::NoFramesDelivered, CaptureTarget::Kind::Monitor);
+    ApplyMissingCaptureOutcome(result, MissingCaptureCause::NoFramesDelivered,
+                               EffectiveCaptureBackend::DxgiOutputDuplication);
 
     EXPECT_FALSE(result.succeeded);
     EXPECT_EQ(result.error_phase, ErrorPhase::VideoCapture) << "the mux must never be named for a capture fault";
@@ -94,16 +99,48 @@ TEST(ApplyMissingCaptureOutcome, ACaptureFaultNamesTheCaptureAndItsBackend) {
 TEST(ApplyMissingCaptureOutcome, AWindowTargetNamesItsOwnBackend) {
     RecorderResult result = SucceedingResult();
 
-    ApplyMissingCaptureOutcome(result, MissingCaptureCause::NoFramesDelivered, CaptureTarget::Kind::Window);
+    ApplyMissingCaptureOutcome(result, MissingCaptureCause::NoFramesDelivered,
+                               EffectiveCaptureBackend::WindowsGraphicsCapture);
 
     EXPECT_NE(result.error_detail.find("Windows Graphics Capture"), std::string::npos);
+}
+
+TEST(ApplyMissingCaptureOutcome, AMonitorRecordedWithWgcIsNotCalledADxgiFault) {
+    // The defect. The backend name came from the TARGET KIND, so a monitor was
+    // always "DXGI desktop duplication" -- including when the session explicitly
+    // selected Windows Graphics Capture for it. The reader was sent to the
+    // diagnostics of a backend that never ran.
+    RecorderConfig config;
+    config.target.kind = CaptureTarget::Kind::Monitor;
+    config.capture_backend = CaptureBackend::WindowsGraphicsCapture;
+    ASSERT_EQ(ResolveCaptureBackend(config), EffectiveCaptureBackend::WindowsGraphicsCapture);
+
+    RecorderResult result = SucceedingResult();
+    ApplyMissingCaptureOutcome(result, MissingCaptureCause::NoFramesDelivered, ResolveCaptureBackend(config));
+
+    EXPECT_NE(result.error_detail.find("Windows Graphics Capture"), std::string::npos);
+    EXPECT_EQ(result.error_detail.find("DXGI"), std::string::npos)
+        << "a backend that never ran must not be named: " << result.error_detail;
+}
+
+TEST(ApplyMissingCaptureOutcome, AMonitorOnTheDefaultBackendIsStillDxgi) {
+    // The control: the default path must keep naming DXGI.
+    RecorderConfig config;
+    config.target.kind = CaptureTarget::Kind::Monitor;
+    config.capture_backend = CaptureBackend::Default;
+    ASSERT_EQ(ResolveCaptureBackend(config), EffectiveCaptureBackend::DxgiOutputDuplication);
+
+    RecorderResult result = SucceedingResult();
+    ApplyMissingCaptureOutcome(result, MissingCaptureCause::NoFramesDelivered, ResolveCaptureBackend(config));
+    EXPECT_NE(result.error_detail.find("DXGI desktop duplication"), std::string::npos);
 }
 
 // The user's own stop is not a capture fault, and must not read like one.
 TEST(ApplyMissingCaptureOutcome, AStopBeforeCaptureIsReportedAsAnAbortedPreparation) {
     RecorderResult result = SucceedingResult();
 
-    ApplyMissingCaptureOutcome(result, MissingCaptureCause::StoppedBeforeCapture, CaptureTarget::Kind::Monitor);
+    ApplyMissingCaptureOutcome(result, MissingCaptureCause::StoppedBeforeCapture,
+                               EffectiveCaptureBackend::DxgiOutputDuplication);
 
     EXPECT_FALSE(result.succeeded);
     EXPECT_EQ(result.error_phase, ErrorPhase::Prepare);

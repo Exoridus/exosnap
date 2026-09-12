@@ -68,13 +68,27 @@ class RecommendationEngine {
     // so the blocker stays silent. Default false (SDR) mirrors the SetOutputPathWritable
     // pattern — the engine stays pure and only emits when the caller supplies the fact.
     // The adapter that drives the captured display, against the encoder the
-    // product needs. A display on the integrated GPU cannot be encoded by the
-    // NVIDIA one; the failure that follows otherwise reads as a codec problem.
+    // product needs. A display on another adapter is a reason to look, not a
+    // proof of anything: hybrid-GPU machines are the common case, and plenty of
+    // them record fine. Only a measurement can say a setup cannot.
     struct CaptureTargetAdapterFacts {
         bool known = false;
         uint32_t vendor_id = 0; // PCI vendor of the adapter owning the display
         std::string adapter_name;
         bool nvidia_adapter_present = false;
+
+        // What is actually known about encoding THIS capture on THIS adapter.
+        // Unknown is the honest default: the adapter facts above come from a DXGI
+        // enumeration, which cannot answer it. Nothing may be blocked on Unknown.
+        enum class EncoderReachability {
+            Unknown,   // Not measured. A warning at most.
+            Reachable, // An encode on this capture's adapter has succeeded.
+            Failed,    // An encode on this capture's adapter has been tried and failed.
+        };
+        EncoderReachability encoder_reachability = EncoderReachability::Unknown;
+        // What was tried and what it said, for the card's evidence line. Empty
+        // unless encoder_reachability is Failed.
+        std::string encoder_failure_detail;
     };
     void SetCaptureTargetAdapter(CaptureTargetAdapterFacts facts) {
         capture_target_adapter_ = std::move(facts);

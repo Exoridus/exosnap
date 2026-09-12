@@ -146,6 +146,75 @@ TEST(EditSessionAdapterTrim, ReleasingAHandleAsksForTheFrameAtThatBoundary) {
     EXPECT_EQ(seek_position, 20'000);
 }
 
+TEST(EditSessionAdapterTrim, DraggingTheOutPointSeeksToTheOutPoint) {
+    // The defect. The seek target was chosen by testing the IN-point's value
+    // (`clamped_start <= 0 ? end_us : start_us`), not by which handle moved. With
+    // an in-point already set, dragging the out-point sent the preview back to
+    // the start of the range -- away from the frame the user was cutting at.
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext());
+    session.setKeyframeTimestampsForTest({0, 10'000'000, 20'000'000, 30'000'000, 40'000'000, 50'000'000});
+
+    // An in-point is set first, and its seek is consumed.
+    session.requestTrim(20'000, 100'000);
+    ASSERT_EQ(session.trimStartUs(), 20'000'000);
+
+    int seek_count = 0;
+    qint64 seek_position = -1;
+    QObject::connect(&session, &EditSessionAdapter::seekRequested, &session, [&](qint64 position_ms) {
+        ++seek_count;
+        seek_position = position_ms;
+    });
+
+    // Now only the out-point moves. The in-point is unchanged at 20 s.
+    session.requestTrim(20'000, 44'000);
+
+    ASSERT_EQ(session.trimStartUs(), 20'000'000) << "the in-point must not have moved";
+    ASSERT_EQ(session.trimEndUs(), 40'000'000);
+    ASSERT_EQ(seek_count, 1);
+    EXPECT_EQ(seek_position, 40'000) << "the seek must follow the handle that moved, not the in-point";
+}
+
+TEST(EditSessionAdapterTrim, DraggingTheInPointStillSeeksToTheInPoint) {
+    // The control: the case the old rule got right must stay right.
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext());
+    session.setKeyframeTimestampsForTest({0, 10'000'000, 20'000'000, 30'000'000, 40'000'000});
+
+    session.requestTrim(20'000, 40'000);
+
+    int seek_count = 0;
+    qint64 seek_position = -1;
+    QObject::connect(&session, &EditSessionAdapter::seekRequested, &session, [&](qint64 position_ms) {
+        ++seek_count;
+        seek_position = position_ms;
+    });
+
+    session.requestTrim(31'000, 40'000);
+
+    ASSERT_EQ(seek_count, 1);
+    EXPECT_EQ(seek_position, 30'000);
+}
+
+TEST(EditSessionAdapterTrim, ATrimThatChangesNothingAsksForNoSeek) {
+    // Re-applying the same range is not a drag. A seek here would fight the
+    // playhead the user just moved somewhere else.
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext());
+    session.setKeyframeTimestampsForTest({0, 10'000'000, 20'000'000, 30'000'000});
+
+    session.requestTrim(20'000, 30'000);
+
+    int seek_count = 0;
+    QObject::connect(&session, &EditSessionAdapter::seekRequested, &session, [&](qint64) { ++seek_count; });
+    session.requestTrim(20'000, 30'000);
+
+    EXPECT_EQ(seek_count, 0);
+}
+
 TEST(EditSessionAdapterTrim, ATrimCountsAsUnsavedWork) {
     EnsureApplication();
     EditSessionAdapter session;
