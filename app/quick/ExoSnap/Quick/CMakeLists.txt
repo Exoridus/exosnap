@@ -1866,6 +1866,10 @@ exosnap_add_gtest(
         EditTimelineModels.h
         ${PROJECT_SOURCE_DIR}/app/services/TimelineThumbnailSource.cpp
         ${PROJECT_SOURCE_DIR}/app/services/TimelineThumbnailSource.h
+        # The export path reports a staging file it could not remove, so the
+        # atomic-publish primitives are part of what this target exercises.
+        ${PROJECT_SOURCE_DIR}/app/services/AtomicFileOps.cpp
+        ${PROJECT_SOURCE_DIR}/app/services/AtomicFileOps.h
     # exosnap_app_log_test_support: loadMarkers() reports markers the sidecar
     # parser had to skip (QCR-207) through AppLog, same as DeviceAdapter does
     # for its rescan milestones.

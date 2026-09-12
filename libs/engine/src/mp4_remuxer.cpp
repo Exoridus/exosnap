@@ -504,10 +504,20 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
         avformat_free_context(out_ctx);
         out_guard.ctx = nullptr;
 
+        // The caller owns this path -- every call site hands in a staging file and
+        // publishes it itself -- so removing it here is a courtesy, not the
+        // transaction. It is still reported: a partial file left on disk because it
+        // could not be deleted is something the caller's own cleanup has to see.
         std::error_code ec;
         std::filesystem::remove(output_path, ec);
-
-        LogInfo("Remux cancelled by caller — partial output removed");
+        if (ec) {
+            logging::LogField fields[] = {{"output", out_str}, {"error", ec.message()}};
+            logging::log(logging::LogLevel::Warn, kLogComponent,
+                         "Remux cancelled, but the partial output could not be removed",
+                         std::span<const logging::LogField>(fields, std::size(fields)));
+        } else {
+            LogInfo("Remux cancelled by caller — partial output removed");
+        }
         return RemuxResult::Fail(AVERROR(ECANCELED), "Remux cancelled by caller");
     }
 
