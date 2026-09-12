@@ -1932,9 +1932,18 @@ void VideoThread::Run() {
         // bounded — the user is waiting on "Preparing"). While holding, the 5 s
         // first-frame guard is suspended (FirstFrameWaitStep); after a successful
         // reopen the deadline anchor (tStart) restarts, giving a fresh 5 s window.
+        //
+        // Both of those windows restart, so neither bounds the start by itself: a
+        // display that reopens and immediately loses access again keeps each of
+        // them young for as long as it likes. tOverall is set once here and never
+        // again, and the bounded step below checks it before anything else --
+        // including while a hold has the 5 s guard suspended.
         bool odStartHolding = false;
         auto odStartLossBegan = std::chrono::steady_clock::now();
         auto odStartLastReopen = odStartLossBegan;
+        const LARGE_INTEGER tOverall = tStart;
+        constexpr double kOverallBudgetSec = std::chrono::duration<double>(kFirstFrameOverallBudget).count();
+        unsigned startHoldsEntered = 0;
 
         while (!gotFirst && !m_state.stop_requested.load()) {
             if (!useOdCapture) {
@@ -1947,7 +1956,35 @@ void VideoThread::Run() {
 
             QueryPerformanceCounter(&tNow);
             double elapsed = static_cast<double>(tNow.QuadPart - tStart.QuadPart) / static_cast<double>(freq.QuadPart);
-            const FirstFrameWaitAction waitAction = FirstFrameWaitStep(odStartHolding, elapsed, kTimeoutSec);
+            const double overallElapsed =
+                static_cast<double>(tNow.QuadPart - tOverall.QuadPart) / static_cast<double>(freq.QuadPart);
+            const FirstFrameWaitAction waitAction =
+                FirstFrameWaitStepBounded(odStartHolding, elapsed, kTimeoutSec, overallElapsed, kOverallBudgetSec);
+            if (waitAction == FirstFrameWaitAction::TimeoutFail && overallElapsed > kOverallBudgetSec) {
+                // The overall bound, not the 5 s guard: name the holds so the
+                // report reads as what happened rather than as a slow display.
+                char buf[256];
+                snprintf(buf, sizeof(buf),
+                         "%s: no first frame within %.0f s of starting, across %u display-loss recover%s. The display "
+                         "kept leaving and returning without settling (a fullscreen switch or mode change that did not "
+                         "complete).",
+                         useOdCapture ? "DXGI OD" : "WGC", kOverallBudgetSec, startHoldsEntered,
+                         startHoldsEntered == 1 ? "y" : "ies");
+                const logging::LogField fields[] = {{"backend", useOdCapture ? "dxgi_od" : "wgc"},
+                                                    {"reason", "first_frame_overall_budget"},
+                                                    {"holds_entered", std::to_string(startHoldsEntered)},
+                                                    {"overall_elapsed_s", std::to_string(overallElapsed)}};
+                logging::log(logging::LogLevel::Warn, "video_thread", "first-frame overall budget exhausted",
+                             std::span<const logging::LogField>(fields, std::size(fields)));
+                m_state.RecordFailure(HRESULT_FROM_WIN32(ERROR_TIMEOUT), ErrorPhase::VideoCapture, buf);
+                if (!useOdCapture) {
+                    if (captureSession != nullptr)
+                        captureSession.Close();
+                    if (framePool != nullptr)
+                        framePool.Close();
+                }
+                return;
+            }
             if (waitAction == FirstFrameWaitAction::TimeoutFail) {
                 if (!useOdCapture) {
                     // Honest cause instead of a bare "timeout". The window-state facts
@@ -2067,6 +2104,7 @@ void VideoThread::Run() {
                     // 15 s budget is exhausted.
                     if (!odStartHolding) {
                         odStartHolding = true;
+                        ++startHoldsEntered;
                         odStartLossBegan = std::chrono::steady_clock::now();
                         odStartLastReopen = odStartLossBegan;
                         logging::log(logging::LogLevel::Info, "video_thread",
@@ -2079,6 +2117,7 @@ void VideoThread::Run() {
                     // same bounded start-hold instead of sitting out the 5 s
                     // first-frame guard for a duplication that cannot deliver.
                     odStartHolding = true;
+                    ++startHoldsEntered;
                     odStartLossBegan = std::chrono::steady_clock::now();
                     odStartLastReopen = odStartLossBegan;
                     logging::log(logging::LogLevel::Info, "video_thread",

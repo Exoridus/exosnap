@@ -417,9 +417,34 @@ FirstFrameWaitStep(bool od_start_holding, double elapsed_since_deadline_sec, dou
     return FirstFrameWaitAction::KeepWaiting;
 }
 
+// The same decision with the bound the two windows above do not have between
+// them. The first-frame deadline restarts after every successful reopen and the
+// hold budget restarts on every entry into a hold, so a display that alternates
+// reopen-succeeds / ACCESS_LOST keeps both windows young forever and the user
+// on "Preparing" for as long as it cares to. The overall elapsed time is
+// measured from the session's first attempt and is never reset by anything.
+//
+// Overall is checked first: while a hold is active the 5 s guard is suspended by
+// design, and the overall bound is the one thing that must not be suspended
+// with it.
+[[nodiscard]] constexpr FirstFrameWaitAction FirstFrameWaitStepBounded(bool od_start_holding,
+                                                                       double elapsed_since_deadline_sec,
+                                                                       double timeout_sec, double overall_elapsed_sec,
+                                                                       double overall_budget_sec) noexcept {
+    if (overall_elapsed_sec > overall_budget_sec)
+        return FirstFrameWaitAction::TimeoutFail;
+    return FirstFrameWaitStep(od_start_holding, elapsed_since_deadline_sec, timeout_sec);
+}
+
 // Bounded recovery budget for a start-time OD access loss (see FirstFrameWaitStep).
 // Short by design: the user is blocked on "Preparing", not watching a live
 // recording, so the wait cannot be the drain's unbounded hold.
 inline constexpr std::chrono::milliseconds kOdStartHoldBudget{15000};
+
+// Everything a start may take from the first acquire attempt to the first frame,
+// holds and reopens included. Two hold budgets plus the first-frame guard with
+// room for the transitions between them: one fullscreen switch that recovers
+// fits comfortably, a display that never settles does not.
+inline constexpr std::chrono::milliseconds kFirstFrameOverallBudget{35000};
 
 } // namespace exosnap::engine
