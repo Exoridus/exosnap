@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
@@ -31,6 +32,17 @@ public sealed record ToolingFingerprint(string OsBuild, string GpuDriver, string
 {
     /// <summary>The value a field takes when nothing could read it.</summary>
     public const string Unknown = "unknown";
+
+    /// <summary>The value a field takes when the tool is resolvably not on the machine.</summary>
+    /// <remarks>
+    /// A different fact from <see cref="Unknown"/> and treated as an ordinary value.
+    /// A machine without PresentMon is a machine whose tool set is fully described --
+    /// it has no PresentMon -- and conflating that with "could not be read" would make
+    /// every verdict on such a machine unreusable for a reason that is not true. A
+    /// tool that appears later changes the fingerprint, which is correct: the next run
+    /// measures with something the previous one did not have.
+    /// </remarks>
+    public const string Absent = "absent";
 
     /// <summary>A fingerprint in which nothing was measured.</summary>
     public static ToolingFingerprint Nothing { get; } = new(Unknown, Unknown, Unknown, Unknown);
@@ -73,6 +85,31 @@ public sealed record ToolingFingerprint(string OsBuild, string GpuDriver, string
     }
 
     /// <summary>
+    /// Reads what this machine is measuring with.
+    /// </summary>
+    /// <param name="gpuDriver">
+    /// The display driver version, as the graphics probe read it. Passed in rather
+    /// than read here so the engine assembly does not depend on the Windows one.
+    /// </param>
+    /// <param name="ffprobeVersion">
+    /// The media oracle's version, <see cref="Absent"/> when it is not installed, or
+    /// an empty string when it is there and would not say.
+    /// </param>
+    /// <param name="presentMonVersion">The present oracle, on the same terms.</param>
+    /// <remarks>
+    /// An empty string becomes <see cref="Unknown"/>, which refuses reuse. A caller
+    /// that knows a tool is simply not installed passes <see cref="Absent"/> instead:
+    /// that is a fact about the machine and hashes like any other, so a campaign on a
+    /// machine without PresentMon is not punished for a question that was answered.
+    /// </remarks>
+    public static ToolingFingerprint Measure(string gpuDriver, string ffprobeVersion, string presentMonVersion) =>
+        new(
+            Environment.OSVersion.Version.ToString(),
+            Known(gpuDriver),
+            Known(ffprobeVersion),
+            Known(presentMonVersion));
+
+    /// <summary>
     /// Whether a verdict recorded under <paramref name="recorded"/> may be reused by a
     /// run measuring under this fingerprint.
     /// </summary>
@@ -108,6 +145,34 @@ public sealed record ToolingFingerprint(string OsBuild, string GpuDriver, string
         if (IsUnknown(this.PresentMon)) { unknown.Add("PresentMon"); }
         return string.Join(", ", unknown);
     }
+
+    /// <summary>
+    /// The file version of an executable, or an empty string when there is none.
+    /// </summary>
+    /// <remarks>
+    /// Read from the file's own version resource rather than by running it with a
+    /// version flag: a fingerprint taken at prepare time should not start four
+    /// processes, and a tool that would have to be run to be identified is a tool this
+    /// cannot identify on a machine where running it is the thing that fails.
+    /// </remarks>
+    public static string VersionOf(string? executablePath)
+    {
+        if (string.IsNullOrWhiteSpace(executablePath) || !File.Exists(executablePath))
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            return FileVersionInfo.GetVersionInfo(executablePath).FileVersion ?? string.Empty;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return string.Empty;
+        }
+    }
+
+    private static string Known(string value) => string.IsNullOrWhiteSpace(value) ? Unknown : value.Trim();
 
     private static bool IsUnknown(string field) =>
         string.IsNullOrWhiteSpace(field) || string.Equals(field, Unknown, StringComparison.OrdinalIgnoreCase);
