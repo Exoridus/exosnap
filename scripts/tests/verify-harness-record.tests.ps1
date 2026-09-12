@@ -26,6 +26,7 @@ $ErrorActionPreference = 'Stop'
 
 $scriptRoot = Split-Path -Parent $PSScriptRoot
 $checker = Join-Path $scriptRoot 'check-release-qualification.ps1'
+. (Join-Path $scriptRoot 'lib/ReleaseQualification.ps1')
 $fixture = Join-Path $PSScriptRoot 'fixtures/verify-harness/release-verification.sample.json'
 
 . (Join-Path $scriptRoot 'lib/ReleaseQualification.ps1')
@@ -151,13 +152,30 @@ Test-Case 'the sample record is the shape the lock understands' {
     Assert-True (-not [string]::IsNullOrWhiteSpace($package.sha256)) 'the package must carry a digest'
 }
 
-Test-Case 'a clean C#-produced record qualifies its commit' {
+Test-Case 'a clean C#-produced record satisfies every content rule the lock has' {
+    # The content rules only -- every field the two implementations have to agree
+    # about -- and deliberately not the completeness rule. That one compares the
+    # record against the catalog and policy of the source line being published,
+    # and the C# producer writes a catalog identity of its own ("catalog-1"), so
+    # it would refuse this fixture whatever the field names were. The case below
+    # is about that refusal; this one is about the field names.
+    $blockers = @(Get-ReleaseQualificationBlockers -Record $record)
+    Assert-Equal 0 $blockers.Count `
+        "the lock objected to a clean record's content: $($blockers -join '; ')"
+}
+
+Test-Case 'the C#-produced record cannot promote this source line yet' {
+    # Not a defect in either half: the C# producer does not yet write this
+    # repository's scenario catalog, and a record about a different set of gates
+    # is not a qualification of this one. Stated as a test so the cutover cannot
+    # be declared finished while it is still true.
     $sidecars = New-SidecarDirectory -Hashes @{ $package.fileName = $package.sha256 }
     try {
         $result = Invoke-Checker -RecordPath $fixture -ExpectedCommit $record.sourceCommit `
             -ExpectedRcTag $record.rcTag -Sha256Directory $sidecars
-        Assert-Equal 0 $result.ExitCode "the lock refused a clean record: $($result.Output)"
-        Assert-True ($result.Output -match 'QUALIFIED') 'the lock must say QUALIFIED out loud'
+        Assert-Equal 1 $result.ExitCode 'a record about another catalog must not promote this commit'
+        Assert-True ($result.Output -match "this source line's catalog") `
+            "the refusal must say the catalog is not this one: $($result.Output)"
     }
     finally { Remove-Item -LiteralPath $sidecars -Recurse -Force -ErrorAction SilentlyContinue }
 }

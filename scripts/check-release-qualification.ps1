@@ -71,6 +71,10 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 . (Join-Path $PSScriptRoot 'lib/ReleaseQualification.ps1')
+# The catalog and the policy come from the source line being published, never
+# from the record: the record's account of which gates were required is the one
+# claim a signature over the record cannot corroborate.
+. (Join-Path $PSScriptRoot 'lib/ReleaseScenarios.ps1')
 
 function Write-Verdict {
     <#
@@ -170,8 +174,18 @@ catch {
     Write-Verdict -Qualified $false -Reasons @($_.Exception.Message)
 }
 
+try {
+    $policy = Get-ReleaseQualificationPolicy
+}
+catch {
+    Write-Verdict -Qualified $false -Reasons @($_.Exception.Message)
+}
+
 $verdict = Test-ReleaseQualification -Record $record -ExpectedCommit $ExpectedCommit `
-    -ExpectedRcTag $ExpectedRcTag -ExpectedPackageSha256 $published
+    -ExpectedRcTag $ExpectedRcTag -ExpectedPackageSha256 $published `
+    -SourceCatalog (Get-ReleaseScenarioCatalog) `
+    -SourceCatalogVersion (Get-ReleaseScenarioCatalogVersion) `
+    -Policy $policy
 
 $detail = "RC ``$(Get-ReleaseQualificationField -Object $record -Name 'rcTag')``, commit " +
 "``$(Get-ReleaseQualificationField -Object $record -Name 'sourceCommit')``, campaign " +

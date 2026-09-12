@@ -23,6 +23,11 @@ $ErrorActionPreference = 'Stop'
 $scriptRoot = Split-Path -Parent $PSScriptRoot
 Import-Module (Join-Path $scriptRoot 'lib/LiveVerifyState.psm1') -Force -DisableNameChecking
 . (Join-Path $scriptRoot 'lib/ReleaseQualification.ps1')
+# The publish lock derives the required set from the catalog and the policy in the
+# source line, so the fixtures have to be about the real ones: a record built
+# against a two-scenario invention would be rejected for that alone, and every
+# negative case below would pass for the wrong reason.
+. (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
 
 $script:CheckScript = Join-Path $scriptRoot 'check-release-qualification.ps1'
 $script:RepositoryRoot = Split-Path -Parent $scriptRoot
@@ -107,10 +112,33 @@ function New-TestRecord {
         one thing wrong, so a passing negative test cannot be an accident of the
         fixture.
     #>
-    param([object[]] $Checks)
+    param(
+        [object[]] $Checks,
+        [string[]] $OmitIds = @(),
+        [switch] $NoBackfill,
+        [object[]] $Catalog = @(),
+        $Policy = $null,
+        [string] $CatalogVersion = ''
+    )
 
-    if ($null -eq $Checks) {
-        $Checks = @((New-TestCheck -Id 'REL-CAP-001'), (New-TestCheck -Id 'REL-SCHEMA-001'))
+    $catalog = if ($Catalog.Count -gt 0) { $Catalog } else { Get-ReleaseScenarioCatalog }
+    $catalogVersion = if ($CatalogVersion) { $CatalogVersion }
+    elseif ($Catalog.Count -gt 0) { '1.0.0' }
+    else { Get-ReleaseScenarioCatalogVersion }
+    $activePolicy = if ($null -ne $Policy) { $Policy } else { Get-ReleaseQualificationPolicy }
+    $policyRequired = @(Get-ReleaseRequiredScenarioIds -Catalog $catalog `
+            -NamedOptIn @($activePolicy.requiredOptIn))
+
+    # Every gate the policy requires gets a PASS row unless the case asked for it
+    # to be missing, so a case that changes one thing changes exactly one thing.
+    # @($null) is a one-element array holding $null, not an empty one.
+    $Checks = @($Checks | Where-Object { $null -ne $_ })
+    if (-not $NoBackfill) {
+        $present = @($Checks | ForEach-Object { "$($_.id)" })
+        foreach ($id in $policyRequired) {
+            if ($id -in $present -or $id -in $OmitIds) { continue }
+            $Checks += (New-TestCheck -Id $id)
+        }
     }
     $record = [ordered]@{
         schema             = Get-ReleaseQualificationSchema
@@ -126,18 +154,40 @@ function New-TestRecord {
             })
         machineFingerprint = 'f' * 64
         harness            = [ordered]@{ version = '1.0.0'; commit = 'c' * 40; dirty = $false }
-        catalog            = [ordered]@{ version = '1.0.0'; digest = 'd' * 64; scenarioCount = 2 }
+        catalog            = Get-ReleaseCatalogIdentity -Catalog $catalog -Version $catalogVersion
         promotion          = Get-ReleasePromotionDeclaration -RcTag $script:GoodRcTag
         capabilities       = [ordered]@{ 'display.count' = '2' }
-        required           = [ordered]@{ ids = @($Checks | Where-Object required | ForEach-Object { $_.id }) }
+        required           = [ordered]@{
+            ids        = @($Checks | Where-Object required | ForEach-Object { $_.id })
+            namedOptIn = @($activePolicy.requiredOptIn)
+        }
         checks             = @($Checks)
     }
-    $blockers = @(Get-ReleaseQualificationBlockers -Record $record)
+    $blockers = @(Get-ReleaseQualificationBlockers -Record $record `
+            -SourceCatalog $catalog -SourceCatalogVersion $catalogVersion `
+            -Policy $activePolicy)
     $record['qualification'] = [ordered]@{
         overall = if ($blockers.Count -eq 0) { 'QUALIFIED' } else { 'NOT_QUALIFIED' }
         reasons = [string[]]$blockers
     }
     return $record
+}
+
+function New-FixturePolicy {
+    <#
+    .SYNOPSIS
+        A policy about a fixture catalog, pinned to that catalog's identity.
+    #>
+    param(
+        [Parameter(Mandatory)] [object[]] $Catalog,
+        [string] $Version = '1.0.0',
+        [string[]] $RequiredOptIn = @()
+    )
+    return [pscustomobject]@{
+        policyVersion = 1
+        catalog       = Get-ReleaseCatalogIdentity -Catalog $Catalog -Version $Version
+        requiredOptIn = [string[]]$RequiredOptIn
+    }
 }
 
 function Invoke-CheckScript {
@@ -366,13 +416,113 @@ Test-Case 'a required gate reported DEFERRED blocks the release' {
     Assert-Match 'REL-UPD-MSI-DECLINE-001 is DEFERRED' $result.Summary 'the reason must name the unanswered gate'
 }
 
-Test-Case 'an opt-in gate nobody named does not block the release' {
-    $directory = New-TestDirectory
-    $record = New-TestRecord -Checks @(
-        (New-TestCheck -Id 'REL-CAP-001'),
-        (New-TestCheck -Id 'REL-AUD-CLOCK-001' -State 'UNAVAILABLE' -Required $false))
-    $result = Invoke-CheckScript -Directory $directory -Record $record
-    Assert-Equal 0 $result.ExitCode "an unnamed opt-in gate must not block: $($result.Output)"
+Test-Case 'an opt-in gate the policy does not name does not block the release' {
+    # Against a fixture catalog and a fixture policy, because the shipped policy
+    # names every opt-in scenario there is: with nothing left unnamed, this rule
+    # would be unobservable and the case would pass without exercising it.
+    $catalog = @(
+        [pscustomobject]@{ Id = 'FIX-BASE-001'; Title = 'base'; Layer = 'automated' },
+        [pscustomobject]@{ Id = 'FIX-LONG-001'; Title = 'long'; Layer = 'automated'; OptIn = $true })
+    $policy = New-FixturePolicy -Catalog $catalog
+    $record = New-TestRecord -NoBackfill -Checks @(
+        (New-TestCheck -Id 'FIX-BASE-001'),
+        (New-TestCheck -Id 'FIX-LONG-001' -State 'UNAVAILABLE' -Required $false)) `
+        -Catalog $catalog -Policy $policy
+
+    $blockers = @(Get-ReleaseQualificationBlockers -Record $record `
+            -SourceCatalog $catalog -SourceCatalogVersion '1.0.0' -Policy $policy)
+    Assert-Equal 0 $blockers.Count "an unnamed opt-in gate must not block: $($blockers -join '; ')"
+}
+
+Test-Case 'a record whose required set is smaller than the policy is refused' {
+    # The case this whole section exists for. Everything about the record is
+    # internally consistent -- every gate it calls required passed, and it says so
+    # -- and it is still not a qualification, because the policy requires a gate
+    # the record decided not to treat as required.
+    $catalog = @(
+        [pscustomobject]@{ Id = 'FIX-A-001'; Title = 'a'; Layer = 'automated' },
+        [pscustomobject]@{ Id = 'FIX-B-001'; Title = 'b'; Layer = 'automated' },
+        [pscustomobject]@{ Id = 'FIX-C-001'; Title = 'c'; Layer = 'automated' })
+    $policy = New-FixturePolicy -Catalog $catalog
+
+    $record = New-TestRecord -NoBackfill -Catalog $catalog -Policy $policy -Checks @(
+        (New-TestCheck -Id 'FIX-A-001'),
+        (New-TestCheck -Id 'FIX-B-001'))
+
+    Assert-Equal 'FIX-A-001 FIX-B-001' (@($record.required.ids) -join ' ') `
+        'the fixture must nominate exactly the two gates it ran'
+
+    $blockers = @(Get-ReleaseQualificationBlockers -Record $record `
+            -SourceCatalog $catalog -SourceCatalogVersion '1.0.0' -Policy $policy)
+    Assert-True ($blockers.Count -gt 0) 'a record that omitted a required gate must not qualify'
+    Assert-True (($blockers -join '; ') -match 'FIX-C-001') `
+        "the omitted gate must be named: $($blockers -join '; ')"
+
+    # And the control: with all three answered, the same fixture qualifies. A
+    # refusal that cannot be satisfied proves nothing about this rule.
+    $complete = New-TestRecord -NoBackfill -Catalog $catalog -Policy $policy -Checks @(
+        (New-TestCheck -Id 'FIX-A-001'),
+        (New-TestCheck -Id 'FIX-B-001'),
+        (New-TestCheck -Id 'FIX-C-001'))
+    $clean = @(Get-ReleaseQualificationBlockers -Record $complete `
+            -SourceCatalog $catalog -SourceCatalogVersion '1.0.0' -Policy $policy)
+    Assert-Equal 0 $clean.Count "the complete record must qualify: $($clean -join '; ')"
+}
+
+Test-Case 'a required gate with no verdict row at all is refused' {
+    $catalog = @(
+        [pscustomobject]@{ Id = 'FIX-A-001'; Title = 'a'; Layer = 'automated' },
+        [pscustomobject]@{ Id = 'FIX-B-001'; Title = 'b'; Layer = 'automated' })
+    $policy = New-FixturePolicy -Catalog $catalog
+
+    # The record nominates both, so the per-id PASS rule has nothing to object
+    # to for FIX-B-001 -- it only looks at ids that have a row.
+    $record = New-TestRecord -NoBackfill -Catalog $catalog -Policy $policy -Checks @(
+        (New-TestCheck -Id 'FIX-A-001'))
+    $record.required.ids = @('FIX-A-001', 'FIX-B-001')
+
+    $blockers = @(Get-ReleaseQualificationBlockers -Record $record `
+            -SourceCatalog $catalog -SourceCatalogVersion '1.0.0' -Policy $policy)
+    Assert-True (($blockers -join '; ') -match 'FIX-B-001') `
+        "a gate with no verdict must be named: $($blockers -join '; ')"
+}
+
+Test-Case 'a policy written against a different catalog is refused, not applied' {
+    $catalog = @([pscustomobject]@{ Id = 'FIX-A-001'; Title = 'a'; Layer = 'automated' })
+    $policy = New-FixturePolicy -Catalog $catalog
+    $record = New-TestRecord -NoBackfill -Catalog $catalog -Policy $policy -Checks @(
+        (New-TestCheck -Id 'FIX-A-001'))
+
+    # The catalog gained a gate; the policy still describes the old one.
+    $grown = @($catalog + [pscustomobject]@{ Id = 'FIX-NEW-001'; Title = 'new'; Layer = 'automated' })
+    $blockers = @(Get-ReleaseQualificationBlockers -Record $record `
+            -SourceCatalog $grown -SourceCatalogVersion '1.0.0' -Policy $policy)
+    Assert-True (($blockers -join '; ') -match 'policy was not revisited') `
+        "a stale policy must be refused: $($blockers -join '; ')"
+}
+
+Test-Case 'the shipped policy is about the shipped catalog' {
+    # The policy pins a digest. Nothing keeps the two in step except this.
+    $catalog = Get-ReleaseScenarioCatalog
+    $identity = Get-ReleaseCatalogIdentity -Catalog $catalog -Version (Get-ReleaseScenarioCatalogVersion)
+    $policy = Get-ReleaseQualificationPolicy
+    foreach ($field in @('version', 'digest', 'scenarioCount')) {
+        Assert-Equal "$($identity[$field])" "$($policy.catalog.$field)" `
+            "scripts/lib/release-policy.json pins catalog $field of a different catalog"
+    }
+    foreach ($id in @($policy.requiredOptIn)) {
+        Assert-True ($id -in @($catalog | ForEach-Object { $_.Id })) `
+            "the policy requires '$id', which the catalog does not have"
+    }
+}
+
+Test-Case 'a qualification without a catalog and policy is not a qualification' {
+    $record = New-TestRecord
+    $verdict = Test-ReleaseQualification -Record $record -ExpectedCommit $script:GoodCommit `
+        -ExpectedRcTag $script:GoodRcTag
+    Assert-True (-not $verdict.Qualified) 'a verdict reached without the policy must not qualify'
+    Assert-True (($verdict.Reasons -join '; ') -match 'could only have been read from the record itself') `
+        "the reason must say why: $($verdict.Reasons -join '; ')"
 }
 
 Test-Case 'a machine left misconfigured blocks the release' {
@@ -694,7 +844,9 @@ Test-Case 'a clean campaign qualifies, and the lock accepts its record' {
         "a clean campaign must qualify: $($record.qualification.reasons -join '; ')"
 
     $verdict = Test-ReleaseQualification -Record $record -ExpectedCommit $script:GoodCommit `
-        -ExpectedRcTag $script:GoodRcTag -ExpectedPackageSha256 @{ $script:PortableName = $script:PortableSha }
+        -ExpectedRcTag $script:GoodRcTag -ExpectedPackageSha256 @{ $script:PortableName = $script:PortableSha } `
+        -SourceCatalog $fixture.Catalog -SourceCatalogVersion '1.0.0' `
+        -Policy (New-FixturePolicy -Catalog $fixture.Catalog)
     Assert-True $verdict.Qualified "the lock must accept the record it produced: $($verdict.Reasons -join '; ')"
 }
 

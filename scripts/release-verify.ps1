@@ -608,6 +608,39 @@ function Write-ReleaseQualificationRecord {
     return $record
 }
 
+function Get-PolicyRequiredOptIn {
+    <#
+    .SYNOPSIS
+        The opt-in gates this release line must answer, from the release policy.
+    .DESCRIPTION
+        The set used to be whatever `-Required` named on the command line, which
+        made the record's own account of "required" the only account there was --
+        and the publish gate could do no better than agree with it. It is read
+        from scripts/lib/release-policy.json instead, so widening or narrowing it
+        is a reviewed commit against the source line being published.
+
+        `-Required` is still accepted, because the campaign runner uses the same
+        list to decide which gates to offer. Naming one the policy does not have
+        is refused rather than silently written into the record: the publish gate
+        would reject that record later, after the campaign had been run.
+    .PARAMETER Named
+        Ids the caller named on the command line.
+    #>
+    param([string[]] $Named = @())
+
+    $policy = Get-ReleaseQualificationPolicy
+    $fromPolicy = @(Get-ReleaseQualificationField -Object $policy -Name 'requiredOptIn')
+
+    $unknown = @(@($Named) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and $_ -notin $fromPolicy })
+    if ($unknown.Count -gt 0) {
+        throw "-Required names $($unknown.Count) gate(s) the release policy does not require: " +
+        "$(($unknown | Sort-Object) -join ', '). Add them to scripts/lib/release-policy.json, " +
+        'or the publish gate will reject the record this run produces.'
+    }
+
+    return [string[]]$fromPolicy
+}
+
 function Show-ReleaseQualification {
     <#
     .SYNOPSIS
@@ -1377,7 +1410,7 @@ switch ($Command) {
         $run = Get-LiveVerifyRun -RunDirectory $directory
         Write-LiveVerifyReport -Run $run | Out-Null
         $record = Write-ReleaseQualificationRecord -Run $run -Catalog $catalog `
-            -RequiredOptIn (Expand-ListArgument -Values $Required)
+            -RequiredOptIn (Get-PolicyRequiredOptIn -Named (Expand-ListArgument -Values $Required))
         Write-Heading 'Report written'
         Write-Host "  $(Join-Path $directory 'release-verification.json')"
         Write-Host "  $(Join-Path $directory 'report.md')"
@@ -1394,7 +1427,7 @@ switch ($Command) {
         $run = Get-LiveVerifyRun -RunDirectory $directory
         Write-LiveVerifyReport -Run $run | Out-Null
         $record = Write-ReleaseQualificationRecord -Run $run -Catalog $catalog `
-            -RequiredOptIn (Expand-ListArgument -Values $Required)
+            -RequiredOptIn (Get-PolicyRequiredOptIn -Named (Expand-ListArgument -Values $Required))
         $recordPath = Join-Path $directory 'release-verification.json'
         Show-ReleaseQualification -Record $record
         Write-Host ''

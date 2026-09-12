@@ -468,6 +468,127 @@ function Get-ReleaseCatalogIdentity {
     return [ordered]@{ version = $Version; digest = $digest; scenarioCount = $Catalog.Count }
 }
 
+function Get-ReleaseQualificationPolicy {
+    <#
+    .SYNOPSIS
+        Which gates a release has to answer, as the repository states it.
+    .DESCRIPTION
+        The completeness half of a qualification cannot come from the record: a
+        record that lists two gates and proves both of them passed is internally
+        consistent and says nothing about the third gate nobody ran. So the set
+        lives in the source line being published, next to this file, and is read
+        from there.
+
+        The policy pins the catalog identity it was written against. A catalog
+        that gained, lost or reclassified a scenario without the policy being
+        revisited is a policy about a different set of gates, and is refused
+        rather than applied to the new one.
+    .PARAMETER Path
+        Policy file to read. Defaults to release-policy.json next to this module.
+    .OUTPUTS
+        The parsed policy object.
+    #>
+    param([string] $Path = '')
+
+    if (-not $Path) { $Path = Join-Path $PSScriptRoot 'release-policy.json' }
+    if (-not (Test-Path -LiteralPath $Path)) {
+        throw "No release policy at '$Path'. Promotion has no definition of 'complete' without it."
+    }
+    return (Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json)
+}
+
+function Get-ReleasePolicyBlockers {
+    <#
+    .SYNOPSIS
+        Every way this record disagrees with what the repository requires.
+    .DESCRIPTION
+        Three comparisons, all of them against sources outside the record:
+
+          * The catalog the record cites has to be the catalog in this source
+            line, by version, digest and count.
+          * The policy has to be about that same catalog, or it is stale.
+          * The required set has to be exactly the set the policy and the catalog
+            produce -- not the set the record nominated for itself.
+
+        The third is the one that matters. Before it, a record could declare
+        `required.ids` to be a subset of the gates, prove every one of them
+        passed, carry a correct signature over all of it, and qualify a release
+        that never ran the rest.
+    .OUTPUTS
+        [string[]] of reasons; empty when the record matches the policy.
+    #>
+    param(
+        [Parameter(Mandatory)] $Record,
+        [Parameter(Mandatory)] [object[]] $Catalog,
+        [Parameter(Mandatory)] [string] $CatalogVersion,
+        [Parameter(Mandatory)] $Policy
+    )
+
+    $reasons = @()
+
+    $identity = Get-ReleaseCatalogIdentity -Catalog $Catalog -Version $CatalogVersion
+    $recorded = Get-ReleaseQualificationField -Object $Record -Name 'catalog'
+
+    foreach ($field in @('version', 'digest', 'scenarioCount')) {
+        $mine = "$($identity[$field])"
+        $theirs = "$(Get-ReleaseQualificationField -Object $recorded -Name $field)"
+        if ($theirs -ne $mine) {
+            $reasons += "the record was produced against catalog $field '$theirs', " +
+            "but this source line's catalog is '$mine'"
+        }
+    }
+
+    $policyCatalog = Get-ReleaseQualificationField -Object $Policy -Name 'catalog'
+    foreach ($field in @('version', 'digest', 'scenarioCount')) {
+        $mine = "$($identity[$field])"
+        $theirs = "$(Get-ReleaseQualificationField -Object $policyCatalog -Name $field)"
+        if ($theirs -ne $mine) {
+            $reasons += "the release policy pins catalog $field '$theirs', but the catalog is '$mine'; " +
+            'the policy was not revisited when the catalog changed'
+        }
+    }
+
+    # A stale policy must not be used to derive a required set: it would be a
+    # statement about gates that no longer exist, or silently omit new ones.
+    if ($reasons.Count -gt 0) { return $reasons }
+
+    $namedOptIn = @(Get-ReleaseQualificationField -Object $Policy -Name 'requiredOptIn')
+    try {
+        $expected = @(Get-ReleaseRequiredScenarioIds -Catalog $Catalog -NamedOptIn $namedOptIn)
+    }
+    catch {
+        return @("the release policy names a scenario the catalog does not have: $($_.Exception.Message)")
+    }
+
+    $required = Get-ReleaseQualificationField -Object $Record -Name 'required'
+    $declared = @(Get-ReleaseQualificationField -Object $required -Name 'ids')
+
+    $missing = @($expected | Where-Object { $_ -notin $declared })
+    if ($missing.Count -gt 0) {
+        $reasons += "the release policy requires $($missing.Count) gate(s) the record does not treat as required: " +
+        "$(($missing | Sort-Object) -join ', ')"
+    }
+
+    $extra = @($declared | Where-Object { $_ -notin $expected })
+    if ($extra.Count -gt 0) {
+        $reasons += "the record treats $($extra.Count) gate(s) as required that the policy and catalog do not name: " +
+        "$(($extra | Sort-Object) -join ', ')"
+    }
+
+    # Required and present are different questions: a gate can be in the set and
+    # have no verdict row at all. The per-id PASS check in the content rules only
+    # looks at ids the record itself listed.
+    $checkIds = @(@(Get-ReleaseQualificationField -Object $Record -Name 'checks') |
+            ForEach-Object { "$(Get-ReleaseQualificationField -Object $_ -Name 'id')" })
+    $unanswered = @($expected | Where-Object { $_ -notin $checkIds })
+    if ($unanswered.Count -gt 0) {
+        $reasons += "$($unanswered.Count) required gate(s) have no verdict in the record at all: " +
+        "$(($unanswered | Sort-Object) -join ', ')"
+    }
+
+    return $reasons
+}
+
 function Get-ReleaseQualificationBlockers {
     <#
     .SYNOPSIS
@@ -477,11 +598,33 @@ function Get-ReleaseQualificationBlockers {
         Content rules only: what the record itself says. The comparisons against the
         tag being published -- commit, RC tag, published asset hashes -- belong to
         Test-ReleaseQualification, which is what the workflow calls.
+
+        Pass -Catalog, -CatalogVersion and -Policy to also check the record
+        against what this source line requires, rather than against its own
+        account of what was required. Omitting them is for inspecting a record
+        whose catalog is not available; it is not a mode a publish may use, and
+        Test-ReleaseQualification refuses that combination.
+    .PARAMETER Catalog
+        The scenario catalog of the source line being published.
+    .PARAMETER CatalogVersion
+        Its declared version.
+    .PARAMETER Policy
+        The parsed release policy (Get-ReleaseQualificationPolicy).
     #>
-    param($Record)
+    param(
+        $Record,
+        [object[]] $SourceCatalog = @(),
+        [string] $SourceCatalogVersion = '',
+        $Policy = $null
+    )
 
     $reasons = @()
     if ($null -eq $Record) { return @('no qualification record was provided') }
+
+    if ($SourceCatalog.Count -gt 0 -and $SourceCatalogVersion -and $null -ne $Policy) {
+        $reasons += @(Get-ReleasePolicyBlockers -Record $Record -Catalog $SourceCatalog `
+                -CatalogVersion $SourceCatalogVersion -Policy $Policy)
+    }
 
     $schema = "$(Get-ReleaseQualificationField -Object $Record -Name 'schema')"
     if ($schema -ne (Get-ReleaseQualificationSchema)) {
@@ -617,14 +760,29 @@ function Test-ReleaseQualification {
         $Record,
         [string] $ExpectedCommit,
         [string] $ExpectedRcTag,
-        [hashtable] $ExpectedPackageSha256
+        [hashtable] $ExpectedPackageSha256,
+        [object[]] $SourceCatalog = @(),
+        [string] $SourceCatalogVersion = '',
+        $Policy = $null
     )
 
     if ($null -eq $Record) {
         return @{ Qualified = $false; Reasons = @('no qualification record was found for this commit') }
     }
 
-    $reasons = @(Get-ReleaseQualificationBlockers -Record $Record)
+    # Without these the completeness of the required set is taken from the
+    # record, which is the one thing a record cannot be trusted about. A caller
+    # that cannot supply them can still read the content rules, but not get a
+    # qualification out of it.
+    $havePolicy = ($SourceCatalog.Count -gt 0 -and $SourceCatalogVersion -and $null -ne $Policy)
+
+    $reasons = @(Get-ReleaseQualificationBlockers -Record $Record `
+            -SourceCatalog $SourceCatalog -SourceCatalogVersion $SourceCatalogVersion -Policy $Policy)
+
+    if (-not $havePolicy) {
+        $reasons += 'no scenario catalog and release policy were supplied, so the required set could only ' +
+        'have been read from the record itself'
+    }
 
     $overall = "$(Get-ReleaseQualificationField -Object (
             Get-ReleaseQualificationField -Object $Record -Name 'qualification') -Name 'overall')"
