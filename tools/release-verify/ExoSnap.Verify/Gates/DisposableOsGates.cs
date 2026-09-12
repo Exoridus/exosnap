@@ -186,8 +186,7 @@ public sealed class ChocolateyRehearsalGate : IScenarioBody
         {
             DisposableOsRunKind.Unavailable => ScenarioResult.Unavailable(run.Detail),
             DisposableOsRunKind.Faulted => ScenarioResult.InfrastructureError(run.Detail),
-            DisposableOsRunKind.Completed => DisposableOsUpdateRun.ToScenarioResult(
-                DisposableOsVerdict.From(run.Result, RequiredSteps)),
+            DisposableOsRunKind.Completed => DisposableOsUpdateRun.ToScenarioResult(run, RequiredSteps),
             _ => ScenarioResult.InfrastructureError($"unrecognized disposable-OS run kind {run.Kind}"),
         };
     }
@@ -289,8 +288,7 @@ public sealed class CleanFirstStartGate : IScenarioBody
         {
             DisposableOsRunKind.Unavailable => ScenarioResult.Unavailable(run.Detail),
             DisposableOsRunKind.Faulted => ScenarioResult.InfrastructureError(run.Detail),
-            DisposableOsRunKind.Completed => DisposableOsUpdateRun.ToScenarioResult(
-                DisposableOsVerdict.From(run.Result, ProductSteps)),
+            DisposableOsRunKind.Completed => DisposableOsUpdateRun.ToScenarioResult(run, ProductSteps),
             _ => ScenarioResult.InfrastructureError($"unrecognized disposable-OS run kind {run.Kind}"),
         };
     }
@@ -369,7 +367,7 @@ internal static class DisposableOsUpdateRun
         {
             DisposableOsRunKind.Unavailable => ScenarioResult.Unavailable(run.Detail),
             DisposableOsRunKind.Faulted => ScenarioResult.InfrastructureError(run.Detail),
-            DisposableOsRunKind.Completed => ToScenarioResult(DisposableOsVerdict.From(run.Result, requiredSteps)),
+            DisposableOsRunKind.Completed => ToScenarioResult(run, requiredSteps),
             _ => ScenarioResult.InfrastructureError($"unrecognized disposable-OS run kind {run.Kind}"),
         };
     }
@@ -379,6 +377,23 @@ internal static class DisposableOsUpdateRun
     /// infrastructure error rather than a product verdict. Only a step that ran and
     /// reported not ok says ExoSnap is wrong.
     /// </summary>
+    /// <summary>
+    /// The scenario result for one disposable-OS run, carrying what the transport
+    /// said about the evidence as well as what the worker said about the product.
+    /// </summary>
+    /// <remarks>
+    /// The transport has been reporting an evidence outcome since the collection
+    /// stopped swallowing failures, and nothing read it: a run whose logs were
+    /// destroyed reached the record as an ordinary pass. The two facts stay separate
+    /// here and are joined once, in the promotion contract.
+    /// </remarks>
+    internal static ScenarioResult ToScenarioResult(DisposableOsRun run, IReadOnlyList<string> requiredSteps)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+        var result = ToScenarioResult(DisposableOsVerdict.From(run.Result, requiredSteps));
+        return run.Evidence.IsComplete ? result : result with { EvidenceGap = run.Evidence.Detail };
+    }
+
     internal static ScenarioResult ToScenarioResult(DisposableOsVerdict verdict) => verdict.Kind switch
     {
         DisposableOsVerdictKind.Pass => ScenarioResult.Pass(verdict.Message),
