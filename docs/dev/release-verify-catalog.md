@@ -5,7 +5,7 @@
 
 Every release gate the typed harness knows, in catalog order. `docs/dev/release-verify-harness.md` is how to work on the harness and `docs/dev/release-verify.md` owns what each gate requires; this page only lays the declarations side by side.
 
-Catalog version `eeb38b20bd730888`. 28 scenarios, 25 with a migrated body, 11 required for promotion.
+Catalog version `eeb38b20bd730888`. 28 scenarios, 27 with a migrated body, 11 required for promotion.
 
 | ID | Class | Tier | Layer | Isolation | Privilege | Interaction | Requires | Oracle | Migrated | Required | Source |
 |----|-------|------|-------|-----------|-----------|-------------|----------|--------|----------|----------|--------|
@@ -17,9 +17,9 @@ Catalog version `eeb38b20bd730888`. 28 scenarios, 25 with a migrated body, 11 re
 | REL-PRESENT-002 | present | 3 | Secure | HardwareLab | Elevated | OperatorAssisted | gpu.d3d11 = true | exosnap, presentmon | yes | yes | ADR 0033; docs/release-checklist.md section 7 (present-mode diagnostics) |
 | REL-PRESENT-XCHECK-001 | present | 2 | FullAuto | DisposableOs | Standard | Automated | presentmon.available = true | exosnap, presentmon | yes | yes | ADR 0070 (PresentMon as an independent oracle; required only when the present-diagnostics code or the Windows major version has moved) |
 | REL-CAP-001 | capture | 1 | FullAuto | Desktop | Standard | Automated | ffprobe.available = true | exosnap, ffprobe | yes | yes | docs/release-checklist.md section 7 |
-| REL-CAP-STALL-001 | capture | 1 | SemiAuto | Desktop | Standard | OperatorAssisted | - | exosnap, ffprobe | no | no | docs/release-checklist.md section 7 |
+| REL-CAP-STALL-001 | capture | 1 | SemiAuto | Desktop | Standard | OperatorAssisted | - | exosnap, ffprobe | yes | no | docs/release-checklist.md section 7 |
 | REL-CAP-QUIET-001 | capture | 1 | FullAuto | Desktop | Standard | Automated | - | exosnap, ffprobe | yes | no | docs/product-spec.md (capture stall) |
-| REL-CAP-FSE-001 | capture | 3 | SemiAuto | HardwareLab | Standard | OperatorAssisted | gpu.d3d11 = true | exosnap, presentmon | no | no | docs/superpowers/specs/2026-07-11-exclusive-fullscreen-capture-spec.md |
+| REL-CAP-FSE-001 | capture | 3 | SemiAuto | HardwareLab | Standard | OperatorAssisted | gpu.d3d11 = true | exosnap, presentmon | yes | no | docs/superpowers/specs/2026-07-11-exclusive-fullscreen-capture-spec.md |
 | REL-AUD-DEGRADE-001 | audio-physical | 3 | ManualPhysical | HardwareLab | Standard | OperatorAssisted | device.audio.render.normal = bound | exosnap, wasapi, ffprobe | no | no | ADR 0046; docs/release-checklist.md section 7 |
 | REL-AUD-SILENCE-001 | audio | 1 | SemiAuto | Desktop | Standard | OperatorAssisted | - | exosnap, ffprobe | yes | no | ADR 0046 (degradation is device loss, not quiet) |
 | REL-AUD-FORMAT-001 | audio | 3 | SemiAuto | HardwareLab | Standard | OperatorAssisted | device.audio.render.44100-test = bound; audio.endpoint.44100 = true | exosnap, wasapi, ffprobe | yes | no | docs/release-checklist.md section 7 (44.1 kHz output device) |
