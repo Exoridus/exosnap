@@ -40,6 +40,19 @@
 .PARAMETER Network
     Connected, Disconnected (default) or HostOnly.
 
+.PARAMETER RequireInteractiveGuest
+    The campaign captures the guest desktop, so the run proves before it starts that
+    the guest has an interactive session on the console with a display attached --
+    rather than inferring it from PowerShell Direct answering, which proves only that
+    the OS is up. Declared per campaign: a scenario that installs and uninstalls needs
+    none of it, and refusing such a run for a missing desktop would demand more than
+    the scenario does.
+
+    Note what it does not do: the campaign is launched over PowerShell Direct, which
+    is session 0, so a run that declares this today is told so instead of producing a
+    picture nobody can explain. Launching the campaign into the interactive session
+    is the transport's job, not this switch's.
+
 .PARAMETER KeepDisk
     Leave the differencing disk in place. For diagnosing a run that failed inside the
     guest; it is not a normal mode, and the disk has to be deleted by hand afterwards.
@@ -63,6 +76,7 @@ param(
     [int] $ProcessorCount = 0,
     [int] $BootTimeoutMinutes = 15,
     [int] $RunTimeoutMinutes = 120,
+    [switch] $RequireInteractiveGuest,
     [switch] $KeepDisk,
     [switch] $DryRun
 )
@@ -138,6 +152,7 @@ $plan = New-ReleaseVmRunPlan `
     -ProcessorCount $ProcessorCount `
     -BootTimeoutMinutes $BootTimeoutMinutes `
     -RunTimeoutMinutes $RunTimeoutMinutes `
+    -RequireInteractiveGuest:$RequireInteractiveGuest `
     -KeepDisk:$KeepDisk
 
 if ($planning) {

@@ -503,6 +503,184 @@ Test-Case 'a rescue step of a resource this run never created is skipped' {
     Remove-Variable releaseVmCollected -Scope Global -ErrorAction SilentlyContinue
 }
 
+# ---------------------------------------------------------------------------
+# Capture readiness as something measured, not inferred
+# ---------------------------------------------------------------------------
+#
+# "PowerShell Direct answered" was the whole readiness signal, and it proves the
+# OS is up and nothing else. A PowerShell Direct session is session 0, which owns
+# no desktop: no monitor enumerates in it, Graphics Capture offers only windows,
+# and Output Duplication finds no outputs. A capture campaign launched that way
+# fails for a reason that reads like a product defect.
+#
+# The guest built by this recipe does log on and does reattach its session to the
+# console. That is not the point: the harness has to prove the state it depends
+# on rather than derive it from a channel that cannot see it.
+
+function New-FixtureReadiness {
+    param([hashtable] $Override = @{})
+    $receipt = @{
+        osReachable          = $true
+        agentSessionId       = 1
+        agentWindowStation   = 'WinSta0'
+        agentDesktop         = 'Default'
+        agentUser            = 'exosnap'
+        consoleSessionId     = 1
+        interactiveSessionId = 1
+        displays             = @(@{ Name = 'IDD-1'; Width = 3840; Height = 2160; RefreshHz = 120 })
+        controlChannel       = $true
+    }
+    foreach ($key in $Override.Keys) { $receipt[$key] = $Override[$key] }
+    return $receipt
+}
+
+Test-Case 'a fully measured guest is capture-ready' {
+    $verdict = Test-ReleaseVmReadiness -Receipt (New-FixtureReadiness) -Requirement (
+        New-ReleaseVmReadinessRequirement -InteractiveAgent -ExpectedUser 'exosnap' `
+            -Display @{ Width = 3840; Height = 2160; RefreshHz = 120 } -ControlChannel)
+
+    Assert-True $verdict.Ready 'every requirement was measured and met'
+    Assert-Equal 0 $verdict.Unmet.Count 'a ready guest has nothing unmet'
+}
+
+Test-Case 'an agent in session 0 is not capture-ready however well the OS answers' {
+    # The defect, stated as the thing that used to be enough: PowerShell Direct
+    # answers from session 0, so "the guest is reachable" was read as "the guest can
+    # capture".
+    $verdict = Test-ReleaseVmReadiness -Receipt (New-FixtureReadiness @{
+            agentSessionId = 0; agentWindowStation = 'Service-0x0-3e7$'; agentDesktop = ''
+        }) -Requirement (New-ReleaseVmReadinessRequirement -InteractiveAgent)
+
+    Assert-True (-not $verdict.Ready) 'session 0 owns no desktop'
+    Assert-Match 'owns no desktop' ($verdict.Unmet -join '; ') 'the reason has to be the session, not a side effect'
+}
+
+Test-Case 'session 0 is unready even when it is the console session' {
+    # With nobody logged on, the console session can be session 0 itself -- so a rule
+    # that only compared the agent session against the console session would call
+    # this guest ready. Session 0 owns no desktop whatever it is attached to.
+    $verdict = Test-ReleaseVmReadiness -Receipt (New-FixtureReadiness @{
+            agentSessionId = 0; consoleSessionId = 0; interactiveSessionId = $null
+        }) -Requirement (New-ReleaseVmReadinessRequirement -InteractiveAgent)
+
+    Assert-True (-not $verdict.Ready) 'a service session is not a desktop'
+    Assert-Match 'owns no desktop' ($verdict.Unmet -join '; ') 'the reason has to name why'
+}
+
+Test-Case 'an agent outside the console session is not capture-ready' {
+    # A logged-on but disconnected session enumerates no display at all, and closing
+    # the VMConnect window is what disconnects it -- so an unattended guest is in
+    # that state by default.
+    $verdict = Test-ReleaseVmReadiness -Receipt (New-FixtureReadiness @{
+            agentSessionId = 2; consoleSessionId = 1
+        }) -Requirement (New-ReleaseVmReadinessRequirement -InteractiveAgent)
+
+    Assert-True (-not $verdict.Ready) 'a disconnected session has no display'
+    Assert-Match 'console' ($verdict.Unmet -join '; ') 'the console session has to be named'
+}
+
+Test-Case 'an agent on the wrong desktop is not capture-ready' {
+    $verdict = Test-ReleaseVmReadiness -Receipt (New-FixtureReadiness @{ agentDesktop = 'Winlogon' }) `
+        -Requirement (New-ReleaseVmReadinessRequirement -InteractiveAgent)
+
+    Assert-True (-not $verdict.Ready) 'the secure desktop is not where a capture runs'
+    Assert-Match 'WinSta0' ($verdict.Unmet -join '; ') 'the expected desktop has to be named'
+}
+
+Test-Case 'a guest running as the wrong user is not capture-ready' {
+    $verdict = Test-ReleaseVmReadiness -Receipt (New-FixtureReadiness @{ agentUser = 'SYSTEM' }) `
+        -Requirement (New-ReleaseVmReadinessRequirement -InteractiveAgent -ExpectedUser 'exosnap')
+
+    Assert-True (-not $verdict.Ready) 'the token decides what the capture may see'
+    Assert-Match 'SYSTEM' ($verdict.Unmet -join '; ') 'the user that was found has to be named'
+}
+
+Test-Case 'a display that does not match the campaign is named exactly' {
+    $verdict = Test-ReleaseVmReadiness -Receipt (New-FixtureReadiness @{
+            displays = @(@{ Name = 'IDD-1'; Width = 1920; Height = 1080; RefreshHz = 60 })
+        }) -Requirement (New-ReleaseVmReadinessRequirement `
+            -Display @{ Width = 3840; Height = 2160; RefreshHz = 120 })
+
+    Assert-True (-not $verdict.Ready) 'a 60 Hz 1080p desktop is not what the scenario asked for'
+    $text = $verdict.Unmet -join '; '
+    Assert-Match '3840x2160' $text 'the requirement has to be stated'
+    Assert-Match '1920x1080' $text 'so does what was actually there'
+}
+
+Test-Case 'a guest with no display at all is named as having none' {
+    $verdict = Test-ReleaseVmReadiness -Receipt (New-FixtureReadiness @{ displays = @() }) `
+        -Requirement (New-ReleaseVmReadinessRequirement -Display @{ Width = 3840; Height = 2160; RefreshHz = 120 })
+
+    Assert-True (-not $verdict.Ready) 'no display is not a small mismatch'
+    Assert-Match 'no display' ($verdict.Unmet -join '; ') 'an empty enumeration reads differently from a wrong mode'
+}
+
+Test-Case 'a fact that was never measured is never assumed true' {
+    # The rule that keeps this honest: a receipt written by an older guest agent
+    # simply does not carry a field this requirement asks about, and the absence of
+    # a measurement is not evidence that the state is good.
+    $receipt = New-FixtureReadiness
+    $receipt.Remove('controlChannel')
+
+    $verdict = Test-ReleaseVmReadiness -Receipt $receipt -Requirement (
+        New-ReleaseVmReadinessRequirement -ControlChannel)
+
+    Assert-True (-not $verdict.Ready) 'an unmeasured requirement is unmet, not met'
+    Assert-Match 'not measured' ($verdict.Unmet -join '; ') 'the difference from a failed measurement has to show'
+}
+
+Test-Case 'every unmet requirement is named at once' {
+    # A harness told one at a time fixes it, re-runs a campaign that takes an hour to
+    # reach this point, and learns the next.
+    $verdict = Test-ReleaseVmReadiness -Receipt (New-FixtureReadiness @{
+            agentSessionId = 0; agentUser = 'SYSTEM'; displays = @()
+        }) -Requirement (New-ReleaseVmReadinessRequirement -InteractiveAgent -ExpectedUser 'exosnap' `
+            -Display @{ Width = 3840; Height = 2160; RefreshHz = 120 } -ControlChannel)
+
+    Assert-True ($verdict.Unmet.Count -ge 3) 'one round trip per unmet requirement is an hour each'
+}
+
+Test-Case 'a guest that never answered is unready before anything else is read' {
+    $verdict = Test-ReleaseVmReadiness -Receipt (New-FixtureReadiness @{ osReachable = $false }) `
+        -Requirement (New-ReleaseVmReadinessRequirement -InteractiveAgent)
+
+    Assert-True (-not $verdict.Ready) 'nothing measured through an unreachable guest means anything'
+    Assert-Match 'did not answer' ($verdict.Unmet -join '; ') 'the first missing link has to be the one reported'
+}
+
+Test-Case 'a run that needs no capture is not held to the interactive contract' {
+    # Scope, kept honest in both directions: an install-and-uninstall run has no
+    # display requirement, and refusing it for one would make the harness demand
+    # more than the scenario does.
+    $verdict = Test-ReleaseVmReadiness -Receipt (New-FixtureReadiness @{
+            agentSessionId = 0; displays = @()
+        }) -Requirement (New-ReleaseVmReadinessRequirement)
+
+    Assert-True $verdict.Ready 'a scenario that captures nothing needs no desktop'
+}
+
+Test-Case 'a capture run proves its readiness before the campaign starts' {
+    $paths = Get-ReleaseVmRunPath -RunId 'ready' -Root 'T:\images'
+    $plan = New-ReleaseVmRunPlan -RunPath $paths -GuestCommand 'verify.exe' -ResultDirectory 'T:\out' `
+        -RequireInteractiveGuest
+    $names = @($plan | ForEach-Object { $_.Name })
+
+    Assert-True ($names -contains 'guest-readiness') 'a capture campaign cannot start on an unproven guest'
+    Assert-True ([array]::IndexOf($names, 'guest-readiness') -lt [array]::IndexOf($names, 'run')) `
+        'readiness that is measured after the campaign explains a failure instead of preventing it'
+    Assert-True ([array]::IndexOf($names, 'wait-for-guest') -lt [array]::IndexOf($names, 'guest-readiness')) `
+        'the guest has to be answering before anything can be measured in it'
+}
+
+Test-Case 'a run that declares no capture does not demand a desktop' {
+    $paths = Get-ReleaseVmRunPath -RunId 'plain' -Root 'T:\images'
+    $plan = New-ReleaseVmRunPlan -RunPath $paths -GuestCommand 'verify.exe' -ResultDirectory 'T:\out'
+    $names = @($plan | ForEach-Object { $_.Name })
+
+    Assert-True (-not ($names -contains 'guest-readiness')) `
+        'the requirement belongs to the scenario, not to every run of the recipe'
+}
+
 Test-Case 'the run plan rescues its evidence before anything discards it' {
     $paths = Get-ReleaseVmRunPath -RunId 'rescue' -Root 'T:\images'
     $plan = New-ReleaseVmRunPlan -RunPath $paths -GuestCommand 'verify.exe' -ResultDirectory 'T:\out'

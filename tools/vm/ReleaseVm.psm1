@@ -758,6 +758,8 @@ function New-ReleaseVmRunPlan {
         [System.Collections.IDictionary] $GpuPartition,
         [int] $BootTimeoutMinutes = 15,
         [int] $RunTimeoutMinutes = 120,
+        [System.Collections.IDictionary] $Readiness,
+        [switch] $RequireInteractiveGuest,
         [switch] $KeepDisk
     )
     if (-not $GpuPartition) { $GpuPartition = $script:GpuPartitionDefault }
@@ -825,6 +827,13 @@ function New-ReleaseVmRunPlan {
             VMName = $vm; TimeoutMinutes = $BootTimeoutMinutes
         }) -NeedsCredential
 
+    if ($RequireInteractiveGuest -or $Readiness) {
+        if (-not $Readiness) { $Readiness = New-ReleaseVmReadinessRequirement -InteractiveAgent }
+        $plan += New-ReleaseVmStep -Name 'guest-readiness' -Command 'Assert-ReleaseVmReadiness' `
+            -Parameters ([ordered]@{ VMName = $vm; Requirement = $Readiness }) -NeedsCredential `
+            -Detail 'measured in the guest, because PowerShell Direct answering proves only that the OS is up'
+    }
+
     if ($ArtifactDirectory) {
         $plan += New-ReleaseVmStep -Name 'copy-artifacts' -Command 'Copy-ReleaseVmDirectory' -Parameters ([ordered]@{
                 VMName = $vm; Source = $ArtifactDirectory; Destination = $RunPath.GuestArtifacts
@@ -870,6 +879,240 @@ function New-ReleaseVmRunPlan {
 # ---------------------------------------------------------------------------
 # The commands the plans name
 # ---------------------------------------------------------------------------
+
+function New-ReleaseVmReadinessRequirement {
+    <#
+    .SYNOPSIS
+        What one run needs a guest to have proven before its campaign starts.
+    .DESCRIPTION
+        Stated per run rather than assumed for every run. An install-and-uninstall
+        scenario needs a reachable OS and nothing else; a capture scenario needs an
+        interactive desktop and a display in a particular mode, and a harness that
+        demanded one of the first would refuse runs the scenario does not need.
+    .PARAMETER InteractiveAgent
+        The process that will run the campaign must be in the interactive session
+        that is attached to the console, on WinSta0\Default. PowerShell Direct lands
+        in session 0, which owns no desktop: no monitor enumerates there, Graphics
+        Capture offers only windows, and Output Duplication finds no outputs.
+    .PARAMETER ExpectedUser
+        The account the campaign must run as. The token decides what a capture is
+        allowed to see, so a run that silently became SYSTEM is a different test.
+    .PARAMETER Display
+        Width, Height and RefreshHz that at least one attached display must report.
+    .PARAMETER ControlChannel
+        The product control channel must answer from inside the guest.
+    #>
+    [OutputType([hashtable])]
+    param(
+        [switch] $InteractiveAgent,
+        [string] $ExpectedUser = '',
+        [System.Collections.IDictionary] $Display,
+        [switch] $ControlChannel
+    )
+    return @{
+        InteractiveAgent = [bool]$InteractiveAgent
+        ExpectedUser     = $ExpectedUser
+        Display          = $Display
+        ControlChannel   = [bool]$ControlChannel
+    }
+}
+
+function Test-ReleaseVmReadiness {
+    <#
+    .SYNOPSIS
+        Whether a measured guest meets a run's requirement, and what it does not meet.
+    .DESCRIPTION
+        Pure: it reads a receipt and a requirement and decides. The measuring is
+        Get-ReleaseVmReadiness, which needs a guest; the deciding is here, where it
+        can be held to its cases.
+
+        Two rules keep it honest. A requirement the receipt carries no measurement for
+        is unmet -- an older guest agent simply does not write a field this build asks
+        about, and the absence of a measurement is not evidence that the state is
+        good. And every unmet requirement is named at once: a campaign that takes an
+        hour to reach this point cannot be debugged one round trip at a time.
+    .OUTPUTS
+        A hashtable with Ready and Unmet.
+    #>
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Receipt,
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Requirement
+    )
+    $unmet = @()
+    $measured = {
+        param($key)
+        return $Receipt.Contains($key) -and $null -ne $Receipt[$key]
+    }
+
+    if (-not (& $measured 'osReachable')) {
+        return @{ Ready = $false; Unmet = @('whether the guest is reachable was not measured') }
+    }
+    if (-not $Receipt['osReachable']) {
+        # Nothing measured through a guest that never answered means anything, so the
+        # rest of the receipt is not read at all.
+        return @{ Ready = $false; Unmet = @('the guest did not answer') }
+    }
+
+    if ($Requirement.InteractiveAgent) {
+        foreach ($key in @('agentSessionId', 'consoleSessionId', 'agentWindowStation', 'agentDesktop')) {
+            if (-not (& $measured $key)) { $unmet += "$key was not measured" }
+        }
+        if ((& $measured 'agentSessionId') -and [int]$Receipt['agentSessionId'] -eq 0) {
+            $unmet += 'the agent runs in session 0, which owns no desktop, so nothing can be captured from it'
+        }
+        elseif ((& $measured 'agentSessionId') -and (& $measured 'consoleSessionId') -and
+                [int]$Receipt['agentSessionId'] -ne [int]$Receipt['consoleSessionId']) {
+            $unmet += ("the agent runs in session $($Receipt['agentSessionId']), which is not the console " +
+                "session $($Receipt['consoleSessionId']); a disconnected session enumerates no display")
+        }
+        if ((& $measured 'agentWindowStation') -and (& $measured 'agentDesktop') -and
+            -not ($Receipt['agentWindowStation'] -eq 'WinSta0' -and $Receipt['agentDesktop'] -eq 'Default')) {
+            $unmet += ("the agent is on $($Receipt['agentWindowStation'])\$($Receipt['agentDesktop']), " +
+                'not WinSta0\Default')
+        }
+    }
+
+    if ($Requirement.ExpectedUser) {
+        if (-not (& $measured 'agentUser')) { $unmet += 'the account the agent runs as was not measured' }
+        elseif ($Receipt['agentUser'] -ne $Requirement.ExpectedUser) {
+            $unmet += "the agent runs as $($Receipt['agentUser']), not $($Requirement.ExpectedUser)"
+        }
+    }
+
+    if ($Requirement.Display) {
+        $wanted = "$($Requirement.Display.Width)x$($Requirement.Display.Height)@$($Requirement.Display.RefreshHz)Hz"
+        if (-not (& $measured 'displays')) {
+            $unmet += "the attached displays were not measured, so $wanted is unproven"
+        }
+        else {
+            $displays = @($Receipt['displays'])
+            if ($displays.Count -eq 0) {
+                $unmet += "no display is attached, so $wanted cannot be shown"
+            }
+            else {
+                $match = @($displays | Where-Object {
+                        [int]$_.Width -eq [int]$Requirement.Display.Width -and
+                        [int]$_.Height -eq [int]$Requirement.Display.Height -and
+                        [int]$_.RefreshHz -eq [int]$Requirement.Display.RefreshHz
+                    })
+                if ($match.Count -eq 0) {
+                    $found = ($displays | ForEach-Object { "$($_.Width)x$($_.Height)@$($_.RefreshHz)Hz" }) -join ', '
+                    $unmet += "no attached display is $wanted; the guest has $found"
+                }
+            }
+        }
+    }
+
+    if ($Requirement.ControlChannel) {
+        if (-not (& $measured 'controlChannel')) { $unmet += 'the control channel was not measured' }
+        elseif (-not $Receipt['controlChannel']) { $unmet += 'the control channel did not answer inside the guest' }
+    }
+
+    return @{ Ready = ($unmet.Count -eq 0); Unmet = $unmet }
+}
+
+function Get-ReleaseVmReadiness {
+    <#
+    .SYNOPSIS
+        Measures, inside the guest, the state a capture campaign depends on.
+    .DESCRIPTION
+        The measurement runs the way the campaign will, because that is the only way
+        the session it reports is the session the campaign gets. A receipt taken over
+        a different channel would describe a different process.
+
+        Fields the guest cannot answer for are left out rather than guessed at;
+        Test-ReleaseVmReadiness treats an absent field as unmet.
+    #>
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)] [string] $VMName,
+        [Parameter(Mandatory)] [System.Management.Automation.PSCredential] $Credential
+    )
+    $measure = {
+        $receipt = @{ osReachable = $true }
+        $receipt['agentSessionId'] = (Get-Process -Id $PID).SessionId
+        $receipt['agentUser'] = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+
+        if (-not ('ExoSnap.Readiness.Native' -as [type])) {
+            Add-Type -Namespace 'ExoSnap.Readiness' -Name 'Native' -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("kernel32.dll")]
+public static extern uint WTSGetActiveConsoleSessionId();
+[System.Runtime.InteropServices.DllImport("user32.dll")]
+public static extern System.IntPtr GetProcessWindowStation();
+[System.Runtime.InteropServices.DllImport("user32.dll")]
+public static extern System.IntPtr GetThreadDesktop(uint dwThreadId);
+[System.Runtime.InteropServices.DllImport("kernel32.dll")]
+public static extern uint GetCurrentThreadId();
+[System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+public static extern bool GetUserObjectInformationW(
+    System.IntPtr hObj, int nIndex, System.Text.StringBuilder pvInfo, uint nLength, out uint lpnLengthNeeded);
+'@
+        }
+        $name = {
+            param($handle)
+            $buffer = New-Object System.Text.StringBuilder 256
+            $needed = 0
+            # UOI_NAME = 2.
+            if ([ExoSnap.Readiness.Native]::GetUserObjectInformationW($handle, 2, $buffer, 256, [ref]$needed)) {
+                return $buffer.ToString()
+            }
+            return $null
+        }
+        $receipt['consoleSessionId'] = [int][ExoSnap.Readiness.Native]::WTSGetActiveConsoleSessionId()
+        $receipt['agentWindowStation'] = & $name ([ExoSnap.Readiness.Native]::GetProcessWindowStation())
+        $receipt['agentDesktop'] = & $name (
+            [ExoSnap.Readiness.Native]::GetThreadDesktop([ExoSnap.Readiness.Native]::GetCurrentThreadId()))
+
+        $interactive = @(Get-Process -Name 'explorer' -ErrorAction SilentlyContinue |
+                Where-Object { $_.SessionId -ne 0 } | Select-Object -First 1)
+        if ($interactive.Count -gt 0) { $receipt['interactiveSessionId'] = $interactive[0].SessionId }
+
+        # WMI rather than the display APIs: this may be running in a session that has
+        # no desktop at all, which is exactly the case being reported, and the display
+        # APIs answer that with a failure rather than an empty list.
+        $receipt['displays'] = @(
+            Get-CimInstance -ClassName Win32_VideoController -ErrorAction SilentlyContinue |
+                Where-Object { $_.CurrentHorizontalResolution } |
+                ForEach-Object {
+                    @{
+                        Name      = $_.Name
+                        Width     = [int]$_.CurrentHorizontalResolution
+                        Height    = [int]$_.CurrentVerticalResolution
+                        RefreshHz = [int]$_.CurrentRefreshRate
+                    }
+                })
+        return $receipt
+    }
+    try {
+        return Invoke-Command -VMName $VMName -Credential $Credential -ScriptBlock $measure -ErrorAction Stop
+    }
+    catch {
+        return @{ osReachable = $false; detail = $_.Exception.Message }
+    }
+}
+
+function Assert-ReleaseVmReadiness {
+    <#
+    .SYNOPSIS
+        Measures a guest and throws unless it meets the run requirement.
+    .DESCRIPTION
+        The plan step form. Throwing is right here: a campaign started on a guest that
+        cannot show a picture produces a failure that reads like a product defect, and
+        the run is stopped before it can.
+    #>
+    param(
+        [Parameter(Mandatory)] [string] $VMName,
+        [Parameter(Mandatory)] [System.Management.Automation.PSCredential] $Credential,
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Requirement
+    )
+    $receipt = Get-ReleaseVmReadiness -VMName $VMName -Credential $Credential
+    $verdict = Test-ReleaseVmReadiness -Receipt $receipt -Requirement $Requirement
+    if (-not $verdict.Ready) {
+        throw ("'$VMName' is not ready for this run:`n    " + ($verdict.Unmet -join "`n    "))
+    }
+    return $receipt
+}
 
 function Get-ReleaseVmHostDriverPackage {
     <#
@@ -1261,6 +1504,10 @@ Export-ModuleMember -Function @(
     'Format-ReleaseVmStep'
     'Write-ReleaseVmPlan'
     'Invoke-ReleaseVmPlan'
+    'New-ReleaseVmReadinessRequirement'
+    'Test-ReleaseVmReadiness'
+    'Get-ReleaseVmReadiness'
+    'Assert-ReleaseVmReadiness'
     'Set-ReleaseVmBootFromDvd'
     'Stop-ReleaseVmIfRunning'
     'Wait-ReleaseVmPowerShellDirect'
