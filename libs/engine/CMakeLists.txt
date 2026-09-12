@@ -1168,6 +1168,18 @@ exosnap_add_gtest(
 )
 target_include_directories(test_duration_skew PRIVATE src)
 
+# The two chroma decisions in the HDR10 PQ path: the left-siting shift (derived
+# from the source crop, so correct only at 1:1) and the half-resolution viewport
+# (integer-halved, so an odd content height left its last row colourless). Both
+# are pure functions of the geometry, so no device is needed.
+exosnap_add_gtest(
+    NAME test_hdr_chroma_geometry
+    TEST_PREFIX engine.
+    SOURCES tests/test_hdr_chroma_geometry.cpp
+    LIBRARIES exosnap_engine d3d11.lib dxgi.lib
+)
+target_include_directories(test_hdr_chroma_geometry PRIVATE src)
+
 # Capture drain selection: the frame loop must never drain the backend it does not
 # own. Pins that an OD capture mid-reopen drains nothing rather than the null WGC pool.
 exosnap_add_gtest(

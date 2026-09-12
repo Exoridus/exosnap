@@ -112,8 +112,11 @@ const char* kChromaShaderSrc = R"(
 float2 main(float4 position : SV_POSITION, float2 texcoord : TEXCOORD0) : SV_TARGET {
     // A half-resolution pass over the full texcoord range lands each chroma
     // sample on the boundary between two luma columns (centre-sited). Shifting
-    // by half a luma pixel puts it on the left column, matching the SDR path
-    // and the siting the container declares.
+    // by half an OUTPUT luma pixel puts it on the left column, matching the SDR
+    // path and the siting the container declares. flags.y carries that shift in
+    // texcoord units of the content rectangle (HdrPqConverter::
+    // LeftSitingShiftTexels) -- derived from the output raster, not the source
+    // crop, so it holds at any scale factor.
     float3 rp = SampleEncoded(texcoord - float2(flags.y, 0.0f));
     float y = kKr * rp.r + kKg * rp.g + kKb * rp.b;
     float cb = (rp.b - y) / (2.0f * (1.0f - kKb));
@@ -213,7 +216,7 @@ bool HdrPqConverter::Init(ID3D11Device* device, ID3D11DeviceContext* context, co
     pc.crop_origin_size[2] = static_cast<float>(geom.src_crop_w) / static_cast<float>(geom.src_width);
     pc.crop_origin_size[3] = static_cast<float>(geom.src_crop_h) / static_cast<float>(geom.src_height);
     pc.flags[0] = input_is_pq ? 1.0f : 0.0f;
-    pc.flags[1] = 0.5f / static_cast<float>(std::max<uint32_t>(1u, geom.src_crop_w));
+    pc.flags[1] = LeftSitingShiftTexels(geom.content_w);
 
     D3D11_BUFFER_DESC const_desc{};
     const_desc.ByteWidth = sizeof(PqConstants);
@@ -331,11 +334,12 @@ bool HdrPqConverter::Convert(ID3D11Texture2D* src, ID3D11Texture2D* dst, std::st
     const float chroma_clear[4] = {kChromaNeutral, kChromaNeutral, kChromaNeutral, kChromaNeutral};
     context_->ClearRenderTargetView(chroma_rtv, chroma_clear);
     context_->OMSetRenderTargets(1, &chroma_rtv, nullptr);
+    const ChromaViewport cvp = ChromaViewportFor(geom_.content_x, geom_.content_y, geom_.content_w, geom_.content_h);
     D3D11_VIEWPORT chroma_vp{};
-    chroma_vp.TopLeftX = static_cast<float>(geom_.content_x / 2);
-    chroma_vp.TopLeftY = static_cast<float>(geom_.content_y / 2);
-    chroma_vp.Width = static_cast<float>(geom_.content_w / 2);
-    chroma_vp.Height = static_cast<float>(geom_.content_h / 2);
+    chroma_vp.TopLeftX = static_cast<float>(cvp.x);
+    chroma_vp.TopLeftY = static_cast<float>(cvp.y);
+    chroma_vp.Width = static_cast<float>(cvp.w);
+    chroma_vp.Height = static_cast<float>(cvp.h);
     chroma_vp.MinDepth = 0.0f;
     chroma_vp.MaxDepth = 1.0f;
     context_->RSSetViewports(1, &chroma_vp);
