@@ -507,9 +507,15 @@ class NvencEncoder {
     // waiting.
     bool ReapCompleted(std::vector<EncodedVideoPacket>& out_packets, std::string& out_error, uint32_t wait_head_ms = 0);
 
-    // Flush all buffered frames (EOS drain).
-    // Appends any remaining packets to out_packets.
+    // Flush all buffered frames (EOS drain). Appends any remaining packets to
+    // out_packets. Returns false when the drain was cut short (EOS refused,
+    // device stopped delivering within the budget, lock failed); what drained is
+    // still in out_packets, and PendingFrames() is what did not.
     bool Flush(std::vector<EncodedVideoPacket>& out_packets, std::string& out_error);
+
+    [[nodiscard]] uint64_t PendingFrames() const noexcept {
+        return static_cast<uint64_t>(m_pending.size());
+    }
 
     // Unregister all slot resources.  Safe to call multiple times.
     void UnregisterAllSlots();

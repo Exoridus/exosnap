@@ -58,6 +58,13 @@ struct SessionStats {
     // nothing — the surface is non-linear). Surfaced as a calm diagnostics notice,
     // never a blocker.
     bool webcam_overlay_omitted = false;
+    // The video encoder's end-of-stream drain was cut short: EOS refused, the
+    // device stopped delivering within the drain budget, or a lock failed. The
+    // file was still finalised with every packet that did drain, so this is a
+    // post-flight fact about the tail of the recording -- `undrained` frames
+    // were submitted and are not in the file. Written once at end of stream.
+    bool video_flush_incomplete = false;
+    uint64_t video_undrained_frames = 0;
 };
 
 // Lightweight RMS snapshot for high-cadence meter updates (~30 Hz).

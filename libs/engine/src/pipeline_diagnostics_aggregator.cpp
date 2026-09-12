@@ -740,6 +740,10 @@ RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_p
     enc.p99_ms = encode_window_.Percentile(now, 0.99);
     enc.frames_submitted = frames_submitted_;
     enc.frames_encoded = stats.encoded_video_packets;
+    // Post-flight facts owned by the video worker, passed through unchanged: the
+    // drain ran once at end of stream, so only the terminal snapshot carries them.
+    enc.flush_incomplete = stats.video_flush_incomplete;
+    enc.undrained_frames = stats.video_undrained_frames;
     enc.backlog =
         (frames_submitted_ > stats.encoded_video_packets) ? (frames_submitted_ - stats.encoded_video_packets) : 0;
     enc.forced_keyframes = forced_keyframes_;

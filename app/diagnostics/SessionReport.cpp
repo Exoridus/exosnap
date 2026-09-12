@@ -202,6 +202,12 @@ QByteArray BuildSessionReportJson(const SessionReportInputs& inputs) {
         counters[QStringLiteral("encoder_encoded")] = static_cast<double>(s.video_encoder.frames_encoded);
         counters[QStringLiteral("encoder_backlog")] = static_cast<double>(s.video_encoder.backlog);
         counters[QStringLiteral("encoder_forced_keyframes")] = static_cast<double>(s.video_encoder.forced_keyframes);
+        // The end-of-stream drain did not deliver every submitted frame: the file
+        // was finalised with what did drain, and undrained is the tail it lacks.
+        // A non-zero value with a "Saved" outcome is exactly the case this report
+        // exists to make visible, because nothing about the file says so.
+        counters[QStringLiteral("encoder_flush_incomplete")] = s.video_encoder.flush_incomplete;
+        counters[QStringLiteral("encoder_undrained_frames")] = static_cast<double>(s.video_encoder.undrained_frames);
         // How often the driver's actual pictureType disagreed with the
         // submission-side GOP-phase prediction. Warn-only during the recording,
         // so a soak run needs the end-of-session total to see it happened at

@@ -223,6 +223,11 @@ struct EncoderDiagnostics {
     // mismatch happened.
     uint64_t output_ts_mismatches = 0;
     uint64_t keyframe_prediction_mismatches = 0;
+    // Post-flight facts passed through from SessionStats at end of stream: the
+    // shutdown drain did not deliver every submitted frame, and how many it left
+    // behind. Only the terminal snapshot can carry a true value.
+    bool flush_incomplete = false;
+    uint64_t undrained_frames = 0;
     VideoCodec codec = VideoCodec::Av1;
     uint32_t width = 0;
     uint32_t height = 0;

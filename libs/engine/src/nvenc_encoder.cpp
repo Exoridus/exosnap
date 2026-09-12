@@ -1696,13 +1696,15 @@ bool NvencEncoder::Flush(std::vector<EncodedVideoPacket>& out_packets, std::stri
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
             continue;
         }
-        // AbortTimeout / AbortError: stop draining but do not fail — the caller
-        // (which ignores this return) still pushes video-EOS and finalises the
-        // file with whatever was already muxed, instead of wedging.
+        // AbortTimeout / AbortError: stop draining. What has drained stays in
+        // out_packets and the caller finalises with it; what has not is still in
+        // m_pending, and the false return is what tells the caller the file ends
+        // short of the recording.
         out_error = step == FlushDrainStep::AbortTimeout
                         ? "Flush drain timed out — device not delivering buffered frames"
                         : (std::string("Flush drain stopped: ") + lockErr);
-        break;
+        m_needMoreInputCount = 0;
+        return false;
     }
 
     m_needMoreInputCount = 0;
@@ -1734,7 +1736,8 @@ bool NvencEncoder::FlushAsync(std::vector<EncodedVideoPacket>& out_packets, std:
         const int32_t headOutIdx = m_pending.front().out_idx;
         if (headOutIdx < 0 || headOutIdx >= kMaxOutputResources) {
             out_error = "FlushAsync: pending frame has an invalid output-ring index";
-            break;
+            m_needMoreInputCount = 0;
+            return false;
         }
         EncodedVideoPacket pkt;
         std::string waitErr;
@@ -1744,11 +1747,12 @@ bool NvencEncoder::FlushAsync(std::vector<EncodedVideoPacket>& out_packets, std:
             out_packets.push_back(std::move(pkt));
             continue;
         }
-        // AbortTimeout / AbortError: stop draining but do not fail — the
-        // caller still pushes video-EOS and finalises with whatever was
-        // already muxed, instead of wedging (same contract as sync Flush).
+        // AbortTimeout / AbortError: stop draining and say so (same contract as
+        // the sync Flush). The packets already drained are the caller's to mux;
+        // m_pending holds the frames that will not be in the file.
         out_error = waitErr;
-        break;
+        m_needMoreInputCount = 0;
+        return false;
     }
 
     m_needMoreInputCount = 0;

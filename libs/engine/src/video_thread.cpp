@@ -4311,9 +4311,27 @@ end_encode_loop:
     {
         std::vector<EncodedVideoPacket> drainPkts;
         std::string flushErr;
-        // flushErr is not escalated — a partial drain is acceptable; any encoded
-        // output already in the mux queue is preserved regardless of flush outcome.
-        encoder->Flush(drainPkts, flushErr);
+        // Not escalated to a failure: every packet that did drain is muxed below
+        // and the file is finalised, which is the right outcome for a device that
+        // stopped delivering at the very end. But not silent either -- the file
+        // ends short of the recording by the frames the encoder still held, and a
+        // report that called that a complete success would be lying about the
+        // one thing the user cannot see in the file.
+        const bool flushComplete = encoder->Flush(drainPkts, flushErr);
+        if (!flushComplete) {
+            const uint64_t undrained = encoder->PendingFrames();
+            {
+                std::lock_guard slk(m_state.stats_mutex);
+                m_state.stats.video_flush_incomplete = true;
+                m_state.stats.video_undrained_frames = undrained;
+            }
+            const logging::LogField fields[] = {{"reason", flushErr},
+                                                {"drained_packets", std::to_string(drainPkts.size())},
+                                                {"undrained_frames", std::to_string(undrained)}};
+            logging::log(logging::LogLevel::Warn, "video_thread",
+                         "video encoder flush was cut short; the file ends before the last submitted frames",
+                         std::span<const logging::LogField>(fields, std::size(fields)));
+        }
 
         for (auto& pkt : drainPkts) {
             if (pkt.bytes.empty())

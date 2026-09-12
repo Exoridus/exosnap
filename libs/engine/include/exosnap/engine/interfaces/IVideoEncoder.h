@@ -69,7 +69,23 @@ class IVideoEncoder {
                              std::vector<EncodedVideoPacket>& out_packets, std::string& out_error) = 0;
 
     // Flush all buffered frames (EOS). Appends remaining packets.
+    //
+    // Returns true only when every frame the encoder still held reached
+    // out_packets. False means the drain was cut short -- EOS was refused, the
+    // device stopped delivering within the drain budget, or a lock failed -- and
+    // out_error says which. The packets that DID drain are still in out_packets
+    // and are still worth muxing: a partial flush loses the tail of the
+    // recording, not the recording, and the caller finalises with what it has.
+    // PendingFrames() says how many frames that tail was.
     virtual bool Flush(std::vector<EncodedVideoPacket>& out_packets, std::string& out_error) = 0;
+
+    // Frames submitted and not yet delivered as packets. After a Flush that
+    // returned false this is the number of frames the file will not contain;
+    // after one that returned true it is 0. Encoders that emit every packet
+    // inline from EncodeFrame never hold any.
+    virtual uint64_t PendingFrames() const noexcept {
+        return 0;
+    }
 
     // Drain any packets completed since the last EncodeFrame/ReapCompleted call,
     // without submitting a new frame. Async encoders use this to reap
