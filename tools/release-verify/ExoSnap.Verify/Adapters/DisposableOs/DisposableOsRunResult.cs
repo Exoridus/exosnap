@@ -17,6 +17,11 @@ public static class DisposableOsStepKind
     /// measured nothing about the product.
     /// </summary>
     public const string Bootstrap = "bootstrap";
+
+    /// <summary>Whether this is a kind the verdict rule knows how to read.</summary>
+    public static bool IsRecognised(string? kind) =>
+        string.Equals(kind, Product, StringComparison.Ordinal)
+        || string.Equals(kind, Bootstrap, StringComparison.Ordinal);
 }
 
 /// <summary>One step a disposable-OS worker script recorded, in the order it ran them.</summary>
@@ -25,19 +30,37 @@ public static class DisposableOsStepKind
 /// <param name="Detail">One sentence about what the step observed.</param>
 /// <param name="Kind">
 /// <see cref="DisposableOsStepKind.Product"/> or <see cref="DisposableOsStepKind.Bootstrap"/>.
-/// Defaults to product, deliberately: a worker that forgets to say gets the
-/// conservative reading, which can fail a gate but can never hide a product defect
-/// behind an infrastructure label.
+/// There is deliberately no default that reads as either.
 /// </param>
+/// <remarks>
+/// An unclassified step is its own outcome, not a product assertion by default.
+/// Defaulting to product looks conservative and is not: "a new product check
+/// nobody classified" and "a new bootstrap step nobody classified" are
+/// indistinguishable from the outside, and reading both as product turns the
+/// second into a false accusation against ExoSnap on a gate that is required for
+/// promotion. The rule here is the same one the whole harness follows -- what was
+/// not measured is never a defect -- so an unclassified step leaves the run
+/// unverified and the schema gets fixed instead of a verdict being guessed.
+/// </remarks>
 public sealed record DisposableOsStepResult(
     string Name,
     bool Ok,
     string Detail,
-    string Kind = DisposableOsStepKind.Product)
+    string Kind = "")
 {
-    /// <summary>Whether a failure of this step would be a statement about ExoSnap.</summary>
+    /// <summary>A failure of this step is a statement about ExoSnap.</summary>
     public bool IsProductAssertion =>
-        !string.Equals(this.Kind, DisposableOsStepKind.Bootstrap, StringComparison.Ordinal);
+        string.Equals(this.Kind, DisposableOsStepKind.Product, StringComparison.Ordinal);
+
+    /// <summary>A failure of this step says the test environment was not built.</summary>
+    public bool IsBootstrap =>
+        string.Equals(this.Kind, DisposableOsStepKind.Bootstrap, StringComparison.Ordinal);
+
+    /// <summary>
+    /// The step carries no kind this rule knows, so nothing can be concluded from
+    /// it either way.
+    /// </summary>
+    public bool IsUnclassified => !DisposableOsStepKind.IsRecognised(this.Kind);
 }
 
 /// <summary>
@@ -85,15 +108,15 @@ public sealed record DisposableOsRunResult(IReadOnlyList<DisposableOsStepResult>
                 continue;
             }
 
-            // Kind is filled the same way: a document written by an older worker
-            // carries none, and every step in one of those was a product assertion
-            // by the contract that existed then.
+            // A null kind stays empty rather than being filled in: it is exactly
+            // the "nobody classified this" case, and inventing a classification
+            // here would be the guess the verdict rule refuses to make.
             repaired.Add(step.Name is null || step.Detail is null || step.Kind is null
                 ? step with
                 {
                     Name = step.Name ?? string.Empty,
                     Detail = step.Detail ?? string.Empty,
-                    Kind = step.Kind ?? DisposableOsStepKind.Product,
+                    Kind = step.Kind ?? string.Empty,
                 }
                 : step);
         }
@@ -148,6 +171,29 @@ public sealed record DisposableOsVerdict(DisposableOsVerdictKind Kind, string Me
             byName[step.Name] = step;
         }
 
+        // An unclassified step is checked before anything else is read out of the
+        // document: the schema it was written against is not the one this rule
+        // reads, so no verdict drawn from it would mean what it says.
+        var unclassified = new List<string>();
+        foreach (var step in byName.Values)
+        {
+            if (step.IsUnclassified)
+            {
+                unclassified.Add(string.IsNullOrEmpty(step.Kind)
+                    ? $"{step.Name}: no kind"
+                    : $"{step.Name}: unrecognised kind '{step.Kind}'");
+            }
+        }
+
+        if (unclassified.Count > 0)
+        {
+            unclassified.Sort(StringComparer.Ordinal);
+            return new DisposableOsVerdict(
+                DisposableOsVerdictKind.Unverified,
+                $"{unclassified.Count} step(s) do not say whether they assert the product or build the "
+                + $"environment, so a failure could not be attributed: {string.Join(", ", unclassified)}");
+        }
+
         var failed = new List<string>();
         var bootstrapFailed = new List<string>();
         var missing = new List<string>();
@@ -164,13 +210,13 @@ public sealed record DisposableOsVerdict(DisposableOsVerdictKind Kind, string Me
                 continue;
             }
 
-            if (step.IsProductAssertion)
+            if (step.IsBootstrap)
             {
-                failed.Add($"{name}: {step.Detail}");
+                bootstrapFailed.Add($"{name}: {step.Detail}");
             }
             else
             {
-                bootstrapFailed.Add($"{name}: {step.Detail}");
+                failed.Add($"{name}: {step.Detail}");
             }
         }
 
@@ -178,7 +224,7 @@ public sealed record DisposableOsVerdict(DisposableOsVerdictKind Kind, string Me
         // every later step depends on the environment it was building.
         foreach (var step in byName.Values)
         {
-            if (!step.Ok && !step.IsProductAssertion && !bootstrapFailed.Exists(
+            if (!step.Ok && step.IsBootstrap && !bootstrapFailed.Exists(
                     entry => entry.StartsWith(step.Name + ":", StringComparison.Ordinal)))
             {
                 bootstrapFailed.Add($"{step.Name}: {step.Detail}");

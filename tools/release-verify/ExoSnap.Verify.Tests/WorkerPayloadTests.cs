@@ -182,6 +182,76 @@ public sealed class WorkerPayloadTests
             WorkerPayload.TransitiveScriptDependencies(worker, WorkerPayload.ReadFileOrNull));
     }
 
+    /// <summary>
+    /// Every step a shipping worker can emit declares a kind the host recognises.
+    /// </summary>
+    /// <remarks>
+    /// The host refuses to draw a verdict from a step that does not say whether it
+    /// asserts the product or builds the environment, which is the safe answer and
+    /// not a useful one: a gate that reports "unverified, the steps do not say"
+    /// tells nobody what happened. So the workers are held to declaring it, here,
+    /// where a new step that forgets turns this red.
+    ///
+    /// Read out of the script text: these workers construct their steps through one
+    /// helper each, and the helper's parameter is mandatory, so an undeclared step
+    /// would not run at all -- but a step constructed some other way would, and this
+    /// is what would catch it.
+    /// </remarks>
+    [Theory]
+    [InlineData("sandbox-update-worker.ps1", "Add-Step -Name")]
+    [InlineData("choco-rehearsal-worker.ps1", "New-Step -Name")]
+    public void EveryStepAShippingWorkerEmitsDeclaresItsKind(string workerFileName, string constructor)
+    {
+        var path = Path.Combine(RepositoryRoot(), "scripts", "lib", workerFileName);
+        var lines = File.ReadAllLines(path);
+
+        var undeclared = new List<string>();
+        for (var index = 0; index < lines.Length; index++)
+        {
+            var line = lines[index];
+            if (!line.Contains(constructor, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            // The definition of the helper itself is not a call site.
+            if (line.Contains("function ", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            // A call may be continued onto the next line with a backtick.
+            var statement = line;
+            var cursor = index;
+            while (statement.TrimEnd().EndsWith('`') && cursor + 1 < lines.Length)
+            {
+                cursor++;
+                statement += lines[cursor];
+            }
+
+            if (!statement.Contains("-Kind 'product'", StringComparison.Ordinal)
+                && !statement.Contains("-Kind 'bootstrap'", StringComparison.Ordinal))
+            {
+                undeclared.Add($"{workerFileName}:{index + 1}: {line.Trim()}");
+            }
+        }
+
+        Assert.Empty(undeclared);
+    }
+
+    [Fact]
+    public void TheBootstrapOnlyWorkerDeclaresItsStepsToo()
+    {
+        // sandbox-choco-worker.ps1 writes its steps as a literal document rather
+        // than through a helper -- every one of them a bootstrap failure -- so the
+        // field is checked where it is written.
+        var path = Path.Combine(RepositoryRoot(), "scripts", "lib", "sandbox-choco-worker.ps1");
+        var text = File.ReadAllText(path);
+
+        Assert.Contains("steps       = @([pscustomobject]@{ name = $Step; ok = $false; detail = $Detail; kind = 'bootstrap' })",
+            text, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void TheChocolateyWorkerNeedsTheRehearsalWorkerAndItsOwnDependency()
     {

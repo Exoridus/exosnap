@@ -87,11 +87,13 @@ public sealed class DisposableOsBootstrapVerdictTests
     }
 
     [Fact]
-    public void AStepWithNoKindIsReadAsAProductAssertion()
+    public void AStepWithNoKindLeavesTheRunUnverified()
     {
-        // The conservative default, and the compatibility rule for a document an
-        // older worker wrote: it can fail a gate, but it can never hide a product
-        // defect behind an infrastructure label.
+        // Defaulting an unclassified step to product LOOKS conservative and is not:
+        // "a new product check nobody classified" and "a new bootstrap step nobody
+        // classified" are indistinguishable from here, and reading both as product
+        // turns the second into a false accusation against ExoSnap on a gate that
+        // is required for promotion. What was not measured is never a defect.
         var verdict = DisposableOsVerdict.From(
             new DisposableOsRunResult([
                 new DisposableOsStepResult("install-base", true, "ok"),
@@ -100,21 +102,57 @@ public sealed class DisposableOsBootstrapVerdictTests
             ]),
             Required);
 
-        Assert.Equal(DisposableOsVerdictKind.Fail, verdict.Kind);
+        Assert.Equal(DisposableOsVerdictKind.Unverified, verdict.Kind);
+        Assert.Contains("do not say whether", verdict.Message, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void AnOlderDocumentWithoutKindStillParses()
+    public void AnUnrecognisedKindIsAlsoUnverified()
     {
-        // The worker's document is written by a script; a field this build added is
-        // simply absent in one an older build wrote.
+        // A typo or a kind a future worker invented. Neither is something this rule
+        // can attribute, so neither may produce a verdict.
+        var verdict = DisposableOsVerdict.From(
+            new DisposableOsRunResult([
+                new DisposableOsStepResult("install-base", false, "no msiexec", "setup"),
+            ]),
+            Required);
+
+        Assert.Equal(DisposableOsVerdictKind.Unverified, verdict.Kind);
+        Assert.Contains("unrecognised kind 'setup'", verdict.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void OneUnclassifiedStepIsEnoughToWithholdAVerdict()
+    {
+        // Not per-step: the document was written against a schema this rule does not
+        // read, so nothing in it can be trusted to mean what it says -- including
+        // the steps that did classify themselves.
+        var verdict = DisposableOsVerdict.From(
+            new DisposableOsRunResult([
+                Bootstrap("install-base", true),
+                Product("decline-offer", true),
+                new DisposableOsStepResult("decline-state", true, "ok"),
+            ]),
+            Required);
+
+        Assert.Equal(DisposableOsVerdictKind.Unverified, verdict.Kind);
+        Assert.Contains("decline-state", verdict.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AnOlderDocumentWithoutKindParsesAndIsUnclassified()
+    {
+        // The worker's document is written by a script, so a field this build added
+        // is simply absent in one an older build wrote. It parses -- the reader must
+        // not crash on it -- and it is unclassified, not product.
         var parsed = DisposableOsRunResult.Parse(
             """{"steps":[{"name":"install-base","ok":true,"detail":"ok"}]}""");
 
         Assert.NotNull(parsed);
         var step = Assert.Single(parsed.Steps);
-        Assert.Equal(DisposableOsStepKind.Product, step.Kind);
-        Assert.True(step.IsProductAssertion);
+        Assert.True(step.IsUnclassified);
+        Assert.False(step.IsProductAssertion);
+        Assert.False(step.IsBootstrap);
     }
 
     [Fact]

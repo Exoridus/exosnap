@@ -60,7 +60,7 @@ public sealed class DisposableOsVerdictTests
     [Fact]
     public void AStepWithoutANameIsUnverifiedRatherThanACrash()
     {
-        var result = DisposableOsRunResult.Parse("""{"steps":[{"ok":true,"detail":"ran"}]}""");
+        var result = DisposableOsRunResult.Parse("""{"steps":[{"ok":true,"detail":"ran","kind":"product"}]}""");
 
         var verdict = DisposableOsVerdict.From(result, DeclineSteps);
 
@@ -72,7 +72,7 @@ public sealed class DisposableOsVerdictTests
     public void AStepWithoutADetailStillReportsItsFailure()
     {
         var result = DisposableOsRunResult.Parse(
-            """{"steps":[{"name":"install-base","ok":true,"detail":"ran"},{"name":"decline-offer","ok":false}]}""");
+            """{"steps":[{"name":"install-base","ok":true,"detail":"ran","kind":"bootstrap"},{"name":"decline-offer","ok":false,"kind":"product"}]}""");
 
         var verdict = DisposableOsVerdict.From(result, DeclineSteps);
 
@@ -83,7 +83,7 @@ public sealed class DisposableOsVerdictTests
     [Fact]
     public void ANullStepEntryIsIgnored()
     {
-        var result = DisposableOsRunResult.Parse("""{"steps":[null,{"name":"install-base","ok":true,"detail":"ran"}]}""");
+        var result = DisposableOsRunResult.Parse("""{"steps":[null,{"name":"install-base","ok":true,"detail":"ran","kind":"bootstrap"}]}""");
 
         var verdict = DisposableOsVerdict.From(result, DeclineSteps);
 
@@ -95,7 +95,7 @@ public sealed class DisposableOsVerdictTests
     public void ADuplicateStepCannotMaskAFailure()
     {
         var result = DisposableOsRunResult.Parse(
-            """{"steps":[{"name":"decline-apply","ok":false,"detail":"applied anyway"},{"name":"decline-apply","ok":true,"detail":"retried"}]}""");
+            """{"steps":[{"name":"decline-apply","ok":false,"detail":"applied anyway","kind":"product"},{"name":"decline-apply","ok":true,"detail":"retried","kind":"product"}]}""");
 
         var verdict = DisposableOsVerdict.From(result, DeclineSteps);
 

@@ -43,12 +43,15 @@ New-Item -ItemType Directory -Path $EvidenceDirectory -Force | Out-Null
 function Write-BootstrapFailure {
     param([Parameter(Mandatory)] [string] $Step, [Parameter(Mandatory)] [string] $Detail)
     # Written in the rehearsal worker's own document shape so the host reads one
-    # format: a bootstrap that failed and a rehearsal step that failed are the same
-    # kind of fact to a report.
+    # format. kind is 'bootstrap' for all of them, which is what these are: the
+    # release MSI, Chocolatey itself and this script's own failures are the test
+    # environment being built, and none of them measured the package. Without the
+    # field the host cannot attribute the failure and refuses to draw a verdict --
+    # which is correct, but it is not the same as saying what actually happened.
     $document = [pscustomobject]@{
         finishedUtc = [DateTime]::UtcNow.ToString('o')
         fatal       = $Detail
-        steps       = @([pscustomobject]@{ name = $Step; ok = $false; detail = $Detail })
+        steps       = @([pscustomobject]@{ name = $Step; ok = $false; detail = $Detail; kind = 'bootstrap' })
     }
     Set-Content -LiteralPath $ResultPath -Value ($document | ConvertTo-Json -Depth 12) -Encoding utf8NoBOM
 }

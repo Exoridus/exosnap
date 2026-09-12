@@ -87,10 +87,10 @@ public sealed class UpdateDeclineGateTests : IDisposable
     {
         using var harness = await HarnessAsync(DisposableOsRun.Completed(new DisposableOsRunResult(
         [
-            new("install-base", true, "installed"),
-            new("decline-offer", true, "offered"),
-            new("decline-apply", true, "applied"),
-            new("decline-state", true, "failureCase uacDeclined, installState intact"),
+            new("install-base", true, "installed", DisposableOsStepKind.Bootstrap),
+            new("decline-offer", true, "offered", DisposableOsStepKind.Product),
+            new("decline-apply", true, "applied", DisposableOsStepKind.Product),
+            new("decline-state", true, "failureCase uacDeclined, installState intact", DisposableOsStepKind.Product),
         ])));
 
         var result = await new UpdateDeclineGate(() => this.baseMsi).RunAsync(
@@ -108,8 +108,8 @@ public sealed class UpdateDeclineGateTests : IDisposable
     {
         using var harness = await HarnessAsync(DisposableOsRun.Completed(new DisposableOsRunResult(
         [
-            new("install-base", true, "installed"),
-            new("decline-offer", false, "update.check timed out"),
+            new("install-base", true, "installed", DisposableOsStepKind.Bootstrap),
+            new("decline-offer", false, "update.check timed out", DisposableOsStepKind.Product),
         ])));
 
         var result = await new UpdateDeclineGate(() => this.baseMsi).RunAsync(
@@ -123,7 +123,7 @@ public sealed class UpdateDeclineGateTests : IDisposable
     {
         using var harness = await HarnessAsync(DisposableOsRun.Completed(new DisposableOsRunResult(
         [
-            new("install-base", true, "installed"),
+            new("install-base", true, "installed", DisposableOsStepKind.Bootstrap),
         ])));
 
         var result = await new UpdateDeclineGate(() => this.baseMsi).RunAsync(
@@ -159,11 +159,11 @@ public sealed class UpdateAcceptGateTests : IDisposable
     {
         using var harness = await HarnessAsync(DisposableOsRun.Completed(new DisposableOsRunResult(
         [
-            new("install-base", true, "installed"),
-            new("updater-gone-before-accept", true, "no stale updater"),
-            new("accept-offer", true, "offered"),
-            new("accept-apply", true, "applied"),
-            new("accept-installed", true, "product version advanced"),
+            new("install-base", true, "installed", DisposableOsStepKind.Bootstrap),
+            new("updater-gone-before-accept", true, "no stale updater", DisposableOsStepKind.Product),
+            new("accept-offer", true, "offered", DisposableOsStepKind.Product),
+            new("accept-apply", true, "applied", DisposableOsStepKind.Product),
+            new("accept-installed", true, "product version advanced", DisposableOsStepKind.Product),
         ])));
 
         var result = await new UpdateAcceptGate(() => this.baseMsi).RunAsync(
@@ -177,12 +177,12 @@ public sealed class UpdateAcceptGateTests : IDisposable
     {
         using var harness = await HarnessAsync(DisposableOsRun.Completed(new DisposableOsRunResult(
         [
-            new("install-base", true, "installed"),
-            new("decline-offer", false, "the decline half failed"),
-            new("updater-gone-before-accept", true, "no stale updater"),
-            new("accept-offer", true, "offered"),
-            new("accept-apply", true, "applied"),
-            new("accept-installed", true, "product version advanced"),
+            new("install-base", true, "installed", DisposableOsStepKind.Bootstrap),
+            new("decline-offer", false, "the decline half failed", DisposableOsStepKind.Product),
+            new("updater-gone-before-accept", true, "no stale updater", DisposableOsStepKind.Product),
+            new("accept-offer", true, "offered", DisposableOsStepKind.Product),
+            new("accept-apply", true, "applied", DisposableOsStepKind.Product),
+            new("accept-installed", true, "product version advanced", DisposableOsStepKind.Product),
         ])));
 
         var result = await new UpdateAcceptGate(() => this.baseMsi).RunAsync(
@@ -211,12 +211,12 @@ public sealed class ChocolateyRehearsalGateTests
 
     private static readonly DisposableOsRunResult RehearsalPassed = new(
     [
-        new("prepare", true, "nuspec rewritten"),
-        new("pack", true, "packed"),
-        new("removeExisting", true, "no prior install"),
-        new("install", true, "installed"),
-        new("uninstall", true, "uninstalled"),
-        new("restore", true, "release MSI reinstalled"),
+        new("prepare", true, "nuspec rewritten", DisposableOsStepKind.Bootstrap),
+        new("pack", true, "packed", DisposableOsStepKind.Bootstrap),
+        new("removeExisting", true, "no prior install", DisposableOsStepKind.Bootstrap),
+        new("install", true, "installed", DisposableOsStepKind.Product),
+        new("uninstall", true, "uninstalled", DisposableOsStepKind.Product),
+        new("restore", true, "release MSI reinstalled", DisposableOsStepKind.Bootstrap),
     ]);
 
     [Fact]
@@ -272,12 +272,12 @@ public sealed class ChocolateyRehearsalGateTests
     {
         using var harness = await HarnessAsync(DisposableOsRun.Completed(new DisposableOsRunResult(
         [
-            new("prepare", true, "nuspec rewritten"),
-            new("pack", true, "packed"),
-            new("removeExisting", true, "no prior install"),
-            new("install", false, "choco install exited 1"),
-            new("uninstall", true, "uninstalled"),
-            new("restore", true, "release MSI reinstalled"),
+            new("prepare", true, "nuspec rewritten", DisposableOsStepKind.Bootstrap),
+            new("pack", true, "packed", DisposableOsStepKind.Bootstrap),
+            new("removeExisting", true, "no prior install", DisposableOsStepKind.Bootstrap),
+            new("install", false, "choco install exited 1", DisposableOsStepKind.Product),
+            new("uninstall", true, "uninstalled", DisposableOsStepKind.Product),
+            new("restore", true, "release MSI reinstalled", DisposableOsStepKind.Bootstrap),
         ])));
         var msi = DisposableOsGateFixture.StageReleaseMsi(harness);
 

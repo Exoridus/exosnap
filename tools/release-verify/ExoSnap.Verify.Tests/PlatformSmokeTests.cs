@@ -222,7 +222,7 @@ public sealed class PlatformSmokeTests
             worker,
             """
             param([string] $StagingDirectory, [string] $ResultPath, [string] $MarkerPath)
-            Set-Content -LiteralPath $ResultPath -Value '{"steps":[{"name":"ran","ok":true,"detail":"smoke"}]}'
+            Set-Content -LiteralPath $ResultPath -Value '{"steps":[{"name":"ran","ok":true,"detail":"smoke","kind":"product"}]}'
             New-Item -ItemType File -Path $MarkerPath -Force | Out-Null
             """,
             TestContext.Current.CancellationToken);

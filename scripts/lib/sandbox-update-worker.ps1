@@ -70,15 +70,23 @@ function Add-Step {
 
         product: what the gate is actually asserting. Only these may fail the gate.
 
-        The default is deliberately 'product': a new step that forgets to say
-        which it is gets the conservative reading, which can make a gate fail but
-        can never hide a product defect behind an infrastructure label.
+        There is no default. It looks conservative to assume 'product' and it is
+        not: an unclassified step is indistinguishable from either kind, so
+        reading it as a product assertion can accuse ExoSnap of the harness's own
+        setup problem. The host treats a step with no recognised kind as
+        unverified, which is the same rule the rest of the harness follows --
+        what was not measured is never a defect.
     #>
     param(
         [Parameter(Mandatory)] [string] $Name,
         [Parameter(Mandatory)] [bool] $Ok,
         [string] $Detail = '',
-        [ValidateSet('product', 'bootstrap')] [string] $Kind = 'product'
+        # Mandatory, with no default. "A new product check nobody classified" and
+        # "a new bootstrap step nobody classified" look identical from the outside,
+        # and defaulting to product turns the second into a false accusation
+        # against ExoSnap on a gate that is required for promotion. An unclassified
+        # step leaves the run unverified instead, so the schema gets fixed.
+        [Parameter(Mandatory)] [ValidateSet('product', 'bootstrap')] [string] $Kind
     )
     $script:Steps.Add([pscustomobject]@{ name = $Name; ok = $Ok; detail = $Detail; kind = $Kind })
     Write-Host "  $(if ($Ok) { 'ok  ' } else { 'FAIL' })  $Name  [$Kind]  $Detail"
@@ -213,23 +221,23 @@ try {
     try {
         $checked = Invoke-LiveVerifyCommand -Connection $app.Connection -Command 'update.check'
         if (-not $checked.ok) {
-            Add-Step -Name 'decline-offer' -Ok $false -Detail "update.check refused: $($checked.error.message)"
+            Add-Step -Name 'decline-offer' -Ok $false -Kind 'product' -Detail "update.check refused: $($checked.error.message)"
         }
         else {
             $state = Wait-UpdateOffer -Connection $app.Connection -TimeoutSeconds $OfferTimeoutSeconds
             $offered = $null -ne $state -and $null -ne $state.PSObject.Properties['updateAvailable'] -and $state.updateAvailable
             if (-not $offered) {
-                Add-Step -Name 'decline-offer' -Ok $false -Detail "no update is offered to $beforeVersion on the $UpdateChannel channel"
+                Add-Step -Name 'decline-offer' -Ok $false -Kind 'product' -Detail "no update is offered to $beforeVersion on the $UpdateChannel channel"
             }
             else {
-                Add-Step -Name 'decline-offer' -Ok $true -Detail "an update is offered to $beforeVersion"
+                Add-Step -Name 'decline-offer' -Ok $true -Kind 'product' -Detail "an update is offered to $beforeVersion"
                 $applied = Invoke-LiveVerifyCommand -Connection $app.Connection -Command 'update.apply'
                 if (-not $applied.ok) {
-                    Add-Step -Name 'decline-apply' -Ok $false -Detail "update.apply refused: $($applied.error.message)"
+                    Add-Step -Name 'decline-apply' -Ok $false -Kind 'product' -Detail "update.apply refused: $($applied.error.message)"
                 }
                 else {
                     $launch = (Invoke-LiveVerifyCommand -Connection $app.Connection -Command 'update.getState').result.updaterLaunch
-                    Add-Step -Name 'decline-apply' -Ok $true -Detail "updater run id $($launch.controlRunId)"
+                    Add-Step -Name 'decline-apply' -Ok $true -Kind 'product' -Detail "updater run id $($launch.controlRunId)"
                     $updater = Connect-LiveVerify -RunId "$($launch.controlRunId)" -Role 'Updater' -ConnectTimeoutMs 30000
                     try {
                         # The failure lands asynchronously: the elevation call is made
@@ -250,14 +258,14 @@ try {
                         $failureCase = if ($null -ne $after) { "$($after.failureCase)" } else { '' }
                         $installState = if ($null -ne $after) { "$($after.installState)" } else { '' }
                         if ($failureCase -ne 'uacDeclined') {
-                            Add-Step -Name 'decline-state' -Ok $false -Detail "failureCase is '$failureCase', expected uacDeclined"
+                            Add-Step -Name 'decline-state' -Ok $false -Kind 'product' -Detail "failureCase is '$failureCase', expected uacDeclined"
                         }
                         elseif ($installState -eq 'strandedInBackup') {
-                            Add-Step -Name 'decline-state' -Ok $false -Detail 'the installation was left stranded in the backup directory'
+                            Add-Step -Name 'decline-state' -Ok $false -Kind 'product' -Detail 'the installation was left stranded in the backup directory'
                         }
                         else {
                             $declineOk = $true
-                            Add-Step -Name 'decline-state' -Ok $true -Detail "failureCase uacDeclined, installState $installState"
+                            Add-Step -Name 'decline-state' -Ok $true -Kind 'product' -Detail "failureCase uacDeclined, installState $installState"
                         }
                         # THE DEFECT THIS STEP EXISTS FOR. A declined update used to
                         # leave the updater running with its failure card open; it
@@ -265,7 +273,7 @@ try {
                         # its own updater over the file and the accept gate failed
                         # with "Failed to stage updater file".
                         $closed = Invoke-LiveVerifyCommand -Connection $updater -Command 'updater.close'
-                        Add-Step -Name 'decline-updater-closed' -Ok ([bool]$closed.ok) `
+                        Add-Step -Name 'decline-updater-closed' -Ok ([bool]$closed.ok) -Kind 'product' `
                             -Detail $(if ($closed.ok) { 'the updater closed on request' } else { "updater.close refused: $($closed.error.message)" })
                     }
                     finally { try { $updater.Close() } catch { } }
@@ -287,7 +295,7 @@ try {
         Start-Sleep -Milliseconds 500
     }
     $stillOpen = @(Get-Process -Name 'exosnap-updater' -ErrorAction SilentlyContinue).Count
-    Add-Step -Name 'updater-gone-before-accept' -Ok ($stillOpen -eq 0) `
+    Add-Step -Name 'updater-gone-before-accept' -Ok ($stillOpen -eq 0) -Kind 'product' `
         -Detail $(if ($stillOpen -eq 0) { 'no updater process is holding exosnap-updater.exe' } else { "$stillOpen updater process(es) still running" })
 
     # ---------------------------------------------------------------------- accept
@@ -295,25 +303,25 @@ try {
     try {
         $checked = Invoke-LiveVerifyCommand -Connection $app.Connection -Command 'update.check'
         if (-not $checked.ok) {
-            Add-Step -Name 'accept-offer' -Ok $false -Detail "update.check refused: $($checked.error.message)"
+            Add-Step -Name 'accept-offer' -Ok $false -Kind 'product' -Detail "update.check refused: $($checked.error.message)"
             Write-Result
             return
         }
         $state = Wait-UpdateOffer -Connection $app.Connection -TimeoutSeconds $OfferTimeoutSeconds
         $offered = $null -ne $state -and $null -ne $state.PSObject.Properties['updateAvailable'] -and $state.updateAvailable
         if (-not $offered) {
-            Add-Step -Name 'accept-offer' -Ok $false -Detail "no update is offered to $beforeVersion after the decline"
+            Add-Step -Name 'accept-offer' -Ok $false -Kind 'product' -Detail "no update is offered to $beforeVersion after the decline"
             Write-Result
             return
         }
-        Add-Step -Name 'accept-offer' -Ok $true -Detail 'an update is offered again after the declined one'
+        Add-Step -Name 'accept-offer' -Ok $true -Kind 'product' -Detail 'an update is offered again after the declined one'
         $applied = Invoke-LiveVerifyCommand -Connection $app.Connection -Command 'update.apply'
         if (-not $applied.ok) {
-            Add-Step -Name 'accept-apply' -Ok $false -Detail "update.apply refused: $($applied.error.message)"
+            Add-Step -Name 'accept-apply' -Ok $false -Kind 'product' -Detail "update.apply refused: $($applied.error.message)"
             Write-Result
             return
         }
-        Add-Step -Name 'accept-apply' -Ok $true -Detail 'the updater was launched without a fault injected'
+        Add-Step -Name 'accept-apply' -Ok $true -Kind 'product' -Detail 'the updater was launched without a fault injected'
     }
     finally { try { $app.Connection.Close() } catch { } }
 
@@ -338,18 +346,20 @@ try {
         catch { }
     }
     if ([string]::IsNullOrWhiteSpace($afterVersion)) {
-        Add-Step -Name 'accept-installed' -Ok $false -Detail 'the application could not be reached again after the install'
+        Add-Step -Name 'accept-installed' -Ok $false -Kind 'product' -Detail 'the application could not be reached again after the install'
     }
     elseif ($afterVersion -eq $beforeVersion) {
-        Add-Step -Name 'accept-installed' -Ok $false -Detail "the version is unchanged at $afterVersion; nothing was installed"
+        Add-Step -Name 'accept-installed' -Ok $false -Kind 'product' -Detail "the version is unchanged at $afterVersion; nothing was installed"
     }
     else {
-        Add-Step -Name 'accept-installed' -Ok $true -Detail "installed: $beforeVersion -> $afterVersion"
+        Add-Step -Name 'accept-installed' -Ok $true -Kind 'product' -Detail "installed: $beforeVersion -> $afterVersion"
     }
     Write-Result
 }
 catch {
-    Add-Step -Name 'worker' -Ok $false -Detail "$($_.Exception.Message)"
+    # The worker itself threw, so the environment is what failed -- nothing below
+    # the throw measured anything.
+    Add-Step -Name 'worker' -Ok $false -Kind 'bootstrap' -Detail "$($_.Exception.Message)"
     Write-Result -Fatal "$($_.Exception.Message)"
 }
 finally {
