@@ -228,6 +228,10 @@ struct EncoderDiagnostics {
     // behind. Only the terminal snapshot can carry a true value.
     bool flush_incomplete = false;
     uint64_t undrained_frames = 0;
+    // Audio packets the muxer could not place: they arrived for a segment that a
+    // split had already finalized. Not in any file; non-zero means the split
+    // cost this much audio.
+    uint64_t audio_packets_trimmed_at_split = 0;
     VideoCodec codec = VideoCodec::Av1;
     uint32_t width = 0;
     uint32_t height = 0;

@@ -2380,13 +2380,13 @@ void VideoThread::Run() {
     //   manual split resets the auto timer.
     // next_auto_threshold_ns: session PTS at which the next AUTOMATIC split fires;
     //   UINT64_MAX disables (mode Off). Recomputed after every boundary.
-    // split_last_seq: last split_request_seq value VideoThread has acted on.
+    // split_last_seq: last split_request sequence VideoThread has acted on.
     // split_armed: a boundary has been decided and a forced IDR requested; the next
     //   routed keyframe is the first frame of the new segment.
     // split_armed_trigger: trigger that armed the pending boundary (for logging).
     uint32_t current_segment_index = 0;
     uint64_t segment_start_session_pts_ns = 0;
-    uint64_t split_last_seq = m_state.split_request_seq.load();
+    uint64_t split_last_seq = UnpackSplitRequest(m_state.split_request.load()).sequence;
     bool split_armed = false;
     // The PTS of the specific frame whose submission consumes the forced-
     // IDR request — set by maybeArmSplit, consumed by ShouldEmitSplitSentinel
@@ -2425,7 +2425,11 @@ void VideoThread::Run() {
     };
 
     auto maybeArmSplit = [&](uint64_t pts_ns) {
-        const uint64_t seq = m_state.split_request_seq.load();
+        // ONE load. The sequence and the trigger that produced it come out of the
+        // same word, so a request landing right now cannot make this call
+        // attribute its sequence to the next request's reason.
+        const SplitRequestState request = UnpackSplitRequest(m_state.split_request.load(std::memory_order_acquire));
+        const uint64_t seq = request.sequence;
         const bool manual = (seq != split_last_seq);
         const bool automatic = (pts_ns >= next_auto_threshold_ns);
         if (split_armed) {
@@ -2453,8 +2457,17 @@ void VideoThread::Run() {
         split_armed = true;
         split_forced_pts_ns = pts_ns; // this call's frame is the one that will carry FORCEIDR
         split_armed_secondary_logged = false;
-        split_armed_trigger = manual ? static_cast<SplitTriggerSource>(m_state.split_last_trigger.load())
-                                     : SplitTriggerSource::AutomaticDuration;
+        split_armed_trigger =
+            manual ? static_cast<SplitTriggerSource>(request.primary_trigger) : SplitTriggerSource::AutomaticDuration;
+        // Consumed: clear the coalesce mask so the NEXT boundary reports its own
+        // requests rather than inheriting this one's. Pinned to the word this call
+        // read, so a request that arrived since is left for the next boundary
+        // instead of being silently swallowed.
+        if (manual) {
+            uint64_t observed = PackSplitRequest(request);
+            m_state.split_request.compare_exchange_strong(observed, SplitRequestConsumed(request),
+                                                          std::memory_order_release, std::memory_order_relaxed);
+        }
         encoder->RequestKeyframe();
         m_state.diagnostics.OnForcedKeyframe();
         m_state.diagnostics.SetSplitPending(true);
@@ -2463,8 +2476,13 @@ void VideoThread::Run() {
         // independent duration timer crossing its threshold); name both triggers
         // instead of letting the ternary silently pick one.
         const char* trigger_label = (manual && automatic) ? "manual+automatic" : (manual ? "manual" : "automatic");
+        // What actually coalesced into this boundary, rather than one arbitrary
+        // winner. Several bits set means several requests collapsed into this
+        // split, which is correct behaviour that used to leave no trace.
+        const std::string coalesced_label = SplitTriggerMaskText(request.coalesced_triggers);
         logging::LogField fields[] = {{"segment_index", std::to_string(current_segment_index + 1u)},
                                       {"trigger", trigger_label},
+                                      {"coalesced_triggers", coalesced_label},
                                       {"session_pts_ms", std::to_string(pts_ns / 1000000ULL)}};
         logging::log(logging::LogLevel::Info, "video_thread", "split boundary armed (forced keyframe requested)",
                      std::span<const logging::LogField>(fields, std::size(fields)));

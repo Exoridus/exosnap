@@ -744,6 +744,7 @@ RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_p
     // drain ran once at end of stream, so only the terminal snapshot carries them.
     enc.flush_incomplete = stats.video_flush_incomplete;
     enc.undrained_frames = stats.video_undrained_frames;
+    enc.audio_packets_trimmed_at_split = stats.audio_packets_trimmed_at_split;
     enc.backlog =
         (frames_submitted_ > stats.encoded_video_packets) ? (frames_submitted_ - stats.encoded_video_packets) : 0;
     enc.forced_keyframes = forced_keyframes_;

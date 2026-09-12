@@ -11,6 +11,7 @@
 #include "session_outcome.h"
 #include "session_stats_collector.h"
 #include "session_stop_reset.h"
+#include "split_sentinel_policy.h"
 #include "video_thread.h"
 #include "wasapi_capture_src.h"
 #include "wasapi_loopback_src.h"
@@ -526,8 +527,14 @@ bool RecorderSession::RequestSplit(SplitTriggerSource source, RecordRequestId re
     // Record the trigger (for logging) before bumping the sequence so the
     // observing thread sees a consistent (seq, trigger) pair.
     const auto st = m_impl->State();
-    st->split_last_trigger.store(static_cast<uint32_t>(source));
-    st->split_request_seq.fetch_add(1);
+    // Compare-exchange, not a store: two requesters (a hotkey and the size
+    // monitor) must not lose each other's trigger bit, and the sequence and the
+    // trigger have to become visible together or the consumer can pair a
+    // sequence with the wrong reason.
+    uint64_t expected = st->split_request.load(std::memory_order_relaxed);
+    while (!st->split_request.compare_exchange_weak(expected, SplitRequestWith(expected, static_cast<uint32_t>(source)),
+                                                    std::memory_order_release, std::memory_order_relaxed)) {
+    }
     return true;
 }
 

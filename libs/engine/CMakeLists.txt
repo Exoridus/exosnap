@@ -696,6 +696,7 @@ exosnap_add_gtest(
     NAME test_split_sentinel_policy
     TEST_PREFIX engine.
     SOURCES tests/test_split_sentinel_policy.cpp
+    LIBRARIES exosnap_engine
 )
 target_include_directories(test_split_sentinel_policy PRIVATE src)
 
@@ -1154,6 +1155,18 @@ exosnap_add_gtest(
     SOURCES tests/test_av_epoch_align.cpp
 )
 target_include_directories(test_av_epoch_align PRIVATE src)
+
+# What the A/V duration skew is allowed to mean. It compared the video end
+# against the audio ENCODER's last PTS -- a different timeline -- so an aligned
+# recording reported its epoch offset as drift. The control case (a real 200 ms
+# loss) is what proves the fix is not just subtracting the offset.
+exosnap_add_gtest(
+    NAME test_duration_skew
+    TEST_PREFIX engine.
+    SOURCES tests/test_duration_skew.cpp
+    LIBRARIES exosnap_engine
+)
+target_include_directories(test_duration_skew PRIVATE src)
 
 # Capture drain selection: the frame loop must never drain the backend it does not
 # own. Pins that an OD capture mid-reopen drains nothing rather than the null WGC pool.

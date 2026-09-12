@@ -133,6 +133,7 @@ QJsonObject EncoderJson(const exosnap::engine::EncoderDiagnostics& e) {
     json.insert(QStringLiteral("forcedKeyframes"), Count(e.forced_keyframes));
     json.insert(QStringLiteral("flushIncomplete"), e.flush_incomplete);
     json.insert(QStringLiteral("undrainedFrames"), Count(e.undrained_frames));
+    json.insert(QStringLiteral("audioPacketsTrimmedAtSplit"), Count(e.audio_packets_trimmed_at_split));
     json.insert(QStringLiteral("timestampMismatches"), Count(e.output_ts_mismatches));
     json.insert(QStringLiteral("keyframeMismatches"), Count(e.keyframe_prediction_mismatches));
     json.insert(QStringLiteral("codec"), ui::videoCodecLabel(e.codec));

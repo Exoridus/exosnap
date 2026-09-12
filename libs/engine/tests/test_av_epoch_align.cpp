@@ -192,3 +192,100 @@ TEST(VfrVideoEpoch, PauseBeforeFirstFrameAdvancesTheFloor) {
 }
 
 } // namespace
+
+// ---- Placing a packet on a segment's local timeline (split boundaries) ----
+//
+// A segment's timestamps start at 0 at its own epoch: the first video packet
+// written into it. Rebasing onto that used to be "epoch unset -> write the
+// session PTS unchanged; before the epoch -> write 0", and both are wrong once a
+// split has happened. After a split at ten minutes the next segment's epoch is
+// not known when the first audio arrives (the queues are independent), so that
+// audio went into a seconds-long file at ten minutes. Audio arriving after the
+// epoch but belonging before it was written at 0, stacking every such packet on
+// the same timestamp.
+
+namespace {
+
+using exosnap::engine::PlaceOnSegmentTimeline;
+using exosnap::engine::SegmentLocalPts;
+using exosnap::engine::SegmentPlacement;
+
+constexpr uint64_t kSegmentEpoch = 600'000'000'000ULL; // a split at 10 minutes
+
+TEST(SegmentTimeline, APacketAfterTheEpochIsRebasedNormally) {
+    const SegmentLocalPts placed =
+        PlaceOnSegmentTimeline(kSegmentEpoch + 40'000'000ULL, /*epoch_set=*/true, kSegmentEpoch);
+    EXPECT_EQ(placed.placement, SegmentPlacement::Write);
+    EXPECT_EQ(placed.local_pts_ns, 40'000'000ULL);
+}
+
+TEST(SegmentTimeline, APacketExactlyAtTheEpochIsLocalZero) {
+    // Local 0 here is the epoch's own definition, not a clamp.
+    const SegmentLocalPts placed = PlaceOnSegmentTimeline(kSegmentEpoch, true, kSegmentEpoch);
+    EXPECT_EQ(placed.placement, SegmentPlacement::Write);
+    EXPECT_EQ(placed.local_pts_ns, 0ULL);
+}
+
+TEST(SegmentTimeline, APacketBeforeTheEpochIsTrimmedNotWrittenAtZero) {
+    // The defect. This packet belongs to the segment that was just finalized;
+    // writing it at local 0 puts audio from before the split at the start of the
+    // file after it.
+    const SegmentLocalPts placed = PlaceOnSegmentTimeline(kSegmentEpoch - 20'000'000ULL, true, kSegmentEpoch);
+    EXPECT_EQ(placed.placement, SegmentPlacement::Trim);
+}
+
+TEST(SegmentTimeline, LateArrivalsDoNotPileUpAtLocalZero) {
+    // Several packets from before the split, arriving after the new epoch is set.
+    // Every one of them used to be written at local 0.
+    int trimmed = 0;
+    for (uint64_t back = 1; back <= 5; ++back) {
+        const SegmentLocalPts placed =
+            PlaceOnSegmentTimeline(kSegmentEpoch - back * 20'000'000ULL, true, kSegmentEpoch);
+        EXPECT_EQ(placed.placement, SegmentPlacement::Trim);
+        if (placed.placement == SegmentPlacement::Trim)
+            ++trimmed;
+    }
+    EXPECT_EQ(trimmed, 5) << "every late packet must be accounted for, not stacked on one timestamp";
+}
+
+TEST(SegmentTimeline, WithoutAnEpochThePacketIsHeldNotWrittenAtItsSessionPts) {
+    // The other half of the defect: with no epoch yet, the session PTS was
+    // written as if it were segment-local. In a file that is seconds long, that
+    // is a ten-minute timestamp.
+    const SegmentLocalPts placed = PlaceOnSegmentTimeline(kSegmentEpoch, /*epoch_set=*/false, 0);
+    EXPECT_EQ(placed.placement, SegmentPlacement::Defer);
+    EXPECT_NE(placed.placement, SegmentPlacement::Write) << "a session PTS is not a segment-local PTS";
+}
+
+TEST(SegmentTimeline, TheFirstSegmentStillStartsAtZero) {
+    // The ordinary no-split case: epoch is the first video packet of the
+    // recording, and the file starts at 0.
+    const uint64_t first_video = 33'000'000ULL;
+    const SegmentLocalPts video = PlaceOnSegmentTimeline(first_video, true, first_video);
+    EXPECT_EQ(video.placement, SegmentPlacement::Write);
+    EXPECT_EQ(video.local_pts_ns, 0ULL);
+
+    const SegmentLocalPts audio = PlaceOnSegmentTimeline(first_video + 21'333'000ULL, true, first_video);
+    EXPECT_EQ(audio.placement, SegmentPlacement::Write);
+    EXPECT_EQ(audio.local_pts_ns, 21'333'000ULL);
+}
+
+// The invariant across both halves: for any packet and any segment state, the
+// result is one of three named outcomes, and a written packet is never given a
+// timestamp that is not relative to the epoch it was placed against.
+TEST(SegmentTimeline, EveryOutcomeIsNamedAndAWriteIsAlwaysRelativeToTheEpoch) {
+    for (const bool epoch_set : {false, true}) {
+        for (uint64_t pts = 0; pts < 2 * kSegmentEpoch; pts += kSegmentEpoch / 3) {
+            const SegmentLocalPts placed = PlaceOnSegmentTimeline(pts, epoch_set, kSegmentEpoch);
+            if (placed.placement != SegmentPlacement::Write) {
+                EXPECT_EQ(placed.local_pts_ns, 0ULL) << "a packet that is not written carries no timestamp";
+                continue;
+            }
+            ASSERT_TRUE(epoch_set);
+            EXPECT_EQ(placed.local_pts_ns, pts - kSegmentEpoch);
+            EXPECT_LE(placed.local_pts_ns, pts) << "a segment-local PTS can never exceed the session PTS";
+        }
+    }
+}
+
+} // namespace

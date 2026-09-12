@@ -208,6 +208,10 @@ QByteArray BuildSessionReportJson(const SessionReportInputs& inputs) {
         // exists to make visible, because nothing about the file says so.
         counters[QStringLiteral("encoder_flush_incomplete")] = s.video_encoder.flush_incomplete;
         counters[QStringLiteral("encoder_undrained_frames")] = static_cast<double>(s.video_encoder.undrained_frames);
+        // Audio a split boundary could not place. The file plays and looks whole;
+        // this is the only place the missing audio is visible.
+        counters[QStringLiteral("audio_packets_trimmed_at_split")] =
+            static_cast<double>(s.video_encoder.audio_packets_trimmed_at_split);
         // How often the driver's actual pictureType disagreed with the
         // submission-side GOP-phase prediction. Warn-only during the recording,
         // so a soak run needs the end-of-session total to see it happened at
