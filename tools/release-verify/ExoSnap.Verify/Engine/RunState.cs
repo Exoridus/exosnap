@@ -33,6 +33,17 @@ public sealed record RunState(
     /// <summary>The schema version this build of the harness writes.</summary>
     public const string CurrentSchemaVersion = "1";
 
+    /// <summary>
+    /// The digest of what these verdicts were measured with, or an empty string.
+    /// </summary>
+    /// <remarks>
+    /// Empty is what a state written before this field existed carries, and it is
+    /// treated as "not recorded" rather than "unchanged": a verdict that cannot say
+    /// which oracles, which Windows build and which display driver produced it has not
+    /// shown it was produced under the conditions in front of the harness now.
+    /// </remarks>
+    public string ToolingFingerprint { get; init; } = string.Empty;
+
     /// <summary>The file name a run's state is stored under.</summary>
     public const string FileName = "state.json";
 
@@ -41,11 +52,18 @@ public sealed record RunState(
     /// harness now. A verdict recorded against different bytes or a different
     /// catalog comes back as <see cref="ScenarioOutcome.Stale"/>.
     /// </summary>
-    public IReadOnlyList<ScenarioVerdict> VerdictsFor(string artifactFingerprint, string catalogVersion)
+    public IReadOnlyList<ScenarioVerdict> VerdictsFor(
+        string artifactFingerprint, string catalogVersion, ToolingFingerprint? tooling = null)
     {
         var artifactMoved = !string.Equals(this.ArtifactFingerprint, artifactFingerprint, StringComparison.Ordinal);
         var catalogMoved = !string.Equals(this.CatalogVersion, catalogVersion, StringComparison.Ordinal);
-        if (!artifactMoved && !catalogMoved)
+
+        // A caller that does not say what it is measuring with gets the old answer:
+        // the tooling rule is opt-in at the call site so a report that only reads a
+        // run does not have to probe the machine to print it.
+        var toolingMoved = tooling is not null && !tooling.Accepts(this.ToolingFingerprint);
+
+        if (!artifactMoved && !catalogMoved && !toolingMoved)
         {
             return this.Verdicts;
         }
@@ -54,7 +72,8 @@ public sealed record RunState(
         {
             (true, true) => "the artifacts and the scenario catalog both changed since this verdict was recorded",
             (true, false) => "the artifacts changed since this verdict was recorded",
-            _ => "the scenario catalog changed since this verdict was recorded",
+            (false, true) => "the scenario catalog changed since this verdict was recorded",
+            _ => tooling!.DescribeMismatch(this.ToolingFingerprint),
         };
 
         return new ReadOnlyCollection<ScenarioVerdict>(

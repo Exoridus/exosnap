@@ -248,7 +248,8 @@ public static class Campaign
     public static ReadOnlyCollection<string> ReconciliationBlockers(
         RunDirectory run,
         CampaignDocument campaign,
-        ScenarioCatalog catalog)
+        ScenarioCatalog catalog,
+        ToolingFingerprint? tooling = null)
     {
         ArgumentNullException.ThrowIfNull(run);
         ArgumentNullException.ThrowIfNull(campaign);
@@ -298,6 +299,23 @@ public static class Campaign
             !string.Equals(state.CatalogVersion, catalog.Version, StringComparison.Ordinal))
         {
             reasons.Add("the run state does not match the prepared campaign, artifact, and catalog");
+        }
+
+        // A verdict is a statement about bytes measured BY something ON something.
+        // The bytes are bound above; this binds the rest, so a local pass produced
+        // with a different ffprobe, on a different Windows build or through a
+        // different display driver cannot qualify a release nobody re-ran.
+        //
+        // Only a real disagreement blocks. A field this machine cannot read makes the
+        // digest empty, and that has to mean "these verdicts may not be REUSED" rather
+        // than "this run may not qualify": refusing to qualify because a tool nobody
+        // needs is unreadable would stop every campaign on a machine without it, which
+        // is a different and much worse failure than the one being prevented.
+        if (tooling is { Digest.Length: > 0 } &&
+            state is { ToolingFingerprint.Length: > 0 } &&
+            !tooling.Accepts(state.ToolingFingerprint))
+        {
+            reasons.Add(tooling.DescribeMismatch(state.ToolingFingerprint));
         }
 
         return new ReadOnlyCollection<string>(reasons);
