@@ -106,31 +106,6 @@ public sealed class DisposableOsVerdictTests
 
 public sealed class DisposableOsRunnerTests
 {
-    private sealed class FixedTransport : IDisposableOsTransport
-    {
-        private readonly DisposableOsRun run;
-
-        public FixedTransport(string name, bool available, DisposableOsRun run)
-        {
-            this.Name = name;
-            this.Available = available;
-            this.run = run;
-        }
-
-        public string Name { get; }
-
-        public bool Available { get; }
-
-        public string UnavailableReason => this.Available ? string.Empty : $"{this.Name} is not available";
-
-        public List<DisposableOsWorkerRequest> Requests { get; } = [];
-
-        public Task<DisposableOsRun> RunWorkerAsync(DisposableOsWorkerRequest request, CancellationToken cancellationToken)
-        {
-            this.Requests.Add(request);
-            return Task.FromResult(this.run);
-        }
-    }
 
     [Fact]
     public async Task SkipsAnUnavailableTransportAndUsesTheNextOne()

@@ -505,6 +505,36 @@ internal sealed class FakeElevatedWorkerHost : IElevatedWorkerHost
     }
 }
 
+/// <summary>A transport that answers with one prepared run and starts no machine.</summary>
+internal sealed class FixedTransport : IDisposableOsTransport
+{
+    private readonly DisposableOsRun run;
+
+    public FixedTransport(string name, bool available, DisposableOsRun run)
+    {
+        this.Name = name;
+        this.Available = available;
+        this.run = run;
+    }
+
+    public string Name { get; }
+
+    public bool Available { get; }
+
+    /// <summary>Whether this fake claims to prove the guest's interactive session.</summary>
+    public bool ProvesInteractiveGuest { get; init; }
+
+    public string UnavailableReason => this.Available ? string.Empty : $"{this.Name} is not available";
+
+    public List<DisposableOsWorkerRequest> Requests { get; } = [];
+
+    public Task<DisposableOsRun> RunWorkerAsync(DisposableOsWorkerRequest request, CancellationToken cancellationToken)
+    {
+        this.Requests.Add(request);
+        return Task.FromResult(this.run);
+    }
+}
+
 /// <summary>A configurable <see cref="IDisposableOsRunner"/> that starts no machine.</summary>
 internal sealed class FakeDisposableOsRunner : IDisposableOsRunner
 {

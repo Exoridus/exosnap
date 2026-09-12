@@ -173,6 +173,16 @@ public sealed class SandboxTransport : IDisposableOsTransport
     public string Name => "sandbox";
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// Not a statement about what Windows Sandbox can do. Nothing here measures the
+    /// session a worker lands in, so this transport cannot back the claim, and a
+    /// transport that made it anyway would be the harness asserting something it never
+    /// checked -- on exactly the question that separates a guest which can show a
+    /// picture from one that only answers.
+    /// </remarks>
+    public bool ProvesInteractiveGuest => false;
+
+    /// <inheritdoc/>
     public bool Available => this.sandbox.Available && this.powerShellHome is not null && Directory.Exists(this.powerShellHome);
 
     /// <inheritdoc/>

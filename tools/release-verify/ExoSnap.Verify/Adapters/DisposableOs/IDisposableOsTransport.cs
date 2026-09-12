@@ -49,6 +49,19 @@ public sealed record DisposableOsWorkerRequest(
     /// silent.
     /// </remarks>
     public bool RequiresNetwork { get; init; }
+
+    /// <summary>
+    /// Whether the worker needs a guest whose interactive session has been proven.
+    /// </summary>
+    /// <remarks>
+    /// A worker that captures the desktop, or drives the application's own window,
+    /// needs a process context with a desktop in it -- and needs that context to have
+    /// been measured rather than assumed. Declared here so a run that needs it is
+    /// never handed to a transport that cannot prove it: the failure that produces is
+    /// every file copying, the channel answering, and the capture failing for a reason
+    /// that reads like a product defect.
+    /// </remarks>
+    public bool RequiresInteractiveGuest { get; init; }
 }
 
 /// <summary>How one disposable-OS worker run ended.</summary>
@@ -106,6 +119,18 @@ public interface IDisposableOsTransport
     /// <summary>Why this transport is not usable here, or an empty string when it is.</summary>
     string UnavailableReason { get; }
 
+    /// <summary>
+    /// Whether this transport measures the session its worker lands in, and so can
+    /// carry a request that declares <see cref="DisposableOsWorkerRequest.RequiresInteractiveGuest"/>.
+    /// </summary>
+    /// <remarks>
+    /// False by default, and false is the honest answer for a transport that simply
+    /// does not look. Claiming it without measuring would be the harness asserting
+    /// something it never checked, on exactly the question that separates a guest
+    /// which can show a picture from one that only answers.
+    /// </remarks>
+    bool ProvesInteractiveGuest => false;
+
     /// <summary>Stages the request and runs it, returning what the worker produced.</summary>
     Task<DisposableOsRun> RunWorkerAsync(DisposableOsWorkerRequest request, CancellationToken cancellationToken);
 }
@@ -144,19 +169,31 @@ public sealed class DisposableOsRunner : IDisposableOsRunner
     public async Task<DisposableOsRun> RunAsync(DisposableOsWorkerRequest request, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
-        foreach (var transport in this.transports)
-        {
-            if (!transport.Available)
-            {
-                continue;
-            }
 
+        // Capability first, availability second. A run that needs a proven interactive
+        // guest must not fall back to a transport that cannot prove one: that fallback
+        // is silent, and what it produces is a capture failure attributed to the
+        // product.
+        var capable = this.transports
+            .Where(transport => !request.RequiresInteractiveGuest || transport.ProvesInteractiveGuest)
+            .ToList();
+
+        foreach (var transport in capable.Where(transport => transport.Available))
+        {
             return await transport.RunWorkerAsync(request, cancellationToken).ConfigureAwait(false);
         }
 
-        var reasons = this.transports.Count == 0
-            ? "no transport is configured"
-            : string.Join("; ", this.transports.Select(transport => $"{transport.Name}: {transport.UnavailableReason}"));
+        if (capable.Count == 0)
+        {
+            var names = this.transports.Count == 0
+                ? "no transport is configured"
+                : string.Join(", ", this.transports.Select(transport => transport.Name));
+            return DisposableOsRun.Unavailable(
+                "this run needs a guest whose interactive session is proven, and no configured transport measures "
+                + $"one ({names})");
+        }
+
+        var reasons = string.Join("; ", capable.Select(transport => $"{transport.Name}: {transport.UnavailableReason}"));
         return DisposableOsRun.Unavailable($"no disposable-OS transport is available on this machine ({reasons})");
     }
 }
