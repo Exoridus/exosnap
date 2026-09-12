@@ -504,6 +504,174 @@ Test-Case 'a rescue step of a resource this run never created is skipped' {
 }
 
 # ---------------------------------------------------------------------------
+# Which image a campaign actually ran on
+# ---------------------------------------------------------------------------
+#
+# The committed recipe and the setup the capture work was qualified on are not the
+# same image: the manifest pins the MTT virtual display driver, and the runs that
+# reached 4K120 through Graphics Capture used SudoVDA. Until that is reconciled the
+# harness has to be able to say which of the two an image is, and refuse a run whose
+# scenario needs the other one -- rather than producing evidence attributed to an
+# image nobody can identify afterwards.
+
+function New-FixtureFingerprint {
+    param([hashtable] $Override = @{})
+    $fingerprint = @{
+        displayProfile      = 'mtt'
+        displayDriver       = 'Root\MttVDD 25.7.23'
+        windowsBuild        = '10.0.26100.4061'
+        hostGpuDriver       = '32.0.15.8098'
+        displayMode         = '2560x1440@60,144'
+        packagePins         = 'sha256:1111111111111111111111111111111111111111111111111111111111111111'
+    }
+    foreach ($key in $Override.Keys) { $fingerprint[$key] = $Override[$key] }
+    return $fingerprint
+}
+
+Test-Case 'an image fingerprint is the same for the same facts and different for different ones' {
+    $a = Get-ReleaseVmImageFingerprintDigest -Fingerprint (New-FixtureFingerprint)
+    $b = Get-ReleaseVmImageFingerprintDigest -Fingerprint (New-FixtureFingerprint)
+    $c = Get-ReleaseVmImageFingerprintDigest -Fingerprint (New-FixtureFingerprint @{ hostGpuDriver = '33.0.0.1' })
+
+    Assert-Equal $a $b 'the same image has to fingerprint the same, or nothing can be compared'
+    Assert-True ($a -ne $c) 'a host driver change is a different image'
+}
+
+Test-Case 'the digest does not depend on the order the facts were written in' {
+    $ordered = [ordered]@{ a = '1'; b = '2' }
+    $reversed = [ordered]@{ b = '2'; a = '1' }
+
+    Assert-Equal (Get-ReleaseVmImageFingerprintDigest -Fingerprint $ordered) `
+        (Get-ReleaseVmImageFingerprintDigest -Fingerprint $reversed) `
+        'a hashtable has no order and the digest must not invent one'
+}
+
+Test-Case 'an image built on a different display profile is refused, not silently used' {
+    # The reconciliation this ticket exists for: a scenario qualified on SudoVDA must
+    # not quietly run on an MTT image and be reported as the same evidence.
+    $drift = Test-ReleaseVmImageFingerprint -Expected (New-FixtureFingerprint @{ displayProfile = 'sudovda' }) `
+        -Actual (New-FixtureFingerprint)
+
+    Assert-True (-not $drift.Matches) 'two different display drivers are two different images'
+    Assert-Match 'displayProfile' ($drift.Differences -join '; ') 'the field that drifted has to be named'
+    Assert-Match 'sudovda' ($drift.Differences -join '; ') 'the profile the run needed has to be named'
+    Assert-Match 'mtt' ($drift.Differences -join '; ') 'so does the one the image has'
+}
+
+Test-Case 'a host driver change requalifies the image' {
+    # The GPU driver is staged into the guest from the host, so changing it on the
+    # host changes the guest -- without anything in the guest being rebuilt.
+    $drift = Test-ReleaseVmImageFingerprint -Expected (New-FixtureFingerprint) `
+        -Actual (New-FixtureFingerprint @{ hostGpuDriver = '33.0.0.1' })
+
+    Assert-True (-not $drift.Matches) 'the guest driver came from the host, so the host driver is part of the image'
+    Assert-Match 'hostGpuDriver' ($drift.Differences -join '; ') 'the field has to be named'
+}
+
+Test-Case 'every drifted field is named at once' {
+    $drift = Test-ReleaseVmImageFingerprint -Expected (New-FixtureFingerprint) `
+        -Actual (New-FixtureFingerprint @{ windowsBuild = '10.0.27000.1'; hostGpuDriver = '33.0.0.1' })
+
+    Assert-Equal 2 $drift.Differences.Count 'rebuilding an image once per drifted field is not a workflow'
+}
+
+Test-Case 'a fact the image never recorded is drift, not agreement' {
+    $actual = New-FixtureFingerprint
+    $actual.Remove('packagePins')
+
+    $drift = Test-ReleaseVmImageFingerprint -Expected (New-FixtureFingerprint) -Actual $actual
+    Assert-True (-not $drift.Matches) 'an unrecorded fact cannot be said to match'
+    Assert-Match 'not recorded' ($drift.Differences -join '; ') 'missing reads differently from different'
+}
+
+Test-Case 'an identical fingerprint is an identical image' {
+    $drift = Test-ReleaseVmImageFingerprint -Expected (New-FixtureFingerprint) -Actual (New-FixtureFingerprint)
+    Assert-True $drift.Matches 'the same facts are the same image'
+    Assert-Equal 0 $drift.Differences.Count 'nothing to report'
+}
+
+Test-Case 'the image paths name where a fingerprint lives' {
+    $paths = Get-ReleaseVmPath -Root 'T:\images'
+    Assert-Equal 'T:\images\image-fingerprint.json' $paths.Fingerprint `
+        'the fingerprint belongs beside the image it describes, not in a run directory'
+}
+
+Test-Case 'a run that pins its image refuses before it copies a disk' {
+    $paths = Get-ReleaseVmRunPath -RunId 'pinned' -Root 'T:\images'
+    $plan = New-ReleaseVmRunPlan -RunPath $paths -GuestCommand 'verify.exe' -ResultDirectory 'T:\out' `
+        -RequireImageFingerprint @{ displayProfile = 'sudovda' }
+    $names = @($plan | ForEach-Object { $_.Name })
+
+    Assert-True ($names -contains 'image-fingerprint') 'a run qualified on one image must not use another'
+    Assert-True ([array]::IndexOf($names, 'image-fingerprint') -lt [array]::IndexOf($names, 'differencing-disk')) `
+        'refusing before anything is created costs nothing'
+}
+
+Test-Case 'a run that pins no image gets no fingerprint step' {
+    $paths = Get-ReleaseVmRunPath -RunId 'unpinned' -Root 'T:\images'
+    $plan = New-ReleaseVmRunPlan -RunPath $paths -GuestCommand 'verify.exe' -ResultDirectory 'T:\out'
+    Assert-True (-not (@($plan | ForEach-Object { $_.Name }) -contains 'image-fingerprint')) `
+        'the pin belongs to the scenario, not to every run of the recipe'
+}
+
+Test-Case 'an image with no recorded fingerprint is refused rather than trusted' {
+    $missing = Join-Path ([IO.Path]::GetTempPath()) ('exosnap-fp-' + [guid]::NewGuid().ToString('N') + '.json')
+    $message = ''
+    try {
+        Assert-ReleaseVmImageFingerprint -Expected @{ displayProfile = 'sudovda' } -FingerprintPath $missing
+    }
+    catch { $message = $_.Exception.Message }
+
+    Assert-Match 'records no fingerprint' $message 'an unidentifiable image cannot back a qualified run'
+}
+
+Test-Case 'a written fingerprint reads back as the same facts plus its digest' {
+    $path = Join-Path ([IO.Path]::GetTempPath()) ('exosnap-fp-' + [guid]::NewGuid().ToString('N') + '.json')
+    try {
+        Write-ReleaseVmImageFingerprint -Fingerprint (New-FixtureFingerprint) -Path $path | Out-Null
+        $read = Assert-ReleaseVmImageFingerprint -Expected (New-FixtureFingerprint) -FingerprintPath $path
+
+        Assert-Equal 'mtt' $read.displayProfile 'the facts survive the round trip'
+        Assert-Equal (Get-ReleaseVmImageFingerprintDigest -Fingerprint (New-FixtureFingerprint)) $read.digest `
+            'a changed fingerprint file has to be visible as one'
+    }
+    finally { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue }
+}
+
+Test-Case 'the manifest says which display profile it describes' {
+    $manifest = Import-PowerShellDataFile -LiteralPath $script:ManifestPath
+    Assert-True ($manifest.Contains('displayProfile')) 'an image that cannot name its display driver cannot be compared'
+    Assert-True ($manifest.displayProfile -in @('mtt', 'sudovda')) 'the profile has to be one the recipe knows'
+}
+
+Test-Case 'the manifest states which profile the capture work was qualified on' {
+    # Recorded rather than assumed: the committed recipe and the qualified setup
+    # differ today, and a harness that cannot say so will report evidence from one as
+    # if it came from the other.
+    $manifest = Import-PowerShellDataFile -LiteralPath $script:ManifestPath
+    Assert-Equal 'sudovda' $manifest.qualifiedDisplayProfile 'the capture runs that reached 4K120 used SudoVDA'
+}
+
+Test-Case 'the fingerprint a manifest contributes carries the profile and the display mode' {
+    $manifest = Import-PowerShellDataFile -LiteralPath $script:ManifestPath
+    $fingerprint = Get-ReleaseVmManifestFingerprint -Manifest $manifest
+
+    Assert-Equal $manifest.displayProfile $fingerprint.displayProfile 'the profile is the first thing that identifies an image'
+    Assert-Match '2560x1440' $fingerprint.displayMode 'the monitor the gates assert against is part of the image'
+    Assert-True ($fingerprint.packagePins.Length -gt 0) 'a changed package pin is a changed image'
+}
+
+Test-Case 'changing one package pin changes the manifest fingerprint' {
+    $manifest = Import-PowerShellDataFile -LiteralPath $script:ManifestPath
+    $before = (Get-ReleaseVmManifestFingerprint -Manifest $manifest).packagePins
+
+    $manifest.packages[0].version = 'something-else'
+    $after = (Get-ReleaseVmManifestFingerprint -Manifest $manifest).packagePins
+
+    Assert-True ($before -ne $after) 'a tool set that drifts turns every disagreement into an image investigation'
+}
+
+# ---------------------------------------------------------------------------
 # Binding a run to the GPU it actually ran on
 # ---------------------------------------------------------------------------
 #

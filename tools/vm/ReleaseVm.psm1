@@ -473,6 +473,9 @@ function Get-ReleaseVmPath {
         Root          = $Root
         GoldenDisk    = [IO.Path]::Combine($Root, $defaults.GoldenDiskName)
         AnswerIso     = [IO.Path]::Combine($Root, $defaults.AnswerIsoName)
+        # What this image is, beside the image. A campaign whose evidence cannot name
+        # the image it came from is a campaign nobody can repeat.
+        Fingerprint   = [IO.Path]::Combine($Root, 'image-fingerprint.json')
         RunRoot       = [IO.Path]::Combine($Root, 'runs')
     }
 }
@@ -761,12 +764,23 @@ function New-ReleaseVmRunPlan {
         [int] $BootTimeoutMinutes = 15,
         [int] $RunTimeoutMinutes = 120,
         [System.Collections.IDictionary] $Readiness,
+        [System.Collections.IDictionary] $RequireImageFingerprint,
         [switch] $RequireInteractiveGuest,
         [switch] $KeepDisk
     )
     if (-not $GpuPartition) { $GpuPartition = $script:GpuPartitionDefault }
     $vm = $RunPath.VMName
     $plan = @()
+
+    if ($RequireImageFingerprint) {
+        # First, before anything is created: an image that is not the one this run was
+        # qualified on makes every later step a waste, and refusing here costs nothing.
+        $plan += New-ReleaseVmStep -Name 'image-fingerprint' -Command 'Assert-ReleaseVmImageFingerprint' `
+            -Parameters ([ordered]@{
+                Expected = $RequireImageFingerprint
+                FingerprintPath = [IO.Path]::Combine((Split-Path -Parent $RunPath.GoldenDisk), 'image-fingerprint.json')
+            }) -Detail 'the two display-driver profiles behave differently under capture'
+    }
 
     $plan += New-ReleaseVmStep -Name 'run-directory' -Command 'New-Item' -Parameters ([ordered]@{
             ItemType = 'Directory'; Path = $RunPath.RunDirectory; Force = $true
@@ -1147,6 +1161,139 @@ function Assert-ReleaseVmReadiness {
         throw ("'$VMName' is not ready for this run:`n    " + ($verdict.Unmet -join "`n    "))
     }
     return $receipt
+}
+
+function Get-ReleaseVmImageFingerprintDigest {
+    <#
+    .SYNOPSIS
+        One stable digest over the facts that identify a golden image.
+    .DESCRIPTION
+        Order-independent: a hashtable has none, and a digest that depended on
+        enumeration order would report drift between two readings of the same image.
+        Keys are sorted and the pairs are joined with separators that cannot occur in
+        a key, so two different fact sets cannot collide by concatenation.
+    #>
+    [OutputType([string])]
+    param([Parameter(Mandatory)] [System.Collections.IDictionary] $Fingerprint)
+    $pairs = @($Fingerprint.Keys | Sort-Object | ForEach-Object { "$_=$($Fingerprint[$_])" })
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($pairs -join "`n")
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        return 'sha256:' + [System.BitConverter]::ToString($sha.ComputeHash($bytes)).Replace('-', '').ToLowerInvariant()
+    }
+    finally { $sha.Dispose() }
+}
+
+function Test-ReleaseVmImageFingerprint {
+    <#
+    .SYNOPSIS
+        Whether the image a run is about to use is the image the run was qualified on.
+    .DESCRIPTION
+        Pure, and it names every drifted field at once: rebuilding a golden image once
+        per discovered difference is not a workflow.
+
+        A fact the image never recorded is drift rather than agreement. An older
+        image simply does not carry a field a later build of this recipe compares,
+        and the absence of a record is not evidence that the two agree.
+    .OUTPUTS
+        A hashtable with Matches and Differences.
+    #>
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Expected,
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Actual
+    )
+    $differences = @()
+    foreach ($key in @($Expected.Keys | Sort-Object)) {
+        if (-not $Actual.Contains($key) -or $null -eq $Actual[$key]) {
+            $differences += "$key`: the run needs $($Expected[$key]); the image has not recorded it"
+            continue
+        }
+        if ("$($Actual[$key])" -ne "$($Expected[$key])") {
+            $differences += "$key`: the run needs $($Expected[$key]); the image is $($Actual[$key])"
+        }
+    }
+    return @{ Matches = ($differences.Count -eq 0); Differences = $differences }
+}
+
+function Get-ReleaseVmManifestFingerprint {
+    <#
+    .SYNOPSIS
+        The part of an image fingerprint the provisioning manifest decides.
+    .DESCRIPTION
+        The display driver profile, the monitor the gates assert against, and a digest
+        over every package pin. The rest of a fingerprint -- the Windows build, the
+        host GPU driver the guest driver was staged from -- is measured, not declared,
+        and is added by whoever builds or checks the image.
+    #>
+    [OutputType([hashtable])]
+    param([Parameter(Mandatory)] [System.Collections.IDictionary] $Manifest)
+    $pins = @($Manifest.packages | Sort-Object { $_.id } | ForEach-Object {
+            $version = if ($_.Contains('version')) { $_.version } else { '' }
+            $sha = if ($_.Contains('sha256')) { $_.sha256 } else { '' }
+            "$($_.id)|$($_.kind)|$version|$sha"
+        })
+    $modes = ($Manifest.display.refreshRates | ForEach-Object { "$_" }) -join ','
+    return @{
+        displayProfile = $Manifest.displayProfile
+        displayMode    = "$($Manifest.display.width)x$($Manifest.display.height)@$modes"
+        packagePins    = Get-ReleaseVmImageFingerprintDigest -Fingerprint @{ pins = ($pins -join "`n") }
+    }
+}
+
+function Assert-ReleaseVmImageFingerprint {
+    <#
+    .SYNOPSIS
+        Refuses a run whose image is not the image the run was qualified on.
+    .DESCRIPTION
+        The plan step form. Evidence attributed to the wrong image is worse than no
+        evidence: the two display-driver profiles this recipe knows behave differently
+        under capture, and a campaign that cannot name the one it ran on cannot be
+        repeated or compared.
+    #>
+    param(
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Expected,
+        [Parameter(Mandatory)] [string] $FingerprintPath
+    )
+    if (-not (Test-Path -LiteralPath $FingerprintPath)) {
+        throw ("this image records no fingerprint at '$FingerprintPath', so it cannot be told apart from any " +
+            'other image. Rebuild it, or write the fingerprint of the image that is there.')
+    }
+    $actual = @{}
+    (Get-Content -LiteralPath $FingerprintPath -Raw | ConvertFrom-Json).PSObject.Properties |
+        ForEach-Object { $actual[$_.Name] = $_.Value }
+
+    $drift = Test-ReleaseVmImageFingerprint -Expected $Expected -Actual $actual
+    if (-not $drift.Matches) {
+        throw ("the golden image is not the image this run was qualified on:`n    " +
+            ($drift.Differences -join "`n    "))
+    }
+    return $actual
+}
+
+function Write-ReleaseVmImageFingerprint {
+    <#
+    .SYNOPSIS
+        Records what an image is, beside the image.
+    .DESCRIPTION
+        Written when the image is built and read by every run afterwards. The digest
+        is stored alongside the facts so a changed fingerprint file is visible as
+        such, rather than only as a comparison failing somewhere later.
+    #>
+    param(
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Fingerprint,
+        [Parameter(Mandatory)] [string] $Path
+    )
+    $document = [ordered]@{}
+    foreach ($key in @($Fingerprint.Keys | Sort-Object)) { $document[$key] = $Fingerprint[$key] }
+    $document['digest'] = Get-ReleaseVmImageFingerprintDigest -Fingerprint $Fingerprint
+
+    $directory = Split-Path -Parent $Path
+    if ($directory -and -not (Test-Path -LiteralPath $directory)) {
+        New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    }
+    Set-Content -LiteralPath $Path -Value ($document | ConvertTo-Json -Depth 4) -Encoding UTF8
+    return $Path
 }
 
 function Get-ReleaseVmInfDriverVersion {
@@ -1767,6 +1914,11 @@ Export-ModuleMember -Function @(
     'Format-ReleaseVmStep'
     'Write-ReleaseVmPlan'
     'Invoke-ReleaseVmPlan'
+    'Get-ReleaseVmImageFingerprintDigest'
+    'Test-ReleaseVmImageFingerprint'
+    'Get-ReleaseVmManifestFingerprint'
+    'Assert-ReleaseVmImageFingerprint'
+    'Write-ReleaseVmImageFingerprint'
     'Get-ReleaseVmInfDriverVersion'
     'Select-ReleaseVmDriverPackage'
     'Compare-ReleaseVmGpuPartition'
