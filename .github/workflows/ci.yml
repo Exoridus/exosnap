@@ -622,3 +622,99 @@ jobs:
             .workspace/release/*/validation-report.md
             .workspace/release/*/artifact-manifest.json
           if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------
+  # The one required check.
+  #
+  # Naming the heavy jobs directly in branch protection looks stricter than it
+  # is: a job that skips itself reports conclusion "skipped", and GitHub counts
+  # a skipped required check as satisfied. "build-test (windows-x64-release)"
+  # is required today and skips on any pull request whose diff misses the
+  # `build` filter — so the rule it is listed under can be satisfied by a job
+  # that never ran. The inverse mistake is just as easy: requiring a
+  # conditional job that reports nothing at all leaves the rule permanently
+  # unsatisfiable.
+  #
+  # So exactly one context is required, and the policy lives here, in the
+  # repository, where it is reviewed with the code. This job always runs and
+  # always reports, and it decides per job whether a non-success result is the
+  # documented behaviour for this event or a failure being waved through.
+  # ---------------------------------------------------------------------------
+  ci-required:
+    name: ci-required
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: always()
+    needs:
+      - lint
+      - verify-harness
+      - dev-scripts
+      - changes
+      - build-test-debug
+      - build-test-release
+      - packaging-smoke
+    steps:
+      - name: Evaluate the required set
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          BUILD_FILTER: ${{ needs.changes.outputs.build }}
+          PACKAGING_FILTER: ${{ needs.changes.outputs.packaging }}
+          R_LINT: ${{ needs.lint.result }}
+          R_VERIFY_HARNESS: ${{ needs.verify-harness.result }}
+          R_DEV_SCRIPTS: ${{ needs.dev-scripts.result }}
+          R_CHANGES: ${{ needs.changes.result }}
+          R_DEBUG: ${{ needs.build-test-debug.result }}
+          R_RELEASE: ${{ needs.build-test-release.result }}
+          R_PACKAGING: ${{ needs.packaging-smoke.result }}
+        run: |
+          set -euo pipefail
+          failed=0
+
+          # $1 job label, $2 its result, $3 "skip-ok" when this event allows a
+          # skip, anything else when it does not.
+          require() {
+            local name="$1" result="$2" skip_ok="$3"
+            if [ "$result" = "success" ]; then
+              echo "ok       $name"
+            elif [ "$result" = "skipped" ] && [ "$skip_ok" = "skip-ok" ]; then
+              echo "skipped  $name (expected for this event)"
+            else
+              echo "FAILED   $name: result=$result"
+              failed=1
+            fi
+          }
+
+          is_tag=false
+          case "$REF" in refs/tags/v*) is_tag=true ;; esac
+
+          # These four run on every trigger; a skip is a workflow defect.
+          require lint                "$R_LINT"           must-run
+          require verify-harness      "$R_VERIFY_HARNESS" must-run
+          require dev-scripts         "$R_DEV_SCRIPTS"    must-run
+          require "detect changes"    "$R_CHANGES"        must-run
+
+          # The heavy legs deliberately do not re-run on a push to main: that
+          # commit is the squash of a pull request whose own run just proved
+          # them. Anywhere else they have to have run.
+          debug_skip=not-allowed
+          if [ "$EVENT" = "push" ] && [ "$is_tag" = false ]; then debug_skip=skip-ok; fi
+          require "build-test (debug)" "$R_DEBUG" "$debug_skip"
+
+          release_skip=not-allowed
+          if [ "$EVENT" = "push" ] && [ "$is_tag" = false ]; then release_skip=skip-ok; fi
+          if [ "$EVENT" = "pull_request" ] && [ "$BUILD_FILTER" != "true" ]; then release_skip=skip-ok; fi
+          require "build-test (release)" "$R_RELEASE" "$release_skip"
+
+          # Pull-request-only, and only when the packaging filter matched.
+          packaging_skip=skip-ok
+          if [ "$EVENT" = "pull_request" ] && [ "$PACKAGING_FILTER" = "true" ]; then
+            packaging_skip=not-allowed
+          fi
+          require packaging-smoke "$R_PACKAGING" "$packaging_skip"
+
+          if [ "$failed" -ne 0 ]; then
+            echo "::error::A job in the required set did not pass, and its result is not an expected skip for this event."
+            exit 1
+          fi
+          echo "All required jobs accounted for."

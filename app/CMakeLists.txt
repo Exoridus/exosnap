@@ -1488,6 +1488,15 @@ if(EXOSNAP_PWSH)
     # an empty selection is an error rather than a pass, and that a failing
     # test's own logs survive the cleanup -- and none of that is observable from
     # a green run of the real suite.
+    # The repository's own statement of what GitHub must enforce, and the
+    # report that compares it with what GitHub actually does. Registered because
+    # both halves are only wrong in one direction that matters -- a live state
+    # weaker than the declared one -- and that is unreachable without fixtures.
+    add_test(NAME pipeline.github_rulesets
+        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
+            "${PROJECT_SOURCE_DIR}/scripts/tests/github-rulesets.tests.ps1")
+    set_tests_properties(pipeline.github_rulesets PROPERTIES TIMEOUT 180 LABELS "pipeline")
+
     add_test(NAME pipeline.run_tests_contract
         COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
             "${PROJECT_SOURCE_DIR}/scripts/tests/run-tests-contract.tests.ps1")

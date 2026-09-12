@@ -197,3 +197,51 @@ jobs:
       - name: sccache stats
         if: always()
         run: sccache --show-stats
+
+  # ---------------------------------------------------------------------------
+  # The required context for this workflow, for the same reason ci.yml has one:
+  # crash-capture-build skips itself on a pull request that neither carries the
+  # label nor touches a crash-capture path, and a skipped required check counts
+  # as satisfied. This job always runs, always reports, and decides whether a
+  # skip is the documented behaviour for the event in front of it.
+  # ---------------------------------------------------------------------------
+  crash-capture-required:
+    name: crash-capture-required
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: always()
+    needs:
+      - changes
+      - crash-capture-build
+    steps:
+      - name: Evaluate the required set
+        env:
+          EVENT: ${{ github.event_name }}
+          FILTER: ${{ needs.changes.outputs.crash_capture }}
+          LABELLED: ${{ contains(github.event.pull_request.labels.*.name, 'crash-capture') }}
+          R_CHANGES: ${{ needs.changes.result }}
+          R_BUILD: ${{ needs.crash-capture-build.result }}
+        run: |
+          set -euo pipefail
+
+          if [ "$R_CHANGES" != "success" ]; then
+            echo "::error::detect crash-capture changes: result=$R_CHANGES"
+            exit 1
+          fi
+          echo "ok       detect crash-capture changes"
+
+          # Outside a pull request the build runs unconditionally. On a pull
+          # request it runs when the label is present or the filter matched.
+          skip_ok=not-allowed
+          if [ "$EVENT" = "pull_request" ] && [ "$LABELLED" != "true" ] && [ "$FILTER" != "true" ]; then
+            skip_ok=skip-ok
+          fi
+
+          if [ "$R_BUILD" = "success" ]; then
+            echo "ok       crash-capture-build (ON)"
+          elif [ "$R_BUILD" = "skipped" ] && [ "$skip_ok" = "skip-ok" ]; then
+            echo "skipped  crash-capture-build (ON) (no label, no crash-capture path)"
+          else
+            echo "::error::crash-capture-build (ON): result=$R_BUILD"
+            exit 1
+          fi
