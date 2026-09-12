@@ -369,6 +369,156 @@ Test-Case 'a cleanup failure is reported when the campaign itself succeeded' {
 }
 
 # ---------------------------------------------------------------------------
+# Rescuing the evidence before anything that could discard it
+# ---------------------------------------------------------------------------
+#
+# The campaign step throwing -- a guest timeout is the ordinary way -- stopped
+# plan execution, which skipped the collect step that follows it, and the cleanup
+# steps then removed the machine and deleted its differencing disk. The run that
+# most needed its evidence was the one guaranteed to destroy it.
+
+Test-Case 'the evidence is collected even when the campaign step throws' {
+    $global:releaseVmCollected = $false
+    function global:Invoke-FixtureGuestTimeout { throw 'the guest command did not finish within 120 minute(s)' }
+    function global:Invoke-FixtureCollect { $global:releaseVmCollected = $true }
+
+    $plan = @(
+        New-ReleaseVmStep -Name 'run' -Command 'Invoke-FixtureGuestTimeout'
+        New-ReleaseVmStep -Name 'collect' -Command 'Invoke-FixtureCollect' -Rescue
+    )
+    try { Invoke-ReleaseVmPlan -Plan $plan | Out-Null } catch { }
+    Remove-Item function:\Invoke-FixtureGuestTimeout, function:\Invoke-FixtureCollect -ErrorAction SilentlyContinue
+
+    Assert-True $global:releaseVmCollected 'a timed-out run is the one whose evidence is worth the most'
+    Remove-Variable releaseVmCollected -Scope Global -ErrorAction SilentlyContinue
+}
+
+Test-Case 'a rescued run may then be cleaned up' {
+    $global:releaseVmRemoved = $false
+    function global:Invoke-FixtureGuestTimeout { throw 'the guest command did not finish' }
+    function global:Invoke-FixtureCollect { }
+    function global:Remove-FixtureDisk { $global:releaseVmRemoved = $true }
+
+    $plan = @(
+        New-ReleaseVmStep -Name 'differencing-disk' -Command 'Invoke-FixtureCollect'
+        New-ReleaseVmStep -Name 'run' -Command 'Invoke-FixtureGuestTimeout'
+        New-ReleaseVmStep -Name 'collect' -Command 'Invoke-FixtureCollect' -Rescue
+        New-ReleaseVmStep -Name 'remove-disk' -Command 'Remove-FixtureDisk' -AlwaysRun `
+            -RunIfCompleted 'differencing-disk' -DiscardsEvidence
+    )
+    try { Invoke-ReleaseVmPlan -Plan $plan | Out-Null } catch { }
+    Remove-Item function:\Invoke-FixtureGuestTimeout, function:\Invoke-FixtureCollect, function:\Remove-FixtureDisk `
+        -ErrorAction SilentlyContinue
+
+    Assert-True $global:releaseVmRemoved 'evidence that reached the host leaves nothing worth preserving'
+    Remove-Variable releaseVmRemoved -Scope Global -ErrorAction SilentlyContinue
+}
+
+Test-Case 'a failed rescue preserves the machine the evidence is still inside' {
+    $global:releaseVmRemoved = $false
+    function global:Invoke-FixtureVm { }
+    function global:Invoke-FixtureGuestTimeout { throw 'the guest command did not finish' }
+    function global:Invoke-FixtureCollectFailure { throw 'PowerShell Direct is not answering' }
+    function global:Remove-FixtureVm { $global:releaseVmRemoved = $true }
+
+    $plan = @(
+        New-ReleaseVmStep -Name 'virtual-machine' -Command 'Invoke-FixtureVm'
+        New-ReleaseVmStep -Name 'run' -Command 'Invoke-FixtureGuestTimeout'
+        New-ReleaseVmStep -Name 'collect' -Command 'Invoke-FixtureCollectFailure' -Rescue
+        New-ReleaseVmStep -Name 'remove-vm' -Command 'Remove-FixtureVm' -AlwaysRun `
+            -RunIfCompleted 'virtual-machine' -DiscardsEvidence
+    )
+    $message = ''
+    try { Invoke-ReleaseVmPlan -Plan $plan | Out-Null } catch { $message = $_.Exception.Message }
+    Remove-Item function:\Invoke-FixtureVm, function:\Invoke-FixtureGuestTimeout, `
+        function:\Invoke-FixtureCollectFailure, function:\Remove-FixtureVm -ErrorAction SilentlyContinue
+
+    Assert-True (-not $global:releaseVmRemoved) 'the evidence is still inside a machine nothing else has a copy of'
+    Assert-Match 'remove-vm' $message 'the result must name what was preserved, or nobody knows to go and get it'
+    Remove-Variable releaseVmRemoved -Scope Global -ErrorAction SilentlyContinue
+}
+
+Test-Case 'a campaign that passed but whose evidence never arrived is not a clean run' {
+    # The case that is easy to miss: nothing failed inside the guest, so the run
+    # looks like a pass, and the evidence the promotion record is built from is
+    # simply not there.
+    function global:Invoke-FixtureSuccess { }
+    function global:Invoke-FixtureCollectFailure { throw 'the result directory could not be copied back' }
+
+    $plan = @(
+        New-ReleaseVmStep -Name 'run' -Command 'Invoke-FixtureSuccess'
+        New-ReleaseVmStep -Name 'collect' -Command 'Invoke-FixtureCollectFailure' -Rescue
+    )
+    $message = ''
+    $threw = $false
+    try { Invoke-ReleaseVmPlan -Plan $plan | Out-Null } catch { $threw = $true; $message = $_.Exception.Message }
+    Remove-Item function:\Invoke-FixtureSuccess, function:\Invoke-FixtureCollectFailure -ErrorAction SilentlyContinue
+
+    Assert-True $threw 'a run with no evidence cannot be reported as a clean one'
+    Assert-Match 'could not be copied back' $message 'the reason the evidence is missing has to reach the caller'
+    Assert-Match '^evidence:' $message 'a missing-evidence run must not read as a campaign that failed'
+}
+
+Test-Case 'the result says which of the three outcomes went wrong' {
+    function global:Invoke-FixtureFailure { throw 'the guest command did not finish' }
+    function global:Invoke-FixtureCleanupFailure { throw 'the machine would not go away' }
+    function global:Invoke-FixtureSuccess { }
+
+    $campaign = ''
+    try {
+        Invoke-ReleaseVmPlan -Plan @(New-ReleaseVmStep -Name 'run' -Command 'Invoke-FixtureFailure') | Out-Null
+    }
+    catch { $campaign = $_.Exception.Message }
+
+    $cleanup = ''
+    try {
+        Invoke-ReleaseVmPlan -Plan @(
+            New-ReleaseVmStep -Name 'run' -Command 'Invoke-FixtureSuccess'
+            New-ReleaseVmStep -Name 'remove-vm' -Command 'Invoke-FixtureCleanupFailure' -AlwaysRun
+        ) | Out-Null
+    }
+    catch { $cleanup = $_.Exception.Message }
+
+    Remove-Item function:\Invoke-FixtureFailure, function:\Invoke-FixtureCleanupFailure, `
+        function:\Invoke-FixtureSuccess -ErrorAction SilentlyContinue
+
+    Assert-Match '^campaign:' $campaign 'a guest that failed is a campaign outcome'
+    Assert-Match '^cleanup:' $cleanup 'a machine that would not go away says nothing about the product'
+}
+
+Test-Case 'a rescue step of a resource this run never created is skipped' {
+    $global:releaseVmCollected = $false
+    function global:Invoke-FixtureVmCollision { throw 'the VM already exists' }
+    function global:Invoke-FixtureCollect { $global:releaseVmCollected = $true }
+
+    $plan = @(
+        New-ReleaseVmStep -Name 'virtual-machine' -Command 'Invoke-FixtureVmCollision'
+        New-ReleaseVmStep -Name 'collect' -Command 'Invoke-FixtureCollect' -Rescue `
+            -RunIfCompleted 'virtual-machine'
+    )
+    try { Invoke-ReleaseVmPlan -Plan $plan | Out-Null } catch { }
+    Remove-Item function:\Invoke-FixtureVmCollision, function:\Invoke-FixtureCollect -ErrorAction SilentlyContinue
+
+    Assert-True (-not $global:releaseVmCollected) 'a name collision must not read files out of somebody else machine'
+    Remove-Variable releaseVmCollected -Scope Global -ErrorAction SilentlyContinue
+}
+
+Test-Case 'the run plan rescues its evidence before anything discards it' {
+    $paths = Get-ReleaseVmRunPath -RunId 'rescue' -Root 'T:\images'
+    $plan = New-ReleaseVmRunPlan -RunPath $paths -GuestCommand 'verify.exe' -ResultDirectory 'T:\out'
+    $collect = @($plan | Where-Object Name -eq 'collect')[0]
+
+    Assert-True $collect.Rescue 'the campaign step throwing is exactly when the evidence is needed'
+    Assert-Equal 'virtual-machine' $collect.RunIfCompleted 'only this run machine may be read from'
+
+    foreach ($name in @('stop', 'remove-vm', 'remove-disk')) {
+        $step = @($plan | Where-Object Name -eq $name)[0]
+        Assert-True $step.DiscardsEvidence `
+            "$name destroys guest state, so it waits until the evidence is out"
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Dry runs of the two host scripts
 # ---------------------------------------------------------------------------
 

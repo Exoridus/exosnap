@@ -93,7 +93,17 @@ function New-ReleaseVmStep {
     .PARAMETER AlwaysRun
         Run during cleanup even when an earlier ordinary step failed.
     .PARAMETER RunIfCompleted
-        For an AlwaysRun step, the name of the creation step that must have completed.
+        For an AlwaysRun or Rescue step, the name of the creation step that must have
+        completed.
+    .PARAMETER Rescue
+        Run after the ordinary steps whether or not one of them failed, before any
+        step that discards guest state. A campaign step throwing -- a guest timeout is
+        the ordinary way -- is exactly when the evidence inside the machine matters,
+        and it is also the case that skips every ordinary step after it.
+    .PARAMETER DiscardsEvidence
+        The step destroys state the evidence may still be in: removing the machine or
+        its disk, and also turning it off, which loses whatever the guest had not
+        written out. Such a step runs only once every rescue step has succeeded.
     #>
     [OutputType([hashtable])]
     param(
@@ -103,16 +113,23 @@ function New-ReleaseVmStep {
         [string] $Detail = '',
         [switch] $NeedsCredential,
         [switch] $AlwaysRun,
+        [switch] $Rescue,
+        [switch] $DiscardsEvidence,
         [string] $RunIfCompleted = ''
     )
+    if ($Rescue -and $AlwaysRun) {
+        throw "step '$Name' cannot be both a rescue and a cleanup step"
+    }
     return @{
-        Name            = $Name
-        Command         = $Command
-        Parameters      = $Parameters
-        Detail          = $Detail
-        NeedsCredential = [bool]$NeedsCredential
-        AlwaysRun       = [bool]$AlwaysRun
-        RunIfCompleted  = $RunIfCompleted
+        Name             = $Name
+        Command          = $Command
+        Parameters       = $Parameters
+        Detail           = $Detail
+        NeedsCredential  = [bool]$NeedsCredential
+        AlwaysRun        = [bool]$AlwaysRun
+        Rescue           = [bool]$Rescue
+        DiscardsEvidence = [bool]$DiscardsEvidence
+        RunIfCompleted   = $RunIfCompleted
     }
 }
 
@@ -195,7 +212,8 @@ function Write-ReleaseVmPlan {
 function Invoke-ReleaseVmPlan {
     <#
     .SYNOPSIS
-        Runs ordinary plan steps to the first failure, then runs cleanup steps.
+        Runs ordinary plan steps to the first failure, rescues the evidence, then
+        cleans up.
     .DESCRIPTION
         The only function in this module that changes anything. A step that throws
         stops ordinary execution: those steps are ordered by dependency, and
@@ -203,9 +221,21 @@ function Invoke-ReleaseVmPlan {
         machine that does not exist. AlwaysRun steps still execute when the resource
         creation step named by RunIfCompleted succeeded.
 
+        Three phases, in this order, because the middle one is the whole point:
+        ordinary steps, then rescue steps, then cleanup. A rescue step runs whether or
+        not an ordinary step failed, so the evidence inside the machine is taken out
+        before anything is allowed to discard it -- a guest timeout throws out of the
+        ordinary phase, which is precisely the run whose logs are worth the most. A
+        cleanup step marked DiscardsEvidence then runs only if every rescue step
+        succeeded; otherwise the machine and its disk are left where they are and the
+        result names them, because a resource left behind is recoverable and evidence
+        is not.
+
         Returns what each step returned, keyed by step name. The campaign step's exit
         code is read from there rather than thrown on -- a run that found defects is a
-        result and not an infrastructure error.
+        result and not an infrastructure error. A rescue failure is not in that class:
+        a campaign whose evidence never reached the host cannot be reported as a clean
+        run, whatever happened inside the guest.
     #>
     [OutputType([hashtable])]
     param(
@@ -214,6 +244,10 @@ function Invoke-ReleaseVmPlan {
     )
     $outputs = @{}
     $failure = $null
+    # Which phase produced the first failure. A campaign that found defects, a
+    # campaign whose evidence never left the guest, and a machine that would not go
+    # away are three different things for whoever reads the result.
+    $failurePhase = ''
     $runStep = {
         param($step)
         Write-Host "  $($step.Name)"
@@ -229,17 +263,24 @@ function Invoke-ReleaseVmPlan {
         $outputs[$step.Name] = & $step.Command @parameters
     }
 
+    $ownerCompleted = {
+        param($step)
+        return (-not $step.RunIfCompleted) -or $outputs.ContainsKey($step.RunIfCompleted)
+    }
+    $rescued = $true
+    $preserved = @()
     try {
-        foreach ($step in @($Plan | Where-Object { -not $_.AlwaysRun })) {
+        foreach ($step in @($Plan | Where-Object { -not ($_.AlwaysRun -or $_.Rescue) })) {
             & $runStep $step
         }
     }
     catch {
         $failure = $_
+        $failurePhase = 'campaign'
     }
     finally {
-        foreach ($step in @($Plan | Where-Object { $_.AlwaysRun })) {
-            if ($step.RunIfCompleted -and -not $outputs.ContainsKey($step.RunIfCompleted)) {
+        foreach ($step in @($Plan | Where-Object { $_.Rescue })) {
+            if (-not (& $ownerCompleted $step)) {
                 Write-Host "  $($step.Name) (skipped; '$($step.RunIfCompleted)' did not complete)"
                 continue
             }
@@ -247,17 +288,44 @@ function Invoke-ReleaseVmPlan {
                 & $runStep $step
             }
             catch {
-                if ($null -eq $failure) {
-                    $failure = $_
-                }
-                else {
-                    Write-Warning "cleanup step '$($step.Name)' failed: $($_.Exception.Message)"
-                }
+                # Not fatal to the other rescue steps -- one unreadable directory must
+                # not cost the rest -- but it does mean nothing may be discarded.
+                $rescued = $false
+                if ($null -eq $failure) { $failure = $_; $failurePhase = 'evidence' }
+                else { Write-Warning "rescue step '$($step.Name)' failed: $($_.Exception.Message)" }
+            }
+        }
+
+        foreach ($step in @($Plan | Where-Object { $_.AlwaysRun })) {
+            if (-not (& $ownerCompleted $step)) {
+                Write-Host "  $($step.Name) (skipped; '$($step.RunIfCompleted)' did not complete)"
+                continue
+            }
+            if ($step.DiscardsEvidence -and -not $rescued) {
+                $preserved += "$($step.Name): $(Format-ReleaseVmStep -Step $step)"
+                Write-Host "  $($step.Name) (skipped; the evidence did not reach the host)"
+                continue
+            }
+            try {
+                & $runStep $step
+            }
+            catch {
+                if ($null -eq $failure) { $failure = $_; $failurePhase = 'cleanup' }
+                else { Write-Warning "cleanup step '$($step.Name)' failed: $($_.Exception.Message)" }
             }
         }
     }
+    if ($preserved.Count -gt 0) {
+        Write-Warning ("the evidence is still inside this run's own resources, so they were kept rather than " +
+            "discarded; recover what you need and remove them by hand:`n    " + ($preserved -join "`n    "))
+    }
     if ($null -ne $failure) {
-        throw $failure
+        $message = "$failurePhase`: $($failure.Exception.Message)"
+        if ($preserved.Count -gt 0) {
+            $message += "; the evidence never reached the host, so these steps were not run and their " +
+                "resources were kept: " + (($preserved | ForEach-Object { ($_ -split ':')[0] }) -join ', ')
+        }
+        throw $message
     }
     return $outputs
 }
@@ -777,21 +845,22 @@ function New-ReleaseVmRunPlan {
 
     $plan += New-ReleaseVmStep -Name 'collect' -Command 'Copy-ReleaseVmDirectoryBack' -Parameters ([ordered]@{
             VMName = $vm; Source = $RunPath.GuestResults; Destination = $ResultDirectory
-        }) -NeedsCredential -Detail 'PowerShell Direct in the other direction: Copy-VMFile is host-to-guest only'
+        }) -NeedsCredential -Rescue -RunIfCompleted 'virtual-machine' `
+        -Detail 'PowerShell Direct in the other direction: Copy-VMFile is host-to-guest only'
 
     $plan += New-ReleaseVmStep -Name 'stop' -Command 'Stop-VM' -Parameters ([ordered]@{
             Name = $vm; TurnOff = $true; Force = $true
-        }) -AlwaysRun -RunIfCompleted 'virtual-machine' `
-        -Detail 'turned off, not shut down: the evidence is already on the host'
+        }) -AlwaysRun -RunIfCompleted 'virtual-machine' -DiscardsEvidence `
+        -Detail 'turned off, not shut down: by here the evidence is already on the host'
 
     $plan += New-ReleaseVmStep -Name 'remove-vm' -Command 'Remove-VM' -Parameters ([ordered]@{
             Name = $vm; Force = $true
-        }) -AlwaysRun -RunIfCompleted 'virtual-machine'
+        }) -AlwaysRun -RunIfCompleted 'virtual-machine' -DiscardsEvidence
 
     if (-not $KeepDisk) {
         $plan += New-ReleaseVmStep -Name 'remove-disk' -Command 'Remove-Item' -Parameters ([ordered]@{
                 LiteralPath = $RunPath.DifferencingDisk; Force = $true
-            }) -AlwaysRun -RunIfCompleted 'differencing-disk' `
+            }) -AlwaysRun -RunIfCompleted 'differencing-disk' -DiscardsEvidence `
             -Detail 'the run leaves nothing behind but the evidence it copied out'
     }
 
