@@ -417,6 +417,16 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
             return fail(E_INVALIDARG, ErrorPhase::Prepare, "audio_track_plan: max 3 audio tracks supported");
         }
 
+        // track_index is the position a worker writes into -- codec-private slots,
+        // per-track RMS, measured epochs, aligned durations. A sparse, duplicated
+        // or out-of-range set of indices was accepted here, and the failure landed
+        // much later as a mux waiting forever for a header nobody would send.
+        if (const std::string bad_indices =
+                DescribeInvalidTrackIndices(config.audio_track_plan, CodecPrivateData::kMaxAudioTracks);
+            !bad_indices.empty()) {
+            return fail(E_INVALIDARG, ErrorPhase::Prepare, bad_indices);
+        }
+
         for (const auto& track : config.audio_track_plan.tracks) {
             if (track.sources.size() < 1 || track.sources.size() > 3) {
                 return fail(E_NOTIMPL, ErrorPhase::Prepare, "Audio tracks must contain between 1 and 3 sources.");
