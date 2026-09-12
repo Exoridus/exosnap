@@ -141,7 +141,8 @@ public sealed class CampaignServices : IAsyncDisposable
             new FlaUiAutomation(),
             new Windows.WindowsSystemAppearance(),
             new ElevatedWorkerHost(ElevatedWorkerHost.Resolve(campaign.RepositoryRoot)),
-            disposableOs);
+            disposableOs,
+            new AudioEndpointControl(processes, tools));
 
         return new CampaignServices(processes, sessions, gates);
     }

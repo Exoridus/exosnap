@@ -569,6 +569,15 @@ internal sealed class GateFakes
     /// <summary>The independent ffprobe oracle.</summary>
     public FakeFfprobe Ffprobe { get; } = new();
 
+    /// <summary>
+    /// The render-endpoint control. Real, over a process runner nothing resolves, so a
+    /// gate that needs it reports itself unavailable instead of reconfiguring the
+    /// developer's sound from a unit test.
+    /// </summary>
+    public AudioEndpointControl AudioEndpoints { get; } = new(
+        new ProcessRunner(),
+        new ToolResolver(readEnvironment: _ => null, fileExists: _ => false, readPath: () => null));
+
     /// <summary>The environment tool, driving both the read-only gates and the orchestrator.</summary>
     public FakeEnvctl Envctl { get; } = new();
 
@@ -703,6 +712,7 @@ internal sealed class GateHarness : IDisposable
             fakes.SystemAppearance,
             fakes.ElevatedWorker,
             fakes.DisposableOs,
+            fakes.AudioEndpoints,
             fakes.LastPresentConfirmation,
             fakes.PresentCapturePath);
 

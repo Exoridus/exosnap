@@ -56,6 +56,8 @@ public static class ReleaseCatalog
         "REL-CAP-001" => new RecordingProducedGate(),
         "REL-CAP-QUIET-001" => new QuietStallGate(),
         "REL-AUD-CLOCK-001" => new AudioClockSoakGate(),
+        "REL-AUD-SILENCE-001" => new AudioSilenceGate(),
+        "REL-AUD-FORMAT-001" => new AudioFormatGate(),
         "REL-DISP-REFRESH-001" => new DisplayRefreshGate(),
         "REL-DISP-HDR-001" => new DisplayHdrGate(),
         "REL-DISP-MIXED-001" => new MixedDisplayGate(),

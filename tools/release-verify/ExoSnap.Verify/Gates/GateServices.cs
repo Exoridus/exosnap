@@ -150,6 +150,7 @@ public sealed record GateServices(
     ISystemAppearance SystemAppearance,
     IElevatedWorkerHost ElevatedWorker,
     IDisposableOsRunner DisposableOs,
+    AudioEndpointControl AudioEndpoints,
     PresentConfirmation? LastPresentConfirmation = null,
     string? PresentCapturePath = null);
 
