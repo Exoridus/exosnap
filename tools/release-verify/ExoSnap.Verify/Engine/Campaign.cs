@@ -87,9 +87,22 @@ public sealed class CampaignServices : IAsyncDisposable
         var presentMon = new PresentMonReader(tools.Resolve("PresentMon", "EXOSNAP_PRESENTMON").Path);
 
         // Transport order is the fallback order: the first one that reports itself
-        // available carries the run.
+        // available and can satisfy what the run declared carries it. The virtual
+        // machine comes first because it is the only one that measures the session a
+        // worker lands in, which a capture run needs and the sandbox cannot answer for.
         var disposableOs = new DisposableOsRunner(
         [
+            new HyperVTransport(
+                processes,
+                campaign.RepositoryRoot,
+                HyperVAccess.Measure(
+                    moduleExists: name => Directory.Exists(Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.System),
+                        "WindowsPowerShell", "v1.0", "Modules", name)),
+                    // The management service, by the process it runs as: asking for it
+                    // by name needs a package reference for one boolean.
+                    serviceRunning: name => Process.GetProcessesByName(name).Length > 0),
+                Path.Combine(Path.GetTempPath(), "exosnap-verify-vm")),
             new SandboxTransport(processes, tools, Path.Combine(Path.GetTempPath(), "exosnap-verify-sandbox")),
         ]);
 
