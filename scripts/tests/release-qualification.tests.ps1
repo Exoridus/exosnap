@@ -72,6 +72,65 @@ function New-TestDirectory {
 # Fixtures
 # ---------------------------------------------------------------------------
 
+# Every fixture below runs `git init` in a temp directory. Under a git hook those
+# inherit GIT_DIR/GIT_INDEX_FILE from the repository being committed, and GIT_DIR
+# beats -C -- so the fixture's index would land on the REAL repository.
+$script:LeakedGitVariables = @(
+    'GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY',
+    'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_COMMON_DIR', 'GIT_PREFIX',
+    'GIT_CEILING_DIRECTORIES', 'GIT_NAMESPACE', 'GIT_QUARANTINE_PATH')
+
+function New-SourceLineRepo {
+    <#
+    .SYNOPSIS
+        A repository with a main branch and a side branch that never merged.
+    .OUTPUTS
+        @{ Path; OnMain; OffMain }
+    #>
+    $root = Join-Path ([IO.Path]::GetTempPath()) "release-source-line/$([guid]::NewGuid().ToString('n'))"
+    New-Item -ItemType Directory -Path $root -Force | Out-Null
+
+    $saved = @{}
+    foreach ($name in $script:LeakedGitVariables) {
+        $saved[$name] = [Environment]::GetEnvironmentVariable($name)
+        if ($null -ne $saved[$name]) { Remove-Item "Env:$name" -ErrorAction SilentlyContinue }
+    }
+    try {
+        & git -C $root init --initial-branch=main 2>&1 | Out-Null
+        & git -C $root config user.email 'fixture@example.invalid' 2>&1 | Out-Null
+        & git -C $root config user.name 'Fixture' 2>&1 | Out-Null
+
+        Set-Content -LiteralPath (Join-Path $root 'a.txt') -Value 'a' -Encoding utf8
+        & git -C $root add -A 2>&1 | Out-Null
+        & git -C $root commit -m 'first' 2>&1 | Out-Null
+        $onMain = (& git -C $root rev-parse HEAD).Trim()
+
+        & git -C $root checkout -b side 2>&1 | Out-Null
+        Set-Content -LiteralPath (Join-Path $root 'b.txt') -Value 'b' -Encoding utf8
+        & git -C $root add -A 2>&1 | Out-Null
+        & git -C $root commit -m 'side only' 2>&1 | Out-Null
+        $offMain = (& git -C $root rev-parse HEAD).Trim()
+
+        & git -C $root checkout main 2>&1 | Out-Null
+    }
+    finally {
+        foreach ($name in $script:LeakedGitVariables) {
+            if ($null -ne $saved[$name]) { Set-Item "Env:$name" -Value $saved[$name] }
+        }
+    }
+
+    return @{ Path = $root; OnMain = $onMain; OffMain = $offMain }
+}
+
+function New-SourceLinePolicy {
+    param([string[]] $AllowedSourceRefs = @('refs/heads/main'), [bool] $RequireAncestry = $true)
+    return [pscustomobject]@{
+        promotion = [pscustomobject]@{
+            allowedSourceRefs = [string[]]$AllowedSourceRefs
+            requireAncestry   = $RequireAncestry
+        }
+    }
+}
 # RFC 8032's own key material. A published test vector cannot be mistaken for a real
 # release key, and it makes the fixtures reproducible byte for byte.
 $script:TestSigningKey = 'nWGxne/9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A='
@@ -79,7 +138,11 @@ $script:TestPublicKey = 'd75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a6
 $script:OtherSigningKey = 'TM0Imyj/ltqdtsNG7BFOD1uKMZ81q6Yk2oz27U+4pvs='
 $script:OtherPublicKey = '3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c'
 
-$script:GoodCommit = '1111111111111111111111111111111111111111'
+# A real commit on a real main, because the publish lock now also asks where the
+# commit came from: a made-up SHA is on no source line at all, and every case
+# below would be refused for that instead of for the thing it is testing.
+$script:SourceRepo = New-SourceLineRepo
+$script:GoodCommit = $script:SourceRepo.OnMain
 $script:GoodRcTag = 'v0.9.1-rc1'
 $script:PortableName = 'ExoSnap-0.9.1-rc1-windows-x64-portable.zip'
 $script:PortableSha = '5cb4a6d95f01ccec747b5e903589caafa6abc79ad134d135d418db022a414ebc'
@@ -210,8 +273,11 @@ function Invoke-CheckScript {
         [switch] $OmitSignature,
         [switch] $CorruptSignature,
         [switch] $OmitPublicKey,
-        [string] $PublicKeyHex = $script:TestPublicKey
+        [string] $PublicKeyHex = $script:TestPublicKey,
+        [string] $RepositoryPath = ''
     )
+
+    if (-not $RepositoryPath) { $RepositoryPath = $script:SourceRepo.Path }
 
     $recordPath = Join-Path $Directory 'release-verification.json'
     if (-not $OmitRecord) {
@@ -239,7 +305,8 @@ function Invoke-CheckScript {
     $output = & pwsh -NoProfile -NonInteractive -File $script:CheckScript `
         -RecordPath $recordPath -PublicKeyHex $key `
         -ExpectedCommit $ExpectedCommit -ExpectedRcTag $ExpectedRcTag `
-        -Sha256Directory $Directory -SummaryPath $summary 2>&1 | Out-String
+        -Sha256Directory $Directory -SummaryPath $summary `
+        -RepositoryPath $RepositoryPath 2>&1 | Out-String
     $code = $LASTEXITCODE
     $summaryText = if (Test-Path -LiteralPath $summary) { Get-Content -LiteralPath $summary -Raw } else { '' }
     return @{ ExitCode = $code; Output = $output; Summary = $summaryText }
@@ -302,7 +369,8 @@ Test-Case 'a record signed by a key that is not the release key blocks the relea
     $summary = Join-Path $directory 'summary.md'
     & pwsh -NoProfile -NonInteractive -File $script:CheckScript -RecordPath $recordPath `
         -PublicKeyHex $script:TestPublicKey -ExpectedCommit $script:GoodCommit `
-        -ExpectedRcTag $script:GoodRcTag -Sha256Directory $directory -SummaryPath $summary 2>&1 | Out-Null
+        -ExpectedRcTag $script:GoodRcTag -Sha256Directory $directory -SummaryPath $summary `
+        -RepositoryPath $script:SourceRepo.Path 2>&1 | Out-Null
     Assert-Equal 1 $LASTEXITCODE 'a foreign signature must block'
     Assert-Match 'DOES NOT VERIFY' (Get-Content -LiteralPath $summary -Raw) 'the reason must say the signature failed'
 }
@@ -330,7 +398,8 @@ Test-Case 'a record edited after signing blocks the release' {
     $summary = Join-Path $directory 'summary.md'
     & pwsh -NoProfile -NonInteractive -File $script:CheckScript -RecordPath $recordPath `
         -PublicKeyHex $script:TestPublicKey -ExpectedCommit $script:GoodCommit `
-        -ExpectedRcTag $script:GoodRcTag -Sha256Directory $directory -SummaryPath $summary 2>&1 | Out-Null
+        -ExpectedRcTag $script:GoodRcTag -Sha256Directory $directory -SummaryPath $summary `
+        -RepositoryPath $script:SourceRepo.Path 2>&1 | Out-Null
     Assert-Equal 1 $LASTEXITCODE 'an edited record must block'
     Assert-Match 'DOES NOT VERIFY' (Get-Content -LiteralPath $summary -Raw) 'the reason must be the signature, not the contents'
 }
@@ -369,7 +438,8 @@ Test-Case 'an unparseable record blocks the release' {
     & pwsh -NoProfile -NonInteractive -File $script:CheckScript -RecordPath $recordPath `
         -PublicKeyHex $script:TestPublicKey `
         -ExpectedCommit $script:GoodCommit -ExpectedRcTag $script:GoodRcTag `
-        -Sha256Directory $directory -SummaryPath $summary 2>&1 | Out-Null
+        -Sha256Directory $directory -SummaryPath $summary `
+        -RepositoryPath $script:SourceRepo.Path 2>&1 | Out-Null
     Assert-Equal 1 $LASTEXITCODE 'an unparseable record must block'
     Assert-Match 'could not be parsed' (Get-Content -LiteralPath $summary -Raw) 'the reason must say so'
 }
@@ -499,6 +569,79 @@ Test-Case 'a policy written against a different catalog is refused, not applied'
             -SourceCatalog $grown -SourceCatalogVersion '1.0.0' -Policy $policy)
     Assert-True (($blockers -join '; ') -match 'policy was not revisited') `
         "a stale policy must be refused: $($blockers -join '; ')"
+}
+
+# ---------------------------------------------------------------------------
+# Which source line a release may be cut from
+# ---------------------------------------------------------------------------
+
+
+
+Test-Case 'a commit on the approved source line may be promoted' {
+    $repo = New-SourceLineRepo
+    try {
+        $result = Test-ReleaseSourceLine -Commit $repo.OnMain -Policy (New-SourceLinePolicy) `
+            -RepositoryPath $repo.Path
+        Assert-True $result.Allowed "a commit on main must be promotable: $($result.Reasons -join '; ')"
+    }
+    finally { Remove-Item -LiteralPath $repo.Path -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-Case 'a commit that never reached the approved line may not be promoted' {
+    # The case the rule exists for: a correctly signed record about a genuinely
+    # verified build of a branch nothing reviewed.
+    $repo = New-SourceLineRepo
+    try {
+        $result = Test-ReleaseSourceLine -Commit $repo.OffMain -Policy (New-SourceLinePolicy) `
+            -RepositoryPath $repo.Path
+        Assert-True (-not $result.Allowed) 'a commit that is not on main must not be promotable'
+        Assert-True (($result.Reasons -join '; ') -match 'not on') `
+            "the refusal must say so: $($result.Reasons -join '; ')"
+    }
+    finally { Remove-Item -LiteralPath $repo.Path -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-Case 'a checkout that cannot answer the ancestry question is a refusal' {
+    $repo = New-SourceLineRepo
+    try {
+        $result = Test-ReleaseSourceLine -Commit $repo.OnMain `
+            -Policy (New-SourceLinePolicy -AllowedSourceRefs @('refs/heads/no-such-branch')) `
+            -RepositoryPath $repo.Path
+        Assert-True (-not $result.Allowed) 'an unanswerable ancestry question must not qualify'
+        Assert-True (($result.Reasons -join '; ') -match 'shallow or single-ref clone') `
+            "the refusal must name what is missing: $($result.Reasons -join '; ')"
+    }
+    finally { Remove-Item -LiteralPath $repo.Path -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-Case 'a policy with no promotion section promotes nothing' {
+    $repo = New-SourceLineRepo
+    try {
+        $result = Test-ReleaseSourceLine -Commit $repo.OnMain `
+            -Policy ([pscustomobject]@{ policyVersion = 1 }) -RepositoryPath $repo.Path
+        Assert-True (-not $result.Allowed) 'a policy that constrains nothing must not permit everything'
+    }
+    finally { Remove-Item -LiteralPath $repo.Path -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-Case 'the publish lock refuses a commit that never reached the approved line' {
+    # End to end through the script the release workflow runs, not only the rule:
+    # a record that is right about everything it measured, for a commit that is on
+    # no approved source line.
+    $directory = New-TestDirectory
+    $record = New-TestRecord
+    $record.sourceCommit = $script:SourceRepo.OffMain
+    $result = Invoke-CheckScript -Directory $directory -Record $record `
+        -ExpectedCommit $script:SourceRepo.OffMain
+    Assert-Equal 1 $result.ExitCode 'a commit off the approved line must not be published'
+    Assert-Match 'is not on' $result.Summary 'the summary must say which line it is not on'
+}
+
+Test-Case 'the shipped policy names a source line at all' {
+    $policy = Get-ReleaseQualificationPolicy
+    Assert-True ($null -ne $policy.promotion) 'the shipped policy must declare a promotion section'
+    Assert-True (@($policy.promotion.allowedSourceRefs).Count -ge 1) `
+        'the shipped policy must name at least one approved source ref'
 }
 
 Test-Case 'the shipped policy is about the shipped catalog' {

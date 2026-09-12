@@ -589,6 +589,93 @@ function Get-ReleasePolicyBlockers {
     return $reasons
 }
 
+function Test-ReleaseSourceLine {
+    <#
+    .SYNOPSIS
+        Whether the commit being promoted is on a source line this repository
+        allows a release to be cut from.
+    .DESCRIPTION
+        A qualification record says a campaign measured a commit. It says nothing
+        about where that commit came from. A correctly signed record about a
+        genuinely verified build of a private branch is a valid record and not a
+        releasable one: nothing reviewed that branch, and the protections on the
+        default branch never saw it.
+
+        So the same policy that defines the required set also names the refs a
+        release may be promoted from, and the commit has to be an ancestor of one
+        of them -- or be one of them.
+
+        Fail-closed in every direction a checkout can be unhelpful. A shallow
+        clone cannot answer an ancestry question, and answering "no ancestry
+        information, so yes" is how this check would become decoration; it says
+        what is missing instead.
+    .PARAMETER Commit
+        The commit the final tag points at.
+    .PARAMETER Policy
+        The parsed release policy.
+    .PARAMETER RepositoryPath
+        Working tree to ask. Defaults to the current directory.
+    .OUTPUTS
+        @{ Allowed = [bool]; Reasons = [string[]] }
+    #>
+    param(
+        [Parameter(Mandatory)] [string] $Commit,
+        [Parameter(Mandatory)] $Policy,
+        [string] $RepositoryPath = '.'
+    )
+
+    $promotion = Get-ReleaseQualificationField -Object $Policy -Name 'promotion'
+    if ($null -eq $promotion) {
+        return @{ Allowed = $false; Reasons = @(
+                'the release policy declares no promotion section, so nothing constrains which ' +
+                'source line a release may be cut from') }
+    }
+
+    if (-not [bool](Get-ReleaseQualificationField -Object $promotion -Name 'requireAncestry')) {
+        return @{ Allowed = $true; Reasons = @() }
+    }
+
+    $allowed = @(Get-ReleaseQualificationField -Object $promotion -Name 'allowedSourceRefs')
+    if ($allowed.Count -eq 0) {
+        return @{ Allowed = $false; Reasons = @(
+                'the release policy requires an approved source line but names no refs, ' +
+                'so no commit could ever be promoted') }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($Commit)) {
+        return @{ Allowed = $false; Reasons = @('no commit was supplied to check the source line of') }
+    }
+
+    $reasons = @()
+    foreach ($ref in $allowed) {
+        # Both spellings: a workflow checkout has the remote-tracking ref, a local
+        # clone has the branch itself.
+        $candidates = @($ref, ($ref -replace '^refs/heads/', 'refs/remotes/origin/'))
+        foreach ($candidate in $candidates) {
+            $resolved = (& git -C $RepositoryPath rev-parse --verify --quiet "$candidate^{commit}" 2>$null)
+            if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace("$resolved")) { continue }
+
+            & git -C $RepositoryPath merge-base --is-ancestor $Commit "$resolved" 2>$null | Out-Null
+            if ($LASTEXITCODE -eq 0) { return @{ Allowed = $true; Reasons = @() } }
+            if ($LASTEXITCODE -ne 1) {
+                # Neither "is an ancestor" nor "is not": git could not tell, which on
+                # a runner means the history was not fetched.
+                $reasons += "ancestry against '$candidate' could not be determined; " +
+                'a shallow checkout cannot answer this. Fetch the full history.'
+                continue
+            }
+            $reasons += "the commit being promoted is not on '$candidate'"
+        }
+    }
+
+    if ($reasons.Count -eq 0) {
+        $reasons += "none of the approved source refs ($($allowed -join ', ')) exists in this checkout; " +
+        'a shallow or single-ref clone cannot answer where this commit came from'
+    }
+
+    return @{ Allowed = $false; Reasons = [string[]]$reasons }
+}
+
 function Get-ReleaseQualificationBlockers {
     <#
     .SYNOPSIS

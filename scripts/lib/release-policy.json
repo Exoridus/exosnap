@@ -23,5 +23,11 @@
     "REL-UPD-PORTABLE-001",
     "REL-VIS-NOTIFY-001",
     "REL-VIS-OVERLAY-001"
-  ]
+  ],
+  "promotion": {
+    "allowedSourceRefs": [
+      "refs/heads/main"
+    ],
+    "requireAncestry": true
+  }
 }
