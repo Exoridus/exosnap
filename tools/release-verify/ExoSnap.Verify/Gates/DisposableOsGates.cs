@@ -176,6 +176,9 @@ public sealed class ChocolateyRehearsalGate : IScenarioBody
             ])
         {
             EvidenceDirectory = context.EvidenceDirectory,
+            // The rehearsal installs from the local package but Chocolatey itself is
+            // bootstrapped from chocolatey.org, so this run cannot be offline.
+            RequiresNetwork = true,
         };
         var run = await services.DisposableOs.RunAsync(request, cancellationToken).ConfigureAwait(false);
 
@@ -253,6 +256,9 @@ internal static class DisposableOsUpdateRun
             ])
         {
             EvidenceDirectory = context.EvidenceDirectory,
+            // The update path is the thing under test: the guest has to reach the
+            // release feed to be offered anything at all.
+            RequiresNetwork = true,
         };
         var run = await services.DisposableOs.RunAsync(request, cancellationToken).ConfigureAwait(false);
 

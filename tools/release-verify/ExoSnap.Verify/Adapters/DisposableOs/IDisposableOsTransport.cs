@@ -35,6 +35,20 @@ public sealed record DisposableOsWorkerRequest(
     /// before the disposable machine and its staging are discarded.
     /// </summary>
     public string? EvidenceDirectory { get; init; }
+
+    /// <summary>
+    /// Whether the worker reaches the network from inside the disposable machine.
+    /// </summary>
+    /// <remarks>
+    /// Declared rather than defaulted, in both directions. A worker that downloads
+    /// an update offer or a Chocolatey package cannot run without it; a gate that
+    /// means to assert offline behaviour proves less than it looks like it does if
+    /// the machine silently had a connection anyway. False is the safe reading of
+    /// silence: a run that needed the network and did not say so fails at the point
+    /// it tries, which names the missing declaration, while the reverse failure is
+    /// silent.
+    /// </remarks>
+    public bool RequiresNetwork { get; init; }
 }
 
 /// <summary>How one disposable-OS worker run ended.</summary>

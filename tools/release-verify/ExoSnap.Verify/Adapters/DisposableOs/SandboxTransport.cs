@@ -74,40 +74,100 @@ public sealed class SandboxTransport : IDisposableOsTransport
         """;
 
     private static readonly TimeSpan LaunchTimeout = TimeSpan.FromSeconds(120);
-    private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(2);
-    private static readonly TimeSpan MachineFreeTimeout = TimeSpan.FromMinutes(3);
+    private static readonly TimeSpan DefaultPollInterval = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan DefaultMachineFreeTimeout = TimeSpan.FromMinutes(3);
+
 
     // Every process Windows keeps alive for a running sandbox. Asked about rather
     // than killed: one of these may belong to a sandbox a person opened themselves.
     private static readonly string[] SandboxProcessNames =
         ["WindowsSandbox", "WindowsSandboxClient", "WindowsSandboxServer", "WindowsSandboxRemoteSession"];
 
-    private readonly ProcessRunner processes;
     private readonly ResolvedTool sandbox;
     private readonly string stagingRoot;
     private readonly string? powerShellHome;
+    private readonly Func<bool> machineIsBusy;
+    private readonly Func<string, CancellationToken, Task<ProcessRunResult>> launch;
+    private readonly TimeSpan pollInterval;
+    private readonly TimeSpan machineFreeTimeout;
 
     /// <summary>Creates a transport resolving WindowsSandbox.exe and PowerShell 7 on this machine.</summary>
     public SandboxTransport(ProcessRunner processes, ToolResolver tools, string stagingRoot)
-        : this(processes, ResolveSandbox(tools), stagingRoot, ResolvePowerShellHome(tools))
+        : this(processes, ResolveSandbox(tools), stagingRoot, ResolvePowerShellHome(tools), null, null, null, null)
     {
     }
 
     /// <summary>Creates a transport with an injected PowerShell 7 home, for tests.</summary>
     public SandboxTransport(ProcessRunner processes, ToolResolver tools, string stagingRoot, string powerShellHome)
-        : this(processes, ResolveSandbox(tools), stagingRoot, RequireHome(powerShellHome))
+        : this(processes, ResolveSandbox(tools), stagingRoot, RequireHome(powerShellHome), null, null, null, null)
     {
     }
 
-    private SandboxTransport(ProcessRunner processes, ResolvedTool sandbox, string stagingRoot, string? powerShellHome)
+    /// <summary>
+    /// Creates a transport whose machine is stood in for: <paramref name="machineIsBusy"/>
+    /// replaces asking Windows which sandbox processes exist, and <paramref name="launch"/>
+    /// replaces starting one over a generated configuration.
+    /// </summary>
+    /// <remarks>
+    /// The lifecycle rules here decide when the staging directory -- the only copy of
+    /// what a run produced -- may be deleted, and there is no way to exercise them
+    /// against a real Windows Sandbox without opening one on the developer's machine
+    /// and leaving it running to reach the interesting case.
+    /// </remarks>
+    internal SandboxTransport(
+        ProcessRunner processes,
+        ToolResolver tools,
+        string stagingRoot,
+        string powerShellHome,
+        Func<bool> machineIsBusy,
+        Func<string, CancellationToken, Task<ProcessRunResult>> launch,
+        TimeSpan? pollInterval = null,
+        TimeSpan? machineFreeTimeout = null)
+        : this(
+            processes,
+            ResolveSandbox(tools),
+            stagingRoot,
+            RequireHome(powerShellHome),
+            machineIsBusy,
+            launch,
+            pollInterval,
+            machineFreeTimeout)
+    {
+    }
+
+    private SandboxTransport(
+        ProcessRunner processes,
+        ResolvedTool sandbox,
+        string stagingRoot,
+        string? powerShellHome,
+        Func<bool>? machineIsBusy,
+        Func<string, CancellationToken, Task<ProcessRunResult>>? launch,
+        TimeSpan? pollInterval,
+        TimeSpan? machineFreeTimeout)
     {
         ArgumentNullException.ThrowIfNull(processes);
         ArgumentException.ThrowIfNullOrWhiteSpace(stagingRoot);
-        this.processes = processes;
         this.sandbox = sandbox;
         this.stagingRoot = stagingRoot;
         this.powerShellHome = powerShellHome;
+        this.machineIsBusy = machineIsBusy ?? MachineIsBusy;
+        this.pollInterval = pollInterval ?? DefaultPollInterval;
+        this.machineFreeTimeout = machineFreeTimeout ?? DefaultMachineFreeTimeout;
+        this.launch = launch ?? ((configurationPath, cancellationToken) => processes.RunAsync(
+            new ProcessRunRequest(this.sandbox.Path!, configurationPath) { Timeout = LaunchTimeout },
+            cancellationToken));
     }
+
+    /// <summary>
+    /// How long the lifecycle is still asked about after the caller has cancelled.
+    /// </summary>
+    /// <remarks>
+    /// The question cannot be skipped -- deleting a live machine's mapped folder is
+    /// the thing being prevented -- but a person who pressed Ctrl-C is waiting, so it
+    /// is asked briefly and answered honestly either way.
+    /// </remarks>
+    private TimeSpan CancelledMachineGrace =>
+        this.machineFreeTimeout < TimeSpan.FromSeconds(15) ? this.machineFreeTimeout : TimeSpan.FromSeconds(15);
 
     /// <inheritdoc/>
     public string Name => "sandbox";
@@ -148,61 +208,87 @@ public sealed class SandboxTransport : IDisposableOsTransport
         // Asked before the launcher is started, never after: WindowsSandbox.exe
         // reports a machine that is already running as a modal dialog rather than an
         // exit code, which would stand on someone's desktop until they clicked it.
-        if (!await WaitForFreeMachineAsync(cancellationToken).ConfigureAwait(false))
+        if (!await this.WaitForFreeMachineAsync(this.machineFreeTimeout).ConfigureAwait(false))
         {
             return DisposableOsRun.Unavailable(
                 "a Windows Sandbox is already running on this machine and only one may run at a time");
         }
 
         var staging = Path.Combine(this.stagingRoot, "sandbox-" + Guid.NewGuid().ToString("N"));
-        // Collected in the finally and attached to whatever is returned, so the
-        // caller learns about a failed collection on every path -- including the
-        // paths that faulted, which are the ones whose evidence matters most.
+
+        // Assigned in the finally so the cancellation path reaches the same rules,
+        // and read after it: the value a return statement hands back is fixed before
+        // the finally runs, so collecting there and returning from inside the try
+        // handed every caller the outcome the run STARTED with.
         var evidence = EvidenceOutcome.NotRequested;
-        DisposableOsRun outcome;
+        var machineEnded = false;
+        var outcome = DisposableOsRun.Faulted("the sandbox run produced no outcome");
         try
         {
-            var preparation = this.Prepare(staging, request);
-            if (preparation.Failure is not null)
-            {
-                outcome = DisposableOsRun.Faulted(preparation.Failure);
-                return outcome with { Evidence = evidence };
-            }
-
-            var launch = await this.processes.RunAsync(
-                new ProcessRunRequest(this.sandbox.Path!, preparation.ConfigurationPath) { Timeout = LaunchTimeout },
-                cancellationToken).ConfigureAwait(false);
-            if (!launch.Succeeded)
-            {
-                outcome = DisposableOsRun.Faulted(
-                    $"WindowsSandbox.exe exited {launch.ExitCode} without starting the worker: {launch.StandardError}");
-                return outcome with { Evidence = evidence };
-            }
-
-            outcome = await AwaitResultAsync(preparation, request.Timeout, cancellationToken).ConfigureAwait(false);
-
-            // The marker means the worker finished, not that the machine is gone.
-            // Returning while it still shuts down would hand the next gate a
-            // machine it cannot have.
-            await WaitForFreeMachineAsync(cancellationToken).ConfigureAwait(false);
-            return outcome with { Evidence = evidence };
+            outcome = await this.RunStagedAsync(staging, request, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
-            // Before the staging goes, and whatever the verdict was: a run that
-            // faulted is the one whose evidence is worth the most.
+            // The order is the contract. A worker deadline and a caller cancellation
+            // both say the WORKER stopped answering; neither says the machine is
+            // gone, and the staging directory is still mapped into it.
+            machineEnded = await this.WaitForFreeMachineAsync(
+                cancellationToken.IsCancellationRequested ? this.CancelledMachineGrace : this.machineFreeTimeout)
+                .ConfigureAwait(false);
+
             evidence = CollectEvidence(staging, request.EvidenceDirectory);
-            if (evidence.IsComplete || evidence.State == EvidenceOutcomeState.Missing)
+
+            // Deleting is the one irreversible step here: a directory left behind is
+            // recoverable, evidence is not. So it happens only when the machine that
+            // could still be writing into it is known to be gone AND nothing in it
+            // failed to come out.
+            if (machineEnded && (evidence.IsComplete || evidence.State == EvidenceOutcomeState.Missing))
             {
                 TryDelete(staging);
             }
-
-            // Otherwise the staging directory stays. It is the only other copy of
-            // what could not be collected, and deleting it is the one irreversible
-            // step here: a directory left behind is recoverable, evidence is not.
-            // The path is named in the Evidence detail the caller receives.
         }
+
+        return (machineEnded ? outcome : MachineStillRunning(outcome, staging)) with { Evidence = evidence };
     }
+
+    /// <summary>
+    /// Everything between a prepared staging directory and the worker result. Split
+    /// out so the cleanup rules are one block that every path passes through.
+    /// </summary>
+    private async Task<DisposableOsRun> RunStagedAsync(
+        string staging, DisposableOsWorkerRequest request, CancellationToken cancellationToken)
+    {
+        var preparation = this.Prepare(staging, request);
+        if (preparation.Failure is not null)
+        {
+            return DisposableOsRun.Faulted(preparation.Failure);
+        }
+
+        var started = await this.launch(preparation.ConfigurationPath, cancellationToken).ConfigureAwait(false);
+        if (!started.Succeeded)
+        {
+            return DisposableOsRun.Faulted(
+                $"WindowsSandbox.exe exited {started.ExitCode} without starting the worker: {started.StandardError}");
+        }
+
+        return await AwaitResultAsync(preparation, request.Timeout, this.pollInterval, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The outcome restated for a machine that outlived its worker: nothing was
+    /// cleaned up, and the run cannot be read as finished.
+    /// </summary>
+    /// <remarks>
+    /// A result document a worker really wrote is still true, but a machine holding
+    /// the staging directory open is not something to stay quiet about: the next gate
+    /// finds the one sandbox this machine allows already taken, and the kept staging
+    /// directory is where this run output still is.
+    /// </remarks>
+    private static DisposableOsRun MachineStillRunning(DisposableOsRun outcome, string staging) =>
+        DisposableOsRun.Faulted(
+            $"{outcome.Detail}; the Windows Sandbox is still running, so the staging directory was kept "
+            + $"rather than deleted out from under it: {staging}");
 
     /// <summary>
     /// Copies the request's payload into a fresh staging directory and writes the
@@ -279,7 +365,7 @@ public sealed class SandboxTransport : IDisposableOsTransport
     }
 
     private static async Task<DisposableOsRun> AwaitResultAsync(
-        SandboxPreparation preparation, TimeSpan timeout, CancellationToken cancellationToken)
+        SandboxPreparation preparation, TimeSpan timeout, TimeSpan pollInterval, CancellationToken cancellationToken)
     {
         var deadline = DateTime.UtcNow.Add(timeout < TimeSpan.Zero ? TimeSpan.Zero : timeout);
         while (!File.Exists(preparation.MarkerPath))
@@ -290,7 +376,7 @@ public sealed class SandboxTransport : IDisposableOsTransport
                     $"the sandbox worker did not finish within {timeout.TotalMinutes:0} minute(s); no marker was written");
             }
 
-            await Task.Delay(PollInterval, cancellationToken).ConfigureAwait(false);
+            await Task.Delay(pollInterval, cancellationToken).ConfigureAwait(false);
         }
 
         if (!File.Exists(preparation.ResultPath))
@@ -306,17 +392,22 @@ public sealed class SandboxTransport : IDisposableOsTransport
     }
 
     /// <summary>True once no sandbox is running, false when the wait ran out.</summary>
-    private static async Task<bool> WaitForFreeMachineAsync(CancellationToken cancellationToken)
+    /// <remarks>
+    /// Deliberately not cancellable: it is called from the cleanup path, where a
+    /// cancellation is precisely the reason the answer is needed. A caller in a hurry
+    /// passes a shorter timeout instead.
+    /// </remarks>
+    private async Task<bool> WaitForFreeMachineAsync(TimeSpan timeout)
     {
-        var deadline = DateTime.UtcNow.Add(MachineFreeTimeout);
-        while (MachineIsBusy())
+        var deadline = DateTime.UtcNow.Add(timeout);
+        while (this.machineIsBusy())
         {
             if (DateTime.UtcNow >= deadline)
             {
                 return false;
             }
 
-            await Task.Delay(PollInterval, cancellationToken).ConfigureAwait(false);
+            await Task.Delay(this.pollInterval, CancellationToken.None).ConfigureAwait(false);
         }
 
         return true;
@@ -519,17 +610,22 @@ public sealed class SandboxTransport : IDisposableOsTransport
         var command = SecurityElement.Escape(
             $"{Quote(guestShell)} -ExecutionPolicy Bypass -NoProfile -File {Quote(guestLauncher)} {quoted}");
 
+        // Every value that reaches the document is escaped, not only the command: a
+        // mapped folder is element content too, and a host directory may legitimately
+        // contain & or a bracket. An unescaped one makes the .wsb malformed, which
+        // Windows Sandbox reports as a modal dialog standing on someone's desktop.
+        var networking = request.RequiresNetwork ? "Default" : "Disable";
         return $"""
             <Configuration>
               <VGpu>Disable</VGpu>
-              <Networking>Default</Networking>
+              <Networking>{networking}</Networking>
               <MappedFolders>
                 <MappedFolder>
-                  <HostFolder>{staging}</HostFolder>
+                  <HostFolder>{SecurityElement.Escape(staging)}</HostFolder>
                   <ReadOnly>false</ReadOnly>
                 </MappedFolder>
                 <MappedFolder>
-                  <HostFolder>{this.powerShellHome}</HostFolder>
+                  <HostFolder>{SecurityElement.Escape(this.powerShellHome!)}</HostFolder>
                   <ReadOnly>true</ReadOnly>
                 </MappedFolder>
               </MappedFolders>

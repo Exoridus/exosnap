@@ -101,6 +101,11 @@ public sealed class UpdateDeclineGateTests : IDisposable
         Assert.Equal("sandbox-update-worker.ps1", request.WorkerFileName);
         Assert.Contains(this.baseMsi, request.SourceFiles);
         Assert.Contains(Path.GetFileName(this.baseMsi), request.WorkerArguments);
+
+        // The update path is what this gate asserts, so the guest has to reach the
+        // release feed to be offered anything at all. A transport that gives a
+        // machine networking only when the run asks for it needs the run to ask.
+        Assert.True(request.RequiresNetwork);
     }
 
     [Fact]
@@ -265,6 +270,10 @@ public sealed class ChocolateyRehearsalGateTests
         Assert.Contains("chocolatey", request.WorkerArguments);
         Assert.Contains("-MsiSha256", request.WorkerArguments);
         Assert.NotNull(request.EvidenceDirectory);
+
+        // Chocolatey itself is bootstrapped from chocolatey.org, so this rehearsal
+        // cannot run on a machine without networking.
+        Assert.True(request.RequiresNetwork);
     }
 
     [Fact]
