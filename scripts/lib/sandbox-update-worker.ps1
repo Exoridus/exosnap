@@ -37,6 +37,13 @@ param(
     # it is gone -- which is what happened to the MSI logs and the updater state
     # while they lived under the staging directory.
     [Parameter(Mandatory)] [string] $EvidenceDirectory,
+    # The candidate the campaign bound, as its identity. The accept assertion
+    # compares the installed build against THESE, not against "something newer
+    # than what we started from": any newer release satisfies that, including
+    # another RC of the same base version that nobody verified.
+    [Parameter(Mandatory)] [string] $ExpectedVersion,
+    [Parameter(Mandatory)] [string] $ExpectedCommit,
+    [Parameter(Mandatory)] [string] $ExpectedExeSha256,
     [string] $UpdateChannel = 'Preview',
     [int] $OfferTimeoutSeconds = 90
 )
@@ -314,7 +321,24 @@ try {
             Write-Result
             return
         }
-        Add-Step -Name 'accept-offer' -Ok $true -Kind 'product' -Detail 'an update is offered again after the declined one'
+        # Which candidate is being offered, checked BEFORE apply. Finding out
+        # afterwards that some other build installed is a worse place to learn it,
+        # and the install would already have happened.
+        $offeredVersion = "$($state.availableVersion)"
+        if ([string]::IsNullOrWhiteSpace($offeredVersion)) {
+            Add-Step -Name 'accept-offer' -Ok $false -Kind 'product' `
+                -Detail 'an update is offered but the state names no available version'
+            Write-Result
+            return
+        }
+        if ($offeredVersion -ne $ExpectedVersion) {
+            Add-Step -Name 'accept-offer' -Ok $false -Kind 'product' `
+                -Detail "the offer is for $offeredVersion, not the bound candidate $ExpectedVersion"
+            Write-Result
+            return
+        }
+        Add-Step -Name 'accept-offer' -Ok $true -Kind 'product' `
+            -Detail "an update to the bound candidate $offeredVersion is offered again after the declined one"
         $applied = Invoke-LiveVerifyCommand -Connection $app.Connection -Command 'update.apply'
         if (-not $applied.ok) {
             Add-Step -Name 'accept-apply' -Ok $false -Kind 'product' -Detail "update.apply refused: $($applied.error.message)"
@@ -329,30 +353,66 @@ try {
     # FRESH launch of the installed path rather than from the connection that
     # started it -- that process is the one being replaced.
     $deadline = [DateTime]::UtcNow.AddMinutes(6)
-    $afterVersion = ''
+    $afterIdentity = $null
     while ([DateTime]::UtcNow -lt $deadline) {
         Start-Sleep -Seconds 5
         try {
             $installedExe = Get-InstalledExoSnap
             if ($null -eq $installedExe) { continue }
             $probe = Start-ControlledApp -ExePath $installedExe -ConnectTimeoutMs 30000
-            try { $afterVersion = "$((Invoke-LiveVerifyCommand -Connection $probe.Connection -Command 'app.identity').result.productVersion)" }
+            try {
+                $afterIdentity = (Invoke-LiveVerifyCommand -Connection $probe.Connection -Command 'app.identity').result
+            }
             finally {
                 try { $probe.Connection.Close() } catch { }
                 Stop-ExoSnapProcesses
             }
-            if (-not [string]::IsNullOrWhiteSpace($afterVersion) -and $afterVersion -ne $beforeVersion) { break }
+            if ($null -ne $afterIdentity -and "$($afterIdentity.productVersion)" -ne $beforeVersion) { break }
         }
         catch { }
     }
-    if ([string]::IsNullOrWhiteSpace($afterVersion)) {
+
+    # The whole identity, not just the version. "the version changed" is satisfied
+    # by any newer build -- including another RC of the same base version that
+    # nobody verified -- so the assertion is that the build now installed IS the
+    # candidate this campaign bound.
+    #
+    # Deliberately not asserted here: that the package the updater downloaded had
+    # the digest the manifest declared. The updater verifies its signed manifest
+    # itself and refuses a mismatch, which is the product path and the real proof;
+    # the control channel exposes no downloaded-package digest, and computing one
+    # from outside would be a test-only route around the chain it claims to check.
+    $afterVersion = if ($null -ne $afterIdentity) { "$($afterIdentity.productVersion)" } else { '' }
+    if ($null -eq $afterIdentity -or [string]::IsNullOrWhiteSpace($afterVersion)) {
         Add-Step -Name 'accept-installed' -Ok $false -Kind 'product' -Detail 'the application could not be reached again after the install'
     }
     elseif ($afterVersion -eq $beforeVersion) {
         Add-Step -Name 'accept-installed' -Ok $false -Kind 'product' -Detail "the version is unchanged at $afterVersion; nothing was installed"
     }
     else {
-        Add-Step -Name 'accept-installed' -Ok $true -Kind 'product' -Detail "installed: $beforeVersion -> $afterVersion"
+        $mismatches = @()
+        if ($afterVersion -ne $ExpectedVersion) {
+            $mismatches += "productVersion is $afterVersion, expected $ExpectedVersion"
+        }
+        $afterCommit = "$($afterIdentity.commit)"
+        if ($afterCommit -ne $ExpectedCommit) {
+            $mismatches += "commit is $afterCommit, expected $ExpectedCommit"
+        }
+        $afterSha = "$($afterIdentity.executableSha256)"
+        # Compared case-insensitively: the digest is hex and the two sides format
+        # it independently.
+        if (-not [string]::Equals($afterSha, $ExpectedExeSha256, [StringComparison]::OrdinalIgnoreCase)) {
+            $mismatches += "executableSha256 is $afterSha, expected $ExpectedExeSha256"
+        }
+
+        if ($mismatches.Count -gt 0) {
+            Add-Step -Name 'accept-installed' -Ok $false -Kind 'product' `
+                -Detail ("the update installed a build that is not the bound candidate: " + ($mismatches -join '; '))
+        }
+        else {
+            Add-Step -Name 'accept-installed' -Ok $true -Kind 'product' `
+                -Detail "installed the bound candidate: $beforeVersion -> $afterVersion (commit $afterCommit)"
+        }
     }
     Write-Result
 }

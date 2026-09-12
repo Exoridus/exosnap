@@ -419,6 +419,115 @@ internal static class DisposableOsGateFixture
 }
 
 /// <summary>
+/// The update gate refuses to run against a binding that cannot name a candidate.
+/// </summary>
+/// <remarks>
+/// Checked before the guest is started, so a harness that cannot say what it
+/// expected reports an infrastructure error rather than a product failure at the
+/// end of a long run. The worker-side assertions (the offer names the bound
+/// candidate; the installed build IS it) run inside the sandbox and are pinned by
+/// the worker''s own steps.
+/// </remarks>
+public sealed class UpdateGateCandidateBindingTests : IDisposable
+{
+    private readonly string baseMsi = Path.Combine(
+        Path.GetTempPath(), "candidate-binding-" + Guid.NewGuid().ToString("N") + ".msi");
+
+    public UpdateGateCandidateBindingTests() => File.WriteAllText(this.baseMsi, "msi");
+
+    public void Dispose() => File.Delete(this.baseMsi);
+
+    private async Task<ScenarioResult> RunWithAsync(Action<GateFakes> bind)
+    {
+        using var harness = await GateHarness.CreateAsync(
+            "REL-UPD-MSI-DECLINE-001",
+            fakes =>
+            {
+                DisposableOsGateFixture.StageWorker(fakes);
+                fakes.DisposableOs.Run = DisposableOsRun.Completed(new DisposableOsRunResult([]));
+                bind(fakes);
+            },
+            TestContext.Current.CancellationToken);
+
+        return await new UpdateDeclineGate(() => this.baseMsi).RunAsync(
+            harness.Context, TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task AnIncompleteBindingIsAnInfrastructureErrorNotAProductFailure()
+    {
+        // The harness could not say what it expected, so nothing was measured about
+        // ExoSnap. Calling this a failing gate would accuse the product of the
+        // campaign''s own missing data.
+        var result = await this.RunWithAsync(fakes => fakes.SourceCommit = string.Empty);
+
+        Assert.Equal(ScenarioOutcome.InfrastructureError, result.Outcome);
+        Assert.Contains("sourceCommit", result.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ABindingFromTwoDifferentCandidatesIsAnInfrastructureError()
+    {
+        // rc4''s version with rc5''s tag: complete, and about no single candidate.
+        var result = await this.RunWithAsync(fakes =>
+        {
+            fakes.ProductVersion = "0.9.1-rc4";
+            fakes.RcTag = "v0.9.1-rc5";
+        });
+
+        Assert.Equal(ScenarioOutcome.InfrastructureError, result.Outcome);
+        Assert.Contains("inconsistent", result.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task TheWorkerIsToldTheCandidateToCompareAgainst()
+    {
+        // Without these the worker can only ask "is this newer than what we started
+        // from", which any newer build satisfies.
+        using var harness = await GateHarness.CreateAsync(
+            "REL-UPD-MSI-DECLINE-001",
+            fakes =>
+            {
+                DisposableOsGateFixture.StageWorker(fakes);
+                fakes.DisposableOs.Run = DisposableOsRun.Completed(new DisposableOsRunResult([]));
+            },
+            TestContext.Current.CancellationToken);
+
+        await new UpdateDeclineGate(() => this.baseMsi).RunAsync(
+            harness.Context, TestContext.Current.CancellationToken);
+
+        var request = Assert.Single(harness.Fakes.DisposableOs.Requests);
+        var arguments = string.Join(" ", request.WorkerArguments);
+
+        Assert.Contains("-ExpectedVersion", arguments, StringComparison.Ordinal);
+        Assert.Contains(harness.Fakes.ProductVersion, arguments, StringComparison.Ordinal);
+        Assert.Contains("-ExpectedCommit", arguments, StringComparison.Ordinal);
+        Assert.Contains(harness.Fakes.SourceCommit, arguments, StringComparison.Ordinal);
+        Assert.Contains("-ExpectedExeSha256", arguments, StringComparison.Ordinal);
+        Assert.Contains(harness.Fakes.ExecutableSha256, arguments, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AConsistentBindingReachesTheTransport()
+    {
+        // The control: the check must not reject the ordinary case.
+        using var harness = await GateHarness.CreateAsync(
+            "REL-UPD-MSI-DECLINE-001",
+            fakes =>
+            {
+                DisposableOsGateFixture.StageWorker(fakes);
+                fakes.DisposableOs.Run = DisposableOsRun.Completed(new DisposableOsRunResult([]));
+            },
+            TestContext.Current.CancellationToken);
+
+        await new UpdateDeclineGate(() => this.baseMsi).RunAsync(
+            harness.Context, TestContext.Current.CancellationToken);
+
+        Assert.Single(harness.Fakes.DisposableOs.Requests);
+    }
+}
+
+/// <summary>
 /// A gate stages every script its worker pulls in.
 /// </summary>
 /// <remarks>

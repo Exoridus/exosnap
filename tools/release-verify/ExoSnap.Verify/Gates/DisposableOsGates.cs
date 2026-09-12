@@ -214,6 +214,15 @@ internal static class DisposableOsUpdateRun
             return ScenarioResult.Unavailable($"{UpdateDeclineGate.WorkerScriptPath} is missing");
         }
 
+        // Before the guest is started: a binding that cannot identify a candidate,
+        // or whose parts came from different ones, has nothing to compare the
+        // installed build against. Discovered here it is an infrastructure error;
+        // discovered at the end of the run it would read as a product failure.
+        if (services.Artifact.DescribeIncompleteCandidateIdentity() is { Length: > 0 } incomplete)
+        {
+            return ScenarioResult.InfrastructureError(incomplete);
+        }
+
         // The MSI goes in by its staged leaf name: the transport owns the translation
         // into whatever path its guest sees.
         //
@@ -229,10 +238,19 @@ internal static class DisposableOsUpdateRun
         // Evidence was only requested by the Chocolatey gate, so an update run that
         // failed left its MSI logs and updater state inside a machine that was then
         // discarded -- the one run whose logs were worth having.
+        // The candidate's identity, so the worker can assert that the update
+        // installed THIS build. "the version changed" used to be the whole proof,
+        // which any newer release satisfies -- including another RC of the same
+        // base version that nobody verified.
         var request = new DisposableOsWorkerRequest(
             UpdateDeclineGate.WorkerFileName,
             staged,
-            ["-BaseMsiPath", Path.GetFileName(baseMsi)])
+            [
+                "-BaseMsiPath", Path.GetFileName(baseMsi),
+                "-ExpectedVersion", services.Artifact.ProductVersion,
+                "-ExpectedCommit", services.Artifact.SourceCommit,
+                "-ExpectedExeSha256", services.Artifact.ExecutableSha256,
+            ])
         {
             EvidenceDirectory = context.EvidenceDirectory,
         };

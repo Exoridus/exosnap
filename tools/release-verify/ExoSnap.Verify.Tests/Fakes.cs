@@ -579,7 +579,16 @@ internal sealed class GateFakes
     public string ExecutablePath { get; set; } = "exosnap.exe";
 
     /// <summary>The product version a gate's <c>ArtifactUnderTest</c> carries.</summary>
-    public string ProductVersion { get; set; } = "0.9.1";
+    public string ProductVersion { get; set; } = "0.9.1-rc4";
+
+    /// <summary>The tag the candidate was published under. Consistent with the version by default.</summary>
+    public string RcTag { get; set; } = "v0.9.1-rc4";
+
+    /// <summary>The commit the candidate was built from.</summary>
+    public string SourceCommit { get; set; } = new string('1', 40);
+
+    /// <summary>Digest of the bound executable.</summary>
+    public string ExecutableSha256 { get; set; } = new string('a', 64);
 
     /// <summary>What a previous present cross-check confirmed, or null.</summary>
     public PresentConfirmation? LastPresentConfirmation { get; set; }
@@ -646,7 +655,13 @@ internal sealed class GateHarness : IDisposable
             .ConfigureAwait(false);
 
         var services = new GateServices(
-            new ArtifactUnderTest(fakes.ExecutablePath, fakes.ProductVersion, fakes.RepositoryRoot),
+            new ArtifactUnderTest(
+                fakes.ExecutablePath,
+                fakes.ProductVersion,
+                fakes.RepositoryRoot,
+                fakes.RcTag,
+                fakes.SourceCommit,
+                fakes.ExecutableSha256),
             fakes.SessionHost,
             fakes.Ffprobe,
             orchestrator,

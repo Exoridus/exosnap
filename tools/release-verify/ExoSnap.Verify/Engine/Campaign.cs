@@ -114,7 +114,10 @@ public sealed class CampaignServices : IAsyncDisposable
             new ArtifactUnderTest(
                 campaign.Binding.ExecutablePath,
                 campaign.Binding.ProductVersion,
-                campaign.RepositoryRoot),
+                campaign.RepositoryRoot,
+                campaign.Binding.RcTag,
+                campaign.Binding.SourceCommit,
+                campaign.Binding.ExecutableSha256),
             sessions,
             ffprobe,
             environment,

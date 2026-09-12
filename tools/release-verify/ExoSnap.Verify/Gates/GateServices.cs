@@ -14,7 +14,81 @@ namespace ExoSnap.Verify.Gates;
 /// <param name="ExecutablePath">The exosnap.exe under test.</param>
 /// <param name="ProductVersion">The version those bytes report about themselves.</param>
 /// <param name="RepositoryRoot">Where the helper scripts a few gates invoke live.</param>
-public sealed record ArtifactUnderTest(string ExecutablePath, string ProductVersion, string RepositoryRoot);
+/// <param name="ExecutablePath">The exosnap.exe the gates drive.</param>
+/// <param name="ProductVersion">The version those bytes report about themselves.</param>
+/// <param name="RepositoryRoot">The checkout the gates read their scripts from.</param>
+/// <param name="RcTag">The release candidate the artifacts were published under.</param>
+/// <param name="SourceCommit">The commit those artifacts were built from.</param>
+/// <param name="ExecutableSha256">Digest of the executable, or empty when it was not computed.</param>
+/// <remarks>
+/// The last three come from the campaign's binding and were not reachable from a
+/// gate before. A gate that wants to prove an update installed THE bound
+/// candidate -- rather than some newer build -- needs the candidate's identity,
+/// and inferring it from the version alone is how "the version changed, so it
+/// worked" became the whole proof.
+/// </remarks>
+public sealed record ArtifactUnderTest(
+    string ExecutablePath,
+    string ProductVersion,
+    string RepositoryRoot,
+    string RcTag = "",
+    string SourceCommit = "",
+    string ExecutableSha256 = "")
+{
+    /// <summary>
+    /// Why this binding cannot identify a candidate, or an empty string when it
+    /// can.
+    /// </summary>
+    /// <remarks>
+    /// Checked before a gate drives anything, because a binding assembled from
+    /// mismatched parts -- rc4's version with rc5's commit -- would otherwise
+    /// surface as a product failure at the end of a long run. A harness that
+    /// cannot say what it expected has measured nothing, so this is an
+    /// infrastructure error and never a verdict about ExoSnap.
+    /// </remarks>
+    public string DescribeIncompleteCandidateIdentity()
+    {
+        var missing = new List<string>();
+        if (string.IsNullOrWhiteSpace(this.ProductVersion))
+        {
+            missing.Add("productVersion");
+        }
+
+        if (string.IsNullOrWhiteSpace(this.RcTag))
+        {
+            missing.Add("rcTag");
+        }
+
+        if (string.IsNullOrWhiteSpace(this.SourceCommit))
+        {
+            missing.Add("sourceCommit");
+        }
+
+        if (string.IsNullOrWhiteSpace(this.ExecutableSha256))
+        {
+            missing.Add("executableSha256");
+        }
+
+        if (missing.Count > 0)
+        {
+            return "the campaign binding does not identify a candidate: "
+                + string.Join(", ", missing) + " missing";
+        }
+
+        // The tag carries the version it published, so a binding whose two halves
+        // came from different candidates is visible here rather than three steps
+        // later. "v0.9.1-rc4" against "0.9.1-rc4"; the tag's leading v is not part
+        // of the version.
+        var tagVersion = this.RcTag.StartsWith('v') ? this.RcTag[1..] : this.RcTag;
+        if (!string.Equals(tagVersion, this.ProductVersion, StringComparison.OrdinalIgnoreCase))
+        {
+            return $"the campaign binding is inconsistent: tag {this.RcTag} does not name version "
+                + $"{this.ProductVersion}, so the expected candidate is ambiguous";
+        }
+
+        return string.Empty;
+    }
+}
 
 /// <summary>
 /// One ExoSnap process shared by every gate that needs one.
