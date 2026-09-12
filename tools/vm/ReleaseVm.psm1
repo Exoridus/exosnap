@@ -19,15 +19,17 @@
 
 Set-StrictMode -Version Latest
 
-# The three-part GPU partition triple, in Hyper-V's own units: partition values run
-# from 0 to 1000000000, where the maximum is the whole adapter. 100000000 is a tenth
-# of the GPU, which is what a capture-and-encode gate needs while the host keeps
-# rendering the developer's desktop; the minimum is set slightly lower so the guest
-# still starts when the host is briefly busier than that.
+# The three-part GPU partition triple, in Hyper-V's own units. What is documented is
+# the range: 0 to 1000000000, where the maximum asks for the whole adapter. What it
+# means in between is not documented as a proportion of anything, and the driver is
+# free to normalise a requested value -- so the configuration a run was measured
+# under is the one Get-VMGpuPartitionAdapter reports back afterwards, not the one
+# set here. Assert-ReleaseVmGpuPartition is what reads it back.
 #
-# Raising these is a decision with a cost on the host side, not a free knob: the
-# partition is reserved for the guest while it runs. An encode-heavy soak wants
-# 500000000, and nothing else does.
+# These values are what a capture-and-encode gate has been run with while the host
+# kept rendering the developer's desktop. Raising them has a cost on the host side,
+# not a free knob: the partition is reserved for the guest while it runs. An
+# encode-heavy soak wants 500000000, and nothing else does.
 $script:GpuPartitionDefault = [ordered]@{
     MinPartitionVRAM     = 80000000
     MaxPartitionVRAM     = 100000000
@@ -815,6 +817,10 @@ function New-ReleaseVmRunPlan {
     foreach ($key in $GpuPartition.Keys) { $partitionParameters[$key] = $GpuPartition[$key] }
     $plan += New-ReleaseVmStep -Name 'gpu-partition' -Command 'Set-VMGpuPartitionAdapter' -Parameters $partitionParameters
 
+    $plan += New-ReleaseVmStep -Name 'gpu-partition-readback' -Command 'Assert-ReleaseVmGpuPartition' `
+        -Parameters ([ordered]@{ VMName = $vm; Requested = $partitionParameters }) `
+        -Detail 'the values are opaque and the platform may normalise them, so the applied ones are the record'
+
     $plan += Get-ReleaseVmNetworkStep -Mode $Network -VMName $vm
 
     $plan += New-ReleaseVmStep -Name 'guest-services' -Command 'Enable-ReleaseVmGuestServices' -Parameters ([ordered]@{
@@ -901,18 +907,25 @@ function New-ReleaseVmReadinessRequirement {
         Width, Height and RefreshHz that at least one attached display must report.
     .PARAMETER ControlChannel
         The product control channel must answer from inside the guest.
+    .PARAMETER GpuBoundTo
+        The host GPU identity this run partitioned. The guest adapter is held against
+        it on what a partition preserves -- vendor and device ids and the driver
+        version -- so a guest that quietly fell back to the Basic Render Driver stops
+        the run instead of producing evidence attributed to the wrong GPU.
     #>
     [OutputType([hashtable])]
     param(
         [switch] $InteractiveAgent,
         [string] $ExpectedUser = '',
         [System.Collections.IDictionary] $Display,
+        [System.Collections.IDictionary] $GpuBoundTo,
         [switch] $ControlChannel
     )
     return @{
         InteractiveAgent = [bool]$InteractiveAgent
         ExpectedUser     = $ExpectedUser
         Display          = $Display
+        GpuBoundTo       = $GpuBoundTo
         ControlChannel   = [bool]$ControlChannel
     }
 }
@@ -1004,6 +1017,16 @@ function Test-ReleaseVmReadiness {
         }
     }
 
+    if ($Requirement.GpuBoundTo) {
+        if (-not (& $measured 'gpu')) {
+            $unmet += 'the guest display adapter was not measured, so the GPU binding is unproven'
+        }
+        else {
+            $binding = Test-ReleaseVmGpuBinding -HostGpu $Requirement.GpuBoundTo -GuestGpu $Receipt['gpu']
+            if (-not $binding.Bound) { $unmet += $binding.Unmet }
+        }
+    }
+
     if ($Requirement.ControlChannel) {
         if (-not (& $measured 'controlChannel')) { $unmet += 'the control channel was not measured' }
         elseif (-not $Receipt['controlChannel']) { $unmet += 'the control channel did not answer inside the guest' }
@@ -1068,6 +1091,18 @@ public static extern bool GetUserObjectInformationW(
                 Where-Object { $_.SessionId -ne 0 } | Select-Object -First 1)
         if ($interactive.Count -gt 0) { $receipt['interactiveSessionId'] = $interactive[0].SessionId }
 
+        $adapter = @(Get-CimInstance -ClassName Win32_VideoController -ErrorAction SilentlyContinue |
+                Where-Object { $_.PNPDeviceID -like 'PCI\*' } | Select-Object -First 1)
+        if ($adapter.Count -gt 0) {
+            $ids = [regex]::Match($adapter[0].PNPDeviceID, 'VEN_(?<vendor>[0-9A-F]{4})&DEV_(?<device>[0-9A-F]{4})')
+            $gpu = @{ Name = $adapter[0].Name; DriverVersion = $adapter[0].DriverVersion }
+            if ($ids.Success) {
+                $gpu['VendorId'] = $ids.Groups['vendor'].Value
+                $gpu['DeviceId'] = $ids.Groups['device'].Value
+            }
+            $receipt['gpu'] = $gpu
+        }
+
         # WMI rather than the display APIs: this may be running in a session that has
         # no desktop at all, which is exactly the case being reported, and the display
         # APIs answer that with a failure rather than an empty list.
@@ -1114,27 +1149,255 @@ function Assert-ReleaseVmReadiness {
     return $receipt
 }
 
+function Get-ReleaseVmInfDriverVersion {
+    <#
+    .SYNOPSIS
+        The version an INF declares, or null when it declares none.
+    .DESCRIPTION
+        The DriverVer directive is "DriverVer = <date>,<version>". The version is what
+        identifies a DriverStore package against the driver the adapter is running;
+        the date is not unique across packages.
+    #>
+    [OutputType([string])]
+    param([Parameter(Mandatory)] [AllowEmptyString()] [string] $InfText)
+    $match = [regex]::Match($InfText, '(?im)^\s*DriverVer\s*=\s*[^,]+,\s*([0-9][0-9.]*)\s*$')
+    if (-not $match.Success) { return $null }
+    return $match.Groups[1].Value
+}
+
+function Select-ReleaseVmDriverPackage {
+    <#
+    .SYNOPSIS
+        The DriverStore package that is the driver the host is running.
+    .DESCRIPTION
+        Matched by version, not by write time. A driver update leaves the previous
+        package in the store and a rollback leaves the newer one, so the newest
+        directory is not the active driver -- and staging the wrong package produces a
+        guest whose user-mode driver does not match the host kernel-mode driver, which
+        fails inside the guest as an unexplained device error.
+
+        Refuses rather than approximates. No match and an ambiguous match are both
+        reported with what was looked for and what the store holds, because staging a
+        driver that is not the host driver is worse than staging none.
+    .OUTPUTS
+        A hashtable with Ok, Package and Detail.
+    #>
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [object[]] $Candidate,
+        [Parameter(Mandatory)] [string] $ActiveDriverVersion
+    )
+    if ($Candidate.Count -eq 0) {
+        return @{ Ok = $false; Package = $null
+            Detail = "no driver package is in the store to match against $ActiveDriverVersion" }
+    }
+
+    $matches = @($Candidate | Where-Object { $_.DriverVersion -eq $ActiveDriverVersion })
+    if ($matches.Count -eq 1) {
+        return @{ Ok = $true; Package = $matches[0]
+            Detail = "$($matches[0].Name) declares $ActiveDriverVersion, which is what the adapter is running" }
+    }
+    if ($matches.Count -gt 1) {
+        return @{ Ok = $false; Package = $null
+            Detail = ("$($matches.Count) driver packages declare $ActiveDriverVersion and nothing here can " +
+                "tell them apart: " + (($matches | ForEach-Object { $_.Name }) -join ', ')) }
+    }
+
+    $held = ($Candidate | ForEach-Object { "$($_.Name) ($($_.DriverVersion))" }) -join ', '
+    return @{ Ok = $false; Package = $null
+        Detail = "no driver package declares $ActiveDriverVersion, which is what the adapter is running; the store holds $held" }
+}
+
+function Compare-ReleaseVmGpuPartition {
+    <#
+    .SYNOPSIS
+        What the adapter actually applied, against what the run asked for.
+    .DESCRIPTION
+        Pure. The partition values are opaque to this recipe and the platform may
+        normalise them, so the configuration a run was measured under is the one read
+        back afterwards. A field the adapter did not report is a difference, not
+        agreement: nobody measured it.
+    .OUTPUTS
+        A hashtable with Matches and Differences.
+    #>
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Requested,
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Actual
+    )
+    $differences = @()
+    foreach ($key in $Requested.Keys) {
+        if (-not $Actual.Contains($key) -or $null -eq $Actual[$key]) {
+            $differences += "$key`: requested $($Requested[$key]), not reported by the adapter"
+            continue
+        }
+        if ([long]$Actual[$key] -ne [long]$Requested[$key]) {
+            $differences += "$key`: requested $($Requested[$key]), actual $($Actual[$key])"
+        }
+    }
+    return @{ Matches = ($differences.Count -eq 0); Differences = $differences }
+}
+
+function Test-ReleaseVmGpuBinding {
+    <#
+    .SYNOPSIS
+        Whether the adapter the guest sees is the host GPU this run partitioned.
+    .DESCRIPTION
+        Compared on what a GPU partition preserves and nothing else: the PCI vendor
+        and device ids, and the driver version, which in the guest comes from the host
+        driver package staged into it. A mismatched driver version is the classic
+        GPU-P failure and the reason the package selection above matches on the active
+        driver rather than on a timestamp.
+
+        The adapter LUID is deliberately not compared. It identifies an adapter within
+        one operating system, the guest assigns its own, and requiring them to agree
+        would fail every correct run. An unmeasured fact is unbound rather than
+        assumed: a guest that reported no adapter proves nothing.
+    .OUTPUTS
+        A hashtable with Bound and Unmet.
+    #>
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $HostGpu,
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $GuestGpu
+    )
+    $unmet = @()
+    foreach ($field in @('VendorId', 'DeviceId', 'DriverVersion')) {
+        $name = $field.Substring(0, 1).ToLowerInvariant() + $field.Substring(1)
+        $hasHost = $HostGpu.Contains($field) -and $null -ne $HostGpu[$field]
+        $hasGuest = $GuestGpu.Contains($field) -and $null -ne $GuestGpu[$field]
+        if (-not $hasHost) { $unmet += "the host $name was not measured"; continue }
+        if (-not $hasGuest) { $unmet += "the guest $name was not measured"; continue }
+        if ("$($HostGpu[$field])" -ne "$($GuestGpu[$field])") {
+            $unmet += "$name`: host $($HostGpu[$field]), guest $($GuestGpu[$field])"
+        }
+    }
+    return @{ Bound = ($unmet.Count -eq 0); Unmet = $unmet }
+}
+
+function Get-ReleaseVmHostGpu {
+    <#
+    .SYNOPSIS
+        The identity of the display adapter a run partitions.
+    .DESCRIPTION
+        Enough to say afterwards which physical GPU a campaign ran on: the PnP
+        instance path, the adapter LUID, the PCI ids, and the driver the adapter is
+        actually running together with the DriverStore package that driver came from.
+
+        The LUID is recorded for the host record, not for comparison against the
+        guest: it identifies an adapter within one operating system.
+    #>
+    [OutputType([hashtable])]
+    param([string] $InstancePathPattern = 'PCI\\VEN_10DE*')
+    $device = @(Get-CimInstance -ClassName Win32_VideoController -ErrorAction SilentlyContinue |
+            Where-Object { $_.PNPDeviceID -like $InstancePathPattern } | Select-Object -First 1)
+    if ($device.Count -eq 0) { return @{ Measured = $false; Detail = "no display adapter matches $InstancePathPattern" } }
+    $adapter = $device[0]
+
+    $identity = @{
+        Measured      = $true
+        InstancePath  = $adapter.PNPDeviceID
+        Name          = $adapter.Name
+        DriverVersion = $adapter.DriverVersion
+    }
+    $ids = [regex]::Match($adapter.PNPDeviceID, 'VEN_(?<vendor>[0-9A-F]{4})&DEV_(?<device>[0-9A-F]{4})(&SUBSYS_(?<subsys>[0-9A-F]{8}))?')
+    if ($ids.Success) {
+        $identity['VendorId'] = $ids.Groups['vendor'].Value
+        $identity['DeviceId'] = $ids.Groups['device'].Value
+        if ($ids.Groups['subsys'].Success) { $identity['SubsystemId'] = $ids.Groups['subsys'].Value }
+    }
+
+    $signed = @(Get-CimInstance -ClassName Win32_PnPSignedDriver -ErrorAction SilentlyContinue |
+            Where-Object { $_.DeviceID -eq $adapter.PNPDeviceID } | Select-Object -First 1)
+    if ($signed.Count -gt 0) {
+        $identity['InfName'] = $signed[0].InfName
+        if ($signed[0].DriverVersion) { $identity['DriverVersion'] = $signed[0].DriverVersion }
+    }
+
+    $luid = @(Get-PnpDeviceProperty -InstanceId $adapter.PNPDeviceID -KeyName 'DEVPKEY_Device_LUID' -ErrorAction SilentlyContinue)
+    if ($luid.Count -gt 0 -and $null -ne $luid[0].Data) { $identity['AdapterLuid'] = "$($luid[0].Data)" }
+
+    return $identity
+}
+
+function Assert-ReleaseVmGpuPartition {
+    <#
+    .SYNOPSIS
+        Reads the applied partition back and throws unless it is what was requested.
+    .DESCRIPTION
+        The plan step form. A run whose partition the platform quietly normalised was
+        measured under a configuration nobody recorded, so the difference is named and
+        the run stops rather than producing evidence attributed to the wrong setup.
+    #>
+    param(
+        [Parameter(Mandatory)] [string] $VMName,
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Requested
+    )
+    $adapter = @(Get-VMGpuPartitionAdapter -VMName $VMName -ErrorAction Stop)
+    if ($adapter.Count -eq 0) { throw "'$VMName' has no GPU partition adapter to read back" }
+
+    $actual = [ordered]@{}
+    foreach ($key in $Requested.Keys) {
+        $property = $adapter[0].PSObject.Properties[$key]
+        if ($property -and $null -ne $property.Value) { $actual[$key] = $property.Value }
+    }
+
+    $comparison = Compare-ReleaseVmGpuPartition -Requested $Requested -Actual $actual
+    if (-not $comparison.Matches) {
+        throw ("the GPU partition on '$VMName' is not what this run asked for:`n    " +
+            ($comparison.Differences -join "`n    "))
+    }
+    return $actual
+}
+
 function Get-ReleaseVmHostDriverPackage {
     <#
     .SYNOPSIS
         The host's active display driver package directory.
     .DESCRIPTION
-        Newest by write time when several are present: a driver update leaves the
-        previous package in the store, and copying the older one into the guest
-        produces a guest whose driver does not match the host's kernel-mode driver.
+        The package whose INF declares the version the adapter is actually running.
+        Not the newest directory by write time: an update leaves the previous package
+        in the store and a rollback leaves the newer one, so the clock says nothing
+        about which driver is loaded, and staging the wrong one produces a guest whose
+        user-mode driver does not match the host kernel-mode driver.
+
+        Returns null when there is no unambiguous match. Copy-ReleaseVmDriverStore
+        refuses on null rather than staging something approximate.
     #>
     [OutputType([string])]
     param(
         [string] $Repository,
-        [string] $Pattern
+        [string] $Pattern,
+        [string] $ActiveDriverVersion
     )
     $defaults = Get-ReleaseVmDefault
     if (-not $Repository) { $Repository = $defaults.HostDriverRepository }
     if (-not $Pattern) { $Pattern = $defaults.HostDriverPattern }
+    if (-not $ActiveDriverVersion) {
+        $gpu = Get-ReleaseVmHostGpu
+        if (-not $gpu.Measured) { return $null }
+        $ActiveDriverVersion = $gpu.DriverVersion
+    }
+
     $candidates = @(Get-ChildItem -LiteralPath $Repository -Directory -Filter $Pattern -ErrorAction SilentlyContinue |
-            Sort-Object LastWriteTime -Descending)
-    if ($candidates.Count -eq 0) { return $null }
-    return $candidates[0].FullName
+            ForEach-Object {
+                $inf = @(Get-ChildItem -LiteralPath $_.FullName -Filter '*.inf' -File -ErrorAction SilentlyContinue |
+                        Select-Object -First 1)
+                @{
+                    Name          = $_.Name
+                    FullName      = $_.FullName
+                    DriverVersion = if ($inf.Count -gt 0) {
+                        Get-ReleaseVmInfDriverVersion -InfText (Get-Content -LiteralPath $inf[0].FullName -Raw)
+                    } else { $null }
+                }
+            })
+
+    $selected = Select-ReleaseVmDriverPackage -Candidate $candidates -ActiveDriverVersion $ActiveDriverVersion
+    if (-not $selected.Ok) {
+        Write-Warning "no host display driver package could be bound: $($selected.Detail)"
+        return $null
+    }
+    return $selected.Package.FullName
 }
 
 function New-ReleaseVmAnswerIso {
@@ -1504,6 +1767,12 @@ Export-ModuleMember -Function @(
     'Format-ReleaseVmStep'
     'Write-ReleaseVmPlan'
     'Invoke-ReleaseVmPlan'
+    'Get-ReleaseVmInfDriverVersion'
+    'Select-ReleaseVmDriverPackage'
+    'Compare-ReleaseVmGpuPartition'
+    'Test-ReleaseVmGpuBinding'
+    'Get-ReleaseVmHostGpu'
+    'Assert-ReleaseVmGpuPartition'
     'New-ReleaseVmReadinessRequirement'
     'Test-ReleaseVmReadiness'
     'Get-ReleaseVmReadiness'

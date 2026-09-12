@@ -34,8 +34,17 @@ it executes.
 | per-run differencing disk | a few hundred MB to a few GB, deleted after the run | `runs/<runId>/` under the image root |
 | Windows 11 installation ISO | about 6 GB | wherever it was downloaded; not tracked, not copied |
 
-Memory 8 GB static, 4 vCPU, and a tenth of the GPU. None of the image, the ISO or the
-run disks is tracked; the recipe is, and the image is reproducible from it.
+Memory 8 GB static, 4 vCPU, and a GPU partition. The partition triples are in
+Hyper-V's own units, which are documented as a range and not as a proportion of the
+adapter, and the platform may normalise a requested value -- so a run reads the
+applied configuration back from `Get-VMGpuPartitionAdapter` and stops if it is not
+what was asked for. The display driver staged into the guest is the DriverStore
+package whose INF declares the version the host adapter is actually running, not the
+newest directory in the store: an update leaves the previous package behind and a
+rollback leaves the newer one.
+
+None of the image, the ISO or the run disks is tracked; the recipe is, and the image
+is reproducible from it.
 
 ## Building it, once
 
