@@ -160,28 +160,6 @@ if (Test-Path -LiteralPath $verifyHarnessSolution -PathType Leaf) {
 $script:LastFailedTests = @()
 $script:MsvcEnvironmentReady = $false
 
-function Test-PresetUsesNinja {
-    <#
-    .SYNOPSIS
-        Whether a configure preset builds with Ninja, following inherits.
-    #>
-    param([Parameter(Mandatory)] [string] $Name)
-
-    $presets = (Get-Content -LiteralPath (Join-Path $repoRoot 'CMakePresets.json') -Raw |
-        ConvertFrom-Json).configurePresets
-    # Bounded rather than while($true): a cycle in inherits is a broken presets
-    # file, and hanging the whole pipeline is a worse way to report it.
-    for ($hop = 0; $hop -lt 16 -and $Name; $hop++) {
-        $preset = $presets | Where-Object { $_.name -eq $Name } | Select-Object -First 1
-        if (-not $preset) { return $false }
-        if ($preset.PSObject.Properties.Name -contains 'generator' -and $preset.generator) {
-            return $preset.generator -eq 'Ninja'
-        }
-        $Name = if ($preset.PSObject.Properties.Name -contains 'inherits') { @($preset.inherits)[0] } else { $null }
-    }
-    return $false
-}
-
 function Initialize-CompilerEnvironment {
     <#
     .SYNOPSIS
@@ -195,7 +173,7 @@ function Initialize-CompilerEnvironment {
     #>
     if ($script:MsvcEnvironmentReady) { return }
     $script:MsvcEnvironmentReady = $true
-    if (-not (Test-PresetUsesNinja -Name $Preset)) { return }
+    if (-not (Test-PresetUsesNinja -Name $Preset -RepoRoot $repoRoot)) { return }
     Enter-MsvcEnvironment | Out-Null
 }
 

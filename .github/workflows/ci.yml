@@ -24,12 +24,12 @@ on:
 #   pull_request      lint, dev-scripts, changes, build-test (debug, full
 #                     suite), build-test (release, configure/build/link only)
 #                     when the `build` filter matches (any C++ or build
-#                     machinery), packaging-smoke when the `packaging` filter
-#                     matches
+#                     machinery), plus the packaging smoke on that release
+#                     build when the `packaging` filter matches
 #   push → main       lint, dev-scripts, changes            (quick checks only)
-#   push → v* tag     everything except packaging-smoke, with the Release
+#   push → v* tag     everything except the packaging smoke, with the Release
 #                     test suite included                   (release gate)
-#   workflow_dispatch everything except packaging-smoke     (manual full run)
+#   workflow_dispatch everything except the packaging smoke (manual full run)
 #
 # Accepted trade-off: a semantic merge skew — two PRs that are each green alone
 # but broken together — is no longer caught by the main push itself. It surfaces
@@ -335,9 +335,9 @@ jobs:
   # ---------------------------------------------------------------------------
   # Detect whether this PR touches packaging-relevant or build/tooling-relevant
   # paths.
-  #   - `packaging` gates the packaging-smoke job below (a scoped-down slice of
-  #     the release-candidate pipeline, ADR 0037) so it only runs when it can
-  #     actually catch something.
+  #   - `packaging` gates the packaging smoke step on the release leg (a
+  #     scoped-down slice of the release-candidate pipeline, ADR 0037) so it
+  #     only runs when it can actually catch something.
   #   - `build` gates the windows-x64-release leg of build-test on PRs (PR-CI
   #     tiering): the debug leg always runs and carries the test suite, so the
   #     release leg — which proves the Release configure/build/link still works
@@ -349,8 +349,8 @@ jobs:
   #     (docs, screenshots, packaging-unrelated scripts) skip the release leg.
   #
   # This job runs on EVERY trigger, not just pull_request, even though its
-  # outputs are only consulted on pull_request (see build-test-release and
-  # packaging-smoke below). That is deliberate: build-test-release has
+  # outputs are only consulted on pull_request (see build-test-release below).
+  # That is deliberate: build-test-release has
   # `needs: changes`, and a job-level `if:` has an implicit `success()` guard
   # unless it names a status-check function. If `changes` were skipped (as it
   # would be on push/tag/dispatch under a plain
@@ -393,6 +393,9 @@ jobs:
               - 'apps/updater/CMakeLists.txt'
               - 'third_party/CMakeLists.txt'
               - 'THIRD_PARTY_NOTICES.md'
+            # `packaging` is a subset of `build` by construction: the packaging
+            # smoke runs on the release leg's build, so a path that arms the
+            # smoke has to arm that leg. ci-required checks the subset holds.
             build:
               - 'app/**'
               - 'apps/**'
@@ -405,6 +408,7 @@ jobs:
               - 'CMakePresets.json'
               - 'cmake/**'
               - 'packaging/**'
+              - 'THIRD_PARTY_NOTICES.md'
               - '.github/workflows/**'
               - 'scripts/build-*'
 
@@ -653,6 +657,36 @@ jobs:
           -BuildDir build/windows-x64-ninja-release -Config Release
           -ExcludeLabel live -RequireFresh
 
+      # Packaging smoke, on the build this job just produced. ADR 0037
+      # established the full release gate (install -> audit -> MSI -> content
+      # assertion -> MSI smoke -> ZIP smoke) in release-candidate.yml, which only
+      # runs on version tags and release/** branches, so a harvest-fragment
+      # regression, a runtime DLL windeployqt fails to stage, or a leaked
+      # dev-tree file would stay invisible until a tag is pushed. This is the
+      # fastest subset that still catches those, on every pull request that
+      # touches a packaging-relevant path (the `changes` job's `packaging`
+      # filter):
+      #
+      #   - cmake --install into a pruned staging tree (identical pruning rules)
+      #   - presence / absence / leak / exe-metadata validation of that tree
+      #   - the dumpbin /dependents static runtime-dependency audit
+      #   - portable ZIP creation + the isolated launch smoke (app exe + updater
+      #     exe, both via SetErrorMode + dialog-sentinel)
+      #
+      # -SkipConfigure: configured above. -SkipMsi: the WiX/MSI build, the MSI
+      # content assertion and the MSI smoke need the WiX Toolset and add several
+      # minutes for a package format the portable-ZIP path already exercises
+      # structurally (same staging tree, same harvest source); they stay with
+      # the release gate. Same preset as the release gate, so what this smokes
+      # is the build path that ships.
+      #
+      # A step here rather than its own job: the job it would need is this one
+      # again -- checkout, MSVC, Qt, sccache, configure, build -- on a second
+      # runner, for a five-minute smoke of the build this runner already holds.
+      - name: Install, package and smoke-test (release-gate subset)
+        if: github.event_name == 'pull_request' && needs.changes.outputs.packaging == 'true'
+        run: pwsh -NonInteractive -File scripts/build-release-artifacts.ps1 -SkipConfigure -Preset windows-x64-ninja-release -SkipMsi
+
       - name: sccache stats
         if: always()
         run: sccache --show-stats
@@ -664,86 +698,8 @@ jobs:
           name: ctest-logs-windows-x64-ninja-release
           path: build/windows-x64-ninja-release/Testing/Temporary/
 
-  # ---------------------------------------------------------------------------
-  # Packaging smoke (PR-CI only; gated on packaging-relevant path changes,
-  # see the `changes` job above). ADR 0037 established the full release-gate
-  # pipeline (install -> audit -> MSI -> content assertion -> MSI smoke -> ZIP
-  # smoke) in release-candidate.yml, but that workflow only runs on version
-  # tags and release/** branches — harvest-fragment regressions, new runtime
-  # DLLs windeployqt fails to stage, or leaked dev-tree files are invisible
-  # until the release tag is pushed. This job runs the fastest subset of that
-  # pipeline that still catches those regressions:
-  #
-  #   - cmake --install into a pruned staging tree (identical pruning rules)
-  #   - presence / absence / leak / exe-metadata validation of that tree
-  #   - the dumpbin /dependents static runtime-dependency audit
-  #   - portable ZIP creation + the isolated launch smoke (app exe + updater
-  #     exe, both via SetErrorMode + dialog-sentinel)
-  #
-  # It deliberately skips the WiX/MSI build, the MSI content assertion, and
-  # the MSI smoke (-SkipMsi): those need the WiX Toolset installed and add
-  # several minutes for a package format the portable-ZIP path already
-  # exercises structurally (same staging tree, same harvest source). It also
-  # builds from the Ninja release preset (sccache-cacheable, shared with the
-  # build-test job's release leg above) rather than the canonical VS-generator
-  # release preset the RC pipeline uses — the VS/MSBuild generator ignores
-  # CMAKE_CXX_COMPILER_LAUNCHER, which would mean a from-scratch compile on
-  # every PR. build-release-artifacts.ps1 takes a -Preset parameter (default
-  # 'windows-x64-release', unchanged for the RC pipeline) and resolves the
-  # built exe under either generator's output layout.
-  # ---------------------------------------------------------------------------
-  packaging-smoke:
-    name: packaging-smoke
-    # ~2x the observed worst case (14 min, cold sccache).
-    timeout-minutes: 30
-    needs: changes
-    # PR-CI only (see the comment above). Now that `changes` runs on every
-    # trigger (not just pull_request — see its own comment above), its
-    # `packaging` output reflects a real push/tag diff outside pull_request
-    # too, so this needs its own explicit event_name guard to stay PR-only;
-    # without it, a push to main that happens to touch a packaging-relevant
-    # path would start running this job there as well, which is not the
-    # intended behavior (release-candidate.yml is the packaging gate for
-    # tags/release branches instead).
-    if: github.event_name == 'pull_request' && needs.changes.outputs.packaging == 'true'
-    runs-on: windows-2022
-    concurrency:
-      group: ci-${{ github.workflow }}-packaging-smoke-${{ github.event.pull_request.number || github.run_id }}
-      cancel-in-progress: true
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-
-      - name: Set up MSVC environment
-        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
-
-      # 'quick': this job is the packaging gate for the Qt Quick application.
-      # install(TARGETS exosnap) plus qt_generate_deploy_qml_app_script() in
-      # app/quick/ExoSnap/Quick/CMakeLists.txt stage the QML runtime, and
-      # scripts/build-release-artifacts.ps1 fails the run if any of it is missing
-      # from the package.
-      - name: Install Qt 6
-        uses: ./.github/actions/setup-qt
-        with:
-          profile: quick
-
-      - name: Set up sccache
-        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
-        # zizmor: ignore[cache-poisoning] -- restored on tag pushes by decision: a cold release build is ~46 min and the key is scoped to runner image + lock files; revisiting it is an ADR, not a lint fix
-
-      - name: Configure (windows-x64-ninja-release)
-        run: cmake --preset windows-x64-ninja-release -DEXOSNAP_USE_SCCACHE=ON
-
-      # -SkipConfigure: configured above. -SkipMsi: WiX/MSI is out of scope for
-      # this PR-CI subset (release-candidate.yml is the release gate for that).
-      - name: Build, install, and smoke-test packaging (release-gate subset)
-        run: pwsh -NonInteractive -File scripts/build-release-artifacts.ps1 -SkipConfigure -Preset windows-x64-ninja-release -SkipMsi
-
-      - name: sccache stats
-        if: always()
-        run: sccache --show-stats
-
       - name: Upload packaging validation report
-        if: always()
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.outputs.packaging == 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: packaging-smoke-report
@@ -782,7 +738,6 @@ jobs:
       - changes
       - build-test-debug
       - build-test-release
-      - packaging-smoke
     steps:
       - name: Evaluate the required set
         env:
@@ -797,7 +752,6 @@ jobs:
           R_CHANGES: ${{ needs.changes.result }}
           R_DEBUG: ${{ needs.build-test-debug.result }}
           R_RELEASE: ${{ needs.build-test-release.result }}
-          R_PACKAGING: ${{ needs.packaging-smoke.result }}
         run: |
           set -euo pipefail
           failed=0
@@ -838,12 +792,16 @@ jobs:
           if [ "$EVENT" = "pull_request" ] && [ "$BUILD_FILTER" != "true" ]; then release_skip=skip-ok; fi
           require "build-test (release)" "$R_RELEASE" "$release_skip"
 
-          # Pull-request-only, and only when the packaging filter matched.
-          packaging_skip=skip-ok
-          if [ "$EVENT" = "pull_request" ] && [ "$PACKAGING_FILTER" = "true" ]; then
-            packaging_skip=not-allowed
+          # The packaging smoke is a step of the release leg, armed by the
+          # `packaging` filter, and that leg is armed by the `build` filter. The
+          # smoke can therefore only run if every packaging path is also a build
+          # path -- a relation the filters state and nothing enforces. Checked
+          # here: a packaging change whose release leg was allowed to skip is a
+          # filter defect, not a pass.
+          if [ "$EVENT" = "pull_request" ] && [ "$PACKAGING_FILTER" = "true" ] && [ "$BUILD_FILTER" != "true" ]; then
+            echo "FAILED   packaging filter matched but the build filter did not: the packaging smoke could not have run"
+            failed=1
           fi
-          require packaging-smoke "$R_PACKAGING" "$packaging_skip"
 
           if [ "$failed" -ne 0 ]; then
             echo "::error::A job in the required set did not pass, and its result is not an expected skip for this event."

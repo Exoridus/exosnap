@@ -1039,7 +1039,11 @@ function New-TestBuildManifest {
 }
 
 function New-TestToolchainManifest {
-    param([string] $Version = '0.9.1-rc1', [string] $ClVersion = 'Version 19.44.35207 for x64')
+    param(
+        [string] $Version = '0.9.1-rc1',
+        [string] $ClVersion = 'Version 19.44.35207 for x64',
+        [string] $Generator = 'Ninja'
+    )
     return [ordered]@{
         product      = 'ExoSnap'
         version      = $Version
@@ -1047,6 +1051,7 @@ function New-TestToolchainManifest {
         runner       = [ordered]@{ imageLabel = 'windows-2022'; imageOs = 'Windows'; imageVersion = '20260901.1' }
         msvc         = [ordered]@{ clVersion = $ClVersion }
         cmake        = [ordered]@{ version = 'cmake version 3.31.6' }
+        build        = [ordered]@{ generator = $Generator; preset = 'windows-x64-ninja-release' }
         qt           = [ordered]@{ version = '6.9.3'; rootDir = 'C:/Qt/6.9.3/msvc2022_64' }
         wix          = [ordered]@{ version = '4.0.5' }
         ffmpeg       = [ordered]@{ url = 'https://example.invalid/ffmpeg.zip'; sha256 = 'e' * 64 }
@@ -1163,6 +1168,15 @@ Test-Case 'a release built by another toolchain blocks the release' {
         -CandidateToolchain (New-TestToolchainManifest -Version '0.9.1' -ClVersion 'Version 19.50.00000 for x64')
     Assert-Equal 1 $result.ExitCode 'a moved compiler must block'
     Assert-Match 'msvc\.clVersion changed' $result.Summary 'the reason must name the toolchain field'
+}
+
+Test-Case 'a release built by another generator blocks the release' {
+    # The generator is part of what produced the bytes: a candidate qualified from
+    # a Ninja build says nothing about a final from the Visual Studio generator.
+    $result = Invoke-PromotionScript -Directory (New-TestDirectory) `
+        -CandidateToolchain (New-TestToolchainManifest -Version '0.9.1' -Generator 'Visual Studio 17 2022')
+    Assert-Equal 1 $result.ExitCode 'a moved generator must block'
+    Assert-Match 'build\.generator changed' $result.Summary 'the reason must name the generator'
 }
 
 Test-Case 'a candidate that published no build inventory cannot be promoted from' {

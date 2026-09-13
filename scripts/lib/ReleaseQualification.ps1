@@ -1049,9 +1049,9 @@ function Compare-ReleaseToolchain {
     .DESCRIPTION
         The install-tree comparison exempts the binaries this repository compiles,
         because their bytes cannot match. This is what keeps that exemption narrow: the
-        compiler, CMake, Qt, WiX and the vendored FFmpeg that produced them have to be
-        the same ones, so "only the version string differs" stays a statement about the
-        source and not about the machine.
+        compiler, CMake, the generator and preset, Qt, WiX and the vendored FFmpeg that
+        produced them have to be the same ones, so "only the version string differs"
+        stays a statement about the source and not about the machine.
 
         The runner image version is reported rather than refused. GitHub patches an
         image between two runs of the same tag without changing anything the compared
@@ -1074,6 +1074,8 @@ function Compare-ReleaseToolchain {
     $fields = [ordered]@{
         'msvc.clVersion' = @('msvc', 'clVersion')
         'cmake.version'  = @('cmake', 'version')
+        'build.generator' = @('build', 'generator')
+        'build.preset'   = @('build', 'preset')
         'qt.version'     = @('qt', 'version')
         'wix.version'    = @('wix', 'version')
         'ffmpeg.url'     = @('ffmpeg', 'url')
