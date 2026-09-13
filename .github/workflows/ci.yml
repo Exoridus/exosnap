@@ -345,12 +345,18 @@ jobs:
           ffprobe -version
 
       - name: A/V-sync analyzer vs golden fixture
-        # Regression-guards the analyzer's event detection + drift math. The
-        # budget is intentionally loose: a 4 s clip's residual drift is bounded by
-        # frame quantization (~one 60 fps frame), not a real A/V budget, and must
-        # stay green across ffmpeg-version differences in reported PTS. The real
-        # 20 ms budget applies to live 2 h captures, not this fixture.
-        run: python scripts/dev/av-sync-check.py tests/fixtures/av-sync/clapper-golden.mp4 --max-drift-ms 45 --json
+        # Regression-guards the analyzer's event detection, its edge location and
+        # the drift fit. The budget is intentionally loose: a 4 s clip's residual
+        # drift is bounded by the 60 fps frame grid, not by a real A/V budget, and
+        # must stay green across ffmpeg-version differences in reported PTS. The
+        # real 20 ms budget applies to live multi-hour captures, not this fixture.
+        #
+        # Five markers, not two: the analyzer refuses a verdict from a reference
+        # that cannot carry one, and two markers never can. A two-marker fixture
+        # would only ever exercise the path that refusal takes.
+        run: >-
+          python scripts/dev/av-sync-check.py tests/fixtures/av-sync/clapper-golden.mp4
+          --max-drift-ms 25 --expected-markers 5 --json
 
   # ---------------------------------------------------------------------------
   # Detect whether this PR touches packaging-relevant or build/tooling-relevant

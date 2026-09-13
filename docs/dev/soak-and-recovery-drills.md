@@ -93,7 +93,7 @@ override with `--max-drift-ms` / `--max-skew-ms`.
 
 ## 2. A/V-sync drift — clapper + `av-sync-check.py`
 
-Measures A/V **clock drift** of a finished file from a two- or three-marker clapper signal.
+Measures A/V **clock drift** of a finished file from a clapper signal of two or more markers.
 
 ### Capture (user-live)
 
@@ -112,6 +112,10 @@ That schedule emits at `+10 s`, `+3600 s`, and `+7190 s`; the 3-hour equivalent
 `--print-clapper-schedule` to validate either schedule without waiting or producing a
 flash/beep. Durations and integer controls are strict: missing, zero, negative,
 nonnumeric and overflowing values fail with exit 64.
+
+**Three markers are usually not enough** — see *How many markers a budget needs*
+below. `--markers` takes any count from 2 upward, spread evenly across the span
+between the margins.
 
 The helper is a separate executable, does not acquire ExoSnap's single-instance mutex,
 and returns from the clapper path before any recorder/capture session is constructed.
@@ -136,28 +140,84 @@ python scripts/dev/av-sync-check.py <recorded-file> --max-drift-ms 20 `
 ```
 
 The analyzer pairs each flash edge to the closest beep edge within the bounded
-cross-stream skew, then recovers start/end (and, for three markers, middle) PTS:
+cross-stream skew, locates each edge to sub-sample precision, and fits a straight
+line through every marker's offset:
 
 ```
-offset_start = flash_start - beep_start
-offset_end   = flash_end   - beep_end
-drift        = offset_end - offset_start     (over the measured span)
+offset_i  = flash_i - beep_i
+offset(t) = intercept + slope * t          (weighted least squares over all markers)
+drift     = slope * span                   (the verdict's quantity)
 ```
+
+The endpoint difference `offset_end - offset_start` is still reported, as a
+diagnostic. It is not the verdict: an endpoint difference is the drift only when
+the drift is linear, and two points cannot show whether it is. A run whose offset
+moves 60 ms and comes back reports exactly zero endpoint drift.
 
 Three-marker output also includes `offset_middle`, `drift_start_middle`,
 `drift_middle_end`, recognized flash/beep PTS and raw/paired event counts. Auto mode
-accepts exactly two or three pairs and fails closed on extras; an explicit expected
-schedule may select the matching marker set around disturbances. Opposing segment
+accepts exactly two or three pairs and fails closed on extras — it has no schedule to
+check against, so nothing there separates four real markers from three plus a
+disturbance. A longer schedule is declared with `--expected-markers` (any count) and
+optionally `--marker-times-seconds`; the analyzer then picks the most evenly spaced
+matching set, which is what a clapper emits. Opposing segment
 drifts that exceed the total budget but cancel at the endpoint are printed and
-recorded in JSON as a reliability finding even when the canonical start→end gate
-passes.
+recorded in JSON as a reliability finding even when the endpoint gate passes.
+
+### The reference has to qualify before there is a verdict
+
+Before any budget is applied, the clapper signal is checked for whether it can carry
+the judgement at all. Three conditions, and the run reports **exit 3, could not
+measure** — never a pass — when any of them fails:
+
+- **At least three markers.** Two define a line exactly; their residuals are zero by
+  construction and nonlinearity is invisible.
+- **A slope uncertain by well under the budget.** Each edge is located to a finite
+  precision, and that propagates into the fitted drift. When the fit is uncertain by
+  more than a third of the budget, "within budget" and "too noisy to tell" are the
+  same measurement.
+- **Residuals inside what the edges allow.** A marker further from the fitted line
+  than its own edge uncertainty means the offset did not move linearly, and then no
+  single rate describes the run.
+
+`--unqualified-reference` prints the numbers with a verdict anyway. It is a
+diagnostic switch, not a way past a gate.
+
+### How many markers a budget needs
+
+An edge is located to the precision of its own sampling grid, sharpened by
+interpolating the threshold crossing and widened by the baseline noise. At 60 fps
+video and a 10 ms astats window, a clean marker's offset is good to roughly
+±5 ms.
+
+The uncertainty of the **total drift** does not shrink with a longer run. A longer
+span determines the *rate* proportionally better and is then multiplied by that same
+longer span, so the two cancel exactly. Only more markers, or sharper edges, help —
+which is why a campaign that lengthens a run to make a verdict possible is doing
+nothing. With `n` evenly spaced markers each good to `σ`, the total drift is
+uncertain by `σ · sqrt(12(n-1) / (n(n+1)))`:
+
+| markers | multiplier | at σ = 5 ms | at σ = 9 ms |
+|---|---|---|---|
+| 3 | 1.41 | ±7.1 ms | ±12.7 ms |
+| 5 | 1.26 | ±6.3 ms | ±11.3 ms |
+| 9 | 1.03 | ±5.2 ms | ±9.3 ms |
+| 20 | 0.74 | ±3.7 ms | ±6.6 ms |
+
+A 20 ms budget needs the uncertainty under about 6.7 ms, so it wants five markers
+at clean edges and twenty at noisy ones — and the three the schedule used to be
+limited to are not enough at either. When the reference does not
+qualify, the verdict names the count that would reach it at the edge precision it
+actually measured.
 
 **Only the drift is pass/fail.** The absolute `offset_start` carries a
 device-dependent **emission skew** (~10–50 ms: GPU present → display capture vs.
 WASAPI render → SYS loopback) that is *not* an ExoSnap error and cancels in the
-drift. So the absolute offset is reported **advisory**; the exit code is driven by
-drift (`0` within budget · `2` over · `3` unmeasurable). Hardening the absolute
-offset would need a one-time calibrated emission-skew subtraction for the setup.
+drift — it is the fit's intercept. So the absolute offset is reported **advisory**;
+the exit code is driven by the fitted drift (`0` within budget · `2` over ·
+`3` unmeasurable, which now includes an unqualified reference). Hardening the
+absolute offset would need a one-time calibrated emission-skew subtraction for the
+setup.
 
 This is the drift **acceptance method for `av-clock-slaving`**: run it before
 clock-slaving to measure the drift, after to prove the compensation. It is **not**
@@ -172,10 +232,20 @@ A/V-sync separately.
 
 The `dev-scripts` CI job provisions + version-verifies system ffmpeg and runs the
 analyzer against a committed golden clip (`tests/fixtures/av-sync/
-clapper-golden.mp4`, ~16 KB, drift ≈ 0 by construction). Regenerate it with
-`python scripts/dev/gen-av-sync-fixture.py` when the analyzer changes. The golden
-clip's residual drift (~one video-frame quantum) is expected — it guards the
-*script*, it is not a real drift budget.
+clapper-golden.mp4`, ~20 KB, five markers over 4 s, checked against a 25 ms budget).
+Regenerate it with `python scripts/dev/gen-av-sync-fixture.py` when the analyzer
+changes; `--markers` and `--duration` control the schedule.
+
+Five markers, not two. The clip's flash and beep are emitted on one synthetic
+timeline, so its *true* drift is zero — but the 60 fps frame grid quantises each
+flash edge, and with two markers the resulting uncertainty is worse than the budget
+the run would be judged against, so the analyzer correctly refuses a verdict. A
+fixture that only ever exercises that refusal guards nothing. At five markers the
+fit is certain to about ±6 ms and the clip passes on its measured drift rather than
+on a budget widened until it did.
+
+The residual drift the clip does report is the frame grid, not a real A/V budget —
+this guards the *script*.
 
 ---
 
