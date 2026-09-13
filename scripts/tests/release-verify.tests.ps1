@@ -2674,10 +2674,12 @@ $($match.Value)
     }
 }
 
-Test-Case 'machine-wide state left by an earlier install is a leftover too' {
-    # The golden image this gate runs on carries C:\ProgramData\ExoSnap, and a
-    # definition of clean that covers only the per-user locations reports that
-    # machine as clean -- so the first start it measures is not a first start.
+Test-Case 'machine-wide state under the product name is a leftover, with no cause attached' {
+    # The golden image this gate runs on carries C:\ProgramData\ExoSnap -- bring-up
+    # diagnostics, not an install: the package installs under Program Files and the
+    # product writes per-user locations only. A definition of clean that covers only
+    # the per-user locations calls that machine clean, and a message that blamed an
+    # install would send the reader looking for one that never happened.
     $worker = Join-Path (Split-Path -Parent $scriptRoot) 'scripts/lib/clean-first-start-worker.ps1'
     $source = Get-Content -LiteralPath $worker -Raw
     $match = [regex]::Match($source, '(?ms)^function Get-ExoSnapResidue \{.*?^\}')
@@ -2697,6 +2699,7 @@ $($match.Value)
 "@
         $output = & pwsh -NoProfile -Command $probe 2>&1 | Out-String
         Assert-True ($output -match 'machine-wide state') "the machine-wide directory has to be named: $output"
+        Assert-True ($output -notmatch 'earlier install') "no install creates this path, so none may be blamed: $output"
     }
     finally {
         Remove-Item -LiteralPath $localAppData -Recurse -Force -ErrorAction SilentlyContinue

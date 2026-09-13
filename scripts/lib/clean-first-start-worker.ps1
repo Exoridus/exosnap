@@ -138,9 +138,14 @@ function Get-ExoSnapResidue {
         $found += 'a per-user registry key (HKCU:\SOFTWARE\Codexo\ExoSnap)'
     }
 
+    # Named without a cause attached. No ExoSnap install creates this directory --
+    # the package installs under Program Files and the product writes per-user
+    # locations -- so whatever is here was put there by something else running under
+    # the product's name, and a message that blamed an install would send the reader
+    # looking for one that does not exist.
     $machineState = Join-Path $env:ProgramData 'ExoSnap'
     if (Test-Path -LiteralPath $machineState) {
-        $found += "machine-wide state from an earlier install ($machineState)"
+        $found += "machine-wide state under the product's name ($machineState)"
     }
 
     # Typed rather than wrapped with a comma. Every caller reads this through @(),
