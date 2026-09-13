@@ -21,17 +21,26 @@
     schema   = 1
 
     # Which virtual display driver this image is built with, and which one the
-    # capture work was qualified on. They are not the same today: the pins below are
-    # the MTT driver, and the runs that reached 4K120 through Graphics Capture used
-    # SudoVDA. Recorded rather than left implicit, because a campaign whose evidence
-    # cannot name the image it came from is a campaign nobody can repeat -- and a
-    # scenario qualified on one driver must not quietly run on the other.
+    # capture work was qualified on. Both are the MTT driver pinned below, and a
+    # scenario qualified on one driver must not quietly run on the other -- so they
+    # are recorded rather than left implicit, even while they agree.
     #
-    # Reconciling them is an image rebuild: the SudoVDA package needs its own version
-    # and SHA-256 pin recorded the same way every package here is, and the golden
-    # image has to be built from it before anything may claim to be qualified on it.
+    # They did not always agree. The qualified profile named SudoVDA on the strength
+    # of the 4K120 Graphics Capture runs, and the matched control that was run for
+    # exactly that question does not support singling it out: 4K120 captured 112.332
+    # FPS with MTT against 112.716 with SudoVDA at the same GPU utilisation, and
+    # unattended Desktop Duplication was demonstrated on both once the capture path
+    # settles. What SudoVDA does offer is a dynamic monitor lifecycle for the test
+    # machine, which is a harness capability rather than a capture-quality claim, and
+    # the image that ran it was ReviOS-derived -- a non-stock Windows underneath every
+    # release gate. The recording application has never been qualified on SudoVDA.
+    #
+    # Naming SudoVDA here therefore claimed something nobody measured and made every
+    # scenario that requires the qualified profile unrunnable. Moving to SudoVDA later
+    # is an image rebuild on stock Windows with its package pinned the way every
+    # package here is, plus qualifying the application on it.
     displayProfile          = 'mtt'
-    qualifiedDisplayProfile = 'sudovda'
+    qualifiedDisplayProfile = 'mtt'
 
     packages = @(
         @{

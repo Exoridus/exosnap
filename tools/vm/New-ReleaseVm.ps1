@@ -58,7 +58,7 @@ param(
     # No ValidateSet: `pwsh -File script.ps1 -Phase gpu,driver` does not parse
     # PowerShell array syntax, so the whole thing arrives as one string and a set
     # attribute refuses it before anything can split it. Validated below instead.
-    [string[]] $Phase = @('create', 'install', 'gpu', 'driver', 'provision'),
+    [string[]] $Phase = @('create', 'install', 'gpu', 'driver', 'provision', 'seal'),
     [string] $HostDriverPackage,
     [string] $ProvisionSwitchName = 'Default Switch',
     [long] $MemoryBytes = 0,
@@ -71,7 +71,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$knownPhases = @('create', 'install', 'gpu', 'driver', 'provision')
+$knownPhases = @('create', 'install', 'gpu', 'driver', 'provision', 'seal')
 $Phase = @($Phase | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } |
         Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 $unknownPhase = @($Phase | Where-Object { $_ -notin $knownPhases })

@@ -110,6 +110,7 @@ VMs boot from the installed disk and need no DVD confirmation.
 | gpu | MMIO window, `Add-VMGpuPartitionAdapter`, the partition triples | Hyper-V only attaches a partition to a stopped machine |
 | driver | the host adapter's driver files, one `Copy-VMFile` per file | needs the machine running again |
 | provision | `provision.ps1` over PowerShell Direct | needs a logged-on session |
+| seal | removes what bringing the image up wrote, then refuses to freeze an image that still holds state of its own | runs last, after the probes of step 7 have left their output |
 
 **5. Review the manifest.** The tracked manifest already contains the exact versions
 and hashes used by the recipe. See the next section before intentionally updating a
@@ -135,9 +136,7 @@ mode, and frames arriving rather than only timeouts. Compare both against the sa
 probes run on the host. **Either one failing moves the gates that need it back to the
 host** -- that is a supported outcome, not a broken image.
 
-**8. Freeze the image.** Stop the machine, and treat `golden.vhdx` as read-only from
-then on. Every run takes a differencing disk from it; a run that wrote into the parent
-would end the property the whole design exists for.
+**8. Freeze the image.** The `seal` phase clears what the probes wrote, refuses the freeze if anything else of the product's is still there, and stops the machine. Treat `golden.vhdx` as read-only from then on. Every run takes a differencing disk from it; a run that wrote into the parent would end the property the whole design exists for.
 
 ## Pinned provisioning
 
@@ -179,17 +178,22 @@ between two campaigns into an investigation of the image rather than of the prod
 
 ## Which image a campaign ran on
 
-Two facts decide what an image is, and they are not the same today.
+Two facts decide what an image is. `displayProfile` in the provisioning manifest says which virtual display driver the image is built with; `qualifiedDisplayProfile` says which one the capture work was qualified on. They are the MTT driver today, and they stay two fields even while they agree, because a scenario qualified on one driver must not quietly run on the other.
 
-`displayProfile` in the provisioning manifest says which virtual display driver the
-image is built with. `qualifiedDisplayProfile` says which one the capture work was
-qualified on. The manifest currently pins the MTT driver, and the runs that reached
-4K120 through Graphics Capture used SudoVDA -- so the two differ, and the recipe says
-so rather than leaving it implicit. Reconciling them is an image rebuild: SudoVDA
-needs its own version and SHA-256 pin recorded the way every package here is, and the
-golden image has to be built from it before anything may claim to be qualified on it.
+The qualified profile named SudoVDA until 2026-09-13, on the strength of the 4K120 Graphics Capture runs. The matched control that was run for exactly that question does not support singling it out: 4K120 captured 112.332 FPS with MTT against 112.716 with SudoVDA at the same GPU utilisation, and unattended Desktop Duplication was demonstrated on both once the capture path settles. What SudoVDA offers is a dynamic monitor lifecycle for the test machine -- a harness capability, not a capture-quality claim -- and the image that ran it was ReviOS-derived, which would put a non-stock Windows underneath every release gate. The recording application has never been qualified on SudoVDA. Naming it therefore claimed something nobody measured while making every scenario that requires the qualified profile unrunnable. Moving to it later is an image rebuild on stock Windows with its package pinned the way every package here is, plus qualifying the application on it.
 
-Until then a run says so rather than choosing between passing and failing. The guest is asked which virtual display driver it actually runs, by the root-enumerated device that driver binds to, and the answer is compared with the profile the scenario was qualified on. A profile whose device identity the recipe has not recorded -- which is the state SudoVDA is in -- makes that comparison **unverifiable**: the scenario is unrunnable on this image, not failing on it, and a run reports it that way. Nothing substitutes a device identity that was never measured, because a claim of qualification is exactly what an unpinned profile cannot support.
+A run measures this rather than trusting it. The guest is asked which virtual display driver it actually runs, by the root-enumerated device that driver binds to, and the answer is compared with the profile the scenario was qualified on. The comparison has three outcomes, not two: **qualified**, **not-qualified**, and **unverifiable** for a profile whose device identity the recipe has not recorded. Unverifiable means the scenario is unrunnable on that image, not failing on it. Nothing substitutes a device identity that was never measured, because a claim of qualification is exactly what an unpinned profile cannot support.
+
+## Sealing an image
+
+The last phase of a build is `seal`, and it exists because bringing an image up leaves state in it. The probes of step 7 and the experiments that drive them write under the product's own name -- `C:\ProgramData\ExoSnap\DxgiDuplicationExperiment` and `C:\ExoSnap-DxgiTest` -- and an image frozen with that in it is not the clean machine the first-start gate is premised on. That is not hypothetical: it is how the image frozen on 2026-09-11 reached a campaign, which reported an environment precondition instead of a product verdict.
+
+Two steps, in this order, and the order is the point:
+
+1. **Clear**, by exact path. Only what the recipe knows it created, listed in `BringUpArtifact`. A parent directory goes when clearing emptied it; a parent that still holds something is left alone. Nothing searches for residue -- deleting what a sweep happened to match would turn an unexplained leftover into a silently clean image.
+2. **Assert**, with the first-start gate's own residue definition, read out of the worker rather than restated. Anything left stops the freeze and is named. Recognise it and add it to `BringUpArtifact`; do not recognise it and find out what put it there.
+
+An unknown leftover is never cleaned automatically. It is the one thing worth finding out about, and each one otherwise costs a full machine build to discover from the other end.
 
 Beside the golden image sits `image-fingerprint.json`: the display profile, the
 monitor mode the gates assert against, a digest over every package pin, the Windows

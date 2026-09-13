@@ -213,6 +213,18 @@ function Get-ReleaseVmDefault {
         # purpose, because the image that would carry it has not been built and
         # inventing an identity would let a run claim a qualification nobody measured.
         DisplayProfileHardwareId = @{ mtt = 'Root\MttVDD' }
+        # What bringing the image up leaves behind, by exact path. The probes and the
+        # experiments that drive them write here, and an image frozen with their
+        # output in it is not the clean machine the first-start gate is premised on.
+        #
+        # Exact subpaths, never a parent: the product's ProgramData directory is its
+        # own namespace, and removing it wholesale would delete residue nobody has
+        # looked at yet along with the diagnostics. Anything under it that is not
+        # named here has to reach the seal assertion and stop the freeze.
+        BringUpArtifact = @(
+            'C:\ProgramData\ExoSnap\DxgiDuplicationExperiment'
+            'C:\ExoSnap-DxgiTest'
+        )
         # Microsoft's PCI vendor id. A GPU-P guest binds to the paravirtual device,
         # which reports this rather than the vendor whose silicon is being
         # partitioned; the vendor's kernel-mode driver never leaves the host.
@@ -709,7 +721,7 @@ function New-ReleaseVmCreatePlan {
     .SYNOPSIS
         The plan that produces the golden image.
     .DESCRIPTION
-        Five phases, because three of them cannot run while the machine is in the
+        Six phases, because several of them cannot run while the machine is in the
         state the previous one leaves it in:
 
           create   the machine, its disk, its firmware, both DVD drives
@@ -717,6 +729,8 @@ function New-ReleaseVmCreatePlan {
           gpu      the GPU partition, which Hyper-V only accepts on a stopped VM
           driver   the host's own display driver files, copied in one by one
           provision the guest script, over PowerShell Direct
+          seal      remove what bringing the image up wrote, and refuse to freeze
+                    an image that still holds state of its own
 
         Checkpoints are disabled in the create phase rather than later: a virtual
         machine with a GPU partition cannot be checkpointed at all, and a machine
@@ -739,7 +753,7 @@ function New-ReleaseVmCreatePlan {
         [int] $ProcessorCount = 4,
         [long] $DiskSizeBytes = 60GB,
         [System.Collections.IDictionary] $GpuPartition,
-        [string[]] $Phase = @('create', 'install', 'gpu', 'driver', 'provision'),
+        [string[]] $Phase = @('create', 'install', 'gpu', 'driver', 'provision', 'seal'),
         [int] $InstallTimeoutMinutes = 90
     )
     if (-not $GpuPartition) { $GpuPartition = $script:GpuPartitionDefault }
@@ -875,6 +889,20 @@ function New-ReleaseVmCreatePlan {
             -Command 'Disconnect-VMNetworkAdapter' -Parameters ([ordered]@{ VMName = $VMName }) `
             -AlwaysRun -RunIfCompleted 'provision-network' `
             -Detail 'the frozen image and ordinary campaigns start disconnected'
+    }
+
+    if ($Phase -contains 'seal') {
+        $plan += New-ReleaseVmStep -Name 'clear-bring-up' -Command 'Clear-ReleaseVmBringUpArtifact' `
+            -Parameters ([ordered]@{ VMName = $VMName; Path = $defaults.BringUpArtifact }) -NeedsCredential `
+            -Detail 'the exact paths the probes and their experiments write, and no others'
+
+        $plan += New-ReleaseVmStep -Name 'assert-sealed' -Command 'Assert-ReleaseVmSealed' `
+            -Parameters ([ordered]@{ VMName = $VMName }) -NeedsCredential `
+            -Detail "the first-start gate's own definition of clean, asked while the image can still be fixed"
+
+        $plan += New-ReleaseVmStep -Name 'stop-for-freeze' -Command 'Stop-ReleaseVmIfRunning' `
+            -Parameters ([ordered]@{ VMName = $VMName }) `
+            -Detail 'a golden image is the parent of every run disk and is never written to again'
     }
 
     return $plan
@@ -2391,6 +2419,91 @@ function Copy-ReleaseVmDirectory {
     return $files.Count
 }
 
+function Clear-ReleaseVmBringUpArtifact {
+    <#
+    .SYNOPSIS
+        Removes the diagnostics an image build leaves in the guest, and nothing else.
+    .DESCRIPTION
+        Only the exact paths the recipe knows it created, and only those. A parent
+        directory is removed when removing them emptied it, because that container is
+        the recipe's own; a parent that still holds something is left alone, so the
+        assertion after this can see it.
+
+        Nothing here searches for residue. Deleting what a sweep happened to match
+        would turn an unexplained leftover into a silently clean image, which is the
+        state this whole gate exists to catch.
+    .OUTPUTS
+        What was removed, as strings.
+    #>
+    [OutputType([string[]])]
+    param(
+        [Parameter(Mandatory)] [string] $VMName,
+        [Parameter(Mandatory)] [System.Management.Automation.PSCredential] $Credential,
+        [string[]] $Path
+    )
+    if (-not $Path) { $Path = (Get-ReleaseVmDefault).BringUpArtifact }
+    $removed = Invoke-Command -VMName $VMName -Credential $Credential -ArgumentList (, [string[]] $Path) -ScriptBlock {
+        param([string[]] $Targets)
+        $done = @()
+        foreach ($target in $Targets) {
+            if (-not (Test-Path -LiteralPath $target)) { continue }
+            Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction Stop
+            $done += $target
+
+            $parent = Split-Path -Parent $target
+            if ($parent -and (Test-Path -LiteralPath $parent) -and
+                @(Get-ChildItem -LiteralPath $parent -Force -ErrorAction SilentlyContinue).Count -eq 0) {
+                Remove-Item -LiteralPath $parent -Force -ErrorAction Stop
+                $done += "$parent (emptied by the above)"
+            }
+        }
+        return , [string[]] $done
+    } -ErrorAction Stop
+    return [string[]] @($removed)
+}
+
+function Assert-ReleaseVmSealed {
+    <#
+    .SYNOPSIS
+        Refuses to freeze an image that still holds state of its own.
+    .DESCRIPTION
+        The same question the first-start gate asks, asked while the image can still
+        be fixed. A golden image that fails it produces a campaign that reports an
+        environment precondition instead of a product verdict -- one run per residue,
+        each costing a machine build to discover.
+
+        The check is the gate's own residue definition, read out of the worker rather
+        than restated here: two definitions of clean would drift, and the one that
+        matters is the one the gate will apply.
+    #>
+    param(
+        [Parameter(Mandatory)] [string] $VMName,
+        [Parameter(Mandatory)] [System.Management.Automation.PSCredential] $Credential,
+        [string] $WorkerPath
+    )
+    if (-not $WorkerPath) {
+        $WorkerPath = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'scripts/lib/clean-first-start-worker.ps1'
+    }
+    $source = Get-Content -LiteralPath $WorkerPath -Raw
+    $probe = [regex]::Match($source, '(?ms)^function Get-ExoSnapResidue \{.*?^\}')
+    if (-not $probe.Success) { throw "Get-ExoSnapResidue was not found in $WorkerPath" }
+
+    $residue = @(Invoke-Command -VMName $VMName -Credential $Credential -ArgumentList $probe.Value -ScriptBlock {
+            param([string] $Function)
+            Set-StrictMode -Version Latest
+            . ([scriptblock]::Create($Function))
+            return , [string[]] @(Get-ExoSnapResidue)
+        } -ErrorAction Stop)
+
+    if ($residue.Count -gt 0) {
+        throw ("'$VMName' cannot be frozen as a golden image: it still holds " +
+            "$($residue.Count) leftover(s) that the clean-first-start gate would refuse:`n    " +
+            ($residue -join "`n    ") +
+            "`n  Remove what you recognise, and find out what put anything you do not.")
+    }
+    return $residue
+}
+
 function Copy-ReleaseVmDriverStore {
     <#
     .SYNOPSIS
@@ -2619,6 +2732,8 @@ Export-ModuleMember -Function @(
     'Copy-ReleaseVmDirectory'
     'Copy-ReleaseVmDirectoryBack'
     'Copy-ReleaseVmDriverStore'
+    'Clear-ReleaseVmBringUpArtifact'
+    'Assert-ReleaseVmSealed'
     'Invoke-ReleaseVmProvisioning'
     'Invoke-ReleaseVmCommand'
 )

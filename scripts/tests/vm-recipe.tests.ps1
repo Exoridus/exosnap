@@ -826,11 +826,67 @@ Test-Case 'the manifest says which display profile it describes' {
 }
 
 Test-Case 'the manifest states which profile the capture work was qualified on' {
-    # Recorded rather than assumed: the committed recipe and the qualified setup
-    # differ today, and a harness that cannot say so will report evidence from one as
-    # if it came from the other.
+    # Recorded rather than assumed, and it has to be a profile this recipe can
+    # actually identify: naming one whose device identity is unpinned makes every
+    # scenario that requires the qualified profile unrunnable, which is what naming
+    # SudoVDA here did. The two agree today, and they are still two fields, because a
+    # scenario qualified on one driver must not quietly run on the other.
     $manifest = Import-PowerShellDataFile -LiteralPath $script:ManifestPath
-    Assert-Equal 'sudovda' $manifest.qualifiedDisplayProfile 'the capture runs that reached 4K120 used SudoVDA'
+    $known = (Get-ReleaseVmDefault).DisplayProfileHardwareId
+
+    Assert-True ($known.Contains($manifest.qualifiedDisplayProfile)) `
+        "the qualified profile '$($manifest.qualifiedDisplayProfile)' has no pinned device identity, so no run could claim it"
+    Assert-True ($known.Contains($manifest.displayProfile)) `
+        "the built profile '$($manifest.displayProfile)' has no pinned device identity, so no run could measure it"
+
+    $verdict = Test-ReleaseVmDisplayProfile -Required $manifest.qualifiedDisplayProfile `
+        -Measured @{ HardwareIds = @($known[$manifest.displayProfile]) }
+    Assert-Equal 'qualified' $verdict.Verdict `
+        "an image built as '$($manifest.displayProfile)' has to satisfy the profile it declares as qualified: $($verdict.Detail)"
+}
+
+Test-Case 'the seal phase clears what it created and then refuses an image that still holds state' {
+    # The order is the point: removing the known paths cannot be the last word,
+    # because what makes an image bad is the leftover nobody knew about.
+    $plan = New-ReleaseVmCreatePlan -VMName 'vm' -Root 'T:\images' -GoldenDisk 'T:\images\golden.vhdx' `
+        -AnswerIso 'T:\images\unattend.iso' -AnswerFile $script:AnswerFile -IsoPath 'W:\win11.iso' `
+        -ProvisionScript $script:ProvisionScript -ProvisionManifest $script:ManifestPath -Phase @('seal')
+
+    $names = @($plan | ForEach-Object { $_.Name })
+    Assert-Equal 'clear-bring-up' $names[0] 'the known diagnostics go first'
+    Assert-Equal 'assert-sealed' $names[1] 'and the image is then held to the gate own definition of clean'
+    Assert-Equal 'stop-for-freeze' $names[2] 'a golden image is frozen stopped'
+
+    $clear = @($plan | Where-Object Name -eq 'clear-bring-up')[0]
+    foreach ($path in @($clear.Parameters['Path'])) {
+        Assert-True ($path -notin @('C:\ProgramData\ExoSnap', 'C:\ProgramData')) `
+            "$path is a namespace, not an artefact; removing it would delete residue nobody has looked at"
+    }
+    Assert-True (@($clear.Parameters['Path']) -contains 'C:\ProgramData\ExoSnap\DxgiDuplicationExperiment') `
+        'the experiment output that was found in the image is named exactly'
+}
+
+Test-Case 'the seal assertion asks the gate own residue definition, not a second copy of it' {
+    # Two definitions of clean would drift, and the one that decides a campaign is the
+    # worker's. The seal step reads it out of the worker rather than restating it.
+    $module = Get-Content -LiteralPath (Join-Path $script:VmRoot 'ReleaseVm.psm1') -Raw
+    $assertion = [regex]::Match($module, '(?ms)^function Assert-ReleaseVmSealed \{.*?^\}')
+    Assert-True $assertion.Success 'Assert-ReleaseVmSealed was not found'
+    Assert-Match 'clean-first-start-worker\.ps1' $assertion.Value 'the worker is the source of the definition'
+    Assert-Match 'Get-ExoSnapResidue' $assertion.Value 'and its probe is what runs in the guest'
+}
+
+Test-Case 'clearing bring-up artefacts never removes a path it was not given' {
+    # Read as source: the removal runs in a guest. What matters is that it iterates
+    # the paths it was handed and does not search for more.
+    $module = Get-Content -LiteralPath (Join-Path $script:VmRoot 'ReleaseVm.psm1') -Raw
+    $clear = [regex]::Match($module, '(?ms)^function Clear-ReleaseVmBringUpArtifact \{.*?^\}')
+    Assert-True $clear.Success 'Clear-ReleaseVmBringUpArtifact was not found'
+
+    $body = $clear.Value
+    Assert-NoMatch 'Get-ChildItem\s+-LiteralPath\s+\$target\s+-Recurse' $body 'it does not enumerate to find things to delete'
+    Assert-Match 'foreach \(\$target in \$Targets\)' $body 'it iterates exactly what it was given'
+    Assert-Match 'Count -eq 0' $body 'an emptied parent is removed only when it is actually empty'
 }
 
 Test-Case 'the fingerprint a manifest contributes carries the profile and the display mode' {
