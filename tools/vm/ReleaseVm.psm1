@@ -1083,14 +1083,17 @@ function New-ReleaseVmReadinessRequirement {
         The account the campaign must run as. The token decides what a capture is
         allowed to see, so a run that silently became SYSTEM is a different test.
     .PARAMETER Display
-        Width, Height and RefreshHz that at least one attached display must report.
+        Width, Height and RefreshHz that one attached display path must be in, all
+        three on the same path.
     .PARAMETER ControlChannel
         The product control channel must answer from inside the guest.
     .PARAMETER GpuBoundTo
-        The host GPU identity this run partitioned. The guest adapter is held against
-        it on what a partition preserves -- vendor and device ids and the driver
-        version -- so a guest that quietly fell back to the Basic Render Driver stops
-        the run instead of producing evidence attributed to the wrong GPU.
+        The host GPU identity this run partitioned, from Get-ReleaseVmHostGpu. The
+        guest is held to it on what a partition actually preserves -- the adapter it
+        presents and the driver package staged into it -- so a guest that quietly
+        fell back to the Basic Render Driver, or holds a driver from a different
+        package than the host is running, stops the run instead of producing evidence
+        attributed to the wrong GPU.
     #>
     [OutputType([hashtable])]
     param(

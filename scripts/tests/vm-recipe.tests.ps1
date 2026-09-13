@@ -1507,6 +1507,26 @@ Test-Case 'run cleanup is ownership-gated and does not suppress cmdlet failures'
     }
 }
 
+Test-Case 'a run that proves its GPU binding holds the guest to the host adapter and the pinned mode' {
+    # Without this switch no run ever executed the binding rules: the plan builder
+    # accepts a readiness requirement, and nothing composed one. The dry run shows the
+    # two steps the switch adds and the identity they hold the guest to. Whether the
+    # host has a matching adapter decides between the plan and a named refusal; both
+    # are asserted, because this case runs on machines of either kind.
+    $result = Invoke-Script -Path $script:RunScript -Arguments @('-DryRun', '-RunId', 'bound-001',
+        '-Root', 'T:\images', '-GuestCommand', 'verify.exe', '-ProveGpuBinding')
+    Assert-Equal 0 $result.ExitCode 'a dry run is not a failure'
+    if ($result.Output -match 'host-gpu-unmeasured') {
+        Assert-Match 'could not be measured' $result.Output 'a host with no matching adapter is told so by name'
+    }
+    else {
+        Assert-Match 'gpu binding\s*:' $result.Output 'the identity the guest is held to is printed'
+        Assert-Match '2560x1440@60Hz' $result.Output 'the mode comes from the provisioning manifest, first pinned rate'
+    }
+    Assert-Match 'start-agent' $result.Output 'the receipt has to come from the interactive agent'
+    Assert-Match 'guest-readiness' $result.Output 'and the guest is held to the requirement before the campaign'
+}
+
 Test-Case 'Invoke-ReleaseVmRun -DryRun accepts a network mode per call' {
     $result = Invoke-Script -Path $script:RunScript -Arguments @('-DryRun', '-RunId', 'dry-002',
         '-Root', 'T:\images', '-Network', 'Connected')
