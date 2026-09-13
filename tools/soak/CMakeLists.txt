@@ -79,4 +79,5 @@ if(Python3_EXECUTABLE)
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/scripts/dev/test_av_sync_check.py"
     )
     set_tests_properties(soak.av_sync_analyzer_unit PROPERTIES TIMEOUT 30)
+    exosnap_set_test_phase(soak.av_sync_analyzer_unit hermetic)
 endif()

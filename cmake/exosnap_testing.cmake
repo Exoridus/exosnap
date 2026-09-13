@@ -1,8 +1,28 @@
 include_guard(GLOBAL)
 
+# The execution phases a test can belong to, and what each one claims about the
+# machine it needs. Every CTest entry carries exactly one of them as a
+# `phase.<name>` label, so a caller can ask for a phase instead of guessing from a
+# test's name which runner it is safe on.
+#
+#   hermetic  Nothing outside the process. No hardware query, no network, no
+#             desktop, no machine state. Runs anywhere, including a container.
+#   cpu       Real CPU work or real time: an encode, a soak, a timing assertion.
+#             Deterministic in result, not in duration, so it belongs off the
+#             fastest lane rather than off a headless runner.
+#   gpu       Needs a graphics adapter: a D3D11 device, DXGI enumeration, NVENC.
+#             On a runner without one these can only skip, and a phase that skips
+#             is not a phase that passed.
+#   desktop   Needs an interactive desktop: a window, focus, a Qt GUI surface.
+#   vm        Needs a disposable machine of its own.
+#   human     Needs a person to do something no API can do.
+#
+# The order is deliberate: each phase needs everything the ones before it need.
+set(EXOSNAP_TEST_PHASES hermetic cpu gpu desktop vm human)
+
 function(exosnap_add_gtest)
   set(options)
-  set(one_value_args NAME TEST_PREFIX TIMEOUT)
+  set(one_value_args NAME TEST_PREFIX TIMEOUT PHASE)
   set(multi_value_args SOURCES LIBRARIES LABELS)
 
   cmake_parse_arguments(
@@ -177,11 +197,50 @@ function(exosnap_add_gtest)
   endif()
   set_tests_properties("${_exosnap_test_name}" PROPERTIES TIMEOUT ${_exosnap_timeout})
 
-  # Optional CTest labels. `live` marks binaries that issue real hardware queries
-  # (DXGI adapter enumeration, NVENC/WASAPI probes) and therefore behave
-  # differently — or only GTEST_SKIP — on GPU-/device-less runners. `ctest -LE
-  # live` then runs the fully-deterministic subset with no hardware present.
-  if(ARG_LABELS)
-    set_tests_properties("${_exosnap_test_name}" PROPERTIES LABELS "${ARG_LABELS}")
+  # The execution phase, as a label, on every entry without exception. Default
+  # `hermetic`: a gtest binary that was given no phase links against the libraries
+  # and asks the machine for nothing, which is what hermetic means. A binary that
+  # does need something says so, and the guard test refuses the combination that
+  # would be a lie -- `live` together with `phase.hermetic`.
+  if(ARG_PHASE)
+    set(_exosnap_phase "${ARG_PHASE}")
+  else()
+    set(_exosnap_phase "hermetic")
   endif()
+
+  if(NOT _exosnap_phase IN_LIST EXOSNAP_TEST_PHASES)
+    message(FATAL_ERROR
+      "exosnap_add_gtest(${ARG_NAME}): PHASE '${_exosnap_phase}' is not one of ${EXOSNAP_TEST_PHASES}")
+  endif()
+
+  # Optional CTest labels alongside it. `live` marks binaries that issue real
+  # hardware queries (DXGI adapter enumeration, NVENC/WASAPI probes) and therefore
+  # behave differently -- or only GTEST_SKIP -- on GPU-/device-less runners.
+  # `ctest -LE live` then runs the fully-deterministic subset with no hardware.
+  set(_exosnap_labels "phase.${_exosnap_phase}")
+  if(ARG_LABELS)
+    list(APPEND _exosnap_labels ${ARG_LABELS})
+  endif()
+
+  set_tests_properties("${_exosnap_test_name}" PROPERTIES LABELS "${_exosnap_labels}")
+endfunction()
+
+# Declares the execution phase of a test registered with a bare `add_test`.
+#
+# Separate from exosnap_add_gtest because a script test, a QML runner and a probe
+# are all registered directly, and every CTest entry has to carry a phase for the
+# guard to mean anything.
+function(exosnap_set_test_phase test_name phase)
+  if(NOT phase IN_LIST EXOSNAP_TEST_PHASES)
+    message(FATAL_ERROR
+      "exosnap_set_test_phase(${test_name}): phase '${phase}' is not one of ${EXOSNAP_TEST_PHASES}")
+  endif()
+
+  get_test_property("${test_name}" LABELS _exosnap_existing)
+  if(_exosnap_existing STREQUAL "NOTFOUND")
+    set(_exosnap_existing "")
+  endif()
+
+  list(APPEND _exosnap_existing "phase.${phase}")
+  set_tests_properties("${test_name}" PROPERTIES LABELS "${_exosnap_existing}")
 endfunction()

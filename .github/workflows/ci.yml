@@ -388,6 +388,14 @@ jobs:
       # they are excluded here rather than trusted to skip themselves — a future
       # runner-image change (or a new live test that forgets the self-skip)
       # would otherwise fail silently past this gate.
+      #
+      # `live` and the execution phases are two axes and neither replaces the
+      # other. A phase says what KIND of machine a test needs; `live` says the
+      # test reads real machine state. The quick.* tests are phase.desktop and run
+      # here because an offscreen Qt platform is a desktop surface — except the
+      # two that also carry `live` because they need the native platform and the
+      # real cursor. Selecting by phase alone would either lose the first group or
+      # keep the second.
       - name: Test (windows-x64-ninja-debug)
         run: >-
           pwsh -NonInteractive -File scripts/run-tests.ps1
@@ -513,6 +521,14 @@ jobs:
       # they are excluded here rather than trusted to skip themselves — a future
       # runner-image change (or a new live test that forgets the self-skip)
       # would otherwise fail silently past this gate.
+      #
+      # `live` and the execution phases are two axes and neither replaces the
+      # other. A phase says what KIND of machine a test needs; `live` says the
+      # test reads real machine state. The quick.* tests are phase.desktop and run
+      # here because an offscreen Qt platform is a desktop surface — except the
+      # two that also carry `live` because they need the native platform and the
+      # real cursor. Selecting by phase alone would either lose the first group or
+      # keep the second.
       #
       # Not on pull_request: the debug leg already carried the full suite, and
       # this leg's PR-tier job is configure/compile/link (see the job comment).

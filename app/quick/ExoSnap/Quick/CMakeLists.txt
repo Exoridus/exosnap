@@ -811,6 +811,7 @@ set_tests_properties(quick.qml.about_smoke PROPERTIES
     LABELS "quick"
     ENVIRONMENT "EXOSNAP_CONFIG_DIR=${CMAKE_CURRENT_BINARY_DIR}/test-config/about_smoke"
 )
+exosnap_set_test_phase(quick.qml.about_smoke desktop)
 
 # The four non-Record destinations are loaded by URL so their documents stay out
 # of the startup compile (QCR-615). That the pages are absent until navigation,
@@ -823,6 +824,7 @@ set_tests_properties(quick.qml.navigation_lifecycle PROPERTIES
     LABELS "quick"
     ENVIRONMENT "EXOSNAP_CONFIG_DIR=${CMAKE_CURRENT_BINARY_DIR}/test-config/navigation_lifecycle"
 )
+exosnap_set_test_phase(quick.qml.navigation_lifecycle desktop)
 
 # An isolated run has to isolate Qt's QML bytecode cache as well — see the
 # script for why EXOSNAP_CONFIG_DIR does not reach it on its own.
@@ -834,6 +836,7 @@ add_test(
         -P ${PROJECT_SOURCE_DIR}/cmake/tests/assert_qml_cache_isolated.cmake
 )
 set_tests_properties(quick.qml.disk_cache_isolation PROPERTIES LABELS "quick")
+exosnap_set_test_phase(quick.qml.disk_cache_isolation hermetic)
 
 # The fixed-dark canon for the five capture-excluded overlays, checked at the
 # source because nothing downstream can observe it: those windows defeat every
@@ -845,6 +848,7 @@ add_test(
         -P ${PROJECT_SOURCE_DIR}/cmake/tests/assert_overlays_are_fixed_dark.cmake
 )
 set_tests_properties(quick.qml.overlays_are_fixed_dark PROPERTIES LABELS "quick")
+exosnap_set_test_phase(quick.qml.overlays_are_fixed_dark hermetic)
 
 qt_add_executable(record_controls_qml_tests
     ${EXOSNAP_QUICK_TESTS_DIR}/qml_test_main.cpp
@@ -1044,6 +1048,7 @@ set_tests_properties(quick.qml.record_controls PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QML_IMPORT_PATH=${_exosnap_quick_qt_prefix}/qml"
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${_exosnap_quick_qt_prefix}/bin"
 )
+exosnap_set_test_phase(quick.qml.record_controls desktop)
 
 # The Edit surface's keyboard contract (QCR-504). A second QML test executable
 # rather than more files in the one above, because EditTimeline.qml takes three
@@ -1146,6 +1151,7 @@ set_tests_properties(quick.qml.edit_timeline PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QML_IMPORT_PATH=${_exosnap_quick_qt_prefix}/qml"
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${_exosnap_quick_qt_prefix}/bin"
 )
+exosnap_set_test_phase(quick.qml.edit_timeline desktop)
 
 # The Record source picker's QML contract. A third QML test executable, for the
 # reason the edit runner states: RecordSourcePicker takes a REQUIRED, C++-typed
@@ -1221,6 +1227,7 @@ set_tests_properties(quick.qml.record_source_picker PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QML_IMPORT_PATH=${_exosnap_quick_qt_prefix}/qml"
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${_exosnap_quick_qt_prefix}/bin"
 )
+exosnap_set_test_phase(quick.qml.record_source_picker desktop)
 
 add_test(NAME quick.qml.record_preview_smoke COMMAND exosnap --preview-smoke-test)
 set_tests_properties(quick.qml.record_preview_smoke PROPERTIES
@@ -1229,6 +1236,7 @@ set_tests_properties(quick.qml.record_preview_smoke PROPERTIES
     RUN_SERIAL TRUE
     SKIP_RETURN_CODE 3
 )
+exosnap_set_test_phase(quick.qml.record_preview_smoke desktop)
 
 # Walks every navigation destination, reports the pointer over each control that
 # declares a pointing hand, and compares what Qt thinks the window cursor is with
@@ -1241,6 +1249,7 @@ set_tests_properties(quick.qml.cursor_audit PROPERTIES
     ENVIRONMENT_MODIFICATION "QT_QPA_PLATFORM=set:windows"
     RUN_SERIAL TRUE
 )
+exosnap_set_test_phase(quick.qml.cursor_audit desktop)
 
 add_test(NAME quick.qml.record_preview_lifecycle COMMAND exosnap --preview-lifecycle-test)
 set_tests_properties(quick.qml.record_preview_lifecycle PROPERTIES
@@ -1249,6 +1258,7 @@ set_tests_properties(quick.qml.record_preview_lifecycle PROPERTIES
     RUN_SERIAL TRUE
     SKIP_RETURN_CODE 3
 )
+exosnap_set_test_phase(quick.qml.record_preview_lifecycle desktop)
 
 exosnap_add_gtest(
     NAME record_viewmodel_qml_adapter_tests

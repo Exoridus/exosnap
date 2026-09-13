@@ -60,8 +60,22 @@
 .EXAMPLE
     pwsh scripts/run-tests.ps1 -Filter recorder_core. -Build
 
+.PARAMETER Phase
+    Run only the tests of one execution phase. Every registered test declares
+    exactly one, and the guard below refuses a tree where one does not.
+
+      hermetic  Nothing outside the process: no hardware, no network, no desktop.
+      cpu       Real CPU work or real time. Deterministic in result, not duration.
+      gpu       Needs a graphics adapter. Without one these can only skip.
+      desktop   Needs an interactive desktop: a window, focus, a Qt surface.
+      vm        Needs a disposable machine of its own.
+      human     Needs a person to do something no API can do.
+
 .EXAMPLE
     pwsh scripts/run-tests.ps1 -ExcludeLabel live
+
+.EXAMPLE
+    pwsh scripts/run-tests.ps1 -Phase hermetic
 #>
 [CmdletBinding()]
 param(
@@ -69,6 +83,8 @@ param(
     [string]$Config = 'Debug',
     [string]$Filter = '',
     [string]$ExcludeLabel = '',
+    [ValidateSet('', 'hermetic', 'cpu', 'gpu', 'desktop', 'vm', 'human')]
+    [string]$Phase = '',
     [int]$Jobs = 0,
     [switch]$Build,
     [switch]$RequireFresh
@@ -270,6 +286,7 @@ try {
     )
     if ($Filter)       { $ctestArgs += @('-R', $Filter) }
     if ($labelPattern) { $ctestArgs += @('-LE', $labelPattern) }
+    if ($Phase)        { $ctestArgs += @('-L', "^phase\.$Phase`$") }
 
     # The census: how many tests this tree registers at all, independent of what
     # this run selects. A suite that quietly lost half its cases to a missing
@@ -279,10 +296,31 @@ try {
         Select-String -Pattern '^Total Tests:\s*(\d+)' | Select-Object -Last 1)
     if ($censusLine) { $registeredCount = [int]$censusLine.Matches[0].Groups[1].Value }
 
+    # Every registered test declares exactly one execution phase. A tree where one
+    # does not is a tree whose selection means nothing: `-Phase hermetic` would
+    # silently leave it out, and a CI lane built on that would report a green suite
+    # it never ran. Checked against the census above rather than by name, so a new
+    # test registered without a phase is caught the first time the suite runs.
+    $phaseTotal = 0
+    foreach ($known in 'hermetic', 'cpu', 'gpu', 'desktop', 'vm', 'human') {
+        $line = (& ctest --test-dir $BuildDir -C $Config -N -L "^phase\.$known`$" 2>&1 |
+            Select-String -Pattern '^Total Tests:\s*(\d+)' | Select-Object -Last 1)
+        if ($line) { $phaseTotal += [int]$line.Matches[0].Groups[1].Value }
+    }
+    if ($registeredCount -gt 0 -and $phaseTotal -ne $registeredCount) {
+        Write-Host ''
+        Write-Host ("FAIL  $($registeredCount - $phaseTotal) of $registeredCount registered test(s) declare no " +
+            'execution phase, so a phase selection would silently leave them out.') -ForegroundColor Red
+        Write-Host ('      Give each one a PHASE in exosnap_add_gtest, or an exosnap_set_test_phase(...) ' +
+            'beside its add_test.') -ForegroundColor Red
+        exit 1
+    }
+
     $selectedCount = 0
     $selectArgs = @('--test-dir', $BuildDir, '-C', $Config, '-N')
     if ($Filter)       { $selectArgs += @('-R', $Filter) }
     if ($labelPattern) { $selectArgs += @('-LE', $labelPattern) }
+    if ($Phase)        { $selectArgs += @('-L', "^phase\.$Phase`$") }
     $selectedLine = (& ctest @selectArgs 2>&1 |
         Select-String -Pattern '^Total Tests:\s*(\d+)' | Select-Object -Last 1)
     if ($selectedLine) { $selectedCount = [int]$selectedLine.Matches[0].Groups[1].Value }
@@ -355,6 +393,7 @@ try {
         freshness_detail   = $freshnessDetail
         ctest_args         = $ctestArgs
         exclude_label      = $ExcludeLabel
+        phase              = $Phase
         exclude_pattern    = $labelPattern
         filter             = $Filter
         tests_registered   = $registeredCount

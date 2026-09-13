@@ -62,10 +62,14 @@ function New-FixtureTree {
 
     $body = if ($Empty) { '' } else { @"
 add_test(fixture.hardware "$noop" "-E" "true")
-set_tests_properties(fixture.hardware PROPERTIES LABELS "live")
+set_tests_properties(fixture.hardware PROPERTIES LABELS "live;phase.gpu")
 add_test(fixture.script_suite "$noop" "-E" "true")
-set_tests_properties(fixture.script_suite PROPERTIES LABELS "live_verify")
+set_tests_properties(fixture.script_suite PROPERTIES LABELS "live_verify;phase.hermetic")
 add_test(fixture.unlabelled "$noop" "-E" "true")
+# Unlabelled in the sense the other cases mean: no subject label. It still
+# declares a phase, because every registered test does and the runner refuses a
+# tree where one does not.
+set_tests_properties(fixture.unlabelled PROPERTIES LABELS "phase.hermetic")
 "@ }
 
     Set-Content -LiteralPath (Join-Path $root 'CTestTestfile.cmake') -Value $body -Encoding utf8
@@ -81,12 +85,14 @@ function Invoke-RunTests {
         [Parameter(Mandatory)] [string] $BuildDir,
         [string] $ExcludeLabel = '',
         [string] $Filter = '',
+        [string] $Phase = '',
         [switch] $RequireFresh
     )
 
     $arguments = @('-NoProfile', '-NonInteractive', '-File', $runTests, '-BuildDir', $BuildDir, '-Config', 'Debug')
     if ($ExcludeLabel) { $arguments += @('-ExcludeLabel', $ExcludeLabel) }
     if ($Filter)       { $arguments += @('-Filter', $Filter) }
+    if ($Phase)        { $arguments += @('-Phase', $Phase) }
     if ($RequireFresh) { $arguments += '-RequireFresh' }
 
     $output = (& pwsh @arguments 2>&1 | Out-String)
@@ -108,6 +114,47 @@ function Get-CTestNames {
 }
 
 Write-Host 'run-tests.ps1 contract'
+
+Test-Case 'a tree with a test that declares no phase is refused' {
+    # The guard the phase selection rests on. Without it `-Phase hermetic` would
+    # quietly leave an undeclared test out and a CI lane built on that would report
+    # a green suite it never ran.
+    $tree = New-FixtureTree
+    try {
+        $file = Join-Path $tree 'CTestTestfile.cmake'
+        $kept = Get-Content -LiteralPath $file |
+            Where-Object { $_ -notmatch 'set_tests_properties\(fixture\.unlabelled' }
+        Set-Content -LiteralPath $file -Value ($kept -join "`n") -Encoding utf8
+
+        $result = Invoke-RunTests -BuildDir $tree
+        Assert-True ($result.ExitCode -ne 0) 'a tree with an undeclared test was accepted'
+        Assert-True ($result.Output -match 'declare no execution phase') `
+            'the refusal did not say what was missing'
+    }
+    finally { Remove-Item -LiteralPath $tree -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-Case 'a phase selects exactly the tests that declare it' {
+    $tree = New-FixtureTree
+    try {
+        $result = Invoke-RunTests -BuildDir $tree -Phase 'gpu'
+        Assert-True ($result.ExitCode -eq 0) "expected success, got $($result.ExitCode): $($result.Output)"
+        Assert-True ($result.Receipt.phase -eq 'gpu') `
+            "the receipt records phase '$($result.Receipt.phase)'"
+        Assert-True ($result.Receipt.tests_selected -eq 1) `
+            "expected 1 of 3 tests selected, got $($result.Receipt.tests_selected)"
+    }
+    finally { Remove-Item -LiteralPath $tree -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-Case 'a phase name the vocabulary does not know is refused before anything runs' {
+    $tree = New-FixtureTree
+    try {
+        $result = Invoke-RunTests -BuildDir $tree -Phase 'gpu-ish'
+        Assert-True ($result.ExitCode -ne 0) 'an unknown phase name was accepted'
+    }
+    finally { Remove-Item -LiteralPath $tree -Recurse -Force -ErrorAction SilentlyContinue }
+}
 
 Test-Case 'excluding "live" keeps the live_verify suites' {
     $tree = New-FixtureTree
@@ -241,7 +288,12 @@ Set-Content -LiteralPath (Join-Path $env:EXOSNAP_CONFIG_DIR 'app.log') -Value 'd
 exit 1
 '@
         $pwshPath = (Get-Process -Id $PID).Path -replace '\\', '/'
-        $body = "add_test(fixture.writes_a_log `"$pwshPath`" `"-NoProfile`" `"-File`" `"$($failing -replace '\\', '/')`")"
+        # Every registered test declares a phase; the runner refuses a tree where
+        # one does not, and this fixture is a tree.
+        $body = @(
+            "add_test(fixture.writes_a_log `"$pwshPath`" `"-NoProfile`" `"-File`" `"$($failing -replace '\\', '/')`")"
+            'set_tests_properties(fixture.writes_a_log PROPERTIES LABELS "phase.hermetic")'
+        ) -join "`n"
         Set-Content -LiteralPath (Join-Path $tree 'CTestTestfile.cmake') -Value $body -Encoding utf8
 
         $result = Invoke-RunTests -BuildDir $tree
