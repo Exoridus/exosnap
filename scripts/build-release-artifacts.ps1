@@ -92,6 +92,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 Import-Module (Join-Path $PSScriptRoot 'lib/MsvcEnvironment.psm1') -Force -DisableNameChecking
+. (Join-Path $PSScriptRoot 'lib/ReleaseArtifactIdentity.ps1')
 
 # ---------------------------------------------------------------------------
 # Paths (resolved from the script location, independent of the caller's CWD)
@@ -1144,11 +1145,19 @@ if (@(& git -C $RepoRoot status --porcelain).Count -gt 0) {
     $sourceCommit += '-dirty'
 }
 $fileEntries = foreach ($file in ($allFiles | Sort-Object FullName)) {
-    [ordered]@{
+    $entry = [ordered]@{
         path   = "$PortablePackageName/" + $file.FullName.Substring($PackageRoot.Length + 1).Replace('\', '/')
         size   = $file.Length
         sha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
     }
+    # Every executable also gets per-section hashes. The ones this repository
+    # compiles carry the release identity, so a final release cannot match its
+    # qualified candidate file for file; the promotion contract compares their
+    # sections instead, and a manifest without them cannot be promoted from.
+    if ($file.Extension -eq '.exe') {
+        $entry['sections'] = Get-ReleasePeSectionHash -Path $file.FullName
+    }
+    $entry
 }
 $manifest = [ordered]@{
     product         = 'ExoSnap'

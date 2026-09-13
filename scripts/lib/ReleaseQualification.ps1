@@ -188,21 +188,29 @@ function Get-ReleasePromotionContract {
         named below, which cannot be identical: each embeds the release version string,
         and every build's `kBuildId` is the CI run id.
 
-        What this does NOT establish is that those three files are correct -- their
-        bytes are compared to nothing. What narrows that gap is the rest of the
-        contract: the same source commit, and the same toolchain, both checked
-        alongside. A defect that the release build introduces into one of the three
-        binaries without changing the commit, the compiler, Qt, WiX, the vendored
-        FFmpeg or any other shipped file remains out of reach, and closing it needs a
-        release identity that stops being compiled in.
+        Those files are not exempt from comparison, only from a whole-file one. The
+        identity lives in fixed-width fields, so a release build of the same commit
+        lays its code out exactly as the candidate did: every PE section of a named
+        file must be byte-identical except the ones that hold the identity -- .rdata,
+        where the fields and the link's debug record sit, and .rsrc, the VERSIONINFO
+        resource. Both builds write per-section hashes for the named files, and a
+        build that did not is refused rather than trusted.
+
+        What remains out of reach is a defect confined to .rdata: constants and
+        string literals of unchanged length, with no effect on .text. The rest of the
+        contract narrows it -- the same source commit and the same toolchain, both
+        checked alongside -- and closing it needs a release identity that stops being
+        compiled in.
     .OUTPUTS
-        @{ Id; Policy; MutableEntries; MutableReason }
+        @{ Id; Policy; MutableEntries; MutableReason; MutableSections; MutableSectionsReason }
     #>
     return [ordered]@{
-        Id             = 'exosnap.release-promotion/1'
-        Policy         = 'the final tag rebuilds the qualified commit; only the declared entries may differ'
-        MutableEntries = [string[]]@('exosnap.exe', 'exosnap-updater.exe', 'crashpad_handler.exe')
-        MutableReason  = 'compiled from this commit, so each carries the release version string and the build id of the run that produced it'
+        Id              = 'exosnap.release-promotion/2'
+        Policy          = 'the final tag rebuilds the qualified commit; only the declared entries may differ, and only in the declared sections'
+        MutableEntries  = [string[]]@('exosnap.exe', 'exosnap-updater.exe', 'crashpad_handler.exe')
+        MutableReason   = 'compiled from this commit, so each carries the release version string and the build id of the run that produced it'
+        MutableSections = [string[]]@('.rdata', '.rsrc')
+        MutableSectionsReason = 'the release identity is stored in fixed-width fields in .rdata beside the link debug record, and the VERSIONINFO resource is .rsrc; every other section is the same code laid out the same way'
     }
 }
 
@@ -221,11 +229,13 @@ function Get-ReleasePromotionDeclaration {
 
     $contract = Get-ReleasePromotionContract
     return [ordered]@{
-        contract         = $contract.Id
-        policy           = $contract.Policy
-        qualifiedVersion = "$RcTag" -replace '^v', ''
-        mutableEntries   = $contract.MutableEntries
-        mutableReason    = $contract.MutableReason
+        contract              = $contract.Id
+        policy                = $contract.Policy
+        qualifiedVersion      = "$RcTag" -replace '^v', ''
+        mutableEntries        = $contract.MutableEntries
+        mutableReason         = $contract.MutableReason
+        mutableSections       = $contract.MutableSections
+        mutableSectionsReason = $contract.MutableSectionsReason
     }
 }
 
@@ -248,6 +258,18 @@ function Get-ReleaseQualificationField {
     }
     if ($Object.PSObject.Properties.Name -contains $Name) { return $Object.$Name }
     return $null
+}
+
+function Get-ReleaseQualificationFieldName {
+    <#
+    .SYNOPSIS
+        The field names of a record node, whether it is a hashtable or JSON-parsed.
+    #>
+    param($Object)
+
+    if ($null -eq $Object) { return @() }
+    if ($Object -is [System.Collections.IDictionary]) { return @($Object.Keys) }
+    return @($Object.PSObject.Properties.Name)
 }
 
 function Resolve-ReleaseScenarioOutcome {
@@ -926,11 +948,11 @@ function Get-ReleaseInstallTreeEntries {
         rather than assumed: a manifest whose root does not name the version it claims
         is not describing the package it says it is.
     .OUTPUTS
-        @{ Entries = @{ path -> sha256 }; Errors = [string[]] }
+        @{ Entries = @{ path -> sha256 }; Sections = @{ path -> @{ section -> sha256 } }; Errors = [string[]] }
     #>
     param($Manifest, [Parameter(Mandatory)] [string] $Version, [Parameter(Mandatory)] [string] $Label)
 
-    $result = @{ Entries = @{}; Errors = @() }
+    $result = @{ Entries = @{}; Sections = @{}; Errors = @() }
     if ($null -eq $Manifest) {
         $result.Errors += "$Label build manifest is missing or empty"
         return $result
@@ -957,7 +979,16 @@ function Get-ReleaseInstallTreeEntries {
             $result.Errors += "$Label build manifest entry '$path' is not under '$expectedRoot/'"
             continue
         }
-        $result.Entries[$path.Substring($separator + 1)] = $sha
+        $relative = $path.Substring($separator + 1)
+        $result.Entries[$relative] = $sha
+        $sections = Get-ReleaseQualificationField -Object $file -Name 'sections'
+        if ($null -ne $sections) {
+            $inventory = @{}
+            foreach ($name in @(Get-ReleaseQualificationFieldName -Object $sections)) {
+                $inventory[$name] = "$(Get-ReleaseQualificationField -Object $sections -Name $name)".ToLowerInvariant()
+            }
+            $result.Sections[$relative] = $inventory
+        }
     }
     return $result
 }
@@ -978,6 +1009,10 @@ function Compare-ReleaseInstallTree {
     .PARAMETER MutableEntries
         Install-tree relative paths permitted to differ, as the qualification record
         declares them.
+    .PARAMETER MutableSections
+        The PE sections of a mutable entry permitted to differ. Every other section of
+        such an entry must be byte-identical, and both manifests must say what those
+        sections hash to; a mutable entry without a section inventory is refused.
     .OUTPUTS
         @{ Differences = [string[]]; Notes = [string[]] }
     #>
@@ -986,7 +1021,8 @@ function Compare-ReleaseInstallTree {
         $CandidateManifest,
         [Parameter(Mandatory)] [string] $QualifiedVersion,
         [Parameter(Mandatory)] [string] $CandidateVersion,
-        [string[]] $MutableEntries = @()
+        [string[]] $MutableEntries = @(),
+        [string[]] $MutableSections = @()
     )
 
     $differences = @()
@@ -1016,7 +1052,15 @@ function Compare-ReleaseInstallTree {
         }
         if ($qualified.Entries[$path] -eq $candidate.Entries[$path]) { continue }
         if ($mutable.ContainsKey($path.ToLowerInvariant())) {
-            $notes += "$path differs, as the promotion contract permits"
+            $sectionDifferences = @(Compare-ReleaseSectionInventory -Path $path `
+                    -Qualified $qualified.Sections[$path] -Candidate $candidate.Sections[$path] `
+                    -MutableSections $MutableSections)
+            if ($sectionDifferences.Count -gt 0) {
+                $differences += $sectionDifferences
+            }
+            else {
+                $notes += "$path differs only in $($MutableSections -join ', '), as the promotion contract permits"
+            }
             continue
         }
         $differences += "$path changed: the campaign qualified $($qualified.Entries[$path]), this release ships $($candidate.Entries[$path])"
@@ -1039,6 +1083,54 @@ function Compare-ReleaseInstallTree {
     }
 
     return @{ Differences = [string[]]$differences; Notes = [string[]]$notes }
+}
+
+function Compare-ReleaseSectionInventory {
+    <#
+    .SYNOPSIS
+        Whether a mutable entry differs only in the sections the contract permits.
+    .DESCRIPTION
+        Both sides must carry an inventory: a manifest written before section hashes
+        existed says nothing about the code, and "nothing to compare against" is a
+        refusal, not a pass. The two inventories must name the same sections, and every
+        section outside the permitted set must hash the same.
+    .OUTPUTS
+        [string[]] differences; empty when the entry is within contract.
+    #>
+    param(
+        [Parameter(Mandatory)] [string] $Path,
+        $Qualified,
+        $Candidate,
+        [string[]] $MutableSections = @()
+    )
+
+    if ($null -eq $Qualified -or $Qualified.Count -eq 0) {
+        return [string[]]@("$Path differs and the qualified candidate published no section inventory for it, so the release's code cannot be compared with the candidate's")
+    }
+    if ($null -eq $Candidate -or $Candidate.Count -eq 0) {
+        return [string[]]@("$Path differs and this release wrote no section inventory for it, so its code cannot be compared with the candidate's")
+    }
+
+    $permitted = @{}
+    foreach ($section in @($MutableSections)) { $permitted[$section] = $true }
+
+    $differences = @()
+    foreach ($section in @($Qualified.Keys | Sort-Object)) {
+        if (-not $Candidate.Contains($section)) {
+            $differences += "$Path section $section was in the qualified candidate and is not in this release"
+            continue
+        }
+        if ($Qualified[$section] -eq $Candidate[$section] -or $permitted.Contains($section)) { continue }
+        $differences += "$Path section $section changed: the campaign qualified $($Qualified[$section]), this release ships $($Candidate[$section]); the release build's code is not the candidate's"
+    }
+    foreach ($section in @($Candidate.Keys | Sort-Object)) {
+        if (-not $Qualified.Contains($section)) {
+            $differences += "$Path section $section is in this release and was not in the qualified candidate"
+        }
+    }
+    # No comma operator: the caller wraps the result in @(), and an empty list has
+    # to arrive as nothing rather than as one empty element.
+    return [string[]]$differences
 }
 
 function Compare-ReleaseToolchain {

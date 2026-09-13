@@ -139,6 +139,7 @@ if ($contractId -ne (Get-ReleasePromotionContract).Id) {
 
 $qualifiedVersion = "$(Get-ReleaseQualificationField -Object $promotion -Name 'qualifiedVersion')"
 $mutableEntries = [string[]]@(Get-ReleaseQualificationField -Object $promotion -Name 'mutableEntries')
+$mutableSections = [string[]]@(Get-ReleaseQualificationField -Object $promotion -Name 'mutableSections')
 
 $qualifiedManifest = Read-JsonOrNull -Path $QualifiedManifestPath
 if ($null -eq $qualifiedManifest) {
@@ -154,7 +155,8 @@ if ($null -eq $candidateManifest) {
 }
 
 $tree = Compare-ReleaseInstallTree -QualifiedManifest $qualifiedManifest -CandidateManifest $candidateManifest `
-    -QualifiedVersion $qualifiedVersion -CandidateVersion $CandidateVersion -MutableEntries $mutableEntries
+    -QualifiedVersion $qualifiedVersion -CandidateVersion $CandidateVersion -MutableEntries $mutableEntries `
+    -MutableSections $mutableSections
 $toolchain = Compare-ReleaseToolchain `
     -QualifiedToolchain (Read-JsonOrNull -Path $QualifiedToolchainPath) `
     -CandidateToolchain (Read-JsonOrNull -Path $CandidateToolchainPath)

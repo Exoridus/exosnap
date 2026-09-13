@@ -174,15 +174,20 @@ the workflow refuses to publish without one.
 > would ship binaries that still call themselves a release candidate.
 >
 > So the rebuild is permitted and its **difference budget is declared in the record** (`promotion`,
-> contract `exosnap.release-promotion/1`) and enforced by
+> contract `exosnap.release-promotion/2`) and enforced by
 > `scripts/check-release-promotion.ps1`, which `publish-release` runs before it creates the draft.
 > Both builds write a per-file inventory of the portable install tree (`artifact-manifest.json`, now
 > a published release asset) and a record of the toolchain that produced it
 > (`toolchain-manifest.json`). Publishing is allowed only when the two install trees hold the same
 > files, every file is byte-identical except `exosnap.exe`, `exosnap-updater.exe` and
 > `crashpad_handler.exe`, both builds came from the same commit, and both used the same compiler,
-> CMake, Qt, WiX and vendored FFmpeg. A candidate cut before the workflow attached that inventory
-> cannot be promoted from at all: cut a new one.
+> CMake, generator and preset, Qt, WiX and vendored FFmpeg. The three executables are not exempt,
+> only compared differently: the manifest carries a hash per PE section for every executable, and
+> a named executable may differ only in `.rdata` (the fixed-width identity fields and the link's
+> debug record) and `.rsrc` (VERSIONINFO) -- `.text`, `.data`, `.pdata` and `.reloc` must be
+> byte-identical, which is what makes "the same code, re-labelled" a checked statement rather than
+> an inference from the commit. A candidate cut before the workflow attached that inventory, or
+> whose manifest carries no section hashes, cannot be promoted from at all: cut a new one.
 >
 > **Not covered.** Those three binaries are compared to nothing, because they cannot be. Their
 > correctness rests on the identical commit and the identical toolchain, both checked. A regression

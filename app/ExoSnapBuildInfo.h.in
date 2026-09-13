@@ -2,8 +2,19 @@
 
 namespace exosnap::build {
 
+// The two values that differ between a release candidate and its final are
+// stored in fixed-width fields. A string literal of a different length would
+// move everything the linker places after it, and a one-byte shift in .rdata
+// rewrites addresses throughout .text, so the two builds could never be shown
+// to contain the same code. With the width fixed, the release build of the
+// same commit differs from the qualified candidate only in these bytes, the
+// VERSIONINFO resource and the link's debug record, and the promotion check
+// compares the code sections byte for byte.
+inline constexpr int kIdentityFieldWidth = 32;
+
 // Full release version ("0.9.0-rc4"; developer builds report "0.9.0-dev").
-constexpr const char* kVersion = "@EXOSNAP_VERSION@";
+constexpr char kVersionField[kIdentityFieldWidth] = "@EXOSNAP_VERSION@";
+constexpr const char* kVersion = kVersionField;
 
 // Numeric base version from the canonical root project(... VERSION ...).
 constexpr const char* kBaseVersion = "@EXOSNAP_BASE_VERSION@";
@@ -17,7 +28,8 @@ constexpr const char* kGitCommitFull = "@EXOSNAP_GIT_SHA_FULL@";
 constexpr const char* kBuildTimestampUtc = "@EXOSNAP_BUILD_TIMESTAMP_UTC@";
 
 // CI run identifier for official builds; empty for local builds.
-constexpr const char* kBuildId = "@EXOSNAP_BUILD_ID@";
+constexpr char kBuildIdField[kIdentityFieldWidth] = "@EXOSNAP_BUILD_ID@";
+constexpr const char* kBuildId = kBuildIdField;
 
 // True only for builds produced by the official release pipeline
 // (EXOSNAP_OFFICIAL_BUILD=ON with a declared release identity).

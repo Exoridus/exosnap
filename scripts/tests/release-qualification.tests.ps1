@@ -23,6 +23,7 @@ $ErrorActionPreference = 'Stop'
 $scriptRoot = Split-Path -Parent $PSScriptRoot
 Import-Module (Join-Path $scriptRoot 'lib/LiveVerifyState.psm1') -Force -DisableNameChecking
 . (Join-Path $scriptRoot 'lib/ReleaseQualification.ps1')
+. (Join-Path $scriptRoot 'lib/ReleaseArtifactIdentity.ps1')
 # The publish lock derives the required set from the catalog and the policy in the
 # source line, so the fixtures have to be about the real ones: a record built
 # against a two-scenario invention would be rejected for that alone, and every
@@ -998,6 +999,23 @@ Write-Host '== The promotion lock: what ships is what was qualified' -Foreground
 
 $script:PromotionScript = Join-Path $scriptRoot 'check-release-promotion.ps1'
 
+function New-TestSectionInventory {
+    <#
+    .SYNOPSIS
+        Per-section hashes of one compiled executable: the code sections fixed, the
+        identity-bearing ones as given.
+    #>
+    param([string] $Identity = ('r' * 64), [string] $Code = ('t' * 64))
+    return [ordered]@{
+        '.text'  = $Code
+        '.rdata' = $Identity
+        '.data'  = 'e' * 64
+        '.pdata' = 'p' * 64
+        '.rsrc'  = $Identity
+        '.reloc' = 'l' * 64
+    }
+}
+
 function New-TestBuildManifest {
     <#
     .SYNOPSIS
@@ -1007,7 +1025,11 @@ function New-TestBuildManifest {
     param(
         [Parameter(Mandatory)] [string] $Version,
         [string] $SourceCommit = $script:GoodCommit,
-        [System.Collections.IDictionary] $Files
+        [System.Collections.IDictionary] $Files,
+        # path -> ordered section name -> sha256, for the entries the contract lets
+        # differ. $null gives the compiled executables the inventory of a build whose
+        # identity fields moved and whose code did not.
+        [System.Collections.IDictionary] $Sections
     )
 
     if ($null -eq $Files) {
@@ -1018,13 +1040,21 @@ function New-TestBuildManifest {
             'qml/ExoSnap/Main.qml' = 'd' * 64
         }
     }
+    if ($null -eq $Sections) {
+        $Sections = [ordered]@{
+            'exosnap.exe'         = New-TestSectionInventory -Identity ('a' * 64)
+            'exosnap-updater.exe' = New-TestSectionInventory -Identity ('b' * 64)
+        }
+    }
     $entries = @()
     foreach ($name in $Files.Keys) {
-        $entries += [ordered]@{
+        $entry = [ordered]@{
             path   = "ExoSnap-$Version-windows-x64-portable/$name"
             size   = 1024
             sha256 = $Files[$name]
         }
+        if ($Sections.Contains($name) -and $null -ne $Sections[$name]) { $entry['sections'] = $Sections[$name] }
+        $entries += $entry
     }
     return [ordered]@{
         product         = 'ExoSnap'
@@ -1110,16 +1140,64 @@ function Invoke-PromotionScript {
 
 Test-Case 'a rebuild that differs only where the contract permits is promotable' {
     # The realistic case: the executables the release version is compiled into
-    # changed, nothing else did.
+    # changed in their identity sections, their code did not, nothing else did.
     $candidate = New-TestBuildManifest -Version '0.9.1' -Files ([ordered]@{
             'exosnap.exe'          = '1' * 64
             'exosnap-updater.exe'  = '2' * 64
             'Qt6Core.dll'          = 'c' * 64
             'qml/ExoSnap/Main.qml' = 'd' * 64
+        }) -Sections ([ordered]@{
+            'exosnap.exe'         = New-TestSectionInventory -Identity ('1' * 64)
+            'exosnap-updater.exe' = New-TestSectionInventory -Identity ('2' * 64)
         })
     $result = Invoke-PromotionScript -Directory (New-TestDirectory) -CandidateManifest $candidate
     Assert-Equal 0 $result.ExitCode "a permitted rebuild must promote: $($result.Output)"
-    Assert-Match 'as the promotion contract permits' $result.Summary 'the permitted differences must be listed'
+    Assert-Match 'differs only in \.rdata, \.rsrc, as the promotion contract permits' $result.Summary 'the permitted differences must be listed'
+}
+
+Test-Case 'a rebuild whose code section moved blocks the release' {
+    # The whole point of the section inventory: an executable the contract lets
+    # differ may differ only where the identity lives. Different code is a
+    # different program, whatever the commit says.
+    $candidate = New-TestBuildManifest -Version '0.9.1' -Files ([ordered]@{
+            'exosnap.exe'          = '1' * 64
+            'exosnap-updater.exe'  = '2' * 64
+            'Qt6Core.dll'          = 'c' * 64
+            'qml/ExoSnap/Main.qml' = 'd' * 64
+        }) -Sections ([ordered]@{
+            'exosnap.exe'         = New-TestSectionInventory -Identity ('1' * 64) -Code ('9' * 64)
+            'exosnap-updater.exe' = New-TestSectionInventory -Identity ('2' * 64)
+        })
+    $result = Invoke-PromotionScript -Directory (New-TestDirectory) -CandidateManifest $candidate
+    Assert-Equal 1 $result.ExitCode 'moved code must block'
+    Assert-Match 'exosnap\.exe section \.text changed' $result.Summary 'the reason must name the file and the section'
+}
+
+Test-Case 'a rebuild without a section inventory cannot be promoted' {
+    # A manifest that says nothing about the sections says nothing about the code,
+    # and nothing to compare against is a refusal, not a pass.
+    $candidate = New-TestBuildManifest -Version '0.9.1' -Files ([ordered]@{
+            'exosnap.exe'          = '1' * 64
+            'exosnap-updater.exe'  = '2' * 64
+            'Qt6Core.dll'          = 'c' * 64
+            'qml/ExoSnap/Main.qml' = 'd' * 64
+        }) -Sections ([ordered]@{})
+    $result = Invoke-PromotionScript -Directory (New-TestDirectory) -CandidateManifest $candidate
+    Assert-Equal 1 $result.ExitCode 'a release without a section inventory must block'
+    Assert-Match 'exosnap\.exe differs and this release wrote no section inventory' $result.Summary 'the reason must say what is missing'
+}
+
+Test-Case 'the section hasher reads a real image and its sections' {
+    # pwsh.exe is a PE image every test machine has; the names are what the
+    # linker gives every MSVC-built image.
+    $inventory = Get-ReleasePeSectionHash -Path (Get-Process -Id $PID).Path
+    Assert-True ($inventory.Keys -contains '.text') 'the code section must be found'
+    Assert-True ($inventory.Keys -contains '.rsrc') 'the resource section must be found'
+    foreach ($name in $inventory.Keys) {
+        Assert-Match '^[0-9a-f]{64}$' $inventory[$name] "section $name must hash to lowercase sha256"
+    }
+    $again = Get-ReleasePeSectionHash -Path (Get-Process -Id $PID).Path
+    Assert-Equal ($inventory['.text']) ($again['.text']) 'the hash must be a function of the bytes'
 }
 
 Test-Case 'a changed shipped file that is not in the contract blocks the release' {
