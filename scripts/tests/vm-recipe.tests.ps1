@@ -858,7 +858,8 @@ Test-Case 'the seal phase clears what it created and then refuses an image that 
     Assert-Equal 'wait-for-seal' $names[2] 'and nothing is asked of a guest that is not answering yet'
     Assert-Equal 'clear-bring-up' $names[3] 'the known diagnostics go next'
     Assert-Equal 'assert-sealed' $names[4] 'and the image is then held to the gate own definition of clean'
-    Assert-Equal 'stop-for-freeze' $names[5] 'a golden image is frozen stopped'
+    Assert-Equal 'image-fingerprint' $names[5] 'what the image is, recorded only once it is clean'
+    Assert-Equal 'stop-for-freeze' $names[6] 'a golden image is frozen stopped'
 
     $clear = @($plan | Where-Object Name -eq 'clear-bring-up')[0]
     foreach ($path in @($clear.Parameters['Path'])) {
@@ -867,6 +868,29 @@ Test-Case 'the seal phase clears what it created and then refuses an image that 
     }
     Assert-True (@($clear.Parameters['Path']) -contains 'C:\ProgramData\ExoSnap\DxgiDuplicationExperiment') `
         'the experiment output that was found in the image is named exactly'
+}
+
+Test-Case 'a sealed image records what it is, declared and measured together' {
+    # Written by the seal phase and read by every run that pins an image. The declared
+    # half comes from the manifest; the measured half can only be read off the machine
+    # that was built, and a fact nobody could measure is absent rather than guessed --
+    # the comparison treats absence as drift, which is the honest reading.
+    $manifest = Import-PowerShellDataFile -LiteralPath $script:ManifestPath
+    $declared = Get-ReleaseVmManifestFingerprint -Manifest $manifest
+
+    foreach ($field in @('displayProfile', 'displayMode', 'packagePins')) {
+        Assert-True ($declared.Contains($field)) "the manifest half has to carry $field"
+    }
+
+    # The measured half is named in the module rather than asserted here: measuring it
+    # needs a guest. What this pins is that the step exists and reads both halves.
+    $module = Get-Content -LiteralPath (Join-Path $script:VmRoot 'ReleaseVm.psm1') -Raw
+    $builder = [regex]::Match($module, '(?ms)^function New-ReleaseVmImageFingerprint \{.*?^\}')
+    Assert-True $builder.Success 'New-ReleaseVmImageFingerprint was not found'
+    Assert-Match 'Get-ReleaseVmManifestFingerprint' $builder.Value 'the declared half comes from the manifest'
+    Assert-Match 'windowsBuild' $builder.Value 'the guest OS build is measured'
+    Assert-Match 'hostDriverVersion' $builder.Value 'so is the host driver the guest driver was staged from'
+    Assert-Match 'if \(\$hostGpu\.Measured\)' $builder.Value 'an unmeasured host adapter contributes nothing rather than a guess'
 }
 
 Test-Case 'the seal assertion asks the gate own residue definition, not a second copy of it' {

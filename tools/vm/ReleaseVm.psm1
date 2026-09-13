@@ -916,6 +916,17 @@ function New-ReleaseVmCreatePlan {
             -Parameters ([ordered]@{ VMName = $VMName }) -NeedsCredential `
             -Detail "the first-start gate's own definition of clean, asked while the image can still be fixed"
 
+        # Written while the machine still answers, and only after the assertion above
+        # passed: a fingerprint beside an image that is not clean would identify the
+        # wrong thing precisely.
+        $plan += New-ReleaseVmStep -Name 'image-fingerprint' -Command 'Write-ReleaseVmSealedFingerprint' `
+            -Parameters ([ordered]@{
+                VMName = $VMName
+                ManifestPath = $ProvisionManifest
+                Path = [IO.Path]::Combine($Root, 'image-fingerprint.json')
+            }) -NeedsCredential `
+            -Detail 'what this image is, beside the image, for every run that pins it'
+
         $plan += New-ReleaseVmStep -Name 'stop-for-freeze' -Command 'Stop-ReleaseVmIfRunning' `
             -Parameters ([ordered]@{ VMName = $VMName }) `
             -Detail 'a golden image is the parent of every run disk and is never written to again'
@@ -1810,6 +1821,68 @@ function Get-ReleaseVmManifestFingerprint {
         displayMode    = "$($Manifest.display.width)x$($Manifest.display.height)@$modes"
         packagePins    = Get-ReleaseVmImageFingerprintDigest -Fingerprint @{ pins = ($pins -join "`n") }
     }
+}
+
+function New-ReleaseVmImageFingerprint {
+    <#
+    .SYNOPSIS
+        Everything that identifies a sealed image, declared and measured together.
+    .DESCRIPTION
+        The manifest half is what the recipe declares: the display profile, the
+        monitor mode the gates assert against, and a digest over every package pin.
+        The other half can only be read off the machine that was built -- the Windows
+        build in the guest, and the host GPU driver the guest driver was staged from.
+        The host driver is in here because the guest driver is copied from the host:
+        changing it on the host changes the guest without anything in the guest being
+        rebuilt, and the image has to be requalified.
+
+        A fact that could not be measured is absent rather than guessed. The comparison
+        this feeds treats an absent field as drift, which is the honest reading: an
+        image that cannot say what it is cannot be told apart from one that differs.
+    #>
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)] [string] $VMName,
+        [Parameter(Mandatory)] [System.Management.Automation.PSCredential] $Credential,
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Manifest
+    )
+    $fingerprint = @{}
+    foreach ($pair in (Get-ReleaseVmManifestFingerprint -Manifest $Manifest).GetEnumerator()) {
+        $fingerprint[$pair.Key] = $pair.Value
+    }
+
+    $build = Invoke-Command -VMName $VMName -Credential $Credential -ErrorAction Stop -ScriptBlock {
+        $os = Get-CimInstance Win32_OperatingSystem
+        "$($os.Version) ($($os.Caption))"
+    }
+    $fingerprint['windowsBuild'] = "$build"
+
+    $hostGpu = Get-ReleaseVmHostGpu
+    if ($hostGpu.Measured) {
+        $fingerprint['hostDriverVersion'] = "$($hostGpu.DriverVersion)"
+        if ($hostGpu.Contains('Package')) { $fingerprint['hostDriverPackage'] = "$($hostGpu['Package'])" }
+    }
+
+    return $fingerprint
+}
+
+function Write-ReleaseVmSealedFingerprint {
+    <#
+    .SYNOPSIS
+        The plan step form: measure the sealed image and write its fingerprint.
+    .DESCRIPTION
+        Reads the manifest from disk rather than taking a parsed one, because a plan
+        step carries values a person can read in a dry run.
+    #>
+    param(
+        [Parameter(Mandatory)] [string] $VMName,
+        [Parameter(Mandatory)] [System.Management.Automation.PSCredential] $Credential,
+        [Parameter(Mandatory)] [string] $ManifestPath,
+        [Parameter(Mandatory)] [string] $Path
+    )
+    $manifest = Import-PowerShellDataFile -LiteralPath $ManifestPath
+    $fingerprint = New-ReleaseVmImageFingerprint -VMName $VMName -Credential $Credential -Manifest $manifest
+    return Write-ReleaseVmImageFingerprint -Fingerprint $fingerprint -Path $Path
 }
 
 function Assert-ReleaseVmImageFingerprint {
@@ -2774,6 +2847,8 @@ Export-ModuleMember -Function @(
     'Get-ReleaseVmManifestFingerprint'
     'Assert-ReleaseVmImageFingerprint'
     'Write-ReleaseVmImageFingerprint'
+    'New-ReleaseVmImageFingerprint'
+    'Write-ReleaseVmSealedFingerprint'
     'Get-ReleaseVmInfDriverVersion'
     'Select-ReleaseVmDriverPackage'
     'Compare-ReleaseVmGpuPartition'
