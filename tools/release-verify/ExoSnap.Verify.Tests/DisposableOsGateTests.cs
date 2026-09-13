@@ -396,6 +396,18 @@ internal static class DisposableOsGateFixture
             Path.Combine(fakes.RepositoryRoot, "packaging", "chocolatey", "exosnap.nuspec"), "<package />");
     }
 
+    /// <summary>Puts the clean-first-start worker script where its gate looks for it.</summary>
+    internal static void StageCleanFirstStartWorker(GateFakes fakes)
+    {
+        StageScript(fakes, CleanFirstStartGate.WorkerFileName);
+
+        // The default fake path is a bare file name; the MSI lookup needs a real
+        // directory to look beside.
+        fakes.ExecutablePath = Path.Combine(fakes.RepositoryRoot, "dist", "exosnap.exe");
+        Directory.CreateDirectory(Path.GetDirectoryName(fakes.ExecutablePath)!);
+        File.WriteAllText(fakes.ExecutablePath, "exe");
+    }
+
     /// <summary>Publishes an MSI beside the bound artifact, the way a release does.</summary>
     internal static string StageReleaseMsi(GateHarness harness)
     {

@@ -188,4 +188,54 @@ public sealed class CleanFirstStartWorkerTests
             Assert.True(File.Exists(path), $"the worker pulls in {Path.GetFileName(path)}, which does not exist");
         }
     }
+
+    [Fact]
+    public async Task TheGateAsksForAnInteractiveGuest()
+    {
+        // Measured on a real guest: started from a session that owns no desktop, the
+        // application exits without opening its control channel, so a run there
+        // reports a product that failed to start from a context nothing claims it
+        // supports. The request field is what keeps such a transport from carrying
+        // this gate at all.
+        using var harness = await GateHarness.CreateAsync(
+            "REL-INSTALL-CLEAN-001",
+            fakes =>
+            {
+                DisposableOsGateFixture.StageCleanFirstStartWorker(fakes);
+                fakes.DisposableOs.Run = DisposableOsRun.Completed(new DisposableOsRunResult([]));
+            },
+            TestContext.Current.CancellationToken);
+        // The lookup is injected because a real one reads the MSI Property table, and
+        // what this case is about is the request the gate composes.
+        var msi = DisposableOsGateFixture.StageReleaseMsi(harness);
+
+        var result = await new CleanFirstStartGate(_ => new ReleaseMsiLookup(msi, new string('a', 64), string.Empty))
+            .RunAsync(harness.Context, TestContext.Current.CancellationToken);
+
+        Assert.True(
+            harness.Fakes.DisposableOs.Requests.Count == 1,
+            $"the gate never reached a transport: {result.Outcome} -- {result.Message}");
+        var request = Assert.Single(harness.Fakes.DisposableOs.Requests);
+        Assert.True(
+            request.RequiresInteractiveGuest,
+            "the gate starts the application and talks to its control channel, which needs a desktop");
+    }
+
+    [Fact]
+    public async Task ATransportThatCannotProveADesktopDoesNotCarryTheGate()
+    {
+        // The meaning of the field, not just its value: a transport that cannot prove
+        // the session is filtered out before it runs, so the run is reported as
+        // unavailable rather than as a product that would not start.
+        var sessionless = new FixedTransport("sandbox", available: true, DisposableOsRun.Completed(
+            new DisposableOsRunResult([]))) { ProvesInteractiveGuest = false };
+        var runner = new DisposableOsRunner([sessionless]);
+        var request = new DisposableOsWorkerRequest("worker.ps1", [], []) { RequiresInteractiveGuest = true };
+
+        var run = await runner.RunAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.Equal(DisposableOsRunKind.Unavailable, run.Kind);
+        Assert.Empty(sessionless.Requests);
+        Assert.NotEqual(DisposableOsRunKind.Faulted, run.Kind);
+    }
 }

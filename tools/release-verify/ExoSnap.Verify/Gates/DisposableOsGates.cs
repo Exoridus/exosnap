@@ -280,6 +280,13 @@ public sealed class CleanFirstStartGate : IScenarioBody
             // starting point: a first start that quietly reached an update feed is a
             // different measurement.
             RequiresNetwork = false,
+            // The gate starts the application and talks to its control channel, and
+            // measured on a real guest the application exits without opening that
+            // channel when it is started from a session that owns no desktop. A
+            // transport that cannot prove an interactive session therefore cannot
+            // carry this gate: it would report a product that failed to start, from a
+            // context nothing claims the product supports.
+            RequiresInteractiveGuest = true,
         };
 
         var run = await services.DisposableOs.RunAsync(request, cancellationToken).ConfigureAwait(false);
