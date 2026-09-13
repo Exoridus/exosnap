@@ -14,6 +14,7 @@
 #include "preview_publish_gate.h"
 #include "session_internal.h"
 #include "split_sentinel_policy.h"
+#include "video_epoch_log.h"
 #include "yuv_to_bgra.h"
 #include <exosnap/engine/cursor_sprite.h>
 #include <exosnap/engine/gpu_hdr_tonemap.h>
@@ -3404,6 +3405,8 @@ void VideoThread::Run() {
                 next_tick_100ns = 0; // first tick at t=0 relative to epoch
                 m_state.video_epoch_qpc_100ns.store(epochQpc100ns);
                 lastVideoPts = 0;
+                const auto epochFields = VideoEpochLogFields(epochQpc100ns, qpcFreq, VideoEpochSource::CaptureObserved);
+                logging::log(logging::LogLevel::Info, "video_thread", kVideoEpochLogMessage, epochFields);
             }
 
             if (!videoEpochSet) {
@@ -4121,6 +4124,13 @@ void VideoThread::Run() {
                     // (The CFR path has no such split: it derives PTS from the
                     // same epoch value it publishes.)
                     m_state.video_epoch_qpc_100ns.store(static_cast<uint64_t>(videoEpochTicks100ns));
+                    // Which of the two the clamp produced decides what the epoch is
+                    // worth to a measurement: the frame's own timestamp is an
+                    // instant on the QPC axis, the floor is only a bound below it.
+                    const auto epochFields =
+                        VideoEpochLogFields(static_cast<uint64_t>(videoEpochTicks100ns), qpcFreq,
+                                            VfrVideoEpochSource(videoEpochTicks100ns, latestFrameTicks100ns));
+                    logging::log(logging::LogLevel::Info, "video_thread", kVideoEpochLogMessage, epochFields);
                 }
 
                 int64_t deltaTicks = latestFrameTicks100ns - videoEpochTicks100ns;

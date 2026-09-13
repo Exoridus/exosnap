@@ -1156,6 +1156,17 @@ exosnap_add_gtest(
 )
 target_include_directories(test_av_epoch_align PRIVATE src)
 
+# The video epoch as a log record (video_epoch_log.h): the field names, the unit
+# and the source marker an analyzer outside the recorder reads to put its own
+# events on the recording's timeline -- pure formatting.
+exosnap_add_gtest(
+    NAME test_video_epoch_log
+    TEST_PREFIX engine.
+    SOURCES tests/test_video_epoch_log.cpp
+    LIBRARIES exosnap_engine
+)
+target_include_directories(test_video_epoch_log PRIVATE src)
+
 # What the A/V duration skew is allowed to mean. It compared the video end
 # against the audio ENCODER's last PTS -- a different timeline -- so an aligned
 # recording reported its epoch offset as drift. The control case (a real 200 ms
