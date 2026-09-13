@@ -184,11 +184,14 @@ jobs:
           # nothing to answer and the hygiene check with nothing to scan.
           fetch-depth: 0
 
-      - name: Install PowerShell
+      - name: Assert PowerShell
         # ubuntu-24.04 images carry pwsh already; asserted rather than assumed, so
         # a runner image that drops it fails here with its name instead of later
-        # with a shell error.
-        run: pwsh -NonInteractive -Command '$PSVersionTable.PSVersion.ToString()'
+        # with a shell error. Through the shell's own `-Version`, not a
+        # PowerShell expression in single quotes: the step is bash, and bash
+        # single quotes are what keeps `$PSVersionTable` from being expanded
+        # by bash -- which shellcheck reads, correctly, as a variable that is not.
+        run: pwsh -Version
 
       - name: Check drift (Qt version, Qt setup, SDK paths)
         run: pwsh -NonInteractive -File scripts/check-drift.ps1
@@ -229,7 +232,9 @@ jobs:
           actionlint -version
 
       - name: actionlint
-        run: actionlint -color
+        # No -color: the escape sequences are noise in the Actions log and make
+        # the log unreadable through the API.
+        run: actionlint
 
       - name: Install zizmor (pinned)
         env:
