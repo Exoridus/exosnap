@@ -1046,6 +1046,41 @@ Test-Case 'a host fact nobody measured leaves the binding unproven too' {
         'the side that is missing has to be named'
 }
 
+Test-Case 'the receipt a real GPU-P guest wrote binds, in the shape it crosses PowerShell Direct in' {
+    # Recorded from the first guest that ever reached the binding rules. Every fixture
+    # above is a hashtable; what a run hands the rules is JSON deserialised by
+    # Windows PowerShell inside the guest and sent back as PSCustomObject, and the
+    # rules refused it at the parameter before comparing a single field. This case
+    # reads the fixture the way a run does, and it has to bind: the staged package,
+    # the adapter and the display path are the host's, measured.
+    $fixture = Join-Path $PSScriptRoot 'fixtures/vm-recipe/agent-receipt-gpup-guest.json'
+    $raw = Get-Content -LiteralPath $fixture -Raw | ConvertFrom-Json
+    Assert-True ($raw -isnot [System.Collections.IDictionary]) 'the fixture has to arrive as an object, not a hashtable'
+
+    $hostGpu = @{
+        Name = 'NVIDIA GeForce RTX 5070 Ti'; VendorId = '10DE'; DeviceId = '2C05'
+        DriverVersion = '32.0.16.1656'; Package = 'nv_dispi.inf_amd64_a3944b54ff18b284'
+    }
+    $requirement = New-ReleaseVmReadinessRequirement -InteractiveAgent -ExpectedUser 'exosnap' `
+        -Display @{ Width = 2560; Height = 1440; RefreshHz = 60 } -GpuBoundTo $hostGpu
+    $outcome = Test-ReleaseVmAgentHandshake -Receipt (ConvertTo-ReleaseVmDictionary -Value $raw) -Requirement $requirement
+
+    Assert-True $outcome.Ok "a correct GPU-P guest has to pass the handshake: $($outcome.Detail)"
+}
+
+Test-Case 'a receipt section that arrives as an object is read like a hashtable' {
+    $raw = '{"gpu":{"Name":"X","VendorId":"1414"},"displayPaths":[{"Device":"\\\\.\\DISPLAY1","Width":1}],"osReachable":true}' |
+        ConvertFrom-Json
+    $converted = ConvertTo-ReleaseVmDictionary -Value $raw
+
+    Assert-True ($converted -is [System.Collections.IDictionary]) 'the top level is a dictionary'
+    Assert-True ($converted['gpu'] -is [System.Collections.IDictionary]) 'and so is every section'
+    Assert-Equal '1414' $converted['gpu']['VendorId'] 'values survive'
+    Assert-True (@($converted['displayPaths']).Count -eq 1) 'arrays stay arrays'
+    Assert-True (@($converted['displayPaths'])[0] -is [System.Collections.IDictionary]) 'and their items are dictionaries'
+    Assert-Equal $true $converted['osReachable'] 'scalars are untouched'
+}
+
 Test-Case 'the profile a scenario was qualified on is unverifiable until its device is pinned' {
     # The state this recipe is actually in: the manifest declares sudovda as the
     # qualified profile, and no image carrying it has been built, so nothing in the
@@ -1250,6 +1285,22 @@ Test-Case 'an agent on the wrong desktop is not capture-ready' {
 
     Assert-True (-not $verdict.Ready) 'the secure desktop is not where a capture runs'
     Assert-Match 'WinSta0' ($verdict.Unmet -join '; ') 'the expected desktop has to be named'
+}
+
+Test-Case 'the expected account matches the agent whether or not Windows qualified the name' {
+    # WindowsIdentity.Name is MACHINE\user; the recipe names the account alone,
+    # because the machine name belongs to the run. Same account, one string longer.
+    $qualified = Test-ReleaseVmReadiness -Receipt (New-FixtureReadiness @{ agentUser = 'EXOSNAP-VERIFY\exosnap' }) `
+        -Requirement (New-ReleaseVmReadinessRequirement -ExpectedUser 'exosnap')
+    Assert-True $qualified.Ready "the machine-qualified name is the same account: $($qualified.Unmet -join '; ')"
+
+    $other = Test-ReleaseVmReadiness -Receipt (New-FixtureReadiness @{ agentUser = 'EXOSNAP-VERIFY\SYSTEM' }) `
+        -Requirement (New-ReleaseVmReadinessRequirement -ExpectedUser 'exosnap')
+    Assert-True (-not $other.Ready) 'a different account is still a different account'
+
+    $pinned = Test-ReleaseVmReadiness -Receipt (New-FixtureReadiness @{ agentUser = 'OTHER\exosnap' }) `
+        -Requirement (New-ReleaseVmReadinessRequirement -ExpectedUser 'EXOSNAP-VERIFY\exosnap')
+    Assert-True (-not $pinned.Ready) 'a requirement that names the machine is held to the machine'
 }
 
 Test-Case 'a guest running as the wrong user is not capture-ready' {

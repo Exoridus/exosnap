@@ -1,0 +1,43 @@
+{
+  "agentDesktop": "Default",
+  "agentSessionId": 1,
+  "agentUser": "EXOSNAP-VERIFY\\exosnap",
+  "agentWindowStation": "WinSta0",
+  "consoleSessionId": 1,
+  "displayDriver": {
+    "HardwareIds": "Root\\MttVDD",
+    "InstanceId": "ROOT\\DISPLAY\\0003",
+    "Name": "Virtual Display Driver"
+  },
+  "displayPaths": [
+    {
+      "Adapter": "Microsoft Hyper-V Video",
+      "Device": "\\\\.\\DISPLAY1",
+      "Height": 768,
+      "Monitor": "Generic PnP Monitor",
+      "Primary": true,
+      "RefreshHz": 64,
+      "Width": 1024
+    },
+    {
+      "Adapter": "Virtual Display Driver",
+      "Device": "\\\\.\\DISPLAY2",
+      "Height": 1440,
+      "Monitor": "Generic PnP Monitor",
+      "Primary": false,
+      "RefreshHz": 60,
+      "Width": 2560
+    }
+  ],
+  "gpu": {
+    "DeviceId": "008E",
+    "DriverVersion": "10.0.26100.1150",
+    "Name": "NVIDIA GeForce RTX 5070 Ti",
+    "VendorId": "1414"
+  },
+  "hostDriverStore": {
+    "DriverVersion": "32.0.16.1656",
+    "Package": "nv_dispi.inf_amd64_a3944b54ff18b284"
+  },
+  "osReachable": true
+}

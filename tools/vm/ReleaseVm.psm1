@@ -1170,8 +1170,16 @@ function Test-ReleaseVmReadiness {
 
     if ($Requirement.ExpectedUser) {
         if (-not (& $measured 'agentUser')) { $unmet += 'the account the agent runs as was not measured' }
-        elseif ($Receipt['agentUser'] -ne $Requirement.ExpectedUser) {
-            $unmet += "the agent runs as $($Receipt['agentUser']), not $($Requirement.ExpectedUser)"
+        else {
+            # WindowsIdentity.Name is MACHINE\user; the recipe names the account
+            # alone, because the machine name is the run's, not the recipe's. Compare
+            # the account, and let a requirement that does carry a qualifier compare
+            # all of it.
+            $actual = "$($Receipt['agentUser'])"
+            $expected = "$($Requirement.ExpectedUser)"
+            $actualAccount = if ($actual.Contains('\')) { $actual.Substring($actual.LastIndexOf('\') + 1) } else { $actual }
+            $sameAccount = if ($expected.Contains('\')) { $actual -eq $expected } else { $actualAccount -eq $expected }
+            if (-not $sameAccount) { $unmet += "the agent runs as $actual, not $expected" }
         }
     }
 
@@ -1346,6 +1354,45 @@ if (`$directory) { Set-Location -LiteralPath `$directory }
 "@
 }
 
+function ConvertTo-ReleaseVmDictionary {
+    <#
+    .SYNOPSIS
+        A receipt as the rules take it: dictionaries all the way down.
+    .DESCRIPTION
+        A receipt is JSON read inside the guest and handed back over PowerShell Direct.
+        What arrives is a deserialised PSCustomObject, and one level of it may already
+        have been copied into a hashtable by the reader; the sections beneath --
+        the adapter, the display paths, the staged package -- come through as objects.
+        Every rule declares its sections as IDictionary and fixtures are written as
+        hashtables, so a rule that is correct on every case it was falsified against
+        still refuses the first receipt a real guest produces.
+
+        Converted once, here, at the boundary: the guest side is Windows PowerShell,
+        which has no -AsHashtable, and the rules should not each learn to accept two
+        shapes.
+    #>
+    [OutputType([object])]
+    param([AllowNull()] $Value)
+    if ($null -eq $Value) { return $null }
+    if ($Value -is [System.Collections.IDictionary]) {
+        $table = @{}
+        foreach ($key in $Value.Keys) { $table[$key] = ConvertTo-ReleaseVmDictionary -Value $Value[$key] }
+        return $table
+    }
+    if ($Value -is [string] -or $Value -is [System.ValueType]) { return $Value }
+    if ($Value -is [System.Collections.IEnumerable]) {
+        return [object[]] @(foreach ($item in $Value) { ConvertTo-ReleaseVmDictionary -Value $item })
+    }
+    if ($Value -is [System.Management.Automation.PSObject] -or $Value.PSObject.Properties.Count -gt 0) {
+        $table = @{}
+        foreach ($property in $Value.PSObject.Properties) {
+            $table[$property.Name] = ConvertTo-ReleaseVmDictionary -Value $property.Value
+        }
+        return $table
+    }
+    return $Value
+}
+
 function Test-ReleaseVmAgentHandshake {
     <#
     .SYNOPSIS
@@ -1371,7 +1418,7 @@ function Test-ReleaseVmAgentHandshake {
         return @{ Ok = $false
             Detail = 'the guest agent wrote no receipt, so nothing is known about the session a campaign would run in' }
     }
-    $verdict = Test-ReleaseVmReadiness -Receipt $Receipt -Requirement $Requirement
+    $verdict = Test-ReleaseVmReadiness -Receipt (ConvertTo-ReleaseVmDictionary -Value $Receipt) -Requirement $Requirement
     if ($verdict.Ready) { return @{ Ok = $true; Detail = 'the agent is in the session the campaign needs' } }
     return @{ Ok = $false; Detail = ($verdict.Unmet -join '; ') }
 }
@@ -1441,8 +1488,8 @@ function Assert-ReleaseVmAgentHandshake {
         [Parameter(Mandatory)] [System.Collections.IDictionary] $Requirement,
         [int] $TimeoutSeconds = 300
     )
-    $receipt = Start-ReleaseVmGuestAgent -VMName $VMName -Credential $Credential -AgentRoot $AgentRoot `
-        -TimeoutSeconds $TimeoutSeconds
+    $receipt = ConvertTo-ReleaseVmDictionary -Value (Start-ReleaseVmGuestAgent -VMName $VMName `
+            -Credential $Credential -AgentRoot $AgentRoot -TimeoutSeconds $TimeoutSeconds)
     $outcome = Test-ReleaseVmAgentHandshake -Receipt $receipt -Requirement $Requirement
     if (-not $outcome.Ok) { throw "'$VMName' cannot run this campaign: $($outcome.Detail)" }
     return $receipt
@@ -1612,9 +1659,9 @@ public static extern bool GetUserObjectInformationW(
         return $receipt
     }
     try {
-        return Invoke-Command -VMName $VMName -Credential $Credential -ScriptBlock $measure -ArgumentList `
-            (Get-ReleaseVmDefault).GuestDriverRepository, $script:DisplayPathNative, $script:DisplayPathScript `
-            -ErrorAction Stop
+        return ConvertTo-ReleaseVmDictionary -Value (Invoke-Command -VMName $VMName -Credential $Credential `
+                -ScriptBlock $measure -ArgumentList (Get-ReleaseVmDefault).GuestDriverRepository, `
+                $script:DisplayPathNative, $script:DisplayPathScript -ErrorAction Stop)
     }
     catch {
         return @{ osReachable = $false; detail = $_.Exception.Message }
@@ -2557,6 +2604,7 @@ Export-ModuleMember -Function @(
     'Assert-ReleaseVmGpuPartition'
     'New-ReleaseVmGuestAgentScript'
     'Test-ReleaseVmAgentHandshake'
+    'ConvertTo-ReleaseVmDictionary'
     'Start-ReleaseVmGuestAgent'
     'Assert-ReleaseVmAgentHandshake'
     'Invoke-ReleaseVmInteractiveCommand'
