@@ -388,6 +388,10 @@ function New-VerifyPlan {
     $checks.Add((New-VerifyCheck -Name 'drift' -Kind 'drift' -DependsOn @('sanity') -Applicable))
     $checks.Add((New-VerifyCheck -Name 'source-hygiene' -Kind 'source-hygiene' -DependsOn @('sanity') -Applicable))
     $checks.Add((New-VerifyCheck -Name 'commit-policy' -Kind 'commit-policy' -DependsOn @('sanity') -Applicable))
+    # Before 'sanity' finishes is too early and after the build is too late: this
+    # asks whether the instrument works, which is worth knowing before a
+    # clang-tidy result is read, and it needs no compile database of its own.
+    $checks.Add((New-VerifyCheck -Name 'lint-canaries' -Kind 'lint-canaries' -DependsOn @('sanity') -Applicable))
     $checks.Add((New-VerifyCheck -Name 'prose-lines' -Kind 'prose-lines' -DependsOn @('sanity') -Applicable))
     $checks.Add((New-VerifyCheck -Name 'format' -Kind 'format' -DependsOn @('sanity') -Applicable))
 
@@ -465,8 +469,8 @@ function Invoke-VerifyPlan {
 
     # Sequential on purpose, and measured so that stays a decision rather than an
     # omission. The independent read-only checks after 'sanity' -- diff, drift,
-    # source-hygiene, commit-policy, prose-lines, format -- take about fifteen
-    # seconds together on a
+    # source-hygiene, commit-policy, lint-canaries, prose-lines, format -- take
+    # about twenty-five seconds together on a
     # sixteen-core machine, of a fast gate that takes about five minutes; running
     # them side by side saves eight seconds at most, and the checks that dominate
     # (build, tests, script-tests) each own a host lock or the full job budget and

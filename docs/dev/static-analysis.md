@@ -26,6 +26,24 @@ unit reports zero findings in repository-owned files. The other five were
 measured that way across 509 translation units. Do not extend the list without
 repeating that pass and recording the result here.
 
+**That is half a rule.** A check that does not run also reports zero findings,
+and nothing in the report tells the two apart. So every blocking check also owns
+a canary under `scripts/tests/fixtures/lint-canaries` -- a few lines written to
+violate exactly that check -- and `scripts/check-lint-canaries.ps1` fails when a
+check does not reject its own. The zero-findings pass says the tree is clean;
+the canary says the instrument is not broken, and neither statement substitutes
+for the other.
+
+The reason this exists is measured, not hypothetical. On 2026-09-13 the
+whole-tree advisory pass reported no `bugprone-unchecked-optional-access`
+findings at all, against 299 in the pass six days earlier. A single-file run with
+the same check configuration and the same compile database reported four findings
+in `libs/update/src/update_checker.cpp` -- a file the whole-tree pass had covered
+and reported three other checks from. The cause was not isolated; what matters is
+that a promotion decision resting on that pass would have been resting on
+silence, and that the number a report carries cannot distinguish a clean tree
+from an absent check.
+
 `readability-misleading-indentation` qualified on the whole-tree pass recorded
 below: zero findings across all 1012 tracked sources. It is the direct form of
 the risk brace-less single statements are usually argued about -- Apple's
@@ -92,6 +110,24 @@ Four rules accounted for four fifths of it: `misc-include-cleaner` (9444),
 `cppcoreguidelines-pro-bounds-avoid-unchecked-container-access` (2862) and the
 `avoid-c-arrays` pair (1120). The rest of this file records what happened to
 each.
+
+A second measurement on 2026-09-13, over `compile_commands.json` rather than the
+tracked source list, counted 14715 distinct sites with the same four rules
+dominating. The two numbers are **not** a before and after: the passes cover
+different sets, and the second one is the pass whose completeness the finding
+above puts in question. Treat both as orders of magnitude, and the per-check
+counts below as the shape of the backlog rather than as a baseline anything is
+measured against.
+
+What the second pass does establish is how small the genuinely bug-shaped
+backlog in shipping code is. Outside tests: `bugprone-incorrect-roundings` 16,
+`bugprone-branch-clone` 11, `bugprone-multi-level-implicit-pointer-conversion`
+9, `bugprone-empty-catch` 5 (two of which already carry the reason in a comment),
+`bugprone-move-forwarding-reference` 5, `bugprone-assignment-in-if-condition` 2.
+The large counts are all style or interop: `performance-enum-size` 159 and
+`performance-no-int-to-ptr` 61 are Win32 and COM shapes, and
+`clang-diagnostic-pragma-once-outside-header` 370 is an artefact of scanning
+headers as their own translation units, not a defect in any of them.
 
 ## Advisory checks
 

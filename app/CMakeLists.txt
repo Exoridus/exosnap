@@ -1519,6 +1519,14 @@ if(EXOSNAP_PWSH)
     set_tests_properties(pipeline.prose_lines PROPERTIES TIMEOUT 300 LABELS "pipeline")
     exosnap_set_test_phase(pipeline.prose_lines hermetic)
 
+    # Needs clang-tidy, and reports that it is missing rather than passing
+    # without it -- which is the same distinction the guard itself is about.
+    add_test(NAME pipeline.lint_canaries
+        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
+            "${PROJECT_SOURCE_DIR}/scripts/tests/lint-canaries.tests.ps1")
+    set_tests_properties(pipeline.lint_canaries PROPERTIES TIMEOUT 300 LABELS "pipeline")
+    exosnap_set_test_phase(pipeline.lint_canaries hermetic)
+
     # The entry point every other gate runs the suite through. What it promises
     # is negative -- that a label exclusion cannot take a category with it, that
     # an empty selection is an error rather than a pass, and that a failing

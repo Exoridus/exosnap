@@ -317,6 +317,13 @@ $realExecutor = {
                 '-NoProfile', '-NonInteractive', '-File', (Join-Path $PSScriptRoot 'check-commit-policy.ps1'))
         }
 
+        'lint-canaries' {
+            # A blocking check that stopped firing reports zero findings, exactly
+            # like a clean tree. This is the other half of that contract.
+            return Invoke-Step -Name 'lint-canaries' -FilePath 'pwsh' -Arguments @(
+                '-NoProfile', '-NonInteractive', '-File', (Join-Path $PSScriptRoot 'check-lint-canaries.ps1'))
+        }
+
         'prose-lines' {
             # -Advisory: the rule is adopted, the tree's backlog is not cleared.
             # check-prose-lines.ps1 says what has to be true before this loses
