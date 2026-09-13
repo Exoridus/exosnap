@@ -190,6 +190,38 @@ public sealed class CleanFirstStartWorkerTests
     }
 
     [Fact]
+    public void AnEmptyDifferenceListIsTheHealthyFirstStart()
+    {
+        // Measured on a real first start: settings.snapshot answers seven sections,
+        // and 'differences' -- the settings whose effective value had to depart from
+        // what was requested -- is empty, because nothing had to be reconciled. The
+        // first assertion swept every section and required each to be non-empty, so
+        // it reported the healthy state as a product failure. The gate must assert
+        // the opposite for that one section.
+        var worker = File.ReadAllText(WorkerPath);
+
+        var start = worker.IndexOf("# The sections that carry the settings themselves", StringComparison.Ordinal);
+        Assert.True(start >= 0, "the first-start-defaults assertion was not found");
+        var end = worker.IndexOf("Add-Step -Name 'first-start-shutdown'", start, StringComparison.Ordinal);
+        Assert.True(end > start, "the first-start-defaults assertion has no end");
+        var step = worker[start..end];
+
+        // The sweep that produced the false accusation, gone.
+        Assert.DoesNotContain("$snapshot.result.PSObject.Properties |", step, StringComparison.Ordinal);
+
+        // A difference on a machine with no stored settings means the defaults could
+        // not be applied as written, which IS a first-start defect.
+        Assert.Contains("$differences.Count -gt 0", step, StringComparison.Ordinal);
+
+        // The sections that carry settings are named, so a renamed one is noticed
+        // rather than swept over.
+        foreach (var section in new[] { "requested", "effective", "app", "constraints", "persistence" })
+        {
+            Assert.Contains($"'{section}'", step, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public void EveryIdentityFieldTheWorkerReadsIsOneTheProductAnswersWith()
     {
         // Measured the expensive way once: the worker read `.version` from

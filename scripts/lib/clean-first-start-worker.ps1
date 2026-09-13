@@ -294,13 +294,31 @@ try {
     $snapshot.result | ConvertTo-Json -Depth 8 |
         Set-Content -LiteralPath (Join-Path $EvidenceDirectory 'first-start-settings.json') -Encoding utf8NoBOM
 
-    $empty = @($snapshot.result.PSObject.Properties |
-            Where-Object { $null -eq $_.Value -or "$($_.Value)" -eq '' } |
-            ForEach-Object { "$($_.Name) is empty on a first start" })
-    $settingCount = @($snapshot.result.PSObject.Properties).Count
-    $detail = if ($empty.Count -eq 0) { "$settingCount setting(s) initialised" } else { $empty -join '; ' }
-    Add-Step -Name 'first-start-defaults' -Ok ($empty.Count -eq 0 -and $settingCount -gt 0) -Kind 'product' `
-        -Detail $detail
+    # The sections that carry the settings themselves, named rather than swept: the
+    # snapshot also carries 'differences', which lists the settings whose effective
+    # value had to depart from what was requested, and on a first start with nothing
+    # but defaults that list is empty BECAUSE the settings are healthy. A rule that
+    # required every section to be non-empty accused the product of exactly the state
+    # it is supposed to be in.
+    $sections = @('requested', 'effective', 'app', 'constraints', 'persistence')
+    $missing = @(foreach ($section in $sections) {
+            $value = $snapshot.result.PSObject.Properties[$section]
+            if (-not $value -or $null -eq $value.Value) { "$section is absent on a first start" }
+            elseif (@($value.Value.PSObject.Properties).Count -eq 0) { "$section is empty on a first start" }
+        })
+
+    # Requested and effective have to agree on a machine with no stored settings and
+    # nothing running: a difference here means the defaults could not be applied as
+    # they are written, which is a first-start defect and not a reconciliation.
+    $differences = @($snapshot.result.differences)
+    if ($differences.Count -gt 0) {
+        $missing += @($differences | ForEach-Object { "$($_.field): requested $($_.requested), effective $($_.effective)" })
+    }
+
+    $detail = if ($missing.Count -eq 0) {
+        "$($sections.Count) settings section(s) initialised, requested and effective agree"
+    } else { $missing -join '; ' }
+    Add-Step -Name 'first-start-defaults' -Ok ($missing.Count -eq 0) -Kind 'product' -Detail $detail
 
     # No quit command exists on the control channel, and inventing one for this gate
     # would be a test-only route around the shutdown the product actually has.
