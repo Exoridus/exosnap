@@ -44,6 +44,13 @@ class FakeProducer : public HubSourceProducer {
     // Which device this producer was built on, as the real producers report it.
     exosnap::engine::DeviceGeneration device_generation;
 
+    // Which call to the factory made this one. A test asking "is this a REBUILT
+    // producer or the old one revived" cannot answer with the address: the first
+    // one is destroyed before the second is allocated, and an allocator handing the
+    // same block back makes a correct rebuild look like a revival. Under a parallel
+    // suite it does exactly that.
+    int build_serial = 0;
+
     bool Open(std::string& err) override {
         ++open_calls;
         if (!open_succeeds) {
@@ -72,12 +79,14 @@ class FakeProducer : public HubSourceProducer {
 struct Fixture {
     std::vector<CaptureSourceKey> built;
     std::unordered_map<CaptureSourceKey, FakeProducer*, CaptureSourceKeyHash> producers;
+    int build_count = 0;
     CaptureHubRegistry registry;
 
     Fixture()
         : registry([this](const CaptureSourceKey& key) -> std::unique_ptr<HubSourceProducer> {
               built.push_back(key);
               auto p = std::make_unique<FakeProducer>();
+              p->build_serial = ++build_count;
               producers[key] = p.get();
               return p;
           }) {
@@ -296,10 +305,10 @@ TEST(CaptureHubRegistry, RebuildingOnANewDeviceProducesFramesAgain) {
     Fixture f;
     auto a = f.SubscribeIgnoring(kWindowA);
     f.DeliverFrame(kWindowA);
-    FakeProducer* first = &f.Producer(kWindowA);
-    first->device_generation = exosnap::engine::DeviceGeneration{1};
+    const int first_serial = f.Producer(kWindowA).build_serial;
+    f.Producer(kWindowA).device_generation = exosnap::engine::DeviceGeneration{1};
 
-    first->next_poll = ProducerPoll::Fatal;
+    f.Producer(kWindowA).next_poll = ProducerPoll::Fatal;
     f.registry.PumpAll();
     ASSERT_TRUE(a.SourceLost());
 
@@ -309,7 +318,7 @@ TEST(CaptureHubRegistry, RebuildingOnANewDeviceProducesFramesAgain) {
     auto b = f.SubscribeIgnoring(kWindowA);
     FakeProducer* second = &f.Producer(kWindowA);
     second->device_generation = exosnap::engine::DeviceGeneration{2};
-    ASSERT_NE(first, second) << "the rebuild must produce a new producer, not revive the old one";
+    ASSERT_NE(second->build_serial, first_serial) << "the rebuild must produce a new producer, not revive the old one";
     EXPECT_NE(second->device_generation, exosnap::engine::DeviceGeneration{1})
         << "a rebuilt producer must be on a new device generation";
 
