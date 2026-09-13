@@ -270,6 +270,10 @@ RecordingCoordinator::RecordingCoordinator()
 }
 
 RecordingCoordinator::~RecordingCoordinator() {
+    // Before anything else: a disk-space auto-stop already queued on the UI thread
+    // must find this expired rather than run against a half-destroyed coordinator.
+    disk_stop_life_token_.reset();
+
     StopMicMeter();
     StopSysMeter();
     StopAppMeter();
@@ -583,7 +587,12 @@ void RecordingCoordinator::OnDiskSpaceLow(exosnap::engine::RecordRequestId reque
     if (QCoreApplication::instance() != nullptr) {
         QMetaObject::invokeMethod(
             QCoreApplication::instance(),
-            [this, request, free_bytes, threshold_bytes]() {
+            [this, alive = std::weak_ptr<bool>(disk_stop_life_token_), request, free_bytes, threshold_bytes]() {
+                // The coordinator itself may be gone: the context object is the
+                // application, which outlives it, and joining the poller does not
+                // retract a call already sitting in this queue.
+                if (alive.expired())
+                    return;
                 // Re-check on the main thread: the recording may have stopped, or
                 // been replaced by the next one, while this was queued.
                 if (record_request_.load() != request || !is_recording_.load())
@@ -2283,17 +2292,19 @@ void RecordingCoordinator::RunRemuxJob(const std::filesystem::path& transient_mk
                 // The remux produced a complete file but publishing it atomically
                 // failed. The transient MKV is still the trustworthy recording, so
                 // demote this to a remux failure: drop the temp, keep the MKV.
-                std::error_code cleanup_ec;
-                std::filesystem::remove(remux_temp, cleanup_ec);
+                if (const std::string left = DescribeFailedStagingRemoval(remux_temp); !left.empty())
+                    diagnostics::AppLog::warning(QStringLiteral("remux"), QString::fromStdString(left));
                 remux_result = exosnap::engine::RemuxResult::Fail(
                     0, "Atomic move to final output failed (Win32 error " + std::to_string(move_err) + ")");
             }
         } else {
             // Failed or cancelled: the target path was never written. Drop the temp so
             // no half-written ".tmp" lingers. (Cancellation already removes it inside
-            // RemuxToProgressiveMp4 — this is a harmless no-op there.)
-            std::error_code cleanup_ec;
-            std::filesystem::remove(remux_temp, cleanup_ec);
+            // RemuxToProgressiveMp4 — this is a harmless no-op there.) A removal that
+            // fails is logged rather than swallowed: the file then stays next to the
+            // user's recordings and nothing else would say so.
+            if (const std::string left = DescribeFailedStagingRemoval(remux_temp); !left.empty())
+                diagnostics::AppLog::warning(QStringLiteral("remux"), QString::fromStdString(left));
         }
 
         // Back on the recording thread; marshal everything to the Qt main thread.
@@ -2433,15 +2444,15 @@ bool RecordingCoordinator::RunSegmentRemuxWork(const std::filesystem::path& tran
 
     if (result.success) {
         if (const unsigned long move_err = AtomicReplaceInPlace(segment_temp, output_mp4); move_err != 0) {
-            std::error_code cleanup_ec;
-            std::filesystem::remove(segment_temp, cleanup_ec);
+            if (const std::string left = DescribeFailedStagingRemoval(segment_temp); !left.empty())
+                diagnostics::AppLog::warning(QStringLiteral("remux"), QString::fromStdString(left));
             result = exosnap::engine::RemuxResult::Fail(0, "Atomic move to segment output failed (Win32 error " +
                                                                std::to_string(move_err) + ")");
         }
     } else {
         // Failed or cancelled: the segment path was never written. Drop the temp.
-        std::error_code cleanup_ec;
-        std::filesystem::remove(segment_temp, cleanup_ec);
+        if (const std::string left = DescribeFailedStagingRemoval(segment_temp); !left.empty())
+            diagnostics::AppLog::warning(QStringLiteral("remux"), QString::fromStdString(left));
     }
 
     if (result.success) {

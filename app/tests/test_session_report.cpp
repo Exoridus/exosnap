@@ -109,6 +109,30 @@ TEST(SessionReport, CarriesEncoderInitAndPeakDrift) {
     EXPECT_DOUBLE_EQ(counters[QStringLiteral("duration_skew_ms")].toDouble(), 12.0);
 }
 
+TEST(SessionReport, ACutShortEncoderFlushIsReportedWithTheFramesItLeftBehind) {
+    // A file finalised after a partial drain plays, seeks and looks complete; the
+    // report is the only place the missing tail is visible at all.
+    SessionReportInputs in = MakeInputs();
+    in.snapshot.video_encoder.flush_incomplete = true;
+    in.snapshot.video_encoder.undrained_frames = 5;
+    in.snapshot.video_encoder.audio_packets_trimmed_at_split = 3;
+    const QJsonObject counters = Parse(BuildSessionReportJson(in))[QStringLiteral("counters")].toObject();
+    EXPECT_TRUE(counters[QStringLiteral("encoder_flush_incomplete")].toBool());
+    EXPECT_DOUBLE_EQ(counters[QStringLiteral("encoder_undrained_frames")].toDouble(), 5.0);
+    // Audio a split could not place. The file plays and looks whole, so the
+    // report is the only place this is visible.
+    EXPECT_DOUBLE_EQ(counters[QStringLiteral("audio_packets_trimmed_at_split")].toDouble(), 3.0);
+
+    // And the ordinary case is an explicit false with zero, not an absent key: a
+    // reader must be able to tell "complete" from "nobody recorded the outcome".
+    const QJsonObject clean = Parse(BuildSessionReportJson(MakeInputs()))[QStringLiteral("counters")].toObject();
+    ASSERT_TRUE(clean.contains(QStringLiteral("encoder_flush_incomplete")));
+    EXPECT_FALSE(clean[QStringLiteral("encoder_flush_incomplete")].toBool());
+    EXPECT_DOUBLE_EQ(clean[QStringLiteral("encoder_undrained_frames")].toDouble(), 0.0);
+    ASSERT_TRUE(clean.contains(QStringLiteral("audio_packets_trimmed_at_split")));
+    EXPECT_DOUBLE_EQ(clean[QStringLiteral("audio_packets_trimmed_at_split")].toDouble(), 0.0);
+}
+
 TEST(SessionReport, UnavailableInsteadOfFakeZero) {
     SessionReportInputs in = MakeInputs();
     in.snapshot.duration_skew_availability = exosnap::engine::MetricAvailability::Unavailable;

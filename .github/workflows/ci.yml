@@ -152,6 +152,111 @@ jobs:
         run: pwsh -NonInteractive -File scripts/validate-network-egress.ps1
 
   # ---------------------------------------------------------------------------
+  # Cheap guardrails that block locally and did not block here. Each of them runs
+  # in the pre-commit gate on a developer's machine, and a PR from a machine that
+  # skipped the hook -- or from a contributor without it -- reached the reviewer
+  # with none of them applied. None needs a compiler.
+  #
+  # The source-hygiene check is scoped to the PR RANGE, not to the checkout. A
+  # pull_request checkout is the merge commit with a depth of one; diffing that
+  # against nothing scans an empty change set and passes over every line the PR
+  # added. The base is fetched to the depth the merge base needs and passed in
+  # explicitly.
+  #
+  # The two workflow linters are pinned by version and by digest, and a missing
+  # tool fails the step: a step that skips itself when its tool is absent reports
+  # a green check that ran nothing, which is the failure this job exists to
+  # prevent in the first place.
+  # ---------------------------------------------------------------------------
+  guardrails:
+    name: guardrails
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    concurrency:
+      group: ci-${{ github.workflow }}-guardrails-${{ github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # Enough history to reach the merge base of the PR. 0 is the whole
+          # repository, which is what makes the base reachable on a branch that
+          # diverged a while ago; a shallow fetch would leave merge-base with
+          # nothing to answer and the hygiene check with nothing to scan.
+          fetch-depth: 0
+
+      - name: Assert PowerShell
+        # ubuntu-24.04 images carry pwsh already; asserted rather than assumed, so
+        # a runner image that drops it fails here with its name instead of later
+        # with a shell error. Through the shell's own `-Version`, not a
+        # PowerShell expression in single quotes: the step is bash, and bash
+        # single quotes are what keeps `$PSVersionTable` from being expanded
+        # by bash -- which shellcheck reads, correctly, as a variable that is not.
+        run: pwsh -Version
+
+      - name: Check drift (Qt version, Qt setup, SDK paths)
+        run: pwsh -NonInteractive -File scripts/check-drift.ps1
+
+      - name: Source hygiene over the PR range
+        # Only on a pull_request, where the range is the PR's base against its
+        # head: the set of lines this change added, which is the contract the
+        # pre-commit hook enforces locally. A tag push or a manual dispatch has no
+        # range a change can be attributed to (github.event.before is zeros or
+        # absent), and scanning the whole tree there would block a release on the
+        # 51-finding backlog in older comments that AGENTS.md names -- a decision
+        # about the backlog, not about the tag. Reported below, not enforced.
+        if: github.event_name == 'pull_request'
+        run: >-
+          pwsh -NonInteractive -File scripts/check-source-hygiene.ps1
+          -Base ${{ github.event.pull_request.base.sha }}
+
+      - name: Source hygiene backlog (whole tree, report only)
+        # Visible on every run so the number is known, never a gate: the backlog
+        # is older comments, and a release is not the place it gets paid down.
+        if: github.event_name != 'pull_request'
+        continue-on-error: true
+        run: pwsh -NonInteractive -File scripts/check-source-hygiene.ps1 -All
+
+      - name: Install actionlint (pinned)
+        # By version and by SHA-256 of the release archive. A linter fetched as
+        # "latest" changes what it flags between two runs of the same workflow.
+        env:
+          ACTIONLINT_VERSION: '1.7.12'
+          ACTIONLINT_SHA256: '8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8'
+        run: |
+          set -euo pipefail
+          archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -sSfL -o "$archive"             "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${archive}"
+          echo "${ACTIONLINT_SHA256}  ${archive}" | sha256sum -c -
+          tar -xzf "$archive" actionlint
+          install -m 0755 actionlint /usr/local/bin/actionlint
+          actionlint -version
+
+      - name: actionlint
+        # No -color: the escape sequences are noise in the Actions log and make
+        # the log unreadable through the API.
+        run: actionlint
+
+      - name: Install zizmor (pinned)
+        env:
+          ZIZMOR_VERSION: '1.30.1'
+        run: |
+          set -euo pipefail
+          pipx install "zizmor==${ZIZMOR_VERSION}"
+          zizmor --version
+
+      - name: zizmor
+        # Offline: the audits that need the GitHub API (stale action refs) are the
+        # ones that change answer between two runs of the same workflow. What is
+        # left is what can be decided from the file, which is what a guardrail is.
+        #
+        # High only, for now. The five known high findings (caches restored on tag
+        # pushes) carry an inline 'zizmor: ignore' at the step that is the decision,
+        # with the reason, so a NEW high finding fails here. The 41 medium findings
+        # are a backlog, not a gate: blocking on them today would block on the state
+        # of the repository rather than on the change in front of the reviewer.
+        run: zizmor --offline --min-severity high .github/workflows
+
+  # ---------------------------------------------------------------------------
   # Release-verify harness: the typed C# harness under tools/release-verify. It
   # has its own SDK pin (tools/release-verify/global.json), its own package lock
   # files, and its own test runner, so it builds and tests on its own rather than
@@ -362,6 +467,7 @@ jobs:
 
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+        # zizmor: ignore[cache-poisoning] -- restored on tag pushes by decision: a cold release build is ~46 min and the key is scoped to runner image + lock files; revisiting it is an ADR, not a lint fix
 
       # No frontend flag: there is one frontend. The Qt Quick application and its
       # adapter/QML test targets are the default build (ADR 0064).
@@ -388,11 +494,19 @@ jobs:
       # they are excluded here rather than trusted to skip themselves — a future
       # runner-image change (or a new live test that forgets the self-skip)
       # would otherwise fail silently past this gate.
+      #
+      # `live` and the execution phases are two axes and neither replaces the
+      # other. A phase says what KIND of machine a test needs; `live` says the
+      # test reads real machine state. The quick.* tests are phase.desktop and run
+      # here because an offscreen Qt platform is a desktop surface — except the
+      # two that also carry `live` because they need the native platform and the
+      # real cursor. Selecting by phase alone would either lose the first group or
+      # keep the second.
       - name: Test (windows-x64-ninja-debug)
         run: >-
           pwsh -NonInteractive -File scripts/run-tests.ps1
           -BuildDir build/windows-x64-ninja-debug -Config Debug
-          -ExcludeLabel live
+          -ExcludeLabel live -RequireFresh
 
       # Blocking static analysis. Deliberately a step inside build-test-debug
       # rather than a job of its own: build-test-debug is already a required
@@ -424,6 +538,7 @@ jobs:
       # set is never what fills it.
       - name: Restore clang-tidy result cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        # zizmor: ignore[cache-poisoning] -- restored on tag pushes by decision: a cold release build is ~46 min and the key is scoped to runner image + lock files; revisiting it is an ADR, not a lint fix
         with:
           path: ${{ runner.temp }}/clang-tidy-cache
           key: clang-tidy-blocking-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -495,6 +610,7 @@ jobs:
 
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+        # zizmor: ignore[cache-poisoning] -- restored on tag pushes by decision: a cold release build is ~46 min and the key is scoped to runner image + lock files; revisiting it is an ADR, not a lint fix
 
       # A Release build is the only configuration that compiles out the harness
       # code paths, so the Debug leg alone would miss exactly the guards that
@@ -514,6 +630,14 @@ jobs:
       # runner-image change (or a new live test that forgets the self-skip)
       # would otherwise fail silently past this gate.
       #
+      # `live` and the execution phases are two axes and neither replaces the
+      # other. A phase says what KIND of machine a test needs; `live` says the
+      # test reads real machine state. The quick.* tests are phase.desktop and run
+      # here because an offscreen Qt platform is a desktop surface — except the
+      # two that also carry `live` because they need the native platform and the
+      # real cursor. Selecting by phase alone would either lose the first group or
+      # keep the second.
+      #
       # Not on pull_request: the debug leg already carried the full suite, and
       # this leg's PR-tier job is configure/compile/link (see the job comment).
       # Tags and manual dispatches are the release gate and run the Release
@@ -523,7 +647,7 @@ jobs:
         run: >-
           pwsh -NonInteractive -File scripts/run-tests.ps1
           -BuildDir build/windows-x64-ninja-release -Config Release
-          -ExcludeLabel live
+          -ExcludeLabel live -RequireFresh
 
       - name: sccache stats
         if: always()
@@ -600,6 +724,7 @@ jobs:
 
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+        # zizmor: ignore[cache-poisoning] -- restored on tag pushes by decision: a cold release build is ~46 min and the key is scoped to runner image + lock files; revisiting it is an ADR, not a lint fix
 
       - name: Configure (windows-x64-ninja-release)
         run: cmake --preset windows-x64-ninja-release -DEXOSNAP_USE_SCCACHE=ON
@@ -622,3 +747,102 @@ jobs:
             .workspace/release/*/validation-report.md
             .workspace/release/*/artifact-manifest.json
           if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------
+  # The one required check.
+  #
+  # Naming the heavy jobs directly in branch protection looks stricter than it
+  # is: a job that skips itself reports conclusion "skipped", and GitHub counts
+  # a skipped required check as satisfied. "build-test (windows-x64-release)"
+  # is required today and skips on any pull request whose diff misses the
+  # `build` filter — so the rule it is listed under can be satisfied by a job
+  # that never ran. The inverse mistake is just as easy: requiring a
+  # conditional job that reports nothing at all leaves the rule permanently
+  # unsatisfiable.
+  #
+  # So exactly one context is required, and the policy lives here, in the
+  # repository, where it is reviewed with the code. This job always runs and
+  # always reports, and it decides per job whether a non-success result is the
+  # documented behaviour for this event or a failure being waved through.
+  # ---------------------------------------------------------------------------
+  ci-required:
+    name: ci-required
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: always()
+    needs:
+      - lint
+      - guardrails
+      - verify-harness
+      - dev-scripts
+      - changes
+      - build-test-debug
+      - build-test-release
+      - packaging-smoke
+    steps:
+      - name: Evaluate the required set
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          BUILD_FILTER: ${{ needs.changes.outputs.build }}
+          PACKAGING_FILTER: ${{ needs.changes.outputs.packaging }}
+          R_LINT: ${{ needs.lint.result }}
+          R_GUARDRAILS: ${{ needs.guardrails.result }}
+          R_VERIFY_HARNESS: ${{ needs.verify-harness.result }}
+          R_DEV_SCRIPTS: ${{ needs.dev-scripts.result }}
+          R_CHANGES: ${{ needs.changes.result }}
+          R_DEBUG: ${{ needs.build-test-debug.result }}
+          R_RELEASE: ${{ needs.build-test-release.result }}
+          R_PACKAGING: ${{ needs.packaging-smoke.result }}
+        run: |
+          set -euo pipefail
+          failed=0
+
+          # $1 job label, $2 its result, $3 "skip-ok" when this event allows a
+          # skip, anything else when it does not.
+          require() {
+            local name="$1" result="$2" skip_ok="$3"
+            if [ "$result" = "success" ]; then
+              echo "ok       $name"
+            elif [ "$result" = "skipped" ] && [ "$skip_ok" = "skip-ok" ]; then
+              echo "skipped  $name (expected for this event)"
+            else
+              echo "FAILED   $name: result=$result"
+              failed=1
+            fi
+          }
+
+          is_tag=false
+          case "$REF" in refs/tags/v*) is_tag=true ;; esac
+
+          # These five run on every trigger; a skip is a workflow defect.
+          require lint                "$R_LINT"           must-run
+          require guardrails          "$R_GUARDRAILS"     must-run
+          require verify-harness      "$R_VERIFY_HARNESS" must-run
+          require dev-scripts         "$R_DEV_SCRIPTS"    must-run
+          require "detect changes"    "$R_CHANGES"        must-run
+
+          # The heavy legs deliberately do not re-run on a push to main: that
+          # commit is the squash of a pull request whose own run just proved
+          # them. Anywhere else they have to have run.
+          debug_skip=not-allowed
+          if [ "$EVENT" = "push" ] && [ "$is_tag" = false ]; then debug_skip=skip-ok; fi
+          require "build-test (debug)" "$R_DEBUG" "$debug_skip"
+
+          release_skip=not-allowed
+          if [ "$EVENT" = "push" ] && [ "$is_tag" = false ]; then release_skip=skip-ok; fi
+          if [ "$EVENT" = "pull_request" ] && [ "$BUILD_FILTER" != "true" ]; then release_skip=skip-ok; fi
+          require "build-test (release)" "$R_RELEASE" "$release_skip"
+
+          # Pull-request-only, and only when the packaging filter matched.
+          packaging_skip=skip-ok
+          if [ "$EVENT" = "pull_request" ] && [ "$PACKAGING_FILTER" = "true" ]; then
+            packaging_skip=not-allowed
+          fi
+          require packaging-smoke "$R_PACKAGING" "$packaging_skip"
+
+          if [ "$failed" -ne 0 ]; then
+            echo "::error::A job in the required set did not pass, and its result is not an expected skip for this event."
+            exit 1
+          fi
+          echo "All required jobs accounted for."

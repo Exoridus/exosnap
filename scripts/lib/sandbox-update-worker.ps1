@@ -32,6 +32,18 @@ param(
     [Parameter(Mandatory)] [string] $BaseMsiPath,
     [Parameter(Mandatory)] [string] $ResultPath,
     [Parameter(Mandatory)] [string] $MarkerPath,
+    # Where everything worth reading afterwards goes. The host copies THIS back
+    # before the machine and its staging are discarded, so anything written outside
+    # it is gone -- which is what happened to the MSI logs and the updater state
+    # while they lived under the staging directory.
+    [Parameter(Mandatory)] [string] $EvidenceDirectory,
+    # The candidate the campaign bound, as its identity. The accept assertion
+    # compares the installed build against THESE, not against "something newer
+    # than what we started from": any newer release satisfies that, including
+    # another RC of the same base version that nobody verified.
+    [Parameter(Mandatory)] [string] $ExpectedVersion,
+    [Parameter(Mandatory)] [string] $ExpectedCommit,
+    [Parameter(Mandatory)] [string] $ExpectedExeSha256,
     [string] $UpdateChannel = 'Preview',
     [int] $OfferTimeoutSeconds = 90
 )
@@ -40,13 +52,51 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $script:Steps = [System.Collections.Generic.List[object]]::new()
-$script:LogDirectory = Join-Path $StagingDirectory 'logs'
+New-Item -ItemType Directory -Path $EvidenceDirectory -Force | Out-Null
+# Under the evidence directory, not the staging directory: the staging directory
+# goes away with the machine, and the logs of a run that failed are the only
+# reason to have looked.
+$script:LogDirectory = Join-Path $EvidenceDirectory 'logs'
 New-Item -ItemType Directory -Path $script:LogDirectory -Force | Out-Null
 
 function Add-Step {
-    param([Parameter(Mandatory)] [string] $Name, [Parameter(Mandatory)] [bool] $Ok, [string] $Detail = '')
-    $script:Steps.Add([pscustomobject]@{ name = $Name; ok = $Ok; detail = $Detail })
-    Write-Host "  $(if ($Ok) { 'ok  ' } else { 'FAIL' })  $Name  $Detail"
+    <#
+    .SYNOPSIS
+        Record one step, saying whether it is a product assertion or the test
+        environment being built.
+    .DESCRIPTION
+        `Kind` is what keeps a bootstrap failure from reading as a product defect.
+        A step with ok=false used to mean "ExoSnap is wrong" whatever the reason,
+        so "msiexec could not start because a staged dependency was missing" was
+        reported as a failing product gate -- the harness accusing the product of
+        its own setup problem.
+
+        bootstrap: building the environment the assertions need. Installing the
+        older release, selecting the channel, launching a helper. A failure here
+        measured nothing about ExoSnap.
+
+        product: what the gate is actually asserting. Only these may fail the gate.
+
+        There is no default. It looks conservative to assume 'product' and it is
+        not: an unclassified step is indistinguishable from either kind, so
+        reading it as a product assertion can accuse ExoSnap of the harness's own
+        setup problem. The host treats a step with no recognised kind as
+        unverified, which is the same rule the rest of the harness follows --
+        what was not measured is never a defect.
+    #>
+    param(
+        [Parameter(Mandatory)] [string] $Name,
+        [Parameter(Mandatory)] [bool] $Ok,
+        [string] $Detail = '',
+        # Mandatory, with no default. "A new product check nobody classified" and
+        # "a new bootstrap step nobody classified" look identical from the outside,
+        # and defaulting to product turns the second into a false accusation
+        # against ExoSnap on a gate that is required for promotion. An unclassified
+        # step leaves the run unverified instead, so the schema gets fixed.
+        [Parameter(Mandatory)] [ValidateSet('product', 'bootstrap')] [string] $Kind
+    )
+    $script:Steps.Add([pscustomobject]@{ name = $Name; ok = $Ok; detail = $Detail; kind = $Kind })
+    Write-Host "  $(if ($Ok) { 'ok  ' } else { 'FAIL' })  $Name  [$Kind]  $Detail"
 }
 
 function Write-Result {
@@ -56,7 +106,13 @@ function Write-Result {
         fatal       = $Fatal
         steps       = @($script:Steps)
     }
-    Set-Content -LiteralPath $ResultPath -Value ($document | ConvertTo-Json -Depth 12) -Encoding utf8NoBOM
+    $json = $document | ConvertTo-Json -Depth 12
+    Set-Content -LiteralPath $ResultPath -Value $json -Encoding utf8NoBOM
+    # A second copy inside the evidence directory. The host reads the result from
+    # $ResultPath, but a run whose result read-back failed still leaves the document
+    # where the evidence went -- otherwise the one artefact that says what happened
+    # is the one that does not survive.
+    Set-Content -LiteralPath (Join-Path $EvidenceDirectory 'result.json') -Value $json -Encoding utf8NoBOM
 }
 
 function Invoke-Msi {
@@ -128,17 +184,19 @@ try {
     # ---------------------------------------------------------------- base install
     $install = Invoke-Msi -Arguments "/i `"$BaseMsiPath`"" -LogName 'install-base.log'
     if ($install.ExitCode -ne 0) {
-        Add-Step -Name 'install-base' -Ok $false -Detail "msiexec exited $($install.ExitCode); see logs/install-base.log"
+        Add-Step -Name 'install-base' -Ok $false -Kind 'bootstrap' `
+            -Detail "msiexec exited $($install.ExitCode); see logs/install-base.log"
         Write-Result -Fatal 'the older release could not be installed, so there was nothing to update from'
         return
     }
     $installedExe = Get-InstalledExoSnap
     if ($null -eq $installedExe) {
-        Add-Step -Name 'install-base' -Ok $false -Detail 'the MSI reported success but HKLM:\SOFTWARE\Codexo\ExoSnap names no installed exosnap.exe'
+        Add-Step -Name 'install-base' -Ok $false -Kind 'bootstrap' `
+            -Detail 'the MSI reported success but HKLM:\SOFTWARE\Codexo\ExoSnap names no installed exosnap.exe'
         Write-Result -Fatal 'no installed build to update from'
         return
     }
-    Add-Step -Name 'install-base' -Ok $true -Detail $installedExe
+    Add-Step -Name 'install-base' -Ok $true -Kind 'bootstrap' -Detail $installedExe
 
     # ------------------------------------------------------------- channel + offer
     # The channel is read when the update service starts, so it takes a restart to
@@ -149,13 +207,15 @@ try {
         $set = Invoke-LiveVerifyCommand -Connection $app.Connection -Command 'settings.set' `
             -Parameters @{ key = 'app.updateChannel'; value = $UpdateChannel }
         if (-not $set.ok) {
-            Add-Step -Name 'select-channel' -Ok $false -Detail "settings.set refused: $($set.error.message)"
+            Add-Step -Name 'select-channel' -Ok $false -Kind 'bootstrap' `
+                -Detail "settings.set refused: $($set.error.message)"
             Write-Result -Fatal 'the update channel could not be selected'
             return
         }
         $before = (Invoke-LiveVerifyCommand -Connection $app.Connection -Command 'app.identity').result
         $beforeVersion = "$($before.productVersion)"
-        Add-Step -Name 'select-channel' -Ok $true -Detail "$UpdateChannel, installed version $beforeVersion"
+        Add-Step -Name 'select-channel' -Ok $true -Kind 'bootstrap' `
+            -Detail "$UpdateChannel, installed version $beforeVersion"
     }
     finally { try { $app.Connection.Close() } catch { } }
 
@@ -168,23 +228,23 @@ try {
     try {
         $checked = Invoke-LiveVerifyCommand -Connection $app.Connection -Command 'update.check'
         if (-not $checked.ok) {
-            Add-Step -Name 'decline-offer' -Ok $false -Detail "update.check refused: $($checked.error.message)"
+            Add-Step -Name 'decline-offer' -Ok $false -Kind 'product' -Detail "update.check refused: $($checked.error.message)"
         }
         else {
             $state = Wait-UpdateOffer -Connection $app.Connection -TimeoutSeconds $OfferTimeoutSeconds
             $offered = $null -ne $state -and $null -ne $state.PSObject.Properties['updateAvailable'] -and $state.updateAvailable
             if (-not $offered) {
-                Add-Step -Name 'decline-offer' -Ok $false -Detail "no update is offered to $beforeVersion on the $UpdateChannel channel"
+                Add-Step -Name 'decline-offer' -Ok $false -Kind 'product' -Detail "no update is offered to $beforeVersion on the $UpdateChannel channel"
             }
             else {
-                Add-Step -Name 'decline-offer' -Ok $true -Detail "an update is offered to $beforeVersion"
+                Add-Step -Name 'decline-offer' -Ok $true -Kind 'product' -Detail "an update is offered to $beforeVersion"
                 $applied = Invoke-LiveVerifyCommand -Connection $app.Connection -Command 'update.apply'
                 if (-not $applied.ok) {
-                    Add-Step -Name 'decline-apply' -Ok $false -Detail "update.apply refused: $($applied.error.message)"
+                    Add-Step -Name 'decline-apply' -Ok $false -Kind 'product' -Detail "update.apply refused: $($applied.error.message)"
                 }
                 else {
                     $launch = (Invoke-LiveVerifyCommand -Connection $app.Connection -Command 'update.getState').result.updaterLaunch
-                    Add-Step -Name 'decline-apply' -Ok $true -Detail "updater run id $($launch.controlRunId)"
+                    Add-Step -Name 'decline-apply' -Ok $true -Kind 'product' -Detail "updater run id $($launch.controlRunId)"
                     $updater = Connect-LiveVerify -RunId "$($launch.controlRunId)" -Role 'Updater' -ConnectTimeoutMs 30000
                     try {
                         # The failure lands asynchronously: the elevation call is made
@@ -205,14 +265,14 @@ try {
                         $failureCase = if ($null -ne $after) { "$($after.failureCase)" } else { '' }
                         $installState = if ($null -ne $after) { "$($after.installState)" } else { '' }
                         if ($failureCase -ne 'uacDeclined') {
-                            Add-Step -Name 'decline-state' -Ok $false -Detail "failureCase is '$failureCase', expected uacDeclined"
+                            Add-Step -Name 'decline-state' -Ok $false -Kind 'product' -Detail "failureCase is '$failureCase', expected uacDeclined"
                         }
                         elseif ($installState -eq 'strandedInBackup') {
-                            Add-Step -Name 'decline-state' -Ok $false -Detail 'the installation was left stranded in the backup directory'
+                            Add-Step -Name 'decline-state' -Ok $false -Kind 'product' -Detail 'the installation was left stranded in the backup directory'
                         }
                         else {
                             $declineOk = $true
-                            Add-Step -Name 'decline-state' -Ok $true -Detail "failureCase uacDeclined, installState $installState"
+                            Add-Step -Name 'decline-state' -Ok $true -Kind 'product' -Detail "failureCase uacDeclined, installState $installState"
                         }
                         # THE DEFECT THIS STEP EXISTS FOR. A declined update used to
                         # leave the updater running with its failure card open; it
@@ -220,7 +280,7 @@ try {
                         # its own updater over the file and the accept gate failed
                         # with "Failed to stage updater file".
                         $closed = Invoke-LiveVerifyCommand -Connection $updater -Command 'updater.close'
-                        Add-Step -Name 'decline-updater-closed' -Ok ([bool]$closed.ok) `
+                        Add-Step -Name 'decline-updater-closed' -Ok ([bool]$closed.ok) -Kind 'product' `
                             -Detail $(if ($closed.ok) { 'the updater closed on request' } else { "updater.close refused: $($closed.error.message)" })
                     }
                     finally { try { $updater.Close() } catch { } }
@@ -242,7 +302,7 @@ try {
         Start-Sleep -Milliseconds 500
     }
     $stillOpen = @(Get-Process -Name 'exosnap-updater' -ErrorAction SilentlyContinue).Count
-    Add-Step -Name 'updater-gone-before-accept' -Ok ($stillOpen -eq 0) `
+    Add-Step -Name 'updater-gone-before-accept' -Ok ($stillOpen -eq 0) -Kind 'product' `
         -Detail $(if ($stillOpen -eq 0) { 'no updater process is holding exosnap-updater.exe' } else { "$stillOpen updater process(es) still running" })
 
     # ---------------------------------------------------------------------- accept
@@ -250,25 +310,42 @@ try {
     try {
         $checked = Invoke-LiveVerifyCommand -Connection $app.Connection -Command 'update.check'
         if (-not $checked.ok) {
-            Add-Step -Name 'accept-offer' -Ok $false -Detail "update.check refused: $($checked.error.message)"
+            Add-Step -Name 'accept-offer' -Ok $false -Kind 'product' -Detail "update.check refused: $($checked.error.message)"
             Write-Result
             return
         }
         $state = Wait-UpdateOffer -Connection $app.Connection -TimeoutSeconds $OfferTimeoutSeconds
         $offered = $null -ne $state -and $null -ne $state.PSObject.Properties['updateAvailable'] -and $state.updateAvailable
         if (-not $offered) {
-            Add-Step -Name 'accept-offer' -Ok $false -Detail "no update is offered to $beforeVersion after the decline"
+            Add-Step -Name 'accept-offer' -Ok $false -Kind 'product' -Detail "no update is offered to $beforeVersion after the decline"
             Write-Result
             return
         }
-        Add-Step -Name 'accept-offer' -Ok $true -Detail 'an update is offered again after the declined one'
+        # Which candidate is being offered, checked BEFORE apply. Finding out
+        # afterwards that some other build installed is a worse place to learn it,
+        # and the install would already have happened.
+        $offeredVersion = "$($state.availableVersion)"
+        if ([string]::IsNullOrWhiteSpace($offeredVersion)) {
+            Add-Step -Name 'accept-offer' -Ok $false -Kind 'product' `
+                -Detail 'an update is offered but the state names no available version'
+            Write-Result
+            return
+        }
+        if ($offeredVersion -ne $ExpectedVersion) {
+            Add-Step -Name 'accept-offer' -Ok $false -Kind 'product' `
+                -Detail "the offer is for $offeredVersion, not the bound candidate $ExpectedVersion"
+            Write-Result
+            return
+        }
+        Add-Step -Name 'accept-offer' -Ok $true -Kind 'product' `
+            -Detail "an update to the bound candidate $offeredVersion is offered again after the declined one"
         $applied = Invoke-LiveVerifyCommand -Connection $app.Connection -Command 'update.apply'
         if (-not $applied.ok) {
-            Add-Step -Name 'accept-apply' -Ok $false -Detail "update.apply refused: $($applied.error.message)"
+            Add-Step -Name 'accept-apply' -Ok $false -Kind 'product' -Detail "update.apply refused: $($applied.error.message)"
             Write-Result
             return
         }
-        Add-Step -Name 'accept-apply' -Ok $true -Detail 'the updater was launched without a fault injected'
+        Add-Step -Name 'accept-apply' -Ok $true -Kind 'product' -Detail 'the updater was launched without a fault injected'
     }
     finally { try { $app.Connection.Close() } catch { } }
 
@@ -276,35 +353,73 @@ try {
     # FRESH launch of the installed path rather than from the connection that
     # started it -- that process is the one being replaced.
     $deadline = [DateTime]::UtcNow.AddMinutes(6)
-    $afterVersion = ''
+    $afterIdentity = $null
     while ([DateTime]::UtcNow -lt $deadline) {
         Start-Sleep -Seconds 5
         try {
             $installedExe = Get-InstalledExoSnap
             if ($null -eq $installedExe) { continue }
             $probe = Start-ControlledApp -ExePath $installedExe -ConnectTimeoutMs 30000
-            try { $afterVersion = "$((Invoke-LiveVerifyCommand -Connection $probe.Connection -Command 'app.identity').result.productVersion)" }
+            try {
+                $afterIdentity = (Invoke-LiveVerifyCommand -Connection $probe.Connection -Command 'app.identity').result
+            }
             finally {
                 try { $probe.Connection.Close() } catch { }
                 Stop-ExoSnapProcesses
             }
-            if (-not [string]::IsNullOrWhiteSpace($afterVersion) -and $afterVersion -ne $beforeVersion) { break }
+            if ($null -ne $afterIdentity -and "$($afterIdentity.productVersion)" -ne $beforeVersion) { break }
         }
         catch { }
     }
-    if ([string]::IsNullOrWhiteSpace($afterVersion)) {
-        Add-Step -Name 'accept-installed' -Ok $false -Detail 'the application could not be reached again after the install'
+
+    # The whole identity, not just the version. "the version changed" is satisfied
+    # by any newer build -- including another RC of the same base version that
+    # nobody verified -- so the assertion is that the build now installed IS the
+    # candidate this campaign bound.
+    #
+    # Deliberately not asserted here: that the package the updater downloaded had
+    # the digest the manifest declared. The updater verifies its signed manifest
+    # itself and refuses a mismatch, which is the product path and the real proof;
+    # the control channel exposes no downloaded-package digest, and computing one
+    # from outside would be a test-only route around the chain it claims to check.
+    $afterVersion = if ($null -ne $afterIdentity) { "$($afterIdentity.productVersion)" } else { '' }
+    if ($null -eq $afterIdentity -or [string]::IsNullOrWhiteSpace($afterVersion)) {
+        Add-Step -Name 'accept-installed' -Ok $false -Kind 'product' -Detail 'the application could not be reached again after the install'
     }
     elseif ($afterVersion -eq $beforeVersion) {
-        Add-Step -Name 'accept-installed' -Ok $false -Detail "the version is unchanged at $afterVersion; nothing was installed"
+        Add-Step -Name 'accept-installed' -Ok $false -Kind 'product' -Detail "the version is unchanged at $afterVersion; nothing was installed"
     }
     else {
-        Add-Step -Name 'accept-installed' -Ok $true -Detail "installed: $beforeVersion -> $afterVersion"
+        $mismatches = @()
+        if ($afterVersion -ne $ExpectedVersion) {
+            $mismatches += "productVersion is $afterVersion, expected $ExpectedVersion"
+        }
+        $afterCommit = "$($afterIdentity.commit)"
+        if ($afterCommit -ne $ExpectedCommit) {
+            $mismatches += "commit is $afterCommit, expected $ExpectedCommit"
+        }
+        $afterSha = "$($afterIdentity.executableSha256)"
+        # Compared case-insensitively: the digest is hex and the two sides format
+        # it independently.
+        if (-not [string]::Equals($afterSha, $ExpectedExeSha256, [StringComparison]::OrdinalIgnoreCase)) {
+            $mismatches += "executableSha256 is $afterSha, expected $ExpectedExeSha256"
+        }
+
+        if ($mismatches.Count -gt 0) {
+            Add-Step -Name 'accept-installed' -Ok $false -Kind 'product' `
+                -Detail ("the update installed a build that is not the bound candidate: " + ($mismatches -join '; '))
+        }
+        else {
+            Add-Step -Name 'accept-installed' -Ok $true -Kind 'product' `
+                -Detail "installed the bound candidate: $beforeVersion -> $afterVersion (commit $afterCommit)"
+        }
     }
     Write-Result
 }
 catch {
-    Add-Step -Name 'worker' -Ok $false -Detail "$($_.Exception.Message)"
+    # The worker itself threw, so the environment is what failed -- nothing below
+    # the throw measured anything.
+    Add-Step -Name 'worker' -Ok $false -Kind 'bootstrap' -Detail "$($_.Exception.Message)"
     Write-Result -Fatal "$($_.Exception.Message)"
 }
 finally {

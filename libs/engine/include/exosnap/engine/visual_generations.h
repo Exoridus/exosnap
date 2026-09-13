@@ -6,16 +6,25 @@ namespace exosnap::engine {
 
 // One monotonically-increasing counter per independently-changing visual
 // input. Each counter is bumped only when that specific input actually
-// changed — a new accepted screen/webcam sample, a cursor position/
-// visibility/shape/capture-toggle change, an overlay geometry/opacity/
-// chroma-key change, or an HDR/colour-pipeline reconfiguration. Comparing
-// the resulting VisualFrameKey tells the pipeline whether the previous
-// composited/converted frame is still valid without ever touching pixels.
+// changed: a new accepted screen/webcam sample, a cursor position/
+// visibility/shape/capture-toggle change, or an overlay geometry/opacity/
+// chroma-key change. Comparing the resulting VisualFrameKey tells the
+// pipeline whether the previous composited/converted frame is still valid
+// without ever touching pixels.
+//
+// Every capture backend must advance the counters for the inputs it owns. A
+// backend that leaves one standing makes two different frames compare equal,
+// which is indistinguishable from "nothing changed" and silently re-uses the
+// cached composite or encoder slot.
 struct VisualGenerations {
     uint64_t screen = 0;
     uint64_t webcam = 0;
     uint64_t cursor = 0;
     uint64_t overlay = 0;
+    // Reserved. The colour pipeline (SDR / tone-map / native HDR10) is
+    // negotiated once from the first captured frame and cannot change while a
+    // session runs -- a display whose HDR is toggled mid-session fails the
+    // recording rather than reconfiguring -- so nothing advances this today.
     uint64_t color_pipeline = 0;
 };
 

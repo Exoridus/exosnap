@@ -4,6 +4,7 @@
 
 #include "models/EditTimelineModel.h"
 #include "models/MarkerSidecar.h"
+#include "services/AtomicFileOps.h"
 
 #include <QDir>
 #include <QFileInfo>
@@ -297,12 +298,12 @@ void EditExportAdapter::startExport() {
             if (ec) {
                 ok = false;
                 error = "Failed to save output file: " + ec.message();
-                std::error_code remove_ec;
-                std::filesystem::remove(temp_output, remove_ec);
+                if (const std::string left = exosnap::DescribeFailedStagingRemoval(temp_output); !left.empty())
+                    error += " (" + left + ")";
             }
         } else {
-            std::error_code remove_ec;
-            std::filesystem::remove(temp_output, remove_ec);
+            if (const std::string left = exosnap::DescribeFailedStagingRemoval(temp_output); !left.empty())
+                error += " (" + left + ")";
         }
 
         if (ok)

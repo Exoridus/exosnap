@@ -24,6 +24,10 @@ struct PreviewMetricsSnapshot {
     quint64 acquires = 0;
     quint64 acquire_abandoned = 0;
     quint64 conversion_failures = 0;
+    // Outside the identity above: the pass that failed to hand the key back still
+    // consumed its frame. Non-zero explains a following run of mutex_misses as a
+    // dead transport rather than contention.
+    quint64 release_failures = 0;
     double scene_fps = 0.0;
     double scene_frame_ms_p50 = 0.0;
     double scene_frame_ms_p95 = 0.0;

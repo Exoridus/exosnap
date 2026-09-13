@@ -502,9 +502,14 @@ bool WasapiProcessLoopbackSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::strin
     buffer_acquired_ = true;
     acquired_frames_ = frames;
 
-    const bool discontinuity = (flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY) != 0;
-    const uint32_t gap_frames = ComputeDiscontinuityGapFrames(discontinuity, device_position_tracked_,
+    const bool discontinuity_flag = (flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY) != 0;
+    const uint32_t gap_frames = ComputeDiscontinuityGapFrames(discontinuity_flag, device_position_tracked_,
                                                               expected_device_position_, devicePos, SampleRate());
+    // The raw flag also fires for state transitions that lost no time, notably the
+    // first packet after an Init or a reactivation. Reporting those unfiltered --
+    // as this source did while both sibling sources filtered -- logged an audio
+    // discontinuity with a zero-frame gap on every per-app capture start.
+    const bool discontinuity = IsReportableDiscontinuity(discontinuity_flag, gap_frames);
     device_position_tracked_ = true;
     expected_device_position_ = devicePos + frames;
 

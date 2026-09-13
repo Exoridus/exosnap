@@ -19,40 +19,26 @@
 //     SessionState.
 //
 // ---------------------------------------------------------------------------
-// Design decision: why these tests stop short of driving VideoThread::Run()
+// Scope: the dispatch mechanism, not a driven VideoThread::Run()
 // ---------------------------------------------------------------------------
-// The parallel-split base commit (ab46665) added the SessionState::
-// video_encoder_factory seam, but video_thread.cpp itself is Agent A's file
-// in a separate worktree and, as of this worktree's base commit, still
-// constructs its own concrete `NvencVideoEncoder nvenc;` by value and never
-// reads m_state.video_encoder_factory at all (verified by inspection: every
-// nvenc.* call site in video_thread.cpp targets that local value, not the
-// factory-produced encoder). Swapping in a SessionState with a
-// FakeVideoEncoderFactory today would therefore have no observable effect on
-// VideoThread -- it would still open a real NVENC session against real GPU
-// hardware, exactly as it does now, because the seam it would need to read
-// isn't wired up yet in this worktree.
+// VideoThread::Run() reads m_state.video_encoder_factory and encodes through
+// the IVideoEncoder it returns, so the seam these tests cover is the one
+// production uses. What Run() cannot be given in a unit test is the rest of its
+// world: it opens a D3D11 device, constructs a capture backend against real
+// hardware, and runs a pacing loop. Substituting a factory would not make any
+// of that reachable.
 //
-// Driving a full SessionState/VideoThread::Run() here would consequently
-// test nothing new about dispatch (it would just re-run the real hardware
-// path, which the existing NVENC-hardware tests already cover), while adding
-// a real-capture dependency to this file. So this file scopes down to what
-// is genuinely reachable without Agent A's wiring: the fake's own contract,
-// the factory's dispatch/injection mechanics, and the SessionState seam
-// itself. See "Remaining limitations" in this task's final report for the
-// specific slot-exhaustion/mid-recording-failure coverage this leaves for a
-// follow-up once video_thread.cpp is wired to consume the factory.
+// So the decisions that are worth testing are extracted from the loop instead
+// and tested as themselves -- NextCaptureDrainStep, NextDrainContinuation,
+// DecideOdReopen, the NVENC drain steps -- each pure, each with the clock as a
+// parameter. This file covers what remains: that the factory dispatches, that
+// the SessionState seam is replaceable and reachable, and that the fake honours
+// the IVideoEncoder contract the production encoder is held to.
 //
-// One deliberate scoping choice inside "factory dispatch": this file never
-// asserts what VideoEncoderFactory::Create(Nvidia) returns on the real,
-// unmodified factory. video_encoder_factory.cpp is itself a placeholder on
-// this base commit (returns nullptr unconditionally, comment: "Agent A wires
-// the Nvidia -> NvencVideoEncoder branch") that Agent A is actively changing
-// in a sibling worktree. Asserting today's placeholder Nvidia behavior would
-// make this test fragile against a merge that is expected and desired. The
-// non-Nvidia -> nullptr behavior, by contrast, is stable across that change
-// (only the Nvidia branch is being added), so that's what's asserted here.
-
+// One deliberate scoping choice: this file does not assert what
+// VideoEncoderFactory::Create(Nvidia) returns. That branch constructs a real
+// NvencVideoEncoder, which needs hardware; the non-Nvidia -> nullptr behaviour
+// is what is stable and assertable here.
 #include <gtest/gtest.h>
 
 #include "fakes/fake_video_encoder.h"

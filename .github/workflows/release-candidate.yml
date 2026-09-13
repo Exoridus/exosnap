@@ -317,6 +317,7 @@ jobs:
       - name: Cache FetchContent deps (sentry-native + Crashpad)
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
+        # zizmor: ignore[cache-poisoning] -- restored on tag pushes by decision: a cold release build is ~46 min and the key is scoped to runner image + lock files; revisiting it is an ADR, not a lint fix
         with:
           path: C:/es
           key: es-fetchcontent-${{ runner.os }}-vs2022-${{ hashFiles('cmake/VendorSentry.cmake') }}
@@ -820,8 +821,14 @@ jobs:
             echo "record it produces is what the final tag will be checked against."
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # Full history, and the approved source refs with it: the qualification gate
+      # asks whether this commit is on a line a release may be cut from, and a
+      # shallow checkout cannot answer that. It refuses rather than assumes, so a
+      # depth-1 clone here would block every release.
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         if: ${{ needs.resolve-identity.outputs.prerelease == 'false' }}
+        with:
+          fetch-depth: 0
 
       # The newest RC at this exact commit, not merely some RC that was once qualified
       # at it: cutting a later candidate from the same source and never verifying it

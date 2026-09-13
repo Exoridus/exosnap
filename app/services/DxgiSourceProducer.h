@@ -28,6 +28,7 @@
 
 #include <winrt/base.h>
 
+#include <exosnap/engine/device_generation.h>
 #include <exosnap/engine/dxgi_od_capture_src.h>
 #include <exosnap/engine/hdr_native.h>
 
@@ -57,6 +58,13 @@ class DxgiSourceProducer final : public HubSourceProducer {
         return context_.get();
     }
 
+    // Which device the two above currently are. Bumped on every (re)open, so a
+    // dependent that cached a resource on the previous device can tell -- the
+    // pointer cannot say, since the allocator may hand back the same address.
+    [[nodiscard]] exosnap::engine::DeviceGeneration DeviceGenerationValue() const noexcept {
+        return device_generation_;
+    }
+
     // HDR facts of the duplicated display, sampled at Open (see
     // DxgiOdCaptureSrc). Feed ResolveRawCaptureTapDesc for FP16 frames.
     [[nodiscard]] const exosnap::engine::HdrDisplayFacts& DisplayFacts() const noexcept {
@@ -68,6 +76,7 @@ class DxgiSourceProducer final : public HubSourceProducer {
 
     winrt::com_ptr<ID3D11Device> device_;
     winrt::com_ptr<ID3D11DeviceContext> context_;
+    exosnap::engine::DeviceGeneration device_generation_;
     exosnap::engine::DxgiOdCaptureSrc od_;
 
     // The hub retries a failed reopen on every pump tick (unbounded, no backoff

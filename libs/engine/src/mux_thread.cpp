@@ -5,6 +5,7 @@
 #include "av_epoch_align.h"
 #include "matroska_stream_writer.h"
 #include "session_internal.h"
+#include "split_sentinel_policy.h"
 
 #include <exosnap/engine/logging/logging.h>
 #include <exosnap/engine/packet_types.h>
@@ -406,12 +407,17 @@ void MuxThread::Run() {
         return audio_shift_ns[track];
     };
 
-    // Rebase a session PTS to the current segment's local timeline (>= 0).
-    auto to_segment_local = [&](uint64_t session_pts_ns) -> uint64_t {
-        if (!seg.epoch_set)
-            return session_pts_ns;
-        return (session_pts_ns > seg.epoch_session_pts_ns) ? (session_pts_ns - seg.epoch_session_pts_ns) : 0ULL;
-    };
+    // Audio held because the current segment's epoch is not known yet. After a
+    // split the next segment's epoch is the first video packet written into it,
+    // and the audio queue is independent -- so audio can arrive first, and
+    // writing it before the epoch exists is what put ten-minute timestamps in a
+    // freshly-opened file.
+    std::deque<EncodedAudioPacket> segment_pending_audio;
+    // Audio that belonged to a segment already closed. Counted, not just dropped.
+    uint64_t trimmed_audio_packets = 0;
+    // Highest aligned session PTS actually WRITTEN per audio track, so the
+    // duration reported for audio describes the file rather than the encoder.
+    std::array<uint64_t, CodecPrivateData::kMaxAudioTracks> aligned_audio_end_ns{};
 
     std::array<uint64_t, CodecPrivateData::kMaxAudioTracks> audio_codec_delay_ns{};
     for (uint32_t i = 0; i < track_count; ++i) {
@@ -431,10 +437,25 @@ void MuxThread::Run() {
             return; // this audio predates the first video frame — trimmed, not written at 0
         }
         payload.pts_ns = shifted_pts_ns;
+        const SegmentLocalPts placed = PlaceOnSegmentTimeline(payload.pts_ns, seg.epoch_set, seg.epoch_session_pts_ns);
+        if (placed.placement == SegmentPlacement::Defer) {
+            // No epoch yet: hold it rather than write a session PTS into a
+            // segment-local timeline. Drained by drain_segment_pending_audio as
+            // soon as the first video packet of this segment sets the epoch.
+            segment_pending_audio.push_back(std::move(payload));
+            return;
+        }
+        if (placed.placement == SegmentPlacement::Trim) {
+            // Belongs before this segment began, and the previous one is already
+            // finalized, so there is nowhere to write it. Counted so a report can
+            // say how much audio the split cost instead of it vanishing.
+            ++trimmed_audio_packets;
+            return;
+        }
         // Matroska stores audio block timestamps offset by the track's CodecDelay
         // (the reader subtracts it), so the first audible sample -- not the
         // encoder's priming -- lands where the timeline says it does.
-        const uint64_t local = to_segment_local(payload.pts_ns) + audio_codec_delay_ns[payload.track_id];
+        const uint64_t local = placed.local_pts_ns + audio_codec_delay_ns[payload.track_id];
         MuxPacket mp;
         mp.pts_ns = local;
         mp.track_num = 2 + payload.track_id;
@@ -445,18 +466,42 @@ void MuxThread::Run() {
         if (!seg.writer->Push(std::move(mp))) {
             write_error = true;
             m_state.diagnostics.OnMuxFailure();
+            return;
         }
+        // The end of the audio this file actually contains, on the same aligned
+        // timeline the video duration is on. The audio thread's own last PTS is
+        // on the capture timeline and differs from this by the track's shift, so
+        // comparing that against the video duration reported the epoch offset as
+        // drift.
+        const uint64_t aligned_end = payload.pts_ns + audio_codec_delay_ns[payload.track_id];
+        if (aligned_end > aligned_audio_end_ns[payload.track_id])
+            aligned_audio_end_ns[payload.track_id] = aligned_end;
     };
 
     auto push_video = [&](EncodedVideoPacket&& payload) {
         if (write_error || !seg.writer)
             return;
-        // A new segment's epoch is the first video packet seen after a split.
+        // A new segment's epoch is the first video packet seen after a split. The
+        // audio held for this segment is placed right after this call returns
+        // (drain_segment_pending_audio at every push_video call site) -- not from
+        // in here, because that drain goes back through push_audio.
         if (!seg.epoch_set) {
             seg.epoch_session_pts_ns = payload.pts_ns;
             seg.epoch_set = true;
         }
-        const uint64_t local = to_segment_local(payload.pts_ns);
+        // The epoch was just set from this packet when it is the segment's first,
+        // so Write is the only outcome here; Defer cannot happen and a video
+        // packet before its own segment's epoch would be a re-ordered stream the
+        // encoder does not produce.
+        const SegmentLocalPts placed = PlaceOnSegmentTimeline(payload.pts_ns, seg.epoch_set, seg.epoch_session_pts_ns);
+        if (placed.placement != SegmentPlacement::Write) {
+            write_error = true;
+            m_state.diagnostics.OnMuxFailure();
+            m_state.RecordFailure(E_FAIL, ErrorPhase::Mux,
+                                  "video packet could not be placed on its own segment's timeline");
+            return;
+        }
+        const uint64_t local = placed.local_pts_ns;
         MuxPacket mp;
         mp.pts_ns = local;
         mp.track_num = 1;
@@ -496,6 +541,7 @@ void MuxThread::Run() {
         if (!seg.writer->Push(std::move(mp))) {
             write_error = true;
             m_state.diagnostics.OnMuxFailure();
+            return;
         }
     };
 
@@ -508,13 +554,32 @@ void MuxThread::Run() {
         }
     };
 
+    // Called once the current segment's epoch is known. Each held packet goes
+    // back through push_audio, which now places it -- written or trimmed. Moved
+    // out of the deque first so a packet that defers again (it cannot, the epoch
+    // is set) could not loop forever.
+    auto drain_segment_pending_audio = [&]() {
+        if (!seg.epoch_set || segment_pending_audio.empty())
+            return;
+        std::deque<EncodedAudioPacket> held;
+        held.swap(segment_pending_audio);
+        while (!held.empty() && !write_error) {
+            push_audio(std::move(held.front()));
+            held.pop_front();
+        }
+    };
+
     // Begin a new segment at a SplitSentinel: finalize the current segment, then
     // open the next. The new epoch is captured from the next video packet.
     auto begin_new_segment = [&](const SplitSentinel& s) {
         if (write_error)
             return;
-        // Flush any buffered pre-epoch audio into the OLD segment first.
+        // Flush any buffered pre-epoch audio into the OLD segment first -- both
+        // the session-level hold (audio that predates the first video frame of
+        // the recording) and anything held for this segment, which still has its
+        // own epoch and can therefore still place it.
         drain_pending_audio();
+        drain_segment_pending_audio();
         finalize_segment(/*session_end=*/false);
         // finalize_segment() sets write_error on a finalize/I-O failure (failure
         // isolation: quarantine the incomplete current file, keep prior segments).
@@ -541,6 +606,7 @@ void MuxThread::Run() {
                 resolve_epoch();
                 push_video(std::move(payload));
                 drain_pending_audio();
+                drain_segment_pending_audio();
             }
         } else if constexpr (std::is_same_v<T, EncodedAudioPacket>) {
             if (!payload.bytes.empty()) {
@@ -572,6 +638,7 @@ void MuxThread::Run() {
             resolve_epoch();
             push_video(std::move(pkt));
             drain_pending_audio();
+            drain_segment_pending_audio();
         }
         for (auto& pkt : m_state.audio_premux) {
             if (pkt.bytes.empty())
@@ -616,8 +683,14 @@ void MuxThread::Run() {
         if (size_split_threshold > 0 && bytes >= size_split_threshold && !m_state.size_split_armed.load()) {
             bool expected = false;
             if (m_state.size_split_armed.compare_exchange_strong(expected, true)) {
-                m_state.split_last_trigger.store(static_cast<uint32_t>(SplitTriggerSource::AutomaticSize));
-                m_state.split_request_seq.fetch_add(1);
+                // Same compare-exchange as the manual path: sequence and trigger
+                // become visible together.
+                uint64_t observed_request = m_state.split_request.load(std::memory_order_relaxed);
+                while (!m_state.split_request.compare_exchange_weak(
+                    observed_request,
+                    SplitRequestWith(observed_request, static_cast<uint32_t>(SplitTriggerSource::AutomaticSize)),
+                    std::memory_order_release, std::memory_order_relaxed)) {
+                }
                 logging::LogField fields[] = {{"segment_index", std::to_string(seg.index)},
                                               {"bytes", std::to_string(bytes)},
                                               {"threshold", std::to_string(size_split_threshold)}};
@@ -695,6 +768,37 @@ void MuxThread::Run() {
             push_audio(std::move(pending_audio.front()));
             pending_audio.pop_front();
         }
+    }
+    // Audio still held for the last segment. With an epoch it is placed as
+    // usual; without one this segment never got a video packet, so there is no
+    // timeline to place it on and it is counted as trimmed rather than written
+    // at a timestamp that means nothing.
+    drain_segment_pending_audio();
+    if (!segment_pending_audio.empty()) {
+        trimmed_audio_packets += segment_pending_audio.size();
+        segment_pending_audio.clear();
+    }
+
+    // The aligned audio ends, published where the collector can compare them
+    // against the video duration on the same timeline.
+    {
+        std::lock_guard lk(m_state.stats_mutex);
+        for (uint32_t i = 0; i < track_count && i < m_state.stats.aligned_audio_duration_ns.size(); ++i)
+            m_state.stats.aligned_audio_duration_ns[i] = aligned_audio_end_ns[i];
+    }
+
+    // What the splits cost, stated once. Audio the muxer could not place is
+    // audio the file does not contain; a report that said nothing about it would
+    // describe a recording that is complete.
+    if (trimmed_audio_packets > 0) {
+        {
+            std::lock_guard lk(m_state.stats_mutex);
+            m_state.stats.audio_packets_trimmed_at_split = trimmed_audio_packets;
+        }
+        const logging::LogField fields[] = {{"packets", std::to_string(trimmed_audio_packets)}};
+        logging::log(logging::LogLevel::Warn, "mux_thread",
+                     "audio packets arrived for a segment that was already closed and were trimmed",
+                     std::span<const logging::LogField>(fields, std::size(fields)));
     }
 
     // --- Step 3: Finalize the final segment ---

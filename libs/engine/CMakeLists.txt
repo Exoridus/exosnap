@@ -290,6 +290,7 @@ add_library(exosnap_engine STATIC
     src/gpu_compositor.cpp
     src/gpu_compositor.h
     src/cursor_sprite.cpp
+    src/device_generation.cpp
     include/exosnap/engine/cursor_sprite.h
     src/gpu_hdr_tonemap.cpp
     include/exosnap/engine/gpu_hdr_tonemap.h
@@ -695,6 +696,7 @@ exosnap_add_gtest(
     NAME test_split_sentinel_policy
     TEST_PREFIX engine.
     SOURCES tests/test_split_sentinel_policy.cpp
+    LIBRARIES exosnap_engine
 )
 target_include_directories(test_split_sentinel_policy PRIVATE src)
 
@@ -736,6 +738,17 @@ exosnap_add_gtest(
     LIBRARIES exosnap_engine
 )
 target_include_directories(test_nvenc_output_ring PRIVATE src
+    "${CMAKE_SOURCE_DIR}/third_party/nvidia")
+
+# Which pending entry a rejected submission takes back: its own, at the back,
+# not the oldest frame the driver still owns at the front (no GPU needed).
+exosnap_add_gtest(
+    NAME test_nvenc_pending_rollback
+    TEST_PREFIX engine.
+    SOURCES tests/test_nvenc_pending_rollback.cpp
+    LIBRARIES exosnap_engine
+)
+target_include_directories(test_nvenc_pending_rollback PRIVATE src
     "${CMAKE_SOURCE_DIR}/third_party/nvidia")
 
 # test_hdr_bitstream_metadata: byte-exact unit tests for the in-band HDR10
@@ -1143,6 +1156,30 @@ exosnap_add_gtest(
 )
 target_include_directories(test_av_epoch_align PRIVATE src)
 
+# What the A/V duration skew is allowed to mean. It compared the video end
+# against the audio ENCODER's last PTS -- a different timeline -- so an aligned
+# recording reported its epoch offset as drift. The control case (a real 200 ms
+# loss) is what proves the fix is not just subtracting the offset.
+exosnap_add_gtest(
+    NAME test_duration_skew
+    TEST_PREFIX engine.
+    SOURCES tests/test_duration_skew.cpp
+    LIBRARIES exosnap_engine
+)
+target_include_directories(test_duration_skew PRIVATE src)
+
+# The two chroma decisions in the HDR10 PQ path: the left-siting shift (derived
+# from the source crop, so correct only at 1:1) and the half-resolution viewport
+# (integer-halved, so an odd content height left its last row colourless). Both
+# are pure functions of the geometry, so no device is needed.
+exosnap_add_gtest(
+    NAME test_hdr_chroma_geometry
+    TEST_PREFIX engine.
+    SOURCES tests/test_hdr_chroma_geometry.cpp
+    LIBRARIES exosnap_engine d3d11.lib dxgi.lib
+)
+target_include_directories(test_hdr_chroma_geometry PRIVATE src)
+
 # Capture drain selection: the frame loop must never drain the backend it does not
 # own. Pins that an OD capture mid-reopen drains nothing rather than the null WGC pool.
 exosnap_add_gtest(
@@ -1153,6 +1190,19 @@ exosnap_add_gtest(
 )
 target_include_directories(test_capture_drain_step PRIVATE src)
 target_compile_definitions(test_capture_drain_step PRIVATE NOMINMAX)
+
+# How long a drain may run. Both drains terminated only because a real source
+# runs out; a source that stays ready starved the encode step, the pacing tick
+# and the stop check below them. The clock is a parameter, so an endlessly ready
+# source is a loop here rather than a machine fast enough to produce one.
+exosnap_add_gtest(
+    NAME test_capture_drain_budget
+    TEST_PREFIX engine.
+    SOURCES tests/test_capture_drain_budget.cpp
+    LIBRARIES exosnap_engine d3d11.lib dxgi.lib
+)
+target_include_directories(test_capture_drain_budget PRIVATE src)
+target_compile_definitions(test_capture_drain_budget PRIVATE NOMINMAX)
 
 # HDR tone-map render pass on the GPU: WARP-backed proof that the shader renders
 # the curve correctly into both the 8-bit (BGRA8) and 10-bit (R10G10B10A2)

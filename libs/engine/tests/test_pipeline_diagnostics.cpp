@@ -160,6 +160,25 @@ TEST(PipelineDiagnostics, AudioSourceHealthSumsAcrossTracks) {
     EXPECT_TRUE(s.audio.source_degraded);
 }
 
+TEST(PipelineDiagnostics, VideoFlushOutcomeIsPassedThroughFromStats) {
+    // The end-of-stream drain writes these once; the aggregator must hand them on
+    // verbatim so the terminal snapshot -- and the session report built from it --
+    // say the file ends short of the recording, rather than "Saved" and nothing.
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+
+    SessionStats stats = MakeStats();
+    const auto before = agg.BuildSnapshot(At(0), stats, DiagnosticsLifecycle::Recording, 0.0);
+    EXPECT_FALSE(before.video_encoder.flush_incomplete);
+    EXPECT_EQ(before.video_encoder.undrained_frames, 0u);
+
+    stats.video_flush_incomplete = true;
+    stats.video_undrained_frames = 7;
+    const auto s = agg.BuildSnapshot(At(200), stats, DiagnosticsLifecycle::Completed, 0.2);
+    EXPECT_TRUE(s.video_encoder.flush_incomplete);
+    EXPECT_EQ(s.video_encoder.undrained_frames, 7u);
+}
+
 TEST(PipelineDiagnostics, AudioPostFlightFactsArePassedThroughFromStats) {
     // The latched degradation bit and the per-track resampler drain figures are
     // owned by the audio workers and only written at end of stream. The aggregator

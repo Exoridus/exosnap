@@ -188,6 +188,7 @@ void PipelineDiagnosticsAggregator::Reset(uint64_t generation, const Diagnostics
     sustain_audio_ = 0;
     sustain_muxer_ = 0;
     sustain_disk_ = 0;
+    sustain_gpu_ = 0;
     last_dropped_total_ = 0;
     last_audio_disc_ = 0;
 
@@ -739,6 +740,11 @@ RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_p
     enc.p99_ms = encode_window_.Percentile(now, 0.99);
     enc.frames_submitted = frames_submitted_;
     enc.frames_encoded = stats.encoded_video_packets;
+    // Post-flight facts owned by the video worker, passed through unchanged: the
+    // drain ran once at end of stream, so only the terminal snapshot carries them.
+    enc.flush_incomplete = stats.video_flush_incomplete;
+    enc.undrained_frames = stats.video_undrained_frames;
+    enc.audio_packets_trimmed_at_split = stats.audio_packets_trimmed_at_split;
     enc.backlog =
         (frames_submitted_ > stats.encoded_video_packets) ? (frames_submitted_ - stats.encoded_video_packets) : 0;
     enc.forced_keyframes = forced_keyframes_;

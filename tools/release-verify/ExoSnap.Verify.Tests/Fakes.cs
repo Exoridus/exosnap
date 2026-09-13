@@ -505,6 +505,36 @@ internal sealed class FakeElevatedWorkerHost : IElevatedWorkerHost
     }
 }
 
+/// <summary>A transport that answers with one prepared run and starts no machine.</summary>
+internal sealed class FixedTransport : IDisposableOsTransport
+{
+    private readonly DisposableOsRun run;
+
+    public FixedTransport(string name, bool available, DisposableOsRun run)
+    {
+        this.Name = name;
+        this.Available = available;
+        this.run = run;
+    }
+
+    public string Name { get; }
+
+    public bool Available { get; }
+
+    /// <summary>Whether this fake claims to prove the guest's interactive session.</summary>
+    public bool ProvesInteractiveGuest { get; init; }
+
+    public string UnavailableReason => this.Available ? string.Empty : $"{this.Name} is not available";
+
+    public List<DisposableOsWorkerRequest> Requests { get; } = [];
+
+    public Task<DisposableOsRun> RunWorkerAsync(DisposableOsWorkerRequest request, CancellationToken cancellationToken)
+    {
+        this.Requests.Add(request);
+        return Task.FromResult(this.run);
+    }
+}
+
 /// <summary>A configurable <see cref="IDisposableOsRunner"/> that starts no machine.</summary>
 internal sealed class FakeDisposableOsRunner : IDisposableOsRunner
 {
@@ -538,6 +568,15 @@ internal sealed class GateFakes
 
     /// <summary>The independent ffprobe oracle.</summary>
     public FakeFfprobe Ffprobe { get; } = new();
+
+    /// <summary>
+    /// The render-endpoint control. Real, over a process runner nothing resolves, so a
+    /// gate that needs it reports itself unavailable instead of reconfiguring the
+    /// developer's sound from a unit test.
+    /// </summary>
+    public AudioEndpointControl AudioEndpoints { get; } = new(
+        new ProcessRunner(),
+        new ToolResolver(readEnvironment: _ => null, fileExists: _ => false, readPath: () => null));
 
     /// <summary>The environment tool, driving both the read-only gates and the orchestrator.</summary>
     public FakeEnvctl Envctl { get; } = new();
@@ -579,7 +618,16 @@ internal sealed class GateFakes
     public string ExecutablePath { get; set; } = "exosnap.exe";
 
     /// <summary>The product version a gate's <c>ArtifactUnderTest</c> carries.</summary>
-    public string ProductVersion { get; set; } = "0.9.1";
+    public string ProductVersion { get; set; } = "0.9.1-rc4";
+
+    /// <summary>The tag the candidate was published under. Consistent with the version by default.</summary>
+    public string RcTag { get; set; } = "v0.9.1-rc4";
+
+    /// <summary>The commit the candidate was built from.</summary>
+    public string SourceCommit { get; set; } = new string('1', 40);
+
+    /// <summary>Digest of the bound executable.</summary>
+    public string ExecutableSha256 { get; set; } = new string('a', 64);
 
     /// <summary>What a previous present cross-check confirmed, or null.</summary>
     public PresentConfirmation? LastPresentConfirmation { get; set; }
@@ -646,7 +694,13 @@ internal sealed class GateHarness : IDisposable
             .ConfigureAwait(false);
 
         var services = new GateServices(
-            new ArtifactUnderTest(fakes.ExecutablePath, fakes.ProductVersion, fakes.RepositoryRoot),
+            new ArtifactUnderTest(
+                fakes.ExecutablePath,
+                fakes.ProductVersion,
+                fakes.RepositoryRoot,
+                fakes.RcTag,
+                fakes.SourceCommit,
+                fakes.ExecutableSha256),
             fakes.SessionHost,
             fakes.Ffprobe,
             orchestrator,
@@ -658,6 +712,7 @@ internal sealed class GateHarness : IDisposable
             fakes.SystemAppearance,
             fakes.ElevatedWorker,
             fakes.DisposableOs,
+            fakes.AudioEndpoints,
             fakes.LastPresentConfirmation,
             fakes.PresentCapturePath);
 

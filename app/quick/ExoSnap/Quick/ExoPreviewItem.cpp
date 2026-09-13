@@ -269,7 +269,13 @@ class PreviewTextureNode final : public QSGNode {
         // state is otherwise inherited by the offscreen conversion pass.
         context_->ClearState();
         context_->CopyResource(local_texture_.Get(), shared_texture_.Get());
-        keyed_mutex_->ReleaseSync(exosnap::engine::kPreviewSharedProducerKey);
+        // The frame is already copied, so this pass still presents it. What a failed
+        // release costs is every pass AFTER it: the mutex stays on the consumer key,
+        // the producer's 0 ms acquire times out forever, and those passes would all
+        // count as mutex_misses -- contention -- which names the wrong cause for a
+        // preview that has in fact stopped. Counted apart so the funnel shows it.
+        if (FAILED(keyed_mutex_->ReleaseSync(exosnap::engine::kPreviewSharedProducerKey)))
+            metrics.release_failures.fetch_add(1, std::memory_order_relaxed);
         bool converted = true;
         if (tone_mapper_ != nullptr) {
             std::string tone_map_error;
@@ -642,6 +648,7 @@ PreviewMetricsSnapshot ExoPreviewItem::metricsSnapshot() const {
     snapshot.acquires = metrics().acquires.load(std::memory_order_relaxed);
     snapshot.acquire_abandoned = metrics().acquire_abandoned.load(std::memory_order_relaxed);
     snapshot.conversion_failures = metrics().conversion_failures.load(std::memory_order_relaxed);
+    snapshot.release_failures = metrics().release_failures.load(std::memory_order_relaxed);
     snapshot.source_dxgi_format = metrics().source_dxgi_format.load(std::memory_order_relaxed);
 
     // Three member scratch buffers rather than three fresh vectors per call: this

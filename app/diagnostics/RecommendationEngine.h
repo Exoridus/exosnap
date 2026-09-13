@@ -68,16 +68,97 @@ class RecommendationEngine {
     // so the blocker stays silent. Default false (SDR) mirrors the SetOutputPathWritable
     // pattern — the engine stays pure and only emits when the caller supplies the fact.
     // The adapter that drives the captured display, against the encoder the
-    // product needs. A display on the integrated GPU cannot be encoded by the
-    // NVIDIA one; the failure that follows otherwise reads as a codec problem.
+    // product needs. A display on another adapter is a reason to look, not a
+    // proof of anything: hybrid-GPU machines are the common case, and plenty of
+    // them record fine. Only a measurement can say a setup cannot.
     struct CaptureTargetAdapterFacts {
         bool known = false;
         uint32_t vendor_id = 0; // PCI vendor of the adapter owning the display
         std::string adapter_name;
         bool nvidia_adapter_present = false;
+        // Identity of the adapter that owns the display, and of the NVIDIA adapter
+        // an encode would run on. Reachability evidence is bound to this pair, so
+        // a display change or a GPU swap stops it from applying.
+        uint64_t capture_adapter_luid = 0;
+        uint64_t encoder_adapter_luid = 0;
+
+        // What is actually known about encoding THIS capture on THIS adapter.
+        // Unknown is the honest default: the adapter facts above come from a DXGI
+        // enumeration, which cannot answer it. Nothing may be blocked on Unknown.
+        enum class EncoderReachability {
+            Unknown,   // Not measured. A warning at most.
+            Reachable, // An encode on this capture's adapter has succeeded.
+            Failed,    // An encode on this capture's adapter has been tried and failed.
+        };
+        EncoderReachability encoder_reachability = EncoderReachability::Unknown;
+        // What was tried and what it said, for the card's evidence line. Empty
+        // unless encoder_reachability is Failed.
+        std::string encoder_failure_detail;
     };
+
+    // Evidence that an encode on a specific pair of adapters could or could not
+    // be reached, latched from a real recording attempt.
+    //
+    // Bound to the adapter pair, not to the machine: a measurement about the
+    // display on the integrated GPU says nothing about the one on the discrete
+    // card, and a verdict that outlived a display change would be shown for a
+    // setup it was never about. Both LUIDs are compared, so a GPU swap, a
+    // hot-plug onto another adapter or a driver reinstall that renumbers them all
+    // invalidate it by simply not matching any more.
+    //
+    // Only a failure the driver classified as being about the DEVICE may be
+    // latched as Failed (nvenc_encoder.h: IsEncoderUnreachableStatus). A TDR, a
+    // transient device loss and a driver reset all fail an encode and all
+    // recover; a blocker latched from one of those would be wrong for the rest of
+    // the session and the user could not clear it.
+    struct EncoderReachabilityEvidence {
+        bool known = false;
+        // LUID of the adapter that owns the captured display, and of the adapter
+        // the encoder was opened on. Compared as opaque values.
+        uint64_t capture_adapter_luid = 0;
+        uint64_t encoder_adapter_luid = 0;
+        bool reachable = false;
+        std::string failure_detail;
+    };
+
+    // Whether `evidence` is about the adapters in `facts`, and therefore may be
+    // applied to them at all. Pure so the invalidation rule is testable without a
+    // recording: the interesting cases are the ones where it must NOT apply.
+    [[nodiscard]] static bool EvidenceAppliesTo(const EncoderReachabilityEvidence& evidence,
+                                                uint64_t capture_adapter_luid, uint64_t encoder_adapter_luid) noexcept {
+        return evidence.known && capture_adapter_luid != 0 && encoder_adapter_luid != 0 &&
+               evidence.capture_adapter_luid == capture_adapter_luid &&
+               evidence.encoder_adapter_luid == encoder_adapter_luid;
+    }
     void SetCaptureTargetAdapter(CaptureTargetAdapterFacts facts) {
         capture_target_adapter_ = std::move(facts);
+        ApplyReachabilityEvidence();
+    }
+
+    // Latch what a real recording attempt established. Called with a failure only
+    // when the driver classified it as being about the device; the caller owns
+    // that classification (nvenc_encoder.h: IsEncoderUnreachableStatus), because
+    // only it has the status.
+    void SetEncoderReachabilityEvidence(EncoderReachabilityEvidence evidence) {
+        reachability_evidence_ = std::move(evidence);
+        ApplyReachabilityEvidence();
+    }
+
+    // Fold the latched evidence into the facts, or leave them Unknown when it is
+    // about other adapters. Re-run whenever either side changes, so a display
+    // change clears a verdict that was never about this display.
+    void ApplyReachabilityEvidence() {
+        capture_target_adapter_.encoder_reachability = CaptureTargetAdapterFacts::EncoderReachability::Unknown;
+        capture_target_adapter_.encoder_failure_detail.clear();
+        if (!EvidenceAppliesTo(reachability_evidence_, capture_target_adapter_.capture_adapter_luid,
+                               capture_target_adapter_.encoder_adapter_luid)) {
+            return;
+        }
+        capture_target_adapter_.encoder_reachability = reachability_evidence_.reachable
+                                                           ? CaptureTargetAdapterFacts::EncoderReachability::Reachable
+                                                           : CaptureTargetAdapterFacts::EncoderReachability::Failed;
+        if (!reachability_evidence_.reachable)
+            capture_target_adapter_.encoder_failure_detail = reachability_evidence_.failure_detail;
     }
 
     void SetOutputDriveKind(DriveKind kind) {
@@ -161,6 +242,7 @@ class RecommendationEngine {
     bool output_path_writable_ = true;   // false => emit the not-writable blocker (set by caller)
     bool elevated_ = false;              // true => process runs elevated (set by caller); Tier-4 fact
     CaptureTargetAdapterFacts capture_target_adapter_;
+    EncoderReachabilityEvidence reachability_evidence_;
     DriveKind output_drive_kind_ = DriveKind::Unknown;
     bool live_gpu_contention_ = false;
     double live_gpu_exec_p99_ms_ = 0.0;

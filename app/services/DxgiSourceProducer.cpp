@@ -82,6 +82,12 @@ bool DxgiSourceProducer::Open(std::string& err) {
         return false;
     }
 
+    // A new device exists, so a new generation: every dependent that cached a
+    // resource on the previous one is now looking at a dead device that may well
+    // report the same size, format and HDR state. Set after the device is real
+    // and before anything can observe it.
+    device_generation_ = exosnap::engine::NextDeviceGeneration();
+
     if (!od_.Open(device_.get(), monitor, err)) {
         Close();
         return false;
@@ -98,6 +104,11 @@ void DxgiSourceProducer::Close() {
     copy_format_ = DXGI_FORMAT_UNKNOWN;
     context_ = nullptr;
     device_ = nullptr;
+    // No device, so nothing may be treated as current against it. Without this a
+    // dependent holding the closed device's generation would compare equal again
+    // after the next open happened to be the same number -- it cannot be, but the
+    // invariant is cheaper to hold than to reason about.
+    device_generation_ = exosnap::engine::DeviceGeneration{};
 }
 
 ProducerPoll DxgiSourceProducer::PollFrame(HubFrame& out) {

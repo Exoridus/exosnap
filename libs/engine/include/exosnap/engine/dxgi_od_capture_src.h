@@ -128,6 +128,19 @@ class DxgiOdCaptureSrc {
     // changed size or format is caught by the drain's per-frame guard).
     bool Reopen(ID3D11Device* device, std::string& out_error);
 
+    // The monitor the LIVE duplication is on, which is not necessarily the
+    // HMONITOR passed to Open: a hot-plug or an EDID renegotiation brings the
+    // display back with a new handle, and Reopen re-resolves by device name.
+    //
+    // Anything that keeps asking the OS about "the display being recorded" has to
+    // ask about this one. Holding the handle from Open means querying a monitor
+    // that no longer exists, which fails -- and a caller that treats a failed
+    // query as "nothing changed" then stops checking for the rest of the session.
+    // Null while the source is closed.
+    [[nodiscard]] HMONITOR Monitor() const noexcept {
+        return m_monitor;
+    }
+
   private:
     winrt::com_ptr<IDXGIOutputDuplication> m_duplication;
     // Factory created at Open(), kept only for its IsCurrent() topology check.
@@ -143,6 +156,9 @@ class DxgiOdCaptureSrc {
     // output after its HMONITOR handle changes across a hot-plug. Never cleared by
     // Close() so recovery can re-resolve.
     std::wstring m_device_name;
+    // The HMONITOR the live duplication actually resolved to. Re-read on every
+    // Open, so it follows a Reopen onto a hot-plugged monitor whose handle changed.
+    HMONITOR m_monitor = nullptr;
     uint32_t m_width = 0;
     uint32_t m_height = 0;
     uint32_t m_refresh_rate_hz = 0;
@@ -316,6 +332,77 @@ enum class CaptureDrainStep : uint8_t {
 }
 
 // ---------------------------------------------------------------------------
+// How long the frame loop may keep draining before it has to do its other work.
+//
+// Both drains used to be "keep going while the source has more". That is a
+// termination condition only as long as the source runs out. A source that
+// stays ready -- a 1000 Hz present rate, a virtual display driver that never
+// reports empty, a backend replaying a backlog -- never lets the loop reach the
+// encode step, the pacing tick or the stop check below it. The recording then
+// produces nothing and does not stop, and neither symptom points at the drain.
+//
+// So the drain gets a budget, and the budget is checked BETWEEN acquisitions.
+// What this does not do, and must not be described as doing: interrupt a
+// driver call that is already blocked inside TryAcquireFrame or
+// TryGetNextFrame. Nothing here can cancel that; the budget bounds how many
+// more the loop starts, not the one it is inside.
+// ---------------------------------------------------------------------------
+enum class DrainContinuation : uint8_t {
+    Continue,    // Keep draining.
+    Stopped,     // A stop was requested: leave the drain to the loop's stop handling.
+    FrameBudget, // This tick has taken all the frames it is allowed to.
+    TimeBudget,  // This tick has spent all the time it is allowed to.
+};
+
+// Pure, and the clock is a parameter: a test drives an endlessly ready source
+// without waiting for one.
+//
+// A zero budget means unbounded for that axis, so a caller that has a reason to
+// drain without one says so explicitly rather than by passing a number large
+// enough to look like a bound.
+[[nodiscard]] constexpr DrainContinuation NextDrainContinuation(bool stop_requested, uint32_t frames_drained,
+                                                                uint32_t frame_budget,
+                                                                std::chrono::microseconds elapsed,
+                                                                std::chrono::microseconds time_budget) noexcept {
+    // Stop first: a stop that arrives while the drain still has budget left must
+    // not wait for the budget to run out.
+    if (stop_requested)
+        return DrainContinuation::Stopped;
+    if (frame_budget != 0 && frames_drained >= frame_budget)
+        return DrainContinuation::FrameBudget;
+    if (time_budget.count() != 0 && elapsed >= time_budget)
+        return DrainContinuation::TimeBudget;
+    return DrainContinuation::Continue;
+}
+
+struct DrainBudget {
+    uint32_t frames = 0;
+    std::chrono::microseconds time{0};
+};
+
+// The budget for one tick, derived from the configured frame interval.
+//
+// Half the interval: the drain is one of several things a tick has to do, and
+// the other half is what the encode, composite and pacing steps get. The floor
+// keeps a very high configured rate from producing a budget so small that a
+// single acquisition exceeds it and the drain never reads a second frame; the
+// ceiling keeps a very low one (a 1 fps timelapse) from handing the drain most
+// of a second during which a stop cannot be observed.
+[[nodiscard]] constexpr DrainBudget DrainBudgetForFrameInterval(std::chrono::microseconds frame_interval) noexcept {
+    constexpr std::chrono::microseconds kFloor{1000};    // 1 ms
+    constexpr std::chrono::microseconds kCeiling{10000}; // 10 ms, above half of a 60 fps interval
+    std::chrono::microseconds half = frame_interval / 2;
+    if (half < kFloor)
+        half = kFloor;
+    if (half > kCeiling)
+        half = kCeiling;
+    // 64 frames is far more than a healthy source queues in one tick and far
+    // less than an unbounded loop: it bounds the pathological case without
+    // truncating a real backlog.
+    return DrainBudget{64u, half};
+}
+
+// ---------------------------------------------------------------------------
 // Wait-for-first-frame guard policy (start-time OD access loss)
 // ---------------------------------------------------------------------------
 // A game entering exclusive fullscreen exactly as recording starts throws
@@ -346,9 +433,58 @@ FirstFrameWaitStep(bool od_start_holding, double elapsed_since_deadline_sec, dou
     return FirstFrameWaitAction::KeepWaiting;
 }
 
+// The same decision with the bound the two windows above do not have between
+// them. The first-frame deadline restarts after every successful reopen and the
+// hold budget restarts on every entry into a hold, so a display that alternates
+// reopen-succeeds / ACCESS_LOST keeps both windows young forever and the user
+// on "Preparing" for as long as it cares to. The overall elapsed time is
+// measured from the session's first attempt and is never reset by anything.
+//
+// Overall is checked first: while a hold is active the 5 s guard is suspended by
+// design, and the overall bound is the one thing that must not be suspended
+// with it.
+[[nodiscard]] constexpr FirstFrameWaitAction FirstFrameWaitStepBounded(bool od_start_holding,
+                                                                       double elapsed_since_deadline_sec,
+                                                                       double timeout_sec, double overall_elapsed_sec,
+                                                                       double overall_budget_sec) noexcept {
+    if (overall_elapsed_sec > overall_budget_sec)
+        return FirstFrameWaitAction::TimeoutFail;
+    return FirstFrameWaitStep(od_start_holding, elapsed_since_deadline_sec, timeout_sec);
+}
+
+// ---------------------------------------------------------------------------
+// Which monitor the mid-session HDR guard must ask about.
+//
+// The guard compares the display's current HDR state against the one the colour
+// description was committed from at session start. It held the HMONITOR from
+// that start -- and a reopen after a hot-plug or an EDID renegotiation resolves
+// the output by device name and comes back on a NEW handle. Queries against the
+// old one then fail, every failure reads as "nothing changed", and the guard
+// stops guarding for the rest of the recording without saying so.
+//
+// A WGC session keeps its target monitor for its whole life (documented
+// behaviour: moving a captured window does not move the HDR target), so it is
+// the session handle there. An OD session follows the live duplication, and
+// falls back to the session handle only while the source is closed -- mid-hold,
+// where there is no current monitor to ask about and a stop must not be
+// concluded from a failed query anyway.
+// ---------------------------------------------------------------------------
+[[nodiscard]] constexpr HMONITOR ResolveHdrGuardMonitor(bool use_od_capture, HMONITOR od_current,
+                                                        HMONITOR session_monitor) noexcept {
+    if (use_od_capture && od_current != nullptr)
+        return od_current;
+    return session_monitor;
+}
+
 // Bounded recovery budget for a start-time OD access loss (see FirstFrameWaitStep).
 // Short by design: the user is blocked on "Preparing", not watching a live
 // recording, so the wait cannot be the drain's unbounded hold.
 inline constexpr std::chrono::milliseconds kOdStartHoldBudget{15000};
+
+// Everything a start may take from the first acquire attempt to the first frame,
+// holds and reopens included. Two hold budgets plus the first-frame guard with
+// room for the transitions between them: one fullscreen switch that recovers
+// fits comfortably, a display that never settles does not.
+inline constexpr std::chrono::milliseconds kFirstFrameOverallBudget{35000};
 
 } // namespace exosnap::engine

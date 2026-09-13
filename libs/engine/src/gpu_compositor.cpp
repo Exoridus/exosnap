@@ -276,8 +276,21 @@ bool GpuCompositor::DrawTexture(ID3D11ShaderResourceView* srv, const WebcamPixel
     context_->PSSetShaderResources(0, 1, &srv);
     context_->Draw(3, 0);
 
+    // Unbind BOTH, not just the input. composite_tex_ is what Result() hands the
+    // caller, so leaving composite_rtv_ bound makes the next pass that samples
+    // the composite hit a read/write hazard: D3D11 resolves it by nulling the
+    // shader-resource slot, and a later OMSetRenderTargets does not restore it,
+    // so that pass silently samples nothing. Same contract as HdrToneMapper.
     ID3D11ShaderResourceView* null_srv = nullptr;
+    ID3D11RenderTargetView* null_rtv = nullptr;
     context_->PSSetShaderResources(0, 1, &null_srv);
+    context_->OMSetRenderTargets(1, &null_rtv, nullptr);
+    // The blend state too. This is the only pass in the engine that enables
+    // alpha blending, and the context keeps it for every later draw on the
+    // shared immediate context. A later pass whose shader does not write alpha
+    // -- the P010 luma/chroma planes return float/float2 -- then blends against
+    // an undefined alpha, and the result is driver-dependent.
+    context_->OMSetBlendState(nullptr, nullptr, 0xffffffff);
     return true;
 }
 

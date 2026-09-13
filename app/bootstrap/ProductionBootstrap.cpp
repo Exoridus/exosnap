@@ -221,8 +221,15 @@ SingleInstanceOutcome ProductionBootstrap::AcquireSingleInstance() {
 
 #if defined(Q_OS_WIN)
     HANDLE mutex = CreateMutexW(nullptr, TRUE, kSingleInstanceMutexName);
-    if (mutex != nullptr && GetLastError() == ERROR_ALREADY_EXISTS) {
-        CloseHandle(mutex);
+    const DWORD create_error = GetLastError();
+    // Two different answers both mean "someone already has it". ERROR_ACCESS_DENIED
+    // with a null handle is the cross-elevation case: the mutex exists but this
+    // token may not open it, which happens whenever one instance runs elevated and
+    // the other does not. Treating that as success would start a second process
+    // that opens the same capture devices.
+    if (mutex == nullptr ? create_error == ERROR_ACCESS_DENIED : create_error == ERROR_ALREADY_EXISTS) {
+        if (mutex != nullptr)
+            CloseHandle(mutex);
 
         // A second launch is almost always the user reaching for the app again,
         // so surface the instance they already have instead of exiting silently.

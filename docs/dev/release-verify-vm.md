@@ -34,8 +34,17 @@ it executes.
 | per-run differencing disk | a few hundred MB to a few GB, deleted after the run | `runs/<runId>/` under the image root |
 | Windows 11 installation ISO | about 6 GB | wherever it was downloaded; not tracked, not copied |
 
-Memory 8 GB static, 4 vCPU, and a tenth of the GPU. None of the image, the ISO or the
-run disks is tracked; the recipe is, and the image is reproducible from it.
+Memory 8 GB static, 4 vCPU, and a GPU partition. The partition triples are in
+Hyper-V's own units, which are documented as a range and not as a proportion of the
+adapter, and the platform may normalise a requested value -- so a run reads the
+applied configuration back from `Get-VMGpuPartitionAdapter` and stops if it is not
+what was asked for. The display driver staged into the guest is the DriverStore
+package whose INF declares the version the host adapter is actually running, not the
+newest directory in the store: an update leaves the previous package behind and a
+rollback leaves the newer one.
+
+None of the image, the ISO or the run disks is tracked; the recipe is, and the image
+is reproducible from it.
 
 ## Building it, once
 
@@ -167,6 +176,31 @@ image then requires an independently retained copy of the pinned archive.
 
 The pins are the recipe. A guest whose tool set drifts turns every disagreement
 between two campaigns into an investigation of the image rather than of the product.
+
+## Which image a campaign ran on
+
+Two facts decide what an image is, and they are not the same today.
+
+`displayProfile` in the provisioning manifest says which virtual display driver the
+image is built with. `qualifiedDisplayProfile` says which one the capture work was
+qualified on. The manifest currently pins the MTT driver, and the runs that reached
+4K120 through Graphics Capture used SudoVDA -- so the two differ, and the recipe says
+so rather than leaving it implicit. Reconciling them is an image rebuild: SudoVDA
+needs its own version and SHA-256 pin recorded the way every package here is, and the
+golden image has to be built from it before anything may claim to be qualified on it.
+
+Beside the golden image sits `image-fingerprint.json`: the display profile, the
+monitor mode the gates assert against, a digest over every package pin, the Windows
+build, and the host GPU driver version the guest driver was staged from. The host
+driver is in there because the guest driver is copied from the host -- changing it on
+the host changes the guest without anything in the guest being rebuilt, and the image
+has to be requalified.
+
+A run can pin the image it needs. The check is the first step in the plan, before a
+differencing disk is created, and it names every drifted field at once. A fact the
+image never recorded counts as drift: an older image simply does not carry a field a
+later build of the recipe compares, and the absence of a record is not evidence that
+the two agree.
 
 ## Running one campaign
 

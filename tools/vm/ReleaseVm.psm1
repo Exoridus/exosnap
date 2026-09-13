@@ -19,15 +19,17 @@
 
 Set-StrictMode -Version Latest
 
-# The three-part GPU partition triple, in Hyper-V's own units: partition values run
-# from 0 to 1000000000, where the maximum is the whole adapter. 100000000 is a tenth
-# of the GPU, which is what a capture-and-encode gate needs while the host keeps
-# rendering the developer's desktop; the minimum is set slightly lower so the guest
-# still starts when the host is briefly busier than that.
+# The three-part GPU partition triple, in Hyper-V's own units. What is documented is
+# the range: 0 to 1000000000, where the maximum asks for the whole adapter. What it
+# means in between is not documented as a proportion of anything, and the driver is
+# free to normalise a requested value -- so the configuration a run was measured
+# under is the one Get-VMGpuPartitionAdapter reports back afterwards, not the one
+# set here. Assert-ReleaseVmGpuPartition is what reads it back.
 #
-# Raising these is a decision with a cost on the host side, not a free knob: the
-# partition is reserved for the guest while it runs. An encode-heavy soak wants
-# 500000000, and nothing else does.
+# These values are what a capture-and-encode gate has been run with while the host
+# kept rendering the developer's desktop. Raising them has a cost on the host side,
+# not a free knob: the partition is reserved for the guest while it runs. An
+# encode-heavy soak wants 500000000, and nothing else does.
 $script:GpuPartitionDefault = [ordered]@{
     MinPartitionVRAM     = 80000000
     MaxPartitionVRAM     = 100000000
@@ -93,7 +95,17 @@ function New-ReleaseVmStep {
     .PARAMETER AlwaysRun
         Run during cleanup even when an earlier ordinary step failed.
     .PARAMETER RunIfCompleted
-        For an AlwaysRun step, the name of the creation step that must have completed.
+        For an AlwaysRun or Rescue step, the name of the creation step that must have
+        completed.
+    .PARAMETER Rescue
+        Run after the ordinary steps whether or not one of them failed, before any
+        step that discards guest state. A campaign step throwing -- a guest timeout is
+        the ordinary way -- is exactly when the evidence inside the machine matters,
+        and it is also the case that skips every ordinary step after it.
+    .PARAMETER DiscardsEvidence
+        The step destroys state the evidence may still be in: removing the machine or
+        its disk, and also turning it off, which loses whatever the guest had not
+        written out. Such a step runs only once every rescue step has succeeded.
     #>
     [OutputType([hashtable])]
     param(
@@ -103,16 +115,23 @@ function New-ReleaseVmStep {
         [string] $Detail = '',
         [switch] $NeedsCredential,
         [switch] $AlwaysRun,
+        [switch] $Rescue,
+        [switch] $DiscardsEvidence,
         [string] $RunIfCompleted = ''
     )
+    if ($Rescue -and $AlwaysRun) {
+        throw "step '$Name' cannot be both a rescue and a cleanup step"
+    }
     return @{
-        Name            = $Name
-        Command         = $Command
-        Parameters      = $Parameters
-        Detail          = $Detail
-        NeedsCredential = [bool]$NeedsCredential
-        AlwaysRun       = [bool]$AlwaysRun
-        RunIfCompleted  = $RunIfCompleted
+        Name             = $Name
+        Command          = $Command
+        Parameters       = $Parameters
+        Detail           = $Detail
+        NeedsCredential  = [bool]$NeedsCredential
+        AlwaysRun        = [bool]$AlwaysRun
+        Rescue           = [bool]$Rescue
+        DiscardsEvidence = [bool]$DiscardsEvidence
+        RunIfCompleted   = $RunIfCompleted
     }
 }
 
@@ -195,7 +214,8 @@ function Write-ReleaseVmPlan {
 function Invoke-ReleaseVmPlan {
     <#
     .SYNOPSIS
-        Runs ordinary plan steps to the first failure, then runs cleanup steps.
+        Runs ordinary plan steps to the first failure, rescues the evidence, then
+        cleans up.
     .DESCRIPTION
         The only function in this module that changes anything. A step that throws
         stops ordinary execution: those steps are ordered by dependency, and
@@ -203,9 +223,21 @@ function Invoke-ReleaseVmPlan {
         machine that does not exist. AlwaysRun steps still execute when the resource
         creation step named by RunIfCompleted succeeded.
 
+        Three phases, in this order, because the middle one is the whole point:
+        ordinary steps, then rescue steps, then cleanup. A rescue step runs whether or
+        not an ordinary step failed, so the evidence inside the machine is taken out
+        before anything is allowed to discard it -- a guest timeout throws out of the
+        ordinary phase, which is precisely the run whose logs are worth the most. A
+        cleanup step marked DiscardsEvidence then runs only if every rescue step
+        succeeded; otherwise the machine and its disk are left where they are and the
+        result names them, because a resource left behind is recoverable and evidence
+        is not.
+
         Returns what each step returned, keyed by step name. The campaign step's exit
         code is read from there rather than thrown on -- a run that found defects is a
-        result and not an infrastructure error.
+        result and not an infrastructure error. A rescue failure is not in that class:
+        a campaign whose evidence never reached the host cannot be reported as a clean
+        run, whatever happened inside the guest.
     #>
     [OutputType([hashtable])]
     param(
@@ -214,6 +246,10 @@ function Invoke-ReleaseVmPlan {
     )
     $outputs = @{}
     $failure = $null
+    # Which phase produced the first failure. A campaign that found defects, a
+    # campaign whose evidence never left the guest, and a machine that would not go
+    # away are three different things for whoever reads the result.
+    $failurePhase = ''
     $runStep = {
         param($step)
         Write-Host "  $($step.Name)"
@@ -229,17 +265,24 @@ function Invoke-ReleaseVmPlan {
         $outputs[$step.Name] = & $step.Command @parameters
     }
 
+    $ownerCompleted = {
+        param($step)
+        return (-not $step.RunIfCompleted) -or $outputs.ContainsKey($step.RunIfCompleted)
+    }
+    $rescued = $true
+    $preserved = @()
     try {
-        foreach ($step in @($Plan | Where-Object { -not $_.AlwaysRun })) {
+        foreach ($step in @($Plan | Where-Object { -not ($_.AlwaysRun -or $_.Rescue) })) {
             & $runStep $step
         }
     }
     catch {
         $failure = $_
+        $failurePhase = 'campaign'
     }
     finally {
-        foreach ($step in @($Plan | Where-Object { $_.AlwaysRun })) {
-            if ($step.RunIfCompleted -and -not $outputs.ContainsKey($step.RunIfCompleted)) {
+        foreach ($step in @($Plan | Where-Object { $_.Rescue })) {
+            if (-not (& $ownerCompleted $step)) {
                 Write-Host "  $($step.Name) (skipped; '$($step.RunIfCompleted)' did not complete)"
                 continue
             }
@@ -247,17 +290,44 @@ function Invoke-ReleaseVmPlan {
                 & $runStep $step
             }
             catch {
-                if ($null -eq $failure) {
-                    $failure = $_
-                }
-                else {
-                    Write-Warning "cleanup step '$($step.Name)' failed: $($_.Exception.Message)"
-                }
+                # Not fatal to the other rescue steps -- one unreadable directory must
+                # not cost the rest -- but it does mean nothing may be discarded.
+                $rescued = $false
+                if ($null -eq $failure) { $failure = $_; $failurePhase = 'evidence' }
+                else { Write-Warning "rescue step '$($step.Name)' failed: $($_.Exception.Message)" }
+            }
+        }
+
+        foreach ($step in @($Plan | Where-Object { $_.AlwaysRun })) {
+            if (-not (& $ownerCompleted $step)) {
+                Write-Host "  $($step.Name) (skipped; '$($step.RunIfCompleted)' did not complete)"
+                continue
+            }
+            if ($step.DiscardsEvidence -and -not $rescued) {
+                $preserved += "$($step.Name): $(Format-ReleaseVmStep -Step $step)"
+                Write-Host "  $($step.Name) (skipped; the evidence did not reach the host)"
+                continue
+            }
+            try {
+                & $runStep $step
+            }
+            catch {
+                if ($null -eq $failure) { $failure = $_; $failurePhase = 'cleanup' }
+                else { Write-Warning "cleanup step '$($step.Name)' failed: $($_.Exception.Message)" }
             }
         }
     }
+    if ($preserved.Count -gt 0) {
+        Write-Warning ("the evidence is still inside this run's own resources, so they were kept rather than " +
+            "discarded; recover what you need and remove them by hand:`n    " + ($preserved -join "`n    "))
+    }
     if ($null -ne $failure) {
-        throw $failure
+        $message = "$failurePhase`: $($failure.Exception.Message)"
+        if ($preserved.Count -gt 0) {
+            $message += "; the evidence never reached the host, so these steps were not run and their " +
+                "resources were kept: " + (($preserved | ForEach-Object { ($_ -split ':')[0] }) -join ', ')
+        }
+        throw $message
     }
     return $outputs
 }
@@ -403,6 +473,9 @@ function Get-ReleaseVmPath {
         Root          = $Root
         GoldenDisk    = [IO.Path]::Combine($Root, $defaults.GoldenDiskName)
         AnswerIso     = [IO.Path]::Combine($Root, $defaults.AnswerIsoName)
+        # What this image is, beside the image. A campaign whose evidence cannot name
+        # the image it came from is a campaign nobody can repeat.
+        Fingerprint   = [IO.Path]::Combine($Root, 'image-fingerprint.json')
         RunRoot       = [IO.Path]::Combine($Root, 'runs')
     }
 }
@@ -690,11 +763,24 @@ function New-ReleaseVmRunPlan {
         [System.Collections.IDictionary] $GpuPartition,
         [int] $BootTimeoutMinutes = 15,
         [int] $RunTimeoutMinutes = 120,
+        [System.Collections.IDictionary] $Readiness,
+        [System.Collections.IDictionary] $RequireImageFingerprint,
+        [switch] $RequireInteractiveGuest,
         [switch] $KeepDisk
     )
     if (-not $GpuPartition) { $GpuPartition = $script:GpuPartitionDefault }
     $vm = $RunPath.VMName
     $plan = @()
+
+    if ($RequireImageFingerprint) {
+        # First, before anything is created: an image that is not the one this run was
+        # qualified on makes every later step a waste, and refusing here costs nothing.
+        $plan += New-ReleaseVmStep -Name 'image-fingerprint' -Command 'Assert-ReleaseVmImageFingerprint' `
+            -Parameters ([ordered]@{
+                Expected = $RequireImageFingerprint
+                FingerprintPath = [IO.Path]::Combine((Split-Path -Parent $RunPath.GoldenDisk), 'image-fingerprint.json')
+            }) -Detail 'the two display-driver profiles behave differently under capture'
+    }
 
     $plan += New-ReleaseVmStep -Name 'run-directory' -Command 'New-Item' -Parameters ([ordered]@{
             ItemType = 'Directory'; Path = $RunPath.RunDirectory; Force = $true
@@ -745,6 +831,10 @@ function New-ReleaseVmRunPlan {
     foreach ($key in $GpuPartition.Keys) { $partitionParameters[$key] = $GpuPartition[$key] }
     $plan += New-ReleaseVmStep -Name 'gpu-partition' -Command 'Set-VMGpuPartitionAdapter' -Parameters $partitionParameters
 
+    $plan += New-ReleaseVmStep -Name 'gpu-partition-readback' -Command 'Assert-ReleaseVmGpuPartition' `
+        -Parameters ([ordered]@{ VMName = $vm; Requested = $partitionParameters }) `
+        -Detail 'the values are opaque and the platform may normalise them, so the applied ones are the record'
+
     $plan += Get-ReleaseVmNetworkStep -Mode $Network -VMName $vm
 
     $plan += New-ReleaseVmStep -Name 'guest-services' -Command 'Enable-ReleaseVmGuestServices' -Parameters ([ordered]@{
@@ -757,6 +847,20 @@ function New-ReleaseVmRunPlan {
             VMName = $vm; TimeoutMinutes = $BootTimeoutMinutes
         }) -NeedsCredential
 
+    $agentRoot = [IO.Path]::Combine($RunPath.GuestRoot, 'agent')
+    if ($RequireInteractiveGuest -or $Readiness) {
+        if (-not $Readiness) { $Readiness = New-ReleaseVmReadinessRequirement -InteractiveAgent }
+
+        $plan += New-ReleaseVmStep -Name 'start-agent' -Command 'Start-ReleaseVmGuestAgent' `
+            -Parameters ([ordered]@{ VMName = $vm; AgentRoot = $agentRoot }) -NeedsCredential `
+            -Detail 'started over PowerShell Direct into the interactive session, which PowerShell Direct is not'
+
+        $plan += New-ReleaseVmStep -Name 'guest-readiness' -Command 'Assert-ReleaseVmAgentHandshake' `
+            -Parameters ([ordered]@{ VMName = $vm; AgentRoot = $agentRoot; Requirement = $Readiness }) `
+            -NeedsCredential `
+            -Detail 'the agent proves its own context; a receipt from PowerShell Direct describes the wrong session'
+    }
+
     if ($ArtifactDirectory) {
         $plan += New-ReleaseVmStep -Name 'copy-artifacts' -Command 'Copy-ReleaseVmDirectory' -Parameters ([ordered]@{
                 VMName = $vm; Source = $ArtifactDirectory; Destination = $RunPath.GuestArtifacts
@@ -768,30 +872,42 @@ function New-ReleaseVmRunPlan {
             })
     }
 
-    $plan += New-ReleaseVmStep -Name 'run' -Command 'Invoke-ReleaseVmCommand' -Parameters ([ordered]@{
-            VMName = $vm
-            Command = $GuestCommand
-            WorkingDirectory = $RunPath.GuestRoot
-            TimeoutMinutes = $RunTimeoutMinutes
-        }) -NeedsCredential -Detail 'the campaign itself, inside the guest'
+    if ($RequireInteractiveGuest -or $Readiness) {
+        $plan += New-ReleaseVmStep -Name 'run' -Command 'Invoke-ReleaseVmInteractiveCommand' -Parameters ([ordered]@{
+                VMName = $vm
+                Command = $GuestCommand
+                AgentRoot = $agentRoot
+                WorkingDirectory = $RunPath.GuestRoot
+                TimeoutMinutes = $RunTimeoutMinutes
+            }) -NeedsCredential -Detail 'through the agent that proved its context, because the app needs a desktop'
+    }
+    else {
+        $plan += New-ReleaseVmStep -Name 'run' -Command 'Invoke-ReleaseVmCommand' -Parameters ([ordered]@{
+                VMName = $vm
+                Command = $GuestCommand
+                WorkingDirectory = $RunPath.GuestRoot
+                TimeoutMinutes = $RunTimeoutMinutes
+            }) -NeedsCredential -Detail 'the campaign itself, inside the guest'
+    }
 
     $plan += New-ReleaseVmStep -Name 'collect' -Command 'Copy-ReleaseVmDirectoryBack' -Parameters ([ordered]@{
             VMName = $vm; Source = $RunPath.GuestResults; Destination = $ResultDirectory
-        }) -NeedsCredential -Detail 'PowerShell Direct in the other direction: Copy-VMFile is host-to-guest only'
+        }) -NeedsCredential -Rescue -RunIfCompleted 'virtual-machine' `
+        -Detail 'PowerShell Direct in the other direction: Copy-VMFile is host-to-guest only'
 
     $plan += New-ReleaseVmStep -Name 'stop' -Command 'Stop-VM' -Parameters ([ordered]@{
             Name = $vm; TurnOff = $true; Force = $true
-        }) -AlwaysRun -RunIfCompleted 'virtual-machine' `
-        -Detail 'turned off, not shut down: the evidence is already on the host'
+        }) -AlwaysRun -RunIfCompleted 'virtual-machine' -DiscardsEvidence `
+        -Detail 'turned off, not shut down: by here the evidence is already on the host'
 
     $plan += New-ReleaseVmStep -Name 'remove-vm' -Command 'Remove-VM' -Parameters ([ordered]@{
             Name = $vm; Force = $true
-        }) -AlwaysRun -RunIfCompleted 'virtual-machine'
+        }) -AlwaysRun -RunIfCompleted 'virtual-machine' -DiscardsEvidence
 
     if (-not $KeepDisk) {
         $plan += New-ReleaseVmStep -Name 'remove-disk' -Command 'Remove-Item' -Parameters ([ordered]@{
                 LiteralPath = $RunPath.DifferencingDisk; Force = $true
-            }) -AlwaysRun -RunIfCompleted 'differencing-disk' `
+            }) -AlwaysRun -RunIfCompleted 'differencing-disk' -DiscardsEvidence `
             -Detail 'the run leaves nothing behind but the evidence it copied out'
     }
 
@@ -802,27 +918,887 @@ function New-ReleaseVmRunPlan {
 # The commands the plans name
 # ---------------------------------------------------------------------------
 
+function New-ReleaseVmReadinessRequirement {
+    <#
+    .SYNOPSIS
+        What one run needs a guest to have proven before its campaign starts.
+    .DESCRIPTION
+        Stated per run rather than assumed for every run. An install-and-uninstall
+        scenario needs a reachable OS and nothing else; a capture scenario needs an
+        interactive desktop and a display in a particular mode, and a harness that
+        demanded one of the first would refuse runs the scenario does not need.
+    .PARAMETER InteractiveAgent
+        The process that will run the campaign must be in the interactive session
+        that is attached to the console, on WinSta0\Default. PowerShell Direct lands
+        in session 0, which owns no desktop: no monitor enumerates there, Graphics
+        Capture offers only windows, and Output Duplication finds no outputs.
+    .PARAMETER ExpectedUser
+        The account the campaign must run as. The token decides what a capture is
+        allowed to see, so a run that silently became SYSTEM is a different test.
+    .PARAMETER Display
+        Width, Height and RefreshHz that at least one attached display must report.
+    .PARAMETER ControlChannel
+        The product control channel must answer from inside the guest.
+    .PARAMETER GpuBoundTo
+        The host GPU identity this run partitioned. The guest adapter is held against
+        it on what a partition preserves -- vendor and device ids and the driver
+        version -- so a guest that quietly fell back to the Basic Render Driver stops
+        the run instead of producing evidence attributed to the wrong GPU.
+    #>
+    [OutputType([hashtable])]
+    param(
+        [switch] $InteractiveAgent,
+        [string] $ExpectedUser = '',
+        [System.Collections.IDictionary] $Display,
+        [System.Collections.IDictionary] $GpuBoundTo,
+        [switch] $ControlChannel
+    )
+    return @{
+        InteractiveAgent = [bool]$InteractiveAgent
+        ExpectedUser     = $ExpectedUser
+        Display          = $Display
+        GpuBoundTo       = $GpuBoundTo
+        ControlChannel   = [bool]$ControlChannel
+    }
+}
+
+function Test-ReleaseVmReadiness {
+    <#
+    .SYNOPSIS
+        Whether a measured guest meets a run's requirement, and what it does not meet.
+    .DESCRIPTION
+        Pure: it reads a receipt and a requirement and decides. The measuring is
+        Get-ReleaseVmReadiness, which needs a guest; the deciding is here, where it
+        can be held to its cases.
+
+        Two rules keep it honest. A requirement the receipt carries no measurement for
+        is unmet -- an older guest agent simply does not write a field this build asks
+        about, and the absence of a measurement is not evidence that the state is
+        good. And every unmet requirement is named at once: a campaign that takes an
+        hour to reach this point cannot be debugged one round trip at a time.
+    .OUTPUTS
+        A hashtable with Ready and Unmet.
+    #>
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Receipt,
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Requirement
+    )
+    $unmet = @()
+    $measured = {
+        param($key)
+        return $Receipt.Contains($key) -and $null -ne $Receipt[$key]
+    }
+
+    if (-not (& $measured 'osReachable')) {
+        return @{ Ready = $false; Unmet = @('whether the guest is reachable was not measured') }
+    }
+    if (-not $Receipt['osReachable']) {
+        # Nothing measured through a guest that never answered means anything, so the
+        # rest of the receipt is not read at all.
+        return @{ Ready = $false; Unmet = @('the guest did not answer') }
+    }
+
+    if ($Requirement.InteractiveAgent) {
+        foreach ($key in @('agentSessionId', 'consoleSessionId', 'agentWindowStation', 'agentDesktop')) {
+            if (-not (& $measured $key)) { $unmet += "$key was not measured" }
+        }
+        if ((& $measured 'agentSessionId') -and [int]$Receipt['agentSessionId'] -eq 0) {
+            $unmet += 'the agent runs in session 0, which owns no desktop, so nothing can be captured from it'
+        }
+        elseif ((& $measured 'agentSessionId') -and (& $measured 'consoleSessionId') -and
+                [int]$Receipt['agentSessionId'] -ne [int]$Receipt['consoleSessionId']) {
+            $unmet += ("the agent runs in session $($Receipt['agentSessionId']), which is not the console " +
+                "session $($Receipt['consoleSessionId']); a disconnected session enumerates no display")
+        }
+        if ((& $measured 'agentWindowStation') -and (& $measured 'agentDesktop') -and
+            -not ($Receipt['agentWindowStation'] -eq 'WinSta0' -and $Receipt['agentDesktop'] -eq 'Default')) {
+            $unmet += ("the agent is on $($Receipt['agentWindowStation'])\$($Receipt['agentDesktop']), " +
+                'not WinSta0\Default')
+        }
+    }
+
+    if ($Requirement.ExpectedUser) {
+        if (-not (& $measured 'agentUser')) { $unmet += 'the account the agent runs as was not measured' }
+        elseif ($Receipt['agentUser'] -ne $Requirement.ExpectedUser) {
+            $unmet += "the agent runs as $($Receipt['agentUser']), not $($Requirement.ExpectedUser)"
+        }
+    }
+
+    if ($Requirement.Display) {
+        $wanted = "$($Requirement.Display.Width)x$($Requirement.Display.Height)@$($Requirement.Display.RefreshHz)Hz"
+        if (-not (& $measured 'displays')) {
+            $unmet += "the attached displays were not measured, so $wanted is unproven"
+        }
+        else {
+            $displays = @($Receipt['displays'])
+            if ($displays.Count -eq 0) {
+                $unmet += "no display is attached, so $wanted cannot be shown"
+            }
+            else {
+                $match = @($displays | Where-Object {
+                        [int]$_.Width -eq [int]$Requirement.Display.Width -and
+                        [int]$_.Height -eq [int]$Requirement.Display.Height -and
+                        [int]$_.RefreshHz -eq [int]$Requirement.Display.RefreshHz
+                    })
+                if ($match.Count -eq 0) {
+                    $found = ($displays | ForEach-Object { "$($_.Width)x$($_.Height)@$($_.RefreshHz)Hz" }) -join ', '
+                    $unmet += "no attached display is $wanted; the guest has $found"
+                }
+            }
+        }
+    }
+
+    if ($Requirement.GpuBoundTo) {
+        if (-not (& $measured 'gpu')) {
+            $unmet += 'the guest display adapter was not measured, so the GPU binding is unproven'
+        }
+        else {
+            $binding = Test-ReleaseVmGpuBinding -HostGpu $Requirement.GpuBoundTo -GuestGpu $Receipt['gpu']
+            if (-not $binding.Bound) { $unmet += $binding.Unmet }
+        }
+    }
+
+    if ($Requirement.ControlChannel) {
+        if (-not (& $measured 'controlChannel')) { $unmet += 'the control channel was not measured' }
+        elseif (-not $Receipt['controlChannel']) { $unmet += 'the control channel did not answer inside the guest' }
+    }
+
+    return @{ Ready = ($unmet.Count -eq 0); Unmet = $unmet }
+}
+
+function New-ReleaseVmGuestAgentScript {
+    <#
+    .SYNOPSIS
+        The script the interactive agent runs inside the guest.
+    .DESCRIPTION
+        Started over PowerShell Direct, which is session 0 and owns no desktop -- so
+        the first thing the agent does is write down the context it actually got, and
+        only then run what it was asked to run. A receipt written afterwards would
+        describe a context nobody checked before trusting it.
+
+        The application under test needs a desktop; the channel that starts the agent
+        cannot give it one. Everything else PowerShell Direct is good for --
+        bootstrapping, file copy, starting this agent, rescue, evidence collection --
+        it keeps doing.
+    #>
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)] [string] $ReceiptPath,
+        [Parameter(Mandatory)] [string] $ResultPath
+    )
+    return @"
+`$ErrorActionPreference = 'Stop'
+
+# The context this agent got, written before anything runs in it.
+`$receipt = @{ osReachable = `$true }
+`$receipt['agentSessionId'] = (Get-Process -Id `$PID).SessionId
+`$receipt['agentUser'] = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+if (-not ('ExoSnap.Agent.Native' -as [type])) {
+    Add-Type -Namespace 'ExoSnap.Agent' -Name 'Native' -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("kernel32.dll")]
+public static extern uint WTSGetActiveConsoleSessionId();
+[System.Runtime.InteropServices.DllImport("user32.dll")]
+public static extern System.IntPtr GetProcessWindowStation();
+[System.Runtime.InteropServices.DllImport("user32.dll")]
+public static extern System.IntPtr GetThreadDesktop(uint dwThreadId);
+[System.Runtime.InteropServices.DllImport("kernel32.dll")]
+public static extern uint GetCurrentThreadId();
+[System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+public static extern bool GetUserObjectInformationW(
+    System.IntPtr hObj, int nIndex, System.Text.StringBuilder pvInfo, uint nLength, out uint lpnLengthNeeded);
+'@
+}
+function Get-UserObjectName([System.IntPtr] `$handle) {
+    `$buffer = New-Object System.Text.StringBuilder 256
+    `$needed = 0
+    if ([ExoSnap.Agent.Native]::GetUserObjectInformationW(`$handle, 2, `$buffer, 256, [ref]`$needed)) {
+        return `$buffer.ToString()
+    }
+    return `$null
+}
+`$receipt['consoleSessionId'] = [int][ExoSnap.Agent.Native]::WTSGetActiveConsoleSessionId()
+`$receipt['agentWindowStation'] = Get-UserObjectName ([ExoSnap.Agent.Native]::GetProcessWindowStation())
+`$receipt['agentDesktop'] = Get-UserObjectName (
+    [ExoSnap.Agent.Native]::GetThreadDesktop([ExoSnap.Agent.Native]::GetCurrentThreadId()))
+`$receipt['displays'] = @(
+    Get-CimInstance -ClassName Win32_VideoController -ErrorAction SilentlyContinue |
+        Where-Object { `$_.CurrentHorizontalResolution } |
+        ForEach-Object {
+            @{ Name = `$_.Name; Width = [int]`$_.CurrentHorizontalResolution
+               Height = [int]`$_.CurrentVerticalResolution; RefreshHz = [int]`$_.CurrentRefreshRate }
+        })
+`$adapter = @(Get-CimInstance -ClassName Win32_VideoController -ErrorAction SilentlyContinue |
+        Where-Object { `$_.PNPDeviceID -like 'PCI\*' } | Select-Object -First 1)
+if (`$adapter.Count -gt 0) {
+    `$ids = [regex]::Match(`$adapter[0].PNPDeviceID, 'VEN_(?<vendor>[0-9A-F]{4})&DEV_(?<device>[0-9A-F]{4})')
+    `$gpu = @{ Name = `$adapter[0].Name; DriverVersion = `$adapter[0].DriverVersion }
+    if (`$ids.Success) {
+        `$gpu['VendorId'] = `$ids.Groups['vendor'].Value
+        `$gpu['DeviceId'] = `$ids.Groups['device'].Value
+    }
+    `$receipt['gpu'] = `$gpu
+}
+`$receipt | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath '$ReceiptPath' -Encoding UTF8
+
+# Only now, and only what the host asked for. The host reads the receipt first and
+# stops the run if this session is not where the campaign belongs.
+`$Command = `$env:EXOSNAP_AGENT_COMMAND
+if (-not `$Command) { exit 0 }
+`$directory = `$env:EXOSNAP_AGENT_WORKINGDIRECTORY
+if (`$directory) { Set-Location -LiteralPath `$directory }
+& cmd.exe /c `$Command
+@{ exitCode = `$LASTEXITCODE } | ConvertTo-Json | Set-Content -LiteralPath '$ResultPath' -Encoding UTF8
+"@
+}
+
+function Test-ReleaseVmAgentHandshake {
+    <#
+    .SYNOPSIS
+        Whether the agent proved it is where the campaign belongs.
+    .DESCRIPTION
+        Pure. The receipt has to come from the agent: one measured over PowerShell
+        Direct describes the PowerShell Direct session, which is never the session the
+        campaign will run in.
+
+        No receipt at all is an infrastructure failure, never a verdict. A guest whose
+        files all copied and whose channel answers is still not a guest that can show
+        a picture, and reporting that as a product result is the accusation this
+        refuses to make.
+    .OUTPUTS
+        A hashtable with Ok and Detail.
+    #>
+    [OutputType([hashtable])]
+    param(
+        [AllowNull()] [System.Collections.IDictionary] $Receipt,
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Requirement
+    )
+    if ($null -eq $Receipt) {
+        return @{ Ok = $false
+            Detail = 'the guest agent wrote no receipt, so nothing is known about the session a campaign would run in' }
+    }
+    $verdict = Test-ReleaseVmReadiness -Receipt $Receipt -Requirement $Requirement
+    if ($verdict.Ready) { return @{ Ok = $true; Detail = 'the agent is in the session the campaign needs' } }
+    return @{ Ok = $false; Detail = ($verdict.Unmet -join '; ') }
+}
+
+function Start-ReleaseVmGuestAgent {
+    <#
+    .SYNOPSIS
+        Starts the agent in the guest's interactive session and waits for its receipt.
+    .DESCRIPTION
+        Registered as a scheduled task with an interactive principal and started on
+        demand: that is the documented way to put a process in the logged-on session
+        from a channel that is not in it. The task is the launch mechanism and proves
+        nothing by itself -- the agent's own receipt is the proof, and
+        Assert-ReleaseVmAgentHandshake is what reads it.
+    #>
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)] [string] $VMName,
+        [Parameter(Mandatory)] [System.Management.Automation.PSCredential] $Credential,
+        [Parameter(Mandatory)] [string] $AgentRoot,
+        [int] $TimeoutSeconds = 300
+    )
+    $receiptPath = Join-Path $AgentRoot 'agent-receipt.json'
+    $resultPath = Join-Path $AgentRoot 'agent-result.json'
+    $script = New-ReleaseVmGuestAgentScript -ReceiptPath $receiptPath -ResultPath $resultPath
+
+    return Invoke-Command -VMName $VMName -Credential $Credential -ScriptBlock {
+        param($Root, $Body, $ScriptPath, $ReceiptPath, $Timeout, $UserName)
+        New-Item -ItemType Directory -Path $Root -Force | Out-Null
+        Set-Content -LiteralPath $ScriptPath -Value $Body -Encoding UTF8
+        Remove-Item -LiteralPath $ReceiptPath -Force -ErrorAction SilentlyContinue
+
+        $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
+            -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$ScriptPath`""
+        $principal = New-ScheduledTaskPrincipal -UserId $UserName -LogonType Interactive -RunLevel Highest
+        Register-ScheduledTask -TaskName 'ExoSnapGuestAgent' -Action $action -Principal $principal -Force | Out-Null
+        Start-ScheduledTask -TaskName 'ExoSnapGuestAgent'
+
+        $deadline = [DateTime]::UtcNow.AddSeconds($Timeout)
+        while ([DateTime]::UtcNow -lt $deadline) {
+            if (Test-Path -LiteralPath $ReceiptPath) {
+                $receipt = @{}
+                (Get-Content -LiteralPath $ReceiptPath -Raw | ConvertFrom-Json).PSObject.Properties |
+                    ForEach-Object { $receipt[$_.Name] = $_.Value }
+                return $receipt
+            }
+            Start-Sleep -Seconds 2
+        }
+        return $null
+    } -ArgumentList $AgentRoot, $script, (Join-Path $AgentRoot 'agent.ps1'), $receiptPath, $TimeoutSeconds,
+        $Credential.UserName
+}
+
+function Assert-ReleaseVmAgentHandshake {
+    <#
+    .SYNOPSIS
+        Starts the agent and throws unless it proved the context the run needs.
+    .DESCRIPTION
+        The plan step form, and the rule the whole interactive path exists for: a
+        reachable guest whose agent is not interactive does not pass, however many
+        files copied into it successfully.
+    #>
+    param(
+        [Parameter(Mandatory)] [string] $VMName,
+        [Parameter(Mandatory)] [System.Management.Automation.PSCredential] $Credential,
+        [Parameter(Mandatory)] [string] $AgentRoot,
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Requirement,
+        [int] $TimeoutSeconds = 300
+    )
+    $receipt = Start-ReleaseVmGuestAgent -VMName $VMName -Credential $Credential -AgentRoot $AgentRoot `
+        -TimeoutSeconds $TimeoutSeconds
+    $outcome = Test-ReleaseVmAgentHandshake -Receipt $receipt -Requirement $Requirement
+    if (-not $outcome.Ok) { throw "'$VMName' cannot run this campaign: $($outcome.Detail)" }
+    return $receipt
+}
+
+function Invoke-ReleaseVmInteractiveCommand {
+    <#
+    .SYNOPSIS
+        Runs one command line in the guest's interactive session and returns its exit code.
+    .DESCRIPTION
+        The campaign goes through the agent that already proved its context, not over
+        PowerShell Direct: that channel is session 0, and the application under test
+        needs a desktop.
+
+        The exit code is returned rather than thrown on. A campaign that found defects
+        exits non-zero, and that is a result.
+    #>
+    param(
+        [Parameter(Mandatory)] [string] $VMName,
+        [Parameter(Mandatory)] [System.Management.Automation.PSCredential] $Credential,
+        [Parameter(Mandatory)] [string] $Command,
+        [Parameter(Mandatory)] [string] $AgentRoot,
+        [string] $WorkingDirectory = 'C:\ExoSnapRun',
+        [int] $TimeoutMinutes = 120
+    )
+    $resultPath = Join-Path $AgentRoot 'agent-result.json'
+    $result = Invoke-Command -VMName $VMName -Credential $Credential -ScriptBlock {
+        param($CommandLine, $Directory, $ResultPath, $TimeoutSeconds)
+        Remove-Item -LiteralPath $ResultPath -Force -ErrorAction SilentlyContinue
+        [Environment]::SetEnvironmentVariable('EXOSNAP_AGENT_COMMAND', $CommandLine, 'Machine')
+        [Environment]::SetEnvironmentVariable('EXOSNAP_AGENT_WORKINGDIRECTORY', $Directory, 'Machine')
+        try {
+            Start-ScheduledTask -TaskName 'ExoSnapGuestAgent'
+            $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+            while ([DateTime]::UtcNow -lt $deadline) {
+                if (Test-Path -LiteralPath $ResultPath) {
+                    return (Get-Content -LiteralPath $ResultPath -Raw | ConvertFrom-Json).exitCode
+                }
+                Start-Sleep -Seconds 5
+            }
+            return $null
+        }
+        finally {
+            [Environment]::SetEnvironmentVariable('EXOSNAP_AGENT_COMMAND', $null, 'Machine')
+            [Environment]::SetEnvironmentVariable('EXOSNAP_AGENT_WORKINGDIRECTORY', $null, 'Machine')
+        }
+    } -ArgumentList $Command, $WorkingDirectory, $resultPath, ($TimeoutMinutes * 60)
+
+    if ($null -eq $result) {
+        throw "the guest agent did not finish within $TimeoutMinutes minute(s): $Command"
+    }
+    return $result
+}
+
+function Get-ReleaseVmReadiness {
+    <#
+    .SYNOPSIS
+        Measures, inside the guest, the state a capture campaign depends on.
+    .DESCRIPTION
+        The measurement runs the way the campaign will, because that is the only way
+        the session it reports is the session the campaign gets. A receipt taken over
+        a different channel would describe a different process.
+
+        Fields the guest cannot answer for are left out rather than guessed at;
+        Test-ReleaseVmReadiness treats an absent field as unmet.
+    #>
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)] [string] $VMName,
+        [Parameter(Mandatory)] [System.Management.Automation.PSCredential] $Credential
+    )
+    $measure = {
+        $receipt = @{ osReachable = $true }
+        $receipt['agentSessionId'] = (Get-Process -Id $PID).SessionId
+        $receipt['agentUser'] = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+
+        if (-not ('ExoSnap.Readiness.Native' -as [type])) {
+            Add-Type -Namespace 'ExoSnap.Readiness' -Name 'Native' -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("kernel32.dll")]
+public static extern uint WTSGetActiveConsoleSessionId();
+[System.Runtime.InteropServices.DllImport("user32.dll")]
+public static extern System.IntPtr GetProcessWindowStation();
+[System.Runtime.InteropServices.DllImport("user32.dll")]
+public static extern System.IntPtr GetThreadDesktop(uint dwThreadId);
+[System.Runtime.InteropServices.DllImport("kernel32.dll")]
+public static extern uint GetCurrentThreadId();
+[System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+public static extern bool GetUserObjectInformationW(
+    System.IntPtr hObj, int nIndex, System.Text.StringBuilder pvInfo, uint nLength, out uint lpnLengthNeeded);
+'@
+        }
+        $name = {
+            param($handle)
+            $buffer = New-Object System.Text.StringBuilder 256
+            $needed = 0
+            # UOI_NAME = 2.
+            if ([ExoSnap.Readiness.Native]::GetUserObjectInformationW($handle, 2, $buffer, 256, [ref]$needed)) {
+                return $buffer.ToString()
+            }
+            return $null
+        }
+        $receipt['consoleSessionId'] = [int][ExoSnap.Readiness.Native]::WTSGetActiveConsoleSessionId()
+        $receipt['agentWindowStation'] = & $name ([ExoSnap.Readiness.Native]::GetProcessWindowStation())
+        $receipt['agentDesktop'] = & $name (
+            [ExoSnap.Readiness.Native]::GetThreadDesktop([ExoSnap.Readiness.Native]::GetCurrentThreadId()))
+
+        $interactive = @(Get-Process -Name 'explorer' -ErrorAction SilentlyContinue |
+                Where-Object { $_.SessionId -ne 0 } | Select-Object -First 1)
+        if ($interactive.Count -gt 0) { $receipt['interactiveSessionId'] = $interactive[0].SessionId }
+
+        $adapter = @(Get-CimInstance -ClassName Win32_VideoController -ErrorAction SilentlyContinue |
+                Where-Object { $_.PNPDeviceID -like 'PCI\*' } | Select-Object -First 1)
+        if ($adapter.Count -gt 0) {
+            $ids = [regex]::Match($adapter[0].PNPDeviceID, 'VEN_(?<vendor>[0-9A-F]{4})&DEV_(?<device>[0-9A-F]{4})')
+            $gpu = @{ Name = $adapter[0].Name; DriverVersion = $adapter[0].DriverVersion }
+            if ($ids.Success) {
+                $gpu['VendorId'] = $ids.Groups['vendor'].Value
+                $gpu['DeviceId'] = $ids.Groups['device'].Value
+            }
+            $receipt['gpu'] = $gpu
+        }
+
+        # WMI rather than the display APIs: this may be running in a session that has
+        # no desktop at all, which is exactly the case being reported, and the display
+        # APIs answer that with a failure rather than an empty list.
+        $receipt['displays'] = @(
+            Get-CimInstance -ClassName Win32_VideoController -ErrorAction SilentlyContinue |
+                Where-Object { $_.CurrentHorizontalResolution } |
+                ForEach-Object {
+                    @{
+                        Name      = $_.Name
+                        Width     = [int]$_.CurrentHorizontalResolution
+                        Height    = [int]$_.CurrentVerticalResolution
+                        RefreshHz = [int]$_.CurrentRefreshRate
+                    }
+                })
+        return $receipt
+    }
+    try {
+        return Invoke-Command -VMName $VMName -Credential $Credential -ScriptBlock $measure -ErrorAction Stop
+    }
+    catch {
+        return @{ osReachable = $false; detail = $_.Exception.Message }
+    }
+}
+
+function Assert-ReleaseVmReadiness {
+    <#
+    .SYNOPSIS
+        Measures a guest and throws unless it meets the run requirement.
+    .DESCRIPTION
+        The plan step form. Throwing is right here: a campaign started on a guest that
+        cannot show a picture produces a failure that reads like a product defect, and
+        the run is stopped before it can.
+    #>
+    param(
+        [Parameter(Mandatory)] [string] $VMName,
+        [Parameter(Mandatory)] [System.Management.Automation.PSCredential] $Credential,
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Requirement
+    )
+    $receipt = Get-ReleaseVmReadiness -VMName $VMName -Credential $Credential
+    $verdict = Test-ReleaseVmReadiness -Receipt $receipt -Requirement $Requirement
+    if (-not $verdict.Ready) {
+        throw ("'$VMName' is not ready for this run:`n    " + ($verdict.Unmet -join "`n    "))
+    }
+    return $receipt
+}
+
+function Get-ReleaseVmImageFingerprintDigest {
+    <#
+    .SYNOPSIS
+        One stable digest over the facts that identify a golden image.
+    .DESCRIPTION
+        Order-independent: a hashtable has none, and a digest that depended on
+        enumeration order would report drift between two readings of the same image.
+        Keys are sorted and the pairs are joined with separators that cannot occur in
+        a key, so two different fact sets cannot collide by concatenation.
+    #>
+    [OutputType([string])]
+    param([Parameter(Mandatory)] [System.Collections.IDictionary] $Fingerprint)
+    $pairs = @($Fingerprint.Keys | Sort-Object | ForEach-Object { "$_=$($Fingerprint[$_])" })
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($pairs -join "`n")
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        return 'sha256:' + [System.BitConverter]::ToString($sha.ComputeHash($bytes)).Replace('-', '').ToLowerInvariant()
+    }
+    finally { $sha.Dispose() }
+}
+
+function Test-ReleaseVmImageFingerprint {
+    <#
+    .SYNOPSIS
+        Whether the image a run is about to use is the image the run was qualified on.
+    .DESCRIPTION
+        Pure, and it names every drifted field at once: rebuilding a golden image once
+        per discovered difference is not a workflow.
+
+        A fact the image never recorded is drift rather than agreement. An older
+        image simply does not carry a field a later build of this recipe compares,
+        and the absence of a record is not evidence that the two agree.
+    .OUTPUTS
+        A hashtable with Matches and Differences.
+    #>
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Expected,
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Actual
+    )
+    $differences = @()
+    foreach ($key in @($Expected.Keys | Sort-Object)) {
+        if (-not $Actual.Contains($key) -or $null -eq $Actual[$key]) {
+            $differences += "$key`: the run needs $($Expected[$key]); the image has not recorded it"
+            continue
+        }
+        if ("$($Actual[$key])" -ne "$($Expected[$key])") {
+            $differences += "$key`: the run needs $($Expected[$key]); the image is $($Actual[$key])"
+        }
+    }
+    return @{ Matches = ($differences.Count -eq 0); Differences = $differences }
+}
+
+function Get-ReleaseVmManifestFingerprint {
+    <#
+    .SYNOPSIS
+        The part of an image fingerprint the provisioning manifest decides.
+    .DESCRIPTION
+        The display driver profile, the monitor the gates assert against, and a digest
+        over every package pin. The rest of a fingerprint -- the Windows build, the
+        host GPU driver the guest driver was staged from -- is measured, not declared,
+        and is added by whoever builds or checks the image.
+    #>
+    [OutputType([hashtable])]
+    param([Parameter(Mandatory)] [System.Collections.IDictionary] $Manifest)
+    $pins = @($Manifest.packages | Sort-Object { $_.id } | ForEach-Object {
+            $version = if ($_.Contains('version')) { $_.version } else { '' }
+            $sha = if ($_.Contains('sha256')) { $_.sha256 } else { '' }
+            "$($_.id)|$($_.kind)|$version|$sha"
+        })
+    $modes = ($Manifest.display.refreshRates | ForEach-Object { "$_" }) -join ','
+    return @{
+        displayProfile = $Manifest.displayProfile
+        displayMode    = "$($Manifest.display.width)x$($Manifest.display.height)@$modes"
+        packagePins    = Get-ReleaseVmImageFingerprintDigest -Fingerprint @{ pins = ($pins -join "`n") }
+    }
+}
+
+function Assert-ReleaseVmImageFingerprint {
+    <#
+    .SYNOPSIS
+        Refuses a run whose image is not the image the run was qualified on.
+    .DESCRIPTION
+        The plan step form. Evidence attributed to the wrong image is worse than no
+        evidence: the two display-driver profiles this recipe knows behave differently
+        under capture, and a campaign that cannot name the one it ran on cannot be
+        repeated or compared.
+    #>
+    param(
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Expected,
+        [Parameter(Mandatory)] [string] $FingerprintPath
+    )
+    if (-not (Test-Path -LiteralPath $FingerprintPath)) {
+        throw ("this image records no fingerprint at '$FingerprintPath', so it cannot be told apart from any " +
+            'other image. Rebuild it, or write the fingerprint of the image that is there.')
+    }
+    $actual = @{}
+    (Get-Content -LiteralPath $FingerprintPath -Raw | ConvertFrom-Json).PSObject.Properties |
+        ForEach-Object { $actual[$_.Name] = $_.Value }
+
+    $drift = Test-ReleaseVmImageFingerprint -Expected $Expected -Actual $actual
+    if (-not $drift.Matches) {
+        throw ("the golden image is not the image this run was qualified on:`n    " +
+            ($drift.Differences -join "`n    "))
+    }
+    return $actual
+}
+
+function Write-ReleaseVmImageFingerprint {
+    <#
+    .SYNOPSIS
+        Records what an image is, beside the image.
+    .DESCRIPTION
+        Written when the image is built and read by every run afterwards. The digest
+        is stored alongside the facts so a changed fingerprint file is visible as
+        such, rather than only as a comparison failing somewhere later.
+    #>
+    param(
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Fingerprint,
+        [Parameter(Mandatory)] [string] $Path
+    )
+    $document = [ordered]@{}
+    foreach ($key in @($Fingerprint.Keys | Sort-Object)) { $document[$key] = $Fingerprint[$key] }
+    $document['digest'] = Get-ReleaseVmImageFingerprintDigest -Fingerprint $Fingerprint
+
+    $directory = Split-Path -Parent $Path
+    if ($directory -and -not (Test-Path -LiteralPath $directory)) {
+        New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    }
+    Set-Content -LiteralPath $Path -Value ($document | ConvertTo-Json -Depth 4) -Encoding UTF8
+    return $Path
+}
+
+function Get-ReleaseVmInfDriverVersion {
+    <#
+    .SYNOPSIS
+        The version an INF declares, or null when it declares none.
+    .DESCRIPTION
+        The DriverVer directive is "DriverVer = <date>,<version>". The version is what
+        identifies a DriverStore package against the driver the adapter is running;
+        the date is not unique across packages.
+    #>
+    [OutputType([string])]
+    param([Parameter(Mandatory)] [AllowEmptyString()] [string] $InfText)
+    $match = [regex]::Match($InfText, '(?im)^\s*DriverVer\s*=\s*[^,]+,\s*([0-9][0-9.]*)\s*$')
+    if (-not $match.Success) { return $null }
+    return $match.Groups[1].Value
+}
+
+function Select-ReleaseVmDriverPackage {
+    <#
+    .SYNOPSIS
+        The DriverStore package that is the driver the host is running.
+    .DESCRIPTION
+        Matched by version, not by write time. A driver update leaves the previous
+        package in the store and a rollback leaves the newer one, so the newest
+        directory is not the active driver -- and staging the wrong package produces a
+        guest whose user-mode driver does not match the host kernel-mode driver, which
+        fails inside the guest as an unexplained device error.
+
+        Refuses rather than approximates. No match and an ambiguous match are both
+        reported with what was looked for and what the store holds, because staging a
+        driver that is not the host driver is worse than staging none.
+    .OUTPUTS
+        A hashtable with Ok, Package and Detail.
+    #>
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [object[]] $Candidate,
+        [Parameter(Mandatory)] [string] $ActiveDriverVersion
+    )
+    if ($Candidate.Count -eq 0) {
+        return @{ Ok = $false; Package = $null
+            Detail = "no driver package is in the store to match against $ActiveDriverVersion" }
+    }
+
+    $matches = @($Candidate | Where-Object { $_.DriverVersion -eq $ActiveDriverVersion })
+    if ($matches.Count -eq 1) {
+        return @{ Ok = $true; Package = $matches[0]
+            Detail = "$($matches[0].Name) declares $ActiveDriverVersion, which is what the adapter is running" }
+    }
+    if ($matches.Count -gt 1) {
+        return @{ Ok = $false; Package = $null
+            Detail = ("$($matches.Count) driver packages declare $ActiveDriverVersion and nothing here can " +
+                "tell them apart: " + (($matches | ForEach-Object { $_.Name }) -join ', ')) }
+    }
+
+    $held = ($Candidate | ForEach-Object { "$($_.Name) ($($_.DriverVersion))" }) -join ', '
+    return @{ Ok = $false; Package = $null
+        Detail = "no driver package declares $ActiveDriverVersion, which is what the adapter is running; the store holds $held" }
+}
+
+function Compare-ReleaseVmGpuPartition {
+    <#
+    .SYNOPSIS
+        What the adapter actually applied, against what the run asked for.
+    .DESCRIPTION
+        Pure. The partition values are opaque to this recipe and the platform may
+        normalise them, so the configuration a run was measured under is the one read
+        back afterwards. A field the adapter did not report is a difference, not
+        agreement: nobody measured it.
+    .OUTPUTS
+        A hashtable with Matches and Differences.
+    #>
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Requested,
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Actual
+    )
+    $differences = @()
+    foreach ($key in $Requested.Keys) {
+        if (-not $Actual.Contains($key) -or $null -eq $Actual[$key]) {
+            $differences += "$key`: requested $($Requested[$key]), not reported by the adapter"
+            continue
+        }
+        if ([long]$Actual[$key] -ne [long]$Requested[$key]) {
+            $differences += "$key`: requested $($Requested[$key]), actual $($Actual[$key])"
+        }
+    }
+    return @{ Matches = ($differences.Count -eq 0); Differences = $differences }
+}
+
+function Test-ReleaseVmGpuBinding {
+    <#
+    .SYNOPSIS
+        Whether the adapter the guest sees is the host GPU this run partitioned.
+    .DESCRIPTION
+        Compared on what a GPU partition preserves and nothing else: the PCI vendor
+        and device ids, and the driver version, which in the guest comes from the host
+        driver package staged into it. A mismatched driver version is the classic
+        GPU-P failure and the reason the package selection above matches on the active
+        driver rather than on a timestamp.
+
+        The adapter LUID is deliberately not compared. It identifies an adapter within
+        one operating system, the guest assigns its own, and requiring them to agree
+        would fail every correct run. An unmeasured fact is unbound rather than
+        assumed: a guest that reported no adapter proves nothing.
+    .OUTPUTS
+        A hashtable with Bound and Unmet.
+    #>
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $HostGpu,
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $GuestGpu
+    )
+    $unmet = @()
+    foreach ($field in @('VendorId', 'DeviceId', 'DriverVersion')) {
+        $name = $field.Substring(0, 1).ToLowerInvariant() + $field.Substring(1)
+        $hasHost = $HostGpu.Contains($field) -and $null -ne $HostGpu[$field]
+        $hasGuest = $GuestGpu.Contains($field) -and $null -ne $GuestGpu[$field]
+        if (-not $hasHost) { $unmet += "the host $name was not measured"; continue }
+        if (-not $hasGuest) { $unmet += "the guest $name was not measured"; continue }
+        if ("$($HostGpu[$field])" -ne "$($GuestGpu[$field])") {
+            $unmet += "$name`: host $($HostGpu[$field]), guest $($GuestGpu[$field])"
+        }
+    }
+    return @{ Bound = ($unmet.Count -eq 0); Unmet = $unmet }
+}
+
+function Get-ReleaseVmHostGpu {
+    <#
+    .SYNOPSIS
+        The identity of the display adapter a run partitions.
+    .DESCRIPTION
+        Enough to say afterwards which physical GPU a campaign ran on: the PnP
+        instance path, the adapter LUID, the PCI ids, and the driver the adapter is
+        actually running together with the DriverStore package that driver came from.
+
+        The LUID is recorded for the host record, not for comparison against the
+        guest: it identifies an adapter within one operating system.
+    #>
+    [OutputType([hashtable])]
+    param([string] $InstancePathPattern = 'PCI\\VEN_10DE*')
+    $device = @(Get-CimInstance -ClassName Win32_VideoController -ErrorAction SilentlyContinue |
+            Where-Object { $_.PNPDeviceID -like $InstancePathPattern } | Select-Object -First 1)
+    if ($device.Count -eq 0) { return @{ Measured = $false; Detail = "no display adapter matches $InstancePathPattern" } }
+    $adapter = $device[0]
+
+    $identity = @{
+        Measured      = $true
+        InstancePath  = $adapter.PNPDeviceID
+        Name          = $adapter.Name
+        DriverVersion = $adapter.DriverVersion
+    }
+    $ids = [regex]::Match($adapter.PNPDeviceID, 'VEN_(?<vendor>[0-9A-F]{4})&DEV_(?<device>[0-9A-F]{4})(&SUBSYS_(?<subsys>[0-9A-F]{8}))?')
+    if ($ids.Success) {
+        $identity['VendorId'] = $ids.Groups['vendor'].Value
+        $identity['DeviceId'] = $ids.Groups['device'].Value
+        if ($ids.Groups['subsys'].Success) { $identity['SubsystemId'] = $ids.Groups['subsys'].Value }
+    }
+
+    $signed = @(Get-CimInstance -ClassName Win32_PnPSignedDriver -ErrorAction SilentlyContinue |
+            Where-Object { $_.DeviceID -eq $adapter.PNPDeviceID } | Select-Object -First 1)
+    if ($signed.Count -gt 0) {
+        $identity['InfName'] = $signed[0].InfName
+        if ($signed[0].DriverVersion) { $identity['DriverVersion'] = $signed[0].DriverVersion }
+    }
+
+    $luid = @(Get-PnpDeviceProperty -InstanceId $adapter.PNPDeviceID -KeyName 'DEVPKEY_Device_LUID' -ErrorAction SilentlyContinue)
+    if ($luid.Count -gt 0 -and $null -ne $luid[0].Data) { $identity['AdapterLuid'] = "$($luid[0].Data)" }
+
+    return $identity
+}
+
+function Assert-ReleaseVmGpuPartition {
+    <#
+    .SYNOPSIS
+        Reads the applied partition back and throws unless it is what was requested.
+    .DESCRIPTION
+        The plan step form. A run whose partition the platform quietly normalised was
+        measured under a configuration nobody recorded, so the difference is named and
+        the run stops rather than producing evidence attributed to the wrong setup.
+    #>
+    param(
+        [Parameter(Mandatory)] [string] $VMName,
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Requested
+    )
+    $adapter = @(Get-VMGpuPartitionAdapter -VMName $VMName -ErrorAction Stop)
+    if ($adapter.Count -eq 0) { throw "'$VMName' has no GPU partition adapter to read back" }
+
+    $actual = [ordered]@{}
+    foreach ($key in $Requested.Keys) {
+        $property = $adapter[0].PSObject.Properties[$key]
+        if ($property -and $null -ne $property.Value) { $actual[$key] = $property.Value }
+    }
+
+    $comparison = Compare-ReleaseVmGpuPartition -Requested $Requested -Actual $actual
+    if (-not $comparison.Matches) {
+        throw ("the GPU partition on '$VMName' is not what this run asked for:`n    " +
+            ($comparison.Differences -join "`n    "))
+    }
+    return $actual
+}
+
 function Get-ReleaseVmHostDriverPackage {
     <#
     .SYNOPSIS
         The host's active display driver package directory.
     .DESCRIPTION
-        Newest by write time when several are present: a driver update leaves the
-        previous package in the store, and copying the older one into the guest
-        produces a guest whose driver does not match the host's kernel-mode driver.
+        The package whose INF declares the version the adapter is actually running.
+        Not the newest directory by write time: an update leaves the previous package
+        in the store and a rollback leaves the newer one, so the clock says nothing
+        about which driver is loaded, and staging the wrong one produces a guest whose
+        user-mode driver does not match the host kernel-mode driver.
+
+        Returns null when there is no unambiguous match. Copy-ReleaseVmDriverStore
+        refuses on null rather than staging something approximate.
     #>
     [OutputType([string])]
     param(
         [string] $Repository,
-        [string] $Pattern
+        [string] $Pattern,
+        [string] $ActiveDriverVersion
     )
     $defaults = Get-ReleaseVmDefault
     if (-not $Repository) { $Repository = $defaults.HostDriverRepository }
     if (-not $Pattern) { $Pattern = $defaults.HostDriverPattern }
+    if (-not $ActiveDriverVersion) {
+        $gpu = Get-ReleaseVmHostGpu
+        if (-not $gpu.Measured) { return $null }
+        $ActiveDriverVersion = $gpu.DriverVersion
+    }
+
     $candidates = @(Get-ChildItem -LiteralPath $Repository -Directory -Filter $Pattern -ErrorAction SilentlyContinue |
-            Sort-Object LastWriteTime -Descending)
-    if ($candidates.Count -eq 0) { return $null }
-    return $candidates[0].FullName
+            ForEach-Object {
+                $inf = @(Get-ChildItem -LiteralPath $_.FullName -Filter '*.inf' -File -ErrorAction SilentlyContinue |
+                        Select-Object -First 1)
+                @{
+                    Name          = $_.Name
+                    FullName      = $_.FullName
+                    DriverVersion = if ($inf.Count -gt 0) {
+                        Get-ReleaseVmInfDriverVersion -InfText (Get-Content -LiteralPath $inf[0].FullName -Raw)
+                    } else { $null }
+                }
+            })
+
+    $selected = Select-ReleaseVmDriverPackage -Candidate $candidates -ActiveDriverVersion $ActiveDriverVersion
+    if (-not $selected.Ok) {
+        Write-Warning "no host display driver package could be bound: $($selected.Detail)"
+        return $null
+    }
+    return $selected.Package.FullName
 }
 
 function New-ReleaseVmAnswerIso {
@@ -1192,6 +2168,26 @@ Export-ModuleMember -Function @(
     'Format-ReleaseVmStep'
     'Write-ReleaseVmPlan'
     'Invoke-ReleaseVmPlan'
+    'Get-ReleaseVmImageFingerprintDigest'
+    'Test-ReleaseVmImageFingerprint'
+    'Get-ReleaseVmManifestFingerprint'
+    'Assert-ReleaseVmImageFingerprint'
+    'Write-ReleaseVmImageFingerprint'
+    'Get-ReleaseVmInfDriverVersion'
+    'Select-ReleaseVmDriverPackage'
+    'Compare-ReleaseVmGpuPartition'
+    'Test-ReleaseVmGpuBinding'
+    'Get-ReleaseVmHostGpu'
+    'Assert-ReleaseVmGpuPartition'
+    'New-ReleaseVmGuestAgentScript'
+    'Test-ReleaseVmAgentHandshake'
+    'Start-ReleaseVmGuestAgent'
+    'Assert-ReleaseVmAgentHandshake'
+    'Invoke-ReleaseVmInteractiveCommand'
+    'New-ReleaseVmReadinessRequirement'
+    'Test-ReleaseVmReadiness'
+    'Get-ReleaseVmReadiness'
+    'Assert-ReleaseVmReadiness'
     'Set-ReleaseVmBootFromDvd'
     'Stop-ReleaseVmIfRunning'
     'Wait-ReleaseVmPowerShellDirect'

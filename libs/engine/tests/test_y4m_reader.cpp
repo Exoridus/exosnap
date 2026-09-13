@@ -2,6 +2,10 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdint>
+#include <string>
+#include <utility>
+
 namespace exosnap::engine {
 namespace {
 
@@ -106,3 +110,84 @@ TEST(ReadY4mFrame, RejectsTruncatedFrameData) {
 
 } // namespace
 } // namespace exosnap::engine
+
+// ---------------------------------------------------------------------------
+// The even-dimension precondition, enforced where the dimensions are first known
+// ---------------------------------------------------------------------------
+//
+// I420 halves both dimensions for the chroma planes, and I420FrameSize does it
+// with integer division -- correct for the documented contract that both are
+// even, silently wrong for anything else. An odd width makes the computed frame
+// size SMALLER than the data a real encoder writes, so the mismatch surfaces
+// later as a torn frame or a rejected GPU configuration rather than as a bad
+// file.
+//
+// Ceil-rounding the chroma planes instead would be a different pixel layout, not
+// a fix for this one -- so the parser rejects, and the even cases are unchanged.
+
+namespace {
+
+using exosnap::engine::I420FrameSize;
+using exosnap::engine::ParseY4mHeader;
+
+std::string HeaderLine(uint32_t width, uint32_t height) {
+    return "YUV4MPEG2 W" + std::to_string(width) + " H" + std::to_string(height) + " F30:1 C420\n";
+}
+
+TEST(Y4mEvenDimensions, AnOddWidthIsRejectedWithTheReason) {
+    std::string err;
+    const auto header = ParseY4mHeader(HeaderLine(1919, 1080), err);
+    EXPECT_FALSE(header.has_value()) << "an odd width was accepted";
+    EXPECT_NE(err.find("even width and height"), std::string::npos) << err;
+    EXPECT_NE(err.find("1919"), std::string::npos) << "the reason must name the dimensions: " << err;
+}
+
+TEST(Y4mEvenDimensions, AnOddHeightIsRejected) {
+    // 1079 rows: the concrete counter-example from the review.
+    std::string err;
+    EXPECT_FALSE(ParseY4mHeader(HeaderLine(1920, 1079), err).has_value());
+    EXPECT_NE(err.find("1079"), std::string::npos) << err;
+}
+
+TEST(Y4mEvenDimensions, BothOddIsRejected) {
+    std::string err;
+    EXPECT_FALSE(ParseY4mHeader(HeaderLine(1919, 1079), err).has_value());
+}
+
+TEST(Y4mEvenDimensions, ZeroIsRejectedAsItsOwnCase) {
+    // Zero is even, so the parity check alone would let it through -- and a
+    // zero-sized frame is not a frame.
+    std::string err;
+    EXPECT_FALSE(ParseY4mHeader(HeaderLine(0, 1080), err).has_value());
+    EXPECT_NE(err.find("positive"), std::string::npos) << err;
+    err.clear();
+    EXPECT_FALSE(ParseY4mHeader(HeaderLine(1920, 0), err).has_value());
+}
+
+TEST(Y4mEvenDimensions, EvenDimensionsAreUnchanged) {
+    // The control: everything that worked before still works, including the small
+    // and odd-looking-but-even sizes.
+    for (const auto [w, h] :
+         {std::pair<uint32_t, uint32_t>{1920, 1080}, {2, 2}, {1280, 720}, {3840, 2160}, {642, 482}}) {
+        std::string err;
+        const auto header = ParseY4mHeader(HeaderLine(w, h), err);
+        ASSERT_TRUE(header.has_value()) << w << "x" << h << ": " << err;
+        EXPECT_EQ(header->width, w);
+        EXPECT_EQ(header->height, h);
+    }
+}
+
+TEST(Y4mEvenDimensions, TheFrameSizeArithmeticIsOnlyCorrectForEvenDimensions) {
+    // The premise, pinned: for an even pair the planes add up exactly, and for an
+    // odd one the integer division loses the last row/column -- which is why the
+    // parser refuses rather than this function rounding differently.
+    EXPECT_EQ(I420FrameSize(4, 4), 16u + 2u * 4u);
+    EXPECT_EQ(I420FrameSize(1920, 1080), 1920u * 1080u * 3u / 2u);
+
+    // 3x3: a full 9-byte Y plane, but 2x(1x1) chroma instead of the 2x(2x2) a
+    // ceil layout would use. The difference is the defect the contract avoids.
+    EXPECT_EQ(I420FrameSize(3, 3), 9u + 2u * 1u);
+    EXPECT_LT(I420FrameSize(3, 3), 9u + 2u * 4u);
+}
+
+} // namespace

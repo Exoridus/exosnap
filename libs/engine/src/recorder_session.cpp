@@ -11,6 +11,7 @@
 #include "session_outcome.h"
 #include "session_stats_collector.h"
 #include "session_stop_reset.h"
+#include "split_sentinel_policy.h"
 #include "video_thread.h"
 #include "wasapi_capture_src.h"
 #include "wasapi_loopback_src.h"
@@ -416,6 +417,16 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
             return fail(E_INVALIDARG, ErrorPhase::Prepare, "audio_track_plan: max 3 audio tracks supported");
         }
 
+        // track_index is the position a worker writes into -- codec-private slots,
+        // per-track RMS, measured epochs, aligned durations. A sparse, duplicated
+        // or out-of-range set of indices was accepted here, and the failure landed
+        // much later as a mux waiting forever for a header nobody would send.
+        if (const std::string bad_indices =
+                DescribeInvalidTrackIndices(config.audio_track_plan, CodecPrivateData::kMaxAudioTracks);
+            !bad_indices.empty()) {
+            return fail(E_INVALIDARG, ErrorPhase::Prepare, bad_indices);
+        }
+
         for (const auto& track : config.audio_track_plan.tracks) {
             if (track.sources.size() < 1 || track.sources.size() > 3) {
                 return fail(E_NOTIMPL, ErrorPhase::Prepare, "Audio tracks must contain between 1 and 3 sources.");
@@ -526,8 +537,14 @@ bool RecorderSession::RequestSplit(SplitTriggerSource source, RecordRequestId re
     // Record the trigger (for logging) before bumping the sequence so the
     // observing thread sees a consistent (seq, trigger) pair.
     const auto st = m_impl->State();
-    st->split_last_trigger.store(static_cast<uint32_t>(source));
-    st->split_request_seq.fetch_add(1);
+    // Compare-exchange, not a store: two requesters (a hotkey and the size
+    // monitor) must not lose each other's trigger bit, and the sequence and the
+    // trigger have to become visible together or the consumer can pair a
+    // sequence with the wrong reason.
+    uint64_t expected = st->split_request.load(std::memory_order_relaxed);
+    while (!st->split_request.compare_exchange_weak(expected, SplitRequestWith(expected, static_cast<uint32_t>(source)),
+                                                    std::memory_order_release, std::memory_order_relaxed)) {
+    }
     return true;
 }
 
@@ -1149,11 +1166,13 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config, RecordReque
         const MissingCaptureCause cause = ClassifyMissingCapture(!result.succeeded, result.stats.video_frames_captured,
                                                                  pre_stop || state_ptr->caller_stop_requested.load());
         if (cause != MissingCaptureCause::None) {
-            ApplyMissingCaptureOutcome(result, cause, config.target.kind);
+            ApplyMissingCaptureOutcome(result, cause, ResolveCaptureBackend(config));
             const logging::LogField fields[] = {{"cause", cause == MissingCaptureCause::StoppedBeforeCapture
                                                               ? "stopped_before_capture"
                                                               : "no_frames_delivered"},
-                                                {"backend", CaptureBackendName(config.target.kind)}};
+                                                // The resolved backend, not the target kind: a monitor recorded
+                                                // with WGC used to be logged as dxgi_od here.
+                                                {"backend", CaptureBackendName(ResolveCaptureBackend(config))}};
             logging::log(logging::LogLevel::Warn, "recorder_session", "session ended without a captured frame",
                          std::span<const logging::LogField>(fields, std::size(fields)));
         }

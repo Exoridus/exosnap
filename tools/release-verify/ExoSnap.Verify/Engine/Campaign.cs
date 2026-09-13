@@ -87,9 +87,22 @@ public sealed class CampaignServices : IAsyncDisposable
         var presentMon = new PresentMonReader(tools.Resolve("PresentMon", "EXOSNAP_PRESENTMON").Path);
 
         // Transport order is the fallback order: the first one that reports itself
-        // available carries the run.
+        // available and can satisfy what the run declared carries it. The virtual
+        // machine comes first because it is the only one that measures the session a
+        // worker lands in, which a capture run needs and the sandbox cannot answer for.
         var disposableOs = new DisposableOsRunner(
         [
+            new HyperVTransport(
+                processes,
+                campaign.RepositoryRoot,
+                HyperVAccess.Measure(
+                    moduleExists: name => Directory.Exists(Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.System),
+                        "WindowsPowerShell", "v1.0", "Modules", name)),
+                    // The management service, by the process it runs as: asking for it
+                    // by name needs a package reference for one boolean.
+                    serviceRunning: name => Process.GetProcessesByName(name).Length > 0),
+                Path.Combine(Path.GetTempPath(), "exosnap-verify-vm")),
             new SandboxTransport(processes, tools, Path.Combine(Path.GetTempPath(), "exosnap-verify-sandbox")),
         ]);
 
@@ -114,7 +127,10 @@ public sealed class CampaignServices : IAsyncDisposable
             new ArtifactUnderTest(
                 campaign.Binding.ExecutablePath,
                 campaign.Binding.ProductVersion,
-                campaign.RepositoryRoot),
+                campaign.RepositoryRoot,
+                campaign.Binding.RcTag,
+                campaign.Binding.SourceCommit,
+                campaign.Binding.ExecutableSha256),
             sessions,
             ffprobe,
             environment,
@@ -125,7 +141,8 @@ public sealed class CampaignServices : IAsyncDisposable
             new FlaUiAutomation(),
             new Windows.WindowsSystemAppearance(),
             new ElevatedWorkerHost(ElevatedWorkerHost.Resolve(campaign.RepositoryRoot)),
-            disposableOs);
+            disposableOs,
+            new AudioEndpointControl(processes, tools));
 
         return new CampaignServices(processes, sessions, gates);
     }
@@ -231,7 +248,8 @@ public static class Campaign
     public static ReadOnlyCollection<string> ReconciliationBlockers(
         RunDirectory run,
         CampaignDocument campaign,
-        ScenarioCatalog catalog)
+        ScenarioCatalog catalog,
+        ToolingFingerprint? tooling = null)
     {
         ArgumentNullException.ThrowIfNull(run);
         ArgumentNullException.ThrowIfNull(campaign);
@@ -281,6 +299,23 @@ public static class Campaign
             !string.Equals(state.CatalogVersion, catalog.Version, StringComparison.Ordinal))
         {
             reasons.Add("the run state does not match the prepared campaign, artifact, and catalog");
+        }
+
+        // A verdict is a statement about bytes measured BY something ON something.
+        // The bytes are bound above; this binds the rest, so a local pass produced
+        // with a different ffprobe, on a different Windows build or through a
+        // different display driver cannot qualify a release nobody re-ran.
+        //
+        // Only a real disagreement blocks. A field this machine cannot read makes the
+        // digest empty, and that has to mean "these verdicts may not be REUSED" rather
+        // than "this run may not qualify": refusing to qualify because a tool nobody
+        // needs is unreadable would stop every campaign on a machine without it, which
+        // is a different and much worse failure than the one being prevented.
+        if (tooling is { Digest.Length: > 0 } &&
+            state is { ToolingFingerprint.Length: > 0 } &&
+            !tooling.Accepts(state.ToolingFingerprint))
+        {
+            reasons.Add(tooling.DescribeMismatch(state.ToolingFingerprint));
         }
 
         return new ReadOnlyCollection<string>(reasons);

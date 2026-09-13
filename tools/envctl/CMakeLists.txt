@@ -91,6 +91,8 @@ exosnap_add_gtest(
     SOURCES tests/test_envctl_win32_read.cpp
     LIBRARIES envctl_win32
     LABELS live
+    # Reads real displays and audio endpoints, which exist in a desktop session.
+    PHASE desktop
 )
 target_include_directories(envctl_win32_read_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
 target_compile_definitions(envctl_win32_read_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)

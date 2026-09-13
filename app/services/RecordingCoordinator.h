@@ -605,6 +605,14 @@ class RecordingCoordinator {
     std::unique_ptr<diagnostics::Win32DiskSpaceProvider> default_disk_space_provider_;
     // Background thread polling free space during recording.
     std::jthread disk_monitor_thread_;
+    // Liveness token for the one queued call that must dereference the coordinator
+    // itself. Every other cross-thread post copies the std::function it needs and
+    // so survives the owner; the disk-space auto-stop has to call StopRecording(),
+    // and joining the poller does not retract a call it already put in the Qt event
+    // queue. Reset at the very top of the destructor, which runs on the same (UI)
+    // thread that dispatches the queued call, so an expired token there means the
+    // coordinator is already gone.
+    std::shared_ptr<bool> disk_stop_life_token_ = std::make_shared<bool>(true);
     // Set to true when the disk-monitor auto-stop fires to suppress duplicate stops.
     std::atomic<bool> disk_stop_triggered_{false};
     // True when the active session targets MP4 (requires remux reserve in threshold).

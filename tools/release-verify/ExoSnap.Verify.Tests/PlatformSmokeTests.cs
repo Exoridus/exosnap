@@ -28,6 +28,23 @@ public sealed class PlatformSmokeTests
     private static readonly TimeSpan SandboxSmokeTimeout = TimeSpan.FromMinutes(5);
 
     [Fact]
+    public void AHardwareAdapterReportsAUserModeDriverVersion()
+    {
+        // The one production read in the tooling fingerprint that could silently
+        // return nothing: an empty driver version makes the whole fingerprint empty,
+        // which reads as "cannot be reused" and would quietly switch the binding off
+        // on every machine.
+        var adapters = ExoSnap.Verify.Windows.GraphicsProbe.TryEnumerateAdapters();
+        Assert.SkipWhen(adapters is null, "DXGI is not reachable on this machine");
+
+        var hardware = adapters!.FirstOrDefault(adapter => !adapter.IsSoftware);
+        Assert.SkipWhen(hardware is null, "this machine has no hardware graphics adapter");
+
+        Assert.NotEmpty(hardware!.UserModeDriverVersion);
+        Assert.Contains(".", hardware.UserModeDriverVersion, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task FfprobeReadsARealEncodeItJustMade()
     {
         var tools = new ToolResolver();
@@ -222,7 +239,7 @@ public sealed class PlatformSmokeTests
             worker,
             """
             param([string] $StagingDirectory, [string] $ResultPath, [string] $MarkerPath)
-            Set-Content -LiteralPath $ResultPath -Value '{"steps":[{"name":"ran","ok":true,"detail":"smoke"}]}'
+            Set-Content -LiteralPath $ResultPath -Value '{"steps":[{"name":"ran","ok":true,"detail":"smoke","kind":"product"}]}'
             New-Item -ItemType File -Path $MarkerPath -Force | Out-Null
             """,
             TestContext.Current.CancellationToken);

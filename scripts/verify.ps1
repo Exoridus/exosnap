@@ -89,15 +89,15 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-# EXOSNAP_VERIFY_JOBS is the default so a pre-push run can be throttled from the
-# environment rather than by editing the shared hook. A value that does not parse,
-# or a non-positive one, means "no cap" just like the default.
-if ($Jobs -le 0 -and -not [string]::IsNullOrWhiteSpace($env:EXOSNAP_VERIFY_JOBS)) {
-    $parsed = 0
-    if ([int]::TryParse($env:EXOSNAP_VERIFY_JOBS, [ref]$parsed) -and $parsed -gt 0) { $Jobs = $parsed }
-}
-if ($Jobs -lt 0) { $Jobs = 0 }
-$jobsArg = if ($Jobs -gt 0) { @('--parallel', "$Jobs") } else { @() }
+Import-Module (Join-Path $PSScriptRoot 'lib/HostResourceLock.psm1') -Force
+
+# The budget is never "unbounded". Two verify runs on one machine -- a pre-commit in
+# one worktree beside a pre-push in another -- each at full parallelism is several
+# times the core count in compiler processes, timing tests flaking, and every run
+# slower than in sequence. An explicit -Jobs wins, then EXOSNAP_VERIFY_JOBS, then
+# all cores but two so the shell and the editor keep one each.
+if ($Jobs -le 0) { $Jobs = Get-HostJobBudget }
+$jobsArg = @('--parallel', "$Jobs")
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 Import-Module (Join-Path $PSScriptRoot 'lib/VerifyPipeline.psm1') -Force -DisableNameChecking
@@ -373,16 +373,26 @@ $realExecutor = {
             # Also here, not only in 'configure': a plan that reuses an existing
             # build directory does not reconfigure, and the compiler is needed
             # either way.
+            #
+            # Under the host build lock: a second worktree's build waits for this
+            # one instead of doubling the compiler processes on the machine. The
+            # parallelism INSIDE the build is already bounded by the budget.
             Initialize-CompilerEnvironment
-            return Invoke-Step -Name 'build' -FilePath 'cmake' `
-                -Arguments (@('--build', '--preset', $Preset) + $jobsArg)
+            return Invoke-WithHostLock -Kind 'build' -Holder "verify $repoRoot" -Body {
+                Invoke-Step -Name 'build' -FilePath 'cmake' `
+                    -Arguments (@('--build', '--preset', $Preset) + $jobsArg)
+            }
         }
 
         'tests' {
             $testArgs = @('-NoProfile', '-NonInteractive', '-File', (Join-Path $PSScriptRoot 'run-tests.ps1'),
-                '-BuildDir', $buildDir, '-Config', $Config)
-            if ($Jobs -gt 0) { $testArgs += @('-Jobs', "$Jobs") }
+                '-BuildDir', $buildDir, '-Config', $Config, '-Jobs', "$Jobs")
             if ($check.Evidence.filter) { $testArgs += @('-Filter', $check.Evidence.filter) }
+            # run-tests.ps1 takes the host device lock itself, so a bare ctest and a
+            # verify run contend the same way. Not taken here as well: a lock held
+            # twice by the same holder is just a lock, but a second run waiting on
+            # this one would wait on the outer hold for the whole test duration --
+            # which is the intended behaviour and the inner one is sufficient.
             $outcome = Invoke-Step -Name 'tests' -FilePath 'pwsh' -Arguments $testArgs
             if ($outcome.Status -ne $status.Pass) {
                 $script:LastFailedTests = Get-FailedCTestName -LogPath $outcome.Evidence.log
@@ -458,7 +468,11 @@ $realExecutor = {
                 '-CacheDir', (Get-ClangTidyCacheDirectory))
             if ($Jobs -gt 0) { $arguments += @('-Jobs', "$Jobs") }
             if ($check.Evidence.scope -ne 'whole-tree') { $arguments += @('-Base', $Base) }
-            return Invoke-Step -Name 'clang-tidy' -FilePath 'pwsh' -Arguments $arguments
+            # Compiler processes again, so the build lock: clang-tidy at -j next to a
+            # build in another worktree is the same collision.
+            return Invoke-WithHostLock -Kind 'build' -Holder "verify $repoRoot" -Body {
+                Invoke-Step -Name 'clang-tidy' -FilePath 'pwsh' -Arguments $arguments
+            }
         }
 
         default { throw "verify.ps1 has no executor for check kind '$($check.Kind)'." }
@@ -516,7 +530,7 @@ else {
     Write-Host '  scope: everything (this mode is the full local blocking contract)'
 }
 if ($Jobs -gt 0) {
-    Write-Host "  jobs: $Jobs (cmake --build --parallel, ctest -j, clang-tidy -j)"
+    Write-Host "  jobs: $Jobs of $([Environment]::ProcessorCount) cores (cmake --build --parallel, ctest -j, clang-tidy -j)"
 }
 Write-Host ""
 

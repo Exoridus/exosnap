@@ -15,6 +15,8 @@
 
 #include "services/CaptureHubRegistry.h"
 
+#include <exosnap/engine/device_generation.h>
+
 namespace {
 
 using namespace exosnap;
@@ -39,6 +41,15 @@ class FakeProducer : public HubSourceProducer {
     int close_calls = 0;
     bool open_succeeds = true;
     uint64_t generation = 0;
+    // Which device this producer was built on, as the real producers report it.
+    exosnap::engine::DeviceGeneration device_generation;
+
+    // Which call to the factory made this one. A test asking "is this a REBUILT
+    // producer or the old one revived" cannot answer with the address: the first
+    // one is destroyed before the second is allocated, and an allocator handing the
+    // same block back makes a correct rebuild look like a revival. Under a parallel
+    // suite it does exactly that.
+    int build_serial = 0;
 
     bool Open(std::string& err) override {
         ++open_calls;
@@ -68,12 +79,14 @@ class FakeProducer : public HubSourceProducer {
 struct Fixture {
     std::vector<CaptureSourceKey> built;
     std::unordered_map<CaptureSourceKey, FakeProducer*, CaptureSourceKeyHash> producers;
+    int build_count = 0;
     CaptureHubRegistry registry;
 
     Fixture()
         : registry([this](const CaptureSourceKey& key) -> std::unique_ptr<HubSourceProducer> {
               built.push_back(key);
               auto p = std::make_unique<FakeProducer>();
+              p->build_serial = ++build_count;
               producers[key] = p.get();
               return p;
           }) {
@@ -251,6 +264,67 @@ TEST(CaptureHubRegistry, LossHoldsTheFrameAndRetriesTheReopenForever) {
     f.DeliverFrame(kWindowA);
     EXPECT_EQ(a.Frame(), HubFrameKind::Live);
     EXPECT_EQ(a.HeldFrame().generation, 2u);
+}
+
+// A Fatal poll is a different thing from a Lost one: the producer's DEVICE is
+// gone, not its source. The hub stops retrying -- there is nothing to retry
+// against -- and says so, because only the owner of that device can replace it.
+TEST(CaptureHubRegistry, AFatalPollStopsRetryingAndIsVisibleToTheOwner) {
+    Fixture f;
+    auto a = f.SubscribeIgnoring(kWindowA);
+    f.DeliverFrame(kWindowA);
+
+    FakeProducer& producer = f.Producer(kWindowA);
+    EXPECT_FALSE(a.SourceLost()) << "a live source is not lost";
+
+    producer.next_poll = ProducerPoll::Fatal;
+    f.registry.PumpAll();
+
+    EXPECT_TRUE(a.SourceLost()) << "the owner cannot rebuild a device it is never told about";
+    EXPECT_EQ(a.Frame(), HubFrameKind::Held) << "lost is not blank: the last good frame is still served";
+
+    const int opens_before = producer.open_calls;
+    producer.next_poll = ProducerPoll::NoFrame;
+    for (int i = 0; i < 20; ++i)
+        f.registry.PumpAll();
+    EXPECT_EQ(producer.open_calls, opens_before) << "no retry loop may run against a device that is gone";
+}
+
+TEST(CaptureHubRegistry, AnEmptySubscriptionReportsNoLoss) {
+    // Nothing was lost because nothing was held. A consumer that read `true` here
+    // would start a rebuild for a source it never had.
+    CaptureSubscription empty;
+    EXPECT_FALSE(empty.SourceLost());
+}
+
+TEST(CaptureHubRegistry, RebuildingOnANewDeviceProducesFramesAgain) {
+    // What the owner does with SourceLost: drop the subscription (disposing the
+    // hub and its producer on the dead device), create a device, subscribe again.
+    // The factory hands out a producer per build, so a rebuilt one is observably
+    // a different object on a different device generation.
+    Fixture f;
+    auto a = f.SubscribeIgnoring(kWindowA);
+    f.DeliverFrame(kWindowA);
+    const int first_serial = f.Producer(kWindowA).build_serial;
+    f.Producer(kWindowA).device_generation = exosnap::engine::DeviceGeneration{1};
+
+    f.Producer(kWindowA).next_poll = ProducerPoll::Fatal;
+    f.registry.PumpAll();
+    ASSERT_TRUE(a.SourceLost());
+
+    a.Reset(); // disposes the hub: last consumer gone
+    EXPECT_EQ(f.registry.HubCountForTest(), 0u);
+
+    auto b = f.SubscribeIgnoring(kWindowA);
+    FakeProducer* second = &f.Producer(kWindowA);
+    second->device_generation = exosnap::engine::DeviceGeneration{2};
+    ASSERT_NE(second->build_serial, first_serial) << "the rebuild must produce a new producer, not revive the old one";
+    EXPECT_NE(second->device_generation, exosnap::engine::DeviceGeneration{1})
+        << "a rebuilt producer must be on a new device generation";
+
+    f.DeliverFrame(kWindowA);
+    EXPECT_EQ(b.Frame(), HubFrameKind::Live);
+    EXPECT_FALSE(b.SourceLost());
 }
 
 TEST(CaptureHubRegistry, AConsumerIsNeverCalledAfterItUnsubscribes) {

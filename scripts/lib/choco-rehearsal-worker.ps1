@@ -68,8 +68,32 @@ $script:Steps = @()
 $script:Observations = @()
 
 function New-Step {
-    param([Parameter(Mandatory)] [string] $Name)
-    return [ordered]@{ name = $Name; ok = $true; detail = ''; assertions = @(); failedAssertions = @() }
+    <#
+    .SYNOPSIS
+        Start a step, saying whether it asserts the package or builds the test.
+    .DESCRIPTION
+        `Kind` is mandatory and has no default. The host refuses to draw a verdict
+        from a step that does not say, because an unclassified step is
+        indistinguishable from either kind -- and reading it as a product
+        assertion would let this worker's own setup problem be reported as a
+        defect in the package.
+
+        product:   what the rehearsal asserts about the Chocolatey package.
+        bootstrap: packing, resolving a source, putting the machine back. A
+                   failure here measured nothing about the package.
+    #>
+    param(
+        [Parameter(Mandatory)] [string] $Name,
+        [Parameter(Mandatory)] [ValidateSet('product', 'bootstrap')] [string] $Kind
+    )
+    return [ordered]@{
+        name             = $Name
+        ok               = $true
+        detail           = ''
+        kind             = $Kind
+        assertions       = @()
+        failedAssertions = @()
+    }
 }
 
 function Add-Assertion {
@@ -286,7 +310,7 @@ try {
     $vcredistBefore = Get-ChocolateyPackageVersion -Id 'vcredist140'
 
     # ---- prepare: the package copy, pointed at the local MSI ----
-    $step = New-Step -Name 'prepare'
+    $step = New-Step -Name 'prepare' -Kind 'bootstrap'
     $configBefore = Get-DirectoryManifest -Path $UserConfigDirectory
     Add-Assertion -Step $step -Text "$UserConfigDirectory exists and is not empty" `
         -Condition ($null -ne $configBefore -and $configBefore.Count -gt 0)
@@ -311,7 +335,7 @@ try {
 
     # ---- pack ----
     if (-not $aborted) {
-        $step = New-Step -Name 'pack'
+        $step = New-Step -Name 'pack' -Kind 'bootstrap'
         $nuspec = Join-Path $copy.PackageDirectory 'exosnap.nuspec'
         $code = Invoke-Recorded -LogName 'choco-pack.log' -FilePath 'choco' `
             -Arguments @('pack', $nuspec, '--out', $workDirectory)
@@ -329,7 +353,7 @@ try {
     # taking that install off first. What it removed is recorded, because the
     # restore step has to put the same thing back.
     if (-not $aborted) {
-        $step = New-Step -Name 'removeExisting'
+        $step = New-Step -Name 'removeExisting' -Kind 'bootstrap'
         $existing = Get-ExoSnapArpEntry
         if ($null -eq $existing) {
             $step.detail = 'no ExoSnap was installed'
@@ -349,7 +373,7 @@ try {
 
     # ---- install through Chocolatey ----
     if (-not $aborted) {
-        $step = New-Step -Name 'install'
+        $step = New-Step -Name 'install' -Kind 'product'
         $machineTouched = $true
         $code = Invoke-Recorded -LogName 'choco-install.log' -FilePath 'choco' `
             -Arguments @('install', 'exosnap', '--source', "$workDirectory$chocoSourceSuffix", '-y', '--no-progress')
@@ -370,7 +394,7 @@ try {
 
     # ---- uninstall, and the residue that must not survive it ----
     if (-not $aborted) {
-        $step = New-Step -Name 'uninstall'
+        $step = New-Step -Name 'uninstall' -Kind 'product'
         $code = Invoke-Recorded -LogName 'choco-uninstall.log' -FilePath 'choco' `
             -Arguments @('uninstall', 'exosnap', '-y')
         Add-Assertion -Step $step -Text "choco uninstall exits 0 (was $code)" -Condition ($code -eq 0)
@@ -398,7 +422,7 @@ try {
     }
 }
 catch {
-    $step = New-Step -Name 'worker'
+    $step = New-Step -Name 'worker' -Kind 'bootstrap'
     Add-Assertion -Step $step -Text "the worker completed without throwing: $($_.Exception.Message)" -Condition $false
     [void](Complete-Step -Step $step)
 }
@@ -410,7 +434,7 @@ finally {
     # restore that only runs on the happy path is a restore that never runs when it
     # is needed.
     try {
-        $step = New-Step -Name 'restore'
+        $step = New-Step -Name 'restore' -Kind 'bootstrap'
         if ($machineTouched) {
             $restoreExitCode = Invoke-Recorded -LogName 'msiexec-restore.log' -FilePath 'msiexec.exe' `
                 -Arguments @('/i', $MsiPath, '/qn', '/norestart', '/l*v',
@@ -442,7 +466,7 @@ finally {
         [void](Complete-Step -Step $step)
     }
     catch {
-        $step = New-Step -Name 'restore'
+        $step = New-Step -Name 'restore' -Kind 'bootstrap'
         Add-Assertion -Step $step -Text "the release MSI could not be reinstalled: $($_.Exception.Message)" `
             -Condition $false
         [void](Complete-Step -Step $step)

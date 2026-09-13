@@ -167,7 +167,10 @@ public sealed class VerifyEngine
                 result.Outcome,
                 result.Message,
                 (long)stopwatch.Elapsed.TotalMilliseconds,
-                new ReadOnlyCollection<Evidence>(result.Evidence)));
+                new ReadOnlyCollection<Evidence>(result.Evidence))
+            {
+                EvidenceGap = result.EvidenceGap,
+            });
         }
 
         return new ReadOnlyCollection<ScenarioVerdict>(verdicts);

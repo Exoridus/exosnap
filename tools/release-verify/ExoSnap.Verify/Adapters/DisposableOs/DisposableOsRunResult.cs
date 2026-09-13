@@ -3,11 +3,65 @@ using System.Text.Json.Serialization;
 
 namespace ExoSnap.Verify.Adapters.DisposableOs;
 
+/// <summary>What a step was doing, which decides what its failure means.</summary>
+public static class DisposableOsStepKind
+{
+    /// <summary>
+    /// The step asserted something about ExoSnap. Only these may fail a gate.
+    /// </summary>
+    public const string Product = "product";
+
+    /// <summary>
+    /// The step was building the environment the assertions need -- installing the
+    /// older release, selecting a channel, launching a helper. A failure here
+    /// measured nothing about the product.
+    /// </summary>
+    public const string Bootstrap = "bootstrap";
+
+    /// <summary>Whether this is a kind the verdict rule knows how to read.</summary>
+    public static bool IsRecognised(string? kind) =>
+        string.Equals(kind, Product, StringComparison.Ordinal)
+        || string.Equals(kind, Bootstrap, StringComparison.Ordinal);
+}
+
 /// <summary>One step a disposable-OS worker script recorded, in the order it ran them.</summary>
 /// <param name="Name">The step's stable name, matched against a gate's required-step list.</param>
 /// <param name="Ok">Whether the step succeeded.</param>
 /// <param name="Detail">One sentence about what the step observed.</param>
-public sealed record DisposableOsStepResult(string Name, bool Ok, string Detail);
+/// <param name="Kind">
+/// <see cref="DisposableOsStepKind.Product"/> or <see cref="DisposableOsStepKind.Bootstrap"/>.
+/// There is deliberately no default that reads as either.
+/// </param>
+/// <remarks>
+/// An unclassified step is its own outcome, not a product assertion by default.
+/// Defaulting to product looks conservative and is not: "a new product check
+/// nobody classified" and "a new bootstrap step nobody classified" are
+/// indistinguishable from the outside, and reading both as product turns the
+/// second into a false accusation against ExoSnap on a gate that is required for
+/// promotion. The rule here is the same one the whole harness follows -- what was
+/// not measured is never a defect -- so an unclassified step leaves the run
+/// unverified and the schema gets fixed instead of a verdict being guessed.
+/// </remarks>
+public sealed record DisposableOsStepResult(
+    string Name,
+    bool Ok,
+    string Detail,
+    string Kind = "")
+{
+    /// <summary>A failure of this step is a statement about ExoSnap.</summary>
+    public bool IsProductAssertion =>
+        string.Equals(this.Kind, DisposableOsStepKind.Product, StringComparison.Ordinal);
+
+    /// <summary>A failure of this step says the test environment was not built.</summary>
+    public bool IsBootstrap =>
+        string.Equals(this.Kind, DisposableOsStepKind.Bootstrap, StringComparison.Ordinal);
+
+    /// <summary>
+    /// The step carries no kind this rule knows, so nothing can be concluded from
+    /// it either way.
+    /// </summary>
+    public bool IsUnclassified => !DisposableOsStepKind.IsRecognised(this.Kind);
+}
 
 /// <summary>
 /// The result document a disposable-OS worker script writes: every step it
@@ -54,8 +108,16 @@ public sealed record DisposableOsRunResult(IReadOnlyList<DisposableOsStepResult>
                 continue;
             }
 
-            repaired.Add(step.Name is null || step.Detail is null
-                ? step with { Name = step.Name ?? string.Empty, Detail = step.Detail ?? string.Empty }
+            // A null kind stays empty rather than being filled in: it is exactly
+            // the "nobody classified this" case, and inventing a classification
+            // here would be the guess the verdict rule refuses to make.
+            repaired.Add(step.Name is null || step.Detail is null || step.Kind is null
+                ? step with
+                {
+                    Name = step.Name ?? string.Empty,
+                    Detail = step.Detail ?? string.Empty,
+                    Kind = step.Kind ?? string.Empty,
+                }
                 : step);
         }
 
@@ -109,7 +171,31 @@ public sealed record DisposableOsVerdict(DisposableOsVerdictKind Kind, string Me
             byName[step.Name] = step;
         }
 
+        // An unclassified step is checked before anything else is read out of the
+        // document: the schema it was written against is not the one this rule
+        // reads, so no verdict drawn from it would mean what it says.
+        var unclassified = new List<string>();
+        foreach (var step in byName.Values)
+        {
+            if (step.IsUnclassified)
+            {
+                unclassified.Add(string.IsNullOrEmpty(step.Kind)
+                    ? $"{step.Name}: no kind"
+                    : $"{step.Name}: unrecognised kind '{step.Kind}'");
+            }
+        }
+
+        if (unclassified.Count > 0)
+        {
+            unclassified.Sort(StringComparer.Ordinal);
+            return new DisposableOsVerdict(
+                DisposableOsVerdictKind.Unverified,
+                $"{unclassified.Count} step(s) do not say whether they assert the product or build the "
+                + $"environment, so a failure could not be attributed: {string.Join(", ", unclassified)}");
+        }
+
         var failed = new List<string>();
+        var bootstrapFailed = new List<string>();
         var missing = new List<string>();
         foreach (var name in requiredSteps)
         {
@@ -119,10 +205,42 @@ public sealed record DisposableOsVerdict(DisposableOsVerdictKind Kind, string Me
                 continue;
             }
 
-            if (!step.Ok)
+            if (step.Ok)
+            {
+                continue;
+            }
+
+            if (step.IsBootstrap)
+            {
+                bootstrapFailed.Add($"{name}: {step.Detail}");
+            }
+            else
             {
                 failed.Add($"{name}: {step.Detail}");
             }
+        }
+
+        // A bootstrap step the gate does not require can still have stopped the run:
+        // every later step depends on the environment it was building.
+        foreach (var step in byName.Values)
+        {
+            if (!step.Ok && step.IsBootstrap && !bootstrapFailed.Exists(
+                    entry => entry.StartsWith(step.Name + ":", StringComparison.Ordinal)))
+            {
+                bootstrapFailed.Add($"{step.Name}: {step.Detail}");
+            }
+        }
+
+        // A bootstrap step that failed built no environment, so nothing downstream
+        // of it measured the product -- reporting that as a product failure is the
+        // harness accusing ExoSnap of the harness's own setup problem. Checked
+        // before the product failures so a run that never got off the ground cannot
+        // be read as a defect.
+        if (bootstrapFailed.Count > 0)
+        {
+            return new DisposableOsVerdict(
+                DisposableOsVerdictKind.Unverified,
+                $"the test environment could not be built, so nothing was measured: {string.Join(" | ", bootstrapFailed)}");
         }
 
         if (failed.Count > 0)

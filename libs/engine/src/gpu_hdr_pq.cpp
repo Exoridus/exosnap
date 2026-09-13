@@ -58,9 +58,13 @@ float PqOetf(float l) {
     return pow((kC1 + kC2 * lm1) / (1.0f + kC3 * lm1), kM2);
 }
 
+// No clamp here. scRGB carries wide-gamut colour as NEGATIVE BT.709 components
+// (BT.2020 pure red is roughly (1.66, -0.12, -0.02) in scRGB), and those
+// negatives are what the 709->2020 matrix needs to land the colour inside the
+// 2020 gamut. Clamping per channel before the matrix desaturates every
+// wide-gamut colour; EncodedRgb saturates once, after the matrix.
 float ScrgbToPqNorm(float v) {
-    float nits = max(v, 0.0f) * kRefWhiteNits;
-    return min(nits / kPqPeakNits, 1.0f);
+    return v * kRefWhiteNits / kPqPeakNits;
 }
 
 float3 Bt709ToBt2020(float3 c) {
@@ -108,8 +112,11 @@ const char* kChromaShaderSrc = R"(
 float2 main(float4 position : SV_POSITION, float2 texcoord : TEXCOORD0) : SV_TARGET {
     // A half-resolution pass over the full texcoord range lands each chroma
     // sample on the boundary between two luma columns (centre-sited). Shifting
-    // by half a luma pixel puts it on the left column, matching the SDR path
-    // and the siting the container declares.
+    // by half an OUTPUT luma pixel puts it on the left column, matching the SDR
+    // path and the siting the container declares. flags.y carries that shift in
+    // texcoord units of the content rectangle (HdrPqConverter::
+    // LeftSitingShiftTexels) -- derived from the output raster, not the source
+    // crop, so it holds at any scale factor.
     float3 rp = SampleEncoded(texcoord - float2(flags.y, 0.0f));
     float y = kKr * rp.r + kKg * rp.g + kKb * rp.b;
     float cb = (rp.b - y) / (2.0f * (1.0f - kKb));
@@ -209,7 +216,7 @@ bool HdrPqConverter::Init(ID3D11Device* device, ID3D11DeviceContext* context, co
     pc.crop_origin_size[2] = static_cast<float>(geom.src_crop_w) / static_cast<float>(geom.src_width);
     pc.crop_origin_size[3] = static_cast<float>(geom.src_crop_h) / static_cast<float>(geom.src_height);
     pc.flags[0] = input_is_pq ? 1.0f : 0.0f;
-    pc.flags[1] = 0.5f / static_cast<float>(std::max<uint32_t>(1u, geom.src_crop_w));
+    pc.flags[1] = LeftSitingShiftTexels(geom.content_w);
 
     D3D11_BUFFER_DESC const_desc{};
     const_desc.ByteWidth = sizeof(PqConstants);
@@ -294,12 +301,24 @@ bool HdrPqConverter::Convert(ID3D11Texture2D* src, ID3D11Texture2D* dst, std::st
     context_->VSSetShader(vertex_shader_.get(), nullptr, 0);
     context_->PSSetSamplers(0, 1, &sampler);
     context_->PSSetConstantBuffers(0, 1, &constants);
-    context_->PSSetShaderResources(0, 1, &srv);
+    // Own the output-merger and rasterizer state rather than inheriting whatever
+    // the previous pass left. The plane shaders return float / float2 and write
+    // no alpha, so any blend state still enabled from the compositor would blend
+    // each plane against an undefined value and the result would depend on the
+    // driver. Opaque and default-rasterized is the only correct setting here.
+    context_->OMSetBlendState(nullptr, nullptr, 0xffffffff);
+    context_->RSSetState(nullptr);
 
     // --- Luma plane (full encode resolution) ---
     const float luma_clear[4] = {kLumaBlack, kLumaBlack, kLumaBlack, kLumaBlack};
     context_->ClearRenderTargetView(luma_rtv, luma_clear); // letterbox bars
     context_->OMSetRenderTargets(1, &luma_rtv, nullptr);
+    // Output first, input second. Binding src as a shader resource while it is
+    // still bound as a render target elsewhere makes D3D11 resolve the hazard by
+    // nulling this slot, and the OMSetRenderTargets above would not restore it --
+    // both draws would then sample nothing and encode flat black. Same order as
+    // HdrToneMapper::Convert.
+    context_->PSSetShaderResources(0, 1, &srv);
     D3D11_VIEWPORT luma_vp{};
     luma_vp.TopLeftX = static_cast<float>(geom_.content_x);
     luma_vp.TopLeftY = static_cast<float>(geom_.content_y);
@@ -315,11 +334,12 @@ bool HdrPqConverter::Convert(ID3D11Texture2D* src, ID3D11Texture2D* dst, std::st
     const float chroma_clear[4] = {kChromaNeutral, kChromaNeutral, kChromaNeutral, kChromaNeutral};
     context_->ClearRenderTargetView(chroma_rtv, chroma_clear);
     context_->OMSetRenderTargets(1, &chroma_rtv, nullptr);
+    const ChromaViewport cvp = ChromaViewportFor(geom_.content_x, geom_.content_y, geom_.content_w, geom_.content_h);
     D3D11_VIEWPORT chroma_vp{};
-    chroma_vp.TopLeftX = static_cast<float>(geom_.content_x / 2);
-    chroma_vp.TopLeftY = static_cast<float>(geom_.content_y / 2);
-    chroma_vp.Width = static_cast<float>(geom_.content_w / 2);
-    chroma_vp.Height = static_cast<float>(geom_.content_h / 2);
+    chroma_vp.TopLeftX = static_cast<float>(cvp.x);
+    chroma_vp.TopLeftY = static_cast<float>(cvp.y);
+    chroma_vp.Width = static_cast<float>(cvp.w);
+    chroma_vp.Height = static_cast<float>(cvp.h);
     chroma_vp.MinDepth = 0.0f;
     chroma_vp.MaxDepth = 1.0f;
     context_->RSSetViewports(1, &chroma_vp);

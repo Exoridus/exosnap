@@ -369,6 +369,856 @@ Test-Case 'a cleanup failure is reported when the campaign itself succeeded' {
 }
 
 # ---------------------------------------------------------------------------
+# Rescuing the evidence before anything that could discard it
+# ---------------------------------------------------------------------------
+#
+# The campaign step throwing -- a guest timeout is the ordinary way -- stopped
+# plan execution, which skipped the collect step that follows it, and the cleanup
+# steps then removed the machine and deleted its differencing disk. The run that
+# most needed its evidence was the one guaranteed to destroy it.
+
+Test-Case 'the evidence is collected even when the campaign step throws' {
+    $global:releaseVmCollected = $false
+    function global:Invoke-FixtureGuestTimeout { throw 'the guest command did not finish within 120 minute(s)' }
+    function global:Invoke-FixtureCollect { $global:releaseVmCollected = $true }
+
+    $plan = @(
+        New-ReleaseVmStep -Name 'run' -Command 'Invoke-FixtureGuestTimeout'
+        New-ReleaseVmStep -Name 'collect' -Command 'Invoke-FixtureCollect' -Rescue
+    )
+    try { Invoke-ReleaseVmPlan -Plan $plan | Out-Null } catch { }
+    Remove-Item function:\Invoke-FixtureGuestTimeout, function:\Invoke-FixtureCollect -ErrorAction SilentlyContinue
+
+    Assert-True $global:releaseVmCollected 'a timed-out run is the one whose evidence is worth the most'
+    Remove-Variable releaseVmCollected -Scope Global -ErrorAction SilentlyContinue
+}
+
+Test-Case 'a rescued run may then be cleaned up' {
+    $global:releaseVmRemoved = $false
+    function global:Invoke-FixtureGuestTimeout { throw 'the guest command did not finish' }
+    function global:Invoke-FixtureCollect { }
+    function global:Remove-FixtureDisk { $global:releaseVmRemoved = $true }
+
+    $plan = @(
+        New-ReleaseVmStep -Name 'differencing-disk' -Command 'Invoke-FixtureCollect'
+        New-ReleaseVmStep -Name 'run' -Command 'Invoke-FixtureGuestTimeout'
+        New-ReleaseVmStep -Name 'collect' -Command 'Invoke-FixtureCollect' -Rescue
+        New-ReleaseVmStep -Name 'remove-disk' -Command 'Remove-FixtureDisk' -AlwaysRun `
+            -RunIfCompleted 'differencing-disk' -DiscardsEvidence
+    )
+    try { Invoke-ReleaseVmPlan -Plan $plan | Out-Null } catch { }
+    Remove-Item function:\Invoke-FixtureGuestTimeout, function:\Invoke-FixtureCollect, function:\Remove-FixtureDisk `
+        -ErrorAction SilentlyContinue
+
+    Assert-True $global:releaseVmRemoved 'evidence that reached the host leaves nothing worth preserving'
+    Remove-Variable releaseVmRemoved -Scope Global -ErrorAction SilentlyContinue
+}
+
+Test-Case 'a failed rescue preserves the machine the evidence is still inside' {
+    $global:releaseVmRemoved = $false
+    function global:Invoke-FixtureVm { }
+    function global:Invoke-FixtureGuestTimeout { throw 'the guest command did not finish' }
+    function global:Invoke-FixtureCollectFailure { throw 'PowerShell Direct is not answering' }
+    function global:Remove-FixtureVm { $global:releaseVmRemoved = $true }
+
+    $plan = @(
+        New-ReleaseVmStep -Name 'virtual-machine' -Command 'Invoke-FixtureVm'
+        New-ReleaseVmStep -Name 'run' -Command 'Invoke-FixtureGuestTimeout'
+        New-ReleaseVmStep -Name 'collect' -Command 'Invoke-FixtureCollectFailure' -Rescue
+        New-ReleaseVmStep -Name 'remove-vm' -Command 'Remove-FixtureVm' -AlwaysRun `
+            -RunIfCompleted 'virtual-machine' -DiscardsEvidence
+    )
+    $message = ''
+    try { Invoke-ReleaseVmPlan -Plan $plan | Out-Null } catch { $message = $_.Exception.Message }
+    Remove-Item function:\Invoke-FixtureVm, function:\Invoke-FixtureGuestTimeout, `
+        function:\Invoke-FixtureCollectFailure, function:\Remove-FixtureVm -ErrorAction SilentlyContinue
+
+    Assert-True (-not $global:releaseVmRemoved) 'the evidence is still inside a machine nothing else has a copy of'
+    Assert-Match 'remove-vm' $message 'the result must name what was preserved, or nobody knows to go and get it'
+    Remove-Variable releaseVmRemoved -Scope Global -ErrorAction SilentlyContinue
+}
+
+Test-Case 'a campaign that passed but whose evidence never arrived is not a clean run' {
+    # The case that is easy to miss: nothing failed inside the guest, so the run
+    # looks like a pass, and the evidence the promotion record is built from is
+    # simply not there.
+    function global:Invoke-FixtureSuccess { }
+    function global:Invoke-FixtureCollectFailure { throw 'the result directory could not be copied back' }
+
+    $plan = @(
+        New-ReleaseVmStep -Name 'run' -Command 'Invoke-FixtureSuccess'
+        New-ReleaseVmStep -Name 'collect' -Command 'Invoke-FixtureCollectFailure' -Rescue
+    )
+    $message = ''
+    $threw = $false
+    try { Invoke-ReleaseVmPlan -Plan $plan | Out-Null } catch { $threw = $true; $message = $_.Exception.Message }
+    Remove-Item function:\Invoke-FixtureSuccess, function:\Invoke-FixtureCollectFailure -ErrorAction SilentlyContinue
+
+    Assert-True $threw 'a run with no evidence cannot be reported as a clean one'
+    Assert-Match 'could not be copied back' $message 'the reason the evidence is missing has to reach the caller'
+    Assert-Match '^evidence:' $message 'a missing-evidence run must not read as a campaign that failed'
+}
+
+Test-Case 'the result says which of the three outcomes went wrong' {
+    function global:Invoke-FixtureFailure { throw 'the guest command did not finish' }
+    function global:Invoke-FixtureCleanupFailure { throw 'the machine would not go away' }
+    function global:Invoke-FixtureSuccess { }
+
+    $campaign = ''
+    try {
+        Invoke-ReleaseVmPlan -Plan @(New-ReleaseVmStep -Name 'run' -Command 'Invoke-FixtureFailure') | Out-Null
+    }
+    catch { $campaign = $_.Exception.Message }
+
+    $cleanup = ''
+    try {
+        Invoke-ReleaseVmPlan -Plan @(
+            New-ReleaseVmStep -Name 'run' -Command 'Invoke-FixtureSuccess'
+            New-ReleaseVmStep -Name 'remove-vm' -Command 'Invoke-FixtureCleanupFailure' -AlwaysRun
+        ) | Out-Null
+    }
+    catch { $cleanup = $_.Exception.Message }
+
+    Remove-Item function:\Invoke-FixtureFailure, function:\Invoke-FixtureCleanupFailure, `
+        function:\Invoke-FixtureSuccess -ErrorAction SilentlyContinue
+
+    Assert-Match '^campaign:' $campaign 'a guest that failed is a campaign outcome'
+    Assert-Match '^cleanup:' $cleanup 'a machine that would not go away says nothing about the product'
+}
+
+Test-Case 'a rescue step of a resource this run never created is skipped' {
+    $global:releaseVmCollected = $false
+    function global:Invoke-FixtureVmCollision { throw 'the VM already exists' }
+    function global:Invoke-FixtureCollect { $global:releaseVmCollected = $true }
+
+    $plan = @(
+        New-ReleaseVmStep -Name 'virtual-machine' -Command 'Invoke-FixtureVmCollision'
+        New-ReleaseVmStep -Name 'collect' -Command 'Invoke-FixtureCollect' -Rescue `
+            -RunIfCompleted 'virtual-machine'
+    )
+    try { Invoke-ReleaseVmPlan -Plan $plan | Out-Null } catch { }
+    Remove-Item function:\Invoke-FixtureVmCollision, function:\Invoke-FixtureCollect -ErrorAction SilentlyContinue
+
+    Assert-True (-not $global:releaseVmCollected) 'a name collision must not read files out of somebody else machine'
+    Remove-Variable releaseVmCollected -Scope Global -ErrorAction SilentlyContinue
+}
+
+# ---------------------------------------------------------------------------
+# The interactive guest agent, and what it has to prove before a campaign runs
+# ---------------------------------------------------------------------------
+#
+# PowerShell Direct is session 0. It is the right channel for bootstrapping, file
+# copy, starting the agent, rescue and evidence collection -- and the wrong process
+# context for the application under test, which needs a desktop. So a capture
+# campaign is launched through an agent in the interactive session, and the agent
+# proves the context it got before anything is run in it.
+#
+# The proof has to come from the agent. A receipt measured over PowerShell Direct
+# describes the PowerShell Direct session, which is never the session the campaign
+# will run in, and reading it as the campaign's context is the defect this replaces.
+
+Test-Case 'the agent script refuses to run anything from session 0' {
+    # The agent is started by a channel that has no desktop, so the first thing it
+    # does is establish that it did not inherit that context.
+    $script = New-ReleaseVmGuestAgentScript -ReceiptPath 'C:\a\receipt.json' -ResultPath 'C:\a\result.json'
+
+    Assert-Match 'SessionId' $script 'the agent has to read the session it is in'
+    Assert-Match 'receipt' $script 'and write down what it found before it runs a campaign'
+}
+
+Test-Case 'the agent writes its receipt before it runs the campaign' {
+    # Order matters: a receipt written afterwards describes a context nobody checked
+    # before trusting it.
+    $script = New-ReleaseVmGuestAgentScript -ReceiptPath 'C:\a\receipt.json' -ResultPath 'C:\a\result.json'
+    $receiptAt = $script.IndexOf('receipt.json')
+    $commandAt = $script.IndexOf('$Command')
+
+    Assert-True ($receiptAt -ge 0) 'the receipt path has to be in the script'
+    Assert-True ($commandAt -ge 0) 'so does the campaign command'
+    Assert-True ($receiptAt -lt $commandAt) 'the context is recorded before it is used'
+}
+
+Test-Case 'the generated agent script is valid PowerShell' {
+    # It is assembled from a here-string with escaped interpolation and a nested
+    # here-string of C# for the user-object calls. A syntax error in it would first
+    # show up as a guest that never handshakes, minutes into a campaign.
+    $script = New-ReleaseVmGuestAgentScript -ReceiptPath 'C:eceipt.json' -ResultPath 'C:esult.json'
+    $errors = $null
+    [System.Management.Automation.Language.Parser]::ParseInput($script, [ref]$null, [ref]$errors) | Out-Null
+
+    Assert-Equal 0 $errors.Count ($errors | ForEach-Object { $_.Message }) -join '; '
+}
+
+Test-Case 'the agent script actually measures a session when it runs' {
+    # Run here, against this machine. What it measures is the host and not a guest,
+    # which is the point: the script has to produce a receipt with the fields the
+    # handshake reads, or the contract above is checked against a document nothing
+    # writes.
+    $root = Join-Path ([IO.Path]::GetTempPath()) ('exosnap-agent-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $root -Force | Out-Null
+    try {
+        $receiptPath = Join-Path $root 'receipt.json'
+        $scriptPath = Join-Path $root 'agent.ps1'
+        Set-Content -LiteralPath $scriptPath -Encoding UTF8 -Value (
+            New-ReleaseVmGuestAgentScript -ReceiptPath $receiptPath -ResultPath (Join-Path $root 'result.json'))
+
+        # No EXOSNAP_AGENT_COMMAND is set, so the agent writes its receipt and stops.
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath *> $null
+
+        Assert-True (Test-Path -LiteralPath $receiptPath) 'the agent has to write its receipt before anything else'
+        $receipt = Get-Content -LiteralPath $receiptPath -Raw | ConvertFrom-Json
+        Assert-True $receipt.osReachable 'a running agent is a reachable one'
+        foreach ($field in @('agentSessionId', 'consoleSessionId', 'agentWindowStation', 'agentDesktop', 'agentUser')) {
+            Assert-True ($null -ne $receipt.$field) "the handshake reads $field, so the agent has to write it"
+        }
+    }
+    finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-Case 'an agent that never handshook is an infrastructure failure, not a verdict' {
+    $outcome = Test-ReleaseVmAgentHandshake -Receipt $null -Requirement (
+        New-ReleaseVmReadinessRequirement -InteractiveAgent)
+
+    Assert-True (-not $outcome.Ok) 'no receipt is no proof'
+    Assert-Match 'no receipt' $outcome.Detail 'the reason has to say the agent never answered'
+}
+
+Test-Case 'a reachable guest whose agent is not interactive does not pass' {
+    # The rule this whole package exists for: PowerShell Direct works, every file
+    # copied, and the campaign still must not run.
+    $receipt = @{
+        osReachable        = $true
+        agentSessionId     = 0
+        consoleSessionId   = 1
+        agentWindowStation = 'Service-0x0-3e7$'
+        agentDesktop       = ''
+    }
+    $outcome = Test-ReleaseVmAgentHandshake -Receipt $receipt -Requirement (
+        New-ReleaseVmReadinessRequirement -InteractiveAgent)
+
+    Assert-True (-not $outcome.Ok) 'a reachable guest is not a ready guest'
+    Assert-Match 'owns no desktop' $outcome.Detail 'the reason has to be the session'
+}
+
+Test-Case 'an agent that proved its context may run the campaign' {
+    $receipt = @{
+        osReachable        = $true
+        agentSessionId     = 1
+        consoleSessionId   = 1
+        agentWindowStation = 'WinSta0'
+        agentDesktop       = 'Default'
+        agentUser          = 'exosnap'
+    }
+    $outcome = Test-ReleaseVmAgentHandshake -Receipt $receipt -Requirement (
+        New-ReleaseVmReadinessRequirement -InteractiveAgent -ExpectedUser 'exosnap')
+
+    Assert-True $outcome.Ok 'the agent is where the campaign needs to be'
+}
+
+Test-Case 'an interactive run launches its campaign through the agent, not over PowerShell Direct' {
+    $paths = Get-ReleaseVmRunPath -RunId 'agent' -Root 'T:\images'
+    $plan = New-ReleaseVmRunPlan -RunPath $paths -GuestCommand 'verify.exe' -ResultDirectory 'T:\out' `
+        -RequireInteractiveGuest
+    $run = @($plan | Where-Object Name -eq 'run')[0]
+
+    Assert-Equal 'Invoke-ReleaseVmInteractiveCommand' $run.Command `
+        'PowerShell Direct is session 0 and the application under test needs a desktop'
+}
+
+Test-Case 'a run with no interactive requirement keeps the direct channel' {
+    # Scope in the other direction: an install-and-uninstall scenario has no desktop
+    # to prove and no reason to pay for an agent.
+    $paths = Get-ReleaseVmRunPath -RunId 'direct' -Root 'T:\images'
+    $plan = New-ReleaseVmRunPlan -RunPath $paths -GuestCommand 'verify.exe' -ResultDirectory 'T:\out'
+    $run = @($plan | Where-Object Name -eq 'run')[0]
+
+    Assert-Equal 'Invoke-ReleaseVmCommand' $run.Command 'nothing here needs a desktop'
+    Assert-True (-not (@($plan | ForEach-Object { $_.Name }) -contains 'start-agent')) 'nor an agent'
+}
+
+Test-Case 'the agent is started and has proved itself before the campaign' {
+    $paths = Get-ReleaseVmRunPath -RunId 'order' -Root 'T:\images'
+    $plan = New-ReleaseVmRunPlan -RunPath $paths -GuestCommand 'verify.exe' -ResultDirectory 'T:\out' `
+        -RequireInteractiveGuest
+    $names = @($plan | ForEach-Object { $_.Name })
+
+    foreach ($step in @('start-agent', 'guest-readiness', 'run')) {
+        Assert-True ($names -contains $step) "an interactive run needs $step"
+    }
+    Assert-True ([array]::IndexOf($names, 'wait-for-guest') -lt [array]::IndexOf($names, 'start-agent')) `
+        'the agent is started over PowerShell Direct, which needs the OS up first'
+    Assert-True ([array]::IndexOf($names, 'start-agent') -lt [array]::IndexOf($names, 'guest-readiness')) `
+        'the receipt has to come from the agent, not from the channel that started it'
+    Assert-True ([array]::IndexOf($names, 'guest-readiness') -lt [array]::IndexOf($names, 'run')) `
+        'proving the context after using it explains a failure instead of preventing it'
+}
+
+Test-Case 'the readiness step reads the receipt the agent wrote' {
+    $paths = Get-ReleaseVmRunPath -RunId 'receipt' -Root 'T:\images'
+    $plan = New-ReleaseVmRunPlan -RunPath $paths -GuestCommand 'verify.exe' -ResultDirectory 'T:\out' `
+        -RequireInteractiveGuest
+    $readiness = @($plan | Where-Object Name -eq 'guest-readiness')[0]
+
+    Assert-Equal 'Assert-ReleaseVmAgentHandshake' $readiness.Command `
+        'a receipt measured over PowerShell Direct describes the PowerShell Direct session'
+}
+
+# ---------------------------------------------------------------------------
+# Which image a campaign actually ran on
+# ---------------------------------------------------------------------------
+#
+# The committed recipe and the setup the capture work was qualified on are not the
+# same image: the manifest pins the MTT virtual display driver, and the runs that
+# reached 4K120 through Graphics Capture used SudoVDA. Until that is reconciled the
+# harness has to be able to say which of the two an image is, and refuse a run whose
+# scenario needs the other one -- rather than producing evidence attributed to an
+# image nobody can identify afterwards.
+
+function New-FixtureFingerprint {
+    param([hashtable] $Override = @{})
+    $fingerprint = @{
+        displayProfile      = 'mtt'
+        displayDriver       = 'Root\MttVDD 25.7.23'
+        windowsBuild        = '10.0.26100.4061'
+        hostGpuDriver       = '32.0.15.8098'
+        displayMode         = '2560x1440@60,144'
+        packagePins         = 'sha256:1111111111111111111111111111111111111111111111111111111111111111'
+    }
+    foreach ($key in $Override.Keys) { $fingerprint[$key] = $Override[$key] }
+    return $fingerprint
+}
+
+Test-Case 'an image fingerprint is the same for the same facts and different for different ones' {
+    $a = Get-ReleaseVmImageFingerprintDigest -Fingerprint (New-FixtureFingerprint)
+    $b = Get-ReleaseVmImageFingerprintDigest -Fingerprint (New-FixtureFingerprint)
+    $c = Get-ReleaseVmImageFingerprintDigest -Fingerprint (New-FixtureFingerprint @{ hostGpuDriver = '33.0.0.1' })
+
+    Assert-Equal $a $b 'the same image has to fingerprint the same, or nothing can be compared'
+    Assert-True ($a -ne $c) 'a host driver change is a different image'
+}
+
+Test-Case 'the digest does not depend on the order the facts were written in' {
+    $ordered = [ordered]@{ a = '1'; b = '2' }
+    $reversed = [ordered]@{ b = '2'; a = '1' }
+
+    Assert-Equal (Get-ReleaseVmImageFingerprintDigest -Fingerprint $ordered) `
+        (Get-ReleaseVmImageFingerprintDigest -Fingerprint $reversed) `
+        'a hashtable has no order and the digest must not invent one'
+}
+
+Test-Case 'an image built on a different display profile is refused, not silently used' {
+    # The reconciliation this ticket exists for: a scenario qualified on SudoVDA must
+    # not quietly run on an MTT image and be reported as the same evidence.
+    $drift = Test-ReleaseVmImageFingerprint -Expected (New-FixtureFingerprint @{ displayProfile = 'sudovda' }) `
+        -Actual (New-FixtureFingerprint)
+
+    Assert-True (-not $drift.Matches) 'two different display drivers are two different images'
+    Assert-Match 'displayProfile' ($drift.Differences -join '; ') 'the field that drifted has to be named'
+    Assert-Match 'sudovda' ($drift.Differences -join '; ') 'the profile the run needed has to be named'
+    Assert-Match 'mtt' ($drift.Differences -join '; ') 'so does the one the image has'
+}
+
+Test-Case 'a host driver change requalifies the image' {
+    # The GPU driver is staged into the guest from the host, so changing it on the
+    # host changes the guest -- without anything in the guest being rebuilt.
+    $drift = Test-ReleaseVmImageFingerprint -Expected (New-FixtureFingerprint) `
+        -Actual (New-FixtureFingerprint @{ hostGpuDriver = '33.0.0.1' })
+
+    Assert-True (-not $drift.Matches) 'the guest driver came from the host, so the host driver is part of the image'
+    Assert-Match 'hostGpuDriver' ($drift.Differences -join '; ') 'the field has to be named'
+}
+
+Test-Case 'every drifted field is named at once' {
+    $drift = Test-ReleaseVmImageFingerprint -Expected (New-FixtureFingerprint) `
+        -Actual (New-FixtureFingerprint @{ windowsBuild = '10.0.27000.1'; hostGpuDriver = '33.0.0.1' })
+
+    Assert-Equal 2 $drift.Differences.Count 'rebuilding an image once per drifted field is not a workflow'
+}
+
+Test-Case 'a fact the image never recorded is drift, not agreement' {
+    $actual = New-FixtureFingerprint
+    $actual.Remove('packagePins')
+
+    $drift = Test-ReleaseVmImageFingerprint -Expected (New-FixtureFingerprint) -Actual $actual
+    Assert-True (-not $drift.Matches) 'an unrecorded fact cannot be said to match'
+    Assert-Match 'not recorded' ($drift.Differences -join '; ') 'missing reads differently from different'
+}
+
+Test-Case 'an identical fingerprint is an identical image' {
+    $drift = Test-ReleaseVmImageFingerprint -Expected (New-FixtureFingerprint) -Actual (New-FixtureFingerprint)
+    Assert-True $drift.Matches 'the same facts are the same image'
+    Assert-Equal 0 $drift.Differences.Count 'nothing to report'
+}
+
+Test-Case 'the image paths name where a fingerprint lives' {
+    $paths = Get-ReleaseVmPath -Root 'T:\images'
+    Assert-Equal 'T:\images\image-fingerprint.json' $paths.Fingerprint `
+        'the fingerprint belongs beside the image it describes, not in a run directory'
+}
+
+Test-Case 'a run that pins its image refuses before it copies a disk' {
+    $paths = Get-ReleaseVmRunPath -RunId 'pinned' -Root 'T:\images'
+    $plan = New-ReleaseVmRunPlan -RunPath $paths -GuestCommand 'verify.exe' -ResultDirectory 'T:\out' `
+        -RequireImageFingerprint @{ displayProfile = 'sudovda' }
+    $names = @($plan | ForEach-Object { $_.Name })
+
+    Assert-True ($names -contains 'image-fingerprint') 'a run qualified on one image must not use another'
+    Assert-True ([array]::IndexOf($names, 'image-fingerprint') -lt [array]::IndexOf($names, 'differencing-disk')) `
+        'refusing before anything is created costs nothing'
+}
+
+Test-Case 'a run that pins no image gets no fingerprint step' {
+    $paths = Get-ReleaseVmRunPath -RunId 'unpinned' -Root 'T:\images'
+    $plan = New-ReleaseVmRunPlan -RunPath $paths -GuestCommand 'verify.exe' -ResultDirectory 'T:\out'
+    Assert-True (-not (@($plan | ForEach-Object { $_.Name }) -contains 'image-fingerprint')) `
+        'the pin belongs to the scenario, not to every run of the recipe'
+}
+
+Test-Case 'an image with no recorded fingerprint is refused rather than trusted' {
+    $missing = Join-Path ([IO.Path]::GetTempPath()) ('exosnap-fp-' + [guid]::NewGuid().ToString('N') + '.json')
+    $message = ''
+    try {
+        Assert-ReleaseVmImageFingerprint -Expected @{ displayProfile = 'sudovda' } -FingerprintPath $missing
+    }
+    catch { $message = $_.Exception.Message }
+
+    Assert-Match 'records no fingerprint' $message 'an unidentifiable image cannot back a qualified run'
+}
+
+Test-Case 'a written fingerprint reads back as the same facts plus its digest' {
+    $path = Join-Path ([IO.Path]::GetTempPath()) ('exosnap-fp-' + [guid]::NewGuid().ToString('N') + '.json')
+    try {
+        Write-ReleaseVmImageFingerprint -Fingerprint (New-FixtureFingerprint) -Path $path | Out-Null
+        $read = Assert-ReleaseVmImageFingerprint -Expected (New-FixtureFingerprint) -FingerprintPath $path
+
+        Assert-Equal 'mtt' $read.displayProfile 'the facts survive the round trip'
+        Assert-Equal (Get-ReleaseVmImageFingerprintDigest -Fingerprint (New-FixtureFingerprint)) $read.digest `
+            'a changed fingerprint file has to be visible as one'
+    }
+    finally { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue }
+}
+
+Test-Case 'the manifest says which display profile it describes' {
+    $manifest = Import-PowerShellDataFile -LiteralPath $script:ManifestPath
+    Assert-True ($manifest.Contains('displayProfile')) 'an image that cannot name its display driver cannot be compared'
+    Assert-True ($manifest.displayProfile -in @('mtt', 'sudovda')) 'the profile has to be one the recipe knows'
+}
+
+Test-Case 'the manifest states which profile the capture work was qualified on' {
+    # Recorded rather than assumed: the committed recipe and the qualified setup
+    # differ today, and a harness that cannot say so will report evidence from one as
+    # if it came from the other.
+    $manifest = Import-PowerShellDataFile -LiteralPath $script:ManifestPath
+    Assert-Equal 'sudovda' $manifest.qualifiedDisplayProfile 'the capture runs that reached 4K120 used SudoVDA'
+}
+
+Test-Case 'the fingerprint a manifest contributes carries the profile and the display mode' {
+    $manifest = Import-PowerShellDataFile -LiteralPath $script:ManifestPath
+    $fingerprint = Get-ReleaseVmManifestFingerprint -Manifest $manifest
+
+    Assert-Equal $manifest.displayProfile $fingerprint.displayProfile 'the profile is the first thing that identifies an image'
+    Assert-Match '2560x1440' $fingerprint.displayMode 'the monitor the gates assert against is part of the image'
+    Assert-True ($fingerprint.packagePins.Length -gt 0) 'a changed package pin is a changed image'
+}
+
+Test-Case 'changing one package pin changes the manifest fingerprint' {
+    $manifest = Import-PowerShellDataFile -LiteralPath $script:ManifestPath
+    $before = (Get-ReleaseVmManifestFingerprint -Manifest $manifest).packagePins
+
+    $manifest.packages[0].version = 'something-else'
+    $after = (Get-ReleaseVmManifestFingerprint -Manifest $manifest).packagePins
+
+    Assert-True ($before -ne $after) 'a tool set that drifts turns every disagreement into an image investigation'
+}
+
+# ---------------------------------------------------------------------------
+# Binding a run to the GPU it actually ran on
+# ---------------------------------------------------------------------------
+#
+# Two claims in the recipe were assumptions written as facts. The driver package
+# staged into the guest was the newest directory in the DriverStore by write time,
+# which is not the same thing as the driver the host is running -- an update leaves
+# the previous package in the store and a rollback leaves the newer one. And the
+# partition triple was documented as a tenth of the adapter, a proportion Hyper-V
+# does not document and the driver is free to normalise.
+
+Test-Case 'the driver version is read out of the package INF' {
+    $inf = @'
+[Version]
+Signature   = "$Windows NT$"
+Class       = Display
+Provider    = %NVIDIA%
+DriverVer   = 09/23/2025,32.0.15.8098
+'@
+    Assert-Equal '32.0.15.8098' (Get-ReleaseVmInfDriverVersion -InfText $inf) 'the version follows the date'
+}
+
+Test-Case 'an INF with no DriverVer line yields nothing rather than a guess' {
+    Assert-True ($null -eq (Get-ReleaseVmInfDriverVersion -InfText "[Version]`nClass = Display")) `
+        'a package whose version cannot be read must not be matched against anything'
+}
+
+Test-Case 'the staged driver package is the one the host is running' {
+    # The defect. Both packages are in the store; the newer one by write time is the
+    # one that was rolled back from, and copying it into the guest produces a guest
+    # whose user-mode driver does not match the host kernel-mode driver.
+    $candidates = @(
+        @{ Name = 'nv_dispi.inf_amd64_newer'; DriverVersion = '32.0.15.9999' }
+        @{ Name = 'nv_dispi.inf_amd64_active'; DriverVersion = '32.0.15.8098' }
+    )
+    $selected = Select-ReleaseVmDriverPackage -Candidate $candidates -ActiveDriverVersion '32.0.15.8098'
+
+    Assert-Equal 'nv_dispi.inf_amd64_active' $selected.Package.Name 'the active driver decides, not the clock'
+    Assert-True $selected.Ok 'an exact match is a match'
+}
+
+Test-Case 'no package matching the active driver is refused, not approximated' {
+    $candidates = @(@{ Name = 'nv_dispi.inf_amd64_stale'; DriverVersion = '31.0.15.1234' })
+    $selected = Select-ReleaseVmDriverPackage -Candidate $candidates -ActiveDriverVersion '32.0.15.8098'
+
+    Assert-True (-not $selected.Ok) 'staging a driver that is not the host driver is worse than staging none'
+    Assert-Match '32\.0\.15\.8098' $selected.Detail 'the version that was looked for has to be named'
+    Assert-Match '31\.0\.15\.1234' $selected.Detail 'so does what the store actually holds'
+}
+
+Test-Case 'two packages claiming the same version are ambiguous, not a coin toss' {
+    $candidates = @(
+        @{ Name = 'nv_dispi.inf_amd64_a'; DriverVersion = '32.0.15.8098' }
+        @{ Name = 'nv_dispi.inf_amd64_b'; DriverVersion = '32.0.15.8098' }
+    )
+    $selected = Select-ReleaseVmDriverPackage -Candidate $candidates -ActiveDriverVersion '32.0.15.8098'
+
+    Assert-True (-not $selected.Ok) 'picking one of two indistinguishable packages is a guess'
+    Assert-Match 'tell them apart' $selected.Detail 'ambiguous has to read differently from absent'
+    Assert-Match 'nv_dispi.inf_amd64_a' $selected.Detail 'both candidates have to be named'
+    Assert-Match 'nv_dispi.inf_amd64_b' $selected.Detail 'both candidates have to be named'
+}
+
+Test-Case 'an empty store says so instead of returning nothing quietly' {
+    $selected = Select-ReleaseVmDriverPackage -Candidate @() -ActiveDriverVersion '32.0.15.8098'
+
+    Assert-True (-not $selected.Ok) 'no package is not a package'
+    Assert-Match 'no driver package' $selected.Detail 'the reason has to distinguish empty from mismatched'
+}
+
+Test-Case 'the partition Hyper-V actually applied is compared against what was asked for' {
+    # Read back rather than logged: the values are opaque to this recipe and the
+    # platform is free to normalise them, so the configuration that matters is the
+    # one the adapter reports afterwards.
+    $requested = [ordered]@{ MinPartitionVRAM = 80000000; MaxPartitionVRAM = 100000000 }
+    $actual = [ordered]@{ MinPartitionVRAM = 80000000; MaxPartitionVRAM = 100000000 }
+
+    $comparison = Compare-ReleaseVmGpuPartition -Requested $requested -Actual $actual
+    Assert-True $comparison.Matches 'an unnormalised partition matches what was asked for'
+    Assert-Equal 0 $comparison.Differences.Count 'nothing to report'
+}
+
+Test-Case 'a normalised partition value is reported as the difference it is' {
+    $requested = [ordered]@{ MinPartitionVRAM = 80000000; MaxPartitionVRAM = 100000000 }
+    $actual = [ordered]@{ MinPartitionVRAM = 80000000; MaxPartitionVRAM = 99999232 }
+
+    $comparison = Compare-ReleaseVmGpuPartition -Requested $requested -Actual $actual
+    Assert-True (-not $comparison.Matches) 'the applied configuration is not the requested one'
+    $text = $comparison.Differences -join '; '
+    Assert-Match 'MaxPartitionVRAM' $text 'the field has to be named'
+    Assert-Match '100000000' $text 'the requested value has to be named'
+    Assert-Match '99999232' $text 'so does the value that was actually applied'
+}
+
+Test-Case 'a partition field the adapter did not report is not read as agreement' {
+    $requested = [ordered]@{ MinPartitionVRAM = 80000000; MaxPartitionEncode = 100000000 }
+    $actual = [ordered]@{ MinPartitionVRAM = 80000000 }
+
+    $comparison = Compare-ReleaseVmGpuPartition -Requested $requested -Actual $actual
+    Assert-True (-not $comparison.Matches) 'a field nobody read back is unproven, not equal'
+    Assert-Match 'not reported' ($comparison.Differences -join '; ') 'missing reads differently from different'
+}
+
+Test-Case 'the guest GPU is bound to the host GPU by what GPU-P actually preserves' {
+    $hostGpu = @{ VendorId = 0x10DE; DeviceId = 0x2C02; DriverVersion = '32.0.15.8098'; AdapterLuid = '0x0000ABCD' }
+    $guest = @{ VendorId = 0x10DE; DeviceId = 0x2C02; DriverVersion = '32.0.15.8098'; AdapterLuid = '0x00001234' }
+
+    $binding = Test-ReleaseVmGpuBinding -HostGpu $hostGpu -GuestGpu $guest
+    Assert-True $binding.Bound 'same adapter, same driver: this is the partitioned GPU'
+    Assert-Equal 0 $binding.Unmet.Count 'a different LUID is expected and is not a mismatch'
+}
+
+Test-Case 'a guest on a different adapter is not bound to the host GPU' {
+    $hostGpu = @{ VendorId = 0x10DE; DeviceId = 0x2C02; DriverVersion = '32.0.15.8098' }
+    $guest = @{ VendorId = 0x1414; DeviceId = 0x008C; DriverVersion = '10.0.26100.1' }
+
+    $binding = Test-ReleaseVmGpuBinding -HostGpu $hostGpu -GuestGpu $guest
+    Assert-True (-not $binding.Bound) 'the Microsoft Basic Render Driver is not an RTX partition'
+    Assert-Match 'deviceId' ($binding.Unmet -join '; ') 'the field that differs has to be named'
+}
+
+Test-Case 'a guest driver that is not the staged host driver is not bound' {
+    # The failure the DriverStore selection above prevents, stated from the other end:
+    # the adapter is right and the user-mode driver is from a different package.
+    $hostGpu = @{ VendorId = 0x10DE; DeviceId = 0x2C02; DriverVersion = '32.0.15.8098' }
+    $guest = @{ VendorId = 0x10DE; DeviceId = 0x2C02; DriverVersion = '31.0.15.1234' }
+
+    $binding = Test-ReleaseVmGpuBinding -HostGpu $hostGpu -GuestGpu $guest
+    Assert-True (-not $binding.Bound) 'a mismatched user-mode driver is the classic GPU-P failure'
+    Assert-Match 'driverVersion' ($binding.Unmet -join '; ') 'the field that differs has to be named'
+}
+
+Test-Case 'a guest that reported no adapter is unbound rather than assumed' {
+    # Every host field is present, so only the guest side can produce the refusal.
+    $hostGpu = @{ VendorId = '10DE'; DeviceId = '2C02'; DriverVersion = '32.0.15.8098' }
+    $binding = Test-ReleaseVmGpuBinding -HostGpu $hostGpu -GuestGpu @{}
+
+    Assert-True (-not $binding.Bound) 'a guest that reported no adapter proves nothing'
+    Assert-Equal 3 $binding.Unmet.Count 'each unmeasured field is its own unmet item'
+    Assert-Match 'the guest vendorId was not measured' ($binding.Unmet -join '; ') 'absence is not agreement'
+}
+
+Test-Case 'a host fact nobody measured leaves the binding unproven too' {
+    # The other direction: a run that could not read its own adapter cannot claim the
+    # guest is on it.
+    $binding = Test-ReleaseVmGpuBinding -HostGpu @{ VendorId = '10DE'; DeviceId = '2C02' } `
+        -GuestGpu @{ VendorId = '10DE'; DeviceId = '2C02'; DriverVersion = '32.0.15.8098' }
+
+    Assert-True (-not $binding.Bound) 'an unmeasured host driver version binds nothing'
+    Assert-Match 'the host driverVersion was not measured' ($binding.Unmet -join '; ') 'the side that is missing has to be named'
+}
+
+Test-Case 'the recipe does not claim the partition triple is a proportion of the adapter' {
+    # Hyper-V does not document these values as a fraction of the adapter and the
+    # driver is free to normalise them, so a comment stating a percentage is a claim
+    # the recipe cannot back. The read-back is what says what was applied.
+    $module = Get-Content -LiteralPath (Join-Path $script:VmRoot 'ReleaseVm.psm1') -Raw
+    Assert-NoMatch 'a tenth of the GPU' $module 'the proportion was never measured'
+}
+
+# ---------------------------------------------------------------------------
+# Capture readiness as something measured, not inferred
+# ---------------------------------------------------------------------------
+#
+# "PowerShell Direct answered" was the whole readiness signal, and it proves the
+# OS is up and nothing else. A PowerShell Direct session is session 0, which owns
+# no desktop: no monitor enumerates in it, Graphics Capture offers only windows,
+# and Output Duplication finds no outputs. A capture campaign launched that way
+# fails for a reason that reads like a product defect.
+#
+# The guest built by this recipe does log on and does reattach its session to the
+# console. That is not the point: the harness has to prove the state it depends
+# on rather than derive it from a channel that cannot see it.
+
+function New-FixtureReadiness {
+    param([hashtable] $Override = @{})
+    $receipt = @{
+        osReachable          = $true
+        agentSessionId       = 1
+        agentWindowStation   = 'WinSta0'
+        agentDesktop         = 'Default'
+        agentUser            = 'exosnap'
+        consoleSessionId     = 1
+        interactiveSessionId = 1
+        displays             = @(@{ Name = 'IDD-1'; Width = 3840; Height = 2160; RefreshHz = 120 })
+        gpu                  = @{ VendorId = '10DE'; DeviceId = '2C02'; DriverVersion = '32.0.15.8098' }
+        controlChannel       = $true
+    }
+    foreach ($key in $Override.Keys) { $receipt[$key] = $Override[$key] }
+    return $receipt
+}
+
+Test-Case 'a fully measured guest is capture-ready' {
+    $verdict = Test-ReleaseVmReadiness -Receipt (New-FixtureReadiness) -Requirement (
+        New-ReleaseVmReadinessRequirement -InteractiveAgent -ExpectedUser 'exosnap' `
+            -Display @{ Width = 3840; Height = 2160; RefreshHz = 120 } -ControlChannel)
+
+    Assert-True $verdict.Ready 'every requirement was measured and met'
+    Assert-Equal 0 $verdict.Unmet.Count 'a ready guest has nothing unmet'
+}
+
+Test-Case 'an agent in session 0 is not capture-ready however well the OS answers' {
+    # The defect, stated as the thing that used to be enough: PowerShell Direct
+    # answers from session 0, so "the guest is reachable" was read as "the guest can
+    # capture".
+    $verdict = Test-ReleaseVmReadiness -Receipt (New-FixtureReadiness @{
+            agentSessionId = 0; agentWindowStation = 'Service-0x0-3e7$'; agentDesktop = ''
+        }) -Requirement (New-ReleaseVmReadinessRequirement -InteractiveAgent)
+
+    Assert-True (-not $verdict.Ready) 'session 0 owns no desktop'
+    Assert-Match 'owns no desktop' ($verdict.Unmet -join '; ') 'the reason has to be the session, not a side effect'
+}
+
+Test-Case 'session 0 is unready even when it is the console session' {
+    # With nobody logged on, the console session can be session 0 itself -- so a rule
+    # that only compared the agent session against the console session would call
+    # this guest ready. Session 0 owns no desktop whatever it is attached to.
+    $verdict = Test-ReleaseVmReadiness -Receipt (New-FixtureReadiness @{
+            agentSessionId = 0; consoleSessionId = 0; interactiveSessionId = $null
+        }) -Requirement (New-ReleaseVmReadinessRequirement -InteractiveAgent)
+
+    Assert-True (-not $verdict.Ready) 'a service session is not a desktop'
+    Assert-Match 'owns no desktop' ($verdict.Unmet -join '; ') 'the reason has to name why'
+}
+
+Test-Case 'an agent outside the console session is not capture-ready' {
+    # A logged-on but disconnected session enumerates no display at all, and closing
+    # the VMConnect window is what disconnects it -- so an unattended guest is in
+    # that state by default.
+    $verdict = Test-ReleaseVmReadiness -Receipt (New-FixtureReadiness @{
+            agentSessionId = 2; consoleSessionId = 1
+        }) -Requirement (New-ReleaseVmReadinessRequirement -InteractiveAgent)
+
+    Assert-True (-not $verdict.Ready) 'a disconnected session has no display'
+    Assert-Match 'console' ($verdict.Unmet -join '; ') 'the console session has to be named'
+}
+
+Test-Case 'an agent on the wrong desktop is not capture-ready' {
+    $verdict = Test-ReleaseVmReadiness -Receipt (New-FixtureReadiness @{ agentDesktop = 'Winlogon' }) `
+        -Requirement (New-ReleaseVmReadinessRequirement -InteractiveAgent)
+
+    Assert-True (-not $verdict.Ready) 'the secure desktop is not where a capture runs'
+    Assert-Match 'WinSta0' ($verdict.Unmet -join '; ') 'the expected desktop has to be named'
+}
+
+Test-Case 'a guest running as the wrong user is not capture-ready' {
+    $verdict = Test-ReleaseVmReadiness -Receipt (New-FixtureReadiness @{ agentUser = 'SYSTEM' }) `
+        -Requirement (New-ReleaseVmReadinessRequirement -InteractiveAgent -ExpectedUser 'exosnap')
+
+    Assert-True (-not $verdict.Ready) 'the token decides what the capture may see'
+    Assert-Match 'SYSTEM' ($verdict.Unmet -join '; ') 'the user that was found has to be named'
+}
+
+Test-Case 'a display that does not match the campaign is named exactly' {
+    $verdict = Test-ReleaseVmReadiness -Receipt (New-FixtureReadiness @{
+            displays = @(@{ Name = 'IDD-1'; Width = 1920; Height = 1080; RefreshHz = 60 })
+        }) -Requirement (New-ReleaseVmReadinessRequirement `
+            -Display @{ Width = 3840; Height = 2160; RefreshHz = 120 })
+
+    Assert-True (-not $verdict.Ready) 'a 60 Hz 1080p desktop is not what the scenario asked for'
+    $text = $verdict.Unmet -join '; '
+    Assert-Match '3840x2160' $text 'the requirement has to be stated'
+    Assert-Match '1920x1080' $text 'so does what was actually there'
+}
+
+Test-Case 'a guest with no display at all is named as having none' {
+    $verdict = Test-ReleaseVmReadiness -Receipt (New-FixtureReadiness @{ displays = @() }) `
+        -Requirement (New-ReleaseVmReadinessRequirement -Display @{ Width = 3840; Height = 2160; RefreshHz = 120 })
+
+    Assert-True (-not $verdict.Ready) 'no display is not a small mismatch'
+    Assert-Match 'no display' ($verdict.Unmet -join '; ') 'an empty enumeration reads differently from a wrong mode'
+}
+
+Test-Case 'a fact that was never measured is never assumed true' {
+    # The rule that keeps this honest: a receipt written by an older guest agent
+    # simply does not carry a field this requirement asks about, and the absence of
+    # a measurement is not evidence that the state is good.
+    $receipt = New-FixtureReadiness
+    $receipt.Remove('controlChannel')
+
+    $verdict = Test-ReleaseVmReadiness -Receipt $receipt -Requirement (
+        New-ReleaseVmReadinessRequirement -ControlChannel)
+
+    Assert-True (-not $verdict.Ready) 'an unmeasured requirement is unmet, not met'
+    Assert-Match 'not measured' ($verdict.Unmet -join '; ') 'the difference from a failed measurement has to show'
+}
+
+Test-Case 'every unmet requirement is named at once' {
+    # A harness told one at a time fixes it, re-runs a campaign that takes an hour to
+    # reach this point, and learns the next.
+    $verdict = Test-ReleaseVmReadiness -Receipt (New-FixtureReadiness @{
+            agentSessionId = 0; agentUser = 'SYSTEM'; displays = @()
+        }) -Requirement (New-ReleaseVmReadinessRequirement -InteractiveAgent -ExpectedUser 'exosnap' `
+            -Display @{ Width = 3840; Height = 2160; RefreshHz = 120 } -ControlChannel)
+
+    Assert-True ($verdict.Unmet.Count -ge 3) 'one round trip per unmet requirement is an hour each'
+}
+
+Test-Case 'a guest that never answered is unready before anything else is read' {
+    $verdict = Test-ReleaseVmReadiness -Receipt (New-FixtureReadiness @{ osReachable = $false }) `
+        -Requirement (New-ReleaseVmReadinessRequirement -InteractiveAgent)
+
+    Assert-True (-not $verdict.Ready) 'nothing measured through an unreachable guest means anything'
+    Assert-Match 'did not answer' ($verdict.Unmet -join '; ') 'the first missing link has to be the one reported'
+}
+
+Test-Case 'a run that needs no capture is not held to the interactive contract' {
+    # Scope, kept honest in both directions: an install-and-uninstall run has no
+    # display requirement, and refusing it for one would make the harness demand
+    # more than the scenario does.
+    $verdict = Test-ReleaseVmReadiness -Receipt (New-FixtureReadiness @{
+            agentSessionId = 0; displays = @()
+        }) -Requirement (New-ReleaseVmReadinessRequirement)
+
+    Assert-True $verdict.Ready 'a scenario that captures nothing needs no desktop'
+}
+
+Test-Case 'a capture run can require the guest to be on the partitioned GPU' {
+    # The guest half of the GPU binding: the readiness receipt carries what the guest
+    # adapter is, and the requirement holds it against the host identity this run
+    # partitioned.
+    $hostGpu = @{ VendorId = '10DE'; DeviceId = '2C02'; DriverVersion = '32.0.15.8098' }
+    $verdict = Test-ReleaseVmReadiness -Receipt (New-FixtureReadiness @{
+            gpu = @{ VendorId = '10DE'; DeviceId = '2C02'; DriverVersion = '32.0.15.8098' }
+        }) -Requirement (New-ReleaseVmReadinessRequirement -GpuBoundTo $hostGpu)
+
+    Assert-True $verdict.Ready 'same adapter, same driver'
+}
+
+Test-Case 'a guest that fell back to a software adapter is not ready for a capture run' {
+    $hostGpu = @{ VendorId = '10DE'; DeviceId = '2C02'; DriverVersion = '32.0.15.8098' }
+    $verdict = Test-ReleaseVmReadiness -Receipt (New-FixtureReadiness @{
+            gpu = @{ VendorId = '1414'; DeviceId = '008C'; DriverVersion = '10.0.26100.1' }
+        }) -Requirement (New-ReleaseVmReadinessRequirement -GpuBoundTo $hostGpu)
+
+    Assert-True (-not $verdict.Ready) 'the Basic Render Driver encodes nothing'
+    Assert-Match 'deviceId' ($verdict.Unmet -join '; ') 'the field that differs has to be named'
+}
+
+Test-Case 'a receipt with no GPU section is not read as the right GPU' {
+    $hostGpu = @{ VendorId = '10DE'; DeviceId = '2C02'; DriverVersion = '32.0.15.8098' }
+    $receipt = New-FixtureReadiness
+    $receipt.Remove('gpu')
+    $verdict = Test-ReleaseVmReadiness -Receipt $receipt -Requirement (
+        New-ReleaseVmReadinessRequirement -GpuBoundTo $hostGpu)
+
+    Assert-True (-not $verdict.Ready) 'an unmeasured adapter is unbound'
+    Assert-Match 'not measured' ($verdict.Unmet -join '; ') 'absence is not agreement'
+}
+
+Test-Case 'a capture run proves its readiness before the campaign starts' {
+    $paths = Get-ReleaseVmRunPath -RunId 'ready' -Root 'T:\images'
+    $plan = New-ReleaseVmRunPlan -RunPath $paths -GuestCommand 'verify.exe' -ResultDirectory 'T:\out' `
+        -RequireInteractiveGuest
+    $names = @($plan | ForEach-Object { $_.Name })
+
+    Assert-True ($names -contains 'guest-readiness') 'a capture campaign cannot start on an unproven guest'
+    Assert-True ([array]::IndexOf($names, 'guest-readiness') -lt [array]::IndexOf($names, 'run')) `
+        'readiness that is measured after the campaign explains a failure instead of preventing it'
+    Assert-True ([array]::IndexOf($names, 'wait-for-guest') -lt [array]::IndexOf($names, 'guest-readiness')) `
+        'the guest has to be answering before anything can be measured in it'
+}
+
+Test-Case 'a run that declares no capture does not demand a desktop' {
+    $paths = Get-ReleaseVmRunPath -RunId 'plain' -Root 'T:\images'
+    $plan = New-ReleaseVmRunPlan -RunPath $paths -GuestCommand 'verify.exe' -ResultDirectory 'T:\out'
+    $names = @($plan | ForEach-Object { $_.Name })
+
+    Assert-True (-not ($names -contains 'guest-readiness')) `
+        'the requirement belongs to the scenario, not to every run of the recipe'
+}
+
+Test-Case 'the run plan rescues its evidence before anything discards it' {
+    $paths = Get-ReleaseVmRunPath -RunId 'rescue' -Root 'T:\images'
+    $plan = New-ReleaseVmRunPlan -RunPath $paths -GuestCommand 'verify.exe' -ResultDirectory 'T:\out'
+    $collect = @($plan | Where-Object Name -eq 'collect')[0]
+
+    Assert-True $collect.Rescue 'the campaign step throwing is exactly when the evidence is needed'
+    Assert-Equal 'virtual-machine' $collect.RunIfCompleted 'only this run machine may be read from'
+
+    foreach ($name in @('stop', 'remove-vm', 'remove-disk')) {
+        $step = @($plan | Where-Object Name -eq $name)[0]
+        Assert-True $step.DiscardsEvidence `
+            "$name destroys guest state, so it waits until the evidence is out"
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Dry runs of the two host scripts
 # ---------------------------------------------------------------------------
 

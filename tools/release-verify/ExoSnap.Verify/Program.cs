@@ -7,6 +7,7 @@ using ExoSnap.Verify.Engine;
 using ExoSnap.Verify.Json;
 using ExoSnap.Verify.Models;
 using ExoSnap.Verify.Processes;
+using ExoSnap.Verify.Windows;
 
 namespace ExoSnap.Verify;
 
@@ -196,6 +197,12 @@ public static class Program
             catalog.ToDocument(),
             VerifyJsonContext.Default.ScenarioDescriptorDocument);
 
+        // What this run will be measuring WITH, recorded next to what it is measuring.
+        // A later run that reads these verdicts back compares the two, so a pass
+        // produced with a different oracle or through a different display driver
+        // cannot qualify a release nobody re-ran.
+        var tooling = MeasureTooling();
+
         run.WriteState(new RunState(
             RunState.CurrentSchemaVersion,
             runId,
@@ -205,9 +212,17 @@ public static class Program
                 Path.GetFileName(binding.ExecutablePath), binding.ExecutableSha256)]),
             catalog.Version,
             DateTimeOffset.UtcNow,
-            []));
+            [])
+        {
+            ToolingFingerprint = tooling.Digest,
+        });
 
         Console.WriteLine($"prepared {runId}");
+        Console.WriteLine(tooling.Digest.Length > 0
+            ? $"tooling  {tooling.Digest} (os {tooling.OsBuild}, gpu {tooling.GpuDriver}, "
+                + $"ffprobe {tooling.Ffprobe}, presentmon {tooling.PresentMon})"
+            : $"tooling  not fully readable, so these verdicts cannot be reused: "
+                + tooling.DescribeMismatch(string.Empty));
         Console.WriteLine($"artifact {binding.ExecutablePath}");
         Console.WriteLine($"version  {binding.ProductVersion} ({binding.ExecutableSha256[..16]})");
         Console.WriteLine($"rc       {binding.RcTag} at {binding.SourceCommit}");
@@ -230,7 +245,7 @@ public static class Program
         }
 
         var catalog = ReleaseCatalog.Create();
-        var reconciliation = Campaign.ReconciliationBlockers(run, campaign, catalog);
+        var reconciliation = Campaign.ReconciliationBlockers(run, campaign, catalog, MeasureTooling());
         if (reconciliation.Count > 0)
         {
             return Usage(ExitInfrastructure, string.Join("; ", reconciliation));
@@ -342,7 +357,7 @@ public static class Program
             return Usage(ExitUsage, "qualify needs a completed campaign; use --run-dir, or --dry-run to plan one.");
         }
 
-        var reconciliation = Campaign.ReconciliationBlockers(run, campaign, catalog);
+        var reconciliation = Campaign.ReconciliationBlockers(run, campaign, catalog, MeasureTooling());
         if (reconciliation.Count > 0)
         {
             Console.WriteLine("NOT QUALIFIED");
@@ -450,6 +465,74 @@ public static class Program
 
     private static string RunsRoot(CommandLine command) =>
         command.Value("runs-root", Path.Combine(RepositoryRoot(command), ".workspace", "release-verify"));
+
+    /// <summary>
+    /// What this machine measures with: the OS, the display driver the capture path
+    /// runs through, and the two independent oracles.
+    /// </summary>
+    /// <remarks>
+    /// The display driver is the user-mode one from the first hardware adapter, which
+    /// is the component the capture and encode paths call into. A machine with no
+    /// hardware adapter leaves it unknown, and an unknown field means these verdicts
+    /// may not be reused -- the safe direction for a question nobody answered.
+    /// </remarks>
+    private static ToolingFingerprint MeasureTooling()
+    {
+        var tools = new ToolResolver();
+        var adapter = GraphicsProbe.TryEnumerateAdapters()?.FirstOrDefault(candidate => !candidate.IsSoftware);
+
+        return ToolingFingerprint.Measure(
+            adapter?.UserModeDriverVersion ?? string.Empty,
+            ToolVersion(tools.Resolve("ffprobe", "EXOSNAP_FFPROBE").Path, "-version"),
+            ToolVersion(tools.Resolve("PresentMon", "EXOSNAP_PRESENTMON").Path, "--version"));
+    }
+
+    /// <summary>
+    /// A tool's version, or <c>absent</c> when it is not on this machine at all.
+    /// </summary>
+    /// <remarks>
+    /// The two are different facts. "Not installed" fully describes the tool set and
+    /// hashes like any other value; "installed and would not say which version" is a
+    /// question nobody answered, and that one refuses reuse.
+    /// </remarks>
+    private static string ToolVersion(string? resolvedPath, string versionFlag)
+    {
+        if (string.IsNullOrWhiteSpace(resolvedPath))
+        {
+            return ToolingFingerprint.Absent;
+        }
+
+        // Asked, not read off the file. ffprobe.exe carries a generic 1.0.0.0 version
+        // resource that is the same across every ffmpeg build, so a fingerprint taken
+        // from it would claim to bind an oracle it does not distinguish at all. The
+        // file version stays as the fallback for a tool that will not answer.
+        using var processes = new ProcessRunner();
+        try
+        {
+            var run = processes
+                .RunAsync(
+                    new ProcessRunRequest(resolvedPath, versionFlag) { Timeout = TimeSpan.FromSeconds(15) },
+                    CancellationToken.None)
+                .GetAwaiter()
+                .GetResult();
+
+            var first = (run.StandardOutput + run.StandardError)
+                .ReplaceLineEndings("\n")
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .FirstOrDefault();
+            if (!string.IsNullOrWhiteSpace(first))
+            {
+                return first;
+            }
+        }
+        catch (ProcessStartFailedException)
+        {
+            // Resolvable and not runnable. The file version below is the better answer
+            // than claiming the tool is absent.
+        }
+
+        return ToolingFingerprint.VersionOf(resolvedPath);
+    }
 
     private static string RepositoryRoot(CommandLine command) =>
         Path.GetFullPath(command.Value("repo", Environment.CurrentDirectory));

@@ -87,10 +87,10 @@ public sealed class UpdateDeclineGateTests : IDisposable
     {
         using var harness = await HarnessAsync(DisposableOsRun.Completed(new DisposableOsRunResult(
         [
-            new("install-base", true, "installed"),
-            new("decline-offer", true, "offered"),
-            new("decline-apply", true, "applied"),
-            new("decline-state", true, "failureCase uacDeclined, installState intact"),
+            new("install-base", true, "installed", DisposableOsStepKind.Bootstrap),
+            new("decline-offer", true, "offered", DisposableOsStepKind.Product),
+            new("decline-apply", true, "applied", DisposableOsStepKind.Product),
+            new("decline-state", true, "failureCase uacDeclined, installState intact", DisposableOsStepKind.Product),
         ])));
 
         var result = await new UpdateDeclineGate(() => this.baseMsi).RunAsync(
@@ -101,6 +101,11 @@ public sealed class UpdateDeclineGateTests : IDisposable
         Assert.Equal("sandbox-update-worker.ps1", request.WorkerFileName);
         Assert.Contains(this.baseMsi, request.SourceFiles);
         Assert.Contains(Path.GetFileName(this.baseMsi), request.WorkerArguments);
+
+        // The update path is what this gate asserts, so the guest has to reach the
+        // release feed to be offered anything at all. A transport that gives a
+        // machine networking only when the run asks for it needs the run to ask.
+        Assert.True(request.RequiresNetwork);
     }
 
     [Fact]
@@ -108,8 +113,8 @@ public sealed class UpdateDeclineGateTests : IDisposable
     {
         using var harness = await HarnessAsync(DisposableOsRun.Completed(new DisposableOsRunResult(
         [
-            new("install-base", true, "installed"),
-            new("decline-offer", false, "update.check timed out"),
+            new("install-base", true, "installed", DisposableOsStepKind.Bootstrap),
+            new("decline-offer", false, "update.check timed out", DisposableOsStepKind.Product),
         ])));
 
         var result = await new UpdateDeclineGate(() => this.baseMsi).RunAsync(
@@ -123,7 +128,7 @@ public sealed class UpdateDeclineGateTests : IDisposable
     {
         using var harness = await HarnessAsync(DisposableOsRun.Completed(new DisposableOsRunResult(
         [
-            new("install-base", true, "installed"),
+            new("install-base", true, "installed", DisposableOsStepKind.Bootstrap),
         ])));
 
         var result = await new UpdateDeclineGate(() => this.baseMsi).RunAsync(
@@ -159,11 +164,11 @@ public sealed class UpdateAcceptGateTests : IDisposable
     {
         using var harness = await HarnessAsync(DisposableOsRun.Completed(new DisposableOsRunResult(
         [
-            new("install-base", true, "installed"),
-            new("updater-gone-before-accept", true, "no stale updater"),
-            new("accept-offer", true, "offered"),
-            new("accept-apply", true, "applied"),
-            new("accept-installed", true, "product version advanced"),
+            new("install-base", true, "installed", DisposableOsStepKind.Bootstrap),
+            new("updater-gone-before-accept", true, "no stale updater", DisposableOsStepKind.Product),
+            new("accept-offer", true, "offered", DisposableOsStepKind.Product),
+            new("accept-apply", true, "applied", DisposableOsStepKind.Product),
+            new("accept-installed", true, "product version advanced", DisposableOsStepKind.Product),
         ])));
 
         var result = await new UpdateAcceptGate(() => this.baseMsi).RunAsync(
@@ -177,12 +182,12 @@ public sealed class UpdateAcceptGateTests : IDisposable
     {
         using var harness = await HarnessAsync(DisposableOsRun.Completed(new DisposableOsRunResult(
         [
-            new("install-base", true, "installed"),
-            new("decline-offer", false, "the decline half failed"),
-            new("updater-gone-before-accept", true, "no stale updater"),
-            new("accept-offer", true, "offered"),
-            new("accept-apply", true, "applied"),
-            new("accept-installed", true, "product version advanced"),
+            new("install-base", true, "installed", DisposableOsStepKind.Bootstrap),
+            new("decline-offer", false, "the decline half failed", DisposableOsStepKind.Product),
+            new("updater-gone-before-accept", true, "no stale updater", DisposableOsStepKind.Product),
+            new("accept-offer", true, "offered", DisposableOsStepKind.Product),
+            new("accept-apply", true, "applied", DisposableOsStepKind.Product),
+            new("accept-installed", true, "product version advanced", DisposableOsStepKind.Product),
         ])));
 
         var result = await new UpdateAcceptGate(() => this.baseMsi).RunAsync(
@@ -211,12 +216,12 @@ public sealed class ChocolateyRehearsalGateTests
 
     private static readonly DisposableOsRunResult RehearsalPassed = new(
     [
-        new("prepare", true, "nuspec rewritten"),
-        new("pack", true, "packed"),
-        new("removeExisting", true, "no prior install"),
-        new("install", true, "installed"),
-        new("uninstall", true, "uninstalled"),
-        new("restore", true, "release MSI reinstalled"),
+        new("prepare", true, "nuspec rewritten", DisposableOsStepKind.Bootstrap),
+        new("pack", true, "packed", DisposableOsStepKind.Bootstrap),
+        new("removeExisting", true, "no prior install", DisposableOsStepKind.Bootstrap),
+        new("install", true, "installed", DisposableOsStepKind.Product),
+        new("uninstall", true, "uninstalled", DisposableOsStepKind.Product),
+        new("restore", true, "release MSI reinstalled", DisposableOsStepKind.Bootstrap),
     ]);
 
     [Fact]
@@ -265,6 +270,10 @@ public sealed class ChocolateyRehearsalGateTests
         Assert.Contains("chocolatey", request.WorkerArguments);
         Assert.Contains("-MsiSha256", request.WorkerArguments);
         Assert.NotNull(request.EvidenceDirectory);
+
+        // Chocolatey itself is bootstrapped from chocolatey.org, so this rehearsal
+        // cannot run on a machine without networking.
+        Assert.True(request.RequiresNetwork);
     }
 
     [Fact]
@@ -272,12 +281,12 @@ public sealed class ChocolateyRehearsalGateTests
     {
         using var harness = await HarnessAsync(DisposableOsRun.Completed(new DisposableOsRunResult(
         [
-            new("prepare", true, "nuspec rewritten"),
-            new("pack", true, "packed"),
-            new("removeExisting", true, "no prior install"),
-            new("install", false, "choco install exited 1"),
-            new("uninstall", true, "uninstalled"),
-            new("restore", true, "release MSI reinstalled"),
+            new("prepare", true, "nuspec rewritten", DisposableOsStepKind.Bootstrap),
+            new("pack", true, "packed", DisposableOsStepKind.Bootstrap),
+            new("removeExisting", true, "no prior install", DisposableOsStepKind.Bootstrap),
+            new("install", false, "choco install exited 1", DisposableOsStepKind.Product),
+            new("uninstall", true, "uninstalled", DisposableOsStepKind.Product),
+            new("restore", true, "release MSI reinstalled", DisposableOsStepKind.Bootstrap),
         ])));
         var msi = DisposableOsGateFixture.StageReleaseMsi(harness);
 
@@ -401,5 +410,253 @@ internal static class DisposableOsGateFixture
         var path = Path.Combine(fakes.RepositoryRoot, "scripts", "lib", fileName);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllText(path, "# worker");
+    }
+
+    /// <summary>
+    /// Writes a worker that pulls in another script, and that script, so a payload
+    /// test has a dependency graph to be right or wrong about.
+    /// </summary>
+    internal static void StageScriptWithDependency(GateFakes fakes, string workerFileName, string dependencyFileName)
+    {
+        var lib = Path.Combine(fakes.RepositoryRoot, "scripts", "lib");
+        Directory.CreateDirectory(lib);
+        File.WriteAllText(
+            Path.Combine(lib, workerFileName),
+            $"Import-Module (Join-Path $StagingDirectory '{dependencyFileName}') -Force");
+        File.WriteAllText(Path.Combine(lib, dependencyFileName), "# module");
+    }
+}
+
+/// <summary>
+/// The update gate refuses to run against a binding that cannot name a candidate.
+/// </summary>
+/// <remarks>
+/// Checked before the guest is started, so a harness that cannot say what it
+/// expected reports an infrastructure error rather than a product failure at the
+/// end of a long run. The worker-side assertions (the offer names the bound
+/// candidate; the installed build IS it) run inside the sandbox and are pinned by
+/// the worker''s own steps.
+/// </remarks>
+public sealed class UpdateGateCandidateBindingTests : IDisposable
+{
+    private readonly string baseMsi = Path.Combine(
+        Path.GetTempPath(), "candidate-binding-" + Guid.NewGuid().ToString("N") + ".msi");
+
+    public UpdateGateCandidateBindingTests() => File.WriteAllText(this.baseMsi, "msi");
+
+    public void Dispose() => File.Delete(this.baseMsi);
+
+    private async Task<ScenarioResult> RunWithAsync(Action<GateFakes> bind)
+    {
+        using var harness = await GateHarness.CreateAsync(
+            "REL-UPD-MSI-DECLINE-001",
+            fakes =>
+            {
+                DisposableOsGateFixture.StageWorker(fakes);
+                fakes.DisposableOs.Run = DisposableOsRun.Completed(new DisposableOsRunResult([]));
+                bind(fakes);
+            },
+            TestContext.Current.CancellationToken);
+
+        return await new UpdateDeclineGate(() => this.baseMsi).RunAsync(
+            harness.Context, TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task AnIncompleteBindingIsAnInfrastructureErrorNotAProductFailure()
+    {
+        // The harness could not say what it expected, so nothing was measured about
+        // ExoSnap. Calling this a failing gate would accuse the product of the
+        // campaign''s own missing data.
+        var result = await this.RunWithAsync(fakes => fakes.SourceCommit = string.Empty);
+
+        Assert.Equal(ScenarioOutcome.InfrastructureError, result.Outcome);
+        Assert.Contains("sourceCommit", result.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ABindingFromTwoDifferentCandidatesIsAnInfrastructureError()
+    {
+        // rc4''s version with rc5''s tag: complete, and about no single candidate.
+        var result = await this.RunWithAsync(fakes =>
+        {
+            fakes.ProductVersion = "0.9.1-rc4";
+            fakes.RcTag = "v0.9.1-rc5";
+        });
+
+        Assert.Equal(ScenarioOutcome.InfrastructureError, result.Outcome);
+        Assert.Contains("inconsistent", result.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task TheWorkerIsToldTheCandidateToCompareAgainst()
+    {
+        // Without these the worker can only ask "is this newer than what we started
+        // from", which any newer build satisfies.
+        using var harness = await GateHarness.CreateAsync(
+            "REL-UPD-MSI-DECLINE-001",
+            fakes =>
+            {
+                DisposableOsGateFixture.StageWorker(fakes);
+                fakes.DisposableOs.Run = DisposableOsRun.Completed(new DisposableOsRunResult([]));
+            },
+            TestContext.Current.CancellationToken);
+
+        await new UpdateDeclineGate(() => this.baseMsi).RunAsync(
+            harness.Context, TestContext.Current.CancellationToken);
+
+        var request = Assert.Single(harness.Fakes.DisposableOs.Requests);
+        var arguments = string.Join(" ", request.WorkerArguments);
+
+        Assert.Contains("-ExpectedVersion", arguments, StringComparison.Ordinal);
+        Assert.Contains(harness.Fakes.ProductVersion, arguments, StringComparison.Ordinal);
+        Assert.Contains("-ExpectedCommit", arguments, StringComparison.Ordinal);
+        Assert.Contains(harness.Fakes.SourceCommit, arguments, StringComparison.Ordinal);
+        Assert.Contains("-ExpectedExeSha256", arguments, StringComparison.Ordinal);
+        Assert.Contains(harness.Fakes.ExecutableSha256, arguments, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AConsistentBindingReachesTheTransport()
+    {
+        // The control: the check must not reject the ordinary case.
+        using var harness = await GateHarness.CreateAsync(
+            "REL-UPD-MSI-DECLINE-001",
+            fakes =>
+            {
+                DisposableOsGateFixture.StageWorker(fakes);
+                fakes.DisposableOs.Run = DisposableOsRun.Completed(new DisposableOsRunResult([]));
+            },
+            TestContext.Current.CancellationToken);
+
+        await new UpdateDeclineGate(() => this.baseMsi).RunAsync(
+            harness.Context, TestContext.Current.CancellationToken);
+
+        Assert.Single(harness.Fakes.DisposableOs.Requests);
+    }
+}
+
+/// <summary>
+/// A gate stages every script its worker pulls in.
+/// </summary>
+/// <remarks>
+/// The worker runs inside a machine with nothing but its staging directory, so a
+/// dependency the gate did not stage is a run that dies at the first line needing
+/// it -- reported as whatever PowerShell says about a missing module, which reads
+/// nothing like an incomplete payload. Two were missing, one of them only
+/// transitively, and both were missing because the list was written by hand.
+/// </remarks>
+public sealed class DisposableOsPayloadContractTests : IDisposable
+{
+    private readonly string baseMsi = Path.Combine(
+        Path.GetTempPath(), "payload-contract-" + Guid.NewGuid().ToString("N") + ".msi");
+
+    public DisposableOsPayloadContractTests() => File.WriteAllText(this.baseMsi, "msi");
+
+    public void Dispose() => File.Delete(this.baseMsi);
+
+    [Fact]
+    public async Task TheUpdateGateStagesWhatItsWorkerImports()
+    {
+        using var harness = await GateHarness.CreateAsync(
+            "REL-UPD-MSI-DECLINE-001",
+            fakes =>
+            {
+                DisposableOsGateFixture.StageScriptWithDependency(
+                    fakes, UpdateDeclineGate.WorkerFileName, "LiveVerifyClient.psm1");
+                fakes.DisposableOs.Run = DisposableOsRun.Completed(new DisposableOsRunResult([]));
+            },
+            TestContext.Current.CancellationToken);
+
+        await new UpdateDeclineGate(() => this.baseMsi).RunAsync(
+            harness.Context, TestContext.Current.CancellationToken);
+
+        var request = Assert.Single(harness.Fakes.DisposableOs.Requests);
+        var worker = Path.Combine(
+            harness.Fakes.RepositoryRoot, "scripts", "lib", UpdateDeclineGate.WorkerFileName);
+
+        Assert.Empty(WorkerPayload.MissingFrom(worker, request.SourceFiles, WorkerPayload.ReadFileOrNull));
+        Assert.Contains(request.SourceFiles, path => Path.GetFileName(path) == "LiveVerifyClient.psm1");
+    }
+
+    [Fact]
+    public async Task TheUpdateGateAsksForItsEvidence()
+    {
+        // It did not, so a failed update run left its MSI logs and updater state
+        // inside a machine that was then discarded -- the one run whose logs were
+        // worth having.
+        using var harness = await GateHarness.CreateAsync(
+            "REL-UPD-MSI-DECLINE-001",
+            fakes =>
+            {
+                DisposableOsGateFixture.StageWorker(fakes);
+                fakes.DisposableOs.Run = DisposableOsRun.Completed(new DisposableOsRunResult([]));
+            },
+            TestContext.Current.CancellationToken);
+
+        await new UpdateDeclineGate(() => this.baseMsi).RunAsync(
+            harness.Context, TestContext.Current.CancellationToken);
+
+        var request = Assert.Single(harness.Fakes.DisposableOs.Requests);
+        Assert.False(string.IsNullOrWhiteSpace(request.EvidenceDirectory));
+    }
+
+    [Fact]
+    public async Task TheChocolateyGateStagesItsRehearsalWorkerAndKeepsThePackageDirectory()
+    {
+        using var harness = await GateHarness.CreateAsync(
+            "REL-PKG-CHOCO-001",
+            fakes =>
+            {
+                DisposableOsGateFixture.StageChocoWorker(fakes);
+                DisposableOsGateFixture.StagePackageSource(fakes);
+                DisposableOsGateFixture.StageScriptWithDependency(
+                    fakes, ChocolateyRehearsalGate.WorkerFileName, "choco-rehearsal-worker.ps1");
+                fakes.DisposableOs.Run = DisposableOsRun.Completed(new DisposableOsRunResult([]));
+            },
+            TestContext.Current.CancellationToken);
+        var msi = DisposableOsGateFixture.StageReleaseMsi(harness);
+
+        // The lookup is injected: identifying a real MSI means reading its Property
+        // table, and this test is about the payload, not about MSI identity (which
+        // ReleaseMsiArtifact's own tests cover).
+        var result = await new ChocolateyRehearsalGate(_ => new ReleaseMsiLookup(msi, new string('a', 64), "staged"))
+            .RunAsync(harness.Context, TestContext.Current.CancellationToken);
+        Assert.True(
+            harness.Fakes.DisposableOs.Requests.Count == 1,
+            $"the gate never reached the transport: {result.Outcome} -- {result.Message}");
+
+        var request = Assert.Single(harness.Fakes.DisposableOs.Requests);
+        var worker = Path.Combine(
+            harness.Fakes.RepositoryRoot, "scripts", "lib", ChocolateyRehearsalGate.WorkerFileName);
+
+        Assert.Empty(WorkerPayload.MissingFrom(worker, request.SourceFiles, WorkerPayload.ReadFileOrNull));
+
+        // The package source stays a directory: the worker reads
+        // tools/chocolateyinstall.ps1 underneath it, so a flattened payload would
+        // lose the only structure it depends on.
+        Assert.Contains(
+            request.SourceFiles,
+            path => Directory.Exists(path) && Path.GetFileName(path) == "chocolatey");
+    }
+
+    [Fact]
+    public async Task AWorkerWhoseDependencyIsNotStagedIsCaughtHere()
+    {
+        // The guard's own premise: if the derivation stopped finding anything, every
+        // test above would pass on an empty answer. This stages a worker that needs
+        // a module and then asks about a payload that omits it.
+        using var harness = await GateHarness.CreateAsync(
+            "REL-UPD-MSI-DECLINE-001",
+            fakes => DisposableOsGateFixture.StageScriptWithDependency(
+                fakes, UpdateDeclineGate.WorkerFileName, "Needed.psm1"),
+            TestContext.Current.CancellationToken);
+
+        var worker = Path.Combine(
+            harness.Fakes.RepositoryRoot, "scripts", "lib", UpdateDeclineGate.WorkerFileName);
+
+        Assert.Equal(
+            ["Needed.psm1"],
+            WorkerPayload.MissingFrom(worker, [worker], WorkerPayload.ReadFileOrNull));
     }
 }
