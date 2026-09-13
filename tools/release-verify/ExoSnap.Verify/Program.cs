@@ -1,5 +1,7 @@
 using System.Globalization;
 using System.Text;
+using System.Text.Json;
+using ExoSnap.Verify.Analysis;
 using ExoSnap.Verify.Capabilities;
 using ExoSnap.Verify.Catalog;
 using ExoSnap.Verify.Cli;
@@ -46,6 +48,7 @@ public static class Program
                 "run" => RunAsync(command).GetAwaiter().GetResult(),
                 "report" => Report(command),
                 "qualify" => Qualify(command),
+                "anchor" => Anchor(command),
                 "" or "help" or "--help" => Usage(ExitOk),
                 _ => Usage(ExitUsage, $"Unknown command '{command.Verb}'."),
             };
@@ -307,6 +310,45 @@ public static class Program
         Console.WriteLine();
         PrintVerdicts(state.Verdicts);
         return ExitOk;
+    }
+
+    /// <summary>
+    /// Qualifies a stimulus-to-recording timebase from measurements that do not involve
+    /// the thing under test.
+    /// </summary>
+    /// <remarks>
+    /// A separate verb rather than part of a scenario: the analysis that needs it decodes
+    /// frames with tools of its own, and what belongs here is the reconciliation -- which
+    /// estimates corroborate, which contradict, and which are bounds rather than readings.
+    /// Exit 2 for a timebase that could not be established, so a caller cannot mistake an
+    /// unqualified oracle for a measurement.
+    /// </remarks>
+    private static readonly JsonSerializerOptions AnchorInputJson = new() { PropertyNameCaseInsensitive = true };
+
+    private static int Anchor(CommandLine command)
+    {
+        var inputPath = command.Value("input", string.Empty);
+        if (inputPath.Length == 0)
+        {
+            return Usage(ExitUsage, "anchor needs --input <observations.json>.");
+        }
+
+        if (!File.Exists(inputPath))
+        {
+            Console.Error.WriteLine($"INFRA_ERROR there is no observation file at '{inputPath}'.");
+            return ExitInfrastructure;
+        }
+
+        var input = JsonSerializer.Deserialize<CursorTimelineInput>(File.ReadAllText(inputPath), AnchorInputJson);
+        if (input is null)
+        {
+            Console.Error.WriteLine($"INFRA_ERROR '{inputPath}' does not read as observations.");
+            return ExitInfrastructure;
+        }
+
+        var result = CursorTimeline.Qualify(input);
+        Console.WriteLine(result.ToJson());
+        return result.Qualified ? ExitOk : 2;
     }
 
     private static int Qualify(CommandLine command)
