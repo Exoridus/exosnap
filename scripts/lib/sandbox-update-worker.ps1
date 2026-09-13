@@ -51,6 +51,15 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+# The caller names a staged payload by file name, because only the transport knows
+# where it put it. Resolved against the staging directory rather than left relative:
+# a relative path resolves against the working directory, which the sandbox happens
+# to set to the staging directory and the virtual-machine recipe sets to the guest
+# root -- where the file is one level below, and msiexec answers 1619.
+if (-not [System.IO.Path]::IsPathRooted($BaseMsiPath)) {
+    $BaseMsiPath = Join-Path $StagingDirectory $BaseMsiPath
+}
+
 $script:Steps = [System.Collections.Generic.List[object]]::new()
 New-Item -ItemType Directory -Path $EvidenceDirectory -Force | Out-Null
 # Under the evidence directory, not the staging directory: the staging directory

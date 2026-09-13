@@ -36,6 +36,20 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+# The caller names staged payloads by file name, because only the transport knows
+# where it put them. Resolved against the staging directory rather than left
+# relative: a relative path resolves against the working directory, which the sandbox
+# happens to set to the staging directory and the virtual-machine recipe sets to the
+# guest root -- where the files are one level below. Resolved here rather than in the
+# rehearsal worker this hands them to, so that one receives paths that are already
+# absolute wherever it runs.
+if (-not [System.IO.Path]::IsPathRooted($MsiPath)) {
+    $MsiPath = Join-Path $StagingDirectory $MsiPath
+}
+if (-not [System.IO.Path]::IsPathRooted($PackageSource)) {
+    $PackageSource = Join-Path $StagingDirectory $PackageSource
+}
+
 $logDirectory = Join-Path $StagingDirectory 'logs'
 New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
 New-Item -ItemType Directory -Path $EvidenceDirectory -Force | Out-Null
