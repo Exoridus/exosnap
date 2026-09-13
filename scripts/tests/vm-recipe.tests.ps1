@@ -853,9 +853,12 @@ Test-Case 'the seal phase clears what it created and then refuses an image that 
         -ProvisionScript $script:ProvisionScript -ProvisionManifest $script:ManifestPath -Phase @('seal')
 
     $names = @($plan | ForEach-Object { $_.Name })
-    Assert-Equal 'clear-bring-up' $names[0] 'the known diagnostics go first'
-    Assert-Equal 'assert-sealed' $names[1] 'and the image is then held to the gate own definition of clean'
-    Assert-Equal 'stop-for-freeze' $names[2] 'a golden image is frozen stopped'
+    Assert-Equal 'eject-install-media' $names[0] 'an image whose ISO has since moved cannot be started at all'
+    Assert-Equal 'start-for-seal' $names[1] 'the phase also runs on its own against an image somebody froze'
+    Assert-Equal 'wait-for-seal' $names[2] 'and nothing is asked of a guest that is not answering yet'
+    Assert-Equal 'clear-bring-up' $names[3] 'the known diagnostics go next'
+    Assert-Equal 'assert-sealed' $names[4] 'and the image is then held to the gate own definition of clean'
+    Assert-Equal 'stop-for-freeze' $names[5] 'a golden image is frozen stopped'
 
     $clear = @($plan | Where-Object Name -eq 'clear-bring-up')[0]
     foreach ($path in @($clear.Parameters['Path'])) {
@@ -874,6 +877,23 @@ Test-Case 'the seal assertion asks the gate own residue definition, not a second
     Assert-True $assertion.Success 'Assert-ReleaseVmSealed was not found'
     Assert-Match 'clean-first-start-worker\.ps1' $assertion.Value 'the worker is the source of the definition'
     Assert-Match 'Get-ExoSnapResidue' $assertion.Value 'and its probe is what runs in the guest'
+}
+
+Test-Case 'what crosses the guest session boundary is counted, not wrapped' {
+    # Twice now a list returned from inside a guest has been wrapped in one more array
+    # on the way out, so the caller counted the wrapper: one leftover on every machine,
+    # and an assertion that printed a type name instead of a reason. A returned array
+    # is one deserialised object; emitted strings are collected by the remoting layer.
+    # Read as source, because the real path needs a guest.
+    $module = Get-Content -LiteralPath (Join-Path $script:VmRoot 'ReleaseVm.psm1') -Raw
+    foreach ($name in @('Clear-ReleaseVmBringUpArtifact', 'Assert-ReleaseVmSealed')) {
+        $function = [regex]::Match($module, "(?ms)^function $name \{.*?^\}")
+        Assert-True $function.Success "$name was not found"
+
+        $block = [regex]::Match($function.Value, '(?ms)-ScriptBlock \{.*?\n    \}')
+        Assert-True $block.Success "$name has no guest scriptblock"
+        Assert-NoMatch 'return\s*,' $block.Value "$name must not wrap its guest result in another array"
+    }
 }
 
 Test-Case 'clearing bring-up artefacts never removes a path it was not given' {

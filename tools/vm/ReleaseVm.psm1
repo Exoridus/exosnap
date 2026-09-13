@@ -892,6 +892,22 @@ function New-ReleaseVmCreatePlan {
     }
 
     if ($Phase -contains 'seal') {
+        # Before the start, not after: a machine whose installation ISO has since
+        # moved cannot be started at all, and this phase is the one that runs against
+        # images old enough for that to have happened.
+        $plan += New-ReleaseVmStep -Name 'eject-install-media' -Command 'Clear-ReleaseVmInstallMedia' `
+            -Parameters ([ordered]@{ VMName = $VMName }) `
+            -Detail 'a finished image boots from its disk; the media are paths on one host'
+
+        # Conditionally, because this phase runs in two situations: at the end of a
+        # full build, where provisioning left the machine running, and on its own
+        # against an image somebody already froze and is now repairing.
+        $plan += New-ReleaseVmStep -Name 'start-for-seal' -Command 'Start-ReleaseVmIfStopped' `
+            -Parameters ([ordered]@{ VMName = $VMName })
+
+        $plan += New-ReleaseVmStep -Name 'wait-for-seal' -Command 'Wait-ReleaseVmPowerShellDirect' `
+            -Parameters ([ordered]@{ VMName = $VMName; TimeoutMinutes = 15 }) -NeedsCredential
+
         $plan += New-ReleaseVmStep -Name 'clear-bring-up' -Command 'Clear-ReleaseVmBringUpArtifact' `
             -Parameters ([ordered]@{ VMName = $VMName; Path = $defaults.BringUpArtifact }) -NeedsCredential `
             -Detail 'the exact paths the probes and their experiments write, and no others'
@@ -2329,6 +2345,51 @@ function Stop-ReleaseVmIfRunning {
     Stop-VM -Name $VMName -Force
 }
 
+function Clear-ReleaseVmInstallMedia {
+    <#
+    .SYNOPSIS
+        Ejects the installation media a finished image no longer boots from.
+    .DESCRIPTION
+        A build machine keeps both DVDs attached for as long as it exists, and their
+        media are paths on one host. The Windows ISO in particular is somebody's
+        download, named on a command line and never copied -- so a machine that
+        installed successfully still refuses to start once that file is moved, renamed
+        or deleted, with an error about a missing virtual disk provider rather than
+        about an ISO nobody needs any more.
+
+        The drives themselves stay. They are in the firmware boot order, and removing
+        them would rewrite it for a machine that already boots from its disk.
+    .OUTPUTS
+        What was ejected, as strings.
+    #>
+    [OutputType([string[]])]
+    param([Parameter(Mandatory)] [string] $VMName)
+    $ejected = @()
+    foreach ($drive in @(Get-VMDvdDrive -VMName $VMName -ErrorAction Stop)) {
+        if ([string]::IsNullOrWhiteSpace($drive.Path)) { continue }
+        $ejected += $drive.Path
+        Set-VMDvdDrive -VMName $VMName -ControllerNumber $drive.ControllerNumber `
+            -ControllerLocation $drive.ControllerLocation -Path $null -ErrorAction Stop
+    }
+    return [string[]] $ejected
+}
+
+function Start-ReleaseVmIfStopped {
+    <#
+    .SYNOPSIS
+        Starts a machine that is off, and says nothing about one already running.
+    .DESCRIPTION
+        The counterpart to Stop-ReleaseVmIfRunning, and for the same reason: a phase
+        has to work both in a full build, which leaves the machine running, and on its
+        own against a machine somebody stopped. `Start-VM` on a running machine is an
+        error, which would end a resumed build on its first step.
+    #>
+    param([Parameter(Mandatory)] [string] $VMName)
+    $vm = Get-VM -Name $VMName -ErrorAction Stop
+    if ($vm.State -eq 'Running') { return }
+    Start-VM -Name $VMName
+}
+
 function Set-ReleaseVmBootFromDvd {
     <#
     .SYNOPSIS
@@ -2442,24 +2503,25 @@ function Clear-ReleaseVmBringUpArtifact {
         [string[]] $Path
     )
     if (-not $Path) { $Path = (Get-ReleaseVmDefault).BringUpArtifact }
-    $removed = Invoke-Command -VMName $VMName -Credential $Credential -ArgumentList (, [string[]] $Path) -ScriptBlock {
+    # Emitted one string at a time, not returned as an array: a returned array crosses
+    # the session boundary as a single deserialised object, and the caller would count
+    # a wrapper of one instead of what was removed.
+    $removed = @(Invoke-Command -VMName $VMName -Credential $Credential -ArgumentList (, [string[]] $Path) -ScriptBlock {
         param([string[]] $Targets)
-        $done = @()
         foreach ($target in $Targets) {
             if (-not (Test-Path -LiteralPath $target)) { continue }
             Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction Stop
-            $done += $target
+            "$target"
 
             $parent = Split-Path -Parent $target
             if ($parent -and (Test-Path -LiteralPath $parent) -and
                 @(Get-ChildItem -LiteralPath $parent -Force -ErrorAction SilentlyContinue).Count -eq 0) {
                 Remove-Item -LiteralPath $parent -Force -ErrorAction Stop
-                $done += "$parent (emptied by the above)"
+                "$parent (emptied by the above)"
             }
         }
-        return , [string[]] $done
-    } -ErrorAction Stop
-    return [string[]] @($removed)
+    } -ErrorAction Stop)
+    return [string[]] $removed
 }
 
 function Assert-ReleaseVmSealed {
@@ -2488,11 +2550,16 @@ function Assert-ReleaseVmSealed {
     $probe = [regex]::Match($source, '(?ms)^function Get-ExoSnapResidue \{.*?^\}')
     if (-not $probe.Success) { throw "Get-ExoSnapResidue was not found in $WorkerPath" }
 
+    # Written out one string at a time rather than returned as an array. A returned
+    # array crosses the session boundary as one deserialised object, so the caller's
+    # @() counts a wrapper of one and prints its type name instead of the leftovers --
+    # and an image with nothing wrong would fail this assertion with an unreadable
+    # reason. Emitting the strings lets the remoting layer collect them.
     $residue = @(Invoke-Command -VMName $VMName -Credential $Credential -ArgumentList $probe.Value -ScriptBlock {
             param([string] $Function)
             Set-StrictMode -Version Latest
             . ([scriptblock]::Create($Function))
-            return , [string[]] @(Get-ExoSnapResidue)
+            foreach ($leftover in @(Get-ExoSnapResidue)) { "$leftover" }
         } -ErrorAction Stop)
 
     if ($residue.Count -gt 0) {
@@ -2727,6 +2794,8 @@ Export-ModuleMember -Function @(
     'Assert-ReleaseVmReadiness'
     'Set-ReleaseVmBootFromDvd'
     'Stop-ReleaseVmIfRunning'
+    'Start-ReleaseVmIfStopped'
+    'Clear-ReleaseVmInstallMedia'
     'Wait-ReleaseVmPowerShellDirect'
     'Copy-ReleaseVmFileSet'
     'Copy-ReleaseVmDirectory'
