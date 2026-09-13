@@ -2629,31 +2629,79 @@ $($match.Value)
     Assert-True ($output -match '^\s*\d+\s*$') "the probe has to return a count, not an error: $output"
 }
 
-Test-Case 'a machine with exactly one leftover is still counted, not unrolled into a string' {
-    # The worker asks the result for its Count. PowerShell unrolls a single-element
-    # array on return, and under StrictMode asking a bare string for Count is an
-    # error -- so the machine that has exactly one leftover is the machine that ends
-    # the run instead of being reported as unclean.
+Test-Case 'the residue count is the number of leftovers, at none, one and several' {
+    # Read through @(), the way the worker reads it. One leftover is the only
+    # population where a correct return and a doubly-wrapped one agree, so a case
+    # that tests only that number cannot tell them apart: a comma in front of the
+    # returned array makes @() count the wrapper, which is one for every machine --
+    # a clean one reported unclean with an empty description, and three leftovers
+    # reported as one.
     $worker = Join-Path (Split-Path -Parent $scriptRoot) 'scripts/lib/clean-first-start-worker.ps1'
     $source = Get-Content -LiteralPath $worker -Raw
     $match = [regex]::Match($source, '(?ms)^function Get-ExoSnapResidue \{.*?^\}')
     Assert-True $match.Success 'Get-ExoSnapResidue was not found in the worker'
 
-    $fakeLocalAppData = New-TestDirectory
+    $localAppData = New-TestDirectory
+    $programData = New-TestDirectory
     try {
-        New-Item -ItemType Directory -Path (Join-Path $fakeLocalAppData 'ExoSnap') -Force | Out-Null
+        # none, then one, then three, built from the locations the probe names.
+        $populations = @(
+            @{ Expected = 0; Make = { } }
+            @{ Expected = 1; Make = { New-Item -ItemType Directory -Path (Join-Path $localAppData 'ExoSnap') -Force | Out-Null } }
+            @{ Expected = 3; Make = {
+                    New-Item -ItemType Directory -Path (Join-Path $localAppData 'ExoSnap/recovery') -Force | Out-Null
+                    New-Item -ItemType Directory -Path (Join-Path $programData 'ExoSnap') -Force | Out-Null
+                } }
+        )
+        foreach ($population in $populations) {
+            & $population.Make
+            $probe = @"
+Set-StrictMode -Version Latest
+`$ErrorActionPreference = 'Stop'
+`$env:LOCALAPPDATA = '$localAppData'
+`$env:ProgramData = '$programData'
+$($match.Value)
+"count=`$(@(Get-ExoSnapResidue).Count)"
+"@
+            $output = & pwsh -NoProfile -Command $probe 2>&1 | Out-String
+            Assert-True ($output -match "count=$($population.Expected)\b") `
+                "$($population.Expected) leftover(s) have to count as $($population.Expected): $output"
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $localAppData -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $programData -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-Case 'machine-wide state left by an earlier install is a leftover too' {
+    # The golden image this gate runs on carries C:\ProgramData\ExoSnap, and a
+    # definition of clean that covers only the per-user locations reports that
+    # machine as clean -- so the first start it measures is not a first start.
+    $worker = Join-Path (Split-Path -Parent $scriptRoot) 'scripts/lib/clean-first-start-worker.ps1'
+    $source = Get-Content -LiteralPath $worker -Raw
+    $match = [regex]::Match($source, '(?ms)^function Get-ExoSnapResidue \{.*?^\}')
+    Assert-True $match.Success 'Get-ExoSnapResidue was not found in the worker'
+
+    $localAppData = New-TestDirectory
+    $programData = New-TestDirectory
+    try {
+        New-Item -ItemType Directory -Path (Join-Path $programData 'ExoSnap') -Force | Out-Null
         $probe = @"
 Set-StrictMode -Version Latest
 `$ErrorActionPreference = 'Stop'
-`$env:LOCALAPPDATA = '$fakeLocalAppData'
+`$env:LOCALAPPDATA = '$localAppData'
+`$env:ProgramData = '$programData'
 $($match.Value)
-`$residue = Get-ExoSnapResidue
-"found `$(`$residue.Count)"
+@(Get-ExoSnapResidue) -join '||'
 "@
         $output = & pwsh -NoProfile -Command $probe 2>&1 | Out-String
-        Assert-True ($output -match 'found 1') "one leftover has to count as one: $output"
+        Assert-True ($output -match 'machine-wide state') "the machine-wide directory has to be named: $output"
     }
-    finally { Remove-Item -LiteralPath $fakeLocalAppData -Recurse -Force -ErrorAction SilentlyContinue }
+    finally {
+        Remove-Item -LiteralPath $localAppData -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $programData -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }
 
 Write-Host ''

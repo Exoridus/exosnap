@@ -189,6 +189,8 @@ so rather than leaving it implicit. Reconciling them is an image rebuild: SudoVD
 needs its own version and SHA-256 pin recorded the way every package here is, and the
 golden image has to be built from it before anything may claim to be qualified on it.
 
+Until then a run says so rather than choosing between passing and failing. The guest is asked which virtual display driver it actually runs, by the root-enumerated device that driver binds to, and the answer is compared with the profile the scenario was qualified on. A profile whose device identity the recipe has not recorded -- which is the state SudoVDA is in -- makes that comparison **unverifiable**: the scenario is unrunnable on this image, not failing on it, and a run reports it that way. Nothing substitutes a device identity that was never measured, because a claim of qualification is exactly what an unpinned profile cannot support.
+
 Beside the golden image sits `image-fingerprint.json`: the display profile, the
 monitor mode the gates assert against, a digest over every package pin, the Windows
 build, and the host GPU driver version the guest driver was staged from. The host
@@ -201,6 +203,22 @@ differencing disk is created, and it names every drifted field at once. A fact t
 image never recorded counts as drift: an older image simply does not carry a field a
 later build of the recipe compares, and the absence of a record is not evidence that
 the two agree.
+
+## What binds a run to the GPU it ran on
+
+A partitioned guest shares no PCI identity with its host, and expecting it to is the mistake this recipe made first. What the guest binds to is the paravirtual device: it reports Microsoft's vendor id and a Microsoft inbox driver version, because the vendor's kernel-mode driver never leaves the host. A rule that required the host's vendor and device ids to appear in the guest refuses every correct campaign and accepts none.
+
+Three independent assertions replace that one, and none of them compares PCI ids across the two operating systems:
+
+| Assertion | Where both sides are measured | What it establishes |
+|---|---|---|
+| partition provenance | the host alone | the partition was created from the physical adapter the host measured. Hyper-V reports the partition's `InstancePath` as that adapter's PnP path with the separators rewritten, so this is the one place a PCI comparison belongs |
+| the adapter | host and guest | the guest is on a paravirtual device that presents the host adapter. The GPU-P device carries the host GPU's friendly name; the Basic Render Driver, which is the same vendor and the fallback worth catching, does not |
+| the driver | host and guest | the DriverStore package staged into the guest is the package the host selected, at the version the host adapter is running. The package is copied in verbatim, so both operating systems can be asked the same question, and a mismatch here is the classic GPU-P failure |
+
+Capability -- that Direct3D and NVENC are actually reachable through the partition -- is not among these. It needs a probe running inside the guest rather than a fact Windows reports about a device, and this recipe does not claim it.
+
+Display readiness is measured per display path, not per adapter. `Win32_VideoController` answers with a mode per adapter, and on a guest carrying an indirect display driver beside the synthetic one both adapters can report a mode that no display path is actually in -- so a gate asking for 2560x1440 at 144 Hz is told it has one while the virtual monitor runs 60 Hz and the primary display runs 1024x768. `EnumDisplayDevices` and `EnumDisplaySettings` read the display device database rather than the calling session's desktop, so they answer from session 0, and one attached path has to be in the requested mode with its own resolution and its own refresh rate.
 
 ## Running one campaign
 

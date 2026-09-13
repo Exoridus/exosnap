@@ -48,6 +48,124 @@ $script:GpuPartitionDefault = [ordered]@{
     OptimalPartitionCompute = 100000000
 }
 
+# The display-path measurement, as source, because it runs in two places that have
+# nothing else in common: inside the interactive agent's script, and inside the
+# scriptblock Get-ReleaseVmReadiness sends over PowerShell Direct. Neither can call
+# into this module, so what they share has to be text.
+#
+# EnumDisplayDevices and EnumDisplaySettings read the display device database rather
+# than the calling session's desktop, which is why they answer from session 0 -- the
+# case that ruled out the display APIs here before and left the measurement on
+# Win32_VideoController, which reports per adapter and cannot say which mode a
+# display path is actually in.
+$script:DisplayPathNative = @'
+[System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential,
+    CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+public struct DISPLAY_DEVICEW {
+    public int cb;
+    [System.Runtime.InteropServices.MarshalAs(
+        System.Runtime.InteropServices.UnmanagedType.ByValTStr, SizeConst = 32)] public string DeviceName;
+    [System.Runtime.InteropServices.MarshalAs(
+        System.Runtime.InteropServices.UnmanagedType.ByValTStr, SizeConst = 128)] public string DeviceString;
+    public int StateFlags;
+    [System.Runtime.InteropServices.MarshalAs(
+        System.Runtime.InteropServices.UnmanagedType.ByValTStr, SizeConst = 128)] public string DeviceID;
+    [System.Runtime.InteropServices.MarshalAs(
+        System.Runtime.InteropServices.UnmanagedType.ByValTStr, SizeConst = 128)] public string DeviceKey;
+}
+[System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential,
+    CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+public struct DEVMODEW {
+    [System.Runtime.InteropServices.MarshalAs(
+        System.Runtime.InteropServices.UnmanagedType.ByValTStr, SizeConst = 32)] public string dmDeviceName;
+    public ushort dmSpecVersion;
+    public ushort dmDriverVersion;
+    public ushort dmSize;
+    public ushort dmDriverExtra;
+    public uint dmFields;
+    public int dmPositionX;
+    public int dmPositionY;
+    public uint dmDisplayOrientation;
+    public uint dmDisplayFixedOutput;
+    public short dmColor;
+    public short dmDuplex;
+    public short dmYResolution;
+    public short dmTTOption;
+    public short dmCollate;
+    [System.Runtime.InteropServices.MarshalAs(
+        System.Runtime.InteropServices.UnmanagedType.ByValTStr, SizeConst = 32)] public string dmFormName;
+    public ushort dmLogPixels;
+    public uint dmBitsPerPel;
+    public uint dmPelsWidth;
+    public uint dmPelsHeight;
+    public uint dmDisplayFlags;
+    public uint dmDisplayFrequency;
+    public uint dmICMMethod;
+    public uint dmICMIntent;
+    public uint dmMediaType;
+    public uint dmDitherType;
+    public uint dmReserved1;
+    public uint dmReserved2;
+    public uint dmPanningWidth;
+    public uint dmPanningHeight;
+}
+[System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+public static extern bool EnumDisplayDevicesW(
+    string lpDevice, uint iDevNum, ref DISPLAY_DEVICEW lpDisplayDevice, uint dwFlags);
+[System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+public static extern bool EnumDisplaySettingsW(string lpszDeviceName, int iModeNum, ref DEVMODEW lpDevMode);
+'@
+
+# Written as a scriptblock literal so both callers can define it as $paths and run it
+# with & $paths. $Native is the type each caller declared the members above on.
+$script:DisplayPathScript = @'
+$paths = {
+    $displayDevice = $Native.GetNestedType('DISPLAY_DEVICEW')
+    $displayMode = $Native.GetNestedType('DEVMODEW')
+    $new = {
+        param($type)
+        $value = [Activator]::CreateInstance($type)
+        return $value
+    }
+    $found = @()
+    for ($index = 0; $index -lt 64; $index++) {
+        $adapter = & $new $displayDevice
+        $adapter.cb = [System.Runtime.InteropServices.Marshal]::SizeOf($adapter)
+        # [NullString]::Value, not $null: PowerShell marshals $null to a string
+        # parameter as an empty string, and EnumDisplayDevices("") enumerates nothing.
+        if (-not $Native::EnumDisplayDevicesW([NullString]::Value, $index, [ref] $adapter, 0)) { break }
+        # DISPLAY_DEVICE_ATTACHED_TO_DESKTOP. A path that shows nothing has no mode,
+        # and a requirement met by a detached path would be met by nothing visible.
+        if (($adapter.StateFlags -band 0x1) -eq 0) { continue }
+
+        $mode = & $new $displayMode
+        $mode.dmSize = [System.Runtime.InteropServices.Marshal]::SizeOf($mode)
+        # ENUM_CURRENT_SETTINGS: the mode this path is in now, not one it offers.
+        if (-not $Native::EnumDisplaySettingsW($adapter.DeviceName, -1, [ref] $mode)) { continue }
+
+        $monitor = & $new $displayDevice
+        $monitor.cb = [System.Runtime.InteropServices.Marshal]::SizeOf($monitor)
+        $monitorName = if ($Native::EnumDisplayDevicesW($adapter.DeviceName, 0, [ref] $monitor, 0)) {
+            $monitor.DeviceString
+        } else { $null }
+
+        $found += @{
+            Device    = $adapter.DeviceName
+            Adapter   = $adapter.DeviceString
+            Monitor   = $monitorName
+            Width     = [int] $mode.dmPelsWidth
+            Height    = [int] $mode.dmPelsHeight
+            RefreshHz = [int] $mode.dmDisplayFrequency
+            # DISPLAY_DEVICE_PRIMARY_DEVICE.
+            Primary   = (($adapter.StateFlags -band 0x4) -ne 0)
+        }
+    }
+    # Typed, not comma-wrapped: every caller reads this through @(), which would
+    # otherwise count the wrapper rather than the paths.
+    return [object[]] $found
+}
+'@
+
 # Well-known SID of the local "Hyper-V Administrators" group. Matched by SID rather
 # than by name because the name is localized and this machine is not en-US throughout.
 $script:HyperVAdministratorsSid = 'S-1-5-32-578'
@@ -88,6 +206,20 @@ function Get-ReleaseVmDefault {
         # are * ? and [ ]. A doubled backslash here would demand two of them in the
         # instance path and match no adapter that exists.
         HostGpuInstancePattern = 'PCI\VEN_10DE*'
+        # The root-enumerated device each virtual display profile binds to, which is
+        # how a guest can be asked which profile it actually runs rather than told.
+        # A profile is absent here until its device identity has been recorded the way
+        # every package in provision-manifest.psd1 is pinned; 'sudovda' is absent on
+        # purpose, because the image that would carry it has not been built and
+        # inventing an identity would let a run claim a qualification nobody measured.
+        DisplayProfileHardwareId = @{ mtt = 'Root\MttVDD' }
+        # Microsoft's PCI vendor id. A GPU-P guest binds to the paravirtual device,
+        # which reports this rather than the vendor whose silicon is being
+        # partitioned; the vendor's kernel-mode driver never leaves the host.
+        ParavirtualVendorId = '1414'
+        # Where the host's driver package lands inside the guest. Copied rather than
+        # installed, so the guest can be asked which package it actually holds.
+        GuestDriverRepository = 'C:\Windows\System32\HostDriverStore\FileRepository'
         GpuPartition     = $script:GpuPartitionDefault
     }
 }
@@ -1042,13 +1174,18 @@ function Test-ReleaseVmReadiness {
 
     if ($Requirement.Display) {
         $wanted = "$($Requirement.Display.Width)x$($Requirement.Display.Height)@$($Requirement.Display.RefreshHz)Hz"
-        if (-not (& $measured 'displays')) {
-            $unmet += "the attached displays were not measured, so $wanted is unproven"
+        # One attached display path has to be in this mode, and the resolution and the
+        # refresh rate have to be that one path's. Asked per adapter, as it was, a
+        # guest whose synthetic display runs 1024x768 and whose virtual monitor runs
+        # 60 Hz answers yes to 2560x1440@144, because two adapters each report a mode
+        # that no display path is actually in.
+        if (-not (& $measured 'displayPaths')) {
+            $unmet += "the attached display paths were not measured, so $wanted is unproven"
         }
         else {
-            $displays = @($Receipt['displays'])
+            $displays = @($Receipt['displayPaths'])
             if ($displays.Count -eq 0) {
-                $unmet += "no display is attached, so $wanted cannot be shown"
+                $unmet += "no display path is attached, so $wanted cannot be shown"
             }
             else {
                 $match = @($displays | Where-Object {
@@ -1057,8 +1194,10 @@ function Test-ReleaseVmReadiness {
                         [int]$_.RefreshHz -eq [int]$Requirement.Display.RefreshHz
                     })
                 if ($match.Count -eq 0) {
-                    $found = ($displays | ForEach-Object { "$($_.Width)x$($_.Height)@$($_.RefreshHz)Hz" }) -join ', '
-                    $unmet += "no attached display is $wanted; the guest has $found"
+                    $found = ($displays | ForEach-Object {
+                            "$($_.Device) ($($_.Adapter)) $($_.Width)x$($_.Height)@$($_.RefreshHz)Hz"
+                        }) -join '; '
+                    $unmet += "no attached display path is $wanted; the guest has $found"
                 }
             }
         }
@@ -1069,7 +1208,11 @@ function Test-ReleaseVmReadiness {
             $unmet += 'the guest display adapter was not measured, so the GPU binding is unproven'
         }
         else {
-            $binding = Test-ReleaseVmGpuBinding -HostGpu $Requirement.GpuBoundTo -GuestGpu $Receipt['gpu']
+            $store = if ($Receipt.Contains('hostDriverStore') -and $null -ne $Receipt['hostDriverStore']) {
+                $Receipt['hostDriverStore']
+            } else { @{} }
+            $binding = Test-ReleaseVmGpuBinding -HostGpu $Requirement.GpuBoundTo -GuestGpu $Receipt['gpu'] `
+                -GuestDriverStore $store
             if (-not $binding.Bound) { $unmet += $binding.Unmet }
         }
     }
@@ -1102,6 +1245,7 @@ function New-ReleaseVmGuestAgentScript {
         [Parameter(Mandatory)] [string] $ReceiptPath,
         [Parameter(Mandatory)] [string] $ResultPath
     )
+    $defaults = Get-ReleaseVmDefault
     return @"
 `$ErrorActionPreference = 'Stop'
 
@@ -1111,6 +1255,7 @@ function New-ReleaseVmGuestAgentScript {
 `$receipt['agentUser'] = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 if (-not ('ExoSnap.Agent.Native' -as [type])) {
     Add-Type -Namespace 'ExoSnap.Agent' -Name 'Native' -MemberDefinition @'
+$($script:DisplayPathNative)
 [System.Runtime.InteropServices.DllImport("kernel32.dll")]
 public static extern uint WTSGetActiveConsoleSessionId();
 [System.Runtime.InteropServices.DllImport("user32.dll")]
@@ -1136,13 +1281,26 @@ function Get-UserObjectName([System.IntPtr] `$handle) {
 `$receipt['agentWindowStation'] = Get-UserObjectName ([ExoSnap.Agent.Native]::GetProcessWindowStation())
 `$receipt['agentDesktop'] = Get-UserObjectName (
     [ExoSnap.Agent.Native]::GetThreadDesktop([ExoSnap.Agent.Native]::GetCurrentThreadId()))
-`$receipt['displays'] = @(
-    Get-CimInstance -ClassName Win32_VideoController -ErrorAction SilentlyContinue |
-        Where-Object { `$_.CurrentHorizontalResolution } |
-        ForEach-Object {
-            @{ Name = `$_.Name; Width = [int]`$_.CurrentHorizontalResolution
-               Height = [int]`$_.CurrentVerticalResolution; RefreshHz = [int]`$_.CurrentRefreshRate }
-        })
+
+# Which virtual display driver this image actually runs, by the device it binds to.
+`$indirect = @(Get-PnpDevice -Class 'Display' -ErrorAction SilentlyContinue |
+        Where-Object { `$_.InstanceId -like 'ROOT\DISPLAY\*' } | Select-Object -First 1)
+if (`$indirect.Count -gt 0) {
+    `$ids = @(Get-PnpDeviceProperty -InstanceId `$indirect[0].InstanceId ``
+            -KeyName 'DEVPKEY_Device_HardwareIds' -ErrorAction SilentlyContinue)
+    `$receipt['displayDriver'] = @{
+        InstanceId  = `$indirect[0].InstanceId
+        Name        = `$indirect[0].FriendlyName
+        HardwareIds = if (`$ids.Count -gt 0 -and `$null -ne `$ids[0].Data) { @(`$ids[0].Data) } else { @() }
+    }
+}
+
+# Per display path, not per adapter: Win32_VideoController reports a mode per adapter
+# and on a guest with an indirect display driver beside the synthetic one both can
+# report a mode no display path is in.
+`$Native = [ExoSnap.Agent.Native]
+$($script:DisplayPathScript)
+`$receipt['displayPaths'] = @(& `$paths)
 `$adapter = @(Get-CimInstance -ClassName Win32_VideoController -ErrorAction SilentlyContinue |
         Where-Object { `$_.PNPDeviceID -like 'PCI\*' } | Select-Object -First 1)
 if (`$adapter.Count -gt 0) {
@@ -1153,6 +1311,24 @@ if (`$adapter.Count -gt 0) {
         `$gpu['DeviceId'] = `$ids.Groups['device'].Value
     }
     `$receipt['gpu'] = `$gpu
+}
+
+# The host driver package as the guest holds it. Copied in rather than installed, so
+# it is not in the driver database and pnputil does not list it; the directory and
+# the DriverVer its INF declares are what both sides can be asked for.
+`$repository = '$($defaults.GuestDriverRepository)'
+`$package = @(Get-ChildItem -LiteralPath `$repository -Directory -ErrorAction SilentlyContinue |
+        Select-Object -First 1)
+if (`$package.Count -gt 0) {
+    `$store = @{ Package = `$package[0].Name }
+    `$inf = @(Get-ChildItem -LiteralPath `$package[0].FullName -Filter '*.inf' -File -ErrorAction SilentlyContinue |
+            Select-Object -First 1)
+    if (`$inf.Count -gt 0) {
+        `$declared = [regex]::Match((Get-Content -LiteralPath `$inf[0].FullName -Raw),
+            '(?im)^\s*DriverVer\s*=\s*[^,]+,\s*([0-9][0-9.]*)\s*`$')
+        if (`$declared.Success) { `$store['DriverVersion'] = `$declared.Groups[1].Value }
+    }
+    `$receipt['hostDriverStore'] = `$store
 }
 `$receipt | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath '$ReceiptPath' -Encoding UTF8
 
@@ -1336,12 +1512,13 @@ function Get-ReleaseVmReadiness {
         [Parameter(Mandatory)] [System.Management.Automation.PSCredential] $Credential
     )
     $measure = {
+        param($driverRepository, $nativeMembers, $pathScript)
         $receipt = @{ osReachable = $true }
         $receipt['agentSessionId'] = (Get-Process -Id $PID).SessionId
         $receipt['agentUser'] = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 
         if (-not ('ExoSnap.Readiness.Native' -as [type])) {
-            Add-Type -Namespace 'ExoSnap.Readiness' -Name 'Native' -MemberDefinition @'
+            Add-Type -Namespace 'ExoSnap.Readiness' -Name 'Native' -MemberDefinition ($nativeMembers + @'
 [System.Runtime.InteropServices.DllImport("kernel32.dll")]
 public static extern uint WTSGetActiveConsoleSessionId();
 [System.Runtime.InteropServices.DllImport("user32.dll")]
@@ -1353,8 +1530,10 @@ public static extern uint GetCurrentThreadId();
 [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
 public static extern bool GetUserObjectInformationW(
     System.IntPtr hObj, int nIndex, System.Text.StringBuilder pvInfo, uint nLength, out uint lpnLengthNeeded);
-'@
+'@)
         }
+        $Native = [ExoSnap.Readiness.Native]
+        . ([scriptblock]::Create($pathScript))
         $name = {
             param($handle)
             $buffer = New-Object System.Text.StringBuilder 256
@@ -1386,24 +1565,53 @@ public static extern bool GetUserObjectInformationW(
             $receipt['gpu'] = $gpu
         }
 
-        # WMI rather than the display APIs: this may be running in a session that has
-        # no desktop at all, which is exactly the case being reported, and the display
-        # APIs answer that with a failure rather than an empty list.
-        $receipt['displays'] = @(
-            Get-CimInstance -ClassName Win32_VideoController -ErrorAction SilentlyContinue |
-                Where-Object { $_.CurrentHorizontalResolution } |
-                ForEach-Object {
-                    @{
-                        Name      = $_.Name
-                        Width     = [int]$_.CurrentHorizontalResolution
-                        Height    = [int]$_.CurrentVerticalResolution
-                        RefreshHz = [int]$_.CurrentRefreshRate
-                    }
-                })
+        # The host driver package as the guest holds it: copied in rather than
+        # installed, so it is not in the driver database and the directory plus the
+        # DriverVer its INF declares are what both sides can be asked for. The
+        # repository path is passed in because this block runs inside the guest, where
+        # nothing of this module exists.
+        $package = @(Get-ChildItem -LiteralPath $driverRepository -Directory -ErrorAction SilentlyContinue |
+                Select-Object -First 1)
+        if ($package.Count -gt 0) {
+            $store = @{ Package = $package[0].Name }
+            $inf = @(Get-ChildItem -LiteralPath $package[0].FullName -Filter '*.inf' -File -ErrorAction SilentlyContinue |
+                    Select-Object -First 1)
+            if ($inf.Count -gt 0) {
+                $declared = [regex]::Match((Get-Content -LiteralPath $inf[0].FullName -Raw),
+                    '(?im)^\s*DriverVer\s*=\s*[^,]+,\s*([0-9][0-9.]*)\s*$')
+                if ($declared.Success) { $store['DriverVersion'] = $declared.Groups[1].Value }
+            }
+            $receipt['hostDriverStore'] = $store
+        }
+
+        # Which virtual display driver this image actually runs, by the device it
+        # binds to. The profile a campaign was qualified on is a claim in the
+        # manifest; this is the measurement it has to agree with.
+        $indirect = @(Get-PnpDevice -Class 'Display' -ErrorAction SilentlyContinue |
+                Where-Object { $_.InstanceId -like 'ROOT\DISPLAY\*' } | Select-Object -First 1)
+        if ($indirect.Count -gt 0) {
+            $ids = @(Get-PnpDeviceProperty -InstanceId $indirect[0].InstanceId `
+                    -KeyName 'DEVPKEY_Device_HardwareIds' -ErrorAction SilentlyContinue)
+            $receipt['displayDriver'] = @{
+                InstanceId  = $indirect[0].InstanceId
+                Name        = $indirect[0].FriendlyName
+                HardwareIds = if ($ids.Count -gt 0 -and $null -ne $ids[0].Data) { @($ids[0].Data) } else { @() }
+            }
+        }
+
+        # Per display path, not per adapter. Win32_VideoController answers with a mode
+        # per adapter, and on a guest with an indirect display driver beside the
+        # synthetic one both adapters can report a mode no display path is actually
+        # in -- so a gate asking for a refresh rate is told it has one. These two
+        # functions read the display device database and need no desktop, which is
+        # what ruled out the display APIs here before.
+        $receipt['displayPaths'] = @(& $paths)
         return $receipt
     }
     try {
-        return Invoke-Command -VMName $VMName -Credential $Credential -ScriptBlock $measure -ErrorAction Stop
+        return Invoke-Command -VMName $VMName -Credential $Credential -ScriptBlock $measure -ArgumentList `
+            (Get-ReleaseVmDefault).GuestDriverRepository, $script:DisplayPathNative, $script:DisplayPathScript `
+            -ErrorAction Stop
     }
     catch {
         return @{ osReachable = $false; detail = $_.Exception.Message }
@@ -1654,40 +1862,168 @@ function Compare-ReleaseVmGpuPartition {
     return @{ Matches = ($differences.Count -eq 0); Differences = $differences }
 }
 
-function Test-ReleaseVmGpuBinding {
+function Test-ReleaseVmDisplayProfile {
     <#
     .SYNOPSIS
-        Whether the adapter the guest sees is the host GPU this run partitioned.
+        Whether a run may claim the virtual display profile it was qualified on.
     .DESCRIPTION
-        Compared on what a GPU partition preserves and nothing else: the PCI vendor
-        and device ids, and the driver version, which in the guest comes from the host
-        driver package staged into it. A mismatched driver version is the classic
-        GPU-P failure and the reason the package selection above matches on the active
-        driver rather than on a timestamp.
+        Three answers, not two, because the interesting case is neither. A scenario
+        qualified on one virtual display driver and run on another is not a failing
+        scenario -- it is a scenario nobody ran, and reporting it as a failure would
+        attribute an image difference to the product.
 
-        The adapter LUID is deliberately not compared. It identifies an adapter within
-        one operating system, the guest assigns its own, and requiring them to agree
-        would fail every correct run. An unmeasured fact is unbound rather than
-        assumed: a guest that reported no adapter proves nothing.
+          qualified      the guest runs the device the qualified profile names.
+          not-qualified  it runs a different one, and both are named.
+          unverifiable   the profile has no recorded device identity, or the guest's
+                         display driver was not measured. Nothing can confirm it, so
+                         nothing claims it.
+
+        A profile with no pinned device identity is the state this recipe is in for
+        the profile the capture work was qualified on: reconciling it is an image
+        rebuild with the package pinned, not a comparison that can be made here.
+    .OUTPUTS
+        A hashtable with Qualified, Verdict and Detail.
+    #>
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)] [AllowEmptyString()] [AllowNull()] [string] $Required,
+        [Parameter(Mandatory)] [AllowNull()] [System.Collections.IDictionary] $Measured,
+        [System.Collections.IDictionary] $KnownProfile
+    )
+    if (-not $KnownProfile) { $KnownProfile = (Get-ReleaseVmDefault).DisplayProfileHardwareId }
+
+    if ([string]::IsNullOrWhiteSpace($Required)) {
+        return @{ Qualified = $false; Verdict = 'unverifiable'
+                  Detail = 'no qualified display profile is declared, so no run can be held to one' }
+    }
+    if (-not $KnownProfile.Contains($Required)) {
+        return @{ Qualified = $false; Verdict = 'unverifiable'
+                  Detail = ("the qualified display profile '$Required' has no recorded device identity in this " +
+                      'recipe; pin it the way every provisioned package is pinned before a run may claim it') }
+    }
+
+    $hardwareIds = @()
+    if ($null -ne $Measured -and $Measured.Contains('HardwareIds') -and $null -ne $Measured['HardwareIds']) {
+        $hardwareIds = @($Measured['HardwareIds'])
+    }
+    if ($hardwareIds.Count -eq 0) {
+        return @{ Qualified = $false; Verdict = 'unverifiable'
+                  Detail = "the guest's virtual display driver was not measured, so '$Required' is unproven" }
+    }
+
+    $expected = "$($KnownProfile[$Required])"
+    if ($hardwareIds | Where-Object { "$_" -eq $expected }) {
+        return @{ Qualified = $true; Verdict = 'qualified'; Detail = "the guest runs $expected, the '$Required' profile" }
+    }
+    return @{ Qualified = $false; Verdict = 'not-qualified'
+              Detail = ("the guest runs $($hardwareIds -join ', '), not $expected, so it is not the " +
+                  "'$Required' profile this scenario was qualified on") }
+}
+
+function Test-ReleaseVmPartitionProvenance {
+    <#
+    .SYNOPSIS
+        Whether the partition this run created came from the host GPU it measured.
+    .DESCRIPTION
+        Entirely a host-side question, and the only one of the GPU facts that can be
+        answered by comparing two PCI identities: both sides are read in the same
+        operating system, off the same device. Hyper-V reports the partition adapter's
+        InstancePath as the physical adapter's PnP path with the separators rewritten
+        and an interface GUID appended, so the host path is normalised to that shape
+        and has to appear in it.
+
+        This is the assertion that says which physical GPU a campaign ran on. It says
+        nothing about the guest, which never sees these ids.
     .OUTPUTS
         A hashtable with Bound and Unmet.
     #>
     [OutputType([hashtable])]
     param(
         [Parameter(Mandatory)] [System.Collections.IDictionary] $HostGpu,
-        [Parameter(Mandatory)] [System.Collections.IDictionary] $GuestGpu
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Partition
     )
     $unmet = @()
-    foreach ($field in @('VendorId', 'DeviceId', 'DriverVersion')) {
-        $name = $field.Substring(0, 1).ToLowerInvariant() + $field.Substring(1)
-        $hasHost = $HostGpu.Contains($field) -and $null -ne $HostGpu[$field]
-        $hasGuest = $GuestGpu.Contains($field) -and $null -ne $GuestGpu[$field]
-        if (-not $hasHost) { $unmet += "the host $name was not measured"; continue }
-        if (-not $hasGuest) { $unmet += "the guest $name was not measured"; continue }
-        if ("$($HostGpu[$field])" -ne "$($GuestGpu[$field])") {
-            $unmet += "$name`: host $($HostGpu[$field]), guest $($GuestGpu[$field])"
+    $hasHost = $HostGpu.Contains('InstancePath') -and -not [string]::IsNullOrWhiteSpace("$($HostGpu['InstancePath'])")
+    $hasPartition = $Partition.Contains('InstancePath') -and -not [string]::IsNullOrWhiteSpace("$($Partition['InstancePath'])")
+    if (-not $hasHost) { $unmet += 'the host adapter instance path was not measured' }
+    if (-not $hasPartition) { $unmet += 'the partition adapter instance path was not measured' }
+    if ($unmet.Count -eq 0) {
+        # PCI\VEN_10DE&DEV_2C05&SUBSYS_...\9B3B... is reported on the partition as
+        # \\?\PCI#VEN_10DE&DEV_2C05&SUBSYS_...#9B3B...#{guid}\GPUPARAV.
+        $normalised = "$($HostGpu['InstancePath'])".Replace('\', '#')
+        if ("$($Partition['InstancePath'])".IndexOf($normalised, [StringComparison]::OrdinalIgnoreCase) -lt 0) {
+            $unmet += ("the partition is on $($Partition['InstancePath']), which does not name the measured " +
+                "host adapter $($HostGpu['InstancePath'])")
         }
     }
+    return @{ Bound = ($unmet.Count -eq 0); Unmet = $unmet }
+}
+
+function Test-ReleaseVmGpuBinding {
+    <#
+    .SYNOPSIS
+        Whether the guest is on this run's GPU partition, running this run's driver.
+    .DESCRIPTION
+        Deliberately NOT a comparison of PCI ids across the two operating systems.
+        What a GPU-P guest binds to is the paravirtual device: it reports Microsoft's
+        vendor id and a Microsoft inbox driver version, because the vendor's
+        kernel-mode driver stays on the host. A rule that required the host's vendor
+        and device ids to appear in the guest would refuse every correct campaign and
+        accept none.
+
+        Two independent things are asked instead:
+
+          the adapter    the guest is on a paravirtual device that presents the host
+                         adapter. The GPU-P device carries the host GPU's friendly
+                         name; the Basic Render Driver, which is the same vendor and
+                         the fallback this is meant to catch, does not.
+          the driver     the user-mode driver package staged into the guest is the
+                         package the host selected, at the version the host adapter is
+                         running. This is the pair the classic GPU-P failure shows up
+                         in, and the bridge between the two operating systems that
+                         Windows does expose identically on both sides.
+
+        An unmeasured fact is unbound rather than assumed: a guest that reported no
+        adapter, or no staged package, proves nothing.
+    .OUTPUTS
+        A hashtable with Bound and Unmet.
+    #>
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $HostGpu,
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $GuestGpu,
+        [System.Collections.IDictionary] $GuestDriverStore
+    )
+    $unmet = @()
+    $defaults = Get-ReleaseVmDefault
+
+    $guestVendor = if ($GuestGpu.Contains('VendorId')) { "$($GuestGpu['VendorId'])" } else { $null }
+    if ([string]::IsNullOrWhiteSpace($guestVendor)) {
+        $unmet += 'the guest vendorId was not measured'
+    }
+    elseif ($guestVendor.TrimStart('0').PadLeft(1, '0') -ne $defaults.ParavirtualVendorId.TrimStart('0')) {
+        $unmet += ("the guest adapter is vendor $guestVendor, not the paravirtual " +
+            "$($defaults.ParavirtualVendorId): this guest is not on a GPU partition")
+    }
+
+    $hostName = if ($HostGpu.Contains('Name')) { "$($HostGpu['Name'])" } else { $null }
+    $guestName = if ($GuestGpu.Contains('Name')) { "$($GuestGpu['Name'])" } else { $null }
+    if ([string]::IsNullOrWhiteSpace($hostName)) { $unmet += 'the host adapter name was not measured' }
+    elseif ([string]::IsNullOrWhiteSpace($guestName)) { $unmet += 'the guest adapter name was not measured' }
+    elseif ($hostName -ne $guestName) {
+        $unmet += "the guest adapter presents itself as '$guestName', not as the partitioned '$hostName'"
+    }
+
+    $store = if ($null -ne $GuestDriverStore) { $GuestDriverStore } else { @{} }
+    foreach ($field in @('Package', 'DriverVersion')) {
+        $name = $field.Substring(0, 1).ToLowerInvariant() + $field.Substring(1)
+        $expected = if ($HostGpu.Contains($field)) { "$($HostGpu[$field])" } else { $null }
+        $actual = if ($store.Contains($field)) { "$($store[$field])" } else { $null }
+        if ([string]::IsNullOrWhiteSpace($expected)) { $unmet += "the host driver $name was not measured"; continue }
+        if ([string]::IsNullOrWhiteSpace($actual)) { $unmet += "the staged driver $name was not measured in the guest"; continue }
+        if ($expected -ne $actual) { $unmet += "staged driver $name`: host $expected, guest $actual" }
+    }
+
     return @{ Bound = ($unmet.Count -eq 0); Unmet = $unmet }
 }
 
@@ -1732,6 +2068,18 @@ function Get-ReleaseVmHostGpu {
 
     $luid = @(Get-PnpDeviceProperty -InstanceId $adapter.PNPDeviceID -KeyName 'DEVPKEY_Device_LUID' -ErrorAction SilentlyContinue)
     if ($luid.Count -gt 0 -and $null -ne $luid[0].Data) { $identity['AdapterLuid'] = "$($luid[0].Data)" }
+
+    # The DriverStore package the running driver came from, by name. This is the half
+    # of the GPU binding the guest can be held to: the package is copied into the
+    # guest verbatim, so both operating systems can be asked the same question.
+    #
+    # Only with a version in hand. Get-ReleaseVmHostDriverPackage falls back to
+    # measuring the adapter when it is given none, which is this function, and an
+    # adapter that reported no driver version would recurse instead of answering.
+    if (-not [string]::IsNullOrWhiteSpace("$($identity['DriverVersion'])")) {
+        $package = Get-ReleaseVmHostDriverPackage -ActiveDriverVersion "$($identity['DriverVersion'])"
+        if ($package) { $identity['Package'] = Split-Path -Leaf $package }
+    }
 
     return $identity
 }
@@ -2200,6 +2548,8 @@ Export-ModuleMember -Function @(
     'Select-ReleaseVmDriverPackage'
     'Compare-ReleaseVmGpuPartition'
     'Test-ReleaseVmGpuBinding'
+    'Test-ReleaseVmPartitionProvenance'
+    'Test-ReleaseVmDisplayProfile'
     'Get-ReleaseVmHostGpu'
     'Assert-ReleaseVmGpuPartition'
     'New-ReleaseVmGuestAgentScript'

@@ -99,6 +99,11 @@ function Get-ExoSnapResidue {
         All of it at once. Each of these is cleared by hand or by starting from a
         fresh image, so learning about them one campaign at a time is one machine
         rebuild per residue.
+
+        Machine-wide state counts, not only the current user's. A first start on a
+        machine that already holds ExoSnap's ProgramData is not the first start this
+        gate claims to measure, and looking only at the per-user locations reports
+        such a machine as clean.
     #>
     [OutputType([string[]])]
     param()
@@ -133,11 +138,17 @@ function Get-ExoSnapResidue {
         $found += 'a per-user registry key (HKCU:\SOFTWARE\Codexo\ExoSnap)'
     }
 
-    # Returned as an array even when it holds one item. PowerShell unrolls a
-    # single-element array on return, and the caller asks the result for its Count --
-    # which under StrictMode is an error on the bare string, so a machine with exactly
-    # one leftover would end the run before it could be reported.
-    return , [string[]] $found
+    $machineState = Join-Path $env:ProgramData 'ExoSnap'
+    if (Test-Path -LiteralPath $machineState) {
+        $found += "machine-wide state from an earlier install ($machineState)"
+    }
+
+    # Typed rather than wrapped with a comma. Every caller reads this through @(),
+    # which normalises the single-element return PowerShell would otherwise unroll to
+    # a bare string; a comma here would add a second array around that, and @() would
+    # then count the wrapper instead of the leftovers -- one, on every machine,
+    # whether it holds none or three.
+    return [string[]] $found
 }
 
 function Invoke-Msi {

@@ -1,4 +1,4 @@
-﻿#Requires -Version 7.0
+#Requires -Version 7.0
 <#
 .SYNOPSIS
     Tests for the Hyper-V release-verification guest recipe under tools/vm.
@@ -561,7 +561,9 @@ Test-Case 'the generated agent script is valid PowerShell' {
     # It is assembled from a here-string with escaped interpolation and a nested
     # here-string of C# for the user-object calls. A syntax error in it would first
     # show up as a guest that never handshakes, minutes into a campaign.
-    $script = New-ReleaseVmGuestAgentScript -ReceiptPath 'C:eceipt.json' -ResultPath 'C:esult.json'
+    $script = New-ReleaseVmGuestAgentScript -ReceiptPath 'C:
+eceipt.json' -ResultPath 'C:
+esult.json'
     $errors = $null
     [System.Management.Automation.Language.Parser]::ParseInput($script, [ref]$null, [ref]$errors) | Out-Null
 
@@ -953,53 +955,160 @@ Test-Case 'a partition field the adapter did not report is not read as agreement
     Assert-Match 'not reported' ($comparison.Differences -join '; ') 'missing reads differently from different'
 }
 
-Test-Case 'the guest GPU is bound to the host GPU by what GPU-P actually preserves' {
-    $hostGpu = @{ VendorId = 0x10DE; DeviceId = 0x2C02; DriverVersion = '32.0.15.8098'; AdapterLuid = '0x0000ABCD' }
-    $guest = @{ VendorId = 0x10DE; DeviceId = 0x2C02; DriverVersion = '32.0.15.8098'; AdapterLuid = '0x00001234' }
-
-    $binding = Test-ReleaseVmGpuBinding -HostGpu $hostGpu -GuestGpu $guest
-    Assert-True $binding.Bound 'same adapter, same driver: this is the partitioned GPU'
-    Assert-Equal 0 $binding.Unmet.Count 'a different LUID is expected and is not a mismatch'
+$script:HostGpuFixture = @{
+    Name          = 'NVIDIA GeForce RTX 5070 Ti'
+    InstancePath  = 'PCI\VEN_10DE&DEV_2C05&SUBSYS_89F41043&REV_A1\9B3B2CB8542DB04800'
+    VendorId      = '10DE'
+    DeviceId      = '2C05'
+    DriverVersion = '32.0.16.1656'
+    Package       = 'nv_dispi.inf_amd64_a3944b54ff18b284'
 }
 
-Test-Case 'a guest on a different adapter is not bound to the host GPU' {
-    $hostGpu = @{ VendorId = 0x10DE; DeviceId = 0x2C02; DriverVersion = '32.0.15.8098' }
-    $guest = @{ VendorId = 0x1414; DeviceId = 0x008C; DriverVersion = '10.0.26100.1' }
+# What a correct GPU-P guest reports: Microsoft's vendor, the host adapter's friendly
+# name, a Microsoft inbox driver version, and the host's package staged as files.
+$script:GuestGpuFixture = @{ Name = 'NVIDIA GeForce RTX 5070 Ti'; VendorId = '1414'
+                             DeviceId = '008E'; DriverVersion = '10.0.26100.1150' }
+$script:GuestStoreFixture = @{ Package = 'nv_dispi.inf_amd64_a3944b54ff18b284'
+                               DriverVersion = '32.0.16.1656' }
 
-    $binding = Test-ReleaseVmGpuBinding -HostGpu $hostGpu -GuestGpu $guest
-    Assert-True (-not $binding.Bound) 'the Microsoft Basic Render Driver is not an RTX partition'
-    Assert-Match 'deviceId' ($binding.Unmet -join '; ') 'the field that differs has to be named'
+Test-Case 'a correct GPU-P guest is bound, though it shares no PCI id with the host' {
+    # The rule this replaces compared host and guest vendor and device ids, which a
+    # partitioned guest never reports: it binds to the paravirtual device, and the
+    # vendor's kernel-mode driver stays on the host. That rule refused every correct
+    # campaign and accepted none.
+    $binding = Test-ReleaseVmGpuBinding -HostGpu $script:HostGpuFixture -GuestGpu $script:GuestGpuFixture `
+        -GuestDriverStore $script:GuestStoreFixture
+
+    Assert-True $binding.Bound "a correct partition has to bind: $($binding.Unmet -join '; ')"
+    Assert-True ($script:HostGpuFixture.VendorId -ne $script:GuestGpuFixture.VendorId) `
+        'the fixture only proves something while the two vendor ids genuinely differ'
 }
 
-Test-Case 'a guest driver that is not the staged host driver is not bound' {
-    # The failure the DriverStore selection above prevents, stated from the other end:
-    # the adapter is right and the user-mode driver is from a different package.
-    $hostGpu = @{ VendorId = 0x10DE; DeviceId = 0x2C02; DriverVersion = '32.0.15.8098' }
-    $guest = @{ VendorId = 0x10DE; DeviceId = 0x2C02; DriverVersion = '31.0.15.1234' }
+Test-Case 'a guest that fell back to the Basic Render Driver is not bound' {
+    # Same vendor as the partition device, so the vendor id alone cannot separate
+    # them. What separates them is the name: the GPU-P device presents the host
+    # adapter, the software fallback presents itself.
+    $guest = @{ Name = 'Microsoft Basic Render Driver'; VendorId = '1414'; DeviceId = '008C' }
+    $binding = Test-ReleaseVmGpuBinding -HostGpu $script:HostGpuFixture -GuestGpu $guest `
+        -GuestDriverStore $script:GuestStoreFixture
 
-    $binding = Test-ReleaseVmGpuBinding -HostGpu $hostGpu -GuestGpu $guest
+    Assert-True (-not $binding.Bound) 'the Basic Render Driver encodes nothing'
+    Assert-Match 'presents itself as' ($binding.Unmet -join '; ') 'the adapter that answered has to be named'
+}
+
+Test-Case 'a guest on no partition at all is not bound' {
+    $guest = @{ Name = 'NVIDIA GeForce RTX 5070 Ti'; VendorId = '10DE'; DeviceId = '2C05' }
+    $binding = Test-ReleaseVmGpuBinding -HostGpu $script:HostGpuFixture -GuestGpu $guest `
+        -GuestDriverStore $script:GuestStoreFixture
+
+    Assert-True (-not $binding.Bound) 'a guest reporting the physical vendor is not a partitioned guest'
+    Assert-Match 'not on a GPU partition' ($binding.Unmet -join '; ') 'what is wrong has to be named'
+}
+
+Test-Case 'a staged driver that is not the host driver is not bound' {
+    # The classic GPU-P failure, and the one thing both operating systems can be
+    # asked identically: the guest holds a package from a different driver than the
+    # one the host adapter is running.
+    $store = @{ Package = 'nv_dispi.inf_amd64_0000000000000000'; DriverVersion = '31.0.15.1234' }
+    $binding = Test-ReleaseVmGpuBinding -HostGpu $script:HostGpuFixture -GuestGpu $script:GuestGpuFixture `
+        -GuestDriverStore $store
+
     Assert-True (-not $binding.Bound) 'a mismatched user-mode driver is the classic GPU-P failure'
-    Assert-Match 'driverVersion' ($binding.Unmet -join '; ') 'the field that differs has to be named'
+    Assert-Match 'staged driver package' ($binding.Unmet -join '; ') 'the package that differs has to be named'
+    Assert-Match 'staged driver driverVersion' ($binding.Unmet -join '; ') 'the version that differs has to be named'
+}
+
+Test-Case 'a guest that staged no driver package is unbound rather than assumed' {
+    $binding = Test-ReleaseVmGpuBinding -HostGpu $script:HostGpuFixture -GuestGpu $script:GuestGpuFixture `
+        -GuestDriverStore @{}
+
+    Assert-True (-not $binding.Bound) 'an unmeasured package proves nothing'
+    Assert-Match 'was not measured in the guest' ($binding.Unmet -join '; ') 'absence is not agreement'
 }
 
 Test-Case 'a guest that reported no adapter is unbound rather than assumed' {
-    # Every host field is present, so only the guest side can produce the refusal.
-    $hostGpu = @{ VendorId = '10DE'; DeviceId = '2C02'; DriverVersion = '32.0.15.8098' }
-    $binding = Test-ReleaseVmGpuBinding -HostGpu $hostGpu -GuestGpu @{}
+    $binding = Test-ReleaseVmGpuBinding -HostGpu $script:HostGpuFixture -GuestGpu @{} `
+        -GuestDriverStore $script:GuestStoreFixture
 
     Assert-True (-not $binding.Bound) 'a guest that reported no adapter proves nothing'
-    Assert-Equal 3 $binding.Unmet.Count 'each unmeasured field is its own unmet item'
     Assert-Match 'the guest vendorId was not measured' ($binding.Unmet -join '; ') 'absence is not agreement'
 }
 
 Test-Case 'a host fact nobody measured leaves the binding unproven too' {
-    # The other direction: a run that could not read its own adapter cannot claim the
-    # guest is on it.
-    $binding = Test-ReleaseVmGpuBinding -HostGpu @{ VendorId = '10DE'; DeviceId = '2C02' } `
-        -GuestGpu @{ VendorId = '10DE'; DeviceId = '2C02'; DriverVersion = '32.0.15.8098' }
+    # The other direction: a run that could not read its own driver package cannot
+    # claim the guest holds it.
+    $hostGpu = @{ Name = 'NVIDIA GeForce RTX 5070 Ti'; VendorId = '10DE' }
+    $binding = Test-ReleaseVmGpuBinding -HostGpu $hostGpu -GuestGpu $script:GuestGpuFixture `
+        -GuestDriverStore $script:GuestStoreFixture
 
-    Assert-True (-not $binding.Bound) 'an unmeasured host driver version binds nothing'
-    Assert-Match 'the host driverVersion was not measured' ($binding.Unmet -join '; ') 'the side that is missing has to be named'
+    Assert-True (-not $binding.Bound) 'an unmeasured host package binds nothing'
+    Assert-Match 'the host driver package was not measured' ($binding.Unmet -join '; ') `
+        'the side that is missing has to be named'
+}
+
+Test-Case 'the profile a scenario was qualified on is unverifiable until its device is pinned' {
+    # The state this recipe is actually in: the manifest declares sudovda as the
+    # qualified profile, and no image carrying it has been built, so nothing in the
+    # recipe can say what device that profile is. Unverifiable is the honest answer;
+    # inventing an identity would let a run claim a qualification nobody measured.
+    $measured = @{ InstanceId = 'ROOT\DISPLAY\0003'; HardwareIds = @('Root\MttVDD') }
+    $verdict = Test-ReleaseVmDisplayProfile -Required 'sudovda' -Measured $measured
+
+    Assert-True (-not $verdict.Qualified) 'an unpinned profile cannot be claimed'
+    Assert-Equal 'unverifiable' $verdict.Verdict 'unrunnable is not the same as failing'
+    Assert-Match 'no recorded device identity' $verdict.Detail 'what is missing has to be named'
+}
+
+Test-Case 'a guest running the profile it was qualified on is qualified' {
+    $measured = @{ InstanceId = 'ROOT\DISPLAY\0003'; HardwareIds = @('Root\MttVDD') }
+    $verdict = Test-ReleaseVmDisplayProfile -Required 'mtt' -Measured $measured
+
+    Assert-True $verdict.Qualified "the measured device is the profile's: $($verdict.Detail)"
+    Assert-Equal 'qualified' $verdict.Verdict 'a measured agreement is a qualification'
+}
+
+Test-Case 'a guest running a different virtual display driver is named, not failed' {
+    $measured = @{ InstanceId = 'ROOT\DISPLAY\0001'; HardwareIds = @('Root\SomeOtherVDD') }
+    $verdict = Test-ReleaseVmDisplayProfile -Required 'mtt' -Measured $measured `
+        -KnownProfile @{ mtt = 'Root\MttVDD' }
+
+    Assert-True (-not $verdict.Qualified) 'a different driver is a different image'
+    Assert-Equal 'not-qualified' $verdict.Verdict 'the image disagrees; the product was not measured'
+    Assert-Match 'Root\\SomeOtherVDD' $verdict.Detail 'what the guest actually runs has to be named'
+    Assert-Match 'Root\\MttVDD' $verdict.Detail 'and what was expected'
+}
+
+Test-Case 'a guest whose display driver was not measured claims no profile' {
+    $verdict = Test-ReleaseVmDisplayProfile -Required 'mtt' -Measured @{}
+    Assert-True (-not $verdict.Qualified) 'an unmeasured driver proves nothing'
+    Assert-Equal 'unverifiable' $verdict.Verdict 'absence is not a mismatch either'
+    Assert-Match 'was not measured' $verdict.Detail 'what is missing has to be named'
+}
+
+Test-Case 'the partition is proven to come from the adapter the host measured' {
+    # Both sides read in the same operating system off the same device, which is the
+    # only place a PCI identity comparison belongs. Hyper-V reports the path with the
+    # separators rewritten and an interface GUID appended.
+    $partition = @{ InstancePath = ('\\?\PCI#VEN_10DE&DEV_2C05&SUBSYS_89F41043&REV_A1#9B3B2CB8542DB04800' +
+            '#{064092b3-625e-43bf-9eb5-dc845897dd59}\GPUPARAV') }
+
+    $provenance = Test-ReleaseVmPartitionProvenance -HostGpu $script:HostGpuFixture -Partition $partition
+    Assert-True $provenance.Bound "the partition names the measured adapter: $($provenance.Unmet -join '; ')"
+}
+
+Test-Case 'a partition on another adapter does not pass for the one the host measured' {
+    $partition = @{ InstancePath = ('\\?\PCI#VEN_10DE&DEV_2C05&SUBSYS_89F41043&REV_A1#0000000000000000' +
+            '#{064092b3-625e-43bf-9eb5-dc845897dd59}\GPUPARAV') }
+
+    $provenance = Test-ReleaseVmPartitionProvenance -HostGpu $script:HostGpuFixture -Partition $partition
+    Assert-True (-not $provenance.Bound) 'a different device instance is a different adapter'
+    Assert-Match 'does not name the measured host adapter' ($provenance.Unmet -join '; ') 'what disagreed has to be named'
+}
+
+Test-Case 'an unmeasured partition path proves no provenance' {
+    $provenance = Test-ReleaseVmPartitionProvenance -HostGpu $script:HostGpuFixture -Partition @{}
+    Assert-True (-not $provenance.Bound) 'an unmeasured partition binds nothing'
+    Assert-Match 'was not measured' ($provenance.Unmet -join '; ') 'absence is not agreement'
 }
 
 Test-Case 'the one guest directory that reaches the host is named here and nowhere else' {
@@ -1080,8 +1189,10 @@ function New-FixtureReadiness {
         agentUser            = 'exosnap'
         consoleSessionId     = 1
         interactiveSessionId = 1
-        displays             = @(@{ Name = 'IDD-1'; Width = 3840; Height = 2160; RefreshHz = 120 })
-        gpu                  = @{ VendorId = '10DE'; DeviceId = '2C02'; DriverVersion = '32.0.15.8098' }
+        displayPaths         = @(@{ Device = '\\.\DISPLAY1'; Adapter = 'IDD-1'; Monitor = 'VDD by MTT'
+                                    Width = 3840; Height = 2160; RefreshHz = 120; Primary = $true })
+        gpu                  = $script:GuestGpuFixture
+        hostDriverStore      = $script:GuestStoreFixture
         controlChannel       = $true
     }
     foreach ($key in $Override.Keys) { $receipt[$key] = $Override[$key] }
@@ -1151,7 +1262,8 @@ Test-Case 'a guest running as the wrong user is not capture-ready' {
 
 Test-Case 'a display that does not match the campaign is named exactly' {
     $verdict = Test-ReleaseVmReadiness -Receipt (New-FixtureReadiness @{
-            displays = @(@{ Name = 'IDD-1'; Width = 1920; Height = 1080; RefreshHz = 60 })
+            displayPaths = @(@{ Device = '\\.\DISPLAY1'; Adapter = 'IDD-1'
+                               Width = 1920; Height = 1080; RefreshHz = 60; Primary = $true })
         }) -Requirement (New-ReleaseVmReadinessRequirement `
             -Display @{ Width = 3840; Height = 2160; RefreshHz = 120 })
 
@@ -1161,12 +1273,61 @@ Test-Case 'a display that does not match the campaign is named exactly' {
     Assert-Match '1920x1080' $text 'so does what was actually there'
 }
 
+Test-Case 'resolution and refresh rate have to be one display path, not two adapters' {
+    # Measured on the image this gate runs on: the synthetic Hyper-V display is the
+    # primary at 1024x768, the virtual monitor runs 2560x1440 at 60 Hz, and neither
+    # path is in the mode the campaign asks for. Asked per adapter, as it was, both
+    # adapters report 2560x1440@144 and the requirement is met by nothing visible.
+    $verdict = Test-ReleaseVmReadiness -Receipt (New-FixtureReadiness @{
+            displayPaths = @(
+                @{ Device = '\\.\DISPLAY1'; Adapter = 'Microsoft Hyper-V Video'
+                   Width = 1024; Height = 768; RefreshHz = 64; Primary = $true }
+                @{ Device = '\\.\DISPLAY2'; Adapter = 'Virtual Display Driver'
+                   Width = 2560; Height = 1440; RefreshHz = 60; Primary = $false }
+            )
+        }) -Requirement (New-ReleaseVmReadinessRequirement `
+            -Display @{ Width = 2560; Height = 1440; RefreshHz = 144 })
+
+    Assert-True (-not $verdict.Ready) 'the resolution is on one path and the refresh rate on neither'
+    $text = $verdict.Unmet -join '; '
+    Assert-Match '2560x1440@144Hz' $text 'the requirement has to be stated'
+    Assert-Match 'DISPLAY2' $text 'every path that was there has to be named'
+    Assert-Match '2560x1440@60Hz' $text 'including the mode it is actually in'
+}
+
+Test-Case 'one path in the requested mode is enough, whether or not it is primary' {
+    $verdict = Test-ReleaseVmReadiness -Receipt (New-FixtureReadiness @{
+            displayPaths = @(
+                @{ Device = '\\.\DISPLAY1'; Adapter = 'Microsoft Hyper-V Video'
+                   Width = 1024; Height = 768; RefreshHz = 64; Primary = $true }
+                @{ Device = '\\.\DISPLAY2'; Adapter = 'Virtual Display Driver'
+                   Width = 2560; Height = 1440; RefreshHz = 144; Primary = $false }
+            )
+        }) -Requirement (New-ReleaseVmReadinessRequirement `
+            -Display @{ Width = 2560; Height = 1440; RefreshHz = 144 })
+
+    Assert-True $verdict.Ready "the capture target is a path, not the desktop's primary: $($verdict.Unmet -join '; ')"
+}
+
+Test-Case 'a receipt that carries no display paths is not read as having the mode' {
+    # The receipt a guest agent from before per-path measurement writes. Its adapter
+    # list said 2560x1440@144 on a machine where no path was in that mode, so falling
+    # back to it would be reading the measurement this replaced.
+    $receipt = New-FixtureReadiness
+    $receipt.Remove('displayPaths')
+    $verdict = Test-ReleaseVmReadiness -Receipt $receipt -Requirement (
+        New-ReleaseVmReadinessRequirement -Display @{ Width = 3840; Height = 2160; RefreshHz = 120 })
+
+    Assert-True (-not $verdict.Ready) 'an unmeasured display path is unproven'
+    Assert-Match 'display paths were not measured' ($verdict.Unmet -join '; ') 'absence is not agreement'
+}
+
 Test-Case 'a guest with no display at all is named as having none' {
-    $verdict = Test-ReleaseVmReadiness -Receipt (New-FixtureReadiness @{ displays = @() }) `
+    $verdict = Test-ReleaseVmReadiness -Receipt (New-FixtureReadiness @{ displayPaths = @() }) `
         -Requirement (New-ReleaseVmReadinessRequirement -Display @{ Width = 3840; Height = 2160; RefreshHz = 120 })
 
     Assert-True (-not $verdict.Ready) 'no display is not a small mismatch'
-    Assert-Match 'no display' ($verdict.Unmet -join '; ') 'an empty enumeration reads differently from a wrong mode'
+    Assert-Match 'no display path' ($verdict.Unmet -join '; ') 'an empty enumeration reads differently from a wrong mode'
 }
 
 Test-Case 'a fact that was never measured is never assumed true' {
@@ -1187,7 +1348,7 @@ Test-Case 'every unmet requirement is named at once' {
     # A harness told one at a time fixes it, re-runs a campaign that takes an hour to
     # reach this point, and learns the next.
     $verdict = Test-ReleaseVmReadiness -Receipt (New-FixtureReadiness @{
-            agentSessionId = 0; agentUser = 'SYSTEM'; displays = @()
+            agentSessionId = 0; agentUser = 'SYSTEM'; displayPaths = @()
         }) -Requirement (New-ReleaseVmReadinessRequirement -InteractiveAgent -ExpectedUser 'exosnap' `
             -Display @{ Width = 3840; Height = 2160; RefreshHz = 120 } -ControlChannel)
 
@@ -1207,43 +1368,54 @@ Test-Case 'a run that needs no capture is not held to the interactive contract' 
     # display requirement, and refusing it for one would make the harness demand
     # more than the scenario does.
     $verdict = Test-ReleaseVmReadiness -Receipt (New-FixtureReadiness @{
-            agentSessionId = 0; displays = @()
+            agentSessionId = 0; displayPaths = @()
         }) -Requirement (New-ReleaseVmReadinessRequirement)
 
     Assert-True $verdict.Ready 'a scenario that captures nothing needs no desktop'
 }
 
 Test-Case 'a capture run can require the guest to be on the partitioned GPU' {
-    # The guest half of the GPU binding: the readiness receipt carries what the guest
-    # adapter is, and the requirement holds it against the host identity this run
-    # partitioned.
-    $hostGpu = @{ VendorId = '10DE'; DeviceId = '2C02'; DriverVersion = '32.0.15.8098' }
+    # The guest half of the GPU binding: the receipt carries the adapter the guest is
+    # on and the driver package staged into it, and the requirement holds both
+    # against the host identity this run partitioned.
     $verdict = Test-ReleaseVmReadiness -Receipt (New-FixtureReadiness @{
-            gpu = @{ VendorId = '10DE'; DeviceId = '2C02'; DriverVersion = '32.0.15.8098' }
-        }) -Requirement (New-ReleaseVmReadinessRequirement -GpuBoundTo $hostGpu)
+            gpu = $script:GuestGpuFixture
+            hostDriverStore = $script:GuestStoreFixture
+        }) -Requirement (New-ReleaseVmReadinessRequirement -GpuBoundTo $script:HostGpuFixture)
 
-    Assert-True $verdict.Ready 'same adapter, same driver'
+    Assert-True $verdict.Ready "a correct partition is ready: $($verdict.Unmet -join '; ')"
 }
 
 Test-Case 'a guest that fell back to a software adapter is not ready for a capture run' {
-    $hostGpu = @{ VendorId = '10DE'; DeviceId = '2C02'; DriverVersion = '32.0.15.8098' }
     $verdict = Test-ReleaseVmReadiness -Receipt (New-FixtureReadiness @{
-            gpu = @{ VendorId = '1414'; DeviceId = '008C'; DriverVersion = '10.0.26100.1' }
-        }) -Requirement (New-ReleaseVmReadinessRequirement -GpuBoundTo $hostGpu)
+            gpu = @{ Name = 'Microsoft Basic Render Driver'; VendorId = '1414'; DeviceId = '008C' }
+            hostDriverStore = $script:GuestStoreFixture
+        }) -Requirement (New-ReleaseVmReadinessRequirement -GpuBoundTo $script:HostGpuFixture)
 
     Assert-True (-not $verdict.Ready) 'the Basic Render Driver encodes nothing'
-    Assert-Match 'deviceId' ($verdict.Unmet -join '; ') 'the field that differs has to be named'
+    Assert-Match 'presents itself as' ($verdict.Unmet -join '; ') 'the adapter that answered has to be named'
 }
 
 Test-Case 'a receipt with no GPU section is not read as the right GPU' {
-    $hostGpu = @{ VendorId = '10DE'; DeviceId = '2C02'; DriverVersion = '32.0.15.8098' }
-    $receipt = New-FixtureReadiness
+    $receipt = New-FixtureReadiness @{ hostDriverStore = $script:GuestStoreFixture }
     $receipt.Remove('gpu')
     $verdict = Test-ReleaseVmReadiness -Receipt $receipt -Requirement (
-        New-ReleaseVmReadinessRequirement -GpuBoundTo $hostGpu)
+        New-ReleaseVmReadinessRequirement -GpuBoundTo $script:HostGpuFixture)
 
     Assert-True (-not $verdict.Ready) 'an unmeasured adapter is unbound'
     Assert-Match 'not measured' ($verdict.Unmet -join '; ') 'absence is not agreement'
+}
+
+Test-Case 'a receipt that names no staged driver package is not read as the right driver' {
+    # The receipt a guest agent from before this field existed writes. An older
+    # agent's silence is not evidence that the right package is there.
+    $receipt = New-FixtureReadiness
+    $receipt.Remove('hostDriverStore')
+    $verdict = Test-ReleaseVmReadiness -Receipt $receipt `
+        -Requirement (New-ReleaseVmReadinessRequirement -GpuBoundTo $script:HostGpuFixture)
+
+    Assert-True (-not $verdict.Ready) 'an unmeasured package is unbound'
+    Assert-Match 'was not measured in the guest' ($verdict.Unmet -join '; ') 'absence is not agreement'
 }
 
 Test-Case 'a capture run proves its readiness before the campaign starts' {
