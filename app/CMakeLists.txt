@@ -1515,6 +1515,15 @@ if(EXOSNAP_PWSH)
             "${PROJECT_SOURCE_DIR}/scripts/tests/run-tests-contract.tests.ps1")
     set_tests_properties(pipeline.run_tests_contract PROPERTIES TIMEOUT 300 LABELS "pipeline")
     exosnap_set_test_phase(pipeline.run_tests_contract hermetic)
+
+    # Holds and contends the real host locks from child processes, so it runs alone:
+    # beside run_tests_contract (which runs run-tests.ps1, which takes the device
+    # lock) its timing assertions would measure the other test's hold.
+    add_test(NAME pipeline.host_resource_lock
+        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
+            "${PROJECT_SOURCE_DIR}/scripts/tests/host-resource-lock.tests.ps1")
+    set_tests_properties(pipeline.host_resource_lock PROPERTIES TIMEOUT 300 LABELS "pipeline" RUN_SERIAL TRUE)
+    exosnap_set_test_phase(pipeline.host_resource_lock hermetic)
 elseif(EXOSNAP_REQUIRE_TEST_TOOLS)
     message(FATAL_ERROR
         "pwsh was not found, so none of the Live Verify and pipeline script tests would be registered "

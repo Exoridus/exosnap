@@ -99,10 +99,13 @@ if (-not [System.IO.Path]::IsPathRooted($BuildDir)) {
     $BuildDir = Join-Path $repoRoot $BuildDir
 }
 
-if ($Jobs -le 0) {
-    $Jobs = [Environment]::ProcessorCount
-    if ($Jobs -le 0) { $Jobs = 4 }
-}
+Import-Module (Join-Path $PSScriptRoot 'lib/HostResourceLock.psm1') -Force
+
+# Bounded by the same budget the verify runner uses, never the full core count:
+# a test run at -j<cores> beside a build in another worktree is the contention
+# the host lock below exists for, and the budget keeps the one that got through
+# from taking the machine anyway.
+if ($Jobs -le 0) { $Jobs = Get-HostJobBudget }
 
 # --- Helpers -----------------------------------------------------------------
 
@@ -332,10 +335,15 @@ try {
     Write-Host "Full log: $logFile" -ForegroundColor DarkGray
     Write-Host ''
 
-    # Stream ctest output to the log file while capturing it for summarisation.
+    # Under the host device lock for the whole run. RESOURCE_LOCK and RUN_SERIAL
+    # serialise tests within THIS ctest; a second ctest in another worktree, a
+    # live check or a VM campaign shares the GPU and the desktop with it and none
+    # of them can see the others. One test run on the host at a time.
     $startedUtc = [DateTime]::UtcNow
-    & ctest @ctestArgs 2>&1 | Tee-Object -FilePath $logFile | Out-Null
-    $ctestExit = $LASTEXITCODE
+    $ctestExit = Invoke-WithHostLock -Kind 'device' -Holder "run-tests $BuildDir" -Body {
+        & ctest @ctestArgs 2>&1 | Tee-Object -FilePath $logFile | Out-Null
+        $LASTEXITCODE
+    }
 
     # --- Rescue what the tests wrote before the config dir goes --------------
     # The QML and cursor-audit suites write their application logs into
