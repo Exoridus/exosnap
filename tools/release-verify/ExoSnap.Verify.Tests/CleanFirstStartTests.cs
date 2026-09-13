@@ -190,6 +190,46 @@ public sealed class CleanFirstStartWorkerTests
     }
 
     [Fact]
+    public void EveryIdentityFieldTheWorkerReadsIsOneTheProductAnswersWith()
+    {
+        // Measured the expensive way once: the worker read `.version` from
+        // app.identity, which answers `productVersion`. Under StrictMode a field the
+        // product does not carry is an error, so the run ended before a single
+        // product step was recorded -- a whole machine build to find a misspelling.
+        // The identity object is built in one place, so the contract can be read from
+        // the source rather than restated here.
+        var source = Path.Combine(
+            RepositoryRoot(), "app", "quick", "ExoSnap", "Quick", "QuickLiveVerifySource.cpp");
+        Assert.True(File.Exists(source), $"{source} is missing");
+
+        var identity = System.Text.RegularExpressions.Regex.Match(
+            File.ReadAllText(source),
+            @"QJsonObject QuickLiveVerifySource::Identity\(\) const \{.*?
+\}",
+            System.Text.RegularExpressions.RegexOptions.Singleline);
+        Assert.True(identity.Success, "QuickLiveVerifySource::Identity() was not found");
+
+        var answered = System.Text.RegularExpressions.Regex
+            .Matches(identity.Value, @"json\.insert\(QStringLiteral\(""(?<field>[A-Za-z]+)""\)")
+            .Select(match => match.Groups["field"].Value)
+            .ToHashSet(StringComparer.Ordinal);
+        Assert.Contains("productVersion", answered);
+
+        var read = System.Text.RegularExpressions.Regex
+            .Matches(File.ReadAllText(WorkerPath), @"\$identity\.result\.(?<field>[A-Za-z]+)")
+            .Select(match => match.Groups["field"].Value)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        Assert.NotEmpty(read);
+
+        var unanswered = read.Where(field => !answered.Contains(field)).ToList();
+        Assert.True(
+            unanswered.Count == 0,
+            $"the worker reads {string.Join(", ", unanswered)} from app.identity, which answers "
+            + string.Join(", ", answered.OrderBy(field => field, StringComparer.Ordinal)));
+    }
+
+    [Fact]
     public async Task TheGateAsksForAnInteractiveGuest()
     {
         // Measured on a real guest: started from a session that owns no desktop, the

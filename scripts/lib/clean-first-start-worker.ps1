@@ -274,7 +274,11 @@ try {
     $first = Start-ExoSnapSession -ExePath $exe -RunId ('clean-first-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 
     $identity = Invoke-LiveVerifyCommand -Connection $first.Connection -Command 'app.identity'
-    $version = "$($identity.result.version)"
+    # productVersion, which is what the identity object carries. Reading a field the
+    # product does not answer with is an error under StrictMode rather than an empty
+    # comparison, so a misspelling here ends the run before any product step records
+    # anything -- and reads as the harness failing, which it is.
+    $version = "$($identity.result.productVersion)"
     Add-Step -Name 'first-start-identity' -Ok ($version -eq $ExpectedVersion) -Kind 'product' `
         -Detail "the first start reports $version; the campaign bound $ExpectedVersion"
 
