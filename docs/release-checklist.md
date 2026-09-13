@@ -20,6 +20,12 @@ a GPU-less runner.
 - [ ] Refresh `KNOWN_LIMITATIONS.md` to the new version and fold in any newly-shipped boundaries
       (the release script asserts the doc names the canonical version).
 - [ ] Full test suite green: `pwsh scripts/run-tests.ps1`.
+- [ ] Cut the changelog. `pwsh scripts/new-changelog.ps1` previews what the release would say; rerun
+      with `-Version x.y.z -Apply` and `EXOSNAP_CHANGELOG_CUT=1` set to write it and open a fresh
+      `## [Unreleased]`. A subject the assembler cannot file is reported rather than dropped, and has
+      to be resolved here -- after the tag it cannot be fixed on the merged commit any more.
+- [ ] Preview the release page: `pwsh scripts/render-release-notes.ps1 -Version x.y.z`. This is the
+      exact text the pipeline will publish, from `.github/templates/release-notes.md`.
 
 ## 2. Build + validate artifacts (packaging gate)
 

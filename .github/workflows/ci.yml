@@ -216,6 +216,26 @@ jobs:
         continue-on-error: true
         run: pwsh -NonInteractive -File scripts/check-source-hygiene.ps1 -All
 
+      - name: Pull request title
+        # The title, not the branch's commits: this repository squash-merges
+        # with the title alone, so the title IS the commit that lands on main
+        # and the only line the changelog cut will ever read. A well-formed
+        # branch behind a malformed title still produces an unfilable entry.
+        if: github.event_name == 'pull_request'
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: pwsh -NonInteractive -File scripts/check-commit-policy.ps1 -Subject "$PR_TITLE"
+
+      - name: Prose line lengths over the PR range (advisory)
+        # Advisory for the same reason the source-hygiene backlog is: the tree
+        # predates the rule, and a branch that adds a paragraph to an already
+        # wrapped document wraps it to match. check-prose-lines.ps1 records what
+        # has to be true before this loses the switch.
+        if: github.event_name == 'pull_request'
+        run: >-
+          pwsh -NonInteractive -File scripts/check-prose-lines.ps1
+          -Advisory -Base ${{ github.event.pull_request.base.sha }}
+
       - name: Install actionlint (pinned)
         # By version and by SHA-256 of the release archive. A linter fetched as
         # "latest" changes what it flags between two runs of the same workflow.

@@ -1015,17 +1015,18 @@ jobs:
       - name: Create draft GitHub Release (if absent)
         run: |
           set -euo pipefail
+          # The text lives in .github/templates/, not in this file: a release
+          # page is prose people read, a wording change should not be a workflow
+          # diff, and the notes can be previewed before the tag is pushed.
+          title="ExoSnap $VERSION"
+          notes_args=(-RepoRoot repo -Version "$VERSION" -Tag "$TAG" -Commit "$GITHUB_SHA" -OutFile release-notes.md)
           if [ "$PRERELEASE" = "true" ]; then
             kind_args=(--prerelease)
-            # $VERSION is the full identity now, so it already reads "0.9.0-rc4" and
-            # repeating the tag after it would be redundant.
-            title="ExoSnap $VERSION"
-            notes="Release CANDIDATE for ExoSnap $VERSION, built from ${GITHUB_SHA}. Marked as a prerelease, so only the Preview update channel offers it; Stable users are unaffected. The artifacts carry $VERSION as their compiled-in ProductVersion — CI proved that against this tag before publishing — so this candidate is a distinct version to the updater and can be updated FROM, not just to. Artifacts and the signed update manifest are attached and verified by CI. This exists to run the manual live checks in docs/release-checklist.md §5/§6/§7 (including the end-to-end updater round trip) against real official artifacts before the final tag is pushed. Not a shipped release — do not announce."
+            notes_args+=(-Candidate)
           else
             kind_args=()
-            title="ExoSnap $VERSION"
-            notes="Automated release build for $TAG. Artifacts and the signed update manifest are attached and verified by CI. Review release notes, then this draft is published automatically once all checks pass. See docs/release-checklist.md before announcing."
           fi
+          pwsh -NoProfile -NonInteractive -File repo/scripts/render-release-notes.ps1 "${notes_args[@]}"
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             is_draft=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq '.draft')
             if [ "$is_draft" != "true" ]; then

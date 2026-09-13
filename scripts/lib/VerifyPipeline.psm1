@@ -387,6 +387,8 @@ function New-VerifyPlan {
     $checks.Add((New-VerifyCheck -Name 'diff' -Kind 'diff' -DependsOn @('sanity') -Applicable))
     $checks.Add((New-VerifyCheck -Name 'drift' -Kind 'drift' -DependsOn @('sanity') -Applicable))
     $checks.Add((New-VerifyCheck -Name 'source-hygiene' -Kind 'source-hygiene' -DependsOn @('sanity') -Applicable))
+    $checks.Add((New-VerifyCheck -Name 'commit-policy' -Kind 'commit-policy' -DependsOn @('sanity') -Applicable))
+    $checks.Add((New-VerifyCheck -Name 'prose-lines' -Kind 'prose-lines' -DependsOn @('sanity') -Applicable))
     $checks.Add((New-VerifyCheck -Name 'format' -Kind 'format' -DependsOn @('sanity') -Applicable))
 
     $checks.Add((New-VerifyCheck -Name 'script-tests' -Kind 'script-tests' -DependsOn @('sanity') `
@@ -463,7 +465,8 @@ function Invoke-VerifyPlan {
 
     # Sequential on purpose, and measured so that stays a decision rather than an
     # omission. The independent read-only checks after 'sanity' -- diff, drift,
-    # source-hygiene, format -- take about twelve seconds together on a
+    # source-hygiene, commit-policy, prose-lines, format -- take about fifteen
+    # seconds together on a
     # sixteen-core machine, of a fast gate that takes about five minutes; running
     # them side by side saves eight seconds at most, and the checks that dominate
     # (build, tests, script-tests) each own a host lock or the full job budget and

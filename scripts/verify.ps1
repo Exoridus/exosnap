@@ -312,6 +312,20 @@ $realExecutor = {
                 '-Base', 'HEAD')
         }
 
+        'commit-policy' {
+            return Invoke-Step -Name 'commit-policy' -FilePath 'pwsh' -Arguments @(
+                '-NoProfile', '-NonInteractive', '-File', (Join-Path $PSScriptRoot 'check-commit-policy.ps1'))
+        }
+
+        'prose-lines' {
+            # -Advisory: the rule is adopted, the tree's backlog is not cleared.
+            # check-prose-lines.ps1 says what has to be true before this loses
+            # the switch.
+            return Invoke-Step -Name 'prose-lines' -FilePath 'pwsh' -Arguments @(
+                '-NoProfile', '-NonInteractive', '-File', (Join-Path $PSScriptRoot 'check-prose-lines.ps1'),
+                '-Advisory')
+        }
+
         'format' {
             $formatArgs = @('-NoProfile', '-NonInteractive', '-File', (Join-Path $PSScriptRoot 'check-format.ps1'))
             if ($Staged) { $formatArgs += @('-Staged', '-Fix') }

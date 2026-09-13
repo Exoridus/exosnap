@@ -1504,6 +1504,21 @@ if(EXOSNAP_PWSH)
     set_tests_properties(pipeline.source_hygiene PROPERTIES TIMEOUT 180 LABELS "pipeline")
     exosnap_set_test_phase(pipeline.source_hygiene hermetic)
 
+    # The subject grammar, the changelog assembler and the release-notes
+    # renderer share one parser, and the release cut is the first place a
+    # disagreement between them would surface -- after the tag is pushed.
+    add_test(NAME pipeline.commit_policy
+        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
+            "${PROJECT_SOURCE_DIR}/scripts/tests/commit-policy.tests.ps1")
+    set_tests_properties(pipeline.commit_policy PROPERTIES TIMEOUT 300 LABELS "pipeline")
+    exosnap_set_test_phase(pipeline.commit_policy hermetic)
+
+    add_test(NAME pipeline.prose_lines
+        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
+            "${PROJECT_SOURCE_DIR}/scripts/tests/prose-lines.tests.ps1")
+    set_tests_properties(pipeline.prose_lines PROPERTIES TIMEOUT 300 LABELS "pipeline")
+    exosnap_set_test_phase(pipeline.prose_lines hermetic)
+
     # The entry point every other gate runs the suite through. What it promises
     # is negative -- that a label exclusion cannot take a category with it, that
     # an empty selection is an error rather than a pass, and that a failing
