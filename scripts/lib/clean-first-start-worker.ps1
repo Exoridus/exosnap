@@ -46,6 +46,15 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+# The caller names the installer by file name, because only the transport knows where
+# it staged it. Resolved against the staging directory rather than left relative: a
+# relative path is resolved against the working directory, which the virtual-machine
+# transport sets to the guest root while the file is one level below it in the
+# harness -- and msiexec answers that with 1619, a package it cannot open.
+if (-not [System.IO.Path]::IsPathRooted($MsiPath)) {
+    $MsiPath = Join-Path $StagingDirectory $MsiPath
+}
+
 Import-Module (Join-Path $StagingDirectory 'LiveVerifyClient.psm1') -Force
 
 $script:Steps = [System.Collections.Generic.List[object]]::new()
