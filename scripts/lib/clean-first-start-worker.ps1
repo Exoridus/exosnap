@@ -104,12 +104,17 @@ function Get-ExoSnapResidue {
     param()
     $found = @()
 
+    # Most keys in this hive carry no DisplayName at all, and under StrictMode reading
+    # a property an object does not have is an error rather than a null. Asked the
+    # other way round, the probe answers on every machine instead of throwing on the
+    # first one it meets.
     $installed = @(Get-ChildItem -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall' `
             -ErrorAction SilentlyContinue |
         ForEach-Object { Get-ItemProperty -LiteralPath $_.PSPath -ErrorAction SilentlyContinue } |
-        Where-Object { $_.DisplayName -eq 'ExoSnap' })
+        Where-Object { $_.PSObject.Properties['DisplayName'] -and $_.DisplayName -eq 'ExoSnap' })
     if ($installed.Count -gt 0) {
-        $found += "an installed product (ExoSnap $($installed[0].DisplayVersion))"
+        $version = if ($installed[0].PSObject.Properties['DisplayVersion']) { $installed[0].DisplayVersion } else { 'version not recorded' }
+        $found += "an installed product (ExoSnap $version)"
     }
 
     $userConfig = Join-Path $env:LOCALAPPDATA 'ExoSnap'
@@ -128,7 +133,11 @@ function Get-ExoSnapResidue {
         $found += 'a per-user registry key (HKCU:\SOFTWARE\Codexo\ExoSnap)'
     }
 
-    return $found
+    # Returned as an array even when it holds one item. PowerShell unrolls a
+    # single-element array on return, and the caller asks the result for its Count --
+    # which under StrictMode is an error on the bare string, so a machine with exactly
+    # one leftover would end the run before it could be reported.
+    return , [string[]] $found
 }
 
 function Invoke-Msi {
@@ -204,7 +213,7 @@ function Stop-ExoSnapProcesses {
 
 try {
     # ---- the state the measurement needs ---------------------------------------
-    $residue = Get-ExoSnapResidue
+    $residue = @(Get-ExoSnapResidue)
     if ($residue.Count -gt 0) {
         Add-Step -Name 'clean-precondition' -Ok $false -Kind 'bootstrap' `
             -Detail ('this machine is not clean, so a first start cannot be measured on it: ' +

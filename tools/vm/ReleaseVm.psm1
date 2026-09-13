@@ -58,11 +58,19 @@ function Get-ReleaseVmDefault {
     <#
     .SYNOPSIS
         The recipe's fixed values, in one place both host scripts read.
+    .DESCRIPTION
+        Everything here is a property of the recipe except the image root, which is a
+        property of a machine: where a host has room for a 60 GB image is not
+        something a repository can know. EXOSNAP_VM_ROOT names it, because callers
+        that compose this recipe -- the typed transport among them -- pass a campaign
+        and a guest command, not a storage layout.
     #>
     [OutputType([hashtable])]
     param()
+    $root = $env:EXOSNAP_VM_ROOT
+    if ([string]::IsNullOrWhiteSpace($root)) { $root = 'D:\exosnap-vm' }
     return @{
-        Root             = 'D:\exosnap-vm'
+        Root             = $root
         GoldenDiskName   = 'golden.vhdx'
         AnswerIsoName    = 'unattend.iso'
         VMName           = 'ExoSnap-Verify'
@@ -76,6 +84,10 @@ function Get-ReleaseVmDefault {
         GuestDriverStaging = 'C:\HostDriverStore'
         HostDriverRepository = 'C:\Windows\System32\DriverStore\FileRepository'
         HostDriverPattern  = 'nv_dispi.inf_amd64_*'
+        # Matched with -like, which has no escape character: its only metacharacters
+        # are * ? and [ ]. A doubled backslash here would demand two of them in the
+        # instance path and match no adapter that exists.
+        HostGpuInstancePattern = 'PCI\VEN_10DE*'
         GpuPartition     = $script:GpuPartitionDefault
     }
 }
@@ -694,7 +706,7 @@ function New-ReleaseVmCreatePlan {
         foreach ($key in $GpuPartition.Keys) { $partitionParameters[$key] = $GpuPartition[$key] }
         $plan += New-ReleaseVmStep -Name 'gpu-partition' -Command 'Set-VMGpuPartitionAdapter' `
             -Parameters $partitionParameters `
-            -Detail 'partition units out of 1000000000; this is a tenth of the adapter'
+            -Detail 'partition units out of a documented range of 1000000000; the applied values are what the read-back reports'
     }
 
     if ($Phase -contains 'driver') {
@@ -831,8 +843,11 @@ function New-ReleaseVmRunPlan {
     foreach ($key in $GpuPartition.Keys) { $partitionParameters[$key] = $GpuPartition[$key] }
     $plan += New-ReleaseVmStep -Name 'gpu-partition' -Command 'Set-VMGpuPartitionAdapter' -Parameters $partitionParameters
 
+    # The partition values alone, not the cmdlet's parameter set: the read-back reads
+    # one adapter property per requested key and compares both sides as numbers, and
+    # -VMName is neither a property of the partition nor a number.
     $plan += New-ReleaseVmStep -Name 'gpu-partition-readback' -Command 'Assert-ReleaseVmGpuPartition' `
-        -Parameters ([ordered]@{ VMName = $vm; Requested = $partitionParameters }) `
+        -Parameters ([ordered]@{ VMName = $vm; Requested = $GpuPartition }) `
         -Detail 'the values are opaque and the platform may normalise them, so the applied ones are the record'
 
     $plan += Get-ReleaseVmNetworkStep -Mode $Network -VMName $vm
@@ -1689,7 +1704,7 @@ function Get-ReleaseVmHostGpu {
         guest: it identifies an adapter within one operating system.
     #>
     [OutputType([hashtable])]
-    param([string] $InstancePathPattern = 'PCI\\VEN_10DE*')
+    param([string] $InstancePathPattern = (Get-ReleaseVmDefault).HostGpuInstancePattern)
     $device = @(Get-CimInstance -ClassName Win32_VideoController -ErrorAction SilentlyContinue |
             Where-Object { $_.PNPDeviceID -like $InstancePathPattern } | Select-Object -First 1)
     if ($device.Count -eq 0) { return @{ Measured = $false; Detail = "no display adapter matches $InstancePathPattern" } }
@@ -2092,6 +2107,12 @@ function Copy-ReleaseVmDirectoryBack {
         Copy-VMFile only goes host to guest, so the evidence comes back over a
         PowerShell Direct session instead. The session is closed in a finally block:
         a session left open holds the virtual machine, and the next step turns it off.
+
+        What lands in the destination is the CONTENT of the guest directory, not a
+        directory named after it. The destination is a run's evidence directory and is
+        already named after the run; adding the guest's own path as a level under it
+        puts the result document one directory below where the run said its evidence
+        is, and below where a caller that composed the run looks for it.
     #>
     param(
         [Parameter(Mandatory)] [string] $VMName,
@@ -2111,7 +2132,9 @@ function Copy-ReleaseVmDirectoryBack {
             throw ("the guest wrote nothing to '$Source'. The campaign either never started or wrote " +
                    'its results somewhere else; there is no run to report on.')
         }
-        Copy-Item -FromSession $session -LiteralPath $Source -Destination $Destination -Recurse -Force
+        # -Path with a wildcard rather than -LiteralPath on the directory: the latter
+        # copies the directory itself, which is one level too deep.
+        Copy-Item -FromSession $session -Path (Join-Path $Source '*') -Destination $Destination -Recurse -Force
     }
     finally {
         Remove-PSSession -Session $session -ErrorAction SilentlyContinue

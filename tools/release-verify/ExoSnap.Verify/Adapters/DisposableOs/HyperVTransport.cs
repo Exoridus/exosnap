@@ -32,6 +32,22 @@ public sealed class HyperVTransport : IDisposableOsTransport
 
     private static readonly TimeSpan DefaultRunTimeout = TimeSpan.FromMinutes(150);
 
+    /// <summary>How much of a stream a failure detail carries.</summary>
+    private const int ExplanationLines = 4;
+
+    /// <summary>
+    /// Where the recipe stages what it copied in, and the one directory it copies
+    /// back out.
+    /// </summary>
+    /// <remarks>
+    /// These are the recipe's, from Get-ReleaseVmRunPath, and a worker that writes
+    /// anywhere else has written where nothing collects: the run then ends with a
+    /// machine that did the work and a host that has no result to read.
+    /// </remarks>
+    private const string GuestHarness = @"C:\ExoSnapRun\harness";
+
+    private const string GuestResults = @"C:\ExoSnapRun\out";
+
     private readonly string repositoryRoot;
     private readonly HyperVAccess access;
     private readonly string stagingRoot;
@@ -199,16 +215,46 @@ public sealed class HyperVTransport : IDisposableOsTransport
         var document = Path.Combine(resultDirectory, "result.json");
         if (!File.Exists(document))
         {
-            var detail = string.IsNullOrWhiteSpace(completed.StandardError)
-                ? $"the virtual machine run exited {completed.ExitCode} and wrote no result document"
-                : completed.StandardError.Trim();
-            return DisposableOsRun.Faulted(detail);
+            return DisposableOsRun.Faulted(DescribeMissingResult(completed));
         }
 
         var result = DisposableOsRunResult.Parse(File.ReadAllText(document));
         return result is null
             ? DisposableOsRun.Faulted("the virtual machine result document is not valid JSON")
             : DisposableOsRun.Completed(result);
+    }
+
+    /// <summary>Why a run produced no result document, in the recipe's own words.</summary>
+    /// <remarks>
+    /// The recipe refuses on the host -- a missing image, a precondition nobody can
+    /// satisfy from here -- by printing what is wrong and exiting non-zero, and it
+    /// prints it where a console script prints things. A detail built from the error
+    /// stream alone therefore carries the exit code and no reason, which is the one
+    /// thing whoever reads an infrastructure error needs.
+    /// </remarks>
+    private static string DescribeMissingResult(ProcessRunResult completed)
+    {
+        var said = Explain(completed.StandardError) ?? Explain(completed.StandardOutput);
+        var run = completed.TimedOut
+            ? $"the virtual machine run timed out after {completed.Duration.TotalMinutes:F0} minute(s)"
+            : $"the virtual machine run exited {completed.ExitCode}";
+        return said is null ? $"{run} and wrote no result document" : $"{run} and wrote no result document: {said}";
+    }
+
+    /// <summary>The tail of a stream, or null when it said nothing.</summary>
+    private static string? Explain(string stream)
+    {
+        if (string.IsNullOrWhiteSpace(stream))
+        {
+            return null;
+        }
+
+        // The tail rather than the whole transcript: the plan prints every step it
+        // ran, and the refusal is what it printed last.
+        var lines = stream
+            .Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .TakeLast(ExplanationLines);
+        return string.Join(" | ", lines);
     }
 
     private ProcessRunRequest Compose(
@@ -244,16 +290,16 @@ public sealed class HyperVTransport : IDisposableOsTransport
         var parts = new List<string>
         {
             "pwsh -NoProfile -ExecutionPolicy Bypass -File",
-            Quote(Path.Combine("C:\\ExoSnapRun\\harness", request.WorkerFileName)),
+            Quote(Path.Combine(GuestHarness, request.WorkerFileName)),
         };
         parts.AddRange(request.WorkerArguments.Select(Quote));
-        parts.AddRange(["-ResultPath", Quote("C:\\ExoSnapRun\\results\\result.json")]);
-        parts.AddRange(["-MarkerPath", Quote("C:\\ExoSnapRun\\results\\done.marker")]);
-        parts.AddRange(["-StagingDirectory", Quote("C:\\ExoSnapRun\\harness")]);
+        parts.AddRange(["-ResultPath", Quote(Path.Combine(GuestResults, "result.json"))]);
+        parts.AddRange(["-MarkerPath", Quote(Path.Combine(GuestResults, "done.marker"))]);
+        parts.AddRange(["-StagingDirectory", Quote(GuestHarness)]);
 
         if (request.EvidenceDirectory is not null)
         {
-            parts.AddRange(["-EvidenceDirectory", Quote("C:\\ExoSnapRun\\results\\evidence")]);
+            parts.AddRange(["-EvidenceDirectory", Quote(Path.Combine(GuestResults, "evidence"))]);
         }
 
         return string.Join(' ', parts);

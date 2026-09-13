@@ -2608,6 +2608,54 @@ Test-Case 'REL-VIS-NOTIFY-001 is red when the toast never reached the desktop an
     Assert-True ($green.Prompts[0] -match '\[j\] richtig') $green.Prompts[0]
 }
 
+Test-Case 'the clean-first-start residue probe answers on a real machine instead of throwing' {
+    # The probe reads every key under the Uninstall hive and filters on DisplayName.
+    # Most keys there have no DisplayName, and the worker runs under StrictMode, where
+    # reading an absent property is an error -- so this threw on the first machine it
+    # was ever run on, before a single step had been recorded. Run against the real
+    # hive on purpose: a fixture would be a hive without the keys that break it.
+    $worker = Join-Path (Split-Path -Parent $scriptRoot) 'scripts/lib/clean-first-start-worker.ps1'
+    $source = Get-Content -LiteralPath $worker -Raw
+    $match = [regex]::Match($source, '(?ms)^function Get-ExoSnapResidue \{.*?^\}')
+    Assert-True $match.Success 'Get-ExoSnapResidue was not found in the worker'
+
+    $probe = @"
+Set-StrictMode -Version Latest
+`$ErrorActionPreference = 'Stop'
+$($match.Value)
+@(Get-ExoSnapResidue).Count
+"@
+    $output = & pwsh -NoProfile -Command $probe 2>&1 | Out-String
+    Assert-True ($output -match '^\s*\d+\s*$') "the probe has to return a count, not an error: $output"
+}
+
+Test-Case 'a machine with exactly one leftover is still counted, not unrolled into a string' {
+    # The worker asks the result for its Count. PowerShell unrolls a single-element
+    # array on return, and under StrictMode asking a bare string for Count is an
+    # error -- so the machine that has exactly one leftover is the machine that ends
+    # the run instead of being reported as unclean.
+    $worker = Join-Path (Split-Path -Parent $scriptRoot) 'scripts/lib/clean-first-start-worker.ps1'
+    $source = Get-Content -LiteralPath $worker -Raw
+    $match = [regex]::Match($source, '(?ms)^function Get-ExoSnapResidue \{.*?^\}')
+    Assert-True $match.Success 'Get-ExoSnapResidue was not found in the worker'
+
+    $fakeLocalAppData = New-TestDirectory
+    try {
+        New-Item -ItemType Directory -Path (Join-Path $fakeLocalAppData 'ExoSnap') -Force | Out-Null
+        $probe = @"
+Set-StrictMode -Version Latest
+`$ErrorActionPreference = 'Stop'
+`$env:LOCALAPPDATA = '$fakeLocalAppData'
+$($match.Value)
+`$residue = Get-ExoSnapResidue
+"found `$(`$residue.Count)"
+"@
+        $output = & pwsh -NoProfile -Command $probe 2>&1 | Out-String
+        Assert-True ($output -match 'found 1') "one leftover has to count as one: $output"
+    }
+    finally { Remove-Item -LiteralPath $fakeLocalAppData -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
 Write-Host ''
 Write-Host "$script:Passed/$($script:Passed + $script:Failed) passed"
 if ($script:Failed -gt 0) { exit 1 }

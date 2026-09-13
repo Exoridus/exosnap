@@ -287,6 +287,25 @@ Test-Case 'the GPU partition carries all four resource triples' {
         'the minimum cannot exceed the maximum'
 }
 
+Test-Case 'the read-back compares partition values and nothing that is not one' {
+    # What the step is handed decides what it reads off the adapter, and both sides of
+    # the comparison are cast to a number. Handing it the cmdlet's parameter set makes
+    # it read the VM name as a partition value, which throws before the machine has
+    # even started -- and the values themselves were correct.
+    $paths = Get-ReleaseVmRunPath -RunId 'readback' -Root 'T:\images'
+    $plan = New-ReleaseVmRunPlan -RunPath $paths -GuestCommand 'verify.exe' -ResultDirectory 'T:\out'
+    $readback = @($plan | Where-Object { $_.Name -eq 'gpu-partition-readback' })[0]
+    $requested = $readback.Parameters['Requested']
+
+    Assert-True (-not $requested.Contains('VMName')) 'the VM name is not a partition value'
+    foreach ($key in $requested.Keys) {
+        Assert-Match '^(Min|Max|Optimal)Partition(VRAM|Encode|Decode|Compute)$' $key `
+            'every requested key has to name a partition field the adapter reports'
+        Assert-True (($requested[$key] -as [long]) -gt 0) "$key has to compare as a number"
+    }
+    Assert-Equal 12 $requested.Count 'all four resources, three bounds each'
+}
+
 Test-Case 'golden-image provisioning connects only for pinned downloads' {
     $plan = New-ReleaseVmCreatePlan -VMName 'vm' -Root 'T:\images' -GoldenDisk 'T:\images\golden.vhdx' `
         -AnswerIso 'T:\images\unattend.iso' -AnswerFile $script:AnswerFile -IsoPath 'W:\win11.iso' `
@@ -981,6 +1000,52 @@ Test-Case 'a host fact nobody measured leaves the binding unproven too' {
 
     Assert-True (-not $binding.Bound) 'an unmeasured host driver version binds nothing'
     Assert-Match 'the host driverVersion was not measured' ($binding.Unmet -join '; ') 'the side that is missing has to be named'
+}
+
+Test-Case 'the one guest directory that reaches the host is named here and nowhere else' {
+    # Callers compose a guest command that has to write into this directory, because
+    # the collect step copies this directory and no other. The typed transport pins
+    # the same two paths in HyperVRunTests; changing either side without the other
+    # produces a machine that did the work and a host with nothing to read.
+    $paths = Get-ReleaseVmRunPath -RunId 'layout' -Root 'T:\images'
+    Assert-Equal 'C:\ExoSnapRun\out' $paths.GuestResults 'the guest results directory the recipe collects'
+    Assert-Equal 'C:\ExoSnapRun\harness' $paths.GuestHarness 'the directory the recipe stages a harness into'
+
+    $plan = New-ReleaseVmRunPlan -RunPath $paths -GuestCommand 'verify.exe' -ResultDirectory 'T:\out'
+    $collect = @($plan | Where-Object { $_.Name -eq 'collect' })[0]
+    Assert-Equal $paths.GuestResults $collect.Parameters['Source'] 'collect takes the guest results directory'
+}
+
+Test-Case 'the image root is a property of the machine, not a constant in the recipe' {
+    # Callers that compose this recipe hand it a campaign and a guest command; where a
+    # host has room for a 60 GB image is not something they can know, and the typed
+    # transport has no parameter for it.
+    $previous = $env:EXOSNAP_VM_ROOT
+    try {
+        $env:EXOSNAP_VM_ROOT = 'Q:\somewhere-else'
+        Assert-Equal 'Q:\somewhere-else' (Get-ReleaseVmDefault).Root 'the environment names the image root'
+        Assert-Equal 'Q:\somewhere-else\golden.vhdx' (Get-ReleaseVmPath).GoldenDisk 'and every path follows it'
+
+        $env:EXOSNAP_VM_ROOT = '   '
+        Assert-Equal 'D:\exosnap-vm' (Get-ReleaseVmDefault).Root 'an empty value is not a root'
+    }
+    finally {
+        if ($null -eq $previous) { Remove-Item Env:\EXOSNAP_VM_ROOT -ErrorAction SilentlyContinue }
+        else { $env:EXOSNAP_VM_ROOT = $previous }
+    }
+}
+
+Test-Case 'the adapter pattern matches an instance path a machine actually reports' {
+    # -like has no escape character, so a backslash written twice asks for two of
+    # them and selects no adapter at all. Nothing else here can catch that: the
+    # decisions are pure and were exercised, while the pattern is only ever compared
+    # against what CIM returns on a host with a GPU.
+    $pattern = (Get-ReleaseVmDefault).HostGpuInstancePattern
+    $instancePath = 'PCI\VEN_10DE&DEV_2C05&SUBSYS_89F41043&REV_A1\9B3B2CB8542DB04800'
+
+    Assert-True ($instancePath -like $pattern) 'the pattern has to match a real NVIDIA instance path'
+    Assert-True (-not ('PCI\VEN_8086&DEV_A780&SUBSYS_00000000&REV_04\3&11583659&0&10' -like $pattern)) `
+        'and it still has to select the NVIDIA adapter rather than any display adapter'
 }
 
 Test-Case 'the recipe does not claim the partition triple is a proportion of the adapter' {

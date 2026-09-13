@@ -98,6 +98,29 @@ public sealed class HyperVRunTests : IDisposable
     }
 
     [Fact]
+    public async Task TheWorkerIsToldToWriteWhereTheRecipeCollectsFrom()
+    {
+        // The recipe copies exactly one guest directory back to the host, and the
+        // host then reads the result document out of it. A worker told to write
+        // anywhere else does the work and leaves nothing to report on: the run ends
+        // as an infrastructure error and the machine is kept because its evidence
+        // never reached the host. The recipe's own value is asserted in
+        // scripts/tests/vm-recipe.tests.ps1, so the two sides cannot drift quietly.
+        await this.RunAsync(
+            new DisposableOsWorkerRequest("worker.ps1", [this.WriteWorker()], [])
+            {
+                EvidenceDirectory = Path.Combine(this.root, "evidence"),
+            },
+            guest: WriteResult);
+
+        var guestCommand = ValueOf(Assert.Single(this.invocations), "-GuestCommand");
+        Assert.Contains(@"-ResultPath C:\ExoSnapRun\out\result.json", guestCommand, StringComparison.Ordinal);
+        Assert.Contains(@"-MarkerPath C:\ExoSnapRun\out\done.marker", guestCommand, StringComparison.Ordinal);
+        Assert.Contains(@"-EvidenceDirectory C:\ExoSnapRun\out\evidence", guestCommand, StringComparison.Ordinal);
+        Assert.Contains(@"-StagingDirectory C:\ExoSnapRun\harness", guestCommand, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task ARunThatNeedsNoNetworkAsksForNone()
     {
         await this.RunAsync(
@@ -132,6 +155,25 @@ public sealed class HyperVRunTests : IDisposable
 
         Assert.Equal(DisposableOsRunKind.Faulted, run.Kind);
         Assert.Contains("session 0", run.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ARefusalTheRecipePrintedIsPartOfWhyNothingWasMeasured()
+    {
+        // The recipe refuses on the host by printing what is wrong and exiting
+        // non-zero, and a console script prints to standard output. A detail built
+        // from the error stream alone carries an exit code and no reason, which
+        // leaves whoever reads the record unable to tell a missing image from a
+        // machine that would not start.
+        var run = await this.RunAsync(
+            new DisposableOsWorkerRequest("worker.ps1", [this.WriteWorker()], []),
+            guest: _ => { },
+            exitCode: 2,
+            standardOutput: "  run          : verify-1\n  there is no golden image at D:\\exosnap-vm\\golden.vhdx.");
+
+        Assert.Equal(DisposableOsRunKind.Faulted, run.Kind);
+        Assert.Contains("exited 2", run.Detail, StringComparison.Ordinal);
+        Assert.Contains("no golden image", run.Detail, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -198,7 +240,8 @@ public sealed class HyperVRunTests : IDisposable
         DisposableOsWorkerRequest request,
         Action<string> guest,
         int exitCode = 0,
-        string standardError = "")
+        string standardError = "",
+        string standardOutput = "")
     {
         var transport = new HyperVTransport(
             this.processes,
@@ -215,7 +258,7 @@ public sealed class HyperVRunTests : IDisposable
                     invocation.FileName,
                     new ReadOnlyCollection<string>([.. invocation.Arguments]),
                     exitCode,
-                    string.Empty,
+                    standardOutput,
                     standardError,
                     false,
                     TimeSpan.Zero));
