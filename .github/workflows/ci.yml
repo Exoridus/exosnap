@@ -422,9 +422,12 @@ jobs:
   build-test-debug:
     name: build-test (windows-x64-debug)
     runs-on: windows-2022
-    # ~2x the observed worst case (46 min, cold sccache): build + qmllint +
-    # full suite + scoped clang-tidy blocking set, all in one job.
-    timeout-minutes: 90
+    # Measured over the last 20 runs: median 12 min at a 97-98 % sccache hit
+    # rate; worst 71 min on a cold cache with a header change that fanned the
+    # scoped clang-tidy set out across the tree (36 min of it). About 1.7x
+    # that worst case: a lint-policy change reaches every unit, and its first
+    # push is the run this ceiling has to let finish.
+    timeout-minutes: 120
     # Not on a push to main: that commit is the squash of a PR whose own run of
     # this exact job just went green (see "WHAT RUNS WHERE" at the top of this
     # file). Written as a positive list over the events this workflow can see
@@ -565,7 +568,8 @@ jobs:
   build-test-release:
     name: build-test (windows-x64-release)
     runs-on: windows-2022
-    # ~2x the observed worst case (27 min, cold sccache).
+    # Measured over the last 20 runs: median 7 min at a 98 % sccache hit rate,
+    # worst 34 min on a cold cache. About 2x that worst case.
     timeout-minutes: 60
     needs: changes
     # PR-CI tiering: this leg proves the Release configure/build/link still
