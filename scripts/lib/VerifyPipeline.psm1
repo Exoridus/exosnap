@@ -451,11 +451,21 @@ function Invoke-VerifyPlan {
     $failedBy    = $null
     $toolMissing = [System.Collections.Generic.List[string]]::new()
 
+    # Sequential on purpose, and measured so that stays a decision rather than an
+    # omission. The independent read-only checks after 'sanity' -- diff, drift,
+    # source-hygiene, format -- take about twelve seconds together on a
+    # sixteen-core machine, of a fast gate that takes about five minutes; running
+    # them side by side saves eight seconds at most, and the checks that dominate
+    # (build, tests, script-tests) each own a host lock or the full job budget and
+    # cannot overlap anything anyway. A parallel phase would buy under three
+    # percent for a second failure-ordering to reason about. If the numbers move,
+    # the durations in the result file are where to see it.
     foreach ($check in $Plan.Checks) {
         $entry = [ordered]@{
             name        = $check.Name
             status      = $null
             detail      = ''
+            durationMs  = 0
             dependsOn   = @($check.DependsOn)
             evidence    = $check.Evidence
             diagnostics = @()
@@ -478,7 +488,13 @@ function Invoke-VerifyPlan {
             $entry.detail = "stopped after '$failedBy' failed"
         }
         else {
+            # Measured so a change to how the plan runs -- a parallel phase, a
+            # different budget -- can be argued from numbers on this machine rather
+            # than from the feeling that it got faster.
+            $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
             $outcome = & $Executor $check $Context
+            $stopwatch.Stop()
+            $entry.durationMs = [long]$stopwatch.ElapsedMilliseconds
             if (-not $outcome -or -not $outcome.ContainsKey('Status')) {
                 throw "The executor returned no Status for check '$($check.Name)'."
             }
@@ -825,6 +841,9 @@ function New-VerifySummary {
     $lines = [System.Collections.Generic.List[string]]::new()
     foreach ($check in $Run.checks) {
         $line = '{0}  {1}' -f $check.status.PadRight($width), $check.name
+        if ($check.Contains('durationMs') -and $check.durationMs -ge 1000) {
+            $line = '{0} {1,6:0.0}s' -f $line.PadRight($width + 18), ($check.durationMs / 1000.0)
+        }
         if ($check.detail) { $line = "$line  -- $($check.detail)" }
         $lines.Add($line)
     }
