@@ -41,6 +41,16 @@ $script:StatusNotRun         = 'NOT_RUN'              # an earlier failure stopp
 # green and -Full -- the contract that claims completeness -- fails on it.
 $script:StatusToolMissing    = 'TOOL_MISSING'
 
+# The CTest label that marks a test as a Qt QuickTest runner, i.e. one that
+# understands -o <file>,txt. Declared at the registration site; read here.
+$script:QuickTestLabel = 'quicktest'
+
+# One line of a build log that explains a failure. Compiler (C1234), linker
+# (LNK1234), MSBuild (MSB1234), a GNU-style "file:line: error:", CMake and ninja.
+# Anchored on the diagnostic token itself so a progress line that merely
+# mentions a file called error.cpp does not match.
+$script:BuildErrorPattern = '(?i)(\berror [CD]\d{4}\b|\berror LNK\d{3,4}\b|\berror MSB\d{4}\b|\bfatal error\b|:\s*error:|^CMake Error|^ninja: error)'
+
 function Get-VerifyStatusName {
     <#
     .SYNOPSIS
@@ -577,14 +587,14 @@ function Get-FailedCTestName {
         } | Sort-Object -Unique)
 }
 
-function Get-CTestCommandPath {
+function Get-CTestRegistration {
     <#
     .SYNOPSIS
-        Test name to the executable CTest runs for it, from a configured tree.
+        What CTest knows about each test in a configured tree: its executable and labels.
     .DESCRIPTION
-        Empty when the tree is not configured or CTest is unavailable: the caller
-        falls back to a composed path, and the worst case stays "no diagnosis",
-        never "ran the wrong binary".
+        Empty when the tree is not configured or CTest is unavailable. Nothing is
+        composed or guessed in that case: the worst outcome stays "no diagnosis",
+        never "ran the wrong binary", and the caller says which of the two it was.
     #>
     [OutputType([hashtable])]
     param(
@@ -592,20 +602,30 @@ function Get-CTestCommandPath {
         [string] $Config = 'Debug'
     )
 
-    $paths = @{}
+    $registration = @{}
     if (-not (Test-Path -LiteralPath (Join-Path $BuildDir 'CTestTestfile.cmake') -PathType Leaf)) {
-        return $paths
+        return $registration
     }
 
     try {
         $raw = & ctest --test-dir $BuildDir -C $Config --show-only=json-v1 2>$null | Out-String
-        if (-not $raw.Trim()) { return $paths }
+        if (-not $raw.Trim()) { return $registration }
         foreach ($test in (ConvertFrom-Json $raw).tests) {
-            if ($test.command -and $test.command.Count -gt 0) { $paths[$test.name] = $test.command[0] }
+            if (-not $test.command -or $test.command.Count -eq 0) { continue }
+            $labels = @()
+            if ($test.PSObject.Properties['properties'] -and $test.properties) {
+                foreach ($property in $test.properties) {
+                    if ($property.name -eq 'LABELS') { $labels = @($property.value) }
+                }
+            }
+            $registration[$test.name] = [pscustomobject]@{
+                FilePath = [string]$test.command[0]
+                Labels   = @($labels)
+            }
         }
     }
     catch { return @{} }
-    return $paths
+    return $registration
 }
 
 function Resolve-QmlDiagnosticCommand {
@@ -620,13 +640,20 @@ function Resolve-QmlDiagnosticCommand {
         it automatically instead of leaving it to be rediscovered.
 
         Only real QuickTest runners take -o. The `exosnap --*-test` entry points
-        registered alongside them are ordinary executables and are left alone.
+        registered alongside them are ordinary executables and would treat the
+        flag as an unknown option. Which tests are QuickTest runners is declared
+        where they are registered, as the CTest label `quicktest`; a list kept
+        here missed the third runner within weeks of the second being added.
 
-        The binary is located by asking CTest where it registered the test, not by
-        composing a path. Where the runners land differs by generator -- the Visual
-        Studio generator writes a per-configuration subdirectory, Ninja does not --
-        and a composed path that misses only makes the diagnosis quietly absent,
-        which is the one outcome this function exists to prevent.
+        The binary is likewise the one CTest registered, never a composed path.
+        Where the runners land differs by generator -- the Visual Studio generator
+        writes a per-configuration subdirectory, Ninja does not -- and a composed
+        path that misses only makes the diagnosis quietly absent, which is the
+        one outcome this function exists to prevent. Without a registration there
+        is nothing to run; the caller reports that rather than guessing.
+    .PARAMETER Registration
+        Test name to what CTest registered for it, as Get-CTestRegistration
+        returns. Read from the build tree when omitted.
     #>
     [OutputType([object[]])]
     param(
@@ -634,36 +661,27 @@ function Resolve-QmlDiagnosticCommand {
         [Parameter(Mandatory)] [string] $LogDirectory,
         [string[]] $FailedTestNames = @(),
         [string] $Config = 'Debug',
-        [hashtable] $TestExecutables = @{}
+        [hashtable] $Registration
     )
 
-    if ($TestExecutables.Count -eq 0) {
-        $TestExecutables = @{
-            'quick.qml.record_controls' = 'record_controls_qml_tests'
-            'quick.qml.edit_timeline'   = 'edit_timeline_qml_tests'
-        }
+    if ($null -eq $Registration) {
+        $Registration = Get-CTestRegistration -BuildDir $BuildDir -Config $Config
     }
-
-    $registered = Get-CTestCommandPath -BuildDir $BuildDir -Config $Config
 
     $commands = [System.Collections.Generic.List[object]]::new()
     foreach ($name in @($FailedTestNames | Sort-Object -Unique)) {
-        if (-not $TestExecutables.ContainsKey($name)) { continue }
-        $exe = $TestExecutables[$name]
+        if (-not $Registration.ContainsKey($name)) { continue }
+        $entry = $Registration[$name]
+        if (@($entry.Labels) -notcontains $script:QuickTestLabel) { continue }
+        $exe = [IO.Path]::GetFileNameWithoutExtension([string]$entry.FilePath)
         $output = Join-Path $LogDirectory "$exe.txt"
-        $filePath = if ($registered.ContainsKey($name)) {
-            $registered[$name]
-        }
-        else {
-            Join-Path (Join-Path $BuildDir $Config) "$exe.exe"
-        }
         # A [pscustomobject], not a hashtable: @(...) around a single dictionary
         # enumerates its ENTRIES, so a one-command result would arrive at the
         # caller as five DictionaryEntry objects instead of one command.
         $commands.Add([pscustomobject]@{
                 TestName   = $name
                 Executable = $exe
-                FilePath   = $filePath
+                FilePath   = [string]$entry.FilePath
                 Arguments  = @('-o', "$output,txt")
                 OutputPath = $output
             })
@@ -825,6 +843,58 @@ function Get-VerifyCTestScriptSuite {
     return @($names | Sort-Object -Unique)
 }
 
+function Get-FirstBuildError {
+    <#
+    .SYNOPSIS
+        The first compiler, linker, CMake or generator error line in a build log.
+    .DESCRIPTION
+        A parallel build keeps going on every other translation unit after the
+        first one fails, so the tail of its log is a wall of unrelated progress
+        lines and cascade errors ending in "ninja: build stopped". The line that
+        explains the failure is the FIRST error, and it scrolled past hundreds of
+        lines earlier. MSVC, the linker, MSBuild, CMake and ninja each phrase it
+        differently; all of them are matched, and only the first hit is returned
+        because the second is usually a consequence of it.
+    #>
+    [OutputType([string])]
+    param([string] $LogPath)
+
+    if (-not $LogPath -or -not (Test-Path -LiteralPath $LogPath -PathType Leaf)) { return $null }
+
+    foreach ($line in (Get-Content -LiteralPath $LogPath)) {
+        if ($line -match $script:BuildErrorPattern) { return $line.Trim() }
+    }
+    return $null
+}
+
+function New-VerifyFailureReport {
+    <#
+    .SYNOPSIS
+        Where the evidence for each failed check is, for the end of the run.
+    .DESCRIPTION
+        A failing step prints its log path when it fails, and then a dozen more
+        lines of summary scroll it off the screen. The final verdict repeats every
+        path a reader needs to open -- the step log and any diagnosis the pipeline
+        produced for it -- so the last thing on the console is where to look, not
+        only that looking is required.
+    #>
+    [OutputType([string[]])]
+    param([Parameter(Mandatory)] [hashtable] $Run)
+
+    $lines = [System.Collections.Generic.List[string]]::new()
+    foreach ($check in $Run.checks) {
+        if ($check.status -ne $script:StatusFail) { continue }
+        $lines.Add("$($check.name):")
+        if ($check.evidence -and $check.evidence.Contains('log') -and $check.evidence.log) {
+            $lines.Add("  log: $($check.evidence.log)")
+        }
+        foreach ($diagnostic in @($check.diagnostics)) {
+            $lines.Add("  diagnosis: $diagnostic")
+        }
+    }
+    return @($lines)
+}
+
 function New-VerifySummary {
     <#
     .SYNOPSIS
@@ -915,8 +985,10 @@ Export-ModuleMember -Function @(
     'New-VerifyPlan',
     'Invoke-VerifyPlan',
     'Resolve-QmlDiagnosticCommand',
-    'Get-CTestCommandPath',
+    'Get-CTestRegistration',
     'Get-FailedCTestName',
+    'Get-FirstBuildError',
+    'New-VerifyFailureReport',
     'Get-VerifyToolCacheDirectory',
     'Get-VerifyCTestScriptSuite',
     'Split-VerifyCommandLineBatch',

@@ -227,7 +227,11 @@ function Invoke-Step {
         # Exit code the step uses to say "the tool I delegate to is not
         # installed". Reported as TOOL_MISSING rather than FAIL, and without the
         # failure tail: there is no diagnostic output to show, only a fact.
-        [int] $ToolMissingExitCode = 0
+        [int] $ToolMissingExitCode = 0,
+        # For steps that run a compiler: print the first error line above the
+        # tail, and carry it into the verdict. The tail of a parallel build is
+        # the cascade, not the cause.
+        [switch] $ReportFirstError
     )
 
     if (-not (Test-Path -LiteralPath $logRoot -PathType Container)) {
@@ -262,12 +266,22 @@ function Invoke-Step {
         return @{ Status = $status.ToolMissing; Detail = $reason.Trim(); Evidence = @{ log = $logPath } }
     }
 
+    $detail = "exit $code"
+    if ($ReportFirstError) {
+        $firstError = Get-FirstBuildError -LogPath $logPath
+        if ($firstError) {
+            Write-Host ""
+            Write-Host "---- $Name first error ----"
+            Write-Host $firstError
+            $detail = "$detail; first error: $firstError"
+        }
+    }
     Write-Host ""
     Write-Host "---- $Name output (last $FailureTailLines lines) ----"
     Get-Content -LiteralPath $logPath -Tail $FailureTailLines -ErrorAction SilentlyContinue |
         ForEach-Object { Write-Host $_ }
     Write-Host "Full log: $logPath"
-    return @{ Status = $status.Fail; Detail = "exit $code"; Evidence = @{ log = $logPath } }
+    return @{ Status = $status.Fail; Detail = $detail; Evidence = @{ log = $logPath } }
 }
 
 $realExecutor = {
@@ -358,7 +372,7 @@ $realExecutor = {
 
         'configure' {
             Initialize-CompilerEnvironment
-            return Invoke-Step -Name 'configure' -FilePath 'cmake' -Arguments @('--preset', $Preset)
+            return Invoke-Step -Name 'configure' -FilePath 'cmake' -Arguments @('--preset', $Preset) -ReportFirstError
         }
 
         'qmllint' {
@@ -366,7 +380,7 @@ $realExecutor = {
             # on this repository reports resolution failures the target does not.
             Initialize-CompilerEnvironment
             return Invoke-Step -Name 'qmllint' -FilePath 'cmake' `
-                -Arguments (@('--build', $buildDir, '--target', 'all_qmllint') + $jobsArg)
+                -Arguments (@('--build', $buildDir, '--target', 'all_qmllint') + $jobsArg) -ReportFirstError
         }
 
         'build' {
@@ -380,7 +394,7 @@ $realExecutor = {
             Initialize-CompilerEnvironment
             return Invoke-WithHostLock -Kind 'build' -Holder "verify $repoRoot" -Body {
                 Invoke-Step -Name 'build' -FilePath 'cmake' `
-                    -Arguments (@('--build', '--preset', $Preset) + $jobsArg)
+                    -Arguments (@('--build', '--preset', $Preset) + $jobsArg) -ReportFirstError
             }
         }
 
@@ -496,8 +510,27 @@ $dryRunExecutor = {
 $diagnosticProvider = {
     param($check, $outcome)
 
-    $commands = Resolve-QmlDiagnosticCommand -BuildDir (Join-Path $repoRoot $buildDir) `
-        -LogDirectory $logRoot -Config $Config -FailedTestNames $script:LastFailedTests
+    $treeDir = Join-Path $repoRoot $buildDir
+    $registration = if ($DryRun) {
+        # The simulated failure names a QuickTest runner; without a registration
+        # to say so the contract would be unreachable on a machine that never
+        # configured the tree, which is exactly where the dry run has to work.
+        @{ 'quick.qml.record_controls' = [pscustomobject]@{
+                FilePath = Join-Path $treeDir 'record_controls_qml_tests.exe'
+                Labels   = @('quick', 'quicktest') } }
+    }
+    else {
+        Get-CTestRegistration -BuildDir $treeDir -Config $Config
+    }
+    if ($registration.Count -eq 0) {
+        # Said out loud, because the alternative is a missing diagnosis that looks
+        # like "the failing test was not a QuickTest".
+        Write-Host ""
+        Write-Host "no CTest registration could be read from $treeDir; the QuickTest re-run is skipped"
+    }
+
+    $commands = Resolve-QmlDiagnosticCommand -BuildDir $treeDir -LogDirectory $logRoot -Config $Config `
+        -FailedTestNames $script:LastFailedTests -Registration $registration
     $produced = @()
     foreach ($command in $commands) {
         if ($DryRun) {
@@ -539,6 +572,13 @@ $run = Invoke-VerifyPlan -Plan $plan -Executor $(if ($DryRun) { $dryRunExecutor 
 
 Write-Host ""
 foreach ($line in (New-VerifySummary -Run $run)) { Write-Host $line }
+
+$failureReport = @(New-VerifyFailureReport -Run $run)
+if ($failureReport.Count -gt 0) {
+    Write-Host ""
+    Write-Host 'evidence:'
+    foreach ($line in $failureReport) { Write-Host "  $line" }
+}
 
 if ($run.toolMissing.Count -gt 0) {
     Write-Host ""

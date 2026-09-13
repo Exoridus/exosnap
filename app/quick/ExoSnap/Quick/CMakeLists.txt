@@ -1043,8 +1043,12 @@ get_filename_component(_exosnap_quick_qt_prefix "${Qt6_DIR}/../../.." ABSOLUTE)
 # it: a QML plugin DLL there links Qt modules that live in Qt's bin/, and the
 # staged copies next to the test binary do not include them — so the plugin
 # resolves and then fails to load. Qt's bin/ on PATH covers that.
+# `quicktest` marks a Qt QuickTest runner, one that takes `-o <file>,txt`. The
+# verify pipeline reads the label from CTest to know which failing tests it may
+# re-run for a per-function report; the `exosnap --*-test` entry points do not
+# carry it because they do not understand the flag.
 set_tests_properties(quick.qml.record_controls PROPERTIES
-    LABELS "quick"
+    LABELS "quick;quicktest"
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QML_IMPORT_PATH=${_exosnap_quick_qt_prefix}/qml"
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${_exosnap_quick_qt_prefix}/bin"
 )
@@ -1147,7 +1151,7 @@ target_link_libraries(edit_timeline_qml_tests
 
 add_test(NAME quick.qml.edit_timeline COMMAND edit_timeline_qml_tests)
 set_tests_properties(quick.qml.edit_timeline PROPERTIES
-    LABELS "quick"
+    LABELS "quick;quicktest"
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QML_IMPORT_PATH=${_exosnap_quick_qt_prefix}/qml"
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${_exosnap_quick_qt_prefix}/bin"
 )
@@ -1223,7 +1227,7 @@ target_link_libraries(record_source_picker_qml_tests
 
 add_test(NAME quick.qml.record_source_picker COMMAND record_source_picker_qml_tests)
 set_tests_properties(quick.qml.record_source_picker PROPERTIES
-    LABELS "quick"
+    LABELS "quick;quicktest"
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QML_IMPORT_PATH=${_exosnap_quick_qt_prefix}/qml"
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${_exosnap_quick_qt_prefix}/bin"
 )
