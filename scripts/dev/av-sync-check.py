@@ -697,7 +697,7 @@ def _parse_marker_times(value: str) -> list[float]:
     except ValueError as error:
         raise argparse.ArgumentTypeError("marker times must be comma-separated seconds") from error
     if len(times) < 2 or any(time < 0.0 for time in times):
-        raise argparse.ArgumentTypeError("marker times must contain 2 or 3 non-negative values")
+        raise argparse.ArgumentTypeError("marker times must contain at least 2 non-negative values")
     if any(times[index] <= times[index - 1] for index in range(1, len(times))):
         raise argparse.ArgumentTypeError("marker times must be strictly increasing")
     return times
