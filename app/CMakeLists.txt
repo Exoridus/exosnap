@@ -1453,6 +1453,15 @@ if(EXOSNAP_PWSH)
     set_tests_properties(pipeline.packaging_version PROPERTIES TIMEOUT 300 LABELS "pipeline")
     exosnap_set_test_phase(pipeline.packaging_version hermetic)
 
+    # The publication policy, offline half only: what packaging/publication-policy.json
+    # is allowed to say about each channel. The feed half of check-feed-drift.ps1 reads
+    # four public services and is advisory by design, so it is not a test.
+    add_test(NAME pipeline.publication_policy
+        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
+            "${PROJECT_SOURCE_DIR}/scripts/tests/publication-policy.tests.ps1")
+    set_tests_properties(pipeline.publication_policy PROPERTIES TIMEOUT 300 LABELS "pipeline")
+    exosnap_set_test_phase(pipeline.publication_policy hermetic)
+
     # The Hyper-V verification guest recipe. Registered here for the reason the
     # release-runner cases are: what it is worth testing about a virtual machine is
     # what happens before one exists -- the three refusals a first attempt hits (not

@@ -568,14 +568,29 @@ submission is the one step that cannot be withdrawn from users' machines, so it 
 the qualification record. Submissions for `v0.9.0` are stopped for that reason; `0.9.1` is the
 version the package managers move to.
 
-> **The version axis is now a CI gate.** `scripts/check-packaging-version.ps1` runs in `ci.yml`'s
-> `lint` job on every pull request and again before the release build, and it fails when any of the
-> roughly sixteen version literals across the three packaging surfaces disagrees with
-> `project(exosnap VERSION x.y.z)`. Run it locally after each bump below --
-> `pwsh scripts/check-packaging-version.ps1` -- rather than discovering a half-finished bump at
-> submission time. It deliberately says nothing about installer hashes: those cannot exist between a
-> bump and the release that produces the bytes, so the Chocolatey checksum placeholder and an
-> unpublished WinGet `InstallerSha256` pass it. The full validators below still check them.
+> **The version axis is a CI gate, and the bump is one command.**
+> `pwsh scripts/bump-version.ps1 -Version <x.y.z>` moves every literal the gate checks -- the CMake
+> version, the Chocolatey nuspec and install script, the Scoop manifest, and the three WinGet
+> manifests together with the directory they live in -- and resets the four values only a release
+> can produce (`checksum64`, the Scoop `hash`, `InstallerSha256`, and every `ProductCode`) to their
+> placeholders, so a bumped tree cannot be submitted by accident. It refuses a dirty tree, so the
+> bump is the whole diff, and finishes by running the gate. The per-surface notes below stay as the
+> description of what each literal is and what still has to be filled in by hand after the release
+> exists.
+>
+> The gate itself, `scripts/check-packaging-version.ps1`, runs in `ci.yml`'s `lint` job on every
+> pull request and again before the release build, and fails when any of those literals disagrees
+> with `project(exosnap VERSION x.y.z)`. It deliberately says nothing about installer hashes: those
+> cannot exist between a bump and the release that produces the bytes, so the placeholders pass it.
+> The full validators below still check them.
+>
+> **What each channel is serving is written down.** `packaging/publication-policy.json` states the
+> intent per channel -- publish, or held at a version with the reason and the version it resumes at
+> -- and `pwsh scripts/check-feed-drift.ps1` reports what the public feeds actually serve against
+> it. The policy half is checked offline by `pipeline.publication_policy` (a hold that the tree has
+> overtaken, a hold with no reason, or a packaging surface the policy says nothing about all fail).
+> The feed half is advisory and never blocks: the feeds are outside this repository, and nothing
+> here submits or publishes anything -- every submission below is a step a person runs.
 
 - [ ] **WinGet.** `packaging/winget/manifests/c/Codexo/ExoSnap/` must contain exactly one version
       directory (`scripts/validate-winget-manifest.ps1` enforces this) — `git mv` the existing
