@@ -1064,6 +1064,7 @@ void VideoThread::Run() {
     HCURSOR wgcCursorHandle = nullptr;
     Win32CursorBitmap wgcCursorBitmap;
     std::vector<uint8_t> wgcCursorUploadBgra;
+    std::vector<uint8_t> wgcCursorInvertUploadBgra;
     int32_t wgcCursorPosX = 0;
     int32_t wgcCursorPosY = 0;
     bool wgcCursorVisible = false;
@@ -1092,6 +1093,7 @@ void VideoThread::Run() {
         uint64_t draw_calls = 0;
         uint64_t draw_clipped_out = 0;
         uint64_t draw_submitted = 0;
+        uint64_t invert_submitted = 0;
         uint64_t draw_failed = 0;
         bool have_outcome = false;
         WgcCursorSampleOutcome outcome = WgcCursorSampleOutcome::Sampled;
@@ -1664,6 +1666,26 @@ void VideoThread::Run() {
             return false;
         }
         ++wgcCursorTrace.draw_submitted;
+
+        // The inverting plane, when the cursor has one. Drawn after the sprite and
+        // over the same rectangle: the two planes are disjoint by construction, so
+        // the order only decides which blend each pixel goes through.
+        if (!wgcCursorBitmap.invert.empty()) {
+            wgcCursorInvertUploadBgra.resize(static_cast<size_t>(clip.w) * clip.h * 4);
+            for (int32_t row = 0; row < clip.h; ++row) {
+                const size_t srcOff =
+                    (static_cast<size_t>(clip.bitmap_off_y + row) * wgcCursorBitmap.width + clip.bitmap_off_x) * 4u;
+                const uint8_t* srcRow = wgcCursorBitmap.invert.data() + srcOff;
+                uint8_t* dstRow = wgcCursorInvertUploadBgra.data() + static_cast<size_t>(row) * clip.w * 4u;
+                std::memcpy(dstRow, srcRow, static_cast<size_t>(clip.w) * 4u);
+            }
+            if (!gpuCompositor.DrawCursorInvert(wgcCursorInvertUploadBgra.data(), clip.w, clip.h, rect, compErr)) {
+                ++wgcCursorTrace.draw_failed;
+                m_state.RecordFailure(E_FAIL, ErrorPhase::VideoCapture, "GPU WGC cursor invert composite: " + compErr);
+                return false;
+            }
+            ++wgcCursorTrace.invert_submitted;
+        }
         return true;
     };
 
@@ -4482,6 +4504,7 @@ end_encode_loop:
             {"draw_calls", std::to_string(wgcCursorTrace.draw_calls)},
             {"draw_clipped_out", std::to_string(wgcCursorTrace.draw_clipped_out)},
             {"draw_submitted", std::to_string(wgcCursorTrace.draw_submitted)},
+            {"invert_submitted", std::to_string(wgcCursorTrace.invert_submitted)},
             {"draw_failed", std::to_string(wgcCursorTrace.draw_failed)},
             {"compositor_ready", gpuCompositorReady ? "true" : "false"},
             {"final_outcome",

@@ -41,6 +41,25 @@ enum class OverlayMode : int {
     Opaque = 2, // force alpha to 1 (webcam with chroma disabled, background blit)
 };
 
+// How a mask cursor's inverting pixels are composited. Named rather than implied,
+// because only one of the two is the Win32 semantics and a reader has to be able
+// to tell which one a path uses.
+enum class MaskCursorComposition {
+    // 1 - destination, the operation Windows performs. Available wherever the
+    // composite target holds the displayed signal, which is every SDR format.
+    ExactSdr,
+    // Opaque, on the native HDR10 path only. The composite there is linear scRGB,
+    // and 1 - linear_destination is not the inversion Windows defines: the
+    // complement of a displayed value is not the complement of its linear light.
+    // Drawing the pixels opaque keeps the pointer legible and is deliberately not
+    // the Win32 operation. Do not read this path as exact XOR semantics.
+    HdrVisibleFallback,
+};
+
+[[nodiscard]] inline MaskCursorComposition SelectMaskCursorComposition(bool hdr_linear) noexcept {
+    return hdr_linear ? MaskCursorComposition::HdrVisibleFallback : MaskCursorComposition::ExactSdr;
+}
+
 [[nodiscard]] inline OverlayMode SelectOverlayMode(bool chroma_enabled, bool force_opaque) noexcept {
     if (chroma_enabled) {
         return OverlayMode::Chroma;

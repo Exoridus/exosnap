@@ -22,10 +22,45 @@
 
 namespace exosnap::engine {
 
+// The four states a mask-only Win32 cursor's pixel can be in. The AND mask
+// selects whether the destination survives, and the XOR mask is applied after
+// it, which is why two of the four are not colours at all.
+//
+//   AND XOR  result
+//    0   0   opaque black
+//    0   1   opaque white
+//    1   0   destination unchanged
+//    1   1   destination inverted
+//
+// Only the first three fit a colour with an alpha. The fourth is what keeps the
+// classic I-beam legible on a light and a dark background alike, and a sprite
+// that drops it is invisible on every cursor built from it alone.
+enum class Win32CursorMaskState {
+    OpaqueBlack,
+    OpaqueWhite,
+    Transparent,
+    Invert,
+};
+
+[[nodiscard]] constexpr Win32CursorMaskState Win32CursorMaskStateOf(bool and_bit, bool xor_bit) noexcept {
+    if (!and_bit) {
+        return xor_bit ? Win32CursorMaskState::OpaqueWhite : Win32CursorMaskState::OpaqueBlack;
+    }
+    return xor_bit ? Win32CursorMaskState::Invert : Win32CursorMaskState::Transparent;
+}
+
 // A cursor image captured from an HCURSOR: tightly packed BGRA with the
 // hotspot the position points at.
+//
+// `invert` is the second plane a mask cursor needs, tightly packed BGRA of the
+// same extent: opaque white where the pixel inverts its destination, zero
+// everywhere else. It is empty for a cursor that inverts nothing, which is every
+// colour cursor and most mask ones. Its shape suits the blend that draws it --
+// SrcBlend INV_DEST_COLOR against DestBlend INV_SRC_ALPHA leaves a zero pixel's
+// destination exactly as it was, so no pixel has to be clipped out.
 struct Win32CursorBitmap {
     std::vector<uint8_t> bgra;
+    std::vector<uint8_t> invert;
     int width = 0;
     int height = 0;
     int hotspot_x = 0;
@@ -35,6 +70,11 @@ struct Win32CursorBitmap {
 // Render the cursor into a BGRA bitmap via GetIconInfo + DrawIconEx. Returns
 // false for a null cursor, a degenerate size (0 or > 256 px), or a GDI
 // failure; `out` is only written on success.
+//
+// For a mask-only cursor the alpha channel is rebuilt from the mask, because
+// DrawIconEx writes none: the three colour states become opaque black, opaque
+// white and transparent, and the inverting state is reported separately in
+// `out.invert` rather than forced into one of them.
 bool CaptureWin32CursorBitmap(HCURSOR cursor, Win32CursorBitmap& out);
 
 // Why a cursor sample produced no sprite. An absent pointer is a normal state

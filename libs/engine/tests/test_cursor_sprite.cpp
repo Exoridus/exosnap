@@ -135,3 +135,41 @@ TEST(WgcCursorSampleOutcome, EveryOutcomeHasItsOwnToken) {
     }
     EXPECT_EQ(tokens.size(), std::size(all));
 }
+
+// The four states a mask-only cursor's pixel can be in. Two of them are colours
+// with an alpha and two are operations on the destination, which is why the
+// sprite alone cannot carry all four.
+TEST(Win32CursorMask, TheFourStatesAreDistinct) {
+    EXPECT_EQ(Win32CursorMaskStateOf(false, false), Win32CursorMaskState::OpaqueBlack);
+    EXPECT_EQ(Win32CursorMaskStateOf(false, true), Win32CursorMaskState::OpaqueWhite);
+    EXPECT_EQ(Win32CursorMaskStateOf(true, false), Win32CursorMaskState::Transparent);
+    EXPECT_EQ(Win32CursorMaskStateOf(true, true), Win32CursorMaskState::Invert);
+}
+
+TEST(Win32CursorMask, TheAndBitAloneCannotSeparateTransparentFromInvert) {
+    // The rebuild this replaced read only the AND plane, so both AND=1 states
+    // became transparent -- and a cursor built entirely from inverting pixels,
+    // which the default I-beam is, came out invisible.
+    EXPECT_NE(Win32CursorMaskStateOf(true, false), Win32CursorMaskStateOf(true, true));
+}
+
+TEST(Win32CursorMask, TheDefaultIBeamIsBuiltFromInvertingPixelsAlone) {
+    // Not a synthetic case: the system I-beam has no opaque pixel of either
+    // colour, so every pixel that makes it visible is an inverting one.
+    Win32CursorBitmap sprite;
+    ASSERT_TRUE(CaptureWin32CursorBitmap(LoadCursorW(nullptr, MAKEINTRESOURCEW(32513)), sprite));
+    ASSERT_FALSE(sprite.invert.empty()) << "the I-beam's inverting plane must survive capture";
+
+    size_t opaque = 0;
+    size_t inverting = 0;
+    for (size_t i = 3; i < sprite.bgra.size(); i += 4) {
+        if (sprite.bgra[i] != 0) {
+            ++opaque;
+        }
+        if (sprite.invert[i] != 0) {
+            ++inverting;
+        }
+    }
+    EXPECT_EQ(opaque, 0u) << "the I-beam carries no opaque pixel; it is visible only by inverting";
+    EXPECT_GT(inverting, 0u);
+}
