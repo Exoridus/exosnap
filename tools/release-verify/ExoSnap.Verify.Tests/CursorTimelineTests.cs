@@ -132,6 +132,39 @@ public sealed class CursorTimelineTests
     }
 
     [Fact]
+    public void TwoMarkersQuantisingOppositeWaysStillAgreeOnTheRate()
+    {
+        // A recording running at exactly the declared rate, with each marker read off
+        // the frame its flash landed in. At 30 fps the two readings can sit almost a
+        // frame out in opposite directions, putting their difference just under two
+        // frame intervals from the declared one. That is the oracle's own resolution,
+        // not drift, and a tolerance of a single frame would call it a failure.
+        var log = WriteEngineLog(0.5);
+        try
+        {
+            const double frame = 1.0 / 30.0;
+            var quantised = Healthy(log) with
+            {
+                FrameIntervalSeconds = frame,
+                Markers =
+                [
+                    new MarkerObservation(4.0, 3.5 - (0.9 * frame)),
+                    new MarkerObservation(31.0, 30.5 + (0.9 * frame)),
+                ],
+            };
+
+            var result = CursorTimeline.Qualify(quantised);
+
+            Assert.True(result.Rate!.Agrees);
+            Assert.True(Math.Abs(result.Rate.Measured - result.Rate.Declared) > frame);
+        }
+        finally
+        {
+            File.Delete(log);
+        }
+    }
+
+    [Fact]
     public void MarkersThatDisagreeAboutTheRateDisqualifyTheTimebase()
     {
         // Test C. The offsets can agree while the clocks run at different speeds: the

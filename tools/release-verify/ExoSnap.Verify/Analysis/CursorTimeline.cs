@@ -32,7 +32,11 @@ public sealed record CursorTimelineInput(
 /// <summary>How far two markers disagree about the rate the timebases ran at.</summary>
 /// <param name="Measured">Seconds between the markers in the recording.</param>
 /// <param name="Declared">Seconds between them in the stimulus schedule.</param>
-/// <param name="ToleranceSeconds">What the frame quantisation alone allows.</param>
+/// <param name="ToleranceSeconds">
+/// What frame quantisation alone allows for the measured interval. Both endpoints are
+/// read as the frame a flash landed in, so each is quantised independently and their
+/// difference can absorb twice a single reading's error.
+/// </param>
 public sealed record MarkerRateCheck(double Measured, double Declared, double ToleranceSeconds)
 {
     /// <summary>Whether the separation agrees within what the quantisation allows.</summary>
@@ -87,10 +91,16 @@ public static class CursorTimeline
         {
             var first = markers[0];
             var last = markers[^1];
+            // Two frame intervals, not one. The measured quantity is a difference of
+            // two marker readings, and each reading is the PTS of the frame its flash
+            // landed in -- so each carries up to a frame of quantisation on its own. A
+            // one-frame tolerance rejects a recording whose rate is exactly right
+            // whenever the two markers happen to quantise in opposite directions, which
+            // is a defect in the oracle and not a finding about the recorder.
             rate = new MarkerRateCheck(
                 last.FramePts - first.FramePts,
                 last.StimulusTimeSeconds - first.StimulusTimeSeconds,
-                input.FrameIntervalSeconds);
+                2.0 * input.FrameIntervalSeconds);
             notes.Add(rate.Evidence);
         }
         else if (markers.Count == 1)
