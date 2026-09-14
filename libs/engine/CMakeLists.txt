@@ -475,6 +475,17 @@ exosnap_add_gtest(
     LIBRARIES exosnap_engine
 )
 
+# The per-monitor DPI scope the cursor mapping reads its pair of coordinates in.
+# What is under test is that the scope is local: a leak would make the whole video
+# thread per-monitor aware and move every other Win32 geometry call with it.
+exosnap_add_gtest(
+    NAME test_thread_dpi_scope
+    TEST_PREFIX engine.
+    SOURCES tests/test_thread_dpi_scope.cpp
+    LIBRARIES exosnap_engine
+)
+target_include_directories(test_thread_dpi_scope PRIVATE src)
+
 exosnap_add_gtest(
     NAME test_multi_track_packet_types
     TEST_PREFIX engine.

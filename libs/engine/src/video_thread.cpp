@@ -9,6 +9,7 @@
 #include "gpu_rgb_to_ayuv.h"
 #include "hdr_preview.h"
 #include "hdr_tonemap.h"
+#include "thread_dpi_scope.h"
 #include <exosnap/engine/dxgi_od_capture_src.h>
 
 #include "preview_publish_gate.h"
@@ -1086,6 +1087,7 @@ void VideoThread::Run() {
         uint64_t null_handle = 0;
         uint64_t bitmap_failed = 0;
         uint64_t bounds_invalid = 0;
+        uint64_t dpi_scope_failed = 0;
         uint64_t handle_changes = 0;
         uint64_t position_changes = 0;
         uint64_t generation_bumps = 0;
@@ -1564,6 +1566,23 @@ void VideoThread::Run() {
         }
 
         ++wgcCursorTrace.samples;
+        // The pointer position and the bounds it is measured against, read in one
+        // coordinate space. Without this the position is virtualised for whichever
+        // monitor the pointer is over while the bounds are not, and the sprite
+        // lands short by however much of the distance lies on a scaled display.
+        // The scope covers the bounds refresh below as well: its GetWindowRect
+        // fallback is virtualised too, and fixing only the cursor would reproduce
+        // the same defect from the other side.
+        const ScopedThreadDpiAwareness dpiScope(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        if (!dpiScope.active()) {
+            // Not a fallback to the old behaviour. Mixed spaces put the pointer
+            // somewhere it never was, and a recording with the cursor in the wrong
+            // place is worse than one without it.
+            ++wgcCursorTrace.dpi_scope_failed;
+            noteWgcCursorOutcome(WgcCursorSampleOutcome::DpiScopeUnavailable, CURSORINFO{});
+            return;
+        }
+
         CURSORINFO cursorInfo{};
         cursorInfo.cbSize = sizeof(cursorInfo);
         const bool infoOk = GetCursorInfo(&cursorInfo) != FALSE;
@@ -1613,12 +1632,11 @@ void VideoThread::Run() {
             return;
         }
 
-        const int32_t cx = ScaleCoordinateToSource(cursorInfo.ptScreenPos.x - wgcCursorBounds.left,
-                                                   static_cast<int32_t>(sourceWidth), boundsW) -
-                           wgcCursorBitmap.hotspot_x;
-        const int32_t cy = ScaleCoordinateToSource(cursorInfo.ptScreenPos.y - wgcCursorBounds.top,
-                                                   static_cast<int32_t>(sourceHeight), boundsH) -
-                           wgcCursorBitmap.hotspot_y;
+        const CursorSourcePoint mapped = MapCursorToSource(
+            cursorInfo.ptScreenPos.x, cursorInfo.ptScreenPos.y, wgcCursorBounds, static_cast<int32_t>(sourceWidth),
+            static_cast<int32_t>(sourceHeight), wgcCursorBitmap.hotspot_x, wgcCursorBitmap.hotspot_y);
+        const int32_t cx = mapped.x;
+        const int32_t cy = mapped.y;
         if (!wgcCursorVisible || cx != wgcCursorPosX || cy != wgcCursorPosY) {
             wgcCursorVisible = true;
             wgcCursorPosX = cx;
@@ -4497,6 +4515,7 @@ end_encode_loop:
             {"null_handle", std::to_string(wgcCursorTrace.null_handle)},
             {"sprite_capture_failed", std::to_string(wgcCursorTrace.bitmap_failed)},
             {"bounds_empty", std::to_string(wgcCursorTrace.bounds_invalid)},
+            {"dpi_scope_failed", std::to_string(wgcCursorTrace.dpi_scope_failed)},
             {"shape_changes", std::to_string(wgcCursorTrace.handle_changes)},
             {"position_changes", std::to_string(wgcCursorTrace.position_changes)},
             {"generation_bumps", std::to_string(wgcCursorTrace.generation_bumps)},

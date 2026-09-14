@@ -173,3 +173,49 @@ TEST(Win32CursorMask, TheDefaultIBeamIsBuiltFromInvertingPixelsAlone) {
     EXPECT_EQ(opaque, 0u) << "the I-beam carries no opaque pixel; it is visible only by inverting";
     EXPECT_GT(inverting, 0u);
 }
+
+// The geometry a live run actually failed on: a 1280x720 window at 100,100 on a
+// 100 per cent primary display, with a 125 per cent second display starting at
+// x=1024, and the pointer on the second one.
+namespace {
+constexpr RECT kWindowBounds{100, 100, 1380, 820};
+constexpr int32_t kSourceWidth = 1280;
+constexpr int32_t kSourceHeight = 720;
+} // namespace
+
+TEST(CursorSourceMapping, PhysicalPointerCoordinatesLandWhereThePointerIs) {
+    // Both halves in the same space: the pointer's physical position and the
+    // window's physical bounds. The sprite belongs at the pointer minus its
+    // hotspot, and the window's monitor is unscaled, so the map is one to one.
+    const CursorSourcePoint a = MapCursorToSource(1200, 520, kWindowBounds, kSourceWidth, kSourceHeight, 8, 9);
+    EXPECT_EQ(a.x, 1092);
+    EXPECT_EQ(a.y, 411);
+
+    const CursorSourcePoint b = MapCursorToSource(1280, 760, kWindowBounds, kSourceWidth, kSourceHeight, 8, 9);
+    EXPECT_EQ(b.x, 1172);
+    EXPECT_EQ(b.y, 651);
+}
+
+TEST(CursorSourceMapping, AVirtualisedPointerAgainstPhysicalBoundsLandsShort) {
+    // The defect, pinned by the numbers a run measured rather than by a rule. A
+    // process that is not per-monitor aware reads a pointer at physical 1200,520
+    // as 1165,416 and one at physical 1280,760 as 1229,608, because the display it
+    // is on is scaled by 1.25 and the window's is not. Subtracting unvirtualised
+    // bounds from those puts the sprite well left of and above the pointer.
+    const CursorSourcePoint a = MapCursorToSource(1165, 416, kWindowBounds, kSourceWidth, kSourceHeight, 8, 9);
+    EXPECT_EQ(a.x, 1057);
+    EXPECT_EQ(a.y, 307);
+    EXPECT_LT(a.x, 1092) << "the virtualised reading must land left of the true position";
+    EXPECT_LT(a.y, 411);
+
+    const CursorSourcePoint b = MapCursorToSource(1229, 608, kWindowBounds, kSourceWidth, kSourceHeight, 8, 9);
+    EXPECT_EQ(b.x, 1121);
+    EXPECT_EQ(b.y, 499);
+
+    // The error is not a uniform scale. Only the part of the distance beyond the
+    // unscaled display's edge is compressed, so how wrong a pointer is depends on
+    // where it is -- which is why a single correction factor would be wrong too.
+    const CursorSourcePoint onPrimary = MapCursorToSource(500, 400, kWindowBounds, kSourceWidth, kSourceHeight, 8, 9);
+    EXPECT_EQ(onPrimary.x, 392) << "a pointer on the window's own display is unaffected";
+    EXPECT_EQ(onPrimary.y, 291);
+}

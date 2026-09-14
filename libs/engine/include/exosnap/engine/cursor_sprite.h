@@ -89,6 +89,10 @@ enum class WgcCursorSampleOutcome {
     NullHandle,
     SpriteCaptureFailed,
     BoundsEmpty,
+    // The per-monitor-aware scope the position and the bounds have to share could
+    // not be entered, so the two would have been read in different spaces. The
+    // sample is skipped rather than placed somewhere the pointer never was.
+    DpiScopeUnavailable,
 };
 
 // Classify the CURSORINFO half of a sample. Split out from the capture loop so
@@ -120,6 +124,8 @@ enum class WgcCursorSampleOutcome {
         return "sprite_capture_failed";
     case WgcCursorSampleOutcome::BoundsEmpty:
         return "cursor_bounds_empty";
+    case WgcCursorSampleOutcome::DpiScopeUnavailable:
+        return "dpi_scope_unavailable";
     case WgcCursorSampleOutcome::Sampled:
         break;
     }
@@ -130,6 +136,37 @@ enum class WgcCursorSampleOutcome {
 // bounds and the source texture differ in size (DPI-scaled window capture).
 // Rounds to nearest; passes the delta through when either extent is unknown.
 int32_t ScaleCoordinateToSource(int32_t screen_delta, int32_t source_pixels, int32_t bounds_pixels) noexcept;
+
+// The sprite's top-left in source pixels for a pointer at `screen` over a window
+// occupying `bounds`, with the sprite's hotspot at the pointer.
+//
+// Both arguments must come from the same coordinate space. They do not by
+// default: a process that is not per-monitor DPI aware is handed a pointer
+// position virtualised for the monitor the pointer is over, while a window on an
+// unscaled monitor reports unvirtualised bounds. Subtracting one from the other
+// compresses whatever part of the distance lies on a scaled monitor and leaves the
+// rest alone, so the sprite lands short by an amount that depends on where the
+// pointer is. The caller reads both under one per-monitor-aware scope for that
+// reason; this function cannot detect the mistake, only inherit it.
+
+// The sprite's hotspot-adjusted top-left, in source pixels. Pure, and the single
+// place the two halves of the mapping meet, so a test can pin what happens when
+// they disagree about their coordinate space.
+struct CursorSourcePoint {
+    int32_t x = 0;
+    int32_t y = 0;
+};
+
+[[nodiscard]] inline CursorSourcePoint MapCursorToSource(int32_t screen_x, int32_t screen_y, const RECT& bounds,
+                                                         int32_t source_width, int32_t source_height, int32_t hotspot_x,
+                                                         int32_t hotspot_y) noexcept {
+    const int32_t bounds_w = bounds.right - bounds.left;
+    const int32_t bounds_h = bounds.bottom - bounds.top;
+    CursorSourcePoint point;
+    point.x = ScaleCoordinateToSource(screen_x - bounds.left, source_width, bounds_w) - hotspot_x;
+    point.y = ScaleCoordinateToSource(screen_y - bounds.top, source_height, bounds_h) - hotspot_y;
+    return point;
+}
 
 // A cursor sprite clipped against the target it is drawn into. Pure.
 struct CursorSpriteClip {
