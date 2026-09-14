@@ -37,6 +37,55 @@ struct Win32CursorBitmap {
 // failure; `out` is only written on success.
 bool CaptureWin32CursorBitmap(HCURSOR cursor, Win32CursorBitmap& out);
 
+// Why a cursor sample produced no sprite. An absent pointer is a normal state
+// and every one of these paths is silent in the capture loop, which leaves a
+// desktop with nothing to draw indistinguishable from a sprite that would not
+// rasterize. Only NotShowing and NullHandle are the operating system declining
+// to offer a cursor; the rest are the recorder failing to use one it was given.
+enum class WgcCursorSampleOutcome {
+    Sampled,
+    CursorInfoFailed,
+    NotShowing,
+    NullHandle,
+    SpriteCaptureFailed,
+    BoundsEmpty,
+};
+
+// Classify the CURSORINFO half of a sample. Split out from the capture loop so
+// the precedence is pinned: a failed query reports neither visibility nor a
+// handle, so it must not be reported as a hidden cursor.
+[[nodiscard]] constexpr WgcCursorSampleOutcome ClassifyWgcCursorInfo(bool info_ok, bool showing,
+                                                                     bool has_handle) noexcept {
+    if (!info_ok) {
+        return WgcCursorSampleOutcome::CursorInfoFailed;
+    }
+    if (!showing) {
+        return WgcCursorSampleOutcome::NotShowing;
+    }
+    if (!has_handle) {
+        return WgcCursorSampleOutcome::NullHandle;
+    }
+    return WgcCursorSampleOutcome::Sampled;
+}
+
+[[nodiscard]] constexpr const char* WgcCursorSampleOutcomeName(WgcCursorSampleOutcome outcome) noexcept {
+    switch (outcome) {
+    case WgcCursorSampleOutcome::CursorInfoFailed:
+        return "cursor_info_failed";
+    case WgcCursorSampleOutcome::NotShowing:
+        return "not_showing";
+    case WgcCursorSampleOutcome::NullHandle:
+        return "null_cursor_handle";
+    case WgcCursorSampleOutcome::SpriteCaptureFailed:
+        return "sprite_capture_failed";
+    case WgcCursorSampleOutcome::BoundsEmpty:
+        return "cursor_bounds_empty";
+    case WgcCursorSampleOutcome::Sampled:
+        break;
+    }
+    return "sampled";
+}
+
 // Map a screen-space delta into source-texture pixels when the captured
 // bounds and the source texture differ in size (DPI-scaled window capture).
 // Rounds to nearest; passes the delta through when either extent is unknown.

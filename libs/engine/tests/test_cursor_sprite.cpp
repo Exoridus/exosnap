@@ -8,6 +8,10 @@
 
 #include <gtest/gtest.h>
 
+#include <iterator>
+#include <set>
+#include <string>
+
 using namespace exosnap::engine;
 
 TEST(CursorSpriteClip, FullyInsidePassesThrough) {
@@ -99,4 +103,35 @@ TEST(ScaleCoordinate, RoundsToNearestAndPassesThroughUnknownBounds) {
     // Unknown bounds pass the delta through.
     EXPECT_EQ(ScaleCoordinateToSource(42, 0, 300), 42);
     EXPECT_EQ(ScaleCoordinateToSource(42, 100, 0), 42);
+}
+
+// The sample classifier decides which of three silent exits a missing pointer
+// took, and the whole point of the record is that the three are not the same
+// finding: only a cursor the OS declines to show is the recorder behaving.
+TEST(WgcCursorSampleOutcome, ReportsTheOperatingSystemsAnswerWhenItHasOne) {
+    EXPECT_EQ(ClassifyWgcCursorInfo(true, true, true), WgcCursorSampleOutcome::Sampled);
+    EXPECT_EQ(ClassifyWgcCursorInfo(true, false, true), WgcCursorSampleOutcome::NotShowing);
+    EXPECT_EQ(ClassifyWgcCursorInfo(true, true, false), WgcCursorSampleOutcome::NullHandle);
+}
+
+TEST(WgcCursorSampleOutcome, AFailedQueryOutranksTheStateItDidNotFill) {
+    // GetCursorInfo leaves flags and hCursor untouched when it fails, so the
+    // zeroed struct reads as a hidden cursor with no handle. Reporting that as
+    // NotShowing would blame the desktop for a call that never answered.
+    EXPECT_EQ(ClassifyWgcCursorInfo(false, false, false), WgcCursorSampleOutcome::CursorInfoFailed);
+    EXPECT_EQ(ClassifyWgcCursorInfo(false, true, true), WgcCursorSampleOutcome::CursorInfoFailed);
+}
+
+TEST(WgcCursorSampleOutcome, EveryOutcomeHasItsOwnToken) {
+    const WgcCursorSampleOutcome all[] = {WgcCursorSampleOutcome::Sampled,
+                                          WgcCursorSampleOutcome::CursorInfoFailed,
+                                          WgcCursorSampleOutcome::NotShowing,
+                                          WgcCursorSampleOutcome::NullHandle,
+                                          WgcCursorSampleOutcome::SpriteCaptureFailed,
+                                          WgcCursorSampleOutcome::BoundsEmpty};
+    std::set<std::string> tokens;
+    for (const WgcCursorSampleOutcome outcome : all) {
+        tokens.insert(WgcCursorSampleOutcomeName(outcome));
+    }
+    EXPECT_EQ(tokens.size(), std::size(all));
 }

@@ -121,6 +121,26 @@ int RectHeight(const RECT& r) noexcept {
     return r.bottom - r.top;
 }
 
+// A cursor handle identifies the shape: the OS hands out one per loaded cursor
+// resource, so Arrow and I-beam differ here even though neither carries a name.
+// Logged so a shape change can be told apart from a position change without
+// hashing the sprite.
+std::string HandleToken(void* handle) {
+    std::ostringstream out;
+    out << "0x" << std::hex << reinterpret_cast<uintptr_t>(handle);
+    return out.str();
+}
+
+// The per-session cursor-pipeline record. Named so a log reader matches the
+// message rather than a substring of it.
+constexpr const char* kWgcCursorSummaryLogMessage = "wgc cursor pipeline summary";
+
+std::string RectToken(const RECT& r) {
+    std::ostringstream out;
+    out << r.left << "," << r.top << "," << r.right << "," << r.bottom;
+    return out.str();
+}
+
 // Win32CursorBitmap / CaptureWin32CursorBitmap / ScaleCoordinateToSource /
 // ClipCursorSprite moved to <recorder_core/cursor_sprite.h>, shared with the
 // DXGI preview's cursor sprite.
@@ -1049,6 +1069,54 @@ void VideoThread::Run() {
     bool wgcCursorVisible = false;
 
     VisualGenerations visualGenerations{};
+
+    // Why the manually drawn WGC pointer is or is not in a frame. Every exit in
+    // sampleWgcCursor below is silent by design -- an absent pointer is a normal
+    // state, not a failure -- which leaves an absent pointer and a broken one
+    // indistinguishable from the outside. These counters separate them: an OS
+    // that reports no visible cursor, a sprite that will not rasterize, and a
+    // mapping with no bounds to map into are three different answers, and only
+    // the last two are defects. Reported once per session, plus one line per
+    // change of outcome so a transition has a timestamp to correlate against.
+    struct WgcCursorTrace {
+        uint64_t samples = 0;
+        uint64_t info_failed = 0;
+        uint64_t not_showing = 0;
+        uint64_t null_handle = 0;
+        uint64_t bitmap_failed = 0;
+        uint64_t bounds_invalid = 0;
+        uint64_t handle_changes = 0;
+        uint64_t position_changes = 0;
+        uint64_t generation_bumps = 0;
+        uint64_t recomposited_for_overlay = 0;
+        uint64_t draw_calls = 0;
+        uint64_t draw_clipped_out = 0;
+        uint64_t draw_submitted = 0;
+        uint64_t draw_failed = 0;
+        bool have_outcome = false;
+        WgcCursorSampleOutcome outcome = WgcCursorSampleOutcome::Sampled;
+    };
+    WgcCursorTrace wgcCursorTrace;
+    auto noteWgcCursorOutcome = [&](WgcCursorSampleOutcome outcome, const CURSORINFO& info) {
+        if (wgcCursorTrace.have_outcome && outcome == wgcCursorTrace.outcome) {
+            return;
+        }
+        wgcCursorTrace.have_outcome = true;
+        wgcCursorTrace.outcome = outcome;
+        const logging::LogField fields[] = {{"outcome", WgcCursorSampleOutcomeName(outcome)},
+                                            {"sample", std::to_string(wgcCursorTrace.samples)},
+                                            {"showing", (info.flags & CURSOR_SHOWING) != 0 ? "true" : "false"},
+                                            {"cursor_handle", HandleToken(info.hCursor)},
+                                            {"screen_x", std::to_string(info.ptScreenPos.x)},
+                                            {"screen_y", std::to_string(info.ptScreenPos.y)},
+                                            {"bounds", RectToken(wgcCursorBounds)},
+                                            {"mapped_x", std::to_string(wgcCursorPosX)},
+                                            {"mapped_y", std::to_string(wgcCursorPosY)},
+                                            {"visible", wgcCursorVisible ? "true" : "false"},
+                                            {"generation", std::to_string(visualGenerations.cursor)}};
+        logging::log(logging::LogLevel::Info, "video_thread", "wgc cursor sample outcome changed",
+                     std::span<const logging::LogField>(fields, std::size(fields)));
+    };
     VisualFrameKey lastCompositedKey{};
     bool haveLastCompositedKey = false;
     uint64_t lastWebcamFrameGeneration = 0;
@@ -1493,31 +1561,53 @@ void VideoThread::Run() {
             return;
         }
 
+        ++wgcCursorTrace.samples;
         CURSORINFO cursorInfo{};
         cursorInfo.cbSize = sizeof(cursorInfo);
-        if (GetCursorInfo(&cursorInfo) == FALSE || (cursorInfo.flags & CURSOR_SHOWING) == 0 ||
-            cursorInfo.hCursor == nullptr) {
+        const bool infoOk = GetCursorInfo(&cursorInfo) != FALSE;
+        const WgcCursorSampleOutcome infoOutcome =
+            ClassifyWgcCursorInfo(infoOk, (cursorInfo.flags & CURSOR_SHOWING) != 0, cursorInfo.hCursor != nullptr);
+        if (infoOutcome != WgcCursorSampleOutcome::Sampled) {
+            switch (infoOutcome) {
+            case WgcCursorSampleOutcome::CursorInfoFailed:
+                ++wgcCursorTrace.info_failed;
+                break;
+            case WgcCursorSampleOutcome::NotShowing:
+                ++wgcCursorTrace.not_showing;
+                break;
+            default:
+                ++wgcCursorTrace.null_handle;
+                break;
+            }
             if (wgcCursorVisible) {
                 wgcCursorVisible = false;
                 ++visualGenerations.cursor;
+                ++wgcCursorTrace.generation_bumps;
             }
+            noteWgcCursorOutcome(infoOutcome, cursorInfo);
             return;
         }
 
         if (cursorInfo.hCursor != wgcCursorHandle || wgcCursorBitmap.bgra.empty()) {
             Win32CursorBitmap next;
             if (!CaptureWin32CursorBitmap(cursorInfo.hCursor, next)) {
+                ++wgcCursorTrace.bitmap_failed;
+                noteWgcCursorOutcome(WgcCursorSampleOutcome::SpriteCaptureFailed, cursorInfo);
                 return;
             }
             wgcCursorHandle = cursorInfo.hCursor;
             wgcCursorBitmap = std::move(next);
             ++visualGenerations.cursor;
+            ++wgcCursorTrace.generation_bumps;
+            ++wgcCursorTrace.handle_changes;
         }
 
         refreshWgcCursorBounds();
         const int boundsW = RectWidth(wgcCursorBounds);
         const int boundsH = RectHeight(wgcCursorBounds);
         if (boundsW <= 0 || boundsH <= 0) {
+            ++wgcCursorTrace.bounds_invalid;
+            noteWgcCursorOutcome(WgcCursorSampleOutcome::BoundsEmpty, cursorInfo);
             return;
         }
 
@@ -1532,7 +1622,10 @@ void VideoThread::Run() {
             wgcCursorPosX = cx;
             wgcCursorPosY = cy;
             ++visualGenerations.cursor;
+            ++wgcCursorTrace.generation_bumps;
+            ++wgcCursorTrace.position_changes;
         }
+        noteWgcCursorOutcome(WgcCursorSampleOutcome::Sampled, cursorInfo);
     };
 
     auto drawWin32CursorGpu = [&]() -> bool {
@@ -1540,10 +1633,12 @@ void VideoThread::Run() {
             return true;
         }
 
+        ++wgcCursorTrace.draw_calls;
         const CursorSpriteClip clip =
             ClipCursorSprite(wgcCursorPosX, wgcCursorPosY, wgcCursorBitmap.width, wgcCursorBitmap.height,
                              static_cast<int32_t>(sourceWidth), static_cast<int32_t>(sourceHeight));
         if (!clip.visible) {
+            ++wgcCursorTrace.draw_clipped_out;
             return true;
         }
 
@@ -1564,9 +1659,11 @@ void VideoThread::Run() {
 
         std::string compErr;
         if (!gpuCompositor.DrawCursor(wgcCursorUploadBgra.data(), clip.w, clip.h, rect, compErr)) {
+            ++wgcCursorTrace.draw_failed;
             m_state.RecordFailure(E_FAIL, ErrorPhase::VideoCapture, "GPU WGC cursor composite: " + compErr);
             return false;
         }
+        ++wgcCursorTrace.draw_submitted;
         return true;
     };
 
@@ -3565,6 +3662,7 @@ void VideoThread::Run() {
                 const bool dynamicOverlayChanged = cursorOverlayMoved || webcamMoved;
                 if (ShouldRecompositeHeldScreen(rawSourceTex != nullptr, odHolding, dynamicOverlayChanged,
                                                 heldScreenTex != nullptr)) {
+                    ++wgcCursorTrace.recomposited_for_overlay;
                     rawSourceTex = heldScreenTex;
                 }
 
@@ -4363,6 +4461,33 @@ end_encode_loop:
         } catch (...) {
             // Same boundary as above, for Close() on the session or the pool.
         }
+    }
+
+    // Emitted for every WGC session with the cursor on, including the ones where
+    // nothing went wrong: the counters are only useful against a baseline, and a
+    // line that appears solely on failure has none. samples==0 means the sampler
+    // never ran, which is itself distinct from every outcome it can report.
+    if (!useOdCapture && m_state.config.capture_cursor) {
+        const logging::LogField fields[] = {
+            {"samples", std::to_string(wgcCursorTrace.samples)},
+            {"info_failed", std::to_string(wgcCursorTrace.info_failed)},
+            {"not_showing", std::to_string(wgcCursorTrace.not_showing)},
+            {"null_handle", std::to_string(wgcCursorTrace.null_handle)},
+            {"sprite_capture_failed", std::to_string(wgcCursorTrace.bitmap_failed)},
+            {"bounds_empty", std::to_string(wgcCursorTrace.bounds_invalid)},
+            {"shape_changes", std::to_string(wgcCursorTrace.handle_changes)},
+            {"position_changes", std::to_string(wgcCursorTrace.position_changes)},
+            {"generation_bumps", std::to_string(wgcCursorTrace.generation_bumps)},
+            {"recomposited_for_overlay", std::to_string(wgcCursorTrace.recomposited_for_overlay)},
+            {"draw_calls", std::to_string(wgcCursorTrace.draw_calls)},
+            {"draw_clipped_out", std::to_string(wgcCursorTrace.draw_clipped_out)},
+            {"draw_submitted", std::to_string(wgcCursorTrace.draw_submitted)},
+            {"draw_failed", std::to_string(wgcCursorTrace.draw_failed)},
+            {"compositor_ready", gpuCompositorReady ? "true" : "false"},
+            {"final_outcome",
+             wgcCursorTrace.have_outcome ? WgcCursorSampleOutcomeName(wgcCursorTrace.outcome) : "none"}};
+        logging::log(logging::LogLevel::Info, "video_thread", kWgcCursorSummaryLogMessage,
+                     std::span<const logging::LogField>(fields, std::size(fields)));
     }
 
     // --- Flush NVENC EOS ---
