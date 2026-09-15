@@ -723,7 +723,16 @@ void RecordingCoordinator::SetAudioSourceMuted(exosnap::engine::AudioSourceKind 
     session_.SetAudioSourceMuted(kind, muted, record_request_.load());
 }
 
-void RecordingCoordinator::SetWebcamSettings(const WebcamSettings& settings) {
+void RecordingCoordinator::UseStaticVerificationWebcam(int width, int height) {
+    static_webcam_source_ = std::make_unique<exosnap::StaticWebcamFrameSource>(width, height);
+}
+
+QString RecordingCoordinator::VerificationWebcamSourceName() const {
+    return static_webcam_source_ ? QStringLiteral("static-verification") : QString();
+}
+
+std::optional<exosnap::engine::AppliedWebcamOverlay>
+RecordingCoordinator::SetWebcamSettings(const WebcamSettings& settings) {
     const WebcamSettings sanitized = SanitizeWebcamSettings(settings);
     const bool device_changed = sanitized.device_id != webcam_settings_.device_id;
     const bool res_changed = sanitized.width != webcam_settings_.width || sanitized.height != webcam_settings_.height;
@@ -731,8 +740,9 @@ void RecordingCoordinator::SetWebcamSettings(const WebcamSettings& settings) {
     webcam_settings_ = sanitized;
 
     const bool recording = is_recording_.load();
+    std::optional<exosnap::engine::AppliedWebcamOverlay> applied;
     if (recording) {
-        session_.UpdateWebcamOverlay(ToLiveWebcamOverlay(webcam_settings_), record_request_.load());
+        applied = session_.UpdateWebcamOverlay(ToLiveWebcamOverlay(webcam_settings_), record_request_.load());
     }
 
     // A device/resolution/fps change requires re-opening the capture, so do not
@@ -741,6 +751,7 @@ void RecordingCoordinator::SetWebcamSettings(const WebcamSettings& settings) {
     // fields are pushed above and enable/disable is handled by SyncWebcamService.
     const bool session_owns_device = recording || prepare_in_flight_.load();
     SyncWebcamService((device_changed || res_changed || fps_changed) && !session_owns_device);
+    return applied;
 }
 
 void RecordingCoordinator::SetWebcamPreviewActive(bool active) {
@@ -1176,8 +1187,15 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
     config.output_path_pre_reserved = true;
     config.split = ctx.split_settings;
 
-    config.webcam.enabled = ctx.webcam_settings.enabled && !ctx.webcam_settings.device_id.empty();
-    config.webcam.frame_provider = &webcam_service_;
+    // The unchanging source, when this process was started for a verification run,
+    // needs no device id: it is not a device. Every other field below stays the
+    // product's own, so the overlay and compositing paths under measurement are
+    // the shipping ones.
+    const bool static_webcam = static_webcam_source_ != nullptr;
+    config.webcam.enabled = static_webcam || (ctx.webcam_settings.enabled && !ctx.webcam_settings.device_id.empty());
+    config.webcam.frame_provider = static_webcam
+                                       ? static_cast<exosnap::engine::WebcamFrameProvider*>(static_webcam_source_.get())
+                                       : static_cast<exosnap::engine::WebcamFrameProvider*>(&webcam_service_);
     config.webcam.overlay_x_norm = ctx.webcam_settings.overlay.x_norm;
     config.webcam.overlay_y_norm = ctx.webcam_settings.overlay.y_norm;
     config.webcam.overlay_w_norm = ctx.webcam_settings.overlay.w_norm;

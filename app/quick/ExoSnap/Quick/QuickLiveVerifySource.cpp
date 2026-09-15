@@ -1060,6 +1060,34 @@ bool QuickLiveVerifySource::SettingsSet(const QString& key, const QJsonValue& va
     return settings_automation::WriteKey(*settings, key, value, error);
 }
 
+bool QuickLiveVerifySource::WebcamOverlaySet(const QJsonObject& fields, QJsonObject* applied, QString* error) {
+    const std::optional<exosnap::engine::AppliedWebcamOverlay> result =
+        application_.applyLiveWebcamOverlay(fields, error);
+    if (!result.has_value()) {
+        if (error->isEmpty())
+            *error = QStringLiteral("The overlay change was not applied");
+        return false;
+    }
+
+    // Read back from the session, not echoed from the request: the engine clamps
+    // the rectangle, and a caller that compared a recording against what it asked
+    // for would read a clamp as a defect.
+    const exosnap::engine::WebcamOverlayLive& live = result->applied;
+    QJsonObject state;
+    state.insert(QStringLiteral("enabled"), live.enabled);
+    state.insert(QStringLiteral("x"), live.overlay_x_norm);
+    state.insert(QStringLiteral("y"), live.overlay_y_norm);
+    state.insert(QStringLiteral("width"), live.overlay_w_norm);
+    state.insert(QStringLiteral("height"), live.overlay_h_norm);
+    state.insert(QStringLiteral("opacity"), live.opacity);
+    state.insert(QStringLiteral("mirror"), live.mirror);
+
+    applied->insert(QStringLiteral("appliedSequence"), static_cast<qint64>(result->sequence));
+    applied->insert(QStringLiteral("appliedQpc100ns"), static_cast<qint64>(result->applied_qpc_100ns));
+    applied->insert(QStringLiteral("applied"), state);
+    return true;
+}
+
 bool QuickLiveVerifySource::SettingsReset(QString* error) {
     auto* settings = application_.settingsAdapter();
     if (settings == nullptr) {

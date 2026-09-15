@@ -510,16 +510,34 @@ struct SessionState {
         webcam_overlay = overlay;
     }
 
-    void UpdateWebcamOverlay(WebcamOverlayLive overlay) {
+    // The sequence and the read-back happen under the same lock as the store, so
+    // a caller's acknowledgement describes the state that was actually installed
+    // and not one a concurrent update replaced in between.
+    AppliedWebcamOverlay UpdateWebcamOverlay(WebcamOverlayLive overlay) {
         overlay = SanitizeWebcamOverlay(overlay);
-        std::lock_guard lk(webcam_overlay_mutex);
-        webcam_overlay = overlay;
+        AppliedWebcamOverlay result;
+        {
+            std::lock_guard lk(webcam_overlay_mutex);
+            webcam_overlay = overlay;
+            result.sequence = ++webcam_overlay_sequence;
+            result.applied = webcam_overlay;
+        }
+        LARGE_INTEGER counter{};
+        LARGE_INTEGER frequency{};
+        if (QueryPerformanceCounter(&counter) != 0 && QueryPerformanceFrequency(&frequency) != 0 &&
+            frequency.QuadPart != 0) {
+            result.applied_qpc_100ns = static_cast<uint64_t>((counter.QuadPart * 10'000'000LL) / frequency.QuadPart);
+        }
+        return result;
     }
 
     [[nodiscard]] WebcamOverlayLive SnapshotWebcamOverlay() const {
         std::lock_guard lk(webcam_overlay_mutex);
         return webcam_overlay;
     }
+
+    // Guarded by webcam_overlay_mutex; advanced only by a completed store.
+    uint64_t webcam_overlay_sequence = 0;
 
     // Clear everything the PREVIOUS recording left behind, so a session object
     // reused by the next Record() call starts indistinguishable from a fresh one.

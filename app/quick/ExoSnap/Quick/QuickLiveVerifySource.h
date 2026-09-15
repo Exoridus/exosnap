@@ -87,6 +87,7 @@ class QuickLiveVerifySource final : public QObject, public live_verify::LiveVeri
     [[nodiscard]] QJsonObject SettingsDescribe() const override;
     [[nodiscard]] QJsonObject SettingsGet(const QString& key, QString* error) const override;
     bool SettingsSet(const QString& key, const QJsonValue& value, QString* error) override;
+    bool WebcamOverlaySet(const QJsonObject& fields, QJsonObject* applied, QString* error) override;
     bool SettingsReset(QString* error) override;
 
     [[nodiscard]] QJsonObject ProfilesSnapshot() const override;

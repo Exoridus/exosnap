@@ -534,7 +534,6 @@ exosnap_add_gtest(
     TEST_PREFIX services.
     SOURCES
         tests/test_static_webcam_frame_source.cpp
-        services/StaticWebcamFrameSource.cpp
     LIBRARIES exosnap_engine
 )
 target_include_directories(static_webcam_frame_source_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

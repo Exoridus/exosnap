@@ -1847,6 +1847,40 @@ void QuickApplication::updateMeters() {
                                 models::MeterDbfsFromRms(microphone));
 }
 
+std::optional<exosnap::engine::AppliedWebcamOverlay> QuickApplication::applyLiveWebcamOverlay(const QJsonObject& fields,
+                                                                                              QString* error) {
+    if (recording_coordinator_ == nullptr) {
+        if (error != nullptr)
+            *error = QStringLiteral("There is no recording coordinator to apply an overlay to");
+        return std::nullopt;
+    }
+
+    // Start from what is live now and change only the named fields, so a caller
+    // moving the rectangle does not silently reset the opacity it never mentioned.
+    WebcamOverlayRect overlay = live_config_.webcam.overlay;
+    const auto number = [&fields](const char* key, float current) {
+        const QJsonValue value = fields.value(QLatin1String(key));
+        return value.isDouble() ? static_cast<float>(value.toDouble()) : current;
+    };
+    overlay.x_norm = number("x", overlay.x_norm);
+    overlay.y_norm = number("y", overlay.y_norm);
+    overlay.w_norm = number("width", overlay.w_norm);
+    overlay.h_norm = number("height", overlay.h_norm);
+    live_config_.webcam.overlay = SanitizeWebcamOverlayRect(overlay);
+    live_config_.webcam.opacity = number("opacity", live_config_.webcam.opacity);
+    if (fields.value(QStringLiteral("mirror")).isBool())
+        live_config_.webcam.mirror = fields.value(QStringLiteral("mirror")).toBool();
+
+    // The production path, not a second one: the same call the drag makes.
+    const std::optional<exosnap::engine::AppliedWebcamOverlay> applied =
+        recording_coordinator_->SetWebcamSettings(webcamSettingsForCapture());
+    synchronizeRecordState();
+    if (!applied.has_value() && error != nullptr) {
+        *error = QStringLiteral("No running recording accepted the overlay change");
+    }
+    return applied;
+}
+
 void QuickApplication::updateWebcamOverlay(const QRectF& normalized_rect) {
     if (!record_view_model_adapter_.webcamOverlayEditable())
         return;

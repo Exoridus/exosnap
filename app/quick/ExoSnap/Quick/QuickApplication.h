@@ -65,8 +65,10 @@
 
 class QQuickWindow;
 
+#include <QJsonObject>
 #include <functional>
 #include <memory>
+
 #include <optional>
 #include <string>
 
@@ -559,6 +561,20 @@ class QuickApplication {
     void cancelCountdown();
     void updateCountdown();
     void toggleSource(const QString& key);
+
+  public:
+    // Live overlay fields, applied through the same path the Record page's drag
+    // takes, and reporting what the session actually installed. For the Live
+    // Verify channel: measuring whether an overlay change reaches the encoded
+    // frame needs a change that is acknowledged with the state it produced, and
+    // the drag acknowledges nothing.
+    //
+    // `fields` names only what should change. Returns nothing when no recording
+    // was running to apply it to.
+    std::optional<exosnap::engine::AppliedWebcamOverlay> applyLiveWebcamOverlay(const QJsonObject& fields,
+                                                                                QString* error);
+
+  private:
     void updateWebcamOverlay(const QRectF& normalized_rect);
     void updateMeters();
     void scheduleMeterUpdate();

@@ -590,14 +590,15 @@ void RecorderSession::RequestFrameSnapshot(FrameSnapshotCallback callback, Recor
     st->snapshot_requested.store(true);
 }
 
-void RecorderSession::UpdateWebcamOverlay(const WebcamOverlayLive& overlay, RecordRequestId request_id) {
+std::optional<AppliedWebcamOverlay> RecorderSession::UpdateWebcamOverlay(const WebcamOverlayLive& overlay,
+                                                                         RecordRequestId request_id) {
     const auto st = m_impl->StateForRequest(request_id);
     if (!st)
-        return;
+        return std::nullopt;
     if (st->config.webcam.frame_provider == nullptr) {
-        return;
+        return std::nullopt;
     }
-    st->UpdateWebcamOverlay(overlay);
+    return st->UpdateWebcamOverlay(overlay);
 }
 
 // ---------------------------------------------------------------------------

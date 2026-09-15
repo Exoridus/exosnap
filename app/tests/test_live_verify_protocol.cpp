@@ -161,6 +161,9 @@ class FakeSource final : public LiveVerifySource {
     }
 
     // --- Settings, profiles, notifications ----------------------------------
+    QJsonObject last_overlay_fields;
+    QJsonObject applied_overlay;
+    quint64 overlay_sequence = 0;
     QString last_settings_key;
     QJsonValue last_settings_value;
 
@@ -181,6 +184,18 @@ class FakeSource final : public LiveVerifySource {
         last_settings_key = key;
         last_settings_value = value;
         return Outcome(error);
+    }
+    bool WebcamOverlaySet(const QJsonObject& fields, QJsonObject* applied, QString* error) override {
+        calls.append(QStringLiteral("webcam.overlay.set"));
+        last_overlay_fields = fields;
+        if (!Outcome(error))
+            return false;
+        // What a real session answers: the state read back after the store, which
+        // is not the request when the engine clamped it.
+        applied->insert(QStringLiteral("appliedSequence"), static_cast<qint64>(++overlay_sequence));
+        applied->insert(QStringLiteral("appliedQpc100ns"), static_cast<qint64>(1234567));
+        applied->insert(QStringLiteral("applied"), applied_overlay);
+        return true;
     }
     bool SettingsReset(QString* error) override {
         calls.append(QStringLiteral("settings.reset"));
@@ -850,9 +865,9 @@ TEST(LiveVerifyDispatcher, TheProtocolOneCommandSurfaceIsExactlyTheOriginalNinet
                                   QStringLiteral("record.snapshot"),     QStringLiteral("record.split"),
                                   QStringLiteral("record.start"),        QStringLiteral("record.stop"),
                                   QStringLiteral("system.capabilities"), QStringLiteral("system.hello"),
-                                  QStringLiteral("system.snapshot"),     QStringLiteral("window.moveToScreen"),
-                                  QStringLiteral("window.snapshot")};
-    EXPECT_EQ(expected.size(), 19);
+                                  QStringLiteral("system.snapshot"),     QStringLiteral("webcam.overlay.set"),
+                                  QStringLiteral("window.moveToScreen"), QStringLiteral("window.snapshot")};
+    EXPECT_EQ(expected.size(), 20);
     EXPECT_EQ(LiveVerifyDispatcher::CommandNames(1), expected);
 }
 
@@ -1778,9 +1793,11 @@ TEST(LiveVerifyDescribe, IdempotencyIsDeclaredAndPlayPauseIsTheExceptionThatIsNo
     // The seven transport intents (six plus record.addMarker -- a second marker
     // is a second marker), edit.playPause, profiles.create (two creates with the
     // same name are two profiles), notification.invokeAction (an action
-    // navigates, opens a folder or relaunches), and notification.raise (two
-    // calls are two notifications).
-    EXPECT_EQ(non_idempotent, 11);
+    // navigates, opens a folder or relaunches), notification.raise (two calls are
+    // two notifications), and webcam.overlay.set, whose effect repeats but whose
+    // answer does not: the applied sequence advances on every accepted call, which
+    // is what lets a caller tell a second identical request from a dropped one.
+    EXPECT_EQ(non_idempotent, 12);
 }
 
 // ---------------------------------------------------------------------------

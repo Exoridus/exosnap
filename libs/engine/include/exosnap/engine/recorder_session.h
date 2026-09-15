@@ -108,6 +108,25 @@ struct WebcamOverlayLive {
     bool operator==(const WebcamOverlayLive&) const = default;
 };
 
+// What an overlay update actually put into effect. Returned rather than assumed,
+// because a caller cannot tell the three outcomes apart from the request alone:
+// the session may not be recording, the values may have been clamped on the way
+// in, and only an update that reached the state advances the sequence.
+//
+// `applied` is read back from the session after the store, not copied from the
+// request. A measurement that compared a recording against what was asked for
+// would report a clamp as a defect.
+struct AppliedWebcamOverlay {
+    // Advances only on an update that reached the session state. A caller can
+    // therefore tell a second identical request from a dropped one.
+    uint64_t sequence = 0;
+    // The performance counter read immediately after the store, in the same
+    // 100 ns units the engine's timestamps use. A lower bound on when the state
+    // was in effect -- not the timestamp of any frame.
+    uint64_t applied_qpc_100ns = 0;
+    WebcamOverlayLive applied;
+};
+
 } // namespace exosnap::engine
 
 namespace exosnap::engine {
@@ -761,7 +780,11 @@ class RecorderSession {
     // Record(request_id) has taken over the session state. No-op if request_id is
     // not that recording (as for Stop()) or if the session was started without a
     // webcam frame provider.
-    void UpdateWebcamOverlay(const WebcamOverlayLive& overlay, RecordRequestId request_id = kUnscopedRecordRequest);
+    // Returns what was put into effect, or nothing when there is no live session
+    // to apply it to. See AppliedWebcamOverlay: the reported state is read back
+    // from the session, so a clamped request reports the clamped value.
+    std::optional<AppliedWebcamOverlay> UpdateWebcamOverlay(const WebcamOverlayLive& overlay,
+                                                            RecordRequestId request_id = kUnscopedRecordRequest);
 
     // Register a stats callback invoked approximately every 264 ms from an
     // internal worker thread.  Must be set before calling Record().
