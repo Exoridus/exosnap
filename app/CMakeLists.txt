@@ -525,6 +525,20 @@ exosnap_add_gtest(
 target_include_directories(structured_log_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(structured_log_tests PROPERTIES AUTOMOC ON)
 
+# The unchanging webcam source that makes the PiP overlay the only thing able to
+# cause a recomposition. Both halves of "static" are pinned, pixels and generation,
+# each against a counter-example that would silently remove the defect the overlay
+# measurement looks for.
+exosnap_add_gtest(
+    NAME static_webcam_frame_source_tests
+    TEST_PREFIX services.
+    SOURCES
+        tests/test_static_webcam_frame_source.cpp
+        services/StaticWebcamFrameSource.cpp
+    LIBRARIES exosnap_engine
+)
+target_include_directories(static_webcam_frame_source_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
 # Session report: the pure JSON builder (deterministic, honest unavailable metrics,
 # segments, error phase, peak drift) and the writer's prune-to-keep-N.
 exosnap_add_gtest(
