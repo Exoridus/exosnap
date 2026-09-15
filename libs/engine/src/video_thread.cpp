@@ -136,6 +136,10 @@ std::string HandleToken(void* handle) {
 // message rather than a substring of it.
 constexpr const char* kWgcCursorSummaryLogMessage = "wgc cursor pipeline summary";
 
+// The per-session overlay-generation record. Separate from the cursor summary
+// because it answers a different question and applies to both backends.
+constexpr const char* kWebcamOverlaySummaryLogMessage = "webcam overlay pipeline summary";
+
 std::string RectToken(const RECT& r) {
     std::ostringstream out;
     out << r.left << "," << r.top << "," << r.right << "," << r.bottom;
@@ -1072,6 +1076,27 @@ void VideoThread::Run() {
 
     VisualGenerations visualGenerations{};
 
+    // Whether an overlay edit reached the frame, kept apart from whether it
+    // reached the picture. Those are different failures: a generation that never
+    // advances leaves a still source re-emitting the composite made with the
+    // previous overlay, while one that advances without the composite following
+    // it is a compositing fault. Neither is visible in the encoded frames alone,
+    // and without these counters an overlay measurement could only ever report
+    // the second.
+    //
+    // Counted separately from the webcam's own generation, because a camera
+    // advances that on every delivered sample and would recomposite the frame on
+    // the overlay's behalf. Reported for both backends whenever a webcam provider
+    // is attached.
+    struct OverlayTrace {
+        uint64_t samples = 0;
+        uint64_t generation_changes = 0;
+        uint64_t webcam_generation_changes = 0;
+        uint64_t recomposited_for_overlay = 0;
+        uint64_t composited_with_overlay = 0;
+    };
+    OverlayTrace overlayTrace;
+
     // Why the manually drawn WGC pointer is or is not in a frame. Every exit in
     // sampleWgcCursor below is silent by design -- an absent pointer is a normal
     // state, not a failure -- which leaves an absent pointer and a broken one
@@ -1135,10 +1160,12 @@ void VideoThread::Run() {
     // source keep re-emitting the composite made with the previous overlay.
     auto sampleOverlay = [&]() -> WebcamOverlayLive {
         WebcamOverlayLive current = m_state.SnapshotWebcamOverlay();
+        ++overlayTrace.samples;
         if (!haveOverlaySnapshot || !(current == lastOverlaySnapshot)) {
             haveOverlaySnapshot = true;
             lastOverlaySnapshot = current;
             ++visualGenerations.overlay;
+            ++overlayTrace.generation_changes;
         }
         return current;
     };
@@ -1760,6 +1787,9 @@ void VideoThread::Run() {
         seedOdCursorFromWin32();
 
         const bool webcamActive = overlay.enabled && webcamProviderAvailable;
+        if (webcamActive) {
+            ++overlayTrace.composited_with_overlay;
+        }
         const bool cursorActive =
             m_state.config.capture_cursor && (!useOdCapture || (odCursorVisible && odCursorShapeValid));
         if (!webcamActive && !cursorActive) {
@@ -3700,9 +3730,20 @@ void VideoThread::Run() {
                                          (!haveLastCompositedKey ||
                                           currentVisualKey.webcam_generation != lastCompositedKey.webcam_generation);
                 const bool dynamicOverlayChanged = cursorOverlayMoved || webcamMoved;
+                // Attributed, not pooled: cursorOverlayMoved is true for a pointer
+                // move as well, and a measurement of the overlay cannot use a
+                // count that a moving cursor also raises.
+                const bool overlayMoved = !haveLastCompositedKey ||
+                                          currentVisualKey.overlay_generation != lastCompositedKey.overlay_generation;
+                if (webcamMoved) {
+                    ++overlayTrace.webcam_generation_changes;
+                }
                 if (ShouldRecompositeHeldScreen(rawSourceTex != nullptr, odHolding, dynamicOverlayChanged,
                                                 heldScreenTex != nullptr)) {
                     ++wgcCursorTrace.recomposited_for_overlay;
+                    if (overlayMoved) {
+                        ++overlayTrace.recomposited_for_overlay;
+                    }
                     rawSourceTex = heldScreenTex;
                 }
 
@@ -4507,6 +4548,21 @@ end_encode_loop:
     // nothing went wrong: the counters are only useful against a baseline, and a
     // line that appears solely on failure has none. samples==0 means the sampler
     // never ran, which is itself distinct from every outcome it can report.
+    // Emitted for both backends and for every session with a webcam attached,
+    // including the ones where nothing went wrong: a counter that appeared only on
+    // failure would have no baseline to be read against.
+    if (webcamProviderAvailable) {
+        const logging::LogField fields[] = {
+            {"samples", std::to_string(overlayTrace.samples)},
+            {"generation_changes", std::to_string(overlayTrace.generation_changes)},
+            {"webcam_generation_changes", std::to_string(overlayTrace.webcam_generation_changes)},
+            {"recomposited_for_overlay", std::to_string(overlayTrace.recomposited_for_overlay)},
+            {"composited_with_overlay", std::to_string(overlayTrace.composited_with_overlay)},
+            {"backend", useOdCapture ? "od" : "wgc"}};
+        logging::log(logging::LogLevel::Info, "video_thread", kWebcamOverlaySummaryLogMessage,
+                     std::span<const logging::LogField>(fields, std::size(fields)));
+    }
+
     if (!useOdCapture && m_state.config.capture_cursor) {
         const logging::LogField fields[] = {
             {"samples", std::to_string(wgcCursorTrace.samples)},
