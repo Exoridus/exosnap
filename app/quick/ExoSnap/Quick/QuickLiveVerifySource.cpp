@@ -502,6 +502,14 @@ QJsonObject QuickLiveVerifySource::RecordSnapshot() const {
         return json;
     }
     json.insert(QStringLiteral("available"), true);
+    // Which webcam the next recording composites from. Present so a run's evidence
+    // proves the unchanging source was really in use: a measurement of the overlay
+    // against a live camera measures the camera as well, and the two are not
+    // distinguishable afterwards from the recording alone.
+    if (auto* coordinator = application_.recordingCoordinator(); coordinator != nullptr) {
+        const QString source = coordinator->VerificationWebcamSourceName();
+        json.insert(QStringLiteral("webcamSource"), source.isEmpty() ? QStringLiteral("device") : source);
+    }
     json.insert(QStringLiteral("state"), record->state());
     json.insert(QStringLiteral("stateText"), record->stateText());
     json.insert(QStringLiteral("recording"), record->recording());

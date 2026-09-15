@@ -1038,6 +1038,121 @@ TEST(LiveVerifyDispatcher, SettingsSetAnswersWithTheReconciledValueAndNotTheRequ
     EXPECT_EQ(result.value(QStringLiteral("requested")).toString(), QStringLiteral("MP4"));
 }
 
+TEST(LiveVerifyDispatcher, WebcamOverlaySetAnswersWithTheAppliedStateAndNotTheRequest) {
+    FakeSource source;
+    source.state.recording_state = QStringLiteral("Recording");
+    // What a session installs after clamping. The request below asks for a
+    // rectangle that runs off the frame; a caller that compared a recording
+    // against what it asked for would read the clamp as a defect.
+    source.applied_overlay.insert(QStringLiteral("x"), 0.5);
+    source.applied_overlay.insert(QStringLiteral("width"), 0.5);
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    QJsonObject params;
+    params.insert(QStringLiteral("x"), 0.9);
+    params.insert(QStringLiteral("width"), 0.5);
+    const QJsonObject response = dispatcher.Dispatch(RequestV2(QStringLiteral("webcam.overlay.set"), params));
+    ASSERT_TRUE(Ok(response));
+
+    const QJsonObject result = response.value(QStringLiteral("result")).toObject();
+    const QJsonObject applied = result.value(QStringLiteral("applied")).toObject();
+    EXPECT_DOUBLE_EQ(applied.value(QStringLiteral("x")).toDouble(), 0.5);
+    EXPECT_DOUBLE_EQ(result.value(QStringLiteral("requested")).toObject().value(QStringLiteral("x")).toDouble(), 0.9)
+        << "the request stays visible beside the applied state, not in place of it";
+    EXPECT_EQ(result.value(QStringLiteral("appliedSequence")).toInt(), 1);
+    EXPECT_GT(result.value(QStringLiteral("appliedQpc100ns")).toDouble(), 0.0);
+}
+
+TEST(LiveVerifyDispatcher, TheAppliedSequenceAdvancesOnlyForAnUpdateThatReachedTheSession) {
+    FakeSource source;
+    source.state.recording_state = QStringLiteral("Recording");
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    QJsonObject params;
+    params.insert(QStringLiteral("x"), 0.1);
+    const QJsonObject first = dispatcher.Dispatch(RequestV2(QStringLiteral("webcam.overlay.set"), params));
+    ASSERT_TRUE(Ok(first));
+    const QJsonObject second = dispatcher.Dispatch(RequestV2(QStringLiteral("webcam.overlay.set"), params));
+    ASSERT_TRUE(Ok(second));
+
+    // Two identical requests, two sequences. That is what lets a caller tell a
+    // second request from one that was dropped -- the effect repeats, the answer
+    // does not.
+    EXPECT_EQ(first.value(QStringLiteral("result")).toObject().value(QStringLiteral("appliedSequence")).toInt(), 1);
+    EXPECT_EQ(second.value(QStringLiteral("result")).toObject().value(QStringLiteral("appliedSequence")).toInt(), 2);
+
+    source.allow_intents = false;
+    const QJsonObject refused = dispatcher.Dispatch(RequestV2(QStringLiteral("webcam.overlay.set"), params));
+    EXPECT_FALSE(Ok(refused));
+    EXPECT_EQ(source.overlay_sequence, 2u) << "a refused apply must not advance the sequence";
+}
+
+TEST(LiveVerifyDispatcher, WebcamOverlaySetIsRefusedWhenThereIsNoRecordingToApplyItTo) {
+    // The mirror image of settings.set: that one is refused DURING a recording,
+    // this one outside it. Answering from a stored setting would report a state
+    // no frame was composited with.
+    FakeSource source;
+    source.state.recording_state = QStringLiteral("Ready");
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    QJsonObject params;
+    params.insert(QStringLiteral("x"), 0.1);
+    const QJsonObject response = dispatcher.Dispatch(RequestV2(QStringLiteral("webcam.overlay.set"), params));
+    EXPECT_FALSE(Ok(response));
+    EXPECT_EQ(ErrorCode(response), QString::fromLatin1(error_code::kInvalidState));
+    EXPECT_FALSE(source.calls.contains(QStringLiteral("webcam.overlay.set")))
+        << "refused before the intent ran, not accepted and then ignored";
+}
+
+TEST(LiveVerifyDispatcher, OnlyTheNamedFieldsReachTheSource) {
+    // A caller moving the rectangle must not silently reset an opacity it never
+    // mentioned. The dispatcher passes the parameters through untouched; the
+    // merge against the current state is the source's job, and this pins that the
+    // dispatcher does not invent the absent keys.
+    FakeSource source;
+    source.state.recording_state = QStringLiteral("Recording");
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    QJsonObject params;
+    params.insert(QStringLiteral("x"), 0.25);
+    params.insert(QStringLiteral("y"), 0.75);
+    ASSERT_TRUE(Ok(dispatcher.Dispatch(RequestV2(QStringLiteral("webcam.overlay.set"), params))));
+
+    EXPECT_TRUE(source.last_overlay_fields.contains(QStringLiteral("x")));
+    EXPECT_TRUE(source.last_overlay_fields.contains(QStringLiteral("y")));
+    EXPECT_FALSE(source.last_overlay_fields.contains(QStringLiteral("opacity")));
+    EXPECT_FALSE(source.last_overlay_fields.contains(QStringLiteral("mirror")));
+}
+
+TEST(LiveVerifyDispatcher, AnAcknowledgementIsNotEvidenceThatTheRecorderChanged) {
+    // The falsification 091-55 rests on. A control channel that answers
+    // "applied B, sequence N" while nothing reached the recorder is exactly the
+    // false success the whole acknowledgement design exists to make visible, and
+    // the answer alone cannot distinguish the two cases -- which is why the
+    // verdict is decided by the encoded frames and the acknowledgement is only
+    // the lower time bound they are judged against.
+    FakeSource source;
+    source.state.recording_state = QStringLiteral("Recording");
+    source.applied_overlay.insert(QStringLiteral("x"), 0.5);
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    QJsonObject params;
+    params.insert(QStringLiteral("x"), 0.5);
+    const QJsonObject response = dispatcher.Dispatch(RequestV2(QStringLiteral("webcam.overlay.set"), params));
+
+    // The fake never touched a recorder, and the response is indistinguishable
+    // from one that did.
+    ASSERT_TRUE(Ok(response));
+    const QJsonObject result = response.value(QStringLiteral("result")).toObject();
+    EXPECT_EQ(result.value(QStringLiteral("appliedSequence")).toInt(), 1);
+    EXPECT_DOUBLE_EQ(result.value(QStringLiteral("applied")).toObject().value(QStringLiteral("x")).toDouble(), 0.5);
+}
+
 TEST(LiveVerifyDispatcher, SettingsSetIsRefusedWhileARecordingIsInFlight) {
     FakeSource source;
     source.state.recording_state = QStringLiteral("Recording");

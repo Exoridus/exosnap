@@ -1091,6 +1091,16 @@ int main(int argc, char* argv[]) {
     std::unique_ptr<exosnap::quick::QuickLiveVerifySource> live_verify_source;
     std::unique_ptr<exosnap::live_verify::LiveVerifyControlServer> live_verify_server;
     if (live_verify_options.requested) {
+        // Replace the camera before anything can start recording. Only under the
+        // control channel, and never persisted: a measurement of what the PiP
+        // overlay does needs a webcam that cannot itself cause a recomposition,
+        // and every real camera does on every delivered sample. Without the flag
+        // the shipping path is untouched.
+        if (arguments.contains(QStringLiteral("--live-verify-static-webcam"))) {
+            if (auto* coordinator = quick_application.recordingCoordinator(); coordinator != nullptr) {
+                coordinator->UseStaticVerificationWebcam(640, 360);
+            }
+        }
         live_verify_source = std::make_unique<exosnap::quick::QuickLiveVerifySource>(quick_application, root_window);
         live_verify_server = std::make_unique<exosnap::live_verify::LiveVerifyControlServer>(
             live_verify_source.get(), live_verify_options.run_id);
