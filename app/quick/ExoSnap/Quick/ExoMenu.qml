@@ -29,4 +29,20 @@ Menu {
         border.color: ExoTheme.lineStrong
         radius: ExoTheme.radiusMd
     }
+
+    // A popup is reparented into the window's overlay, so it is not part of the
+    // scene subtree it was declared in and nothing takes it down with that
+    // subtree. The shell swaps destinations by switching the visibility of a
+    // StackLayout child, which left an open menu drawing over the destination
+    // the user had just navigated to. ComboBox closes its own popup on this;
+    // Menu does not.
+    Connections {
+        target: root.parent
+        enabled: root.opened
+
+        function onVisibleChanged(): void {
+            if (!root.parent.visible)
+                root.close();
+        }
+    }
 }

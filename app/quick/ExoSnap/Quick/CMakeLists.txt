@@ -956,6 +956,13 @@ qt_add_qml_module(record_controls_qml_tests
         # here against a plain ListModel — the real one is a C++ proxy the test
         # module cannot construct, and none of what is asserted is about it.
         ExoLogView.qml
+        # The three popup surfaces a destination owns, for one contract they
+        # share: a popup is reparented into the window overlay, so hiding the
+        # page it was declared in does not take it down with it. That is
+        # lifetime rather than appearance, and invisible to a screenshot.
+        ExoMenu.qml
+        ExoMenuItem.qml
+        ExoSelect.qml
         # The title band's destination. Its width has to stay put while the
         # selection moves across the row, which is geometry rather than
         # something a screenshot of one selected state can show.

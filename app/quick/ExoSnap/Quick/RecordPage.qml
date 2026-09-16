@@ -696,6 +696,7 @@ Item {
 
         sourceComponent: RecordSourcePicker {
             recordViewModel: root.recordViewModel
+            hostPage: root
         }
     }
 

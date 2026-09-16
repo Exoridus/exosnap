@@ -68,6 +68,16 @@ AbstractButton {
             popover.close();
     }
 
+    // The popover lives in the window's overlay rather than in this button's
+    // scene subtree, so hiding the destination that carries the row does not
+    // take it down: the shell swaps destinations by switching a StackLayout
+    // child's visibility, and an explanation left open kept drawing over the
+    // page the user had navigated to.
+    onVisibleChanged: {
+        if (!root.visible)
+            popover.close();
+    }
+
     HoverHandler {
         cursorShape: Qt.PointingHandCursor
     }
