@@ -520,6 +520,7 @@ QJsonObject QuickLiveVerifySource::RecordSnapshot() const {
         const QVariantMap option = entry.toMap();
         QJsonObject display;
         display.insert(QStringLiteral("identity"), option.value(QStringLiteral("identity")).toString());
+        display.insert(QStringLiteral("device"), option.value(QStringLiteral("device")).toString());
         display.insert(QStringLiteral("label"), option.value(QStringLiteral("label")).toString());
         display.insert(QStringLiteral("selected"), option.value(QStringLiteral("selected")).toBool());
         displays.append(display);

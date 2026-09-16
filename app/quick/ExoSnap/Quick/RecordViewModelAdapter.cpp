@@ -765,6 +765,11 @@ void RecordViewModelAdapter::rebuildPresentation() {
             const QVariantMap option{
                 {QStringLiteral("targetIndex"), index},
                 {QStringLiteral("identity"), identity},
+                // What the operating system calls this target -- a monitor's
+                // device name, a window's title. The identity above is a handle
+                // and the label is for a person to read; neither can be matched
+                // against what an automated caller was told to record.
+                {QStringLiteral("device"), QString::fromStdString(target.description)},
                 {QStringLiteral("label"), QString::fromStdString(presentation.label)},
                 {QStringLiteral("kind"), window ? QStringLiteral("window") : QStringLiteral("display")},
                 {QStringLiteral("regionLabel"), region_label},
