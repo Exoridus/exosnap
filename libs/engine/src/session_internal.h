@@ -13,6 +13,7 @@
 #include <exosnap/engine/webcam_placement.h>
 
 #include "pipeline_diagnostics_aggregator.h"
+#include "qpc_100ns.h"
 
 #include <algorithm>
 #include <array>
@@ -526,7 +527,8 @@ struct SessionState {
         LARGE_INTEGER frequency{};
         if (QueryPerformanceCounter(&counter) != 0 && QueryPerformanceFrequency(&frequency) != 0 &&
             frequency.QuadPart != 0) {
-            result.applied_qpc_100ns = static_cast<uint64_t>((counter.QuadPart * 10'000'000LL) / frequency.QuadPart);
+            result.applied_qpc_100ns =
+                QpcTicksTo100ns(static_cast<uint64_t>(counter.QuadPart), static_cast<uint64_t>(frequency.QuadPart));
         }
         return result;
     }

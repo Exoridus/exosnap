@@ -75,8 +75,7 @@ namespace {
 static uint64_t Qpc100ns(uint64_t freq) noexcept {
     LARGE_INTEGER qpc;
     QueryPerformanceCounter(&qpc);
-    const auto q = static_cast<uint64_t>(qpc.QuadPart);
-    return (q / freq) * 10000000ULL + (q % freq) * 10000000ULL / freq;
+    return QpcTicksTo100ns(static_cast<uint64_t>(qpc.QuadPart), freq);
 }
 
 const char* TargetKindName(CaptureTarget::Kind kind) noexcept {

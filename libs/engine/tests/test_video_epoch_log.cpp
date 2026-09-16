@@ -3,6 +3,7 @@
 
 #include <gtest/gtest.h>
 
+#include "qpc_100ns.h"
 #include "video_epoch_log.h"
 
 #include <optional>
@@ -62,4 +63,36 @@ TEST(VideoEpochLog, AClampedVfrEpochIsNotReportedAsTheFramesOwnTimestamp) {
     // measurement told "frame_timestamp" would treat that floor as an instant.
     EXPECT_EQ(exosnap::engine::VfrVideoEpochSource(500, 500), exosnap::engine::VideoEpochSource::FrameTimestamp);
     EXPECT_EQ(exosnap::engine::VfrVideoEpochSource(500, 400), exosnap::engine::VideoEpochSource::SessionStartFloor);
+}
+
+// The conversion that produces every 100 ns value in this contract, including the
+// overlay acknowledgement's. Pinned here because a wrong result is not a wrong
+// shape: it is a well-formed number on the wrong timeline.
+
+TEST(QpcTicks, ConvertsWholeAndFractionalSeconds) {
+    EXPECT_EQ(exosnap::engine::QpcTicksTo100ns(0, 10'000'000), 0u);
+    EXPECT_EQ(exosnap::engine::QpcTicksTo100ns(10'000'000, 10'000'000), 10'000'000u);
+    // A 10 MHz counter is already in 100 ns units, so the value passes through.
+    EXPECT_EQ(exosnap::engine::QpcTicksTo100ns(4'089'402'061'399, 10'000'000), 4'089'402'061'399u);
+    // 3.6864 MHz, the other frequency Windows commonly reports.
+    EXPECT_EQ(exosnap::engine::QpcTicksTo100ns(3'686'400, 3'686'400), 10'000'000u);
+    EXPECT_EQ(exosnap::engine::QpcTicksTo100ns(1'843'200, 3'686'400), 5'000'000u);
+}
+
+TEST(QpcTicks, SurvivesTheUptimeAtWhichTheDirectFormOverflows) {
+    // `ticks * 10'000'000` leaves the 64-bit range at about 9.2e11 ticks -- a day
+    // of uptime on a 10 MHz counter. The direct form does not fail there, it
+    // wraps: the reading below came back as 40'012 s instead of 408'940 s, which
+    // is what made an overlay acknowledgement land 368'928 s before the recording
+    // it belonged to.
+    constexpr uint64_t kFourDaysOfTicks = 4'089'402'061'399;
+    constexpr uint64_t kTenMhz = 10'000'000;
+    EXPECT_EQ(exosnap::engine::QpcTicksTo100ns(kFourDaysOfTicks, kTenMhz) / 10'000'000ULL, 408'940u);
+
+    // The same instant on a 24 MHz counter, well past the same boundary.
+    EXPECT_EQ(exosnap::engine::QpcTicksTo100ns(408'940ULL * 24'000'000ULL, 24'000'000) / 10'000'000ULL, 408'940u);
+}
+
+TEST(QpcTicks, AZeroFrequencyYieldsZeroRatherThanDividing) {
+    EXPECT_EQ(exosnap::engine::QpcTicksTo100ns(500, 0), 0u);
 }
