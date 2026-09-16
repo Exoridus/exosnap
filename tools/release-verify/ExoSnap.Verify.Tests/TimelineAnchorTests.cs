@@ -141,4 +141,67 @@ public sealed class TimelineAnchorTests
         Assert.False(anchor.IsEstablished);
         Assert.Contains("none", anchor.Explanation, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void ABoundDoesNotMoveOrSharpenTheReadingItAgreesWith()
+    {
+        // The measured case from the first bound guest run: the recorder reads 70 ms and
+        // the marker cannot place the offset below 8 ms. Compatible, and the anchor is
+        // the recorder's reading unchanged -- with its own uncertainty, not a smaller one
+        // manufactured by counting the bound as a second opinion.
+        var anchor = TimelineAnchor.Reconcile(
+        [
+            new TimelineAnchorEstimate(AnchorSource.PerformanceCounter, 0.070, 0.017, "counter"),
+            new TimelineAnchorEstimate(
+                AnchorSource.InBandMarker, 0.008, 0.017, "marker", TimelineEvidenceKind.LowerBound),
+        ]);
+
+        Assert.True(anchor.IsEstablished, anchor.Explanation);
+        Assert.Equal(0.070, anchor.OffsetSeconds, 6);
+        Assert.Equal(0.017, anchor.UncertaintySeconds, 6);
+    }
+
+    [Fact]
+    public void AReadingEntirelyBelowALowerBoundIsRefused()
+    {
+        // The impossible direction: the marker was seen in a frame the reading says was
+        // captured before the paint. Only when the WHOLE reading interval is on the wrong
+        // side -- anything less is the latency the bound cannot measure.
+        var anchor = TimelineAnchor.Reconcile(
+        [
+            new TimelineAnchorEstimate(AnchorSource.PerformanceCounter, 0.0, 0.010, "counter"),
+            new TimelineAnchorEstimate(
+                AnchorSource.InBandMarker, 0.050, 0.010, "marker", TimelineEvidenceKind.LowerBound),
+        ]);
+
+        Assert.False(anchor.IsEstablished);
+        Assert.Equal(AnchorRejection.Contradicted, anchor.Rejection);
+    }
+
+    [Fact]
+    public void BoundsAloneEstablishNothing()
+    {
+        // Two bounds from different sources are still not a reading. They say where the
+        // offset is not, and a timebase cannot be made of that.
+        var anchor = TimelineAnchor.Reconcile(
+        [
+            new TimelineAnchorEstimate(
+                AnchorSource.InBandMarker, 0.050, 0.010, "marker", TimelineEvidenceKind.LowerBound),
+            new TimelineAnchorEstimate(
+                AnchorSource.WallClock, 0.100, 0.010, "wall clock", TimelineEvidenceKind.UpperBound),
+        ]);
+
+        Assert.False(anchor.IsEstablished);
+        Assert.Equal(AnchorRejection.NotCorroborated, anchor.Rejection);
+    }
+
+    [Fact]
+    public void AReadingWithNoIndependentEvidenceIsNotCorroborated()
+    {
+        var anchor = TimelineAnchor.Reconcile(
+            [new TimelineAnchorEstimate(AnchorSource.PerformanceCounter, 0.070, 0.017, "counter")]);
+
+        Assert.False(anchor.IsEstablished);
+        Assert.Equal(AnchorRejection.NotCorroborated, anchor.Rejection);
+    }
 }

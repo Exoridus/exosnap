@@ -28,28 +28,66 @@ public enum AnchorSource
     PerformanceCounter,
 }
 
-/// <summary>One estimate of how far the recording's timebase sits from the stimulus's.</summary>
-/// <param name="Source">Where the estimate came from.</param>
+/// <summary>What a piece of timing evidence actually says about the offset.</summary>
+/// <remarks>
+/// Not every time a run records is a reading of the offset. A counter logged on both
+/// sides of the same instant is one. A transition rendered by the stimulus and then seen
+/// in the recording is not: between the paint and the frame that carries it sits a
+/// capture latency that is unknown, non-negative, and not the same on every machine --
+/// about a third of a frame on bare metal and two frames in a GPU-partitioned guest.
+/// Treating such a marker as a point estimate pulls the anchor towards the paint time by
+/// exactly that latency, and averaging it with a counter reading makes the result worse
+/// than the counter alone while calling it corroboration.
+/// </remarks>
+public enum TimelineEvidenceKind
+{
+    /// <summary>A reading of the offset, usable on its own.</summary>
+    PointEstimate,
+
+    /// <summary>
+    /// The offset cannot be smaller than this. What a rendered marker gives: the frame
+    /// carrying it cannot precede the paint that produced it.
+    /// </summary>
+    LowerBound,
+
+    /// <summary>The offset cannot be larger than this.</summary>
+    UpperBound,
+}
+
+/// <summary>One piece of evidence about how far the recording's timebase sits from the stimulus's.</summary>
+/// <param name="Source">Where the evidence came from.</param>
 /// <param name="OffsetSeconds">Add this to a presentation timestamp to get a stimulus time.</param>
 /// <param name="UncertaintySeconds">
-/// Half-width of the interval the true offset lies in. Never zero: an estimate presented
-/// as exact cannot be reconciled with another, because any disagreement at all then reads
-/// as a contradiction.
+/// Half-width of the interval this evidence allows. Never zero: evidence presented as
+/// exact cannot be reconciled with anything else, because any disagreement at all then
+/// reads as a contradiction.
 /// </param>
 /// <param name="Evidence">What was measured, phrased for a verdict line.</param>
+/// <param name="Kind">
+/// Whether this reads the offset or only bounds it. Defaulted to a point estimate so a
+/// caller that supplies a genuine reading says nothing extra; evidence that merely
+/// constrains has to say so.
+/// </param>
 public sealed record TimelineAnchorEstimate(
     AnchorSource Source,
     double OffsetSeconds,
     double UncertaintySeconds,
-    string Evidence);
+    string Evidence,
+    TimelineEvidenceKind Kind = TimelineEvidenceKind.PointEstimate);
 
 /// <summary>Why a reconciliation of several anchors did not produce a usable timebase.</summary>
 public enum AnchorRejection
 {
-    /// <summary>Fewer than two independent estimates were supplied.</summary>
+    /// <summary>
+    /// No usable reading of the offset, or nothing independent to check it against.
+    /// Bounds alone establish nothing: they say where the offset is not.
+    /// </summary>
     NotCorroborated,
 
-    /// <summary>Two estimates disagree by more than their uncertainties allow.</summary>
+    /// <summary>
+    /// Two readings disagree by more than their uncertainties allow, or a reading falls
+    /// outside what a bound permits.
+    /// </summary>
     Contradicted,
 }
 
@@ -110,34 +148,36 @@ public sealed class TimelineAnchor
     public bool IsEstablished => this.Rejection is null;
 
     /// <summary>
-    /// Reconciles independent offset estimates into one timebase.
+    /// Reconciles independent timing evidence into one timebase.
     /// </summary>
     /// <param name="estimates">
-    /// At least two estimates from different sources. Two readings of the same source
-    /// corroborate nothing: they share whatever is wrong with that source.
+    /// At least one point estimate, and at least two distinct sources. Two readings of
+    /// the same source corroborate nothing: they share whatever is wrong with that
+    /// source. Bounds may accompany the readings and may refute them, but never move
+    /// them.
     /// </param>
     public static TimelineAnchor Reconcile(IEnumerable<TimelineAnchorEstimate> estimates)
     {
         ArgumentNullException.ThrowIfNull(estimates);
         var supplied = new ReadOnlyCollection<TimelineAnchorEstimate>([.. estimates]);
+        var readings = supplied.Where(e => e.Kind == TimelineEvidenceKind.PointEstimate).ToList();
+        var bounds = supplied.Where(e => e.Kind != TimelineEvidenceKind.PointEstimate).ToList();
 
         var distinctSources = supplied.Select(estimate => estimate.Source).Distinct().Count();
-        if (distinctSources < 2)
+        if (readings.Count == 0 || distinctSources < 2)
         {
             var names = supplied.Count == 0
                 ? "none"
-                : string.Join(", ", supplied.Select(estimate => estimate.Source));
-            return new TimelineAnchor(
-                0,
-                0,
-                supplied,
-                AnchorRejection.NotCorroborated,
-                $"the timebase needs two independent anchors; got {names}");
+                : string.Join(", ", supplied.Select(estimate => $"{estimate.Source} ({estimate.Kind})"));
+            var missing = readings.Count == 0
+                ? "the timebase needs a reading of the offset; bounds alone say only where it is not"
+                : "the timebase needs two independent anchors";
+            return new TimelineAnchor(0, 0, supplied, AnchorRejection.NotCorroborated, $"{missing}; got {names}");
         }
 
-        foreach (var left in supplied)
+        foreach (var left in readings)
         {
-            foreach (var right in supplied)
+            foreach (var right in readings)
             {
                 if (left.Source == right.Source)
                 {
@@ -160,12 +200,14 @@ public sealed class TimelineAnchor
             }
         }
 
-        // Inverse-variance weighting, with the uncertainty floored: an estimate claiming
-        // zero uncertainty would take the whole weight and silence every other anchor,
-        // which is the opposite of corroboration.
+        // Inverse-variance weighting over the READINGS only, with the uncertainty floored:
+        // an estimate claiming zero uncertainty would take the whole weight and silence
+        // every other anchor, which is the opposite of corroboration. Bounds are excluded
+        // by construction -- a bound that pulled the offset towards itself would import
+        // the very latency it exists to acknowledge.
         double weightSum = 0;
         double weighted = 0;
-        foreach (var estimate in supplied)
+        foreach (var estimate in readings)
         {
             var sigma = Math.Max(estimate.UncertaintySeconds, 1e-6);
             var weight = 1.0 / (sigma * sigma);
@@ -175,15 +217,43 @@ public sealed class TimelineAnchor
 
         var offset = weighted / weightSum;
         var uncertainty = Math.Sqrt(1.0 / weightSum);
-        var best = supplied.OrderBy(estimate => estimate.UncertaintySeconds).First();
+
+        // A bound refutes a reading only when the reading's whole interval sits on the
+        // wrong side of it. Anything less is agreement: the gap between them is the
+        // latency the bound was never able to measure.
+        foreach (var bound in bounds)
+        {
+            var limit = bound.Kind == TimelineEvidenceKind.LowerBound
+                ? bound.OffsetSeconds - bound.UncertaintySeconds
+                : bound.OffsetSeconds + bound.UncertaintySeconds;
+            var refuted = bound.Kind == TimelineEvidenceKind.LowerBound
+                ? offset + uncertainty < limit
+                : offset - uncertainty > limit;
+            if (refuted)
+            {
+                var side = bound.Kind == TimelineEvidenceKind.LowerBound ? "below" : "above";
+                return new TimelineAnchor(
+                    0,
+                    0,
+                    supplied,
+                    AnchorRejection.Contradicted,
+                    $"the readings put the offset at {Seconds(offset)} s +/- {Seconds(uncertainty)}, which is entirely {side} " +
+                    $"the {Seconds(limit)} s {bound.Source} allows ({bound.Evidence})");
+            }
+        }
+
+        var best = readings.OrderBy(estimate => estimate.UncertaintySeconds).First();
+        var corroboration = bounds.Count == 0
+            ? string.Empty
+            : $", consistent with {bounds.Count.ToString(CultureInfo.InvariantCulture)} causal bound(s)";
 
         return new TimelineAnchor(
             offset,
             uncertainty,
             supplied,
             null,
-            $"{supplied.Count.ToString(CultureInfo.InvariantCulture)} anchors agree on {Seconds(offset)} s +/- {Seconds(uncertainty)} " +
-            $"(tightest: {best.Source}, {best.Evidence})");
+            $"{readings.Count.ToString(CultureInfo.InvariantCulture)} reading(s) give {Seconds(offset)} s +/- {Seconds(uncertainty)} " +
+            $"(tightest: {best.Source}, {best.Evidence}){corroboration}");
     }
 
     /// <summary>
@@ -216,9 +286,19 @@ public sealed class TimelineAnchor
     }
 
     /// <summary>
-    /// The offset implied by a marker the stimulus drew at a known stimulus time and the
-    /// frame it was found in.
+    /// The lower bound a marker places on the offset: the stimulus drew it at a known
+    /// time, and the frame carrying it cannot precede that paint.
     /// </summary>
+    /// <remarks>
+    /// A bound and not a reading. With the offset defined as stimulus time minus
+    /// presentation timestamp, a marker painted at S and first visible in the frame at P
+    /// gives `offset = S - P + L`, where L is the paint-to-capture latency: non-negative,
+    /// unmeasured, and unbounded above. So `S - P` is the smallest the offset can be, and
+    /// a marker that appeared EARLIER than a counter reading allows still refutes it --
+    /// which is the fabrication this evidence exists to catch. What it must not do is
+    /// drag the offset down by L, which is exactly what averaging it with a counter
+    /// reading did.
+    /// </remarks>
     /// <param name="markerStimulusTimeSeconds">Stimulus time the marker was drawn at.</param>
     /// <param name="markerFramePts">Presentation timestamp of the frame it was found in.</param>
     /// <param name="frameIntervalSeconds">
@@ -236,7 +316,8 @@ public sealed class TimelineAnchor
             AnchorSource.InBandMarker,
             markerStimulusTimeSeconds - markerFramePts,
             frameIntervalSeconds / 2,
-            $"marker declared at stimulus t={Seconds(markerStimulusTimeSeconds)} s found at {Seconds(markerFramePts)} s");
+            $"marker declared at stimulus t={Seconds(markerStimulusTimeSeconds)} s found at {Seconds(markerFramePts)} s",
+            TimelineEvidenceKind.LowerBound);
     }
 
     /// <summary>

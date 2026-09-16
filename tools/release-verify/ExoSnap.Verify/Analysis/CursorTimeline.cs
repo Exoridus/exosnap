@@ -73,15 +73,23 @@ public static class CursorTimeline
         var estimates = new List<TimelineAnchorEstimate>();
         var markers = (input.Markers ?? []).OrderBy(marker => marker.StimulusTimeSeconds).ToList();
 
-        // The first marker carries the offset. Later ones are readings of the same
-        // source, so they corroborate nothing on their own -- what they add is the
-        // rate check below.
-        if (markers.Count > 0 && input.FrameIntervalSeconds > 0)
+        // Every marker, and every one of them as a causal lower bound rather than a
+        // reading: a frame cannot carry a flash that had not been painted yet. The paint
+        // -to-capture latency between the two is unknown and varies by an order of
+        // magnitude between bare metal and a partitioned guest, so a marker says where
+        // the offset cannot be, not where it is.
+        foreach (var marker in markers)
         {
+            if (input.FrameIntervalSeconds <= 0)
+            {
+                break;
+            }
+
             estimates.Add(TimelineAnchor.FromInBandMarker(
-                markers[0].StimulusTimeSeconds, markers[0].FramePts, input.FrameIntervalSeconds));
+                marker.StimulusTimeSeconds, marker.FramePts, input.FrameIntervalSeconds));
         }
-        else if (markers.Count == 0)
+
+        if (markers.Count == 0)
         {
             notes.Add("no in-band marker was located in the recording");
         }
@@ -102,6 +110,12 @@ public static class CursorTimeline
                 last.StimulusTimeSeconds - first.StimulusTimeSeconds,
                 2.0 * input.FrameIntervalSeconds);
             notes.Add(rate.Evidence);
+            if (!rate.Agrees)
+            {
+                notes.Add(
+                    "the marker separation does not agree; it is reported rather than gating, because the "
+                    + "paint-to-capture latency cancels out of that difference only if it was the same at both markers");
+            }
         }
         else if (markers.Count == 1)
         {
@@ -180,14 +194,17 @@ public sealed record CursorTimelineResult(
     ReadOnlyCollection<string> Notes)
 {
     /// <summary>
-    /// Whether a cursor analysis may proceed on this timebase.
+    /// Whether an analysis may proceed on this timebase.
     /// </summary>
     /// <remarks>
-    /// Both conditions, because they fail differently: the anchor says the offsets
-    /// corroborate one another, and the rate check says one offset can describe the
-    /// whole run rather than only its beginning.
+    /// The anchor alone. The marker separation is reported beside it as a consistency
+    /// observation and no longer gates: it equals the declared separation plus the
+    /// DIFFERENCE of the two paint-to-capture latencies, so it proves the clocks ran at
+    /// the same rate only under an assumption about that latency which nothing in the run
+    /// measures. Gating on it would state a proof the evidence does not contain -- and a
+    /// tolerance widened until a guest passes is worse than an honest observation.
     /// </remarks>
-    public bool Qualified => this.Anchor.IsEstablished && this.Rate?.Agrees != false;
+    public bool Qualified => this.Anchor.IsEstablished;
 
     private static readonly JsonSerializerOptions Indented = new() { WriteIndented = true };
 
@@ -203,6 +220,7 @@ public sealed record CursorTimelineResult(
             estimates = this.Anchor.Estimates.Select(estimate => new
             {
                 source = estimate.Source.ToString(),
+                kind = estimate.Kind.ToString(),
                 offsetSeconds = estimate.OffsetSeconds,
                 uncertaintySeconds = estimate.UncertaintySeconds,
                 evidence = estimate.Evidence,

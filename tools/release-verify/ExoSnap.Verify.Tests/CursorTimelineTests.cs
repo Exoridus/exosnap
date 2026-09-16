@@ -229,14 +229,69 @@ public sealed class CursorTimelineTests
     }
 
     [Fact]
-    public void SourcesThatContradictEachOtherAreRefused()
+    public void AMarkerSeenBeforeTheRecorderCouldHaveCapturedItIsRefused()
     {
-        // The markers say the recording opened 0.5 s in; the recorder says 2 s. One of
-        // them is wrong and nothing here can say which, so no timebase is published.
-        var log = WriteEngineLog(2.0);
+        // The markers place the offset at 2 s; the recorder says the timeline opened
+        // 0.5 s in. That direction is impossible: the flash would have had to appear in a
+        // frame captured before it was painted. This is the fabrication a marker exists
+        // to catch, and it survives the marker being a bound rather than a reading.
+        var log = WriteEngineLog(0.5);
         try
         {
-            var result = CursorTimeline.Qualify(Healthy(log));
+            var result = CursorTimeline.Qualify(Healthy(log, offsetSeconds: 2.0));
+
+            Assert.False(result.Qualified);
+            Assert.Equal(AnchorRejection.Contradicted, result.Anchor.Rejection);
+        }
+        finally
+        {
+            File.Delete(log);
+        }
+    }
+
+    [Fact]
+    public void ACaptureLatencyBetweenPaintAndFrameIsNotAContradiction()
+    {
+        // The other direction, which the two-point model used to reject. The markers put
+        // the offset no lower than 0.5 s and the recorder reads 0.57 s: the 70 ms between
+        // them is the paint-to-capture latency, which is about a third of a frame on bare
+        // metal and two frames in a GPU-partitioned guest. The anchor is the recorder's
+        // reading, unmoved -- averaging the two would drag it towards the paint by
+        // exactly that latency and call the result more precise than either input.
+        var log = WriteEngineLog(0.57);
+        try
+        {
+            var result = CursorTimeline.Qualify(Healthy(log, offsetSeconds: 0.5));
+
+            Assert.True(result.Qualified, result.Anchor.Explanation);
+            Assert.Equal(0.57, result.Anchor.OffsetSeconds, 3);
+        }
+        finally
+        {
+            File.Delete(log);
+        }
+    }
+
+    [Fact]
+    public void ASecondMarkerThatIsCausallyImpossibleRefusesTheRun()
+    {
+        // One marker consistent with the recorder, one that could not have been captured
+        // when it was. Every marker is checked, not only the first: a run whose timeline
+        // drifted apart mid-way would otherwise qualify on its opening.
+        var log = WriteEngineLog(0.5);
+        var input = new CursorTimelineInput(
+            Markers:
+            [
+                new MarkerObservation(4.0, 3.5),
+                new MarkerObservation(31.0, 29.0),
+            ],
+            FrameIntervalSeconds: FrameInterval,
+            EngineLogPath: log,
+            StimulusEpochTicks: 0,
+            QpcFrequencyHz: Frequency);
+        try
+        {
+            var result = CursorTimeline.Qualify(input);
 
             Assert.False(result.Qualified);
             Assert.Equal(AnchorRejection.Contradicted, result.Anchor.Rejection);
