@@ -273,6 +273,27 @@ void VideoThread::Run() {
     const bool targetIsMonitor = (target.kind == CaptureTarget::Kind::Monitor);
     const HWND targetHwnd =
         (target.kind == CaptureTarget::Kind::Window) ? reinterpret_cast<HWND>(target.native_id) : nullptr;
+    // For Monitor targets, keep capture and encode on the adapter that owns the
+    // HMONITOR. This is required by DXGI duplication and avoids a cross-adapter
+    // WGC monitor texture when the harness selects that backend.
+    //
+    // The lookup happens before anything is opened, and its failure ends the
+    // session here. Duplication requires a device built on the adapter that owns
+    // the output; without one it acquires nothing for the whole start budget and
+    // then reports that no frame was ever captured -- twenty seconds and a
+    // zero-byte partial in place of an answer. Window capture is no remedy: an
+    // HMONITOR whose adapter cannot be found is not a display this machine can
+    // capture by any route, so the honest outcome is a named refusal now.
+    winrt::com_ptr<IDXGIAdapter1> monitorAdapter;
+    if (targetIsMonitor) {
+        std::string adapterErr;
+        if (!FindAdapterForMonitor(reinterpret_cast<HMONITOR>(target.native_id), monitorAdapter.put(), adapterErr) ||
+            !monitorAdapter) {
+            m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare,
+                                  "the display's graphics adapter could not be identified: " + adapterErr);
+            return;
+        }
+    }
     const EffectiveCaptureBackend captureBackend = ResolveCaptureBackend(m_state.config);
     const bool useOdCapture = (captureBackend == EffectiveCaptureBackend::DxgiOutputDuplication);
 
@@ -284,15 +305,6 @@ void VideoThread::Run() {
                                       {"dpi_awareness", DpiAwarenessName()}};
         logging::log(logging::LogLevel::Info, "video_thread", "capture session starting",
                      std::span<const logging::LogField>(fields, std::size(fields)));
-    }
-
-    // For Monitor targets, keep capture and encode on the adapter that owns the
-    // HMONITOR. This is required by DXGI duplication and avoids a cross-adapter
-    // WGC monitor texture when the harness selects that backend.
-    winrt::com_ptr<IDXGIAdapter1> monitorAdapter;
-    if (targetIsMonitor) {
-        std::string adapterErr;
-        FindAdapterForMonitor(reinterpret_cast<HMONITOR>(target.native_id), monitorAdapter.put(), adapterErr);
     }
 
     // --- D3D11 video-capable device (exclusive to this thread's context) ---
